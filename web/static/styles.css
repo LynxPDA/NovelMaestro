@@ -1345,13 +1345,14 @@ a.fname:hover {
 .ed-cm .cm-scroller {
  position: relative;
 }
-/* оверлей подсветки — внутри .cm-scroller, скроллится вместе с текстом */
+/* оверлей подсветки — внутри .cm-scroller, скроллится вместе с текстом.
+   Без width/height и БЕЗ overflow: размер 0×0, марки рисуются по своим
+   координатам (обрезает их только сам скроллер) */
 .ed-hl-layer {
- position: absolute;
- left: 0;
- top: 0;
- pointer-events: none;
- overflow: hidden;
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
 }
 .hl-mark {
  position: absolute;

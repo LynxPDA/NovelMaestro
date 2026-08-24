@@ -141,7 +141,7 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
 | GET/POST | `/api/session`, `/api/login`, `/api/logout` | сессия, вход по токену |
 | GET | `/api/dashboard`, `/api/state`, `/api/sections`, `/api/projects` | дашборд (`running_jobs` — все активные; `recent_jobs` — до 20), hub |
 | POST | `/api/projects` (создание) | + move/rename/copy/delete |
-| GET | `/api/projects/{s}/{n}/tree`, `/api/stats` | главы+артефакты, статистика |
+| GET | `/api/projects/{s}/{n}/tree`, `/api/stats` | главы+артефакты, статистика (раунд 23: артефакты включают легаси `*_перевод/редактура/полировка`) |
 | GET | `/api/projects/{s}/{n}/status` | таблица готовности глав (раунд 21): по-главные флаги translate/redact/polish + ner/wiki/compiled; кеш по сигнатуре mtime |
 | GET | `/api/templates` | наборы шаблонов с деревом файлов (раунд 21; для создания проекта и вкладки «Шаблоны») |
 | POST/DELETE | `/api/templates` (создание), `/api/templates/{s}/copy`, DELETE `/api/templates/{s}` | CRUD наборов; `General` — системный: создание/удаление/запись → 400/403 |

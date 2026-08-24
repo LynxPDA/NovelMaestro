@@ -651,6 +651,32 @@ def test_project_tree_lists_chapters(srv_ctx):
     assert entry["artifacts"]["chapter.txt"] > 0
 
 
+def test_project_tree_legacy_artifacts(srv_ctx):
+    """Раунд 23: легаси-имена *_перевод/редактура/полировка видны."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    ch = projects_root / "ACTIVE" / "test_book" / "chapters" / "00002_1"
+    ch.mkdir(parents=True)
+    (ch / "chapter.txt").write_text("о", encoding="utf-8")
+    (ch / "chapter1_translated.txt").write_text("перевод", encoding="utf-8")
+    (ch / "chapter1_redacted.txt").write_text("ред", encoding="utf-8")
+    (ch / "chapter1_polished.txt").write_text("пол", encoding="utf-8")
+    # шумовые файлы не должны попасть в артефакты редактора глав
+    (ch / "chapter1_polished.log").write_text("log", encoding="utf-8")
+    (ch / "chapter1_translated_trace.json").write_text("{}", encoding="utf-8")
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/tree")
+    assert res.status == 200
+    entry = next(e for e in payload["chapters"] if e["dir"] == "00002_1")
+    arts = entry["artifacts"]
+    assert "chapter.txt" in arts
+    assert "chapter1_translated.txt" in arts
+    assert "chapter1_redacted.txt" in arts
+    assert "chapter1_polished.txt" in arts
+    assert "chapter1_polished.log" not in arts
+    assert "chapter1_translated_trace.json" not in arts
+
+
 def test_project_tree_no_chapters(srv_ctx):
     _, port, _ = srv_ctx()
     _create_project(port, None)  # projects_root не используется здесь

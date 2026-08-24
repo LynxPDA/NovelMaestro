@@ -102,7 +102,8 @@
 
     /* ── матчер глоссария (раунд 23): термины → чанки с regex ── */
     buildGlossaryMatcher: (items) => {
-      // оба поля: term И translation (NFC при построении); длинные раньше
+      // оба поля: term И translation (NFC при построении); длинные раньше;
+      // поиск регистронезависимый («Секта» в начале предложения найдёт «секта»)
       var terms = [];
       for (var i = 0; i < (items || []).length; i++) {
         var it = items[i] || {};
@@ -112,8 +113,8 @@
         var tr = String(it.translation || "")
           .trim()
           .normalize("NFC");
-        if (t) terms.push({ text: t, item: it });
-        if (tr && tr !== t) terms.push({ text: tr, item: it });
+        if (t) terms.push({ text: t, key: t.toLowerCase(), item: it });
+        if (tr && tr !== t) terms.push({ text: tr, key: tr.toLowerCase(), item: it });
       }
       terms.sort(function (a, b) {
         var d = b.text.length - a.text.length;
@@ -130,7 +131,7 @@
                 return escapeRe(t.text);
               })
               .join("|"),
-            "g",
+            "gi",
           ),
           terms: part,
         });
@@ -149,10 +150,12 @@
         var m;
         while ((m = chunk.re.exec(src)) !== null) {
           var hit = m[0];
+          var hitKey = hit.toLowerCase();
           var item = null;
-          // длинные раньше — первое точное совпадение и есть искомый термин
+          // длинные раньше — первое совпадение и есть искомый термин;
+          // сравнение по ключу (регистронезависимо)
           for (var k = 0; k < chunk.terms.length; k++) {
-            if (chunk.terms[k].text === hit) {
+            if (chunk.terms[k].key === hitKey) {
               item = chunk.terms[k].item;
               break;
             }

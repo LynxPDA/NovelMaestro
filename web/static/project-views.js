@@ -497,23 +497,23 @@ function viewProject(section, name) {
     );
   }
   /* ── Редактор глав (раунд 23) ─────────────────── */
-  const ED_ARTIFACT_LABELS = {
-    "chapter.txt": "Оригинал",
-    "translated.txt": "Перевод",
-    "redacted.txt": "Редактура",
-    "polished.txt": "Полировка",
-  };
-  const ED_ARTIFACT_ORDER = [
-    "chapter.txt",
-    "translated.txt",
-    "redacted.txt",
-    "polished.txt",
+  /* Поиск артефактов по маске: канон (translated.txt) И легаси
+     (chapter1_translated.txt — старые проекты). test — предикат по имени. */
+  const ED_CLASSIFY = [
+    { canon: "chapter.txt", label: "Оригинал",
+      test: (n) => n === "chapter.txt" },
+    { canon: "translated.txt", label: "Перевод",
+      test: (n) => n === "translated.txt" || n.endsWith("_translated.txt") },
+    { canon: "redacted.txt", label: "Редактура",
+      test: (n) => n === "redacted.txt" || n.endsWith("_redacted.txt") },
+    { canon: "polished.txt", label: "Полировка",
+      test: (n) => n === "polished.txt" || n.endsWith("_polished.txt") },
   ];
 
   async function editorTabView() {
     const ed = (st.editor = st.editor || {
       chapter: null,
-      mode: "one", // one | two
+      mode: "two", // one | two — по умолчанию две панели (оригинал+перевод)
       left: { type: null, text: null, dirty: false },
       right: { type: null, text: null, dirty: false },
       hl: false,
@@ -542,13 +542,16 @@ function viewProject(section, name) {
     if (!chapters.some((c) => c.dir === ed.chapter)) {
       ed.chapter = chapters[0].dir;
     }
+    /* артефакты главы по маскам (канон приоритетен, затем легаси) */
     const chapterTypes = (dir) => {
       const ch = chapters.find((c) => c.dir === dir);
+      const names = ch ? Object.keys(ch.artifacts || {}) : [];
       const out = [];
-      for (const name of ED_ARTIFACT_ORDER) {
-        if (ch && ch.artifacts[name] != null) {
-          out.push({ name, label: ED_ARTIFACT_LABELS[name] || name });
-        }
+      for (const c of ED_CLASSIFY) {
+        const hits = names.filter(c.test);
+        if (!hits.length) continue;
+        const pick = hits.includes(c.canon) ? c.canon : hits.sort()[0];
+        out.push({ name: pick, label: c.label });
       }
       return out;
     };
@@ -568,8 +571,13 @@ function viewProject(section, name) {
         "Сохранить",
       );
       const perr = h("div", { class: "form-error" });
-      bar.append(h("span", { class: "field-help" }, "Файл:"), typeSel,
-        meta, h("span", { class: "spacer" }), saveBtn);
+      bar.append(
+        h("span", { class: "field-help" }, "Файл:"),
+        typeSel,
+        meta,
+        h("span", { class: "spacer" }),
+        saveBtn,
+      );
       const host = h("div", { class: "ed-cm" });
       pane.append(bar, perr, host);
       return {
@@ -589,8 +597,10 @@ function viewProject(section, name) {
     const pRight = makePane(ed.right);
     const panes = [pLeft, pRight];
 
-    /* селект типа артефакта: опции по главе, выбор — прежний или первый */
-    function fillTypeSel(pInfo) {
+    /* селект типа артефакта: опции по главе, выбор — прежний или первый;
+       avoid — тип, который уже выбран другой панелью (для «Два файла»
+       правая панель по умолчанию берёт следующий тип, а не тот же) */
+    function fillTypeSel(pInfo, avoid) {
       const opts = chapterTypes(ed.chapter);
       pInfo.typeSel.replaceChildren();
       for (const o of opts) {
@@ -599,8 +609,12 @@ function viewProject(section, name) {
       if (opts.some((o) => o.name === pInfo.state.type)) {
         pInfo.typeSel.value = pInfo.state.type;
       } else {
-        pInfo.typeSel.value = opts.length ? opts[0].name : "";
-        pInfo.state.type = pInfo.typeSel.value || null;
+        let pick = opts.length ? opts[0].name : "";
+        if (avoid && opts.some((o) => o.name !== avoid)) {
+          pick = opts.find((o) => o.name !== avoid).name;
+        }
+        pInfo.typeSel.value = pick;
+        pInfo.state.type = pick || null;
       }
       return pInfo.state.type;
     }
@@ -620,8 +634,7 @@ function viewProject(section, name) {
         // переподключаем DOM (несохранённые правки не трогаем)
         pInfo.host.replaceChildren(pInfo.editor.root);
         pInfo.perr.textContent = "";
-        pInfo.meta.textContent =
-          `${fmtSize(pInfo.state.text.length)} · ${type}`;
+        pInfo.meta.textContent = `${fmtSize(pInfo.state.text.length)} · ${type}`;
         pInfo.saveBtn.disabled = !pInfo.state.dirty;
         if (pInfo.hl) {
           pInfo.host.append(pInfo.hl.tip);
@@ -703,29 +716,29 @@ function viewProject(section, name) {
     }
 
     function computeHighlight(pInfo) {
-      const h = pInfo.hl;
-      if (!h || !pInfo.editor || !pInfo.editor.isCM) return;
+      const hl = pInfo.hl;
+      if (!hl || !pInfo.editor || !pInfo.editor.isCM) return;
       const view = pInfo.editor.view;
       const text = view.state.doc.toString();
-      h.matches = UICore.glossaryMatches(text, ed.ner.matcher).sort(
+      hl.matches = UICore.glossaryMatches(text, ed.ner.matcher).sort(
         (a, b) => a.from - b.from,
       );
       placeMarks(pInfo);
     }
 
     function placeMarks(pInfo) {
-      const h = pInfo.hl;
-      if (!h || !pInfo.editor || !pInfo.editor.isCM) return;
+      const hl = pInfo.hl; /* НЕ h — не затенять глобальный h() */
+      if (!hl || !pInfo.editor || !pInfo.editor.isCM) return;
       const view = pInfo.editor.view;
       const scroller = view.scrollDOM;
       const scrollRect = scroller.getBoundingClientRect();
-      const layer = h.layer;
+      const layer = hl.layer;
       if (!layer.isConnected) scroller.append(layer);
       layer.replaceChildren();
       const ranges = view.visibleRanges;
       let lastEnd = -1;
-      for (let i = 0; i < h.matches.length; i++) {
-        const m = h.matches[i];
+      for (let i = 0; i < hl.matches.length; i++) {
+        const m = hl.matches[i];
         if (m.from < lastEnd) continue; // перекрытия — только первое
         lastEnd = m.to;
         if (!inRanges(m.from, m.to, ranges)) continue;
@@ -766,12 +779,12 @@ function viewProject(section, name) {
     }
 
     function moveTip(pInfo, e) {
-      const h = pInfo.hl;
-      if (!h || !pInfo.editor || !pInfo.editor.isCM) return;
+      const hl = pInfo.hl;
+      if (!hl || !pInfo.editor || !pInfo.editor.isCM) return;
       const view = pInfo.editor.view;
-      const tip = h.tip;
+      const tip = hl.tip;
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
-      const m = pos == null ? null : findAt(h.matches, pos);
+      const m = pos == null ? null : findAt(hl.matches, pos);
       if (!m || !m.item) {
         tip.style.display = "none";
         return;
@@ -876,7 +889,8 @@ function viewProject(section, name) {
       title: "Подсветить термины глоссария (ner.json) в тексте редактора",
     });
     function renderModeLabel() {
-      modeBtn.textContent = ed.mode === "two" ? "Один файл" : "Два файла";
+      /* подпись = ТЕКУЩЕЕ состояние; клик переключает */
+      modeBtn.textContent = ed.mode === "two" ? "Два файла" : "Один файл";
     }
     function renderHlLabel() {
       hlBtn.textContent = ed.hl
@@ -889,7 +903,9 @@ function viewProject(section, name) {
       grid.replaceChildren();
       grid.classList.toggle("ed-grid-two", ed.mode === "two");
       // spread: append([a, b]) привёл бы массив к строке «[object …]»
-      grid.append(...(ed.mode === "two" ? [pLeft.pane, pRight.pane] : [pLeft.pane]));
+      grid.append(
+        ...(ed.mode === "two" ? [pLeft.pane, pRight.pane] : [pLeft.pane]),
+      );
     }
 
     chapterSel.addEventListener("change", () => {
@@ -903,7 +919,7 @@ function viewProject(section, name) {
         p.saveBtn.disabled = true;
       }
       fillTypeSel(pLeft);
-      fillTypeSel(pRight);
+      fillTypeSel(pRight, pLeft.state.type);
       loadPane(pLeft);
       loadPane(pRight);
     });
@@ -937,14 +953,17 @@ function viewProject(section, name) {
       modeBtn,
       hlBtn,
       h("span", { class: "spacer" }),
-      h("span", { class: "field-help" },
-        "изменения сохраняются кнопкой «Сохранить»"),
+      h(
+        "span",
+        { class: "field-help" },
+        "изменения сохраняются кнопкой «Сохранить»",
+      ),
     );
     renderModeLabel();
     renderHlLabel();
     rebuildGrid();
     fillTypeSel(pLeft);
-    fillTypeSel(pRight);
+    fillTypeSel(pRight, pLeft.state.type);
     loadPane(pLeft);
     loadPane(pRight);
     wrap.append(toolbar, grid);
@@ -984,7 +1003,12 @@ function viewProject(section, name) {
     }
 
     const search = h("input", { class: "input", placeholder: "Поиск…" });
-    if (st.search) search.value = st.search; // раунд 23: из «→ Глоссарий» редактора
+    // раунд 23: из «→ Глоссарий» редактора — применяем один раз и сбрасываем,
+    // чтобы ручные заходы на вкладку не наследовали чужой поиск
+    if (st.search) {
+      search.value = st.search;
+      st.search = null;
+    }
     const typeFilter = h("select", { class: "input" });
     const table = h("table", { class: "ner-table" });
     const tbody = h("tbody");

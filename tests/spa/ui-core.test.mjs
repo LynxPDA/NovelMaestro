@@ -152,6 +152,22 @@ test("glossaryMatches: совпадения по обоим полям", () => {
   assert.deepEqual(found, ["Хунг", "Школа", "Хун"]);
 });
 
+test("glossaryMatches: регистронезависимо, термин находится", () => {
+  const items = [
+    { term: "Хунг", translation: "секта" },
+  ];
+  const found = hits("хунг и СЕКТА", items);
+  // совпадения — в регистре ИСХОДНОГО текста, поиск регистронезависимый
+  assert.deepEqual(found, ["хунг", "СЕКТА"]);
+  // item привязан к совпадению несмотря на другой регистр
+  const ms = UICore.glossaryMatches(
+    "хунг",
+    UICore.buildGlossaryMatcher(items),
+  );
+  assert.equal(ms.length, 1);
+  assert.equal(ms[0].item.term, "Хунг");
+});
+
 test("glossaryMatches: дубль термин/перевод не дублирует совпадения", () => {
   const text = "灵草 растёт. Линь собирает 灵草.";
   const found = hits(text, NER_ITEMS);

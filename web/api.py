@@ -816,7 +816,11 @@ def _project_stats(ctx: dict) -> dict:
 
 
 def _project_tree(ctx: dict) -> dict:
-    """Дерево глав: номер, папка, артефакты с размерами."""
+    """Дерево глав: номер, папка, артефакты с размерами.
+
+    Раунд 23: помимо канонических имён — легаси-суффиксы старых проектов:
+    ``*_translated.txt``, ``*_redacted.txt``, ``*_polished.txt``
+    (вкладка «Редактор» видит ключевые файлы независимо от маски)."""
     common = _import_common(ctx)
     pdir, section, name = _project_path(ctx)
     chapters_dir = pdir / "chapters"
@@ -826,6 +830,7 @@ def _project_tree(ctx: dict) -> dict:
     chapter_map = common.build_chapter_map(chapters_dir)
     artifacts = ("chapter.txt", "translated.txt", "translated_trace.json",
                  "redacted.txt", "polished.txt")
+    legacy_sfx = ("_translated.txt", "_redacted.txt", "_polished.txt")
     items = []
     for num in sorted(chapter_map):
         for dir_str in chapter_map[num]:
@@ -835,6 +840,13 @@ def _project_tree(ctx: dict) -> dict:
                 f = d / art
                 if f.is_file():
                     entry["artifacts"][art] = f.stat().st_size
+            try:
+                entries = list(d.iterdir())
+            except OSError:
+                entries = []
+            for f in entries:
+                if f.is_file() and f.name.endswith(legacy_sfx):
+                    entry["artifacts"][f.name] = f.stat().st_size
             items.append(entry)
     return {"ok": True, "section": section, "name": name,
             "chapters": items}
