@@ -532,6 +532,7 @@ function viewProject(section, name) {
       ngram: 3, // размер n-граммы нечёткого поиска (аналог --ner_ngram)
       threshold: 0.75, // порог пересечения н-грамм (аналог --ner_threshold)
       ner: null, // кеш {items, matcher} глоссария
+      panes: null, // кеш панелей — повторный рендер не теряет правки
     });
     const wrap = h("div", { class: "ed-wrap" });
     const toolbar = h("div", { class: "files-toolbar" });
@@ -625,8 +626,21 @@ function viewProject(section, name) {
         hl: null,
       };
     }
-    const pLeft = makePane(ed.left);
-    const pRight = makePane(ed.right);
+    /* панели кешируются между рендерами вкладки: повторный рендер (смена
+       вкладки и т.п.) не пересоздаёт CodeMirror и не теряет правки */
+    if (!ed.panes) {
+      ed.panes = [makePane(ed.left), makePane(ed.right)];
+      for (const p of ed.panes) {
+        p.typeSel.addEventListener("change", () => {
+          p.state.type = p.typeSel.value || null;
+          p.state.text = null;
+          loadPane(p);
+        });
+        p.saveBtn.addEventListener("click", () => savePane(p));
+      }
+    }
+    const pLeft = ed.panes[0];
+    const pRight = ed.panes[1];
     const panes = [pLeft, pRight];
 
     /* селект типа артефакта: опции по главе, выбор — прежний, иначе —
@@ -648,20 +662,31 @@ function viewProject(section, name) {
       return pInfo.state.type;
     }
 
+    /* программная замена текста — без колбэка «правки» (смена главы,
+       загрузка, очистка): колбэк реагирует только на правки пользователя */
+    function setEditorText(pInfo, text) {
+      if (!pInfo.editor) return;
+      pInfo._loading = true;
+      try {
+        pInfo.editor.setValue(text);
+      } finally {
+        pInfo._loading = false;
+      }
+    }
+
     /* загрузка артефакта главы в редактор (первый раз — создаёт CM) */
     async function loadPane(pInfo) {
       const type = pInfo.state.type;
       if (!type) {
-        if (pInfo.editor) pInfo.editor.setValue("");
+        setEditorText(pInfo, "");
         pInfo.meta.textContent = "—";
         pInfo.saveBtn.disabled = true;
         pInfo.state.text = null;
         return;
       }
-      /* повторный рендер уже обработан ниже (после сброса главы — грузим заново) */
+      /* повторный рендер вкладки: редактор уже загружен — только
+         переподключаем DOM (несохранённые правки не трогаем) */
       if (pInfo.editor && pInfo.state.text != null) {
-        // повторный рендер вкладки: редактор уже загружен — только
-        // переподключаем DOM (несохранённые правки не трогаем)
         pInfo.host.replaceChildren(pInfo.editor.root);
         pInfo.perr.textContent = "";
         pInfo.meta.textContent = `${fmtSize(pInfo.state.text.length)} · ${type}`;
@@ -683,18 +708,20 @@ function viewProject(section, name) {
         pInfo.state.dirty = false;
         pInfo.meta.textContent = `${fmtSize(data.size)} · ${type}`;
         if (pInfo.editor) {
-          pInfo.editor.setValue(data.content);
+          setEditorText(pInfo, data.content);
           pInfo.host.replaceChildren(pInfo.editor.root);
         } else {
           pInfo.editor = makeEditor(data.content, "txt", () => {
+            if (pInfo._loading) return; // программные setValue — не «правка»
             pInfo.state.text = pInfo.editor.getValue();
             pInfo.state.dirty = true;
             pInfo.saveBtn.disabled = false;
+            if (pInfo.hl) pInfo.hl.tip.style.display = "none";
             scheduleHighlight(pInfo);
           });
           pInfo.host.replaceChildren(pInfo.editor.root);
         }
-        pInfo.saveBtn.disabled = false;
+        pInfo.saveBtn.disabled = !pInfo.state.dirty;
         maybeHl(pInfo);
       } catch (ex) {
         pInfo.state.text = null;
@@ -719,6 +746,7 @@ function viewProject(section, name) {
         });
         pInfo.state.dirty = false;
         pInfo.meta.textContent = `${fmtSize(pInfo.state.text.length)} · ${pInfo.state.type}`;
+        pInfo.saveBtn.disabled = true;
         toast("Сохранено");
       } catch (ex) {
         pInfo.perr.textContent = ex.message;
@@ -869,6 +897,12 @@ function viewProject(section, name) {
 
     function attachHl(pInfo) {
       if (!pInfo.editor || !pInfo.editor.isCM) return;
+      /* идемпотентно: повторный вызов (смена главы/типа, переключение
+         подсветки) НЕ создаёт второй слой — только пересчитывает марки */
+      if (pInfo.hl) {
+        computeHighlight(pInfo);
+        return;
+      }
       const view = pInfo.editor.view;
       const scroller = view.scrollDOM;
       const layer = h("div", { class: "ed-hl-layer" });
@@ -877,16 +911,55 @@ function viewProject(section, name) {
       pInfo.host.append(tip);
       pInfo.hl = { layer, tip, matches: [] };
       scroller.append(layer);
-      scroller.addEventListener("mousemove", (e) => moveTip(pInfo, e));
-      scroller.addEventListener("mouseleave", () => {
-        pInfo.hl.tip.style.display = "none";
-      });
-      scroller.addEventListener("scroll", () => {
-        pInfo.hl.tip.style.display = "none";
-      });
+      /* тултип: при наведении на него/рядом НЕ прячем (иначе кнопка
+         «→ Глоссарий» недостижима — тултип исчезает при сходе с совпадения) */
+      const onMove = (e) => {
+        const tipEl = pInfo.hl && pInfo.hl.tip;
+        if (tipEl && tipEl.style.display !== "none") {
+          const r = tipEl.getBoundingClientRect();
+          if (
+            r.width > 0 &&
+            e.clientX >= r.left - 8 &&
+            e.clientX <= r.right + 8 &&
+            e.clientY >= r.top - 8 &&
+            e.clientY <= r.bottom + 8
+          ) {
+            return;
+          }
+        }
+        moveTip(pInfo, e);
+      };
+      const onLeave = () => {
+        if (pInfo.hl) pInfo.hl.tip.style.display = "none";
+      };
+      /* скролл: прячем тултип и переставляем марки видимой области
+         (без этого подсветка не появляется в новых местах при прокрутке) */
+      let hlRaf = null;
+      const onScroll = () => {
+        if (pInfo.hl) pInfo.hl.tip.style.display = "none";
+        if (hlRaf == null) {
+          hlRaf = requestAnimationFrame(() => {
+            hlRaf = null;
+            placeMarks(pInfo);
+          });
+        }
+      };
+      const onTipLeave = () => {
+        if (pInfo.hl) pInfo.hl.tip.style.display = "none";
+      };
+      scroller.addEventListener("mousemove", onMove);
+      scroller.addEventListener("mouseleave", onLeave);
+      scroller.addEventListener("scroll", onScroll);
+      tip.addEventListener("mouseleave", onTipLeave);
+      pInfo._hlCleanup = () => {
+        scroller.removeEventListener("mousemove", onMove);
+        scroller.removeEventListener("mouseleave", onLeave);
+        scroller.removeEventListener("scroll", onScroll);
+      };
       if (typeof ResizeObserver === "function") {
         const ro = new ResizeObserver(() => placeMarks(pInfo));
         ro.observe(pInfo.host);
+        pInfo._hlResize = ro;
       }
       computeHighlight(pInfo);
     }
@@ -895,6 +968,14 @@ function viewProject(section, name) {
       if (!pInfo.hl) return;
       pInfo.hl.layer.remove();
       pInfo.hl.tip.remove();
+      if (pInfo._hlCleanup) {
+        pInfo._hlCleanup();
+        pInfo._hlCleanup = null;
+      }
+      if (pInfo._hlResize) {
+        pInfo._hlResize.disconnect();
+        pInfo._hlResize = null;
+      }
       pInfo.hl = null;
     }
 
@@ -1002,9 +1083,15 @@ function viewProject(section, name) {
         p.state.type = null;
         p.state.text = null;
         p.state.dirty = false;
-        if (p.editor) p.editor.setValue("");
+        setEditorText(p, ""); // без колбэка «правки» — иначе текст станет ""
         p.meta.textContent = "—";
         p.saveBtn.disabled = true;
+        if (p.hl) {
+          // сброс подсветки прошлой главы (марки + тултип)
+          p.hl.matches = [];
+          p.hl.layer.replaceChildren();
+          p.hl.tip.style.display = "none";
+        }
       }
       const def = defaultTypes();
       fillTypeSel(pLeft, def.left);
@@ -1012,14 +1099,6 @@ function viewProject(section, name) {
       loadPane(pLeft);
       loadPane(pRight);
     });
-    for (const p of panes) {
-      p.typeSel.addEventListener("change", () => {
-        p.state.type = p.typeSel.value || null;
-        p.state.text = null;
-        loadPane(p);
-      });
-      p.saveBtn.addEventListener("click", () => savePane(p));
-    }
     modeBtn.addEventListener("click", () => {
       ed.mode = ed.mode === "two" ? "one" : "two";
       renderModeLabel();
@@ -1045,12 +1124,6 @@ function viewProject(section, name) {
       ngramInput,
       h("span", { class: "field-help" }, "порог:"),
       thresholdInput,
-      h("span", { class: "spacer" }),
-      h(
-        "span",
-        { class: "field-help" },
-        "изменения сохраняются кнопкой «Сохранить»",
-      ),
     );
     renderModeLabel();
     renderHlLabel();
