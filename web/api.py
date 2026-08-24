@@ -1,0 +1,2164 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+api.py — REST-хендлеры web-бэкэнда.
+
+M1: сессия и вход (GET /api/session, POST /api/login|logout).
+M2: hub и проекты — разделы, список, создание, управление, hub_state,
+    ACTIONS из run.py, дерево глав, шаблоны.
+Далее по майлстоунам: файлы, NER, env, промпты, запуски.
+Хендлеры получают ctx {params, query, body, handler, auth, authenticated,
+repo_root, projects_root} и возвращают dict для JSON-ответа (200)
+или бросают ApiError.
+"""
+from __future__ import annotations
+
+import copy
+import logging
+import re
+import shutil
+import threading
+from pathlib import Path
+
+import unicodedata
+
+log = logging.getLogger("web")
+
+# Кеш stats без TTL: вместо времени — сигнатура состояния (mtime папок
+# глав + ner/wiki + compiled). При каждом чтении считаем сигнатуру (это
+# scandir 1 уровня, а НЕ полный обход глав) и пересчитываем проект только
+# если сигнатура изменилась. Так кеш всегда актуален, ловит даже внешние
+# правки файлов и переживает рестарт сервера (дисковый кеш).
+_STATS_CACHE: dict[str, dict] = {}   # key "sec/name" → {"sig", "stats"}
+_STATS_LOCK = threading.Lock()
+_STATS_CACHE_FILE = ".stats_cache.json"  # в корне projects/ (рядом с hub_state)
+_CACHE_LOADED: set[str] = set()      # корни, для которых загружен дисковой кеш
+
+from web.auth import COOKIE_NAME
+from web.jobs import JobManager
+from web.multipart import (
+    MultipartError, extract_files, extract_value, parse_multipart,
+)
+from web.sandbox import SandboxError, resolve_path
+from web.server import ApiError, Router
+from web.stages import STAGE_SPECS, build_command, ordered_stages, script_path, spec_for
+from web import state as st
+
+UPLOAD_DIRS = ("source", "chapters", "prompts", "images", "tmp")
+BINARY_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".epub",
+              ".zip", ".fb2", ".ttf", ".otf", ".woff", ".woff2")
+TEXT_EXT = (".txt", ".md", ".json", ".yaml", ".yml", ".env", ".log",
+            ".csv", ".xml", ".html", ".css", ".js", ".py")
+
+# ════════════════════════════════════════════════════════════════════
+# Служебные
+# ════════════════════════════════════════════════════════════════════
+def _projects_root(ctx: dict) -> Path:
+    """Корень projects/ (обязателен для хендлеров M2+)."""
+    root = ctx.get("projects_root")
+    if root is None:
+        raise ApiError(500, "Корень projects/ не настроен")
+    return root
+
+
+def _repo_root(ctx: dict) -> Path:
+    """Корень репозитория (для шаблонов)."""
+    root = ctx.get("repo_root")
+    if root is None:
+        raise ApiError(500, "Корень репозитория не настроен")
+    return root
+
+
+def _import_projects(ctx: dict):
+    """Ленивый импорт core.projects (падает 500 с понятной причиной)."""
+    try:
+        from core import projects as prj
+        return prj
+    except ImportError as exc:
+        raise ApiError(500, f"core.projects недоступен: {exc}")
+
+
+def _import_common(ctx: dict):
+    """Ленивый импорт core.common."""
+    try:
+        from core import common as c
+        return c
+    except ImportError as exc:
+        raise ApiError(500, f"core.common недоступен: {exc}")
+
+
+def _project_path(ctx: dict) -> tuple[Path, str, str]:
+    """Путь к папке проекта по параметрам маршрута + раздел/имя."""
+    prj = _import_projects(ctx)
+    section = ctx["params"]["sec"]
+    name = ctx["params"]["name"]
+    pdir = prj.project_dir(_projects_root(ctx), section, name)
+    if not pdir.is_dir():
+        raise ApiError(404, f"Проект не найден: {section}/{name}")
+    return pdir, section, name
+
+
+def _check_confirm(ctx: dict, what: str = "УДАЛИТЬ") -> None:
+    """Опасные действия требуют ввода слова подтверждения."""
+    got = (ctx["body"].get("confirm") or "").strip().upper()
+    if got != what:
+        raise ApiError(400, f"Для подтверждения введите слово {what}")
+
+
+# ════════════════════════════════════════════════════════════════════
+# Сессия (M1)
+# ════════════════════════════════════════════════════════════════════
+def register(router: Router, host: str) -> None:
+    """Регистрирует все хендлеры web-бэкэнда."""
+    router.add("GET", "/api/session", _session)
+    router.add("POST", "/api/login", _login)
+    router.add("POST", "/api/logout", _logout)
+    _register_hub(router)
+    _register_files(router)
+    _register_m7(router)
+    _register_logs(router)
+    _register_check(router)
+    _register_templates(router)
+    _register_jobs(router)
+
+
+def _session(ctx: dict) -> dict:
+    return {
+        "ok": True,
+        "authenticated": ctx["authenticated"],
+        "token_set": ctx["auth"].token_set(),
+        "host": ctx["host"],
+    }
+
+
+def _login(ctx: dict) -> dict:
+    # M3 (AUDIT): rate-limit — много неудачных входов за минуту → 429
+    if ctx["auth"].login_blocked():
+        raise ApiError(429, "Слишком много попыток входа. Подождите минуту.")
+    token = (ctx["body"].get("token") or "").strip()
+    if not ctx["auth"].check_token(token):
+        ctx["auth"].login_failure()
+        raise ApiError(401, "Неверный токен")
+    sid = ctx["auth"].issue_session()
+    ctx["handler"].set_cookie(COOKIE_NAME, sid)
+    return {"ok": True, "authenticated": True}
+
+
+def _logout(ctx: dict) -> dict:
+    sid = ctx["handler"].session_id()
+    ctx["auth"].invalidate_session(sid)
+    ctx["handler"].clear_cookie(COOKIE_NAME)
+    return {"ok": True}
+
+
+# ════════════════════════════════════════════════════════════════════
+# Пульт и проекты (M2)
+# ════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# Файлы (M3)
+# ════════════════════════════════════════════════════════════════════
+def _project_ctx(ctx: dict) -> tuple[Path, str, str]:
+    """Проект по query project=sec/name (для файловых хендлеров)."""
+    prj = _import_projects(ctx)
+    project = (ctx["query"].get("project") or ctx["body"].get("project") or "")
+    if "/" not in project:
+        raise ApiError(400, "Параметр project=sec/name обязателен")
+    section, _, name = project.partition("/")
+    pdir = prj.project_dir(_projects_root(ctx), section, name)
+    if not pdir.is_dir():
+        raise ApiError(404, f"Проект не найден: {section}/{name}")
+    return pdir, section, name
+
+
+def _resolve_project_path(ctx: dict, pdir: Path, rel: str) -> Path:
+    """Разрешает путь внутри проекта; запрещает выход и NUL."""
+    try:
+        return resolve_path(pdir, rel)
+    except SandboxError as exc:
+        raise ApiError(400, str(exc))
+
+
+def _files_listing(ctx: dict) -> dict:
+    """Листинг папки проекта (GET /api/files?project=&path=)."""
+    pdir, section, name = _project_ctx(ctx)
+    rel = ctx["query"].get("path", "")
+    target = _resolve_project_path(ctx, pdir, rel)
+    if not target.is_dir():
+        raise ApiError(404, "Папка не найдена")
+    entries = []
+    for p in sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name)):
+        try:
+            st_p = p.stat()
+            size = st_p.st_size if p.is_file() else 0
+            mtime = int(st_p.st_mtime)
+        except OSError:
+            continue
+        entries.append({
+            "name": p.name,
+            "dir": p.is_dir(),
+            "size": size,
+            "mtime": mtime,
+        })
+    return {"ok": True, "path": rel, "entries": entries}
+
+
+def _is_binary_bytes(data: bytes) -> bool:
+    """NUL-снифф: бинарный файл не открываем как текст."""
+    return b"\x00" in data[:8192]
+
+
+FILE_TEXT_LIMIT = 5 * 1024 * 1024  # > 5 МБ — редактор не открывает, скачивание
+
+
+def _file_read(ctx: dict) -> dict:
+    """Чтение файла текстом (GET /api/file?project=&path=).
+
+    JSON отдаётся pretty-print'ом; бинарные файлы — ошибка 400;
+    файлы больше FILE_TEXT_LIMIT — 413 (предложить скачивание).
+    """
+    pdir, section, name = _project_ctx(ctx)
+    rel = ctx["query"].get("path", "")
+    target = _resolve_project_path(ctx, pdir, rel)
+    if not target.is_file():
+        raise ApiError(404, "Файл не найден")
+    size = target.stat().st_size
+    if size > FILE_TEXT_LIMIT:
+        raise ApiError(413, f"Файл {size} Б — слишком большой для редактора, "
+                            "скачайте его через кнопку скачивания")
+    raw = target.read_bytes()
+    if _is_binary_bytes(raw):
+        raise ApiError(400, "Бинарный файл — открыть как текст нельзя")
+    text = raw.decode("utf-8", errors="replace")
+    if target.suffix == ".json":
+        try:
+            import json as _json
+            text = _json.dumps(_json.loads(text), ensure_ascii=False, indent=2)
+        except (ValueError, TypeError):
+            log.debug("JSON-файл невалиден, отдаём как есть: %s", rel)
+    return {"ok": True, "path": rel, "content": text,
+            "size": target.stat().st_size}
+
+
+def _file_write(ctx: dict) -> dict:
+    """Запись файла (PUT /api/file {project, path, content})."""
+    common = _import_common(ctx)
+    pdir, section, name = _project_ctx(ctx)
+    rel = (ctx["body"].get("path") or "").strip()
+    content = ctx["body"].get("content")
+    if content is None:
+        raise ApiError(400, "Поле content обязательно")
+    target = _resolve_project_path(ctx, pdir, rel)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = unicodedata.normalize("NFC", str(content))
+    common.atomic_write(target, text)
+    return {"ok": True, "path": rel, "size": len(text.encode("utf-8"))}
+
+
+def _file_delete(ctx: dict) -> dict:
+    """Удаление файла (DELETE /api/file?project=&path=)."""
+    pdir, section, name = _project_ctx(ctx)
+    rel = ctx["query"].get("path", "")
+    target = _resolve_project_path(ctx, pdir, rel)
+    if not target.exists():
+        raise ApiError(404, "Файл не найден")
+    try:
+        if target.is_dir():
+            import shutil
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    except OSError as exc:
+        raise ApiError(500, f"Не удалось удалить: {exc}")
+    return {"ok": True, "path": rel}
+
+
+def _file_upload(ctx: dict) -> dict:
+    """Загрузка файлов (POST /api/upload, multipart).
+
+    Поля: dest=source|chapters|prompts|images|tmp + files[] (несколько).
+    Имена — только basename; лимит max_upload_mb на файл.
+    """
+    pdir, section, name = _project_ctx(ctx)
+    raw = ctx.get("raw_body") or b""
+    ctype = ctx.get("content_type") or ""
+    boundary = ""
+    if "boundary=" in ctype:
+        # ctype в ctx — lowercase; boundary регистрозависим, берём из headers
+        boundary = ctx.get("boundary") or ""
+        if not boundary:
+            boundary = ctype.split("boundary=", 1)[1].strip()\
+                .strip('"').strip("'").split(";")[0]
+    try:
+        fields = parse_multipart(raw, boundary)
+    except MultipartError as exc:
+        raise ApiError(400, f"Некорректный multipart: {exc}")
+    dest = extract_value(fields, "dest") or "tmp"
+    if dest not in UPLOAD_DIRS:
+        raise ApiError(400, f"Папка назначения недопустима: {dest}")
+    dest_dir = _resolve_project_path(ctx, pdir, dest)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    files = extract_files(fields)
+    if not files:
+        raise ApiError(400, "Нет файлов в запросе")
+    limit_mb = ctx.get("max_upload_mb", 512)
+    saved = []
+    for f in files:
+        fname = f.get("filename") or ""
+        if not fname or "\x00" in fname:
+            continue
+        if len(f["data"]) > limit_mb * 1024 * 1024:
+            raise ApiError(413, f"Файл слишком большой: {fname}")
+        target = _resolve_project_path(ctx, dest_dir, fname)
+        target.write_bytes(f["data"])
+        saved.append(f"{dest}/{fname}")
+    return {"ok": True, "saved": saved}
+
+
+def _file_download(ctx: dict) -> dict:
+    """Скачивание файла (GET /api/download?project=&path=&inline=1).
+
+    inline=1 — без Content-Disposition (для предпросмотра картинок в SPA).
+    """
+    pdir, section, name = _project_ctx(ctx)
+    rel = ctx["query"].get("path", "")
+    target = _resolve_project_path(ctx, pdir, rel)
+    if not target.is_file():
+        raise ApiError(404, "Файл не найден")
+    data = target.read_bytes()
+    handler = ctx["handler"]
+    if ctx["query"].get("inline"):
+        ctype = "image/jpeg" if target.suffix.lower() in (".jpg", ".jpeg") \
+            else "image/png" if target.suffix.lower() == ".png" \
+            else "application/octet-stream"
+        handler._send(200, ctype, data, [("Cache-Control", "no-cache")])
+        return {}
+    from urllib.parse import quote
+    handler._send(200, "application/octet-stream", data,
+                  [("Content-Disposition",
+                    f'attachment; filename="{quote(target.name)}"')])
+    return {}  # ответ уже отправлен
+
+
+def _register_files(router: Router) -> None:
+    router.add("GET", "/api/files", _files_listing)
+    router.add("GET", "/api/file", _file_read)
+    router.add("PUT", "/api/file", _file_write)
+    router.add("DELETE", "/api/file", _file_delete)
+    router.add("POST", "/api/upload", _file_upload)
+    router.add("GET", "/api/download", _file_download)
+
+
+def _register_hub(router: Router) -> None:
+    router.add("GET", "/api/state", _state)
+    router.add("GET", "/api/dashboard", _dashboard)
+    router.add("GET", "/api/actions", _actions)
+    router.add("GET", "/api/sections", _sections)
+    router.add("POST", "/api/sections", _sections_create)
+    router.add("POST", "/api/sections/rename", _sections_rename)
+    router.add("DELETE", "/api/sections/{name}", _sections_delete)
+    router.add("GET", "/api/projects", _projects_list)
+    router.add("POST", "/api/projects", _projects_create)
+    router.add("POST", "/api/projects/move", _projects_move)
+    router.add("POST", "/api/projects/rename", _projects_rename)
+    router.add("POST", "/api/projects/copy", _projects_copy)
+    router.add("DELETE", "/api/projects", _projects_delete)
+    router.add("GET", "/api/projects/{sec}/{name}/stats", _project_stats)
+    router.add("GET", "/api/projects/{sec}/{name}/status", _project_status)
+    router.add("GET", "/api/projects/{sec}/{name}/tree", _project_tree)
+    router.add("GET", "/api/templates", _templates)
+
+
+def _state(ctx: dict) -> dict:
+    """hub_state — общий с cli-пультом (последний раздел/проект)."""
+    hub = st.load_hub_state(_projects_root(ctx))
+    return {"ok": True, **hub}
+
+
+def _stats_signature(pdir: Path) -> str:
+    """Дешёвый отпечаток состояния проекта для кеша stats.
+
+    Содержит mtime папок глав (создание/удаление файлов меняет mtime
+    каталога), mtime ner.json/wiki.md и mtime папок compiled-кандидатов.
+    Это scandir 1 уровня, а НЕ полный обход глав — поэтому проверка
+    сигнатуры на порядки дешевле самого project_stats().
+    """
+    pdir = Path(pdir)
+    parts: list[str] = []
+    ch = pdir / "chapters"
+    try:
+        subs = sorted(
+            (d.name, d.stat().st_mtime_ns)
+            for d in ch.iterdir() if d.is_dir()
+        )
+    except OSError:
+        subs = []
+    parts.append(f"ch:{len(subs)}")
+    parts.extend(f"{n}:{m}" for n, m in subs)
+    for f in ("ner.json", "wiki.md"):
+        p = pdir / f
+        try:
+            parts.append(f"{f}:{p.stat().st_mtime_ns}")
+        except OSError:
+            parts.append(f"{f}:0")
+    for d in (pdir, pdir / "tmp", pdir / "output"):
+        try:
+            parts.append(f"d:{d.name}:{d.stat().st_mtime_ns}")
+        except OSError:
+            parts.append(f"d:{d.name}:0")
+    return "|".join(parts)
+
+
+def _stats_cache_path(root: Path) -> Path:
+    """Файл дискового кеша stats (в корне projects/, рядом с hub_state)."""
+    return root / _STATS_CACHE_FILE
+
+
+def _stats_cache_key(root: Path, sec: str, name: str) -> str:
+    """Ключ кеша с пространством имён корня projects/ (L5, AUDIT):
+    два сервера на разных корнях не смешивают записи."""
+    return f"{root}::{sec}/{name}"
+
+
+def _load_stats_cache(root: Path) -> None:
+    """Загрузка дискового кеша stats (переживает рестарт сервера)."""
+    try:
+        import json as _json
+        data = _json.loads(_stats_cache_path(root).read_text(
+            encoding="utf-8"))
+        if isinstance(data, dict):
+            pfx = f"{root}::"
+            _STATS_CACHE.update(
+                {pfx + k: v for k, v in data.items()
+                 if isinstance(v, dict) and "sig" in v
+                 and ("stats" in v or "status" in v)})
+    except (OSError, ValueError) as exc:
+        log.debug("stats-кеш не читается: %s", exc)
+
+
+def _save_stats_cache(root: Path) -> None:
+    """Атомарная запись дискового кеша stats (только записи этого корня)."""
+    try:
+        import json as _json
+        from core.common import atomic_write
+        pfx = f"{root}::"
+        mine = {k[len(pfx):]: v for k, v in _STATS_CACHE.items()
+                if k.startswith(pfx)}
+        atomic_write(_stats_cache_path(root),
+                     _json.dumps(mine, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001 — кеш не критичен
+        log.debug("stats-кеш не пишется: %s", exc)
+
+
+def _ensure_stats_cache(root: Path) -> None:
+    """Загрузка дискового кеша один раз на корень projects/."""
+    key_root = str(root)
+    if key_root in _CACHE_LOADED:
+        return
+    _CACHE_LOADED.add(key_root)
+    _load_stats_cache(root)
+
+
+def _invalidate_all_stats(root: Path) -> None:
+    """Сброс кеша stats для этого корня (структурные операции)."""
+    with _STATS_LOCK:
+        pfx = f"{root}::"
+        for k in [k for k in _STATS_CACHE if k.startswith(pfx)]:
+            del _STATS_CACHE[k]
+        _save_stats_cache(root)
+
+
+def _cached_stats(prj, root: Path, sec: str, name: str) -> str:
+    """stats проекта: из кеша, если сигнатура не изменилась (без TTL).
+
+    Кеш в памяти + на диске; актуальность — сигнатура mtime, а не время.
+    """
+    key = _stats_cache_key(root, sec, name)
+    pdir = root / sec / name
+    sig = _stats_signature(pdir)
+    with _STATS_LOCK:
+        _ensure_stats_cache(root)
+        entry = _STATS_CACHE.get(key)
+        if entry is not None and entry.get("sig") == sig:
+            return entry["stats"]
+        try:
+            stats = prj.project_stats(pdir)
+        except Exception as exc:  # noqa: BLE001 — статистика необязательна
+            log.debug("stats(%s) не собралась: %s", key, exc)
+            stats = ""
+        _STATS_CACHE[key] = {"sig": sig, "stats": stats}
+        _save_stats_cache(root)
+        return stats
+
+
+def _cached_status(prj, root: Path, sec: str, name: str) -> dict:
+    """Таблица готовности глав: кеш по сигнатуре (как stats), ключ :status.
+
+    Сигнатура та же (_stats_signature): mtime папок глав покрывает
+    появление/удаление артефактов, ner.json/wiki.md — свои mtime.
+    """
+    key = _stats_cache_key(root, sec, name) + ":status"
+    pdir = root / sec / name
+    sig = _stats_signature(pdir)
+    with _STATS_LOCK:
+        _ensure_stats_cache(root)
+        entry = _STATS_CACHE.get(key)
+        if entry is not None and entry.get("sig") == sig:
+            return entry.get("status", {})
+        try:
+            status = prj.project_progress_table(pdir)
+        except Exception as exc:  # noqa: BLE001 — статус необязателен
+            log.debug("status(%s) не собрался: %s", key, exc)
+            status = {}
+        _STATS_CACHE[key] = {"sig": sig, "status": status}
+        _save_stats_cache(root)
+        return status
+
+
+def _collect_stats(prj, root: Path) -> tuple[list, int]:
+    """Обход всех разделов/проектов; stats — из кеша по сигнатуре."""
+    sections = []
+    total = 0
+    for sec in prj.load_sections(root):
+        names = prj.list_projects(root, sec)
+        total += len(names)
+        items = []
+        for n in names:
+            stats = _cached_stats(prj, root, sec, n)
+            items.append({"name": n, "stats": stats})
+        sections.append({"name": sec, "projects": items})
+    return sections, total
+
+
+def _dashboard(ctx: dict) -> dict:
+    """Сводка для дашборда (W3): разделы/проекты/статистика + недавние jobs.
+
+    Один запрос вместо N запросов /stats с фронта. Stats — кеш по
+    сигнатуре (без TTL); jobs читаются всегда свежими через общий
+    JobManager (_job_manager): HTTP-контекст не носит job_manager.
+    """
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    hub = st.load_hub_state(root)
+    sections, total = _collect_stats(prj, root)
+    recent_jobs = []
+    running_jobs = []
+    jm = _job_manager(ctx)
+    try:
+        # Раунд 20: «Последние запуски» — до 20; активные — из ПОЛНОГО
+        # списка, а не из среза (running может быть старше 20 записей)
+        all_jobs = jm.list()
+        recent_jobs = all_jobs[:20]
+        for item in all_jobs:
+            if item.get("status") == "running":
+                job = jm.get(item["id"])
+                if job is not None:
+                    running_jobs.append(job.payload())
+    except Exception as exc:  # noqa: BLE001
+        log.debug("jobs.list() не собрался: %s", exc)
+    return {"ok": True, "total": total, "sections": sections,
+            "hub": hub, "recent_jobs": recent_jobs,
+            "running_jobs": running_jobs}
+
+
+def _actions(ctx: dict) -> dict:
+    """Реестр стадий из STAGE_SPECS + доступность скриптов (раунд 4)."""
+    repo = _repo_root(ctx)
+    items = []
+    for key, spec in ordered_stages():
+        script = script_path(key, repo)
+        items.append({
+            "key": key, "title": spec["title"], "folder": "scripts",
+            "script": spec["script"],
+            "available": script is not None and script.is_file(),
+        })
+    return {"ok": True, "actions": items}
+
+
+def _sections(ctx: dict) -> dict:
+    """Разделы со счётчиками проектов."""
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    return {"ok": True, "sections": [
+        {"name": s, "count": len(prj.list_projects(root, s))}
+        for s in prj.load_sections(root)
+    ]}
+
+
+def _hub_clear_section(root: Path, section: str) -> None:
+    """Зачистить ссылку на раздел в hub_state (переименован/удалён)."""
+    hub = st.load_hub_state(root)
+    if hub.get("section") == section:
+        hub.pop("section", None)
+        hub.pop("project", None)
+        st.save_hub_state(root, hub)
+
+
+def _sections_create(ctx: dict) -> dict:
+    """Создать раздел (POST /api/sections, {"name": ...})."""
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    name = (ctx["body"].get("name") or "").strip()
+    ok, res = prj.create_section(root, name)
+    if not ok:
+        raise ApiError(400, str(res))
+    _invalidate_all_stats(root)
+    return {"ok": True, "name": res}
+
+
+def _sections_rename(ctx: dict) -> dict:
+    """Переименовать/слить раздел (POST /api/sections/rename, {src, dst})."""
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    body = ctx["body"]
+    src = (body.get("src") or "").strip()
+    dst = (body.get("dst") or "").strip()
+    if not src or not dst:
+        raise ApiError(400, "src и dst обязательны")
+    ok, res = prj.rename_section(root, src, dst)
+    if not ok:
+        raise ApiError(400, str(res))
+    _hub_clear_section(root, src)
+    _invalidate_all_stats(root)
+    return {"ok": True, "src": src, "dst": res}
+
+
+def _sections_delete(ctx: dict) -> dict:
+    """Удалить пустой раздел (DELETE /api/sections/{name})."""
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    name = ctx["params"]["name"]
+    ok, res = prj.delete_section(root, name)
+    if not ok:
+        code = 409 if "не пуст" in str(res) else 404
+        raise ApiError(code, str(res))
+    _hub_clear_section(root, name)
+    _invalidate_all_stats(root)
+    return {"ok": True, "name": res}
+
+
+def _projects_list(ctx: dict) -> dict:
+    """Имена проектов раздела (GET /api/projects?section=)."""
+    prj = _import_projects(ctx)
+    section = ctx["query"].get("section", "")
+    if section not in prj.load_sections(_projects_root(ctx)):
+        raise ApiError(400, f"Неизвестный раздел: {section!r}")
+    names = prj.list_projects(_projects_root(ctx), section)
+    return {"ok": True, "section": section, "projects": names}
+
+
+def _projects_create(ctx: dict) -> dict:
+    """Создать проект: раздел, имя, метаданные, шаблон типа книги."""
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    repo = _repo_root(ctx)
+    body = ctx["body"]
+    section = (body.get("section") or "").strip()
+    name = (body.get("name") or "").strip()
+    if section not in prj.load_sections(root):
+        raise ApiError(400, f"Неизвестный раздел: {section!r}")
+    raw_name = name
+    name = prj.sanitize_project_name(name)
+    if not name:
+        raise ApiError(400, "Имя после очистки пустое — допустимы латинские "
+                             "буквы, цифры, точки, '_' и '-'")
+    ok, res = prj.create_project(root, section, name)
+    if not ok:
+        raise ApiError(400, str(res))
+    pdir = Path(res)
+    tpl = (body.get("template") or "").strip() or None
+    copied: list[str] = []
+    if tpl:
+        tpl_dir = repo / "templates" / tpl
+        if not tpl_dir.is_dir():
+            raise ApiError(400, f"Шаблон не найден: templates/{tpl}")
+        prj.write_project_metadata(
+            pdir, tpl_dir,
+            title=(body.get("title") or "").strip(),
+            author=(body.get("author") or "").strip(),
+            genres=([g.strip() for g in (body.get("genres") or "").split(",")
+                     if g.strip()] or None),
+        )
+        copied = prj.fill_project_from_template(pdir, tpl_dir)
+    _invalidate_all_stats(root)
+    return {"ok": True, "section": section, "name": name,
+            "renamed": name != raw_name, "copied": copied}
+
+
+def _projects_move(ctx: dict) -> dict:
+    """Перенос проекта в другой раздел."""
+    prj = _import_projects(ctx)
+    body = ctx["body"]
+    section = (body.get("section") or "").strip()
+    name = (body.get("name") or "").strip()
+    dst = (body.get("dst") or "").strip()
+    ok, res = prj.move_project(_projects_root(ctx), section, name, dst)
+    if not ok:
+        raise ApiError(400, str(res))
+    _invalidate_all_stats(_projects_root(ctx))
+    return {"ok": True, "section": dst, "name": Path(res).name}
+
+
+def _projects_rename(ctx: dict) -> dict:
+    """Переименование проекта внутри раздела."""
+    prj = _import_projects(ctx)
+    body = ctx["body"]
+    section = (body.get("section") or "").strip()
+    name = (body.get("name") or "").strip()
+    new_name = (body.get("new_name") or "").strip()
+    ok, res = prj.rename_project(_projects_root(ctx), section, name, new_name)
+    if not ok:
+        raise ApiError(400, str(res))
+    _invalidate_all_stats(_projects_root(ctx))
+    return {"ok": True, "section": section, "name": Path(res).name}
+
+
+def _projects_copy(ctx: dict) -> dict:
+    """Дублирование проекта внутри раздела."""
+    prj = _import_projects(ctx)
+    body = ctx["body"]
+    section = (body.get("section") or "").strip()
+    name = (body.get("name") or "").strip()
+    new_name = (body.get("new_name") or "").strip()
+    ok, res = prj.copy_project(_projects_root(ctx), section, name, new_name)
+    if not ok:
+        raise ApiError(400, str(res))
+    _invalidate_all_stats(_projects_root(ctx))
+    return {"ok": True, "section": section, "name": Path(res).name}
+
+
+def _projects_delete(ctx: dict) -> dict:
+    """Удаление проекта (требует confirm: 'УДАЛИТЬ')."""
+    prj = _import_projects(ctx)
+    body = ctx["body"]
+    section = (body.get("section") or "").strip()
+    name = (body.get("name") or "").strip()
+    _check_confirm(ctx, "УДАЛИТЬ")
+    ok, res = prj.delete_project(_projects_root(ctx), section, name)
+    if not ok:
+        raise ApiError(400, str(res))
+    _invalidate_all_stats(_projects_root(ctx))
+    return {"ok": True, "section": section, "name": name}
+
+
+def _project_status(ctx: dict) -> dict:
+    """GET /api/projects/{sec}/{name}/status — таблица готовности глав."""
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    _pdir, sec, name = _project_path(ctx)
+    return {"ok": True, "status": _cached_status(prj, root, sec, name)}
+
+
+def _project_stats(ctx: dict) -> dict:
+    """Краткая статистика проекта (строка) + структура папок.
+
+    stats — кеш по сигнатуре (без TTL): страница «Проекты» раньше
+    делала запрос на каждую карточку, каждый запрос = полный обход
+    chapters/. skeleton дёшев (iterdir верхнего уровня) — не кешируется.
+    """
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    pdir, section, name = _project_path(ctx)
+    stats = _cached_stats(prj, root, section, name)
+    return {"ok": True, "section": section, "name": name,
+            "stats": stats,
+            "skeleton": [p.name for p in sorted(pdir.iterdir())
+                          if p.is_dir()]}
+
+
+def _project_tree(ctx: dict) -> dict:
+    """Дерево глав: номер, папка, артефакты с размерами."""
+    common = _import_common(ctx)
+    pdir, section, name = _project_path(ctx)
+    chapters_dir = pdir / "chapters"
+    if not chapters_dir.is_dir():
+        return {"ok": True, "section": section, "name": name,
+                "chapters": []}
+    chapter_map = common.build_chapter_map(chapters_dir)
+    artifacts = ("chapter.txt", "translated.txt", "translated_trace.json",
+                 "redacted.txt", "polished.txt")
+    items = []
+    for num in sorted(chapter_map):
+        for dir_str in chapter_map[num]:
+            d = Path(dir_str)
+            entry = {"id": num, "dir": d.name, "artifacts": {}}
+            for art in artifacts:
+                f = d / art
+                if f.is_file():
+                    entry["artifacts"][art] = f.stat().st_size
+            items.append(entry)
+    return {"ok": True, "section": section, "name": name,
+            "chapters": items}
+
+
+def _templates(ctx: dict) -> dict:
+    """Наборы шаблонов (templates/*) с файлами набора.
+
+    Раунд 21: files — полное дерево набора (относительные пути со
+    слэшами) — единый ответ для «создания проекта» и «Шаблонов».
+    """
+    prj = _import_projects(ctx)
+    repo = _repo_root(ctx)
+    sets = prj.list_template_sets(repo / "templates")
+    out = []
+    for s in sets:
+        out.append({"name": s, "files": prj.templates_files(repo / "templates", s)})
+    return {"ok": True, "templates": out}
+
+
+# ════════════════════════════════════════════════════════════════════
+# NER, review, конфиги, промпты (M7)
+# ════════════════════════════════════════════════════════════════════
+NER_TEXT_LIMIT = 10 * 1024 * 1024  # > 10 МБ — не JSON, а скачивание
+
+
+def _ner_get(ctx: dict) -> dict:
+    """Глоссарий (GET /api/ner?project=): total + by_type + items.
+
+    Файл > 10 МБ — отдаём флаг too_large (скачивание файлом)."""
+    pdir, _section, _name = _project_ctx(ctx)
+    ner = pdir / "ner.json"
+    if not ner.is_file():
+        return {"ok": True, "exists": False, "total": 0,
+                "by_type": {}, "items": []}
+    size = ner.stat().st_size
+    if size > NER_TEXT_LIMIT:
+        return {"ok": True, "exists": True, "too_large": True, "size": size}
+    try:
+        import json as _json
+        items = _json.loads(ner.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as exc:
+        raise ApiError(500, f"ner.json не читается: {exc}")
+    if not isinstance(items, list):
+        raise ApiError(500, "ner.json: ожидался список терминов")
+    by_type: dict[str, int] = {}
+    for it in items:
+        t = it.get("type") or "?"
+        by_type[t] = by_type.get(t, 0) + 1
+    return {"ok": True, "exists": True, "total": len(items),
+            "by_type": by_type, "items": items}
+
+
+def _ner_put(ctx: dict) -> dict:
+    """Сохранить глоссарий (PUT /api/ner {project, items})."""
+    common = _import_common(ctx)
+    pdir, _section, _name = _project_ctx(ctx)
+    items = ctx["body"].get("items")
+    if not isinstance(items, list):
+        raise ApiError(400, "Поле items: список терминов")
+    import json as _json
+    text = _json.dumps(items, ensure_ascii=False, indent=2)
+    common.atomic_write(pdir / "ner.json",
+                        unicodedata.normalize("NFC", text))
+    return {"ok": True, "total": len(items)}
+
+
+def _ner_export(ctx: dict) -> dict:
+    """Экспорт глоссария для анализа (GET /api/ner/export?project=&format=…).
+
+    format=json  → полные записи JSON;
+    format=text  → записи текстом (format_ner_record, Термин/Тип/Перевод);
+    format=names → имена по полу (женские/мужские).
+    Общие фильтры: count_threshold, types.
+    Возвращает {ok, name, content} — фронт скачивает файлом.
+    """
+    common = _import_common(ctx)
+    pdir, _section, _name = _project_ctx(ctx)
+    ner = pdir / "ner.json"
+    if not ner.is_file():
+        raise ApiError(404, "ner.json не найден")
+    try:
+        import json as _json
+        items = _json.loads(ner.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as exc:
+        raise ApiError(500, f"ner.json не читается: {exc}")
+    if not isinstance(items, list):
+        raise ApiError(500, "ner.json: ожидался список терминов")
+
+    q = ctx["query"]
+    fmt = q.get("format", "json")
+    if fmt not in ("json", "text", "names"):
+        raise ApiError(400, "format: json | text | names")
+
+    def _int(name: str, default: int) -> int:
+        v = q.get(name)
+        if v in (None, ""):
+            return default
+        try:
+            return int(v)
+        except ValueError:
+            raise ApiError(400, f"{name}: ожидалось число")
+
+    def _csv(name: str) -> list[str]:
+        return [s.strip() for s in q.get(name, "").split(",") if s.strip()]
+
+    threshold = _int("count_threshold", 0)
+    types = _csv("types")
+    filtered = common.filter_ner_items(items, threshold, types)
+    if not filtered:
+        raise ApiError(400, "Нет записей, подходящих под критерии")
+
+    if fmt == "json":
+        content = _json.dumps(filtered, ensure_ascii=False, indent=2) + "\n"
+        return {"ok": True, "name": "ner_export.json", "content": content,
+                "total": len(filtered)}
+    if fmt == "text":
+        lines: list[str] = []
+        for i, item in enumerate(filtered, 1):
+            lines.extend(common.format_ner_record(item, i))
+        return {"ok": True, "name": "ner_analysis.txt",
+                "content": "\n".join(lines), "total": len(filtered)}
+    # names: имена по полу
+    female_types = _csv("female_types") or ["Person (female)"]
+    male_types = _csv("male_types") or ["Person (male)"]
+    female, male = [], []
+    for item in filtered:
+        t = item.get("type", "")
+        tr = item.get("translation", "")
+        if t in female_types:
+            female.append(tr)
+        elif t in male_types:
+            male.append(tr)
+    content = ("=== ЖЕНСКИЕ ИМЕНА ===\n"
+               + ("\n".join(female) if female else "Нет данных")
+               + "\n\n=== МУЖСКИЕ ИМЕНА ===\n"
+               + ("\n".join(male) if male else "Нет данных") + "\n")
+    return {"ok": True, "name": "ner_names.txt", "content": content,
+            "total": len(filtered)}
+
+
+def _review_file(ctx: dict, fname: str) -> Path:
+    """Файл review внутри проекта (ner_review.json /
+    translate_check_llm_review.json)."""
+    pdir, _section, _name = _project_ctx(ctx)
+    return pdir / fname
+
+
+def _review_get(ctx: dict, fname: str) -> dict:
+    """Чтение review-файла: JSON pretty, отсутствующий — пустой."""
+    p = _review_file(ctx, fname)
+    if not p.is_file():
+        return {"ok": True, "exists": False, "content": ""}
+    text = p.read_text(encoding="utf-8", errors="replace")
+    if p.suffix == ".json":
+        try:
+            import json as _json
+            text = _json.dumps(_json.loads(text), ensure_ascii=False, indent=2)
+        except (ValueError, TypeError):
+            log.debug("review-файл невалиден, отдаём как есть: %s", fname)
+    return {"ok": True, "exists": True, "content": text,
+            "size": p.stat().st_size}
+
+
+def _review_put(ctx: dict, fname: str) -> dict:
+    """Запись review-файла (PUT, контент в body)."""
+    common = _import_common(ctx)
+    content = ctx["body"].get("content")
+    if content is None:
+        raise ApiError(400, "Поле content обязательно")
+    p = _review_file(ctx, fname)
+    common.atomic_write(p, unicodedata.normalize("NFC", str(content)))
+    return {"ok": True, "exists": True}
+
+
+def _review_apply(ctx: dict, action: str) -> dict:
+    """Применение review-правок: запуск стадии n/5 с --apply.
+
+    POST /api/{ner|translate_check_llm}/review/apply
+    {project, dry_run?} → JobManager
+    (subprocess ner_check.py/translate_check_llm.py --apply
+    [--dry-run])."""
+    body = ctx["body"]
+    project = (body.get("project") or "").strip()
+    if "/" not in project:
+        raise ApiError(400, "Параметр project=sec/name обязателен")
+    dry = bool(body.get("dry_run", False))
+    params: dict = {"apply": True, "dry_run": dry}
+    if action == "translate_check_llm":
+        params["type"] = body.get("type") or "polished"
+    ctx["body"] = {"action": action, "project": project, "params": params}
+    return _jobs_start(ctx)
+
+
+def _ner_review_apply(ctx: dict) -> dict:
+    """POST /api/ner/review/apply → ner_check.py --apply."""
+    return _review_apply(ctx, "ner_check")
+
+
+def _tcl_review_apply(ctx: dict) -> dict:
+    """POST /api/translate_check_llm/review/apply →
+    translate_check_llm.py --apply."""
+    return _review_apply(ctx, "translate_check_llm")
+
+
+def _env_path(ctx: dict, scope: str) -> Path:
+    """Файл .env для web-редактирования (раунд 4).
+
+    scope=project → ТОЛЬКО pdir/.env (собственный файл проекта; если его
+    нет — хендлеры отвечают exists=False); scope=global → системный
+    projects/.env (единый конфиг, редактируется из вкладки «Настройки»).
+    """
+    if scope == "global":
+        return _projects_root(ctx) / ".env"
+    return _project_ctx(ctx)[0] / ".env"
+
+
+def _env_scope_info(ctx: dict, scope: str, path: Path) -> dict:
+    """Пометка: чей файл фактически открыт (проект/общий)."""
+    if scope == "project":
+        return {"source": "project"}
+    return {"source": "shared"}
+
+
+def _mask_env(text: str) -> str:
+    """Маскирование значений: KEY=value → KEY=•••• (комментарии целы)."""
+    out = []
+    for line in text.splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key = line.split("=", 1)[0].rstrip()
+            out.append(f"{key}=••••")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _env_no_auth(ctx: dict) -> bool:
+    """Режим без аутентификации (W1): значения .env можно показывать."""
+    auth_obj = ctx.get("auth")
+    return bool(auth_obj is not None and getattr(auth_obj, "no_auth", False))
+
+
+def _env_get(ctx: dict) -> dict:
+    """.env (GET /api/env?project=&scope=project|global).
+
+    W6: без аутентификации (доверенная LAN) значения ВИДИМЫ — отдаём
+    целиком (content). При --auth — только ключи и маска ••••.
+    Плюс пометка source: чей файл фактически открыт (project/shared/repo).
+    """
+    scope = ctx["query"].get("scope", "project")
+    p = _env_path(ctx, scope)
+    info = _env_scope_info(ctx, scope, p)
+    if not p.is_file():
+        return {"ok": True, "scope": scope, "exists": False,
+                "masked": "", "keys": [], "visible": _env_no_auth(ctx),
+                **info}
+    text = p.read_text(encoding="utf-8", errors="replace")
+    keys = [line.split("=", 1)[0].strip()
+            for line in text.splitlines()
+            if "=" in line and not line.lstrip().startswith("#")]
+    resp = {"ok": True, "scope": scope, "exists": True,
+            "masked": _mask_env(text), "keys": keys,
+            "visible": _env_no_auth(ctx), **info}
+    if _env_no_auth(ctx):
+        resp["content"] = text
+    return resp
+
+
+def _env_put(ctx: dict) -> dict:
+    """Запись .env (PUT /api/env {scope, content | changes}).
+
+    content — ПОЛНАЯ замена файла (создание с нуля / дублирование из
+    общего или шаблона); changes: {KEY: value} — точечная замена
+    (пустое значение — удалить строку ^KEY=, комментарии не трогаем).
+    Значения в ответ не возвращаются."""
+    common = _import_common(ctx)
+    body = ctx["body"]
+    scope = body.get("scope", "project")
+    p = _env_path(ctx, scope)
+    if "content" in body:
+        if not isinstance(body["content"], str):
+            raise ApiError(400, "Поле content: строка")
+        common.atomic_write(p, unicodedata.normalize("NFC", body["content"]))
+        keys = [line.split("=", 1)[0].strip()
+                for line in body["content"].splitlines()
+                if "=" in line and not line.lstrip().startswith("#")]
+        return {"ok": True, "scope": scope, "keys": keys}
+    changes = body.get("changes")
+    if not isinstance(changes, dict):
+        raise ApiError(400, "Поле changes: {KEY: value}")
+    text = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
+    lines = text.splitlines()
+    for key, value in (changes or {}).items():
+        k = str(key).strip()
+        # M4 (AUDIT): ключ — строго [A-Za-z0-9_] (нет '=', пробелов, '\n')
+        if not _ENV_KEY_RE.match(k):
+            raise ApiError(400, f"Некорректный ключ: {key!r}")
+        value = "" if value is None else str(value)
+        # M4 (AUDIT): перевод строки в значении — инъекция новых ключей
+        if "\n" in value or "\r" in value:
+            raise ApiError(400, f"Значение ключа {k!r} не может содержать перевод строки")
+        replaced = False
+        for i, line in enumerate(lines):
+            if line.split("=", 1)[0].strip() == k:
+                if value:
+                    lines[i] = f"{k}={value}"
+                else:
+                    del lines[i]
+                replaced = True
+                break
+        if not replaced and value:
+            lines.append(f"{k}={value}")
+    out = "\n".join(lines)
+    if out and not out.endswith("\n"):
+        out += "\n"
+    common.atomic_write(p, out)
+    keys = [line.split("=", 1)[0].strip()
+            for line in lines
+            if "=" in line and not line.lstrip().startswith("#")]
+    return {"ok": True, "scope": scope, "keys": keys}
+
+
+def _env_delete(ctx: dict) -> dict:
+    """Удалить собственный .env проекта (DELETE /api/env?project=&scope=project).
+
+    После удаления проект снова использует общий projects/.env —
+    канон find_env_file (fallback) остаётся для конвейера.
+    """
+    pdir, _section, _name = _project_ctx(ctx)
+    p = pdir / ".env"
+    if p.is_file():
+        p.unlink()
+    return {"ok": True, "scope": "project", "deleted": True}
+
+
+def _env_template(ctx: dict) -> dict:
+    """Шаблон .env из templates/.env.example (GET /api/env/template)."""
+    repo = _repo_root(ctx)
+    f = repo / "templates" / ".env.example"
+    if f.is_file():
+        return {"ok": True, "name": f.name,
+                "content": f.read_text(encoding="utf-8", errors="replace")}
+    return {"ok": True, "name": None, "content": ""}
+
+
+def _prompts_list(ctx: dict) -> dict:
+    """Список prompts/ проекта с тегами + доступные шаблоны (W4).
+
+    Шаблоны — имена файлов из templates/*/prompts (уникальные, с пометкой
+    from_template): фронт показывает их даже при пустом prompts/ проекта
+    и умеет создавать промпт из шаблона.
+    """
+    pdir, _section, _name = _project_ctx(ctx)
+    pr = pdir / "prompts"
+    out = []
+    if pr.is_dir():
+        for f in sorted(pr.iterdir()):
+            if not f.is_file():
+                continue
+            tags = []
+            try:
+                head = f.read_text(encoding="utf-8", errors="replace")[:4000]
+                for m in re.findall(r"<(\w+)>", head):
+                    if m not in tags:
+                        tags.append(m)
+                out.append({"name": f.name, "size": f.stat().st_size,
+                            "tags": tags})
+            except OSError as exc:
+                log.debug("Промпт не читается %s: %s", f, exc)
+    repo = _repo_root(ctx)
+    tpl_root = repo / "templates"
+    templates = []
+    if tpl_root.is_dir():
+        for tset in sorted(tpl_root.iterdir()):
+            tdir = tset / "prompts"
+            if not tset.is_dir() or not tdir.is_dir():
+                continue
+            try:
+                for f in sorted(tdir.iterdir()):
+                    if f.is_file() and f.name not in [t["name"] for t in templates]:
+                        templates.append({"name": f.name, "set": tset.name,
+                                          "size": f.stat().st_size})
+            except OSError as exc:
+                log.debug("Шаблоны не читаются %s: %s", tset.name, exc)
+    return {"ok": True, "prompts": out, "templates": templates}
+
+
+def _prompts_get(ctx: dict) -> dict:
+    """Содержимое промпта (GET /api/prompts/{name}?project=)."""
+    pdir, _section, _name = _project_ctx(ctx)
+    name = ctx["params"]["name"]
+    target = _resolve_project_path(ctx, pdir / "prompts", name)
+    if not target.is_file():
+        raise ApiError(404, f"Промпт не найден: {name}")
+    return {"ok": True, "name": name,
+            "content": target.read_text(encoding="utf-8", errors="replace")}
+
+
+def _prompts_put(ctx: dict) -> dict:
+    """Сохранить промпт (PUT /api/prompts/{name} {project, content})."""
+    common = _import_common(ctx)
+    pdir, _section, _name = _project_ctx(ctx)
+    name = ctx["params"]["name"]
+    content = ctx["body"].get("content")
+    if content is None:
+        raise ApiError(400, "Поле content обязательно")
+    target = _resolve_project_path(ctx, pdir / "prompts", name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    common.atomic_write(target, unicodedata.normalize("NFC", str(content)))
+    return {"ok": True, "name": name}
+
+
+def _prompts_delete(ctx: dict) -> dict:
+    """Удалить промпт проекта (DELETE /api/prompts/{name}?project=)."""
+    pdir, _section, _name = _project_ctx(ctx)
+    name = ctx["params"]["name"]
+    target = _resolve_project_path(ctx, pdir / "prompts", name)
+    if not target.is_file():
+        raise ApiError(404, f"Промпт не найден: {name}")
+    target.unlink()
+    return {"ok": True, "name": name}
+
+
+def _prompts_template(ctx: dict) -> dict:
+    """Шаблоны промпта из templates/*/prompts (GET .../template)."""
+    repo = _repo_root(ctx)
+    name = ctx["params"]["name"]
+    tpl_root = repo / "templates"
+    out = []
+    if tpl_root.is_dir():
+        for tset in sorted(tpl_root.iterdir()):
+            if not tset.is_dir():
+                continue
+            f = tset / "prompts" / name
+            if f.is_file():
+                try:
+                    out.append({"set": tset.name, "name": name,
+                                "content": f.read_text(
+                                    encoding="utf-8", errors="replace")})
+                except OSError as exc:
+                    log.debug("Шаблон не читается %s: %s", f, exc)
+    if not out:
+        raise ApiError(404, f"Шаблон не найден: {name}")
+    return {"ok": True, "name": name, "templates": out}
+
+
+def _metadata_get(ctx: dict) -> dict:
+    """source/metadata.yaml (GET /api/metadata?project=)."""
+    pdir, _section, _name = _project_ctx(ctx)
+    p = pdir / "source" / "metadata.yaml"
+    if not p.is_file():
+        return {"ok": True, "exists": False, "content": ""}
+    return {"ok": True, "exists": True,
+            "content": p.read_text(encoding="utf-8", errors="replace")}
+
+
+def _metadata_put(ctx: dict) -> dict:
+    """Сохранить source/metadata.yaml (PUT /api/metadata)."""
+    common = _import_common(ctx)
+    pdir, _section, _name = _project_ctx(ctx)
+    content = ctx["body"].get("content")
+    if content is None:
+        raise ApiError(400, "Поле content обязательно")
+    p = pdir / "source" / "metadata.yaml"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    common.atomic_write(p, unicodedata.normalize("NFC", str(content)))
+    return {"ok": True, "exists": True}
+
+
+# ══════════════════════════════════════════════════════════════
+# Обложка (W6)
+# ══════════════════════════════════════════════════════════════
+COVER_NAMES = ("cover.jpg", "cover.png", "cover.jpeg", "cover.webp")
+COVER_MAX_BYTES = 8 * 1024 * 1024  # 8 МБ
+
+
+def _cover_file(pdir: Path) -> Path | None:
+    """Существующий файл обложки в source/ (первый по приоритету имён)."""
+    src = pdir / "source"
+    if not src.is_dir():
+        return None
+    for n in COVER_NAMES:
+        p = src / n
+        if p.is_file():
+            return p
+    return None
+
+
+def _cover_get(ctx: dict) -> dict:
+    """Статус обложки (GET /api/cover?project=): имя/размер или ничего."""
+    pdir, _section, _name = _project_ctx(ctx)
+    p = _cover_file(pdir)
+    if p is None:
+        return {"ok": True, "exists": False}
+    try:
+        size = p.stat().st_size
+    except OSError as exc:
+        raise ApiError(404, f"Обложка не читается: {exc.strerror}") from exc
+    return {"ok": True, "exists": True, "name": p.name, "size": size,
+            "path": f"source/{p.name}"}
+
+
+def _cover_put(ctx: dict) -> dict:
+    """Загрузить обложку (PUT /api/cover {project, content_base64, name}).
+
+    Имя приводится к cover.<расширение>; допустимы jpg/png/jpeg/webp,
+    лимит COVER_MAX_BYTES. Прежние обложки с другими расширениями
+    удаляются (одна обложка — один файл).
+    """
+    import base64
+    import binascii
+    pdir, _section, _name = _project_ctx(ctx)
+    body = ctx["body"]
+    raw_b64 = str(body.get("content_base64") or "")
+    if not raw_b64:
+        raise ApiError(400, "Поле content_base64 обязательно")
+    try:
+        raw = base64.b64decode(raw_b64, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ApiError(400, f"Некорректный base64: {exc}") from exc
+    if len(raw) > COVER_MAX_BYTES:
+        raise ApiError(413, f"Обложка больше {COVER_MAX_BYTES // (1024 * 1024)} МБ")
+    name = str(body.get("name") or "cover.jpg")
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else "jpg"
+    if ext not in ("jpg", "jpeg", "png", "webp"):
+        raise ApiError(400, "Допустимы cover.jpg / .png / .webp")
+    # L6 (AUDIT): сигнатура — файл должен быть реальным изображением
+    if not _cover_magic_ok(raw, ext):
+        raise ApiError(400, f"Файл не похож на изображение .{ext}")
+    src = pdir / "source"
+    src.mkdir(parents=True, exist_ok=True)
+    # убираем прочие варианты обложки — должен остаться один файл
+    for n in COVER_NAMES:
+        old = src / n
+        if n != f"cover.{ext}" and old.is_file():
+            try:
+                old.unlink()
+            except OSError as exc:
+                log.debug("Старая обложка не удалена %s: %s", old, exc)
+    target = src / f"cover.{ext}"
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(raw)
+    tmp.replace(target)
+    return {"ok": True, "exists": True, "name": target.name,
+            "size": len(raw), "path": f"source/{target.name}"}
+
+
+def _cover_magic_ok(raw: bytes, ext: str) -> bool:
+    """Сигнатура изображения по первым байтам (L6, AUDIT)."""
+    if ext in ("jpg", "jpeg"):
+        return raw[:3] == b"\xff\xd8\xff"
+    if ext == "png":
+        return raw[:8] == b"\x89PNG\r\n\x1a\n"
+    if ext == "webp":
+        return raw[:4] == b"RIFF" and raw[8:12] == b"WEBP"
+    return False
+
+
+def _cover_delete(ctx: dict) -> dict:
+    """Удалить обложку (DELETE /api/cover?project=)."""
+    pdir, _section, _name = _project_ctx(ctx)
+    p = _cover_file(pdir)
+    if p is None:
+        return {"ok": True, "exists": False}
+    try:
+        p.unlink()
+    except OSError as exc:
+        raise ApiError(400, f"Не удалось удалить обложку: {exc.strerror}") from exc
+    return {"ok": True, "exists": False}
+
+
+# ════════════════════════════════════════════════════════════════════
+# Логи (M8)
+# ════════════════════════════════════════════════════════════════════
+LOG_TAIL_LIMIT = 1024 * 1024  # максимум 1 МБ на просмотр
+
+
+def _logs_list(ctx: dict) -> dict:
+    """Дерево логов проекта: рекурсивно по logs/, только *.log (раунд 14).
+    path — относительный путь от logs/ (папки через '/'); GET /api/logs."""
+    pdir, _section, _name = _project_ctx(ctx)
+    out = []
+    root = pdir / "logs"
+    if not root.is_dir():
+        return {"ok": True, "logs": out}
+    for f in sorted(root.rglob("*")):
+        try:
+            if not f.is_file() or f.suffix.lower() != ".log":
+                continue
+            st = f.stat()
+            rel = f.relative_to(root)
+            out.append({"name": rel.name,
+                        "path": rel.as_posix(),
+                        "size": st.st_size,
+                        "mtime": int(st.st_mtime)})
+        except OSError as exc:
+            log.debug("Лог недоступен (%s): %s", f.name, exc)
+    return {"ok": True, "logs": out}
+
+
+def _logs_read(ctx: dict) -> dict:
+    """Хвост лог-файла (GET /api/logs/{name}?project=&tail=N байт)."""
+    pdir, _section, _name = _project_ctx(ctx)
+    name = ctx["params"]["name"]
+    sub = ctx["query"].get("dir", "")
+    # раунд 14: подпапка — любой относительный путь от logs/
+    # (путь валидируется _resolve_project_path, выход за logs/ запрещён)
+    base = (pdir / "logs" / sub) if sub else (pdir / "logs")
+    target = _resolve_project_path(ctx, base, name)
+    if not target.is_file():
+        raise ApiError(404, f"Лог не найден: {name}")
+    try:
+        tail = int(ctx["query"].get("tail", "0") or "0")
+    except ValueError:
+        tail = 0
+    size = target.stat().st_size
+    start = max(0, size - min(tail, LOG_TAIL_LIMIT)) if tail else 0
+    try:
+        with open(target, "rb") as fh:
+            fh.seek(start)
+            raw = fh.read()
+    except OSError as exc:
+        raise ApiError(404, f"Лог не читается: {name} ({exc.strerror})") from exc
+    text = raw.decode("utf-8", errors="replace")
+    return {"ok": True, "name": name, "size": size,
+            "start": start, "content": text}
+
+
+def _notes_get(ctx: dict) -> dict:
+    """Заметки (GET /api/notes): projects/notes.md целиком (раунд 12).
+    Файла нет — пустая строка (создастся при PUT)."""
+    path = _projects_root(ctx) / "notes.md"
+    content = path.read_text(encoding="utf-8", errors="replace") \
+        if path.is_file() else ""
+    return {"ok": True, "exists": path.is_file(), "content": content}
+
+
+def _notes_put(ctx: dict) -> dict:
+    """Запись заметок (PUT /api/notes {content}) — атомарно."""
+    body = ctx.get("body") or {}
+    if not isinstance(body.get("content"), str):
+        raise ApiError(400, "Поле content: строка")
+    common = _import_common(ctx)
+    path = _projects_root(ctx) / "notes.md"
+    common.atomic_write(str(path),
+                        unicodedata.normalize("NFC", body["content"]))
+    return {"ok": True, "exists": True}
+
+
+def _register_m7(router: Router) -> None:
+    router.add("GET", "/api/ner", _ner_get)
+    router.add("GET", "/api/ner/export", _ner_export)
+    router.add("PUT", "/api/ner", _ner_put)
+    router.add("GET", "/api/ner/review", lambda ctx: _review_get(ctx, "ner_review.json"))
+    router.add("PUT", "/api/ner/review", lambda ctx: _review_put(ctx, "ner_review.json"))
+    router.add("POST", "/api/ner/review/apply", _ner_review_apply)
+    router.add("GET", "/api/translate_check_llm/review", lambda ctx: _review_get(ctx, "translate_check_llm_review.json"))
+    router.add("PUT", "/api/translate_check_llm/review", lambda ctx: _review_put(ctx, "translate_check_llm_review.json"))
+    router.add("POST", "/api/translate_check_llm/review/apply", _tcl_review_apply)
+    router.add("GET", "/api/notes", _notes_get)
+    router.add("PUT", "/api/notes", _notes_put)
+    router.add("GET", "/api/env", _env_get)
+    router.add("PUT", "/api/env", _env_put)
+    router.add("DELETE", "/api/env", _env_delete)
+    router.add("GET", "/api/env/template", _env_template)
+    router.add("GET", "/api/prompts", _prompts_list)
+    router.add("GET", "/api/prompts/{name}", _prompts_get)
+    router.add("PUT", "/api/prompts/{name}", _prompts_put)
+    router.add("DELETE", "/api/prompts/{name}", _prompts_delete)
+    router.add("GET", "/api/prompts/{name}/template", _prompts_template)
+    router.add("GET", "/api/metadata", _metadata_get)
+    router.add("PUT", "/api/metadata", _metadata_put)
+    router.add("GET", "/api/cover", _cover_get)
+    router.add("PUT", "/api/cover", _cover_put)
+    router.add("DELETE", "/api/cover", _cover_delete)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Регистрация роутов
+# ════════════════════════════════════════════════════════════════════
+# Отчёты translate_check (W7)
+# ════════════════════════════════════════════════════════════════════
+CHECK_REPORT_LIMIT = 512 * 1024  # читаем не больше 512 КБ на отчёт
+
+
+def _parse_check_report(text: str) -> dict:
+    """Разбор текстового отчёта translate_check (logs/check_*.txt).
+
+    Формат: `N. Папка: путь` + строки ошибок (  - … / [ВНИМАНИЕ] / [FATAL]),
+    финал — `--- Сводка ---`. Возвращает метаданные + entries.
+    """
+    def _m(pattern: str) -> str | None:
+        m = re.search(pattern, text)
+        return m.group(1).strip() if m else None
+
+    entries: list[dict] = []
+    cur: dict | None = None
+    def _chapter_num(m: re.Match) -> int | None:
+        """Номер главы из regex-совпадения; мусорные отчёты не роняем."""
+        try:
+            return int(m.group(1))
+        except (ValueError, IndexError):
+            return None
+
+    for line in text.splitlines():
+        m = re.match(r"^(\d+)\. Папка: (.+)$", line)
+        num = _chapter_num(m) if m else None
+        if m and num is not None:
+            if cur:
+                entries.append(cur)
+            cur = {"chapter": num, "dir": m.group(2).strip(),
+                   "errors": []}
+            continue
+        m = re.match(r"^(\d+)\.\s+(\S.*)$", line)
+        num = _chapter_num(m) if m else None
+        if m and num is not None:  # «Папка не найдена.» и т.п.
+            if cur:
+                entries.append(cur)
+            cur = {"chapter": num, "dir": "",
+                   "errors": [m.group(2).strip()]}
+            continue
+        if cur is not None:
+            stripped = line.strip()
+            if stripped == "--- Сводка ---" or stripped.startswith("==="):
+                entries.append(cur)
+                cur = None
+                continue
+            if stripped:
+                cur["errors"].append(stripped)
+    if cur:
+        entries.append(cur)
+    for e in entries:
+        e["fatal"] = any(x.startswith("[FATAL]") for x in e["errors"])
+        if e["dir"].startswith("./"):  # './chapters/xxx' → 'chapters/xxx'
+            e["dir"] = e["dir"][2:]
+    return {
+        "type": _m(r"=== Отчёт о проверке перевода \((\w+)\) ==="),
+        "range": _m(r"Диапазон глав\s*: (.+)"),
+        "date": _m(r"Дата\s*: (.+)"),
+        "checked": _m(r"Проверено глав\s*: (\d+)"),
+        "failed": _m(r"С ошибками\s*: (\d+)"),
+        "skipped": _m(r"Пропущено\s*: (\d+)"),
+        "entries": entries,
+    }
+
+
+def _check_reports(ctx: dict) -> dict:
+    """Список и разбор отчётов translate_check (GET /api/check?project=)."""
+    pdir, _section, _name = _project_ctx(ctx)
+    logs = pdir / "logs"
+    out = []
+    if logs.is_dir():
+        files = [f for f in logs.iterdir()
+                 if f.is_file() and f.name.startswith("check_")
+                 and f.suffix == ".txt"]
+        for f in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True):
+            try:
+                text = f.read_text(encoding="utf-8",
+                                   errors="replace")[:CHECK_REPORT_LIMIT]
+                info = _parse_check_report(text)
+                out.append({"name": f.name,
+                            "mtime": int(f.stat().st_mtime), **info})
+            except OSError as exc:
+                log.debug("Отчёт не читается %s: %s", f.name, exc)
+    return {"ok": True, "reports": out}
+
+
+def _register_check(router: Router) -> None:
+    router.add("GET", "/api/check", _check_reports)
+
+
+def _register_logs(router: Router) -> None:
+    router.add("GET", "/api/logs", _logs_list)
+    router.add("GET", "/api/logs/{name}", _logs_read)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Запуски и стадии (M4)
+# ════════════════════════════════════════════════════════════════════
+def _job_manager(ctx: dict) -> JobManager:
+    """Общий JobManager (singleton на сервер, ленивое создание).
+
+    Приоритет: явный ctx['job_manager'] (тесты/встраивание) →
+    handler.server.job_manager (реальный сервер) → глобальный
+    _main.JOB_MANAGER (fallback, напр. CLI-импорты)."""
+    jm = ctx.get("job_manager")
+    if jm is not None:
+        return jm
+    handler = ctx.get("handler")
+    srv = handler.server if handler is not None else None
+    jm = getattr(srv, "job_manager", None) if srv is not None else None
+    if jm is None:
+        from web import main as _main
+        jm = _main.JOB_MANAGER  # pragma: no cover — реальный сервер
+        if srv is not None:
+            srv.job_manager = jm
+    return jm
+
+
+def _jobs_start(ctx: dict) -> dict:
+    """Запуск стадии (POST /api/jobs {action, project, params})."""
+    body = ctx["body"]
+    action = (body.get("action") or "").strip()
+    project = (body.get("project") or "").strip()
+    params = body.get("params") or {}
+    if not action:
+        raise ApiError(400, "Поле action обязательно")
+    if "/" not in project:
+        raise ApiError(400, "Параметр project=sec/name обязателен")
+    prj = _import_projects(ctx)
+    section, _, name = project.partition("/")
+    pdir = prj.project_dir(_projects_root(ctx), section, name)
+    if not pdir.is_dir():
+        raise ApiError(404, f"Проект не найден: {section}/{name}")
+    spec = spec_for(action)
+    if spec is None:
+        raise ApiError(400, f"Стадия {action} пока не поддерживается в web")
+    title = spec["title"]
+    repo = _repo_root(ctx)
+    script = script_path(action, repo)
+    if script is None or not script.is_file():
+        raise ApiError(500, f"Скрипт не найден: {spec['script']}")
+    ctx["project_dir"] = pdir  # для LLM-профилей (find_env_file)
+    # R9: настройки запуска сохраняются в .env проекта (копия общего)
+    _persist_run_params(ctx, pdir, action, params)
+    argv = build_command(action, params, ctx)
+    argv[0] = str(script)  # абсолютный путь к скрипту
+    jm = _job_manager(ctx)
+    # H2 (AUDIT): лимит параллельных задач --jobs-limit (мёртвая опция → живая)
+    handler = ctx.get("handler")
+    srv = handler.server if handler is not None else None
+    limit = getattr(srv, "jobs_limit", 2) if srv is not None else 2
+    running = sum(1 for j in jm.list() if j.get("status") == "running")
+    if running >= limit:
+        raise ApiError(
+            429,
+            f"Лимит параллельных задач: {limit} (активно: {running}). "
+            f"Дождитесь завершения или остановите запуск.",
+        )
+    # M10 (AUDIT): per-project лок — две стадии на один проект
+    # параллельно перезаписали бы одни и те же артефакты
+    busy = jm.running_on(project)
+    if busy is not None:
+        raise ApiError(
+            409,
+            f"Проект {project} уже обрабатывается задачей «{busy.title}» "
+            f"({busy.id}) — дождитесь завершения или остановите её.",
+        )
+    env = None
+    api_key = ctx.pop("_llm_api_key", None)
+    if api_key:
+        # P1 (AUDIT #2): ключ — только в окружении subprocess
+        env = {"LLM_API_KEY": str(api_key)}
+    job = jm.start(action, title, project, argv, pdir, env=env)
+    return {"ok": True, "job": _job_payload(job)}
+
+
+def _job_payload(job) -> dict:
+    """Публичное представление запуска (метаданные + буфер)."""
+    return job.payload()
+
+
+# ════════════════════════════════════════════════════════════════════
+# R9: настройки запусков в .env проекта
+# ════════════════════════════════════════════════════════════════════
+def _env_apply_keys(env_path: Path, updates: dict) -> None:
+    """Обновляет KEY=VALUE в .env, сохраняя комментарии/порядок строк.
+
+    Существующие ключи заменяются на месте, новые добавляются в конец;
+    запись — атомарная (atomic_write). M4 (AUDIT): значения санитизируются
+    (strip + перевод строки → пробел) — нет инъекции новых ключей."""
+    lines: list[str] = []
+    if env_path.is_file():
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+    keys = set(updates)
+    out: list[str] = []
+    used: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            name = stripped.split("=", 1)[0].strip()
+            if name in keys:
+                out.append(f"{name}={_sanitize_env_value(updates[name])}")
+                used.add(name)
+                continue
+        out.append(line)
+    for name in keys - used:
+        out.append(f"{name}={_sanitize_env_value(updates[name])}")
+    c = _import_common({})
+    c.atomic_write(str(env_path), "\n".join(out) + "\n")
+
+
+_ENV_KEY_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _sanitize_env_value(value) -> str:
+    """Значение .env: строка без переводов строк (M4)."""
+    s = "" if value is None else str(value).strip()
+    return s.replace("\n", " ").replace("\r", " ")
+
+
+def _persist_run_params(ctx: dict, pdir: Path, stage: str,
+                        params: dict) -> None:
+    """Сохраняет настройки запуска стадии в .env проекта (R9).
+
+    Если pdir/.env нет — копия системного projects/.env (или шаблона),
+    затем обновляются ключи по env_keys_for. api_key пишется в .env
+    (раунд 13: локальный однопользовательский проект — удобство важнее
+    сокрытия; ключ хранится как API_KEY). Пустые значения НЕ пишутся;
+    системный .env не трогается."""
+    from web.stages import env_keys_for
+    updates: dict[str, str] = {}
+    profile = str(params.get("profile") or "")
+    for field, value in params.items():
+        if value is None or value == "":
+            continue
+        keys = env_keys_for(stage, field, profile)
+        if not keys:
+            continue
+        if isinstance(value, bool):
+            updates[keys[0]] = "1" if value else "0"
+        else:
+            updates[keys[0]] = str(value).strip()
+    if not updates:
+        return
+    env_path = pdir / ".env"
+    if not env_path.is_file():
+        src = _projects_root(ctx) / ".env"
+        if not src.is_file():
+            src = _repo_root(ctx) / "templates" / ".env.example"
+        try:
+            if src.is_file():
+                # M1 (AUDIT): копия БЕЗ секретов — ключи остаются только
+                # в системном projects/.env (fallback в _llm_argv)
+                text = src.read_text(encoding="utf-8", errors="replace")
+                text = _strip_secret_keys(text)
+                env_path.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            log.debug("Не удалось скопировать .env в проект: %s", exc)
+    _env_apply_keys(env_path, updates)
+
+
+def _strip_secret_keys(text: str) -> str:
+    """Убирает значения секретных ключей (*_API_KEY, API_KEY) из текста
+    .env (M1): строки остаются с пустым значением + комментарий.
+    Раунд 12: единый ключ API_KEY тоже секретный (не *_API_KEY)."""
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            name = stripped.split("=", 1)[0].strip()
+            if name == "API_KEY" or name.upper().endswith("_API_KEY"):
+                out.append(f"{name}=")
+                out.append(f"# (секрет не копируется в проект — M1, AUDIT)")
+                continue
+        out.append(line)
+    return "\n".join(out) + ("\n" if out else "")
+
+
+def _env_ctx(ctx: dict, scope: str) -> tuple[Path, str]:
+    """(путь к .env, источник) для scope global/project."""
+    if scope == "global":
+        return _projects_root(ctx) / ".env", "shared"
+    pdir, _s, _n = _project_ctx(ctx)
+    return pdir / ".env", "project"
+
+
+def _jobs_list(ctx: dict) -> dict:
+    """История запусков (GET /api/jobs)."""
+    jm = _job_manager(ctx)
+    return {"ok": True, "jobs": jm.list()}
+
+
+def _jobs_get(ctx: dict) -> dict:
+    """Детали запуска + хвост буфера (GET /api/jobs/{id})."""
+    jm = _job_manager(ctx)
+    job = jm.get(ctx["params"]["id"])
+    if job is None:
+        raise ApiError(404, "Запуск не найден")
+    return {"ok": True, "job": _job_payload(job)}
+
+
+def _jobs_stop(ctx: dict) -> dict:
+    """Остановка (POST /api/jobs/{id}/stop): terminate → 5 c → kill."""
+    jm = _job_manager(ctx)
+    job = jm.stop(ctx["params"]["id"])
+    if job is None:
+        raise ApiError(404, "Запуск не найден")
+    return {"ok": True, "status": job.status}
+
+
+def _jobs_delete(ctx: dict) -> dict:
+    """Удалить из истории (DELETE /api/jobs/{id})."""
+    jm = _job_manager(ctx)
+    if not jm.remove(ctx["params"]["id"]):
+        raise ApiError(404, "Запуск не найден")
+    return {"ok": True}
+
+
+def _jobs_stream(ctx: dict) -> dict:
+    """SSE-стрим лога (GET /api/jobs/{id}/stream)."""
+    import json as _json
+    jm = _job_manager(ctx)
+    job = jm.get(ctx["params"]["id"])
+    if job is None:
+        raise ApiError(404, "Запуск не найден")
+    handler = ctx["handler"]
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("X-Accel-Buffering", "no")
+    handler.send_header("Connection", "close")
+    handler.end_headers()
+    # SSE-стрим сам пишет ответ; конец потока — EOF для fetch:
+    # второй JSON-ответ сервер дописывать не должен
+    ctx["streamed"] = True
+    handler.close_connection = True
+    q = job.subscribe()
+    try:
+        # сразу — весь текущий буфер + события (для живой таблицы)
+        for line in job.tail(5000):
+            ev = _json.dumps({"type": "line", "text": line}, ensure_ascii=False)
+            handler.wfile.write(f"data: {ev}\n\n".encode("utf-8"))
+        for ev_item in list(job.events):
+            ev = _json.dumps({"type": "event", "event": ev_item},
+                             ensure_ascii=False)
+            handler.wfile.write(f"data: {ev}\n\n".encode("utf-8"))
+        # текущий прогресс — живое прикрепление сразу видит бар
+        if job.progress:
+            ev = _json.dumps({"type": "progress", "event": job.progress},
+                             ensure_ascii=False)
+            handler.wfile.write(f"data: {ev}\n\n".encode("utf-8"))
+        # уже завершился до подписки — статус сразу и закрываем
+        if job.status != "running":
+            ev = _json.dumps({"type": "status", "status": job.status},
+                             ensure_ascii=False)
+            handler.wfile.write(f"data: {ev}\n\n".encode("utf-8"))
+            handler.wfile.flush()
+            return {}
+        handler.wfile.flush()
+        while True:
+            try:
+                ev_type, payload = q.get(timeout=15.0)
+            except Exception:
+                handler.wfile.write(b": ping\n\n")
+                handler.wfile.flush()
+                continue
+            if ev_type == "line":
+                ev = _json.dumps({"type": "line", "text": payload}, ensure_ascii=False)
+            elif ev_type == "event":
+                ev = _json.dumps({"type": "event", "event": payload},
+                                 ensure_ascii=False)
+            elif ev_type == "progress":
+                ev = _json.dumps({"type": "progress", "event": payload},
+                                 ensure_ascii=False)
+            else:
+                ev = _json.dumps({"type": "status", "status": payload}, ensure_ascii=False)
+            handler.wfile.write(f"data: {ev}\n\n".encode("utf-8"))
+            handler.wfile.flush()
+            if ev_type == "status":
+                break
+    finally:
+        job.unsubscribe(q)
+    return {}
+
+
+def _stage_spec(ctx: dict) -> dict:
+    """Спека стадии (GET /api/stages/{key}/spec).
+
+    R9: при project=sec/name поля предзаполняются из .env проекта
+    (настройки запусков, сохранённые прошлыми запусками) — приоритет
+    .env > дефолт спеки."""
+    spec = spec_for(ctx["params"]["key"])
+    if spec is None:
+        raise ApiError(404, "Стадия не найдена")
+    spec = copy.deepcopy(spec)  # не мутируем глобальный кэш спекаций
+    project = ctx["query"].get("project", "")
+    if "/" in project:
+        try:
+            from web.stages import env_keys_for
+            pdir, _sec, _name = _project_ctx(ctx)
+            # раунд 21 (п.9): автоподхват compiled_chapters.txt для NER —
+            # если дефолт пуст и файл есть. .env ниже приоритетнее
+            # (явные значения всегда выигрывают)
+            if ctx["params"]["key"] == "ner":
+                for field in spec.get("fields", []):
+                    if (field.get("name") == "file"
+                            and not field.get("default")
+                            and (pdir / "compiled_chapters.txt").is_file()):
+                        field["default"] = "compiled_chapters.txt"
+            c = _import_common(ctx)
+            env = c.parse_dotenv(c.find_env_file(start_dir=str(pdir)))
+            for field in spec.get("fields", []):
+                for key in env_keys_for(
+                        ctx["params"]["key"], field["name"]):
+                    # раунд 13: пустое значение не забивает fallback-ключ
+                    # (пустой TRANSLATE_MODEL не прячет общую MODEL)
+                    if key in env and str(env[key]) != "":
+                        val = env[key]
+                        if field.get("type") == "bool":
+                            # D: строка "0" не должна быть truthy —
+                            # чекбокс вспыхивает
+                            field["default"] = str(val).strip().lower() in (
+                                "1", "true", "yes", "on")
+                        elif field.get("type") == "files":
+                            # C: basename — NER_PROMPT_FILE=prompts/ner_prompt.txt
+                            # → ner_prompt.txt (селект наполнен именами)
+                            name = str(val).replace("\\", "/").rsplit("/", 1)[-1]
+                            field["default"] = name
+                        else:
+                            field["default"] = val
+                        break
+        except ApiError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — .env необязателен
+            log.debug("Предзаполнение формы из .env: %s", exc)
+    return {"ok": True, "spec": spec}
+
+
+def _stage_options(ctx: dict) -> dict:
+    """Динамические опции стадии (GET /api/stages/{key}/options?project=)."""
+    common = _import_common(ctx)
+    spec = spec_for(ctx["params"]["key"])
+    if spec is None:
+        raise ApiError(404, "Стадия не найдена")
+    out: dict = {"ok": True, "options": {}}
+    project = ctx["query"].get("project", "")
+    if "/" in project:
+        pdir, _section, _name = _project_ctx(ctx)
+        # диапазон глав
+        chapters_dir = pdir / "chapters"
+        if chapters_dir.is_dir():
+            ch_map = common.build_chapter_map(chapters_dir)
+            nums = sorted(ch_map)
+            if nums:
+                out["options"]["chapters"] = {"min": nums[0], "max": nums[-1]}
+        # файлы source/
+        src = pdir / "source"
+        if src.is_dir():
+            out["options"]["source"] = sorted(
+                f.name for f in src.iterdir()
+                if f.is_file() and f.suffix.lower() in
+                (".epub", ".zip", ".txt"))
+        # файлы prompts/
+        pr = pdir / "prompts"
+        if pr.is_dir():
+            out["options"]["prompts"] = sorted(
+                f.name for f in pr.iterdir() if f.is_file())
+        # файлы корня проекта (для полей files с dir="");
+        # dot-файлы (.env, .web_secret) не показываем — секреты
+        root = sorted(f.name for f in pdir.iterdir()
+                      if f.is_file() and not f.name.startswith("."))
+        if root:
+            out["options"]["root"] = root
+    return out
+
+
+# ════════════════════════════════════════════════════════════════════
+# Шаблоны (раунд 21, вкладка «Шаблоны»)
+# ════════════════════════════════════════════════════════════════════
+def _templates_root(ctx: dict) -> Path:
+    """Корень шаблонов: templates/ репозитория."""
+    return _repo_root(ctx) / "templates"
+
+
+def _templates_create(ctx: dict) -> dict:
+    """POST /api/templates — создать набор ({"name": ...})."""
+    prj = _import_projects(ctx)
+    name = prj.create_template_set(
+        _templates_root(ctx), (ctx["body"].get("name") or "").strip())
+    if not name:
+        raise ApiError(400, "Недопустимое имя набора: General занят, "
+                             "недопустимые символы или уже существует")
+    return {"ok": True, "name": name}
+
+
+def _templates_copy(ctx: dict) -> dict:
+    """POST /api/templates/{set}/copy — копировать ({"dst": ...})."""
+    prj = _import_projects(ctx)
+    src = ctx["params"]["set"]
+    dst = prj.copy_template_set(
+        _templates_root(ctx), src, (ctx["body"].get("dst") or "").strip())
+    if not dst:
+        raise ApiError(400, "Нельзя скопировать: имя недопустимо "
+                             "(General занят) или dst уже существует")
+    return {"ok": True, "name": dst}
+
+
+def _templates_delete(ctx: dict) -> dict:
+    """DELETE /api/templates/{set} — удалить набор (General — 403)."""
+    prj = _import_projects(ctx)
+    name = ctx["params"]["set"]
+    if name == prj.TEMPLATE_PROTECTED:
+        raise ApiError(403, "General — системный набор, удаление запрещено")
+    if not prj.delete_template_set(_templates_root(ctx), name):
+        raise ApiError(404, f"Набор не найден: {name}")
+    return {"ok": True, "name": name}
+
+
+def _templates_file_get(ctx: dict) -> dict:
+    """GET /api/templates/{set}/file?path=… — содержимое файла."""
+    prj = _import_projects(ctx)
+    name = ctx["params"]["set"]
+    rel = ctx["query"].get("path", "")
+    text = prj.read_template_file(_templates_root(ctx), name, rel)
+    if text is None:
+        raise ApiError(404, f"Файл не найден: {name}/{rel}")
+    info = prj.template_file_info(_templates_root(ctx), name, rel) or {}
+    return {"ok": True, "name": name, "path": rel, "content": text,
+            "size": info.get("size", 0), "mtime": info.get("mtime", 0)}
+
+
+def _templates_file_put(ctx: dict) -> dict:
+    """PUT /api/templates/{set}/file — записать файл (path+content)."""
+    prj = _import_projects(ctx)
+    name = ctx["params"]["set"]
+    if name == prj.TEMPLATE_PROTECTED:
+        raise ApiError(403, "General — системный набор, изменение запрещено")
+    body = ctx["body"]
+    rel = (body.get("path") or "").strip()
+    if not rel:
+        raise ApiError(400, "path обязателен")
+    if not prj.write_template_file(
+            _templates_root(ctx), name, rel, body.get("content") or ""):
+        raise ApiError(404, f"Набор не найден: {name}")
+    return {"ok": True, "name": name, "path": rel}
+
+
+def _templates_file_delete(ctx: dict) -> dict:
+    """DELETE /api/templates/{set}/file?path=… — удалить файл."""
+    prj = _import_projects(ctx)
+    name = ctx["params"]["set"]
+    if name == prj.TEMPLATE_PROTECTED:
+        raise ApiError(403, "General — системный набор, изменение запрещено")
+    rel = ctx["query"].get("path", "")
+    if not prj.delete_template_file(_templates_root(ctx), name, rel):
+        raise ApiError(404, f"Файл не найден: {name}/{rel}")
+    return {"ok": True, "name": name, "path": rel}
+
+
+def _templates_rename(ctx: dict) -> dict:
+    """POST /api/templates/{set}/rename — переименовать/перенести файл.
+
+    Body: {src, dst} — относительные пути внутри набора."""
+    prj = _import_projects(ctx)
+    name = ctx["params"]["set"]
+    body = ctx["body"]
+    src = (body.get("src") or "").strip()
+    dst = (body.get("dst") or "").strip()
+    if not src or not dst:
+        raise ApiError(400, "src и dst обязательны")
+    if name == prj.TEMPLATE_PROTECTED:
+        raise ApiError(403, "General — системный набор, изменение запрещено")
+    err = prj.move_template_file(_templates_root(ctx), name, src, dst)
+    if err:
+        code = 404 if "не найден" in err or "Недопустимый" in err else 400
+        raise ApiError(code, f"{name}: {err}")
+    return {"ok": True, "name": name, "src": src, "dst": dst}
+
+
+def _templates_upload(ctx: dict) -> dict:
+    """Загрузка файлов в набор (POST /api/templates/{set}/upload, multipart).
+
+    Поля: files[] (несколько); dest — подпапка внутри набора (опц.).
+    General — 403; лимит max_upload_mb на файл.
+    """
+    prj = _import_projects(ctx)
+    name = ctx["params"]["set"]
+    if name == prj.TEMPLATE_PROTECTED:
+        raise ApiError(403, "General — системный набор, изменение запрещено")
+    set_dir = _templates_root(ctx) / name
+    if not set_dir.is_dir():
+        raise ApiError(404, f"Набор не найден: {name}")
+    raw = ctx.get("raw_body") or b""
+    ctype = ctx.get("content_type") or ""
+    boundary = ctx.get("boundary") or ""
+    if not boundary and "boundary=" in ctype:
+        boundary = ctype.split("boundary=", 1)[1].strip()\
+            .strip('"').strip("'").split(";")[0]
+    try:
+        fields = parse_multipart(raw, boundary)
+    except MultipartError as exc:
+        raise ApiError(400, f"Некорректный multipart: {exc}")
+    dest = extract_value(fields, "dest") or ""
+    files = extract_files(fields)
+    if not files:
+        raise ApiError(400, "Нет файлов в запросе")
+    limit_mb = ctx.get("max_upload_mb", 512)
+    saved = []
+    for f in files:
+        fname = f.get("filename") or ""
+        if not fname or "\x00" in fname:
+            continue
+        if len(f["data"]) > limit_mb * 1024 * 1024:
+            raise ApiError(413, f"Файл слишком большой: {fname}")
+        rel = f"{dest}/{fname}" if dest else fname
+        try:
+            target = resolve_path(set_dir, rel)
+        except SandboxError as exc:
+            raise ApiError(400, str(exc))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(f["data"])
+        saved.append(rel)
+    return {"ok": True, "saved": saved}
+
+
+def _templates_download(ctx: dict) -> dict:
+    """Скачивание файла набора (GET /api/templates/{set}/download?path=)."""
+    prj = _import_projects(ctx)
+    name = ctx["params"]["set"]
+    set_dir = _templates_root(ctx) / name
+    if not set_dir.is_dir():
+        raise ApiError(404, f"Набор не найден: {name}")
+    rel = ctx["query"].get("path", "")
+    try:
+        target = resolve_path(set_dir, rel)
+    except SandboxError as exc:
+        raise ApiError(400, str(exc))
+    if not target.is_file():
+        raise ApiError(404, f"Файл не найден: {name}/{rel}")
+    data = target.read_bytes()
+    handler = ctx["handler"]
+    from urllib.parse import quote
+    handler._send(200, "application/octet-stream", data,
+                  [("Content-Disposition",
+                    f'attachment; filename="{quote(target.name)}"')])
+    return {}  # ответ уже отправлен
+
+
+def _templates_mkdir(ctx: dict) -> dict:
+    """Создать пустой каталог в наборе (POST /api/templates/{set}/mkdir)."""
+    prj = _import_projects(ctx)
+    name = ctx["params"]["set"]
+    rel = (ctx["body"].get("path") or "").strip()
+    if not rel:
+        raise ApiError(400, "path обязателен")
+    err = prj.create_template_dir(_templates_root(ctx), name, rel)
+    if err:
+        code = 403 if "General" in err else \
+            (404 if "не найден" in err or "Недопустимый" in err else 400)
+        raise ApiError(code, f"{name}: {err}")
+    return {"ok": True, "name": name, "path": rel}
+
+
+def _register_templates(router: Router) -> None:
+    router.add("POST", "/api/templates", _templates_create)
+    router.add("POST", "/api/templates/{set}/copy", _templates_copy)
+    router.add("DELETE", "/api/templates/{set}", _templates_delete)
+    router.add("GET", "/api/templates/{set}/file", _templates_file_get)
+    router.add("PUT", "/api/templates/{set}/file", _templates_file_put)
+    router.add("DELETE", "/api/templates/{set}/file", _templates_file_delete)
+    router.add("POST", "/api/templates/{set}/rename", _templates_rename)
+    router.add("POST", "/api/templates/{set}/upload", _templates_upload)
+    router.add("GET", "/api/templates/{set}/download", _templates_download)
+    router.add("POST", "/api/templates/{set}/mkdir", _templates_mkdir)
+
+
+def _stages_list(ctx: dict) -> dict:
+    """Список стадий (GET /api/stages): key/title/script."""
+    return {"ok": True, "stages": [
+        {"key": k, "title": v["title"], "script": v["script"]}
+        for k, v in ordered_stages()]}
+
+
+def _register_jobs(router: Router) -> None:
+    router.add("GET", "/api/stages", _stages_list)
+    router.add("POST", "/api/jobs", _jobs_start)
+    router.add("GET", "/api/jobs", _jobs_list)
+    router.add("GET", "/api/jobs/{id}", _jobs_get)
+    router.add("POST", "/api/jobs/{id}/stop", _jobs_stop)
+    router.add("DELETE", "/api/jobs/{id}", _jobs_delete)
+    router.add("GET", "/api/jobs/{id}/stream", _jobs_stream)
+    router.add("GET", "/api/stages/{key}/spec", _stage_spec)
+    router.add("GET", "/api/stages/{key}/options", _stage_options)

@@ -1,0 +1,2218 @@
+function viewProject(section, name) {
+  const st = {
+    view: "files",
+    path: "",
+    edit: null,
+    ner: null,
+    review: {},
+    search: null,
+  };
+  const page = h("div", { class: "page" });
+
+  function setPath(path) {
+    st.path = path || "";
+    st.edit = null;
+    st.search = null;
+    render();
+  }
+
+  function openEditor(full) {
+    st.edit = full;
+    st.search = null;
+    render();
+  }
+
+  function setView(view) {
+    st.view = view;
+    st.edit = null;
+    st.search = null;
+    render();
+  }
+
+  const TABS = [
+    ["files", "Файлы"],
+    ["ner", "Глоссарий"],
+    ["review", "Проверка"],
+    ["status", "Статус"],
+    ["config", "Конфиг"],
+    ["prompts", "Промпты"],
+    ["logs", "Логи"],
+    ["notes", "Заметки"],
+  ];
+
+  async function render() {
+    page.replaceChildren();
+    const header = h(
+      "div",
+      { class: "page-header" },
+      h(
+        "div",
+        { class: "page-header-main" },
+        h("h1", { class: "page-title" }, name),
+        h("div", { class: "page-sub" }, `${section} · проект`),
+      ),
+      h(
+        "a",
+        { class: "btn btn-sm", href: `#/run/${section}/${name}` },
+        "▶ Запуски",
+      ),
+    );
+    const tabs = h(
+      "div",
+      { class: "tabs" },
+      TABS.map(([key, label]) =>
+        h(
+          "button",
+          {
+            class: "tab" + (st.view === key ? " tab-active" : ""),
+            onclick: () => setView(key),
+          },
+          label,
+        ),
+      ),
+    );
+    let body;
+    if (st.edit) body = await editorView();
+    else if (st.view === "ner") body = await nerView();
+    else if (st.view === "review") body = await reviewView();
+    else if (st.view === "status") body = await statusView();
+    else if (st.view === "config") body = await configView();
+    else if (st.view === "prompts") body = await promptsView();
+    else if (st.view === "logs") body = await logsView();
+    else if (st.view === "notes") body = await notesView();
+    else body = await filesView();
+    page.append(header, tabs, body);
+    if (st.edit && st.search && st._ed && st._ed.isCM) {
+      // открыть CM-поиск с фрагментом ошибки после монтирования редактора
+      const q = st.search;
+      window.CM.openSearchPanel(st._ed.view);
+      const panel = st._ed.view.dom.querySelector(".cm-panel.cm-search");
+      const input = panel && panel.querySelector("input");
+      if (input) {
+        input.value = q;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        input.focus();
+      }
+    }
+  }
+
+  function downloadUrl(full) {
+    const q = new URLSearchParams({
+      project: `${section}/${name}`,
+      path: full,
+    });
+    return `/api/download?${q}`;
+  }
+
+  async function filesView() {
+    const q = new URLSearchParams({ project: `${section}/${name}` });
+    if (st.path) q.set("path", st.path);
+    let data;
+    try {
+      data = await api(`/files?${q}`);
+    } catch (ex) {
+      return h("div", { class: "files-empty" }, ex.message);
+    }
+    const parts = st.path ? st.path.split("/") : [];
+    const crumbs = h("div", { class: "crumbs" });
+    const walk = [];
+    crumbs.append(crumb(`${section}/${name}`, () => setPath("")));
+    for (const p of parts) {
+      walk.push(p);
+      const target = walk.join("/"); // snapshot: замыкание не мутирует
+      crumbs.append(h("span", { class: "crumb-sep" }, " / "));
+      crumbs.append(crumb(p, () => setPath(target)));
+    }
+    const upInput = h("input", {
+      type: "file",
+      multiple: true,
+      class: "hidden",
+    });
+    const toolbar = h(
+      "div",
+      { class: "files-toolbar" },
+      crumbs,
+      h("span", { class: "spacer" }),
+      h(
+        "button",
+        { class: "btn btn-sm", onclick: () => upInput.click() },
+        "Загрузить",
+      ),
+    );
+    upInput.addEventListener("change", async () => {
+      const form = new FormData();
+      form.append("dest", st.path || "tmp");
+      for (const f of upInput.files) form.append("files[]", f, f.name);
+      try {
+        const r = await apiUpload(`/upload?project=${section}/${name}`, form);
+        toast(`Загружено: ${r.saved.length} файл(ов)`);
+        render();
+      } catch (ex) {
+        toast(ex.message, "err");
+      }
+    });
+    const entries = data.entries || [];
+    const FILES_PAGE_SIZE = 200;
+    const fPager = h("div", { class: "ner-pager" });
+    let fPage = 0;
+    const drop = h("div", { class: "files-list" });
+    function renderFiles() {
+      const pages = Math.max(1, Math.ceil(entries.length / FILES_PAGE_SIZE));
+      fPage = Math.min(fPage, pages - 1);
+      drop.replaceChildren(
+        ...entries
+          .slice(fPage * FILES_PAGE_SIZE, (fPage + 1) * FILES_PAGE_SIZE)
+          .map((e) => fileRow(e)),
+      );
+      fPager.replaceChildren(
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            disabled: fPage <= 0,
+            onclick: () => {
+              fPage--;
+              renderFiles();
+            },
+          },
+          "‹",
+        ),
+        h(
+          "span",
+          { class: "ner-pager-info" },
+          ` ${fPage + 1} / ${pages} · файлов: ${entries.length} `,
+        ),
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            disabled: fPage >= pages - 1,
+            onclick: () => {
+              fPage++;
+              renderFiles();
+            },
+          },
+          "›",
+        ),
+      );
+    }
+    renderFiles();
+    drop.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      drop.classList.add("drop-over");
+    });
+    drop.addEventListener("dragleave", () =>
+      drop.classList.remove("drop-over"),
+    );
+    drop.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      drop.classList.remove("drop-over");
+      const form = new FormData();
+      form.append("dest", st.path || "tmp");
+      for (const f of e.dataTransfer.files) form.append("files[]", f, f.name);
+      try {
+        const r = await apiUpload(`/upload?project=${section}/${name}`, form);
+        toast(`Загружено: ${r.saved.length} файл(ов)`);
+        render();
+      } catch (ex) {
+        toast(ex.message, "err");
+      }
+    });
+    return h("div", { class: "files-wrap" }, toolbar, drop, fPager);
+  }
+
+  function fileRow(e) {
+    const full = st.path ? `${st.path}/${e.name}` : e.name;
+    const nameNode = e.dir
+      ? h(
+          "a",
+          {
+            class: "fname",
+            href: "#",
+            onclick: (ev) => {
+              ev.preventDefault();
+              setPath(full);
+            },
+          },
+          fileIcon(e) + " " + e.name,
+        )
+      : h("span", { class: "fname" }, fileIcon(e) + " " + e.name);
+    const actions = h(
+      "div",
+      { class: "factions" },
+      e.dir
+        ? null
+        : [
+            h(
+              "a",
+              {
+                class: "btn btn-sm btn-ghost",
+                href: downloadUrl(full),
+                download: e.name,
+              },
+              "Скачать",
+            ),
+            h(
+              "button",
+              {
+                class: "btn btn-sm btn-ghost",
+                onclick: () => openEditor(full),
+              },
+              "Правка",
+            ),
+          ],
+      h(
+        "button",
+        {
+          class: "btn btn-sm btn-danger-ghost",
+          onclick: () =>
+            confirmModal("Удаление файла", full, "УДАЛИТЬ", async () => {
+              const dq = new URLSearchParams({
+                project: `${section}/${name}`,
+                path: full,
+              });
+              await api(`/file?${dq}`, { method: "DELETE" });
+              toast(`Удалено: ${full}`);
+              render();
+            }),
+        },
+        "Удалить",
+      ),
+    );
+    const meta = h(
+      "div",
+      { class: "fmeta" },
+      e.dir
+        ? ""
+        : `${fmtSize(e.size)} · ${new Date(e.mtime * 1000).toLocaleString("ru-RU")}`,
+    );
+    return h("div", { class: "frow" }, nameNode, meta, actions);
+  }
+
+  async function editorView() {
+    const full = st.edit;
+    const q = new URLSearchParams({
+      project: `${section}/${name}`,
+      path: full,
+    });
+    let data;
+    try {
+      data = await api(`/file?${q}`);
+    } catch (ex) {
+      return h("div", { class: "files-empty" }, ex.message);
+    }
+    const ext = extOf(full);
+    const ed = makeEditor(data.content, ext);
+    const err = h("div", { class: "form-error" });
+
+    /* подсветка — по расширению файла (makeEditor/setLang), без ручного
+       выбора представления; «Рендер» — только предпросмотр md/html */
+
+    /* предпросмотр: markdown (marked) и html — оба в sandbox-iframe
+       (без allow-scripts); те же стили/кегль/высота, что у «Заметок» */
+    const frame = h("iframe", {
+      class: "editor-preview-frame preview-adaptive",
+      sandbox: "allow-same-origin",
+      title: "предпросмотр",
+    });
+    let mode = "code"; // code | md | html
+    const prevBtn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost", title: "Показать отрендеренный вид" },
+      "Рендер",
+    );
+    function renderPreview() {
+      if (mode === "code") return;
+      if (mode === "md") {
+        const html = window.marked
+          ? window.marked.parse(ed.getValue(), {
+              mangle: false,
+              headerIds: false,
+            })
+          : "<pre>marked не загружен</pre>";
+        frame.srcdoc = mdPreviewSrcdoc(html);
+      } else if (mode === "html") {
+        frame.srcdoc = wrapPreviewDoc(ed.getValue());
+      }
+    }
+    frame.addEventListener("load", () => fitPreviewFrame(frame));
+    function setMode(next) {
+      mode = next;
+      if (mode === "code") {
+        prevBtn.textContent = "Рендер";
+        editorHost.style.display = "";
+        frame.style.display = "none";
+      } else {
+        prevBtn.textContent = "Код";
+        editorHost.style.display = "none";
+        frame.style.display = "block";
+        renderPreview();
+      }
+    }
+    prevBtn.addEventListener("click", () => {
+      if (mode === "code") {
+        setMode(ext === "html" || ext === "htm" ? "html" : "md");
+      } else {
+        setMode("code");
+      }
+    });
+
+    const saveBtn = h("button", { class: "btn btn-sm" }, "Сохранить");
+    saveBtn.addEventListener("click", async () => {
+      err.textContent = "";
+      try {
+        await api("/file", {
+          method: "PUT",
+          body: {
+            project: `${section}/${name}`,
+            path: full,
+            content: ed.getValue(),
+          },
+        });
+        toast("Сохранено");
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    });
+
+    const findBtn = h("button", { class: "btn btn-sm btn-ghost" }, "Поиск");
+    findBtn.addEventListener("click", () => {
+      if (ed.isCM) {
+        window.CM.openSearchPanel(ed.view);
+      } else {
+        toast("Поиск доступен в редакторе CodeMirror (Ctrl+F)", "err");
+      }
+    });
+
+    const toolbar = h(
+      "div",
+      { class: "files-toolbar" },
+      h(
+        "button",
+        { class: "btn btn-sm btn-ghost", onclick: () => setPath(st.path) },
+        "← Назад",
+      ),
+      h("span", { class: "editor-meta" }, `${full} · ${fmtSize(data.size)}`),
+      h("span", { class: "spacer" }),
+      h("span", { class: "field-help" }, "кегль"),
+      previewFontSelect(() => {
+        if (mode !== "code") renderPreview();
+      }),
+      findBtn,
+      prevBtn,
+      saveBtn,
+    );
+    const editorHost = h("div", { class: "editor-cm" }, ed.root);
+    st._ed = ed;
+    return h(
+      "div",
+      { class: "editor-wrap editor-has-preview" },
+      toolbar,
+      err,
+      editorHost,
+      frame,
+    );
+  }
+  /* ── Глоссарий NER ───────────────────────────── */
+  async function nerView() {
+    const q = new URLSearchParams({ project: `${section}/${name}` });
+    let data;
+    try {
+      data = await api(`/ner?${q}`);
+    } catch (ex) {
+      return h("div", { class: "files-empty" }, ex.message);
+    }
+    if (data.too_large) {
+      return h(
+        "div",
+        { class: "files-empty" },
+        `Глоссарий ${fmtSize(data.size)} — откройте через «Файлы» (правка ner.json)`,
+      );
+    }
+    data.items = data.items || [];
+    const LS_KEY = `nerCols:${section}/${name}`;
+    const DEFAULT_COLS = ["term", "type", "translation"];
+    const COL_LABELS = { term: "Термин", type: "Тип", translation: "Перевод" };
+    let cols;
+    try {
+      const saved = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+      cols = Array.isArray(saved) && saved.length ? saved : [...DEFAULT_COLS];
+    } catch {
+      cols = [...DEFAULT_COLS];
+    }
+    const knownKeys = new Set(DEFAULT_COLS);
+    for (const it of data.items) {
+      for (const k of Object.keys(it)) if (k !== "__new") knownKeys.add(k);
+    }
+
+    const search = h("input", { class: "input", placeholder: "Поиск…" });
+    const typeFilter = h("select", { class: "input" });
+    const table = h("table", { class: "ner-table" });
+    const tbody = h("tbody");
+    const pager = h("div", { class: "ner-pager" });
+    let editing = null; // редактируемая запись (объект из data.items)
+    let page = 0; // M6: текущая страница таблицы
+    const colLabel = (key) => COL_LABELS[key] || key;
+    /* R8-5: значения-объекты/массивы (напр. _votes_pinyin) показываем
+       компактным JSON, а не «[object Object]» */
+    const cellText = (v) =>
+      v && typeof v === "object" ? JSON.stringify(v) : String(v ?? "");
+    const isStruct = (v) => v != null && typeof v === "object";
+
+    /* сортировка: выбираемое поле + направление (по возрастанию/убыванию) */
+    const sortKeys = [...knownKeys].sort();
+    const sortSel = h("select", { class: "input" });
+    for (const k of sortKeys) {
+      sortSel.append(h("option", { value: k }, colLabel(k)));
+    }
+    const DEFAULT_SORT = knownKeys.has("count") ? "count" : "term";
+    sortSel.value = sortKeys.includes(DEFAULT_SORT)
+      ? DEFAULT_SORT
+      : sortKeys[0] || "";
+    const dirSel = h("select", { class: "input" });
+    dirSel.append(h("option", { value: "asc" }, "по возрастанию"));
+    dirSel.append(h("option", { value: "desc" }, "по убыванию"));
+    dirSel.value = DEFAULT_SORT === "count" ? "desc" : "asc";
+
+    function renderTypeFilter() {
+      typeFilter.replaceChildren(h("option", { value: "" }, "Все типы"));
+      for (const t of Object.keys(data.by_type || {})) {
+        typeFilter.append(
+          h("option", { value: t }, `${t} (${data.by_type[t]})`),
+        );
+      }
+    }
+    function visible() {
+      const qq = search.value.trim().toLowerCase();
+      const tf = typeFilter.value;
+      const filtered = data.items.filter((it) => {
+        const type = String(it.type || "");
+        if (tf && type !== tf) return false;
+        if (qq && !cols.some((c) => cellText(it[c]).toLowerCase().includes(qq)))
+          return false;
+        return true;
+      });
+      const field = sortSel.value;
+      const dir = dirSel.value === "desc" ? -1 : 1;
+      if (!field) return filtered;
+      return filtered.slice().sort((a, b) => {
+        const av = a[field];
+        const bv = b[field];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1; // пустые значения — в конец
+        if (bv == null) return -1;
+        const numA = Number(av);
+        const numB = Number(bv);
+        const numeric =
+          av !== "" &&
+          bv !== "" &&
+          Number.isFinite(numA) &&
+          Number.isFinite(numB);
+        const cmp = numeric
+          ? numA - numB
+          : cellText(av).localeCompare(cellText(bv), "ru");
+        return cmp * dir;
+      });
+    }
+    function saveCols() {
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify(cols));
+      } catch {
+        /* localStorage недоступен (приватный режим) — не критично */
+      }
+    }
+    async function saveNer() {
+      try {
+        const items = data.items.map((it) => {
+          const { __new, ...rest } = it;
+          return rest;
+        });
+        await api("/ner", {
+          method: "PUT",
+          body: { project: `${section}/${name}`, items },
+        });
+        toast("Глоссарий сохранён");
+      } catch (ex) {
+        toast(ex.message, "err");
+      }
+    }
+
+    function renderPager(total) {
+      if (total === 0) {
+        pager.replaceChildren();
+        return;
+      }
+      const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      pager.replaceChildren(
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            disabled: page <= 0,
+            onclick: () => {
+              page--;
+              renderRows();
+            },
+          },
+          "‹",
+        ),
+        h(
+          "span",
+          { class: "ner-pager-info" },
+          ` ${page + 1} / ${pages} · всего ${total} `,
+        ),
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            disabled: page >= pages - 1,
+            onclick: () => {
+              page++;
+              renderRows();
+            },
+          },
+          "›",
+        ),
+      );
+    }
+
+    function renderRows() {
+      table.replaceChildren(
+        h(
+          "thead",
+          {},
+          h(
+            "tr",
+            {},
+            ...cols.map((c) => h("th", {}, colLabel(c))),
+            h("th", {}, ""),
+          ),
+        ),
+        tbody,
+      );
+      tbody.replaceChildren();
+      const vis = visible(); // отфильтровано и отсортировано
+      const pages = Math.max(1, Math.ceil(vis.length / PAGE_SIZE));
+      if (page >= pages) page = pages - 1; // M6: страница не убегает
+      const slice = vis.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+      for (const it of slice) {
+        if (editing === it) {
+          tbody.append(editRow(it));
+        } else {
+          tbody.append(viewRow(it));
+        }
+      }
+      if (!slice.length && !editing) {
+        tbody.append(
+          h(
+            "tr",
+            {},
+            h("td", { colspan: String(cols.length + 1) }, "Нет записей"),
+          ),
+        );
+      }
+      renderPager(vis.length);
+    }
+
+    function viewRow(it) {
+      return h(
+        "tr",
+        { class: "ner-row" },
+        ...cols.map((c) =>
+          h(
+            "td",
+            {
+              class: c === "type" ? "ner-type" : "",
+              title: isStruct(it[c]) ? cellText(it[c]) : "",
+            },
+            cellText(it[c]),
+          ),
+        ),
+        h(
+          "td",
+          { class: "ner-actions" },
+          h(
+            "button",
+            { class: "btn btn-sm btn-ghost", onclick: () => startEdit(it) },
+            "✎",
+          ),
+          h(
+            "button",
+            {
+              class: "btn btn-sm btn-danger-ghost",
+              onclick: () =>
+                confirmModal(
+                  "Удалить термин",
+                  String(it.term || ""),
+                  "УДАЛИТЬ",
+                  async () => {
+                    data.items = data.items.filter((x) => x !== it);
+                    await saveNer();
+                    renderRows();
+                  },
+                ),
+            },
+            "✕",
+          ),
+        ),
+      );
+    }
+
+    function editRow(it) {
+      const inputs = {};
+      const tr = h(
+        "tr",
+        { class: "ner-row ner-editing" },
+        ...cols.map((c) => {
+          /* R8-5: значение-объект редактируется как JSON-текст; при
+             коммите парсим — невалидный JSON не сохраняется */
+          const struct = isStruct(it[c]);
+          const inp = struct
+            ? h("textarea", {
+                class: "input input-sm ner-json-cell",
+                rows: "3",
+                spellcheck: "false",
+                value: cellText(it[c]),
+              })
+            : h("input", {
+                class: "input input-sm",
+                value: cellText(it[c]),
+              });
+          inp.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !(struct && e.shiftKey)) {
+              e.preventDefault();
+              commit();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancel();
+            }
+          });
+          inputs[c] = inp;
+          return h("td", { class: struct ? "ner-json-td" : "" }, inp);
+        }),
+        h(
+          "td",
+          { class: "ner-actions" },
+          h("button", { class: "btn btn-sm", onclick: commit }, "✓"),
+          h("button", { class: "btn btn-sm btn-ghost", onclick: cancel }, "✕"),
+        ),
+      );
+      function commit() {
+        for (const c of cols) {
+          const raw = inputs[c].value;
+          if (isStruct(it[c])) {
+            if (raw.trim()) {
+              try {
+                it[c] = JSON.parse(raw);
+              } catch {
+                toast(
+                  `Невалидный JSON в «${colLabel(c)}» — правка не сохранена`,
+                  "err",
+                );
+                return;
+              }
+            } else {
+              it[c] = ""; // очистка значения
+            }
+          } else {
+            it[c] = raw;
+          }
+        }
+        delete it.__new;
+        editing = null;
+        renderRows();
+        saveNer();
+      }
+      function cancel() {
+        if (it.__new) data.items = data.items.filter((x) => x !== it);
+        editing = null;
+        renderRows();
+      }
+      setTimeout(() => inputs[cols[0]]?.focus(), 0);
+      return tr;
+    }
+
+    function startEdit(it) {
+      editing = it;
+      const vis = visible();
+      const idx = vis.indexOf(it);
+      if (idx >= 0) page = Math.floor(idx / PAGE_SIZE); // M6: на свою страницу
+      renderRows();
+    }
+
+    /* «+ Столбец»: чекбоксы всех ключей записи */
+    const colBtn = h("button", { class: "btn btn-sm btn-ghost" }, "+ Столбец");
+    colBtn.addEventListener("click", () => {
+      const rows = [...knownKeys].map((k) => {
+        const cb = h("input", { type: "checkbox" });
+        cb.checked = cols.includes(k);
+        cb.addEventListener("change", () => {
+          if (cb.checked) {
+            cols.push(k);
+          } else if (cols.length > 1) {
+            cols = cols.filter((x) => x !== k);
+          } else {
+            cb.checked = true; // последний столбец не снимаем
+          }
+          saveCols();
+          renderRows();
+        });
+        return h("label", { class: "ner-col-row" }, cb, " " + colLabel(k));
+      });
+      const modal = h(
+        "div",
+        {
+          class: "modal-backdrop",
+          onclick: (e) => e.target === modal && close(),
+        },
+        h(
+          "div",
+          { class: "modal" },
+          h("div", { class: "modal-title" }, "Столбцы глоссария"),
+          h(
+            "div",
+            { class: "modal-text" },
+            "Отображаемые поля записей ner.json:",
+          ),
+          ...rows,
+          h(
+            "div",
+            { class: "modal-actions" },
+            h(
+              "button",
+              {
+                class: "btn btn-ghost",
+                onclick: () => {
+                  cols = [...DEFAULT_COLS];
+                  saveCols();
+                  renderRows();
+                  close();
+                },
+              },
+              "Сбросить",
+            ),
+            h("button", { class: "btn btn-primary", onclick: close }, "Готово"),
+          ),
+        ),
+      );
+      document.body.append(modal);
+      function close() {
+        modal.remove();
+      }
+    });
+
+    const addBtn = h(
+      "button",
+      {
+        class: "btn btn-sm",
+        onclick: () => {
+          const it = { term: "", type: "noun", translation: "", __new: true };
+          data.items.push(it);
+          editing = it;
+          const vis = visible(); // M6: новая запись — на последнюю страницу
+          page = Math.max(0, Math.ceil(vis.length / PAGE_SIZE) - 1);
+          renderRows();
+        },
+      },
+      "+ Термин",
+    );
+    /* Экспорт для анализа: настройки в модалке, файл скачивается */
+    const exportBtn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost" },
+      "⬇ Экспорт для анализа",
+    );
+    exportBtn.addEventListener("click", () =>
+      exportModal(data.by_type || {}, `${section}/${name}`),
+    );
+    const meta = h("div", { class: "ner-meta" }, `Всего: ${data.total}`);
+    const toolbar = h(
+      "div",
+      { class: "files-toolbar" },
+      meta,
+      h("span", { class: "spacer" }),
+      search,
+      typeFilter,
+      sortSel,
+      dirSel,
+      colBtn,
+      addBtn,
+      exportBtn,
+    );
+    search.addEventListener("input", () => {
+      page = 0; // M6: фильтр — на первую страницу
+      renderRows();
+    });
+    typeFilter.addEventListener("change", () => {
+      page = 0;
+      renderRows();
+    });
+    sortSel.addEventListener("change", () => {
+      page = 0;
+      renderRows();
+    });
+    dirSel.addEventListener("change", () => {
+      page = 0;
+      renderRows();
+    });
+    renderTypeFilter();
+    renderRows();
+    return h("div", { class: "files-wrap" }, toolbar, table, pager);
+  }
+  /* ── Проверка (review ner / translate_check_llm) ── */
+  async function reviewView() {
+    const wrap = h("div", { class: "review-wrap" });
+    const panel = h("div", { class: "review-panel" });
+    wrap.append(panel);
+    const q = new URLSearchParams({ project: `${section}/${name}` });
+    // карточка LLM-проверки: глоссарий (1) и перевод (3)
+    function makeCard(title, path, applyPath) {
+      const card = h("div", { class: "review-card" });
+      const ed = makeEditor("", "json");
+      const err = h("div", { class: "form-error" });
+      const status = h("div", { class: "review-status" });
+      const dryBtn = h(
+        "button",
+        { class: "btn btn-sm btn-ghost" },
+        "Пробный прогон",
+      );
+      const applyBtn = h("button", { class: "btn btn-sm" }, "Применить");
+      card.append(
+        h("div", { class: "review-card-title" }, title),
+        h(
+          "div",
+          { class: "review-card-body" },
+          h("div", { class: "editor-cm editor-cm-small" }, ed.root),
+          status,
+          err,
+          h("div", { class: "review-actions" }, dryBtn, applyBtn),
+        ),
+      );
+      api(path + "?" + q)
+        .then((d) => {
+          ed.setValue(d.content || "");
+          status.textContent = d.exists
+            ? `файл есть · ${fmtSize(d.size)}`
+            : "файла ещё нет — создастся при применении";
+        })
+        .catch((ex) => (err.textContent = ex.message));
+      async function runApply(dry) {
+        err.textContent = "";
+        try {
+          await api(applyPath, {
+            method: "POST",
+            body: { project: `${section}/${name}`, dry_run: dry },
+          });
+          toast(`${dry ? "Пробный прогон" : "Применение"}: запущено`);
+        } catch (ex) {
+          err.textContent = ex.message;
+        }
+      }
+      dryBtn.addEventListener("click", () => runApply(true));
+      applyBtn.addEventListener("click", () => runApply(false));
+      const saveBtn = h(
+        "button",
+        { class: "btn btn-sm btn-ghost" },
+        "Сохранить файл",
+      );
+      saveBtn.addEventListener("click", async () => {
+        err.textContent = "";
+        try {
+          await api(path, {
+            method: "PUT",
+            body: { project: `${section}/${name}`, content: ed.getValue() },
+          });
+          toast("Сохранено");
+        } catch (ex) {
+          err.textContent = ex.message;
+        }
+      });
+      card.querySelector(".review-actions")?.append(saveBtn);
+      return card;
+    }
+    /* порядок секций: 1 · глоссарий (LLM) → 2 · алгоритмическая
+       → 3 · перевод (LLM) — совпадает с нумерацией */
+    panel.append(
+      makeCard(
+        "1 · Проверка глоссария (LLM) — ner_review.json",
+        "/ner/review",
+        "/ner/review/apply",
+      ),
+    );
+    const sec2 = h(
+      "div",
+      { class: "review-section" },
+      h(
+        "div",
+        { class: "review-section-title" },
+        "2 · Проверка перевода (алгоритмическая)",
+      ),
+      h(
+        "div",
+        { class: "review-section-sub" },
+        "отчёты стадии translate_check (logs/check_*.txt)",
+      ),
+    );
+    panel.append(sec2);
+    sec2.append(await renderCheckReports());
+    panel.append(
+      makeCard(
+        "3 · Проверка перевода (LLM) — translate_check_llm_review.json",
+        "/translate_check_llm/review",
+        "/translate_check_llm/review/apply",
+      ),
+    );
+    return wrap;
+  }
+
+  /* ── Конфиг: env + metadata ────────────────────── */
+  /* ── Конфиг: env + metadata + обложка (W6) ─────── */
+  // раунд 21: «Статус» — таблица готовности глав + сводка ner/wiki/compiled
+  async function statusView() {
+    let data;
+    try {
+      data = await api(`/projects/${section}/${name}/status`);
+    } catch (ex) {
+      return h("div", { class: "files-empty" }, ex.message);
+    }
+    const s = data.status || {};
+    const chapters = s.chapters || {};
+    const counts = s.counts || {};
+    const ids = Object.keys(chapters)
+      .map(Number)
+      .sort((a, b) => a - b);
+    const rows = ids.map((id) => {
+      const c = chapters[id];
+      const cells = ["translate", "redact", "polish"].map((k) => {
+        const ok = !!c[k];
+        return h(
+          "td",
+          { class: ok ? "ch-cell ch-ok" : "ch-cell ch-pending" },
+          ok ? "✓" : "·",
+        );
+      });
+      return h(
+        "tr",
+        { class: "ch-row" },
+        h("th", { class: "ch-num" }, String(id)),
+        ...cells,
+      );
+    });
+    const table = h(
+      "table",
+      { class: "ch-table" },
+      h(
+        "thead",
+        {},
+        h(
+          "tr",
+          {},
+          h("th", {}, "Глава"),
+          h("th", {}, "пер"),
+          h("th", {}, "ред"),
+          h("th", {}, "пол"),
+        ),
+      ),
+      h(
+        "tbody",
+        {},
+        rows.length
+          ? rows
+          : [h("tr", {}, h("td", { colspan: 4 }, "Глав пока нет"))],
+      ),
+    );
+    const ner = s.ner || {};
+    const wiki = s.wiki || {};
+    const compiled = s.compiled || [];
+    const sumCard = h(
+      "div",
+      { class: "dash-summary" },
+      h(
+        "div",
+        { class: "stat-card" },
+        h("div", { class: "stat-num" }, String(counts.chapters ?? 0)),
+        h("div", { class: "stat-label" }, "глав"),
+      ),
+      h(
+        "div",
+        { class: "stat-card" },
+        h(
+          "div",
+          { class: "stat-num" },
+          `${counts.translate ?? 0}/${counts.redact ?? 0}/${counts.polish ?? 0}`,
+        ),
+        h("div", { class: "stat-label" }, "пер/ред/пол"),
+      ),
+      h(
+        "div",
+        { class: "stat-card" },
+        h(
+          "div",
+          { class: "stat-num" },
+          ner.exists ? String(ner.terms ?? 0) : "—",
+        ),
+        h("div", { class: "stat-label" }, "терминов в глоссарии"),
+      ),
+      h(
+        "div",
+        { class: "stat-card" },
+        h(
+          "div",
+          { class: "stat-num" },
+          wiki.exists ? String(wiki.articles ?? 0) : "—",
+        ),
+        h("div", { class: "stat-label" }, "статей wiki"),
+      ),
+    );
+    const compiledRow = h(
+      "div",
+      { class: "card" },
+      h("div", { class: "card-title" }, "Скомпилировано"),
+      compiled.length
+        ? h("div", { class: "card-sub" }, compiled.join(" · "))
+        : h("div", { class: "card-hint" }, "Компиляций пока нет"),
+    );
+    return h("div", { class: "files-wrap" }, sumCard, table, compiledRow);
+  }
+
+  async function configView() {
+    const wrap = h("div", { class: "config-wrap" });
+    const err = h("div", { class: "form-error" });
+    const q = new URLSearchParams({ project: `${section}/${name}` });
+
+    /* — .env: только собственный .env проекта (общий — на главной,
+         вкладка «Настройки») — */
+    const envCard = h("div", { class: "review-card" });
+    const envEd = makeEditor("", "txt");
+    const envMeta = h("div", { class: "review-status" });
+    const modeSel = h("select", { class: "input" });
+    modeSel.append(
+      h("option", { value: "shared" }, "Использовать общий .env"),
+      h("option", { value: "own" }, "Свой .env проекта"),
+    );
+    const envToolbar = h("div", { class: "files-toolbar" });
+    const envBody = h(
+      "div",
+      { class: "review-card-body" },
+      envToolbar,
+      h("div", { class: "editor-cm editor-cm-small" }, envEd.root),
+      envMeta,
+      err,
+    );
+    envCard.append(
+      h("div", { class: "review-card-title" }, "Файл .env"),
+      envBody,
+    );
+    let hasOwn = false;
+    let envVisible = false;
+    /* раунд 13/15: select активен — «Общий .env» показывает системный
+       (read-only, сохранять из проекта НЕЛЬЗЯ — редактируется на
+       главной), «Свой .env» — редактор проекта (создание/правка/
+       удаление). loadEnv НЕ трогает modeSel — иначе выбор пользователя
+       сбрасывался (баг раунда 14). */
+    async function loadEnv() {
+      err.textContent = "";
+      try {
+        const d = await api(`/env?${q}&scope=project`);
+        hasOwn = !!d.exists;
+        envVisible = !!d.visible;
+        envEd.setValue(hasOwn ? d.content || d.masked || "" : "");
+        envEd.setReadOnly(false);
+        renderEnvToolbar();
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    }
+    async function loadSharedEnv() {
+      try {
+        const d = await api(`/env?scope=global`);
+        envEd.setValue(d.content || d.masked || "");
+        envEd.setReadOnly(true);
+        renderEnvToolbar();
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    }
+    function envChangesFromEditor() {
+      const changes = {};
+      for (const line of envEd.getValue().split("\n")) {
+        if (!line || line.startsWith("#")) continue;
+        const eq = line.indexOf("=");
+        if (eq < 0) continue;
+        const key = line.slice(0, eq).trim();
+        const val = line.slice(eq + 1).trim();
+        if (key && val && val !== "••••") changes[key] = val;
+      }
+      return changes;
+    }
+    const dupSharedBtn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost" },
+      "Дублировать из общего",
+    );
+    dupSharedBtn.addEventListener("click", async () => {
+      try {
+        const d = await api(`/env?scope=global`);
+        envEd.setValue(d.content || d.masked || "");
+        envMeta.textContent = "Содержимое .env — сохраните, чтобы создать свой";
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    });
+    const dupTplBtn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost" },
+      "Дублировать из шаблона",
+    );
+    dupTplBtn.addEventListener("click", async () => {
+      try {
+        const d = await api(`/env/template`);
+        envEd.setValue(d.content || "");
+        envMeta.textContent = d.name
+          ? `Шаблон ${d.name} — сохраните, чтобы создать свой`
+          : "Шаблон templates/.env.example не найден";
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    });
+    const envSave = h("button", { class: "btn btn-sm" }, "Сохранить .env");
+    envSave.addEventListener("click", async () => {
+      err.textContent = "";
+      try {
+        if (envVisible) {
+          await api("/env", {
+            method: "PUT",
+            body: {
+              project: `${section}/${name}`,
+              scope: "project",
+              content: envEd.getValue(),
+            },
+          });
+        } else {
+          await api("/env", {
+            method: "PUT",
+            body: {
+              project: `${section}/${name}`,
+              scope: "project",
+              changes: envChangesFromEditor(),
+            },
+          });
+        }
+        toast(".env проекта сохранён");
+        await loadEnv();
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    });
+    const envDel = h(
+      "button",
+      { class: "btn btn-sm btn-danger-ghost" },
+      "Удалить .env",
+    );
+    envDel.addEventListener("click", () =>
+      confirmModal(
+        "Удалить .env проекта",
+        "Проект вернётся к системному .env (projects/.env)",
+        "УДАЛИТЬ",
+        async () => {
+          try {
+            await api(`/env?${q}&scope=project`, { method: "DELETE" });
+            toast(".env проекта удалён");
+            await loadEnv();
+            // раунд 15: после удаления проект возвращается к системному
+            if (!hasOwn) {
+              modeSel.value = "shared";
+              await loadSharedEnv();
+            }
+          } catch (ex) {
+            err.textContent = ex.message;
+          }
+        },
+      ),
+    );
+    function renderEnvToolbar() {
+      envToolbar.replaceChildren();
+      envToolbar.append(modeSel, h("span", { class: "spacer" }));
+      if (modeSel.value === "shared") {
+        // раунд 15: системный .env — read-only, из проекта сохранять нельзя
+        envMeta.textContent =
+          "Системный .env (projects/.env) — read-only, редактируется на главной, вкладка «Настройки»";
+        if (hasOwn) envToolbar.append(envDel);
+      } else if (hasOwn) {
+        envMeta.textContent =
+          "собственный .env" +
+          (envVisible ? "" : " · значения скрыты (--auth)");
+        envToolbar.append(envSave, envDel);
+      } else {
+        envMeta.textContent =
+          "своего .env нет — создайте: дублируйте из общего или шаблона, либо напишите с нуля";
+        envToolbar.append(dupSharedBtn, dupTplBtn, envSave);
+      }
+    }
+    modeSel.addEventListener("change", async () => {
+      if (modeSel.value === "shared") await loadSharedEnv();
+      else await loadEnv();
+    });
+    async function initEnv() {
+      await loadEnv();
+      modeSel.value = hasOwn ? "own" : "shared";
+      if (modeSel.value === "shared") await loadSharedEnv();
+    }
+    await initEnv();
+
+    /* — Обложка — */
+    const coverCard = h("div", { class: "review-card" });
+    const coverInfo = h("div", { class: "review-status" });
+    const coverImg = h("img", { class: "cover-preview", alt: "обложка" });
+    const coverFile = h("input", {
+      type: "file",
+      accept: ".jpg,.jpeg,.png,.webp",
+    });
+    const coverUpload = h("button", { class: "btn btn-sm" }, "Загрузить");
+    const coverDelete = h(
+      "button",
+      { class: "btn btn-sm btn-danger-ghost" },
+      "Удалить",
+    );
+    coverCard.append(
+      h("div", { class: "review-card-title" }, "Обложка (source/)"),
+      h(
+        "div",
+        { class: "review-card-body" },
+        coverInfo,
+        coverImg,
+        h(
+          "div",
+          { class: "review-actions" },
+          coverFile,
+          coverUpload,
+          coverDelete,
+        ),
+      ),
+    );
+    async function loadCover() {
+      try {
+        const d = await api(`/cover?${q}`);
+        if (d.exists) {
+          coverInfo.textContent = `${d.name} · ${fmtSize(d.size)}`;
+          coverImg.src = `/api/download?${new URLSearchParams({
+            project: `${section}/${name}`,
+            path: d.path,
+            inline: "1",
+          })}`;
+          coverImg.style.display = "";
+        } else {
+          coverInfo.textContent = "обложки нет";
+          coverImg.style.display = "none";
+        }
+      } catch (ex) {
+        coverInfo.textContent = ex.message;
+      }
+    }
+    coverUpload.addEventListener("click", async () => {
+      const f = coverFile.files && coverFile.files[0];
+      if (!f) {
+        toast("Сначала выберите файл", "err");
+        return;
+      }
+      try {
+        const b64 = await new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result).split(",", 2)[1] || "");
+          r.onerror = () => reject(new Error("не удалось прочитать файл"));
+          r.readAsDataURL(f);
+        });
+        await api("/cover", {
+          method: "PUT",
+          body: {
+            project: `${section}/${name}`,
+            name: f.name,
+            content_base64: b64,
+          },
+        });
+        toast("Обложка загружена");
+        await loadCover();
+      } catch (ex) {
+        toast(ex.message, "err");
+      }
+    });
+    coverDelete.addEventListener("click", () =>
+      confirmModal(
+        "Удалить обложку",
+        "Файл будет удалён из source/",
+        "УДАЛИТЬ",
+        async () => {
+          try {
+            await api(`/cover?${q}`, { method: "DELETE" });
+            toast("Обложка удалена");
+            await loadCover();
+          } catch (ex) {
+            toast(ex.message, "err");
+          }
+        },
+      ),
+    );
+    await loadCover();
+
+    /* — metadata.yaml — */
+    const metaCard = h("div", { class: "review-card" });
+    const metaEd = makeEditor("", "yaml");
+    const metaSave = h(
+      "button",
+      { class: "btn btn-sm" },
+      "Сохранить metadata.yaml",
+    );
+    metaCard.append(
+      h("div", { class: "review-card-title" }, "source/metadata.yaml"),
+      h(
+        "div",
+        { class: "review-card-body" },
+        h("div", { class: "editor-cm editor-cm-small" }, metaEd.root),
+        h("div", { class: "review-actions" }, metaSave),
+      ),
+    );
+    api("/metadata?" + q)
+      .then((d) => metaEd.setValue(d.content || ""))
+      .catch(() => {
+        /* metadata может отсутствовать — пустой редактор */
+      });
+    metaSave.addEventListener("click", async () => {
+      try {
+        await api("/metadata", {
+          method: "PUT",
+          body: { project: `${section}/${name}`, content: metaEd.getValue() },
+        });
+        toast("metadata.yaml сохранён");
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    });
+
+    wrap.append(envCard, coverCard, metaCard);
+    return wrap;
+  }
+
+  /* ── Промпты ───────────────────────────────────── */
+  async function promptsView() {
+    const q = new URLSearchParams({ project: `${section}/${name}` });
+    let data;
+    try {
+      data = await api(`/prompts?${q}`);
+    } catch (ex) {
+      return h("div", { class: "files-empty" }, ex.message);
+    }
+    const list = h("div", { class: "prompt-list" });
+    const err = h("div", { class: "form-error" });
+    const ed = makeEditor("", "txt");
+    const nameLabel = h("div", { class: "prompt-name" });
+    let current = null;
+
+    function renderList() {
+      list.replaceChildren();
+      delBtn.disabled = !current;
+      for (const p of data.prompts || []) {
+        const btn = h(
+          "button",
+          {
+            class:
+              "btn btn-sm btn-ghost prompt-item" +
+              (current === p.name ? " prompt-item-active" : ""),
+          },
+          `${p.name} · ${fmtSize(p.size)}${p.tags?.length ? " · " + p.tags.join(", ") : ""}`,
+        );
+        btn.addEventListener("click", () => load(p.name));
+        list.append(btn);
+      }
+      if (!data.prompts?.length) {
+        list.append(
+          h(
+            "div",
+            { class: "empty" },
+            "Нет промптов — создайте кнопками «Создать» или «Из шаблона»",
+          ),
+        );
+      }
+    }
+    async function load(fname) {
+      err.textContent = "";
+      try {
+        const d = await api(`/prompts/${encodeURIComponent(fname)}?${q}`);
+        current = fname;
+        nameLabel.textContent = fname;
+        ed.setValue(d.content || "");
+        if (ed.isCM) ed.setLang(extOf(fname));
+        renderList();
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    }
+    const saveBtn = h("button", { class: "btn btn-sm" }, "Сохранить");
+    saveBtn.addEventListener("click", async () => {
+      if (!current) return;
+      try {
+        await api(`/prompts/${encodeURIComponent(current)}`, {
+          method: "PUT",
+          body: { project: `${section}/${name}`, content: ed.getValue() },
+        });
+        toast("Промпт сохранён");
+        render();
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    });
+    const delBtn = h(
+      "button",
+      { class: "btn btn-sm btn-danger-ghost", disabled: true },
+      "Удалить",
+    );
+    delBtn.addEventListener("click", () => {
+      if (!current) return;
+      confirmModal(
+        "Удаление промпта",
+        `${current} — файл будет удалён`,
+        "УДАЛИТЬ",
+        async () => {
+          try {
+            await api(`/prompts/${encodeURIComponent(current)}?${q}`, {
+              method: "DELETE",
+            });
+            toast(`Удалён: ${current}`);
+            current = null;
+            nameLabel.textContent = "";
+            ed.setValue("");
+            renderList();
+          } catch (ex) {
+            err.textContent = ex.message;
+          }
+        },
+      );
+    });
+    const createBtn = h("button", { class: "btn btn-sm btn-ghost" }, "Создать");
+    createBtn.addEventListener("click", () => {
+      const nameInput = h("input", {
+        class: "input",
+        placeholder: "имя_промпта.txt",
+      });
+      const cerr = h("div", { class: "form-error" });
+      const modal = h(
+        "div",
+        {
+          class: "modal-backdrop",
+          onclick: (e) => e.target === modal && modal.remove(),
+        },
+        h(
+          "div",
+          { class: "modal" },
+          h("div", { class: "modal-title" }, "Новый промпт"),
+          nameInput,
+          cerr,
+          h(
+            "div",
+            { class: "modal-actions" },
+            h(
+              "button",
+              { class: "btn btn-ghost", onclick: () => modal.remove() },
+              "Отмена",
+            ),
+            h(
+              "button",
+              {
+                class: "btn btn-primary",
+                onclick: async () => {
+                  const fname = nameInput.value.trim();
+                  if (!fname) {
+                    cerr.textContent = "Укажите имя файла";
+                    return;
+                  }
+                  try {
+                    await api(`/prompts/${encodeURIComponent(fname)}`, {
+                      method: "PUT",
+                      body: { project: `${section}/${name}`, content: "" },
+                    });
+                    modal.remove();
+                    toast(`Создан: ${fname}`);
+                    render();
+                  } catch (ex) {
+                    cerr.textContent = ex.message;
+                  }
+                },
+              },
+              "Создать",
+            ),
+          ),
+        ),
+      );
+      document.body.append(modal);
+      nameInput.focus();
+    });
+    const tplBtn = h("button", { class: "btn btn-sm btn-ghost" }, "Из шаблона");
+    tplBtn.addEventListener("click", () =>
+      templateModal(data.templates || [], async (tpl, outName) => {
+        try {
+          await api(`/prompts/${encodeURIComponent(outName)}`, {
+            method: "PUT",
+            body: { project: `${section}/${name}`, content: tpl.content },
+          });
+          toast(`Создан ${outName} (из «${tpl.set}»)`);
+          render();
+        } catch (ex) {
+          toast(ex.message, "err");
+        }
+      }),
+    );
+    const toolbar = h(
+      "div",
+      { class: "files-toolbar" },
+      nameLabel,
+      h("span", { class: "spacer" }),
+      createBtn,
+      tplBtn,
+      delBtn,
+      saveBtn,
+    );
+    renderList();
+    const editorHost = h("div", { class: "editor-cm" }, ed.root);
+    return h("div", { class: "files-wrap" }, toolbar, err, list, editorHost);
+  }
+
+  /* Модалка выбора шаблона (W4): наборы templates + имя файла →
+     колбэк (шаблон, имя). Работает и на пустом prompts/. */
+  function templateModal(templates, onApply) {
+    const q = new URLSearchParams({ project: `${section}/${name}` });
+    const err = h("div", { class: "form-error" });
+    const sel = h("select", { class: "input" });
+    for (const t of templates) {
+      sel.append(h("option", { value: t.name }, `${t.name} · набор ${t.set}`));
+    }
+    const fname = h("input", { class: "input", placeholder: "имя файла" });
+    function syncName() {
+      if (!fname.dataset.touched) fname.value = sel.value || "";
+    }
+    sel.addEventListener("change", syncName);
+    fname.addEventListener("input", () => (fname.dataset.touched = "1"));
+    const modal = h(
+      "div",
+      {
+        class: "modal-backdrop",
+        onclick: (e) => e.target === modal && close(),
+      },
+      h(
+        "div",
+        { class: "modal" },
+        h("div", { class: "modal-title" }, "Создать промпт из шаблона"),
+        templates.length
+          ? h("div", { class: "form-row" }, sel, fname)
+          : h("div", { class: "modal-text" }, "Шаблоны не найдены"),
+        err,
+        h(
+          "div",
+          { class: "modal-actions" },
+          h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
+          h(
+            "button",
+            {
+              class: "btn btn-primary",
+              onclick: async () => {
+                const target = templates.find((t) => t.name === sel.value);
+                const outName = fname.value.trim();
+                if (!target || !outName) {
+                  err.textContent = "Выберите шаблон и укажите имя файла";
+                  return;
+                }
+                try {
+                  const d = await api(
+                    `/prompts/${encodeURIComponent(target.name)}/template?${q}`,
+                  );
+                  const tpl =
+                    (d.templates || []).find((t) => t.set === target.set) ||
+                    (d.templates || [])[0];
+                  close();
+                  await onApply(tpl, outName);
+                } catch (ex) {
+                  err.textContent = ex.message;
+                }
+              },
+            },
+            "Создать",
+          ),
+        ),
+      ),
+    );
+    syncName();
+    document.body.append(modal);
+    sel.focus();
+    function close() {
+      modal.remove();
+    }
+  }
+
+  /* ── Логи (M8) ─────────────────────────────────── */
+  async function logsView() {
+    /* раунд 14: структура папок как «Проекты-Файлы» (crumbs + подпапки),
+       отображаются только *.log */
+    const q = new URLSearchParams({ project: `${section}/${name}` });
+    let data;
+    try {
+      data = await api(`/logs?${q}`);
+    } catch (ex) {
+      return h("div", { class: "files-empty" }, ex.message);
+    }
+    const all = (data.logs || []).slice().sort((a, b) => b.mtime - a.mtime);
+    const cur = st.logPath || "";
+    const crumbs = h("div", { class: "crumbs" });
+    crumbs.append(
+      crumb("logs", () => {
+        st.logPath = "";
+        render();
+      }),
+    );
+    const parts = cur ? cur.split("/") : [];
+    const walk = [];
+    for (const p of parts) {
+      walk.push(p);
+      const target = walk.join("/");
+      crumbs.append(h("span", { class: "crumb-sep" }, " / "));
+      crumbs.append(
+        crumb(p, () => {
+          st.logPath = target;
+          render();
+        }),
+      );
+    }
+    const list = h("div", { class: "prompt-list" });
+    const pre = h("pre", { class: "log-view" });
+    const meta = h("div", { class: "review-status" });
+    const LOG_PAGE_SIZE = 20;
+    let lPage = 0;
+    const lPager = h("div", { class: "ner-pager" });
+    const follow = h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost",
+        title: "Догружать хвост файла каждые 1,5 с (автопрокрутка вниз)",
+      },
+      "Автообновление",
+    );
+    let timer = null;
+
+    function renderList(selected) {
+      list.replaceChildren();
+      const prefix = cur ? cur + "/" : "";
+      const dirs = [
+        ...new Set(
+          all
+            .map((l) => l.path)
+            .filter((p2) => p2.startsWith(prefix))
+            .map((p2) => p2.slice(prefix.length))
+            .filter((p2) => p2.includes("/"))
+            .map((p2) => p2.split("/")[0]),
+        ),
+      ].sort();
+      const files = all.filter(
+        (l) => !l.path.slice(prefix.length).includes("/"),
+      );
+      const entries = [
+        ...dirs.map((d) => ({ kind: "dir", name: d, mtime: 0, size: 0 })),
+        ...files.map((f) => ({ kind: "file", ...f })),
+      ];
+      const pages = Math.max(1, Math.ceil(entries.length / LOG_PAGE_SIZE));
+      lPage = Math.min(lPage, pages - 1);
+      const slice = entries.slice(
+        lPage * LOG_PAGE_SIZE,
+        (lPage + 1) * LOG_PAGE_SIZE,
+      );
+      for (const e of slice) {
+        if (e.kind === "dir") {
+          const btn = h(
+            "button",
+            { class: "btn btn-sm btn-ghost prompt-item" },
+            `📁 ${e.name}/`,
+          );
+          btn.addEventListener("click", () => {
+            st.logPath = cur ? `${cur}/${e.name}` : e.name;
+            render();
+          });
+          list.append(btn);
+        } else {
+          const btn = h(
+            "button",
+            {
+              class:
+                "btn btn-sm btn-ghost prompt-item" +
+                (selected === e.name ? " prompt-item-active" : ""),
+            },
+            `${e.name} · ${fmtSize(e.size)}`,
+          );
+          btn.addEventListener("click", () => loadLog(e.name, false, cur));
+          list.append(btn);
+        }
+      }
+      if (!entries.length) {
+        list.append(h("div", { class: "empty" }, "Логов нет"));
+      }
+      lPager.replaceChildren(
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            disabled: lPage <= 0,
+            onclick: () => {
+              lPage--;
+              renderList(selected);
+            },
+          },
+          "‹",
+        ),
+        h(
+          "span",
+          { class: "ner-pager-info" },
+          ` ${lPage + 1} / ${pages} · логов: ${files.length} `,
+        ),
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            disabled: lPage >= pages - 1,
+            onclick: () => {
+              lPage++;
+              renderList(selected);
+            },
+          },
+          "›",
+        ),
+      );
+    }
+    async function loadLog(name, append, dir) {
+      try {
+        const sub = dir ? `&dir=${encodeURIComponent(dir)}` : "";
+        const d = await api(
+          `/logs/${encodeURIComponent(name)}?${q}${sub}&tail=${append ? 65536 : 0}`,
+        );
+        if (append) pre.textContent += d.content;
+        else pre.textContent = d.content;
+        pre.dataset.log = name;
+        pre.dataset.dir = dir || "";
+        meta.textContent = `${dir ? dir + "/" : ""}${name} · ${fmtSize(d.size)}`;
+        renderList(name);
+        pre.scrollTop = pre.scrollHeight;
+      } catch (ex) {
+        meta.textContent = ex.message;
+      }
+    }
+    follow.addEventListener("click", () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+        follow.textContent = "Автообновление";
+        meta.textContent = meta.textContent.replace(
+          " · автообновление вкл",
+          "",
+        );
+        return;
+      }
+      follow.textContent = "Стоп";
+      meta.textContent += " · автообновление вкл";
+      timer = setInterval(async () => {
+        const active = pre.dataset.log;
+        const adir = pre.dataset.dir;
+        if (active) await loadLog(active, true, adir);
+      }, 1500);
+    });
+    renderList();
+    const toolbar = h(
+      "div",
+      { class: "files-toolbar" },
+      crumbs,
+      h("span", { class: "spacer" }),
+      meta,
+      follow,
+    );
+    return h("div", { class: "files-wrap" }, toolbar, list, lPager, pre);
+  }
+
+  /* ── Отчёты translate_check (W7) ────────────── */
+  async function notesView() {
+    /* «Заметки» проекта — markdown-файл source/info.md (копируется из
+       шаблона General при создании проекта); редактор как у «Заметок»
+       приложения: CodeMirror + md-предпросмотр в sandbox-iframe */
+    const NOTES_PATH = "source/info.md";
+    const err = h("div", { class: "form-error" });
+    const ed = makeEditor("", "md");
+    const editorHost = h(
+      "div",
+      { class: "editor-cm editor-cm-small" },
+      ed.root,
+    );
+    const frame = h("iframe", {
+      class: "editor-preview-frame preview-adaptive",
+      sandbox: "allow-same-origin",
+      title: "предпросмотр",
+    });
+    const status = h("div", { class: "review-status" });
+    let mode = "code";
+    const prevBtn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost", title: "Показать отрендеренный вид" },
+      "Рендер",
+    );
+    function renderPreview() {
+      if (mode === "code") return;
+      const html = window.marked
+        ? window.marked.parse(ed.getValue(), {
+            mangle: false,
+            headerIds: false,
+          })
+        : "<pre>marked не загружен</pre>";
+      frame.srcdoc = mdPreviewSrcdoc(html);
+    }
+    frame.addEventListener("load", () => fitPreviewFrame(frame));
+    function setMode(next) {
+      mode = next;
+      if (mode === "code") {
+        prevBtn.textContent = "Рендер";
+        editorHost.style.display = "";
+        frame.style.display = "none";
+      } else {
+        prevBtn.textContent = "Код";
+        editorHost.style.display = "none";
+        frame.style.display = "block";
+        renderPreview();
+      }
+    }
+    prevBtn.addEventListener("click", () => {
+      if (mode === "code") setMode("md");
+      else setMode("code");
+    });
+    const saveBtn = h(
+      "button",
+      { class: "btn btn-sm btn-primary" },
+      "Сохранить",
+    );
+    saveBtn.addEventListener("click", async () => {
+      err.textContent = "";
+      try {
+        await api("/file", {
+          method: "PUT",
+          body: {
+            project: `${section}/${name}`,
+            path: NOTES_PATH,
+            content: ed.getValue(),
+          },
+        });
+        toast("Заметки сохранены");
+        status.textContent = "source/info.md";
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    });
+    async function loadNotes() {
+      const q = new URLSearchParams({
+        project: `${section}/${name}`,
+        path: NOTES_PATH,
+      });
+      try {
+        const d = await api(`/file?${q}`);
+        ed.setValue(d.content || "");
+        status.textContent = d.path;
+      } catch (ex) {
+        if (/не найден/.test(ex.message)) {
+          ed.setValue("");
+          status.textContent =
+            "инфо-файла ещё нет — сохраните, чтобы создать source/info.md";
+        } else {
+          err.textContent = ex.message;
+        }
+      }
+    }
+    await loadNotes();
+    setMode("code");
+    return h(
+      "div",
+      { class: "page" },
+      h(
+        "div",
+        { class: "page-header" },
+        h(
+          "div",
+          { class: "page-header-main" },
+          h("h1", { class: "page-title" }, "Заметки"),
+          h(
+            "div",
+            { class: "page-sub" },
+            "Информация о книге (markdown, source/info.md — копируется из шаблона)",
+          ),
+        ),
+      ),
+      h(
+        "div",
+        { class: "review-card" },
+        h("div", { class: "review-card-title" }, "Редактор"),
+        h(
+          "div",
+          { class: "review-card-body" },
+          h(
+            "div",
+            { class: "files-toolbar" },
+            status,
+            h("span", { class: "spacer" }),
+            h("span", { class: "field-help" }, "кегль"),
+            previewFontSelect(() => {
+              if (mode !== "code") renderPreview();
+            }),
+            prevBtn,
+            saveBtn,
+          ),
+          err,
+          editorHost,
+          frame,
+        ),
+      ),
+    );
+  }
+
+  /* ── Отчёты translate_check (W7) — секция 2 «Проверки» ── */
+  async function renderCheckReports() {
+    const q = new URLSearchParams({ project: `${section}/${name}` });
+    let data;
+    try {
+      data = await api(`/check?${q}`);
+    } catch (ex) {
+      return h("div", { class: "files-empty" }, ex.message);
+    }
+    if (!data.reports?.length) {
+      return h(
+        "div",
+        { class: "files-empty" },
+        "Нет отчётов — запустите стадию translate_check (экран «Запуски», стадия 4)",
+      );
+    }
+    let current = data.reports[0];
+    let page = 0; // M8: страница таблицы текущего отчёта
+    let rPage = 0; // раунд 12: страница списка отчётов (10/стр)
+    const REPORT_PAGE_SIZE = 10;
+    const list = h("div", { class: "prompt-list" });
+    const listPager = h("div", { class: "ner-pager" });
+    const body = h("div", { class: "review-card" });
+    const pager = h("div", { class: "ner-pager" });
+
+    function renderPager(total) {
+      if (total === 0) {
+        pager.replaceChildren();
+        return;
+      }
+      const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      pager.replaceChildren(
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            disabled: page <= 0,
+            onclick: () => {
+              page--;
+              renderReport();
+            },
+          },
+          "‹",
+        ),
+        h(
+          "span",
+          { class: "ner-pager-info" },
+          ` ${page + 1} / ${pages} · всего ${total} `,
+        ),
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            disabled: page >= pages - 1,
+            onclick: () => {
+              page++;
+              renderReport();
+            },
+          },
+          "›",
+        ),
+      );
+    }
+    function renderListPager(total) {
+      const pages = Math.max(1, Math.ceil(total / REPORT_PAGE_SIZE));
+      listPager.replaceChildren(
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            disabled: rPage <= 0,
+            onclick: () => {
+              rPage--;
+              renderList();
+            },
+          },
+          "‹",
+        ),
+        h(
+          "span",
+          { class: "ner-pager-info" },
+          ` ${rPage + 1} / ${pages} · отчётов: ${total} `,
+        ),
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            disabled: rPage >= pages - 1,
+            onclick: () => {
+              rPage++;
+              renderList();
+            },
+          },
+          "›",
+        ),
+      );
+    }
+    function renderList() {
+      list.replaceChildren();
+      const slice = data.reports.slice(
+        rPage * REPORT_PAGE_SIZE,
+        (rPage + 1) * REPORT_PAGE_SIZE,
+      );
+      for (const r of slice) {
+        const btn = h(
+          "button",
+          {
+            class:
+              "btn btn-sm btn-ghost prompt-item" +
+              (r === current ? " prompt-item-active" : ""),
+          },
+          `${r.name} · ошибок: ${r.failed ?? "?"}`,
+        );
+        btn.addEventListener("click", () => {
+          current = r;
+          page = 0; // M8: другой отчёт — с первой страницы
+          renderList();
+          renderReport();
+        });
+        list.append(btn);
+      }
+      listPager.replaceChildren();
+      renderListPager(data.reports.length);
+    }
+    function renderReport() {
+      body.replaceChildren();
+      const r = current;
+      body.append(
+        h("div", { class: "review-card-title" }, r.name),
+        h(
+          "div",
+          { class: "review-status" },
+          `тип: ${r.type || "?"} · диапазон: ${r.range || "?"} · проверено: ${r.checked || "?"} · с ошибками: ${r.failed || "?"} · дата: ${r.date || "?"}`,
+        ),
+      );
+      if (!r.entries?.length) {
+        body.append(h("div", { class: "card-hint" }, "Ошибок нет ✓"));
+        return;
+      }
+      const rows = [];
+      /* фрагмент для поиска: последний «…» / '…' / текст после «:» */
+      function searchFragment(msg) {
+        const q = msg.match(/«([^»]+)»/);
+        if (q) return q[1];
+        const sq = msg.match(/'([^']+)'/);
+        if (sq) return sq[1];
+        const colon = msg.match(/:\s*([^:]*)$/);
+        if (colon && colon[1].trim()) return colon[1].trim();
+        return msg;
+      }
+      /* открыть файл главы (тип из отчёта) в редакторе с поиском ошибки */
+      async function openErrorFile(dir, type, msg) {
+        const rel = dir ? `${dir}/${type}.txt` : `${type}.txt`;
+        const fq = new URLSearchParams({
+          project: `${section}/${name}`,
+          path: rel,
+        });
+        try {
+          await api(`/file?${fq}`);
+          st.edit = rel;
+          st.search = searchFragment(msg);
+          render();
+        } catch {
+          setPath(dir || "");
+          setView("files");
+        }
+      }
+      for (const e of r.entries) {
+        const dirCell = h(
+          "td",
+          {},
+          e.dir
+            ? h(
+                "a",
+                {
+                  class: "link",
+                  onclick: () => setPath(e.dir),
+                  title: "Открыть папку главы в «Файлы»",
+                },
+                e.dir,
+              )
+            : "—",
+        );
+        const errCell = h(
+          "td",
+          {},
+          ...e.errors.map((msg) =>
+            h(
+              "button",
+              {
+                class:
+                  "check-msg-link " +
+                  (e.fatal || msg.startsWith("[FATAL]")
+                    ? "check-fatal"
+                    : "check-msg"),
+                onclick: () => openErrorFile(e.dir, r.type, msg),
+                title: `Открыть ${e.dir}/${r.type}.txt и найти ошибку`,
+              },
+              msg,
+            ),
+          ),
+        );
+        rows.push(
+          h(
+            "tr",
+            { class: "ner-row" },
+            h("td", { class: "ch-num" }, String(e.chapter)),
+            dirCell,
+            errCell,
+          ),
+        );
+      }
+      body.append(
+        h(
+          "table",
+          { class: "ner-table" },
+          h(
+            "thead",
+            {},
+            h(
+              "tr",
+              {},
+              h("th", {}, "Глава"),
+              h("th", {}, "Папка"),
+              h("th", {}, "Ошибки"),
+            ),
+          ),
+          h("tbody", {}, rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)),
+        ),
+      );
+      body.append(pager);
+      renderPager(rows.length);
+    }
+    renderList();
+    renderReport();
+    return h(
+      "div",
+      { class: "files-wrap" },
+      h("div", { class: "check-list" }, list, listPager),
+      body,
+    );
+  }
+
+  render();
+  return page;
+}

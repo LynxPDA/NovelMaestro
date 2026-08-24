@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NovelMaestro</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232ea043'/%3E%3Ctext x='8' y='12' font-size='9' text-anchor='middle' fill='%230d1117' font-family='monospace'%3E%E2%87%84%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app-root"></div>
+    <div
+      id="toasts"
+      x-data="{ items: [], push(msg, kind) { const it = { msg, kind, id: Date.now() + Math.random() }; this.items.push(it); setTimeout(() => this.items = this.items.filter((x) => x.id !== it.id), 3500); } }"
+      class="toast-host"
+    >
+      <template x-for="it in items" :key="it.id">
+        <div :class="'toast toast-' + it.kind" x-text="it.msg"></div>
+      </template>
+    </div>
+    <script src="/vendor/codemirror.min.js"></script>
+    <script src="/vendor/marked.min.js"></script>
+    <script defer src="/vendor/alpine.min.js"></script>
+    <script src="/ui-core.js"></script>
+    <script src="/project-views.js"></script>
+    <script src="/run-views.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

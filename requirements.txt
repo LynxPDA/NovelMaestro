@@ -1,0 +1,14 @@
+# NovelMaestro: зависимости (pip install -r requirements.txt)
+
+# Обязательные
+requests
+tqdm
+
+# Опционально: ускорение поиска терминов (есть regex-fallback)
+pyahocorasick
+
+# Тесты (для разработки)
+pytest
+
+# Только Windows, опционально (стрелочный TUI, иначе нумерованный ввод):
+#   pip install windows-curses

@@ -1,0 +1,1290 @@
+/* styles.css — дизайн-система web-интерфейса (тёмная тема, терминальный акцент).
+ * Цвета: фон #0d1117, поверхности #161b22, акцент #2ea043/#d29922. */
+
+:root {
+ --bg: #0d1117;
+ --surface: #161b22;
+ --surface-2: #1c2128;
+ --border: #30363d;
+ --text: #e6edf3;
+ --muted: #8b949e;
+ --accent: #2ea043;
+ --accent-dim: #238636;
+ --accent-2: #d29922;
+ --danger: #f85149;
+ --radius: 8px;
+ --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+ --sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+ box-sizing: border-box;
+}
+
+html,
+body {
+ margin: 0;
+ height: 100%;
+ background: var(--bg);
+ color: var(--text);
+ font-family: var(--sans);
+ font-size: 14px;
+}
+
+.app-root {
+ height: 100%;
+}
+
+/* ── каркас ─────────────────────────────────────────────── */
+.layout {
+ display: flex;
+ flex-direction: column;
+ height: 100%;
+}
+
+.topbar {
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ height: 52px;
+ padding: 0 20px;
+ background: var(--surface);
+ border-bottom: 1px solid var(--border);
+}
+
+.brand {
+ font-weight: 700;
+ letter-spacing: 0.3px;
+}
+.brand::before {
+ content: "⇄ ";
+ color: var(--accent);
+}
+
+.topbar-right {
+ display: flex;
+ align-items: center;
+ gap: 14px;
+}
+
+.conn {
+ font-size: 12px;
+ color: var(--muted);
+}
+.conn-ok {
+ color: var(--accent);
+}
+.conn-bad {
+ color: var(--danger);
+}
+
+.body {
+ display: flex;
+ flex: 1;
+ min-height: 0;
+}
+
+.sidebar {
+ width: 190px;
+ padding: 14px 10px;
+ background: var(--surface);
+ border-right: 1px solid var(--border);
+ display: flex;
+ flex-direction: column;
+ gap: 4px;
+}
+
+.nav-item {
+ display: block;
+ padding: 8px 12px;
+ border-radius: var(--radius);
+ color: var(--muted);
+ text-decoration: none;
+ font-size: 13px;
+}
+.nav-item:hover {
+ color: var(--text);
+ background: var(--surface-2);
+}
+.nav-item-active {
+ color: var(--text);
+ background: var(--surface-2);
+ font-weight: 600;
+}
+
+.content {
+ flex: 1;
+ overflow: auto;
+ padding: 24px;
+}
+
+/* ── страница ───────────────────────────────────────────── */
+.page {
+ max-width: 1200px;
+ margin: 0 auto;
+}
+
+.page-header {
+ margin-bottom: 22px;
+ display: flex;
+ align-items: flex-start;
+ justify-content: space-between;
+ gap: 14px;
+}
+.page-header-main {
+ flex: 1;
+ min-width: 0;
+}
+.page-title {
+ margin: 0;
+ font-size: 22px;
+ overflow-wrap: anywhere;
+}
+.page-sub {
+ margin-top: 4px;
+ color: var(--muted);
+ font-size: 13px;
+}
+
+.cards {
+ display: grid;
+ grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+ gap: 16px;
+}
+
+.card {
+ background: var(--surface);
+ border: 1px solid var(--border);
+ border-radius: var(--radius);
+ padding: 16px;
+}
+.card-title {
+ font-size: 15px;
+ font-weight: 600;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+.card-sub {
+ margin-top: 6px;
+ color: var(--text);
+ font-size: 13px;
+}
+.card-hint {
+ margin-top: 8px;
+ color: var(--muted);
+ font-size: 12px;
+}
+
+.m1-note {
+ margin-top: 22px;
+ padding: 14px 16px;
+ background: var(--surface);
+ border: 1px dashed var(--border);
+ border-radius: var(--radius);
+ color: var(--muted);
+ font-size: 13px;
+}
+
+/* ── файлы (M3) ─────────────────────────────────────────── */
+.files-wrap {
+ margin-top: 18px;
+}
+.files-toolbar {
+ display: flex;
+ align-items: center;
+ gap: 10px;
+ margin-bottom: 10px;
+}
+.files-toolbar .spacer {
+ flex: 1;
+}
+.crumbs {
+ display: flex;
+ align-items: center;
+ gap: 4px;
+ flex-wrap: wrap;
+ color: var(--muted);
+ font-size: 13px;
+}
+.crumb {
+ color: var(--accent);
+ text-decoration: none;
+}
+.crumb:hover {
+ text-decoration: underline;
+}
+.crumb-sep {
+ color: var(--muted);
+}
+.files-list {
+ background: var(--surface);
+ border: 1px solid var(--border);
+ border-radius: var(--radius);
+ overflow: hidden;
+ min-height: 120px;
+}
+.files-list.drop-over {
+ border-color: var(--accent);
+ background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.files-empty {
+ margin-top: 18px;
+ padding: 18px;
+ background: var(--surface);
+ border: 1px dashed var(--border);
+ border-radius: var(--radius);
+ color: var(--muted);
+}
+.frow {
+ display: flex;
+ align-items: center;
+ gap: 12px;
+ padding: 9px 14px;
+ border-bottom: 1px solid var(--border);
+}
+.frow:last-child {
+ border-bottom: none;
+}
+.frow:hover {
+ background: var(--hover);
+}
+.fname {
+ flex: 1;
+ min-width: 0;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+ font-size: 14px;
+}
+a.fname {
+ color: var(--text);
+ text-decoration: none;
+}
+a.fname:hover {
+ color: var(--accent);
+}
+.fmeta {
+ color: var(--muted);
+ font-size: 12px;
+ white-space: nowrap;
+}
+.factions {
+ display: flex;
+ gap: 6px;
+}
+.btn-danger-ghost {
+ color: var(--danger);
+ border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+ background: transparent;
+}
+.btn-danger-ghost:hover {
+ background: var(--danger);
+ color: var(--surface);
+}
+.hidden {
+ display: none;
+}
+
+/* ── редактор (M3) ──────────────────────────────────────── */
+.editor-wrap {
+ margin-top: 18px;
+}
+.editor-meta {
+ color: var(--muted);
+ font-size: 12px;
+}
+.editor-area {
+ width: 100%;
+ min-height: 60vh;
+ padding: 12px;
+ background: var(--surface);
+ color: var(--text);
+ border: 1px solid var(--border);
+ border-radius: var(--radius);
+ font-family: var(--mono);
+ font-size: 13px;
+ line-height: 1.55;
+ resize: vertical;
+ white-space: pre-wrap;
+ word-break: break-word;
+ overflow-wrap: anywhere;
+}
+.editor-area:focus {
+ outline: none;
+ border-color: var(--accent);
+}
+
+/* ── вход ───────────────────────────────────────────────── */
+.login-wrap {
+ height: 100%;
+ display: flex;
+ align-items: center;
+ justify-content: center;
+ background: var(--bg);
+}
+
+.login-card {
+ width: 340px;
+ padding: 28px;
+ text-align: center;
+ background: var(--surface);
+ border: 1px solid var(--border);
+ border-radius: 12px;
+ display: flex;
+ flex-direction: column;
+ gap: 14px;
+}
+
+.login-title {
+ font-size: 18px;
+ font-weight: 700;
+}
+.login-subtitle {
+ color: var(--muted);
+ font-size: 13px;
+ margin-bottom: 6px;
+}
+
+/* ── элементы ───────────────────────────────────────────── */
+.input {
+ padding: 9px 12px;
+ border-radius: var(--radius);
+ border: 1px solid var(--border);
+ background: var(--bg);
+ color: var(--text);
+ font-size: 14px;
+ outline: none;
+}
+.input:focus {
+ border-color: var(--accent);
+}
+
+.btn {
+ padding: 8px 14px;
+ border-radius: var(--radius);
+ border: 1px solid transparent;
+ background: var(--surface-2);
+ color: var(--text);
+ font-size: 13px;
+ cursor: pointer;
+ font-family: var(--sans);
+ text-decoration: none;
+}
+.btn:hover {
+ background: #252d38;
+}
+.btn-primary {
+ background: var(--accent-dim);
+ font-weight: 600;
+}
+.btn-primary:hover {
+ background: var(--accent);
+}
+.btn-block {
+ width: 100%;
+}
+.btn-ghost {
+ background: transparent;
+ border-color: var(--border);
+}
+.btn-ghost:hover {
+ background: var(--surface-2);
+}
+
+.form-error {
+ color: var(--danger);
+ font-size: 13px;
+ min-height: 18px;
+}
+
+/* ── hub: разделы и проекты (M2) ───────────────────────── */
+.section {
+ margin-bottom: 26px;
+}
+
+.section-header {
+ display: flex;
+ align-items: center;
+ gap: 10px;
+ margin-bottom: 10px;
+}
+.section-title {
+ margin: 0;
+ font-size: 16px;
+ font-weight: 600;
+ display: flex;
+ align-items: center;
+ gap: 8px;
+}
+.section-active .section-title::after {
+ content: "◀ текущий";
+ color: var(--accent-2);
+ font-size: 11px;
+ font-weight: 400;
+}
+
+.badge {
+ padding: 1px 8px;
+ border-radius: 10px;
+ background: var(--surface-2);
+ border: 1px solid var(--border);
+ color: var(--muted);
+ font-size: 12px;
+}
+
+.project-card .card-actions {
+ margin-top: 12px;
+ display: flex;
+ gap: 8px;
+}
+
+/* ── шаблоны (раунд 21) ── */
+.tpl-grid {
+ display: grid;
+ grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+ gap: 12px;
+ padding: 4px 0;
+}
+.tpl-card .card-actions {
+ margin-top: 12px;
+ display: flex;
+ flex-wrap: wrap;
+ gap: 8px;
+}
+
+.btn-sm {
+ padding: 4px 10px;
+ font-size: 12px;
+}
+
+.btn-danger {
+ background: transparent;
+ border-color: var(--danger);
+ color: var(--danger);
+}
+.btn-danger:hover {
+ background: var(--danger);
+ color: var(--bg);
+}
+.btn:disabled,
+.btn[disabled] {
+ opacity: 0.45;
+ cursor: not-allowed;
+ pointer-events: none;
+ box-shadow: none;
+}
+
+.empty {
+ padding: 20px;
+ text-align: center;
+ color: var(--muted);
+ border: 1px dashed var(--border);
+ border-radius: var(--radius);
+}
+
+/* ── модальные окна ────────────────────────────────────── */
+.modal-backdrop {
+ position: fixed;
+ inset: 0;
+ background: rgba(1, 4, 9, 0.7);
+ display: flex;
+ align-items: center;
+ justify-content: center;
+ z-index: 50;
+}
+
+.modal {
+ width: 420px;
+ max-width: 92vw;
+ max-height: 86vh;
+ overflow: auto;
+ background: var(--surface);
+ border: 1px solid var(--border);
+ border-radius: 12px;
+ padding: 22px;
+ display: flex;
+ flex-direction: column;
+ gap: 12px;
+}
+.modal-wide {
+ width: 560px;
+}
+
+.modal-title {
+ font-size: 17px;
+ font-weight: 700;
+}
+.modal-text {
+ color: var(--muted);
+ font-size: 13px;
+}
+.modal-actions {
+ display: flex;
+ justify-content: flex-end;
+ gap: 10px;
+}
+
+.field {
+ display: flex;
+ flex-direction: column;
+ gap: 5px;
+ font-size: 13px;
+ color: var(--muted);
+}
+.field-row {
+ display: flex;
+ align-items: center;
+ gap: 6px;
+}
+.field-row .input {
+ flex: 1;
+ min-width: 0;
+}
+
+.manage-grid {
+ display: flex;
+ flex-direction: column;
+ gap: 14px;
+}
+.manage-row {
+ display: flex;
+ gap: 10px;
+ align-items: flex-end;
+}
+.manage-row .field {
+ flex: 1;
+}
+
+/* ── тосты ─────────────────────────────────────────────── */
+.toast {
+ position: fixed;
+ bottom: 24px;
+ right: 24px;
+ z-index: 100;
+ padding: 10px 16px;
+ border-radius: var(--radius);
+ background: var(--surface-2);
+ border: 1px solid var(--border);
+ box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.toast-ok {
+ border-color: var(--accent);
+}
+.toast-bad {
+ border-color: var(--danger);
+}
+
+/* ── запуски стадий (M4) ───────────────────────────────── */
+.run-layout {
+ display: grid;
+ /* раунд 21: 370px → 305px (−17%) — компактнее; кнопка «Стоп» не
+     вылезает благодаря flex-wrap в .job-row (раунд 21) */
+ grid-template-columns: 305px 1fr;
+ gap: 16px;
+ align-items: start;
+}
+.run-col {
+ display: flex;
+ flex-direction: column;
+ gap: 14px;
+ min-width: 0;
+}
+.run-panel {
+ background: var(--surface-2);
+ border: 1px solid var(--border);
+ border-radius: var(--radius);
+ padding: 14px;
+ display: flex;
+ flex-direction: column;
+ gap: 10px;
+}
+.run-panel-title {
+ display: flex;
+ align-items: center;
+ gap: 8px;
+ font-size: 13px;
+ font-weight: 600;
+ color: var(--text-dim);
+ text-transform: uppercase;
+ letter-spacing: 0.04em;
+}
+.run-empty {
+ background: var(--surface-2);
+ border: 1px dashed var(--border);
+ border-radius: var(--radius);
+ padding: 22px;
+ color: var(--text-dim);
+ text-align: center;
+}
+.stage-grid {
+ display: flex;
+ flex-direction: column;
+ gap: 8px;
+}
+.stage-card {
+ display: flex;
+ align-items: center;
+ gap: 10px;
+ padding: 10px 12px;
+ background: var(--surface-1);
+ border: 1px solid var(--border);
+ border-radius: var(--radius);
+ color: var(--text);
+ text-align: left;
+ cursor: pointer;
+ transition: border-color 0.15s;
+}
+.stage-card:hover {
+ border-color: var(--accent);
+}
+.stage-card-active {
+ border-color: var(--accent);
+ background: color-mix(in srgb, var(--accent) 12%, var(--surface-1));
+}
+.stage-card-title {
+ font-size: 14px;
+ font-weight: 600;
+}
+.ner-json-cell {
+ font-family: var(--mono);
+ font-size: 12px;
+ resize: vertical;
+}
+.ner-json-td {
+ max-width: 320px;
+}
+.ner-json-td textarea {
+ width: 100%;
+}
+.run-form {
+ display: flex;
+ flex-direction: column;
+ gap: 12px;
+}
+.field-help {
+ font-size: 11px;
+ color: var(--text-dim);
+ margin-top: 2px;
+}
+.checkbox {
+ width: 18px;
+ height: 18px;
+ accent-color: var(--accent);
+}
+.job-list {
+ display: flex;
+ flex-direction: column;
+ gap: 6px;
+}
+.job-row {
+ display: flex;
+ align-items: center;
+ /* раунд 21: перенос строк — на узких окнах кнопки никогда не
+     вылезают за виджет (мини-бар уходит на вторую строку) */
+ flex-wrap: wrap;
+ row-gap: 6px;
+ gap: 8px;
+ padding: 6px 8px;
+ background: var(--surface-1);
+ border: 1px solid var(--border);
+ border-radius: var(--radius);
+ font-size: 12px;
+}
+.job-title {
+ flex: 1;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+.job-time {
+ color: var(--text-dim);
+ font-size: 11px;
+}
+.badge-running {
+ background: color-mix(in srgb, var(--accent) 20%, transparent);
+ color: var(--accent);
+}
+.badge-done {
+ background: color-mix(in srgb, #2ecc71 20%, transparent);
+ color: #2ecc71;
+}
+.badge-failed {
+ background: color-mix(in srgb, var(--danger) 20%, transparent);
+ color: var(--danger);
+}
+.badge-stopped {
+ background: color-mix(in srgb, #f39c12 20%, transparent);
+ color: #f39c12;
+}
+.log-area {
+ background: var(--bg);
+ border: 1px solid var(--border);
+ border-radius: var(--radius);
+ padding: 10px;
+ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ font-size: 12px;
+ line-height: 1.5;
+ color: var(--text);
+ min-height: 260px;
+ max-height: 480px;
+ overflow: auto;
+ white-space: pre-wrap;
+ word-break: break-word;
+}
+
+/* ── прогрессбар запусков (раунд 19) ──────────────────────── */
+.progress-wrap {
+ display: flex;
+ align-items: center;
+ gap: 8px;
+ font-size: 12px;
+}
+.progress-wrap.hidden {
+ display: none;
+}
+.progress-label {
+ color: var(--text);
+ font-weight: 600;
+ white-space: nowrap;
+ min-width: 0;
+ overflow: hidden;
+ text-overflow: ellipsis;
+}
+.progress-track {
+ flex: 1;
+ min-width: 60px;
+ height: 6px;
+ border-radius: 3px;
+ background: var(--surface-2);
+ border: 1px solid var(--border);
+ overflow: hidden;
+}
+.progress-fill {
+ height: 100%;
+ border-radius: 3px;
+ background: var(--accent);
+ transition: width 0.3s ease;
+}
+.progress-text {
+ color: var(--muted);
+ font-variant-numeric: tabular-nums;
+ white-space: nowrap;
+}
+.progress-line {
+ color: var(--muted);
+ font-size: 12px;
+ font-variant-numeric: tabular-nums;
+ white-space: nowrap;
+ overflow: hidden;
+ text-overflow: ellipsis;
+}
+.progress-wrap.mini {
+ gap: 6px;
+ margin-top: 6px;
+}
+.progress-wrap.mini .progress-track {
+ height: 4px;
+ min-width: 40px;
+}
+.progress-wrap.mini .progress-text {
+ font-size: 11px;
+}
+
+/* ── живая таблица глав (конвейер, стадия 3) ── */
+.ch-table {
+ width: 100%;
+ border-collapse: collapse;
+ margin-bottom: 12px;
+ font-size: 12px;
+}
+.ch-table th,
+.ch-table td {
+ border: 1px solid var(--border);
+ padding: 4px 8px;
+ text-align: center;
+}
+.ch-table thead th {
+ background: color-mix(in srgb, var(--bg) 60%, var(--border));
+ font-weight: 600;
+ color: var(--text-dim);
+}
+.ch-num {
+ color: var(--text-dim);
+ font-variant-numeric: tabular-nums;
+}
+.ch-cell {
+ min-width: 52px;
+ font-size: 13px;
+}
+.ch-ok {
+ color: #2ecc71;
+}
+.ch-error {
+ color: var(--danger);
+}
+.ch-skip {
+ color: #f39c12;
+}
+.ch-pending {
+ color: var(--text-dim);
+}
+
+/* ── M7: вкладки, NER, review, конфиг, промпты ─────────── */
+.tabs {
+ display: flex;
+ gap: 4px;
+ padding: 0 16px;
+ border-bottom: 1px solid var(--border);
+ background: var(--bg);
+}
+.tab {
+ padding: 8px 14px;
+ background: none;
+ border: none;
+ color: var(--text-dim);
+ cursor: pointer;
+ border-bottom: 2px solid transparent;
+ font-size: 14px;
+}
+.tab:hover {
+ color: var(--text);
+}
+.tab-active {
+ color: var(--accent);
+ border-bottom-color: var(--accent);
+}
+.ner-table {
+ width: 100%;
+ border-collapse: collapse;
+ margin-top: 8px;
+}
+.ner-table th,
+.ner-table td {
+ padding: 6px 10px;
+ border-bottom: 1px solid var(--border);
+ text-align: left;
+}
+.ner-table th {
+ color: var(--text-dim);
+ font-weight: 600;
+}
+.ner-type {
+ color: var(--accent);
+ font-size: 13px;
+}
+.ner-actions {
+ white-space: nowrap;
+ text-align: right;
+}
+.ner-meta {
+ color: var(--text-dim);
+ font-size: 13px;
+}
+/* M6/M8: пагинация таблиц глоссария и отчётов */
+.ner-pager {
+ display: flex;
+ align-items: center;
+ gap: 6px;
+ padding: 8px 0;
+}
+.ner-pager-info {
+ color: var(--text-dim);
+ font-size: 13px;
+}
+/* раунд 13: заметки используют editor-cm как файлы.
+   .notes-frame переопределяется ПОСЛЕ .editor-preview-frame (см. ниже). */
+.review-wrap,
+.config-wrap {
+ display: flex;
+ flex-direction: column;
+ gap: 14px;
+ padding: 16px;
+}
+.review-card {
+ border: 1px solid var(--border);
+ border-radius: 8px;
+ background: var(--bg);
+ overflow: hidden;
+}
+.review-card-title {
+ padding: 8px 12px;
+ font-weight: 600;
+ border-bottom: 1px solid var(--border);
+ background: var(--bg-dim);
+}
+.review-card-body {
+ padding: 12px;
+ display: flex;
+ flex-direction: column;
+ gap: 8px;
+}
+.review-actions {
+ display: flex;
+ gap: 8px;
+}
+.review-status {
+ color: var(--text-dim);
+ font-size: 13px;
+}
+/* раунд 22: секции единой вкладки «Проверка» (1·LLM / 2·алгоритмич. / 3·LLM) */
+.review-section {
+ border: 1px solid var(--border);
+ border-top-width: 2px;
+ border-radius: 8px;
+ background: var(--bg);
+ overflow: hidden;
+}
+.review-section-title {
+ padding: 8px 12px;
+ font-weight: 600;
+ border-bottom: 1px solid var(--border);
+ background: var(--bg-dim);
+}
+.review-section-sub {
+ padding: 4px 12px 8px;
+ color: var(--text-dim);
+ font-size: 13px;
+}
+.editor-small {
+ min-height: 140px;
+}
+.prompt-list {
+ display: flex;
+ flex-direction: column;
+ gap: 4px;
+ margin-bottom: 8px;
+}
+.prompt-item {
+ text-align: left;
+ justify-content: flex-start;
+}
+.prompt-name {
+ color: var(--text-dim);
+ font-size: 13px;
+}
+.log-view {
+ background: #0d1117;
+ border: 1px solid var(--border);
+ border-radius: 8px;
+ padding: 10px;
+ max-height: 420px;
+ overflow: auto;
+ font-family: ui-monospace, monospace;
+ font-size: 12px;
+ line-height: 1.5;
+ white-space: pre-wrap;
+ word-break: break-word;
+}
+.prompt-item-active {
+ color: var(--accent);
+ border-color: var(--accent);
+}
+
+/* ── Дашборд (W3) ─────────────────────────────────────────── */
+.dash-card {
+ min-width: 220px;
+}
+
+.dash-jobs {
+ margin-top: 16px;
+ width: 100%;
+}
+
+.dash-jobs .ner-table {
+ width: 100%;
+}
+
+/* таблица «Последние запуски»: строки — обычные table-row,
+   не наследовать flex от .job-row (список истории) */
+.dash-jobs .ner-table .job-row,
+.dash-jobs .ner-table tr {
+ display: table-row;
+}
+.dash-recent-row {
+ cursor: pointer;
+}
+.dash-recent-row:hover td {
+ background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* сводка и активные запуски на дашборде (раунд 2) */
+.dash-summary {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 12px;
+ margin: 12px 0 4px;
+}
+
+.stat-card {
+ background: var(--bg2, #161b22);
+ border: 1px solid var(--bd, #30363d);
+ border-radius: 10px;
+ padding: 12px 18px;
+ min-width: 120px;
+ text-align: center;
+}
+
+.stat-num {
+ font-size: 26px;
+ font-weight: 700;
+ color: var(--fg, #e6edf3);
+}
+
+.stat-label {
+ font-size: 12px;
+ color: var(--dim, #8b949e);
+ margin-top: 2px;
+}
+
+.dash-jobs .card-title {
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ gap: 8px;
+}
+
+.dash-refresh {
+ font-size: 12px;
+}
+
+.dash-runs {
+ display: flex;
+ flex-direction: column;
+ gap: 8px;
+}
+
+.dash-run {
+ cursor: default;
+}
+
+.dash-run .dash-run-title {
+ font-weight: 600;
+ color: var(--fg, #e6edf3);
+}
+
+.dash-run .job-time {
+ font-size: 12px;
+ color: var(--dim, #8b949e);
+ margin-left: 6px;
+}
+
+.dash-log {
+ margin: 8px 0 0;
+ padding: 10px;
+ max-height: 240px;
+ overflow: auto;
+ background: var(--bg, #0d1117);
+ border: 1px solid var(--bd, #30363d);
+ border-radius: 8px;
+ font-size: 12px;
+ line-height: 1.5;
+ white-space: pre-wrap;
+ word-break: break-word;
+}
+
+.dash-log.hidden {
+ display: none;
+}
+
+.dash-last {
+ border-color: var(--accent, #2ea043);
+ margin-bottom: 16px;
+ display: inline-block;
+}
+
+/* ── NER-редактор (W5) ────────────────────────────────────── */
+.ner-editing td {
+ background: rgba(46, 160, 67, 0.08);
+}
+
+.ner-editing .input-sm {
+ width: 100%;
+ min-width: 90px;
+ padding: 4px 8px;
+ font-size: 13px;
+}
+
+.ner-col-row {
+ display: block;
+ padding: 4px 0;
+ cursor: pointer;
+}
+.exp-rows {
+ display: flex;
+ flex-direction: column;
+ gap: 8px;
+ margin: 6px 0;
+}
+.exp-extra {
+ display: flex;
+ flex-direction: column;
+ gap: 4px;
+ margin: 6px 0;
+}
+
+/* ── Обложка (W6) ─────────────────────────────────────────── */
+.cover-preview {
+ max-width: 220px;
+ max-height: 320px;
+ border-radius: 6px;
+ border: 1px solid var(--border, #30363d);
+ margin: 8px 0;
+ display: block;
+}
+
+/* ── Отчёты translate_check (W7) ───────────────────────────── */
+.check-list {
+ max-height: 200px;
+ overflow-y: auto;
+ margin-bottom: 12px;
+}
+
+.check-msg {
+ white-space: pre-wrap;
+ font-size: 13px;
+}
+
+.check-fatal {
+ white-space: pre-wrap;
+ font-size: 13px;
+ color: #f85149;
+ font-weight: 600;
+}
+
+/* кликабельные ошибки «Проверка» → открывают файл с поиском */
+.check-msg-link {
+ display: block;
+ width: 100%;
+ text-align: left;
+ background: none;
+ border: none;
+ padding: 0;
+ margin: 0;
+ font: inherit;
+ color: inherit;
+ cursor: pointer;
+}
+
+.check-msg-link:hover {
+ text-decoration: underline;
+}
+
+/* ── CodeMirror-редактор (W8) ─────────────────────────────── */
+.editor-cm {
+ flex: 1;
+ min-height: 420px;
+ border: 1px solid var(--border, #30363d);
+ border-radius: 6px;
+ overflow: auto;
+}
+
+.editor-cm .cm-editor {
+ height: 100%;
+}
+
+.editor-cm .cm-editor.cm-focused {
+ outline: none;
+}
+
+.editor-preview-frame {
+ display: none;
+ flex: 1;
+ min-height: 420px;
+ border: 1px solid var(--border, #30363d);
+ border-radius: 6px;
+ background: var(--bg);
+}
+/* раунд 17: любой предпросмотр (заметки + файлы) — высота по контенту */
+.editor-preview-frame.preview-adaptive,
+.editor-preview-frame.notes-frame {
+ flex: none;
+ min-height: 0;
+ height: auto;
+ width: 100%;
+}
+
+/* Тёмная тема CodeMirror: вендор без пресета (базовые стили — light),
+   переопределяем фон/текст/поле/панель поиска на тёмные */
+.editor-cm .cm-editor {
+ background: var(--bg);
+ color: var(--text);
+}
+.editor-cm .cm-gutters {
+ background: var(--surface);
+ color: var(--muted);
+ border-right: 1px solid var(--border);
+}
+.editor-cm .cm-activeLine {
+ background: rgba(46, 160, 67, 0.08);
+}
+.editor-cm .cm-activeLineGutter {
+ background: rgba(46, 160, 67, 0.1);
+}
+.editor-cm .cm-selectionBackground,
+.editor-cm .cm-content ::selection {
+ background: rgba(46, 160, 67, 0.3) !important;
+}
+.editor-cm .cm-cursor {
+ border-left-color: var(--accent);
+}
+.editor-cm .cm-panels {
+ background: var(--surface);
+ color: var(--text);
+ border-bottom: 1px solid var(--border);
+}
+.editor-cm .cm-panel.cm-search input {
+ background: var(--bg);
+ color: var(--text);
+ border: 1px solid var(--border);
+ border-radius: 4px;
+ padding: 3px 6px;
+}
+.editor-cm .cm-panel.cm-search input:focus {
+ border-color: var(--accent);
+ outline: none;
+}
+.editor-cm .cm-panel.cm-search button {
+ background: var(--surface-2);
+ color: var(--text);
+ border: 1px solid var(--border);
+ border-radius: 4px;
+ cursor: pointer;
+ font-size: 12px;
+}
+.editor-cm .cm-searchMatch .cm-selectionMatch {
+ background: rgba(210, 153, 34, 0.35);
+ outline: none;
+}
+.editor-cm .cm-searchMatch-selected .cm-selectionMatch {
+ background: rgba(210, 153, 34, 0.55);
+}
+
+.input-inline {
+ width: auto;
+ min-width: 90px;
+}
+
+.editor-has-preview {
+ display: flex;
+ flex-direction: column;
+ gap: 8px;
+}
+
+.editor-cm-small {
+ min-height: 260px;
+ /* весь .env показывается целиком (R8-2): без max-height редактор
+     растёт с контентом, страница прокручивается */
+ max-height: none;
+}
+
+/* ── Тосты через Alpine (W9) ──────────────────────────────── */
+.toast-host {
+ position: fixed;
+ right: 16px;
+ bottom: 16px;
+ z-index: 1000;
+ display: flex;
+ flex-direction: column;
+ gap: 8px;
+}

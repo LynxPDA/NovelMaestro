@@ -1,0 +1,23 @@
+{
+  "ignore": [
+    "web/static/vendor/**",
+    "projects/**",
+    "servers/**",
+    "Images/**",
+    "backup/**",
+    "**/__pycache__/**",
+    ".venv/**",
+    "venv/**"
+  ],
+  "rules": {
+    "noise": {
+      "disable": [
+        "python-path-traversal",
+        "python-ssrf",
+        "python-assert-production",
+        "nested-ternary-js",
+        "prefer-at-js"
+      ]
+    }
+  }
+}

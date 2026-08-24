@@ -1,0 +1,26 @@
+# Кэш Python и скомпилированные файлы
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Кэш тестов (вижу у вас папку)
+.pytest_cache/
+.coverage
+
+# Основное
+projects/
+servers/
+Images/
+backup/
+
+# Виртуальные окружения (если вы их создадите в будущем)
+venv/
+env/
+.venv/
+.env
+
+logs/
+
+# web-бэкэнд: рантайм-данные
+web/jobs.json
+web/job_logs/
