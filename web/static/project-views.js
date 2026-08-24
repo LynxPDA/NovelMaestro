@@ -557,7 +557,10 @@ function viewProject(section, name) {
     function makePane(paneState) {
       const pane = h("div", { class: "ed-pane" });
       const bar = h("div", { class: "ed-pane-bar" });
-      const typeSel = h("select", { class: "input ed-type" });
+      const typeSel = h("select", {
+        class: "input ed-type",
+        title: "Какой файл главы открыт в этой панели",
+      });
       const meta = h("span", { class: "ed-meta" });
       const saveBtn = h(
         "button",
@@ -565,7 +568,8 @@ function viewProject(section, name) {
         "Сохранить",
       );
       const perr = h("div", { class: "form-error" });
-      bar.append(typeSel, meta, h("span", { class: "spacer" }), saveBtn);
+      bar.append(h("span", { class: "field-help" }, "Файл:"), typeSel,
+        meta, h("span", { class: "spacer" }), saveBtn);
       const host = h("div", { class: "ed-cm" });
       pane.append(bar, perr, host);
       return {
@@ -611,6 +615,21 @@ function viewProject(section, name) {
         pInfo.state.text = null;
         return;
       }
+      if (pInfo.editor && pInfo.state.text != null) {
+        // повторный рендер вкладки: редактор уже загружен — только
+        // переподключаем DOM (несохранённые правки не трогаем)
+        pInfo.host.replaceChildren(pInfo.editor.root);
+        pInfo.perr.textContent = "";
+        pInfo.meta.textContent =
+          `${fmtSize(pInfo.state.text.length)} · ${type}`;
+        pInfo.saveBtn.disabled = !pInfo.state.dirty;
+        if (pInfo.hl) {
+          pInfo.host.append(pInfo.hl.tip);
+          pInfo.hl.tip.style.display = "none";
+          computeHighlight(pInfo);
+        }
+        return;
+      }
       const path = `chapters/${ed.chapter}/${type}`;
       const q = new URLSearchParams({ project: `${section}/${name}`, path });
       pInfo.perr.textContent = "";
@@ -622,6 +641,7 @@ function viewProject(section, name) {
         pInfo.meta.textContent = `${fmtSize(data.size)} · ${type}`;
         if (pInfo.editor) {
           pInfo.editor.setValue(data.content);
+          pInfo.host.replaceChildren(pInfo.editor.root);
         } else {
           pInfo.editor = makeEditor(data.content, "txt", () => {
             pInfo.state.text = pInfo.editor.getValue();
@@ -839,25 +859,37 @@ function viewProject(section, name) {
     }
 
     /* ── сборка интерфейса ── */
-    const chapterSel = h("select", { class: "input ed-chapter" });
+    const chapterSel = h("select", {
+      class: "input ed-chapter",
+      title: "Глава, чьи файлы редактируются",
+    });
     for (const c of chapters) {
       chapterSel.append(h("option", { value: c.dir }, c.dir));
     }
     chapterSel.value = ed.chapter;
-    const modeBtn = h("button", { class: "btn btn-sm btn-ghost" });
-    const hlBtn = h("button", { class: "btn btn-sm btn-ghost" });
+    const modeBtn = h("button", {
+      class: "btn btn-sm btn-ghost",
+      title: "Одна панель или две рядом (например, оригинал + перевод)",
+    });
+    const hlBtn = h("button", {
+      class: "btn btn-sm btn-ghost",
+      title: "Подсветить термины глоссария (ner.json) в тексте редактора",
+    });
     function renderModeLabel() {
       modeBtn.textContent = ed.mode === "two" ? "Один файл" : "Два файла";
     }
     function renderHlLabel() {
-      hlBtn.textContent = ed.hl ? "Подсветка: вкл" : "Подсветка: выкл";
+      hlBtn.textContent = ed.hl
+        ? "Подсветка терминов: вкл"
+        : "Подсветка терминов: выкл";
       hlBtn.classList.toggle("btn-active", ed.hl);
     }
 
     function rebuildGrid() {
       grid.replaceChildren();
       grid.classList.toggle("ed-grid-two", ed.mode === "two");
-      grid.append(ed.mode === "two" ? [pLeft.pane, pRight.pane] : [pLeft.pane]);
+      // spread: append([a, b]) привёл бы массив к строке «[object …]»
+      grid.append(...(ed.mode === "two" ? [pLeft.pane, pRight.pane] : [pLeft.pane]));
     }
 
     chapterSel.addEventListener("change", () => {
@@ -899,11 +931,14 @@ function viewProject(section, name) {
     });
 
     toolbar.append(
+      h("span", { class: "field-help" }, "Глава:"),
       chapterSel,
+      h("span", { class: "field-help" }, "Режим:"),
       modeBtn,
       hlBtn,
       h("span", { class: "spacer" }),
-      h("span", { class: "field-help" }, "правка — только этот браузер"),
+      h("span", { class: "field-help" },
+        "изменения сохраняются кнопкой «Сохранить»"),
     );
     renderModeLabel();
     renderHlLabel();
