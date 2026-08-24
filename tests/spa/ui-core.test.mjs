@@ -235,9 +235,26 @@ test("glossaryMatches: ngramSize настраивается (аналог --ner_
   const items = [{ term: "Хунг", translation: "" }];
   const m2 = UICore.buildGlossaryMatcher(items, 2);
   assert.equal(m2.ngramSize, 2);
-  assert.deepEqual(m2.threshold, 0.7);
+  assert.deepEqual(m2.threshold, 0.75); // дефолт порога в редакторе
   const ms = UICore.glossaryMatches("Хунгу", m2);
   assert.deepEqual(ms.map((m) => "Хунгу".slice(m.from, m.to)), ["Хунгу"]);
+});
+
+test("glossaryMatches: threshold настраивается (аналог --ner_threshold)", () => {
+  const items = [{ term: "хунгамар", translation: "" }];
+  // слово «хунгамат»: совпадает 3 из 4 5-грамм = 0.75; общая подстрока 7 из 8.
+  // порог 0.7 пропускает, 0.8 — отклоняет; точных вхождений в тексте нет.
+  const loose = UICore.buildGlossaryMatcher(items, 5, 0.7);
+  assert.equal(loose.threshold, 0.7);
+  const msLoose = UICore.glossaryMatches("хунгамат", loose);
+  assert.deepEqual(msLoose.map((m) => "хунгамат".slice(m.from, m.to)), ["хунгамат"]);
+  const strict = UICore.buildGlossaryMatcher(items, 5, 0.8);
+  assert.equal(strict.threshold, 0.8);
+  assert.deepEqual(UICore.glossaryMatches("хунгамат", strict), []);
+  // clamp: мусорные значения → дефолт 0.75; зажим в [0, 1]
+  assert.equal(UICore.buildGlossaryMatcher(items, 5, NaN).threshold, 0.75);
+  assert.equal(UICore.buildGlossaryMatcher(items, 5, 5).threshold, 1);
+  assert.equal(UICore.buildGlossaryMatcher(items, 5, -2).threshold, 0);
 });
 
 test("buildGlossaryMatcher: чанки по ~2000 терминов", () => {

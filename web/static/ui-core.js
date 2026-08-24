@@ -21,8 +21,8 @@
    * одинаково к термину и тексту; точное вхождение — подстрока в норм.
    * тексте (как Aho-Corasick/regex load_ner_data); нечёткое — аналог
    * _fuzzy_hit (пересечение n-грамм >= threshold + общая подстрока >= 0.8). */
-  var SEARCH_DROP_RE = /[\s\u3000\u200b.,!?;:()«»"'’‘…—–\-]+/g;
-  var DROP_CHAR_RE = /[\s\u3000\u200b.,!?;:()«»"'’‘…—–\-]/;
+  var SEARCH_DROP_RE = /[\s\u3000\u200b.,!?;:()«»"'’‘…—–-]+/g;
+  var DROP_CHAR_RE = /[\s\u3000\u200b.,!?;:()«»"'’‘…—–-]/;
   function normalizeForSearch(s) {
     return String(s || "")
       .normalize("NFC")
@@ -170,13 +170,19 @@
 
     /* ── матчер глоссария (раунд 23): термины → чанки с regex ──
      * ngramSize — размер n-граммы нечёткого поиска (аналог --ner_ngram
-     * в translate_book.py, дефолт 3). Термины нормализуются как в
-     * core.common.normalize_for_search; длинные раньше. */
-    buildGlossaryMatcher: (items, ngramSize) => {
+     * в translate_book.py, дефолт 3); threshold — порог пересечения н-грамм,
+     * выше = строже (аналог --ner_threshold, дефолт 0.75).
+     * Термины нормализуются как в core.common.normalize_for_search;
+     * длинные раньше. */
+    buildGlossaryMatcher: (items, ngramSize, threshold) => {
       var n =
         ngramSize && ngramSize >= 1 && isFinite(ngramSize)
           ? Math.floor(ngramSize)
           : 3;
+      var th =
+        threshold != null && isFinite(threshold)
+          ? Math.min(1, Math.max(0, threshold))
+          : 0.75;
       var terms = [];
       var seen = {};
       for (var i = 0; i < (items || []).length; i++) {
@@ -209,7 +215,7 @@
         chunks: chunks,
         total: terms.length,
         ngramSize: n,
-        threshold: 0.7, // дефолт --ner_threshold в translate_book.py
+        threshold: th, // дефолт 0.75; --ner_threshold в translate_book = 0.7
       };
     },
 
@@ -223,7 +229,7 @@
       var out = [];
       var src = String(text || "");
       if (!matcher || !matcher.chunks || !src) return out;
-      var threshold = matcher.threshold != null ? matcher.threshold : 0.7;
+      var threshold = matcher.threshold == null ? 0.75 : matcher.threshold;
       var n = matcher.ngramSize || 3;
 
       /* нормализация текста + карта «позиция нормы → индекс оригинала» */

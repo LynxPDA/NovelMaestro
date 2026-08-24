@@ -1324,6 +1324,9 @@ a.fname:hover {
 .ed-ngram {
  width: 60px;
 }
+.ed-threshold {
+ width: 70px;
+}
 .ed-meta {
  color: var(--muted);
  font-size: 12px;

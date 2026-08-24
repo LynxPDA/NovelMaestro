@@ -530,6 +530,7 @@ function viewProject(section, name) {
       right: { type: null, text: null, dirty: false },
       hl: true, // подсветка терминов глоссария — по умолчанию включена
       ngram: 3, // размер n-граммы нечёткого поиска (аналог --ner_ngram)
+      threshold: 0.75, // порог пересечения н-грамм (аналог --ner_threshold)
       ner: null, // кеш {items, matcher} глоссария
     });
     const wrap = h("div", { class: "ed-wrap" });
@@ -731,7 +732,11 @@ function viewProject(section, name) {
       const data = await api(`/ner?${q}`);
       ed.ner = {
         items: data.items || [],
-        matcher: UICore.buildGlossaryMatcher(data.items || [], ed.ngram),
+        matcher: UICore.buildGlossaryMatcher(
+          data.items || [],
+          ed.ngram,
+          ed.threshold,
+        ),
       };
     }
     /* пересчёт подсветки всех панелей (после смены ngram и т.п.) */
@@ -940,7 +945,34 @@ function viewProject(section, name) {
       ed.ngram = Number.isFinite(v) ? Math.min(6, Math.max(1, v)) : 3;
       ngramInput.value = String(ed.ngram);
       if (ed.ner) {
-        ed.ner.matcher = UICore.buildGlossaryMatcher(ed.ner.items, ed.ngram);
+        ed.ner.matcher = UICore.buildGlossaryMatcher(
+          ed.ner.items,
+          ed.ngram,
+          ed.threshold,
+        );
+        recomputeAll();
+      }
+    });
+    const thresholdInput = h("input", {
+      class: "input ed-threshold",
+      type: "number",
+      min: "0",
+      max: "1",
+      step: "0.05",
+      title:
+        "Порог нечёткого поиска терминов: выше — строже (аналог --ner_threshold в translate_book)",
+    });
+    thresholdInput.value = String(ed.threshold);
+    thresholdInput.addEventListener("change", () => {
+      const v = parseFloat(thresholdInput.value);
+      ed.threshold = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.75;
+      thresholdInput.value = String(ed.threshold);
+      if (ed.ner) {
+        ed.ner.matcher = UICore.buildGlossaryMatcher(
+          ed.ner.items,
+          ed.ngram,
+          ed.threshold,
+        );
         recomputeAll();
       }
     });
@@ -1011,6 +1043,8 @@ function viewProject(section, name) {
       hlBtn,
       h("span", { class: "field-help" }, "n-грамма:"),
       ngramInput,
+      h("span", { class: "field-help" }, "порог:"),
+      thresholdInput,
       h("span", { class: "spacer" }),
       h(
         "span",
