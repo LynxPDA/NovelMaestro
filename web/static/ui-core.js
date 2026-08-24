@@ -16,6 +16,74 @@
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
+  /* ── порт логики поиска терминов из core.common / translate_book.py ──
+   * normalize_for_search: NFC → lower → убрать пробелы/пунктуацию —
+   * одинаково к термину и тексту; точное вхождение — подстрока в норм.
+   * тексте (как Aho-Corasick/regex load_ner_data); нечёткое — аналог
+   * _fuzzy_hit (пересечение n-грамм >= threshold + общая подстрока >= 0.8). */
+  var SEARCH_DROP_RE = /[\s\u3000\u200b.,!?;:()«»"'’‘…—–\-]+/g;
+  var DROP_CHAR_RE = /[\s\u3000\u200b.,!?;:()«»"'’‘…—–\-]/;
+  function normalizeForSearch(s) {
+    return String(s || "")
+      .normalize("NFC")
+      .toLowerCase()
+      .replace(SEARCH_DROP_RE, "");
+  }
+  /* комбинирующие диакритики — не рвём NFC-пары при построении карты */
+  var COMBINING_RE =
+    /^[\u0300-\u036f\u0483-\u0489\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]/;
+  /* is_cjk (core.common) */
+  function isCjkChar(c) {
+    var cp = c.codePointAt(0);
+    return (
+      (cp >= 0x4e00 && cp <= 0x9fff) ||
+      (cp >= 0x3400 && cp <= 0x4dbf) ||
+      (cp >= 0x20000 && cp <= 0x2a6df) ||
+      (cp >= 0x2a700 && cp <= 0x2b73f) ||
+      (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0x2f800 && cp <= 0x2fa1f) ||
+      (cp >= 0x3040 && cp <= 0x309f) ||
+      (cp >= 0x30a0 && cp <= 0x30ff) ||
+      (cp >= 0xac00 && cp <= 0xd7af)
+    );
+  }
+  function isCjkString(s) {
+    if (!s) return false;
+    var n = 0;
+    for (var i = 0; i < s.length; i++) if (isCjkChar(s[i])) n++;
+    return n / s.length > 0.5;
+  }
+  /* буква/цифра любого письма — для слово-границ не-CJK терминов */
+  var WORD_CHAR_RE = /[\p{L}\p{N}]/u;
+  /* get_ngrams (core.common): объект-множество */
+  function getNgrams(s, n) {
+    var out = {};
+    if (!s) return out;
+    if (s.length < n) {
+      out[s] = true;
+      return out;
+    }
+    for (var i = 0; i + n <= s.length; i++) out[s.slice(i, i + n)] = true;
+    return out;
+  }
+  /* самая длинная общая подстрока — проверка из _fuzzy_hit */
+  function longestCommonSubstring(a, b) {
+    if (!a || !b) return 0;
+    var best = 0;
+    var prev = new Array(b.length + 1).fill(0);
+    for (var i = 1; i <= a.length; i++) {
+      var cur = new Array(b.length + 1).fill(0);
+      for (var j = 1; j <= b.length; j++) {
+        if (a[i - 1] === b[j - 1]) {
+          cur[j] = prev[j - 1] + 1;
+          if (cur[j] > best) best = cur[j];
+        }
+      }
+      prev = cur;
+    }
+    return best;
+  }
+
   var UICore = {
     /* ── роутер: "#/run/a/b" → {view, rest} ── */
     parseRoute: (hash) => {
@@ -100,80 +168,199 @@
       return entries;
     },
 
-    /* ── матчер глоссария (раунд 23): термины → чанки с regex ── */
-    buildGlossaryMatcher: (items) => {
-      // оба поля: term И translation (NFC при построении); длинные раньше;
-      // поиск регистронезависимый («Секта» в начале предложения найдёт «секта»)
+    /* ── матчер глоссария (раунд 23): термины → чанки с regex ──
+     * ngramSize — размер n-граммы нечёткого поиска (аналог --ner_ngram
+     * в translate_book.py, дефолт 3). Термины нормализуются как в
+     * core.common.normalize_for_search; длинные раньше. */
+    buildGlossaryMatcher: (items, ngramSize) => {
+      var n =
+        ngramSize && ngramSize >= 1 && isFinite(ngramSize)
+          ? Math.floor(ngramSize)
+          : 3;
       var terms = [];
+      var seen = {};
       for (var i = 0; i < (items || []).length; i++) {
         var it = items[i] || {};
-        var t = String(it.term || "")
-          .trim()
-          .normalize("NFC");
-        var tr = String(it.translation || "")
-          .trim()
-          .normalize("NFC");
-        if (t) terms.push({ text: t, key: t.toLowerCase(), item: it });
-        if (tr && tr !== t) terms.push({ text: tr, key: tr.toLowerCase(), item: it });
+        var t = normalizeForSearch(it.term);
+        var tr = normalizeForSearch(it.translation);
+        if (t && !seen[t]) {
+          seen[t] = true;
+          terms.push({ norm: t, isCjk: isCjkString(t), item: it, ngrams: getNgrams(t, n) });
+        }
+        if (tr && tr !== t && !seen[tr]) {
+          seen[tr] = true;
+          terms.push({ norm: tr, isCjk: isCjkString(tr), item: it, ngrams: getNgrams(tr, n) });
+        }
       }
-      terms.sort(function (a, b) {
-        var d = b.text.length - a.text.length;
-        return d !== 0 ? d : a.text < b.text ? -1 : a.text > b.text ? 1 : 0;
+      terms.sort((a, b) => {
+        var d = b.norm.length - a.norm.length;
+        return d === 0 ? (a.norm < b.norm ? -1 : a.norm > b.norm ? 1 : 0) : d;
       });
       var CHUNK = 2000;
       var chunks = [];
-      for (var i = 0; i < terms.length; i += CHUNK) {
-        var part = terms.slice(i, i + CHUNK);
+      for (var c = 0; c < terms.length; c += CHUNK) {
+        var part = terms.slice(c, c + CHUNK);
         chunks.push({
-          re: new RegExp(
-            part
-              .map(function (t) {
-                return escapeRe(t.text);
-              })
-              .join("|"),
-            "gi",
-          ),
+          re: new RegExp(part.map((t) => escapeRe(t.norm)).join("|"), "g"),
           terms: part,
         });
       }
-      return { chunks: chunks, total: terms.length };
+      return {
+        chunks: chunks,
+        total: terms.length,
+        ngramSize: n,
+        threshold: 0.7, // дефолт --ner_threshold в translate_book.py
+      };
     },
 
-    /* ── совпадения матчера в тексте: [{from, to, item}] ── */
+    /* ── совпадения матчера в тексте: [{from, to, item}] ──
+     * 1) точные: подстрока в нормализованном тексте (аналог Aho-Corasick);
+     *    для не-CJK обязательны слово-границы в ОРИГИНАЛЬНОМ тексте;
+     * 2) нечёткие (не-CJK, длина нормы >= 3): пересечение n-грамм >=
+     *    threshold + общая подстрока >= 0.8 длины (аналог _fuzzy_hit) —
+     *    ловит склонения; диапазон расширяется до целого слова. */
     glossaryMatches: (text, matcher) => {
       var out = [];
       var src = String(text || "");
-      if (!matcher || !matcher.chunks) return out;
-      for (var c = 0; c < matcher.chunks.length; c++) {
-        var chunk = matcher.chunks[c];
+      if (!matcher || !matcher.chunks || !src) return out;
+      var threshold = matcher.threshold != null ? matcher.threshold : 0.7;
+      var n = matcher.ngramSize || 3;
+
+      /* нормализация текста + карта «позиция нормы → индекс оригинала» */
+      var norm = "";
+      var map = [];
+      for (var i = 0; i < src.length; i++) {
+        var ch = src[i];
+        if (i > 0 && COMBINING_RE.test(ch)) continue; // слилось с предыдущим
+        if (DROP_CHAR_RE.test(ch)) continue;
+        var nc = ch.normalize("NFC").toLowerCase();
+        for (var k = 0; k < nc.length; k++) {
+          map.push(i);
+          norm += nc[k];
+        }
+      }
+      if (norm.length !== map.length) return out; // защита, не должно случиться
+      var wordBound = (of, ot) => {
+        // не буква/цифра вокруг в ОРИГИНАЛЕ (пробелы/пунктуация нормализацией убраны)
+        if (of > 0 && WORD_CHAR_RE.test(src[of - 1])) return false;
+        if (ot < src.length && WORD_CHAR_RE.test(src[ot])) return false;
+        return true;
+      };
+
+      /* 1) точные совпадения */
+      var ci, q;
+      for (ci = 0; ci < matcher.chunks.length; ci++) {
+        var chunk = matcher.chunks[ci];
         chunk.re.lastIndex = 0;
         var m;
-        while ((m = chunk.re.exec(src)) !== null) {
-          var hit = m[0];
-          var hitKey = hit.toLowerCase();
-          var item = null;
-          // длинные раньше — первое совпадение и есть искомый термин;
-          // сравнение по ключу (регистронезависимо)
-          for (var k = 0; k < chunk.terms.length; k++) {
-            if (chunk.terms[k].key === hitKey) {
-              item = chunk.terms[k].item;
+        while ((m = chunk.re.exec(norm)) !== null) {
+          var nf = m.index;
+          var nt = nf + m[0].length;
+          var entry = null;
+          for (q = 0; q < chunk.terms.length; q++) {
+            if (chunk.terms[q].norm === m[0]) {
+              entry = chunk.terms[q];
               break;
             }
           }
-          out.push({ from: m.index, to: m.index + hit.length, item: item });
-          if (m.index === chunk.re.lastIndex) chunk.re.lastIndex++; // пустых нет, но защита
+          var of = map[nf];
+          var ot = map[nt - 1] + 1;
+          if (entry && !entry.isCjk && !wordBound(of, ot)) continue;
+          out.push({ from: of, to: ot, item: entry ? entry.item : null });
+          if (m.index === chunk.re.lastIndex) chunk.re.lastIndex++;
         }
       }
-      // дедуп перекрытий между чанками: длиннейшее по позиции (длинные раньше)
-      out.sort(function (a, b) {
-        return a.from - b.from || b.to - a.to;
-      });
+
+      /* 2) нечёткие: только не-CJK с нормой >= 3 (как _fuzzy_hit в core) */
+      var cands = [];
+      for (ci = 0; ci < matcher.chunks.length; ci++) {
+        var tt = matcher.chunks[ci].terms;
+        for (q = 0; q < tt.length; q++) {
+          var e = tt[q];
+          if (!e.isCjk && e.norm.length >= 3) cands.push(e);
+        }
+      }
+      if (cands.length && norm.length >= n) {
+        /* инвертированный индекс n-грамм нормализованного текста */
+        var idx = new Map();
+        for (var p = 0; p + n <= norm.length; p++) {
+          var g = norm.slice(p, p + n);
+          var arr = idx.get(g);
+          if (arr) {
+            if (arr.length < 2000) arr.push(p); // часто повт. граммы — не раздувать
+          } else idx.set(g, [p]);
+        }
+        var budget = 500000; // предохранитель на большой текст/глоссарий
+        for (ci = 0; ci < cands.length && budget > 0; ci++) {
+          var ent = cands[ci];
+          var en = ent.norm;
+          if (en.length < n) continue;
+          var firstGram = en.slice(0, n);
+          var positions = idx.get(firstGram);
+          if (!positions) continue;
+          var engrams = ent.ngrams || getNgrams(en, n);
+          var gramKeys = Object.keys(engrams);
+          var limit = Math.min(positions.length, 2000);
+          for (var pi = 0; pi < limit && budget > 0; pi++) {
+            var s = positions[pi];
+            if (s + en.length > norm.length) continue;
+            var o1 = map[s];
+            var o2 = map[s + en.length - 1] + 1;
+            /* окно целиком внутри одного слова: нормализация выбрасывает
+               пробелы/пунктуацию, и окно через границу слов («этажа — лишь»
+               для «А-Ли») обязано быть отклонено */
+            var spanOk = true;
+            for (var sc2 = o1; sc2 < o2; sc2++) {
+              if (!WORD_CHAR_RE.test(src[sc2])) {
+                spanOk = false;
+                break;
+              }
+            }
+            if (!spanOk) continue;
+            budget--;
+            /* расширение до целого слова (падежи: «Хунга» для «Хунг») */
+            var f2 = o1;
+            var guard = 0;
+            while (f2 > 0 && WORD_CHAR_RE.test(src[f2 - 1]) && guard++ < 8) f2--;
+            var t2 = o2;
+            guard = 0;
+            while (t2 < src.length && WORD_CHAR_RE.test(src[t2]) && guard++ < 8) t2++;
+            var wordNorm = normalizeForSearch(src.slice(f2, t2));
+            if (!wordNorm) continue;
+            /* принять: слово = термин; корень + окончание/падеж (термин —
+               префикс слова, не длиннее +3 — иначе «который» матчится на «кот»,
+               «морали»/«залил» — на «А-Ли»); либо строгий аналог _fuzzy_hit
+               с жёстким ограничением лишних n-грамм слова */
+            var hitWord = wordNorm === en;
+            if (!hitWord && wordNorm.length <= en.length + 3) {
+              hitWord = wordNorm.startsWith(en);
+            }
+            if (!hitWord) {
+              var wgrams = getNgrams(wordNorm, n);
+              var inter = 0;
+              for (var wg in wgrams) if (engrams[wg]) inter++;
+              if (
+                inter / gramKeys.length >= threshold &&
+                Object.keys(wgrams).length <= gramKeys.length + 1 &&
+                longestCommonSubstring(en, wordNorm) >= en.length * 0.8
+              ) {
+                hitWord = true;
+              }
+            }
+            if (!hitWord) continue;
+            out.push({ from: f2, to: t2, item: ent.item });
+          }
+        }
+      }
+
+      /* дедуп перекрытий: сортировка по позиции, длиннейшее раньше */
+      out.sort((a, b) => a.from - b.from || b.to - a.to);
       var dedup = [];
       var lastTo = -1;
-      for (var i = 0; i < out.length; i++) {
-        if (out[i].from < lastTo) continue;
-        dedup.push(out[i]);
-        lastTo = out[i].to;
+      for (var di = 0; di < out.length; di++) {
+        if (out[di].from < lastTo) continue;
+        dedup.push(out[di]);
+        lastTo = out[di].to;
       }
       return dedup;
     },

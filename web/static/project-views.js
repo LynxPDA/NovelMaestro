@@ -500,14 +500,26 @@ function viewProject(section, name) {
   /* Поиск артефактов по маске: канон (translated.txt) И легаси
      (chapter1_translated.txt — старые проекты). test — предикат по имени. */
   const ED_CLASSIFY = [
-    { canon: "chapter.txt", label: "Оригинал",
-      test: (n) => n === "chapter.txt" },
-    { canon: "translated.txt", label: "Перевод",
-      test: (n) => n === "translated.txt" || n.endsWith("_translated.txt") },
-    { canon: "redacted.txt", label: "Редактура",
-      test: (n) => n === "redacted.txt" || n.endsWith("_redacted.txt") },
-    { canon: "polished.txt", label: "Полировка",
-      test: (n) => n === "polished.txt" || n.endsWith("_polished.txt") },
+    {
+      canon: "chapter.txt",
+      label: "Оригинал",
+      test: (n) => n === "chapter.txt",
+    },
+    {
+      canon: "translated.txt",
+      label: "Перевод",
+      test: (n) => n === "translated.txt" || n.endsWith("_translated.txt"),
+    },
+    {
+      canon: "redacted.txt",
+      label: "Редактура",
+      test: (n) => n === "redacted.txt" || n.endsWith("_redacted.txt"),
+    },
+    {
+      canon: "polished.txt",
+      label: "Полировка",
+      test: (n) => n === "polished.txt" || n.endsWith("_polished.txt"),
+    },
   ];
 
   async function editorTabView() {
@@ -516,7 +528,8 @@ function viewProject(section, name) {
       mode: "two", // one | two — по умолчанию две панели (оригинал+перевод)
       left: { type: null, text: null, dirty: false },
       right: { type: null, text: null, dirty: false },
-      hl: false,
+      hl: true, // подсветка терминов глоссария — по умолчанию включена
+      ngram: 3, // размер n-граммы нечёткого поиска (аналог --ner_ngram)
       ner: null, // кеш {items, matcher} глоссария
     });
     const wrap = h("div", { class: "ed-wrap" });
@@ -555,6 +568,24 @@ function viewProject(section, name) {
       }
       return out;
     };
+    /* типы по умолчанию: слева — оригинал (chapter.txt), справа —
+       по приоритету доступности: полировка > редактура > перевод */
+    function defaultTypes() {
+      const opts = chapterTypes(ed.chapter);
+      const by = (pred) => opts.find(pred) || null;
+      const left =
+        by((o) => o.name === "chapter.txt") || opts[0] || null;
+      const right =
+        by((o) => o.name === "polished.txt" || o.name.endsWith("_polished.txt")) ||
+        by((o) => o.name === "redacted.txt" || o.name.endsWith("_redacted.txt")) ||
+        by((o) => o.name === "translated.txt" || o.name.endsWith("_translated.txt")) ||
+        (left ? opts.find((o) => o.name !== left.name) : opts[0]) ||
+        left;
+      return {
+        left: left ? left.name : null,
+        right: right ? right.name : null,
+      };
+    }
 
     /* ── панель: селект артефакта, редактор, сохранение ── */
     function makePane(paneState) {
@@ -597,10 +628,9 @@ function viewProject(section, name) {
     const pRight = makePane(ed.right);
     const panes = [pLeft, pRight];
 
-    /* селект типа артефакта: опции по главе, выбор — прежний или первый;
-       avoid — тип, который уже выбран другой панелью (для «Два файла»
-       правая панель по умолчанию берёт следующий тип, а не тот же) */
-    function fillTypeSel(pInfo, avoid) {
+    /* селект типа артефакта: опции по главе, выбор — прежний, иначе —
+       defaultName (если доступен) или первый вариант */
+    function fillTypeSel(pInfo, defaultName) {
       const opts = chapterTypes(ed.chapter);
       pInfo.typeSel.replaceChildren();
       for (const o of opts) {
@@ -609,10 +639,8 @@ function viewProject(section, name) {
       if (opts.some((o) => o.name === pInfo.state.type)) {
         pInfo.typeSel.value = pInfo.state.type;
       } else {
-        let pick = opts.length ? opts[0].name : "";
-        if (avoid && opts.some((o) => o.name !== avoid)) {
-          pick = opts.find((o) => o.name !== avoid).name;
-        }
+        const d = opts.find((o) => o.name === defaultName);
+        const pick = d ? d.name : opts.length ? opts[0].name : "";
         pInfo.typeSel.value = pick;
         pInfo.state.type = pick || null;
       }
@@ -629,6 +657,7 @@ function viewProject(section, name) {
         pInfo.state.text = null;
         return;
       }
+      /* повторный рендер уже обработан ниже (после сброса главы — грузим заново) */
       if (pInfo.editor && pInfo.state.text != null) {
         // повторный рендер вкладки: редактор уже загружен — только
         // переподключаем DOM (несохранённые правки не трогаем)
@@ -702,8 +731,17 @@ function viewProject(section, name) {
       const data = await api(`/ner?${q}`);
       ed.ner = {
         items: data.items || [],
-        matcher: UICore.buildGlossaryMatcher(data.items || []),
+        matcher: UICore.buildGlossaryMatcher(data.items || [], ed.ngram),
       };
+    }
+    /* пересчёт подсветки всех панелей (после смены ngram и т.п.) */
+    function recomputeAll() {
+      if (!ed.hl || !ed.ner) return;
+      for (const p of panes) {
+        if (p.editor && p.editor.isCM) {
+          if (p.hl) computeHighlight(p); else attachHl(p);
+        }
+      }
     }
 
     function scheduleHighlight(pInfo) {
@@ -888,6 +926,24 @@ function viewProject(section, name) {
       class: "btn btn-sm btn-ghost",
       title: "Подсветить термины глоссария (ner.json) в тексте редактора",
     });
+    const ngramInput = h("input", {
+      class: "input ed-ngram",
+      type: "number",
+      min: "1",
+      max: "6",
+      title:
+        "Размер n-граммы нечёткого поиска терминов (аналог --ner_ngram в translate_book)",
+    });
+    ngramInput.value = String(ed.ngram);
+    ngramInput.addEventListener("change", () => {
+      const v = parseInt(ngramInput.value, 10);
+      ed.ngram = Number.isFinite(v) ? Math.min(6, Math.max(1, v)) : 3;
+      ngramInput.value = String(ed.ngram);
+      if (ed.ner) {
+        ed.ner.matcher = UICore.buildGlossaryMatcher(ed.ner.items, ed.ngram);
+        recomputeAll();
+      }
+    });
     function renderModeLabel() {
       /* подпись = ТЕКУЩЕЕ состояние; клик переключает */
       modeBtn.textContent = ed.mode === "two" ? "Два файла" : "Один файл";
@@ -918,8 +974,9 @@ function viewProject(section, name) {
         p.meta.textContent = "—";
         p.saveBtn.disabled = true;
       }
-      fillTypeSel(pLeft);
-      fillTypeSel(pRight, pLeft.state.type);
+      const def = defaultTypes();
+      fillTypeSel(pLeft, def.left);
+      fillTypeSel(pRight, def.right);
       loadPane(pLeft);
       loadPane(pRight);
     });
@@ -952,6 +1009,8 @@ function viewProject(section, name) {
       h("span", { class: "field-help" }, "Режим:"),
       modeBtn,
       hlBtn,
+      h("span", { class: "field-help" }, "n-грамма:"),
+      ngramInput,
       h("span", { class: "spacer" }),
       h(
         "span",
@@ -962,8 +1021,9 @@ function viewProject(section, name) {
     renderModeLabel();
     renderHlLabel();
     rebuildGrid();
-    fillTypeSel(pLeft);
-    fillTypeSel(pRight, pLeft.state.type);
+    const def = defaultTypes();
+    fillTypeSel(pLeft, def.left);
+    fillTypeSel(pRight, def.right);
     loadPane(pLeft);
     loadPane(pRight);
     wrap.append(toolbar, grid);

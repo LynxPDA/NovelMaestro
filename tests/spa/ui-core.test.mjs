@@ -153,17 +153,12 @@ test("glossaryMatches: совпадения по обоим полям", () => {
 });
 
 test("glossaryMatches: регистронезависимо, термин находится", () => {
-  const items = [
-    { term: "Хунг", translation: "секта" },
-  ];
+  const items = [{ term: "Хунг", translation: "секта" }];
   const found = hits("хунг и СЕКТА", items);
   // совпадения — в регистре ИСХОДНОГО текста, поиск регистронезависимый
   assert.deepEqual(found, ["хунг", "СЕКТА"]);
   // item привязан к совпадению несмотря на другой регистр
-  const ms = UICore.glossaryMatches(
-    "хунг",
-    UICore.buildGlossaryMatcher(items),
-  );
+  const ms = UICore.glossaryMatches("хунг", UICore.buildGlossaryMatcher(items));
   assert.equal(ms.length, 1);
   assert.equal(ms[0].item.term, "Хунг");
 });
@@ -205,6 +200,44 @@ test("glossaryMatches: пустые/без матчера", () => {
   assert.deepEqual(UICore.glossaryMatches("x", null), []);
   assert.equal(matcherFor(null).total, 0);
   assert.equal(matcherFor(undefined).total, 0);
+});
+
+test("glossaryMatches: слово-границы — нет обрывков внутри слов", () => {
+  // короткие термины не матчатся внутри слов (не «от» в «кот»/«кто»)
+  const items = [{ term: "от", translation: "" }];
+  assert.deepEqual(hits("кот и кто", items), []);
+  assert.deepEqual(hits("от кота", items), ["от"]);
+  assert.deepEqual(hits("кто от кого", items), ["от"]);
+});
+
+test("glossaryMatches: склонения через нечёткий поиск (аналог _fuzzy_hit)", () => {
+  // «Хунгу» в тексте: точное «Хунг» отклонено слово-границей,
+  // нечёткий поиск (3-граммы, пересечение >= 0.7) ловит слово целиком
+  const items = [{ term: "Хунг", translation: "" }];
+  const text = "Он встретил Хунгу у реки.";
+  const found = hits(text, items);
+  assert.deepEqual(found, ["Хунгу"]);
+  // CJK-термины без слово-границ — точное вхождение внутри слов допустимо
+  const cjk = [{ term: "灵草", translation: "" }];
+  assert.deepEqual(hits("这是灵草地", cjk), ["灵草"]);
+});
+
+test("glossaryMatches: нормализация — пробелы и пунктуация", () => {
+  // normalize_for_search: регистр/пробелы/пунктуация в термине и тексте — как есть;
+  // диапазон в оригинале включает пропущенные пробелы и пунктыацию между словами.
+  const items = [{ term: "Школа Света", translation: "" }];
+  assert.deepEqual(hits("в школа   света, где он учился", items), [
+    "школа   света",
+  ]);
+});
+
+test("glossaryMatches: ngramSize настраивается (аналог --ner_ngram)", () => {
+  const items = [{ term: "Хунг", translation: "" }];
+  const m2 = UICore.buildGlossaryMatcher(items, 2);
+  assert.equal(m2.ngramSize, 2);
+  assert.deepEqual(m2.threshold, 0.7);
+  const ms = UICore.glossaryMatches("Хунгу", m2);
+  assert.deepEqual(ms.map((m) => "Хунгу".slice(m.from, m.to)), ["Хунгу"]);
 });
 
 test("buildGlossaryMatcher: чанки по ~2000 терминов", () => {
