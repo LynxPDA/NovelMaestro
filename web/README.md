@@ -35,8 +35,15 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
   (ключи-слаги), дерево глав с артефактами, шаблоны проектов.
 - **Файлы**: браузер/редактор/загрузка (multipart, свой парсер)/скачивание,
   песочница `resolve_path` (запрет `..`, абсолютных путей, симлинк-побега);
-  большие файлы (>5 МБ) не открываются в редакторе (413, скачивание).
+  раунд 23: «＋ Файл»/«＋ Каталог»/«Переим.» (mkdir/rename — файлы И
+  каталоги); большие файлы (>5 МБ) не открываются в редакторе (413,
+  скачивание).
 - **Редактор** (W8): CodeMirror 6 (вендор в `static/vendor/`, офлайн):
+  раунд 23: вкладка «Редактор» — главы проекта, панели
+  Оригинал/Перевод/Редактура/Полировка (1 или 2 файла), сохранение
+  через `/api/file`, подсветка терминов глоссария оверлеем
+  (`coordsAtPos`/`posAtCoords`), тултип с «→ Глоссарий» (предзаполненный
+  поиск); настройки — localStorage браузера, не .env.
   подсветка по расширению файла (md/html/json/yaml/py), без ручного
   выбора представления; предпросмотр md/html — кнопка «Рендер»
   (sandbox-iframe); поиск/замена Ctrl+F/Ctrl+H; fallback на textarea.
@@ -138,11 +145,11 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
 | GET | `/api/projects/{s}/{n}/status` | таблица готовности глав (раунд 21): по-главные флаги translate/redact/polish + ner/wiki/compiled; кеш по сигнатуре mtime |
 | GET | `/api/templates` | наборы шаблонов с деревом файлов (раунд 21; для создания проекта и вкладки «Шаблоны») |
 | POST/DELETE | `/api/templates` (создание), `/api/templates/{s}/copy`, DELETE `/api/templates/{s}` | CRUD наборов; `General` — системный: создание/удаление/запись → 400/403 |
-| GET/PUT/DELETE | `/api/templates/{s}/file` (`?path=…`, PUT — `{path, content}`) | чтение/запись/удаление файлов и каталогов набора (каталог — рекурсивно); эскейпы за пределы набора → 404; GET отдаёт `size`/`mtime` для мета редактора |
-| POST | `/api/templates/{s}/rename` (`{src, dst}`) | переименование/перенос файла или каталога внутри набора; General → 403, нет исходника → 404, занято → 400 |
-| POST | `/api/templates/{s}/upload` (multipart `files[]`, опц. `dest`) | загрузка файлов в набор (раунд 22); General → 403 |
+| GET/PUT/DELETE | `/api/templates/{s}/file` (`?path=…`, PUT — `{path, content}`) | чтение/запись/удаление ФАЙЛОВ набора; каталог → 403 (неизменяемы); запись в несуществующий каталог → 400 (раунд 23: неявный mkdir запрещён); эскейпы за пределы набора → 404; GET отдаёт `size`/`mtime` для мета редактора |
+| POST | `/api/templates/{s}/rename` (`{src, dst}`) | переименование/перенос ФАЙЛА внутри набора; каталог → 403 (неизменяемы); General → 403, нет исходника → 404, занято → 400, родительский каталог dst отсутствует → 400 |
+| POST | `/api/templates/{s}/upload` (multipart `files[]`, опц. `dest`) | загрузка файлов в набор (раунд 22); General → 403; `dest` обязан существовать (неявный mkdir запрещён) → 400 |
 | GET | `/api/templates/{s}/download?path=…` | скачивание файла набора (attachment); работает и для General |
-| POST | `/api/templates/{s}/mkdir` (`{path}`) | создание пустого каталога (раунд 22); General → 403, дубль → 400 |
+| POST | `/api/templates/{s}/mkdir` (`{path}`) | раунд 23: ВСЕГДА 403 — каталоги в шаблонах неизменяемы (скелет `prompts/`+`source/` ремонтируется при чтении) |
 | POST/DELETE | `/api/sections`, `/api/sections/rename` (`{src,dst}`), DELETE `/api/sections/{name}` | управление разделами (раунд 22): создание, переименование (merge — перенос проектов), удаление; непустой раздел → 409 |
 | GET/PUT | `/api/ner`, `/api/metadata` | глоссарий, metadata.yaml |
 | GET | `/api/ner/export?project=&format=json\|text\|names` | экспорт глоссария для анализа (JSON / записи текстом / имена по полу); фильтры: `count_threshold`, `types`, `exclude_words`, `range`, `show_aliases`, `show_votes`, `female_types`, `male_types` → `{name, content}` (раунд 3) |
@@ -155,6 +162,8 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
 | GET | `/api/prompts/{name}/template` | шаблоны промптов |
 | GET | `/api/logs`, `/api/logs/{name}` | логи проекта |
 | GET/PUT/DELETE | `/api/files`, `/api/file`, `/api/upload`, `/api/download` | файлы (`download?inline=1` — предпросмотр) |
+| POST | `/api/mkdir` (`?project=&path=` или body) | раунд 23: создание пустого каталога проекта; дубль/эскейп → 400 |
+| POST | `/api/file/rename` (`{project, path, new_name}`) | раунд 23: переименование файла ИЛИ каталога проекта; нет исходника → 404, занято → 400, недопустимое имя → 400 |
 | GET | `/api/stages`, `/api/stages/{k}/spec\|options` | стадии, формы |
 | POST/GET | `/api/jobs`, `/api/jobs/{id}`, `/api/jobs/{id}/stream` | запуски, SSE; при лимите параллельных (`WEB_JOBS_LIMIT`) — **429** (H2); вторая стадия на тот же проект — **409** (M10). SSE: стартовый бурст хвоста (до 5000 строк) + события/прогресс + финальный `status`; клиент берёт лог ТОЛЬКО из стрима (payload `lines` на running не дублирует) |
 | POST | `/api/jobs/{id}/stop`, DELETE `/api/jobs/{id}` | стоп (killpg)/удаление |

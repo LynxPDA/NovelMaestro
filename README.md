@@ -368,8 +368,8 @@ MyNovel/
 ├── ner_analysis.txt             # экспорт глоссария для анализа (через веб: /api/ner/export)
 ├── wiki.md                      # wiki-компендиум
 ├── compiled_1_50_txt.txt        # собранный TXT (compiled_<start>_<end>_<mode>.txt)
-├── book_1_50.epub               # собранный EPUB (book_<start>_<end>.epub)
-└── book_1_50.fb2                # собранный FB2 (book_<start>_<end>.fb2)
+├── MyNovel_1_50.epub            # собранный EPUB (<ИмяПроекта>_<start>_<end>.epub)
+└── MyNovel_1_50.fb2             # собранный FB2 (<ИмяПроекта>_<start>_<end>.fb2)
 ```
 
 ### Компиляция в EPUB / FB2

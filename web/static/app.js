@@ -1361,7 +1361,7 @@ function cmLang(ext) {
 }
 
 /* Единая фабрика редактора: { root, getValue, setValue, setLang } */
-function makeEditor(initial, langExt) {
+function makeEditor(initial, langExt, onUpdate) {
   if (CM_READY) {
     const { EditorView, Compartment, basicSetup, search } = window.CM;
     const langComp = new Compartment();
@@ -1378,6 +1378,10 @@ function makeEditor(initial, langExt) {
           "&": { height: "100%", fontSize: "13px" },
           ".cm-scroller": { fontFamily: "inherit" },
         }),
+        // раунд 23: колбэк изменений текста (вкладка «Редактор»)
+        ...(onUpdate
+          ? [EditorView.updateListener.of((u) => u.docChanged && onUpdate())]
+          : []),
       ],
       parent: null,
     });
@@ -1913,7 +1917,8 @@ async function viewTemplates() {
           )
         : h("span", { class: "fname" }, "📄 " + e.name);
       const actions = h("div", { class: "factions" });
-      if (!e.dir) {
+      /* раунд 23: у каталогов шаблонов НИКАКИХ действий — только переход */
+      if (writable && !e.dir) {
         actions.append(
           h(
             "a",
@@ -1925,17 +1930,13 @@ async function viewTemplates() {
             "Скачать",
           ),
         );
-      }
-      if (writable) {
-        if (!e.dir) {
-          actions.append(
-            h(
-              "button",
-              { class: "btn btn-sm btn-ghost", onclick: () => openEdit(full) },
-              "Правка",
-            ),
-          );
-        }
+        actions.append(
+          h(
+            "button",
+            { class: "btn btn-sm btn-ghost", onclick: () => openEdit(full) },
+            "Правка",
+          ),
+        );
         actions.append(
           h(
             "button",
@@ -1943,8 +1944,8 @@ async function viewTemplates() {
               class: "btn btn-sm btn-ghost",
               onclick: () =>
                 nameModal(
-                  `Переименовать ${e.dir ? "каталог" : "файл"} ${e.name}`,
-                  e.dir ? "новое имя каталога" : "новое имя файла",
+                  `Переименовать файл ${e.name}`,
+                  "новое имя файла",
                   async (nm) => {
                     const dir = st.path ? st.path + "/" : "";
                     await api(
@@ -1966,20 +1967,15 @@ async function viewTemplates() {
             {
               class: "btn btn-sm btn-danger-ghost",
               onclick: () =>
-                confirmModal(
-                  `Удаление ${e.dir ? "каталога" : "файла"}`,
-                  full,
-                  "УДАЛИТЬ",
-                  async () => {
-                    const q = new URLSearchParams({ path: full });
-                    await api(
-                      `/templates/${encodeURIComponent(st.set)}/file?${q}`,
-                      { method: "DELETE" },
-                    );
-                    toast(`Удалено: ${full}`);
-                    render();
-                  },
-                ),
+                confirmModal("Удаление файла", full, "УДАЛИТЬ", async () => {
+                  const q = new URLSearchParams({ path: full });
+                  await api(
+                    `/templates/${encodeURIComponent(st.set)}/file?${q}`,
+                    { method: "DELETE" },
+                  );
+                  toast(`Удалено: ${full}`);
+                  render();
+                }),
             },
             "Удалить",
           ),
@@ -2078,26 +2074,7 @@ async function viewTemplates() {
       },
       "＋ Файл",
     );
-    const mkdirBtn = h(
-      "button",
-      {
-        class: "btn btn-sm",
-        onclick: () =>
-          nameModal(
-            "Новый каталог",
-            "путь внутри набора, напр. prompts/extra",
-            async (rel) => {
-              await api(`/templates/${encodeURIComponent(st.set)}/mkdir`, {
-                method: "POST",
-                body: { path: rel },
-              });
-              toast(`Создан каталог: ${rel}`);
-              render();
-            },
-          ),
-      },
-      "＋ Каталог",
-    );
+    /* раунд 23: «＋ Каталог» убран — каталоги в шаблонах неизменяемы */
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
@@ -2110,7 +2087,6 @@ async function viewTemplates() {
               { class: "btn btn-sm", onclick: () => upInput.click() },
               "Загрузить",
             ),
-            mkdirBtn,
             addBtn,
           ]
         : []),

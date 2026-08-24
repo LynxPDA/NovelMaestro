@@ -157,6 +157,13 @@ def test_project_stats(tmp_path):
     (pdir2 / "compiled_5_10_txt.txt").unlink()
     (pdir2 / "book_5_10.epub").write_text("ok")
     assert "compiled: ✓" in P.project_stats(pdir2)
+    # раунд 23: экспорты по имени проекта {Имя}_{start}_{end}.epub/.fb2
+    (pdir2 / "book_5_10.epub").unlink()
+    (pdir2 / "Книга2_5_10.epub").write_text("ok")
+    assert "compiled: ✓" in P.project_stats(pdir2)
+    (pdir2 / "Книга2_5_10.epub").unlink()
+    (pdir2 / "Книга2_5_10.fb2").write_text("ok")
+    assert "compiled: ✓" in P.project_stats(pdir2)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -441,6 +448,31 @@ def test_copy_template_set(tmp_path):
     assert P.copy_template_set(tmp_path, "NoSuch", "New") is None
 
 
+def test_template_skeleton_copy_repairs_degraded(tmp_path):
+    """Раунд 23: копия всегда со скелетом, даже если исходник деградировал."""
+    s = _mk_tpl_set(tmp_path, "Src")
+    # «деградация»: исходник потерял каталог source/
+    import shutil
+    shutil.rmtree(s / "source")
+    assert P.copy_template_set(tmp_path, "Src", "Dst") == "Dst"
+    assert (tmp_path / "Dst" / "prompts").is_dir()
+    assert (tmp_path / "Dst" / "source").is_dir()
+    # скелет не создаётся поверх файла
+    (tmp_path / "Dst" / "prompts" / "translate.txt").write_text("t")
+    (tmp_path / "Dst" / "prompts" / "translate.txt").unlink()
+
+
+def test_template_skeleton_ensure(tmp_path):
+    """Раунд 23: _ensure_template_skeleton идемпотентен и создаёт оба каталога."""
+    d = tmp_path / "T"
+    d.mkdir()
+    P._ensure_template_skeleton(d)
+    assert (d / "prompts").is_dir() and (d / "source").is_dir()
+    (d / "prompts").rmdir()
+    P._ensure_template_skeleton(d)  # повторно — восстанавливает
+    assert (d / "prompts").is_dir() and (d / "source").is_dir()
+
+
 def test_delete_template_set(tmp_path):
     _mk_tpl_set(tmp_path, "Del")
     assert P.delete_template_set(tmp_path, "Del") is True
@@ -471,56 +503,58 @@ def test_templates_empty_dirs_visible(tmp_path):
     assert "prompts/" not in files
 
 
-def test_delete_template_dir(tmp_path):
-    """Каталог удаляется так же, как файл (рекурсивно)."""
+def test_delete_template_dir_forbidden(tmp_path):
+    """Раунд 23: каталоги в шаблонах неизменяемы — удаление запрещено."""
     s = _mk_tpl_set(tmp_path, "T")
     (s / "prompts" / "extra").mkdir()
     (s / "prompts" / "extra" / "x.txt").write_text("x", encoding="utf-8")
-    assert P.delete_template_file(tmp_path, "T", "prompts/extra")
-    assert not (s / "prompts" / "extra").exists()
-    # пустой каталог тоже
+    err = P.delete_template_file(tmp_path, "T", "prompts/extra")
+    assert err and "Каталоги в шаблонах неизменяемы" in err
+    assert (s / "prompts" / "extra" / "x.txt").is_file()
+    # пустой каталог тоже запрещён
     (s / "prompts" / "empty").mkdir()
-    assert P.delete_template_file(tmp_path, "T", "prompts/empty")
-    assert "prompts/empty/" not in P.templates_files(tmp_path, "T")
+    err = P.delete_template_file(tmp_path, "T", "prompts/empty")
+    assert err and "Каталоги" in err
+    # скелет (prompts/source) тоже каталоги → запрещены
+    err = P.delete_template_file(tmp_path, "T", "prompts")
+    assert err and "Каталоги" in err
     # файл по-прежнему удаляется
-    assert P.delete_template_file(tmp_path, "T", "prompts/translate.txt")
+    assert P.delete_template_file(tmp_path, "T", "prompts/translate.txt") is None
+    assert not (s / "prompts" / "translate.txt").exists()
     # нет пути / General / нет набора
-    assert not P.delete_template_file(tmp_path, "T", "prompts/nope.txt")
-    assert not P.delete_template_file(tmp_path, "General", "prompts")
-    assert not P.delete_template_file(tmp_path, "NoSuch", "x")
+    err = P.delete_template_file(tmp_path, "T", "prompts/nope.txt")
+    assert err is not None and "не найден" in err
+    err = P.delete_template_file(tmp_path, "General", "prompts")
+    assert err is not None and "General" in err
+    err = P.delete_template_file(tmp_path, "NoSuch", "x")
+    assert err is not None and "не найден" in err
 
 
-def test_move_template_dir(tmp_path):
-    """Каталог переименовывается/переносится как файл."""
+def test_move_template_dir_forbidden(tmp_path):
+    """Раунд 23: каталоги в шаблонах неизменяемы — перенос запрещён."""
     s = _mk_tpl_set(tmp_path, "T")
     (s / "prompts" / "extra").mkdir()
     (s / "prompts" / "extra" / "x.txt").write_text("x", encoding="utf-8")
     # переименование каталога
-    assert P.move_template_file(tmp_path, "T", "prompts/extra",
-                                "prompts/more") is None
-    assert (s / "prompts" / "more" / "x.txt").is_file()
-    assert not (s / "prompts" / "extra").exists()
-    # перенос каталога в подпапку
-    (s / "prompts" / "deep").mkdir()
-    assert P.move_template_file(tmp_path, "T", "prompts/more",
-                                "prompts/deep/more") is None
-    assert (s / "prompts" / "deep" / "more" / "x.txt").is_file()
-    # dst уже существует → отказ
-    err = P.move_template_file(tmp_path, "T", "prompts/deep/more",
-                               "prompts/deep")
-    assert err and "уже существует" in err
+    err = P.move_template_file(tmp_path, "T", "prompts/extra", "prompts/more")
+    assert err and "Каталоги в шаблонах неизменяемы" in err
+    assert (s / "prompts" / "extra" / "x.txt").is_file()
+    assert not (s / "prompts" / "more").exists()
+    # скелет тоже каталог
+    err = P.move_template_file(tmp_path, "T", "prompts", "prompts2")
+    assert err and "Каталоги" in err
+    # файлы переименовываются как раньше
+    assert P.move_template_file(tmp_path, "T", "prompts/translate.txt",
+                                "prompts/main.txt") is None
+    assert (s / "prompts" / "main.txt").is_file()
 
 
-def test_create_template_dir(tmp_path):
+def test_create_template_dir_forbidden(tmp_path):
+    """Раунд 23: создание каталогов в шаблонах запрещено всегда."""
     s = _mk_tpl_set(tmp_path, "T")
-    assert P.create_template_dir(tmp_path, "T", "prompts/extra") is None
-    assert (s / "prompts" / "extra").is_dir()
-    # дубль пути
     err = P.create_template_dir(tmp_path, "T", "prompts/extra")
-    assert err and "уже существует" in err
-    # эскейп за пределы набора
-    err = P.create_template_dir(tmp_path, "T", "../outside")
-    assert err and "Недопустимый" in err
+    assert err and "Каталоги в шаблонах неизменяемы" in err
+    assert not (s / "prompts" / "extra").exists()
     # General запрещён
     _mk_tpl_set(tmp_path, "General")
     err = P.create_template_dir(tmp_path, "General", "prompts/x")
@@ -533,27 +567,41 @@ def test_read_write_delete_template_file(tmp_path):
     s = _mk_tpl_set(tmp_path, "T")
     assert P.read_template_file(tmp_path, "T", "prompts/translate.txt") == "t"
     assert P.read_template_file(tmp_path, "T", "prompts/nope.txt") is None
-    # запись нового файла
-    assert P.write_template_file(tmp_path, "T", "prompts/new.txt", "x")
+    # запись нового файла (родительский каталог существует)
+    assert P.write_template_file(tmp_path, "T", "prompts/new.txt", "x") is None
     assert (s / "prompts" / "new.txt").read_text() == "x"
     # перезапись
-    assert P.write_template_file(tmp_path, "T", "prompts/translate.txt", "t2")
+    assert P.write_template_file(tmp_path, "T", "prompts/translate.txt",
+                                 "t2") is None
     assert (s / "prompts" / "translate.txt").read_text() == "t2"
+    # раунд 23: запись в несуществующий каталог запрещена (неявный mkdir)
+    err = P.write_template_file(tmp_path, "T", "prompts/extra/x.txt", "x")
+    assert err is not None and "Каталог не существует" in err
+    assert not (s / "prompts" / "extra").exists()
+    # а в существующий вложенный каталог — можно (легаси-каталог на диске)
+    (s / "source" / "legacy").mkdir()
+    assert P.write_template_file(tmp_path, "T", "source/legacy/x.txt",
+                                 "x") is None
+    assert (s / "source" / "legacy" / "x.txt").read_text() == "x"
     # удаление
-    assert P.delete_template_file(tmp_path, "T", "prompts/new.txt")
+    assert P.delete_template_file(tmp_path, "T", "prompts/new.txt") is None
     assert not (s / "prompts" / "new.txt").exists()
 
 
 def test_template_escape_protected(tmp_path):
     _mk_tpl_set(tmp_path, "T")
     assert P.read_template_file(tmp_path, "T", "../../evil.txt") is None
-    assert not P.write_template_file(tmp_path, "T", "../escape.txt", "x")
-    assert not P.delete_template_file(tmp_path, "T", "../escape.txt")
+    err = P.write_template_file(tmp_path, "T", "../escape.txt", "x")
+    assert err is not None and "Недопустимый" in err  # эскейп = нет пути
+    err = P.delete_template_file(tmp_path, "T", "../escape.txt")
+    assert err is not None and "Файл не найден" in err  # эскейп = нет пути
     assert not (tmp_path / "escape.txt").exists()
     # запись в General запрещена
     _mk_tpl_set(tmp_path, "General")
-    assert not P.write_template_file(tmp_path, "General", "prompts/x.txt", "x")
-    assert not P.delete_template_file(tmp_path, "General", "prompts/translate.txt")
+    err = P.write_template_file(tmp_path, "General", "prompts/x.txt", "x")
+    assert err is not None and "General" in err
+    err = P.delete_template_file(tmp_path, "General", "prompts/translate.txt")
+    assert err is not None and "General" in err
 
 
 def test_template_file_info(tmp_path):
@@ -574,15 +622,20 @@ def test_move_template_file(tmp_path):
                                 "prompts/main.txt") is None
     assert (s / "prompts" / "main.txt").is_file()
     assert not (s / "prompts" / "translate.txt").exists()
-    # перенос в другую папку (создаётся)
+    # раунд 23: перенос в несуществующий каталог запрещён
+    err = P.move_template_file(tmp_path, "T", "prompts/main.txt",
+                               "source/new/deep.txt")
+    assert err is not None and "Каталог не существует" in err
+    assert not (s / "source" / "new").exists()
+    # перенос в существующий каталог — можно
     assert P.move_template_file(tmp_path, "T", "prompts/main.txt",
-                                "source/new/deep.txt") is None
-    assert (s / "source" / "new" / "deep.txt").is_file()
+                                "source/deep.txt") is None
+    assert (s / "source" / "deep.txt").is_file()
     # нет исходника
     assert P.move_template_file(tmp_path, "T", "prompts/main.txt",
                                 "prompts/x.txt") is not None
     # назначение занято
-    assert P.move_template_file(tmp_path, "T", "source/new/deep.txt",
+    assert P.move_template_file(tmp_path, "T", "source/deep.txt",
                                 "source/metadata.yaml") is not None
     # эскейпы
     assert P.move_template_file(tmp_path, "T", "source/metadata.yaml",
@@ -606,6 +659,9 @@ def test_project_progress_table(tmp_path):
     (pdir / "ner.json").write_text('[{ "term": "x" }]', encoding="utf-8")
     (pdir / "wiki.md").write_text("## Статья\n## Другая\n", encoding="utf-8")
     (pdir / "compiled_book.txt").write_text("c", encoding="utf-8")
+    # раунд 23: экспорт {имя_проекта}_{start}_{end}.epub виден в compiled
+    (pdir / "proj_1_2.epub").write_text("e", encoding="utf-8")
+    (pdir / "proj_5_6.fb2").write_text("f", encoding="utf-8")
     st = P.project_progress_table(pdir)
     assert st["counts"] == {"chapters": 2, "translate": 2, "redact": 0, "polish": 1}
     assert st["chapters"][1]["translate"] is True
@@ -614,6 +670,8 @@ def test_project_progress_table(tmp_path):
     assert st["ner"] == {"exists": True, "terms": 1}
     assert st["wiki"] == {"exists": True, "articles": 2}
     assert "compiled_book.txt" in st["compiled"]
+    assert "proj_1_2.epub" in st["compiled"]
+    assert "proj_5_6.fb2" in st["compiled"]
 
 
 def test_project_progress_table_empty(tmp_path):

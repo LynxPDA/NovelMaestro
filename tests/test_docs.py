@@ -47,6 +47,7 @@ PROJECTS_API = ["SECTIONS", "DEFAULT_SECTIONS", "load_sections",
                 "sanitize_project_name", "ensure_projects_root",
                 "list_projects", "project_stats", "create_project",
                 "move_project", "rename_project", "list_template_sets",
+                "TEMPLATE_SKELETON", "_ensure_template_skeleton",
                 "create_template_dir", "render_metadata",
                 "fill_project_from_template", "write_project_metadata",
                 "delete_project", "copy_project"]

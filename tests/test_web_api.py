@@ -416,6 +416,16 @@ def test_templates_crud(srv_ctx):
             port, "PUT", f"/api/templates/{name}/file",
             {"path": "prompts/x.txt", "content": "привет"})
         assert res.status == 200
+        # раунд 23: запись в несуществующий каталог → 400 (неявный mkdir)
+        res, payload = _request(
+            port, "PUT", f"/api/templates/{name}/file",
+            {"path": "prompts/nope/x.txt", "content": "x"})
+        assert res.status == 400 and "Каталог" in payload["error"]
+        # rename в несуществующий каталог → 400
+        res, payload = _request(
+            port, "POST", f"/api/templates/{name}/rename",
+            {"src": "prompts/x.txt", "dst": "prompts/nope/x.txt"})
+        assert res.status == 400 and "Каталог" in payload["error"]
         res, payload = _request(
             port, "GET", f"/api/templates/{name}/file?path=prompts/x.txt")
         assert res.status == 200 and payload["content"] == "привет"
@@ -480,34 +490,37 @@ def test_templates_general_protected(srv_ctx):
 
 
 def test_templates_upload_download_mkdir(srv_ctx):
-    """Раунд 22: загрузка/скачивание/каталоги в наборе шаблонов."""
+    """Раунд 23: каталоги в шаблонах неизменяемы — mkdir/rename/delete 403."""
     _, port, _ = srv_ctx()
     name = "TplUp_01"
     try:
         res, _ = _request(port, "POST", "/api/templates", {"name": name})
         assert res.status == 200
-        # mkdir
+        # mkdir → 403 всегда
         res, payload = _request(port, "POST", f"/api/templates/{name}/mkdir",
                                 {"path": "prompts/extra"})
-        assert res.status == 200, payload
-        res, payload = _request(port, "POST", f"/api/templates/{name}/mkdir",
-                                {"path": "prompts/extra"})
-        assert res.status == 400 and "уже существует" in payload["error"]
-        # upload в подпапку dest=prompts/extra
+        assert res.status == 403 and "Каталоги" in payload["error"]
+        # upload в подпапку dest=prompts (создание файла разрешено)
         res, payload = _multipart_request(
             port, f"/api/templates/{name}/upload",
-            [("dest", "prompts/extra")],
+            [("dest", "prompts")],
             [("up.txt", "text/plain", "содержимое".encode("utf-8"))])
         assert res.status == 200, payload
-        assert payload["saved"] == ["prompts/extra/up.txt"]
-        # пустой каталог виден в дереве (trailing '/')
+        assert payload["saved"] == ["prompts/up.txt"]
+        # раунд 23: upload в несуществующий каталог → 400 (неявный mkdir)
+        res, payload = _multipart_request(
+            port, f"/api/templates/{name}/upload",
+            [("dest", "prompts/nope")],
+            [("up2.txt", "text/plain", "x".encode("utf-8"))])
+        assert res.status == 400 and "Каталог" in payload["error"]
+        # файл виден в дереве
         res, payload = _request(port, "GET", "/api/templates")
         t = next(x for x in payload["templates"] if x["name"] == name)
-        assert "prompts/extra/up.txt" in t["files"]
+        assert "prompts/up.txt" in t["files"]
         # download — сырой ответ с attachment
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
         conn.request("GET", f"/api/templates/{name}/download?path="
-                            "prompts/extra/up.txt",
+                            "prompts/up.txt",
                      headers={"X-Requested-With": "fetch"})
         res = conn.getresponse()
         raw = res.read()
@@ -515,20 +528,28 @@ def test_templates_upload_download_mkdir(srv_ctx):
         assert res.status == 200
         assert raw == "содержимое".encode("utf-8")
         assert "attachment" in (res.getheader("Content-Disposition") or "")
-        # переименование каталога — файл переезжает вместе с ним
+        # переименование каталога (prompts — скелет) → 403
         res, payload = _request(port, "POST", f"/api/templates/{name}/rename",
-                                {"src": "prompts/extra",
-                                 "dst": "prompts/more"})
-        assert res.status == 200 and payload["dst"] == "prompts/more"
+                                {"src": "prompts", "dst": "prompts2"})
+        assert res.status == 403 and "Каталоги" in payload["error"]
+        # переименование ФАЙЛА разрешено
+        res, payload = _request(port, "POST", f"/api/templates/{name}/rename",
+                                {"src": "prompts/up.txt",
+                                 "dst": "prompts/more.txt"})
+        assert res.status == 200 and payload["dst"] == "prompts/more.txt"
         res, payload = _request(
-            port, "GET", f"/api/templates/{name}/file?path=prompts/more/up.txt")
+            port, "GET", f"/api/templates/{name}/file?path=prompts/more.txt")
         assert res.status == 200 and payload["content"] == "содержимое"
-        # удаление каталога (рекурсивно) через DELETE-роут файлов
+        # удаление каталога через DELETE-роут файлов → 403
         res, payload = _request(port, "DELETE",
-                                f"/api/templates/{name}/file?path=prompts/more")
+                                f"/api/templates/{name}/file?path=prompts")
+        assert res.status == 403 and "Каталоги" in payload["error"]
+        # удаление файла разрешено
+        res, payload = _request(port, "DELETE",
+                                f"/api/templates/{name}/file?path=prompts/more.txt")
         assert res.status == 200
         res, payload = _request(
-            port, "GET", f"/api/templates/{name}/file?path=prompts/more/up.txt")
+            port, "GET", f"/api/templates/{name}/file?path=prompts/more.txt")
         assert res.status == 404
         # General: upload/mkdir/delete → 403
         res, payload = _request(port, "POST", "/api/templates/General/upload")
@@ -541,6 +562,26 @@ def test_templates_upload_download_mkdir(srv_ctx):
         assert res.status == 403
     finally:
         from core import projects as P
+        P.delete_template_set(REPO / "templates", name)
+
+
+def test_templates_skeleton_repaired_on_read(srv_ctx):
+    """Раунд 23: GET /api/templates чинит скелет «деградировавшего» набора."""
+    _, port, _ = srv_ctx()
+    from core import projects as P
+    name = "TplSk_01"
+    try:
+        res, _ = _request(port, "POST", "/api/templates", {"name": name})
+        assert res.status == 200
+        import shutil
+        set_dir = REPO / "templates" / name
+        shutil.rmtree(set_dir / "source")
+        res, payload = _request(port, "GET", "/api/templates")
+        assert res.status == 200
+        t = next(x for x in payload["templates"] if x["name"] == name)
+        assert "source/" in t["files"] or "source" in t["files"]
+        assert (set_dir / "source").is_dir()
+    finally:
         P.delete_template_set(REPO / "templates", name)
 
 
@@ -885,6 +926,106 @@ def test_file_delete_404(srv_ctx):
     res, payload = _request(port, "DELETE",
                             "/api/file?project=ACTIVE/test_book&path=nope")
     assert res.status == 404
+
+
+# mkdir (раунд 23)
+
+def test_file_mkdir(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/mkdir"
+                            "?project=ACTIVE/test_book&path=tmp/extra")
+    assert res.status == 200, payload
+    assert (projects_root / "ACTIVE" / "test_book"
+            / "tmp" / "extra").is_dir()
+
+
+def test_file_mkdir_duplicate(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    (pdir / "tmp").mkdir(exist_ok=True)
+    res, payload = _request(port, "POST", "/api/mkdir"
+                            "?project=ACTIVE/test_book&path=tmp")
+    assert res.status == 400
+    assert "уже существует" in payload["error"]
+
+
+def test_file_mkdir_escape(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/mkdir"
+                            "?project=ACTIVE/test_book&path=../evil")
+    assert res.status == 400
+    assert "за пределы" in payload["error"]
+
+
+def test_file_mkdir_requires_path(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/mkdir"
+                            "?project=ACTIVE/test_book")
+    assert res.status == 400
+
+
+# rename (раунд 23)
+
+def test_file_rename_file(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/file/rename",
+                            {"project": "ACTIVE/test_book",
+                             "path": "source/hello.txt",
+                             "new_name": "hi.txt"})
+    assert res.status == 200, payload
+    assert payload["new_path"] == "source/hi.txt"
+    pdir = projects_root / "ACTIVE" / "test_book"
+    assert (pdir / "source" / "hi.txt").is_file()
+    assert not (pdir / "source" / "hello.txt").exists()
+
+
+def test_file_rename_dir(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    (pdir / "tmp" / "old").mkdir(parents=True)
+    (pdir / "tmp" / "old" / "x.txt").write_text("x", encoding="utf-8")
+    res, payload = _request(port, "POST", "/api/file/rename",
+                            {"project": "ACTIVE/test_book",
+                             "path": "tmp/old", "new_name": "new"})
+    assert res.status == 200, payload
+    assert payload["new_path"] == "tmp/new"
+    assert (pdir / "tmp" / "new" / "x.txt").is_file()
+    assert not (pdir / "tmp" / "old").exists()
+
+
+def test_file_rename_taken(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/file/rename",
+                            {"project": "ACTIVE/test_book",
+                             "path": "source/hello.txt",
+                             "new_name": "meta.json"})
+    assert res.status == 400
+    assert "уже существует" in payload["error"]
+
+
+def test_file_rename_404(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/file/rename",
+                            {"project": "ACTIVE/test_book",
+                             "path": "nope.txt", "new_name": "x.txt"})
+    assert res.status == 404
+
+
+def test_file_rename_slash_rejected(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/file/rename",
+                            {"project": "ACTIVE/test_book",
+                             "path": "source/hello.txt",
+                             "new_name": "sub/x.txt"})
+    assert res.status == 400
+    assert "только имя" in payload["error"]
 
 
 # upload

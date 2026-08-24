@@ -120,7 +120,10 @@ def cac_env(tmp_path, monkeypatch):
                 ". . .\n"
                 "Продолжение текста.\n")
         (d / "polished.txt").write_text(text, encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
+    # раунд 23: экспорт называется по имени папки проекта → chdir в именованную
+    proj_dir = tmp_path / "Тестовая_Книга"
+    proj_dir.mkdir()
+    monkeypatch.chdir(proj_dir)
     old = {k: v for k, v in vars(CAC.cfg).items()}
     CAC.cfg.base_dir = str(chapters)
     CAC.cfg.tmp_dir = str(tmp_path)
@@ -171,7 +174,7 @@ def test_cac_compile_epub_native(cac_env):
     cover.write_bytes(b"fake")
     CAC.cfg.epub_cover = str(cover)
     CAC.compile_book("epub")
-    epub = Path(CAC.cfg.tmp_dir) / "book_1_2.epub"
+    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.epub"
     assert epub.is_file(), "EPUB не создан"
     with zipfile.ZipFile(epub) as zf:
         names = zf.namelist()
@@ -195,7 +198,7 @@ def test_cac_compile_epub_no_cover(cac_env):
     import zipfile
     CAC.cfg.epub_cover = str(Path(CAC.cfg.tmp_dir) / "nonexistent.jpg")
     CAC.compile_book("epub")
-    epub = Path(CAC.cfg.tmp_dir) / "book_1_2.epub"
+    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.epub"
     assert epub.is_file()
     with zipfile.ZipFile(epub) as zf:
         names = zf.namelist()
@@ -208,13 +211,13 @@ def test_cac_compile_fb2_native(cac_env):
     cover = Path(CAC.cfg.tmp_dir) / "cover.jpg"
     cover.write_bytes(b"fake")
     CAC.cfg.fb2_cover = str(cover)
-    # Создаём donate-файл для теста
-    src = Path(CAC.cfg.tmp_dir) / "source"
+    # Создаём donate-файл для теста (ищется в ./source от cwd — папка проекта)
+    src = Path.cwd() / "source"
     src.mkdir(exist_ok=True)
     (src / "donate.txt").write_text(
         "# Поддержать проект\n\nТестовая ссылка\n", encoding="utf-8")
     CAC.compile_book("fb2")
-    fb2 = Path(CAC.cfg.tmp_dir) / "book_1_2.fb2"
+    fb2 = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.fb2"
     assert fb2.is_file(), "FB2 не создан"
     content = fb2.read_text(encoding="utf-8")
     assert "<coverpage>" in content                         # обложка нативно
@@ -233,7 +236,7 @@ def test_cac_compile_fb2_no_cover(cac_env):
     """FB2 без обложки (--no-fb2-cover) — coverpage отсутствует."""
     CAC.cfg.fb2_inject_cover = 0
     CAC.compile_book("fb2")
-    fb2 = Path(CAC.cfg.tmp_dir) / "book_1_2.fb2"
+    fb2 = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.fb2"
     assert fb2.is_file()
     content = fb2.read_text(encoding="utf-8")
     assert "<coverpage>" not in content
@@ -245,7 +248,7 @@ def test_cac_epub_title_not_duplicated(cac_env):
     import re, zipfile
     CAC.cfg.add_donate_page = 0
     CAC.compile_book("epub")
-    epub = Path(CAC.cfg.tmp_dir) / "book_1_2.epub"
+    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.epub"
     with zipfile.ZipFile(epub) as zf:
         ch1 = zf.read("OEBPS/chapter_0001.xhtml").decode("utf-8")
     m = re.search(r"<body>.*</body>", ch1, re.DOTALL)
@@ -261,7 +264,7 @@ def test_cac_fb2_title_not_duplicated(cac_env):
     import re
     CAC.cfg.add_donate_page = 0
     CAC.compile_book("fb2")
-    fb2 = Path(CAC.cfg.tmp_dir) / "book_1_2.fb2"
+    fb2 = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.fb2"
     content = fb2.read_text(encoding="utf-8")
     m = re.search(r"<section>(.*?)</section>", content, re.DOTALL)
     assert m is not None
@@ -304,14 +307,13 @@ def test_cac_load_donate_page_explicit_path(cac_env, monkeypatch, tmp_path):
 def test_cac_compile_epub_donate_external(cac_env, monkeypatch):
     """EPUB с внешним donate-файлом: заголовок из файла."""
     import zipfile
-    src = Path(CAC.cfg.tmp_dir) / "source"
+    src = Path.cwd() / "source"
     src.mkdir(exist_ok=True)
     (src / "donate.txt").write_text(
         "# Поддержать нас\n\nСсылка сюда\n", encoding="utf-8")
-    monkeypatch.chdir(CAC.cfg.tmp_dir)
     CAC.cfg.donate_file = ""
     CAC.compile_book("epub")
-    epub = Path(CAC.cfg.tmp_dir) / "book_1_2.epub"
+    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.epub"
     with zipfile.ZipFile(epub) as zf:
         names = zf.namelist()
         # Последняя глава — donate

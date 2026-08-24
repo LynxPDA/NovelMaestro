@@ -254,6 +254,54 @@ def _file_write(ctx: dict) -> dict:
     return {"ok": True, "path": rel, "size": len(text.encode("utf-8"))}
 
 
+def _file_mkdir(ctx: dict) -> dict:
+    """Создать каталог (POST /api/mkdir?project=&path=).
+
+    Раунд 23: «＋ Каталог» в «Файлы»; занято → 400, эскейп → 400.
+    """
+    pdir, _section, _name = _project_ctx(ctx)
+    rel = (ctx["query"].get("path") or ctx["body"].get("path") or "").strip()
+    if not rel:
+        raise ApiError(400, "path обязателен")
+    target = _resolve_project_path(ctx, pdir, rel)
+    if target.exists():
+        raise ApiError(400, f"Путь уже существует: {rel}")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ApiError(500, f"Не удалось создать каталог: {exc}")
+    return {"ok": True, "path": rel}
+
+
+def _file_rename(ctx: dict) -> dict:
+    """Переименовать файл ИЛИ каталог (POST /api/file/rename).
+
+    Body: {project, path, new_name} — new_name только имя внутри той же
+    папки (без слешей). Занято → 400, нет исходника → 404, эскейп → 400.
+    """
+    pdir, _section, _name = _project_ctx(ctx)
+    rel = (ctx["body"].get("path") or "").strip()
+    new_name = (ctx["body"].get("new_name") or "").strip()
+    if not rel or not new_name:
+        raise ApiError(400, "path и new_name обязательны")
+    if ("/" in new_name or "\\" in new_name or "\x00" in new_name
+            or new_name in (".", "..")):
+        raise ApiError(400, "new_name: только имя внутри той же папки")
+    src = _resolve_project_path(ctx, pdir, rel)
+    if not src.exists():
+        raise ApiError(404, f"Файл не найден: {rel}")
+    parent_rel = rel.rpartition("/")[0]
+    dst_rel = f"{parent_rel}/{new_name}" if parent_rel else new_name
+    dst = _resolve_project_path(ctx, pdir, dst_rel)
+    if dst.exists():
+        raise ApiError(400, f"Путь назначения уже существует: {dst_rel}")
+    try:
+        src.replace(dst)
+    except OSError as exc:
+        raise ApiError(500, f"Не удалось переименовать: {exc}")
+    return {"ok": True, "path": rel, "new_path": dst_rel}
+
+
 def _file_delete(ctx: dict) -> dict:
     """Удаление файла (DELETE /api/file?project=&path=)."""
     pdir, section, name = _project_ctx(ctx)
@@ -344,6 +392,8 @@ def _register_files(router: Router) -> None:
     router.add("GET", "/api/file", _file_read)
     router.add("PUT", "/api/file", _file_write)
     router.add("DELETE", "/api/file", _file_delete)
+    router.add("POST", "/api/mkdir", _file_mkdir)
+    router.add("POST", "/api/file/rename", _file_rename)
     router.add("POST", "/api/upload", _file_upload)
     router.add("GET", "/api/download", _file_download)
 
@@ -801,6 +851,9 @@ def _templates(ctx: dict) -> dict:
     sets = prj.list_template_sets(repo / "templates")
     out = []
     for s in sets:
+        # раунд 23: ремонт скелета при чтении — инвариант prompts/+source/
+        # гарантирован и для наборов, созданных до раунда 23
+        prj._ensure_template_skeleton(repo / "templates" / s)
         out.append({"name": s, "files": prj.templates_files(repo / "templates", s)})
     return {"ok": True, "templates": out}
 
@@ -2010,21 +2063,29 @@ def _templates_file_put(ctx: dict) -> dict:
     rel = (body.get("path") or "").strip()
     if not rel:
         raise ApiError(400, "path обязателен")
-    if not prj.write_template_file(
-            _templates_root(ctx), name, rel, body.get("content") or ""):
-        raise ApiError(404, f"Набор не найден: {name}")
+    err = prj.write_template_file(
+        _templates_root(ctx), name, rel, body.get("content") or "")
+    if err:
+        code = 403 if "Каталоги" in err or "General" in err else \
+            (404 if "не найден" in err or "Недопустимый" in err else 400)
+        raise ApiError(code, f"{name}: {err}")
     return {"ok": True, "name": name, "path": rel}
 
 
 def _templates_file_delete(ctx: dict) -> dict:
-    """DELETE /api/templates/{set}/file?path=… — удалить файл."""
+    """DELETE /api/templates/{set}/file?path=… — удалить файл.
+
+    Каталоги неизменяемы (раунд 23) → 403."""
     prj = _import_projects(ctx)
     name = ctx["params"]["set"]
     if name == prj.TEMPLATE_PROTECTED:
         raise ApiError(403, "General — системный набор, изменение запрещено")
     rel = ctx["query"].get("path", "")
-    if not prj.delete_template_file(_templates_root(ctx), name, rel):
-        raise ApiError(404, f"Файл не найден: {name}/{rel}")
+    err = prj.delete_template_file(_templates_root(ctx), name, rel)
+    if err:
+        code = 403 if "Каталоги" in err else \
+            (404 if "не найден" in err or "Недопустимый" in err else 400)
+        raise ApiError(code, f"{name}: {err}")
     return {"ok": True, "name": name, "path": rel}
 
 
@@ -2043,7 +2104,8 @@ def _templates_rename(ctx: dict) -> dict:
         raise ApiError(403, "General — системный набор, изменение запрещено")
     err = prj.move_template_file(_templates_root(ctx), name, src, dst)
     if err:
-        code = 404 if "не найден" in err or "Недопустимый" in err else 400
+        code = 403 if "Каталоги" in err else \
+            (404 if "не найден" in err or "Недопустимый" in err else 400)
         raise ApiError(code, f"{name}: {err}")
     return {"ok": True, "name": name, "src": src, "dst": dst}
 
@@ -2088,7 +2150,9 @@ def _templates_upload(ctx: dict) -> dict:
             target = resolve_path(set_dir, rel)
         except SandboxError as exc:
             raise ApiError(400, str(exc))
-        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.parent.is_dir():
+            # раунд 23: каталоги в шаблонах не создаются даже неявно
+            raise ApiError(400, f"Каталог не существует: {rel}")
         target.write_bytes(f["data"])
         saved.append(rel)
     return {"ok": True, "saved": saved}
@@ -2126,7 +2190,8 @@ def _templates_mkdir(ctx: dict) -> dict:
         raise ApiError(400, "path обязателен")
     err = prj.create_template_dir(_templates_root(ctx), name, rel)
     if err:
-        code = 403 if "General" in err else \
+        # раунд 23: любые каталоги в шаблонах запрещены → всегда 403
+        code = 403 if ("General" in err or "Каталоги" in err) else \
             (404 if "не найден" in err or "Недопустимый" in err else 400)
         raise ApiError(code, f"{name}: {err}")
     return {"ok": True, "name": name, "path": rel}

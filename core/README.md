@@ -54,18 +54,25 @@ LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) 
   delete_project (без подтверждений — они в UI) / copy_project (дубликат)
 шаблоны: TEMPLATE_PROTECTED="General" (системный, только чтение) /
   list_template_sets (подпапки templates/ с prompts/) /
+  TEMPLATE_SKELETON=("prompts", "source") — инвариант набора;
+  _ensure_template_skeleton (идемпотентный mkdir скелета; ремонт при
+  чтении — web/api.py::_templates) /
   create_template_set (каркас prompts/+source/ как у General) /
-  create_template_dir (пустой каталог; General — запрещён) /
-  copy_template_set (ИЗ General можно) /
+  create_template_dir (раунд 23: ВСЕГДА ошибка «Каталоги в шаблонах
+  неизменяемы» — каталоги не создаются) /
+  copy_template_set (ИЗ General можно; после копии — ремонт скелета) /
   delete_template_set (General — запрещён) /
   templates_files (дерево файлов набора, относительные пути;
   пустые каталоги — как "path/") /
-  read_template_file / write_template_file / delete_template_file
-  (файл ИЛИ каталог — каталог рекурсивно; эскейпы за пределы набора
-  и запись в General отклоняются) /
+  read_template_file / write_template_file (раунд 23: только ФАЙЛЫ —
+  родительский каталог обязан существовать, неявное создание каталогов
+  запрещено; str|None) / delete_template_file (раунд 23: только файлы —
+  каталог возвращает «Каталоги в шаблонах неизменяемы», str|None;
+  эскейпы за пределы набора и запись в General отклоняются) /
   template_file_info (size/mtime файла — мета редактора) /
-  move_template_file (переименование/перенос файла ИЛИ каталога внутри
-  набора; General запрещён, dst не должен существовать) /
+  move_template_file (раунд 23: только файлы; каталог — «Каталоги в
+  шаблонах неизменяемы»; General запрещён, dst не должен существовать,
+  родительский каталог dst — обязан существовать) /
   fill_project_from_template (prompts/+source/ без перезаписи) /
   render_metadata + write_project_metadata (title/author/subject/date
   в source/metadata.yaml, date по умолчанию — дата создания)

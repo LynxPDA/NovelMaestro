@@ -11,6 +11,11 @@
     root.UICore = factory();
   }
 })(typeof self === "undefined" ? this : self, () => {
+  /* экранирование regex-спецсимволов (для матчера глоссария) */
+  function escapeRe(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
   var UICore = {
     /* ── роутер: "#/run/a/b" → {view, rest} ── */
     parseRoute: (hash) => {
@@ -93,6 +98,81 @@
         }
       }
       return entries;
+    },
+
+    /* ── матчер глоссария (раунд 23): термины → чанки с regex ── */
+    buildGlossaryMatcher: (items) => {
+      // оба поля: term И translation (NFC при построении); длинные раньше
+      var terms = [];
+      for (var i = 0; i < (items || []).length; i++) {
+        var it = items[i] || {};
+        var t = String(it.term || "")
+          .trim()
+          .normalize("NFC");
+        var tr = String(it.translation || "")
+          .trim()
+          .normalize("NFC");
+        if (t) terms.push({ text: t, item: it });
+        if (tr && tr !== t) terms.push({ text: tr, item: it });
+      }
+      terms.sort(function (a, b) {
+        var d = b.text.length - a.text.length;
+        return d !== 0 ? d : a.text < b.text ? -1 : a.text > b.text ? 1 : 0;
+      });
+      var CHUNK = 2000;
+      var chunks = [];
+      for (var i = 0; i < terms.length; i += CHUNK) {
+        var part = terms.slice(i, i + CHUNK);
+        chunks.push({
+          re: new RegExp(
+            part
+              .map(function (t) {
+                return escapeRe(t.text);
+              })
+              .join("|"),
+            "g",
+          ),
+          terms: part,
+        });
+      }
+      return { chunks: chunks, total: terms.length };
+    },
+
+    /* ── совпадения матчера в тексте: [{from, to, item}] ── */
+    glossaryMatches: (text, matcher) => {
+      var out = [];
+      var src = String(text || "");
+      if (!matcher || !matcher.chunks) return out;
+      for (var c = 0; c < matcher.chunks.length; c++) {
+        var chunk = matcher.chunks[c];
+        chunk.re.lastIndex = 0;
+        var m;
+        while ((m = chunk.re.exec(src)) !== null) {
+          var hit = m[0];
+          var item = null;
+          // длинные раньше — первое точное совпадение и есть искомый термин
+          for (var k = 0; k < chunk.terms.length; k++) {
+            if (chunk.terms[k].text === hit) {
+              item = chunk.terms[k].item;
+              break;
+            }
+          }
+          out.push({ from: m.index, to: m.index + hit.length, item: item });
+          if (m.index === chunk.re.lastIndex) chunk.re.lastIndex++; // пустых нет, но защита
+        }
+      }
+      // дедуп перекрытий между чанками: длиннейшее по позиции (длинные раньше)
+      out.sort(function (a, b) {
+        return a.from - b.from || b.to - a.to;
+      });
+      var dedup = [];
+      var lastTo = -1;
+      for (var i = 0; i < out.length; i++) {
+        if (out[i].from < lastTo) continue;
+        dedup.push(out[i]);
+        lastTo = out[i].to;
+      }
+      return dedup;
     },
   };
 

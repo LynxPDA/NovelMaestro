@@ -1288,3 +1288,116 @@ a.fname:hover {
  flex-direction: column;
  gap: 8px;
 }
+/* ── Редактор глав (раунд 23): панели, подсветка глоссария ── */
+.ed-wrap {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ed-chapter {
+  max-width: 340px;
+}
+.ed-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.ed-grid.ed-grid-two {
+  grid-template-columns: 1fr 1fr;
+}
+.ed-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ed-pane-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ed-type {
+  width: auto;
+  min-width: 140px;
+}
+.ed-meta {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ed-cm {
+  position: relative;
+  min-height: 420px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.ed-cm .cm-editor {
+  height: 100%;
+}
+.ed-cm .cm-editor.cm-focused {
+  outline: none;
+}
+.ed-cm .cm-scroller {
+  position: relative;
+}
+/* оверлей подсветки — внутри .cm-scroller, скроллится вместе с текстом */
+.ed-hl-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.hl-mark {
+  position: absolute;
+  background: rgba(210, 153, 34, 0.22);
+  border-radius: 2px;
+  pointer-events: none;
+}
+/* тултип термина глоссария (в .ed-cm, над редактором) */
+.hl-tip {
+  position: absolute;
+  z-index: 40;
+  max-width: 340px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: auto;
+}
+.hl-tip-term {
+  font-weight: 700;
+  font-size: 13px;
+}
+.hl-tip-row {
+  font-size: 12px;
+  color: var(--text);
+}
+.hl-tip-notes {
+  font-size: 12px;
+  color: var(--muted);
+}
+.hl-tip-btn {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+/* ── Тосты через Alpine (W9) ──────────────────────────────── */
+.toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

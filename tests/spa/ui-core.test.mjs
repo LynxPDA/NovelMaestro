@@ -5,8 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const UICore = require("../../web/static/ui-core.js");
+const _require = createRequire(import.meta.url); // _: анализатор путает с глобалом
+const UICore = _require("../../web/static/ui-core.js");
 
 test("parseRoute: пустой хэш → hub", () => {
   assert.deepEqual(UICore.parseRoute(""), { view: "hub", rest: [] });
@@ -118,6 +118,87 @@ test("dirEntries: плоский список → дерево каталога"
     ["d:nested", "f:redact.txt", "f:translate.txt"],
   );
   assert.deepEqual(UICore.dirEntries([], ""), []);
+});
+
+/* ── раунд 23: матчер глоссария (вкладка «Редактор») ── */
+
+const NER_ITEMS = [
+  { term: "Хунг", translation: "Хун", type: "имя", notes: "герой" },
+  { term: "секта", translation: "Школа", type: "место", notes: "" },
+  { term: "灵草", translation: "灵草", type: "предмет" },
+  { term: "Линь", translation: "Линь", type: "имя" },
+];
+
+function matcherFor(items) {
+  return UICore.buildGlossaryMatcher(items);
+}
+
+function hits(text, items) {
+  return UICore.glossaryMatches(text, matcherFor(items)).map((m) =>
+    text.slice(m.from, m.to),
+  );
+}
+
+test("buildGlossaryMatcher: оба поля term+translation", () => {
+  const m = matcherFor(NER_ITEMS);
+  // 4 записи: term Хунг + translation Хун, term секта + translation Школа,
+  // термин-дубль (translation === term — не дублируется), Линь
+  assert.equal(m.total, 6);
+});
+
+test("glossaryMatches: совпадения по обоим полям", () => {
+  const text = "Хунг и Школа. Хун улыбнулся.";
+  const found = hits(text, NER_ITEMS);
+  assert.deepEqual(found, ["Хунг", "Школа", "Хун"]);
+});
+
+test("glossaryMatches: дубль термин/перевод не дублирует совпадения", () => {
+  const text = "灵草 растёт. Линь собирает 灵草.";
+  const found = hits(text, NER_ITEMS);
+  // 灵草 и Линь — по одному вхождению каждый, несмотря на дубль полей
+  assert.deepEqual(found, ["灵草", "Линь", "灵草"]);
+});
+
+test("glossaryMatches: длинные термины раньше коротких", () => {
+  const items = [
+    { term: "abc", translation: "" },
+    { term: "abcd", translation: "" },
+  ];
+  const text = "abcd";
+  const found = hits(text, items);
+  assert.deepEqual(found, ["abcd"]); // не "abc" + "d"
+});
+
+test("glossaryMatches: спецсимволы экранируются", () => {
+  const items = [{ term: "a(b)c", translation: "" }];
+  assert.deepEqual(hits("x a(b)c y", items), ["a(b)c"]);
+  const items2 = [{ term: "1+1", translation: "" }];
+  assert.deepEqual(hits("2 1+1 2", items2), ["1+1"]);
+});
+
+test("glossaryMatches: NFC терминов при построении матчера", () => {
+  // термин в NFD (e + combining acute) нормализуется в NFC é
+  const items = [{ term: "e\u0301", translation: "" }];
+  const m = matcherFor(items);
+  assert.equal(m.total, 1);
+  assert.deepEqual(hits("\u00e9", items), ["\u00e9"]);
+});
+
+test("glossaryMatches: пустые/без матчера", () => {
+  assert.deepEqual(UICore.glossaryMatches("", matcherFor([])), []);
+  assert.deepEqual(UICore.glossaryMatches("x", null), []);
+  assert.equal(matcherFor(null).total, 0);
+  assert.equal(matcherFor(undefined).total, 0);
+});
+
+test("buildGlossaryMatcher: чанки по ~2000 терминов", () => {
+  const many = [];
+  for (let i = 0; i < 4500; i++) many.push({ term: "t" + i, translation: "" });
+  const m = matcherFor(many);
+  assert.equal(m.total, 4500);
+  assert.ok(m.chunks.length >= 3);
+  // совпадение по термину из последнего чанка
+  assert.deepEqual(hits("t4499", many), ["t4499"]);
 });
 
 test("dirEntries: пустой каталог (trailing '/') виден и не даёт пустых имён", () => {

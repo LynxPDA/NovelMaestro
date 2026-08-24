@@ -627,6 +627,22 @@ def export_titles():
     print(f"Откройте {cfg.titles_file}, отредактируйте текст после ':::' и сохраните.")
 
 # ==========================================
+# ИМЯ ЭКСПОРТА (раунд 23: имя проекта + диапазон)
+# ==========================================
+def _export_label() -> str:
+    """Метка имени файла экспорта: NFC + санитизация basename cwd.
+
+    Имя папки проекта (валидируется valid_project_name) превращается
+    в безопасную метку: пробелы → '_', ведущие/хвостовые '.'/'_' срезаются;
+    пустой результат → fallback "book". Только epub/fb2 (compiled_* не трогаем).
+    """
+    import unicodedata
+    label = unicodedata.normalize("NFC", os.path.basename(os.getcwd())).strip()
+    label = label.replace(" ", "_").strip("._")
+    return label or "book"
+
+
+# ==========================================
 # ЗАГРУЗКА КАСТОМНЫХ ЗАГОЛОВКОВ
 # ==========================================
 def load_custom_titles():
@@ -767,13 +783,17 @@ def compile_book(mode):
 
     # Нативная генерация EPUB (без pandoc)
     if mode == "epub":
-        epub_output = os.path.join(cfg.tmp_dir, f"book_{cfg.start}_{cfg.end}.epub")
+        label = _export_label()
+        epub_output = os.path.join(
+            cfg.tmp_dir, f"{label}_{cfg.start}_{cfg.end}.epub")
         meta = parse_yaml_meta(cfg.epub_meta) if os.path.isfile(cfg.epub_meta) else {}
         build_epub_native(chapters_data, meta, cfg.epub_cover, epub_output)
 
     # Нативная генерация FB2 (без pandoc)
     if mode == "fb2":
-        fb2_output = os.path.join(cfg.tmp_dir, f"book_{cfg.start}_{cfg.end}.fb2")
+        label = _export_label()
+        fb2_output = os.path.join(
+            cfg.tmp_dir, f"{label}_{cfg.start}_{cfg.end}.fb2")
         meta = parse_yaml_meta(cfg.epub_meta) if os.path.isfile(cfg.epub_meta) else {}
         cover = cfg.fb2_cover if cfg.fb2_inject_cover == 1 else None
         build_fb2_native(chapters_data, meta, cover, fb2_output)

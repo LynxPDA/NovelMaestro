@@ -362,6 +362,19 @@ def _tpl_resolve(set_dir: Path, rel: str) -> Path | None:
     return p
 
 
+TEMPLATE_SKELETON = ("prompts", "source")
+
+
+def _ensure_template_skeleton(set_dir: Path) -> None:
+    """Гарантировать каркас набора: prompts/ + source/ (идемпотентно).
+
+    Раунд 23: скелет как у General — инвариант набора. Вызывается при
+    создании, копировании и ремонте при чтении (_templates в web/api.py).
+    """
+    for sub in TEMPLATE_SKELETON:
+        (set_dir / sub).mkdir(parents=True, exist_ok=True)
+
+
 def create_template_set(templates_dir: Path, name: str) -> str | None:
     """Создать новый набор шаблонов с каркасом prompts/ + source/.
 
@@ -376,8 +389,7 @@ def create_template_set(templates_dir: Path, name: str) -> str | None:
     if d is None or d.exists():
         return None
     d.mkdir(parents=True, exist_ok=True)
-    (d / "prompts").mkdir(exist_ok=True)
-    (d / "source").mkdir(exist_ok=True)
+    _ensure_template_skeleton(d)
     return name
 
 
@@ -395,6 +407,8 @@ def copy_template_set(templates_dir: Path, src: str, dst: str) -> str | None:
     if sdir is None or ddir is None or not sdir.is_dir() or ddir.exists():
         return None
     shutil.copytree(sdir, ddir)
+    # раунд 23: копия всегда со скелетом, даже если исходник «деградировал»
+    _ensure_template_skeleton(ddir)
     return dst
 
 
@@ -414,26 +428,18 @@ def delete_template_set(templates_dir: Path, name: str) -> bool:
 
 
 def create_template_dir(templates_dir: Path, name: str, rel: str) -> str | None:
-    """Создать пустой каталог в наборе (General — запрещён).
+    """Создать каталог в наборе — ЗАПРЕЩЕНО (раунд 23).
 
-    None — успех; строка-ошибка — иначе: набор не найден, эскейп за
-    пределы набора, путь уже существует."""
+    Каталоги в шаблонах неизменяемы: скелет prompts/ + source/ — всё,
+    что разрешено. Роут остаётся (всегда ошибка), чтобы не ломать
+    публичный API; UI-кнопка убрана. Возвращает строку-ошибку."""
     name = unicodedata.normalize("NFC", (name or "").strip())
     if name == TEMPLATE_PROTECTED:
         return "General — системный набор, изменение запрещено"
     set_dir = _tpl_set_dir(templates_dir, name)
     if set_dir is None or not set_dir.is_dir():
         return "Набор не найден"
-    p = _tpl_resolve(set_dir, rel)
-    if p is None:
-        return "Недопустимый путь"
-    if p.exists():
-        return "Путь уже существует"
-    try:
-        p.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        return f"Не удалось создать каталог: {e}"
-    return None
+    return "Каталоги в шаблонах неизменяемы"
 
 
 def templates_files(templates_dir: Path, name: str, sub: str = "") -> list[str]:
@@ -474,48 +480,51 @@ def read_template_file(templates_dir: Path, name: str, rel: str) -> str | None:
 
 
 def write_template_file(templates_dir: Path, name: str, rel: str,
-                        content: str) -> bool:
+                        content: str) -> str | None:
     """Записать/создать файл в наборе (General — запрещён).
 
-    rel может содержать подпапки (создаются); эскейпы за пределы
-    набора отклоняются. False — набор не найден/General/эскейп."""
+    Раунд 23: каталоги неизменяемы — родительский каталог обязан
+    существовать (неявное создание каталогов через путь файла запрещено).
+    None — успех; строка-ошибка — иначе: набор не найден/General/эскейп/
+    каталог не существует."""
     name = unicodedata.normalize("NFC", (name or "").strip())
     if name == TEMPLATE_PROTECTED:
-        return False
+        return "General — системный набор, изменение запрещено"
     set_dir = _tpl_set_dir(templates_dir, name)
     if set_dir is None or not set_dir.is_dir():
-        return False
+        return "Набор не найден"
     p = _tpl_resolve(set_dir, rel)
     if p is None:
-        return False
-    p.parent.mkdir(parents=True, exist_ok=True)
+        return "Недопустимый путь"
+    if not p.parent.is_dir():
+        return "Каталог не существует"
     p.write_text(content or "", encoding="utf-8")
-    return True
+    return None
 
 
-def delete_template_file(templates_dir: Path, name: str, rel: str) -> bool:
-    """Удалить файл ИЛИ каталог из набора (General — запрещён).
+def delete_template_file(templates_dir: Path, name: str, rel: str) -> str | None:
+    """Удалить файл из набора (General — запрещён).
 
-    Каталог удаляется рекурсивно вместе с содержимым; пустые каталоги
-    перестают показываться в templates_files. False — набор не
-    найден/General/пути нет."""
+    Раунд 23: каталоги неизменяемы — удаление каталога отклоняется
+    ("Каталоги в шаблонах неизменяемы"); файлы удаляются как раньше.
+    None — успех; строка-ошибка — иначе: набор не найден/General/
+    пути нет/каталог."""
     name = unicodedata.normalize("NFC", (name or "").strip())
     if name == TEMPLATE_PROTECTED:
-        return False
+        return "General — системный набор, изменение запрещено"
     set_dir = _tpl_set_dir(templates_dir, name)
     if set_dir is None or not set_dir.is_dir():
-        return False
+        return "Набор не найден"
     p = _tpl_resolve(set_dir, rel)
     if p is None or not p.exists():
-        return False
+        return "Файл не найден"
+    if p.is_dir():
+        return "Каталоги в шаблонах неизменяемы"
     try:
-        if p.is_file():
-            p.unlink()
-        else:
-            shutil.rmtree(p)
-    except OSError:
-        return False
-    return True
+        p.unlink()
+    except OSError as exc:
+        return f"Не удалось удалить файл: {exc}"
+    return None
 
 
 def template_file_info(templates_dir: Path, name: str,
@@ -555,11 +564,14 @@ def move_template_file(templates_dir: Path, name: str,
     dp = _tpl_resolve(set_dir, dst)
     if sp is None or not sp.exists():
         return "Исходный путь не найден"
+    if sp.is_dir():
+        return "Каталоги в шаблонах неизменяемы"
     if dp is None:
         return "Недопустимый путь назначения"
     if dp.exists():
         return "Путь назначения уже существует"
-    dp.parent.mkdir(parents=True, exist_ok=True)
+    if not dp.parent.is_dir():
+        return "Каталог не существует"  # раунд 23: каталоги не создаются
     sp.replace(dp)
     return None
 
@@ -581,11 +593,15 @@ def list_projects(projects_root: Path, section: str) -> list:
 
 def _has_compiled(pdir: Path) -> bool:
     """Есть ли скомпилированные файлы (clean_and_compile пишет их в cwd
-    проекта по умолчанию, либо в tmp//output/ при --out)."""
+    проекта по умолчанию, либо в tmp//output/ при --out).
+
+    Раунд 23: экспорты EPUB/FB2 — '{имя_проекта}_{start}_{end}.{ext}';
+    легаси-паттерн book_* тоже распознаётся."""
+    new_pats = (f"{pdir.name}_*.epub", f"{pdir.name}_*.fb2")
     for d in (pdir, pdir / "tmp", pdir / "output"):
         if not d.is_dir():
             continue
-        for pat in ("compiled_*.txt", "book_*.epub", "book_*.fb2"):
+        for pat in ("compiled_*.txt", "book_*.epub", "book_*.fb2", *new_pats):
             if any(d.glob(pat)):
                 return True
     return False
@@ -684,12 +700,15 @@ def project_progress_table(pdir: Path) -> dict:
                                     if line.startswith("## "))
         except OSError:
             pass
+    prefix = f"{pdir.name}_"
     compiled = sorted(
         f.name for d in (pdir, pdir / "tmp", pdir / "output")
         if d.is_dir()
         for f in d.iterdir()
         if f.is_file() and (
-            f.name.startswith("compiled_") or f.name.startswith("book_")))
+            f.name.startswith("compiled_") or f.name.startswith("book_")
+            or (f.name.startswith(prefix)
+                and (f.name.endswith(".epub") or f.name.endswith(".fb2")))))
     return {"chapters": chapters, "counts": counts,
             "ner": ner, "wiki": wiki, "compiled": compiled}
 

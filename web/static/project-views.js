@@ -1,3 +1,4 @@
+/* eslint-disable-next-line no-unused-vars -- глобал SPA, вызывается из app.js */
 function viewProject(section, name) {
   const st = {
     view: "files",
@@ -6,6 +7,7 @@ function viewProject(section, name) {
     ner: null,
     review: {},
     search: null,
+    editor: null, // раунд 23: вкладка «Редактор» (глава/панели/подсветка)
   };
   const page = h("div", { class: "page" });
 
@@ -31,6 +33,7 @@ function viewProject(section, name) {
 
   const TABS = [
     ["files", "Файлы"],
+    ["editor", "Редактор"],
     ["ner", "Глоссарий"],
     ["review", "Проверка"],
     ["status", "Статус"],
@@ -73,6 +76,7 @@ function viewProject(section, name) {
     );
     let body;
     if (st.edit) body = await editorView();
+    else if (st.view === "editor") body = await editorTabView();
     else if (st.view === "ner") body = await nerView();
     else if (st.view === "review") body = await reviewView();
     else if (st.view === "status") body = await statusView();
@@ -128,6 +132,53 @@ function viewProject(section, name) {
       multiple: true,
       class: "hidden",
     });
+    /* раунд 23: «＋ Файл» — создать пустой файл и открыть редактор;
+       «＋ Каталог» — POST /api/mkdir */
+    const addFileBtn = h(
+      "button",
+      {
+        class: "btn btn-sm",
+        onclick: () =>
+          nameModal(
+            "Новый файл",
+            "путь внутри проекта, напр. prompts/x.txt",
+            async (rel) => {
+              await api("/file", {
+                method: "PUT",
+                body: {
+                  project: `${section}/${name}`,
+                  path: rel,
+                  content: "",
+                },
+              });
+              toast(`Создан: ${rel}`);
+              openEditor(rel);
+            },
+          ),
+      },
+      "＋ Файл",
+    );
+    const addDirBtn = h(
+      "button",
+      {
+        class: "btn btn-sm",
+        onclick: () =>
+          nameModal(
+            "Новый каталог",
+            "путь внутри проекта, напр. tmp/extra",
+            async (rel) => {
+              const mq = new URLSearchParams({
+                project: `${section}/${name}`,
+                path: rel,
+              });
+              await api(`/mkdir?${mq}`, { method: "POST" });
+              toast(`Создан каталог: ${rel}`);
+              render();
+            },
+          ),
+      },
+      "＋ Каталог",
+    );
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
@@ -138,6 +189,8 @@ function viewProject(section, name) {
         { class: "btn btn-sm", onclick: () => upInput.click() },
         "Загрузить",
       ),
+      addFileBtn,
+      addDirBtn,
     );
     upInput.addEventListener("change", async () => {
       const form = new FormData();
@@ -237,44 +290,74 @@ function viewProject(section, name) {
           fileIcon(e) + " " + e.name,
         )
       : h("span", { class: "fname" }, fileIcon(e) + " " + e.name);
-    const actions = h(
-      "div",
-      { class: "factions" },
-      e.dir
-        ? null
-        : [
-            h(
-              "a",
-              {
-                class: "btn btn-sm btn-ghost",
-                href: downloadUrl(full),
-                download: e.name,
-              },
-              "Скачать",
-            ),
-            h(
-              "button",
-              {
-                class: "btn btn-sm btn-ghost",
-                onclick: () => openEditor(full),
-              },
-              "Правка",
-            ),
-          ],
+    const actions = h("div", { class: "factions" });
+    /* раунд 23: «Переим.» — и у файлов, и у каталогов (POST /api/file/rename) */
+    const renameBtn = h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost",
+        onclick: () =>
+          nameModal(
+            `Переименовать ${e.dir ? "каталог" : "файл"} ${e.name}`,
+            "новое имя",
+            async (nm) => {
+              await api("/file/rename", {
+                method: "POST",
+                body: {
+                  project: `${section}/${name}`,
+                  path: full,
+                  new_name: nm,
+                },
+              });
+              toast(`Переименовано: ${e.name} → ${nm}`);
+              render();
+            },
+          ),
+      },
+      "Переим.",
+    );
+    if (!e.dir) {
+      actions.append(
+        h(
+          "a",
+          {
+            class: "btn btn-sm btn-ghost",
+            href: downloadUrl(full),
+            download: e.name,
+          },
+          "Скачать",
+        ),
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            onclick: () => openEditor(full),
+          },
+          "Правка",
+        ),
+      );
+    }
+    actions.append(renameBtn);
+    actions.append(
       h(
         "button",
         {
           class: "btn btn-sm btn-danger-ghost",
           onclick: () =>
-            confirmModal("Удаление файла", full, "УДАЛИТЬ", async () => {
-              const dq = new URLSearchParams({
-                project: `${section}/${name}`,
-                path: full,
-              });
-              await api(`/file?${dq}`, { method: "DELETE" });
-              toast(`Удалено: ${full}`);
-              render();
-            }),
+            confirmModal(
+              `Удаление ${e.dir ? "каталога" : "файла"}`,
+              full,
+              "УДАЛИТЬ",
+              async () => {
+                const dq = new URLSearchParams({
+                  project: `${section}/${name}`,
+                  path: full,
+                });
+                await api(`/file?${dq}`, { method: "DELETE" });
+                toast(`Удалено: ${full}`);
+                render();
+              },
+            ),
         },
         "Удалить",
       ),
@@ -413,6 +496,426 @@ function viewProject(section, name) {
       frame,
     );
   }
+  /* ── Редактор глав (раунд 23) ─────────────────── */
+  const ED_ARTIFACT_LABELS = {
+    "chapter.txt": "Оригинал",
+    "translated.txt": "Перевод",
+    "redacted.txt": "Редактура",
+    "polished.txt": "Полировка",
+  };
+  const ED_ARTIFACT_ORDER = [
+    "chapter.txt",
+    "translated.txt",
+    "redacted.txt",
+    "polished.txt",
+  ];
+
+  async function editorTabView() {
+    const ed = (st.editor = st.editor || {
+      chapter: null,
+      mode: "one", // one | two
+      left: { type: null, text: null, dirty: false },
+      right: { type: null, text: null, dirty: false },
+      hl: false,
+      ner: null, // кеш {items, matcher} глоссария
+    });
+    const wrap = h("div", { class: "ed-wrap" });
+    const toolbar = h("div", { class: "files-toolbar" });
+    const grid = h("div", { class: "ed-grid" });
+
+    let tree;
+    try {
+      tree = await api(`/projects/${section}/${name}/tree`);
+    } catch (ex) {
+      return h("div", { class: "files-empty" }, ex.message);
+    }
+    const chapters = (tree.chapters || []).filter(
+      (c) => c.artifacts && Object.keys(c.artifacts).length > 0,
+    );
+    if (!chapters.length) {
+      return h(
+        "div",
+        { class: "files-empty" },
+        "Нет глав с артефактами — сначала запустите epub_to_chapters",
+      );
+    }
+    if (!chapters.some((c) => c.dir === ed.chapter)) {
+      ed.chapter = chapters[0].dir;
+    }
+    const chapterTypes = (dir) => {
+      const ch = chapters.find((c) => c.dir === dir);
+      const out = [];
+      for (const name of ED_ARTIFACT_ORDER) {
+        if (ch && ch.artifacts[name] != null) {
+          out.push({ name, label: ED_ARTIFACT_LABELS[name] || name });
+        }
+      }
+      return out;
+    };
+
+    /* ── панель: селект артефакта, редактор, сохранение ── */
+    function makePane(paneState) {
+      const pane = h("div", { class: "ed-pane" });
+      const bar = h("div", { class: "ed-pane-bar" });
+      const typeSel = h("select", { class: "input ed-type" });
+      const meta = h("span", { class: "ed-meta" });
+      const saveBtn = h(
+        "button",
+        { class: "btn btn-sm", disabled: true },
+        "Сохранить",
+      );
+      const perr = h("div", { class: "form-error" });
+      bar.append(typeSel, meta, h("span", { class: "spacer" }), saveBtn);
+      const host = h("div", { class: "ed-cm" });
+      pane.append(bar, perr, host);
+      return {
+        pane,
+        bar,
+        typeSel,
+        meta,
+        saveBtn,
+        perr,
+        host,
+        state: paneState,
+        editor: null,
+        hl: null,
+      };
+    }
+    const pLeft = makePane(ed.left);
+    const pRight = makePane(ed.right);
+    const panes = [pLeft, pRight];
+
+    /* селект типа артефакта: опции по главе, выбор — прежний или первый */
+    function fillTypeSel(pInfo) {
+      const opts = chapterTypes(ed.chapter);
+      pInfo.typeSel.replaceChildren();
+      for (const o of opts) {
+        pInfo.typeSel.append(h("option", { value: o.name }, o.label));
+      }
+      if (opts.some((o) => o.name === pInfo.state.type)) {
+        pInfo.typeSel.value = pInfo.state.type;
+      } else {
+        pInfo.typeSel.value = opts.length ? opts[0].name : "";
+        pInfo.state.type = pInfo.typeSel.value || null;
+      }
+      return pInfo.state.type;
+    }
+
+    /* загрузка артефакта главы в редактор (первый раз — создаёт CM) */
+    async function loadPane(pInfo) {
+      const type = pInfo.state.type;
+      if (!type) {
+        if (pInfo.editor) pInfo.editor.setValue("");
+        pInfo.meta.textContent = "—";
+        pInfo.saveBtn.disabled = true;
+        pInfo.state.text = null;
+        return;
+      }
+      const path = `chapters/${ed.chapter}/${type}`;
+      const q = new URLSearchParams({ project: `${section}/${name}`, path });
+      pInfo.perr.textContent = "";
+      pInfo.meta.textContent = "загрузка…";
+      try {
+        const data = await api(`/file?${q}`);
+        pInfo.state.text = data.content;
+        pInfo.state.dirty = false;
+        pInfo.meta.textContent = `${fmtSize(data.size)} · ${type}`;
+        if (pInfo.editor) {
+          pInfo.editor.setValue(data.content);
+        } else {
+          pInfo.editor = makeEditor(data.content, "txt", () => {
+            pInfo.state.text = pInfo.editor.getValue();
+            pInfo.state.dirty = true;
+            pInfo.saveBtn.disabled = false;
+            scheduleHighlight(pInfo);
+          });
+          pInfo.host.replaceChildren(pInfo.editor.root);
+        }
+        pInfo.saveBtn.disabled = false;
+        maybeHl(pInfo);
+      } catch (ex) {
+        pInfo.state.text = null;
+        pInfo.perr.textContent = ex.message;
+        pInfo.meta.textContent = "";
+        pInfo.saveBtn.disabled = true;
+      }
+    }
+
+    async function savePane(pInfo) {
+      if (!pInfo.state.type || pInfo.state.text == null) return;
+      pInfo.perr.textContent = "";
+      const path = `chapters/${ed.chapter}/${pInfo.state.type}`;
+      try {
+        await api("/file", {
+          method: "PUT",
+          body: {
+            project: `${section}/${name}`,
+            path,
+            content: pInfo.state.text,
+          },
+        });
+        pInfo.state.dirty = false;
+        pInfo.meta.textContent = `${fmtSize(pInfo.state.text.length)} · ${pInfo.state.type}`;
+        toast("Сохранено");
+      } catch (ex) {
+        pInfo.perr.textContent = ex.message;
+      }
+    }
+
+    /* ── подсветка терминов глоссария поверх редактора ── */
+    async function ensureNer() {
+      if (ed.ner) return;
+      const q = new URLSearchParams({ project: `${section}/${name}` });
+      const data = await api(`/ner?${q}`);
+      ed.ner = {
+        items: data.items || [],
+        matcher: UICore.buildGlossaryMatcher(data.items || []),
+      };
+    }
+
+    function scheduleHighlight(pInfo) {
+      if (!ed.hl || !ed.ner || !pInfo.editor) return;
+      if (pInfo.hlTimer) clearTimeout(pInfo.hlTimer);
+      pInfo.hlTimer = setTimeout(() => {
+        pInfo.hlTimer = null;
+        computeHighlight(pInfo);
+      }, 150);
+    }
+
+    function computeHighlight(pInfo) {
+      const h = pInfo.hl;
+      if (!h || !pInfo.editor || !pInfo.editor.isCM) return;
+      const view = pInfo.editor.view;
+      const text = view.state.doc.toString();
+      h.matches = UICore.glossaryMatches(text, ed.ner.matcher).sort(
+        (a, b) => a.from - b.from,
+      );
+      placeMarks(pInfo);
+    }
+
+    function placeMarks(pInfo) {
+      const h = pInfo.hl;
+      if (!h || !pInfo.editor || !pInfo.editor.isCM) return;
+      const view = pInfo.editor.view;
+      const scroller = view.scrollDOM;
+      const scrollRect = scroller.getBoundingClientRect();
+      const layer = h.layer;
+      if (!layer.isConnected) scroller.append(layer);
+      layer.replaceChildren();
+      const ranges = view.visibleRanges;
+      let lastEnd = -1;
+      for (let i = 0; i < h.matches.length; i++) {
+        const m = h.matches[i];
+        if (m.from < lastEnd) continue; // перекрытия — только первое
+        lastEnd = m.to;
+        if (!inRanges(m.from, m.to, ranges)) continue;
+        const a = view.coordsAtPos(m.from);
+        const b = view.coordsAtPos(m.to);
+        if (!a || !b) continue;
+        const span = h("span", { class: "hl-mark" });
+        span.style.left = a.left - scrollRect.left + scroller.scrollLeft + "px";
+        span.style.top = a.top - scrollRect.top + scroller.scrollTop + "px";
+        span.style.width = Math.max(2, b.right - a.left) + "px";
+        span.style.height = Math.max(1, b.bottom - a.top) + "px";
+        span.dataset.i = String(i);
+        layer.append(span);
+      }
+    }
+
+    function inRanges(from, to, ranges) {
+      for (const r of ranges) {
+        if (to <= r.from) return false;
+        if (from < r.to) return true;
+      }
+      return false;
+    }
+
+    function findAt(matches, pos) {
+      const ms = matches || null;
+      if (!ms) return null;
+      let lo = 0;
+      let hi = ms.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const m = ms[mid];
+        if (pos < m.from) hi = mid - 1;
+        else if (pos >= m.to) lo = mid + 1;
+        else return m;
+      }
+      return null;
+    }
+
+    function moveTip(pInfo, e) {
+      const h = pInfo.hl;
+      if (!h || !pInfo.editor || !pInfo.editor.isCM) return;
+      const view = pInfo.editor.view;
+      const tip = h.tip;
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      const m = pos == null ? null : findAt(h.matches, pos);
+      if (!m || !m.item) {
+        tip.style.display = "none";
+        return;
+      }
+      const a = view.coordsAtPos(m.from);
+      if (!a) {
+        tip.style.display = "none";
+        return;
+      }
+      const hostRect = pInfo.host.getBoundingClientRect();
+      const term = String(m.item.term || "");
+      const translation = String(m.item.translation || "");
+      const type = String(m.item.type || "");
+      const notes = String(m.item.notes || "");
+      tip.replaceChildren(
+        h("div", { class: "hl-tip-term" }, term || "?"),
+        translation
+          ? h("div", { class: "hl-tip-row" }, `Перевод: ${translation}`)
+          : null,
+        type ? h("div", { class: "hl-tip-row" }, `Тип: ${type}`) : null,
+        notes ? h("div", { class: "hl-tip-notes" }, notes) : null,
+        h(
+          "button",
+          {
+            class: "btn btn-sm hl-tip-btn",
+            onclick: () => goGlossary(term || translation),
+          },
+          "→ Глоссарий",
+        ),
+      );
+      tip.style.display = "block";
+      const x = a.left - hostRect.left + 12;
+      const y = a.top - hostRect.top - tip.offsetHeight - 8;
+      tip.style.left =
+        Math.max(4, Math.min(x, hostRect.width - tip.offsetWidth - 8)) + "px";
+      tip.style.top =
+        Math.max(4, Math.min(y, hostRect.height - tip.offsetHeight - 8)) + "px";
+    }
+
+    function attachHl(pInfo) {
+      if (!pInfo.editor || !pInfo.editor.isCM) return;
+      const view = pInfo.editor.view;
+      const scroller = view.scrollDOM;
+      const layer = h("div", { class: "ed-hl-layer" });
+      const tip = h("div", { class: "hl-tip" });
+      tip.style.display = "none";
+      pInfo.host.append(tip);
+      pInfo.hl = { layer, tip, matches: [] };
+      scroller.append(layer);
+      scroller.addEventListener("mousemove", (e) => moveTip(pInfo, e));
+      scroller.addEventListener("mouseleave", () => {
+        pInfo.hl.tip.style.display = "none";
+      });
+      scroller.addEventListener("scroll", () => {
+        pInfo.hl.tip.style.display = "none";
+      });
+      if (typeof ResizeObserver === "function") {
+        const ro = new ResizeObserver(() => placeMarks(pInfo));
+        ro.observe(pInfo.host);
+      }
+      computeHighlight(pInfo);
+    }
+
+    function detachHl(pInfo) {
+      if (!pInfo.hl) return;
+      pInfo.hl.layer.remove();
+      pInfo.hl.tip.remove();
+      pInfo.hl = null;
+    }
+
+    async function maybeHl(pInfo) {
+      if (!ed.hl || !pInfo.editor) return;
+      try {
+        await ensureNer();
+        attachHl(pInfo);
+      } catch (ex) {
+        toast(ex.message, "err");
+      }
+    }
+
+    function goGlossary(term) {
+      st.view = "ner";
+      st.search = term || "";
+      render();
+    }
+
+    /* ── сборка интерфейса ── */
+    const chapterSel = h("select", { class: "input ed-chapter" });
+    for (const c of chapters) {
+      chapterSel.append(h("option", { value: c.dir }, c.dir));
+    }
+    chapterSel.value = ed.chapter;
+    const modeBtn = h("button", { class: "btn btn-sm btn-ghost" });
+    const hlBtn = h("button", { class: "btn btn-sm btn-ghost" });
+    function renderModeLabel() {
+      modeBtn.textContent = ed.mode === "two" ? "Один файл" : "Два файла";
+    }
+    function renderHlLabel() {
+      hlBtn.textContent = ed.hl ? "Подсветка: вкл" : "Подсветка: выкл";
+      hlBtn.classList.toggle("btn-active", ed.hl);
+    }
+
+    function rebuildGrid() {
+      grid.replaceChildren();
+      grid.classList.toggle("ed-grid-two", ed.mode === "two");
+      grid.append(ed.mode === "two" ? [pLeft.pane, pRight.pane] : [pLeft.pane]);
+    }
+
+    chapterSel.addEventListener("change", () => {
+      ed.chapter = chapterSel.value;
+      for (const p of panes) {
+        p.state.type = null;
+        p.state.text = null;
+        p.state.dirty = false;
+        if (p.editor) p.editor.setValue("");
+        p.meta.textContent = "—";
+        p.saveBtn.disabled = true;
+      }
+      fillTypeSel(pLeft);
+      fillTypeSel(pRight);
+      loadPane(pLeft);
+      loadPane(pRight);
+    });
+    for (const p of panes) {
+      p.typeSel.addEventListener("change", () => {
+        p.state.type = p.typeSel.value || null;
+        p.state.text = null;
+        loadPane(p);
+      });
+      p.saveBtn.addEventListener("click", () => savePane(p));
+    }
+    modeBtn.addEventListener("click", () => {
+      ed.mode = ed.mode === "two" ? "one" : "two";
+      renderModeLabel();
+      rebuildGrid();
+    });
+    hlBtn.addEventListener("click", () => {
+      ed.hl = !ed.hl;
+      renderHlLabel();
+      if (ed.hl) {
+        for (const p of panes) maybeHl(p);
+      } else {
+        for (const p of panes) detachHl(p);
+      }
+    });
+
+    toolbar.append(
+      chapterSel,
+      modeBtn,
+      hlBtn,
+      h("span", { class: "spacer" }),
+      h("span", { class: "field-help" }, "правка — только этот браузер"),
+    );
+    renderModeLabel();
+    renderHlLabel();
+    rebuildGrid();
+    fillTypeSel(pLeft);
+    fillTypeSel(pRight);
+    loadPane(pLeft);
+    loadPane(pRight);
+    wrap.append(toolbar, grid);
+    return wrap;
+  }
+
   /* ── Глоссарий NER ───────────────────────────── */
   async function nerView() {
     const q = new URLSearchParams({ project: `${section}/${name}` });
@@ -446,6 +949,7 @@ function viewProject(section, name) {
     }
 
     const search = h("input", { class: "input", placeholder: "Поиск…" });
+    if (st.search) search.value = st.search; // раунд 23: из «→ Глоссарий» редактора
     const typeFilter = h("select", { class: "input" });
     const table = h("table", { class: "ner-table" });
     const tbody = h("tbody");
