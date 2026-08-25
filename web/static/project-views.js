@@ -10,7 +10,6 @@ function viewProject(section, name) {
     editor: null, // раунд 23: вкладка «Редактор» (глава/панели/подсветка)
   };
   const page = h("div", { class: "page" });
-  let nerMetaEl = null; // счётчик терминов глоссария — справа в шапке
 
   function setPath(path) {
     st.path = path || "";
@@ -46,9 +45,6 @@ function viewProject(section, name) {
 
   async function render() {
     page.replaceChildren();
-    /* счётчик глоссария: заполняет nerView, в остальных вкладках скрыт */
-    nerMetaEl = h("div", { class: "ner-meta" });
-    nerMetaEl.style.display = "none";
     const header = h(
       "div",
       { class: "page-header" },
@@ -59,14 +55,9 @@ function viewProject(section, name) {
         h("div", { class: "page-sub" }, `${section} · проект`),
       ),
       h(
-        "div",
-        { class: "page-header-side" },
-        h(
-          "a",
-          { class: "btn btn-sm", href: `#/run/${section}/${name}` },
-          "▶ Запуски",
-        ),
-        nerMetaEl,
+        "a",
+        { class: "btn btn-sm", href: `#/run/${section}/${name}` },
+        "▶ Запуски",
       ),
     );
     const tabs = h(
@@ -1476,6 +1467,11 @@ function viewProject(section, name) {
     let page = 0; // M6: текущая страница таблицы
     const colLabel = (key) => COL_LABELS[key] || key;
     const visibleCols = () => (cols == null ? [...knownKeys] : cols);
+    function colsLabel() {
+      if (cols == null) return "Все столбцы";
+      if (cols.length === 1) return colLabel(cols[0]);
+      return `Столбцы (${cols.length})`;
+    }
     /* R8-5: значения-объекты/массивы (напр. _votes_pinyin) показываем
        компактным JSON, а не «[object Object]» */
     const cellText = UICore.nerCellText;
@@ -1897,8 +1893,16 @@ function viewProject(section, name) {
       renderRows();
     }
 
-    /* «Столбцы»: чекбоксы всех ключей записи (единая модалка «Все / набор») */
-    const colBtn = h("button", { class: "btn btn-sm btn-ghost" }, "Столбцы");
+    /* «Столбцы»: чекбоксы всех ключей записи (единая модалка «Все / набор»),
+       подпись как у полей/типов: «Все столбцы» / «Столбцы (N)» */
+    const colBtn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost", title: "Какие столбцы показывать" },
+      colsLabel(),
+    );
+    function refreshColBtn() {
+      colBtn.textContent = colsLabel();
+    }
     colBtn.addEventListener("click", () => {
       openToggleAllModal({
         title: "Столбцы глоссария",
@@ -1910,11 +1914,13 @@ function viewProject(section, name) {
         set: (next) => {
           cols = next;
           saveCols();
+          refreshColBtn();
           renderRows();
         },
         reset: () => {
           cols = [...DEFAULT_COLS];
           saveCols();
+          refreshColBtn();
           renderRows();
         },
       });
@@ -1993,6 +1999,7 @@ function viewProject(section, name) {
       "button",
       {
         class: "btn btn-sm",
+        title: "Добавить термин в глоссарий",
         onclick: () => {
           const it = { term: "", type: "noun", translation: "", __new: true };
           data.items.push(it);
@@ -2007,28 +2014,20 @@ function viewProject(section, name) {
     /* Экспорт для анализа: настройки в модалке, файл скачивается */
     const exportBtn = h(
       "button",
-      { class: "btn btn-sm btn-ghost" },
+      {
+        class: "btn btn-sm btn-ghost",
+        title: "Скачать ner.json для анализа (все записи)",
+      },
       "⬇ Экспорт для анализа",
     );
     exportBtn.addEventListener("click", () =>
       exportModal(data.by_type || {}, `${section}/${name}`),
     );
-    if (nerMetaEl) {
-      nerMetaEl.textContent = `Всего: ${data.total}`;
-      nerMetaEl.style.display = "";
-    }
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
-      h(
-        "span",
-        { class: "ner-search" },
-        h("span", { class: "field-help" }, "Поиск:"),
-        search,
-        searchFieldsBtn,
-      ),
+      h("span", { class: "ner-search" }, search, searchFieldsBtn),
       h("span", { class: "spacer" }),
-      h("span", { class: "field-help" }, "Показывать:"),
       typeBtn,
       colBtn,
       addBtn,

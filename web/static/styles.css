@@ -145,16 +145,6 @@ body {
  color: var(--muted);
  font-size: 13px;
 }
-/* счётчик глоссария: под кнопкой «Запуски», на уровне подзаголовка */
-.page-header-side {
- display: flex;
- flex-direction: column;
- align-items: flex-end;
-}
-.page-header-side .ner-meta {
- margin-top: 4px;
- white-space: nowrap;
-}
 
 .cards {
  display: grid;
@@ -920,10 +910,6 @@ a.fname:hover {
 .ner-actions {
  white-space: nowrap;
  text-align: right;
-}
-.ner-meta {
- color: var(--text-dim);
- font-size: 13px;
 }
 /* M6/M8: пагинация таблиц глоссария и отчётов */
 .ner-pager {
