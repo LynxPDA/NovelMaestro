@@ -898,6 +898,10 @@ a.fname:hover {
  display: flex;
  align-items: center;
  gap: 6px;
+ flex-shrink: 0;
+}
+.ner-search .input {
+ min-width: 160px;
 }
 .ner-type {
  color: var(--accent);

@@ -95,20 +95,26 @@
     }
     return { field: clicked || field || "count", dir: "desc" };
   }
+  function nerTypeAllowed(type, typeFilter) {
+    if (typeFilter == null || typeFilter === "") return true;
+    if (Array.isArray(typeFilter)) {
+      if (!typeFilter.length) return false;
+      return typeFilter.indexOf(type) !== -1;
+    }
+    return type === String(typeFilter);
+  }
   function filterNerItems(items, query, fields, typeFilter) {
     var list = items || [];
     var qq = String(query || "").trim().toLowerCase();
-    var tf = typeFilter ? String(typeFilter) : "";
-    var keys = fields && fields.length ? fields : null;
-    return list.filter(function (it) {
+    var keys = fields == null ? null : fields;
+    return list.filter((it) => {
       var type = String(it.type || "");
-      if (tf && type !== tf) return false;
+      if (!nerTypeAllowed(type, typeFilter)) return false;
       if (!qq) return true;
+      if (keys && !keys.length) return false;
       var searchKeys =
         keys ||
-        Object.keys(it).filter(function (k) {
-          return k !== "__new";
-        });
+        Object.keys(it).filter((k) => k !== "__new");
       for (var i = 0; i < searchKeys.length; i++) {
         if (nerCellText(it[searchKeys[i]]).toLowerCase().includes(qq)) {
           return true;
@@ -121,7 +127,7 @@
     var list = (items || []).slice();
     if (!field) return list;
     var sign = dir === "asc" ? 1 : -1;
-    list.sort(function (a, b) {
+    list.sort((a, b) => {
       var av = a[field];
       var bv = b[field];
       if (av == null && bv == null) return 0;
@@ -234,9 +240,7 @@
       var b = Math.max(a, Math.min(Number(to) || 0, src.length));
       var lim = Number(maxLen);
       if (!isFinite(lim) || lim <= 0) lim = 200;
-      var isEnd = function (ch) {
-        return /[。！？.!?…\n]/.test(ch);
-      };
+      var isEnd = (ch) => /[。！？.!?…\n]/.test(ch);
       var start = a;
       while (start > 0 && !isEnd(src.charAt(start - 1))) start--;
       var end = b;

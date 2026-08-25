@@ -379,3 +379,18 @@ test("filterNerItems: по выбранным полям и типу", () => {
   assert.equal(UICore.filterNerItems(items, "", ["term"], "skill").length, 1);
   assert.equal(UICore.filterNerItems(items, "огонь", ["translation"], "person").length, 0);
 });
+
+test("filterNerItems: пустые поля/типы и набор типов", () => {
+  const items = [
+    { term: "林凡", type: "person", translation: "Лин Фань", notes: "гг" },
+    { term: "火", type: "skill", translation: "огонь", notes: "стихия" },
+  ];
+  assert.equal(UICore.filterNerItems(items, "гг", [], "").length, 0);
+  assert.equal(UICore.filterNerItems(items, "", null, []).length, 0);
+  assert.equal(
+    UICore.filterNerItems(items, "", null, ["person", "skill"]).length,
+    2,
+  );
+  assert.equal(UICore.filterNerItems(items, "", null, ["person"]).length, 1);
+  assert.equal(UICore.filterNerItems(items, "", [], "").length, 2);
+});

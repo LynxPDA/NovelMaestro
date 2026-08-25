@@ -1456,7 +1456,6 @@ function viewProject(section, name) {
       search.value = st.search;
       st.search = null;
     }
-    const typeFilter = h("select", { class: "input" });
     const table = h("table", { class: "ner-table" });
     const tbody = h("tbody");
     const pager = h("div", { class: "ner-pager" });
@@ -1473,35 +1472,48 @@ function viewProject(section, name) {
     let sortDir = "desc";
 
     const LS_SEARCH_KEY = `nerSearch:${section}/${name}`;
-    let searchFields = null; // null = все поля записи
+    const LS_TYPES_KEY = `nerTypes:${section}/${name}`;
+    let searchFields = null; // null = все поля, [] = ни одного
+    let typeFilter = null; // null = все типы, [] = ни одного
     try {
       const saved = JSON.parse(localStorage.getItem(LS_SEARCH_KEY) || "null");
-      if (Array.isArray(saved) && saved.length) {
-        const filtered = saved.filter((k) => knownKeys.has(k));
-        searchFields =
-          filtered.length && filtered.length < knownKeys.size
-            ? filtered
-            : null;
+      if (Array.isArray(saved)) {
+        if (!saved.length) {
+          searchFields = [];
+        } else {
+          const filtered = saved.filter((k) => knownKeys.has(k));
+          searchFields =
+            filtered.length && filtered.length < knownKeys.size
+              ? filtered
+              : null;
+        }
       }
     } catch {
       searchFields = null;
     }
-
-    function renderTypeFilter() {
-      typeFilter.replaceChildren(h("option", { value: "" }, "Все типы"));
-      for (const t of Object.keys(data.by_type || {})) {
-        typeFilter.append(
-          h("option", { value: t }, `${t} (${data.by_type[t]})`),
-        );
+    const typeNames = () => Object.keys(data.by_type || {});
+    try {
+      const saved = JSON.parse(localStorage.getItem(LS_TYPES_KEY) || "null");
+      if (Array.isArray(saved)) {
+        if (!saved.length) {
+          typeFilter = [];
+        } else {
+          const all = typeNames();
+          const filtered = saved.filter((t) => all.includes(t));
+          typeFilter =
+            filtered.length && filtered.length < all.length ? filtered : null;
+        }
       }
+    } catch {
+      typeFilter = null;
     }
+
     function visible() {
-      const fields = searchFields == null ? [...knownKeys] : searchFields;
       const filtered = UICore.filterNerItems(
         data.items,
         search.value,
-        fields,
-        typeFilter.value,
+        searchFields,
+        typeFilter,
       );
       return UICore.sortNerItems(filtered, sortField, sortDir);
     }
@@ -1519,10 +1531,97 @@ function viewProject(section, name) {
         /* localStorage недоступен (приватный режим) — не критично */
       }
     }
+    function saveTypeFilter() {
+      try {
+        localStorage.setItem(LS_TYPES_KEY, JSON.stringify(typeFilter));
+      } catch {
+        /* localStorage недоступен (приватный режим) — не критично */
+      }
+    }
     function searchFieldsLabel() {
-      if (!searchFields) return "Все поля";
+      if (searchFields == null) return "Все поля";
       if (searchFields.length === 1) return colLabel(searchFields[0]);
       return `Поля (${searchFields.length})`;
+    }
+    function typeFilterLabel() {
+      if (typeFilter == null) return "Все типы";
+      if (typeFilter.length === 1) {
+        const t = typeFilter[0];
+        const n = (data.by_type || {})[t];
+        return n == null ? t : `${t} (${n})`;
+      }
+      return `Типы (${typeFilter.length})`;
+    }
+    /* модалка «все / ничего / набор»: клик по «Все» снимает или ставит все */
+    function openToggleAllModal(opts) {
+      const allKeys = [...opts.keys];
+      const allCb = h("input", { type: "checkbox" });
+      const itemCbs = [];
+      function current() {
+        return opts.get();
+      }
+      function apply(next) {
+        opts.set(next);
+        allCb.checked = next == null;
+        const set = new Set(next == null ? allKeys : next);
+        for (const { k, cb } of itemCbs) cb.checked = set.has(k);
+      }
+      allCb.checked = current() == null;
+      allCb.addEventListener("change", () => {
+        apply(allCb.checked ? null : []);
+      });
+      const rows = allKeys.map((k) => {
+        const cb = h("input", { type: "checkbox" });
+        const cur = current();
+        cb.checked = cur == null || cur.includes(k);
+        itemCbs.push({ k, cb });
+        cb.addEventListener("change", () => {
+          const set = new Set(current() == null ? allKeys : current());
+          if (cb.checked) set.add(k);
+          else set.delete(k);
+          apply(
+            set.size === allKeys.length
+              ? null
+              : allKeys.filter((x) => set.has(x)),
+          );
+        });
+        return h("label", { class: "ner-col-row" }, cb, " " + opts.labelOf(k));
+      });
+      const modal = h(
+        "div",
+        {
+          class: "modal-backdrop",
+          onclick: (e) => e.target === modal && close(),
+        },
+        h(
+          "div",
+          { class: "modal" },
+          h("div", { class: "modal-title" }, opts.title),
+          h("div", { class: "modal-text" }, opts.text),
+          h("label", { class: "ner-col-row" }, allCb, " " + opts.allLabel),
+          ...rows,
+          h(
+            "div",
+            { class: "modal-actions" },
+            h(
+              "button",
+              {
+                class: "btn btn-ghost",
+                onclick: () => {
+                  apply(null);
+                  close();
+                },
+              },
+              "Сбросить",
+            ),
+            h("button", { class: "btn btn-primary", onclick: close }, "Готово"),
+          ),
+        ),
+      );
+      document.body.append(modal);
+      function close() {
+        modal.remove();
+      }
     }
     async function saveNer() {
       try {
@@ -1847,79 +1946,49 @@ function viewProject(section, name) {
       searchFieldsBtn.textContent = searchFieldsLabel();
     }
     searchFieldsBtn.addEventListener("click", () => {
-      const allKeys = [...knownKeys];
-      const allCb = h("input", { type: "checkbox" });
-      allCb.checked = searchFields == null;
-      const fieldCbs = [];
-      function currentSet() {
-        return new Set(searchFields == null ? allKeys : searchFields);
-      }
-      function applySet(set) {
-        if (set.size === 0) return false;
-        searchFields =
-          set.size === knownKeys.size ? null : allKeys.filter((k) => set.has(k));
-        allCb.checked = searchFields == null;
-        for (const { k, cb } of fieldCbs) cb.checked = set.has(k);
-        saveSearchFields();
-        refreshSearchFieldsBtn();
-        page = 0;
-        renderRows();
-        return true;
-      }
-      const rows = allKeys.map((k) => {
-        const cb = h("input", { type: "checkbox" });
-        cb.checked = searchFields == null || searchFields.includes(k);
-        fieldCbs.push({ k, cb });
-        cb.addEventListener("change", () => {
-          const set = currentSet();
-          if (cb.checked) set.add(k);
-          else set.delete(k);
-          if (!applySet(set)) cb.checked = true; // последнее поле не снимаем
-        });
-        return h("label", { class: "ner-col-row" }, cb, " " + colLabel(k));
-      });
-      allCb.addEventListener("change", () => {
-        applySet(new Set(allKeys)); // «Все поля» всегда выбирает полный набор
-      });
-      const modal = h(
-        "div",
-        {
-          class: "modal-backdrop",
-          onclick: (e) => e.target === modal && close(),
+      openToggleAllModal({
+        title: "Где искать",
+        text: "Поля записи, в которых ищется строка:",
+        allLabel: "Все поля",
+        keys: [...knownKeys],
+        labelOf: colLabel,
+        get: () => searchFields,
+        set: (next) => {
+          searchFields = next;
+          saveSearchFields();
+          refreshSearchFieldsBtn();
+          page = 0;
+          renderRows();
         },
-        h(
-          "div",
-          { class: "modal" },
-          h("div", { class: "modal-title" }, "Где искать"),
-          h(
-            "div",
-            { class: "modal-text" },
-            "Поля записи, в которых ищется строка:",
-          ),
-          h("label", { class: "ner-col-row" }, allCb, " Все поля"),
-          ...rows,
-          h(
-            "div",
-            { class: "modal-actions" },
-            h(
-              "button",
-              {
-                class: "btn btn-ghost",
-                onclick: () => {
-                  applySet(new Set(allKeys));
-                  close();
-                },
-              },
-              "Сбросить",
-            ),
-            h("button", { class: "btn btn-primary", onclick: close }, "Готово"),
-          ),
-        ),
-      );
-      document.body.append(modal);
-      function close() {
-        modal.remove();
-      }
+      });
+    });
+    const typeBtn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost", title: "Фильтр типов" },
+      typeFilterLabel(),
+    );
+    function refreshTypeBtn() {
+      typeBtn.textContent = typeFilterLabel();
+    }
+    typeBtn.addEventListener("click", () => {
+      openToggleAllModal({
+        title: "Типы",
+        text: "Какие типы записей показывать:",
+        allLabel: "Все типы",
+        keys: typeNames(),
+        labelOf: (t) => {
+          const n = (data.by_type || {})[t];
+          return n == null ? t : `${t} (${n})`;
+        },
+        get: () => typeFilter,
+        set: (next) => {
+          typeFilter = next;
+          saveTypeFilter();
+          refreshTypeBtn();
+          page = 0;
+          renderRows();
+        },
+      });
     });
 
     const addBtn = h(
@@ -1951,9 +2020,9 @@ function viewProject(section, name) {
       "div",
       { class: "files-toolbar" },
       meta,
-      h("span", { class: "spacer" }),
       h("span", { class: "ner-search" }, search, searchFieldsBtn),
-      typeFilter,
+      h("span", { class: "spacer" }),
+      typeBtn,
       colBtn,
       addBtn,
       exportBtn,
@@ -1962,11 +2031,6 @@ function viewProject(section, name) {
       page = 0; // M6: фильтр — на первую страницу
       renderRows();
     });
-    typeFilter.addEventListener("change", () => {
-      page = 0;
-      renderRows();
-    });
-    renderTypeFilter();
     renderRows();
     return h("div", { class: "files-wrap" }, toolbar, table, pager);
   }
