@@ -88,6 +88,33 @@ def test_pipeline_script_path():
     assert p.name == "pipeline.py"
 
 
+def test_pipeline_action_options():
+    """Тип работы: 8 вариантов с подписями исходников/циклов;
+    дефолт — полный цикл (8)."""
+    from web.stages import _LLM_FIELDS
+    spec = spec_for("pipeline")
+    assert spec is not None
+    action = next(f for f in spec["fields"] if f["name"] == "action")
+    assert action["type"] == "select"
+    assert action["options"] == ["1", "2", "3", "4", "5", "6", "7", "8"]
+    assert action["default"] == "8"
+    labels = action["labels"]
+    assert labels["1"] == "Перевод"
+    assert labels["2"] == "Редактура (исходник - Перевод)"
+    assert labels["3"] == "Полировка (исходник - Редактура)"
+    assert labels["4"] == "Полировка (исходник - Перевод)"
+    assert labels["5"] == "Сокращенный цикл: Перевод -> Редактура"
+    assert labels["6"] == "Сокращенный цикл: Перевод -> Полировка"
+    assert labels["7"] == "Сокращенный цикл: Редактура -> Полировка"
+    assert labels["8"] == "Полный цикл: Перевод -> Редактура -> Полировка"
+    # единая модель конвейера: PIPELINE_MODEL → MODEL
+    model = next(f for f in spec["fields"] if f["name"] == "model")
+    assert model in _LLM_FIELDS
+    from web.stages import env_keys_for
+    assert env_keys_for("pipeline", "model") == ["PIPELINE_MODEL", "MODEL"]
+    assert env_keys_for("pipeline", "host") == ["HOST"]
+
+
 def test_build_pipeline_argv():
     form = {"action": "translate_check", "start": "1", "end": "5", "jobs": "4",
             "timeout": "300", "host": "http://127.0.0.1:9989",
@@ -174,35 +201,26 @@ def test_build_stage_cmd_prompt_override(tmp_path):
     assert "--prompt_file" in cmd
     assert cmd[cmd.index("--prompt_file") + 1] == \
         "prompts/pipeline_prompt.txt"
-    # без переданного — дефолт стадии (раунд 19: как было)
+    # без переданного — дефолт стадии (как было)
     cmd2 = build_stage_cmd(2, script, tmp_path / "in", tmp_path / "out",
                            "http://h", "k", "м", 300)
     assert cmd2[cmd2.index("--prompt_file") + 1] == \
         "prompts/redact_prompt.txt"
 
 
-def test_build_stage_cmd_stage_models(tmp_path):
-    """Раунд 12: модель по стадии (stage_models) приоритетнее общей."""
+def test_build_stage_cmd_single_model(tmp_path):
+    """единая модель конвейера — без stage_models: переданная модель
+    уходит во все стадии как есть."""
     from web.pipeline import build_stage_cmd
     script = tmp_path / "translate_book.py"
+    for stage in (1, 2, 3):
+        cmd = build_stage_cmd(stage, script, tmp_path / "in",
+                              tmp_path / "out",
+                              "http://h", "k", "общая", 300)
+        assert "--model общая" in " ".join(cmd)
+    # потоки на главу — по умолчанию 1, пробрасываются в argv
     cmd = build_stage_cmd(1, script, tmp_path / "in", tmp_path / "out",
-                          "http://h", "k", "общая", 300,
-                          stage_models={1: "translate-model",
-                                        2: "redact-model",
-                                        3: "polish-model"})
-    joined = " ".join(cmd)
-    assert "--model translate-model" in joined
-    cmd3 = build_stage_cmd(3, script, tmp_path / "in", tmp_path / "out",
-                           "http://h", "k", "общая", 300,
-                           stage_models={1: "translate-model",
-                                         2: "redact-model",
-                                         3: "polish-model"})
-    assert "--model polish-model" in " ".join(cmd3)
-    # стадия без своей модели → общая
-    cmd2 = build_stage_cmd(2, script, tmp_path / "in", tmp_path / "out",
-                           "http://h", "k", "общая", 300)
-    assert "--model общая" in " ".join(cmd2)
-    # раунд 14: потоки на главу — по умолчанию 1, пробрасываются в argv
+                          "http://h", "k", "м", 300)
     assert "--threads" in cmd and "1" in cmd
     cmd4 = build_stage_cmd(1, script, tmp_path / "in", tmp_path / "out",
                            "http://h", "k", "м", 300, threads=4)
@@ -241,9 +259,9 @@ def test_pipeline_help_smoke():
 
 
 def test_pipeline_full_cycle_events(tmp_path):
-    """Полный цикл: 3 главы × 3 стадии → 9 OK-событий @@CHAPTER@@."""
+    """Полный цикл (действие 8): 3 главы × 3 стадии → 9 OK-событий."""
     proj, fake = _make_project(tmp_path)
-    cmd = [sys.executable, str(PIPELINE), "--action", "4",
+    cmd = [sys.executable, str(PIPELINE), "--action", "8",
            "--start", "1", "--end", "3", "--jobs", "2",
            "--script", str(fake), *_PIPELINE_ARGS]
     r = subprocess.run(cmd, capture_output=True, text=True,
@@ -260,6 +278,50 @@ def test_pipeline_full_cycle_events(tmp_path):
         assert (d / "translated.txt").is_file()
         assert (d / "redacted.txt").is_file()
         assert (d / "polished.txt").is_file()
+
+
+def test_pipeline_polish_from_translated(tmp_path):
+    """Действие 4 — полировка (исходник - Перевод): вход translated.txt,
+    а не redacted.txt (redacted.txt не создаём — иначе был бы SKIP)."""
+    proj, fake = _make_project(tmp_path)
+    for n in (1, 2, 3):
+        d = proj / "chapters" / f"{n:05d}_1"
+        (d / "translated.txt").write_text("перевод\n", encoding="utf-8")
+    cmd = [sys.executable, str(PIPELINE), "--action", "4",
+           "--start", "1", "--end", "3", "--jobs", "3",
+           "--script", str(fake), *_PIPELINE_ARGS]
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       timeout=120, cwd=str(proj))
+    assert r.returncode == 0, r.stderr[-500:]
+    events = [json.loads(l[len(CHAPTER_PREFIX):])
+              for l in r.stdout.splitlines()
+              if l.startswith(CHAPTER_PREFIX)]
+    ok = [e for e in events if e["status"] == "OK"]
+    assert len(ok) == 3, [e for e in events if e["status"] != "OK"]
+    for n in (1, 2, 3):
+        assert (proj / "chapters" / f"{n:05d}_1" / "polished.txt").is_file()
+
+
+def test_pipeline_translate_then_polish(tmp_path):
+    """Действие 6 — сокращённый цикл перевод→полировка: 2 стадии на главу,
+    полировка читает translated.txt (redacted.txt не создаётся)."""
+    proj, fake = _make_project(tmp_path)
+    cmd = [sys.executable, str(PIPELINE), "--action", "6",
+           "--start", "1", "--end", "3", "--jobs", "3",
+           "--script", str(fake), *_PIPELINE_ARGS]
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       timeout=120, cwd=str(proj))
+    assert r.returncode == 0, r.stderr[-500:]
+    events = [json.loads(l[len(CHAPTER_PREFIX):])
+              for l in r.stdout.splitlines()
+              if l.startswith(CHAPTER_PREFIX)]
+    ok = [e for e in events if e["status"] == "OK"]
+    assert len(ok) == 6, [e for e in events if e["status"] != "OK"]
+    for n in (1, 2, 3):
+        d = proj / "chapters" / f"{n:05d}_1"
+        assert (d / "translated.txt").is_file()
+        assert (d / "polished.txt").is_file()
+        assert not (d / "redacted.txt").exists()
 
 
 def test_pipeline_single_stage(tmp_path):

@@ -53,9 +53,25 @@ _STAGE_IO = {
     3: ("redacted.txt", "polished.txt"),
 }
 _STAGE_NAME = {1: "translate", 2: "redact", 3: "polish"}
-_ACTION_NAMES = {1: "Перевод", 2: "Редактура", 3: "Полировка",
-                 4: "Полный цикл (→→→)"}
-_FULL_CYCLE = [1, 2, 3]
+# Типы работ: стадии конвейера + откуда полировка берёт исходник.
+# polish_input: "translated.txt" — полировка прямо из перевода (без редактуры);
+# не задан — дефолт _STAGE_IO[3] = redacted.txt.
+_ACTION_SPECS: dict[int, dict] = {
+    1: {"stages": [1], "name": "Перевод"},
+    2: {"stages": [2], "name": "Редактура (исходник - Перевод)"},
+    3: {"stages": [3], "name": "Полировка (исходник - Редактура)"},
+    4: {"stages": [3], "name": "Полировка (исходник - Перевод)",
+        "polish_input": "translated.txt"},
+    5: {"stages": [1, 2],
+        "name": "Сокращенный цикл: Перевод -> Редактура"},
+    6: {"stages": [1, 3],
+        "name": "Сокращенный цикл: Перевод -> Полировка",
+        "polish_input": "translated.txt"},
+    7: {"stages": [2, 3],
+        "name": "Сокращенный цикл: Редактура -> Полировка"},
+    8: {"stages": [1, 2, 3],
+        "name": "Полный цикл: Перевод -> Редактура -> Полировка"},
+}
 # Дефолты конвейера. Переопределяются из .env: PIPELINE_TIMEOUT,
 # PIPELINE_STREAM_TIMEOUT, PIPELINE_MAX_RETRIES, PIPELINE_CHUNK_SIZE,
 # PIPELINE_NER_THRESHOLD, PIPELINE_NER_NGRAM, PIPELINE_JOBS (R5-H).
@@ -243,11 +259,9 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     host: str, api_key: str, model: str,
                     timeout: int, temperature=None, reasoning_effort=None,
                     no_reasoning=False, stream_timeout=None,
-                    stage_models: dict | None = None,
                     threads: int = 1, prompt_file: str = "") -> list[str]:
-    # Раунд 12: модель по стадии (TRANSLATE/REDACT/POLISH_MODEL), иначе общая
-    if stage_models:
-        model = stage_models.get(stage) or model
+    # единая модель конвейера (PIPELINE_MODEL → MODEL) — без
+    # отдельных моделей под translate/redact/polish
     common = [
         "--host", host,
         "--model", model,
@@ -311,15 +325,20 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     tracker: Tracker,
                     temperature=None, reasoning_effort=None,
                     no_reasoning=False, stream_timeout=None,
-                    stage_models: dict | None = None,
                     threads: int = 1,
-                    prompts: dict[int, str] | None = None) -> bool:
-    """Одна глава: стадии по порядку, fail-fast (код 0 + файл + grep)."""
+                    prompts: dict[int, str] | None = None,
+                    polish_in: str | None = None) -> bool:
+    """Одна глава: стадии по порядку, fail-fast (код 0 + файл + grep).
+
+    polish_in — вход полировки вместо дефолтного redacted.txt
+    (полировка из перевода: действия 4 и 6)."""
     sub_timeout = timeout * 10 + 600
     for chapter_dir in dirs:
         for stage in stages:
             name = _STAGE_NAME[stage]
             in_name, out_name = _STAGE_IO[stage]
+            if stage == 3 and polish_in:
+                in_name = polish_in
             in_file = chapter_dir / in_name
             out_file = chapter_dir / out_name
             if not in_file.is_file():
@@ -458,7 +477,7 @@ def main() -> None:
     ap.add_argument("--host", default="", help="URL LLM-сервера (пусто = HOST из .env)")
     ap.add_argument("--api_key", default="", help="API-ключ (argv — только для тестов; в web идёт через LLM_API_KEY)")
     ap.add_argument("--model", default="",
-                    help="Модель (пусто = TRANSLATE/REDACT/POLISH_MODEL из .env → MODEL)")
+                    help="Модель (пусто = PIPELINE_MODEL из .env → MODEL)")
     ap.add_argument("--env_file", default=None, help="Путь к .env")
     ap.add_argument("--script", default=None,
                     help="Путь к translate_book.py (обычно не нужен)")
@@ -521,16 +540,8 @@ def main() -> None:
     api_key = args.api_key or sc["api_key"]
     if not api_key:
         api_key = os.environ.get("LLM_API_KEY", "")
-    # модели по стадиям (раунд 12): <STAGE>_MODEL → общая MODEL
-    stage_models = {
-        1: get_stage_model(env_data, "translate"),
-        2: get_stage_model(env_data, "redact"),
-        3: get_stage_model(env_data, "polish"),
-    }
-    if args.action == 4:
-        model = args.model or stage_models[1] or ""
-    else:
-        model = args.model or stage_models[args.action] or ""
+    # единая модель конвейера: PIPELINE_MODEL → общая MODEL
+    model = args.model or get_stage_model(env_data, "pipeline") or ""
 
     if not host:
         log.error("Host LLM-сервера не задан: укажите --host или создайте .env (HOST)")
@@ -548,10 +559,10 @@ def main() -> None:
         log.error("start > end: %d > %d", start, end)
         sys.exit(1)
 
-    stages = _FULL_CYCLE if args.action == 4 else [args.action]
-    action_label = "FullCycle" if args.action == 4 \
-        else _STAGE_NAME[args.action]
-    # Раунд 20: промпт-файлы — явные флаги > авто (кандидат с тегами /
+    action_spec = _ACTION_SPECS[args.action]
+    stages = action_spec["stages"]
+    action_label = action_spec["name"]
+    # промпт-файлы — явные флаги > авто (кандидат с тегами /
     # дефолтные имена по стадиям)
     prompts = resolve_prompt_paths(
         args.prompt_file,
@@ -591,7 +602,8 @@ def main() -> None:
                         host, api_key, model, args.timeout, log, tracker,
                         args.temperature, args.reasoning_effort,
                         args.no_reasoning, args.stream_timeout,
-                        stage_models, args.threads, prompts): cid
+                        args.threads, prompts,
+                        polish_in=action_spec.get("polish_input")): cid
             for cid, dirs in to_process.items()
         }
         for fut in as_completed(futures):
