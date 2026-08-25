@@ -721,10 +721,10 @@ def run_two_pass(
             disable=web_progress_enabled(),
         )
         pbar_lock = threading.Lock()
-        # Раунд 20: tqdm при disable=True НЕ двигает pbar.n — считаем сами
+        # tqdm при disable=True НЕ двигает pbar.n — считаем сами
         # (иначе web-прогрессбар залипает на 0/N)
         steps_done = already_done
-        # Раунд 21: стартовое событие прогресса — бар виден сразу,
+        # стартовое событие прогресса — бар виден сразу,
         # до первого завершённого шага (медленный LLM)
         emit_progress(steps_done, total * 2, "NER (pass1+pass2)")
         if web_progress_enabled():
@@ -1484,7 +1484,7 @@ def main():
     )
 
     args = parser.parse_args()
-    # Сервер: CLI > HOST/API_KEY/MODEL из .env (раунд 12)
+    # Сервер: CLI > HOST/API_KEY/MODEL из .env
     env_data = parse_dotenv(find_env_file(args.env_file)) if args.env_file \
         else parse_dotenv(find_env_file())
     sc = get_server_config(env_data)
@@ -1574,7 +1574,7 @@ def main():
         base_url += "/v1"
 
     if args.no_reasoning:
-        args.reasoning_effort = None  # раунд 12: disable в select = --no_reasoning
+        args.reasoning_effort = None  # disable в select = --no_reasoning
     try:
         model_name = determine_model(args.model, logger)
     except SystemExit:
@@ -1680,9 +1680,9 @@ def main():
             pbar = tqdm(total=len(all_chunks), unit="chunk", desc="Extract",
                         disable=web_progress_enabled())
             pbar.update(len(processed_chunks))
-            # Раунд 20: свой счётчик — pbar.n мёртв при disable=True
+            # свой счётчик — pbar.n мёртв при disable=True
             done = len(processed_chunks)
-            # Раунд 21: стартовое событие прогресса — бар и «📊» видны
+            # стартовое событие прогресса — бар и «📊» видны
             # сразу, до первого завершённого чанка (медленный LLM)
             emit_progress(done, len(all_chunks), "Извлечение терминов")
             if web_progress_enabled():

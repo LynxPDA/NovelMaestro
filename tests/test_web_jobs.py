@@ -43,7 +43,7 @@ FAKE_PARENT_CHILD = (
     "    time.sleep(1)\n"
 )
 
-# Раунд 19: строки лога вперемешку с событиями прогресса @@PROGRESS@@
+# строки лога вперемешку с событиями прогресса @@PROGRESS@@
 FAKE_PROGRESS = (
     "import sys, time\n"
     "for i in range(3):\n"
@@ -115,7 +115,7 @@ def test_start_failed(tmp_path, fake_script):
 
 
 def test_dashboard_running_jobs(tmp_path, fake_script):
-    """Раунд 2: /api/dashboard через _dashboard включает активные запуски
+    """/api/dashboard через _dashboard включает активные запуски
     с хвостом лога (running_jobs)."""
     from web.api import _dashboard
 
@@ -280,7 +280,7 @@ def test_subscribe_lines(tmp_path, fake_script):
 
 
 # ════════════════════════════════════════════════════════════════════
-# раунд 19: прогресс @@PROGRESS@@ → job.progress / payload / SSE
+# прогресс @@PROGRESS@@ → job.progress / payload / SSE
 
 
 def test_progress_events(tmp_path, fake_script):
@@ -639,7 +639,7 @@ def test_m5_stages_in_specs():
         assert spec is not None, key
         assert spec["script"] in ("ner.py", "ner_check.py",
                                    "translate_check_llm.py", "wiki.py")
-        # LLM-поля обязательны (раунд 12: profile убран)
+        # LLM-поля обязательны (profile убран)
         names = [f["name"] for f in spec["fields"]]
         assert "profile" not in names
         assert "host" in names and "model" in names and "api_key" in names
@@ -711,7 +711,7 @@ def test_stage_spec_env_prefill_bool_on(jobs_srv, tmp_path):
 
 
 def test_build_ner_modes():
-    """Раунд 16: extract / compile / postprocess."""
+    """extract / compile / postprocess."""
 
     compile_argv = build_command("ner", {"mode": "compile",
                                          "ner_file": "ner.json"}, {})
@@ -757,7 +757,7 @@ def test_build_translate_check_llm_flags():
     assert "--no_reasoning" not in argv
     assert "--threads" in argv and "--max_fixes_per_chapter" in argv
 
-    # раунд 14: none в text-поле = --no_reasoning
+    # none в text-поле = --no_reasoning
     form2 = dict(form, reasoning_effort="none")
     argv2 = build_command("translate_check_llm", form2, {})
     assert "--no_reasoning" in argv2
@@ -787,7 +787,7 @@ def test_build_wiki_flags():
 
 
 def test_llm_profile_from_env(tmp_path, monkeypatch):
-    """Раунд 12: единый сервер из .env → host/model/api_key подставляются."""
+    """единый сервер из .env → host/model/api_key подставляются."""
     env = tmp_path / ".env"
     env.write_text(
         "HOST=http://192.168.1.8:9989\n"
@@ -813,7 +813,7 @@ def test_llm_profile_from_env(tmp_path, monkeypatch):
 
 
 def test_llm_cli_overrides_env(tmp_path, monkeypatch):
-    """Явные host/model/api_key в форме приоритетнее .env (раунд 12)."""
+    """Явные host/model/api_key в форме приоритетнее .env ."""
     env = tmp_path / ".env"
     env.write_text("HOST=http://old:9989\nAPI_KEY=old\n"
                     "MODEL=old-model\n", encoding="utf-8")
@@ -1001,7 +1001,7 @@ def test_jobs_start_and_status(jobs_srv, fake_script):
 
 
 def test_jobs_history_trimmed(jobs_srv):
-    """R5-F + раунд 20: история ограничена MAX_HISTORY (20); сайдкары
+    """R5-F + история ограничена MAX_HISTORY (20); сайдкары
     удаляются."""
     _, req, jm = jobs_srv
     for i in range(25):
@@ -1122,7 +1122,7 @@ def test_stage_spec_api(jobs_srv):
 
 
 def test_dashboard_recent_cap(tmp_path):
-    """Раунд 20: recent_jobs на дашборде — не более 20 записей."""
+    """recent_jobs на дашборде — не более 20 записей."""
     from web.api import _dashboard
 
     jm = JobManager(tmp_path, python="python3")
@@ -1136,7 +1136,7 @@ def test_dashboard_recent_cap(tmp_path):
 
 
 def test_dashboard_running_from_full_list(tmp_path, fake_script):
-    """Раунд 20: running_jobs собираются из полного списка jobs,
+    """running_jobs собираются из полного списка jobs,
     а не из среза «последних N»."""
     from web.api import _dashboard
 

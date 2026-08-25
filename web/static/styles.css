@@ -439,7 +439,7 @@ a.fname:hover {
  gap: 8px;
 }
 
-/* ── шаблоны (раунд 21) ── */
+/* ── шаблоны  ── */
 .tpl-grid {
  display: grid;
  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -578,8 +578,8 @@ a.fname:hover {
 /* ── запуски стадий (M4) ───────────────────────────────── */
 .run-layout {
  display: grid;
- /* раунд 21: 370px → 305px (−17%) — компактнее; кнопка «Стоп» не
-     вылезает благодаря flex-wrap в .job-row (раунд 21) */
+ /* 370px → 305px (−17%) — компактнее; кнопка «Стоп» не
+     вылезает благодаря flex-wrap в .job-row  */
  grid-template-columns: 305px 1fr;
  gap: 16px;
  align-items: start;
@@ -680,7 +680,7 @@ a.fname:hover {
 .job-row {
  display: flex;
  align-items: center;
- /* раунд 21: перенос строк — на узких окнах кнопки никогда не
+ /* перенос строк — на узких окнах кнопки никогда не
      вылезают за виджет (мини-бар уходит на вторую строку) */
  flex-wrap: wrap;
  row-gap: 6px;
@@ -733,7 +733,7 @@ a.fname:hover {
  word-break: break-word;
 }
 
-/* ── прогрессбар запусков (раунд 19) ──────────────────────── */
+/* ── прогрессбар запусков  ──────────────────────── */
 .progress-wrap {
  display: flex;
  align-items: center;
@@ -922,7 +922,7 @@ a.fname:hover {
  color: var(--text-dim);
  font-size: 13px;
 }
-/* раунд 13: заметки используют editor-cm как файлы.
+/* заметки используют editor-cm как файлы.
    .notes-frame переопределяется ПОСЛЕ .editor-preview-frame (см. ниже). */
 .review-wrap,
 .config-wrap {
@@ -957,7 +957,7 @@ a.fname:hover {
  color: var(--text-dim);
  font-size: 13px;
 }
-/* раунд 22: секции единой вкладки «Проверка» (1·LLM / 2·алгоритмич. / 3·LLM) */
+/* секции единой вкладки «Проверка» (1·LLM / 2·алгоритмич. / 3·LLM) */
 .review-section {
  border: 1px solid var(--border);
  border-top-width: 2px;
@@ -1038,7 +1038,7 @@ a.fname:hover {
  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-/* сводка и активные запуски на дашборде (раунд 2) */
+/* сводка и активные запуски на дашборде  */
 .dash-summary {
  display: flex;
  flex-wrap: wrap;
@@ -1225,7 +1225,7 @@ a.fname:hover {
  border-radius: 6px;
  background: var(--bg);
 }
-/* раунд 17: любой предпросмотр (заметки + файлы) — высота по контенту */
+/* любой предпросмотр (заметки + файлы) — высота по контенту */
 .editor-preview-frame.preview-adaptive,
 .editor-preview-frame.notes-frame {
  flex: none;
@@ -1318,7 +1318,7 @@ a.fname:hover {
  flex-direction: column;
  gap: 8px;
 }
-/* ── Редактор глав (раунд 23): панели, подсветка глоссария ── */
+/* ── Редактор глав : панели, подсветка глоссария ── */
 .ed-wrap {
  margin-top: 18px;
  display: flex;

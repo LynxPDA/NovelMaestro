@@ -120,7 +120,7 @@ def cac_env(tmp_path, monkeypatch):
                 ". . .\n"
                 "Продолжение текста.\n")
         (d / "polished.txt").write_text(text, encoding="utf-8")
-    # раунд 23: экспорт называется по имени папки проекта → chdir в именованную
+    # экспорт называется по имени папки проекта → chdir в именованную
     proj_dir = tmp_path / "Тестовая_Книга"
     proj_dir.mkdir()
     monkeypatch.chdir(proj_dir)

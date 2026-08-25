@@ -1030,14 +1030,14 @@ def do_check(args, logger) -> int:
         if errs:
             merge_and_save(errs)
 
-    # Раунд 12: верхний предел потоков 16 (как в ner/wiki/translate)
+    # верхний предел потоков 16 (как в ner/wiki/translate)
     with ThreadPoolExecutor(max_workers=max(1, min(16, args.threads))) as ex:
         futs = {ex.submit(worker, i, b): i for i, b in enumerate(batches)}
         pbar = tqdm(total=len(batches), unit="batch", desc="LLM",
                     disable=web_progress_enabled())
-        # Раунд 20: свой счётчик — pbar.n мёртв при disable=True
+        # свой счётчик — pbar.n мёртв при disable=True
         done = 0
-        # Раунд 21: стартовое событие прогресса — бар виден сразу
+        # стартовое событие прогресса — бар виден сразу
         emit_progress(done, len(batches), "Проверка перевода LLM")
         if web_progress_enabled():
             logger.info(f"📊 Прогресс: {done}/{len(batches)}")

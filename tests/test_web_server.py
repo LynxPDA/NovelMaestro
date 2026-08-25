@@ -228,7 +228,7 @@ def test_static_app_js(srv_ctx):
 
 
 def test_static_index_links_split_js(srv_ctx):
-    """Раунд 12: index.html подключает все три JS-файла разбитого app.js."""
+    """index.html подключает все три JS-файла разбитого app.js."""
     import http.client
     _, port = srv_ctx(Auth("t"))
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)

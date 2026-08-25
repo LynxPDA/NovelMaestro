@@ -302,7 +302,7 @@ def run_pass(title, items, prompt_tpl, args, base_url, api_key, model,
     batches = build_ner_batches(items, args.batch_size,
                                 args.show_aliases, args.show_votes)
     logger.info(f"── {title}: {len(items)} записей, батчей: {len(batches)}")
-    # Раунд 21: стартовое событие прогресса — бар виден сразу
+    # стартовое событие прогресса — бар виден сразу
     emit_progress(0, len(batches), "Проверка глоссария")
     if web_progress_enabled():
         logger.info(f"📊 Прогресс: 0/{len(batches)}")

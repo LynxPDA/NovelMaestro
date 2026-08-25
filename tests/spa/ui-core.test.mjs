@@ -1,4 +1,4 @@
-/* Юнит-тесты web/static/ui-core.js (раунд 21).
+/* Юнит-тесты web/static/ui-core.js.
  * Запуск: node --test tests/spa/ (или npm-скрипт, если появится package.json).
  * Никакой сети и DOM — чистые функции. */
 import { test } from "node:test";
@@ -120,7 +120,7 @@ test("dirEntries: плоский список → дерево каталога"
   assert.deepEqual(UICore.dirEntries([], ""), []);
 });
 
-/* ── раунд 23: матчер глоссария (вкладка «Редактор») ── */
+/* ── матчер глоссария (вкладка «Редактор») ── */
 
 const NER_ITEMS = [
   { term: "Хунг", translation: "Хун", type: "имя", notes: "герой" },

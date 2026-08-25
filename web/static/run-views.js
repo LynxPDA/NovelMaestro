@@ -6,7 +6,7 @@ function viewRun(section, name, attachJobId) {
     log: [], // строки лога текущего запуска (ТОЛЬКО из SSE-стрима)
     events: [], // события глав конвейера (стадия 3)
     progress: null, // последнее событие прогресса {label, done, total}
-    gen: 0, // раунд 20: поколение отрисовки — гасит гонки двух render()
+    gen: 0, // поколение отрисовки — гасит гонки двух render()
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
@@ -26,7 +26,7 @@ function viewRun(section, name, attachJobId) {
         return;
       }
       if (job.status !== "running") {
-        // раунд 20: завершённый запуск лог не показывает (Д2) —
+        // завершённый запуск лог не показывает (Д2) —
         // ведём себя как заход на страницу без job id
         autoAttach();
         return;
@@ -63,7 +63,7 @@ function viewRun(section, name, attachJobId) {
 
   function setStage(key) {
     st.stage = key;
-    // раунд 20: активный запуск/стрим НЕ сбрасываем — лог остаётся
+    // активный запуск/стрим НЕ сбрасываем — лог остаётся
     // под формой, пока стадия не завершилась
     render();
   }
@@ -91,7 +91,7 @@ function viewRun(section, name, attachJobId) {
       ),
     );
     const body = await runBody();
-    if (gen !== st.gen) return; // раунд 20: устаревший рендер — не рисовать
+    if (gen !== st.gen) return; // устаревший рендер — не рисовать
     page.append(header, body);
   }
 
@@ -137,7 +137,7 @@ function viewRun(section, name, attachJobId) {
     return h("div", { class: "run-layout" }, stageList, right);
   }
 
-  // раунд 20: карточка активного запуска ВМЕСТО истории запусков
+  // карточка активного запуска ВМЕСТО истории запусков
   async function activePanel() {
     const panel = h("div", { class: "run-panel" });
     panel.append(h("div", { class: "run-panel-title" }, "Активный запуск"));
@@ -171,7 +171,7 @@ function viewRun(section, name, attachJobId) {
         "a",
         {
           class: "btn btn-sm btn-primary",
-          // раунд 20: без job id — autoAttach сам прикрепится к активному
+          // без job id — autoAttach сам прикрепится к активному
           href: `#/run/${section}/${name}`,
         },
         "Показать",
@@ -198,7 +198,7 @@ function viewRun(section, name, attachJobId) {
   }
 
   function miniBar(p, status) {
-    // раунд 21: у running-задачи без событий прогресса бар всё равно
+    // у running-задачи без событий прогресса бар всё равно
     // виден («ожидание…») — раньше возвращался null и виджет молчал
     if (!p && status !== "running") return null;
     const total = p && p.total ? p.total : 0;
@@ -251,7 +251,7 @@ function viewRun(section, name, attachJobId) {
     }
     const err = h("div", { class: "form-error" });
     const fieldNodes = [];
-    const fieldWraps = {}; // name → label-обёртка (промпты pipeline, раунд 20)
+    const fieldWraps = {}; // name → label-обёртка (промпты pipeline, )
     const values = {};
 
     // C/D: bool из .env (строка "0") и files-default по basename
@@ -361,7 +361,7 @@ function viewRun(section, name, attachJobId) {
       fieldWraps[f.name] = wrap;
     }
 
-    // раунд 20: pipeline — режим промптов (auto/separate/combined):
+    // pipeline — режим промптов (auto/separate/combined):
     // показываем только нужные поля по выбранному режиму
     if (key === "pipeline") {
       const modeSel = values["prompt_mode"];
@@ -437,7 +437,7 @@ function viewRun(section, name, attachJobId) {
   function logPanel() {
     const job = st.job;
     const pre = h("pre", { class: "log-area", text: "" });
-    // раунд 20: st.log наполняется ТОЛЬКО SSE-стримом — payload lines
+    // st.log наполняется ТОЛЬКО SSE-стримом — payload lines
     // не дублируем (иначе хвост приходит дважды: snapshot + бурст)
     pre.textContent = st.log.length ? st.log.join("\n") : "(лог пуст)";
     pre.scrollTop = pre.scrollHeight;
@@ -465,7 +465,7 @@ function viewRun(section, name, attachJobId) {
       h("span", { class: "spacer" }),
       stopBtn,
     );
-    // раунд 19: прогрессбар из структурированных событий @@PROGRESS@@
+    // прогрессбар из структурированных событий @@PROGRESS@@
     // (label + трек + done/total + %); без событий — скрыт
     const bar = h(
       "div",
@@ -495,7 +495,7 @@ function viewRun(section, name, attachJobId) {
     return panel;
   }
 
-  // раунд 21: текстовая строка прогресса («📊 12/636») для тулбара лога
+  // текстовая строка прогресса («📊 12/636») для тулбара лога
   function progressLineText() {
     return UICore.progressText(
       st.progress,
@@ -507,7 +507,7 @@ function viewRun(section, name, attachJobId) {
   function paintBar(bar) {
     const p = st.progress;
     const running = st.job && st.job.status === "running";
-    // раунд 21: пока задача работает, бар ВСЕГДА виден — даже до первого
+    // пока задача работает, бар ВСЕГДА виден — даже до первого
     // события прогресса («ожидание первого результата…»)
     if (!p && !running) {
       bar.classList.add("hidden");
@@ -574,7 +574,7 @@ function viewRun(section, name, attachJobId) {
     );
   }
 
-  // стрим лога после старта. Раунд 20: единственный источник лога —
+  // стрим лога после старта. единственный источник лога —
   // SSE (стартовый бурст сервера уже содержит хвост), payload lines не
   // дублируем; AbortController гасит старый стрим при уходе со страницы.
   async function attachStream(jobId) {

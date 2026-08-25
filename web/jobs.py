@@ -135,7 +135,7 @@ class Job:
 class JobManager:
     """История запусков: словарь id → Job + персистентность."""
 
-    MAX_HISTORY = 20  # R5-F + раунд 20: дашборд «Последние запуски» — до 20
+    MAX_HISTORY = 20  # R5-F + дашборд «Последние запуски» — до 20
 
     def __init__(self, web_dir: Path, python: str | None = None,
                  repo_root: Path | None = None) -> None:
@@ -250,7 +250,7 @@ class JobManager:
                     log.debug("job_logs/{id}.log не пишется: %s", exc)
 
     def _cleanup_orphans(self) -> None:
-        """Раунд 21 (п.10): сайдкары без записи в jobs.json — сироты от
+        """сайдкары без записи в jobs.json — сироты от
         старых версий/падений; удаляются, чтобы job_logs/ не рос вечно."""
         d = self._logs_dir()
         if not d.is_dir():
@@ -386,7 +386,7 @@ class JobManager:
             proc_env = dict(os.environ)
             if env:
                 proc_env.update(env)
-            # раунд 19: каждый web-запуск — в режиме структурированного
+            # каждый web-запуск — в режиме структурированного
             # прогресса (emit_progress в скриптах; tqdm отключается)
             proc_env["WEB_PROGRESS"] = "1"
             proc = subprocess.Popen(

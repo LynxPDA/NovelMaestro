@@ -19,7 +19,7 @@ from pathlib import Path
 # Дефолтные разделы пульта (бутстрап новой установки; дальше список —
 # в projects/.sections.json, порядок важен — это порядок отображения)
 DEFAULT_SECTIONS = ["ACTIVE", "HOLD", "DONE"]
-# Исторический алиас (доки/тесты раунда 21)
+# Исторический алиас (доки/тесты)
 SECTIONS = DEFAULT_SECTIONS
 
 # Файл персиста списка разделов (в корне projects/, рядом с hub_state)
@@ -68,7 +68,7 @@ def load_sections(projects_root: Path) -> list:
     """Список разделов пульта: дефолты + кастомные из .sections.json.
 
     Файла нет → дефолты + легаси-папки на диске (миграция, напр. DONE_OPEN
-    с установок раунда 21). Папка на диске, которой нет в списке, тоже
+    со старых установок). Папка на диске, которой нет в списке, тоже
     добавляется (ручные папки). Никогда не бросает.
     """
     root = Path(projects_root)
@@ -331,7 +331,7 @@ def write_project_metadata(pdir: Path, template_dir: Path,
 
 
 # ══════════════════════════════════════════════════════════════════
-# Шаблоны: CRUD наборов и файлов (раунд 21, вкладка «Шаблоны»)
+# Шаблоны: CRUD наборов и файлов (вкладка «Шаблоны»)
 # ══════════════════════════════════════════════════════════════════
 
 # Системный набор — только чтение: нельзя удалять/перезаписывать;
@@ -368,7 +368,7 @@ TEMPLATE_SKELETON = ("prompts", "source")
 def _ensure_template_skeleton(set_dir: Path) -> None:
     """Гарантировать каркас набора: prompts/ + source/ (идемпотентно).
 
-    Раунд 23: скелет как у General — инвариант набора. Вызывается при
+    скелет как у General — инвариант набора. Вызывается при
     создании, копировании и ремонте при чтении (_templates в web/api.py).
     """
     for sub in TEMPLATE_SKELETON:
@@ -378,7 +378,7 @@ def _ensure_template_skeleton(set_dir: Path) -> None:
 def create_template_set(templates_dir: Path, name: str) -> str | None:
     """Создать новый набор шаблонов с каркасом prompts/ + source/.
 
-    Каркас тот же, что у General (раунд 22): пустые prompts/ и source/,
+    Каркас тот же, что у General : пустые prompts/ и source/,
     чтобы у нового проекта были обе подпапки шаблона. Возвращает имя
     набора (NFC) или None: недопустимое имя, дубликат, попытка
     создать/занять General."""
@@ -407,7 +407,7 @@ def copy_template_set(templates_dir: Path, src: str, dst: str) -> str | None:
     if sdir is None or ddir is None or not sdir.is_dir() or ddir.exists():
         return None
     shutil.copytree(sdir, ddir)
-    # раунд 23: копия всегда со скелетом, даже если исходник «деградировал»
+    # копия всегда со скелетом, даже если исходник «деградировал»
     _ensure_template_skeleton(ddir)
     return dst
 
@@ -428,7 +428,7 @@ def delete_template_set(templates_dir: Path, name: str) -> bool:
 
 
 def create_template_dir(templates_dir: Path, name: str, rel: str) -> str | None:
-    """Создать каталог в наборе — ЗАПРЕЩЕНО (раунд 23).
+    """Создать каталог в наборе — ЗАПРЕЩЕНО.
 
     Каталоги в шаблонах неизменяемы: скелет prompts/ + source/ — всё,
     что разрешено. Роут остаётся (всегда ошибка), чтобы не ломать
@@ -483,7 +483,7 @@ def write_template_file(templates_dir: Path, name: str, rel: str,
                         content: str) -> str | None:
     """Записать/создать файл в наборе (General — запрещён).
 
-    Раунд 23: каталоги неизменяемы — родительский каталог обязан
+    каталоги неизменяемы — родительский каталог обязан
     существовать (неявное создание каталогов через путь файла запрещено).
     None — успех; строка-ошибка — иначе: набор не найден/General/эскейп/
     каталог не существует."""
@@ -505,7 +505,7 @@ def write_template_file(templates_dir: Path, name: str, rel: str,
 def delete_template_file(templates_dir: Path, name: str, rel: str) -> str | None:
     """Удалить файл из набора (General — запрещён).
 
-    Раунд 23: каталоги неизменяемы — удаление каталога отклоняется
+    каталоги неизменяемы — удаление каталога отклоняется
     ("Каталоги в шаблонах неизменяемы"); файлы удаляются как раньше.
     None — успех; строка-ошибка — иначе: набор не найден/General/
     пути нет/каталог."""
@@ -571,7 +571,7 @@ def move_template_file(templates_dir: Path, name: str,
     if dp.exists():
         return "Путь назначения уже существует"
     if not dp.parent.is_dir():
-        return "Каталог не существует"  # раунд 23: каталоги не создаются
+        return "Каталог не существует"  # каталоги не создаются
     sp.replace(dp)
     return None
 
@@ -595,7 +595,7 @@ def _has_compiled(pdir: Path) -> bool:
     """Есть ли скомпилированные файлы (clean_and_compile пишет их в cwd
     проекта по умолчанию, либо в tmp//output/ при --out).
 
-    Раунд 23: экспорты EPUB/FB2 — '{имя_проекта}_{start}_{end}.{ext}';
+    экспорты EPUB/FB2 — '{имя_проекта}_{start}_{end}.{ext}';
     легаси-паттерн book_* тоже распознаётся."""
     new_pats = (f"{pdir.name}_*.epub", f"{pdir.name}_*.fb2")
     for d in (pdir, pdir / "tmp", pdir / "output"):

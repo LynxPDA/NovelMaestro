@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-run.py — запуск NovelMaestro (раунд 4: web-first).
+run.py — запуск NovelMaestro (web-first).
 
-С раунда 4 интерфейс только один — web (сервер + SPA, пакет web/);
+Интерфейс только один — web (сервер + SPA, пакет web/);
 терминальный пульт (cli/tui) удалён. run.py — тонкий лаунчер:
 
   python3 run.py                # web-сервер + открыть браузер

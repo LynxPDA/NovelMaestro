@@ -83,8 +83,8 @@ _LOGGER_PREFIX_RE = re.compile(
 )
 _SYM = {"OK": "✓", "ERROR": "✗", "SKIP": "⊘"}
 CHAPTER_PREFIX = "@@CHAPTER@@"
-# Раунд 20: промпт-файлы конвейера — 4 варианта (см. resolve_prompt_paths).
-# Дефолтные имена по стадиям (как раунд 19): отдельные файлы без тегов.
+# промпт-файлы конвейера — 4 варианта (см. resolve_prompt_paths).
+# Дефолтные имена по стадиям : отдельные файлы без тегов.
 _PROMPT_STAGE_DEFAULTS = {
     1: "prompts/translate_prompt.txt",
     2: "prompts/redact_prompt.txt",
@@ -203,12 +203,12 @@ class Tracker:
 # ═══ Команда translate_book.py ═══
 def resolve_prompt_paths(combined: str = "",
                          per_stage: dict[int, str] | None = None) -> dict[int, str]:
-    """Пути промпт-файлов по стадиям (раунд 20): явные флаги > auto.
+    """Пути промпт-файлов по стадиям : явные флаги > auto.
 
     combined — один файл на все стадии (теги <translate>/<redact>/<polish>);
     per_stage — отдельные файлы (пустые стадии получают дефолтное имя).
     auto: кандидат с тегами в prompts/ → combined; иначе дефолтные имена
-    по стадиям (как раунд 19). Пути относительные — cwd = папка проекта.
+    по стадиям . Пути относительные — cwd = папка проекта.
     """
     out: dict[int, str] = {}
     if combined:
@@ -266,7 +266,7 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
         common += ["--reasoning_effort", str(reasoning_effort)]
     if no_reasoning:
         common.append("--no_reasoning")
-    # Раунд 20: переданный путь (resolve_prompt_paths) > дефолт по стадии
+    # переданный путь (resolve_prompt_paths) > дефолт по стадии
     prompt_file = prompt_file or _PROMPT_STAGE_DEFAULTS[stage]
     if stage == 1:
         return [sys.executable, str(script), str(in_file), "--mode",
@@ -333,13 +333,13 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                                   host, api_key, model, timeout,
                                   temperature, reasoning_effort,
                                   no_reasoning, stream_timeout,
-                                  stage_models, threads,
+                                  threads,
                                   prompt_file=(prompts or {}).get(stage) or "")
             proc_env = dict(os.environ)
             if api_key:
                 proc_env["LLM_API_KEY"] = api_key
             try:
-                # Раунд 21: Popen + построчное чтение — строки @@PROGRESS@@
+                # Popen + построчное чтение — строки @@PROGRESS@@
                 # потомка ретранслируются в свой stdout (JobManager пробросит
                 # их в SSE), остальной вывод копится в буфер для grep_errors.
                 # subprocess.run(capture_output=True) глотал прогресс целиком.
@@ -433,8 +433,12 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
 # ═══ main ═══
 def main() -> None:
     ap = argparse.ArgumentParser(description="Web-оркестратор конвейера")
-    ap.add_argument("--action", type=int, required=True, choices=[1, 2, 3, 4],
-                    help="Тип работы (перевод/редактура/полировка/полный цикл)")
+    ap.add_argument("--action", type=int, required=True,
+                    choices=list(_ACTION_SPECS),
+                    help="Тип работы: 1=перевод, 2=редактура (из перевода), "
+                         "3=полировка (из редактуры), 4=полировка (из перевода), "
+                         "5=перевод→редактура, 6=перевод→полировка, "
+                         "7=редактура→полировка, 8=полный цикл")
     ap.add_argument("--start", type=int, default=None, help="Начальная глава")
     ap.add_argument("--end", type=int, default=None, help="Конечная глава")
     ap.add_argument("--jobs", type=int, default=None, help="Потоков (1–16)")
@@ -559,7 +563,7 @@ def main() -> None:
     log.info("ДИАПАЗОН   : Главы с %d по %d", start, end)
     log.info("ПОТОКОВ    : %d (главы) × %d (чанки на главу)",
              args.jobs, args.threads)
-    log.info("МОДЕЛЬ     : %s", model or "из .env (по стадиям)")
+    log.info("МОДЕЛЬ     : %s", model or "из .env")
     log.info("СЕРВЕР     : %s", host)
     log.info("ПРОМПТЫ    : %s", " | ".join(
         f"{_STAGE_NAME[s]}={prompts[s]}" for s in stages))

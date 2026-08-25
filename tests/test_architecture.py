@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Архитектурные стражи (AGENTS.md §3–§4, раунд 4: web-first):
+"""Архитектурные стражи (AGENTS.md §3–§4, web-first):
 статические проверки по исходникам. Ловят будущие правки, ломающие
 слоистость, единую LLM-гигиену и web-канон (без cli/tui)."""
 import re
@@ -25,13 +25,13 @@ def test_dirs_not_empty():
 # cli/tui удалены: никаких следов терминального пульта
 # ══════════════════════════════════════════════════════════════════════
 def test_cli_backend_and_tui_removed():
-    assert not (ROOT / "backends").exists(), "backends/ удалён (раунд 4)"
+    assert not (ROOT / "backends").exists(), "backends/ удалён "
     assert not (ROOT / "core" / "ui.py").exists(), "core/ui.py удалён"
     assert not (ROOT / "core" / "tui.py").exists(), "core/tui.py удалён"
 
 
 def test_web_layout():
-    """web/ = сервер + статика + README (канон раунда 4)."""
+    """web/ = сервер + статика + README (канон web-first)."""
     assert (ROOT / "web" / "main.py").is_file()
     assert (ROOT / "web" / "README.md").is_file()
     assert (ROOT / "web" / "static" / "app.js").is_file()
@@ -53,7 +53,7 @@ def test_script_has_no_input_calls(script):
 def test_script_does_not_import_core_ui(script):
     src = script.read_text(encoding="utf-8")
     assert "core.ui" not in src and "from core import ui" not in src, \
-        f"{script.name}: интерактив удалён вместе с cli (раунд 4)"
+        f"{script.name}: интерактив удалён вместе с cli "
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -99,7 +99,7 @@ def test_web_module_imports_from_web_only(module):
     логику и не ссылается на удалённые backends/cli."""
     src = module.read_text(encoding="utf-8")
     assert "backends" not in src, \
-        f"{module.name}: ссылка на удалённый backends/ (раунд 4)"
+        f"{module.name}: ссылка на удалённый backends/ "
     assert "core.ui" not in src and "core.tui" not in src, \
         f"{module.name}: cli/tui удалены"
 

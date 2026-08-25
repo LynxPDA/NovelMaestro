@@ -278,7 +278,7 @@ def test_env_get_masked(srv, tmp_path):
 
 
 def test_notes_get_put_roundtrip(srv, tmp_path):
-    """Раунд 12: GET/PUT /api/notes — projects/notes.md."""
+    """GET/PUT /api/notes — projects/notes.md."""
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
     r = _request(port, "GET", "/api/notes")
@@ -301,7 +301,7 @@ def test_notes_put_rejects_non_string(srv, tmp_path):
 
 
 def test_env_get_global(srv, tmp_path):
-    """Раунд 8: scope=global — системный projects/.env."""
+    """scope=global — системный projects/.env."""
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
     (tmp_path / "prj" / ".env").write_text("GLOBAL=1\n", encoding="utf-8")
@@ -463,7 +463,7 @@ def test_prompts_template_missing(srv, tmp_path):
 
 
 def test_logs_list(srv, tmp_path):
-    """Раунд 14: дерево логов — рекурсивно по logs/, только *.log,
+    """дерево логов — рекурсивно по logs/, только *.log,
     path — относительный путь от logs/."""
     srv, port, root = srv()
     pdir = _mk_project(root)
@@ -546,7 +546,7 @@ def test_prompts_templates_in_list_and_create(srv, tmp_path):
 # ════════════════════════════════════════════════════════════════════
 
 def test_env_project_no_fallback_to_shared(srv, tmp_path):
-    """Раунд 2: scope=project без pdir/.env НЕ отдаёт общий файл —
+    """scope=project без pdir/.env НЕ отдаёт общий файл —
     exists=False (общий редактируется только с scope=global)."""
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     _mk_project(root)
@@ -558,7 +558,7 @@ def test_env_project_no_fallback_to_shared(srv, tmp_path):
 
 
 def test_env_global_is_projects_env(srv, tmp_path):
-    """Раунд 8: scope=global — projects/.env, а не корневой .env репо."""
+    """scope=global — projects/.env, а не корневой .env репо."""
     _srv, port, root = srv(projects_root=tmp_path / "prj",
                            repo_root=tmp_path / "repo")
     _mk_project(root)
@@ -584,7 +584,7 @@ def test_env_project_own_file_wins(srv, tmp_path):
 
 
 def test_env_put_content_mode_creates(srv, tmp_path):
-    """Раунд 2: PUT с content — полная замена/создание с нуля."""
+    """PUT с content — полная замена/создание с нуля."""
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     pdir = _mk_project(root)
     r = _request(port, "PUT", "/api/env",
@@ -601,7 +601,7 @@ def test_env_put_content_mode_creates(srv, tmp_path):
 
 
 def test_env_put_global_content(srv, tmp_path):
-    """Раунд 8: projects/.env пишется через content (Настройки)."""
+    """projects/.env пишется через content (Настройки)."""
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
     r = _request(port, "PUT", "/api/env",
@@ -611,7 +611,7 @@ def test_env_put_global_content(srv, tmp_path):
 
 
 def test_env_delete_project_only(srv, tmp_path):
-    """Раунд 2: DELETE /api/env?scope=project удаляет только pdir/.env."""
+    """DELETE /api/env?scope=project удаляет только pdir/.env."""
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     pdir = _mk_project(root)
     (pdir / ".env").write_text("OWN=1\n", encoding="utf-8")
@@ -623,7 +623,7 @@ def test_env_delete_project_only(srv, tmp_path):
 
 
 def test_env_template_endpoint(srv, tmp_path):
-    """Раунд 2: GET /api/env/template отдаёт templates/.env.example."""
+    """GET /api/env/template отдаёт templates/.env.example."""
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     r = _request(port, "GET", "/api/env/template")
     assert r["ok"] and r["name"] == ".env.example"
@@ -632,7 +632,7 @@ def test_env_template_endpoint(srv, tmp_path):
 
 
 def test_prompts_delete(srv, tmp_path):
-    """Раунд 2: DELETE /api/prompts/{name} удаляет файл промпта."""
+    """DELETE /api/prompts/{name} удаляет файл промпта."""
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     pdir = _mk_project(root)
     (pdir / "prompts").mkdir()
@@ -822,7 +822,7 @@ def test_stage_spec_env_defaults(srv, tmp_path):
     fields = {f["name"]: f.get("default", "") for f in r["spec"]["fields"]}
     assert fields.get("chunk_size") == "12345"
     assert fields.get("threshold") == "0.9"
-    # раунд 12: стадийная NER_MODEL приоритетнее общей MODEL
+    # стадийная NER_MODEL приоритетнее общей MODEL
     assert fields.get("model") == "ner-gpt"
     assert fields.get("host") == ""  # HOST не задан — пусто
 
@@ -860,7 +860,7 @@ def test_job_start_copies_env_without_secrets(srv, tmp_path):
 
 def test_job_start_persists_run_params(srv, tmp_path):
     """R9-B: запуск создаёт/обновляет .env проекта (копия системного),
-    api_key пишется как API_KEY (раунд 13), пустые поля пропускаются."""
+    api_key пишется как API_KEY , пустые поля пропускаются."""
     srv, port, root = srv()
     pdir = _mk_project(root)
     (root / ".env").write_text("HOST=http://sys\n", encoding="utf-8")

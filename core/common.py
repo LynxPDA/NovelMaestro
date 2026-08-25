@@ -77,7 +77,7 @@ def find_env_file(explicit=None, start_dir=None):
     явный путь → вверх от start_dir/каталога common/cwd — сначала
     <dir>/projects/.env (системный), затем <dir>/.env (проектный/корневой).
     При подъёме из папки проекта первым находится собственный .env книги,
-    из корня репо — системный projects/.env (канон раунда 8).
+    из корня репо — системный projects/.env (канон web-first).
     Не найден → None (скрипт обязан работать дальше с ручным вводом)."""
     if explicit and os.path.isfile(explicit):
         return os.path.abspath(explicit)
@@ -103,7 +103,7 @@ def find_env_file(explicit=None, start_dir=None):
 
 def get_server_config(env_data: dict) -> dict:
     """Единый сервер из .env → {host, api_key, model} (ключи HOST/API_KEY/MODEL).
-    Раунд 12: профили local/remote убраны — один адрес, ключ и модель."""
+    профили local/remote убраны — один адрес, ключ и модель."""
     return {
         "host": env_data.get("HOST", "").strip(),
         "api_key": env_data.get("API_KEY", "").strip(),
@@ -201,7 +201,7 @@ def setup_logging(output_filename, logger_name=None):
 
 
 def determine_model(arg_model, logger=None):
-    """Модель ТОЛЬКО из аргумента/конфига (раунд 12: автоопределение
+    """Модель ТОЛЬКО из аргумента/конфига (автоопределение
     через GET /models убрано). Пусто → SystemExit (fail-fast)."""
     if arg_model:
         if logger:

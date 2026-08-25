@@ -97,7 +97,7 @@ def test_sections_lists_counts(srv_ctx):
 
 
 def test_sections_crud_api(srv_ctx):
-    """Раунд 22: создание/переименование(merge)/удаление разделов."""
+    """создание/переименование(merge)/удаление разделов."""
     _, port, projects_root = srv_ctx()
     # создать
     res, payload = _request(port, "POST", "/api/sections", {"name": "Архив"})
@@ -389,7 +389,7 @@ def test_stats_cache_persisted_on_disk(monkeypatch, srv_ctx):
 
 
 # ════════════════════════════════════════════════════════════════════
-# раунд 21: шаблоны (CRUD) и статус проекта
+# шаблоны (CRUD) и статус проекта
 
 def test_templates_crud(srv_ctx):
     """Создание/копирование/удаление набора через /api/templates."""
@@ -416,7 +416,7 @@ def test_templates_crud(srv_ctx):
             port, "PUT", f"/api/templates/{name}/file",
             {"path": "prompts/x.txt", "content": "привет"})
         assert res.status == 200
-        # раунд 23: запись в несуществующий каталог → 400 (неявный mkdir)
+        # запись в несуществующий каталог → 400 (неявный mkdir)
         res, payload = _request(
             port, "PUT", f"/api/templates/{name}/file",
             {"path": "prompts/nope/x.txt", "content": "x"})
@@ -490,7 +490,7 @@ def test_templates_general_protected(srv_ctx):
 
 
 def test_templates_upload_download_mkdir(srv_ctx):
-    """Раунд 23: каталоги в шаблонах неизменяемы — mkdir/rename/delete 403."""
+    """каталоги в шаблонах неизменяемы — mkdir/rename/delete 403."""
     _, port, _ = srv_ctx()
     name = "TplUp_01"
     try:
@@ -507,7 +507,7 @@ def test_templates_upload_download_mkdir(srv_ctx):
             [("up.txt", "text/plain", "содержимое".encode("utf-8"))])
         assert res.status == 200, payload
         assert payload["saved"] == ["prompts/up.txt"]
-        # раунд 23: upload в несуществующий каталог → 400 (неявный mkdir)
+        # upload в несуществующий каталог → 400 (неявный mkdir)
         res, payload = _multipart_request(
             port, f"/api/templates/{name}/upload",
             [("dest", "prompts/nope")],
@@ -566,7 +566,7 @@ def test_templates_upload_download_mkdir(srv_ctx):
 
 
 def test_templates_skeleton_repaired_on_read(srv_ctx):
-    """Раунд 23: GET /api/templates чинит скелет «деградировавшего» набора."""
+    """GET /api/templates чинит скелет «деградировавшего» набора."""
     _, port, _ = srv_ctx()
     from core import projects as P
     name = "TplSk_01"
@@ -652,7 +652,7 @@ def test_project_tree_lists_chapters(srv_ctx):
 
 
 def test_project_tree_legacy_artifacts(srv_ctx):
-    """Раунд 23: легаси-имена *_перевод/редактура/полировка видны."""
+    """легаси-имена *_перевод/редактура/полировка видны."""
     _, port, projects_root = srv_ctx()
     _create_project(port, projects_root)
     ch = projects_root / "ACTIVE" / "test_book" / "chapters" / "00002_1"
@@ -954,7 +954,7 @@ def test_file_delete_404(srv_ctx):
     assert res.status == 404
 
 
-# mkdir (раунд 23)
+# mkdir
 
 def test_file_mkdir(srv_ctx):
     _, port, projects_root = srv_ctx()
@@ -993,7 +993,7 @@ def test_file_mkdir_requires_path(srv_ctx):
     assert res.status == 400
 
 
-# rename (раунд 23)
+# rename
 
 def test_file_rename_file(srv_ctx):
     _, port, projects_root = srv_ctx()
@@ -1185,7 +1185,7 @@ def test_dashboard_summary(srv_ctx, tmp_path):
     demo = [p for p in secs["ACTIVE"]["projects"] if p["name"] == "demo"][0]
     assert "1" in demo["stats"]  # главы считаются
     assert isinstance(payload["recent_jobs"], list)
-    assert isinstance(payload.get("running_jobs"), list)  # раунд 2
+    assert isinstance(payload.get("running_jobs"), list)  #
 
 
 def test_dashboard_stats_cache(monkeypatch, srv_ctx):

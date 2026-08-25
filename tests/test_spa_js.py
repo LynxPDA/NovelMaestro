@@ -1,4 +1,4 @@
-"""SPA (раунд 21): юнит-тесты чистых функций + синтаксис static/*.js.
+"""SPA : юнит-тесты чистых функций + синтаксис static/*.js.
 
 ui-core.js покрывается node --test (tests/spa/ui-core.test.mjs) —
 без сети и без DOM; каждый static/*.js проверяется node --check.

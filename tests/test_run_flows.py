@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""run.py — тонкий лаунчер web (раунд 4): bootstrap projects/ + корневого
+"""run.py — тонкий лаунчер web : bootstrap projects/ + корневого
 .env, проброс настроек в web/main.py. Без сети, всё в tmp_path:
 глобальные REPO/PROJECTS подменяются monkeypatch, subprocess — моком."""
 import sys

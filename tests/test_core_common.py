@@ -171,7 +171,7 @@ def test_parse_dotenv_full(tmp_path):
 
 
 def test_find_env_file_upward(tmp_path):
-    """Раунд 8: системный projects/.env — приоритетнее корневого .env."""
+    """системный projects/.env — приоритетнее корневого .env."""
     (tmp_path / "projects").mkdir()
     (tmp_path / ".env").write_text("A=1", encoding="utf-8")
     (tmp_path / "projects" / ".env").write_text("A=2", encoding="utf-8")
@@ -220,7 +220,7 @@ def test_get_server_config():
     env = {"HOST": "http://h", "MODEL": "m"}
     cfg = C.get_server_config(env)
     assert cfg["host"] == "http://h" and cfg["model"] == "m" and cfg["api_key"] == ""
-    # legacy-ключи профилей игнорируются (раунд 12)
+    # legacy-ключи профилей игнорируются
     assert C.get_server_config({"LOCAL_HOST": "x"})["host"] == ""
 
 
@@ -987,7 +987,7 @@ def test_determine_model_from_arg():
 
 
 def test_determine_model_empty_raises():
-    # раунд 12: автоопределение убрано — пусто = SystemExit
+    # автоопределение убрано — пусто = SystemExit
     with pytest.raises(SystemExit):
         C.determine_model("")
 

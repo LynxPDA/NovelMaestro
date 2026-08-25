@@ -257,7 +257,7 @@ def _file_write(ctx: dict) -> dict:
 def _file_mkdir(ctx: dict) -> dict:
     """Создать каталог (POST /api/mkdir?project=&path=).
 
-    Раунд 23: «＋ Каталог» в «Файлы»; занято → 400, эскейп → 400.
+    «＋ Каталог» в «Файлы»; занято → 400, эскейп → 400.
     """
     pdir, _section, _name = _project_ctx(ctx)
     rel = (ctx["query"].get("path") or ctx["body"].get("path") or "").strip()
@@ -594,7 +594,7 @@ def _dashboard(ctx: dict) -> dict:
     running_jobs = []
     jm = _job_manager(ctx)
     try:
-        # Раунд 20: «Последние запуски» — до 20; активные — из ПОЛНОГО
+        # «Последние запуски» — до 20; активные — из ПОЛНОГО
         # списка, а не из среза (running может быть старше 20 записей)
         all_jobs = jm.list()
         recent_jobs = all_jobs[:20]
@@ -611,7 +611,7 @@ def _dashboard(ctx: dict) -> dict:
 
 
 def _actions(ctx: dict) -> dict:
-    """Реестр стадий из STAGE_SPECS + доступность скриптов (раунд 4)."""
+    """Реестр стадий из STAGE_SPECS + доступность скриптов ."""
     repo = _repo_root(ctx)
     items = []
     for key, spec in ordered_stages():
@@ -818,7 +818,7 @@ def _project_stats(ctx: dict) -> dict:
 def _project_tree(ctx: dict) -> dict:
     """Дерево глав: номер, папка, артефакты с размерами.
 
-    Раунд 23: помимо канонических имён — легаси-суффиксы старых проектов:
+    помимо канонических имён — легаси-суффиксы старых проектов:
     ``*_translated.txt``, ``*_redacted.txt``, ``*_polished.txt``
     (вкладка «Редактор» видит ключевые файлы независимо от маски)."""
     common = _import_common(ctx)
@@ -855,7 +855,7 @@ def _project_tree(ctx: dict) -> dict:
 def _templates(ctx: dict) -> dict:
     """Наборы шаблонов (templates/*) с файлами набора.
 
-    Раунд 21: files — полное дерево набора (относительные пути со
+    files — полное дерево набора (относительные пути со
     слэшами) — единый ответ для «создания проекта» и «Шаблонов».
     """
     prj = _import_projects(ctx)
@@ -863,8 +863,8 @@ def _templates(ctx: dict) -> dict:
     sets = prj.list_template_sets(repo / "templates")
     out = []
     for s in sets:
-        # раунд 23: ремонт скелета при чтении — инвариант prompts/+source/
-        # гарантирован и для наборов, созданных до раунда 23
+        # ремонт скелета при чтении — инвариант prompts/+source/
+        # гарантирован и для наборов, созданных ранее
         prj._ensure_template_skeleton(repo / "templates" / s)
         out.append({"name": s, "files": prj.templates_files(repo / "templates", s)})
     return {"ok": True, "templates": out}
@@ -1056,7 +1056,7 @@ def _tcl_review_apply(ctx: dict) -> dict:
 
 
 def _env_path(ctx: dict, scope: str) -> Path:
-    """Файл .env для web-редактирования (раунд 4).
+    """Файл .env для web-редактирования.
 
     scope=project → ТОЛЬКО pdir/.env (собственный файл проекта; если его
     нет — хендлеры отвечают exists=False); scope=global → системный
@@ -1428,7 +1428,7 @@ LOG_TAIL_LIMIT = 1024 * 1024  # максимум 1 МБ на просмотр
 
 
 def _logs_list(ctx: dict) -> dict:
-    """Дерево логов проекта: рекурсивно по logs/, только *.log (раунд 14).
+    """Дерево логов проекта: рекурсивно по logs/, только *.log.
     path — относительный путь от logs/ (папки через '/'); GET /api/logs."""
     pdir, _section, _name = _project_ctx(ctx)
     out = []
@@ -1455,7 +1455,7 @@ def _logs_read(ctx: dict) -> dict:
     pdir, _section, _name = _project_ctx(ctx)
     name = ctx["params"]["name"]
     sub = ctx["query"].get("dir", "")
-    # раунд 14: подпапка — любой относительный путь от logs/
+    # подпапка — любой относительный путь от logs/
     # (путь валидируется _resolve_project_path, выход за logs/ запрещён)
     base = (pdir / "logs" / sub) if sub else (pdir / "logs")
     target = _resolve_project_path(ctx, base, name)
@@ -1479,7 +1479,7 @@ def _logs_read(ctx: dict) -> dict:
 
 
 def _notes_get(ctx: dict) -> dict:
-    """Заметки (GET /api/notes): projects/notes.md целиком (раунд 12).
+    """Заметки (GET /api/notes): projects/notes.md целиком.
     Файла нет — пустая строка (создастся при PUT)."""
     path = _projects_root(ctx) / "notes.md"
     content = path.read_text(encoding="utf-8", errors="replace") \
@@ -1760,7 +1760,7 @@ def _persist_run_params(ctx: dict, pdir: Path, stage: str,
 
     Если pdir/.env нет — копия системного projects/.env (или шаблона),
     затем обновляются ключи по env_keys_for. api_key пишется в .env
-    (раунд 13: локальный однопользовательский проект — удобство важнее
+    (локальный однопользовательский проект — удобство важнее
     сокрытия; ключ хранится как API_KEY). Пустые значения НЕ пишутся;
     системный .env не трогается."""
     from web.stages import env_keys_for
@@ -1934,7 +1934,7 @@ def _stage_spec(ctx: dict) -> dict:
         try:
             from web.stages import env_keys_for
             pdir, _sec, _name = _project_ctx(ctx)
-            # раунд 21 (п.9): автоподхват compiled_chapters.txt для NER —
+            # автоподхват compiled_chapters.txt для NER —
             # если дефолт пуст и файл есть. .env ниже приоритетнее
             # (явные значения всегда выигрывают)
             if ctx["params"]["key"] == "ner":
@@ -1948,8 +1948,8 @@ def _stage_spec(ctx: dict) -> dict:
             for field in spec.get("fields", []):
                 for key in env_keys_for(
                         ctx["params"]["key"], field["name"]):
-                    # раунд 13: пустое значение не забивает fallback-ключ
-                    # (пустой TRANSLATE_MODEL не прячет общую MODEL)
+                    # пустое значение не забивает fallback-ключ
+                    # (пустой PIPELINE_MODEL не прячет общую MODEL)
                     if key in env and str(env[key]) != "":
                         val = env[key]
                         if field.get("type") == "bool":
@@ -2011,7 +2011,7 @@ def _stage_options(ctx: dict) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════
-# Шаблоны (раунд 21, вкладка «Шаблоны»)
+# Шаблоны (вкладка «Шаблоны»)
 # ════════════════════════════════════════════════════════════════════
 def _templates_root(ctx: dict) -> Path:
     """Корень шаблонов: templates/ репозитория."""
@@ -2087,7 +2087,7 @@ def _templates_file_put(ctx: dict) -> dict:
 def _templates_file_delete(ctx: dict) -> dict:
     """DELETE /api/templates/{set}/file?path=… — удалить файл.
 
-    Каталоги неизменяемы (раунд 23) → 403."""
+    Каталоги неизменяемы  → 403."""
     prj = _import_projects(ctx)
     name = ctx["params"]["set"]
     if name == prj.TEMPLATE_PROTECTED:
@@ -2163,7 +2163,7 @@ def _templates_upload(ctx: dict) -> dict:
         except SandboxError as exc:
             raise ApiError(400, str(exc))
         if not target.parent.is_dir():
-            # раунд 23: каталоги в шаблонах не создаются даже неявно
+            # каталоги в шаблонах не создаются даже неявно
             raise ApiError(400, f"Каталог не существует: {rel}")
         target.write_bytes(f["data"])
         saved.append(rel)
@@ -2202,7 +2202,7 @@ def _templates_mkdir(ctx: dict) -> dict:
         raise ApiError(400, "path обязателен")
     err = prj.create_template_dir(_templates_root(ctx), name, rel)
     if err:
-        # раунд 23: любые каталоги в шаблонах запрещены → всегда 403
+        # любые каталоги в шаблонах запрещены → всегда 403
         code = 403 if ("General" in err or "Каталоги" in err) else \
             (404 if "не найден" in err or "Недопустимый" in err else 400)
         raise ApiError(code, f"{name}: {err}")

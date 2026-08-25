@@ -26,11 +26,11 @@ log = logging.getLogger("web.stages")
 # host → {STAGE}_HOST. api_key/profile в .env НЕ пишутся.
 
 def env_keys_for(stage: str, field: str, profile: str = "") -> list[str]:
-    """Кандидаты env-ключей для поля формы стадии (R9, раунд 12/13).
+    """Кандидаты env-ключей для поля формы стадии (R9, ).
 
     Схема без профилей: host → HOST (единый адрес), model →
     <STAGE>_MODEL → MODEL, api_key → API_KEY (единый ключ — персист
-    и предзаполнение, раунд 13: ключ хранится в .env). profile убран.
+    и предзаполнение, ключ хранится в .env). profile убран.
     Персист берёт первый ключ; предзаполнение — первый найденный.
     """
     s = (stage or "").upper()
@@ -59,7 +59,7 @@ def _range_argv(name: str, form: dict, start_key: str = "start",
 
 
 def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
-    """--host/--model/--api_key для LLM-стадий (раунд 12, без профилей).
+    """--host/--model/--api_key для LLM-стадий (без профилей).
 
     Приоритет: явные значения формы > HOST/API_KEY/MODEL из .env
     (find_env_file от папки проекта + get_server_config/get_stage_model).
@@ -206,7 +206,7 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
         argv.append("--no_reasoning")
     elif re_effort not in (None, ""):
         argv += ["--reasoning_effort", str(re_effort)]
-    # Раунд 20: промпт-файлы конвейера — режим auto/separate/combined.
+    # промпт-файлы конвейера — режим auto/separate/combined.
     # combined → --prompt_file (теги); separate → по одному флагу на стадию;
     # auto → явно заданные поля, остальное дорешает resolve_prompt_paths.
     prompt_mode = form.get("prompt_mode") or "auto"
@@ -398,7 +398,7 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
 
 
 # ── Общие поля сервера для LLM-стадий (вставляются в начало формы) ──
-# Раунд 13: значения подтягиваются из .env и вписываются в поля —
+# значения подтягиваются из .env и вписываются в поля —
 # подсказки «Пусто = …» не нужны (help отсутствует).
 _LLM_FIELDS = [
     {"name": "host", "label": "Сервер LLM",

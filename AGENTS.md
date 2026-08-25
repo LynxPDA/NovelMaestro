@@ -116,7 +116,7 @@ argparse («СИМВОЛЫ»/«ТОКЕНЫ»).
 
 | Задача | Функция |
 | --- | --- |
-| .env | `parse_dotenv` / `find_env_file` (системный `projects/.env`, вверх от старта) / `get_server_config` (единый `HOST/API_KEY/MODEL`, раунд 12: профили local/remote убраны) / `get_stage_model` (`<СТАДИЯ>_MODEL` → общая `MODEL`) / `print_env_help` |
+| .env | `parse_dotenv` / `find_env_file` (системный `projects/.env`, вверх от старта) / `get_server_config` (единый `HOST/API_KEY/MODEL`, профили local/remote убраны) / `get_stage_model` (`<СТАДИЯ>_MODEL` → общая `MODEL`) / `print_env_help` |
 | лог | `setup_logging` / `log_argv` (фактическая команда запуска в лог) |
 | модель | `determine_model` (только из аргумента/`.env`; авто через `GET /models` убрано — модель обязательна) |
 | промпты | `load_prompt` (файл целиком) / `get_tagged_prompt` (теги) |
@@ -131,7 +131,7 @@ argparse («СИМВОЛЫ»/«ТОКЕНЫ»).
 | чтение | `read_text_safe` (utf-8 → cp1251 fallback) |
 | прогресс web | `web_progress_enabled` (флаг `WEB_PROGRESS=1`) / `emit_progress` (done, total, label → `@@PROGRESS@@` + JSON; только в web-режиме, no-op в CLI) |
 | главы | `parse_chapter_id` / `build_chapter_map` / `find_chapter_file` / `format_ranges` / `compile_chapter_texts` (склейка `chapter.txt` из папок в один файл) |
-| проекты | **ТОЛЬКО** `core/projects.py`: `DEFAULT_SECTIONS` (ACTIVE/HOLD/DONE, алиас `SECTIONS`) / `load_sections` / `save_sections` / `create_section` / `rename_section` (в существующий — перенос проектов) / `delete_section` (непустой — отказ) / `ensure_projects_root` / `valid_project_name` / `sanitize_project_name` / `list_projects` / `project_stats` / `project_progress_table` / `create_project` / `move_project` / `rename_project` / `copy_project` / `delete_project` / `list_template_sets` / `TEMPLATE_SKELETON` (`prompts`+`source`) / `_ensure_template_skeleton` (идемпотентный ремонт скелета) / `create_template_set` (каркас prompts/+source/) / `create_template_dir` (раунд 23: всегда ошибка — каталоги неизменяемы) / `copy_template_set` / `delete_template_set` / `templates_files` (пустые каталоги как `path/`) / `read_template_file` / `write_template_file` / `delete_template_file` (каталог → ошибка; `str \| None`) / `template_file_info` / `move_template_file` (только файлы; каталог → ошибка) / `fill_project_from_template` / `render_metadata` / `write_project_metadata` |
+| проекты | **ТОЛЬКО** `core/projects.py`: `DEFAULT_SECTIONS` (ACTIVE/HOLD/DONE, алиас `SECTIONS`) / `load_sections` / `save_sections` / `create_section` / `rename_section` (в существующий — перенос проектов) / `delete_section` (непустой — отказ) / `ensure_projects_root` / `valid_project_name` / `sanitize_project_name` / `list_projects` / `project_stats` / `project_progress_table` / `create_project` / `move_project` / `rename_project` / `copy_project` / `delete_project` / `list_template_sets` / `TEMPLATE_SKELETON` (`prompts`+`source`) / `_ensure_template_skeleton` (идемпотентный ремонт скелета) / `create_template_set` (каркас prompts/+source/) / `create_template_dir` (всегда ошибка — каталоги неизменяемы) / `copy_template_set` / `delete_template_set` / `templates_files` (пустые каталоги как `path/`) / `read_template_file` / `write_template_file` / `delete_template_file` (каталог → ошибка; `str \| None`) / `template_file_info` / `move_template_file` (только файлы; каталог → ошибка) / `fill_project_from_template` / `render_metadata` / `write_project_metadata` |
 
 Запрещено: свои парсеры .env, свои стрим-обработчики SSE, свои парсеры имён
 главных папок. Добавил функцию в таблицу — обнови и `core/README.md`,
@@ -197,9 +197,9 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
 - Не убирать fail-fast в web/pipeline.py (returncode 0 + непустой выходной
   файл + grep слов-ошибок).
 - Не читай файлы с приватными SSH ключами.
-- Не возвращай cli/tui и `backends/` — раунд 4 сделал интерфейс web-only;
-  исторический документ AUDIT.md удалён (раунд 9), его выводы учтены.
-- НЕ вводи настройку слов-ошибок пайплайна (M7 отменён, раунд 11): текст
+- Не возвращай cli/tui и `backends/` — интерфейс web-only;
+  исторический документ AUDIT.md удалён, его выводы учтены.
+- НЕ вводи настройку слов-ошибок пайплайна (M7 отменён): текст
   перевода НЕ попадает в stdout скриптов (только прогресс/ошибки) — жёсткий
   `_ERROR_RE` в web/pipeline.py ловит реальные сбои; настройка = регресс.
 
@@ -233,7 +233,7 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
    Тесты НЕ должны ходить в сеть: LLM только мокать (monkeypatch на
    `stream_chat_completion` / `requests.post`), данные — во временных
    папках pytest (`tmp_path`).
-8. **Стандарт коммитов** (с раунда 22): `<тип>(<область>): <описание на
+8. **Стандарт коммитов**: `<тип>(<область>): <описание на
    русском>`; типы — `feat`/`fix`/`refactor`/`docs`/`test`/`chore`;
    области — `core`/`scripts`/`web`/`templates`/`tests`/`docs`/`repo`.
    Описание — инфинитив, до ~72 символов; одно логическое изменение —
@@ -290,6 +290,6 @@ git add -A && git commit -m "…" && git push origin
 
 ## 11. Правила коммитов
 
-Коммиты строго атомарны (одно логическое изменение — один коммит) и оформляются по Conventional Commits: `<type>(<scope>): краткое описание на русском`. Допустимые `type`: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. `scope` — короткий латинский модуль (`web`, `api`, `pipeline`, `ner`, `core`, `docs`). Описание до 72 символов, без точки в конце; детали, списки изменений и ссылки на раунды/задачи (`Refs: round-21`) выносятся в тело коммита.
+Коммиты строго атомарны (одно логическое изменение — один коммит) и оформляются по Conventional Commits: `<type>(<scope>): краткое описание на русском`. Допустимые `type`: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. `scope` — короткий латинский модуль (`web`, `api`, `pipeline`, `ner`, `core`, `docs`). Описание до 72 символов, без точки в конце; детали, списки изменений и ссылки на задачи выносятся в тело коммита.
 
-Категорически запрещены произвольные префиксы и неинформативные сообщения: `Раунд`, `W*`, `M*`, `TODO:`, `Шаблоны:`, `фиксы`, `правки`, CAPS и эмодзи. Запрещено смешивать несвязанные правки (например, новую фичу и обновление статусов в `TODO.md`) в одном коммите. Эталонные примеры: `feat(run): добавлен прогресс запусков`, `fix(web): убран кегль 11 из предпросмотра`, `docs(todo): отмечено завершение раунда 18`.
+Категорически запрещены произвольные префиксы и неинформативные сообщения: `W*`, `M*`, `TODO:`, `Шаблоны:`, `фиксы`, `правки`, CAPS и эмодзи. Запрещено смешивать несвязанные правки (например, новую фичу и обновление статусов в `TODO.md`) в одном коммите. Эталонные примеры: `feat(run): добавлен прогресс запусков`, `fix(web): убран кегль 11 из предпросмотра`, `docs(todo): обновлён статус задач`.

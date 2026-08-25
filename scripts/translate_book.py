@@ -125,7 +125,7 @@ MODE_PRESETS = {
     "polish":    dict(min_len_ratio=0.9, max_retries=3,  threads_cap=16, trace_default=False),
 }
 
-# Раунд 19: человекочитаемые фазы для web-прогресса (emit_progress)
+# человекочитаемые фазы для web-прогресса (emit_progress)
 MODE_LABELS = {
     "translate": "Перевод",
     "redact": "Редактура",
@@ -473,9 +473,9 @@ def main(argv=None):
             futs = {ex.submit(process_item, i, orig, draft, ctx): i
                     for i, orig, draft in items}
             pbar = tqdm(total=len(items), unit="chunk", disable=_web_mode)
-            # Раунд 20: свой счётчик — pbar.n мёртв при disable=True
+            # свой счётчик — pbar.n мёртв при disable=True
             done = 0
-            # Раунд 21: стартовое событие прогресса — бар и «📊» видны
+            # стартовое событие прогресса — бар и «📊» видны
             # сразу, до первого завершённого чанка (медленный LLM)
             emit_progress(done, len(items), _mode_label)
             if _web_mode:
@@ -502,7 +502,7 @@ def main(argv=None):
                     pbar.update(1)
                     done += 1
                     emit_progress(done, len(items), _mode_label)
-                    # Раунд 21: «📊» в текстовый лог каждые 10 чанков
+                    # «📊» в текстовый лог каждые 10 чанков
                     if _web_mode and done % 10 == 0:
                         logger.info(f"📊 Прогресс: {done}/{len(items)}")
             pbar.close()

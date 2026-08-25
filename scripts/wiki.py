@@ -818,7 +818,7 @@ def run_wiki_generation(
     _log(logger, logging.INFO,
          "🔍 Извлечение контекста (поиск по translation)...")
     fragments_map: dict[str, list[str]] = {}
-    # Раунд 21: стартовое событие прогресса — бар виден сразу
+    # стартовое событие прогресса — бар виден сразу
     emit_progress(0, len(filtered), "Извлечение контекста")
     if web_progress_enabled():
         _log(logger, logging.INFO, f"📊 Прогресс: 0/{len(filtered)}")
@@ -881,7 +881,7 @@ def run_wiki_generation(
     pbar = tqdm(total=total_tasks, desc="Wiki generation",
                 disable=web_progress_enabled())
     completed = 0
-    # Раунд 21: стартовое событие прогресса — бар виден сразу
+    # стартовое событие прогресса — бар виден сразу
     emit_progress(0, total_tasks, "Генерация статей")
     if web_progress_enabled():
         _log(logger, logging.INFO, f"📊 Прогресс: 0/{total_tasks}")
@@ -1195,7 +1195,7 @@ def main():
     )
 
     args = parser.parse_args()
-    # Сервер: CLI > HOST/API_KEY/MODEL из .env (раунд 12)
+    # Сервер: CLI > HOST/API_KEY/MODEL из .env
     env_data = parse_dotenv(find_env_file(args.env_file)) if args.env_file \
         else parse_dotenv(find_env_file())
     sc = get_server_config(env_data)
@@ -1238,7 +1238,7 @@ def main():
 
     # ── Модель ──
     if args.no_reasoning:
-        args.thinking = None  # раунд 12: disable в select = --no_reasoning
+        args.thinking = None  # disable в select = --no_reasoning
     base_url = args.host.rstrip("/")
     if not base_url.endswith("/v1"):
         base_url += "/v1"

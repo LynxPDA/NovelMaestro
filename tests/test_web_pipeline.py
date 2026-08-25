@@ -75,8 +75,8 @@ def test_pipeline_stage_in_specs():
     names = [f["name"] for f in spec["fields"]]
     assert "action" in names and "start" in names and "end" in names
     assert "jobs" in names and "host" in names and "api_key" in names
-    assert "profile" not in names  # раунд 12: профили убраны
-    # раунд 20: выбор промпт-файлов (auto/separate/combined)
+    assert "profile" not in names  # профили убраны
+    # выбор промпт-файлов (auto/separate/combined)
     assert "prompt_mode" in names and "prompt_file" in names
     assert "translate_prompt" in names and "redact_prompt" in names
     assert "polish_prompt" in names
@@ -105,7 +105,7 @@ def test_build_pipeline_argv():
 
 
 def test_build_pipeline_prompt_argv():
-    """Раунд 20: режимы промптов pipeline → нужные флаги argv."""
+    """режимы промптов pipeline → нужные флаги argv."""
     from web.stages import build_command
     ctx: dict = {}
     base = {"action": "4", "host": "http://h", "model": "m",
@@ -133,11 +133,11 @@ def test_build_pipeline_prompt_argv():
 
 
 def test_resolve_prompt_paths(tmp_path, monkeypatch):
-    """Раунд 20: auto — кандидат с тегами > дефолтные имена по стадиям;
+    """auto — кандидат с тегами > дефолтные имена по стадиям;
     явные флаги приоритетнее auto."""
     from web.pipeline import resolve_prompt_paths
     monkeypatch.chdir(tmp_path)
-    # пусто — дефолтные имена по стадиям (как раунд 19)
+    # пусто — дефолтные имена по стадиям
     out = resolve_prompt_paths()
     assert out[1] == "prompts/translate_prompt.txt"
     assert out[2] == "prompts/redact_prompt.txt"
@@ -165,7 +165,7 @@ def test_resolve_prompt_paths(tmp_path, monkeypatch):
 
 
 def test_build_stage_cmd_prompt_override(tmp_path):
-    """Раунд 20: переданный prompt_file подменяет дефолт по стадии."""
+    """переданный prompt_file подменяет дефолт по стадии."""
     from web.pipeline import build_stage_cmd
     script = tmp_path / "translate_book.py"
     cmd = build_stage_cmd(1, script, tmp_path / "in", tmp_path / "out",
@@ -231,7 +231,7 @@ def test_pipeline_help_smoke():
                        capture_output=True, text=True, timeout=30)
     assert r.returncode == 0
     assert "--action" in r.stdout
-    # раунд 20: флаги промпт-файлов
+    # флаги промпт-файлов
     assert "--prompt_file" in r.stdout
     assert "--translate_prompt" in r.stdout
 

@@ -1,4 +1,4 @@
-/* ui-core.js — чистые функции SPA (раунд 21).
+/* ui-core.js — чистые функции SPA.
  *
  * Вынесены из app.js / run-views.js / project-views.js для юнит-тестов
  * node --test (tests/spa/ui-core.test.mjs). UMD: в браузере — window.UICore,
@@ -217,7 +217,7 @@
         var f = files[i];
         if (prefix && f.indexOf(prefix + "/") !== 0) continue;
         var rest = prefix ? f.slice(prefix.length + 1) : f;
-        if (!rest) continue; // раунд 22: пустой каталог ("source/") при входе в него
+        if (!rest) continue; // пустой каталог ("source/") при входе в него
         var parts = rest.split("/");
         if (parts.length > 1) {
           var dir = parts[0];
@@ -263,7 +263,7 @@
       return src.slice(l, r).replace(/\s+/g, " ").trim();
     },
 
-    /* ── матчер глоссария (раунд 23): термины → чанки с regex ──
+    /* ── матчер глоссария : термины → чанки с regex ──
      * ngramSize — размер n-граммы нечёткого поиска (аналог --ner_ngram
      * в translate_book.py, дефолт 3); threshold — порог пересечения н-грамм,
      * выше = строже (аналог --ner_threshold, дефолт 0.75).

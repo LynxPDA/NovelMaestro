@@ -167,14 +167,15 @@ def test_main_translate(tmp_path, monkeypatch):
 
 
 def test_main_resolves_server_from_env(tmp_path, monkeypatch):
-    """Раунд 12: host/model из .env (HOST/TRANSLATE_MODEL), без --host."""
+    """host/model из .env (HOST/MODEL), без --host; отдельные модели
+    под режимы убраны — берётся единая модель скрипта."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "book.txt").write_text("Исходный текст книги.",
                                        encoding="utf-8")
     (tmp_path / "ner.json").write_text("[]", encoding="utf-8")
     env = tmp_path / ".env"
-    env.write_text("HOST=http://from-env:9989\nMODEL=общая\n"
-                   "TRANSLATE_MODEL=стадийная\n", encoding="utf-8")
+    env.write_text("HOST=http://from-env:9989\nMODEL=общая\n",
+                   encoding="utf-8")
     seen: dict = {}
     def fake_stream(base_url, model, *a, **k):
         seen["base_url"] = base_url

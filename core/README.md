@@ -2,7 +2,7 @@
 
 .env: parse_dotenv / find_env_file (системный projects/.env, вверх от
   старта: сначала DIR/projects/.env, затем DIR/.env) / get_server_config
-  (HOST/API_KEY/MODEL — раунд 12, профили убраны) /
+  (HOST/API_KEY/MODEL, профили убраны) /
   get_stage_model (СТАДИЯ_MODEL → общая MODEL) / print_env_help
 лог/модель: setup_logging / log_argv (фактическая команда запуска,
   значения --*api_key*/*token*/*secret* маскируются — M2) /
@@ -36,7 +36,7 @@ LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) 
 
 # core/projects.py — менеджмент проектов (общий слой бэкэндов)
 
-разделы (раунд 22, динамические): DEFAULT_SECTIONS (ACTIVE/HOLD/DONE,
+разделы (динамические): DEFAULT_SECTIONS (ACTIVE/HOLD/DONE,
   алиас SECTIONS) / load_sections (файл .sections.json → дефолты + легаси
   DONE_OPEN при первом запуске; папки на диске до-обнаруживаются) /
   save_sections (атомарно tmp+replace) / create_section /
@@ -48,7 +48,7 @@ LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) 
   только латиница/цифры/.*-)
 проекты: list_projects / project_stats / project_progress_table
   (таблица готовности глав: по-главные флаги translate/redact/polish,
-  легаси-суффиксы, ner/wiki/compiled — раунд 21) /
+  легаси-суффиксы, ner/wiki/compiled) /
   create_project (каркас source/chapters/prompts/logs/tmp) /
   move_project (перенос между разделами) / rename_project /
   delete_project (без подтверждений — они в UI) / copy_project (дубликат)
@@ -58,19 +58,19 @@ LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) 
   _ensure_template_skeleton (идемпотентный mkdir скелета; ремонт при
   чтении — web/api.py::_templates) /
   create_template_set (каркас prompts/+source/ как у General) /
-  create_template_dir (раунд 23: ВСЕГДА ошибка «Каталоги в шаблонах
+  create_template_dir (ВСЕГДА ошибка «Каталоги в шаблонах
   неизменяемы» — каталоги не создаются) /
   copy_template_set (ИЗ General можно; после копии — ремонт скелета) /
   delete_template_set (General — запрещён) /
   templates_files (дерево файлов набора, относительные пути;
   пустые каталоги — как "path/") /
-  read_template_file / write_template_file (раунд 23: только ФАЙЛЫ —
+  read_template_file / write_template_file (только ФАЙЛЫ —
   родительский каталог обязан существовать, неявное создание каталогов
-  запрещено; str|None) / delete_template_file (раунд 23: только файлы —
+  запрещено; str|None) / delete_template_file (только файлы —
   каталог возвращает «Каталоги в шаблонах неизменяемы», str|None;
   эскейпы за пределы набора и запись в General отклоняются) /
   template_file_info (size/mtime файла — мета редактора) /
-  move_template_file (раунд 23: только файлы; каталог — «Каталоги в
+  move_template_file (только файлы; каталог — «Каталоги в
   шаблонах неизменяемы»; General запрещён, dst не должен существовать,
   родительский каталог dst — обязан существовать) /
   fill_project_from_template (prompts/+source/ без перезаписи) /

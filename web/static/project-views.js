@@ -7,7 +7,7 @@ function viewProject(section, name) {
     ner: null,
     review: {},
     search: null,
-    editor: null, // раунд 23: вкладка «Редактор» (глава/панели/подсветка)
+    editor: null, // вкладка «Редактор» (глава/панели/подсветка)
   };
   const page = h("div", { class: "page" });
 
@@ -132,7 +132,7 @@ function viewProject(section, name) {
       multiple: true,
       class: "hidden",
     });
-    /* раунд 23: «＋ Файл» — создать пустой файл и открыть редактор;
+    /* «＋ Файл» — создать пустой файл и открыть редактор;
        «＋ Каталог» — POST /api/mkdir */
     const addFileBtn = h(
       "button",
@@ -291,7 +291,7 @@ function viewProject(section, name) {
         )
       : h("span", { class: "fname" }, fileIcon(e) + " " + e.name);
     const actions = h("div", { class: "factions" });
-    /* раунд 23: «Переим.» — и у файлов, и у каталогов (POST /api/file/rename) */
+    /* «Переим.» — и у файлов, и у каталогов (POST /api/file/rename) */
     const renameBtn = h(
       "button",
       {
@@ -496,7 +496,7 @@ function viewProject(section, name) {
       frame,
     );
   }
-  /* ── Редактор глав (раунд 23) ─────────────────── */
+  /* ── Редактор глав  ─────────────────── */
   /* Поиск артефактов по маске: канон (translated.txt) И легаси
      (chapter1_translated.txt — старые проекты). test — предикат по имени. */
   const ED_CLASSIFY = [
@@ -1454,7 +1454,7 @@ function viewProject(section, name) {
     }
 
     const search = h("input", { class: "input", placeholder: "Поиск…" });
-    // раунд 23: из «→ Глоссарий» редактора — применяем один раз и сбрасываем,
+    // из «→ Глоссарий» редактора — применяем один раз и сбрасываем,
     // чтобы ручные заходы на вкладку не наследовали чужой поиск
     if (st.search) {
       search.value = st.search;
@@ -2148,7 +2148,7 @@ function viewProject(section, name) {
 
   /* ── Конфиг: env + metadata ────────────────────── */
   /* ── Конфиг: env + metadata + обложка (W6) ─────── */
-  // раунд 21: «Статус» — таблица готовности глав + сводка ner/wiki/compiled
+  // «Статус» — таблица готовности глав + сводка ner/wiki/compiled
   async function statusView() {
     let data;
     try {
@@ -2286,11 +2286,11 @@ function viewProject(section, name) {
     );
     let hasOwn = false;
     let envVisible = false;
-    /* раунд 13/15: select активен — «Общий .env» показывает системный
+    /* select активен — «Общий .env» показывает системный
        (read-only, сохранять из проекта НЕЛЬЗЯ — редактируется на
        главной), «Свой .env» — редактор проекта (создание/правка/
        удаление). loadEnv НЕ трогает modeSel — иначе выбор пользователя
-       сбрасывался (баг раунда 14). */
+       сбрасывался (баг). */
     async function loadEnv() {
       err.textContent = "";
       try {
@@ -2400,7 +2400,7 @@ function viewProject(section, name) {
             await api(`/env?${q}&scope=project`, { method: "DELETE" });
             toast(".env проекта удалён");
             await loadEnv();
-            // раунд 15: после удаления проект возвращается к системному
+            // после удаления проект возвращается к системному
             if (!hasOwn) {
               modeSel.value = "shared";
               await loadSharedEnv();
@@ -2415,7 +2415,9 @@ function viewProject(section, name) {
       envToolbar.replaceChildren();
       envToolbar.append(modeSel, h("span", { class: "spacer" }));
       if (modeSel.value === "shared") {
-        // раунд 15: системный .env — read-only, из проекта сохранять нельзя
+        // системный .env — read-only, из проекта сохранять нельзя;
+        // «Удалить .env» в этом режиме не показываем: удаление —
+        // только из режима «Свой .env проекта»
         envMeta.textContent =
           "Системный .env (projects/.env) — read-only, редактируется на главной, вкладка «Настройки»";
         if (hasOwn) envToolbar.append(envDel);
@@ -2829,7 +2831,7 @@ function viewProject(section, name) {
 
   /* ── Логи (M8) ─────────────────────────────────── */
   async function logsView() {
-    /* раунд 14: структура папок как «Проекты-Файлы» (crumbs + подпапки),
+    /* структура папок как «Проекты-Файлы» (crumbs + подпапки),
        отображаются только *.log */
     const q = new URLSearchParams({ project: `${section}/${name}` });
     let data;
@@ -3169,7 +3171,7 @@ function viewProject(section, name) {
     }
     let current = data.reports[0];
     let page = 0; // M8: страница таблицы текущего отчёта
-    let rPage = 0; // раунд 12: страница списка отчётов (10/стр)
+    let rPage = 0; // страница списка отчётов (10/стр)
     const REPORT_PAGE_SIZE = 10;
     const list = h("div", { class: "prompt-list" });
     const listPager = h("div", { class: "ner-pager" });

@@ -16,7 +16,7 @@ function h(tag, attrs = {}, ...children) {
       node.addEventListener(k.slice(2), v);
     } else if (k === "value") {
       // textarea: setAttribute("value") НЕ заполняет содержимое —
-      // значение только через свойство (баг глоссария, раунд 11)
+      // значение только через свойство (баг глоссария, )
       node.value = v;
     } else node.setAttribute(k, v);
   }
@@ -35,7 +35,7 @@ const PAGE_SIZE = 200;
 /* Предпросмотр markdown/html (Заметки и «Правка» файлов).
    Кегль — localStorage previewFontSize (не .env: UI-предпочтение).
    srcdoc-iframe не наследует тему страницы — стили задаём явно. */
-const PREVIEW_FONT_KEY = "previewFontSizeV2"; // раунд 21: старый ключ
+const PREVIEW_FONT_KEY = "previewFontSizeV2"; // старый ключ
 // previewFontSize (дефолт 7) игнорируем — новый дефолт 12px должен
 // сработать у всех, а не только у тех, кто не менял кегль
 const PREVIEW_FONT_DEFAULT = 12;
@@ -717,7 +717,7 @@ function sectionBlock(section, projects, sectionActive, statsMap) {
   );
 }
 
-/* ── Настройки: системный .env (projects/.env, раунд 8) ── */
+/* ── Настройки: системный .env (projects/.env, ) ── */
 /* ── Заметки (markdown) ──────────────────────────────────── */
 async function viewNotes() {
   const err = h("div", { class: "form-error" });
@@ -976,8 +976,8 @@ async function viewDashboard() {
   );
   /* текущие активные запуски: статус + строки лога (разворачиваются) */
   const running = d.running_jobs || [];
-  // мини-бар прогресса (раунд 19): label + трек + done/total.
-  // Раунд 21: у running-задачи без событий прогресса бар виден
+  // мини-бар прогресса : label + трек + done/total.
+  // у running-задачи без событий прогресса бар виден
   // («ожидание…») — раньше возвращался null и запуск выглядел мёртвым
   function miniBar(p, status) {
     if (!p && status !== "running") return null;
@@ -1015,7 +1015,7 @@ async function viewDashboard() {
         "a",
         {
           class: "dash-run-title",
-          // раунд 20: ведём на Запуски проекта — активный запуск там
+          // ведём на Запуски проекта — активный запуск там
           // подхватится сам (autoAttach), без чужого job id в hash
           href: `#/run/${j.project}`,
         },
@@ -1087,7 +1087,7 @@ async function viewDashboard() {
       "tr",
       {
         class: "dash-recent-row",
-        // раунд 20: клик по истории — в проект на вкладку Запуски,
+        // клик по истории — в проект на вкладку Запуски,
         // а не в конкретный (возможно завершённый) запуск с логом
         onclick: () => {
           location.hash = `#/run/${j.project}`;
@@ -1180,7 +1180,7 @@ async function viewDashboard() {
 }
 
 // автообновление дашборда: раз в 20 с перечитываем сводку и запуски.
-// Раунд 21: таймер НЕ регистрируется один раз навсегда — ensureDashTimer
+// таймер НЕ регистрируется один раз навсегда — ensureDashTimer
 // пересоздаёт его при каждом входе на дашборд (иначе после первого ухода
 // автообновление умирало навсегда).
 let dashTimer = null;
@@ -1191,7 +1191,7 @@ function ensureDashTimer() {
     }, 20000);
   }
 }
-// раунд 21: поколение рендера — устаревший async-рендер не перетирает #app
+// поколение рендера — устаревший async-рендер не перетирает #app
 // (гонка таймер/навигация, та же идея, что st.gen в run-views.js)
 let renderGen = 0;
 
@@ -1378,7 +1378,7 @@ function makeEditor(initial, langExt, onUpdate) {
           "&": { height: "100%", fontSize: "13px" },
           ".cm-scroller": { fontFamily: "inherit" },
         }),
-        // раунд 23: колбэк обновлений CM (doc / viewport / selection)
+        // колбэк обновлений CM (doc / viewport / selection)
         ...(onUpdate
           ? [EditorView.updateListener.of((u) => onUpdate(u))]
           : []),
@@ -1443,7 +1443,7 @@ function layout(content) {
       {
         class: "nav-item" + (route.view === view ? " nav-item-active" : ""),
         href: `#/${view}`,
-        // раунд 21: повторный клик по той же вкладке — полный рендер
+        // повторный клик по той же вкладке — полный рендер
         // (сброс внутреннего состояния: у «Шаблонов» — выход из набора)
         onclick: (ev) => {
           if (route.view === view) {
@@ -1510,7 +1510,7 @@ async function logout() {
 
 function render() {
   const root = document.querySelector("#app");
-  // раунд 20: старый view получает сигнал до очистки — гасит SSE-стрим
+  // старый view получает сигнал до очистки — гасит SSE-стрим
   // (run-views.js слушает pi-navigate на своём page, once); page лежит
   // глубоко (layout > body > main.content), поэтому ищем по классу
   const oldPage = root.querySelector(".page");
@@ -1523,9 +1523,9 @@ function render() {
     return;
   }
   const route = parseRoute();
-  const gen = ++renderGen; // раунд 21: поколение этого рендера
+  const gen = ++renderGen; // поколение этого рендера
   if (route.view === "dashboard") {
-    ensureDashTimer(); // раунд 21: вход на дашборд — таймер жив
+    ensureDashTimer(); // вход на дашборд — таймер жив
   } else if (dashTimer) {
     clearInterval(dashTimer);
     dashTimer = null;
@@ -1542,13 +1542,13 @@ function render() {
   };
   const fn = views[route.view] || (() => viewUnknown(route.view));
   Promise.resolve(fn()).then((node) => {
-    if (gen !== renderGen) return; // раунд 21: устаревший рендер — мимо
+    if (gen !== renderGen) return; // устаревший рендер — мимо
     root.replaceChildren();
     root.append(layout(node));
   });
 }
 
-/* ── Шаблоны (раунд 21) ──────────────────────────────────── */
+/* ── Шаблоны  ──────────────────────────────────── */
 function nameModal(title, placeholder, onOk) {
   const name = h("input", { class: "input", placeholder });
   const err = h("div", { class: "form-error" });
@@ -1591,7 +1591,7 @@ function nameModal(title, placeholder, onOk) {
   }
 }
 
-/* ── управление разделами (раунд 22) ────────────────────────── */
+/* ── управление разделами  ────────────────────────── */
 function sectionsModal() {
   const err = h("div", { class: "form-error" });
   const list = h("div", { class: "hub-sections-modal" });
@@ -1856,7 +1856,7 @@ async function viewTemplates() {
     const files = t.files || [];
     const entries = UICore.dirEntries(files, st.path);
     const crumbs = h("div", { class: "crumbs" });
-    // раунд 21: первый крош — СТОРОНА наборов (сброс st.set),
+    // первый крош — СТОРОНА наборов (сброс st.set),
     // второй — корень набора; раньше «Шаблоны · X» оставался внутри
     crumbs.append(
       crumb("Шаблоны", () => {
@@ -1917,7 +1917,7 @@ async function viewTemplates() {
           )
         : h("span", { class: "fname" }, "📄 " + e.name);
       const actions = h("div", { class: "factions" });
-      /* раунд 23: у каталогов шаблонов НИКАКИХ действий — только переход */
+      /* у каталогов шаблонов НИКАКИХ действий — только переход */
       if (writable && !e.dir) {
         actions.append(
           h(
@@ -2074,7 +2074,7 @@ async function viewTemplates() {
       },
       "＋ Файл",
     );
-    /* раунд 23: «＋ Каталог» убран — каталоги в шаблонах неизменяемы */
+    /* «＋ Каталог» убран — каталоги в шаблонах неизменяемы */
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
@@ -2223,7 +2223,7 @@ async function viewTemplates() {
   return page;
 }
 
-/* ── Справка (пустая, раунд 5) ───────────────────────────── */
+/* ── Справка (пустая, ) ───────────────────────────── */
 async function viewHelp() {
   return h(
     "div",

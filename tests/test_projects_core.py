@@ -157,7 +157,7 @@ def test_project_stats(tmp_path):
     (pdir2 / "compiled_5_10_txt.txt").unlink()
     (pdir2 / "book_5_10.epub").write_text("ok")
     assert "compiled: ✓" in P.project_stats(pdir2)
-    # раунд 23: экспорты по имени проекта {Имя}_{start}_{end}.epub/.fb2
+    # экспорты по имени проекта {Имя}_{start}_{end}.epub/.fb2
     (pdir2 / "book_5_10.epub").unlink()
     (pdir2 / "Книга2_5_10.epub").write_text("ok")
     assert "compiled: ✓" in P.project_stats(pdir2)
@@ -249,7 +249,7 @@ def test_fill_project_from_template(tmp_path):
 
 
 def test_fill_template_general_files(tmp_path):
-    """Раунд 22: info.md/donate.txt/replacements.txt из General попадают в проект."""
+    """info.md/donate.txt/replacements.txt из General попадают в проект."""
     tpl = tmp_path / "T"
     (tpl / "prompts").mkdir(parents=True)
     (tpl / "source").mkdir(parents=True)
@@ -300,7 +300,7 @@ def test_copy_project(tmp_path):
     assert not ok
 
 
-# ── раунд 22: разделы (создание/переименование/удаление) ──
+# ── разделы (создание/переименование/удаление) ──
 
 def test_sections_defaults_and_persist(tmp_path):
     root = tmp_path / "projects"
@@ -314,7 +314,7 @@ def test_sections_defaults_and_persist(tmp_path):
 
 
 def test_sections_legacy_migration(tmp_path):
-    """DONE_OPEN с установок раунда 21 подхватывается как кастомный."""
+    """DONE_OPEN со старых установок подхватывается как кастомный."""
     root = tmp_path / "projects"
     (root / "ACTIVE").mkdir(parents=True)
     (root / "HOLD").mkdir()
@@ -411,7 +411,7 @@ def test_sections_custom_not_touched_by_bootstrap(tmp_path):
     assert P.load_sections(root) == ["ACTIVE", "HOLD", "DONE", "Архив"]
 
 
-# ── раунд 21: шаблоны (CRUD) ────────────────────────────────
+# ── шаблоны (CRUD) ────────────────────────────────
 
 def _mk_tpl_set(root: Path, name: str) -> Path:
     s = root / name
@@ -425,7 +425,7 @@ def _mk_tpl_set(root: Path, name: str) -> Path:
 def test_create_template_set(tmp_path):
     assert P.create_template_set(tmp_path, "Mine") == "Mine"
     assert (tmp_path / "Mine" / "prompts").is_dir()
-    # раунд 22: каркас как у General — prompts/ + source/
+    # каркас как у General — prompts/ + source/
     assert (tmp_path / "Mine" / "source").is_dir()
     # дубль
     assert P.create_template_set(tmp_path, "Mine") is None
@@ -449,7 +449,7 @@ def test_copy_template_set(tmp_path):
 
 
 def test_template_skeleton_copy_repairs_degraded(tmp_path):
-    """Раунд 23: копия всегда со скелетом, даже если исходник деградировал."""
+    """копия всегда со скелетом, даже если исходник деградировал."""
     s = _mk_tpl_set(tmp_path, "Src")
     # «деградация»: исходник потерял каталог source/
     import shutil
@@ -463,7 +463,7 @@ def test_template_skeleton_copy_repairs_degraded(tmp_path):
 
 
 def test_template_skeleton_ensure(tmp_path):
-    """Раунд 23: _ensure_template_skeleton идемпотентен и создаёт оба каталога."""
+    """_ensure_template_skeleton идемпотентен и создаёт оба каталога."""
     d = tmp_path / "T"
     d.mkdir()
     P._ensure_template_skeleton(d)
@@ -493,7 +493,7 @@ def test_templates_files(tmp_path):
 
 
 def test_templates_empty_dirs_visible(tmp_path):
-    """Раунд 22: пустой каталог не пропадает из списка (trailing '/')."""
+    """пустой каталог не пропадает из списка (trailing '/')."""
     s = _mk_tpl_set(tmp_path, "T")
     (s / "prompts" / "extra").mkdir()
     files = P.templates_files(tmp_path, "T")
@@ -504,7 +504,7 @@ def test_templates_empty_dirs_visible(tmp_path):
 
 
 def test_delete_template_dir_forbidden(tmp_path):
-    """Раунд 23: каталоги в шаблонах неизменяемы — удаление запрещено."""
+    """каталоги в шаблонах неизменяемы — удаление запрещено."""
     s = _mk_tpl_set(tmp_path, "T")
     (s / "prompts" / "extra").mkdir()
     (s / "prompts" / "extra" / "x.txt").write_text("x", encoding="utf-8")
@@ -531,7 +531,7 @@ def test_delete_template_dir_forbidden(tmp_path):
 
 
 def test_move_template_dir_forbidden(tmp_path):
-    """Раунд 23: каталоги в шаблонах неизменяемы — перенос запрещён."""
+    """каталоги в шаблонах неизменяемы — перенос запрещён."""
     s = _mk_tpl_set(tmp_path, "T")
     (s / "prompts" / "extra").mkdir()
     (s / "prompts" / "extra" / "x.txt").write_text("x", encoding="utf-8")
@@ -550,7 +550,7 @@ def test_move_template_dir_forbidden(tmp_path):
 
 
 def test_create_template_dir_forbidden(tmp_path):
-    """Раунд 23: создание каталогов в шаблонах запрещено всегда."""
+    """создание каталогов в шаблонах запрещено всегда."""
     s = _mk_tpl_set(tmp_path, "T")
     err = P.create_template_dir(tmp_path, "T", "prompts/extra")
     assert err and "Каталоги в шаблонах неизменяемы" in err
@@ -574,7 +574,7 @@ def test_read_write_delete_template_file(tmp_path):
     assert P.write_template_file(tmp_path, "T", "prompts/translate.txt",
                                  "t2") is None
     assert (s / "prompts" / "translate.txt").read_text() == "t2"
-    # раунд 23: запись в несуществующий каталог запрещена (неявный mkdir)
+    # запись в несуществующий каталог запрещена (неявный mkdir)
     err = P.write_template_file(tmp_path, "T", "prompts/extra/x.txt", "x")
     assert err is not None and "Каталог не существует" in err
     assert not (s / "prompts" / "extra").exists()
@@ -622,7 +622,7 @@ def test_move_template_file(tmp_path):
                                 "prompts/main.txt") is None
     assert (s / "prompts" / "main.txt").is_file()
     assert not (s / "prompts" / "translate.txt").exists()
-    # раунд 23: перенос в несуществующий каталог запрещён
+    # перенос в несуществующий каталог запрещён
     err = P.move_template_file(tmp_path, "T", "prompts/main.txt",
                                "source/new/deep.txt")
     assert err is not None and "Каталог не существует" in err
@@ -647,7 +647,7 @@ def test_move_template_file(tmp_path):
                                 "prompts/x.txt") is not None
 
 
-# ── раунд 21: таблица готовности глав ───────────────────────
+# ── таблица готовности глав ───────────────────────
 
 def test_project_progress_table(tmp_path):
     pdir = tmp_path / "proj"
@@ -659,7 +659,7 @@ def test_project_progress_table(tmp_path):
     (pdir / "ner.json").write_text('[{ "term": "x" }]', encoding="utf-8")
     (pdir / "wiki.md").write_text("## Статья\n## Другая\n", encoding="utf-8")
     (pdir / "compiled_book.txt").write_text("c", encoding="utf-8")
-    # раунд 23: экспорт {имя_проекта}_{start}_{end}.epub виден в compiled
+    # экспорт {имя_проекта}_{start}_{end}.epub виден в compiled
     (pdir / "proj_1_2.epub").write_text("e", encoding="utf-8")
     (pdir / "proj_5_6.fb2").write_text("f", encoding="utf-8")
     st = P.project_progress_table(pdir)
