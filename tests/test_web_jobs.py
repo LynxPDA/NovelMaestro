@@ -532,7 +532,7 @@ def test_stage_order_and_titles():
     assert STAGE_SPECS["ner_check"]["title"] == "Проверка глоссария (LLM)"
     assert STAGE_SPECS["pipeline"]["title"].endswith("(LLM)")
     assert STAGE_SPECS["translate_check"]["title"] == \
-        "Проверка исходника (алгоритм)"
+        "Проверка перевода"
     assert STAGE_SPECS["translate_check_llm"]["title"] == "Проверка перевода (LLM)"
 
 

@@ -2132,7 +2132,7 @@ function viewProject(section, name) {
       card.querySelector(".review-actions")?.append(saveBtn);
       return card;
     }
-    /* порядок секций: 1 · глоссарий (LLM) → 2 · алгоритм
+    /* порядок секций: 1 · глоссарий (LLM) → 2 · проверка перевода
        → 3 · перевод (LLM) — совпадает с нумерацией */
     panel.append(
       makeCard(
@@ -2147,7 +2147,7 @@ function viewProject(section, name) {
       h(
         "div",
         { class: "review-section-title" },
-        "2 · Проверка исходника (алгоритм)",
+        "2 · Проверка перевода",
       ),
       h(
         "div",

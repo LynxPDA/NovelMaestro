@@ -124,7 +124,7 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
 | `ner` | Создание глоссария (LLM) | `scripts/ner.py` | да |
 | `ner_check` | Проверка глоссария (LLM) | `scripts/ner_check.py` | да |
 | `pipeline` | Перевод (LLM) | `web/pipeline.py` | да |
-| `translate_check` | Проверка исходника (алгоритм) | `scripts/translate_check.py` | нет |
+| `translate_check` | Проверка перевода | `scripts/translate_check.py` | нет |
 | `translate_check_llm` | Проверка перевода (LLM) | `scripts/translate_check_llm.py` | да |
 | `batch_replace` | Массовые замены | `scripts/batch_replace.py` | нет |
 | `compile` | Компиляция TXT/EPUB/FB2 | `scripts/clean_and_compile.py` | нет |

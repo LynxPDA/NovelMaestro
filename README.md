@@ -259,8 +259,8 @@ python3 ../../../scripts/translate_check_llm.py --apply                         
 
 Интерактив (поиск, применение, предпросмотр, полный автомат) — в
 web-интерфейсе, стадия «Проверка перевода (LLM)»
-(translate_check_llm); алгоритмическая сверка — «Проверка исходника
-(алгоритм)» / translate_check.
+(translate_check_llm); алгоритмическая сверка — «Проверка перевода» /
+translate_check.
 
 ### Массовые замены (batch_replace)
 

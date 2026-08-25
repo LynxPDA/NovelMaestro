@@ -432,7 +432,7 @@ STAGE_SPECS: dict[str, dict] = {
         ],
     },
     "translate_check": {
-        "title": "Проверка исходника (алгоритм)",
+        "title": "Проверка перевода",
         "script": "translate_check.py",
         "build": build_translate_check,
         "fields": [
