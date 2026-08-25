@@ -10,6 +10,7 @@ function viewProject(section, name) {
     editor: null, // раунд 23: вкладка «Редактор» (глава/панели/подсветка)
   };
   const page = h("div", { class: "page" });
+  let nerMetaEl = null; // счётчик терминов глоссария — справа в шапке
 
   function setPath(path) {
     st.path = path || "";
@@ -45,6 +46,9 @@ function viewProject(section, name) {
 
   async function render() {
     page.replaceChildren();
+    /* счётчик глоссария: заполняет nerView, в остальных вкладках скрыт */
+    nerMetaEl = h("div", { class: "ner-meta" });
+    nerMetaEl.style.display = "none";
     const header = h(
       "div",
       { class: "page-header" },
@@ -55,9 +59,14 @@ function viewProject(section, name) {
         h("div", { class: "page-sub" }, `${section} · проект`),
       ),
       h(
-        "a",
-        { class: "btn btn-sm", href: `#/run/${section}/${name}` },
-        "▶ Запуски",
+        "div",
+        { class: "page-header-side" },
+        h(
+          "a",
+          { class: "btn btn-sm", href: `#/run/${section}/${name}` },
+          "▶ Запуски",
+        ),
+        nerMetaEl,
       ),
     );
     const tabs = h(
@@ -1437,10 +1446,14 @@ function viewProject(section, name) {
     const LS_KEY = `nerCols:${section}/${name}`;
     const DEFAULT_COLS = ["term", "type", "translation"];
     const COL_LABELS = { term: "Термин", type: "Тип", translation: "Перевод" };
-    let cols;
+    let cols = [...DEFAULT_COLS];
     try {
-      const saved = JSON.parse(localStorage.getItem(LS_KEY) || "null");
-      cols = Array.isArray(saved) && saved.length ? saved : [...DEFAULT_COLS];
+      const raw = localStorage.getItem(LS_KEY);
+      if (raw != null) {
+        const saved = JSON.parse(raw);
+        if (saved === null) cols = null; // «Все столбцы» (выбор в модалке)
+        else if (Array.isArray(saved) && saved.length) cols = saved;
+      }
     } catch {
       cols = [...DEFAULT_COLS];
     }
@@ -1462,6 +1475,7 @@ function viewProject(section, name) {
     let editing = null; // редактируемая запись (объект из data.items)
     let page = 0; // M6: текущая страница таблицы
     const colLabel = (key) => COL_LABELS[key] || key;
+    const visibleCols = () => (cols == null ? [...knownKeys] : cols);
     /* R8-5: значения-объекты/массивы (напр. _votes_pinyin) показываем
        компактным JSON, а не «[object Object]» */
     const cellText = UICore.nerCellText;
@@ -1478,14 +1492,14 @@ function viewProject(section, name) {
     try {
       const saved = JSON.parse(localStorage.getItem(LS_SEARCH_KEY) || "null");
       if (Array.isArray(saved)) {
-        if (!saved.length) {
-          searchFields = [];
-        } else {
+        if (saved.length) {
           const filtered = saved.filter((k) => knownKeys.has(k));
           searchFields =
             filtered.length && filtered.length < knownKeys.size
               ? filtered
               : null;
+        } else {
+          searchFields = [];
         }
       }
     } catch {
@@ -1495,13 +1509,13 @@ function viewProject(section, name) {
     try {
       const saved = JSON.parse(localStorage.getItem(LS_TYPES_KEY) || "null");
       if (Array.isArray(saved)) {
-        if (!saved.length) {
-          typeFilter = [];
-        } else {
+        if (saved.length) {
           const all = typeNames();
           const filtered = saved.filter((t) => all.includes(t));
           typeFilter =
             filtered.length && filtered.length < all.length ? filtered : null;
+        } else {
+          typeFilter = [];
         }
       }
     } catch {
@@ -1552,7 +1566,9 @@ function viewProject(section, name) {
       }
       return `Типы (${typeFilter.length})`;
     }
-    /* модалка «все / ничего / набор»: клик по «Все» снимает или ставит все */
+    /* модалка «Все / набор» — единая для столбцов, полей и типов:
+       сверху чекбокс «Все»; снять ВСЁ нельзя — остаётся минимум один
+       пункт; снятие «Все» оставляет первый пункт списка */
     function openToggleAllModal(opts) {
       const allKeys = [...opts.keys];
       const allCb = h("input", { type: "checkbox" });
@@ -1568,7 +1584,7 @@ function viewProject(section, name) {
       }
       allCb.checked = current() == null;
       allCb.addEventListener("change", () => {
-        apply(allCb.checked ? null : []);
+        apply(allCb.checked ? null : [allKeys[0]]);
       });
       const rows = allKeys.map((k) => {
         const cb = h("input", { type: "checkbox" });
@@ -1577,13 +1593,19 @@ function viewProject(section, name) {
         itemCbs.push({ k, cb });
         cb.addEventListener("change", () => {
           const set = new Set(current() == null ? allKeys : current());
-          if (cb.checked) set.add(k);
-          else set.delete(k);
-          apply(
-            set.size === allKeys.length
-              ? null
-              : allKeys.filter((x) => set.has(x)),
-          );
+          if (cb.checked) {
+            set.add(k);
+            apply(
+              set.size === allKeys.length
+                ? null
+                : allKeys.filter((x) => set.has(x)),
+            );
+          } else if (set.size > 1) {
+            set.delete(k);
+            apply(allKeys.filter((x) => set.has(x)));
+          } else {
+            cb.checked = true; // последний пункт не снимаем
+          }
         });
         return h("label", { class: "ner-col-row" }, cb, " " + opts.labelOf(k));
       });
@@ -1608,7 +1630,7 @@ function viewProject(section, name) {
               {
                 class: "btn btn-ghost",
                 onclick: () => {
-                  apply(null);
+                  opts.reset();
                   close();
                 },
               },
@@ -1686,7 +1708,7 @@ function viewProject(section, name) {
           h(
             "tr",
             {},
-            ...cols.map((c) => {
+            ...visibleCols().map((c) => {
               const active = sortField === c;
               const mark = active ? (sortDir === "desc" ? " ↓" : " ↑") : "";
               return h(
@@ -1742,7 +1764,7 @@ function viewProject(section, name) {
           h(
             "tr",
             {},
-            h("td", { colspan: String(cols.length + 1) }, "Нет записей"),
+            h("td", { colspan: String(visibleCols().length + 1) }, "Нет записей"),
           ),
         );
       }
@@ -1753,7 +1775,7 @@ function viewProject(section, name) {
       return h(
         "tr",
         { class: "ner-row" },
-        ...cols.map((c) =>
+        ...visibleCols().map((c) =>
           h(
             "td",
             {
@@ -1798,7 +1820,7 @@ function viewProject(section, name) {
       const tr = h(
         "tr",
         { class: "ner-row ner-editing" },
-        ...cols.map((c) => {
+        ...visibleCols().map((c) => {
           /* R8-5: значение-объект редактируется как JSON-текст; при
              коммите парсим — невалидный JSON не сохраняется */
           const struct = isStruct(it[c]);
@@ -1833,7 +1855,7 @@ function viewProject(section, name) {
         ),
       );
       function commit() {
-        for (const c of cols) {
+        for (const c of visibleCols()) {
           const raw = inputs[c].value;
           if (isStruct(it[c])) {
             if (raw.trim()) {
@@ -1863,7 +1885,7 @@ function viewProject(section, name) {
         editing = null;
         renderRows();
       }
-      setTimeout(() => inputs[cols[0]]?.focus(), 0);
+      setTimeout(() => inputs[visibleCols()[0]]?.focus(), 0);
       return tr;
     }
 
@@ -1875,65 +1897,27 @@ function viewProject(section, name) {
       renderRows();
     }
 
-    /* «+ Столбец»: чекбоксы всех ключей записи */
-    const colBtn = h("button", { class: "btn btn-sm btn-ghost" }, "+ Столбец");
+    /* «Столбцы»: чекбоксы всех ключей записи (единая модалка «Все / набор») */
+    const colBtn = h("button", { class: "btn btn-sm btn-ghost" }, "Столбцы");
     colBtn.addEventListener("click", () => {
-      const rows = [...knownKeys].map((k) => {
-        const cb = h("input", { type: "checkbox" });
-        cb.checked = cols.includes(k);
-        cb.addEventListener("change", () => {
-          if (cb.checked) {
-            cols.push(k);
-          } else if (cols.length > 1) {
-            cols = cols.filter((x) => x !== k);
-          } else {
-            cb.checked = true; // последний столбец не снимаем
-          }
+      openToggleAllModal({
+        title: "Столбцы глоссария",
+        text: "Отображаемые поля записей ner.json:",
+        allLabel: "Все",
+        keys: [...knownKeys],
+        labelOf: colLabel,
+        get: () => cols,
+        set: (next) => {
+          cols = next;
           saveCols();
           renderRows();
-        });
-        return h("label", { class: "ner-col-row" }, cb, " " + colLabel(k));
-      });
-      const modal = h(
-        "div",
-        {
-          class: "modal-backdrop",
-          onclick: (e) => e.target === modal && close(),
         },
-        h(
-          "div",
-          { class: "modal" },
-          h("div", { class: "modal-title" }, "Столбцы глоссария"),
-          h(
-            "div",
-            { class: "modal-text" },
-            "Отображаемые поля записей ner.json:",
-          ),
-          ...rows,
-          h(
-            "div",
-            { class: "modal-actions" },
-            h(
-              "button",
-              {
-                class: "btn btn-ghost",
-                onclick: () => {
-                  cols = [...DEFAULT_COLS];
-                  saveCols();
-                  renderRows();
-                  close();
-                },
-              },
-              "Сбросить",
-            ),
-            h("button", { class: "btn btn-primary", onclick: close }, "Готово"),
-          ),
-        ),
-      );
-      document.body.append(modal);
-      function close() {
-        modal.remove();
-      }
+        reset: () => {
+          cols = [...DEFAULT_COLS];
+          saveCols();
+          renderRows();
+        },
+      });
     });
 
     /* поля поиска: как «+ Столбец», по умолчанию все ключи записи */
@@ -1949,12 +1933,19 @@ function viewProject(section, name) {
       openToggleAllModal({
         title: "Где искать",
         text: "Поля записи, в которых ищется строка:",
-        allLabel: "Все поля",
+        allLabel: "Все",
         keys: [...knownKeys],
         labelOf: colLabel,
         get: () => searchFields,
         set: (next) => {
           searchFields = next;
+          saveSearchFields();
+          refreshSearchFieldsBtn();
+          page = 0;
+          renderRows();
+        },
+        reset: () => {
+          searchFields = null;
           saveSearchFields();
           refreshSearchFieldsBtn();
           page = 0;
@@ -1974,7 +1965,7 @@ function viewProject(section, name) {
       openToggleAllModal({
         title: "Типы",
         text: "Какие типы записей показывать:",
-        allLabel: "Все типы",
+        allLabel: "Все",
         keys: typeNames(),
         labelOf: (t) => {
           const n = (data.by_type || {})[t];
@@ -1983,6 +1974,13 @@ function viewProject(section, name) {
         get: () => typeFilter,
         set: (next) => {
           typeFilter = next;
+          saveTypeFilter();
+          refreshTypeBtn();
+          page = 0;
+          renderRows();
+        },
+        reset: () => {
+          typeFilter = null;
           saveTypeFilter();
           refreshTypeBtn();
           page = 0;
@@ -2015,13 +2013,22 @@ function viewProject(section, name) {
     exportBtn.addEventListener("click", () =>
       exportModal(data.by_type || {}, `${section}/${name}`),
     );
-    const meta = h("div", { class: "ner-meta" }, `Всего: ${data.total}`);
+    if (nerMetaEl) {
+      nerMetaEl.textContent = `Всего: ${data.total}`;
+      nerMetaEl.style.display = "";
+    }
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
-      meta,
-      h("span", { class: "ner-search" }, search, searchFieldsBtn),
+      h(
+        "span",
+        { class: "ner-search" },
+        h("span", { class: "field-help" }, "Поиск:"),
+        search,
+        searchFieldsBtn,
+      ),
       h("span", { class: "spacer" }),
+      h("span", { class: "field-help" }, "Показывать:"),
       typeBtn,
       colBtn,
       addBtn,

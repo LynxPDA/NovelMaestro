@@ -145,6 +145,16 @@ body {
  color: var(--muted);
  font-size: 13px;
 }
+/* счётчик глоссария: под кнопкой «Запуски», на уровне подзаголовка */
+.page-header-side {
+ display: flex;
+ flex-direction: column;
+ align-items: flex-end;
+}
+.page-header-side .ner-meta {
+ margin-top: 4px;
+ white-space: nowrap;
+}
 
 .cards {
  display: grid;
