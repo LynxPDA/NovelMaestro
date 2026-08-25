@@ -942,6 +942,13 @@ a.fname:hover {
  font-weight: 600;
  border-bottom: 1px solid var(--border);
  background: var(--bg-dim);
+ display: flex;
+ align-items: center;
+ gap: 8px;
+ flex-wrap: wrap;
+}
+.review-card-title .spacer {
+ flex: 1;
 }
 .review-card-body {
  padding: 12px;
@@ -952,10 +959,130 @@ a.fname:hover {
 .review-actions {
  display: flex;
  gap: 8px;
+ align-items: center;
+ flex-wrap: wrap;
 }
 .review-status {
  color: var(--text-dim);
  font-size: 13px;
+}
+/* ── Проверка: список LLM-правок ── */
+.btn-xs {
+ padding: 2px 8px;
+ font-size: 12px;
+}
+.seg {
+ display: flex;
+ gap: 2px;
+ border: 1px solid var(--border);
+ border-radius: 6px;
+ padding: 2px;
+ background: var(--surface);
+}
+.seg-btn {
+ border: none;
+ background: transparent;
+ border-radius: 4px;
+ color: var(--muted);
+}
+.seg-btn:hover {
+ background: var(--surface-2);
+ color: var(--text);
+}
+.seg-active {
+ background: var(--accent-dim);
+ color: var(--text);
+ font-weight: 600;
+}
+.review-summary {
+ display: flex;
+ gap: 6px;
+ flex-wrap: wrap;
+}
+.badge-accept {
+ background: color-mix(in srgb, #2ecc71 15%, transparent);
+ color: #2ecc71;
+}
+.badge-reject {
+ background: color-mix(in srgb, var(--danger) 15%, transparent);
+ color: var(--danger);
+}
+.rv-list {
+ display: flex;
+ flex-direction: column;
+ gap: 8px;
+}
+.rv-row {
+ border: 1px solid var(--border);
+ border-radius: 8px;
+ padding: 8px 10px;
+ display: flex;
+ flex-direction: column;
+ gap: 6px;
+ background: var(--surface);
+}
+.rv-row-reject {
+ opacity: 0.75;
+}
+.rv-row-head {
+ display: flex;
+ align-items: center;
+ gap: 8px;
+}
+.rv-row-title {
+ font-weight: 600;
+ flex: 1;
+ min-width: 0;
+ overflow-wrap: anywhere;
+}
+.rv-diff {
+ font-size: 13px;
+ line-height: 1.5;
+ display: flex;
+ flex-wrap: wrap;
+ gap: 4px;
+ align-items: baseline;
+}
+.rv-old {
+ text-decoration: line-through;
+ color: var(--muted);
+}
+.rv-new {
+ color: #2ecc71;
+}
+.rv-reason {
+ color: var(--text-dim);
+ font-size: 13px;
+}
+.rv-meta {
+ color: var(--text-dim);
+ font-size: 12px;
+}
+.rv-actions {
+ display: flex;
+ gap: 6px;
+ flex-wrap: wrap;
+}
+.rv-act-active {
+ border-color: var(--accent);
+ color: var(--accent);
+}
+.rv-bak {
+ display: inline-flex;
+ align-items: center;
+ gap: 4px;
+ font-size: 12px;
+ color: var(--text-dim);
+ cursor: pointer;
+}
+.rv-ta {
+ font-family: var(--mono);
+ font-size: 13px;
+}
+.rv-label {
+ font-size: 12px;
+ color: var(--text-dim);
+ margin-top: 6px;
 }
 /* секции единой вкладки «Проверка» (1·LLM / 2·алгоритмич. / 3·LLM) */
 .review-section {

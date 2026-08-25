@@ -1,3 +1,7 @@
+/* поллинг завершения применений проверок (вкладка «Проверка»):
+   ключ `${project}:${kind}` → {timer, jobId}; повторный запуск гасит
+   старый watcher того же ключа (не плодим интервалы). */
+const _reviewWatchers = new Map();
 /* eslint-disable-next-line no-unused-vars -- глобал SPA, вызывается из app.js */
 function viewProject(section, name) {
   const st = {
@@ -2068,9 +2072,9 @@ function viewProject(section, name) {
     wrap.append(panel);
     const q = new URLSearchParams({ project: `${section}/${name}` });
     // карточка LLM-проверки: глоссарий (1) и перевод (3)
-    function makeCard(title, path, applyPath) {
+    function makeCard(title, path, applyPath, kind) {
+      // kind: "ner" | "tcl" — формат записей и переход к тексту правки
       const card = h("div", { class: "review-card" });
-      const ed = makeEditor("", "json");
       const err = h("div", { class: "form-error" });
       const status = h("div", { class: "review-status" });
       const dryBtn = h(
@@ -2079,39 +2083,363 @@ function viewProject(section, name) {
         "Пробный прогон",
       );
       const applyBtn = h("button", { class: "btn btn-sm" }, "Применить");
-      card.append(
-        h("div", { class: "review-card-title" }, title),
+      const bakBox = h(
+        "label",
+        { class: "chk rv-bak" },
+        h("input", { type: "checkbox" }),
+        " не создавать .bak",
+      );
+      const body = h("div", { class: "review-card-body" });
+      const stKey = `review:${kind}`;
+      st.review[kind] = st.review[kind] || { mode: "list" };
+      const seg = h(
+        "div",
+        { class: "seg" },
         h(
-          "div",
-          { class: "review-card-body" },
-          h("div", { class: "editor-cm editor-cm-small" }, ed.root),
-          status,
-          err,
-          h("div", { class: "review-actions" }, dryBtn, applyBtn),
+          "button",
+          {
+            class:
+              "btn btn-sm seg-btn" +
+              (st.review[kind].mode === "list" ? " seg-active" : ""),
+            onclick: () => setMode("list"),
+          },
+          "Список правок",
+        ),
+        h(
+          "button",
+          {
+            class:
+              "btn btn-sm seg-btn" +
+              (st.review[kind].mode === "editor" ? " seg-active" : ""),
+            onclick: () => setMode("editor"),
+          },
+          "Редактор JSON",
         ),
       );
-      api(path + "?" + q)
-        .then((d) => {
-          ed.setValue(d.content || "");
-          status.textContent = d.exists
-            ? `файл есть · ${fmtSize(d.size)}`
-            : "файла ещё нет — создастся при применении";
-        })
-        .catch((ex) => (err.textContent = ex.message));
+      card.append(
+        h(
+          "div",
+          { class: "review-card-title" },
+          h("span", { text: title }),
+          h("span", { class: "spacer" }),
+          seg,
+        ),
+        body,
+      );
+      // ── состояние: распарсенный review-файл + редактор ──
+      let parsed = null; // {doc, entries, isArray} | null (нет файла)
+      let ed = null;
+      async function load() {
+        const d = await api(path + "?" + q);
+        status.textContent = d.exists
+          ? `файл есть · ${fmtSize(d.size)}`
+          : "файла ещё нет — создастся при применении";
+        parsed = d.exists
+          ? UICore.parseReviewContent(d.content)
+          : null;
+        return d;
+      }
+      async function save() {
+        await api(path, {
+          method: "PUT",
+          body: {
+            project: `${section}/${name}`,
+            content: JSON.stringify(parsed.doc, null, 2),
+          },
+        });
+        parsed.entries = parsed.isArray
+          ? parsed.doc
+          : parsed.doc["правки"];
+      }
+      function refresh() {
+        load()
+          .then(() => {
+            if (ed) ed.setValue(parsed ? JSON.stringify(parsed.doc, null, 2) : "");
+            renderCard();
+          })
+          .catch((ex) => (err.textContent = ex.message));
+      }
+      // ── режим «Список правок» ──
+      function setMode(next) {
+        if (next === st.review[kind].mode) return;
+        st.review[kind].mode = next;
+        renderCard();
+      }
+      function entryHead(e) {
+        if (kind === "ner")
+          return `${e["term"] || "?"} · ${e["field"] || "?"}`;
+        const ch = e["глава"];
+        return `Гл.${ch == null ? "?" : ch}` + (e["тип"] ? ` · ${e["тип"]}` : "");
+      }
+      function entryMeta(e) {
+        const parts = [];
+        if (e["этап"]) parts.push(e["этап"]);
+        if (e["дата применения"]) parts.push(`применено: ${e["дата применения"]}`);
+        return parts.join(" · ");
+      }
+      function gotoEntry(e) {
+        if (kind === "ner") {
+          st.view = "ner";
+          st.edit = null;
+          st.search = e["term"] || "";
+          render();
+          return;
+        }
+        // tcl: файл главы из записи (абсолютный путь → chapters/…)
+        const m = String(e["файл"] || "")
+          .replace(/\\/g, "/")
+          .match(/\/chapters\/([^/]+\/.+)$/);
+        if (m) {
+          st.edit = "chapters/" + m[1];
+          st.search = e["old"] || "";
+          render();
+        } else {
+          toast("В записи нет пути к файлу главы", "err");
+        }
+      }
+      function statusBtn(i, e, s, label) {
+        const active = e["статус"] === s;
+        return h(
+          "button",
+          {
+            class:
+              "btn btn-xs btn-ghost rv-act" +
+              (active ? " rv-act-active" : ""),
+            title: active ? "уже выбран" : `установить «${s}»`,
+            onclick: async () => {
+              err.textContent = "";
+              try {
+                const doc2 = UICore.updateReviewEntry(
+                  parsed.doc, i, { "статус": s }, parsed.isArray);
+                if (!doc2) {
+                  err.textContent = "Не удалось обновить запись";
+                  return;
+                }
+                parsed.doc = doc2;
+                await save();
+                renderList();
+              } catch (ex) {
+                err.textContent = ex.message;
+              }
+            },
+          },
+          label,
+        );
+      }
+      function correctModal(i, e) {
+        const oldIn = h("textarea", { class: "input rv-ta", rows: 2 }, e["old"] || "");
+        const newIn = h("textarea", { class: "input rv-ta", rows: 2 }, e["new"] || "");
+        const reasonIn = h("input", { class: "input", value: e["причина"] || "" });
+        const err2 = h("div", { class: "form-error" });
+        const modal = h(
+          "div",
+          {
+            class: "modal-backdrop",
+            onclick: (ev) => ev.target === modal && close(),
+          },
+          h(
+            "div",
+            { class: "modal" },
+            h("div", { class: "modal-title" }, `Правка ${i + 1}`),
+            h("label", { class: "rv-label" }, "Было (old)"),
+            oldIn,
+            h("label", { class: "rv-label" }, "Стало (new)"),
+            newIn,
+            h("label", { class: "rv-label" }, "Причина"),
+            reasonIn,
+            err2,
+            h(
+              "div",
+              { class: "modal-actions" },
+              h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
+              h(
+                "button",
+                {
+                  class: "btn btn-primary",
+                  onclick: async () => {
+                    err2.textContent = "";
+                    const doc2 = UICore.updateReviewEntry(
+                      parsed.doc, i,
+                      {
+                        old: oldIn.value.trim(),
+                        new: newIn.value.trim(),
+                        причина: reasonIn.value.trim(),
+                      },
+                      parsed.isArray,
+                    );
+                    if (!doc2) {
+                      err2.textContent = "Не удалось обновить запись";
+                      return;
+                    }
+                    try {
+                      parsed.doc = doc2;
+                      await save();
+                      close();
+                      renderList();
+                      toast("Правка сохранена");
+                    } catch (ex) {
+                      err2.textContent = ex.message;
+                    }
+                  },
+                },
+                "Сохранить",
+              ),
+            ),
+          ),
+        );
+        function close() {
+          modal.remove();
+        }
+        document.body.append(modal);
+        newIn.focus();
+      }
+      function entryRow(e, i) {
+        const applied = e["применено"];
+        const accepted = e["статус"] === "принять";
+        const rejected = e["статус"] === "отклонить";
+        const badge = applied
+          ? h("span", { class: "badge badge-done" }, "применено")
+          : accepted
+            ? h("span", { class: "badge badge-accept" }, "принять")
+            : rejected
+              ? h("span", { class: "badge badge-reject" }, "отклонить")
+              : h("span", { class: "badge" }, "новая");
+        const actions = h(
+          "div",
+          { class: "rv-actions" },
+          statusBtn(i, e, "принять", "Принять"),
+          statusBtn(i, e, "отклонить", "Отклонить"),
+          h(
+            "button",
+            {
+              class: "btn btn-xs btn-ghost",
+              onclick: () => correctModal(i, e),
+            },
+            "Откорректировать",
+          ),
+          h(
+            "button",
+            {
+              class: "btn btn-xs btn-ghost",
+              title: kind === "ner" ? "Открыть глоссарий с этим термином" : "Открыть файл главы с фрагментом",
+              onclick: () => gotoEntry(e),
+            },
+            kind === "ner" ? "→ Глоссарий" : "→ Глава",
+          ),
+        );
+        return h(
+          "div",
+          { class: "rv-row" + (rejected ? " rv-row-reject" : "") },
+          h(
+            "div",
+            { class: "rv-row-head" },
+            h("span", { class: "rv-row-title" }, entryHead(e)),
+            badge,
+          ),
+          h(
+            "div",
+            { class: "rv-diff" },
+            h("span", { class: "rv-old" }, e["old"] || ""),
+            " → ",
+            h("span", { class: "rv-new" }, e["new"] || ""),
+          ),
+          (e["причина"]
+            ? h("div", { class: "rv-reason" }, e["причина"])
+            : null),
+          h("div", { class: "rv-meta" }, entryMeta(e)),
+          actions,
+        );
+      }
+      function renderList() {
+        body.replaceChildren();
+        if (!parsed || !parsed.ok) {
+          body.append(
+            h(
+              "div",
+              { class: "files-empty" },
+              "Файл правок не прочитан (невалидный JSON) — переключитесь на «Редактор JSON» или запустите проверку",
+            ),
+          );
+        } else if (!parsed.entries.length) {
+          body.append(
+            h(
+              "div",
+              { class: "card-hint" },
+              "Правок ещё нет — запустите проверку (вкладка «Запуски»)",
+            ),
+          );
+        } else {
+          const sum = UICore.reviewSummary(parsed.entries);
+          body.append(
+            h(
+              "div",
+              { class: "review-summary" },
+              h("span", { class: "badge" }, `всего: ${sum.total}`),
+              h("span", { class: "badge badge-accept" }, `принято: ${sum.accepted}`),
+              h("span", { class: "badge badge-reject" }, `отклонено: ${sum.rejected}`),
+              h("span", { class: "badge badge-done" }, `применено: ${sum.applied}`),
+            ),
+            h(
+              "div",
+              { class: "rv-list" },
+              parsed.entries.map((e, i) => entryRow(e, i)),
+            ),
+          );
+        }
+        body.append(status, actionsBar, err);
+      }
+      // ── применение: запуск + уведомление о результате ──
       async function runApply(dry) {
         err.textContent = "";
         try {
-          await api(applyPath, {
+          const r = await api(applyPath, {
             method: "POST",
-            body: { project: `${section}/${name}`, dry_run: dry },
+            body: {
+              project: `${section}/${name}`,
+              dry_run: dry,
+              no_bak: bakBox.querySelector("input").checked,
+            },
           });
           toast(`${dry ? "Пробный прогон" : "Применение"}: запущено`);
+          watchJob(r.job && r.job.id, dry);
         } catch (ex) {
           err.textContent = ex.message;
         }
       }
+      function watchJob(jobId, dry) {
+        const key = `${section}/${name}:${stKey}`;
+        const prev = _reviewWatchers.get(key);
+        if (prev) {
+          clearInterval(prev.timer);
+          _reviewWatchers.delete(key);
+        }
+        if (!jobId) return;
+        const label = dry ? "Пробный прогон" : "Применение";
+        const timer = setInterval(async () => {
+          let job = null;
+          try {
+            const r = await api(`/jobs/${jobId}`);
+            job = r.job;
+          } catch {
+            /* сеть — пробуем ещё раз */
+          }
+          if (!job || job.status === "running") return;
+          clearInterval(timer);
+          _reviewWatchers.delete(key);
+          if (job.status === "done")
+            toast(`✅ ${label} завершено`);
+          else if (job.status === "failed")
+            toast(`❌ ${label}: ошибка — смотрите лог запуска`, "err");
+          else if (job.status === "stopped")
+            toast(`⏹ ${label} остановлено`);
+          refresh();
+        }, 2000);
+        _reviewWatchers.set(key, { timer, jobId });
+      }
       dryBtn.addEventListener("click", () => runApply(true));
       applyBtn.addEventListener("click", () => runApply(false));
+      // ── режим «Редактор JSON» (прежний интерфейс) ──
+      const edHost = h("div", { class: "editor-cm editor-cm-small" });
       const saveBtn = h(
         "button",
         { class: "btn btn-sm btn-ghost" },
@@ -2129,7 +2457,33 @@ function viewProject(section, name) {
           err.textContent = ex.message;
         }
       });
-      card.querySelector(".review-actions")?.append(saveBtn);
+      const actionsBar = h(
+        "div",
+        { class: "review-actions" },
+        dryBtn,
+        applyBtn,
+        bakBox,
+        h("span", { class: "spacer" }),
+        saveBtn,
+      );
+      function renderEditor() {
+        body.replaceChildren();
+        if (!ed) {
+          ed = makeEditor("", "json");
+          edHost.replaceChildren(ed.root);
+        }
+        body.append(edHost, status, actionsBar, err);
+      }
+      function renderCard() {
+        if (st.review[kind].mode === "editor") renderEditor();
+        else renderList();
+      }
+      load()
+        .then(() => {
+          if (ed) ed.setValue(parsed ? JSON.stringify(parsed.doc, null, 2) : "");
+          renderCard();
+        })
+        .catch((ex) => (err.textContent = ex.message));
       return card;
     }
     /* порядок секций: 1 · глоссарий (LLM) → 2 · проверка перевода
@@ -2139,6 +2493,7 @@ function viewProject(section, name) {
         "1 · Проверка глоссария (LLM) — ner_review.json",
         "/ner/review",
         "/ner/review/apply",
+        "ner",
       ),
     );
     const sec2 = h(
@@ -2158,6 +2513,7 @@ function viewProject(section, name) {
         "3 · Проверка перевода (LLM) — translate_check_llm_review.json",
         "/translate_check_llm/review",
         "/translate_check_llm/review/apply",
+        "tcl",
       ),
     );
     return wrap;

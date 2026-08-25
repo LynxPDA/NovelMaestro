@@ -394,3 +394,83 @@ test("filterNerItems: пустые поля/типы и набор типов", 
   assert.equal(UICore.filterNerItems(items, "", null, ["person"]).length, 1);
   assert.equal(UICore.filterNerItems(items, "", [], "").length, 2);
 });
+
+/* ── review-файлы проверок (список LLM-правок) ── */
+
+test("parseReviewContent: объект с «правки»", () => {
+  const text = JSON.stringify({
+    создан: "2024-01-01 10:00",
+    вход: "ner.json",
+    правки: [{ term: "林凡", field: "translation", old: "А", new: "Б" }],
+  });
+  const p = UICore.parseReviewContent(text);
+  assert.equal(p.ok, true);
+  assert.equal(p.isArray, false);
+  assert.equal(p.entries.length, 1);
+  assert.equal(p.entries[0].term, "林凡");
+  assert.equal(p.doc["вход"], "ner.json");
+});
+
+test("parseReviewContent: legacy-массив", () => {
+  const p = UICore.parseReviewContent('[{"term":"x","field":"type"}]');
+  assert.equal(p.ok, true);
+  assert.equal(p.isArray, true);
+  assert.equal(p.entries.length, 1);
+  assert.deepEqual(p.doc, p.entries);
+});
+
+test("parseReviewContent: невалидный JSON и не-список", () => {
+  const bad = UICore.parseReviewContent("{не json");
+  assert.equal(bad.ok, false);
+  assert.equal(bad.entries.length, 0);
+  const noList = UICore.parseReviewContent('{"создан":"t"}');
+  assert.equal(noList.ok, false);
+  const empty = UICore.parseReviewContent("");
+  assert.equal(empty.ok, false);
+});
+
+test("updateReviewEntry: точечная правка в объекте, «обновлён» обновляется", () => {
+  const doc = {
+    создан: "2024-01-01 10:00",
+    правки: [
+      { term: "林凡", field: "translation", old: "А", new: "Б", статус: "принять" },
+      { term: "火", field: "notes", old: "В", new: "Г", статус: "отклонить" },
+    ],
+  };
+  const doc2 = UICore.updateReviewEntry(doc, 0, { статус: "отклонить" }, false);
+  assert.notEqual(doc2, doc); // иммутабельно
+  assert.equal(doc2["правки"][0]["статус"], "отклонить");
+  assert.equal(doc2["правки"][1]["статус"], "отклонить"); // соседняя цела
+  assert.equal(doc["правки"][0]["статус"], "принять"); // исходник не тронут
+  assert.ok(doc2["обновлён"]); // проставлен текущий момент
+  assert.equal(doc["обновлён"], undefined);
+});
+
+test("updateReviewEntry: legacy-массив и границы", () => {
+  const arr = [{ term: "x" }];
+  const arr2 = UICore.updateReviewEntry(arr, 0, { term: "y" }, true);
+  assert.equal(arr2[0].term, "y");
+  assert.equal(arr[0].term, "x");
+  assert.equal(UICore.updateReviewEntry(arr, 5, { term: "z" }, true), null);
+  assert.equal(UICore.updateReviewEntry(arr, -1, { term: "z" }, true), null);
+  assert.equal(UICore.updateReviewEntry(null, 0, {}, true), null);
+});
+
+test("reviewSummary: подсчёт статусов", () => {
+  const entries = [
+    { статус: "принять", применено: false },
+    { статус: "принять", применено: true },
+    { статус: "отклонить" },
+    { применено: true }, // legacy без статуса
+    { статус: "принять" },
+  ];
+  assert.deepEqual(UICore.reviewSummary(entries), {
+    total: 5, accepted: 3, rejected: 1, applied: 2,
+  });
+  assert.deepEqual(UICore.reviewSummary([]), {
+    total: 0, accepted: 0, rejected: 0, applied: 0,
+  });
+  assert.deepEqual(UICore.reviewSummary(null), {
+    total: 0, accepted: 0, rejected: 0, applied: 0,
+  });
+});

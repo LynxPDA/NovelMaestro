@@ -466,6 +466,57 @@
       return dedup;
     },
 
+    /* ── review-файлы проверок (ner_review.json / …_llm_review.json) ──
+     * Формат: объект {создан, обновлён, вход, правки:[…]} или legacy-
+     * массив записей. Разбор и точечные правки — без серверного роута
+     * (чтение → обновление → PUT целиком). */
+    parseReviewContent: (text) => {
+      var doc = null;
+      try {
+        doc = JSON.parse(String(text || "").trim());
+      } catch (_e) {
+        return { ok: false, doc: null, entries: [], isArray: false };
+      }
+      if (Array.isArray(doc)) return { ok: true, doc: doc, entries: doc, isArray: true };
+      if (doc && typeof doc === "object" && Array.isArray(doc["правки"])) {
+        return { ok: true, doc: doc, entries: doc["правки"], isArray: false };
+      }
+      return { ok: false, doc: null, entries: [], isArray: false };
+    },
+
+    /* иммутабельное обновление одной записи: возвращает новый doc
+     * (объект с «правки» или массив); «обновлён» проставляется текущим
+     * временем. Индекс вне диапазона — null (не меняем файл). */
+    updateReviewEntry: (doc, index, patch, isArray) => {
+      if (!doc || !patch || typeof index !== "number") return null;
+      var entries = isArray ? doc : doc["правки"];
+      if (!Array.isArray(entries) || index < 0 || index >= entries.length) {
+        return null;
+      }
+      var next = isArray ? doc.slice() : Object.assign({}, doc);
+      var nextEntries = entries.slice();
+      nextEntries[index] = Object.assign({}, entries[index], patch);
+      if (isArray) {
+        return nextEntries;
+      }
+      next["правки"] = nextEntries;
+      next["обновлён"] = new Date().toISOString().slice(0, 16).replace("T", " ");
+      return next;
+    },
+
+    /* сводка по записям: всего / принято / отклонено / применено */
+    reviewSummary: (entries) => {
+      var sum = { total: 0, accepted: 0, rejected: 0, applied: 0 };
+      for (var i = 0; i < (entries || []).length; i++) {
+        var e = entries[i] || {};
+        sum.total++;
+        if (e["применено"]) sum.applied++;
+        if (e["статус"] === "принять") sum.accepted++;
+        else if (e["статус"] === "отклонить") sum.rejected++;
+      }
+      return sum;
+    },
+
     nerCellText: nerCellText,
     nextNerSort: nextNerSort,
     filterNerItems: filterNerItems,
