@@ -1399,9 +1399,7 @@ function makeEditor(initial, langExt, onUpdate) {
           ".cm-scroller": { fontFamily: "inherit" },
         }),
         // колбэк обновлений CM (doc / viewport / selection)
-        ...(onUpdate
-          ? [EditorView.updateListener.of((u) => onUpdate(u))]
-          : []),
+        ...(onUpdate ? [EditorView.updateListener.of((u) => onUpdate(u))] : []),
       ],
       parent: null,
     });

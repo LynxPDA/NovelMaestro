@@ -2144,11 +2144,7 @@ function viewProject(section, name) {
     const sec2 = h(
       "div",
       { class: "review-section" },
-      h(
-        "div",
-        { class: "review-section-title" },
-        "2 · Проверка перевода",
-      ),
+      h("div", { class: "review-section-title" }, "2 · Проверка перевода"),
       h(
         "div",
         { class: "review-section-sub" },
