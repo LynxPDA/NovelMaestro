@@ -533,7 +533,10 @@ function viewProject(section, name) {
       threshold: 0.75, // порог пересечения н-грамм (аналог --ner_threshold)
       ner: null, // кеш {items, matcher} глоссария
       panes: null, // кеш панелей — повторный рендер не теряет правки
+      wrap: null, // весь DOM вкладки — возврат из «Глоссарий» без пересборки
     });
+    /* вкладка уже собрана: не пересоздаём (скролл, глава, правки, подсветка) */
+    if (ed.wrap) return ed.wrap;
     const wrap = h("div", { class: "ed-wrap" });
     const toolbar = h("div", { class: "files-toolbar" });
     const grid = h("div", { class: "ed-grid" });
@@ -721,6 +724,11 @@ function viewProject(section, name) {
           });
           pInfo.host.replaceChildren(pInfo.editor.root);
         }
+        /* replaceChildren снял тултип (он был соседом editor.root) — вернуть */
+        if (pInfo.hl) {
+          pInfo.host.append(pInfo.hl.tip);
+          pInfo.hl.tip.style.display = "none";
+        }
         pInfo.saveBtn.disabled = !pInfo.state.dirty;
         maybeHl(pInfo);
       } catch (ex) {
@@ -857,14 +865,19 @@ function viewProject(section, name) {
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
       const m = pos == null ? null : findAt(hl.matches, pos);
       if (!m || !m.item) {
+        hl.cur = null;
         tip.style.display = "none";
         return;
       }
+      /* тот же термин — не пересобирать DOM (кнопка «→ Глоссарий» живая) */
+      if (hl.cur === m && tip.style.display !== "none") return;
       const a = view.coordsAtPos(m.from);
       if (!a) {
+        hl.cur = null;
         tip.style.display = "none";
         return;
       }
+      hl.cur = m;
       const hostRect = pInfo.host.getBoundingClientRect();
       const term = String(m.item.term || "");
       const translation = String(m.item.translation || "");
@@ -909,11 +922,17 @@ function viewProject(section, name) {
       const tip = h("div", { class: "hl-tip" });
       tip.style.display = "none";
       pInfo.host.append(tip);
-      pInfo.hl = { layer, tip, matches: [] };
+      pInfo.hl = { layer, tip, matches: [], cur: null };
       scroller.append(layer);
-      /* тултип: при наведении на него/рядом НЕ прячем (иначе кнопка
-         «→ Глоссарий» недостижима — тултип исчезает при сходе с совпадения) */
+      /* тултип — сосед скроллера (не потомок): переход курсора на него
+         даёт mouseleave скроллера. relatedTarget = тултип → не прятать,
+         иначе кнопка «→ Глоссарий» исчезает до клика. */
+      const overTip = (node) => {
+        const t = pInfo.hl && pInfo.hl.tip;
+        return !!(t && node && (t === node || t.contains(node)));
+      };
       const onMove = (e) => {
+        if (overTip(e.target)) return;
         const tipEl = pInfo.hl && pInfo.hl.tip;
         if (tipEl && tipEl.style.display !== "none") {
           const r = tipEl.getBoundingClientRect();
@@ -929,14 +948,21 @@ function viewProject(section, name) {
         }
         moveTip(pInfo, e);
       };
-      const onLeave = () => {
-        if (pInfo.hl) pInfo.hl.tip.style.display = "none";
+      const onLeave = (e) => {
+        if (overTip(e.relatedTarget)) return;
+        if (pInfo.hl) {
+          pInfo.hl.cur = null;
+          pInfo.hl.tip.style.display = "none";
+        }
       };
       /* скролл: прячем тултип и переставляем марки видимой области
          (без этого подсветка не появляется в новых местах при прокрутке) */
       let hlRaf = null;
       const onScroll = () => {
-        if (pInfo.hl) pInfo.hl.tip.style.display = "none";
+        if (pInfo.hl) {
+          pInfo.hl.cur = null;
+          pInfo.hl.tip.style.display = "none";
+        }
         if (hlRaf == null) {
           hlRaf = requestAnimationFrame(() => {
             hlRaf = null;
@@ -944,8 +970,15 @@ function viewProject(section, name) {
           });
         }
       };
-      const onTipLeave = () => {
-        if (pInfo.hl) pInfo.hl.tip.style.display = "none";
+      const onTipLeave = (e) => {
+        const sc = pInfo.editor && pInfo.editor.view && pInfo.editor.view.scrollDOM;
+        if (sc && e.relatedTarget && (sc === e.relatedTarget || sc.contains(e.relatedTarget))) {
+          return; // обратно в текст — moveTip решит, прятать ли
+        }
+        if (pInfo.hl) {
+          pInfo.hl.cur = null;
+          pInfo.hl.tip.style.display = "none";
+        }
       };
       scroller.addEventListener("mousemove", onMove);
       scroller.addEventListener("mouseleave", onLeave);
@@ -1089,6 +1122,7 @@ function viewProject(section, name) {
         if (p.hl) {
           // сброс подсветки прошлой главы (марки + тултип)
           p.hl.matches = [];
+          p.hl.cur = null;
           p.hl.layer.replaceChildren();
           p.hl.tip.style.display = "none";
         }
@@ -1134,6 +1168,7 @@ function viewProject(section, name) {
     loadPane(pLeft);
     loadPane(pRight);
     wrap.append(toolbar, grid);
+    ed.wrap = wrap;
     return wrap;
   }
 
