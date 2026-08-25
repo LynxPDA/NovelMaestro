@@ -1325,7 +1325,7 @@ a.fname:hover {
  width: 60px;
 }
 .ed-threshold {
- width: 70px;
+ width: 96px;
 }
 .ed-meta {
  color: var(--muted);
@@ -1350,6 +1350,30 @@ a.fname:hover {
 }
 .ed-cm .cm-scroller {
  position: relative;
+}
+/* нумерация строк — как в «Файлах»: светлые цифры на тёмном gutter */
+.ed-cm .cm-gutters {
+ background: var(--surface);
+ color: var(--muted);
+ border-right: 1px solid var(--border);
+}
+.ed-cm .cm-activeLineGutter {
+ background: rgba(46, 160, 67, 0.1);
+}
+.ed-cm .cm-activeLine {
+ background: rgba(46, 160, 67, 0.08);
+}
+.ed-cm .cm-cursor {
+ border-left-color: var(--accent);
+}
+.ed-cm .cm-selectionBackground,
+.ed-cm .cm-content ::selection {
+ background: rgba(46, 160, 67, 0.3) !important;
+}
+.ed-add-term {
+ position: absolute;
+ z-index: 41;
+ font-size: 12px;
 }
 /* оверлей подсветки — внутри .cm-scroller, скроллится вместе с текстом.
    Без width/height и БЕЗ overflow: размер 0×0, марки рисуются по своим

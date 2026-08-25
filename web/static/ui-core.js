@@ -168,6 +168,39 @@
       return entries;
     },
 
+    /* предложение вокруг выделения (добавление термина из chapter.txt):
+     * границы 。！？.!?… и перевод строки; не длиннее maxLen СИМВОЛОВ. */
+    glossarySentence: (text, from, to, maxLen) => {
+      var src = String(text || "");
+      var a = Math.max(0, Math.min(Number(from) || 0, src.length));
+      var b = Math.max(a, Math.min(Number(to) || 0, src.length));
+      var lim = Number(maxLen);
+      if (!isFinite(lim) || lim <= 0) lim = 200;
+      var isEnd = function (ch) {
+        return /[。！？.!?…\n]/.test(ch);
+      };
+      var start = a;
+      while (start > 0 && !isEnd(src.charAt(start - 1))) start--;
+      var end = b;
+      while (end < src.length && !isEnd(src.charAt(end))) end++;
+      if (
+        end < src.length &&
+        isEnd(src.charAt(end)) &&
+        src.charAt(end) !== "\n"
+      ) {
+        end++;
+      }
+      var sent = src.slice(start, end).replace(/\s+/g, " ").trim();
+      if (sent.length <= lim) return sent;
+      var termLen = b - a;
+      if (termLen >= lim) return src.slice(a, a + lim);
+      var left = Math.floor((lim - termLen) / 2);
+      var l = Math.max(start, a - left);
+      var r = Math.min(end, l + lim);
+      if (r - l < lim) l = Math.max(start, r - lim);
+      return src.slice(l, r).replace(/\s+/g, " ").trim();
+    },
+
     /* ── матчер глоссария (раунд 23): термины → чанки с regex ──
      * ngramSize — размер n-граммы нечёткого поиска (аналог --ner_ngram
      * в translate_book.py, дефолт 3); threshold — порог пересечения н-грамм,

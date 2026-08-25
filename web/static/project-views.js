@@ -533,7 +533,7 @@ function viewProject(section, name) {
       threshold: 0.75, // порог пересечения н-грамм (аналог --ner_threshold)
       ner: null, // кеш {items, matcher} глоссария
       panes: null, // кеш панелей — повторный рендер не теряет правки
-      wrap: null, // весь DOM вкладки — возврат из «Глоссарий» без пересборки
+      wrap: null, // DOM вкладки: пока открыт проект; F5/другой проект — сброс
     });
     /* вкладка уже собрана: не пересоздаём (скролл, глава, правки, подсветка) */
     if (ed.wrap) return ed.wrap;
@@ -699,6 +699,8 @@ function viewProject(section, name) {
           pInfo.hl.tip.style.display = "none";
           computeHighlight(pInfo);
         }
+        if (pInfo.addBtn) pInfo.host.append(pInfo.addBtn);
+        updateAddTerm(pInfo);
         return;
       }
       const path = `chapters/${ed.chapter}/${type}`;
@@ -714,8 +716,11 @@ function viewProject(section, name) {
           setEditorText(pInfo, data.content);
           pInfo.host.replaceChildren(pInfo.editor.root);
         } else {
-          pInfo.editor = makeEditor(data.content, "txt", () => {
+          pInfo.editor = makeEditor(data.content, "txt", (u) => {
             if (pInfo._loading) return; // программные setValue — не «правка»
+            if (u && u.viewportChanged) placeMarks(pInfo);
+            if (u && u.selectionSet) updateAddTerm(pInfo);
+            if (!u || !u.docChanged) return;
             pInfo.state.text = pInfo.editor.getValue();
             pInfo.state.dirty = true;
             pInfo.saveBtn.disabled = false;
@@ -724,13 +729,15 @@ function viewProject(section, name) {
           });
           pInfo.host.replaceChildren(pInfo.editor.root);
         }
-        /* replaceChildren снял тултип (он был соседом editor.root) — вернуть */
+        /* replaceChildren снял тултип/кнопку (соседи editor.root) — вернуть */
         if (pInfo.hl) {
           pInfo.host.append(pInfo.hl.tip);
           pInfo.hl.tip.style.display = "none";
         }
+        if (pInfo.addBtn) pInfo.host.append(pInfo.addBtn);
         pInfo.saveBtn.disabled = !pInfo.state.dirty;
         maybeHl(pInfo);
+        updateAddTerm(pInfo);
       } catch (ex) {
         pInfo.state.text = null;
         pInfo.perr.textContent = ex.message;
@@ -775,7 +782,16 @@ function viewProject(section, name) {
         ),
       };
     }
-    /* пересчёт подсветки всех панелей (после смены ngram и т.п.) */
+    /* пересчёт подсветки всех панелей (после смены ngram/порога) */
+    function applyMatcher() {
+      if (!ed.ner) return;
+      ed.ner.matcher = UICore.buildGlossaryMatcher(
+        ed.ner.items,
+        ed.ngram,
+        ed.threshold,
+      );
+      recomputeAll();
+    }
     function recomputeAll() {
       if (!ed.hl || !ed.ner) return;
       for (const p of panes) {
@@ -783,6 +799,10 @@ function viewProject(section, name) {
           if (p.hl) computeHighlight(p); else attachHl(p);
         }
       }
+      /* порог/скролл: координаты CM на кадр могут быть пустыми — второй проход */
+      requestAnimationFrame(() => {
+        for (const p of panes) if (p.hl) placeMarks(p);
+      });
     }
 
     function scheduleHighlight(pInfo) {
@@ -1028,6 +1048,116 @@ function viewProject(section, name) {
       render();
     }
 
+    /* ── добавление термина из выделения в chapter.txt ── */
+    function ensureAddBtn(pInfo) {
+      if (pInfo.addBtn) return pInfo.addBtn;
+      const btn = h(
+        "button",
+        { class: "btn btn-sm ed-add-term", type: "button" },
+        "＋ в глоссарий",
+      );
+      btn.style.display = "none";
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        addSelectionToGlossary(pInfo);
+      });
+      pInfo.host.append(btn);
+      pInfo.addBtn = btn;
+      return btn;
+    }
+
+    function updateAddTerm(pInfo) {
+      if (!pInfo.editor || !pInfo.editor.isCM) {
+        if (pInfo.addBtn) pInfo.addBtn.style.display = "none";
+        return;
+      }
+      const btn = ensureAddBtn(pInfo);
+      if (pInfo.state.type !== "chapter.txt") {
+        btn.style.display = "none";
+        return;
+      }
+      const view = pInfo.editor.view;
+      const sel = view.state.selection.main;
+      if (sel.empty) {
+        btn.style.display = "none";
+        return;
+      }
+      const term = view.state.doc.sliceString(sel.from, sel.to).trim();
+      if (!term) {
+        btn.style.display = "none";
+        return;
+      }
+      const a = view.coordsAtPos(sel.from);
+      const b = view.coordsAtPos(sel.to);
+      if (!a) {
+        btn.style.display = "none";
+        return;
+      }
+      btn.style.display = "block";
+      const hostRect = pInfo.host.getBoundingClientRect();
+      const w = btn.offsetWidth || 140;
+      const hh = btn.offsetHeight || 28;
+      let x = a.left - hostRect.left;
+      const bottom = (b && b.bottom) || a.bottom;
+      let y = bottom - hostRect.top + 4;
+      if (y + hh > hostRect.height - 4) y = a.top - hostRect.top - hh - 4;
+      x = Math.max(4, Math.min(x, hostRect.width - w - 4));
+      y = Math.max(4, Math.min(y, hostRect.height - hh - 4));
+      btn.style.left = x + "px";
+      btn.style.top = y + "px";
+    }
+
+    async function addSelectionToGlossary(pInfo) {
+      if (pInfo.state.type !== "chapter.txt" || !pInfo.editor || !pInfo.editor.isCM) {
+        return;
+      }
+      const view = pInfo.editor.view;
+      const sel = view.state.selection.main;
+      if (sel.empty) return;
+      const text = view.state.doc.toString();
+      const term = text.slice(sel.from, sel.to).trim().normalize("NFC");
+      if (!term) return;
+      const key = term;
+      try {
+        const q = new URLSearchParams({ project: `${section}/${name}` });
+        const data = await api(`/ner?${q}`);
+        if (data.too_large) {
+          toast("Глоссарий слишком большой — правьте через «Файлы»", "err");
+          return;
+        }
+        const items = data.items || [];
+        const dup = items.some(
+          (it) => String(it.term || "").trim().normalize("NFC") === key,
+        );
+        if (dup) {
+          toast(`Термин «${term}» уже есть в глоссарии`, "err");
+          return;
+        }
+        const context = UICore.glossarySentence(text, sel.from, sel.to, 200);
+        items.push({
+          term,
+          type: "",
+          translation: "",
+          context,
+          count: 1,
+        });
+        await api("/ner", {
+          method: "PUT",
+          body: { project: `${section}/${name}`, items },
+        });
+        ed.ner = {
+          items,
+          matcher: UICore.buildGlossaryMatcher(items, ed.ngram, ed.threshold),
+        };
+        recomputeAll();
+        if (pInfo.addBtn) pInfo.addBtn.style.display = "none";
+        toast("Термин добавлен в глоссарий");
+      } catch (ex) {
+        toast(ex.message, "err");
+      }
+    }
+
     /* ── сборка интерфейса ── */
     const chapterSel = h("select", {
       class: "input ed-chapter",
@@ -1058,14 +1188,7 @@ function viewProject(section, name) {
       const v = parseInt(ngramInput.value, 10);
       ed.ngram = Number.isFinite(v) ? Math.min(6, Math.max(1, v)) : 3;
       ngramInput.value = String(ed.ngram);
-      if (ed.ner) {
-        ed.ner.matcher = UICore.buildGlossaryMatcher(
-          ed.ner.items,
-          ed.ngram,
-          ed.threshold,
-        );
-        recomputeAll();
-      }
+      applyMatcher();
     });
     const thresholdInput = h("input", {
       class: "input ed-threshold",
@@ -1077,18 +1200,24 @@ function viewProject(section, name) {
         "Порог нечёткого поиска терминов: выше — строже (аналог --ner_threshold в translate_book)",
     });
     thresholdInput.value = String(ed.threshold);
+    const readThreshold = (raw) => {
+      const v = parseFloat(String(raw || "").replace(",", "."));
+      return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : null;
+    };
+    /* input — сразу (спиннер/ввод); change — нормализует отображаемое значение */
+    thresholdInput.addEventListener("input", () => {
+      const raw = thresholdInput.value.trim().replace(",", ".");
+      if (!/^\d+(\.\d+)?$/.test(raw)) return; // «0.» — ждём цифру
+      const v = readThreshold(raw);
+      if (v == null || v === ed.threshold) return;
+      ed.threshold = v;
+      applyMatcher();
+    });
     thresholdInput.addEventListener("change", () => {
-      const v = parseFloat(thresholdInput.value);
-      ed.threshold = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.75;
+      const v = readThreshold(thresholdInput.value);
+      ed.threshold = v == null ? 0.75 : v;
       thresholdInput.value = String(ed.threshold);
-      if (ed.ner) {
-        ed.ner.matcher = UICore.buildGlossaryMatcher(
-          ed.ner.items,
-          ed.ngram,
-          ed.threshold,
-        );
-        recomputeAll();
-      }
+      applyMatcher();
     });
     function renderModeLabel() {
       /* подпись = ТЕКУЩЕЕ состояние; клик переключает */
@@ -1126,6 +1255,7 @@ function viewProject(section, name) {
           p.hl.layer.replaceChildren();
           p.hl.tip.style.display = "none";
         }
+        if (p.addBtn) p.addBtn.style.display = "none";
       }
       const def = defaultTypes();
       fillTypeSel(pLeft, def.left);
@@ -1156,7 +1286,7 @@ function viewProject(section, name) {
       hlBtn,
       h("span", { class: "field-help" }, "n-грамма:"),
       ngramInput,
-      h("span", { class: "field-help" }, "порог:"),
+      h("span", { class: "field-help" }, "Порог:"),
       thresholdInput,
     );
     renderModeLabel();

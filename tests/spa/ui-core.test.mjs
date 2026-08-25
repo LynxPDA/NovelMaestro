@@ -283,3 +283,35 @@ test("dirEntries: пустой каталог (trailing '/') виден и не 
     ["d:empty"],
   );
 });
+
+test("glossarySentence: русское предложение вокруг термина", () => {
+  const t = "Привет. Это термин здесь. Конец.";
+  const from = t.indexOf("термин");
+  const to = from + "термин".length;
+  assert.equal(UICore.glossarySentence(t, from, to, 200), "Это термин здесь.");
+});
+
+test("glossarySentence: китайское предложение (。 — граница)", () => {
+  const t = "即便他们真打赢了，苏星宇也不介意。下一句。";
+  const from = t.indexOf("苏星宇");
+  const to = from + "苏星宇".length;
+  assert.equal(
+    UICore.glossarySentence(t, from, to, 200),
+    "即便他们真打赢了，苏星宇也不介意。",
+  );
+});
+
+test("glossarySentence: обрезка до maxLen, термин внутри окна", () => {
+  const term = "TERM";
+  const t = "а".repeat(180) + term + "б".repeat(180);
+  const from = 180;
+  const to = 184;
+  const s = UICore.glossarySentence(t, from, to, 200);
+  assert.ok(s.length <= 200);
+  assert.ok(s.includes(term));
+});
+
+test("glossarySentence: дефолт maxLen 200, пустой текст", () => {
+  assert.equal(UICore.glossarySentence("", 0, 0, 200), "");
+  assert.equal(UICore.glossarySentence("нет границ", 0, 3), "нет границ");
+});

@@ -1378,9 +1378,9 @@ function makeEditor(initial, langExt, onUpdate) {
           "&": { height: "100%", fontSize: "13px" },
           ".cm-scroller": { fontFamily: "inherit" },
         }),
-        // раунд 23: колбэк изменений текста (вкладка «Редактор»)
+        // раунд 23: колбэк обновлений CM (doc / viewport / selection)
         ...(onUpdate
-          ? [EditorView.updateListener.of((u) => u.docChanged && onUpdate())]
+          ? [EditorView.updateListener.of((u) => onUpdate(u))]
           : []),
       ],
       parent: null,
