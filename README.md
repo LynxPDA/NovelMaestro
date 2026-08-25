@@ -229,6 +229,7 @@ python3 ../../../scripts/ner_check.py --passes whole      # этап 1 → ner_r
 # человек правит статусы в ner_review.json
 python3 ../../../scripts/ner_check.py --apply --dry-run   # предпросмотр правок
 python3 ../../../scripts/ner_check.py --apply             # применить (бэкап ner.json.bak)
+python3 ../../../scripts/ner_check.py --apply --no-bak    # применить без бэкапа
 python3 ../../../scripts/ner_check.py --passes types      # этап 2 → тот же ner_review.json
 ```
 
@@ -257,6 +258,7 @@ python3 ../../../scripts/translate_check_llm.py --start 1 --end 50  # поиск
 # человек правит статусы в translate_check_llm_review.json
 python3 ../../../scripts/translate_check_llm.py --apply --dry-run                  # предпросмотр
 python3 ../../../scripts/translate_check_llm.py --apply                            # применить принятые
+python3 ../../../scripts/translate_check_llm.py --apply --no-bak                   # без бэкапов .bak
 ```
 
 Интерактив (поиск, применение, предпросмотр, полный автомат) — в
