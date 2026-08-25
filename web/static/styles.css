@@ -894,18 +894,13 @@ a.fname:hover {
  font-weight: 400;
  color: var(--accent);
 }
-/* группы тулбара глоссария: «пилюли» — поиск+поля, типы+столбцы */
-.toolbar-group {
+.ner-search {
  display: flex;
  align-items: center;
  gap: 6px;
  flex-shrink: 0;
- padding: 3px 6px;
- border: 1px solid var(--border);
- border-radius: var(--radius);
- background: var(--surface-2);
 }
-.toolbar-group .input {
+.ner-search .input {
  min-width: 160px;
 }
 .ner-type {

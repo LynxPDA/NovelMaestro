@@ -2023,13 +2023,13 @@ function viewProject(section, name) {
     exportBtn.addEventListener("click", () =>
       exportModal(data.by_type || {}, `${section}/${name}`),
     );
-    /* группы-«пилюли»: поиск+поля и типы+столбцы — видно, что к чему */
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
-      h("span", { class: "toolbar-group" }, search, searchFieldsBtn),
+      h("span", { class: "ner-search" }, search, searchFieldsBtn),
       h("span", { class: "spacer" }),
-      h("span", { class: "toolbar-group" }, typeBtn, colBtn),
+      typeBtn,
+      colBtn,
       addBtn,
       exportBtn,
     );
