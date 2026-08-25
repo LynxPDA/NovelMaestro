@@ -84,6 +84,64 @@
     return best;
   }
 
+  /* ── таблица глоссария: ячейка / сортировка / поиск ── */
+  function nerCellText(v) {
+    return v && typeof v === "object" ? JSON.stringify(v) : String(v == null ? "" : v);
+  }
+  /* первый клик по столбцу — убывание, повторный — возрастание */
+  function nextNerSort(field, dir, clicked) {
+    if (clicked && clicked === field) {
+      return { field: clicked, dir: dir === "desc" ? "asc" : "desc" };
+    }
+    return { field: clicked || field || "count", dir: "desc" };
+  }
+  function filterNerItems(items, query, fields, typeFilter) {
+    var list = items || [];
+    var qq = String(query || "").trim().toLowerCase();
+    var tf = typeFilter ? String(typeFilter) : "";
+    var keys = fields && fields.length ? fields : null;
+    return list.filter(function (it) {
+      var type = String(it.type || "");
+      if (tf && type !== tf) return false;
+      if (!qq) return true;
+      var searchKeys =
+        keys ||
+        Object.keys(it).filter(function (k) {
+          return k !== "__new";
+        });
+      for (var i = 0; i < searchKeys.length; i++) {
+        if (nerCellText(it[searchKeys[i]]).toLowerCase().includes(qq)) {
+          return true;
+        }
+      }
+      return false;
+    });
+  }
+  function sortNerItems(items, field, dir) {
+    var list = (items || []).slice();
+    if (!field) return list;
+    var sign = dir === "asc" ? 1 : -1;
+    list.sort(function (a, b) {
+      var av = a[field];
+      var bv = b[field];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      var numA = Number(av);
+      var numB = Number(bv);
+      var numeric =
+        av !== "" &&
+        bv !== "" &&
+        Number.isFinite(numA) &&
+        Number.isFinite(numB);
+      var cmp = numeric
+        ? numA - numB
+        : nerCellText(av).localeCompare(nerCellText(bv), "ru");
+      return cmp * sign;
+    });
+    return list;
+  }
+
   var UICore = {
     /* ── роутер: "#/run/a/b" → {view, rest} ── */
     parseRoute: (hash) => {
@@ -403,6 +461,11 @@
       }
       return dedup;
     },
+
+    nerCellText: nerCellText,
+    nextNerSort: nextNerSort,
+    filterNerItems: filterNerItems,
+    sortNerItems: sortNerItems,
   };
 
   return UICore;

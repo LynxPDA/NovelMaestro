@@ -315,3 +315,67 @@ test("glossarySentence: дефолт maxLen 200, пустой текст", () =>
   assert.equal(UICore.glossarySentence("", 0, 0, 200), "");
   assert.equal(UICore.glossarySentence("нет границ", 0, 3), "нет границ");
 });
+
+test("nerCellText: объекты как JSON, пустые как строка", () => {
+  assert.equal(UICore.nerCellText(null), "");
+  assert.equal(UICore.nerCellText(undefined), "");
+  assert.equal(UICore.nerCellText("Лин"), "Лин");
+  assert.equal(UICore.nerCellText(12), "12");
+  assert.equal(UICore.nerCellText({ a: 1 }), '{"a":1}');
+});
+
+test("nextNerSort: первый клик — убывание, повтор — возрастание", () => {
+  assert.deepEqual(UICore.nextNerSort("count", "desc", "translation"), {
+    field: "translation",
+    dir: "desc",
+  });
+  assert.deepEqual(UICore.nextNerSort("translation", "desc", "translation"), {
+    field: "translation",
+    dir: "asc",
+  });
+  assert.deepEqual(UICore.nextNerSort("translation", "asc", "translation"), {
+    field: "translation",
+    dir: "desc",
+  });
+  assert.deepEqual(UICore.nextNerSort(null, null, null), {
+    field: "count",
+    dir: "desc",
+  });
+});
+
+test("sortNerItems: count по убыванию, пустые в конце", () => {
+  const items = [
+    { term: "a", count: 1 },
+    { term: "b", count: 10 },
+    { term: "c" },
+    { term: "d", count: 5 },
+  ];
+  assert.deepEqual(
+    UICore.sortNerItems(items, "count", "desc").map((x) => x.term),
+    ["b", "d", "a", "c"],
+  );
+  assert.deepEqual(
+    UICore.sortNerItems(items, "count", "asc").map((x) => x.term),
+    ["a", "d", "b", "c"],
+  );
+});
+
+test("sortNerItems: строки по возрастанию", () => {
+  const items = [{ term: "я" }, { term: "б" }, { term: "а" }];
+  assert.deepEqual(
+    UICore.sortNerItems(items, "term", "asc").map((x) => x.term),
+    ["а", "б", "я"],
+  );
+});
+
+test("filterNerItems: по выбранным полям и типу", () => {
+  const items = [
+    { term: "林凡", type: "person", translation: "Лин Фань", notes: "гг" },
+    { term: "火", type: "skill", translation: "огонь", notes: "стихия" },
+  ];
+  assert.equal(UICore.filterNerItems(items, "гг", ["notes"], "").length, 1);
+  assert.equal(UICore.filterNerItems(items, "гг", ["term"], "").length, 0);
+  assert.equal(UICore.filterNerItems(items, "лин", null, "").length, 1);
+  assert.equal(UICore.filterNerItems(items, "", ["term"], "skill").length, 1);
+  assert.equal(UICore.filterNerItems(items, "огонь", ["translation"], "person").length, 0);
+});

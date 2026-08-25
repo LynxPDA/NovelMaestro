@@ -869,6 +869,36 @@ a.fname:hover {
  color: var(--text-dim);
  font-weight: 600;
 }
+.ner-table th.ner-th {
+ white-space: nowrap;
+}
+.ner-table th.ner-th-active {
+ color: var(--text);
+}
+.ner-th-btn {
+ background: none;
+ border: none;
+ color: inherit;
+ font: inherit;
+ font-weight: 600;
+ cursor: pointer;
+ padding: 0;
+ text-align: left;
+ width: 100%;
+ user-select: none;
+}
+.ner-th-btn:hover {
+ color: var(--text);
+}
+.ner-th-dir {
+ font-weight: 400;
+ color: var(--accent);
+}
+.ner-search {
+ display: flex;
+ align-items: center;
+ gap: 6px;
+}
 .ner-type {
  color: var(--accent);
  font-size: 13px;
