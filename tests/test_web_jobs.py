@@ -748,6 +748,23 @@ def test_build_ner_check_flags():
     assert "--apply" not in argv and "--auto-apply" not in argv
 
 
+def test_build_ner_check_no_bak():
+    """no_bak: true → --no-bak в argv; false/нет — флага нет."""
+    argv = build_command("ner_check", {"no_bak": True}, {})
+    assert "--no-bak" in argv
+    argv2 = build_command("ner_check", {"no_bak": False}, {})
+    assert "--no-bak" not in argv2
+    argv3 = build_command("ner_check", {"apply": True}, {})
+    assert "--no-bak" not in argv3
+
+
+def test_build_translate_check_llm_no_bak():
+    argv = build_command("translate_check_llm", {"no_bak": True}, {})
+    assert "--no-bak" in argv
+    argv2 = build_command("translate_check_llm", {"no_bak": False}, {})
+    assert "--no-bak" not in argv2
+
+
 def test_build_translate_check_llm_flags():
     form = {"type": "polished", "start": "1", "end": "10",
             "two_pass": True, "context_budget": "75000",

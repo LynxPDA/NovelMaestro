@@ -8,6 +8,7 @@
 """
 import json
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -254,6 +255,30 @@ def test_review_apply_creates_job(srv, tmp_path):
     # job существует в менеджере
     job = srv.job_manager.get(r["job"]["id"])
     assert job is not None
+
+
+def test_review_apply_passes_no_bak(srv, tmp_path):
+    """no_bak в body → параметр задачи (--no-bak соберётся в argv)."""
+    srv, port, root = srv()
+    _mk_project(root)
+    from web.jobs import JobManager
+    srv.job_manager = JobManager(tmp_path / "web", repo_root=REPO)
+    r = _request(port, "POST", "/api/translate_check_llm/review/apply",
+                 {"project": "ACTIVE/demo", "no_bak": True})
+    assert r["ok"]
+    job = srv.job_manager.get(r["job"]["id"])
+    assert job is not None and "--no-bak" in job.argv
+    # ждём завершения первой задачи (per-project лок на запуск)
+    for _ in range(50):
+        j = srv.job_manager.get(job.id)
+        if j is not None and j.status != "running":
+            break
+        time.sleep(0.05)
+    # без флага — бэкапы по умолчанию включены (флага нет)
+    r2 = _request(port, "POST", "/api/ner/review/apply",
+                  {"project": "ACTIVE/demo"})
+    job2 = srv.job_manager.get(r2["job"]["id"])
+    assert job2 is not None and "--no-bak" not in job2.argv
 
 
 # ════════════════════════════════════════════════════════════════════

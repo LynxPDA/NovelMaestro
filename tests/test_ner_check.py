@@ -327,6 +327,35 @@ def test_ner_check_apply_dry_run_and_real(tmp_path, monkeypatch):
     assert rc == 0
 
 
+def test_ner_check_apply_no_bak(tmp_path, monkeypatch):
+    """--no-bak: ner.json обновляется, .bak не создаётся."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    doc = {"создан": "t", "вход": "ner.json", "правки": [
+        {"этап": "Весь глоссарий", "term": "林凡", "field": "translation",
+         "old": "Линь Фан", "new": "Лин Фань", "причина": "r",
+         "статус": "принять", "применено": False},
+    ]}
+    (tmp_path / "ner_review.json").write_text(
+        json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    rc = NC.main(["--apply", "--no-bak", "--input", "ner.json"])
+    assert rc == 0
+    data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
+    assert data[0]["translation"] == "Лин Фань"
+    assert not (tmp_path / "ner.json.bak").exists()
+    # без --no-bak бэкап создаётся (по умолчанию): новая правка
+    doc2 = {"создан": "t", "вход": "ner.json", "правки": [
+        {"этап": "Весь глоссарий", "term": "青云宗", "field": "translation",
+         "old": "Секта Цинъюнь", "new": "Секта Цинъюнь (гл.)", "причина": "r",
+         "статус": "принять", "применено": False},
+    ]}
+    (tmp_path / "ner_review.json").write_text(
+        json.dumps(doc2, ensure_ascii=False), encoding="utf-8")
+    rc = NC.main(["--apply", "--input", "ner.json"])
+    assert rc == 0
+    assert (tmp_path / "ner.json.bak").exists()
+
+
 def test_ner_check_apply_legacy_patches_array(tmp_path, monkeypatch):
     """Старый формат (простой массив патчей) понимается как «принять»."""
     monkeypatch.chdir(tmp_path)

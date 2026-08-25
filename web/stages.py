@@ -308,6 +308,8 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
     for flag in ("apply", "auto_apply", "dry_run"):
         if form.get(flag):
             argv.append(f"--{flag.replace('_', '-')}")
+    if form.get("no_bak"):
+        argv.append("--no-bak")
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
     re_effort = form.get("reasoning_effort")
@@ -344,6 +346,8 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
     for flag in ("apply", "auto_apply", "dry_run"):
         if form.get(flag):
             argv.append(f"--{flag.replace('_', '-')}")
+    if form.get("no_bak"):
+        argv.append("--no-bak")
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     if form.get("temperature") not in (None, ""):
@@ -661,6 +665,8 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "bool", "default": False},
             {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
              "type": "bool", "default": False},
+            {"name": "no_bak", "label": "Не создавать .bak (--no-bak)",
+             "type": "bool", "default": False},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": ""},
             {"name": "reasoning_effort", "label": "Reasoning effort",
@@ -699,6 +705,8 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "auto_apply", "label": "Автоприменение (--auto-apply)",
              "type": "bool", "default": False},
             {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
+             "type": "bool", "default": False},
+            {"name": "no_bak", "label": "Не создавать .bak (--no-bak)",
              "type": "bool", "default": False},
             {"name": "prompt_file", "label": "Промпт-файл (теги pass1/pass2)",
              "type": "files", "dir": "prompts", "ext": [".txt"],

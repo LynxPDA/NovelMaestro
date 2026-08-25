@@ -1038,6 +1038,8 @@ def _review_apply(ctx: dict, action: str) -> dict:
         raise ApiError(400, "Параметр project=sec/name обязателен")
     dry = bool(body.get("dry_run", False))
     params: dict = {"apply": True, "dry_run": dry}
+    if body.get("no_bak"):
+        params["no_bak"] = True
     if action == "translate_check_llm":
         params["type"] = body.get("type") or "polished"
     ctx["body"] = {"action": action, "project": project, "params": params}

@@ -700,12 +700,12 @@ def resolve_entry_path(entry, file_type, chapter_map, logger=None):
 
 
 def apply_fix_entries(entries, file_type, chapter_map, logger,
-                      dry_run=False):
+                      dry_run=False, no_bak=False):
     """Применение принятых неприменённых правок к файлам глав.
     Группировка по файлу, замены последовательные (NFC, первое
-    вхождение). Бэкап <файл>.bak перед первой записью. Помечает
-    записи in-place: применено=True + «дата применения».
-    Возвращает (applied, skipped)."""
+    вхождение). Бэкап <файл>.bak перед первой записью (кроме
+    no_bak=True). Помечает записи in-place: применено=True +
+    «дата применения». Возвращает (applied, skipped)."""
     pending = [e for e in entries
                if e.get("статус", REVIEW_ACCEPT) == REVIEW_ACCEPT
                and not e.get("применено")]
@@ -744,7 +744,8 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
             logger.info(f"  ✔ Гл.{e['глава']} [{e.get('тип') or '?'}]: "
                         f"«{e['old'][:60]}» → «{e['new'][:60]}»")
         if changed and not dry_run:
-            shutil.copy2(fp, fp + ".bak")
+            if not no_bak:
+                shutil.copy2(fp, fp + ".bak")
             atomic_write(fp, cur)
     if dry_run and applied:
         for e in applied:          # dry-run ничего не применяет
@@ -834,6 +835,9 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                     help="Сразу применить найденное без человека.")
     ap.add_argument("--dry-run", dest="dry_run", action="store_true",
                     help="Предпросмотр: файлы не изменяются.")
+    ap.add_argument("--no-bak", dest="no_bak", action="store_true",
+                    help="Не создавать бэкапы <файл>.bak при применении "
+                        "(по умолчанию создаются).")
     # LLM
     ap.add_argument("--temperature", type=float, default=None,
                     help="Температура (иначе дефолт сервера).")
@@ -903,12 +907,14 @@ def do_apply(args, logger) -> int:
     if args.dry_run:
         applied, skipped = apply_fix_entries(entries, args.file_type,
                                              chapter_map, logger,
-                                             dry_run=True)
+                                             dry_run=True,
+                                             no_bak=args.no_bak)
         logger.info(f"DRY-RUN: было бы применено {len(applied)}, "
                     f"пропущено {skipped}. Файлы не изменены.")
         return 0
     applied, skipped = apply_fix_entries(entries, args.file_type,
-                                         chapter_map, logger)
+                                         chapter_map, logger,
+                                         no_bak=args.no_bak)
     logger.info(f"Итог: применено {len(applied)}, "
                 f"пропущено/отклонено {skipped}.")
     if not applied:
@@ -920,8 +926,10 @@ def do_apply(args, logger) -> int:
                      or datetime.now().strftime("%Y-%m-%d %H:%M"),
                      entries, meta=meta)
     write_changes_md(entries, args, logger)
-    logger.info(f"✅ Главы обновлены ({len(applied)} правок; бэкапы "
-                f"<файл>.bak); флаги «применено» сохранены в {args.review}")
+    logger.info(f"✅ Главы обновлены ({len(applied)} правок"
+                + ("; без бэкапов" if args.no_bak else "; бэкапы "
+                  f"<файл>.bak") + "); флаги «применено» сохранены "
+                f"в {args.review}")
     return 0
 
 
@@ -1069,7 +1077,8 @@ def do_check(args, logger) -> int:
     if args.auto_apply and entries:
         applied, skipped = apply_fix_entries(entries, args.file_type,
                                              chapter_map, logger,
-                                             dry_run=args.dry_run)
+                                             dry_run=args.dry_run,
+                                             no_bak=args.no_bak)
         if args.dry_run:
             logger.info(f"DRY-RUN авто-применение: было бы "
                         f"{len(applied)}, пропущено {skipped}.")

@@ -249,6 +249,22 @@ def test_apply_fix_entries_statuses_backup_and_dry_run(tmp_path):
     assert entries[0]["применено"] and entries[0]["дата применения"]
 
 
+def test_apply_fix_entries_no_bak(tmp_path):
+    """no_bak=True: файл обновляется, .bak не создаётся."""
+    ch_dir, cmap = _mk_chapters(tmp_path, {1: "первый текст главы один."})
+    fp = Path(ch_dir) / "00000_1_t" / "polished.txt"
+    entries = [
+        {"этап": "s", "глава": 1, "файл": str(fp), "old": "первый текст",
+         "new": "правленый текст", "тип": "typo", "причина": "",
+         "статус": C.REVIEW_ACCEPT, "применено": False},
+    ]
+    applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
+                                            SilentLog(), no_bak=True)
+    assert (len(applied), skipped) == (1, 0)
+    assert "правленый текст" in fp.read_text(encoding="utf-8")
+    assert not (fp.parent / "polished.txt.bak").exists()
+
+
 def test_apply_fix_entries_sequential_same_file(tmp_path):
     ch_dir, cmap = _mk_chapters(
         tmp_path, {1: "альфа и омега в одной строке текста."})

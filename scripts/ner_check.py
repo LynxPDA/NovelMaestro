@@ -194,6 +194,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="С --apply/--auto-apply: показать правки без "
                         "записи файлов.")
+    p.add_argument("--no-bak", action="store_true",
+                   help="Не создавать бэкап <файл>.bak при применении "
+                        "(по умолчанию создаётся).")
     # сервер: CLI > HOST/API_KEY/MODEL из .env > help+exit
     p.add_argument("--host", default=None, help="URL API-сервера (пусто = HOST из .env).")
     p.add_argument("--api_key", default=None, help="Bearer-ключ (пусто = API_KEY из .env).")
@@ -461,7 +464,7 @@ def do_check(args, logger) -> int:
             return
         applied, skipped = apply_ner_patches(data, entries, logger)
         if applied:
-            if not backed_up:
+            if not args.no_bak and not backed_up:
                 shutil.copy2(args.input, args.input + ".bak")
                 backed_up = True
                 logger.info(f"💾 Бэкап: {args.input}.bak")
@@ -470,7 +473,8 @@ def do_check(args, logger) -> int:
             write_changes_md(entries, args, logger)
         save_review()
         logger.info(f"Авто-применение: применено {len(applied)}, "
-                    f"пропущено {skipped}.")
+                    f"пропущено {skipped}"
+                    + (" (без бэкапа)" if args.no_bak else "") + ".")
 
     def run_stage(title, subset):
         tpl = (prompt_tpl if title == "Весь глоссарий"
@@ -548,15 +552,17 @@ def do_apply(args, logger) -> int:
             logger.info(f"  · {prefix}{p['term']} [{p['field']}]: "
                         f"{p['old']!r} → {p['new']!r}")
         return 0
-    shutil.copy2(args.input, args.input + ".bak")
-    logger.info(f"💾 Бэкап: {args.input}.bak")
+    if not args.no_bak:
+        shutil.copy2(args.input, args.input + ".bak")
+        logger.info(f"💾 Бэкап: {args.input}.bak")
     atomic_write(args.input, json.dumps(data, ensure_ascii=False, indent=2))
     save_review_file(args.review, args.input,
                      (meta or {}).get("создан")
                      or datetime.now().strftime("%Y-%m-%d %H:%M"),
                      entries, meta=meta)
     write_changes_md(entries, args, logger)
-    logger.info(f"✅ ner.json обновлён ({len(applied)} правок); "
+    logger.info(f"✅ ner.json обновлён ({len(applied)} правок"
+                + (" без бэкапа" if args.no_bak else "") + "); "
                 f"флаги «применено» сохранены в {args.review}")
     return 0
 
