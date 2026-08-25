@@ -699,7 +699,7 @@ function viewProject(section, name) {
           pInfo.hl.tip.style.display = "none";
           computeHighlight(pInfo);
         }
-        if (pInfo.addBtn) pInfo.host.append(pInfo.addBtn);
+        if (pInfo.addUi) pInfo.host.append(pInfo.addUi.wrap);
         updateAddTerm(pInfo);
         return;
       }
@@ -734,7 +734,7 @@ function viewProject(section, name) {
           pInfo.host.append(pInfo.hl.tip);
           pInfo.hl.tip.style.display = "none";
         }
-        if (pInfo.addBtn) pInfo.host.append(pInfo.addBtn);
+        if (pInfo.addUi) pInfo.host.append(pInfo.addUi.wrap);
         pInfo.saveBtn.disabled = !pInfo.state.dirty;
         maybeHl(pInfo);
         updateAddTerm(pInfo);
@@ -1049,67 +1049,143 @@ function viewProject(section, name) {
     }
 
     /* ── добавление термина из выделения в chapter.txt ── */
-    function ensureAddBtn(pInfo) {
-      if (pInfo.addBtn) return pInfo.addBtn;
+    function ensureAddUi(pInfo) {
+      if (pInfo.addUi) return pInfo.addUi;
       const btn = h(
         "button",
         { class: "btn btn-sm ed-add-term", type: "button" },
         "＋ в глоссарий",
       );
-      btn.style.display = "none";
+      const termEl = h("div", { class: "hl-tip-term" });
+      const typeInp = h("input", {
+        class: "input input-sm",
+        placeholder: "Тип",
+      });
+      const trInp = h("input", {
+        class: "input input-sm",
+        placeholder: "Перевод",
+      });
+      const saveBtn = h(
+        "button",
+        { class: "btn btn-sm", type: "button" },
+        "Добавить",
+      );
+      const cancelBtn = h(
+        "button",
+        { class: "btn btn-sm btn-ghost", type: "button" },
+        "Отмена",
+      );
+      const form = h(
+        "div",
+        { class: "ed-add-form" },
+        termEl,
+        h("div", { class: "hl-tip-row" }, "Тип"),
+        typeInp,
+        h("div", { class: "hl-tip-row" }, "Перевод"),
+        trInp,
+        h("div", { class: "ed-add-form-actions" }, saveBtn, cancelBtn),
+      );
+      form.style.display = "none";
+      const wrap = h("div", { class: "ed-add-wrap" }, btn, form);
+      wrap.style.display = "none";
       btn.addEventListener("mousedown", (e) => e.preventDefault());
+      form.addEventListener("mousedown", (e) => e.stopPropagation());
       btn.addEventListener("click", (e) => {
         e.preventDefault();
-        addSelectionToGlossary(pInfo);
+        openAddForm(pInfo);
       });
-      pInfo.host.append(btn);
-      pInfo.addBtn = btn;
-      return btn;
+      cancelBtn.addEventListener("click", () => closeAddForm(pInfo));
+      saveBtn.addEventListener("click", () => submitAddForm(pInfo));
+      typeInp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          trInp.focus();
+        } else if (e.key === "Escape") {
+          closeAddForm(pInfo);
+        }
+      });
+      trInp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          submitAddForm(pInfo);
+        } else if (e.key === "Escape") {
+          closeAddForm(pInfo);
+        }
+      });
+      pInfo.host.append(wrap);
+      pInfo.addUi = { wrap, btn, form, termEl, typeInp, trInp, saveBtn };
+      return pInfo.addUi;
     }
 
-    function updateAddTerm(pInfo) {
-      if (!pInfo.editor || !pInfo.editor.isCM) {
-        if (pInfo.addBtn) pInfo.addBtn.style.display = "none";
-        return;
-      }
-      const btn = ensureAddBtn(pInfo);
-      if (pInfo.state.type !== "chapter.txt") {
-        btn.style.display = "none";
-        return;
-      }
+    function placeAddUi(pInfo, from, to) {
+      const ui = pInfo.addUi;
+      if (!ui || !pInfo.editor || !pInfo.editor.isCM) return;
       const view = pInfo.editor.view;
-      const sel = view.state.selection.main;
-      if (sel.empty) {
-        btn.style.display = "none";
-        return;
-      }
-      const term = view.state.doc.sliceString(sel.from, sel.to).trim();
-      if (!term) {
-        btn.style.display = "none";
-        return;
-      }
-      const a = view.coordsAtPos(sel.from);
-      const b = view.coordsAtPos(sel.to);
-      if (!a) {
-        btn.style.display = "none";
-        return;
-      }
-      btn.style.display = "block";
+      const a = view.coordsAtPos(from);
+      const b = view.coordsAtPos(to);
+      if (!a) return;
+      ui.wrap.style.display = "block";
       const hostRect = pInfo.host.getBoundingClientRect();
-      const w = btn.offsetWidth || 140;
-      const hh = btn.offsetHeight || 28;
+      const w = ui.wrap.offsetWidth || 220;
+      const hh = ui.wrap.offsetHeight || 28;
       let x = a.left - hostRect.left;
       const bottom = (b && b.bottom) || a.bottom;
       let y = bottom - hostRect.top + 4;
       if (y + hh > hostRect.height - 4) y = a.top - hostRect.top - hh - 4;
       x = Math.max(4, Math.min(x, hostRect.width - w - 4));
       y = Math.max(4, Math.min(y, hostRect.height - hh - 4));
-      btn.style.left = x + "px";
-      btn.style.top = y + "px";
+      ui.wrap.style.left = x + "px";
+      ui.wrap.style.top = y + "px";
     }
 
-    async function addSelectionToGlossary(pInfo) {
-      if (pInfo.state.type !== "chapter.txt" || !pInfo.editor || !pInfo.editor.isCM) {
+    function closeAddForm(pInfo) {
+      pInfo.addDraft = null;
+      if (!pInfo.addUi) return;
+      pInfo.addUi.form.style.display = "none";
+      pInfo.addUi.btn.style.display = "block";
+      updateAddTerm(pInfo);
+    }
+
+    function updateAddTerm(pInfo) {
+      if (!pInfo.editor || !pInfo.editor.isCM) {
+        if (pInfo.addUi) pInfo.addUi.wrap.style.display = "none";
+        return;
+      }
+      const ui = ensureAddUi(pInfo);
+      if (pInfo.state.type !== "chapter.txt") {
+        pInfo.addDraft = null;
+        ui.wrap.style.display = "none";
+        return;
+      }
+      /* форма открыта — не прятать при потере выделения (фокус в полях) */
+      if (pInfo.addDraft) {
+        ui.btn.style.display = "none";
+        ui.form.style.display = "flex";
+        placeAddUi(pInfo, pInfo.addDraft.from, pInfo.addDraft.to);
+        return;
+      }
+      const view = pInfo.editor.view;
+      const sel = view.state.selection.main;
+      if (sel.empty) {
+        ui.wrap.style.display = "none";
+        return;
+      }
+      const term = view.state.doc.sliceString(sel.from, sel.to).trim();
+      if (!term) {
+        ui.wrap.style.display = "none";
+        return;
+      }
+      ui.form.style.display = "none";
+      ui.btn.style.display = "block";
+      placeAddUi(pInfo, sel.from, sel.to);
+    }
+
+    async function openAddForm(pInfo) {
+      if (
+        pInfo.state.type !== "chapter.txt" ||
+        !pInfo.editor ||
+        !pInfo.editor.isCM
+      ) {
         return;
       }
       const view = pInfo.editor.view;
@@ -1118,7 +1194,7 @@ function viewProject(section, name) {
       const text = view.state.doc.toString();
       const term = text.slice(sel.from, sel.to).trim().normalize("NFC");
       if (!term) return;
-      const key = term;
+      const ui = ensureAddUi(pInfo);
       try {
         const q = new URLSearchParams({ project: `${section}/${name}` });
         const data = await api(`/ner?${q}`);
@@ -1128,20 +1204,54 @@ function viewProject(section, name) {
         }
         const items = data.items || [];
         const dup = items.some(
-          (it) => String(it.term || "").trim().normalize("NFC") === key,
+          (it) => String(it.term || "").trim().normalize("NFC") === term,
         );
         if (dup) {
           toast(`Термин «${term}» уже есть в глоссарии`, "err");
           return;
         }
-        const context = UICore.glossarySentence(text, sel.from, sel.to, 200);
-        items.push({
-          term,
-          type: "",
-          translation: "",
-          context,
-          count: 1,
-        });
+        pInfo.addDraft = { term, from: sel.from, to: sel.to, text };
+        ui.termEl.textContent = term;
+        ui.typeInp.value = "";
+        ui.trInp.value = "";
+        ui.btn.style.display = "none";
+        ui.form.style.display = "flex";
+        placeAddUi(pInfo, sel.from, sel.to);
+        setTimeout(() => ui.typeInp.focus(), 0);
+      } catch (ex) {
+        toast(ex.message, "err");
+      }
+    }
+
+    async function submitAddForm(pInfo) {
+      const draft = pInfo.addDraft;
+      if (!draft || !pInfo.addUi) return;
+      const type = pInfo.addUi.typeInp.value.trim();
+      const translation = pInfo.addUi.trInp.value.trim();
+      const term = draft.term;
+      pInfo.addUi.saveBtn.disabled = true;
+      try {
+        const q = new URLSearchParams({ project: `${section}/${name}` });
+        const data = await api(`/ner?${q}`);
+        if (data.too_large) {
+          toast("Глоссарий слишком большой — правьте через «Файлы»", "err");
+          return;
+        }
+        const items = data.items || [];
+        const dup = items.some(
+          (it) => String(it.term || "").trim().normalize("NFC") === term,
+        );
+        if (dup) {
+          toast(`Термин «${term}» уже есть в глоссарии`, "err");
+          return;
+        }
+        const context = UICore.glossarySentence(
+          draft.text,
+          draft.from,
+          draft.to,
+          200,
+        );
+        items.push({ term, type, translation, context, count: 1 });
         await api("/ner", {
           method: "PUT",
           body: { project: `${section}/${name}`, items },
@@ -1151,10 +1261,14 @@ function viewProject(section, name) {
           matcher: UICore.buildGlossaryMatcher(items, ed.ngram, ed.threshold),
         };
         recomputeAll();
-        if (pInfo.addBtn) pInfo.addBtn.style.display = "none";
+        pInfo.addDraft = null;
+        pInfo.addUi.form.style.display = "none";
+        pInfo.addUi.wrap.style.display = "none";
         toast("Термин добавлен в глоссарий");
       } catch (ex) {
         toast(ex.message, "err");
+      } finally {
+        if (pInfo.addUi) pInfo.addUi.saveBtn.disabled = false;
       }
     }
 
@@ -1255,7 +1369,8 @@ function viewProject(section, name) {
           p.hl.layer.replaceChildren();
           p.hl.tip.style.display = "none";
         }
-        if (p.addBtn) p.addBtn.style.display = "none";
+        p.addDraft = null;
+        if (p.addUi) p.addUi.wrap.style.display = "none";
       }
       const def = defaultTypes();
       fillTypeSel(pLeft, def.left);

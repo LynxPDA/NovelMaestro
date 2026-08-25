@@ -1370,10 +1370,32 @@ a.fname:hover {
 .ed-cm .cm-content ::selection {
  background: rgba(46, 160, 67, 0.3) !important;
 }
-.ed-add-term {
+.ed-add-wrap {
  position: absolute;
  z-index: 41;
+}
+.ed-add-term {
  font-size: 12px;
+}
+.ed-add-form {
+ display: flex;
+ flex-direction: column;
+ gap: 4px;
+ min-width: 220px;
+ max-width: 280px;
+ padding: 8px 10px;
+ background: var(--surface);
+ border: 1px solid var(--border, #30363d);
+ border-radius: 8px;
+ box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+.ed-add-form .input {
+ width: 100%;
+}
+.ed-add-form-actions {
+ display: flex;
+ gap: 6px;
+ margin-top: 2px;
 }
 /* оверлей подсветки — внутри .cm-scroller, скроллится вместе с текстом.
    Без width/height и БЕЗ overflow: размер 0×0, марки рисуются по своим
