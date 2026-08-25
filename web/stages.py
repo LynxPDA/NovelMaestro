@@ -128,6 +128,14 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
         argv += ["--clean", "0"]
     if form.get("remove_pages") == 0:
         argv += ["--remove-pages", "0"]
+    if form.get("chapter_re"):
+        argv += ["--chapter-re", str(form["chapter_re"])]
+    if form.get("book_title"):
+        argv += ["--book-title", str(form["book_title"])]
+    if form.get("chunk_size") not in (None, ""):
+        argv += ["--chunk-size", str(form["chunk_size"])]
+    if form.get("clean_output"):
+        argv += ["--clean-output"]
     if form.get("dry_run"):
         argv += ["--dry-run"]
     return argv
@@ -427,6 +435,18 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "select", "options": ["1", "0"], "default": "1"},
             {"name": "remove_pages", "label": "Номера страниц (0 = не убирать)",
              "type": "select", "options": ["1", "0"], "default": "1"},
+            {"name": "chapter_re",
+             "label": "Маркер главы (regex, пусто = пресет)",
+             "type": "text", "default": ""},
+            {"name": "book_title",
+             "label": "Название книги (удаляется из заголовков)",
+             "type": "text", "default": ""},
+            {"name": "chunk_size",
+             "label": "Чанк фоллбэка (нет маркеров), СИМВОЛЫ",
+             "type": "number", "default": "7000"},
+            {"name": "clean_output",
+             "label": "Очистить папки глав перед записью",
+             "type": "bool", "default": False},
             {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
              "type": "bool", "default": False},
         ],

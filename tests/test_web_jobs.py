@@ -552,7 +552,9 @@ def test_build_epub_to_chapters_defaults():
 
 def test_build_epub_to_chapters_full():
     form = {"input": "source/book.epub", "lang": "zh", "polished": True,
-            "clean": 0, "remove_pages": 0, "dry_run": True}
+            "clean": 0, "remove_pages": 0, "dry_run": True,
+            "chapter_re": "第\\d+章", "book_title": "Книга",
+            "chunk_size": "5000", "clean_output": True}
     argv = build_command("epub", form, {})
     assert "--input" in argv and "source/book.epub" in argv
     assert "--lang" in argv and "zh" in argv
@@ -560,6 +562,10 @@ def test_build_epub_to_chapters_full():
     assert "--clean" in argv and "0" in argv
     assert "--remove-pages" in argv and "0" in argv
     assert "--dry-run" in argv
+    assert "--chapter-re" in argv and "第\\d+章" in argv
+    assert "--book-title" in argv and "Книга" in argv
+    assert "--chunk-size" in argv and "5000" in argv
+    assert "--clean-output" in argv
 
 
 def test_build_translate_check():
