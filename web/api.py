@@ -1798,15 +1798,26 @@ def _persist_run_params(ctx: dict, pdir: Path, stage: str,
 def _strip_secret_keys(text: str) -> str:
     """Убирает значения секретных ключей (*_API_KEY, API_KEY) из текста
     .env (M1): строки остаются с пустым значением + комментарий.
-    Раунд 12: единый ключ API_KEY тоже секретный (не *_API_KEY)."""
+    единый ключ API_KEY тоже секретный (не *_API_KEY).
+    Системные WEB_* (настройки web-сервера) в проект НЕ копируются
+    вовсе — в проектном .env они бесполезны (читает их только
+    системный projects/.env)."""
+    marker = "# (секрет не копируется в проект — M1, AUDIT)"
     out = []
     for line in text.splitlines():
         stripped = line.strip()
+        # синтетический маркер прошлой чистки — не дублируем
+        # (рядом со следующим секретным ключом добавится заново)
+        if stripped == marker:
+            continue
         if stripped and not stripped.startswith("#") and "=" in stripped:
             name = stripped.split("=", 1)[0].strip()
             if name == "API_KEY" or name.upper().endswith("_API_KEY"):
                 out.append(f"{name}=")
-                out.append(f"# (секрет не копируется в проект — M1, AUDIT)")
+                out.append(marker)
+                continue
+            if name.startswith("WEB_"):
+                # системная настройка web — не место в .env проекта
                 continue
         out.append(line)
     return "\n".join(out) + ("\n" if out else "")

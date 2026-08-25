@@ -185,7 +185,7 @@ def test_main_resolves_server_from_env(tmp_path, monkeypatch):
     monkeypatch.setattr(TB, "determine_model", lambda m, *a, **k: m)
     TB.main(["book.txt", "--threads", "1", "--env_file", str(env)])
     assert seen["base_url"] == "http://from-env:9989/v1"
-    assert seen["model"] == "стадийная"
+    assert seen["model"] == "общая"
 
 
 def test_main_redact_bad_json_returns_1(tmp_path, monkeypatch):

@@ -22,7 +22,7 @@ ner.json (поле translation; пол по наличию (female)/(male) в ty
 в тексте чанка (основное назначение — polish).
 
 Сервер: --host/--model/--api_key (CLI) > HOST/API_KEY/MODEL из .env
-(модель по режиму: TRANSLATE_MODEL/REDACT_MODEL/POLISH_MODEL → MODEL).
+(единая модель скрипта — без отдельных моделей под режимы).
 Ничего нет → подсказка по .env и выход.
 
 Совместимость: redact_book.py = shim (--mode redact); все старые флаги
@@ -263,7 +263,7 @@ def build_parser():
   max_tokens — серверный предохранитель (ТОКЕНЫ), не внутренний расчёт.
 
 Сервер (приоритет): CLI --host/--model/--api_key > HOST/API_KEY/MODEL из .env
-(модель по режиму: TRANSLATE_MODEL/REDACT_MODEL/POLISH_MODEL → MODEL).
+(единая модель скрипта — без отдельных моделей под режимы).
 """,
     )
     p.add_argument("file", help="Вход: txt (translate/polish) или JSON-trace (redact).")
@@ -291,7 +291,7 @@ def build_parser():
     p.add_argument("--host", default=None, help="URL API-сервера.")
     p.add_argument("--api_key", default=None, help="Bearer-ключ.")
     p.add_argument("--model", default=None,
-                   help="Модель: --model или MODEL/TRANSLATE_MODEL в .env (обязательна).")
+                   help="Модель: --model или MODEL в .env (обязательна).")
     p.add_argument("--env_file", default=None, help="Явный путь к .env.")
     # Чанкование (символы)
     p.add_argument("--chunk_size", type=int, default=800,
@@ -358,13 +358,13 @@ def main(argv=None):
     log_argv(logger)
 
     logger.info(f"🧭 Режим: {mode} | вход: {args.file} | выход: {out_path}")
-    
+
     # ── Сервер: CLI > HOST/API_KEY/MODEL из .env > help+exit ──
     env_data = parse_dotenv(find_env_file(args.env_file))
     sc = get_server_config(env_data)
     host = args.host or sc["host"]
     api_key = args.api_key if args.api_key is not None else sc["api_key"]
-    model = args.model or get_stage_model(env_data, mode)
+    model = args.model or get_stage_model(env_data)
     if not host:
         print_env_help()
         sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")

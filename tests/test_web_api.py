@@ -1209,3 +1209,25 @@ def test_dashboard_stats_cache(monkeypatch, srv_ctx):
     assert res2.status == 200 and len(calls) == 1  # из кеша
     api._STATS_CACHE.clear()
     api._CACHE_LOADED.clear()
+
+
+def test_strip_secret_keys_keeps_web_out_of_project():
+    """Копия системного .env в проект: API_KEY затирается, WEB_*
+    (системные настройки web) не попадают в pdir/.env вовсе."""
+    from web.api import _strip_secret_keys
+    text = (
+        "# комментарий\n"
+        "HOST=http://h\n"
+        "API_KEY=secret\n"
+        "MODEL=m\n"
+        "WEB_HOST=0.0.0.0\n"
+        "WEB_AUTH=1\n"
+        "NER_MODEL=ner\n"
+    )
+    out = _strip_secret_keys(text)
+    assert "HOST=http://h" in out
+    assert "API_KEY=" in out and "secret" not in out
+    assert "WEB_HOST" not in out and "WEB_AUTH" not in out
+    assert "NER_MODEL=ner" in out
+    # повторно — идемпотентно
+    assert _strip_secret_keys(out) == out

@@ -425,7 +425,8 @@ web-сервера; проектный `pdir/.env` приоритетнее дл
 затем обновляются ключи `<STAGE>_<FIELD>` (например `NER_CHUNK_SIZE`,
 `TRANSLATE_CHECK_EXCLUDE_WORDS`; модель — `<STAGE>_MODEL`, fallback —
 общая `MODEL`). Проектный `pdir/.env` приоритетнее системного.
-`API_KEY` не сохраняется (только предзаполнение формы). Слова-исключения проверки перевода —
+`API_KEY` не сохраняется (только предзаполнение формы); системные
+`WEB_*` (настройки web-сервера) в проект не копируются. Слова-исключения проверки перевода —
 `TRANSLATE_CHECK_EXCLUDE_WORDS` (дефолт `VIP,MVP,【,】,NPC`).
 
 ```ini
@@ -436,23 +437,25 @@ HOST=http://localhost:8080/v1
 API_KEY=your-api-key
 MODEL=gemma-3-novel-224b
 
-# Модель конкретной стадии (необязательно; fallback на общую MODEL)
-TRANSLATE_MODEL=...
-REDACT_MODEL=...
-POLISH_MODEL=...
+# Модель конкретного скрипта (необязательно; fallback на общую MODEL)
 NER_MODEL=...
 NER_CHECK_MODEL=...
 TRANSLATE_CHECK_LLM_MODEL=...
 WIKI_MODEL=...
+PIPELINE_MODEL=...   # web-конвейер (единая модель)
 ```
 
-**Приоритет модели стадии:** `СТАДИЯ_MODEL` → общая `MODEL`. Модель
-обязательна: берётся из `--model` или `.env`, автоопределение через
-`GET /models` убрано (раунд 12).
+**Приоритет модели:** `<СКРИПТ>_MODEL` → общая `MODEL`. Правило — один
+скрипт, один набор «сервер + ключ + модель»: отдельных моделей под
+перевод/редактуру/полировку в конвейере больше нет (убраны
+`TRANSLATE_MODEL`/`REDACT_MODEL`/`POLISH_MODEL`). Модель обязательна:
+берётся из `--model` или `.env`, автоопределение через `GET /models`
+убрано.
 
-> Модели стадий (`TRANSLATE_MODEL`, `NER_MODEL`, `NER_CHECK_MODEL`,
-> `TRANSLATE_CHECK_LLM_MODEL`, `WIKI_MODEL` и т.п.) подставляет web-слой
-> (`web/stages.py`); при прямом запуске `scripts/*.py` — та же схема.
+> Модели скриптов (`NER_MODEL`, `NER_CHECK_MODEL`,
+> `TRANSLATE_CHECK_LLM_MODEL`, `WIKI_MODEL`, `PIPELINE_MODEL` и т.п.)
+> подставляет web-слой (`web/stages.py`); при прямом запуске
+> `scripts/*.py` — та же схема.
 
 Web-сервер читает из того же `.env` ключи `WEB_HOST`, `WEB_PORT`,
 `WEB_AUTH`, `WEB_TOKEN`, `WEB_MAX_UPLOAD_MB`, `WEB_JOBS_LIMIT`

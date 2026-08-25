@@ -232,17 +232,18 @@ def test_get_server_config_remote():
 
 
 def test_get_stage_model_stage_wins():
-    env = {"MODEL": "общая", "TRANSLATE_MODEL": "стадийная"}
-    assert C.get_stage_model(env, "translate") == "стадийная"
+    # схема «один скрипт — одна модель»: NER_MODEL → общая MODEL
+    env = {"MODEL": "общая", "NER_MODEL": "стадийная"}
+    assert C.get_stage_model(env, "ner") == "стадийная"
 
 
 def test_get_stage_model_fallback_to_shared():
     env = {"MODEL": "общая"}
-    assert C.get_stage_model(env, "translate") == "общая"
+    assert C.get_stage_model(env, "ner") == "общая"
 
 
 def test_get_stage_model_empty():
-    assert C.get_stage_model({}, "translate") == ""
+    assert C.get_stage_model({}, "ner") == ""
 
 def test_get_stage_model_case():
     env = {"MODEL": "r", "wiki_model": "w", "WIKI_MODEL": "W"}
