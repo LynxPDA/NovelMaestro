@@ -585,6 +585,20 @@ class JobManager:
         self._persist()
         return True
 
+    def clear_finished(self) -> int:
+        """Очистить историю завершённых запусков (кнопка «Очистить»
+        на дашборде). Активные (running) остаются управляемыми.
+        Возвращает число удалённых записей."""
+        with self._lock:
+            finished = [j for j in self._jobs.values()
+                        if j.status != "running"]
+            for job in finished:
+                self._jobs.pop(job.id, None)
+                self._drop_sidecar(job.id)
+        if finished:
+            self._persist()
+        return len(finished)
+
     def get(self, job_id: str) -> Job | None:
         with self._lock:
             return self._jobs.get(job_id)

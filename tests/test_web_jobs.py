@@ -1040,6 +1040,27 @@ def test_jobs_list_delete(jobs_srv):
     assert not (jm.web_dir / "job_logs" / f"{job.id}.log").exists()
 
 
+def test_jobs_clear_finished(jobs_srv, fake_script):
+    """DELETE /api/jobs — очистка истории завершённых запусков;
+    активные (running) остаются."""
+    port, req, jm = jobs_srv
+    done = jm.start("test", "Готов", "ACTIVE/x", [], Path("."))
+    _wait_status(jm, done.id, "done", "failed", "stopped")
+    running = jm.start("test", "Активный", "ACTIVE/x",
+                       [str(fake_script / "hang.py")], Path("."))
+    time.sleep(0.3)
+    assert running.status == "running"
+    res, payload = req("DELETE", "/api/jobs")
+    assert res.status == 200
+    assert payload["cleared"] >= 1
+    jobs = jm.list()
+    # завершённый ушёл, активный остался
+    assert not any(j["id"] == done.id for j in jobs)
+    assert any(j["id"] == running.id for j in jobs)
+    # сайдкар очищенного задания удалён
+    assert not (jm.web_dir / "job_logs" / f"{done.id}.log").exists()
+
+
 def test_jobs_stop_api(jobs_srv, fake_script):
     port, req, jm = jobs_srv
     job = jm.start("test", "Тест", "ACTIVE/x",

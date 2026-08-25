@@ -1103,7 +1103,27 @@ async function viewDashboard() {
   const recentCard = h(
     "div",
     { class: "card dash-jobs" },
-    h("div", { class: "card-title" }, "Последние запуски (до 20)"),
+    h(
+      "div",
+      { class: "card-title" },
+      "Последние запуски",
+      h(
+        "button",
+        {
+          class: "btn btn-sm btn-ghost dash-refresh",
+          onclick: async () => {
+            try {
+              await api("/api/jobs", { method: "DELETE" });
+              toast("История запусков очищена");
+              render();
+            } catch (ex) {
+              toast(ex.message, "err");
+            }
+          },
+        },
+        "Очистить",
+      ),
+    ),
     recentRows.length
       ? h(
           "table",

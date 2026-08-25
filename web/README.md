@@ -87,11 +87,13 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
   вкладке «Логи» проекта). Метаданные всех запусков — `jobs.json`,
   хвост лога/событий — `web/job_logs/{id}.log` (переживает рестарт
   сервера).
-- **Дашборд** (раунд 20): «Последние запуски» — до 20 записей
+- **Дашборд**: «Последние запуски» — до 20 записей
   (`MAX_HISTORY=20`), колонки Задача/Проект/Статус/Прогресс/Дата; клик
-  по строке ведёт на Запуски проекта (без job id). Активные запуски
-  собираются из ПОЛНОГО списка jobs, а не из среза «последних 20».
-- **Промпты конвейера** (раунд 20): форма pipeline — режим
+  по строке ведёт на Запуски проекта (без job id); кнопка «Очистить»
+  (DELETE `/api/jobs`) удаляет завершённые запуски, активные остаются.
+  Активные запуски собираются из ПОЛНОГО списка jobs, а не из среза
+  «последних 20».
+- **Промпты конвейера**: форма pipeline — режим
   `auto`/`separate`/`combined` + выбор файлов из `prompts/`.
   auto: кандидат с тегами `<translate>/<redact>/<polish>`
   (`pipeline_prompt.txt` → `prompts.txt` → `translate_book_prompt.txt`),
@@ -158,29 +160,30 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
 | POST | `/api/projects` (создание) | + move/rename/copy/delete |
 | GET | `/api/projects/{s}/{n}/tree`, `/api/stats` | главы+артефакты, статистика (раунд 23: артефакты включают легаси `*_перевод/редактура/полировка`) |
 | GET | `/api/projects/{s}/{n}/status` | таблица готовности глав (раунд 21): по-главные флаги translate/redact/polish + ner/wiki/compiled; кеш по сигнатуре mtime |
-| GET | `/api/templates` | наборы шаблонов с деревом файлов (раунд 21; для создания проекта и вкладки «Шаблоны») |
+| GET | `/api/templates` | наборы шаблонов с деревом файлов (для создания проекта и вкладки «Шаблоны») |
 | POST/DELETE | `/api/templates` (создание), `/api/templates/{s}/copy`, DELETE `/api/templates/{s}` | CRUD наборов; `General` — системный: создание/удаление/запись → 400/403 |
-| GET/PUT/DELETE | `/api/templates/{s}/file` (`?path=…`, PUT — `{path, content}`) | чтение/запись/удаление ФАЙЛОВ набора; каталог → 403 (неизменяемы); запись в несуществующий каталог → 400 (раунд 23: неявный mkdir запрещён); эскейпы за пределы набора → 404; GET отдаёт `size`/`mtime` для мета редактора |
+| GET/PUT/DELETE | `/api/templates/{s}/file` (`?path=…`, PUT — `{path, content}`) | чтение/запись/удаление ФАЙЛОВ набора; каталог → 403 (неизменяемы); запись в несуществующий каталог → 400 (неявный mkdir запрещён); эскейпы за пределы набора → 404; GET отдаёт `size`/`mtime` для мета редактора |
 | POST | `/api/templates/{s}/rename` (`{src, dst}`) | переименование/перенос ФАЙЛА внутри набора; каталог → 403 (неизменяемы); General → 403, нет исходника → 404, занято → 400, родительский каталог dst отсутствует → 400 |
-| POST | `/api/templates/{s}/upload` (multipart `files[]`, опц. `dest`) | загрузка файлов в набор (раунд 22); General → 403; `dest` обязан существовать (неявный mkdir запрещён) → 400 |
+| POST | `/api/templates/{s}/upload` (multipart `files[]`, опц. `dest`) | загрузка файлов в набор; General → 403; `dest` обязан существовать (неявный mkdir запрещён) → 400 |
 | GET | `/api/templates/{s}/download?path=…` | скачивание файла набора (attachment); работает и для General |
-| POST | `/api/templates/{s}/mkdir` (`{path}`) | раунд 23: ВСЕГДА 403 — каталоги в шаблонах неизменяемы (скелет `prompts/`+`source/` ремонтируется при чтении) |
-| POST/DELETE | `/api/sections`, `/api/sections/rename` (`{src,dst}`), DELETE `/api/sections/{name}` | управление разделами (раунд 22): создание, переименование (merge — перенос проектов), удаление; непустой раздел → 409 |
+| POST | `/api/templates/{s}/mkdir` (`{path}`) | ВСЕГДА 403 — каталоги в шаблонах неизменяемы (скелет `prompts/`+`source/` ремонтируется при чтении) |
+| POST/DELETE | `/api/sections`, `/api/sections/rename` (`{src,dst}`), DELETE `/api/sections/{name}` | управление разделами: создание, переименование (merge — перенос проектов), удаление; непустой раздел → 409 |
 | GET/PUT | `/api/ner`, `/api/metadata` | глоссарий, metadata.yaml |
-| GET | `/api/ner/export?project=&format=json\|text\|names` | экспорт глоссария для анализа (JSON / записи текстом / имена по полу); фильтры: `count_threshold`, `types`, `exclude_words`, `range`, `show_aliases`, `show_votes`, `female_types`, `male_types` → `{name, content}` (раунд 3) |
+| GET | `/api/ner/export?project=&format=json\|text\|names` | экспорт глоссария для анализа (JSON / записи текстом / имена по полу); фильтры: `count_threshold`, `types`, `exclude_words`, `range`, `show_aliases`, `show_votes`, `female_types`, `male_types` → `{name, content}` |
 | GET/PUT/DELETE | `/api/cover` | обложка source/cover.* |
 | GET/PUT | `/api/{ner\|translate_check_llm}/review`, POST `.../apply` | review-флоу |
 | GET | `/api/check` | отчёты translate_check (W7) |
-| GET/PUT/DELETE | `/api/env?scope=project\|global` | .env (раунд 4: global — корневой `.env` репо; project — только собственный `pdir/.env`) |
-| GET | `/api/env/template` | шаблон `templates/.env.example` (раунд 2) |
-| GET/PUT/DELETE | `/api/prompts`, `/api/prompts/{name}` | промпты (раунд 2: DELETE — удаление, PUT с пустым content — создание) |
+| GET/PUT/DELETE | `/api/env?scope=project\|global` | .env (global — корневой `.env` репо; project — только собственный `pdir/.env`) |
+| GET | `/api/env/template` | шаблон `templates/.env.example` |
+| GET/PUT/DELETE | `/api/prompts`, `/api/prompts/{name}` | промпты (DELETE — удаление, PUT с пустым content — создание) |
 | GET | `/api/prompts/{name}/template` | шаблоны промптов |
 | GET | `/api/logs`, `/api/logs/{name}` | логи проекта |
 | GET/PUT/DELETE | `/api/files`, `/api/file`, `/api/upload`, `/api/download` | файлы (`download?inline=1` — предпросмотр) |
-| POST | `/api/mkdir` (`?project=&path=` или body) | раунд 23: создание пустого каталога проекта; дубль/эскейп → 400 |
-| POST | `/api/file/rename` (`{project, path, new_name}`) | раунд 23: переименование файла ИЛИ каталога проекта; нет исходника → 404, занято → 400, недопустимое имя → 400 |
+| POST | `/api/mkdir` (`?project=&path=` или body) | создание пустого каталога проекта; дубль/эскейп → 400 |
+| POST | `/api/file/rename` (`{project, path, new_name}`) | переименование файла ИЛИ каталога проекта; нет исходника → 404, занято → 400, недопустимое имя → 400 |
 | GET | `/api/stages`, `/api/stages/{k}/spec\|options` | стадии, формы |
 | POST/GET | `/api/jobs`, `/api/jobs/{id}`, `/api/jobs/{id}/stream` | запуски, SSE; при лимите параллельных (`WEB_JOBS_LIMIT`) — **429** (H2); вторая стадия на тот же проект — **409** (M10). SSE: стартовый бурст хвоста (до 5000 строк) + события/прогресс + финальный `status`; клиент берёт лог ТОЛЬКО из стрима (payload `lines` на running не дублирует) |
+| DELETE | `/api/jobs` | очистить историю завершённых запусков (активные не трогаются) |
 | POST | `/api/jobs/{id}/stop`, DELETE `/api/jobs/{id}` | стоп (killpg)/удаление |
 
 ## Тесты

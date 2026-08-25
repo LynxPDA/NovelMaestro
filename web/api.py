@@ -1852,6 +1852,13 @@ def _jobs_delete(ctx: dict) -> dict:
     return {"ok": True}
 
 
+def _jobs_clear(ctx: dict) -> dict:
+    """Очистить историю завершённых запусков (DELETE /api/jobs).
+    Активные (running) не трогаются — остаются на дашборде."""
+    jm = _job_manager(ctx)
+    return {"ok": True, "cleared": jm.clear_finished()}
+
+
 def _jobs_stream(ctx: dict) -> dict:
     """SSE-стрим лога (GET /api/jobs/{id}/stream)."""
     import json as _json
@@ -2233,6 +2240,7 @@ def _register_jobs(router: Router) -> None:
     router.add("GET", "/api/stages", _stages_list)
     router.add("POST", "/api/jobs", _jobs_start)
     router.add("GET", "/api/jobs", _jobs_list)
+    router.add("DELETE", "/api/jobs", _jobs_clear)
     router.add("GET", "/api/jobs/{id}", _jobs_get)
     router.add("POST", "/api/jobs/{id}/stop", _jobs_stop)
     router.add("DELETE", "/api/jobs/{id}", _jobs_delete)
