@@ -169,20 +169,21 @@ def _lan_ip() -> str:
 
 def _print_banner(url: str, lan_url: str | None, token: str,
                   use_auth: bool) -> None:
-    print("╔═══════════════════════════════════════════════════╗")
-    print("║  NovelMaestro · web-бэкэнд                        ║")
-    print(f"║  URL:   {url}")
+    line = "═" * 47
+    print(line)
+    print("  NovelMaestro · web-бэкэнд")
+    print(f"  URL:   {url}")
     if lan_url:
-        print(f"║  Локальная сеть: {lan_url}")
+        print(f"  Локальная сеть: {lan_url}")
     if use_auth:
-        print(f"║  Токен: {token}")
-        print("║  (сохранён в projects/.web_secret, chmod 600)     ║")
+        print(f"  Токен: {token}")
+        print("  (сохранён в projects/.web_secret, chmod 600)")
     else:
-        print("║  Аутентификация: ВЫКЛЮЧЕНА (доверенная сеть;      ║")
-        print("║  включить: --auth или WEB_AUTH=1)                 ║")
-        print("║  ⚠ ВНИМАНИЕ (H1, AUDIT): .env и API-ключи видны    ║")
-        print("║  без пароля любому в сети — только доверенная LAN! ║")
-    print("╚═══════════════════════════════════════════════════╝")
+        print("  Аутентификация: ВЫКЛЮЧЕНА (доверенная сеть;")
+        print("  включить: --auth или WEB_AUTH=1)")
+        print("  ⚠ ВНИМАНИЕ: .env и API-ключи видны")
+        print("  без пароля любому в сети — только доверенная LAN!")
+    print(line)
     print("Остановка: Ctrl+C")
 
 
