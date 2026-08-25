@@ -2420,7 +2420,6 @@ function viewProject(section, name) {
         // только из режима «Свой .env проекта»
         envMeta.textContent =
           "Системный .env (projects/.env) — read-only, редактируется на главной, вкладка «Настройки»";
-        if (hasOwn) envToolbar.append(envDel);
       } else if (hasOwn) {
         envMeta.textContent =
           "собственный .env" +
@@ -2438,7 +2437,11 @@ function viewProject(section, name) {
     });
     async function initEnv() {
       await loadEnv();
+      // порядок важен: сначала выбор режима, потом рендер тулбара —
+      // иначе кнопки рисуются для старого значения select (баг:
+      // при «Своём .env» по умолчанию не было «Сохранить»)
       modeSel.value = hasOwn ? "own" : "shared";
+      renderEnvToolbar();
       if (modeSel.value === "shared") await loadSharedEnv();
     }
     await initEnv();
