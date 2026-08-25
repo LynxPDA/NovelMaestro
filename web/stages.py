@@ -412,7 +412,7 @@ _LLM_FIELDS = [
 
 STAGE_SPECS: dict[str, dict] = {
     "epub": {
-        "title": "Разбор исходника",
+        "title": "Разбор исходника на главы",
         "script": "epub_to_chapters.py",
         "build": build_epub_to_chapters,
         "fields": [
@@ -432,7 +432,7 @@ STAGE_SPECS: dict[str, dict] = {
         ],
     },
     "translate_check": {
-        "title": "Проверка перевода (алгоритмическая)",
+        "title": "Проверка исходника (алгоритм)",
         "script": "translate_check.py",
         "build": build_translate_check,
         "fields": [
@@ -481,7 +481,7 @@ STAGE_SPECS: dict[str, dict] = {
         ],
     },
     "pipeline": {
-        "title": "Конвейер (перевод → редактура → полировка) (LLM)",
+        "title": "Перевод (LLM)",
         "script": "web/pipeline.py",
         "build": build_pipeline,
         "fields": _LLM_FIELDS + [
@@ -550,7 +550,7 @@ STAGE_SPECS: dict[str, dict] = {
         ],
     },
     "ner": {
-        "title": "NER (извлечение терминов)",
+        "title": "Создание глоссария (LLM)",
         "script": "ner.py",
         "build": build_ner,
         "fields": _LLM_FIELDS + [
@@ -705,7 +705,7 @@ STAGE_SPECS: dict[str, dict] = {
         ],
     },
     "wiki": {
-        "title": "Wiki (глоссарий-вики)",
+        "title": "Создание Wiki (LLM)",
         "script": "wiki.py",
         "build": build_wiki,
         "fields": _LLM_FIELDS + [

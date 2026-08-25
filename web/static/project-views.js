@@ -578,12 +578,18 @@ function viewProject(section, name) {
     function defaultTypes() {
       const opts = chapterTypes(ed.chapter);
       const by = (pred) => opts.find(pred) || null;
-      const left =
-        by((o) => o.name === "chapter.txt") || opts[0] || null;
+      const left = by((o) => o.name === "chapter.txt") || opts[0] || null;
       const right =
-        by((o) => o.name === "polished.txt" || o.name.endsWith("_polished.txt")) ||
-        by((o) => o.name === "redacted.txt" || o.name.endsWith("_redacted.txt")) ||
-        by((o) => o.name === "translated.txt" || o.name.endsWith("_translated.txt")) ||
+        by(
+          (o) => o.name === "polished.txt" || o.name.endsWith("_polished.txt"),
+        ) ||
+        by(
+          (o) => o.name === "redacted.txt" || o.name.endsWith("_redacted.txt"),
+        ) ||
+        by(
+          (o) =>
+            o.name === "translated.txt" || o.name.endsWith("_translated.txt"),
+        ) ||
         (left ? opts.find((o) => o.name !== left.name) : opts[0]) ||
         left;
       return {
@@ -796,7 +802,8 @@ function viewProject(section, name) {
       if (!ed.hl || !ed.ner) return;
       for (const p of panes) {
         if (p.editor && p.editor.isCM) {
-          if (p.hl) computeHighlight(p); else attachHl(p);
+          if (p.hl) computeHighlight(p);
+          else attachHl(p);
         }
       }
       /* порог/скролл: координаты CM на кадр могут быть пустыми — второй проход */
@@ -991,8 +998,13 @@ function viewProject(section, name) {
         }
       };
       const onTipLeave = (e) => {
-        const sc = pInfo.editor && pInfo.editor.view && pInfo.editor.view.scrollDOM;
-        if (sc && e.relatedTarget && (sc === e.relatedTarget || sc.contains(e.relatedTarget))) {
+        const sc =
+          pInfo.editor && pInfo.editor.view && pInfo.editor.view.scrollDOM;
+        if (
+          sc &&
+          e.relatedTarget &&
+          (sc === e.relatedTarget || sc.contains(e.relatedTarget))
+        ) {
           return; // обратно в текст — moveTip решит, прятать ли
         }
         if (pInfo.hl) {
@@ -1204,7 +1216,10 @@ function viewProject(section, name) {
         }
         const items = data.items || [];
         const dup = items.some(
-          (it) => String(it.term || "").trim().normalize("NFC") === term,
+          (it) =>
+            String(it.term || "")
+              .trim()
+              .normalize("NFC") === term,
         );
         if (dup) {
           toast(`Термин «${term}» уже есть в глоссарии`, "err");
@@ -1239,7 +1254,10 @@ function viewProject(section, name) {
         }
         const items = data.items || [];
         const dup = items.some(
-          (it) => String(it.term || "").trim().normalize("NFC") === term,
+          (it) =>
+            String(it.term || "")
+              .trim()
+              .normalize("NFC") === term,
         );
         if (dup) {
           toast(`Термин «${term}» уже есть в глоссарии`, "err");
@@ -1442,7 +1460,8 @@ function viewProject(section, name) {
       const raw = localStorage.getItem(LS_KEY);
       if (raw != null) {
         const saved = JSON.parse(raw);
-        if (saved === null) cols = null; // «Все столбцы» (выбор в модалке)
+        if (saved === null)
+          cols = null; // «Все столбцы» (выбор в модалке)
         else if (Array.isArray(saved) && saved.length) cols = saved;
       }
     } catch {
@@ -1732,9 +1751,7 @@ function viewProject(section, name) {
                     },
                   },
                   colLabel(c),
-                  mark
-                    ? h("span", { class: "ner-th-dir" }, mark)
-                    : "",
+                  mark ? h("span", { class: "ner-th-dir" }, mark) : "",
                 ),
               );
             }),
@@ -1760,7 +1777,11 @@ function viewProject(section, name) {
           h(
             "tr",
             {},
-            h("td", { colspan: String(visibleCols().length + 1) }, "Нет записей"),
+            h(
+              "td",
+              { colspan: String(visibleCols().length + 1) },
+              "Нет записей",
+            ),
           ),
         );
       }
@@ -2111,7 +2132,7 @@ function viewProject(section, name) {
       card.querySelector(".review-actions")?.append(saveBtn);
       return card;
     }
-    /* порядок секций: 1 · глоссарий (LLM) → 2 · алгоритмическая
+    /* порядок секций: 1 · глоссарий (LLM) → 2 · алгоритм
        → 3 · перевод (LLM) — совпадает с нумерацией */
     panel.append(
       makeCard(
@@ -2126,7 +2147,7 @@ function viewProject(section, name) {
       h(
         "div",
         { class: "review-section-title" },
-        "2 · Проверка перевода (алгоритмическая)",
+        "2 · Проверка исходника (алгоритм)",
       ),
       h(
         "div",

@@ -120,15 +120,15 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
 
 | Слаг | Название в UI | Скрипт | LLM |
 | --- | --- | --- | --- |
-| `epub` | Разбор исходника | `scripts/epub_to_chapters.py` | нет |
-| `ner` | NER (извлечение терминов) | `scripts/ner.py` | да |
+| `epub` | Разбор исходника на главы | `scripts/epub_to_chapters.py` | нет |
+| `ner` | Создание глоссария (LLM) | `scripts/ner.py` | да |
 | `ner_check` | Проверка глоссария (LLM) | `scripts/ner_check.py` | да |
-| `pipeline` | Конвейер (перевод → редактура → полировка) (LLM) | `web/pipeline.py` | да |
-| `translate_check` | Проверка перевода (алгоритмическая) | `scripts/translate_check.py` | нет |
+| `pipeline` | Перевод (LLM) | `web/pipeline.py` | да |
+| `translate_check` | Проверка исходника (алгоритм) | `scripts/translate_check.py` | нет |
 | `translate_check_llm` | Проверка перевода (LLM) | `scripts/translate_check_llm.py` | да |
 | `batch_replace` | Массовые замены | `scripts/batch_replace.py` | нет |
 | `compile` | Компиляция TXT/EPUB/FB2 | `scripts/clean_and_compile.py` | нет |
-| `wiki` | Wiki (глоссарий-вики) | `scripts/wiki.py` | да |
+| `wiki` | Создание Wiki (LLM) | `scripts/wiki.py` | да |
 
 ## Архитектура (контракт)
 

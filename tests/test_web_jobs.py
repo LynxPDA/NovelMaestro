@@ -532,7 +532,7 @@ def test_stage_order_and_titles():
     assert STAGE_SPECS["ner_check"]["title"] == "Проверка глоссария (LLM)"
     assert STAGE_SPECS["pipeline"]["title"].endswith("(LLM)")
     assert STAGE_SPECS["translate_check"]["title"] == \
-        "Проверка перевода (алгоритмическая)"
+        "Проверка исходника (алгоритм)"
     assert STAGE_SPECS["translate_check_llm"]["title"] == "Проверка перевода (LLM)"
 
 
@@ -1136,7 +1136,7 @@ def test_stage_spec_api(jobs_srv):
     port, req, _jm = jobs_srv
     res, payload = req("GET", "/api/stages/epub/spec")
     assert res.status == 200
-    assert payload["spec"]["title"] == "Разбор исходника"
+    assert payload["spec"]["title"] == "Разбор исходника на главы"
     assert payload["spec"]["fields"]
     res, payload = req("GET", "/api/stages/nope/spec")
     assert res.status == 404
