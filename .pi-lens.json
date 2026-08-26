@@ -9,6 +9,7 @@
     ".venv/**",
     "venv/**"
   ],
+  "format": { "enabled": false },
   "rules": {
     "noise": {
       "disable": [
@@ -18,6 +19,7 @@
         "nested-ternary-js",
         "prefer-at-js"
       ]
-    }
+    },
+    "jscpd": { "disable": ["duplicate"] }
   }
 }

@@ -215,6 +215,21 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
   перевода НЕ попадает в stdout скриптов (только прогресс/ошибки) — жёсткий
   `_ERROR_RE` в web/pipeline.py ловит реальные сбои; настройка = регресс.
 
+## 8а. pi-lens (настройки шума)
+
+- `~/.pi-lens/config.json` (глобально, вне репо): `tests.enabled: false` —
+  встроенный тест-раннер жёстко зовёт `python` (в системе только `python3`,
+  ENOENT-шум); тесты гоним вручную `python3 -m pytest tests/ -q`.
+- `.pi-lens.json` (в репо): `format.enabled: false` — НЕ переформатировать
+  файлы автоматически (перекраивает весь файл, шум в диффах);
+  `rules.jscpd.disable: ["duplicate"]` — без дубликатов-предупреждений;
+  `ignore` — projects/, servers/, Images/, backup/, __pycache__/, .venv/.
+- Находки pi-lens — подсказки, не истина: перед реакцией проверяй
+  фактическое состояние (grep / node --check / pytest). Устаревший кэш
+  диспатч-пайплайна повторяет старые находки (например, «exportModal
+  unused» после переноса функции) — снимать через `lens_diagnostic_mark`
+  false-positive, реальная проверка — `python3 -m pytest` + `node --check`.
+
 ## 9. Как вносить изменения
 
 0. Планы и статусы — в `TODO.md`: перед задачей сверься с текущими

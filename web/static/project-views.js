@@ -3944,6 +3944,20 @@ function exportModal(byType, project) {
       err.textContent = ex.message;
     }
   });
+
+  /* Скачивание сгенерированного на клиенте файла (экспорт глоссария) */
+  function downloadText(name, content) {
+    const url = URL.createObjectURL(
+      new Blob([content], { type: "text/plain;charset=utf-8" }),
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
   const cancelBtn = h("button", { class: "btn btn-ghost" }, "Отмена");
   const modal = h(
     "div",

@@ -620,7 +620,7 @@ function manageProjectModal(section, name) {
   });
 }
 
-/* Экспорт глоссария: модалка настроек + скачивание файла */
+/* Экспорт глоссария (модалка настроек + скачивание файла) — в project-views.js */
 
 function sectionBlock(section, projects, sectionActive, statsMap) {
   const cards = projects.map((name) => {
@@ -1369,20 +1369,6 @@ async function apiUpload(path, form) {
     throw new Error((data && data.error) || `Ошибка ${res.status}`);
   }
   return data;
-}
-
-/* Скачивание сгенерированного на клиенте файла (экспорт глоссария) */
-function downloadText(name, content) {
-  const url = URL.createObjectURL(
-    new Blob([content], { type: "text/plain;charset=utf-8" }),
-  );
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }
 
 /* ── Редактор файлов: CodeMirror c fallback на textarea (W8) ── */
