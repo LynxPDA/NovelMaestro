@@ -15,6 +15,24 @@
  --radius: 8px;
  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
  --sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+ --btn-hover: #252d38;
+ --log-bg: #0d1117;
+}
+
+/* Светлая тема интерфейса: WEB_UI_THEME=light (системный .env) */
+:root[data-ui-theme="light"] {
+ --bg: #ffffff;
+ --surface: #f6f8fa;
+ --surface-2: #eaeef2;
+ --border: #d0d7de;
+ --text: #1f2328;
+ --muted: #59636e;
+ --accent: #1a7f37;
+ --accent-dim: #238636;
+ --accent-2: #9a6700;
+ --danger: #cf222e;
+ --btn-hover: #eaeef2;
+ --log-bg: #f6f8fa;
 }
 
 * {
@@ -372,7 +390,7 @@ a.fname:hover {
  text-decoration: none;
 }
 .btn:hover {
- background: #252d38;
+ background: var(--btn-hover);
 }
 .btn-primary {
  background: var(--accent-dim);
@@ -1131,7 +1149,7 @@ a.fname:hover {
  font-size: 13px;
 }
 .log-view {
- background: #0d1117;
+ background: var(--log-bg);
  border: 1px solid var(--border);
  border-radius: 8px;
  padding: 10px;
@@ -1425,6 +1443,82 @@ a.fname:hover {
 }
 .editor-cm .cm-searchMatch-selected .cm-selectionMatch {
  background: rgba(210, 153, 34, 0.55);
+}
+
+/* Светлая тема редактора: WEB_EDITOR_THEME=light (или auto при светлом
+ * интерфейсе) — переменные перекрывают тёмные цвета выше. */
+body[data-editor-theme="light"] .editor-cm .cm-editor {
+ background: #ffffff;
+ color: #1f2328;
+}
+body[data-editor-theme="light"] .editor-cm .cm-gutters {
+ background: #f6f8fa;
+ color: #59636e;
+ border-right: 1px solid #d0d7de;
+}
+body[data-editor-theme="light"] .editor-cm .cm-activeLine {
+ background: rgba(26, 127, 55, 0.08);
+}
+body[data-editor-theme="light"] .editor-cm .cm-activeLineGutter {
+ background: rgba(26, 127, 55, 0.1);
+}
+body[data-editor-theme="light"] .editor-cm .cm-selectionBackground,
+body[data-editor-theme="light"] .editor-cm .cm-content ::selection {
+ background: rgba(26, 127, 55, 0.25) !important;
+}
+body[data-editor-theme="light"] .editor-cm .cm-panels {
+ background: #f6f8fa;
+ color: #1f2328;
+ border-bottom: 1px solid #d0d7de;
+}
+body[data-editor-theme="light"] .editor-cm .cm-panel.cm-search input {
+ background: #ffffff;
+ color: #1f2328;
+ border: 1px solid #d0d7de;
+}
+body[data-editor-theme="light"] .editor-cm .cm-panel.cm-search button {
+ background: #eaeef2;
+ color: #1f2328;
+ border: 1px solid #d0d7de;
+}
+body[data-editor-theme="light"] .editor-cm .cm-searchMatch .cm-selectionMatch {
+ background: rgba(154, 103, 0, 0.3);
+}
+body[data-editor-theme="light"] .editor-cm .cm-searchMatch-selected .cm-selectionMatch {
+ background: rgba(154, 103, 0, 0.5);
+}
+body[data-editor-theme="light"] .editor-cm .cm-cursor {
+ border-left-color: #1a7f37;
+}
+
+/* То же для крупного редактора .ed-cm (просмотр глав и файлов) */
+body[data-editor-theme="light"] .ed-cm .cm-editor {
+ background: #ffffff;
+ color: #1f2328;
+}
+body[data-editor-theme="light"] .ed-cm .cm-gutters {
+ background: #f6f8fa;
+ color: #59636e;
+ border-right: 1px solid #d0d7de;
+}
+body[data-editor-theme="light"] .ed-cm .cm-activeLine {
+ background: rgba(26, 127, 55, 0.08);
+}
+body[data-editor-theme="light"] .ed-cm .cm-activeLineGutter {
+ background: rgba(26, 127, 55, 0.1);
+}
+body[data-editor-theme="light"] .ed-cm .cm-cursor {
+ border-left-color: #1a7f37;
+}
+body[data-editor-theme="light"] .ed-cm .cm-selectionBackground,
+body[data-editor-theme="light"] .ed-cm .cm-content ::selection {
+ background: rgba(26, 127, 55, 0.25) !important;
+}
+
+/* fallback-textarea тоже подстраивается */
+body[data-editor-theme="light"] .editor-area {
+ background: #ffffff;
+ color: #1f2328;
 }
 
 .input-inline {

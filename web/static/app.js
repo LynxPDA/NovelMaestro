@@ -46,6 +46,80 @@ function getPreviewFontSize() {
   return UICore.clampFont(n, PREVIEW_FONT_OPTIONS, PREVIEW_FONT_DEFAULT);
 }
 
+/* ── Внешний вид (системный .env: WEB_UI_THEME/WEB_EDITOR_THEME/
+   WEB_EDITOR_FONT_SIZE; в проекты не копируются) ── */
+const EDITOR_SETTINGS = { ui: "dark", editor: "auto", fontSize: 13 };
+
+/* Синтаксические цвета редакторов: вендор не отдаёт HighlightStyle,
+   классы подсветки генерирует автоименами (CSS их не переопределит) —
+   свои стили по теме через syntaxHighlighting (не-fallback, выигрывает
+   у светлого дефолта basicSetup). */
+const EDITOR_HIGHLIGHT = (() => {
+  const cm = window.CM || {};
+  const t = cm.tags;
+  if (!t || !cm.HighlightStyle || !cm.syntaxHighlighting) return null;
+  const HS = cm.HighlightStyle;
+  const base = (extra) => [
+    { tag: t.meta, color: extra.meta },
+    { tag: t.link, textDecoration: "underline" },
+    { tag: t.heading, textDecoration: "underline", fontWeight: "bold" },
+    { tag: t.emphasis, fontStyle: "italic" },
+    { tag: t.strong, fontWeight: "bold" },
+    { tag: t.strikethrough, textDecoration: "line-through" },
+    { tag: t.keyword, color: extra.keyword },
+    { tag: [t.atom, t.bool, t.url, t.contentSeparator, t.labelName],
+      color: extra.atom },
+    { tag: [t.literal, t.inserted], color: extra.string },
+    { tag: [t.string, t.deleted], color: extra.string },
+    { tag: [t.regexp, t.escape, t.special(t.string)], color: extra.string },
+    { tag: t.definition(t.variableName), color: extra.type },
+    { tag: t.local(t.variableName), color: extra.text },
+    { tag: [t.typeName, t.namespace], color: extra.type },
+    { tag: t.className, color: extra.type },
+    { tag: [t.special(t.variableName), t.macroName], color: extra.string },
+    { tag: t.definition(t.propertyName), color: extra.atom },
+    { tag: t.comment, color: extra.comment },
+    { tag: t.invalid, color: extra.invalid },
+  ];
+  return {
+    dark: HS.define(base({
+      meta: "#8b949e", comment: "#8b949e", text: "#e6edf3",
+      keyword: "#ff7b72", atom: "#79c0ff", string: "#a5d6a7",
+      type: "#ffa657", invalid: "#f85149",
+    })),
+    light: HS.define(base({
+      meta: "#6e7781", comment: "#6e7781", text: "#1f2328",
+      keyword: "#cf222e", atom: "#0550ae", string: "#0a3069",
+      type: "#953800", invalid: "#cf222e",
+    })),
+  };
+})();
+
+function effectiveEditorTheme() {
+  return EDITOR_SETTINGS.editor === "auto"
+    ? EDITOR_SETTINGS.ui
+    : EDITOR_SETTINGS.editor;
+}
+
+async function applyEditorSettings() {
+  try {
+    const s = await api("/api/settings");
+    EDITOR_SETTINGS.ui = s.ui_theme === "light" ? "light" : "dark";
+    EDITOR_SETTINGS.editor =
+      s.editor_theme === "dark" || s.editor_theme === "light"
+        ? s.editor_theme
+        : "auto";
+    const n = parseInt(s.editor_font_size, 10);
+    if (Number.isFinite(n)) {
+      EDITOR_SETTINGS.fontSize = Math.max(8, Math.min(32, n));
+    }
+  } catch {
+    /* дефолты уже стоят */
+  }
+  document.documentElement.dataset.uiTheme = EDITOR_SETTINGS.ui;
+  document.body.dataset.editorTheme = effectiveEditorTheme();
+}
+
 function setPreviewFontSize(n) {
   const next = UICore.clampFont(n, PREVIEW_FONT_OPTIONS, PREVIEW_FONT_DEFAULT);
   localStorage.setItem(PREVIEW_FONT_KEY, String(next));
@@ -55,18 +129,24 @@ function setPreviewFontSize(n) {
 function previewCss() {
   /* Внутри iframe всегда 16px: Chrome не даёт рисовать меньше минимума
      (~12–16px), поэтому визуальный кегль задаём zoom на самом iframe. */
+  const light = EDITOR_SETTINGS.ui === "light";
+  const bg = light ? "#ffffff" : "#0d1117";
+  const fg = light ? "#1f2328" : "#e6edf3";
+  const panel = light ? "#f6f8fa" : "#161b22";
+  const border = light ? "#d0d7de" : "#30363d";
+  const link = light ? "#1a7f37" : "#2ea043";
   return (
     "html{-webkit-text-size-adjust:100%;text-size-adjust:100%}" +
-    "html,body{background:#0d1117;color:#e6edf3;" +
+    `html,body{background:${bg};color:${fg};` +
     "font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;" +
     "font-size:16px;line-height:1.5;margin:0}" +
     "body{padding:10px}" +
     "h1,h2,h3,h4,h5,h6{font-size:16px;font-weight:600;margin:0.65em 0 0.3em}" +
     "p,li,td,th,blockquote,pre,code{font-size:16px}" +
-    "pre{background:#161b22;padding:8px;border-radius:6px;overflow:auto}" +
+    `pre{background:${panel};padding:8px;border-radius:6px;overflow:auto}` +
     "code{background:rgba(110,118,129,.2);padding:1px 4px;border-radius:3px}" +
-    "table{border-collapse:collapse}th,td{border:1px solid #30363d;padding:3px 6px}" +
-    "a{color:#2ea043}"
+    `table{border-collapse:collapse}th,td{border:1px solid ${border};padding:3px 6px}` +
+    `a{color:${link}}`
   );
 }
 
@@ -885,6 +965,91 @@ async function viewSettings() {
     }
   });
   await loadEnv();
+  /* ── внешний вид: тема интерфейса, тема/кегль редакторов (системный .env) ── */
+  const uiSel = h(
+    "select",
+    { class: "input input-inline" },
+    h("option", { value: "dark" }, "Тёмная"),
+    h("option", { value: "light" }, "Светлая"),
+  );
+  uiSel.value = EDITOR_SETTINGS.ui;
+  const edSel = h(
+    "select",
+    { class: "input input-inline" },
+    h("option", { value: "auto" }, "Авто (как интерфейс)"),
+    h("option", { value: "dark" }, "Тёмная"),
+    h("option", { value: "light" }, "Светлая"),
+  );
+  edSel.value = EDITOR_SETTINGS.editor;
+  const fontIn = h("input", {
+    type: "number",
+    class: "input input-inline",
+    min: "8",
+    max: "32",
+    value: String(EDITOR_SETTINGS.fontSize),
+  });
+  const lookBtn = h("button", { class: "btn btn-sm" }, "Применить");
+  lookBtn.addEventListener("click", async () => {
+    err.textContent = "";
+    try {
+      const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
+      await api("/env", {
+        method: "PUT",
+        body: {
+          scope: "global",
+          changes: {
+            WEB_UI_THEME: uiSel.value,
+            WEB_EDITOR_THEME: edSel.value,
+            WEB_EDITOR_FONT_SIZE: String(n),
+          },
+        },
+      });
+      await applyEditorSettings();
+      render();
+      toast("Внешний вид сохранён");
+    } catch (ex) {
+      err.textContent = ex.message;
+    }
+  });
+  const lookCard = h(
+    "div",
+    { class: "review-card" },
+    h("div", { class: "review-card-title" }, "Внешний вид"),
+    h(
+      "div",
+      { class: "review-card-body" },
+      h(
+        "div",
+        { class: "files-toolbar look-toolbar" },
+        h(
+          "label",
+          { class: "field" },
+          h("div", { class: "field-label" }, "Тема интерфейса"),
+          uiSel,
+        ),
+        h(
+          "label",
+          { class: "field" },
+          h("div", { class: "field-label" }, "Тема редакторов"),
+          edSel,
+        ),
+        h(
+          "label",
+          { class: "field" },
+          h("div", { class: "field-label" }, "Кегль редакторов, px"),
+          fontIn,
+        ),
+        h("span", { class: "spacer" }),
+        lookBtn,
+      ),
+      h(
+        "div",
+        { class: "field-help" },
+        "системные настройки (.env): WEB_UI_THEME, WEB_EDITOR_THEME, " +
+          "WEB_EDITOR_FONT_SIZE — в проекты не копируются",
+      ),
+    ),
+  );
   return h(
     "div",
     { class: "page" },
@@ -898,10 +1063,11 @@ async function viewSettings() {
         h(
           "div",
           { class: "page-sub" },
-          "Системный .env (projects/.env) — сервер, ключ и модели",
+          "Системный .env (корень репо) — сервер, ключ, модели и внешний вид",
         ),
       ),
     ),
+    lookCard,
     h(
       "div",
       { class: "review-card" },
@@ -1271,33 +1437,10 @@ async function viewHub() {
 }
 
 /* ── файловый менеджер (M3) ─────────────────────────────── */
-const F_ICONS = {
-  txt: "📄",
-  json: "🧾",
-  md: "📝",
-  yaml: "📋",
-  yml: "📋",
-  png: "🖼",
-  jpg: "🖼",
-  jpeg: "🖼",
-  webp: "🖼",
-  gif: "🖼",
-  epub: "📚",
-  log: "📜",
-  csv: "📊",
-  py: "🐍",
-};
-
 function fmtSize(n) {
   if (n >= 1048576) return (n / 1048576).toFixed(1) + " МБ";
   if (n >= 1024) return (n / 1024).toFixed(1) + " КБ";
   return n + " Б";
-}
-
-function fileIcon(entry) {
-  if (entry.dir) return "📁";
-  const ext = (entry.name.split(".").pop() || "").toLowerCase();
-  return F_ICONS[ext] || "📄";
 }
 
 function crumb(text, fn) {
@@ -1386,21 +1529,30 @@ function makeEditor(initial, langExt, onUpdate) {
     const { EditorView, Compartment, basicSetup, search } = window.CM;
     const langComp = new Compartment();
     const roComp = new Compartment();
+    const ext = [
+      basicSetup,
+      search({ top: true }),
+      langComp.of(cmLang(langExt) || []),
+      roComp.of([]),
+      EditorView.lineWrapping, // длинные строки переносятся (R8-1)
+      EditorView.theme({
+        "&": {
+          height: "100%",
+          fontSize: EDITOR_SETTINGS.fontSize + "px",
+        },
+        ".cm-scroller": { fontFamily: "inherit" },
+      }),
+      // колбэк обновлений CM (doc / viewport / selection)
+      ...(onUpdate ? [EditorView.updateListener.of((u) => onUpdate(u))] : []),
+    ];
+    // синтаксическая подсветка по теме редактора: свой HighlightStyle
+    // (не-fallback — выигрывает у светлого дефолта basicSetup)
+    const sh = window.CM.syntaxHighlighting;
+    const hl = EDITOR_HIGHLIGHT && EDITOR_HIGHLIGHT[effectiveEditorTheme()];
+    if (sh && hl) ext.push(sh(hl));
     const view = new EditorView({
       doc: initial,
-      extensions: [
-        basicSetup,
-        search({ top: true }),
-        langComp.of(cmLang(langExt) || []),
-        roComp.of([]),
-        EditorView.lineWrapping, // длинные строки переносятся (R8-1)
-        EditorView.theme({
-          "&": { height: "100%", fontSize: "13px" },
-          ".cm-scroller": { fontFamily: "inherit" },
-        }),
-        // колбэк обновлений CM (doc / viewport / selection)
-        ...(onUpdate ? [EditorView.updateListener.of((u) => onUpdate(u))] : []),
-      ],
+      extensions: ext,
       parent: null,
     });
     return {
@@ -1425,6 +1577,7 @@ function makeEditor(initial, langExt, onUpdate) {
   // fallback: обычная textarea (vendor не загрузился)
   const ta = h("textarea", { class: "editor-area", spellcheck: "false" });
   ta.value = initial;
+  ta.style.fontSize = EDITOR_SETTINGS.fontSize + "px";
   return {
     root: ta,
     isCM: false,
@@ -2276,6 +2429,7 @@ async function boot() {
   } catch {
     state.auth = false;
   }
+  await applyEditorSettings();
   window.addEventListener("hashchange", render);
   render();
 }
