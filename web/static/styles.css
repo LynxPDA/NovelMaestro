@@ -698,6 +698,16 @@ a.fname:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.log-job-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
 .job-time {
   color: var(--text-dim);
   font-size: 11px;

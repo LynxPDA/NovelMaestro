@@ -197,6 +197,13 @@ function viewRun(section, name, attachJobId) {
     return panel;
   }
 
+  // текст мини-бара активного запуска (общий для отрисовки и SSE)
+  function miniProgressText(p) {
+    if (!p) return "ожидание…";
+    const total = p.total ? p.total : 0;
+    return (p.label || "") + (total > 0 ? ` ${p.done}/${p.total}` : "");
+  }
+
   function miniBar(p, status) {
     // у running-задачи без событий прогресса бар всё равно
     // виден («ожидание…») — раньше возвращался null и виджет молчал
@@ -212,14 +219,20 @@ function viewRun(section, name, attachJobId) {
         { class: "progress-track" },
         h("div", { class: "progress-fill", style: "width:" + pct + "%" }),
       ),
-      h(
-        "span",
-        { class: "progress-text" },
-        p
-          ? (p.label || "") + (total > 0 ? ` ${p.done}/${p.total}` : "")
-          : "ожидание…",
-      ),
+      h("span", { class: "progress-text" }, miniProgressText(p)),
     );
+  }
+
+  // живое обновление мини-бара из SSE (fill + текст)
+  function paintMini(bar) {
+    const p = st.progress;
+    const total = p && p.total ? p.total : 0;
+    const done = p ? p.done : 0;
+    const pct = UICore.progressPct(done, total);
+    const fill = bar.querySelector(".progress-fill");
+    if (fill) fill.style.width = pct + "%";
+    const text = bar.querySelector(".progress-text");
+    if (text) text.textContent = miniProgressText(p);
   }
 
   function emptyRun() {
@@ -459,17 +472,24 @@ function viewRun(section, name, attachJobId) {
     const toolbar = h(
       "div",
       { class: "run-panel-title" },
-      h("span", { text: "Лог " }),
+      h("span", { text: "Лог · " }),
+      h(
+        "span",
+        { class: "log-job-title" },
+        job.title || job.action || "запуск",
+      ),
+      h("span", { class: "spacer" }),
       status,
       h("span", { class: "progress-line", text: progressLineText() }),
-      h("span", { class: "spacer" }),
       stopBtn,
     );
     // прогрессбар из структурированных событий @@PROGRESS@@
-    // (label + трек + done/total + %); без событий — скрыт
+    // (label + трек + done/total + %); без событий — скрыт.
+    // Класс log-progress — уникальный селектор для SSE: обычный
+    // .progress-wrap первым в DOM находит мини-бар «Активный запуск»
     const bar = h(
       "div",
-      { class: "progress-wrap" },
+      { class: "progress-wrap log-progress" },
       h("span", { class: "progress-label", text: "" }),
       h(
         "div",
@@ -480,7 +500,7 @@ function viewRun(section, name, attachJobId) {
     );
     paintBar(bar);
     const panel = h("div", { class: "run-panel" }, toolbar, bar, pre);
-    if (st.stage === "pipeline" && st.job) {
+    if (st.stage === "pipeline" && st.job && st.job.action === "pipeline") {
       // конвейер: таблица глав поверх лога
       const table = chapterTable();
       panel.prepend(
@@ -503,7 +523,9 @@ function viewRun(section, name, attachJobId) {
     );
   }
 
-  // отрисовка прогрессбара в переданный узел (лог-панель и SSE)
+  // отрисовка прогрессбара в переданный узел (лог-панель и SSE).
+  // Все querySelector'ы загардены: чужой узел (например мини-бар без
+  // .progress-label) не должен уронить SSE-стрим
   function paintBar(bar) {
     const p = st.progress;
     const running = st.job && st.job.status === "running";
@@ -517,16 +539,20 @@ function viewRun(section, name, attachJobId) {
     const total = p && p.total ? p.total : 0;
     const done = p ? p.done : 0;
     const pct = UICore.progressPct(done, total);
-    bar.querySelector(".progress-label").textContent =
-      (p && p.label) || (running ? "Запуск" : "");
-    bar.querySelector(".progress-fill").style.width = pct + "%";
-    bar.querySelector(".progress-text").textContent = p
-      ? total > 0
-        ? `${p.done}/${total} · ${pct}%`
-        : `${p.done} …`
-      : running
-        ? "ожидание первого результата…"
-        : "";
+    const label = bar.querySelector(".progress-label");
+    if (label)
+      label.textContent = (p && p.label) || (running ? "Запуск" : "");
+    const fill = bar.querySelector(".progress-fill");
+    if (fill) fill.style.width = pct + "%";
+    const text = bar.querySelector(".progress-text");
+    if (text)
+      text.textContent = p
+        ? total > 0
+          ? `${p.done}/${total} · ${pct}%`
+          : `${p.done} …`
+        : running
+          ? "ожидание первого результата…"
+          : "";
   }
 
   // таблица глав для конвейера: строки = главы, колонки = стадии 1..3
@@ -582,13 +608,8 @@ function viewRun(section, name, attachJobId) {
     streamCtrl = new AbortController();
     const sig = streamCtrl.signal;
     try {
-      // события конвейера подтянем из payload (лог — только из стрима)
-      try {
-        const r = await api(`/jobs/${jobId}`);
-        if (r.job && r.job.events) st.events = r.job.events;
-      } catch {
-        /* события всё равно придут из стрима */
-      }
+      // события конвейера приходят в том же SSE (snapshot + живые);
+      // отдельный GET /jobs здесь не нужен — он дублировал бы события
       const res = await fetch(`/api/jobs/${jobId}/stream`, { signal: sig });
       if (!res.ok || !res.body) {
         const err = await res.json().catch(() => ({}));
@@ -612,41 +633,13 @@ function viewRun(section, name, attachJobId) {
             } catch {
               continue;
             }
-            if (payload.type === "line") {
-              st.log.push(payload.text);
-              if (st.log.length > 2000) st.log.splice(0, st.log.length - 2000);
-              const pre = page.querySelector(".log-area");
-              if (pre) {
-                pre.textContent = st.log.join("\n");
-                pre.scrollTop = pre.scrollHeight;
-              }
-            } else if (payload.type === "event" && payload.event) {
-              st.events.push(payload.event);
-              const t = page.querySelector(".ch-table");
-              if (t) {
-                const ev = payload.event;
-                const cell = t.querySelector(
-                  `.ch-row:nth-child(${ev.id}) .ch-cell:nth-child(${ev.stage + 1})`,
-                );
-                if (cell) {
-                  const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
-                  cell.textContent = statusSym[ev.status] || ev.status;
-                  cell.className = "ch-cell ch-" + ev.status.toLowerCase();
-                }
-              }
-            } else if (payload.type === "progress" && payload.event) {
-              st.progress = payload.event;
-              const bar = page.querySelector(".progress-wrap");
-              if (bar) paintBar(bar);
-              const pl = page.querySelector(".progress-line");
-              if (pl) pl.textContent = progressLineText();
-            } else if (payload.type === "status") {
-              st.job.status = payload.status;
-              const statusEl = page.querySelector(".log-status");
-              if (statusEl) {
-                statusEl.textContent = payload.status;
-                statusEl.className = "badge badge-" + payload.status;
-              }
+            // обработка одного payload — в своём try/catch: кривое
+            // событие не должно ронять весь стрим (иначе лог замрёт,
+            // а панель не закроется — status так и не придёт)
+            try {
+              onPayload(payload);
+            } catch (ex) {
+              console.warn("SSE: событие пропущено:", ex && ex.message);
             }
           }
         }
@@ -669,6 +662,62 @@ function viewRun(section, name, attachJobId) {
       render();
     } finally {
       streamCtrl = null;
+    }
+  }
+
+  // разбор одного SSE-payload: лог, события глав, прогресс, статус.
+  // Все querySelector'ы идут по page с гвардами — узел может быть
+  // перерисован/отсутствовать (лог-панель скрыта после завершения)
+  function onPayload(payload) {
+    if (payload.type === "line") {
+      st.log.push(payload.text);
+      if (st.log.length > 2000) st.log.splice(0, st.log.length - 2000);
+      const pre = page.querySelector(".log-area");
+      if (pre) {
+        pre.textContent = st.log.join("\n");
+        pre.scrollTop = pre.scrollHeight;
+      }
+    } else if (payload.type === "event" && payload.event) {
+      const ev = payload.event;
+      // таблица глав — только pipeline-события (числовой stage);
+      // иначе селектор nth-child будет невалидным и уронит стрим
+      if (ev && ev.id != null && typeof ev.stage === "number") {
+        // дедуп: snapshot стрима повторяет события из attachToJob
+        const prev = st.events.findIndex(
+          (e) => e.id === ev.id && e.stage === ev.stage,
+        );
+        if (prev >= 0) st.events[prev] = ev;
+        else st.events.push(ev);
+        const t = page.querySelector(".ch-table");
+        if (t) {
+          const cell = t.querySelector(
+            `.ch-row:nth-child(${ev.id}) .ch-cell:nth-child(${ev.stage + 1})`,
+          );
+          if (cell) {
+            const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
+            cell.textContent = statusSym[ev.status] || ev.status;
+            cell.className =
+              "ch-cell ch-" + String(ev.status).toLowerCase();
+          }
+        }
+      }
+    } else if (payload.type === "progress" && payload.event) {
+      st.progress = payload.event;
+      // лог-бар — по уникальному классу; мини-бар «Активный запуск»
+      // обновляем отдельно (в нём нет .progress-label)
+      const bar = page.querySelector(".log-progress");
+      if (bar) paintBar(bar);
+      const mini = page.querySelector(".progress-wrap.mini");
+      if (mini) paintMini(mini);
+      const pl = page.querySelector(".progress-line");
+      if (pl) pl.textContent = progressLineText();
+    } else if (payload.type === "status") {
+      st.job.status = payload.status;
+      const statusEl = page.querySelector(".log-status");
+      if (statusEl) {
+        statusEl.textContent = payload.status;
+        statusEl.className = "badge badge-" + payload.status;
+      }
     }
   }
 
