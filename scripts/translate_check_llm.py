@@ -5,7 +5,7 @@ translate_check_llm.py — проверка перевода через LLM (б�
 fix-скрипта пишется человекочитаемый накопительный файл правок
 translate_check_llm_review.json (как ner_review.json): человек правит
 статусы «принять»/«отклонить», затем --apply применяет только принятые
-(бэкап <файл>.bak, лог translate_check_llm_changes.md).
+(бэкап <файл>.bak).
 
 Примеры:
   python3 translate_check_llm.py --start 1 --end 50  # поиск → review.json
@@ -76,7 +76,6 @@ from core.common import (  # noqa: E402
 
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "translate_check_prompt.txt")
 DEFAULT_REVIEW = "translate_check_llm_review.json"
-DEFAULT_CHANGES = "translate_check_llm_changes.md"
 
 # ─────────────────────────────────────────────
 # ВСТРОЕННЫЕ ПРОМПТЫ
@@ -754,30 +753,7 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
     return applied, skipped
 
 
-def fixes_table(applied) -> str:
-    lines = ["| # | Глава | Тип | Было | Стало | Причина | Файл | Когда |",
-             "|---|-------|-----|------|-------|---------|------|-------|"]
-    for i, e in enumerate(applied, 1):
-        old = e["old"].replace("|", "\\|")[:80]
-        new = e["new"].replace("|", "\\|")[:80]
-        reason = (e.get("причина") or "").replace("|", "\\|")
-        lines.append(f"| {i} | {e['глава']} | {e.get('тип') or '?'} "
-                     f"| {old} | {new} | {reason} "
-                     f"| {e.get('файл', '')} | {e.get('дата применения', '')} |")
-    return "\n".join(lines)
 
-
-def write_changes_md(entries, args, logger):
-    """Лог применённых правок: все прогоны накопительного файла."""
-    applied = [e for e in entries if e.get("применено")]
-    changes = [f"# Fix-errors: применённые правки",
-               f"",
-               f"- Дата: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-               f"- Главы: {args.chapters_dir}, правки: {args.review}",
-               f"- Применено всего: {len(applied)}",
-               "", fixes_table(applied), ""]
-    atomic_write(DEFAULT_CHANGES, "\n".join(changes))
-    logger.info(f"📄 Лог применённых правок: {DEFAULT_CHANGES}")
 
 
 # ─────────────────────────────────────────────
@@ -925,7 +901,6 @@ def do_apply(args, logger) -> int:
                      (meta or {}).get("создан")
                      or datetime.now().strftime("%Y-%m-%d %H:%M"),
                      entries, meta=meta)
-    write_changes_md(entries, args, logger)
     logger.info(f"✅ Главы обновлены ({len(applied)} правок"
                 + ("; без бэкапов" if args.no_bak else "; бэкапы "
                   f"<файл>.bak") + "); флаги «применено» сохранены "
@@ -1085,7 +1060,6 @@ def do_check(args, logger) -> int:
         elif applied:
             save_review_file(args.review, ch_dir, created, entries,
                              params=params)
-            write_changes_md(entries, args, logger)
             logger.info(f"Авто-применение: {len(applied)} правок, "
                         f"пропущено {skipped}.")
         else:

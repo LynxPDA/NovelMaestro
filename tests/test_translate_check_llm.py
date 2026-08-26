@@ -351,8 +351,8 @@ def test_main_apply_statuses_backup_and_log(tmp_path, monkeypatch):
     doc = json.loads(Path(review).read_text(encoding="utf-8"))
     assert doc["правки"][0]["применено"] is True
     assert doc["правки"][1]["применено"] is False
-    log = Path("translate_check_llm_changes.md").read_text(encoding="utf-8")
-    assert "правленый текст" in log and "главы два" not in log
+    # отчёт changes.md не создаётся — web-интерфейс достаточно
+    assert not Path("translate_check_llm_changes.md").exists()
 
 
 def test_main_apply_legacy_array(tmp_path, monkeypatch):
