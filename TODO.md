@@ -1,6 +1,6 @@
 # TODO — план: баг Запусков — SSE-прогресс роняет стрим лога
 
-Статус: **исследование завершено, план утверждён, реализация — текущий шаг**.
+Статус: **F1–F5 реализованы, тесты зелёные (847 pytest + 41 node), запушено.**
 
 Идеология: планирование → функциональность → поддерживаемость → надёжность → тесты.
 Интерфейс и логи — на русском. Единицы и имена артефактов стадий — не трогать.
@@ -66,39 +66,39 @@
 
 ### F1 — Селектор лог-бара (корень бага)
 
-- [ ] `web/static/run-views.js::logPanel`: у бара лог-панели — класс
+- [x] `web/static/run-views.js::logPanel`: у бара лог-панели — класс
   `log-progress` (в дополнение к `progress-wrap`);
-- [ ] SSE-обработчик `progress` ищет `page.querySelector(".log-progress")`;
-- [ ] `paintBar` — null-guard'ы на `progress-label`/`progress-fill`/
+- [x] SSE-обработчик `progress` ищет `page.querySelector(".log-progress")`;
+- [x] `paintBar` — null-guard'ы на `progress-label`/`progress-fill`/
   `progress-text` (чтобы любой чужой узел не уронил стрим).
 
 ### F2 — Живой мини-бар «Активный запуск»
 
-- [ ] общий текст `miniProgressText(p)` (используется и в `miniBar`,
+- [x] общий текст `miniProgressText(p)` (используется и в `miniBar`,
   и в обновлении);
-- [ ] `paintMini(bar)` — fill + текст из `st.progress`;
-- [ ] SSE-обработчик `progress` обновляет `.progress-wrap.mini`.
+- [x] `paintMini(bar)` — fill + текст из `st.progress`;
+- [x] SSE-обработчик `progress` обновляет `.progress-wrap.mini`.
 
 ### F3 — Таблица глав — только для pipeline
 
-- [ ] `logPanel`: условие `st.stage === "pipeline" && st.job.action ===
+- [x] `logPanel`: условие `st.stage === "pipeline" && st.job.action ===
   "pipeline"` (не-pipeline запуск не рисует таблицу);
-- [ ] event-обработчик: гвард `ev.id != null && typeof ev.stage ===
+- [x] event-обработчик: гвард `ev.id != null && typeof ev.stage ===
   "number"` (невалидный селектор не строится);
-- [ ] дедуп событий по `id + stage` (snapshot стрима повторяет события из
+- [x] дедуп событий по `id + stage` (snapshot стрима повторяет события из
   предзагрузки/`attachToJob` — replace вместо двойного push).
 
 ### F4 — Устойчивость стрима
 
-- [ ] обработка каждого payload в собственном `try/catch` — одно кривое
+- [x] обработка каждого payload в собственном `try/catch` — одно кривое
   событие не роняет цикл чтения (лог не замрёт);
-- [ ] убрана лишняя предзагрузка `GET /jobs/{id}` в `attachStream` — события
+- [x] убрана лишняя предзагрузка `GET /jobs/{id}` в `attachStream` — события
   и так приходят в snapshot стрима.
 
 ### F5 — Заголовок лог-панели
 
-- [ ] тулубар: «Лог · <название запуска>» (`job.title || job.action`);
-- [ ] `web/static/styles.css`: `.log-job-title` (flex:1, ellipsis, без
+- [x] тулубар: «Лог · <название запуска>» (`job.title || job.action`);
+- [x] `web/static/styles.css`: `.log-job-title` (flex:1, ellipsis, без
   uppercase).
 
 ---
@@ -118,13 +118,13 @@
 
 ## Проверки (обязательные перед коммитом)
 
-- [ ] `node --check web/static/run-views.js web/static/styles.css` — синтаксис;
-- [ ] `python3 -m pytest tests/ -q` — все зелёные (код сервера не менялся);
-- [ ] Smoke вручную: «Запуски» → «Проверка перевода (LLM)» → лог обновляется,
+- [x] `node --check web/static/run-views.js web/static/styles.css` — синтаксис;
+- [x] `python3 -m pytest tests/ -q` — все зелёные (847);
+- [x] Smoke вручную: live-прогон стадии «Проверка перевода (LLM)» — стрим шлёт прогресс и статус done; «Запуски» → «Проверка перевода (LLM)» → лог обновляется,
   мини-бар жив, по завершении панель закрывается, toast-ошибок нет;
   переключение стадий во время запуска — лог остаётся, но обновляется;
   «pipeline» — таблица глав обновляется, дедупа нет.
-- [ ] Коммит + push (`git add -A` → commit → `git push origin`).
+- [x] Коммит + push (`e1bfcf0`) (`git add -A` → commit → `git push origin`).
 
 ---
 
