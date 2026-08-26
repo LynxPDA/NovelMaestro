@@ -50,7 +50,7 @@ web/      web-интерфейс: server.py + api.py (роуты/хендлер�
           (реестр стадий и сборка argv), jobs.py (JobManager + SSE),
           pipeline.py (web-оркестратор конвейера), static/ (SPA).
           Контракт API — web/README.md.
-scripts/  исполнители — чистый CLI (argparse), без интерактивных меню.
+cli/  исполнители — чистый CLI (argparse), без интерактивных меню.
           batch_replace.py — массовые замены по файлу правил (prompts/replacements.txt);
 tools/    вспомогательные утилиты вне конвейера: tampermonkey_rulate_reload.js
           (userscript Rulate, README — tools/README.md).
@@ -67,7 +67,7 @@ tests/    pytest P0–P2.
 Правило слоёв:
 
 - интерактив — только в браузере (SPA) и в `web/` (серверная часть
-  интерактивна через HTTP); `scripts/` — только argparse, без `input()`
+  интерактивна через HTTP); `cli/` — только argparse, без `input()`
   и без импорта UI-слоёв (их больше не существует);
 - общая логика — только в `core/`; скрипты заимствуют импортом из
   `core.common`, НЕ копируют функции себе; менеджмент проектов (разделы,
@@ -211,8 +211,9 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
 - Не убирать fail-fast в web/pipeline.py (returncode 0 + непустой выходной
   файл + grep слов-ошибок).
 - Не читай файлы с приватными SSH ключами.
-- Не возвращай cli/tui и `backends/` — интерфейс web-only;
-  исторический документ AUDIT.md удалён, его выводы учтены.
+- Не возвращай интерактивный cli/tui и `backends/` — интерфейс web-only;
+  (папка `cli/` — только argparse-исполнители, §3); исторический
+  документ AUDIT.md удалён, его выводы учтены.
 - НЕ вводи настройку слов-ошибок пайплайна (M7 отменён): текст
   перевода НЕ попадает в stdout скриптов (только прогресс/ошибки) — жёсткий
   `_ERROR_RE` в web/pipeline.py ловит реальные сбои; настройка = регресс.
@@ -243,7 +244,7 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
    незапушенный коммит — не завершённая работа.
 1. Общая логика → `core/common.py` (+ запись в `core/README.md` и при
    необходимости в таблицу §6 / `tests/test_docs.py`).
-2. Новый исполнитель → `scripts/xxx.py` (CLI, argparse, bootstrap §4).
+2. Новый исполнитель → `cli/xxx.py` (CLI, argparse, bootstrap §4).
 3. Новая стадия в web → строка в `web/stages.py::STAGE_SPECS` (ключ-слаг,
    title, script, build-функция, fields) + форма в SPA.
 4. Новый роут API → `web/api.py` (+ строка в таблицу `web/README.md`).
@@ -255,7 +256,7 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
 7. **Перед коммитом — обязательно:**
    - прогони `python3 -m pytest tests/ -q` — все тесты должны быть
      зелёными. Коммит с падающими тестами запрещён;
-   - если менял код `core/`, `scripts/`, `web/`, `run.py` — проверь,
+   - если менял код `core/`, `cli/`, `web/`, `run.py` — проверь,
      что существующие тесты это покрывают; не покрывают — добавь/обнови
      тесты в том же коммите;
    - затем smoke-запуск затронутого скрипта с `--help` (и `--dry-run`,
@@ -268,7 +269,7 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
    папках pytest (`tmp_path`).
 8. **Стандарт коммитов**: `<тип>(<область>): <описание на
    русском>`; типы — `feat`/`fix`/`refactor`/`docs`/`test`/`chore`;
-   области — `core`/`scripts`/`web`/`templates`/`tests`/`docs`/`repo`.
+   области — `core`/`cli`/`web`/`templates`/`tests`/`docs`/`repo`.
    Описание — инфинитив, до ~72 символов; одно логическое изменение —
    один коммит. Если в одном файле смешаны правки из разных задач
    (например, докстринг + фича), файл можно коммитить целиком в коммит
@@ -284,11 +285,11 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
 
 ```bash
 python3 -m pytest tests/ -q                      # тесты (обязательно перед коммитом)
-python3 -m pytest tests/ -q --cov=core --cov=scripts --cov=web  # покрытие (нужен pytest-cov)
+python3 -m pytest tests/ -q --cov=core --cov=cli --cov=web  # покрытие (нужен pytest-cov)
 python3 run.py                                    # web-интерфейс (сервер + браузер)
 python3 web/main.py --help                        # флаги сервера
-python3 scripts/translate_book.py --help          # единый LLM-скрипт
-python3 scripts/translate_check_llm.py --help   # проверка перевода LLM
+python3 cli/translate_book.py --help          # единый LLM-скрипт
+python3 cli/translate_check_llm.py --help   # проверка перевода LLM
 ls projects/ACTIVE/*/chapters | head              # данные реального проекта
 # публикация изменений (обязательно):
 git add -A && git commit -m "…" && git push origin
@@ -309,8 +310,8 @@ git add -A && git commit -m "…" && git push origin
   `tests/test_epub_to_chapters.py`, `tests/test_translate_check.py` —
   чистые функции + оркестраторы (`run_two_pass`, `run_wiki_generation`)
   и `main()` с моками LLM;
-- `tests/test_scripts_units.py` / `tests/test_scripts_e2e.py` — чистые
-  функции и прогоны `main()` остальных `scripts/` без сети
+- `tests/test_cli_units.py` / `tests/test_cli_e2e.py` — чистые
+  функции и прогоны `main()` остальных `cli/` без сети
   (batch_replace, clean_and_compile, translate_check и др.);
 - `tests/test_web_pipeline.py` — web-оркестратор `web/pipeline.py`
   (Tracker, build_stage_cmd, grep_errors, process_chapter, main);
@@ -321,7 +322,7 @@ git add -A && git commit -m "…" && git push origin
 - `tests/test_docs.py` — сверка доков (`core/README.md`, AGENTS.md §6)
   с кодом;
 - `tests/test_architecture.py` — регресс-гарды архитектуры (§3: запрет
-  `input()` и UI-импортов в `scripts/`, единый стрим, bootstrap,
+  `input()` и UI-импортов в `cli/`, единый стрим, bootstrap,
   web-раскладка, run.py — лаунчер web, отсутствие backends/cli|tui).
 
 ## 11. Правила коммитов

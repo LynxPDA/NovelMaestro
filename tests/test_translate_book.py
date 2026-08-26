@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""scripts/translate_book.py — единый LLM-скрипт: ordered-writer,
+"""cli/translate_book.py — единый LLM-скрипт: ordered-writer,
 process_item, парсер/пресеты режимов и main() целиком (мок LLM)."""
 # pyright: reportMissingImports=false
 import io
@@ -14,7 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "cli"))
 from conftest import SilentLog  # noqa: E402
 
 import translate_book as TB  # noqa: E402

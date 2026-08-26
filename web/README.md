@@ -1,7 +1,7 @@
 # web — web-интерфейс
 
 Статус: **работает** (v1.0 M1–M8 + v2 W1–W9, web-first).
-Единственный интерфейс проекта: тот же конвейер перевода (`scripts/` +
+Единственный интерфейс проекта: тот же конвейер перевода (`cli/` +
 `core/`), управление — через браузер (cli/tui удалены).
 
 ## Запуск
@@ -135,15 +135,15 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 
 | Слаг | Название в UI | Скрипт | LLM |
 | --- | --- | --- | --- |
-| `epub` | Разбор исходника на главы | `scripts/epub_to_chapters.py` | нет |
-| `ner` | Создание глоссария (LLM) | `scripts/ner.py` | да |
-| `ner_check` | Проверка глоссария (LLM) | `scripts/ner_check.py` | да |
+| `epub` | Разбор исходника на главы | `cli/epub_to_chapters.py` | нет |
+| `ner` | Создание глоссария (LLM) | `cli/ner.py` | да |
+| `ner_check` | Проверка глоссария (LLM) | `cli/ner_check.py` | да |
 | `pipeline` | Перевод (LLM) | `web/pipeline.py` | да |
-| `translate_check` | Проверка перевода | `scripts/translate_check.py` | нет |
-| `translate_check_llm` | Проверка перевода (LLM) | `scripts/translate_check_llm.py` | да |
-| `batch_replace` | Массовые замены | `scripts/batch_replace.py` | нет |
-| `compile` | Компиляция TXT/EPUB/FB2 | `scripts/clean_and_compile.py` | нет |
-| `wiki` | Создание Wiki (LLM) | `scripts/wiki.py` | да |
+| `translate_check` | Проверка перевода | `cli/translate_check.py` | нет |
+| `translate_check_llm` | Проверка перевода (LLM) | `cli/translate_check_llm.py` | да |
+| `batch_replace` | Массовые замены | `cli/batch_replace.py` | нет |
+| `compile` | Компиляция TXT/EPUB/FB2 | `cli/clean_and_compile.py` | нет |
+| `wiki` | Создание Wiki (LLM) | `cli/wiki.py` | да |
 
 ## Архитектура (контракт)
 

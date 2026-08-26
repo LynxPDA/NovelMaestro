@@ -4,7 +4,7 @@
 
 Страховка от рассинхрона: имена функций в таблице §6 AGENTS.md обязаны
 существовать в core/common.py и core/projects.py и упоминаться в самом
-файле; пути в backticks (scripts/, web/, tests/, *.md, run.py) —
+файле; пути в backticks (cli/, web/, tests/, *.md, run.py) —
 существовать. Добавил функцию в таблицу §6 — добавь её и сюда
 (CORE_API/PROJECTS_API). Запуск: python3 -m pytest tests/ -q"""
 import re

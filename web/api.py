@@ -621,7 +621,7 @@ def _actions(ctx: dict) -> dict:
     for key, spec in ordered_stages():
         script = script_path(key, repo)
         items.append({
-            "key": key, "title": spec["title"], "folder": "scripts",
+            "key": key, "title": spec["title"], "folder": "cli",
             "script": spec["script"],
             "available": script is not None and script.is_file(),
         })

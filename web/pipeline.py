@@ -4,7 +4,7 @@
 pipeline.py — web-оркестратор конвейера (стадия pipeline).
 
 Запускается через JobManager как subprocess (cwd = папка проекта).
-По главам [start..end] гоняет scripts/translate_book.py
+По главам [start..end] гоняет cli/translate_book.py
 (--mode translate|redact|polish), fail-fast (код 0 + непустой выход +
 grep слов-ошибок), ThreadPoolExecutor(jobs).
 
@@ -12,7 +12,7 @@ grep слов-ошибок), ThreadPoolExecutor(jobs).
   @@CHAPTER@@ {"type":"chapter","id":3,"stage":1,"status":"OK"}
 JobManager._reader парсит их в job.events → SSE и payload.
 
-Никакого интерактива: только argparse (те же правила, что scripts/).
+Никакого интерактива: только argparse (те же правила, что cli/).
 """
 import argparse
 import json
@@ -526,10 +526,10 @@ def main() -> None:
     import shlex as _shlex
     log.info("Запуск: %s", _shlex.join(sys.argv))
 
-    # корень репо (для scripts/translate_book.py) — подъём от этого файла
+    # корень репо (для cli/translate_book.py) — подъём от этого файла
     repo = Path(__file__).resolve().parents[1]
     script = Path(args.script).resolve() if args.script \
-        else repo / "scripts" / "translate_book.py"
+        else repo / "cli" / "translate_book.py"
     if not script.is_file():
         log.error("translate_book.py не найден: %s", script)
         sys.exit(1)

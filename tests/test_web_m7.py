@@ -902,8 +902,8 @@ def test_job_start_copies_env_without_secrets(srv, tmp_path):
     """M1 (AUDIT): копия системного .env в проект — БЕЗ значений API_KEY."""
     srv, port, root = srv(repo_root=tmp_path / "repo")
     pdir = _mk_project(root)
-    (tmp_path / "repo" / "scripts").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / "scripts" / "translate_check.py").write_text(
+    (tmp_path / "repo" / "cli").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "repo" / "cli" / "translate_check.py").write_text(
         "import sys\nsys.exit(0)\n", encoding="utf-8")
     (tmp_path / "repo" / ".env").write_text(
         "HOST=http://sys\nAPI_KEY=СЕКРЕТ-СИСТЕМНЫЙ\n"
@@ -927,8 +927,8 @@ def test_job_start_persists_run_params(srv, tmp_path):
     api_key пишется как API_KEY , пустые поля пропускаются."""
     srv, port, root = srv(repo_root=tmp_path / "repo")
     pdir = _mk_project(root)
-    (tmp_path / "repo" / "scripts").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / "scripts" / "translate_check.py").write_text(
+    (tmp_path / "repo" / "cli").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "repo" / "cli" / "translate_check.py").write_text(
         "import sys\nsys.exit(0)\n", encoding="utf-8")
     (tmp_path / "repo" / ".env").write_text("HOST=http://sys\n",
                                              encoding="utf-8")

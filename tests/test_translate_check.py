@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""scripts/translate_check.py — ratio-логика сравнения размеров
-артефактов (остальные ветки — в tests/test_scripts_e2e.py)."""
+"""cli/translate_check.py — ratio-логика сравнения размеров
+артефактов (остальные ветки — в tests/test_cli_e2e.py)."""
 # pyright: reportMissingImports=false
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "cli"))
 
 import translate_check as TC  # noqa: E402
 

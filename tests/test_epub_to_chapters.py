@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""scripts/epub_to_chapters.py — разбор EPUB: spine-порядок,
+"""cli/epub_to_chapters.py — разбор EPUB: spine-порядок,
 process_archive (реальная запись, dry-run, пустой архив)."""
 import sys
 import zipfile
@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "cli"))
 
 import epub_to_chapters as E2C  # noqa: E402
 

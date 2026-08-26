@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""scripts/wiki.py — генерация вики: форматирование, статьи, сборка,
+"""cli/wiki.py — генерация вики: форматирование, статьи, сборка,
 run_wiki_generation и main() целиком (мок LLM)."""
 # pyright: reportMissingImports=false
 import json
@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "cli"))
 from conftest import SilentLog  # noqa: E402
 
 import wiki as WIKI  # noqa: E402

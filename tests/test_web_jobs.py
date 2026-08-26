@@ -537,7 +537,7 @@ def test_stage_order_and_titles():
 
 
 def test_script_path(tmp_path):
-    # репо — настоящий, значит scripts/*.py существуют
+    # репо — настоящий, значит cli/*.py существуют
     for key in ("epub", "translate_check", "compile", "batch_replace"):
         p = script_path(key, REPO)
         assert p is not None and p.is_file(), key
@@ -545,9 +545,9 @@ def test_script_path(tmp_path):
 
 def test_build_epub_to_chapters_defaults():
     argv = build_command("epub", {}, {})
-    assert argv[0] == "scripts/epub_to_chapters.py"
+    assert argv[0] == "cli/epub_to_chapters.py"
     # дефолты: ничего не добавляется
-    assert argv == ["scripts/epub_to_chapters.py"]
+    assert argv == ["cli/epub_to_chapters.py"]
 
 
 def test_build_epub_to_chapters_full():
@@ -572,7 +572,7 @@ def test_build_translate_check():
     # подписи пресетов web-формы маппятся на числовой --preset
     form = {"preset": "redacted", "start": 5, "end": 10, "lenient": True}
     argv = build_command("translate_check", form, {})
-    assert argv[0] == "scripts/translate_check.py"
+    assert argv[0] == "cli/translate_check.py"
     assert "--preset" in argv and "2" in argv
     assert "--start" in argv and "5" in argv
     assert "--end" in argv and "10" in argv
@@ -660,7 +660,7 @@ def test_build_ner_defaults_and_flags():
             "two_pass": True, "strip_meta": True, "min_count": "2",
             "save_interval": "10", "retries": "3", "timeout": "900"}
     argv = build_command("ner", form, {})
-    assert argv[0] == "scripts/ner.py"
+    assert argv[0] == "cli/ner.py"
     assert "compiled_book.txt" in argv
     assert "--two-pass" in argv and "--strip-meta" in argv
     assert "--min-count" in argv and "2" in argv
@@ -738,7 +738,7 @@ def test_build_ner_check_flags():
             "exclude_words": "палладия", "show_aliases": True,
             "show_votes": True, "dry_run": True}
     argv = build_command("ner_check", form, {})
-    assert argv[0] == "scripts/ner_check.py"
+    assert argv[0] == "cli/ner_check.py"
     assert "--input" in argv and "ner.json" in argv
     assert "--passes" in argv and "types" in argv
     assert "-c" in argv and "2" in argv
@@ -774,7 +774,7 @@ def test_build_translate_check_llm_flags():
             "reasoning_effort": "low",
             "threads": "4", "max_fixes_per_chapter": "0"}
     argv = build_command("translate_check_llm", form, {})
-    assert argv[0] == "scripts/translate_check_llm.py"
+    assert argv[0] == "cli/translate_check_llm.py"
     assert "--start" in argv and "--end" in argv
     assert "--two_pass" in argv and "--context_budget" in argv
     # применение/предпросмотр/бэкапы — только через «Проверка» проекта
@@ -805,7 +805,7 @@ def test_build_wiki_flags():
             "co_occurrence_top": "5", "rulate_mode": True,
             "thinking": "medium"}
     argv = build_command("wiki", form, {})
-    assert argv[0] == "scripts/wiki.py"
+    assert argv[0] == "cli/wiki.py"
     assert "compiled_book.txt" in argv
     assert "--near-distance" in argv and "64" in argv
     assert "--chunk-size" in argv and "1000" in argv

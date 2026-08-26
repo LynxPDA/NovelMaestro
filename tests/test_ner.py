@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""scripts/ner.py — извлечение имён: конвейерные функции (pass1/pass2,
+"""cli/ner.py — извлечение имён: конвейерные функции (pass1/pass2,
 merge, finalize), run_two_pass и main() целиком (мок LLM)."""
 # pyright: reportMissingImports=false
 import json
@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "cli"))
 from conftest import SilentLog  # noqa: E402
 from core import common as C  # noqa: E402
 

@@ -2,7 +2,7 @@
 
 Два варианта распространения — **Docker** (сервер) и **портативная сборка
 для Windows 10/11** (папка с интерпретатором Python и зависимостями).
-Оба варианта используют один и тот же код (`web/` + `core/` + `scripts/`),
+Оба варианта используют один и тот же код (`web/` + `core/` + `cli/`),
 конфиг — корневой `.env` (см. `templates/.env.example`), данные —
 папка проектов (`--projects-dir` / `WEB_PROJECTS_DIR`, по умолчанию
 `projects/`).
@@ -100,7 +100,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_portable_windows.ps1
 ```text
 novelmaestro-portable\
 ├── python\            # интерпретатор Python (embeddable 3.12) + requests/tqdm/pyahocorasick
-├── core\  scripts\  web\  templates\  run.py  …
+├── core\  cli\  web\  templates\  run.py  …
 ├── start.bat          # запуск: web-сервер + браузер
 └── README.txt
 ```

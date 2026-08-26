@@ -1043,12 +1043,12 @@ def test_log_argv(tmp_path):
     """R9-D: фактическая команда запуска пишется в лог (shlex.join)."""
     out = tmp_path / "запуск.txt"
     logger, log_name = C.setup_logging(str(out), logger_name="тест.argv")
-    C.log_argv(logger, argv=["python3", "scripts/ner.py", "--chunk_size 1"
+    C.log_argv(logger, argv=["python3", "cli/ner.py", "--chunk_size 1"
                              .replace(" ", "=")])
     for h in logger.handlers:
         h.flush()
     text = Path(log_name).read_text(encoding="utf-8")
-    assert "Запуск: python3 scripts/ner.py --chunk_size=1" in text
+    assert "Запуск: python3 cli/ner.py --chunk_size=1" in text
 
 
 def test_log_argv_masks_secrets(tmp_path):
@@ -1056,7 +1056,7 @@ def test_log_argv_masks_secrets(tmp_path):
     out = tmp_path / "секрет.txt"
     logger, log_name = C.setup_logging(str(out), logger_name="тест.секрет")
     C.log_argv(logger, argv=[
-        "python3", "scripts/translate_book.py", "--api_key", "СЕКРЕТ-КЛЮЧ",
+        "python3", "cli/translate_book.py", "--api_key", "СЕКРЕТ-КЛЮЧ",
         "--model", "модель", "--host", "http://h",
         "--token=ТОКЕН", "--timeout", "300",
     ])

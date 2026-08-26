@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-SCRIPTS = sorted((ROOT / "scripts").glob("*.py"))
+SCRIPTS = sorted((ROOT / "cli").glob("*.py"))
 WEB = sorted((ROOT / "web").glob("*.py"))
 CORE = ROOT / "core" / "common.py"
 
@@ -38,17 +38,17 @@ def test_web_layout():
     assert (ROOT / "web" / "static" / "index.html").is_file()
     # вспомогательные утилиты вне конвейера — в tools/ (userscript Rulate)
     assert (ROOT / "tools").is_dir()
-    assert not (ROOT / "scripts" / "Other_tools").exists()
+    assert not (ROOT / "cli" / "Other_tools").exists()
 
 
 # ══════════════════════════════════════════════════════════════════════
-# scripts/ = чистый CLI: никакого интерактива
+# cli/ = чистый CLI: никакого интерактива
 # ══════════════════════════════════════════════════════════════════════
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
 def test_script_has_no_input_calls(script):
     src = script.read_text(encoding="utf-8")
     assert not re.search(r"(?<![\w.])input\s*\(", src), \
-        f"{script.name}: input() запрещён в scripts/ (только argparse)"
+        f"{script.name}: input() запрещён в cli/ (только argparse)"
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
@@ -68,7 +68,7 @@ def test_core_common_has_the_single_stream():
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
 def test_script_uses_core_stream_not_requests_post(script):
-    """Никто в scripts/ не ходит в LLM напрямую (requests.post/iter_lines)."""
+    """Никто в cli/ не ходит в LLM напрямую (requests.post/iter_lines)."""
     src = script.read_text(encoding="utf-8")
     assert not re.search(r"requests\.post\s*\(", src), \
         f"{script.name}: прямой requests.post запрещён — только stream_chat_completion"

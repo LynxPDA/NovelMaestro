@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-for _p in (ROOT, ROOT / "scripts"):
+for _p in (ROOT, ROOT / "cli"):
     _s = str(_p)
     if _s not in sys.path:
         sys.path.insert(0, _s)

@@ -23,12 +23,28 @@
   merge_review_entries/merge_fix_entries/apply_ner_patches —
   `stage`/`status`/`applied`/`applied_at`/`reason`/`chapter`/`file`/`type`,
   контейнер `entries`, мета `created`/`updated`/`input`/`params`.
-- [x] `scripts/ner_check.py`, `scripts/translate_check_llm.py` — чтение/
+- [x] `cli/ner_check.py`, `cli/translate_check_llm.py` — чтение/
   запись/применение/логгеры.
 - [x] SPA: ui-core.js (parseReviewContent/update/remove/reviewSummary),
   project-views.js (вьювер: chapter/type/file/reason/status/applied).
 - [x] Тесты: pytest (849) + node (44) обновлены и зелёные.
 - [x] Доки: README.md, core/README.md, web/README.md, AGENTS.md §6.
+
+### T11 — Переименование scripts/ → cli/ (пакет)
+
+- [x] `git mv scripts cli` + `tests/test_scripts_*.py` → `tests/test_cli_*.py`;
+      web/stages.py (argv ×9 + script_path), web/pipeline.py (fallback),
+      web/api.py (folder) обновлены.
+- [x] Тесты: sys.path на `ROOT / "cli"` (conftest + 10 файлов), argv-assert'ы
+      test_web_jobs, fake-repo test_web_m7; pytest 852 зелёные, --help OK.
+- [x] Доки: README/web/core/AGENTS/TODO/packaging/templates/tools — все
+      упоминания `scripts/` → `cli/` (`_legacy_scripts/` не тронут;
+      запрет «интерактивного cli» переформулирован).
+- [x] pyrightconfig.json: extraPaths core+cli — тестовые импорты
+      разрешаются (пре-экзистинг Optional-находки в тестах помечены
+      false-positive; подтверждено на пре-ренейм-коммите).
+
+---
 
 ### T10 — Доработки по отзывам (пакет)
 
@@ -99,7 +115,7 @@
    говорят про «корневой .env» (`web/README.md:22,184`) — код отстал.
    Перенос: корневой `.env`, проектный `pdir/.env` по-прежнему приоритетнее.
 2. **Незакоммиченные правки пользователя** (сделаны вручную): userscript
-   Rulate перенесён `scripts/Other_tools/` → `tools/`, из `.gitignore`
+   Rulate перенесён `cli/Other_tools/` → `tools/`, из `.gitignore`
    убраны `servers/` и `backup/`, со скриптов снят бит исполняемости
    (755→644), `web/static/run-views.js` и `styles.css` отформатированы.
 3. **Запуски · Проверка перевода (LLM)**: в форме стадии 4 чекбокса
@@ -114,7 +130,7 @@
    - «Откорректировать»: поле «Было» можно менять — правка перестанет
      находиться; в подписях торчат `(old)`/`(new)`.
 5. **`translate_check_llm_changes.md`** — отчёт-дубликат web-интерфейса
-   (`scripts/translate_check_llm.py:write_changes_md`), выпилить.
+   (`cli/translate_check_llm.py:write_changes_md`), выпилить.
 6. **Настройки внешнего вида**: редакторы (CodeMirror 6) наследуют
    синтаксические цвета светлой темы вендора (`#a11` — тёмно-красный на
    тёмном фоне нечитаем). Классы подсветки вендор генерирует автоименами
@@ -186,7 +202,7 @@
 | `run.py` | системный `.env` в корне + миграция |
 | `web/api.py` | global-env в корне; `GET /api/settings` |
 | `web/main.py`, `web/stages.py` | упоминания пути .env; флаги T3 |
-| `scripts/translate_check_llm.py` | удалён `write_changes_md` |
+| `cli/translate_check_llm.py` | удалён `write_changes_md` |
 | `web/static/vendor/codemirror.min.js` | экспорт HighlightStyle/tags/syntaxHighlighting |
 | `web/static/app.js` | настройки внешнего вида, makeEditor, previewCss |
 | `web/static/project-views.js` | T4 — review-карточка |

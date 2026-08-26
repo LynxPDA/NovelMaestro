@@ -4,7 +4,7 @@
 stages.py — спеки стадий web-интерфейса (M4: не-LLM; M5: LLM).
 
 Каждая стадия: spec (поля формы) + build_command(form, ctx) → argv.
-- cwd = папка проекта; python = sys.executable; скрипт = REPO/scripts/xxx.py.
+- cwd = папка проекта; python = sys.executable; скрипт = REPO/cli/xxx.py.
 - Единицы в лейблах — как в help скриптов (СИМВОЛЫ/ТОКЕНЫ/ГЛАВЫ).
 """
 from __future__ import annotations
@@ -117,7 +117,7 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
 
 
 def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
-    argv = ["scripts/epub_to_chapters.py"]
+    argv = ["cli/epub_to_chapters.py"]
     if form.get("input"):
         argv += ["--input", str(form["input"])]
     if form.get("lang"):
@@ -146,7 +146,7 @@ PRESET_BY_LABEL = {"polished": "1", "redacted": "2", "translated": "3"}
 
 
 def build_translate_check(form: dict, ctx: dict) -> list[str]:
-    argv = ["scripts/translate_check.py"]
+    argv = ["cli/translate_check.py"]
     if form.get("preset"):
         preset = PRESET_BY_LABEL.get(str(form["preset"]), str(form["preset"]))
         argv += ["--preset", preset]
@@ -159,7 +159,7 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
 
 
 def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
-    argv = ["scripts/clean_and_compile.py",
+    argv = ["cli/clean_and_compile.py",
             "--mode", str(form.get("mode", "txt"))]
     argv += _range_argv("start", form)
     if form.get("source_type"):
@@ -178,7 +178,7 @@ def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
 
 
 def build_batch_replace(form: dict, ctx: dict) -> list[str]:
-    argv = ["scripts/batch_replace.py"]
+    argv = ["cli/batch_replace.py"]
     if form.get("rules_file"):
         argv += ["--rules-file", str(form["rules_file"])]
     if form.get("type"):
@@ -245,7 +245,7 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
     compile (собрать chapter.txt + извлечение), postprocess
     (обработка ner.json без LLM: --strip-meta / --min-count).
     """
-    argv = ["scripts/ner.py"]
+    argv = ["cli/ner.py"]
     mode = form.get("mode") or "extract"
     if mode == "compile":
         argv.append("--compile_chapters")
@@ -283,7 +283,7 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
 
 def build_ner_check(form: dict, ctx: dict) -> list[str]:
     """Стадия n — проверка глоссария (ner_check.py)."""
-    argv = ["scripts/ner_check.py"]
+    argv = ["cli/ner_check.py"]
     if form.get("input"):
         argv += ["--input", str(form["input"])]
     if form.get("report"):
@@ -331,7 +331,7 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
 def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
     """Стадия translate_check_llm — проверка перевода через LLM
     (translate_check_llm.py)."""
-    argv = ["scripts/translate_check_llm.py"]
+    argv = ["cli/translate_check_llm.py"]
     argv += _range_argv("translate_check_llm", form)
     # папка глав всегда ./chapters (дефолт скрипта, cwd = проект)
     if form.get("type"):
@@ -375,7 +375,7 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
 
 def build_wiki(form: dict, ctx: dict) -> list[str]:
     """Стадия 7 — генерация вики (wiki.py). file — txt новеллы."""
-    argv = ["scripts/wiki.py"]
+    argv = ["cli/wiki.py"]
     if form.get("file"):
         argv.append(str(form["file"]))
     if form.get("ner_file"):
@@ -825,7 +825,7 @@ def build_command(key: str, form: dict, ctx: dict) -> list[str]:
 def script_path(key: str, repo_root: Path) -> Path | None:
     """Абсолютный путь к скрипту стадии в репо.
 
-    script может быть "x.py" (scripts/x.py) или "папка/файл.py"
+    script может быть "x.py" (cli/x.py) или "папка/файл.py"
     (относительно корня репо — web-оркестраторы)."""
     spec = STAGE_SPECS.get(key)
     if spec is None:
@@ -833,4 +833,4 @@ def script_path(key: str, repo_root: Path) -> Path | None:
     rel = spec["script"]
     if "/" in rel:
         return repo_root / rel
-    return repo_root / "scripts" / rel
+    return repo_root / "cli" / rel

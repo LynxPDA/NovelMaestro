@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Тесты потока проверки перевода через LLM (translate_check_llm):
 core.common (fix_entry, merge_fix_entries, apply_fix_to_text) и
-scripts/translate_check_llm.py (накопительный
+cli/translate_check_llm.py (накопительный
  translate_check_llm_review.json, применение, авто-режим).
 Без сети и без интерактива."""
 # pyright: reportMissingImports=false
@@ -14,7 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "cli"))
 
 import core.common as C  # noqa: E402
 import translate_check_llm as FE  # noqa: E402  (бывший fix_errors/redact_errors)
@@ -89,7 +89,7 @@ def test_apply_fix_to_text():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# scripts/translate_check_llm.py: LLM-обвязка (промпты, запрос, батчи)
+# cli/translate_check_llm.py: LLM-обвязка (промпты, запрос, батчи)
 # ══════════════════════════════════════════════════════════════════════
 
 def test_load_prompts(tmp_path):
@@ -177,7 +177,7 @@ def test_atomic_write_and_find(tmp_path):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# scripts/translate_check_llm.py: review-файл и применение
+# cli/translate_check_llm.py: review-файл и применение
 # ══════════════════════════════════════════════════════════════════════
 
 def _mk_chapters(tmp_path, texts):
@@ -282,7 +282,7 @@ def test_apply_fix_entries_sequential_same_file(tmp_path):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# scripts/translate_check_llm.py: main() — поиск, apply, авто-режим (без сети)
+# cli/translate_check_llm.py: main() — поиск, apply, авто-режим (без сети)
 # ══════════════════════════════════════════════════════════════════════
 
 def _answer_one(monkeypatch, entries_json, calls=None):

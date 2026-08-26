@@ -14,7 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "cli"))
 from conftest import SilentLog  # noqa: E402
 
 import ner as NER            # noqa: E402
@@ -27,7 +27,7 @@ import batch_replace as BR    # noqa: E402
 
 
 # ══════════════════════════════════════════════════════════════════════
-# scripts/ner.py
+# cli/ner.py
 # ══════════════════════════════════════════════════════════════════════
 def test_ner_normalize_cjk():
     assert NER.normalize_cjk("陈 阳") == "陈阳"
@@ -202,7 +202,7 @@ def test_ner_chunk_cache_roundtrip(tmp_path):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# scripts/wiki.py
+# cli/wiki.py
 # ══════════════════════════════════════════════════════════════════════
 def test_wiki_fts_escape():
     assert WIKI._fts_escape('кавычка "тут"') == 'кавычка ""тут""'
@@ -323,7 +323,7 @@ def test_wiki_llm_request_delegates(monkeypatch):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# scripts/translate_check_llm.py (бывший fix_errors.py)
+# cli/translate_check_llm.py (бывший fix_errors.py)
 # ══════════════════════════════════════════════════════════════════════
 def test_re_strip_chapter_headers():
     out = RE.strip_chapter_headers("Глава 5: Тьма\nтекст\nГлава 6: Свет\nпродолжение")
@@ -472,7 +472,7 @@ def test_re_errors_to_entries(tmp_path):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# scripts/epub_to_chapters.py
+# cli/epub_to_chapters.py
 # ══════════════════════════════════════════════════════════════════════
 def test_e2c_html_to_text():
     out = E2C.html_to_text("<p>Привет</p><p>мир</p>")
@@ -580,7 +580,7 @@ def test_e2c_process_txt(tmp_path):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# scripts/clean_and_compile.py
+# cli/clean_and_compile.py
 # ══════════════════════════════════════════════════════════════════════
 def test_cac_config_titles_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -642,7 +642,7 @@ def test_cac_inject_fb2_cover(tmp_path):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# scripts/batch_replace.py
+# cli/batch_replace.py
 # ══════════════════════════════════════════════════════════════════════
 def _rules_file(tmp_path, text):
     p = tmp_path / "rules.txt"

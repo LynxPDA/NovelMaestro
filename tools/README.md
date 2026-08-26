@@ -1,6 +1,6 @@
 # tools/ — вспомогательные утилиты
 
-Утилиты вне конвейера NovelMaestro (не `scripts/`, не `web/`).
+Утилиты вне конвейера NovelMaestro (не `cli/`, не `web/`).
 
 ## tampermonkey_rulate_reload.js
 

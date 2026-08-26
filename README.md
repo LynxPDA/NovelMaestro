@@ -196,20 +196,20 @@ python3 web/main.py --help     # флаги сервера (host/port/auth/то�
 
 ```bash
 cd projects/ACTIVE/MyNovel
-python3 ../../../scripts/translate_check.py --preset 1
-python3 ../../../scripts/clean_and_compile.py --mode txt --start 1 --end 50
-python3 ../../../scripts/batch_replace.py --dry-run
+python3 ../../../cli/translate_check.py --preset 1
+python3 ../../../cli/clean_and_compile.py --mode txt --start 1 --end 50
+python3 ../../../cli/batch_replace.py --dry-run
 ```
 
 (из `projects/ACTIVE/MyNovel` корень репо — `../../..`; web-интерфейс
 подставляет пути сам. Интерактивные параметры задаются формами стадий
 в web.)
 
-Все скрипты-исполнители (`scripts/`) поддерживают `--help` для списка параметров.
+Все скрипты-исполнители (`cli/`) поддерживают `--help` для списка параметров.
 
 ### Проверка глоссария LLM (ner_check)
 
-`scripts/ner_check.py` отправляет глоссарий из `ner.json` в LLM и получает
+`cli/ner_check.py` отправляет глоссарий из `ner.json` в LLM и получает
 правки (без LLM на этапе применения). Рекомендуемый двухэтапный режим:
 этап 1 — весь список (`--passes whole`), человек правит статусы, `--apply`;
 этап 2 — каждый `type` отдельно уже по обновлённому глоссарию
@@ -233,12 +233,12 @@ python3 ../../../scripts/batch_replace.py --dry-run
 
 ```bash
 cd projects/ACTIVE/MyNovel
-python3 ../../../scripts/ner_check.py --passes whole      # этап 1 → ner_review.json
+python3 ../../../cli/ner_check.py --passes whole      # этап 1 → ner_review.json
 # человек правит статусы в ner_review.json
-python3 ../../../scripts/ner_check.py --apply --dry-run   # предпросмотр правок
-python3 ../../../scripts/ner_check.py --apply             # применить (бэкап ner.json.bak)
-python3 ../../../scripts/ner_check.py --apply --no-bak    # применить без бэкапа
-python3 ../../../scripts/ner_check.py --passes types      # этап 2 → тот же ner_review.json
+python3 ../../../cli/ner_check.py --apply --dry-run   # предпросмотр правок
+python3 ../../../cli/ner_check.py --apply             # применить (бэкап ner.json.bak)
+python3 ../../../cli/ner_check.py --apply --no-bak    # применить без бэкапа
+python3 ../../../cli/ner_check.py --passes types      # этап 2 → тот же ner_review.json
 ```
 
 Интерактив (выбор сервера, этапы, предпросмотр, подтверждение применения,
@@ -246,7 +246,7 @@ python3 ../../../scripts/ner_check.py --passes types      # этап 2 → то�
 
 ### Проверка перевода через LLM (translate_check_llm)
 
-`scripts/translate_check_llm.py` (бывший `fix_errors.py`) ищет ошибки в
+`cli/translate_check_llm.py` (бывший `fix_errors.py`) ищет ошибки в
 файлах глав (`--type polished|redacted|translated`) через LLM и вместо генерации
 fix-скрипта пишет человекочитаемый накопительный файл
 `translate_check_llm_review.json` (поля английские: `chapter`, `file`,
@@ -262,11 +262,11 @@ fix-скрипта пишет человекочитаемый накопите�
 
 ```bash
 cd projects/ACTIVE/MyNovel
-python3 ../../../scripts/translate_check_llm.py --start 1 --end 50  # поиск → review-файл
+python3 ../../../cli/translate_check_llm.py --start 1 --end 50  # поиск → review-файл
 # человек правит статусы в translate_check_llm_review.json
-python3 ../../../scripts/translate_check_llm.py --apply --dry-run                  # предпросмотр
-python3 ../../../scripts/translate_check_llm.py --apply                            # применить принятые
-python3 ../../../scripts/translate_check_llm.py --apply --no-bak                   # без бэкапов .bak
+python3 ../../../cli/translate_check_llm.py --apply --dry-run                  # предпросмотр
+python3 ../../../cli/translate_check_llm.py --apply                            # применить принятые
+python3 ../../../cli/translate_check_llm.py --apply --no-bak                   # без бэкапов .bak
 ```
 
 Интерактив (поиск, применение, предпросмотр, полный автомат) — в
@@ -276,16 +276,16 @@ translate_check.
 
 ### Массовые замены (batch_replace)
 
-Скрипт `scripts/batch_replace.py` применяет к главам список замен из
+Скрипт `cli/batch_replace.py` применяет к главам список замен из
 внешнего файла правил — без LLM и без интерактива (интерактив — стадия
 «Массовые замены» в web). Полезно для финальной чистки имён и терминов
 в готовых главах.
 
 ```bash
 cd projects/ACTIVE/MyNovel
-python3 ../../../scripts/batch_replace.py --dry-run            # показать, что заменится
-python3 ../../../scripts/batch_replace.py --type polished      # применить к polished
-python3 ../../../scripts/batch_replace.py --type chapter --start 1 --end 20
+python3 ../../../cli/batch_replace.py --dry-run            # показать, что заменится
+python3 ../../../cli/batch_replace.py --type polished      # применить к polished
+python3 ../../../cli/batch_replace.py --type chapter --start 1 --end 20
 ```
 
 Файл правил по умолчанию — `prompts/replacements.txt` (лежит в папке
@@ -315,7 +315,7 @@ NovelMaestro/
 │   ├── jobs.py             # JobManager + SSE-стрим задач
 │   ├── pipeline.py         # web-оркестратор конвейера
 │   └── static/             # SPA: index.html, app.js, styles.css
-├── scripts/                # исполнители (CLI, argparse)
+├── cli/                # исполнители (CLI, argparse)
 │   ├── translate_book.py   # перевод / редактура / полировка
 │   ├── translate_check_llm.py  # проверка перевода через LLM (review-файл)
 │   ├── clean_and_compile.py# компиляция в TXT/EPUB/FB2
@@ -391,7 +391,7 @@ MyNovel/
 
 ### Компиляция в EPUB / FB2
 
-Скрипт `scripts/clean_and_compile.py` собирает главы в TXT, EPUB или FB2.
+Скрипт `cli/clean_and_compile.py` собирает главы в TXT, EPUB или FB2.
 EPUB и FB2 генерируются нативно (stdlib, без внешних зависимостей).
 
 **Обложка и метаданные.** В EPUB/FB2 встраиваются, если файлы найдены:
@@ -472,7 +472,7 @@ PIPELINE_MODEL=...   # web-конвейер (единая модель)
 > Модели скриптов (`NER_MODEL`, `NER_CHECK_MODEL`,
 > `TRANSLATE_CHECK_LLM_MODEL`, `WIKI_MODEL`, `PIPELINE_MODEL` и т.п.)
 > подставляет web-слой (`web/stages.py`); при прямом запуске
-> `scripts/*.py` — та же схема.
+> `cli/*.py` — та же схема.
 
 Web-сервер читает из того же `.env` ключи `WEB_HOST`, `WEB_PORT`,
 `WEB_AUTH`, `WEB_TOKEN`, `WEB_MAX_UPLOAD_MB`, `WEB_JOBS_LIMIT`
@@ -553,7 +553,7 @@ Web-сервер читает из того же `.env` ключи `WEB_HOST`, `
 python3 -m pytest tests/ -q
 
 # С проверкой покрытия (нужен pytest-cov)
-python3 -m pytest tests/ -q --cov=core --cov=scripts --cov=web
+python3 -m pytest tests/ -q --cov=core --cov=cli --cov=web
 ```
 
 Тесты не требуют сети — LLM мокнут через monkeypatch, данные создаются во временных папках.
