@@ -123,8 +123,8 @@ argparse («СИМВОЛЫ»/«ТОКЕНЫ»).
 | чанкование | `split_text_smart` |
 | текст/CJK | `get_ngrams` / `is_cjk` / `is_cjk_string` / `find_exact_match` |
 | поиск терминов | `load_ner_data` + `find_relevant_ner` (+ `normalize_for_search`, `build_smart_regex`) |
-| проверка глоссария (ner_check) | `filter_ner_items` / `format_ner_record` / `glossary_body` / `build_ner_batches` (count по убыванию, бюджет в СИМВОЛАХ) / `parse_ner_patches` / `review_entry` / `parse_review_doc` / `merge_review_entries` (review-файл: этапы, статусы принять/отклонить, накопление) / `apply_ner_patches` (статусы + применено, дубли термина по совпавшему `old`) |
-| проверка перевода LLM (translate_check_llm) | `fix_entry` (ошибка LLM → запись review) / `merge_fix_entries` (накопление, дедуп по глава+old+new) / `apply_fix_to_text` (NFC, первое вхождение) |
+| проверка глоссария (ner_check) | `filter_ner_items` / `format_ner_record` / `glossary_body` / `build_ner_batches` (count по убыванию, бюджет в СИМВОЛАХ) / `parse_ner_patches` / `review_entry` / `parse_review_doc` / `merge_review_entries` (review-файл: поля английские — `stage`/`status`/`applied`/`old`/`new`, статусы принять/отклонить, накопление) / `apply_ner_patches` (status + applied, дубли термина по совпавшему `old`) |
+| проверка перевода LLM (translate_check_llm) | `fix_entry` (ошибка LLM → запись review) / `merge_fix_entries` (накопление, дедуп по chapter+old+new) / `apply_fix_to_text` (NFC, первое вхождение) |
 | имена по полу | `collect_gender_names` (polish: поиск по `translation`, пол по наличию `(female)`/`(male)` в `type`) |
 | запрос к LLM | **ТОЛЬКО** `stream_chat_completion` — единая гигиена стрима ([DONE]/finish_reason, loop-детект, cut, empty, min_len_ratio) → `(text, err)` |
 | запись файла | `atomic_write` (tmp + fsync + os.replace) |
@@ -163,6 +163,16 @@ blacklist: raw/draft/translated/original/source/backup).
 Везде, где сравнивается/заменяется русский текст — NFC-нормализация
 (`unicodedata.normalize("NFC", …)`): поиск фрагментов, fix-скрипты,
 замена строк. Кавычки «»/", тире —–-, многоточия …/... считаются разными.
+
+### JSON-файлы данных (правило консистентности)
+
+Названия полей в JSON-файлах данных (review-файлы ner_review.json /
+translate_check_llm_review.json и т.п.) — ПО УМОЛЧАНИЮ на английском:
+`entries`, `status`, `applied`, `reason`, `stage`, `chapter`, `file`,
+`type`, `term`, `field`, `old`, `new`, `created`, `updated` … Значения
+(статусы «принять»/«отклонить», тексты ошибок, логи) остаются русскими.
+Новые JSON-ключи писать только на английском; переименование — жёсткое,
+без fallback-чтения старых ключей (совместимость не сохраняем).
 
 ### Промпты
 

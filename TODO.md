@@ -2,6 +2,36 @@
 
 Статус: **готово (ожидает коммита и push).**
 
+---
+
+## Дополнительные задачи (по ходу)
+
+### T6 — Флаги применения в «Настройках» не применялись (баг)
+
+- [x] `api("/api/settings")` → `api("/settings")`: хелпер api() сам
+  добавляет префикс /api, двойной префикс давал 404 → молчаливый catch →
+  сброс темы на тёмную. Заодно исправлен `api("/api/jobs")` (очистка
+  истории запусков — тот же двойной префикс).
+- [x] `exportModal` перенесена из app.js в project-views.js (кросс-файловый
+  глобал, no-unused-vars); `catch (_e)` → optional catch binding.
+
+### T7 — JSON-поля review-файлов на английском (правило консистентности)
+
+- [x] Правило в AGENTS.md §7 (JSON-файлы данных: поля — английские,
+  значения — русские; жёстко, без fallback-чтения).
+- [x] `core/common.py`: review_entry/fix_entry/parse_review_doc/
+  merge_review_entries/merge_fix_entries/apply_ner_patches —
+  `stage`/`status`/`applied`/`applied_at`/`reason`/`chapter`/`file`/`type`,
+  контейнер `entries`, мета `created`/`updated`/`input`/`params`.
+- [x] `scripts/ner_check.py`, `scripts/translate_check_llm.py` — чтение/
+  запись/применение/логгеры.
+- [x] SPA: ui-core.js (parseReviewContent/update/remove/reviewSummary),
+  project-views.js (вьювер: chapter/type/file/reason/status/applied).
+- [x] Тесты: pytest (849) + node (44) обновлены и зелёные.
+- [x] Доки: README.md, core/README.md, web/README.md, AGENTS.md §6.
+
+---
+
 Идеология: планирование → функциональность → поддерживаемость → надёжность → тесты.
 Интерфейс и логи — на русском. Единицы и имена артефактов стадий — не трогать.
 

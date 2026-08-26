@@ -460,15 +460,15 @@ def test_re_errors_to_entries(tmp_path):
                                    "polished", cmap, SilentLog())
     assert len(entries) == 1
     e = entries[0]
-    assert e["глава"] == 1 and e["этап"] == "Главы 1–1 (polished)"
+    assert e["chapter"] == 1 and e["stage"] == "Главы 1–1 (polished)"
     assert e["old"] == "ошибка в тексте" and e["new"] == "правкa"
-    assert e["тип"] == "typo" and e["статус"] == "принять"
-    assert e["файл"].endswith("polished.txt")
+    assert e["type"] == "typo" and e["status"] == "принять"
+    assert e["file"].endswith("polished.txt")
     # неизвестный тип ошибки очищается, запись живёт
     e2 = RE.errors_to_entries(
         [{"chapter": 1, "fragment": "фрагмент подлиннее", "corrected": "y",
           "type": "бред"}], "s", "polished", cmap, SilentLog())
-    assert e2 and e2[0]["тип"] == ""
+    assert e2 and e2[0]["type"] == ""
 
 
 # ══════════════════════════════════════════════════════════════════════

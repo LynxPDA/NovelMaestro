@@ -37,7 +37,11 @@
   function fileIcon(entry) {
     if (!entry) return "📄";
     if (entry.dir) return "📁";
-    var ext = (String(entry.name || "").split(".").pop() || "").toLowerCase();
+    var ext = (
+      String(entry.name || "")
+        .split(".")
+        .pop() || ""
+    ).toLowerCase();
     return F_ICONS[ext] || "📄";
   }
 
@@ -513,13 +517,13 @@
       var doc = null;
       try {
         doc = JSON.parse(String(text || "").trim());
-      } catch (_e) {
+      } catch {
         return { ok: false, doc: null, entries: [], isArray: false };
-      }  // eslint-disable-line no-unused-vars
+      }
       if (Array.isArray(doc))
         return { ok: true, doc: doc, entries: doc, isArray: true };
-      if (doc && typeof doc === "object" && Array.isArray(doc["правки"])) {
-        return { ok: true, doc: doc, entries: doc["правки"], isArray: false };
+      if (doc && typeof doc === "object" && Array.isArray(doc["entries"])) {
+        return { ok: true, doc: doc, entries: doc["entries"], isArray: false };
       }
       return { ok: false, doc: null, entries: [], isArray: false };
     },
@@ -529,7 +533,7 @@
      * временем. Индекс вне диапазона — null (не меняем файл). */
     updateReviewEntry: (doc, index, patch, isArray) => {
       if (!doc || !patch || typeof index !== "number") return null;
-      var entries = isArray ? doc : doc["правки"];
+      var entries = isArray ? doc : doc["entries"];
       if (!Array.isArray(entries) || index < 0 || index >= entries.length) {
         return null;
       }
@@ -539,8 +543,8 @@
       if (isArray) {
         return nextEntries;
       }
-      next["правки"] = nextEntries;
-      next["обновлён"] = new Date()
+      next["entries"] = nextEntries;
+      next["updated"] = new Date()
         .toISOString()
         .slice(0, 16)
         .replace("T", " ");
@@ -554,7 +558,7 @@
      * проставляется текущим временем. Вне диапазона/без «правки» — null. */
     removeReviewEntry: (doc, index, isArray) => {
       if (!doc || typeof index !== "number") return null;
-      var entries = isArray ? doc : doc["правки"];
+      var entries = isArray ? doc : doc["entries"];
       if (!Array.isArray(entries) || index < 0 || index >= entries.length) {
         return null;
       }
@@ -563,8 +567,8 @@
         .concat(entries.slice(index + 1));
       if (isArray) return nextEntries;
       var next = Object.assign({}, doc);
-      next["правки"] = nextEntries;
-      next["обновлён"] = new Date()
+      next["entries"] = nextEntries;
+      next["updated"] = new Date()
         .toISOString()
         .slice(0, 16)
         .replace("T", " ");
@@ -577,9 +581,9 @@
       for (var i = 0; i < (entries || []).length; i++) {
         var e = entries[i] || {};
         sum.total++;
-        if (e["применено"]) sum.applied++;
-        if (e["статус"] === "принять") sum.accepted++;
-        else if (e["статус"] === "отклонить") sum.rejected++;
+        if (e["applied"]) sum.applied++;
+        if (e["status"] === "принять") sum.accepted++;
+        else if (e["status"] === "отклонить") sum.rejected++;
       }
       return sum;
     },

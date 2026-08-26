@@ -408,16 +408,16 @@ test("filterNerItems: пустые поля/типы и набор типов", 
 
 test("parseReviewContent: объект с «правки»", () => {
   const text = JSON.stringify({
-    создан: "2024-01-01 10:00",
-    вход: "ner.json",
-    правки: [{ term: "林凡", field: "translation", old: "А", new: "Б" }],
+    created: "2024-01-01 10:00",
+    input: "ner.json",
+    entries: [{ term: "林凡", field: "translation", old: "А", new: "Б" }],
   });
   const p = UICore.parseReviewContent(text);
   assert.equal(p.ok, true);
   assert.equal(p.isArray, false);
   assert.equal(p.entries.length, 1);
   assert.equal(p.entries[0].term, "林凡");
-  assert.equal(p.doc["вход"], "ner.json");
+  assert.equal(p.doc["input"], "ner.json");
 });
 
 test("parseReviewContent: legacy-массив", () => {
@@ -432,7 +432,7 @@ test("parseReviewContent: невалидный JSON и не-список", () =>
   const bad = UICore.parseReviewContent("{не json");
   assert.equal(bad.ok, false);
   assert.equal(bad.entries.length, 0);
-  const noList = UICore.parseReviewContent('{"создан":"t"}');
+  const noList = UICore.parseReviewContent('{"created":"t"}');
   assert.equal(noList.ok, false);
   const empty = UICore.parseReviewContent("");
   assert.equal(empty.ok, false);
@@ -440,25 +440,25 @@ test("parseReviewContent: невалидный JSON и не-список", () =>
 
 test("updateReviewEntry: точечная правка в объекте, «обновлён» обновляется", () => {
   const doc = {
-    создан: "2024-01-01 10:00",
-    правки: [
+    created: "2024-01-01 10:00",
+    entries: [
       {
         term: "林凡",
         field: "translation",
         old: "А",
         new: "Б",
-        статус: "принять",
+        status: "принять",
       },
-      { term: "火", field: "notes", old: "В", new: "Г", статус: "отклонить" },
+      { term: "火", field: "notes", old: "В", new: "Г", status: "отклонить" },
     ],
   };
-  const doc2 = UICore.updateReviewEntry(doc, 0, { статус: "отклонить" }, false);
+  const doc2 = UICore.updateReviewEntry(doc, 0, { status: "отклонить" }, false);
   assert.notEqual(doc2, doc); // иммутабельно
-  assert.equal(doc2["правки"][0]["статус"], "отклонить");
-  assert.equal(doc2["правки"][1]["статус"], "отклонить"); // соседняя цела
-  assert.equal(doc["правки"][0]["статус"], "принять"); // исходник не тронут
-  assert.ok(doc2["обновлён"]); // проставлен текущий момент
-  assert.equal(doc["обновлён"], undefined);
+  assert.equal(doc2["entries"][0]["status"], "отклонить");
+  assert.equal(doc2["entries"][1]["status"], "отклонить"); // соседняя цела
+  assert.equal(doc["entries"][0]["status"], "принять"); // исходник не тронут
+  assert.ok(doc2["updated"]); // проставлен текущий момент
+  assert.equal(doc["updated"], undefined);
 });
 
 test("updateReviewEntry: legacy-массив и границы", () => {
@@ -484,8 +484,8 @@ test("fileIcon: папка и расширения", () => {
 
 test("removeReviewEntry: удаление в объекте, «обновлён» обновляется", () => {
   const doc = {
-    создан: "2024-01-01 10:00",
-    правки: [
+    created: "2024-01-01 10:00",
+    entries: [
       { term: "林凡", field: "translation" },
       { term: "火", field: "notes" },
       { term: "刀", field: "type" },
@@ -493,11 +493,11 @@ test("removeReviewEntry: удаление в объекте, «обновлён�
   };
   const doc2 = UICore.removeReviewEntry(doc, 1, false);
   assert.notEqual(doc2, doc); // иммутабельно
-  assert.equal(doc2["правки"].length, 2);
-  assert.equal(doc2["правки"][1].term, "刀");
-  assert.equal(doc["правки"].length, 3); // исходник не тронут
-  assert.ok(doc2["обновлён"]);
-  assert.equal(doc["обновлён"], undefined);
+  assert.equal(doc2["entries"].length, 2);
+  assert.equal(doc2["entries"][1].term, "刀");
+  assert.equal(doc["entries"].length, 3); // исходник не тронут
+  assert.ok(doc2["updated"]);
+  assert.equal(doc["updated"], undefined);
   assert.equal(UICore.removeReviewEntry(doc, 5, false), null); // вне диапазона
   assert.equal(UICore.removeReviewEntry(doc, -1, false), null);
   assert.equal(UICore.removeReviewEntry(null, 0, false), null);
@@ -513,11 +513,11 @@ test("removeReviewEntry: legacy-массив", () => {
 
 test("reviewSummary: подсчёт статусов", () => {
   const entries = [
-    { статус: "принять", применено: false },
-    { статус: "принять", применено: true },
-    { статус: "отклонить" },
-    { применено: true }, // legacy без статуса
-    { статус: "принять" },
+    { status: "принять", applied: false },
+    { status: "принять", applied: true },
+    { status: "отклонить" },
+    { applied: true }, // legacy без статуса
+    { status: "принять" },
   ];
   assert.deepEqual(UICore.reviewSummary(entries), {
     total: 5,

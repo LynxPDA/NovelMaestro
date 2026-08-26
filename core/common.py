@@ -658,19 +658,18 @@ def review_entry(raw, stage=""):
     field = str(raw.get("field", "")).strip().lower()
     if not term or field not in NER_PATCH_FIELDS:
         return None
-    status = str(raw.get("статус", REVIEW_ACCEPT)).strip().lower()
+    status = str(raw.get("status", REVIEW_ACCEPT)).strip().lower()
     if status not in REVIEW_STATUSES:
         status = REVIEW_ACCEPT
     return {
-        "этап": str(raw.get("этап") or stage),
+        "stage": str(raw.get("stage") or stage),
         "term": term,
         "field": field,
         "old": unicodedata.normalize("NFC", str(raw.get("old", ""))),
         "new": unicodedata.normalize("NFC", str(raw.get("new", ""))),
-        "причина": str(raw.get("причина")
-                       or raw.get("reason") or "").strip(),
-        "статус": status,
-        "применено": bool(raw.get("применено", False)),
+        "reason": str(raw.get("reason") or "").strip(),
+        "status": status,
+        "applied": bool(raw.get("applied", False)),
     }
 
 
@@ -679,7 +678,7 @@ def parse_review_doc(doc, logger=None):
     или объект с ключом «правки». Возвращает список записей или None,
     если структура не распознана."""
     if isinstance(doc, dict):
-        rows = doc.get("правки")
+        rows = doc.get("entries")
     else:
         rows = doc
     if not isinstance(rows, list):
@@ -727,8 +726,8 @@ def apply_ner_patches(items, patches, logger=None):
             index.setdefault(term, []).append(item)
     applied, skipped = [], 0
     for p in patches:
-        status = str(p.get("статус", REVIEW_ACCEPT)).strip().lower()
-        if status == REVIEW_REJECT or p.get("применено"):
+        status = str(p.get("status", REVIEW_ACCEPT)).strip().lower()
+        if status == REVIEW_REJECT or p.get("applied"):
             skipped += 1
             continue
         term = unicodedata.normalize("NFC", str(p.get("term", "")))
@@ -752,11 +751,11 @@ def apply_ner_patches(items, patches, logger=None):
             skipped += 1
             continue
         target[p["field"]] = p["new"]
-        p["применено"] = True
-        p["дата применения"] = time.strftime("%Y-%m-%d %H:%M")
+        p["applied"] = True
+        p["applied_at"] = time.strftime("%Y-%m-%d %H:%M")
         applied.append(p)
         if logger:
-            stage = p.get("этап") or ""
+            stage = p.get("stage") or ""
             prefix = f"[{stage}] " if stage else ""
             logger.info(f"  ✔ {prefix}{p['term']} [{p['field']}]: "
                         f"{p['old']!r} → {p['new']!r}")
@@ -796,19 +795,19 @@ def fix_entry(raw, stage=""):
     new = str(raw.get("corrected") or "").strip()
     if not old or not new or old == new:
         return None
-    status = str(raw.get("статус") or REVIEW_ACCEPT).strip().lower()
+    status = str(raw.get("status") or REVIEW_ACCEPT).strip().lower()
     if status not in REVIEW_STATUSES:
         status = REVIEW_ACCEPT
     etype = str(raw.get("type") or "").strip().lower()
     if etype and etype not in FIX_ERROR_TYPES:
         etype = ""
-    return {"этап": str(stage or ""), "глава": ch,
-            "файл": str(raw.get("файл") or ""),
-            "тип": etype,
+    return {"stage": str(stage or ""), "chapter": ch,
+            "file": str(raw.get("file") or ""),
+            "type": etype,
             "old": unicodedata.normalize("NFC", old),
             "new": unicodedata.normalize("NFC", new),
-            "причина": str(raw.get("reason") or "").strip(),
-            "статус": status, "применено": bool(raw.get("применено"))}
+            "reason": str(raw.get("reason") or "").strip(),
+            "status": status, "applied": bool(raw.get("applied"))}
 
 
 def merge_fix_entries(existing, fresh, logger=None):
@@ -816,10 +815,10 @@ def merge_fix_entries(existing, fresh, logger=None):
     запись с тем же (глава, old, new) сохраняется как есть, новая не
     добавляется. Возвращает (merged_list, added_count)."""
     merged = list(existing)
-    seen = {(e.get("глава"), e.get("old"), e.get("new")) for e in merged}
+    seen = {(e.get("chapter"), e.get("old"), e.get("new")) for e in merged}
     added = 0
     for e in fresh:
-        key = (e.get("глава"), e.get("old"), e.get("new"))
+        key = (e.get("chapter"), e.get("old"), e.get("new"))
         if key in seen:
             continue
         seen.add(key)

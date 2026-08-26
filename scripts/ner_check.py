@@ -244,7 +244,7 @@ def load_review_file(path: str, logger):
     except (OSError, json.JSONDecodeError) as e:
         sys.exit(f"❌ Не удалось прочитать {path}: {e}")
     entries = parse_review_doc(doc, logger)
-    meta = ({k: v for k, v in doc.items() if k != "правки"}
+    meta = ({k: v for k, v in doc.items() if k != "entries"}
             if isinstance(doc, dict) else None)
     return meta, entries
 
@@ -253,14 +253,14 @@ def save_review_file(path, input_path, created, entries, params=None,
                      meta=None):
     """Запись накопительного файла правок (сохраняет дату создания и
     параметры прогона: params из do_check, иначе — из meta файла)."""
-    doc = {"создан": created,
-           "обновлён": datetime.now().strftime("%Y-%m-%d %H:%M"),
-           "вход": input_path,
-           "правки": entries}
+    doc = {"created": created,
+           "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+           "input": input_path,
+           "entries": entries}
     saved_params = params if params is not None \
-        else (meta or {}).get("параметры")
+        else (meta or {}).get("params")
     if saved_params:
-        doc["параметры"] = saved_params
+        doc["params"] = saved_params
     atomic_write(path, json.dumps(doc, ensure_ascii=False, indent=2))
 
 
@@ -362,10 +362,10 @@ def review_table(entries) -> str:
     for i, p in enumerate(entries, 1):
         old = p["old"].replace("|", "\\|")
         new = p["new"].replace("|", "\\|")
-        reason = p["причина"].replace("|", "\\|")
-        lines.append(f"| {i} | {p.get('этап', '')} | {p['term']} "
+        reason = p["reason"].replace("|", "\\|")
+        lines.append(f"| {i} | {p.get('stage', '')} | {p['term']} "
                      f"| {p['field']} | {old} | {new} | {reason} "
-                     f"| {p.get('дата применения', '')} |")
+                     f"| {p.get('applied_at', '')} |")
     return "\n".join(lines)
 
 
@@ -396,7 +396,7 @@ def write_report(args, passes_out, raws, total_items, logger):
 
 def write_changes_md(entries, args, logger):
     """Лог применённых правок: все этапы накопительного файла."""
-    applied = [e for e in entries if e.get("применено")]
+    applied = [e for e in entries if e.get("applied")]
     changes = [f"# NER-check: применённые правки",
                f"",
                f"- Дата: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
@@ -419,7 +419,7 @@ def do_check(args, logger) -> int:
     logger.info(f"📊 После фильтрации: {len(items)} записей.")
 
     prompt_tpl = get_prompt(args, logger)
-    params = {"вход": args.input,
+    params = {"input": args.input,
               "бюджет батча": args.batch_size,
               "порог count": args.count_threshold,
               "исключения notes": args.exclude_words,
@@ -428,7 +428,7 @@ def do_check(args, logger) -> int:
               "промпт файл": args.prompt_file,
               "типы": args.types}
     meta, entries = load_review_file(args.review, logger)
-    created = (meta or {}).get("создан") \
+    created = (meta or {}).get("created") \
         or datetime.now().strftime("%Y-%m-%d %H:%M")
     if entries is None:
         entries = []
@@ -531,9 +531,9 @@ def do_apply(args, logger) -> int:
     if entries is None:
         sys.exit(f"❌ {args.review}: не распознан список правок.")
     pending = sum(1 for e in entries
-                  if e["статус"] == REVIEW_ACCEPT and not e["применено"])
-    n_rej = sum(1 for e in entries if e["статус"] == REVIEW_REJECT)
-    n_done = sum(1 for e in entries if e["применено"])
+                  if e["status"] == REVIEW_ACCEPT and not e["applied"])
+    n_rej = sum(1 for e in entries if e["status"] == REVIEW_REJECT)
+    n_done = sum(1 for e in entries if e["applied"])
     logger.info(f"📋 {args.review}: к применению {pending}, "
                 f"отклонено {n_rej}, уже применено {n_done}.")
     data = load_ner_json(args.input, logger)
@@ -547,7 +547,7 @@ def do_apply(args, logger) -> int:
     if args.dry_run:
         logger.info("DRY-RUN: файлы не изменены.")
         for p in applied:
-            stage = p.get("этап") or ""
+            stage = p.get("stage") or ""
             prefix = f"[{stage}] " if stage else ""
             logger.info(f"  · {prefix}{p['term']} [{p['field']}]: "
                         f"{p['old']!r} → {p['new']!r}")
@@ -557,7 +557,7 @@ def do_apply(args, logger) -> int:
         logger.info(f"💾 Бэкап: {args.input}.bak")
     atomic_write(args.input, json.dumps(data, ensure_ascii=False, indent=2))
     save_review_file(args.review, args.input,
-                     (meta or {}).get("создан")
+                     (meta or {}).get("created")
                      or datetime.now().strftime("%Y-%m-%d %H:%M"),
                      entries, meta=meta)
     write_changes_md(entries, args, logger)

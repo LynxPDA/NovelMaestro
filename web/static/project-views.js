@@ -2145,16 +2145,12 @@ function viewProject(section, name) {
             content: JSON.stringify(parsed.doc, null, 2),
           },
         });
-        parsed.entries = parsed.isArray ? parsed.doc : parsed.doc["правки"];
+        parsed.entries = parsed.isArray ? parsed.doc : parsed.doc["entries"];
       }
       async function deleteEntry(i) {
         err.textContent = "";
         try {
-          const doc2 = UICore.removeReviewEntry(
-            parsed.doc,
-            i,
-            parsed.isArray,
-          );
+          const doc2 = UICore.removeReviewEntry(parsed.doc, i, parsed.isArray);
           if (!doc2) {
             err.textContent = "Не удалось удалить запись";
             return;
@@ -2184,16 +2180,16 @@ function viewProject(section, name) {
       }
       function entryHead(e) {
         if (kind === "ner") return `${e["term"] || "?"} · ${e["field"] || "?"}`;
-        const ch = e["глава"];
+        const ch = e["chapter"];
         return (
-          `Гл.${ch == null ? "?" : ch}` + (e["тип"] ? ` · ${e["тип"]}` : "")
+          `Гл.${ch == null ? "?" : ch}` + (e["type"] ? ` · ${e["type"]}` : "")
         );
       }
       function entryMeta(e) {
         const parts = [];
-        if (e["этап"]) parts.push(e["этап"]);
-        if (e["дата применения"])
-          parts.push(`применено: ${e["дата применения"]}`);
+        if (e["stage"]) parts.push(e["stage"]);
+        if (e["applied_at"])
+          parts.push(`применено: ${e["applied_at"]}`);
         return parts.join(" · ");
       }
       function gotoEntry(e) {
@@ -2205,7 +2201,7 @@ function viewProject(section, name) {
           return;
         }
         // tcl: файл главы из записи (абсолютный путь → chapters/…)
-        const m = String(e["файл"] || "")
+        const m = String(e["file"] || "")
           .replace(/\\/g, "/")
           .match(/\/chapters\/([^/]+\/.+)$/);
         if (m) {
@@ -2217,7 +2213,7 @@ function viewProject(section, name) {
         }
       }
       function statusBtn(i, e, s, label) {
-        const active = e["статус"] === s;
+        const active = e["status"] === s;
         return h(
           "button",
           {
@@ -2261,7 +2257,7 @@ function viewProject(section, name) {
         );
         const reasonIn = h("input", {
           class: "input",
-          value: e["причина"] || "",
+          value: e["reason"] || "",
         });
         const err2 = h("div", { class: "form-error" });
         const modal = h(
@@ -2333,9 +2329,9 @@ function viewProject(section, name) {
         newIn.focus();
       }
       function entryRow(e, i) {
-        const applied = e["применено"];
-        const accepted = e["статус"] === "принять";
-        const rejected = e["статус"] === "отклонить";
+        const applied = e["applied"];
+        const accepted = e["status"] === "принять";
+        const rejected = e["status"] === "отклонить";
         const badge = applied
           ? h("span", { class: "badge badge-done" }, "применено")
           : accepted
@@ -2394,7 +2390,7 @@ function viewProject(section, name) {
             " → ",
             h("span", { class: "rv-new" }, e["new"] || ""),
           ),
-          e["причина"] ? h("div", { class: "rv-reason" }, e["причина"]) : null,
+          e["reason"] ? h("div", { class: "rv-reason" }, e["reason"]) : null,
           h("div", { class: "rv-meta" }, entryMeta(e)),
           actions,
         );
@@ -2409,15 +2405,7 @@ function viewProject(section, name) {
               "Файл правок не прочитан (невалидный JSON) — переключитесь на «Редактор JSON» или запустите проверку",
             ),
           );
-        } else if (!parsed.entries.length) {
-          body.append(
-            h(
-              "div",
-              { class: "card-hint" },
-              "Правок ещё нет — запустите проверку (вкладка «Запуски»)",
-            ),
-          );
-        } else {
+        } else if (parsed.entries.length) {
           const sum = UICore.reviewSummary(parsed.entries);
           body.append(
             h(
@@ -2444,6 +2432,14 @@ function viewProject(section, name) {
               "div",
               { class: "rv-list" },
               parsed.entries.map((e, i) => entryRow(e, i)),
+            ),
+          );
+        } else {
+          body.append(
+            h(
+              "div",
+              { class: "card-hint" },
+              "Правок ещё нет — запустите проверку (вкладка «Запуски»)",
             ),
           );
         }
@@ -2527,7 +2523,7 @@ function viewProject(section, name) {
       clearBtn.addEventListener("click", async () => {
         err.textContent = "";
         try {
-          const empty = parsed && parsed.isArray ? [] : { "правки": [] };
+          const empty = parsed && parsed.isArray ? [] : { правки: [] };
           await api(path, {
             method: "PUT",
             body: {
@@ -3863,4 +3859,127 @@ function viewProject(section, name) {
 
   render();
   return page;
+
+}
+
+function exportModal(byType, project) {
+  const err = h("div", { class: "form-error" });
+  const fmtJson = h("input", { type: "radio", name: "expfmt", value: "json" });
+  const fmtText = h("input", { type: "radio", name: "expfmt", value: "text" });
+  const fmtNames = h("input", {
+    type: "radio",
+    name: "expfmt",
+    value: "names",
+  });
+  fmtJson.checked = true;
+  const fmtPairs = [
+    [fmtJson, "JSON — полные записи"],
+    [fmtText, "Текст — записи (Термин, Тип, Перевод)"],
+    [fmtNames, "Текст — имена (женские/мужские)"],
+  ];
+  const cntInp = h("input", {
+    type: "number",
+    class: "input input-sm",
+    min: "0",
+    value: "0",
+  });
+
+  const typeKeys = Object.keys(byType);
+  const typeCbs = typeKeys.map((t) => {
+    const cb = h("input", { type: "checkbox" });
+    cb.dataset.type = t;
+    return h("label", { class: "ner-col-row" }, cb, ` ${t} (${byType[t]})`);
+  });
+
+  const femaleCbs = typeKeys.map((t) => {
+    const cb = h("input", { type: "checkbox" });
+    cb.checked = /\(female\)/i.test(t);
+    cb.dataset.type = t;
+    return h("label", { class: "ner-col-row" }, cb, ` ${t} (${byType[t]})`);
+  });
+  const maleCbs = typeKeys.map((t) => {
+    const cb = h("input", { type: "checkbox" });
+    cb.checked = /\(male\)/i.test(t);
+    cb.dataset.type = t;
+    return h("label", { class: "ner-col-row" }, cb, ` ${t} (${byType[t]})`);
+  });
+  const extra = h("div", { class: "exp-extra" });
+  function renderExtra() {
+    extra.replaceChildren();
+    const fmt = fmtJson.checked ? "json" : fmtText.checked ? "text" : "names";
+    if (fmt === "names") {
+      extra.append(
+        h("div", { class: "modal-text" }, "Женские типы:"),
+        ...(femaleCbs.length
+          ? femaleCbs
+          : [h("div", { class: "card-hint" }, "нет типов")]),
+        h("div", { class: "modal-text" }, "Мужские типы:"),
+        ...(maleCbs.length
+          ? maleCbs
+          : [h("div", { class: "card-hint" }, "нет типов")]),
+      );
+    }
+  }
+  for (const [r] of fmtPairs) r.addEventListener("change", renderExtra);
+  const goBtn = h("button", { class: "btn btn-primary" }, "Экспорт");
+  goBtn.addEventListener("click", async () => {
+    err.textContent = "";
+    const fmt = fmtJson.checked ? "json" : fmtText.checked ? "text" : "names";
+    const q = new URLSearchParams({ project, format: fmt });
+    if (cntInp.value !== "") q.set("count_threshold", cntInp.value);
+    const sel = typeCbs.filter((cb) => cb.checked).map((cb) => cb.dataset.type);
+    if (sel.length) q.set("types", sel.join(","));
+    if (fmt === "names") {
+      const f = femaleCbs
+        .filter((cb) => cb.checked)
+        .map((cb) => cb.dataset.type);
+      const m = maleCbs.filter((cb) => cb.checked).map((cb) => cb.dataset.type);
+      if (f.length) q.set("female_types", f.join(","));
+      if (m.length) q.set("male_types", m.join(","));
+    }
+    try {
+      const r = await api(`/ner/export?${q}`);
+      downloadText(r.name, r.content);
+      toast(`Экспортировано записей: ${r.total}`);
+      close();
+    } catch (ex) {
+      err.textContent = ex.message;
+    }
+  });
+  const cancelBtn = h("button", { class: "btn btn-ghost" }, "Отмена");
+  const modal = h(
+    "div",
+    { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
+    h(
+      "div",
+      { class: "modal" },
+      h("div", { class: "modal-title" }, "Экспорт глоссария для анализа"),
+      h("div", { class: "modal-text" }, "Формат файла:"),
+      ...fmtPairs.map(([r, label]) =>
+        h("label", { class: "ner-col-row" }, r, ` ${label}`),
+      ),
+      h(
+        "div",
+        { class: "exp-rows" },
+        h("label", { class: "ner-col-row" }, "Порог count (мин.):", cntInp),
+      ),
+      typeCbs.length
+        ? h(
+            "div",
+            { class: "exp-rows" },
+            h("div", { class: "modal-text" }, "Типы (пусто = все):"),
+            ...typeCbs,
+          )
+        : null,
+      extra,
+      err,
+      h("div", { class: "modal-actions" }, cancelBtn, goBtn),
+    ),
+  );
+  renderExtra();
+  document.body.append(modal);
+  function close() {
+    modal.remove();
+  }
+  cancelBtn.addEventListener("click", close);
 }

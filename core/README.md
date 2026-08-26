@@ -18,13 +18,13 @@ ner_check: filter_ner_items / format_ner_record / glossary_body /
   parse_ner_patches (JSON-патчи LLM {term,field,old,new,reason},
   field ∈ translation|type|notes) /
   review_entry / parse_review_doc / merge_review_entries (review-файл:
-  этап/статус принять|отклонить/применено, накопление по этапам,
-  дедуп по term+field+old+new) /
-  apply_ner_patches (статусы + применено, дубли термина по совпавшему
+  поля английские: stage/status принять|отклонить/applied/old/new,
+  накопление по этапам, дедуп по term+field+old+new) /
+  apply_ner_patches (status + applied, дубли термина по совпавшему
   old, сверка old по NFC)
 translate_check_llm: fix_entry (ошибка LLM {chapter,fragment,corrected,type,reason}
-  → запись review: глава/файл/old/new/тип/причина/статус/применено, NFC) /
-  merge_fix_entries (накопление без затирания, дедуп по глава+old+new) /
+  → запись review: stage/chapter/file/type/old/new/reason/status/applied, NFC) /
+  merge_fix_entries (накопление без затирания, дедуп по chapter+old+new) /
   apply_fix_to_text (одна замена фрагмента, NFC, первое вхождение)
 LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) → (text, err);
   ретраи ТОЛЬКО 408/425/429/5xx + Retry-After/backoff+jitter (H3)

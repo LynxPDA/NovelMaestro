@@ -67,8 +67,10 @@ const EDITOR_HIGHLIGHT = (() => {
     { tag: t.strong, fontWeight: "bold" },
     { tag: t.strikethrough, textDecoration: "line-through" },
     { tag: t.keyword, color: extra.keyword },
-    { tag: [t.atom, t.bool, t.url, t.contentSeparator, t.labelName],
-      color: extra.atom },
+    {
+      tag: [t.atom, t.bool, t.url, t.contentSeparator, t.labelName],
+      color: extra.atom,
+    },
     { tag: [t.literal, t.inserted], color: extra.string },
     { tag: [t.string, t.deleted], color: extra.string },
     { tag: [t.regexp, t.escape, t.special(t.string)], color: extra.string },
@@ -82,16 +84,30 @@ const EDITOR_HIGHLIGHT = (() => {
     { tag: t.invalid, color: extra.invalid },
   ];
   return {
-    dark: HS.define(base({
-      meta: "#8b949e", comment: "#8b949e", text: "#e6edf3",
-      keyword: "#ff7b72", atom: "#79c0ff", string: "#a5d6a7",
-      type: "#ffa657", invalid: "#f85149",
-    })),
-    light: HS.define(base({
-      meta: "#6e7781", comment: "#6e7781", text: "#1f2328",
-      keyword: "#cf222e", atom: "#0550ae", string: "#0a3069",
-      type: "#953800", invalid: "#cf222e",
-    })),
+    dark: HS.define(
+      base({
+        meta: "#8b949e",
+        comment: "#8b949e",
+        text: "#e6edf3",
+        keyword: "#ff7b72",
+        atom: "#79c0ff",
+        string: "#a5d6a7",
+        type: "#ffa657",
+        invalid: "#f85149",
+      }),
+    ),
+    light: HS.define(
+      base({
+        meta: "#6e7781",
+        comment: "#6e7781",
+        text: "#1f2328",
+        keyword: "#cf222e",
+        atom: "#0550ae",
+        string: "#0a3069",
+        type: "#953800",
+        invalid: "#cf222e",
+      }),
+    ),
   };
 })();
 
@@ -103,7 +119,7 @@ function effectiveEditorTheme() {
 
 async function applyEditorSettings() {
   try {
-    const s = await api("/api/settings");
+    const s = await api("/settings");
     EDITOR_SETTINGS.ui = s.ui_theme === "light" ? "light" : "dark";
     EDITOR_SETTINGS.editor =
       s.editor_theme === "dark" || s.editor_theme === "light"
@@ -605,129 +621,7 @@ function manageProjectModal(section, name) {
 }
 
 /* Экспорт глоссария: модалка настроек + скачивание файла */
-function exportModal(byType, project) {
-  const err = h("div", { class: "form-error" });
-  const fmtJson = h("input", { type: "radio", name: "expfmt", value: "json" });
-  const fmtText = h("input", { type: "radio", name: "expfmt", value: "text" });
-  const fmtNames = h("input", {
-    type: "radio",
-    name: "expfmt",
-    value: "names",
-  });
-  fmtJson.checked = true;
-  const fmtPairs = [
-    [fmtJson, "JSON — полные записи"],
-    [fmtText, "Текст — записи (Термин, Тип, Перевод)"],
-    [fmtNames, "Текст — имена (женские/мужские)"],
-  ];
-  const cntInp = h("input", {
-    type: "number",
-    class: "input input-sm",
-    min: "0",
-    value: "0",
-  });
 
-  const typeKeys = Object.keys(byType);
-  const typeCbs = typeKeys.map((t) => {
-    const cb = h("input", { type: "checkbox" });
-    cb.dataset.type = t;
-    return h("label", { class: "ner-col-row" }, cb, ` ${t} (${byType[t]})`);
-  });
-
-  const femaleCbs = typeKeys.map((t) => {
-    const cb = h("input", { type: "checkbox" });
-    cb.checked = /\(female\)/i.test(t);
-    cb.dataset.type = t;
-    return h("label", { class: "ner-col-row" }, cb, ` ${t} (${byType[t]})`);
-  });
-  const maleCbs = typeKeys.map((t) => {
-    const cb = h("input", { type: "checkbox" });
-    cb.checked = /\(male\)/i.test(t);
-    cb.dataset.type = t;
-    return h("label", { class: "ner-col-row" }, cb, ` ${t} (${byType[t]})`);
-  });
-  const extra = h("div", { class: "exp-extra" });
-  function renderExtra() {
-    extra.replaceChildren();
-    const fmt = fmtJson.checked ? "json" : fmtText.checked ? "text" : "names";
-    if (fmt === "names") {
-      extra.append(
-        h("div", { class: "modal-text" }, "Женские типы:"),
-        ...(femaleCbs.length
-          ? femaleCbs
-          : [h("div", { class: "card-hint" }, "нет типов")]),
-        h("div", { class: "modal-text" }, "Мужские типы:"),
-        ...(maleCbs.length
-          ? maleCbs
-          : [h("div", { class: "card-hint" }, "нет типов")]),
-      );
-    }
-  }
-  for (const [r] of fmtPairs) r.addEventListener("change", renderExtra);
-  const goBtn = h("button", { class: "btn btn-primary" }, "Экспорт");
-  goBtn.addEventListener("click", async () => {
-    err.textContent = "";
-    const fmt = fmtJson.checked ? "json" : fmtText.checked ? "text" : "names";
-    const q = new URLSearchParams({ project, format: fmt });
-    if (cntInp.value !== "") q.set("count_threshold", cntInp.value);
-    const sel = typeCbs.filter((cb) => cb.checked).map((cb) => cb.dataset.type);
-    if (sel.length) q.set("types", sel.join(","));
-    if (fmt === "names") {
-      const f = femaleCbs
-        .filter((cb) => cb.checked)
-        .map((cb) => cb.dataset.type);
-      const m = maleCbs.filter((cb) => cb.checked).map((cb) => cb.dataset.type);
-      if (f.length) q.set("female_types", f.join(","));
-      if (m.length) q.set("male_types", m.join(","));
-    }
-    try {
-      const r = await api(`/ner/export?${q}`);
-      downloadText(r.name, r.content);
-      toast(`Экспортировано записей: ${r.total}`);
-      close();
-    } catch (ex) {
-      err.textContent = ex.message;
-    }
-  });
-  const cancelBtn = h("button", { class: "btn btn-ghost" }, "Отмена");
-  const modal = h(
-    "div",
-    { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-    h(
-      "div",
-      { class: "modal" },
-      h("div", { class: "modal-title" }, "Экспорт глоссария для анализа"),
-      h("div", { class: "modal-text" }, "Формат файла:"),
-      ...fmtPairs.map(([r, label]) =>
-        h("label", { class: "ner-col-row" }, r, ` ${label}`),
-      ),
-      h(
-        "div",
-        { class: "exp-rows" },
-        h("label", { class: "ner-col-row" }, "Порог count (мин.):", cntInp),
-      ),
-      typeCbs.length
-        ? h(
-            "div",
-            { class: "exp-rows" },
-            h("div", { class: "modal-text" }, "Типы (пусто = все):"),
-            ...typeCbs,
-          )
-        : null,
-      extra,
-      err,
-      h("div", { class: "modal-actions" }, cancelBtn, goBtn),
-    ),
-  );
-  renderExtra();
-  document.body.append(modal);
-  function close() {
-    modal.remove();
-  }
-  cancelBtn.addEventListener("click", close);
-}
-
-/* ── hub: разделы и проекты (M2) ──────────────────────────── */
 function sectionBlock(section, projects, sectionActive, statsMap) {
   const cards = projects.map((name) => {
     const stats = h("div", {
@@ -1279,7 +1173,7 @@ async function viewDashboard() {
           class: "btn btn-sm btn-ghost dash-refresh",
           onclick: async () => {
             try {
-              await api("/api/jobs", { method: "DELETE" });
+              await api("/jobs", { method: "DELETE" });
               toast("История запусков очищена");
               render();
             } catch (ex) {
@@ -1437,6 +1331,7 @@ async function viewHub() {
 }
 
 /* ── файловый менеджер (M3) ─────────────────────────────── */
+
 function fmtSize(n) {
   if (n >= 1048576) return (n / 1048576).toFixed(1) + " МБ";
   if (n >= 1024) return (n / 1024).toFixed(1) + " КБ";

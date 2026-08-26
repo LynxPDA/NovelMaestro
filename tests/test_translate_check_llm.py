@@ -30,17 +30,17 @@ def test_fix_entry_normalizes_and_defaults():
                      "corrected": " стало ", "type": "typo"},
                     stage="Главы 1–12 (polished)")
     assert e is not None
-    assert e["глава"] == 12
-    assert e["этап"] == "Главы 1–12 (polished)"
+    assert e["chapter"] == 12
+    assert e["stage"] == "Главы 1–12 (polished)"
     assert e["old"] == "было" and e["new"] == "стало"
-    assert e["тип"] == "typo" and e["статус"] == "принять"
-    assert e["применено"] is False
+    assert e["type"] == "typo" and e["status"] == "принять"
+    assert e["applied"] is False
 
 
 def test_fix_entry_bad_type_cleared_and_invalid_rejected():
     e = C.fix_entry({"chapter": 1, "fragment": "длинный фрагмент",
                      "corrected": "другой фрагмент", "type": "бред"})
-    assert e is not None and e["тип"] == ""
+    assert e is not None and e["type"] == ""
     assert C.fix_entry({"chapter": "x", "fragment": "а",
                         "corrected": "б"}) is None
     assert C.fix_entry({"chapter": 1, "fragment": "одно и то же",
@@ -52,24 +52,24 @@ def test_fix_entry_bad_type_cleared_and_invalid_rejected():
 def test_fix_entry_nfc_and_status():
     frag = "унификация"
     e = C.fix_entry({"chapter": 2, "fragment": frag,
-                     "corrected": "новое", "статус": C.REVIEW_REJECT})
+                     "corrected": "новое", "status": C.REVIEW_REJECT})
     assert e is not None
     assert e["old"] == unicodedata.normalize("NFC", frag)
-    assert e["статус"] == C.REVIEW_REJECT
+    assert e["status"] == C.REVIEW_REJECT
 
 
 def test_merge_fix_entries_dedup_and_keep_status():
     base = [C.fix_entry({"chapter": 1, "fragment": "старый текст",
                          "corrected": "новый"})]
     assert base[0] is not None
-    base[0]["статус"] = C.REVIEW_REJECT
-    base[0]["применено"] = True
+    base[0]["status"] = C.REVIEW_REJECT
+    base[0]["applied"] = True
     same = C.fix_entry({"chapter": 1, "fragment": "старый текст",
                         "corrected": "новый"})
     merged, added = C.merge_fix_entries(base, [same], SilentLog())
     assert merged[0] is not None
-    assert added == 0 and merged[0]["статус"] == C.REVIEW_REJECT
-    assert merged[0]["применено"] is True
+    assert added == 0 and merged[0]["status"] == C.REVIEW_REJECT
+    assert merged[0]["applied"] is True
     another = [C.fix_entry({"chapter": 1, "fragment": "старый текст",
                             "corrected": "иначе"})]
     merged2, added2 = C.merge_fix_entries(merged, another, SilentLog())
@@ -198,23 +198,23 @@ def test_load_review_file_legacy_and_doc(tmp_path):
                             ensure_ascii=False), encoding="utf-8")
     meta, entries = FE.load_review_file(str(p), SilentLog())
     assert meta is None and len(entries) == 1
-    assert entries[0]["статус"] == C.REVIEW_ACCEPT
+    assert entries[0]["status"] == C.REVIEW_ACCEPT
     # полный документ: статусы, применено и неизвестные записи
-    doc = {"создан": "x", "правки": [
-        {"этап": "Главы 1–1 (polished)", "глава": 1, "файл": "a.txt",
-         "old": "а было", "new": "а стало", "тип": "typo",
-         "причина": "", "статус": C.REVIEW_REJECT, "применено": False},
+    doc = {"created": "x", "entries": [
+        {"stage": "Главы 1–1 (polished)", "chapter": 1, "file": "a.txt",
+         "old": "а было", "new": "а стало", "type": "typo",
+         "reason": "", "status": C.REVIEW_REJECT, "applied": False},
         {"old": None},  # битая запись — отсев
-        {"глава": 2, "old": "б было", "new": "б стало",
-         "статус": C.REVIEW_ACCEPT, "применено": True,
-         "дата применения": "2026-01-01 00:00"},
+        {"chapter": 2, "old": "б было", "new": "б стало",
+         "status": C.REVIEW_ACCEPT, "applied": True,
+         "applied_at": "2026-01-01 00:00"},
     ]}
     p2 = tmp_path / "rev2.json"
     p2.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     _, e2 = FE.load_review_file(str(p2), SilentLog())
     assert len(e2) == 2
-    assert e2[0]["статус"] == C.REVIEW_REJECT
-    assert e2[1]["применено"] is True and e2[1]["дата применения"]
+    assert e2[0]["status"] == C.REVIEW_REJECT
+    assert e2[1]["applied"] is True and e2[1]["applied_at"]
     assert FE.load_review_file(str(tmp_path / "нет.json"),
                                SilentLog()) == (None, [])
     bad = tmp_path / "bad.json"
@@ -225,20 +225,20 @@ def test_load_review_file_legacy_and_doc(tmp_path):
 def test_apply_fix_entries_statuses_backup_and_dry_run(tmp_path):
     ch_dir, cmap = _mk_chapters(tmp_path, {1: "первый текст главы один."})
     entries = [
-        {"этап": "s", "глава": 1, "файл": str(Path(ch_dir) /
+        {"stage": "s", "chapter": 1, "file": str(Path(ch_dir) /
          "00000_1_t" / "polished.txt"), "old": "первый текст",
-         "new": "правленый текст", "тип": "typo", "причина": "",
-         "статус": C.REVIEW_ACCEPT, "применено": False},
-        {"этап": "s", "глава": 1, "файл": "", "old": "главы один",
-         "new": "главы два", "тип": "typo", "причина": "",
-         "статус": C.REVIEW_REJECT, "применено": False},
+         "new": "правленый текст", "type": "typo", "reason": "",
+         "status": C.REVIEW_ACCEPT, "applied": False},
+        {"stage": "s", "chapter": 1, "file": "", "old": "главы один",
+         "new": "главы два", "type": "typo", "reason": "",
+         "status": C.REVIEW_REJECT, "applied": False},
     ]
     applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
                                             SilentLog(), dry_run=True)
     assert (len(applied), skipped) == (1, 1)
     fp = Path(ch_dir) / "00000_1_t" / "polished.txt"
     assert fp.read_text(encoding="utf-8") == "первый текст главы один."
-    assert not entries[0]["применено"]  # dry-run флаги не ставит
+    assert not entries[0]["applied"]  # dry-run флаги не ставит
     assert not (fp.parent / "polished.txt.bak").exists()
 
     applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
@@ -246,7 +246,7 @@ def test_apply_fix_entries_statuses_backup_and_dry_run(tmp_path):
     assert (len(applied), skipped) == (1, 1)
     assert "правленый текст" in fp.read_text(encoding="utf-8")
     assert (fp.parent / "polished.txt.bak").exists()
-    assert entries[0]["применено"] and entries[0]["дата применения"]
+    assert entries[0]["applied"] and entries[0]["applied_at"]
 
 
 def test_apply_fix_entries_no_bak(tmp_path):
@@ -254,9 +254,9 @@ def test_apply_fix_entries_no_bak(tmp_path):
     ch_dir, cmap = _mk_chapters(tmp_path, {1: "первый текст главы один."})
     fp = Path(ch_dir) / "00000_1_t" / "polished.txt"
     entries = [
-        {"этап": "s", "глава": 1, "файл": str(fp), "old": "первый текст",
-         "new": "правленый текст", "тип": "typo", "причина": "",
-         "статус": C.REVIEW_ACCEPT, "применено": False},
+        {"stage": "s", "chapter": 1, "file": str(fp), "old": "первый текст",
+         "new": "правленый текст", "type": "typo", "reason": "",
+         "status": C.REVIEW_ACCEPT, "applied": False},
     ]
     applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
                                             SilentLog(), no_bak=True)
@@ -269,9 +269,9 @@ def test_apply_fix_entries_sequential_same_file(tmp_path):
     ch_dir, cmap = _mk_chapters(
         tmp_path, {1: "альфа и омега в одной строке текста."})
     fp = str(Path(ch_dir) / "00000_1_t" / "polished.txt")
-    mk = lambda o, n: {"этап": "s", "глава": 1, "файл": fp, "old": o,
-                       "new": n, "тип": "", "причина": "",
-                       "статус": C.REVIEW_ACCEPT, "применено": False}
+    mk = lambda o, n: {"stage": "s", "chapter": 1, "file": fp, "old": o,
+                       "new": n, "type": "", "reason": "",
+                       "status": C.REVIEW_ACCEPT, "applied": False}
     # вторая правка цепляется за результат первой
     entries = [mk("альфа", "бета"), mk("бета и омега", "бета и сигма")]
     applied, _ = FE.apply_fix_entries(entries, "polished", cmap,
@@ -307,11 +307,11 @@ def test_main_check_writes_review_and_params(tmp_path, monkeypatch):
                   "--type", "polished", "--review", review])
     assert rc == 0
     doc = json.loads(Path(review).read_text(encoding="utf-8"))
-    assert len(doc["правки"]) == 1
-    e = doc["правки"][0]
-    assert e["old"] == "ошибкой здесь" and e["статус"] == "принять"
-    assert e["файл"].endswith("polished.txt")
-    params = doc["параметры"]
+    assert len(doc["entries"]) == 1
+    e = doc["entries"][0]
+    assert e["old"] == "ошибкой здесь" and e["status"] == "принять"
+    assert e["file"].endswith("polished.txt")
+    params = doc["params"]
     assert params["тип файлов"] == "polished" and params["потоки"] == 4
     # повторный прогон: дубль не добавляется
     rc = FE.main(["--host", "http://x", "--api_key", "k", "--model", "m",
@@ -319,7 +319,7 @@ def test_main_check_writes_review_and_params(tmp_path, monkeypatch):
                   "--review", review])
     assert rc == 0
     doc2 = json.loads(Path(review).read_text(encoding="utf-8"))
-    assert len(doc2["правки"]) == 1 and doc2["параметры"] == params
+    assert len(doc2["entries"]) == 1 and doc2["params"] == params
 
 
 def test_main_apply_statuses_backup_and_log(tmp_path, monkeypatch):
@@ -328,13 +328,13 @@ def test_main_apply_statuses_backup_and_log(tmp_path, monkeypatch):
     fp = str(Path(ch_dir) / "00000_1_t" / "polished.txt")
     review = str(tmp_path / "rev.json")
     Path(review).write_text(json.dumps({
-        "создан": "x", "правки": [
-            {"этап": "s", "глава": 1, "файл": fp, "old": "первый текст",
-             "new": "правленый текст", "тип": "typo", "причина": "р",
-             "статус": C.REVIEW_ACCEPT, "применено": False},
-            {"этап": "s", "глава": 1, "файл": fp, "old": "главы один",
-             "new": "главы два", "тип": "typo", "причина": "",
-             "статус": C.REVIEW_REJECT, "применено": False},
+        "created": "x", "entries": [
+            {"stage": "s", "chapter": 1, "file": fp, "old": "первый текст",
+             "new": "правленый текст", "type": "typo", "reason": "р",
+             "status": C.REVIEW_ACCEPT, "applied": False},
+            {"stage": "s", "chapter": 1, "file": fp, "old": "главы один",
+             "new": "главы два", "type": "typo", "reason": "",
+             "status": C.REVIEW_REJECT, "applied": False},
         ]}, ensure_ascii=False), encoding="utf-8")
     # dry-run: ничего не меняем
     rc = FE.main(["--apply", "--dry-run", "--review", review,
@@ -349,8 +349,8 @@ def test_main_apply_statuses_backup_and_log(tmp_path, monkeypatch):
     assert "правленый текст" in text and "главы один" in text  # reject жив
     assert (Path(fp).parent / "polished.txt.bak").exists()
     doc = json.loads(Path(review).read_text(encoding="utf-8"))
-    assert doc["правки"][0]["применено"] is True
-    assert doc["правки"][1]["применено"] is False
+    assert doc["entries"][0]["applied"] is True
+    assert doc["entries"][1]["applied"] is False
     # отчёт changes.md не создаётся — web-интерфейс достаточно
     assert not Path("translate_check_llm_changes.md").exists()
 
@@ -369,7 +369,7 @@ def test_main_apply_legacy_array(tmp_path, monkeypatch):
     assert rc == 0
     assert "новый текст" in fp.read_text(encoding="utf-8")
     doc = json.loads(Path(review).read_text(encoding="utf-8"))
-    assert isinstance(doc, dict) and doc["правки"][0]["применено"] is True
+    assert isinstance(doc, dict) and doc["entries"][0]["applied"] is True
 
 
 def test_main_apply_nothing_and_missing(tmp_path, monkeypatch):
@@ -378,7 +378,7 @@ def test_main_apply_nothing_and_missing(tmp_path, monkeypatch):
         FE.main(["--apply", "--review", "нет.json"])
     ch_dir, _ = _mk_chapters(tmp_path, {1: "текст."})
     review = str(tmp_path / "rev.json")
-    Path(review).write_text(json.dumps({"правки": []}), encoding="utf-8")
+    Path(review).write_text(json.dumps({"entries": []}), encoding="utf-8")
     rc = FE.main(["--apply", "--review", review, "--chapters_dir", ch_dir])
     assert rc == 0
 
@@ -399,7 +399,7 @@ def test_main_auto_apply_and_fail_fast(tmp_path, monkeypatch):
     assert "правкой здесь" in fp.read_text(encoding="utf-8")
     assert (fp.parent / "polished.txt.bak").exists()
     doc = json.loads(Path(review).read_text(encoding="utf-8"))
-    assert doc["правки"][0]["применено"] is True
+    assert doc["entries"][0]["applied"] is True
     # авто-режим + dry-run: файлы не меняются
     _mk_chapters(tmp_path / "d2", {1: "другой текст с ошибкой тут."})
     _answer_one(monkeypatch, json.dumps([
@@ -439,7 +439,7 @@ def test_main_check_no_errors(tmp_path, monkeypatch):
                   "--review", review])
     assert rc == 0
     doc = json.loads(Path(review).read_text(encoding="utf-8"))
-    assert doc["правки"] == []
+    assert doc["entries"] == []
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -448,11 +448,11 @@ def test_main_check_no_errors(tmp_path, monkeypatch):
 
 def _write_review_meta(tmp_path, applied=False):
     (tmp_path / "translate_check_llm_review.json").write_text(json.dumps({
-        "создан": "x",
-        "параметры": {"тип файлов": "polished", "начало": 3, "конец": 9},
-        "правки": [{"этап": "Главы 3–9 (polished)", "глава": 3,
-                    "файл": "", "old": "старый фрагмент",
-                    "new": "новый фрагмент", "тип": "typo",
-                    "причина": "", "статус": "принять",
-                    "применено": applied}]},
+        "created": "x",
+        "params": {"тип файлов": "polished", "начало": 3, "конец": 9},
+        "entries": [{"stage": "Главы 3–9 (polished)", "chapter": 3,
+                    "file": "", "old": "старый фрагмент",
+                    "new": "новый фрагмент", "type": "typo",
+                    "reason": "", "status": "принять",
+                    "applied": applied}]},
         ensure_ascii=False), encoding="utf-8")

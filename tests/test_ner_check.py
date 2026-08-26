@@ -86,8 +86,8 @@ def test_review_entry():
     # legacy-патч → запись со статусом по умолчанию
     e = review_entry({"term": "A", "field": "translation", "old": "а",
                       "new": "б", "reason": "r"}, stage="Весь глоссарий")
-    assert e["этап"] == "Весь глоссарий" and e["статус"] == "принять"
-    assert e["применено"] is False and e["причина"] == "r"
+    assert e["stage"] == "Весь глоссарий" and e["status"] == "принять"
+    assert e["applied"] is False and e["reason"] == "r"
     # некорректные записи отсеиваются
     assert review_entry({"term": "A", "field": "context",
                          "old": "", "new": ""}) is None
@@ -95,21 +95,21 @@ def test_review_entry():
     assert review_entry(5) is None
     # полная запись: регистр/пробелы статуса, field в lower
     e2 = review_entry({"term": "A", "field": "Type", "old": "x", "new": "y",
-                       "статус": " Отклонить ", "этап": "Тип: Skill"})
-    assert e2["field"] == "type" and e2["статус"] == "отклонить"
-    assert e2["этап"] == "Тип: Skill"
+                       "status": " Отклонить ", "stage": "Тип: Skill"})
+    assert e2["field"] == "type" and e2["status"] == "отклонить"
+    assert e2["stage"] == "Тип: Skill"
     # неизвестный статус → принять
     e3 = review_entry({"term": "A", "field": "notes", "old": "x",
-                       "new": "y", "статус": "непонятно"})
-    assert e3["статус"] == "принять"
+                       "new": "y", "status": "непонятно"})
+    assert e3["status"] == "принять"
 
 
 def test_parse_review_doc_and_merge():
-    doc = {"создан": "…", "правки": [
+    doc = {"created": "…", "entries": [
         {"term": "A", "field": "translation", "old": "а", "new": "б",
-         "статус": "отклонить"}]}
+         "status": "отклонить"}]}
     entries = parse_review_doc(doc)
-    assert len(entries) == 1 and entries[0]["статус"] == "отклонить"
+    assert len(entries) == 1 and entries[0]["status"] == "отклонить"
     # legacy-массив тоже понимается
     assert parse_review_doc([{"term": "A", "field": "translation",
                               "old": "а", "new": "б"}])
@@ -123,8 +123,8 @@ def test_parse_review_doc_and_merge():
                            "old": "x", "new": "y"}, stage="Тип: Skill")]
     merged, added = merge_review_entries(entries, fresh)
     assert added == 1 and len(merged) == 2
-    assert merged[0]["статус"] == "отклонить"
-    assert merged[0]["этап"] == ""          # первый этап не перезаписан
+    assert merged[0]["status"] == "отклонить"
+    assert merged[0]["stage"] == ""          # первый этап не перезаписан
 
 
 def test_apply_ner_patches():
@@ -154,18 +154,18 @@ def test_apply_ner_patches_statuses_and_duplicates():
         {"term": "玄", "type": "Skill", "translation": "тайна"},
     ]
     entries = [
-        {"этап": "e", "term": "玄", "field": "translation", "old": "мрак",
-         "new": "тьма", "причина": "", "статус": "принять",
-         "применено": False},
-        {"этап": "e", "term": "玄", "field": "translation", "old": "тайна",
-         "new": "тьма", "причина": "", "статус": "принять",
-         "применено": False},
-        {"этап": "e", "term": "玄", "field": "notes", "old": "",
-         "new": "x", "причина": "", "статус": "отклонить",
-         "применено": False},                     # отклонено человеком
-        {"этап": "e", "term": "玄", "field": "type", "old": "Skill",
-         "new": "X", "причина": "", "статус": "принять",
-         "применено": True},                      # уже применено
+        {"stage": "e", "term": "玄", "field": "translation", "old": "мрак",
+         "new": "тьма", "reason": "", "status": "принять",
+         "applied": False},
+        {"stage": "e", "term": "玄", "field": "translation", "old": "тайна",
+         "new": "тьма", "reason": "", "status": "принять",
+         "applied": False},
+        {"stage": "e", "term": "玄", "field": "notes", "old": "",
+         "new": "x", "reason": "", "status": "отклонить",
+         "applied": False},                     # отклонено человеком
+        {"stage": "e", "term": "玄", "field": "type", "old": "Skill",
+         "new": "X", "reason": "", "status": "принять",
+         "applied": True},                      # уже применено
     ]
     applied, skipped = apply_ner_patches(items, entries)
     assert len(applied) == 2 and skipped == 2
@@ -173,9 +173,9 @@ def test_apply_ner_patches_statuses_and_duplicates():
     assert items[1]["translation"] == "тьма"
     assert "notes" not in items[0]               # отклонённое не тронуто
     assert items[0]["type"] == "Skill"           # применённое не тронуто
-    assert entries[0]["применено"] is True
-    assert "дата применения" in entries[0]
-    assert entries[2]["применено"] is False
+    assert entries[0]["applied"] is True
+    assert "applied_at" in entries[0]
+    assert entries[2]["applied"] is False
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -217,12 +217,12 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     # правки — в накопительном ner_review.json (дедуп между проходами)
     doc = json.loads((tmp_path / "ner_review.json")
                      .read_text(encoding="utf-8"))
-    assert len(doc["правки"]) == 1
-    e = doc["правки"][0]
-    assert e["этап"] == "Весь глоссарий"
-    assert e["статус"] == "принять" and e["применено"] is False
+    assert len(doc["entries"]) == 1
+    e = doc["entries"][0]
+    assert e["stage"] == "Весь глоссарий"
+    assert e["status"] == "принять" and e["applied"] is False
     assert not (tmp_path / "ner_patches.json").exists()
-    params = doc["параметры"]
+    params = doc["params"]
     assert params["бюджет батча"] == 196608
     assert params["исключения notes"] == ""
     report = (tmp_path / "ner_report.md").read_text(encoding="utf-8")
@@ -260,7 +260,7 @@ def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
     # человек отклонил правку
     doc = json.loads((tmp_path / "ner_review.json")
                      .read_text(encoding="utf-8"))
-    doc["правки"][0]["статус"] = "отклонить"
+    doc["entries"][0]["status"] = "отклонить"
     (tmp_path / "ner_review.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
 
@@ -272,29 +272,29 @@ def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
     assert rc == 0
     doc = json.loads((tmp_path / "ner_review.json")
                      .read_text(encoding="utf-8"))
-    entries = doc["правки"]
+    entries = doc["entries"]
     assert len(entries) == 2
-    assert entries[0]["статус"] == "отклонить"       # решение человека
-    assert entries[0]["этап"] == "Весь глоссарий"    # этап не перезаписан
-    assert entries[1]["этап"] == "Тип: Skill"
-    assert entries[1]["статус"] == "принять"
+    assert entries[0]["status"] == "отклонить"       # решение человека
+    assert entries[0]["stage"] == "Весь глоссарий"    # этап не перезаписан
+    assert entries[1]["stage"] == "Тип: Skill"
+    assert entries[1]["status"] == "принять"
 
 
 def test_ner_check_apply_dry_run_and_real(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
-    doc = {"создан": "t", "вход": "ner.json",
-           "параметры": {"бюджет батча": 12345},
-           "правки": [
-        {"этап": "Весь глоссарий", "term": "林凡", "field": "translation",
-         "old": "Линь Фан", "new": "Лин Фань", "причина": "r",
-         "статус": "принять", "применено": False},
-        {"этап": "Тип: Skill", "term": "林凡", "field": "notes",
-         "old": "nope", "new": "x", "причина": "r",
-         "статус": "принять", "применено": False},   # old не совпал
-        {"этап": "Тип: Skill", "term": "火球术", "field": "translation",
-         "old": "Огненный шар", "new": "не должно", "причина": "r",
-         "статус": "отклонить", "применено": False},  # отклонено человеком
+    doc = {"created": "t", "input": "ner.json",
+           "params": {"бюджет батча": 12345},
+           "entries": [
+        {"stage": "Весь глоссарий", "term": "林凡", "field": "translation",
+         "old": "Линь Фан", "new": "Лин Фань", "reason": "r",
+         "status": "принять", "applied": False},
+        {"stage": "Тип: Skill", "term": "林凡", "field": "notes",
+         "old": "nope", "new": "x", "reason": "r",
+         "status": "принять", "applied": False},   # old не совпал
+        {"stage": "Тип: Skill", "term": "火球术", "field": "translation",
+         "old": "Огненный шар", "new": "не должно", "reason": "r",
+         "status": "отклонить", "applied": False},  # отклонено человеком
     ]}
     (tmp_path / "ner_review.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
@@ -317,11 +317,11 @@ def test_ner_check_apply_dry_run_and_real(tmp_path, monkeypatch):
     # флаги «применено» сохранены в файл правок
     doc2 = json.loads((tmp_path / "ner_review.json")
                       .read_text(encoding="utf-8"))
-    assert doc2["правки"][0]["применено"] is True
-    assert "дата применения" in doc2["правки"][0]
-    assert doc2["правки"][1]["применено"] is False
+    assert doc2["entries"][0]["applied"] is True
+    assert "applied_at" in doc2["entries"][0]
+    assert doc2["entries"][1]["applied"] is False
     # параметры прошлого прогона пережили применение
-    assert doc2["параметры"] == {"бюджет батча": 12345}
+    assert doc2["params"] == {"бюджет батча": 12345}
     # повторный apply: всё уже применено — нер.json не трогается
     rc = NC.main(["--apply", "--input", "ner.json"])
     assert rc == 0
@@ -331,10 +331,10 @@ def test_ner_check_apply_no_bak(tmp_path, monkeypatch):
     """--no-bak: ner.json обновляется, .bak не создаётся."""
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
-    doc = {"создан": "t", "вход": "ner.json", "правки": [
-        {"этап": "Весь глоссарий", "term": "林凡", "field": "translation",
-         "old": "Линь Фан", "new": "Лин Фань", "причина": "r",
-         "статус": "принять", "применено": False},
+    doc = {"created": "t", "input": "ner.json", "entries": [
+        {"stage": "Весь глоссарий", "term": "林凡", "field": "translation",
+         "old": "Линь Фан", "new": "Лин Фань", "reason": "r",
+         "status": "принять", "applied": False},
     ]}
     (tmp_path / "ner_review.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
@@ -344,10 +344,10 @@ def test_ner_check_apply_no_bak(tmp_path, monkeypatch):
     assert data[0]["translation"] == "Лин Фань"
     assert not (tmp_path / "ner.json.bak").exists()
     # без --no-bak бэкап создаётся (по умолчанию): новая правка
-    doc2 = {"создан": "t", "вход": "ner.json", "правки": [
-        {"этап": "Весь глоссарий", "term": "青云宗", "field": "translation",
-         "old": "Секта Цинъюнь", "new": "Секта Цинъюнь (гл.)", "причина": "r",
-         "статус": "принять", "применено": False},
+    doc2 = {"created": "t", "input": "ner.json", "entries": [
+        {"stage": "Весь глоссарий", "term": "青云宗", "field": "translation",
+         "old": "Секта Цинъюнь", "new": "Секта Цинъюнь (гл.)", "reason": "r",
+         "status": "принять", "applied": False},
     ]}
     (tmp_path / "ner_review.json").write_text(
         json.dumps(doc2, ensure_ascii=False), encoding="utf-8")
@@ -389,7 +389,7 @@ def test_ner_check_auto_apply_whole(tmp_path, monkeypatch):
     assert (tmp_path / "ner.json.bak").exists()
     doc = json.loads((tmp_path / "ner_review.json")
                      .read_text(encoding="utf-8"))
-    assert doc["правки"][0]["применено"] is True
+    assert doc["entries"][0]["applied"] is True
     changes = (tmp_path / "ner_changes.md").read_text(encoding="utf-8")
     assert "Лин Фань" in changes and "Весь глоссарий" in changes
 
@@ -451,7 +451,7 @@ def test_ner_check_llm_error_does_not_crash(tmp_path, monkeypatch):
     assert rc == 0
     doc = json.loads((tmp_path / "ner_review.json")
                      .read_text(encoding="utf-8"))
-    assert doc["правки"] == []
+    assert doc["entries"] == []
     report = (tmp_path / "ner_report.md").read_text(encoding="utf-8")
     assert "Ошибка LLM" in report
 

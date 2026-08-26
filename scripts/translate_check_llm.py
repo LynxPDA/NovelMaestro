@@ -627,21 +627,21 @@ def load_review_file(path, logger):
     if isinstance(raw, list):
         entries = [x for x in (fix_entry(e) for e in raw) if x]
         return None, entries
-    if isinstance(raw, dict) and isinstance(raw.get("правки"), list):
+    if isinstance(raw, dict) and isinstance(raw.get("entries"), list):
         entries = []
-        for e in raw["правки"]:
+        for e in raw["entries"]:
             if not isinstance(e, dict):
                 continue
-            rec = {"chapter": e.get("глава"), "fragment": e.get("old"),
-                   "corrected": e.get("new"), "type": e.get("тип"),
-                   "reason": e.get("причина"),
-                   "статус": e.get("статус", REVIEW_ACCEPT),
-                   "применено": e.get("применено", False),
-                   "файл": e.get("файл", "")}
-            norm = fix_entry(rec, stage=e.get("этап", ""))
+            rec = {"chapter": e.get("chapter"), "fragment": e.get("old"),
+                   "corrected": e.get("new"), "type": e.get("type"),
+                   "reason": e.get("reason"),
+                   "status": e.get("status", REVIEW_ACCEPT),
+                   "applied": e.get("applied", False),
+                   "file": e.get("file", "")}
+            norm = fix_entry(rec, stage=e.get("stage", ""))
             if norm:
-                if e.get("дата применения"):
-                    norm["дата применения"] = e["дата применения"]
+                if e.get("applied_at"):
+                    norm["applied_at"] = e["applied_at"]
                 entries.append(norm)
         return raw, entries
     return None, None
@@ -651,14 +651,14 @@ def save_review_file(path, input_dir, created, entries, params=None,
                      meta=None):
     """Запись накопительного файла правок (сохраняет дату создания и
     параметры прогона: params из проверки, иначе — из meta файла)."""
-    doc = {"создан": created,
-           "обновлён": datetime.now().strftime("%Y-%m-%d %H:%M"),
-           "вход": input_dir,
-           "правки": entries}
+    doc = {"created": created,
+           "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+           "input": input_dir,
+           "entries": entries}
     saved_params = params if params is not None \
-        else (meta or {}).get("параметры")
+        else (meta or {}).get("params")
     if saved_params:
-        doc["параметры"] = saved_params
+        doc["params"] = saved_params
     atomic_write(path, json.dumps(doc, ensure_ascii=False, indent=2))
 
 
@@ -671,13 +671,13 @@ def errors_to_entries(errors, stage, file_type, chapter_map, logger):
         if not rec:
             skip += 1
             continue
-        ch = rec["глава"]
+        ch = rec["chapter"]
         if ch not in cache:
             cache[ch] = find_chapter_file(ch, file_type, chapter_map,
                                           logger)
         fp, _content = cache[ch]
         if fp:
-            rec["файл"] = fp
+            rec["file"] = fp
         entries.append(rec)
     if skip:
         logger.info(f"Некорректных записей отсеяно: {skip}")
@@ -690,10 +690,10 @@ def errors_to_entries(errors, stage, file_type, chapter_map, logger):
 
 def resolve_entry_path(entry, file_type, chapter_map, logger=None):
     """Путь файла правки: сохранённый «файл», иначе поиск по главе."""
-    fp = entry.get("файл") or ""
+    fp = entry.get("file") or ""
     if fp and os.path.isfile(fp):
         return fp
-    fp2, _content = find_chapter_file(entry.get("глава"), file_type,
+    fp2, _content = find_chapter_file(entry.get("chapter"), file_type,
                                       chapter_map, logger)
     return fp2
 
@@ -706,8 +706,8 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
     no_bak=True). Помечает записи in-place: применено=True +
     «дата применения». Возвращает (applied, skipped)."""
     pending = [e for e in entries
-               if e.get("статус", REVIEW_ACCEPT) == REVIEW_ACCEPT
-               and not e.get("применено")]
+               if e.get("status", REVIEW_ACCEPT) == REVIEW_ACCEPT
+               and not e.get("applied")]
     skipped = len(entries) - len(pending)
     by_file = defaultdict(list)
     for e in pending:
@@ -717,7 +717,7 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
                            f"правка пропущена.")
             skipped += 1
             continue
-        e["файл"] = fp
+        e["file"] = fp
         by_file[fp].append(e)
     applied = []
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -732,15 +732,15 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
         for e in group:
             nt, ok = apply_fix_to_text(cur, e["old"], e["new"])
             if not ok:
-                logger.info(f"  ⚠ Гл.{e['глава']}: фрагмент не найден — "
+                logger.info(f"  ⚠ Гл.{e['chapter']}: фрагмент не найден — "
                             f"пропуск.")
                 skipped += 1
                 continue
             cur, changed = nt, True
-            e["применено"] = True
-            e["дата применения"] = now
+            e["applied"] = True
+            e["applied_at"] = now
             applied.append(e)
-            logger.info(f"  ✔ Гл.{e['глава']} [{e.get('тип') or '?'}]: "
+            logger.info(f"  ✔ Гл.{e['chapter']} [{e.get('type') or '?'}]: "
                         f"«{e['old'][:60]}» → «{e['new'][:60]}»")
         if changed and not dry_run:
             if not no_bak:
@@ -748,8 +748,8 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
             atomic_write(fp, cur)
     if dry_run and applied:
         for e in applied:          # dry-run ничего не применяет
-            e["применено"] = False
-            e.pop("дата применения", None)
+            e["applied"] = False
+            e.pop("applied_at", None)
     return applied, skipped
 
 
@@ -873,9 +873,9 @@ def do_apply(args, logger) -> int:
     if entries is None:
         sys.exit(f"❌ {args.review}: не распознан список правок.")
     pending = sum(1 for e in entries
-                  if e["статус"] == REVIEW_ACCEPT and not e["применено"])
-    n_rej = sum(1 for e in entries if e["статус"] == REVIEW_REJECT)
-    n_done = sum(1 for e in entries if e["применено"])
+                  if e["status"] == REVIEW_ACCEPT and not e["applied"])
+    n_rej = sum(1 for e in entries if e["status"] == REVIEW_REJECT)
+    n_done = sum(1 for e in entries if e["applied"])
     logger.info(f"📋 {args.review}: к применению {pending}, "
                 f"отклонено {n_rej}, уже применено {n_done}.")
     ch_dir = os.path.abspath(args.chapters_dir)
@@ -898,7 +898,7 @@ def do_apply(args, logger) -> int:
                     "применены или список пуст).")
         return 0
     save_review_file(args.review, ch_dir,
-                     (meta or {}).get("создан")
+                     (meta or {}).get("created")
                      or datetime.now().strftime("%Y-%m-%d %H:%M"),
                      entries, meta=meta)
     logger.info(f"✅ Главы обновлены ({len(applied)} правок"
@@ -958,7 +958,7 @@ def do_check(args, logger) -> int:
               "два прохода": bool(args.two_pass),
               "промпт файл": args.prompt_file}
     meta, existing = load_review_file(args.review, logger)
-    created = (meta or {}).get("создан") \
+    created = (meta or {}).get("created") \
         or datetime.now().strftime("%Y-%m-%d %H:%M")
     entries = existing or []
     added_total = 0
