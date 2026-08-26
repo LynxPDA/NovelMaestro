@@ -86,7 +86,9 @@
 
   /* ── таблица глоссария: ячейка / сортировка / поиск ── */
   function nerCellText(v) {
-    return v && typeof v === "object" ? JSON.stringify(v) : String(v == null ? "" : v);
+    return v && typeof v === "object"
+      ? JSON.stringify(v)
+      : String(v == null ? "" : v);
   }
   /* первый клик по столбцу — убывание, повторный — возрастание */
   function nextNerSort(field, dir, clicked) {
@@ -105,16 +107,16 @@
   }
   function filterNerItems(items, query, fields, typeFilter) {
     var list = items || [];
-    var qq = String(query || "").trim().toLowerCase();
+    var qq = String(query || "")
+      .trim()
+      .toLowerCase();
     var keys = fields == null ? null : fields;
     return list.filter((it) => {
       var type = String(it.type || "");
       if (!nerTypeAllowed(type, typeFilter)) return false;
       if (!qq) return true;
       if (keys && !keys.length) return false;
-      var searchKeys =
-        keys ||
-        Object.keys(it).filter((k) => k !== "__new");
+      var searchKeys = keys || Object.keys(it).filter((k) => k !== "__new");
       for (var i = 0; i < searchKeys.length; i++) {
         if (nerCellText(it[searchKeys[i]]).toLowerCase().includes(qq)) {
           return true;
@@ -286,11 +288,21 @@
         var tr = normalizeForSearch(it.translation);
         if (t && !seen[t]) {
           seen[t] = true;
-          terms.push({ norm: t, isCjk: isCjkString(t), item: it, ngrams: getNgrams(t, n) });
+          terms.push({
+            norm: t,
+            isCjk: isCjkString(t),
+            item: it,
+            ngrams: getNgrams(t, n),
+          });
         }
         if (tr && tr !== t && !seen[tr]) {
           seen[tr] = true;
-          terms.push({ norm: tr, isCjk: isCjkString(tr), item: it, ngrams: getNgrams(tr, n) });
+          terms.push({
+            norm: tr,
+            isCjk: isCjkString(tr),
+            item: it,
+            ngrams: getNgrams(tr, n),
+          });
         }
       }
       terms.sort((a, b) => {
@@ -422,10 +434,12 @@
             /* расширение до целого слова (падежи: «Хунга» для «Хунг») */
             var f2 = o1;
             var guard = 0;
-            while (f2 > 0 && WORD_CHAR_RE.test(src[f2 - 1]) && guard++ < 8) f2--;
+            while (f2 > 0 && WORD_CHAR_RE.test(src[f2 - 1]) && guard++ < 8)
+              f2--;
             var t2 = o2;
             guard = 0;
-            while (t2 < src.length && WORD_CHAR_RE.test(src[t2]) && guard++ < 8) t2++;
+            while (t2 < src.length && WORD_CHAR_RE.test(src[t2]) && guard++ < 8)
+              t2++;
             var wordNorm = normalizeForSearch(src.slice(f2, t2));
             if (!wordNorm) continue;
             /* принять: слово = термин; корень + окончание/падеж (термин —
@@ -477,7 +491,8 @@
       } catch (_e) {
         return { ok: false, doc: null, entries: [], isArray: false };
       }
-      if (Array.isArray(doc)) return { ok: true, doc: doc, entries: doc, isArray: true };
+      if (Array.isArray(doc))
+        return { ok: true, doc: doc, entries: doc, isArray: true };
       if (doc && typeof doc === "object" && Array.isArray(doc["правки"])) {
         return { ok: true, doc: doc, entries: doc["правки"], isArray: false };
       }
@@ -500,7 +515,10 @@
         return nextEntries;
       }
       next["правки"] = nextEntries;
-      next["обновлён"] = new Date().toISOString().slice(0, 16).replace("T", " ");
+      next["обновлён"] = new Date()
+        .toISOString()
+        .slice(0, 16)
+        .replace("T", " ");
       return next;
     },
 

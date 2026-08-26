@@ -237,7 +237,10 @@ test("glossaryMatches: ngramSize настраивается (аналог --ner_
   assert.equal(m2.ngramSize, 2);
   assert.deepEqual(m2.threshold, 0.75); // дефолт порога в редакторе
   const ms = UICore.glossaryMatches("Хунгу", m2);
-  assert.deepEqual(ms.map((m) => "Хунгу".slice(m.from, m.to)), ["Хунгу"]);
+  assert.deepEqual(
+    ms.map((m) => "Хунгу".slice(m.from, m.to)),
+    ["Хунгу"],
+  );
 });
 
 test("glossaryMatches: threshold настраивается (аналог --ner_threshold)", () => {
@@ -247,7 +250,10 @@ test("glossaryMatches: threshold настраивается (аналог --ner_
   const loose = UICore.buildGlossaryMatcher(items, 5, 0.7);
   assert.equal(loose.threshold, 0.7);
   const msLoose = UICore.glossaryMatches("хунгамат", loose);
-  assert.deepEqual(msLoose.map((m) => "хунгамат".slice(m.from, m.to)), ["хунгамат"]);
+  assert.deepEqual(
+    msLoose.map((m) => "хунгамат".slice(m.from, m.to)),
+    ["хунгамат"],
+  );
   const strict = UICore.buildGlossaryMatcher(items, 5, 0.8);
   assert.equal(strict.threshold, 0.8);
   assert.deepEqual(UICore.glossaryMatches("хунгамат", strict), []);
@@ -377,7 +383,10 @@ test("filterNerItems: по выбранным полям и типу", () => {
   assert.equal(UICore.filterNerItems(items, "гг", ["term"], "").length, 0);
   assert.equal(UICore.filterNerItems(items, "лин", null, "").length, 1);
   assert.equal(UICore.filterNerItems(items, "", ["term"], "skill").length, 1);
-  assert.equal(UICore.filterNerItems(items, "огонь", ["translation"], "person").length, 0);
+  assert.equal(
+    UICore.filterNerItems(items, "огонь", ["translation"], "person").length,
+    0,
+  );
 });
 
 test("filterNerItems: пустые поля/типы и набор типов", () => {
@@ -433,7 +442,13 @@ test("updateReviewEntry: точечная правка в объекте, «об
   const doc = {
     создан: "2024-01-01 10:00",
     правки: [
-      { term: "林凡", field: "translation", old: "А", new: "Б", статус: "принять" },
+      {
+        term: "林凡",
+        field: "translation",
+        old: "А",
+        new: "Б",
+        статус: "принять",
+      },
       { term: "火", field: "notes", old: "В", new: "Г", статус: "отклонить" },
     ],
   };
@@ -465,12 +480,21 @@ test("reviewSummary: подсчёт статусов", () => {
     { статус: "принять" },
   ];
   assert.deepEqual(UICore.reviewSummary(entries), {
-    total: 5, accepted: 3, rejected: 1, applied: 2,
+    total: 5,
+    accepted: 3,
+    rejected: 1,
+    applied: 2,
   });
   assert.deepEqual(UICore.reviewSummary([]), {
-    total: 0, accepted: 0, rejected: 0, applied: 0,
+    total: 0,
+    accepted: 0,
+    rejected: 0,
+    applied: 0,
   });
   assert.deepEqual(UICore.reviewSummary(null), {
-    total: 0, accepted: 0, rejected: 0, applied: 0,
+    total: 0,
+    accepted: 0,
+    rejected: 0,
+    applied: 0,
   });
 });

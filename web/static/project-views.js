@@ -2134,9 +2134,7 @@ function viewProject(section, name) {
         status.textContent = d.exists
           ? `файл есть · ${fmtSize(d.size)}`
           : "файла ещё нет — создастся при применении";
-        parsed = d.exists
-          ? UICore.parseReviewContent(d.content)
-          : null;
+        parsed = d.exists ? UICore.parseReviewContent(d.content) : null;
         return d;
       }
       async function save() {
@@ -2147,14 +2145,13 @@ function viewProject(section, name) {
             content: JSON.stringify(parsed.doc, null, 2),
           },
         });
-        parsed.entries = parsed.isArray
-          ? parsed.doc
-          : parsed.doc["правки"];
+        parsed.entries = parsed.isArray ? parsed.doc : parsed.doc["правки"];
       }
       function refresh() {
         load()
           .then(() => {
-            if (ed) ed.setValue(parsed ? JSON.stringify(parsed.doc, null, 2) : "");
+            if (ed)
+              ed.setValue(parsed ? JSON.stringify(parsed.doc, null, 2) : "");
             renderCard();
           })
           .catch((ex) => (err.textContent = ex.message));
@@ -2166,15 +2163,17 @@ function viewProject(section, name) {
         renderCard();
       }
       function entryHead(e) {
-        if (kind === "ner")
-          return `${e["term"] || "?"} · ${e["field"] || "?"}`;
+        if (kind === "ner") return `${e["term"] || "?"} · ${e["field"] || "?"}`;
         const ch = e["глава"];
-        return `Гл.${ch == null ? "?" : ch}` + (e["тип"] ? ` · ${e["тип"]}` : "");
+        return (
+          `Гл.${ch == null ? "?" : ch}` + (e["тип"] ? ` · ${e["тип"]}` : "")
+        );
       }
       function entryMeta(e) {
         const parts = [];
         if (e["этап"]) parts.push(e["этап"]);
-        if (e["дата применения"]) parts.push(`применено: ${e["дата применения"]}`);
+        if (e["дата применения"])
+          parts.push(`применено: ${e["дата применения"]}`);
         return parts.join(" · ");
       }
       function gotoEntry(e) {
@@ -2203,14 +2202,17 @@ function viewProject(section, name) {
           "button",
           {
             class:
-              "btn btn-xs btn-ghost rv-act" +
-              (active ? " rv-act-active" : ""),
+              "btn btn-xs btn-ghost rv-act" + (active ? " rv-act-active" : ""),
             title: active ? "уже выбран" : `установить «${s}»`,
             onclick: async () => {
               err.textContent = "";
               try {
                 const doc2 = UICore.updateReviewEntry(
-                  parsed.doc, i, { "статус": s }, parsed.isArray);
+                  parsed.doc,
+                  i,
+                  { статус: s },
+                  parsed.isArray,
+                );
                 if (!doc2) {
                   err.textContent = "Не удалось обновить запись";
                   return;
@@ -2227,9 +2229,20 @@ function viewProject(section, name) {
         );
       }
       function correctModal(i, e) {
-        const oldIn = h("textarea", { class: "input rv-ta", rows: 2 }, e["old"] || "");
-        const newIn = h("textarea", { class: "input rv-ta", rows: 2 }, e["new"] || "");
-        const reasonIn = h("input", { class: "input", value: e["причина"] || "" });
+        const oldIn = h(
+          "textarea",
+          { class: "input rv-ta", rows: 2 },
+          e["old"] || "",
+        );
+        const newIn = h(
+          "textarea",
+          { class: "input rv-ta", rows: 2 },
+          e["new"] || "",
+        );
+        const reasonIn = h("input", {
+          class: "input",
+          value: e["причина"] || "",
+        });
         const err2 = h("div", { class: "form-error" });
         const modal = h(
           "div",
@@ -2259,7 +2272,8 @@ function viewProject(section, name) {
                   onclick: async () => {
                     err2.textContent = "";
                     const doc2 = UICore.updateReviewEntry(
-                      parsed.doc, i,
+                      parsed.doc,
+                      i,
                       {
                         old: oldIn.value.trim(),
                         new: newIn.value.trim(),
@@ -2321,7 +2335,10 @@ function viewProject(section, name) {
             "button",
             {
               class: "btn btn-xs btn-ghost",
-              title: kind === "ner" ? "Открыть глоссарий с этим термином" : "Открыть файл главы с фрагментом",
+              title:
+                kind === "ner"
+                  ? "Открыть глоссарий с этим термином"
+                  : "Открыть файл главы с фрагментом",
               onclick: () => gotoEntry(e),
             },
             kind === "ner" ? "→ Глоссарий" : "→ Глава",
@@ -2343,9 +2360,7 @@ function viewProject(section, name) {
             " → ",
             h("span", { class: "rv-new" }, e["new"] || ""),
           ),
-          (e["причина"]
-            ? h("div", { class: "rv-reason" }, e["причина"])
-            : null),
+          e["причина"] ? h("div", { class: "rv-reason" }, e["причина"]) : null,
           h("div", { class: "rv-meta" }, entryMeta(e)),
           actions,
         );
@@ -2375,9 +2390,21 @@ function viewProject(section, name) {
               "div",
               { class: "review-summary" },
               h("span", { class: "badge" }, `всего: ${sum.total}`),
-              h("span", { class: "badge badge-accept" }, `принято: ${sum.accepted}`),
-              h("span", { class: "badge badge-reject" }, `отклонено: ${sum.rejected}`),
-              h("span", { class: "badge badge-done" }, `применено: ${sum.applied}`),
+              h(
+                "span",
+                { class: "badge badge-accept" },
+                `принято: ${sum.accepted}`,
+              ),
+              h(
+                "span",
+                { class: "badge badge-reject" },
+                `отклонено: ${sum.rejected}`,
+              ),
+              h(
+                "span",
+                { class: "badge badge-done" },
+                `применено: ${sum.applied}`,
+              ),
             ),
             h(
               "div",
@@ -2426,12 +2453,10 @@ function viewProject(section, name) {
           if (!job || job.status === "running") return;
           clearInterval(timer);
           _reviewWatchers.delete(key);
-          if (job.status === "done")
-            toast(`✅ ${label} завершено`);
+          if (job.status === "done") toast(`✅ ${label} завершено`);
           else if (job.status === "failed")
             toast(`❌ ${label}: ошибка — смотрите лог запуска`, "err");
-          else if (job.status === "stopped")
-            toast(`⏹ ${label} остановлено`);
+          else if (job.status === "stopped") toast(`⏹ ${label} остановлено`);
           refresh();
         }, 2000);
         _reviewWatchers.set(key, { timer, jobId });
@@ -2480,7 +2505,8 @@ function viewProject(section, name) {
       }
       load()
         .then(() => {
-          if (ed) ed.setValue(parsed ? JSON.stringify(parsed.doc, null, 2) : "");
+          if (ed)
+            ed.setValue(parsed ? JSON.stringify(parsed.doc, null, 2) : "");
           renderCard();
         })
         .catch((ex) => (err.textContent = ex.message));
