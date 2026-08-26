@@ -30,6 +30,17 @@
 - [x] Тесты: pytest (849) + node (44) обновлены и зелёные.
 - [x] Доки: README.md, core/README.md, web/README.md, AGENTS.md §6.
 
+### T12 — Локальные конфиги и баг селекта редактора (пакет)
+
+- [x] pyrightconfig.json убран из git и добавлен в .gitignore (вместе с
+      .vscode/, .idea/, .DS_Store, *.iml, .pylintrc) — локальные инструменты;
+      .pi-lens.json остаётся в репо (контракт pi-lens, AGENTS.md §8а).
+- [x] Фикс дублирования в селекте «Файл» редактора: missing-каноны
+      собирались на каждой итерации (выходило 7 вариантов вместо 4);
+      теперь missing.push только в ветке отсутствующего канона.
+
+---
+
 ### T11 — Переименование scripts/ → cli/ (пакет)
 
 - [x] `git mv scripts cli` + `tests/test_scripts_*.py` → `tests/test_cli_*.py`;

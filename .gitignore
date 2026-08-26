@@ -7,6 +7,14 @@ __pycache__/
 .pytest_cache/
 .coverage
 
+# Локальные инструменты и IDE (не часть репо)
+pyrightconfig.json
+.vscode/
+.idea/
+*.iml
+.DS_Store
+.pylintrc
+
 # Основное
 projects/
 Images/

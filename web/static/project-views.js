@@ -579,8 +579,9 @@ function viewProject(section, name) {
           out.push({ name: c.canon, label: c.label });
         } else if (hits.length) {
           out.push({ name: hits.sort()[0], label: `${c.label} (легаси)` });
+        } else {
+          missing.push({ name: c.canon, label: c.label });
         }
-        missing.push({ name: c.canon, label: c.label });
       }
       return out.concat(missing);
     };
