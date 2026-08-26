@@ -471,6 +471,46 @@ test("updateReviewEntry: legacy-массив и границы", () => {
   assert.equal(UICore.updateReviewEntry(null, 0, {}, true), null);
 });
 
+test("fileIcon: папка и расширения", () => {
+  assert.equal(UICore.fileIcon({ dir: true }), "📁");
+  assert.equal(UICore.fileIcon({ name: "ch.txt" }), "📄");
+  assert.equal(UICore.fileIcon({ name: "ner.json" }), "🧾");
+  assert.equal(UICore.fileIcon({ name: "README.md" }), "📝");
+  assert.equal(UICore.fileIcon({ name: "x.png" }), "🖼");
+  assert.equal(UICore.fileIcon({ name: "noext" }), "📄");
+  assert.equal(UICore.fileIcon(null), "📄");
+  assert.equal(UICore.fileIcon({ name: "A.TXT" }), "📄"); // lower
+});
+
+test("removeReviewEntry: удаление в объекте, «обновлён» обновляется", () => {
+  const doc = {
+    создан: "2024-01-01 10:00",
+    правки: [
+      { term: "林凡", field: "translation" },
+      { term: "火", field: "notes" },
+      { term: "刀", field: "type" },
+    ],
+  };
+  const doc2 = UICore.removeReviewEntry(doc, 1, false);
+  assert.notEqual(doc2, doc); // иммутабельно
+  assert.equal(doc2["правки"].length, 2);
+  assert.equal(doc2["правки"][1].term, "刀");
+  assert.equal(doc["правки"].length, 3); // исходник не тронут
+  assert.ok(doc2["обновлён"]);
+  assert.equal(doc["обновлён"], undefined);
+  assert.equal(UICore.removeReviewEntry(doc, 5, false), null); // вне диапазона
+  assert.equal(UICore.removeReviewEntry(doc, -1, false), null);
+  assert.equal(UICore.removeReviewEntry(null, 0, false), null);
+});
+
+test("removeReviewEntry: legacy-массив", () => {
+  const arr = [{ term: "x" }, { term: "y" }, { term: "z" }];
+  const arr2 = UICore.removeReviewEntry(arr, 0, true);
+  assert.equal(arr2.length, 2);
+  assert.equal(arr2[0].term, "y");
+  assert.equal(arr.length, 3); // исходник не тронут
+});
+
 test("reviewSummary: подсчёт статусов", () => {
   const entries = [
     { статус: "принять", применено: false },

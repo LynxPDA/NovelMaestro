@@ -16,6 +16,31 @@
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
+  /* ── иконки файлов (карта расширений; кросс-файловый хелпер) ── */
+  var F_ICONS = {
+    txt: "📄",
+    json: "🧾",
+    md: "📝",
+    yaml: "📋",
+    yml: "📋",
+    png: "🖼",
+    jpg: "🖼",
+    jpeg: "🖼",
+    webp: "🖼",
+    gif: "🖼",
+    epub: "📚",
+    log: "📜",
+    csv: "📊",
+    py: "🐍",
+  };
+
+  function fileIcon(entry) {
+    if (!entry) return "📄";
+    if (entry.dir) return "📁";
+    var ext = (String(entry.name || "").split(".").pop() || "").toLowerCase();
+    return F_ICONS[ext] || "📄";
+  }
+
   /* ── порт логики поиска терминов из core.common / translate_book.py ──
    * normalize_for_search: NFC → lower → убрать пробелы/пунктуацию —
    * одинаково к термину и тексту; точное вхождение — подстрока в норм.
@@ -490,7 +515,7 @@
         doc = JSON.parse(String(text || "").trim());
       } catch (_e) {
         return { ok: false, doc: null, entries: [], isArray: false };
-      }
+      }  // eslint-disable-line no-unused-vars
       if (Array.isArray(doc))
         return { ok: true, doc: doc, entries: doc, isArray: true };
       if (doc && typeof doc === "object" && Array.isArray(doc["правки"])) {
@@ -514,6 +539,30 @@
       if (isArray) {
         return nextEntries;
       }
+      next["правки"] = nextEntries;
+      next["обновлён"] = new Date()
+        .toISOString()
+        .slice(0, 16)
+        .replace("T", " ");
+      return next;
+    },
+
+    /* иконка файла по имени/папке (карта F_ICONS) */
+    fileIcon: fileIcon,
+
+    /* иммутабельное удаление записи: новый doc без индекса; «обновлён»
+     * проставляется текущим временем. Вне диапазона/без «правки» — null. */
+    removeReviewEntry: (doc, index, isArray) => {
+      if (!doc || typeof index !== "number") return null;
+      var entries = isArray ? doc : doc["правки"];
+      if (!Array.isArray(entries) || index < 0 || index >= entries.length) {
+        return null;
+      }
+      var nextEntries = entries
+        .slice(0, index)
+        .concat(entries.slice(index + 1));
+      if (isArray) return nextEntries;
+      var next = Object.assign({}, doc);
       next["правки"] = nextEntries;
       next["обновлён"] = new Date()
         .toISOString()

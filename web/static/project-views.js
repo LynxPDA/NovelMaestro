@@ -291,9 +291,9 @@ function viewProject(section, name) {
               setPath(full);
             },
           },
-          fileIcon(e) + " " + e.name,
+          UICore.fileIcon(e) + " " + e.name,
         )
-      : h("span", { class: "fname" }, fileIcon(e) + " " + e.name);
+      : h("span", { class: "fname" }, UICore.fileIcon(e) + " " + e.name);
     const actions = h("div", { class: "factions" });
     /* «Переим.» — и у файлов, и у каталогов (POST /api/file/rename) */
     const renameBtn = h(
@@ -2147,6 +2147,26 @@ function viewProject(section, name) {
         });
         parsed.entries = parsed.isArray ? parsed.doc : parsed.doc["правки"];
       }
+      async function deleteEntry(i) {
+        err.textContent = "";
+        try {
+          const doc2 = UICore.removeReviewEntry(
+            parsed.doc,
+            i,
+            parsed.isArray,
+          );
+          if (!doc2) {
+            err.textContent = "Не удалось удалить запись";
+            return;
+          }
+          parsed.doc = doc2;
+          await save();
+          renderList();
+          toast("Правка удалена");
+        } catch (ex) {
+          err.textContent = ex.message;
+        }
+      }
       function refresh() {
         load()
           .then(() => {
@@ -2231,7 +2251,7 @@ function viewProject(section, name) {
       function correctModal(i, e) {
         const oldIn = h(
           "textarea",
-          { class: "input rv-ta", rows: 2 },
+          { class: "input rv-ta rv-old-ro", rows: 2, readonly: true },
           e["old"] || "",
         );
         const newIn = h(
@@ -2254,9 +2274,14 @@ function viewProject(section, name) {
             "div",
             { class: "modal" },
             h("div", { class: "modal-title" }, `Правка ${i + 1}`),
-            h("label", { class: "rv-label" }, "Было (old)"),
+            h("label", { class: "rv-label" }, "Было"),
             oldIn,
-            h("label", { class: "rv-label" }, "Стало (new)"),
+            h(
+              "div",
+              { class: "field-help" },
+              "не редактируется — по этому тексту правка ищется в главе",
+            ),
+            h("label", { class: "rv-label" }, "Стало"),
             newIn,
             h("label", { class: "rv-label" }, "Причина"),
             reasonIn,
@@ -2330,6 +2355,15 @@ function viewProject(section, name) {
               onclick: () => correctModal(i, e),
             },
             "Откорректировать",
+          ),
+          h(
+            "button",
+            {
+              class: "btn btn-xs btn-ghost rv-del",
+              title: "Удалить правку из файла",
+              onclick: () => deleteEntry(i),
+            },
+            "Удалить",
           ),
           h(
             "button",
@@ -2482,6 +2516,31 @@ function viewProject(section, name) {
           err.textContent = ex.message;
         }
       });
+      const clearBtn = h(
+        "button",
+        {
+          class: "btn btn-sm btn-ghost rv-clear",
+          title: "Удалить все правки из файла",
+        },
+        "Очистить",
+      );
+      clearBtn.addEventListener("click", async () => {
+        err.textContent = "";
+        try {
+          const empty = parsed && parsed.isArray ? [] : { "правки": [] };
+          await api(path, {
+            method: "PUT",
+            body: {
+              project: `${section}/${name}`,
+              content: JSON.stringify(empty, null, 2),
+            },
+          });
+          toast("Все правки удалены");
+          refresh();
+        } catch (ex) {
+          err.textContent = ex.message;
+        }
+      });
       const actionsBar = h(
         "div",
         { class: "review-actions" },
@@ -2489,12 +2548,16 @@ function viewProject(section, name) {
         applyBtn,
         bakBox,
         h("span", { class: "spacer" }),
+        clearBtn,
         saveBtn,
       );
       function renderEditor() {
         body.replaceChildren();
         if (!ed) {
-          ed = makeEditor("", "json");
+          ed = makeEditor(
+            parsed ? JSON.stringify(parsed.doc, null, 2) : "",
+            "json",
+          );
           edHost.replaceChildren(ed.root);
         }
         body.append(edHost, status, actionsBar, err);
