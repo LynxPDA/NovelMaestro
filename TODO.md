@@ -30,6 +30,28 @@
 - [x] Тесты: pytest (849) + node (44) обновлены и зелёные.
 - [x] Доки: README.md, core/README.md, web/README.md, AGENTS.md §6.
 
+### T9 — Релизные сборки и инженерные задачи (пакет)
+
+- [x] `tools/README.md` — юзерскрипт Rulate (установка, формат файла,
+      сопоставление, настройки, безопасность); доки переведены на
+      фактический путь `tools/` (AGENTS.md, README.md).
+- [x] Кастомная папка проектов: `--projects-dir`/`WEB_PROJECTS_DIR`
+      в web/main.py и run.py (bootstrap + проброс); тесты;
+      доки (README.md, web/README.md, AGENTS.md).
+- [x] regex-fallback NER: найден и исправлен баг — короткий CJK-термин-
+      префикс терялся (регэксп-чередование не перекрывает); теперь
+      проверка каждого варианта вхождением (семантика Aho-Corasick);
+      тест `test_regex_fallback_prefix_overlap`.
+- [x] Docker: Dockerfile (python:3.12-slim, deps, healthcheck),
+      .dockerignore, docker-compose.yml (порт, volume projects/job_logs,
+      env_file required:false); собран и проверен e2e (проект, subprocess).
+- [x] Портативная Windows-сборка: `packaging/build_portable_windows.ps1`
+      (embeddable Python + pip + deps + start.bat, zip);
+      `packaging/README.md` (обе сборки + публичный релиз: LICENSE,
+      секреты, GitHub Releases).
+
+---
+
 ### T8 — Редактор: отсутствующий файл — пустой редактор (создание при сохранении)
 
 - [x] `web/api.py` `_file_read`: файла нет → `{content: "", missing: true}`

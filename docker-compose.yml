@@ -1,0 +1,36 @@
+# NovelMaestro в Docker — один сервис, web-интерфейс :8756.
+#
+# Быстрый старт:
+#   cp templates/.env.example .env     # конфиг LLM + WEB_* (по желанию)
+#   docker compose up -d --build
+#   → http://localhost:8756
+#
+# Данные:
+#   ./projects        — ВСЕ проекты (обязательно монтировать, иначе потеряются)
+#   ./web/job_logs    — история запусков (jobs.json + логи; необязательно)
+# Конфиг: ./.env (если есть) инжектится переменными окружения — тот же
+# приоритет, что и локально (env > .env-файл); LLM-скрипты в subprocess
+# наследуют окружение, поэтому API_KEY/MODEL доходят до них.
+# Токен (при WEB_AUTH=1) генерируется в projects/.web_secret и сохраняется
+# между перезапусками (volume).
+services:
+  novelmaestro:
+    build: .
+    image: novelmaestro:latest
+    container_name: novelmaestro
+    restart: unless-stopped
+    ports:
+      - "8756:8756"                 # web-интерфейс
+    volumes:
+      - ./projects:/app/projects
+      - ./web/job_logs:/app/web/job_logs
+    env_file:
+      - path: ./.env
+        required: false             # .env может отсутствовать (env-переменные ниже)
+    environment:
+      WEB_HOST: 0.0.0.0
+      # WEB_AUTH: "1"               # включить токен (иначе — доверенная LAN)
+      # WEB_TOKEN: "..."            # при --auth; иначе автогенерация
+      # WEB_MAX_UPLOAD_MB: "512"
+      # WEB_JOBS_LIMIT: "2"
+    # HEALTHCHECK зашит в образ (Dockerfile): GET /api/session

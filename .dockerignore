@@ -1,0 +1,20 @@
+# В образ не попадают: данные, история запусков, тесты, git, окружения.
+.git
+.github
+projects/
+servers/
+Images/
+backup/
+tests/
+logs/
+web/job_logs/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.env
+*.log
+node_modules/
+.pi-lens.json
+dist/
