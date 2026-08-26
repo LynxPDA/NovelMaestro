@@ -2188,8 +2188,7 @@ function viewProject(section, name) {
       function entryMeta(e) {
         const parts = [];
         if (e["stage"]) parts.push(e["stage"]);
-        if (e["applied_at"])
-          parts.push(`применено: ${e["applied_at"]}`);
+        if (e["applied_at"]) parts.push(`применено: ${e["applied_at"]}`);
         return parts.join(" · ");
       }
       function gotoEntry(e) {
@@ -2226,7 +2225,7 @@ function viewProject(section, name) {
                 const doc2 = UICore.updateReviewEntry(
                   parsed.doc,
                   i,
-                  { статус: s },
+                  { status: s },
                   parsed.isArray,
                 );
                 if (!doc2) {
@@ -2298,7 +2297,7 @@ function viewProject(section, name) {
                       {
                         old: oldIn.value.trim(),
                         new: newIn.value.trim(),
-                        причина: reasonIn.value.trim(),
+                        reason: reasonIn.value.trim(),
                       },
                       parsed.isArray,
                     );
@@ -2523,7 +2522,7 @@ function viewProject(section, name) {
       clearBtn.addEventListener("click", async () => {
         err.textContent = "";
         try {
-          const empty = parsed && parsed.isArray ? [] : { правки: [] };
+          const empty = parsed && parsed.isArray ? [] : { entries: [] };
           await api(path, {
             method: "PUT",
             body: {
@@ -3859,7 +3858,6 @@ function viewProject(section, name) {
 
   render();
   return page;
-
 }
 
 function exportModal(byType, project) {

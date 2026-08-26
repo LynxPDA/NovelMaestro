@@ -510,7 +510,7 @@
     },
 
     /* ── review-файлы проверок (ner_review.json / …_llm_review.json) ──
-     * Формат: объект {создан, обновлён, вход, правки:[…]} или legacy-
+     * Формат: объект {created, updated, input, entries:[…]} или legacy-
      * массив записей. Разбор и точечные правки — без серверного роута
      * (чтение → обновление → PUT целиком). */
     parseReviewContent: (text) => {
@@ -544,10 +544,7 @@
         return nextEntries;
       }
       next["entries"] = nextEntries;
-      next["updated"] = new Date()
-        .toISOString()
-        .slice(0, 16)
-        .replace("T", " ");
+      next["updated"] = new Date().toISOString().slice(0, 16).replace("T", " ");
       return next;
     },
 
@@ -568,10 +565,7 @@
       if (isArray) return nextEntries;
       var next = Object.assign({}, doc);
       next["entries"] = nextEntries;
-      next["updated"] = new Date()
-        .toISOString()
-        .slice(0, 16)
-        .replace("T", " ");
+      next["updated"] = new Date().toISOString().slice(0, 16).replace("T", " ");
       return next;
     },
 
