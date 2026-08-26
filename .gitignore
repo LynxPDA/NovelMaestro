@@ -9,9 +9,7 @@ __pycache__/
 
 # Основное
 projects/
-servers/
 Images/
-backup/
 
 # Виртуальные окружения (если вы их создадите в будущем)
 venv/
