@@ -759,8 +759,9 @@ def test_build_ner_check_no_bak():
 
 
 def test_build_translate_check_llm_no_bak():
+    """Флаги применения/бэкапов из «Запусков» всегда выключены."""
     argv = build_command("translate_check_llm", {"no_bak": True}, {})
-    assert "--no-bak" in argv
+    assert "--no-bak" not in argv
     argv2 = build_command("translate_check_llm", {"no_bak": False}, {})
     assert "--no-bak" not in argv2
 
@@ -769,13 +770,17 @@ def test_build_translate_check_llm_flags():
     form = {"type": "polished", "start": "1", "end": "10",
             "two_pass": True, "context_budget": "75000",
             "review": "translate_check_llm_review.json", "dry_run": True,
+            "apply": True, "auto_apply": True,
             "reasoning_effort": "low",
             "threads": "4", "max_fixes_per_chapter": "0"}
     argv = build_command("translate_check_llm", form, {})
     assert argv[0] == "scripts/translate_check_llm.py"
     assert "--start" in argv and "--end" in argv
     assert "--two_pass" in argv and "--context_budget" in argv
-    assert "--dry-run" in argv
+    # применение/предпросмотр/бэкапы — только через «Проверка» проекта
+    assert "--dry-run" not in argv
+    assert "--apply" not in argv and "--auto-apply" not in argv
+    assert "--no-bak" not in argv
     assert "--reasoning_effort" in argv and "low" in argv
     assert "--no_reasoning" not in argv
     assert "--threads" in argv and "--max_fixes_per_chapter" in argv

@@ -68,7 +68,7 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
     C1 (AUDIT): ключ из .env подставляется ТОЛЬКО если host не переопределён
     формой (или совпадает с env-HOST) — иначе ключ уйдёт на чужой сервер.
     M1 (AUDIT): ключа нет в проектном .env (он копируется без секретов) →
-    fallback на системный projects/.env.
+    fallback на системный корневой .env.
     """
     argv = []
     form_host = (form.get("host") or "").strip()
@@ -94,7 +94,7 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
         if not api_key and (not form_host or host == sc["host"]):
             api_key = sc["api_key"]
             if not api_key:
-                # M1: проектный .env без секретов → системный projects/.env
+                # M1: проектный .env без секретов → системный корневой .env
                 from core.common import (find_env_file as _find_env,
                                          parse_dotenv as _parse_env)
                 sys_env = _parse_env(_find_env())
@@ -343,11 +343,15 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
         argv += ["--context_budget", str(form["context_budget"])]
     if form.get("review"):
         argv += ["--review", str(form["review"])]
-    for flag in ("apply", "auto_apply", "dry_run"):
-        if form.get(flag):
-            argv.append(f"--{flag.replace('_', '-')}")
-    if form.get("no_bak"):
-        argv.append("--no-bak")
+    # флаги применения/предпросмотра/бэкапов собираются только для пути
+    # «Проверка» проекта (ctx["review_apply"]); из «Запусков» (форма без
+    # этих чекбоксов) они всегда выключены
+    if ctx.get("review_apply"):
+        for flag in ("apply", "auto_apply", "dry_run"):
+            if form.get(flag):
+                argv.append(f"--{flag.replace('_', '-')}")
+        if form.get("no_bak"):
+            argv.append("--no-bak")
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     if form.get("temperature") not in (None, ""):
@@ -700,14 +704,6 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "75000"},
             {"name": "review", "label": "Review-файл правок",
              "type": "text", "default": "translate_check_llm_review.json"},
-            {"name": "apply", "label": "Применить принятые правки (--apply)",
-             "type": "bool", "default": False},
-            {"name": "auto_apply", "label": "Автоприменение (--auto-apply)",
-             "type": "bool", "default": False},
-            {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
-             "type": "bool", "default": False},
-            {"name": "no_bak", "label": "Не создавать .bak (--no-bak)",
-             "type": "bool", "default": False},
             {"name": "prompt_file", "label": "Промпт-файл (теги pass1/pass2)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "translate_check_prompt.txt"},
