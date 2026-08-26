@@ -1,0 +1,55 @@
+# Портативная Windows-сборка NovelMaestro → zip-артефакт/релиз.
+#
+# Запуск: вкладка Actions → «Portable Windows build» → «Run workflow»
+# (можно указать версию Python и метку имени zip), или автоматически при
+# пуше тега v* — тогда zip прикрепляется к GitHub Release этого тега.
+# Сборка идёт на windows-latest (см. packaging/build_portable_windows.ps1).
+
+name: Portable Windows build
+
+on:
+  workflow_dispatch:
+    inputs:
+      python_version:
+        description: "Версия Python (embeddable, напр. 3.12.8)"
+        required: false
+        default: "3.12.8"
+      label:
+        description: "Метка имени zip (пусто — дата)"
+        required: false
+        default: ""
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Сборка портативного пакета
+        shell: powershell
+        env:
+          PY_VERSION: ${{ inputs.python_version }}
+          PKG_LABEL: ${{ inputs.label }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          $label = if ($env:EVENT_NAME -eq "push") { $env:REF_NAME } else { $env:PKG_LABEL }
+          & packaging/build_portable_windows.ps1 -Label $label -PythonVersion "$env:PY_VERSION"
+
+      - name: Загрузить артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: novelmaestro-portable
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Прикрепить к релизу (только по тегу)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/*.zip --generate-notes

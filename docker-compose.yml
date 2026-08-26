@@ -19,6 +19,11 @@ services:
     image: novelmaestro:latest
     container_name: novelmaestro
     restart: unless-stopped
+    # uid/gid внутри контейнера = uid/gid хост-пользователя (Linux):
+    # файлы в ./projects создаются от вашего имени и доступны для ручной
+    # правки; на Docker Desktop (Windows/Mac) берётся 1000:1000 — там
+    # владелец виртуализируется и это не важно.
+    user: "${UID:-1000}:${GID:-1000}"
     ports:
       - "8756:8756"                 # web-интерфейс
     volumes:

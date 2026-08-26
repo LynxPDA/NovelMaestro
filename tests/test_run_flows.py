@@ -137,6 +137,20 @@ def test_main_projects_dir_switches_global(fake_repo, monkeypatch):
     assert not (fake_repo / "projects" / "ACTIVE").exists()
 
 
+def test_main_projects_dir_from_env(fake_repo, monkeypatch):
+    """WEB_PROJECTS_DIR в системном .env — без CLI-флага."""
+    custom = fake_repo / "env_novels"
+    custom.mkdir(parents=True)
+    (fake_repo / ".env").write_text(
+        f"HOST=x\nWEB_PROJECTS_DIR={custom}\n", encoding="utf-8")
+    monkeypatch.setattr(RUN, "run_web_backend", lambda args: None)
+    monkeypatch.setattr(sys, "argv", ["run.py"])
+    RUN.main()
+    assert RUN.PROJECTS == custom.resolve()
+    assert (custom / "ACTIVE").is_dir()  # bootstrap в папке из .env
+    assert not (fake_repo / "projects" / "ACTIVE").exists()
+
+
 def test_force_utf8_io_no_crash():
     """_force_utf8_io терпит любые стримы (в т.ч. подмены pytest)."""
     RUN._force_utf8_io()

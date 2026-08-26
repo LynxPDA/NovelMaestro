@@ -25,6 +25,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Харденинг: версия Python — строго X.Y.Z (инпут из GitHub Actions)
+if ($PythonVersion -notmatch "^\d+\.\d+\.\d+$") {
+    throw "-PythonVersion: ожидается X.Y.Z, получено: $PythonVersion"
+}
+
 $root   = Split-Path -Parent $PSScriptRoot          # корень репо
 $dist   = Join-Path $root $OutDir
 $portable = Join-Path $dist "novelmaestro-portable"
@@ -83,7 +88,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # ── 5. Копируем репозиторий (без данных/тестов/мусора) ─────────────
 Write-Host "Копирую репозиторий…"
-robocopy $root $portable /E /XD .git projects tests servers Images backup __pycache__ .venv logs job_logs .pytest_cache dist /XF .env *.pyc *.log /NFL /NDL /NJH /NJS /NP
+robocopy $root $portable /E /XD .git .github projects tests servers Images backup __pycache__ .venv logs job_logs .pytest_cache dist /XF .env *.pyc *.log /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy: ошибка копирования (код $LASTEXITCODE)" }
 
 # ── 6. start.bat (только ASCII: cmd читает bat в кодовой странице

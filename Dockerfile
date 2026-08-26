@@ -20,9 +20,13 @@ WORKDIR /app
 # Код приложения (проекты/тесты/логи исключены через .dockerignore).
 COPY . .
 
-# Контейнер работает от root: bind-mount ./projects на Linux-хосте
-# наследует владельца хост-папки, поэтому non-root пользователь
-# ломал бы монтирование (см. packaging/README.md → «Безопасность»).
+# Не-root пользователь с uid=1000 (типичный первый пользователь Linux;
+# Docker Desktop виртуализует владельца). Файлы, созданные контейнером
+# в bind-mount ./projects, принадлежат uid 1000 — хост-пользователь
+# сможет править их вручную. Иной uid хоста: --user $(id -u):$(id -g)
+# или user: "${UID}:${GID}" в compose (см. packaging/README.md).
+RUN useradd -m -u 1000 app && chown -R app:app /app
+USER app
 
 EXPOSE 8756
 

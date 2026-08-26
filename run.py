@@ -19,6 +19,7 @@ stdlib-only.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -29,8 +30,22 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from core import projects as prj          # noqa: E402
+from core.common import find_env_file, parse_dotenv  # noqa: E402
 
 PROJECTS = REPO / "projects"
+
+
+def _env_cfg() -> dict:
+    """Конфиг из системного корневого .env репозитория (stdlib, os.environ
+    приоритетнее): find_env_file от корня REPO — детерминированно, без
+    зависимости от cwd, с которого запущен лаунчер."""
+    cfg: dict = {}
+    try:
+        cfg.update(parse_dotenv(find_env_file(start_dir=str(REPO))))
+    except Exception:  # noqa: BLE001 — .env необязателен
+        pass
+    cfg.update({k: v for k, v in os.environ.items() if v})
+    return cfg
 
 
 def _force_utf8_io() -> None:
@@ -106,9 +121,11 @@ def main() -> None:
                     help="Не открывать браузер автоматически")
     args = ap.parse_args()
 
-    if args.projects_dir:  # своя папка: bootstrap и web/main.py читают её
-        global PROJECTS
-        PROJECTS = Path(args.projects_dir).expanduser().resolve()
+    # своя папка: CLI-флаг > системный .env (WEB_PROJECTS_DIR) > дефолт
+    global PROJECTS
+    projects_dir = args.projects_dir or _env_cfg().get("WEB_PROJECTS_DIR")
+    if projects_dir:
+        PROJECTS = Path(projects_dir).expanduser().resolve()
     bootstrap_projects()
     run_web_backend(args)
 
