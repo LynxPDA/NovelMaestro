@@ -564,18 +564,25 @@ function viewProject(section, name) {
     if (!chapters.some((c) => c.dir === ed.chapter)) {
       ed.chapter = chapters[0].dir;
     }
-    /* артефакты главы по маскам (канон приоритетен, затем легаси) */
+    /* артефакты главы по маскам (канон приоритетен, затем легаси). Канон
+       показывается даже если файла ещё нет — пустой редактор, сохранение
+       создаст файл (напр. polished.txt до полировки); канон-без-файла —
+       в конец списка, чтобы дефолты предпочитали существующие файлы */
     const chapterTypes = (dir) => {
       const ch = chapters.find((c) => c.dir === dir);
       const names = ch ? Object.keys(ch.artifacts || {}) : [];
       const out = [];
+      const missing = [];
       for (const c of ED_CLASSIFY) {
         const hits = names.filter(c.test);
-        if (!hits.length) continue;
-        const pick = hits.includes(c.canon) ? c.canon : hits.sort()[0];
-        out.push({ name: pick, label: c.label });
+        if (hits.includes(c.canon)) {
+          out.push({ name: c.canon, label: c.label });
+        } else if (hits.length) {
+          out.push({ name: hits.sort()[0], label: `${c.label} (легаси)` });
+        }
+        missing.push({ name: c.canon, label: c.label });
       }
-      return out;
+      return out.concat(missing);
     };
     /* типы по умолчанию: слева — оригинал (chapter.txt), справа —
        по приоритету доступности: полировка > редактура > перевод */
@@ -702,7 +709,9 @@ function viewProject(section, name) {
       if (pInfo.editor && pInfo.state.text != null) {
         pInfo.host.replaceChildren(pInfo.editor.root);
         pInfo.perr.textContent = "";
-        pInfo.meta.textContent = `${fmtSize(pInfo.state.text.length)} · ${type}`;
+        pInfo.meta.textContent = pInfo.state.missing
+          ? `новый файл · ${type}`
+          : `${fmtSize(pInfo.state.text.length)} · ${type}`;
         pInfo.saveBtn.disabled = !pInfo.state.dirty;
         if (pInfo.hl) {
           pInfo.host.append(pInfo.hl.tip);
@@ -721,7 +730,10 @@ function viewProject(section, name) {
         const data = await api(`/file?${q}`);
         pInfo.state.text = data.content;
         pInfo.state.dirty = false;
-        pInfo.meta.textContent = `${fmtSize(data.size)} · ${type}`;
+        pInfo.state.missing = !!data.missing; /* файла нет — создание при сохранении */
+        pInfo.meta.textContent = data.missing
+          ? `новый файл · ${type}`
+          : `${fmtSize(data.size)} · ${type}`;
         if (pInfo.editor) {
           setEditorText(pInfo, data.content);
           pInfo.host.replaceChildren(pInfo.editor.root);
@@ -750,6 +762,7 @@ function viewProject(section, name) {
         updateAddTerm(pInfo);
       } catch (ex) {
         pInfo.state.text = null;
+        pInfo.state.missing = false;
         pInfo.perr.textContent = ex.message;
         pInfo.meta.textContent = "";
         pInfo.saveBtn.disabled = true;
@@ -770,6 +783,7 @@ function viewProject(section, name) {
           },
         });
         pInfo.state.dirty = false;
+        pInfo.state.missing = false; /* файл создан — больше не «новый» */
         pInfo.meta.textContent = `${fmtSize(pInfo.state.text.length)} · ${pInfo.state.type}`;
         pInfo.saveBtn.disabled = true;
         toast("Сохранено");
@@ -1381,6 +1395,7 @@ function viewProject(section, name) {
         p.state.type = null;
         p.state.text = null;
         p.state.dirty = false;
+        p.state.missing = false;
         setEditorText(p, ""); // без колбэка «правки» — иначе текст станет ""
         p.meta.textContent = "—";
         p.saveBtn.disabled = true;
@@ -3556,15 +3571,11 @@ function viewProject(section, name) {
       try {
         const d = await api(`/file?${q}`);
         ed.setValue(d.content || "");
-        status.textContent = d.path;
+        status.textContent = d.missing
+          ? "инфо-файла ещё нет — сохраните, чтобы создать source/info.md"
+          : d.path;
       } catch (ex) {
-        if (/не найден/.test(ex.message)) {
-          ed.setValue("");
-          status.textContent =
-            "инфо-файла ещё нет — сохраните, чтобы создать source/info.md";
-        } else {
-          err.textContent = ex.message;
-        }
+        err.textContent = ex.message;
       }
     }
     await loadNotes();
@@ -3771,7 +3782,8 @@ function viewProject(section, name) {
           path: rel,
         });
         try {
-          await api(`/file?${fq}`);
+          const d = await api(`/file?${fq}`);
+          if (d.missing) throw new Error("missing");
           st.edit = rel;
           st.search = searchFragment(msg);
           render();

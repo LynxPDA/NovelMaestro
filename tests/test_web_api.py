@@ -864,12 +864,26 @@ def test_file_read_json_pretty(srv_ctx):
     assert "\n  \"title\"" in payload["content"]  # indent=2
 
 
-def test_file_read_missing_404(srv_ctx):
+def test_file_read_missing_empty(srv_ctx):
+    """Нет файла — пустой редактор (missing=True): сохранение создаст файл."""
     _, port, _ = srv_ctx()
     _create_project(port, None)
     res, payload = _request(port, "GET",
                             "/api/file?project=ACTIVE/test_book&path=zz.txt")
-    assert res.status == 404
+    assert res.status == 200
+    assert payload["content"] == ""
+    assert payload["missing"] is True
+    assert payload["size"] == 0
+    # создание нового файла: PUT по отсутствующему пути → GET отдаёт текст
+    res, payload = _request(port, "PUT", "/api/file",
+                            {"project": "ACTIVE/test_book",
+                             "path": "zz.txt", "content": "текст"})
+    assert res.status == 200, payload
+    res, payload = _request(port, "GET",
+                            "/api/file?project=ACTIVE/test_book&path=zz.txt")
+    assert res.status == 200
+    assert payload["content"] == "текст"
+    assert not payload.get("missing")
 
 
 def test_file_read_binary_rejected(srv_ctx):

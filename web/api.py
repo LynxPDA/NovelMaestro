@@ -215,12 +215,16 @@ def _file_read(ctx: dict) -> dict:
 
     JSON отдаётся pretty-print'ом; бинарные файлы — ошибка 400;
     файлы больше FILE_TEXT_LIMIT — 413 (предложить скачивание).
+    Файла нет — пустой редактор (missing: true): сохранение создаст файл.
     """
     pdir, section, name = _project_ctx(ctx)
     rel = ctx["query"].get("path", "")
     target = _resolve_project_path(ctx, pdir, rel)
     if not target.is_file():
-        raise ApiError(404, "Файл не найден")
+        if target.is_dir():
+            raise ApiError(400, "Это каталог — открыть как текст нельзя")
+        return {"ok": True, "path": rel, "content": "", "size": 0,
+                "missing": True}
     size = target.stat().st_size
     if size > FILE_TEXT_LIMIT:
         raise ApiError(413, f"Файл {size} Б — слишком большой для редактора, "
