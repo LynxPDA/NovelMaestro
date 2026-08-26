@@ -440,13 +440,13 @@ web-сервера; проектный `pdir/.env` приоритетнее дл
 `.env` и при каждом запуске сохраняются обратно: системный
 `projects/.env` копируется в папку проекта (`pdir/.env`), если её нет,
 затем обновляются ключи `<STAGE>_<FIELD>` (например `NER_CHUNK_SIZE`,
-`TRANSLATE_CHECK_EXCLUDE_WORDS`; модель — `<STAGE>_MODEL`, fallback —
+`TRANSLATE_CHECK_EXCLUDE_WORDS`; сервер — `<STAGE>_HOST` → `HOST`,
+ключ — `<STAGE>_API_KEY` → `API_KEY`, модель — `<STAGE>_MODEL` →
 общая `MODEL`). Проектный `pdir/.env` приоритетнее системного.
-`API_KEY` не сохраняется (только предзаполнение формы); системные
-`WEB_*` (настройки web-сервера) в проект не копируются. Слова-исключения проверки перевода —
+Ключ сохраняется как `<STAGE>_API_KEY` (fallback — `API_KEY`);
+системные `WEB_*` (настройки web-сервера) в проект не копируются.
+Слова-исключения проверки перевода —
 `TRANSLATE_CHECK_EXCLUDE_WORDS` (дефолт `VIP,MVP,【,】,NPC`).
-
-```ini
 
 ```ini
 # Единый сервер LLM (vLLM, Ollama, LM Studio, OpenAI-совместимый)
@@ -454,25 +454,38 @@ HOST=http://localhost:8080/v1
 API_KEY=your-api-key
 MODEL=gemma-3-novel-224b
 
-# Модель конкретного скрипта (необязательно; fallback на общую MODEL)
+# Сервер конкретного скрипта (необязательно; fallback на общие ключи)
+# Схема «один скрипт — один набор сервер + ключ + модель»:
+# <СКРИПТ>_HOST / <СКРИПТ>_API_KEY / <СКРИПТ>_MODEL
+NER_HOST=...            # свой сервер для cli/ner.py
+NER_API_KEY=...
 NER_MODEL=...
+NER_CHECK_HOST=...      # свой сервер для cli/ner_check.py
+NER_CHECK_API_KEY=...
 NER_CHECK_MODEL=...
+TRANSLATE_CHECK_LLM_HOST=...
+TRANSLATE_CHECK_LLM_API_KEY=...
 TRANSLATE_CHECK_LLM_MODEL=...
+WIKI_HOST=...
+WIKI_API_KEY=...
 WIKI_MODEL=...
-PIPELINE_MODEL=...   # web-конвейер (единая модель)
+PIPELINE_HOST=...       # web-конвейер (единый сервер и модель)
+PIPELINE_API_KEY=...
+PIPELINE_MODEL=...
 ```
 
-**Приоритет модели:** `<СКРИПТ>_MODEL` → общая `MODEL`. Правило — один
-скрипт, один набор «сервер + ключ + модель»: отдельных моделей под
-перевод/редактуру/полировку в конвейере больше нет (убраны
-`TRANSLATE_MODEL`/`REDACT_MODEL`/`POLISH_MODEL`). Модель обязательна:
-берётся из `--model` или `.env`, автоопределение через `GET /models`
-убрано.
+**Приоритет сервера:** `<СКРИПТ>_HOST` → `HOST`, ключ —
+`<СКРИПТ>_API_KEY` → `API_KEY`, модель — `<СКРИПТ>_MODEL` → общая
+`MODEL`. Правило — один скрипт, один набор «сервер + ключ + модель»:
+отдельных моделей под перевод/редактуру/полировку в конвейере больше
+нет (убраны `TRANSLATE_MODEL`/`REDACT_MODEL`/`POLISH_MODEL`). Модель
+обязательна: берётся из `--model` или `.env`, автоопределение через
+`GET /models` убрано.
 
-> Модели скриптов (`NER_MODEL`, `NER_CHECK_MODEL`,
-> `TRANSLATE_CHECK_LLM_MODEL`, `WIKI_MODEL`, `PIPELINE_MODEL` и т.п.)
+> Серверы скриптов (`NER_HOST`/`NER_API_KEY`/`NER_MODEL`,
+> `NER_CHECK_*`, `TRANSLATE_CHECK_LLM_*`, `WIKI_*`, `PIPELINE_*` и т.п.)
 > подставляет web-слой (`web/stages.py`); при прямом запуске
-> `cli/*.py` — та же схема.
+> `cli/*.py` — та же схема через `get_server_config(env, стадия)`.
 
 Web-сервер читает из того же `.env` ключи `WEB_HOST`, `WEB_PORT`,
 `WEB_AUTH`, `WEB_TOKEN`, `WEB_MAX_UPLOAD_MB`, `WEB_JOBS_LIMIT`

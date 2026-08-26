@@ -1796,8 +1796,8 @@ def _persist_run_params(ctx: dict, pdir: Path, stage: str,
     Если pdir/.env нет — копия системного корневого .env (или шаблона),
     затем обновляются ключи по env_keys_for. api_key пишется в .env
     (локальный однопользовательский проект — удобство важнее
-    сокрытия; ключ хранится как API_KEY). Пустые значения НЕ пишутся;
-    системный .env не трогается."""
+    сокрытия; ключ хранится как <СТАДИЯ>_API_KEY, fallback — API_KEY).
+    Пустые значения НЕ пишутся; системный .env не трогается."""
     from web.stages import env_keys_for
     updates: dict[str, str] = {}
     profile = str(params.get("profile") or "")
@@ -1987,15 +1987,8 @@ def _stage_spec(ctx: dict) -> dict:
         try:
             from web.stages import env_keys_for
             pdir, _sec, _name = _project_ctx(ctx)
-            # автоподхват compiled_chapters.txt для NER —
-            # если дефолт пуст и файл есть. .env ниже приоритетнее
-            # (явные значения всегда выигрывают)
-            if ctx["params"]["key"] == "ner":
-                for field in spec.get("fields", []):
-                    if (field.get("name") == "file"
-                            and not field.get("default")
-                            and (pdir / "compiled_chapters.txt").is_file()):
-                        field["default"] = "compiled_chapters.txt"
+            # автоподхвата compiled_chapters.txt больше нет — режим
+            # «собрать главы» склеивает главы в память без файла
             c = _import_common(ctx)
             env = c.parse_dotenv(c.find_env_file(start_dir=str(pdir)))
             for field in spec.get("fields", []):

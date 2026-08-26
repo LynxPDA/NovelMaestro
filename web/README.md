@@ -120,8 +120,9 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
   сохраняются в `.env` проекта — копия системного корневого `.env`
   создаётся в папке проекта при первом запуске, затем обновляются ключи
   `<STAGE>_<FIELD>` (напр. `NER_CHUNK_SIZE`, `TRANSLATE_CHECK_EXCLUDE_WORDS`;
-  модель — `<STAGE>_MODEL`, fallback — общая `MODEL`). `API_KEY`
-  не сохраняется (только предзаполнение формы; профили убраны).
+  сервер — `<STAGE>_HOST` → `HOST`, ключ — `<STAGE>_API_KEY` → `API_KEY`,
+  модель — `<STAGE>_MODEL` → общая `MODEL`). Ключ сохраняется как
+  `<STAGE>_API_KEY` (fallback — `API_KEY`); профили убраны.
 - **Заметки** (раунд 12): `GET/PUT /api/notes` — `projects/notes.md`
   (markdown-редактор на вкладке «Заметки», рендер в sandbox-iframe).
 - **Логи**: список `logs/` и `logs/chapters/`, хвост, follow.
@@ -137,6 +138,13 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 | --- | --- | --- | --- |
 | `epub` | Разбор исходника на главы | `cli/epub_to_chapters.py` | нет |
 | `ner` | Создание глоссария (LLM) | `cli/ner.py` | да |
+
+Стадия `ner` — 4 режима формы: `extract` (с нуля, новый глоссарий),
+`finetune` (дообучение на существующий ner.json), `compile` (склейка
+глав `chapters/*/chapter.txt` в память без временного файла +
+извлечение; поля `start`/`end` — диапазон глав, ГЛАВЫ), `postprocess`
+(обработка ner.json без LLM: `strip_meta`/`min_count`; LLM-поля формы
+скрываются).
 | `ner_check` | Проверка глоссария (LLM) | `cli/ner_check.py` | да |
 | `pipeline` | Перевод (LLM) | `web/pipeline.py` | да |
 | `translate_check` | Проверка перевода | `cli/translate_check.py` | нет |

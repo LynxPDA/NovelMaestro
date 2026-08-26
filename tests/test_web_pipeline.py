@@ -112,7 +112,9 @@ def test_pipeline_action_options():
     assert model in _LLM_FIELDS
     from web.stages import env_keys_for
     assert env_keys_for("pipeline", "model") == ["PIPELINE_MODEL", "MODEL"]
-    assert env_keys_for("pipeline", "host") == ["HOST"]
+    assert env_keys_for("pipeline", "host") == ["PIPELINE_HOST", "HOST"]
+    assert env_keys_for("pipeline", "api_key") == \
+        ["PIPELINE_API_KEY", "API_KEY"]
 
 
 def test_build_pipeline_argv():

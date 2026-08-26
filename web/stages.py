@@ -21,28 +21,28 @@ log = logging.getLogger("web.stages")
 # ── R9: настройки запусков в .env ───────────────────────────────────────
 # Поля формы стадии сохраняются в .env проекта при каждом запуске и
 # предзаполняются из него. Схема ключей: {STAGE}_{FIELD} (верхним
-# регистром); LLM-поля — отдельно: model → {STAGE}_LOCAL/REMOTE_MODEL
-# (по профилю; скрипты читают эти ключи через get_stage_model),
-# host → {STAGE}_HOST. api_key/profile в .env НЕ пишутся.
+# регистром); LLM-поля — отдельно: host → {STAGE}_HOST → HOST,
+# api_key → {STAGE}_API_KEY → API_KEY, model → {STAGE}_MODEL → MODEL
+# (скрипты читают через get_server_config(env, stage)).
 
 def env_keys_for(stage: str, field: str, profile: str = "") -> list[str]:
-    """Кандидаты env-ключей для поля формы стадии (R9, ).
+    """Кандидаты env-ключей для поля формы стадии (R9).
 
-    Схема без профилей: host → HOST (единый адрес), model →
-    <STAGE>_MODEL → MODEL, api_key → API_KEY (единый ключ — персист
-    и предзаполнение, ключ хранится в .env). profile убран.
-    Персист берёт первый ключ; предзаполнение — первый найденный.
+    Схема «один скрипт — один набор сервер+ключ+модель»: host →
+    <STAGE>_HOST → HOST, api_key → <STAGE>_API_KEY → API_KEY, model →
+    <STAGE>_MODEL → MODEL. Персист берёт первый ключ (стадийный);
+    предзаполнение — первый найденный. profile убран.
     """
     s = (stage or "").upper()
     f = (field or "").upper()
     if f == "PROFILE":
         return []
     if f == "API_KEY":
-        return ["API_KEY"]
+        return [f"{s}_API_KEY", "API_KEY"]
     if f == "MODEL":
         return [f"{s}_MODEL", "MODEL"]
     if f == "HOST":
-        return ["HOST"]
+        return [f"{s}_HOST", "HOST"]
     return [f"{s}_{f}"]
 
 
@@ -62,7 +62,7 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
     """--host/--model/--api_key для LLM-стадий (без профилей).
 
     Приоритет: явные значения формы > HOST/API_KEY/MODEL из .env
-    (find_env_file от папки проекта + get_server_config/get_stage_model).
+    (find_env_file от папки проекта + get_server_config(env, stage)).
     Пустой результат — скрипт сам найдёт .env или попросит ввод.
 
     C1 (AUDIT): ключ из .env подставляется ТОЛЬКО если host не переопределён
@@ -86,8 +86,8 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
             log.debug(".env не загружен: %s", exc)
             env_data = {}
     try:
-        from core.common import get_server_config, get_stage_model
-        sc = get_server_config(env_data)
+        from core.common import get_server_config
+        sc = get_server_config(env_data, stage)
         if not host:
             host = sc["host"]
         # C1: ключ из .env — только для env-HOST'а
@@ -98,9 +98,9 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
                 from core.common import (find_env_file as _find_env,
                                          parse_dotenv as _parse_env)
                 sys_env = _parse_env(_find_env())
-                api_key = get_server_config(sys_env)["api_key"]
+                api_key = get_server_config(sys_env, stage)["api_key"]
         if not model:
-            model = get_stage_model(env_data, stage) or sc["model"]
+            model = sc["model"]
     except Exception as exc:
         log.debug("Сервер из .env не применён: %s", exc)
     if host:
@@ -241,43 +241,51 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
 def build_ner(form: dict, ctx: dict) -> list[str]:
     """Стадия 2 — извлечение NER (ner.py).
 
-    Три режима скрипта: extract (txt → глоссарий / дообучение),
-    compile (собрать chapter.txt + извлечение), postprocess
+    Режимы: extract (с нуля, txt → новый глоссарий), finetune
+    (дообучение, txt + существующий ner.json), compile (собрать
+    главы в память + извлечение, опционально start/end), postprocess
     (обработка ner.json без LLM: --strip-meta / --min-count).
+    LLM-флаги собираются только для LLM-режимов.
     """
     argv = ["cli/ner.py"]
     mode = form.get("mode") or "extract"
+    llm_mode = mode in ("extract", "finetune", "compile")
     if mode == "compile":
         argv.append("--compile_chapters")
-    elif form.get("file"):
+        argv += _range_argv("start", form)
+    elif mode in ("extract", "finetune") and form.get("file"):
         argv.append(str(form["file"]))
     if form.get("ner_file"):
         argv += ["--ner_file", str(form["ner_file"])]
-    if form.get("prompt_file"):
-        argv += ["--prompt_file", str(form["prompt_file"])]
-    for name, flag in (("threads", "--threads"), ("chunk_size", "--chunk_size"),
-                       ("retries", "--retries"), ("timeout", "--timeout"),
-                       ("save_interval", "--save-interval"),
-                       ("min_count", "--min-count")):
-        if form.get(name) not in (None, ""):
-            argv += [flag, str(form[name])]
-    if form.get("threshold") not in (None, ""):
-        argv += ["--threshold", str(form["threshold"])]
-    if form.get("ngram") not in (None, ""):
-        argv += ["--ngram", str(form["ngram"])]
-    if form.get("temperature") not in (None, ""):
-        argv += ["--temperature", str(form["temperature"])]
-    if form.get("reasoning") == "none":
-        argv.append("--no_reasoning")
-    elif form.get("reasoning"):
-        argv += ["--reasoning-effort", str(form["reasoning"])]
-    if form.get("two_pass"):
-        argv.append("--two-pass")
-    if form.get("keep_fields"):
-        argv += ["--keep-fields", str(form["keep_fields"])]
+    if llm_mode:
+        if form.get("prompt_file"):
+            argv += ["--prompt_file", str(form["prompt_file"])]
+        for name, flag in (("threads", "--threads"),
+                           ("chunk_size", "--chunk_size"),
+                           ("retries", "--retries"),
+                           ("timeout", "--timeout"),
+                           ("save_interval", "--save-interval")):
+            if form.get(name) not in (None, ""):
+                argv += [flag, str(form[name])]
+        if form.get("threshold") not in (None, ""):
+            argv += ["--threshold", str(form["threshold"])]
+        if form.get("ngram") not in (None, ""):
+            argv += ["--ngram", str(form["ngram"])]
+        if form.get("temperature") not in (None, ""):
+            argv += ["--temperature", str(form["temperature"])]
+        if form.get("reasoning") == "none":
+            argv.append("--no_reasoning")
+        elif form.get("reasoning"):
+            argv += ["--reasoning-effort", str(form["reasoning"])]
+        if form.get("two_pass"):
+            argv.append("--two-pass")
+        if form.get("keep_fields"):
+            argv += ["--keep-fields", str(form["keep_fields"])]
+        argv += _llm_argv(form, ctx, "ner")
+    if form.get("min_count") not in (None, ""):
+        argv += ["--min-count", str(form["min_count"])]
     if form.get("strip_meta"):
         argv.append("--strip-meta")
-    argv += _llm_argv(form, ctx, "ner")
     return argv
 
 
@@ -581,22 +589,29 @@ STAGE_SPECS: dict[str, dict] = {
         "script": "ner.py",
         "build": build_ner,
         "fields": _LLM_FIELDS + [
-            {"name": "mode", "label": "Режим работы",
+            {"name": "mode", "label": "Режим",
              "type": "select",
-             "options": ["extract", "compile", "postprocess"],
+             "options": ["extract", "finetune", "compile", "postprocess"],
              "default": "extract",
              "labels": {
-                 "extract": "Извлечение из txt (новый или дообучение)",
-                 "compile": "Собрать chapter.txt по папкам + извлечение",
-                 "postprocess": "Обработка ner.json (без LLM)",
+                 "extract": "С нуля (новый глоссарий)",
+                 "finetune": "Дообучение (глоссарий уже есть)",
+                 "compile": "Собрать главы + извлечение",
+                 "postprocess": "Постобработка ner.json (без LLM)",
              },
-             "help": "извлечение: нужен txt; ner.json есть — дообучение, нет — новый. собрать главы: сам склеит chapters/*/chapter.txt. обработка: только strip-meta / min-count, без LLM."},
-            {"name": "file", "label": "Входной txt (для извлечения)",
+             "help": "с нуля: txt → новый ner.json. дообучение: txt, термины добавятся к существующему ner.json. собрать главы: склеит chapters/*/chapter.txt в память (без временного файла), можно ограничить диапазоном. постобработка: только strip-meta / min-count, без LLM."},
+            {"name": "file", "label": "Входной txt",
              "type": "files", "dir": "", "ext": [".txt"], "default": "",
-             "help": "нужен в режиме извлечения; в «собрать главы» и «обработка» не обязателен"},
+             "help": "нужен в режимах «с нуля» и «дообучение»; в «собрать главы» и «постобработка» не нужен"},
+            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
+             "type": "number", "default": "",
+             "help": "для режима «собрать главы»; пусто = с первой"},
+            {"name": "end", "label": "Конечная глава (ГЛАВЫ)",
+             "type": "number", "default": "",
+             "help": "для режима «собрать главы»; пусто = до последней"},
             {"name": "ner_file", "label": "Глоссарий ner.json",
              "type": "files", "dir": "", "ext": [".json"], "default": "ner.json",
-             "help": "если файл есть — термины добавятся к нему (дообучение); если нет — создастся новый. в режиме «обработка» — входной файл"},
+             "help": "«с нуля» — создастся новый; «дообучение» — термины добавятся к существующему; «постобработка» — входной файл"},
             {"name": "prompt_file", "label": "Промпт-файл (теги pass1/pass2)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "ner_prompt.txt"},
@@ -620,10 +635,11 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "text", "default": "",
              "help": "Пусто = голосуют translation/type/pinyin; notes, context, translated_context не голосуют. Пример: notes,context"},
             {"name": "strip_meta", "label": "Удалить служебные поля (--strip-meta)",
-             "type": "bool", "default": False},
+             "type": "bool", "default": False,
+             "help": "режим «постобработка»: основной фильтр; в LLM-режимах — дополнительно после извлечения"},
             {"name": "min_count", "label": "Мин. count для сохранения",
              "type": "number", "default": "",
-             "help": "Пусто = сохраняются все записи (фильтр count не применяется)"},
+             "help": "режим «постобработка»: фильтр count; в LLM-режимах — дополнительно"},
             {"name": "save_interval", "label": "Интервал сохранения кэша",
              "type": "number", "default": "10"},
             {"name": "retries", "label": "Повторные попытки",

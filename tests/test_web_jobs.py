@@ -717,18 +717,37 @@ def test_stage_spec_env_prefill_bool_on(jobs_srv, tmp_path):
 
 
 def test_build_ner_modes():
-    """extract / compile / postprocess."""
+    """extract / finetune / compile (с диапазоном) / postprocess."""
 
-    compile_argv = build_command("ner", {"mode": "compile",
-                                         "ner_file": "ner.json"}, {})
+    # compile: --compile_chapters + диапазон глав
+    compile_argv = build_command(
+        "ner", {"mode": "compile", "start": "1", "end": "20",
+                "ner_file": "ner.json", "threads": "4"}, {})
     assert "--compile_chapters" in compile_argv
     assert compile_argv[1] == "--compile_chapters"
+    assert "--start" in compile_argv and "1" in compile_argv
+    assert "--end" in compile_argv and "20" in compile_argv
+    # LLM-флаги собираются для compile
+    assert "--threads" in compile_argv and "4" in compile_argv
+
+    # extract / finetune: файл позиционный, LLM-флаги есть
+    for mode in ("extract", "finetune"):
+        argv = build_command(
+            "ner", {"mode": mode, "file": "book.txt",
+                    "ner_file": "ner.json", "threads": "4"}, {})
+        assert "book.txt" in argv
+        assert "--compile_chapters" not in argv
+        assert "--threads" in argv
+
+    # postprocess: без файла и без LLM-флагов
     post_argv = build_command(
         "ner", {"mode": "postprocess", "ner_file": "ner.json",
                 "strip_meta": True, "min_count": "2"}, {})
     assert "--compile_chapters" not in post_argv
     assert "--strip-meta" in post_argv and "--min-count" in post_argv
-    assert "compiled_book.txt" not in post_argv
+    assert "book.txt" not in post_argv
+    assert "--host" not in post_argv and "--model" not in post_argv
+    assert "--threads" not in post_argv
 
 
 def test_build_ner_check_flags():
@@ -838,6 +857,35 @@ def test_llm_profile_from_env(tmp_path, monkeypatch):
     assert "--model" in joined and "ner-model" in joined
     # модель стадии NER приоритетнее общей
     assert "--model" in joined and "ner-model" in joined
+
+
+def test_llm_stage_keys_from_env(tmp_path, monkeypatch):
+    """Стадийные NER_HOST/NER_API_KEY приоритетнее общих HOST/API_KEY."""
+    env = tmp_path / ".env"
+    env.write_text(
+        "HOST=http://общий:9989\n"
+        "API_KEY=общий-ключ\n"
+        "MODEL=общая-модель\n"
+        "NER_HOST=http://нер:9989\n"
+        "NER_API_KEY=нер-ключ\n"
+        "NER_MODEL=нер-модель\n",
+        encoding="utf-8")
+    import core.common as common
+    monkeypatch.setattr(common, "find_env_file",
+                        lambda explicit=None, start_dir=None: str(env))
+    ctx: dict = {"project_dir": str(tmp_path)}
+    argv = build_command("ner", {"file": "book.txt"}, ctx)
+    joined = " ".join(argv)
+    assert "http://нер:9989" in joined and "http://общий:9989" not in joined
+    assert "нер-модель" in joined
+    assert ctx.get("_llm_api_key") == "нер-ключ"
+
+    # другой стадии (wiki) стадийные ключи не мешают — общие
+    ctx2: dict = {"project_dir": str(tmp_path)}
+    argv2 = build_command("wiki", {"file": "book.txt"}, ctx2)
+    joined2 = " ".join(argv2)
+    assert "http://общий:9989" in joined2
+    assert ctx2.get("_llm_api_key") == "общий-ключ"
 
 
 def test_llm_cli_overrides_env(tmp_path, monkeypatch):

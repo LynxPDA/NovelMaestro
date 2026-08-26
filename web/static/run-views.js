@@ -401,6 +401,37 @@ function viewRun(section, name, attachJobId) {
       applyMode();
     }
 
+    // ner — режимы: LLM (extract/finetune/compile) и постобработка (без LLM):
+    // постобработка прячет LLM-поля и входной txt, «собрать главы» —
+    // прячет txt и показывает диапазон глав
+    if (key === "ner") {
+      const modeSel = values["mode"];
+      const llmFields = [
+        "host", "model", "api_key", "prompt_file", "threads",
+        "chunk_size", "threshold", "ngram", "temperature", "reasoning",
+        "two_pass", "keep_fields", "save_interval", "retries", "timeout",
+      ];
+      const rangeFields = ["start", "end"];
+      const fileField = "file";
+      function applyNerMode() {
+        const m = (modeSel && modeSel.value) || "extract";
+        const isPost = m === "postprocess";
+        const isCompile = m === "compile";
+        for (const name of llmFields) {
+          const wrap = fieldWraps[name];
+          if (wrap) wrap.classList.toggle("hidden", isPost);
+        }
+        for (const name of rangeFields) {
+          const wrap = fieldWraps[name];
+          if (wrap) wrap.classList.toggle("hidden", !isCompile);
+        }
+        const fw = fieldWraps[fileField];
+        if (fw) fw.classList.toggle("hidden", isPost || isCompile);
+      }
+      if (modeSel) modeSel.addEventListener("change", applyNerMode);
+      applyNerMode();
+    }
+
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
