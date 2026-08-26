@@ -240,7 +240,7 @@ python3 ../../../scripts/ner_check.py --passes types      # этап 2 → то�
 ### Проверка перевода через LLM (translate_check_llm)
 
 `scripts/translate_check_llm.py` (бывший `fix_errors.py`) ищет ошибки в
-файлах глав (`--type polished|redacted`) через LLM и вместо генерации
+файлах глав (`--type polished|redacted|translated`) через LLM и вместо генерации
 fix-скрипта пишет человекочитаемый накопительный файл
 `translate_check_llm_review.json` (поля английские: `chapter`, `file`,
 `old`/`new`, `type`, `reason`, `status` со значениями «принять»/«отклонить»,

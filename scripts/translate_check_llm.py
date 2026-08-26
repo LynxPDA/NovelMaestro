@@ -793,7 +793,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
     ap.add_argument("--chapters_dir", default="./chapters",
                     help="Папка глав (default: ./chapters).")
     ap.add_argument("--type", dest="file_type", default="polished",
-                    choices=["polished", "redacted"],
+                    choices=["polished", "redacted", "translated"],
                     help="Тип проверяемых файлов (default: polished).")
     # Режим
     ap.add_argument("--two_pass", action="store_true",

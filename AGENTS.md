@@ -223,7 +223,7 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
 - `.pi-lens.json` (в репо): `format.enabled: false` — НЕ переформатировать
   файлы автоматически (перекраивает весь файл, шум в диффах);
   `rules.jscpd.disable: ["duplicate"]` — без дубликатов-предупреждений;
-  `ignore` — projects/, servers/, Images/, backup/, __pycache__/, .venv/.
+  `ignore` — projects/, servers/, Images/, backup/, **pycache**/, .venv/.
 - Находки pi-lens — подсказки, не истина: перед реакцией проверяй
   фактическое состояние (grep / node --check / pytest). Устаревший кэш
   диспатч-пайплайна повторяет старые находки (например, «exportModal

@@ -333,8 +333,7 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
     (translate_check_llm.py)."""
     argv = ["scripts/translate_check_llm.py"]
     argv += _range_argv("translate_check_llm", form)
-    if form.get("chapters_dir"):
-        argv += ["--chapters_dir", str(form["chapters_dir"])]
+    # папка глав всегда ./chapters (дефолт скрипта, cwd = проект)
     if form.get("type"):
         argv += ["--type", str(form["type"])]
     if form.get("two_pass"):
@@ -691,13 +690,11 @@ STAGE_SPECS: dict[str, dict] = {
         "build": build_translate_check_llm,
         "fields": _LLM_FIELDS + [
             {"name": "type", "label": "Тип файлов глав",
-             "type": "select", "options": ["polished", "redacted"],
+             "type": "select", "options": ["polished", "redacted", "translated"],
              "default": "polished"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "chapters_dir", "label": "Папка глав",
-             "type": "text", "default": "chapters"},
             {"name": "two_pass", "label": "Второй проход верификации",
              "type": "bool", "default": False},
             {"name": "context_budget", "label": "Бюджет контекста на пакет, СИМВОЛЫ",
