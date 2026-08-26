@@ -540,8 +540,7 @@ function viewRun(section, name, attachJobId) {
     const done = p ? p.done : 0;
     const pct = UICore.progressPct(done, total);
     const label = bar.querySelector(".progress-label");
-    if (label)
-      label.textContent = (p && p.label) || (running ? "Запуск" : "");
+    if (label) label.textContent = (p && p.label) || (running ? "Запуск" : "");
     const fill = bar.querySelector(".progress-fill");
     if (fill) fill.style.width = pct + "%";
     const text = bar.querySelector(".progress-text");
@@ -696,8 +695,7 @@ function viewRun(section, name, attachJobId) {
           if (cell) {
             const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
             cell.textContent = statusSym[ev.status] || ev.status;
-            cell.className =
-              "ch-cell ch-" + String(ev.status).toLowerCase();
+            cell.className = "ch-cell ch-" + String(ev.status).toLowerCase();
           }
         }
       }
