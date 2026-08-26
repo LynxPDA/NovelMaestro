@@ -73,11 +73,10 @@ def parse_dotenv(path) -> dict:
 
 
 def find_env_file(explicit=None, start_dir=None):
-    """Ищет .env БЕЗ хардкода абсолютных путей:
-    явный путь → вверх от start_dir/каталога common/cwd — сначала
-    <dir>/projects/.env (системный), затем <dir>/.env (проектный/корневой).
-    При подъёме из папки проекта первым находится собственный .env книги,
-    из корня репо — системный projects/.env (канон web-first).
+    """Ищет .env БЕЗ хардкода абсолютных путей: явный путь → вверх от
+    start_dir/каталога common/cwd — единственный кандидат <dir>/.env.
+    При подъёме из папки проекта первым находится собственный pdir/.env
+    книги, из корня репо — системный корневой .env (канон web-first).
     Не найден → None (скрипт обязан работать дальше с ручным вводом)."""
     if explicit and os.path.isfile(explicit):
         return os.path.abspath(explicit)
@@ -90,10 +89,9 @@ def find_env_file(explicit=None, start_dir=None):
     for base in bases:
         d = base
         for _ in range(6):  # подъём вверх по дереву
-            for cand in (os.path.join(d, "projects", ".env"),
-                         os.path.join(d, ".env")):
-                if os.path.isfile(cand):
-                    return os.path.abspath(cand)
+            cand = os.path.join(d, ".env")
+            if os.path.isfile(cand):
+                return os.path.abspath(cand)
             parent = os.path.dirname(d)
             if parent == d:
                 break

@@ -76,9 +76,11 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
   таб с поиском термина); JSON-редактор — прежний режим. Применение
   запускается как фоновая задача и уведомляет о завершении toast-ом
   (✅/❌/⏹); чекбокс «не создавать .bak» (по умолчанию бэкапы создаются).
-- **Конфиг** (W6, раунд 8): системный `.env` — `projects/.env`
+- **Конфиг** (W6, раунд 8): системный `.env` — корневой `.env` репо
   (`scope=global`; проектный `pdir/.env` — изоляция проекта, приоритетнее
   системного; значения видимы без auth, маскируются при `--auth`);
+  настройки внешнего вида (`WEB_UI_THEME`/`WEB_EDITOR_THEME`/
+  `WEB_EDITOR_FONT_SIZE`) — `GET /api/settings`;
   metadata.yaml; обложка (upload/предпросмотр/удаление, `source/cover.*`).
 - **Промпты** (W4): файлы `prompts/` + шаблоны `templates/*/prompts`
   в одном списке; создание промпта из шаблона.
@@ -110,7 +112,7 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
   translate_book.py сам различает формат (файл без тегов = промпт стадии).
 - **Настройки запусков** (R9): поля форм предзаполняются из `.env`
   (`GET /api/stages/{key}/spec?project=…`), при каждом запуске
-  сохраняются в `.env` проекта — копия системного `projects/.env`
+  сохраняются в `.env` проекта — копия системного корневого `.env`
   создаётся в папке проекта при первом запуске, затем обновляются ключи
   `<STAGE>_<FIELD>` (напр. `NER_CHUNK_SIZE`, `TRANSLATE_CHECK_EXCLUDE_WORDS`;
   модель — `<STAGE>_MODEL`, fallback — общая `MODEL`). `API_KEY`
@@ -183,6 +185,7 @@ WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
 | GET | `/api/check` | отчёты translate_check (W7) |
 | GET/PUT/DELETE | `/api/env?scope=project\|global` | .env (global — корневой `.env` репо; project — только собственный `pdir/.env`) |
 | GET | `/api/env/template` | шаблон `templates/.env.example` |
+| GET | `/api/settings` | внешний вид интерфейса из системного .env: `ui_theme` (WEB_UI_THEME), `editor_theme` (WEB_EDITOR_THEME), `editor_font_size` (WEB_EDITOR_FONT_SIZE); невалидные → дефолты (dark/auto/13) |
 | GET/PUT/DELETE | `/api/prompts`, `/api/prompts/{name}` | промпты (DELETE — удаление, PUT с пустым content — создание) |
 | GET | `/api/prompts/{name}/template` | шаблоны промптов |
 | GET | `/api/logs`, `/api/logs/{name}` | логи проекта |

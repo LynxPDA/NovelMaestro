@@ -1,7 +1,8 @@
 # core/common.py (stdlib + requests; опц. pyahocorasick) — для заимствований
 
-.env: parse_dotenv / find_env_file (системный projects/.env, вверх от
-  старта: сначала DIR/projects/.env, затем DIR/.env) / get_server_config
+.env: parse_dotenv / find_env_file (системный корневой .env, вверх от
+  старта: из папки книги — её pdir/.env, из корня — корневой .env) /
+  get_server_config
   (HOST/API_KEY/MODEL, профили убраны) /
   get_stage_model (СТАДИЯ_MODEL → общая MODEL) / print_env_help
 лог/модель: setup_logging / log_argv (фактическая команда запуска,

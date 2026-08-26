@@ -1043,6 +1043,8 @@ def _review_apply(ctx: dict, action: str) -> dict:
     if action == "translate_check_llm":
         params["type"] = body.get("type") or "polished"
     ctx["body"] = {"action": action, "project": project, "params": params}
+    # маркер: флаги применения собираются только этим путём («Проверка»)
+    ctx["review_apply"] = True
     return _jobs_start(ctx)
 
 
@@ -1062,10 +1064,10 @@ def _env_path(ctx: dict, scope: str) -> Path:
 
     scope=project → ТОЛЬКО pdir/.env (собственный файл проекта; если его
     нет — хендлеры отвечают exists=False); scope=global → системный
-    projects/.env (единый конфиг, редактируется из вкладки «Настройки»).
+    корневой .env репо (единый конфиг, вкладка «Настройки»).
     """
     if scope == "global":
-        return _projects_root(ctx) / ".env"
+        return _repo_root(ctx) / ".env"
     return _project_ctx(ctx)[0] / ".env"
 
 
@@ -1177,7 +1179,7 @@ def _env_put(ctx: dict) -> dict:
 def _env_delete(ctx: dict) -> dict:
     """Удалить собственный .env проекта (DELETE /api/env?project=&scope=project).
 
-    После удаления проект снова использует общий projects/.env —
+    После удаления проект снова использует общий корневой .env —
     канон find_env_file (fallback) остаётся для конвейера.
     """
     pdir, _section, _name = _project_ctx(ctx)
@@ -1195,6 +1197,32 @@ def _env_template(ctx: dict) -> dict:
         return {"ok": True, "name": f.name,
                 "content": f.read_text(encoding="utf-8", errors="replace")}
     return {"ok": True, "name": None, "content": ""}
+
+
+def _settings_get(ctx: dict) -> dict:
+    """Настройки внешнего вида интерфейса (GET /api/settings).
+
+    Источник — системный корневой .env (WEB_UI_THEME/WEB_EDITOR_THEME/
+    WEB_EDITOR_FONT_SIZE); невалидные значения заменяются дефолтами,
+    в проектный pdir/.env не копируются (WEB_* вырезаются).
+    """
+    c = _import_common(ctx)
+    env = c.parse_dotenv(_env_path(ctx, "global"))
+    ui_theme = str(env.get("WEB_UI_THEME", "")).strip().lower()
+    if ui_theme not in ("dark", "light"):
+        ui_theme = "dark"
+    editor_theme = str(env.get("WEB_EDITOR_THEME", "")).strip().lower()
+    if editor_theme not in ("auto", "dark", "light"):
+        editor_theme = "auto"
+    try:
+        font = int(float(str(env.get("WEB_EDITOR_FONT_SIZE", "13"))))
+    except (TypeError, ValueError):
+        font = 13
+    font = max(8, min(32, font))
+    return {"ok": True,
+            "ui_theme": ui_theme,
+            "editor_theme": editor_theme,
+            "editor_font_size": font}
 
 
 def _prompts_list(ctx: dict) -> dict:
@@ -1517,6 +1545,7 @@ def _register_m7(router: Router) -> None:
     router.add("PUT", "/api/env", _env_put)
     router.add("DELETE", "/api/env", _env_delete)
     router.add("GET", "/api/env/template", _env_template)
+    router.add("GET", "/api/settings", _settings_get)
     router.add("GET", "/api/prompts", _prompts_list)
     router.add("GET", "/api/prompts/{name}", _prompts_get)
     router.add("PUT", "/api/prompts/{name}", _prompts_put)
@@ -1760,7 +1789,7 @@ def _persist_run_params(ctx: dict, pdir: Path, stage: str,
                         params: dict) -> None:
     """Сохраняет настройки запуска стадии в .env проекта (R9).
 
-    Если pdir/.env нет — копия системного projects/.env (или шаблона),
+    Если pdir/.env нет — копия системного корневого .env (или шаблона),
     затем обновляются ключи по env_keys_for. api_key пишется в .env
     (локальный однопользовательский проект — удобство важнее
     сокрытия; ключ хранится как API_KEY). Пустые значения НЕ пишутся;
@@ -1782,7 +1811,7 @@ def _persist_run_params(ctx: dict, pdir: Path, stage: str,
         return
     env_path = pdir / ".env"
     if not env_path.is_file():
-        src = _projects_root(ctx) / ".env"
+        src = _repo_root(ctx) / ".env"
         if not src.is_file():
             src = _repo_root(ctx) / "templates" / ".env.example"
         try:
@@ -1801,9 +1830,9 @@ def _strip_secret_keys(text: str) -> str:
     """Убирает значения секретных ключей (*_API_KEY, API_KEY) из текста
     .env (M1): строки остаются с пустым значением + комментарий.
     единый ключ API_KEY тоже секретный (не *_API_KEY).
-    Системные WEB_* (настройки web-сервера) в проект НЕ копируются
-    вовсе — в проектном .env они бесполезны (читает их только
-    системный projects/.env)."""
+    Системные WEB_* (настройки web-сервера и интерфейса) в проект НЕ
+    копируются вовсе — в проектном .env они бесполезны (читает их только
+    системный корневой .env)."""
     marker = "# (секрет не копируется в проект — M1, AUDIT)"
     out = []
     for line in text.splitlines():
@@ -1828,7 +1857,7 @@ def _strip_secret_keys(text: str) -> str:
 def _env_ctx(ctx: dict, scope: str) -> tuple[Path, str]:
     """(путь к .env, источник) для scope global/project."""
     if scope == "global":
-        return _projects_root(ctx) / ".env", "shared"
+        return _repo_root(ctx) / ".env", "shared"
     pdir, _s, _n = _project_ctx(ctx)
     return pdir / ".env", "project"
 

@@ -12,7 +12,7 @@ run.py — запуск NovelMaestro (web-first).
 
 Менеджмент проектов (создание, перенос, переименование, дублирование,
 удаление) — в web-интерфейсе; общая логика — core/projects.py.
-Конфиг — системный projects/.env (см. templates/.env.example).
+Конфиг — системный корневой .env (см. templates/.env.example).
 stdlib-only.
 """
 from __future__ import annotations
@@ -44,13 +44,22 @@ def _force_utf8_io() -> None:
 
 
 def bootstrap_projects() -> None:
-    """При запуске: каркас projects/ (разделы) и системный
-    projects/.env из шаблона."""
+    """При запуске: каркас projects/ (разделы) и системный корневой
+    .env из шаблона; старый projects/.env переносится в корень."""
     created = prj.ensure_projects_root(PROJECTS)
     if created:
         print(f"  ✔ Созданы разделы: {', '.join(created)}")
-    env_dst = PROJECTS / ".env"
+    env_dst = REPO / ".env"
     env_tpl = REPO / "templates" / ".env.example"
+    # миграция: системный .env переехал из projects/ в корень репо
+    legacy = PROJECTS / ".env"
+    if not env_dst.exists() and legacy.is_file():
+        try:
+            shutil.move(str(legacy), str(env_dst))
+        except OSError as exc:
+            print(f"  ⚠ Не удалось перенести projects/.env: {exc}")
+        else:
+            print(f"  ✔ Системный .env перенесён: projects/.env → {env_dst.name}")
     if not env_dst.exists() and env_tpl.is_file():
         print("  ℹ Системный .env не найден — копирую шаблон "
               "templates/.env.example (единый конфиг сервера и LLM).")

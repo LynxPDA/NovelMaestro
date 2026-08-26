@@ -171,14 +171,13 @@ def test_parse_dotenv_full(tmp_path):
 
 
 def test_find_env_file_upward(tmp_path):
-    """системный projects/.env — приоритетнее корневого .env."""
+    """Из глубины projects/ находится системный корневой .env."""
     (tmp_path / "projects").mkdir()
     (tmp_path / ".env").write_text("A=1", encoding="utf-8")
-    (tmp_path / "projects" / ".env").write_text("A=2", encoding="utf-8")
     deep = tmp_path / "projects" / "ACTIVE" / "book"
     deep.mkdir(parents=True)
     found = C.find_env_file(start_dir=str(deep))
-    assert found == str(tmp_path / "projects" / ".env")  # системный
+    assert found == str(tmp_path / ".env")  # системный корневой
 
 
 def test_find_env_file_project_env_wins(tmp_path):
@@ -186,7 +185,7 @@ def test_find_env_file_project_env_wins(tmp_path):
     book = tmp_path / "projects" / "ACTIVE" / "book"
     book.mkdir(parents=True)
     (book / ".env").write_text("P=1", encoding="utf-8")
-    (tmp_path / "projects" / ".env").write_text("S=1", encoding="utf-8")
+    (tmp_path / ".env").write_text("S=1", encoding="utf-8")
     found = C.find_env_file(start_dir=str(book))
     assert found == str(book / ".env")
 

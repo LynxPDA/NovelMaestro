@@ -326,14 +326,46 @@ def test_notes_put_rejects_non_string(srv, tmp_path):
 
 
 def test_env_get_global(srv, tmp_path):
-    """scope=global — системный projects/.env."""
-    _srv, port, root = srv(projects_root=tmp_path / "prj")
+    """scope=global — системный корневой .env репо."""
+    _srv, port, root = srv(projects_root=tmp_path / "prj",
+                           repo_root=tmp_path / "repo")
     (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "prj" / ".env").write_text("GLOBAL=1\n", encoding="utf-8")
+    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "repo" / ".env").write_text("GLOBAL=1\n", encoding="utf-8")
     r = _request(port, "GET", "/api/env?scope=global")
     assert r["ok"] and r["exists"] and r["keys"] == ["GLOBAL"]
     assert r["source"] == "shared"
     assert "1" not in r["masked"]
+
+
+def test_settings_get(srv, tmp_path):
+    """GET /api/settings — внешний вид из корневого .env, дефолты."""
+    _srv, port, root = srv(projects_root=tmp_path / "prj",
+                           repo_root=tmp_path / "repo")
+    (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
+    r = _request(port, "GET", "/api/settings")
+    assert r["ok"]
+    assert r["ui_theme"] == "dark"
+    assert r["editor_theme"] == "auto"
+    assert r["editor_font_size"] == 13
+
+    (tmp_path / "repo" / ".env").write_text(
+        "WEB_UI_THEME=light\nWEB_EDITOR_THEME=dark\n"
+        "WEB_EDITOR_FONT_SIZE=16\n", encoding="utf-8")
+    r = _request(port, "GET", "/api/settings")
+    assert r["ui_theme"] == "light"
+    assert r["editor_theme"] == "dark"
+    assert r["editor_font_size"] == 16
+
+    # невалидные значения → дефолты без падения
+    (tmp_path / "repo" / ".env").write_text(
+        "WEB_UI_THEME=blue\nWEB_EDITOR_FONT_SIZE=abc\n",
+        encoding="utf-8")
+    r = _request(port, "GET", "/api/settings")
+    assert r["ui_theme"] == "dark"
+    assert r["editor_theme"] == "auto"
+    assert r["editor_font_size"] == 13
 
 
 def test_env_put_replace(srv, tmp_path):
@@ -582,8 +614,8 @@ def test_env_project_no_fallback_to_shared(srv, tmp_path):
     assert "http://shared" not in (r.get("content") or "")
 
 
-def test_env_global_is_projects_env(srv, tmp_path):
-    """scope=global — projects/.env, а не корневой .env репо."""
+def test_env_global_is_repo_root_env(srv, tmp_path):
+    """scope=global — корневой .env репо, projects/.env не читается."""
     _srv, port, root = srv(projects_root=tmp_path / "prj",
                            repo_root=tmp_path / "repo")
     _mk_project(root)
@@ -593,8 +625,8 @@ def test_env_global_is_projects_env(srv, tmp_path):
     (tmp_path / "prj" / ".env").write_text("K=v\n", encoding="utf-8")
     r = _request(port, "GET", "/api/env?scope=global")
     assert r["ok"] and r["exists"] and r["source"] == "shared"
-    assert r["keys"] == ["K"]
-    assert "ROOT" not in r["keys"]
+    assert r["keys"] == ["ROOT"]
+    assert "K" not in r["keys"]
 
 
 def test_env_project_own_file_wins(srv, tmp_path):
@@ -626,25 +658,29 @@ def test_env_put_content_mode_creates(srv, tmp_path):
 
 
 def test_env_put_global_content(srv, tmp_path):
-    """projects/.env пишется через content (Настройки)."""
-    _srv, port, root = srv(projects_root=tmp_path / "prj")
+    """Корневой .env пишется через content (Настройки)."""
+    _srv, port, root = srv(projects_root=tmp_path / "prj",
+                           repo_root=tmp_path / "repo")
     (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
     r = _request(port, "PUT", "/api/env",
                  body={"scope": "global", "content": "HOST=x\n"})
     assert r["ok"] and r["keys"] == ["HOST"]
-    assert (tmp_path / "prj" / ".env").read_text(encoding="utf-8") == "HOST=x\n"
+    assert (tmp_path / "repo" / ".env").read_text(encoding="utf-8") == "HOST=x\n"
 
 
 def test_env_delete_project_only(srv, tmp_path):
     """DELETE /api/env?scope=project удаляет только pdir/.env."""
-    _srv, port, root = srv(projects_root=tmp_path / "prj")
+    _srv, port, root = srv(projects_root=tmp_path / "prj",
+                           repo_root=tmp_path / "repo")
     pdir = _mk_project(root)
     (pdir / ".env").write_text("OWN=1\n", encoding="utf-8")
-    (tmp_path / "prj" / ".env").write_text("SHARED=1\n", encoding="utf-8")
+    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "repo" / ".env").write_text("SHARED=1\n", encoding="utf-8")
     r = _request(port, "DELETE", f"/api/env?{_q('ACTIVE/demo')}&scope=project")
     assert r["ok"] and r["deleted"]
     assert not (pdir / ".env").exists()
-    assert (tmp_path / "prj" / ".env").exists()  # общий не тронут
+    assert (tmp_path / "repo" / ".env").exists()  # общий не тронут
 
 
 def test_env_template_endpoint(srv, tmp_path):
@@ -864,9 +900,12 @@ def test_stage_spec_env_no_project(srv, tmp_path):
 
 def test_job_start_copies_env_without_secrets(srv, tmp_path):
     """M1 (AUDIT): копия системного .env в проект — БЕЗ значений API_KEY."""
-    srv, port, root = srv()
+    srv, port, root = srv(repo_root=tmp_path / "repo")
     pdir = _mk_project(root)
-    (root / ".env").write_text(
+    (tmp_path / "repo" / "scripts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "repo" / "scripts" / "translate_check.py").write_text(
+        "import sys\nsys.exit(0)\n", encoding="utf-8")
+    (tmp_path / "repo" / ".env").write_text(
         "HOST=http://sys\nAPI_KEY=СЕКРЕТ-СИСТЕМНЫЙ\n"
         "REMOTE_API_KEY=другой-секрет\nMODEL=m\n", encoding="utf-8")
     from web.jobs import JobManager
@@ -886,9 +925,13 @@ def test_job_start_copies_env_without_secrets(srv, tmp_path):
 def test_job_start_persists_run_params(srv, tmp_path):
     """R9-B: запуск создаёт/обновляет .env проекта (копия системного),
     api_key пишется как API_KEY , пустые поля пропускаются."""
-    srv, port, root = srv()
+    srv, port, root = srv(repo_root=tmp_path / "repo")
     pdir = _mk_project(root)
-    (root / ".env").write_text("HOST=http://sys\n", encoding="utf-8")
+    (tmp_path / "repo" / "scripts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "repo" / "scripts" / "translate_check.py").write_text(
+        "import sys\nsys.exit(0)\n", encoding="utf-8")
+    (tmp_path / "repo" / ".env").write_text("HOST=http://sys\n",
+                                             encoding="utf-8")
     from web.jobs import JobManager
     srv.job_manager = JobManager(tmp_path / "web", repo_root=REPO)
     r = _request(port, "POST", "/api/jobs",

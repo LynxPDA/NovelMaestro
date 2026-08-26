@@ -55,7 +55,7 @@ JOB_MANAGER = JobManager(Path(__file__).resolve().parent)
 
 
 def _env_cfg() -> dict:
-    """Конфиг из системного projects/.env , os.environ
+    """Конфиг из системного корневого .env, os.environ
     приоритетнее."""
     cfg: dict = {}
     try:

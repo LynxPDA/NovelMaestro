@@ -37,24 +37,32 @@ def test_bootstrap_creates_sections_and_env(fake_repo, capsys):
     RUN.bootstrap_projects()
     for sec in P.SECTIONS:
         assert (RUN.PROJECTS / sec).is_dir()
-    assert (RUN.PROJECTS / ".env").is_file()  # системный projects/.env
+    assert (RUN.REPO / ".env").is_file()  # системный корневой .env
     out = capsys.readouterr().out
     assert "templates/.env.example" in out
 
 
 def test_bootstrap_env_copied_only_once(fake_repo, monkeypatch, capsys):
     RUN.bootstrap_projects()
-    (RUN.PROJECTS / ".env").write_text("HOST=y\n", encoding="utf-8")
+    (RUN.REPO / ".env").write_text("HOST=y\n", encoding="utf-8")
     RUN.bootstrap_projects()  # повтор: .env уже есть — не перезаписываем
-    assert (RUN.PROJECTS / ".env").read_text(encoding="utf-8") == "HOST=y\n"
+    assert (RUN.REPO / ".env").read_text(encoding="utf-8") == "HOST=y\n"
 
 
 def test_bootstrap_idempotent_when_env_exists(fake_repo, monkeypatch):
-    (RUN.PROJECTS / ".env").write_text("x", encoding="utf-8")
+    (RUN.REPO / ".env").write_text("x", encoding="utf-8")
     RUN.bootstrap_projects()
     for sec in P.SECTIONS:
         assert (RUN.PROJECTS / sec).is_dir()
-    assert (RUN.PROJECTS / ".env").read_text(encoding="utf-8") == "x"
+    assert (RUN.REPO / ".env").read_text(encoding="utf-8") == "x"
+
+
+def test_bootstrap_migrates_legacy_projects_env(fake_repo, capsys):
+    """Старый projects/.env переносится в корень при первом запуске."""
+    (RUN.PROJECTS / ".env").write_text("HOST=legacy\n", encoding="utf-8")
+    RUN.bootstrap_projects()
+    assert not (RUN.PROJECTS / ".env").exists()
+    assert (RUN.REPO / ".env").read_text(encoding="utf-8") == "HOST=legacy\n"
 
 
 # ──────────────────────────────────────────────────────────────────────
