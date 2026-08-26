@@ -36,7 +36,9 @@ def test_web_layout():
     assert (ROOT / "web" / "README.md").is_file()
     assert (ROOT / "web" / "static" / "app.js").is_file()
     assert (ROOT / "web" / "static" / "index.html").is_file()
-    assert not (ROOT / "tools").exists()
+    # вспомогательные утилиты вне конвейера — в tools/ (userscript Rulate)
+    assert (ROOT / "tools").is_dir()
+    assert not (ROOT / "scripts" / "Other_tools").exists()
 
 
 # ══════════════════════════════════════════════════════════════════════
