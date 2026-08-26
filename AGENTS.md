@@ -52,12 +52,14 @@ web/      web-интерфейс: server.py + api.py (роуты/хендлер�
           Контракт API — web/README.md.
 scripts/  исполнители — чистый CLI (argparse), без интерактивных меню.
           batch_replace.py — массовые замены по файлу правил (prompts/replacements.txt);
-          Other_tools/ — вспомогательные утилиты вне конвейера (userscript Rulate).
+tools/    вспомогательные утилиты вне конвейера: tampermonkey_rulate_reload.js
+          (userscript Rulate, README — tools/README.md).
 templates/ шаблоны новых проектов: общие шаблоны в корне (.env.example,
           donate.txt.example, replacements.txt.example); подпапки по типу
           книги — жанру и языку (General/) с промптами и metadata.yaml.
 run.py    лаунчер: python3 run.py → web/main.py (+браузер); проброс
-          --host/--port/--auth/--token/--max-upload-mb/--jobs-limit.
+          --host/--port/--auth/--token/--max-upload-mb/--jobs-limit/
+          --projects-dir.
 projects/ <раздел>/<книга>/ — данные проектов (НЕ в git, см .gitignore).
 tests/    pytest P0–P2.
 ```

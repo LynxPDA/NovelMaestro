@@ -121,6 +121,7 @@ LLM), конфиги, промпты, заметки, логи, запуски �
 ```
 python3 run.py                 # web-сервер + открыть браузер
 python3 run.py --no-open       # без автозапуска браузера
+python3 run.py --projects-dir /mnt/data/novels   # своя папка проектов
 python3 web/main.py --help     # флаги сервера (host/port/auth/токен/лимиты)
 ```
 
@@ -131,6 +132,11 @@ python3 web/main.py --help     # флаги сервера (host/port/auth/то�
 ещё нет, копирует туда шаблон `templates/.env.example` (единый файл
 настроек LLM-сервера и самого web-сервера; `find_env_file` находит его
 автоматически).
+
+**Своя папка проектов**: `run.py --projects-dir <путь>` (или
+`WEB_PROJECTS_DIR` в системном `.env` / окружении) — данные проектов
+(и `projects/.web_secret`, и `projects/.sections.json`) лягут туда;
+удобно для Docker/портативных сборок (см. `packaging/README.md`).
 
 **Разделы проектов** (динамические):
 
@@ -316,9 +322,14 @@ NovelMaestro/
 │   ├── ner.py              # извлечение именованных сущностей
 │   ├── translate_check.py  # проверка перевода
 │   ├── wiki.py             # генерация wiki-статей
-│   ├── batch_replace.py    # массовые замены по файлу правил
-│   └── Other_tools/        # вспомогательные утилиты (вне конвейера)
-│       └── tampermonkey_rulate_reload.js  # userscript загрузки глав на Rulate
+│   └── batch_replace.py    # массовые замены по файлу правил
+├── tools/                  # вспомогательные утилиты (вне конвейера)
+│   ├── README.md           # установка/использование (Rulate userscript)
+│   └── tampermonkey_rulate_reload.js  # userscript загрузки глав на Rulate
+├── packaging/              # релизные сборки: Docker, портативная Windows
+│   └── README.md           # инструкции (см. также Dockerfile, docker-compose.yml)
+├── Dockerfile              # сборка образа (python:3.12-slim, healthcheck)
+├── docker-compose.yml      # один сервис: порт 8756, volume projects/job_logs
 ├── projects/               # данные проектов (не в git):
 │                           # <раздел>/<книга>/ — см. «Структура папки проекта»
 ├── templates/              # шаблоны для новых проектов (см. ниже)
