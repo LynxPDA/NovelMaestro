@@ -44,13 +44,13 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core.common import (  # noqa: E402
-    compile_chapter_texts,
+    atomic_write,
+    compile_chapter_text,
     determine_model,
     emit_progress,
     find_env_file,
     get_ngrams,
     get_server_config,
-    get_stage_model,
     is_cjk_string,
     log_argv,
     parse_dotenv,
@@ -1329,6 +1329,9 @@ def main():
             "  Постпроцессинг без входного файла:\n"
             "    python ner.py --ner_file ner.json --min-count 2 --strip-meta\n"
             "\n"
+            "  Сборка глав с диапазоном (в память, без временного файла):\n"
+            "    python ner.py --compile_chapters --start 1 --end 20\n"
+            "\n"
             "Формат промпт-файла (--prompt_file):\n"
             "\n"
             "  <prompt_pass1>\n"
@@ -1470,8 +1473,8 @@ def main():
     parser.add_argument(
         "--compile_chapters", action="store_true",
         help=(
-            "Собрать chapters/*/chapter.txt в один файл "
-            "(compiled_chapters.txt) и использовать его как вход."
+            "Собрать chapters/*/chapter.txt и использовать как вход "
+            "(в память, без временного файла)."
         ),
     )
     parser.add_argument(
@@ -1479,18 +1482,29 @@ def main():
         help="Папка глав для --compile_chapters (по умолчанию: chapters).",
     )
     parser.add_argument(
-        "--compile_out", default="compiled_chapters.txt",
-        help="Куда писать собранный txt (--compile_chapters).",
+        "--start", type=int, default=None,
+        help="Начальная глава для --compile_chapters (ГЛАВЫ, включительно).",
+    )
+    parser.add_argument(
+        "--end", type=int, default=None,
+        help="Конечная глава для --compile_chapters (ГЛАВЫ, включительно).",
+    )
+    parser.add_argument(
+        "--compile_out", default=None,
+        help=(
+            "Опционально: сохранить собранный txt в этот файл "
+            "(--compile_chapters). Пусто = сборка в память, файл не пишется."
+        ),
     )
 
     args = parser.parse_args()
     # Сервер: CLI > HOST/API_KEY/MODEL из .env
     env_data = parse_dotenv(find_env_file(args.env_file)) if args.env_file \
         else parse_dotenv(find_env_file())
-    sc = get_server_config(env_data)
+    sc = get_server_config(env_data, "ner")
     args.host = args.host or sc["host"] or ""
     args.api_key = args.api_key if args.api_key is not None else sc["api_key"]
-    args.model = args.model or get_stage_model(env_data, "ner")
+    args.model = args.model or sc["model"]
     if not args.host:
         print_env_help()
         sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")
@@ -1506,20 +1520,34 @@ def main():
             f.strip() for f in args.keep_fields.split(",") if f.strip()
         }
 
-    # ── Сборка глав (chapter.txt → один txt) ──
+    # ── Сборка глав (chapter.txt → в память; --compile_out — сохранить) ──
+    in_memory_text: str | None = None
     if args.compile_chapters:
-        out = args.compile_out or "compiled_chapters.txt"
         try:
             os.makedirs("logs", exist_ok=True)
         except OSError as exc:
             print(f"⚠ logs/ не создаётся: {exc}", file=sys.stderr)
         clog, _ = setup_logging(os.path.join("logs", "ner_compile.log"))
-        info = compile_chapter_texts(
-            args.chapters_dir, out, want="chapter", logger=clog)
+        text, info = compile_chapter_text(
+            args.chapters_dir, want="chapter",
+            start=args.start, end=args.end, logger=clog)
         if info["written"] == 0:
             clog.error("Не собрано ни одной главы из %s", args.chapters_dir)
             return 1
-        args.file = out
+        if args.compile_out:
+            # явный --compile_out — сохранить собранный txt (кастомный файл)
+            out = args.compile_out
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+            except OSError as exc:
+                print(f"⚠ Папка не создаётся: {exc}", file=sys.stderr)
+            atomic_write(out, text)
+            clog.info("💾 Собранный txt сохранён: %s", out)
+            args.file = out
+        else:
+            # сборка в память — файл не пишется; кэши лягут рядом (cwd)
+            args.file = "compiled_chapters.txt"
+            in_memory_text = text
 
     # ── Режим постпроцессинга (без входного файла) ──
     postprocess_requested = args.strip_meta or args.min_count is not None
@@ -1554,7 +1582,7 @@ def main():
     logger, _ = setup_logging(log_path)
     log_argv(logger)
 
-    if not os.path.exists(args.file):
+    if not os.path.exists(args.file) and in_memory_text is None:
         _log(logger, logging.ERROR, f"❌ Файл не найден: {args.file}")
         return 1  # H4 (AUDIT): нет входного файла — код 1
 
@@ -1593,11 +1621,17 @@ def main():
             _log(logger, logging.WARNING,
                  "⚠️ Pass2 промпт не содержит {chunk_text} и/или {ner_json}.")
 
-    try:
-        with open(args.file, "r", encoding="utf-8") as f:
-            full_text = f.read()
-    except OSError as exc:
-        parser.error(f"Файл не читается: {exc}")
+    if in_memory_text is not None:
+        full_text = in_memory_text
+        _log(logger, logging.INFO,
+             f"📚 Вход: сборка глав в память "
+             f"({len(full_text)} символов, файл не создаётся)")
+    else:
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                full_text = f.read()
+        except OSError as exc:
+            parser.error(f"Файл не читается: {exc}")
 
     all_chunks = split_text_smart(
         full_text, target_chars=args.chunk_size, logger=logger

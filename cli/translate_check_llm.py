@@ -63,7 +63,6 @@ from core.common import (  # noqa: E402
     find_env_file,
     fix_entry,
     get_server_config,
-    get_stage_model,
     log_argv,
     merge_fix_entries,
     parse_dotenv,
@@ -912,10 +911,10 @@ def do_check(args, logger) -> int:
     """Поиск ошибок LLM → накопительный review-файл."""
     env_path = find_env_file(args.env_file)
     env_data = parse_dotenv(env_path)
-    sc = get_server_config(env_data)
+    sc = get_server_config(env_data, "translate_check_llm")
     host = args.host or sc["host"]
     api_key = args.api_key if args.api_key is not None else sc["api_key"]
-    model = args.model or get_stage_model(env_data, "translate_check_llm")
+    model = args.model or sc["model"]
     if not api_key:
         api_key = os.environ.get("LLM_API_KEY", "")
     if not host:

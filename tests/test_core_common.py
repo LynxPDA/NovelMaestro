@@ -255,6 +255,31 @@ def test_get_stage_model_no_stage_is_shared():
     assert C.get_stage_model(env, "") == "общая"
 
 
+def test_get_server_config_stage_wins():
+    """Стадия непуста: <СТАДИЯ>_HOST/API_KEY/MODEL → общие ключи."""
+    env = {"HOST": "http://общий", "API_KEY": "общий-ключ",
+           "MODEL": "общая", "NER_HOST": "http://нер",
+           "NER_API_KEY": "нер-ключ", "NER_MODEL": "нер-модель"}
+    cfg = C.get_server_config(env, "ner")
+    assert cfg == {"host": "http://нер", "api_key": "нер-ключ",
+                   "model": "нер-модель"}
+
+
+def test_get_server_config_stage_fallback():
+    """Стадийных ключей нет — общие HOST/API_KEY/MODEL."""
+    env = {"HOST": "http://общий", "API_KEY": "ключ", "MODEL": "модель"}
+    cfg = C.get_server_config(env, "wiki")
+    assert cfg == {"host": "http://общий", "api_key": "ключ",
+                   "model": "модель"}
+
+
+def test_get_server_config_stage_empty_is_shared():
+    """Пустая стадия — только общие ключи."""
+    env = {"HOST": "http://общий", "NER_HOST": "http://нер"}
+    assert C.get_server_config(env)["host"] == "http://общий"
+    assert C.get_server_config(env, "")["host"] == "http://общий"
+
+
 def test_print_env_help(capsys):
     C.print_env_help()
     out = capsys.readouterr().out
@@ -424,6 +449,26 @@ def test_compile_chapter_texts(tmp_path):
                                     want="chapter", start=2, end=2)
     assert info2["written"] == 1
     assert (tmp_path / "one.txt").read_text(encoding="utf-8") == "два\n"
+
+
+def test_compile_chapter_text_in_memory(tmp_path):
+    """compile_chapter_text — склейка в память без записи файла."""
+    root = tmp_path / "chapters"
+    d1 = root / "00000_1_a"
+    d2 = root / "00000_2_b"
+    d1.mkdir(parents=True)
+    d2.mkdir()
+    (d1 / "chapter.txt").write_text("раз\n", encoding="utf-8")
+    (d2 / "chapter.txt").write_text("два\n", encoding="utf-8")
+    text, info = C.compile_chapter_text(str(root), want="chapter")
+    assert info["written"] == 2 and info["missing"] == []
+    assert text == "раз\n\nдва\n"
+    # файл не создаётся
+    assert not list(tmp_path.glob("*.txt"))
+    # диапазон глав
+    text2, info2 = C.compile_chapter_text(str(root), want="chapter",
+                                          start=2, end=2)
+    assert info2["written"] == 1 and text2 == "два\n"
 
 
 def test_find_chapter_file_priority(tmp_path):

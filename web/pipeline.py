@@ -43,7 +43,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 from core.common import (  # noqa: E402
     build_chapter_map, find_env_file, format_ranges, get_server_config,
-    get_stage_model, parse_dotenv,
+    parse_dotenv,
 )
 
 # ═══ Константы (канон run_pipeline.py) ═══
@@ -534,14 +534,14 @@ def main() -> None:
         log.error("translate_book.py не найден: %s", script)
         sys.exit(1)
 
-    # сервер: явные CLI > HOST/API_KEY/MODEL из .env > LLM_API_KEY (env, P1)
-    sc = get_server_config(env_data)
+    # сервер: явные CLI > PIPELINE_HOST/API_KEY/MODEL из .env > LLM_API_KEY
+    sc = get_server_config(env_data, "pipeline")
     host = args.host or sc["host"]
     api_key = args.api_key or sc["api_key"]
     if not api_key:
         api_key = os.environ.get("LLM_API_KEY", "")
     # единая модель конвейера: PIPELINE_MODEL → общая MODEL
-    model = args.model or get_stage_model(env_data, "pipeline") or ""
+    model = args.model or sc["model"] or ""
 
     if not host:
         log.error("Host LLM-сервера не задан: укажите --host или создайте .env (HOST)")

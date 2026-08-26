@@ -51,7 +51,7 @@ def test_process_chunk_pass1(monkeypatch):
     monkeypatch.setattr(NER, "llm_request", lambda *a, **k: None)
     idx, ners, err = NER.process_chunk_pass1(
         7, "текст", "h", "m", "k", 3, 10, None, "промпт", SilentLog())
-    assert ners == [] and "retries" in err
+    assert ners == [] and err is not None and "retries" in err
     # некорректный формат
     monkeypatch.setattr(NER, "llm_request", lambda *a, **k: "не json")
     idx, ners, err = NER.process_chunk_pass1(
@@ -75,7 +75,7 @@ def test_process_chunk_pass2(monkeypatch):
     idx, ners, err = NER.process_chunk_pass2(
         1, "текст", [{"term": "陈阳"}], "h", "m", "k", 2, 10, None,
         "шаблон {chunk_text} {ner_json}", SilentLog())
-    assert "Pass2 fail" in err
+    assert err is not None and "Pass2 fail" in err
 
 
 def test_compute_final_ner():
@@ -406,7 +406,8 @@ def test_main_postprocess_only(tmp_path, monkeypatch, ner_reset):
 
 
 def test_main_compile_chapters(tmp_path, monkeypatch, ner_reset):
-    """--compile_chapters склеивает chapter.txt и идёт в извлечение."""
+    """--compile_chapters склеивает chapter.txt в память (без файла)
+    и идёт в извлечение."""
     monkeypatch.chdir(tmp_path)
     ch = tmp_path / "chapters" / "00000_1_a"
     ch.mkdir(parents=True)
@@ -416,9 +417,48 @@ def test_main_compile_chapters(tmp_path, monkeypatch, ner_reset):
         "ner.py", "--compile_chapters", "--host", "http://h", "--model", "m",
         "--threads", "1", "--ner_file", "ner.json"])
     NER.main()
+    # временный файл НЕ создаётся — сборка идёт в память
     compiled = tmp_path / "compiled_chapters.txt"
-    assert compiled.is_file() and "陈阳" in compiled.read_text(encoding="utf-8")
+    assert not compiled.exists()
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
+    assert data and data[0]["term"] == "陈阳"
+
+
+def test_main_compile_chapters_compile_out(tmp_path, monkeypatch, ner_reset):
+    """Явный --compile_out сохраняет собранный txt (кастомный файл)."""
+    monkeypatch.chdir(tmp_path)
+    ch = tmp_path / "chapters" / "00000_1_a"
+    ch.mkdir(parents=True)
+    (ch / "chapter.txt").write_text("陈阳 в тексте.\n", encoding="utf-8")
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: P1_ANSWER)
+    monkeypatch.setattr(sys, "argv", [
+        "ner.py", "--compile_chapters", "--compile_out", "my_book.txt",
+        "--host", "http://h", "--model", "m",
+        "--threads", "1", "--ner_file", "ner.json"])
+    NER.main()
+    out = tmp_path / "my_book.txt"
+    assert out.is_file() and "陈阳" in out.read_text(encoding="utf-8")
+    assert not (tmp_path / "compiled_chapters.txt").exists()
+    data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
+    assert data and data[0]["term"] == "陈阳"
+
+
+def test_main_compile_chapters_range(tmp_path, monkeypatch, ner_reset):
+    """--start/--end ограничивают диапазон собираемых глав."""
+    monkeypatch.chdir(tmp_path)
+    for num, name in ((1, "00000_1_a"), (2, "00000_2_b"), (3, "00000_3_c")):
+        d = tmp_path / "chapters" / name
+        d.mkdir(parents=True)
+        (d / "chapter.txt").write_text(f"текст {num}\n", encoding="utf-8")
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: P1_ANSWER)
+    monkeypatch.setattr(sys, "argv", [
+        "ner.py", "--compile_chapters", "--start", "2", "--end", "2",
+        "--host", "http://h", "--model", "m",
+        "--threads", "1", "--ner_file", "ner.json"])
+    NER.main()
+    data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
+    # в извлечение попал только текст главы 2 (термин «текст 3» не мог
+    # прийти извне — LLM замокано, но чанк один и это глава 2)
     assert data and data[0]["term"] == "陈阳"
 
 

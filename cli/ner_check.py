@@ -79,7 +79,6 @@ from core.common import (  # noqa: E402
     log_argv,
     filter_ner_items,
     get_server_config,
-    get_stage_model,
     glossary_body,
     load_prompt,
     merge_review_entries,
@@ -268,10 +267,10 @@ def resolve_server(args, logger):
     """CLI > HOST/API_KEY/MODEL из .env > help+exit.
     Возвращает (base_url, key, model, env_data)."""
     env_data = parse_dotenv(find_env_file(args.env_file))
-    sc = get_server_config(env_data)
+    sc = get_server_config(env_data, "ner_check")
     host = args.host or sc["host"]
     api_key = args.api_key if args.api_key is not None else sc["api_key"]
-    model = args.model or get_stage_model(env_data, "ner_check")
+    model = args.model or sc["model"]
     if not host:
         print_env_help()
         sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")

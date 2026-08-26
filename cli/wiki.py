@@ -38,7 +38,6 @@ from core.common import (  # noqa: E402
     emit_progress,
     find_env_file,
     get_server_config,
-    get_stage_model,
     log_argv as _cc_log_argv,
     parse_dotenv,
     print_env_help,
@@ -1198,10 +1197,10 @@ def main():
     # Сервер: CLI > HOST/API_KEY/MODEL из .env
     env_data = parse_dotenv(find_env_file(args.env_file)) if args.env_file \
         else parse_dotenv(find_env_file())
-    sc = get_server_config(env_data)
+    sc = get_server_config(env_data, "wiki")
     args.host = args.host or sc["host"] or ""
     args.api_key = args.api_key if args.api_key is not None else sc["api_key"]
-    args.model = args.model or get_stage_model(env_data, "wiki")
+    args.model = args.model or sc["model"]
     if not args.host:
         print_env_help()
         sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")

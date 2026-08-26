@@ -24,7 +24,7 @@ tiktoken НЕ используется и не требуется.
   LLM           stream_chat_completion
   файловая ФС   atomic_write, read_text_safe
   главы         parse_chapter_id, build_chapter_map, find_chapter_file,
-                format_ranges, compile_chapter_texts
+                format_ranges, compile_chapter_text, compile_chapter_texts
 """
 from __future__ import annotations
 
@@ -99,13 +99,24 @@ def find_env_file(explicit=None, start_dir=None):
     return None
 
 
-def get_server_config(env_data: dict) -> dict:
-    """Единый сервер из .env → {host, api_key, model} (ключи HOST/API_KEY/MODEL).
-    профили local/remote убраны — один адрес, ключ и модель."""
+def get_server_config(env_data: dict, stage: str = "") -> dict:
+    """Сервер из .env → {host, api_key, model}.
+
+    stage непуст — схема «один скрипт — один набор сервер+ключ+модель»:
+    <СТАДИЯ>_HOST/<СТАДИЯ>_API_KEY/<СТАДИЯ>_MODEL переопределяют общие
+    HOST/API_KEY/MODEL (модель — через get_stage_model). Пустая стадия —
+    только общие ключи (профили local/remote убраны)."""
+    s = (stage or "").upper()
+    host = env_data.get(f"{s}_HOST" if s else "HOST", "").strip()
+    if not host:
+        host = env_data.get("HOST", "").strip()
+    api_key = env_data.get(f"{s}_API_KEY" if s else "API_KEY", "").strip()
+    if not api_key:
+        api_key = env_data.get("API_KEY", "").strip()
     return {
-        "host": env_data.get("HOST", "").strip(),
-        "api_key": env_data.get("API_KEY", "").strip(),
-        "model": env_data.get("MODEL", "").strip(),
+        "host": host,
+        "api_key": api_key,
+        "model": get_stage_model(env_data, stage),
     }
 
 
@@ -1199,14 +1210,14 @@ def format_ranges(ids) -> str:
     return ", ".join(ranges)
 
 
-def compile_chapter_texts(chapters_dir, out_path, want="chapter",
-                          start=None, end=None, logger=None) -> dict:
-    """Собрать тексты глав из папок в один файл (для NER и т.п.).
+def compile_chapter_text(chapters_dir, want="chapter", start=None, end=None,
+                         logger=None) -> tuple[str, dict]:
+    """Собрать тексты глав из папок в память (без записи файла).
 
     Папки — через build_chapter_map; файл главы — find_chapter_file.
     Дубли номера: берётся последняя папка (как clean_and_compile).
     start/end — включительно, None = весь диапазон.
-    Возвращает {written, missing, path, warnings}.
+    Возвращает (text, info) — info {written, missing, warnings}.
     """
     chapter_map = build_chapter_map(chapters_dir, logger=logger)
     ids = sorted(chapter_map)
@@ -1242,15 +1253,32 @@ def compile_chapter_texts(chapters_dir, out_path, want="chapter",
         parts.append(text)
         if logger:
             logger.info("Глава %s: %s", cid, os.path.basename(path))
+    if logger:
+        logger.info("Собрано глав в память: %d (пропущено: %d)",
+                    len(parts), len(missing))
+    return "\n".join(parts), {"written": len(parts),
+                               "missing": missing, "warnings": warnings}
+
+
+def compile_chapter_texts(chapters_dir, out_path, want="chapter",
+                          start=None, end=None, logger=None) -> dict:
+    """Собрать тексты глав из папок в один файл (для NER и т.п.).
+
+    Склейка — через compile_chapter_text (в память), затем запись файла.
+    start/end — включительно, None = весь диапазон.
+    Возвращает {written, missing, path, warnings}.
+    """
+    text, info = compile_chapter_text(chapters_dir, want=want, start=start,
+                                      end=end, logger=logger)
     parent = os.path.dirname(out_path)
     if parent:
         try:
             os.makedirs(parent, exist_ok=True)
         except OSError as exc:
             raise OSError(f"Не удалось создать папку {parent}: {exc}") from exc
-    atomic_write(out_path, "\n".join(parts))
+    atomic_write(out_path, text)
     if logger:
         logger.info("Собрано глав: %d → %s (пропущено: %d)",
-                    len(parts), out_path, len(missing))
-    return {"written": len(parts), "missing": missing,
-            "path": out_path, "warnings": warnings}
+                    info["written"], out_path, len(info["missing"]))
+    info["path"] = out_path
+    return info
