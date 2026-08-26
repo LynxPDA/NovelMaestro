@@ -19,9 +19,11 @@ python3 web/main.py --auth      # включить токен (см. ниже)
 .env маскируются `••••`.
 
 Параметры: `--host --port --auth --token --open --max-upload-mb
---jobs-limit`; источник: CLI-флаг > окружение > корневой `.env`
-(`WEB_HOST WEB_PORT WEB_AUTH WEB_TOKEN WEB_MAX_UPLOAD_MB
-WEB_JOBS_LIMIT`) > дефолт. `--no-auth` — устаревший no-op.
+--jobs-limit --projects-dir`; источник: CLI-флаг > окружение > корневой
+`.env` (`WEB_HOST WEB_PORT WEB_AUTH WEB_TOKEN WEB_MAX_UPLOAD_MB
+WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS_DIR`
+— папка проектов (по умолчанию `<репо>/projects`; там же `projects/.web_secret`
+и `projects/.sections.json`). `--no-auth` — устаревший no-op.
 
 ## Возможности
 

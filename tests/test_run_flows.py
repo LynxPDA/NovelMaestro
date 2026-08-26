@@ -78,7 +78,8 @@ def test_run_web_backend_default_cmd(fake_repo, monkeypatch):
     monkeypatch.setattr(RUN.subprocess, "run", fake_run)
     args = RUN.argparse.Namespace(host=None, port=None, auth=False,
                                   token=None, max_upload_mb=None,
-                                  jobs_limit=None, no_open=False)
+                                  jobs_limit=None, projects_dir=None,
+                                  no_open=False)
     RUN.run_web_backend(args)
     cmd = captured["cmd"]
     assert cmd[0] == sys.executable
@@ -97,7 +98,8 @@ def test_run_web_backend_passthrough(fake_repo, monkeypatch):
     monkeypatch.setattr(RUN.subprocess, "run", fake_run)
     args = RUN.argparse.Namespace(host="127.0.0.1", port=8899, auth=True,
                                   token="tok", max_upload_mb=100,
-                                  jobs_limit=4, no_open=True)
+                                  jobs_limit=4,
+                                  projects_dir="D:/novels", no_open=True)
     RUN.run_web_backend(args)
     cmd = captured["cmd"]
     assert "--host" in cmd and "127.0.0.1" in cmd
@@ -106,6 +108,7 @@ def test_run_web_backend_passthrough(fake_repo, monkeypatch):
     assert "--token" in cmd and "tok" in cmd
     assert "--max-upload-mb" in cmd and "100" in cmd
     assert "--jobs-limit" in cmd and "4" in cmd
+    assert "--projects-dir" in cmd and "D:/novels" in cmd
     assert "--open" not in cmd                  # --no-open
 
 
@@ -119,6 +122,19 @@ def test_main_launches_web(fake_repo, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["run.py", "--no-open"])
     RUN.main()
     assert called["args"].no_open is True
+
+
+def test_main_projects_dir_switches_global(fake_repo, monkeypatch):
+    """--projects-dir: bootstrap идёт в кастомную папку, флаг пробрасывается."""
+    custom = fake_repo / "custom_novels"
+    custom.mkdir(parents=True)
+    monkeypatch.setattr(RUN, "run_web_backend", lambda args: None)
+    monkeypatch.setattr(sys, "argv",
+                        ["run.py", "--projects-dir", str(custom)])
+    RUN.main()
+    assert RUN.PROJECTS == custom.resolve()
+    assert (custom / "ACTIVE").is_dir()  # bootstrap в кастомной папке
+    assert not (fake_repo / "projects" / "ACTIVE").exists()
 
 
 def test_force_utf8_io_no_crash():

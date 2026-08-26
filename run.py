@@ -9,6 +9,7 @@ run.py — запуск NovelMaestro (web-first).
   python3 run.py                # web-сервер + открыть браузер
   python3 run.py --host 127.0.0.1 --port 8756 --auth
   python3 run.py --no-open      # без автозапуска браузера
+  python3 run.py --projects-dir /mnt/data/novels  # своя папка проектов
 
 Менеджмент проектов (создание, перенос, переименование, дублирование,
 удаление) — в web-интерфейсе; общая логика — core/projects.py.
@@ -74,6 +75,7 @@ def run_web_backend(args: argparse.Namespace) -> None:
         ("--host", args.host), ("--port", args.port), ("--token", args.token),
         ("--max-upload-mb", args.max_upload_mb),
         ("--jobs-limit", args.jobs_limit),
+        ("--projects-dir", args.projects_dir),
     ):
         if value is not None:
             cmd.append(flag)
@@ -97,10 +99,16 @@ def main() -> None:
                     help="Лимит загрузки файлов, МБ (по умолчанию 512)")
     ap.add_argument("--jobs-limit", type=int,
                     help="Максимум параллельных задач (по умолчанию 2)")
+    ap.add_argument("--projects-dir",
+                    help="Папка проектов (по умолчанию <репо>/projects; "
+                         "WEB_PROJECTS_DIR)")
     ap.add_argument("--no-open", action="store_true",
                     help="Не открывать браузер автоматически")
     args = ap.parse_args()
 
+    if args.projects_dir:  # своя папка: bootstrap и web/main.py читают её
+        global PROJECTS
+        PROJECTS = Path(args.projects_dir).expanduser().resolve()
     bootstrap_projects()
     run_web_backend(args)
 

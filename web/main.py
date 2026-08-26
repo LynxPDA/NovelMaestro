@@ -9,7 +9,7 @@ main.py — CLI-точка входа web-бэкэнда.
 ВЫКЛЮЧЕНА (доверенная LAN, работа по SSH). Включить токен: --auth
 (или WEB_AUTH=1); тогда токен: --token > WEB_TOKEN > projects/.web_secret.
 Конфигурация окружением: WEB_HOST, WEB_PORT, WEB_AUTH, WEB_TOKEN,
-WEB_MAX_UPLOAD_MB, WEB_JOBS_LIMIT.
+WEB_MAX_UPLOAD_MB, WEB_JOBS_LIMIT, WEB_PROJECTS_DIR.
 """
 from __future__ import annotations
 
@@ -112,6 +112,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--jobs-limit", type=int,
                    default=_env_int(cfg, "WEB_JOBS_LIMIT", 2),
                    help="Максимум параллельных задач (по умолчанию 2)")
+    p.add_argument("--projects-dir",
+                   default=cfg.get("WEB_PROJECTS_DIR", ""),
+                   help="Папка проектов (по умолчанию <репо>/projects; "
+                        "WEB_PROJECTS_DIR)")
     return p.parse_args(argv)
 
 
@@ -192,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
     use_auth = args.auth and not args.no_auth
     _setup_logging()
     projects_root = _find_repo_root() / "projects"
+    if args.projects_dir:
+        projects_root = Path(args.projects_dir).expanduser().resolve()
     ensure_projects_root(projects_root)
     api._ensure_stats_cache(projects_root)  # дисковый кеш stats → память
     if use_auth:
