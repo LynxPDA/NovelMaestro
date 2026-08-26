@@ -584,6 +584,29 @@ def test_load_ner_data_regex_fallback(tmp_path, monkeypatch):
     assert cnt == 1 and "Чэнь Ян" in s
 
 
+def test_regex_fallback_prefix_overlap(tmp_path, monkeypatch):
+    """Фолбэк находит ВСЕ варианты, включая короткий термин-префикс
+    внутри длинного (регэксп-чередование их теряет, Aho-Corasick — нет)."""
+    monkeypatch.setitem(sys.modules, "ahocorasick", None)
+    ner = [
+        {"term": "系统", "translation": "Система", "type": "Object"},
+        {"term": "系统管理员", "translation": "Администратор", "type": "Person"},
+    ]
+    p = tmp_path / "ner.json"
+    p.write_text(json.dumps(ner, ensure_ascii=False), encoding="utf-8")
+    data, automaton = C.load_ner_data(str(p), 3, SilentLog())
+    assert isinstance(automaton, tuple) and automaton[0] == "regex_fallback"
+    s, cnt = C.find_relevant_ner("系统管理员", data, 0.7, 3,
+                                 "term,translation", automaton=automaton)
+    assert cnt == 2
+    assert {e["term"] for e in json.loads(s)} == {"系统", "系统管理员"}
+    # то же без фолбэка (Aho-Corasick) — результат идентичен
+    data2, ac = C.load_ner_data(str(p), 3, SilentLog())
+    s2, cnt2 = C.find_relevant_ner("系统管理员", data2, 0.7, 3,
+                                   "term,translation", automaton=ac)
+    assert cnt2 == 2 and {e["term"] for e in json.loads(s2)} == {"系统", "系统管理员"}
+
+
 def test_find_relevant_ner_aliases_flag(tmp_path):
     data, automaton = C.load_ner_data(_write_ner(tmp_path), 3, SilentLog())
     # include_aliases=True → aliases добавляются, даже если не в полях

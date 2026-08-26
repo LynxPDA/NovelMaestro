@@ -385,14 +385,7 @@ def load_ner_data(filepath, ngram_size, logger):
         logger.info(f"✅ Loaded {len(processed_data)} terms, "
                     f"{len(variant_to_idx)} variants (regex fallback, "
                     f"pip install pyahocorasick for speedup).")
-        sorted_variants = sorted(variant_to_idx.keys(), key=len, reverse=True)
-        compiled = None
-        if sorted_variants:
-            try:
-                compiled = re.compile("|".join(re.escape(v) for v in sorted_variants))
-            except re.error:
-                compiled = None
-        automaton = ("regex_fallback", compiled, variant_to_idx)
+        automaton = ("regex_fallback", variant_to_idx)
     return processed_data, automaton
 
 
@@ -424,12 +417,14 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
 
     if automaton is not None:
         if isinstance(automaton, tuple) and automaton[0] == "regex_fallback":
-            _, compiled_re, variant_to_idx = automaton
-            if compiled_re:
-                for m in compiled_re.finditer(text_norm):
-                    idx = variant_to_idx.get(m.group())
-                    if idx is not None:
-                        found.add(idx)
+            # регэксп-чередование с longest-first НЕ находит перекрытия
+            # (короткий термин-префикс внутри длинного) — проверяем каждый
+            # вариант вхождением, семантика как у Aho-Corasick: «есть ли
+            # термин в тексте» (только медленнее: V×len(text))
+            _, variant_to_idx = automaton
+            for v_norm, idx in variant_to_idx.items():
+                if v_norm and v_norm in text_norm:
+                    found.add(idx)
         else:
             if isinstance(automaton, tuple):
                 raise TypeError("Неизвестный формат автомата")
