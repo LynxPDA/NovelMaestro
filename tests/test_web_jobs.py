@@ -1083,10 +1083,10 @@ def test_build_wiki_compile_chapters():
 
 
 def test_build_wiki_rulate_html():
-    """wiki: rulate-html → --rulate-html, дефолтный выход wiki.html."""
+    """wiki: rulate-html → --rulate-html, дефолтный выход wiki.txt."""
     argv = build_command("wiki", {"format": "rulate-html"}, {})
     assert "--rulate-html" in argv
-    assert "--output" in argv and "wiki.html" in argv
+    assert "--output" in argv and "wiki.txt" in argv
     assert "--rulate-mode" not in argv
 
 

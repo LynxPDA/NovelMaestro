@@ -179,7 +179,7 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 `chapters/*` в память, `type` — chapter/translated/redacted/polished,
 `start`/`end` — диапазон, ГЛАВЫ). Формат вывода: `md` (обычный
 Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
-`<ul>`, `<hr />`, выход `wiki.html`). Оглавление (`toc`) и якоря-ссылки
+`<ul>`, `<hr />`, выход `wiki.txt` — HTML-разметка внутри txt). Оглавление (`toc`) и якоря-ссылки
 (`toc_links`) — только в обычном режиме; у rulate-режимов содержания
 нет. Режим `titles` компилятора выпилен (вкладка «Главы» правит
 названия прямо в файлах).

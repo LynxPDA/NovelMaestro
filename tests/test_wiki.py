@@ -351,7 +351,8 @@ def test_main_no_file_no_compile(tmp_path, monkeypatch):
 
 
 def test_main_rulate_html(tmp_path, monkeypatch):
-    """wiki: --rulate-html → wiki.html с span-заголовками."""
+    """wiki: --rulate-html → wiki.txt с span-заголовками (HTML-разметка
+    внутри txt-файла)."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "novel.txt").write_text(_NOVEL_MAIN, encoding="utf-8")
     (tmp_path / "ner.json").write_text(json.dumps([
@@ -365,11 +366,12 @@ def test_main_rulate_html(tmp_path, monkeypatch):
         "--output", "wiki.md", "--host", "http://h", "--model", "m",
         "--threads", "1", "--rulate-html"])
     WIKI.main()
-    html = (tmp_path / "wiki.html").read_text(encoding="utf-8")
+    html = (tmp_path / "wiki.txt").read_text(encoding="utf-8")
     assert "СТАТЬЯ" in html
     assert "<h1>" not in html
     assert "## Содержание" not in html
     assert ":|:" not in html
+    assert not (tmp_path / "wiki.html").exists()
 
 
 def test_main_toc_off(tmp_path, monkeypatch):

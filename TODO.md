@@ -32,7 +32,8 @@
 
 ### 1.3 Rulate HTML (вместо Markdown)
 
-- `cli/wiki.py`: `--rulate-html`, вывод по умолчанию `wiki.html`;
+- `cli/wiki.py`: `--rulate-html`, вывод по умолчанию `wiki.txt`
+  (HTML-разметка внутри txt, как просил пользователь);
   `md_to_html`: `##` → `<p><strong><span style="font-size:20px">…`,
   `###` → 16px, списки → `<ul>`, `---` → `<hr />` (и межстатейный
   разделитель — `<hr />`), экранирование HTML.

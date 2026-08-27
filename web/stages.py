@@ -411,7 +411,7 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
     elif fmt == "rulate-html":
         argv.append("--rulate-html")
         if output == "wiki.md":
-            output = "wiki.html"
+            output = "wiki.txt"
     toc_on = form.get("toc", True)
     links_on = form.get("toc_links", True)
     if toc_on in (False, "0", 0):

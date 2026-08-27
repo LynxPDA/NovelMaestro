@@ -1082,7 +1082,7 @@ def main():
             "      --threads 4 --top 60 --exclude-types Other,Material\n"
             "  python wiki.py --compile-chapters --type polished \\\n"
             "      --start 1 --end 100 --ner_file ner.json --output wiki.md\n"
-            "  python wiki.py novel.txt --rulate-html --output wiki.html\n"
+            "  python wiki.py novel.txt --rulate-html --output wiki.txt\n"
             "\n"
             "Единицы:\n"
             "  --chunk-size и размеры текста — СИМВОЛЫ;\n"
@@ -1491,7 +1491,7 @@ def main():
     rulate = args.rulate_mode or args.rulate_html
     rulate_html = args.rulate_html
     if rulate_html and os.path.splitext(args.output)[1].lower() == ".md":
-        args.output = os.path.splitext(args.output)[0] + ".html"
+        args.output = os.path.splitext(args.output)[0] + ".txt"
 
     _log(logger, logging.INFO,
          f"🚀 Wiki | Модель: {model_name} | Top: {args.top} | "
