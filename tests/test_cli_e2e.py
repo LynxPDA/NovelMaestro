@@ -160,6 +160,48 @@ def test_cac_compile_txt(cac_env):
     assert log.is_file() and "[OK] Глава 1" in log.read_text(encoding="utf-8")
 
 
+def test_cac_title_from_first_line(cac_env):
+    """Глава без «Глава N»: заголовок — первая непустая строка
+    (вики-глава «Wiki Новеллы»); ###/#### остаются в теле."""
+    d = cac_env / "chapters" / "00000_3_x"
+    d.mkdir()
+    (d / "polished.txt").write_text(
+        "Wiki Новеллы\n\n### Линь Шуй\n\n#### Описание\n\nТекст статьи.\n",
+        encoding="utf-8")
+    CAC.cfg.start, CAC.cfg.end = 1, 3
+    CAC.compile_book("txt")
+    out = Path(CAC.cfg.tmp_dir) / "compiled_1_3_txt.txt"
+    content = out.read_text(encoding="utf-8")
+    assert "[Wiki Новеллы :|: 3]" in content   # заголовок из первой строки
+    assert "### Линь Шуй" in content           # внутренние заголовки целы
+
+
+def test_cac_epub_wiki_chapter_title(cac_env):
+    """EPUB: вики-глава в TOC как «Wiki Новеллы»; ###/#### не создают
+    пунктов содержания (остаются текстом в теле)."""
+    import zipfile
+    d = cac_env / "chapters" / "00000_3_x"
+    d.mkdir()
+    (d / "polished.txt").write_text(
+        "Wiki Новеллы\n\n### Линь Шуй\n\n#### Описание\n\nТекст статьи.\n",
+        encoding="utf-8")
+    CAC.cfg.start, CAC.cfg.end = 1, 3
+    CAC.cfg.epub_cover = str(Path(CAC.cfg.tmp_dir) / "nonexistent.jpg")
+    CAC.compile_book("epub")
+    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_3.epub"
+    assert epub.is_file()
+    with zipfile.ZipFile(epub) as zf:
+        nav = zf.read("OEBPS/nav.xhtml").decode("utf-8")
+        assert "Wiki Новеллы" in nav            # TOC: вики-глава
+        assert "Глава 3" not in nav             # без фолбека «Глава N»
+        ch3 = zf.read("OEBPS/chapter_0003.xhtml").decode("utf-8")
+        assert "<h1>Wiki Новеллы</h1>" in ch3
+        # внутренние ###/#### — простой текст в <p>, пунктов TOC нет
+        assert "### Линь Шуй" in ch3
+        assert "#### Описание" in ch3
+        assert ch3.count("<navPoint") == 0
+
+
 def test_cac_compile_txt_no_titles_fallback(cac_env):
     CAC.compile_book("txt")
     out = Path(CAC.cfg.tmp_dir) / "compiled_1_2_txt.txt"

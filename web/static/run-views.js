@@ -564,9 +564,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       modeSel.addEventListener("change", applyNerSimple);
       applyNerSimple();
     }
-    // wiki: «Собрать из глав» — прячем входной txt (показываем тип)
+    // wiki: «Собрать из глав» — прячем входной txt (показываем тип);
+    // «Сохранить как главу» — прячем формат
     if (key === "wiki" && byName["source"]) {
       const srcSel = byName["source"];
+      const asChSel = byName["as_chapter"];
+      const fmtSel = byName["format"];
       const applyWikiSimple = () => {
         const chapters = srcSel.value === "chapters";
         const fw = byName["file"];
@@ -575,8 +578,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         const tw = byName["type"];
         const twrap = tw && tw.closest ? tw.closest(".field") : null;
         if (twrap) twrap.classList.toggle("hidden", !chapters);
+        const asCh = !!(asChSel && asChSel.checked);
+        const fwrap = fmtSel && fmtSel.closest
+          ? fmtSel.closest(".field") : null;
+        if (fwrap) fwrap.classList.toggle("hidden", asCh);
       };
       srcSel.addEventListener("change", applyWikiSimple);
+      if (asChSel) asChSel.addEventListener("change", applyWikiSimple);
       applyWikiSimple();
     }
     // диапазон глав (всегда виден, если стадия принимает start/end)
@@ -725,10 +733,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (key === "wiki") {
       const srcSel = fieldWraps["source"] && fieldWraps["source"]._input;
       const fmtSel = fieldWraps["format"] && fieldWraps["format"]._input;
+      const asChSel =
+        fieldWraps["as_chapter"] && fieldWraps["as_chapter"]._input;
       const tocFields = ["toc", "toc_links"];
+      const fileOnlyFields = ["output", "format", "toc", "toc_links"];
       function applyWikiMode() {
         const src = (srcSel && srcSel.value) || "txt";
         const fmt = (fmtSel && fmtSel.value) || "md";
+        const asCh = !!(asChSel && asChSel.checked);
         const fw = fieldWraps["file"];
         if (fw) fw.classList.toggle("hidden", src === "chapters");
         for (const name of ["type", "start", "end"]) {
@@ -738,11 +750,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         const isMd = fmt === "md";
         for (const name of tocFields) {
           const w = fieldWraps[name];
-          if (w) w.classList.toggle("hidden", !isMd);
+          if (w) w.classList.toggle("hidden", !isMd || asCh);
+        }
+        // вики-глава: формат/выходной файл не нужны
+        for (const name of fileOnlyFields) {
+          const w = fieldWraps[name];
+          if (w) w.classList.toggle("hidden", asCh);
         }
       }
       if (srcSel) srcSel.addEventListener("change", applyWikiMode);
       if (fmtSel) fmtSel.addEventListener("change", applyWikiMode);
+      if (asChSel) asChSel.addEventListener("change", applyWikiMode);
       applyWikiMode();
     }
 

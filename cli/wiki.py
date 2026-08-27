@@ -34,6 +34,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core.common import (  # noqa: E402
+    build_chapter_map,
     compile_chapter_text,
     determine_model,
     emit_progress,
@@ -827,6 +828,55 @@ def assemble_wiki(
          f"💾 Wiki сохранена: {output_path} ({len(text)} символов)")
 
 
+def assemble_wiki_chapter(
+    sections_by_type: list[tuple[str, list[tuple[str, str]]]],
+    output_path: str,
+    logger=None,
+) -> None:
+    """Собрать вики как дополнительную последнюю главу (--as-chapter).
+
+    chapter.txt (и polished.txt — для компиляции по умолчанию): первая
+    строка — название главы «Wiki Новеллы» ПРОСТЫМ текстом (без
+    rulate-спецзаголовка); статьи — в формате как у rulate (заголовки
+    сдвинуты глубже: ## → ###), разделители ---.
+    """
+    if not sections_by_type:
+        _log(logger, logging.WARNING, "⚠️ Нет разделов для сборки.")
+        return
+
+    lines = ["Wiki Новеллы", ""]
+    for _type_name_ru, terms in sections_by_type:
+        if not terms:
+            continue
+        for _title, content in terms:
+            lines.append(_shift_headings(content))
+            lines.append("\n---\n")
+
+    text = "\n".join(lines)
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError as exc:
+        _log(logger, logging.ERROR,
+             f"❌ Не удалось записать {output_path}: {exc}")
+        return
+
+    _log(logger, logging.INFO,
+         f"💾 Вики-глава сохранена: {output_path} ({len(text)} символов)")
+
+    # polished.txt — дубль для компиляции (source_type по умолчанию)
+    polished_path = os.path.join(os.path.dirname(output_path),
+                                 "polished.txt")
+    try:
+        with open(polished_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        _log(logger, logging.INFO,
+             f"💾 Вики-глава (polished): {polished_path}")
+    except OSError as exc:
+        _log(logger, logging.ERROR,
+             f"❌ Не удалось записать {polished_path}: {exc}")
+
+
 # ══════════════════════════════════════════════════════════════════════
 # ОСНОВНОЙ PIPELINE
 # ══════════════════════════════════════════════════════════════════════
@@ -852,6 +902,7 @@ def run_wiki_generation(
     toc: bool = True,
     toc_links: bool = True,
     rulate_html: bool = False,
+    as_chapter: bool = False,
 ) -> None:
 
     # ── Статистика отбора ──
@@ -1023,7 +1074,10 @@ def run_wiki_generation(
         save_wiki_cache(cache_file, cache)
 
     # ── Сборка ──
-    _log(logger, logging.INFO, "📝 Сборка wiki.md...")
+    if as_chapter:
+        _log(logger, logging.INFO, "📝 Сборка вики-главы...")
+    else:
+        _log(logger, logging.INFO, "📝 Сборка wiki.md...")
     sections_by_type: list[tuple[str, list[tuple[str, str]]]] = []
 
     for base_type in TYPE_ORDER:
@@ -1052,9 +1106,13 @@ def run_wiki_generation(
             )
 
     if sections_by_type:
-        assemble_wiki(sections_by_type, output_path, rulate,
-                      toc=toc, toc_links=toc_links,
-                      rulate_html=rulate_html, logger=logger)
+        if as_chapter:
+            assemble_wiki_chapter(sections_by_type, output_path,
+                                  logger=logger)
+        else:
+            assemble_wiki(sections_by_type, output_path, rulate,
+                          toc=toc, toc_links=toc_links,
+                          rulate_html=rulate_html, logger=logger)
     else:
         _log(logger, logging.WARNING, "⚠️ Ни одного раздела не сгенерировано.")
 
@@ -1083,6 +1141,7 @@ def main():
             "  python wiki.py --compile-chapters --type polished \\\n"
             "      --start 1 --end 100 --ner_file ner.json --output wiki.md\n"
             "  python wiki.py novel.txt --rulate-html --output wiki.txt\n"
+            "  python wiki.py --as-chapter --compile-chapters --type polished\n"
             "\n"
             "Единицы:\n"
             "  --chunk-size и размеры текста — СИМВОЛЫ;\n"
@@ -1328,6 +1387,15 @@ def main():
         ),
     )
     g_out.add_argument(
+        "--as-chapter", action="store_true",
+        help=(
+            "Сохранить вики как дополнительную последнюю главу "
+            "chapters/00000_{N+1}_Wiki_Новеллы/chapter.txt: название "
+            "главы «Wiki Новеллы» простым текстом, статьи — в формате "
+            "как у rulate (заголовки глубже); вместо файла --output."
+        ),
+    )
+    g_out.add_argument(
         "--toc", action=argparse.BooleanOptionalAction, default=True,
         help="Оглавление в обычном режиме (--no-toc — выключить).",
     )
@@ -1493,6 +1561,22 @@ def main():
     if rulate_html and os.path.splitext(args.output)[1].lower() == ".md":
         args.output = os.path.splitext(args.output)[0] + ".txt"
 
+    # --as-chapter: вики-глава в chapters/ как последняя по номеру
+    if args.as_chapter:
+        ch_map = build_chapter_map("./chapters")
+        next_num = (max(ch_map) + 1) if ch_map else 1
+        ch_dir = os.path.join("./chapters",
+                              f"00000_{next_num}_Wiki_Новеллы")
+        try:
+            os.makedirs(ch_dir, exist_ok=True)
+        except OSError as exc:
+            _log(logger, logging.ERROR,
+                 f"❌ Не удалось создать папку {ch_dir}: {exc}")
+            return
+        args.output = os.path.join(ch_dir, "chapter.txt")
+        _log(logger, logging.INFO,
+             f"📁 Вики-глава: {ch_dir} (номер {next_num})")
+
     _log(logger, logging.INFO,
          f"🚀 Wiki | Модель: {model_name} | Top: {args.top} | "
          f"Exclude: {exclude_types or 'нет'} | "
@@ -1524,6 +1608,7 @@ def main():
         toc=args.toc,
         toc_links=args.toc_links,
         rulate_html=rulate_html,
+        as_chapter=args.as_chapter,
         logger=logger,
     )
 

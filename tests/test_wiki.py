@@ -122,6 +122,23 @@ def test_assemble_rulate_html(tmp_path):
     assert "## Содержание" not in text
 
 
+def test_assemble_wiki_chapter(tmp_path):
+    """assemble_wiki_chapter: название «Wiki Новеллы» простым текстом,
+    статьи в rulate-стиле (заголовки глубже), без спецзаголовка."""
+    sections = [("Персонажи", [
+        ("Линь Шуй", "## Линь Шуй\n\nТекст.\n\n### Описание\n\n- Пункт\n"),
+    ])]
+    out = str(tmp_path / "chapter.txt")
+    WIKI.assemble_wiki_chapter(sections, out, SilentLog())
+    text = Path(out).read_text(encoding="utf-8")
+    assert text.startswith("Wiki Новеллы\n")
+    assert ":|:" not in text            # без rulate-спецзаголовка
+    assert "### Линь Шуй" in text        # ## → ### (как rulate)
+    assert "#### Описание" in text       # ### → ####
+    assert "## Содержание" not in text
+    assert "---" in text
+
+
 def test_md_to_html_escaping():
     """md_to_html: экранирование и inline-жирный."""
     html = WIKI.md_to_html("<script>alert(1)</script>\n\n**важно** & <тег>")
@@ -372,6 +389,42 @@ def test_main_rulate_html(tmp_path, monkeypatch):
     assert "## Содержание" not in html
     assert ":|:" not in html
     assert not (tmp_path / "wiki.html").exists()
+
+
+def test_main_as_chapter(tmp_path, monkeypatch):
+    """wiki: --as-chapter → chapters/00000_{N+1}_Wiki_Новеллы/chapter.txt,
+    файл --output не создаётся."""
+    chapters = tmp_path / "chapters"
+    d1 = chapters / "00000_1_x"
+    d1.mkdir(parents=True)
+    (d1 / "chapter.txt").write_text(
+        "Глава 1\n\nЛинь Шуй шла по дороге. Линь Шуй думала.\n",
+        encoding="utf-8")
+    (tmp_path / "ner.json").write_text(json.dumps([
+        {"term": "林水", "translation": "Линь Шуй",
+         "type": "Person (female)", "count": 3},
+    ], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
+    monkeypatch.setattr(sys, "argv", [
+        "wiki.py", "--as-chapter", "--compile-chapters", "--type",
+        "chapter", "--ner_file", "ner.json", "--host", "http://h",
+        "--model", "m", "--threads", "1"])
+    WIKI.main()
+    ch = (tmp_path / "chapters" / "00000_2_Wiki_Новеллы" / "chapter.txt")
+    assert ch.is_file(), "вики-глава не создана"
+    text = ch.read_text(encoding="utf-8")
+    assert text.startswith("Wiki Новеллы\n")
+    assert "СТАТЬЯ" in text
+    assert ":|:" not in text
+    assert not (tmp_path / "wiki.md").exists()
+    # номер — последний + 1; polished.txt — дубль для компиляции
+    assert (tmp_path / "chapters" / "00000_1_x").is_dir()
+    polished = (tmp_path / "chapters" / "00000_2_Wiki_Новеллы"
+                / "polished.txt")
+    assert polished.is_file()
+    assert polished.read_text(encoding="utf-8") == text
 
 
 def test_main_toc_off(tmp_path, monkeypatch):

@@ -766,7 +766,7 @@ def test_simple_fields_per_stage():
         "pipeline": ["action", "prompt_file"],
         "translate_check_llm": ["type", "two_pass", "prompt_file"],
         "wiki": ["source", "file", "type", "prompt_file", "top",
-                 "min_count", "format"],
+                 "min_count", "format", "as_chapter"],
     }
     for key, names in expected.items():
         assert STAGE_SPECS[key]["simple"] == names, key
@@ -1088,6 +1088,19 @@ def test_build_wiki_rulate_html():
     assert "--rulate-html" in argv
     assert "--output" in argv and "wiki.txt" in argv
     assert "--rulate-mode" not in argv
+
+
+def test_build_wiki_as_chapter():
+    """wiki: «Сохранить как главу вики» → --as-chapter, без --output
+    и флагов формата."""
+    argv = build_command(
+        "wiki", {"as_chapter": True, "format": "rulate-html",
+                  "output": "wiki.md"}, {})
+    assert "--as-chapter" in argv
+    assert "--rulate-html" not in argv
+    assert "--output" not in argv
+    argv2 = build_command("wiki", {"as_chapter": False, "format": "md"}, {})
+    assert "--as-chapter" not in argv2
 
 
 def test_build_wiki_toc_off():

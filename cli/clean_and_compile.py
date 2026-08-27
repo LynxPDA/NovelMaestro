@@ -716,7 +716,15 @@ def compile_book(mode):
 
             content = safe_read(file_path)
             orig_header_match = re.search(r"^Глава\s+\d+.*", content, flags=re.MULTILINE)
-            orig_header = orig_header_match.group(0).strip() if orig_header_match else f"Глава {i}"
+            if orig_header_match:
+                orig_header = orig_header_match.group(0).strip()
+            else:
+                # Нет «Глава N»: заголовок — первая непустая строка файла
+                # (вкладка «Главы», вики-глава «Wiki Новеллы»)
+                _first = next(
+                    (ln.strip() for ln in content.splitlines() if ln.strip()),
+                    "")
+                orig_header = _first.lstrip("#").strip() or f"Глава {i}"
 
             final_title = custom_titles.get(i, "")
             if not final_title:
@@ -739,7 +747,13 @@ def compile_book(mode):
                 filtered_lines.append(line)
             content = "\n".join(filtered_lines)
 
-            content = re.sub(r"^Глава\s+\d+.*$", replacement, content, count=1, flags=re.MULTILINE)
+            if orig_header_match:
+                content = re.sub(r"^Глава\s+\d+.*$", replacement, content,
+                                 count=1, flags=re.MULTILINE)
+            else:
+                # заголовок из первой непустой строки — убрать её из тела
+                content = re.sub(r"^\s*\S.*$", replacement, content,
+                                 count=1, flags=re.MULTILINE)
             content = content.replace("【", "[").replace("】", "]")
             content = re.sub(r"^[ \t]*(\.[ \t]*){3,}$", sep_string, content, flags=re.MULTILINE)
             content = re.sub(r"^[ \t]*(\*[ \t]*){3,}$", sep_string, content, flags=re.MULTILINE)

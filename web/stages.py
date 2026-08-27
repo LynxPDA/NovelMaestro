@@ -399,6 +399,7 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
     src = form.get("source") or "txt"
     fmt = form.get("format") or "md"
     output = str(form.get("output") or "wiki.md")
+    as_chapter = bool(form.get("as_chapter"))
     if src == "chapters":
         argv.append("--compile-chapters")
         if form.get("type"):
@@ -406,20 +407,23 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
         argv += _range_argv("start", form)
     elif form.get("file"):
         argv.append(str(form["file"]))
-    if fmt == "rulate-md":
-        argv.append("--rulate-mode")
-    elif fmt == "rulate-html":
-        argv.append("--rulate-html")
-        if output == "wiki.md":
-            output = "wiki.txt"
-    toc_on = form.get("toc", True)
-    links_on = form.get("toc_links", True)
-    if toc_on in (False, "0", 0):
-        argv.append("--no-toc")
-    if links_on in (False, "0", 0):
-        argv.append("--no-toc-links")
-    if output:
-        argv += ["--output", output]
+    if as_chapter:
+        argv.append("--as-chapter")
+    else:
+        if fmt == "rulate-md":
+            argv.append("--rulate-mode")
+        elif fmt == "rulate-html":
+            argv.append("--rulate-html")
+            if output == "wiki.md":
+                output = "wiki.txt"
+        toc_on = form.get("toc", True)
+        links_on = form.get("toc_links", True)
+        if toc_on in (False, "0", 0):
+            argv.append("--no-toc")
+        if links_on in (False, "0", 0):
+            argv.append("--no-toc-links")
+        if output:
+            argv += ["--output", output]
     if form.get("ner_file"):
         argv += ["--ner_file", str(form["ner_file"])]
     if form.get("prompt_file"):
@@ -873,6 +877,11 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "ner_file", "label": "NER JSON",
              "type": "files", "dir": "", "ext": [".json"], "default": "ner.json"},
             {"name": "output", "label": "Выходной файл", "type": "text", "default": "wiki.md"},
+            {"name": "as_chapter", "label": "Сохранить как главу вики",
+             "type": "bool", "default": False,
+             "help": "вместо файла — дополнительная последняя глава "
+                      "chapters/00000_{N+1}_Wiki_Новеллы/chapter.txt, "
+                      "название «Wiki Новеллы» простым текстом"},
             {"name": "format", "label": "Формат",
              "type": "select",
              "options": ["md", "rulate-md", "rulate-html"],
@@ -923,7 +932,7 @@ STAGE_SPECS: dict[str, dict] = {
                     "дефолтные настройки",
         },
         "simple": ["source", "file", "type", "prompt_file", "top",
-                    "min_count", "format"],
+                    "min_count", "format", "as_chapter"],
     },
     "batch_replace": {
         "title": "Массовые замены",
