@@ -1359,7 +1359,7 @@ def _metadata_put(ctx: dict) -> dict:
 # ══════════════════════════════════════════════════════════════
 # Обложка (W6)
 # ══════════════════════════════════════════════════════════════
-COVER_NAMES = ("cover.jpg", "cover.png", "cover.jpeg", "cover.webp")
+COVER_NAMES = ("cover.jpg", "cover.png", "cover.jpeg")
 COVER_MAX_BYTES = 8 * 1024 * 1024  # 8 МБ
 
 
@@ -1392,7 +1392,8 @@ def _cover_get(ctx: dict) -> dict:
 def _cover_put(ctx: dict) -> dict:
     """Загрузить обложку (PUT /api/cover {project, content_base64, name}).
 
-    Имя приводится к cover.<расширение>; допустимы jpg/png/jpeg/webp,
+    Имя приводится к cover.<расширение>; допустимы jpg/png/jpeg (webp
+    не принимаем: обложка идёт в EPUB/FB2, где webp не в спецификациях),
     лимит COVER_MAX_BYTES. Прежние обложки с другими расширениями
     удаляются (одна обложка — один файл).
     """
@@ -1411,8 +1412,8 @@ def _cover_put(ctx: dict) -> dict:
         raise ApiError(413, f"Обложка больше {COVER_MAX_BYTES // (1024 * 1024)} МБ")
     name = str(body.get("name") or "cover.jpg")
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else "jpg"
-    if ext not in ("jpg", "jpeg", "png", "webp"):
-        raise ApiError(400, "Допустимы cover.jpg / .png / .webp")
+    if ext not in ("jpg", "jpeg", "png"):
+        raise ApiError(400, "Допустимы cover.jpg / .png / .jpeg")
     # L6 (AUDIT): сигнатура — файл должен быть реальным изображением
     if not _cover_magic_ok(raw, ext):
         raise ApiError(400, f"Файл не похож на изображение .{ext}")
@@ -1440,8 +1441,6 @@ def _cover_magic_ok(raw: bytes, ext: str) -> bool:
         return raw[:3] == b"\xff\xd8\xff"
     if ext == "png":
         return raw[:8] == b"\x89PNG\r\n\x1a\n"
-    if ext == "webp":
-        return raw[:4] == b"RIFF" and raw[8:12] == b"WEBP"
     return False
 
 

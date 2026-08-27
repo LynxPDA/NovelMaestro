@@ -2925,7 +2925,7 @@ function viewProject(section, name) {
     const coverImg = h("img", { class: "cover-preview", alt: "обложка" });
     const coverFile = h("input", {
       type: "file",
-      accept: ".jpg,.jpeg,.png,.webp",
+      accept: ".jpg,.jpeg,.png",
     });
     const coverUpload = h("button", { class: "btn btn-sm" }, "Загрузить");
     const coverDelete = h(

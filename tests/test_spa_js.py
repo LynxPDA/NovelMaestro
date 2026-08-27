@@ -49,8 +49,10 @@ def test_run_views_expert_form_not_async():
 def test_create_project_modal_uploads():
     """Мастер создания: опциональные обложка и исходник → source/."""
     src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
-    # два опциональных file-input: обложка и исходник
-    assert 'accept: ".jpg,.jpeg,.png,.webp"' in src
+    # два опциональных file-input: обложка (jpg/png — для EPUB/FB2,
+    # webp не предлагаем) и исходник
+    assert 'accept: ".jpg,.jpeg,.png"' in src
+    assert "webp" not in src.split("function manageProjectModal")[0]
     assert 'accept: ".txt,.md,.epub,.zip"' in src
     # обложка — PUT /api/cover (base64), исходник — upload с dest=source
     assert 'await api("/cover"' in src

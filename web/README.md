@@ -34,7 +34,7 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
   разделами»; `projects/.sections.json` — источник истины), карточки
   проектов, создание/перенос/переименование/копирование/удаление
   (с подтверждением); мастер создания — опциональные загрузка обложки
-  (jpg/png/webp → `source/cover.*`, `PUT /api/cover`) и исходника
+  (jpg/png → `source/cover.*`, `PUT /api/cover`) и исходника
   (txt/md/epub/zip → `source/`, `POST /api/upload` с dest=source),
   реестр стадий `web/stages.py::STAGE_SPECS`
   (ключи-слаги), дерево глав с артефактами, шаблоны проектов.

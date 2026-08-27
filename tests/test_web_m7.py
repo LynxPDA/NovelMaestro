@@ -727,14 +727,17 @@ def test_cover_roundtrip(srv, tmp_path):
 
 
 def test_cover_rejects_bad_ext(srv, tmp_path):
-    """W6: обложка только jpg/png/webp."""
+    """W6: обложка только jpg/png/jpeg (webp убран — не читается
+    в EPUB/FB2)."""
     import base64
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     _mk_project(root)
-    r = _request(port, "PUT", "/api/cover",
-                 body={"project": "ACTIVE/demo", "name": "x.gif",
-                       "content_base64": base64.b64encode(b"gif").decode()})
-    assert "__error__" in r and r["__error__"] == 400
+    for ext in ("x.gif", "x.webp"):
+        r = _request(port, "PUT", "/api/cover",
+                     body={"project": "ACTIVE/demo", "name": ext,
+                           "content_base64":
+                               base64.b64encode(b"fake").decode()})
+        assert "__error__" in r and r["__error__"] == 400
 
 
 def test_download_inline_image(srv, tmp_path):

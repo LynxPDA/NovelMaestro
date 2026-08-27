@@ -388,7 +388,7 @@ function createProjectModal() {
   const coverFile = h("input", {
     type: "file",
     class: "input",
-    accept: ".jpg,.jpeg,.png,.webp",
+    accept: ".jpg,.jpeg,.png",
   });
   const srcFile = h("input", {
     type: "file",
@@ -427,7 +427,7 @@ function createProjectModal() {
         h(
           "label",
           { class: "field" },
-          "Обложка (опционально, jpg/png/webp)",
+          "Обложка (опционально, jpg/png)",
           coverFile,
         ),
         h(
