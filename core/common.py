@@ -1287,9 +1287,10 @@ def compile_chapter_texts(chapters_dir, out_path, want="chapter",
 def _first_nonempty_line(path: str, limit: int = 65536) -> str | None:
     """Первая непустая строка файла — БЕЗ чтения файла целиком.
 
-    Читает только префикс (пока не встретится перевод строки или
-    limit байт) — названия тысяч глав читаются за доли секунды.
-    Кодировка как read_text_safe (utf-8 → cp1251), строка NFC.
+    Читает префикс, пока первая непустая строка не будет завершена
+    переводом строки (или limit байт); декодирует ТОЛЬКО эту строку
+    (utf-8 → cp1251) — разрез на границе чанка не может испортить
+    строку (весь буфер строго не декодируется). Строка NFC.
     """
     import unicodedata
     data = b""
@@ -1300,23 +1301,28 @@ def _first_nonempty_line(path: str, limit: int = 65536) -> str | None:
                 if not chunk:
                     break
                 data += chunk
-                if b"\n" in data:
-                    break
+                lines = data.split(b"\n")
+                for idx, ln in enumerate(lines):
+                    if ln.strip() and idx + 1 < len(lines):
+                        break
+                else:
+                    continue  # строки нет или не завершена — дочитать
+                break
     except OSError:
+        return None
+    line_b = next((ln for ln in data.split(b"\n") if ln.strip()), b"")
+    if not line_b:
         return None
     for enc in ("utf-8", "cp1251"):
         try:
-            text = data.decode(enc)
+            s = line_b.decode(enc)
             break
         except (UnicodeDecodeError, LookupError):
             continue
     else:
-        text = data.decode("utf-8", errors="replace")
-    for line in text.splitlines():
-        s = unicodedata.normalize("NFC", line.strip())
-        if s:
-            return s
-    return None
+        s = line_b.decode("utf-8", errors="replace")
+    s = unicodedata.normalize("NFC", s.strip())
+    return s or None
 
 
 def read_chapter_titles(chapters_dir, want="polished", logger=None) -> dict:

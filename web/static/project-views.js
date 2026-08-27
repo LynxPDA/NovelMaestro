@@ -2630,7 +2630,7 @@ function viewProject(section, name) {
   async function chaptersView() {
     const err = h("div", { class: "form-error" });
     const typeSel = h("select", { class: "input chapters-type" });
-    const types = ["chapters", "translated", "redacted", "polished"];
+    const types = ["chapter", "translated", "redacted", "polished"];
     for (const t of types) {
       typeSel.append(h("option", { value: t }, t));
     }

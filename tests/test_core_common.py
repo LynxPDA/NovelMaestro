@@ -488,6 +488,32 @@ def test_read_chapter_titles(tmp_path):
     assert C.read_chapter_titles(str(root), want="translated") == {}
 
 
+def test_first_nonempty_line_chunk_cut(tmp_path):
+    """Разрез на границе 4096 байт не портит первую строку (utf-8).
+
+    Многобайтовый символ «Ж» переживает границу чанка — декодируется
+    ТОЛЬКО первая строка, а не весь буфер (иначе utf-8 падает и
+    фолбек cp1251 даёт «Р“Р»Р°РІР°»-кракозябры).
+    """
+    head = "Глава 1. Проиграл всё\n\n".encode("utf-8")
+    filler = "Текст главы. ".encode("utf-8") * 120
+    buf = head + filler
+    assert len(buf) < 4095
+    buf += b"x" * (4095 - len(buf))
+    buf += "Ж".encode("utf-8") + "\nхвост".encode("utf-8")
+    p = tmp_path / "polished.txt"
+    p.write_bytes(buf)
+    assert C._first_nonempty_line(str(p)) == "Глава 1. Проиграл всё"
+    # пустые строки перед заголовком — тоже корректно
+    p2 = tmp_path / "p2.txt"
+    p2.write_bytes(b"\n\n" + head + b"\n")
+    assert C._first_nonempty_line(str(p2)) == "Глава 1. Проиграл всё"
+    # реально cp1251 — фолбек работает
+    p3 = tmp_path / "p3.txt"
+    p3.write_bytes("Глава 2. Побить его\n".encode("cp1251"))
+    assert C._first_nonempty_line(str(p3)) == "Глава 2. Побить его"
+
+
 def test_write_chapter_titles(tmp_path):
     """write_chapter_titles: замена первой строки, остальное сохраняется."""
     root = tmp_path / "chapters"
