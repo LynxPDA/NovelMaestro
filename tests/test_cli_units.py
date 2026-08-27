@@ -615,7 +615,24 @@ def test_cac_build_chapter_map_dup_takes_last(tmp_path, capsys):
 def test_cac_get_content_type():
     assert CAC.get_content_type("x.jpg") == "image/jpeg"
     assert CAC.get_content_type("x.PNG") == "image/png"
-    assert CAC.get_content_type("x.webp") == "image/jpeg"  # дефолт
+    assert CAC.get_content_type("x.webp") == "image/webp"
+    assert CAC.get_content_type("x.unknown") == "image/jpeg"  # дефолт
+
+
+def test_cac_resolve_cover_path(tmp_path):
+    """Автоподхват реальной обложки: дефолт cover.jpg отсутствует,
+    web сохраняет cover.<ext> (png/webp и т.п.) — берём существующий."""
+    src = tmp_path / "source"
+    src.mkdir()
+    default = str(src / "cover.jpg")
+    # нет файлов → возвращаем исходный путь как есть
+    assert CAC.resolve_cover_path(default) == default
+    # существует cover.png → подхват вместо отсутствующего cover.jpg
+    (src / "cover.png").write_bytes(b"\x89PNG\r\n")
+    assert CAC.resolve_cover_path(default) == str(src / "cover.png")
+    # явно указанный существующий файл не трогаем
+    assert CAC.resolve_cover_path(str(src / "cover.png")) == \
+        str(src / "cover.png")
 
 
 def test_cac_inject_fb2_cover(tmp_path):

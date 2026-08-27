@@ -162,8 +162,30 @@ def get_content_type(image_path):
         ".png": "image/png",
         ".gif": "image/gif",
         ".bmp": "image/bmp",
+        ".webp": "image/webp",
     }
     return types.get(ext, "image/jpeg")
+
+
+_COVER_CANDIDATES = ("cover.jpg", "cover.jpeg", "cover.png", "cover.webp")
+
+
+def resolve_cover_path(cover_path):
+    """Реальная обложка для сборки.
+
+    Web-загрузка сохраняет обложку как source/cover.<ext> (jpg/jpeg/png/
+    webp), а дефолт компилятора — ./source/cover.jpg. Если указанный файл
+    отсутствует — ищем любой существующий cover.* рядом и берём его.
+    """
+    if os.path.isfile(cover_path):
+        return cover_path
+    d = os.path.dirname(cover_path) or "."
+    for name in _COVER_CANDIDATES:
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand):
+            print(f"[ИНФО] Обложка {cover_path} не найдена — берём {cand}")
+            return cand
+    return cover_path
 
 def inject_fb2_cover(fb2_path, cover_path, log_file=None):
     if not os.path.isfile(fb2_path):
@@ -882,9 +904,9 @@ def main():
     cfg.base_dir = args.chapters_dir
     cfg.tmp_dir = args.tmp_dir
     cfg.compile_type = args.source_type
-    cfg.epub_cover = args.epub_cover
+    cfg.epub_cover = resolve_cover_path(args.epub_cover)
     cfg.epub_meta = args.epub_meta
-    cfg.fb2_cover = args.fb2_cover
+    cfg.fb2_cover = resolve_cover_path(args.fb2_cover)
     cfg.fb2_inject_cover = 0 if args.no_fb2_cover else 1
     cfg.add_donate_page = 0 if args.no_donate else 1
     cfg.donate_file = args.donate_file
