@@ -2015,6 +2015,12 @@ def _stage_spec(ctx: dict) -> dict:
                             # C: basename — NER_PROMPT_FILE=prompts/ner_prompt.txt
                             # → ner_prompt.txt (селект наполнен именами)
                             name = str(val).replace("\\", "/").rsplit("/", 1)[-1]
+                            # автоподхват только реально существующих файлов:
+                            # удалённый промпт не предзаполняется из .env
+                            # (иначе «мёртвый» выбор ломает автоподхват)
+                            d = field.get("dir") or ""
+                            if not ((pdir / d if d else pdir) / name).is_file():
+                                continue
                             field["default"] = name
                         else:
                             field["default"] = val
@@ -2033,12 +2039,26 @@ _OPTIONS_CACHE: dict[str, tuple[tuple[float, ...], dict]] = {}
 
 
 def _options_signature(pdir: Path) -> tuple[float, ...]:
-    """mtime папок проекта, влияющих на опции стадий (U8)."""
+    """Сигнатура для кэша опций стадий (U8).
+
+    max mtime файлов в папке (а не mtime каталога): перезапись
+    существующего файла (например, правка промпта с тегами) mtime
+    каталога не меняет — иначе кэш опций (список промптов, auto_prompt)
+    устаревал бы."""
     sig: list[float] = []
     for name in ("chapters", "source", "prompts"):
         d = pdir / name
         try:
-            sig.append(d.stat().st_mtime if d.is_dir() else 0.0)
+            if d.is_dir():
+                mt = 0.0
+                for f in d.iterdir():
+                    try:
+                        mt = max(mt, f.stat().st_mtime)
+                    except OSError:
+                        continue
+                sig.append(mt)
+            else:
+                sig.append(0.0)
         except OSError:
             sig.append(0.0)
     try:
@@ -2085,6 +2105,21 @@ def _stage_options(ctx: dict) -> dict:
         if pr.is_dir():
             out["options"]["prompts"] = sorted(
                 f.name for f in pr.iterdir() if f.is_file())
+        # pipeline: автоподхват общего промпт-файла с тегами — ровно
+        # тот, что выберет auto-режим конвейера (первый существующий
+        # кандидат из _PROMPT_COMBINED_CANDIDATES с тегами)
+        if ctx["params"]["key"] == "pipeline":
+            for cand in ("pipeline_prompt.txt", "prompts.txt",
+                         "translate_book_prompt.txt"):
+                f = pdir / "prompts" / cand
+                try:
+                    text = f.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if any(common.get_tagged_prompt(text, tag)
+                       for tag in ("translate", "redact", "polish")):
+                    out["options"]["auto_prompt"] = f"prompts/{cand}"
+                    break
         # файлы корня проекта (для полей files с dir="");
         # dot-файлы (.env, .web_secret) не показываем — секреты
         root = sorted(f.name for f in pdir.iterdir()

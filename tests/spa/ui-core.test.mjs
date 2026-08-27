@@ -75,6 +75,23 @@ test("fileBase: пути со слешами и бэкслешами", () => {
   assert.equal(UICore.fileBase(""), "");
 });
 
+
+test("pickPoolFile: только реально существующие файлы", () => {
+  const pool = ["pipeline_prompt.txt", "translate_prompt.txt", "ner.json"];
+  // basename дефолта есть в пуле → подхват
+  assert.equal(
+    UICore.pickPoolFile("prompts/translate_prompt.txt", pool),
+    "translate_prompt.txt",
+  );
+  // точное имя (dir="") в пуле
+  assert.equal(UICore.pickPoolFile("ner.json", pool), "ner.json");
+  // дефолт указывает на файл, которого нет → НЕ подхватываем ("")
+  assert.equal(UICore.pickPoolFile("redact_prompt.txt", pool), "");
+  assert.equal(UICore.pickPoolFile("prompts/redact_prompt.txt", pool), "");
+  // пустой дефолт → ""
+  assert.equal(UICore.pickPoolFile("", pool), "");
+});
+
 test("clampFont: из опций, иначе дефолт", () => {
   assert.equal(UICore.clampFont(12, [5, 7, 10, 12, 14], 12), 12);
   assert.equal(UICore.clampFont("12", [5, 7, 10, 12, 14], 12), 12);

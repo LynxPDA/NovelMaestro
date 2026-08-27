@@ -907,6 +907,8 @@ def test_stage_spec_env_prefill(jobs_srv, tmp_path):
     port, req, _jm = jobs_srv
     _make_project(port, req)
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / "prompts" / "ner_prompt.txt").write_text("промпт",
+                                                       encoding="utf-8")
     (pdir / ".env").write_text(
         "NER_STRIP_META=0\n"
         "NER_PROMPT_FILE=prompts/ner_prompt.txt\n",
@@ -918,6 +920,25 @@ def test_stage_spec_env_prefill(jobs_srv, tmp_path):
     assert fields["strip_meta"]["default"] is False
     # C: полный путь из .env → basename, селект находит option
     assert fields["prompt_file"]["default"] == "ner_prompt.txt"
+
+
+def test_stage_spec_env_prefill_skips_missing_file(jobs_srv, tmp_path):
+    """files из .env предзаполняется ТОЛЬКО если файл реально существует:
+    удалённый промпт не остаётся «подхваченным» после перезагрузки."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / ".env").write_text(
+        "PIPELINE_TRANSLATE_PROMPT=translate_prompt.txt\n"
+        "PIPELINE_REDACT_PROMPT=redact_prompt.txt\n",
+        encoding="utf-8")
+    res, payload = req("GET",
+                       "/api/stages/pipeline/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    # файлов нет в prompts/ → дефолт остаётся пустым (не подхватываем)
+    assert fields["translate_prompt"]["default"] == ""
+    assert fields["redact_prompt"]["default"] == ""
 
 
 def test_stage_spec_env_prefill_bool_on(jobs_srv, tmp_path):
@@ -1557,6 +1578,47 @@ def test_stage_options_cache_invalidates(jobs_srv, tmp_path):
                        "/api/stages/wiki/options?project=ACTIVE/test_book")
     assert res.status == 200
     assert "ner.json" in payload["options"]["root"]
+
+
+def test_pipeline_options_auto_prompt(jobs_srv, tmp_path):
+    """Автоподхват общего промпт-файла: pipeline_prompt.txt с тегами →
+    options.auto_prompt; без тегов/файла — нет; инвалидация по mtime."""
+    from web.api import _OPTIONS_CACHE
+    _OPTIONS_CACHE.clear()
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+
+    # кандидата нет → auto_prompt отсутствует
+    res, payload = req("GET",
+                       "/api/stages/pipeline/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert "auto_prompt" not in payload["options"]
+
+    # файл без тегов — не кандидат
+    (pdir / "prompts" / "pipeline_prompt.txt").write_text(
+        "обычный текст без тегов\n", encoding="utf-8")
+    res, payload = req("GET",
+                       "/api/stages/pipeline/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert "auto_prompt" not in payload["options"]
+
+    # с тегами translate/redact/polish — автоподхват
+    (pdir / "prompts" / "pipeline_prompt.txt").write_text(
+        "<translate>перевод</translate>\n<redact>редактура</redact>\n"
+        "<polish>полировка</polish>\n", encoding="utf-8")
+    res, payload = req("GET",
+                       "/api/stages/pipeline/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert payload["options"]["auto_prompt"] == "prompts/pipeline_prompt.txt"
+
+    # удалили файл → авто-кандидат исчез (кэш инвалидирован по mtime)
+    (pdir / "prompts" / "pipeline_prompt.txt").unlink()
+    res, payload = req("GET",
+                       "/api/stages/pipeline/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert "auto_prompt" not in payload["options"]
+    _OPTIONS_CACHE.clear()
 
 
 def test_stream_sse(jobs_srv, fake_script):

@@ -345,12 +345,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           (n) =>
             exts.length === 0 || exts.some((e) => n.toLowerCase().endsWith(e)),
         );
-        const baseDef = UICore.fileBase(def);
-        let chosen = "";
-        if (baseDef && items.includes(baseDef)) chosen = baseDef;
-        else if (def && items.includes(def)) chosen = def;
-        else if (baseDef) chosen = baseDef; // нет в пуле — добавим опцией
-        vals[f.name] = chosen;
+        // только реально существующие файлы (pickPoolFile): удалённый
+        // промпт не остаётся «подхваченным» из .env-памяти и не ломает
+        // автоподхват конвейера (pipeline_prompt.txt)
+        vals[f.name] = UICore.pickPoolFile(def, items);
+        // pipeline: «Общий промпт-файл» — автоподхват кандидата auto-режима
+        // (первый файл с тегами из опций сервера); не перекрываем реальную
+        // память из .env — только если выбор пуст
+        if (f.name === "prompt_file" && opts.auto_prompt
+            && vals[f.name] === "") {
+          const auto = UICore.fileBase(opts.auto_prompt);
+          if (items.includes(auto)) vals[f.name] = auto;
+        }
       } else {
         vals[f.name] = def;
         // автозаполнение диапазона глав из опций (как в CLI)
@@ -453,9 +459,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       for (const n of items) {
         input.append(h("option", { value: n }, n));
       }
-      const chosen = String(vals[f.name] ?? "");
-      if (chosen && !items.includes(chosen)) {
-        input.append(h("option", { value: chosen }, chosen));
+      let chosen = String(vals[f.name] ?? "");
+      if (chosen !== "" && !items.includes(chosen)) {
+        // файл исчез из пула (удалён) — сбрасываем «мёртвый» выбор
+        chosen = "";
+        vals[f.name] = "";
       }
       input.value = chosen;
       input.addEventListener("change", () => {

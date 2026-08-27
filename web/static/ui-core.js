@@ -230,6 +230,18 @@
       return i < 0 ? s : s.slice(i + 1);
     },
 
+    /* ── выбор файла из пула опций: ТОЛЬКО реально существующие ──
+     * Дефолт (из спеки или .env) сравнивается с пулом файлов проекта;
+     * файла нет в пуле → "" (не подхватываем): удалённый промпт не
+     * должен оставаться выбранным — иначе запуск уходит в per-stage
+     * режим и игнорирует автоподхват (напр. pipeline_prompt.txt). */
+    pickPoolFile: (def, items) => {
+      var baseDef = UICore.fileBase(def);
+      if (baseDef && items.includes(baseDef)) return baseDef;
+      if (def && items.includes(def)) return def;
+      return "";
+    },
+
     /* ── валидация кегля рендера: значение из опций, иначе дефолт ── */
     clampFont: (n, options, def) => {
       var v = parseInt(n, 10);
