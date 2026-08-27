@@ -36,3 +36,11 @@ def test_js_syntax(name):
     """node --check — синтаксис каждого статического JS."""
     r = _node("--check", str(SPA_DIR / name))
     assert r.returncode == 0, f"node --check {name}:\n{r.stderr}"
+
+
+def test_run_views_expert_form_not_async():
+    """Регрессия «[object Promise]»: expertForm рендерит DOM синхронно
+    (formPanel вставляет результат как узел) — async вернул бы Promise."""
+    src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    assert "async function expertForm" not in src
+    assert "function expertForm(key, spec)" in src

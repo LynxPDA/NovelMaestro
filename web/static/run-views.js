@@ -371,8 +371,10 @@ function viewRun(section, name, attachJobId) {
     return h("div", { class: "run-form" }, nodes);
   }
 
-  // экспертная форма: все поля спеки (до простого режима)
-  async function expertForm(key, spec) {
+  // экспертная форма: все поля спеки (до простого режима).
+  // НЕ async — formPanel вставляет результат как DOM-узел; async
+  // вернул бы Promise (баг «[object Promise]» при переключении).
+  function expertForm(key, spec) {
     const err = h("div", { class: "form-error" });
     const fieldNodes = [];
     const fieldWraps = {}; // name → label-обёртка (промпты pipeline, )
