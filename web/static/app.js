@@ -384,6 +384,17 @@ function createProjectModal() {
   const author = h("input", { class: "input", placeholder: "Автор" });
   const genres = h("input", { class: "input", placeholder: "жанр1, жанр2" });
   const tplSel = h("select", { class: "input" });
+  // опциональные загрузки: обложка и исходник для разбора — оба в source/
+  const coverFile = h("input", {
+    type: "file",
+    class: "input",
+    accept: ".jpg,.jpeg,.png,.webp",
+  });
+  const srcFile = h("input", {
+    type: "file",
+    class: "input",
+    accept: ".txt,.md,.epub,.zip",
+  });
   const err = h("div", { class: "form-error" });
 
   return new Promise((resolve) => {
@@ -413,6 +424,18 @@ function createProjectModal() {
           genres,
         ),
         h("label", { class: "field" }, "Шаблон типа книги", tplSel),
+        h(
+          "label",
+          { class: "field" },
+          "Обложка (опционально, jpg/png/webp)",
+          coverFile,
+        ),
+        h(
+          "label",
+          { class: "field" },
+          "Исходник txt/md/epub/zip (опционально)",
+          srcFile,
+        ),
         err,
         h(
           "div",
@@ -439,11 +462,52 @@ function createProjectModal() {
                   });
                   close();
                   hubCache = null;
+                  const proj = `${r.section}/${r.name}`;
+                  // опциональные загрузки: обложка и исходник → source/
+                  const uploadErrors = [];
+                  const cover = coverFile.files && coverFile.files[0];
+                  if (cover) {
+                    try {
+                      const b64 = await new Promise((resolve, reject) => {
+                        const fr = new FileReader();
+                        fr.onload = () =>
+                          resolve(String(fr.result).split(",", 2)[1] || "");
+                        fr.onerror = () =>
+                          reject(new Error("не удалось прочитать обложку"));
+                        fr.readAsDataURL(cover);
+                      });
+                      await api("/cover", {
+                        method: "PUT",
+                        body: {
+                          project: proj,
+                          name: cover.name,
+                          content_base64: b64,
+                        },
+                      });
+                    } catch (ex) {
+                      uploadErrors.push(`обложка: ${ex.message}`);
+                    }
+                  }
+                  const src = srcFile.files && srcFile.files[0];
+                  if (src) {
+                    try {
+                      const form = new FormData();
+                      form.append("dest", "source");
+                      form.append("files[]", src, src.name);
+                      await apiUpload("/upload", form);
+                    } catch (ex) {
+                      uploadErrors.push(`исходник: ${ex.message}`);
+                    }
+                  }
                   toast(
                     r.renamed
-                      ? `Создан ${r.section}/${r.name} (имя очищено)`
-                      : `Создан ${r.section}/${r.name}`,
+                      ? `Создан ${proj} (имя очищено)`
+                      : `Создан ${proj}`,
                   );
+                  if (uploadErrors.length) {
+                    toast(`Проект создан, но: ${uploadErrors.join("; ")}`,
+                      "err");
+                  }
                   resolve(true);
                 } catch (ex) {
                   err.textContent = ex.message;

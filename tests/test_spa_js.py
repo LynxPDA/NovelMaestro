@@ -44,3 +44,20 @@ def test_run_views_expert_form_not_async():
     src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
     assert "async function expertForm" not in src
     assert "function expertForm(key, spec)" in src
+
+
+def test_create_project_modal_uploads():
+    """Мастер создания: опциональные обложка и исходник → source/."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    # два опциональных file-input: обложка и исходник
+    assert 'accept: ".jpg,.jpeg,.png,.webp"' in src
+    assert 'accept: ".txt,.md,.epub,.zip"' in src
+    # обложка — PUT /api/cover (base64), исходник — upload с dest=source
+    assert 'await api("/cover"' in src
+    assert 'form.append("dest", "source")' in src
+    # проект создаётся ДО загрузок (нужен существующий project=sec/name)
+    create = src.index("function createProjectModal")
+    up = src.index("form.append(\"dest\", \"source\")")
+    assert create < up
+    # загрузки живут внутри мастера (до конца его тела)
+    assert src.index("function manageProjectModal") > up
