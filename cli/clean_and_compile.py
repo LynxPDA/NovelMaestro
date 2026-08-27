@@ -290,7 +290,8 @@ def parse_yaml_meta(path):
     meta = {}
     try:
         text = safe_read(path)
-    except Exception:
+    except (OSError, ValueError):
+        # B12: только ошибки чтения/кодировки — программные баги не маскируем
         return meta
     lines = text.split('\n')
     # Убираем front-matter делимитеры ---
@@ -509,7 +510,8 @@ def build_epub_native(chapters_data, meta, cover_path, output_path):
                             _chapter_xhtml(ch['title'], ch['body']))
         print(f"[УСПЕХ] EPUB сгенерирован (нативно): {output_path}")
         return True
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
+        # B12: файловые/данные-ошибки — отчёт и fallback; баги кода падают явно
         print(f"[ОШИБКА] Генерация EPUB: {e}")
         return False
 
@@ -590,7 +592,8 @@ def build_fb2_native(chapters_data, meta, cover_path, output_path):
             f.write(fb2_xml)
         print(f"[УСПЕХ] FB2 сгенерирован (нативно): {output_path}")
         return True
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
+        # B12: файловые/данные-ошибки — отчёт и fallback; баги кода падают явно
         print(f"[ОШИБКА] Генерация FB2: {e}")
         return False
 

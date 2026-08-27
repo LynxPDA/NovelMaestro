@@ -250,8 +250,7 @@ async function api(path, opts = {}) {
   return data;
 }
 
-/* Тосты — обычный DOM (надёжно без гонки Alpine/module);
-   Alpine подключён для будущих компонентов. */
+/* Тосты — обычный DOM (B8: Alpine и toast-host на нём убраны). */
 function toast(msg, kind = "ok") {
   const t = h("div", { class: `toast toast-${kind}` }, msg);
   document.body.append(t);

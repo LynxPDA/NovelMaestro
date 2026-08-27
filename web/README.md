@@ -89,11 +89,18 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
   metadata.yaml; обложка (upload/предпросмотр/удаление, `source/cover.*`).
 - **Промпты** (W4): файлы `prompts/` + шаблоны `templates/*/prompts`
   в одном списке; создание промпта из шаблона.
-- **Запуски**: все стадии пайплайна, динамические формы,
-  live-лог + SSE, прогрессбар LLM-стадий (события
+- **Запуски**: все стадии пайплайна, **«Простой режим / Экспертный»**
+  (сегмент-переключатель над формой): простой — карточка пресета
+  (название, «что будет сделано», диапазон глав, одна кнопка
+  «Запустить»; params = дефолты спеки `preset.params`, LLM-поля не
+  показываются — сервер из `.env`); экспертный — полная форма. Выбор
+  режима — localStorage (`runMode`, по стадиям), дефолт — простой.
+  live-лог + SSE (reconnect с backoff при обрыве), прогрессбар
+  LLM-стадий (события
   `@@PROGRESS@@` из скриптов, `WEB_PROGRESS=1` ставит JobManager.start в
   env subprocess, tqdm в web отключается; без событий бар скрыт),
-  конвейер с таблицей глав (✓/✗/⊘), stop — сигнал **группе процессов**
+  конвейер с таблицей глав (✓/✗/⊘, строки — реальные главы из
+  `options.chapters.ids`), stop — сигнал **группе процессов**
   (дочерние translate_book.py не осиротеют).
   Страница «Запуски» истории НЕ показывает: слева — карточка
   **активного** запуска проекта (badge/бар/переход/стоп), лог
@@ -202,10 +209,10 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 | GET/PUT/DELETE | `/api/prompts`, `/api/prompts/{name}` | промпты (DELETE — удаление, PUT с пустым content — создание) |
 | GET | `/api/prompts/{name}/template` | шаблоны промптов |
 | GET | `/api/logs`, `/api/logs/{name}` | логи проекта |
-| GET/PUT/DELETE | `/api/files`, `/api/file`, `/api/upload`, `/api/download` | файлы (`download?inline=1` — предпросмотр); чтение отсутствующего файла — `missing: true` + пустой `content` (редактор создаёт файл при сохранении) |
+| GET/PUT/DELETE | `/api/files`, `/api/file`, `/api/upload`, `/api/download` | файлы (`download?inline=1` — предпросмотр); чтение отсутствующего файла — `missing: true` + пустой `content` (редактор создаёт файл при сохранении); `upload` с пустым `dest` — корень проекта (поля files с `dir=""`) |
 | POST | `/api/mkdir` (`?project=&path=` или body) | создание пустого каталога проекта; дубль/эскейп → 400 |
 | POST | `/api/file/rename` (`{project, path, new_name}`) | переименование файла ИЛИ каталога проекта; нет исходника → 404, занято → 400, недопустимое имя → 400 |
-| GET | `/api/stages`, `/api/stages/{k}/spec\|options` | стадии, формы |
+| GET | `/api/stages`, `/api/stages/{k}/spec\|options` | стадии, формы; `spec.preset.params` — параметры «Простого режима» (дефолты полей + overrides); `options.chapters.ids` — реальные главы |
 | POST/GET | `/api/jobs`, `/api/jobs/{id}`, `/api/jobs/{id}/stream` | запуски, SSE; при лимите параллельных (`WEB_JOBS_LIMIT`) — **429** (H2); вторая стадия на тот же проект — **409** (M10). SSE: стартовый бурст хвоста (до 5000 строк) + события/прогресс + финальный `status`; клиент берёт лог ТОЛЬКО из стрима (payload `lines` на running не дублирует) |
 | DELETE | `/api/jobs` | очистить историю завершённых запусков (активные не трогаются) |
 | POST | `/api/jobs/{id}/stop`, DELETE `/api/jobs/{id}` | стоп (killpg)/удаление |

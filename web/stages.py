@@ -6,6 +6,10 @@ stages.py — спеки стадий web-интерфейса (M4: не-LLM; M5
 Каждая стадия: spec (поля формы) + build_command(form, ctx) → argv.
 - cwd = папка проекта; python = sys.executable; скрипт = REPO/cli/xxx.py.
 - Единицы в лейблах — как в help скриптов (СИМВОЛЫ/ТОКЕНЫ/ГЛАВЫ).
+- preset: карточка «Простой режим» — title/desc + overrides; параметры
+  простого режима считаются preset_params() (дефолты полей формы +
+  overrides). Все поля формы — экспертные: в простом режиме форма
+  целиком скрыта карточкой пресета.
 """
 from __future__ import annotations
 
@@ -433,6 +437,41 @@ _LLM_FIELDS = [
 ]
 
 
+# ── пресеты «Простого режима» в Запусках ───────────────────────────────
+# Пресет: title (название карточки) + desc (1–2 строки «что будет
+# сделано») + overrides (отклонения от дефолтов полей формы). Параметры
+# простого режима — preset_params(spec): непустые дефолты полей формы +
+# overrides; LLM-поля (host/model/api_key) имеют пустые дефолты и в
+# params не попадают — скрипты сами берут сервер из .env.
+
+def preset_params(spec: dict) -> dict:
+    """Параметры простого режима запуска (пресет) для спеки стадии.
+
+    params = непустые дефолты полей формы + overrides пресета — ровно
+    то, что форма отправила бы с дефолтными значениями: булёвы входят
+    всегда (false = выключено), пустые строки пропускаются, files с
+    dir префиксуются папкой (R5-G). API вкладывает результат в
+    spec.preset.params — SPA читает его без дублирования логики.
+    """
+    params: dict = {}
+    for f in spec.get("fields", []):
+        name = f["name"]
+        default = f.get("default")
+        if f["type"] == "bool":
+            params[name] = bool(default)
+        elif default is None or str(default) == "":
+            continue
+        elif f["type"] == "files":
+            v = str(default)
+            if f.get("dir") and "/" not in v:
+                v = f"{f['dir']}/{v}"
+            params[name] = v
+        else:
+            params[name] = str(default)
+    params.update(spec.get("preset", {}).get("overrides") or {})
+    return params
+
+
 STAGE_SPECS: dict[str, dict] = {
     "epub": {
         "title": "Разбор исходника на главы",
@@ -465,6 +504,12 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
              "type": "bool", "default": False},
         ],
+        "preset": {
+            "title": "Разобрать исходник",
+            "desc": "Автопоиск исходника в source/, пресет языка zh, "
+                    "чистки и уборка номеров страниц включены",
+            "overrides": {"lang": "zh"},
+        },
     },
     "translate_check": {
         "title": "Проверка перевода",
@@ -486,6 +531,11 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "Пусто = TRANSLATE_CHECK_EXCLUDE_WORDS из .env "
                       "или дефолт скрипта (VIP,MVP,【,】,NPC)"},
         ],
+        "preset": {
+            "title": "Сравнить перевод",
+            "desc": "Сравнение polished с исходником по всем главам "
+                    "(пресет polished)",
+        },
     },
     "compile": {
         "title": "Компиляция TXT/EPUB/FB2",
@@ -514,6 +564,10 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "donate_file", "label": "Файл страницы поддержки",
              "type": "text", "default": ""},
         ],
+        "preset": {
+            "title": "Собрать книгу",
+            "desc": "TXT из polished, все главы, со страницей поддержки",
+        },
     },
     "pipeline": {
         "title": "Перевод (LLM)",
@@ -583,6 +637,11 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
              "default": ""},
         ],
+        "preset": {
+            "title": "Перевести книгу",
+            "desc": "Полный цикл: перевод → редактура → полировка "
+                    "всех глав, промпты из prompts/",
+        },
     },
     "ner": {
         "title": "Создание глоссария (LLM)",
@@ -647,6 +706,12 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "timeout", "label": "Таймаут запроса, сек",
              "type": "number", "default": "300"},
         ],
+        "preset": {
+            "title": "Собрать главы + глоссарий",
+            "desc": "Склейка chapters/*/chapter.txt в память и "
+                    "извлечение терминов в ner.json (все главы)",
+            "overrides": {"mode": "compile"},
+        },
     },
     "ner_check": {
         "title": "Проверка глоссария (LLM)",
@@ -699,6 +764,11 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "300"},
             {"name": "max_retries", "label": "Повторы", "type": "number", "default": "3"},
         ],
+        "preset": {
+            "title": "Проверить глоссарий",
+            "desc": "LLM-проверка ner.json: все проходы, "
+                    "правки не применяются",
+        },
     },
     "translate_check_llm": {
         "title": "Проверка перевода (LLM)",
@@ -740,6 +810,11 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "max_changed_chars", "label": "Макс. изменённых символов, СИМВОЛЫ",
              "type": "number", "default": "0"},
         ],
+        "preset": {
+            "title": "Проверить перевод (LLM)",
+            "desc": "LLM-проверка polished всех глав, один проход, "
+                    "дефолтные настройки",
+        },
     },
     "wiki": {
         "title": "Создание Wiki (LLM)",
@@ -782,6 +857,11 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "timeout", "label": "Таймаут запроса, сек", "type": "number", "default": "300"},
             {"name": "threads", "label": "Потоков", "type": "number", "default": "4"},
         ],
+        "preset": {
+            "title": "Создать вики",
+            "desc": "Генерация wiki.md: ner.json + перевод, "
+                    "дефолтные настройки",
+        },
     },
     "batch_replace": {
         "title": "Массовые замены",
@@ -802,6 +882,11 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
              "type": "bool", "default": False},
         ],
+        "preset": {
+            "title": "Применить замены",
+            "desc": "Массовые замены prompts/replacements.txt "
+                    "по polished, все главы",
+        },
     },
 }
 

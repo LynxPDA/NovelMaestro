@@ -78,9 +78,15 @@
   }
   function isCjkString(s) {
     if (!s) return false;
+    // B9: итерация по code points (for...of), а не UTF-16 code units —
+    // суррогатные пары (доп. плоскости, U+20000+) не считаются как 2
     var n = 0;
-    for (var i = 0; i < s.length; i++) if (isCjkChar(s[i])) n++;
-    return n / s.length > 0.5;
+    var len = 0;
+    for (var ch of String(s)) {
+      len++;
+      if (isCjkChar(ch)) n++;
+    }
+    return len > 0 && n / len > 0.5;
   }
   /* буква/цифра любого письма — для слово-границ не-CJK терминов */
   var WORD_CHAR_RE = /[\p{L}\p{N}]/u;
@@ -584,8 +590,35 @@
 
     nerCellText: nerCellText,
     nextNerSort: nextNerSort,
+    isCjkString: isCjkString,
     filterNerItems: filterNerItems,
     sortNerItems: sortNerItems,
+
+    /* ── режим «Простой/Экспертный» в Запусках (localStorage) ── */
+    /* выбор запоминается по стадии: runMode = JSON {stage: mode};
+       стадия без записи = глобальный дефолт "simple" (новички). */
+    runModeGet: (stage) => {
+      try {
+        var m = JSON.parse(localStorage.getItem("runMode") || "{}");
+        if (m && typeof m === "object" && m[stage] === "expert") {
+          return "expert";
+        }
+      } catch (err) { /* нет localStorage/кривой JSON — простой режим */
+        void err;
+      }
+      return "simple";
+    },
+    runModeSet: (stage, mode) => {
+      var m = {};
+      try {
+        m = JSON.parse(localStorage.getItem("runMode") || "{}");
+      } catch (err) { /* перезаписываем */ void err; }
+      if (!m || typeof m !== "object") m = {};
+      m[stage] = mode === "expert" ? "expert" : "simple";
+      try {
+        localStorage.setItem("runMode", JSON.stringify(m));
+      } catch (err) { /* приватный режим/переполнение — молча */ void err; }
+    },
   };
 
   return UICore;

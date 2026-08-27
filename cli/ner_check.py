@@ -211,8 +211,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Не слать reasoning-поле в payload.")
     p.add_argument("--max_tokens", type=int, default=65536,
                    help="Серверный предел ответа, ТОКЕНЫ (не расчёт).")
-    p.add_argument("--timeout", type=int, default=900)
-    p.add_argument("--stream_timeout", type=int, default=900)
+    p.add_argument("--timeout", type=int, default=300)
+    p.add_argument("--stream_timeout", type=int, default=300)
     p.add_argument("--max_retries", type=int, default=3)
     return p
 

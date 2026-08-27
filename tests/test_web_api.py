@@ -1096,6 +1096,22 @@ def test_upload_into_chapters_ok(srv_ctx):
     assert payload["saved"] == ["chapters/ch.txt"]
 
 
+def test_upload_to_project_root(srv_ctx):
+    """B3: dest="" (поля files с dir="" — ner_file, wiki file)
+    загружает файл в корень проекта — он виден в селекте полей."""
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _multipart_request(
+        port, "/api/upload?project=ACTIVE/test_book",
+        [("dest", "")],
+        [("ner.json", "application/json", b'{"terms": []}')])
+    assert res.status == 200, payload
+    assert payload["saved"] == ["ner.json"]
+    pdir = projects_root / "ACTIVE" / "test_book"
+    assert (pdir / "ner.json").is_file()
+    assert (pdir / "ner.json").read_text(encoding="utf-8") == '{"terms": []}'
+
+
 def test_upload_bad_dest_rejected(srv_ctx):
     _, port, projects_root = srv_ctx()
     _file_project(port, projects_root)

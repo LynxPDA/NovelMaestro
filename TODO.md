@@ -1,120 +1,182 @@
-# TODO — план: режимы «Создание глоссария», диапазон глав, серверы по скриптам
+# TODO — согласование: «Простой режим» в Запусках, ревью кода, улучшения
 
-Статус: **готово (ожидает коммита и push).**
-
----
-
-## Исследование (диагностика по пунктам запроса)
-
-1. **«Запуски → Создание глоссария» (стадия ner, cli/ner.py)**:
-   - режим `compile` (`--compile_chapters`) пишет временный
-     `compiled_chapters.txt` в корень проекта и читает его обратно —
-     файл не нужен, можно склеивать главы в память;
-   - диапазона глав нет: `compile_chapter_texts` в core/common.py уже
-     умеет `start/end` (использует clean_and_compile), но ner.py
-     флаги `--start/--end` не принимает и в форму не выведены;
-   - режим `extract` совмещает «с нуля» и «дообучение» по факту
-     существования ner.json, а «постобработка» (без LLM) показана в той
-     же форме с LLM-полями — режимы надо развести явно.
-2. **Сервер по скриптам**: `get_stage_model` даёт только модель
-   (`<СТАДИЯ>_MODEL` → `MODEL`); HOST/API_KEY — единые
-   (`get_server_config` без стадии). В шаблоне и системном .env —
-   только `MODEL` по скриптам. Нужны `<СТАДИЯ>_HOST`/`<СТАДИЯ>_API_KEY`
-   по той же схеме fallback.
-3. `web/api.py::_stage_spec` — автоподхват `compiled_chapters.txt` в
-   поле file стадии ner: с переходом на in-memory сборку файл больше
-   не создаётся — автоподхват убрать.
+Статус: **реализовано** (ответы на вопросы 1.4 учтены). Коммиты:
+`feat(web): простой/экспертный режим…`, `fix(web): сироты…`, `fix(web): …`
+(см. git log). Невыполненное — ниже в тексте (U1/U3/U4/U9/U12, B7).
 
 ---
 
-## План реализации
+## 1. «Простой режим / Экспертный» в Запусках — ✅ выполнено
 
-### T1 — core: сервер по скриптам (`<СТАДИЯ>_HOST`/`<СТАДИЯ>_API_KEY`)
+### 1.1 Общая механика — ✅
 
-- [x] `core/common.py::get_server_config(env_data, stage="")` — стадия
-      непуста: `<СТАДИЯ>_HOST` → `HOST`, `<СТАДИЯ>_API_KEY` → `API_KEY`,
-      модель через `get_stage_model`; docstring; без стадии — как раньше.
-- [x] Скрипты передают свою стадию: cli/ner.py («ner»),
-      cli/ner_check.py («ner_check»), cli/wiki.py («wiki»),
-      cli/translate_check_llm.py («translate_check_llm»),
-      web/pipeline.py («pipeline»); cli/translate_book.py — общие ключи
-      (не стадия web; конвейер передаёт ему всё явными флагами).
-- [x] `web/stages.py::env_keys_for` — host → `[<СТАДИЯ>_HOST, HOST]`,
-      api_key → `[<СТАДИЯ>_API_KEY, API_KEY]` (персист и предзаполнение
-      формы); `_llm_argv` — `get_server_config(env_data, stage)` + тот же
-      fallback на системный .env.
-- [x] `templates/.env.example` + системный `.env` — блок
-      «Серверы по скриптам»: `<СКРИПТ>_HOST/API_KEY/MODEL` (комментарии).
-- [x] Доки: core/README.md, AGENTS.md §6, README.md, web/README.md.
+- В панели «Запуски» (`web/static/run-views.js`) — сегмент-переключатель
+  **«Простой режим / Экспертный»** над формой стадии (`modeToggle`).
+- **Простой режим**: карточка пресета — название, 1–2 строки «что будет
+  сделано», диапазон глав (всегда отображается, если стадия принимает
+  start/end), одна кнопка «Запустить». Все поля скрыты.
+- **Экспертный**: текущая форма целиком, без изменений (`expertForm`).
+- **Отправка**: простой режим шлёт `params` = `spec.preset.params`
+  (считается на сервере: непустые дефолты полей + overrides пресета).
+  Диапазон глав уходит в params как start/end, если заполнен.
+- **LLM-поля (host/model/api_key)** в простом режиме не показываются
+  вовсе: скрипты сами берут их из .env (`get_server_config` + fallback
+  на системный .env — уже работает, `_llm_argv`).
+- Запоминание режима — localStorage (`runMode`, JSON по стадиям;
+  дефолт — «простой»). Хелперы `UICore.runModeGet/runModeSet`.
+- Серверный API: `POST /api/jobs` без изменений; `_stage_spec` теперь
+  вкладывает `preset.params` в ответ (логика — в `web/stages.py`).
 
-### T2 — core: `compile_chapter_text` (сборка глав в память)
+### 1.2 Что в простой режим, что в экспертный — ✅ (по таблице)
 
-- [x] `core/common.py::compile_chapter_text(chapters_dir, want, start,
-      end, logger)` → `(text, info)` без записи файла;
-      `compile_chapter_texts` переиспользует её (тот же вывод на диск).
-- [x] Тесты `tests/test_core_common.py`: in-memory сборка + диапазон.
+Все поля — экспертные (в простом режиме форма скрыта целиком); пресеты:
 
-### T3 — cli/ner.py: диапазон глав, без временного файла
+| Стадия | Пресет (title / desc) | overrides |
+| --- | --- | --- |
+| epub | «Разобрать исходник» / автопоиск в source/, zh, чистки и уборка номеров | `lang: zh` |
+| ner | «Собрать главы + глоссарий» / склейка chapters/*/chapter.txt в память, извлечение в ner.json | `mode: compile` |
+| ner_check | «Проверить глоссарий» / все проходы, правки не применяются | — |
+| pipeline | «Перевести книгу» / полный цикл, промпты из prompts/ | — |
+| translate_check | «Сравнить перевод» / polished vs исходник, все главы | — |
+| translate_check_llm | «Проверить перевод (LLM)» / polished, один проход | — |
+| batch_replace | «Применить замены» / prompts/replacements.txt по polished | — |
+| compile | «Собрать книгу» / TXT из polished, все главы | — |
+| wiki | «Создать вики» / wiki.md: ner.json + перевод | — |
 
-- [x] `--start`/`--end` (ГЛАВЫ, включительно) — проброс в
-      `compile_chapter_text`; help в единицах.
-- [x] `--compile_out` default None: пусто = сборка в память, файл не
-      пишется; явный `--compile_out` — сохранить собранный txt
-      (кастомный файл для извлечений остаётся и через `file`).
-- [x] Кэши (ner_progress.json / ner_pass1/2_cache.json) при сборке в
-      память — в cwd (корень проекта), как раньше рядом с файлом.
-- [x] `get_server_config(env_data, "ner")` (T1).
+### 1.3 Реализация — ✅
 
-### T4 — web/stages.py: режимы стадии ner
+1. `web/stages.py`: `preset` (title/desc/overrides) в каждой спеке +
+   `preset_params()` (дефолты формы + overrides; булёвы входят всегда,
+   files префиксуются папкой, LLM-поля не попадают — пустые дефолты).
+2. `web/static/run-views.js`: переключатель, карточка пресета, отправка
+   `preset.params`; лог/прогресс/стоп — как сейчас.
+3. `web/api.py`: `_stage_spec` вкладывает `preset.params` (спека уходит
+   целиком, expert-поля SPA игнорирует).
+4. Тесты: `tests/test_web_jobs.py` — пресеты (params == дефолты спеки +
+   overrides, spot-checks, argv-собираемость); SPA — `tests/spa/ui-core.test.mjs`
+   (runMode, isCjkString).
+5. Доки: web/README.md, README.md, AGENTS.md (localStorage-предпочтение).
 
-- [x] Спека ner: mode select — `extract` («С нуля (новый глоссарий)») /
-      `finetune` («Дообучение (глоссарий уже есть)») / `compile`
-      («Собрать главы + извлечение») / `postprocess»
-      («Постобработка ner.json (без LLM)»); поля start/end (ГЛАВЫ);
-      help «файл нужен для extract/finetune».
-- [x] `build_ner`: compile → `--compile_chapters` + `_range_argv`;
-      extract/finetune → позиционный file; postprocess → только
-      ner_file/strip_meta/min_count; LLM-флаги и `_llm_argv` — только
-      для LLM-режимов (extract/finetune/compile).
-- [x] `web/api.py::_stage_spec` — убрать автоподхват
-      compiled_chapters.txt.
-- [x] `run-views.js`: переключение видимости полей по режиму ner
-      (как prompt_mode у pipeline): postprocess — только
-      ner_file/strip_meta/min_count; compile — start/end, без file;
-      extract/finetune — file, без start/end.
+### 1.4 Вопросы к пользователю — ответы учтены
 
-### T5 — Тесты
-
-- [x] `tests/test_core_common.py`: `get_server_config` со стадией
-      (host/api_key/model, fallback, пустая стадия); `compile_chapter_text`.
-- [x] `tests/test_ner.py`: `test_main_compile_chapters` — файл
-      `compiled_chapters.txt` НЕ создаётся по умолчанию, извлечение
-      работает; `--compile_out` пишет файл; диапазон `--start/--end`.
-- [x] `tests/test_web_jobs.py`: `test_build_ner_modes` — новые режимы,
-      start/end в compile, LLM-флаги только в LLM-режимах;
-      `test_llm_profile_from_env` — стадийные NER_HOST/NER_API_KEY.
-
-### T6 — Доки и проверки
-
-- [x] README.md, web/README.md — режимы ner, серверы по скриптам.
-- [x] `python3 -m pytest tests/ -q` — все зелёные.
-- [x] `node --check` на изменённые JS.
-- [x] Smoke: web — режимы ner переключают поля; запуск compile без
-      compiled_chapters.txt; NER_HOST/NER_API_KEY в .env подхватываются.
-- [x] Коммит + push (несколько атомарных).
+- Дефолт переключателя: **простой**.
+- Глобальный переключатель, память **по стадии**.
+- ner в простом: «собрать главы + извлечение» (compile, без входного txt);
+  во всех Запусках простого режима отображается диапазон глав.
+- Сводка пресета: одна строка + кнопка.
+- Расхождения дефолтов (B6): скрипты выровнены под форму.
 
 ---
 
-## Карта правок
+## 2. Общая проверка кода — найденные баги и проблемы
 
-| Файл | Изменения |
-| --- | --- |
-| `core/common.py` | `get_server_config(env, stage)`, `compile_chapter_text` |
-| `cli/ner.py` | `--start/--end`, in-memory compile, `--compile_out` опциональный, стадия «ner» |
-| `cli/ner_check.py`, `cli/wiki.py`, `cli/translate_check_llm.py`, `web/pipeline.py` | стадия в `get_server_config` |
-| `web/stages.py` | `env_keys_for` (host/api_key по стадиям), `build_ner`, спека ner (режимы + start/end) |
-| `web/api.py` | убран автоподхват compiled_chapters.txt |
-| `web/static/run-views.js` | видимость полей по режиму ner |
-| `templates/.env.example`, `.env` | `<СКРИПТ>_HOST/API_KEY/MODEL` |
-| `core/README.md`, `web/README.md`, `README.md`, `AGENTS.md` | серверы по скриптам, режимы ner |
-| тесты | T5 |
+### B1 (средний) — ✅ наблюдатель сирот
+
+`web/jobs.py::_orphan_watch` — фоновый поток (daemon, `ORPHAN_POLL=5с`)
+опрашивает running-запуски без proc (сироты после рестарта): pid умер →
+failed + exit_code=1 + persist + notify. Тесты: `test_orphan_watcher_marks_dead`,
+`test_orphan_watcher_ignores_live`.
+
+### B2 (низкий) — ✅ remove() останавливает сирот
+
+`remove()`: SIGTERM уходит и по pid сироты (`_signal_group_pid`), если
+proc=None, но pid жив. Тест: `test_remove_stops_orphan`.
+
+### B3 (низкий) — ✅ upload с dir="" в корень проекта
+
+`/api/upload` с пустым `dest` = корень проекта (поля files с dir="");
+SPA шлёт `dest = dir || ""`. Тест: `test_upload_to_project_root`.
+
+### B4 (низкий, UX) — ✅ смена host очищает api_key
+
+В `expertForm` при изменении host поле api_key очищается (C1 защищал
+только env-fallback).
+
+### B5 (низкий) — ✅ кэш options инвалидируется
+
+`st.options = null` при смене стадии и после завершения запуска
+(в attachStream перед финальным render).
+
+### B6 (низкий) — ✅ дефолты скриптов выровнены под форму
+
+- ner threads 1 → **4** (cli/ner.py);
+- ner_check timeout/stream_timeout 900 → **300** (cli/ner_check.py);
+- translate_check_llm max_retries 5 → **3** (cli/translate_check_llm.py).
+U2: тест-таблица форма ↔ argparse (build_parser вынесен из main в ner.py).
+
+### B7 (низкий) — ⏸️ НЕ делал
+
+Зомби-детект только на Linux (`/proc/<pid>/stat`); на macOS/stdlib
+портабельного способа нет (psutil — тяжёлая зависимость, запрещена
+AGENTS.md). Некритично: зомби быстро исчезают.
+
+### B8 (инфо) — ✅ мёртвый груз
+
+- `vendor/alpine.min.js` и toast-host на Alpine убраны (тосты — обычный DOM);
+- `web/main.py --no-auth` — оставлен (совместимость);
+- `env_keys_for(profile=...)` — параметр оставлен (публичная сигнатура).
+
+### B9 (низкий) — ✅ isCjkString и суррогатные пары
+
+Итерация `for...of` (code points), экспорт `UICore.isCjkString` +
+тест в ui-core.test.mjs.
+
+### B10 (низкий) — ✅ таблица глав по реальным id
+
+`options.chapters.ids` (api.py) + строки с `data-id`; SSE-обновление —
+по `[data-id=…]`, не nth-child. Тест: `test_stage_options_api` обновлён.
+
+### B11 (низкий) — ✅ ротация web.log
+
+`RotatingFileHandler` (5 МБ, backupCount=2) в `web/main.py`.
+
+### B12 (инфо) — ✅ сужены широкие except
+
+`cli/clean_and_compile.py` (parse_yaml_meta → OSError/ValueError;
+epub/fb2-native → OSError/ValueError/TypeError), `cli/epub_to_chapters.py`
+→ KeyError/IndexError/ValueError.
+
+---
+
+## 3. Улучшения, упрощения, поддержка и расширение
+
+### 3.1 Упрощение кода
+
+- **U1. Декларативный сбор argv** — ⏸️ НЕ делал (крупный рефактор
+  build_*; риск регрессий не оправдан в этой задаче).
+- **U2. Единый источник дефолтов** — ✅ тест-таблица форма ↔ argparse
+  (см. B6).
+- **U3. Вынести st.options-логику** — ⏸️ частично: params простого
+  режима считаются на сервере (stages.py), JS их не дублирует; полный
+  вынос логики опций — не делал.
+- **U4. Разбить project-views.js** — ⏸️ НЕ делал (4010 строк, отдельная
+  задача).
+
+### 3.2 Надёжность
+
+- **U5. Наблюдатель сирот** — ✅ = B1.
+- **U6. Reconnect SSE** — ✅ `attachStream` с backoff (1с, 2с, 4с, …,
+  ≤5 попыток); при переподключении st.log очищается — снапшот хвоста
+  приходит целиком без дублей.
+- **U7. Ротация web.log** — ✅ = B11.
+
+### 3.3 Оптимизация
+
+- **U8. Кэш `_stage_options`** — ✅ по сигнатуре mtime папок
+  (chapters/source/prompts/корень); тест `test_stage_options_cache_invalidates`.
+- **U9. Хвост SSE постранично** — ⏸️ НЕ делал (API-изменение
+  offset/limit, низкая ценность).
+
+### 3.4 Поддержка и расширение
+
+- **U10. Пресеты как расширяемый механизм** — ✅ задел: preset =
+  {title, desc, overrides}, params считаются; добавление второго пресета —
+  селект в простом режиме (структура готова).
+- **U11. Тесты SPA шире** — ✅ частично: ui-core.test.mjs — runMode
+  (localStorage-стаб) и isCjkString; рендер карточки/отправка params —
+  без jsdom не тестируются (params-логика покрыта Python-тестами).
+- **U12. Согласованность matcher JS↔Python** — ⏸️ НЕ делал (property-тест,
+  отдельная задача).
+- **U13. Доки** — ✅ web/README.md, README.md, AGENTS.md.
+
+### 3.5 Проверено, замечаний нет — без изменений

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import logging.handlers
 import os
 import secrets
 import socket
@@ -147,7 +148,11 @@ def _setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=[
-            logging.FileHandler(logs_dir / "web.log", encoding="utf-8"),
+            # B11: ротация web.log по размеру (>5 МБ → .1/.2), иначе
+            # файл растёт бесконечно
+            logging.handlers.RotatingFileHandler(
+                logs_dir / "web.log", maxBytes=5 * 1024 * 1024,
+                backupCount=2, encoding="utf-8"),
             logging.StreamHandler(sys.stdout),
         ],
     )

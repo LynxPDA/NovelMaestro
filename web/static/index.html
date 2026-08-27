@@ -12,18 +12,8 @@
   </head>
   <body>
     <div id="app" class="app-root"></div>
-    <div
-      id="toasts"
-      x-data="{ items: [], push(msg, kind) { const it = { msg, kind, id: Date.now() + Math.random() }; this.items.push(it); setTimeout(() => this.items = this.items.filter((x) => x.id !== it.id), 3500); } }"
-      class="toast-host"
-    >
-      <template x-for="it in items" :key="it.id">
-        <div :class="'toast toast-' + it.kind" x-text="it.msg"></div>
-      </template>
-    </div>
     <script src="/vendor/codemirror.min.js"></script>
     <script src="/vendor/marked.min.js"></script>
-    <script defer src="/vendor/alpine.min.js"></script>
     <script src="/ui-core.js"></script>
     <script src="/project-views.js"></script>
     <script src="/run-views.js"></script>

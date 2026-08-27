@@ -470,6 +470,80 @@ def test_reconcile_alive_pid(tmp_path, fake_script):
             sleeper.wait()
 
 
+def test_orphan_watcher_marks_dead(tmp_path, fake_script, monkeypatch):
+    """B1: сирота (running без proc, pid умер после рестарта) —
+    фоновый наблюдатель помечает failed, не дожидаясь перезагрузки."""
+    import web.jobs as jobs_mod
+    monkeypatch.setattr(jobs_mod, "ORPHAN_POLL", 0.05)
+    jm = JobManager(tmp_path, python="python3")
+    job = jm.start("test", "Тест", "ACTIVE/x",
+                   [str(fake_script / "ok.py")], tmp_path)
+    _wait_status(jm, job.id, "done")
+    # превращаем в сироту: running + мёртвый pid + proc=None
+    job.status = "running"
+    job.pid = 999999999
+    job.proc = None
+    job.finished = None
+    job = _wait_status(jm, job.id, "failed")
+    assert job.exit_code == 1
+    assert job.finished is not None
+    # статус зафиксирован на диске (persist)
+    data = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))
+    fixed = [i for i in data if i["id"] == job.id][0]
+    assert fixed["status"] == "failed"
+
+
+def test_orphan_watcher_ignores_live(tmp_path, fake_script, monkeypatch):
+    """B1: сирота с ЖИВЫМ pid остаётся running (наблюдатель не трогает)."""
+    import subprocess
+    import web.jobs as jobs_mod
+    monkeypatch.setattr(jobs_mod, "ORPHAN_POLL", 0.05)
+    sleeper = subprocess.Popen(["python3", "-c",
+                                "import time; time.sleep(120)"])
+    try:
+        jm = JobManager(tmp_path, python="python3")
+        job = jm.start("test", "Тест", "ACTIVE/x",
+                       [str(fake_script / "hang.py")], tmp_path)
+        _wait_status(jm, job.id, "running")
+        job.proc = None
+        job.pid = sleeper.pid
+        time.sleep(0.3)  # несколько циклов наблюдателя
+        cur = jm.get(job.id)
+        assert cur is not None and cur.status == "running"
+    finally:
+        if sleeper.poll() is None:
+            sleeper.kill()
+            sleeper.wait()
+
+
+def test_remove_stops_orphan(tmp_path, fake_script):
+    """B2: remove() сироты останавливает живой процесс (proc=None,
+    pid жив) — раньше SIGTERM не уходил и процесс работал дальше."""
+    import subprocess
+    import time as _time
+    sleeper = subprocess.Popen(["python3", "-c",
+                                "import time; time.sleep(120)"])
+    try:
+        jm = JobManager(tmp_path, python="python3")
+        job = jm.start("test", "Тест", "ACTIVE/x",
+                       [str(fake_script / "hang.py")], tmp_path)
+        _wait_status(jm, job.id, "running")
+        # сирота: proc=None, pid — живой внешний процесс
+        job.proc = None
+        job.pid = sleeper.pid
+        assert jm.remove(job.id) is True
+        assert jm.get(job.id) is None
+        try:
+            sleeper.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        assert sleeper.poll() is not None, "сирота не остановлен при remove"
+    finally:
+        if sleeper.poll() is None:
+            sleeper.kill()
+            sleeper.wait()
+
+
 def test_shutdown_stops_running(tmp_path, fake_script):
     """R15: shutdown() останавливает все активные запуски (завершение
     сервера — никаких процессов-сирот)."""
@@ -633,6 +707,108 @@ def test_spec_for_strips_build():
 def test_build_unknown_stage():
     with pytest.raises(ValueError):
         build_command("nope", {}, {})
+
+
+# ════════════════════════════════════════════════════════════════════
+# пресеты «Простого режима» (карточка запуска вместо формы)
+
+
+def test_presets_all_stages():
+    """У каждой стадии — пресет {title, desc}; params простого режима
+    = непустые дефолты полей формы + overrides; LLM-полей нет (скрипты
+    берут сервер из .env)."""
+    from web.stages import preset_params
+    for key in STAGE_ORDER:
+        spec = STAGE_SPECS[key]
+        preset = spec.get("preset")
+        assert preset is not None, key
+        assert preset.get("title"), key
+        assert preset.get("desc"), key
+        params = preset_params(spec)
+        names = {f["name"] for f in spec["fields"]}
+        assert set(params) <= names, key
+        assert not {"host", "model", "api_key"} & set(params), key
+        # эталон: непустые дефолты полей + overrides пресета
+        expected = {}
+        for f in spec["fields"]:
+            d = f.get("default")
+            if f["type"] == "bool":
+                expected[f["name"]] = bool(d)
+            elif d is None or str(d) == "":
+                continue
+            elif f["type"] == "files":
+                v = str(d)
+                if f.get("dir") and "/" not in v:
+                    v = f"{f['dir']}/{v}"
+                expected[f["name"]] = v
+            else:
+                expected[f["name"]] = str(d)
+        expected.update(spec.get("preset", {}).get("overrides") or {})
+        assert params == expected, key
+
+
+def test_preset_spot_checks():
+    """Точечные проверки: что реально уедет в params при нажатии
+    «Запустить» в простом режиме."""
+    from web.stages import preset_params
+    # ner: compile без входного txt
+    params = preset_params(STAGE_SPECS["ner"])
+    assert params["mode"] == "compile"
+    assert "file" not in params
+    assert params["ner_file"] == "ner.json"
+    # pipeline: полный цикл, дефолты, без диапазона
+    params = preset_params(STAGE_SPECS["pipeline"])
+    assert params["action"] == "8"
+    assert params["jobs"] == "4"
+    assert "start" not in params and "end" not in params
+    # epub: автопоиск исходника + пресет языка zh
+    params = preset_params(STAGE_SPECS["epub"])
+    assert params["lang"] == "zh"
+    assert "input" not in params
+    # batch_replace: файл правил с папкой prompts/
+    params = preset_params(STAGE_SPECS["batch_replace"])
+    assert params["rules_file"] == "prompts/replacements.txt"
+    # wiki: ner.json + дефолтные настройки
+    params = preset_params(STAGE_SPECS["wiki"])
+    assert params["ner_file"] == "ner.json"
+    assert params["top"] == "80"
+
+
+def test_preset_llm_stage_argv_buildable():
+    """params простого режима LLM-стадий проходят build_command без
+    ошибок (нет обязательных полей, которые бы уронили сборку)."""
+    from web.stages import preset_params
+    for key in ("ner", "ner_check", "translate_check_llm", "wiki"):
+        params = preset_params(STAGE_SPECS[key])
+        argv = build_command(key, params, {})
+        assert argv[0].endswith(".py"), key
+
+
+# ════════════════════════════════════════════════════════════════════
+# U2: дефолты формы == дефолты argparse скриптов (единый источник)
+
+
+def test_form_defaults_match_script_argparse():
+    """Известные расхождения дефолтов (B6) выравнены: форма → скрипт.
+    Таблица: (стадия, поле) → (build_parser, argparse-dest). При
+    расхождении — скрипт выравнивается под форму (web — основной UI)."""
+    from cli.ner import build_parser as ner_parser
+    from cli.ner_check import build_parser as ner_check_parser
+    from cli.translate_check_llm import build_parser as tcl_parser
+
+    table = [
+        ("ner", "threads", ner_parser, "threads"),
+        ("ner_check", "timeout", ner_check_parser, "timeout"),
+        ("ner_check", "stream_timeout", ner_check_parser,
+         "stream_timeout"),
+        ("translate_check_llm", "max_retries", tcl_parser, "max_retries"),
+    ]
+    for stage, field, build, dest in table:
+        form_default = STAGE_SPECS[stage]["fields"]
+        f = next(x for x in form_default if x["name"] == field)
+        assert str(f["default"]) == str(build().get_default(dest)), \
+            f"{stage}.{field}: форма {f['default']} ≠ скрипт " \
+            f"{build().get_default(dest)}"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1312,8 +1488,35 @@ def test_stage_options_api(jobs_srv, tmp_path):
     res, payload = req("GET",
                        "/api/stages/epub/options?project=ACTIVE/test_book")
     assert res.status == 200
-    assert payload["options"]["chapters"] == {"min": 1, "max": 3}
+    # B10: ids — реальные главы (пропусков в нумерации нет в списке)
+    assert payload["options"]["chapters"] == {"min": 1, "max": 3,
+                                               "ids": [1, 3]}
     assert "book.epub" in payload["options"]["source"]
+
+
+def test_stage_options_cache_invalidates(jobs_srv, tmp_path):
+    """U8: кэш опций инвалидируется по mtime — новый файл в корне
+    виден вторым запросом без перезагрузки сервера."""
+    from web.api import _OPTIONS_CACHE
+    _OPTIONS_CACHE.clear()
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / "chapters" / "00001").mkdir(parents=True)
+    (pdir / "chapters" / "00001" / "chapter.txt").write_text(
+        "текст", encoding="utf-8")
+    res, payload = req("GET",
+                       "/api/stages/wiki/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert payload["options"]["chapters"] == {"min": 1, "max": 1,
+                                               "ids": [1]}
+    assert "ner.json" not in payload["options"].get("root", [])
+    # появился ner.json (корень проекта) — кэш должен инвалидироваться
+    (pdir / "ner.json").write_text("{}", encoding="utf-8")
+    res, payload = req("GET",
+                       "/api/stages/wiki/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert "ner.json" in payload["options"]["root"]
 
 
 def test_stream_sse(jobs_srv, fake_script):

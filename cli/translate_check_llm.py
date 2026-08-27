@@ -821,8 +821,8 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                     help="Усилия рассуждения модели.")
     ap.add_argument("--no_reasoning", action="store_true",
                     help="Отключить reasoning-блок запроса.")
-    ap.add_argument("--max_retries", type=int, default=5,
-                    help="Попытки на запрос (default: 5).")
+    ap.add_argument("--max_retries", type=int, default=3,
+                    help="Попытки на запрос (default: 3).")
     ap.add_argument("--timeout", type=int, default=120,
                     help="Таймаут соединения, сек (default: 120).")
     ap.add_argument("--stream_timeout", type=int, default=300,

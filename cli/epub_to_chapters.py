@@ -527,7 +527,8 @@ def _get_spine_order(zf: zipfile.ZipFile) -> list[str] | None:
             if href:
                 result.append((opf_dir + "/" + href) if opf_dir else href)
         return result if result else None
-    except (KeyError, Exception):
+    except (KeyError, IndexError, ValueError):
+        # B12: кривой OPF/манифест — None; прочие ошибки не маскируем
         return None
 
 

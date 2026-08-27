@@ -1302,9 +1302,9 @@ def postprocess_ner_file(
 # ══════════════════════════════════════════════════════════════════════
 
 
-def main():
-    global EXTRA_VOTED_FIELDS
-
+def build_parser() -> argparse.ArgumentParser:
+    """Парсер CLI ner.py (вынесен из main — для сверки дефолтов
+    с формой web-интерфейса, U2)."""
     parser = argparse.ArgumentParser(
         description=(
             "NER Extraction для веб-новелл.\n"
@@ -1377,8 +1377,8 @@ def main():
         ),
     )
     parser.add_argument(
-        "--threads", type=int, default=1,
-        help="Число параллельных потоков (по умолчанию: 1, макс: 16).",
+        "--threads", type=int, default=4,
+        help="Число параллельных потоков (по умолчанию: 4, макс: 16).",
     )
     parser.add_argument(
         "--host", default=None,
@@ -1496,7 +1496,13 @@ def main():
             "(--compile_chapters). Пусто = сборка в память, файл не пишется."
         ),
     )
+    return parser
 
+
+def main():
+    global EXTRA_VOTED_FIELDS
+
+    parser = build_parser()
     args = parser.parse_args()
     # Сервер: CLI > HOST/API_KEY/MODEL из .env
     env_data = parse_dotenv(find_env_file(args.env_file)) if args.env_file \

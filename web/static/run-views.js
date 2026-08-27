@@ -63,6 +63,9 @@ function viewRun(section, name, attachJobId) {
 
   function setStage(key) {
     st.stage = key;
+    // B5: кэш опций (файлы/главы) — только для текущей стадии:
+    // после запуска ner появился ner.json, wiki должна его увидеть
+    st.options = null;
     // активный запуск/стрим НЕ сбрасываем — лог остаётся
     // под формой, пока стадия не завершилась
     render();
@@ -262,6 +265,114 @@ function viewRun(section, name, attachJobId) {
         st.options = {};
       }
     }
+    // «Простой режим» — карточка пресета (дефолты спеки), «Экспертный» —
+    // полная форма; выбор запоминается по стадии (localStorage)
+    const mode = UICore.runModeGet(key);
+    const body =
+      mode === "simple" ? simplePanel(key, spec) : expertForm(key, spec);
+    return h(
+      "div",
+      { class: "run-panel" },
+      h("div", { class: "run-panel-title" }, `${key} · ${spec.title}`),
+      modeToggle(key, mode),
+      body,
+    );
+  }
+
+  // сегмент-переключатель «Простой режим / Экспертный»
+  function modeToggle(key, mode) {
+    const btn = (m, label) =>
+      h(
+        "button",
+        {
+          class: "mode-btn" + (mode === m ? " mode-btn-active" : ""),
+          onclick: () => {
+            UICore.runModeSet(key, m);
+            render();
+          },
+        },
+        label,
+      );
+    return h(
+      "div",
+      { class: "run-mode" },
+      btn("simple", "Простой режим"),
+      btn("expert", "Экспертный"),
+    );
+  }
+
+  // карточка пресета простого режима: «что будет сделано» + диапазон
+  // глав (если стадия принимает start/end) + одна кнопка «Запустить».
+  // params — дефолты спеки (preset.params, считается на сервере);
+  // LLM-поля не показываются: скрипты берут сервер из .env.
+  function simplePanel(key, spec) {
+    const preset = spec.preset || {};
+    const params = preset.params || {};
+    const err = h("div", { class: "form-error" });
+    const hasRange = (spec.fields || []).some(
+      (f) => f.name === "start" || f.name === "end",
+    );
+    const ch = (st.options || {}).chapters || {};
+    const start = h("input", {
+      type: "number",
+      class: "input preset-range",
+      value: ch.min == null ? "" : String(ch.min),
+    });
+    const end = h("input", {
+      type: "number",
+      class: "input preset-range",
+      value: ch.max == null ? "" : String(ch.max),
+    });
+    const card = h(
+      "div",
+      { class: "preset-card" },
+      h("div", { class: "preset-title" }, preset.title || "Запуск"),
+      h("div", { class: "preset-desc" }, preset.desc || ""),
+    );
+    const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
+    runBtn.addEventListener("click", async () => {
+      err.textContent = "";
+      const p = Object.assign({}, params);
+      if (hasRange) {
+        const s = start.value.trim();
+        const e = end.value.trim();
+        if (s !== "") p.start = s;
+        if (e !== "") p.end = e;
+      }
+      try {
+        const r = await api("/jobs", {
+          method: "POST",
+          body: { action: key, project: `${section}/${name}`, params: p },
+        });
+        st.job = r.job;
+        st.log = [];
+        st.events = [];
+        st.progress = r.job.progress || null;
+        await render(); // дождаться DOM лога, иначе attachStream не найдёт его
+        attachStream(r.job.id);
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    });
+    const nodes = [card];
+    if (hasRange) {
+      nodes.push(
+        h(
+          "div",
+          { class: "preset-range-row" },
+          h("span", { class: "preset-range-label" }, "Главы:"),
+          start,
+          h("span", { class: "preset-range-sep" }, "–"),
+          end,
+        ),
+      );
+    }
+    nodes.push(err, runBtn);
+    return h("div", { class: "run-form" }, nodes);
+  }
+
+  // экспертная форма: все поля спеки (до простого режима)
+  async function expertForm(key, spec) {
     const err = h("div", { class: "form-error" });
     const fieldNodes = [];
     const fieldWraps = {}; // name → label-обёртка (промпты pipeline, )
@@ -330,7 +441,9 @@ function viewRun(section, name, attachJobId) {
         upInput.addEventListener("change", async () => {
           if (!upInput.files || !upInput.files.length) return;
           const form = new FormData();
-          form.append("dest", dir || "tmp");
+          // B3: dir="" (поля корня проекта — ner_file, wiki file) —
+          // загружаем в корень проекта, иначе файл не появится в селекте
+          form.append("dest", dir || "");
           for (const f2 of upInput.files) {
             form.append("files[]", f2, f2.name);
           }
@@ -432,6 +545,16 @@ function viewRun(section, name, attachJobId) {
       applyNerMode();
     }
 
+    // B4: смена host очищает предзаполненный api_key — иначе старый
+    // ключ уедет на чужой сервер (C1 защищает только env-fallback)
+    const hostEl = values["host"];
+    const keyEl = values["api_key"];
+    if (hostEl && keyEl) {
+      hostEl.addEventListener("change", () => {
+        keyEl.value = "";
+      });
+    }
+
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
@@ -470,12 +593,7 @@ function viewRun(section, name, attachJobId) {
       }
     });
 
-    return h(
-      "div",
-      { class: "run-panel" },
-      h("div", { class: "run-panel-title" }, `${key} · ${spec.title}`),
-      h("div", { class: "run-form" }, fieldNodes, err, runBtn),
-    );
+    return h("div", { class: "run-form" }, fieldNodes, err, runBtn);
   }
 
   function logPanel() {
@@ -589,14 +707,24 @@ function viewRun(section, name, attachJobId) {
   function chapterTable() {
     const opts = st.options || {};
     const ch = opts.chapters || {};
-    const min = ch.min == null ? 1 : ch.min;
-    const max = ch.max == null ? 20 : ch.max;
+    // B10: реальные id из options.chapters.ids (опции стадии); без ids
+    // (старый сервер) — диапазон min..max как раньше
+    const ids = Array.isArray(ch.ids) && ch.ids.length
+      ? ch.ids
+      : null;
     const cols = [1, 2, 3];
     const stageSym = { 1: "пер", 2: "ред", 3: "пол" };
     const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
     const byKey = UICore.chapterByKey(st.events);
     const cells = [];
-    for (let id = min; id <= max; id++) {
+    const range = ids || (() => {
+      const min = ch.min == null ? 1 : ch.min;
+      const max = ch.max == null ? 20 : ch.max;
+      const out = [];
+      for (let i = min; i <= max; i++) out.push(i);
+      return out;
+    })();
+    for (const id of range) {
       const row = [h("th", { class: "ch-num" }, String(id))];
       for (const stage of cols) {
         const s = byKey[id + ":" + stage];
@@ -609,7 +737,7 @@ function viewRun(section, name, attachJobId) {
           ),
         );
       }
-      cells.push(h("tr", { class: "ch-row" }, row));
+      cells.push(h("tr", { class: "ch-row", "data-id": id }, row));
     }
     return h(
       "table",
@@ -633,45 +761,28 @@ function viewRun(section, name, attachJobId) {
   // стрим лога после старта. единственный источник лога —
   // SSE (стартовый бурст сервера уже содержит хвост), payload lines не
   // дублируем; AbortController гасит старый стрим при уходе со страницы.
+  // U6: обрыв сети/таймаут — reconnect с backoff (1 c, 2 c, 4 c, …),
+  // не больше MAX_ATTEMPTS; при переподключении сервер шлёт весь хвост
+  // заново — очищаем st.log, чтобы снапшот не продублировал строки.
+  const MAX_STREAM_ATTEMPTS = 5;
   async function attachStream(jobId) {
     if (streamCtrl) streamCtrl.abort(); // один стрим на экземпляр
     streamCtrl = new AbortController();
     const sig = streamCtrl.signal;
     try {
-      // события конвейера приходят в том же SSE (snapshot + живые);
-      // отдельный GET /jobs здесь не нужен — он дублировал бы события
-      const res = await fetch(`/api/jobs/${jobId}/stream`, { signal: sig });
-      if (!res.ok || !res.body) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err && err.error) || `Ошибка ${res.status}`);
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const events = buf.split("\n\n");
-        buf = events.pop();
-        for (const ev of events) {
-          for (const line of ev.split("\n")) {
-            if (!line.startsWith("data: ")) continue;
-            let payload;
-            try {
-              payload = JSON.parse(line.slice(6));
-            } catch {
-              continue;
-            }
-            // обработка одного payload — в своём try/catch: кривое
-            // событие не должно ронять весь стрим (иначе лог замрёт,
-            // а панель не закроется — status так и не придёт)
-            try {
-              onPayload(payload);
-            } catch (ex) {
-              console.warn("SSE: событие пропущено:", ex && ex.message);
-            }
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await streamOnce(jobId, sig);
+          break; // стрим завершился штатно (задание закончилось)
+        } catch (ex) {
+          if (ex && ex.name === "AbortError") return; // ушли со страницы
+          const running = st.job && st.job.status === "running";
+          if (!running || attempt >= MAX_STREAM_ATTEMPTS) {
+            if (running) toast(`SSE-стрим оборван: ${ex.message}`, "err");
+            break;
           }
+          st.log = []; // снапшот reconnect'а придёт целиком — без дублей
+          await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
         }
       }
       // конец стрима (задание завершилось): догнать статус/события;
@@ -685,13 +796,53 @@ function viewRun(section, name, attachJobId) {
       } catch {
         /* статус уже есть */
       }
-      render();
-    } catch (ex) {
-      if (ex && ex.name === "AbortError") return; // ушли со страницы — молча
-      toast(ex.message, "err");
+      // B5: после завершения запуска могли появиться новые файлы
+      // (ner.json, wiki.md) — форма перечитает опции при рендере
+      st.options = null;
       render();
     } finally {
       streamCtrl = null;
+    }
+  }
+
+  // одна попытка стрима: fetch + чтение до конца (EOF = статус).
+  // Выбрасывает исключение при сетевом обрыве — reconnect крутится выше.
+  async function streamOnce(jobId, sig) {
+    // события конвейера приходят в том же SSE (snapshot + живые);
+    // отдельный GET /jobs здесь не нужен — он дублировал бы события
+    const res = await fetch(`/api/jobs/${jobId}/stream`, { signal: sig });
+    if (!res.ok || !res.body) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err && err.error) || `Ошибка ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const events = buf.split("\n\n");
+      buf = events.pop();
+      for (const ev of events) {
+        for (const line of ev.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          let payload;
+          try {
+            payload = JSON.parse(line.slice(6));
+          } catch {
+            continue;
+          }
+          // обработка одного payload — в своём try/catch: кривое
+          // событие не должно ронять весь стрим (иначе лог замрёт,
+          // а панель не закроется — status так и не придёт)
+          try {
+            onPayload(payload);
+          } catch (ex) {
+            console.warn("SSE: событие пропущено:", ex && ex.message);
+          }
+        }
+      }
     }
   }
 
@@ -710,7 +861,7 @@ function viewRun(section, name, attachJobId) {
     } else if (payload.type === "event" && payload.event) {
       const ev = payload.event;
       // таблица глав — только pipeline-события (числовой stage);
-      // иначе селектор nth-child будет невалидным и уронит стрим
+      // иначе селектор будет невалидным и уронит стрим
       if (ev && ev.id != null && typeof ev.stage === "number") {
         // дедуп: snapshot стрима повторяет события из attachToJob
         const prev = st.events.findIndex(
@@ -720,8 +871,10 @@ function viewRun(section, name, attachJobId) {
         else st.events.push(ev);
         const t = page.querySelector(".ch-table");
         if (t) {
+          // B10: строка ищется по data-id (реальные главы), а не
+          // nth-child (позиция) — нумерация может быть разреженной
           const cell = t.querySelector(
-            `.ch-row:nth-child(${ev.id}) .ch-cell:nth-child(${ev.stage + 1})`,
+            `.ch-row[data-id="${ev.id}"] .ch-cell:nth-child(${ev.stage + 1})`,
           );
           if (cell) {
             const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };

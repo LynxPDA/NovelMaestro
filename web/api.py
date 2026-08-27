@@ -327,7 +327,8 @@ def _file_delete(ctx: dict) -> dict:
 def _file_upload(ctx: dict) -> dict:
     """Загрузка файлов (POST /api/upload, multipart).
 
-    Поля: dest=source|chapters|prompts|images|tmp + files[] (несколько).
+    Поля: dest=source|chapters|prompts|images|tmp + files[] (несколько);
+    пусто/отсутствует dest = корень проекта (поля files с dir="").
     Имена — только basename; лимит max_upload_mb на файл.
     """
     pdir, section, name = _project_ctx(ctx)
@@ -344,8 +345,10 @@ def _file_upload(ctx: dict) -> dict:
         fields = parse_multipart(raw, boundary)
     except MultipartError as exc:
         raise ApiError(400, f"Некорректный multipart: {exc}")
-    dest = extract_value(fields, "dest") or "tmp"
-    if dest not in UPLOAD_DIRS:
+    dest = extract_value(fields, "dest")
+    # пусто = корень проекта (поля files с dir="" — ner_file, wiki file);
+    # иначе — только разрешённые подпапки (UPLOAD_DIRS)
+    if dest and dest not in UPLOAD_DIRS:
         raise ApiError(400, f"Папка назначения недопустима: {dest}")
     dest_dir = _resolve_project_path(ctx, pdir, dest)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -362,7 +365,7 @@ def _file_upload(ctx: dict) -> dict:
             raise ApiError(413, f"Файл слишком большой: {fname}")
         target = _resolve_project_path(ctx, dest_dir, fname)
         target.write_bytes(f["data"])
-        saved.append(f"{dest}/{fname}")
+        saved.append(f"{dest}/{fname}" if dest else fname)
     return {"ok": True, "saved": saved}
 
 
@@ -1982,6 +1985,11 @@ def _stage_spec(ctx: dict) -> dict:
     if spec is None:
         raise ApiError(404, "Стадия не найдена")
     spec = copy.deepcopy(spec)  # не мутируем глобальный кэш спекаций
+    # пресет простого режима: параметры считаются в web/stages.py
+    # (дефолты полей формы + overrides) и уходят в спеку целиком
+    if spec.get("preset") is not None:
+        from web.stages import preset_params
+        spec["preset"]["params"] = preset_params(spec)
     project = ctx["query"].get("project", "")
     if "/" in project:
         try:
@@ -2018,6 +2026,28 @@ def _stage_spec(ctx: dict) -> dict:
     return {"ok": True, "spec": spec}
 
 
+# U8: кэш опций стадий — сигнатура mtime папок, влияющих на опции
+# (chapters/source/prompts/корень). build_chapter_map на каждый запрос
+# дорогой, а папки меняются редко; любое изменение — инвалидация.
+_OPTIONS_CACHE: dict[str, tuple[tuple[float, ...], dict]] = {}
+
+
+def _options_signature(pdir: Path) -> tuple[float, ...]:
+    """mtime папок проекта, влияющих на опции стадий (U8)."""
+    sig: list[float] = []
+    for name in ("chapters", "source", "prompts"):
+        d = pdir / name
+        try:
+            sig.append(d.stat().st_mtime if d.is_dir() else 0.0)
+        except OSError:
+            sig.append(0.0)
+    try:
+        sig.append(pdir.stat().st_mtime)  # корень: ner.json и т.п.
+    except OSError:
+        sig.append(0.0)
+    return tuple(sig)
+
+
 def _stage_options(ctx: dict) -> dict:
     """Динамические опции стадии (GET /api/stages/{key}/options?project=)."""
     common = _import_common(ctx)
@@ -2028,13 +2058,21 @@ def _stage_options(ctx: dict) -> dict:
     project = ctx["query"].get("project", "")
     if "/" in project:
         pdir, _section, _name = _project_ctx(ctx)
+        sig = _options_signature(pdir)
+        cached = _OPTIONS_CACHE.get(str(pdir))
+        if cached is not None and cached[0] == sig:
+            out["options"] = cached[1]
+            return out
         # диапазон глав
         chapters_dir = pdir / "chapters"
         if chapters_dir.is_dir():
             ch_map = common.build_chapter_map(chapters_dir)
             nums = sorted(ch_map)
             if nums:
-                out["options"]["chapters"] = {"min": nums[0], "max": nums[-1]}
+                # ids — реальные главы (B10): таблица конвейера рисует
+                # строки по списку, а не по диапазону min..max
+                out["options"]["chapters"] = {
+                    "min": nums[0], "max": nums[-1], "ids": nums}
         # файлы source/
         src = pdir / "source"
         if src.is_dir():
@@ -2053,6 +2091,7 @@ def _stage_options(ctx: dict) -> dict:
                       if f.is_file() and not f.name.startswith("."))
         if root:
             out["options"]["root"] = root
+        _OPTIONS_CACHE[str(pdir)] = (sig, out["options"])
     return out
 
 

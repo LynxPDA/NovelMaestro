@@ -538,3 +538,54 @@ test("reviewSummary: подсчёт статусов", () => {
     applied: 0,
   });
 });
+
+/* ── режим «Простой/Экспертный» в Запусках (localStorage) ── */
+function stubLocalStorage() {
+  let store = {};
+  const ls = {
+    getItem: (k) => (k in store ? store[k] : null),
+    setItem: (k, v) => { store[k] = String(v); },
+    removeItem: (k) => { delete store[k]; },
+    clear: () => { store = {}; },
+  };
+  globalThis.localStorage = ls;
+  return ls;
+}
+
+test("runModeGet: дефолт — простой режим", () => {
+  stubLocalStorage();
+  assert.equal(UICore.runModeGet("pipeline"), "simple");
+});
+
+test("runModeSet/runModeGet: выбор запоминается по стадии", () => {
+  stubLocalStorage();
+  UICore.runModeSet("wiki", "expert");
+  UICore.runModeSet("pipeline", "simple");
+  assert.equal(UICore.runModeGet("wiki"), "expert");
+  assert.equal(UICore.runModeGet("pipeline"), "simple");
+  // другие стадии — глобальный дефолт
+  assert.equal(UICore.runModeGet("ner"), "simple");
+});
+
+test("runModeSet: переключение обратно в простой", () => {
+  stubLocalStorage();
+  UICore.runModeSet("ner", "expert");
+  UICore.runModeSet("ner", "simple");
+  assert.equal(UICore.runModeGet("ner"), "simple");
+});
+
+test("runMode: кривой JSON в localStorage не роняет", () => {
+  stubLocalStorage();
+  localStorage.setItem("runMode", "not-json{{");
+  assert.equal(UICore.runModeGet("ner"), "simple");
+});
+
+test("isCjkString: суррогатные пары не считаются за 2 символа (B9)", () => {
+  // U+20000 (CJK Ext B) — суррогатная пара в UTF-16
+  const s = "𠀀𠀀𠀀" + "abc"; // 3 CJK + 3 латиницы
+  assert.equal(UICore.isCjkString(s), false); // ровно 0.5 — не > 0.5
+  const s2 = "𠀀𠀀𠀀𠀀" + "ab"; // 4 CJK + 2 латиницы
+  assert.equal(UICore.isCjkString(s2), true);
+  assert.equal(UICore.isCjkString(""), false);
+  assert.equal(UICore.isCjkString(null), false);
+});
