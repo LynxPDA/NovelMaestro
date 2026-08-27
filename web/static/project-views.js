@@ -12,6 +12,7 @@ function viewProject(section, name) {
     review: {},
     search: null,
     editor: null, // вкладка «Редактор» (глава/панели/подсветка)
+    chaptersType: null, // тип файлов во вкладке «Главы» (localStorage-нет)
   };
   const page = h("div", { class: "page" });
 
@@ -40,6 +41,7 @@ function viewProject(section, name) {
     ["editor", "Редактор"],
     ["ner", "Глоссарий"],
     ["review", "Проверка"],
+    ["chapters", "Главы"],
     ["status", "Статус"],
     ["config", "Конфиг"],
     ["prompts", "Промпты"],
@@ -83,6 +85,7 @@ function viewProject(section, name) {
     else if (st.view === "editor") body = await editorTabView();
     else if (st.view === "ner") body = await nerView();
     else if (st.view === "review") body = await reviewView();
+    else if (st.view === "chapters") body = await chaptersView();
     else if (st.view === "status") body = await statusView();
     else if (st.view === "config") body = await configView();
     else if (st.view === "prompts") body = await promptsView();
@@ -2621,6 +2624,117 @@ function viewProject(section, name) {
 
   /* ── Конфиг: env + metadata ────────────────────── */
   /* ── Конфиг: env + metadata + обложка (W6) ─────── */
+  // «Главы» — названия глав: тип файлов (chapters/translated/redacted/
+  // polished), слева номер каталога, справа редактируемая первая строка;
+  // одна кнопка «Сохранить» — все изменения разом в соответствующие файлы
+  async function chaptersView() {
+    const err = h("div", { class: "form-error" });
+    const typeSel = h("select", { class: "input chapters-type" });
+    const types = ["chapters", "translated", "redacted", "polished"];
+    for (const t of types) {
+      typeSel.append(h("option", { value: t }, t));
+    }
+    typeSel.value = st.chaptersType || "polished";
+    const saveBtn = h("button", { class: "btn btn-primary" }, "Сохранить");
+    saveBtn.disabled = true;
+    const status = h("span", { class: "review-status" });
+    const rows = h("div", { class: "chapters-rows" });
+    let inputs = {}; // id → {input, orig}
+
+    async function load() {
+      st.chaptersType = typeSel.value;
+      saveBtn.disabled = true;
+      status.textContent = "Загрузка…";
+      rows.replaceChildren();
+      inputs = {};
+      try {
+        const r = await api(
+          `/projects/${section}/${name}/chapters/titles` +
+          `?type=${encodeURIComponent(typeSel.value)}`,
+        );
+        const titles = r.titles || {};
+        const ids = Object.keys(titles)
+          .map(Number)
+          .sort((a, b) => a - b);
+        for (const id of ids) {
+          const inp = h("input", {
+            class: "input chapters-title",
+            value: titles[id],
+          });
+          inputs[id] = { input: inp, orig: String(titles[id]) };
+          inp.addEventListener("input", () => {
+            saveBtn.disabled = false;
+          });
+          rows.append(
+            h(
+              "div",
+              { class: "chapters-row" },
+              h("span", { class: "ch-num" }, String(id)),
+              inp,
+            ),
+          );
+        }
+        saveBtn.disabled = true;
+        status.textContent = ids.length
+          ? `Глав: ${ids.length} (${typeSel.value})`
+          : "Файлы не найдены";
+      } catch (ex) {
+        status.textContent = ex.message;
+      }
+    }
+
+    saveBtn.addEventListener("click", async () => {
+      const titles = {};
+      let changed = 0;
+      for (const id of Object.keys(inputs)) {
+        const { input, orig } = inputs[id];
+        const v = input.value.trim();
+        if (v && v !== orig) {
+          titles[id] = v;
+          changed++;
+        }
+      }
+      if (!changed) {
+        toast("Изменений нет");
+        return;
+      }
+      saveBtn.disabled = true;
+      try {
+        const r = await api(`/projects/${section}/${name}/chapters/titles`, {
+          method: "PUT",
+          body: { type: typeSel.value, titles },
+        });
+        toast(`Сохранено глав: ${r.updated.length}`);
+        status.textContent = "Сохранено";
+        await load();
+      } catch (ex) {
+        saveBtn.disabled = false;
+        status.textContent = ex.message;
+        err.textContent = ex.message;
+      }
+    });
+
+    typeSel.addEventListener("change", load);
+    load();
+
+    const toolbar = h(
+      "div",
+      { class: "chapters-toolbar" },
+      h("span", { class: "field-label" }, "Тип файлов глав:"),
+      typeSel,
+      h("span", { class: "spacer" }),
+      status,
+      saveBtn,
+    );
+    const hint = h(
+      "div",
+      { class: "card-hint" },
+      "Название главы — первая непустая строка файла. " +
+        "Правки сохраняются в соответствующие файлы глав одной кнопкой.",
+    );
+    return h("div", { class: "files-wrap" }, toolbar, hint, err, rows);
+  }
+
   // «Статус» — таблица готовности глав + сводка ner/wiki/compiled
   async function statusView() {
     let data;

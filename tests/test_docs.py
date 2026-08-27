@@ -39,6 +39,7 @@ CORE_API = [
     "web_progress_enabled", "emit_progress",
     "parse_chapter_id", "build_chapter_map", "find_chapter_file",
     "format_ranges", "compile_chapter_texts",
+    "read_chapter_titles", "write_chapter_titles",
 ]
 # Зеркало API core/projects.py (web-интерфейс берёт его отсюда)
 PROJECTS_API = ["SECTIONS", "DEFAULT_SECTIONS", "load_sections",

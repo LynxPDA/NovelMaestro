@@ -471,6 +471,42 @@ def test_compile_chapter_text_in_memory(tmp_path):
     assert info2["written"] == 1 and text2 == "два\n"
 
 
+def test_read_chapter_titles(tmp_path):
+    """read_chapter_titles: первая непустая строка файла главы."""
+    root = tmp_path / "chapters"
+    d1 = root / "00000_1_a"
+    d2 = root / "00000_2_b"
+    d1.mkdir(parents=True)
+    d2.mkdir()
+    (d1 / "polished.txt").write_text("\n\nГлава 1 Начало\n\nТекст\n",
+                                      encoding="utf-8")
+    (d2 / "polished.txt").write_text("Глава 2 Продолжение\n\nТекст\n",
+                                      encoding="utf-8")
+    titles = C.read_chapter_titles(str(root), want="polished")
+    assert titles == {1: "Глава 1 Начало", 2: "Глава 2 Продолжение"}
+    # файлов нужного типа нет → пусто (strict_types без fallback)
+    assert C.read_chapter_titles(str(root), want="translated") == {}
+
+
+def test_write_chapter_titles(tmp_path):
+    """write_chapter_titles: замена первой строки, остальное сохраняется."""
+    root = tmp_path / "chapters"
+    d1 = root / "00000_1_a"
+    d1.mkdir(parents=True)
+    (d1 / "polished.txt").write_text("\nГлава 1 Старое\n\nТекст\n",
+                                      encoding="utf-8")
+    res = C.write_chapter_titles(str(root), "polished", {1: "Глава 1 Новое"})
+    assert res["updated"] == [1] and res["missing"] == []
+    text = (d1 / "polished.txt").read_text(encoding="utf-8")
+    assert text == "\nГлава 1 Новое\n\nТекст\n"
+    # отсутствующая глава — в missing, файл не трогается
+    res2 = C.write_chapter_titles(str(root), "polished", {2: "Глава 2"})
+    assert res2["missing"] == [2]
+    # пустой заголовок — missing
+    res3 = C.write_chapter_titles(str(root), "polished", {1: "  "})
+    assert res3["missing"] == [1]
+
+
 def test_find_chapter_file_priority(tmp_path):
     d = tmp_path / "00000_1_x"
     d.mkdir()

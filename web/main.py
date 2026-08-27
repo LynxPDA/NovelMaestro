@@ -215,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = _find_repo_root()
     srv = server.make_server(args.host, args.port, auth_obj, router,
                              repo_root=repo_root,
-                             projects_root=repo_root / "projects")
+                             projects_root=projects_root)
     srv.max_upload_mb = args.max_upload_mb
     srv.jobs_limit = args.jobs_limit
     # JobManager живёт на сервере (для _job_manager(ctx)); процессы —

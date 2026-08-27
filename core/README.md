@@ -34,7 +34,9 @@ LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) 
   только в web-режиме; total=None/0 — неопределённый бар; no-op в CLI)
 главы: parse_chapter_id / build_chapter_map / find_chapter_file(strict) / format_ranges /
   compile_chapter_text (склейка chapter.txt из папок глав в память,
-  (text, info), start/end) / compile_chapter_texts (та же склейка → файл)
+  (text, info), start/end) / compile_chapter_texts (та же склейка → файл) /
+  read_chapter_titles / write_chapter_titles (названия глав: первая
+  непустая строка файла; чтение/замена с NFC, вкладка «Главы»)
 
 # core/projects.py — менеджмент проектов (общий слой бэкэндов)
 

@@ -10,7 +10,6 @@ clean_and_compile.py — компиляция глав в TXT/EPUB/FB2 (чист
   txt          сборка единого TXT (для выкладки)
   epub         сборка Markdown → нативная генерация EPUB (zipfile, stdlib)
   fb2          сборка Markdown → нативная генерация FB2 (+ обложка, stdlib)
-  titles       выгрузка заголовков в titles_START_END.txt для правки
   epub-chunks  EPUB частями по --chunk-size глав (default 50)
   txt-chunks   TXT частями по --chunk-size глав (default 500)
   fb2-chunks   FB2 частями по --chunk-size глав (default 50)
@@ -621,37 +620,6 @@ def build_fb2_native(chapters_data, meta, cover_path, output_path):
 
 
 # ==========================================
-# ВЫГРУЗКА ЗАГОЛОВКОВ
-# ==========================================
-def export_titles():
-    chapter_map = build_chapter_map(cfg.base_dir)
-    print(f"Выгружаю заголовки в файл: {cfg.titles_file}")
-    found = 0
-    try:
-        out_titles = open(cfg.titles_file, "w", encoding="utf-8")
-    except OSError as exc:
-        print(f"Ошибка: не удалось создать {cfg.titles_file}: {exc}")
-        return
-    with out_titles as f:
-        for i in range(cfg.start, cfg.end + 1):
-            dir_path = chapter_map.get(i)
-            if not dir_path:
-                continue
-            file_path, warnings = find_chapter_file(
-                dir_path, i, want=cfg.compile_type,
-                strict_types=(cfg.compile_type != "chapter"))
-            if not file_path:
-                continue
-            lines = safe_read_lines(file_path)
-            for line in lines:
-                if re.match(r"^Глава\s+\d+", line.strip()):
-                    f.write(f"{i}:::{line.strip()}\n")
-                    found += 1
-                    break
-    print(f"Успешно выгружено {found} заголовков!")
-    print(f"Откройте {cfg.titles_file}, отредактируйте текст после ':::' и сохраните.")
-
-# ==========================================
 # ИМЯ ЭКСПОРТА (имя проекта + диапазон)
 # ==========================================
 def _export_label() -> str:
@@ -854,16 +822,14 @@ def build_parser():
   %(prog)s --mode txt
   %(prog)s --mode epub --start 1 --end 120 --no-donate
   %(prog)s --mode epub-chunks --chunk-size 50
-  %(prog)s --mode titles
   %(prog)s --mode fb2 --source-type redacted
 Интерактивный режим — лаунчер tools/run_clean_and_compile.py.
 """,
     )
     p.add_argument("--mode", required=True,
-                   choices=["txt", "epub", "fb2", "titles",
+                   choices=["txt", "epub", "fb2",
                             "epub-chunks", "txt-chunks", "fb2-chunks"],
-                   help="Действие: сборка (txt/epub/fb2), выгрузка "
-                        "заголовков (titles) или сборка частями (*-chunks)")
+                   help="Действие: сборка (txt/epub/fb2) или сборка частями (*-chunks)")
     p.add_argument("--start", type=int, default=None,
                    help="Начальная глава (по умолчанию: минимальная найденная)")
     p.add_argument("--end", type=int, default=None,
@@ -931,9 +897,7 @@ def main():
           f"источник: {cfg.compile_type} | папка: {cfg.base_dir}")
 
     mode = args.mode
-    if mode == "titles":
-        export_titles()
-    elif mode in ("txt", "epub", "fb2"):
+    if mode in ("txt", "epub", "fb2"):
         compile_book(mode)
     else:  # *-chunks
         base_mode = mode.split("-", 1)[0]  # epub|txt|fb2

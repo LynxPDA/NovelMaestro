@@ -76,6 +76,65 @@ def test_assemble(tmp_path):
     assert not (tmp_path / "нет.md").exists()
 
 
+def test_assemble_toc_toggles(tmp_path):
+    """toc/toc_links: оглавление и якоря-ссылки в обычном режиме."""
+    sections = [("Персонажи", [("Линь Шуй", "## Линь Шуй\nтекст")])]
+    out = str(tmp_path / "w.md")
+    # без оглавления
+    WIKI.assemble_wiki(sections, out, False, SilentLog(),
+                       toc=False, toc_links=True)
+    text = Path(out).read_text(encoding="utf-8")
+    assert "## Содержание" not in text
+    assert "<a id=" not in text
+    # оглавление без ссылок
+    WIKI.assemble_wiki(sections, out, False, SilentLog(),
+                       toc=True, toc_links=False)
+    text = Path(out).read_text(encoding="utf-8")
+    assert "## Содержание" in text
+    assert "  - Линь Шуй" in text
+    assert "[Линь Шуй]" not in text and "<a id=" not in text
+    # оглавление со ссылками: якорь в теле + ссылка в содержании
+    WIKI.assemble_wiki(sections, out, False, SilentLog(),
+                       toc=True, toc_links=True)
+    text = Path(out).read_text(encoding="utf-8")
+    assert "  - [Линь Шуй](#линь-шуй)" in text
+    assert '<a id="линь-шуй"></a>' in text
+
+
+def test_assemble_rulate_html(tmp_path):
+    """rulate_html: заголовки — span font-size, списки <ul>, <hr />."""
+    sections = [
+        ("Персонажи", [("Чу Синь",
+                         "## Чу Синь\n\nСотрудница.\n\n"
+                         "### Описание\n\n- Пункт **жирный**\n- Ещё\n\n---\n")]),
+    ]
+    out = str(tmp_path / "wiki.html")
+    WIKI.assemble_wiki(sections, out, True, SilentLog(),
+                       rulate_html=True)
+    text = Path(out).read_text(encoding="utf-8")
+    # заголовок — не тег <h1..h6>, а указание шрифта
+    assert '<p><strong><span style="font-size:20px">Чу Синь</span>' in text
+    assert '<p><strong><span style="font-size:16px">Описание</span>' in text
+    assert "<h1>" not in text and "<h2>" not in text
+    assert "<ul>" in text and "<li>Пункт <strong>жирный</strong></li>" in text
+    assert "<hr />" in text  # и межстатейный разделитель — <hr />
+    assert text.count("<hr />") >= 2
+    assert "## Содержание" not in text
+
+
+def test_md_to_html_escaping():
+    """md_to_html: экранирование и inline-жирный."""
+    html = WIKI.md_to_html("<script>alert(1)</script>\n\n**важно** & <тег>")
+    assert "&lt;script&gt;" in html and "&amp;" in html
+    assert "<strong>важно</strong>" in html
+
+
+def test_slugify():
+    assert WIKI._slugify("Линь Шуй") == "линь-шуй"
+    assert WIKI._slugify("Чу Синь (female)") == "чу-синь-female"
+    assert WIKI._slugify("  ") == "-"
+
+
 def test_stats_helpers():
     # TYPE_NAMES_RU покрывает базовые типы
     assert WIKI.TYPE_NAMES_RU["Person"]
@@ -238,3 +297,96 @@ def test_main_rulate(tmp_path, monkeypatch):
     WIKI.main()
     text = (tmp_path / "wiki.md").read_text(encoding="utf-8")
     assert ":|:" in text  # rulate-таблица вместо содержания
+
+
+def test_main_compile_chapters(tmp_path, monkeypatch):
+    """wiki: --compile-chapters собирает главы в память (без txt)."""
+    chapters = tmp_path / "chapters"
+    d1 = chapters / "00000_1_x"
+    d1.mkdir(parents=True)
+    (d1 / "chapter.txt").write_text(
+        "Глава 1\n\nЛинь Шуй шла по дороге.\n\nЛинь Шуй думала.\n",
+        encoding="utf-8")
+    (tmp_path / "ner.json").write_text(json.dumps([
+        {"term": "林水", "translation": "Линь Шуй",
+         "type": "Person (female)", "count": 3},
+    ], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
+    monkeypatch.setattr(sys, "argv", [
+        "wiki.py", "--compile-chapters", "--type", "chapter",
+        "--start", "1", "--end", "1", "--ner_file", "ner.json",
+        "--output", "wiki.md", "--host", "http://h", "--model", "m",
+        "--threads", "1"])
+    WIKI.main()
+    text = (tmp_path / "wiki.md").read_text(encoding="utf-8")
+    assert "СТАТЬЯ" in text and "Линь Шуй" in text
+    # txt-файл не создавался — сборка шла в память
+    assert not (tmp_path / "compiled_1_1_chapter.txt").exists()
+
+
+def test_main_compile_chapters_missing(tmp_path, monkeypatch):
+    """wiki: --compile-chapters без глав — ранний выход."""
+    (tmp_path / "chapters").mkdir()
+    (tmp_path / "ner.json").write_text("[]", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(sys, "argv", [
+        "wiki.py", "--compile-chapters", "--ner_file", "ner.json",
+        "--host", "http://h", "--model", "m"])
+    WIKI.main()
+    assert not (tmp_path / "wiki.md").exists()
+
+
+def test_main_no_file_no_compile(tmp_path, monkeypatch):
+    """wiki: ни file, ни --compile-chapters — ошибка."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(sys, "argv", [
+        "wiki.py", "--ner_file", "ner.json", "--host", "http://h",
+        "--model", "m"])
+    WIKI.main()
+    assert not (tmp_path / "wiki.md").exists()
+
+
+def test_main_rulate_html(tmp_path, monkeypatch):
+    """wiki: --rulate-html → wiki.html с span-заголовками."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "novel.txt").write_text(_NOVEL_MAIN, encoding="utf-8")
+    (tmp_path / "ner.json").write_text(json.dumps([
+        {"term": "林水", "translation": "Линь Шуй",
+         "type": "Person (female)", "count": 7},
+    ], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
+    monkeypatch.setattr(sys, "argv", [
+        "wiki.py", "novel.txt", "--ner_file", "ner.json",
+        "--output", "wiki.md", "--host", "http://h", "--model", "m",
+        "--threads", "1", "--rulate-html"])
+    WIKI.main()
+    html = (tmp_path / "wiki.html").read_text(encoding="utf-8")
+    assert "СТАТЬЯ" in html
+    assert "<h1>" not in html
+    assert "## Содержание" not in html
+    assert ":|:" not in html
+
+
+def test_main_toc_off(tmp_path, monkeypatch):
+    """wiki: --no-toc — оглавления нет."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "novel.txt").write_text(_NOVEL_MAIN, encoding="utf-8")
+    (tmp_path / "ner.json").write_text(json.dumps([
+        {"term": "林水", "translation": "Линь Шуй",
+         "type": "Person (female)", "count": 7},
+    ], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
+    monkeypatch.setattr(sys, "argv", [
+        "wiki.py", "novel.txt", "--ner_file", "ner.json",
+        "--output", "wiki.md", "--host", "http://h", "--model", "m",
+        "--threads", "1", "--no-toc"])
+    WIKI.main()
+    text = (tmp_path / "wiki.md").read_text(encoding="utf-8")
+    assert "## Содержание" not in text
+    assert "СТАТЬЯ" in text

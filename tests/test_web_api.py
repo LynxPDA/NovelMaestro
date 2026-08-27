@@ -677,6 +677,57 @@ def test_project_tree_legacy_artifacts(srv_ctx):
     assert "chapter1_translated_trace.json" not in arts
 
 
+def test_project_chapters_titles(srv_ctx):
+    """GET/PUT /api/projects/{s}/{n}/chapters/titles — названия глав."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    pdir = projects_root / "ACTIVE" / "test_book"
+    ch = pdir / "chapters" / "00001_1"
+    ch.mkdir(parents=True)
+    (ch / "polished.txt").write_text("\nГлава 1 Старая\n\nТекст\n",
+                                      encoding="utf-8")
+    # GET: первая непустая строка
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/chapters/titles"
+                            "?type=polished")
+    assert res.status == 200
+    assert payload["titles"] == {"1": "Глава 1 Старая"}
+    # недопустимый тип → 400
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/chapters/titles"
+                            "?type=bad")
+    assert res.status == 400
+    # PUT: замена первой строки в файле
+    res, payload = _request(port, "PUT",
+                            "/api/projects/ACTIVE/test_book/chapters/titles",
+                            {"type": "polished",
+                             "titles": {"1": "Глава 1 Новая"}})
+    assert res.status == 200
+    assert payload["updated"] == [1] and payload["missing"] == []
+    text = (ch / "polished.txt").read_text(encoding="utf-8")
+    assert text == "\nГлава 1 Новая\n\nТекст\n"
+    # отсутствующая глава → missing
+    res, payload = _request(port, "PUT",
+                            "/api/projects/ACTIVE/test_book/chapters/titles",
+                            {"type": "polished", "titles": {"99": "X"}})
+    assert res.status == 200
+    assert payload["missing"] == [99]
+    # дефолтный тип — polished (без ?type)
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/chapters/titles")
+    assert res.status == 200 and payload["type"] == "polished"
+    # нет chapters/ → GET 200 с пустыми titles; PUT → 404
+    import shutil
+    shutil.rmtree(pdir / "chapters")
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/chapters/titles")
+    assert res.status == 200 and payload["titles"] == {}
+    res, payload = _request(port, "PUT",
+                            "/api/projects/ACTIVE/test_book/chapters/titles",
+                            {"type": "polished", "titles": {"1": "X"}})
+    assert res.status == 404
+
+
 def test_project_tree_no_chapters(srv_ctx):
     _, port, _ = srv_ctx()
     _create_project(port, None)  # projects_root не используется здесь

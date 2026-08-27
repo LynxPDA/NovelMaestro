@@ -422,6 +422,10 @@ def _register_hub(router: Router) -> None:
     router.add("GET", "/api/projects/{sec}/{name}/stats", _project_stats)
     router.add("GET", "/api/projects/{sec}/{name}/status", _project_status)
     router.add("GET", "/api/projects/{sec}/{name}/tree", _project_tree)
+    router.add("GET", "/api/projects/{sec}/{name}/chapters/titles",
+               _chapter_titles_get)
+    router.add("PUT", "/api/projects/{sec}/{name}/chapters/titles",
+               _chapter_titles_put)
     router.add("GET", "/api/templates", _templates)
 
 
@@ -857,6 +861,58 @@ def _project_tree(ctx: dict) -> dict:
             items.append(entry)
     return {"ok": True, "section": section, "name": name,
             "chapters": items}
+
+
+def _chapter_titles_get(ctx: dict) -> dict:
+    """Названия глав (GET /api/projects/{s}/{n}/chapters/titles).
+
+    type=polished|redacted|translated|chapter — тип файлов глав;
+    названия — первая непустая строка файла (read_chapter_titles).
+    """
+    common = _import_common(ctx)
+    pdir, section, name = _project_path(ctx)
+    want = ctx["query"].get("type", "polished")
+    if want not in ("chapter", "translated", "redacted", "polished"):
+        raise ApiError(400, f"Недопустимый тип: {want}")
+    chapters_dir = pdir / "chapters"
+    if not chapters_dir.is_dir():
+        return {"ok": True, "section": section, "name": name,
+                "type": want, "titles": {}}
+    titles = common.read_chapter_titles(chapters_dir, want=want)
+    return {"ok": True, "section": section, "name": name,
+            "type": want, "titles": titles}
+
+
+def _chapter_titles_put(ctx: dict) -> dict:
+    """Сохранить названия глав (PUT …/chapters/titles).
+
+    body: {type, titles: {номер: строка}} — каждая строка заменяет
+    первую непустую строку соответствующего файла главы
+    (write_chapter_titles, NFC).
+    """
+    common = _import_common(ctx)
+    pdir, section, name = _project_path(ctx)
+    body = ctx["body"] or {}
+    want = str(body.get("type") or "polished")
+    if want not in ("chapter", "translated", "redacted", "polished"):
+        raise ApiError(400, f"Недопустимый тип: {want}")
+    raw = body.get("titles") or {}
+    if not isinstance(raw, dict):
+        raise ApiError(400, "titles должен быть объектом {номер: строка}")
+    titles: dict[int, str] = {}
+    for k, v in raw.items():
+        try:
+            titles[int(k)] = str(v)
+        except (TypeError, ValueError):
+            raise ApiError(400, f"Недопустимый номер главы: {k!r}")
+    chapters_dir = pdir / "chapters"
+    if not chapters_dir.is_dir():
+        raise ApiError(404, "Папка chapters/ не найдена")
+    result = common.write_chapter_titles(chapters_dir, want, titles)
+    return {"ok": True, "section": section, "name": name,
+            "type": want, "updated": result["updated"],
+            "missing": result["missing"],
+            "warnings": result["warnings"]}
 
 
 def _templates(ctx: dict) -> dict:

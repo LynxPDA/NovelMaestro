@@ -174,6 +174,16 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 | `compile` | Компиляция TXT/EPUB/FB2 | `cli/clean_and_compile.py` | нет |
 | `wiki` | Создание Wiki (LLM) | `cli/wiki.py` | да |
 
+Стадия `wiki` — источник текста: «Готовый txt» (как раньше) или
+«Собрать из глав» (`source=chapters` → `--compile-chapters`, склейка
+`chapters/*` в память, `type` — chapter/translated/redacted/polished,
+`start`/`end` — диапазон, ГЛАВЫ). Формат вывода: `md` (обычный
+Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
+`<ul>`, `<hr />`, выход `wiki.html`). Оглавление (`toc`) и якоря-ссылки
+(`toc_links`) — только в обычном режиме; у rulate-режимов содержания
+нет. Режим `titles` компилятора выпилен (вкладка «Главы» правит
+названия прямо в файлах).
+
 ## Архитектура (контракт)
 
 - Общая логика — только из `core/` (`core.common`, `core.projects`);
@@ -204,6 +214,7 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 | POST | `/api/projects` (создание) | + move/rename/copy/delete |
 | GET | `/api/projects/{s}/{n}/tree`, `/api/stats` | главы+артефакты, статистика (раунд 23: артефакты включают легаси `*_перевод/редактура/полировка`) |
 | GET | `/api/projects/{s}/{n}/status` | таблица готовности глав (раунд 21): по-главные флаги translate/redact/polish + ner/wiki/compiled; кеш по сигнатуре mtime |
+| GET/PUT | `/api/projects/{s}/{n}/chapters/titles` | названия глав (вкладка «Главы»): GET `?type=polished\|redacted\|translated\|chapter` → `{titles: {номер: первая непустая строка}}`; PUT `{type, titles: {номер: строка}}` — замена первой строки в файлах глав (NFC), → `{updated, missing, warnings}` |
 | GET | `/api/templates` | наборы шаблонов с деревом файлов (для создания проекта и вкладки «Шаблоны») |
 | POST/DELETE | `/api/templates` (создание), `/api/templates/{s}/copy`, DELETE `/api/templates/{s}` | CRUD наборов; `General` — системный: создание/удаление/запись → 400/403 |
 | GET/PUT/DELETE | `/api/templates/{s}/file` (`?path=…`, PUT — `{path, content}`) | чтение/запись/удаление ФАЙЛОВ набора; каталог → 403 (неизменяемы); запись в несуществующий каталог → 400 (неявный mkdir запрещён); эскейпы за пределы набора → 404; GET отдаёт `size`/`mtime` для мета редактора |

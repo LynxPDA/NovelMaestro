@@ -174,8 +174,7 @@ def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
         argv += ["--source-type", str(form["source_type"])]
     if form.get("chunk_size"):
         argv += ["--chunk-size", str(form["chunk_size"])]
-    if form.get("tmp_dir"):
-        argv += ["--tmp-dir", str(form["tmp_dir"])]
+    # --tmp-dir убран из web: compiled_*/book_* пишутся в корень проекта
     if form.get("no_donate"):
         argv += ["--no-donate"]
     if form.get("no_fb2_cover"):
@@ -389,14 +388,40 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
 
 
 def build_wiki(form: dict, ctx: dict) -> list[str]:
-    """Стадия 7 — генерация вики (wiki.py). file — txt новеллы."""
+    """Стадия 7 — генерация вики (wiki.py).
+
+    Источник текста: готовый txt (source/file) ИЛИ сборка глав в память
+    (source=chapters → --compile-chapters + --type/--start/--end).
+    Формат: md / rulate-md / rulate-html; оглавление и якоря — только
+    в обычном режиме (toc/toc_links).
+    """
     argv = ["cli/wiki.py"]
-    if form.get("file"):
+    src = form.get("source") or "txt"
+    fmt = form.get("format") or "md"
+    output = str(form.get("output") or "wiki.md")
+    if src == "chapters":
+        argv.append("--compile-chapters")
+        if form.get("type"):
+            argv += ["--type", str(form["type"])]
+        argv += _range_argv("start", form)
+    elif form.get("file"):
         argv.append(str(form["file"]))
+    if fmt == "rulate-md":
+        argv.append("--rulate-mode")
+    elif fmt == "rulate-html":
+        argv.append("--rulate-html")
+        if output == "wiki.md":
+            output = "wiki.html"
+    toc_on = form.get("toc", True)
+    links_on = form.get("toc_links", True)
+    if toc_on in (False, "0", 0):
+        argv.append("--no-toc")
+    if links_on in (False, "0", 0):
+        argv.append("--no-toc-links")
+    if output:
+        argv += ["--output", output]
     if form.get("ner_file"):
         argv += ["--ner_file", str(form["ner_file"])]
-    if form.get("output"):
-        argv += ["--output", str(form["output"])]
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     for name, flag in (("top", "--top"), ("min_count", "--min-count"),
@@ -421,8 +446,6 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
         argv.append("--no_reasoning")
     elif form.get("thinking"):
         argv += ["--thinking", str(form["thinking"])]
-    if form.get("rulate_mode"):
-        argv.append("--rulate-mode")
     argv += _llm_argv(form, ctx, "wiki")
     return argv
 
@@ -544,8 +567,12 @@ STAGE_SPECS: dict[str, dict] = {
         "fields": [
             {"name": "mode", "label": "Режим",
              "type": "select",
-             "options": ["txt", "epub", "fb2", "titles", "epub-chunks",
+             "options": ["txt", "epub", "fb2", "epub-chunks",
                          "txt-chunks", "fb2-chunks"],
+             "labels": {"txt": "TXT", "epub": "EPUB", "fb2": "FB2",
+                         "epub-chunks": "EPUB частями",
+                         "txt-chunks": "TXT частями",
+                         "fb2-chunks": "FB2 частями"},
              "default": "txt"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
@@ -553,11 +580,10 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "source_type", "label": "Исходный файл главы",
              "type": "select", "options": ["polished", "redacted", "translated", "chapter"],
              "default": "polished"},
-            {"name": "chunk_size", "label": "Глав в части для *-chunks",
-             "type": "number", "default": ""},
-            {"name": "tmp_dir", "label": "Папка для compiled_*/book_*",
-             "type": "text", "default": ""},
-            {"name": "no_donate", "label": "Без страницы поддержки (--no-donate)",
+            {"name": "chunk_size", "label": "Глав в части",
+             "type": "number", "default": "",
+             "help": "для *-chunks режимов; пусто = дефолт (epub=50, txt=500, fb2=50)"},
+            {"name": "no_donate", "label": "Без страницы поддержки",
              "type": "bool", "default": False},
             {"name": "no_fb2_cover", "label": "Без обложки в FB2",
              "type": "bool", "default": False},
@@ -824,11 +850,44 @@ STAGE_SPECS: dict[str, dict] = {
         "script": "wiki.py",
         "build": build_wiki,
         "fields": _LLM_FIELDS + [
+            {"name": "source", "label": "Источник текста",
+             "type": "select",
+             "options": ["txt", "chapters"],
+             "labels": {"txt": "Готовый txt", "chapters": "Собрать из глав"},
+             "default": "txt",
+             "help": "txt — готовый скомпилированный файл; «собрать из глав» — "
+                      "склейка chapters/* в память (как в Создании глоссария)"},
             {"name": "file", "label": "Входной txt новеллы (перевод)",
-             "type": "files", "dir": "", "ext": [".txt"], "default": ""},
+             "type": "files", "dir": "", "ext": [".txt"], "default": "",
+             "help": "нужен при источнике «Готовый txt»"},
+            {"name": "type", "label": "Тип файлов глав",
+             "type": "select", "options": ["chapter", "translated", "redacted", "polished"],
+             "default": "chapter",
+             "help": "при источнике «Собрать из глав»"},
+            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
+             "type": "number", "default": "",
+             "help": "при источнике «Собрать из глав»; пусто = с первой"},
+            {"name": "end", "label": "Конечная глава (ГЛАВЫ)",
+             "type": "number", "default": "",
+             "help": "при источнике «Собрать из глав»; пусто = до последней"},
             {"name": "ner_file", "label": "NER JSON",
              "type": "files", "dir": "", "ext": [".json"], "default": "ner.json"},
             {"name": "output", "label": "Выходной файл", "type": "text", "default": "wiki.md"},
+            {"name": "format", "label": "Формат",
+             "type": "select",
+             "options": ["md", "rulate-md", "rulate-html"],
+             "labels": {"md": "Обычный Markdown",
+                        "rulate-md": "Rulate (Markdown)",
+                        "rulate-html": "Rulate (HTML)"},
+             "default": "md",
+             "help": "rulate-html: заголовки — <span style=font-size>, "
+                      "списки <ul>, разделители <hr />"},
+            {"name": "toc", "label": "Оглавление",
+             "type": "bool", "default": True,
+             "help": "обычный режим; Rulate — всегда без оглавления"},
+            {"name": "toc_links", "label": "Якоря-ссылки в оглавлении",
+             "type": "bool", "default": True,
+             "help": "обычный режим; ссылки [термин](#якорь) на статью"},
             {"name": "prompt_file", "label": "Промпт (тег <prompt_wiki_article>)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "wiki_prompt.txt"},
@@ -848,8 +907,6 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "co_occurrence_pairs", "label": "Пары типов для связей",
              "type": "text", "default": "Person:Person,Person:Organisation,Person:Artifact"},
             {"name": "co_occurrence_top", "label": "Связей на термин", "type": "number", "default": "5"},
-            {"name": "rulate_mode", "label": "Rulate-режим",
-             "type": "bool", "default": False},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": ""},
             {"name": "thinking", "label": "Reasoning effort",
@@ -865,8 +922,8 @@ STAGE_SPECS: dict[str, dict] = {
             "desc": "Генерация wiki.md: ner.json + перевод, "
                     "дефолтные настройки",
         },
-        "simple": ["file", "prompt_file", "top", "min_count",
-                    "rulate_mode"],
+        "simple": ["source", "file", "type", "prompt_file", "top",
+                    "min_count", "format"],
     },
     "batch_replace": {
         "title": "Массовые замены",

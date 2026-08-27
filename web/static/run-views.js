@@ -429,6 +429,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         vals[f.name] = input.checked;
         touched.add(f.name);
       });
+      // чекбокс СЛЕВА от текста (не снизу): строка checkbox + label
+      const wrap = h("label", { class: "field field-check" }, input, label);
+      if (f.help) wrap.append(h("div", { class: "field-help" }, f.help));
+      wrap._input = input;
+      return wrap;
     } else if (f.type === "select") {
       input = h("select", { class: "input" });
       const labels = f.labels || {};
@@ -558,6 +563,21 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       };
       modeSel.addEventListener("change", applyNerSimple);
       applyNerSimple();
+    }
+    // wiki: «Собрать из глав» — прячем входной txt (показываем тип)
+    if (key === "wiki" && byName["source"]) {
+      const srcSel = byName["source"];
+      const applyWikiSimple = () => {
+        const chapters = srcSel.value === "chapters";
+        const fw = byName["file"];
+        const wrap = fw && fw.closest ? fw.closest(".field") : null;
+        if (wrap) wrap.classList.toggle("hidden", chapters);
+        const tw = byName["type"];
+        const twrap = tw && tw.closest ? tw.closest(".field") : null;
+        if (twrap) twrap.classList.toggle("hidden", !chapters);
+      };
+      srcSel.addEventListener("change", applyWikiSimple);
+      applyWikiSimple();
     }
     // диапазон глав (всегда виден, если стадия принимает start/end)
     const hasRange = (spec.fields || []).some(
@@ -697,6 +717,33 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
       if (modeSel) modeSel.addEventListener("change", applyNerMode);
       applyNerMode();
+    }
+
+    // wiki — источник текста: «Готовый txt» ↔ «Собрать из глав»;
+    // формат: обычный/rulate-md/rulate-html (toc/toc_links — только
+    // в обычном режиме)
+    if (key === "wiki") {
+      const srcSel = fieldWraps["source"] && fieldWraps["source"]._input;
+      const fmtSel = fieldWraps["format"] && fieldWraps["format"]._input;
+      const tocFields = ["toc", "toc_links"];
+      function applyWikiMode() {
+        const src = (srcSel && srcSel.value) || "txt";
+        const fmt = (fmtSel && fmtSel.value) || "md";
+        const fw = fieldWraps["file"];
+        if (fw) fw.classList.toggle("hidden", src === "chapters");
+        for (const name of ["type", "start", "end"]) {
+          const w = fieldWraps[name];
+          if (w) w.classList.toggle("hidden", src !== "chapters");
+        }
+        const isMd = fmt === "md";
+        for (const name of tocFields) {
+          const w = fieldWraps[name];
+          if (w) w.classList.toggle("hidden", !isMd);
+        }
+      }
+      if (srcSel) srcSel.addEventListener("change", applyWikiMode);
+      if (fmtSel) fmtSel.addEventListener("change", applyWikiMode);
+      applyWikiMode();
     }
 
     // B4: смена host очищает предзаполненный api_key — иначе старый

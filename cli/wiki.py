@@ -34,6 +34,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core.common import (  # noqa: E402
+    compile_chapter_text,
     determine_model,
     emit_progress,
     find_env_file,
@@ -333,6 +334,83 @@ def _get_type_name_ru(base_type: str) -> str:
 def _shift_headings(md: str) -> str:
     """Сдвигает все Markdown-заголовки на один уровень глубже (## → ###)."""
     return re.sub(r'^(#{1,5})\s', r'#\1 ', md, flags=re.MULTILINE)
+
+
+def _slugify(s: str) -> str:
+    """Якорь для оглавления: NFC + lowercase, не-буквы → '-', схлопывание.
+
+    Совпадает для заголовка статьи (## {translation}) и строки оглавления
+    (один и тот же текст) — ссылка работает без внешних slugger'ов.
+    """
+    import unicodedata
+    s = unicodedata.normalize("NFC", s or "").lower()
+    out = [ch if ch.isalnum() else "-" for ch in s]
+    slug = re.sub(r"-+", "-", "".join(out)).strip("-")
+    return slug or "-"
+
+
+def _inline_html(s: str) -> str:
+    """Экранирование + минимальный inline-markdown (**жирный**, *курсив*)."""
+    from html import escape as _esc
+    s = _esc(s)
+    s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
+    s = re.sub(r"\*(.+?)\*", r"<em>\1</em>", s)
+    return s
+
+
+def md_to_html(md: str) -> str:
+    """Конвертация статьи (markdown от LLM) в HTML для Rulate.
+
+    ## / ### → <p><strong><span style="font-size:20px/16px">…</span></strong></p>
+    (заголовки — указанием шрифта, НЕ тегами <h1..h6>); списки → <ul>;
+    --- → <hr />; абзацы → <p>. Всё экранируется (_inline_html).
+    """
+    lines = md.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if not stripped:
+            i += 1
+            continue
+        # разделитель
+        if re.match(r"^(?:-{3,}|\*{3,}|_{3,})$", stripped):
+            out.append("<hr />")
+            i += 1
+            continue
+        # заголовки: НЕ тег заголовка, а указание шрифта (требование Rulate)
+        m = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if m:
+            level = len(m.group(1))
+            size = "20px" if level <= 2 else "16px"
+            text = _inline_html(m.group(2).strip())
+            out.append(
+                f'<p><strong><span style="font-size:{size}">{text}</span>'
+                f"</strong></p>")
+            i += 1
+            continue
+        # список: собираем подряд идущие пункты
+        if re.match(r"^[-*+]\s+", stripped):
+            items: list[str] = []
+            while i < len(lines):
+                lm = re.match(r"^[-*+]\s+(.*)$", lines[i].strip())
+                if not lm:
+                    break
+                items.append(
+                    f"    <li>{_inline_html(lm.group(1).strip())}</li>")
+                i += 1
+            out.append("<ul>")
+            out.extend(items)
+            out.append("</ul>")
+            continue
+        # абзац: до пустой строки
+        para = [stripped]
+        i += 1
+        while i < len(lines) and lines[i].strip():
+            para.append(lines[i].strip())
+            i += 1
+        out.append(f"<p>{_inline_html(' '.join(para))}</p>")
+    return "\n\n".join(out)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -671,48 +749,70 @@ def assemble_wiki(
     sections_by_type: list[tuple[str, list[tuple[str, str]]]],
     output_path: str,
     rulate: bool,
-    logger,
+    logger=None,
+    toc: bool = True,
+    toc_links: bool = True,
+    rulate_html: bool = False,
 ) -> None:
-    """
-    Собирает итоговый Markdown.
+    """Собирает итоговый файл вики.
 
     sections_by_type: [(type_name_ru, [(title, content), ...]), ...]
     rulate: True — режим для импорта на Rulate (без содержания,
             заголовки сдвинуты на уровень глубже, спецзаголовок).
+    rulate_html: True — вместо Markdown генерируется HTML: заголовки —
+            <span style="font-size:20px/16px"> (не теги заголовков),
+            списки <ul>, разделители <hr /> (требование Rulate).
+    toc: оглавление (только в обычном режиме; Rulate — всегда без него).
+    toc_links: якоря-ссылки в оглавлении (обычный режим).
     """
     if not sections_by_type:
         _log(logger, logging.WARNING, "⚠️ Нет разделов для сборки.")
         return
 
     lines: list[str] = []
+    use_html = rulate_html
 
     # ── Заголовок ──
-    if rulate:
+    if use_html:
+        lines.append(
+            '<p><strong><span style="font-size:20px">'
+            'Wiki — Энциклопедия новеллы</span></strong></p>\n')
+    elif rulate:
         lines.append("# [Wiki — Энциклопедия новеллы :|:  :|:  :|: ]\n")
     else:
         lines.append("# Wiki — Энциклопедия новеллы\n")
 
     # ── Оглавление (только в обычном режиме) ──
-    if not rulate:
+    if not rulate and not use_html and toc:
         lines.append("## Содержание\n")
         for type_name_ru, terms in sections_by_type:
             if not terms:
                 continue
             lines.append(f"- **{type_name_ru}**")
             for title, _ in terms:
-                lines.append(f"  - {_capitalize_first(title)}")
+                t = _capitalize_first(title)
+                if toc_links:
+                    lines.append(f"  - [{t}](#{_slugify(t)})")
+                else:
+                    lines.append(f"  - {t}")
         lines.append("")
         lines.append("---\n")
 
     # ── Тело ──
-    for type_name_ru, terms in sections_by_type:
+    for _type_name_ru, terms in sections_by_type:
         if not terms:
             continue
-        for _, content in terms:
-            if rulate:
-                content = _shift_headings(content)
-            lines.append(content)
-            lines.append("\n---\n")
+        for title, content in terms:
+            if use_html:
+                lines.append(md_to_html(content))
+            else:
+                if rulate:
+                    content = _shift_headings(content)
+                # якорь для ссылки оглавления (обычный режим с ссылками)
+                if not rulate and toc and toc_links:
+                    lines.append(f'<a id="{_slugify(_capitalize_first(title))}"></a>')
+                lines.append(content)
+            lines.append("\n<hr />\n" if use_html else "\n---\n")
 
     text = "\n".join(lines)
     try:
@@ -748,7 +848,10 @@ def run_wiki_generation(
     co_pairs: list[tuple[str, str]],
     co_top: int,
     rulate: bool,
-    logger,
+    logger=None,
+    toc: bool = True,
+    toc_links: bool = True,
+    rulate_html: bool = False,
 ) -> None:
 
     # ── Статистика отбора ──
@@ -949,7 +1052,9 @@ def run_wiki_generation(
             )
 
     if sections_by_type:
-        assemble_wiki(sections_by_type, output_path, rulate, logger)
+        assemble_wiki(sections_by_type, output_path, rulate,
+                      toc=toc, toc_links=toc_links,
+                      rulate_html=rulate_html, logger=logger)
     else:
         _log(logger, logging.WARNING, "⚠️ Ни одного раздела не сгенерировано.")
 
@@ -975,6 +1080,9 @@ def main():
             "  python wiki.py novel.txt --ner_file ner.json \\\n"
             "      --host http://127.0.0.1:9989 --model qwen3 \\\n"
             "      --threads 4 --top 60 --exclude-types Other,Material\n"
+            "  python wiki.py --compile-chapters --type polished \\\n"
+            "      --start 1 --end 100 --ner_file ner.json --output wiki.md\n"
+            "  python wiki.py novel.txt --rulate-html --output wiki.html\n"
             "\n"
             "Единицы:\n"
             "  --chunk-size и размеры текста — СИМВОЛЫ;\n"
@@ -988,8 +1096,29 @@ def main():
     # ── Входные файлы ──
     g_input = parser.add_argument_group("Входные файлы")
     g_input.add_argument(
-        "file",
-        help="Путь к .txt файлу новеллы (русский перевод).",
+        "file", nargs="?", default=None,
+        help="Путь к .txt файлу новеллы (русский перевод); не нужен,"
+             " если задан --compile-chapters.",
+    )
+    g_input.add_argument(
+        "--compile-chapters", action="store_true",
+        help="Собрать главы из chapters/ в память (как ner --compile_chapters)"
+             " и строить вики по ним; тип файлов — --type, диапазон —"
+             " --start/--end.",
+    )
+    g_input.add_argument(
+        "--type", default="chapter",
+        choices=["chapter", "translated", "redacted", "polished"],
+        metavar="TYPE",
+        help="Тип файлов глав для --compile-chapters (по умолчанию: chapter).",
+    )
+    g_input.add_argument(
+        "--start", type=int, default=None, metavar="N",
+        help="Начальная глава для --compile-chapters (пусто = с первой).",
+    )
+    g_input.add_argument(
+        "--end", type=int, default=None, metavar="N",
+        help="Конечная глава для --compile-chapters (пусто = до последней).",
     )
     g_input.add_argument(
         "--ner_file",
@@ -1183,14 +1312,28 @@ def main():
     g_out = parser.add_argument_group("Режим вывода")
     g_out.add_argument(
         "--rulate-mode",
-        action=argparse.BooleanOptionalAction,
-        default=False,
+        action="store_true",
         help=(
-            "Режим форматирования для импорта на Rulate (по умолчанию: включён). "
-            "Отключает содержание, сдвигает заголовки на уровень глубже, "
-            "использует спецзаголовок для импорта. "
-            "Для отключения: --no-rulate-mode."
+            "Режим форматирования для импорта на Rulate (Markdown): "
+            "без содержания, заголовки сдвинуты на уровень глубже, "
+            "спецзаголовок для импорта."
         ),
+    )
+    g_out.add_argument(
+        "--rulate-html",
+        action="store_true",
+        help=(
+            "Rulate в HTML: заголовки — <span style=\"font-size:20px/16px\">, "
+            "списки <ul>, разделители <hr /> (вместо Markdown)."
+        ),
+    )
+    g_out.add_argument(
+        "--toc", action=argparse.BooleanOptionalAction, default=True,
+        help="Оглавление в обычном режиме (--no-toc — выключить).",
+    )
+    g_out.add_argument(
+        "--toc-links", action=argparse.BooleanOptionalAction, default=True,
+        help="Якоря-ссылки в оглавлении (--no-toc-links — плоский список).",
     )
 
     args = parser.parse_args()
@@ -1228,7 +1371,15 @@ def main():
     _cc_log_argv(logger)
 
     # ── Проверка файлов ──
-    if not os.path.exists(args.file):
+    if args.compile_chapters:
+        if not os.path.isdir("./chapters"):
+            _log(logger, logging.ERROR, "❌ Папка chapters/ не найдена.")
+            return
+    elif not args.file:
+        _log(logger, logging.ERROR,
+             "❌ Нужен входной txt (file) или --compile-chapters.")
+        return
+    elif not os.path.exists(args.file):
         _log(logger, logging.ERROR, f"❌ Файл не найден: {args.file}")
         return
     if not os.path.exists(args.ner_file):
@@ -1260,18 +1411,37 @@ def main():
             if "article" in loaded:
                 system_prompt = loaded["article"]
 
-    # ── Чтение текста ──
-    _log(logger, logging.INFO, f"📖 Чтение: {args.file}")
-    try:
-        with open(args.file, "r", encoding="utf-8") as f:
-            full_text = f.read()
-    except OSError as exc:
-        _log(logger, logging.ERROR, f"❌ Не удалось прочитать {args.file}: {exc}")
-        return 1
-    if not full_text.strip():
-        _log(logger, logging.ERROR, "❌ Файл пуст.")
-        return
-    _log(logger, logging.INFO, f"   Размер: {len(full_text)} символов")
+    # ── Чтение текста: готовый txt ИЛИ сборка глав в память ──
+    if args.compile_chapters:
+        _log(logger, logging.INFO,
+             f"📖 Сборка глав в память: chapters/ ({args.type})")
+        full_text, info = compile_chapter_text(
+            "./chapters", want=args.type,
+            start=args.start, end=args.end, logger=logger)
+        for w in (info.get("warnings") or []):
+            _log(logger, logging.WARNING, w)
+        if info.get("missing"):
+            _log(logger, logging.WARNING,
+                 f"⚠️ Пропущено глав: {len(info['missing'])} "
+                 f"({', '.join(str(i) for i in info['missing'])})")
+        if not full_text.strip():
+            _log(logger, logging.ERROR, "❌ Ни одной главы не собрано.")
+            return
+        _log(logger, logging.INFO,
+             f"   Глав собрано: {info['written']}, "
+             f"размер: {len(full_text)} символов")
+    else:
+        _log(logger, logging.INFO, f"📖 Чтение: {args.file}")
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                full_text = f.read()
+        except OSError as exc:
+            _log(logger, logging.ERROR, f"❌ Не удалось прочитать {args.file}: {exc}")
+            return 1
+        if not full_text.strip():
+            _log(logger, logging.ERROR, "❌ Файл пуст.")
+            return
+        _log(logger, logging.INFO, f"   Размер: {len(full_text)} символов")
 
     db = build_fts_index(full_text, args.chunk_size, logger)
 
@@ -1318,7 +1488,10 @@ def main():
         "thinking": args.thinking,
     }
 
-    rulate = args.rulate_mode
+    rulate = args.rulate_mode or args.rulate_html
+    rulate_html = args.rulate_html
+    if rulate_html and os.path.splitext(args.output)[1].lower() == ".md":
+        args.output = os.path.splitext(args.output)[0] + ".html"
 
     _log(logger, logging.INFO,
          f"🚀 Wiki | Модель: {model_name} | Top: {args.top} | "
@@ -1326,7 +1499,9 @@ def main():
          f"Co-occur: {args.co_occurrence_pairs or 'выкл'} | "
          f"NEAR: {args.near_distance} | "
          f"Thinking: {args.thinking or 'сервер'} | "
-         f"Rulate: {'on' if rulate else 'off'} | "
+         f"Rulate: {'html' if rulate_html else ('md' if rulate else 'off')} | "
+         f"TOC: {'on' if args.toc else 'off'}/links: "
+         f"{'on' if args.toc_links else 'off'} | "
          f"Потоков: {args.threads}")
 
     run_wiki_generation(
@@ -1346,6 +1521,9 @@ def main():
         co_pairs=co_pairs,
         co_top=args.co_occurrence_top,
         rulate=rulate,
+        toc=args.toc,
+        toc_links=args.toc_links,
+        rulate_html=rulate_html,
         logger=logger,
     )
 

@@ -765,8 +765,8 @@ def test_simple_fields_per_stage():
         "ner_check": ["prompt_file", "passes"],
         "pipeline": ["action", "prompt_file"],
         "translate_check_llm": ["type", "two_pass", "prompt_file"],
-        "wiki": ["file", "prompt_file", "top", "min_count",
-                 "rulate_mode"],
+        "wiki": ["source", "file", "type", "prompt_file", "top",
+                 "min_count", "format"],
     }
     for key, names in expected.items():
         assert STAGE_SPECS[key]["simple"] == names, key
@@ -1058,7 +1058,7 @@ def test_build_wiki_flags():
             "exclude_types": "Other", "types": "Person",
             "context_chunks": "12", "near_distance": "64",
             "chunk_size": "1000", "co_occurrence_pairs": "Person:Person",
-            "co_occurrence_top": "5", "rulate_mode": True,
+            "co_occurrence_top": "5", "format": "rulate-md",
             "thinking": "medium"}
     argv = build_command("wiki", form, {})
     assert argv[0] == "cli/wiki.py"
@@ -1068,6 +1068,34 @@ def test_build_wiki_flags():
     assert "--co-occurrence-pairs" in argv
     assert "--rulate-mode" in argv
     assert "--thinking" in argv and "medium" in argv
+
+
+def test_build_wiki_compile_chapters():
+    """wiki: источник «собрать из глав» → --compile-chapters + тип/диапазон."""
+    form = {"source": "chapters", "type": "polished",
+            "start": "1", "end": "20", "ner_file": "ner.json"}
+    argv = build_command("wiki", form, {})
+    assert "--compile-chapters" in argv
+    assert "--type" in argv and "polished" in argv
+    assert "--start" in argv and "1" in argv
+    assert "--end" in argv and "20" in argv
+    assert "file" not in argv
+
+
+def test_build_wiki_rulate_html():
+    """wiki: rulate-html → --rulate-html, дефолтный выход wiki.html."""
+    argv = build_command("wiki", {"format": "rulate-html"}, {})
+    assert "--rulate-html" in argv
+    assert "--output" in argv and "wiki.html" in argv
+    assert "--rulate-mode" not in argv
+
+
+def test_build_wiki_toc_off():
+    """wiki: toc/toc_links выключены → --no-toc/--no-toc-links."""
+    argv = build_command("wiki", {"toc": False, "toc_links": False}, {})
+    assert "--no-toc" in argv and "--no-toc-links" in argv
+    argv2 = build_command("wiki", {"toc": True, "toc_links": True}, {})
+    assert "--no-toc" not in argv2 and "--no-toc-links" not in argv2
 
 
 def test_llm_profile_from_env(tmp_path, monkeypatch):

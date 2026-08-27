@@ -137,12 +137,12 @@ def cac_env(tmp_path, monkeypatch):
         setattr(CAC.cfg, k, v)
 
 
-def test_cac_export_titles(cac_env, capsys):
-    CAC.export_titles()
-    tf = Path(CAC.cfg.titles_file)
-    assert tf.is_file()
-    content = tf.read_text(encoding="utf-8")
-    assert "1:::Глава 1" in content and "2:::Глава 2" in content
+def test_cac_titles_mode_removed(cac_env):
+    """Режим titles выпилен из CLI: выбора нет, export_titles отсутствует."""
+    assert not hasattr(CAC, "export_titles")
+    choices = CAC.build_parser()._actions
+    mode_choices = [a for a in choices if a.dest == "mode"][0].choices
+    assert mode_choices is not None and "titles" not in mode_choices
 
 
 def test_cac_compile_txt(cac_env):

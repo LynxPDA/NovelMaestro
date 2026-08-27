@@ -1282,3 +1282,89 @@ def compile_chapter_texts(chapters_dir, out_path, want="chapter",
                     info["written"], out_path, len(info["missing"]))
     info["path"] = out_path
     return info
+
+
+def read_chapter_titles(chapters_dir, want="polished", logger=None) -> dict:
+    """Названия глав: первая непустая строка каждого файла.
+
+    Папки — build_chapter_map (дубли: последняя), файл —
+    find_chapter_file (want=type, strict_types для не-chapter).
+    Возвращает {номер главы: строка-название} — только главы, где
+    файл найден и есть непустая строка.
+    """
+    import unicodedata
+    chapter_map = build_chapter_map(chapters_dir, logger=logger)
+    titles: dict[int, str] = {}
+    for cid in sorted(chapter_map):
+        dirs = chapter_map.get(cid) or []
+        dir_path = dirs[-1] if dirs else None
+        if not dir_path:
+            continue
+        path, _warns = find_chapter_file(
+            dir_path, cid, want=want,
+            strict_types=(want != "chapter"), logger=logger)
+        if not path:
+            continue
+        text = read_text_safe(path)
+        for line in text.splitlines():
+            s = unicodedata.normalize("NFC", line.strip())
+            if s:
+                titles[cid] = s
+                break
+    if logger:
+        logger.info("Названия глав (%s): %d/%d", want, len(titles),
+                    len(chapter_map))
+    return titles
+
+
+def write_chapter_titles(chapters_dir, want, titles, logger=None) -> dict:
+    """Записать названия глав: замена первой непустой строки в файле.
+
+    titles: {номер главы: новая первая строка}. Файл ищется как в
+    read_chapter_titles; строка заменяется (NFC), остальной текст и
+    хвостовой перевод строки сохраняются. Возвращает
+    {updated: [номера], missing: [номера], warnings: [строки]}.
+    """
+    import unicodedata
+    chapter_map = build_chapter_map(chapters_dir, logger=logger)
+    updated: list[int] = []
+    missing: list[int] = []
+    warnings: list[str] = []
+    for cid, new_title in titles.items():
+        if not str(new_title).strip():
+            missing.append(cid)
+            continue
+        dirs = chapter_map.get(cid) or []
+        dir_path = dirs[-1] if dirs else None
+        if not dir_path:
+            missing.append(cid)
+            continue
+        path, warns = find_chapter_file(
+            dir_path, cid, want=want,
+            strict_types=(want != "chapter"), logger=logger)
+        warnings.extend(warns or [])
+        if not path:
+            missing.append(cid)
+            continue
+        text = read_text_safe(path)
+        lines = text.splitlines()
+        idx = None
+        for i, line in enumerate(lines):
+            if unicodedata.normalize("NFC", line.strip()):
+                idx = i
+                break
+        if idx is None:
+            lines.append("")
+            idx = len(lines) - 1
+        lines[idx] = unicodedata.normalize(
+            "NFC", str(new_title).strip())
+        nl = "\n" if text.endswith("\n") else ""
+        atomic_write(path, "\n".join(lines) + nl)
+        updated.append(cid)
+        if logger:
+            logger.info("Глава %s: заголовок обновлён", cid)
+    if logger:
+        logger.info("Названия глав: обновлено %d, пропущено %d",
+                    len(updated), len(missing))
+    return {"updated": updated, "missing": missing,
+            "warnings": warnings}
