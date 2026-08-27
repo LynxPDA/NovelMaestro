@@ -714,18 +714,27 @@ def test_build_unknown_stage():
 
 
 def test_presets_all_stages():
-    """У каждой стадии — пресет {title, desc}; params простого режима
-    = непустые дефолты полей формы + overrides; LLM-полей нет (скрипты
-    берут сервер из .env)."""
+    """У стадий с простым режимом — пресет {title, desc} + непустой
+    список simple; params = непустые дефолты полей + overrides;
+    LLM-полей нет (скрипты берут сервер из .env). Стадии без simple
+    (translate_check/batch_replace/compile) — только экспертные."""
     from web.stages import preset_params
+    expert_only = ("translate_check", "batch_replace", "compile")
     for key in STAGE_ORDER:
         spec = STAGE_SPECS[key]
+        names = {f["name"] for f in spec["fields"]}
+        if key in expert_only:
+            assert spec.get("preset") is None, key
+            assert not spec.get("simple"), key
+            continue
         preset = spec.get("preset")
         assert preset is not None, key
         assert preset.get("title"), key
         assert preset.get("desc"), key
+        simple = spec.get("simple") or []
+        assert simple, key  # есть простой режим — есть и поля к карточке
+        assert set(simple) <= names, key
         params = preset_params(spec)
-        names = {f["name"] for f in spec["fields"]}
         assert set(params) <= names, key
         assert not {"host", "model", "api_key"} & set(params), key
         # эталон: непустые дефолты полей + overrides пресета
@@ -747,6 +756,40 @@ def test_presets_all_stages():
         assert params == expected, key
 
 
+def test_simple_fields_per_stage():
+    """Состав простого режима по стадиям (согласовано с ТЗ): какие
+    поля показываются в простом режиме к карточке пресета."""
+    expected = {
+        "epub": ["input", "lang"],
+        "ner": ["mode", "prompt_file", "two_pass"],
+        "ner_check": ["prompt_file", "passes"],
+        "pipeline": ["action", "prompt_file"],
+        "translate_check_llm": ["type", "two_pass", "prompt_file"],
+        "wiki": ["file", "prompt_file", "top", "min_count",
+                 "rulate_mode"],
+    }
+    for key, names in expected.items():
+        assert STAGE_SPECS[key]["simple"] == names, key
+
+
+def test_ner_check_no_report_no_apply():
+    """ner_check: отчёт (ner_report.md) и --apply выпилены из формы
+    Запусков; apply остался в build (его шлёт /api/ner/review/apply)."""
+    spec = STAGE_SPECS["ner_check"]
+    assert "report" not in {f["name"] for f in spec["fields"]}
+    assert "apply" not in {f["name"] for f in spec["fields"]}
+    argv = build_command("ner_check", {"apply": True, "input": "ner.json"},
+                         {})
+    assert "--apply" in argv
+
+
+def test_compile_donate_autofile():
+    """compile: donate_file с autofile source/donate.txt (автоподхват)."""
+    spec = STAGE_SPECS["compile"]
+    f = next(x for x in spec["fields"] if x["name"] == "donate_file")
+    assert f.get("autofile") == "source/donate.txt"
+
+
 def test_preset_spot_checks():
     """Точечные проверки: что реально уедет в params при нажатии
     «Запустить» в простом режиме."""
@@ -765,9 +808,6 @@ def test_preset_spot_checks():
     params = preset_params(STAGE_SPECS["epub"])
     assert params["lang"] == "zh"
     assert "input" not in params
-    # batch_replace: файл правил с папкой prompts/
-    params = preset_params(STAGE_SPECS["batch_replace"])
-    assert params["rules_file"] == "prompts/replacements.txt"
     # wiki: ner.json + дефолтные настройки
     params = preset_params(STAGE_SPECS["wiki"])
     assert params["ner_file"] == "ner.json"
@@ -927,7 +967,7 @@ def test_build_ner_modes():
 
 
 def test_build_ner_check_flags():
-    form = {"input": "ner.json", "report": "ner_report.md",
+    form = {"input": "ner.json",
             "review": "ner_review.json", "passes": "types",
             "types": "Person", "count_threshold": "2",
             "exclude_words": "палладия", "show_aliases": True,

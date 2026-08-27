@@ -1589,7 +1589,7 @@ function render() {
     notes: viewNotes,
     help: viewHelp,
     project: () => viewProject(route.rest[0], route.rest[1]),
-    run: () => viewRun(route.rest[0], route.rest[1], route.rest[2]),
+    run: () => window.viewRun(route.rest[0], route.rest[1], route.rest[2]),
   };
   const fn = views[route.view] || (() => viewUnknown(route.view));
   Promise.resolve(fn()).then((node) => {

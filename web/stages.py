@@ -8,8 +8,12 @@ stages.py — спеки стадий web-интерфейса (M4: не-LLM; M5
 - Единицы в лейблах — как в help скриптов (СИМВОЛЫ/ТОКЕНЫ/ГЛАВЫ).
 - preset: карточка «Простой режим» — title/desc + overrides; параметры
   простого режима считаются preset_params() (дефолты полей формы +
-  overrides). Все поля формы — экспертные: в простом режиме форма
-  целиком скрыта карточкой пресета.
+  overrides).
+- simple: имена полей, ДОПОЛНИТЕЛЬНО показываемых в простом режиме
+  (карточка пресета + диапазон глав + эти поля); остальные поля —
+  экспертные и в простом режиме берут дефолты пресета.
+- стадий без simple (translate_check/batch_replace/compile) простого
+  режима нет — только экспертный (переключатель не показывается).
 """
 from __future__ import annotations
 
@@ -298,8 +302,7 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
     argv = ["cli/ner_check.py"]
     if form.get("input"):
         argv += ["--input", str(form["input"])]
-    if form.get("report"):
-        argv += ["--report", str(form["report"])]
+    # --report удалён: отчёт ner_report.md не нужен (выпилен из web и cli)
     if form.get("review"):
         argv += ["--review", str(form["review"])]
     if form.get("prompt_file"):
@@ -510,6 +513,7 @@ STAGE_SPECS: dict[str, dict] = {
                     "чистки и уборка номеров страниц включены",
             "overrides": {"lang": "zh"},
         },
+        "simple": ["input", "lang"],
     },
     "translate_check": {
         "title": "Проверка перевода",
@@ -531,11 +535,7 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "Пусто = TRANSLATE_CHECK_EXCLUDE_WORDS из .env "
                       "или дефолт скрипта (VIP,MVP,【,】,NPC)"},
         ],
-        "preset": {
-            "title": "Сравнить перевод",
-            "desc": "Сравнение polished с исходником по всем главам "
-                    "(пресет polished)",
-        },
+        # только экспертный режим (без простого/пресета)
     },
     "compile": {
         "title": "Компиляция TXT/EPUB/FB2",
@@ -562,12 +562,12 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "no_fb2_cover", "label": "Без обложки в FB2",
              "type": "bool", "default": False},
             {"name": "donate_file", "label": "Файл страницы поддержки",
-             "type": "text", "default": ""},
+             "type": "text", "default": "",
+             "autofile": "source/donate.txt",
+             "help": "пусто и source/donate.txt есть — подхватится "
+                     "автоматически"},
         ],
-        "preset": {
-            "title": "Собрать книгу",
-            "desc": "TXT из polished, все главы, со страницей поддержки",
-        },
+        # только экспертный режим (без простого/пресета)
     },
     "pipeline": {
         "title": "Перевод (LLM)",
@@ -642,6 +642,7 @@ STAGE_SPECS: dict[str, dict] = {
             "desc": "Полный цикл: перевод → редактура → полировка "
                     "всех глав, промпты из prompts/",
         },
+        "simple": ["action", "prompt_file"],
     },
     "ner": {
         "title": "Создание глоссария (LLM)",
@@ -688,7 +689,7 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "text",
              "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
              "default": ""},
-            {"name": "two_pass", "label": "Двухпроходная схема (--two-pass)",
+            {"name": "two_pass", "label": "Двухпроходная схема",
              "type": "bool", "default": True},
             {"name": "keep_fields", "label": "Поля в голосование (через запятую)",
              "type": "text", "default": "",
@@ -712,6 +713,7 @@ STAGE_SPECS: dict[str, dict] = {
                     "извлечение терминов в ner.json (все главы)",
             "overrides": {"mode": "compile"},
         },
+        "simple": ["mode", "prompt_file", "two_pass"],
     },
     "ner_check": {
         "title": "Проверка глоссария (LLM)",
@@ -720,7 +722,6 @@ STAGE_SPECS: dict[str, dict] = {
         "fields": _LLM_FIELDS + [
             {"name": "input", "label": "Входной JSON (ner.json)",
              "type": "files", "dir": "", "ext": [".json"], "default": "ner.json"},
-            {"name": "report", "label": "Отчёт", "type": "text", "default": "ner_report.md"},
             {"name": "review", "label": "Review-файл правок",
              "type": "text", "default": "ner_review.json"},
             {"name": "prompt_file", "label": "Промпт-файл",
@@ -743,8 +744,8 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "bool", "default": False},
             {"name": "show_votes", "label": "Показывать голоса",
              "type": "bool", "default": False},
-            {"name": "apply", "label": "Применить принятые правки (--apply)",
-             "type": "bool", "default": False},
+            # --apply убран из Запусков: применяется только в «Проверках»
+            # проекта (/api/ner/review/apply шлёт apply напрямую)
             {"name": "auto_apply", "label": "Автоприменение (--auto-apply)",
              "type": "bool", "default": False},
             {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
@@ -769,6 +770,7 @@ STAGE_SPECS: dict[str, dict] = {
             "desc": "LLM-проверка ner.json: все проходы, "
                     "правки не применяются",
         },
+        "simple": ["prompt_file", "passes"],
     },
     "translate_check_llm": {
         "title": "Проверка перевода (LLM)",
@@ -815,6 +817,7 @@ STAGE_SPECS: dict[str, dict] = {
             "desc": "LLM-проверка polished всех глав, один проход, "
                     "дефолтные настройки",
         },
+        "simple": ["type", "two_pass", "prompt_file"],
     },
     "wiki": {
         "title": "Создание Wiki (LLM)",
@@ -825,7 +828,7 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "files", "dir": "", "ext": [".txt"], "default": ""},
             {"name": "ner_file", "label": "NER JSON",
              "type": "files", "dir": "", "ext": [".json"], "default": "ner.json"},
-            {"name": "output", "label": "Выходной Markdown", "type": "text", "default": "wiki.md"},
+            {"name": "output", "label": "Выходной файл", "type": "text", "default": "wiki.md"},
             {"name": "prompt_file", "label": "Промпт (тег <prompt_wiki_article>)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "wiki_prompt.txt"},
@@ -845,7 +848,7 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "co_occurrence_pairs", "label": "Пары типов для связей",
              "type": "text", "default": "Person:Person,Person:Organisation,Person:Artifact"},
             {"name": "co_occurrence_top", "label": "Связей на термин", "type": "number", "default": "5"},
-            {"name": "rulate_mode", "label": "Rulate-режим (--rulate-mode)",
+            {"name": "rulate_mode", "label": "Rulate-режим",
              "type": "bool", "default": False},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": ""},
@@ -862,6 +865,8 @@ STAGE_SPECS: dict[str, dict] = {
             "desc": "Генерация wiki.md: ner.json + перевод, "
                     "дефолтные настройки",
         },
+        "simple": ["file", "prompt_file", "top", "min_count",
+                    "rulate_mode"],
     },
     "batch_replace": {
         "title": "Массовые замены",
@@ -882,11 +887,7 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
              "type": "bool", "default": False},
         ],
-        "preset": {
-            "title": "Применить замены",
-            "desc": "Массовые замены prompts/replacements.txt "
-                    "по polished, все главы",
-        },
+        # только экспертный режим (без простого/пресета)
     },
 }
 

@@ -225,9 +225,8 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     params = doc["params"]
     assert params["бюджет батча"] == 196608
     assert params["исключения notes"] == ""
-    report = (tmp_path / "ner_report.md").read_text(encoding="utf-8")
-    assert "Весь глоссарий" in report and "Тип: Skill" in report
-    assert "ner_review.json" in report
+    # отчёт ner_report.md удалён — файла быть не должно
+    assert not (tmp_path / "ner_report.md").exists()
 
 
 def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
@@ -452,11 +451,12 @@ def test_ner_check_llm_error_does_not_crash(tmp_path, monkeypatch):
     doc = json.loads((tmp_path / "ner_review.json")
                      .read_text(encoding="utf-8"))
     assert doc["entries"] == []
-    report = (tmp_path / "ner_report.md").read_text(encoding="utf-8")
-    assert "Ошибка LLM" in report
+    # отчёт удалён: файла быть не должно, скрипт не падает
+    assert not (tmp_path / "ner_report.md").exists()
 
 
-def test_ner_check_unparsed_raw_saved(tmp_path, monkeypatch):
+def test_ner_check_unparsed_does_not_crash(tmp_path, monkeypatch):
+    """Непарсибельный ответ LLM — без отчёта и без падения."""
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
     calls = []
@@ -464,5 +464,4 @@ def test_ner_check_unparsed_raw_saved(tmp_path, monkeypatch):
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
                   "--host", "http://x", "--model", "m"])
     assert rc == 0
-    report = (tmp_path / "ner_report.md").read_text(encoding="utf-8")
-    assert "СЫРЬЁ" in report and "мусор без JSON" in report
+    assert not (tmp_path / "ner_report.md").exists()

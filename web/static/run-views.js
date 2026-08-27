@@ -1,4 +1,6 @@
-function viewRun(section, name, attachJobId) {
+// глобал для роутера app.js (plain-script: window.viewRun вызывается
+// из app.js напрямую); явная привязка — чтобы линтер видел использование
+window.viewRun = function viewRun(section, name, attachJobId) {
   const st = {
     stage: null, // выбранная стадия: {key, title, script, spec}
     options: null, // динамические опции {chapters, source, prompts, root}
@@ -7,6 +9,8 @@ function viewRun(section, name, attachJobId) {
     events: [], // события глав конвейера (стадия 3)
     progress: null, // последнее событие прогресса {label, done, total}
     gen: 0, // поколение отрисовки — гасит гонки двух render()
+    values: {}, // значения формы по стадиям (данные; синхронизация режимов)
+    touched: {}, // изменённые пользователем поля по стадиям (Set имён)
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
@@ -66,6 +70,10 @@ function viewRun(section, name, attachJobId) {
     // B5: кэш опций (файлы/главы) — только для текущей стадии:
     // после запуска ner появился ner.json, wiki должна его увидеть
     st.options = null;
+    // значения формы — тоже по стадиям: переключение стадии = свежая
+    // форма (внутри стадии значения общие для обоих режимов)
+    st.values[key] = null;
+    st.touched[key] = null;
     // активный запуск/стрим НЕ сбрасываем — лог остаётся
     // под формой, пока стадия не завершилась
     render();
@@ -265,16 +273,23 @@ function viewRun(section, name, attachJobId) {
         st.options = {};
       }
     }
-    // «Простой режим» — карточка пресета (дефолты спеки), «Экспертный» —
-    // полная форма; выбор запоминается по стадии (localStorage)
-    const mode = UICore.runModeGet(key);
+    // синхронизация режимов: значения формы — общие (st.values),
+    // инициализация один раз на выбор стадии (дефолты + .env-префилл)
+    if (!st.values[key]) initFormValues(key, spec);
+    // «Простой режим» — только для стадий с пресетом (spec.simple);
+    // translate_check/batch_replace/compile — только экспертные,
+    // переключатель не показываем
+    const hasSimple = (spec.simple || []).length > 0;
+    const mode = hasSimple ? UICore.runModeGet(key) : "expert";
     const body =
-      mode === "simple" ? simplePanel(key, spec) : expertForm(key, spec);
+      hasSimple && mode === "simple"
+        ? simplePanel(key, spec)
+        : expertForm(key, spec);
     return h(
       "div",
       { class: "run-panel" },
       h("div", { class: "run-panel-title" }, `${key} · ${spec.title}`),
-      modeToggle(key, mode),
+      hasSimple ? modeToggle(key, mode) : null,
       body,
     );
   }
@@ -301,48 +316,287 @@ function viewRun(section, name, attachJobId) {
     );
   }
 
-  // карточка пресета простого режима: «что будет сделано» + диапазон
-  // глав (если стадия принимает start/end) + одна кнопка «Запустить».
-  // params — дефолты спеки (preset.params, считается на сервере);
-  // LLM-поля не показываются: скрипты берут сервер из .env.
+  // ── синхронизация режимов: единое хранилище значений формы ──────────
+  // st.values[stage] — значения полей (данные), st.touched[stage] —
+  // имена полей, которые пользователь менял. Оба режима читают/пишут
+  // один объект: переключение «Простой ↔ Экспертный» ничего не теряет,
+  // тонкие правки из эксперта применяются в простом и наоборот.
+
+  // инициализация значений формы по спеке: дефолты (уже с .env-префиллом
+  // сервера) + автоподхват диапазона глав и autofile-файлов
+  function initFormValues(key, spec) {
+    const opts = st.options || {};
+    const vals = {};
+    for (const f of spec.fields || []) {
+      const def = f.default == null ? "" : String(f.default);
+      if (f.type === "bool") {
+        vals[f.name] = UICore.boolOn(def);
+      } else if (f.type === "files") {
+        // C: basename-сравнение с пулом опций (source/prompts/root)
+        const dir = f.dir || "";
+        const pool =
+          dir === "source"
+            ? opts.source || []
+            : dir === "prompts"
+              ? opts.prompts || []
+              : opts.root || [];
+        const exts = (f.ext || []).map((e) => e.toLowerCase());
+        const items = pool.filter(
+          (n) =>
+            exts.length === 0 || exts.some((e) => n.toLowerCase().endsWith(e)),
+        );
+        const baseDef = UICore.fileBase(def);
+        let chosen = "";
+        if (baseDef && items.includes(baseDef)) chosen = baseDef;
+        else if (def && items.includes(def)) chosen = def;
+        else if (baseDef) chosen = baseDef; // нет в пуле — добавим опцией
+        vals[f.name] = chosen;
+      } else {
+        vals[f.name] = def;
+        // автозаполнение диапазона глав из опций (как в CLI)
+        if ((f.name === "start" || f.name === "end") && vals[f.name] === "") {
+          const ch = opts.chapters || {};
+          const d = f.name === "start" ? ch.min : ch.max;
+          if (d != null) vals[f.name] = String(d);
+        }
+        // autofile: автоподхват файла из пула (donate.txt и т.п.)
+        if (f.autofile && vals[f.name] === "") {
+          const slash = f.autofile.indexOf("/");
+          const adir = slash >= 0 ? f.autofile.slice(0, slash) : "";
+          const abase = slash >= 0 ? f.autofile.slice(slash + 1) : f.autofile;
+          const apool =
+            adir === "source"
+              ? opts.source || []
+              : adir === "prompts"
+                ? opts.prompts || []
+                : opts.root || [];
+          if (apool.includes(abase)) vals[f.name] = f.autofile;
+        }
+      }
+    }
+    st.values[key] = vals;
+    st.touched[key] = new Set();
+  }
+
+  // файл → путь внутри проекта (R5-G): голое имя + dir → "dir/имя"
+  function finalFile(f, v) {
+    if (f.type === "files" && f.dir && v && !String(v).includes("/")) {
+      return `${f.dir}/${v}`;
+    }
+    return v;
+  }
+
+  // params запуска: экспертный = все непустые значения формы (vals
+  // уже включают дефолты + .env-префилл + автоподхваты диапазона/
+  // autofile); простой = пресет (дефолты) + поля, которые пользователь
+  // менял в ЛЮБОМ режиме (синхронизация режимов: правки из эксперта
+  // применяются в простом и наоборот).
+  function buildParams(key, spec, mode) {
+    const vals = st.values[key] || {};
+    const touched = st.touched[key] || new Set();
+    const p = {};
+    if (mode === "simple") {
+      Object.assign(p, (spec.preset || {}).params || {});
+    }
+    for (const f of spec.fields || []) {
+      const v = vals[f.name];
+      const use = mode === "expert" || touched.has(f.name);
+      if (!use) continue;
+      if (f.type === "bool") p[f.name] = Boolean(v);
+      else if (v !== "" && v != null) p[f.name] = finalFile(f, v);
+    }
+    return p;
+  }
+
+  // общий построитель поля: label + input, привязанный к st.values[key]
+  // (оба режима). Возвращает label-обёртку; сам input — в wrap._input
+  // (у files — row, select внутри row._sel).
+  function buildField(key, f) {
+    const vals = st.values[key];
+    const touched = st.touched[key];
+    const label = h("div", { class: "field-label" }, f.label);
+    let input;
+    if (f.type === "bool") {
+      input = h("input", { type: "checkbox", class: "checkbox" });
+      input.checked = Boolean(vals[f.name]);
+      input.addEventListener("change", () => {
+        vals[f.name] = input.checked;
+        touched.add(f.name);
+      });
+    } else if (f.type === "select") {
+      input = h("select", { class: "input" });
+      const labels = f.labels || {};
+      for (const o of f.options || []) {
+        const text = labels[o] == null ? (o === "" ? "—" : o) : labels[o];
+        input.append(h("option", { value: o }, text));
+      }
+      input.value = String(vals[f.name] ?? f.default ?? "");
+      input.addEventListener("change", () => {
+        vals[f.name] = input.value;
+        touched.add(f.name);
+      });
+    } else if (f.type === "files") {
+      input = h("select", { class: "input" });
+      const dir = f.dir || "";
+      const pool =
+        dir === "source"
+          ? st.options.source || []
+          : dir === "prompts"
+            ? st.options.prompts || []
+            : st.options.root || [];
+      const exts = (f.ext || []).map((e) => e.toLowerCase());
+      const items = pool.filter(
+        (n) =>
+          exts.length === 0 || exts.some((e) => n.toLowerCase().endsWith(e)),
+      );
+      input.append(h("option", { value: "" }, "—"));
+      for (const n of items) {
+        input.append(h("option", { value: n }, n));
+      }
+      const chosen = String(vals[f.name] ?? "");
+      if (chosen && !items.includes(chosen)) {
+        input.append(h("option", { value: chosen }, chosen));
+      }
+      input.value = chosen;
+      input.addEventListener("change", () => {
+        vals[f.name] = input.value;
+        touched.add(f.name);
+      });
+      // загрузка своего файла сразу (без выбора из существующих)
+      const row = h("div", { class: "field-row" }, input);
+      const upInput = h("input", { type: "file", class: "hidden" });
+      const upBtn = h(
+        "button",
+        { class: "btn btn-sm btn-ghost" },
+        "Загрузить",
+      );
+      upBtn.addEventListener("click", () => upInput.click());
+      upInput.addEventListener("change", async () => {
+        if (!upInput.files || !upInput.files.length) return;
+        const form = new FormData();
+        // B3: dir="" (поля корня проекта — ner_file, wiki file) —
+        // загружаем в корень проекта, иначе файл не появится в селекте
+        form.append("dest", dir || "");
+        for (const f2 of upInput.files) {
+          form.append("files[]", f2, f2.name);
+        }
+        try {
+          const r = await apiUpload(
+            `/upload?project=${section}/${name}`,
+            form,
+          );
+          toast(`Загружено: ${r.saved.length} файл(ов)`);
+          st.options = null; // перечитать список файлов
+          render();
+        } catch (ex) {
+          toast(ex.message, "err");
+        }
+      });
+      row.append(upBtn, upInput);
+      row._sel = input; // значение — select внутри row
+      input = row;
+    } else {
+      input = h("input", {
+        type:
+          f.type === "number"
+            ? "number"
+            : f.type === "password"
+              ? "password"
+              : "text",
+        class: "input",
+      });
+      input.value = String(vals[f.name] ?? f.default ?? "");
+      input.addEventListener("input", () => {
+        vals[f.name] = input.value;
+        touched.add(f.name);
+      });
+    }
+    const wrap = h("label", { class: "field" }, label, input);
+    if (f.help) wrap.append(h("div", { class: "field-help" }, f.help));
+    wrap._input = input;
+    return wrap;
+  }
+
+  // карточка пресета + простые поля (spec.simple) + диапазон глав:
+  // простой режим — «частично показанный экспертный», значения общие
   function simplePanel(key, spec) {
     const preset = spec.preset || {};
-    const params = preset.params || {};
     const err = h("div", { class: "form-error" });
-    const hasRange = (spec.fields || []).some(
-      (f) => f.name === "start" || f.name === "end",
-    );
-    const ch = (st.options || {}).chapters || {};
-    const start = h("input", {
-      type: "number",
-      class: "input preset-range",
-      value: ch.min == null ? "" : String(ch.min),
-    });
-    const end = h("input", {
-      type: "number",
-      class: "input preset-range",
-      value: ch.max == null ? "" : String(ch.max),
-    });
     const card = h(
       "div",
       { class: "preset-card" },
       h("div", { class: "preset-title" }, preset.title || "Запуск"),
       h("div", { class: "preset-desc" }, preset.desc || ""),
     );
+    const wraps = [];
+    const byName = {};
+    for (const name of spec.simple || []) {
+      const f = (spec.fields || []).find((x) => x.name === name);
+      if (!f) continue;
+      const wrap = buildField(key, f);
+      wraps.push(wrap);
+      byName[name] = wrap._input;
+    }
+    // ner: «постобработка» — без LLM, прячем промпт и двухпроходную схему
+    if (key === "ner" && byName["mode"]) {
+      const modeSel = byName["mode"];
+      const applyNerSimple = () => {
+        const hide = modeSel.value === "postprocess";
+        for (const name of ["prompt_file", "two_pass"]) {
+          const w = byName[name];
+          const wrap = w && w.closest ? w.closest(".field") : null;
+          if (wrap) wrap.classList.toggle("hidden", hide);
+        }
+      };
+      modeSel.addEventListener("change", applyNerSimple);
+      applyNerSimple();
+    }
+    // диапазон глав (всегда виден, если стадия принимает start/end)
+    const hasRange = (spec.fields || []).some(
+      (f) => f.name === "start" || f.name === "end",
+    );
+    const rangeNodes = [];
+    if (hasRange) {
+      const start = h("input", {
+        type: "number",
+        class: "input preset-range",
+      });
+      const end = h("input", {
+        type: "number",
+        class: "input preset-range",
+      });
+      start.value = String(st.values[key]["start"] ?? "");
+      end.value = String(st.values[key]["end"] ?? "");
+      start.addEventListener("input", () => {
+        st.values[key]["start"] = start.value;
+        st.touched[key].add("start");
+      });
+      end.addEventListener("input", () => {
+        st.values[key]["end"] = end.value;
+        st.touched[key].add("end");
+      });
+      rangeNodes.push(
+        h(
+          "div",
+          { class: "preset-range-row" },
+          h("span", { class: "preset-range-label" }, "Главы:"),
+          start,
+          h("span", { class: "preset-range-sep" }, "–"),
+          end,
+        ),
+      );
+    }
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
-      const p = Object.assign({}, params);
-      if (hasRange) {
-        const s = start.value.trim();
-        const e = end.value.trim();
-        if (s !== "") p.start = s;
-        if (e !== "") p.end = e;
-      }
       try {
         const r = await api("/jobs", {
           method: "POST",
-          body: { action: key, project: `${section}/${name}`, params: p },
+          body: {
+            action: key,
+            project: `${section}/${name}`,
+            params: buildParams(key, spec, "simple"),
+          },
         });
         st.job = r.job;
         st.log = [];
@@ -354,21 +608,15 @@ function viewRun(section, name, attachJobId) {
         err.textContent = ex.message;
       }
     });
-    const nodes = [card];
-    if (hasRange) {
-      nodes.push(
-        h(
-          "div",
-          { class: "preset-range-row" },
-          h("span", { class: "preset-range-label" }, "Главы:"),
-          start,
-          h("span", { class: "preset-range-sep" }, "–"),
-          end,
-        ),
-      );
-    }
-    nodes.push(err, runBtn);
-    return h("div", { class: "run-form" }, nodes);
+    return h(
+      "div",
+      { class: "run-form" },
+      card,
+      wraps,
+      rangeNodes,
+      err,
+      runBtn,
+    );
   }
 
   // экспертная форма: все поля спеки (до простого режима).
@@ -378,113 +626,8 @@ function viewRun(section, name, attachJobId) {
     const err = h("div", { class: "form-error" });
     const fieldNodes = [];
     const fieldWraps = {}; // name → label-обёртка (промпты pipeline, )
-    const values = {};
-
-    // C/D: bool из .env (строка "0") и files-default по basename
-    const boolOn = UICore.boolOn;
-    const fileBase = UICore.fileBase;
-
     for (const f of spec.fields || []) {
-      const label = h("div", { class: "field-label" }, f.label);
-      let input;
-      if (f.type === "bool") {
-        input = h("input", { type: "checkbox", class: "checkbox" });
-        input.checked = boolOn(f.default);
-        values[f.name] = input;
-      } else if (f.type === "select") {
-        input = h("select", { class: "input" });
-        const labels = f.labels || {};
-        for (const o of f.options || []) {
-          const text = labels[o] == null ? (o === "" ? "—" : o) : labels[o];
-          input.append(h("option", { value: o }, text));
-        }
-        input.value = f.default == null ? "" : String(f.default);
-        values[f.name] = input;
-      } else if (f.type === "files") {
-        input = h("select", { class: "input" });
-        const dir = f.dir || "";
-        const pool =
-          dir === "source"
-            ? st.options.source || []
-            : dir === "prompts"
-              ? st.options.prompts || []
-              : st.options.root || [];
-        const exts = (f.ext || []).map((e) => e.toLowerCase());
-        const items = pool.filter(
-          (n) =>
-            exts.length === 0 || exts.some((e) => n.toLowerCase().endsWith(e)),
-        );
-        input.append(h("option", { value: "" }, "—"));
-        for (const n of items) {
-          input.append(h("option", { value: n }, n));
-        }
-        // C: default из .env может быть prompts/ner_prompt.txt —
-        // селект наполнен именами файлов, сравниваем basename
-        const rawDef = f.default == null ? "" : String(f.default);
-        const baseDef = fileBase(rawDef);
-        let chosen = "";
-        if (baseDef && items.includes(baseDef)) chosen = baseDef;
-        else if (rawDef && items.includes(rawDef)) chosen = rawDef;
-        else if (baseDef) {
-          input.append(h("option", { value: baseDef }, baseDef));
-          chosen = baseDef;
-        }
-        input.value = chosen;
-        values[f.name] = input;
-        // загрузка своего файла сразу (без выбора из существующих)
-        const row = h("div", { class: "field-row" }, input);
-        const upInput = h("input", { type: "file", class: "hidden" });
-        const upBtn = h(
-          "button",
-          { class: "btn btn-sm btn-ghost" },
-          "Загрузить",
-        );
-        upBtn.addEventListener("click", () => upInput.click());
-        upInput.addEventListener("change", async () => {
-          if (!upInput.files || !upInput.files.length) return;
-          const form = new FormData();
-          // B3: dir="" (поля корня проекта — ner_file, wiki file) —
-          // загружаем в корень проекта, иначе файл не появится в селекте
-          form.append("dest", dir || "");
-          for (const f2 of upInput.files) {
-            form.append("files[]", f2, f2.name);
-          }
-          try {
-            const r = await apiUpload(
-              `/upload?project=${section}/${name}`,
-              form,
-            );
-            toast(`Загружено: ${r.saved.length} файл(ов)`);
-            st.options = null; // перечитать список файлов
-            render();
-          } catch (ex) {
-            toast(ex.message, "err");
-          }
-        });
-        row.append(upBtn, upInput);
-        row._sel = input; // submit: значение берём из select внутри row
-        input = row;
-      } else {
-        input = h("input", {
-          type:
-            f.type === "number"
-              ? "number"
-              : f.type === "password"
-                ? "password"
-                : "text",
-          class: "input",
-        });
-        input.value = f.default == null ? "" : String(f.default);
-        // автозаполнение диапазона глав из опций стадии (как в CLI)
-        if (f.name === "start" || f.name === "end") {
-          const ch = (st.options || {}).chapters || {};
-          const def = f.name === "start" ? ch.min : ch.max;
-          if (def != null && input.value === "") input.value = String(def);
-        }
-        values[f.name] = input;
-      }
-      const wrap = h("label", { class: "field" }, label, input);
-      if (f.help) wrap.append(h("div", { class: "field-help" }, f.help));
+      const wrap = buildField(key, f);
       fieldNodes.push(wrap);
       fieldWraps[f.name] = wrap;
     }
@@ -492,7 +635,8 @@ function viewRun(section, name, attachJobId) {
     // pipeline — режим промптов (auto/separate/combined):
     // показываем только нужные поля по выбранному режиму
     if (key === "pipeline") {
-      const modeSel = values["prompt_mode"];
+      const modeSel =
+        fieldWraps["prompt_mode"] && fieldWraps["prompt_mode"]._input;
       const promptFields = [
         "prompt_file",
         "translate_prompt",
@@ -520,7 +664,7 @@ function viewRun(section, name, attachJobId) {
     // постобработка прячет LLM-поля и входной txt, «собрать главы» —
     // прячет txt и показывает диапазон глав
     if (key === "ner") {
-      const modeSel = values["mode"];
+      const modeSel = fieldWraps["mode"] && fieldWraps["mode"]._input;
       const llmFields = [
         "host", "model", "api_key", "prompt_file", "threads",
         "chunk_size", "threshold", "ngram", "temperature", "reasoning",
@@ -549,40 +693,27 @@ function viewRun(section, name, attachJobId) {
 
     // B4: смена host очищает предзаполненный api_key — иначе старый
     // ключ уедет на чужой сервер (C1 защищает только env-fallback)
-    const hostEl = values["host"];
-    const keyEl = values["api_key"];
+    const hostEl = fieldWraps["host"] && fieldWraps["host"]._input;
+    const keyEl = fieldWraps["api_key"] && fieldWraps["api_key"]._input;
     if (hostEl && keyEl) {
       hostEl.addEventListener("change", () => {
         keyEl.value = "";
+        st.values[key]["api_key"] = "";
+        st.touched[key].add("api_key");
       });
     }
 
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
-      const params = {};
-      for (const f of spec.fields || []) {
-        const el = values[f.name];
-        if (f.type === "bool") {
-          params[f.name] = el.checked;
-        } else {
-          // files: select лежит внутри row (кнопка «Загрузить» рядом)
-          const src = el._sel || el;
-          const v = src.value.trim();
-          if (v === "") continue;
-          // R5-G: голое имя файла из select → путь внутри проекта
-          // (source/*, prompts/*), иначе скрипт не найдёт файл от cwd.
-          let val = v;
-          if (f.type === "files" && f.dir && !v.includes("/")) {
-            val = `${f.dir}/${v}`;
-          }
-          params[f.name] = val;
-        }
-      }
       try {
         const r = await api("/jobs", {
           method: "POST",
-          body: { action: key, project: `${section}/${name}`, params },
+          body: {
+            action: key,
+            project: `${section}/${name}`,
+            params: buildParams(key, spec, "expert"),
+          },
         });
         st.job = r.job;
         st.log = [];

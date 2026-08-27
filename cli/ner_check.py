@@ -19,8 +19,8 @@ ner_check.py — LLM-проверка глоссария ner.json и приме�
 «статус» и флаг «применено»; повторный прогон не затирает решения
 человека (дедупликация по term+field+old+new).
 
-Артефакты: ner_report.md (отчёт прогона) + ner_review.json
-(накопительный файл правок). --apply применяет правки ИЗ ФАЙЛА
+Артефакты: ner_review.json (накопительный файл правок; отчёт
+ner_report.md удалён — не нужен). --apply применяет правки ИЗ ФАЙЛА
 (без LLM): бэкап ner.json.bak, лог ner_changes.md со ВСЕМИ
 применёнными правками и их этапами; --dry-run — без записи.
 Legacy-формат (простой массив патчей, старый ner_patches.json)
@@ -93,7 +93,6 @@ from core.common import (  # noqa: E402
 )
 
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "ner_check_prompt.txt")
-DEFAULT_REPORT = "ner_report.md"
 DEFAULT_REVIEW = "ner_review.json"
 DEFAULT_BATCH_SIZE = 196608  # СИМВОЛЫ (~65536 токенов)
 
@@ -154,8 +153,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="LLM-проверка глоссария ner.json + применение правок")
     p.add_argument("--input", default="ner.json",
                    help="Путь к ner.json (по умолчанию: ner.json).")
-    p.add_argument("--report", default=DEFAULT_REPORT,
-                   help="Путь к отчёту (по умолчанию: ner_report.md).")
     p.add_argument("--review", "--patches", dest="review",
                    default=DEFAULT_REVIEW,
                    help="Накопительный файл правок для человека "
@@ -297,10 +294,9 @@ def render_prompt(prompt_tpl: str, body: str) -> str:
 
 
 def run_pass(title, items, prompt_tpl, args, base_url, api_key, model,
-             logger, raws):
+             logger):
     """Один проход (весь список или один тип). Возвращает список патчей
-    или None при ошибке LLM/парсинга всех батчей. Нераспознанные ответы
-    складывает в raws: [(title, bi, nbatches, text)]."""
+    или None при ошибке LLM/парсинга всех батчей."""
     batches = build_ner_batches(items, args.batch_size,
                                 args.show_aliases, args.show_votes)
     logger.info(f"── {title}: {len(items)} записей, батчей: {len(batches)}")
@@ -331,9 +327,7 @@ def run_pass(title, items, prompt_tpl, args, base_url, api_key, model,
             continue
         found = parse_ner_patches(text, logger)
         if found is None:
-            logger.error(f"  ❌ Ответ не распарсился "
-                         f"(сырьё — в {args.report}).")
-            raws.append((title, bi, len(batches), text))
+            logger.error("  ❌ Ответ не распарсился (см. лог выше).")
             continue
         ok_any = True
         logger.info(f"  ✔ Предложено правок: {len(found)}")
@@ -366,31 +360,6 @@ def review_table(entries) -> str:
                      f"| {p['field']} | {old} | {new} | {reason} "
                      f"| {p.get('applied_at', '')} |")
     return "\n".join(lines)
-
-
-def write_report(args, passes_out, raws, total_items, logger):
-    header = [f"# NER-check: отчёт",
-              f"",
-              f"- Дата: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-              f"- Вход: {args.input} (записей после фильтра: {total_items})",
-              f"- Режим: --passes {args.passes}",
-              f"- Правки: {args.review} (статусы «принять»/«отклонить»)",
-              ""]
-    sections = []
-    for title, patches in passes_out:
-        sec = [f"## {title}", ""]
-        if patches is None:
-            sec += ["⛔ Ошибка LLM/парсинга — см. лог и секции «СЫРЬЁ» ниже.", ""]
-        elif not patches:
-            sec += ["Ошибок не обнаружено.", ""]
-        else:
-            sec += [f"Предложено правок: {len(patches)}", "",
-                    patches_table(patches), ""]
-        sections.append("\n".join(sec))
-    for title, bi, nb, text in raws:
-        sections.append(f"## {title} (батч {bi}/{nb}) — СЫРЬЁ\n\n{text}\n")
-    atomic_write(args.report, "\n".join(header) + "\n".join(sections))
-    logger.info(f"📄 Отчёт: {args.report}")
 
 
 def write_changes_md(entries, args, logger):
@@ -431,8 +400,6 @@ def do_check(args, logger) -> int:
         or datetime.now().strftime("%Y-%m-%d %H:%M")
     if entries is None:
         entries = []
-    passes_out = []                       # [(title, patches|None)]
-    raws = []                             # [(title, bi, nbatches, text)]
     added_total = 0
     backed_up = False
 
@@ -479,11 +446,9 @@ def do_check(args, logger) -> int:
         tpl = (prompt_tpl if title == "Весь глоссарий"
                else TYPES_STAGE_PREFIX + prompt_tpl)
         patches = run_pass(title, subset, tpl, args,
-                           base_url, api_key, model, logger, raws)
-        passes_out.append((title, patches))
+                           base_url, api_key, model, logger)
         if patches is None:
             if args.auto_apply:
-                write_report(args, passes_out, raws, len(items), logger)
                 sys.exit(f"❌ Авто-режим: этап «{title}» не завершился "
                          f"(LLM/парсинг) — останов.")
             return
@@ -509,7 +474,6 @@ def do_check(args, logger) -> int:
                 subset = [i for i in items if i.get("type") == t]
                 run_stage(f"Тип: {t}", subset)
 
-    write_report(args, passes_out, raws, len(items), logger)
     save_review()
     logger.info(f"🧩 Правки: {args.review} "
                 f"(новых: {added_total}, всего: {len(entries)})")

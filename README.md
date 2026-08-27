@@ -61,7 +61,7 @@ EPUB/текст
 │    Извлечение имён, терминов, локаций → ner.json    │
 │    Затем — проверка глоссария LLM (ner_check):      │
 │    этап 1 — весь список, этап 2 — по типам;         │
-│    правки LLM → ner_report.md + ner_review.json;    │
+│    правки LLM → ner_review.json;                     │
 │    статусы принять/отклонить правит человек,        │
 │    применение — --apply (есть --auto-apply)         │
 │    Результат: выверенный ner.json                    │
@@ -383,7 +383,6 @@ MyNovel/
 │   └── Translate_1-42_j4_*.log  # лог прогона конвейера (стадия+диапазон+время)
 ├── tmp/
 ├── ner.json                     # глоссарий
-├── ner_report.md                # отчёт ner_check (прогон, предложено LLM)
 ├── ner_review.json              # правки ner_check: статусы принять/отклонить
 ├── ner_changes.md               # лог применённых правок (с этапами)
 ├── translate_check_llm_review.json  # правки проверки перевода LLM: принять/отклонить
@@ -557,6 +556,7 @@ Web-сервер читает из того же `.env` ключи `WEB_HOST`, `
 | `templates/donate.txt.example` | Страница «Поддержать проект» | `source/donate.txt` |
 | `templates/replacements.txt.example` | Шаблон правил массовых замен | `prompts/replacements.txt` |
 | `templates/General/prompts/*_prompt.txt` | Стартовые промпты NER/ner_check/перевода/редактуры/полировки | `prompts/` (имена файлов сохраняются) |
+| `templates/General/prompts/pipeline_prompt.txt` | Общий промпт конвейера с тегами `<translate>/<redact>/<polish>` (конкатенация трёх промптов) — вариант по умолчанию | `prompts/pipeline_prompt.txt` |
 | `templates/General/source/metadata.yaml` | Метаданные книги для EPUB/FB2 | `source/metadata.yaml` |
 
 `General/` — универсальный тип книги (подходит для большинства новелл).
