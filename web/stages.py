@@ -409,6 +409,8 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
         argv.append(str(form["file"]))
     if as_chapter:
         argv.append("--as-chapter")
+        if form.get("save_type"):
+            argv += ["--save-type", str(form["save_type"])]
     else:
         if fmt == "rulate-md":
             argv.append("--rulate-mode")
@@ -880,8 +882,14 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "as_chapter", "label": "Сохранить как главу вики",
              "type": "bool", "default": False,
              "help": "вместо файла — дополнительная последняя глава "
-                      "chapters/00000_{N+1}_Wiki_Новеллы/chapter.txt, "
-                      "название «Wiki Новеллы» простым текстом"},
+                      "chapters/00000_{N+1}_Wiki_Новеллы/, название "
+                      "«Wiki Новеллы» простым текстом"},
+            {"name": "save_type", "label": "Тип файла вики-главы",
+             "type": "select",
+             "options": ["translated", "redacted", "polished"],
+             "default": "polished",
+             "help": "для «Сохранить как главу вики»; polished — как "
+                      "компиляция по умолчанию; chapter.txt не пишется"},
             {"name": "format", "label": "Формат",
              "type": "select",
              "options": ["md", "rulate-md", "rulate-html"],
@@ -932,7 +940,7 @@ STAGE_SPECS: dict[str, dict] = {
                     "дефолтные настройки",
         },
         "simple": ["source", "file", "type", "prompt_file", "top",
-                    "min_count", "format", "as_chapter"],
+                    "min_count", "format", "as_chapter", "save_type"],
     },
     "batch_replace": {
         "title": "Массовые замены",

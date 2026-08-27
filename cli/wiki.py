@@ -835,10 +835,11 @@ def assemble_wiki_chapter(
 ) -> None:
     """Собрать вики как дополнительную последнюю главу (--as-chapter).
 
-    chapter.txt (и polished.txt — для компиляции по умолчанию): первая
-    строка — название главы «Wiki Новеллы» ПРОСТЫМ текстом (без
-    rulate-спецзаголовка); статьи — в формате как у rulate (заголовки
-    сдвинуты глубже: ## → ###), разделители ---.
+    output_path — файл выбранного типа (translated/redacted/polished,
+    задаёт main): первая строка — название главы «Wiki Новеллы» ПРОСТЫМ
+    текстом (без rulate-спецзаголовка); статьи — в формате как у rulate
+    (заголовки сдвинуты глубже: ## → ###), разделители ---. chapter.txt
+    не пишется.
     """
     if not sections_by_type:
         _log(logger, logging.WARNING, "⚠️ Нет разделов для сборки.")
@@ -863,18 +864,6 @@ def assemble_wiki_chapter(
 
     _log(logger, logging.INFO,
          f"💾 Вики-глава сохранена: {output_path} ({len(text)} символов)")
-
-    # polished.txt — дубль для компиляции (source_type по умолчанию)
-    polished_path = os.path.join(os.path.dirname(output_path),
-                                 "polished.txt")
-    try:
-        with open(polished_path, "w", encoding="utf-8") as f:
-            f.write(text)
-        _log(logger, logging.INFO,
-             f"💾 Вики-глава (polished): {polished_path}")
-    except OSError as exc:
-        _log(logger, logging.ERROR,
-             f"❌ Не удалось записать {polished_path}: {exc}")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1390,10 +1379,17 @@ def main():
         "--as-chapter", action="store_true",
         help=(
             "Сохранить вики как дополнительную последнюю главу "
-            "chapters/00000_{N+1}_Wiki_Новеллы/chapter.txt: название "
-            "главы «Wiki Новеллы» простым текстом, статьи — в формате "
-            "как у rulate (заголовки глубже); вместо файла --output."
+            "chapters/00000_{N+1}_Wiki_Новеллы/: название главы «Wiki "
+            "Новеллы» простым текстом, статьи — в формате как у rulate "
+            "(заголовки глубже); файл — тип из --save-type (вместо "
+            "файла --output)."
         ),
+    )
+    g_out.add_argument(
+        "--save-type", default="polished",
+        choices=["translated", "redacted", "polished"], metavar="TYPE",
+        help="Тип файла вики-главы для --as-chapter "
+             "(translated/redacted/polished; по умолчанию: polished).",
     )
     g_out.add_argument(
         "--toc", action=argparse.BooleanOptionalAction, default=True,
@@ -1561,7 +1557,9 @@ def main():
     if rulate_html and os.path.splitext(args.output)[1].lower() == ".md":
         args.output = os.path.splitext(args.output)[0] + ".txt"
 
-    # --as-chapter: вики-глава в chapters/ как последняя по номеру
+    # --as-chapter: вики-глава в chapters/ как последняя по номеру;
+    # файл — выбранного типа (translated/redacted/polished), chapter.txt
+    # не пишется
     if args.as_chapter:
         ch_map = build_chapter_map("./chapters")
         next_num = (max(ch_map) + 1) if ch_map else 1
@@ -1573,9 +1571,10 @@ def main():
             _log(logger, logging.ERROR,
                  f"❌ Не удалось создать папку {ch_dir}: {exc}")
             return
-        args.output = os.path.join(ch_dir, "chapter.txt")
+        args.output = os.path.join(ch_dir, f"{args.save_type}.txt")
         _log(logger, logging.INFO,
-             f"📁 Вики-глава: {ch_dir} (номер {next_num})")
+             f"📁 Вики-глава: {ch_dir} (номер {next_num}, "
+             f"{args.save_type}.txt)")
 
     _log(logger, logging.INFO,
          f"🚀 Wiki | Модель: {model_name} | Top: {args.top} | "

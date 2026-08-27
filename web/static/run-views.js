@@ -565,11 +565,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       applyNerSimple();
     }
     // wiki: «Собрать из глав» — прячем входной txt (показываем тип);
-    // «Сохранить как главу» — прячем формат
+    // «Сохранить как главу» — прячем формат, показываем тип файла
     if (key === "wiki" && byName["source"]) {
       const srcSel = byName["source"];
       const asChSel = byName["as_chapter"];
       const fmtSel = byName["format"];
+      const stSel = byName["save_type"];
       const applyWikiSimple = () => {
         const chapters = srcSel.value === "chapters";
         const fw = byName["file"];
@@ -582,6 +583,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         const fwrap = fmtSel && fmtSel.closest
           ? fmtSel.closest(".field") : null;
         if (fwrap) fwrap.classList.toggle("hidden", asCh);
+        const swrap = stSel && stSel.closest
+          ? stSel.closest(".field") : null;
+        if (swrap) swrap.classList.toggle("hidden", !asCh);
       };
       srcSel.addEventListener("change", applyWikiSimple);
       if (asChSel) asChSel.addEventListener("change", applyWikiSimple);
@@ -752,11 +756,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           const w = fieldWraps[name];
           if (w) w.classList.toggle("hidden", !isMd || asCh);
         }
-        // вики-глава: формат/выходной файл не нужны
+        // вики-глава: формат/выходной файл не нужны; тип файла — только
+        // при включённой вики-главе
         for (const name of fileOnlyFields) {
           const w = fieldWraps[name];
           if (w) w.classList.toggle("hidden", asCh);
         }
+        const sw = fieldWraps["save_type"];
+        if (sw) sw.classList.toggle("hidden", !asCh);
       }
       if (srcSel) srcSel.addEventListener("change", applyWikiMode);
       if (fmtSel) fmtSel.addEventListener("change", applyWikiMode);
