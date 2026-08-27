@@ -1284,15 +1284,51 @@ def compile_chapter_texts(chapters_dir, out_path, want="chapter",
     return info
 
 
+def _first_nonempty_line(path: str, limit: int = 65536) -> str | None:
+    """Первая непустая строка файла — БЕЗ чтения файла целиком.
+
+    Читает только префикс (пока не встретится перевод строки или
+    limit байт) — названия тысяч глав читаются за доли секунды.
+    Кодировка как read_text_safe (utf-8 → cp1251), строка NFC.
+    """
+    import unicodedata
+    data = b""
+    try:
+        with open(path, "rb") as f:
+            while len(data) < limit:
+                chunk = f.read(4096)
+                if not chunk:
+                    break
+                data += chunk
+                if b"\n" in data:
+                    break
+    except OSError:
+        return None
+    for enc in ("utf-8", "cp1251"):
+        try:
+            text = data.decode(enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    else:
+        text = data.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        s = unicodedata.normalize("NFC", line.strip())
+        if s:
+            return s
+    return None
+
+
 def read_chapter_titles(chapters_dir, want="polished", logger=None) -> dict:
     """Названия глав: первая непустая строка каждого файла.
 
     Папки — build_chapter_map (дубли: последняя), файл —
     find_chapter_file (want=type, strict_types для не-chapter).
+    Чтение — префиксом (_first_nonempty_line), файл целиком НЕ
+    читается: тысячи глав — быстро.
     Возвращает {номер главы: строка-название} — только главы, где
     файл найден и есть непустая строка.
     """
-    import unicodedata
     chapter_map = build_chapter_map(chapters_dir, logger=logger)
     titles: dict[int, str] = {}
     for cid in sorted(chapter_map):
@@ -1305,12 +1341,9 @@ def read_chapter_titles(chapters_dir, want="polished", logger=None) -> dict:
             strict_types=(want != "chapter"), logger=logger)
         if not path:
             continue
-        text = read_text_safe(path)
-        for line in text.splitlines():
-            s = unicodedata.normalize("NFC", line.strip())
-            if s:
-                titles[cid] = s
-                break
+        s = _first_nonempty_line(path)
+        if s:
+            titles[cid] = s
     if logger:
         logger.info("Названия глав (%s): %d/%d", want, len(titles),
                     len(chapter_map))
