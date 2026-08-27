@@ -38,6 +38,9 @@ RING_SIZE = 5000
 JOB_LOGS_DIRNAME = "job_logs"
 STOP_GRACE = 5.0  # секунд между terminate и kill
 SSE_PING = 15.0  # секунд между ping в стриме
+# B1: период опроса «сирот» — running-запусков без reader'а (после
+# рестарта сервера); смерть pid → статус failed + persist
+ORPHAN_POLL = 5.0
 
 # Префиксы структурированных событий в stdout (JSON после него).
 # @@CHAPTER@@ — события глав конвейера (web/pipeline.py);
@@ -148,6 +151,8 @@ class JobManager:
         self._load()
         self._cleanup_orphans()
         self._trim_history()
+        # B1: фоновый наблюдатель сирот (daemon — не держит процесс)
+        threading.Thread(target=self._orphan_watch, daemon=True).start()
 
     # ── персистентность ─────────────────────────────────────
     def _store_path(self) -> Path:
@@ -318,6 +323,27 @@ class JobManager:
         except OSError:
             return False
         return True
+
+    def _orphan_watch(self) -> None:
+        """B1: сироты после рестарта сервера зависают навсегда —
+        reader-поток умер вместе со старым сервером, статус никогда не
+        обновится. Наблюдатель опрашивает running-запуски без proc
+        (сироты) по pid: процесс умер → done/failed + persist.
+        Обычные запуски (proc жив) обрабатывает reader-поток."""
+        while True:
+            time.sleep(ORPHAN_POLL)
+            with self._lock:
+                orphans = [j for j in self._jobs.values()
+                           if j.status == "running" and j.proc is None]
+            for job in orphans:
+                if not self._pid_alive(job.pid):
+                    job.status = "failed"
+                    job.exit_code = job.exit_code or 1
+                    job.finished = time.time()
+                    job.notify(("status", job.status))
+                    self._persist()
+                    log.info("Наблюдатель: сирота %s (pid=%s) умер — "
+                             "помечен failed", job.id, job.pid)
 
     def _reconcile(self) -> None:
         """Проверяет сохранённые «running»-запуски после рестарта сервера:
@@ -579,8 +605,14 @@ class JobManager:
             job = self._jobs.pop(job_id, None)
         if job is None:
             return False
-        if job.status == "running" and job.proc is not None:
-            self._signal_group(job.proc, signal.SIGTERM)
+        # B2: remove останавливает и сирот (proc=None, но pid жив) —
+        # раньше SIGTERM уходил только при живом Popen, и удаление из
+        # истории оставляло процесс работать
+        if job.status == "running":
+            if job.proc is not None:
+                self._signal_group(job.proc, signal.SIGTERM)
+            elif self._pid_alive(job.pid):
+                self._signal_group_pid(job.pid, signal.SIGTERM)
         self._drop_sidecar(job_id)
         self._persist()
         return True
