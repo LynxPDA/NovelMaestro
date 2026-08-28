@@ -3350,14 +3350,14 @@ function viewProject(section, name) {
         const withFile = (d.templates || []).filter((t) =>
           (t.files || []).includes(rel),
         );
-        if (!withFile.length) {
-          sel.append(
-            h("option", { value: "" }, "Нет наборов с этим файлом"),
-          );
-        } else {
+        if (withFile.length) {
           for (const t of withFile) {
             sel.append(h("option", { value: t.name }, t.name));
           }
+        } else {
+          sel.append(
+            h("option", { value: "" }, "Нет наборов с этим файлом"),
+          );
         }
       })
       .catch((ex) => {
