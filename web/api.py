@@ -1289,7 +1289,7 @@ def _settings_get(ctx: dict) -> dict:
 
 
 def _prompts_list(ctx: dict) -> dict:
-    """Список prompts/ проекта с тегами + доступные шаблоны (W4).
+    """Список prompts/ проекта + доступные шаблоны (W4).
 
     Шаблоны — имена файлов из templates/*/prompts (уникальные, с пометкой
     from_template): фронт показывает их даже при пустом prompts/ проекта
@@ -1302,14 +1302,8 @@ def _prompts_list(ctx: dict) -> dict:
         for f in sorted(pr.iterdir()):
             if not f.is_file():
                 continue
-            tags = []
             try:
-                head = f.read_text(encoding="utf-8", errors="replace")[:4000]
-                for m in re.findall(r"<(\w+)>", head):
-                    if m not in tags:
-                        tags.append(m)
-                out.append({"name": f.name, "size": f.stat().st_size,
-                            "tags": tags})
+                out.append({"name": f.name, "size": f.stat().st_size})
             except OSError as exc:
                 log.debug("Промпт не читается %s: %s", f, exc)
     repo = _repo_root(ctx)
@@ -1547,9 +1541,11 @@ def _logs_read(ctx: dict) -> dict:
     pdir, _section, _name = _project_ctx(ctx)
     name = ctx["params"]["name"]
     sub = ctx["query"].get("dir", "")
-    # подпапка — любой относительный путь от logs/
-    # (путь валидируется _resolve_project_path, выход за logs/ запрещён)
-    base = (pdir / "logs" / sub) if sub else (pdir / "logs")
+    # подпапка — путь от logs/; sub валидируется ПЕРЕД join (абсолютный
+    # путь в pathlib перекрыл бы базу — песочницу обходим)
+    base = pdir / "logs"
+    if sub:
+        base = _resolve_project_path(ctx, base, sub)
     target = _resolve_project_path(ctx, base, name)
     if not target.is_file():
         raise ApiError(404, f"Лог не найден: {name}")
@@ -1568,6 +1564,41 @@ def _logs_read(ctx: dict) -> dict:
     text = raw.decode("utf-8", errors="replace")
     return {"ok": True, "name": name, "size": size,
             "start": start, "content": text}
+
+
+def _logs_delete(ctx: dict) -> dict:
+    """Удаление логов проекта: один файл (DELETE /api/logs/{name}
+    ?dir=подпапка) или ВСЕ *.log (DELETE /api/logs).
+    Пути валидируются _resolve_project_path (выход за logs/ запрещён)."""
+    pdir, _section, _name = _project_ctx(ctx)
+    name = ctx.get("params", {}).get("name", "")
+    sub = ctx.get("query", {}).get("dir", "")
+    root = pdir / "logs"
+    if name:
+        # sub валидируется ПЕРЕД join — абсолютный/.. путь не уйдёт
+        # за пределы logs/ (см. _logs_read)
+        base = root
+        if sub:
+            base = _resolve_project_path(ctx, base, sub)
+        target = _resolve_project_path(ctx, base, name)
+        if not target.is_file():
+            raise ApiError(404, f"Лог не найден: {name}")
+        try:
+            target.unlink()
+        except OSError as exc:
+            raise ApiError(500, f"Не удалось удалить лог: {exc}") from exc
+        return {"ok": True, "deleted": name}
+    # очистка всех *.log (папки и не-.log файлы не трогаем)
+    deleted = []
+    if root.is_dir():
+        for f in sorted(root.rglob("*.log")):
+            try:
+                if f.is_file():
+                    f.unlink()
+                    deleted.append(f.relative_to(root).as_posix())
+            except OSError as exc:
+                log.debug("Лог не удаляется (%s): %s", f.name, exc)
+    return {"ok": True, "deleted": deleted}
 
 
 def _notes_get(ctx: dict) -> dict:
@@ -1717,6 +1748,8 @@ def _register_check(router: Router) -> None:
 def _register_logs(router: Router) -> None:
     router.add("GET", "/api/logs", _logs_list)
     router.add("GET", "/api/logs/{name}", _logs_read)
+    router.add("DELETE", "/api/logs/{name}", _logs_delete)
+    router.add("DELETE", "/api/logs", _logs_delete)
 
 
 # ════════════════════════════════════════════════════════════════════

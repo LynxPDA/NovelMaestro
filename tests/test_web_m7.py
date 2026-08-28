@@ -456,7 +456,8 @@ def test_metadata_get_put(srv, tmp_path):
 # prompts
 
 
-def test_prompts_list_tags(srv, tmp_path):
+def test_prompts_list_no_tags(srv, tmp_path):
+    """Список промптов — без тегов (теги в списке убраны)."""
     srv, port, root = srv()
     pdir = _mk_project(root)
     pr = pdir / "prompts"
@@ -467,8 +468,8 @@ def test_prompts_list_tags(srv, tmp_path):
     r = _request(port, "GET", f"/api/prompts?{_q('ACTIVE/demo')}")
     assert r["ok"] and len(r["prompts"]) == 2
     by_name = {p["name"]: p for p in r["prompts"]}
-    assert "translate" in by_name["translate_prompt.txt"]["tags"]
-    assert by_name["notes.txt"]["tags"] == []
+    assert "tags" not in by_name["translate_prompt.txt"]
+    assert by_name["translate_prompt.txt"]["size"] > 0
 
 
 def test_prompts_get_put(srv, tmp_path):
@@ -556,6 +557,67 @@ def test_logs_read_full(srv, tmp_path):
     (pdir / "logs" / "run.log").write_text("ABC\n", encoding="utf-8")
     r = _request(port, "GET", f"/api/logs/run.log?{_q('ACTIVE/demo')}")
     assert r["content"] == "ABC\n" and r["start"] == 0
+
+
+def test_logs_delete_one(srv, tmp_path):
+    """DELETE /api/logs/{name} — один файл (в т.ч. из подпапки)."""
+    srv, port, root = srv()
+    pdir = _mk_project(root)
+    (pdir / "logs").mkdir()
+    (pdir / "logs" / "run.log").write_text("A\n", encoding="utf-8")
+    (pdir / "logs" / "chapters").mkdir()
+    (pdir / "logs" / "chapters" / "ch1.log").write_text("B\n",
+                                                            encoding="utf-8")
+    r = _request(port, "DELETE",
+                 f"/api/logs/run.log?{_q('ACTIVE/demo')}")
+    assert r["ok"] and not (pdir / "logs" / "run.log").exists()
+    assert (pdir / "logs" / "chapters" / "ch1.log").exists()
+    r2 = _request(port, "DELETE",
+                  f"/api/logs/ch1.log?{_q('ACTIVE/demo', dir='chapters')}")
+    assert r2["ok"] and not (pdir / "logs" / "chapters" / "ch1.log").exists()
+    # несуществующий — 404
+    r3 = _request(port, "DELETE", f"/api/logs/nope.log?{_q('ACTIVE/demo')}")
+    assert "__error__" in r3 and r3["__error__"] == 404
+
+
+def test_logs_delete_all(srv, tmp_path):
+    """DELETE /api/logs — все *.log, не-.log и папки не трогаем."""
+    srv, port, root = srv()
+    pdir = _mk_project(root)
+    (pdir / "logs").mkdir()
+    (pdir / "logs" / "run.log").write_text("A\n", encoding="utf-8")
+    (pdir / "logs" / "notes.txt").write_text("не лог\n", encoding="utf-8")
+    (pdir / "logs" / "chapters").mkdir()
+    (pdir / "logs" / "chapters" / "ch1.log").write_text("B\n",
+                                                            encoding="utf-8")
+    r = _request(port, "DELETE", f"/api/logs?{_q('ACTIVE/demo')}")
+    assert r["ok"] and len(r["deleted"]) == 2
+    assert not (pdir / "logs" / "run.log").exists()
+    assert not (pdir / "logs" / "chapters" / "ch1.log").exists()
+    assert (pdir / "logs" / "notes.txt").exists()
+    assert (pdir / "logs" / "chapters").is_dir()
+
+
+def test_logs_delete_escapes(srv, tmp_path):
+    """удаление лога не уходит за пределы logs/."""
+    srv, port, root = srv()
+    pdir = _mk_project(root)
+    (pdir / "logs").mkdir()
+    (pdir / "secret.txt").write_text("top\n", encoding="utf-8")
+    r = _request(port, "DELETE",
+                 f"/api/logs/{urllib.parse.quote('../secret.txt', safe='')}"
+                 f"?{_q('ACTIVE/demo')}")
+    assert "__error__" in r and r["__error__"] == 400
+    assert (pdir / "secret.txt").exists()
+    # dir=.. / абсолютный dir — база перекрывается ДО join, песочница
+    r2 = _request(port, "DELETE",
+                  f"/api/logs/secret.txt?{_q('ACTIVE/demo', dir='..')}")
+    assert "__error__" in r2 and r2["__error__"] == 400
+    assert (pdir / "secret.txt").exists()
+    r3 = _request(port, "DELETE",
+                  f"/api/logs/secret.txt?{_q('ACTIVE/demo', dir='/etc')}")
+    assert "__error__" in r3 and r3["__error__"] == 400
+    assert (pdir / "secret.txt").exists()
 
 
 def test_logs_read_missing(srv, tmp_path):

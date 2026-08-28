@@ -2791,7 +2791,6 @@ function viewProject(section, name) {
     );
     const ner = s.ner || {};
     const wiki = s.wiki || {};
-    const compiled = s.compiled || [];
     const sumCard = h(
       "div",
       { class: "dash-summary" },
@@ -2832,15 +2831,7 @@ function viewProject(section, name) {
         h("div", { class: "stat-label" }, "статей wiki"),
       ),
     );
-    const compiledRow = h(
-      "div",
-      { class: "card" },
-      h("div", { class: "card-title" }, "Скомпилировано"),
-      compiled.length
-        ? h("div", { class: "card-sub" }, compiled.join(" · "))
-        : h("div", { class: "card-hint" }, "Компиляций пока нет"),
-    );
-    return h("div", { class: "files-wrap" }, sumCard, table, compiledRow);
+    return h("div", { class: "files-wrap" }, sumCard, table);
   }
 
   async function configView() {
@@ -3127,42 +3118,132 @@ function viewProject(section, name) {
     );
     await loadCover();
 
-    /* — metadata.yaml — */
-    const metaCard = h("div", { class: "review-card" });
-    const metaEd = makeEditor("", "yaml");
-    const metaSave = h(
-      "button",
-      { class: "btn btn-sm" },
-      "Сохранить metadata.yaml",
+    /* — source-файлы: metadata.yaml + donate.txt (редактор, сохранение,
+         загрузка из шаблона) — */
+    function sourceCard(title, ext) {
+      const card = h("div", { class: "review-card" });
+      const ed = makeEditor("", ext);
+      const save = h("button", { class: "btn btn-sm" }, `Сохранить ${title}`);
+      const tpl = h("button", { class: "btn btn-sm btn-ghost" }, "Из шаблона");
+      card.append(
+        h("div", { class: "review-card-title" }, `source/${title}`),
+        h(
+          "div",
+          { class: "review-card-body" },
+          h("div", { class: "editor-cm editor-cm-small" }, ed.root),
+          h("div", { class: "review-actions" }, tpl, save),
+        ),
+      );
+      const rel = `source/${title}`;
+      api(`/file?${q}&path=${encodeURIComponent(rel)}`)
+        .then((d) => ed.setValue(d.content || ""))
+        .catch(() => {
+          /* файл может отсутствовать — пустой редактор */
+        });
+      save.addEventListener("click", async () => {
+        try {
+          await api("/file", {
+            method: "PUT",
+            body: {
+              project: `${section}/${name}`,
+              path: rel,
+              content: ed.getValue(),
+            },
+          });
+          toast(`${rel} сохранён`);
+        } catch (ex) {
+          err.textContent = ex.message;
+        }
+      });
+      tpl.addEventListener("click", () =>
+        templateFileModal(rel, (content) => {
+          ed.setValue(content);
+          toast(`${rel} — загружен из шаблона, сохраните`);
+        }),
+      );
+      return card;
+    }
+
+    wrap.append(
+      envCard,
+      coverCard,
+      sourceCard("metadata.yaml", "yaml"),
+      sourceCard("donate.txt", "txt"),
     );
-    metaCard.append(
-      h("div", { class: "review-card-title" }, "source/metadata.yaml"),
+    return wrap;
+  }
+
+  /* Модалка «файл из шаблона»: наборы templates, где есть нужный
+     файл → колбэк (содержимое). Список наборов — GET /api/templates
+     (дерево файлов), чтение — GET /api/templates/{set}/file?path=. */
+  function templateFileModal(rel, onLoad) {
+    const err = h("div", { class: "form-error" });
+    const sel = h("select", { class: "input" });
+    const modal = h(
+      "div",
+      {
+        class: "modal-backdrop",
+        onclick: (e) => e.target === modal && close(),
+      },
       h(
         "div",
-        { class: "review-card-body" },
-        h("div", { class: "editor-cm editor-cm-small" }, metaEd.root),
-        h("div", { class: "review-actions" }, metaSave),
+        { class: "modal" },
+        h("div", { class: "modal-title" }, `Загрузить ${rel} из шаблона`),
+        sel,
+        err,
+        h(
+          "div",
+          { class: "modal-actions" },
+          h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
+          h(
+            "button",
+            {
+              class: "btn btn-primary",
+              onclick: async () => {
+                const set = sel.value;
+                if (!set) {
+                  err.textContent = "Выберите набор шаблонов";
+                  return;
+                }
+                try {
+                  const d = await api(
+                    `/templates/${encodeURIComponent(set)}/file` +
+                      `?path=${encodeURIComponent(rel)}`,
+                  );
+                  close();
+                  onLoad(d.content || "");
+                } catch (ex) {
+                  err.textContent = ex.message;
+                }
+              },
+            },
+            "Загрузить",
+          ),
+        ),
       ),
     );
-    api("/metadata?" + q)
-      .then((d) => metaEd.setValue(d.content || ""))
-      .catch(() => {
-        /* metadata может отсутствовать — пустой редактор */
-      });
-    metaSave.addEventListener("click", async () => {
-      try {
-        await api("/metadata", {
-          method: "PUT",
-          body: { project: `${section}/${name}`, content: metaEd.getValue() },
-        });
-        toast("metadata.yaml сохранён");
-      } catch (ex) {
+    document.body.append(modal);
+    api("/templates")
+      .then((d) => {
+        const withFile = (d.templates || []).filter((t) =>
+          (t.files || []).includes(rel),
+        );
+        if (!withFile.length) {
+          sel.append(
+            h("option", { value: "" }, "Нет наборов с этим файлом"),
+          );
+        } else {
+          for (const t of withFile) {
+            sel.append(h("option", { value: t.name }, t.name));
+          }
+        }
+      })
+      .catch((ex) => {
         err.textContent = ex.message;
-      }
-    });
-
-    wrap.append(envCard, coverCard, metaCard);
-    return wrap;
+      });
+    function close() {
+      modal.remove();
+    }
   }
 
   /* ── Промпты ───────────────────────────────────── */
@@ -3191,7 +3272,7 @@ function viewProject(section, name) {
               "btn btn-sm btn-ghost prompt-item" +
               (current === p.name ? " prompt-item-active" : ""),
           },
-          `${p.name} · ${fmtSize(p.size)}${p.tags?.length ? " · " + p.tags.join(", ") : ""}`,
+          `${p.name} · ${fmtSize(p.size)}`,
         );
         btn.addEventListener("click", () => load(p.name));
         list.append(btn);
@@ -3517,7 +3598,34 @@ function viewProject(section, name) {
             `${e.name} · ${fmtSize(e.size)}`,
           );
           btn.addEventListener("click", () => loadLog(e.name, false, cur));
-          list.append(btn);
+          const del = h(
+            "button",
+            { class: "btn btn-sm btn-ghost log-del-btn", title: "Удалить лог" },
+            "🗑",
+          );
+          del.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            const full = cur ? `${cur}/${e.name}` : e.name;
+            confirmModal(
+              "Удалить лог",
+              `Файл ${full} будет удалён`,
+              "УДАЛИТЬ",
+              async () => {
+                try {
+                  const sub = cur ? `&dir=${encodeURIComponent(cur)}` : "";
+                  await api(`/logs/${encodeURIComponent(e.name)}?${q}${sub}`, {
+                    method: "DELETE",
+                  });
+                  toast(`Лог удалён: ${full}`);
+                  st.logPath = ""; // папка могла стать пустой — на корень
+                  render();
+                } catch (ex) {
+                  toast(ex.message, "err");
+                }
+              },
+            );
+          });
+          list.append(h("div", { class: "prompt-item-row" }, btn, del));
         }
       }
       if (!entries.length) {
@@ -3592,6 +3700,29 @@ function viewProject(section, name) {
       }, 1500);
     });
     renderList();
+    const clearAll = h(
+      "button",
+      { class: "btn btn-sm btn-danger" },
+      "Очистить все",
+    );
+    clearAll.disabled = !all.length;
+    clearAll.addEventListener("click", () =>
+      confirmModal(
+        "Очистить все логи",
+        `Будут удалены все *.log в logs/ (${all.length} шт.)`,
+        "ОЧИСТИТЬ",
+        async () => {
+          try {
+            await api(`/logs?${q}`, { method: "DELETE" });
+            toast("Все логи удалены");
+            st.logPath = "";
+            render();
+          } catch (ex) {
+            toast(ex.message, "err");
+          }
+        },
+      ),
+    );
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
@@ -3599,6 +3730,7 @@ function viewProject(section, name) {
       h("span", { class: "spacer" }),
       meta,
       follow,
+      clearAll,
     );
     return h("div", { class: "files-wrap" }, toolbar, list, lPager, pre);
   }

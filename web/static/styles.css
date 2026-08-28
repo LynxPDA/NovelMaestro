@@ -1288,6 +1288,18 @@ a.fname:hover {
   color: var(--accent);
   border-color: var(--accent);
 }
+.prompt-item-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.prompt-item-row .prompt-item {
+  flex: 1;
+}
+.log-del-btn {
+  padding: 2px 8px;
+  font-size: 13px;
+}
 
 /* ── Дашборд (W3) ─────────────────────────────────────────── */
 .dash-card {
