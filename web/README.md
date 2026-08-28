@@ -250,7 +250,8 @@ Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
 | GET/PUT/DELETE | `/api/files`, `/api/file`, `/api/upload`, `/api/download` | файлы (`download?inline=1` — предпросмотр); чтение отсутствующего файла — `missing: true` + пустой `content` (редактор создаёт файл при сохранении); `upload` с пустым `dest` — корень проекта (поля files с `dir=""`) |
 | POST | `/api/mkdir` (`?project=&path=` или body) | создание пустого каталога проекта; дубль/эскейп → 400 |
 | POST | `/api/file/rename` (`{project, path, new_name}`) | переименование файла ИЛИ каталога проекта; нет исходника → 404, занято → 400, недопустимое имя → 400 |
-| GET | `/api/stages`, `/api/stages/{k}/spec\|options` | стадии, формы; `spec.preset.params` — параметры «Простого режима» (дефолты полей + overrides); `options.chapters.ids` — реальные главы |
+| GET | `/api/stages`, `/api/stages/{k}/spec\|options` | стадии, формы; `spec.preset.params` — параметры «Простого режима» (дефолты полей + overrides); `options.chapters.ids` — реальные главы; epub: `autosave` — настройки формы в localStorage, `noenv`-поля (textarea regexp) не пишутся в `.env` |
+| POST/GET/DELETE | `/api/stages/epub/preview` (POST — создание, GET — чтение), GET `.../preview/text?num=`, DELETE `.../preview/folder?seq=` | epub: предпросмотр разбивки — папки `00000_1_…` + размеры в kB, текст главы по номеру, удаление секции с перенумерацией на сервере (seq уходит в `skip` запуска) |
 | POST/GET | `/api/jobs`, `/api/jobs/{id}`, `/api/jobs/{id}/stream` | запуски, SSE; при лимите параллельных (`WEB_JOBS_LIMIT`) — **429** (H2); вторая стадия на тот же проект — **409** (M10). SSE: стартовый бурст хвоста (до 5000 строк) + события/прогресс + финальный `status`; клиент берёт лог ТОЛЬКО из стрима (payload `lines` на running не дублирует) |
 | DELETE | `/api/jobs` | очистить историю завершённых запусков (активные не трогаются) |
 | POST | `/api/jobs/{id}/stop`, DELETE `/api/jobs/{id}` | стоп (killpg)/удаление |

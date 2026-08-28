@@ -124,28 +124,40 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
     return argv
 
 
+def _epub_lines(value) -> list[str]:
+    """Строки textarea-поля epub (по одному паттерну на строку)."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(x) for x in value if str(x).strip()]
+    return [ln.strip() for ln in str(value).splitlines() if ln.strip()]
+
+
 def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
     argv = ["cli/epub_to_chapters.py"]
     if form.get("input"):
         argv += ["--input", str(form["input"])]
-    if form.get("lang"):
-        argv += ["--lang", str(form["lang"])]
+    mode = str(form.get("mode") or "toc")
+    argv += ["--mode", mode]
+    for p in _epub_lines(form.get("split_patterns")):
+        argv += ["--split-re", p]
+    for p in _epub_lines(form.get("clean_patterns")):
+        argv += ["--clean-re", p]
+    if mode == "chunk":
+        if form.get("chunk_size") not in (None, ""):
+            argv += ["--chunk-size", str(form["chunk_size"])]
+        if form.get("chunk_mask"):
+            argv += ["--chunk-mask", str(form["chunk_mask"])]
+    if form.get("title_limit") not in (None, ""):
+        argv += ["--title-limit", str(form["title_limit"])]
+    if form.get("num_offset") not in (None, ""):
+        argv += ["--num-offset", str(form["num_offset"])]
+    for s in form.get("skip") or []:
+        argv += ["--skip", str(s)]
     if form.get("polished"):
         argv += ["--polished", "1"]
-    if form.get("clean") == 0:
-        argv += ["--clean", "0"]
-    if form.get("remove_pages") == 0:
-        argv += ["--remove-pages", "0"]
-    if form.get("chapter_re"):
-        argv += ["--chapter-re", str(form["chapter_re"])]
-    if form.get("book_title"):
-        argv += ["--book-title", str(form["book_title"])]
-    if form.get("chunk_size") not in (None, ""):
-        argv += ["--chunk-size", str(form["chunk_size"])]
     if form.get("clean_output"):
         argv += ["--clean-output"]
-    if form.get("dry_run"):
-        argv += ["--dry-run"]
     return argv
 
 
@@ -493,40 +505,66 @@ STAGE_SPECS: dict[str, dict] = {
         "title": "Разбор исходника на главы",
         "script": "epub_to_chapters.py",
         "build": build_epub_to_chapters,
+        "autosave": True,  # настройки формы — сразу в localStorage
         "fields": [
-            {"name": "input", "label": "Исходник (epub/zip/txt), пусто = автопоиск",
-             "type": "files", "dir": "source", "ext": [".epub", ".zip", ".txt"],
-             "default": ""},
-            {"name": "lang", "label": "Пресет языка",
-             "type": "select", "options": ["", "zh", "en", "ru"], "default": ""},
-            {"name": "polished", "label": "Полированный TXT (--polished 1)",
+            {"name": "input",
+             "label": "Исходник (обязателен, автоподхвата нет)",
+             "type": "files", "dir": "source",
+             "ext": [".epub", ".zip", ".txt"], "default": ""},
+            {"name": "mode", "label": "Режим разбивки",
+             "type": "select",
+             "options": ["toc", "regex", "chunk"],
+             "labels": {"toc": "По TOC (epub/zip)",
+                        "regex": "Ручная (regexp)",
+                        "chunk": "По чанкам"},
+             "default": "toc",
+             "help": "toc — epub/zip по структуре (TOC/spine/h1-h2); "
+                      "regex — строки-маркеры; chunk — фиксированный "
+                      "размер (СИМВОЛЫ)"},
+            {"name": "split_patterns",
+             "label": "Паттерны разбивки (regexp, по одному на строку)",
+             "type": "textarea", "rows": 4, "default": "",
+             "noenv": True,
+             "help": "Строка считается маркером, если НАЧИНАЕТСЯ с "
+                      "любого паттерна; вся строка становится заголовком "
+                      "главы; пример: «Глава \\d+»"},
+            {"name": "chunk_size", "label": "Размер чанка, СИМВОЛЫ",
+             "type": "number", "default": "7000",
+             "help": "режим «по чанкам»"},
+            {"name": "chunk_mask",
+             "label": "Маска названия чанка",
+             "type": "text", "default": "Глава {num}",
+             "help": "{num} — номер; пример: «Часть {num}» → "
+                      "00000_1_Часть_1…"},
+            {"name": "clean_patterns",
+             "label": "Очистки текста (regexp, по одному на строку)",
+             "type": "textarea", "rows": 3, "default": "",
+             "noenv": True,
+             "help": "Каждый паттерн удаляет все совпадения из текста; "
+                      "пустые строки сжимаются; пример: «^本章完»"},
+            {"name": "title_limit",
+             "label": "Длина названия каталога, СИМВОЛЫ",
+             "type": "number", "default": "50",
+             "help": "имя папки обрезается; первая строка файла — "
+                      "полный заголовок"},
+            {"name": "num_offset",
+             "label": "Смещение нумерации (первый номер)",
+             "type": "number", "default": "1",
+             "help": "875 → первая папка 000_875_… (нули добивают "
+                      "ширину 6)"},
+            {"name": "polished", "label": "Полированный TXT (polished.txt)",
              "type": "bool", "default": False},
-            {"name": "clean", "label": "Чистки (--clean 0 = выключить)",
-             "type": "select", "options": ["1", "0"], "default": "1"},
-            {"name": "remove_pages", "label": "Номера страниц (0 = не убирать)",
-             "type": "select", "options": ["1", "0"], "default": "1"},
-            {"name": "chapter_re",
-             "label": "Маркер главы (regex, пусто = пресет)",
-             "type": "text", "default": ""},
-            {"name": "book_title",
-             "label": "Название книги (удаляется из заголовков)",
-             "type": "text", "default": ""},
-            {"name": "chunk_size",
-             "label": "Чанк фоллбэка (нет маркеров), СИМВОЛЫ",
-             "type": "number", "default": "7000"},
             {"name": "clean_output",
              "label": "Очистить папки глав перед записью",
-             "type": "bool", "default": False},
-            {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
              "type": "bool", "default": False},
         ],
         "preset": {
             "title": "Разобрать исходник",
-            "desc": "Автопоиск исходника в source/, пресет языка zh, "
-                    "чистки и уборка номеров страниц включены",
-            "overrides": {"lang": "zh"},
+            "desc": "Автоматическая разбивка epub/zip по TOC; txt не "
+                    "принимается; исходник выбирается вручную",
+            "overrides": {"mode": "toc"},
         },
-        "simple": ["input", "lang"],
+        "simple": ["input"],
     },
     "translate_check": {
         "title": "Проверка перевода",

@@ -1,106 +1,102 @@
-# TODO — Запуски: Wiki (LLM), Компиляция TXT/EPUB/FB2, Проекты: «Главы»
+# TODO — Переработка «epub · Разбор исходника на главы» (CLI + web)
 
-Статус: **реализовано**. Три группы фич — в одном цикле (коммиты
-`feat(wiki)`, `feat(compile)`, `feat(api)` …). Невыполненное — ниже.
+Статус: **готово**. Полная переработка стадии `epub`: новые режимы,
+каноничные имена каталогов с настраиваемой длиной, предпросмотр с
+удалением/перенумерацией, автосохранение настроек.
 
----
+## Исследование (факты, на которых строится план)
 
-## 1. Запуски — Создание Wiki (LLM) — ✅ выполнено
+- Канон `parse_chapter_id` (core/common.py): папка `<нули>_<номер>_<заголовок>`,
+  нули добивают ширину 6 — `00000_1`, `0000_85`, `000_177`, `0_12345`.
+  Текущий `write_section` уже так делает (`zeros = 6 - len(counter)`).
+  Смещение 875 → первая папка `000_875_…` (ширина сохраняется).
+- Текущий скрипт (1044 строки): пресеты языков zh/en/ru, `Patterns`,
+  `process_archive`/`process_txt`/`split_and_write`, `--lang`, автопоиск
+  в `source/`, `--clean/--remove-pages/--book-title/--move-done`.
+- Web: `web/stages.py::build_epub_to_chapters` + спека (input/lang/polished/
+  clean/remove_pages/chapter_re/book_title/chunk_size/clean_output/dry_run);
+  SPA — generic-форма (buildField), пресет простого режима `{input, lang}`.
+- R9: настройки запусков пишутся в `.env` проекта при запуске; предзаполнение
+  из `.env` в `_stage_spec`. Многострочные regexp-поля в .env не пишем
+  (перевод строк → пробелы ломает «по одному на строку»).
+- UI-предпочтения — localStorage (AGENTS §7); автосохранение настроек
+  epub-формы делаем в localStorage по проекту.
+- Предпросмотр: CLI-режим `--preview-json tmp/epub_preview.json` (секции +
+  тексты), API читает JSON; удаление/перенумерация — правка JSON на сервере;
+  запуск получает `--skip` из предпросмотра (удаления переносятся в реальный
+  разбор).
 
-### 1.1 Источник текста: «Готовый txt» ИЛИ «Собрать из глав»
+## План
 
-- `cli/wiki.py`: `file` — опциональный (`nargs="?"`); добавлены
-  `--compile-chapters` (склейка `chapters/*` в память, как в Создании
-  глоссария), `--type` (chapter/translated/redacted/polished),
-  `--start`/`--end` (диапазон, ГЛАВЫ); нет глав — ранний выход.
-- `web/stages.py::build_wiki`: `source` select (txt/chapters) →
-  `--compile-chapters` + тип/диапазон, либо входной файл.
-- SPA: переключатель источника прячет `file` (эксперт) / `type` (простой);
-  диапазон глав — как у ner.
-- Тесты: `test_main_compile_chapters`, `test_main_compile_chapters_missing`,
-  `test_main_no_file_no_compile`, `test_build_wiki_compile_chapters`.
+### 1. CLI — `cli/epub_to_chapters.py` (полная переработка)
 
-### 1.2 Оглавление и якоря-ссылки (обычный режим)
+- [x] Три режима `--mode`: `toc` (по структуре epub/zip: spine/TOC/h1-h2,
+      дубль заголовка главы в тексте удаляется), `regex` (строки-маркеры,
+      `--split-re` по одному на строку), `chunk` (`--chunk-size`, СИМВОЛЫ;
+      название — по маске `--chunk-mask`, обязателен `{num}`).
+- [x] Вход только .epub/.zip/.txt; `--input` обязателен (автопоиск убран);
+      TOC-режим отклоняет txt; regex/chunk принимают txt и epub/zip.
+- [x] Пресеты языков удалены (LANG_PRESETS/Patterns/--lang и все
+      языковые паттерны).
+- [x] Очистки: `--clean-re` (append, по одному на строку) — удаляет все
+      совпадения из текста (MULTILINE — якоря ^/$ работают построчно).
+- [x] Имена каталогов: `safe_folder` (недопустимые символы Windows+Linux,
+      пробелы → `_`, зарезервированные имена, точки/пробелы в конце),
+      `--title-limit` (СИМВОЛЫ, дефолт 50), первая строка файла — заголовок.
+- [x] `--num-offset` (первый номер, дефолт 1), `--skip N` (append) —
+      пропуск секции по исходному seq с перенумерацией.
+- [x] `--preview-json PATH` — вместо записи пишет JSON
+      `{source, num_offset, title_limit, entries: [{seq, num, folder, heading, text}]}`.
+- [x] `--polished`, `--clean-output`, `--dry-run`, `--report`, сверка
+      ДО/ПОСЛЕ — сохранить.
 
-- `cli/wiki.py`: `--toc`/`--no-toc`, `--toc-links`/`--no-toc-links`;
-  оглавление и якоря `<a id="slug">` — только в обычном Markdown;
-  Rulate — всегда без содержания.
-- `web/stages.py`: `toc`/`toc_links` (bool, дефолт True) → флаги;
-  SPA прячет их при формате ≠ md.
-- Тесты: `test_assemble_toc_toggles`, `test_build_wiki_toc_off`,
-  `test_main_toc_off`.
+### 2. Web-спека — `web/stages.py`
 
-### 1.3 Rulate HTML (вместо Markdown)
+- [x] Новые поля: input (files, source, epub/zip/txt), mode (select toc/regex/
+      chunk), split_patterns (textarea, noenv), chunk_size (СИМВОЛЫ),
+      chunk_mask («Глава {num}»), clean_patterns (textarea, noenv),
+      title_limit (СИМВОЛЫ, 50), num_offset (1), polished, clean_output.
+- [x] `build_epub_to_chapters`: --mode всегда; split/clean — по строкам
+      (append); chunk-поля только в chunk-режиме; skip — списком.
+- [x] `autosave: True` в спеке; noenv-поля не пишутся/не читаются из .env
+      (`_persist_run_params`, `_stage_spec` в api.py).
 
-- `cli/wiki.py`: `--rulate-html`, вывод по умолчанию `wiki.txt`
-  (HTML-разметка внутри txt, как просил пользователь);
-- `cli/wiki.py`: `--as-chapter` — вики как дополнительная последняя
-  глава `chapters/00000_{N+1}_Wiki_Новеллы/` (один файл выбранного
-  типа: `--save-type` translated/redacted/polished, по умолчанию
-  polished; chapter.txt не пишется), название «Wiki Новеллы» простым
-  текстом, статьи в rulate-стиле (заголовки глубже); компилятор берёт заголовок главы из
-  первой непустой строки, когда нет «Глава N» — вики-глава попадает в
-  TOC epub/fb2, `###`/`####` остаются текстом и TOC не ломают;
-  `md_to_html`: `##` → `<p><strong><span style="font-size:20px">…`,
-  `###` → 16px, списки → `<ul>`, `---` → `<hr />` (и межстатейный
-  разделитель — `<hr />`), экранирование HTML.
-- `web/stages.py`: `format` select (md/rulate-md/rulate-html) →
-  `--rulate-mode`/`--rulate-html`; старый чекбокс `rulate_mode` убран.
-- Тесты: `test_assemble_rulate_html`, `test_md_to_html_escaping`,
-  `test_slugify`, `test_main_rulate_html`, `test_build_wiki_rulate_html`.
+### 3. API предпросмотра — `web/api.py`
 
----
+- [x] `POST /api/stages/epub/preview` {params, skip} — subprocess скрипта с
+      `--preview-json tmp/epub_preview.json`, ответ — summary (папки+размеры).
+- [x] `GET /api/stages/epub/preview` — summary из JSON.
+- [x] `GET /api/stages/epub/preview/text?num=` — текст главы.
+- [x] `DELETE /api/stages/epub/preview/folder?seq=` — удаление секции +
+      перенумерация (префикс ширины 6 от num_offset).
 
-## 2. Запуски — Компиляция TXT/EPUB/FB2 — ✅ выполнено
+### 4. SPA — `web/static/run-views.js` + styles.css
 
-- Убрано поле «Папка для compiled_*/book_*» (`tmp_dir`) из формы и
-  `--tmp-dir` из сборки argv (комментарий в stages.py).
-- Чекбоксы — СЛЕВА от текста (`label.field-check` + CSS): checkbox + label
-  в строку во всех полях (не только компиляция).
-- «Файл страницы поддержки» — автозаполнение `source/donate.txt` при
-  автодетекте (autofile; баг был в web/main.py: игнорировался
-  `--projects-dir` — исправлен на `projects_root=projects_root`).
-- Переименования: «Без страницы поддержки (--no-donate)» → «Без страницы
-  поддержки»; «Глав в части для *-chunks» → «Глав в части» (labels
-  режимов — TXT/EPUB/FB2 частями).
-- Режим `titles` выпилен: из CLI (`export_titles` удалён, choice убран) и
-  из формы; legacy-файлы titles по-прежнему читаются (совместимость).
-- Тесты: `test_cac_titles_mode_removed`, compile-спека в
-  `test_simple_fields_per_stage`, smoke `--help`.
+- [x] textarea-тип поля; regexp-справка (сворачиваемая, с примерами) —
+      экспертный режим.
+- [x] Автосохранение настроек epub-формы в localStorage (по проекту),
+      загрузка поверх .env/дефолтов.
+- [x] Динамическая фильтрация исходника по режиму: toc — epub/zip,
+      regex/chunk — +txt; простой режим — epub/zip; «Запустить»/предпросмотр
+      без исходника — ошибка.
+- [x] Панель предпросмотра (оба режима): кнопка «Предпросмотр»,
+      список каталогов + размер КБ + удаление с перенумерацией, выбор главы
+      и текст; правка настроек — предпросмотр устаревает.
+- [x] Запуск переносит skip-список предпросмотра в params.
 
----
+### 5. Тесты
 
-## 3. Проекты — вкладка «Главы» — ✅ выполнено
+- [x] `tests/test_epub_to_chapters.py` — полная переработка: toc/regex/chunk,
+      safe_folder/folder_name (ширина 6, лимит 50), offset, skip+перенумерация,
+      preview_json, main (required input, bad suffix, clean-output, preview).
+- [x] `tests/test_cli_units.py` — e2c-тесты под новые сигнатуры.
+- [x] `tests/test_web_jobs.py` — build-тесты (mode/split-re/clean-re/skip/
+      chunk), simple = [input], preset spot-checks.
+- [x] `tests/test_web_api.py` — preview-флоу: создание, текст, удаление+
+      перенумерация, offset, ошибки (txt в toc, 404).
 
-- Вкладка «Главы» между «Проверка» и «Статус» (`project-views.js`).
-- Дропдаун типа файлов (chapters/translated/redacted/polished),
-  список строк: слева номер главы, справа редактируемое поле
-  (первая непустая строка файла), одна кнопка «Сохранить».
-- `core/common.py`: `read_chapter_titles` / `write_chapter_titles`
-  (первая непустая строка; замена с NFC, остальной текст и перевод
-  строки сохраняются; `missing`/`warnings`).
-- API: `GET/PUT /api/projects/{s}/{n}/chapters/titles` (type,
-  `{titles: {номер: строка}}`).
-- Тесты: `test_read_chapter_titles`, `test_write_chapter_titles`,
-  `test_project_chapters_titles` (web API); доки — AGENTS.md §6,
-  core/README.md, web/README.md, test_docs.py.
+### 6. Доки и коммит
 
----
-
-## 4. Сопутствующие правки
-
-- `web/main.py`: фикс `--projects-dir` (сервер смотрел в репозиторный
-  `projects/` вместо переданного каталога) — причина «невидимых»
-  autofile-файлов в эмпирических тестах.
-- `tests/test_web_jobs.py`: `rulate_mode` → `format`/`toc`/`toc_links`,
-  wiki simple-поля, новые build-тесты.
-- `cli/wiki.py`/`cli/clean_and_compile.py` — smoke-прогоны `--help`,
-  wiki e2e на стаб-LLM (SSE): compile-chapters, rulate-md, rulate-html.
-
----
-
-## 5. Не делал (вне объёма)
-
-- **U4. Разбить project-views.js** — ⏸️ отдельная задача.
-- **U12. Согласованность matcher JS↔Python** — ⏸️ отдельная задача.
-- **B7. Портабельный зомби-детект** — ⏸️ (см. прежний TODO).
+- [x] `web/README.md` — описание стадии epub, API-таблица (preview-роуты).
+- [ ] `python3 -m pytest tests/ -q` зелёные; `node --check` run-views;
+      smoke `--help`; коммит+пуш.

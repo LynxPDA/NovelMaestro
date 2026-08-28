@@ -620,26 +620,44 @@ def test_script_path(tmp_path):
 def test_build_epub_to_chapters_defaults():
     argv = build_command("epub", {}, {})
     assert argv[0] == "cli/epub_to_chapters.py"
-    # дефолты: ничего не добавляется
-    assert argv == ["cli/epub_to_chapters.py"]
+    # дефолты: режим toc всегда явный, остальное не добавляется
+    assert argv == ["cli/epub_to_chapters.py", "--mode", "toc"]
 
 
 def test_build_epub_to_chapters_full():
-    form = {"input": "source/book.epub", "lang": "zh", "polished": True,
-            "clean": 0, "remove_pages": 0, "dry_run": True,
-            "chapter_re": "第\\d+章", "book_title": "Книга",
-            "chunk_size": "5000", "clean_output": True}
+    form = {"input": "source/book.epub", "mode": "regex",
+            "split_patterns": ["Глава \\d+", "^第[0-9]+章"],
+            "clean_patterns": "^本章完",
+            "chunk_size": "5000", "chunk_mask": "Часть {num}",
+            "title_limit": "40", "num_offset": "875",
+            "skip": [2, 5], "polished": True, "clean_output": True}
     argv = build_command("epub", form, {})
     assert "--input" in argv and "source/book.epub" in argv
-    assert "--lang" in argv and "zh" in argv
+    assert "--mode" in argv and "regex" in argv
+    # паттерны — по одному аргументу на строку
+    assert argv.count("--split-re") == 2
+    assert "Глава \\d+" in argv and "^第[0-9]+章" in argv
+    assert "--clean-re" in argv and "^本章完" in argv
+    # чанковые поля — только в chunk-режиме
+    assert "--chunk-size" not in argv and "--chunk-mask" not in argv
+    assert "--title-limit" in argv and "40" in argv
+    assert "--num-offset" in argv and "875" in argv
+    assert "--skip" in argv and "2" in argv and "5" in argv
     assert "--polished" in argv and "1" in argv
-    assert "--clean" in argv and "0" in argv
-    assert "--remove-pages" in argv and "0" in argv
-    assert "--dry-run" in argv
-    assert "--chapter-re" in argv and "第\\d+章" in argv
-    assert "--book-title" in argv and "Книга" in argv
-    assert "--chunk-size" in argv and "5000" in argv
     assert "--clean-output" in argv
+    # chunk-режим: маска и размер добавляются
+    argv2 = build_command("epub",
+                          {"mode": "chunk", "chunk_size": "3000",
+                           "chunk_mask": "Часть {num}"}, {})
+    assert "--mode" in argv2 and "chunk" in argv2
+    assert "--chunk-size" in argv2 and "3000" in argv2
+    assert "--chunk-mask" in argv2 and "Часть {num}" in argv2
+    # текстarea-поле может прийти строкой с переводами строк
+    argv3 = build_command("epub",
+                          {"mode": "regex",
+                           "split_patterns": "Глава \\d+\n^第[0-9]+章"},
+                          {})
+    assert argv3.count("--split-re") == 2
 
 
 def test_build_translate_check():
@@ -760,7 +778,7 @@ def test_simple_fields_per_stage():
     """Состав простого режима по стадиям (согласовано с ТЗ): какие
     поля показываются в простом режиме к карточке пресета."""
     expected = {
-        "epub": ["input", "lang"],
+        "epub": ["input"],
         "ner": ["mode", "prompt_file", "two_pass"],
         "ner_check": ["prompt_file", "passes"],
         "pipeline": ["action", "prompt_file"],
@@ -831,9 +849,11 @@ def test_preset_spot_checks():
     assert params["action"] == "8"
     assert params["jobs"] == "4"
     assert "start" not in params and "end" not in params
-    # epub: автопоиск исходника + пресет языка zh
+    # epub: простой режим — только TOC-разбивка, исходник обязателен
+    # (автоподхвата нет); пресет фиксирует режим toc
     params = preset_params(STAGE_SPECS["epub"])
-    assert params["lang"] == "zh"
+    assert params["mode"] == "toc"
+    assert params["title_limit"] == "50"
     assert "input" not in params
     # wiki: ner.json + дефолтные настройки
     params = preset_params(STAGE_SPECS["wiki"])

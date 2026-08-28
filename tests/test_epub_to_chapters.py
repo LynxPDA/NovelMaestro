@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""cli/epub_to_chapters.py — разбор EPUB: spine-порядок,
-process_archive (реальная запись, dry-run, пустой архив)."""
+"""cli/epub_to_chapters.py — новая разбивка: канон каталогов (ширина 6),
+режимы toc/regex/chunk, offset/skip, предпросмотр, запись."""
+import json
 import sys
 import zipfile
 from pathlib import Path
@@ -13,6 +14,123 @@ sys.path.insert(0, str(ROOT / "cli"))
 import epub_to_chapters as E2C  # noqa: E402
 
 
+# ── канон имён каталогов ──────────────────────────────────────────────
+def test_folder_name_canon_width6():
+    """Нули добивают ширину 6: 00000_1, 0000_12, 000_177, 0_12345."""
+    assert E2C.folder_name(1, "Глава 1") == "00000_1_Глава_1"
+    assert E2C.folder_name(12, "Глава 1") == "0000_12_Глава_1"
+    assert E2C.folder_name(177, "Глава 1") == "000_177_Глава_1"
+    assert E2C.folder_name(12345, "Глава 1") == "0_12345_Глава_1"
+    assert E2C.folder_name(123456, "Глава 1") == "123456_Глава_1"
+
+
+def test_folder_name_sanitize():
+    """Недопустимые символы (Windows и Linux) → '_', пробелы → '_',
+    лимит длины, зарезервированные имена Windows."""
+    assert E2C.folder_name(1, "Глава: 1?") == "00000_1_Глава_1"
+    assert E2C.folder_name(1, "CON") == "00000_1_Chapter"
+    assert E2C.folder_name(1, "  Глава  ") == "00000_1_Глава"
+    assert E2C.folder_name(1, "x" * 200) == "00000_1_" + "x" * 50
+    assert E2C.folder_name(1, "a/b\\c") == "00000_1_a_b_c"
+    # пустой заголовок — запасное имя
+    assert E2C.folder_name(1, "") == "00000_1_Chapter"
+
+
+def test_safe_folder_title_limit():
+    assert E2C.safe_folder("Глава", 3) == "Гла"
+    assert E2C.safe_folder("Глава", 0) == "Глава"  # 0 = без лимита
+
+
+# ── TXT: regexp-режим ─────────────────────────────────────────────────
+def _write_txt(path: Path, text: str):
+    path.write_text(text, encoding="utf-8")
+
+
+def test_split_input_regex(tmp_path):
+    txt = tmp_path / "book.txt"
+    _write_txt(txt, "Пролог\nвступление\nГлава 1\nпервый\nГлава 2\nвторой\n")
+    split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
+    entries, before, removed = E2C.split_input(
+        txt, "regex", split_res, [], title_limit=50)
+    assert before == len("Пролог\nвступление\nГлава 1\nпервый\nГлава 2\nвторой\n")
+    assert removed == []
+    # пролог — непустая преамбула → секция «Пролог»
+    assert [e["heading"] for e in entries] == ["Пролог", "Глава 1", "Глава 2"]
+    assert [e["num"] for e in entries] == [1, 2, 3]
+    assert entries[1]["body"] == "первый"
+
+
+def test_split_input_regex_offset(tmp_path):
+    txt = tmp_path / "book.txt"
+    _write_txt(txt, "Глава 1\nпервый\nГлава 2\nвторой\n")
+    split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
+    entries, *_ = E2C.split_input(txt, "regex", split_res, [],
+                                  num_offset=875)
+    # offset 875 → первая папка 000_875_ (ширина 6)
+    assert [e["num"] for e in entries] == [875, 876]
+    assert E2C.folder_name(entries[0]["num"], entries[0]["heading"]) \
+        == "000_875_Глава_1"
+
+
+def test_split_input_regex_skip_renumber(tmp_path):
+    txt = tmp_path / "book.txt"
+    _write_txt(txt, "Глава 1\nпервый\nГлава 2\nвторой\nГлава 3\nтретий\n")
+    split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
+    entries, *_ = E2C.split_input(txt, "regex", split_res, [],
+                                  skips={2})
+    # seq 2 (Глава 2) пропущен, остальные перенумерованы с 1
+    assert [e["seq"] for e in entries] == [1, 3]
+    assert [e["num"] for e in entries] == [1, 2]
+    assert [e["heading"] for e in entries] == ["Глава 1", "Глава 3"]
+
+
+def test_split_input_regex_cleanups(tmp_path):
+    txt = tmp_path / "book.txt"
+    _write_txt(txt, "Глава 1\n本章完\nпервый\n\n\nГлава 2\nвторой\n")
+    split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
+    clean_res = [E2C._safe_compile("^本章完$", "clean-re",
+                                   multiline=True)]
+    entries, before, removed = E2C.split_input(txt, "regex", split_res,
+                                               clean_res)
+    assert "本章完" in removed[0]
+    # пустые строки сжаты, маркер удалён из тела
+    assert "\n\n\n" not in entries[0]["body"]
+    assert "本章完" not in entries[0]["body"]
+
+
+def test_split_input_regex_no_match(tmp_path, capsys):
+    txt = tmp_path / "book.txt"
+    _write_txt(txt, "просто текст без маркеров\n")
+    with pytest_raises():
+        E2C.split_input(txt, "regex", [E2C._safe_compile("Глава", "split-re")],
+                        [])
+
+
+def pytest_raises():
+    import pytest
+    return pytest.raises(SystemExit)
+
+
+# ── TXT: chunk-режим ──────────────────────────────────────────────────
+def test_split_input_chunk(tmp_path):
+    txt = tmp_path / "book.txt"
+    _write_txt(txt, "текст без маркеров. " * 800)
+    entries, *_ = E2C.split_input(txt, "chunk", [], [],
+                                  chunk_size=3000,
+                                  chunk_mask="Часть {num}")
+    assert len(entries) >= 4
+    assert entries[0]["heading"] == "Часть 1"
+    assert [e["num"] for e in entries] == list(range(1, len(entries) + 1))
+
+
+def test_split_input_chunk_mask_requires_num(tmp_path, capsys):
+    txt = tmp_path / "book.txt"
+    _write_txt(txt, "текст. " * 100)
+    with pytest_raises():
+        E2C.split_input(txt, "chunk", [], [], chunk_mask="Часть")
+
+
+# ── EPUB: структура (spine/TOC/h1-h2) ────────────────────────────────
 def _make_epub(path: Path, with_spine=True):
     ch1 = ("<html><head><title>Глава 1</title></head>"
            "<body><p>Глава 1</p><p>текст один</p></body></html>")
@@ -33,74 +151,6 @@ def _make_epub(path: Path, with_spine=True):
         zf.writestr("OEBPS/ch2.xhtml", ch2)
 
 
-def test_spine_order(tmp_path):
-    epub = tmp_path / "book.epub"
-    _make_epub(epub, with_spine=True)
-    with zipfile.ZipFile(epub) as zf:
-        order = E2C._get_spine_order(zf)
-    assert order == ["OEBPS/ch1.xhtml", "OEBPS/ch2.xhtml"]
-    # без OPF → None
-    epub2 = tmp_path / "nospine.epub"
-    _make_epub(epub2, with_spine=False)
-    with zipfile.ZipFile(epub2) as zf:
-        assert E2C._get_spine_order(zf) is None
-
-
-def test_process_archive(tmp_path):
-    epub = tmp_path / "book.epub"
-    _make_epub(epub)
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, before, after, removed = E2C.process_archive(
-        str(epub), pat, True, True, False, out)
-    assert n >= 2 and before > 0 and after > 0
-    assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
-    assert (out / "00000_2_Глава_2" / "chapter.txt").is_file()
-    content = (out / "00000_1_Глава_1" / "chapter.txt").read_text(encoding="utf-8")
-    assert "текст один" in content
-
-
-def test_process_archive_empty(tmp_path, capsys):
-    empty = tmp_path / "empty.epub"
-    with zipfile.ZipFile(empty, "w") as zf:
-        zf.writestr("readme.md", "не html")
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    out = tmp_path / "chapters"
-    out.mkdir()
-    n, *_ = E2C.process_archive(str(empty), pat, True, True, False, out)
-    assert n == 0
-    assert "нет HTML" in capsys.readouterr().out
-
-
-def test_process_archive_zip_of_txt(tmp_path):
-    """ZIP без HTML, только txt — разбирается как TXT (не «0 файлов»)."""
-    z = tmp_path / "book.zip"
-    with zipfile.ZipFile(z, "w") as zf:
-        zf.writestr("1.txt", "Глава 1\nтекст один\n")
-        zf.writestr("2.txt", "Глава 2\nтекст два\n")
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    out = tmp_path / "chapters"
-    out.mkdir()
-    n, *_ = E2C.process_archive(str(z), pat, True, True, False, out)
-    assert n == 2
-    assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
-    assert (out / "00000_2_Глава_2" / "chapter.txt").is_file()
-
-
-def test_process_archive_dry_run(tmp_path):
-    epub = tmp_path / "book.epub"
-    _make_epub(epub)
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, *_ = E2C.process_archive(str(epub), pat, True, True, False, out,
-                                dry_run=True)
-    assert n >= 2
-    assert list(out.iterdir()) == []  # ничего не записано
-
-
-# ── структурный путь: один xhtml ≈ одна секция (≥3 файлов) ───────────
 def _make_epub_n(path: Path, n=4, with_toc=True):
     """n файлов с h1; spine-порядок; toc.ncx с заголовками «Глава N»."""
     container = ('<?xml version="1.0"?><container><rootfiles><rootfile '
@@ -128,37 +178,39 @@ def _make_epub_n(path: Path, n=4, with_toc=True):
                 f"<body><h1>Глава {i}</h1><p>текст {i}</p></body></html>")
 
 
-def test_process_archive_structural(tmp_path):
+def test_spine_order(tmp_path):
+    epub = tmp_path / "book.epub"
+    _make_epub(epub, with_spine=True)
+    with zipfile.ZipFile(epub) as zf:
+        order = E2C._get_spine_order(zf)
+    assert order == ["OEBPS/ch1.xhtml", "OEBPS/ch2.xhtml"]
+    epub2 = tmp_path / "nospine.epub"
+    _make_epub(epub2, with_spine=False)
+    with zipfile.ZipFile(epub2) as zf:
+        assert E2C._get_spine_order(zf) is None
+
+
+def test_split_input_toc(tmp_path):
     epub = tmp_path / "book.epub"
     _make_epub_n(epub, n=4)
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, before, after, removed = E2C.process_archive(
-        str(epub), pat, True, True, False, out)
-    assert n == 4
-    for i in range(1, 5):
-        f = out / f"00000_{i}_Глава_{i}" / "chapter.txt"
-        assert f.is_file()
-    # заголовок из TOC, h1-строка не дублируется в теле
-    c1 = (out / "00000_1_Глава_1" / "chapter.txt").read_text(
-        encoding="utf-8")
-    assert c1 == "Глава 1\n\nтекст 1\n"
+    entries, before, removed = E2C.split_input(epub, "toc", [], [])
+    assert before > 0 and removed == []
+    assert [e["heading"] for e in entries] == \
+        ["Глава 1", "Глава 2", "Глава 3", "Глава 4"]
+    assert [e["num"] for e in entries] == [1, 2, 3, 4]
+    # дубль заголовка из тела убран: «Глава 1» — только заголовок секции
+    assert entries[0]["body"] == "текст 1"
 
 
-def test_process_archive_structural_no_toc(tmp_path):
+def test_split_input_toc_no_toc(tmp_path):
     """Без toc.ncx заголовок берётся из <title>/<h1>."""
     epub = tmp_path / "book.epub"
     _make_epub_n(epub, n=3, with_toc=False)
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, *_ = E2C.process_archive(str(epub), pat, True, True, False, out)
-    assert n == 3
-    assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
+    entries, *_ = E2C.split_input(epub, "toc", [], [])
+    assert [e["heading"] for e in entries] == ["Глава 1", "Глава 2", "Глава 3"]
 
 
-def test_process_archive_h1_split(tmp_path):
+def test_split_input_toc_h1_split(tmp_path):
     """Несколько h1 в одном файле — внутренний split."""
     epub = tmp_path / "book.epub"
     container = ('<?xml version="1.0"?><container><rootfiles><rootfile '
@@ -180,16 +232,13 @@ def test_process_archive_h1_split(tmp_path):
         zf.writestr("OEBPS/c2.xhtml", c2)
         zf.writestr("OEBPS/c3.xhtml",
                     "<html><body><h1>Глава 3</h1><p>текст три</p></body></html>")
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, *_ = E2C.process_archive(str(epub), pat, True, True, False, out)
-    assert n == 4
-    assert (out / "00000_2_Глава_2" / "chapter.txt").is_file()
-    assert (out / "00000_3_Глава_2.5" / "chapter.txt").is_file()
+    entries, *_ = E2C.split_input(epub, "toc", [], [])
+    assert [e["heading"] for e in entries] == \
+        ["Глава 1", "Глава 2", "Глава 2.5", "Глава 3"]
+    assert [e["num"] for e in entries] == [1, 2, 3, 4]
 
 
-def test_process_archive_toc_service(tmp_path):
+def test_split_input_toc_service(tmp_path):
     """Служебный пункт TOC («Информация») — не глава."""
     epub = tmp_path / "book.epub"
     container = ('<?xml version="1.0"?><container><rootfiles><rootfile '
@@ -221,137 +270,132 @@ def test_process_archive_toc_service(tmp_path):
             zf.writestr(
                 f"OEBPS/c{i}.xhtml",
                 f"<html><body><h1>Глава {i}</h1><p>текст {i}</p></body></html>")
+    entries, *_ = E2C.split_input(epub, "toc", [], [])
+    assert [e["heading"] for e in entries] == ["Глава 1", "Глава 2", "Глава 3"]
+
+
+def test_split_input_toc_rejects_txt(tmp_path, capsys):
+    txt = tmp_path / "book.txt"
+    _write_txt(txt, "текст\n")
+    with pytest_raises():
+        E2C.split_input(txt, "toc", [], [])
+
+
+def test_split_input_zip_of_txt_regex(tmp_path):
+    """ZIP с txt внутри — текст, разбивается regexp."""
+    z = tmp_path / "book.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("1.txt", "Глава 1\nтекст один\n")
+        zf.writestr("2.txt", "Глава 2\nтекст два\n")
+    split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
+    entries, *_ = E2C.split_input(z, "regex", split_res, [])
+    assert [e["heading"] for e in entries] == ["Глава 1", "Глава 2"]
+
+
+# ── запись и предпросмотр ────────────────────────────────────────────
+def _entries3():
+    return [
+        {"seq": 1, "num": 1, "heading": "Глава 1", "body": "первый"},
+        {"seq": 2, "num": 2, "heading": "Глава 2", "body": "второй"},
+    ]
+
+
+def test_write_entries(tmp_path):
+    out = tmp_path / "chapters"
+    E2C.write_entries(_entries3(), out, polished=False)
+    assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
+    assert (out / "00000_2_Глава_2" / "chapter.txt").is_file()
+    c1 = (out / "00000_1_Глава_1" / "chapter.txt").read_text(
+        encoding="utf-8")
+    assert c1 == "Глава 1\n\nпервый\n"
+
+
+def test_write_entries_polished(tmp_path):
+    out = tmp_path / "chapters"
+    E2C.write_entries(_entries3(), out, polished=True)
+    assert (out / "00000_1_Глава_1" / "chapter1_polished.txt").is_file()
+
+
+def test_write_entries_dry_run(tmp_path):
     out = tmp_path / "chapters"
     out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, *_ = E2C.process_archive(str(epub), pat, True, True, False, out)
-    assert n == 3  # инфо-страница пропущена
-    assert not (out / "00000_1_Информация").exists()
+    E2C.write_entries(_entries3(), out, polished=False, dry_run=True)
+    assert list(out.iterdir()) == []  # ничего не записано
+
+
+def test_write_entries_keeps_old_dirs(tmp_path):
+    """write_entries сам старые папки НЕ чистит — это делает main
+    (--clean-output); старые каталоги остаются на месте."""
+    out = tmp_path / "chapters"
+    (out / "00000_1_Старая").mkdir(parents=True)
+    E2C.write_entries(_entries3(), out, polished=False)
+    assert (out / "00000_1_Старая").exists()
     assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
 
 
-# ── TXT: фоллбэк-чанки, китайские числительные, ложные маркеры ───────
-def test_process_txt_chunks(tmp_path):
-    """TXT без маркеров — чанки «Часть N», не одна секция."""
-    txt = tmp_path / "book.txt"
-    txt.write_text("текст без маркеров. " * 800, encoding="utf-8")
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, *_ = E2C.process_txt(txt, pat, True, True, False, out,
-                            chunk_size=3000)
-    assert n >= 4
-    assert (out / "00000_1_Часть_1" / "chapter.txt").is_file()
-    c1 = (out / "00000_1_Часть_1" / "chapter.txt").read_text(
-        encoding="utf-8")
-    assert c1.startswith("Часть 1\n\n")
+def test_write_preview_json(tmp_path):
+    pv = tmp_path / "preview.json"
+    E2C.write_preview_json(_entries3(), pv, "book.txt", 1, 50)
+    data = json.loads(pv.read_text(encoding="utf-8"))
+    assert data["source"] == "book.txt"
+    assert data["num_offset"] == 1 and data["title_limit"] == 50
+    assert data["entries"][0]["folder"] == "00000_1_Глава_1"
+    assert data["entries"][0]["text"] == "первый"
 
 
-def test_zh_cn_markers(tmp_path):
-    """Только 第一章/第二章 — фоллбэк-маркеры (китайские числительные)."""
-    txt = tmp_path / "book.txt"
-    txt.write_text("第一章\nтекст один\n第二章\nтекст два\n",
-                   encoding="utf-8")
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["zh"], {})
-    n, *_ = E2C.process_txt(txt, pat, True, True, False, out)
-    assert n == 2
-    assert (out / "00000_1_第一章" / "chapter.txt").is_file()
-    assert (out / "00000_2_第二章" / "chapter.txt").is_file()
+def test_write_preview_json_offset(tmp_path):
+    pv = tmp_path / "preview.json"
+    entries = [{"seq": 1, "num": 875, "heading": "Глава 1", "body": "x"}]
+    E2C.write_preview_json(entries, pv, "book.txt", 875, 50)
+    data = json.loads(pv.read_text(encoding="utf-8"))
+    assert data["entries"][0]["folder"] == "000_875_Глава_1"
 
 
-def test_zh_no_false_marker(tmp_path):
-    """«详见第5章…» не маркер; 第1章 — маркер (убрали .*?)."""
-    txt = tmp_path / "book.txt"
-    txt.write_text("第1章\n详见第5章的内容\n第2章\nтекст\n",
-                   encoding="utf-8")
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["zh"], {})
-    n, *_ = E2C.process_txt(txt, pat, True, True, False, out)
-    assert n == 2
-    c1 = (out / "00000_1_第1章" / "chapter.txt").read_text(encoding="utf-8")
-    assert "详见第5章" in c1  # строка осталась в теле, не стала главой
-
-
-def test_zh_volume_prefix(tmp_path):
-    """卷二 第5章 — маркер, префикс тома отбрасывается."""
-    txt = tmp_path / "book.txt"
-    txt.write_text("卷二 第5章\nтекст\n", encoding="utf-8")
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["zh"], {})
-    n, *_ = E2C.process_txt(txt, pat, True, True, False, out)
-    assert n == 1
-    assert (out / "00000_1_第5章" / "chapter.txt").is_file()
-
-
-def test_ru_volume_prefix(tmp_path):
-    """Том 2. Глава 5 — маркер, префикс тома отбрасывается."""
-    txt = tmp_path / "book.txt"
-    txt.write_text("Том 2. Глава 5\nтекст\n", encoding="utf-8")
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, *_ = E2C.process_txt(txt, pat, True, True, False, out)
-    assert n == 1
-    assert (out / "00000_1_Глава_5" / "chapter.txt").is_file()
-
-
-def test_empty_section_skipped(tmp_path):
-    """Пустая секция после чисток — папки нет."""
-    txt = tmp_path / "book.txt"
-    txt.write_text("Глава 1\n\n\nГлава 2\nтекст\n", encoding="utf-8")
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, *_ = E2C.process_txt(txt, pat, True, True, False, out)
-    assert n == 1
-    assert not (out / "00000_1_Глава_1").exists()
-    assert (out / "00000_1_Глава_2" / "chapter.txt").is_file()
-
-
-def test_heading_tail_stripped(tmp_path):
-    """Хвост заголовка (完)/(Конец главы) убирается."""
-    txt = tmp_path / "book.txt"
-    txt.write_text("Глава 5. Название (Конец главы)\nтекст\n",
-                   encoding="utf-8")
-    out = tmp_path / "chapters"
-    out.mkdir()
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, *_ = E2C.process_txt(txt, pat, True, True, False, out)
-    assert n == 1
-    # точка после номера сохраняется (разделитель внутри заголовка)
-    assert (out / "00000_1_Глава_5._Название" / "chapter.txt").is_file()
-
-
-def test_main_clean_output(tmp_path, monkeypatch):
-    """--clean-output удаляет старые папки глав перед записью."""
+# ── main(): argv → файлы ─────────────────────────────────────────────
+def test_main_regex_full(tmp_path, monkeypatch):
     src = tmp_path / "book.txt"
-    src.write_text("Глава 1\nтекст\nГлава 2\nтекст\n", encoding="utf-8")
+    src.write_text("Глава 1\nтекст один\nГлава 2\nтекст два\n",
+                   encoding="utf-8")
     out = tmp_path / "chapters"
-    (out / "00000_1_Старая").mkdir(parents=True)
-    (out / "00000_2_Старая").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", [
         "epub_to_chapters.py", "--input", str(src),
-        "--output", str(out), "--lang", "ru", "--clean-output"])
+        "--mode", "regex", "--split-re", "Глава \\d+",
+        "--output", str(out), "--clean-output"])
+    E2C.main()
+    assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
+    assert (out / "00000_2_Глава_2" / "chapter.txt").is_file()
+
+
+def test_main_toc_clean_output(tmp_path, monkeypatch):
+    """--clean-output удаляет старые папки глав перед записью (epub)."""
+    epub = tmp_path / "book.epub"
+    _make_epub_n(epub, n=2)
+    out = tmp_path / "chapters"
+    (out / "00000_1_Старая").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [
+        "epub_to_chapters.py", "--input", str(epub),
+        "--mode", "toc", "--output", str(out), "--clean-output"])
     E2C.main()
     assert not (out / "00000_1_Старая").exists()
     assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
 
 
-def test_main_warns_old_dirs(tmp_path, monkeypatch, capsys):
-    """Без --clean-output — предупреждение, старые папки целы."""
-    src = tmp_path / "book.txt"
-    src.write_text("Глава 1\nтекст\n", encoding="utf-8")
-    out = tmp_path / "chapters"
-    (out / "00000_1_Старая").mkdir(parents=True)
+def test_main_requires_input(tmp_path, monkeypatch, capsys):
+    """Без --input — ошибка (автоподхвата нет)."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", [
-        "epub_to_chapters.py", "--input", str(src),
-        "--output", str(out), "--lang", "ru"])
-    E2C.main()
-    assert (out / "00000_1_Старая").exists()
-    assert "уже есть" in capsys.readouterr().out
+    monkeypatch.setattr(sys, "argv", ["epub_to_chapters.py", "--mode", "toc"])
+    with pytest_raises():
+        E2C.main()
+    assert "--input" in capsys.readouterr().err
+
+
+def test_main_no_lang_flag(capsys):
+    """--lang удалён из argparse (unrecognized arguments)."""
+    try:
+        E2C.build_parser().parse_args(["--input", "x.epub", "--lang", "zh"])
+        raise AssertionError("--lang не должен парситься")
+    except SystemExit:
+        err = capsys.readouterr().err
+        assert "unrecognized" in err and "--lang" in err

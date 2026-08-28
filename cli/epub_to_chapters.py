@@ -3,14 +3,22 @@
 """
 Разбивает EPUB / ZIP / TXT на главы.
 
-Обычный режим:   chapters/00000_1_Заголовок/chapter.txt
-Polished режим:  chapters/00000_1_Заголовок/polished.txt
+Режимы (--mode):
+  toc    автоматическая разбивка epub/zip по структуре (spine/TOC/h1-h2);
+         TXT не принимается; дубль названия главы в тексте удаляется;
+  regex  ручная разбивка: каждая строка, начинающаяся с любого
+         --split-re, — начало новой главы (вся строка — заголовок);
+  chunk  разбивка по чанкам --chunk-size (СИМВОЛЫ), названия — по маске
+         --chunk-mask (обязателен {num}).
 
-Архив: текст из всех HTML конкатенируется (с заголовками из <title>),
-разбивается по маркерам секций (главы, прологи, эпилоги, экстра).
+Каталоги глав: <нули>_<номер>_<заголовок> — канон core.common.parse_chapter_id;
+нули добивают ширину 6: 00000_1, 0000_12, 000_177, 0_12345.
+Первая строка chapter.txt — заголовок главы; имя каталога — безопасная
+версия заголовка, обрезанная до --title-limit (СИМВОЛЫ, дефолт 50).
 """
 
 import argparse
+import json
 import re
 import sys
 import os
@@ -78,84 +86,18 @@ def html_to_text(markup: str) -> str:
     return "".join(ex.parts)
 
 
-# ======================== ПРЕСЕТЫ ЯЗЫКОВ ===============================
-LANG_PRESETS: dict[str, dict[str, str]] = {
-    "zh": {
-        # БЕЗ .*? — иначе ложные маркеры вида «详见第5章…».
-        # Маркер — целая строка (с допуском префикса книги/тома).
-        "chapter_re":  r"第\d+章",
-        "front_re":    r"序章|前言|楔子|引子",
-        # extra_re намеренно отключён: 番外 / 特典 / 附錄 / 後記
-        # дают ложные срабатывания внутри основного текста.
-        # "extra_re": r"番外|特典|附錄|後記",
-        "epilogue_re": r"尾聲|結語",
-        "page_re":     r"^[ \t]*第\d+頁[ \t]*$",
-        # book_re — ТОЛЬКО для clean_heading (префикс книги в заголовке)
-        # и как допустимый префикс строки-маркера. К телу главы не применяется.
-        "book_re":     r"《[^》]*》",
-        # Фоллбэк-маркер: китайские числительные (第一章), если арабских
-        # (第1章) в тексте нет вообще.
-        "chapter_cn_re": r"第[一二三四五六七八九十百千零两]+章",
-        # Префикс тома перед маркером: 卷二 第5章 / 第二卷 第5章
-        "volume_re":   r"卷[一二三四五六七八九十百千零两]+|第[一二三四五六七八九十百千零两]+卷",
-        # Дубли заголовков глав с иероглифическими цифрами (第三章 и т. п.)
-        # — удаляются из тела, когда рядом есть арабский эквивалент (第3章).
-        "dup_chapter_re":
-                       r"^[ \t]*第[一二三四五六七八九十百千零两]+章[^\n]*$",
-        "end_re":      r"[\s（(]*本章完[)）]\s*$",
-        "note_re":     r"^作者有話要說[：:]?[^\n]*(?:\n(?!\n)[^\n]*)*",
-        # Хвост заголовка: 第1章 神秘道种 (完)
-        "heading_tail_re": r"[\s（(【]*完[)）】]*\s*$",
-    },        
-    "en": {
-        "chapter_re":  r"Chapter\s+\d+",
-        "front_re":    r"Prologue|Preface|Introduction|Foreword",
-        "extra_re":    r"Extra|Bonus|Side\s+Story|Appendix",
-        "epilogue_re": r"Epilogue|Afterword",
-        "page_re":     r"^[ \t]*Page\s+\d+[ \t]*$",
-        "book_re":     r"",
-        "dup_chapter_re": r"",
-        "end_re":      r"[\s(]*\[?The End\]?[)]\s*$",
-        "note_re":     r"^Author'?s Note[：:]?[^\n]*(?:\n(?!\n)[^\n]*)*",
-        "volume_re":   r"Book\s+\d+|Volume\s+\d+",
-        "heading_tail_re": r"[\s(]*\[?The End\]?[)]?\s*$",
-    },
-    "ru": {
-        "chapter_re":  r"Глава\s+\d+",
-        "front_re":    r"Пролог|Предисловие|Введение|Предыстория",
-        "extra_re":    r"Экстра|Бонус|Приложение|Дополнение",
-        "epilogue_re": r"Эпилог|Послесловие|Заключение",
-        "page_re":     r"^[ \t]*Страница\s+\d+[ \t]*$",
-        "book_re":     r"",
-        "dup_chapter_re": r"",
-        "end_re":      r"[\s(]*Конец главы[)]\s*$",
-        "note_re":     r"^Примечание автора[：:]?[^\n]*(?:\n(?!\n)[^\n]*)*",
-        "volume_re":   r"Том\s+\d+",
-        "heading_tail_re": r"[\s(]*Конец главы[)]?\s*$",
-    },
-}
-
-LANG_LABELS = {"zh": "中文", "en": "English", "ru": "Русский"}
-
-EXCLUDE_NAMES = {
-    "cover.xhtml", "cover.html", "cover.htm",
-    "toc.xhtml",   "toc.html",   "toc.htm",
-    "nav.xhtml",   "nav.html",   "nav.htm",
-}
-
-TITLE_RE    = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
-H1_RE       = re.compile(r"<h1[^>]*>(.*?)</h1>",       re.S | re.I)
-TAG_RE      = re.compile(r"<[^>]+>")
-WS_RE       = re.compile(r"\s+")
-CTRL_RE     = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-MULTI_NL_RE = re.compile(r"\n{3,}")
-LEADING_WS_RE = re.compile(r"^[ \t]+", re.M)
-_FW_TABLE   = str.maketrans("０１２３４５６７８９", "0123456789")
-BADCHAR_RE  = re.compile(r'[/\\?%*:|"<>(),，（）\s]')
-MAX_FOLDER  = 150
+# ======================== ДЕКОДИРОВАНИЕ ================================
+_FW_TABLE = str.maketrans("０１２３４５６７８９", "0123456789")
+WS_RE    = re.compile(r"\s+")
+TAG_RE   = re.compile(r"<[^>]+>")
+CTRL_RE  = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+MULTI_NL_RE    = re.compile(r"\n{3,}")
+LEADING_WS_RE  = re.compile(r"^[ \t]+", re.M)
+TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
+H1_RE    = re.compile(r"<h1[^>]*>(.*?)</h1>",       re.S | re.I)
+_H_TAG_RE = re.compile(r"<h([12])[^>]*>(.*?)</h\1>", re.S | re.I)
 
 
-# =========================== ХЕЛПЕРЫ ===================================
 def norm_fw(s: str) -> str:
     """Полноширинные цифры → ASCII; идеографический пробел → обычный."""
     s = s.translate(_FW_TABLE)
@@ -200,13 +142,6 @@ def extract_title_html(markup: str) -> str:
     return WS_RE.sub(" ", raw).strip()
 
 
-def safe_folder(title: str) -> str:
-    t = CTRL_RE.sub("", title)
-    t = BADCHAR_RE.sub("_", t)
-    t = re.sub(r"_+", "_", t).strip("_")
-    return t[:MAX_FOLDER].rstrip("_") or "Chapter"
-
-
 def first_line(text: str, max_len: int = 40) -> str:
     for line in text.split("\n"):
         s = line.strip()
@@ -223,279 +158,123 @@ def title_already_in_text(title: str, text: str) -> bool:
     return t in head
 
 
-# ── Очистка заголовка от названия новеллы ─────────────────────────────
-#   book_re применяется ЗДЕСЬ и НЕ применяется в apply_cleanings.
-def clean_heading(heading: str, pat,
-                  book_title: str | None = None) -> str:
-    h = heading.strip()
-    if not h:
-        return h
+def clean_title(s: str) -> str:
+    """Заголовок: обрезка пробелов + схлопывание внутренних пробелов."""
+    return WS_RE.sub(" ", (s or "").strip())
 
-    # 1. Явно заданное название (--book-title)
-    if book_title:
-        escaped = re.escape(book_title.strip())
-        h = re.sub(
-            r'^[\s\-–—:：.。,，]*' + escaped + r'[\s\-–—:：.。,，]*',
-            '', h, count=1, flags=re.I,
-        )
 
-    # 2. book_re из пресета (《…》 и т. п.) — только для heading
-    if pat.book_re:
-        h = pat.book_re.sub('', h)
+# ======================== ИМЕНА КАТАЛОГОВ ==============================
+# Недопустимые символы: Windows (< > : " / \ | ? * и управляющие) +
+# Linux (/ и NUL). Пробелы → '_' (канон 00000_1_Первая_строка).
+_INVALID_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_RESERVED_RE = re.compile(r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])$", re.I)
 
-    # 3. Если маркер секции внутри строки — всё до него отбрасываем
-    if pat.section_re:
-        m = pat.section_re.search(h)
-        if m and m.start() > 0:
-            h = h[m.start():]
 
-    # 4. Начальные / конечные разделители
-    h = re.sub(r'^[\s\-–—:：.。,，]+', '', h)
-    h = re.sub(r'[\s\-–—:：.。,，]+$', '', h)
-
-    # 5. Мусор в конце заголовка: (完), (Конец главы), (The End)
-    if pat.heading_tail_re:
-        h = pat.heading_tail_re.sub('', h)
-
-    h = WS_RE.sub(' ', h).strip()
-
-    return h
-
-# ======================== ПАТТЕРНЫ =====================================
-def _safe_compile(pattern: str, flags: int, name: str):
-    if not pattern:
-        return None
+def safe_folder(title: str, title_limit: int = 50) -> str:
+    """Безопасное имя каталога: недопустимые символы → '_', пробелы → '_',
+    зарезервированные имена Windows, точки/пробелы в конце, лимит длины."""
+    t = CTRL_RE.sub("", title)
+    t = _INVALID_CHARS_RE.sub("_", t)
+    t = t.replace(" ", "_")
+    t = re.sub(r"_+", "_", t)
+    t = t.strip(" _.")
+    if _RESERVED_RE.match(t):
+        t = "Chapter"
     try:
-        return re.compile(pattern, flags)
+        limit = int(title_limit)
+    except (TypeError, ValueError):
+        limit = 50
+    if limit > 0:
+        t = t[:limit].rstrip(" _.")
+    return t or "Chapter"
+
+
+def folder_name(num: int, title: str, title_limit: int = 50) -> str:
+    """Каноничный каталог главы: <нули>_<номер>_<заголовок>.
+    Нули добивают ширину 6: 00000_1, 0000_12, 000_177, 0_12345;
+    номер ≥ 100000 — без префикса (ширина 6 уже достигнута)."""
+    zeros = "0" * max(0, 6 - len(str(num)))
+    prefix = f"{zeros}_{num}" if zeros else str(num)
+    return f"{prefix}_{safe_folder(title, title_limit)}"
+
+
+# ======================== ОЧИСТКИ ТЕКСТА ===============================
+def _safe_compile(pattern: str, name: str, multiline: bool = False):
+    """Компиляция паттерна; multiline — ^/$ матчат начало/конец СТРОКИ
+    (очистки построчные: «^本章完$» удаляет только строку-маркер)."""
+    try:
+        return re.compile(pattern, re.MULTILINE if multiline else 0)
     except re.error as e:
-        sys.exit(f"  Ошибка в паттерне --{name}: {e}\n"
-                 f"  Паттерн: {pattern}")
+        sys.exit(f"  Ошибка в паттерне --{name}: {e}\n  Паттерн: {pattern}")
 
 
-class Patterns:
-    def __init__(self, preset: dict, overrides: dict):
-        merged = {**preset}
-        for k, v in overrides.items():
-            if v is not None:
-                merged[k] = v
-
-        self.chapter_re  = _safe_compile(merged.get("chapter_re", ""),
-                                         re.M | re.I, "chapter-re")
-        self.front_re    = _safe_compile(merged.get("front_re", ""),
-                                         re.M | re.I, "front-re")
-        self.extra_re    = _safe_compile(merged.get("extra_re", ""),
-                                         re.M | re.I, "extra-re")
-        self.epilogue_re = _safe_compile(merged.get("epilogue_re", ""),
-                                         re.M | re.I, "epilogue-re")
-        self.page_re     = _safe_compile(merged.get("page_re", ""),
-                                         re.M | re.I, "page-re")
-        # book_re — только для clean_heading, НЕ для apply_cleanings
-        self.book_re     = _safe_compile(merged.get("book_re", ""),
-                                         re.M, "book-re")
-        self.dup_chapter_re = _safe_compile(
-                                         merged.get("dup_chapter_re", ""),
-                                         re.M, "dup-chapter-re")
-        self.end_re      = _safe_compile(merged.get("end_re", ""),
-                                         re.M, "end-re")
-        self.note_re     = _safe_compile(merged.get("note_re", ""),
-                                         re.M, "note-re")
-        # Фоллбэк-маркер (第一章), префикс тома, хвост заголовка
-        self.chapter_cn_re = _safe_compile(merged.get("chapter_cn_re", ""),
-                                           re.M | re.I, "chapter-cn-re")
-        self.volume_re     = _safe_compile(merged.get("volume_re", ""),
-                                           re.M | re.I, "volume-re")
-        self.heading_tail_re = _safe_compile(merged.get("heading_tail_re", ""),
-                                             re.M, "heading-tail-re")
-
-        # section_re = объединение всех типов секций
-        parts = []
-        for key in ("chapter_re", "front_re", "extra_re", "epilogue_re"):
-            p = merged.get(key, "")
-            if p:
-                parts.append(f"(?:{p})")
-        if parts:
-            self.section_pattern = "|".join(parts)
-            self.section_re = _safe_compile(self.section_pattern,
-                                            re.M | re.I, "section")
-        else:
-            self.section_pattern = None
-            self.section_re = None
-
-        # Числовой префикс перед главами
-        ch = merged.get("chapter_re", "")
-        if ch:
-            self.num_prefix_re = _safe_compile(
-                r"^[ \t]*[\d.]+\s*(?=" + ch + r")",
-                re.M | re.I, "num-prefix")
-        else:
-            self.num_prefix_re = None
-
-        # Дубль заголовка (одна и та же строка дважды подряд)
-        if self.section_pattern:
-            self.dup_re = _safe_compile(
-                r"^[ \t]*((?:" + self.section_pattern + r")[^\n]*)[ \t]*\n"
-                r"(?:[ \t]*\n)*[ \t]*\1[ \t]*\n",
-                re.M | re.I, "dup-title")
-        else:
-            self.dup_re = None
-
-        # txt_marker — компилируем один раз; допускаем префиксы
-        # книги (book_re) и тома (volume_re) перед маркером.
-        book_prefix = ""
-        vol_prefix  = ""
-        if merged.get("book_re"):
-            book_prefix = f"(?:(?:{merged['book_re']})[\\s]*)?"
-        if merged.get("volume_re"):
-            vol_prefix = f"(?:(?:{merged['volume_re']})[\\s、.，,]*)?"
-        if self.section_pattern:
-            self._txt_marker = _safe_compile(
-                r"^[ \t]*(" + book_prefix + vol_prefix
-                + r"(?:" + self.section_pattern
-                + r"))[ \t]*(.*?)[ \t]*$",
-                re.M | re.I, "txt-marker")
-        else:
-            self._txt_marker = None
-
-        # Фоллбэк: китайские числительные (第一章), если основной
-        # маркер не дал ни одной главы.
-        if merged.get("chapter_cn_re"):
-            self._txt_marker_cn = _safe_compile(
-                r"^[ \t]*((?:" + merged["chapter_cn_re"]
-                + r"))[ \t]*(.*?)[ \t]*$",
-                re.M | re.I, "txt-marker-cn")
-        else:
-            self._txt_marker_cn = None
-
-    def txt_marker(self, cn_fallback=False):
-        if cn_fallback and self._txt_marker_cn is not None:
-            return self._txt_marker_cn
-        return self._txt_marker
-
-
-# ======================== ЧИСТКИ ТЕЛА ==================================
-#   book_re здесь НЕТ — он работает только в clean_heading.
-def apply_cleanings(text, title_raw, pat, do_clean, do_pages):
+def apply_cleanups(text: str, clean_res) -> tuple[str, list[str]]:
+    """Удаляет все совпадения каждого паттерна; сжимает пустые строки."""
     removed: list[str] = []
-
-    if do_pages and pat.page_re:
-        for m in pat.page_re.finditer(text):
+    for rx in clean_res:
+        for m in rx.finditer(text):
             removed.append(m.group(0))
-        text = pat.page_re.sub("", text)
-
-    if do_clean:
-        for rx in (pat.num_prefix_re, pat.dup_re,
-                   pat.dup_chapter_re,
-                   pat.end_re, pat.note_re):
-            if rx:
-                for m in rx.finditer(text):
-                    removed.append(m.group(0))
-                text = rx.sub("", text)
-
-    # Сжатие пустых строк + удаление ведущих пробелов / табов
+        text = rx.sub("", text)
     text = MULTI_NL_RE.sub("\n\n", text)
     text = LEADING_WS_RE.sub("", text)
-
     return text.strip(), removed
 
 
-# ==================== ЗАПИСЬ СЕКЦИИ ====================================
-def write_section(output_dir, counter, heading, body,
-                  polished, dry_run=False):
-    # Превращаем число в строку
-    c_str = str(counter)
-    # Считаем количество нулей (как это делал zfill для длины 6)
-    zeros = "0" * max(0, 6 - len(c_str))
-    # Формируем новый префикс вида 00000_1
-    prefix = f"{zeros}_{c_str}" 
-    folder_name = f"{prefix}_{safe_folder(heading)}"
-    fname = f"chapter{counter}_polished.txt" if polished else "chapter.txt"
-
-    if dry_run:
-        print(f"  [{prefix}] {folder_name}/{fname}")
-        return
-
-    folder = output_dir / folder_name
-    try:
-        folder.mkdir(parents=True, exist_ok=True)
-        content = (heading + "\n\n" + body + "\n") if body else (heading + "\n")
-        (folder / fname).write_text(content, encoding="utf-8")
-        print(f"  [{prefix}] {folder_name}/{fname}")
-    except OSError as e:
-        print(f"  ⚠ Ошибка записи [{prefix}] {folder_name}/{fname}: {e}",
-              file=sys.stderr)
-
-
-# ============================================================
-#  ОБЩАЯ ЛОГИКА: разбивка по маркерам секций + запись
-# ============================================================
-def _find_markers(text, pat):
-    """Маркеры: основной → фоллбэк (第一章), если основных нет."""
-    markers = []
-    if pat.txt_marker():
-        markers = list(pat.txt_marker().finditer(text))
-    if not markers and pat.txt_marker(cn_fallback=True):
-        markers = list(pat.txt_marker(cn_fallback=True).finditer(text))
-    return markers
-
-
-def split_and_write(text, pat, do_clean, do_pages,
-                    polished, output_dir,
-                    book_title=None, dry_run=False,
-                    chunk_size=7000):
-    markers = _find_markers(text, pat)
-
-    chapters: list[tuple[str, str]] = []
-    removed_all: list[str] = []
-
-    if not markers:
-        body, rem = apply_cleanings(text, "", pat, do_clean, do_pages)
-        removed_all.extend(rem)
+# ======================== РАЗБИВКА =====================================
+def split_by_patterns(text: str, split_res) -> list[tuple[str, str]]:
+    """Строка начинается с любого паттерна — заголовок новой главы."""
+    lines = text.split("\n")
+    marker_idx = [
+        i for i, ln in enumerate(lines)
+        if ln.strip() and any(rx.match(ln.strip()) for rx in split_res)
+    ]
+    if not marker_idx:
+        sys.exit("Ни одна строка не совпала с паттернами разбивки — "
+                 "проверьте regexp (--split-re)")
+    sections: list[tuple[str, str]] = []
+    if marker_idx[0] > 0:
+        pre = "\n".join(lines[:marker_idx[0]]).strip()
+        if pre:
+            heading = clean_title(first_line(pre)) or "Пролог"
+            sections.append((heading, pre))
+    for k, idx in enumerate(marker_idx):
+        end = marker_idx[k + 1] if k + 1 < len(marker_idx) else len(lines)
+        heading = clean_title(lines[idx])
+        if not heading:
+            heading = f"Секция {k + 1}"
+        body = "\n".join(lines[idx + 1:end]).strip()
         if body:
-            # Фоллбэк: маркеров нет — режем на чанки (нейтральные
-            # заголовки «Часть N», НЕ «Глава N» — это канон перевода).
-            from core.common import split_text_smart
-            chunks = split_text_smart(body, target_chars=chunk_size)
-            for i, ch in enumerate(chunks, 1):
-                if ch.strip():
-                    chapters.append((f"Часть {i}", ch.strip()))
-    else:
-        # Текст до первого маркера
-        if markers[0].start() > 0:
-            pre = text[: markers[0].start()]
-            pre, rem = apply_cleanings(pre, "", pat, do_clean, do_pages)
-            removed_all.extend(rem)
-            if pre.strip():
-                raw_h   = first_line(pre) or "Пролог"
-                heading = clean_heading(raw_h, pat, book_title) or "Пролог"
-                chapters.append((heading, pre))
-
-        # Секции по маркерам
-        for i, m in enumerate(markers):
-            raw_h   = m.group(0).strip()
-            heading = clean_heading(raw_h, pat, book_title)
-            if not heading:
-                heading = f"Секция {i + 1}"
-
-            body_start = m.end()
-            body_end   = (markers[i + 1].start()
-                          if i + 1 < len(markers) else len(text))
-            body = text[body_start:body_end]
-            body, rem = apply_cleanings(body, heading, pat,
-                                        do_clean, do_pages)
-            removed_all.extend(rem)
-            # Пустая секция после чисток — не пишем (нет папки)
-            if body.strip():
-                chapters.append((heading, body))
-
-    s_after = 0
-    for idx, (heading, body) in enumerate(chapters, 1):
-        write_section(output_dir, idx, heading, body, polished, dry_run)
-        s_after += len(heading) + len(body)
-
-    return len(chapters), s_after, removed_all
+            sections.append((heading, body))
+    return sections
 
 
-# ==================== EPUB: порядок из <spine> =========================
+def split_by_chunks(text: str, chunk_size: int,
+                    mask: str) -> list[tuple[str, str]]:
+    """Чанки фиксированного размера (СИМВОЛЫ); заголовки — по маске."""
+    if "{num}" not in mask:
+        sys.exit("Маска названия чанка должна содержать {num} "
+                 "(например «Глава {num}»)")
+    from core.common import split_text_smart
+    chunks = split_text_smart(text, target_chars=chunk_size)
+    sections: list[tuple[str, str]] = []
+    for i, ch in enumerate(chunks, 1):
+        if ch.strip():
+            sections.append((mask.replace("{num}", str(i)), ch.strip()))
+    return sections
+
+
+# ======================== EPUB: СТРУКТУРА ==============================
+EXCLUDE_NAMES = {
+    "cover.xhtml", "cover.html", "cover.htm",
+    "toc.xhtml",   "toc.html",   "toc.htm",
+    "nav.xhtml",   "nav.html",   "nav.htm",
+}
+
+SERVICE_TOC_RE = re.compile(
+    r"^(информация|信息|info|cover|обложка|содержание|оглавление|about|简介)$",
+    re.I)
+
+
 def _get_spine_order(zf: zipfile.ZipFile) -> list[str] | None:
     try:
         container = zf.read("META-INF/container.xml").decode(
@@ -505,7 +284,6 @@ def _get_spine_order(zf: zipfile.ZipFile) -> list[str] | None:
             return None
         opf_path = m.group(1)
         opf_raw  = zf.read(opf_path).decode("utf-8", errors="replace")
-
         manifest: dict[str, str] = {}
         for item_m in re.finditer(r'<item\s[^>]*>', opf_raw, re.I):
             tag    = item_m.group(0)
@@ -513,14 +291,11 @@ def _get_spine_order(zf: zipfile.ZipFile) -> list[str] | None:
             href_m = re.search(r'\bhref\s*=\s*"([^"]*)"', tag, re.I)
             if id_m and href_m:
                 manifest[id_m.group(1)] = unquote(href_m.group(1))
-
         spine_ids = re.findall(
             r'<itemref\s[^>]*idref\s*=\s*"([^"]*)"', opf_raw, re.I)
-
         opf_dir = str(Path(opf_path).parent)
         if opf_dir == ".":
             opf_dir = ""
-
         result = []
         for sid in spine_ids:
             href = manifest.get(sid)
@@ -528,13 +303,7 @@ def _get_spine_order(zf: zipfile.ZipFile) -> list[str] | None:
                 result.append((opf_dir + "/" + href) if opf_dir else href)
         return result if result else None
     except (KeyError, IndexError, ValueError):
-        # B12: кривой OPF/манифест — None; прочие ошибки не маскируем
         return None
-
-
-SERVICE_TOC_RE = re.compile(
-    r"^(информация|信息|info|cover|обложка|содержание|оглавление|about|简介)$",
-    re.I)
 
 
 def _get_toc_titles(zf: zipfile.ZipFile) -> dict[str, str]:
@@ -574,49 +343,28 @@ def _get_toc_titles(zf: zipfile.ZipFile) -> dict[str, str]:
     return out
 
 
-_H_TAG_RE = re.compile(r"<h([12])[^>]*>(.*?)</h\1>", re.S | re.I)
+def _archive_html_names(zf: zipfile.ZipFile) -> set[str]:
+    return {
+        n for n in zf.namelist()
+        if n.lower().endswith((".xhtml", ".html", ".htm"))
+        and Path(n).name.lower() not in EXCLUDE_NAMES
+        and not n.endswith("/")
+    }
 
 
-def split_markup_by_headings(markup, pat, book_title,
-                             do_clean, do_pages):
-    """Разбить HTML по h1/h2 → [(heading, body)] | None (нет заголовков)."""
-    matches = list(_H_TAG_RE.finditer(markup))
-    if not matches:
-        return None
-    sections: list[tuple[str, str]] = []
-    # Текст до первого заголовка — «Пролог»
-    pre = markup[:matches[0].start()]
-    if pre.strip():
-        body = html_to_text(pre)
-        body = norm_fw(body)
-        body = normalize_newlines(body)
-        body, _ = apply_cleanings(body, "", pat, do_clean, do_pages)
-        if body.strip():
-            raw_h = first_line(body) or "Пролог"
-            heading = clean_heading(raw_h, pat, book_title) or "Пролог"
-            sections.append((heading, body))
-    for i, m in enumerate(matches):
-        raw_h = TAG_RE.sub("", m.group(2))
-        raw_h = unescape(raw_h)
-        raw_h = norm_fw(raw_h)
-        heading = clean_heading(WS_RE.sub(" ", raw_h).strip(),
-                                pat, book_title)
-        if not heading:
-            heading = f"Секция {len(sections) + 1}"
-        body_start = m.end()
-        body_end   = (matches[i + 1].start()
-                      if i + 1 < len(matches) else len(markup))
-        body = html_to_text(markup[body_start:body_end])
-        body = norm_fw(body)
-        body = normalize_newlines(body)
-        body, _ = apply_cleanings(body, heading, pat, do_clean, do_pages)
-        if body.strip():
-            sections.append((heading, body))
-    return sections or None
+def _archive_order(zf: zipfile.ZipFile, all_html) -> list[str]:
+    """Порядок чтения: spine → остальное → алфавитный фоллбэк."""
+    spine = _get_spine_order(zf)
+    if spine:
+        names = [n for n in spine if n in all_html]
+        names.extend(sorted(all_html - set(names),
+                            key=lambda n: nat_key(Path(n).name)))
+        return names
+    return sorted(all_html, key=lambda n: nat_key(Path(n).name))
 
 
-def _strip_heading_line(text, heading, pat):
-    """Убрать первую строку-заголовок (h1-дубль) из начала тела."""
+def _strip_heading_line(text: str, heading: str) -> str:
+    """Убрать первую строку-заголовок (дубль названия главы) из начала тела."""
     lines = text.splitlines(keepends=True)
     for i, ln in enumerate(lines[:5]):
         if not ln.strip():
@@ -624,169 +372,217 @@ def _strip_heading_line(text, heading, pat):
         s = ln.strip()
         if heading and (heading in s or s in heading):
             return "".join(lines[i + 1:])
-        # строка начинается с маркера секции — это заголовок
-        if pat.section_re and pat.section_re.search(s) \
-                and pat.section_re.search(s).start() == 0 \
-                and len(s) < 80:
-            return "".join(lines[i + 1:])
         break
     return text
 
 
-# ==================== ОБРАБОТКА АРХИВА =================================
-def process_archive(arc_path, pat, do_clean, do_pages,
-                    polished, output_dir,
-                    book_title=None, dry_run=False,
-                    chunk_size=7000):
-    entries: list[tuple[str, str, str, str]] = []  # name, title, raw, markup
+def split_markup_by_headings(markup: str) -> list[tuple[str, str]] | None:
+    """Разбить HTML по h1/h2 → [(heading, body)] | None (нет заголовков)."""
+    matches = list(_H_TAG_RE.finditer(markup))
+    if not matches:
+        return None
+    sections: list[tuple[str, str]] = []
+    pre = markup[:matches[0].start()]
+    if pre.strip():
+        body = html_to_text(pre)
+        body = norm_fw(body)
+        body = normalize_newlines(body)
+        body, _ = apply_cleanups(body, [])
+        if body.strip():
+            heading = clean_title(first_line(body)) or "Пролог"
+            sections.append((heading, body.strip()))
+    for i, m in enumerate(matches):
+        raw_h = TAG_RE.sub("", m.group(2))
+        raw_h = unescape(raw_h)
+        raw_h = norm_fw(raw_h)
+        heading = clean_title(WS_RE.sub(" ", raw_h))
+        if not heading:
+            heading = f"Секция {len(sections) + 1}"
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(markup)
+        body = html_to_text(markup[m.end():end])
+        body = norm_fw(body)
+        body = normalize_newlines(body)
+        body, _ = apply_cleanups(body, [])
+        if body.strip():
+            sections.append((heading, body.strip()))
+    return sections or None
 
+
+def extract_epub_sections(arc_path: Path) -> list[tuple[str, str]]:
+    """Режим toc: структурная разбивка epub/zip по spine/TOC/h1-h2."""
     with zipfile.ZipFile(arc_path) as zf:
-        all_html = {
-            n for n in zf.namelist()
-            if n.lower().endswith((".xhtml", ".html", ".htm"))
-            and Path(n).name.lower() not in EXCLUDE_NAMES
-            and not n.endswith("/")
-        }
+        all_html = _archive_html_names(zf)
         if not all_html:
-            # ZIP без HTML, но с txt — разбираем как TXT
-            all_txt = sorted(
-                (n for n in zf.namelist()
-                 if n.lower().endswith(".txt") and not n.endswith("/")),
-                key=lambda n: nat_key(Path(n).name))
-            if all_txt:
-                parts = []
-                for name in all_txt:
-                    raw = decode_bytes(zf.read(name))
-                    raw = normalize_newlines(raw)
-                    raw = norm_fw(raw)
-                    parts.append(raw)
-                full_text = "\n\n".join(parts)
-                n, s_after, removed = split_and_write(
-                    full_text, pat, do_clean, do_pages, polished,
-                    output_dir, book_title, dry_run, chunk_size)
-                return n, len(full_text), s_after, removed
-            print("  В архиве нет HTML-файлов.")
-            return 0, 0, 0, []
-
-        # Порядок: spine → fallback алфавитный
-        spine = _get_spine_order(zf)
-        if spine:
-            names = [n for n in spine if n in all_html]
-            remaining = sorted(all_html - set(names),
-                               key=lambda n: nat_key(Path(n).name))
-            names.extend(remaining)
-        else:
-            names = sorted(all_html,
-                           key=lambda n: nat_key(Path(n).name))
-
+            sys.exit("В архиве нет HTML-файлов — режим TOC требует epub/zip "
+                     "со структурой; для txt используйте ручной режим "
+                     "или разбивку по чанкам")
+        names = _archive_order(zf, all_html)
         toc_titles = _get_toc_titles(zf)
-
+        sections: list[tuple[str, str]] = []
         for name in names:
             try:
                 markup = decode_bytes(zf.read(name))
             except KeyError:
                 continue
             markup = normalize_newlines(markup)
-            title  = extract_title_html(markup)
-            raw    = html_to_text(markup)
-            raw    = norm_fw(raw)
-            raw    = normalize_newlines(raw)
-            entries.append((name, title, raw, markup))
-
-    # Структурный путь: ≥3 файлов — один файл ≈ одна секция
-    if len(entries) >= 3:
-        removed_all: list[str] = []
-        s_after = 0
-        written = 0
-        for name, title, raw, markup in entries:
-            base = Path(name).name.lower()
+            title = extract_title_html(markup)
             # несколько h1/h2 в файле — режем внутри файла
-            sections = split_markup_by_headings(
-                markup, pat, book_title, do_clean, do_pages)
-            if sections and len(sections) > 1:
-                for heading, body in sections:
-                    if body.strip():
-                        written += 1
-                        write_section(output_dir, written, heading, body,
-                                      polished, dry_run)
-                        s_after += len(heading) + len(body)
+            subs = split_markup_by_headings(markup)
+            if subs and len(subs) > 1:
+                sections.extend(subs)
                 continue
-
-            # Одна секция: заголовок TOC → <title>/<h1> → «Секция N»
+            base = Path(name).name.lower()
             toc_t = toc_titles.get(base, "")
             if toc_t and SERVICE_TOC_RE.match(toc_t.strip()):
                 continue  # служебная страница («Информация») — не глава
-            heading = toc_t or title or ""
+            heading = clean_title(toc_t or title or "")
             if not heading:
-                continue  # страница без заголовка
-            heading = clean_heading(heading, pat, book_title)
-            if not heading:
-                heading = f"Секция {written + 1}"
-            body = _strip_heading_line(raw, heading, pat)
-            body, rem = apply_cleanings(body, heading, pat,
-                                        do_clean, do_pages)
-            removed_all.extend(rem)
+                continue  # страница без заголовка — не глава
+            raw = html_to_text(markup)
+            raw = norm_fw(raw)
+            raw = normalize_newlines(raw)
+            body = _strip_heading_line(raw, heading)
             if body.strip():
-                written += 1
-                write_section(output_dir, written, heading, body,
-                              polished, dry_run)
-                s_after += len(heading) + len(body)
-        return written, sum(len(e[2]) for e in entries), s_after, removed_all
+                sections.append((heading, body.strip()))
+    return sections
 
-    # 1–2 файла: конкатенация + regex (как раньше)
-    parts = []
-    for _name, title, text, _markup in entries:
-        cleaned = clean_heading(title, pat, book_title) if title else ""
-        if cleaned and not title_already_in_text(cleaned, text):
-            parts.append(cleaned + "\n" + text)
+
+def archive_to_text(arc_path: Path) -> str:
+    """Весь текст архива (для regex/chunk-режимов): HTML по порядку,
+    заголовки файлов — как строки-заголовки; ZIP с txt — конкатенация."""
+    with zipfile.ZipFile(arc_path) as zf:
+        all_html = _archive_html_names(zf)
+        if all_html:
+            names = _archive_order(zf, all_html)
+            parts: list[str] = []
+            for name in names:
+                try:
+                    markup = decode_bytes(zf.read(name))
+                except KeyError:
+                    continue
+                markup = normalize_newlines(markup)
+                title = extract_title_html(markup)
+                text = html_to_text(markup)
+                text = norm_fw(text)
+                text = normalize_newlines(text)
+                cleaned = clean_title(title) if title else ""
+                if cleaned and not title_already_in_text(cleaned, text):
+                    parts.append(cleaned + "\n" + text)
+                else:
+                    parts.append(text)
+            return "\n\n".join(parts)
+        all_txt = sorted(
+            (n for n in zf.namelist()
+             if n.lower().endswith(".txt") and not n.endswith("/")),
+            key=lambda n: nat_key(Path(n).name))
+        if not all_txt:
+            sys.exit("В архиве нет ни HTML, ни TXT")
+        out_parts = []
+        for name in all_txt:
+            raw = decode_bytes(zf.read(name))
+            raw = normalize_newlines(raw)
+            raw = norm_fw(raw)
+            out_parts.append(raw)
+        return "\n\n".join(out_parts)
+
+
+def read_text_file(txt_path: Path) -> str:
+    raw = decode_bytes(txt_path.read_bytes())
+    raw = normalize_newlines(raw)
+    raw = norm_fw(raw)
+    return raw
+
+
+# ======================== ОБЩИЙ ВХОД ===================================
+def split_input(input_file: Path, mode: str,
+                split_res, clean_res,
+                chunk_size: int = 7000, chunk_mask: str = "Глава {num}",
+                title_limit: int = 50, num_offset: int = 1,
+                skips: set[int] | None = None) -> tuple[list[dict], int, list[str]]:
+    """Разбивает исходник на главы → (entries, s_before, removed).
+
+    entry = {seq (исходный порядок, с 1), num (номер с учётом offset/skip),
+             heading, body}. skip — исходные seq, которые пропускаются,
+    оставшиеся перенумеровываются с num_offset.
+    """
+    skips = skips or set()
+    suffix = input_file.suffix.lower()
+    removed: list[str] = []
+    if mode == "toc":
+        if suffix == ".txt":
+            sys.exit("Режим TOC не принимает TXT — используйте ручной "
+                     "режим (regexp) или разбивку по чанкам")
+        raw_sections = extract_epub_sections(input_file)
+        s_before = sum(len(b) for _, b in raw_sections)
+        sections: list[tuple[str, str]] = []
+        for h, b in raw_sections:
+            body, rem = apply_cleanups(b, clean_res)
+            removed.extend(rem)
+            if body.strip():
+                sections.append((h, body.strip()))
+    else:
+        text = (read_text_file(input_file) if suffix == ".txt"
+                else archive_to_text(input_file))
+        s_before = len(text)
+        text, removed = apply_cleanups(text, clean_res)
+        if mode == "regex":
+            sections = split_by_patterns(text, split_res)
         else:
-            parts.append(text)
-
-    full_text = "\n\n".join(parts)
-    s_before  = len(full_text)
-
-    has_markers = bool(_find_markers(full_text, pat))
-
-    if has_markers:
-        n, s_after, removed = split_and_write(
-            full_text, pat, do_clean, do_pages, polished, output_dir,
-            book_title, dry_run, chunk_size)
-        return n, s_before, s_after, removed
-
-    # Fallback: маркеров нет → каждый HTML-файл = секция
-    removed_all: list[str] = []
-    s_after = 0
-    written = 0
-    for _name, title, raw, _markup in entries:
-        body, rem = apply_cleanings(raw, title, pat, do_clean, do_pages)
-        removed_all.extend(rem)
-        heading = clean_heading(title, pat, book_title) if title else ""
-        if not heading:
-            heading = f"Глава {written + 1}"
-        if body.strip():
-            written += 1
-            write_section(output_dir, written, heading, body,
-                          polished, dry_run)
-            s_after += len(heading) + len(body)
-
-    return written, s_before, s_after, removed_all
+            sections = split_by_chunks(text, chunk_size, chunk_mask)
+    entries: list[dict] = []
+    num = num_offset
+    for i, (h, b) in enumerate(sections, 1):
+        if i in skips:
+            continue
+        entries.append({"seq": i, "num": num, "heading": h, "body": b})
+        num += 1
+    return entries, s_before, removed
 
 
-# ==================== ОБРАБОТКА TXT ====================================
-def process_txt(txt_path, pat, do_clean, do_pages,
-                polished, output_dir,
-                book_title=None, dry_run=False,
-                chunk_size=7000):
-    data = txt_path.read_bytes()
-    raw  = decode_bytes(data)
-    raw  = normalize_newlines(raw)
-    raw  = norm_fw(raw)
-    s_before = len(raw)
+# ======================== ЗАПИСЬ =======================================
+def write_section(output_dir, num: int, heading: str, body: str,
+                  polished: bool, title_limit: int = 50,
+                  dry_run: bool = False) -> None:
+    fname = f"chapter{num}_polished.txt" if polished else "chapter.txt"
+    folder = output_dir / folder_name(num, heading, title_limit)
+    if dry_run:
+        print(f"  [{folder.name}] {fname}")
+        return
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        content = (heading + "\n\n" + body + "\n") if body else (heading + "\n")
+        (folder / fname).write_text(content, encoding="utf-8")
+        print(f"  [{folder.name}] {fname}")
+    except OSError as e:
+        print(f"  ⚠ Ошибка записи [{folder.name}] {fname}: {e}",
+              file=sys.stderr)
 
-    n, s_after, removed = split_and_write(
-        raw, pat, do_clean, do_pages, polished, output_dir,
-        book_title, dry_run, chunk_size)
-    return n, s_before, s_after, removed
+
+def write_entries(entries: list[dict], output_dir: Path, polished: bool,
+                  title_limit: int = 50, dry_run: bool = False) -> None:
+    for e in entries:
+        write_section(output_dir, e["num"], e["heading"], e["body"],
+                      polished, title_limit, dry_run)
+
+
+def write_preview_json(entries: list[dict], preview_path: Path,
+                       source: str, num_offset: int,
+                       title_limit: int = 50) -> None:
+    """Предпросмотр: JSON с секциями (папки + заголовки + тексты)."""
+    from core.common import atomic_write
+    data = {
+        "source": source,
+        "num_offset": num_offset,
+        "title_limit": title_limit,
+        "entries": [
+            {"seq": e["seq"], "num": e["num"],
+             "folder": folder_name(e["num"], e["heading"], title_limit),
+             "heading": e["heading"], "text": e["body"]}
+            for e in entries
+        ],
+    }
+    atomic_write(str(preview_path),
+                 json.dumps(data, ensure_ascii=False, indent=1))
 
 
 # ========================== ARGPARSE ===================================
@@ -796,174 +592,138 @@ def build_parser():
         description="Разбивает EPUB / ZIP / TXT на главы.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
-Примеры:
-  %(prog)s                                  автопоиск в ./source (один файл)
-  %(prog)s --input book.epub
-  %(prog)s --input trans.txt --polished 1 --lang ru
-  %(prog)s --clean 0 --remove-pages 0       без чисток
-  %(prog)s --front-re "Пролог|Вступление"   свой паттерн пролога
-  %(prog)s --book-title "Название Новеллы"  убрать название из заголовков
-  %(prog)s --dry-run                        только показать, не писать
+Режимы (--mode):
+  toc    автоматическая разбивка epub/zip по структуре (spine/TOC/h1-h2);
+         TXT не принимается; дубль названия главы в тексте удаляется;
+  regex  ручная разбивка: каждая строка, начинающаяся с любого
+         --split-re, — начало новой главы (вся строка — заголовок);
+  chunk  разбивка по чанкам --chunk-size (СИМВОЛЫ), названия — по маске
+         --chunk-mask (обязателен {num}).
 
-Единицы и форматы:
-  сверка ДО/ПОСЛЕ и чистки — в СИМВОЛАХ;
-  папки глав — 00000_N_Заголовок (единый канон
-  core.common.parse_chapter_id: 00000_1…, 0000_10…, legacy 000001…).
+Каталоги глав: <нули>_<номер>_<заголовок> — канон parse_chapter_id;
+нули добивают ширину 6: 00000_1, 0000_12, 000_177, 0_12345.
+
+Примеры:
+  %(prog)s --input book.epub
+  %(prog)s --input book.txt --mode regex --split-re "Глава \\d+"
+  %(prog)s --input book.txt --mode chunk --chunk-size 7000 \\
+          --chunk-mask "Часть {num}"
+  %(prog)s --input book.epub --num-offset 875 --skip 3 --skip 7
+  %(prog)s --input book.epub --preview-json tmp/preview.json
 """,
     )
-    p.add_argument("--input", type=Path, default=None, metavar="FILE",
-                   help="Путь к .epub/.zip/.txt (default: автопоиск)")
-    p.add_argument("--source", type=Path, default=Path("./source"),
-                   help="Папка для автопоиска (default: ./source)")
+    p.add_argument("--input", type=Path, required=True, metavar="FILE",
+                   help="Исходник: .epub/.zip/.txt (обязателен)")
     p.add_argument("--output", type=Path, default=Path("chapters"),
                    help="Выходная папка (default: ./chapters)")
+    p.add_argument("--mode", choices=["toc", "regex", "chunk"],
+                   default="toc", help="Режим разбивки (default: toc)")
 
-    g = p.add_argument_group("Язык и паттерны")
-    g.add_argument("--lang", choices=list(LANG_PRESETS), default=None,
-                   help="Пресет (default: меню; polished → ru)")
-    g.add_argument("--chapter-re",  dest="chapter_re",  metavar="RE",
-                   help="Маркер главы")
-    g.add_argument("--front-re",    dest="front_re",    metavar="RE",
-                   help="Пролог / предисловие")
-    g.add_argument("--extra-re",    dest="extra_re",    metavar="RE",
-                   help="Экстра / бонус")
-    g.add_argument("--epilogue-re", dest="epilogue_re", metavar="RE",
-                   help="Эпилог / послесловие")
-    g.add_argument("--page-re",     dest="page_re",     metavar="RE",
-                   help="Номер страницы")
-    g.add_argument("--book-re",     dest="book_re",     metavar="RE",
-                   help="Префикс книги в заголовке (regex, только heading)")
-    g.add_argument("--book-title",  dest="book_title",  metavar="STR",
-                   help="Название книги — удаляется из заголовков секций")
-    g.add_argument("--end-re",      dest="end_re",      metavar="RE",
-                   help="Маркер конца главы")
-    g.add_argument("--note-re",     dest="note_re",     metavar="RE",
-                   help="Заметки автора")
-    g.add_argument("--volume-re",   dest="volume_re",   metavar="RE",
-                   help="Префикс тома перед маркером (Том 2., 卷二)")
-    g.add_argument("--heading-tail-re", dest="heading_tail_re",
-                   metavar="RE", help="Мусор в конце заголовка ((完), (Конец))")
+    g = p.add_argument_group("Ручная разбивка и очистки")
+    g.add_argument("--split-re", dest="split_re", action="append",
+                   default=[], metavar="RE",
+                   help="Паттерн маркера главы (regex; строка начинается "
+                        "с паттерна — заголовок); можно повторять")
+    g.add_argument("--clean-re", dest="clean_re", action="append",
+                   default=[], metavar="RE",
+                   help="Очистка текста: все совпадения удаляются; "
+                        "можно повторять")
 
-    g = p.add_argument_group("Чистки")
-    g.add_argument("--clean", type=int, choices=[0, 1], default=1,
-                   help="Все чистки (default: 1)")
-    g.add_argument("--remove-pages", type=int, choices=[0, 1], default=1,
-                   help="Номера страниц (default: 1)")
+    g = p.add_argument_group("Разбивка по чанкам")
+    g.add_argument("--chunk-size", type=int, default=7000, metavar="N",
+                   help="Размер чанка, СИМВОЛЫ (default: 7000)")
+    g.add_argument("--chunk-mask", default="Глава {num}", metavar="MASK",
+                   help="Маска названия чанка, {num} — номер "
+                        "(default: «Глава {num}»)")
 
-    g = p.add_argument_group("Режим")
+    g = p.add_argument_group("Каталоги глав")
+    g.add_argument("--title-limit", type=int, default=50, metavar="N",
+                   help="Длина названия каталога, СИМВОЛЫ (default: 50)")
+    g.add_argument("--num-offset", type=int, default=1, metavar="N",
+                   help="Первый номер каталога (default: 1); "
+                        "875 → 000_875_…")
+    g.add_argument("--skip", action="append", default=[], metavar="N",
+                   help="Пропустить секцию по исходному номеру; "
+                        "оставшиеся перенумеровываются; можно повторять")
+
+    g = p.add_argument_group("Запись")
     g.add_argument("--polished", type=int, choices=[0, 1], default=None,
                    help="0 = chapter.txt, 1 = polished.txt")
-    g.add_argument("--chunk-size", type=int, default=7000, metavar="N",
-                   help="Размер чанка фоллбэка, если маркеров нет, "
-                        "СИМВОЛЫ (default: 7000)")
     g.add_argument("--clean-output", action="store_true",
                    help="Удалить старые папки глав перед записью")
-    g.add_argument("--move-done", action="store_true",
-                   help="Перенести файл в done/ после обработки")
-    g.add_argument("--report", type=Path, default="./logs/epub_to_txt_clean_report.txt", metavar="FILE",
-                   help="Лог удалённых строк")
+    g.add_argument("--preview-json", type=Path, default=None, metavar="FILE",
+                   help="Вместо записи — JSON предпросмотра "
+                        "{source, num_offset, title_limit, entries}")
     g.add_argument("--dry-run", action="store_true",
                    help="Показать список глав без записи на диск")
+    g.add_argument("--report", type=Path,
+                   default=Path("./logs/epub_to_txt_clean_report.txt"),
+                   metavar="FILE", help="Лог удалённых фрагментов")
     return p
 
 
 # ============================= MAIN ====================================
 def main():
-    args       = build_parser().parse_args()
+    args = build_parser().parse_args()
     # R9: фактическая команда запуска
     import shlex as _shlex
-    import sys as _sys
-    print(f"Запуск: {_shlex.join(_sys.argv)}")
-    output_dir = args.output.resolve()
-    dry_run    = args.dry_run
+    print(f"Запуск: {_shlex.join(sys.argv)}")
 
-    if not dry_run:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── 1. Входной файл ──
-    if args.input:
-        input_file = args.input.resolve()
-        if not input_file.is_file():
-            sys.exit(f"Файл не найден: {input_file}")
-    else:
-        src = args.source.resolve()
-        if not src.is_dir():
-            sys.exit(f"Папка не найдена: {src}")
-        exts = {".epub", ".zip", ".txt"}
-        candidates = sorted(
-            f for f in src.iterdir()
-            if f.is_file() and f.suffix.lower() in exts
-        )
-        if not candidates:
-            sys.exit(f"В {src} нет .epub / .zip / .txt")
-        if len(candidates) == 1:
-            input_file = candidates[0]
-            print(f"Найден: {input_file.name}")
-        else:
-            print(f"В {src} несколько подходящих файлов — укажите --input:")
-            for f in candidates:
-                print(f"  - {f.name}")
-            print("Интерактивный выбор — в лаунчере tools/run_epub_to_chapters.py")
-            sys.exit(1)
-
+    input_file = args.input.resolve()
+    if not input_file.is_file():
+        sys.exit(f"Файл не найден: {input_file}")
     suffix = input_file.suffix.lower()
     if suffix not in (".epub", ".zip", ".txt"):
-        sys.exit(f"Неподдерживаемый формат: {suffix}")
+        sys.exit(f"Неподдерживаемый формат: {suffix} — нужен .epub/.zip/.txt")
 
-    # ── 2. Режим ──
-    if args.polished is not None:
-        polished = bool(args.polished)
-    else:
-        polished = False  # обычный режим (chapter.txt)
+    mode = args.mode
+    if mode == "regex" and not args.split_re:
+        sys.exit("Режим regex требует хотя бы один --split-re")
+    split_res = [_safe_compile(p, "split-re") for p in args.split_re]
+    clean_res = [_safe_compile(p, "clean-re", multiline=True)
+                 for p in args.clean_re]
+    title_limit = max(1, args.title_limit)
+    num_offset = max(1, args.num_offset)
+    skips: set[int] = set()
+    for s in args.skip:
+        try:
+            skips.add(int(s))
+        except ValueError:
+            sys.exit(f"--skip: ожидалось число, получено: {s}")
+    polished = bool(args.polished) if args.polished is not None else False
 
-    # ── 3. Язык ──
-    if args.lang:
-        lang = args.lang
-    else:
-        lang = "ru" if polished else "zh"
-
-    # ── 4. Паттерны ──
-    overrides = {
-        "chapter_re":  args.chapter_re,
-        "front_re":    args.front_re,
-        "extra_re":    args.extra_re,
-        "epilogue_re": args.epilogue_re,
-        "page_re":     args.page_re,
-        "book_re":     args.book_re,
-        "end_re":      args.end_re,
-        "note_re":     args.note_re,
-        "volume_re":   args.volume_re,
-        "heading_tail_re": args.heading_tail_re,
-    }
-    pat        = Patterns(LANG_PRESETS[lang], overrides)
-    do_clean   = bool(args.clean)
-    do_pages   = bool(args.remove_pages)
-    book_title = args.book_title
-
-    # ── 5. Обработка ──
     print(f"\n  Файл:    {input_file.name}")
-    print(f"  Пресет:  {lang} ({LANG_LABELS[lang]})")
-    print(f"  Режим:   {'polished' if polished else 'обычный'}")
-    try:
-        _clean_i, _pages_i = int(do_clean), int(do_pages)
-    except (TypeError, ValueError):
-        _clean_i, _pages_i = 0, 0
-    print(f"  Чистки:  clean={_clean_i}  pages={_pages_i}")
-    if book_title:
-        print(f"  Книга:   «{book_title}» (удаляется из заголовков)")
-    print(f"  Выход:   {output_dir}")
-    print(f"  Чанк:    {args.chunk_size} симв. (фоллбэк без маркеров)")
-    if dry_run:
-        print("  *** DRY RUN — файлы не записываются ***")
-    print()
+    print(f"  Режим:   {mode}"
+          + (f" · чанк {args.chunk_size} симв. · маска «{args.chunk_mask}»"
+             if mode == "chunk" else ""))
+    print(f"  Каталог: <нули>_<номер>_<заголовок>, лимит {title_limit} симв.")
+    print(f"  Номера:  с {num_offset}"
+          + (f" · пропуск: {sorted(skips)}" if skips else ""))
 
-    # ── 5.5 Повторный запуск: старые папки глав ──
+    entries, s_before, removed = split_input(
+        input_file, mode, split_res, clean_res,
+        args.chunk_size, args.chunk_mask, title_limit, num_offset, skips)
+
+    if args.preview_json:
+        preview = Path(args.preview_json).resolve()
+        write_preview_json(entries, preview, input_file.name,
+                           num_offset, title_limit)
+        print(f"\n  Предпросмотр: {len(entries)} секций → {preview}")
+        for e in entries:
+            folder = folder_name(e["num"], e["heading"], title_limit)
+            print(f"  {e['num']:>6}  {folder}  ({len(e['body'])} симв.)")
+        return
+
+    output_dir = args.output.resolve()
+    if not args.dry_run:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Повторный запуск: старые папки глав
     old_dirs = []
     if output_dir.is_dir():
         old_dirs = [p for p in output_dir.iterdir()
-                    if p.is_dir()
-                    and re.match(r"^0*_\d+", p.name)]
-    if old_dirs and not dry_run:
+                    if p.is_dir() and re.match(r"^0*_\d+", p.name)]
+    if old_dirs and not args.dry_run:
         if args.clean_output:
             import shutil
             for d in old_dirs:
@@ -976,53 +736,34 @@ def main():
         else:
             print(f"  ⚠ В {output_dir} уже есть {len(old_dirs)} папок глав; "
                   "--clean-output удалит их перед записью")
-    elif old_dirs and dry_run:
+    elif old_dirs and args.dry_run:
         print(f"  ⚠ В {output_dir} уже есть {len(old_dirs)} папок глав "
               "(dry-run: не трону)")
 
-    if suffix in (".epub", ".zip"):
-        n, s_b, s_a, removed = process_archive(
-            input_file, pat, do_clean, do_pages, polished, output_dir,
-            book_title, dry_run, args.chunk_size)
-    else:
-        n, s_b, s_a, removed = process_txt(
-            input_file, pat, do_clean, do_pages, polished, output_dir,
-            book_title, dry_run, args.chunk_size)
+    if not entries:
+        print("  Секций нет — ничего не записано.")
+        return
 
-    # ── 6. done ──
-    if args.move_done and n and not dry_run:
-        done = input_file.parent / "done"
-        done.mkdir(exist_ok=True)
-        dest = done / input_file.name
-        if dest.exists():
-            stem, ext, k = input_file.stem, input_file.suffix, 1
-            while dest.exists():
-                dest = done / f"{stem}_{k}{ext}"
-                k += 1
-        input_file.rename(dest)
-        print(f"  Перенесено → {dest}")
+    write_entries(entries, output_dir, polished, title_limit, args.dry_run)
 
-    # ── 7. Сверка (приближённая) ──
-    delta     = s_b - s_a
+    # ── Сверка (приближённая) ──
+    s_after = sum(len(e["heading"]) + len(e["body"]) for e in entries)
+    delta = s_before - s_after
     rem_chars = sum(len(s) for s in removed)
-
     print(f"\n{'=' * 55}")
-    print(f"  Секций:             {n}")
-    print(f"  Символов ДО:        {s_b}")
-    print(f"  Символов ПОСЛЕ:     {s_a}  (включая заголовки секций)")
+    print(f"  Секций:             {len(entries)}")
+    print(f"  Символов ДО:        {s_before}")
+    print(f"  Символов ПОСЛЕ:     {s_after}  (включая заголовки секций)")
     print(f"  Разница:            {delta}")
     print(f"  Удалено фрагментов: {len(removed)}  ({rem_chars} симв.)")
-
-    # Допуск: сжатие строк/отступов даёт до ~400 симв. на секцию.
-    tol = max(n * 400, 300)
+    tol = max(len(entries) * 400, 300)
     if abs(delta - rem_chars) > tol:
         print(f"\n  ⚠  Разница ({delta}) ≠ удалённые ({rem_chars}).")
-        print(f"     Часть разницы — чистка заголовков / сжатие строк.")
-        print(f"     Проверьте --report для деталей.")
+        print("     Часть разницы — чистка заголовков / сжатие строк.")
     else:
-        print(f"  ✓  Сверка в норме.")
+        print("  ✓  Сверка в норме.")
 
-    if args.report and not dry_run:
+    if args.report and not args.dry_run:
         try:
             args.report.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:

@@ -399,24 +399,53 @@ def test_e2c_main_txt_flow(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", [
         "epub_to_chapters.py", "--input", str(src),
-        "--output", str(out), "--lang", "ru"])
+        "--output", str(out), "--mode", "regex",
+        "--split-re", "Глава \\d+"])
     E2C.main()
     assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
     assert (out / "00000_2_Глава_2" / "chapter.txt").is_file()
 
 
-def test_e2c_main_no_input_multi(tmp_path, monkeypatch, capsys):
+def test_e2c_main_toc_flow(tmp_path, monkeypatch, capsys):
+    """epub по TOC: канон папок, дубль заголовка в теле удалён."""
+    import zipfile
     import epub_to_chapters as E2C
-    src = tmp_path / "source"
-    src.mkdir()
-    (src / "a.txt").write_text("x", encoding="utf-8")
-    (src / "b.txt").write_text("y", encoding="utf-8")
+    src = tmp_path / "book.epub"
+    container = ('<?xml version="1.0"?><container><rootfiles><rootfile '
+                 'full-path="OEBPS/content.opf"/></rootfiles></container>')
+    opf = ('<?xml version="1.0"?><package><manifest>'
+           '<item id="c1" href="c1.xhtml"/>'
+           '<item id="c2" href="c2.xhtml"/></manifest>'
+           '<spine><itemref idref="c1"/><itemref idref="c2"/></spine>'
+           '</package>')
+    with zipfile.ZipFile(src, "w") as zf:
+        zf.writestr("META-INF/container.xml", container)
+        zf.writestr("OEBPS/content.opf", opf)
+        zf.writestr("OEBPS/c1.xhtml", "<html><body><h1>Глава 1</h1>"
+                     "<p>текст один</p></body></html>")
+        zf.writestr("OEBPS/c2.xhtml", "<html><body><h1>Глава 2</h1>"
+                     "<p>текст два</p></body></html>")
+    out = tmp_path / "chapters"
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", [
-        "epub_to_chapters.py", "--source", str(src), "--lang", "ru"])
+        "epub_to_chapters.py", "--input", str(src),
+        "--output", str(out), "--mode", "toc"])
+    E2C.main()
+    assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
+    assert (out / "00000_2_Глава_2" / "chapter.txt").is_file()
+    c1 = (out / "00000_1_Глава_1" / "chapter.txt").read_text(
+        encoding="utf-8")
+    assert "текст один" in c1 and c1.count("Глава 1") == 1
+
+
+def test_e2c_main_no_input(tmp_path, monkeypatch, capsys):
+    """Без --input — ошибка (автоподхвата исходника нет)."""
+    import epub_to_chapters as E2C
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["epub_to_chapters.py", "--mode", "toc"])
     with pytest.raises(SystemExit):
         E2C.main()
-    assert "несколько подходящих" in capsys.readouterr().out
+    assert "--input" in capsys.readouterr().err
 
 
 # ── дополнительные ветки translate_check ──────────────────────────────

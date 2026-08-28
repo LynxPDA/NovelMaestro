@@ -12,6 +12,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     gen: 0, // поколение отрисовки — гасит гонки двух render()
     values: {}, // значения формы по стадиям (данные; синхронизация режимов)
     touched: {}, // изменённые пользователем поля по стадиям (Set имён)
+    preview: null, // epub: данные предпросмотра {entries, source, skips}
+    previewDirty: true, // epub: настройки менялись после предпросмотра
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
@@ -87,6 +89,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // форма (внутри стадии значения общие для обоих режимов)
     st.values[key] = null;
     st.touched[key] = null;
+    st.preview = null; // epub: свежий предпросмотр для новой стадии
+    st.previewDirty = true;
     // активный запуск/стрим НЕ сбрасываем — лог остаётся
     // под формой, пока стадия не завершилась
     render();
@@ -295,17 +299,21 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // переключатель не показываем
     const hasSimple = (spec.simple || []).length > 0;
     const mode = hasSimple ? UICore.runModeGet(key) : "expert";
+    st.mode = mode; // buildField: epub-фильтр расширений по режиму
     const body =
       hasSimple && mode === "simple"
         ? simplePanel(key, spec)
         : expertForm(key, spec);
-    return h(
+    const panel = h(
       "div",
       { class: "run-panel" },
       h("div", { class: "run-panel-title" }, `${key} · ${spec.title}`),
       hasSimple ? modeToggle(key, mode) : null,
       body,
     );
+    // epub: панель предпросмотра разбивки — в обоих режимах
+    if (key === "epub") panel.append(epubPreviewPanel(key, spec, mode));
+    return panel;
   }
 
   // сегмент-переключатель «Простой режим / Экспертный»
@@ -317,6 +325,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           class: "mode-btn" + (mode === m ? " mode-btn-active" : ""),
           onclick: () => {
             UICore.runModeSet(key, m);
+            if (key === "epub") st.previewDirty = true;
             render();
           },
         },
@@ -335,6 +344,29 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // имена полей, которые пользователь менял. Оба режима читают/пишут
   // один объект: переключение «Простой ↔ Экспертный» ничего не теряет,
   // тонкие правки из эксперта применяются в простом и наоборот.
+
+  // ── epub: автосохранение настроек формы (localStorage, по проекту) ──
+  // Настройки сохраняются сразу при вводе (без ожидания запуска) и
+  // восстанавливаются поверх .env/дефолтов при входе на стадию.
+  const EPUB_SAVE_KEY = "epubRunVals";
+  function epubSave(key) {
+    try {
+      localStorage.setItem(
+        `${EPUB_SAVE_KEY}:${section}/${name}`,
+        JSON.stringify(st.values[key] || {}),
+      );
+    } catch {
+      /* нет localStorage (приватный режим) — не критично */
+    }
+  }
+  function epubLoad() {
+    try {
+      const raw = localStorage.getItem(`${EPUB_SAVE_KEY}:${section}/${name}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
 
   // инициализация значений формы по спеке: дефолты (уже с .env-префиллом
   // сервера) + автоподхват диапазона глав и autofile-файлов
@@ -396,6 +428,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
     st.values[key] = vals;
     st.touched[key] = new Set();
+    // epub: автосохранённые настройки поверх дефолтов/.env
+    if (spec.autosave) {
+      const saved = epubLoad();
+      if (saved && typeof saved === "object") {
+        for (const f of spec.fields || []) {
+          if (saved[f.name] !== undefined) {
+            vals[f.name] = saved[f.name];
+            st.touched[key].add(f.name);
+          }
+        }
+      }
+    }
   }
 
   // файл → путь внутри проекта (R5-G): голое имя + dir → "dir/имя"
@@ -425,6 +469,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (f.type === "bool") p[f.name] = Boolean(v);
       else if (v !== "" && v != null) p[f.name] = finalFile(f, v);
     }
+    if (key === "epub") {
+      // удалённые в предпросмотре секции: seq уходят в параметры
+      // запуска, скрипт их пропускает и перенумеровывает
+      p.skip = (st.preview && st.preview.skips) || [];
+    }
     return p;
   }
 
@@ -452,6 +501,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         label,
       );
       wrap._input = input;
+      if (key === "epub") wireEpubAutosave(wrap);
       return wrap;
     } else if (f.type === "select") {
       input = h("select", { class: "input" });
@@ -465,6 +515,28 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         vals[f.name] = input.value;
         touched.add(f.name);
       });
+    } else if (f.type === "textarea") {
+      // epub: многострочные regexp (по одному паттерну на строку)
+      input = h("textarea", {
+        class: "input epub-textarea",
+        rows: f.rows || 3,
+        text: String(vals[f.name] ?? f.default ?? ""),
+      });
+      input.addEventListener("input", () => {
+        vals[f.name] = input.value;
+        touched.add(f.name);
+      });
+    } else if (f.type === "textarea") {
+      // epub: многострочные regexp — по одному паттерну на строку
+      input = h("textarea", {
+        class: "input epub-textarea",
+        rows: f.rows || 3,
+        text: String(vals[f.name] ?? f.default ?? ""),
+      });
+      input.addEventListener("input", () => {
+        vals[f.name] = input.value;
+        touched.add(f.name);
+      });
     } else if (f.type === "files") {
       input = h("select", { class: "input" });
       const dir = f.dir || "";
@@ -474,7 +546,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           : dir === "prompts"
             ? st.options.prompts || []
             : st.options.root || [];
-      const exts = (f.ext || []).map((e) => e.toLowerCase());
+      let exts = (f.ext || []).map((e) => e.toLowerCase());
+      // epub: расширения зависят от режима — toc: только epub/zip;
+      // regex/chunk: + txt; простой режим всегда toc (пресет)
+      if (key === "epub" && f.name === "input") {
+        const m =
+          st.mode === "simple" ? "toc" : String(vals["mode"] || "toc");
+        exts =
+          m === "toc"
+            ? [".epub", ".zip"]
+            : [".epub", ".zip", ".txt"];
+      }
       const items = pool.filter(
         (n) =>
           exts.length === 0 || exts.some((e) => n.toLowerCase().endsWith(e)),
@@ -546,7 +628,19 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const wrap = h("label", { class: "field" }, label, input);
     if (f.help) wrap.append(h("div", { class: "field-help" }, f.help));
     wrap._input = input;
+    if (key === "epub") wireEpubAutosave(wrap);
     return wrap;
+  }
+
+  // epub: автосохранение настроек при вводе + пометка «предпросмотр
+  // устарел». input/change всплывают от вложенного элемента к label.
+  function wireEpubAutosave(wrap) {
+    const onCh = () => {
+      epubSave(st.stage);
+      st.previewDirty = true;
+    };
+    wrap.addEventListener("input", onCh);
+    wrap.addEventListener("change", onCh);
   }
 
   // карточка пресета + простые поля (spec.simple) + диапазон глав:
@@ -648,6 +742,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
+      const verr = epubValidateInput(key, spec, "simple");
+      if (verr) {
+        err.textContent = verr;
+        return;
+      }
       try {
         const r = await api("/jobs", {
           method: "POST",
@@ -766,6 +865,64 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       applyWikiMode();
     }
 
+    // epub (экспертный): справка по regexp (collapsible) + перестройка
+    // селекта исходника при смене режима (расширения зависят от режима)
+    if (key === "epub") {
+      const modeSel =
+        fieldWraps["mode"] && fieldWraps["mode"]._input;
+      const inputWrap = fieldWraps["input"];
+      const help = h(
+        "details",
+        { class: "regexp-help" },
+        h("summary", {}, "Справка по regexp"),
+        h(
+          "div",
+          { class: "regexp-help-body" },
+          h("p", {}, "Маркер — строка, НАЧИНАЮЩАЯСЯ с паттерна; ",
+            "вся строка становится заголовком главы."),
+          h("p", {}, "Примеры (по одному на строку):"),
+          h("ul", {},
+            h("li", {}, h("code", {}, "Глава \\d+")),
+            h("li", {}, h("code", {}, "^第[0-9]+章")),
+            h("li", {}, h("code", {}, "^(Глава|Часть)\\s\\d+")),
+          ),
+          h("p", {}, "Очистка — паттерн удаляет совпадения из текста главы;",
+            "пустые строки сжимаются."),
+        ),
+      );
+      fieldNodes.push(help);
+      if (modeSel && inputWrap) {
+        const rebuildInput = () => {
+          const m = modeSel.value || "toc";
+          const exts =
+            m === "toc"
+              ? [".epub", ".zip"]
+              : [".epub", ".zip", ".txt"];
+          const sel = inputWrap._input && inputWrap._input._sel;
+          if (!sel) return;
+          const cur = sel.value;
+          const opts = [...sel.options];
+          sel.replaceChildren();
+          sel.append(h("option", { value: "" }, "—"));
+          for (const o of opts) {
+            if (o.value === "") continue;
+            const ok = exts.some((e) =>
+              o.value.toLowerCase().endsWith(e));
+            if (ok) sel.append(h("option", { value: o.value }, o.value));
+          }
+          if (cur && !exts.some((e) => cur.toLowerCase().endsWith(e))) {
+            sel.value = "";
+            st.values[key]["input"] = "";
+            st.touched[key].add("input");
+          } else {
+            sel.value = cur;
+          }
+        };
+        modeSel.addEventListener("change", rebuildInput);
+        rebuildInput();
+      }
+    }
+
     // B4: смена host очищает предзаполненный api_key — иначе старый
     // ключ уедет на чужой сервер (C1 защищает только env-fallback)
     const hostEl = fieldWraps["host"] && fieldWraps["host"]._input;
@@ -781,6 +938,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
+      const verr = epubValidateInput(key, spec, "expert");
+      if (verr) {
+        err.textContent = verr;
+        return;
+      }
       try {
         const r = await api("/jobs", {
           method: "POST",
@@ -803,6 +965,180 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     });
 
     return h("div", { class: "run-form" }, fieldNodes, err, runBtn);
+  }
+
+  // ── epub: панель предпросмотра разбивки ──────────────────────────────
+  // Кнопка «Предпросмотр» → POST /stages/epub/preview (папки + размеры);
+  // удаление секции — DELETE .../folder?seq= (сервер перенумеровывает),
+  // seq копится в st.preview.skips и уходит в параметры запуска;
+  // текст главы — GET .../preview/text?num=.
+  function epubPreviewPanel(key, spec, mode) {
+    const err = h("div", { class: "form-error" });
+    const btn = h("button", { class: "btn btn-primary" }, "Предпросмотр");
+    btn.addEventListener("click", async () => {
+      err.textContent = "";
+      const verr = epubValidateInput(key, spec, mode);
+      if (verr) {
+        err.textContent = verr;
+        return;
+      }
+      try {
+        await epubRunPreview(key, spec, mode);
+        render();
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    });
+    const title = h(
+      "div",
+      { class: "run-panel-title" },
+      "Предпросмотр разбивки",
+      h("span", { class: "spacer" }),
+      btn,
+    );
+    const nodes = [title];
+    if (!st.preview) {
+      nodes.push(
+        h(
+          "div",
+          { class: "field-help" },
+          "Нажмите «Предпросмотр» — покажется список папок глав "
+            + "(размеры, удаление, текст)",
+        ),
+      );
+    } else {
+      if (st.previewDirty) {
+        nodes.push(
+          h(
+            "div",
+            { class: "field-help" },
+            "Настройки изменены — обновите предпросмотр",
+          ),
+        );
+      }
+      nodes.push(epubPreviewList(st.preview, err));
+      nodes.push(epubPreviewTextViewer(st.preview, err));
+    }
+    nodes.push(err);
+    return h("div", { class: "run-panel epub-preview" }, nodes);
+  }
+
+  // валидация исходника epub: обязателен; расширения — по режиму
+  function epubValidateInput(key, spec, mode) {
+    if (key !== "epub") return "";
+    const vals = st.values[key] || {};
+    const v = String(vals["input"] || "");
+    if (!v) return "Выберите исходник (автоподхвата нет)";
+    const m =
+      mode === "simple" ? "toc" : String(vals["mode"] || "toc");
+    const ext = v.toLowerCase().split(".").pop();
+    const ok =
+      m === "toc"
+        ? ext === "epub" || ext === "zip"
+        : ext === "epub" || ext === "zip" || ext === "txt";
+    return ok
+      ? ""
+      : "В режиме «по TOC» принимаются только epub/zip; "
+        + "txt — в режимах regexp/чанки";
+  }
+
+  // запуск предпросмотра: синхронно гоняет CLI с --preview-json
+  async function epubRunPreview(key, spec, mode) {
+    const r = await api("/stages/epub/preview", {
+      method: "POST",
+      body: {
+        project: `${section}/${name}`,
+        params: buildParams(key, spec, mode),
+        skip: (st.preview && st.preview.skips) || [],
+      },
+    });
+    st.preview = {
+      entries: r.entries || [],
+      source: r.source || "",
+      skips: (st.preview && st.preview.skips) || [],
+      viewNum: null,
+    };
+    st.previewDirty = false;
+  }
+
+  // список папок: имя + размер в kB + удаление (перенумерация на сервере)
+  function epubPreviewList(prev, err) {
+    const rows = (prev.entries || []).map((e) => {
+      const del = h("button", { class: "btn btn-sm btn-danger" }, "Удалить");
+      del.addEventListener("click", async () => {
+        err.textContent = "";
+        try {
+          const r = await api(
+            `/stages/epub/preview/folder?seq=${e.seq}`
+              + `&project=${section}/${name}`,
+            { method: "DELETE" },
+          );
+          prev.entries = r.entries || [];
+          prev.skips = [...(prev.skips || []), e.seq];
+          prev.viewNum = null;
+          render();
+        } catch (ex) {
+          err.textContent = ex.message;
+        }
+      });
+      return h(
+        "div",
+        { class: "epub-prev-row" },
+        h("span", { class: "epub-prev-folder", text: e.folder }),
+        h(
+          "span",
+          { class: "epub-prev-size", text: `${e.size_kb} kB` },
+        ),
+        del,
+      );
+    });
+    return h("div", { class: "epub-prev-list" }, rows);
+  }
+
+  // просмотр текста главы: селектор по номеру → текст с сервера
+  function epubPreviewTextViewer(prev, err) {
+    const sel = h("select", { class: "input" });
+    sel.append(h("option", { value: "" }, "— текст главы —"));
+    for (const e of prev.entries || []) {
+      sel.append(
+        h("option", { value: e.num }, `${e.num} · ${e.heading || e.folder}`),
+      );
+    }
+    const box = h(
+      "pre",
+      { class: "epub-prev-text", text: "(выберите главу)" },
+    );
+    sel.addEventListener("change", async () => {
+      if (!sel.value) {
+        box.textContent = "(выберите главу)";
+        prev.viewNum = null;
+        return;
+      }
+      prev.viewNum = Number(sel.value);
+      try {
+        const r = await api(
+          `/stages/epub/preview/text?num=${sel.value}`
+            + `&project=${section}/${name}`,
+        );
+        box.textContent = `${r.heading || ""}\n\n${r.text || ""}`;
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    });
+    if (prev.viewNum != null) {
+      const opt = [...sel.options].find((o) => o.value === String(prev.viewNum));
+      if (opt) {
+        sel.value = opt.value;
+        box.textContent = "(обновите текст)";
+      }
+    }
+    return h(
+      "div",
+      { class: "field" },
+      h("div", { class: "field-label" }, "Текст главы"),
+      sel,
+      box,
+    );
   }
 
   function logPanel() {

@@ -1320,3 +1320,127 @@ def test_strip_secret_keys_keeps_web_out_of_project():
     assert "NER_MODEL=ner" in out
     # повторно — идемпотентно
     assert _strip_secret_keys(out) == out
+
+
+# ════════════════════════════════════════════════════════════════════
+# epub: предпросмотр разбивки (preview API)
+# ════════════════════════════════════════════════════════════════════
+def _make_epub_file(pdir: Path, name="book.epub") -> Path:
+    """Простой epub: 2 xhtml с h1, spine, без toc.ncx."""
+    import zipfile
+    src = pdir / "source"
+    src.mkdir(exist_ok=True)
+    epub = src / name
+    container = ('<?xml version="1.0"?><container><rootfiles><rootfile '
+                 'full-path="OEBPS/content.opf"/></rootfiles></container>')
+    opf = ('<?xml version="1.0"?><package><manifest>'
+           '<item id="c1" href="c1.xhtml"/>'
+           '<item id="c2" href="c2.xhtml"/></manifest>'
+           '<spine><itemref idref="c1"/><itemref idref="c2"/></spine>'
+           '</package>')
+    with zipfile.ZipFile(epub, "w") as zf:
+        zf.writestr("META-INF/container.xml", container)
+        zf.writestr("OEBPS/content.opf", opf)
+        zf.writestr("OEBPS/c1.xhtml",
+                    "<html><body><h1>Глава 1</h1><p>текст один</p>"
+                    "<p>" + "абв " * 200 + "</p></body></html>")
+        zf.writestr("OEBPS/c2.xhtml",
+                    "<html><body><h1>Глава 2</h1><p>текст два</p>"
+                    "<p>" + "где " * 200 + "</p></body></html>")
+    return epub
+
+
+def test_epub_preview_flow(srv_ctx):
+    """POST предпросмотр → папки/размеры; текст главы; удаление
+    с перенумерацией; удалённая секция уходит в skip-параметры."""
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    _make_epub_file(pdir)
+    base = "/api/stages/epub/preview"
+    # предпросмотр по TOC
+    res, payload = _request(port, "POST", base, {
+        "project": "ACTIVE/test_book",
+        "params": {"input": "source/book.epub", "mode": "toc"},
+    })
+    assert res.status == 200, payload
+    entries = payload["entries"]
+    assert [e["folder"] for e in entries] == \
+        ["00000_1_Глава_1", "00000_2_Глава_2"]
+    assert all(e["size_kb"] > 0 for e in entries)
+    # GET — тот же предпросмотр
+    res2, payload2 = _request(port, "GET",
+                              base + "?project=ACTIVE/test_book")
+    assert res2.status == 200
+    assert [e["folder"] for e in payload2["entries"]] == \
+        [e["folder"] for e in entries]
+    # текст главы по номеру
+    res3, payload3 = _request(port, "GET",
+                              base + "/text?num=1&project=ACTIVE/test_book")
+    assert res3.status == 200
+    assert payload3["heading"] == "Глава 1"
+    assert payload3["text"].startswith("текст один")
+    # несуществующая глава — 404
+    res4, _ = _request(port, "GET",
+                       base + "/text?num=99&project=ACTIVE/test_book")
+    assert res4.status == 404
+    # удаление seq=1: Глава 2 перенумеровывается в 00000_1_Глава_2
+    res5, payload5 = _request(port, "DELETE",
+                              base + "/folder?seq=1&project=ACTIVE/test_book")
+    assert res5.status == 200
+    assert [e["folder"] for e in payload5["entries"]] == ["00000_1_Глава_2"]
+    # текст по новому номеру доступен
+    res6, payload6 = _request(port, "GET",
+                              base + "/text?num=1&project=ACTIVE/test_book")
+    assert res6.status == 200 and payload6["heading"] == "Глава 2"
+    # повторное удаление — 404
+    res7, _ = _request(port, "DELETE",
+                       base + "/folder?seq=1&project=ACTIVE/test_book")
+    assert res7.status == 404
+
+
+def test_epub_preview_regex_txt_and_offset(srv_ctx):
+    """txt в regex-режиме + num_offset=875 → папка 000_875_…"""
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    (pdir / "source" / "book.txt").write_text(
+        "Глава 1\nпервый\nГлава 2\nвторой\n", encoding="utf-8")
+    res, payload = _request(port, "POST", "/api/stages/epub/preview", {
+        "project": "ACTIVE/test_book",
+        "params": {"input": "source/book.txt", "mode": "regex",
+                   "split_patterns": ["Глава \\d+"],
+                   "num_offset": "875"},
+    })
+    assert res.status == 200, payload
+    assert [e["folder"] for e in payload["entries"]] == \
+        ["000_875_Глава_1", "000_876_Глава_2"]
+
+
+def test_epub_preview_toc_rejects_txt(srv_ctx):
+    """txt в toc-режиме — 400 с понятной ошибкой."""
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    (pdir / "source" / "book.txt").write_text("текст\n", encoding="utf-8")
+    res, payload = _request(port, "POST", "/api/stages/epub/preview", {
+        "project": "ACTIVE/test_book",
+        "params": {"input": "source/book.txt", "mode": "toc"},
+    })
+    assert res.status == 400
+    assert "TOC" in payload.get("error", "")
+
+
+def test_epub_preview_requires_project(srv_ctx):
+    """Без project — 400."""
+    _, port, _ = srv_ctx()
+    res, payload = _request(port, "POST", "/api/stages/epub/preview",
+                            {"params": {"mode": "toc"}})
+    assert res.status == 400
+    assert "project" in payload.get("error", "")
+
+
+def test_epub_preview_skip_propagates(srv_ctx):
+    """skip из предпросмотра попадает в build_command → --skip."""
+    from web.stages import build_command
+    argv = build_command("epub", {"input": "source/book.epub",
+                                  "mode": "toc", "skip": [1, 3]}, {})
+    assert argv.count("--skip") == 2
+    assert argv[argv.index("--skip")] == "--skip"

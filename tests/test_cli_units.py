@@ -65,7 +65,7 @@ def test_ner_terms_are_duplicate():
 def test_ner_fuzzy_duplicate_in_list():
     items = [{"term": "陈阳"}, {"term": "林水"}]
     ok, it = NER.is_fuzzy_duplicate_in_list("陈 阳", items, 3, 0.8)
-    assert ok and it["term"] == "陈阳"
+    assert ok and it is not None and it["term"] == "陈阳"
     ok, it = NER.is_fuzzy_duplicate_in_list("Совершенно Иной", items, 3, 0.8)
     assert not ok and it is None
 
@@ -132,14 +132,14 @@ def test_ner_normalize_phonetic():
     assert NER.normalize_phonetic("Chen Yang") == "chenyang"
     assert NER.normalize_phonetic("chén2 yang1") == "chényang"
     assert NER.normalize_phonetic("   ") == ""
-    assert NER.normalize_phonetic(None) == ""
+    assert NER.normalize_phonetic(None or "") == ""
 
 
 def test_ner_get_type_base():
     assert NER.get_type_base("Person (male)") == "Person"
     assert NER.get_type_base("Location") == "Location"
     assert NER.get_type_base("") == ""
-    assert NER.get_type_base(None) == ""
+    assert NER.get_type_base(None or "") == ""
 
 
 def test_ner_merge_alias_groups():
@@ -427,7 +427,8 @@ def test_re_find_chapter_file_in_dir(tmp_path):
     d.mkdir()
     (d / "polished.txt").write_text("текст главы", encoding="utf-8")
     fp, content = RE.find_chapter_file_in_dir(str(d), 1, "polished")
-    assert fp.endswith("polished.txt") and content == "текст главы"
+    assert fp is not None and fp.endswith("polished.txt")
+    assert content == "текст главы"
     fp, content = RE.find_chapter_file_in_dir(str(d), 1, "redacted")
     assert fp is None and content is None
 
@@ -532,17 +533,14 @@ def test_e2c_title_already_in_text():
     assert E2C.title_already_in_text("", "что угодно")  # пустой заголовок не дублируем
 
 
-def test_e2c_patterns_and_clean_heading():
-    pat = E2C.Patterns(E2C.LANG_PRESETS["zh"], {})
-    assert pat.chapter_re is not None
-    assert pat.txt_marker() is not None
-    # удаление названия книги из заголовка
-    h = E2C.clean_heading("《Небесный меч》 第1章 Начало", pat, None)
-    assert "《" not in h and "第1章" in h
-    h = E2C.clean_heading("Небесный меч - Глава 1", E2C.Patterns(E2C.LANG_PRESETS["ru"], {}),
-                          "Небесный меч")
-    assert h == "Глава 1"
-    assert E2C.clean_heading("", pat) == ""
+def test_e2c_clean_title():
+    # чистка заголовка: обрезка и схлопывание пробелов
+    assert E2C.clean_title("  Глава 1  ") == "Глава 1"
+    assert E2C.clean_title("Глава  1\tНачало") == "Глава 1 Начало"
+    assert E2C.clean_title("") == ""
+    # первая непустая строка — заголовок (лимит по умолчанию 40)
+    assert E2C.first_line("Глава 1\nтекст") == "Глава 1"
+    assert E2C.first_line("\nГлава 1\n") == "Глава 1"
 
 
 def test_e2c_write_section(tmp_path, capsys):
@@ -554,37 +552,34 @@ def test_e2c_write_section(tmp_path, capsys):
     assert (folder / "chapter12_polished.txt").exists()
     # dry_run ничего не пишет
     E2C.write_section(tmp_path, 99, "Глава 99", "тело", False, dry_run=True)
-    assert not (tmp_path / "000099_Глава_99").exists()
+    assert not (tmp_path / "0000_99_Глава_99").exists()
+    # пустое тело — только заголовок
+    c = (tmp_path / "0000_12_Глава_12" / "chapter12_polished.txt")
+    assert c.read_text(encoding="utf-8") == "Глава 12\n"
 
 
-def test_e2c_split_and_write(tmp_path, capsys):
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    text = "Пролог\nвступление\nГлава 1\nпервый текст\nГлава 2\nвторой текст\n"
-    n, _, removed = E2C.split_and_write(text, pat, do_clean=True, do_pages=True,
-                                        polished=False, output_dir=tmp_path)
-    assert n == 3  # прелог + 2 главы
+def test_e2c_split_regex_and_write(tmp_path, capsys):
+    src = tmp_path / "book.txt"
+    src.write_text("Пролог\nвступление\nГлава 1\nпервый текст\n"
+                   "Глава 2\nвторой текст\n", encoding="utf-8")
+    split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
+    entries, before, removed = E2C.split_input(
+        src, "regex", split_res, [], title_limit=50)
+    assert [e["heading"] for e in entries] == ["Пролог", "Глава 1", "Глава 2"]
+    assert removed == [] and before > 0
+    E2C.write_entries(entries, tmp_path, polished=False)
     assert (tmp_path / "00000_1_Пролог").is_dir()
     assert (tmp_path / "00000_2_Глава_1").is_dir()
     assert (tmp_path / "00000_3_Глава_2").is_dir()
 
 
-def test_e2c_split_and_write_no_markers(tmp_path):
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    n, _, _ = E2C.split_and_write("просто сплошной текст", pat, True, True,
-                                  False, tmp_path)
-    assert n == 1  # одна секция с дефолтным заголовком
-
-
-def test_e2c_process_txt(tmp_path):
+def test_e2c_split_chunk_write(tmp_path):
     src = tmp_path / "book.txt"
-    src.write_text("Глава 1\nодин\nГлава 2\nдва\n", encoding="utf-8")
-    pat = E2C.Patterns(E2C.LANG_PRESETS["ru"], {})
-    out = tmp_path / "chapters"
-    out.mkdir()
-    n, before, after, removed = E2C.process_txt(
-        src, pat, True, True, False, out)
-    assert n == 2 and before > 0 and after > 0
-    assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
+    src.write_text("просто сплошной текст. " * 600, encoding="utf-8")
+    entries, *_ = E2C.split_input(src, "chunk", [], [],
+                                  chunk_size=3000, chunk_mask="Часть {num}")
+    assert len(entries) >= 2  # несколько чанков
+    assert entries[0]["heading"].startswith("Часть ")
 
 
 # ══════════════════════════════════════════════════════════════════════

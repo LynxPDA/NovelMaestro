@@ -1890,10 +1890,15 @@ def _persist_run_params(ctx: dict, pdir: Path, stage: str,
     сокрытия; ключ хранится как <СТАДИЯ>_API_KEY, fallback — API_KEY).
     Пустые значения НЕ пишутся; системный .env не трогается."""
     from web.stages import env_keys_for
+    # noenv-поля (многострочные regexp epub) в .env не пишем — перевод
+    # строк на пробелы ломает «по одному паттерну на строку»
+    spec = spec_for(stage)
+    noenv = {f["name"] for f in (spec or {}).get("fields", [])
+             if f.get("noenv")}
     updates: dict[str, str] = {}
     profile = str(params.get("profile") or "")
     for field, value in params.items():
-        if value is None or value == "":
+        if field in noenv or value is None or value == "":
             continue
         keys = env_keys_for(stage, field, profile)
         if not keys:
@@ -2088,6 +2093,8 @@ def _stage_spec(ctx: dict) -> dict:
             c = _import_common(ctx)
             env = c.parse_dotenv(c.find_env_file(start_dir=str(pdir)))
             for field in spec.get("fields", []):
+                if field.get("noenv"):
+                    continue  # epub: многострочные regexp — только localStorage
                 for key in env_keys_for(
                         ctx["params"]["key"], field["name"]):
                     # пустое значение не забивает fallback-ключ
@@ -2437,6 +2444,147 @@ def _stages_list(ctx: dict) -> dict:
         for k, v in ordered_stages()]}
 
 
+# ════════════════════════════════════════════════════════════════════
+# epub: предпросмотр разбивки (папки, размеры, удаление, текст)
+# ════════════════════════════════════════════════════════════════════
+EPUB_PREVIEW_FILE = "tmp/epub_preview.json"  # относит. cwd = папка проекта
+
+
+def _epub_preview_path(pdir: Path) -> Path:
+    return pdir / EPUB_PREVIEW_FILE
+
+
+def _epub_preview_read(pdir: Path) -> dict:
+    """JSON предпросмотра; нет файла/битый — пустой предпросмотр."""
+    import json as _json
+    path = _epub_preview_path(pdir)
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"source": "", "num_offset": 1, "title_limit": 50,
+                "entries": []}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("source", "")
+    data.setdefault("num_offset", 1)
+    data.setdefault("title_limit", 50)
+    data.setdefault("entries", [])
+    return data
+
+
+def _epub_preview_summary(data: dict) -> dict:
+    """Публичное представление: папки + размеры (без текстов)."""
+    entries = []
+    for e in data.get("entries", []):
+        text = e.get("text", "") or ""
+        entries.append({
+            "seq": e.get("seq"),
+            "num": e.get("num"),
+            "folder": e.get("folder", ""),
+            "heading": e.get("heading", ""),
+            "size_kb": round(len(text.encode("utf-8")) / 1024, 1),
+        })
+    return {"entries": entries}
+
+
+def _epub_preview_run(ctx: dict, pdir: Path, params: dict,
+                      skip: list) -> dict:
+    """Запускает скрипт с --preview-json (синхронно); возвращает данные."""
+    import subprocess
+    import sys as _sys
+    repo = _repo_root(ctx)
+    script = script_path("epub", repo)
+    if script is None or not script.is_file():
+        raise ApiError(500, "Скрипт epub_to_chapters.py не найден")
+    argv = build_command("epub", params, ctx)
+    argv[0] = str(script)
+    argv += ["--preview-json", EPUB_PREVIEW_FILE]
+    for s in skip or []:
+        argv += ["--skip", str(s)]
+    try:
+        proc = subprocess.run(
+            [_sys.executable, *argv], cwd=str(pdir),
+            capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise ApiError(500, "Предпросмотр не уложился в 120 c — "
+                            "уменьшите исходник")
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        raise ApiError(400, f"Ошибка разбивки: {err[:500]}")
+    data = _epub_preview_read(pdir)
+    if not data.get("entries"):
+        raise ApiError(400, "Разбивка не дала ни одной главы")
+    return data
+
+
+def _epub_preview_post(ctx: dict) -> dict:
+    """Создать/обновить предпросмотр (POST /api/stages/epub/preview)."""
+    pdir, _sec, _name = _project_ctx(ctx)
+    body = ctx["body"] or {}
+    data = _epub_preview_run(ctx, pdir, body.get("params") or {},
+                             body.get("skip") or [])
+    return {"ok": True, "source": data.get("source", ""),
+            **_epub_preview_summary(data)}
+
+
+def _epub_preview_get(ctx: dict) -> dict:
+    """Текущий предпросмотр (GET /api/stages/epub/preview)."""
+    pdir, _sec, _name = _project_ctx(ctx)
+    data = _epub_preview_read(pdir)
+    return {"ok": True, "source": data.get("source", ""),
+            **_epub_preview_summary(data)}
+
+
+def _epub_preview_text(ctx: dict) -> dict:
+    """Текст главы предпросмотра (GET .../preview/text?num=N)."""
+    pdir, _sec, _name = _project_ctx(ctx)
+    try:
+        num = int(ctx["query"].get("num", ""))
+    except (TypeError, ValueError):
+        raise ApiError(400, "Параметр num обязателен (номер главы)")
+    data = _epub_preview_read(pdir)
+    for e in data.get("entries", []):
+        if e.get("num") == num:
+            return {"ok": True, "heading": e.get("heading", ""),
+                    "text": e.get("text", "")}
+    raise ApiError(404, f"Глава {num} не найдена в предпросмотре")
+
+
+def _epub_preview_folder_delete(ctx: dict) -> dict:
+    """Удалить главу из предпросмотра + перенумерация
+    (DELETE .../preview/folder?seq=N; seq — исходный порядок)."""
+    pdir, _sec, _name = _project_ctx(ctx)
+    try:
+        seq = int(ctx["query"].get("seq", ""))
+    except (TypeError, ValueError):
+        raise ApiError(400, "Параметр seq обязателен")
+    data = _epub_preview_read(pdir)
+    entries = [e for e in data.get("entries", [])
+               if e.get("seq") != seq]
+    if len(entries) == len(data.get("entries", [])):
+        raise ApiError(404, f"Секция {seq} не найдена в предпросмотре")
+    # перенумерация: каталоги нумеруются по порядку от num_offset,
+    # префикс — ширина 6 (00000_1, 0000_12, 000_177…)
+    try:
+        offset = int(data.get("num_offset", 1))
+    except (TypeError, ValueError):
+        offset = 1
+    for i, e in enumerate(entries):
+        num = offset + i
+        e["num"] = num
+        parts = str(e.get("folder", "")).split("_", 2)
+        if len(parts) == 3:
+            zeros = "0" * max(0, 6 - len(str(num)))
+            e["folder"] = f"{zeros}_{num}_{parts[2]}"
+    data["entries"] = entries
+    import json as _json
+    common = _import_common(ctx)
+    common.atomic_write(str(_epub_preview_path(pdir)),
+                        _json.dumps(data, ensure_ascii=False, indent=1))
+    return {"ok": True, "source": data.get("source", ""),
+            **_epub_preview_summary(data)}
+
+
 def _register_jobs(router: Router) -> None:
     router.add("GET", "/api/stages", _stages_list)
     router.add("POST", "/api/jobs", _jobs_start)
@@ -2448,3 +2596,9 @@ def _register_jobs(router: Router) -> None:
     router.add("GET", "/api/jobs/{id}/stream", _jobs_stream)
     router.add("GET", "/api/stages/{key}/spec", _stage_spec)
     router.add("GET", "/api/stages/{key}/options", _stage_options)
+    # epub: предпросмотр разбивки (папки/размеры/удаление/текст)
+    router.add("POST", "/api/stages/epub/preview", _epub_preview_post)
+    router.add("GET", "/api/stages/epub/preview", _epub_preview_get)
+    router.add("GET", "/api/stages/epub/preview/text", _epub_preview_text)
+    router.add("DELETE", "/api/stages/epub/preview/folder",
+               _epub_preview_folder_delete)
