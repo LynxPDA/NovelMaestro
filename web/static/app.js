@@ -269,7 +269,7 @@ const _tooltip = (() => {
 function attachTooltip(el, text) {
   if (!el || !text) return;
   el.setAttribute("data-tip", ""); // маркер для CSS-курсора
-  const show = (e) => {
+  const show = () => {
     _tooltip.textContent = text;
     _tooltip.classList.add("tooltip-show");
     const r = el.getBoundingClientRect();
