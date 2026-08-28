@@ -92,6 +92,33 @@ def _nfc(s: str) -> str:
 # ══════════════════════════════════════════════════════════════════════
 # ПАРСИНГ ФАЙЛА ПРАВИЛ
 # ══════════════════════════════════════════════════════════════════════
+def parse_replace_lines(lines) -> tuple[List[Rule], List[str]]:
+    """Парсит пары «паттерн -> замена» из строк (--replace).
+
+    Каждая строка — одно regexp-правило; пустая правая часть — удаление.
+    Возвращает (rules, warnings): битая строка → предупреждение + пропуск.
+    """
+    rules: List[Rule] = []
+    warnings: List[str] = []
+    for i, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "->" not in line:
+            warnings.append(f"строка {i}: нет разделителя «->» — пропущена")
+            continue
+        left, right = line.split("->", 1)
+        left = _nfc(left.strip())
+        right = _nfc(right.strip())
+        if not left:
+            warnings.append(f"строка {i}: пустая левая часть — пропущена")
+            continue
+        rules.append(Rule(pattern=left, replacement=right,
+                          ignore_case=False, is_regex=True,
+                          section="--replace"))
+    return rules, warnings
+
+
 def parse_rules(rules_file, force_regex: bool = False):
     """Читает файл правил.
 
@@ -198,6 +225,10 @@ def main(argv=None) -> int:
                     help="Номер первой главы (default: минимум найденных).")
     ap.add_argument("--end", type=int, default=None,
                     help="Номер последней главы (default: максимум найденных).")
+    ap.add_argument("--replace", action="append", default=[],
+                    metavar="PAT -> REPL",
+                    help="Regexp-замена (можно несколько); PAT -> пусто — "
+                         "удаление. Если задан, файл правил не читается.")
     ap.add_argument("--regex", action="store_true",
                     help="Все строки правил трактовать как regex.")
     ap.add_argument("--dry-run", "--dry_run", dest="dry_run",
@@ -210,15 +241,25 @@ def main(argv=None) -> int:
     print(f"Запуск: {_shlex.join(_sys.argv)}")
 
     # ── Правила ──
-    rules, warnings = parse_rules(args.rules_file, force_regex=args.regex)
-    for w in warnings:
-        print(f"⚠ {w}")
-    if not rules:
-        if warnings and warnings[0].startswith("Не удалось прочитать"):
-            print(f"❌ {warnings[0]}")
-        else:
-            print(f"❌ Файл правил {args.rules_file!r} не содержит ни одной замены.")
-        return 1
+    if args.replace:
+        # --replace: только regexp-пары из аргументов (файл не читается)
+        rules, warnings = parse_replace_lines(args.replace)
+        for w in warnings:
+            print(f"⚠ {w}")
+        if not rules:
+            print(f"❌ В --replace нет ни одной корректной замены.")
+            return 1
+    else:
+        rules, warnings = parse_rules(args.rules_file,
+                                      force_regex=args.regex)
+        for w in warnings:
+            print(f"⚠ {w}")
+        if not rules:
+            if warnings and warnings[0].startswith("Не удалось прочитать"):
+                print(f"❌ {warnings[0]}")
+            else:
+                print(f"❌ Файл правил {args.rules_file!r} не содержит ни одной замены.")
+            return 1
 
     # ── Карта глав ──
     chapter_map = build_chapter_map(args.chapters_dir)

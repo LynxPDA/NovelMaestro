@@ -527,17 +527,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         vals[f.name] = input.value;
         touched.add(f.name);
       });
-    } else if (f.type === "textarea") {
-      // epub: многострочные regexp — по одному паттерну на строку
-      input = h("textarea", {
-        class: "input epub-textarea",
-        rows: f.rows || 3,
-        text: String(vals[f.name] ?? f.default ?? ""),
-      });
-      input.addEventListener("input", () => {
-        vals[f.name] = input.value;
-        touched.add(f.name);
-      });
     } else if (f.type === "files") {
       input = h("select", { class: "input" });
       const dir = f.dir || "";
@@ -744,7 +733,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
-      const verr = epubValidateInput(key, spec, "simple");
+      const verr = epubValidateInput(key, "simple");
       if (verr) {
         err.textContent = verr;
         return;
@@ -899,6 +888,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             h("li", {}, h("code", {}, "[0-9]+"), " — все цифры"),
             h("li", {}, h("code", {}, "\\(未完待续\\)"), " — «(未完待续)»"),
           ),
+          h("p", {}, "Замены (все режимы, применяются ДО разбивки) — ",
+            "по одной паре на строку: ",
+            h("code", {}, "паттерн -> замена"),
+            "; пустая правая часть — удаление:"),
+          h("ul", {},
+            h("li", {}, h("code", {}, "第(\\d+)章 -> Глава \\1"),
+              " — «第1章» → «Глава 1» (\\1 — группа)"),
+            h("li", {}, h("code", {}, "\\s+ -> "), " — сжать пробелы"),
+            h("li", {}, h("code", {}, "(?:他|她) -> 他"), " — унифицировать"),
+            h("li", {}, h("code", {}, "\\(\\d+\\) ->"), " — убрать «(12)»"),
+          ),
           h("p", {}, "Шпаргалка по regexp:"),
           h("ul", {},
             h("li", {}, h("code", {}, "^"), " — начало строки, ",
@@ -963,6 +963,52 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     }
 
+    if (key === "batch_replace") {
+      const help = h(
+        "details",
+        { class: "regexp-help" },
+        h("summary", {}, "Справка по regexp"),
+        h(
+          "div",
+          { class: "regexp-help-body" },
+          h("p", {}, "Формат — одна пара на строку: ",
+            h("code", {}, "паттерн -> замена"),
+            "; пустая правая часть — удаление."),
+          h("p", {}, "Замены:"),
+          h("ul", {},
+            h("li", {}, h("code", {}, "Глава \\d+ -> Глава №\\g<0>"),
+              " — «Глава 5» → «Глава №5»"),
+            h("li", {}, h("code", {}, "\\s+ -> "), " — сжать пробелы"),
+            h("li", {}, h("code", {}, "(?:его|её) -> их"),
+              " — «его/её» → «их»"),
+            h("li", {}, h("code", {}, "\\bкнязь\\b -> Князь"),
+              " — только целое слово"),
+          ),
+          h("p", {}, "Удаления:"),
+          h("ul", {},
+            h("li", {}, h("code", {}, "^##? .*$ ->"), " — строки-заголовки"),
+            h("li", {}, h("code", {}, "<[^>]+> ->"), " — HTML-теги"),
+            h("li", {}, h("code", {}, "\\(\\d+\\) ->"), " — «(12)»"),
+          ),
+          h("p", {}, "Шпаргалка по regexp:"),
+          h("ul", {},
+            h("li", {}, h("code", {}, "^"), " — начало строки, ",
+              h("code", {}, "$"), " — конец"),
+            h("li", {}, h("code", {}, "\\d"), " — цифра, ",
+              h("code", {}, "\\s"), " — пробел, ",
+              h("code", {}, "\\b"), " — граница слова"),
+            h("li", {}, h("code", {}, "\\g<0>"), " — всё совпадение; ",
+              h("code", {}, "\\1"), " — первая группа"),
+            h("li", {}, h("code", {}, "."), " — любой символ, ",
+              h("code", {}, "\\."), " — точка"),
+            h("li", {}, h("code", {}, "(a|b)"), " — a или b, ",
+              h("code", {}, "[0-9]"), " — диапазон"),
+          ),
+        ),
+      );
+      fieldNodes.push(help);
+    }
+
     // B4: смена host очищает предзаполненный api_key — иначе старый
     // ключ уедет на чужой сервер (C1 защищает только env-fallback)
     const hostEl = fieldWraps["host"] && fieldWraps["host"]._input;
@@ -978,7 +1024,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
-      const verr = epubValidateInput(key, spec, "expert");
+      const verr = epubValidateInput(key, "expert");
       if (verr) {
         err.textContent = verr;
         return;
@@ -1017,7 +1063,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const btn = h("button", { class: "btn btn-primary" }, "Предпросмотр");
     btn.addEventListener("click", async () => {
       err.textContent = "";
-      const verr = epubValidateInput(key, spec, mode);
+      const verr = epubValidateInput(key, mode);
       if (verr) {
         err.textContent = verr;
         return;
@@ -1064,7 +1110,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // валидация исходника epub: обязателен; расширения — по режиму
-  function epubValidateInput(key, spec, mode) {
+  function epubValidateInput(key, mode) {
     if (key !== "epub") return "";
     const vals = st.values[key] || {};
     const v = String(vals["input"] || "");

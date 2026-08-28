@@ -143,6 +143,8 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
         argv += ["--split-re", p]
     for p in _epub_lines(form.get("clean_patterns")):
         argv += ["--clean-re", p]
+    for p in _epub_lines(form.get("replace_patterns")):
+        argv += ["--replace-re", p]
     if mode == "chunk":
         if form.get("chunk_size") not in (None, ""):
             argv += ["--chunk-size", str(form["chunk_size"])]
@@ -198,13 +200,11 @@ def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
 
 def build_batch_replace(form: dict, ctx: dict) -> list[str]:
     argv = ["cli/batch_replace.py"]
-    if form.get("rules_file"):
-        argv += ["--rules-file", str(form["rules_file"])]
+    for line in _epub_lines(form.get("replacements")):
+        argv += ["--replace", line]
     if form.get("type"):
         argv += ["--type", str(form["type"])]
     argv += _range_argv("start", form)
-    if form.get("regex"):
-        argv += ["--regex"]
     if form.get("dry_run"):
         argv += ["--dry-run"]
     return argv
@@ -543,6 +543,15 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "Работают во ВСЕХ режимах. Каждый паттерн удаляет "
                       "все совпадения из текста; пустые строки сжимаются; "
                       "пример: «^本章完»"},
+            {"name": "replace_patterns",
+             "label": "Замены (regexp, паттерн -> замена)",
+             "type": "textarea", "rows": 3, "default": "",
+             "noenv": True,
+             "help": "Работают во ВСЕХ режимах, применяются ДО разбивки. "
+                      "По одной паре на строку: «паттерн -> замена»; "
+                      "пустая правая часть — УДАЛЕНИЕ. Удобно нормализовать "
+                      "маркеры глав: «第(\\d+)章 -> Глава \\1» "
+                      "(\\1 — первая группа)"},
             {"name": "title_limit",
              "label": "Длина названия каталога, СИМВОЛЫ",
              "type": "number", "default": "50",
@@ -962,22 +971,26 @@ STAGE_SPECS: dict[str, dict] = {
         "script": "batch_replace.py",
         "build": build_batch_replace,
         "fields": [
-            {"name": "rules_file", "label": "Файл правил",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "prompts/replacements.txt"},
+            {"name": "replacements",
+             "label": "Regexp-замены (по одной на строку)",
+             "type": "textarea", "rows": 5, "default": "",
+             "noenv": True,
+             "help": "Формат: паттерн -> замена (regexp, спецсимволы "
+                      "работают). Пустая правая часть — УДАЛЕНИЕ: "
+                      "«<div>.*?</div> ->». Строки с # — комментарии. "
+                      "Примеры: «Глава \\d+ -> Глава №\\g<0>»..."},
             {"name": "type", "label": "Тип файлов глав",
              "type": "select", "options": ["polished", "redacted", "translated", "chapter"],
              "default": "polished"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "regex", "label": "Правила как regex (--regex)",
-             "type": "bool", "default": False},
             {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
-             "type": "bool", "default": False},
+             "type": "bool", "default": False,
+             "help": "Показать, что изменится, не трогая файлы"},
         ],
         # только экспертный режим (без простого/пресета)
-    },
+    }, 
 }
 
 # Порядок отображения стадий в «Запусках» (логика конвейера: разбор →

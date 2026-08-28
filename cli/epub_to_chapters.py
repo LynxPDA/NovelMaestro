@@ -208,6 +208,28 @@ def _safe_compile(pattern: str, name: str, multiline: bool = False):
         sys.exit(f"  Ошибка в паттерне --{name}: {e}\n  Паттерн: {pattern}")
 
 
+def _parse_replace_re(lines) -> list[tuple[re.Pattern, str]]:
+    """Парсит --replace-re «паттерн -> замена» → [(compiled, repl)].
+
+    Пустая правая часть — удаление совпадений. Битая строка — sys.exit.
+    """
+    out: list[tuple[re.Pattern, str]] = []
+    for i, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "->" not in line:
+            sys.exit(f"--replace-re строка {i}: нет разделителя «->» — "
+                     f"ожидалось «паттерн -> замена»")
+        pat, repl = line.split("->", 1)
+        pat = pat.strip()
+        if not pat:
+            sys.exit(f"--replace-re строка {i}: пустой паттерн")
+        compiled = _safe_compile(pat, "replace-re")
+        out.append((compiled, repl.strip()))
+    return out
+
+
 def apply_cleanups(text: str, clean_res) -> tuple[str, list[str]]:
     """Удаляет все совпадения каждого паттерна; сжимает пустые строки."""
     removed: list[str] = []
@@ -496,6 +518,7 @@ def read_text_file(txt_path: Path) -> str:
 # ======================== ОБЩИЙ ВХОД ===================================
 def split_input(input_file: Path, mode: str,
                 split_res, clean_res,
+                replace_res=(),
                 chunk_size: int = 7000, chunk_mask: str = "Глава {num}",
                 title_limit: int = 50, num_offset: int = 1,
                 skips: set[int] | None = None) -> tuple[list[dict], int, list[str]]:
@@ -504,6 +527,10 @@ def split_input(input_file: Path, mode: str,
     entry = {seq (исходный порядок, с 1), num (номер с учётом offset/skip),
              heading, body}. skip — исходные seq, которые пропускаются,
     оставшиеся перенумеровываются с num_offset.
+
+    replace_res — пары (compiled, repl): regexp-замены, применяются
+    к тексту ДО разбивки (можно нормализовать маркеры глав, напр.
+    «第\\d+章 -> Глава \\d+»); пустая repl — удаление совпадений.
     """
     skips = skips or set()
     suffix = input_file.suffix.lower()
@@ -529,6 +556,9 @@ def split_input(input_file: Path, mode: str,
                 else archive_to_text(input_file))
         s_before = len(text)
         text, removed = apply_cleanups(text, clean_res)
+        # regexp-замены — до разбивки (нормализация маркеров глав)
+        for pat, repl in replace_res:
+            text = pat.sub(repl, text)
         if mode == "regex":
             sections = split_by_patterns(text, split_res)
         else:
@@ -600,7 +630,7 @@ def write_preview_json(entries: list[dict], preview_path: Path,
 def build_parser():
     p = argparse.ArgumentParser(
         prog="split_book",
-        description="Разбивает EPUB / ZIP / TXT на главы.",
+        description="Разбивает EPUB / TXT на главы.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Режимы (--mode):
@@ -621,10 +651,13 @@ def build_parser():
           --chunk-mask "Часть {num}"
   %(prog)s --input book.epub --num-offset 875 --skip 3 --skip 7
   %(prog)s --input book.epub --preview-json tmp/preview.json
+  %(prog)s --input book.txt --mode regex \
+          --replace-re "第(\\d+)章 -> Глава \\1" \
+          --split-re "Глава \\d+"
 """,
     )
     p.add_argument("--input", type=Path, required=True, metavar="FILE",
-                   help="Исходник: .epub/.zip/.txt (обязателен)")
+                   help="Исходник: .epub/.txt (обязателен)")
     p.add_argument("--output", type=Path, default=Path("chapters"),
                    help="Выходная папка (default: ./chapters)")
     p.add_argument("--mode", choices=["toc", "regex", "chunk"],
@@ -639,6 +672,11 @@ def build_parser():
                    default=[], metavar="RE",
                    help="Очистка текста: все совпадения удаляются; "
                         "можно повторять")
+    g.add_argument("--replace-re", dest="replace_re", action="append",
+                   default=[], metavar="PAT -> REPL",
+                   help="Regexp-замена ДО разбивки (можно повторять); "
+                        "пустая REPL — удаление; обратные ссылки в REPL "
+                        "работают: \"第(\\d+)章 -> Глава \\1\"")
 
     g = p.add_argument_group("Разбивка по чанкам")
     g.add_argument("--chunk-size", type=int, default=7000, metavar="N",
@@ -696,6 +734,7 @@ def main():
     split_res = [_safe_compile(p, "split-re") for p in args.split_re]
     clean_res = [_safe_compile(p, "clean-re", multiline=True)
                  for p in args.clean_re]
+    replace_res = _parse_replace_re(args.replace_re)
     title_limit = max(1, args.title_limit)
     num_offset = max(1, args.num_offset)
     skips: set[int] = set()
@@ -715,8 +754,9 @@ def main():
           + (f" · пропуск: {sorted(skips)}" if skips else ""))
 
     entries, s_before, removed = split_input(
-        input_file, mode, split_res, clean_res,
-        args.chunk_size, args.chunk_mask, title_limit, num_offset, skips)
+        input_file, mode, split_res, clean_res, replace_res,
+        chunk_size=args.chunk_size, chunk_mask=args.chunk_mask,
+        title_limit=title_limit, num_offset=num_offset, skips=skips)
 
     if args.preview_json:
         preview = Path(args.preview_json).resolve()

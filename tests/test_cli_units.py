@@ -738,6 +738,51 @@ def test_br_apply_no_change():
     assert out == "текст" and stats == {}
 
 
+def test_br_parse_replace_lines():
+    """--replace: пары «паттерн -> замена», пустая правая — удаление."""
+    rules, warnings = BR.parse_replace_lines([
+        "Глава \\d+ -> Глава №\\g<0>",
+        "\\(\\d+\\) ->",
+        "# комментарий",
+        "без разделителя",
+        " -> пусто",
+    ])
+    assert len(warnings) == 2  # без разделителя + пустая левая
+    assert len(rules) == 2
+    assert rules[0].is_regex and rules[0].pattern == "Глава \\d+"
+    assert rules[0].replacement == "Глава №\\g<0>"
+    assert rules[1].replacement == ""  # удаление
+    # NFC-нормализация
+    rules2, _ = BR.parse_replace_lines(["е\u0308лка -> ёлка"])
+    assert rules2[0].pattern == "ёлка"
+
+
+def test_br_main_replace_flag(tmp_path, capsys):
+    """--replace применяется вместо файла правил (dry-run)."""
+    ch = tmp_path / "chapters" / "00000_1_Глава_1"
+    ch.mkdir(parents=True)
+    (ch / "polished.txt").write_text(
+        "Глава 1\nтекст (12)\n", encoding="utf-8")
+    rc = BR.main(["--chapters-dir", str(tmp_path / "chapters"),
+                  "--replace", "Глава \\d+ -> Глава №\\g<0>",
+                  "--replace", "\\(\\d+\\) ->",
+                  "--dry-run"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "[DRY] Глава 1: 2 замен" in out
+    # файл не тронут
+    assert "текст (12)" in (ch / "polished.txt").read_text(
+        encoding="utf-8")
+
+
+def test_br_main_replace_broken(tmp_path, capsys):
+    """Битая --replace-строка → код 1."""
+    rc = BR.main(["--chapters-dir", str(tmp_path / "chapters"),
+                  "--replace", "без разделителя"])
+    assert rc == 1
+    assert "нет разделителя" in capsys.readouterr().out
+
+
 def parse_br(path, force_regex=False):
     """Шорткат: parse_rules с распаковкой."""
     return BR.parse_rules(path, force_regex=force_regex)

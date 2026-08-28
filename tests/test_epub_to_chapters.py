@@ -281,6 +281,34 @@ def test_split_input_toc_rejects_txt(tmp_path, capsys):
         E2C.split_input(txt, "toc", [], [])
 
 
+def test_split_input_replace_before_split(tmp_path):
+    """--replace-re: замены применяются ДО разбивки (нормализация
+    маркеров глав); пустая замена — удаление."""
+    txt = tmp_path / "book.txt"
+    txt.write_text("第1章\nтекст один\n第2章\nтекст два\n",
+                   encoding="utf-8")
+    split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
+    replace_res = E2C._parse_replace_re(["第(\\d+)章 -> Глава \\1"])
+    entries, *_ = E2C.split_input(txt, "regex", split_res, [],
+                                  replace_res)
+    assert [e["heading"] for e in entries] == ["Глава 1", "Глава 2"]
+    # удаление: пустая правая часть
+    txt2 = tmp_path / "b2.txt"
+    txt2.write_text("Глава 1\nтекст (12)\n", encoding="utf-8")
+    replace2 = E2C._parse_replace_re(["\\(\\d+\\) ->"])
+    entries2, *_ = E2C.split_input(txt2, "regex", split_res, [],
+                                   replace2)
+    assert "(12)" not in entries2[0]["body"]
+
+
+def test_parse_replace_re_broken(tmp_path):
+    """Битая --replace-re-строка — SystemExit с пояснением."""
+    with pytest_raises():
+        E2C._parse_replace_re(["без разделителя"])
+    with pytest_raises():
+        E2C._parse_replace_re([" -> x"])
+
+
 def test_split_input_rejects_zip(tmp_path):
     """ZIP не принимается ни в одном режиме — только epub/txt."""
     z = tmp_path / "book.zip"

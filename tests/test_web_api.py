@@ -1415,6 +1415,24 @@ def test_epub_preview_regex_txt_and_offset(srv_ctx):
         ["000_875_Глава_1", "000_876_Глава_2"]
 
 
+def test_epub_preview_replace_before_split(srv_ctx):
+    """replace_patterns: маркеры «第N章» нормализуются в «Глава N»
+    ДО разбивки — папки получаются по новым заголовкам."""
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    (pdir / "source" / "book.txt").write_text(
+        "第1章\nпервый\n第2章\nвторой\n", encoding="utf-8")
+    res, payload = _request(port, "POST", "/api/stages/epub/preview", {
+        "project": "ACTIVE/test_book",
+        "params": {"input": "source/book.txt", "mode": "regex",
+                   "split_patterns": ["Глава \\d+"],
+                   "replace_patterns": "第(\\d+)章 -> Глава \\1"},
+    })
+    assert res.status == 200, payload
+    assert [e["folder"] for e in payload["entries"]] == \
+        ["00000_1_Глава_1", "00000_2_Глава_2"]
+
+
 def test_epub_preview_toc_rejects_txt(srv_ctx):
     """txt в toc-режиме — 400 с понятной ошибкой."""
     _, port, projects_root = srv_ctx()

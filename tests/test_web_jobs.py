@@ -628,6 +628,7 @@ def test_build_epub_to_chapters_full():
     form = {"input": "source/book.epub", "mode": "regex",
             "split_patterns": ["Глава \\d+", "^第[0-9]+章"],
             "clean_patterns": "^本章完",
+            "replace_patterns": "第(\\d+)章 -> Глава \\1",
             "chunk_size": "5000", "chunk_mask": "Часть {num}",
             "title_limit": "40", "num_offset": "875",
             "skip": [2, 5], "output_type": "polished",
@@ -639,6 +640,7 @@ def test_build_epub_to_chapters_full():
     assert argv.count("--split-re") == 2
     assert "Глава \\d+" in argv and "^第[0-9]+章" in argv
     assert "--clean-re" in argv and "^本章完" in argv
+    assert "--replace-re" in argv and "第(\\d+)章 -> Глава \\1" in argv
     # чанковые поля — только в chunk-режиме
     assert "--chunk-size" not in argv and "--chunk-mask" not in argv
     assert "--title-limit" in argv and "40" in argv
@@ -709,15 +711,28 @@ def test_build_clean_and_compile():
 
 
 def test_build_batch_replace():
-    form = {"rules_file": "prompts/replacements.txt", "type": "polished",
-            "start": 1, "end": 5, "regex": True, "dry_run": True}
+    form = {"replacements": "Глава \\d+ -> Глава №\\g<0>\n\\(\\d+\\) ->",
+            "type": "polished", "start": 1, "end": 5,
+            "dry_run": True}
     argv = build_command("batch_replace", form, {})
-    assert "--rules-file" in argv
+    assert argv.count("--replace") == 2
+    assert "Глава \\d+ -> Глава №\\g<0>" in argv
+    assert "\\(\\d+\\) ->" in argv
+    assert "--rules-file" not in argv
     assert "--type" in argv and "polished" in argv
     assert "--start" in argv and "1" in argv
     assert "--end" in argv and "5" in argv
-    assert "--regex" in argv
     assert "--dry-run" in argv
+    # пустая форма — без --replace
+    argv2 = build_command("batch_replace", {}, {})
+    assert "--replace" not in argv2
+
+
+def test_build_batch_replace_list_form():
+    """replacements может прийти списком строк (как split_patterns)."""
+    argv = build_command("batch_replace",
+                         {"replacements": ["a -> b", "c ->"]}, {})
+    assert argv.count("--replace") == 2
 
 
 def test_spec_for_strips_build():
