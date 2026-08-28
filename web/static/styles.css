@@ -575,6 +575,11 @@ a.fname:hover {
   flex: 1;
   min-width: 0;
 }
+/* подсказка чекбокса — НЕ в строке с ним, а следующей строкой */
+.field-check .field-help {
+  flex-basis: 100%;
+  margin-top: 2px;
+}
 .field-row .input {
   flex: 1;
   min-width: 0;

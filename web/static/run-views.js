@@ -41,6 +41,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         render();
         return;
       }
+      if (job.status !== "running") {
+        // завершённый запуск лог не показывает (Д2) —
+        // ведём себя как заход на страницу без job id
+        autoAttach();
+        return;
+      }
       st.job = job;
       st.log = [];
       st.events = [];
@@ -48,17 +54,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (job.events) st.events = job.events;
       await loadChapterState();
       await render();
-      if (job.status === "running") {
-        attachStream(jobId);
-      }
+      attachStream(jobId);
     } catch (ex) {
       toast(ex.message, "err");
       render();
     }
   }
 
-  // ── авто-прикрепление: активный запуск проекта, а если его нет —
-  // последний завершённый (лог с итогами, таблица по факту) ──
+  // ── авто-прикрепление к активному запуску проекта ──
   async function autoAttach() {
     try {
       const r = await api("/jobs");
@@ -67,18 +70,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       );
       if (mine.length) {
         attachToJob(mine[0].id);
-        return;
+      } else {
+        render();
       }
-      const last = (r.jobs || [])
-        .filter((j) => j.project === `${section}/${name}`)
-        .sort((a, b) => (b.created || 0) - (a.created || 0))[0];
-      if (last) {
-        attachToJob(last.id);
-        return;
-      }
-      render();
     } catch {
-      render(); // без запусков — просто пустая страница
+      render(); // без активного запуска — просто пустая страница
     }
   }
 
@@ -149,13 +145,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       await activePanel(),
     );
 
-    // правая панель: форма + лог (лог — пока есть запуск,
-    // завершённый тоже остаётся видимым с итогами)
+    // правая панель: форма + лог (лог — только у активного запуска;
+    // завершённый не показывается — история во вкладке «Логи»)
     const right = h(
       "div",
       { class: "run-col run-col-form" },
       st.stage ? await formPanel() : emptyRun(),
-      st.job
+      st.job && st.job.status === "running"
         ? logPanel()
         : h(
             "div",
