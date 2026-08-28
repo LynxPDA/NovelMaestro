@@ -544,17 +544,18 @@ def test_e2c_clean_title():
 
 
 def test_e2c_write_section(tmp_path, capsys):
-    E2C.write_section(tmp_path, 1, "Глава 1", "тело", polished=False)
+    E2C.write_section(tmp_path, 1, "Глава 1", "тело")
     folder = tmp_path / "00000_1_Глава_1"
     assert (folder / "chapter.txt").read_text(encoding="utf-8") == "Глава 1\n\nтело\n"
-    E2C.write_section(tmp_path, 12, "Глава 12", "", polished=True)
+    E2C.write_section(tmp_path, 12, "Глава 12", "", output_type="polished")
     folder = tmp_path / "0000_12_Глава_12"   # ширина поля счётчика = 6 символов
-    assert (folder / "chapter12_polished.txt").exists()
+    assert (folder / "polished.txt").exists()
     # dry_run ничего не пишет
-    E2C.write_section(tmp_path, 99, "Глава 99", "тело", False, dry_run=True)
+    E2C.write_section(tmp_path, 99, "Глава 99", "тело",
+                      output_type="polished", dry_run=True)
     assert not (tmp_path / "0000_99_Глава_99").exists()
     # пустое тело — только заголовок
-    c = (tmp_path / "0000_12_Глава_12" / "chapter12_polished.txt")
+    c = (tmp_path / "0000_12_Глава_12" / "polished.txt")
     assert c.read_text(encoding="utf-8") == "Глава 12\n"
 
 
@@ -567,7 +568,7 @@ def test_e2c_split_regex_and_write(tmp_path, capsys):
         src, "regex", split_res, [], title_limit=50)
     assert [e["heading"] for e in entries] == ["Пролог", "Глава 1", "Глава 2"]
     assert removed == [] and before > 0
-    E2C.write_entries(entries, tmp_path, polished=False)
+    E2C.write_entries(entries, tmp_path)
     assert (tmp_path / "00000_1_Пролог").is_dir()
     assert (tmp_path / "00000_2_Глава_1").is_dir()
     assert (tmp_path / "00000_3_Глава_2").is_dir()

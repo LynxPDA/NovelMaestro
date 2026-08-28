@@ -178,6 +178,19 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 | `compile` | Компиляция TXT/EPUB/FB2 | `cli/clean_and_compile.py` | нет |
 | `wiki` | Создание Wiki (LLM) | `cli/wiki.py` | да |
 
+Стадия `epub` — разбор исходника на главы (только `.epub`/`.txt`, ZIP
+не принимается): режимы `toc` (только epub, по структуре spine/TOC/h1-h2),
+`regex` (строки-маркеры `--split-re`, по одному на строку) и `chunk`
+(`--chunk-size` в СИМВОЛАХ + маска `--chunk-mask` с `{num}`); epub в
+regex/chunk-режимах перегоняется в текст. Каталоги глав — канон
+`00000_1_…` (нули добивают ширину 6), `--title-limit` (СИМВОЛЫ, 50),
+`--num-offset`, `--skip` с перенумерацией; `--output-type` — какой файл
+создаётся в папке главы (`chapter`/`translated`/`redacted`/`polished`).
+Предпросмотр разбивки (панель в форме): папки + размеры в kB, удаление
+секции с перенумерацией (seq уходит в `skip` реального запуска), текст
+главы по номеру. Настройки формы автосохраняются в localStorage
+(проект); многострочные regexp-поля (`noenv`) в `.env` не пишутся.
+
 Стадия `wiki` — источник текста: «Готовый txt» (как раньше) или
 «Собрать из глав» (`source=chapters` → `--compile-chapters`, склейка
 `chapters/*` в память, `type` — chapter/translated/redacted/polished,

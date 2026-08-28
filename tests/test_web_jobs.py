@@ -630,7 +630,8 @@ def test_build_epub_to_chapters_full():
             "clean_patterns": "^本章完",
             "chunk_size": "5000", "chunk_mask": "Часть {num}",
             "title_limit": "40", "num_offset": "875",
-            "skip": [2, 5], "polished": True, "clean_output": True}
+            "skip": [2, 5], "output_type": "polished",
+            "clean_output": True}
     argv = build_command("epub", form, {})
     assert "--input" in argv and "source/book.epub" in argv
     assert "--mode" in argv and "regex" in argv
@@ -643,7 +644,10 @@ def test_build_epub_to_chapters_full():
     assert "--title-limit" in argv and "40" in argv
     assert "--num-offset" in argv and "875" in argv
     assert "--skip" in argv and "2" in argv and "5" in argv
-    assert "--polished" in argv and "1" in argv
+    assert "--output-type" in argv and "polished" in argv
+    # chapter (дефолт) — флаг не добавляется
+    argv4 = build_command("epub", {"mode": "toc"}, {})
+    assert "--output-type" not in argv4
     assert "--clean-output" in argv
     # chunk-режим: маска и размер добавляются
     argv2 = build_command("epub",

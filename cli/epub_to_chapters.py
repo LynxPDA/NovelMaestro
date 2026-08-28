@@ -507,6 +507,9 @@ def split_input(input_file: Path, mode: str,
     """
     skips = skips or set()
     suffix = input_file.suffix.lower()
+    if suffix == ".zip":
+        sys.exit("ZIP не принимается — переименуйте в .epub или "
+                 "извлеките текст в .txt")
     removed: list[str] = []
     if mode == "toc":
         if suffix == ".txt":
@@ -521,6 +524,7 @@ def split_input(input_file: Path, mode: str,
             if body.strip():
                 sections.append((h, body.strip()))
     else:
+        # epub в regex/chunk-режимах перегоняется в текст (архив→txt)
         text = (read_text_file(input_file) if suffix == ".txt"
                 else archive_to_text(input_file))
         s_before = len(text)
@@ -540,10 +544,16 @@ def split_input(input_file: Path, mode: str,
 
 
 # ======================== ЗАПИСЬ =======================================
+# Имена выходных файлов — канон артефактов стадий (AGENTS §7):
+# chapter.txt → translated.txt → redacted.txt → polished.txt
+OUTPUT_FILES = {"chapter": "chapter.txt", "translated": "translated.txt",
+                "redacted": "redacted.txt", "polished": "polished.txt"}
+
+
 def write_section(output_dir, num: int, heading: str, body: str,
-                  polished: bool, title_limit: int = 50,
+                  output_type: str = "chapter", title_limit: int = 50,
                   dry_run: bool = False) -> None:
-    fname = f"chapter{num}_polished.txt" if polished else "chapter.txt"
+    fname = OUTPUT_FILES.get(output_type, "chapter.txt")
     folder = output_dir / folder_name(num, heading, title_limit)
     if dry_run:
         print(f"  [{folder.name}] {fname}")
@@ -558,11 +568,12 @@ def write_section(output_dir, num: int, heading: str, body: str,
               file=sys.stderr)
 
 
-def write_entries(entries: list[dict], output_dir: Path, polished: bool,
-                  title_limit: int = 50, dry_run: bool = False) -> None:
+def write_entries(entries: list[dict], output_dir: Path,
+                  output_type: str = "chapter", title_limit: int = 50,
+                  dry_run: bool = False) -> None:
     for e in entries:
         write_section(output_dir, e["num"], e["heading"], e["body"],
-                      polished, title_limit, dry_run)
+                      output_type, title_limit, dry_run)
 
 
 def write_preview_json(entries: list[dict], preview_path: Path,
@@ -647,8 +658,11 @@ def build_parser():
                         "оставшиеся перенумеровываются; можно повторять")
 
     g = p.add_argument_group("Запись")
-    g.add_argument("--polished", type=int, choices=[0, 1], default=None,
-                   help="0 = chapter.txt, 1 = polished.txt")
+    g.add_argument("--output-type", dest="output_type",
+                   choices=list(OUTPUT_FILES), default="chapter",
+                   metavar="TYPE",
+                   help="Выходной файл: chapter/translated/redacted/polished "
+                        "(default: chapter.txt)")
     g.add_argument("--clean-output", action="store_true",
                    help="Удалить старые папки глав перед записью")
     g.add_argument("--preview-json", type=Path, default=None, metavar="FILE",
@@ -690,7 +704,7 @@ def main():
             skips.add(int(s))
         except ValueError:
             sys.exit(f"--skip: ожидалось число, получено: {s}")
-    polished = bool(args.polished) if args.polished is not None else False
+    output_type = args.output_type
 
     print(f"\n  Файл:    {input_file.name}")
     print(f"  Режим:   {mode}"
@@ -744,7 +758,8 @@ def main():
         print("  Секций нет — ничего не записано.")
         return
 
-    write_entries(entries, output_dir, polished, title_limit, args.dry_run)
+    write_entries(entries, output_dir, output_type, title_limit,
+                  args.dry_run)
 
     # ── Сверка (приближённая) ──
     s_after = sum(len(e["heading"]) + len(e["body"]) for e in entries)

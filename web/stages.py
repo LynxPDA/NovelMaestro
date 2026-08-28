@@ -154,8 +154,8 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
         argv += ["--num-offset", str(form["num_offset"])]
     for s in form.get("skip") or []:
         argv += ["--skip", str(s)]
-    if form.get("polished"):
-        argv += ["--polished", "1"]
+    if form.get("output_type") not in (None, "", "chapter"):
+        argv += ["--output-type", str(form["output_type"])]
     if form.get("clean_output"):
         argv += ["--clean-output"]
     return argv
@@ -508,40 +508,41 @@ STAGE_SPECS: dict[str, dict] = {
         "autosave": True,  # настройки формы — сразу в localStorage
         "fields": [
             {"name": "input",
-             "label": "Исходник (обязателен, автоподхвата нет)",
+             "label": "Исходник",
              "type": "files", "dir": "source",
-             "ext": [".epub", ".zip", ".txt"], "default": ""},
+             "ext": [".epub", ".txt"], "default": ""},
             {"name": "mode", "label": "Режим разбивки",
              "type": "select",
              "options": ["toc", "regex", "chunk"],
-             "labels": {"toc": "По TOC (epub/zip)",
+             "labels": {"toc": "По TOC (epub)",
                         "regex": "Ручная (regexp)",
                         "chunk": "По чанкам"},
              "default": "toc",
-             "help": "toc — epub/zip по структуре (TOC/spine/h1-h2); "
-                      "regex — строки-маркеры; chunk — фиксированный "
-                      "размер (СИМВОЛЫ)"},
+             "help": "toc — только epub, по структуре (TOC/spine/h1-h2); "
+                      "regex/chunk — epub ИЛИ txt (epub перегоняется "
+                      "в текст); zip не принимается"},
             {"name": "split_patterns",
              "label": "Паттерны разбивки (regexp, по одному на строку)",
              "type": "textarea", "rows": 4, "default": "",
              "noenv": True,
-             "help": "Строка считается маркером, если НАЧИНАЕТСЯ с "
-                      "любого паттерна; вся строка становится заголовком "
-                      "главы; пример: «Глава \\d+»"},
+             "help": "ТОЛЬКО режим regexp. Строка считается маркером, "
+                      "если НАЧИНАЕТСЯ с любого паттерна; вся строка "
+                      "становится заголовком главы; пример: «Глава \\d+»"},
             {"name": "chunk_size", "label": "Размер чанка, СИМВОЛЫ",
              "type": "number", "default": "7000",
-             "help": "режим «по чанкам»"},
+             "help": "ТОЛЬКО режим «по чанкам»"},
             {"name": "chunk_mask",
              "label": "Маска названия чанка",
              "type": "text", "default": "Глава {num}",
-             "help": "{num} — номер; пример: «Часть {num}» → "
-                      "00000_1_Часть_1…"},
+             "help": "ТОЛЬКО режим «по чанкам». {num} — номер; "
+                      "пример: «Часть {num}» → 00000_1_Часть_1…"},
             {"name": "clean_patterns",
              "label": "Очистки текста (regexp, по одному на строку)",
              "type": "textarea", "rows": 3, "default": "",
              "noenv": True,
-             "help": "Каждый паттерн удаляет все совпадения из текста; "
-                      "пустые строки сжимаются; пример: «^本章完»"},
+             "help": "Работают во ВСЕХ режимах. Каждый паттерн удаляет "
+                      "все совпадения из текста; пустые строки сжимаются; "
+                      "пример: «^本章完»"},
             {"name": "title_limit",
              "label": "Длина названия каталога, СИМВОЛЫ",
              "type": "number", "default": "50",
@@ -552,15 +553,27 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "1",
              "help": "875 → первая папка 000_875_… (нули добивают "
                       "ширину 6)"},
-            {"name": "polished", "label": "Полированный TXT (polished.txt)",
-             "type": "bool", "default": False},
+            {"name": "output_type", "label": "Тип выходного файла",
+             "type": "select",
+             "options": ["chapter", "translated", "redacted", "polished"],
+             "labels": {"chapter": "chapter.txt",
+                        "translated": "translated.txt",
+                        "redacted": "redacted.txt",
+                        "polished": "polished.txt"},
+             "default": "chapter",
+             "help": "какой файл создаётся в папке главы (канон "
+                      "артефактов стадий)"},
             {"name": "clean_output",
              "label": "Очистить папки глав перед записью",
-             "type": "bool", "default": False},
+             "type": "bool", "default": False,
+             "help": "Удалить старые каталоги глав (00000_1_…, 00000_2_…) "
+                      "в chapters/ перед записью. Рекомендуется при "
+                      "повторном разборе — иначе старые главы останутся "
+                      "рядом с новыми и могут попасть в конвейер"},
         ],
         "preset": {
             "title": "Разобрать исходник",
-            "desc": "Автоматическая разбивка epub/zip по TOC; txt не "
+            "desc": "Автоматическая разбивка epub по TOC; txt не "
                     "принимается; исходник выбирается вручную",
             "overrides": {"mode": "toc"},
         },

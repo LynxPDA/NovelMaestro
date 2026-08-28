@@ -281,15 +281,18 @@ def test_split_input_toc_rejects_txt(tmp_path, capsys):
         E2C.split_input(txt, "toc", [], [])
 
 
-def test_split_input_zip_of_txt_regex(tmp_path):
-    """ZIP с txt внутри — текст, разбивается regexp."""
+def test_split_input_rejects_zip(tmp_path):
+    """ZIP не принимается ни в одном режиме — только epub/txt."""
     z = tmp_path / "book.zip"
     with zipfile.ZipFile(z, "w") as zf:
         zf.writestr("1.txt", "Глава 1\nтекст один\n")
-        zf.writestr("2.txt", "Глава 2\nтекст два\n")
     split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
-    entries, *_ = E2C.split_input(z, "regex", split_res, [])
-    assert [e["heading"] for e in entries] == ["Глава 1", "Глава 2"]
+    with pytest_raises():
+        E2C.split_input(z, "regex", split_res, [])
+    with pytest_raises():
+        E2C.split_input(z, "toc", [], [])
+    with pytest_raises():
+        E2C.split_input(z, "chunk", [], [])
 
 
 # ── запись и предпросмотр ────────────────────────────────────────────
@@ -302,7 +305,7 @@ def _entries3():
 
 def test_write_entries(tmp_path):
     out = tmp_path / "chapters"
-    E2C.write_entries(_entries3(), out, polished=False)
+    E2C.write_entries(_entries3(), out)
     assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
     assert (out / "00000_2_Глава_2" / "chapter.txt").is_file()
     c1 = (out / "00000_1_Глава_1" / "chapter.txt").read_text(
@@ -310,16 +313,23 @@ def test_write_entries(tmp_path):
     assert c1 == "Глава 1\n\nпервый\n"
 
 
-def test_write_entries_polished(tmp_path):
+def test_write_entries_output_types(tmp_path):
+    """--output-type: канон имён артефактов стадий."""
     out = tmp_path / "chapters"
-    E2C.write_entries(_entries3(), out, polished=True)
-    assert (out / "00000_1_Глава_1" / "chapter1_polished.txt").is_file()
+    for t in ("chapter", "translated", "redacted", "polished"):
+        E2C.write_entries(_entries3(), out, output_type=t)
+    assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
+    assert (out / "00000_1_Глава_1" / "translated.txt").is_file()
+    assert (out / "00000_1_Глава_1" / "redacted.txt").is_file()
+    assert (out / "00000_1_Глава_1" / "polished.txt").is_file()
+    # неизвестный тип — fallback на chapter.txt
+    assert not (out / "00000_1_Глава_1" / "x.txt").exists()
 
 
 def test_write_entries_dry_run(tmp_path):
     out = tmp_path / "chapters"
     out.mkdir()
-    E2C.write_entries(_entries3(), out, polished=False, dry_run=True)
+    E2C.write_entries(_entries3(), out, dry_run=True)
     assert list(out.iterdir()) == []  # ничего не записано
 
 
@@ -328,7 +338,7 @@ def test_write_entries_keeps_old_dirs(tmp_path):
     (--clean-output); старые каталоги остаются на месте."""
     out = tmp_path / "chapters"
     (out / "00000_1_Старая").mkdir(parents=True)
-    E2C.write_entries(_entries3(), out, polished=False)
+    E2C.write_entries(_entries3(), out)
     assert (out / "00000_1_Старая").exists()
     assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
 

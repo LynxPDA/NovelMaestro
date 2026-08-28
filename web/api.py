@@ -2492,7 +2492,7 @@ def _epub_preview_run(ctx: dict, pdir: Path, params: dict,
     """Запускает скрипт с --preview-json (синхронно); возвращает данные."""
     import subprocess
     import sys as _sys
-    repo = _repo_root(ctx)
+    repo = Path(_repo_root(ctx))  # repo_root может прийти строкой
     script = script_path("epub", repo)
     if script is None or not script.is_file():
         raise ApiError(500, "Скрипт epub_to_chapters.py не найден")

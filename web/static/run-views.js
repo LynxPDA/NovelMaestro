@@ -281,15 +281,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     } catch (ex) {
       return h("div", { class: "run-empty" }, ex.message);
     }
-    if (!st.options) {
-      try {
-        const r = await api(
-          `/stages/${key}/options?project=${section}/${name}`,
-        );
-        st.options = r.options || {};
-      } catch {
-        st.options = {};
-      }
+    // опции перечитываем при КАЖДОМ рендере формы: файлы могли
+    // поменяться на диске вне интерфейса (переименование epub/zip,
+    // загрузка), а селект исходника должен видеть свежий список
+    try {
+      const r = await api(
+        `/stages/${key}/options?project=${section}/${name}`,
+      );
+      st.options = r.options || {};
+    } catch {
+      st.options = {};
     }
     // синхронизация режимов: значения формы — общие (st.values),
     // инициализация один раз на выбор стадии (дефолты + .env-префилл)
@@ -547,15 +548,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             ? st.options.prompts || []
             : st.options.root || [];
       let exts = (f.ext || []).map((e) => e.toLowerCase());
-      // epub: расширения зависят от режима — toc: только epub/zip;
-      // regex/chunk: + txt; простой режим всегда toc (пресет)
+      // epub: расширения зависят от режима — toc: только epub;
+      // regex/chunk: epub + txt; простой режим всегда toc (пресет);
+      // zip не принимается ни в одном режиме
       if (key === "epub" && f.name === "input") {
         const m =
           st.mode === "simple" ? "toc" : String(vals["mode"] || "toc");
-        exts =
-          m === "toc"
-            ? [".epub", ".zip"]
-            : [".epub", ".zip", ".txt"];
+        exts = m === "toc" ? [".epub"] : [".epub", ".txt"];
       }
       const items = pool.filter(
         (n) =>
@@ -572,8 +571,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         vals[f.name] = "";
       }
       input.value = chosen;
+      // НЕ ссылаться на переменную input: ниже она переприсваивается
+      // на row (select прячется в row._sel) — замыкание поймало бы div
+      const sel = input;
       input.addEventListener("change", () => {
-        vals[f.name] = input.value;
+        vals[f.name] = sel.value;
         touched.add(f.name);
       });
       // загрузка своего файла сразу (без выбора из существующих)
@@ -880,24 +882,57 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           { class: "regexp-help-body" },
           h("p", {}, "Маркер — строка, НАЧИНАЮЩАЯСЯ с паттерна; ",
             "вся строка становится заголовком главы."),
-          h("p", {}, "Примеры (по одному на строку):"),
+          h("p", {}, "Разделители глав (режим regexp, по одному на строку):"),
           h("ul", {},
-            h("li", {}, h("code", {}, "Глава \\d+")),
-            h("li", {}, h("code", {}, "^第[0-9]+章")),
-            h("li", {}, h("code", {}, "^(Глава|Часть)\\s\\d+")),
+            h("li", {}, h("code", {}, "Глава \\d+"), " — «Глава 1», «Глава 22»"),
+            h("li", {}, h("code", {}, "^第[0-9]+章"), " — «第1章», «第25章»"),
+            h("li", {}, h("code", {}, "^第.章"), " — «第一章», «第二百三十五章»"),
+            h("li", {}, h("code", {}, "^(Глава|Часть)\\s\\d+"),
+              " — «Глава 3» или «Часть 5»"),
+            h("li", {}, h("code", {}, "^\\d+\\.\\s*$"), " — «12.»"),
           ),
-          h("p", {}, "Очистка — паттерн удаляет совпадения из текста главы;",
-            "пустые строки сжимаются."),
+          h("p", {}, "Очистка (все режимы, по одному на строку) — ",
+            "паттерн удаляет все совпадения из текста главы; ",
+            "пустые строки сжимаются:"),
+          h("ul", {},
+            h("li", {}, h("code", {}, "^本章完$"), " — строка «本章完»"),
+            h("li", {}, h("code", {}, "[0-9]+"), " — все цифры"),
+            h("li", {}, h("code", {}, "\\(未完待续\\)"), " — «(未完待续)»"),
+          ),
+          h("p", {}, "Шпаргалка по regexp:"),
+          h("ul", {},
+            h("li", {}, h("code", {}, "^"), " — начало строки, ",
+              h("code", {}, "$"), " — конец"),
+            h("li", {}, h("code", {}, "\\d"), " — цифра, ",
+              h("code", {}, "\\s"), " — пробел"),
+            h("li", {}, h("code", {}, "+"), " — один и больше, ",
+              h("code", {}, "*"), " — ноль и больше"),
+            h("li", {}, h("code", {}, "(a|b)"), " — a или b, ",
+              h("code", {}, "[0-9]"), " — диапазон"),
+            h("li", {}, h("code", {}, "\\\\("), " — скобка (экранирование)"),
+          ),
         ),
       );
       fieldNodes.push(help);
       if (modeSel && inputWrap) {
+        // поля, видимые только в своём режиме: split_patterns — regexp,
+        // chunk_size/chunk_mask — чанки; clean_patterns — все режимы
+        const wrapSplit = fieldWraps["split_patterns"];
+        const wrapChunkSize = fieldWraps["chunk_size"];
+        const wrapChunkMask = fieldWraps["chunk_mask"];
+        const applyModeVisibility = () => {
+          const m = modeSel.value || "toc";
+          if (wrapSplit) wrapSplit.classList.toggle("hidden", m !== "regex");
+          if (wrapChunkSize) {
+            wrapChunkSize.classList.toggle("hidden", m !== "chunk");
+          }
+          if (wrapChunkMask) {
+            wrapChunkMask.classList.toggle("hidden", m !== "chunk");
+          }
+        };
         const rebuildInput = () => {
           const m = modeSel.value || "toc";
-          const exts =
-            m === "toc"
-              ? [".epub", ".zip"]
-              : [".epub", ".zip", ".txt"];
+          const exts = m === "toc" ? [".epub"] : [".epub", ".txt"];
           const sel = inputWrap._input && inputWrap._input._sel;
           if (!sel) return;
           const cur = sel.value;
@@ -918,8 +953,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             sel.value = cur;
           }
         };
-        modeSel.addEventListener("change", rebuildInput);
-        rebuildInput();
+        const onMode = () => {
+          applyModeVisibility();
+          rebuildInput();
+          st.previewDirty = true;
+        };
+        modeSel.addEventListener("change", onMode);
+        onMode();
       }
     }
 
@@ -997,16 +1037,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       btn,
     );
     const nodes = [title];
-    if (!st.preview) {
-      nodes.push(
-        h(
-          "div",
-          { class: "field-help" },
-          "Нажмите «Предпросмотр» — покажется список папок глав "
-            + "(размеры, удаление, текст)",
-        ),
-      );
-    } else {
+    if (st.preview) {
       if (st.previewDirty) {
         nodes.push(
           h(
@@ -1018,6 +1049,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
       nodes.push(epubPreviewList(st.preview, err));
       nodes.push(epubPreviewTextViewer(st.preview, err));
+    } else {
+      nodes.push(
+        h(
+          "div",
+          { class: "field-help" },
+          "Нажмите «Предпросмотр» — покажется список папок глав "
+            + "(размеры, удаление, текст)",
+        ),
+      );
     }
     nodes.push(err);
     return h("div", { class: "run-panel epub-preview" }, nodes);
@@ -1028,18 +1068,19 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (key !== "epub") return "";
     const vals = st.values[key] || {};
     const v = String(vals["input"] || "");
-    if (!v) return "Выберите исходник (автоподхвата нет)";
+    if (!v) return "Выберите исходник";
     const m =
       mode === "simple" ? "toc" : String(vals["mode"] || "toc");
     const ext = v.toLowerCase().split(".").pop();
     const ok =
       m === "toc"
-        ? ext === "epub" || ext === "zip"
-        : ext === "epub" || ext === "zip" || ext === "txt";
+        ? ext === "epub"
+        : ext === "epub" || ext === "txt";
     return ok
       ? ""
-      : "В режиме «по TOC» принимаются только epub/zip; "
-        + "txt — в режимах regexp/чанки";
+      : m === "toc"
+        ? "В режиме «по TOC» принимается только epub"
+        : "Принимаются только epub и txt (zip не поддерживается)";
   }
 
   // запуск предпросмотра: синхронно гоняет CLI с --preview-json

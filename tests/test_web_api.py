@@ -1428,6 +1428,26 @@ def test_epub_preview_toc_rejects_txt(srv_ctx):
     assert "TOC" in payload.get("error", "")
 
 
+def test_epub_preview_rejects_zip(srv_ctx):
+    """zip не принимается ни в одном режиме — 400 с пояснением."""
+    import zipfile
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    z = pdir / "source" / "book.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("1.txt", "Глава 1\nтекст\n")
+    for mode in ("toc", "regex", "chunk"):
+        params: dict = {"input": "source/book.zip", "mode": mode}
+        if mode == "regex":
+            params["split_patterns"] = ["Глава \\d+"]
+        res, payload = _request(port, "POST", "/api/stages/epub/preview", {
+            "project": "ACTIVE/test_book",
+            "params": params,
+        })
+        assert res.status == 400
+        assert "ZIP" in payload.get("error", "")
+
+
 def test_epub_preview_requires_project(srv_ctx):
     """Без project — 400."""
     _, port, _ = srv_ctx()
