@@ -443,9 +443,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         vals[f.name] = input.checked;
         touched.add(f.name);
       });
-      // чекбокс СЛЕВА от текста (не снизу): строка checkbox + label
-      const wrap = h("label", { class: "field field-check" }, input, label);
-      if (f.help) wrap.append(h("div", { class: "field-help" }, f.help));
+      // чекбокс СЛЕВА от текста (не снизу): строка checkbox + label;
+      // подсказка — только title (наведение), чтобы не ломала строку
+      const wrap = h(
+        "label",
+        { class: "field field-check", title: f.help || undefined },
+        input,
+        label,
+      );
       wrap._input = input;
       return wrap;
     } else if (f.type === "select") {
