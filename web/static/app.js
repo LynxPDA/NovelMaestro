@@ -2372,18 +2372,111 @@ async function viewTemplates() {
   return page;
 }
 
-/* ── Справка (пустая, ) ───────────────────────────── */
+/* Санитайзер справки: убирает скрипты, фреймы и инлайновые
+   обработчики из отрендеренного markdown (контент статический,
+   но защита дешёвая). Обходит subtree, мутирует на месте. */
+function _helpSanitize(root) {
+  const walker = (node) => {
+    const kids = Array.from(node.childNodes);
+    for (const el of kids) {
+      if (el.nodeType !== Node.ELEMENT_NODE) continue;
+      const tag = el.tagName.toLowerCase();
+      if (["script", "style", "iframe", "object", "embed"].includes(tag)) {
+        el.remove();
+        continue;
+      }
+      for (const attr of Array.from(el.attributes)) {
+        const name = attr.name.toLowerCase();
+        const val = attr.value.trim().toLowerCase();
+        if (name.startsWith("on") || val.startsWith("javascript:")) {
+          el.removeAttribute(attr.name);
+        }
+      }
+      walker(el);
+    }
+  };
+  walker(root);
+}
+
+/* ── Справка (help.md → markdown-рендер + TOC) ─────────── */
 async function viewHelp() {
+  const err = h("div", { class: "form-error" });
+  const content = h("div", { class: "md-body" });
+  const toc = h("nav", { class: "help-toc" });
+  const body = h("div", { class: "help-body" }, content);
+
+  try {
+    const res = await fetch("/help.md", {
+      headers: { "X-Requested-With": "fetch" },
+    });
+    if (!res.ok) throw new Error(`Ошибка ${res.status}`);
+    const md = await res.text();
+    const html = window.marked
+      ? window.marked.parse(md, { mangle: false, headerIds: false })
+      : "<p>marked не загружен</p>";
+    /* статическая справка доверенная, но парсим через
+       createContextualFragment + санитайзер (без innerHTML): скрипты,
+       инлайновые обработчики и javascript: ссылки не попадают в DOM */
+    const frag = document
+      .createRange()
+      .createContextualFragment(html);
+    _helpSanitize(frag);
+    content.append(frag);
+    /* h1 «Справка» дублирует заголовок страницы — убираем */
+    const h1 = content.querySelector("h1");
+    if (h1) h1.remove();
+    /* TOC по h2/h3: свои id (marked их не проставляет), клик —
+       плавный скролл без смены hash (роутер бы ушёл на #help-N) */
+    const heads = content.querySelectorAll("h2, h3");
+    heads.forEach((hd, i) => {
+      const id = "help-s" + i;
+      hd.id = id;
+      const isH2 = hd.tagName === "H2";
+      const link = h(
+        "a",
+        {
+          class: "help-toc-link" + (isH2 ? " help-toc-h2" : " help-toc-h3"),
+          href: "#" + id,
+        },
+        hd.textContent,
+      );
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        hd.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      toc.append(link);
+    });
+    if (!heads.length) toc.append(h("div", { class: "muted" }, "—"));
+  } catch (ex) {
+    err.textContent = ex.message || "Не удалось загрузить справку";
+    content.append(
+      h(
+        "p",
+        { class: "muted" },
+        "Справка хранится в web/static/help.md — проверьте, что файл на месте.",
+      ),
+    );
+  }
+
   return h(
     "div",
     { class: "page" },
-    h("h1", { class: "page-title" }, "Справка"),
     h(
-      "p",
-      { class: "muted" },
-      "Раздел в разработке. Здесь появятся инструкции по стадиям,\n" +
-        "промптам и настройке серверов.",
+      "div",
+      { class: "page-header" },
+      h(
+        "div",
+        { class: "page-header-main" },
+        h("h1", { class: "page-title" }, "Справка"),
+        h(
+          "div",
+          { class: "page-sub" },
+          "Инструкции по программе, проектам, стадиям и регулярным выражениям",
+        ),
+      ),
     ),
+    err,
+    h("div", { class: "help-layout" }, toc, body),
   );
 }
 

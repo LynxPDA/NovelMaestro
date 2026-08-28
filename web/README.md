@@ -154,6 +154,9 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
   `<STAGE>_API_KEY` (fallback — `API_KEY`); профили убраны.
 - **Заметки** (раунд 12): `GET/PUT /api/notes` — `projects/notes.md`
   (markdown-редактор на вкладке «Заметки», рендер в sandbox-iframe).
+- **Справка**: вкладка в левой панели — `static/help.md` (markdown),
+  рендер `marked` + TOC по h2/h3 (липкий список разделов); контент:
+  программа, проекты, вкладки проекта, шаблоны, запуски, regexp.
 - **Логи**: список `logs/` и `logs/chapters/`, хвост, follow.
 
 ## Стадии (порядок в «Запусках»)

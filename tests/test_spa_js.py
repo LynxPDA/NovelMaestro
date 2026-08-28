@@ -63,3 +63,16 @@ def test_create_project_modal_uploads():
     assert create < up
     # загрузки живут внутри мастера (до конца его тела)
     assert src.index("function manageProjectModal") > up
+
+
+def test_help_view_renders_static_md():
+    """Справка: viewHelp грузит web/static/help.md и рендерит через marked
+    (без innerHTML — санитайзер + createContextualFragment)."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert "async function viewHelp" in src
+    assert 'fetch("/help.md"' in src
+    assert "window.marked.parse" in src
+    assert "createContextualFragment" in src
+    assert "_helpSanitize" in src
+    assert "help-toc" in src and "md-body" in src
+    assert (SPA_DIR / "help.md").is_file(), "web/static/help.md отсутствует"
