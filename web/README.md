@@ -89,7 +89,11 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
   системного; значения видимы без auth, маскируются при `--auth`);
   настройки внешнего вида (`WEB_UI_THEME`/`WEB_EDITOR_THEME`/
   `WEB_EDITOR_FONT_SIZE`) — `GET /api/settings`;
-  metadata.yaml; обложка (upload/предпросмотр/удаление, `source/cover.*`).
+  metadata.yaml; обложка (upload/предпросмотр/удаление, `source/cover.*`);
+  M9: карточка «Обложки и метаданные» — варианты по умолчанию из `source/`
+  (несколько обложек/наборов YAML), сохраняются в `.env` проекта
+  (`COMPILE_EPUB_COVER`/`COMPILE_FB2_COVER`/`COMPILE_EPUB_META`,
+  `source/<файл>`), предзаполняют форму стадии compile.
 - **Промпты** (W4): файлы `prompts/` + шаблоны `templates/*/prompts`
   в одном списке; создание промпта из шаблона.
 - **Запуски**: все стадии пайплайна, **«Простой режим / Экспертный»**
@@ -176,6 +180,13 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 | `translate_check_llm` | Проверка перевода (LLM) | `cli/translate_check_llm.py` | да |
 | `batch_replace` | Массовые замены | `cli/batch_replace.py` | нет |
 | `compile` | Компиляция TXT/EPUB/FB2 | `cli/clean_and_compile.py` | нет |
+
+Стадия `compile` (M9): поля `epub_cover`/`fb2_cover` (files из `source/`,
+jpg/jpeg/png/webp/gif/bmp) и `epub_meta` (files из `source/`, yaml/yml) —
+варианты обложек/метаданных; пусто = авто (`cover.*`/`metadata.yaml`).
+Ключи `.env`: `COMPILE_EPUB_COVER`, `COMPILE_FB2_COVER`, `COMPILE_EPUB_META`.
+Заголовок главы: первое «Глава N» в файле → иначе первая непустая строка
+(«Пролог. Пример» → название) → иначе «Глава N».
 | `wiki` | Создание Wiki (LLM) | `cli/wiki.py` | да |
 
 Стадия `epub` — разбор исходника на главы (только `.epub`/`.txt`, ZIP
@@ -261,7 +272,7 @@ Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
 | GET/PUT/DELETE | `/api/cover` | обложка source/cover.* |
 | GET/PUT | `/api/{ner\|translate_check_llm}/review`, POST `.../apply` | review-флоу |
 | GET | `/api/check` | отчёты translate_check (W7) |
-| GET/PUT/DELETE | `/api/env?scope=project\|global` | .env (global — корневой `.env` репо; project — только собственный `pdir/.env`) |
+| GET/PUT/DELETE | `/api/env?scope=project\|global` | .env (global — корневой `.env` репо; project — только собственный `pdir/.env`); GET — `values` несекретных ключей; PUT changes без pdir/.env — сид из системного `.env` (без секретов) |
 | GET | `/api/env/template` | шаблон `templates/.env.example` |
 | GET | `/api/settings` | внешний вид интерфейса из системного .env: `ui_theme` (WEB_UI_THEME), `editor_theme` (WEB_EDITOR_THEME), `editor_font_size` (WEB_EDITOR_FONT_SIZE); невалидные → дефолты (dark/auto/13) |
 | GET/PUT/DELETE | `/api/prompts`, `/api/prompts/{name}` | промпты (DELETE — удаление, PUT с пустым content — создание) |
@@ -271,7 +282,7 @@ Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
 | GET/PUT/DELETE | `/api/files`, `/api/file`, `/api/upload`, `/api/download` | файлы (`download?inline=1` — предпросмотр); чтение отсутствующего файла — `missing: true` + пустой `content` (редактор создаёт файл при сохранении); `upload` с пустым `dest` — корень проекта (поля files с `dir=""`) |
 | POST | `/api/mkdir` (`?project=&path=` или body) | создание пустого каталога проекта; дубль/эскейп → 400 |
 | POST | `/api/file/rename` (`{project, path, new_name}`) | переименование файла ИЛИ каталога проекта; нет исходника → 404, занято → 400, недопустимое имя → 400 |
-| GET | `/api/stages`, `/api/stages/{k}/spec\|options` | стадии, формы; `spec.preset.params` — параметры «Простого режима» (дефолты полей + overrides); `options.chapters.ids` — реальные главы; epub: `autosave` — настройки формы в localStorage, `noenv`-поля (textarea regexp) не пишутся в `.env` |
+| GET | `/api/stages`, `/api/stages/{k}/spec\|options` | стадии, формы; `spec.preset.params` — параметры «Простого режима» (дефолты полей + overrides); `options.chapters.ids` — реальные главы; `options.source` — ВСЕ файлы `source/` (клиент фильтрует по ext селекта: epub/обложки/yaml); epub: `autosave` — настройки формы в localStorage, `noenv`-поля (textarea regexp) не пишутся в `.env` |
 | POST/GET/DELETE | `/api/stages/epub/preview` (POST — создание, GET — чтение), GET `.../preview/text?num=`, DELETE `.../preview/folder?seq=` | epub: предпросмотр разбивки — папки `00000_1_…` + размеры в kB, текст главы по номеру, удаление секции с перенумерацией на сервере (seq уходит в `skip` запуска) |
 | POST/GET | `/api/jobs`, `/api/jobs/{id}`, `/api/jobs/{id}/stream` | запуски, SSE; при лимите параллельных (`WEB_JOBS_LIMIT`) — **429** (H2); вторая стадия на тот же проект — **409** (M10). SSE: стартовый бурст хвоста (до 5000 строк) + события/прогресс + финальный `status`; клиент берёт лог ТОЛЬКО из стрима (payload `lines` на running не дублирует) |
 | DELETE | `/api/jobs` | очистить историю завершённых запусков (активные не трогаются) |

@@ -195,6 +195,14 @@ def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
         argv += ["--no-fb2-cover"]
     if form.get("donate_file"):
         argv += ["--donate-file", str(form["donate_file"])]
+    # M9: варианты обложек/метаданных из source/ (пусто = дефолт скрипта
+    # с автопоиском cover.* / metadata.yaml)
+    if form.get("epub_cover"):
+        argv += ["--epub-cover", str(form["epub_cover"])]
+    if form.get("epub_meta"):
+        argv += ["--epub-meta", str(form["epub_meta"])]
+    if form.get("fb2_cover"):
+        argv += ["--fb2-cover", str(form["fb2_cover"])]
     return argv
 
 
@@ -637,11 +645,29 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "bool", "default": False},
             {"name": "no_fb2_cover", "label": "Без обложки в FB2",
              "type": "bool", "default": False},
+            {"name": "epub_cover", "label": "Обложка (EPUB)",
+             "type": "files", "dir": "source",
+             "ext": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"],
+             "default": "",
+             "help": "пусто = авто: cover.* из source/ (первый найденный); "
+                      "варианты обложек загружаются через «Файлы»"},
+            {"name": "epub_meta", "label": "Метаданные (YAML)",
+             "type": "files", "dir": "source",
+             "ext": [".yaml", ".yml"],
+             "default": "",
+             "help": "пусто = source/metadata.yaml; любой yaml/yml из source/ "
+                      "(несколько наборов метаданных)"},
+            {"name": "fb2_cover", "label": "Обложка (FB2)",
+             "type": "files", "dir": "source",
+             "ext": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"],
+             "default": "",
+             "help": "пусто = авто: cover.* из source/; для FB2 можно "
+                      "выбрать отдельную обложку"},
             {"name": "donate_file", "label": "Файл страницы поддержки",
              "type": "text", "default": "",
              "autofile": "source/donate.txt",
              "help": "пусто и source/donate.txt есть — подхватится "
-                     "автоматически"},
+                      "автоматически"},
         ],
         # только экспертный режим (без простого/пресета)
     },

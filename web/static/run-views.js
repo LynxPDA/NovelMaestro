@@ -494,13 +494,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         touched.add(f.name);
       });
       // чекбокс СЛЕВА от текста (не снизу): строка checkbox + label;
-      // подсказка — только title (наведение), чтобы не ломала строку
+      // подсказка — тултип при наведении (M9), чтобы не ломала строку
       const wrap = h(
         "label",
-        { class: "field field-check", title: f.help || undefined },
+        { class: "field field-check" },
         input,
         label,
       );
+      if (f.help) attachTooltip(wrap, f.help);
       wrap._input = input;
       if (key === "epub") wireEpubAutosave(wrap);
       return wrap;
@@ -617,7 +618,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       });
     }
     const wrap = h("label", { class: "field" }, label, input);
-    if (f.help) wrap.append(h("div", { class: "field-help" }, f.help));
+    // M9: сложные контролы (select/textarea/files) — тултип при наведении;
+    // inline-подсказка остаётся только у простых text/number
+    if (f.help) {
+      const complex = f.type === "select" || f.type === "textarea"
+        || f.type === "files";
+      if (complex) {
+        attachTooltip(wrap, f.help);
+      } else {
+        wrap.append(h("div", { class: "field-help" }, f.help));
+      }
+    }
     wrap._input = input;
     if (key === "epub") wireEpubAutosave(wrap);
     return wrap;
@@ -632,6 +643,166 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     };
     wrap.addEventListener("input", onCh);
     wrap.addEventListener("change", onCh);
+  }
+
+  // ── ner_check: режимы-пресеты и чипсы типов (вместо select/text) ──
+  // Общие для простого и экспертного режимов: карточки пишут
+  // st.values[key][...], чипсы грузят типы из глоссария (GET /api/ner).
+  // Возвращает {cards, chipsBar, chipsBox, guide, loadTypes}.
+  function nerCheckWidgets(key) {
+    const PRESETS = [
+      { v: "whole", t: "Быстро: весь список",
+        d: "Этап 1 — весь глоссарий одним проходом" },
+      { v: "types", t: "Глубоко: по типам",
+        d: "Этап 2 — по типам глоссария (правки по обновлённому ner.json)" },
+      { v: "all", t: "Полный цикл",
+        d: "Этапы 1+2: весь список, затем по типам" },
+    ];
+    const cards = h("div", { class: "ner-presets" });
+    function renderPresets() {
+      const cur = String(st.values[key]["passes"] ?? "all");
+      cards.replaceChildren();
+      for (const p of PRESETS) {
+        cards.append(
+          h(
+            "button",
+            {
+              class:
+                "ner-preset" + (cur === p.v ? " ner-preset-active" : ""),
+              type: "button",
+              onclick: () => {
+                st.values[key]["passes"] = p.v;
+                st.touched[key].add("passes");
+                renderPresets();
+              },
+            },
+            h("div", { class: "ner-preset-title" }, p.t),
+            h("div", { class: "ner-preset-desc" }, p.d),
+          ),
+        );
+      }
+    }
+    renderPresets();
+
+    const chipsBar = h("div", { class: "ner-chips-bar" });
+    const chipsInfo = h("div", { class: "field-help" });
+    const selAll = h(
+      "button",
+      { class: "btn btn-xs btn-ghost", type: "button" },
+      "Выбрать все",
+    );
+    const selNone = h(
+      "button",
+      { class: "btn btn-xs btn-ghost", type: "button" },
+      "Снять все",
+    );
+    const chipsBox = h("div", { class: "ner-chips-box" });
+    let typeNames = [];
+    let typeCounts = {};
+    // null = все типы (пустое значение), список — выбранные
+    function curTypes() {
+      const v = String(st.values[key]["types"] ?? "");
+      return v
+        ? v.split(",").map((s) => s.trim()).filter(Boolean)
+        : null;
+    }
+    function renderChips() {
+      const cur = curTypes();
+      chipsBox.replaceChildren();
+      for (const t of typeNames) {
+        const cb = h("input", { type: "checkbox", class: "checkbox" });
+        cb.checked = cur == null || cur.includes(t);
+        cb.addEventListener("change", () => {
+          const set = new Set(cur == null ? typeNames : cur);
+          if (cb.checked) {
+            set.add(t);
+            st.values[key]["types"] =
+              set.size === typeNames.length ? "" : [...set].join(",");
+          } else if (set.size > 1) {
+            set.delete(t);
+            st.values[key]["types"] = [...set].join(",");
+          } else {
+            cb.checked = true; // минимум один тип (как в глоссарии)
+          }
+          st.touched[key].add("types");
+          renderChips();
+        });
+        const n = typeCounts[t];
+        chipsBox.append(
+          h(
+            "label",
+            { class: "ner-chip" },
+            cb,
+            ` ${t}` + (n != null ? ` (${n})` : ""),
+          ),
+        );
+      }
+    }
+    selAll.addEventListener("click", () => {
+      st.values[key]["types"] = "";
+      st.touched[key].add("types");
+      renderChips();
+    });
+    selNone.addEventListener("click", () => {
+      if (typeNames.length) {
+        // минимум один тип (как в глоссарии) — снять все нельзя
+        st.values[key]["types"] = typeNames[0];
+        st.touched[key].add("types");
+        renderChips();
+      }
+    });
+    chipsBar.append(
+      selAll,
+      selNone,
+      h("span", { class: "spacer" }),
+      chipsInfo,
+    );
+    // подсказка-степпер: правильный порядок проверки и применения
+    const guide = h(
+      "details",
+      { class: "regexp-help ner-guide" },
+      h("summary", {}, "Как пользоваться проверкой"),
+      h(
+        "div",
+        { class: "regexp-help-body" },
+        h("ol", {},
+          h("li", {}, "Запустите проверку — правки LLM запишутся в ",
+            h("code", {}, "ner_review.json"), " (к тексту не применяются)"),
+          h("li", {}, "Во вкладке «Проверки» отредактируйте правки: ",
+            "принять / отклонить"),
+          h("li", {}, "Нажмите «Применить» — принятые правки попадут в ",
+            h("code", {}, "ner.json"))),
+      ),
+    );
+    // загрузка типов из глоссария — асинхронно, после вставки в DOM
+    const loadTypes = async () => {
+      chipsInfo.textContent = "Загрузка типов из глоссария…";
+      try {
+        const d = await api(`/ner?project=${section}/${name}`);
+        const byType = d.by_type || {};
+        typeNames = Object.keys(byType).sort();
+        typeCounts = byType;
+        if (!typeNames.length) {
+          chipsInfo.textContent =
+            "Глоссарий пуст — сначала создайте его стадией «Создание глоссария»";
+          return;
+        }
+        const cur = curTypes();
+        if (cur) {
+          // устаревшие/удалённые типы не остаются выбранными
+          const ok = cur.filter((t) => typeNames.includes(t));
+          st.values[key]["types"] =
+            ok.length === typeNames.length ? "" : ok.join(",");
+          if (!ok.length) st.values[key]["types"] = typeNames[0];
+        }
+        chipsInfo.textContent =
+          `${typeNames.length} тип(ов) в глоссарии · пусто = все`;
+        renderChips();
+      } catch (ex) {
+        chipsInfo.textContent = ex.message;
+      }
+    };
+    return { cards, chipsBar, chipsBox, guide, loadTypes };
   }
 
   // карточка пресета + простые поля (spec.simple) + диапазон глав:
@@ -668,6 +839,19 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       modeSel.addEventListener("change", applyNerSimple);
       applyNerSimple();
     }
+    // ner_check: режим-пресеты карточками вместо select (простой режим)
+    if (key === "ner_check" && byName["passes"]) {
+      const sel = byName["passes"];
+      const wrap = sel.closest ? sel.closest(".field") : null;
+      const w = nerCheckWidgets(key);
+      if (wrap) {
+        const idx = wraps.indexOf(wrap);
+        if (idx >= 0) wraps.splice(idx, 0, w.cards);
+        wrap.classList.add("hidden");
+      }
+      w.loadTypes();
+    }
+
     // wiki: «Собрать из глав» — прячем входной txt (показываем тип);
     // «Сохранить как главу» — прячем формат, показываем тип файла
     if (key === "wiki" && byName["source"]) {
@@ -854,6 +1038,25 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (fmtSel) fmtSel.addEventListener("change", applyWikiMode);
       if (asChSel) asChSel.addEventListener("change", applyWikiMode);
       applyWikiMode();
+    }
+
+    // ner_check — редизайн: карточки-пресеты режимов и чипсы типов из
+    // глоссария вместо select/text; степпер «как пользоваться»
+    if (key === "ner_check") {
+      const passesWrap = fieldWraps["passes"];
+      const typesWrap = fieldWraps["types"];
+      const w = nerCheckWidgets(key);
+      if (typesWrap) {
+        const idx = fieldNodes.indexOf(typesWrap);
+        if (idx >= 0) fieldNodes.splice(idx, 0, w.chipsBar, w.chipsBox, w.guide);
+        typesWrap.classList.add("hidden");
+      }
+      if (passesWrap) {
+        const idx = fieldNodes.indexOf(passesWrap);
+        if (idx >= 0) fieldNodes.splice(idx, 0, w.cards);
+        passesWrap.classList.add("hidden");
+      }
+      w.loadTypes();
     }
 
     // epub (экспертный): справка по regexp (collapsible) + перестройка

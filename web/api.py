@@ -1172,7 +1172,7 @@ def _env_get(ctx: dict) -> dict:
     if not p.is_file():
         return {"ok": True, "scope": scope, "exists": False,
                 "masked": "", "keys": [], "visible": _env_no_auth(ctx),
-                **info}
+                "values": {}, **info}
     text = p.read_text(encoding="utf-8", errors="replace")
     keys = [line.split("=", 1)[0].strip()
             for line in text.splitlines()
@@ -1182,6 +1182,17 @@ def _env_get(ctx: dict) -> dict:
             "visible": _env_no_auth(ctx), **info}
     if _env_no_auth(ctx):
         resp["content"] = text
+    # M9: значения НЕсекретных ключей (COMPILE_EPUB_COVER и т.п.) — для
+    # предзаполнения селектов в «Настройках»; секреты (API_KEY/TOKEN/…)
+    # не отдаются даже без аутентификации (маскировка их и так прячет)
+    resp["values"] = {}
+    for line in text.splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key = line.split("=", 1)[0].strip()
+            up = key.upper()
+            if not any(s in up for s in
+                       ("API_KEY", "TOKEN", "PASSWORD", "SECRET")):
+                resp["values"][key] = line.split("=", 1)[1].strip()
     return resp
 
 
@@ -1207,7 +1218,21 @@ def _env_put(ctx: dict) -> dict:
     changes = body.get("changes")
     if not isinstance(changes, dict):
         raise ApiError(400, "Поле changes: {KEY: value}")
-    text = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
+    text = ""
+    if p.is_file():
+        text = p.read_text(encoding="utf-8", errors="replace")
+    elif scope == "project":
+        # M9: точечная запись в ещё не созданный .env проекта — сид из
+        # системного корневого .env (без секретов), как в
+        # _persist_run_params: голый .env затенял бы системный
+        # (HOST/API_KEY/MODEL) и ломал конфиг LLM проекта
+        try:
+            src = _repo_root(ctx) / ".env"
+            if src.is_file():
+                text = _strip_secret_keys(
+                    src.read_text(encoding="utf-8", errors="replace"))
+        except OSError as exc:
+            log.debug("Не удалось сидировать .env проекта: %s", exc)
     lines = text.splitlines()
     for key, value in (changes or {}).items():
         k = str(key).strip()
@@ -2188,13 +2213,12 @@ def _stage_options(ctx: dict) -> dict:
                 # строки по списку, а не по диапазону min..max
                 out["options"]["chapters"] = {
                     "min": nums[0], "max": nums[-1], "ids": nums}
-        # файлы source/
+        # файлы source/ — ВСЕ файлы (клиент фильтрует по ext селекта):
+        # epub-исходники, txt, обложки (jpg/png/webp), metadata.yaml и т.п.
         src = pdir / "source"
         if src.is_dir():
             out["options"]["source"] = sorted(
-                f.name for f in src.iterdir()
-                if f.is_file() and f.suffix.lower() in
-                (".epub", ".zip", ".txt"))
+                f.name for f in src.iterdir() if f.is_file())
         # файлы prompts/
         pr = pdir / "prompts"
         if pr.is_dir():

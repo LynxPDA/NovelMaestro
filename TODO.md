@@ -67,56 +67,62 @@
 
 ### 1. Тултипы и единый стиль (web/static)
 
-- [ ] `styles.css`: стили `.tooltip` (позиционирование поверх, z-index,
-      тёмная подложка, стрелка).
-- [ ] `app.js`: глобал `attachTooltip(el, text)` — показ по mouseenter/focus,
-      скрытие по mouseleave/blur, автоочистка при remove.
-- [ ] `run-views.js` `buildField`: чекбоксы — tooltip вместо нативного title;
+- [x] `styles.css`: стили `.tooltip` (позиционирование поверх, z-index,
+      тёмная подложка, прижатие к краям окна).
+- [x] `app.js`: глобал `attachTooltip(el, text)` — показ по mouseenter/focus,
+      скрытие по mouseleave/blur, у верхнего края — под элементом.
+- [x] `run-views.js` `buildField`: чекбоксы — tooltip вместо нативного title;
       select/textarea/files с `help` — tooltip; inline `.field-help` остаётся
       только для простых text/number.
-- [ ] `project-views.js`: тултипы на чекбоксы (rv-bak, экспорт NER, модалки
-      типов) и сложные контролы.
-- [ ] `AGENTS.md`: короткий раздел «UI-гайдлайн» (тултипы, единый стиль).
+- [x] `project-views.js`: тултипы на чекбоксы (rv-bak) и сложные контролы
+      (тип файлов глав, режим .env, медиа-селекты).
+- [x] `AGENTS.md`: короткий раздел «UI/UX-гайдлайн» (тултипы, чипсы,
+      карточки-пресеты).
 
 ### 2. Обложки/метаданные
 
-- [ ] `web/api.py` `_stage_options`: source-пул = все файлы (клиент фильтрует
+- [x] `web/api.py` `_stage_options`: source-пул = все файлы (клиент фильтрует
       по ext селекта).
-- [ ] `web/api.py` `_env_put`: changes при отсутствии pdir/.env — сид из
-      системного .env (`_strip_secret_keys`), затем ключи.
-- [ ] `web/stages.py`: compile-поля `epub_cover`/`epub_meta`/`fb2_cover`
+- [x] `web/api.py` `_env_put`: changes при отсутствии pdir/.env — сид из
+      системного .env (`_strip_secret_keys`), затем ключи; GET — `values`
+      несекретных ключей.
+- [x] `web/stages.py`: compile-поля `epub_cover`/`epub_meta`/`fb2_cover`
       (files, dir=source, ext) + `build_clean_and_compile` передаёт флаги.
-- [ ] `project-views.js` configView: карточка «Обложка и метаданные» — селекты
+- [x] `project-views.js` configView: карточка «Обложки и метаданные» — селекты
       вариантов из source/, сохранение выбора в .env (COMPILE_*), чтение
       текущих значений из /api/env.
-- [ ] Тесты: source-пул с картинкой/yaml; env_put-сид; build compile
-      cover/meta; поля спеки.
+- [x] Тесты: source-пул с картинкой/yaml; env_put-сид; env_get values;
+      build compile cover/meta; поля спеки.
 
 ### 3. Редизайн ner_check
 
-- [ ] `run-views.js`: чипсы типов из глоссария (GET /api/ner, by_type) вместо
+- [x] `run-views.js`: чипсы типов из глоссария (GET /api/ner, by_type) вместо
       text-поля; «Выбрать все / Снять все»; минимум один выбран (как глоссарий);
       значение — строка через запятую в st.values["types"].
-- [ ] Карточки-пресеты passes вместо select (экспертный + простой):
+- [x] Карточки-пресеты passes вместо select (экспертный + простой):
       «Быстро: весь список» (whole), «Глубоко: по типам» (types),
       «Полный цикл» (all).
-- [ ] Степпер-гайд «Как пользоваться»: 1) запусти проверку (правки →
+- [x] Степпер-гайд «Как пользоваться»: 1) запусти проверку (правки →
       ner_review.json), 2) правки во вкладке «Проверки», 3) «Применить».
-- [ ] Тесты: build_command passes/types (строка через запятую); спека ner_check.
+- [x] Тесты: build_command types (строка через запятую); спека ner_check.
 
 ### 4. Очистка clean_and_compile
 
-- [ ] Убрать замену 【】→[].
-- [ ] Единый regex сепараторов: `^[ \t]*(?:[.*…][ \t]*){3,}$`.
-- [ ] Тесты: 【】 сохраняются в TXT; точки/звёздочки/многоточия → один сепаратор.
+- [x] Убрана замена 【】→[].
+- [x] Единый regex сепараторов: `^[ \t]*(?:[.*…][ \t]*){3,}$`.
+- [x] Тесты: 【】 сохраняются в TXT; точки/звёздочки/многоточия/смешанные →
+      один сепаратор.
 
 ### 5. Заголовок главы
 
-- [ ] Тест: первая строка «Пролог. Пример» → заголовок главы (TXT + EPUB TOC).
+- [x] Исследование: fallback на первую непустую строку уже реализован
+      (строки 711–717 clean_and_compile.py) — «Пролог. Пример» становится
+      названием главы.
+- [x] Тест: первая строка «Пролог. Пример» → заголовок главы.
 
 ### 6. Доки и коммит
 
-- [ ] `web/README.md`: compile-поля cover/meta, source-пул (все файлы),
-      env-сид.
-- [ ] `python3 -m pytest tests/ -q` зелёные; `node --check` run-views/
+- [x] `web/README.md`: compile-поля cover/meta, source-пул (все файлы),
+      env-сид + values, заголовок главы.
+- [x] `python3 -m pytest tests/ -q` зелёные (938); `node --check` run-views/
       project-views/app; smoke `--help` clean_and_compile; коммит+пуш.

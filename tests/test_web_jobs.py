@@ -710,6 +710,23 @@ def test_build_clean_and_compile():
     assert argv2[argv2.index("--mode") + 1] == "txt"
 
 
+def test_build_clean_and_compile_cover_meta():
+    """M9: варианты обложек/метаданных из source/ — флаги в argv;
+    пустые значения флагов не добавляют."""
+    form = {"mode": "epub",
+            "epub_cover": "source/cover2.png",
+            "epub_meta": "source/metadata2.yaml",
+            "fb2_cover": "source/cover3.jpg"}
+    argv = build_command("compile", form, {})
+    assert "--epub-cover" in argv and "source/cover2.png" in argv
+    assert "--epub-meta" in argv and "source/metadata2.yaml" in argv
+    assert "--fb2-cover" in argv and "source/cover3.jpg" in argv
+    argv2 = build_command("compile", {"mode": "txt"}, {})
+    assert "--epub-cover" not in argv2
+    assert "--epub-meta" not in argv2
+    assert "--fb2-cover" not in argv2
+
+
 def test_build_batch_replace():
     form = {"replacements": "Глава \\d+ -> Глава №\\g<0>\n\\(\\d+\\) ->",
             "type": "polished", "start": 1, "end": 5,
@@ -825,6 +842,20 @@ def test_compile_donate_autofile():
     spec = STAGE_SPECS["compile"]
     f = next(x for x in spec["fields"] if x["name"] == "donate_file")
     assert f.get("autofile") == "source/donate.txt"
+
+
+def test_compile_cover_meta_fields():
+    """M9: compile — поля выбора обложек/метаданных (files из source/)."""
+    spec = STAGE_SPECS["compile"]
+    by_name = {f["name"]: f for f in spec["fields"]}
+    for name, exts in (("epub_cover", [".jpg", ".png"]),
+                       ("epub_meta", [".yaml", ".yml"]),
+                       ("fb2_cover", [".jpg", ".png"])):
+        f = by_name.get(name)
+        assert f is not None, name
+        assert f["type"] == "files" and f["dir"] == "source", name
+        assert f["default"] == "", name
+        assert set(f["ext"]) & set(exts), name
 
 
 def test_wiki_range_fields_first():
@@ -1075,6 +1106,17 @@ def test_build_ner_check_no_bak():
     """no_bak: true → --no-bak в argv; false/нет — флага нет."""
     argv = build_command("ner_check", {"no_bak": True}, {})
     assert "--no-bak" in argv
+
+
+def test_build_ner_check_types_chips_value():
+    """Чипсы типов пишут строку через запятую — build передаёт её
+    в --types как есть; пусто = все типы (флаг не добавляется)."""
+    argv = build_command("ner_check",
+                         {"types": "Person,Place,noun"}, {})
+    assert "--types" in argv
+    assert "Person,Place,noun" in argv
+    argv2 = build_command("ner_check", {"types": ""}, {})
+    assert "--types" not in argv2
     argv2 = build_command("ner_check", {"no_bak": False}, {})
     assert "--no-bak" not in argv2
     argv3 = build_command("ner_check", {"apply": True}, {})
@@ -1657,6 +1699,9 @@ def test_stage_options_api(jobs_srv, tmp_path):
     src = pdir / "source"
     src.mkdir(exist_ok=True)
     (src / "book.epub").write_bytes(b"x")
+    # M9: в source-пуле ВСЕ файлы — обложки и yaml тоже видны селектам
+    (src / "cover2.png").write_bytes(b"png")
+    (src / "metadata2.yaml").write_text("title: Книга\n", encoding="utf-8")
     res, payload = req("GET",
                        "/api/stages/epub/options?project=ACTIVE/test_book")
     assert res.status == 200
@@ -1664,6 +1709,8 @@ def test_stage_options_api(jobs_srv, tmp_path):
     assert payload["options"]["chapters"] == {"min": 1, "max": 3,
                                                "ids": [1, 3]}
     assert "book.epub" in payload["options"]["source"]
+    assert "cover2.png" in payload["options"]["source"]
+    assert "metadata2.yaml" in payload["options"]["source"]
 
 
 def test_stage_options_cache_invalidates(jobs_srv, tmp_path):

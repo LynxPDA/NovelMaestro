@@ -405,6 +405,41 @@ def test_env_put_add_key(srv, tmp_path):
     assert "NEW=v" in text
 
 
+def test_env_put_seed_from_system(srv, tmp_path):
+    """M9: changes-PUT без собственного .env проекта — сид из системного
+    корневого .env (без секретов), затем точечные ключи; голый .env не
+    затеняет системный конфиг."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env").write_text(
+        "HOST=http://x\nAPI_KEY=secret\nMODEL=m1\n", encoding="utf-8")
+    srv, port, root = srv(repo_root=repo)
+    pdir = _mk_project(root)
+    res = _request(port, "PUT", "/api/env",
+                   {"project": "ACTIVE/demo", "scope": "project",
+                    "changes": {"COMPILE_EPUB_COVER": "source/cover2.png"}})
+    assert res["ok"]
+    text = (pdir / ".env").read_text(encoding="utf-8")
+    assert "COMPILE_EPUB_COVER=source/cover2.png" in text
+    # сид-ключи системного .env перенесены, секрет — пуст (M1-стиль)
+    assert "HOST=http://x" in text
+    assert "MODEL=m1" in text
+    assert "API_KEY=secret" not in text
+
+
+def test_env_get_values_non_secret(srv, tmp_path):
+    """M9: GET /api/env отдаёт values несекретных ключей (для селектов
+    в «Настройках»); секреты — только маской."""
+    srv, port, root = srv()
+    pdir = _mk_project(root)
+    (pdir / ".env").write_text(
+        "COMPILE_EPUB_COVER=source/cover2.png\nAPI_KEY=secret\n",
+        encoding="utf-8")
+    r = _request(port, "GET", f"/api/env?{_q('ACTIVE/demo')}")
+    assert r["values"]["COMPILE_EPUB_COVER"] == "source/cover2.png"
+    assert "API_KEY" not in r["values"]
+
+
 def test_env_put_bad_key(srv, tmp_path):
     srv, port, root = srv()
     _mk_project(root)

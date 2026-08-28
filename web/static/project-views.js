@@ -2108,6 +2108,10 @@ function viewProject(section, name) {
         h("input", { type: "checkbox" }),
         " не создавать .bak",
       );
+      attachTooltip(
+        bakBox,
+        "Не создавать резервную копию файла перед применением правок",
+      );
       const body = h("div", { class: "review-card-body" });
       const stKey = `review:${kind}`;
       st.review[kind] = st.review[kind] || { mode: "list" };
@@ -2630,6 +2634,10 @@ function viewProject(section, name) {
   async function chaptersView() {
     const err = h("div", { class: "form-error" });
     const typeSel = h("select", { class: "input chapters-type" });
+    attachTooltip(
+      typeSel,
+      "Какой файл главы править: chapter/translated/redacted/polished",
+    );
     const types = ["chapter", "translated", "redacted", "polished"];
     for (const t of types) {
       typeSel.append(h("option", { value: t }, t));
@@ -2848,6 +2856,11 @@ function viewProject(section, name) {
     modeSel.append(
       h("option", { value: "shared" }, "Использовать общий .env"),
       h("option", { value: "own" }, "Свой .env проекта"),
+    );
+    attachTooltip(
+      modeSel,
+      "Общий .env — системный (read-only, правится на главной); "
+        + "собственный .env проекта — перекрывает общий для этой книги",
     );
     const envToolbar = h("div", { class: "files-toolbar" });
     const envBody = h(
@@ -3164,8 +3177,117 @@ function viewProject(section, name) {
       return card;
     }
 
+    /* — M9: варианты обложек/метаданных (выбор по умолчанию → .env) — */
+    const mediaCard = h("div", { class: "review-card" });
+    const mediaInfo = h("div", { class: "review-status" });
+    const mediaErr = h("div", { class: "form-error" });
+    const coverEpubSel = h("select", { class: "input" });
+    const coverFb2Sel = h("select", { class: "input" });
+    const metaSel = h("select", { class: "input" });
+    const mediaSave = h("button", { class: "btn btn-sm" }, "Сохранить выбор");
+    mediaSave.disabled = true;
+    const IMG_EXT = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"];
+    const MEDIA_KEYS = {
+      coverEpubSel: "COMPILE_EPUB_COVER",
+      coverFb2Sel: "COMPILE_FB2_COVER",
+      metaSel: "COMPILE_EPUB_META",
+    };
+    let mediaChanged = false;
+    function fillMediaSel(sel, items) {
+      sel.replaceChildren();
+      sel.append(h("option", { value: "" }, "— авто (cover.* / metadata.yaml)"));
+      for (const n of items) sel.append(h("option", { value: n }, n));
+    }
+    function mediaSelects() {
+      return [
+        [coverEpubSel, MEDIA_KEYS.coverEpubSel],
+        [coverFb2Sel, MEDIA_KEYS.coverFb2Sel],
+        [metaSel, MEDIA_KEYS.metaSel],
+      ];
+    }
+    async function loadMedia() {
+      mediaErr.textContent = "";
+      try {
+        const o = await api(`/stages/compile/options?${q}`);
+        const src = o.options && o.options.source ? o.options.source : [];
+        const imgs = src.filter((n) => IMG_EXT.some((e) => n.toLowerCase().endsWith(e)));
+        const metas = src.filter((n) => /\.ya?ml$/i.test(n));
+        fillMediaSel(coverEpubSel, imgs);
+        fillMediaSel(coverFb2Sel, imgs);
+        fillMediaSel(metaSel, metas);
+        const d = await api(`/env?${q}&scope=project`);
+        const vals = d.values || {};
+        for (const [sel, key] of mediaSelects()) {
+          const cur = vals[key] || "";
+          const base = cur.replace(/\\/g, "/").split("/").pop();
+          if (base && [...sel.options].some((o) => o.value === base)) {
+            sel.value = base;
+          } else {
+            sel.value = "";
+          }
+        }
+        mediaInfo.textContent = d.exists
+          ? "выбор по умолчанию — из .env проекта"
+          : "выбор по умолчанию — не задан (.env проекта не создан)";
+        mediaSave.disabled = !mediaChanged;
+      } catch (ex) {
+        mediaErr.textContent = ex.message;
+      }
+    }
+    for (const [sel] of mediaSelects()) {
+      sel.addEventListener("change", () => {
+        mediaChanged = true;
+        mediaSave.disabled = false;
+      });
+    }
+    mediaSave.addEventListener("click", async () => {
+      mediaErr.textContent = "";
+      const changes = {};
+      for (const [sel, key] of mediaSelects()) {
+        changes[key] = sel.value ? `source/${sel.value}` : "";
+      }
+      try {
+        await api("/env", {
+          method: "PUT",
+          body: { project: `${section}/${name}`, scope: "project", changes },
+        });
+        toast("Выбор обложки/метаданных сохранён");
+        mediaChanged = false;
+        mediaSave.disabled = true;
+        await loadMedia();
+      } catch (ex) {
+        mediaErr.textContent = ex.message;
+      }
+    });
+    attachTooltip(coverEpubSel,
+      "Обложка по умолчанию для EPUB; пусто = авто (cover.* из source/)");
+    attachTooltip(coverFb2Sel,
+      "Обложка по умолчанию для FB2; пусто = авто (cover.* из source/)");
+    attachTooltip(metaSel,
+      "Метаданные по умолчанию; пусто = source/metadata.yaml");
+    const mediaBody = h(
+      "div",
+      { class: "review-card-body" },
+      mediaInfo,
+      h("label", { class: "field" },
+        h("div", { class: "field-label" }, "Обложка EPUB (source/)"), coverEpubSel),
+      h("label", { class: "field" },
+        h("div", { class: "field-label" }, "Обложка FB2 (source/)"), coverFb2Sel),
+      h("label", { class: "field" },
+        h("div", { class: "field-label" }, "Метаданные YAML (source/)"), metaSel),
+      h("div", { class: "review-actions" }, mediaSave),
+      mediaErr,
+    );
+    mediaCard.append(
+      h("div", { class: "review-card-title" },
+        "Обложки и метаданные (варианты по умолчанию)"),
+      mediaBody,
+    );
+    loadMedia();
+
     wrap.append(
       envCard,
+      mediaCard,
       coverCard,
       sourceCard("metadata.yaml", "yaml"),
       sourceCard("donate.txt", "txt"),

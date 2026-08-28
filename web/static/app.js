@@ -257,6 +257,40 @@ function toast(msg, kind = "ok") {
   setTimeout(() => t.remove(), 3500);
 }
 
+/* ── тултипы (M9): единая всплывающая подсказка ────────────────
+ * attachTooltip(el, text) — показ по наведению/фокусу, скрытие по
+ * уходу; позиция над элементом (прижата к краю окна, у верхнего
+ * края — под элементом). Один общий элемент на страницу. */
+const _tooltip = (() => {
+  const t = h("div", { class: "tooltip" });
+  document.body.append(t);
+  return t;
+})();
+function attachTooltip(el, text) {
+  if (!el || !text) return;
+  el.setAttribute("data-tip", ""); // маркер для CSS-курсора
+  const show = (e) => {
+    _tooltip.textContent = text;
+    _tooltip.classList.add("tooltip-show");
+    const r = el.getBoundingClientRect();
+    const tw = _tooltip.offsetWidth;
+    const th = _tooltip.offsetHeight;
+    const x = Math.max(
+      8,
+      Math.min(r.left + r.width / 2 - tw / 2, window.innerWidth - tw - 8),
+    );
+    const above = r.top - th - 6;
+    _tooltip.style.left = x + "px";
+    _tooltip.style.top =
+      (above >= 4 ? above : r.bottom + 6) + "px";
+  };
+  const hide = () => _tooltip.classList.remove("tooltip-show");
+  el.addEventListener("mouseenter", show);
+  el.addEventListener("mouseleave", hide);
+  el.addEventListener("focus", show);
+  el.addEventListener("blur", hide);
+}
+
 function confirmModal(title, text, confirmWord, onConfirm) {
   const word = h("input", { class: "input", placeholder: confirmWord });
   const err = h("div", { class: "form-error" });
