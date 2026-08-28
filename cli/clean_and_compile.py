@@ -754,10 +754,13 @@ def compile_book(mode):
                 # заголовок из первой непустой строки — убрать её из тела
                 content = re.sub(r"^\s*\S.*$", replacement, content,
                                  count=1, flags=re.MULTILINE)
-            content = content.replace("【", "[").replace("】", "]")
-            content = re.sub(r"^[ \t]*(\.[ \t]*){3,}$", sep_string, content, flags=re.MULTILINE)
-            content = re.sub(r"^[ \t]*(\*[ \t]*){3,}$", sep_string, content, flags=re.MULTILINE)
-            content = re.sub(r"^[ \t]*(…[ \t]*){3,}$", sep_string, content, flags=re.MULTILINE)
+            # Единый алгоритм нормализации разделителей: строка из 3+
+            # разделителей (точки/звёздочки/многоточия, разделённые пробелами)
+            # → универсальный сепаратор. Китайские скобки 【】 НЕ заменяем
+            # (косметика, не критичная очистка — M9).
+            content = re.sub(
+                r"^[ \t]*(?:[.*…][ \t]*){3,}$", sep_string,
+                content, flags=re.MULTILINE)
 
             cleaned_lines = [line.strip() for line in content.splitlines() if line.strip()]
             # Для EPUB/FB2 заголовок хранится отдельно в title —

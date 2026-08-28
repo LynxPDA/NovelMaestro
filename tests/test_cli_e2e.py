@@ -154,10 +154,30 @@ def test_cac_compile_txt(cac_env):
     assert out.is_file()
     content = out.read_text(encoding="utf-8")
     assert "[Глава 1 (правленый) :|: 1]" in content
-    assert "[Квадратные]" in content      # 【】 → []
+    assert "【Квадратные】" in content      # 【】 НЕ заменяются (косметика убрана)
     assert "* * *" in content              # «. . .» → сепаратор
     log = Path("logs") / "build_log_txt.txt"
     assert log.is_file() and "[OK] Глава 1" in log.read_text(encoding="utf-8")
+
+
+def test_cac_separators_unified(cac_env):
+    """Единый алгоритм разделителей: строки точек, звёздочек и многоточий
+    → один сепаратор «* * *»; смешанные строки тоже сворачиваются."""
+    d = cac_env / "chapters" / "00000_3_x"
+    d.mkdir()
+    (d / "polished.txt").write_text(
+        "Глава 3\n\nТекст.\n. . .\nТекст2.\n* * * *\nТекст3.\n… … …\n"
+        "Конец.\n* . * .\nФинал.\n",
+        encoding="utf-8")
+    CAC.cfg.start, CAC.cfg.end = 1, 3
+    CAC.compile_book("txt")
+    out = Path(CAC.cfg.tmp_dir) / "compiled_1_3_txt.txt"
+    content = out.read_text(encoding="utf-8")
+    # 4 разделителя из главы 3 + 2 из глав 1–2 (фикстура: «. . .»)
+    assert content.count("* * *") == 6
+    assert ". . ." not in content
+    assert "… … …" not in content
+    assert "* . * ." not in content
 
 
 def test_cac_title_from_first_line(cac_env):
@@ -174,6 +194,21 @@ def test_cac_title_from_first_line(cac_env):
     content = out.read_text(encoding="utf-8")
     assert "[Wiki Новеллы :|: 3]" in content   # заголовок из первой строки
     assert "### Линь Шуй" in content           # внутренние заголовки целы
+
+
+def test_cac_title_from_prologue_first_line(cac_env):
+    """Нет «Глава N»: заголовок — первая непустая строка, даже если она
+    начинается с «Пролог.» — она целиком становится названием главы."""
+    d = cac_env / "chapters" / "00000_3_x"
+    d.mkdir()
+    (d / "polished.txt").write_text(
+        "Пролог. Пример\n\nТекст пролога.\n", encoding="utf-8")
+    CAC.cfg.start, CAC.cfg.end = 1, 3
+    CAC.compile_book("txt")
+    out = Path(CAC.cfg.tmp_dir) / "compiled_1_3_txt.txt"
+    content = out.read_text(encoding="utf-8")
+    assert "[Пролог. Пример :|: 3]" in content
+    assert "Пролог. Пример" not in content.replace("[Пролог. Пример :|: 3]", "")
 
 
 def test_cac_epub_wiki_chapter_title(cac_env):

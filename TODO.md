@@ -1,102 +1,122 @@
-# TODO — Переработка «epub · Разбор исходника на главы» (CLI + web)
+# TODO — UI/UX-стандартизация, обложки/метаданные, редизайн ner_check, очистка clean_and_compile
 
-Статус: **готово**. Полная переработка стадии `epub`: новые режимы,
-каноничные имена каталогов с настраиваемой длиной, предпросмотр с
-удалением/перенумерацией, автосохранение настроек.
+Статус: **в работе**. Четыре направления: тултипы и единый стиль интерфейса,
+гибкий выбор обложек/метаданных, интуитивный интерфейс NER-проверок,
+оптимизация нормализации текста при компиляции.
+
+## Техническое задание
+
+1. **Стандартизация UI/UX и подсказки.** Тултипы при наведении на все чекбоксы
+   и сложные элементы управления во всей системе; правила оформления интерфейса
+   и использования тултипов (дизайн-гайдлайн) — коротко в AGENTS.md.
+2. **Несколько обложек и метаданных.** Выбор нескольких вариантов обложек и
+   наборов метаданных в `source/`; переключатели выбора — в «Настройках проекта»
+   и в этапе финальной компиляции. Загрузка уже реализована через «Файлы».
+3. **Редизайн NER-проверок (ner_check).** Динамический выбор типов чипсами из
+   реального глоссария (+ «Выбрать все / Снять все»), понятные карточки-пресеты
+   режимов («Быстро: весь список», «Глубоко: по типам», «Полный цикл»),
+   подсказка-степпер порядка действий.
+4. **Оптимизация очистки при компиляции (clean_and_compile).** Убрать замену
+   китайских скобок 【】→[] (не критичная косметика); объединить правила
+   нормализации разделителей (точки/звёздочки/многоточия) в один алгоритм
+   (функциональность не ломать); жёсткое удаление «Глава N» из середины текста
+   (после 9-й строки) — оставить.
+5. **Заголовок главы в compile.** Исследовать, как определяется заголовок:
+   если нет «Глава N» — fallback на первую непустую строку (например
+   «Пролог. Пример» → это и есть название главы/части).
 
 ## Исследование (факты, на которых строится план)
 
-- Канон `parse_chapter_id` (core/common.py): папка `<нули>_<номер>_<заголовок>`,
-  нули добивают ширину 6 — `00000_1`, `0000_85`, `000_177`, `0_12345`.
-  Текущий `write_section` уже так делает (`zeros = 6 - len(counter)`).
-  Смещение 875 → первая папка `000_875_…` (ширина сохраняется).
-- Текущий скрипт (1044 строки): пресеты языков zh/en/ru, `Patterns`,
-  `process_archive`/`process_txt`/`split_and_write`, `--lang`, автопоиск
-  в `source/`, `--clean/--remove-pages/--book-title/--move-done`.
-- Web: `web/stages.py::build_epub_to_chapters` + спека (input/lang/polished/
-  clean/remove_pages/chapter_re/book_title/chunk_size/clean_output/dry_run);
-  SPA — generic-форма (buildField), пресет простого режима `{input, lang}`.
-- R9: настройки запусков пишутся в `.env` проекта при запуске; предзаполнение
-  из `.env` в `_stage_spec`. Многострочные regexp-поля в .env не пишем
-  (перевод строк → пробелы ломает «по одному на строку»).
-- UI-предпочтения — localStorage (AGENTS §7); автосохранение настроек
-  epub-формы делаем в localStorage по проекту.
-- Предпросмотр: CLI-режим `--preview-json tmp/epub_preview.json` (секции +
-  тексты), API читает JSON; удаление/перенумерация — правка JSON на сервере;
-  запуск получает `--skip` из предпросмотра (удаления переносятся в реальный
-  разбор).
+- **Тултипы.** `buildField` (run-views.js): чекбоксы — нативный `title`;
+  остальные поля — inline `.field-help` под полем. Единого тултип-компонента
+  нет. Чекбоксы в project-views.js (review-карточки, экспорт NER, модалки) —
+  без подсказок. `h()`/`toast`/`confirmModal` — глобалы app.js; тултип-хелпер
+  разместить там же.
+- **Обложки/метаданные.** CLI уже принимает `--epub-cover/--epub-meta/
+  --fb2-cover` (пути от cwd=проект; дефолт `./source/cover.jpg` +
+  `./source/metadata.yaml`; `resolve_cover_path` — fallback на любой `cover.*`).
+  Web-спека compile НЕ передаёт cover/meta. `_stage_options`: source-пул только
+  `.epub/.zip/.txt` — картинки/yaml не видны селектам. ConfigView: карточка
+  обложки (один канон `cover.<ext>` через /api/cover) + редакторы
+  metadata.yaml/donate.txt; загрузка вариантов — уже через «Файлы».
+  R9: ключи `COMPILE_EPUB_COVER/COMPILE_EPUB_META/COMPILE_FB2_COVER`
+  (env_keys_for) — префилл формы из .env уже работает, `_persist_run_params`
+  пишет значения при запуске. `_env_put` (changes) при отсутствии pdir/.env
+  создаёт «голый» .env → затеняет системный (HOST/API_KEY/MODEL) — для
+  точечной записи из Настроек нужен сид из системного .env без секретов
+  (как `_persist_run_params`).
+- **ner_check.** CLI: `--passes all|whole|types`, `--types` (запятая; пусто =
+  все типы). Спека: passes select + types text; simple = [prompt_file, passes].
+  Источник чипсов — `GET /api/ner` → `by_type: {тип: count}`. Паттерн
+  «минимум один выбран» уже есть в модалке типов глоссария (openToggleAllModal).
+  Флоу правок: вкладка «Проверки» — reviewView (список, статусы
+  принять/отклонить, «Применить»).
+- **clean_and_compile.** Строка 757: `content.replace("【", "[").replace("】", "]")`
+  — жёсткая косметика, убрать. Строки 758–760: три regex сепараторов
+  (точки/звёздочки/многоточия) — объединить. Строки 726–731: удаление «Глава N»
+  после 9-й строки — оставить. Тест `test_cac_compile_txt` жёстко проверяет
+  【】→[] — обновить.
+- **Заголовок главы.** Уже реализовано (строки 711–717 clean_and_compile.py):
+  первое «Глава N» в файле → заголовок; иначе первая непустая строка (ведущие
+  `#` срезаются) → заголовок; иначе fallback «Глава N». Пример «Пролог. Пример»
+  станет названием главы. Тесты есть (test_cac_title_from_first_line,
+  test_cac_epub_wiki_chapter_title, test_cac_compile_txt_no_titles_fallback) —
+  добавить тест с точным примером «Пролог. Пример».
 
 ## План
 
-### 1. CLI — `cli/epub_to_chapters.py` (полная переработка)
+### 1. Тултипы и единый стиль (web/static)
 
-- [x] Три режима `--mode`: `toc` (по структуре epub/zip: spine/TOC/h1-h2,
-      дубль заголовка главы в тексте удаляется), `regex` (строки-маркеры,
-      `--split-re` по одному на строку), `chunk` (`--chunk-size`, СИМВОЛЫ;
-      название — по маске `--chunk-mask`, обязателен `{num}`).
-- [x] Вход только .epub/.zip/.txt; `--input` обязателен (автопоиск убран);
-      TOC-режим отклоняет txt; regex/chunk принимают txt и epub/zip.
-- [x] Пресеты языков удалены (LANG_PRESETS/Patterns/--lang и все
-      языковые паттерны).
-- [x] Очистки: `--clean-re` (append, по одному на строку) — удаляет все
-      совпадения из текста (MULTILINE — якоря ^/$ работают построчно).
-- [x] Имена каталогов: `safe_folder` (недопустимые символы Windows+Linux,
-      пробелы → `_`, зарезервированные имена, точки/пробелы в конце),
-      `--title-limit` (СИМВОЛЫ, дефолт 50), первая строка файла — заголовок.
-- [x] `--num-offset` (первый номер, дефолт 1), `--skip N` (append) —
-      пропуск секции по исходному seq с перенумерацией.
-- [x] `--preview-json PATH` — вместо записи пишет JSON
-      `{source, num_offset, title_limit, entries: [{seq, num, folder, heading, text}]}`.
-- [x] `--polished`, `--clean-output`, `--dry-run`, `--report`, сверка
-      ДО/ПОСЛЕ — сохранить.
+- [ ] `styles.css`: стили `.tooltip` (позиционирование поверх, z-index,
+      тёмная подложка, стрелка).
+- [ ] `app.js`: глобал `attachTooltip(el, text)` — показ по mouseenter/focus,
+      скрытие по mouseleave/blur, автоочистка при remove.
+- [ ] `run-views.js` `buildField`: чекбоксы — tooltip вместо нативного title;
+      select/textarea/files с `help` — tooltip; inline `.field-help` остаётся
+      только для простых text/number.
+- [ ] `project-views.js`: тултипы на чекбоксы (rv-bak, экспорт NER, модалки
+      типов) и сложные контролы.
+- [ ] `AGENTS.md`: короткий раздел «UI-гайдлайн» (тултипы, единый стиль).
 
-### 2. Web-спека — `web/stages.py`
+### 2. Обложки/метаданные
 
-- [x] Новые поля: input (files, source, epub/zip/txt), mode (select toc/regex/
-      chunk), split_patterns (textarea, noenv), chunk_size (СИМВОЛЫ),
-      chunk_mask («Глава {num}»), clean_patterns (textarea, noenv),
-      title_limit (СИМВОЛЫ, 50), num_offset (1), polished, clean_output.
-- [x] `build_epub_to_chapters`: --mode всегда; split/clean — по строкам
-      (append); chunk-поля только в chunk-режиме; skip — списком.
-- [x] `autosave: True` в спеке; noenv-поля не пишутся/не читаются из .env
-      (`_persist_run_params`, `_stage_spec` в api.py).
+- [ ] `web/api.py` `_stage_options`: source-пул = все файлы (клиент фильтрует
+      по ext селекта).
+- [ ] `web/api.py` `_env_put`: changes при отсутствии pdir/.env — сид из
+      системного .env (`_strip_secret_keys`), затем ключи.
+- [ ] `web/stages.py`: compile-поля `epub_cover`/`epub_meta`/`fb2_cover`
+      (files, dir=source, ext) + `build_clean_and_compile` передаёт флаги.
+- [ ] `project-views.js` configView: карточка «Обложка и метаданные» — селекты
+      вариантов из source/, сохранение выбора в .env (COMPILE_*), чтение
+      текущих значений из /api/env.
+- [ ] Тесты: source-пул с картинкой/yaml; env_put-сид; build compile
+      cover/meta; поля спеки.
 
-### 3. API предпросмотра — `web/api.py`
+### 3. Редизайн ner_check
 
-- [x] `POST /api/stages/epub/preview` {params, skip} — subprocess скрипта с
-      `--preview-json tmp/epub_preview.json`, ответ — summary (папки+размеры).
-- [x] `GET /api/stages/epub/preview` — summary из JSON.
-- [x] `GET /api/stages/epub/preview/text?num=` — текст главы.
-- [x] `DELETE /api/stages/epub/preview/folder?seq=` — удаление секции +
-      перенумерация (префикс ширины 6 от num_offset).
+- [ ] `run-views.js`: чипсы типов из глоссария (GET /api/ner, by_type) вместо
+      text-поля; «Выбрать все / Снять все»; минимум один выбран (как глоссарий);
+      значение — строка через запятую в st.values["types"].
+- [ ] Карточки-пресеты passes вместо select (экспертный + простой):
+      «Быстро: весь список» (whole), «Глубоко: по типам» (types),
+      «Полный цикл» (all).
+- [ ] Степпер-гайд «Как пользоваться»: 1) запусти проверку (правки →
+      ner_review.json), 2) правки во вкладке «Проверки», 3) «Применить».
+- [ ] Тесты: build_command passes/types (строка через запятую); спека ner_check.
 
-### 4. SPA — `web/static/run-views.js` + styles.css
+### 4. Очистка clean_and_compile
 
-- [x] textarea-тип поля; regexp-справка (сворачиваемая, с примерами) —
-      экспертный режим.
-- [x] Автосохранение настроек epub-формы в localStorage (по проекту),
-      загрузка поверх .env/дефолтов.
-- [x] Динамическая фильтрация исходника по режиму: toc — epub/zip,
-      regex/chunk — +txt; простой режим — epub/zip; «Запустить»/предпросмотр
-      без исходника — ошибка.
-- [x] Панель предпросмотра (оба режима): кнопка «Предпросмотр»,
-      список каталогов + размер КБ + удаление с перенумерацией, выбор главы
-      и текст; правка настроек — предпросмотр устаревает.
-- [x] Запуск переносит skip-список предпросмотра в params.
+- [ ] Убрать замену 【】→[].
+- [ ] Единый regex сепараторов: `^[ \t]*(?:[.*…][ \t]*){3,}$`.
+- [ ] Тесты: 【】 сохраняются в TXT; точки/звёздочки/многоточия → один сепаратор.
 
-### 5. Тесты
+### 5. Заголовок главы
 
-- [x] `tests/test_epub_to_chapters.py` — полная переработка: toc/regex/chunk,
-      safe_folder/folder_name (ширина 6, лимит 50), offset, skip+перенумерация,
-      preview_json, main (required input, bad suffix, clean-output, preview).
-- [x] `tests/test_cli_units.py` — e2c-тесты под новые сигнатуры.
-- [x] `tests/test_web_jobs.py` — build-тесты (mode/split-re/clean-re/skip/
-      chunk), simple = [input], preset spot-checks.
-- [x] `tests/test_web_api.py` — preview-флоу: создание, текст, удаление+
-      перенумерация, offset, ошибки (txt в toc, 404).
+- [ ] Тест: первая строка «Пролог. Пример» → заголовок главы (TXT + EPUB TOC).
 
 ### 6. Доки и коммит
 
-- [x] `web/README.md` — описание стадии epub, API-таблица (preview-роуты).
-- [ ] `python3 -m pytest tests/ -q` зелёные; `node --check` run-views;
-      smoke `--help`; коммит+пуш.
+- [ ] `web/README.md`: compile-поля cover/meta, source-пул (все файлы),
+      env-сид.
+- [ ] `python3 -m pytest tests/ -q` зелёные; `node --check` run-views/
+      project-views/app; smoke `--help` clean_and_compile; коммит+пуш.
