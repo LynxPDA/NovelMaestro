@@ -166,6 +166,34 @@ def test_main_translate(tmp_path, monkeypatch):
     assert trace[0]["translated_text"].strip() == "ПЕРЕВЕДЁННЫЙ ТЕКСТ"
 
 
+def test_main_prompt_missing_tag_falls_back_to_builtin(tmp_path, monkeypatch):
+    """промпт-файл с тегами, но без тега стадии → предупреждение и
+    ВСТРОЕННЫЙ промпт (не «файл целиком» с чужими тегами)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "chunks.json").write_text(json.dumps([
+        {"chunk_id": 0, "original_text": "原文",
+         "translated_text": "Перевод"},
+    ], ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "ner.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "prompt.txt").write_text(
+        "<translate>\nПереведи {original_text}\n</translate>\n",
+        encoding="utf-8")
+    seen = {}
+    def fake_stream(base_url, model, messages, *a, **k):
+        seen["content"] = messages[0]["content"]
+        return ("ПЕРЕВОД", "")
+    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "м")
+    # redact: в файле только тег <translate> — тег redact отсутствует
+    TB.main(["chunks.json", "--mode", "redact", "--prompt_file",
+             "prompt.txt", "--host", "http://h", "--model", "m",
+             "--threads", "1"])
+    from cli.translate_book import DEFAULT_REDACT_PROMPT
+    # встроенный промпт, а НЕ файл целиком с чужим тегом
+    assert "<translate>" not in seen["content"]
+    assert DEFAULT_REDACT_PROMPT.strip().splitlines()[0] in seen["content"]
+
+
 def test_main_resolves_server_from_env(tmp_path, monkeypatch):
     """host/model из .env (HOST/MODEL), без --host; отдельные модели
     под режимы убраны — берётся единая модель скрипта."""

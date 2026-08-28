@@ -76,10 +76,13 @@ def test_pipeline_stage_in_specs():
     assert "action" in names and "start" in names and "end" in names
     assert "jobs" in names and "host" in names and "api_key" in names
     assert "profile" not in names  # профили убраны
-    # выбор промпт-файлов (auto/separate/combined)
-    assert "prompt_mode" in names and "prompt_file" in names
-    assert "translate_prompt" in names and "redact_prompt" in names
-    assert "polish_prompt" in names
+    # единый общий промпт-файл; режим промптов и отдельные файлы
+    # на стадию убраны
+    assert "prompt_file" in names
+    assert "prompt_mode" not in names
+    assert "translate_prompt" not in names
+    assert "redact_prompt" not in names
+    assert "polish_prompt" not in names
 
 
 def test_pipeline_script_path():
@@ -134,43 +137,33 @@ def test_build_pipeline_argv():
 
 
 def test_build_pipeline_prompt_argv():
-    """режимы промптов pipeline → нужные флаги argv."""
+    """единый общий промпт-файл → один --prompt_file; без файла —
+    без флагов промптов (встроенные/авто в pipeline.py)."""
     from web.stages import build_command
     ctx: dict = {}
     base = {"action": "4", "host": "http://h", "model": "m",
             "api_key": "k"}
-    # combined → один --prompt_file, без per-stage флагов
-    form = dict(base, prompt_mode="combined",
-                prompt_file="prompts/pipeline_prompt.txt")
+    # задан общий файл → --prompt_file
+    form = dict(base, prompt_file="prompts/pipeline_prompt.txt")
     argv = build_command("pipeline", form, ctx)
     assert "--prompt_file" in argv
     assert "prompts/pipeline_prompt.txt" in argv
-    assert "--translate_prompt" not in argv
-    # separate → по одному флагу на стадию, без --prompt_file
-    form2 = dict(base, prompt_mode="separate",
-                 translate_prompt="prompts/t.txt",
-                 redact_prompt="prompts/r.txt")
-    argv2 = build_command("pipeline", form2, ctx)
-    assert "--translate_prompt" in argv2 and "prompts/t.txt" in argv2
-    assert "--redact_prompt" in argv2 and "prompts/r.txt" in argv2
+    # без файла — флагов промптов нет вообще
+    argv2 = build_command("pipeline", dict(base), ctx)
     assert "--prompt_file" not in argv2
-    # auto: явно заданные пробрасываются, пустые — не мешают
-    form3 = dict(base, prompt_mode="auto", polish_prompt="prompts/p.txt")
-    argv3 = build_command("pipeline", form3, ctx)
-    assert "--polish_prompt" in argv3 and "prompts/p.txt" in argv3
-    assert "--translate_prompt" not in argv3
+    assert "--translate_prompt" not in argv2
+    assert "--redact_prompt" not in argv2
+    assert "--polish_prompt" not in argv2
 
 
 def test_resolve_prompt_paths(tmp_path, monkeypatch):
-    """auto — кандидат с тегами > дефолтные имена по стадиям;
-    явные флаги приоритетнее auto."""
+    """auto — кандидат с тегами из prompts/ > пустые пути (встроенные);
+    отдельные файлы на стадию убраны."""
     from web.pipeline import resolve_prompt_paths
     monkeypatch.chdir(tmp_path)
-    # пусто — дефолтные имена по стадиям
+    # пусто и нет кандидатов — стадии на встроенных промптах
     out = resolve_prompt_paths()
-    assert out[1] == "prompts/translate_prompt.txt"
-    assert out[2] == "prompts/redact_prompt.txt"
-    assert out[3] == "prompts/polish_prompt.txt"
+    assert out[1] == out[2] == out[3] == ""
     # кандидат с тегами → один файл на все стадии
     pr = tmp_path / "prompts"
     pr.mkdir()
@@ -179,22 +172,49 @@ def test_resolve_prompt_paths(tmp_path, monkeypatch):
         "<polish>\nПОЛИРОВКА\n</polish>", encoding="utf-8")
     out = resolve_prompt_paths()
     assert out[1] == out[2] == out[3] == "prompts/pipeline_prompt.txt"
-    # файл БЕЗ тегов кандидатом не считается → дефолты
+    # файл БЕЗ тегов кандидатом не считается → встроенные
     (pr / "pipeline_prompt.txt").write_text(
         "просто текст без тегов", encoding="utf-8")
     out = resolve_prompt_paths()
-    assert out[1] == "prompts/translate_prompt.txt"
-    # явный combined
+    assert out[1] == out[2] == out[3] == ""
+    # явный общий файл — все стадии им
     out = resolve_prompt_paths("prompts/pipeline_prompt.txt")
     assert out[1] == out[2] == out[3] == "prompts/pipeline_prompt.txt"
-    # явный separate: пустые стадии — дефолтные имена
-    out = resolve_prompt_paths("", {1: "prompts/t.txt"})
-    assert out[1] == "prompts/t.txt"
-    assert out[2] == "prompts/redact_prompt.txt"
+
+
+def test_warn_missing_prompt_tag(tmp_path, monkeypatch):
+    """предупреждение, если в общем промпт-файле нет тега стадии;
+    файл без тегов и пустой путь — без предупреждения."""
+    from web.pipeline import warn_missing_prompt_tag
+    import logging
+    monkeypatch.chdir(tmp_path)
+    pr = tmp_path / "prompts"
+    pr.mkdir()
+    pf = "prompts/p.txt"
+    (pr / "p.txt").write_text(
+        "<translate>\nПЕРЕВОД\n</translate>\n"
+        "<polish>\nПОЛИРОВКА\n</polish>", encoding="utf-8")
+    msgs = []
+    class L:
+        def warning(self, *a): msgs.append(a)
+    # есть тег translate, нет redact
+    warn_missing_prompt_tag(pf, 1, L())
+    assert not msgs
+    warn_missing_prompt_tag(pf, 2, L())
+    assert msgs and msgs[0][2] == "redact"
+    # файл без тегов — легальный режим, без предупреждения
+    (pr / "p.txt").write_text("просто текст", encoding="utf-8")
+    msgs2 = []
+    warn_missing_prompt_tag(pf, 2, L())
+    assert not msgs2
+    # пустой путь — пропуск
+    warn_missing_prompt_tag("", 2, L())
+    assert not msgs2
 
 
 def test_build_stage_cmd_prompt_override(tmp_path):
-    """переданный prompt_file подменяет дефолт по стадии."""
+    """переданный prompt_file уходит в команду стадии; пусто =
+    без --prompt_file (встроенные промпты)."""
     from web.pipeline import build_stage_cmd
     script = tmp_path / "translate_book.py"
     cmd = build_stage_cmd(1, script, tmp_path / "in", tmp_path / "out",
@@ -203,11 +223,10 @@ def test_build_stage_cmd_prompt_override(tmp_path):
     assert "--prompt_file" in cmd
     assert cmd[cmd.index("--prompt_file") + 1] == \
         "prompts/pipeline_prompt.txt"
-    # без переданного — дефолт стадии (как было)
+    # без переданного — флага нет вообще (встроенный промпт)
     cmd2 = build_stage_cmd(2, script, tmp_path / "in", tmp_path / "out",
                            "http://h", "k", "м", 300)
-    assert cmd2[cmd2.index("--prompt_file") + 1] == \
-        "prompts/redact_prompt.txt"
+    assert "--prompt_file" not in cmd2
 
 
 def test_build_stage_cmd_single_model(tmp_path):
@@ -253,7 +272,8 @@ def test_pipeline_help_smoke():
     assert "--action" in r.stdout
     # флаги промпт-файлов
     assert "--prompt_file" in r.stdout
-    assert "--translate_prompt" in r.stdout
+    # отдельные файлы на стадию убраны
+    assert "--translate_prompt" not in r.stdout
 
 
 # ════════════════════════════════════════════════════════════════════

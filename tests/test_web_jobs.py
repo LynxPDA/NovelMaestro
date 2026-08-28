@@ -790,6 +790,33 @@ def test_compile_donate_autofile():
     assert f.get("autofile") == "source/donate.txt"
 
 
+def test_wiki_range_fields_first():
+    """wiki: диапазон глав (start/end) — ПЕРЕД «Источник текста»."""
+    spec = STAGE_SPECS["wiki"]
+    names = [f["name"] for f in spec["fields"]]
+    assert names.index("start") < names.index("source")
+    assert names.index("end") < names.index("source")
+    assert names.index("source") < names.index("file")
+
+
+def test_pipeline_no_separate_prompts():
+    """pipeline: отдельные промпт-файлы на стадию и режим промптов убраны."""
+    spec = STAGE_SPECS["pipeline"]
+    names = {f["name"] for f in spec["fields"]}
+    assert "prompt_file" in names
+    assert "prompt_mode" not in names
+    assert "translate_prompt" not in names
+    assert "redact_prompt" not in names
+    assert "polish_prompt" not in names
+    argv = build_command("pipeline",
+                         {"prompt_file": "prompts/p.txt",
+                          "translate_prompt": "prompts/t.txt",
+                          "action": "1", "host": "h", "model": "m"},
+                         {})
+    assert "--prompt_file" in argv
+    assert "--translate_prompt" not in argv
+
+
 def test_preset_spot_checks():
     """Точечные проверки: что реально уедет в params при нажатии
     «Запустить» в простом режиме."""
@@ -929,16 +956,17 @@ def test_stage_spec_env_prefill_skips_missing_file(jobs_srv, tmp_path):
     _make_project(port, req)
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
     (pdir / ".env").write_text(
-        "PIPELINE_TRANSLATE_PROMPT=translate_prompt.txt\n"
-        "PIPELINE_REDACT_PROMPT=redact_prompt.txt\n",
+        "PIPELINE_PROMPT_FILE=prompts/pipeline_prompt.txt\n",
         encoding="utf-8")
     res, payload = req("GET",
                        "/api/stages/pipeline/spec?project=ACTIVE/test_book")
     assert res.status == 200
     fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    # файлов нет в prompts/ → дефолт остаётся пустым (не подхватываем)
-    assert fields["translate_prompt"]["default"] == ""
-    assert fields["redact_prompt"]["default"] == ""
+    # файла нет в prompts/ → дефолт остаётся пустым (не подхватываем)
+    assert fields["prompt_file"]["default"] == ""
+    # отдельные файлы на стадию убраны из спеки
+    assert "translate_prompt" not in fields
+    assert "redact_prompt" not in fields
 
 
 def test_stage_spec_env_prefill_bool_on(jobs_srv, tmp_path):

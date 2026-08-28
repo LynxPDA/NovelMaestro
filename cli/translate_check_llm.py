@@ -323,6 +323,12 @@ def load_prompts(prompt_file, logger):
             p2 = m2.group(1).strip()
         if not m1 and not m2:
             logger.warning("Теги <pass1>/<pass2> не найдены, встроенные.")
+        elif not m1:
+            logger.warning("В промпт-файле нет тега <pass1> — "
+                           "pass1 будет ВСТРОЕННЫМ.")
+        elif not m2:
+            logger.warning("В промпт-файле нет тега <pass2> — "
+                           "pass2 будет ВСТРОЕННЫМ.")
     return p1, p2
 
 

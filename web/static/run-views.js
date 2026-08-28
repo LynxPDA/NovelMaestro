@@ -8,12 +8,24 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     log: [], // строки лога текущего запуска (ТОЛЬКО из SSE-стрима)
     events: [], // события глав конвейера (стадия 3)
     progress: null, // последнее событие прогресса {label, done, total}
+    chapterState: null, // фактическое состояние артефактов глав (status API)
     gen: 0, // поколение отрисовки — гасит гонки двух render()
     values: {}, // значения формы по стадиям (данные; синхронизация режимов)
     touched: {}, // изменённые пользователем поля по стадиям (Set имён)
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
+
+  // ── фактическое состояние артефактов глав (для таблицы конвейера) ──
+  async function loadChapterState() {
+    try {
+      const r = await api(`/projects/${section}/${name}/status`);
+      const ch = r.status && r.status.chapters;
+      st.chapterState = ch && typeof ch === "object" ? ch : null;
+    } catch {
+      st.chapterState = null;
+    }
+  }
 
   // ── прикрепление к конкретному запуску (лог + SSE + управление) ──
   async function attachToJob(jobId) {
@@ -29,26 +41,24 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         render();
         return;
       }
-      if (job.status !== "running") {
-        // завершённый запуск лог не показывает (Д2) —
-        // ведём себя как заход на страницу без job id
-        autoAttach();
-        return;
-      }
       st.job = job;
       st.log = [];
       st.events = [];
       st.progress = job.progress || null;
       if (job.events) st.events = job.events;
+      await loadChapterState();
       await render();
-      attachStream(jobId);
+      if (job.status === "running") {
+        attachStream(jobId);
+      }
     } catch (ex) {
       toast(ex.message, "err");
       render();
     }
   }
 
-  // ── авто-прикрепление к активному запуску проекта ──
+  // ── авто-прикрепление: активный запуск проекта, а если его нет —
+  // последний завершённый (лог с итогами, таблица по факту) ──
   async function autoAttach() {
     try {
       const r = await api("/jobs");
@@ -57,11 +67,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       );
       if (mine.length) {
         attachToJob(mine[0].id);
-      } else {
-        render();
+        return;
       }
+      const last = (r.jobs || [])
+        .filter((j) => j.project === `${section}/${name}`)
+        .sort((a, b) => (b.created || 0) - (a.created || 0))[0];
+      if (last) {
+        attachToJob(last.id);
+        return;
+      }
+      render();
     } catch {
-      render(); // без активного запуска — просто пустая страница
+      render(); // без запусков — просто пустая страница
     }
   }
 
@@ -132,12 +149,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       await activePanel(),
     );
 
-    // правая панель: форма + лог (лог — только у активного запуска)
+    // правая панель: форма + лог (лог — пока есть запуск,
+    // завершённый тоже остаётся видимым с итогами)
     const right = h(
       "div",
       { class: "run-col run-col-form" },
       st.stage ? await formPanel() : emptyRun(),
-      st.job && st.job.status === "running"
+      st.job
         ? logPanel()
         : h(
             "div",
@@ -642,21 +660,22 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         st.log = [];
         st.events = [];
         st.progress = r.job.progress || null;
+        await loadChapterState();
         await render(); // дождаться DOM лога, иначе attachStream не найдёт его
         attachStream(r.job.id);
       } catch (ex) {
         err.textContent = ex.message;
       }
     });
-    return h(
-      "div",
-      { class: "run-form" },
-      card,
-      wraps,
-      rangeNodes,
-      err,
-      runBtn,
-    );
+    // wiki: диапазон глав — НАД «Источник текста» (простой режим);
+    // остальные стадии — как раньше, после полей
+    const body = [card, ...wraps];
+    if (key === "wiki" && rangeNodes.length) {
+      body.splice(1, 0, ...rangeNodes);
+    } else {
+      body.push(...rangeNodes);
+    }
+    return h("div", { class: "run-form" }, body, err, runBtn);
   }
 
   // экспертная форма: все поля спеки (до простого режима).
@@ -672,33 +691,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       fieldWraps[f.name] = wrap;
     }
 
-    // pipeline — режим промптов (auto/separate/combined):
-    // показываем только нужные поля по выбранному режиму
-    if (key === "pipeline") {
-      const modeSel =
-        fieldWraps["prompt_mode"] && fieldWraps["prompt_mode"]._input;
-      const promptFields = [
-        "prompt_file",
-        "translate_prompt",
-        "redact_prompt",
-        "polish_prompt",
-      ];
-      const visible = {
-        auto: promptFields,
-        separate: ["translate_prompt", "redact_prompt", "polish_prompt"],
-        combined: ["prompt_file"],
-      };
-      function applyMode() {
-        const m = (modeSel && modeSel.value) || "auto";
-        const show = visible[m] || promptFields;
-        for (const name of promptFields) {
-          const wrap = fieldWraps[name];
-          if (wrap) wrap.classList.toggle("hidden", !show.includes(name));
-        }
-      }
-      if (modeSel) modeSel.addEventListener("change", applyMode);
-      applyMode();
-    }
+    // pipeline — единый общий промпт-файл (теги translate/redact/polish),
+    // режим промптов и отдельные файлы на стадию убраны
 
     // ner — режимы: LLM (extract/finetune/compile) и постобработка (без LLM):
     // постобработка прячет LLM-поля и входной txt, «собрать главы» —
@@ -799,6 +793,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         st.log = [];
         st.events = [];
         st.progress = r.job.progress || null;
+        await loadChapterState();
         await render(); // дождаться DOM лога, иначе attachStream не найдёт его
         attachStream(r.job.id);
       } catch (ex) {
@@ -937,10 +932,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       for (let i = min; i <= max; i++) out.push(i);
       return out;
     })();
+    const stateByStage = { 1: "translate", 2: "redact", 3: "polish" };
     for (const id of range) {
       const row = [h("th", { class: "ch-num" }, String(id))];
       for (const stage of cols) {
-        const s = byKey[id + ":" + stage];
+        // событие текущего запуска > фактическое состояние артефактов
+        // (статус проекта) > «·»
+        let s = byKey[id + ":" + stage];
+        if (!s) {
+          const stCh = st.chapterState && st.chapterState[id];
+          if (stCh && stCh[stateByStage[stage]]) s = "OK";
+        }
         const cls = s ? "ch-cell ch-" + s.toLowerCase() : "ch-cell ch-pending";
         row.push(
           h(
@@ -1010,8 +1012,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         /* статус уже есть */
       }
       // B5: после завершения запуска могли появиться новые файлы
-      // (ner.json, wiki.md) — форма перечитает опции при рендере
+      // (ner.json, wiki.md) — форма перечитает опции при рендере;
+      // таблица глав — по свежему состоянию артефактов
       st.options = null;
+      await loadChapterState();
       render();
     } finally {
       streamCtrl = null;

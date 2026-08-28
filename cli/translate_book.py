@@ -394,8 +394,22 @@ def main(argv=None):
             logger.info(f"📝 Промпт: тег <{mode}> из {args.prompt_file} "
                         f"({len(active_prompt)} симв.)")
         else:
-            logger.info(f"📝 Промпт (файл целиком, без тегов): "
-                        f"{args.prompt_file} ({len(active_prompt)} симв.)")
+            # файл с ТЕГАМИ, но без тега текущей стадии — предупреждение
+            # и встроенный промпт вместо «файла целиком» (теги бы не
+            # попали в промпт стадии)
+            has_any_tag = any(
+                get_tagged_prompt(custom, t) for t in
+                ("translate", "redact", "polish")
+            )
+            if has_any_tag:
+                logger.warning(
+                    f"⚠️ В промпт-файле {args.prompt_file} нет тега "
+                    f"<{mode}> — используется ВСТРОЕННЫЙ промпт")
+                active_prompt = (DEFAULT_REDACT_PROMPT if mode == "redact"
+                                 else DEFAULT_TRANSLATE_PROMPT)
+            else:
+                logger.info(f"📝 Промпт (файл целиком, без тегов): "
+                            f"{args.prompt_file} ({len(active_prompt)} симв.)")
     else:
         active_prompt = (DEFAULT_REDACT_PROMPT if mode == "redact"
                          else DEFAULT_TRANSLATE_PROMPT)

@@ -528,16 +528,30 @@ def load_two_pass_prompts(filepath: str, logger) -> tuple[str, str | None]:
     p1 = re.search(r"<prompt_pass1>(.*?)</prompt_pass1>", content, re.DOTALL)
     p2 = re.search(r"<prompt_pass2>(.*?)</prompt_pass2>", content, re.DOTALL)
 
-    pass1 = p1.group(1).strip() if p1 else content.strip()
-    pass2 = p2.group(1).strip() if p2 else None
+    if p1 and p2:
+        pass1, pass2 = p1.group(1).strip(), p2.group(1).strip()
+    elif p1:
+        pass1 = p1.group(1).strip()
+        _log(logger, logging.WARNING,
+             "⚠️ В промпт-файле нет тега <prompt_pass2> — "
+             "pass2 будет ВСТРОЕННЫМ.")
+        pass2 = None
+    elif p2:
+        _log(logger, logging.WARNING,
+             "⚠️ В промпт-файле нет тега <prompt_pass1> — "
+             "pass1 будет ВСТРОЕННЫМ.")
+        pass1 = SYSTEM_PROMPT_PASS1
+        pass2 = p2.group(1).strip()
+    else:
+        _log(logger, logging.INFO,
+             "📝 Теги не найдены — файл целиком используется как pass1.")
+        pass1 = content.strip()
+        pass2 = None
 
     if not pass1:
         _log(logger, logging.WARNING,
              "⚠️ Pass1 промпт пуст — используется встроенный.")
         pass1 = SYSTEM_PROMPT_PASS1
-    if not p1 and not p2:
-        _log(logger, logging.INFO,
-             "📝 Теги не найдены — файл целиком используется как pass1.")
     if pass2 is None:
         _log(logger, logging.INFO,
              "📝 Pass2 не задан в файле — используется встроенный.")

@@ -221,26 +221,10 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
         argv.append("--no_reasoning")
     elif re_effort not in (None, ""):
         argv += ["--reasoning_effort", str(re_effort)]
-    # промпт-файлы конвейера — режим auto/separate/combined.
-    # combined → --prompt_file (теги); separate → по одному флагу на стадию;
-    # auto → явно заданные поля, остальное дорешает resolve_prompt_paths.
-    prompt_mode = form.get("prompt_mode") or "auto"
-    _PER_STAGE = (("translate_prompt", "--translate_prompt"),
-                  ("redact_prompt", "--redact_prompt"),
-                  ("polish_prompt", "--polish_prompt"))
-    if prompt_mode == "combined":
-        if form.get("prompt_file"):
-            argv += ["--prompt_file", str(form["prompt_file"])]
-    elif prompt_mode == "separate":
-        for name, flag in _PER_STAGE:
-            if form.get(name):
-                argv += [flag, str(form[name])]
-    else:  # auto
-        if form.get("prompt_file"):
-            argv += ["--prompt_file", str(form["prompt_file"])]
-        for name, flag in _PER_STAGE:
-            if form.get(name):
-                argv += [flag, str(form[name])]
+    # единый общий промпт-файл (теги <translate>/<redact>/<polish>);
+    # пусто = авто (кандидат с тегами из prompts/)
+    if form.get("prompt_file"):
+        argv += ["--prompt_file", str(form["prompt_file"])]
     argv += _llm_argv(form, ctx, "pipeline")
     return argv
 
@@ -624,34 +608,14 @@ STAGE_SPECS: dict[str, dict] = {
                       "4=полировка (исходник - перевод), "
                       "5=перевод→редактура, 6=перевод→полировка, "
                       "7=редактура→полировка, 8=полный цикл"},
-            {"name": "prompt_mode", "label": "Режим промптов",
-             "type": "select",
-             "options": ["auto", "separate", "combined"],
-             "default": "auto",
-             "labels": {"auto": "Авто (по папке prompts/)",
-                        "separate": "Отдельные файлы на стадию",
-                        "combined": "Один файл с тегами"},
-             "help": "auto: ищет файл с тегами <translate>/<redact>/<polish> "
-                      "(pipeline_prompt.txt, prompts.txt, "
-                      "translate_book_prompt.txt), иначе — дефолтные имена "
-                      "по стадиям (translate/redact/polish_prompt.txt)"},
             {"name": "prompt_file",
              "label": "Общий промпт-файл (теги translate/redact/polish)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "",
-             "help": "для режима combined; в auto — перекрывает автоподхват"},
-            {"name": "translate_prompt", "label": "Промпт перевода",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "",
-             "help": "для режима separate; пусто = дефолтный файл/встроенный"},
-            {"name": "redact_prompt", "label": "Промпт редактуры",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "",
-             "help": "для режима separate; пусто = дефолтный файл/встроенный"},
-            {"name": "polish_prompt", "label": "Промпт полировки",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "",
-             "help": "для режима separate; пусто = дефолтный файл/встроенный"},
+             "help": "один файл с тегами <translate>/<redact>/<polish>; "
+                      "пусто = авто (первый кандидат с тегами из prompts/); "
+                      "недостающий тег стадии — предупреждение + встроенный "
+                      "промпт"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
@@ -856,6 +820,12 @@ STAGE_SPECS: dict[str, dict] = {
         "script": "wiki.py",
         "build": build_wiki,
         "fields": _LLM_FIELDS + [
+            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
+             "type": "number", "default": "",
+             "help": "при источнике «Собрать из глав»; пусто = с первой"},
+            {"name": "end", "label": "Конечная глава (ГЛАВЫ)",
+             "type": "number", "default": "",
+             "help": "при источнике «Собрать из глав»; пусто = до последней"},
             {"name": "source", "label": "Источник текста",
              "type": "select",
              "options": ["txt", "chapters"],
@@ -870,12 +840,6 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "select", "options": ["chapter", "translated", "redacted", "polished"],
              "default": "chapter",
              "help": "при источнике «Собрать из глав»"},
-            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
-             "type": "number", "default": "",
-             "help": "при источнике «Собрать из глав»; пусто = с первой"},
-            {"name": "end", "label": "Конечная глава (ГЛАВЫ)",
-             "type": "number", "default": "",
-             "help": "при источнике «Собрать из глав»; пусто = до последней"},
             {"name": "ner_file", "label": "NER JSON",
              "type": "files", "dir": "", "ext": [".json"], "default": "ner.json"},
             {"name": "output", "label": "Выходной файл", "type": "text", "default": "wiki.md"},

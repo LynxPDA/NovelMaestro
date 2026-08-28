@@ -99,13 +99,8 @@ _LOGGER_PREFIX_RE = re.compile(
 )
 _SYM = {"OK": "✓", "ERROR": "✗", "SKIP": "⊘"}
 CHAPTER_PREFIX = "@@CHAPTER@@"
-# промпт-файлы конвейера — 4 варианта (см. resolve_prompt_paths).
-# Дефолтные имена по стадиям : отдельные файлы без тегов.
-_PROMPT_STAGE_DEFAULTS = {
-    1: "prompts/translate_prompt.txt",
-    2: "prompts/redact_prompt.txt",
-    3: "prompts/polish_prompt.txt",
-}
+# промпт-файлы конвейера — только единый общий файл с тегами
+# <translate>/<redact>/<polish> (отдельные файлы на стадию убраны).
 # Кандидаты «одного файла с тегами» для режима auto.
 _PROMPT_COMBINED_CANDIDATES = [
     "prompts/pipeline_prompt.txt",
@@ -217,25 +212,18 @@ class Tracker:
 
 
 # ═══ Команда translate_book.py ═══
-def resolve_prompt_paths(combined: str = "",
-                         per_stage: dict[int, str] | None = None) -> dict[int, str]:
-    """Пути промпт-файлов по стадиям : явные флаги > auto.
+def resolve_prompt_paths(combined: str = "") -> dict[int, str]:
+    """Пути промпт-файлов по стадиям : явный файл > авто.
 
     combined — один файл на все стадии (теги <translate>/<redact>/<polish>);
-    per_stage — отдельные файлы (пустые стадии получают дефолтное имя).
-    auto: кандидат с тегами в prompts/ → combined; иначе дефолтные имена
-    по стадиям . Пути относительные — cwd = папка проекта.
+    пусто — auto: первый кандидат с тегами в prompts/ → все стадии;
+    иначе — пустые пути (стадии используют встроенные промпты).
+    Пути относительные — cwd = папка проекта.
     """
     out: dict[int, str] = {}
     if combined:
         for stage in _STAGE_NAME:
             out[stage] = combined
-        return out
-    per_stage = per_stage or {}
-    if any(per_stage.values()):
-        for stage in _STAGE_NAME:
-            path = per_stage.get(stage)
-            out[stage] = str(path) if path else _PROMPT_STAGE_DEFAULTS[stage]
         return out
     # auto: ищем файл с тегами (combined-режим)
     from core.common import get_tagged_prompt
@@ -249,10 +237,40 @@ def resolve_prompt_paths(combined: str = "",
             for stage in _STAGE_NAME:
                 out[stage] = str(p)
             return out
-    # иначе — отдельные дефолтные файлы по стадиям
-    for stage, name in _PROMPT_STAGE_DEFAULTS.items():
-        out[stage] = name
+    # иначе — стадии используют встроенные промпты translate_book.py
+    for stage in _STAGE_NAME:
+        out[stage] = ""
     return out
+
+
+# тег стадии в общем промпт-файле
+_STAGE_TAG = {1: "translate", 2: "redact", 3: "polish"}
+
+
+def warn_missing_prompt_tag(prompt_file: str, stage: int, log) -> bool:
+    """Предупреждение, если общий промпт-файл не содержит тега стадии.
+
+    Файл без тегов — легальный режим «промпт целиком», не ругаемся.
+    Если теги есть, но нужного нет — стадия уйдёт на встроенный промпт.
+    Возвращает True, если тег отсутствует (стадия на встроенном).
+    """
+    if not prompt_file:
+        return True
+    path = Path(prompt_file)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    from core.common import get_tagged_prompt
+    tag = _STAGE_TAG[stage]
+    if get_tagged_prompt(text, tag):
+        return False
+    if not any(get_tagged_prompt(text, t) for t in _PROMPT_TAGS):
+        return False
+    log.warning("В промпт-файле %s нет тега <%s> — стадия «%s» "
+                "использует ВСТРОЕННЫЙ промпт",
+                prompt_file, tag, _STAGE_NAME[stage])
+    return True
 
 
 def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
@@ -280,12 +298,12 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
         common += ["--reasoning_effort", str(reasoning_effort)]
     if no_reasoning:
         common.append("--no_reasoning")
-    # переданный путь (resolve_prompt_paths) > дефолт по стадии
-    prompt_file = prompt_file or _PROMPT_STAGE_DEFAULTS[stage]
+    # общий промпт-файл — только если задан (пусто = встроенный)
+    if prompt_file:
+        common += ["--prompt_file", prompt_file]
     if stage == 1:
         return [sys.executable, str(script), str(in_file), "--mode",
                 "translate", *common,
-                "--prompt_file", prompt_file,
                 "--ner_fields", "term,type,translation",
                 "--chunk_size", str(_DEFAULTS["chunk_size"]),
                 "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
@@ -293,13 +311,11 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
     if stage == 2:
         return [sys.executable, str(script), str(in_file), "--mode",
                 "redact", *common,
-                "--prompt_file", prompt_file,
                 "--min_len_ratio", "0.9",
                 "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
                 "--ner_ngram", str(_DEFAULTS["ner_ngram"])]
     return [sys.executable, str(script), str(in_file), "--mode",
             "polish", *common,
-            "--prompt_file", prompt_file,
             "--ner_fields", "term,type,translation",
             "--chunk_size", str(_DEFAULTS["chunk_size"]),
             "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
@@ -388,7 +404,8 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                             if ev.get("label"):
                                 label += f" · {ev['label']}"
                             print("@@PROGRESS@@" + json.dumps(
-                                {"done": ev.get("done", 0),
+                                {"type": "progress",
+                                 "done": ev.get("done", 0),
                                  "total": ev.get("total", 0),
                                  "label": label},
                                 ensure_ascii=False), flush=True)
@@ -483,13 +500,7 @@ def main() -> None:
                     help="Путь к translate_book.py (обычно не нужен)")
     ap.add_argument("--prompt_file", default="",
                     help="Общий промпт-файл с тегами <translate>/<redact>/<polish> "
-                         "(пусто = авто)")
-    ap.add_argument("--translate_prompt", default="",
-                    help="Промпт-файл перевода (пусто = авто)")
-    ap.add_argument("--redact_prompt", default="",
-                    help="Промпт-файл редактуры (пусто = авто)")
-    ap.add_argument("--polish_prompt", default="",
-                    help="Промпт-файл полировки (пусто = авто)")
+                         "(пусто = авто: кандидат с тегами из prompts/)")
     args = ap.parse_args()
 
     log = logging.getLogger("web.pipeline")
@@ -562,13 +573,13 @@ def main() -> None:
     action_spec = _ACTION_SPECS[args.action]
     stages = action_spec["stages"]
     action_label = action_spec["name"]
-    # промпт-файлы — явные флаги > авто (кандидат с тегами /
-    # дефолтные имена по стадиям)
-    prompts = resolve_prompt_paths(
-        args.prompt_file,
-        {1: args.translate_prompt, 2: args.redact_prompt,
-         3: args.polish_prompt},
-    )
+    # промпт-файлы — явный общий файл > авто (первый кандидат с тегами
+    # из prompts/); пусто = встроенные промпты translate_book.py
+    prompts = resolve_prompt_paths(args.prompt_file)
+    builtin = {}
+    for stage in stages:
+        if warn_missing_prompt_tag(prompts[stage], stage, log):
+            builtin[stage] = True
     log.info("═" * 60)
     log.info("ТИП РАБОТЫ : %s", action_label)
     log.info("ДИАПАЗОН   : Главы с %d по %d", start, end)
@@ -577,7 +588,8 @@ def main() -> None:
     log.info("МОДЕЛЬ     : %s", model or "из .env")
     log.info("СЕРВЕР     : %s", host)
     log.info("ПРОМПТЫ    : %s", " | ".join(
-        f"{_STAGE_NAME[s]}={prompts[s]}" for s in stages))
+        f"{_STAGE_NAME[s]}={('встроенный' if builtin.get(s) or not prompts[s] else prompts[s])}"
+        for s in stages))
     log.info("ВРЕМЯ      : %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     log.info("═" * 60)
 

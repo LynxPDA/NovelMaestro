@@ -173,6 +173,14 @@ def test_ner_load_two_pass_prompts(tmp_path):
     # нет файла → встроенный pass1
     p1, p2 = NER.load_two_pass_prompts(str(tmp_path / "нет.txt"), SilentLog())
     assert p1 == NER.SYSTEM_PROMPT_PASS1 and p2 is None
+    # файл с тегами, но без pass1 → встроенный pass1 + pass2 из тега
+    p.write_text("<prompt_pass2>\nВТОРОЙ\n</prompt_pass2>", encoding="utf-8")
+    p1, p2 = NER.load_two_pass_prompts(str(p), SilentLog())
+    assert p1 == NER.SYSTEM_PROMPT_PASS1 and p2 == "ВТОРОЙ"
+    # файл с тегами, но без pass2 → pass1 из тега + встроенный pass2
+    p.write_text("<prompt_pass1>\nПЕРВЫЙ\n</prompt_pass1>", encoding="utf-8")
+    p1, p2 = NER.load_two_pass_prompts(str(p), SilentLog())
+    assert p1 == "ПЕРВЫЙ" and p2 is None
 
 
 def test_ner_llm_request_delegates(monkeypatch):
