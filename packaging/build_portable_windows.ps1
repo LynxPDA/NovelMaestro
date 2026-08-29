@@ -1,4 +1,4 @@
-# build_portable_windows.ps1 — портативная сборка NovelMaestro для Windows 10/11.
+﻿# build_portable_windows.ps1 — портативная сборка NovelMaestro для Windows 10/11.
 #
 # Результат: dist\novelmaestro-portable\ — папка с интерпретатором Python
 # (embeddable), зависимостями и приложением. Установка не нужна:

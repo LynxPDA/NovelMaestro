@@ -127,7 +127,31 @@
 
 * [x] help.md: epub/ner/ner_check/compile — актуализированы.
 * [x] web/README.md: ner_check «Режимы».
-* [x] Dockerfile/docker-compose/packaging/*.ps1/workflows — актуальны
+* [x] Dockerfile/docker-compose/workflows — актуальны
       (проверено: пути и зависимости совпадают с репозиторием).
 * [x] Тесты: test_cac_compile_txt_plain (без `#`), ner_check whole/types
       (all отклоняется), 943 зелёных; node --check; smoke --help.
+
+## Раунд 3: единый диапазон глав + Windows-сборка
+
+### R3-1. Единая строка диапазона в форме запусков
+
+* [x] Диапазон «Главы: [start] – [end]» — одна строка в простом И
+      экспертном режимах (buildRangeRow); start/end из спека отдельными
+      полями не рисуются.
+* [x] Строка диапазона — ПЕРВОЙ в списке (все 7 стадий с start/end:
+      ner, wiki, pipeline, translate_check, translate_check_llm,
+      compile, batch_replace).
+* [x] Простой режим: files-поля брали row-обёртку вместо select —
+      условная видимость (ner файл/диапазон, wiki источник) не
+      работала; исправлено (_sel || _input), оба режима согласованы.
+* [x] number-поля без стрелок «больше/меньше» (CSS appearance).
+* [x] Коммит b16f254 (fix(web): единый диапазон глав в форме запусков).
+
+### R3-2. Windows-сборка: кодировка .ps1
+
+* [x] Причина падения: UTF-8 БЕЗ BOM — Windows PowerShell 5.1 (дефолт
+      windows-latest) парсит такие файлы как ANSI → кириллица ломает
+      парсер (лог: Ñ€ÑƒÑÑÐºÐ¸Ð¹, missing closing '}').
+* [x] Фикс: BOM добавлен в packaging/build_portable_windows.ps1.
+* [x] Проверка: других .ps1 в репо нет; инвокация workflow корректна.
