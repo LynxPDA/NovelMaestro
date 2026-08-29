@@ -185,7 +185,7 @@
       regexp в массовых заменах дефолтный файл правил не нужен (новые
       проекты не получат его при создании из шаблона).
 * [x] Ссылки проверены: docstring batch_replace ведёт на корневой
-      templates/replacements.txt.example; _prompts_list перечисляет
+      templates/replacements.txt.example;_prompts_list перечисляет
       файлы динамически; тесты используют свои tmp-шаблоны — 943
       зелёных.
 
@@ -196,9 +196,22 @@
       тест test_prompts_template_from_repo переведён на
       pipeline_prompt.txt.
 * [x] donate.txt обезличен (личные ссылки Telegram/VK/Rulate убраны,
-      вместо них — плейсхолдеры): и в templates/General/source/donate.txt
-      (шаблон для новых проектов), и в templates/donate.txt.example.
+      вместо них — плейсхолдеры): templates/General/source/donate.txt
+      (шаблон для новых проектов).
 * [x] .gitignore: /templates/Custom и /templates/Custome (персональные
       наборы шаблонов не публикуются).
 * [x] help.md/DEVELOPERS.md: таблицы промптов — перевод/редактура/полировка
       по умолчанию pipeline_prompt.txt; 943 теста зелёных.
+
+### R3-8. Единый donate-шаблон + универсальность перевода
+
+* [x] Корневой templates/donate.txt.example удалён — страница поддержки
+      берётся только из templates/<набор>/source/donate.txt (General);
+      ссылки в help.md/AGENTS.md/DEVELOPERS.md обновлены.
+* [x] Универсальность проверена: код не привязан к языку (нормализация
+      NFC/lower, NER на n-граммах, чанкование общее; CJK-хелперы только
+      для китайских исходников, остальные языки идут мимо них).
+* [x] Документация: README/help.md/AGENTS.md — «с любого языка на
+      русский»; докстринги wiki.py/translate_book.py/translate_check_llm.py
+      обобщены (шаблон General остаётся китай-ориентированным — это
+      контент набора, не документация). 943 теста зелёных.

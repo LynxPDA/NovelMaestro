@@ -89,7 +89,7 @@ DEFAULT_REDACT_PROMPT = """# Role
 Input Data Structure
 Тебе будут предоставлены три блока данных:
 <glossary>: Словарь именованных сущностей (NER) в формате JSON. Поля: term, translation, type, aliases (если есть).
-<source_text>: Оригинальный текст на китайском языке.
+<source_text>: Оригинальный текст на исходном языке.
 <draft_translation>: Черновой перевод на русский язык.
 Task
 Отредактируй <draft_translation>, опираясь на контекст <source_text> и глоссарий <glossary>.
@@ -179,7 +179,7 @@ def process_item(internal_id, original_text, draft_text, ctx):
         include_aliases=ctx["include_aliases"],
     )
     # Имена по полу (по translation; основное назначение — polish).
-    # В redact вход — китайский оригинал, списки будут пустыми.
+    # В redact вход — оригинал на исходном языке, списки будут пустыми.
     female, male = collect_gender_names(
         original_text, ctx["ner_data"],
         ctx["ner_threshold"], ctx["ner_ngram"])

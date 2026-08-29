@@ -12,8 +12,9 @@ API общего модуля: `core/README.md`; контракт web — `web/R
 
 ## 1. Суть
 
-Конвейер перевода веб-новелл (zh→ru) через OpenAI-совместимые LLM-серверы
-с человеческими контрольными точками. Интерфейс и логи — на русском языке.
+Конвейер перевода веб-новелл с любого исходного языка (по умолчанию
+китайский — шаблон General) на русский через OpenAI-совместимые
+LLM-серверы с человеческими контрольными точками. Интерфейс и логи — на русском языке.
 Интерфейс один — **web** (сервер + SPA, пакет `web/`; контракт —
 `web/README.md`). `run.py` — тонкий лаунчер: поднимает `web/main.py`
 и открывает браузер. Разделы ACTIVE/HOLD/DONE/DONE_OPEN — в web-интерфейсе;
@@ -57,8 +58,8 @@ cli/  исполнители — чистый CLI (argparse), без интер�
 tools/    вспомогательные утилиты вне конвейера: tampermonkey_rulate_reload.js
           (userscript Rulate, README — tools/README.md).
 templates/ шаблоны новых проектов: общие шаблоны в корне (.env.example,
-          donate.txt.example, replacements.txt.example); подпапки по типу
-          книги — жанру и языку (General/) с промптами и metadata.yaml.
+          replacements.txt.example); подпапки по типу книги — жанру и
+          языку (General/) с промптами, metadata.yaml и donate.txt.
 run.py    лаунчер: python3 run.py → web/main.py (+браузер); проброс
           --host/--port/--auth/--token/--max-upload-mb/--jobs-limit/
           --projects-dir.

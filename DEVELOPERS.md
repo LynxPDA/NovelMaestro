@@ -26,8 +26,9 @@ web/      web-интерфейс: server.py + api.py (роуты/хендлер�
           Контракт API — web/README.md.
 cli/      исполнители — чистый CLI (argparse), без интерактивных меню.
 tools/    вспомогательные утилиты вне конвейера.
-templates/ шаблоны новых проектов: общие (.env.example, donate.txt.example,
-          replacements.txt.example) + подпапки по типу книги (General/).
+templates/ шаблоны новых проектов: общие (.env.example,
+          replacements.txt.example) + подпапки по типу книги (General/
+          с prompts/, source/ и donate.txt).
 run.py    лаунчер: python3 run.py → web/main.py (+браузер).
 projects/ <раздел>/<книга>/ — данные проектов (НЕ в git).
 tests/    pytest P0–P2 (один модуль — один файл тестов).
@@ -190,8 +191,8 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`,
 ## Шаблоны проектов
 
 `templates/` — стартовые файлы: общие в корне (`.env.example`,
-`donate.txt.example`, `replacements.txt.example`), подпапки по типу
-книги (`General/`) с `prompts/` + `source/` (metadata.yaml).
+`replacements.txt.example`), подпапки по типу книги (`General/`) с
+`prompts/` + `source/` (metadata.yaml, donate.txt).
 Скелет набора — `core/projects.py::TEMPLATE_SKELETON`; каталоги в
 наборах неизменяемы (`create_template_dir` всегда ошибка);
 `General` — системный (создание/удаление/запись → 400/403).
