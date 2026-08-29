@@ -120,6 +120,52 @@ novelmaestro-portable\
 - Антивирус может «не узнать» embeddable-python — это нормально,
   подпишите/заархивируйте и добавьте исключение при необходимости.
 
+## Публикация релиза (пошагово)
+
+Релиз = тег `v*` на `main`. Пуш тега автоматически запускает оба
+воркфлоу (`docker.yml` → образ ghcr, `windows.yml` → zip + GitHub
+Release).
+
+```bash
+# 1. Проверка перед релизом
+python3 -m pytest tests/ -q          # все тесты зелёные
+node --check web/static/app.js       # и остальные статики без ошибок
+
+# 2. Закоммитить и запушить всё (незапушенный коммит — не релиз)
+git add -A && git commit -m "…" && git push origin
+
+# 3. Тег версии и пуш
+git tag v0.2.0
+git push origin v0.2.0
+# → Actions: Docker image + Portable Windows build (по тегу)
+
+# 4. Дождаться двух зелёных галок (вкладка Actions)
+#    windows.yml сам создаст GitHub Release и прикрепит
+#    novelmaestro-portable-<версия>.zip (gh release create --generate-notes)
+
+# 5. Проверить:
+#    - страница Releases → v0.2.0, ассет zip на месте;
+#    - ghcr.io/LynxPDA/novelmaestro:0.2.0 (+ :latest).
+```
+
+### Пересобрать релиз с тем же тегом (например, забыли файл)
+
+Тег и релиз уже существуют — `gh release create` не перезапишет.
+Удалите и создайте заново:
+
+```bash
+git push origin :refs/tags/v0.2.0     # удалить тег на remote
+# GitHub → Releases → v0.2.0 → Delete release (кнопка справа)
+git tag v0.2.0                        # заново на текущем HEAD
+git push origin v0.2.0                # оба воркфлоу пересоберутся
+```
+
+### Черновые прогоны без релиза
+
+Actions → нужный воркфлоу → «Run workflow» — собирает без тега и без
+релиза (Windows: поля «Версия Python» и «Метка имени zip»). Артефакт
+лежит в Actions → run → Artifacts.
+
 ## Переход репозитория в публичный доступ
 
 1. **LICENSE** — MIT (файл `LICENSE` в корне репо).

@@ -33,3 +33,7 @@ web/job_logs/
 
 # релизные сборки (локальный вывод)
 dist/
+
+# TODO.md — внутренний план разработки, в сборки (Docker/Windows)
+# не попадает (.dockerignore, robocopy /XF); сам файл остаётся в git
+TODO.md

@@ -88,7 +88,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # ── 5. Копируем репозиторий (без данных/тестов/мусора) ─────────────
 Write-Host "Копирую репозиторий…"
-robocopy $root $portable /E /XD .git .github projects tests servers Images backup __pycache__ .venv logs job_logs .pytest_cache dist /XF .env *.pyc *.log /NFL /NDL /NJH /NJS /NP
+robocopy $root $portable /E /XD .git .github projects tests servers Images backup __pycache__ .venv logs job_logs .pytest_cache dist /XF .env *.pyc *.log TODO.md /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy: ошибка копирования (код $LASTEXITCODE)" }
 
 # ── 6. start.bat (только ASCII: cmd читает bat в кодовой странице

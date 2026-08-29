@@ -17,4 +17,5 @@ venv/
 *.log
 node_modules/
 .pi-lens.json
+TODO.md
 dist/
