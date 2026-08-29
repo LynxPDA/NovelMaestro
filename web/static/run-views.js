@@ -350,14 +350,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // Настройки сохраняются сразу при вводе (без ожидания запуска) и
   // восстанавливаются поверх .env/дефолтов при входе на стадию.
   const EPUB_SAVE_KEY = "epubRunVals";
-  // версия автосохранённых настроек: при изменении дефолтов спеки
-  // старый кэш игнорируется (напр. маска «Глава {num}» → «Chapter {num}»)
-  const EPUB_SAVE_V = 2;
   function epubSave(key) {
     try {
       localStorage.setItem(
         `${EPUB_SAVE_KEY}:${section}/${name}`,
-        JSON.stringify({ v: EPUB_SAVE_V, vals: st.values[key] || {} }),
+        JSON.stringify(st.values[key] || {}),
       );
     } catch {
       /* нет localStorage (приватный режим) — не критично */
@@ -366,12 +363,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   function epubLoad() {
     try {
       const raw = localStorage.getItem(`${EPUB_SAVE_KEY}:${section}/${name}`);
-      if (!raw) return null;
-      const d = JSON.parse(raw);
-      if (!d || typeof d !== "object" || d.v !== EPUB_SAVE_V) {
-        return null; // старый кэш с устаревшими дефолтами
-      }
-      return d.vals || null;
+      return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
     }
