@@ -3,12 +3,12 @@
 ner_check.py — LLM-проверка глоссария ner.json и применение правок.
 Без интерактивного меню. Все параметры через argparse или .env.
 
-Проходы (--passes, по умолчанию all):
-  whole — весь список одной посылкой (батчи только если глоссарий
-          больше бюджета --batch_size; записи идут по count по убыванию);
-  types — каждый type отдельно (консистентность внутри типа);
-  all   — весь список + каждый тип за один запуск по одному снимку
-          данных (быстрый режим).
+Режимы (--passes, по умолчанию whole):
+  whole — выбранные типы ОДНОВРЕМЕННО: весь (отфильтрованный по
+          --types) список одной посылкой; батчи только если глоссарий
+          больше бюджета --batch_size, записи по count по убыванию;
+  types — выбранные типы ПО ОЧЕРЕДИ: каждый type отдельно
+          (консистентность внутри типа).
 
 Рекомендуемый двухэтапный режим (человеческие контрольные точки):
   1) --passes whole          → правки в ner_review.json, человек правит
@@ -27,16 +27,15 @@ Legacy-формат (простой массив патчей, старый ner_
 понимается автоматически.
 
 Авто-режим (--auto-apply): правки применяются сразу после каждого
-этапа, без человека. --passes all --auto-apply идёт ПОСЛЕДОВАТЕЛЬНО:
-whole → применение → types уже по обновлённым данным → применение.
-Ошибка LLM/парсинга в авто-режиме — fail-fast (код 1).
+этапа, без человека: whole → применение → types по обновлённым
+данным → применение. Ошибка LLM/парсинга в авто-режиме — fail-fast
+(код 1).
 
 Примеры:
-  python3 ner_check.py --passes whole          # этап 1: весь список
+  python3 ner_check.py --passes whole          # выбранные типы разом
   python3 ner_check.py --apply --dry-run       # предпросмотр правок
   python3 ner_check.py --apply                 # применить правки
-  python3 ner_check.py --passes types          # этап 2: по типам
-  python3 ner_check.py --passes all --auto-apply   # полный автомат
+  python3 ner_check.py --passes types          # выбранные типы по очереди
 """
 from __future__ import annotations
 
@@ -161,11 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--prompt_file", default=DEFAULT_PROMPT_FILE,
                    help="Внешний промпт; плейсхолдер {glossary}. "
                         "Нет файла — встроенный fallback.")
-    p.add_argument("--passes", choices=["all", "whole", "types"],
-                   default="all",
-                   help="whole — весь список (этап 1); types — каждый тип "
-                        "отдельно (этап 2); all — и то и другое за один "
-                        "запуск (по умолчанию).")
+    p.add_argument("--passes", choices=["whole", "types"],
+                   default="whole",
+                   help="whole — выбранные типы одновременно (весь список "
+                        "разом, по умолчанию); types — выбранные типы по "
+                        "очереди (каждый тип отдельно).")
     p.add_argument("--types", default="",
                    help="Ограничить проходы по типам (через запятую). "
                         "Пусто = все типы ner.json.")
@@ -183,10 +182,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--apply", action="store_true",
                    help="Применить правки из --review к ner.json (без LLM).")
     p.add_argument("--auto-apply", action="store_true",
-                   help="Авто-режим: применять правки сразу после каждого "
-                        "этапа, без человека. С --passes all этапы идут "
-                        "последовательно: whole → применение → types по "
-                        "обновлённым данным → применение.")
+                   help="Авто-режим: применять правки сразу после этапа, "
+                        "без человека: whole → применение (types — по "
+                        "обновлённым данным при ручном втором прогоне).")
     p.add_argument("--dry-run", action="store_true",
                    help="С --apply/--auto-apply: показать правки без "
                         "записи файлов.")
@@ -456,16 +454,11 @@ def do_check(args, logger) -> int:
         if args.auto_apply:
             auto_apply()
 
-    if args.passes in ("all", "whole"):
+    if args.passes == "whole":
         run_stage("Весь глоссарий", items)
-        if args.auto_apply and args.passes == "all":
-            # типовые проходы — по обновлённым данным после применения
-            items = filter_ner_items(data, args.count_threshold,
-                                     type_filter, exclude)
-    if args.passes in ("all", "types"):
+    if args.passes == "types":
         if not items:
-            logger.info("ℹ После обновления нет записей для типовых "
-                        "проходов.")
+            logger.info("ℹ Нет записей для типовых проходов.")
         else:
             all_types = sorted({i.get("type", "") for i in items
                                 if i.get("type")})

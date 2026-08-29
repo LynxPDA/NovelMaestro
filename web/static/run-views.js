@@ -350,11 +350,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // Настройки сохраняются сразу при вводе (без ожидания запуска) и
   // восстанавливаются поверх .env/дефолтов при входе на стадию.
   const EPUB_SAVE_KEY = "epubRunVals";
+  // версия автосохранённых настроек: при изменении дефолтов спеки
+  // старый кэш игнорируется (напр. маска «Глава {num}» → «Chapter {num}»)
+  const EPUB_SAVE_V = 2;
   function epubSave(key) {
     try {
       localStorage.setItem(
         `${EPUB_SAVE_KEY}:${section}/${name}`,
-        JSON.stringify(st.values[key] || {}),
+        JSON.stringify({ v: EPUB_SAVE_V, vals: st.values[key] || {} }),
       );
     } catch {
       /* нет localStorage (приватный режим) — не критично */
@@ -363,7 +366,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   function epubLoad() {
     try {
       const raw = localStorage.getItem(`${EPUB_SAVE_KEY}:${section}/${name}`);
-      return raw ? JSON.parse(raw) : null;
+      if (!raw) return null;
+      const d = JSON.parse(raw);
+      if (!d || typeof d !== "object" || d.v !== EPUB_SAVE_V) {
+        return null; // старый кэш с устаревшими дефолтами
+      }
+      return d.vals || null;
     } catch {
       return null;
     }
@@ -700,7 +708,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             "label",
             { class: "ner-chip" },
             cb,
-            ` ${t}` + (n != null ? ` (${n})` : ""),
+            ` ${t}` + (n == null ? "" : ` (${n})`),
           ),
         );
       }
@@ -1344,9 +1352,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
 
   // ── epub: панель предпросмотра разбивки ──────────────────────────────
   // Кнопка «Предпросмотр» → POST /stages/epub/preview (папки + размеры);
-  // снятие галочки — seq уходит в st.preview.skips, предпросмотр
-  // перезапускается со skip (скрипт пропускает и перенумеровывает);
-  // текст главы — GET .../preview/text?num=.
+  // снятие галочки — seq уходит в st.preview.skips БЕЗ перезапуска
+  // предпросмотра (строка остаётся с отжатым чекбоксом для наглядности;
+  // перенумерация — при реальном запуске со skip); текст главы —
+  // GET .../preview/text?num=.
   function epubPreviewPanel(key, spec, mode) {
     const err = h("div", { class: "form-error" });
     const btn = h("button", { class: "btn btn-primary" }, "Предпросмотр");
@@ -1382,7 +1391,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           ),
         );
       }
-      nodes.push(epubPreviewList(st.preview, err, key, spec, mode));
+      nodes.push(epubPreviewList(st.preview, err));
       nodes.push(epubPreviewTextViewer(st.preview, err));
     } else {
       nodes.push(
@@ -1440,12 +1449,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // список папок: чекбокс (по умолчанию все включены) + имя + размер;
   // снятие галочки — глава пропускается, остальные перенумеровываются
   // (предпросмотр перезапускается со списком skip)
-  function epubPreviewList(prev, err, key, spec, mode) {
+  function epubPreviewList(prev, err) {
     const skips = new Set(prev.skips || []);
     const rows = (prev.entries || []).map((e) => {
       const cb = h("input", { type: "checkbox", class: "checkbox" });
       cb.checked = !skips.has(e.seq);
-      cb.addEventListener("change", async () => {
+      cb.addEventListener("change", () => {
+        // снятие галочки — seq уходит в skips, НО предпросмотр не
+        // перезапускаем: строка остаётся с отжатым чекбоксом для
+        // наглядности; перенумерация произойдёт при реальном запуске
         err.textContent = "";
         const s = new Set(prev.skips || []);
         if (cb.checked) {
@@ -1454,12 +1466,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           s.add(e.seq);
         }
         prev.skips = [...s];
-        try {
-          await epubRunPreview(key, spec, mode);
-          render();
-        } catch (ex) {
-          err.textContent = ex.message;
-        }
+        render();
       });
       const row = h(
         "div",
@@ -1477,8 +1484,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const hint = h(
       "div",
       { class: "field-help" },
-      "Снимите галочку, чтобы исключить главу из разбора "
-        + "(остальные перенумеруются)",
+      "Снимите галочку, чтобы исключить главу из разбора — "
+        + "нумерация остальных сместится при запуске",
     );
     return h("div", { class: "epub-prev-list" }, hint, rows);
   }

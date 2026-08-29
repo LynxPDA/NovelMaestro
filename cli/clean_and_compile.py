@@ -8,8 +8,8 @@ clean_and_compile.py — компиляция глав в TXT/EPUB/FB2 (чист
 
 Режимы (--mode):
   txt          сборка единого TXT (Rulate): заголовки «# [Название :|: N]»
-  txt-plain    сборка единого TXT без rulate-форматирования (обычные
-               заголовки «# Название»)
+  txt-plain    сборка единого TXT: заголовки КАК В ПЕРЕВОДЕ (без
+               markdown-префиксов) — только очистка и компиляция
   epub         сборка Markdown → нативная генерация EPUB (zipfile, stdlib)
   fb2          сборка Markdown → нативная генерация FB2 (+ обложка, stdlib)
   epub-chunks  EPUB частями по --chunk-size глав (default 50)
@@ -732,11 +732,15 @@ def compile_book(mode):
             if not final_title:
                 final_title = orig_header
 
-            if mode in ("epub", "fb2", "txt-plain"):
-                # epub/fb2 — заголовок отдельно (title); txt-plain —
-                # обычный markdown-заголовок без rulate-суффикса
+            if mode in ("epub", "fb2"):
+                # epub/fb2 — заголовок отдельно (title)
                 replacement = f"# {final_title}"
-                sep_string = r"\* \* \*" if mode != "txt-plain" else "* * *"
+                sep_string = r"\* \* \*"
+            elif mode == "txt-plain":
+                # txt-plain — заголовок КАК В ПЕРЕВОДЕ, без markdown-
+                # префикса: только очистка и компиляция
+                replacement = final_title
+                sep_string = "* * *"
             else:
                 # txt (Rulate): «# [Название :|: N]» — тег загрузки на rulate
                 replacement = f"# [{final_title}{tag_suffix}]"
@@ -853,8 +857,9 @@ def build_parser():
                             "epub-chunks", "txt-chunks", "fb2-chunks"],
                    help="Действие: сборка (txt-plain/txt/epub/fb2) или "
                         "сборка частями (*-chunks). txt = TXT (Rulate) "
-                        "с тегами «# [Название :|: N]»; txt-plain — обычный "
-                        "TXT без rulate-форматирования")
+                        "с тегами «# [Название :|: N]»; txt-plain — TXT "
+                        "как в переводе: заголовки без markdown-префиксов, "
+                        "только очистка и компиляция")
     p.add_argument("--start", type=int, default=None,
                    help="Начальная глава (по умолчанию: минимальная найденная)")
     p.add_argument("--end", type=int, default=None,

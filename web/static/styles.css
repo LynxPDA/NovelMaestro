@@ -310,7 +310,9 @@ a.fname:hover {
   color: var(--surface);
 }
 .hidden {
-  display: none;
+  /* !important: .field (display:flex) идёт позже в каскаде и при
+     равной специфичности перекрыл бы скрытие полей формы */
+  display: none !important;
 }
 
 /* ── редактор (M3) ──────────────────────────────────────── */

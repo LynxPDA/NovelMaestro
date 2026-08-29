@@ -161,14 +161,15 @@ def test_cac_compile_txt(cac_env):
 
 
 def test_cac_compile_txt_plain(cac_env):
-    """txt-plain: обычные markdown-заголовки БЕЗ rulate-тегов
-    «[:|:]» и скобок (в отличие от txt = TXT (Rulate))."""
+    """txt-plain: заголовки КАК В ПЕРЕВОДЕ — без markdown-префиксов
+    и rulate-тегов «[:|:]» (в отличие от txt = TXT (Rulate))."""
     CAC.compile_book("txt-plain")
     out = Path(CAC.cfg.tmp_dir) / "compiled_1_2_txt-plain.txt"
     assert out.is_file()
     content = out.read_text(encoding="utf-8")
-    assert "# Глава 1" in content
-    assert "# Глава 2" in content
+    assert "Глава 1" in content
+    assert "Глава 2" in content
+    assert "# Глава 1" not in content
     assert ":|:" not in content
     assert "[Глава 1" not in content
 

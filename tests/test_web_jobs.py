@@ -1123,6 +1123,21 @@ def test_build_ner_check_no_bak():
     assert "--no-bak" in argv
 
 
+def test_ner_check_passes_modes():
+    """«Режимы»: whole (по умолчанию) / types; all убран."""
+    f = next(x for x in STAGE_SPECS["ner_check"]["fields"]
+             if x["name"] == "passes")
+    assert f["label"] == "Режимы"
+    assert f["options"] == ["whole", "types"]
+    assert "all" not in f["options"]
+    assert f["default"] == "whole"
+    # дефолтный запуск без passes → --passes whole
+    argv = build_command("ner_check", {}, {})
+    assert "--passes" not in argv or argv[argv.index("--passes") + 1] == "whole"
+    argv2 = build_command("ner_check", {"passes": "types"}, {})
+    assert "--passes" in argv2 and "types" in argv2
+
+
 def test_build_ner_check_types_chips_value():
     """Чипсы типов пишут строку через запятую — build передаёт её
     в --types как есть; пусто = все типы (флаг не добавляется)."""

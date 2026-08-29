@@ -811,15 +811,14 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "prompt_file", "label": "Промпт-файл",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "ner_check_prompt.txt"},
-            {"name": "passes", "label": "Проходы",
-             "labels": {"all": "Полный цикл (этапы 1+2)",
-                         "whole": "Весь список (этап 1)",
-                         "types": "По типам (этап 2)"},
-             "type": "select", "options": ["all", "whole", "types"],
-             "default": "all",
-             "help": "полный цикл — весь список, затем по типам; "
-                      "«весь список» — этап 1 одним проходом; «по типам» — "
-                      "этап 2 по типам глоссария"}, 
+            {"name": "passes", "label": "Режимы",
+             "labels": {"whole": "Выбранные типы (одновременно)",
+                         "types": "Выбранные типы (по очереди)"},
+             "type": "select", "options": ["whole", "types"],
+             "default": "whole",
+             "help": "одновременно — весь список выбранных типов разом "
+                      "(батчи по бюджету); по очереди — каждый тип "
+                      "отдельно"}, 
             {"name": "batch_size", "label": "Бюджет пакета, СИМВОЛЫ",
              "type": "number", "default": "196608"},
             {"name": "count_threshold", "label": "Порог count (> X)",
@@ -853,7 +852,7 @@ STAGE_SPECS: dict[str, dict] = {
         ],
         "preset": {
             "title": "Проверить глоссарий",
-            "desc": "LLM-проверка ner.json: все проходы, "
+            "desc": "LLM-проверка ner.json по выбранным типам, "
                     "правки не применяются",
         },
         "simple": ["prompt_file", "passes"],

@@ -200,19 +200,18 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     resp = ('```json\n[{"term": "林凡", "field": "translation", '
             '"old": "Линь Фан", "new": "Лин Фань", "reason": "pinyin"}]\n```')
     _mock_stream(monkeypatch, resp, calls)
-    rc = NC.main(["--input", "ner.json", "--passes", "all",
+    rc = NC.main(["--input", "ner.json", "--passes", "whole",
                   "--exclude-words", "",
                   "--host", "http://x", "--model", "m"])
     assert rc == 0
-    # 1 проход весь список + 3 типа
-    assert len(calls) == 4
-    # в первом запросе (весь список) записи идут по count по убыванию
+    # один проход «Весь глоссарий» (типы — отдельным режимом)
+    assert len(calls) == 1
+    # в запросе записи идут по count по убыванию
     first = calls[0]
     assert first.index("青云宗") < first.index("火球术") < first.index("林凡")
     # префикс «глоссарий уже проверен» — только в типовых проходах
     prefix = NC.TYPES_STAGE_PREFIX.strip()
     assert prefix not in calls[0]
-    assert all(prefix in c for c in calls[1:])
     # параметры прогона сохранены в meta review-файла
     # правки — в накопительном ner_review.json (дедуп между проходами)
     doc = json.loads((tmp_path / "ner_review.json")
@@ -393,33 +392,40 @@ def test_ner_check_auto_apply_whole(tmp_path, monkeypatch):
     assert "Лин Фань" in changes and "Весь глоссарий" in changes
 
 
-def test_ner_check_auto_apply_all_sequential(tmp_path, monkeypatch):
-    """--passes all --auto-apply: типы видят данные ПОСЛЕ этапа 1."""
+def test_ner_check_auto_apply_whole_only(tmp_path, monkeypatch):
+    """Режим all убран: --passes whole --auto-apply делает ОДИН проход
+    (весь список) и применяет; типовые проходы не запускаются."""
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
     calls = []
 
     def fake(base_url, model, messages, **kw):
         calls.append(messages[0]["content"])
-        if len(calls) == 1:      # этап 1 (весь список): правим имя
-            return ('[{"term": "林凡", "field": "translation", '
-                    '"old": "Линь Фан", "new": "Лин Фань", '
-                    '"reason": "p"}]'), None
-        return "[]", None
+        return ('[{"term": "林凡", "field": "translation", '
+                '"old": "Линь Фан", "new": "Лин Фань", '
+                '"reason": "p"}]'), None
 
     monkeypatch.setattr(NC, "stream_chat_completion", fake)
-    rc = NC.main(["--input", "ner.json", "--passes", "all",
+    rc = NC.main(["--input", "ner.json", "--passes", "whole",
                   "--exclude-words", "", "--host", "http://x",
                   "--model", "m", "--auto-apply"])
     assert rc == 0
-    # 1 проход весь список + 3 типа
-    assert len(calls) == 4
-    # типовые проходы шли по обновлённому глоссарию
-    later = "\n".join(calls[1:])
-    assert "Лин Фань" in later and "Линь Фан" not in later
+    # только проход «Весь глоссарий» (типы не идут)
+    assert len(calls) == 1
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
     assert (tmp_path / "ner.json.bak").exists()
+
+
+def test_ner_check_passes_all_rejected(tmp_path, monkeypatch):
+    """--passes all удалён из choices — argparse отказывает."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    try:
+        NC.main(["--input", "ner.json", "--passes", "all"])
+        assert False, "all должен быть отклонён"
+    except SystemExit:
+        pass
 
 
 def test_ner_check_auto_apply_fail_fast(tmp_path, monkeypatch):
