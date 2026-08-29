@@ -131,3 +131,9 @@ Write-Host ""
 Write-Host "ГОТОВО: $portable"
 if (-not $NoZip) { Write-Host "Архив: $zipOut" }
 Write-Host "Запуск на Windows: $portable\start.bat"
+
+# robocopy (шаг 5) — последняя внешняя команда; при успешном копировании
+# она возвращает код 1, а обёртка powershell в GitHub Actions выходит
+# с последним $LASTEXITCODE → успешная сборка «падает» с кодом 1.
+# Сбрасываем явно (в интерактиве безвредно).
+$global:LASTEXITCODE = 0
