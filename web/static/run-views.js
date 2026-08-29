@@ -1477,7 +1477,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           s.add(e.seq);
         }
         prev.skips = [...s];
-        render();
+        // БЕЗ render(): только визуальное состояние строки — иначе
+        // перерисовывается вся страница (форма, поля, предпросмотр)
+        row.classList.toggle("epub-prev-skip", !cb.checked);
       });
       const row = h(
         "div",
