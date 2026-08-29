@@ -88,7 +88,7 @@ class Router:
 # Обработчик запросов
 # ════════════════════════════════════════════════════════════════════
 class Handler(BaseHTTPRequestHandler):
-    server_version = "web/0.1"
+    server_version = "web/0.1.1"
     protocol_version = "HTTP/1.1"
 
     # ── служебное ──────────────────────────────────────────────
@@ -135,6 +135,9 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "Некорректный Content-Length")
         if cl == 0:
             return {}
+        if cl < 0:
+            # rfile.read(-1) читал бы до EOF — поток зависал (DoS)
+            raise ApiError(400, "Некорректный Content-Length")
         if cl > MAX_JSON_BODY:
             raise ApiError(413, "Тело запроса слишком большое")
         raw = self.rfile.read(cl)
@@ -238,6 +241,9 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "Некорректный Content-Length")
         if cl == 0:
             return b""
+        if cl < 0:
+            # rfile.read(-1) читал бы до EOF — поток зависал (DoS)
+            raise ApiError(400, "Некорректный Content-Length")
         limit = getattr(self.server, "max_upload_mb", 512) * 1024 * 1024
         if cl > limit:
             raise ApiError(
@@ -248,7 +254,9 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_static(self, path: str) -> None:
         rel = path.lstrip("/") or "index.html"
         target = (STATIC_DIR / rel).resolve(strict=False)
-        if not str(target).startswith(str(STATIC_DIR)) or not target.is_file():
+        # is_relative_to, а НЕ startswith: префиксная проверка пропускала
+        # «соседей» (web/static_evil.txt) через /../static_evil.txt
+        if not target.is_relative_to(STATIC_DIR) or not target.is_file():
             self._send(404, "text/plain; charset=utf-8", b"Not Found")
             return
         ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"

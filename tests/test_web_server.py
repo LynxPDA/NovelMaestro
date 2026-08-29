@@ -250,6 +250,66 @@ def test_static_traversal_rejected(srv_ctx):
         assert res.status == 404, f"{bad} должен быть 404"
 
 
+def test_static_prefix_sibling_rejected(srv_ctx, tmp_path, monkeypatch):
+    """Соседний файл с префиксом static* не отдаётся через ../.
+
+    Префиксная проверка str(target).startswith(static) пропускала
+    web/static_evil.txt через GET /../static_evil.txt (raw-запрос,
+    браузер нормализует ..). is_relative_to закрывает и этот кейс."""
+    import http.client
+    import web.server as server_mod
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("ok", encoding="utf-8")
+    (tmp_path / "static_evil.txt").write_text("SECRET", encoding="utf-8")
+    monkeypatch.setattr(server_mod, "STATIC_DIR", static_dir)
+    auth_obj = Auth("t")
+    srv, port = srv_ctx(auth_obj)
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    # raw-запрос: http.client сам нормализует путь, шлём через putrequest
+    conn.putrequest("GET", "/../static_evil.txt", skip_host=False)
+    conn.putheader("Host", f"127.0.0.1:{port}")
+    conn.endheaders()
+    res = conn.getresponse()
+    body = res.read().decode("utf-8", "replace")
+    conn.close()
+    assert res.status == 404
+    assert "SECRET" not in body
+    # нормальная статика не пострадала
+    res, _ = _request(port, "GET", "/", xrw=None)
+    assert res.status == 200
+
+
+def test_negative_content_length_rejected(srv_ctx):
+    """Content-Length: -1 → 400, а не зависание read(-1) до EOF."""
+    import http.client
+    # no-auth: 401 не должен маскировать проверку Content-Length
+    _, port = srv_ctx(Auth(no_auth=True))
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.putrequest("PUT", "/api/file", skip_host=False)
+    conn.putheader("Host", f"127.0.0.1:{port}")
+    conn.putheader("X-Requested-With", "fetch")
+    conn.putheader("Content-Length", "-1")
+    conn.endheaders()
+    res = conn.getresponse()
+    raw = res.read()
+    conn.close()
+    assert res.status == 400
+    assert "Content-Length" in raw.decode("utf-8", "replace")
+
+    # и в multipart-ветке (_read_raw_body): /api/upload с тем же заголовком
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.putrequest("POST", "/api/upload", skip_host=False)
+    conn.putheader("Host", f"127.0.0.1:{port}")
+    conn.putheader("X-Requested-With", "fetch")
+    conn.putheader("Content-Length", "-1")
+    conn.endheaders()
+    res = conn.getresponse()
+    raw = res.read()
+    conn.close()
+    assert res.status == 400
+
+
 def test_static_unknown_404(srv_ctx):
     _, port = srv_ctx(Auth("t"))
     res, _ = _request(port, "GET", "/no-such-file.js", xrw=None)
