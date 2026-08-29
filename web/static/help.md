@@ -189,9 +189,9 @@ md/html. Промпты стадий:
 
 | Стадия | Файл по умолчанию | Теги (общий файл) |
 | --- | --- | --- |
-| Перевод | `translate_prompt.txt` | `<translate>` |
-| Редактура | `redact_prompt.txt` | `<redact>` |
-| Полировка | `polish_prompt.txt` | `<polish>` |
+| Перевод | `pipeline_prompt.txt` | `<translate>` |
+| Редактура | `pipeline_prompt.txt` | `<redact>` |
+| Полировка | `pipeline_prompt.txt` | `<polish>` |
 | Глоссарий | `ner_prompt.txt` | `<prompt_pass1>`, `<prompt_pass2>` |
 | Проверка глоссария | `ner_check_prompt.txt` | — (файл целиком) |
 | Проверка перевода (LLM) | `translate_check_prompt.txt` | `<pass1>/<pass2>` |

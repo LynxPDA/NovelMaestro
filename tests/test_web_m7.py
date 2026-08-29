@@ -537,7 +537,7 @@ def test_prompts_template_from_repo(srv, tmp_path):
     srv, port, root = srv()
     _mk_project(root)
     r = _request(port, "GET",
-                 f"/api/prompts/translate_prompt.txt/template"
+                 f"/api/prompts/pipeline_prompt.txt/template"
                  f"?{_q('ACTIVE/demo')}")
     assert r["ok"] and r["templates"]
     assert any(t["set"] == "General" for t in r["templates"])

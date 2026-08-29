@@ -169,9 +169,9 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`,
 
 | Стадия | Файл (по умолчанию) | Теги (в режиме общего файла) |
 | --- | --- | --- |
-| Перевод | `prompts/translate_prompt.txt` | `<translate>` |
-| Редактура (redact) | `prompts/redact_prompt.txt` | `<redact>` |
-| Полировка (polish) | `prompts/polish_prompt.txt` | `<polish>` |
+| Перевод | `prompts/pipeline_prompt.txt` | `<translate>` |
+| Редактура (redact) | `prompts/pipeline_prompt.txt` | `<redact>` |
+| Полировка (polish) | `prompts/pipeline_prompt.txt` | `<polish>` |
 | NER-извлечение | `prompts/ner_prompt.txt` | `<prompt_pass1>`, `<prompt_pass2>` |
 | Проверка глоссария | `prompts/ner_check_prompt.txt` | — (файл целиком) |
 | Проверка перевода (LLM) | `prompts/translate_check_prompt.txt` | `<pass1>/<pass2>` |

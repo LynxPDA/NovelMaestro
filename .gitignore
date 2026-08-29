@@ -37,3 +37,7 @@ dist/
 # TODO.md — внутренний план разработки, в сборки (Docker/Windows)
 # не попадает (.dockerignore, robocopy /XF); сам файл остаётся в git
 TODO.md
+
+# персональные наборы шаблонов (не для публикации)
+/templates/Custom
+/templates/Custome

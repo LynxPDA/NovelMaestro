@@ -188,3 +188,17 @@
       templates/replacements.txt.example; _prompts_list перечисляет
       файлы динамически; тесты используют свои tmp-шаблоны — 943
       зелёных.
+
+### R3-7. Шаблоны: отдельные промпты удалены, donate обезличен
+
+* [x] templates/General/prompts/{translate,redact,polish}_prompt.txt
+      удалены — pipeline использует единый pipeline_prompt.txt с тегами;
+      тест test_prompts_template_from_repo переведён на
+      pipeline_prompt.txt.
+* [x] donate.txt обезличен (личные ссылки Telegram/VK/Rulate убраны,
+      вместо них — плейсхолдеры): и в templates/General/source/donate.txt
+      (шаблон для новых проектов), и в templates/donate.txt.example.
+* [x] .gitignore: /templates/Custom и /templates/Custome (персональные
+      наборы шаблонов не публикуются).
+* [x] help.md/DEVELOPERS.md: таблицы промптов — перевод/редактура/полировка
+      по умолчанию pipeline_prompt.txt; 943 теста зелёных.
