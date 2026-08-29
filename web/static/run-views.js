@@ -772,6 +772,43 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return { chipsBar, chipsBox, guide, loadTypes };
   }
 
+  // ── диапазон глав: ЕДИНАЯ строка «Главы: [start] – [end]» ────────────
+  // для обоих режимов (простой/экспертный); значения пишутся в
+  // st.values[key].start/end как и раньше (buildParams их собирает).
+  // Возвращает null, если стадия не принимает start/end.
+  function buildRangeRow(key, spec) {
+    const hasRange = (spec.fields || []).some(
+      (f) => f.name === "start" || f.name === "end",
+    );
+    if (!hasRange) return null;
+    const start = h("input", {
+      type: "number",
+      class: "input preset-range",
+    });
+    const end = h("input", {
+      type: "number",
+      class: "input preset-range",
+    });
+    start.value = String(st.values[key]["start"] ?? "");
+    end.value = String(st.values[key]["end"] ?? "");
+    start.addEventListener("input", () => {
+      st.values[key]["start"] = start.value;
+      st.touched[key].add("start");
+    });
+    end.addEventListener("input", () => {
+      st.values[key]["end"] = end.value;
+      st.touched[key].add("end");
+    });
+    return h(
+      "div",
+      { class: "preset-range-row" },
+      h("span", { class: "preset-range-label" }, "Главы:"),
+      start,
+      h("span", { class: "preset-range-sep" }, "–"),
+      end,
+    );
+  }
+
   // карточка пресета + простые поля (spec.simple) + диапазон глав:
   // простой режим — «частично показанный экспертный», значения общие
   function simplePanel(key, spec) {
@@ -790,7 +827,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (!f) continue;
       const wrap = buildField(key, f);
       wraps.push(wrap);
-      byName[name] = wrap._input;
+      // files-поля: настоящий select спрятан в row._sel (row — обёртка
+      // с кнопкой «Загрузить»); без этого srcSel.value/fileSel.value
+      // всегда undefined и условная видимость полей не работает
+      byName[name] = (wrap._input && wrap._input._sel) || wrap._input;
     }
     // ner: входной файл или сборка глав; «постобработка» — без LLM
     if (key === "ner" && byName["mode"]) {
@@ -852,40 +892,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (asChSel) asChSel.addEventListener("change", applyWikiSimple);
       applyWikiSimple();
     }
-    // диапазон глав (всегда виден, если стадия принимает start/end)
-    const hasRange = (spec.fields || []).some(
-      (f) => f.name === "start" || f.name === "end",
-    );
-    const rangeNodes = [];
-    let rangeRow = null;
-    if (hasRange) {
-      const start = h("input", {
-        type: "number",
-        class: "input preset-range",
-      });
-      const end = h("input", {
-        type: "number",
-        class: "input preset-range",
-      });
-      start.value = String(st.values[key]["start"] ?? "");
-      end.value = String(st.values[key]["end"] ?? "");
-      start.addEventListener("input", () => {
-        st.values[key]["start"] = start.value;
-        st.touched[key].add("start");
-      });
-      end.addEventListener("input", () => {
-        st.values[key]["end"] = end.value;
-        st.touched[key].add("end");
-      });
-      rangeRow = h(
-        "div",
-        { class: "preset-range-row" },
-        h("span", { class: "preset-range-label" }, "Главы:"),
-        start,
-        h("span", { class: "preset-range-sep" }, "–"),
-        end,
-      );
-      rangeNodes.push(rangeRow);
+    // диапазон глав — единая строка «Главы: [start] – [end]»
+    const rangeRow = buildRangeRow(key, spec);
+    if (rangeRow) {
       // ner: диапазон нужен только когда входной файл НЕ выбран
       // (сборка глав в память) и режим не «постобработка»
       if (key === "ner" && byName["mode"]) {
@@ -899,6 +908,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         modeSel.addEventListener("change", applyNerRange);
         if (fileSel) fileSel.addEventListener("change", applyNerRange);
         applyNerRange();
+      }
+      // wiki: диапазон — только когда «Собрать из глав»
+      if (key === "wiki" && byName["source"]) {
+        const srcSel = byName["source"];
+        const applyWikiRange = () => {
+          rangeRow.classList.toggle("hidden", srcSel.value !== "chapters");
+        };
+        srcSel.addEventListener("change", applyWikiRange);
+        applyWikiRange();
       }
     }
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
@@ -929,14 +947,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         err.textContent = ex.message;
       }
     });
-    // wiki: диапазон глав — НАД «Источник текста» (простой режим);
-    // остальные стадии — как раньше, после полей
+    // диапазон глав — ПЕРВЫМ в списке (сразу под карточкой пресета)
     const body = [card, ...wraps];
-    if (key === "wiki" && rangeNodes.length) {
-      body.splice(1, 0, ...rangeNodes);
-    } else {
-      body.push(...rangeNodes);
-    }
+    if (rangeRow) body.splice(1, 0, rangeRow);
     return h("div", { class: "run-form" }, body, err, runBtn);
   }
 
@@ -948,10 +961,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const fieldNodes = [];
     const fieldWraps = {}; // name → label-обёртка (промпты pipeline, )
     for (const f of spec.fields || []) {
+      // start/end — отдельными полями не рисуем: единая строка
+      // «Главы: [start] – [end]» (buildRangeRow) идёт первой
+      if (f.name === "start" || f.name === "end") continue;
       const wrap = buildField(key, f);
       fieldNodes.push(wrap);
       fieldWraps[f.name] = wrap;
     }
+    // диапазон глав — ПЕРВЫМ в списке полей (все стадии с start/end)
+    const rangeRow = buildRangeRow(key, spec);
+    if (rangeRow) fieldNodes.unshift(rangeRow);
 
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны
@@ -969,7 +988,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         "chunk_size", "threshold", "ngram", "temperature", "reasoning",
         "two_pass", "keep_fields", "save_interval", "retries", "timeout",
       ];
-      const rangeFields = ["start", "end"];
       function applyNerMode() {
         const m = (modeSel && modeSel.value) || "extract";
         const isPost = m === "postprocess";
@@ -980,9 +998,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         const fw = fieldWraps["file"];
         if (fw) fw.classList.toggle("hidden", isPost);
         const noFile = !(fileSel && fileSel.value);
-        for (const name of rangeFields) {
-          const wrap = fieldWraps[name];
-          if (wrap) wrap.classList.toggle("hidden", isPost || !noFile);
+        if (rangeRow) {
+          rangeRow.classList.toggle("hidden", isPost || !noFile);
         }
       }
       if (modeSel) modeSel.addEventListener("change", applyNerMode);
@@ -1006,9 +1023,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         const asCh = !!(asChSel && asChSel.checked);
         const fw = fieldWraps["file"];
         if (fw) fw.classList.toggle("hidden", src === "chapters");
-        for (const name of ["type", "start", "end"]) {
-          const w = fieldWraps[name];
-          if (w) w.classList.toggle("hidden", src !== "chapters");
+        const tw = fieldWraps["type"];
+        if (tw) tw.classList.toggle("hidden", src !== "chapters");
+        // диапазон — только при «Собрать из глав»
+        if (rangeRow) {
+          rangeRow.classList.toggle("hidden", src !== "chapters");
         }
         const isMd = fmt === "md";
         for (const name of tocFields) {

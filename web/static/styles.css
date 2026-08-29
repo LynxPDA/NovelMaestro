@@ -314,6 +314,16 @@ a.fname:hover {
      равной специфичности перекрыл бы скрытие полей формы */
   display: none !important;
 }
+/* number-поля без стрелок «больше/меньше» (единый дизайн диапазона) */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
 
 /* ── редактор (M3) ──────────────────────────────────────── */
 .editor-wrap {
