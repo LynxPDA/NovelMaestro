@@ -68,7 +68,7 @@ sudo apt install python3-requests python3-tqdm python3-ahocorasick python3-pytes
 
 После запуска откроется браузер с интерфейсом. При первом старте
 программа сама создаст папку `projects/` с разделами
-**ACTIVE / HOLD / DONE** и шаблоном настроек.
+**ACTIVE / HOLD / DONE**.
 
 Параметры сервера: `python3 run.py --no-open` (без браузера),
 `--projects-dir <путь>` (своя папка проектов), а также

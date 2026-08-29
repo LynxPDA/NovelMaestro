@@ -156,8 +156,8 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`,
 `WEB_MAX_UPLOAD_MB`, `WEB_JOBS_LIMIT`, `WEB_PROJECTS_DIR`.
 
 **Настройки запусков (R9).** Поля форм «Запусков» предзаполняются из
-`.env` и при каждом запуске сохраняются обратно: системный
-`projects/.env` копируется в папку проекта (`pdir/.env`), если её нет,
+`.env` и при каждом запуске сохраняются обратно: системный корневой
+`.env` репо копируется в папку проекта (`pdir/.env`), если её нет,
 затем обновляются ключи `<STAGE>_<FIELD>` (например `NER_CHUNK_SIZE`,
 `TRANSLATE_CHECK_EXCLUDE_WORDS`; сервер — `<STAGE>_HOST` → `HOST`,
 ключ — `<STAGE>_API_KEY` → `API_KEY`, модель — `<STAGE>_MODEL` →
@@ -176,7 +176,7 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`,
 | NER-извлечение | `prompts/ner_prompt.txt` | `<prompt_pass1>`, `<prompt_pass2>` |
 | Проверка глоссария | `prompts/ner_check_prompt.txt` | — (файл целиком) |
 | Проверка перевода (LLM) | `prompts/translate_check_prompt.txt` | `<pass1>/<pass2>` |
-| Wiki-статьи | `prompts/wiki.txt` | `<prompt_wiki_article>` |
+| Wiki-статьи | `prompts/wiki_prompt.txt` | `<prompt_wiki_article>` |
 
 Файл БЕЗ тегов = промпт этапа целиком (допустимый режим «отдельный
 файл на этап»). Встроенные промпты в скриптах (DEFAULT_*/PASS1_PROMPT) —
