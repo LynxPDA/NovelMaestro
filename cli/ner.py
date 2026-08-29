@@ -1607,7 +1607,7 @@ def main():
         return 1  # H4 (AUDIT): нет входного файла — код 1
 
     # Логируем конфигурацию голосования
-    voted = ["translation", "type", "pinyin / reading"]
+    voted = ["translation", "type", "reading (произношение)"]
     voted += sorted(EXTRA_VOTED_FIELDS)
     non_voted = sorted(DEFAULT_NON_VOTED_FIELDS - EXTRA_VOTED_FIELDS)
     _log(logger, logging.INFO, f"🗳️ Голосуют: {', '.join(voted)}")

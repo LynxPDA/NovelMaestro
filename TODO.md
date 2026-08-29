@@ -226,3 +226,16 @@
       ПИНЬИНЯ» оставлена (указание, что пиньинь пишется в это поле).
 * [x] .gitignore: /templates/Custome убран, остался /templates/Custom.
 * [x] 943 теста зелёные.
+
+### R3-10. Нюансы промптов в документации
+
+* [x] «reading» — стандартный NLP-термин (чтение/произношение знака),
+      оставлен как есть; описание в промпте поясняет.
+* [x] help.md: раздел «Нюансы промптов» — теги vs файл целиком,
+      NER-поля (term/reading/type/translation/notes/context, строгий
+      JSON), единый pipeline_prompt.txt, рекомендация своего набора
+      для других языков.
+* [x] DEVELOPERS.md: нюансы ответов LLM — NER JSON, wiki near-distance
+      (ТОКЕНЫ), review-поля translate_check_llm.
+* [x] ner.py: лог «Голосуют» — "reading (произношение)" вместо
+      "pinyin / reading". 943 теста зелёные.
