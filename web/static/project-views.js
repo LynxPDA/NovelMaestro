@@ -3040,6 +3040,7 @@ function viewProject(section, name) {
     /* — Обложка — */
     const coverCard = h("div", { class: "review-card" });
     const coverInfo = h("div", { class: "review-status" });
+    const coverSel = h("select", { class: "input" });
     const coverImg = h("img", { class: "cover-preview", alt: "обложка" });
     const coverFile = h("input", {
       type: "file",
@@ -3051,11 +3052,18 @@ function viewProject(section, name) {
       { class: "btn btn-sm btn-danger-ghost" },
       "Удалить",
     );
+    const IMG_EXT = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"];
     coverCard.append(
-      h("div", { class: "review-card-title" }, "Обложка (source/)"),
+      h("div", { class: "review-card-title" }, "Обложка"),
       h(
         "div",
         { class: "review-card-body" },
+        h(
+          "label",
+          { class: "field" },
+          h("div", { class: "field-label" }, "Файл из source/"),
+          coverSel,
+        ),
         coverInfo,
         coverImg,
         h(
@@ -3067,25 +3075,50 @@ function viewProject(section, name) {
         ),
       ),
     );
+    function showCoverImg(path) {
+      coverImg.src = `/api/download?${new URLSearchParams({
+        project: `${section}/${name}`,
+        path,
+        inline: "1",
+      })}`;
+      coverImg.style.display = "";
+    }
     async function loadCover() {
       try {
+        // варианты обложек в source/ — из опций стадии compile
+        const o = await api(`/stages/compile/options?${q}`);
+        const src = o.options && o.options.source ? o.options.source : [];
+        const imgs = src.filter((n) =>
+          IMG_EXT.some((e) => n.toLowerCase().endsWith(e)));
+        coverSel.replaceChildren();
+        coverSel.append(
+          h("option", { value: "" }, "— выберите обложку —"),
+        );
+        for (const n of imgs) coverSel.append(h("option", { value: n }, n));
         const d = await api(`/cover?${q}`);
         if (d.exists) {
           coverInfo.textContent = `${d.name} · ${fmtSize(d.size)}`;
-          coverImg.src = `/api/download?${new URLSearchParams({
-            project: `${section}/${name}`,
-            path: d.path,
-            inline: "1",
-          })}`;
-          coverImg.style.display = "";
+          if (imgs.includes(d.name)) coverSel.value = d.name;
+          showCoverImg(d.path);
         } else {
           coverInfo.textContent = "обложки нет";
           coverImg.style.display = "none";
+          coverSel.value = "";
         }
       } catch (ex) {
         coverInfo.textContent = ex.message;
       }
     }
+    coverSel.addEventListener("change", () => {
+      const v = coverSel.value;
+      if (v) {
+        coverInfo.textContent = v;
+        showCoverImg(`source/${v}`);
+      } else {
+        coverImg.style.display = "none";
+        coverInfo.textContent = "выберите файл из source/";
+      }
+    });
     coverUpload.addEventListener("click", async () => {
       const f = coverFile.files && coverFile.files[0];
       if (!f) {
@@ -3131,28 +3164,69 @@ function viewProject(section, name) {
     );
     await loadCover();
 
-    /* — source-файлы: metadata.yaml + donate.txt (редактор, сохранение,
-         загрузка из шаблона) — */
-    function sourceCard(title, ext) {
+    /* — source-файлы с выбором файла из source/ (редактор, сохранение,
+         загрузка из шаблона). defFile — файл по умолчанию (metadata.yaml,
+         donate.txt); ext — расширение для фильтра списка. — */
+    function sourceFilesCard(title, ext, defFile) {
       const card = h("div", { class: "review-card" });
-      const ed = makeEditor("", ext);
-      const save = h("button", { class: "btn btn-sm" }, `Сохранить ${title}`);
+      const ed = makeEditor("", ext === ".yaml" ? "yaml" : "txt");
+      const save = h("button", { class: "btn btn-sm" }, "Сохранить");
       const tpl = h("button", { class: "btn btn-sm btn-ghost" }, "Из шаблона");
+      const sel = h("select", { class: "input" });
+      const status = h("div", { class: "review-status" });
       card.append(
-        h("div", { class: "review-card-title" }, `source/${title}`),
+        h("div", { class: "review-card-title" }, title),
         h(
           "div",
           { class: "review-card-body" },
+          h(
+            "label",
+            { class: "field" },
+            h("div", { class: "field-label" }, "Файл из source/"),
+            sel,
+          ),
+          status,
           h("div", { class: "editor-cm editor-cm-small" }, ed.root),
           h("div", { class: "review-actions" }, tpl, save),
         ),
       );
-      const rel = `source/${title}`;
-      api(`/file?${q}&path=${encodeURIComponent(rel)}`)
-        .then((d) => ed.setValue(d.content || ""))
-        .catch(() => {
-          /* файл может отсутствовать — пустой редактор */
-        });
+      let rel = `source/${defFile}`;
+      async function loadFile() {
+        status.textContent = "Загрузка…";
+        try {
+          const d = await api(`/file?${q}&path=${encodeURIComponent(rel)}`);
+          ed.setValue(d.content || "");
+          status.textContent = d.missing
+            ? "файла нет — создастся при сохранении"
+            : rel;
+        } catch (ex) {
+          status.textContent = ex.message;
+        }
+      }
+      async function load() {
+        try {
+          const o = await api(`/stages/compile/options?${q}`);
+          const src = o.options && o.options.source ? o.options.source : [];
+          const items = src.filter((n) =>
+            n.toLowerCase().endsWith(ext));
+          sel.replaceChildren();
+          if (!items.length) {
+            sel.append(h("option", { value: "" }, "— нет файлов —"));
+          } else {
+            sel.append(h("option", { value: "" }, "— выберите файл —"));
+            for (const n of items) sel.append(h("option", { value: n }, n));
+            sel.value = items.includes(defFile) ? defFile : items[0];
+          }
+          rel = sel.value ? `source/${sel.value}` : `source/${defFile}`;
+          await loadFile();
+        } catch (ex) {
+          status.textContent = ex.message;
+        }
+      }
+      sel.addEventListener("change", async () => {
+        rel = sel.value ? `source/${sel.value}` : `source/${defFile}`;
+        await loadFile();
+      });
       save.addEventListener("click", async () => {
         try {
           await api("/file", {
@@ -3164,6 +3238,7 @@ function viewProject(section, name) {
             },
           });
           toast(`${rel} сохранён`);
+          await loadFile();
         } catch (ex) {
           err.textContent = ex.message;
         }
@@ -3174,123 +3249,17 @@ function viewProject(section, name) {
           toast(`${rel} — загружен из шаблона, сохраните`);
         }),
       );
+      load();
       return card;
     }
 
-    /* — M9: варианты обложек/метаданных (выбор по умолчанию → .env) — */
-    const mediaCard = h("div", { class: "review-card" });
-    const mediaInfo = h("div", { class: "review-status" });
-    const mediaErr = h("div", { class: "form-error" });
-    const coverEpubSel = h("select", { class: "input" });
-    const coverFb2Sel = h("select", { class: "input" });
-    const metaSel = h("select", { class: "input" });
-    const mediaSave = h("button", { class: "btn btn-sm" }, "Сохранить выбор");
-    mediaSave.disabled = true;
-    const IMG_EXT = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"];
-    const MEDIA_KEYS = {
-      coverEpubSel: "COMPILE_EPUB_COVER",
-      coverFb2Sel: "COMPILE_FB2_COVER",
-      metaSel: "COMPILE_EPUB_META",
-    };
-    let mediaChanged = false;
-    function fillMediaSel(sel, items) {
-      sel.replaceChildren();
-      sel.append(h("option", { value: "" }, "— авто (cover.* / metadata.yaml)"));
-      for (const n of items) sel.append(h("option", { value: n }, n));
-    }
-    function mediaSelects() {
-      return [
-        [coverEpubSel, MEDIA_KEYS.coverEpubSel],
-        [coverFb2Sel, MEDIA_KEYS.coverFb2Sel],
-        [metaSel, MEDIA_KEYS.metaSel],
-      ];
-    }
-    async function loadMedia() {
-      mediaErr.textContent = "";
-      try {
-        const o = await api(`/stages/compile/options?${q}`);
-        const src = o.options && o.options.source ? o.options.source : [];
-        const imgs = src.filter((n) => IMG_EXT.some((e) => n.toLowerCase().endsWith(e)));
-        const metas = src.filter((n) => /\.ya?ml$/i.test(n));
-        fillMediaSel(coverEpubSel, imgs);
-        fillMediaSel(coverFb2Sel, imgs);
-        fillMediaSel(metaSel, metas);
-        const d = await api(`/env?${q}&scope=project`);
-        const vals = d.values || {};
-        for (const [sel, key] of mediaSelects()) {
-          const cur = vals[key] || "";
-          const base = cur.replace(/\\/g, "/").split("/").pop();
-          if (base && [...sel.options].some((o) => o.value === base)) {
-            sel.value = base;
-          } else {
-            sel.value = "";
-          }
-        }
-        mediaInfo.textContent = d.exists
-          ? "выбор по умолчанию — из .env проекта"
-          : "выбор по умолчанию — не задан (.env проекта не создан)";
-        mediaSave.disabled = !mediaChanged;
-      } catch (ex) {
-        mediaErr.textContent = ex.message;
-      }
-    }
-    for (const [sel] of mediaSelects()) {
-      sel.addEventListener("change", () => {
-        mediaChanged = true;
-        mediaSave.disabled = false;
-      });
-    }
-    mediaSave.addEventListener("click", async () => {
-      mediaErr.textContent = "";
-      const changes = {};
-      for (const [sel, key] of mediaSelects()) {
-        changes[key] = sel.value ? `source/${sel.value}` : "";
-      }
-      try {
-        await api("/env", {
-          method: "PUT",
-          body: { project: `${section}/${name}`, scope: "project", changes },
-        });
-        toast("Выбор обложки/метаданных сохранён");
-        mediaChanged = false;
-        mediaSave.disabled = true;
-        await loadMedia();
-      } catch (ex) {
-        mediaErr.textContent = ex.message;
-      }
-    });
-    attachTooltip(coverEpubSel,
-      "Обложка по умолчанию для EPUB; пусто = авто (cover.* из source/)");
-    attachTooltip(coverFb2Sel,
-      "Обложка по умолчанию для FB2; пусто = авто (cover.* из source/)");
-    attachTooltip(metaSel,
-      "Метаданные по умолчанию; пусто = source/metadata.yaml");
-    const mediaBody = h(
-      "div",
-      { class: "review-card-body" },
-      mediaInfo,
-      h("label", { class: "field" },
-        h("div", { class: "field-label" }, "Обложка EPUB (source/)"), coverEpubSel),
-      h("label", { class: "field" },
-        h("div", { class: "field-label" }, "Обложка FB2 (source/)"), coverFb2Sel),
-      h("label", { class: "field" },
-        h("div", { class: "field-label" }, "Метаданные YAML (source/)"), metaSel),
-      h("div", { class: "review-actions" }, mediaSave),
-      mediaErr,
-    );
-    mediaCard.append(
-      h("div", { class: "review-card-title" },
-        "Обложки и метаданные (варианты по умолчанию)"),
-      mediaBody,
-    );
-    loadMedia();
+    /* — source-файлы с выбором из имеющихся в source/ — */
 
     wrap.append(
       envCard,
-      mediaCard,
       coverCard,
-      sourceCard("metadata.yaml", "yaml"),
-      sourceCard("donate.txt", "txt"),
+      sourceFilesCard("Метаданные epub/fb2", ".yaml", "metadata.yaml"),
+      sourceFilesCard("Файл страницы поддержки", ".txt", "donate.txt"),
     );
     return wrap;
   }

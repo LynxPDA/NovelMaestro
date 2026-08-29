@@ -789,42 +789,7 @@ a.fname:hover {
   color: var(--text-dim);
   margin-top: 2px;
 }
-/* ── ner_check: карточки-пресеты режимов и чипсы типов ── */
-.ner-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 4px 0 8px;
-}
-.ner-preset {
-  flex: 1 1 180px;
-  text-align: left;
-  padding: 8px 10px;
-  border: 1px solid var(--border, #444);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  transition: border-color 0.15s, background 0.15s;
-}
-.ner-preset:hover {
-  border-color: var(--accent);
-}
-.ner-preset-active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-.ner-preset-title {
-  font-weight: 600;
-  font-size: 13px;
-}
-.ner-preset-desc {
-  font-size: 11px;
-  color: var(--text-dim);
-}
+/* ── ner_check: чипсы типов (карточки-пресеты убраны) ── */
 .ner-chips-bar {
   display: flex;
   align-items: center;
@@ -2010,6 +1975,15 @@ body[data-editor-theme="light"] .editor-area {
   font-size: 13px;
 }
 .epub-prev-row:last-child { border-bottom: none; }
+.epub-prev-check {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+.epub-prev-skip {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
 .epub-prev-folder {
   flex: 1;
   font-family: var(--mono, monospace);
@@ -2031,6 +2005,29 @@ body[data-editor-theme="light"] .editor-area {
   border: 1px solid var(--border, #444);
   border-radius: 6px;
   padding: 8px;
+}
+
+/* ── compile: предпросмотр обложки и файлов ─────────────── */
+.compile-preview {
+  margin-top: 8px;
+}
+.compile-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.compile-prev-text {
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.45;
+  background: var(--bg-soft, #2a2a2a);
+  border: 1px solid var(--border, #444);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 0;
 }
 
 /* ── Справка: TOC + markdown-типографика ─────────────────── */

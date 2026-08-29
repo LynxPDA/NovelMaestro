@@ -583,6 +583,21 @@ def test_e2c_split_chunk_write(tmp_path):
     assert entries[0]["heading"].startswith("Часть ")
 
 
+def test_e2c_rename_chapters(tmp_path):
+    """rename_chapters: заголовки ВСЕХ глав заменяются маской с номером
+    ПОСЛЕ перенумерации (skip применён до присвоения номеров)."""
+    src = tmp_path / "book.txt"
+    src.write_text("Глава 1\nтекст\nГлава 2\nтекст\nГлава 3\nтекст\n",
+                   encoding="utf-8")
+    split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
+    entries, *_ = E2C.split_input(
+        src, "regex", split_res, [], skips={2},
+        rename_chapters=True, chunk_mask="Chapter {num}")
+    assert [e["heading"] for e in entries] == ["Chapter 1", "Chapter 2"]
+    assert [e["num"] for e in entries] == [1, 2]
+    assert [e["seq"] for e in entries] == [1, 3]
+
+
 # ══════════════════════════════════════════════════════════════════════
 # cli/clean_and_compile.py
 # ══════════════════════════════════════════════════════════════════════

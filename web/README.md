@@ -89,11 +89,11 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
   системного; значения видимы без auth, маскируются при `--auth`);
   настройки внешнего вида (`WEB_UI_THEME`/`WEB_EDITOR_THEME`/
   `WEB_EDITOR_FONT_SIZE`) — `GET /api/settings`;
-  metadata.yaml; обложка (upload/предпросмотр/удаление, `source/cover.*`);
-  M9: карточка «Обложки и метаданные» — варианты по умолчанию из `source/`
-  (несколько обложек/наборов YAML), сохраняются в `.env` проекта
-  (`COMPILE_EPUB_COVER`/`COMPILE_FB2_COVER`/`COMPILE_EPUB_META`,
-  `source/<файл>`), предзаполняют форму стадии compile.
+  metadata.yaml; карточки «Обложка» (upload/предпросмотр/удаление,
+  `source/cover.*`), «Метаданные epub/fb2» и «Файл страницы поддержки» —
+  выбор файла из имеющихся в `source/` + предпросмотр/редактор;
+  дефолты обложки/метаданных/доната выбираются в форме стадии compile
+  (`COMPILE_COVER`/`COMPILE_EPUB_META`/`COMPILE_DONATE_FILE` в `.env`).
 - **Промпты** (W4): файлы `prompts/` + шаблоны `templates/*/prompts`
   в одном списке; создание промпта из шаблона.
 - **Запуски**: все стадии пайплайна, **«Простой режим / Экспертный»**
@@ -171,23 +171,40 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 | `epub` | Разбор исходника на главы | `cli/epub_to_chapters.py` | нет |
 | `ner` | Создание глоссария (LLM) | `cli/ner.py` | да |
 
-Стадия `ner` — 4 режима формы: `extract` (с нуля, новый глоссарий),
-`finetune` (дообучение на существующий ner.json), `compile` (склейка
-глав `chapters/*/chapter.txt` в память без временного файла +
-извлечение; поля `start`/`end` — диапазон глав, ГЛАВЫ), `postprocess`
-(обработка ner.json без LLM: `strip_meta`/`min_count`; LLM-поля формы
-скрываются).
+Стадия `ner` — 3 режима формы: `extract` («Новый глоссарий
+(автоматический)»), `finetune` («Дообучение»), `postprocess` (обработка
+ner.json без LLM: `strip_meta`/`min_count`; LLM-поля формы скрываются).
+Режим «Собрать главы + извлечение» убран: extract/finetune без
+входного файла сами склеивают главы `chapters/*/chapter.txt` в память
+(`--compile_chapters`, без временного файла); поля `start`/`end` —
+диапазон глав (ГЛАВЫ), видны только когда файл не выбран. Файл в
+CLI — позиционный аргумент.
 | `ner_check` | Проверка глоссария (LLM) | `cli/ner_check.py` | да |
+
+Стадия `ner_check` — «Проходы» одним select: «Полный цикл (этапы 1+2)»,
+«Весь список (этап 1)», «По типам (этап 2)»; карточки-пресеты убраны
+(дублировали select), типы — только чипсы-чекбоксы из глоссария (поле
+«Типы через запятую» удалено).
 | `pipeline` | Перевод (LLM) | `web/pipeline.py` | да |
 | `translate_check` | Проверка перевода | `cli/translate_check.py` | нет |
 | `translate_check_llm` | Проверка перевода (LLM) | `cli/translate_check_llm.py` | да |
 | `batch_replace` | Массовые замены | `cli/batch_replace.py` | нет |
 | `compile` | Компиляция TXT/EPUB/FB2 | `cli/clean_and_compile.py` | нет |
 
-Стадия `compile` (M9): поля `epub_cover`/`fb2_cover` (files из `source/`,
-jpg/jpeg/png/webp/gif/bmp) и `epub_meta` (files из `source/`, yaml/yml) —
-варианты обложек/метаданных; пусто = авто (`cover.*`/`metadata.yaml`).
-Ключи `.env`: `COMPILE_EPUB_COVER`, `COMPILE_FB2_COVER`, `COMPILE_EPUB_META`.
+Стадия `compile`: режимы `txt` («TXT (Rulate)»), `txt-plain` («TXT»),
+`epub`, `fb2`, `epub-chunks`, `txt-chunks`, `fb2-chunks`. TXT (Rulate)
+оформляет заголовки глав под Rulate (`# [Глава N :|: N]`), TXT —
+обычные markdown-заголовки без тегов. Единое поле `cover` (files из
+`source/`, jpg/jpeg/png/webp/gif/bmp) — обложка для EPUB и FB2
+одновременно (`--epub-cover` + `--fb2-cover`); пусто = `--no-cover`
+(автоподхват `cover.*` отключён). `epub_meta` (files из `source/`,
+yaml/yml) — метаданные; пусто = авто `metadata.yaml`. `donate_file`
+(files из `source/`, txt) — страница поддержки; пусто = `--no-donate`
+(автоподхват `source/donate.txt` отключён). Чекбоксы «Без страницы
+поддержки»/«Без обложки в FB2» убраны. В txt-режимах поля
+обложки/метаданных/доната скрыты. В форме — предпросмотр
+обложки/`metadata.yaml`/страницы поддержки. Ключи `.env`:
+`COMPILE_COVER`, `COMPILE_EPUB_META`, `COMPILE_DONATE_FILE`.
 Заголовок главы: первое «Глава N» в файле → иначе первая непустая строка
 («Пролог. Пример» → название) → иначе «Глава N».
 | `wiki` | Создание Wiki (LLM) | `cli/wiki.py` | да |
@@ -195,16 +212,20 @@ jpg/jpeg/png/webp/gif/bmp) и `epub_meta` (files из `source/`, yaml/yml) —
 Стадия `epub` — разбор исходника на главы (только `.epub`/`.txt`, ZIP
 не принимается): режимы `toc` (только epub, по структуре spine/TOC/h1-h2),
 `regex` (строки-маркеры `--split-re`, по одному на строку) и `chunk`
-(`--chunk-size` в СИМВОЛАХ + маска `--chunk-mask` с `{num}`); epub в
-regex/chunk-режимах перегоняется в текст. Каталоги глав — канон
-`00000_1_…` (нули добивают ширину 6), `--title-limit` (СИМВОЛЫ, 50),
-`--num-offset`, `--skip` с перенумерацией; `--output-type` — какой файл
-создаётся в папке главы (`chapter`/`translated`/`redacted`/`polished`);
+(`--chunk-size` в СИМВОЛАХ + маска `--chunk-mask` с `{num}`, дефолт
+«Chapter {num}»); epub в regex/chunk-режимах перегоняется в текст.
+Каталоги глав — канон `00000_1_…` (нули добивают ширину 6),
+`--title-limit` (СИМВОЛЫ, 50), `--num-offset`, `--skip` с перенумерацией;
+`--output-type` — какой файл создаётся в папке главы
+(`chapter`/`translated`/`redacted`/`polished`); `--rename-chapters` —
+переопределить названия ВСЕХ глав маской (`--chunk-mask`);
 `--replace-re` — regexp-замены «паттерн -> замена» (пустая правая часть —
-удаление), применяются ДО разбивки (нормализация маркеров глав).
-Предпросмотр разбивки (панель в форме): папки + размеры в kB, удаление
-секции с перенумерацией (seq уходит в `skip` реального запуска), текст
-главы по номеру. Настройки формы автосохраняются в localStorage
+удаление), применяются ДО разбивки (нормализация маркеров глав); поле
+«Очистки текста» убрано из формы (регулярные замены и очистка — единое
+поле «Замены и очистки», удаление = пустая правая часть).
+Предпросмотр разбивки (панель в форме): папки + размеры в kB, чекбоксы
+секций (снятие = `skip` с перенумерацией, перезапуск предпросмотра),
+текст главы по номеру. Настройки формы автосохраняются в localStorage
 (проект); многострочные regexp-поля (`noenv`) в `.env` не пишутся.
 
 Стадия `batch_replace` — массовые замены: поле `replacements` —

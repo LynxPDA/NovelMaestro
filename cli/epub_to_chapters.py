@@ -519,9 +519,10 @@ def read_text_file(txt_path: Path) -> str:
 def split_input(input_file: Path, mode: str,
                 split_res, clean_res,
                 replace_res=(),
-                chunk_size: int = 7000, chunk_mask: str = "Глава {num}",
+                chunk_size: int = 7000, chunk_mask: str = "Chapter {num}",
                 title_limit: int = 50, num_offset: int = 1,
-                skips: set[int] | None = None) -> tuple[list[dict], int, list[str]]:
+                skips: set[int] | None = None,
+                rename_chapters: bool = False) -> tuple[list[dict], int, list[str]]:
     """Разбивает исходник на главы → (entries, s_before, removed).
 
     entry = {seq (исходный порядок, с 1), num (номер с учётом offset/skip),
@@ -531,6 +532,10 @@ def split_input(input_file: Path, mode: str,
     replace_res — пары (compiled, repl): regexp-замены, применяются
     к тексту ДО разбивки (можно нормализовать маркеры глав, напр.
     «第\\d+章 -> Глава \\d+»); пустая repl — удаление совпадений.
+
+    rename_chapters — заголовки ВСЕХ глав заменяются на chunk_mask
+    (с номером после перенумерации); удобно после разбивки по
+    TOC/паттернам: «Chapter 1», «Chapter 2»…
     """
     skips = skips or set()
     suffix = input_file.suffix.lower()
@@ -568,7 +573,8 @@ def split_input(input_file: Path, mode: str,
     for i, (h, b) in enumerate(sections, 1):
         if i in skips:
             continue
-        entries.append({"seq": i, "num": num, "heading": h, "body": b})
+        heading = chunk_mask.replace("{num}", str(num)) if rename_chapters else h
+        entries.append({"seq": i, "num": num, "heading": heading, "body": b})
         num += 1
     return entries, s_before, removed
 
@@ -681,9 +687,9 @@ def build_parser():
     g = p.add_argument_group("Разбивка по чанкам")
     g.add_argument("--chunk-size", type=int, default=7000, metavar="N",
                    help="Размер чанка, СИМВОЛЫ (default: 7000)")
-    g.add_argument("--chunk-mask", default="Глава {num}", metavar="MASK",
-                   help="Маска названия чанка, {num} — номер "
-                        "(default: «Глава {num}»)")
+    g.add_argument("--chunk-mask", default="Chapter {num}", metavar="MASK",
+                   help="Маска названия (чанка или переопределённых глав), "
+                        "{num} — номер (default: «Chapter {num}»)")
 
     g = p.add_argument_group("Каталоги глав")
     g.add_argument("--title-limit", type=int, default=50, metavar="N",
@@ -703,6 +709,10 @@ def build_parser():
                         "(default: chapter.txt)")
     g.add_argument("--clean-output", action="store_true",
                    help="Удалить старые папки глав перед записью")
+    g.add_argument("--rename-chapters", action="store_true",
+                   help="Переопределить названия ВСЕХ глав на --chunk-mask "
+                        "(номер после перенумерации); работает во всех "
+                        "режимах (toc/regex/chunk)")
     g.add_argument("--preview-json", type=Path, default=None, metavar="FILE",
                    help="Вместо записи — JSON предпросмотра "
                         "{source, num_offset, title_limit, entries}")
@@ -737,6 +747,9 @@ def main():
     replace_res = _parse_replace_re(args.replace_re)
     title_limit = max(1, args.title_limit)
     num_offset = max(1, args.num_offset)
+    if args.rename_chapters and "{num}" not in args.chunk_mask:
+        sys.exit("--rename-chapters: маска названия должна содержать "
+                 "{num} (например «Chapter {num}»)")
     skips: set[int] = set()
     for s in args.skip:
         try:
@@ -748,7 +761,9 @@ def main():
     print(f"\n  Файл:    {input_file.name}")
     print(f"  Режим:   {mode}"
           + (f" · чанк {args.chunk_size} симв. · маска «{args.chunk_mask}»"
-             if mode == "chunk" else ""))
+             if mode == "chunk" else "")
+          + (f" · переопределение названий «{args.chunk_mask}»"
+             if args.rename_chapters else ""))
     print(f"  Каталог: <нули>_<номер>_<заголовок>, лимит {title_limit} симв.")
     print(f"  Номера:  с {num_offset}"
           + (f" · пропуск: {sorted(skips)}" if skips else ""))
@@ -756,7 +771,8 @@ def main():
     entries, s_before, removed = split_input(
         input_file, mode, split_res, clean_res, replace_res,
         chunk_size=args.chunk_size, chunk_mask=args.chunk_mask,
-        title_limit=title_limit, num_offset=num_offset, skips=skips)
+        title_limit=title_limit, num_offset=num_offset, skips=skips,
+        rename_chapters=args.rename_chapters)
 
     if args.preview_json:
         preview = Path(args.preview_json).resolve()

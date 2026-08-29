@@ -7,7 +7,9 @@ clean_and_compile.py — компиляция глав в TXT/EPUB/FB2 (чист
 Интерактивный режим — в лаунчере tools/run_clean_and_compile.py.
 
 Режимы (--mode):
-  txt          сборка единого TXT (для выкладки)
+  txt          сборка единого TXT (Rulate): заголовки «# [Название :|: N]»
+  txt-plain    сборка единого TXT без rulate-форматирования (обычные
+               заголовки «# Название»)
   epub         сборка Markdown → нативная генерация EPUB (zipfile, stdlib)
   fb2          сборка Markdown → нативная генерация FB2 (+ обложка, stdlib)
   epub-chunks  EPUB частями по --chunk-size глав (default 50)
@@ -730,10 +732,13 @@ def compile_book(mode):
             if not final_title:
                 final_title = orig_header
 
-            if mode == "epub" or mode == "fb2":
+            if mode in ("epub", "fb2", "txt-plain"):
+                # epub/fb2 — заголовок отдельно (title); txt-plain —
+                # обычный markdown-заголовок без rulate-суффикса
                 replacement = f"# {final_title}"
-                sep_string = r"\* \* \*"
+                sep_string = r"\* \* \*" if mode != "txt-plain" else "* * *"
             else:
+                # txt (Rulate): «# [Название :|: N]» — тег загрузки на rulate
                 replacement = f"# [{final_title}{tag_suffix}]"
                 sep_string = "* * *"
 
@@ -844,9 +849,12 @@ def build_parser():
 """,
     )
     p.add_argument("--mode", required=True,
-                   choices=["txt", "epub", "fb2",
+                   choices=["txt", "txt-plain", "epub", "fb2",
                             "epub-chunks", "txt-chunks", "fb2-chunks"],
-                   help="Действие: сборка (txt/epub/fb2) или сборка частями (*-chunks)")
+                   help="Действие: сборка (txt-plain/txt/epub/fb2) или "
+                        "сборка частями (*-chunks). txt = TXT (Rulate) "
+                        "с тегами «# [Название :|: N]»; txt-plain — обычный "
+                        "TXT без rulate-форматирования")
     p.add_argument("--start", type=int, default=None,
                    help="Начальная глава (по умолчанию: минимальная найденная)")
     p.add_argument("--end", type=int, default=None,
@@ -869,6 +877,8 @@ def build_parser():
                    help="Обложка для инжекции в FB2 (по умолчанию: ./source/cover.jpg)")
     p.add_argument("--no-fb2-cover", action="store_true",
                    help="Не инжецировать обложку в FB2")
+    p.add_argument("--no-cover", action="store_true",
+                   help="Не добавлять обложку: ни в EPUB, ни в FB2")
     p.add_argument("--no-donate", action="store_true",
                    help="Не добавлять страницу поддержки в EPUB/FB2")
     p.add_argument("--donate-file", default="",
@@ -887,10 +897,10 @@ def main():
     cfg.base_dir = args.chapters_dir
     cfg.tmp_dir = args.tmp_dir
     cfg.compile_type = args.source_type
-    cfg.epub_cover = resolve_cover_path(args.epub_cover)
+    cfg.epub_cover = "" if args.no_cover else resolve_cover_path(args.epub_cover)
     cfg.epub_meta = args.epub_meta
-    cfg.fb2_cover = resolve_cover_path(args.fb2_cover)
-    cfg.fb2_inject_cover = 0 if args.no_fb2_cover else 1
+    cfg.fb2_cover = "" if args.no_cover else resolve_cover_path(args.fb2_cover)
+    cfg.fb2_inject_cover = 0 if (args.no_fb2_cover or args.no_cover) else 1
     cfg.add_donate_page = 0 if args.no_donate else 1
     cfg.donate_file = args.donate_file
     try:
@@ -914,7 +924,7 @@ def main():
           f"источник: {cfg.compile_type} | папка: {cfg.base_dir}")
 
     mode = args.mode
-    if mode in ("txt", "epub", "fb2"):
+    if mode in ("txt", "txt-plain", "epub", "fb2"):
         compile_book(mode)
     else:  # *-chunks
         base_mode = mode.split("-", 1)[0]  # epub|txt|fb2

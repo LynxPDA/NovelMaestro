@@ -696,35 +696,41 @@ def test_build_translate_check():
 
 def test_build_clean_and_compile():
     form = {"mode": "epub", "source_type": "redacted", "chunk_size": 50,
-            "no_donate": True, "no_fb2_cover": True,
-            "donate_file": "donate.txt"}
+            "cover": "source/cover.jpg",
+            "donate_file": "source/donate.txt"}
     argv = build_command("compile", form, {})
     assert "--mode" in argv and "epub" in argv
     assert "--source-type" in argv and "redacted" in argv
     assert "--chunk-size" in argv and "50" in argv
-    assert "--no-donate" in argv
-    assert "--no-fb2-cover" in argv
-    assert "--donate-file" in argv and "donate.txt" in argv
-    # дефолтный mode = txt
+    # единая обложка: уходит в --epub-cover И --fb2-cover
+    assert "--epub-cover" in argv
+    assert argv[argv.index("--epub-cover") + 1] == "source/cover.jpg"
+    assert "--fb2-cover" in argv
+    assert argv[argv.index("--fb2-cover") + 1] == "source/cover.jpg"
+    assert "--donate-file" in argv and "source/donate.txt" in argv
+    assert "--no-cover" not in argv and "--no-donate" not in argv
+    # дефолтный mode = txt; пустые обложка/донат — явные --no-*
     argv2 = build_command("compile", {}, {})
     assert argv2[argv2.index("--mode") + 1] == "txt"
+    assert "--no-cover" in argv2
+    assert "--no-donate" in argv2
 
 
 def test_build_clean_and_compile_cover_meta():
-    """M9: варианты обложек/метаданных из source/ — флаги в argv;
-    пустые значения флагов не добавляют."""
+    """единая обложка cover (files из source/) + метаданные — флаги в
+    argv; txt-режим — без обложки/метаданных, с --no-cover."""
     form = {"mode": "epub",
-            "epub_cover": "source/cover2.png",
-            "epub_meta": "source/metadata2.yaml",
-            "fb2_cover": "source/cover3.jpg"}
+            "cover": "source/cover2.png",
+            "epub_meta": "source/metadata2.yaml"}
     argv = build_command("compile", form, {})
     assert "--epub-cover" in argv and "source/cover2.png" in argv
+    assert "--fb2-cover" in argv and "source/cover2.png" in argv
     assert "--epub-meta" in argv and "source/metadata2.yaml" in argv
-    assert "--fb2-cover" in argv and "source/cover3.jpg" in argv
     argv2 = build_command("compile", {"mode": "txt"}, {})
     assert "--epub-cover" not in argv2
     assert "--epub-meta" not in argv2
     assert "--fb2-cover" not in argv2
+    assert "--no-cover" in argv2
 
 
 def test_build_batch_replace():
@@ -815,7 +821,7 @@ def test_simple_fields_per_stage():
     поля показываются в простом режиме к карточке пресета."""
     expected = {
         "epub": ["input"],
-        "ner": ["mode", "prompt_file", "two_pass"],
+        "ner": ["mode", "file", "prompt_file", "two_pass"],
         "ner_check": ["prompt_file", "passes"],
         "pipeline": ["action", "prompt_file"],
         "translate_check_llm": ["type", "two_pass", "prompt_file"],
@@ -837,25 +843,30 @@ def test_ner_check_no_report_no_apply():
     assert "--apply" in argv
 
 
-def test_compile_donate_autofile():
-    """compile: donate_file с autofile source/donate.txt (автоподхват)."""
+def test_compile_donate_no_autofile():
+    """compile: donate_file — files из source/ (.txt) БЕЗ autofile:
+    пусто = без страницы поддержки (--no-donate)."""
     spec = STAGE_SPECS["compile"]
     f = next(x for x in spec["fields"] if x["name"] == "donate_file")
-    assert f.get("autofile") == "source/donate.txt"
+    assert f["type"] == "files" and f["dir"] == "source"
+    assert ".txt" in (f.get("ext") or [])
+    assert not f.get("autofile")
 
 
 def test_compile_cover_meta_fields():
-    """M9: compile — поля выбора обложек/метаданных (files из source/)."""
+    """compile: единая обложка cover + метаданные (files из source/);
+    чекбоксы no_donate/no_fb2_cover и раздельные обложки убраны."""
     spec = STAGE_SPECS["compile"]
     by_name = {f["name"]: f for f in spec["fields"]}
-    for name, exts in (("epub_cover", [".jpg", ".png"]),
-                       ("epub_meta", [".yaml", ".yml"]),
-                       ("fb2_cover", [".jpg", ".png"])):
+    for name, exts in (("cover", [".jpg", ".png"]),
+                       ("epub_meta", [".yaml", ".yml"])):
         f = by_name.get(name)
         assert f is not None, name
         assert f["type"] == "files" and f["dir"] == "source", name
         assert f["default"] == "", name
         assert set(f["ext"]) & set(exts), name
+    assert "epub_cover" not in by_name and "fb2_cover" not in by_name
+    assert "no_donate" not in by_name and "no_fb2_cover" not in by_name
 
 
 def test_wiki_range_fields_first():
@@ -889,9 +900,9 @@ def test_preset_spot_checks():
     """Точечные проверки: что реально уедет в params при нажатии
     «Запустить» в простом режиме."""
     from web.stages import preset_params
-    # ner: compile без входного txt
+    # ner: новый глоссарий без входного txt — сборка глав в память
     params = preset_params(STAGE_SPECS["ner"])
-    assert params["mode"] == "compile"
+    assert params["mode"] == "extract"
     assert "file" not in params
     assert params["ner_file"] == "ner.json"
     # pipeline: полный цикл, дефолты, без диапазона
@@ -1052,20 +1063,24 @@ def test_stage_spec_env_prefill_bool_on(jobs_srv, tmp_path):
 
 
 def test_build_ner_modes():
-    """extract / finetune / compile (с диапазоном) / postprocess."""
+    """extract / finetune (файл или --compile_chapters) / postprocess;
+    режим compile из формы убран."""
+    mode_field = next(f for f in STAGE_SPECS["ner"]["fields"]
+                      if f["name"] == "mode")
+    assert "compile" not in mode_field["options"]
 
-    # compile: --compile_chapters + диапазон глав
-    compile_argv = build_command(
-        "ner", {"mode": "compile", "start": "1", "end": "20",
-                "ner_file": "ner.json", "threads": "4"}, {})
-    assert "--compile_chapters" in compile_argv
-    assert compile_argv[1] == "--compile_chapters"
-    assert "--start" in compile_argv and "1" in compile_argv
-    assert "--end" in compile_argv and "20" in compile_argv
-    # LLM-флаги собираются для compile
-    assert "--threads" in compile_argv and "4" in compile_argv
+    # extract/finetune без файла: --compile_chapters + диапазон глав
+    for mode in ("extract", "finetune"):
+        argv = build_command(
+            "ner", {"mode": mode, "start": "1", "end": "20",
+                    "ner_file": "ner.json", "threads": "4"}, {})
+        assert argv[1] == "--compile_chapters"
+        assert "--start" in argv and "1" in argv
+        assert "--end" in argv and "20" in argv
+        # LLM-флаги собираются
+        assert "--threads" in argv and "4" in argv
 
-    # extract / finetune: файл позиционный, LLM-флаги есть
+    # extract / finetune с файлом: файл позиционный, без сборки
     for mode in ("extract", "finetune"):
         argv = build_command(
             "ner", {"mode": mode, "file": "book.txt",

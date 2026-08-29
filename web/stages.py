@@ -148,8 +148,12 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
     if mode == "chunk":
         if form.get("chunk_size") not in (None, ""):
             argv += ["--chunk-size", str(form["chunk_size"])]
+    # маска нужна и в chunk-режиме, и при переопределении названий
+    if mode == "chunk" or form.get("rename_chapters"):
         if form.get("chunk_mask"):
             argv += ["--chunk-mask", str(form["chunk_mask"])]
+    if form.get("rename_chapters"):
+        argv.append("--rename-chapters")
     if form.get("title_limit") not in (None, ""):
         argv += ["--title-limit", str(form["title_limit"])]
     if form.get("num_offset") not in (None, ""):
@@ -189,20 +193,19 @@ def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
     if form.get("chunk_size"):
         argv += ["--chunk-size", str(form["chunk_size"])]
     # --tmp-dir убран из web: compiled_*/book_* пишутся в корень проекта
-    if form.get("no_donate"):
-        argv += ["--no-donate"]
-    if form.get("no_fb2_cover"):
-        argv += ["--no-fb2-cover"]
-    if form.get("donate_file"):
-        argv += ["--donate-file", str(form["donate_file"])]
-    # M9: варианты обложек/метаданных из source/ (пусто = дефолт скрипта
-    # с автопоиском cover.* / metadata.yaml)
-    if form.get("epub_cover"):
-        argv += ["--epub-cover", str(form["epub_cover"])]
+    # единая обложка для EPUB и FB2; пусто = без обложки (--no-cover)
+    cover = form.get("cover")
+    if cover:
+        argv += ["--epub-cover", str(cover), "--fb2-cover", str(cover)]
+    else:
+        argv.append("--no-cover")
     if form.get("epub_meta"):
         argv += ["--epub-meta", str(form["epub_meta"])]
-    if form.get("fb2_cover"):
-        argv += ["--fb2-cover", str(form["fb2_cover"])]
+    # страница поддержки: явный файл или ничего (без автоподхвата)
+    if form.get("donate_file"):
+        argv += ["--donate-file", str(form["donate_file"])]
+    else:
+        argv.append("--no-donate")
     return argv
 
 
@@ -252,20 +255,21 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
 def build_ner(form: dict, ctx: dict) -> list[str]:
     """Стадия 2 — извлечение NER (ner.py).
 
-    Режимы: extract (с нуля, txt → новый глоссарий), finetune
-    (дообучение, txt + существующий ner.json), compile (собрать
-    главы в память + извлечение, опционально start/end), postprocess
-    (обработка ner.json без LLM: --strip-meta / --min-count).
-    LLM-флаги собираются только для LLM-режимов.
+    Режимы: extract (новый глоссарий), finetune (дообучение на
+    существующий ner.json), postprocess (обработка ner.json без LLM:
+    --strip-meta / --min-count). Вход: выбранный файл (позиционный
+    аргумент) ИЛИ сборка глав в память (--compile_chapters,
+    опционально start/end). LLM-флаги — только для LLM-режимов.
     """
     argv = ["cli/ner.py"]
     mode = form.get("mode") or "extract"
-    llm_mode = mode in ("extract", "finetune", "compile")
-    if mode == "compile":
-        argv.append("--compile_chapters")
-        argv += _range_argv("start", form)
-    elif mode in ("extract", "finetune") and form.get("file"):
-        argv.append(str(form["file"]))
+    llm_mode = mode in ("extract", "finetune")
+    if llm_mode:
+        if form.get("file"):
+            argv.append(str(form["file"]))
+        else:
+            argv.append("--compile_chapters")
+            argv += _range_argv("start", form)
     if form.get("ner_file"):
         argv += ["--ner_file", str(form["ner_file"])]
     if llm_mode:
@@ -523,7 +527,7 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "select",
              "options": ["toc", "regex", "chunk"],
              "labels": {"toc": "По TOC (epub)",
-                        "regex": "Ручная (regexp)",
+                        "regex": "Ручной (regexp)",
                         "chunk": "По чанкам"},
              "default": "toc",
              "help": "toc — только epub, по структуре (TOC/spine/h1-h2); "
@@ -540,26 +544,26 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "7000",
              "help": "ТОЛЬКО режим «по чанкам»"},
             {"name": "chunk_mask",
-             "label": "Маска названия чанка",
-             "type": "text", "default": "Глава {num}",
-             "help": "ТОЛЬКО режим «по чанкам». {num} — номер; "
-                      "пример: «Часть {num}» → 00000_1_Часть_1…"},
-            {"name": "clean_patterns",
-             "label": "Очистки текста (regexp, по одному на строку)",
-             "type": "textarea", "rows": 3, "default": "",
-             "noenv": True,
-             "help": "Работают во ВСЕХ режимах. Каждый паттерн удаляет "
-                      "все совпадения из текста; пустые строки сжимаются; "
-                      "пример: «^本章完»"},
+             "label": "Маска названия глав",
+             "type": "text", "default": "Chapter {num}",
+             "help": "названия чанков в режиме «по чанкам»; при включённом "
+                      "«Переопределить названия» — названия ВСЕХ глав; "
+                      "{num} — номер; пример: «Часть {num}» → 00000_1_Часть_1…"},
+            {"name": "rename_chapters",
+             "label": "Переопределить названия глав маской",
+             "type": "bool", "default": False,
+             "help": "все заголовки глав заменяются на «Маска названия "
+                      "глав» ({num} — номер). Удобно после разбивки по "
+                      "TOC/паттернам: «Chapter 1», «Chapter 2»…"},
             {"name": "replace_patterns",
-             "label": "Замены (regexp, паттерн -> замена)",
+             "label": "Замены и очистки (regexp, паттерн -> замена)",
              "type": "textarea", "rows": 3, "default": "",
              "noenv": True,
              "help": "Работают во ВСЕХ режимах, применяются ДО разбивки. "
                       "По одной паре на строку: «паттерн -> замена»; "
-                      "пустая правая часть — УДАЛЕНИЕ. Удобно нормализовать "
-                      "маркеры глав: «第(\\d+)章 -> Глава \\1» "
-                      "(\\1 — первая группа)"},
+                      "пустая правая часть — УДАЛЕНИЕ (заменяет «Очистки "
+                      "текста»). Удобно нормализовать маркеры глав: "
+                      "«第(\\d+)章 -> Глава \\1» (\\1 — первая группа)"}, 
             {"name": "title_limit",
              "label": "Длина названия каталога, СИМВОЛЫ",
              "type": "number", "default": "50",
@@ -625,13 +629,17 @@ STAGE_SPECS: dict[str, dict] = {
         "fields": [
             {"name": "mode", "label": "Режим",
              "type": "select",
-             "options": ["txt", "epub", "fb2", "epub-chunks",
+             "options": ["txt", "txt-plain", "epub", "fb2", "epub-chunks",
                          "txt-chunks", "fb2-chunks"],
-             "labels": {"txt": "TXT", "epub": "EPUB", "fb2": "FB2",
+             "labels": {"txt": "TXT (Rulate)", "txt-plain": "TXT",
+                        "epub": "EPUB", "fb2": "FB2",
                          "epub-chunks": "EPUB частями",
                          "txt-chunks": "TXT частями",
                          "fb2-chunks": "FB2 частями"},
-             "default": "txt"},
+             "default": "txt",
+             "help": "TXT (Rulate) — заголовки «# [Название :|: N]» для "
+                      "загрузки на rulate; TXT — обычный txt без "
+                      "rulate-форматирования"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
@@ -641,15 +649,11 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "chunk_size", "label": "Глав в части",
              "type": "number", "default": "",
              "help": "для *-chunks режимов; пусто = дефолт (epub=50, txt=500, fb2=50)"},
-            {"name": "no_donate", "label": "Без страницы поддержки",
-             "type": "bool", "default": False},
-            {"name": "no_fb2_cover", "label": "Без обложки в FB2",
-             "type": "bool", "default": False},
-            {"name": "epub_cover", "label": "Обложка (EPUB)",
+            {"name": "cover", "label": "Обложка",
              "type": "files", "dir": "source",
              "ext": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"],
              "default": "",
-             "help": "пусто = авто: cover.* из source/ (первый найденный); "
+             "help": "единая обложка для EPUB и FB2; пусто = без обложки; "
                       "варианты обложек загружаются через «Файлы»"},
             {"name": "epub_meta", "label": "Метаданные (YAML)",
              "type": "files", "dir": "source",
@@ -657,17 +661,11 @@ STAGE_SPECS: dict[str, dict] = {
              "default": "",
              "help": "пусто = source/metadata.yaml; любой yaml/yml из source/ "
                       "(несколько наборов метаданных)"},
-            {"name": "fb2_cover", "label": "Обложка (FB2)",
-             "type": "files", "dir": "source",
-             "ext": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"],
-             "default": "",
-             "help": "пусто = авто: cover.* из source/; для FB2 можно "
-                      "выбрать отдельную обложку"},
             {"name": "donate_file", "label": "Файл страницы поддержки",
-             "type": "text", "default": "",
-             "autofile": "source/donate.txt",
-             "help": "пусто и source/donate.txt есть — подхватится "
-                      "автоматически"},
+             "type": "files", "dir": "source", "ext": [".txt"],
+             "default": "",
+             "help": "страница поддержки для EPUB/FB2; пусто = без страницы; "
+                      "файл загружается через «Файлы» (source/)"}, 
         ],
         # только экспертный режим (без простого/пресета)
     },
@@ -733,27 +731,32 @@ STAGE_SPECS: dict[str, dict] = {
         "fields": _LLM_FIELDS + [
             {"name": "mode", "label": "Режим",
              "type": "select",
-             "options": ["extract", "finetune", "compile", "postprocess"],
+             "options": ["extract", "finetune", "postprocess"],
              "default": "extract",
              "labels": {
-                 "extract": "С нуля (новый глоссарий)",
-                 "finetune": "Дообучение (глоссарий уже есть)",
-                 "compile": "Собрать главы + извлечение",
+                 "extract": "Новый глоссарий (автоматический)",
+                 "finetune": "Дообучение",
                  "postprocess": "Постобработка ner.json (без LLM)",
              },
-             "help": "с нуля: txt → новый ner.json. дообучение: txt, термины добавятся к существующему ner.json. собрать главы: склеит chapters/*/chapter.txt в память (без временного файла), можно ограничить диапазоном. постобработка: только strip-meta / min-count, без LLM."},
+             "help": "новый глоссарий: извлечение терминов в ner.json. "
+                      "дообучение: термины добавятся к существующему ner.json. "
+                      "Вход: выбранный txt или сборка глав chapters/*/chapter.txt "
+                      "в память (диапазон ниже, пусто = все главы). "
+                      "постобработка: только strip-meta / min-count, без LLM."},
             {"name": "file", "label": "Входной txt",
              "type": "files", "dir": "", "ext": [".txt"], "default": "",
-             "help": "нужен в режимах «с нуля» и «дообучение»; в «собрать главы» и «постобработка» не нужен"},
+             "help": "необязателен: выбран — работаем с ним; пусто — сборка "
+                      "глав chapters/*/chapter.txt в память (диапазон ниже); "
+                      "в «постобработка» не нужен"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": "",
-             "help": "для режима «собрать главы»; пусто = с первой"},
+             "help": "когда входной файл не выбран (сборка глав); пусто = с первой"},
             {"name": "end", "label": "Конечная глава (ГЛАВЫ)",
              "type": "number", "default": "",
-             "help": "для режима «собрать главы»; пусто = до последней"},
+             "help": "когда входной файл не выбран (сборка глав); пусто = до последней"},
             {"name": "ner_file", "label": "Глоссарий ner.json",
              "type": "files", "dir": "", "ext": [".json"], "default": "ner.json",
-             "help": "«с нуля» — создастся новый; «дообучение» — термины добавятся к существующему; «постобработка» — входной файл"},
+             "help": "«новый глоссарий» — создастся новый; «дообучение» — термины добавятся к существующему; «постобработка» — входной файл"},
             {"name": "prompt_file", "label": "Промпт-файл (теги pass1/pass2)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "ner_prompt.txt"},
@@ -790,12 +793,11 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "300"},
         ],
         "preset": {
-            "title": "Собрать главы + глоссарий",
-            "desc": "Склейка chapters/*/chapter.txt в память и "
-                    "извлечение терминов в ner.json (все главы)",
-            "overrides": {"mode": "compile"},
+            "title": "Новый глоссарий",
+            "desc": "Извлечение терминов в ner.json: входной txt или "
+                    "сборка глав в память (все главы)",
         },
-        "simple": ["mode", "prompt_file", "two_pass"],
+        "simple": ["mode", "file", "prompt_file", "two_pass"],
     },
     "ner_check": {
         "title": "Проверка глоссария (LLM)",
@@ -810,12 +812,14 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "ner_check_prompt.txt"},
             {"name": "passes", "label": "Проходы",
-             "labels": {"all": "Всё (этапы 1+2)", "whole": "Весь список (этап 1)",
+             "labels": {"all": "Полный цикл (этапы 1+2)",
+                         "whole": "Весь список (этап 1)",
                          "types": "По типам (этап 2)"},
              "type": "select", "options": ["all", "whole", "types"],
-             "default": "all"},
-            {"name": "types", "label": "Типы через запятую (пусто = все)",
-             "type": "text", "default": ""},
+             "default": "all",
+             "help": "полный цикл — весь список, затем по типам; "
+                      "«весь список» — этап 1 одним проходом; «по типам» — "
+                      "этап 2 по типам глоссария"}, 
             {"name": "batch_size", "label": "Бюджет пакета, СИМВОЛЫ",
              "type": "number", "default": "196608"},
             {"name": "count_threshold", "label": "Порог count (> X)",

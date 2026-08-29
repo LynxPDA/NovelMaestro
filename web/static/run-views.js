@@ -645,44 +645,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     wrap.addEventListener("change", onCh);
   }
 
-  // ── ner_check: режимы-пресеты и чипсы типов (вместо select/text) ──
-  // Общие для простого и экспертного режимов: карточки пишут
-  // st.values[key][...], чипсы грузят типы из глоссария (GET /api/ner).
-  // Возвращает {cards, chipsBar, chipsBox, guide, loadTypes}.
+  // ── ner_check: чипсы типов из глоссария (вместо select/text) ──
+  // Общие для простого и экспертного режимов: чипсы грузят типы из
+  // глоссария (GET /api/ner); выбор проходов — обычный select «Проходы».
+  // Возвращает {chipsBar, chipsBox, guide, loadTypes}.
   function nerCheckWidgets(key) {
-    const PRESETS = [
-      { v: "whole", t: "Быстро: весь список",
-        d: "Этап 1 — весь глоссарий одним проходом" },
-      { v: "types", t: "Глубоко: по типам",
-        d: "Этап 2 — по типам глоссария (правки по обновлённому ner.json)" },
-      { v: "all", t: "Полный цикл",
-        d: "Этапы 1+2: весь список, затем по типам" },
-    ];
-    const cards = h("div", { class: "ner-presets" });
-    function renderPresets() {
-      const cur = String(st.values[key]["passes"] ?? "all");
-      cards.replaceChildren();
-      for (const p of PRESETS) {
-        cards.append(
-          h(
-            "button",
-            {
-              class:
-                "ner-preset" + (cur === p.v ? " ner-preset-active" : ""),
-              type: "button",
-              onclick: () => {
-                st.values[key]["passes"] = p.v;
-                st.touched[key].add("passes");
-                renderPresets();
-              },
-            },
-            h("div", { class: "ner-preset-title" }, p.t),
-            h("div", { class: "ner-preset-desc" }, p.d),
-          ),
-        );
-      }
-    }
-    renderPresets();
 
     const chipsBar = h("div", { class: "ner-chips-bar" });
     const chipsInfo = h("div", { class: "field-help" });
@@ -802,7 +769,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         chipsInfo.textContent = ex.message;
       }
     };
-    return { cards, chipsBar, chipsBox, guide, loadTypes };
+    return { chipsBar, chipsBox, guide, loadTypes };
   }
 
   // карточка пресета + простые поля (spec.simple) + диапазон глав:
@@ -825,29 +792,35 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       wraps.push(wrap);
       byName[name] = wrap._input;
     }
-    // ner: «постобработка» — без LLM, прячем промпт и двухпроходную схему
+    // ner: входной файл или сборка глав; «постобработка» — без LLM
     if (key === "ner" && byName["mode"]) {
       const modeSel = byName["mode"];
+      const fileSel = byName["file"];
       const applyNerSimple = () => {
-        const hide = modeSel.value === "postprocess";
+        const isPost = modeSel.value === "postprocess";
         for (const name of ["prompt_file", "two_pass"]) {
           const w = byName[name];
           const wrap = w && w.closest ? w.closest(".field") : null;
-          if (wrap) wrap.classList.toggle("hidden", hide);
+          if (wrap) wrap.classList.toggle("hidden", isPost);
         }
+        const fw = fileSel && fileSel.closest
+          ? fileSel.closest(".field") : null;
+        if (fw) fw.classList.toggle("hidden", isPost);
       };
       modeSel.addEventListener("change", applyNerSimple);
+      if (fileSel) fileSel.addEventListener("change", applyNerSimple);
       applyNerSimple();
     }
-    // ner_check: режим-пресеты карточками вместо select (простой режим)
+    // ner_check: чипсы типов из глоссария после select «Проходы»
     if (key === "ner_check" && byName["passes"]) {
       const sel = byName["passes"];
       const wrap = sel.closest ? sel.closest(".field") : null;
       const w = nerCheckWidgets(key);
       if (wrap) {
         const idx = wraps.indexOf(wrap);
-        if (idx >= 0) wraps.splice(idx, 0, w.cards);
-        wrap.classList.add("hidden");
+        if (idx >= 0) {
+          wraps.splice(idx + 1, 0, w.chipsBar, w.chipsBox, w.guide);
+        }
       }
       w.loadTypes();
     }
@@ -884,6 +857,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       (f) => f.name === "start" || f.name === "end",
     );
     const rangeNodes = [];
+    let rangeRow = null;
     if (hasRange) {
       const start = h("input", {
         type: "number",
@@ -903,16 +877,29 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         st.values[key]["end"] = end.value;
         st.touched[key].add("end");
       });
-      rangeNodes.push(
-        h(
-          "div",
-          { class: "preset-range-row" },
-          h("span", { class: "preset-range-label" }, "Главы:"),
-          start,
-          h("span", { class: "preset-range-sep" }, "–"),
-          end,
-        ),
+      rangeRow = h(
+        "div",
+        { class: "preset-range-row" },
+        h("span", { class: "preset-range-label" }, "Главы:"),
+        start,
+        h("span", { class: "preset-range-sep" }, "–"),
+        end,
       );
+      rangeNodes.push(rangeRow);
+      // ner: диапазон нужен только когда входной файл НЕ выбран
+      // (сборка глав в память) и режим не «постобработка»
+      if (key === "ner" && byName["mode"]) {
+        const modeSel = byName["mode"];
+        const fileSel = byName["file"];
+        const applyNerRange = () => {
+          const noFile = !(fileSel && fileSel.value);
+          const notPost = modeSel.value !== "postprocess";
+          rangeRow.classList.toggle("hidden", !(noFile && notPost));
+        };
+        modeSel.addEventListener("change", applyNerRange);
+        if (fileSel) fileSel.addEventListener("change", applyNerRange);
+        applyNerRange();
+      }
     }
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
@@ -969,34 +956,37 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны
 
-    // ner — режимы: LLM (extract/finetune/compile) и постобработка (без LLM):
-    // постобработка прячет LLM-поля и входной txt, «собрать главы» —
-    // прячет txt и показывает диапазон глав
+    // ner — режимы: LLM (extract/finetune) и постобработка (без LLM):
+    // постобработка прячет LLM-поля, файл и диапазон; входной файл
+    // не выбран — сборка глав в память, тогда виден диапазон
     if (key === "ner") {
       const modeSel = fieldWraps["mode"] && fieldWraps["mode"]._input;
+      const fileSel =
+        fieldWraps["file"] && fieldWraps["file"]._input
+          && fieldWraps["file"]._input._sel;
       const llmFields = [
         "host", "model", "api_key", "prompt_file", "threads",
         "chunk_size", "threshold", "ngram", "temperature", "reasoning",
         "two_pass", "keep_fields", "save_interval", "retries", "timeout",
       ];
       const rangeFields = ["start", "end"];
-      const fileField = "file";
       function applyNerMode() {
         const m = (modeSel && modeSel.value) || "extract";
         const isPost = m === "postprocess";
-        const isCompile = m === "compile";
         for (const name of llmFields) {
           const wrap = fieldWraps[name];
           if (wrap) wrap.classList.toggle("hidden", isPost);
         }
+        const fw = fieldWraps["file"];
+        if (fw) fw.classList.toggle("hidden", isPost);
+        const noFile = !(fileSel && fileSel.value);
         for (const name of rangeFields) {
           const wrap = fieldWraps[name];
-          if (wrap) wrap.classList.toggle("hidden", !isCompile);
+          if (wrap) wrap.classList.toggle("hidden", isPost || !noFile);
         }
-        const fw = fieldWraps[fileField];
-        if (fw) fw.classList.toggle("hidden", isPost || isCompile);
       }
       if (modeSel) modeSel.addEventListener("change", applyNerMode);
+      if (fileSel) fileSel.addEventListener("change", applyNerMode);
       applyNerMode();
     }
 
@@ -1040,21 +1030,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       applyWikiMode();
     }
 
-    // ner_check — редизайн: карточки-пресеты режимов и чипсы типов из
-    // глоссария вместо select/text; степпер «как пользоваться»
+    // ner_check — чипсы типов из глоссария после select «Проходы»;
+    // карточки-пресеты убраны (названия — в select), степпер остаётся
     if (key === "ner_check") {
       const passesWrap = fieldWraps["passes"];
-      const typesWrap = fieldWraps["types"];
       const w = nerCheckWidgets(key);
-      if (typesWrap) {
-        const idx = fieldNodes.indexOf(typesWrap);
-        if (idx >= 0) fieldNodes.splice(idx, 0, w.chipsBar, w.chipsBox, w.guide);
-        typesWrap.classList.add("hidden");
-      }
       if (passesWrap) {
         const idx = fieldNodes.indexOf(passesWrap);
-        if (idx >= 0) fieldNodes.splice(idx, 0, w.cards);
-        passesWrap.classList.add("hidden");
+        if (idx >= 0) {
+          fieldNodes.splice(idx + 1, 0, w.chipsBar, w.chipsBox, w.guide);
+        }
       }
       w.loadTypes();
     }
@@ -1083,24 +1068,19 @@ window.viewRun = function viewRun(section, name, attachJobId) {
               " — «Глава 3» или «Часть 5»"),
             h("li", {}, h("code", {}, "^\\d+\\.\\s*$"), " — «12.»"),
           ),
-          h("p", {}, "Очистка (все режимы, по одному на строку) — ",
-            "паттерн удаляет все совпадения из текста главы; ",
-            "пустые строки сжимаются:"),
-          h("ul", {},
-            h("li", {}, h("code", {}, "^本章完$"), " — строка «本章完»"),
-            h("li", {}, h("code", {}, "[0-9]+"), " — все цифры"),
-            h("li", {}, h("code", {}, "\\(未完待续\\)"), " — «(未完待续)»"),
-          ),
-          h("p", {}, "Замены (все режимы, применяются ДО разбивки) — ",
+          h("p", {}, "Замены и очистки (все режимы, применяются ДО разбивки) — ",
             "по одной паре на строку: ",
             h("code", {}, "паттерн -> замена"),
-            "; пустая правая часть — удаление:"),
+            "; пустая правая часть — УДАЛЕНИЕ (заменяет «Очистки текста»):"),
           h("ul", {},
+            h("li", {}, h("code", {}, "^本章完$ ->"), " — удалить строку «本章完»"),
+            h("li", {}, h("code", {}, "[0-9]+ ->"), " — удалить все цифры"),
+            h("li", {}, h("code", {}, "\\(未完待续\\) ->"),
+              " — убрать «(未完待续)»"),
             h("li", {}, h("code", {}, "第(\\d+)章 -> Глава \\1"),
               " — «第1章» → «Глава 1» (\\1 — группа)"),
             h("li", {}, h("code", {}, "\\s+ -> "), " — сжать пробелы"),
             h("li", {}, h("code", {}, "(?:他|她) -> 他"), " — унифицировать"),
-            h("li", {}, h("code", {}, "\\(\\d+\\) ->"), " — убрать «(12)»"),
           ),
           h("p", {}, "Шпаргалка по regexp:"),
           h("ul", {},
@@ -1119,20 +1099,32 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       fieldNodes.push(help);
       if (modeSel && inputWrap) {
         // поля, видимые только в своём режиме: split_patterns — regexp,
-        // chunk_size/chunk_mask — чанки; clean_patterns — все режимы
+        // chunk_size — чанки; маска — чанки ИЛИ переопределение названий;
+        // переопределение — во всех режимах кроме чанков
         const wrapSplit = fieldWraps["split_patterns"];
         const wrapChunkSize = fieldWraps["chunk_size"];
         const wrapChunkMask = fieldWraps["chunk_mask"];
+        const wrapRename = fieldWraps["rename_chapters"];
+        const renameCh = wrapRename && wrapRename._input;
         const applyModeVisibility = () => {
           const m = modeSel.value || "toc";
           if (wrapSplit) wrapSplit.classList.toggle("hidden", m !== "regex");
           if (wrapChunkSize) {
             wrapChunkSize.classList.toggle("hidden", m !== "chunk");
           }
+          if (wrapRename) {
+            wrapRename.classList.toggle("hidden", m === "chunk");
+          }
           if (wrapChunkMask) {
-            wrapChunkMask.classList.toggle("hidden", m !== "chunk");
+            wrapChunkMask.classList.toggle(
+              "hidden",
+              !(m === "chunk" || (renameCh && renameCh.checked)),
+            );
           }
         };
+        if (renameCh) {
+          renameCh.addEventListener("change", applyModeVisibility);
+        }
         const rebuildInput = () => {
           const m = modeSel.value || "toc";
           const exts = m === "toc" ? [".epub"] : [".epub", ".txt"];
@@ -1212,6 +1204,100 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       fieldNodes.push(help);
     }
 
+    // compile — предпросмотр обложки/metadata.yaml/страницы поддержки
+    // и скрытие неактуальных полей в txt-режимах
+    if (key === "compile") {
+      const modeSel = fieldWraps["mode"] && fieldWraps["mode"]._input;
+      const coverSel =
+        fieldWraps["cover"] && fieldWraps["cover"]._input
+          && fieldWraps["cover"]._input._sel;
+      const metaSel =
+        fieldWraps["epub_meta"] && fieldWraps["epub_meta"]._input
+          && fieldWraps["epub_meta"]._input._sel;
+      const donateSel =
+        fieldWraps["donate_file"] && fieldWraps["donate_file"]._input
+          && fieldWraps["donate_file"]._input._sel;
+      const prevCover = h("img", {
+        class: "cover-preview",
+        alt: "обложка",
+        style: "display:none",
+      });
+      const prevMeta = h("pre", { class: "compile-prev-text" });
+      const prevDonate = h("pre", { class: "compile-prev-text" });
+      async function updateCompilePreview() {
+        const q = new URLSearchParams({ project: `${section}/${name}` });
+        const cover = String(st.values[key]["cover"] || "").trim();
+        if (cover) {
+          prevCover.src =
+            `/api/download?${q}&path=${encodeURIComponent(`source/${cover}`)}`
+            + "&inline=1";
+          prevCover.style.display = "";
+        } else {
+          prevCover.style.display = "none";
+        }
+        // метаданные: пусто = авто source/metadata.yaml (что попадёт
+        // в сборку)
+        const meta =
+          String(st.values[key]["epub_meta"] || "").trim()
+          || "metadata.yaml";
+        try {
+          const d = await api(
+            `/file?${q}&path=${encodeURIComponent(`source/${meta}`)}`,
+          );
+          prevMeta.textContent = d.missing
+            ? "Метаданные: файл не найден"
+            : `Метаданные (${meta}):\n${(d.content || "").slice(0, 2000)}`;
+        } catch {
+          prevMeta.textContent = "";
+        }
+        const donate = String(st.values[key]["donate_file"] || "").trim();
+        if (donate) {
+          try {
+            const d = await api(
+              `/file?${q}&path=${encodeURIComponent(`source/${donate}`)}`,
+            );
+            prevDonate.textContent = d.missing
+              ? "Страница поддержки: файл не найден"
+              : `Страница поддержки (${donate}):\n`
+                + `${(d.content || "").slice(0, 2000)}`;
+          } catch {
+            prevDonate.textContent = "";
+          }
+        } else {
+          prevDonate.textContent = "";
+        }
+      }
+      const preview = h(
+        "details",
+        { class: "regexp-help compile-preview" },
+        h("summary", {}, "Предпросмотр обложки и файлов"),
+        h(
+          "div",
+          { class: "compile-preview-body" },
+          prevCover,
+          prevMeta,
+          prevDonate,
+        ),
+      );
+      fieldNodes.push(preview);
+      function applyCompileMode() {
+        const m = (modeSel && modeSel.value) || "txt";
+        const book =
+          m === "epub" || m === "fb2" || m === "epub-chunks"
+          || m === "fb2-chunks";
+        for (const name of ["cover", "epub_meta", "donate_file"]) {
+          const w = fieldWraps[name];
+          if (w) w.classList.toggle("hidden", !book);
+        }
+      }
+      if (modeSel) modeSel.addEventListener("change", applyCompileMode);
+      applyCompileMode();
+      for (const sel of [coverSel, metaSel, donateSel]) {
+        if (sel) sel.addEventListener("change", updateCompilePreview);
+      }
+      updateCompilePreview();
+    }
+
     // B4: смена host очищает предзаполненный api_key — иначе старый
     // ключ уедет на чужой сервер (C1 защищает только env-fallback)
     const hostEl = fieldWraps["host"] && fieldWraps["host"]._input;
@@ -1258,8 +1344,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
 
   // ── epub: панель предпросмотра разбивки ──────────────────────────────
   // Кнопка «Предпросмотр» → POST /stages/epub/preview (папки + размеры);
-  // удаление секции — DELETE .../folder?seq= (сервер перенумеровывает),
-  // seq копится в st.preview.skips и уходит в параметры запуска;
+  // снятие галочки — seq уходит в st.preview.skips, предпросмотр
+  // перезапускается со skip (скрипт пропускает и перенумеровывает);
   // текст главы — GET .../preview/text?num=.
   function epubPreviewPanel(key, spec, mode) {
     const err = h("div", { class: "form-error" });
@@ -1296,7 +1382,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           ),
         );
       }
-      nodes.push(epubPreviewList(st.preview, err));
+      nodes.push(epubPreviewList(st.preview, err, key, spec, mode));
       nodes.push(epubPreviewTextViewer(st.preview, err));
     } else {
       nodes.push(
@@ -1304,7 +1390,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           "div",
           { class: "field-help" },
           "Нажмите «Предпросмотр» — покажется список папок глав "
-            + "(размеры, удаление, текст)",
+            + "(галочки, размеры, текст)",
         ),
       );
     }
@@ -1351,38 +1437,50 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     st.previewDirty = false;
   }
 
-  // список папок: имя + размер в kB + удаление (перенумерация на сервере)
-  function epubPreviewList(prev, err) {
+  // список папок: чекбокс (по умолчанию все включены) + имя + размер;
+  // снятие галочки — глава пропускается, остальные перенумеровываются
+  // (предпросмотр перезапускается со списком skip)
+  function epubPreviewList(prev, err, key, spec, mode) {
+    const skips = new Set(prev.skips || []);
     const rows = (prev.entries || []).map((e) => {
-      const del = h("button", { class: "btn btn-sm btn-danger" }, "Удалить");
-      del.addEventListener("click", async () => {
+      const cb = h("input", { type: "checkbox", class: "checkbox" });
+      cb.checked = !skips.has(e.seq);
+      cb.addEventListener("change", async () => {
         err.textContent = "";
+        const s = new Set(prev.skips || []);
+        if (cb.checked) {
+          s.delete(e.seq);
+        } else {
+          s.add(e.seq);
+        }
+        prev.skips = [...s];
         try {
-          const r = await api(
-            `/stages/epub/preview/folder?seq=${e.seq}`
-              + `&project=${section}/${name}`,
-            { method: "DELETE" },
-          );
-          prev.entries = r.entries || [];
-          prev.skips = [...(prev.skips || []), e.seq];
-          prev.viewNum = null;
+          await epubRunPreview(key, spec, mode);
           render();
         } catch (ex) {
           err.textContent = ex.message;
         }
       });
-      return h(
+      const row = h(
         "div",
         { class: "epub-prev-row" },
+        h("label", { class: "epub-prev-check" }, cb),
         h("span", { class: "epub-prev-folder", text: e.folder }),
         h(
           "span",
           { class: "epub-prev-size", text: `${e.size_kb} kB` },
         ),
-        del,
       );
+      if (!cb.checked) row.classList.add("epub-prev-skip");
+      return row;
     });
-    return h("div", { class: "epub-prev-list" }, rows);
+    const hint = h(
+      "div",
+      { class: "field-help" },
+      "Снимите галочку, чтобы исключить главу из разбора "
+        + "(остальные перенумеруются)",
+    );
+    return h("div", { class: "epub-prev-list" }, hint, rows);
   }
 
   // просмотр текста главы: селектор по номеру → текст с сервера

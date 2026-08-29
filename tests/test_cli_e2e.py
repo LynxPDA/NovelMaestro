@@ -160,6 +160,19 @@ def test_cac_compile_txt(cac_env):
     assert log.is_file() and "[OK] Глава 1" in log.read_text(encoding="utf-8")
 
 
+def test_cac_compile_txt_plain(cac_env):
+    """txt-plain: обычные markdown-заголовки БЕЗ rulate-тегов
+    «[:|:]» и скобок (в отличие от txt = TXT (Rulate))."""
+    CAC.compile_book("txt-plain")
+    out = Path(CAC.cfg.tmp_dir) / "compiled_1_2_txt-plain.txt"
+    assert out.is_file()
+    content = out.read_text(encoding="utf-8")
+    assert "# Глава 1" in content
+    assert "# Глава 2" in content
+    assert ":|:" not in content
+    assert "[Глава 1" not in content
+
+
 def test_cac_separators_unified(cac_env):
     """Единый алгоритм разделителей: строки точек, звёздочек и многоточий
     → один сепаратор «* * *»; смешанные строки тоже сворачиваются."""
