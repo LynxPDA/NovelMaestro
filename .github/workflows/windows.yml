@@ -47,11 +47,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: novelmaestro-portable
-          path: dist/*.zip
+          # только портативный пакет; python-*.zip (загруженный
+          # embeddable) в dist/ — служебный, в артефакт не идёт
+          path: dist/novelmaestro-portable-*.zip
           if-no-files-found: error
 
       - name: Прикрепить к релизу (только по тегу)
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/*.zip --generate-notes
+        run: gh release create "${{ github.ref_name }}" dist/novelmaestro-portable-*.zip --generate-notes
