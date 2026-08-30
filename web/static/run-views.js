@@ -43,12 +43,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         render();
         return;
       }
-      if (job.status !== "running") {
-        // завершённый запуск лог не показывает (Д2) —
-        // ведём себя как заход на страницу без job id
-        autoAttach();
-        return;
-      }
+      // лог живёт только на вкладке СВОЕЙ стадии активного запуска —
+      // при прикреплении переключаемся на неё; по завершению запуска
+      // панель лога закрывается (история — на «Дашборде» и в «Логах»)
+      st.stage = job.action;
       st.job = job;
       st.log = [];
       st.events = [];
@@ -91,8 +89,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     st.touched[key] = null;
     st.preview = null; // epub: свежий предпросмотр для новой стадии
     st.previewDirty = true;
-    // активный запуск/стрим НЕ сбрасываем — лог остаётся
-    // под формой, пока стадия не завершилась
+    // активный запуск/стрим НЕ сбрасываем — лог привязан к своей
+    // стадии и виден на её вкладке, чужие вкладки его не показывают
     render();
   }
 
@@ -149,18 +147,33 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       await activePanel(),
     );
 
-    // правая панель: форма + лог (лог — только у активного запуска;
-    // завершённый не показывается — история во вкладке «Логи»)
+    // правая панель: форма + лог. Лог — ТОЛЬКО активного (running)
+    // запуска и только на вкладке его стадии; по завершению запуска
+    // панель закрывается. История — на «Дашборде» и во вкладке «Логи»
     const right = h(
       "div",
       { class: "run-col run-col-form" },
       st.stage ? await formPanel() : emptyRun(),
-      st.job && st.job.status === "running"
+      st.job &&
+      st.job.status === "running" &&
+      st.job.action === st.stage
         ? logPanel()
         : h(
             "div",
             { class: "run-empty" },
-            "Запустите стадию — лог появится здесь",
+            h("div", { text: "Запустите стадию — лог появится здесь" }),
+            h(
+              "div",
+              { class: "run-empty-hint" },
+              "История запусков — ",
+              h("a", { href: "#/dashboard" }, "на Дашборде"),
+              " · логи — ",
+              h(
+                "a",
+                { href: `#/project/${section}/${name}/logs` },
+                "во вкладке «Логи»",
+              ),
+            ),
           ),
     );
     return h("div", { class: "run-layout" }, stageList, right);
@@ -1562,7 +1575,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       job.status,
     );
     const stopBtn = h("button", { class: "btn btn-sm btn-danger" }, "Стоп");
-    stopBtn.disabled = job.status !== "running";
     stopBtn.addEventListener("click", async () => {
       try {
         await api(`/jobs/${job.id}/stop`, { method: "POST" });
@@ -1746,7 +1758,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
       // конец стрима (задание завершилось): догнать статус/события;
-      // лог скрывается сам — st.job больше не running (Д2)
+      // панель лога закрывается — status больше не running (лог —
+      // только активного запуска)
       try {
         const r = await api(`/jobs/${jobId}`);
         if (r.job) {
@@ -1810,7 +1823,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
 
   // разбор одного SSE-payload: лог, события глав, прогресс, статус.
   // Все querySelector'ы идут по page с гвардами — узел может быть
-  // перерисован/отсутствовать (лог-панель скрыта после завершения)
+  // перерисован/отсутствовать (панель перестроена после завершения)
   function onPayload(payload) {
     if (payload.type === "line") {
       st.log.push(payload.text);

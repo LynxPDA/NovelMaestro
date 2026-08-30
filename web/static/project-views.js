@@ -3,9 +3,9 @@
    старый watcher того же ключа (не плодим интервалы). */
 const _reviewWatchers = new Map();
 /* eslint-disable-next-line no-unused-vars -- глобал SPA, вызывается из app.js */
-function viewProject(section, name) {
+function viewProject(section, name, tab) {
   const st = {
-    view: "files",
+    view: "files", // tab (третий сегмент роута) может открыть свою вкладку
     path: "",
     edit: null,
     ner: null,
@@ -48,6 +48,9 @@ function viewProject(section, name) {
     ["logs", "Логи"],
     ["notes", "Заметки"],
   ];
+  // роут #/project/раздел/книга/<вкладка> — открыть конкретную
+  // вкладку (например, #/.../logs из страницы «Запуски»)
+  if (tab && TABS.some((t) => t[0] === tab)) st.view = tab;
 
   async function render() {
     page.replaceChildren();
@@ -3210,12 +3213,12 @@ function viewProject(section, name) {
           const items = src.filter((n) =>
             n.toLowerCase().endsWith(ext));
           sel.replaceChildren();
-          if (!items.length) {
-            sel.append(h("option", { value: "" }, "— нет файлов —"));
-          } else {
+          if (items.length) {
             sel.append(h("option", { value: "" }, "— выберите файл —"));
             for (const n of items) sel.append(h("option", { value: n }, n));
             sel.value = items.includes(defFile) ? defFile : items[0];
+          } else {
+            sel.append(h("option", { value: "" }, "— нет файлов —"));
           }
           rel = sel.value ? `source/${sel.value}` : `source/${defFile}`;
           await loadFile();
@@ -3653,8 +3656,13 @@ function viewProject(section, name) {
             .map((p2) => p2.split("/")[0]),
         ),
       ].sort();
+      // файлы ТОЛЬКО из текущей папки: путь начинается с prefix и
+      // после него не содержит больше «/» (иначе корневые логи
+      // «протекали» бы в подпапки — например, в chapters)
       const files = all.filter(
-        (l) => !l.path.slice(prefix.length).includes("/"),
+        (l) =>
+          l.path.startsWith(prefix) &&
+          !l.path.slice(prefix.length).includes("/"),
       );
       const entries = [
         ...dirs.map((d) => ({ kind: "dir", name: d, mtime: 0, size: 0 })),

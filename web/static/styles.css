@@ -147,7 +147,9 @@ body {
 
 /* ── страница ───────────────────────────────────────────── */
 .page {
-  max-width: 1200px;
+  /* шире на широких мониторах (1200 → 1560, +30%); на узких —
+     как раньше (100%) */
+  max-width: min(1560px, 100%);
   margin: 0 auto;
 }
 
@@ -645,7 +647,7 @@ input[type="number"] {
   opacity: 1;
 }
 [data-tip] {
-  cursor: help;
+  /* без смены курсора: подсказка — только по наведению */
 }
 
 /* ── запуски стадий (M4) ───────────────────────────────── */
@@ -689,6 +691,18 @@ input[type="number"] {
   padding: 22px;
   color: var(--text-dim);
   text-align: center;
+}
+.run-empty-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.run-empty-hint a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.run-empty-hint a:hover {
+  text-decoration: underline;
 }
 .stage-grid {
   display: flex;

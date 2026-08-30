@@ -29,9 +29,6 @@ function h(tag, attrs = {}, ...children) {
   return node;
 }
 
-/* M6/M8 (AUDIT): размер страницы таблиц глоссария и отчётов */
-const PAGE_SIZE = 200;
-
 /* Предпросмотр markdown/html (Заметки и «Правка» файлов).
    Кегль — localStorage previewFontSize (не .env: UI-предпочтение).
    srcdoc-iframe не наследует тему страницы — стили задаём явно. */
@@ -290,6 +287,9 @@ function attachTooltip(el, text) {
   el.addEventListener("focus", show);
   el.addEventListener("blur", hide);
 }
+// кросс-файловый хелпер: используется в project-views.js (тултипы
+// полей форм) — явный экспорт на window, как у window.viewRun
+window.attachTooltip = attachTooltip; 
 
 function confirmModal(title, text, confirmWord, onConfirm) {
   const word = h("input", { class: "input", placeholder: confirmWord });
@@ -383,10 +383,15 @@ async function loadHub(force = false) {
     api("/dashboard").catch(() => null),
   ]);
   const bySection = {};
-  for (const s of sections.sections) {
-    const list = await api(`/projects?section=${encodeURIComponent(s.name)}`);
-    bySection[s.name] = list.projects;
-  }
+  // списки проектов по разделам — параллельно, а не по очереди
+  // (на медленной сети это экономит N-1 RTT)
+  const lists = await Promise.all(
+    (sections.sections || []).map(async (s) => {
+      const r = await api(`/projects?section=${encodeURIComponent(s.name)}`);
+      return [s.name, r.projects];
+    }),
+  );
+  for (const [name, projects] of lists) bySection[name] = projects;
   /* stats для карточек берём из кешируемого /dashboard одним запросом,
      а не дергаем /stats на каждый проект (R5-K follow-up). */
   const statsMap = {};
@@ -1172,8 +1177,8 @@ async function viewDashboard() {
         "a",
         {
           class: "dash-run-title",
-          // ведём на Запуски проекта — активный запуск там
-          // подхватится сам (autoAttach), без чужого job id в hash
+          // активные запуски — на страницу «Запуски» проекта
+          // (авто-подхват активного запуска), история — там же
           href: `#/run/${j.project}`,
         },
         j.title || j.action || "запуск",
@@ -1686,7 +1691,7 @@ function render() {
     templates: viewTemplates,
     notes: viewNotes,
     help: viewHelp,
-    project: () => viewProject(route.rest[0], route.rest[1]),
+    project: () => viewProject(route.rest[0], route.rest[1], route.rest[2]),
     run: () => window.viewRun(route.rest[0], route.rest[1], route.rest[2]),
   };
   const fn = views[route.view] || (() => viewUnknown(route.view));
