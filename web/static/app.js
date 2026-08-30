@@ -1615,11 +1615,6 @@ function layout(content) {
     h(
       "div",
       { class: "topbar-right" },
-      h(
-        "span",
-        { class: state.auth ? "conn conn-ok" : "conn conn-bad" },
-        state.auth ? "● соединение ок" : "○ нет связи",
-      ),
       h("button", { class: "btn btn-ghost", onclick: logout }, "Выйти"),
     ),
   );

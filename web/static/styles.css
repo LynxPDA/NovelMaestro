@@ -94,17 +94,6 @@ body {
   gap: 14px;
 }
 
-.conn {
-  font-size: 12px;
-  color: var(--muted);
-}
-.conn-ok {
-  color: var(--accent);
-}
-.conn-bad {
-  color: var(--danger);
-}
-
 .body {
   display: flex;
   flex: 1;
