@@ -385,7 +385,7 @@ def _file_download(ctx: dict) -> dict:
         ctype = "image/jpeg" if target.suffix.lower() in (".jpg", ".jpeg") \
             else "image/png" if target.suffix.lower() == ".png" \
             else "application/octet-stream"
-        handler._send(200, ctype, data, [("Cache-Control", "no-cache")])
+        handler._send(200, ctype, data, cache="no-cache")
         return {}
     from urllib.parse import quote
     handler._send(200, "application/octet-stream", data,

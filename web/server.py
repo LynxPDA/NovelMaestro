@@ -9,9 +9,12 @@ ThreadingHTTPServer + собственный роутер (метод + шабл
 """
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
 import logging
 import mimetypes
+import re
 import urllib.parse
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,6 +25,13 @@ from web.auth import COOKIE_NAME, Auth, csrf_ok
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_JSON_BODY = 16 * 1024 * 1024  # 16 МБ — лимит JSON-тел
+
+# Версионирование ассетов SPA: index.html раздаётся всегда свежим
+# (no-store), но ссылки на js/css получают ?v=<sha256> — тогда сами
+# ассеты можно кэшировать в браузере навсегда (immutable): новая
+# версия файла = новый URL, устаревший кэш никогда не используется.
+_ASSET_URL_RE = re.compile(rb'((?:src|href)=")(/[^"?#]+\.(?:js|css))(")')
+_ASSET_VERSION_CACHE: dict[str, tuple[int, str]] = {}
 
 log = logging.getLogger("web")
 
@@ -96,11 +106,12 @@ class Handler(BaseHTTPRequestHandler):
         log.info("%s %s", self.address_string(), format % args)
 
     def _send(self, status: int, ctype: str, body: bytes,
-              extra_headers: list[tuple[str, str]] | None = None) -> None:
+              extra_headers: list[tuple[str, str]] | None = None,
+              cache: str = "no-store") -> None:
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         for k, v in extra_headers or []:
             self.send_header(k, v)
         self.end_headers()
@@ -265,7 +276,45 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self._send(404, "text/plain; charset=utf-8", b"Not Found")
             return
-        self._send(200, ctype, data)
+        if rel == "index.html":
+            # index.html — всегда свежий (no-store по умолчанию), но
+            # ссылки на ассеты версионируются ?v=<sha256>: кэш браузера
+            # по ассетам живёт вечно (immutable), смена файла = смена
+            # URL — устаревших версий не бывает
+            html = _ASSET_URL_RE.sub(self._version_asset, data)
+            self._send(200, ctype, html)
+            return
+        # ассеты: immutable-кэш (URL несёт ?v= из index.html) + gzip,
+        # когда клиент умеет; Vary — чтобы кэши не мешали варианты
+        headers = [("Vary", "Accept-Encoding")]
+        if "gzip" in self.headers.get("Accept-Encoding", ""):
+            gz = gzip.compress(data, 6)
+            if len(gz) < len(data):
+                data = gz
+                headers.append(("Content-Encoding", "gzip"))
+        self._send(200, ctype, data, headers,
+                   cache="max-age=31536000, immutable")
+
+    def _version_asset(self, m: re.Match) -> bytes:
+        """Замена src/href="/x.js" → "?v=<sha256 содержимого>" в index.html."""
+        url = m.group(2).decode("utf-8")
+        target = (STATIC_DIR / url.lstrip("/")).resolve(strict=False)
+        if not target.is_file():
+            return m.group(0)
+        try:
+            st = target.stat()
+        except OSError:
+            return m.group(0)
+        cached = _ASSET_VERSION_CACHE.get(str(target))
+        if cached is None or cached[0] != st.st_mtime_ns:
+            try:
+                ver = hashlib.sha256(target.read_bytes()).hexdigest()[:12]
+            except OSError:
+                return m.group(0)
+            _ASSET_VERSION_CACHE[str(target)] = (st.st_mtime_ns, ver)
+        else:
+            ver = cached[1]
+        return m.group(1) + url.encode() + f"?v={ver}".encode() + m.group(3)
 
     # ── HTTP-методы ────────────────────────────────────────────
     do_GET = _dispatch
