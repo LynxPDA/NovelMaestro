@@ -132,6 +132,7 @@ def test_process_batch_one_pass(monkeypatch):
              (1, "f", "d", "продолжение главы")]
     out = FE.process_batch(batch, "П1", "П2", False, "h", "m", "k",
                            1, 10, 10, None, None, SilentLog())
+    assert out is not None
     assert len(out) == 1 and out[0]["chapter"] == 1
     assert len(calls) == 1  # только P1
 
@@ -147,6 +148,7 @@ def test_process_batch_two_pass(monkeypatch):
     batch = [(1, "f", "d", "Глава 1\nааааа")]
     out = FE.process_batch(batch, "П1", "П2", True, "h", "m", "k",
                            1, 10, 10, None, None, SilentLog())
+    assert out is not None
     assert len(out) == 1 and out[0]["status"] == "confirmed"
 
 
@@ -197,7 +199,8 @@ def test_load_review_file_legacy_and_doc(tmp_path):
                               "type": "typo", "reason": "r"}],
                             ensure_ascii=False), encoding="utf-8")
     meta, entries = FE.load_review_file(str(p), SilentLog())
-    assert meta is None and len(entries) == 1
+    assert meta is None and entries is not None
+    assert len(entries) == 1
     assert entries[0]["status"] == C.REVIEW_ACCEPT
     # полный документ: статусы, применено и неизвестные записи
     doc = {"created": "x", "entries": [
@@ -212,6 +215,7 @@ def test_load_review_file_legacy_and_doc(tmp_path):
     p2 = tmp_path / "rev2.json"
     p2.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     _, e2 = FE.load_review_file(str(p2), SilentLog())
+    assert e2 is not None
     assert len(e2) == 2
     assert e2[0]["status"] == C.REVIEW_REJECT
     assert e2[1]["applied"] is True and e2[1]["applied_at"]

@@ -607,8 +607,8 @@ def llm_request(
     """Делегирует в единый стрим core.common.stream_chat_completion
     ([DONE]/finish_reason, loop-детект, cut, empty — одна гигиена на проект).
     max_tokens=65536 — исторический предел wiki (ТОКЕНЫ, серверный
-    предохранитель). thinking по умолчанию "none": генерация вики не
-    требует рассуждений; --thinking задаёт усилие."""
+    предохранитель). thinking: пусто = не передаём (дефолт сервера),
+    задано — шлём как есть (none = явное отключение)."""
     text, _err = stream_chat_completion(
         base_url, model,
         [{"role": "system", "content": system_prompt},
@@ -618,7 +618,7 @@ def llm_request(
         timeout=timeout,
         stream_timeout=timeout,
         temperature=temperature,
-        reasoning_effort=thinking or "none",
+        reasoning_effort=thinking,
         max_tokens=65536,
         logger=logger,
         label="[wiki]",
@@ -1338,7 +1338,7 @@ def main():
         help=(
             "Режим (усилие) размышления модели (reasoning effort). "
             "Варианты: none/minimal/low/medium/high/xhigh/max. "
-            "По умолчанию none — генерация вики без рассуждений."
+            "По умолчанию не задаётся (сервер использует свой дефолт)."
         ),
     )
 
@@ -1575,7 +1575,7 @@ def main():
          f"Exclude: {exclude_types or 'нет'} | "
          f"Co-occur: {args.co_occurrence_pairs or 'выкл'} | "
          f"NEAR: {args.near_distance} | "
-         f"Thinking: {args.thinking or 'none'} | "
+         f"Thinking: {args.thinking or 'сервер'} | "
          f"Rulate: {'html' if rulate_html else ('md' if rulate else 'off')} | "
          f"TOC: {'on' if args.toc else 'off'}/links: "
          f"{'on' if args.toc_links else 'off'} | "
