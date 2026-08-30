@@ -607,6 +607,19 @@ def _has_compiled(pdir: Path) -> bool:
     return False
 
 
+def _artifact_ready(d: Path, names: set[str], canon: str,
+                    legacy_suffix: str) -> bool:
+    """Артефакт стадии готов: файл есть И не пустой (> 0 байт)."""
+    for n in names:
+        if n == canon or n.endswith(legacy_suffix):
+            try:
+                if (d / n).stat().st_size > 0:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def project_stats(pdir: Path) -> str:
     """Краткая строка состояния проекта: главы, артефакты, ner/wiki.
 
@@ -667,12 +680,10 @@ def project_progress_table(pdir: Path) -> dict:
             if cid is None:
                 continue
             names = {f.name for f in d.iterdir() if f.is_file()}
-            tr = ("translated.txt" in names
-                  or any(n.endswith("_translated.txt") for n in names))
-            rd = ("redacted.txt" in names
-                  or any(n.endswith("_redacted.txt") for n in names))
-            pl = ("polished.txt" in names
-                  or any(n.endswith("_polished.txt") for n in names))
+            tr = _artifact_ready(d, names, "translated.txt",
+                                 "_translated.txt")
+            rd = _artifact_ready(d, names, "redacted.txt", "_redacted.txt")
+            pl = _artifact_ready(d, names, "polished.txt", "_polished.txt")
             chapters[cid] = {"translate": tr, "redact": rd, "polish": pl}
             counts["chapters"] += 1
             if tr:

@@ -692,3 +692,25 @@ def test_project_progress_table_legacy_names(tmp_path):
     st = P.project_progress_table(pdir)
     assert st["chapters"][770]["translate"] is True
     assert st["chapters"][770]["redact"] is False
+
+
+def test_project_progress_table_empty_artifact_not_done(tmp_path):
+    """Пустой артефакт (0 байт) НЕ считается готовым: галочка только
+    при непустом файле (канон и легаси-суффикс)."""
+    pdir = tmp_path / "proj"
+    (pdir / "chapters" / "001").mkdir(parents=True)
+    (pdir / "chapters" / "002").mkdir()
+    (pdir / "chapters" / "003").mkdir()
+    # 001: пустой translated.txt — не готов; 002: непустой — готов;
+    # 003: пустой легаси-файл — не готов, непустой polished — готов
+    (pdir / "chapters" / "001" / "translated.txt").write_text("", encoding="utf-8")
+    (pdir / "chapters" / "002" / "translated.txt").write_text("t", encoding="utf-8")
+    (pdir / "chapters" / "003" / "003_redacted.txt").write_text("", encoding="utf-8")
+    (pdir / "chapters" / "003" / "003_polished.txt").write_text("p", encoding="utf-8")
+    st = P.project_progress_table(pdir)
+    assert st["chapters"][1]["translate"] is False  # пустой файл
+    assert st["chapters"][2]["translate"] is True
+    assert st["chapters"][3]["redact"] is False  # пустой легаси
+    assert st["chapters"][3]["polish"] is True
+    assert st["counts"] == {"chapters": 3, "translate": 1, "redact": 0,
+                             "polish": 1}
