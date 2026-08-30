@@ -1212,14 +1212,12 @@ def test_build_translate_check_llm_flags():
     assert "--apply" not in argv and "--auto-apply" not in argv
     assert "--no-bak" not in argv
     assert "--reasoning_effort" in argv and "low" in argv
-    assert "--no_reasoning" not in argv
     assert "--threads" in argv and "--max_fixes_per_chapter" in argv
 
-    # none в text-поле = --no_reasoning
+    # none в text-поле = --reasoning_effort none (флаг --no_reasoning убран)
     form2 = dict(form, reasoning_effort="none")
     argv2 = build_command("translate_check_llm", form2, {})
-    assert "--no_reasoning" in argv2
-    assert "--reasoning_effort" not in argv2
+    assert "--reasoning_effort" in argv2 and "none" in argv2
     # произвольные значения (xhigh/max) передаются как есть
     form3 = dict(form, reasoning_effort="xhigh")
     argv3 = build_command("translate_check_llm", form3, {})

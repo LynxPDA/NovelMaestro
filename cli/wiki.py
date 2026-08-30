@@ -607,8 +607,8 @@ def llm_request(
     """Делегирует в единый стрим core.common.stream_chat_completion
     ([DONE]/finish_reason, loop-детект, cut, empty — одна гигиена на проект).
     max_tokens=65536 — исторический предел wiki (ТОКЕНЫ, серверный
-    предохранитель). enable_reasoning=False: wiki шлёт reasoning_effort="none"
-    (генерация вики не требует рассуждений); --thinking добавляет effort."""
+    предохранитель). thinking по умолчанию "none": генерация вики не
+    требует рассуждений; --thinking задаёт усилие."""
     text, _err = stream_chat_completion(
         base_url, model,
         [{"role": "system", "content": system_prompt},
@@ -618,8 +618,7 @@ def llm_request(
         timeout=timeout,
         stream_timeout=timeout,
         temperature=temperature,
-        reasoning_effort=thinking,
-        enable_reasoning=False,
+        reasoning_effort=thinking or "none",
         max_tokens=65536,
         logger=logger,
         label="[wiki]",
@@ -1303,10 +1302,6 @@ def main():
         help="Модель: --model или MODEL/WIKI_MODEL в .env (обязательна).",
     )
     g_llm.add_argument(
-        "--no_reasoning", action="store_true",
-        help="Отключить рассуждения (reasoning_effort=none).",
-    )
-    g_llm.add_argument(
         "--env_file", default=None, help="Явный путь к .env.",
     )
     g_llm.add_argument(
@@ -1342,9 +1337,8 @@ def main():
         metavar="LEVEL",
         help=(
             "Режим (усилие) размышления модели (reasoning effort). "
-            "Варианты: none/minimal/low/medium/high/xhigh/max "
-            "(none — отключить). "
-            "По умолчанию не задаётся (сервер использует свой дефолт)."
+            "Варианты: none/minimal/low/medium/high/xhigh/max. "
+            "По умолчанию none — генерация вики без рассуждений."
         ),
     )
 
@@ -1453,8 +1447,6 @@ def main():
         return
 
     # ── Модель ──
-    if args.no_reasoning:
-        args.thinking = None  # disable в select = --no_reasoning
     base_url = args.host.rstrip("/")
     if not base_url.endswith("/v1"):
         base_url += "/v1"
@@ -1583,7 +1575,7 @@ def main():
          f"Exclude: {exclude_types or 'нет'} | "
          f"Co-occur: {args.co_occurrence_pairs or 'выкл'} | "
          f"NEAR: {args.near_distance} | "
-         f"Thinking: {args.thinking or 'сервер'} | "
+         f"Thinking: {args.thinking or 'none'} | "
          f"Rulate: {'html' if rulate_html else ('md' if rulate else 'off')} | "
          f"TOC: {'on' if args.toc else 'off'}/links: "
          f"{'on' if args.toc_links else 'off'} | "

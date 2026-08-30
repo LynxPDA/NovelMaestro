@@ -440,7 +440,7 @@ def build_batches(chapters, budget, logger):
 
 def query_llm_raw(user_msg, sys_prompt, base_url, model, api_key,
                   max_retries, timeout, stream_timeout, temperature,
-                  reasoning_effort, enable_reasoning, logger, label=""):
+                  reasoning_effort, logger, label=""):
     """Делегирует в единый стрим-запрос core.common
     (loop-детект, [DONE], cut, empty — одна реализация на проект).
     max_tokens=32768 — исторический предел (ТОКЕНЫ, серверный
@@ -455,7 +455,6 @@ def query_llm_raw(user_msg, sys_prompt, base_url, model, api_key,
         stream_timeout=stream_timeout,
         temperature=temperature,
         reasoning_effort=reasoning_effort,
-        enable_reasoning=enable_reasoning,
         max_tokens=32768,
         logger=logger,
         label=label,
@@ -562,7 +561,7 @@ def apply_safety(errors, max_fix, min_len, max_chars, logger):
 
 def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
                   retries, timeout, stream_timeout, temperature,
-                  reasoning_effort, enable_reasoning, logger, retry_empty=0):
+                  reasoning_effort, logger, retry_empty=0):
     ch_counts = defaultdict(int)
     for c in batch:
         ch_counts[c[0]] += 1
@@ -582,7 +581,7 @@ def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
     for att in range(1 + retry_empty):
         raw = query_llm_raw(text, p1, base_url, model, api_key,
                             retries, timeout, stream_timeout, temperature,
-                            reasoning_effort, enable_reasoning, logger, "[P1]")
+                            reasoning_effort, logger, "[P1]")
         if raw is None:
             return None   # ошибка LLM → fail-fast на уровне прогона
         parsed = parse_llm_json(raw, logger)
@@ -600,7 +599,7 @@ def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
     user2 = f"=== ОРИГИНАЛЬНЫЙ ТЕКСТ ===\n{text}\n\n=== НАЙДЕННЫЕ ОШИБКИ ===\n{ej}"
     raw2 = query_llm_raw(user2, p2, base_url, model, api_key,
                          retries, timeout, stream_timeout, temperature,
-                         reasoning_effort, enable_reasoning, logger, "[P2]")
+                         reasoning_effort, logger, "[P2]")
     if raw2 is None:
         logger.warning("[P2] Нет ответа, использую P1.")
         return errors1
@@ -826,9 +825,8 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                     choices=["none", "minimal", "low", "medium", "high",
                              "xhigh", "max"],
                     help="Усилия рассуждения модели: none/minimal/low/"
-                         "medium/high/xhigh/max (пусто = сервер).")
-    ap.add_argument("--no_reasoning", action="store_true",
-                    help="Отключить рассуждения (reasoning_effort=none).")
+                         "medium/high/xhigh/max (пусто = сервер; "
+                         "none — отключить).")
     ap.add_argument("--max_retries", type=int, default=3,
                     help="Попытки на запрос (default: 3).")
     ap.add_argument("--timeout", type=int, default=120,
@@ -987,7 +985,6 @@ def do_check(args, logger) -> int:
     all_errors = []
     done_cnt = [0]
     failed_cnt = [0]
-    enable_re = not args.no_reasoning
 
     def worker(idx, batch):
         nums = [c[0] for c in batch]
@@ -999,7 +996,7 @@ def do_check(args, logger) -> int:
         errs = process_batch(
             batch, p1, p2, args.two_pass, base_url, model_name, api_key,
             args.max_retries, args.timeout, args.stream_timeout,
-            args.temperature, args.reasoning_effort, enable_re,
+            args.temperature, args.reasoning_effort,
             logger, retry_empty=args.retry_empty)
         if errs is None:
             with lock:

@@ -212,7 +212,6 @@ def process_item(internal_id, original_text, draft_text, ctx):
         stream_timeout=ctx["stream_timeout"],
         temperature=ctx["temperature"],
         reasoning_effort=ctx["reasoning_effort"],
-        enable_reasoning=ctx["enable_reasoning"],
         min_len_ratio=ctx["min_len_ratio"],
         reference_len=len(reference),
         logger=ctx["logger"],
@@ -300,8 +299,6 @@ def build_parser():
                    help="Коэффициент жёсткого лимита чанка.")
     # Генерация
     p.add_argument("--threads", type=int, default=1, help="Потоки (1..N).")
-    p.add_argument("--no_reasoning", action="store_true",
-                   help="Отключить рассуждения (reasoning_effort=none).")
     p.add_argument("--temperature", type=float, default=None,
                    help="Температура (иначе — дефолт сервера).")
     p.add_argument("--reasoning_effort", type=str, default=None,
@@ -466,7 +463,6 @@ def main(argv=None):
                      else preset["max_retries"]),
         timeout=args.timeout, stream_timeout=args.stream_timeout,
         temperature=args.temperature, reasoning_effort=args.reasoning_effort,
-        enable_reasoning=not args.no_reasoning,
         min_len_ratio=(args.min_len_ratio if args.min_len_ratio is not None
                        else preset["min_len_ratio"]),
         logger=logger,

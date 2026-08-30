@@ -879,7 +879,7 @@ def _retry_wait(attempt: int, resp=None) -> float:
 def stream_chat_completion(
     base_url, model, messages, api_key="",
     max_retries=3, timeout=300, stream_timeout=900,
-    temperature=None, reasoning_effort=None, enable_reasoning=True,
+    temperature=None, reasoning_effort=None,
     max_tokens=65536, min_len_ratio=0.0, reference_len=0,
     logger=None, label="",
 ):
@@ -887,7 +887,9 @@ def stream_chat_completion(
     Возвращает (text | None, error_str).
     Гигиена: [DONE]/finish_reason, детект зацикливания, обрезка max_tokens,
     пустой ответ, min_len_ratio к reference_len (в символах).
-    max_tokens — серверный предел (ТОКЕНЫ), всё остальное — символы."""
+    max_tokens — серверный предел (ТОКЕНЫ), всё остальное — символы.
+    reasoning_effort: None — поле не шлём (дефолт сервера); строка —
+    шлём как есть (в т.ч. "none" — отключение рассуждений)."""
     url = f"{base_url}/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -895,20 +897,11 @@ def stream_chat_completion(
     payload = {"model": model, "messages": messages,
                "stream": True, "max_tokens": max_tokens}
     if reasoning_effort:
-        # явный effort (в т.ч. "none") приоритетнее дефолта enable_reasoning:
-        # ner/wiki держат enable_reasoning=False, но --reasoning-effort
-        # должен включать/настраивать рассуждения
+        # единый OpenAI-совместимый способ: значение (в т.ч. "none" —
+        # отключение рассуждений) понимают OpenAI API, llama.cpp,
+        # OpenRouter/Bothub пробрасывают провайдеру; None — ничего не
+        # шлём (дефолт сервера)
         payload["reasoning_effort"] = reasoning_effort
-    elif not enable_reasoning:
-        # явное отключение рассуждений — единый OpenAI-совместимый способ:
-        # reasoning_effort="none" понимают OpenAI API (валидное значение),
-        # llama.cpp (выключает thinking), OpenRouter/Bothub пробрасывают
-        # провайдеру; пропуск поля НЕ отключает reasoning у моделей,
-        # которые думают по умолчанию
-        payload["reasoning_effort"] = "none"
-    # enable_reasoning=True без effort — ничего не шлём (дефолт сервера);
-    # структурированное reasoning:{enabled:...} не шлём вовсе: его не
-    # знают строгие OpenAI-совместимые серверы (llama.cpp его стирает)
     if temperature is not None:
         payload["temperature"] = temperature
 

@@ -115,7 +115,7 @@ def test_query_llm_raw_delegates(monkeypatch):
 
     monkeypatch.setattr(FE, "stream_chat_completion", fake_stream)
     out = FE.query_llm_raw("ю", "с", "h", "m", "k", 2, 30, 60, None,
-                           None, True, SilentLog(), "[X]")
+                           None, SilentLog(), "[X]")
     assert out == "ОТВЕТ"
     assert seen["n"] == 2 and seen["kw"]["max_tokens"] == 32768
 
@@ -131,7 +131,7 @@ def test_process_batch_one_pass(monkeypatch):
     batch = [(1, "f", "d", "Глава 1\nфрагмент длинный"),
              (1, "f", "d", "продолжение главы")]
     out = FE.process_batch(batch, "П1", "П2", False, "h", "m", "k",
-                           1, 10, 10, None, None, True, SilentLog())
+                           1, 10, 10, None, None, SilentLog())
     assert len(out) == 1 and out[0]["chapter"] == 1
     assert len(calls) == 1  # только P1
 
@@ -146,7 +146,7 @@ def test_process_batch_two_pass(monkeypatch):
     monkeypatch.setattr(FE, "query_llm_raw", lambda *a, **k: next(answers))
     batch = [(1, "f", "d", "Глава 1\nааааа")]
     out = FE.process_batch(batch, "П1", "П2", True, "h", "m", "k",
-                           1, 10, 10, None, None, True, SilentLog())
+                           1, 10, 10, None, None, SilentLog())
     assert len(out) == 1 and out[0]["status"] == "confirmed"
 
 
@@ -155,11 +155,11 @@ def test_process_batch_failures(monkeypatch):
     monkeypatch.setattr(FE, "query_llm_raw", lambda *a, **k: None)
     batch = [(1, "f", "d", "текст")]
     assert FE.process_batch(batch, "П1", "П2", True, "h", "m", "k",
-                            1, 10, 10, None, None, True, SilentLog()) is None
+                            1, 10, 10, None, None, SilentLog()) is None
     # P1 вернул не-JSON → retry_empty исчерпан → пусто
     monkeypatch.setattr(FE, "query_llm_raw", lambda *a, **k: "мусор")
     assert FE.process_batch(batch, "П1", "П2", False, "h", "m", "k",
-                            1, 10, 10, None, None, True, SilentLog(),
+                            1, 10, 10, None, None, SilentLog(),
                             retry_empty=1) == []
 
 

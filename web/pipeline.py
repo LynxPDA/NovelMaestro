@@ -276,7 +276,7 @@ def warn_missing_prompt_tag(prompt_file: str, stage: int, log) -> bool:
 def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     host: str, api_key: str, model: str,
                     timeout: int, temperature=None, reasoning_effort=None,
-                    no_reasoning=False, stream_timeout=None,
+                    stream_timeout=None,
                     threads: int = 1, prompt_file: str = "") -> list[str]:
     # единая модель конвейера (PIPELINE_MODEL → MODEL) — без
     # отдельных моделей под translate/redact/polish
@@ -296,8 +296,6 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
         common += ["--temperature", str(temperature)]
     if reasoning_effort:
         common += ["--reasoning_effort", str(reasoning_effort)]
-    if no_reasoning:
-        common.append("--no_reasoning")
     # общий промпт-файл — только если задан (пусто = встроенный)
     if prompt_file:
         common += ["--prompt_file", prompt_file]
@@ -340,7 +338,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     timeout: int, log: logging.Logger,
                     tracker: Tracker,
                     temperature=None, reasoning_effort=None,
-                    no_reasoning=False, stream_timeout=None,
+                    stream_timeout=None,
                     threads: int = 1,
                     prompts: dict[int, str] | None = None,
                     polish_in: str | None = None) -> bool:
@@ -367,7 +365,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
             cmd = build_stage_cmd(stage, script, in_file, out_file,
                                   host, api_key, model, timeout,
                                   temperature, reasoning_effort,
-                                  no_reasoning, stream_timeout,
+                                  stream_timeout,
                                   threads,
                                   prompt_file=(prompts or {}).get(stage) or "")
             proc_env = dict(os.environ)
@@ -491,8 +489,6 @@ def main() -> None:
                              "xhigh", "max"],
                     help="Усилия рассуждений: none/minimal/low/medium/"
                          "high/xhigh/max (none — отключить)")
-    ap.add_argument("--no_reasoning", action="store_true",
-                    help="Отключить рассуждения (reasoning_effort=none)")
     ap.add_argument("--host", default="", help="URL LLM-сервера (пусто = HOST из .env)")
     ap.add_argument("--api_key", default="", help="API-ключ (argv — только для тестов; в web идёт через LLM_API_KEY)")
     ap.add_argument("--model", default="",
@@ -641,7 +637,7 @@ def main() -> None:
             pool.submit(process_chapter, cid, dirs, script, stages,
                         host, api_key, model, args.timeout, log, tracker,
                         args.temperature, args.reasoning_effort,
-                        args.no_reasoning, args.stream_timeout,
+                        args.stream_timeout,
                         args.threads, prompts,
                         polish_in=action_spec.get("polish_input")): cid
             for cid, dirs in to_process.items()

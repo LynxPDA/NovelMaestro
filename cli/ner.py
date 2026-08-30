@@ -579,8 +579,8 @@ def llm_request(
     """Делегирует в единый стрим core.common.stream_chat_completion
     ([DONE]/finish_reason, loop-детект, cut, empty — одна гигиена на проект).
     max_tokens=65536 — исторический предел NER (ТОКЕНЫ, серверный
-    предохранитель). enable_reasoning=False: NER шлёт reasoning_effort="none"
-    (извлечение терминов не требует рассуждений — быстрее и дешевле)."""
+    предохранитель). reasoning_effort по умолчанию "none": извлечение
+    терминов не требует рассуждений — быстрее и дешевле."""
     text, _err = stream_chat_completion(
         base_url, model,
         [{"role": "system", "content": system_prompt},
@@ -590,8 +590,7 @@ def llm_request(
         timeout=timeout,
         stream_timeout=timeout,
         temperature=temperature,
-        reasoning_effort=reasoning_effort,
-        enable_reasoning=False,
+        reasoning_effort=reasoning_effort or "none",
         max_tokens=65536,
         logger=logger,
         label="[NER]",
@@ -1407,10 +1406,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Модель: --model или MODEL/NER_MODEL в .env (обязательна).",
     )
     parser.add_argument(
-        "--no_reasoning", action="store_true",
-        help="Отключить рассуждения (reasoning_effort=none).",
-    )
-    parser.add_argument(
         "--env_file", default=None, help="Явный путь к .env.",
     )
     parser.add_argument(
@@ -1433,8 +1428,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--reasoning-effort", type=str, default=None,
         help=(
             "Уровень усилий размышления модели (reasoning effort): "
-            "none/minimal/low/medium/high/xhigh/max (none — отключить). "
-            "Передаётся в запрос как есть. По умолчанию не отправляется."
+            "none/minimal/low/medium/high/xhigh/max. "
+            "По умолчанию none — извлечение терминов без рассуждений."
         ),
     )
     parser.add_argument(
@@ -1622,8 +1617,6 @@ def main():
     if not base_url.endswith("/v1"):
         base_url += "/v1"
 
-    if args.no_reasoning:
-        args.reasoning_effort = None  # disable в select = --no_reasoning
     try:
         model_name = determine_model(args.model, logger)
     except SystemExit:

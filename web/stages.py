@@ -240,9 +240,7 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
     re_effort = form.get("reasoning_effort")
-    if re_effort == "none":
-        argv.append("--no_reasoning")
-    elif re_effort not in (None, ""):
+    if re_effort not in (None, ""):
         argv += ["--reasoning_effort", str(re_effort)]
     # единый общий промпт-файл (теги <translate>/<redact>/<polish>);
     # пусто = авто (кандидат с тегами из prompts/)
@@ -288,9 +286,7 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
             argv += ["--ngram", str(form["ngram"])]
         if form.get("temperature") not in (None, ""):
             argv += ["--temperature", str(form["temperature"])]
-        if form.get("reasoning") == "none":
-            argv.append("--no_reasoning")
-        elif form.get("reasoning"):
+        if form.get("reasoning") not in (None, ""):
             argv += ["--reasoning-effort", str(form["reasoning"])]
         if form.get("two_pass"):
             argv.append("--two-pass")
@@ -335,9 +331,7 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
     re_effort = form.get("reasoning_effort")
-    if re_effort == "none":
-        argv.append("--no_reasoning")
-    elif re_effort not in (None, ""):
+    if re_effort not in (None, ""):
         argv += ["--reasoning_effort", str(re_effort)]
     if form.get("max_tokens") not in (None, ""):
         argv += ["--max_tokens", str(form["max_tokens"])]
@@ -377,9 +371,7 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
         argv += ["--prompt_file", str(form["prompt_file"])]
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
-    if form.get("reasoning_effort") == "none":
-        argv.append("--no_reasoning")
-    elif form.get("reasoning_effort"):
+    if form.get("reasoning_effort") not in (None, ""):
         argv += ["--reasoning_effort", str(form["reasoning_effort"])]
     for name, flag in (("max_retries", "--max_retries"),
                        ("timeout", "--timeout"),
@@ -456,9 +448,7 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
         argv += ["--co-occurrence-pairs", str(form["co_occurrence_pairs"])]
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
-    if form.get("thinking") == "none":
-        argv.append("--no_reasoning")
-    elif form.get("thinking"):
+    if form.get("thinking") not in (None, ""):
         argv += ["--thinking", str(form["thinking"])]
     argv += _llm_argv(form, ctx, "wiki")
     return argv

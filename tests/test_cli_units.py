@@ -196,7 +196,7 @@ def test_ner_llm_request_delegates(monkeypatch):
                           "ключ", 3, 300, 0.1, SilentLog())
     assert out == "ОТВЕТ"
     assert seen["messages"][0]["role"] == "system"
-    assert seen["enable_reasoning"] is False
+    assert seen["reasoning_effort"] == "none"  # NER по умолчанию без рассуждений
     assert seen["max_tokens"] == 65536
 
 

@@ -88,7 +88,7 @@ def _ctx(mode):
         "include_aliases": False, "prompt": "{ner_block}|{original_text}|{translated_text}",
         "base_url": "http://h", "model": "m", "api_key": "",
         "max_retries": 1, "timeout": 10, "stream_timeout": 10,
-        "temperature": None, "reasoning_effort": None, "enable_reasoning": True,
+        "temperature": None, "reasoning_effort": None,
         "min_len_ratio": 0.0, "logger": SilentLog(),
     }
 

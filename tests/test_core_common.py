@@ -944,7 +944,7 @@ def test_stream_success(monkeypatch, variant):
     assert cap["json"]["stream"] is True
     assert cap["json"]["model"] == "m"
     assert cap["json"]["max_tokens"] == 65536
-    # enable_reasoning по умолчанию: никаких reasoning-полей — дефолт сервера
+    # reasoning_effort не задан: никаких reasoning-полей — дефолт сервера
     # (структурированное reasoning:{...} не шлём: его не знают строгие серверы)
     assert "reasoning" not in cap["json"]
     assert "reasoning_effort" not in cap["json"]
@@ -964,24 +964,23 @@ def test_stream_payload_options(monkeypatch):
     assert cap["json"]["max_tokens"] == 1024
 
 
-def test_stream_reasoning_disabled(monkeypatch):
-    """enable_reasoning=False → reasoning_effort="none" — единый
-    OpenAI-совместимый способ отключить рассуждения (OpenAI, llama.cpp,
-    OpenRouter/Bothub пробрасывают провайдеру)."""
+def test_stream_reasoning_effort_none(monkeypatch):
+    """reasoning_effort="none" — единый OpenAI-совместимый способ
+    отключить рассуждения (OpenAI, llama.cpp, OpenRouter/Bothub
+    пробрасывают провайдеру)."""
     cap = {}
     _patch_post(monkeypatch, _sse(["ок"]), capture=cap)
     C.stream_chat_completion("http://h/v1", "m", [],
-                             enable_reasoning=False)
+                             reasoning_effort="none")
     assert cap["json"]["reasoning_effort"] == "none"
     assert "reasoning" not in cap["json"]
 
-    # явный effort приоритетнее дефолта enable_reasoning=False
-    # (ner/wiki держат False, но --reasoning-effort должен работать)
+    # пустой effort = поле не шлём (дефолт сервера)
     cap2 = {}
     _patch_post(monkeypatch, _sse(["ок"]), capture=cap2)
-    C.stream_chat_completion("http://h/v1", "m", [],
-                             enable_reasoning=False, reasoning_effort="low")
-    assert cap2["json"]["reasoning_effort"] == "low"
+    C.stream_chat_completion("http://h/v1", "m", [], reasoning_effort=None)
+    assert "reasoning_effort" not in cap2["json"]
+    assert "reasoning" not in cap2["json"]
 
 
 def test_stream_cut_by_max_tokens(monkeypatch):

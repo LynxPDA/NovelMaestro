@@ -203,9 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["none", "minimal", "low", "medium", "high",
                             "xhigh", "max"],
                    help="Усилия рассуждений: none/minimal/low/medium/"
-                        "high/xhigh/max (пусто = сервер).")
-    p.add_argument("--no_reasoning", action="store_true",
-                   help="Отключить рассуждения (reasoning_effort=none).")
+                        "high/xhigh/max (пусто = сервер; none — отключить).")
     p.add_argument("--max_tokens", type=int, default=65536,
                    help="Серверный предел ответа, ТОКЕНЫ (не расчёт).")
     p.add_argument("--timeout", type=int, default=300)
@@ -318,7 +316,6 @@ def run_pass(title, items, prompt_tpl, args, base_url, api_key, model,
             timeout=args.timeout, stream_timeout=args.stream_timeout,
             temperature=args.temperature,
             reasoning_effort=args.reasoning_effort,
-            enable_reasoning=not args.no_reasoning,
             max_tokens=args.max_tokens,
             reference_len=0, logger=logger,
             label=f"ner_check {title} {bi}/{len(batches)}")
