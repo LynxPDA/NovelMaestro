@@ -200,10 +200,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--temperature", type=float, default=None,
                    help="Температура LLM (пусто = сервер).")
     p.add_argument("--reasoning_effort", default=None,
-                   choices=["low", "medium", "high"],
-                   help="Усилия рассуждений (low/medium/high).")
+                   choices=["none", "minimal", "low", "medium", "high",
+                            "xhigh", "max"],
+                   help="Усилия рассуждений: none/minimal/low/medium/"
+                        "high/xhigh/max (пусто = сервер).")
     p.add_argument("--no_reasoning", action="store_true",
-                   help="Не слать reasoning-поле в payload.")
+                   help="Отключить рассуждения (reasoning_effort=none).")
     p.add_argument("--max_tokens", type=int, default=65536,
                    help="Серверный предел ответа, ТОКЕНЫ (не расчёт).")
     p.add_argument("--timeout", type=int, default=300)

@@ -579,8 +579,8 @@ def llm_request(
     """Делегирует в единый стрим core.common.stream_chat_completion
     ([DONE]/finish_reason, loop-детект, cut, empty — одна гигиена на проект).
     max_tokens=65536 — исторический предел NER (ТОКЕНЫ, серверный
-    предохранитель). enable_reasoning=False: NER исторически не слал
-    поле reasoning в payload."""
+    предохранитель). enable_reasoning=False: NER шлёт reasoning_effort="none"
+    (извлечение терминов не требует рассуждений — быстрее и дешевле)."""
     text, _err = stream_chat_completion(
         base_url, model,
         [{"role": "system", "content": system_prompt},
@@ -1408,7 +1408,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--no_reasoning", action="store_true",
-        help="Не слать reasoning-поле в payload.",
+        help="Отключить рассуждения (reasoning_effort=none).",
     )
     parser.add_argument(
         "--env_file", default=None, help="Явный путь к .env.",
@@ -1432,7 +1432,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reasoning-effort", type=str, default=None,
         help=(
-            "Уровень усилий размышления модели (например: low, medium, high). "
+            "Уровень усилий размышления модели (reasoning effort): "
+            "none/minimal/low/medium/high/xhigh/max (none — отключить). "
             "Передаётся в запрос как есть. По умолчанию не отправляется."
         ),
     )

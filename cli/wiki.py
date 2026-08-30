@@ -607,8 +607,8 @@ def llm_request(
     """Делегирует в единый стрим core.common.stream_chat_completion
     ([DONE]/finish_reason, loop-детект, cut, empty — одна гигиена на проект).
     max_tokens=65536 — исторический предел wiki (ТОКЕНЫ, серверный
-    предохранитель). enable_reasoning=False: wiki исторически не слал
-    поле reasoning (только reasoning_effort через --thinking)."""
+    предохранитель). enable_reasoning=False: wiki шлёт reasoning_effort="none"
+    (генерация вики не требует рассуждений); --thinking добавляет effort."""
     text, _err = stream_chat_completion(
         base_url, model,
         [{"role": "system", "content": system_prompt},
@@ -1304,7 +1304,7 @@ def main():
     )
     g_llm.add_argument(
         "--no_reasoning", action="store_true",
-        help="Не слать reasoning-поле в payload.",
+        help="Отключить рассуждения (reasoning_effort=none).",
     )
     g_llm.add_argument(
         "--env_file", default=None, help="Явный путь к .env.",
@@ -1337,11 +1337,13 @@ def main():
         "--thinking",
         type=str,
         default=None,
-        choices=["low", "medium", "high"],
+        choices=["none", "minimal", "low", "medium", "high",
+                 "xhigh", "max"],
         metavar="LEVEL",
         help=(
             "Режим (усилие) размышления модели (reasoning effort). "
-            "Варианты: low, medium, high. "
+            "Варианты: none/minimal/low/medium/high/xhigh/max "
+            "(none — отключить). "
             "По умолчанию не задаётся (сервер использует свой дефолт)."
         ),
     )

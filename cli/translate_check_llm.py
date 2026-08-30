@@ -823,10 +823,12 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
     ap.add_argument("--temperature", type=float, default=None,
                     help="Температура (иначе дефолт сервера).")
     ap.add_argument("--reasoning_effort", default=None,
-                    choices=["low", "medium", "high"],
-                    help="Усилия рассуждения модели.")
+                    choices=["none", "minimal", "low", "medium", "high",
+                             "xhigh", "max"],
+                    help="Усилия рассуждения модели: none/minimal/low/"
+                         "medium/high/xhigh/max (пусто = сервер).")
     ap.add_argument("--no_reasoning", action="store_true",
-                    help="Отключить reasoning-блок запроса.")
+                    help="Отключить рассуждения (reasoning_effort=none).")
     ap.add_argument("--max_retries", type=int, default=3,
                     help="Попытки на запрос (default: 3).")
     ap.add_argument("--timeout", type=int, default=120,

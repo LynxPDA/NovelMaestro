@@ -944,7 +944,10 @@ def test_stream_success(monkeypatch, variant):
     assert cap["json"]["stream"] is True
     assert cap["json"]["model"] == "m"
     assert cap["json"]["max_tokens"] == 65536
-    assert cap["json"]["reasoning"] == {"enabled": True}   # enable_reasoning по умолчанию
+    # enable_reasoning по умолчанию: никаких reasoning-полей — дефолт сервера
+    # (структурированное reasoning:{...} не шлём: его не знают строгие серверы)
+    assert "reasoning" not in cap["json"]
+    assert "reasoning_effort" not in cap["json"]
     assert "Authorization" not in cap["headers"]            # api_key пуст
 
 
@@ -959,6 +962,26 @@ def test_stream_payload_options(monkeypatch):
     assert "reasoning" not in cap["json"]                   # effort важнее
     assert cap["json"]["temperature"] == 0.2
     assert cap["json"]["max_tokens"] == 1024
+
+
+def test_stream_reasoning_disabled(monkeypatch):
+    """enable_reasoning=False → reasoning_effort="none" — единый
+    OpenAI-совместимый способ отключить рассуждения (OpenAI, llama.cpp,
+    OpenRouter/Bothub пробрасывают провайдеру)."""
+    cap = {}
+    _patch_post(monkeypatch, _sse(["ок"]), capture=cap)
+    C.stream_chat_completion("http://h/v1", "m", [],
+                             enable_reasoning=False)
+    assert cap["json"]["reasoning_effort"] == "none"
+    assert "reasoning" not in cap["json"]
+
+    # явный effort приоритетнее дефолта enable_reasoning=False
+    # (ner/wiki держат False, но --reasoning-effort должен работать)
+    cap2 = {}
+    _patch_post(monkeypatch, _sse(["ок"]), capture=cap2)
+    C.stream_chat_completion("http://h/v1", "m", [],
+                             enable_reasoning=False, reasoning_effort="low")
+    assert cap2["json"]["reasoning_effort"] == "low"
 
 
 def test_stream_cut_by_max_tokens(monkeypatch):

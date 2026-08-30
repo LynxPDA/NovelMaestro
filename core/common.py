@@ -895,9 +895,20 @@ def stream_chat_completion(
     payload = {"model": model, "messages": messages,
                "stream": True, "max_tokens": max_tokens}
     if reasoning_effort:
+        # явный effort (в т.ч. "none") приоритетнее дефолта enable_reasoning:
+        # ner/wiki держат enable_reasoning=False, но --reasoning-effort
+        # должен включать/настраивать рассуждения
         payload["reasoning_effort"] = reasoning_effort
-    elif enable_reasoning:
-        payload["reasoning"] = {"enabled": True}
+    elif not enable_reasoning:
+        # явное отключение рассуждений — единый OpenAI-совместимый способ:
+        # reasoning_effort="none" понимают OpenAI API (валидное значение),
+        # llama.cpp (выключает thinking), OpenRouter/Bothub пробрасывают
+        # провайдеру; пропуск поля НЕ отключает reasoning у моделей,
+        # которые думают по умолчанию
+        payload["reasoning_effort"] = "none"
+    # enable_reasoning=True без effort — ничего не шлём (дефолт сервера);
+    # структурированное reasoning:{enabled:...} не шлём вовсе: его не
+    # знают строгие OpenAI-совместимые серверы (llama.cpp его стирает)
     if temperature is not None:
         payload["temperature"] = temperature
 

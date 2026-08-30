@@ -487,10 +487,12 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=None,
                     help="Температура LLM (пусто = сервер)")
     ap.add_argument("--reasoning_effort", default=None,
-                    choices=["low", "medium", "high"],
-                    help="Усилия рассуждений (low/medium/high)")
+                    choices=["none", "minimal", "low", "medium", "high",
+                             "xhigh", "max"],
+                    help="Усилия рассуждений: none/minimal/low/medium/"
+                         "high/xhigh/max (none — отключить)")
     ap.add_argument("--no_reasoning", action="store_true",
-                    help="Не слать reasoning-поле в payload")
+                    help="Отключить рассуждения (reasoning_effort=none)")
     ap.add_argument("--host", default="", help="URL LLM-сервера (пусто = HOST из .env)")
     ap.add_argument("--api_key", default="", help="API-ключ (argv — только для тестов; в web идёт через LLM_API_KEY)")
     ap.add_argument("--model", default="",

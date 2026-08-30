@@ -301,11 +301,12 @@ def build_parser():
     # Генерация
     p.add_argument("--threads", type=int, default=1, help="Потоки (1..N).")
     p.add_argument("--no_reasoning", action="store_true",
-                   help="Отключить reasoning-блок запроса.")
+                   help="Отключить рассуждения (reasoning_effort=none).")
     p.add_argument("--temperature", type=float, default=None,
                    help="Температура (иначе — дефолт сервера).")
     p.add_argument("--reasoning_effort", type=str, default=None,
-                   help="Усилия рассуждения: low/medium/high.")
+                   help="Усилия рассуждения: none/minimal/low/medium/"
+                        "high/xhigh/max (none — отключить).")
     # Надёжность
     p.add_argument("--timeout", type=int, default=900,
                    help="Таймаут соединения, сек.")
