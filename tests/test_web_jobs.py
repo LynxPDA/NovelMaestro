@@ -1062,6 +1062,41 @@ def test_stage_spec_env_prefill_bool_on(jobs_srv, tmp_path):
     assert fields["strip_meta"]["default"] is True
 
 
+def test_stage_spec_env_prefill_global_fallback(jobs_srv, tmp_path,
+                                                 monkeypatch):
+    """Без pdir/.env форма предзаполняется из системного корневого .env
+    (канон find_env_file: подъём от папки проекта к корню репо) —
+    глобальный конфиг не теряется для свежих проектов."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    global_env = tmp_path / ".env"
+    global_env.write_text(
+        "MODEL=global-model\n"
+        "PIPELINE_JOBS=2\n",
+        encoding="utf-8")
+    import core.common as common
+
+    def fake_find(explicit=None, start_dir=None):
+        # от папки проекта поднимаемся к tmp_path/.env (глобальный)
+        if start_dir:
+            d = Path(start_dir)
+            for _ in range(6):
+                cand = d / ".env"
+                if cand.is_file():
+                    return str(cand)
+                d = d.parent
+        return str(global_env)
+
+    monkeypatch.setattr(common, "find_env_file", fake_find)
+    res, payload = req(
+        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    # глобальные MODEL → общая модель, PIPELINE_JOBS → дефолт формы
+    assert fields["model"]["default"] == "global-model"
+    assert fields["jobs"]["default"] == "2"
+
+
 def test_build_ner_modes():
     """extract / finetune (файл или --compile_chapters) / postprocess;
     режим compile из формы убран."""
