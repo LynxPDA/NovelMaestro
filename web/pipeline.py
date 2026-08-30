@@ -573,6 +573,32 @@ def main() -> None:
     action_spec = _ACTION_SPECS[args.action]
     stages = action_spec["stages"]
     action_label = action_spec["name"]
+    # общий лог запуска (канон run_pipeline.sh): один файл на запуск
+    # для ЛЮБОГО типа работы — logs/{Метка}_{start}-{end}_j{jobs}_{время}.log
+    # (детальные логи по главам — logs/chapters/ как раньше)
+    try:
+        short = {1: "Translate", 2: "Redact", 3: "Polish"}
+        common_label = "FullCycle" if stages == [1, 2, 3] \
+            else "".join(short[s] for s in stages)
+        logs_dir = Path("logs")
+        logs_dir.mkdir(exist_ok=True)
+        common_log = logs_dir / (
+            f"{common_label}_{start}-{end}_j{args.jobs}_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        )
+        # прошлый FileHandler от предыдущего запуска (тесты гоняют
+        # main() в одном процессе) — убрать, оставив stdout
+        for h in list(log.handlers):
+            if isinstance(h, logging.FileHandler):
+                log.removeHandler(h)
+        fh = logging.FileHandler(common_log, encoding="utf-8", mode="w")
+        fh.setFormatter(logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"))
+        log.addHandler(fh)
+        log.info("ОБЩИЙ ЛОГ  : %s", common_log)
+    except OSError as exc:
+        log.warning("Общий лог запуска не пишется: %s", exc)
     # промпт-файлы — явный общий файл > авто (первый кандидат с тегами
     # из prompts/); пусто = встроенные промпты translate_book.py
     prompts = resolve_prompt_paths(args.prompt_file)

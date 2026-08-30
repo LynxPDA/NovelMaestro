@@ -368,6 +368,32 @@ def test_pipeline_single_stage(tmp_path):
         assert (proj / "chapters" / f"{n:05d}_1" / "redacted.txt").is_file()
 
 
+def test_pipeline_common_log_file(tmp_path):
+    """Общий лог запуска пишется для ЛЮБОГО типа работы (не только
+    полный цикл): logs/{Метка}_{start}-{end}_j{jobs}_{время}.log
+    (канон run_pipeline.sh) + в файле есть заголовок ТИП РАБОТЫ."""
+    proj, fake = _make_project(tmp_path)
+    cmd = [sys.executable, str(PIPELINE), "--action", "1",
+           "--start", "1", "--end", "3", "--jobs", "2",
+           "--script", str(fake), *_PIPELINE_ARGS]
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       timeout=120, cwd=str(proj))
+    assert r.returncode == 0, r.stderr[-500:]
+    logs = list((proj / "logs").glob("Translate_1-3_j2_*.log"))
+    assert len(logs) == 1, [p.name for p in (proj / "logs").iterdir()]
+    body = logs[0].read_text(encoding="utf-8")
+    assert "ТИП РАБОТЫ : Перевод" in body
+    # полный цикл — своя метка FullCycle
+    cmd = [sys.executable, str(PIPELINE), "--action", "8",
+           "--start", "1", "--end", "3", "--jobs", "2",
+           "--script", str(fake), *_PIPELINE_ARGS]
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       timeout=120, cwd=str(proj))
+    assert r.returncode == 0, r.stderr[-500:]
+    logs = list((proj / "logs").glob("FullCycle_1-3_j2_*.log"))
+    assert len(logs) == 1, [p.name for p in (proj / "logs").iterdir()]
+
+
 def test_pipeline_fail_fast(tmp_path):
     """Ошибка стадии: returncode != 0 → ERROR-событие, exit != 0.
     C2 (AUDIT): провал всех глав — exit 1 (раньше тавтология давала 0)."""
