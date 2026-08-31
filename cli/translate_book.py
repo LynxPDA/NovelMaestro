@@ -16,8 +16,10 @@ max_tokens — серверный предохранитель (ТОКЕНЫ), �
 
 Промпты: --prompt_file БЕЗ тегов = промпт текущего режима (файл целиком);
 с тегами <translate>/<redact>/<polish> — один файл на все режимы.
-Плейсхолдеры: {ner_block} (все режимы); {original_text}, {translated_text}
-(только redact); {female_names}, {male_names} — женские/мужские имена из
+Плейсхолдеры: {ner_block} (все режимы); {original_text} — входной текст
+(translate/polish: нет тега — текст дописывается после промпта;
+redact: внутри <source_text>); {translated_text} (только redact);
+{female_names}, {male_names} — женские/мужские имена из
 ner.json (поле translation; пол по наличию (female)/(male) в type), ищутся
 в тексте чанка (основное назначение — polish).
 
@@ -82,6 +84,8 @@ DEFAULT_TRANSLATE_PROMPT = """<glossary>
 {ner_block}
 </glossary>
 Translate the following segment into Russian, without additional explanation.
+
+{original_text}
 """
 
 DEFAULT_REDACT_PROMPT = """# Role
@@ -196,11 +200,20 @@ def process_item(internal_id, original_text, draft_text, ctx):
                         .replace("{translated_text}", draft_text or ""))
         reference = draft_text or ""
     else:
-        user_content = (ctx["prompt"]
-                        .replace("{ner_block}", ner_block)
-                        .replace("{female_names}", female_block)
-                        .replace("{male_names}", male_block)
-                        + "\n\n" + original_text)
+        # translate/polish: {original_text} — тег-переменная (как в redact);
+        # нет тега — текст дописывается после промпта (обратная совместимость)
+        if "{original_text}" in ctx["prompt"]:
+            user_content = (ctx["prompt"]
+                            .replace("{ner_block}", ner_block)
+                            .replace("{female_names}", female_block)
+                            .replace("{male_names}", male_block)
+                            .replace("{original_text}", original_text))
+        else:
+            user_content = (ctx["prompt"]
+                            .replace("{ner_block}", ner_block)
+                            .replace("{female_names}", female_block)
+                            .replace("{male_names}", male_block)
+                            + "\n\n" + original_text)
         reference = original_text
 
     text, err = stream_chat_completion(
@@ -252,7 +265,10 @@ def build_parser():
   без тегов  = промпт текущего режима (файл целиком);
   с тегами   <translate>/<redact>/<polish> — один файл на все режимы.
   Плейсхолдеры: {ner_block} (все режимы),
-                {original_text}, {translated_text} (только redact),
+                {original_text} — входной текст (translate/polish:
+                  если тега нет — текст дописывается после промпта;
+                  redact: внутри <source_text>),
+                {translated_text} (только redact),
                 {female_names}, {male_names} — женские/мужские имена из
                 ner.json (translation; пол по (female)/(male) в type; без term)
                 для справочника полов в polish.

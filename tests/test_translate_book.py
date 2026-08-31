@@ -293,3 +293,58 @@ def test_main_polish_gender_placeholders(tmp_path, monkeypatch):
     assert "Байху" not in prompt_part                 # без пола — не имя
     # term (китайский) не попадает
     assert "廖停雁" not in prompt_part and "苏星宇" not in prompt_part
+
+
+def test_main_translate_original_text_placeholder(tmp_path, monkeypatch):
+    """translate: {original_text} в промпте заменяется текстом чанка;
+    без тега текст дописывается после промпта (обратная совместимость)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ch.txt").write_text("第一章 神秘道种\n苏星宇睁开了眼。",
+                                     encoding="utf-8")
+    (tmp_path / "prompt.txt").write_text(
+        "<translate>\nПереведи:\n{original_text}\n</translate>",
+        encoding="utf-8")
+    captured = {}
+
+    def fake_stream(base_url, model, messages, **kw):
+        captured["content"] = messages[0]["content"]
+        return ("ПЕРЕВОД", "")
+
+    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
+             "--prompt_file", "prompt.txt", "--threads", "1"])
+    out = (tmp_path / "translated_book.txt").read_text(encoding="utf-8")
+    assert out == "ПЕРЕВОД\n"
+    content = captured["content"]
+    # тег заменён ровно один раз, литерала нет
+    assert "{original_text}" not in content
+    assert content.count("第一章 神秘道种") == 1
+    # текст внутри тега, а не дописанным хвостом
+    assert content.strip().endswith("苏星宇睁开了眼。")
+    # перевод не задваивается: в промпте нет второго вхождения чанка
+    assert content.count("苏星宇睁开了眼。") == 1
+
+
+def test_main_translate_no_placeholder_appends_text(tmp_path, monkeypatch):
+    """translate без {original_text}: текст дописывается после промпта."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ch.txt").write_text("苏星宇睁开了眼。", encoding="utf-8")
+    (tmp_path / "prompt.txt").write_text(
+        "<translate>\nПереведи следующий текст:\n</translate>",
+        encoding="utf-8")
+    captured = {}
+
+    def fake_stream(base_url, model, messages, **kw):
+        captured["content"] = messages[0]["content"]
+        return ("ПЕРЕВОД", "")
+
+    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
+             "--prompt_file", "prompt.txt", "--threads", "1"])
+    content = captured["content"]
+    assert "苏星宇睁开了眼。" in content
+    # хвост после промпта: чанк дописан после последней строки промпта
+    tail = content.split("Переведи следующий текст:")[1]
+    assert "苏星宇睁开了眼。" in tail

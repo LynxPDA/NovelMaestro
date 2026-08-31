@@ -184,7 +184,9 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`,
 `<translate>/<redact>/<polish>` (`pipeline_prompt.txt` → `prompts.txt`
 → `translate_book_prompt.txt` при пустом поле формы).
 
-Плейсхолдеры: `{ner_block}`, `{original_text}`, `{translated_text}`,
+Плейсхолдеры: `{ner_block}`; `{original_text}` — входной текст
+(translate/polish: нет тега — текст дописывается после промпта;
+redact: внутри `<source_text>`); `{translated_text}` (redact);
 `{female_names}`, `{male_names}` (polish: имена из ner.json по полю
 `translation`, пол по наличию `(female)`/`(male)` в `type`).
 

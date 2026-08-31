@@ -49,6 +49,7 @@
 
 Переведи следующий текст:
 
+{original_text}
 </translate>
 
 <redact>
