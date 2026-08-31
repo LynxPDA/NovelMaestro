@@ -205,8 +205,9 @@ md/html. Промпты стадий:
 | Wiki | `wiki_prompt.txt` | `<prompt_wiki_article>` |
 
 Плейсхолдеры: `{ner_block}` (translate/redact/polish),
-`{original_text}` — входной текст (translate/polish: нет тега — текст
-дописывается после промпта; redact: внутри `<source_text>`),
+`{original_text}` — входной текст (translate/polish: тег обязателен,
+нет — предупреждение в лог, текст дописывается после промпта;
+redact: внутри `<source_text>`),
 `{translated_text}` (redact),
 `{female_names}` / `{male_names}` (имена из глоссария по полу).
 
@@ -220,8 +221,9 @@ md/html. Промпты стадий:
   `context`. Программа понимает и `pinyin`, и `reading`.
 - **Перевод**: единый `pipeline_prompt.txt` с тегами
   `<translate>/<redact>/<polish>`; `{ner_block}` и `{original_text}`
-  подставляются автоматически (если `{original_text}` нет — текст
-  дописывается после промпта).
+  подставляются автоматически. `{original_text}` в translate/polish
+  обязателен: нет тега — предупреждение в лог, текст дописывается
+  после промпта.
 - Промпты — контент проекта: для другого языка (корейский, японский
   и т.п.) создайте свой набор шаблонов (`templates/Custom`) или
   отредактируйте промпты проекта.

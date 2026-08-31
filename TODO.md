@@ -268,9 +268,11 @@
 
 ### R4-4. translate/polish: тег {original_text}
 
-* [x] translate_book.py: {original_text} заменяется в translate/polish
-      (нет тега — текст дописывается после промпта, обратная
-      совместимость); DEFAULT_TRANSLATE_PROMPT и pipeline_prompt.txt
-      обновлены; доки (help.md/DEVELOPERS.md).
+* [x] translate_book.py: {original_text} заменяется в translate/polish;
+      тег обязателен — нет тега: предупреждение в лог (один раз на
+      режим), текст дописывается после промпта (обратная совместимость
+      убрана); DEFAULT_TRANSLATE_PROMPT и pipeline_prompt.txt обновлены;
+      доки (help.md/DEVELOPERS.md).
 * [x] Тесты: W1-дефолты (127.0.0.1), fallback-порт (занят/свободен),
-      {original_text} (тег и append-режим). 953 зелёных.
+      {original_text} (тег и warn-режим). 953 зелёных.
+* [x] Релиз 0.1.4: тег v0.1.4, оба воркфлоу, релиз с zip.

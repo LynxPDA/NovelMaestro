@@ -17,8 +17,9 @@ max_tokens — серверный предохранитель (ТОКЕНЫ), �
 Промпты: --prompt_file БЕЗ тегов = промпт текущего режима (файл целиком);
 с тегами <translate>/<redact>/<polish> — один файл на все режимы.
 Плейсхолдеры: {ner_block} (все режимы); {original_text} — входной текст
-(translate/polish: нет тега — текст дописывается после промпта;
-redact: внутри <source_text>); {translated_text} (только redact);
+(translate/polish: тег ОБЯЗАТЕЛЕН, нет тега — предупреждение в лог,
+текст дописывается после промпта; redact: внутри <source_text>);
+{translated_text} (только redact);
 {female_names}, {male_names} — женские/мужские имена из
 ner.json (поле translation; пол по наличию (female)/(male) в type), ищутся
 в тексте чанка (основное назначение — polish).
@@ -141,6 +142,9 @@ MODE_LABELS = {
 # ══════════════════════════════════════════════════════════════════════
 _write_lock = threading.Lock()
 _next_idx = 0
+# режимы, для которых уже предупреждено о пропущенном {original_text}
+# (не спамим лог одним предупреждением на каждый чанк)
+_warned_missing_text_tag: set[str] = set()
 _pending: dict = {}
 _trace: list = []
 _write_mode = "translate"
@@ -200,8 +204,9 @@ def process_item(internal_id, original_text, draft_text, ctx):
                         .replace("{translated_text}", draft_text or ""))
         reference = draft_text or ""
     else:
-        # translate/polish: {original_text} — тег-переменная (как в redact);
-        # нет тега — текст дописывается после промпта (обратная совместимость)
+        # translate/polish: {original_text} — обязательный тег-переменная;
+        # нет тега — предупреждение в лог (один раз на режим), текст
+        # дописывается после промпта, чтобы перевод не сломался
         if "{original_text}" in ctx["prompt"]:
             user_content = (ctx["prompt"]
                             .replace("{ner_block}", ner_block)
@@ -209,6 +214,12 @@ def process_item(internal_id, original_text, draft_text, ctx):
                             .replace("{male_names}", male_block)
                             .replace("{original_text}", original_text))
         else:
+            mode = ctx["mode"]
+            if mode not in _warned_missing_text_tag:
+                _warned_missing_text_tag.add(mode)
+                ctx["logger"].warning(
+                    "Промпт режима %s не содержит {original_text} — "
+                    "добавьте тег; текст дописан после промпта", mode)
             user_content = (ctx["prompt"]
                             .replace("{ner_block}", ner_block)
                             .replace("{female_names}", female_block)
@@ -265,9 +276,9 @@ def build_parser():
   без тегов  = промпт текущего режима (файл целиком);
   с тегами   <translate>/<redact>/<polish> — один файл на все режимы.
   Плейсхолдеры: {ner_block} (все режимы),
-                {original_text} — входной текст (translate/polish:
-                  если тега нет — текст дописывается после промпта;
-                  redact: внутри <source_text>),
+                {original_text} — входной текст (translate/polish: тег
+                  ОБЯЗАТЕЛЕН, нет — предупреждение в лог, текст
+                  дописывается после промпта; redact: <source_text>),
                 {translated_text} (только redact),
                 {female_names}, {male_names} — женские/мужские имена из
                 ner.json (translation; пол по (female)/(male) в type; без term)

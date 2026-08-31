@@ -326,14 +326,17 @@ def test_main_translate_original_text_placeholder(tmp_path, monkeypatch):
     assert content.count("苏星宇睁开了眼。") == 1
 
 
-def test_main_translate_no_placeholder_appends_text(tmp_path, monkeypatch):
-    """translate без {original_text}: текст дописывается после промпта."""
+def test_main_translate_no_placeholder_warns_and_appends(tmp_path, monkeypatch):
+    """translate без {original_text}: предупреждение в лог + текст
+    дописывается после промпта (чтобы перевод не сломался)."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "ch.txt").write_text("苏星宇睁开了眼。", encoding="utf-8")
     (tmp_path / "prompt.txt").write_text(
         "<translate>\nПереведи следующий текст:\n</translate>",
         encoding="utf-8")
     captured = {}
+    # сбрасываем «уже предупреждено» — иначе предупреждение не повторится
+    monkeypatch.setattr(TB, "_warned_missing_text_tag", set())
 
     def fake_stream(base_url, model, messages, **kw):
         captured["content"] = messages[0]["content"]
@@ -348,3 +351,8 @@ def test_main_translate_no_placeholder_appends_text(tmp_path, monkeypatch):
     # хвост после промпта: чанк дописан после последней строки промпта
     tail = content.split("Переведи следующий текст:")[1]
     assert "苏星宇睁开了眼。" in tail
+    # предупреждение в лог-файл (logs/translated_book.log)
+    log_file = tmp_path / "logs" / "translated_book.log"
+    assert log_file.is_file()
+    log_text = log_file.read_text(encoding="utf-8")
+    assert "{original_text}" in log_text and "WARNING" in log_text
