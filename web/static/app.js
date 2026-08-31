@@ -462,7 +462,7 @@ function createProjectModal() {
           "Жанры через запятую (опционально)",
           genres,
         ),
-        h("label", { class: "field" }, "Шаблон типа книги", tplSel),
+        h("label", { class: "field" }, "Шаблон", tplSel),
         h(
           "label",
           { class: "field" },
@@ -562,19 +562,30 @@ function createProjectModal() {
       ),
     );
     document.body.append(modal);
-    for (const s of hubCache.sections) {
-      sectionSel.append(h("option", { value: s.name }, s.name));
-    }
-    const gen = hubCache.templates.find((t) => t.name === "General");
-    if (gen || hubCache.templates.length) {
-      const list = gen
-        ? [gen, ...hubCache.templates.filter((t) => t !== gen)]
-        : hubCache.templates;
-      for (const t of list) {
-        tplSel.append(h("option", { value: t.name }, t.name));
-      }
-    }
-    name.focus();
+    // разделы и шаблоны — из свежего hub на момент открытия модалки:
+    // hubCache мог быть сброшен операциями «Управления разделами» (null),
+    // тогда select'ы оставались пустыми — раздел/шаблон выбрать нельзя
+    loadHub()
+      .then((hub) => {
+        for (const s of hub.sections) {
+          sectionSel.append(h("option", { value: s.name }, s.name));
+        }
+        const gen = hub.templates.find((t) => t.name === "General");
+        if (gen || hub.templates.length) {
+          const list = gen
+            ? [gen, ...hub.templates.filter((t) => t !== gen)]
+            : hub.templates;
+          for (const t of list) {
+            tplSel.append(h("option", { value: t.name }, t.name));
+          }
+        }
+        name.focus();
+      })
+      .catch((ex) => {
+        err.textContent =
+          "Не удалось загрузить разделы и шаблоны: " + ex.message;
+        name.focus();
+      });
     function close(result = false) {
       modal.remove();
       resolve(result);
@@ -1704,6 +1715,27 @@ function render() {
 function nameModal(title, placeholder, onOk) {
   const name = h("input", { class: "input", placeholder });
   const err = h("div", { class: "form-error" });
+  // защита от двойного клика: второй POST тем же именем = дубль раздела
+  // (параллельные запросы проходили проверку «уже существует» вместе)
+  const okBtn = h(
+    "button",
+    {
+      class: "btn btn-primary",
+      onclick: async () => {
+        err.textContent = "";
+        if (okBtn.disabled) return;
+        okBtn.disabled = true;
+        try {
+          await onOk(name.value.trim());
+          close();
+        } catch (ex) {
+          err.textContent = ex.message;
+          okBtn.disabled = false;
+        }
+      },
+    },
+    "ОК",
+  );
   const modal = h(
     "div",
     { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
@@ -1717,22 +1749,7 @@ function nameModal(title, placeholder, onOk) {
         "div",
         { class: "modal-actions" },
         h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
-        h(
-          "button",
-          {
-            class: "btn btn-primary",
-            onclick: async () => {
-              err.textContent = "";
-              try {
-                await onOk(name.value.trim());
-                close();
-              } catch (ex) {
-                err.textContent = ex.message;
-              }
-            },
-          },
-          "ОК",
-        ),
+        okBtn,
       ),
     ),
   );
@@ -1775,6 +1792,7 @@ function sectionsModal() {
                 toast(`Создан раздел: ${nm}`);
                 hubCache = null;
                 refresh();
+                render(); // хаб за модалкой сразу видит новый раздел
               }),
           },
           "＋ Раздел",
@@ -1803,6 +1821,7 @@ function sectionsModal() {
                 toast(`Раздел переименован: ${s.name} → ${nm}`);
                 hubCache = null;
                 refresh();
+                render(); // хаб за модалкой сразу видит изменения
               },
             ),
         },
@@ -1821,6 +1840,7 @@ function sectionsModal() {
               toast(`Удалён раздел: ${s.name}`);
               hubCache = null;
               refresh();
+              render(); // хаб за модалкой сразу видит изменения
             } catch (ex) {
               err.textContent = ex.message;
             }
