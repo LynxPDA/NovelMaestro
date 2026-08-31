@@ -42,7 +42,10 @@ LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) 
 
 разделы (динамические): DEFAULT_SECTIONS (ACTIVE/HOLD/DONE,
   алиас SECTIONS) / load_sections (файл .sections.json → дефолты + легаси
-  DONE_OPEN при первом запуске; папки на диске до-обнаруживаются) /
+  DONE_OPEN при первом запуске; папки на диске до-обнаруживаются; дубли
+  в файле схлопываются, записи без папки на диске — призраки — игнорируются;
+  операции с файлом под мьютексом — параллельные запросы web не плодят
+  дубли) /
   save_sections (атомарно tmp+replace) / create_section /
   rename_section (в существующий — merge: проекты переносятся
   move_project-ом; переименование на месте сохраняет позицию) /

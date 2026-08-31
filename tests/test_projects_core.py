@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """core/projects.py — менеджмент проектов: списки, каркас, переносы,
 переименование. Всё во временных папках (tmp_path), без сети."""
+import json
 import sys
 from pathlib import Path
 
@@ -409,6 +410,57 @@ def test_sections_custom_not_touched_by_bootstrap(tmp_path):
     assert P.ensure_projects_root(root) == []
     assert (root / "Архив" / "Книга").is_dir()
     assert P.load_sections(root) == ["ACTIVE", "HOLD", "DONE", "Архив"]
+
+
+def test_load_sections_dedupes_file_entries(tmp_path):
+    """Дубли в .sections.json (след гонки) показываются один раз."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_section(root, "Архив")
+    f = root / P.SECTIONS_FILE
+    data = json.loads(f.read_text(encoding="utf-8"))
+    data.append("Архив")
+    f.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    assert P.load_sections(root).count("Архив") == 1
+
+
+def test_load_sections_drops_phantom_entries(tmp_path):
+    """Запись файла без папки на диске — призрак — не показывается."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    f = root / P.SECTIONS_FILE
+    data = json.loads(f.read_text(encoding="utf-8"))
+    data.append("Призрак")
+    f.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    assert "Призрак" not in P.load_sections(root)
+    # реальная папка на диске по-прежнему до-обнаруживается
+    (root / "Ручная").mkdir()
+    sections = P.load_sections(root)
+    assert "Ручная" in sections and sections.count("Призрак") == 0
+
+
+def test_concurrent_create_section_unique(tmp_path):
+    """Параллельные create_section одного имени — одна запись (мьютекс).
+
+    ThreadingHTTPServer гоняет запросы в отдельных тредах; без мьютекса
+    read-modify-write .sections.json плодил дубли раздела.
+    """
+    import threading
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    results: list = []
+
+    def _worker():
+        results.append(P.create_section(root, "Архив"))
+
+    threads = [threading.Thread(target=_worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sum(1 for ok, _ in results if ok) == 1
+    assert P.load_sections(root).count("Архив") == 1
+    assert (root / "Архив").is_dir()
 
 
 # ── шаблоны (CRUD) ────────────────────────────────

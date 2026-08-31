@@ -13,6 +13,7 @@ import datetime
 import json
 import re
 import shutil
+import threading
 import unicodedata
 from pathlib import Path
 
@@ -24,6 +25,12 @@ SECTIONS = DEFAULT_SECTIONS
 
 # Файл персиста списка разделов (в корне projects/, рядом с hub_state)
 SECTIONS_FILE = ".sections.json"
+
+# Мьютекс на read-modify-write списка разделов: web-сервер многопоточный
+# (ThreadingHTTPServer), параллельные запросы к /api/sections без мьютекса
+# пишут в общий .sections.tmp и теряют/дублируют записи. RLock — load_sections
+# вызывается и изнутри мьютексных секций (create/rename/delete_section).
+_SECTIONS_LOCK = threading.RLock()
 
 # Подпапки каркаса нового проекта
 PROJECT_SKELETON = ("source", "chapters", "prompts", "logs", "tmp")
@@ -69,26 +76,47 @@ def load_sections(projects_root: Path) -> list:
 
     Файла нет → дефолты + легаси-папки на диске (миграция, напр. DONE_OPEN
     со старых установок). Папка на диске, которой нет в списке, тоже
-    добавляется (ручные папки). Никогда не бросает.
+    добавляется (ручные папки). Дубли в файле схлопываются (след гонки
+    параллельных create_section); запись файла без папки на диске —
+    призрак и игнорируется (создание раздела всегда создаёт папку;
+    папка исчезает только при удалении раздела). Никогда не бросает.
     """
+    with _SECTIONS_LOCK:
+        return _load_sections_unlocked(projects_root)
+
+
+def _load_sections_unlocked(projects_root: Path) -> list:
+    """Чтение списка разделов без захвата мьютекса (внутри секций)."""
     root = Path(projects_root)
     sections: list[str] = []
+    had_file = False
     f = _sections_file(root)
     if f.is_file():
+        had_file = True
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
             if isinstance(data, list):
-                sections = [s for s in data
-                            if isinstance(s, str) and valid_project_name(s)]
+                seen: set[str] = set()
+                for s in data:
+                    if (isinstance(s, str) and valid_project_name(s)
+                            and s not in seen):
+                        seen.add(s)
+                        sections.append(s)
         except (OSError, ValueError):
             pass
     if not sections:
         sections = list(DEFAULT_SECTIONS)
     if root.is_dir():
-        for d in sorted(root.iterdir()):
-            if d.is_dir() and valid_project_name(d.name) \
-                    and d.name not in sections:
-                sections.append(d.name)
+        on_disk = [d.name for d in sorted(root.iterdir())
+                   if d.is_dir() and valid_project_name(d.name)]
+        # реальные папки без записи — до-обнаруживаем (ручные/легаси)
+        from_file = set(sections)
+        # записи файла без папки на диске — призраки (гонка/ручное удаление):
+        # создание раздела всегда создаёт папку; без файла дефолты — контракт
+        # (бутстрап), их отсутствие на диске не мешает create_project
+        if had_file:
+            sections = [s for s in sections if s in set(on_disk)]
+        sections.extend(d for d in on_disk if d not in from_file)
     return sections
 
 
@@ -121,16 +149,17 @@ def create_section(projects_root: Path, name: str):
     if not valid_project_name(name):
         return False, ("Недопустимое имя раздела (пустое, слишком длинное "
                        "или содержит /\\:*?\"<>|).")
-    sections = load_sections(root)
-    if name in sections:
-        return False, f"Раздел уже существует: {name}."
-    try:
-        (root / name).mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        return False, f"Не удалось создать раздел: {e}"
-    sections.append(name)
-    save_sections(root, sections)
-    return True, name
+    with _SECTIONS_LOCK:
+        sections = _load_sections_unlocked(root)
+        if name in sections:
+            return False, f"Раздел уже существует: {name}."
+        try:
+            (root / name).mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return False, f"Не удалось создать раздел: {e}"
+        sections.append(name)
+        save_sections(root, sections)
+        return True, name
 
 
 def rename_section(projects_root: Path, src: str, dst: str):
@@ -143,52 +172,55 @@ def rename_section(projects_root: Path, src: str, dst: str):
     root = Path(projects_root)
     src = unicodedata.normalize("NFC", (src or "").strip())
     dst = unicodedata.normalize("NFC", (dst or "").strip())
-    sections = load_sections(root)
-    if src not in sections:
-        return False, f"Раздел не найден: {src!r}."
     if not valid_project_name(dst):
         return False, "Недопустимое новое имя раздела."
     if src == dst:
         return False, "Имя раздела не изменилось."
-    src_dir = root / src
-    if not src_dir.is_dir():
-        return False, f"Папка раздела не найдена: {src}."
-    merge = dst in sections
-    if merge:
-        dst_dir = root / dst
-        try:
-            dst_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            return False, f"Не удалось создать раздел: {e}"
-        for p in sorted(src_dir.iterdir()):
-            if not p.is_dir():
-                continue
-            if (dst_dir / p.name).exists():
-                return False, (f"В разделе {dst} уже есть проект {p.name!r} — "
-                               "перенос невозможен.")
-        try:
+    # мьютекс от проверок до записи файла: вариант «одинаковые операции
+    # в двух тредах» детерминирован и не плодит дубли/потери записей
+    with _SECTIONS_LOCK:
+        sections = _load_sections_unlocked(root)
+        if src not in sections:
+            return False, f"Раздел не найден: {src!r}."
+        src_dir = root / src
+        if not src_dir.is_dir():
+            return False, f"Папка раздела не найдена: {src}."
+        merge = dst in sections
+        if merge:
+            dst_dir = root / dst
+            try:
+                dst_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                return False, f"Не удалось создать раздел: {e}"
             for p in sorted(src_dir.iterdir()):
                 if not p.is_dir():
                     continue
-                shutil.move(str(p), str(dst_dir / p.name))
-            shutil.rmtree(src_dir, ignore_errors=True)
-        except OSError as e:
-            return False, f"Не удалось перенести проекты: {e}"
-    else:
-        dst_dir = root / dst
-        if dst_dir.exists():
-            return False, f"Раздел {dst} уже существует."
-        try:
-            shutil.move(str(src_dir), str(dst_dir))
-        except OSError as e:
-            return False, f"Не удалось переименовать раздел: {e}"
-    if merge:
-        # dst уже в списке — просто убираем src (позиция dst сохраняется)
-        sections = [s for s in sections if s != src]
-    else:
-        # переименование на месте: позиция сохраняется
-        sections = [dst if s == src else s for s in sections]
-    save_sections(root, sections)
+                if (dst_dir / p.name).exists():
+                    return False, (f"В разделе {dst} уже есть проект "
+                                   f"{p.name!r} — перенос невозможен.")
+            try:
+                for p in sorted(src_dir.iterdir()):
+                    if not p.is_dir():
+                        continue
+                    shutil.move(str(p), str(dst_dir / p.name))
+                shutil.rmtree(src_dir, ignore_errors=True)
+            except OSError as e:
+                return False, f"Не удалось перенести проекты: {e}"
+        else:
+            dst_dir = root / dst
+            if dst_dir.exists():
+                return False, f"Раздел {dst} уже существует."
+            try:
+                shutil.move(str(src_dir), str(dst_dir))
+            except OSError as e:
+                return False, f"Не удалось переименовать раздел: {e}"
+        if merge:
+            # dst уже в списке — просто убираем src (позиция dst сохраняется)
+            sections = [s for s in sections if s != src]
+        else:
+            # переименование на месте: позиция сохраняется
+            sections = [dst if s == src else s for s in sections]
+        save_sections(root, sections)
     return True, dst
 
 
@@ -200,18 +232,19 @@ def delete_section(projects_root: Path, name: str):
     """
     root = Path(projects_root)
     name = unicodedata.normalize("NFC", (name or "").strip())
-    sections = load_sections(root)
-    if name not in sections:
-        return False, f"Раздел не найден: {name!r}."
-    d = root / name
-    if d.is_dir() and any(d.iterdir()):
-        return False, "Раздел не пуст — сначала перенесите или удалите проекты."
-    try:
-        if d.is_dir():
-            shutil.rmtree(d, ignore_errors=True)
-    except OSError:
-        pass
-    save_sections(root, [s for s in sections if s != name])
+    with _SECTIONS_LOCK:
+        sections = _load_sections_unlocked(root)
+        if name not in sections:
+            return False, f"Раздел не найден: {name!r}."
+        d = root / name
+        if d.is_dir() and any(d.iterdir()):
+            return False, "Раздел не пуст — сначала перенесите или удалите проекты."
+        try:
+            if d.is_dir():
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+        save_sections(root, [s for s in sections if s != name])
     return True, name
 
 
@@ -230,8 +263,9 @@ def ensure_projects_root(projects_root: Path) -> list:
         if not d.is_dir():
             d.mkdir(parents=True, exist_ok=True)
             created.append(sec)
-    if not _sections_file(projects_root).is_file():
-        save_sections(projects_root, load_sections(projects_root))
+    with _SECTIONS_LOCK:
+        if not _sections_file(projects_root).is_file():
+            save_sections(projects_root, _load_sections_unlocked(projects_root))
     return created
 
 
