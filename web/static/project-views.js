@@ -2,6 +2,10 @@
    ключ `${project}:${kind}` → {timer, jobId}; повторный запуск гасит
    старый watcher того же ключа (не плодим интервалы). */
 const _reviewWatchers = new Map();
+/* Размер страницы таблиц глоссария (вкладка «Глоссарий») и отчётов
+   проверок (вкладка «Проверка»). Был глобалом app.js и пропал при
+   рефакторинге (c60ac00) — без него вкладки падают с ReferenceError. */
+const PAGE_SIZE = 200;
 /* eslint-disable-next-line no-unused-vars -- глобал SPA, вызывается из app.js */
 function viewProject(section, name, tab) {
   const st = {

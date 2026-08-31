@@ -499,7 +499,10 @@ function createProjectModal() {
                     method: "POST",
                     body: payload,
                   });
-                  close();
+                  // закрыть модалку сразу, а resolve(true) — только после
+                  // опциональных загрузок: viewHub перерисует список, иначе
+                  // новый проект не появится до обновления страницы
+                  close(true);
                   hubCache = null;
                   const proj = `${r.section}/${r.name}`;
                   // опциональные загрузки: обложка и исходник → source/
@@ -533,7 +536,7 @@ function createProjectModal() {
                       const form = new FormData();
                       form.append("dest", "source");
                       form.append("files[]", src, src.name);
-                      await apiUpload("/upload", form);
+                      await apiUpload(`/upload?project=${proj}`, form);
                     } catch (ex) {
                       uploadErrors.push(`исходник: ${ex.message}`);
                     }
@@ -572,9 +575,9 @@ function createProjectModal() {
       }
     }
     name.focus();
-    function close() {
+    function close(result = false) {
       modal.remove();
-      resolve(false);
+      resolve(result);
     }
   });
 }
