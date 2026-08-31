@@ -77,6 +77,17 @@ sudo apt install python3-requests python3-tqdm python3-ahocorasick python3-pytes
 
 После запуска откроется браузер с интерфейсом.
 
+### Docker (сервер, без установки Python)
+
+```bash
+cp templates/.env.example .env    # конфиг LLM (HOST/API_KEY/MODEL) + WEB_*
+docker compose up -d --build
+# → http://localhost:8756  (в браузере)
+```
+
+Данные живут в папке `projects/` (монтируется в контейнер). Подробности —
+порты, переменные, обновление — в [packaging/README.md](packaging/README.md).
+
 Параметры сервера: `python3 run.py --no-open` (без браузера),
 `--projects-dir <путь>` (своя папка проектов), а также
 `--host/--port/--auth/--token` — см. `python3 web/main.py --help`;
