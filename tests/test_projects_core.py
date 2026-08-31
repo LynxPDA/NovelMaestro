@@ -463,6 +463,43 @@ def test_concurrent_create_section_unique(tmp_path):
     assert (root / "Архив").is_dir()
 
 
+def test_concurrent_create_project_unique(tmp_path):
+    """Параллельные create_project одного имени — один успех (мьютекс).
+
+    ThreadingHTTPServer гоняет запросы в тредах; без мьютекса оба могли
+    пройти проверку dst.exists() (TOCTOU).
+    """
+    import threading
+    P.ensure_projects_root(tmp_path)
+    results: list = []
+
+    def _worker():
+        results.append(P.create_project(tmp_path, "ACTIVE", "Книга"))
+
+    threads = [threading.Thread(target=_worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sum(1 for ok, _ in results if ok) == 1
+    assert (tmp_path / "ACTIVE" / "Книга").is_dir()
+
+
+def test_copy_project_skips_env(tmp_path):
+    """Копия проекта не наследует проектный .env (ключи/профили)."""
+    P.ensure_projects_root(tmp_path)
+    ok, res = P.create_project(tmp_path, "ACTIVE", "X")
+    assert ok
+    pdir = _p(res)
+    (pdir / ".env").write_text("API_KEY=secret", encoding="utf-8")
+    (pdir / "source" / "a.txt").write_text("1", encoding="utf-8")
+    ok, res = P.copy_project(tmp_path, "ACTIVE", "X", "X_copy")
+    assert ok
+    dst = _p(res)
+    assert not (dst / ".env").exists()
+    assert (dst / "source" / "a.txt").read_text(encoding="utf-8") == "1"
+
+
 # ── шаблоны (CRUD) ────────────────────────────────
 
 def _mk_tpl_set(root: Path, name: str) -> Path:

@@ -32,6 +32,13 @@ SECTIONS_FILE = ".sections.json"
 # вызывается и изнутри мьютексных секций (create/rename/delete_section).
 _SECTIONS_LOCK = threading.RLock()
 
+# Мьютекс на операции с папками проектов (create/move/rename/copy/delete):
+# check-then-act (dst.exists() → move/rmtree) без него даёт TOCTOU — два
+# параллельных запроса оба проходят проверку. Отдельный от разделов:
+# из проектных секций зовётся load_sections, поэтому порядок захвата всегда
+# «проекты → разделы», обратного нет — взаимных блокировок не бывает.
+_PROJECTS_LOCK = threading.RLock()
+
 # Подпапки каркаса нового проекта
 PROJECT_SKELETON = ("source", "chapters", "prompts", "logs", "tmp")
 
@@ -765,20 +772,21 @@ def create_project(projects_root: Path, section: str, name: str):
     Path созданной папки, при ошибке — строка с причиной (текст для UI).
     """
     projects_root = Path(projects_root)
-    sections = load_sections(projects_root)
-    if section not in sections:
-        return False, f"Неизвестный раздел: {section!r} (доступны: {', '.join(sections)})."
-    name = unicodedata.normalize("NFC", (name or "").strip())
-    if not valid_project_name(name):
-        return False, "Недопустимое имя проекта (пустое, слишком длинное или содержит /\\:*?\"<>|)."
-    dst = project_dir(projects_root, section, name)
-    if dst.exists():
-        return False, f"Проект уже существует: {section}/{name}."
-    try:
-        for sub in PROJECT_SKELETON:
-            (dst / sub).mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        return False, f"Не удалось создать папки проекта: {e}"
+    with _PROJECTS_LOCK:
+        sections = load_sections(projects_root)
+        if section not in sections:
+            return False, f"Неизвестный раздел: {section!r} (доступны: {', '.join(sections)})."
+        name = unicodedata.normalize("NFC", (name or "").strip())
+        if not valid_project_name(name):
+            return False, "Недопустимое имя проекта (пустое, слишком длинное или содержит /\\:*?\"<>|)."
+        dst = project_dir(projects_root, section, name)
+        if dst.exists():
+            return False, f"Проект уже существует: {section}/{name}."
+        try:
+            for sub in PROJECT_SKELETON:
+                (dst / sub).mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return False, f"Не удалось создать папки проекта: {e}"
     return True, dst
 
 
@@ -790,44 +798,46 @@ def move_project(projects_root: Path, src_section: str, name: str,
     дубль в целевом разделе, недопустимые разделы.
     """
     projects_root = Path(projects_root)
-    sections = load_sections(projects_root)
-    for sec in (src_section, dst_section):
-        if sec not in sections:
-            return False, f"Неизвестный раздел: {sec!r}."
-    if src_section == dst_section:
-        return False, "Проект уже в этом разделе."
-    src = project_dir(projects_root, src_section, name)
-    if not src.is_dir():
-        return False, f"Проект не найден: {src_section}/{name}."
-    dst = project_dir(projects_root, dst_section, src.name)
-    if dst.exists():
-        return False, f"В разделе {dst_section} уже есть проект {dst.name!r}."
-    try:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dst))
-    except OSError as e:
-        return False, f"Не удалось перенести проект: {e}"
+    with _PROJECTS_LOCK:
+        sections = load_sections(projects_root)
+        for sec in (src_section, dst_section):
+            if sec not in sections:
+                return False, f"Неизвестный раздел: {sec!r}."
+        if src_section == dst_section:
+            return False, "Проект уже в этом разделе."
+        src = project_dir(projects_root, src_section, name)
+        if not src.is_dir():
+            return False, f"Проект не найден: {src_section}/{name}."
+        dst = project_dir(projects_root, dst_section, src.name)
+        if dst.exists():
+            return False, f"В разделе {dst_section} уже есть проект {dst.name!r}."
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+        except OSError as e:
+            return False, f"Не удалось перенести проект: {e}"
     return True, dst
 
 
 def rename_project(projects_root: Path, section: str, name: str, new_name: str):
     """Переименовать проект внутри раздела. Возвращает (ok, message_or_path)."""
     projects_root = Path(projects_root)
-    if section not in load_sections(projects_root):
-        return False, f"Неизвестный раздел: {section!r}."
-    src = project_dir(projects_root, section, name)
-    if not src.is_dir():
-        return False, f"Проект не найден: {section}/{name}."
     new_name = unicodedata.normalize("NFC", (new_name or "").strip())
     if not valid_project_name(new_name):
         return False, "Недопустимое новое имя проекта."
-    dst = project_dir(projects_root, section, new_name)
-    if dst.exists():
-        return False, f"Проект с именем {new_name!r} уже есть в разделе {section}."
-    try:
-        shutil.move(str(src), str(dst))
-    except OSError as e:
-        return False, f"Не удалось переименовать проект: {e}"
+    with _PROJECTS_LOCK:
+        if section not in load_sections(projects_root):
+            return False, f"Неизвестный раздел: {section!r}."
+        src = project_dir(projects_root, section, name)
+        if not src.is_dir():
+            return False, f"Проект не найден: {section}/{name}."
+        dst = project_dir(projects_root, section, new_name)
+        if dst.exists():
+            return False, f"Проект с именем {new_name!r} уже есть в разделе {section}."
+        try:
+            shutil.move(str(src), str(dst))
+        except OSError as e:
+            return False, f"Не удалось переименовать проект: {e}"
     return True, dst
 
 
@@ -837,37 +847,40 @@ def delete_project(projects_root: Path, section: str, name: str):
     Возвращает (ok, message_or_path).
     """
     projects_root = Path(projects_root)
-    if section not in load_sections(projects_root):
-        return False, f"Неизвестный раздел: {section!r}."
-    src = project_dir(projects_root, section, name)
-    if not src.is_dir():
-        return False, f"Проект не найден: {section}/{name}."
-    try:
-        shutil.rmtree(src)
-    except OSError as e:
-        return False, f"Не удалось удалить проект: {e}"
+    with _PROJECTS_LOCK:
+        if section not in load_sections(projects_root):
+            return False, f"Неизвестный раздел: {section!r}."
+        src = project_dir(projects_root, section, name)
+        if not src.is_dir():
+            return False, f"Проект не найден: {section}/{name}."
+        try:
+            shutil.rmtree(src)
+        except OSError as e:
+            return False, f"Не удалось удалить проект: {e}"
     return True, src
 
 
 def copy_project(projects_root: Path, section: str, name: str, new_name: str):
     """Дублировать проект внутри раздела (shutil.copytree).
 
-    Возвращает (ok, message_or_path).
+    Проектный .env (ключи/профили книги) в копию НЕ переносится — копия
+    не должна наследовать чужие секреты. Возвращает (ok, message_or_path).
     """
     projects_root = Path(projects_root)
-    if section not in load_sections(projects_root):
-        return False, f"Неизвестный раздел: {section!r}."
-    src = project_dir(projects_root, section, name)
-    if not src.is_dir():
-        return False, f"Проект не найден: {section}/{name}."
     new_name = unicodedata.normalize("NFC", (new_name or "").strip())
     if not valid_project_name(new_name):
         return False, "Недопустимое имя копии проекта."
-    dst = project_dir(projects_root, section, new_name)
-    if dst.exists():
-        return False, f"Проект с именем {new_name!r} уже есть в разделе {section}."
-    try:
-        shutil.copytree(src, dst)
-    except OSError as e:
-        return False, f"Не удалось скопировать проект: {e}"
+    with _PROJECTS_LOCK:
+        if section not in load_sections(projects_root):
+            return False, f"Неизвестный раздел: {section!r}."
+        src = project_dir(projects_root, section, name)
+        if not src.is_dir():
+            return False, f"Проект не найден: {section}/{name}."
+        dst = project_dir(projects_root, section, new_name)
+        if dst.exists():
+            return False, f"Проект с именем {new_name!r} уже есть в разделе {section}."
+        try:
+            shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".env"))
+        except OSError as e:
+            return False, f"Не удалось скопировать проект: {e}"
     return True, dst

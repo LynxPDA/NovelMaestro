@@ -58,7 +58,10 @@ LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) 
   легаси-суффиксы, ner/wiki/compiled) /
   create_project (каркас source/chapters/prompts/logs/tmp) /
   move_project (перенос между разделами) / rename_project /
-  delete_project (без подтверждений — они в UI) / copy_project (дубликат)
+  delete_project (без подтверждений — они в UI) /
+  copy_project (дубликат, проектный .env не копируется);
+  create/move/rename/copy/delete под мьютексом — параллельные запросы web
+  не дают TOCTOU-гонок
 шаблоны: TEMPLATE_PROTECTED="General" (системный, только чтение) /
   list_template_sets (подпапки templates/ с prompts/) /
   TEMPLATE_SKELETON=("prompts", "source") — инвариант набора;
