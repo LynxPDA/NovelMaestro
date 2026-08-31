@@ -310,7 +310,7 @@ Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
 | GET | `/api/prompts/{name}/template` | шаблоны промптов |
 | GET | `/api/logs`, `/api/logs/{name}` | логи проекта |
 | DELETE | `/api/logs`, `/api/logs/{name}` | удаление всех `*.log` / одного лога (`?dir=подпапка`) |
-| GET/PUT/DELETE | `/api/files`, `/api/file`, `/api/upload`, `/api/download` | файлы (`download?inline=1` — предпросмотр); чтение отсутствующего файла — `missing: true` + пустой `content` (редактор создаёт файл при сохранении); `upload` с пустым `dest` — корень проекта (поля files с `dir=""`) |
+| GET/PUT/DELETE | `/api/files`, `/api/file`, `/api/upload`, `/api/download` | файлы (`download?inline=1` — предпросмотр); чтение отсутствующего файла — `missing: true` + пустой `content` (редактор создаёт файл при сохранении); `upload` (multipart `files[]`, `dest`: source/chapters/prompts/images/tmp, вложенные `chapters/…`, пусто — корень проекта; имена только basename; лимит `max_upload_mb` на файл и тело; запись атомарная — при ошибке валидации не пишется ничего) |
 | POST | `/api/mkdir` (`?project=&path=` или body) | создание пустого каталога проекта; дубль/эскейп → 400 |
 | POST | `/api/file/rename` (`{project, path, new_name}`) | переименование файла ИЛИ каталога проекта; нет исходника → 404, занято → 400, недопустимое имя → 400 |
 | GET | `/api/stages`, `/api/stages/{k}/spec\|options` | стадии, формы; `spec.preset.params` — параметры «Простого режима» (дефолты полей + overrides); `options.chapters.ids` — реальные главы; `options.source` — ВСЕ файлы `source/` (клиент фильтрует по ext селекта: epub/обложки/yaml); epub: `autosave` — настройки формы в localStorage, `noenv`-поля (textarea regexp) не пишутся в `.env` |

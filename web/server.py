@@ -223,8 +223,11 @@ class Handler(BaseHTTPRequestHandler):
         }
         if self.command in ("POST", "PUT", "DELETE"):
             if ctype.startswith("multipart/form-data"):
-                ctx["raw_body"] = self._read_raw_body()
+                # тело НЕ читаем в память: хендлер забирает его из rfile
+                # потоково (upload), здесь — только валидация длины
+                ctx["raw_body"] = b""
                 ctx["body"] = {}
+                ctx["upload_length"] = self._check_upload_length()
                 # boundary регистрозависим — отдаём как в заголовке
                 if "boundary=" in raw_ctype:
                     ctx["boundary"] = raw_ctype.split("boundary=", 1)[1]\
@@ -240,26 +243,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send_json(200, result, self._extra_headers)
 
-    def _read_raw_body(self) -> bytes:
-        """Сырое тело запроса (для multipart-парсера).
+    def _check_upload_length(self) -> int:
+        """Валидация Content-Length multipart-тела (без чтения байт).
 
-        H5 (AUDIT): лимит — max_upload_mb (--max-upload-mb), а не
-        MAX_JSON_BODY (16 МБ): иначе загрузка 16–512 МБ давала 413.
+        Отрицательный — 400 (#read(-1) зависал бы), больше max_upload_mb
+        — 413 (#H5 AUDIT: лимит — max_upload_mb (--max-upload-mb), а не
+        MAX_JSON_BODY (16 МБ); иначе загрузка 16–512 МБ давала 413).
+        Тело затем читает хендлер потоково (upload).
         """
         try:
             cl = int(self.headers.get("Content-Length", "0") or 0)
         except (ValueError, TypeError):
             raise ApiError(400, "Некорректный Content-Length")
-        if cl == 0:
-            return b""
         if cl < 0:
             # rfile.read(-1) читал бы до EOF — поток зависал (DoS)
             raise ApiError(400, "Некорректный Content-Length")
+        if cl == 0:
+            return 0
         limit = getattr(self.server, "max_upload_mb", 512) * 1024 * 1024
         if cl > limit:
             raise ApiError(
                 413, f"Тело запроса слишком большое (лимит {limit // (1024 * 1024)} МБ)")
-        return self.rfile.read(cl)
+        return cl
 
     # ── статика SPA ────────────────────────────────────────────
     def _serve_static(self, path: str) -> None:

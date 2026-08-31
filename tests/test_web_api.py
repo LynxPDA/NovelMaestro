@@ -1203,6 +1203,118 @@ def test_upload_missing_boundary_400(srv_ctx):
     assert payload["saved"] == ["source/x.txt"]
 
 
+def test_upload_binary_boundary_like_bytes_intact(srv_ctx):
+    """Байты, похожие на boundary, внутри файла не режут данные.
+
+    Парсер признаёт границу только на переносе строки; раньше bytes.find
+    резал файл по первому совпадению подстроки.
+    """
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    blob = b"\x00--BOUND--x\r\nz\x01\x02\xff"
+    res, payload = _multipart_request(
+        port, "/api/upload?project=ACTIVE/test_book",
+        [("dest", "source")],
+        [("blob.bin", "application/octet-stream", blob)])
+    assert res.status == 200, payload
+    pdir = projects_root / "ACTIVE" / "test_book"
+    assert (pdir / "source" / "blob.bin").read_bytes() == blob
+
+
+def test_upload_into_nested_chapter_folder_ok(srv_ctx):
+    """dest=chapters/<папка главы> — загрузка внутрь главы разрешена."""
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _multipart_request(
+        port, "/api/upload?project=ACTIVE/test_book",
+        [("dest", "chapters/00001_1_test")],
+        [("ch.txt", "text/plain", b"abc")])
+    assert res.status == 200, payload
+    assert payload["saved"] == ["chapters/00001_1_test/ch.txt"]
+    pdir = projects_root / "ACTIVE" / "test_book"
+    assert (pdir / "chapters" / "00001_1_test" / "ch.txt").read_bytes() == b"abc"
+
+
+def test_upload_nested_escape_dest_rejected(srv_ctx):
+    """Вложенный dest с '..' не проходит песочницу, хотя префикс chapters/."""
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _multipart_request(
+        port, "/api/upload?project=ACTIVE/test_book",
+        [("dest", "chapters/../evil")],
+        [("x.txt", "text/plain", b"x")])
+    assert res.status == 400
+
+
+def test_upload_filename_with_slash_rejected(srv_ctx):
+    """Имена файлов — только basename: подпапка в filename → 400."""
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _multipart_request(
+        port, "/api/upload?project=ACTIVE/test_book",
+        [("dest", "source")],
+        [("a/b.txt", "text/plain", b"x")])
+    assert res.status == 400
+    assert "Недопустимое имя файла" in payload["error"]
+    pdir = projects_root / "ACTIVE" / "test_book"
+    assert not (pdir / "source" / "a").exists()
+
+
+def test_upload_over_limit_nothing_written(srv_ctx):
+    """413 на лимите тела — до какой-либо записи на диск."""
+    srv, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    srv.max_upload_mb = 0  # любое тело крупнее 0 → 413 по Content-Length
+    res, payload = _multipart_request(
+        port, "/api/upload?project=ACTIVE/test_book",
+        [("dest", "source")],
+        [("x.txt", "text/plain", b"x")])
+    assert res.status == 413
+    pdir = projects_root / "ACTIVE" / "test_book"
+    assert not (pdir / "source" / "x.txt").exists()
+
+
+def test_multipart_fields_file_limit_spool(srv_ctx):
+    """Файловое поле крупнее лимита — 413 при парсинге (spool закрыт)."""
+    import io
+    import types as _types
+    from web.server import ApiError
+
+    def _body(mb_payload: bytes) -> bytes:
+        b = (b"--BOUND\r\n"
+             b"Content-Disposition: form-data; name=\"dest\"\r\n\r\n"
+             b"source\r\n"
+             b"--BOUND\r\n"
+             b"Content-Disposition: form-data; name=\"files[]\"; "
+             b"filename=\"big.bin\"\r\nContent-Type: application/octet-stream"
+             b"\r\n\r\n") + mb_payload + b"\r\n--BOUND--\r\n"
+        return b
+
+    class _Handler:
+        def __init__(self, body: bytes, mb: int) -> None:
+            self.rfile = io.BytesIO(body)
+            self.headers = {"Content-Length": str(len(body))}
+            self.server = _types.SimpleNamespace(max_upload_mb=mb)
+
+    ctx = {"handler": _Handler(_body(b"abc"), 0),
+           "content_type": "multipart/form-data; boundary=BOUND",
+           "boundary": "BOUND"}
+    with pytest.raises(ApiError) as ei:
+        web_api._multipart_fields(ctx)
+    assert ei.value.status == 413
+    assert "big.bin" in ei.value.message
+    # лимит достаточен — файл читается из spool
+    ctx = {"handler": _Handler(_body(b"abc"), 1),
+           "content_type": "multipart/form-data; boundary=BOUND",
+           "boundary": "BOUND"}
+    fields = web_api._multipart_fields(ctx)
+    try:
+        files = [f for f in fields if f["filename"] == "big.bin"]
+        assert files and files[0]["data"].read() == b"abc"
+    finally:
+        web_api._close_multipart_fields(fields)
+
+
 # download
 
 def test_download_attachment(srv_ctx):

@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import re
 import shutil
+import tempfile
 import threading
 from pathlib import Path
 
@@ -37,7 +39,8 @@ _CACHE_LOADED: set[str] = set()      # корни, для которых заг�
 from web.auth import COOKIE_NAME
 from web.jobs import JobManager
 from web.multipart import (
-    MultipartError, extract_files, extract_value, parse_multipart,
+    MultipartError, extract_files, extract_value, iter_parts,
+    parse_disposition,
 )
 from web.sandbox import SandboxError, resolve_path
 from web.server import ApiError, Router
@@ -45,6 +48,8 @@ from web.stages import STAGE_SPECS, build_command, ordered_stages, script_path, 
 from web import state as st
 
 UPLOAD_DIRS = ("source", "chapters", "prompts", "images", "tmp")
+# Текстовое поле формы (без filename) крупнее — подозрительный запрос
+MAX_TEXT_FIELD = 1024 * 1024
 BINARY_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".epub",
               ".zip", ".fb2", ".ttf", ".otf", ".woff", ".woff2")
 TEXT_EXT = (".txt", ".md", ".json", ".yaml", ".yml", ".env", ".log",
@@ -85,6 +90,131 @@ def _import_common(ctx: dict):
         return c
     except ImportError as exc:
         raise ApiError(500, f"core.common недоступен: {exc}")
+
+
+class _LengthLimitedReader:
+    """Бинарный reader, отдающий не более limit байт (тело запроса)."""
+
+    def __init__(self, src, limit: int) -> None:
+        self.src = src
+        self.left = limit
+
+    def read(self, n: int = -1) -> bytes:
+        if self.left <= 0:
+            return b""
+        if n < 0 or n > self.left:
+            n = self.left
+        data = self.src.read(n)
+        self.left -= len(data)
+        return data
+
+
+def _close_multipart_fields(fields: list[dict]) -> None:
+    """Закрыть spool-файлы полей multipart (у файловых полей data — файл)."""
+    for f in fields:
+        data = f.get("data")
+        if data is not None and hasattr(data, "close"):
+            data.close()
+
+
+def _multipart_fields(ctx: dict) -> list[dict]:
+    """Поля multipart-запроса: файлы — во временных файлах (spool).
+
+    Тело читается из rfile чанками — память не растёт с размером файлов.
+    Файловое поле крупнее max_upload_mb → 413 ДО записи чего-либо на
+    диск; текстовое поле (без filename) крупнее MAX_TEXT_FIELD → 400.
+    """
+    handler = ctx["handler"]
+    ctype = ctx.get("content_type") or ""
+    boundary = ctx.get("boundary") or ""
+    if not boundary and "boundary=" in ctype:
+        boundary = ctype.split("boundary=", 1)[1].strip()\
+            .strip('"').strip("'").split(";")[0]
+    try:
+        cl = int(handler.headers.get("Content-Length", "0") or 0)
+    except (ValueError, TypeError):
+        raise ApiError(400, "Некорректный Content-Length")
+    if cl <= 0:
+        raise ApiError(400, "Пустое тело multipart")
+    try:
+        limit_mb = int(getattr(handler.server, "max_upload_mb", 512))
+    except (TypeError, ValueError):
+        limit_mb = 512
+    limit_bytes = limit_mb * 1024 * 1024
+    body = _LengthLimitedReader(handler.rfile, cl)
+    fields: list[dict] = []
+    try:
+        for headers, data_iter in iter_parts(body, boundary):
+            disp = parse_disposition(headers.get("content-disposition", ""))
+            filename = disp.get("filename")
+            if filename:
+                spool = tempfile.TemporaryFile(mode="w+b")
+                size = 0
+                try:
+                    for chunk in data_iter:
+                        size += len(chunk)
+                        if size > limit_bytes:
+                            raise ApiError(413,
+                                           f"Файл слишком большой: {filename}")
+                        spool.write(chunk)
+                except BaseException:
+                    spool.close()
+                    raise
+                spool.seek(0)
+                fields.append({
+                    "name": disp.get("name", ""),
+                    "filename": filename,
+                    "content_type": headers.get("content-type", ""),
+                    "data": spool,
+                })
+            else:
+                parts: list[bytes] = []
+                size = 0
+                for chunk in data_iter:
+                    size += len(chunk)
+                    if size > MAX_TEXT_FIELD:
+                        raise ApiError(400,
+                                       "Текстовое поле формы слишком большое")
+                    parts.append(chunk)
+                fields.append({
+                    "name": disp.get("name", ""),
+                    "filename": None,
+                    "content_type": headers.get("content-type", ""),
+                    "data": b"".join(parts),
+                })
+    except MultipartError as exc:
+        _close_multipart_fields(fields)
+        raise ApiError(400, f"Некорректный multipart: {exc}")
+    except ApiError:
+        _close_multipart_fields(fields)
+        raise
+    return fields
+
+
+def _atomic_write_spool(target: Path, spool) -> None:
+    """Записать spool в target атомарно (tmp в той же папке + os.replace).
+
+    Обрыв соединения не оставляет битый файл поверх существующего;
+    spool закрывается.
+    """
+    try:
+        fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=".up-")
+    except OSError as exc:
+        raise ApiError(500, f"Не удалось создать временный файл: {exc}")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            shutil.copyfileobj(spool, out, 1024 * 1024)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp, target)
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise ApiError(500, f"Не удалось записать файл: {exc}")
+    finally:
+        spool.close()
 
 
 def _project_path(ctx: dict) -> tuple[Path, str, str]:
@@ -327,46 +457,40 @@ def _file_delete(ctx: dict) -> dict:
 def _file_upload(ctx: dict) -> dict:
     """Загрузка файлов (POST /api/upload, multipart).
 
-    Поля: dest=source|chapters|prompts|images|tmp + files[] (несколько);
-    пусто/отсутствует dest = корень проекта (поля files с dir="").
-    Имена — только basename; лимит max_upload_mb на файл.
+    Поля: dest=source|chapters|prompts|images|tmp|вложенная chapters/…
+    + files[] (несколько); пусто/отсутствует dest = корень проекта.
+    Имена — только basename; лимит max_upload_mb на файл и на тело;
+    файлы пишутся атомарно, при ошибке валидации не пишется ничего.
     """
-    pdir, section, name = _project_ctx(ctx)
-    raw = ctx.get("raw_body") or b""
-    ctype = ctx.get("content_type") or ""
-    boundary = ""
-    if "boundary=" in ctype:
-        # ctype в ctx — lowercase; boundary регистрозависим, берём из headers
-        boundary = ctx.get("boundary") or ""
-        if not boundary:
-            boundary = ctype.split("boundary=", 1)[1].strip()\
-                .strip('"').strip("'").split(";")[0]
+    pdir, _section, _name = _project_ctx(ctx)
+    fields = _multipart_fields(ctx)
     try:
-        fields = parse_multipart(raw, boundary)
-    except MultipartError as exc:
-        raise ApiError(400, f"Некорректный multipart: {exc}")
-    dest = extract_value(fields, "dest")
-    # пусто = корень проекта (поля files с dir="" — ner_file, wiki file);
-    # иначе — только разрешённые подпапки (UPLOAD_DIRS)
-    if dest and dest not in UPLOAD_DIRS:
-        raise ApiError(400, f"Папка назначения недопустима: {dest}")
-    dest_dir = _resolve_project_path(ctx, pdir, dest)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    files = extract_files(fields)
-    if not files:
-        raise ApiError(400, "Нет файлов в запросе")
-    limit_mb = ctx.get("max_upload_mb", 512)
-    saved = []
-    for f in files:
-        fname = f.get("filename") or ""
-        if not fname or "\x00" in fname:
-            continue
-        if len(f["data"]) > limit_mb * 1024 * 1024:
-            raise ApiError(413, f"Файл слишком большой: {fname}")
-        target = _resolve_project_path(ctx, dest_dir, fname)
-        target.write_bytes(f["data"])
-        saved.append(f"{dest}/{fname}" if dest else fname)
-    return {"ok": True, "saved": saved}
+        dest = extract_value(fields, "dest")
+        # пусто = корень проекта (поля files с dir="" — ner_file, wiki
+        # file); вложенные папки глав — для загрузки внутрь chapter-папок
+        if dest and dest not in UPLOAD_DIRS \
+                and not dest.startswith("chapters/"):
+            raise ApiError(400, f"Папка назначения недопустима: {dest}")
+        uploads = []
+        for f in extract_files(fields):
+            fname = f.get("filename") or ""
+            if not fname or "\x00" in fname:
+                continue
+            if "/" in fname or "\\" in fname or fname in (".", ".."):
+                raise ApiError(400, f"Недопустимое имя файла: {fname}")
+            uploads.append((fname, f["data"]))
+        if not uploads:
+            raise ApiError(400, "Нет файлов в запросе")
+        dest_dir = _resolve_project_path(ctx, pdir, dest)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        saved = []
+        for fname, spool in uploads:
+            target = _resolve_project_path(ctx, dest_dir, fname)
+            _atomic_write_spool(target, spool)
+            saved.append(f"{dest}/{fname}" if dest else fname)
+        return {"ok": True, "saved": saved}
+    finally:
+        _close_multipart_fields(fields)
 
 
 def _file_download(ctx: dict) -> dict:
@@ -2365,7 +2489,8 @@ def _templates_upload(ctx: dict) -> dict:
     """Загрузка файлов в набор (POST /api/templates/{set}/upload, multipart).
 
     Поля: files[] (несколько); dest — подпапка внутри набора (опц.).
-    General — 403; лимит max_upload_mb на файл.
+    General — 403; файлы пишутся атомарно (tmp+replace); ошибка
+    валидации — на диск не пишется ничего.
     """
     prj = _import_projects(ctx)
     name = ctx["params"]["set"]
@@ -2374,39 +2499,30 @@ def _templates_upload(ctx: dict) -> dict:
     set_dir = _templates_root(ctx) / name
     if not set_dir.is_dir():
         raise ApiError(404, f"Набор не найден: {name}")
-    raw = ctx.get("raw_body") or b""
-    ctype = ctx.get("content_type") or ""
-    boundary = ctx.get("boundary") or ""
-    if not boundary and "boundary=" in ctype:
-        boundary = ctype.split("boundary=", 1)[1].strip()\
-            .strip('"').strip("'").split(";")[0]
+    fields = _multipart_fields(ctx)
     try:
-        fields = parse_multipart(raw, boundary)
-    except MultipartError as exc:
-        raise ApiError(400, f"Некорректный multipart: {exc}")
-    dest = extract_value(fields, "dest") or ""
-    files = extract_files(fields)
-    if not files:
-        raise ApiError(400, "Нет файлов в запросе")
-    limit_mb = ctx.get("max_upload_mb", 512)
-    saved = []
-    for f in files:
-        fname = f.get("filename") or ""
-        if not fname or "\x00" in fname:
-            continue
-        if len(f["data"]) > limit_mb * 1024 * 1024:
-            raise ApiError(413, f"Файл слишком большой: {fname}")
-        rel = f"{dest}/{fname}" if dest else fname
-        try:
-            target = resolve_path(set_dir, rel)
-        except SandboxError as exc:
-            raise ApiError(400, str(exc))
-        if not target.parent.is_dir():
-            # каталоги в шаблонах не создаются даже неявно
-            raise ApiError(400, f"Каталог не существует: {rel}")
-        target.write_bytes(f["data"])
-        saved.append(rel)
-    return {"ok": True, "saved": saved}
+        dest = extract_value(fields, "dest") or ""
+        files = extract_files(fields)
+        if not files:
+            raise ApiError(400, "Нет файлов в запросе")
+        saved = []
+        for f in files:
+            fname = f.get("filename") or ""
+            if not fname or "\x00" in fname:
+                continue
+            rel = f"{dest}/{fname}" if dest else fname
+            try:
+                target = resolve_path(set_dir, rel)
+            except SandboxError as exc:
+                raise ApiError(400, str(exc))
+            if not target.parent.is_dir():
+                # каталоги в шаблонах не создаются даже неявно
+                raise ApiError(400, f"Каталог не существует: {rel}")
+            _atomic_write_spool(target, f["data"])
+            saved.append(rel)
+        return {"ok": True, "saved": saved}
+    finally:
+        _close_multipart_fields(fields)
 
 
 def _templates_download(ctx: dict) -> dict:
