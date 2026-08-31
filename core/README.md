@@ -3,8 +3,9 @@
 .env: parse_dotenv / find_env_file (системный корневой .env, вверх от
   старта: из папки книги — её pdir/.env, из корня — корневой .env) /
   get_server_config (HOST/API_KEY/MODEL; стадия непуста —
-  СТАДИЯ_HOST/API_KEY/MODEL → общие, профили убраны) /
-  get_stage_model (СТАДИЯ_MODEL → общая MODEL) / print_env_help
+  СТАДИЯ_HOST/API_KEY/MODEL → общие; os.environ приоритетнее файла
+  .env — в Docker конфиг приходит переменными окружения) /
+  get_stage_model (СТАДИЯ_MODEL → общая MODEL, env > файл) / print_env_help
 лог/модель: setup_logging / log_argv (фактическая команда запуска,
   значения --*api_key*/*token*/*secret* маскируются — M2) /
   determine_model (только из аргумента/`.env`; авто через GET /models убрано)

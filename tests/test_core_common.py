@@ -215,7 +215,9 @@ def test_find_env_file_returns_none(tmp_path, monkeypatch):
     assert C.find_env_file(start_dir=str(tmp_path)) is None
 
 
-def test_get_server_config():
+def test_get_server_config(monkeypatch):
+    for k in ("HOST", "API_KEY", "MODEL", "NER_HOST", "NER_MODEL"):
+        monkeypatch.delenv(k, raising=False)
     env = {"HOST": "http://h", "MODEL": "m"}
     cfg = C.get_server_config(env)
     assert cfg["host"] == "http://h" and cfg["model"] == "m" and cfg["api_key"] == ""
@@ -223,7 +225,41 @@ def test_get_server_config():
     assert C.get_server_config({"LOCAL_HOST": "x"})["host"] == ""
 
 
-def test_get_server_config_remote():
+def test_get_server_config_environment_wins(monkeypatch):
+    """Канон §7: os.environ приоритетнее .env (Docker env_file → окружение)."""
+    for k in ("HOST", "API_KEY", "MODEL", "NER_HOST", "NER_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    cfg = C.get_server_config({"HOST": "http://file", "API_KEY": "fk",
+                               "MODEL": "fm"})
+    assert cfg == {"host": "http://file", "api_key": "fk", "model": "fm"}
+    monkeypatch.setenv("HOST", "http://env")
+    monkeypatch.setenv("MODEL", "env-m")
+    cfg = C.get_server_config({"HOST": "http://file", "API_KEY": "fk",
+                               "MODEL": "fm"})
+    assert cfg["host"] == "http://env" and cfg["model"] == "env-m"
+    # ключ файла для чужого хоста не подставляется при env-HOST'е
+    assert cfg["api_key"] == "fk"
+    # стадийный ключ окружения переопределяет и общий env, и файл
+    monkeypatch.setenv("NER_HOST", "http://ner")
+    assert C.get_server_config({"HOST": "http://file"}, "ner")["host"] == "http://ner"
+    # пустые значения окружения = отсутствуют (файл остаётся)
+    monkeypatch.setenv("HOST", "  ")
+    assert C.get_server_config({"HOST": "http://file"})["host"] == "http://file"
+
+
+def test_get_stage_model_environment_wins(monkeypatch):
+    for k in ("MODEL", "NER_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    assert C.get_stage_model({"MODEL": "общая"}, "ner") == "общая"
+    monkeypatch.setenv("MODEL", "env-общая")
+    assert C.get_stage_model({"MODEL": "общая"}, "ner") == "env-общая"
+    monkeypatch.setenv("NER_MODEL", "env-стадийная")
+    assert C.get_stage_model({"MODEL": "общая"}, "ner") == "env-стадийная"
+
+
+def test_get_server_config_remote(monkeypatch):
+    for k in ("HOST", "API_KEY", "MODEL"):
+        monkeypatch.delenv(k, raising=False)
     env = {"HOST": "https://r", "API_KEY": "k", "MODEL": "m"}
     cfg = C.get_server_config(env)
     assert cfg == {"host": "https://r", "api_key": "k", "model": "m"}

@@ -100,19 +100,32 @@ def find_env_file(explicit=None, start_dir=None):
 
 
 def get_server_config(env_data: dict, stage: str = "") -> dict:
-    """Сервер из .env → {host, api_key, model}.
+    """Сервер → {host, api_key, model}.
 
     stage непуст — схема «один скрипт — один набор сервер+ключ+модель»:
     <СТАДИЯ>_HOST/<СТАДИЯ>_API_KEY/<СТАДИЯ>_MODEL переопределяют общие
     HOST/API_KEY/MODEL (модель — через get_stage_model). Пустая стадия —
-    только общие ключи (профили local/remote убраны)."""
+    только общие ключи (профили local/remote убраны).
+
+    Приоритет (канон §7): os.environ > .env: в Docker конфиг приходит
+    переменными окружения (env_file в compose), файла .env в образе нет.
+    env_data — значения, распарсенные из файла .env.
+    """
     s = (stage or "").upper()
-    host = env_data.get(f"{s}_HOST" if s else "HOST", "").strip()
+
+    def val(name: str) -> str:
+        """Значение ключа: os.environ > env_data (оба обрезаны)."""
+        raw = os.environ.get(name)
+        if raw is not None and raw.strip():
+            return raw.strip()
+        return env_data.get(name, "").strip()
+
+    host = val(f"{s}_HOST" if s else "HOST")
     if not host:
-        host = env_data.get("HOST", "").strip()
-    api_key = env_data.get(f"{s}_API_KEY" if s else "API_KEY", "").strip()
+        host = val("HOST")
+    api_key = val(f"{s}_API_KEY" if s else "API_KEY")
     if not api_key:
-        api_key = env_data.get("API_KEY", "").strip()
+        api_key = val("API_KEY")
     return {
         "host": host,
         "api_key": api_key,
@@ -122,13 +135,19 @@ def get_server_config(env_data: dict, stage: str = "") -> dict:
 
 def get_stage_model(env_data: dict, stage: str = "") -> str:
     """Модель этапа: <STAGE>_MODEL → общая MODEL → ''.
-    stage пуст → сразу общая модель."""
+    stage пуст → сразу общая модель. os.environ приоритетнее файла."""
+
+    def val(name: str) -> str:
+        raw = os.environ.get(name)
+        if raw is not None and raw.strip():
+            return raw.strip()
+        return env_data.get(name, "").strip()
+
     if stage:
-        stage_model = env_data.get(
-            (stage or "").upper() + "_MODEL", "").strip()
+        stage_model = val((stage or "").upper() + "_MODEL")
         if stage_model:
             return stage_model
-    return env_data.get("MODEL", "").strip()
+    return val("MODEL")
 
 
 def print_env_help() -> None:
