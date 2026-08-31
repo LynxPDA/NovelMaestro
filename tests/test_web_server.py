@@ -320,15 +320,15 @@ def test_static_unknown_404(srv_ctx):
 # W1: дефолты main.py — локальная сеть без аутентификации
 # ════════════════════════════════════════════════════════════════════
 
-def test_w1_defaults_lan_no_auth():
-    """Без флагов: host=0.0.0.0, auth выключен."""
+def test_w1_defaults_localhost_no_auth():
+    """Без флагов: host=127.0.0.1 (только этот компьютер), auth выключен."""
     from web.main import _parse_args
     import os
     saved = {k: os.environ.pop(k, None) for k in
              ("WEB_HOST", "WEB_PORT", "WEB_AUTH", "WEB_TOKEN")}
     try:
         args = _parse_args([])
-        assert args.host == "0.0.0.0"
+        assert args.host == "127.0.0.1"
         assert args.auth is False
     finally:
         for k, v in saved.items():
@@ -364,3 +364,56 @@ def test_w1_lan_ip_is_sane():
     assert isinstance(ip, str) and ip
     parts = ip.split(".")
     assert len(parts) == 4 and all(p.isdigit() for p in parts)
+
+
+def test_w1_port_fallback_when_busy():
+    """Порт занят → _bind_server берёт следующий свободный (port+1)."""
+    from web.main import _bind_server
+    import socket
+    from web.auth import Auth
+    from web.server import Router
+    from pathlib import Path
+
+    # занимаем порт реальным сокетом
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", 0))
+        s.listen(1)
+        busy = s.getsockname()[1]
+        auth_obj = Auth("tok", no_auth=True)
+        srv, actual = _bind_server(
+            "127.0.0.1", busy, auth_obj, Router(),
+            repo_root=Path(".").resolve(),
+            projects_root=Path(".").resolve() / "projects",
+            max_port_attempts=20,
+        )
+        try:
+            assert actual == busy + 1, f"ожидался {busy + 1}, получен {actual}"
+            assert srv.server_address[1] == actual
+        finally:
+            srv.server_close()
+
+
+def test_w1_port_free_uses_requested():
+    """Свободный порт → используется запрошенный, без смещения."""
+    from web.main import _bind_server
+    from web.auth import Auth
+    from web.server import Router
+    from pathlib import Path
+    import socket
+
+    auth_obj = Auth("tok", no_auth=True)
+    # находим заведомо свободный порт (bind+close — небольшая гонка, для теста ок)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        free_port = s.getsockname()[1]
+    srv, actual = _bind_server(
+        "127.0.0.1", free_port, auth_obj, Router(),
+        repo_root=Path(".").resolve(),
+        projects_root=Path(".").resolve() / "projects",
+    )
+    try:
+        assert actual == free_port
+        assert srv.server_address[1] == free_port
+    finally:
+        srv.server_close()

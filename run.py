@@ -105,7 +105,9 @@ def run_web_backend(args: argparse.Namespace) -> None:
 def main() -> None:
     _force_utf8_io()
     ap = argparse.ArgumentParser(description="Запуск NovelMaestro (web)")
-    ap.add_argument("--host", help="Адрес прослушивания (по умолчанию 0.0.0.0)")
+    ap.add_argument("--host",
+                    help="Адрес прослушивания (по умолчанию 127.0.0.1 — "
+                         "только этот компьютер; 0.0.0.0 — вся локальная сеть)")
     ap.add_argument("--port", type=int, help="Порт (по умолчанию 8756)")
     ap.add_argument("--auth", action="store_true",
                     help="Требовать токен доступа (по умолчанию выключено)")

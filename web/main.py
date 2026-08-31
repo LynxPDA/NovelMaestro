@@ -3,11 +3,13 @@
 """
 main.py — CLI-точка входа web-бэкэнда.
 
-Запуск:  python3 web/main.py [--host 0.0.0.0] [--port 8756]
+Запуск:  python3 web/main.py [--host 127.0.0.1] [--port 8756]
 
-Режим по умолчанию — локальная сеть: слушаем 0.0.0.0, аутентификация
-ВЫКЛЮЧЕНА (доверенная LAN, работа по SSH). Включить токен: --auth
-(или WEB_AUTH=1); тогда токен: --token > WEB_TOKEN > projects/.web_secret.
+По умолчанию слушаем ТОЛЬКО 127.0.0.1 (локальный доступ, безопасно без
+токена); для доступа с других машин LAN — --host 0.0.0.0 (тогда
+обязательно включите токен: --auth или WEB_AUTH=1; токен:
+--token > WEB_TOKEN > projects/.web_secret). Если порт занят — сервер
+автоматически берёт следующий свободный (port+1 … port+100).
 Конфигурация окружением: WEB_HOST, WEB_PORT, WEB_AUTH, WEB_TOKEN,
 WEB_MAX_UPLOAD_MB, WEB_JOBS_LIMIT, WEB_PROJECTS_DIR.
 """
@@ -94,8 +96,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         prog="web/main.py",
         description="Web-интерфейс NovelMaestro (сервер + SPA).",
     )
-    p.add_argument("--host", default=cfg.get("WEB_HOST", "0.0.0.0"),
-                   help="Адрес прослушивания (по умолчанию 0.0.0.0 — вся локальная сеть)")
+    p.add_argument("--host", default=cfg.get("WEB_HOST", "127.0.0.1"),
+                   help="Адрес прослушивания (по умолчанию 127.0.0.1 — только этот компьютер; "
+                        "0.0.0.0 — вся локальная сеть, тогда включите --auth)")
     p.add_argument("--port", type=int, default=_env_int(cfg, "WEB_PORT", 8756),
                    help="Порт (по умолчанию 8756)")
     p.add_argument("--auth", action="store_true",
@@ -176,6 +179,30 @@ def _lan_ip() -> str:
         return "127.0.0.1"
 
 
+def _bind_server(host: str, port: int, auth_obj: auth.Auth,
+                 router: server.Router, repo_root: Path,
+                 projects_root: Path,
+                 max_port_attempts: int = 100) -> tuple[server.WebServer, int]:
+    """Создаёт сервер; если порт занят — берёт следующий свободный
+    (port+1 … port+max_port_attempts). Возвращает (srv, фактический порт)."""
+    last_exc: OSError | None = None
+    for candidate in range(port, port + max_port_attempts + 1):
+        try:
+            srv = server.make_server(host, candidate, auth_obj, router,
+                                     repo_root=repo_root,
+                                     projects_root=projects_root)
+        except OSError as exc:
+            last_exc = exc
+            continue
+        if candidate != port:
+            log.warning("Порт %d занят — использую %d", port, candidate)
+        return srv, candidate
+    if last_exc is not None:
+        raise last_exc
+    raise OSError(f"Не удалось найти свободный порт в диапазоне "
+                  f"{port}–{port + max_port_attempts}")
+
+
 def _print_banner(url: str, lan_url: str | None, token: str,
                   use_auth: bool) -> None:
     line = "═" * 47
@@ -187,11 +214,13 @@ def _print_banner(url: str, lan_url: str | None, token: str,
     if use_auth:
         print(f"  Токен: {token}")
         print("  (сохранён в projects/.web_secret, chmod 600)")
+    elif lan_url is None:
+        print("  Аутентификация: ВЫКЛЮЧЕНА (доступ только с этого")
+        print("  компьютера — токен не нужен)")
     else:
-        print("  Аутентификация: ВЫКЛЮЧЕНА (доверенная сеть;")
-        print("  включить: --auth или WEB_AUTH=1)")
-        print("  ⚠ ВНИМАНИЕ: .env и API-ключи видны")
-        print("  без пароля любому в сети — только доверенная LAN!")
+        print("  Аутентификация: ВЫКЛЮЧЕНА — сервер слушает 0.0.0.0!")
+        print("  ⚠ ВНИМАНИЕ: .env и API-ключи видны без пароля")
+        print("  любому в сети. Включите: --auth или WEB_AUTH=1")
     print(line)
     print("Остановка: Ctrl+C")
 
@@ -213,16 +242,16 @@ def main(argv: list[str] | None = None) -> int:
     router = server.Router()
     api.register(router, host=args.host)
     repo_root = _find_repo_root()
-    srv = server.make_server(args.host, args.port, auth_obj, router,
-                             repo_root=repo_root,
-                             projects_root=projects_root)
+    srv, port = _bind_server(args.host, args.port, auth_obj, router,
+                             repo_root, projects_root)
     srv.max_upload_mb = args.max_upload_mb
     srv.jobs_limit = args.jobs_limit
     # JobManager живёт на сервере (для _job_manager(ctx)); процессы —
     # в отдельной сессии (start_new_session) и переживают рестарт сервера,
     # поэтому при завершении останавливаем все активные запуски явно.
     srv.job_manager = JOB_MANAGER
-    port = srv.server_address[1]
+    if port != args.port:
+        print(f"  ⚠ Порт {args.port} занят — сервер работает на порту {port}")
     url = f"http://{args.host}:{port}"
     lan_url = f"http://{_lan_ip()}:{port}" if args.host == "0.0.0.0" else None
     _print_banner(url, lan_url, token, use_auth)
