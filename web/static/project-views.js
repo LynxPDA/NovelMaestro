@@ -207,17 +207,45 @@ function viewProject(section, name, tab) {
       addDirBtn,
     );
     upInput.addEventListener("change", async () => {
-      const form = new FormData();
-      form.append("dest", st.path || "tmp");
-      for (const f of upInput.files) form.append("files[]", f, f.name);
       try {
-        const r = await apiUpload(`/upload?project=${section}/${name}`, form);
-        toast(`Загружено: ${r.saved.length} файл(ов)`);
-        render();
+        const r = await uploadFiles(upInput.files);
+        if (r) {
+          toast(`Загружено: ${r.saved.length} файл(ов)`);
+          render();
+        }
       } catch (ex) {
         toast(ex.message, "err");
       }
     });
+    async function uploadFiles(files) {
+      const dest = st.path || "tmp";
+      // перезапись существующих файлов — с подтверждением
+      const names = [...files].map((f) => f.name).filter(Boolean);
+      let existing = [];
+      try {
+        const d = await api(
+          `/files?project=${encodeURIComponent(`${section}/${name}`)}` +
+          `&path=${encodeURIComponent(dest)}`,
+        );
+        existing = (d.entries || []).map((e) => e.name);
+      } catch {
+        /* папки ещё нет — всё новое */
+      }
+      const collide = names.filter((n) => existing.includes(n));
+      if (collide.length) {
+        const ok = await confirmModal(
+          "Загрузка с перезаписью",
+          `В ${dest} уже есть: ${collide.join(", ")}. Заменить этими файлами?`,
+          "ПЕРЕЗАПИСАТЬ",
+          async () => {},
+        );
+        if (!ok) return null;
+      }
+      const form = new FormData();
+      form.append("dest", dest);
+      for (const f of files) form.append("files[]", f, f.name);
+      return apiUpload(`/upload?project=${section}/${name}`, form);
+    }
     const entries = data.entries || [];
     const FILES_PAGE_SIZE = 200;
     const fPager = h("div", { class: "ner-pager" });
@@ -274,13 +302,12 @@ function viewProject(section, name, tab) {
     drop.addEventListener("drop", async (e) => {
       e.preventDefault();
       drop.classList.remove("drop-over");
-      const form = new FormData();
-      form.append("dest", st.path || "tmp");
-      for (const f of e.dataTransfer.files) form.append("files[]", f, f.name);
       try {
-        const r = await apiUpload(`/upload?project=${section}/${name}`, form);
-        toast(`Загружено: ${r.saved.length} файл(ов)`);
-        render();
+        const r = await uploadFiles(e.dataTransfer.files);
+        if (r) {
+          toast(`Загружено: ${r.saved.length} файл(ов)`);
+          render();
+        }
       } catch (ex) {
         toast(ex.message, "err");
       }

@@ -294,43 +294,53 @@ window.attachTooltip = attachTooltip;
 function confirmModal(title, text, confirmWord, onConfirm) {
   const word = h("input", { class: "input", placeholder: confirmWord });
   const err = h("div", { class: "form-error" });
-  const modal = h(
-    "div",
-    { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-    h(
+  // Промис: true — подтверждено (onConfirm выполнен), false — отмена.
+  // Старые вызовы тоже валидны — возврат промиса можно игнорировать.
+  return new Promise((resolve) => {
+    const modal = h(
       "div",
-      { class: "modal" },
-      h("div", { class: "modal-title" }, title),
-      h("div", { class: "modal-text" }, text),
-      word,
-      err,
+      { class: "modal-backdrop", onclick: (e) => e.target === modal && close(false) },
       h(
         "div",
-        { class: "modal-actions" },
-        h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
+        { class: "modal" },
+        h("div", { class: "modal-title" }, title),
+        h("div", { class: "modal-text" }, text),
+        word,
+        err,
         h(
-          "button",
-          {
-            class: "btn btn-danger",
-            onclick: async () => {
-              if (word.value.trim().toUpperCase() !== confirmWord) {
-                err.textContent = `Введите слово ${confirmWord}`;
-                return;
-              }
-              await onConfirm();
-              close();
+          "div",
+          { class: "modal-actions" },
+          h("button", { class: "btn btn-ghost", onclick: () => close(false) }, "Отмена"),
+          h(
+            "button",
+            {
+              class: "btn btn-danger",
+              onclick: async () => {
+                if (word.value.trim().toUpperCase() !== confirmWord) {
+                  err.textContent = `Введите слово ${confirmWord}`;
+                  return;
+                }
+                try {
+                  await onConfirm();
+                } catch (ex) {
+                  err.textContent = ex.message;
+                  return;
+                }
+                close(true);
+              },
             },
-          },
-          "Подтвердить",
+            "Подтвердить",
+          ),
         ),
       ),
-    ),
-  );
-  document.body.append(modal);
-  word.focus();
-  function close() {
-    modal.remove();
-  }
+    );
+    document.body.append(modal);
+    word.focus();
+    function close(result) {
+      modal.remove();
+      resolve(result);
+    }
+  });
 }
 
 /* ── экран входа ─────────────────────────────────────────── */
