@@ -20,9 +20,12 @@ docker compose up -d --build
 Или вручную:
 
 ```bash
+cp templates/.env.example .env         # конфиг (HOST/API_KEY/MODEL + WEB_*)
 docker build -t novelmaestro .
 docker run -d -p 8756:8756 \
+  --env-file .env \
   -v "$PWD/projects:/app/projects" \
+  -v "$PWD/templates:/app/templates" \
   -v "$PWD/web/job_logs:/app/web/job_logs" \
   novelmaestro
 ```
@@ -54,14 +57,21 @@ docker run -d -p 8756:8756 \
 | Что | Куда | Назначение |
 | --- | --- | --- |
 | `./projects` | `/app/projects` | **все проекты** — монтируйте обязательно, иначе потеряются при пересоздании контейнера |
+| `./templates` | `/app/templates` | ваши **наборы шаблонов** (вкладка «Шаблоны») — монтируется, иначе изменения потеряются при пересоздании |
 | `./web/job_logs` | `/app/web/job_logs` | история запусков (`jobs.json` + логи), переживает рестарт |
-| `./.env` | env-переменные | `env_file` с `required: false` — если `.env` есть, его значения попадают в окружение (приоритет: env > файл); LLM-скрипты в subprocess наследуют окружение |
+| `./.env` | env-переменные | `env_file` с `required: false` — если `.env` есть, его значения попадают в окружение (приоритет: env > файл); LLM-скрипты в subprocess наследуют окружение, `get_server_config` читает окружение прежде файла |
 | токен | `projects/.web_secret` | генерируется при `WEB_AUTH=1`, сохраняется в volume |
 
 Переменные окружения — те же, что локально: `WEB_HOST`, `WEB_PORT`,
 `WEB_AUTH`, `WEB_TOKEN`, `WEB_MAX_UPLOAD_MB`, `WEB_JOBS_LIMIT`,
 `WEB_PROJECTS_DIR` (не нужен при монтировании в дефолтный путь), а также
 `HOST`/`API_KEY`/`MODEL` и `*_MODEL` для LLM.
+
+**Конфиг в Docker**: основной путь — `./.env` на хосте; изменения
+применяются после `docker compose up -d` (env_file перечитывается при
+пересоздании контейнера). Вкладка «Настройки» (глобальный `.env`)
+в контейнере пишет файл `/app/.env`, который не переживает пересоздание
+и перекрывается переменными окружения — в Docker правите конфиг на хосте.
 
 ### Права на файлы и безопасность
 
@@ -84,7 +94,22 @@ git pull
 docker compose up -d --build
 ```
 
-Данные (volume) не трогаются.
+- Переживают обновление (живут на хосте, смонтированы): `projects/`
+  (все книги), `templates/` (ваши наборы шаблонов), `web/job_logs/`
+  (история запусков), `projects/.web_secret` (токен).
+- Монтирование `./templates` заменяет встроенную папку: запускайте
+  compose из клона репозитория — там `templates/` есть (наборы General
+  и др.); если её нет, контейнер увидит пустую папку и «Шаблоны» будут
+  пустыми — скопируйте `templates/` из репозитория.
+- Не переживает: `/app/.env` внутри контейнера (глобальная вкладка
+  «Настройки») — в Docker конфиг правится в `./.env` на хосте
+  (`cp templates/.env.example .env` при первом старте).
+- Если используете готовый образ из реестра вместо локальной сборки:
+  замените `image: novelmaestro:latest` в compose на
+  `image: ghcr.io/<владелец>/<репо>:<версия>` и обновляйтесь
+  `docker compose pull && docker compose up -d` (без `--build`).
+- После обновления откройте интерфейс и убедитесь, что проекты и
+  шаблоны на месте.
 
 ## Портативная сборка Windows 10/11
 

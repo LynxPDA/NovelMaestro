@@ -85,8 +85,9 @@ docker compose up -d --build
 # → http://localhost:8756  (в браузере)
 ```
 
-Данные живут в папке `projects/` (монтируется в контейнер). Подробности —
-порты, переменные, обновление — в [packaging/README.md](packaging/README.md).
+Данные живут в папках `projects/` и `templates/` (монтируются в контейнер).
+Подробности — порты, переменные, обновление — в
+[packaging/README.md](packaging/README.md).
 
 Параметры сервера: `python3 run.py --no-open` (без браузера),
 `--projects-dir <путь>` (своя папка проектов), а также
