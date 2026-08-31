@@ -92,12 +92,12 @@ robocopy $root $portable /E /XD .git .github projects tests servers Images backu
 if ($LASTEXITCODE -ge 8) { throw "robocopy: ошибка копирования (код $LASTEXITCODE)" }
 
 # ── 6. start.bat (только ASCII: cmd читает bat в кодовой странице
-#         консоли; русский текст — внутри браузера) + README.txt ──
+#         консоли; русский текст — внутри браузера) + START.txt ──
 @"
 @echo off
 cd /d "%~dp0"
 echo NovelMaestro: starting web server...
-echo Browser will open automatically (http://127.0.0.1:8756).
+echo Browser will open automatically.
 python\python.exe run.py
 if errorlevel 1 (
   echo.
@@ -110,14 +110,20 @@ NovelMaestro — портативная сборка (Windows 10/11)
 
 Запуск: двойной клик по start.bat
   - поднимется web-сервер и откроется браузер (http://127.0.0.1:8756)
+  - адрес по умолчанию — только этот компьютер (127.0.0.1);
+    если порт 8756 занят — сервер сам возьмёт следующий свободный
+    и покажет его в консоли и в баннере сервера
   - папка projects\ создастся рядом при первом запуске (разделы ACTIVE/HOLD/DONE)
 
 Конфиг: файл .env рядом с run.py (см. templates\.env.example) —
   LLM-сервер (HOST/API_KEY/MODEL) и WEB_* настройки.
   Если .env нет — он создастся из шаблона при первом запуске.
+  WEB_HOST=127.0.0.1 — локальный доступ (по умолчанию);
+  WEB_HOST=0.0.0.0 — доступ с других машин сети, тогда включите
+  WEB_AUTH=1 (токен: WEB_TOKEN или projects\.web_secret).
 
 Обновление версии: перенесите папку projects\ в новую сборку и запустите.
-"@ | Set-Content -Path (Join-Path $portable "README.txt") -Encoding UTF8
+"@ | Set-Content -Path (Join-Path $portable "START.txt") -Encoding UTF8
 
 # ── 7. (опционально) zip ────────────────────────────────────────────
 if (-not $NoZip) {

@@ -239,3 +239,38 @@
       (ТОКЕНЫ), review-поля translate_check_llm.
 * [x] ner.py: лог «Голосуют» — "reading (произношение)" вместо
       "pinyin / reading". 943 теста зелёные.
+
+## Раунд 4: сервер (127.0.0.1, fallback-порт), баги SPA, {original_text} в translate
+
+### R4-1. Сервер по умолчанию — только localhost + fallback-порт
+
+* [x] web/main.py: дефолт `--host`/`WEB_HOST` — `127.0.0.1` (было 0.0.0.0);
+      баннер различает localhost (токен не нужен) и 0.0.0.0 (предупреждение).
+* [x] Порт занят → `_bind_server` берёт следующий свободный (port+1…+100),
+      пишет предупреждение и фактический адрес в консоль.
+* [x] README.md: раздел «Настройки сервера» — адрес/порт, ключи авторизации,
+      127.0.0.1 vs 0.0.0.0, решение возможных проблем.
+* [x] web/README.md, .env.example, run.py help — актуализированы.
+
+### R4-2. Сборка Windows: START.txt вместо README.txt
+
+* [x] README.txt → START.txt (инструкция по запуску; README.md — основная
+      документация); start.bat без хардкод-URL (fallback-порт).
+* [x] packaging/README.md: раздел «Сервер в портативной сборке».
+
+### R4-3. Баги SPA
+
+* [x] Вкладки «Глоссарий»/«Проверка» пустые: `PAGE_SIZE` пропал из app.js
+      (c60ac00) — определён в project-views.js, где используется.
+* [x] Новый проект не появлялся до refresh: `close()` модалки резолвил
+      false раньше времени; теперь `close(true)` сразу после создания,
+      загрузки обложки/исходника — фоном; `?project=` в upload исходника.
+
+### R4-4. translate/polish: тег {original_text}
+
+* [x] translate_book.py: {original_text} заменяется в translate/polish
+      (нет тега — текст дописывается после промпта, обратная
+      совместимость); DEFAULT_TRANSLATE_PROMPT и pipeline_prompt.txt
+      обновлены; доки (help.md/DEVELOPERS.md).
+* [x] Тесты: W1-дефолты (127.0.0.1), fallback-порт (занят/свободен),
+      {original_text} (тег и append-режим). 953 зелёных.
