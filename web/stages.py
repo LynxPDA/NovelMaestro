@@ -340,7 +340,9 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["-c", str(form["count_threshold"])]
     if form.get("fields"):
         argv += ["--fields", str(form["fields"])]
-    for flag in ("apply", "auto_apply", "dry_run"):
+    # --apply/--auto-apply/--dry-run: «Предпросмотр (--dry-run)» из формы
+    # убран — предпросмотр правок показывают «Проверки» проекта
+    for flag in ("apply", "auto_apply"):
         if form.get(flag):
             argv.append(f"--{flag.replace('_', '-')}")
     if form.get("no_bak"):
@@ -837,8 +839,6 @@ STAGE_SPECS: dict[str, dict] = {
             # --apply убран из Запусков: применяется только в «Проверках»
             # проекта (/api/ner/review/apply шлёт apply напрямую)
             {"name": "auto_apply", "label": "Автоприменение (--auto-apply)",
-             "type": "bool", "default": False},
-            {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
              "type": "bool", "default": False},
             {"name": "no_bak", "label": "Не создавать .bak (--no-bak)",
              "type": "bool", "default": False},

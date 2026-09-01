@@ -1146,7 +1146,9 @@ def test_build_ner_modes():
 
 
 def test_build_ner_check_flags():
-    """exclude-words/aliases/votes убраны; поля — единым --fields."""
+    """exclude-words/aliases/votes убраны; поля — единым --fields;
+    «Предпросмотр (--dry-run)» из формы убран (предпросмотр —
+    в «Проверках» проекта)."""
     form = {"input": "ner.json",
             "review": "ner_review.json", "passes": "types",
             "types": "Person", "count_threshold": "2",
@@ -1160,7 +1162,7 @@ def test_build_ner_check_flags():
     assert argv[argv.index("--fields") + 1] == "term,type,context"
     assert "--exclude-words" not in argv
     assert "--show-aliases" not in argv and "--show-votes" not in argv
-    assert "--dry-run" in argv
+    assert "--dry-run" not in argv
     assert "--apply" not in argv and "--auto-apply" not in argv
     # пустые fields — флага нет (дефолт скрипта)
     argv2 = build_command("ner_check", {"fields": ""}, {})
