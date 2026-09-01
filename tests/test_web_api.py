@@ -1412,6 +1412,37 @@ def test_dashboard_stats_cache(monkeypatch, srv_ctx):
     api._CACHE_LOADED.clear()
 
 
+def test_project_delete_stats_cache_scoped(monkeypatch, srv_ctx):
+    """Удаление проекта сбрасывает только ЕГО stats-кеш — соседний
+    проект не пересобирается (после удаления список не виснет)."""
+    import web.api as api
+    from core import projects as P
+    calls = []
+    orig = P.project_stats
+    def counting(*a, **k):
+        calls.append(1)
+        return orig(*a, **k)
+    monkeypatch.setattr(P, "project_stats", counting)
+    api._STATS_CACHE.clear()
+    api._CACHE_LOADED.clear()
+    _, port, _ = srv_ctx()
+    _create_project(port, _, name="first")
+    _create_project(port, _, name="second")
+    # прогреть кеш обоих проектов
+    res1, _ = _request(port, "GET", "/api/dashboard")
+    assert res1.status == 200 and len(calls) == 2
+    # удалить один проект
+    res2, _ = _request(port, "DELETE", "/api/projects",
+                       {"section": "ACTIVE", "name": "first",
+                        "confirm": "УДАЛИТЬ"})
+    assert res2.status == 200
+    # кеш «second» жив — project_stats не пересобирается
+    res3, _ = _request(port, "GET", "/api/dashboard")
+    assert res3.status == 200 and len(calls) == 2
+    api._STATS_CACHE.clear()
+    api._CACHE_LOADED.clear()
+
+
 def test_strip_secret_keys_keeps_web_out_of_project():
     """Копия системного .env в проект: API_KEY затирается, WEB_*
     (системные настройки web) не попадают в pdir/.env вовсе."""

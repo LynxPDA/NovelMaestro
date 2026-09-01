@@ -387,10 +387,9 @@ let hubCache = null;
 
 async function loadHub(force = false) {
   if (hubCache && !force) return hubCache;
-  const [sections, templates, dash] = await Promise.all([
+  const [sections, templates] = await Promise.all([
     api("/sections"),
     api("/templates"),
-    api("/dashboard").catch(() => null),
   ]);
   const bySection = {};
   // списки проектов по разделам — параллельно, а не по очереди
@@ -403,22 +402,32 @@ async function loadHub(force = false) {
   );
   for (const [name, projects] of lists) bySection[name] = projects;
   /* stats для карточек берём из кешируемого /dashboard одним запросом,
-     а не дергаем /stats на каждый проект (R5-K follow-up). */
-  const statsMap = {};
-  if (dash) {
-    for (const s of dash.sections || []) {
-      for (const p of s.projects || []) {
-        statsMap[`${s.name}/${p.name}`] = p.stats;
-      }
-    }
-  }
-  hubCache = {
+     а не дергаем /stats на каждый проект (R5-K follow-up). Список
+     рендерится сразу, статистика догружается в фоне — удаление
+     проекта не ждёт пересчёта stats всех проектов. */
+  const cache = {
     sections: sections.sections,
     templates: templates.templates,
     bySection,
-    statsMap,
+    statsMap: {},
   };
-  return hubCache;
+  hubCache = cache;
+  api("/dashboard")
+    .then((dash) => {
+      if (hubCache !== cache) return; // кеш уже перезапрошен — мимо
+      const statsMap = {};
+      if (dash) {
+        for (const s of dash.sections || []) {
+          for (const p of s.projects || []) {
+            statsMap[`${s.name}/${p.name}`] = p.stats;
+          }
+        }
+      }
+      cache.statsMap = statsMap;
+      if (parseRoute().view === "hub") render();
+    })
+    .catch(() => {});
+  return cache;
 }
 
 async function projectStats(section, name) {
@@ -616,6 +625,10 @@ function manageProjectModal(section, name) {
         info.textContent = r.stats;
       })
       .catch(() => {});
+    function close(result = false) {
+      modal.remove();
+      resolve(result);
+    }
     const modal = h(
       "div",
       {
@@ -647,8 +660,7 @@ function manageProjectModal(section, name) {
                       body: { section, name, dst: dstSel.value },
                     });
                     toast(`Перенесено → ${r.section}/${r.name}`);
-                    close();
-                    resolve(true);
+                    close(true);
                   } catch (ex) {
                     err.textContent = ex.message;
                   }
@@ -673,8 +685,7 @@ function manageProjectModal(section, name) {
                       body: { section, name, new_name: newName.value.trim() },
                     });
                     toast(`Переименовано → ${r.name}`);
-                    close();
-                    resolve(true);
+                    close(true);
                   } catch (ex) {
                     err.textContent = ex.message;
                   }
@@ -698,8 +709,7 @@ function manageProjectModal(section, name) {
                       body: { section, name, new_name: `${name}_copy` },
                     });
                     toast(`Копия: ${r.section}/${r.name}`);
-                    close();
-                    resolve(true);
+                    close(true);
                   } catch (ex) {
                     err.textContent = ex.message;
                   }
@@ -722,14 +732,13 @@ function manageProjectModal(section, name) {
                         body: { section, name, confirm: "УДАЛИТЬ" },
                       });
                       toast(`Удалено: ${section}/${name}`);
-                      close();
-                      resolve(true);
+                      close(true);
                     },
                   ),
               },
               "Удалить",
             ),
-            h("button", { class: "btn btn-ghost", onclick: close }, "Закрыть"),
+            h("button", { class: "btn btn-ghost", onclick: () => close() }, "Закрыть"),
           ),
         ),
       ),
@@ -739,10 +748,6 @@ function manageProjectModal(section, name) {
       dstSel.append(h("option", { value: s.name }, s.name));
     }
     newName.value = name;
-    function close() {
-      modal.remove();
-      resolve(false);
-    }
   });
 }
 
@@ -1722,8 +1727,9 @@ function render() {
 }
 
 /* ── Шаблоны  ──────────────────────────────────── */
-function nameModal(title, placeholder, onOk) {
+function nameModal(title, placeholder, onOk, initial = "") {
   const name = h("input", { class: "input", placeholder });
+  if (initial) name.value = initial;
   const err = h("div", { class: "form-error" });
   // защита от двойного клика: второй POST тем же именем = дубль раздела
   // (параллельные запросы проходили проверку «уже существует» вместе)
@@ -1765,6 +1771,7 @@ function nameModal(title, placeholder, onOk) {
   );
   document.body.append(modal);
   name.focus();
+  if (initial) name.select();
   function close() {
     modal.remove();
   }
@@ -1833,6 +1840,7 @@ function sectionsModal() {
                 refresh();
                 render(); // хаб за модалкой сразу видит изменения
               },
+              s.name,
             ),
         },
         "Переименовать",
@@ -2140,6 +2148,7 @@ async function viewTemplates() {
                     toast(`Переименовано: ${e.name} → ${nm}`);
                     render();
                   },
+                  e.name,
                 ),
             },
             "Переим.",

@@ -652,6 +652,18 @@ def _invalidate_all_stats(root: Path) -> None:
         _save_stats_cache(root)
 
 
+def _invalidate_stats_entry(root: Path, sec: str, name: str) -> None:
+    """Точечный сброс кеша stats одного проекта (создание/перенос/
+    переименование/дублирование/удаление) — остальные проекты кеш
+    сохраняют, dashboard после операции не пересобирается целиком.
+    """
+    with _STATS_LOCK:
+        key = _stats_cache_key(root, sec, name)
+        for k in (key, key + ":status"):
+            _STATS_CACHE.pop(k, None)
+        _save_stats_cache(root)
+
+
 def _cached_stats(prj, root: Path, sec: str, name: str) -> str:
     """stats проекта: из кеша, если сигнатура не изменилась (без TTL).
 
@@ -864,7 +876,7 @@ def _projects_create(ctx: dict) -> dict:
                      if g.strip()] or None),
         )
         copied = prj.fill_project_from_template(pdir, tpl_dir)
-    _invalidate_all_stats(root)
+    _invalidate_stats_entry(root, section, name)
     return {"ok": True, "section": section, "name": name,
             "renamed": name != raw_name, "copied": copied}
 
@@ -879,7 +891,8 @@ def _projects_move(ctx: dict) -> dict:
     ok, res = prj.move_project(_projects_root(ctx), section, name, dst)
     if not ok:
         raise ApiError(400, str(res))
-    _invalidate_all_stats(_projects_root(ctx))
+    # старый ключ (root::раздел/имя) устарел; новый ещё не закеширован
+    _invalidate_stats_entry(_projects_root(ctx), section, name)
     return {"ok": True, "section": dst, "name": Path(res).name}
 
 
@@ -893,7 +906,7 @@ def _projects_rename(ctx: dict) -> dict:
     ok, res = prj.rename_project(_projects_root(ctx), section, name, new_name)
     if not ok:
         raise ApiError(400, str(res))
-    _invalidate_all_stats(_projects_root(ctx))
+    _invalidate_stats_entry(_projects_root(ctx), section, name)
     return {"ok": True, "section": section, "name": Path(res).name}
 
 
@@ -907,7 +920,7 @@ def _projects_copy(ctx: dict) -> dict:
     ok, res = prj.copy_project(_projects_root(ctx), section, name, new_name)
     if not ok:
         raise ApiError(400, str(res))
-    _invalidate_all_stats(_projects_root(ctx))
+    _invalidate_stats_entry(_projects_root(ctx), section, new_name)
     return {"ok": True, "section": section, "name": Path(res).name}
 
 
@@ -921,7 +934,7 @@ def _projects_delete(ctx: dict) -> dict:
     ok, res = prj.delete_project(_projects_root(ctx), section, name)
     if not ok:
         raise ApiError(400, str(res))
-    _invalidate_all_stats(_projects_root(ctx))
+    _invalidate_stats_entry(_projects_root(ctx), section, name)
     return {"ok": True, "section": section, "name": name}
 
 

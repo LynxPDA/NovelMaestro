@@ -353,6 +353,7 @@ function viewProject(section, name, tab) {
               toast(`Переименовано: ${e.name} → ${nm}`);
               render();
             },
+            e.name,
           ),
       },
       "Переим.",
@@ -3078,7 +3079,7 @@ function viewProject(section, name, tab) {
     const coverImg = h("img", { class: "cover-preview", alt: "обложка" });
     const coverFile = h("input", {
       type: "file",
-      accept: ".jpg,.jpeg,.png",
+      accept: ".jpg,.jpeg,.png,.webp,.gif,.bmp",
     });
     const coverUpload = h("button", { class: "btn btn-sm" }, "Загрузить");
     const coverDelete = h(
@@ -3160,42 +3161,68 @@ function viewProject(section, name, tab) {
         return;
       }
       try {
-        const b64 = await new Promise((resolve, reject) => {
-          const r = new FileReader();
-          r.onload = () => resolve(String(r.result).split(",", 2)[1] || "");
-          r.onerror = () => reject(new Error("не удалось прочитать файл"));
-          r.readAsDataURL(f);
-        });
-        await api("/cover", {
-          method: "PUT",
-          body: {
-            project: `${section}/${name}`,
-            name: f.name,
-            content_base64: b64,
-          },
-        });
-        toast("Обложка загружена");
+        // имя сохраняется: cover1.png, cover2.png… попадают в source/
+        // как есть (PUT /cover пишет всегда source/cover.*)
+        let existing = [];
+        try {
+          const d = await api(
+            `/files?project=${encodeURIComponent(`${section}/${name}`)}` +
+            `&path=source`,
+          );
+          existing = (d.entries || []).map((e) => e.name);
+        } catch {
+          /* source/ ещё нет — всё новое */
+        }
+        if (existing.includes(f.name)) {
+          const ok = await confirmModal(
+            "Загрузка с перезаписью",
+            `В source/ уже есть ${f.name}. Заменить этим файлом?`,
+            "ПЕРЕЗАПИСАТЬ",
+            async () => {},
+          );
+          if (!ok) return;
+        }
+        const form = new FormData();
+        form.append("dest", "source");
+        form.append("files[]", f, f.name);
+        await apiUpload(`/upload?${q}`, form);
+        toast(`Загружено: source/${f.name}`);
         await loadCover();
+        if ([...coverSel.options].some((o) => o.value === f.name)) {
+          coverSel.value = f.name;
+          coverSel.dispatchEvent(new Event("change"));
+        }
       } catch (ex) {
         toast(ex.message, "err");
       }
     });
-    coverDelete.addEventListener("click", () =>
+    coverDelete.addEventListener("click", () => {
+      const sel = coverSel.value;
       confirmModal(
         "Удалить обложку",
-        "Файл будет удалён из source/",
+        sel
+          ? `Файл source/${sel} будет удалён`
+          : "Каноническая обложка (cover.*) будет удалена из source/",
         "УДАЛИТЬ",
         async () => {
           try {
-            await api(`/cover?${q}`, { method: "DELETE" });
+            if (sel) {
+              const dq = new URLSearchParams({
+                project: `${section}/${name}`,
+                path: `source/${sel}`,
+              });
+              await api(`/file?${dq}`, { method: "DELETE" });
+            } else {
+              await api(`/cover?${q}`, { method: "DELETE" });
+            }
             toast("Обложка удалена");
             await loadCover();
           } catch (ex) {
             toast(ex.message, "err");
           }
         },
-      ),
-    );
+      );
+    });
     await loadCover();
 
     /* — source-файлы с выбором файла из source/ (редактор, сохранение,
