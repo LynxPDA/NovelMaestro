@@ -799,10 +799,15 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "min_count", "label": "Мин. count для сохранения",
              "type": "number", "default": "",
              "help": "режим «постобработка»: фильтр count; в LLM-режимах — дополнительно"},
-            {"name": "save_interval", "label": "Интервал сохранения кэша",
-             "type": "number", "default": "10"},
+            {"name": "save_interval", "label": "Интервал сохранения ner.json",
+             "type": "number", "default": "10",
+             "help": "каждые N чанков — промежуточный снапшот глоссария. "
+                      "Возобновление с места остановки убрано: каждый "
+                      "запуск идёт с первого чанка"},
             {"name": "retries", "label": "Повторные попытки",
-             "type": "number", "default": "3"},
+             "type": "number", "default": "3",
+             "help": "общее число попыток LLM на чанк: сеть/стрим и "
+                      "невалидный формат ответа считаются одинаково"},
             {"name": "timeout", "label": "Таймаут запроса, сек",
              "type": "number", "default": "300"},
         ],

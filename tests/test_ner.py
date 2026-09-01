@@ -30,12 +30,9 @@ def ner_globals():
 @pytest.fixture()
 def ner_reset():
     old_data = NER.global_ner_data
-    old_chunks = NER.processed_chunks
     NER.global_ner_data = []
-    NER.processed_chunks = set()
     yield
     NER.global_ner_data = old_data
-    NER.processed_chunks = old_chunks
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -43,17 +40,18 @@ def ner_reset():
 # ══════════════════════════════════════════════════════════════════════
 def test_process_chunk_pass1(monkeypatch):
     ok = '[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян"}]'
-    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: ok)
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (ok, None))
     idx, ners, err = NER.process_chunk_pass1(
         7, "текст", "h", "m", "k", 1, 10, None, "промпт", SilentLog())
     assert (idx, err) == (7, None) and ners[0]["term"] == "陈阳"
-    # LLM не ответил
-    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: None)
+    # LLM не ответил (транспортная ошибка после всех попыток)
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (None, "HTTP 500"))
     idx, ners, err = NER.process_chunk_pass1(
         7, "текст", "h", "m", "k", 3, 10, None, "промпт", SilentLog())
-    assert ners == [] and err is not None and "retries" in err
+    assert ners == [] and err == "HTTP 500"
     # некорректный формат
-    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: "не json")
+    monkeypatch.setattr(NER, "llm_request",
+                        lambda *a, **k: ("не json", "Invalid NER format"))
     idx, ners, err = NER.process_chunk_pass1(
         7, "текст", "h", "m", "k", 1, 10, None, "промпт", SilentLog())
     assert ners == [] and err == "Invalid NER format"
@@ -66,12 +64,13 @@ def test_process_chunk_pass2(monkeypatch):
         SilentLog())
     assert (idx, ners, err) == (1, [], None)
     ok = '[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян", "status": "confirmed"}]'
-    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: ok)
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (ok, None))
     idx, ners, err = NER.process_chunk_pass2(
         1, "текст", [{"term": "陈阳"}], "h", "m", "k", 1, 10, None,
         "шаблон {chunk_text} {ner_json}", SilentLog())
     assert err is None and ners[0]["status"] == "confirmed"
-    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: None)
+    monkeypatch.setattr(NER, "llm_request",
+                        lambda *a, **k: (None, "Pass2 fail after 2 retries"))
     idx, ners, err = NER.process_chunk_pass2(
         1, "текст", [{"term": "陈阳"}], "h", "m", "k", 2, 10, None,
         "шаблон {chunk_text} {ner_json}", SilentLog())
@@ -219,14 +218,13 @@ def test_run_two_pass_fresh(tmp_path, monkeypatch, ner_globals):
                  '"translation": "Чэнь Ян", "status": "confirmed"}]')
 
     def fake_llm(system_prompt, user_content, *a, **k):
-        return p1_answer if system_prompt == "ПРОМПТ1" else p2_answer
+        answer = p1_answer if system_prompt == "ПРОМПТ1" else p2_answer
+        return answer, None
 
     monkeypatch.setattr(NER, "llm_request", fake_llm)
     out = str(tmp_path / "ner.json")
     NER.run_two_pass(
         all_chunks=["текст чанка один", "текст чанка два"],
-        pass1_cache_file=str(tmp_path / "p1.json"),
-        pass2_cache_file=str(tmp_path / "p2.json"),
         base_url="http://h", model_name="m", api_key="",
         max_retries=1, timeout=10, temperature=None,
         pass1_prompt="ПРОМПТ1", pass2_prompt="ПРОМПТ2 {chunk_text} {ner_json}",
@@ -236,47 +234,44 @@ def test_run_two_pass_fresh(tmp_path, monkeypatch, ner_globals):
     data = json.loads(Path(out).read_text(encoding="utf-8"))
     assert len(data) == 1 and data[0]["term"] == "陈阳"
     assert data[0]["count"] == 2  # найден в обоих чанках
-    # кэши удалены после финализации
+    # кэши возобновления не создаются
     assert not (tmp_path / "p1.json").exists()
     assert not (tmp_path / "p2.json").exists()
 
 
-def test_run_two_pass_all_cached(tmp_path, monkeypatch, ner_globals):
-    """Все чанки уже в pass2-кэше — LLM не вызывается."""
-    cache = {0: [{"term": "陈阳", "type": "Person (male)",
-                  "translation": "Чэнь Ян"}]}
-    p2f = tmp_path / "p2.json"
-    p2f.write_text(json.dumps({str(k): v for k, v in cache.items()},
-                              ensure_ascii=False), encoding="utf-8")
+def test_run_two_pass_no_resume_from_cache(tmp_path, monkeypatch, ner_globals):
+    """Возобновление убрано: кэшей нет в сигнатуре, LLM зовётся для
+    всех чанков — файлы pass1/pass2-кэшей не читаются никогда."""
+    calls = []
 
-    def boom(*a, **k):
-        raise AssertionError("LLM не должен вызываться")
+    def fake_llm(system_prompt, user_content, *a, **k):
+        calls.append(system_prompt)
+        return ('[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян"}]',
+                None)
 
-    monkeypatch.setattr(NER, "llm_request", boom)
+    monkeypatch.setattr(NER, "llm_request", fake_llm)
     out = str(tmp_path / "ner.json")
     NER.run_two_pass(
-        all_chunks=["текст"], pass1_cache_file=str(tmp_path / "p1.json"),
-        pass2_cache_file=str(p2f), base_url="h", model_name="m", api_key="",
+        all_chunks=["текст"], base_url="h", model_name="m", api_key="",
         max_retries=1, timeout=10, temperature=None,
         pass1_prompt="П1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=1, ner_file=out, threshold=0.95, ngram_size=3,
         save_interval=5, logger=SilentLog(),
     )
+    assert len(calls) == 2  # pass1 + pass2 для единственного чанка
     data = json.loads(Path(out).read_text(encoding="utf-8"))
-    assert len(data) == 1
+    assert data[0]["term"] == "陈阳"
 
 
 def test_run_two_pass_counts_failures(tmp_path, monkeypatch, ner_globals):
     """H4 (AUDIT): run_two_pass возвращает число упавших чанков."""
     def fake_llm(system_prompt, user_content, *a, **k):
-        return None  # LLM не отвечает → чанк упал
+        return None, "HTTP 500"  # LLM не отвечает → чанк упал
 
     monkeypatch.setattr(NER, "llm_request", fake_llm)
     out = str(tmp_path / "ner.json")
     failed = NER.run_two_pass(
         all_chunks=["чанк один", "чанк два", "чанк три"],
-        pass1_cache_file=str(tmp_path / "p1.json"),
-        pass2_cache_file=str(tmp_path / "p2.json"),
         base_url="http://h", model_name="m", api_key="",
         max_retries=1, timeout=10, temperature=None,
         pass1_prompt="ПРОМПТ1", pass2_prompt="П2 {chunk_text} {ner_json}",
@@ -292,13 +287,11 @@ def test_run_two_pass_all_ok_returns_zero(tmp_path, monkeypatch, ner_globals):
     """H4: успешный прогон → 0 упавших."""
     p1_answer = '[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян"}]'
     def fake_llm(system_prompt, user_content, *a, **k):
-        return p1_answer
+        return p1_answer, None
 
     monkeypatch.setattr(NER, "llm_request", fake_llm)
     failed = NER.run_two_pass(
-        all_chunks=["текст"], pass1_cache_file=str(tmp_path / "p1.json"),
-        pass2_cache_file=str(tmp_path / "p2.json"),
-        base_url="h", model_name="m", api_key="",
+        all_chunks=["текст"], base_url="h", model_name="m", api_key="",
         max_retries=1, timeout=10, temperature=None,
         pass1_prompt="ПРОМПТ1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=1, ner_file=str(tmp_path / "ner.json"),
@@ -315,15 +308,13 @@ def test_run_two_pass_pass2_fallback(tmp_path, monkeypatch, ner_globals):
     def fake_llm(system_prompt, user_content, *a, **k):
         calls.append(system_prompt)
         if system_prompt == "ПРОМПТ1":
-            return p1_answer
-        return None  # pass2 не отвечает
+            return p1_answer, None
+        return None, "Pass2 fail after 1 retries"  # pass2 не отвечает
 
     monkeypatch.setattr(NER, "llm_request", fake_llm)
     out = str(tmp_path / "ner.json")
     NER.run_two_pass(
-        all_chunks=["текст"], pass1_cache_file=str(tmp_path / "p1.json"),
-        pass2_cache_file=str(tmp_path / "p2.json"),
-        base_url="h", model_name="m", api_key="",
+        all_chunks=["текст"], base_url="h", model_name="m", api_key="",
         max_retries=1, timeout=10, temperature=None,
         pass1_prompt="ПРОМПТ1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=1, ner_file=out, threshold=0.95, ngram_size=3,
@@ -345,8 +336,8 @@ P2_ANSWER = ('[{"term": "陈阳", "type": "Person (male)", '
 def _fake_llm(system_prompt, user_content, *a, **k):
     # pass2 получает особый системный промпт
     if system_prompt == NER.SYSTEM_PROMPT_PASS2_SYS:
-        return P2_ANSWER
-    return P1_ANSWER
+        return P2_ANSWER, None
+    return P1_ANSWER, None
 
 
 def test_main_two_pass(tmp_path, monkeypatch, ner_reset):
@@ -354,6 +345,14 @@ def test_main_two_pass(tmp_path, monkeypatch, ner_reset):
     (tmp_path / "novel.txt").write_text(
         "陈阳 шёл по дороге. Потом 陈阳 остановился.\n"
         "Это был долгий путь.\n", encoding="utf-8")
+    # устаревшие файлы возобновления: не читаются, удаляются при старте
+    (tmp_path / "ner_pass1_cache.json").write_text(json.dumps(
+        {"0": [{"term": "старый", "type": "Person", "translation": "С"}]},
+        ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "ner_pass2_cache.json").write_text(
+        json.dumps({"0": [{"term": "старый", "type": "Person",
+                          "translation": "С"}]}, ensure_ascii=False),
+        encoding="utf-8")
     monkeypatch.setattr(NER, "llm_request", _fake_llm)
     monkeypatch.setattr(sys, "argv", [
         "ner.py", "novel.txt", "--host", "http://h", "--model", "m",
@@ -361,8 +360,10 @@ def test_main_two_pass(tmp_path, monkeypatch, ner_reset):
     NER.main()
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data and data[0]["term"] == "陈阳"
-    # кэши и прогресс убраны после успешного завершения
+    assert all(d["term"] != "старый" for d in data)  # кэш НЕ читался
+    # файлы возобновления удалены при старте
     assert not (tmp_path / "ner_pass1_cache.json").exists()
+    assert not (tmp_path / "ner_pass2_cache.json").exists()
     assert not (tmp_path / "ner_progress.json").exists()
     # лог извлечения — в logs/, не рядом с txt
     assert (tmp_path / "logs" / "ner_extraction.log").is_file()
@@ -374,7 +375,7 @@ def test_main_single_pass(tmp_path, monkeypatch, ner_reset):
     (tmp_path / "novel.txt").write_text(
         "陈阳 против 陈阳 — два упоминания в разных чанках.\n",
         encoding="utf-8")
-    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: P1_ANSWER)
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (P1_ANSWER, None))
     monkeypatch.setattr(sys, "argv", [
         "ner.py", "novel.txt", "--host", "http://h", "--model", "m",
         "--threads", "1", "--ner_file", "ner.json",
@@ -412,7 +413,7 @@ def test_main_compile_chapters(tmp_path, monkeypatch, ner_reset):
     ch = tmp_path / "chapters" / "00000_1_a"
     ch.mkdir(parents=True)
     (ch / "chapter.txt").write_text("陈阳 в тексте.\n", encoding="utf-8")
-    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: P1_ANSWER)
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (P1_ANSWER, None))
     monkeypatch.setattr(sys, "argv", [
         "ner.py", "--compile_chapters", "--host", "http://h", "--model", "m",
         "--threads", "1", "--ner_file", "ner.json"])
@@ -430,7 +431,7 @@ def test_main_compile_chapters_compile_out(tmp_path, monkeypatch, ner_reset):
     ch = tmp_path / "chapters" / "00000_1_a"
     ch.mkdir(parents=True)
     (ch / "chapter.txt").write_text("陈阳 в тексте.\n", encoding="utf-8")
-    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: P1_ANSWER)
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (P1_ANSWER, None))
     monkeypatch.setattr(sys, "argv", [
         "ner.py", "--compile_chapters", "--compile_out", "my_book.txt",
         "--host", "http://h", "--model", "m",
@@ -450,7 +451,7 @@ def test_main_compile_chapters_range(tmp_path, monkeypatch, ner_reset):
         d = tmp_path / "chapters" / name
         d.mkdir(parents=True)
         (d / "chapter.txt").write_text(f"текст {num}\n", encoding="utf-8")
-    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: P1_ANSWER)
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (P1_ANSWER, None))
     monkeypatch.setattr(sys, "argv", [
         "ner.py", "--compile_chapters", "--start", "2", "--end", "2",
         "--host", "http://h", "--model", "m",
@@ -476,19 +477,22 @@ def test_main_missing_file(tmp_path, monkeypatch, ner_reset):
     assert not (tmp_path / "ner.json").exists()
 
 
-def test_main_resume_progress(tmp_path, monkeypatch, ner_reset):
-    """Все чанки уже в прогрессе → однопроходный режим сразу завершается."""
+def test_main_ignores_stale_progress(tmp_path, monkeypatch, ner_reset):
+    """Устаревший ner_progress.json не резюмирует: все чанки идут в LLM,
+    файл удаляется при старте."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "novel.txt").write_text("короткий текст\n", encoding="utf-8")
     (tmp_path / "ner_progress.json").write_text(
         json.dumps({"processed_indices": [0]}), encoding="utf-8")
     (tmp_path / "ner.json").write_text("[]", encoding="utf-8")
 
-    def boom(*a, **k):
-        raise AssertionError("LLM не должен вызываться")
-
-    monkeypatch.setattr(NER, "llm_request", boom)
+    calls = []
+    monkeypatch.setattr(
+        NER, "llm_request",
+        lambda *a, **k: (calls.append(1) or P1_ANSWER, None))
     monkeypatch.setattr(sys, "argv", [
         "ner.py", "novel.txt", "--host", "http://h", "--model", "m",
         "--threads", "1", "--ner_file", "ner.json"])
     NER.main()
+    assert calls  # LLM вызывался — чанк обработан с нуля
+    assert not (tmp_path / "ner_progress.json").exists()

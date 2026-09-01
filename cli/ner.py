@@ -12,7 +12,8 @@ NER Extraction для веб-новелл.
 
 Two-pass работает конвейером (pipeline): каждый поток выполняет
 pass1 → pass2 для одного чанка, затем берёт следующий. Без барьеров.
-Кэш сохраняется периодически — при падении возобновление с места остановки.
+Каждый запуск обрабатывает все чанки с первого — возобновление с места
+остановки убрано. Снапшоты ner.json — защита от падения, не кэш.
 """
 
 import os
@@ -44,6 +45,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core.common import (  # noqa: E402
+    _retry_wait,
     atomic_write,
     compile_chapter_text,
     determine_model,
@@ -137,7 +139,6 @@ DEFAULT_SAVE_INTERVAL = 10
 
 ner_lock = threading.Lock()
 global_ner_data: list[dict] = []
-processed_chunks: set[int] = set()
 EXTRA_VOTED_FIELDS: set[str] = set()
 
 # ══════════════════════════════════════════════════════════════════════
@@ -393,15 +394,33 @@ def is_valid_ner_format(data) -> bool:
 
 
 def parse_ner_response(response_text: str):
-    try:
-        match = re.search(r"\[.*\]", response_text, re.DOTALL)
-        if match:
-            data = json.loads(match.group())
-            return data if is_valid_ner_format(data) else None
-        data = json.loads(response_text)
-        return data if is_valid_ner_format(data) else None
-    except (json.JSONDecodeError, ValueError):
+    """Найти в ответе первый валидный JSON-массив NER-записей.
+
+    Допустимы вводный текст/пояснения модели до и после массива:
+    декодируется JSON-значение от каждого «[» (raw_decode), поэтому
+    хвост с текстом и скобками не ломает разбор, а объект-обёртка
+    ({"entities": [...]}) обрабатывается поиском вложенного массива."""
+    if not response_text or not response_text.strip():
         return None
+    s = response_text.strip()
+    dec = json.JSONDecoder()
+    # ответ целиком — JSON (массив или обёртка)
+    try:
+        data, _ = dec.raw_decode(s)
+        if is_valid_ner_format(data):
+            return data
+    except json.JSONDecodeError:
+        pass
+    # массив внутри ответа (префикс/суффикс текста)
+    for i, ch in enumerate(s):
+        if ch == "[":
+            try:
+                data, _ = dec.raw_decode(s, i)
+            except json.JSONDecodeError:
+                continue
+            if is_valid_ner_format(data):
+                return data
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -460,56 +479,21 @@ def save_ner_data(filepath: str) -> None:
         _save_ner_data_unlocked(filepath)
 
 
-def load_progress(progress_file: str) -> None:
-    global processed_chunks
-    if os.path.exists(progress_file):
+def cleanup_stale_resume_files(file_dir: str, logger) -> None:
+    """Удалить файлы возобновления прошлых версий (resume убран).
+
+    ner_progress.json / ner_pass1_cache.json / ner_pass2_cache.json
+    больше не создаются и не читаются — старые файлы от прежних
+    прогонов удаляем при старте, чтобы не путали."""
+    for name in ("ner_progress.json", "ner_pass1_cache.json",
+                 "ner_pass2_cache.json"):
+        path = os.path.join(file_dir, name)
         try:
-            with open(progress_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            processed_chunks = set(data.get("processed_indices", []))
-        except Exception:
+            os.remove(path)
+            _log(logger, logging.INFO,
+                 f"🧹 Удалён устаревший файл возобновления: {path}")
+        except OSError:
             pass
-
-
-def save_progress_unlocked(progress_file: str) -> None:
-    tmp_path = progress_file + ".tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump({"processed_indices": sorted(processed_chunks)}, f, indent=2)
-            f.write("\n")
-        os.replace(tmp_path, progress_file)
-    except OSError:
-        pass
-
-
-# ── Универсальный кэш (pass1 / pass2) ──
-
-
-def save_chunk_cache(filepath: str, results: dict[int, list[dict]]) -> None:
-    serializable = {str(k): v for k, v in results.items()}
-    tmp_path = filepath + ".tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(serializable, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        os.replace(tmp_path, filepath)
-    except OSError as exc:
-        print(f"⚠ Кэш не сохранён ({exc}): {filepath}", file=sys.stderr)
-
-
-def load_chunk_cache(filepath: str, logger) -> dict[int, list[dict]]:
-    if not os.path.exists(filepath):
-        return {}
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        result = {int(k): v for k, v in data.items()}
-        _log(logger, logging.INFO,
-             f"📂 Загружен кэш: {len(result)} чанков из {filepath}")
-        return result
-    except Exception as e:
-        _log(logger, logging.ERROR, f"⚠️ Ошибка чтения кэша {filepath}: {e}")
-        return {}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -575,27 +559,53 @@ def llm_request(
     temperature: float | None,
     logger,
     reasoning_effort: str | None = None,
-) -> str | None:
-    """Делегирует в единый стрим core.common.stream_chat_completion
-    ([DONE]/finish_reason, loop-детект, cut, empty — одна гигиена на проект).
-    max_tokens=65536 — исторический предел NER (ТОКЕНЫ, серверный
-    предохранитель). reasoning_effort: пусто = не передаём (дефолт
-    сервера), задано — шлём как есть (none = явное отключение)."""
-    text, _err = stream_chat_completion(
-        base_url, model,
-        [{"role": "system", "content": system_prompt},
-         {"role": "user", "content": user_content}],
-        api_key=api_key,
-        max_retries=max_retries,
-        timeout=timeout,
-        stream_timeout=timeout,
-        temperature=temperature,
-        reasoning_effort=reasoning_effort,
-        max_tokens=65536,
-        logger=logger,
-        label="[NER]",
-    )
-    return text
+    validator=None,
+) -> tuple[str | None, str | None]:
+    """Запрос к LLM с ОБЩИМ бюджетом ретраев на транспорт и формат.
+
+    max_retries — суммарное число попыток на вызов: транспортная
+    ошибка (сеть/стрим/пустой ответ) и ошибка формата (validator
+    вернул текст ошибки) считаются одинаково — один общий цикл,
+    квадратичного расхода бюджета нет. Транспорт делегирован в
+    единый stream_chat_completion ([DONE]/finish_reason, loop-детект,
+    cut, empty — одна гигиена на проект), по одной попытке на
+    итерацию. max_tokens=65536 — исторический предел NER (ТОКЕНЫ,
+    серверный предохранитель). reasoning_effort: пусто = не передаём
+    (дефолт сервера), задано — шлём как есть (none = отключение).
+    Возвращает (text | None, error | None)."""
+    last_err = "Unknown"
+    attempts = max(1, max_retries)
+    for attempt in range(attempts):
+        text, err = stream_chat_completion(
+            base_url, model,
+            [{"role": "system", "content": system_prompt},
+             {"role": "user", "content": user_content}],
+            api_key=api_key,
+            max_retries=1,  # бюджет попыток — в общем цикле здесь
+            timeout=timeout,
+            stream_timeout=timeout,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            max_tokens=65536,
+            logger=None,  # итог логируем ниже (не «1 попыток» на итерацию)
+            label="[NER]",
+        )
+        if err:
+            last_err = err
+        elif validator is not None:
+            ferr = validator(text)
+            if not ferr:
+                return text, None
+            last_err = ferr
+        else:
+            return text, None
+        if attempt + 1 < attempts:
+            _log(logger, logging.WARNING,
+                 f"⚠️ [NER] попытка {attempt + 1}/{attempts}: {last_err} — повтор")
+            time.sleep(_retry_wait(attempt))
+    if logger:
+        logger.error(f"❌ [NER] {attempts} попыток: {last_err}")
+    return None, last_err
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -616,14 +626,24 @@ def process_chunk_pass1(
     logger,
     reasoning_effort: str | None = None,
 ) -> tuple[int, list[dict], str | None]:
-    raw = llm_request(
+    ners: list[dict] | None = None
+
+    def _validate(raw: str) -> str | None:
+        nonlocal ners
+        ners = parse_ner_response(raw)
+        return None if ners is not None else "Invalid NER format"
+
+    raw, err = llm_request(
         system_prompt, text, base_url, model, api_key,
         max_retries, timeout, temperature, logger,
         reasoning_effort=reasoning_effort,
+        validator=_validate,
     )
     if raw is None:
-        return index, [], f"Fail after {max_retries} retries"
-    ners = parse_ner_response(raw)
+        return index, [], err or f"Fail after {max(1, max_retries)} retries"
+    if ners is None:
+        # валидатор не отработал (мок llm_request) — разбираем здесь
+        ners = parse_ner_response(raw)
     if ners is None:
         return index, [], "Invalid NER format"
     return index, ners, None
@@ -650,14 +670,24 @@ def process_chunk_pass2(
     user_content = review_prompt_template.replace("{chunk_text}", text)
     user_content = user_content.replace("{ner_json}", ner_json)
 
-    raw = llm_request(
+    ners: list[dict] | None = None
+
+    def _validate(raw: str) -> str | None:
+        nonlocal ners
+        ners = parse_ner_response(raw)
+        return None if ners is not None else "Pass2: invalid format"
+
+    raw, err = llm_request(
         SYSTEM_PROMPT_PASS2_SYS, user_content, base_url, model,
         api_key, max_retries, timeout, temperature, logger,
         reasoning_effort=reasoning_effort,
+        validator=_validate,
     )
     if raw is None:
-        return index, [], f"Pass2 fail after {max_retries} retries"
-    ners = parse_ner_response(raw)
+        return index, [], err or f"Pass2 fail after {max(1, max_retries)} retries"
+    if ners is None:
+        # валидатор не отработал (мок llm_request) — разбираем здесь
+        ners = parse_ner_response(raw)
     if ners is None:
         return index, [], "Pass2: invalid format"
     return index, ners, None
@@ -675,16 +705,13 @@ def process_chunk_pass2(
 #  Thread 3: pass1(2) → pass2(2) → pass1(6) → pass2(6) → ...
 #  Thread 4: pass1(3) → pass2(3) → pass1(7) → pass2(7) → ...
 #
-#  Кэши сохраняются каждые save_interval завершённых чанков.
-#  При падении: возобновление пропускает чанки из pass2_cache,
-#  для чанков из pass1_cache (но не pass2) — только pass2.
+#  Снапшот ner.json пишется каждые save_interval завершённых чанков.
+#  Возобновление с места остановки убрано — каждый запуск идёт с нуля.
 # ══════════════════════════════════════════════════════════════════════
 
 
 def run_two_pass(
     all_chunks: list[str],
-    pass1_cache_file: str,
-    pass2_cache_file: str,
     base_url: str,
     model_name: str,
     api_key: str,
@@ -702,185 +729,148 @@ def run_two_pass(
     reasoning_effort: str | None = None,
 ) -> int:
     """Двухпроходный конвейер NER. Возвращает число УПАВШИХ чанков
-    (pass1-ошибка/необработанное исключение; pass2-fallback — не сбой)."""
+    (pass1-ошибка/необработанное исключение; pass2-fallback — не сбой).
+
+    Каждый запуск обрабатывает ВСЕ чанки с первого — возобновление
+    с места остановки убрано. Каждые save_interval чанков пишется
+    снапшот ner.json (защита от падения, не кэш)."""
     total = len(all_chunks)
 
-    pass1_cache: dict[int, list[dict]] = load_chunk_cache(pass1_cache_file, logger)
-    pass2_cache: dict[int, list[dict]] = load_chunk_cache(pass2_cache_file, logger)
-
-    cache_lock = threading.Lock()
-
-    todo = [i for i in range(total) if i not in pass2_cache]
-
-    p1_done = len(pass1_cache)
-    p2_done = len(pass2_cache)
+    # результаты pass2 по чанкам — для снапшотов и финализации
+    completed: dict[int, list[dict]] = {}
+    done_lock = threading.Lock()
     failed = 0  # H4 (AUDIT): счётчик упавших чанков
 
-    if not todo:
+    _log(logger, logging.INFO,
+         f"🔄 Конвейер: {total} чанков в работе | потоков: {max_workers}")
+
+    pbar = tqdm(
+        total=total * 2,
+        unit="step",
+        desc="Two-pass pipeline",
+        disable=web_progress_enabled(),
+    )
+    pbar_lock = threading.Lock()
+    # tqdm при disable=True НЕ двигает pbar.n — считаем сами
+    # (иначе web-прогрессбар залипает на 0/N)
+    steps_done = 0
+    # стартовое событие прогресса — бар виден сразу,
+    # до первого завершённого шага (медленный LLM)
+    emit_progress(steps_done, total * 2, "NER (pass1+pass2)")
+    if web_progress_enabled():
         _log(logger, logging.INFO,
-             f"✅ Все {total} чанков уже обработаны (pass2). Переход к финализации.")
-    else:
-        _log(logger, logging.INFO,
-             f"🔄 Конвейер: {len(todo)} чанков в работе | "
-             f"pass1 кэш: {p1_done}/{total} | pass2 кэш: {p2_done}/{total} | "
-             f"потоков: {max_workers}")
+             f"📊 Прогресс: {steps_done}/{total * 2}")
 
-        already_done = p2_done * 2 + max(0, p1_done - p2_done)
-        pbar = tqdm(
-            total=total * 2,
-            unit="step",
-            desc="Two-pass pipeline",
-            initial=already_done,
-            disable=web_progress_enabled(),
-        )
-        pbar_lock = threading.Lock()
-        # tqdm при disable=True НЕ двигает pbar.n — считаем сами
-        # (иначе web-прогрессбар залипает на 0/N)
-        steps_done = already_done
-        # стартовое событие прогресса — бар виден сразу,
-        # до первого завершённого шага (медленный LLM)
-        emit_progress(steps_done, total * 2, "NER (pass1+pass2)")
-        if web_progress_enabled():
-            _log(logger, logging.INFO,
-                 f"📊 Прогресс: {steps_done}/{total * 2}")
+    def _step(n: int = 1) -> None:
+        """n шагов прогресса (под pbar_lock — потокобезопасно)."""
+        nonlocal steps_done
+        with pbar_lock:
+            steps_done += n
+            pbar.update(n)
+            emit_progress(steps_done, total * 2, "NER (pass1+pass2)")
 
-        def _step(n: int = 1) -> None:
-            """n шагов прогресса (под pbar_lock — потокобезопасно)."""
-            nonlocal steps_done
-            with pbar_lock:
-                steps_done += n
-                pbar.update(n)
-                emit_progress(steps_done, total * 2, "NER (pass1+pass2)")
+    completed_since_save = 0
 
-        completed_since_save = 0
+    def _process_one_chunk(idx: int) -> tuple[int, list[dict], str | None]:
+        """Один поток: pass1 → pass2 для чанка idx."""
+        local_steps = 0
+        try:
+            text = all_chunks[idx]
 
-        def _process_one_chunk(idx: int) -> tuple[int, list[dict], str | None]:
-            """Один поток: pass1 → pass2 для чанка idx."""
-            steps_done = 0
-            try:
-                text = all_chunks[idx]
-
-                # ── PASS 1 ──
-                p1_err: str | None = None
-                if idx in pass1_cache:
-                    p1_ners = pass1_cache[idx]
-                    _step()
-                    steps_done += 1
-                else:
-                    _, p1_ners, err = process_chunk_pass1(
-                        idx, text, base_url, model_name, api_key,
-                        max_retries, timeout, temperature, pass1_prompt, logger,
-                        reasoning_effort=reasoning_effort,
-                    )
-                    if err:
-                        _log(logger, logging.ERROR,
-                             f"⚠️  Pass1 chunk {idx}/{total}: {err}")
-                        tqdm.write(f"⚠️  Pass1 {idx}: {err}")
-                        p1_err = err  # H4: сбой pass1 = упавший чанк
-                        p1_ners = []
-                    else:
-                        _log(logger, logging.INFO,
-                             f"✅ Pass1 chunk {idx}/{total}: {len(p1_ners)} entities")
-                        tqdm.write(f"✅ Pass1 {idx}: {len(p1_ners)} ent.")
-                    with cache_lock:
-                        pass1_cache[idx] = p1_ners
-                    _step()
-                    steps_done += 1
-
-                # ── PASS 2 ──
-                if idx in pass2_cache:
-                    return idx, pass2_cache[idx], None
-
-                if not p1_ners:
-                    with cache_lock:
-                        pass2_cache[idx] = []
-                    _step()
-                    steps_done += 1
-                    return idx, [], p1_err  # H4: сбой pass1 ≠ fallback
-
-                _, p2_ners, err = process_chunk_pass2(
-                    idx, text, p1_ners, base_url, model_name, api_key,
-                    max_retries, timeout, temperature, pass2_prompt, logger,
-                    reasoning_effort=reasoning_effort,
-                )
-                if err:
-                    _log(logger, logging.WARNING,
-                         f"⚠️  Pass2 chunk {idx}/{total}: {err} — fallback to pass1")
-                    tqdm.write(f"⚠️  Pass2 {idx}: {err} (fallback)")
-                    p2_ners = p1_ners
-                else:
-                    _log(logger, logging.INFO,
-                         f"✅ Pass2 chunk {idx}/{total}: {len(p2_ners)} entities")
-                    tqdm.write(f"✅ Pass2 {idx}: {len(p2_ners)} ent.")
-
-                with cache_lock:
-                    pass2_cache[idx] = p2_ners
-                _step()
-                steps_done += 1
-
-                return idx, p2_ners, None
-
-            except Exception as e:
+            # ── PASS 1 ──
+            _, p1_ners, err = process_chunk_pass1(
+                idx, text, base_url, model_name, api_key,
+                max_retries, timeout, temperature, pass1_prompt, logger,
+                reasoning_effort=reasoning_effort,
+            )
+            if err:
                 _log(logger, logging.ERROR,
-                     f"💥 Chunk {idx}: необработанная ошибка: {e}")
-                tqdm.write(f"💥 Chunk {idx}: {e}")
-                with cache_lock:
-                    pass1_cache.setdefault(idx, [])
-                    pass2_cache.setdefault(idx, [])
-                remaining = 2 - steps_done
-                if remaining > 0:
-                    _step(remaining)
-                return idx, [], f"Unhandled: {e}"
+                     f"⚠️  Pass1 chunk {idx}/{total}: {err}")
+                tqdm.write(f"⚠️  Pass1 {idx}: {err}")
+                p1_ners = []
+            else:
+                _log(logger, logging.INFO,
+                     f"✅ Pass1 chunk {idx}/{total}: {len(p1_ners)} entities")
+                tqdm.write(f"✅ Pass1 {idx}: {len(p1_ners)} ent.")
+            _step()
+            local_steps += 1
 
-        # ── Запуск конвейера ──
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(_process_one_chunk, idx): idx
-                for idx in todo
-            }
+            # ── PASS 2 ──
+            if not p1_ners:
+                with done_lock:
+                    completed[idx] = []
+                _step()
+                local_steps += 1
+                return idx, [], err  # H4: сбой pass1 ≠ fallback
 
-            for fut in as_completed(futures):
-                idx, ners, err = fut.result()
-                if err:
-                    failed += 1  # H4: чанк не извлечён
+            _, p2_ners, err2 = process_chunk_pass2(
+                idx, text, p1_ners, base_url, model_name, api_key,
+                max_retries, timeout, temperature, pass2_prompt, logger,
+                reasoning_effort=reasoning_effort,
+            )
+            if err2:
+                _log(logger, logging.WARNING,
+                     f"⚠️  Pass2 chunk {idx}/{total}: {err2} — fallback to pass1")
+                tqdm.write(f"⚠️  Pass2 {idx}: {err2} (fallback)")
+                p2_ners = p1_ners
+            else:
+                _log(logger, logging.INFO,
+                     f"✅ Pass2 chunk {idx}/{total}: {len(p2_ners)} entities")
+                tqdm.write(f"✅ Pass2 {idx}: {len(p2_ners)} ent.")
 
-                completed_since_save += 1
+            with done_lock:
+                completed[idx] = p2_ners
+            _step()
+            local_steps += 1
 
-                if completed_since_save >= save_interval:
-                    with cache_lock:
-                        save_chunk_cache(pass1_cache_file, pass1_cache)
-                        save_chunk_cache(pass2_cache_file, pass2_cache)
-                        p2_snapshot = copy.deepcopy(pass2_cache)
-                    save_ner_snapshot(
-                        p2_snapshot, ner_file,
-                        threshold, ngram_size, logger,
-                    )
+            return idx, p2_ners, None
+
+        except Exception as e:
+            _log(logger, logging.ERROR,
+                 f"💥 Chunk {idx}: необработанная ошибка: {e}")
+            tqdm.write(f"💥 Chunk {idx}: {e}")
+            with done_lock:
+                completed.setdefault(idx, [])
+            remaining = 2 - local_steps
+            if remaining > 0:
+                _step(remaining)
+            return idx, [], f"Unhandled: {e}"
+
+    # ── Запуск конвейера ──
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_process_one_chunk, idx): idx
+            for idx in range(total)
+        }
+
+        for fut in as_completed(futures):
+            idx, _, err = fut.result()
+            if err:
+                failed += 1  # H4: чанк не извлечён
+
+            completed_since_save += 1
+
+            if completed_since_save >= save_interval:
+                with done_lock:
+                    snapshot = copy.deepcopy(completed)
+                save_ner_snapshot(
+                    snapshot, ner_file,
+                    threshold, ngram_size, logger,
+                )
+                _log(logger, logging.INFO,
+                     f"💾 Снапшот ner.json ({len(completed)}/{total} готово)")
+                if web_progress_enabled():
                     _log(logger, logging.INFO,
-                         f"💾 Кэши сохранены ({len(pass2_cache)}/{total} готово)")
-                    if web_progress_enabled():
-                        _log(logger, logging.INFO,
-                             f"📊 Прогресс: {steps_done}/{total * 2}")
-                    completed_since_save = 0
+                         f"📊 Прогресс: {steps_done}/{total * 2}")
+                completed_since_save = 0
 
-        pbar.close()
-
-        with cache_lock:
-            save_chunk_cache(pass1_cache_file, pass1_cache)
-            save_chunk_cache(pass2_cache_file, pass2_cache)
-        _log(logger, logging.INFO,
-             f"💾 Финальное сохранение кэшей ({len(pass2_cache)}/{total})")
+    pbar.close()
 
     # ── Финализация: голосование → дедупликация → словарь ──
     _log(logger, logging.INFO,
          "━━━ ФИНАЛИЗАЦИЯ: Голосование → Дедупликация ━━━")
-    finalize_two_pass(pass2_cache, ner_file, threshold, ngram_size, logger)
+    finalize_two_pass(completed, ner_file, threshold, ngram_size, logger)
 
-    for f in (pass1_cache_file, pass2_cache_file):
-        try:
-            os.remove(f)
-            _log(logger, logging.INFO, f"🗑️ Удалён {f}")
-        except OSError:
-            pass
     if failed:
         _log(logger, logging.WARNING,
              f"⚠️ Не извлечено чанков: {failed}/{total} (частичный результат)")
@@ -1414,7 +1404,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--retries", type=int, default=3,
-        help="Число повторных попыток при ошибках (по умолчанию: 3).",
+        help="Общее число попыток LLM на чанк: сеть/стрим и невалидный "
+             "формат ответа (по умолчанию: 3).",
     )
     parser.add_argument(
         "--timeout", type=int, default=900,
@@ -1450,7 +1441,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--save-interval", type=int, default=DEFAULT_SAVE_INTERVAL,
         help=(
-            "Интервал сохранения на диск (каждые N чанков, "
+            "Интервал сохранения снапшота ner.json (каждые N чанков, "
             f"по умолчанию: {DEFAULT_SAVE_INTERVAL})."
         ),
     )
@@ -1591,12 +1582,10 @@ def main():
     except OSError as exc:
         print(f"⚠ logs/ не создаётся: {exc}", file=sys.stderr)
     log_path = os.path.join("logs", "ner_extraction.log")
-    progress_file = os.path.join(file_dir, "ner_progress.json")  # кэши не переносим
-    pass1_cache_file = os.path.join(file_dir, "ner_pass1_cache.json")
-    pass2_cache_file = os.path.join(file_dir, "ner_pass2_cache.json")
 
     logger, _ = setup_logging(log_path)
     log_argv(logger)
+    cleanup_stale_resume_files(file_dir, logger)
 
     if not os.path.exists(args.file) and in_memory_text is None:
         _log(logger, logging.ERROR, f"❌ Файл не найден: {args.file}")
@@ -1611,7 +1600,6 @@ def main():
         _log(logger, logging.INFO, f"📝 Last-write-wins: {', '.join(non_voted)}")
 
     load_initial_ner(args.ner_file, args.ngram, logger)
-    load_progress(progress_file)
 
     base_url = args.host.rstrip("/")
     if not base_url.endswith("/v1"):
@@ -1652,12 +1640,8 @@ def main():
     )
     _flush_log(logger)
 
-    chunks_todo = [
-        (i, c) for i, c in enumerate(all_chunks) if i not in processed_chunks
-    ]
-
-    if not chunks_todo and not args.two_pass:
-        _log(logger, logging.INFO, "✅ Все чанки уже обработаны.")
+    if not all_chunks and not args.two_pass:
+        _log(logger, logging.INFO, "✅ Нет чанков для обработки.")
         if postprocess_requested:
             postprocess_ner_file(
                 args.ner_file, args.strip_meta, args.min_count, logger
@@ -1680,8 +1664,6 @@ def main():
 
         failed_chunks = run_two_pass(
             all_chunks=all_chunks,
-            pass1_cache_file=pass1_cache_file,
-            pass2_cache_file=pass2_cache_file,
             base_url=base_url,
             model_name=model_name,
             api_key=args.api_key,
@@ -1699,17 +1681,12 @@ def main():
             reasoning_effort=args.reasoning_effort,
         )
 
-        try:
-            os.remove(progress_file)
-        except OSError:
-            pass
-
     # ════════════════════════════════════════════════════════════════
     # РЕЖИМ: ОБЫЧНЫЙ (без two-pass)
     # ════════════════════════════════════════════════════════════════
     else:
         _log(logger, logging.INFO,
-             f"🚀 Модель: {model_name} | Чанков: {len(chunks_todo)}/{len(all_chunks)} "
+             f"🚀 Модель: {model_name} | Чанков: {len(all_chunks)} "
              f"| Потоков: {max_workers} | Save interval: {save_interval}")
         _log(logger, logging.INFO, "━━━ ИЗВЛЕЧЕНИЕ (однопроходное) ━━━")
 
@@ -1723,13 +1700,12 @@ def main():
                     args.temperature, pass1_prompt, logger,
                     args.reasoning_effort,
                 ): idx
-                for idx, chunk in chunks_todo
+                for idx, chunk in enumerate(all_chunks)
             }
             pbar = tqdm(total=len(all_chunks), unit="chunk", desc="Extract",
                         disable=web_progress_enabled())
-            pbar.update(len(processed_chunks))
             # свой счётчик — pbar.n мёртв при disable=True
-            done = len(processed_chunks)
+            done = 0
             # стартовое событие прогресса — бар и «📊» видны
             # сразу, до первого завершённого чанка (медленный LLM)
             emit_progress(done, len(all_chunks), "Извлечение терминов")
@@ -1752,10 +1728,6 @@ def main():
                     tqdm.write(f"Chunk {idx}: +{a} new | +{u} hits")
                 else:
                     _log(logger, logging.INFO, f"✅ Chunk {idx}: 0 entities")
-
-                with ner_lock:
-                    processed_chunks.add(idx)
-                    save_progress_unlocked(progress_file)
 
                 chunks_since_save += 1
                 pbar.update(1)
@@ -1784,12 +1756,6 @@ def main():
         _log(logger, logging.INFO,
              f"💾 Финальное сохранение ({len(global_ner_data)} терминов)")
 
-        if len(processed_chunks) == len(all_chunks):
-            try:
-                os.remove(progress_file)
-            except OSError:
-                pass
-
     # ════════════════════════════════════════════════════════════════
     # ПОСТПРОЦЕССИНГ
     # ════════════════════════════════════════════════════════════════
@@ -1802,8 +1768,7 @@ def main():
 
     # H4 (AUDIT): все чанки упали → код 1 (частичный успех — 0 + warning)
     if failed_chunks:
-        total_todo = len(chunks_todo) if not args.two_pass else len(all_chunks)
-        if failed_chunks == total_todo:
+        if failed_chunks == len(all_chunks):
             return 1
     return 0
 

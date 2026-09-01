@@ -126,6 +126,19 @@ def test_ner_parse_response():
     assert data and data[0]["term"] == "陈阳"
     assert NER.parse_ner_response("мусор без json") is None
     assert NER.parse_ner_response('[{"term": 1}]') is None
+    assert NER.parse_ner_response("") is None
+    # обёртка-объект: массив внутри {"entities": [...]}
+    wrapped = ('{"entities": [{"term": "林水", "type": "Person", '
+               '"translation": "Линь Шуй"}]}')
+    data = NER.parse_ner_response(wrapped)
+    assert data and data[0]["term"] == "林水"
+    # хвост с пояснением и скобками после массива
+    tailed = ('[{"term": "林水", "type": "Person", "translation": "Линь Шуй"}]\n'
+              'Пояснение [разбор].')
+    data = NER.parse_ner_response(tailed)
+    assert data and data[0]["term"] == "林水"
+    # пустой массив — валидный ответ «сущностей нет»
+    assert NER.parse_ner_response("[]") == []
 
 
 def test_ner_normalize_phonetic():
@@ -192,21 +205,63 @@ def test_ner_llm_request_delegates(monkeypatch):
         return "ОТВЕТ", ""
 
     monkeypatch.setattr(NER, "stream_chat_completion", fake_stream)
-    out = NER.llm_request("система", "запрос", "http://h", "модель",
-                          "ключ", 3, 300, 0.1, SilentLog())
-    assert out == "ОТВЕТ"
+    text, err = NER.llm_request("система", "запрос", "http://h", "модель",
+                                "ключ", 3, 300, 0.1, SilentLog())
+    assert (text, err) == ("ОТВЕТ", None)
     assert seen["messages"][0]["role"] == "system"
     assert seen["reasoning_effort"] is None  # пусто = дефолт сервера, не передаём
     assert seen["max_tokens"] == 65536
+    assert seen["max_retries"] == 1  # бюджет ретраев — общий цикл llm_request
 
 
-def test_ner_chunk_cache_roundtrip(tmp_path):
-    results = {1: [{"term": "陈阳"}], 5: [{"term": "林水"}]}
-    f = str(tmp_path / "cache.json")
-    NER.save_chunk_cache(f, results)
-    loaded = NER.load_chunk_cache(f, SilentLog())
-    assert loaded == results
-    assert NER.load_chunk_cache(str(tmp_path / "нет.json"), SilentLog()) == {}
+def test_ner_llm_request_format_retries(monkeypatch):
+    """Невалидный формат ответа ретраится в общем бюджете max_retries."""
+    answers = iter(["не json", "тоже не json",
+                    '[{"term": "陈阳", "type": "Person", '
+                    '"translation": "Чэнь Ян"}]'])
+
+    def fake_stream(base_url, model, messages, **kw):
+        return next(answers), ""
+
+    monkeypatch.setattr(NER, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(NER.time, "sleep", lambda s: None)
+    monkeypatch.setattr(NER, "_retry_wait", lambda attempt: 0)
+    text, err = NER.llm_request(
+        "система", "запрос", "http://h", "модель", "ключ",
+        3, 300, None, SilentLog(),
+        validator=lambda r: None if r.startswith("[") else "Invalid NER format",
+    )
+    assert err is None
+    assert text is not None and "陈阳" in text
+
+
+def test_ner_llm_request_format_exhausted(monkeypatch):
+    """Бюджет исчерпан на ошибках формата — (None, ошибка)."""
+    def fake_stream(base_url, model, messages, **kw):
+        return "не json", ""
+
+    monkeypatch.setattr(NER, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(NER.time, "sleep", lambda s: None)
+    monkeypatch.setattr(NER, "_retry_wait", lambda attempt: 0)
+    text, err = NER.llm_request(
+        "система", "запрос", "http://h", "модель", "ключ",
+        2, 300, None, SilentLog(),
+        validator=lambda r: "Invalid NER format",
+    )
+    assert text is None and err == "Invalid NER format"
+
+
+def test_ner_cleanup_stale_resume_files(tmp_path):
+    """Файлы возобновления прошлых версий удаляются при старте."""
+    (tmp_path / "ner_progress.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "ner_pass1_cache.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "ner_pass2_cache.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "novel.txt").write_text("текст", encoding="utf-8")
+    NER.cleanup_stale_resume_files(str(tmp_path), SilentLog())
+    assert not (tmp_path / "ner_progress.json").exists()
+    assert not (tmp_path / "ner_pass1_cache.json").exists()
+    assert not (tmp_path / "ner_pass2_cache.json").exists()
+    assert (tmp_path / "novel.txt").exists()  # чужие файлы не трогаем
 
 
 # ══════════════════════════════════════════════════════════════════════
