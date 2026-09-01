@@ -253,6 +253,8 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
         argv += ["--threads", str(form["threads"])]
     if form.get("timeout") not in (None, ""):
         argv += ["--timeout", str(form["timeout"])]
+    if form.get("max_retries") not in (None, ""):
+        argv += ["--max_retries", str(form["max_retries"])]
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
     re_effort = form.get("reasoning_effort")
@@ -334,11 +336,8 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--batch_size", str(form["batch_size"])]
     if form.get("count_threshold") not in (None, ""):
         argv += ["-c", str(form["count_threshold"])]
-    if form.get("exclude_words"):
-        argv += ["--exclude-words", str(form["exclude_words"])]
-    for flag in ("show_aliases", "show_votes"):
-        if form.get(flag):
-            argv.append(f"--{flag.replace('_', '-')}")
+    if form.get("fields"):
+        argv += ["--fields", str(form["fields"])]
     for flag in ("apply", "auto_apply", "dry_run"):
         if form.get(flag):
             argv.append(f"--{flag.replace('_', '-')}")
@@ -352,7 +351,6 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
     if form.get("max_tokens") not in (None, ""):
         argv += ["--max_tokens", str(form["max_tokens"])]
     for name, flag in (("timeout", "--timeout"),
-                       ("stream_timeout", "--stream_timeout"),
                        ("max_retries", "--max_retries")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
@@ -724,6 +722,10 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "при параллельных главах (jobs>1) держите 1 — иначе упрётесь в лимит запросов"},
             {"name": "timeout", "label": "Таймаут LLM-запроса, сек",
              "type": "number", "default": "300"},
+            {"name": "max_retries", "label": "Повторы",
+             "type": "number", "default": "3",
+             "help": "попытки виртуального потока на один LLM-запрос "
+                      "(сеть/стрим)"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": ""},
             {"name": "reasoning_effort", "label": "Reasoning effort",
@@ -842,12 +844,11 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "196608"},
             {"name": "count_threshold", "label": "Порог count (> X)",
              "type": "number", "default": "0"},
-            {"name": "exclude_words", "label": "Исключить слова",
-             "type": "text", "default": "палладия,палладию"},
-            {"name": "show_aliases", "label": "Показывать алиасы",
-             "type": "bool", "default": False},
-            {"name": "show_votes", "label": "Показывать голоса",
-             "type": "bool", "default": False},
+            # types/fields — скрытые: значения пишет виджет чипсов
+            # (типы и поля из ner.json), buildParams собирает их в params
+            {"name": "types", "type": "hidden", "default": ""},
+            {"name": "fields", "type": "hidden",
+             "default": "term,type,translation"},
             # --apply убран из Запусков: применяется только в «Проверках»
             # проекта (/api/ner/review/apply шлёт apply напрямую)
             {"name": "auto_apply", "label": "Автоприменение (--auto-apply)",
@@ -865,8 +866,6 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "max_tokens", "label": "Max tokens (серверный лимит), ТОКЕНЫ",
              "type": "number", "default": "65536"},
             {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300"},
-            {"name": "stream_timeout", "label": "Таймаут стрима, сек",
-             "type": "number", "default": "300"},
             {"name": "max_retries", "label": "Повторы", "type": "number", "default": "3"},
         ],
         "preset": {

@@ -173,12 +173,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "≈ 65536 токенов).")
     p.add_argument("-c", "--count-threshold", type=int, default=0,
                    help="Порог count: записи с count > X (по умолчанию: 0).")
-    p.add_argument("--exclude-words", default="палладия,палладию",
-                   help="Подстроки в notes для исключения записей.")
-    p.add_argument("--show-aliases", action="store_true",
-                   help="Показывать aliases в глоссарии.")
-    p.add_argument("--show-votes", action="store_true",
-                   help="Показывать статистику голосования.")
+    p.add_argument("--fields", default="term,type,translation",
+                   help="Поля записи, передаваемые LLM (через запятую). "
+                        "term — всегда. По умолчанию: term,type,translation.")
     p.add_argument("--apply", action="store_true",
                    help="Применить правки из --review к ner.json (без LLM).")
     p.add_argument("--auto-apply", action="store_true",
@@ -207,7 +204,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max_tokens", type=int, default=65536,
                    help="Серверный предел ответа, ТОКЕНЫ (не расчёт).")
     p.add_argument("--timeout", type=int, default=300)
-    p.add_argument("--stream_timeout", type=int, default=300)
     p.add_argument("--max_retries", type=int, default=3)
     return p
 
@@ -295,8 +291,8 @@ def run_pass(title, items, prompt_tpl, args, base_url, api_key, model,
              logger):
     """Один проход (весь список или один тип). Возвращает список патчей
     или None при ошибке LLM/парсинга всех батчей."""
-    batches = build_ner_batches(items, args.batch_size,
-                                args.show_aliases, args.show_votes)
+    fields = [f.strip() for f in args.fields.split(",") if f.strip()]
+    batches = build_ner_batches(items, args.batch_size, fields)
     logger.info(f"── {title}: {len(items)} записей, батчей: {len(batches)}")
     # стартовое событие прогресса — бар виден сразу
     emit_progress(0, len(batches), "Проверка глоссария")
@@ -304,7 +300,7 @@ def run_pass(title, items, prompt_tpl, args, base_url, api_key, model,
         logger.info(f"📊 Прогресс: 0/{len(batches)}")
     patches, ok_any = [], False
     for bi, batch in enumerate(batches, 1):
-        body = glossary_body(batch, args.show_aliases, args.show_votes)
+        body = glossary_body(batch, fields)
         user_msg = render_prompt(prompt_tpl, body)
         logger.info(f"  батч {bi}/{len(batches)}: {len(batch)} записей, "
                     f"{len(user_msg)} символов запроса")
@@ -313,7 +309,7 @@ def run_pass(title, items, prompt_tpl, args, base_url, api_key, model,
             [{"role": "user", "content": user_msg}],
             api_key=api_key,
             max_retries=args.max_retries,
-            timeout=args.timeout, stream_timeout=args.stream_timeout,
+            timeout=args.timeout, stream_timeout=args.timeout,
             temperature=args.temperature,
             reasoning_effort=args.reasoning_effort,
             max_tokens=args.max_tokens,
@@ -375,10 +371,9 @@ def write_changes_md(entries, args, logger):
 def do_check(args, logger) -> int:
     base_url, api_key, model, _ = resolve_server(args, logger)
     data = load_ner_json(args.input, logger)
-    exclude = [w.strip() for w in args.exclude_words.split(",") if w.strip()]
     type_filter = ([t.strip() for t in args.types.split(",") if t.strip()]
                    or None)
-    items = filter_ner_items(data, args.count_threshold, type_filter, exclude)
+    items = filter_ner_items(data, args.count_threshold, type_filter)
     if not items:
         sys.exit("❌ Нет записей после фильтрации.")
     logger.info(f"📊 После фильтрации: {len(items)} записей.")
@@ -387,9 +382,7 @@ def do_check(args, logger) -> int:
     params = {"input": args.input,
               "бюджет батча": args.batch_size,
               "порог count": args.count_threshold,
-              "исключения notes": args.exclude_words,
-              "показ aliases": bool(args.show_aliases),
-              "показ votes": bool(args.show_votes),
+              "поля": args.fields,
               "промпт файл": args.prompt_file,
               "типы": args.types}
     meta, entries = load_review_file(args.review, logger)

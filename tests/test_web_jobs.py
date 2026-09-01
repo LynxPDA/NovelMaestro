@@ -957,8 +957,7 @@ def test_form_defaults_match_script_argparse():
     table = [
         ("ner", "threads", ner_parser, "threads"),
         ("ner_check", "timeout", ner_check_parser, "timeout"),
-        ("ner_check", "stream_timeout", ner_check_parser,
-         "stream_timeout"),
+        ("ner_check", "fields", ner_check_parser, "fields"),
         ("translate_check_llm", "max_retries", tcl_parser, "max_retries"),
     ]
     for stage, field, build, dest in table:
@@ -1146,20 +1145,25 @@ def test_build_ner_modes():
 
 
 def test_build_ner_check_flags():
+    """exclude-words/aliases/votes убраны; поля — единым --fields."""
     form = {"input": "ner.json",
             "review": "ner_review.json", "passes": "types",
             "types": "Person", "count_threshold": "2",
-            "exclude_words": "палладия", "show_aliases": True,
-            "show_votes": True, "dry_run": True}
+            "fields": "term,type,context", "dry_run": True}
     argv = build_command("ner_check", form, {})
     assert argv[0] == "cli/ner_check.py"
     assert "--input" in argv and "ner.json" in argv
     assert "--passes" in argv and "types" in argv
     assert "-c" in argv and "2" in argv
-    assert "--exclude-words" in argv
-    assert "--show-aliases" in argv and "--show-votes" in argv
+    assert "--fields" in argv
+    assert argv[argv.index("--fields") + 1] == "term,type,context"
+    assert "--exclude-words" not in argv
+    assert "--show-aliases" not in argv and "--show-votes" not in argv
     assert "--dry-run" in argv
     assert "--apply" not in argv and "--auto-apply" not in argv
+    # пустые fields — флага нет (дефолт скрипта)
+    argv2 = build_command("ner_check", {"fields": ""}, {})
+    assert "--fields" not in argv2
 
 
 def test_build_ner_check_no_bak():

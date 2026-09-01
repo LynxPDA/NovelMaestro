@@ -1253,13 +1253,15 @@ def test_log_argv(tmp_path):
 
 
 def test_log_argv_masks_secrets(tmp_path):
-    """M2 (AUDIT): значения --api_key/--token в лог НЕ попадают."""
+    """M2 (AUDIT): значения --api_key/--token в лог НЕ попадают;
+    --max_tokens — лимит ответа, не секрет: в лог попадает как есть"""
     out = tmp_path / "секрет.txt"
     logger, log_name = C.setup_logging(str(out), logger_name="тест.секрет")
     C.log_argv(logger, argv=[
         "python3", "cli/translate_book.py", "--api_key", "СЕКРЕТ-КЛЮЧ",
         "--model", "модель", "--host", "http://h",
         "--token=ТОКЕН", "--timeout", "300",
+        "--max_tokens", "65536", "--max-tokens=1024",
     ])
     for h in logger.handlers:
         h.flush()
@@ -1268,3 +1270,6 @@ def test_log_argv_masks_secrets(tmp_path):
     assert "--api_key '••••'" in text  # shlex.join берёт значение в кавычки
     assert "'--token=••••'" in text
     assert "--model 'модель'" in text and "http://h" in text
+    # max_tokens — не секрет: значение видно в логе
+    assert "65536" in text and "--max-tokens=1024" in text
+    assert "--max_tokens '••••'" not in text

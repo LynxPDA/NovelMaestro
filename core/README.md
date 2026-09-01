@@ -18,8 +18,9 @@
   разделитель — ровно один пробел: лишние пробелы остаются значимыми)
 NER: load_ner_data / find_relevant_ner (поиск по term+aliases в оригинальном написании) /
   collect_gender_names (поиск имён по translation; пол по наличию (female)/(male) в type)
-ner_check: filter_ner_items / format_ner_record / glossary_body /
-  build_ner_batches (count по убыванию, бюджет СИМВОЛЫ) /
+ner_check: filter_ner_items (порог count + типы) / format_ner_record /
+  glossary_body / build_ner_batches (count по убыванию, бюджет СИМВОЛЫ;
+  fields — какие поля записи передавать LLM, None = все, term — всегда) /
   parse_ner_patches (JSON-патчи LLM {term,field,old,new,reason},
   field ∈ translation|type|notes) /
   review_entry / parse_review_doc / merge_review_entries (review-файл:

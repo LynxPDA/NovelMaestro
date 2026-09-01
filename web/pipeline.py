@@ -276,7 +276,7 @@ def warn_missing_prompt_tag(prompt_file: str, stage: int, log) -> bool:
 def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     host: str, api_key: str, model: str,
                     timeout: int, temperature=None, reasoning_effort=None,
-                    stream_timeout=None,
+                    stream_timeout=None, max_retries=None,
                     threads: int = 1, prompt_file: str = "") -> list[str]:
     # единая модель конвейера (PIPELINE_MODEL → MODEL) — без
     # отдельных моделей под translate/redact/polish
@@ -286,7 +286,8 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
         "--threads", str(threads),
         "--timeout", str(timeout),
         "--stream_timeout", str(stream_timeout or timeout),
-        "--max_retries", str(_DEFAULTS["max_retries"]),
+        "--max_retries", str(max_retries if max_retries is not None
+                              else _DEFAULTS["max_retries"]),
         "--out", str(out_file),
         "--ner_file", "ner.json",
     ]
@@ -338,7 +339,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     timeout: int, log: logging.Logger,
                     tracker: Tracker,
                     temperature=None, reasoning_effort=None,
-                    stream_timeout=None,
+                    stream_timeout=None, max_retries=None,
                     threads: int = 1,
                     prompts: dict[int, str] | None = None,
                     polish_in: str | None = None) -> bool:
@@ -365,7 +366,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
             cmd = build_stage_cmd(stage, script, in_file, out_file,
                                   host, api_key, model, timeout,
                                   temperature, reasoning_effort,
-                                  stream_timeout,
+                                  stream_timeout, max_retries,
                                   threads,
                                   prompt_file=(prompts or {}).get(stage) or "")
             proc_env = dict(os.environ)
@@ -482,6 +483,9 @@ def main() -> None:
                     help="Таймаут одного LLM-запроса, сек")
     ap.add_argument("--stream_timeout", type=int, default=None,
                     help="Таймаут простоя стрима, сек")
+    ap.add_argument("--max_retries", type=int, default=None,
+                    help="Повторы LLM-запроса (по умолчанию "
+                         "PIPELINE_MAX_RETRIES из .env → 3)")
     ap.add_argument("--temperature", type=float, default=None,
                     help="Температура LLM (пусто = сервер)")
     ap.add_argument("--reasoning_effort", default=None,
@@ -520,6 +524,9 @@ def main() -> None:
         ap.error("--threads должен быть 1–16")
     args.timeout = args.timeout or _DEFAULTS["timeout"]
     args.stream_timeout = args.stream_timeout or _DEFAULTS["stream_timeout"]
+    args.max_retries = (args.max_retries
+                        if args.max_retries is not None
+                        else _DEFAULTS["max_retries"])
 
     if not 1 <= args.jobs <= 16:
         ap.error("--jobs должен быть 1–16")
@@ -637,7 +644,7 @@ def main() -> None:
             pool.submit(process_chapter, cid, dirs, script, stages,
                         host, api_key, model, args.timeout, log, tracker,
                         args.temperature, args.reasoning_effort,
-                        args.stream_timeout,
+                        args.stream_timeout, args.max_retries,
                         args.threads, prompts,
                         polish_in=action_spec.get("polish_input")): cid
             for cid, dirs in to_process.items()

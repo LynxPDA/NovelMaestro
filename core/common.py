@@ -173,8 +173,11 @@ def print_env_help() -> None:
 # ══════════════════════════════════════════════════════════════════════
 # ЛОГИРОВАНИЕ / МОДЕЛЬ
 # ══════════════════════════════════════════════════════════════════════
+# --max_tokens/--max-tokens — серверный лимит ответа, не секрет:
+# из маски исключаем (иначе лог пишет «--max_tokens '••••'»)
 _SECRET_FLAG_RE = re.compile(
-    r"^(--[A-Za-z0-9_-]*(?:key|token|secret|password|auth)[A-Za-z0-9_-]*)"
+    r"^(?!.*max[-_]?tokens)"
+    r"(--[A-Za-z0-9_-]*(?:key|token|secret|password|auth)[A-Za-z0-9_-]*)"
     r"(?:=(\S+))?$",
     re.IGNORECASE,
 )
@@ -611,59 +614,60 @@ REVIEW_REJECT = "отклонить"
 REVIEW_STATUSES = (REVIEW_ACCEPT, REVIEW_REJECT)
 
 
-def filter_ner_items(items, count_threshold=0, types=None,
-                     exclude_words=None):
-    """Фильтр записей нер.json: порог count, список типов, подстроки
-    в notes для исключения. types/exclude_words — списки или None."""
+def filter_ner_items(items, count_threshold=0, types=None):
+    """Фильтр записей ner.json: порог count и список типов.
+    types — список типов или None (все)."""
     types = [t.strip() for t in types if t.strip()] if types else []
-    exclude = [w.strip().lower() for w in (exclude_words or []) if w.strip()]
     out = []
     for item in items:
         if types and item.get("type", "") not in types:
             continue
         if (item.get("count", 0) or 0) <= count_threshold:
             continue
-        notes = item.get("notes", "")
-        notes = notes if isinstance(notes, str) else str(notes or "")
-        notes_lower = notes.lower()
-        if any(w in notes_lower for w in exclude):
-            continue
         out.append(item)
     return out
 
 
-def format_ner_record(item, idx, show_aliases=False, show_votes=False):
-    """Блок одной записи глоссария (список строк). idx — номер записи."""
+# порядок полей записи в промпте (стабильный вывод)
+NER_RECORD_FIELDS = (
+    "type", "translation", "pinyin", "reading", "context",
+    "translated_context", "notes", "aliases",
+)
+
+
+def format_ner_record(item, idx, fields=None):
+    """Блок одной записи глоссария (список строк). idx — номер записи.
+    fields — какие поля передавать LLM (None = все); term — всегда."""
+    selected = {f.strip() for f in fields} if fields else None
     lines = [f"--- Запись {idx} ---", f"term: {item.get('term', '')}"]
-    aliases = item.get("aliases", [])
-    if aliases and show_aliases:
-        lines.append(f"aliases: {', '.join(aliases)}")
-    lines.append(f"type: {item.get('type', '')}")
-    lines.append(f"translation: {item.get('translation', '')}")
-    lines.append(f"context: {item.get('context', '')}")
-    if item.get("notes"):
-        lines.append(f"notes: {item['notes']}")
-    if show_votes:
-        for key in ("_votes_translation", "_votes_type", "_votes_pinyin"):
-            votes = item.get(key)
-            if votes and len(votes) > 1:
-                top = sorted(votes.items(), key=lambda x: -x[1])[:3]
-                votes_str = ", ".join(f'"{v}":{c}' for v, c in top)
-                field_name = key.replace("_votes_", "")
-                lines.append(f"  [{field_name} голоса: {votes_str}]")
+    for field in NER_RECORD_FIELDS:
+        if selected is not None and field not in selected:
+            continue
+        value = item.get(field)
+        if field == "aliases":
+            aliases = value or []
+            if not aliases:
+                continue
+            lines.append(f"aliases: {', '.join(str(a) for a in aliases)}")
+            continue
+        value = "" if value is None else str(value).strip()
+        if not value:
+            continue
+        lines.append(f"{field}: {value}")
     lines.append("")
     return lines
 
 
-def glossary_body(items, show_aliases=False, show_votes=False):
-    """Тело глоссария для промпта: записи с перенумерацией 1..N."""
+def glossary_body(items, fields=None):
+    """Тело глоссария для промпта: записи с перенумерацией 1..N.
+    fields — список полей записи для LLM (None = все)."""
     lines = []
     for i, item in enumerate(items, 1):
-        lines.extend(format_ner_record(item, i, show_aliases, show_votes))
+        lines.extend(format_ner_record(item, i, fields))
     return "\n".join(lines)
 
 
-def build_ner_batches(items, budget, show_aliases=False, show_votes=False):
+def build_ner_batches(items, budget, fields=None):
     """Резка глоссария на батчи по бюджету (СИМВОЛЫ).
     Записи сортируются по count по убыванию — самые частотные термины
     попадают в первый батч. Возвращает список списков записей;
@@ -672,8 +676,7 @@ def build_ner_batches(items, budget, show_aliases=False, show_votes=False):
                      key=lambda it: -((it.get("count") or 0)))
     batches, cur, cur_len = [], [], 0
     for item in ordered:
-        block = "\n".join(
-            format_ner_record(item, 0, show_aliases, show_votes))
+        block = "\n".join(format_ner_record(item, 0, fields))
         if cur and cur_len + len(block) > budget:
             batches.append(cur)
             cur, cur_len = [], 0

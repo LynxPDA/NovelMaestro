@@ -213,8 +213,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         "a",
         {
           class: "btn btn-sm btn-primary",
-          // без job id — autoAttach сам прикрепится к активному
-          href: `#/run/${section}/${name}`,
+          // id в URL (не голый #/run/…): повторный клик по той же
+          // странице перечитает запуск и обновит висящий статус
+          href: `#/run/${section}/${name}/${j.id}`,
         },
         "Показать",
       ),
@@ -495,6 +496,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // (оба режима). Возвращает label-обёртку; сам input — в wrap._input
   // (у files — row, select внутри row._sel).
   function buildField(key, f) {
+    if (f.type === "hidden") return null; // параметры виджетов (чипсы)
     const vals = st.values[key];
     const touched = st.touched[key];
     const label = h("div", { class: "field-label" }, f.label);
@@ -737,6 +739,82 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h("span", { class: "spacer" }),
       chipsInfo,
     );
+
+    // ── поля записи, передаваемые LLM (term — всегда) ──
+    // чипсы полей из ner.json; дефолт: type + translation; динамическое
+    // окружение — pinyin/reading/context/translated_context/notes/aliases
+    // (показываются только реально имеющиеся в глоссарии)
+    const FIELD_ORDER = ["type", "translation", "pinyin", "reading",
+      "context", "translated_context", "notes", "aliases"];
+    const FIELD_LABELS = {
+      type: "тип", translation: "перевод", pinyin: "пиньинь",
+      reading: "чтение", context: "контекст",
+      translated_context: "перевод контекста", notes: "примечания",
+      aliases: "алиасы",
+    };
+    const fieldsBar = h("div", { class: "ner-chips-bar" });
+    const fieldsInfo = h("div", { class: "field-help" });
+    const fieldsBox = h("div", { class: "ner-chips-box" });
+    let fieldNames = [];
+    function curFields() {
+      let v = String(st.values[key]["fields"] ?? "").trim();
+      if (!v) {
+        v = "term,type,translation";
+        st.values[key]["fields"] = v;
+      }
+      // term — всегда в запросе, чипса у него нет
+      return v.split(",").map((s) => s.trim())
+        .filter((s) => s && s !== "term");
+    }
+    function renderFields() {
+      const cur = curFields();
+      fieldsBox.replaceChildren();
+      for (const name of fieldNames) {
+        const cb = h("input", { type: "checkbox", class: "checkbox" });
+        cb.checked = cur.includes(name);
+        cb.addEventListener("change", () => {
+          const set = new Set(cur);
+          if (cb.checked) {
+            set.add(name);
+          } else if (set.size > 1) {
+            set.delete(name);
+          } else {
+            cb.checked = true; // минимум одно поле (term и так всегда)
+            return;
+          }
+          st.values[key]["fields"] = [...set].join(",");
+          st.touched[key].add("fields");
+          renderFields();
+        });
+        fieldsBox.append(
+          h(
+            "label",
+            { class: "ner-chip" },
+            cb,
+            ` ${FIELD_LABELS[name] || name}`,
+          ),
+        );
+      }
+    }
+    const fieldsAll = h(
+      "button",
+      { class: "btn btn-xs btn-ghost", type: "button" },
+      "Выбрать все",
+    );
+    fieldsAll.addEventListener("click", () => {
+      if (fieldNames.length) {
+        st.values[key]["fields"] = fieldNames.join(",");
+        st.touched[key].add("fields");
+        renderFields();
+      }
+    });
+    fieldsBar.append(
+      h("span", {}, "Поля в запросе LLM:"),
+      fieldsAll,
+      h("span", { class: "spacer" }),
+      fieldsInfo,
+    );
+
     // подсказка-степпер: правильный порядок проверки и применения
     const guide = h(
       "details",
@@ -778,11 +856,25 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         chipsInfo.textContent =
           `${typeNames.length} тип(ов) в глоссарии · пусто = все`;
         renderChips();
+        // поля записей — из реальных ключей ner.json (динамически)
+        const present = new Set();
+        for (const it of d.items || []) {
+          if (!it || typeof it !== "object") continue;
+          for (const k of Object.keys(it)) {
+            if (!k.startsWith("_")) present.add(k);
+          }
+        }
+        fieldNames = FIELD_ORDER.filter(
+          (n) => n === "type" || n === "translation" || present.has(n),
+        );
+        fieldsInfo.textContent =
+          "term — всегда; включены только поля записи";
+        renderFields();
       } catch (ex) {
         chipsInfo.textContent = ex.message;
       }
     };
-    return { chipsBar, chipsBox, guide, loadTypes };
+    return { chipsBar, chipsBox, guide, loadTypes, fieldsBar, fieldsBox };
   }
 
   // ── диапазон глав: ЕДИНАЯ строка «Главы: [start] – [end]» ────────────
@@ -839,6 +931,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const f = (spec.fields || []).find((x) => x.name === name);
       if (!f) continue;
       const wrap = buildField(key, f);
+      if (!wrap) continue; // hidden-поля (чипсы) в простом списке не нужны
       wraps.push(wrap);
       // files-поля: настоящий select спрятан в row._sel (row — обёртка
       // с кнопкой «Загрузить»); без этого srcSel.value/fileSel.value
@@ -872,7 +965,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (wrap) {
         const idx = wraps.indexOf(wrap);
         if (idx >= 0) {
-          wraps.splice(idx + 1, 0, w.chipsBar, w.chipsBox, w.guide);
+          wraps.splice(idx + 1, 0, w.chipsBar, w.chipsBox, w.fieldsBar,
+                       w.fieldsBox, w.guide);
         }
       }
       w.loadTypes();
@@ -978,6 +1072,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       // «Главы: [start] – [end]» (buildRangeRow) идёт первой
       if (f.name === "start" || f.name === "end") continue;
       const wrap = buildField(key, f);
+      if (!wrap) continue; // hidden-поля рисуют свои виджеты (чипсы)
       fieldNodes.push(wrap);
       fieldWraps[f.name] = wrap;
     }
@@ -1070,7 +1165,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (passesWrap) {
         const idx = fieldNodes.indexOf(passesWrap);
         if (idx >= 0) {
-          fieldNodes.splice(idx + 1, 0, w.chipsBar, w.chipsBox, w.guide);
+          fieldNodes.splice(idx + 1, 0, w.chipsBar, w.chipsBox,
+                           w.fieldsBar, w.fieldsBox, w.guide);
         }
       }
       w.loadTypes();
@@ -1888,11 +1984,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (pl) pl.textContent = progressLineText();
     } else if (payload.type === "status") {
       st.job.status = payload.status;
-      const statusEl = page.querySelector(".log-status");
-      if (statusEl) {
-        statusEl.textContent = payload.status;
-        statusEl.className = "badge badge-" + payload.status;
-      }
+      // статус — финальное событие стрима: перерисовать сразу,
+      // иначе панель «Активный запуск» и лог остаются со старым
+      // статусом (stopped/done/failed должны закрывать панели)
+      render();
     }
   }
 

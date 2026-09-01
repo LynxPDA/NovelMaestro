@@ -40,17 +40,31 @@ def test_filter_ner_items():
     assert [i["term"] for i in out] == ["青云宗", "火球术"]
     out = filter_ner_items(ITEMS, types=["Location"])
     assert [i["term"] for i in out] == ["青云宗"]
-    out = filter_ner_items(ITEMS, exclude_words=["палладия"])
-    assert [i["term"] for i in out] == ["林凡", "火球术"]
+    # exclude_words убран — все записи по порогу/типам остаются
+    out = filter_ner_items(ITEMS, count_threshold=4)
+    assert len(out) == 3
 
 
-def test_format_and_glossary_body():
+def test_format_and_glossary_body_fields():
+    # по умолчанию — все поля (кроме служебных с «_»); пустые пропущены
     lines = format_ner_record(ITEMS[0], 1)
     assert lines[0] == "--- Запись 1 ---"
     assert "term: 林凡" in lines and "context: герой" in lines
     assert not any(l.startswith("notes:") for l in lines)
-    body = glossary_body(ITEMS[:2])
-    assert "--- Запись 1 ---" in body and "--- Запись 2 ---" in body
+    # fields — только выбранные; term всегда; count не показывается
+    lines = format_ner_record(ITEMS[0], 1, fields=["term", "type"])
+    assert any(l.startswith("type:") for l in lines)
+    assert not any(l.startswith("translation:") for l in lines)
+    assert not any(l.startswith("context:") for l in lines)
+    assert not any(l.startswith("count:") for l in lines)
+    # aliases — только когда выбраны; голоса больше не выводятся
+    item = dict(ITEMS[1], aliases=["Цинъюнь"],
+                _votes_translation={"а": 2, "б": 1})
+    body = glossary_body([item], fields=["term", "aliases"])
+    assert "aliases: Цинъюнь" in body
+    assert "_votes" not in body
+    body_all = glossary_body(ITEMS[:2])
+    assert "--- Запись 1 ---" in body_all and "--- Запись 2 ---" in body_all
 
 
 def test_build_ner_batches_sorted_by_count_desc():
@@ -201,7 +215,6 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
             '"old": "Линь Фан", "new": "Лин Фань", "reason": "pinyin"}]\n```')
     _mock_stream(monkeypatch, resp, calls)
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
-                  "--exclude-words", "",
                   "--host", "http://x", "--model", "m"])
     assert rc == 0
     # один проход «Весь глоссарий» (типы — отдельным режимом)
@@ -223,7 +236,7 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     assert not (tmp_path / "ner_patches.json").exists()
     params = doc["params"]
     assert params["бюджет батча"] == 196608
-    assert params["исключения notes"] == ""
+    assert params["поля"] == "term,type,translation"
     # отчёт ner_report.md удалён — файла быть не должно
     assert not (tmp_path / "ner_report.md").exists()
 
@@ -252,8 +265,7 @@ def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
 
     # этап 1: весь список
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
-                  "--exclude-words", "", "--host", "http://x",
-                  "--model", "m"])
+                   "--model", "m"])
     assert rc == 0
     # человек отклонил правку
     doc = json.loads((tmp_path / "ner_review.json")
@@ -265,8 +277,7 @@ def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
     # этап 2: по типам; LLM повторяет старую правку + даёт новую
     rc = NC.main(["--input", "ner.json", "--passes", "types",
                   "--types", "Person (male),Skill",
-                  "--exclude-words", "", "--host", "http://x",
-                  "--model", "m"])
+                   "--model", "m"])
     assert rc == 0
     doc = json.loads((tmp_path / "ner_review.json")
                      .read_text(encoding="utf-8"))
@@ -379,8 +390,7 @@ def test_ner_check_auto_apply_whole(tmp_path, monkeypatch):
     calls = []
     _mock_stream(monkeypatch, resp, calls)
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
-                  "--exclude-words", "", "--host", "http://x",
-                  "--model", "m", "--auto-apply"])
+                   "--model", "m", "--auto-apply"])
     assert rc == 0
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
@@ -407,8 +417,7 @@ def test_ner_check_auto_apply_whole_only(tmp_path, monkeypatch):
 
     monkeypatch.setattr(NC, "stream_chat_completion", fake)
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
-                  "--exclude-words", "", "--host", "http://x",
-                  "--model", "m", "--auto-apply"])
+                   "--model", "m", "--auto-apply"])
     assert rc == 0
     # только проход «Весь глоссарий» (типы не идут)
     assert len(calls) == 1
@@ -435,7 +444,6 @@ def test_ner_check_auto_apply_fail_fast(tmp_path, monkeypatch):
                         lambda *a, **kw: (None, "timeout"))
     with pytest.raises(SystemExit):
         NC.main(["--input", "ner.json", "--passes", "whole",
-                 "--exclude-words", "", "--host", "http://x",
                  "--model", "m", "--auto-apply"])
     # нер.json не тронут, бэкапа нет
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))

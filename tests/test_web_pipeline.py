@@ -122,7 +122,7 @@ def test_pipeline_action_options():
 
 def test_build_pipeline_argv():
     form = {"action": "translate_check", "start": "1", "end": "5", "jobs": "4",
-            "timeout": "300", "host": "http://127.0.0.1:9989",
+            "timeout": "300", "max_retries": "7", "host": "http://127.0.0.1:9989",
             "model": "m", "api_key": "k"}
     ctx: dict = {}
     argv = build_command("pipeline", form, ctx)
@@ -131,6 +131,9 @@ def test_build_pipeline_argv():
     assert "--start" in argv and "--end" in argv
     assert "--jobs" in argv and "4" in argv
     assert "--host" in argv and "--model" in argv
+    # повторы из экспертной формы — отдельным флагом в argv
+    assert "--max_retries" in argv
+    assert argv[argv.index("--max_retries") + 1] == "7"
     # P1 (AUDIT #2): ключ не в argv, а в ctx для env JobManager
     assert "--api_key" not in argv
     assert ctx.get("_llm_api_key") == "k"
@@ -246,6 +249,20 @@ def test_build_stage_cmd_single_model(tmp_path):
     cmd4 = build_stage_cmd(1, script, tmp_path / "in", tmp_path / "out",
                            "http://h", "k", "м", 300, threads=4)
     assert "--threads 4" in " ".join(cmd4)
+
+
+def test_build_stage_cmd_max_retries(tmp_path):
+    """повторы из формы — в команду стадии; пусто — дефолт _DEFAULTS."""
+    from web.pipeline import build_stage_cmd, _DEFAULTS
+    script = tmp_path / "translate_book.py"
+    cmd = build_stage_cmd(1, script, tmp_path / "in", tmp_path / "out",
+                          "http://h", "k", "м", 300, max_retries=7)
+    i = cmd.index("--max_retries")
+    assert cmd[i + 1] == "7"
+    cmd2 = build_stage_cmd(1, script, tmp_path / "in", tmp_path / "out",
+                           "http://h", "k", "м", 300)
+    i2 = cmd2.index("--max_retries")
+    assert cmd2[i2 + 1] == str(_DEFAULTS["max_retries"])
 
 
 def test_grep_errors_ignores_logger_level_names():

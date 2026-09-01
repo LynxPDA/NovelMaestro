@@ -299,7 +299,7 @@ Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
 | POST | `/api/templates/{s}/mkdir` (`{path}`) | ВСЕГДА 403 — каталоги в шаблонах неизменяемы (скелет `prompts/`+`source/` ремонтируется при чтении) |
 | POST/DELETE | `/api/sections`, `/api/sections/rename` (`{src,dst}`), DELETE `/api/sections/{name}` | управление разделами: создание, переименование (merge — перенос проектов), удаление; непустой раздел → 409 |
 | GET/PUT | `/api/ner`, `/api/metadata` | глоссарий, metadata.yaml |
-| GET | `/api/ner/export?project=&format=json\|text\|names` | экспорт глоссария для анализа (JSON / записи текстом / имена по полу); фильтры: `count_threshold`, `types`, `exclude_words`, `range`, `show_aliases`, `show_votes`, `female_types`, `male_types` → `{name, content}` |
+| GET | `/api/ner/export?project=&format=json\|text\|names` | экспорт глоссария для анализа (JSON / записи текстом / имена по полу); фильтры: `count_threshold`, `types`; для format=names — так же `female_types`, `male_types` → `{name, content}` |
 | GET/PUT/DELETE | `/api/cover` | обложка source/cover.* |
 | GET/PUT | `/api/{ner\|translate_check_llm}/review`, POST `.../apply` | review-флоу |
 | GET | `/api/check` | отчёты translate_check (W7) |
