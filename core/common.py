@@ -637,10 +637,15 @@ NER_RECORD_FIELDS = (
 
 def format_ner_record(item, idx, fields=None):
     """Блок одной записи глоссария (список строк). idx — номер записи.
-    fields — какие поля передавать LLM (None = все); term — всегда."""
+    fields — какие поля передавать LLM (None = все); term — всегда.
+    Неизвестные ключи (новые поля ner.json) идут после известных."""
     selected = {f.strip() for f in fields} if fields else None
     lines = [f"--- Запись {idx} ---", f"term: {item.get('term', '')}"]
-    for field in NER_RECORD_FIELDS:
+    ordered = list(NER_RECORD_FIELDS) + [k for k in item
+                                        if k not in NER_RECORD_FIELDS
+                                        and k != "term"
+                                        and not k.startswith("_")]
+    for field in ordered:
         if selected is not None and field not in selected:
             continue
         value = item.get(field)
@@ -650,6 +655,8 @@ def format_ner_record(item, idx, fields=None):
                 continue
             lines.append(f"aliases: {', '.join(str(a) for a in aliases)}")
             continue
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
         value = "" if value is None else str(value).strip()
         if not value:
             continue

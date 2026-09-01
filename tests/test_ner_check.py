@@ -65,6 +65,16 @@ def test_format_and_glossary_body_fields():
     assert "_votes" not in body
     body_all = glossary_body(ITEMS[:2])
     assert "--- Запись 1 ---" in body_all and "--- Запись 2 ---" in body_all
+    # новое поле записи (неизвестный ключ ner.json) — рендерится после
+    # известных; в выбранный набор — только когда явно выбрано
+    item = dict(ITEMS[0], gender_history="устойчиво",
+                extra_field=["а", "б"])
+    lines = format_ner_record(item, 1)
+    assert any(l.startswith("gender_history: ") for l in lines)
+    assert 'extra_field: ["а", "б"]' in lines
+    lines_sel = format_ner_record(item, 1, fields=["term", "type"])
+    assert not any(l.startswith("gender_history") for l in lines_sel)
+    assert not any(l.startswith("extra_field") for l in lines_sel)
 
 
 def test_build_ner_batches_sorted_by_count_desc():
@@ -110,11 +120,13 @@ def test_review_entry():
     # полная запись: регистр/пробелы статуса, field в lower
     e2 = review_entry({"term": "A", "field": "Type", "old": "x", "new": "y",
                        "status": " Отклонить ", "stage": "Тип: Skill"})
+    assert e2 is not None
     assert e2["field"] == "type" and e2["status"] == "отклонить"
     assert e2["stage"] == "Тип: Skill"
     # неизвестный статус → принять
     e3 = review_entry({"term": "A", "field": "notes", "old": "x",
                        "new": "y", "status": "непонятно"})
+    assert e3 is not None
     assert e3["status"] == "принять"
 
 
@@ -123,6 +135,7 @@ def test_parse_review_doc_and_merge():
         {"term": "A", "field": "translation", "old": "а", "new": "б",
          "status": "отклонить"}]}
     entries = parse_review_doc(doc)
+    assert entries is not None
     assert len(entries) == 1 and entries[0]["status"] == "отклонить"
     # legacy-массив тоже понимается
     assert parse_review_doc([{"term": "A", "field": "translation",

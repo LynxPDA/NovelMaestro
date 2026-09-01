@@ -753,9 +753,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     );
 
     // ── поля записи, передаваемые LLM ──
-    // чипсы — ключи полей ner.json как в данных (term, type, …);
-    // «term» — всегда в запросе (чекбокс неотключаемый); остальные —
-    // type/translation/pinyin/…, показываются только имеющиеся в данных
+    // чипсы — ключи полей из реальных данных ner.json: известные в
+    // привычном порядке, ЛЮБОЙ новый ключ добавляется в конец сам;
+    // «term» — всегда в запросе (чекбокс неотключаемый)
     const FIELD_ORDER = ["type", "translation", "pinyin", "reading",
       "context", "translated_context", "notes", "aliases"];
     const fieldsBar = h("div", { class: "ner-chips-bar" });
@@ -869,9 +869,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             if (!k.startsWith("_")) present.add(k);
           }
         }
-        fieldNames = FIELD_ORDER.filter(
-          (n) => n === "type" || n === "translation" || present.has(n),
-        );
+        // поля — ключи из реальных данных ner.json: известные идут в
+        // привычном порядке, ЛЮБОЙ новый ключ добавляется в конец
+        fieldNames = [
+          ...FIELD_ORDER.filter(
+            (n) => n === "type" || n === "translation" || present.has(n),
+          ),
+          ...[...present]
+            .filter((k) => !FIELD_ORDER.includes(k) && k !== "term")
+            .sort(),
+        ];
         fieldsInfo.textContent =
           "term — всегда; названия полей — ключи ner.json";
         renderFields();
