@@ -1130,6 +1130,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
               h("code", {}, "[0-9]"), " — диапазон"),
             h("li", {}, h("code", {}, "\\\\("), " — скобка (экранирование)"),
           ),
+          h("p", {}, "Флаги в конце строки правила: ",
+            h("code", {}, " |i"), " — не учитывать регистр; ",
+            h("code", {}, " |r"), " — regexp (всегда включён); ",
+            "пробелы в паттерне значимы."),
         ),
       );
       fieldNodes.push(help);
@@ -1239,6 +1243,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             h("li", {}, h("code", {}, "(a|b)"), " — a или b, ",
               h("code", {}, "[0-9]"), " — диапазон"),
           ),
+          h("p", {}, "Флаги в конце строки правила: ",
+            h("code", {}, " |i"), " — не учитывать регистр; ",
+            h("code", {}, " |r"), " — regexp (всегда включён); ",
+            "пробелы в паттерне значимы."),
         ),
       );
       fieldNodes.push(help);

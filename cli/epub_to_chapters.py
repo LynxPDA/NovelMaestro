@@ -22,6 +22,7 @@ import json
 import re
 import sys
 import os
+import unicodedata
 import zipfile
 from html import unescape
 from html.parser import HTMLParser
@@ -44,6 +45,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core.common import (  # noqa: E402
+    strip_rule_flags,
     trim_rule_left,
     trim_rule_right,
 )
@@ -204,11 +206,14 @@ def folder_name(num: int, title: str, title_limit: int = 50) -> str:
 
 
 # ======================== ОЧИСТКИ ТЕКСТА ===============================
-def _safe_compile(pattern: str, name: str, multiline: bool = False):
+def _safe_compile(pattern: str, name: str, multiline: bool = False,
+                  ignore_case: bool = False):
     """Компиляция паттерна; multiline — ^/$ матчат начало/конец СТРОКИ
     (очистки построчные: «^本章完$» удаляет только строку-маркер)."""
+    flags = (re.MULTILINE if multiline else 0) \
+        | (re.IGNORECASE if ignore_case else 0)
     try:
-        return re.compile(pattern, re.MULTILINE if multiline else 0)
+        return re.compile(pattern, flags)
     except re.error as e:
         sys.exit(f"  Ошибка в паттерне --{name}: {e}\n  Паттерн: {pattern}")
 
@@ -217,14 +222,16 @@ def _parse_replace_re(lines) -> list[tuple[re.Pattern, str]]:
     """Парсит --replace-re «паттерн -> замена» → [(compiled, repl)].
 
     Паттерн — MULTILINE («^»/«$» — начало/конец СТРОКИ); значимые
-    пробелы сохраняются («^  ->», «\\s+ -> »). Пустая правая часть —
-    удаление совпадений. Битая строка — sys.exit.
+    пробелы сохраняются («^  ->», «\\s+ -> »). Флаг « |i» в конце строки —
+    без учёта регистра; « |r» — без эффекта (всегда regexp). Пустая
+    правая часть — удаление совпадений. Битая строка — sys.exit.
     """
     out: list[tuple[re.Pattern, str]] = []
     for i, raw in enumerate(lines, 1):
         line = raw.rstrip("\r\n")
         if not line.strip() or line.lstrip().startswith("#"):
             continue
+        line, flags = strip_rule_flags(line)
         if "->" not in line:
             sys.exit(f"--replace-re строка {i}: нет разделителя «->» — "
                      f"ожидалось «паттерн -> замена»")
@@ -233,7 +240,8 @@ def _parse_replace_re(lines) -> list[tuple[re.Pattern, str]]:
         repl = trim_rule_right(repl)
         if not pat:
             sys.exit(f"--replace-re строка {i}: пустой паттерн")
-        compiled = _safe_compile(pat, "replace-re", multiline=True)
+        compiled = _safe_compile(pat, "replace-re", multiline=True,
+                                 ignore_case="i" in flags)
         out.append((compiled, repl))
     return out
 
@@ -560,6 +568,8 @@ def split_input(input_file: Path, mode: str,
         s_before = sum(len(b) for _, b in raw_sections)
         sections: list[tuple[str, str]] = []
         for h, b in raw_sections:
+            h = unicodedata.normalize("NFC", h)
+            b = unicodedata.normalize("NFC", b)
             body, rem = apply_cleanups(b, clean_res)
             removed.extend(rem)
             # regexp-замены — как и в остальных режимах, ДО разбивки:
@@ -574,6 +584,7 @@ def split_input(input_file: Path, mode: str,
         # epub в regex/chunk-режимах перегоняется в текст (архив→txt)
         text = (read_text_file(input_file) if suffix == ".txt"
                 else archive_to_text(input_file))
+        text = unicodedata.normalize("NFC", text)
         s_before = len(text)
         text, removed = apply_cleanups(text, clean_res)
         # regexp-замены — до разбивки (нормализация маркеров глав)
@@ -697,7 +708,8 @@ def build_parser():
                    default=[], metavar="PAT -> REPL",
                    help="Regexp-замена ДО разбивки (можно повторять); "
                         "пустая REPL — удаление; обратные ссылки в REPL "
-                        "работают: \"第(\\d+)章 -> Глава \\1\"")
+                        "работают: \"第(\\d+)章 -> Глава \\1\"; флаг "
+                        "« |i» в конце строки — без учёта регистра")
 
     g = p.add_argument_group("Разбивка по чанкам")
     g.add_argument("--chunk-size", type=int, default=7000, metavar="N",

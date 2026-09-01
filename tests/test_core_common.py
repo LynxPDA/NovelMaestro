@@ -151,6 +151,19 @@ def test_trim_rule_right():
     assert C.trim_rule_right("") == ""
 
 
+def test_strip_rule_flags():
+    """Флаги « |i»/« |r» в конце строки правила; разделитель — ровно
+    один пробел, лишние пробелы остаются значимыми в правиле."""
+    assert C.strip_rule_flags("Хунг -> Хун") == ("Хунг -> Хун", "")
+    assert C.strip_rule_flags("Хунг -> Хун |i") == ("Хунг -> Хун", "i")
+    assert C.strip_rule_flags("Хунг -> Хун |IR") == ("Хунг -> Хун", "ir")
+    assert C.strip_rule_flags("Хунг -> Хун|i") == ("Хунг -> Хун|i", "")
+    # два пробела перед «|»: один — разделитель флагов, второй —
+    # значимая правая часть («сжать пробелы», а не удаление)
+    assert C.strip_rule_flags("\\s+ ->  |r") == ("\\s+ -> ", "r")
+    assert C.strip_rule_flags("Хунг -> Хун  |i") == ("Хунг -> Хун ", "i")
+
+
 def test_loop_detection_patterns():
     ok = "Обычный текст перевода без повторов, просто длинное предложение."
     assert not any(r.search(ok) for r in C._LOOP_RES)

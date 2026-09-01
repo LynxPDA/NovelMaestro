@@ -666,6 +666,16 @@ def test_build_epub_to_chapters_full():
     assert argv3.count("--split-re") == 2
 
 
+def test_build_epub_to_chapters_clean_patterns_ws():
+    """clean_patterns идут дословно, как в CLI: пробелы по краям строки
+    значимы — « +$» (хвостовые пробелы) не превращается в «+$»."""
+    argv = build_command("epub",
+                         {"mode": "regex",
+                          "split_patterns": "第\\d+章",
+                          "clean_patterns": " +$ \n^本章完$"}, {})
+    assert " +$ " in argv and "^本章完$" in argv
+
+
 def test_build_translate_check():
     # подписи пресетов web-формы маппятся на числовой --preset
     form = {"preset": "redacted", "start": 5, "end": 10, "lenient": True}

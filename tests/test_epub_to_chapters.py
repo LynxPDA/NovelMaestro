@@ -351,6 +351,29 @@ def test_replace_re_significant_ws(tmp_path):
     assert pat2.sub(" ", "a   b\tc") == "a b c"
 
 
+def test_replace_re_flags_space():
+    """--replace-re: «\\s+ ->  |r» — пробел правой части значим
+    (сжатие), флаг |r — без эффекта (всегда regexp)."""
+    pat, repl = E2C._parse_replace_re(["\\s+ ->  |r"])[0]
+    assert repl == " "
+    assert pat.sub(" ", "a   b") == "a b"
+
+
+def test_replace_re_flags_and_nfc(tmp_path):
+    """--replace-re: « |i» — регистр; текст и паттерн в NFC —
+    NFD-контент (cafe\u0301) совпадает с NFC-паттерном (café)."""
+    txt = tmp_path / "nfc.txt"
+    txt.write_text("第1章\ncafe\u0301 ХУНГ\n", encoding="utf-8")
+    split_res = [E2C._safe_compile("第\\d+章", "split-re")]
+    replace_res = E2C._parse_replace_re([
+        "café -> кофе",
+        "хунг -> Хун |i",
+    ])
+    entries, *_ = E2C.split_input(txt, "regex", split_res, [],
+                                  replace_res)
+    assert entries[0]["body"] == "кофе Хун"
+
+
 def test_split_input_rejects_zip(tmp_path):
     """ZIP не принимается ни в одном режиме — только epub/txt."""
     z = tmp_path / "book.zip"

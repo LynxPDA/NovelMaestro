@@ -45,14 +45,13 @@ from core.common import (  # noqa: E402
     emit_progress,
     find_chapter_file,
     read_text_safe,
+    strip_rule_flags,
     trim_rule_left,
     trim_rule_right,
 )
 
 # Допустимые типы файлов → значение want для find_chapter_file
 FILE_TYPES = ("polished", "redacted", "translated", "chapter")
-
-_FLAG_RE = re.compile(r"\s+\|([ir]+)\s*$")
 
 
 @dataclass
@@ -103,8 +102,9 @@ def parse_replace_lines(lines) -> tuple[List[Rule], List[str]]:
 
     Каждая строка — одно regexp-правило; пустая правая часть — удаление.
     Значимые пробелы сохраняются: «^  ->» (отступ строки), «\\s+ -> »
-    (сжатие пробелов). Возвращает (rules, warnings): битая строка →
-    предупреждение + пропуск.
+    (сжатие пробелов). Флаги в конце строки (как в файле правил):
+    « |i» — не учитывать регистр, « |r» — без эффекта (всегда regexp).
+    Возвращает (rules, warnings): битая строка → предупреждение + пропуск.
     """
     rules: List[Rule] = []
     warnings: List[str] = []
@@ -112,6 +112,7 @@ def parse_replace_lines(lines) -> tuple[List[Rule], List[str]]:
         line = raw.rstrip("\r\n")
         if not line.strip() or line.lstrip().startswith("#"):
             continue
+        line, flags = strip_rule_flags(line)
         if "->" not in line:
             warnings.append(f"строка {i}: нет разделителя «->» — пропущена")
             continue
@@ -122,7 +123,7 @@ def parse_replace_lines(lines) -> tuple[List[Rule], List[str]]:
             warnings.append(f"строка {i}: пустая левая часть — пропущена")
             continue
         rules.append(Rule(pattern=left, replacement=right,
-                          ignore_case=False, is_regex=True,
+                          ignore_case="i" in flags, is_regex=True,
                           section="--replace"))
     return rules, warnings
 
@@ -150,12 +151,8 @@ def parse_rules(rules_file, force_regex: bool = False):
             section = stripped[2:].strip()
             continue
 
-        # Флаги — в самом конце строки: « |ir»
-        flags = ""
-        m = _FLAG_RE.search(line)
-        if m:
-            flags = m.group(1).lower()
-            line = line[:m.start()]
+        # Флаги — в самом конце строки: « |ir» (ровно один пробел перед «|»)
+        line, flags = strip_rule_flags(line)
 
         # Разделитель: табуляция или первое «->»
         if "\t" in line:
@@ -172,7 +169,6 @@ def parse_rules(rules_file, force_regex: bool = False):
             warnings.append(f"строка {lineno}: пустая левая часть — пропущена")
             continue
 
-        flags = flags.replace(" ", "")
         rules.append(Rule(
             pattern=left,
             replacement=right,
@@ -236,7 +232,8 @@ def main(argv=None) -> int:
     ap.add_argument("--replace", action="append", default=[],
                     metavar="PAT -> REPL",
                     help="Regexp-замена (можно несколько); PAT -> пусто — "
-                         "удаление. Если задан, файл правил не читается.")
+                         "удаление. Флаги в конце строки: « |i» — регистр, "
+                         "« |r» — без эффекта. Если задан, файл правил не читается.")
     ap.add_argument("--regex", action="store_true",
                     help="Все строки правил трактовать как regex.")
     ap.add_argument("--dry-run", "--dry_run", dest="dry_run",

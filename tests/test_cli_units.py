@@ -705,6 +705,15 @@ def test_br_parse_rules_flags(tmp_path):
     assert rules[2].is_regex and rules[2].ignore_case
 
 
+def test_br_parse_rules_flags_significant_ws(tmp_path):
+    """Файл правил: лишние пробелы перед флагами значимы —
+    «\\s+ ->  |r» = сжатие пробелов, а не удаление."""
+    path = _rules_file(tmp_path, "\\s+ ->  |r\n")
+    rules, warnings = parse_br(path)
+    assert warnings == []
+    assert rules[0].is_regex and rules[0].replacement == " "
+
+
 def test_br_parse_rules_force_regex(tmp_path):
     path = _rules_file(tmp_path, "Хунг -> Хун\n")
     rules, _ = parse_br(path, force_regex=True)
@@ -784,6 +793,21 @@ def test_br_parse_replace_lines_ws():
     assert rules[0].pattern == "^  " and rules[0].replacement == ""
     assert rules[1].pattern == "\\s+" and rules[1].replacement == " "
     assert rules[2].pattern == "^ +"
+
+
+def test_br_parse_replace_lines_flags():
+    """--replace: флаги « |i»/« |r» в конце строки (как в файле правил);
+    «\\s+ ->  |r» — пробел правой части значим (сжатие)."""
+    rules, warnings = BR.parse_replace_lines([
+        "Хунг -> Хун |i",
+        "\\s+ ->  |r",
+        "^(第\\d+章.*)\\n(?=\\1$) -> |ir",
+    ])
+    assert warnings == []
+    assert rules[0].ignore_case and rules[0].replacement == "Хун"
+    assert rules[1].replacement == " "      # сжатие, а не удаление
+    assert rules[2].replacement == "" and rules[2].ignore_case
+    assert all(r.is_regex for r in rules)
 
 
 def test_br_multiline_anchors():

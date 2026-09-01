@@ -28,7 +28,7 @@ CORE_API = [
     "load_prompt", "get_tagged_prompt",
     "split_text_smart",
     "get_ngrams", "is_cjk", "is_cjk_string", "find_exact_match",
-    "trim_rule_left", "trim_rule_right",
+    "trim_rule_left", "trim_rule_right", "strip_rule_flags",
     "load_ner_data", "find_relevant_ner", "collect_gender_names",
     "normalize_for_search", "build_smart_regex",
     "filter_ner_items", "format_ner_record", "glossary_body",

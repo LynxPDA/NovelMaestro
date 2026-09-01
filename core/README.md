@@ -13,7 +13,9 @@
 текст (СИМВОЛЫ): split_text_smart / get_ngrams / is_cjk / is_cjk_string /
   normalize_for_search / build_smart_regex / find_exact_match
 правила замен «паттерн -> замена»: trim_rule_left / trim_rule_right
-  (паддинг у «->»; значимые пробелы «^  » / «  $» и «\s+ -> »)
+  (паддинг у «->»; значимые пробелы «^  » / «  $» и «\s+ -> ») /
+  strip_rule_flags (флаги « |i»/« |r» в конце строки правила;
+  разделитель — ровно один пробел: лишние пробелы остаются значимыми)
 NER: load_ner_data / find_relevant_ner (поиск по term+aliases в оригинальном написании) /
   collect_gender_names (поиск имён по translation; пол по наличию (female)/(male) в type)
 ner_check: filter_ner_items / format_ner_record / glossary_body /
