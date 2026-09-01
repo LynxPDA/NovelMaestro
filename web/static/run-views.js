@@ -89,6 +89,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     st.touched[key] = null;
     st.preview = null; // epub: свежий предпросмотр для новой стадии
     st.previewDirty = true;
+    st.brPreview = null; // batch_replace: предпросмотр замен в главе
+    st.brChapter = null;
+    st.brSig = "";
     // активный запуск/стрим НЕ сбрасываем — лог привязан к своей
     // стадии и виден на её вкладке, чужие вкладки его не показывают
     render();
@@ -328,6 +331,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     );
     // epub: панель предпросмотра разбивки — в обоих режимах
     if (key === "epub") panel.append(epubPreviewPanel(key, spec, mode));
+    // batch_replace: панель предпросмотра замен по главам
+    if (key === "batch_replace") {
+      const br = batchReplacePreviewPanel(key);
+      panel.append(br.el);
+      br.mount(panel.querySelector(".run-form") || panel);
+    }
     return panel;
   }
 
@@ -740,18 +749,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       chipsInfo,
     );
 
-    // ── поля записи, передаваемые LLM (term — всегда) ──
-    // чипсы полей из ner.json; дефолт: type + translation; динамическое
-    // окружение — pinyin/reading/context/translated_context/notes/aliases
-    // (показываются только реально имеющиеся в глоссарии)
+    // ── поля записи, передаваемые LLM ──
+    // чипсы полей из ner.json с русскими названиями (как в глоссарии);
+    // «Термин» — всегда в запросе (чекбокс неотключаемый); остальные —
+    // type/translation/pinyin/…, показываются только имеющиеся в данных
     const FIELD_ORDER = ["type", "translation", "pinyin", "reading",
       "context", "translated_context", "notes", "aliases"];
-    const FIELD_LABELS = {
-      type: "тип", translation: "перевод", pinyin: "пиньинь",
-      reading: "чтение", context: "контекст",
-      translated_context: "перевод контекста", notes: "примечания",
-      aliases: "алиасы",
-    };
     const fieldsBar = h("div", { class: "ner-chips-bar" });
     const fieldsInfo = h("div", { class: "field-help" });
     const fieldsBox = h("div", { class: "ner-chips-box" });
@@ -762,36 +765,36 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         v = "term,type,translation";
         st.values[key]["fields"] = v;
       }
-      // term — всегда в запросе, чипса у него нет
-      return v.split(",").map((s) => s.trim())
-        .filter((s) => s && s !== "term");
+      const set = new Set(v.split(",").map((s) => s.trim())
+        .filter((s) => s && s !== "term"));
+      set.add("term"); // термин — всегда в запросе
+      return set;
     }
     function renderFields() {
       const cur = curFields();
       fieldsBox.replaceChildren();
-      for (const name of fieldNames) {
+      for (const name of ["term", ...fieldNames]) {
+        const isTerm = name === "term";
         const cb = h("input", { type: "checkbox", class: "checkbox" });
-        cb.checked = cur.includes(name);
-        cb.addEventListener("change", () => {
-          const set = new Set(cur);
-          if (cb.checked) {
-            set.add(name);
-          } else if (set.size > 1) {
-            set.delete(name);
-          } else {
-            cb.checked = true; // минимум одно поле (term и так всегда)
-            return;
-          }
-          st.values[key]["fields"] = [...set].join(",");
-          st.touched[key].add("fields");
-          renderFields();
-        });
+        cb.checked = isTerm || cur.has(name);
+        cb.disabled = isTerm; // неотключаемый
+        if (!isTerm) {
+          cb.addEventListener("change", () => {
+            const set = new Set(curFields());
+            if (cb.checked) set.add(name);
+            else set.delete(name); // минимум — «Термин» (неотключаемый)
+            st.values[key]["fields"] = [...set].join(",");
+            st.touched[key].add("fields");
+            renderFields();
+          });
+        }
         fieldsBox.append(
           h(
             "label",
-            { class: "ner-chip" },
+            { class: "ner-chip" + (isTerm ? " ner-chip-term" : "") },
             cb,
-            ` ${FIELD_LABELS[name] || name}`,
+            ` ${UICore.nerFieldLabel(name)}`
+              + (isTerm ? " (всегда)" : ""),
           ),
         );
       }
@@ -803,7 +806,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     );
     fieldsAll.addEventListener("click", () => {
       if (fieldNames.length) {
-        st.values[key]["fields"] = fieldNames.join(",");
+        st.values[key]["fields"] = ["term", ...fieldNames].join(",");
         st.touched[key].add("fields");
         renderFields();
       }
@@ -868,7 +871,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           (n) => n === "type" || n === "translation" || present.has(n),
         );
         fieldsInfo.textContent =
-          "term — всегда; включены только поля записи";
+          "Термин — всегда; остальные названия — как в глоссарии";
         renderFields();
       } catch (ex) {
         chipsInfo.textContent = ex.message;
@@ -1485,6 +1488,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     });
 
+    // обёртки полей текущей формы — для панели предпросмотра замен
+    // (batch_replace: реакции на смену типа/диапазона/правил)
+    st.curWraps = fieldWraps;
+
     return h("div", { class: "run-form" }, fieldNodes, err, runBtn);
   }
 
@@ -1543,6 +1550,235 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
     nodes.push(err);
     return h("div", { class: "run-panel epub-preview" }, nodes);
+  }
+
+  // ── batch_replace: предпросмотр замен по главам ────────────────────
+  // Выбор типа файлов глав («Тип файлов глав» формы), выбор главы —
+  // и подсветка того, что изменится (удалённые/вставленные фрагменты).
+  // Правила парсятся и применяются ТЕМ ЖЕ путём, что реальный запуск
+  // (parse_replace_lines + apply_rules_segments) — POST
+  // /stages/batch_replace/preview.
+  function batchReplacePreviewPanel(key) {
+    const wraps = st.curWraps || {};
+    const err = h("div", { class: "form-error" });
+    const note = h("div", { class: "field-help" });
+    const dirty = h(
+      "div",
+      { class: "field-help", style: "display:none" },
+    );
+    const chSel = h("select", { class: "input" });
+    chSel.append(h("option", { value: "" }, "—"));
+    const btn = h(
+      "button",
+      { class: "btn btn-primary", type: "button" },
+      "Предпросмотр",
+    );
+    const box = h("div", { class: "br-box" });
+
+    const inputOf = (w) =>
+      (w && w._input && w._input._sel) || (w && w._input) || null;
+
+    // сигнатура формы — для пометки «предпросмотр устарел»
+    function sig() {
+      const v = st.values[key] || {};
+      return [v["type"], v["start"], v["end"], v["replacements"],
+              st.brChapter]
+        .map((x) => String(x ?? "")).join("\u0000");
+    }
+
+    async function loadChapters(autoRun) {
+      note.textContent = "Загрузка глав…";
+      let tree;
+      try {
+        tree = await api(`/projects/${section}/${name}/tree`);
+      } catch (ex) {
+        note.textContent = ex.message;
+        return;
+      }
+      const v = st.values[key] || {};
+      const ft = String(v["type"] || "polished");
+      const art = `${ft}.txt`;
+      const s = parseInt(v["start"] || "", 10);
+      const e = parseInt(v["end"] || "", 10);
+      const list = (tree.chapters || []).filter((c) => {
+        if (!c.artifacts || !c.artifacts[art]) return false;
+        if (s > e) return false;
+        if (Number.isFinite(s) && c.id < s) return false;
+        if (Number.isFinite(e) && c.id > e) return false;
+        return true;
+      });
+      const keep = (st.brChapter != null
+        && list.some((c) => c.id === Number(st.brChapter)))
+        ? Number(st.brChapter)
+        : list.length ? list[0].id : null;
+      st.brChapter = keep;
+      if (st.brPreview && st.brPreview.num !== keep) st.brPreview = null;
+      chSel.replaceChildren();
+      if (!list.length) {
+        chSel.append(
+          h("option", { value: "" },
+            s > e
+              ? "Диапазон пуст (начало > конца)"
+              : `Нет глав типа «${ft}»`),
+        );
+        chSel.disabled = true;
+        note.textContent = s > e
+          ? "Исправьте диапазон глав"
+          : `В диапазоне нет файлов типа ${ft}`;
+        box.replaceChildren();
+        return;
+      }
+      chSel.disabled = false;
+      for (const c of list) {
+        chSel.append(
+          h("option", { value: c.id }, `${c.id} · ${c.dir}`),
+        );
+      }
+      chSel.value = String(keep);
+      note.textContent = list.length === 1
+        ? "1 глава доступна"
+        : `Доступно глав: ${list.length}`;
+      if (autoRun) await runPreview();
+    }
+
+    async function runPreview() {
+      const num = st.brChapter;
+      const v = st.values[key] || {};
+      const replacements = v["replacements"] || "";
+      const lines = String(replacements).split("\n")
+        .filter((ln) => ln.trim());
+      if (num == null) return;
+      if (!lines.length) {
+        st.brPreview = null;
+        box.replaceChildren();
+        note.textContent =
+          "Добавьте замены — предпросмотр покажет, что изменится";
+        return;
+      }
+      err.textContent = "";
+      dirty.style.display = "none";
+      note.textContent = "Предпросмотр…";
+      try {
+        const r = await api("/stages/batch_replace/preview", {
+          method: "POST",
+          body: {
+            project: `${section}/${name}`,
+            type: ft || v["type"] || "polished",
+            chapter: num,
+            replacements,
+          },
+        });
+        st.brPreview = r;
+        st.brSig = sig();
+        renderBrResult();
+        note.textContent = r.changed
+          ? "Изменения подсвечены: красное — удалено, зелёное — вставлено"
+          : "Замен в этой главе нет";
+      } catch (ex) {
+        st.brPreview = null;
+        box.replaceChildren();
+        err.textContent = ex.message;
+        note.textContent = "";
+      }
+    }
+
+    function renderBrResult() {
+      box.replaceChildren();
+      const r = st.brPreview;
+      if (!r) return;
+      const stats = (r.stats || []).filter((s) => s.count > 0);
+      if (stats.length) {
+        const head = ["Замен по правилам: "];
+        stats.forEach((s, i) => {
+          if (i) head.push(" · ");
+          head.push(h("code", { class: "br-rule" }, s.label));
+          head.push(` ${s.count}`);
+        });
+        box.append(h("div", { class: "br-stats" }, head));
+      }
+      if (r.warnings && r.warnings.length) {
+        box.append(
+          h("div", { class: "field-help" }, "⚠ " + r.warnings.join(" · ")),
+        );
+      }
+      const pre = h("pre", { class: "br-text" });
+      for (const [kind, text] of r.segments || []) {
+        if (kind === "keep") {
+          pre.append(document.createTextNode(text));
+        } else {
+          pre.append(
+            h(
+              "span",
+              { class: kind === "del" ? "br-del" : "br-ins" },
+              text,
+            ),
+          );
+        }
+      }
+      box.append(pre);
+    }
+
+    chSel.addEventListener("change", () => {
+      st.brChapter = chSel.value === "" ? null : Number(chSel.value);
+      runPreview();
+    });
+    btn.addEventListener("click", () => {
+      err.textContent = "";
+      runPreview();
+    });
+
+    const el = h(
+      "div",
+      { class: "run-panel br-panel" },
+      h(
+        "div",
+        { class: "run-panel-title" },
+        "Предпросмотр замен",
+        h("span", { class: "spacer" }),
+        btn,
+      ),
+      h(
+        "div",
+        { class: "field" },
+        h("div", { class: "field-label" }, "Глава"),
+        chSel,
+      ),
+      note,
+      dirty,
+      box,
+      err,
+    );
+
+    // привязка событий формы ПОСЛЕ вставки в DOM: смена типа/диапазона
+    // пересобирает список глав (и автопресмотр), набор правил только
+    // помечает «устарел» (запуск — кнопкой или выбором главы)
+    function mount(formNode) {
+      const onType = inputOf(wraps["type"]);
+      const onStart = inputOf(wraps["start"]);
+      const onEnd = inputOf(wraps["end"]);
+      const onRepl = inputOf(wraps["replacements"]);
+      formNode.addEventListener("input", (ev) => {
+        if (ev.target === onRepl) {
+          if (st.brSig && sig() !== st.brSig) {
+            dirty.textContent =
+              "Правила изменены — нажмите «Предпросмотр»";
+            dirty.style.display = "";
+          }
+        } else if (ev.target === onStart || ev.target === onEnd) {
+          loadChapters(true);
+        }
+      });
+      formNode.addEventListener("change", (ev) => {
+        if (ev.target === onType) {
+          st.brPreview = null;
+          st.brChapter = null;
+          loadChapters(true);
+        }
+      });
+      loadChapters(true);
+    }
+
+    return { el, mount };
   }
 
   // валидация исходника epub: обязателен; расширения — по режиму

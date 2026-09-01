@@ -1512,7 +1512,6 @@ function viewProject(section, name, tab) {
     data.items = data.items || [];
     const LS_KEY = `nerCols:${section}/${name}`;
     const DEFAULT_COLS = ["term", "type", "translation"];
-    const COL_LABELS = { term: "Термин", type: "Тип", translation: "Перевод" };
     let cols = [...DEFAULT_COLS];
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -1542,7 +1541,7 @@ function viewProject(section, name, tab) {
     const pager = h("div", { class: "ner-pager" });
     let editing = null; // редактируемая запись (объект из data.items)
     let page = 0; // M6: текущая страница таблицы
-    const colLabel = (key) => COL_LABELS[key] || key;
+    const colLabel = (key) => UICore.nerFieldLabel(key);
     const visibleCols = () => (cols == null ? [...knownKeys] : cols);
     function colsLabel() {
       if (cols == null) return "Все столбцы";

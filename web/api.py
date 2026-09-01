@@ -92,6 +92,15 @@ def _import_common(ctx: dict):
         raise ApiError(500, f"core.common недоступен: {exc}")
 
 
+def _import_batch_replace():
+    """Ленивый импорт чистой логики cli/batch_replace.py (правила)."""
+    try:
+        from cli import batch_replace as br
+        return br
+    except ImportError as exc:
+        raise ApiError(500, f"cli.batch_replace недоступен: {exc}")
+
+
 class _LengthLimitedReader:
     """Бинарный reader, отдающий не более limit байт (тело запроса)."""
 
@@ -2738,6 +2747,62 @@ def _epub_preview_folder_delete(ctx: dict) -> dict:
             **_epub_preview_summary(data)}
 
 
+def _batch_replace_preview(ctx: dict) -> dict:
+    """Предпросмотр замен в одной главе
+    (POST /api/stages/batch_replace/preview).
+
+    Тело: {project, type, chapter, replacements}. Правила парсятся и
+    применяются тем же путём, что реальный запуск
+    (cli.batch_replace.parse_replace_lines + apply_rules_segments) —
+    файлы не изменяются. Возвращает segments (keep/del/ins) итогового
+    текста и счётчики замен по правилам.
+    """
+    pdir, _sec, _name = _project_ctx(ctx)
+    br = _import_batch_replace()
+    common = _import_common(ctx)
+    body = ctx["body"] or {}
+    ftype = str(body.get("type") or "polished")
+    if ftype not in br.FILE_TYPES:
+        raise ApiError(400, f"Неизвестный тип файлов глав: {ftype}")
+    try:
+        num = int(body.get("chapter") or "")
+    except (TypeError, ValueError):
+        raise ApiError(400, "Номер главы (chapter) обязателен")
+    replacements = body.get("replacements")
+    if isinstance(replacements, str):
+        lines = [ln for ln in replacements.splitlines() if ln.strip()]
+    elif isinstance(replacements, list):
+        lines = [str(x) for x in replacements if str(x).strip()]
+    else:
+        lines = []
+    rules, warnings = br.parse_replace_lines(lines)
+    if not rules:
+        raise ApiError(400, "В форме нет ни одной корректной замены"
+                            + (": " + "; ".join(warnings) if warnings else ""))
+    chapters_dir = pdir / "chapters"
+    ch_map = common.build_chapter_map(chapters_dir)
+    dirs = ch_map.get(num)
+    if not dirs:
+        raise ApiError(404, f"Глава {num} не найдена")
+    filepath, warns = common.find_chapter_file(dirs[0], num,
+                                               want=ftype, strict=True,
+                                               strict_types=True)
+    warnings += [w for w in warns if w not in warnings]
+    if filepath is None:
+        raise ApiError(404, f"В главе {num} нет файла типа {ftype}")
+    content = common.read_text_safe(filepath)
+    segments, stats = br.apply_rules_segments(content, rules)
+    return {"ok": True, "num": num, "dir": Path(dirs[0]).name,
+            "type": ftype,
+            "changed": bool(stats),
+            "stats": [{"label": label, "count": cnt}
+                      for label, cnt in sorted(stats.items(),
+                                               key=lambda x: -x[1])],
+            "warnings": warnings,
+            "segments": segments}
+
+
+
 def _register_jobs(router: Router) -> None:
     router.add("GET", "/api/stages", _stages_list)
     router.add("POST", "/api/jobs", _jobs_start)
@@ -2755,3 +2820,5 @@ def _register_jobs(router: Router) -> None:
     router.add("GET", "/api/stages/epub/preview/text", _epub_preview_text)
     router.add("DELETE", "/api/stages/epub/preview/folder",
                _epub_preview_folder_delete)
+    router.add("POST", "/api/stages/batch_replace/preview",
+               _batch_replace_preview)

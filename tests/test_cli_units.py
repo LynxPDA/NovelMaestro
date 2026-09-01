@@ -817,6 +817,59 @@ def test_br_apply_no_change():
     assert out == "текст" and stats == {}
 
 
+def test_br_apply_rules_segments_del_ins():
+    """Сегменты: удаление/вставка, склейка совпадает с apply_rules."""
+    r1 = BR.Rule("Хунг", "Хун", False, False)
+    r2 = BR.Rule(r"\(\d+\)", "", False, True)
+    text = "Хунг (12) здесь"
+    segs, stats = BR.apply_rules_segments(text, [r1, r2])
+    assert "".join(t for k, t in segs if k != "del") == "Хун  здесь"
+    assert stats == {"Хунг": 1, r"\(\d+\)": 1}
+    assert ("del", "Хунг") in segs and ("ins", "Хун") in segs
+    assert ("del", "(12)") in segs
+    # regex с обратной ссылкой — дель/вставка по группам
+    r3 = BR.Rule("Хунг(а|у)", r"Хун\1", False, True)
+    segs2, _ = BR.apply_rules_segments("Хунга и Хунгу", [r3])
+    assert "".join(t for k, t in segs2 if k != "del") == "Хуна и Хуну"
+    # вставленное первым правилом видно следующим заменам
+    seq = [BR.Rule("Хунг", "Хун", False, False),
+           BR.Rule("Хуна", "Хуня", False, False)]
+    segs3, stats3 = BR.apply_rules_segments("Хунга", seq)
+    assert "".join(t for k, t in segs3 if k != "del") == "Хуня"
+    assert stats3 == {"Хунг": 1, "Хуна": 1}
+    # «Хун» первого правила поглощён дель «Хуна» второй замены
+    assert ("del", "Хунг") in segs3
+    assert ("del", "Хуна") in segs3 and ("ins", "Хуня") in segs3
+
+
+def test_br_apply_rules_segments_matches_apply_rules():
+    """Сегментная склейка ≡ apply_rules при любой последовательности."""
+    rules = [
+        BR.Rule("Хунг", "Хун", False, False),
+        BR.Rule("\\s+", " ", False, True),
+        BR.Rule("^  ", "", False, True),
+        BR.Rule(" заслуга", " Заслуга", True, False),
+    ]
+    text = "Хунг   и   Бессмертного заслуга\n  с отступом"
+    segs, stats = BR.apply_rules_segments(text, rules)
+    out, stats2 = BR.apply_rules(text, rules)
+    assert "".join(t for k, t in segs if k != "del") == out
+    assert stats == stats2
+    assert ("del", "Хунг") in segs
+
+
+def test_br_apply_rules_segments_zero_width_and_empty():
+    """Zero-width-якоря («^ ->») и пустой текст."""
+    r = BR.Rule("^", "# ", False, True)
+    segs, stats = BR.apply_rules_segments("a\nb", [r])
+    assert "".join(t for k, t in segs if k != "del") == "# a\n# b"
+    assert stats == {"^": 2}
+    # пустой текст: вставка срабатывает, делений нет
+    segs2, stats2 = BR.apply_rules_segments("", [r])
+    assert "".join(t for k, t in segs2 if k != "del") == "# "
+    assert stats2 == {"^": 1}
+
+
 def test_br_parse_replace_lines():
     """--replace: пары «паттерн -> замена», пустая правая — удаление."""
     rules, warnings = BR.parse_replace_lines([

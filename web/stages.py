@@ -232,8 +232,9 @@ def build_batch_replace(form: dict, ctx: dict) -> list[str]:
     if form.get("type"):
         argv += ["--type", str(form["type"])]
     argv += _range_argv("start", form)
-    if form.get("dry_run"):
-        argv += ["--dry-run"]
+    # --dry-run на этапе формы не нужен: предпросмотр изменений —
+    # панель «Предпросмотр замен» по выбранной главе (SPA →
+    # POST /api/stages/batch_replace/preview)
     return argv
 
 
@@ -1039,9 +1040,6 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "dry_run", "label": "Предпросмотр (--dry-run)",
-             "type": "bool", "default": False,
-             "help": "Показать, что изменится, не трогая файлы"},
         ],
         # только экспертный режим (без простого/пресета)
     }, 

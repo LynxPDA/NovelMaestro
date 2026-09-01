@@ -187,14 +187,87 @@ def apply_rules(content: str, rules: List[Rule]):
 
     Возвращает (new_content, stats: {label: count}). Текст NFC-нормализуется.
     """
+    segments, stats = apply_rules_segments(content, rules)
+    return "".join(t for k, t in segments if k != "del"), stats
+
+
+def apply_rules_segments(content: str, rules: List[Rule]):
+    """Применяет правила и возвращает (segments, stats) — разметка изменений.
+
+    segments — список пар (kind, text) в порядке итогового текста:
+    «keep» — осталось без изменений, «del» — удалено правилом,
+    «ins» — вставлено заменой. «del» в итоговом тексте НЕ участвует
+    (склейка без него даёт результат apply_rules), но сохраняет позицию
+    в потоке — для подсветки удалённого. Правила применяются
+    последовательно, следующие замены видят только итоговый текст.
+    Stats: {label: count}, как в apply_rules; текст NFC-нормализуется.
+    """
     content = _nfc(content)
+    segs = [("keep", content)] if content else []
     stats = {}
     for rule in rules:
-        compiled = rule.compile()
-        content, n = rule.sub(compiled, content)
-        if n > 0:
-            stats[rule.label] = stats.get(rule.label, 0) + n
-    return content, stats
+        rx = rule.compile()
+        # текущий текст — ВСЁ кроме «del» (удалённое в нём не участвует)
+        cur = "".join(t for k, t in segs if k != "del")
+        # координаты сегментов в текущем тексте; «del» — точка
+        starts = []
+        pos = 0
+        for k, t in segs:
+            starts.append(pos)
+            if k != "del":
+                pos += len(t)
+
+        def cut(a: int, b: int, edge: bool = False):
+            """Кусок текущего текста [a, b) в виде сегментов;
+            встретившиеся внутри «del» сохраняются (a <= pos < b;
+            edge — включать pos == b для последнего куска)."""
+            out = []
+            for i, (kind, t) in enumerate(segs):
+                s = starts[i]
+                if not t:
+                    continue
+                if kind == "del":
+                    if a <= s < b or (edge and s == b):
+                        out.append((kind, t))
+                    continue
+                e = s + len(t)
+                if e <= a or s >= b:
+                    continue
+                cs = max(s, a)
+                ce = min(e, b)
+                out.append((kind, t[cs - s:ce - s]))
+            return out
+
+        def flush_del(a: int, b: int):
+            """Старые «del» ВНУТРИ совпадения [a, b) — хронологически они
+            появились раньше и визуально должны идти до нового «del»."""
+            out = []
+            for i, (kind, t) in enumerate(segs):
+                if kind == "del" and a <= starts[i] < b:
+                    out.append((kind, t))
+            return out
+
+        matches = list(rx.finditer(cur))
+        if not matches:
+            continue
+        new_segs = []
+        last = 0
+        for m in matches:
+            a, b = m.span()
+            new_segs.extend(cut(last, a))
+            new_segs.extend(flush_del(a, b))
+            if a != b:
+                new_segs.append(("del", cur[a:b]))
+            rep = m.expand(rule.replacement) if rule.is_regex \
+                else rule.replacement
+            if rep:
+                new_segs.append(("ins", rep))
+            last = b
+        new_segs.extend(cut(last, len(cur), edge=True))
+        segs = new_segs
+        if len(matches):
+            stats[rule.label] = stats.get(rule.label, 0) + len(matches)
+    return segs, stats
 
 
 def process_file(filepath, rules: List[Rule], dry_run: bool = False):

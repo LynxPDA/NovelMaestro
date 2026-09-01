@@ -186,6 +186,23 @@
   }
 
   var UICore = {
+    /* ── русские названия полей записи глоссария ──
+       единый словарь: вкладка «Глоссарий» (колонки и модалки),
+       «Поля в запросе LLM» стадии проверки (ner_check) и её чипсы. */
+    nerFieldLabels: {
+      term: "Термин",
+      type: "Тип",
+      translation: "Перевод",
+      pinyin: "Пиньинь",
+      reading: "Чтение",
+      context: "Контекст",
+      translated_context: "Перевод контекста",
+      notes: "Примечания",
+      aliases: "Алиасы",
+      count: "Частота",
+    },
+    nerFieldLabel: (key) => UICore.nerFieldLabels[key] || key,
+
     /* ── роутер: "#/run/a/b" → {view, rest} ── */
     parseRoute: (hash) => {
       var h = String(hash || "")

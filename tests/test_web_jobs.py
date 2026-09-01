@@ -755,7 +755,8 @@ def test_build_batch_replace():
     assert "--type" in argv and "polished" in argv
     assert "--start" in argv and "1" in argv
     assert "--end" in argv and "5" in argv
-    assert "--dry-run" in argv
+    # чекбокс убран из формы: предпросмотр — панель по выбранной главе
+    assert "--dry-run" not in argv
     # пустая форма — без --replace
     argv2 = build_command("batch_replace", {}, {})
     assert "--replace" not in argv2

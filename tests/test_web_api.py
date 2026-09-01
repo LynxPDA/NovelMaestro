@@ -1618,6 +1618,86 @@ def test_epub_preview_requires_project(srv_ctx):
     assert "project" in payload.get("error", "")
 
 
+def _br_chapter(pdir, num=1, folder="Глава_1") -> Path:
+    """Папка главы с polished.txt для предпросмотра замен."""
+    zeros = "0" * max(0, 6 - len(str(num)))
+    d = pdir / "chapters" / f"{zeros}_{num}_{folder}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "chapter.txt").write_text("Заголовок\n", encoding="utf-8")
+    return d
+
+
+def test_batch_replace_preview_flow(srv_ctx):
+    """Предпросмотр замен: сегменты keep/del/ins + счётчики + склейка.
+
+    Правила применяются тем же путём, что реальный запуск.
+    """
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    d = _br_chapter(pdir)
+    (d / "polished.txt").write_text(
+        "Глава 5 начинается. Идём дальше.\n\nНачало.\n", encoding="utf-8")
+    res, payload = _request(port, "POST",
+                            "/api/stages/batch_replace/preview", {
+        "project": "ACTIVE/test_book",
+        "type": "polished",
+        "chapter": 1,
+        "replacements": "Глава (\\d+) -> Глава №\\1\nИдём -> Идем",
+    })
+    assert res.status == 200, payload
+    assert payload["ok"] and payload["num"] == 1
+    assert payload["dir"] == "00000_1_Глава_1" and payload["type"] == "polished"
+    assert payload["changed"] is True
+    joined = "".join(t for k, t in payload["segments"] if k != "del")
+    assert joined == "Глава №5 начинается. Идем дальше.\n\nНачало.\n"
+    assert ["del", "Глава 5"] in payload["segments"]
+    assert ["ins", "Глава №5"] in payload["segments"]
+    assert ["del", "Идём"] in payload["segments"]
+    assert ["ins", "Идем"] in payload["segments"]
+    labels = {s["label"]: s["count"] for s in payload["stats"]}
+    assert labels == {"--replace/Глава (\\d+)": 1, "--replace/Идём": 1}
+    assert payload["warnings"] == []
+    # файл главы НЕ изменён — это предпросмотр
+    assert "Глава 5 начинается" in (d / "polished.txt").read_text(
+        encoding="utf-8")
+
+
+def test_batch_replace_preview_deletion_and_errors(srv_ctx):
+    """Удаление (пустая правая часть) и ошибки: глава/файл/правила."""
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    d = _br_chapter(pdir)
+    (d / "polished.txt").write_text("(12) Привет\n", encoding="utf-8")
+    url = "/api/stages/batch_replace/preview"
+    base = {"project": "ACTIVE/test_book", "type": "polished",
+            "chapter": 1}
+    # удаление — только сегмент del, ins нет
+    res, payload = _request(port, "POST", url,
+                            {**base, "replacements": r"\(\d+\) ->"})
+    assert res.status == 200, payload
+    joined = "".join(t for k, t in payload["segments"] if k != "del")
+    assert joined == " Привет\n"
+    assert ["del", "(12)"] in payload["segments"]
+    assert not any(k == "ins" for k, _ in payload["segments"])
+    # нет ни одного корректного правила — 400
+    res2, payload2 = _request(port, "POST", url,
+                              {**base, "replacements": "без разделителя"})
+    assert res2.status == 400
+    assert "корректной замены" in payload2.get("error", "")
+    # несуществующая глава — 404
+    res3, payload3 = _request(port, "POST", url,
+                              {**base, "chapter": 99,
+                               "replacements": "a -> b"})
+    assert res3.status == 404
+    # глава без файла нужного типа — 404
+    d2 = _br_chapter(pdir, num=2, folder="Глава_2")
+    res4, payload4 = _request(port, "POST", url,
+                              {**base, "chapter": 2,
+                               "replacements": "a -> b"})
+    assert res4.status == 404
+    assert "polished" in payload4.get("error", "")
+
+
 def test_epub_preview_skip_propagates(srv_ctx):
     """skip из предпросмотра попадает в build_command → --skip."""
     from web.stages import build_command

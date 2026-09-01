@@ -833,6 +833,12 @@ input[type="number"] {
 }
 .ner-chip:has(input:checked) {
   border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.ner-chip-term {
+  cursor: default;
+  opacity: 0.75;
+}
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .ner-chip .checkbox {
@@ -2019,6 +2025,41 @@ body[data-editor-theme="light"] .editor-area {
   border: 1px solid var(--border, #444);
   border-radius: 6px;
   padding: 8px;
+}
+
+/* ── batch_replace: предпросмотр замен в главе ─────────── */
+.br-panel {
+  margin-top: 12px;
+}
+.br-box {
+  margin-top: 6px;
+}
+.br-stats {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.br-rule {
+  font-size: 12px;
+}
+.br-text {
+  margin-top: 4px;
+  max-height: 400px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.55;
+  background: var(--bg-soft, #2a2a2a);
+  border: 1px solid var(--border, #444);
+  border-radius: 6px;
+  padding: 8px;
+}
+.br-del {
+  background: rgba(231, 76, 60, 0.28);
+  border-radius: 3px;
+}
+.br-ins {
+  background: rgba(46, 204, 113, 0.22);
+  border-radius: 3px;
 }
 
 /* ── compile: предпросмотр обложки и файлов ─────────────── */
