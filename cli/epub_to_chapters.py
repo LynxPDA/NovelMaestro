@@ -281,6 +281,9 @@ def split_by_patterns(text: str, split_res) -> list[tuple[str, str]]:
         if not heading:
             heading = f"Секция {k + 1}"
         body = "\n".join(lines[idx + 1:end]).strip()
+        # дубль заголовка в начале тела — только ТОЧНОЕ совпадение,
+        # чтобы не съесть текст, начинающийся с части заголовка
+        body = _strip_heading_line(body, heading, exact=True).strip()
         if body:
             sections.append((heading, body))
     return sections
@@ -401,17 +404,43 @@ def _archive_order(zf: zipfile.ZipFile, all_html) -> list[str]:
     return sorted(all_html, key=lambda n: nat_key(Path(n).name))
 
 
-def _strip_heading_line(text: str, heading: str) -> str:
-    """Убрать первую строку-заголовок (дубль названия главы) из начала тела."""
+def _strip_heading_line(text: str, heading: str,
+                      exact: bool = False) -> str:
+    """Убрать ВСЕ ведущие строки-дубли заголовка из начала тела.
+
+    Источник часто повторяет заголовок первым абзацем тела (с отступом
+    и/или пустыми строками между копиями) — убираются все ведущие
+    копии, тело начинается с собственно текста. Пустые строки между
+    копиями пропускаются.
+
+    exact=True — дубль только при точном совпадении (обрезка
+    пробелов). Иначе строка считается дублем, если равна заголовку,
+    содержит его и близка к нему по длине (декорация «（上）」/«。」,
+    до +8 символов) или сама входит в заголовок (короткий <h1>-маркер
+    против полного заголовка TOC). Длинная строка с заголовком внутри
+    — это уже проза, она сохраняется.
+    """
+    if not heading:
+        return text
     lines = text.splitlines(keepends=True)
-    for i, ln in enumerate(lines[:5]):
-        if not ln.strip():
-            continue
-        s = ln.strip()
-        if heading and (heading in s or s in heading):
-            return "".join(lines[i + 1:])
-        break
-    return text
+    while lines:
+        start = 0
+        while start < len(lines) and not lines[start].strip():
+            start += 1
+        if start >= len(lines):
+            break
+        s = lines[start].strip()
+        if exact:
+            hit = s == heading
+        else:
+            hit = (s == heading
+                   or s in heading
+                   or (heading in s and len(s) <= len(heading) + 8))
+        if hit:
+            lines = lines[start + 1:]
+        else:
+            break
+    return "".join(lines)
 
 
 def split_markup_by_headings(markup: str) -> list[tuple[str, str]] | None:
@@ -441,6 +470,8 @@ def split_markup_by_headings(markup: str) -> list[tuple[str, str]] | None:
         body = norm_fw(body)
         body = normalize_newlines(body)
         body, _ = apply_cleanups(body, [])
+        # дубль заголовка первым абзацем тела — только точное совпадение
+        body = _strip_heading_line(body, heading, exact=True)
         if body.strip():
             sections.append((heading, body.strip()))
     return sections or None

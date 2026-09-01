@@ -203,6 +203,82 @@ def test_split_input_toc(tmp_path):
     assert entries[0]["body"] == "текст 1"
 
 
+def test_split_input_toc_dup_indented(tmp_path):
+    """toc-режим: дубль заголовка первым абзацем тела (с отступом из
+    U+2003 EM SPACE и пустой строкой) убирается ВСЕ копии."""
+    epub = tmp_path / "book.epub"
+    container = ('<?xml version="1.0"?><container><rootfiles><rootfile '
+                 'full-path="OEBPS/content.opf"/></rootfiles></container>')
+    opf = ('<?xml version="1.0"?><package><manifest>'
+           '<item id="c1" href="c1.xhtml"/>'
+           '<item id="c2" href="c2.xhtml"/></manifest>'
+           '<spine><itemref idref="c1"/><itemref idref="c2"/></spine>'
+           '</package>')
+    toc = ('<?xml version="1.0"?><ncx>'
+           '<navPoint><navLabel><text>Глава 1</text></navLabel>'
+           '<content src="c1.xhtml"/></navPoint>'
+           '<navPoint><navLabel><text>Глава 2</text></navLabel>'
+           '<content src="c2.xhtml"/></navPoint>'
+           '</ncx>')
+    with zipfile.ZipFile(epub, "w") as zf:
+        zf.writestr("META-INF/container.xml", container)
+        zf.writestr("OEBPS/content.opf", opf)
+        zf.writestr("OEBPS/toc.ncx", toc)
+        zf.writestr("OEBPS/c1.xhtml",
+                    "<html><body><h1>Глава 1</h1>"
+                    "<p>\u2003\u2003Глава 1</p><p>текст один</p></body></html>")
+        zf.writestr("OEBPS/c2.xhtml",
+                    "<html><body><h1>Глава 2</h1>"
+                    "<p>\u2003\u2003Глава 2</p><p>текст два</p></body></html>")
+    entries, *_ = E2C.split_input(epub, "toc", [], [])
+    assert [e["heading"] for e in entries] == ["Глава 1", "Глава 2"]
+    assert entries[0]["body"] == "текст один"
+    assert entries[1]["body"] == "текст два"
+
+
+def test_split_by_patterns_dup_title(tmp_path):
+    """regex-режим: дубль заголовка в начале тела — только ТОЧНОЕ
+    совпадение; строка, начинающаяся с заголовка, сохраняется."""
+    text = ("Глава 1\n"
+            "\u2003\u2003Глава 1\n"
+            "Глава 1 была первой\n"
+            "Глава 2\n"
+            "текст два\n")
+    src = tmp_path / "book.txt"
+    src.write_text(text, encoding="utf-8")
+    # якорный паттерн: «Глава 1 была первой» маркером НЕ становится
+    entries, *_ = E2C.split_input(
+        src, "regex",
+        [E2C._safe_compile("^Глава \\d+$", "split-re", multiline=True)],
+        [])
+    assert [e["heading"] for e in entries] == ["Глава 1", "Глава 2"]
+    # дубль «Глава 1» (точное совпадение) убран,
+    # «Глава 1 была первой» (продолжение заголовка) — осталась
+    assert entries[0]["body"] == "Глава 1 была первой"
+    assert entries[1]["body"] == "текст два"
+
+
+def test_strip_heading_line_prose_kept():
+    """Длинная строка, содержащая заголовок, — проза, не дубль."""
+    heading = "Глава 1"
+    text = ("Глава 1\n"
+            "Глава 1 была самой длинной и скучной\n"
+            "текст\n")
+    out = E2C._strip_heading_line(text, heading)
+    assert out == "Глава 1 была самой длинной и скучной\nтекст\n"
+    # декорация до +8 символов — дубль
+    out = E2C._strip_heading_line("Глава 1（上）\nтекст\n", heading)
+    assert out == "текст\n"
+    # короткая строка, входящая в заголовок — дубль-маркер
+    out = E2C._strip_heading_line(
+        "第1章\n正文\n", "第1章 我看见女子剑仙安坐闺房")
+    assert out == "正文\n"
+    # exact: только точное совпадение
+    out = E2C._strip_heading_line("Глава 1（上）\nтекст\n", heading,
+                                  exact=True)
+    assert out == "Глава 1（上）\nтекст\n"
+
+
 def test_split_input_toc_replace(tmp_path):
     """toc-режим: --replace-re применяется к заголовкам и телу секций
     (как и предпросмотр — в нём тот же split_input)."""
