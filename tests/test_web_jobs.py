@@ -628,7 +628,6 @@ def test_build_epub_to_chapters_full():
     form = {"input": "source/book.epub", "mode": "regex",
             "split_patterns": ["Глава \\d+", "^第[0-9]+章"],
             "clean_patterns": "^本章完",
-            "replace_patterns": "第(\\d+)章 -> Глава \\1",
             "chunk_size": "5000", "chunk_mask": "Часть {num}",
             "title_limit": "40", "num_offset": "875",
             "skip": [2, 5], "output_type": "polished",
@@ -640,7 +639,8 @@ def test_build_epub_to_chapters_full():
     assert argv.count("--split-re") == 2
     assert "Глава \\d+" in argv and "^第[0-9]+章" in argv
     assert "--clean-re" in argv and "^本章完" in argv
-    assert "--replace-re" in argv and "第(\\d+)章 -> Глава \\1" in argv
+    # «Замены и очистки» из epub убраны — это стадия batch_replace
+    assert "--replace-re" not in argv
     # чанковые поля — только в chunk-режиме
     assert "--chunk-size" not in argv and "--chunk-mask" not in argv
     assert "--title-limit" in argv and "40" in argv

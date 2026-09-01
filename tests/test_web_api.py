@@ -1558,9 +1558,10 @@ def test_epub_preview_regex_txt_and_offset(srv_ctx):
         ["000_875_Глава_1", "000_876_Глава_2"]
 
 
-def test_epub_preview_replace_before_split(srv_ctx):
-    """replace_patterns: маркеры «第N章» нормализуются в «Глава N»
-    ДО разбивки — папки получаются по новым заголовкам."""
+def test_epub_preview_replace_field_removed(srv_ctx):
+    """«Замены и очистки» из epub убраны (дублируют batch_replace):
+    replace_patterns в params игнорируются — разбивка идёт по сырому
+    тексту, папки получаются с исходными маркерами «第N章»."""
     _, port, projects_root = srv_ctx()
     pdir = _file_project(port, projects_root)
     (pdir / "source" / "book.txt").write_text(
@@ -1568,12 +1569,12 @@ def test_epub_preview_replace_before_split(srv_ctx):
     res, payload = _request(port, "POST", "/api/stages/epub/preview", {
         "project": "ACTIVE/test_book",
         "params": {"input": "source/book.txt", "mode": "regex",
-                   "split_patterns": ["Глава \\d+"],
+                   "split_patterns": ["第\\d+章"],
                    "replace_patterns": "第(\\d+)章 -> Глава \\1"},
     })
     assert res.status == 200, payload
     assert [e["folder"] for e in payload["entries"]] == \
-        ["00000_1_Глава_1", "00000_2_Глава_2"]
+        ["00000_1_第1章", "00000_2_第2章"]
 
 
 def test_epub_preview_toc_rejects_txt(srv_ctx):
@@ -1679,6 +1680,14 @@ def test_batch_replace_preview_deletion_and_errors(srv_ctx):
     assert joined == " Привет\n"
     assert ["del", "(12)"] in payload["segments"]
     assert not any(k == "ins" for k, _ in payload["segments"])
+    # пустые правила — глава без изменений (не ошибка)
+    res_empty, payload_empty = _request(port, "POST", url,
+                                        {**base, "replacements": "  \n"})
+    assert res_empty.status == 200, payload_empty
+    assert payload_empty["changed"] is False and payload_empty["stats"] == []
+    joined_empty = "".join(t for k, t in payload_empty["segments"]
+                            if k != "del")
+    assert joined_empty == "(12) Привет\n"
     # нет ни одного корректного правила — 400
     res2, payload2 = _request(port, "POST", url,
                               {**base, "replacements": "без разделителя"})

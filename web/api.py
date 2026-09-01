@@ -2754,8 +2754,9 @@ def _batch_replace_preview(ctx: dict) -> dict:
     Тело: {project, type, chapter, replacements}. Правила парсятся и
     применяются тем же путём, что реальный запуск
     (cli.batch_replace.parse_replace_lines + apply_rules_segments) —
-    файлы не изменяются. Возвращает segments (keep/del/ins) итогового
-    текста и счётчики замен по правилам.
+    файлы не изменяются. Пустые правила — текст главы без изменений.
+    Возвращает segments (keep/del/ins) итогового текста и счётчики
+    замен по правилам.
     """
     pdir, _sec, _name = _project_ctx(ctx)
     br = _import_batch_replace()
@@ -2776,7 +2777,7 @@ def _batch_replace_preview(ctx: dict) -> dict:
     else:
         lines = []
     rules, warnings = br.parse_replace_lines(lines)
-    if not rules:
+    if lines and not rules:
         raise ApiError(400, "В форме нет ни одной корректной замены"
                             + (": " + "; ".join(warnings) if warnings else ""))
     chapters_dir = pdir / "chapters"

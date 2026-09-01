@@ -14,6 +14,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     touched: {}, // изменённые пользователем поля по стадиям (Set имён)
     preview: null, // epub: данные предпросмотра {entries, source, skips}
     previewDirty: true, // epub: настройки менялись после предпросмотра
+    brPreview: null, // batch_replace: предпросмотр {segments, stats, …}
+    brChapter: null, // batch_replace: выбранная глава предпросмотра
+    brSig: "", // batch_replace: сигнатура формы последнего предпросмотра
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
@@ -750,8 +753,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     );
 
     // ── поля записи, передаваемые LLM ──
-    // чипсы полей из ner.json с русскими названиями (как в глоссарии);
-    // «Термин» — всегда в запросе (чекбокс неотключаемый); остальные —
+    // чипсы — ключи полей ner.json как в данных (term, type, …);
+    // «term» — всегда в запросе (чекбокс неотключаемый); остальные —
     // type/translation/pinyin/…, показываются только имеющиеся в данных
     const FIELD_ORDER = ["type", "translation", "pinyin", "reading",
       "context", "translated_context", "notes", "aliases"];
@@ -793,8 +796,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             "label",
             { class: "ner-chip" + (isTerm ? " ner-chip-term" : "") },
             cb,
-            ` ${UICore.nerFieldLabel(name)}`
-              + (isTerm ? " (всегда)" : ""),
+            ` ${name}` + (isTerm ? " (всегда)" : ""),
           ),
         );
       }
@@ -871,7 +873,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           (n) => n === "type" || n === "translation" || present.has(n),
         );
         fieldsInfo.textContent =
-          "Термин — всегда; остальные названия — как в глоссарии";
+          "term — всегда; названия полей — ключи ner.json";
         renderFields();
       } catch (ex) {
         chipsInfo.textContent = ex.message;
@@ -907,7 +909,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       st.values[key]["end"] = end.value;
       st.touched[key].add("end");
     });
-    return h(
+    const rowEl = h(
       "div",
       { class: "preset-range-row" },
       h("span", { class: "preset-range-label" }, "Главы:"),
@@ -915,6 +917,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h("span", { class: "preset-range-sep" }, "–"),
       end,
     );
+    // ссылки на инпуты — для внешних панелей (предпросмотр замен
+    // batch_replace перечитывает диапазон при вводе)
+    rowEl._start = start;
+    rowEl._end = end;
+    st.rangeRow = rowEl;
+    return rowEl;
   }
 
   // карточка пресета + простые поля (spec.simple) + диапазон глав:
@@ -1645,16 +1653,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const num = st.brChapter;
       const v = st.values[key] || {};
       const replacements = v["replacements"] || "";
-      const lines = String(replacements).split("\n")
-        .filter((ln) => ln.trim());
       if (num == null) return;
-      if (!lines.length) {
-        st.brPreview = null;
-        box.replaceChildren();
-        note.textContent =
-          "Добавьте замены — предпросмотр покажет, что изменится";
-        return;
-      }
       err.textContent = "";
       dirty.style.display = "none";
       note.textContent = "Предпросмотр…";
@@ -1663,7 +1662,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           method: "POST",
           body: {
             project: `${section}/${name}`,
-            type: ft || v["type"] || "polished",
+            type: v["type"] || "polished",
             chapter: num,
             replacements,
           },
@@ -1673,7 +1672,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         renderBrResult();
         note.textContent = r.changed
           ? "Изменения подсвечены: красное — удалено, зелёное — вставлено"
-          : "Замен в этой главе нет";
+          : (replacements.trim()
+            ? "Замен в этой главе нет"
+            : "Правил нет — показан текст главы без изменений");
       } catch (ex) {
         st.brPreview = null;
         box.replaceChildren();
@@ -1753,9 +1754,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // пересобирает список глав (и автопресмотр), набор правил только
     // помечает «устарел» (запуск — кнопкой или выбором главы)
     function mount(formNode) {
+      const rangeRow = st.rangeRow || {};
       const onType = inputOf(wraps["type"]);
-      const onStart = inputOf(wraps["start"]);
-      const onEnd = inputOf(wraps["end"]);
+      const onStart = rangeRow._start || null;
+      const onEnd = rangeRow._end || null;
       const onRepl = inputOf(wraps["replacements"]);
       formNode.addEventListener("input", (ev) => {
         if (ev.target === onRepl) {
