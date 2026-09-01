@@ -2,7 +2,8 @@
 #
 # Быстрый старт:
 #   cp templates/.env.example .env     # конфиг LLM + WEB_* (по желанию)
-#   docker compose up -d --build
+#   docker compose pull && docker compose up -d   # готовый образ из ghcr.io
+#   docker compose up -d --build       # или локальная сборка из исходников
 #   → http://localhost:8756
 #
 # Данные:
@@ -18,8 +19,8 @@
 # между перезапусками (volume).
 services:
   novelmaestro:
-    build: .
-    image: novelmaestro:latest
+    build: .                                    # исходники для --build
+    image: ghcr.io/lynxpda/novelmaestro:latest   # готовый образ из реестра
     container_name: novelmaestro
     restart: unless-stopped
     # uid/gid внутри контейнера = uid/gid хост-пользователя (Linux):

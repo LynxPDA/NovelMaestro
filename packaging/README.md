@@ -104,10 +104,13 @@ docker compose up -d --build
 - Не переживает: `/app/.env` внутри контейнера (глобальная вкладка
   «Настройки») — в Docker конфиг правится в `./.env` на хосте
   (`cp templates/.env.example .env` при первом старте).
-- Если используете готовый образ из реестра вместо локальной сборки:
-  замените `image: novelmaestro:latest` в compose на
-  `image: ghcr.io/<владелец>/<репо>:<версия>` и обновляйтесь
-  `docker compose pull && docker compose up -d` (без `--build`).
+- Образ по умолчанию — готовый из реестра ghcr.io:
+  `ghcr.io/lynxpda/novelmaestro` (`:latest` на ветке main, `:<версия>` по
+  тегам — публикуется воркфлоу docker.yml автоматически). Обновление
+  готового образа: `docker compose pull && docker compose up -d`
+  (без `--build`); локальная сборка из исходников —
+  `docker compose up -d --build`. Для своего форка поменяйте
+  `image:` в compose на `ghcr.io/<владелец>/<репо>:<версия>`.
 - После обновления откройте интерфейс и убедитесь, что проекты и
   шаблоны на месте.
 
