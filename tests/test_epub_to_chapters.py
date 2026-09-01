@@ -279,6 +279,59 @@ def test_strip_heading_line_prose_kept():
     assert out == "Глава 1（上）\nтекст\n"
 
 
+def test_strip_heading_line_short_heading_safety():
+    """Короткие заголовки («I», «1») не поедают прозу: допуск
+    декорации пропорционален длине заголовка."""
+    # «I. Начало» — проза, не дубль
+    out = E2C._strip_heading_line("I\nI. Начало\nтекст\n", "I")
+    assert out == "I. Начало\nтекст\n"
+    # «I.» — декорация в пределах допуска (min(8, len//2)=1)
+    out = E2C._strip_heading_line("I\nI.\nтекст\n", "I")
+    assert out == "текст\n"
+    # «Глава 1 — начало» длиннее допуска — проза
+    out = E2C._strip_heading_line(
+        "Глава 1\nГлава 1 — начало\nтекст\n", "Глава 1")
+    assert out == "Глава 1 — начало\nтекст\n"
+
+
+def test_strip_heading_line_nfc():
+    """NFD-строка совпадает с NFC-заголовком (нормализация перед
+    сравнением) — дубль убирается."""
+    out = E2C._strip_heading_line("café\ncafe\u0301\nтекст\n", "café")
+    assert out == "текст\n"
+    # exact тоже по NFC
+    out = E2C._strip_heading_line("café\ncafe\u0301\nтекст\n", "café",
+                                  exact=True)
+    assert out == "текст\n"
+
+
+def test_strip_heading_line_promo_tail():
+    """Заголовок с промо-хвостом («…【求全订，求月票】») — тоже
+    дубль: парный декор снимается целиком; проза — нет."""
+    h = "第100章 青山未来观想图，春闱甲榜少年高中"
+    out = E2C._strip_heading_line(
+        h + "\n" + h + "【求全订，求月票】\n正文\n", h)
+    assert out == "正文\n"
+    # декорация скобками
+    out = E2C._strip_heading_line("Глава 1\nГлава 1（上）\n正文\n",
+                                  "Глава 1")
+    assert out == "正文\n"
+    # пунктуационный хвост
+    out = E2C._strip_heading_line("Глава 1\nГлава 1。\n正文\n", "Глава 1")
+    assert out == "正文\n"
+    # проза в скобках после заголовка — НЕ снимается (хвост не парный)
+    out = E2C._strip_heading_line(
+        "Глава 1\nГлава 1 была самой длинной\n正文\n", "Глава 1")
+    assert out == "Глава 1 была самой длинной\n正文\n"
+    # полный заголовок против обрезанного TOC: хвост «快！【…】»
+    out = E2C._strip_heading_line(
+        "第101章 秦相阳谋，殿试提前，姐姐他真的好\n"
+        "第101章 秦相阳谋，殿试提前，姐姐他真的好快！【求全订，求月票】\n"
+        "正文\n",
+        "第101章 秦相阳谋，殿试提前，姐姐他真的好")
+    assert out == "正文\n"
+
+
 def test_split_input_toc_replace(tmp_path):
     """toc-режим: --replace-re применяется к заголовкам и телу секций
     (как и предпросмотр — в нём тот же split_input)."""

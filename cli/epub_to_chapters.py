@@ -404,6 +404,13 @@ def _archive_order(zf: zipfile.ZipFile, all_html) -> list[str]:
     return sorted(all_html, key=lambda n: nat_key(Path(n).name))
 
 
+_DECOR_RE = re.compile(
+    r"^[【（(「『\[〔].*[】）)」』\]〕]$"   # парный декор: 【…】（…）
+    r"|^[\s。，、；：！？…—–\-·~]*$")            # только пунктуация/пробелы
+_DECOR_TAIL_RE = re.compile(
+    r"[【（(「『\[〔][^】）)」』\]〕]*[】）)」』\]〕]$")  # группа в конце хвоста
+
+
 def _strip_heading_line(text: str, heading: str,
                       exact: bool = False) -> str:
     """Убрать ВСЕ ведущие строки-дубли заголовка из начала тела.
@@ -415,10 +422,15 @@ def _strip_heading_line(text: str, heading: str,
 
     exact=True — дубль только при точном совпадении (обрезка
     пробелов). Иначе строка считается дублем, если равна заголовку,
-    содержит его и близка к нему по длине (декорация «（上）」/«。」,
-    до +8 символов) или сама входит в заголовок (короткий <h1>-маркер
-    против полного заголовка TOC). Длинная строка с заголовком внутри
-    — это уже проза, она сохраняется.
+    входит в него (короткий <h1>-маркер против полного заголовка TOC)
+    или начинается с заголовка, а хвост — декорация: парные группы в
+    конце хвоста (【…】, （…）) снимаются, остаток должен быть коротким
+    (до min(8, половина длины заголовка) символов) или чисто
+    пунктуационным. Так убираются заголовки с промо-хвостом
+    («…【求全订，求月票】» и полный заголовок против обрезанного TOC:
+    «…真的好快！【…】»), а проза («Глава 1 была самой длинной»,
+    «I. Начало») сохраняется. Сравнение — по NFC, чтобы NFD/NFC-
+    варианты одной строки совпадали.
     """
     if not heading:
         return text
@@ -429,13 +441,20 @@ def _strip_heading_line(text: str, heading: str,
             start += 1
         if start >= len(lines):
             break
-        s = lines[start].strip()
+        s = unicodedata.normalize("NFC", lines[start].strip())
+        h = unicodedata.normalize("NFC", heading)
         if exact:
-            hit = s == heading
+            hit = s == h
+        elif s == h or s in h:
+            hit = True
+        elif h in s:
+            tail = s[len(h):]
+            while _DECOR_TAIL_RE.search(tail):
+                tail = _DECOR_TAIL_RE.sub("", tail)
+            tol = min(8, max(1, len(h) // 2))
+            hit = len(tail) <= tol or bool(_DECOR_RE.match(tail))
         else:
-            hit = (s == heading
-                   or s in heading
-                   or (heading in s and len(s) <= len(heading) + 8))
+            hit = False
         if hit:
             lines = lines[start + 1:]
         else:
