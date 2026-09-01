@@ -128,6 +128,29 @@ def test_find_exact_match():
     assert not C.find_exact_match("Линь Шуи", "Линь Шуй")
 
 
+def test_trim_rule_left():
+    """Правила замен: паддинг у «->» убирается, значимые пробелы
+    у якорей («^  », «  $») сохраняются."""
+    assert C.trim_rule_left("Хунг ") == "Хунг"
+    assert C.trim_rule_left(" Хунг") == "Хунг"
+    assert C.trim_rule_left("^  ") == "^  "          # отступ строки
+    assert C.trim_rule_left("  $ ") == "  $"          # хвостовые пробелы
+    assert C.trim_rule_left("^ ") == "^"              # 1 пробел — паддинг
+    assert C.trim_rule_left("^ +") == "^ +"            # обычный regex
+    assert C.trim_rule_left("") == ""
+    assert C.trim_rule_left("   ") == ""
+
+
+def test_trim_rule_right():
+    """Правая часть: паддинг убирается, но « -> » (только пробелы) —
+    значимая замена (сжатие пробелов)."""
+    assert C.trim_rule_right(" Хун") == "Хун"
+    assert C.trim_rule_right("Хун ") == "Хун"
+    assert C.trim_rule_right(" ") == " "
+    assert C.trim_rule_right("  ") == "  "
+    assert C.trim_rule_right("") == ""
+
+
 def test_loop_detection_patterns():
     ok = "Обычный текст перевода без повторов, просто длинное предложение."
     assert not any(r.search(ok) for r in C._LOOP_RES)

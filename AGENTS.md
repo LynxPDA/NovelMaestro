@@ -130,6 +130,7 @@ argparse («СИМВОЛЫ»/«ТОКЕНЫ»).
 | чанкование | `split_text_smart` |
 | текст/CJK | `get_ngrams` / `is_cjk` / `is_cjk_string` / `find_exact_match` |
 | поиск терминов | `load_ner_data` + `find_relevant_ner` (+ `normalize_for_search`, `build_smart_regex`) |
+| правила замен «паттерн -> замена» (batch_replace/epub replace-re) | `trim_rule_left` / `trim_rule_right` (паддинг у «->»; значимые пробелы «^  », «  $» и правая часть «\s+ -> ») |
 | проверка глоссария (ner_check) | `filter_ner_items` / `format_ner_record` / `glossary_body` / `build_ner_batches` (count по убыванию, бюджет в СИМВОЛАХ) / `parse_ner_patches` / `review_entry` / `parse_review_doc` / `merge_review_entries` (review-файл: поля английские — `stage`/`status`/`applied`/`old`/`new`, статусы принять/отклонить, накопление) / `apply_ner_patches` (status + applied, дубли термина по совпавшему `old`) |
 | проверка перевода LLM (translate_check_llm) | `fix_entry` (ошибка LLM → запись review) / `merge_fix_entries` (накопление, дедуп по chapter+old+new) / `apply_fix_to_text` (NFC, первое вхождение) |
 | имена по полу | `collect_gender_names` (polish: поиск по `translation`, пол по наличию `(female)`/`(male)` в `type`) |

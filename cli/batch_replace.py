@@ -45,6 +45,8 @@ from core.common import (  # noqa: E402
     emit_progress,
     find_chapter_file,
     read_text_safe,
+    trim_rule_left,
+    trim_rule_right,
 )
 
 # Допустимые типы файлов → значение want для find_chapter_file
@@ -69,8 +71,12 @@ class Rule:
         return f"{self.section}/{pat}" if self.section else pat
 
     def compile(self):
-        """Компилирует matcher. Возвращает re.Pattern (literal экранируется)."""
-        flags = re.UNICODE
+        """Компилирует matcher. Возвращает re.Pattern (literal экранируется).
+
+        MULTILINE: «^»/«$» матчат начало/конец СТРОКИ (literal не
+        страдает — re.escape экранирует якоря).
+        """
+        flags = re.UNICODE | re.MULTILINE
         if self.ignore_case:
             flags |= re.IGNORECASE
         src = self.pattern if self.is_regex else re.escape(self.pattern)
@@ -96,20 +102,22 @@ def parse_replace_lines(lines) -> tuple[List[Rule], List[str]]:
     """Парсит пары «паттерн -> замена» из строк (--replace).
 
     Каждая строка — одно regexp-правило; пустая правая часть — удаление.
-    Возвращает (rules, warnings): битая строка → предупреждение + пропуск.
+    Значимые пробелы сохраняются: «^  ->» (отступ строки), «\\s+ -> »
+    (сжатие пробелов). Возвращает (rules, warnings): битая строка →
+    предупреждение + пропуск.
     """
     rules: List[Rule] = []
     warnings: List[str] = []
     for i, raw in enumerate(lines, 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
+        line = raw.rstrip("\r\n")
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
         if "->" not in line:
             warnings.append(f"строка {i}: нет разделителя «->» — пропущена")
             continue
         left, right = line.split("->", 1)
-        left = _nfc(left.strip())
-        right = _nfc(right.strip())
+        left = trim_rule_left(left)
+        right = trim_rule_right(right)
         if not left:
             warnings.append(f"строка {i}: пустая левая часть — пропущена")
             continue
@@ -158,8 +166,8 @@ def parse_rules(rules_file, force_regex: bool = False):
             warnings.append(f"строка {lineno}: нет разделителя «->» — пропущена")
             continue
 
-        left = _nfc(left.strip())
-        right = _nfc(right.strip())
+        left = trim_rule_left(left)
+        right = trim_rule_right(right)
         if not left:
             warnings.append(f"строка {lineno}: пустая левая часть — пропущена")
             continue

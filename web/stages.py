@@ -133,6 +133,20 @@ def _epub_lines(value) -> list[str]:
     return [ln.strip() for ln in str(value).splitlines() if ln.strip()]
 
 
+def _replace_lines(value) -> list[str]:
+    r"""Строки textarea правил замен (batch_replace/replace_patterns).
+
+    В отличие от _epub_lines пробелы по краям строки НЕ режутся:
+    они могут быть значимы («^  ->» — отступ строки; «\s+ -> » —
+    сжатие пробелов). Убираются только переводы строки.
+    """
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(x) for x in value if str(x).strip()]
+    return [ln.rstrip("\r") for ln in str(value).splitlines() if ln.strip()]
+
+
 def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
     argv = ["cli/epub_to_chapters.py"]
     if form.get("input"):
@@ -143,7 +157,7 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
         argv += ["--split-re", p]
     for p in _epub_lines(form.get("clean_patterns")):
         argv += ["--clean-re", p]
-    for p in _epub_lines(form.get("replace_patterns")):
+    for p in _replace_lines(form.get("replace_patterns")):
         argv += ["--replace-re", p]
     if mode == "chunk":
         if form.get("chunk_size") not in (None, ""):
@@ -211,7 +225,7 @@ def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
 
 def build_batch_replace(form: dict, ctx: dict) -> list[str]:
     argv = ["cli/batch_replace.py"]
-    for line in _epub_lines(form.get("replacements")):
+    for line in _replace_lines(form.get("replacements")):
         argv += ["--replace", line]
     if form.get("type"):
         argv += ["--type", str(form["type"])]
@@ -552,8 +566,11 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "Работают во ВСЕХ режимах, применяются ДО разбивки. "
                       "По одной паре на строку: «паттерн -> замена»; "
                       "пустая правая часть — УДАЛЕНИЕ (заменяет «Очистки "
-                      "текста»). Удобно нормализовать маркеры глав: "
-                      "«第(\\d+)章 -> Глава \\1» (\\1 — первая группа)"}, 
+                      "текста»). «^»/«$» — начало/конец СТРОКИ. Удобно "
+                      "нормализовать маркеры глав: "
+                      "«第(\\d+)章 -> Глава \\1» (\\1 — первая группа); "
+                      "дубль заголовка главы: "
+                      "«^(第\\d+章.*)\\n(?=\\1$) ->»; отступ строки: «^  ->»"}, 
             {"name": "title_limit",
              "label": "Длина названия каталога, СИМВОЛЫ",
              "type": "number", "default": "50",
@@ -996,8 +1013,13 @@ STAGE_SPECS: dict[str, dict] = {
              "noenv": True,
              "help": "Формат: паттерн -> замена (regexp, спецсимволы "
                       "работают). Пустая правая часть — УДАЛЕНИЕ: "
-                      "«<div>.*?</div> ->». Строки с # — комментарии. "
-                      "Примеры: «Глава \\d+ -> Глава №\\g<0>»..."},
+                      "«<div>.*?</div> ->». «^»/«$» — начало/конец "
+                      "СТРОКИ; пробелы в паттерне значимы. "
+                      "Примеры: «Глава \\d+ -> Глава №\\g<0>», "
+                      "«\\s+ -> » (сжать пробелы), «^  ->» (отступ "
+                      "строки), «^(第\\d+章.*)\\n(?=\\1$) ->» "
+                      "(строка-дубликат заголовка главы). Строки с # — "
+                      "комментарии"},
             {"name": "type", "label": "Тип файлов глав",
              "type": "select", "options": ["polished", "redacted", "translated", "chapter"],
              "default": "polished"},

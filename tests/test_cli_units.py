@@ -772,6 +772,33 @@ def test_br_parse_replace_lines():
     assert rules2[0].pattern == "ёлка"
 
 
+def test_br_parse_replace_lines_ws():
+    """--replace: значимые пробелы сохраняются — «^  ->» (отступ
+    строки) и «\\s+ -> » (сжатие пробелов)."""
+    rules, warnings = BR.parse_replace_lines([
+        "^  ->",
+        "\\s+ -> ",
+        "^ + ->",
+    ])
+    assert warnings == []
+    assert rules[0].pattern == "^  " and rules[0].replacement == ""
+    assert rules[1].pattern == "\\s+" and rules[1].replacement == " "
+    assert rules[2].pattern == "^ +"
+
+
+def test_br_multiline_anchors():
+    """MULTILINE: «^»/«$» матчат СТРОКИ — отступы в начале строки
+    и дубликаты заголовков глав."""
+    r1 = BR.Rule("^  ", "", False, True)
+    out, stats = BR.apply_rules("  абзац\nне трогаем\n   три\n", [r1])
+    assert out == "абзац\nне трогаем\n три\n"
+    assert stats == {"^  ": 2}
+    r2 = BR.Rule("^(第\\d+章.*)\\n(?=\\1$)", "", False, True)
+    out2, stats2 = BR.apply_rules("第1章 标题\n第1章 标题\n正文\n", [r2])
+    assert out2 == "第1章 标题\n正文\n"
+    assert stats2 == {"^(第\\d+章.*)\\n(?=\\1$)": 1}
+
+
 def test_br_main_replace_flag(tmp_path, capsys):
     """--replace применяется вместо файла правил (dry-run)."""
     ch = tmp_path / "chapters" / "00000_1_Глава_1"

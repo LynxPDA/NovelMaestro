@@ -3,6 +3,7 @@
 """cli/epub_to_chapters.py — новая разбивка: канон каталогов (ширина 6),
 режимы toc/regex/chunk, offset/skip, предпросмотр, запись."""
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -202,6 +203,22 @@ def test_split_input_toc(tmp_path):
     assert entries[0]["body"] == "текст 1"
 
 
+def test_split_input_toc_replace(tmp_path):
+    """toc-режим: --replace-re применяется к заголовкам и телу секций
+    (как и предпросмотр — в нём тот же split_input)."""
+    epub = tmp_path / "book.epub"
+    _make_epub_n(epub, n=2)
+    replace_res = E2C._parse_replace_re([
+        "Глава (\\d+) -> Часть \\1",
+        "текст -> текст-очищен",
+    ])
+    entries, *_ = E2C.split_input(epub, "toc", [], [],
+                                  replace_res=replace_res)
+    assert [e["heading"] for e in entries] == ["Часть 1", "Часть 2"]
+    assert entries[0]["body"] == "текст-очищен 1"
+    assert entries[1]["body"] == "текст-очищен 2"
+
+
 def test_split_input_toc_no_toc(tmp_path):
     """Без toc.ncx заголовок берётся из <title>/<h1>."""
     epub = tmp_path / "book.epub"
@@ -307,6 +324,31 @@ def test_parse_replace_re_broken(tmp_path):
         E2C._parse_replace_re(["без разделителя"])
     with pytest_raises():
         E2C._parse_replace_re([" -> x"])
+
+
+def test_replace_re_multiline(tmp_path):
+    """--replace-re: «^»/«$» матчат СТРОКИ (MULTILINE) — заголовок
+    нормализуется в каждой строке, а не только в первой."""
+    txt = tmp_path / "ml.txt"
+    txt.write_text("第1章\nтекст один\n第2章\nтекст два\n",
+                   encoding="utf-8")
+    split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
+    replace_res = E2C._parse_replace_re(["^第(\\d+)章 -> Глава \\1"])
+    entries, *_ = E2C.split_input(txt, "regex", split_res, [],
+                                  replace_res)
+    assert [e["heading"] for e in entries] == ["Глава 1", "Глава 2"]
+
+
+def test_replace_re_significant_ws(tmp_path):
+    """--replace-re: «^  ->» — пробелы у якоря значимы (удаление
+    отступа строки), «\\s+ -> » — сжатие пробелов."""
+    pat, repl = E2C._parse_replace_re(["^  ->"])[0]
+    assert pat.pattern == "^  " and pat.flags & re.MULTILINE
+    src = "   " + "第1章\n" + "    " + "第2章\n"
+    assert pat.sub("", src) == " " + "第1章\n" + "  " + "第2章\n"
+    pat2, repl2 = E2C._parse_replace_re(["\\s+ -> "])[0]
+    assert repl2 == " "
+    assert pat2.sub(" ", "a   b\tc") == "a b c"
 
 
 def test_split_input_rejects_zip(tmp_path):

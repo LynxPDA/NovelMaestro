@@ -43,6 +43,11 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
+from core.common import (  # noqa: E402
+    trim_rule_left,
+    trim_rule_right,
+)
+
 # ======================== HTML → TEXT ==================================
 SKIP_TAGS  = {"script", "style", "head", "title", "svg", "rt", "rp"}
 BLOCK_TAGS = {
@@ -211,22 +216,25 @@ def _safe_compile(pattern: str, name: str, multiline: bool = False):
 def _parse_replace_re(lines) -> list[tuple[re.Pattern, str]]:
     """Парсит --replace-re «паттерн -> замена» → [(compiled, repl)].
 
-    Пустая правая часть — удаление совпадений. Битая строка — sys.exit.
+    Паттерн — MULTILINE («^»/«$» — начало/конец СТРОКИ); значимые
+    пробелы сохраняются («^  ->», «\\s+ -> »). Пустая правая часть —
+    удаление совпадений. Битая строка — sys.exit.
     """
     out: list[tuple[re.Pattern, str]] = []
     for i, raw in enumerate(lines, 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
+        line = raw.rstrip("\r\n")
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
         if "->" not in line:
             sys.exit(f"--replace-re строка {i}: нет разделителя «->» — "
                      f"ожидалось «паттерн -> замена»")
         pat, repl = line.split("->", 1)
-        pat = pat.strip()
+        pat = trim_rule_left(pat)
+        repl = trim_rule_right(repl)
         if not pat:
             sys.exit(f"--replace-re строка {i}: пустой паттерн")
-        compiled = _safe_compile(pat, "replace-re")
-        out.append((compiled, repl.strip()))
+        compiled = _safe_compile(pat, "replace-re", multiline=True)
+        out.append((compiled, repl))
     return out
 
 
@@ -530,8 +538,9 @@ def split_input(input_file: Path, mode: str,
     оставшиеся перенумеровываются с num_offset.
 
     replace_res — пары (compiled, repl): regexp-замены, применяются
-    к тексту ДО разбивки (можно нормализовать маркеры глав, напр.
-    «第\\d+章 -> Глава \\d+»); пустая repl — удаление совпадений.
+    ДО разбивки во всех режимах (можно нормализовать маркеры глав,
+    напр. «第\\d+章 -> Глава \\d+»); пустая repl — удаление совпадений.
+    В toc-режиме замены применяются к заголовку и телу каждой секции.
 
     rename_chapters — заголовки ВСЕХ глав заменяются на chunk_mask
     (с номером после перенумерации); удобно после разбивки по
@@ -553,8 +562,14 @@ def split_input(input_file: Path, mode: str,
         for h, b in raw_sections:
             body, rem = apply_cleanups(b, clean_res)
             removed.extend(rem)
+            # regexp-замены — как и в остальных режимах, ДО разбивки:
+            # нормализуют маркеры глав в заголовке и текст секции
+            heading = h
+            for pat, repl in replace_res:
+                body = pat.sub(repl, body)
+                heading = pat.sub(repl, heading)
             if body.strip():
-                sections.append((h, body.strip()))
+                sections.append((heading, body.strip()))
     else:
         # epub в regex/chunk-режимах перегоняется в текст (архив→txt)
         text = (read_text_file(input_file) if suffix == ".txt"
