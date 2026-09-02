@@ -1438,6 +1438,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           const w = fieldWraps[name];
           if (w) w.classList.toggle("hidden", !book);
         }
+        // предпросмотр обложки и файлов — только для EPUB/FB2
+        preview.classList.toggle("hidden", !book);
       }
       if (modeSel) modeSel.addEventListener("change", applyCompileMode);
       applyCompileMode();
