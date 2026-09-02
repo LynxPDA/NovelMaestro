@@ -5,8 +5,8 @@ batch_replace.py — массовые замены по внешнему фай�
 
 Без интерактивного меню и без LLM. Замены применяются к файлам выбранного
 типа в папках глав. Правила — текстовый файл (по умолчанию
-`prompts/replacements.txt` в папке проекта), формат описан в шаблоне
-`templates/replacements.txt.example`.
+`prompts/replacements.txt` в папке проекта); формат правил — в
+`cli/batch_replace.py` и `web/static/help.md`.
 
 Примеры:
   python batch_replace.py --dry-run
