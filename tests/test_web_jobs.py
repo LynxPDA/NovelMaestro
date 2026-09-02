@@ -991,18 +991,19 @@ def test_build_ner_defaults_and_flags():
     form = {"file": "compiled_book.txt", "ner_file": "ner.json",
             "prompt_file": "prompts/ner.txt", "threads": "4",
             "chunk_size": "7000", "threshold": "0.75", "ngram": "3",
-            "two_pass": True, "strip_meta": True, "min_count": "2",
+            "two_pass": True,
             "save_interval": "10", "retries": "3", "timeout": "900"}
     argv = build_command("ner", form, {})
     assert argv[0] == "cli/ner.py"
     assert "compiled_book.txt" in argv
-    assert "--two-pass" in argv and "--strip-meta" in argv
-    assert "--min-count" in argv and "2" in argv
+    assert "--two-pass" in argv
     assert "--chunk_size" in argv and "7000" in argv
     assert "--save-interval" in argv
     # пустые значения не дают флагов
     assert "--reasoning-effort" not in argv
     assert "--temperature" not in argv
+    # постпроцессинг убран: strip-meta/min-count больше не строятся
+    assert "--strip-meta" not in argv and "--min-count" not in argv
 
 
 def test_ner_spec_no_keep_all():
@@ -1028,14 +1029,11 @@ def test_stage_spec_env_prefill(jobs_srv, tmp_path):
     (pdir / "prompts" / "ner_prompt.txt").write_text("промпт",
                                                        encoding="utf-8")
     (pdir / ".env").write_text(
-        "NER_STRIP_META=0\n"
         "NER_PROMPT_FILE=prompts/ner_prompt.txt\n",
         encoding="utf-8")
     res, payload = req("GET", "/api/stages/ner/spec?project=ACTIVE/test_book")
     assert res.status == 200
     fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    # D: "0" не truthy — чекбокс не вспыхивает (именно bool, не строка)
-    assert fields["strip_meta"]["default"] is False
     # C: полный путь из .env → basename, селект находит option
     assert fields["prompt_file"]["default"] == "ner_prompt.txt"
 
@@ -1061,15 +1059,15 @@ def test_stage_spec_env_prefill_skips_missing_file(jobs_srv, tmp_path):
 
 
 def test_stage_spec_env_prefill_bool_on(jobs_srv, tmp_path):
-    """D: =1 → default True (bool)."""
+    """D: =1 → default True (bool) — на bool-поле формы NER (two_pass)."""
     port, req, _jm = jobs_srv
     _make_project(port, req)
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    (pdir / ".env").write_text("NER_STRIP_META=1\n", encoding="utf-8")
+    (pdir / ".env").write_text("NER_TWO_PASS=1\n", encoding="utf-8")
     res, payload = req("GET", "/api/stages/ner/spec?project=ACTIVE/test_book")
     assert res.status == 200
     fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    assert fields["strip_meta"]["default"] is True
+    assert fields["two_pass"]["default"] is True
 
 
 def test_stage_spec_env_prefill_global_fallback(jobs_srv, tmp_path,
@@ -1108,11 +1106,12 @@ def test_stage_spec_env_prefill_global_fallback(jobs_srv, tmp_path,
 
 
 def test_build_ner_modes():
-    """extract / finetune (файл или --compile_chapters) / postprocess;
-    режим compile из формы убран."""
+    """extract / finetune (файл или --compile_chapters); режимы compile
+    и postprocess из формы убраны."""
     mode_field = next(f for f in STAGE_SPECS["ner"]["fields"]
                       if f["name"] == "mode")
     assert "compile" not in mode_field["options"]
+    assert "postprocess" not in mode_field["options"]
 
     # extract/finetune без файла: --compile_chapters + диапазон глав
     for mode in ("extract", "finetune"):
@@ -1134,15 +1133,13 @@ def test_build_ner_modes():
         assert "--compile_chapters" not in argv
         assert "--threads" in argv
 
-    # postprocess: без файла и без LLM-флагов
-    post_argv = build_command(
-        "ner", {"mode": "postprocess", "ner_file": "ner.json",
-                "strip_meta": True, "min_count": "2"}, {})
-    assert "--compile_chapters" not in post_argv
-    assert "--strip-meta" in post_argv and "--min-count" in post_argv
-    assert "book.txt" not in post_argv
-    assert "--host" not in post_argv and "--model" not in post_argv
-    assert "--threads" not in post_argv
+    # постпроцессинг убран: флаги strip-meta/min-count не строятся ни в
+    # каком режиме
+    argv = build_command(
+        "ner", {"mode": "finetune", "file": "book.txt",
+                "ner_file": "ner.json", "strip_meta": True,
+                "min_count": "2"}, {})
+    assert "--strip-meta" not in argv and "--min-count" not in argv
 
 
 def test_build_ner_check_flags():

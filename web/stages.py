@@ -274,49 +274,41 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
     """Стадия 2 — извлечение NER (ner.py).
 
     Режимы: extract (новый глоссарий), finetune (дообучение на
-    существующий ner.json), postprocess (обработка ner.json без LLM:
-    --strip-meta / --min-count). Вход: выбранный файл (позиционный
+    существующий ner.json). Вход: выбранный файл (позиционный
     аргумент) ИЛИ сборка глав в память (--compile_chapters,
-    опционально start/end). LLM-флаги — только для LLM-режимов.
+    опционально start/end). LLM-флаги — для обоих режимов.
     """
     argv = ["cli/ner.py"]
     mode = form.get("mode") or "extract"
-    llm_mode = mode in ("extract", "finetune")
-    if llm_mode:
-        if form.get("file"):
-            argv.append(str(form["file"]))
-        else:
-            argv.append("--compile_chapters")
-            argv += _range_argv("start", form)
+    if form.get("file"):
+        argv.append(str(form["file"]))
+    else:
+        argv.append("--compile_chapters")
+        argv += _range_argv("start", form)
     if form.get("ner_file"):
         argv += ["--ner_file", str(form["ner_file"])]
-    if llm_mode:
-        if form.get("prompt_file"):
-            argv += ["--prompt_file", str(form["prompt_file"])]
-        for name, flag in (("threads", "--threads"),
-                           ("chunk_size", "--chunk_size"),
-                           ("retries", "--retries"),
-                           ("timeout", "--timeout"),
-                           ("save_interval", "--save-interval")):
-            if form.get(name) not in (None, ""):
-                argv += [flag, str(form[name])]
-        if form.get("threshold") not in (None, ""):
-            argv += ["--threshold", str(form["threshold"])]
-        if form.get("ngram") not in (None, ""):
-            argv += ["--ngram", str(form["ngram"])]
-        if form.get("temperature") not in (None, ""):
-            argv += ["--temperature", str(form["temperature"])]
-        if form.get("reasoning") not in (None, ""):
-            argv += ["--reasoning-effort", str(form["reasoning"])]
-        if form.get("two_pass"):
-            argv.append("--two-pass")
-        if form.get("keep_fields"):
-            argv += ["--keep-fields", str(form["keep_fields"])]
-        argv += _llm_argv(form, ctx, "ner")
-    if form.get("min_count") not in (None, ""):
-        argv += ["--min-count", str(form["min_count"])]
-    if form.get("strip_meta"):
-        argv.append("--strip-meta")
+    if form.get("prompt_file"):
+        argv += ["--prompt_file", str(form["prompt_file"])]
+    for name, flag in (("threads", "--threads"),
+                       ("chunk_size", "--chunk_size"),
+                       ("retries", "--retries"),
+                       ("timeout", "--timeout"),
+                       ("save_interval", "--save-interval")):
+        if form.get(name) not in (None, ""):
+            argv += [flag, str(form[name])]
+    if form.get("threshold") not in (None, ""):
+        argv += ["--threshold", str(form["threshold"])]
+    if form.get("ngram") not in (None, ""):
+        argv += ["--ngram", str(form["ngram"])]
+    if form.get("temperature") not in (None, ""):
+        argv += ["--temperature", str(form["temperature"])]
+    if form.get("reasoning") not in (None, ""):
+        argv += ["--reasoning-effort", str(form["reasoning"])]
+    if form.get("two_pass"):
+        argv.append("--two-pass")
+    if form.get("keep_fields"):
+        argv += ["--keep-fields", str(form["keep_fields"])]
+    argv += _llm_argv(form, ctx, "ner")
     return argv
 
 
@@ -734,23 +726,20 @@ STAGE_SPECS: dict[str, dict] = {
         "fields": _LLM_FIELDS + [
             {"name": "mode", "label": "Режим",
              "type": "select",
-             "options": ["extract", "finetune", "postprocess"],
+             "options": ["extract", "finetune"],
              "default": "extract",
              "labels": {
                  "extract": "Новый глоссарий (автоматический)",
                  "finetune": "Дообучение",
-                 "postprocess": "Постобработка ner.json (без LLM)",
              },
              "help": "новый глоссарий: извлечение терминов в ner.json. "
                       "дообучение: термины добавятся к существующему ner.json. "
                       "Вход: выбранный txt или сборка глав chapters/*/chapter.txt "
-                      "в память (диапазон ниже, пусто = все главы). "
-                      "постобработка: только strip-meta / min-count, без LLM."},
+                      "в память (диапазон ниже, пусто = все главы)."},
             {"name": "file", "label": "Входной txt",
              "type": "files", "dir": "", "ext": [".txt"], "default": "",
              "help": "необязателен: выбран — работаем с ним; пусто — сборка "
-                      "глав chapters/*/chapter.txt в память (диапазон ниже); "
-                      "в «постобработка» не нужен"},
+                      "глав chapters/*/chapter.txt в память (диапазон ниже)"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": "",
              "help": "когда входной файл не выбран (сборка глав); пусто = с первой"},
@@ -759,7 +748,7 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "когда входной файл не выбран (сборка глав); пусто = до последней"},
             {"name": "ner_file", "label": "Глоссарий ner.json",
              "type": "files", "dir": "", "ext": [".json"], "default": "ner.json",
-             "help": "«новый глоссарий» — создастся новый; «дообучение» — термины добавятся к существующему; «постобработка» — входной файл"},
+             "help": "«новый глоссарий» — создастся новый; «дообучение» — термины добавятся к существующему"},
             {"name": "prompt_file", "label": "Промпт-файл (теги pass1/pass2)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "ner_prompt.txt"},
@@ -782,12 +771,6 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "keep_fields", "label": "Поля в голосование (через запятую)",
              "type": "text", "default": "",
              "help": "Пусто = голосуют translation/type/pinyin; notes, context, translated_context не голосуют. Пример: notes,context"},
-            {"name": "strip_meta", "label": "Удалить служебные поля (--strip-meta)",
-             "type": "bool", "default": False,
-             "help": "режим «постобработка»: основной фильтр; в LLM-режимах — дополнительно после извлечения"},
-            {"name": "min_count", "label": "Мин. count для сохранения",
-             "type": "number", "default": "",
-             "help": "режим «постобработка»: фильтр count; в LLM-режимах — дополнительно"},
             {"name": "save_interval", "label": "Интервал сохранения ner.json",
              "type": "number", "default": "10",
              "help": "каждые N чанков — промежуточный снапшот глоссария. "

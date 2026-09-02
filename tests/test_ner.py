@@ -133,28 +133,6 @@ def test_save_ner_snapshot(ner_globals, tmp_path):
     assert {"старый", "новый"} <= terms
 
 
-def test_postprocess_ner_file(tmp_path):
-    f = tmp_path / "ner.json"
-    data = [
-        {"term": "陈阳", "count": 5, "pinyin": "Chen Yang",
-         "type": "Person (male)", "_votes_type": {"Person (male)": 5}},
-        {"term": "陳陽", "count": 2, "pinyin": "chen yang",
-         "type": "Person (male)", "_votes_type": {"Person (male)": 2}},
-        {"term": "редкий", "count": 1, "_ngrams": []},
-    ]
-    f.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    NER.postprocess_ner_file(str(f), strip_meta=True, min_count=2,
-                             logger=SilentLog())
-    out = json.loads(f.read_text(encoding="utf-8"))
-    assert len(out) == 1                      # редкий отфильтрован, дубль слит
-    assert out[0]["term"] == "陈阳"
-    assert out[0]["count"] == 7
-    assert "陳陽" in out[0]["aliases"]
-    assert not any(k.startswith("_") for k in out[0])  # meta удалена
-    # нет файла — не падает
-    NER.postprocess_ner_file(str(tmp_path / "нет.json"), False, None, SilentLog())
-
-
 def test_load_initial_ner(tmp_path, ner_globals):
     f = tmp_path / "start.json"
     f.write_text(json.dumps(
@@ -378,32 +356,13 @@ def test_main_single_pass(tmp_path, monkeypatch, ner_reset):
     monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (P1_ANSWER, None))
     monkeypatch.setattr(sys, "argv", [
         "ner.py", "novel.txt", "--host", "http://h", "--model", "m",
-        "--threads", "1", "--ner_file", "ner.json",
-        "--strip-meta", "--min-count", "1"])
+        "--threads", "1", "--ner_file", "ner.json"])
     NER.main()
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data and data[0]["term"] == "陈阳"
-    # постпроцессинг: служебные поля удалены
-    assert not any(k.startswith("_") for k in data[0])
     # лог извлечения — в logs/ (основной режим)
     assert (tmp_path / "logs" / "ner_extraction.log").is_file()
     assert not (tmp_path / "ner_extraction.log").exists()
-
-
-def test_main_postprocess_only(tmp_path, monkeypatch, ner_reset):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "ner.json").write_text(json.dumps([
-        {"term": "陈阳", "count": 5, "type": "Person (male)",
-         "_votes_type": {"Person (male)": 5}},
-        {"term": "мелочь", "count": 1},
-    ], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(sys, "argv", [
-        "ner.py", "--ner_file", "ner.json", "--strip-meta",
-        "--min-count", "2"])
-    NER.main()
-    data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
-    assert len(data) == 1 and data[0]["term"] == "陈阳"
-    assert "_votes_type" not in data[0]
 
 
 def test_main_compile_chapters(tmp_path, monkeypatch, ner_reset):

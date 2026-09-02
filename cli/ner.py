@@ -1245,61 +1245,6 @@ def merge_alias_groups(ner_data: list[dict], logger) -> int:
 
 
 
-def postprocess_ner_file(
-    filepath: str,
-    strip_meta: bool,
-    min_count: int | None,
-    logger,
-) -> None:
-    if not os.path.exists(filepath):
-        _log(logger, logging.ERROR, f"❌ Файл {filepath} не найден.")
-        return
-
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError) as exc:
-        _log(logger, logging.ERROR, f"❌ NER не читается: {exc}")
-        return
-
-    original_len = len(data)
-
-    if min_count is not None and min_count > 1:
-        data = [item for item in data if item.get("count", 1) >= min_count]
-        removed = original_len - len(data)
-        if removed:
-            _log(logger, logging.INFO,
-                 f"✂️ --min-count={min_count}: удалено {removed} записей.")
-
-    # ── Alias-merge: схлопывание дублей написания ──
-    # Вызывается ДО strip_meta, пока _votes_* ещё на месте.
-    merged_groups = merge_alias_groups(data, logger)
-    if merged_groups:
-        _log(logger, logging.INFO,
-             f"🔗 postprocess: схлопнуто {merged_groups} alias-групп.")
-
-    if strip_meta:
-        data = [
-            {k: v for k, v in item.items() if not k.startswith(META_PREFIX)}
-            for item in data
-        ]
-        _log(logger, logging.INFO, "🧹 --strip-meta: служебные поля удалены.")
-
-    data.sort(key=lambda x: x.get("count", 0), reverse=True)
-
-    tmp_path = filepath + ".tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        os.replace(tmp_path, filepath)
-    except OSError as exc:
-        _log(logger, logging.ERROR, f"⚠ NER не сохранён ({exc}): {filepath}")
-        return
-
-    _log(logger, logging.INFO, f"💾 Сохранено {len(data)} записей в {filepath}")
-
-
 # ══════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════
@@ -1328,9 +1273,6 @@ def build_parser() -> argparse.ArgumentParser:
             "\n"
             "  С уровнем усилий размышления:\n"
             "    python ner.py novel.txt --two-pass --reasoning-effort high\n"
-            "\n"
-            "  Постпроцессинг без входного файла:\n"
-            "    python ner.py --ner_file ner.json --min-count 2 --strip-meta\n"
             "\n"
             "  Сборка глав с диапазоном (в память, без временного файла):\n"
             "    python ner.py --compile_chapters --start 1 --end 20\n"
@@ -1366,7 +1308,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "file", nargs="?", default=None,
-        help="Путь к входному .txt файлу. Не требуется при --strip-meta / --min-count.",
+        help="Путь к входному .txt файлу (или --compile_chapters).",
     )
     parser.add_argument(
         "--ner_file", default="ner.json",
@@ -1458,20 +1400,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Все поля голосуют (включая notes, context, translated_context).",
     )
     parser.add_argument(
-        "--strip-meta", action="store_true",
-        help=(
-            "Удалить служебные поля (_votes_*, _source_chunks) из ner.json. "
-            "Можно использовать как постпроцессинг без входного файла."
-        ),
-    )
-    parser.add_argument(
-        "--min-count", type=int, default=None, metavar="N",
-        help=(
-            "Удалить из ner.json записи с count < N. "
-            "Например, --min-count 2 уберёт одноразовые термины."
-        ),
-    )
-    parser.add_argument(
         "--compile_chapters", action="store_true",
         help=(
             "Собрать chapters/*/chapter.txt и использовать как вход "
@@ -1556,24 +1484,8 @@ def main():
             args.file = "compiled_chapters.txt"
             in_memory_text = text
 
-    # ── Режим постпроцессинга (без входного файла) ──
-    postprocess_requested = args.strip_meta or args.min_count is not None
     if args.file is None:
-        if postprocess_requested:
-            try:
-                os.makedirs("logs", exist_ok=True)
-            except OSError as exc:
-                print(f"⚠ logs/ не создаётся: {exc}", file=sys.stderr)
-            logger, _ = setup_logging(os.path.join("logs", "ner_postprocess.log"))
-            log_argv(logger)
-            postprocess_ner_file(
-                args.ner_file, args.strip_meta, args.min_count, logger
-            )
-            return 0
-        parser.error(
-            "Укажите входной файл, --compile_chapters или флаги "
-            "постпроцессинга (--strip-meta, --min-count)."
-        )
+        parser.error("Укажите входной файл или --compile_chapters.")
 
     # ── Основной режим ──
     file_dir = os.path.dirname(os.path.abspath(args.file)) or "."
@@ -1642,10 +1554,6 @@ def main():
 
     if not all_chunks and not args.two_pass:
         _log(logger, logging.INFO, "✅ Нет чанков для обработки.")
-        if postprocess_requested:
-            postprocess_ner_file(
-                args.ner_file, args.strip_meta, args.min_count, logger
-            )
         return 0
 
     max_workers = max(1, min(16, args.threads))
@@ -1757,14 +1665,8 @@ def main():
              f"💾 Финальное сохранение ({len(global_ner_data)} терминов)")
 
     # ════════════════════════════════════════════════════════════════
-    # ПОСТПРОЦЕССИНГ
-    # ════════════════════════════════════════════════════════════════
     _log(logger, logging.INFO,
          f"🏁 Готово. Терминов: {len(global_ner_data)}. Файл: {args.ner_file}")
-    if postprocess_requested:
-        postprocess_ner_file(
-            args.ner_file, args.strip_meta, args.min_count, logger
-        )
 
     # H4 (AUDIT): все чанки упали → код 1 (частичный успех — 0 + warning)
     if failed_chunks:

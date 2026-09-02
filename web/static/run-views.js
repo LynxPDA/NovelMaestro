@@ -956,20 +956,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       // всегда undefined и условная видимость полей не работает
       byName[name] = (wrap._input && wrap._input._sel) || wrap._input;
     }
-    // ner: входной файл или сборка глав; «постобработка» — без LLM
+    // ner: входной файл или сборка глав
     if (key === "ner" && byName["mode"]) {
       const modeSel = byName["mode"];
       const fileSel = byName["file"];
       const applyNerSimple = () => {
-        const isPost = modeSel.value === "postprocess";
-        for (const name of ["prompt_file", "two_pass"]) {
-          const w = byName[name];
-          const wrap = w && w.closest ? w.closest(".field") : null;
-          if (wrap) wrap.classList.toggle("hidden", isPost);
-        }
         const fw = fileSel && fileSel.closest
           ? fileSel.closest(".field") : null;
-        if (fw) fw.classList.toggle("hidden", isPost);
+        if (fw) fw.classList.remove("hidden");
       };
       modeSel.addEventListener("change", applyNerSimple);
       if (fileSel) fileSel.addEventListener("change", applyNerSimple);
@@ -1021,14 +1015,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const rangeRow = buildRangeRow(key, spec);
     if (rangeRow) {
       // ner: диапазон нужен только когда входной файл НЕ выбран
-      // (сборка глав в память) и режим не «постобработка»
+      // (сборка глав в память)
       if (key === "ner" && byName["mode"]) {
         const modeSel = byName["mode"];
         const fileSel = byName["file"];
         const applyNerRange = () => {
           const noFile = !(fileSel && fileSel.value);
-          const notPost = modeSel.value !== "postprocess";
-          rangeRow.classList.toggle("hidden", !(noFile && notPost));
+          rangeRow.classList.toggle("hidden", !noFile);
         };
         modeSel.addEventListener("change", applyNerRange);
         if (fileSel) fileSel.addEventListener("change", applyNerRange);
@@ -1101,31 +1094,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны
 
-    // ner — режимы: LLM (extract/finetune) и постобработка (без LLM):
-    // постобработка прячет LLM-поля, файл и диапазон; входной файл
-    // не выбран — сборка глав в память, тогда виден диапазон
+    // ner — входной файл или сборка глав в память (диапазон виден
+    // только когда файл не выбран)
     if (key === "ner") {
       const modeSel = fieldWraps["mode"] && fieldWraps["mode"]._input;
       const fileSel =
         fieldWraps["file"] && fieldWraps["file"]._input
           && fieldWraps["file"]._input._sel;
-      const llmFields = [
-        "host", "model", "api_key", "prompt_file", "threads",
-        "chunk_size", "threshold", "ngram", "temperature", "reasoning",
-        "two_pass", "keep_fields", "save_interval", "retries", "timeout",
-      ];
       function applyNerMode() {
-        const m = (modeSel && modeSel.value) || "extract";
-        const isPost = m === "postprocess";
-        for (const name of llmFields) {
-          const wrap = fieldWraps[name];
-          if (wrap) wrap.classList.toggle("hidden", isPost);
-        }
-        const fw = fieldWraps["file"];
-        if (fw) fw.classList.toggle("hidden", isPost);
         const noFile = !(fileSel && fileSel.value);
         if (rangeRow) {
-          rangeRow.classList.toggle("hidden", isPost || !noFile);
+          rangeRow.classList.toggle("hidden", !noFile);
         }
       }
       if (modeSel) modeSel.addEventListener("change", applyNerMode);
