@@ -958,9 +958,11 @@ def test_form_defaults_match_script_argparse():
     table = [
         ("ner", "threads", ner_parser, "threads"),
         ("ner_check", "timeout", ner_check_parser, "timeout"),
-        ("ner_check", "fields", ner_check_parser, "fields"),
         ("translate_check_llm", "max_retries", tcl_parser, "max_retries"),
     ]
+    # ner_check.fields — скрытое поле чипсов: дефолт пустой, набор полей
+    # считают чипсы из реальных ключей ner.json (term + type/translation/
+    # notes/context, если есть) — со скриптовым дефолтом не сверяется
     for stage, field, build, dest in table:
         form_default = STAGE_SPECS[stage]["fields"]
         f = next(x for x in form_default if x["name"] == field)

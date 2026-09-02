@@ -765,7 +765,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     function curFields() {
       let v = String(st.values[key]["fields"] ?? "").trim();
       if (!v) {
-        v = "term,type,translation";
+        // дефолт: term + type/translation/notes/context — те, что есть
+        // в реальных данных ner.json (fieldNames уже загружен)
+        const base = ["type", "translation", "notes", "context"].filter(
+          (n) => fieldNames.includes(n),
+        );
+        v = ["term", ...base].join(",");
         st.values[key]["fields"] = v;
       }
       const set = new Set(v.split(",").map((s) => s.trim())
@@ -880,7 +885,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             .sort(),
         ];
         fieldsInfo.textContent =
-          "term — всегда; названия полей — ключи ner.json";
+          "term — всегда; по умолчанию: type, translation, notes, "
+          + "context (если есть в данных)";
         renderFields();
       } catch (ex) {
         chipsInfo.textContent = ex.message;

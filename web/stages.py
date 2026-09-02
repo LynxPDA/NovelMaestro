@@ -815,10 +815,13 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "count_threshold", "label": "Порог count (> X)",
              "type": "number", "default": "0"},
             # types/fields — скрытые: значения пишет виджет чипсов
-            # (типы и поля из ner.json), buildParams собирает их в params
-            {"name": "types", "type": "hidden", "default": ""},
-            {"name": "fields", "type": "hidden",
-             "default": "term,type,translation"},
+            # (типы и поля из ner.json), buildParams собирает их в params;
+            # noenv — .env не предзаполняет чипсы (дефолт: все типы и
+            # term+type+translation+notes+context, если есть в данных)
+            {"name": "types", "type": "hidden", "default": "",
+             "noenv": True},
+            {"name": "fields", "type": "hidden", "default": "",
+             "noenv": True},
             # --apply убран из Запусков: применяется только в «Проверках»
             # проекта (/api/ner/review/apply шлёт apply напрямую)
             {"name": "auto_apply", "label": "Автоприменение (--auto-apply)",

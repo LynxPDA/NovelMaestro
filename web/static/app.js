@@ -1302,15 +1302,21 @@ async function viewDashboard() {
         "button",
         {
           class: "btn btn-sm btn-ghost dash-refresh",
-          onclick: async () => {
-            try {
-              await api("/jobs", { method: "DELETE" });
-              toast("История запусков очищена");
-              render();
-            } catch (ex) {
-              toast(ex.message, "err");
-            }
-          },
+          onclick: () =>
+            confirmModal(
+              "Очистить историю запусков",
+              "Все записи о запусках будут удалены",
+              "УДАЛИТЬ",
+              async () => {
+                try {
+                  await api("/jobs", { method: "DELETE" });
+                  toast("История запусков очищена");
+                  render();
+                } catch (ex) {
+                  toast(ex.message, "err");
+                }
+              },
+            ),
         },
         "Очистить",
       ),
@@ -1849,20 +1855,26 @@ function sectionsModal() {
         "button",
         {
           class: "btn btn-sm btn-danger-ghost",
-          onclick: async () => {
-            err.textContent = "";
-            try {
-              await api(`/sections/${encodeURIComponent(s.name)}`, {
-                method: "DELETE",
-              });
-              toast(`Удалён раздел: ${s.name}`);
-              hubCache = null;
-              refresh();
-              render(); // хаб за модалкой сразу видит изменения
-            } catch (ex) {
-              err.textContent = ex.message;
-            }
-          },
+          onclick: () =>
+            confirmModal(
+              "Удалить раздел",
+              `Раздел ${s.name} будет удалён`,
+              "УДАЛИТЬ",
+              async () => {
+                err.textContent = "";
+                try {
+                  await api(`/sections/${encodeURIComponent(s.name)}`, {
+                    method: "DELETE",
+                  });
+                  toast(`Удалён раздел: ${s.name}`);
+                  hubCache = null;
+                  refresh();
+                  render(); // хаб за модалкой сразу видит изменения
+                } catch (ex) {
+                  err.textContent = ex.message;
+                }
+              },
+            ),
         },
         "Удалить",
       ),

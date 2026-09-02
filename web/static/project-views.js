@@ -2191,17 +2191,24 @@ function viewProject(section, name, tab) {
                     err2.textContent = "Выберите столбец";
                     return;
                   }
-                  knownKeys.delete(name);
-                  data.items.forEach((it) => delete it[name]);
-                  if (cols != null) {
-                    cols = cols.filter((c) => c !== name);
-                    if (!cols.length) cols = [...DEFAULT_COLS];
-                  }
-                  saveCols();
-                  refreshColBtn();
-                  renderRows();
-                  saveNer();
-                  close();
+                  confirmModal(
+                    "Удалить столбец",
+                    `Поле ${name} будет удалено из всех терминов глоссария`,
+                    "УДАЛИТЬ",
+                    async () => {
+                      knownKeys.delete(name);
+                      data.items.forEach((it) => delete it[name]);
+                      if (cols != null) {
+                        cols = cols.filter((c) => c !== name);
+                        if (!cols.length) cols = [...DEFAULT_COLS];
+                      }
+                      saveCols();
+                      refreshColBtn();
+                      renderRows();
+                      saveNer();
+                      close();
+                    },
+                  );
                 },
               },
               "Удалить",
@@ -2238,19 +2245,22 @@ function viewProject(section, name, tab) {
         h("option", { value: "=" }, "="),
         h("option", { value: "≠" }, "≠"),
       );
-      const valInp = h("input", { class: "input", placeholder: "значение (число)" });
-      const scopeCb = h("input", { type: "checkbox" });
-      const allCb = h("input", { type: "checkbox" });
+      const valInp = h("input", { class: "input", placeholder: "значение" });
       const countEl = h("div", { class: "field-help" }, "");
       const err2 = h("div", { class: "form-error" });
       function victims() {
-        const scope = scopeCb.checked ? visible() : data.items;
-        if (allCb.checked) return scope; // все найденные/отфильтрованные
+        // условие применяется ко ВСЕМ терминам глоссария
         const raw = valInp.value.trim();
         if (!raw) return [];
         const num = Number(raw);
-        return scope.filter((it) => {
+        return data.items.filter((it) => {
           const v = it[fieldSel.value];
+          const s = String(v == null ? "" : v);
+          // «=»/«≠» — СОДЕРЖИТ/НЕ СОДЕРЖИТ (по подстроке), а не
+          // точное совпадение; «>»/«<» — числовое сравнение, если
+          // обе стороны числа (иначе строковое)
+          if (opSel.value === "=") return s.includes(raw);
+          if (opSel.value === "≠") return !s.includes(raw);
           if (
             Number.isFinite(num) &&
             v != null &&
@@ -2259,21 +2269,16 @@ function viewProject(section, name, tab) {
           ) {
             const n = Number(v);
             if (opSel.value === ">") return n > num;
-            if (opSel.value === "<") return n < num;
-            if (opSel.value === "=") return n === num;
-            return n !== num;
+            return n < num;
           }
-          const s = String(v == null ? "" : v);
           if (opSel.value === ">") return s > raw;
-          if (opSel.value === "<") return s < raw;
-          if (opSel.value === "=") return s === raw;
-          return s !== raw;
+          return s < raw;
         });
       }
       function refreshCount() {
         countEl.textContent = `Будет удалено: ${victims().length}`;
       }
-      [fieldSel, opSel, valInp, scopeCb, allCb].forEach((el) =>
+      [fieldSel, opSel, valInp].forEach((el) =>
         el.addEventListener("input", refreshCount),
       );
       refreshCount();
@@ -2287,16 +2292,11 @@ function viewProject(section, name, tab) {
           h(
             "div",
             { class: "modal-text" },
-            "Условие: значение поля сравнивается с числом (или строкой):",
+            "Условие применяется ко всем терминам глоссария. ",
+            "«=» — содержит, «≠» — не содержит (по подстроке, ",
+            "не точное совпадение); «>»/«<» — больше/меньше.",
           ),
           h("div", { class: "ner-del-filter" }, fieldSel, opSel, valInp),
-          h(
-            "label",
-            { class: "chk" },
-            scopeCb,
-            " только среди найденных (поиск/тип)",
-          ),
-          h("label", { class: "chk" }, allCb, " удалить ВСЕ найденные (без условия)"),
           countEl,
           err2,
           h(
@@ -2313,12 +2313,19 @@ function viewProject(section, name, tab) {
                     err2.textContent = "Нет записей под условием";
                     return;
                   }
-                  const set = new Set(vics);
-                  data.items = data.items.filter((it) => !set.has(it));
-                  saveNer();
-                  renderRows();
-                  close();
-                  toast(`Удалено терминов: ${vics.length}`);
+                  confirmModal(
+                    "Удалить термины",
+                    `Будет удалено терминов: ${vics.length}`,
+                    "УДАЛИТЬ",
+                    async () => {
+                      const set = new Set(vics);
+                      data.items = data.items.filter((it) => !set.has(it));
+                      saveNer();
+                      renderRows();
+                      close();
+                      toast(`Удалено терминов: ${vics.length}`);
+                    },
+                  );
                 },
               },
               "Удалить",
@@ -2676,7 +2683,13 @@ function viewProject(section, name, tab) {
             {
               class: "btn btn-xs btn-ghost rv-del",
               title: "Удалить правку из файла",
-              onclick: () => deleteEntry(i),
+              onclick: () =>
+                confirmModal(
+                  "Удалить правку",
+                  `Запись «${entryHead(e)}» будет удалена из файла`,
+                  "УДАЛИТЬ",
+                  async () => deleteEntry(i),
+                ),
             },
             "Удалить",
           ),
@@ -2883,22 +2896,30 @@ function viewProject(section, name, tab) {
         },
         "Очистить",
       );
-      clearBtn.addEventListener("click", async () => {
-        err.textContent = "";
-        try {
-          const empty = parsed && parsed.isArray ? [] : { entries: [] };
-          await api(path, {
-            method: "PUT",
-            body: {
-              project: `${section}/${name}`,
-              content: JSON.stringify(empty, null, 2),
-            },
-          });
-          toast("Все правки удалены");
-          refresh();
-        } catch (ex) {
-          err.textContent = ex.message;
-        }
+      clearBtn.addEventListener("click", () => {
+        const n = parsed && parsed.entries ? parsed.entries.length : 0;
+        confirmModal(
+          "Очистить правки",
+          `Будут удалены все правки из файла (${n} шт.)`,
+          "УДАЛИТЬ",
+          async () => {
+            err.textContent = "";
+            try {
+              const empty = parsed && parsed.isArray ? [] : { entries: [] };
+              await api(path, {
+                method: "PUT",
+                body: {
+                  project: `${section}/${name}`,
+                  content: JSON.stringify(empty, null, 2),
+                },
+              });
+              toast("Все правки удалены");
+              refresh();
+            } catch (ex) {
+              err.textContent = ex.message;
+            }
+          },
+        );
       });
       const actionsBar = h(
         "div",
@@ -4173,7 +4194,7 @@ function viewProject(section, name, tab) {
       confirmModal(
         "Очистить все логи",
         `Будут удалены все *.log в logs/ (${all.length} шт.)`,
-        "ОЧИСТИТЬ",
+        "УДАЛИТЬ",
         async () => {
           try {
             await api(`/logs?${q}`, { method: "DELETE" });
