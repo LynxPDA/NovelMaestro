@@ -1594,6 +1594,50 @@ function viewProject(section, name, tab) {
       typeFilter = null;
     }
 
+    /* «Спорные»: состояние фильтра (поле голосов + коэффициент) —
+       localStorage; спорно, если max/второй < ratio. */
+    const LS_DISPUTE_KEY = `nerDispute:${section}/${name}`;
+    const voteKeys = [...new Set(
+      data.items.flatMap((it) =>
+        Object.keys(it).filter((k) => k.startsWith("_votes_")),
+      ),
+    )];
+    let dispute = null;
+    try {
+      const saved = JSON.parse(
+        localStorage.getItem(LS_DISPUTE_KEY) || "null",
+      );
+      if (saved && voteKeys.includes(saved.field)) {
+        const ratio = Number(saved.ratio);
+        if (Number.isFinite(ratio) && ratio > 0) dispute = saved;
+      }
+    } catch {
+      dispute = null;
+    }
+    function saveDispute() {
+      try {
+        localStorage.setItem(LS_DISPUTE_KEY, JSON.stringify(dispute));
+      } catch {
+        /* localStorage недоступен — не критично */
+      }
+    }
+    function disputeVictims() {
+      if (!dispute || !voteKeys.length) return [];
+      const field = dispute.field;
+      const out = [];
+      for (const it of data.items) {
+        const v = it[field];
+        if (!Array.isArray(v)) continue;
+        const nums = v
+          .map((x) => Number(x))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        if (nums.length < 2) continue;
+        nums.sort((a, b) => b - a);
+        if (nums[0] / nums[1] < dispute.ratio) out.push(it);
+      }
+      return out;
+    }
+
     function visible() {
       let filtered = UICore.filterNerItems(
         data.items,

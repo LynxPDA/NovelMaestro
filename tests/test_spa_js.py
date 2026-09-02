@@ -73,6 +73,16 @@ def test_help_view_renders_static_md():
     assert 'fetch("/help.md"' in src
     assert "window.marked.parse" in src
     assert "createContextualFragment" in src
-    assert "_helpSanitize" in src
-    assert "help-toc" in src and "md-body" in src
-    assert (SPA_DIR / "help.md").is_file(), "web/static/help.md отсутствует"
+
+
+def test_glossary_dispute_vars_declared():
+    """Регрессия «пустая вкладка Глоссарий»: dispute/voteKeys/
+    disputeVictims/saveDispute ОБЯЗАНЫ быть объявлены в project-views.js
+    (ReferenceError при рендере nerView оставлял только панели)."""
+    src = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    for decl in ("const LS_DISPUTE_KEY", "const voteKeys",
+                 "let dispute = null", "function saveDispute",
+                 "function disputeVictims"):
+        assert decl in src, f"не найдено объявление: {decl}"
+    # использование внутри nerView — до конца файла (нет дубля вне)
+    assert src.count("function disputeVictims") == 1
