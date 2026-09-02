@@ -770,7 +770,7 @@ function sectionBlock(section, projects, sectionActive, statsMap) {
         { class: "card-actions" },
         h(
           "a",
-          { class: "btn btn-sm", href: `#/project/${section.name}/${name}` },
+          { class: "btn btn-sm btn-ghost", href: `#/project/${section.name}/${name}` },
           "Открыть",
         ),
         h(
