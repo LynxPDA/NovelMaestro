@@ -59,8 +59,8 @@ cli/  исполнители — чистый CLI (argparse), без интер�
           batch_replace.py — массовые замены по файлу правил (prompts/replacements.txt);
 tools/    вспомогательные утилиты вне конвейера: tampermonkey_rulate_reload.js
           (userscript Rulate, README — tools/README.md).
-templates/ шаблоны новых проектов: общие шаблоны в корне (.env.example,
-          replacements.txt.example); подпапки по типу книги — жанру и
+templates/ шаблоны новых проектов: общие шаблоны в корне (.env.example);
+          подпапки по типу книги — жанру и
           языку (General/) с промптами, metadata.yaml и donate.txt.
 run.py    лаунчер: python3 run.py → web/main.py (+браузер); проброс
           --host/--port/--auth/--token/--max-upload-mb/--jobs-limit/
@@ -224,8 +224,12 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
 
 ## 8. Запреты
 
-- **Боевые проекты неприкосновенны**: не трогай реальные проекты
-  (`projects/<раздел>/<книга>/`) и их артефакты. Для проверок и тестов —
+- **Dev и Prod разделены**: рабочие проекты живут в репо
+  (`projects/<раздел>/<книга>/` — gitignored), боевые — в Docker-контейнере
+  (папка вне репо, обычно `~/dockers/NovelMaestro/`). Изменения в проектах
+  репо — обычная работа; боевой контейнер и его bind-mount-данные
+  (`projects/`, `templates/`, `web/job_logs` вне репо) не трогай без
+  явной просьбы — там живут реальные книги. Для проверок и тестов —
   только временные данные: pytest `tmp_path`, `/tmp`, моки API; PUT/POST/
   DELETE к живому web-серверу против боевых проектов запрещены.
   Эксперименты с книгами — только в разделе `projects/TMP` (песочница,
