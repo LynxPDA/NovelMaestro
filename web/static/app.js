@@ -43,9 +43,26 @@ function getPreviewFontSize() {
   return UICore.clampFont(n, PREVIEW_FONT_OPTIONS, PREVIEW_FONT_DEFAULT);
 }
 
-/* ── Внешний вид (системный .env: WEB_UI_THEME/WEB_EDITOR_THEME/
-   WEB_EDITOR_FONT_SIZE; в проекты не копируются) ── */
+/* ── Внешний вид: UI-предпочтения в localStorage браузера (не .env —
+   12-factor: клиентские настройки живут на клиенте). ── */
+const UI_LOOK_KEY = "uiLookV1";
 const EDITOR_SETTINGS = { ui: "dark", editor: "auto", fontSize: 13 };
+function loadUiLook() {
+  try {
+    const raw = localStorage.getItem(UI_LOOK_KEY);
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (d.ui === "light" || d.ui === "dark") EDITOR_SETTINGS.ui = d.ui;
+    if (d.editor === "auto" || d.editor === "dark" || d.editor === "light")
+      EDITOR_SETTINGS.editor = d.editor;
+    const n = parseInt(d.fontSize, 10);
+    if (Number.isFinite(n))
+      EDITOR_SETTINGS.fontSize = Math.max(8, Math.min(32, n));
+  } catch {
+    /* битый localStorage — дефолты */
+  }
+}
+loadUiLook();
 
 /* Синтаксические цвета редакторов: вендор не отдаёт HighlightStyle,
    классы подсветки генерирует автоименами (CSS их не переопределит) —
@@ -114,21 +131,7 @@ function effectiveEditorTheme() {
     : EDITOR_SETTINGS.editor;
 }
 
-async function applyEditorSettings() {
-  try {
-    const s = await api("/settings");
-    EDITOR_SETTINGS.ui = s.ui_theme === "light" ? "light" : "dark";
-    EDITOR_SETTINGS.editor =
-      s.editor_theme === "dark" || s.editor_theme === "light"
-        ? s.editor_theme
-        : "auto";
-    const n = parseInt(s.editor_font_size, 10);
-    if (Number.isFinite(n)) {
-      EDITOR_SETTINGS.fontSize = Math.max(8, Math.min(32, n));
-    }
-  } catch {
-    /* дефолты уже стоят */
-  }
+function applyEditorSettings() {
   document.documentElement.dataset.uiTheme = EDITOR_SETTINGS.ui;
   document.body.dataset.editorTheme = effectiveEditorTheme();
 }
@@ -938,59 +941,9 @@ async function viewNotes() {
   );
 }
 
-async function viewSettings() {
-  const err = h("div", { class: "form-error" });
-  const ed = makeEditor("", "txt");
-  const meta = h("div", { class: "review-status" });
-  const editorHost = h("div", { class: "editor-cm editor-cm-small" }, ed.root);
-  const saveBtn = h("button", { class: "btn btn-sm" }, "Сохранить");
-  let visible = false;
-  async function loadEnv() {
-    err.textContent = "";
-    try {
-      const d = await api(`/env?scope=global`);
-      visible = !!d.visible;
-      ed.setValue(d.content || d.masked || "");
-      meta.textContent = d.exists
-        ? visible
-          ? ".env (проектный/системный)"
-          : ".env · значения скрыты (--auth)"
-        : ".env не существует — сохраните, чтобы создать";
-    } catch (ex) {
-      err.textContent = ex.message;
-    }
-  }
-  saveBtn.addEventListener("click", async () => {
-    err.textContent = "";
-    try {
-      if (visible) {
-        await api("/env", {
-          method: "PUT",
-          body: { scope: "global", content: ed.getValue() },
-        });
-      } else {
-        const changes = {};
-        for (const line of ed.getValue().split("\n")) {
-          if (!line || line.startsWith("#")) continue;
-          const eq = line.indexOf("=");
-          if (eq < 0) continue;
-          const key = line.slice(0, eq).trim();
-          const val = line.slice(eq + 1).trim();
-          if (key && val && val !== "••••") changes[key] = val;
-        }
-        await api("/env", {
-          method: "PUT",
-          body: { scope: "global", changes },
-        });
-      }
-      toast(".env сохранён");
-      await loadEnv();
-    } catch (ex) {
-      err.textContent = ex.message;
-    }
-  });
-  await loadEnv();
-  /* ── внешний вид: тема интерфейса, тема/кегль редакторов (системный .env) ── */
+function viewSettings() {
+  /* ── внешний вид: тема интерфейса, тема/кегль редакторов —
+     UI-предпочтения в localStorage браузера (не .env) ── */
   const uiSel = h(
     "select",
     { class: "input input-inline" },
@@ -1014,27 +967,25 @@ async function viewSettings() {
     value: String(EDITOR_SETTINGS.fontSize),
   });
   const lookBtn = h("button", { class: "btn btn-sm" }, "Применить");
-  lookBtn.addEventListener("click", async () => {
-    err.textContent = "";
+  lookBtn.addEventListener("click", () => {
+    const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
+    EDITOR_SETTINGS.ui = uiSel.value === "light" ? "light" : "dark";
+    EDITOR_SETTINGS.editor =
+      edSel.value === "dark" || edSel.value === "light"
+        ? edSel.value
+        : "auto";
+    EDITOR_SETTINGS.fontSize = n;
     try {
-      const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
-      await api("/env", {
-        method: "PUT",
-        body: {
-          scope: "global",
-          changes: {
-            WEB_UI_THEME: uiSel.value,
-            WEB_EDITOR_THEME: edSel.value,
-            WEB_EDITOR_FONT_SIZE: String(n),
-          },
-        },
-      });
-      await applyEditorSettings();
-      render();
-      toast("Внешний вид сохранён");
-    } catch (ex) {
-      err.textContent = ex.message;
+      localStorage.setItem(
+        UI_LOOK_KEY,
+        JSON.stringify(EDITOR_SETTINGS),
+      );
+    } catch {
+      /* localStorage недоступен — не критично */
     }
+    applyEditorSettings();
+    render();
+    toast("Внешний вид сохранён");
   });
   const lookCard = h(
     "div",
@@ -1070,8 +1021,8 @@ async function viewSettings() {
       h(
         "div",
         { class: "field-help" },
-        "системные настройки (.env): WEB_UI_THEME, WEB_EDITOR_THEME, " +
-          "WEB_EDITOR_FONT_SIZE — в проекты не копируются",
+        "хранится в браузере (localStorage), не в .env — переживает " +
+          "обновление и пересоздание контейнера",
       ),
     ),
   );
@@ -1088,7 +1039,8 @@ async function viewSettings() {
         h(
           "div",
           { class: "page-sub" },
-          "Системный .env (корень репо) — сервер, ключ, модели и внешний вид",
+          "Внешний вид и интерфейс — хранятся в браузере (localStorage); " +
+            "сервер и LLM-конфиг — в .env / переменных окружения",
         ),
       ),
     ),
@@ -1115,24 +1067,6 @@ async function viewSettings() {
             "хранится в браузере (localStorage), не в .env — как тема и авто-обновление",
           ),
         ),
-      ),
-    ),
-    h(
-      "div",
-      { class: "review-card" },
-      h("div", { class: "review-card-title" }, "Файл .env"),
-      h(
-        "div",
-        { class: "review-card-body" },
-        h(
-          "div",
-          { class: "files-toolbar" },
-          meta,
-          h("span", { class: "spacer" }),
-          saveBtn,
-        ),
-        editorHost,
-        err,
       ),
     ),
   );
@@ -2554,7 +2488,7 @@ async function boot() {
   } catch {
     state.auth = false;
   }
-  await applyEditorSettings();
+  applyEditorSettings();
   window.addEventListener("hashchange", render);
   render();
 }

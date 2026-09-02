@@ -338,34 +338,12 @@ def test_env_get_global(srv, tmp_path):
     assert "1" not in r["masked"]
 
 
-def test_settings_get(srv, tmp_path):
-    """GET /api/settings — внешний вид из корневого .env, дефолты."""
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
+def test_settings_get_removed(srv, tmp_path):
+    """GET /api/settings удалён: внешний вид — localStorage браузера,
+    не .env (12-factor). Роут больше не существует."""
+    _srv, port, root = srv(projects_root=tmp_path / "prj")
     r = _request(port, "GET", "/api/settings")
-    assert r["ok"]
-    assert r["ui_theme"] == "dark"
-    assert r["editor_theme"] == "auto"
-    assert r["editor_font_size"] == 13
-
-    (tmp_path / "repo" / ".env").write_text(
-        "WEB_UI_THEME=light\nWEB_EDITOR_THEME=dark\n"
-        "WEB_EDITOR_FONT_SIZE=16\n", encoding="utf-8")
-    r = _request(port, "GET", "/api/settings")
-    assert r["ui_theme"] == "light"
-    assert r["editor_theme"] == "dark"
-    assert r["editor_font_size"] == 16
-
-    # невалидные значения → дефолты без падения
-    (tmp_path / "repo" / ".env").write_text(
-        "WEB_UI_THEME=blue\nWEB_EDITOR_FONT_SIZE=abc\n",
-        encoding="utf-8")
-    r = _request(port, "GET", "/api/settings")
-    assert r["ui_theme"] == "dark"
-    assert r["editor_theme"] == "auto"
-    assert r["editor_font_size"] == 13
+    assert r.get("ok") is not True  # 404/ошибка — эндпоинта нет
 
 
 def test_env_put_replace(srv, tmp_path):
@@ -780,13 +758,12 @@ def test_env_delete_project_only(srv, tmp_path):
     assert (tmp_path / "repo" / ".env").exists()  # общий не тронут
 
 
-def test_env_template_endpoint(srv, tmp_path):
-    """GET /api/env/template отдаёт templates/.env.example."""
+def test_env_template_endpoint_removed(srv, tmp_path):
+    """GET /api/env/template удалён вместе с редактором системного .env
+    (окно .env убрано из «Настроек»; шаблон — в templates/.env.example)."""
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     r = _request(port, "GET", "/api/env/template")
-    assert r["ok"] and r["name"] == ".env.example"
-    assert "HOST" in r["content"] or "API" in r["content"] \
-        or "LLM" in r["content"] or "SERVER" in r["content"]
+    assert r.get("ok") is not True  # 404/ошибка — эндпоинта нет
 
 
 def test_prompts_delete(srv, tmp_path):

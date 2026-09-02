@@ -1423,42 +1423,6 @@ def _env_delete(ctx: dict) -> dict:
     return {"ok": True, "scope": "project", "deleted": True}
 
 
-def _env_template(ctx: dict) -> dict:
-    """Шаблон .env из templates/.env.example (GET /api/env/template)."""
-    repo = _repo_root(ctx)
-    f = repo / "templates" / ".env.example"
-    if f.is_file():
-        return {"ok": True, "name": f.name,
-                "content": f.read_text(encoding="utf-8", errors="replace")}
-    return {"ok": True, "name": None, "content": ""}
-
-
-def _settings_get(ctx: dict) -> dict:
-    """Настройки внешнего вида интерфейса (GET /api/settings).
-
-    Источник — системный корневой .env (WEB_UI_THEME/WEB_EDITOR_THEME/
-    WEB_EDITOR_FONT_SIZE); невалидные значения заменяются дефолтами,
-    в проектный pdir/.env не копируются (WEB_* вырезаются).
-    """
-    c = _import_common(ctx)
-    env = c.parse_dotenv(_env_path(ctx, "global"))
-    ui_theme = str(env.get("WEB_UI_THEME", "")).strip().lower()
-    if ui_theme not in ("dark", "light"):
-        ui_theme = "dark"
-    editor_theme = str(env.get("WEB_EDITOR_THEME", "")).strip().lower()
-    if editor_theme not in ("auto", "dark", "light"):
-        editor_theme = "auto"
-    try:
-        font = int(float(str(env.get("WEB_EDITOR_FONT_SIZE", "13"))))
-    except (TypeError, ValueError):
-        font = 13
-    font = max(8, min(32, font))
-    return {"ok": True,
-            "ui_theme": ui_theme,
-            "editor_theme": editor_theme,
-            "editor_font_size": font}
-
-
 def _prompts_list(ctx: dict) -> dict:
     """Список prompts/ проекта + доступные шаблоны (W4).
 
@@ -1808,8 +1772,6 @@ def _register_m7(router: Router) -> None:
     router.add("GET", "/api/env", _env_get)
     router.add("PUT", "/api/env", _env_put)
     router.add("DELETE", "/api/env", _env_delete)
-    router.add("GET", "/api/env/template", _env_template)
-    router.add("GET", "/api/settings", _settings_get)
     router.add("GET", "/api/prompts", _prompts_list)
     router.add("GET", "/api/prompts/{name}", _prompts_get)
     router.add("PUT", "/api/prompts/{name}", _prompts_put)

@@ -38,6 +38,12 @@ RUN mkdir -p /app/templates-dist \
     && cp -a /app/templates/. /app/templates-dist/ \
     && chown -R app:app /app/templates-dist
 
+# Конфиг по умолчанию: копия templates/.env.example → /app/.env
+# (значения по умолчанию; корневой .env с секретами в образ НЕ входит —
+# .dockerignore). Реальные HOST/API_KEY/MODEL — переменными окружения
+# в compose (environment, приоритет окружения над .env-файлом).
+RUN cp /app/templates/.env.example /app/.env && chown app:app /app/.env
+
 # USER app НЕ ставится: контейнер стартует от root, docker-entrypoint.sh
 # делает chown каталогов данных и сам переключается на app (gosu).
 RUN chown -R app:app /app

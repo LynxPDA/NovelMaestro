@@ -92,8 +92,8 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 - **Конфиг** (W6, раунд 8): системный `.env` — корневой `.env` репо
   (`scope=global`; проектный `pdir/.env` — изоляция проекта, приоритетнее
   системного; значения видимы без auth, маскируются при `--auth`);
-  настройки внешнего вида (`WEB_UI_THEME`/`WEB_EDITOR_THEME`/
-  `WEB_EDITOR_FONT_SIZE`) — `GET /api/settings`;
+  внешний вид (тема/кегль) — вкладка «Настройки», localStorage браузера
+  (не .env);
   metadata.yaml; карточки «Обложка» (upload/предпросмотр/удаление,
   `source/cover.*`), «Метаданные epub/fb2» и «Файл страницы поддержки» —
   выбор файла из имеющихся в `source/` + предпросмотр/редактор;
@@ -304,8 +304,6 @@ Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
 | GET/PUT | `/api/{ner\|translate_check_llm}/review`, POST `.../apply` | review-флоу |
 | GET | `/api/check` | отчёты translate_check (W7) |
 | GET/PUT/DELETE | `/api/env?scope=project\|global` | .env (global — корневой `.env` репо; project — только собственный `pdir/.env`); GET — `values` несекретных ключей; PUT changes без pdir/.env — сид из системного `.env` (без секретов) |
-| GET | `/api/env/template` | шаблон `templates/.env.example` |
-| GET | `/api/settings` | внешний вид интерфейса из системного .env: `ui_theme` (WEB_UI_THEME), `editor_theme` (WEB_EDITOR_THEME), `editor_font_size` (WEB_EDITOR_FONT_SIZE); невалидные → дефолты (dark/auto/13) |
 | GET/PUT/DELETE | `/api/prompts`, `/api/prompts/{name}` | промпты (DELETE — удаление, PUT с пустым content — создание) |
 | GET | `/api/prompts/{name}/template` | шаблоны промптов |
 | GET | `/api/logs`, `/api/logs/{name}` | логи проекта |
