@@ -638,6 +638,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
               : "text",
         class: "input",
       });
+      // min/max из spec — браузерный стоп-механизм (стрелки/клавиши)
+      if (f.min != null) input.min = String(f.min);
+      if (f.max != null) input.max = String(f.max);
       input.value = String(vals[f.name] ?? f.default ?? "");
       input.addEventListener("input", () => {
         vals[f.name] = input.value;
@@ -1046,7 +1049,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
-      const verr = epubValidateInput(key, "simple");
+      const verr = epubValidateInput(key, "simple")
+        || numericFieldError(key, spec);
       if (verr) {
         err.textContent = verr;
         return;
@@ -1464,7 +1468,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
-      const verr = epubValidateInput(key, "expert");
+      const verr = epubValidateInput(key, "expert")
+        || numericFieldError(key, spec);
       if (verr) {
         err.textContent = verr;
         return;
@@ -1778,6 +1783,27 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // валидация исходника epub: обязателен; расширения — по режиму
+  // проверка number-полей с min/max из spec: значение вне диапазона
+  // блокируется ДО отправки (иначе скрипт упадёт с кодом 2 и «failed»
+  // без понятной причины). Пусто/не число — пропускаем (скрипт сам
+  // решает); валидны только заполненные значения.
+  function numericFieldError(key, spec) {
+    const vals = st.values[key] || {};
+    for (const f of spec.fields || []) {
+      if (f.type !== "number" || f.min == null && f.max == null) continue;
+      const raw = String(vals[f.name] ?? "");
+      if (raw === "" || raw == null) continue;
+      const n = Number(raw);
+      if (Number.isNaN(n)) continue;
+      const label = (f.label || f.name).replace(/\s*\([^)]*\)\s*$/, "");
+      if (f.min != null && n < f.min)
+        return `«${label}»: минимум ${f.min}`;
+      if (f.max != null && n > f.max)
+        return `«${label}»: максимум ${f.max}`;
+    }
+    return "";
+  }
+
   function epubValidateInput(key, mode) {
     if (key !== "epub") return "";
     const vals = st.values[key] || {};

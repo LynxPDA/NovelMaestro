@@ -1545,6 +1545,34 @@ def test_jobs_start_and_status(jobs_srv, fake_script):
     assert res.status == 400
 
 
+def test_jobs_start_validates_numeric_bounds(jobs_srv):
+    """Числовые поля с min/max из spec: недопустимое значение → 400
+    ДО запуска (скрипт бы упал с кодом 2 и «failed» без причины)."""
+    port, req, jm = jobs_srv
+    _make_project(port, req)
+    # jobs > 16 — отказ с понятной ошибкой
+    res, payload = req("POST", "/api/jobs",
+                       {"action": "pipeline",
+                        "project": "ACTIVE/test_book",
+                        "params": {"jobs": "30", "threads": "1"}})
+    assert res.status == 400, payload
+    assert "максимум 16" in payload.get("error", "")
+    # threads < 1 — отказ
+    res, payload = req("POST", "/api/jobs",
+                       {"action": "pipeline",
+                        "project": "ACTIVE/test_book",
+                        "params": {"jobs": "2", "threads": "0"}})
+    assert res.status == 400, payload
+    assert "минимум 1" in payload.get("error", "")
+    # допустимые значения проходят (400 дальше не случится: стадия
+    # pipeline требует файлы; валидна только граница)
+    res, payload = req("POST", "/api/jobs",
+                       {"action": "pipeline",
+                        "project": "ACTIVE/test_book",
+                        "params": {"jobs": "2", "threads": "4"}})
+    assert res.status != 400 or "максимум" not in payload.get("error", "")
+
+
 def test_jobs_history_trimmed(jobs_srv):
     """R5-F + история ограничена MAX_HISTORY (20); сайдкары
     удаляются."""

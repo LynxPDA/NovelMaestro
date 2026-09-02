@@ -1970,6 +1970,29 @@ def _jobs_start(ctx: dict) -> dict:
     if script is None or not script.is_file():
         raise ApiError(500, f"Скрипт не найден: {spec['script']}")
     ctx["project_dir"] = pdir  # для LLM-профилей (find_env_file)
+    # валидация number-полей с min/max из spec: недопустимое значение
+    # → 400 ДО запуска (скрипт бы упал с кодом 2 и «failed» без причины)
+    for f in spec.get("fields") or []:
+        if f.get("type") != "number" or (f.get("min") is None
+                                          and f.get("max") is None):
+            continue
+        raw = params.get(f["name"])
+        if raw is None or raw == "":
+            continue
+        try:
+            n = float(str(raw))
+        except (TypeError, ValueError):
+            continue
+        label = (f.get("label") or f["name"]).split("(")[0].strip()
+        try:
+            fmin = None if f.get("min") is None else float(f["min"])
+            fmax = None if f.get("max") is None else float(f["max"])
+        except (TypeError, ValueError):
+            continue
+        if fmin is not None and n < fmin:
+            raise ApiError(400, f"«{label}»: минимум {f['min']}")
+        if fmax is not None and n > fmax:
+            raise ApiError(400, f"«{label}»: максимум {f['max']}")
     # R9: настройки запуска сохраняются в .env проекта (копия общего)
     _persist_run_params(ctx, pdir, action, params)
     argv = build_command(action, params, ctx)

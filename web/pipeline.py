@@ -301,7 +301,9 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     host: str, api_key: str, model: str,
                     timeout: int, temperature=None, reasoning_effort=None,
                     stream_timeout=None, max_retries=None,
-                    threads: int = 1, prompt_file: str = "") -> list[str]:
+                    threads: int = 1, prompt_file: str = "",
+                    ner_min_count: int = 0,
+                    names_min_count: int = 10) -> list[str]:
     # единая модель конвейера (PIPELINE_MODEL → MODEL) — без
     # отдельных моделей под translate/redact/polish
     common = [
@@ -324,6 +326,9 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
     # общий промпт-файл — только если задан (пусто = встроенный)
     if prompt_file:
         common += ["--prompt_file", prompt_file]
+    # пороги count: ner_block и имена (дефолты: 0 — выключено, 10)
+    common += ["--ner_min_count", str(ner_min_count),
+               "--names_min_count", str(names_min_count)]
     if stage == 1:
         return [sys.executable, str(script), str(in_file), "--mode",
                 "translate", *common,
@@ -366,7 +371,9 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     stream_timeout=None, max_retries=None,
                     threads: int = 1,
                     prompts: dict[int, str] | None = None,
-                    polish_in: str | None = None) -> bool:
+                    polish_in: str | None = None,
+                    ner_min_count: int = 0,
+                    names_min_count: int = 10) -> bool:
     """Одна глава: стадии по порядку, fail-fast (код 0 + файл + grep).
 
     polish_in — вход полировки вместо дефолтного redacted.txt
@@ -399,7 +406,9 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                                   temperature, reasoning_effort,
                                   stream_timeout, max_retries,
                                   threads,
-                                  prompt_file=(prompts or {}).get(stage) or "")
+                                  prompt_file=(prompts or {}).get(stage) or "",
+                                  ner_min_count=ner_min_count,
+                                  names_min_count=names_min_count)
             proc_env = dict(os.environ)
             if api_key:
                 proc_env["LLM_API_KEY"] = api_key
@@ -526,6 +535,12 @@ def main() -> None:
     ap.add_argument("--prompt_file", default="",
                     help="Общий промпт-файл с тегами <translate>/<redact>/<polish> "
                          "(пусто = авто: кандидат с тегами из prompts/)")
+    ap.add_argument("--ner_min_count", type=int, default=0,
+                    help="Минимальный count термина для {ner_block} "
+                         "(0 — выключено).")
+    ap.add_argument("--names_min_count", type=int, default=10,
+                    help="Минимальный count термина для {female_names}/"
+                         "{male_names} (0 — выключено).")
     args = ap.parse_args()
 
     log = logging.getLogger("web.pipeline")
@@ -669,7 +684,9 @@ def main() -> None:
                         args.temperature, args.reasoning_effort,
                         args.stream_timeout, args.max_retries,
                         args.threads, prompts,
-                        polish_in=action_spec.get("polish_input")): cid
+                        polish_in=action_spec.get("polish_input"),
+                        ner_min_count=args.ner_min_count,
+                        names_min_count=args.names_min_count): cid
             for cid, dirs in to_process.items()
         }
         for fut in as_completed(futures):

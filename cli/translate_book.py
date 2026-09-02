@@ -185,12 +185,14 @@ def process_item(internal_id, original_text, draft_text, ctx):
         ctx["ner_ngram"], ctx["ner_fields"],
         automaton=ctx["automaton"],
         include_aliases=ctx["include_aliases"],
+        min_count=ctx.get("ner_min_count", 0),
     )
     # Имена по полу (по translation; основное назначение — polish).
     # В redact вход — оригинал на исходном языке, списки будут пустыми.
     female, male = collect_gender_names(
         original_text, ctx["ner_data"],
-        ctx["ner_threshold"], ctx["ner_ngram"])
+        ctx["ner_threshold"], ctx["ner_ngram"],
+        min_count=ctx.get("names_min_count", 0))
     female_block = "\n".join(female) if female else "(нет)"
     male_block = "\n".join(male) if male else "(нет)"
     if ctx["mode"] == "redact":
@@ -307,6 +309,13 @@ def build_parser():
     p.add_argument("--ner_fields", type=str, default="term,translation,type",
                    help="Поля ner.json через запятую; aliases добавляются "
                         "автоматически (отключить: --no-aliases).")
+    p.add_argument("--ner_min_count", type=int, default=0,
+                   help="Минимальный count термина для {ner_block}: термины "
+                        "с count ниже отфильтровываются (0 — выключено).")
+    p.add_argument("--names_min_count", type=int, default=10,
+                   help="Минимальный count термина для {female_names}/"
+                        "{male_names}: имена с count ниже отфильтровываются "
+                        "(0 — выключено).")
     p.add_argument("--no-aliases", action="store_true",
                    help="Не добавлять aliases в NER-блок.")
     # Промпт
@@ -409,6 +418,8 @@ def main(argv=None):
         logger.error("❌ CRITICAL: NER data is empty! Check ner.json path and format.")
     else:
         logger.info(f"✅ NER Data loaded successfully. Terms count: {len(ner_data)}")
+    logger.info(f"📋 Пороги count: ner_block={args.ner_min_count}, "
+                f"имена={args.names_min_count}")
 
     # ── Промпт ──
     custom = load_prompt(args.prompt_file, logger) if args.prompt_file else None
@@ -484,6 +495,8 @@ def main(argv=None):
         mode=mode, ner_data=ner_data, automaton=automaton,
         ner_threshold=args.ner_threshold, ner_ngram=args.ner_ngram,
         ner_fields=args.ner_fields, include_aliases=not args.no_aliases,
+        ner_min_count=args.ner_min_count,
+        names_min_count=args.names_min_count,
         prompt=active_prompt, base_url=base_url, model=model_name,
         api_key=api_key,
         max_retries=(args.max_retries if args.max_retries is not None

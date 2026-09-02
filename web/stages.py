@@ -253,6 +253,11 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
         argv += ["--jobs", str(form["jobs"])]
     if form.get("threads") not in (None, ""):
         argv += ["--threads", str(form["threads"])]
+    # пороги count: ner_block и имена (пусто/0 = фильтр выключен)
+    for flag, name in (("--ner_min_count", "ner_min_count"),
+                       ("--names_min_count", "names_min_count")):
+        if form.get(name) not in (None, ""):
+            argv += [flag, str(form[name])]
     if form.get("timeout") not in (None, ""):
         argv += ["--timeout", str(form["timeout"])]
     if form.get("max_retries") not in (None, ""):
@@ -695,10 +700,23 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
             {"name": "jobs", "label": "Параллельных потоков (1–16)",
-             "type": "number", "default": "4"},
-            {"name": "threads", "label": "Потоков на главу (чанки), 1–16",
-             "type": "number", "default": "1",
-             "help": "при параллельных главах (jobs>1) держите 1 — иначе упрётесь в лимит запросов"},
+             "type": "number", "default": "4", "min": 1, "max": 16,
+             "help": "главы обрабатываются параллельно; допустимо 1–16"},
+            {"name": "threads", "label": "Потоков на главу, чанки (1–16)",
+             "type": "number", "default": "1", "min": 1, "max": 16,
+             "help": "чанки одной главы; допустимо 1–16; при параллельных "
+                      "главах (jobs>1) держите 1 — иначе упрётесь в лимит "
+                      "запросов"},
+            {"name": "ner_min_count", "label": "Мин. count для глоссария "
+             "({ner_block})",
+             "type": "number", "default": "0",
+             "help": "термины с count ниже порога НЕ попадают в {ner_block}; "
+                      "0 — фильтр выключен (все найденные)"},
+            {"name": "names_min_count", "label": "Мин. count для имён "
+             "({female_names}/{male_names})",
+             "type": "number", "default": "10",
+             "help": "имена с count ниже порога НЕ попадают в справочник "
+                      "полов; 0 — фильтр выключен"},
             {"name": "timeout", "label": "Таймаут LLM-запроса, сек",
              "type": "number", "default": "300"},
             {"name": "max_retries", "label": "Повторы",
@@ -753,7 +771,7 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "ner_prompt.txt"},
             {"name": "threads", "label": "Потоков (1–16)",
-             "type": "number", "default": "4"},
+             "type": "number", "default": "4", "min": 1, "max": 16},
             {"name": "chunk_size", "label": "Размер чанка, СИМВОЛЫ",
              "type": "number", "default": "7000"},
             {"name": "threshold", "label": "Порог дедупликации (0–1)",
@@ -878,7 +896,7 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "300"},
             {"name": "retry_empty", "label": "Доп. повторы при пустом ответе",
              "type": "number", "default": "0"},
-            {"name": "threads", "label": "Параллельные пакеты", "type": "number", "default": "4"},
+            {"name": "threads", "label": "Параллельные пакеты (1–16)", "type": "number", "default": "4", "min": 1, "max": 16},
             {"name": "max_fixes_per_chapter", "label": "Лимит правок на главу (0 = нет)",
              "type": "number", "default": "0"},
             {"name": "min_fix_length", "label": "Мин. длина правки, СИМВОЛЫ",
@@ -974,7 +992,7 @@ STAGE_SPECS: dict[str, dict] = {
              "default": ""},
             {"name": "retries", "label": "Повторы", "type": "number", "default": "3"},
             {"name": "timeout", "label": "Таймаут запроса, сек", "type": "number", "default": "300"},
-            {"name": "threads", "label": "Потоков", "type": "number", "default": "4"},
+            {"name": "threads", "label": "Потоков (1–16)", "type": "number", "default": "4", "min": 1, "max": 16},
         ],
         "preset": {
             "title": "Создать вики",

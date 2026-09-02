@@ -493,9 +493,12 @@ def _fuzzy_hit(term_norm, term_ngrams, text_norm, text_ngrams, threshold):
 
 
 def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
-                      automaton=None, include_aliases=True):
+                      automaton=None, include_aliases=True,
+                      min_count=0):
     """Поиск релевантных терминов: Aho-Corasick/regex → n-граммы (не-CJK).
-    Возвращает (JSON-строка, count). ner_fields — 'f1,f2,...'."""
+    Возвращает (JSON-строка, count). ner_fields — 'f1,f2,...'.
+    min_count — порог поля count (частота термина): термины с count <
+    min_count отфильтровываются (0 — фильтр выключен)."""
     if not ner_data or not text:
         return "[]", 0
     text_norm = normalize_for_search(text)
@@ -539,6 +542,8 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
         if item["term"] in seen:
             continue
         seen.add(item["term"])
+        if min_count and (item.get("count") or 0) < min_count:
+            continue
         entry = {f: item[f] for f in fields if f in item}
         if (include_aliases and not wants_aliases
                 and item.get("aliases") and "aliases" not in entry):
@@ -559,13 +564,15 @@ def _gender_of_type(type_str) -> str:
     return ""
 
 
-def collect_gender_names(text, ner_data, threshold=0.75, ngram_size=3):
+def collect_gender_names(text, ner_data, threshold=0.75, ngram_size=3,
+                         min_count=0):
     """Поиск в тексте имён из ner.json ПО ПОЛЮ translation (русское
     написание; term не используется). Пол — по наличию '(female)'/'(male)'
     в поле type (Person/Creature/составные типы; '(unknown)' — без пола).
     Возвращает (female, male) — списки translation найденных записей:
     дедупликация по нормализованному написанию, сортировка
-    count desc → алфавит. Пустой вход → ([], [])."""
+    count desc → алфавит. min_count — порог поля count (0 — выключен).
+    Пустой вход → ([], [])."""
     if not text or not ner_data:
         return [], []
     text_norm = normalize_for_search(text)
@@ -590,6 +597,8 @@ def collect_gender_names(text, ner_data, threshold=0.75, ngram_size=3):
         if ngrams is None:
             ngrams = get_ngrams(t_norm, n=ngram_size) if len(t_norm) >= 3 else set()
         if not _fuzzy_hit(t_norm, ngrams, text_norm, text_ngrams, threshold):
+            continue
+        if min_count and (item.get("count") or 0) < min_count:
             continue
         seen.add(t_norm)
         buckets[gender].append(item)

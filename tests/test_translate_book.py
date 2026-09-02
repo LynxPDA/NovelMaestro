@@ -264,10 +264,11 @@ def test_main_polish_gender_placeholders(tmp_path, monkeypatch):
         "Ляо Тинъянь увидела Су Синюя. Байху рычал.", encoding="utf-8")
     (tmp_path / "ner.json").write_text(json.dumps([
         {"term": "廖停雁", "translation": "Ляо Тинъянь",
-         "type": "Person (female)", "count": 5},
+         "type": "Person (female)", "count": 12},
         {"term": "苏星宇", "translation": "Су Синюй",
          "type": "Person (male)", "count": 10},
-        {"term": "白虎", "translation": "Байху", "type": "Creature"},
+        {"term": "白虎", "translation": "Байху", "type": "Creature",
+         "count": 99},
     ], ensure_ascii=False), encoding="utf-8")
     (tmp_path / "prompt.txt").write_text(
         "<polish>\nЖ:\n{female_names}\nМ:\n{male_names}\n</polish>",
@@ -293,6 +294,45 @@ def test_main_polish_gender_placeholders(tmp_path, monkeypatch):
     assert "Байху" not in prompt_part                 # без пола — не имя
     # term (китайский) не попадает
     assert "廖停雁" not in prompt_part and "苏星宇" not in prompt_part
+
+
+def test_main_polish_min_count_filters_names(tmp_path, monkeypatch):
+    """--names_min_count: имена с count ниже порога не попадают
+    в {female_names}/{male_names} (по умолчанию 10)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "redacted.txt").write_text(
+        "Ляо Тинъянь увидела Су Синюя.", encoding="utf-8")
+    (tmp_path / "ner.json").write_text(json.dumps([
+        {"term": "廖停雁", "translation": "Ляо Тинъянь",
+         "type": "Person (female)", "count": 5},
+        {"term": "苏星宇", "translation": "Су Синюй",
+         "type": "Person (male)", "count": 10},
+    ], ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "prompt.txt").write_text(
+        "<polish>\nЖ:\n{female_names}\nМ:\n{male_names}\n</polish>",
+        encoding="utf-8")
+    captured = {}
+
+    def fake_stream(base_url, model, messages, **kw):
+        captured["content"] = messages[0]["content"]
+        return ("ОТПОЛИРОВАНО", "")
+
+    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    TB.main(["redacted.txt", "--mode", "polish", "--host", "http://h",
+             "--prompt_file", "prompt.txt", "--threads", "1"])
+    content = captured["content"]
+    prompt_part = content.split("\n\n")[0]
+    assert "Ж:\n(нет)\nМ:\nСу Синюй" in prompt_part  # 5 < 10 — отсечена
+    assert "Ляо Тинъянь" not in prompt_part
+    # порог 0 — все имена попадают
+    captured.clear()
+    TB.main(["redacted.txt", "--mode", "polish", "--host", "http://h",
+             "--prompt_file", "prompt.txt", "--threads", "1",
+             "--names_min_count", "0"])
+    content2 = captured["content"]
+    prompt_part2 = content2.split("\n\n")[0]
+    assert "Ж:\nЛяо Тинъянь\nМ:\nСу Синюй" in prompt_part2
 
 
 def test_main_translate_original_text_placeholder(tmp_path, monkeypatch):

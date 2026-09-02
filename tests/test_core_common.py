@@ -738,6 +738,29 @@ def test_load_and_find_ner(tmp_path):
     assert cnt == 0 and s == "[]"
 
 
+def test_find_relevant_ner_min_count(tmp_path):
+    """min_count: термины с count ниже порога не попадают в блок."""
+    ner = [
+        {"term": "陈阳", "translation": "Чэнь Ян", "type": "Person (male)",
+         "count": 3},
+        {"term": "白虎", "translation": "Байху", "type": "Creature",
+         "count": 50},
+    ]
+    p = tmp_path / "ner.json"
+    p.write_text(json.dumps(ner, ensure_ascii=False), encoding="utf-8")
+    data, automaton = C.load_ner_data(str(p), 3, SilentLog())
+    # порог 10: 陈阳 (3) отсекается, 白虎 (50) остаётся
+    s, cnt = C.find_relevant_ner("陈阳 и 白虎", data, 0.7, 3,
+                                 "term,translation,type",
+                                 automaton=automaton, min_count=10)
+    assert cnt == 1 and "白虎" in s and "陈阳" not in s
+    # порог 0 (по умолчанию) — оба попадают
+    s2, cnt2 = C.find_relevant_ner("陈阳 и 白虎", data, 0.7, 3,
+                                   "term,translation,type",
+                                   automaton=automaton)
+    assert cnt2 == 2 and "陈阳" in s2
+
+
 def test_load_ner_data_missing_and_broken(tmp_path):
     log = SilentLog()
     data, automaton = C.load_ner_data(str(tmp_path / "нет.json"), 3, log)
