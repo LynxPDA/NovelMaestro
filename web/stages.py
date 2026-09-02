@@ -333,6 +333,8 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--types", str(form["types"])]
     if form.get("batch_size") not in (None, ""):
         argv += ["--batch_size", str(form["batch_size"])]
+    if form.get("threads") not in (None, ""):
+        argv += ["--threads", str(form["threads"])]
     if form.get("count_threshold") not in (None, ""):
         argv += ["-c", str(form["count_threshold"])]
     if form.get("fields"):
@@ -830,6 +832,10 @@ STAGE_SPECS: dict[str, dict] = {
                       "отдельно"}, 
             {"name": "batch_size", "label": "Бюджет пакета, СИМВОЛЫ",
              "type": "number", "default": "196608"},
+            {"name": "threads", "label": "Потоков (1–16)",
+             "type": "number", "default": "1", "min": 1, "max": 16,
+             "help": "батчи и типы выполняются параллельно (вместо "
+                      "последовательного прохода типов)"},
             {"name": "count_threshold", "label": "Порог count (> X)",
              "type": "number", "default": "0"},
             # types/fields — скрытые: значения пишет виджет чипсов

@@ -8,7 +8,9 @@ ner_check.py — LLM-проверка глоссария ner.json и приме�
           --types) список одной посылкой; батчи только если глоссарий
           больше бюджета --batch_size, записи по count по убыванию;
   types — выбранные типы ПО ОЧЕРЕДИ: каждый type отдельно
-          (консистентность внутри типа).
+          (консистентность внутри типа); батчи и типы идут
+          ПАРАЛЛЕЛЬНО в рамках --threads (общий прогрессбар по
+          всем батчам).
 
 Рекомендуемый двухэтапный режим (человеческие контрольные точки):
   1) --passes whole          → правки в ner_review.json, человек правит
@@ -45,6 +47,7 @@ import json
 import os
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 try:
@@ -172,6 +175,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE,
                    help="Бюджет батча, СИМВОЛЫ (по умолчанию: 196608 "
                         "≈ 65536 токенов).")
+    p.add_argument("--threads", type=int, default=1,
+                   help="Параллельных потоков (1..16): батчи и типы "
+                        "выполняются одновременно (по умолчанию: 1).")
     p.add_argument("-c", "--count-threshold", type=int, default=0,
                    help="Порог count: записи с count > X (по умолчанию: 0).")
     p.add_argument("--fields", default="term,type,translation",
@@ -293,46 +299,46 @@ def render_prompt(prompt_tpl: str, body: str) -> str:
     return prompt_tpl.rstrip() + "\n\n## ГЛОССАРИЙ\n\n" + body
 
 
-def run_pass(title, items, prompt_tpl, args, base_url, api_key, model,
-             logger):
-    """Один проход (весь список или один тип). Возвращает список патчей
-    или None при ошибке LLM/парсинга всех батчей."""
+def run_pass_tasks(title, items, prompt_tpl, args, logger):
+    """Собирает задачи (title, batch) прохода: резка по бюджету.
+    Возвращает список (title, batch) в порядке следования батчей."""
     fields = [f.strip() for f in args.fields.split(",") if f.strip()]
     batches = build_ner_batches(items, args.batch_size, fields)
     logger.info(f"── {title}: {len(items)} записей, батчей: {len(batches)}")
-    # стартовое событие прогресса — бар виден сразу
-    emit_progress(0, len(batches), "Проверка глоссария")
-    if web_progress_enabled():
-        logger.info(f"📊 Прогресс: 0/{len(batches)}")
-    patches, ok_any = [], False
-    for bi, batch in enumerate(batches, 1):
-        body = glossary_body(batch, fields)
-        user_msg = render_prompt(prompt_tpl, body)
-        logger.info(f"  батч {bi}/{len(batches)}: {len(batch)} записей, "
-                    f"{len(user_msg)} символов запроса")
-        text, err = stream_chat_completion(
-            base_url, model,
-            [{"role": "user", "content": user_msg}],
-            api_key=api_key,
-            max_retries=args.max_retries,
-            timeout=args.timeout, stream_timeout=args.timeout,
-            temperature=args.temperature,
-            reasoning_effort=args.reasoning_effort,
-            max_tokens=args.max_tokens,
-            reference_len=0, logger=logger,
-            label=f"ner_check {title} {bi}/{len(batches)}")
-        if err:
-            logger.error(f"  ❌ LLM: {err}")
-            continue
-        found = parse_ner_patches(text, logger)
-        if found is None:
-            logger.error("  ❌ Ответ не распарсился (см. лог выше).")
-            continue
-        ok_any = True
-        logger.info(f"  ✔ Предложено правок: {len(found)}")
-        patches.extend(found)
-        emit_progress(bi, len(batches), "Проверка глоссария")
-    return patches if ok_any else None
+    return [(title, batch) for batch in batches]
+
+
+def run_batch(task, prompt_tpl, args, base_url, api_key, model, logger):
+    """Один батч проверки (запускается в потоке). Возвращает
+    (title, patches|None) — None при ошибке LLM/парсинга."""
+    title, batch = task
+    fields = [f.strip() for f in args.fields.split(",") if f.strip()]
+    body = glossary_body(batch, fields)
+    tpl = (prompt_tpl if title == "Весь глоссарий"
+           else TYPES_STAGE_PREFIX + prompt_tpl)
+    user_msg = render_prompt(tpl, body)
+    logger.info(f"  батч: {len(batch)} записей, "
+                f"{len(user_msg)} символов запроса")
+    text, err = stream_chat_completion(
+        base_url, model,
+        [{"role": "user", "content": user_msg}],
+        api_key=api_key,
+        max_retries=args.max_retries,
+        timeout=args.timeout, stream_timeout=args.timeout,
+        temperature=args.temperature,
+        reasoning_effort=args.reasoning_effort,
+        max_tokens=args.max_tokens,
+        reference_len=0, logger=logger,
+        label=f"ner_check {title}")
+    if err:
+        logger.error(f"  ❌ LLM: {err}")
+        return title, None
+    found = parse_ner_patches(text, logger)
+    if found is None:
+        logger.error("  ❌ Ответ не распарсился (см. лог выше).")
+        return title, None
+    logger.info(f"  ✔ Предложено правок: {len(found)}")
+    return title, found
 
 
 def patches_table(patches, offset=0) -> str:
@@ -410,22 +416,16 @@ def do_check(args, logger) -> int:
                     f"пропущено {skipped}"
                     + (" (без бэкапа)" if args.no_bak else "") + ".")
 
-    def run_stage(title, subset):
-        tpl = (prompt_tpl if title == "Весь глоссарий"
-               else TYPES_STAGE_PREFIX + prompt_tpl)
-        patches = run_pass(title, subset, tpl, args,
-                           base_url, api_key, model, logger)
-        if patches is None:
-            if args.auto_apply:
-                sys.exit(f"❌ Авто-режим: этап «{title}» не завершился "
-                         f"(LLM/парсинг) — останов.")
-            return
-        collect(title, patches)
-        if args.auto_apply:
-            auto_apply()
+    # ── сбор задач (батчей): whole — один проход, types — по типам
+    stage_tasks = []  # [(title, batch)]
+
+    def run_stage_tasks(title, subset):
+        nonlocal stage_tasks
+        stage_tasks.extend(
+            run_pass_tasks(title, subset, prompt_tpl, args, logger))
 
     if args.passes == "whole":
-        run_stage("Весь глоссарий", items)
+        run_stage_tasks("Весь глоссарий", items)
     if args.passes == "types":
         if not items:
             logger.info("ℹ Нет записей для типовых проходов.")
@@ -435,7 +435,77 @@ def do_check(args, logger) -> int:
             wanted = type_filter or all_types
             for t in [t for t in all_types if t in wanted]:
                 subset = [i for i in items if i.get("type") == t]
-                run_stage(f"Тип: {t}", subset)
+                run_stage_tasks(f"Тип: {t}", subset)
+
+    if not stage_tasks:
+        logger.info("ℹ Нет батчей — проверять нечего.")
+        save_review()
+        return 0
+
+    # ── параллельное выполнение: threads потоков на ВСЕ батчи
+    #    (типы и чанки идут одновременно, не последовательно)
+    try:
+        workers = max(1, min(16, int(args.threads)))
+    except (TypeError, ValueError):
+        workers = 1
+    logger.info(f"🔀 Потоков: {workers} (батчей всего: {len(stage_tasks)})")
+    total = len(stage_tasks)
+    emit_progress(0, total, "Проверка глоссария")
+    if web_progress_enabled():
+        logger.info(f"📊 Прогресс: 0/{total}")
+    results = {}  # title -> list[patches]
+    failures = {}  # title -> число упавших батчей
+    done = 0
+
+    def _run_batch(task):
+        return run_batch(task, prompt_tpl, args,
+                         base_url, api_key, model, logger)
+
+    if workers <= 1:
+        for task in stage_tasks:
+            title, found = _run_batch(task)
+            done += 1
+            emit_progress(done, total, "Проверка глоссария")
+            if found is None:
+                failures[title] = failures.get(title, 0) + 1
+            else:
+                results.setdefault(title, []).extend(found)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(_run_batch, t): t for t in stage_tasks}
+            for fut in as_completed(futs):
+                title, found = fut.result()
+                done += 1
+                emit_progress(done, total, "Проверка глоссария")
+                if found is None:
+                    failures[title] = failures.get(title, 0) + 1
+                else:
+                    results.setdefault(title, []).extend(found)
+    if web_progress_enabled():
+        logger.info(f"📊 Прогресс: {done}/{total}")
+
+    # ── сборка в порядке проходов (детерминированный порядок записи) ──
+    seen_titles = []
+    for title, _ in stage_tasks:
+        if title not in seen_titles:
+            seen_titles.append(title)
+    for title in seen_titles:
+        patches = results.get(title)
+        failed = failures.get(title, 0)
+        n_batches = sum(1 for t, _ in stage_tasks if t == title)
+        if patches is None and failed >= n_batches:
+            logger.error(f"❌ Этап «{title}» не завершился "
+                         f"(LLM/парсинг): {failed}/{n_batches} батчей.")
+            if args.auto_apply:
+                sys.exit(f"❌ Авто-режим: этап «{title}» не завершился "
+                         f"(LLM/парсинг) — останов.")
+            continue
+        if failed:
+            logger.warning(f"⚠ Этап «{title}»: {failed}/{n_batches} "
+                           f"батчей не завершились — пропущены.")
+        collect(title, patches or [])
+        if args.auto_apply:
+            auto_apply()
 
     save_review()
     logger.info(f"🧩 Правки: {args.review} "

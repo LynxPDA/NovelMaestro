@@ -490,3 +490,45 @@ def test_ner_check_unparsed_does_not_crash(tmp_path, monkeypatch):
                   "--host", "http://x", "--model", "m"])
     assert rc == 0
     assert not (tmp_path / "ner_report.md").exists()
+
+
+def test_ner_check_threads_parallel_types(tmp_path, monkeypatch):
+    """--threads > 1: типы идут параллельно, все батчи обработаны,
+    правки собраны по проходам (детерминированный порядок)."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    calls = []
+    resp = ('[{"term": "林凡", "field": "translation", '
+            '"old": "Линь Фан", "new": "Лин Фань", "reason": "p"}]')
+    _mock_stream(monkeypatch, resp, calls)
+    rc = NC.main(["--input", "ner.json", "--passes", "types",
+                  "--threads", "2", "--host", "http://x",
+                  "--model", "m"])
+    assert rc == 0
+    # три типа → три батча (по одному на тип) — все запрошены
+    assert len(calls) == 3
+    doc = json.loads((tmp_path / "ner_review.json")
+                     .read_text(encoding="utf-8"))
+    stages = [e["stage"] for e in doc["entries"]]
+    # правки дедуплицируются (одинаковый ответ) — но этап записан
+    assert stages and stages == sorted(stages)
+    assert stages[0].startswith("Тип: ")
+
+
+def test_ner_check_threads_overall_progress(tmp_path, monkeypatch):
+    """Общий прогресс по ВСЕМ батчам (не текущий чанк):
+    emit_progress доходит до total = число батчей всех типов."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    calls = []
+    _mock_stream(monkeypatch, "[]", calls)
+    events = []
+    monkeypatch.setattr(NC, "emit_progress",
+                        lambda done, total, label="":
+                        events.append((done, total)))
+    rc = NC.main(["--input", "ner.json", "--passes", "types",
+                  "--threads", "2", "--host", "http://x",
+                  "--model", "m"])
+    assert rc == 0
+    assert events and events[-1] == (3, 3)  # 3 типа = 3 батча, общий итог
+    assert events[0] == (0, 3)  # старт — сразу общий total
