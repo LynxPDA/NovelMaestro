@@ -19,10 +19,10 @@ ner_check.py — LLM-проверка глоссария ner.json и приме�
 «статус» и флаг «применено»; повторный прогон не затирает решения
 человека (дедупликация по term+field+old+new).
 
-Артефакты: ner_review.json (накопительный файл правок; отчёт
-ner_report.md удалён — не нужен). --apply применяет правки ИЗ ФАЙЛА
-(без LLM): бэкап ner.json.bak, лог ner_changes.md со ВСЕМИ
-применёнными правками и их этапами; --dry-run — без записи.
+Артефакты: ner_review.json (накопительный файл правок; отчёты
+ner_report.md и ner_changes.md удалены — не нужны). --apply
+применяет правки ИЗ ФАЙЛА (без LLM): бэкап ner.json.bak;
+--dry-run — без записи.
 Legacy-формат (простой массив патчей, старый ner_patches.json)
 понимается автоматически.
 
@@ -341,33 +341,6 @@ def patches_table(patches, offset=0) -> str:
     return "\n".join(lines)
 
 
-def review_table(entries) -> str:
-    """Таблица применённых правок (для ner_changes.md): с этапом и датой."""
-    lines = ["| # | Этап | Термин | Поле | Было | Стало | Причина | Когда |",
-             "|---|------|--------|------|------|-------|---------|-------|"]
-    for i, p in enumerate(entries, 1):
-        old = p["old"].replace("|", "\\|")
-        new = p["new"].replace("|", "\\|")
-        reason = p["reason"].replace("|", "\\|")
-        lines.append(f"| {i} | {p.get('stage', '')} | {p['term']} "
-                     f"| {p['field']} | {old} | {new} | {reason} "
-                     f"| {p.get('applied_at', '')} |")
-    return "\n".join(lines)
-
-
-def write_changes_md(entries, args, logger):
-    """Лог применённых правок: все этапы накопительного файла."""
-    applied = [e for e in entries if e.get("applied")]
-    changes = [f"# NER-check: применённые правки",
-               f"",
-               f"- Дата: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-               f"- Вход: {args.input}, правки: {args.review}",
-               f"- Применено всего (все этапы): {len(applied)}",
-               "", review_table(applied), ""]
-    atomic_write("ner_changes.md", "\n".join(changes))
-    logger.info("📄 Лог применённых правок: ner_changes.md")
-
-
 def do_check(args, logger) -> int:
     base_url, api_key, model, _ = resolve_server(args, logger)
     data = load_ner_json(args.input, logger)
@@ -426,7 +399,6 @@ def do_check(args, logger) -> int:
                 logger.info(f"💾 Бэкап: {args.input}.bak")
             atomic_write(args.input,
                          json.dumps(data, ensure_ascii=False, indent=2))
-            write_changes_md(entries, args, logger)
         save_review()
         logger.info(f"Авто-применение: применено {len(applied)}, "
                     f"пропущено {skipped}"
@@ -508,7 +480,6 @@ def do_apply(args, logger) -> int:
                      (meta or {}).get("created")
                      or datetime.now().strftime("%Y-%m-%d %H:%M"),
                      entries, meta=meta)
-    write_changes_md(entries, args, logger)
     logger.info(f"✅ ner.json обновлён ({len(applied)} правок"
                 + (" без бэкапа" if args.no_bak else "") + "); "
                 f"флаги «применено» сохранены в {args.review}")

@@ -110,6 +110,7 @@ def test_review_entry():
     # legacy-патч → запись со статусом по умолчанию
     e = review_entry({"term": "A", "field": "translation", "old": "а",
                       "new": "б", "reason": "r"}, stage="Весь глоссарий")
+    assert e is not None
     assert e["stage"] == "Весь глоссарий" and e["status"] == "принять"
     assert e["applied"] is False and e["reason"] == "r"
     # некорректные записи отсеиваются
@@ -333,9 +334,8 @@ def test_ner_check_apply_dry_run_and_real(tmp_path, monkeypatch):
     assert data[0]["translation"] == "Лин Фань"
     assert data[2]["translation"] == "Огненный шар"   # отклонённое цело
     assert (tmp_path / "ner.json.bak").exists()
-    changes = (tmp_path / "ner_changes.md").read_text(encoding="utf-8")
-    assert "Лин Фань" in changes and "Весь глоссарий" in changes
-    assert "Применено всего (все этапы): 1" in changes
+    # отчёт ner_changes.md удалён (не нужен) — файл не создаётся
+    assert not (tmp_path / "ner_changes.md").exists()
     # флаги «применено» сохранены в файл правок
     doc2 = json.loads((tmp_path / "ner_review.json")
                       .read_text(encoding="utf-8"))
@@ -391,8 +391,7 @@ def test_ner_check_apply_legacy_patches_array(tmp_path, monkeypatch):
     assert rc == 0
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
-    assert "Лин Фань" in (tmp_path / "ner_changes.md") \
-        .read_text(encoding="utf-8")
+    assert not (tmp_path / "ner_changes.md").exists()
 
 
 def test_ner_check_auto_apply_whole(tmp_path, monkeypatch):
@@ -411,8 +410,7 @@ def test_ner_check_auto_apply_whole(tmp_path, monkeypatch):
     doc = json.loads((tmp_path / "ner_review.json")
                      .read_text(encoding="utf-8"))
     assert doc["entries"][0]["applied"] is True
-    changes = (tmp_path / "ner_changes.md").read_text(encoding="utf-8")
-    assert "Лин Фань" in changes and "Весь глоссарий" in changes
+    assert not (tmp_path / "ner_changes.md").exists()
 
 
 def test_ner_check_auto_apply_whole_only(tmp_path, monkeypatch):
