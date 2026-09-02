@@ -1518,6 +1518,16 @@ input[type="number"] {
   padding: 4px 0;
   cursor: pointer;
 }
+/* строка «поле оператор значение» в модалке удаления по фильтру */
+.ner-del-filter {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 6px 0;
+}
+.ner-del-filter .input {
+  min-width: 90px;
+}
 .exp-rows {
   display: flex;
   flex-direction: column;

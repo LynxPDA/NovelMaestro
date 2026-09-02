@@ -1949,6 +1949,16 @@ function viewProject(section, name, tab) {
             it[c] = raw;
           }
         }
+        if (it.__new) {
+          const t = String(it.term || "").trim();
+          const tr = String(it.translation || "").trim();
+          if (!t || !tr) {
+            toast("Термин и перевод не могут быть пустыми", "err");
+            return;
+          }
+          it.term = t;
+          it.translation = tr;
+        }
         delete it.__new;
         editing = null;
         renderRows();
@@ -2073,6 +2083,255 @@ function viewProject(section, name, tab) {
       });
     });
 
+    /* «+ Столбец»: добавить новое поле всем терминам глоссария */
+    const addColBtn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost", title: "Добавить столбец ко всем терминам" },
+      "+ Столбец",
+    );
+    addColBtn.addEventListener("click", () => {
+      const inp = h("input", {
+        class: "input",
+        placeholder: "имя столбца (ключ JSON)",
+      });
+      const err2 = h("div", { class: "form-error" });
+      const modal = h(
+        "div",
+        { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
+        h(
+          "div",
+          { class: "modal" },
+          h("div", { class: "modal-title" }, "Новый столбец"),
+          inp,
+          err2,
+          h(
+            "div",
+            { class: "modal-actions" },
+            h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
+            h(
+              "button",
+              {
+                class: "btn btn-primary",
+                onclick: () => {
+                  const name = inp.value.trim();
+                  if (!name) {
+                    err2.textContent = "Введите имя столбца";
+                    return;
+                  }
+                  if (knownKeys.has(name)) {
+                    err2.textContent = "Такой столбец уже есть";
+                    return;
+                  }
+                  knownKeys.add(name);
+                  data.items.forEach((it) => {
+                    if (it[name] === undefined) it[name] = "";
+                  });
+                  if (cols != null) cols.push(name);
+                  saveCols();
+                  refreshColBtn();
+                  renderRows();
+                  saveNer();
+                  close();
+                },
+              },
+              "Добавить",
+            ),
+          ),
+        ),
+      );
+      function close() {
+        modal.remove();
+      }
+      document.body.append(modal);
+      inp.focus();
+    });
+    /* «✕ Столбец»: удалить поле из всех терминов (кроме term) */
+    const delColBtn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost", title: "Удалить столбец из всех терминов" },
+      "✕ Столбец",
+    );
+    delColBtn.addEventListener("click", () => {
+      const keys = [...knownKeys].filter((k) => k !== "term");
+      if (!keys.length) {
+        toast("Нет столбцов для удаления", "err");
+        return;
+      }
+      const sel = h(
+        "select",
+        { class: "input" },
+        ...keys.map((k) => h("option", { value: k }, k)),
+      );
+      const err2 = h("div", { class: "form-error" });
+      const modal = h(
+        "div",
+        { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
+        h(
+          "div",
+          { class: "modal" },
+          h("div", { class: "modal-title" }, "Удалить столбец"),
+          h(
+            "div",
+            { class: "modal-text" },
+            "Поле удаляется из всех терминов глоссария:",
+          ),
+          sel,
+          err2,
+          h(
+            "div",
+            { class: "modal-actions" },
+            h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
+            h(
+              "button",
+              {
+                class: "btn btn-danger",
+                onclick: () => {
+                  const name = sel.value;
+                  if (!name) {
+                    err2.textContent = "Выберите столбец";
+                    return;
+                  }
+                  knownKeys.delete(name);
+                  data.items.forEach((it) => delete it[name]);
+                  if (cols != null) {
+                    cols = cols.filter((c) => c !== name);
+                    if (!cols.length) cols = [...DEFAULT_COLS];
+                  }
+                  saveCols();
+                  refreshColBtn();
+                  renderRows();
+                  saveNer();
+                  close();
+                },
+              },
+              "Удалить",
+            ),
+          ),
+        ),
+      );
+      function close() {
+        modal.remove();
+      }
+      document.body.append(modal);
+    });
+    /* «✕ По фильтру»: удалить термины по условию (count > N) или все найденные */
+    const delFilterBtn = h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost",
+        title: "Удалить термины по условию или все найденные",
+      },
+      "✕ По фильтру",
+    );
+    delFilterBtn.addEventListener("click", () => {
+      const fieldSel = h(
+        "select",
+        { class: "input" },
+        ...[...knownKeys].map((k) => h("option", { value: k }, k)),
+      );
+      fieldSel.value = "count";
+      const opSel = h(
+        "select",
+        { class: "input" },
+        h("option", { value: ">" }, ">"),
+        h("option", { value: "<" }, "<"),
+        h("option", { value: "=" }, "="),
+        h("option", { value: "≠" }, "≠"),
+      );
+      const valInp = h("input", { class: "input", placeholder: "значение (число)" });
+      const scopeCb = h("input", { type: "checkbox" });
+      const allCb = h("input", { type: "checkbox" });
+      const countEl = h("div", { class: "field-help" }, "");
+      const err2 = h("div", { class: "form-error" });
+      function victims() {
+        const scope = scopeCb.checked ? visible() : data.items;
+        if (allCb.checked) return scope; // все найденные/отфильтрованные
+        const raw = valInp.value.trim();
+        if (!raw) return [];
+        const num = Number(raw);
+        return scope.filter((it) => {
+          const v = it[fieldSel.value];
+          if (
+            Number.isFinite(num) &&
+            v != null &&
+            v !== "" &&
+            Number.isFinite(Number(v))
+          ) {
+            const n = Number(v);
+            if (opSel.value === ">") return n > num;
+            if (opSel.value === "<") return n < num;
+            if (opSel.value === "=") return n === num;
+            return n !== num;
+          }
+          const s = String(v == null ? "" : v);
+          if (opSel.value === ">") return s > raw;
+          if (opSel.value === "<") return s < raw;
+          if (opSel.value === "=") return s === raw;
+          return s !== raw;
+        });
+      }
+      function refreshCount() {
+        countEl.textContent = `Будет удалено: ${victims().length}`;
+      }
+      [fieldSel, opSel, valInp, scopeCb, allCb].forEach((el) =>
+        el.addEventListener("input", refreshCount),
+      );
+      refreshCount();
+      const modal = h(
+        "div",
+        { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
+        h(
+          "div",
+          { class: "modal" },
+          h("div", { class: "modal-title" }, "Удалить термины по фильтру"),
+          h(
+            "div",
+            { class: "modal-text" },
+            "Условие: значение поля сравнивается с числом (или строкой):",
+          ),
+          h("div", { class: "ner-del-filter" }, fieldSel, opSel, valInp),
+          h(
+            "label",
+            { class: "chk" },
+            scopeCb,
+            " только среди найденных (поиск/тип)",
+          ),
+          h("label", { class: "chk" }, allCb, " удалить ВСЕ найденные (без условия)"),
+          countEl,
+          err2,
+          h(
+            "div",
+            { class: "modal-actions" },
+            h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
+            h(
+              "button",
+              {
+                class: "btn btn-danger",
+                onclick: () => {
+                  const vics = victims();
+                  if (!vics.length) {
+                    err2.textContent = "Нет записей под условием";
+                    return;
+                  }
+                  const set = new Set(vics);
+                  data.items = data.items.filter((it) => !set.has(it));
+                  saveNer();
+                  renderRows();
+                  close();
+                  toast(`Удалено терминов: ${vics.length}`);
+                },
+              },
+              "Удалить",
+            ),
+          ),
+        ),
+      );
+      function close() {
+        modal.remove();
+      }
+      document.body.append(modal);
+    });
+
     const addBtn = h(
       "button",
       {
@@ -2080,10 +2339,9 @@ function viewProject(section, name, tab) {
         title: "Добавить термин в глоссарий",
         onclick: () => {
           const it = { term: "", type: "noun", translation: "", __new: true };
-          data.items.push(it);
+          data.items.unshift(it); // новый термин — сверху
           editing = it;
-          const vis = visible(); // M6: новая запись — на последнюю страницу
-          page = Math.max(0, Math.ceil(vis.length / PAGE_SIZE) - 1);
+          page = 0;
           renderRows();
         },
       },
@@ -2108,6 +2366,9 @@ function viewProject(section, name, tab) {
       h("span", { class: "spacer" }),
       typeBtn,
       colBtn,
+      addColBtn,
+      delColBtn,
+      delFilterBtn,
       addBtn,
       exportBtn,
     );
