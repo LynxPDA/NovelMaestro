@@ -15,6 +15,7 @@ import threading
 import time
 import re
 import sys
+from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
@@ -329,10 +330,6 @@ def _capitalize_first(s: str) -> str:
         return s
     return s[0].upper() + s[1:]
 
-def _get_type_name_ru(base_type: str) -> str:
-    return TYPE_NAMES_RU.get(base_type, base_type)
-
-
 def _shift_headings(md: str) -> str:
     """Сдвигает все Markdown-заголовки на один уровень глубже (## → ###)."""
     return re.sub(r'^(#{1,5})\s', r'#\1 ', md, flags=re.MULTILINE)
@@ -427,15 +424,20 @@ def extract_context(
     top_k: int,
     near_distance: int,
     logger,
+    markers: dict | None = None,
+    default_markers: list | None = None,
 ) -> list[str]:
     """
-    Извлечь релевантные фрагменты по русскому переводу.
-    Все чанки извлекаются в порядке текста, выборка равномерная.
+    Извлечь релевантные фрагменты по переводу термина.
+    Маркеры описания — из промпта (тег <wiki_markers>) или встроенные;
+    все чанки — в порядке текста, выборка равномерная.
     """
     if not translation:
         return []
 
-    markers = DESCRIPTION_MARKERS.get(base_type, DEFAULT_MARKERS)
+    markers_cfg = markers or DESCRIPTION_MARKERS
+    def_markers = default_markers or DEFAULT_MARKERS
+    active_markers = markers_cfg.get(base_type, def_markers) or []
     candidates: list[str] = []
     seen: set[str] = set()
     ev = _fts_escape(translation)
@@ -452,7 +454,7 @@ def extract_context(
         _add([first])
 
     # 2. Появления с маркерами описания (все совпадения, равномерная выборка)
-    for marker in markers:
+    for marker in active_markers:
         em = _fts_escape(marker)
         if em.endswith("*"):
             q = f'NEAR("{ev}" "{em[:-1]}"*, {near_distance})'
@@ -631,7 +633,30 @@ def llm_request(
 # ЗАГРУЗКА ПРОМПТОВ
 # ══════════════════════════════════════════════════════════════════════
 
-def load_wiki_prompts(filepath: str, logger) -> dict[str, str]:
+def _load_json_tag(content: str, tag: str, logger, default):
+    """Достаёт JSON-значение из тега <tag>...</tag>; битый JSON —
+    предупреждение и default (настройка не критична)."""
+    m = re.search(rf"<{tag}>(.*?)</{tag}>", content, re.DOTALL)
+    if not m:
+        return default
+    try:
+        return json.loads(m.group(1).strip())
+    except json.JSONDecodeError as e:
+        _log(logger, logging.WARNING,
+             f"⚠️ Тег <{tag}>: битый JSON ({e}) — встроенные значения.")
+        return default
+
+
+def load_wiki_prompts(filepath: str, logger) -> dict[str, object]:
+    """Читает wiki-промпт-файл. Возвращает dict с ключами:
+    article — тег <prompt_wiki_article> (или файл целиком без тегов);
+    markers — <wiki_markers> {тип: [маркеры]} (JSON);
+    default_markers — <wiki_default_markers> [маркеры] (JSON);
+    type_names_ru — <wiki_type_names_ru> {тип: название} (JSON);
+    relations_labels — <wiki_relations_labels> {тип: заголовок} (JSON);
+    skip_relations — <wiki_skip_relations> [типы] (JSON);
+    type_order — <wiki_type_order> [типы] (JSON).
+    Отсутствующие теги — None: код использует встроенные значения."""
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
@@ -639,7 +664,7 @@ def load_wiki_prompts(filepath: str, logger) -> dict[str, str]:
         _log(logger, logging.ERROR, f"⚠️ Не удалось прочитать {filepath}: {e}")
         return {}
 
-    result: dict[str, str] = {}
+    result: dict[str, object] = {}
     m = re.search(
         r"<prompt_wiki_article>(.*?)</prompt_wiki_article>",
         content, re.DOTALL,
@@ -650,6 +675,19 @@ def load_wiki_prompts(filepath: str, logger) -> dict[str, str]:
     if not result:
         result["article"] = content.strip()
 
+    result["markers"] = _load_json_tag(content, "wiki_markers",
+                                        logger, None)
+    result["default_markers"] = _load_json_tag(content,
+                                                "wiki_default_markers",
+                                                logger, None)
+    result["type_names_ru"] = _load_json_tag(content, "wiki_type_names_ru",
+                                              logger, None)
+    result["relations_labels"] = _load_json_tag(
+        content, "wiki_relations_labels", logger, None)
+    result["skip_relations"] = _load_json_tag(content, "wiki_skip_relations",
+                                               logger, None)
+    result["type_order"] = _load_json_tag(content, "wiki_type_order",
+                                           logger, None)
     return result
 
 
@@ -679,17 +717,23 @@ def generate_article(
     system_prompt: str,
     llm_args: dict,
     logger,
+    type_names_ru: dict | None = None,
+    relations_labels: dict | None = None,
+    skip_relations: set | None = None,
 ) -> str | None:
     translation = _get_translation(item)
+    type_names_ru = type_names_ru or TYPE_NAMES_RU
+    relations_labels = relations_labels or SECTION_RELATIONS_LABEL
+    skip_relations = skip_relations or SKIP_RELATIONS_TYPES
 
     user_parts = ["=== ДАННЫЕ ТЕРМИНА ==="]
     user_parts.append(_format_term_for_prompt(item))
 
-    if co_occur and base_type not in SKIP_RELATIONS_TYPES:
-        rel_label = SECTION_RELATIONS_LABEL.get(base_type, "Взаимосвязи")
+    if co_occur and base_type not in skip_relations:
+        rel_label = relations_labels.get(base_type, "Взаимосвязи")
         user_parts.append(f"\n=== {rel_label.upper()} (совместные появления) ===")
         for name, related_type, cnt in co_occur:
-            type_ru = TYPE_NAMES_RU.get(related_type, related_type)
+            type_ru = type_names_ru.get(related_type, related_type)
             user_parts.append(
                 f"  - {name} ({type_ru}): {cnt} совместных фрагментов"
             )
@@ -701,11 +745,11 @@ def generate_article(
 
     user_content = "\n".join(user_parts)
 
-    rel_label = SECTION_RELATIONS_LABEL.get(base_type, "Примечания")
+    rel_label = relations_labels.get(base_type, "Примечания")
     sys_prompt = system_prompt.replace("{translation}", _capitalize_first(translation))
     sys_prompt = sys_prompt.replace("{relations_label}", rel_label)
 
-    if base_type in SKIP_RELATIONS_TYPES:
+    if base_type in skip_relations:
         sys_prompt = sys_prompt.replace(
             f"- ### {rel_label} — в контексте данного типа.\n", ""
         )
@@ -892,6 +936,12 @@ def run_wiki_generation(
     toc_links: bool = True,
     rulate_html: bool = False,
     as_chapter: bool = False,
+    markers: dict | None = None,
+    default_markers: list | None = None,
+    type_names_ru: dict | None = None,
+    relations_labels: dict | None = None,
+    skip_relations: set | None = None,
+    type_order: list | None = None,
 ) -> None:
 
     # ── Статистика отбора ──
@@ -975,6 +1025,7 @@ def run_wiki_generation(
             trans, base_type,
             item.get("count", 0), db, context_chunks,
             near_distance, logger,
+            markers=markers, default_markers=default_markers,
         )
         fragments_map[trans] = frags
         emit_progress(i + 1, len(filtered), "Извлечение контекста")
@@ -1013,6 +1064,9 @@ def run_wiki_generation(
         result = generate_article(
             item, frags, co, base_type,
             system_prompt, llm_args, logger,
+            type_names_ru=type_names_ru,
+            relations_labels=relations_labels,
+            skip_relations=skip_relations,
         )
         if result:
             with cache_lock:
@@ -1069,10 +1123,13 @@ def run_wiki_generation(
         _log(logger, logging.INFO, "📝 Сборка wiki.md...")
     sections_by_type: list[tuple[str, list[tuple[str, str]]]] = []
 
-    for base_type in TYPE_ORDER:
+    type_order = type_order or TYPE_ORDER
+    t_names = type_names_ru or TYPE_NAMES_RU
+    for base_type in type_order:
+        base_type = str(base_type)
         if base_type not in results:
             continue
-        type_name_ru = _get_type_name_ru(base_type)
+        type_name_ru = t_names.get(base_type, base_type)
         terms = results[base_type]
         if terms:
             # Сортировка по count убывающе (самые частые первыми)
@@ -1081,12 +1138,13 @@ def run_wiki_generation(
                 (type_name_ru, [(t, c) for t, c, _ in terms])
             )
 
-    # Типы, не вошедшие в TYPE_ORDER
-    known = set(TYPE_ORDER)
+    # Типы, не вошедшие в type_order
+    known = set(type_order)
     for base_type in results:
         if base_type in known:
             continue
-        type_name_ru = _get_type_name_ru(base_type)
+        base_type = str(base_type)
+        type_name_ru = t_names.get(base_type, base_type)
         terms = results[base_type]
         if terms:
             terms.sort(key=lambda x: -x[2])
@@ -1457,8 +1515,16 @@ def main():
         _log(logger, logging.ERROR, "❌ Модель не определена.")
         return
 
-    # ── Промпт ──
+    # ── Промпт и настройки из тегов ──
     system_prompt = SYSTEM_WIKI_ARTICLE
+    # русско-заточенные настройки (маркеры описания, названия типов,
+    # заголовки секций, порядок) — из тегов <wiki_*> промпт-файла,
+    # иначе встроенные значения
+    wiki_cfg: dict[str, Any] = {
+        "markers": None, "default_markers": None,
+        "type_names_ru": None, "relations_labels": None,
+        "skip_relations": None, "type_order": None,
+    }
     if args.prompt_file:
         if not os.path.exists(args.prompt_file):
             # R5-I: внешний промпт не найден — минимальный fallback
@@ -1467,8 +1533,12 @@ def main():
                  f"— встроенный промпт.")
         else:
             loaded = load_wiki_prompts(args.prompt_file, logger)
-            if "article" in loaded:
-                system_prompt = loaded["article"]
+            article = loaded.get("article")
+            if isinstance(article, str):
+                system_prompt = article
+            for key in wiki_cfg:
+                if loaded.get(key) is not None:
+                    wiki_cfg[key] = loaded[key]
 
     # ── Чтение текста: готовый txt ИЛИ сборка глав в память ──
     if args.compile_chapters:
@@ -1608,6 +1678,12 @@ def main():
         toc_links=args.toc_links,
         rulate_html=rulate_html,
         as_chapter=args.as_chapter,
+        markers=wiki_cfg["markers"],
+        default_markers=wiki_cfg["default_markers"],
+        type_names_ru=wiki_cfg["type_names_ru"],
+        relations_labels=wiki_cfg["relations_labels"],
+        skip_relations=wiki_cfg["skip_relations"],
+        type_order=wiki_cfg["type_order"],
         logger=logger,
     )
 

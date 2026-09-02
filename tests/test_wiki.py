@@ -157,6 +157,32 @@ def test_stats_helpers():
     assert WIKI.TYPE_NAMES_RU["Person"]
 
 
+def test_load_wiki_prompts_tags(tmp_path):
+    """Теги <wiki_*> разбираются в JSON; отсутствующие — None;
+    битый JSON — предупреждение и None (встроенные значения)."""
+    p = tmp_path / "wiki_prompt.txt"
+    p.write_text(
+        "<prompt_wiki_article>СТАТЬЯ</prompt_wiki_article>\n"
+        '<wiki_markers>{"Person": ["выглядел*"]}</wiki_markers>\n'
+        '<wiki_type_names_ru>{"Person": "Герои"}</wiki_type_names_ru>\n'
+        '<wiki_skip_relations>["Stage"]</wiki_skip_relations>\n',
+        encoding="utf-8")
+    d = WIKI.load_wiki_prompts(str(p), SilentLog())
+    assert d["article"] == "СТАТЬЯ"
+    assert d["markers"] == {"Person": ["выглядел*"]}
+    assert d["type_names_ru"] == {"Person": "Герои"}
+    assert d["skip_relations"] == ["Stage"]
+    assert d["default_markers"] is None
+    assert d["relations_labels"] is None
+    assert d["type_order"] is None
+
+    # битый JSON в теге — None без падения
+    p.write_text("<wiki_markers>{битый}</wiki_markers>", encoding="utf-8")
+    d = WIKI.load_wiki_prompts(str(p), SilentLog())
+    assert d["markers"] is None
+    assert d["article"] == "<wiki_markers>{битый}</wiki_markers>"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # run_wiki_generation целиком
 # ══════════════════════════════════════════════════════════════════════
