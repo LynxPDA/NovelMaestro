@@ -1595,12 +1595,17 @@ function viewProject(section, name, tab) {
     }
 
     function visible() {
-      const filtered = UICore.filterNerItems(
+      let filtered = UICore.filterNerItems(
         data.items,
         search.value,
         searchFields,
         typeFilter,
       );
+      const disputed = disputeVictims();
+      if (disputed.length) {
+        const set = new Set(disputed);
+        filtered = filtered.filter((it) => set.has(it));
+      }
       return UICore.sortNerItems(filtered, sortField, sortDir);
     }
     function saveCols() {
@@ -2014,6 +2019,110 @@ function viewProject(section, name, tab) {
       });
     });
 
+    /* «Спорные»: настройки (поле голосов + коэффициент) открываются
+       модалкой; фильтр — дополнительный поверх поиска и типов. */
+    const disputeBtn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost", title: "Спорные записи по голосам" },
+      "Спорные",
+    );
+    function refreshDisputeBtn() {
+      if (dispute) {
+        disputeBtn.classList.add("btn-active");
+        const field = dispute.field.replace(/^_votes_/, "");
+        disputeBtn.textContent = `Спорные (${field} ${dispute.ratio})`;
+      } else {
+        disputeBtn.classList.remove("btn-active");
+        disputeBtn.textContent = "Спорные";
+      }
+    }
+    refreshDisputeBtn();
+    disputeBtn.addEventListener("click", () => {
+      const keys = voteKeys.length ? voteKeys : [...knownKeys];
+      const sel = h(
+        "select",
+        { class: "input" },
+        ...keys.map((k) =>
+          h("option", { value: k }, k.replace(/^_votes_/, "") + "  (" + k + ")"),
+        ),
+      );
+      sel.value = dispute ? dispute.field : (voteKeys[0] || "");
+      const ratioInp = h("input", {
+        class: "input",
+        type: "number",
+        min: "1",
+        step: "0.01",
+        value: dispute ? String(dispute.ratio) : "1.16",
+      });
+      const help = h(
+        "div",
+        { class: "field-help" },
+        "Отношение самого большого голоса ко второму по величине; ",
+        "спорно, если разрыв МЕНЬШЕ коэффициента (напр. 173/149 = 1.16). ",
+        "Фильтр — поверх текущего поиска и типов.",
+      );
+      const err2 = h("div", { class: "form-error" });
+      const modal = h(
+        "div",
+        { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
+        h(
+          "div",
+          { class: "modal" },
+          h("div", { class: "modal-title" }, "Спорные записи"),
+          h("div", { class: "modal-text" }, "Поле голосования:"),
+          sel,
+          h("div", { class: "modal-text" }, "Коэффициент (max/2-й):"),
+          ratioInp,
+          help,
+          err2,
+          h(
+            "div",
+            { class: "modal-actions" },
+            h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
+            h(
+              "button",
+              {
+                class: "btn btn-primary",
+                onclick: () => {
+                  const ratio = Number(ratioInp.value);
+                  if (!Number.isFinite(ratio) || ratio <= 0) {
+                    err2.textContent = "Коэффициент — число больше 0";
+                    return;
+                  }
+                  dispute = { field: sel.value || voteKeys[0], ratio };
+                  saveDispute();
+                  refreshDisputeBtn();
+                  page = 0;
+                  renderRows();
+                  close();
+                },
+              },
+              "Применить",
+            ),
+            h(
+              "button",
+              {
+                class: "btn btn-ghost",
+                onclick: () => {
+                  dispute = null;
+                  saveDispute();
+                  refreshDisputeBtn();
+                  page = 0;
+                  renderRows();
+                  close();
+                },
+              },
+              "Выключить",
+            ),
+          ),
+        ),
+      );
+      function close() {
+        modal.remove();
+      }
+      document.body.append(modal);
+    });
+
     /* поля поиска: как «+ Столбец», по умолчанию все ключи записи */
     const searchFieldsBtn = h(
       "button",
@@ -2339,21 +2448,44 @@ function viewProject(section, name, tab) {
       document.body.append(modal);
     });
 
-    const addBtn = h(
-      "button",
-      {
-        class: "btn btn-sm",
-        title: "Добавить термин в глоссарий",
-        onclick: () => {
-          const it = { term: "", type: "noun", translation: "", __new: true };
-          data.items.unshift(it); // новый термин — сверху
-          editing = it;
-          page = 0;
-          renderRows();
-        },
-      },
-      "+ Термин",
-    );
+    const addTerm = () => {
+      const it = { term: "", type: "noun", translation: "", __new: true };
+      data.items.unshift(it); // новый термин — сверху
+      editing = it;
+      page = 0;
+      renderRows();
+    };
+    // групповая кнопка: открывает меню действий, закрывает по клику вне
+    function menuButton(icon, title, items) {
+      const box = h("div", { class: "menu-box", hidden: true });
+      for (const it of items) {
+        box.append(
+          h(
+            "button",
+            {
+              class: "btn btn-sm btn-ghost menu-item",
+              onclick: () => {
+                box.hidden = true;
+                it.action();
+              },
+            },
+            it.label,
+          ),
+        );
+      }
+      const btn = h(
+        "button",
+        { class: "btn btn-sm", title, onclick: () => {
+          box.hidden = !box.hidden;
+        } },
+        icon,
+      );
+      const wrap = h("div", { class: "toolbar-menu" }, btn, box);
+      document.addEventListener("click", (e) => {
+        if (!wrap.contains(e.target)) box.hidden = true;
+      });
+      return wrap;
+    }
     /* Экспорт для анализа: настройки в модалке, файл скачивается */
     const exportBtn = h(
       "button",
@@ -2373,10 +2505,17 @@ function viewProject(section, name, tab) {
       h("span", { class: "spacer" }),
       typeBtn,
       colBtn,
-      addColBtn,
-      delColBtn,
-      delFilterBtn,
-      addBtn,
+      disputeBtn,
+      // «+»: новый столбец или новый термин (меню вместо двух кнопок)
+      menuButton("+", "Добавить столбец или термин", [
+        { label: "+ Столбец", action: () => addColBtn.click() },
+        { label: "+ Термин", action: addTerm },
+      ]),
+      // «x»: удалить столбец или термины по фильтру
+      menuButton("x", "Удалить столбец или термины по фильтру", [
+        { label: "x Столбец", action: () => delColBtn.click() },
+        { label: "x По фильтру", action: () => delFilterBtn.click() },
+      ]),
       exportBtn,
     );
     search.addEventListener("input", () => {
