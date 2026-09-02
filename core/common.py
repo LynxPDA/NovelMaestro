@@ -441,6 +441,9 @@ def load_ner_data(filepath, ngram_size, logger):
         term = item.get("term", "")
         if not term:
             continue
+        # count — частота: строки из JSON нормализуем к int (иначе
+        # сортировки -count и пороги падают с TypeError)
+        item["count"] = _int_count(item.get("count"))
         variants = [term] + item.get("aliases", [])
         term_norm = normalize_for_search(term)
         item["_term_norm"] = term_norm
@@ -542,7 +545,7 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
         if item["term"] in seen:
             continue
         seen.add(item["term"])
-        if min_count and (item.get("count") or 0) < min_count:
+        if min_count and _int_count(item.get("count")) < min_count:
             continue
         entry = {f: item[f] for f in fields if f in item}
         if (include_aliases and not wants_aliases
@@ -598,13 +601,13 @@ def collect_gender_names(text, ner_data, threshold=0.75, ngram_size=3,
             ngrams = get_ngrams(t_norm, n=ngram_size) if len(t_norm) >= 3 else set()
         if not _fuzzy_hit(t_norm, ngrams, text_norm, text_ngrams, threshold):
             continue
-        if min_count and (item.get("count") or 0) < min_count:
+        if min_count and _int_count(item.get("count")) < min_count:
             continue
         seen.add(t_norm)
         buckets[gender].append(item)
 
     def _key(it):
-        return (-(it.get("count") or 0),
+        return (-_int_count(it.get("count")),
                 (it.get("translation") or "").strip().lower())
 
     return tuple([(it.get("translation") or "").strip()
@@ -623,6 +626,16 @@ REVIEW_REJECT = "отклонить"
 REVIEW_STATUSES = (REVIEW_ACCEPT, REVIEW_REJECT)
 
 
+def _int_count(value) -> int:
+    """Нормализация поля count (частота термина) к int: числа — как
+    есть, строки — int(float(...)), мусор/пусто — 0. Сырые строки в
+    JSON (LLM/руки) ломали сортировки унарным минусом и пороги."""
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return 0
+
+
 def filter_ner_items(items, count_threshold=0, types=None):
     """Фильтр записей ner.json: порог count и список типов.
     types — список типов или None (все)."""
@@ -631,7 +644,7 @@ def filter_ner_items(items, count_threshold=0, types=None):
     for item in items:
         if types and item.get("type", "") not in types:
             continue
-        if (item.get("count", 0) or 0) <= count_threshold:
+        if _int_count(item.get("count")) <= count_threshold:
             continue
         out.append(item)
     return out
@@ -1072,8 +1085,11 @@ def stream_chat_completion(
 # ФАЙЛОВАЯ ФС
 # ══════════════════════════════════════════════════════════════════════
 def atomic_write(filepath, content) -> None:
-    """Запись через tmp + os.replace (не оставляет битых файлов)."""
-    d = os.path.dirname(filepath) or "."
+    """Запись через tmp + os.replace (не оставляет битых файлов).
+    Симлинк-цель разрешается realpath: os.replace заменил бы сам
+    симлинк, а в docker /app/.env → env.d/.env (хостовый конфиг)."""
+    real = os.path.realpath(filepath)
+    d = os.path.dirname(real) or "."
     try:
         os.makedirs(d, exist_ok=True)
     except OSError as exc:
@@ -1084,7 +1100,7 @@ def atomic_write(filepath, content) -> None:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, filepath)
+        os.replace(tmp, real)
     except BaseException:
         try:
             os.unlink(tmp)

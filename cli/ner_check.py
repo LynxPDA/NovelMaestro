@@ -70,6 +70,7 @@ _bootstrap_core()
 from core.common import (  # noqa: E402
     REVIEW_ACCEPT,
     REVIEW_REJECT,
+    _int_count,
     apply_ner_patches,
     atomic_write,
     build_ner_batches,
@@ -218,6 +219,11 @@ def load_ner_json(path: str, logger):
         sys.exit(f"❌ Ошибка чтения JSON {path}: {e}")
     if not isinstance(data, list):
         sys.exit(f"❌ {path}: ожидается список записей.")
+    # count — частота: строки из JSON нормализуем к int (иначе пороги
+    # и сортировки падают с TypeError)
+    for it in data:
+        if isinstance(it, dict) and "count" in it:
+            it["count"] = _int_count(it["count"])
     logger.info(f"📖 {path}: {len(data)} записей.")
     return data
 

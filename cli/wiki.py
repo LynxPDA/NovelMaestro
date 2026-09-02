@@ -34,6 +34,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core.common import (  # noqa: E402
+    _int_count,
     build_chapter_map,
     compile_chapter_text,
     determine_model,
@@ -1514,6 +1515,11 @@ def main():
     if not isinstance(ner_data, list):
         _log(logger, logging.ERROR, "❌ ner.json должен быть массивом.")
         return
+    # count — частота: строки из JSON нормализуем к int (иначе
+    # сортировки -count падают с TypeError)
+    for it in ner_data:
+        if isinstance(it, dict) and "count" in it:
+            it["count"] = _int_count(it["count"])
     _log(logger, logging.INFO, f"   Записей: {len(ner_data)}")
 
     # ── Фильтр типов (белый список) ──

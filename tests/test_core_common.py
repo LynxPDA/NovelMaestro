@@ -408,6 +408,21 @@ def test_atomic_write(tmp_path):
     assert not list(target.parent.glob("*.tmp"))
 
 
+def test_atomic_write_through_symlink(tmp_path):
+    """Симлинк-цель: запись идёт в реальный файл, симлинк сохраняется
+    (docker: /app/.env → env.d/.env)."""
+    real = tmp_path / "env.d" / ".env"
+    real.parent.mkdir()
+    real.write_text("HOST=old\n", encoding="utf-8")
+    link = tmp_path / ".env"
+    link.symlink_to(real)
+    C.atomic_write(str(link), "HOST=new\n")
+    # симлинк не заменён файлом; цель обновлена
+    assert link.is_symlink()
+    assert real.read_text(encoding="utf-8") == "HOST=new\n"
+    assert not list(real.parent.glob("*.tmp"))
+
+
 def test_atomic_write_failure(tmp_path, monkeypatch):
     target = tmp_path / "файл.txt"
 
@@ -736,6 +751,35 @@ def test_load_and_find_ner(tmp_path):
     s, cnt = C.find_relevant_ner("ничего нет", data, 0.7, 3,
                                  "term,translation,type", automaton=automaton)
     assert cnt == 0 and s == "[]"
+
+
+def test_collect_gender_names_string_count(tmp_path):
+    """count-строки в ner.json не ломают сортировку имён (регрессия
+    артефакта [FAIL: bad operand type for unary -: 'str'])."""
+    ner = [
+        {"term": "陈阳", "translation": "Чэнь Ян",
+         "type": "Person (male)", "count": "5"},   # строка!
+        {"term": "白虎", "translation": "Байху",
+         "type": "Creature", "count": 50},
+        {"term": "苏星宇", "translation": "Су Синюй",
+         "type": "Person (male)", "count": "abc"},  # мусор → 0
+    ]
+    p = tmp_path / "ner.json"
+    p.write_text(json.dumps(ner, ensure_ascii=False), encoding="utf-8")
+    data, automaton = C.load_ner_data(str(p), 3, SilentLog())
+    # load_ner_data нормализует count к int
+    by_term = {d["term"]: d["count"] for d in data}
+    assert by_term["陈阳"] == 5 and by_term["白虎"] == 50
+    assert by_term["苏星宇"] == 0
+    # сортировка по -count не падает (был TypeError со строкой)
+    female, male = C.collect_gender_names(
+        "Чэнь Ян и Су Синюй", data, 0.7, 3)
+    assert "Чэнь Ян" in male and "Су Синюй" in male
+    # find_relevant_ner с порогом тоже терпит строки
+    s, cnt = C.find_relevant_ner("白虎", data, 0.7, 3,
+                                 "term,translation,type",
+                                 automaton=automaton, min_count=10)
+    assert cnt == 1 and "白虎" in s
 
 
 def test_find_relevant_ner_min_count(tmp_path):
