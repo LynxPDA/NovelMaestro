@@ -44,7 +44,7 @@ function viewProject(section, name, tab) {
     ["files", "Файлы"],
     ["editor", "Редактор"],
     ["ner", "Глоссарий"],
-    ["review", "Проверка"],
+    ["review", "Проверки"],
     ["chapters", "Главы"],
     ["status", "Статус"],
     ["config", "Конфиг"],
@@ -1541,7 +1541,7 @@ function viewProject(section, name, tab) {
     const pager = h("div", { class: "ner-pager" });
     let editing = null; // редактируемая запись (объект из data.items)
     let page = 0; // M6: текущая страница таблицы
-    const colLabel = (key) => UICore.nerFieldLabel(key);
+    const colLabel = (key) => key; // заголовки — сырые ключи JSON (term, type, …)
     const visibleCols = () => (cols == null ? [...knownKeys] : cols);
     function colsLabel() {
       if (cols == null) return "Все столбцы";
@@ -2447,6 +2447,8 @@ function viewProject(section, name, tab) {
       // ── состояние: распарсенный review-файл + редактор ──
       let parsed = null; // {doc, entries, isArray} | null (нет файла)
       let ed = null;
+      const RV_PAGE = 100; // правок на страницу списка
+      let page = 0; // текущая страница списка правок
       async function load() {
         const d = await api(path + "?" + q);
         status.textContent = d.exists
@@ -2724,6 +2726,13 @@ function viewProject(section, name, tab) {
           );
         } else if (parsed.entries.length) {
           const sum = UICore.reviewSummary(parsed.entries);
+          const total = parsed.entries.length;
+          const pages = Math.max(1, Math.ceil(total / RV_PAGE));
+          if (page >= pages) page = pages - 1;
+          const slice = parsed.entries.slice(
+            page * RV_PAGE,
+            (page + 1) * RV_PAGE,
+          );
           body.append(
             h(
               "div",
@@ -2748,8 +2757,45 @@ function viewProject(section, name, tab) {
             h(
               "div",
               { class: "rv-list" },
-              parsed.entries.map((e, i) => entryRow(e, i)),
+              // индекс записи — глобальный (page * RV_PAGE + i):
+              // кнопки правят запись по позиции в parsed.entries
+              slice.map((e, i) => entryRow(e, page * RV_PAGE + i)),
             ),
+            pages > 1
+              ? h(
+                  "div",
+                  { class: "ner-pager" },
+                  h(
+                    "button",
+                    {
+                      class: "btn btn-sm btn-ghost",
+                      disabled: page <= 0,
+                      onclick: () => {
+                        page--;
+                        renderList();
+                      },
+                    },
+                    "‹",
+                  ),
+                  h(
+                    "span",
+                    { class: "ner-pager-info" },
+                    ` ${page + 1} / ${pages} · всего ${total} `,
+                  ),
+                  h(
+                    "button",
+                    {
+                      class: "btn btn-sm btn-ghost",
+                      disabled: page >= pages - 1,
+                      onclick: () => {
+                        page++;
+                        renderList();
+                      },
+                    },
+                    "›",
+                  ),
+                )
+              : null,
           );
         } else {
           body.append(
