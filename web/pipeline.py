@@ -42,8 +42,8 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 from core.common import (  # noqa: E402
-    build_chapter_map, find_env_file, format_ranges, get_server_config,
-    parse_dotenv,
+    PROGRESS_PREFIX, build_chapter_map, find_env_file, format_ranges,
+    get_server_config, parse_dotenv,
 )
 
 # ═══ Константы (канон run_pipeline.py) ═══
@@ -115,6 +115,17 @@ def emit(ev: dict) -> None:
     print(CHAPTER_PREFIX + json.dumps(ev, ensure_ascii=False), flush=True)
 
 
+def emit_progress(done: int, total: int, label: str = "") -> None:
+    """Общий прогресс конвейера → stdout (JobManager → SSE).
+
+    done/total — завершённые стадии от общего числа (главы × стадии),
+    а не чанки одной главы: полоска в web растёт по главам, детали
+    текущего чанка — в label."""
+    print(PROGRESS_PREFIX + json.dumps(
+        {"type": "progress", "done": done, "total": total,
+         "label": label}, ensure_ascii=False), flush=True)
+
+
 # ═══ Трекер (потокобезопасный, web-вариант) ═══
 class Tracker:
     def __init__(self, chapter_ids: list[int], stages: list[int]) -> None:
@@ -147,6 +158,19 @@ class Tracker:
         return {"full": sorted(full), "partial": sorted(partial),
                 "failed": sorted(failed), "pending": sorted(pending),
                 "not_found": sorted(self._not_found)}
+
+    def overall(self) -> tuple[int, int]:
+        """Общий прогресс: (завершённых стадий, всего стадий).
+
+        done — стадии со статусом OK/SKIP/ERROR; total — главы × стадии.
+        NOT_FOUND не входит (глава без папки — не работа)."""
+        with self._lock:
+            total = len(self._status) * len(self._stages)
+            done = sum(
+                1 for st in self._status.values()
+                for v in st.values() if v in ("OK", "SKIP", "ERROR")
+            )
+            return done, total
 
     def progress_str(self) -> str:
         s = self.snapshot()
@@ -348,6 +372,15 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
     polish_in — вход полировки вместо дефолтного redacted.txt
     (полировка из перевода: действия 4 и 6)."""
     sub_timeout = timeout * 10 + 600
+
+    def _record(status: str) -> None:
+        """Запись статуса стадии + событие главы + общий прогресс."""
+        tracker.record(chapter_id, stage, status)
+        emit({"type": "chapter", "id": chapter_id, "stage": stage,
+              "status": status})
+        done, total = tracker.overall()
+        emit_progress(done, total, f"Глава {chapter_id} · {name}")
+
     for chapter_dir in dirs:
         for stage in stages:
             name = _STAGE_NAME[stage]
@@ -359,9 +392,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
             if not in_file.is_file():
                 log.warning("Глава %03d | [%s] Пропущена (нет исходника: %s)",
                             chapter_id, name, in_name)
-                tracker.record(chapter_id, stage, "SKIP")
-                emit({"type": "chapter", "id": chapter_id, "stage": stage,
-                      "status": "SKIP"})
+                _record("SKIP")
                 return True
             cmd = build_stage_cmd(stage, script, in_file, out_file,
                                   host, api_key, model, timeout,
@@ -384,9 +415,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
             except OSError as exc:
                 log.error("Глава %03d | [%s] Не удалось запустить: %s",
                           chapter_id, name, exc)
-                tracker.record(chapter_id, stage, "ERROR")
-                emit({"type": "chapter", "id": chapter_id, "stage": stage,
-                      "status": "ERROR"})
+                _record("ERROR")
                 return False
             out_lines: list[str] = []
             err_lines: list[str] = []
@@ -395,17 +424,21 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                 if stream is None:
                     return
                 for line in stream:
-                    if line.startswith("@@PROGRESS@@"):
+                    if line.startswith(PROGRESS_PREFIX):
                         try:
                             ev = json.loads(
-                                line[len("@@PROGRESS@@"):].strip())
+                                line[len(PROGRESS_PREFIX):].strip())
                             label = f"Глава {chapter_id} · {name}"
                             if ev.get("label"):
                                 label += f" · {ev['label']}"
-                            print("@@PROGRESS@@" + json.dumps(
+                            # полоска — ОБЩИЙ прогресс конвейера (главы ×
+                            # стадии), а не чанки одной главы; детальный
+                            # label чанка сохраняется в тексте бара
+                            done, total = tracker.overall()
+                            print(PROGRESS_PREFIX + json.dumps(
                                 {"type": "progress",
-                                 "done": ev.get("done", 0),
-                                 "total": ev.get("total", 0),
+                                 "done": done,
+                                 "total": total,
                                  "label": label},
                                 ensure_ascii=False), flush=True)
                         except Exception:
@@ -425,9 +458,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                 terr.join()
                 log.error("Глава %03d | [%s] ТАЙМАУТ subprocess (%d с)",
                           chapter_id, name, sub_timeout)
-                tracker.record(chapter_id, stage, "ERROR")
-                emit({"type": "chapter", "id": chapter_id, "stage": stage,
-                      "status": "ERROR"})
+                _record("ERROR")
                 return False
             tout.join()
             terr.join()
@@ -437,16 +468,12 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                           chapter_id, name, proc.returncode)
                 for line in combined.strip().splitlines()[-10:]:
                     log.error("  │ %s", line)
-                tracker.record(chapter_id, stage, "ERROR")
-                emit({"type": "chapter", "id": chapter_id, "stage": stage,
-                      "status": "ERROR"})
+                _record("ERROR")
                 return False
             if not out_file.is_file() or out_file.stat().st_size == 0:
                 log.error("Глава %03d | [%s] ОШИБКА (файл %s не создан)",
                           chapter_id, name, out_name)
-                tracker.record(chapter_id, stage, "ERROR")
-                emit({"type": "chapter", "id": chapter_id, "stage": stage,
-                      "status": "ERROR"})
+                _record("ERROR")
                 return False
             error_lines = grep_errors(combined)
             if error_lines:
@@ -454,13 +481,9 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                           chapter_id, name)
                 for line in error_lines:
                     log.error("  │ %s", line)
-                tracker.record(chapter_id, stage, "ERROR")
-                emit({"type": "chapter", "id": chapter_id, "stage": stage,
-                      "status": "ERROR"})
+                _record("ERROR")
                 return False
-            tracker.record(chapter_id, stage, "OK")
-            emit({"type": "chapter", "id": chapter_id, "stage": stage,
-                  "status": "OK"})
+            _record("OK")
             log.info("Глава %03d | [%s] OK", chapter_id, name)
     return True
 
