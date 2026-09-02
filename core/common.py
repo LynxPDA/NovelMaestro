@@ -34,6 +34,7 @@ import logging
 import os
 import random
 import re
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -1183,6 +1184,97 @@ def emit_progress(done: int, total: int | None, label: str = "") -> None:
          "done": _int_safe(done),
          "total": None if total is None else _int_safe(total)},
         ensure_ascii=False), flush=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# FTS5: полнотекстовый индекс (RAG-поиск контекста, wiki, ner_check-rag)
+# ══════════════════════════════════════════════════════════════════════
+def fts_escape(s: str) -> str:
+    """Экранирование кавычек для FTS5 MATCH."""
+    return s.replace('"', '""')
+
+
+def build_fts_index(text: str, chunk_size: int, logger=None) -> sqlite3.Connection:
+    """FTS5-индекс текста в памяти: нарезка на чанки по абзацам
+    (fallback — по chunk_size). Возвращает sqlite3.Connection с таблицей
+    chunks(content, chunk_id UNINDEXED)."""
+    paragraphs = re.split(r'\n\s*\n', text)
+    chunks: list[str] = []
+    current = ""
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        if len(current) + len(para) + 2 > chunk_size and current:
+            chunks.append(current)
+            current = para
+        else:
+            current = current + "\n" + para if current else para
+    if current:
+        chunks.append(current)
+
+    if len(chunks) <= 1 and len(text) > chunk_size:
+        chunks = [text[i:i + chunk_size]
+                  for i in range(0, len(text), chunk_size)]
+
+    db = sqlite3.connect(":memory:")
+    db.execute(
+        "CREATE VIRTUAL TABLE chunks USING fts5(content, chunk_id UNINDEXED)")
+    for i, chunk in enumerate(chunks):
+        db.execute("INSERT INTO chunks VALUES (?, ?)", (chunk, str(i)))
+    db.commit()
+    return db
+
+
+def fts_search_all(db: sqlite3.Connection, query: str) -> list[str]:
+    """Все совпавшие чанки в порядке текста (без BM25)."""
+    try:
+        rows = db.execute(
+            "SELECT content FROM chunks WHERE chunks MATCH ? "
+            "ORDER BY CAST(chunk_id AS INTEGER)",
+            (query,),
+        ).fetchall()
+        return [r[0] for r in rows]
+    except sqlite3.OperationalError:
+        return []
+
+
+def fts_search_first(db: sqlite3.Connection, query: str) -> str | None:
+    """Первый чанк по порядку текста."""
+    try:
+        row = db.execute(
+            "SELECT content FROM chunks WHERE chunks MATCH ? "
+            "ORDER BY CAST(chunk_id AS INTEGER) LIMIT 1",
+            (query,),
+        ).fetchone()
+        return row[0] if row else None
+    except sqlite3.OperationalError:
+        return None
+
+
+def fts_search_ids_all(db: sqlite3.Connection, query: str) -> set[str]:
+    """Все chunk_id, где встречается запрос (без BM25, без LIMIT)."""
+    try:
+        rows = db.execute(
+            "SELECT chunk_id FROM chunks WHERE chunks MATCH ?",
+            (query,),
+        ).fetchall()
+        return {r[0] for r in rows}
+    except sqlite3.OperationalError:
+        return set()
+
+
+def even_sample(items: list, n: int) -> list:
+    """Равномерная выборка n элементов: первый и последний всегда,
+    остальные — с равным шагом (для RAG: не только начало книги)."""
+    if len(items) <= n:
+        return list(items)
+    if n <= 0:
+        return []
+    if n == 1:
+        return [items[0]]
+    return [items[round(i * (len(items) - 1) / (n - 1))]
+            for i in range(n)]
 
 
 # ══════════════════════════════════════════════════════════════════════

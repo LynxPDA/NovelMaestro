@@ -37,10 +37,16 @@ _bootstrap_core()
 from core.common import (  # noqa: E402
     _int_count,
     build_chapter_map,
+    build_fts_index,
     compile_chapter_text,
     determine_model,
     emit_progress,
+    even_sample,
     find_env_file,
+    fts_escape,
+    fts_search_all,
+    fts_search_first,
+    fts_search_ids_all,
     get_server_config,
     log_argv as _cc_log_argv,
     parse_dotenv,
@@ -208,97 +214,15 @@ def _log(logger, level: int, msg: str) -> None:
 # FTS5 УТИЛИТЫ
 # ══════════════════════════════════════════════════════════════════════
 
-def _fts_escape(s: str) -> str:
-    return s.replace('"', '""')
-
-
-def _fts_search_all(db: sqlite3.Connection, query: str) -> list[str]:
-    """Все совпавшие чанки в порядке следования по тексту (без BM25)."""
-    try:
-        rows = db.execute(
-            "SELECT content FROM chunks WHERE chunks MATCH ? "
-            "ORDER BY CAST(chunk_id AS INTEGER)",
-            (query,),
-        ).fetchall()
-        return [r[0] for r in rows]
-    except sqlite3.OperationalError:
-        return []
-
-
-def _fts_search_first(db: sqlite3.Connection, query: str) -> str | None:
-    """Первый чанк по порядку текста."""
-    try:
-        row = db.execute(
-            "SELECT content FROM chunks WHERE chunks MATCH ? "
-            "ORDER BY CAST(chunk_id AS INTEGER) LIMIT 1",
-            (query,),
-        ).fetchone()
-        return row[0] if row else None
-    except sqlite3.OperationalError:
-        return None
-
-
-def _fts_search_ids_all(db: sqlite3.Connection, query: str) -> set[str]:
-    """Все chunk_id, где встречается запрос. Без BM25, без LIMIT."""
-    try:
-        rows = db.execute(
-            "SELECT chunk_id FROM chunks WHERE chunks MATCH ?",
-            (query,),
-        ).fetchall()
-        return {r[0] for r in rows}
-    except sqlite3.OperationalError:
-        return set()
-
-
-def _even_sample(items: list, n: int) -> list:
-    """
-    Равномерная выборка n элементов из списка.
-    Первый и последний элементы включаются всегда.
-    """
-    if len(items) <= n:
-        return list(items)
-    if n <= 0:
-        return []
-    if n == 1:
-        return [items[0]]
-    return [items[round(i * (len(items) - 1) / (n - 1))] for i in range(n)]
-
-
-def build_fts_index(text: str, chunk_size: int, logger) -> sqlite3.Connection:
+def build_fts_index_wrapped(text: str, chunk_size: int, logger) -> sqlite3.Connection:
+    """FTS5-индекс с логом (обёртка над core.common.build_fts_index)."""
     _log(logger, logging.INFO, "📇 Построение FTS5 индекса...")
     t0 = time.time()
-
-    paragraphs = re.split(r'\n\s*\n', text)
-    chunks: list[str] = []
-    current = ""
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-        if len(current) + len(para) + 2 > chunk_size and current:
-            chunks.append(current)
-            current = para
-        else:
-            current = current + "\n" + para if current else para
-    if current:
-        chunks.append(current)
-
-    if len(chunks) <= 1 and len(text) > chunk_size:
-        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-        _log(logger, logging.WARNING,
-             f"⚠️ Абзацы не найдены — нарезка по {chunk_size} символов")
-
-    db = sqlite3.connect(":memory:")
-    db.execute(
-        "CREATE VIRTUAL TABLE chunks USING fts5(content, chunk_id UNINDEXED)"
-    )
-    for i, chunk in enumerate(chunks):
-        db.execute("INSERT INTO chunks VALUES (?, ?)", (chunk, str(i)))
-    db.commit()
-
+    db = build_fts_index(text, chunk_size)
     elapsed = time.time() - t0
+    n_chunks = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     _log(logger, logging.INFO,
-         f"✅ FTS5 индекс: {len(chunks)} чанков за {elapsed:.1f}s")
+         f"✅ FTS5 индекс: {n_chunks} чанков за {elapsed:.1f}s")
     return db
 
 
@@ -440,7 +364,7 @@ def extract_context(
     active_markers = markers_cfg.get(base_type, def_markers) or []
     candidates: list[str] = []
     seen: set[str] = set()
-    ev = _fts_escape(translation)
+    ev = fts_escape(translation)
 
     def _add(hits: list[str]) -> None:
         for h in hits:
@@ -449,28 +373,28 @@ def extract_context(
                 seen.add(h)
 
     # 1. Первое появление (по порядку текста)
-    first = _fts_search_first(db, f'"{ev}"')
+    first = fts_search_first(db, f'"{ev}"')
     if first:
         _add([first])
 
     # 2. Появления с маркерами описания (все совпадения, равномерная выборка)
     for marker in active_markers:
-        em = _fts_escape(marker)
+        em = fts_escape(marker)
         if em.endswith("*"):
             q = f'NEAR("{ev}" "{em[:-1]}"*, {near_distance})'
         else:
             q = f'NEAR("{ev}" "{em}", {near_distance})'
 
-        hits = _fts_search_all(db, q)
-        _add(_even_sample(hits, 3))
+        hits = fts_search_all(db, q)
+        _add(even_sample(hits, 3))
         if len(candidates) >= top_k:
             break
 
     # 3. Дополняем равномерной выборкой из всех упоминаний
     if len(candidates) < top_k:
-        all_hits = _fts_search_all(db, f'"{ev}"')
+        all_hits = fts_search_all(db, f'"{ev}"')
         remaining = [h for h in all_hits if h not in seen]
-        _add(_even_sample(remaining, top_k - len(candidates)))
+        _add(even_sample(remaining, top_k - len(candidates)))
 
     return candidates[:top_k]
 
@@ -534,7 +458,7 @@ def compute_co_occurrence(
             trans = _get_translation(item)
             if not trans:
                 continue
-            ids = _fts_search_ids_all(db, f'"{_fts_escape(trans)}"')
+            ids = fts_search_ids_all(db, f'"{fts_escape(trans)}"')
             if ids:
                 chunk_map[btype][trans] = ids
 
@@ -1572,7 +1496,7 @@ def main():
             return
         _log(logger, logging.INFO, f"   Размер: {len(full_text)} символов")
 
-    db = build_fts_index(full_text, args.chunk_size, logger)
+    db = build_fts_index_wrapped(full_text, args.chunk_size, logger)
 
     # ── Чтение NER ──
     _log(logger, logging.INFO, f"📂 Чтение NER: {args.ner_file}")

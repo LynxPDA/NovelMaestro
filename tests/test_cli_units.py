@@ -268,34 +268,34 @@ def test_ner_cleanup_stale_resume_files(tmp_path):
 # cli/wiki.py
 # ══════════════════════════════════════════════════════════════════════
 def test_wiki_fts_escape():
-    assert WIKI._fts_escape('кавычка "тут"') == 'кавычка ""тут""'
+    assert WIKI.fts_escape('кавычка "тут"') == 'кавычка ""тут""'
 
 
 def test_wiki_fts_index_and_search():
     text = ("Линь Шуй вошла в зал и осмотрелась.\n\n"
             "Потом Линь Шуй достала меч.\n\n"
             "Чэнь Ян наблюдал издалека.")
-    db = WIKI.build_fts_index(text, chunk_size=100, logger=SilentLog())
-    hits = WIKI._fts_search_all(db, '"Линь Шуй"')
+    db = WIKI.build_fts_index(text, chunk_size=100)
+    hits = WIKI.fts_search_all(db, '"Линь Шуй"')
     assert len(hits) >= 1 and all("Линь Шуй" in h for h in hits)
-    first = WIKI._fts_search_first(db, '"Линь Шуй"')
+    first = WIKI.fts_search_first(db, '"Линь Шуй"')
     assert first == hits[0]
-    ids = WIKI._fts_search_ids_all(db, '"Чэнь Ян"')
+    ids = WIKI.fts_search_ids_all(db, '"Чэнь Ян"')
     assert len(ids) == 1
     # некорректный FTS-запрос не роняет, а даёт пустой результат
-    assert WIKI._fts_search_all(db, '"незакрытая') == []
-    assert WIKI._fts_search_first(db, '"незакрытая') is None
-    assert WIKI._fts_search_ids_all(db, '"незакрытая') == set()
+    assert WIKI.fts_search_all(db, '"незакрытая') == []
+    assert WIKI.fts_search_first(db, '"незакрытая') is None
+    assert WIKI.fts_search_ids_all(db, '"незакрытая') == set()
     db.close()
 
 
 def test_wiki_even_sample():
     items = list(range(10))
-    s = WIKI._even_sample(items, 4)
+    s = WIKI.even_sample(items, 4)
     assert s[0] == 0 and s[-1] == 9 and len(s) == 4
-    assert WIKI._even_sample(items, 20) == items
-    assert WIKI._even_sample(items, 1) == [0]
-    assert WIKI._even_sample(items, 0) == []
+    assert WIKI.even_sample(items, 20) == items
+    assert WIKI.even_sample(items, 1) == [0]
+    assert WIKI.even_sample(items, 0) == []
 
 
 def test_wiki_shift_headings():
@@ -362,9 +362,14 @@ def test_wiki_load_prompts(tmp_path):
     p = tmp_path / "wiki_prompt.txt"
     p.write_text("<prompt_wiki_article>\nШАБЛОН\n</prompt_wiki_article>",
                  encoding="utf-8")
-    assert WIKI.load_wiki_prompts(str(p), SilentLog()) == {"article": "ШАБЛОН"}
+    cfg = WIKI.load_wiki_prompts(str(p), SilentLog())
+    assert cfg["article"] == "ШАБЛОН"
+    # остальные поля — None без соответствующих тегов
+    for key in ("markers", "default_markers", "type_names_ru",
+                "relations_labels", "skip_relations", "type_order"):
+        assert cfg[key] is None, key
     p.write_text("просто текст", encoding="utf-8")
-    assert WIKI.load_wiki_prompts(str(p), SilentLog()) == {"article": "просто текст"}
+    assert WIKI.load_wiki_prompts(str(p), SilentLog())["article"] == "просто текст"
     assert WIKI.load_wiki_prompts(str(tmp_path / "нет"), SilentLog()) == {}
 
 
