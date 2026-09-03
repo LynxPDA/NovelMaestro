@@ -703,6 +703,33 @@ def test_build_translate_check():
     assert "--exclude-words" not in argv5
 
 
+def test_build_translate_check_custom_settings():
+    """Задача 5: коэффициенты пресетов, отключаемые проверки —
+    проброс в argv."""
+    form = {"preset": "polished",
+            "ratio_neighbor": "1.1", "tol_neighbor": "0.1",
+            "ratio_original": "2.0", "tol_original": "0.6",
+            "no_nonrussian": True, "no_chapter_order": True,
+            "nonrussian_regex": r"[一-鿿]+",
+            "chapter_regex": r"^Глава\s+(\d+)"}
+    argv = build_command("translate_check", form, {})
+    assert "--ratio-neighbor" in argv and "1.1" in argv
+    assert "--tol-neighbor" in argv and "0.1" in argv
+    assert "--ratio-original" in argv and "2.0" in argv
+    assert "--tol-original" in argv and "0.6" in argv
+    assert "--no-nonrussian" in argv
+    assert "--no-chapter-order" in argv
+    assert "--nonrussian-regex" in argv
+    assert argv[argv.index("--nonrussian-regex") + 1] == r"[一-鿿]+"
+    assert "--chapter-regex" in argv
+    # пустые значения — флагов нет
+    argv2 = build_command("translate_check", {"preset": "polished"}, {})
+    for flag in ("--ratio-neighbor", "--tol-neighbor", "--ratio-original",
+                 "--tol-original", "--no-nonrussian", "--no-chapter-order",
+                 "--nonrussian-regex", "--chapter-regex"):
+        assert flag not in argv2
+
+
 
 def test_build_clean_and_compile():
     form = {"mode": "epub", "source_type": "redacted", "chunk_size": 50,

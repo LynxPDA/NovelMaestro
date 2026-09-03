@@ -198,6 +198,18 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--lenient"]
     if form.get("exclude_words"):
         argv += ["--exclude-words", str(form["exclude_words"])]
+    for name, flag in (("ratio_neighbor", "--ratio-neighbor"),
+                       ("tol_neighbor", "--tol-neighbor"),
+                       ("ratio_original", "--ratio-original"),
+                       ("tol_original", "--tol-original"),
+                       ("nonrussian_regex", "--nonrussian-regex"),
+                       ("chapter_regex", "--chapter-regex")):
+        if form.get(name) not in (None, ""):
+            argv += [flag, str(form[name])]
+    if form.get("no_nonrussian"):
+        argv.append("--no-nonrussian")
+    if form.get("no_chapter_order"):
+        argv.append("--no-chapter-order")
     return argv
 
 
@@ -625,6 +637,41 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "text", "default": "",
              "help": "Пусто = TRANSLATE_CHECK_EXCLUDE_WORDS из .env "
                       "или дефолт скрипта (VIP,MVP,【,】,NPC)"},
+            {"name": "ratio_neighbor", "label": "Ratio соседней стадии",
+             "type": "number", "default": "", "step": "0.01",
+             "help": "Ожидаемый ratio (напр. polished/redacted ≈ 1.0); "
+                      "эвристика — подбирается опытным путём; пусто = "
+                      "встроенный дефолт"},
+            {"name": "tol_neighbor", "label": "Допуск соседней стадии",
+             "type": "number", "default": "", "step": "0.01",
+             "help": "Допуск ± для ratio соседней стадии (пусто = дефолт)"},
+            {"name": "ratio_original", "label": "Ratio с оригиналом",
+             "type": "number", "default": "", "step": "0.01",
+             "help": "Ожидаемый ratio перевода к chapter (≈2.1); "
+                      "эвристика — подбирается опытным путём; пусто = "
+                      "встроенный дефолт"},
+            {"name": "tol_original", "label": "Допуск с оригиналом",
+             "type": "number", "default": "", "step": "0.01",
+             "help": "Допуск ± для ratio с оригиналом (пусто = дефолт)"},
+            {"name": "no_nonrussian", "label": "Отключить проверку "
+                     "не-русских символов",
+             "type": "bool", "default": False,
+             "help": "Не проверять китайские иероглифы/латиницу "
+                      "(по умолчанию проверка включена)"},
+            {"name": "nonrussian_regex", "label": "Свой regexp "
+                     "не-русских символов",
+             "type": "text", "default": "",
+             "help": "Напр. [一-鿿]+ — только иероглифы; пусто = "
+                      "иероглифы + латиница"},
+            {"name": "no_chapter_order", "label": "Отключить проверку "
+                     "последовательности глав",
+             "type": "bool", "default": False,
+             "help": "Не проверять «Глава N → N+1» и лишние заголовки "
+                      "(по умолчанию включено)"},
+            {"name": "chapter_regex", "label": "Свой формат «Глава N»",
+             "type": "text", "default": "",
+             "help": "Regexp с группой 1 = номер главы; пусто = "
+                      r"^\s*Глава\s+(\d+|\[Номер\])"},
         ],
         # только экспертный режим (без простого/пресета)
     },

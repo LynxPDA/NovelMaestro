@@ -66,6 +66,65 @@ def test_tc_check_chapter_errors(tmp_path):
     assert "лишн" in joined                        # «Глава 9» после 3-й строки
 
 
+def test_tc_check_chapter_no_nonrussian(tmp_path):
+    """Задача 5: --no-nonrussian отключает проверку иероглифов/латиницы;
+    свой regexp — свои паттерны."""
+    d = _build_valid_chapter(tmp_path, 1)
+    broken = ("Глава 1\n\n"
+              "слово broken и иероглиф 中 тут\n"
+              + "дальше русский текст. " * 90)
+    (d / "polished.txt").write_text(broken, encoding="utf-8")
+    (d / "redacted.txt").write_text(broken, encoding="utf-8")
+    # проверка не-русских ВЫКЛЮЧЕНА
+    errors, _ = TC.check_chapter(1, str(d), "polished",
+                                 [("redacted", 1.0, 0.05)],
+                                 strict=False, prev_inner_chapter=None,
+                                 check_nonrussian=False)
+    joined = "\n".join(errors)
+    assert "broken" not in joined and "中" not in joined
+    # свой regexp — только иероглифы
+    errors, _ = TC.check_chapter(
+        1, str(d), "polished", [("redacted", 1.0, 0.05)],
+        strict=False, prev_inner_chapter=None,
+        check_nonrussian=True, nonrussian_regexes=[re.compile(r"[一-鿿]+")])
+    joined = "\n".join(errors)
+    assert "中" in joined and "broken" not in joined
+
+
+def test_tc_check_chapter_no_order_and_custom_regex(tmp_path):
+    """Задача 5: --no-chapter-order отключает проверку нумерации;
+    свой chapter_regex — свой формат заголовка."""
+    d = _build_valid_chapter(tmp_path, 1)
+    broken = ("Глава 1\n\n"
+              + "дальше русский текст. " * 90 + "\nГлава 9 лишняя\n")
+    (d / "polished.txt").write_text(broken, encoding="utf-8")
+    (d / "redacted.txt").write_text(broken, encoding="utf-8")
+    # последовательность ВЫКЛЮЧЕНА
+    errors, prev = TC.check_chapter(1, str(d), "polished",
+                                    [("redacted", 1.0, 0.05)],
+                                    strict=False, prev_inner_chapter=5,
+                                    check_chapter_order=False)
+    joined = "\n".join(errors)
+    assert "последовательность" not in joined
+    assert "лишн" not in joined
+    assert prev == 1  # номер всё равно обновляется
+    # свой формат: «Раздел N» вместо «Глава N»
+    custom = ("Раздел 3\n\n" + "дальше русский текст. " * 90)
+    (d / "polished.txt").write_text(custom, encoding="utf-8")
+    (d / "redacted.txt").write_text(custom, encoding="utf-8")
+    errors, prev = TC.check_chapter(
+        1, str(d), "polished", [("redacted", 1.0, 0.05)],
+        strict=False, prev_inner_chapter=2,
+        chapter_regex=re.compile(r"^Раздел\s+(\d+)"))
+    joined = "\n".join(errors)
+    assert "последовательность" not in joined and prev == 3
+    # без своего формата — «Раздел 3» не распознаётся → ошибка
+    errors, _ = TC.check_chapter(1, str(d), "polished",
+                                 [("redacted", 1.0, 0.05)],
+                                 strict=False, prev_inner_chapter=None)
+    assert any("Нет «Глава N»" in e for e in errors)
+
+
 def test_tc_check_chapter_missing_and_fatal(tmp_path):
     d = tmp_path / "00000_1_x"
     d.mkdir()
