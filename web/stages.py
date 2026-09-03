@@ -1063,7 +1063,7 @@ STAGE_SPECS: dict[str, dict] = {
                      "vs перевод (polished), дефолтный промпт и бюджет",
             "overrides": {"type": "polished"},
         },
-        "simple": ["start", "end", "type", "prompt_file"],
+        "simple": ["start", "end", "type", "prompt_file", "budget"],
     },
     "wiki": {
         "title": "Создание Wiki (LLM)",

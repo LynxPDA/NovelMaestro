@@ -838,6 +838,11 @@ input[type="number"] {
 .preset-range {
   width: 90px;
 }
+/* «Конечная глава» считается по бюджету (translate_quality) */
+.preset-range.range-auto {
+  opacity: 0.75;
+  cursor: default;
+}
 .preset-range-sep {
   color: var(--text-dim);
 }
