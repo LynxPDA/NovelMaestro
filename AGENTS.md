@@ -130,7 +130,7 @@ argparse («СИМВОЛЫ»/«ТОКЕНЫ»).
 | чанкование | `split_text_smart` |
 | текст/CJK | `get_ngrams` / `is_cjk` / `is_cjk_string` / `find_exact_match` |
 | поиск терминов | `load_ner_data` + `find_relevant_ner` (+ `normalize_for_search`, `build_smart_regex`) |
-| правила замен «паттерн -> замена» (batch_replace/epub replace-re) | `trim_rule_left` / `trim_rule_right` (паддинг у «->»; значимые пробелы «^  », «  $» и правая часть «\s+ -> ») / `strip_rule_flags` (флаги « \|i»/« \|r» в конце строки; разделитель — ровно один пробел) |
+| правила замен «паттерн -> замена» (batch_replace/epub replace-re) | `trim_rule_left` / `trim_rule_right` (паддинг у «->»; значимые пробелы «^  », «  $» и правая часть «\s+ -> ») / `strip_rule_flags` (флаги « \|i»/« \|r» в конце строки; разделитель — ровно один пробел) / `strip_line_comment` (inline-комментарий « # …» в конце строки; «#» без пробела слева — не комментарий) |
 | проверка глоссария (ner_check) | `filter_ner_items` (порог count + типы) / `format_ner_record` / `glossary_body` / `build_ner_batches` (count по убыванию, бюджет в СИМВОЛАХ; fields — поля записи для LLM, term — всегда) / `parse_ner_patches` / `review_entry` / `parse_review_doc` / `merge_review_entries` (review-файл: поля английские — `stage`/`status`/`applied`/`old`/`new`, статусы принять/отклонить, накопление) / `apply_ner_patches` (status + applied, дубли термина по совпавшему `old`) |
 | проверка перевода LLM (translate_check_llm) | `fix_entry` (ошибка LLM → запись review) / `merge_fix_entries` (накопление, дедуп по chapter+old+new) / `apply_fix_to_text` (NFC, первое вхождение) |
 | имена по полу | `collect_gender_names` (polish: поиск по `translation`, пол по наличию `(female)`/`(male)` в `type`) |
@@ -252,6 +252,10 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
 - НЕ вводи настройку слов-ошибок пайплайна (M7 отменён): текст
   перевода НЕ попадает в stdout скриптов (только прогресс/ошибки) — жёсткий
   `_ERROR_RE` в web/pipeline.py ловит реальные сбои; настройка = регресс.
+- **Комментарии в коде — только для понимания**: минимальные, объясняют
+  «почему», а не «что» (что видно из кода). Запрещены комментарии-дневники
+  (номера раундов/этапов, «сделано в сессии N», отчёты о правках) — их
+  место в TODO.md и сообщениях коммитов, а не в коде.
 
 ## 8а. pi-lens (настройки шума)
 
