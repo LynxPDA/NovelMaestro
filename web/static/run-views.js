@@ -1,6 +1,35 @@
+  // translate_quality: последняя глава, помещающаяся в бюджет запроса.
+  // Размер главы = перевод (тип файлов) + оригинал (chapter.txt);
+  // из бюджета вычитается длина промпта; доступна как глобал — для
+  // node-тестов (vm-контекст), в браузере вызывается из attachQualityRange.
+  function qualityEndByBudget(chapters, start, budget, promptLen, type) {
+    const avail = (budget || 0) - (promptLen || 0);
+    if (avail <= 0 || !start || !chapters || !chapters.length) return "";
+    const art = type + ".txt";
+    const rows = chapters
+      .map((ch) => {
+        const a = ch.artifacts || {};
+        return {
+          id: parseInt(ch.id, 10) || 0,
+          sz: (a[art] || 0) + (a["chapter.txt"] || 0),
+        };
+      })
+      .filter((x) => x.id >= start && x.sz > 0)
+      .sort((a, b) => a.id - b.id);
+    let sum = 0;
+    let last = "";
+    for (const r of rows) {
+      if (sum + r.sz > avail) break;
+      sum += r.sz;
+      last = String(r.id);
+    }
+    return last;
+  }
+
 // глобал для роутера app.js (plain-script: window.viewRun вызывается
 // из app.js напрямую); явная привязка — чтобы линтер видел использование
 window.viewRun = function viewRun(section, name, attachJobId) {
+
   const st = {
     stage: null, // выбранная стадия: {key, title, script, spec}
     options: null, // динамические опции {chapters, source, prompts, root}
@@ -502,11 +531,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       p.skip = (st.preview && st.preview.skips) || [];
     }
     // ner_check · RAG: в простом режиме поля RAG-режима попадают
-    // в параметры как в экспертном (когда выбран режим rag)
+    // в параметры как в экспертном (когда выбран режим rag);
+    // fields — выбранные чипсами поля записи (идут в RAG-промпт)
     if (key === "ner_check" && mode === "simple"
         && String(p["passes"] ?? "") === "rag") {
       for (const name of ["rag_terms", "rag_source_type",
-                          "rag_budget"]) {
+                          "rag_budget", "fields"]) {
         const f = (spec.fields || []).find((x) => x.name === name);
         if (!f) continue;
         const v = vals[f.name];
@@ -1225,6 +1255,72 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return rowEl;
   }
 
+  // translate_quality: «Конечная глава» — расчёт по бюджету (readonly):
+  // start + budget + тип файлов + промпт-файл пересчитывают end
+  // интерактивно (tree — размеры глав, /projects/…/tree).
+  function attachQualityRange(key, inputs) {
+    if (key !== "translate_quality") return;
+    const row = st.rangeRow;
+    if (!row || !row._start || !row._end) return;
+    const end = row._end;
+    end.setAttribute("readonly", "");
+    end.classList.add("range-auto");
+    const budgetIn = inputs.budget;
+    const typeSel = inputs.type;
+    const promptSel =
+      inputs.prompt_file && inputs.prompt_file._sel
+        ? inputs.prompt_file._sel
+        : inputs.prompt_file;
+    let tree = null;
+    let promptLen = 0;
+    let promptFile = "";
+    const loadPrompt = async () => {
+      const file = promptSel && promptSel.value ? promptSel.value : "";
+      if (file === promptFile) return;
+      promptFile = file;
+      promptLen = 0;
+      if (!file) return;
+      try {
+        const d = await api(
+          `/prompts/${encodeURIComponent(file)}?project=${section}/${name}`,
+        );
+        promptLen = (d.content || "").length;
+      } catch {
+        promptLen = 0;
+      }
+    };
+    const recalc = async () => {
+      if (!tree) {
+        try {
+          const d = await api(`/projects/${section}/${name}/tree`);
+          tree = d.chapters || [];
+        } catch {
+          tree = [];
+        }
+      }
+      await loadPrompt();
+      const start = parseInt(row._start.value || "", 10) || 0;
+      const raw =
+        budgetIn && budgetIn.value !== "" ? budgetIn.value : "200000";
+      const budget = parseInt(raw, 10) || 0;
+      const type = (typeSel && typeSel.value) || "polished";
+      const last = qualityEndByBudget(tree, start, budget, promptLen, type);
+      end.value = last;
+      st.values[key]["end"] = last;
+      st.touched[key].add("end");
+      if (!start) end.title = "введите начальную главу";
+      else if (budget - promptLen <= 0)
+        end.title = "промпт больше бюджета — увеличьте бюджет";
+      else if (last)end.title = "рассчитано по бюджету"; else 
+        end.title = "в бюджет не влезает ни одна глава — увеличьте бюджет";
+    };
+    row._start.addEventListener("input", recalc);
+    if (budgetIn) budgetIn.addEventListener("input", recalc);
+    if (typeSel) typeSel.addEventListener("change", recalc);
+    if (promptSel) promptSel.addEventListener("change", recalc);
+    recalc();
+  }
+
   // карточка пресета + простые поля (spec.simple) + диапазон глав:
   // простой режим — «частично показанный экспертный», значения общие
   function simplePanel(key, spec) {
@@ -1281,9 +1377,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
       w.loadTypes();
       const ragWraps = [];
-      // чипсы типов/полей в RAG не влияют — прячем вместе с RAG-панелью
-      const ragHidden = [w.chipsBar, w.chipsBox, w.fieldsBar, w.fieldsBox,
-                         w.guide];
+      // в RAG прячем только чипсы ТИПОВ: поля записи (fieldsBar) и
+      // степпер остаются — выбранные поля уходят в RAG-промпт
+      const ragHidden = [w.chipsBar, w.chipsBox];
       for (const name of ["rag_terms", "rag_source_type",
                           "rag_budget"]) {
         const f = (spec.fields || []).find((x) => x.name === name);
@@ -1412,6 +1508,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (rangeRow) body.splice(1, 0, rangeRow);
     // ner_check RAG: после постройки rangeRow — первая раскладка
     if (ragApply) ragApply();
+    // translate_quality: end считает бюджет (start/budget/type/prompt)
+    attachQualityRange(key, byName);
     return h("div", { class: "run-form" }, body, err, runBtn);
   }
 
@@ -1434,6 +1532,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // диапазон глав — ПЕРВЫМ в списке полей (все стадии с start/end)
     const rangeRow = buildRangeRow(key, spec);
     if (rangeRow) fieldNodes.unshift(rangeRow);
+    // translate_quality: end считает бюджет (start/budget/type/prompt)
+    attachQualityRange(key, fieldWraps);
 
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны
@@ -1534,9 +1634,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         ragWrap.append(h("div", { class: "ner-add-disputed" }, addBtn));
       }
       const sel = passesWrap && passesWrap._input;
-      // чипсы типов/полей в RAG не влияют — прячем вместе с RAG-панелью
-      const ragHidden = [w.chipsBar, w.chipsBox, w.fieldsBar, w.fieldsBox,
-                         w.guide];
+      // в RAG прячем только чипсы ТИПОВ: поля записи (fieldsBar) и
+      // степпер остаются — выбранные поля уходят в RAG-промпт
+      const ragHidden = [w.chipsBar, w.chipsBox];
       const applyRagExpert = () => {
         const isRag = sel && sel.value === "rag";
         for (const name of ragNames) {

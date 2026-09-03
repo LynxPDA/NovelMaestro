@@ -583,7 +583,8 @@ def test_ner_check_rag_builds_block(tmp_path):
     db = build_fts_index(text, 1000)
     items_by_term = {i["term"]: i for i in ITEMS}
     block = NC.build_rag_block(
-        ["林凡", "青云宗", "火球术"], items_by_term, db, 2000, SilentLog())
+        ["林凡", "青云宗", "火球术"], items_by_term, db, 2000,
+        logger=SilentLog())
     assert "林凡" in block and "Секта Цинъюнь" in block
     assert "Линь Фан" in block  # фрагмент по переводу
     # бюджет: суммарная длина фрагментов ≤ бюджет × число терминов
@@ -591,6 +592,31 @@ def test_ner_check_rag_builds_block(tmp_path):
     frag_lines = [l for l in block.splitlines() if l.startswith("  · ")]
     assert len(frag_lines) > 0
     assert sum(len(l) for l in frag_lines) <= 2000 * 3 + 1000
+
+
+def test_ner_check_rag_block_fields(tmp_path):
+    """RAG: выбранные поля записи (fields) уходят в промпт, остальные
+    поля — нет; term — всегда в заголовке."""
+    from core.common import build_fts_index
+    text = "Линь Фан вошёл в зал. " * 20
+    db = build_fts_index(text, 1000)
+    items_by_term = {i["term"]: i for i in ITEMS}
+    block = NC.build_rag_block(["林凡"], items_by_term, db, 2000,
+                               ["term", "type", "translation"])
+    assert "(тип: Person (male))" in block
+    assert "type: Person (male)" in block
+    assert "translation: Линь Фан" in block
+    assert "context:" not in block  # поле не выбрано
+    # notes/context — при выборе
+    block2 = NC.build_rag_block(["青云宗"], items_by_term, db, 2000,
+                                ["term", "type", "translation", "notes"])
+    assert "notes: палладия" in block2
+    assert "context:" not in block2
+    # fields=None — все поля (как format_ner_record)
+    block3 = NC.build_rag_block(["青云宗"], items_by_term, db, 2000)
+    assert "type: Location" in block3
+    assert "translation: Секта Цинъюнь" in block3
+    assert "notes: палладия" in block3
 
 
 def test_ner_check_rag_main(tmp_path, monkeypatch):

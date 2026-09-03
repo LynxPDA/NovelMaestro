@@ -85,6 +85,7 @@ from core.common import (  # noqa: E402
     find_env_file,
     log_argv,
     filter_ner_items,
+    format_ner_record,
     fts_escape,
     fts_search_all,
     get_server_config,
@@ -417,17 +418,30 @@ def load_rag_prompt(prompt_file: str, logger) -> str:
     return DEFAULT_NER_RAG_PROMPT
 
 
-def build_rag_block(terms, items_by_term, db, budget, logger):
+def build_rag_block(terms, items_by_term, db, budget, fields=None,
+                    logger=None):
     """Собирает блок «термины + релевантные фрагменты» для RAG-промпта.
-    Фрагменты — FTS5-поиск по translation, равномерная выборка (не
-    только начало книги), суммарный бюджет — budget СИМВОЛОВ."""
+    fields — поля записи ner.json, передаваемые LLM (термин — всегда,
+    в заголовке; дефолт — type/translation); фрагменты — FTS5-поиск по
+    translation, равномерная выборка (не только начало книги),
+    суммарный бюджет — budget СИМВОЛОВ."""
     import re as _re
+    selected = {f.strip() for f in fields} if fields else None
     lines = []
     for term in terms:
         item = items_by_term.get(term)
         translation = (item or {}).get("translation") or ""
         type_str = (item or {}).get("type") or "?"
         lines.append(f"--- {term} (тип: {type_str}) ---")
+        # выбранные поля записи (термин уже в заголовке)
+        if item:
+            rec = format_ner_record(item, 0, selected)
+            for ln in rec[1:]:
+                if ln.startswith("term:"):
+                    continue
+                lines.append("  " + ln)
+        else:
+            lines.append("  (нет записи в ner.json)")
         if not translation:
             lines.append("  (нет перевода в ner.json)")
             continue
@@ -492,7 +506,9 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
     if args.rag_source_type:
         logger.info(f"🔎 RAG: {len(terms)} терминов.")
     db = build_fts_index(text, 1000)
-    block = build_rag_block(terms, items_by_term, db, args.rag_budget, logger)
+    fields = [f.strip() for f in args.fields.split(",") if f.strip()]
+    block = build_rag_block(terms, items_by_term, db, args.rag_budget,
+                            fields, logger)
     user_msg = render_prompt(prompt_tpl, block)
     logger.info(f"  запрос: {len(user_msg)} символов")
     emit_progress(0, 1, "Точечная проверка (RAG)")
