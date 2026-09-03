@@ -455,6 +455,26 @@ def test_parse_replace_re_broken(tmp_path):
         E2C._parse_replace_re([" -> x"])
 
 
+def test_replace_re_inline_comment(tmp_path):
+    """--replace-re: комментарий « # …» в конце строки отрезается;
+    решётка без пробела слева — не комментарий."""
+    from core.common import strip_line_comment
+    txt = tmp_path / "c.txt"
+    txt.write_text("Глава 1\nтекст один\n", encoding="utf-8")
+    # main() срезает комментарий у --split-re/--clean-re/--replace-re
+    split_res = [E2C._safe_compile(
+        strip_line_comment("Глава \\d+ # маркер главы"), "split-re")]
+    replace_res = E2C._parse_replace_re([
+        "^(Глава) -> Глава №\\1  # нумерация",
+        "цвет#[0-9a-f]+ -> X",
+    ])
+    assert len(replace_res) == 2
+    assert replace_res[0][1] == "Глава №\\1"
+    assert replace_res[1][0].pattern == "цвет#[0-9a-f]+"
+    entries, *_ = E2C.split_input(txt, "regex", split_res, [], [])
+    assert [e["heading"] for e in entries] == ["Глава 1"]
+
+
 def test_replace_re_multiline(tmp_path):
     """--replace-re: «^»/«$» матчат СТРОКИ (MULTILINE) — заголовок
     нормализуется в каждой строке, а не только в первой."""

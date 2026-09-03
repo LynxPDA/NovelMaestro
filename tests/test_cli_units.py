@@ -923,6 +923,40 @@ def test_br_parse_replace_lines_flags():
     assert all(r.is_regex for r in rules)
 
 
+def test_br_inline_comments():
+    """Inline-комментарий « # …» в конце строки правила: отрезается
+    у --replace и в файле правил; «#» без пробела слева — не комментарий."""
+    rules, warnings = BR.parse_replace_lines([
+        "Глава \\d+ -> Глава №\\g<0>  # нумерация глав",
+        "цвет#[0-9a-f]+ -> COLOR  # hex-цвет — не комментарий",
+        "\s+ ->  |r  # сжатие пробелов",
+    ])
+    assert warnings == []
+    assert rules[0].pattern == "Глава \\d+"
+    assert rules[0].replacement == "Глава №\\g<0>"
+    # решётка без пробела слева — не комментарий, паттерн сохраняется
+    assert rules[1].pattern == "цвет#[0-9a-f]+"
+    assert rules[1].replacement == "COLOR"
+    # флаги идут ДО комментария
+    assert rules[2].is_regex and rules[2].replacement == " "
+
+
+def test_br_rules_file_inline_comments(tmp_path):
+    """Файл правил: « # …» в конце строки — комментарий; строка
+    целиком с «#» в начале — тоже комментарий."""
+    path = _rules_file(tmp_path, (
+        "# общий комментарий\n"
+        "Хунг -> Хун  # имя героя\n"
+        "Хунг(а) -> Хун\\1 |i  # с флагом\n"
+        "\n"
+    ))
+    rules, warnings = parse_br(path)
+    assert warnings == []
+    assert [r.pattern for r in rules] == ["Хунг", "Хунг(а)"]
+    assert [r.replacement for r in rules] == ["Хун", "Хун\\1"]
+    assert rules[1].ignore_case
+
+
 def test_br_multiline_anchors():
     """MULTILINE: «^»/«$» матчат СТРОКИ — отступы в начале строки
     и дубликаты заголовков глав."""

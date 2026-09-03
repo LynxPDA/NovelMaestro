@@ -45,6 +45,7 @@ from core.common import (  # noqa: E402
     emit_progress,
     find_chapter_file,
     read_text_safe,
+    strip_line_comment,
     strip_rule_flags,
     trim_rule_left,
     trim_rule_right,
@@ -112,6 +113,9 @@ def parse_replace_lines(lines) -> tuple[List[Rule], List[str]]:
         line = raw.rstrip("\r\n")
         if not line.strip() or line.lstrip().startswith("#"):
             continue
+        line = strip_line_comment(line)
+        if not line.strip():
+            continue
         line, flags = strip_rule_flags(line)
         if "->" not in line:
             warnings.append(f"строка {i}: нет разделителя «->» — пропущена")
@@ -149,6 +153,11 @@ def parse_rules(rules_file, force_regex: bool = False):
             continue
         if stripped.startswith("##"):
             section = stripped[2:].strip()
+            continue
+
+        # Комментарий в конце строки — « # …» (флаги идут до него)
+        line = strip_line_comment(line)
+        if not line.strip():
             continue
 
         # Флаги — в самом конце строки: « |ir» (ровно один пробел перед «|»)

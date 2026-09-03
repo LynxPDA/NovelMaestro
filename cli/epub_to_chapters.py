@@ -45,6 +45,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core.common import (  # noqa: E402
+    strip_line_comment,
     strip_rule_flags,
     trim_rule_left,
     trim_rule_right,
@@ -230,6 +231,9 @@ def _parse_replace_re(lines) -> list[tuple[re.Pattern, str]]:
     for i, raw in enumerate(lines, 1):
         line = raw.rstrip("\r\n")
         if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        line = strip_line_comment(line)
+        if not line.strip():
             continue
         line, flags = strip_rule_flags(line)
         if "->" not in line:
@@ -818,9 +822,12 @@ def main():
     mode = args.mode
     if mode == "regex" and not args.split_re:
         sys.exit("Режим regex требует хотя бы один --split-re")
-    split_res = [_safe_compile(p, "split-re") for p in args.split_re]
-    clean_res = [_safe_compile(p, "clean-re", multiline=True)
-                 for p in args.clean_re]
+    split_re = [s for s in args.split_re if s.strip()]
+    clean_re = [s for s in args.clean_re if s.strip()]
+    split_res = [_safe_compile(strip_line_comment(p), "split-re")
+                 for p in split_re]
+    clean_res = [_safe_compile(strip_line_comment(p), "clean-re",
+                               multiline=True) for p in clean_re]
     replace_res = _parse_replace_re(args.replace_re)
     title_limit = max(1, args.title_limit)
     num_offset = max(1, args.num_offset)
