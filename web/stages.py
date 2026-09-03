@@ -191,8 +191,6 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
     check_type = str(form.get("check_type") or "polished")
     argv += ["--check-type", check_type]
     argv += _range_argv("start", form)
-    if form.get("lenient"):
-        argv += ["--lenient"]
     if form.get("exclude_words"):
         argv += ["--exclude-words", str(form["exclude_words"])]
     for name, flag in (("neighbor", "--neighbor"),
@@ -646,9 +644,6 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "check_type", "label": "Тип файлов глав",
              "type": "select",
              "options": ["polished", "redacted", "translated"],
-             "labels": {"polished": "polished (после полировки)",
-                         "redacted": "redacted (после редактуры)",
-                         "translated": "translated (после перевода)"},
              "default": "polished",
              "help": "polished → сравнивается с redacted (соседняя "
                       "стадия) и chapter (оригинал); redacted → с "
@@ -656,8 +651,6 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "lenient", "label": "Мягкий режим (--lenient)",
-             "type": "bool", "default": False},
             {"name": "exclude_words",
              "label": "Слова-исключения (через запятую)",
              "type": "text", "default": "",
@@ -666,19 +659,18 @@ STAGE_SPECS: dict[str, dict] = {
                       "заполняется оттуда"},
             {"name": "neighbor",
              "label": "Стадия/Стадия (по занимаемому месту)",
-             "type": "text", "default": "",
+             "type": "text", "default": "1.0±0.05",
              "help": "Ожидаемый ratio соседней стадии и допуск: "
-                      "«1.0±0.05» (напр. polished/redacted); пусто = "
-                      "встроенный дефолт"},
+                      "«1.0±0.05» (напр. polished/redacted)"},
             {"name": "original",
              "label": "Оригинал/Стадия (по занимаемому месту)",
-             "type": "text", "default": "",
+             "type": "text", "default": "2.1±0.5",
              "help": "Ожидаемый ratio с оригиналом и допуск: "
-                      "«2.1±0.5» (напр. polished/chapter); пусто = "
-                      "встроенный дефолт"},
+                      "«2.1±0.5» (напр. polished/chapter)"},
             {"name": "regexp_checks",
              "label": "Regexp-проверки (по одной на строку)",
-             "type": "textarea", "rows": 4, "default": "",
+             "type": "textarea", "rows": 4,
+             "default": "[一-鿿【】「」『』]+\n[a-zA-Z]+\n^\\s*Глава\\s+(\\d+|\\[Номер\\])",
              "help": "Каждая строка — regexp по тексту главы (multiline): "
                       "всё найденное — ошибка; первое вхождение на первой "
                       "непустой строке (заголовок главы) не считается; "

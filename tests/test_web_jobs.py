@@ -703,15 +703,17 @@ def test_build_epub_to_chapters_clean_patterns_ws():
 
 
 def test_build_translate_check():
-    # тип файлов глав → --check-type; диапазон/режим/исключения — как есть
-    form = {"check_type": "redacted", "start": 5, "end": 10,
-            "lenient": True}
+    # тип файлов глав → --check-type; диапазон/исключения — как есть;
+    # lenient убран из web (всегда strict, CLI сохраняет флаг)
+    form = {"check_type": "redacted", "start": 5, "end": 10}
     argv = build_command("translate_check", form, {})
     assert argv[0] == "cli/translate_check.py"
     assert "--check-type" in argv and "redacted" in argv
     assert "--start" in argv and "5" in argv
     assert "--end" in argv and "10" in argv
-    assert "--lenient" in argv
+    assert "--lenient" not in argv
+    assert "--lenient" not in build_command(
+        "translate_check", {"lenient": True}, {})
     # без диапазона — только тип
     argv2 = build_command("translate_check",
                           {"check_type": "polished"}, {})
