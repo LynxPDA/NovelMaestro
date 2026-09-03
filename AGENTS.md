@@ -272,6 +272,16 @@ polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксир�
   unused» после переноса функции) — снимать через `lens_diagnostic_mark`
   false-positive, реальная проверка — `python3 -m pytest` + `node --check`.
 
+## 8б. Отладка SPA через playwright
+
+- Playwright установлен глобально и доступен для отладки web-интерфейса:
+  подними сервер (`python3 web/main.py --port 8877 --projects-dir /tmp/…`),
+  затем headless-скрипт с `playwright-core` (chromium в
+  `~/.cache/ms-playwright`): переход на `#/project/<раздел>/<книга>/review`,
+  перехват `pageerror`/`console`, дамп `$eval` состояния DOM и fetch-
+  ответов API. Данные — только временные (`/tmp`, песочница TMP),
+  не боевые.
+
 ## 9. Как вносить изменения
 
 0. **Релизы и CHANGELOG.md** — релиз (тег `v*` + GitHub Release,
