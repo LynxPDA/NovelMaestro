@@ -66,3 +66,64 @@ def test_check_chapter_exclusions(tmp_path):
     errors, _ = TC.check_chapter(1, str(d), "polished", comps,
                                  False, None, exclusions=["vip"])
     assert not any("VIP" in e for e in errors)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Новые сравнения по типу файлов: --check-type + «ratio±tol»
+
+
+def test_parse_ratio_tol():
+    assert TC.parse_ratio_tol(None, 1.0, 0.05) == (1.0, 0.05)
+    assert TC.parse_ratio_tol("1.2±0.07", 1.0, 0.05) == (1.2, 0.07)
+    assert TC.parse_ratio_tol("2.5", 2.1, 0.5) == (2.5, 0.5)
+    assert TC.parse_ratio_tol(" 2.5 ± 0.7 ", 2.1, 0.5) == (2.5, 0.7)
+
+
+def test_comparisons_for():
+    assert TC.comparisons_for("polished") == [
+        ("redacted", 1.0, 0.05), ("chapter", 2.1, 0.5)]
+    assert TC.comparisons_for("redacted") == [
+        ("translated", 1.0, 0.05), ("chapter", 2.1, 0.5)]
+    assert TC.comparisons_for("translated") == [("chapter", 2.1, 0.5)]
+    # кастомные коэффициенты
+    assert TC.comparisons_for("polished", "1.3±0.1", "2.0±0.2")[0] == \
+        ("redacted", 1.3, 0.1)
+    assert TC.comparisons_for("polished", "1.3±0.1", "2.0±0.2")[1] == \
+        ("chapter", 2.0, 0.2)
+
+
+def test_check_chapter_regexp_checks(tmp_path):
+    """regexp-проверки: всё найденное — ошибка; заголовок главы — нет."""
+    d = tmp_path / "00000_2_x"
+    d.mkdir()
+    body = ("Глава 2\n\nнормальный русский текст. " * 40
+            + "\n\nГлава 99\nещё текст. " * 40)
+    (d / "polished.txt").write_text(body, encoding="utf-8")
+    comps = []
+    # дефолтные проверки: лишняя «Глава 99» — ошибка, первая — нет
+    errors, prev = TC.check_chapter(2, str(d), "polished", comps,
+                                    False, None, exclusions=[])
+    assert prev == 2
+    assert any("Глава 99" in e for e in errors)
+    assert not any("Глава 2" in e for e in errors)
+    # кастомный паттерн: только иероглифы
+    import re as _re
+    rx = _re.compile(r"[一-鿿]+", _re.MULTILINE)
+    clean = body.replace("Глава 99", "99")
+    (d / "polished.txt").write_text(clean + "中文", encoding="utf-8")
+    errors, _ = TC.check_chapter(2, str(d), "polished", comps,
+                                 False, None, exclusions=[],
+                                 regexp_checks=[rx])
+    assert any("中文" in e for e in errors)
+
+
+def test_check_chapter_no_header(tmp_path):
+    """Нет «Глава N» в начале — структурная ошибка (всегда включена)."""
+    d = tmp_path / "00000_3_x"
+    d.mkdir()
+    body = ("просто текст без заголовка. " * 60)
+    (d / "polished.txt").write_text(body, encoding="utf-8")
+    errors, prev = TC.check_chapter(3, str(d), "polished", [],
+                                    False, None, exclusions=[])
+    assert any("Нет «Глава N» в начале" in e for e in errors)
+    assert prev is None

@@ -6,14 +6,16 @@ translate_check.py — проверка перевода по цепочке к�
 
 Проверки:
   • объёмы по цепочке (ratio-эвристики; размеры файлов — БАЙТЫ):
-      polished   vs redacted     1.0 ± 0.05
-      polished   vs chapter      2.1 ± 0.5
+      polished   vs redacted     1.0 ± 0.05  (--neighbor)
+      polished   vs chapter      2.1 ± 0.5   (--original)
       redacted   vs translated   1.0 ± 0.05
       translated vs chapter      2.1 ± 0.5
   • минимальный размер файла (3072 Б);
-  • остатки иероглифов / латиницы (исключения — пусто: ничего);
+  • regexp-проверки текста главы (--regexp-check, multiline): всё
+      найденное — ошибка; первое вхождение на первой непустой строке
+      (заголовок главы) не считается; по умолчанию — иероглифы,
+      латиница, лишние «Глава N»; исключения — пусто: ничего;
   • заголовок «Глава N» в начале + сквозная последовательность;
-  • лишние «Глава N» после 3-й строки;
   • дубли папок / файлов (strict → FATAL, глава пропускается).
 
 ЕДИНИЦЫ: размеры файлов — байты; ratio — безразмерная эвристика
@@ -44,7 +46,8 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
-from core.common import build_chapter_map, find_chapter_file  # noqa: E402
+from core.common import (build_chapter_map, find_chapter_file,
+                         strip_line_comment)  # noqa: E402
 
 # ──────────────────────────────────────────────
 # НАСТРОЙКИ (настраиваемые коэффициенты)
@@ -78,7 +81,18 @@ def load_exclusions(env_path=None) -> list[str]:
 # ──────────────────────────────────────────────
 CHINESE_REGEX = re.compile(r'[一-鿿【】「」『』]+')
 ENGLISH_REGEX = re.compile(r'[a-zA-Z]+')
+CHAPTER_LINE_RE = re.compile(r'^\s*Глава\s+(\d+|\[Номер\])',
+                             re.MULTILINE | re.IGNORECASE)
 CHAPTER_REGEX = re.compile(r'^\s*Глава\s+(\d+|\[Номер\])', re.IGNORECASE)
+
+# Дефолтные regexp-проверки текста главы (пусто в --regexp-check =
+# эти строки): всё найденное — ошибка; первое вхождение на первой
+# непустой строке (заголовок главы) ошибкой не считается.
+DEFAULT_REGEXP_CHECKS = [
+    r'[一-鿿【】「」『』]+',
+    r'[a-zA-Z]+',
+    r'^\s*Глава\s+(\d+|\[Номер\])',
+]
 
 
 def _write_report(report_path: str, text: str, mode: str = "a") -> None:
@@ -90,31 +104,46 @@ def _write_report(report_path: str, text: str, mode: str = "a") -> None:
         print(f"Ошибка записи {report_path}: {exc}")
 
 # ──────────────────────────────────────────────
-# ПРЕСЕТЫ (коэффициенты — эвристики, подбираются опытным путём;
-# переопределяются флагами --ratio-neighbor/--tol-neighbor/
-# --ratio-original/--tol-original)
+# СРАВНЕНИЯ ПО ТИПУ ФАЙЛОВ ГЛАВ (коэффициенты — эвристики, подбираются
+# опытным путём; переопределяются флагами --neighbor/--original)
 # ──────────────────────────────────────────────
-def presets(ratio_neighbor=None, tol_neighbor=None,
-            ratio_original=None, tol_original=None) -> dict:
-    """Пресеты сравнений с настраиваемыми коэффициентами.
-    None = встроенные дефолты (RATIO_* / TOL_*)."""
-    rn = ratio_neighbor if ratio_neighbor is not None else RATIO_NEIGHBOR
-    tn = tol_neighbor if tol_neighbor is not None else TOL_NEIGHBOR
-    ro = ratio_original if ratio_original is not None else RATIO_ORIGINAL
-    to = tol_original if tol_original is not None else TOL_ORIGINAL
+def parse_ratio_tol(value, def_ratio, def_tol) -> tuple[float, float]:
+    """Разбирает «ratio±tol» (например «1.0±0.05») или просто число.
+    None/пусто — встроенные дефолты (def_ratio, def_tol)."""
+    if value in (None, ""):
+        return def_ratio, def_tol
+    s = str(value).strip().replace(" ", "")
+    if "±" in s:
+        parts = s.split("±", 1)
+        try:
+            return float(parts[0]), float(parts[1])
+        except ValueError:
+            pass
+    try:
+        return float(s), def_tol
+    except ValueError:
+        sys.exit(f"Ошибка: «{value}» — ожидалось число или «ratio±tol»")
+
+
+def comparisons_for(check_type, neighbor=None, original=None):
+    """Сравнения для типа файлов глав: polished → redacted+chapter,
+    redacted → translated+chapter, translated → только chapter.
+    neighbor/original — «ratio±tol»; None = встроенные дефолты."""
+    rn, tn = parse_ratio_tol(neighbor, RATIO_NEIGHBOR, TOL_NEIGHBOR)
+    ro, to = parse_ratio_tol(original, RATIO_ORIGINAL, TOL_ORIGINAL)
     return {
-        "1": ("polished", [
+        "polished": [
             ("redacted", rn, tn),
             ("chapter", ro, to),
-        ]),
-        "2": ("redacted", [
+        ],
+        "redacted": [
             ("translated", rn, tn),
             ("chapter", ro, to),
-        ]),
-        "3": ("translated", [
+        ],
+        "translated": [
             ("chapter", ro, to),
-        ]),
-    }
+        ],
+    }[check_type]
 
 # ──────────────────────────────────────────────
 # СРАВНЕНИЕ РАЗМЕРОВ
@@ -140,17 +169,14 @@ def compare_sizes(check_label, ref_label, check_size, ref_size,
 # ──────────────────────────────────────────────
 def check_chapter(chapter_num, dir_path, check_type, comparisons,
                   strict, prev_inner_chapter, exclusions=None,
-                  check_nonrussian=True, nonrussian_regexes=None,
-                  check_chapter_order=True, chapter_regex=None):
+                  regexp_checks=None):
     """Возвращает (список_ошибок, обновлённый_prev_inner_chapter).
     В список попадают ТОЛЬКО ошибки и предупреждения поиска.
     exclusions — слова-исключения (R9), по умолчанию load_exclusions().
-    check_nonrussian — проверка не-русских символов (китайский/латиница),
-      по умолчанию вкл; nonrussian_regexes — список regexp вместо
-      дефолтных (CHINESE_REGEX+ENGLISH_REGEX).
-    check_chapter_order — проверка последовательности «Глава N»,
-      по умолчанию вкл; chapter_regex — свой формат заголовка
-      (группа 1 = номер главы)."""
+    regexp_checks — список compiled regexp по тексту главы: всё
+      найденное — ошибка; первое вхождение на первой непустой строке
+      (заголовок главы) не считается. None = дефолтные проверки
+      (иероглифы, латиница, лишние «Глава N»)."""
     errors: list[str] = []
     if exclusions is None:
         exclusions = load_exclusions()
@@ -203,51 +229,40 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
         errors.append(f"  - Ошибка чтения файла: {e}")
         return errors, prev_inner_chapter
 
-    # ---- не-русские символы (по умолчанию вкл; --no-nonrussian
-    #      отключает, --nonrussian-regex задаёт свои паттерны) ----
-    if check_nonrussian:
-        regexes = list(nonrussian_regexes) if nonrussian_regexes \
-            else [CHINESE_REGEX, ENGLISH_REGEX]
-        for rx in regexes:
-            raw = set(rx.findall(content))
-            bad = [m for m in raw if m.lower() not in exclusions]
-            if bad:
-                preview = ", ".join(bad[:10])
-                tail = f" … (+{len(bad) - 10})" if len(bad) > 10 else ""
-                errors.append(f"  - Не-русские символы: {preview}{tail}")
-
-    # ---- заголовок «Глава N» (проверка последовательности — по
-    #      умолчанию вкл; --no-chapter-order отключает, --chapter-regex
-    #      задаёт свой формат) ----
+    # ---- regexp-проверки текста (всё найденное — ошибка; первое
+    #      вхождение на первой непустой строке — заголовок главы) ----
     non_empty = [l.strip() for l in lines if l.strip()]
     first_line = non_empty[0] if non_empty else ""
-    rx = chapter_regex or CHAPTER_REGEX
-    m = rx.search(first_line)
+    regexes = list(regexp_checks) if regexp_checks is not None \
+        else [CHINESE_REGEX, ENGLISH_REGEX, CHAPTER_LINE_RE]
+    for rx in regexes:
+        hits = list(rx.finditer(content))
+        if hits and first_line and rx.search(first_line):
+            hits = hits[1:]  # заголовок главы — не ошибка
+        bad = [h.group(0) for h in hits if h.group(0).lower() not in exclusions]
+        if bad:
+            preview = ", ".join(bad[:10])
+            tail = f" … (+{len(bad) - 10})" if len(bad) > 10 else ""
+            errors.append(f"  - По паттерну {rx.pattern}: {preview}{tail}")
+
+    # ---- заголовок «Глава N» в начале + сквозная последовательность
+    #      (структурные проверки — всегда включены) ----
+    m = CHAPTER_REGEX.search(first_line)
     if not m:
-        if check_chapter_order:
-            snippet = (first_line[:30] + "…") if len(first_line) > 30 else first_line
-            errors.append(f"  - Нет «Глава N» в начале (найдено: '{snippet}')")
+        snippet = (first_line[:30] + "…") if len(first_line) > 30 else first_line
+        errors.append(f"  - Нет «Глава N» в начале (найдено: '{snippet}')")
     else:
         try:
             cur = int(m.group(1))
         except ValueError:
             cur = 0
-        if check_chapter_order and prev_inner_chapter is not None:
+        if prev_inner_chapter is not None:
             expected = prev_inner_chapter + 1
             if cur != expected:
                 errors.append(f"  - Нарушена последовательность: после Главы "
                               f"{prev_inner_chapter} → Глава {cur} "
                               f"(ожидалась {expected})")
         prev_inner_chapter = cur
-
-    # ---- лишние «Глава N» после 3-й строки ----
-    if check_chapter_order and len(lines) >= 4:
-        for line in lines[3:]:
-            if rx.search(line):
-                snippet = line.strip()
-                txt = (snippet[:40] + "…") if len(snippet) > 40 else snippet
-                errors.append(f"  - Лишнее «Глава N» после 3-й строки: '{txt}'")
-                break
 
     return errors, prev_inner_chapter
 
@@ -260,22 +275,30 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Единицы: размеры файлов — байты; ratio — безразмерная эвристика.
-Пресеты сравнений:
-  1) POLISHED   vs redacted (1.0±0.05) + chapter (2.1±0.5)
-  2) REDACTED   vs translated (1.0±0.05) + chapter (2.1±0.5)
-  3) TRANSLATED vs chapter (2.1±0.5)
+Сравнения по типу файлов глав:
+  POLISHED   vs redacted (1.0±0.05) + chapter (2.1±0.5)
+  REDACTED   vs translated (1.0±0.05) + chapter (2.1±0.5)
+  TRANSLATED vs chapter (2.1±0.5)
+Коэффициенты: --neighbor/--original в формате «ratio±tol».
+Regexp-проверки текста (--regexp-check, по одной на строку): всё
+найденное — ошибка; первое вхождение на первой непустой строке
+(заголовок главы) не считается; ^/$ — начало/конец СТРОКИ (multiline);
+комментарий в конце строки — « # …». Пусто = встроенные дефолты
+(иероглифы, латиница, лишние «Глава N»).
 Примеры:
-  %(prog)s                                  strict, пресет 1, весь диапазон
-  %(prog)s --preset 2 --start 1 --end 50
+  %(prog)s                                  strict, polished, весь диапазон
+  %(prog)s --check-type redacted --start 1 --end 50
   %(prog)s --chapters-dir ./chapters --lenient
-Интерактивный выбор — в лаунчере tools/run_translate_check.py.
 """,
     )
     parser.add_argument("--chapters-dir", default="./chapters",
                         help="Путь к папке с главами (по умолчанию: ./chapters)")
-    parser.add_argument("--preset", choices=sorted(presets()), default="1",
-                        help="Тип проверки: 1=POLISHED, 2=REDACTED, "
-                             "3=TRANSLATED (по умолчанию: 1)")
+    parser.add_argument("--check-type", choices=["polished", "redacted",
+                                                 "translated"],
+                        default="polished",
+                        help="Тип файлов глав: polished (vs redacted+chapter), "
+                             "redacted (vs translated+chapter), translated "
+                             "(vs chapter); по умолчанию: polished")
     parser.add_argument("--start", type=int, default=None,
                         help="Начальная глава (по умолчанию: минимальная найденная)")
     parser.add_argument("--end", type=int, default=None,
@@ -290,37 +313,23 @@ def main() -> None:
                         help="Слова-исключения через запятую "
                              "(пусто = ничего; иначе "
                              "TRANSLATE_CHECK_EXCLUDE_WORDS из .env)")
-    # ── настраиваемые коэффициенты пресетов (эвристики: подбираются
-    #    опытным путём под конкретную книгу; дефолты — встроенные)
-    parser.add_argument("--ratio-neighbor", type=float, default=None,
-                        help="Ожидаемый ratio соседней стадии (по умолчанию "
-                             f"{RATIO_NEIGHBOR}) — эвристика, подбирается "
-                             "опытным путём")
-    parser.add_argument("--tol-neighbor", type=float, default=None,
-                        help="Допуск ratio соседней стадии (по умолчанию "
-                             f"{TOL_NEIGHBOR})")
-    parser.add_argument("--ratio-original", type=float, default=None,
-                        help="Ожидаемый ratio с оригиналом chapter (по "
-                             f"умолчанию {RATIO_ORIGINAL}) — эвристика, "
-                             "подбирается опытным путём")
-    parser.add_argument("--tol-original", type=float, default=None,
-                        help="Допуск ratio с оригиналом (по умолчанию "
-                             f"{TOL_ORIGINAL})")
-    # ── отключаемые проверки (экспертные)
-    parser.add_argument("--no-nonrussian", action="store_true",
-                        help="Отключить проверку не-русских символов "
-                             "(китайские иероглифы/латиница; по умолчанию "
-                             "включена)")
-    parser.add_argument("--nonrussian-regex", default=None,
-                        help="Свой regexp для поиска не-русских символов "
-                             "(по умолчанию: иероглифы + латиница)")
-    parser.add_argument("--no-chapter-order", action="store_true",
-                        help="Отключить проверку последовательности глав "
-                             "(по умолчанию включена)")
-    parser.add_argument("--chapter-regex", default=None,
-                        help="Свой формат заголовка «Глава N» (regexp с "
-                             "группой 1 = номер; по умолчанию: "
-                             r"^\s*Глава\s+(\d+|\[Номер\])")
+    # ── настраиваемые коэффициенты (эвристики: подбираются опытным
+    #    путём под конкретную книгу; дефолты — встроенные)
+    parser.add_argument("--neighbor", default=None,
+                        help="Стадия/Стадия (по занимаемому месту): "
+                             f"«ratio±tol», напр. «{RATIO_NEIGHBOR}±"
+                             f"{TOL_NEIGHBOR}» (пусто = дефолт)")
+    parser.add_argument("--original", default=None,
+                        help="Оригинал/Стадия (по занимаемому месту): "
+                             f"«ratio±tol», напр. «{RATIO_ORIGINAL}±"
+                             f"{TOL_ORIGINAL}» (пусто = дефолт)")
+    # ── regexp-проверки текста главы (экспертные)
+    parser.add_argument("--regexp-check", action="append", default=[],
+                        metavar="RE",
+                        help="Regexp по тексту главы (multiline): всё "
+                             "найденное — ошибка; можно повторять; "
+                             "комментарий в конце строки — « # …»; "
+                             "пусто = дефолтные проверки")
     args = parser.parse_args()
     strict = not args.lenient
     chapters_dir: str = args.chapters_dir
@@ -356,10 +365,13 @@ def main() -> None:
     auto_min = min(chapter_map)
     auto_max = max(chapter_map)
 
-    type_choice = args.preset
-    check_type, comparisons = presets(
-        args.ratio_neighbor, args.tol_neighbor,
-        args.ratio_original, args.tol_original)[type_choice]
+    check_type = args.check_type
+    comparisons = comparisons_for(check_type, args.neighbor, args.original)
+    regexp_checks = []
+    for line in args.regexp_check:
+        line = strip_line_comment(line).strip()
+        if line:
+            regexp_checks.append(re.compile(line, re.MULTILINE))
 
     print("--------------------------------------")
     print(f"Найден диапазон глав: {auto_min} – {auto_max} "
@@ -385,6 +397,7 @@ def main() -> None:
         f"Диапазон глав : {start_cap} – {end_cap}\n"
         f"Папка глав    : {os.path.abspath(chapters_dir)}\n"
         f"Сравнения     : {comp_desc}\n"
+        f"Regexp-проверки: {'; '.join(rx.pattern for rx in regexp_checks)}\n"
         f"Режим         : {'strict' if strict else 'lenient'}\n"
         f"Исключения    : {', '.join(exclusions)}\n"
         "Единицы       : размеры в байтах; ratio — безразмерная эвристика\n"
@@ -428,13 +441,7 @@ def main() -> None:
             strict=strict,
             prev_inner_chapter=prev_inner_chapter,
             exclusions=exclusions,
-            check_nonrussian=not args.no_nonrussian,
-            nonrussian_regexes=(
-                [re.compile(args.nonrussian_regex)]
-                if args.nonrussian_regex else None),
-            check_chapter_order=not args.no_chapter_order,
-            chapter_regex=(re.compile(args.chapter_regex)
-                           if args.chapter_regex else None),
+            regexp_checks=regexp_checks or None,
         )
 
         # ---- консоль: всегда показываем прогресс ----
