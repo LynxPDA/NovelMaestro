@@ -1,5 +1,42 @@
 # История версий NovelMaestro
 
+## 0.1.16 (2026-02-13)
+
+### Новое
+
+- **translate_check · «Тип файлов глав» вместо пресета** — выбор
+  типа (polished/redacted/translated) определяет сравнения:
+  polished → redacted+chapter, redacted → translated+chapter,
+  translated → только chapter; простой режим с карточкой
+  «Проверить перевод».
+- **translate_check · «ratio±tol» в одном поле** — «Стадия/Стадия
+  (по занимаемому месту)» и «Оригинал/Стадия (по занимаемому
+  месту)» вместо четырёх полей ratio/tol; формат `1.0±0.05`
+  (`--neighbor`/`--original`).
+- **translate_check · универсальные regexp-проверки** — чекбоксы
+  отключения и «свои форматы» убраны: каждая строка — regexp по
+  тексту главы (multiline), всё найденное — ошибка, первое
+  вхождение на заголовке главы не считается; по умолчанию —
+  иероглифы, латиница, лишние «Глава N».
+- **Комментарии « # …» в regexp-полях** — паттерны разбивки epub,
+  regexp-проверки translate_check и правила batch_replace
+  поддерживают комментарий в конце строки; многострочные поля
+  предзаполняются из `.env` одной строкой с переносами как «\n»
+  (`EPUB_SPLIT_PATTERNS`, `TRANSLATE_CHECK_REGEXP_CHECKS`,
+  `BATCH_REPLACE_REPLACEMENTS`).
+- **Предпросмотры при светлой теме** — явный цвет текста у
+  предпросмотра замен, epub-разбивки и compile: чёрные буквы на
+  тёмном фоне невозможны при любой теме.
+
+### Изменения
+
+- `cli/translate_check.py`: `--preset` → `--check-type`,
+  `--ratio-*/--tol-*` → `--neighbor`/`--original`,
+  `--no-nonrussian`/`--nonrussian-regex`/`--no-chapter-order`/
+  `--chapter-regex` → `--regexp-check` (повторяемый).
+- `core/common.py`: новая функция `strip_line_comment` (inline-
+  комментарий « # …» в строке правила).
+
 ## 0.1.12 (2026-09-03)
 
 ### Новое
