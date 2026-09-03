@@ -594,6 +594,28 @@ def test_ner_check_rag_builds_block(tmp_path):
     assert sum(len(l) for l in frag_lines) <= 2000 * 3 + 1000
 
 
+def test_ner_check_rag_searches_by_term(tmp_path):
+    """RAG: FTS5 ищет по ПОЛЮ term (исходный термин), а не по
+    translation — для chapter-источника (китайский текст) перевод
+    в тексте не встречается; fallback на translation — только при
+    пустом результате (переведённые источники)."""
+    from core.common import build_fts_index
+    # китайский текст книги: термин встречается, перевод — нет
+    text = "林凡走进了大厅。" * 30 + "\n\n" + "青云宗位于山中。" * 30
+    db = build_fts_index(text, 1000)
+    items_by_term = {i["term"]: i for i in ITEMS}
+    block = NC.build_rag_block(["林凡"], items_by_term, db, 2000,
+                               logger=SilentLog())
+    assert "林凡走进了大厅" in block  # фрагмент по term (раньше пусто)
+    assert "(термин не найден в тексте)" not in block
+    # термин без совпадений в тексте → fallback по переводу
+    text2 = "Линь Фан вошёл в зал. " * 30
+    db2 = build_fts_index(text2, 1000)
+    block2 = NC.build_rag_block(["林凡"], items_by_term, db2, 2000,
+                                logger=SilentLog())
+    assert "Линь Фан вошёл" in block2
+
+
 def test_ner_check_rag_block_fields(tmp_path):
     """RAG: выбранные поля записи (fields) уходят в промпт, остальные
     поля — нет; term — всегда в заголовке."""

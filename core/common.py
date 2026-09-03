@@ -1259,10 +1259,26 @@ def fts_escape(s: str) -> str:
     return s.replace('"', '""')
 
 
+# Пробелы вокруг CJK-иероглифов для FTS5 (unicode61): сплошная
+# китайская строка токенизируется как ОДИН токен — термин-подстрока
+# не матчится. Разбивка по символам делает каждый иероглиф токеном,
+# фразовый запрос термина («林凡» → «林 凡») находит смежные токены.
+_CJK_IDEOGRAPH_RE = re.compile(r'[\u3400-\u9fff\uf900-\ufaff]')
+
+
+def _cjk_space(text: str) -> str:
+    """Пробелы вокруг каждого иероглифа (и в тексте, и в запросе —
+    симметрично, иначе термины не найдутся)."""
+    return _CJK_IDEOGRAPH_RE.sub(r' \g<0> ', text)
+
+
 def build_fts_index(text: str, chunk_size: int, logger=None) -> sqlite3.Connection:
     """FTS5-индекс текста в памяти: нарезка на чанки по абзацам
     (fallback — по chunk_size). Возвращает sqlite3.Connection с таблицей
-    chunks(content, chunk_id UNINDEXED)."""
+    chunks(searchable, content UNINDEXED, chunk_id UNINDEXED): searchable
+    — с пробелами вокруг иероглифов (unicode61 токенизирует сплошную
+    CJK-строку одним токеном, подстрока-термин не матчится), content —
+    оригинальный текст для выдачи фрагментов."""
     paragraphs = re.split(r'\n\s*\n', text)
     chunks: list[str] = []
     current = ""
@@ -1284,9 +1300,11 @@ def build_fts_index(text: str, chunk_size: int, logger=None) -> sqlite3.Connecti
 
     db = sqlite3.connect(":memory:")
     db.execute(
-        "CREATE VIRTUAL TABLE chunks USING fts5(content, chunk_id UNINDEXED)")
+        "CREATE VIRTUAL TABLE chunks USING fts5(searchable, "
+        "content UNINDEXED, chunk_id UNINDEXED)")
     for i, chunk in enumerate(chunks):
-        db.execute("INSERT INTO chunks VALUES (?, ?)", (chunk, str(i)))
+        db.execute("INSERT INTO chunks VALUES (?, ?, ?)",
+                   (_cjk_space(chunk), chunk, str(i)))
     db.commit()
     return db
 
@@ -1297,7 +1315,7 @@ def fts_search_all(db: sqlite3.Connection, query: str) -> list[str]:
         rows = db.execute(
             "SELECT content FROM chunks WHERE chunks MATCH ? "
             "ORDER BY CAST(chunk_id AS INTEGER)",
-            (query,),
+            (_cjk_space(query),),
         ).fetchall()
         return [r[0] for r in rows]
     except sqlite3.OperationalError:
@@ -1310,7 +1328,7 @@ def fts_search_first(db: sqlite3.Connection, query: str) -> str | None:
         row = db.execute(
             "SELECT content FROM chunks WHERE chunks MATCH ? "
             "ORDER BY CAST(chunk_id AS INTEGER) LIMIT 1",
-            (query,),
+            (_cjk_space(query),),
         ).fetchone()
         return row[0] if row else None
     except sqlite3.OperationalError:
@@ -1322,7 +1340,7 @@ def fts_search_ids_all(db: sqlite3.Connection, query: str) -> set[str]:
     try:
         rows = db.execute(
             "SELECT chunk_id FROM chunks WHERE chunks MATCH ?",
-            (query,),
+            (_cjk_space(query),),
         ).fetchall()
         return {r[0] for r in rows}
     except sqlite3.OperationalError:

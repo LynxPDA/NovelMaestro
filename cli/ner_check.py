@@ -423,9 +423,10 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
     """Собирает блок «термины + релевантные фрагменты» для RAG-промпта.
     fields — поля записи ner.json, передаваемые LLM (термин — всегда,
     в заголовке; дефолт — type/translation); фрагменты — FTS5-поиск по
-    translation, равномерная выборка (не только начало книги),
-    суммарный бюджет — budget СИМВОЛОВ."""
-    import re as _re
+    term (исходный термин — для chapter-источника), при пустом
+    результате — по translation (переведённые источники), равномерная
+    выборка (не только начало книги), суммарный бюджет — budget
+    СИМВОЛОВ."""
     selected = {f.strip() for f in fields} if fields else None
     lines = []
     for term in terms:
@@ -442,11 +443,13 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
                 lines.append("  " + ln)
         else:
             lines.append("  (нет записи в ner.json)")
-        if not translation:
-            lines.append("  (нет перевода в ner.json)")
-            continue
-        ev = fts_escape(translation)
+        ev = fts_escape(term)
         hits = fts_search_all(db, f'"{ev}"')
+        if not hits and translation:
+            # перевод — fallback для переведённых источников
+            # (translated/redacted/polished)
+            ev = fts_escape(translation)
+            hits = fts_search_all(db, f'"{ev}"')
         if not hits:
             lines.append("  (термин не найден в тексте)")
             continue
