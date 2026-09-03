@@ -4543,6 +4543,16 @@ function viewProject(section, name, tab) {
     function renderReport() {
       body.replaceChildren();
       const r = current;
+      if (!r) {
+        // после «Очистить» отчётов нет — пустое состояние вместо падения
+        body.append(
+          h("div", { class: "files-empty" },
+            "Нет отчётов — запустите стадию translate_check "
+            + "(экран «Запуски», стадия 4)"),
+        );
+        pager.replaceChildren();
+        return;
+      }
       body.append(
         h("div", { class: "review-card-title" }, r.name),
         h(
@@ -4650,12 +4660,62 @@ function viewProject(section, name, tab) {
       body.append(pager);
       renderPager(rows.length);
     }
+    // «Очистить» — удалить все отчёты check_*.txt из logs/ проекта
+    const clearBtn = h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost rv-clear",
+        title: "Удалить все отчёты check_*.txt из logs/",
+      },
+      "Очистить",
+    );
+    clearBtn.disabled = !(data.reports || []).length;
+    clearBtn.addEventListener("click", () => {
+      const n = (data.reports || []).length;
+      confirmModal(
+        "Очистить отчёты",
+        `Будут удалены все отчёты translate_check (${n} шт.) из logs/`,
+        "УДАЛИТЬ",
+        async () => {
+          const q = new URLSearchParams({ project: `${section}/${name}` });
+          try {
+            for (const r of data.reports || []) {
+              await api(`/file?${q}&path=${encodeURIComponent(`logs/${r.name}`)}`, {
+                method: "DELETE",
+              });
+            }
+            data.reports = [];
+            current = null;
+            page = 0;
+            rPage = 0;
+            clearBtn.disabled = true;
+            renderList();
+            renderReport();
+            toast("Все отчёты удалены");
+          } catch (ex) {
+            toast(ex.message, "err");
+          }
+        },
+      );
+    });
     renderList();
     renderReport();
     return h(
       "div",
       { class: "files-wrap" },
-      h("div", { class: "check-list" }, list, listPager),
+      h(
+        "div",
+        { class: "check-list" },
+        h(
+          "div",
+          { class: "check-list-toolbar" },
+          h("span", { class: "check-list-count" },
+            `${data.reports.length} отчёт(ов)`),
+          clearBtn,
+        ),
+        list,
+        listPager,
+      ),
       body,
     );
   }
@@ -4679,10 +4739,12 @@ async function renderQualityReports(section, name) {
   });
   frame.style.display = "none";
 
-  async function renderFile(name) {
+  async function renderFile(fname) {
+    // fname — имя файла отчёта; name — имя проекта (замыкание):
+    // не перекрывать, иначе project=раздел/отчёт → 404 и пустой экран
     const q = new URLSearchParams({
       project: `${section}/${name}`,
-      path: name,
+      path: fname,
     });
     try {
       const r = await api(`/file?${q}`);
@@ -4698,6 +4760,7 @@ async function renderQualityReports(section, name) {
       err.textContent = "";
     } catch (ex) {
       err.textContent = ex.message;
+      frame.style.display = "none";
     }
   }
 
@@ -4746,6 +4809,7 @@ async function renderQualityReports(section, name) {
       sel,
     ),
     empty,
+    err,
     frame,
   );
   await loadFiles();

@@ -1609,6 +1609,19 @@ input[type="number"] {
   margin-bottom: 12px;
 }
 
+.check-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px;
+}
+
+.check-list-count {
+  color: var(--text-soft, #9aa7b8);
+  font-size: 13px;
+}
+
 .quality-reports {
   display: flex;
   flex-direction: column;
