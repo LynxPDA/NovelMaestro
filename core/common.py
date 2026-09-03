@@ -757,6 +757,44 @@ def parse_ner_patches(text, logger=None):
     return patches
 
 
+def parse_rag_suggestions(text, logger=None):
+    """Разбор ответа LLM в RAG-режиме: JSON-массив уточнений
+    [{term, type?, translation?, reason?}]. Терпим к код-заборам.
+    Возвращает список dict (term всегда, type/translation — если есть)
+    или None, если JSON не распарсился."""
+    s = (text or "").strip()
+    s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+    s = re.sub(r"\s*```$", "", s)
+    start, end = s.find("["), s.rfind("]")
+    if start == -1 or end <= start:
+        if logger:
+            logger.warning("⚠ В ответе LLM не найден JSON-массив.")
+        return None
+    try:
+        raw = json.loads(s[start:end + 1])
+    except json.JSONDecodeError as e:
+        if logger:
+            logger.warning(f"⚠ JSON уточнений не распарсился: {e}")
+        return None
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for p in raw:
+        if not isinstance(p, dict):
+            continue
+        term = unicodedata.normalize("NFC", str(p.get("term", "")).strip())
+        if not term:
+            continue
+        item = {"term": term,
+                "reason": str(p.get("reason", "")).strip()}
+        for field in ("type", "translation"):
+            v = str(p.get(field, "")).strip()
+            if v:
+                item[field] = unicodedata.normalize("NFC", v)
+        out.append(item)
+    return out
+
+
 def review_entry(raw, stage=""):
     """Нормализация одной правки в запись review-файла.
     Понимает и legacy-патч {term,field,old,new,reason}, и полную запись

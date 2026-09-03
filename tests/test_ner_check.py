@@ -19,6 +19,7 @@ from core.common import (  # noqa: E402
     parse_ner_patches, parse_review_doc, review_entry,
 )
 import ner_check as NC  # noqa: E402
+from conftest import SilentLog  # noqa: E402
 
 ITEMS = [
     {"term": "林凡", "type": "Person (male)", "translation": "Линь Фан",
@@ -532,3 +533,97 @@ def test_ner_check_threads_overall_progress(tmp_path, monkeypatch):
     assert rc == 0
     assert events and events[-1] == (3, 3)  # 3 типа = 3 батча, общий итог
     assert events[0] == (0, 3)  # старт — сразу общий total
+
+
+# ──────────────────────────────────────────────────────────────────────
+# RAG-режим (--passes rag)
+# ──────────────────────────────────────────────────────────────────────
+def test_ner_check_rag_builds_block(tmp_path):
+    """build_rag_block: термины из ner.json + релевантные фрагменты
+    книги равномерно (не с начала), бюджет соблюдается."""
+    from core.common import build_fts_index
+    text = "\n\n".join([
+        "Линь Фан вошёл в зал. " * 20,
+        "Секта Цинъюнь расположена в горах. " * 20,
+        "Огненный шар вспыхнул в руке. " * 20,
+        "Ничего общего с терминами. " * 20,
+    ])
+    db = build_fts_index(text, 1000)
+    items_by_term = {i["term"]: i for i in ITEMS}
+    block = NC.build_rag_block(
+        ["林凡", "青云宗", "火球术"], items_by_term, db, 2000, SilentLog())
+    assert "林凡" in block and "Секта Цинъюнь" in block
+    assert "Линь Фан" in block  # фрагмент по переводу
+    # бюджет: суммарная длина фрагментов ≤ бюджет × число терминов
+    import re as _re
+    frag_lines = [l for l in block.splitlines() if l.startswith("  · ")]
+    assert len(frag_lines) > 0
+    assert sum(len(l) for l in frag_lines) <= 2000 * 3 + 1000
+
+
+def test_ner_check_rag_main(tmp_path, monkeypatch):
+    """e2e: --passes rag с терминами и файлом книги → review-файл
+    с патчами stage=RAG (type/translation, old→new); LLM мокается."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    (tmp_path / "novel.txt").write_text(
+        "Линь Фан вошёл в зал. " * 50, encoding="utf-8")
+    calls = []
+    resp = ('[{"term": "林凡", "type": "Person (male)", '
+            '"translation": "Линь Фан", "reason": "p"}]')
+    _mock_stream(monkeypatch, resp, calls)
+    rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                  "--rag_terms", "林凡\n青云宗\n",
+                  "--rag_novel", "novel.txt",
+                  "--rag_budget", "1500",
+                  "--host", "http://x", "--model", "m"])
+    assert rc == 0
+    assert len(calls) == 1
+    # в запрос попали и термины, и фрагменты книги
+    assert "林凡" in calls[0] and "Линь Фан" in calls[0]
+    doc = json.loads((tmp_path / "ner_review.json")
+                     .read_text(encoding="utf-8"))
+    # 林凡 уже Person (male) и Линь Фан — уточнений нет → пусто
+    assert doc["entries"] == []
+
+
+def test_ner_check_rag_patches_differ(tmp_path, monkeypatch):
+    """RAG: если LLM предлагает другое значение — появляется патч
+    field=type/translation с old→new."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    (tmp_path / "novel.txt").write_text(
+        "Линь Фан вошёл в зал. " * 50, encoding="utf-8")
+    calls = []
+    resp = ('[{"term": "林凡", "type": "Person (female)", '
+            '"translation": "Линь Фан", "reason": "по фрагменту"}]')
+    _mock_stream(monkeypatch, resp, calls)
+    rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                  "--rag_terms", "林凡",
+                  "--rag_novel", "novel.txt",
+                  "--host", "http://x", "--model", "m"])
+    assert rc == 0
+    doc = json.loads((tmp_path / "ner_review.json")
+                     .read_text(encoding="utf-8"))
+    entries = doc["entries"]
+    assert len(entries) == 1
+    e = entries[0]
+    assert e["stage"] == "RAG" and e["term"] == "林凡"
+    assert e["field"] == "type"
+    assert e["old"] == "Person (male)" and e["new"] == "Person (female)"
+
+
+def test_ner_check_rag_missing_files(tmp_path, monkeypatch):
+    """RAG: нет файла книги / пустой список терминов — rc=1, без LLM."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    calls = []
+    _mock_stream(monkeypatch, "[]", calls)
+    rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                  "--rag_terms", "", "--rag_novel", "novel.txt",
+                  "--host", "http://x", "--model", "m"])
+    assert rc == 1 and not calls
+    rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                  "--rag_terms", "林凡", "--rag_novel", "нет.txt",
+                  "--host", "http://x", "--model", "m"])
+    assert rc == 1 and not calls

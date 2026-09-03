@@ -1175,11 +1175,11 @@ def test_build_ner_check_no_bak():
 
 
 def test_ner_check_passes_modes():
-    """«Режимы»: whole (по умолчанию) / types; all убран."""
+    """«Режимы»: whole (по умолчанию) / types / rag; all убран."""
     f = next(x for x in STAGE_SPECS["ner_check"]["fields"]
              if x["name"] == "passes")
     assert f["label"] == "Режимы"
-    assert f["options"] == ["whole", "types"]
+    assert f["options"] == ["whole", "types", "rag"]
     assert "all" not in f["options"]
     assert f["default"] == "whole"
     # дефолтный запуск без passes → --passes whole
@@ -1187,6 +1187,26 @@ def test_ner_check_passes_modes():
     assert "--passes" not in argv or argv[argv.index("--passes") + 1] == "whole"
     argv2 = build_command("ner_check", {"passes": "types"}, {})
     assert "--passes" in argv2 and "types" in argv2
+
+
+def test_build_ner_check_rag_flags():
+    """RAG-режим: --rag_terms/--rag_novel/--rag_budget/--rag_prompt_file
+    пробрасываются в argv, если заполнены."""
+    form = {"passes": "rag", "rag_terms": "林凡\n青云宗",
+            "rag_novel": "source/novel.txt", "rag_budget": "4000",
+            "rag_prompt_file": "prompts/rag.txt"}
+    argv = build_command("ner_check", form, {})
+    assert "--passes" in argv and argv[argv.index("--passes") + 1] == "rag"
+    assert "--rag_terms" in argv
+    assert "林凡\n青云宗" in argv
+    assert "--rag_novel" in argv and "source/novel.txt" in argv
+    assert "--rag_budget" in argv and "4000" in argv
+    assert "--rag_prompt_file" in argv and "prompts/rag.txt" in argv
+    # пустые — флагов нет
+    argv2 = build_command("ner_check", {"passes": "rag"}, {})
+    assert "--rag_terms" not in argv2
+    assert "--rag_novel" not in argv2
+    assert "--rag_budget" not in argv2
 
 
 def test_build_ner_check_types_chips_value():

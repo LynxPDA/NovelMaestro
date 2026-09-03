@@ -45,6 +45,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -76,17 +77,22 @@ from core.common import (  # noqa: E402
     _int_count,
     apply_ner_patches,
     atomic_write,
+    build_fts_index,
     build_ner_batches,
     emit_progress,
+    even_sample,
     find_env_file,
     log_argv,
     filter_ner_items,
+    fts_escape,
+    fts_search_all,
     get_server_config,
     glossary_body,
     load_prompt,
     merge_review_entries,
     parse_dotenv,
     parse_ner_patches,
+    parse_rag_suggestions,
     parse_review_doc,
     print_env_help,
     review_entry,
@@ -107,6 +113,27 @@ TYPES_STAGE_PREFIX = (
     "унифицированных на прошлом этапе, — они приняты человеком. Ищи "
     "только несогласованность, ошибки и неверные типы ВНУТРИ данной "
     "группы записей.\n\n")
+
+DEFAULT_NER_RAG_PROMPT = """\
+Ты — профессиональный редактор и локализатор. Ниже дан список терминов
+и релевантные фрагменты книги, где эти термины встречаются.
+
+**Твоя задача:** для каждого термина определи/уточни по фрагментам:
+- тип сущности (Person/Location/Organisation/Technique/Artifact/Creature/
+  Stage/Material/Event/… — с полом в скобках для персонажей, напр.
+  Person (male));
+- корректный перевод и контекст употребления.
+
+Отвечай ТОЛЬКО JSON-массивом без markdown-заборов:
+[{"term": "<термин>", "type": "<тип>", "translation": "<перевод>", "reason": "<краткое обоснование по фрагментам>"}]
+Не выдумывай: если по фрагментам тип/перевод не определить — пропусти
+термин (не включай в массив).
+
+## ТЕРМИНЫ И ФРАГМЕНТЫ
+
+{rag_block}
+"""
+
 
 DEFAULT_NER_CHECK_PROMPT = """\
 Ты — профессиональный редактор и локализатор. Ниже приведён глоссарий перевода (термины, типы, переводы, контекст, примечания).
@@ -164,11 +191,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--prompt_file", default=DEFAULT_PROMPT_FILE,
                    help="Внешний промпт; плейсхолдер {glossary}. "
                         "Нет файла — встроенный fallback.")
-    p.add_argument("--passes", choices=["whole", "types"],
+    p.add_argument("--passes", choices=["whole", "types", "rag"],
                    default="whole",
                    help="whole — выбранные типы одновременно (весь список "
                         "разом, по умолчанию); types — выбранные типы по "
-                        "очереди (каждый тип отдельно).")
+                        "очереди (каждый тип отдельно); rag — точечная "
+                        "проверка спорных терминов по списку с FTS5-"
+                        "контекстом.")
+    p.add_argument("--rag_terms", default="",
+                   help="RAG-режим: список терминов, каждый с новой строки "
+                        "(остальное подтягивается из ner.json).")
+    p.add_argument("--rag_novel", default="",
+                   help="RAG-режим: txt-файл книги для FTS5-поиска "
+                        "(релевантные фрагменты по терминам).")
+    p.add_argument("--rag_budget", type=int, default=6000,
+                   help="RAG-режим: бюджет релевантного текста на термин, "
+                        "СИМВОЛЫ (по умолчанию: 6000).")
+    p.add_argument("--rag_prompt_file", default=None,
+                   help="RAG-режим: файл промпта с тегом <prompt_rag> "
+                        "(по умолчанию: тот же --prompt_file).")
     p.add_argument("--types", default="",
                    help="Ограничить проходы по типам (через запятую). "
                         "Пусто = все типы ner.json.")
@@ -341,6 +382,142 @@ def run_batch(task, prompt_tpl, args, base_url, api_key, model, logger):
     return title, found
 
 
+def load_rag_prompt(prompt_file: str, logger) -> str:
+    """RAG-промпт: тег <prompt_rag> из файла (или --rag_prompt_file,
+    или --prompt_file); нет тега — встроенный DEFAULT_NER_RAG_PROMPT."""
+    for f in (prompt_file,):
+        if not f or not os.path.exists(f):
+            continue
+        try:
+            text = open(f, "r", encoding="utf-8").read()
+        except OSError:
+            continue
+        m = re.search(r"<prompt_rag>(.*?)</prompt_rag>", text, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+    logger.info("ℹ RAG-промпт: тег <prompt_rag> не найден — встроенный "
+                "fallback.")
+    return DEFAULT_NER_RAG_PROMPT
+
+
+def build_rag_block(terms, items_by_term, db, budget, logger):
+    """Собирает блок «термины + релевантные фрагменты» для RAG-промпта.
+    Фрагменты — FTS5-поиск по translation, равномерная выборка (не
+    только начало книги), суммарный бюджет — budget СИМВОЛОВ."""
+    import re as _re
+    lines = []
+    for term in terms:
+        item = items_by_term.get(term)
+        translation = (item or {}).get("translation") or ""
+        type_str = (item or {}).get("type") or "?"
+        lines.append(f"--- {term} (тип: {type_str}) ---")
+        if not translation:
+            lines.append("  (нет перевода в ner.json)")
+            continue
+        ev = fts_escape(translation)
+        hits = fts_search_all(db, f'"{ev}"')
+        if not hits:
+            lines.append("  (термин не найден в тексте)")
+            continue
+        frags = even_sample(hits, max(1, budget // 1500))
+        # нарезаем фрагменты по остатку бюджета
+        used = 0
+        for f in frags:
+            if used >= budget:
+                break
+            take = min(len(f), budget - used)
+            lines.append(f"  · {f[:take]}")
+            used += take
+        lines.append("")
+    return "\n".join(lines)
+
+
+def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
+    """RAG-режим: список терминов → релевантный текст (FTS5) → LLM.
+    Возвращает код возврата (0 — ок)."""
+    terms = [t.strip() for t in args.rag_terms.split("\n")
+             if t.strip()]
+    if not terms:
+        logger.error("❌ RAG: пустой список терминов (--rag_terms).")
+        return 1
+    if not os.path.exists(args.rag_novel):
+        logger.error(f"❌ RAG: файл книги не найден: {args.rag_novel}")
+        return 1
+    try:
+        with open(args.rag_novel, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError as exc:
+        logger.error(f"❌ RAG: не удалось прочитать {args.rag_novel}: {exc}")
+        return 1
+    data = load_ner_json(args.input, logger)
+    items_by_term = {i.get("term", ""): i for i in data}
+    logger.info(f"🔎 RAG: {len(terms)} терминов, "
+                f"{len(text)} символов книги.")
+    db = build_fts_index(text, 1000)
+    block = build_rag_block(terms, items_by_term, db, args.rag_budget, logger)
+    user_msg = render_prompt(prompt_tpl, block)
+    logger.info(f"  запрос: {len(user_msg)} символов")
+    emit_progress(0, 1, "Точечная проверка (RAG)")
+    text_out, err = stream_chat_completion(
+        base_url, model,
+        [{"role": "user", "content": user_msg}],
+        api_key=api_key,
+        max_retries=args.max_retries,
+        timeout=args.timeout, stream_timeout=args.timeout,
+        temperature=args.temperature,
+        reasoning_effort=args.reasoning_effort,
+        max_tokens=args.max_tokens,
+        reference_len=0, logger=logger,
+        label=f"ner_check rag")
+    emit_progress(1, 1, "Точечная проверка (RAG)")
+    if err:
+        logger.error(f"  ❌ LLM: {err}")
+        return 1
+    found = parse_rag_suggestions(text_out, logger)
+    if found is None:
+        logger.error("  ❌ Ответ не распарсился (см. лог выше).")
+        return 1
+    logger.info(f"  ✔ Определено: {len(found)} терминов")
+    # RAG-ответ — уточнение type/translation: превращаем в патчи,
+    # сверяя с текущими значениями в ner.json (old → new)
+    entries = []
+    for p in found:
+        term = p.get("term", "")
+        item = items_by_term.get(term)
+        if not item:
+            logger.warning(f"  ⚠ Термин {term!r} не найден в ner.json — "
+                           f"пропущен.")
+            continue
+        for field in ("type", "translation"):
+            new = str(p.get(field, "")).strip()
+            old = str(item.get(field, "")).strip()
+            if not new:
+                continue
+            if field == "translation" and new == old:
+                continue
+            if field == "type":
+                # тип: нормализуем только случай, когда изменился
+                if new == old:
+                    continue
+            e = review_entry({"term": term, "field": field,
+                              "old": old, "new": new,
+                              "reason": p.get("reason", "")},
+                             stage="RAG")
+            if e:
+                entries.append(e)
+    if not entries:
+        logger.info("  ℹ Уточнений, отличающихся от ner.json, нет.")
+    # сохраняем в review-файл (дедуп с накопленным)
+    meta, existing = load_review_file(args.review, logger)
+    created = (meta or {}).get("created") \
+        or datetime.now().strftime("%Y-%m-%d %H:%M")
+    merged, added = merge_review_entries(existing or [], entries, logger)
+    save_review_file(args.review, args.input, created, merged)
+    logger.info(f"🧩 Правки: {args.review} "
+                f"(новых: {added}, всего: {len(merged)})")
+    return 0
+
+
 def patches_table(patches, offset=0) -> str:
     lines = ["| # | Термин | Поле | Было | Стало | Причина |",
              "|---|--------|------|------|-------|---------|"]
@@ -355,6 +532,12 @@ def patches_table(patches, offset=0) -> str:
 
 def do_check(args, logger) -> int:
     base_url, api_key, model, _ = resolve_server(args, logger)
+
+    if args.passes == "rag":
+        prompt_tpl = load_rag_prompt(args.rag_prompt_file or args.prompt_file,
+                                     logger)
+        return run_rag(args, logger, base_url, api_key, model, prompt_tpl)
+
     data = load_ner_json(args.input, logger)
     type_filter = ([t.strip() for t in args.types.split(",") if t.strip()]
                    or None)

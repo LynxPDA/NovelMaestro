@@ -23,6 +23,13 @@ ner_check: filter_ner_items (порог count + типы) / format_ner_record /
   fields — какие поля записи передавать LLM, None = все, term — всегда) /
   parse_ner_patches (JSON-патчи LLM {term,field,old,new,reason},
   field ∈ translation|type|notes) /
+  parse_rag_suggestions (RAG-уточнения LLM {term,type?,translation?,
+  reason?} — список dict) /
+FTS5 (RAG/wiki): build_fts_index (текст → in-memory sqlite, нарезка
+  по абзацам с fallback по chunk_size) / fts_escape / fts_search_all /
+  fts_search_first / fts_search_ids_all (все — без BM25, в порядке
+  текста, битый запрос → пусто) / even_sample (равномерная выборка:
+  первый и последний всегда)
   review_entry / parse_review_doc / merge_review_entries (review-файл:
   поля английские: stage/status принять|отклонить/applied/old/new,
   накопление по этапам, дедуп по term+field+old+new) /

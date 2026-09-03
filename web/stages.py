@@ -329,6 +329,14 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--prompt_file", str(form["prompt_file"])]
     if form.get("passes"):
         argv += ["--passes", str(form["passes"])]
+    if form.get("rag_terms"):
+        argv += ["--rag_terms", str(form["rag_terms"])]
+    if form.get("rag_novel"):
+        argv += ["--rag_novel", str(form["rag_novel"])]
+    if form.get("rag_budget") not in (None, ""):
+        argv += ["--rag_budget", str(form["rag_budget"])]
+    if form.get("rag_prompt_file"):
+        argv += ["--rag_prompt_file", str(form["rag_prompt_file"])]
     if form.get("types"):
         argv += ["--types", str(form["types"])]
     if form.get("batch_size") not in (None, ""):
@@ -824,12 +832,14 @@ STAGE_SPECS: dict[str, dict] = {
              "default": "ner_check_prompt.txt"},
             {"name": "passes", "label": "Режимы",
              "labels": {"whole": "Выбранные типы (одновременно)",
-                         "types": "Выбранные типы (по очереди)"},
-             "type": "select", "options": ["whole", "types"],
+                         "types": "Выбранные типы (по очереди)",
+                         "rag": "Точечно по списку (RAG)"},
+             "type": "select", "options": ["whole", "types", "rag"],
              "default": "whole",
              "help": "одновременно — весь список выбранных типов разом "
                       "(батчи по бюджету); по очереди — каждый тип "
-                      "отдельно"}, 
+                      "отдельно; rag — точечная проверка списка терминов "
+                      "по FTS5-фрагментам книги"}, 
             {"name": "batch_size", "label": "Бюджет пакета, СИМВОЛЫ",
              "type": "number", "default": "196608"},
             {"name": "threads", "label": "Потоков (1–16)",
@@ -838,6 +848,23 @@ STAGE_SPECS: dict[str, dict] = {
                       "последовательного прохода типов)"},
             {"name": "count_threshold", "label": "Порог count (> X)",
              "type": "number", "default": "0"},
+            {"name": "rag_terms", "label": "RAG: список терминов",
+             "type": "textarea", "default": "",
+             "help": "Каждый термин с новой строки; тип/перевод "
+                      "подтягиваются из ner.json; нужен режим «rag»"},
+            {"name": "rag_novel", "label": "RAG: файл книги (txt)",
+             "type": "files", "dir": "", "ext": [".txt"], "default": "",
+             "help": "Полный текст книги для FTS5-поиска релевантных "
+                      "фрагментов"},
+            {"name": "rag_budget", "label": "RAG: бюджет на термин, СИМВОЛЫ",
+             "type": "number", "default": "6000",
+             "help": "Сколько релевантного текста (равномерно по книге) "
+                      "отдаётся LLM на один термин"},
+            {"name": "rag_prompt_file", "label": "RAG: промпт-файл",
+             "type": "files", "dir": "prompts", "ext": [".txt"],
+             "default": "",
+             "help": "Файл с тегом <prompt_rag>; пусто — тот же "
+                      "промпт-файл стадии"},
             # types/fields — скрытые: значения пишет виджет чипсов
             # (типы и поля из ner.json), buildParams собирает их в params;
             # noenv — .env не предзаполняет чипсы (дефолт: все типы и
