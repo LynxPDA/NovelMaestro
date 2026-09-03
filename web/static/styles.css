@@ -588,6 +588,15 @@ input[type="number"] {
   justify-content: flex-end;
   gap: 10px;
 }
+/* редактор промпта в модалке запусков (высота фиксированная) */
+.editor-modal-body {
+  height: 60vh;
+  min-height: 320px;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
 
 .field {
   display: flex;

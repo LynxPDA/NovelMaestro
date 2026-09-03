@@ -607,15 +607,33 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         vals[f.name] = sel.value;
         touched.add(f.name);
       });
-      // загрузка своего файла сразу (без выбора из существующих)
+      // загрузка своего файла / редактирование выбранного (промпты)
       const row = h("div", { class: "field-row" }, input);
       const upInput = h("input", { type: "file", class: "hidden" });
+      // промпт-файлы (dir=prompts, .txt): выбранный промпт редактируется
+      // прямо из запуска («Редактировать» вместо «Загрузить»)
+      const isPrompt = dir === "prompts"
+        && (f.ext || []).includes(".txt");
       const upBtn = h(
         "button",
         { class: "btn btn-sm btn-ghost" },
         "Загрузить",
       );
-      upBtn.addEventListener("click", () => upInput.click());
+      function refreshPromptBtn() {
+        if (!isPrompt) {
+          upBtn.textContent = "Загрузить";
+          return;
+        }
+        upBtn.textContent = sel.value ? "Редактировать" : "Загрузить";
+      }
+      upBtn.addEventListener("click", () => {
+        if (isPrompt && sel.value) {
+          editPromptModal(sel.value);
+        } else {
+          upInput.click();
+        }
+      });
+      sel.addEventListener("change", refreshPromptBtn);
       upInput.addEventListener("change", async () => {
         if (!upInput.files || !upInput.files.length) return;
         const form = new FormData();
@@ -638,6 +656,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       });
       row.append(upBtn, upInput);
+      refreshPromptBtn();
       row._sel = input; // значение — select внутри row
       input = row;
     } else {
@@ -910,10 +929,78 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return { chipsBar, chipsBox, guide, loadTypes, fieldsBar, fieldsBox };
   }
 
+  // «Редактировать» промпт из запуска: чтение/правка/сохранение
+  // выбранного файла prompts/ (GET/PUT /api/prompts/{name})
+  function editPromptModal(fileName) {
+    const err = h("div", { class: "form-error" });
+    const host = h("div", { class: "editor-modal-body" });
+    const modal = h(
+      "div",
+      { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
+      h(
+        "div", { class: "modal modal-wide" },
+        h("div", { class: "modal-title" }, `Промпт: ${fileName}`),
+        host,
+        err,
+        h(
+          "div", { class: "modal-actions" },
+          h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
+          h(
+            "button",
+            {
+              class: "btn btn-primary",
+              onclick: async () => {
+                err.textContent = "";
+                if (!ed) {
+                  err.textContent = "Редактор ещё не загружен";
+                  return;
+                }
+                try {
+                  await api(`/prompts/${encodeURIComponent(fileName)}`, {
+                    method: "PUT",
+                    body: { project: `${section}/${name}`,
+                            content: ed.getValue() },
+                  });
+                  toast(`Сохранено: ${fileName}`);
+                  close();
+                } catch (ex) {
+                  err.textContent = ex.message;
+                }
+              },
+            },
+            "Сохранить",
+          ),
+        ),
+      ),
+    );
+    let ed = null;
+    (async () => {
+      try {
+        const d = await api(
+          `/prompts/${encodeURIComponent(fileName)}?project=${section}/${name}`,
+        );
+        // makeEditor/extOf — из app.js (глобальные; к моменту клика
+        // уже загружены)
+        ed = makeEditor(d.content || "", extOf(fileName));
+        host.append(h("div", { class: "editor-cm" }, ed.root));
+      } catch (ex) {
+        err.textContent = ex.message;
+      }
+    })();
+    function close() {
+      modal.remove();
+    }
+    document.body.append(modal);
+  }
+
   // «Добавить спорные» (RAG): модалка с настройками (поле голосов,
   // типы, коэффициент, порог count) → спорные термины из ner.json
   // добавляются в поле rag_terms построчно. Спорно, если max/второй
   // голос < коэффициента (по выбранному полю _votes_xxx).
+  //
+  // ВНИМАНИЕ: _votes_* в ner.json — ОБЪЕКТ {вариант: голоса}, а не
+  // массив (напр. {"Анлэ": 173, "Аньлэ": 149, ...}); поэтому берём
+  // Object.values и сортируем по убыванию.
   function addDisputedTermsModal(key, textareaWrap) {
     const err = h("div", { class: "form-error" });
     const fieldSel = h("select", { class: "input" },
@@ -922,6 +1009,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const typesInfo = h("div", { class: "field-help" });
     let typeNames = [];
     let selTypes = null; // null = все выбранные
+    let items = []; // все записи ner.json (для пересчёта счётчиков)
     const ratioInp = h("input", {
       class: "input", type: "number", min: "0.01", step: "0.01",
       value: "1.5",
@@ -936,6 +1024,36 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       "коэффициента (напр. 173/149 = 1.16 < 1.5). Порог count — только ",
       "записи с count > X (0 = без порога).",
     );
+    // спорность одной записи по выбранному полю (или любому _votes_*)
+    function isDisputed(it, ratio, threshold) {
+      if (threshold > 0 && !(Number(it.count) > threshold)) return false;
+      const field = fieldSel.value;
+      const keys = field
+        ? [field]
+        : Object.keys(it).filter((k) => k.startsWith("_votes_"));
+      for (const k of keys) {
+        const v = it[k];
+        if (!v || typeof v !== "object") continue;
+        const nums = Object.values(v)
+          .map(Number)
+          .filter((n) => Number.isFinite(n) && n > 0);
+        if (nums.length < 2) continue;
+        nums.sort((a, b) => b - a);
+        if (nums[0] / nums[1] < ratio) return true;
+      }
+      return false;
+    }
+    function disputedCountFor(type) {
+      const ratio = Number(ratioInp.value);
+      if (!Number.isFinite(ratio) || ratio <= 0) return 0;
+      const threshold = Math.max(0, Number(countInp.value) || 0);
+      let n = 0;
+      for (const it of items) {
+        if (it.type !== type) continue;
+        if (isDisputed(it, ratio, threshold)) n++;
+      }
+      return n;
+    }
     function renderTypeChips() {
       typesBox.replaceChildren();
       for (const t of typeNames) {
@@ -954,7 +1072,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           }
           renderTypeChips();
         });
-        typesBox.append(h("label", { class: "ner-chip" }, cb, ` ${t}`));
+        const n = disputedCountFor(t);
+        typesBox.append(
+          h("label", { class: "ner-chip" }, cb, ` ${t} (${n})`),
+        );
       }
     }
     const selAll = h("button", { class: "btn btn-xs btn-ghost" },
@@ -1003,30 +1124,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
                   return;
                 }
                 const threshold = Math.max(0, Number(countInp.value) || 0);
-                const field = fieldSel.value; // "" = все поля голосов
-                const d = await api(`/ner?project=${section}/${name}`);
                 const terms = new Set();
-                for (const it of d.items || []) {
+                for (const it of items) {
                   if (selTypes != null && !selTypes.includes(it.type)) {
                     continue;
                   }
-                  if (threshold > 0
-                      && !(Number(it.count) > threshold)) continue;
-                  let ok = false;
-                  const keys = field
-                    ? [field]
-                    : Object.keys(it).filter((k) =>
-                        k.startsWith("_votes_"));
-                  for (const k of keys) {
-                    const v = it[k];
-                    if (!Array.isArray(v)) continue;
-                    const nums = v.map(Number)
-                      .filter((n) => Number.isFinite(n) && n > 0);
-                    if (nums.length < 2) continue;
-                    nums.sort((a, b) => b - a);
-                    if (nums[0] / nums[1] < ratio) ok = true;
-                  }
-                  if (ok) terms.add(it.term);
+                  if (isDisputed(it, ratio, threshold)) terms.add(it.term);
                 }
                 const cur = String(
                   st.values[key]["rag_terms"] ?? "").trim();
@@ -1050,12 +1153,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     function close() {
       modal.remove();
     }
-    // поля голосов и типы — из данных ner.json (асинхронно)
+    // поля голосов и типы — из данных ner.json (асинхронно); данные
+    // кешируем в items для живого пересчёта счётчиков
     api(`/ner?project=${section}/${name}`).then((d) => {
+      items = d.items || [];
       const byType = d.by_type || {};
       typeNames = Object.keys(byType).sort();
       const seen = new Set();
-      for (const it of d.items || []) {
+      for (const it of items) {
         if (!it || typeof it !== "object") continue;
         for (const k of Object.keys(it)) {
           if (k.startsWith("_votes_") && !seen.has(k)) {
@@ -1070,6 +1175,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           : "Глоссарий пуст";
       renderTypeChips();
     }).catch(() => {});
+    // живой пересчёт счётчиков при изменении параметров
+    ratioInp.addEventListener("input", renderTypeChips);
+    countInp.addEventListener("input", renderTypeChips);
+    fieldSel.addEventListener("change", renderTypeChips);
     document.body.append(modal);
   }
 
@@ -1169,6 +1278,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
       w.loadTypes();
       const ragWraps = [];
+      // чипсы типов/полей в RAG не влияют — прячем вместе с RAG-панелью
+      const ragHidden = [w.chipsBar, w.chipsBox, w.fieldsBar, w.fieldsBox,
+                         w.guide];
       for (const name of ["rag_terms", "rag_source_type",
                           "rag_budget"]) {
         const f = (spec.fields || []).find((x) => x.name === name);
@@ -1194,6 +1306,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         const isRag = sel.value === "rag";
         for (const rw of ragWraps) {
           rw.classList.toggle("hidden", !isRag);
+        }
+        for (const el of ragHidden) {
+          el.classList.toggle("hidden", isRag);
         }
         const rr = st.rangeRow;
         if (rr) rr.classList.toggle("hidden", !isRag);
@@ -1416,11 +1531,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         ragWrap.append(h("div", { class: "ner-add-disputed" }, addBtn));
       }
       const sel = passesWrap && passesWrap._input;
+      // чипсы типов/полей в RAG не влияют — прячем вместе с RAG-панелью
+      const ragHidden = [w.chipsBar, w.chipsBox, w.fieldsBar, w.fieldsBox,
+                         w.guide];
       const applyRagExpert = () => {
         const isRag = sel && sel.value === "rag";
         for (const name of ragNames) {
           const fw = fieldWraps[name];
           if (fw) fw.classList.toggle("hidden", !isRag);
+        }
+        for (const el of ragHidden) {
+          el.classList.toggle("hidden", isRag);
         }
         if (rangeRow) rangeRow.classList.toggle("hidden", !isRag);
       };

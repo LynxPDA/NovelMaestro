@@ -911,7 +911,7 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
             {"name": "rag_budget", "label": "RAG: бюджет на термин, СИМВОЛЫ",
-             "type": "number", "default": "6000",
+             "type": "number", "default": "65536",
              "help": "Сколько релевантного текста (равномерно по книге) "
                       "отдаётся LLM на один термин"},
             # types/fields — скрытые: значения пишет виджет чипсов

@@ -251,12 +251,37 @@ def test_persist_metadata(tmp_path, fake_script):
     assert loaded.lines == [f"line-{i}" for i in range(10)]
     assert loaded.lines[-1] == "line-9"
     # секретов нет ни в jobs.json, ни в сайдкаре
-    data = (tmp_path / "jobs.json").read_text(encoding="utf-8")
+    data = (tmp_path / "job_logs" / "jobs.json").read_text(encoding="utf-8")
     assert "SECRET" not in data
     assert "argv" not in data
     side = (tmp_path / "job_logs" / f"{job.id}.log").read_text(
         encoding="utf-8")
     assert "SECRET" not in side
+
+
+def test_migrate_old_jobs_json(tmp_path, fake_script):
+    """Старый web/jobs.json переносится в job_logs/jobs.json при старте
+    (docker: job_logs — volume, история не теряется при обновлении)."""
+    old = tmp_path / "jobs.json"
+    old.write_text(
+        "[{\"id\": \"old-1\", \"action\": \"test\", \"title\": \"Старый\", "
+        "\"project\": \"ACTIVE/x\", \"status\": \"done\", "
+        "\"created\": 1}]",
+        encoding="utf-8")
+    jm = JobManager(tmp_path, python="python3")
+    loaded = jm.get("old-1")
+    assert loaded is not None
+    assert loaded.title == "Старый"
+    # файл переехал, старый удалён
+    assert (tmp_path / "job_logs" / "jobs.json").is_file()
+    assert not old.exists()
+    # повторный старт — миграция не затирает свежий файл
+    (tmp_path / "job_logs" / "jobs.json").write_text(
+        "[]", encoding="utf-8")
+    old.write_text("[{\"bad\": 1}]", encoding="utf-8")
+    jm2 = JobManager(tmp_path, python="python3")
+    assert jm2.get("old-1") is None  # история из свежего файла
+    assert (tmp_path / "jobs.json").is_file()  # старый не съеден
 
 
 def test_subscribe_lines(tmp_path, fake_script):
@@ -309,7 +334,7 @@ def test_progress_persist(tmp_path, fake_script):
                    [str(fake_script / "progress.py")], tmp_path)
     _wait_status(jm, job.id, "done")
     # в jobs.json есть progress и нет argv
-    data = (tmp_path / "jobs.json").read_text(encoding="utf-8")
+    data = (tmp_path / "job_logs" / "jobs.json").read_text(encoding="utf-8")
     assert "\"progress\"" in data
     assert "argv" not in data
     # новый менеджер на той же папке — progress восстановлен
@@ -405,19 +430,19 @@ def test_reconcile_dead_pid(tmp_path, fake_script):
                    [str(fake_script / "ok.py")], tmp_path)
     _wait_status(jm, job.id, "done")
     # перезаписываем метаданные: running + несуществующий pid
-    data = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))
+    data = json.loads((tmp_path / "job_logs" / "jobs.json").read_text(encoding="utf-8"))
     for item in data:
         if item["id"] == job.id:
             item["status"] = "running"
             item["pid"] = 999999999  # заведомо мёртвый
-    (tmp_path / "jobs.json").write_text(json.dumps(data), encoding="utf-8")
+    (tmp_path / "job_logs" / "jobs.json").write_text(json.dumps(data), encoding="utf-8")
     jm2 = JobManager(tmp_path, python="python3")
     loaded = jm2.get(job.id)
     assert loaded is not None
     assert loaded.status == "failed"
     assert loaded.finished is not None
     # статус зафиксирован в jobs.json
-    data2 = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))
+    data2 = json.loads((tmp_path / "job_logs" / "jobs.json").read_text(encoding="utf-8"))
     fixed = [i for i in data2 if i["id"] == job.id][0]
     assert fixed["status"] == "failed"
 
@@ -436,12 +461,12 @@ def test_reconcile_alive_pid(tmp_path, fake_script):
                        [str(fake_script / "hang.py")], tmp_path)
         _wait_status(jm, job.id, "running")
         # симулируем рестарт: новый менеджер, pid живого процесса
-        data = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))
+        data = json.loads((tmp_path / "job_logs" / "jobs.json").read_text(encoding="utf-8"))
         for item in data:
             if item["id"] == job.id:
                 item["status"] = "running"
                 item["pid"] = sleeper.pid
-        (tmp_path / "jobs.json").write_text(json.dumps(data), encoding="utf-8")
+        (tmp_path / "job_logs" / "jobs.json").write_text(json.dumps(data), encoding="utf-8")
         jm2 = JobManager(tmp_path, python="python3")
         loaded = jm2.get(job.id)
         assert loaded is not None
@@ -488,7 +513,7 @@ def test_orphan_watcher_marks_dead(tmp_path, fake_script, monkeypatch):
     assert job.exit_code == 1
     assert job.finished is not None
     # статус зафиксирован на диске (persist)
-    data = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))
+    data = json.loads((tmp_path / "job_logs" / "jobs.json").read_text(encoding="utf-8"))
     fixed = [i for i in data if i["id"] == job.id][0]
     assert fixed["status"] == "failed"
 
@@ -1251,6 +1276,10 @@ def test_build_ner_check_rag_flags():
     # поле rag_prompt_file убрано из спеки ner_check
     names = {f["name"] for f in STAGE_SPECS["ner_check"]["fields"]}
     assert "rag_prompt_file" not in names
+    # дефолт бюджета RAG — 65536 СИМВОЛОВ
+    fb = next(f for f in STAGE_SPECS["ner_check"]["fields"]
+              if f["name"] == "rag_budget")
+    assert fb["default"] == "65536"
     # пустые — флагов нет
     argv2 = build_command("ner_check", {"passes": "rag"}, {})
     assert "--rag_terms" not in argv2
@@ -1481,7 +1510,7 @@ def test_api_key_not_in_payload(tmp_path, fake_script):
     assert "SECRET" not in json.dumps(payload)
     assert "argv" not in payload
     # jobs.json тоже без ключа
-    data = (tmp_path / "jobs.json").read_text(encoding="utf-8")
+    data = (tmp_path / "job_logs" / "jobs.json").read_text(encoding="utf-8")
     assert "SECRET" not in data
 
 
@@ -1495,7 +1524,7 @@ def test_llm_api_key_via_env(tmp_path, fake_script):
     _wait_status(jm, job.id, "done")
     payload = job.payload()
     assert "env-secret" not in json.dumps(payload)
-    data = (tmp_path / "jobs.json").read_text(encoding="utf-8")
+    data = (tmp_path / "job_logs" / "jobs.json").read_text(encoding="utf-8")
     assert "env-secret" not in data
 
 

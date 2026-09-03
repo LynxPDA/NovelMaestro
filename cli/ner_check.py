@@ -221,7 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--end", type=int, default=None,
                    help="RAG-режим: конечная глава сборки (по умолчанию: "
                         "максимальная найденная).")
-    p.add_argument("--rag_budget", type=int, default=6000,
+    p.add_argument("--rag_budget", type=int, default=65536,
                    help="RAG-режим: бюджет релевантного текста на термин, "
                         "СИМВОЛЫ (по умолчанию: 6000).")
     p.add_argument("--rag_prompt_file", default=None,

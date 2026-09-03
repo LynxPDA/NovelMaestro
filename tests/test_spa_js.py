@@ -105,6 +105,22 @@ def test_ner_check_rag_ui_present():
     assert "load_rag_prompt(args.rag_prompt_file or args.prompt_file" in cli
     # автоподхват ner_check_prompt.txt остался в общем «Промпт-файле»
     assert "ner_check_prompt.txt" in st and "autofile" in st
+    # чипсы типов/полей скрываются в RAG-режиме (не влияют)
+    assert "ragHidden" in rv
+
+
+def test_prompt_edit_button():
+    """Запуски (LLM): промпт не выбран — «Загрузить»; выбран —
+    «Редактировать» (просмотр/правка/сохранение через /api/prompts)."""
+    rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    assert "function editPromptModal(fileName)" in rv
+    assert "isPrompt" in rv  # только dir=prompts, .txt
+    assert "upBtn.textContent = sel.value ? \"Редактировать\" : \"Загрузить\"" \
+        in rv
+    assert "/prompts/${encodeURIComponent(fileName)}" in rv
+    assert "makeEditor(d.content || \"\", extOf(fileName))" in rv
+    # редактор промпта — модалка с сохранением
+    assert "Сохранить" in rv and "editor-modal-body" in rv
 
 
 def test_glossary_dispute_removed():

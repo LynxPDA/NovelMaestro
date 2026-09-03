@@ -156,7 +156,10 @@ class JobManager:
 
     # ── персистентность ─────────────────────────────────────
     def _store_path(self) -> Path:
-        return self.web_dir / "jobs.json"
+        # jobs.json лежит ВНУТРИ job_logs/: в docker оба пути смонтированы
+        # в один volume (web/job_logs), иначе при пересоздании контейнера
+        # история запусков терялась (jobs.json оставался в слое образа)
+        return self._logs_dir() / "jobs.json"
 
     def _logs_dir(self) -> Path:
         """Каталог сайдкаров: web/job_logs/."""
@@ -241,7 +244,9 @@ class JobManager:
             jobs = list(self._jobs.values())
             try:
                 data = [self._serialize(j) for j in jobs]
-                self._store_path().write_text(
+                sp = self._store_path()
+                sp.parent.mkdir(parents=True, exist_ok=True)
+                sp.write_text(
                     json.dumps(data, ensure_ascii=False, indent=2),
                     encoding="utf-8")
             except OSError as exc:
@@ -262,6 +267,7 @@ class JobManager:
             return
         known = {f"{job.id}.log" for job in self._jobs.values()}
         known |= {f"{job.id}.events.json" for job in self._jobs.values()}
+        known.add("jobs.json")  # сама история, а не сирота
         for p in d.iterdir():
             if not p.is_file():
                 continue
@@ -271,7 +277,27 @@ class JobManager:
                 except OSError as exc:
                     log.debug("Сирота %s не удаляется: %s", p, exc)
 
+    def _migrate_store(self) -> None:
+        """Одноразовая миграция: старый web/jobs.json → job_logs/jobs.json
+        (docker-volume). Старый файл остаётся на месте, если новый уже
+        есть — не затираем свежую историю."""
+        old = self.web_dir / "jobs.json"
+        new = self._store_path()
+        if not old.is_file() or new.is_file():
+            return
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            # copy+unlink (не rename): в docker старый путь и volume могут
+            # лежать на разных файловых системах (EXDEV)
+            new.write_text(old.read_text(encoding="utf-8", errors="replace"),
+                           encoding="utf-8")
+            old.unlink()
+            log.info("jobs.json перенесён в job_logs/ (миграция)")
+        except OSError as exc:
+            log.debug("Миграция jobs.json не удалась: %s", exc)
+
     def _load(self) -> None:
+        self._migrate_store()
         p = self._store_path()
         if not p.is_file():
             return

@@ -71,8 +71,11 @@ def save_form_state(projects_root: Path, project: str,
 
 
 def jobs_file(web_dir: Path) -> Path:
-    """Путь к jobs.json (история запусков)."""
-    return web_dir / "jobs.json"
+    """Путь к jobs.json (история запусков).
+
+    Внутри job_logs/ — в docker этот каталог смонтирован в volume,
+    иначе при пересоздании контейнера история теряется."""
+    return web_dir / "job_logs" / "jobs.json"
 
 
 def load_jobs(web_dir: Path) -> list[dict]:
