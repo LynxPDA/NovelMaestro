@@ -49,6 +49,21 @@
       br-text/epub-prev-text/compile-prev-text (чёрные буквы на
       тёмном фоне больше невозможны при любой теме).
 
+## Текущая сессия (0.1.17 — оценка перевода LLM, типы файлов глав)
+
+- [x] **1. Стадия «Оценка перевода (LLM)»** (`translate_quality`, между
+      batch_replace и compile): один LLM-запрос по пакету глав —
+      `{original_text}` (chapter.txt) + `{translated_text}` (тип файлов
+      глав) в промпте (тег `<prompt_assessment>`,
+      `templates/General/prompts/translate_quality_prompt.txt`); простой
+      режим (start/end/type/prompt_file), экспертный — + LLM-поля и
+      бюджет СИМВОЛЫ (главы+промпт; не влезает — обрезка до целого
+      количества глав); md-отчёт с технической шапкой (дефолт
+      translation_quality_assessment.md); секция «Проверки» →
+      «Оценка перевода (LLM)» с выбором md-файла и рендером.
+- [x] **2. compile · «Тип файлов глав»** — поле source_type
+      переименовано (было «Исходный файл главы»).
+
 ## Текущая сессия (0.1.15 — RAG-спорные, редактор промптов, docker-история)
 
 - [x] **1. ner_check · RAG** — чипсы типов/полей скрываются в RAG
