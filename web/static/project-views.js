@@ -1829,6 +1829,11 @@ function viewProject(section, name, tab) {
           tbody.append(viewRow(it));
         }
       }
+      // редактируемая запись гарантированно видна: если она не попала
+      // в slice (сортировка count ↓, поиск, фильтр типов) — докидываем
+      if (editing && !slice.includes(editing)) {
+        tbody.append(editRow(editing));
+      }
       if (!slice.length && !editing) {
         tbody.append(
           h(
@@ -2345,6 +2350,10 @@ function viewProject(section, name, tab) {
       const it = { term: "", type: "noun", translation: "", __new: true };
       data.items.unshift(it); // новый термин — сверху
       editing = it;
+      // сбросить поиск и фильтр типов — иначе новая запись (count=null,
+      // пустой термин) не пройдёт фильтр и не будет видна
+      search.value = "";
+      typeFilter = null;
       page = 0;
       renderRows();
     };

@@ -234,12 +234,13 @@ body {
   min-width: 190px;
   padding: 6px;
   border-radius: 10px;
-  background: var(--card-bg, #fff);
-  border: 1px solid var(--border, #ddd);
+  background: var(--surface);
+  border: 1px solid var(--border);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
   display: flex;
   flex-direction: column;
   gap: 2px;
+  color: var(--text);
 }
 .toolbar-menu .menu-box .menu-item {
   text-align: left;

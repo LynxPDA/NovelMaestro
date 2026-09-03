@@ -753,17 +753,15 @@ def test_build_clean_and_compile():
     assert "--no-donate" in argv2
 
 
-def test_build_compile_clean_flags():
-    """Задача 6: очистка текста — --no-clean / --clean-regex."""
+def test_build_compile_no_clean_fields():
+    """Очистка из compile убрана: no_clean/clean_regex отсутствуют
+    в спеке и в argv (удаление «Глава N» — через batch_replace)."""
+    names = {f["name"] for f in STAGE_SPECS["compile"]["fields"]}
+    assert "no_clean" not in names and "clean_regex" not in names
     argv = build_command("compile", {"no_clean": True,
                                       "clean_regex": r"^Глава\s+(\d+)"}, {})
-    assert "--no-clean" in argv
-    assert "--clean-regex" in argv
-    assert argv[argv.index("--clean-regex") + 1] == r"^Глава\s+(\d+)"
-    # дефолт — без флагов (очистка включена)
-    argv2 = build_command("compile", {}, {})
-    assert "--no-clean" not in argv2
-    assert "--clean-regex" not in argv2
+    assert "--no-clean" not in argv
+    assert "--clean-regex" not in argv
 
 
 def test_build_clean_and_compile_cover_meta():
@@ -1236,10 +1234,11 @@ def test_ner_check_passes_modes():
 
 def test_build_ner_check_rag_flags():
     """RAG-режим: --rag_terms/--rag_source_type/диапазон/
-    --rag_budget/--rag_prompt_file пробрасываются в argv."""
+    --rag_budget пробрасываются в argv; отдельного --rag_prompt_file
+    нет — RAG-промпт берётся из общего «Промпт-файла» (тег <prompt_rag>)."""
     form = {"passes": "rag", "rag_terms": "林凡\n青云宗",
             "rag_source_type": "redacted", "start": "1", "end": "9",
-            "rag_budget": "4000", "rag_prompt_file": "prompts/rag.txt"}
+            "rag_budget": "4000"}
     argv = build_command("ner_check", form, {})
     assert "--passes" in argv and argv[argv.index("--passes") + 1] == "rag"
     assert "--rag_terms" in argv
@@ -1248,7 +1247,10 @@ def test_build_ner_check_rag_flags():
     assert argv[argv.index("--rag_source_type") + 1] == "redacted"
     assert "--start" in argv and "--end" in argv
     assert "--rag_budget" in argv and "4000" in argv
-    assert "--rag_prompt_file" in argv and "prompts/rag.txt" in argv
+    assert "--rag_prompt_file" not in argv
+    # поле rag_prompt_file убрано из спеки ner_check
+    names = {f["name"] for f in STAGE_SPECS["ner_check"]["fields"]}
+    assert "rag_prompt_file" not in names
     # пустые — флагов нет
     argv2 = build_command("ner_check", {"passes": "rag"}, {})
     assert "--rag_terms" not in argv2

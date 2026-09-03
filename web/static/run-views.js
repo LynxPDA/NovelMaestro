@@ -506,7 +506,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (key === "ner_check" && mode === "simple"
         && String(p["passes"] ?? "") === "rag") {
       for (const name of ["rag_terms", "rag_source_type",
-                          "rag_budget", "rag_prompt_file"]) {
+                          "rag_budget"]) {
         const f = (spec.fields || []).find((x) => x.name === name);
         if (!f) continue;
         const v = vals[f.name];
@@ -910,35 +910,80 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return { chipsBar, chipsBox, guide, loadTypes, fieldsBar, fieldsBox };
   }
 
-  // «Добавить спорные» (RAG): модалка с настройками (тип, коэффициент,
-  // порог count) → спорные термины из ner.json добавляются в поле
-  // rag_terms построчно. Спорно, если max/второй голос < коэффициента.
+  // «Добавить спорные» (RAG): модалка с настройками (поле голосов,
+  // типы, коэффициент, порог count) → спорные термины из ner.json
+  // добавляются в поле rag_terms построчно. Спорно, если max/второй
+  // голос < коэффициента (по выбранному полю _votes_xxx).
   function addDisputedTermsModal(key, textareaWrap) {
     const err = h("div", { class: "form-error" });
-    const typeSel = h("select", { class: "input" },
-      h("option", { value: "" }, "Все типы"));
+    const fieldSel = h("select", { class: "input" },
+      h("option", { value: "" }, "Все поля голосов"));
+    const typesBox = h("div", { class: "ner-chips-box" });
+    const typesInfo = h("div", { class: "field-help" });
+    let typeNames = [];
+    let selTypes = null; // null = все выбранные
     const ratioInp = h("input", {
-      class: "input", type: "number", min: "1", step: "0.01",
-      value: "1.16",
+      class: "input", type: "number", min: "0.01", step: "0.01",
+      value: "1.5",
     });
     const countInp = h("input", {
       class: "input", type: "number", min: "0", value: "0",
     });
     const help = h(
       "div", { class: "field-help" },
-      "Отношение самого большого голоса ко второму по величине; ",
-      "спорно, если разрыв МЕНЬШЕ коэффициента (напр. 173/149 = 1.16). ",
-      "Порог count — только записи с count > X (0 = без порога).",
+      "Поле голосов — спорность считается по выбранному полю ",
+      "_votes_xxx (или по любому). Спорно, если разрыв max/2-й МЕНЬШЕ ",
+      "коэффициента (напр. 173/149 = 1.16 < 1.5). Порог count — только ",
+      "записи с count > X (0 = без порога).",
     );
+    function renderTypeChips() {
+      typesBox.replaceChildren();
+      for (const t of typeNames) {
+        const cb = h("input", { type: "checkbox", class: "checkbox" });
+        cb.checked = selTypes == null || selTypes.includes(t);
+        cb.addEventListener("change", () => {
+          const set = new Set(selTypes == null ? typeNames : selTypes);
+          if (cb.checked) {
+            set.add(t);
+            selTypes = set.size === typeNames.length ? null : [...set];
+          } else if (set.size > 1) {
+            set.delete(t);
+            selTypes = [...set];
+          } else {
+            cb.checked = true; // минимум один тип
+          }
+          renderTypeChips();
+        });
+        typesBox.append(h("label", { class: "ner-chip" }, cb, ` ${t}`));
+      }
+    }
+    const selAll = h("button", { class: "btn btn-xs btn-ghost" },
+      "Выбрать все");
+    selAll.addEventListener("click", () => {
+      selTypes = null;
+      renderTypeChips();
+    });
+    const selNone = h("button", { class: "btn btn-xs btn-ghost" },
+      "Снять все");
+    selNone.addEventListener("click", () => {
+      if (typeNames.length) {
+        selTypes = [typeNames[0]]; // минимум один тип
+        renderTypeChips();
+      }
+    });
     const modal = h(
       "div",
       { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
       h(
         "div", { class: "modal" },
         h("div", { class: "modal-title" }, "Добавить спорные термины"),
-        h("div", { class: "modal-text" }, "Тип:"),
-        typeSel,
-        h("div", { class: "modal-text" }, "Коэффициент (max/2-й):"),
+        h("div", { class: "modal-text" }, "Поле голосов:"),
+        fieldSel,
+        h("div", { class: "modal-text" }, "Типы:"),
+        h("div", { class: "ner-chips-bar" }, selAll, selNone,
+          h("span", { class: "spacer" }), typesInfo),
+        typesBox,
+        h("div", { class: "modal-text" }, "Коэффициент:"),
         ratioInp,
         h("div", { class: "modal-text" }, "Порог count:"),
         countInp,
@@ -958,16 +1003,21 @@ window.viewRun = function viewRun(section, name, attachJobId) {
                   return;
                 }
                 const threshold = Math.max(0, Number(countInp.value) || 0);
-                const type = typeSel.value;
+                const field = fieldSel.value; // "" = все поля голосов
                 const d = await api(`/ner?project=${section}/${name}`);
                 const terms = new Set();
                 for (const it of d.items || []) {
-                  if (type && it.type !== type) continue;
+                  if (selTypes != null && !selTypes.includes(it.type)) {
+                    continue;
+                  }
                   if (threshold > 0
                       && !(Number(it.count) > threshold)) continue;
                   let ok = false;
-                  for (const k of Object.keys(it)) {
-                    if (!k.startsWith("_votes_")) continue;
+                  const keys = field
+                    ? [field]
+                    : Object.keys(it).filter((k) =>
+                        k.startsWith("_votes_"));
+                  for (const k of keys) {
                     const v = it[k];
                     if (!Array.isArray(v)) continue;
                     const nums = v.map(Number)
@@ -1000,12 +1050,25 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     function close() {
       modal.remove();
     }
-    // типы — из глоссария (асинхронно)
+    // поля голосов и типы — из данных ner.json (асинхронно)
     api(`/ner?project=${section}/${name}`).then((d) => {
       const byType = d.by_type || {};
-      for (const t of Object.keys(byType).sort()) {
-        typeSel.append(h("option", { value: t }, `${t} (${byType[t]})`));
+      typeNames = Object.keys(byType).sort();
+      const seen = new Set();
+      for (const it of d.items || []) {
+        if (!it || typeof it !== "object") continue;
+        for (const k of Object.keys(it)) {
+          if (k.startsWith("_votes_") && !seen.has(k)) {
+            seen.add(k);
+            fieldSel.append(h("option", { value: k }, k));
+          }
+        }
       }
+      typesInfo.textContent =
+        typeNames.length
+          ? `${typeNames.length} тип(ов) · пусто = все`
+          : "Глоссарий пуст";
+      renderTypeChips();
     }).catch(() => {});
     document.body.append(modal);
   }
@@ -1107,7 +1170,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       w.loadTypes();
       const ragWraps = [];
       for (const name of ["rag_terms", "rag_source_type",
-                          "rag_budget", "rag_prompt_file"]) {
+                          "rag_budget"]) {
         const f = (spec.fields || []).find((x) => x.name === name);
         if (!f) continue;
         const rw = buildField(key, f);
@@ -1340,7 +1403,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
       w.loadTypes();
       const ragNames = ["rag_terms", "rag_source_type",
-                        "rag_budget", "rag_prompt_file"];
+                        "rag_budget"];
       const ragWrap = fieldWraps["rag_terms"];
       if (ragWrap) {
         const addBtn = h(

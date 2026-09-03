@@ -88,18 +88,23 @@ def test_templates_general_readonly():
 
 def test_ner_check_rag_ui_present():
     """Запуски ner_check · RAG: условная видимость RAG-полей,
-    кнопка «Добавить спорные», автоподхват промпт-файла."""
+    кнопка «Добавить спорные»; отдельный RAG-промпт-файл убран —
+    RAG-промпт живёт в общем «Промпт-файле» (тег <prompt_rag>)."""
     rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
     # RAG-поля строятся и прячутся по режиму (и простой, и экспертный)
     assert "rag_source_type" in rv
-    assert "rag_budget" in rv and "rag_prompt_file" in rv
+    assert "rag_budget" in rv
+    assert "rag_prompt_file" not in rv  # дубль убран
     assert "addDisputedTermsModal" in rv
     assert "Добавить спорные" in rv
     assert "classList.toggle(\"hidden\", !isRag)" in rv
-    # автоподхват ner_check_prompt.txt для RAG-промпта
+    # RAG-промпт — тег <prompt_rag> в общем промпт-файле стадии
     st = (REPO / "web" / "stages.py").read_text(encoding="utf-8")
     assert "ner_check_prompt.txt" in st
-    assert "autofile" in st
+    cli = (REPO / "cli" / "ner_check.py").read_text(encoding="utf-8")
+    assert "load_rag_prompt(args.rag_prompt_file or args.prompt_file" in cli
+    # автоподхват ner_check_prompt.txt остался в общем «Промпт-файле»
+    assert "ner_check_prompt.txt" in st and "autofile" in st
 
 
 def test_glossary_dispute_removed():

@@ -230,10 +230,6 @@ def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
         argv.append("--no-cover")
     if form.get("epub_meta"):
         argv += ["--epub-meta", str(form["epub_meta"])]
-    if form.get("no_clean"):
-        argv.append("--no-clean")
-    if form.get("clean_regex"):
-        argv += ["--clean-regex", str(form["clean_regex"])]
     # страница поддержки: явный файл или ничего (без автоподхвата)
     if form.get("donate_file"):
         argv += ["--donate-file", str(form["donate_file"])]
@@ -352,8 +348,8 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
     argv += _range_argv("start", form)
     if form.get("rag_budget") not in (None, ""):
         argv += ["--rag_budget", str(form["rag_budget"])]
-    if form.get("rag_prompt_file"):
-        argv += ["--rag_prompt_file", str(form["rag_prompt_file"])]
+    # RAG-промпт — это тот же «Промпт-файл» (внутри тег <prompt_rag>);
+    # отдельного --rag_prompt_file нет: CLI берёт --prompt_file
     if form.get("types"):
         argv += ["--types", str(form["types"])]
     if form.get("batch_size") not in (None, ""):
@@ -720,15 +716,6 @@ STAGE_SPECS: dict[str, dict] = {
              "default": "",
              "help": "страница поддержки для EPUB/FB2; пусто = без страницы; "
                       "файл загружается через «Файлы» (source/)"},
-            {"name": "no_clean", "label": "Отключить очистку текста",
-             "type": "bool", "default": False,
-             "help": "НЕ удалять строки «Глава N» в теле главы "
-                      "(по умолчанию очистка включена)"},
-            {"name": "clean_regex", "label": "Свой regexp очистки",
-             "type": "text", "default": "",
-             "help": "Строки, совпавшие с regexp, удаляются из тела "
-                      "главы (после 9-й строки); пусто = "
-                      r"^Глава\s+(\d+|\[Номер\])"},
         ],
         # только экспертный режим (без простого/пресета)
     },
@@ -886,7 +873,10 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "text", "default": "ner_review.json"},
             {"name": "prompt_file", "label": "Промпт-файл",
              "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "ner_check_prompt.txt"},
+             "default": "ner_check_prompt.txt",
+             "autofile": "prompts/ner_check_prompt.txt",
+             "help": "Содержит тег <prompt_rag> для RAG-режима; "
+                      "автоподхват ner_check_prompt.txt"},
             {"name": "passes", "label": "Режимы",
              "labels": {"whole": "Выбранные типы (одновременно)",
                          "types": "Выбранные типы (по отдельности)",
@@ -924,13 +914,6 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "6000",
              "help": "Сколько релевантного текста (равномерно по книге) "
                       "отдаётся LLM на один термин"},
-            {"name": "rag_prompt_file", "label": "RAG: промпт-файл",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "ner_check_prompt.txt",
-             "autofile": "prompts/ner_check_prompt.txt",
-             "help": "Файл с тегом <prompt_rag>; автоподхват "
-                      "ner_check_prompt.txt; пусто — тот же промпт-файл "
-                      "стадии"},
             # types/fields — скрытые: значения пишет виджет чипсов
             # (типы и поля из ner.json), buildParams собирает их в params;
             # noenv — .env не предзаполняет чипсы (дефолт: все типы и
