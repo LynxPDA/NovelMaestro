@@ -1595,7 +1595,7 @@ function viewProject(section, name, tab) {
     }
 
     function visible() {
-      let filtered = UICore.filterNerItems(
+      const filtered = UICore.filterNerItems(
         data.items,
         search.value,
         searchFields,
@@ -2377,7 +2377,7 @@ function viewProject(section, name, tab) {
       }
       const btn = h(
         "button",
-        { class: "btn btn-sm", title, onclick: () => {
+        { class: "btn btn-sm btn-ghost", title, onclick: () => {
           box.hidden = !box.hidden;
         } },
         icon,
@@ -3016,7 +3016,7 @@ function viewProject(section, name, tab) {
       ),
     );
     panel.append(sec2);
-    sec2.append(await renderCheckReports());
+    sec2.append(await renderCheckReports(section, name));
     panel.append(
       makeCard(
         "3 · Проверка перевода (LLM) — translate_check_llm_review.json",
@@ -3026,6 +3026,9 @@ function viewProject(section, name, tab) {
       ),
     );
     /* 4 · Оценка перевода (LLM) — md-отчёты translate_quality */
+    /* renderCheckReports/renderQualityReports — глобальные функции
+       (см. ниже), принимают (section, name) параметрами — без
+       глобалов, иначе вкладка падает с ReferenceError */
     const sec4 = h(
       "div",
       { class: "review-section" },
@@ -3042,7 +3045,7 @@ function viewProject(section, name, tab) {
       ),
     );
     panel.append(sec4);
-    sec4.append(await renderQualityReports());
+    sec4.append(await renderQualityReports(section, name));
     return wrap;
   }
 
@@ -4414,7 +4417,7 @@ function viewProject(section, name, tab) {
   }
 
   /* ── Отчёты translate_check (W7) — секция 2 «Проверки» ── */
-  async function renderCheckReports() {
+  async function renderCheckReports(section, name) {
     const q = new URLSearchParams({ project: `${section}/${name}` });
     let data;
     try {
@@ -4662,7 +4665,7 @@ function viewProject(section, name, tab) {
 }
 
 /* ── Оценка перевода (LLM): md-отчёты translate_quality ── */
-async function renderQualityReports() {
+async function renderQualityReports(section, name) {
   /* Секция «Проверки»: выбор md-отчёта из корня проекта + рендер
      markdown в sandbox-iframe; по умолчанию —
      translation_quality_assessment.md. */
