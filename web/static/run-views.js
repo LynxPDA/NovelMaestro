@@ -1255,22 +1255,27 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return rowEl;
   }
 
-  // translate_quality: «Конечная глава» — расчёт по бюджету (readonly):
-  // start + budget + тип файлов + промпт-файл пересчитывают end
-  // интерактивно (tree — размеры глав, /projects/…/tree).
-  function attachQualityRange(key, inputs) {
+  // translate_quality: «Конечная глава» — бюджет. Простой режим
+  // (auto): end readonly, считается интерактивно из start + budget +
+  // тип + промпт (tree — размеры глав). Экспертный (manual): end
+  // редактируемый; введённая глава остаётся, если влезает в бюджет,
+  // иначе пересчитывается до последней влезающей.
+  function attachQualityRange(key, inputs, mode) {
     if (key !== "translate_quality") return;
     const row = st.rangeRow;
     if (!row || !row._start || !row._end) return;
     const end = row._end;
-    end.setAttribute("readonly", "");
-    end.classList.add("range-auto");
-    const budgetIn = inputs.budget;
-    const typeSel = inputs.type;
-    const promptSel =
-      inputs.prompt_file && inputs.prompt_file._sel
-        ? inputs.prompt_file._sel
-        : inputs.prompt_file;
+    const auto = mode !== "manual";
+    // инпуты: в экспертном режиме передаются обёртки .field (wrap),
+    // в простом — уже инпуты; у files-полей select спрятан в _sel
+    const fieldInput = (x) => {
+      if (!x) return null;
+      const inp = x._input || x;
+      return (inp && inp._sel) || inp;
+    };
+    const budgetIn = fieldInput(inputs.budget);
+    const typeSel = fieldInput(inputs.type);
+    const promptSel = fieldInput(inputs.prompt_file);
     let tree = null;
     let promptLen = 0;
     let promptFile = "";
@@ -1289,7 +1294,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         promptLen = 0;
       }
     };
-    const recalc = async () => {
+    // последняя глава, помещающаяся в бюджет от start
+    const lastFit = async (start) => {
       if (!tree) {
         try {
           const d = await api(`/projects/${section}/${name}/tree`);
@@ -1299,25 +1305,47 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
       await loadPrompt();
-      const start = parseInt(row._start.value || "", 10) || 0;
       const raw =
         budgetIn && budgetIn.value !== "" ? budgetIn.value : "200000";
       const budget = parseInt(raw, 10) || 0;
       const type = (typeSel && typeSel.value) || "polished";
-      const last = qualityEndByBudget(tree, start, budget, promptLen, type);
-      end.value = last;
-      st.values[key]["end"] = last;
-      st.touched[key].add("end");
-      if (!start) end.title = "введите начальную главу";
-      else if (budget - promptLen <= 0)
-        end.title = "промпт больше бюджета — увеличьте бюджет";
-      else if (last)end.title = "рассчитано по бюджету"; else 
-        end.title = "в бюджет не влезает ни одна глава — увеличьте бюджет";
+      return qualityEndByBudget(tree, start, budget, promptLen, type);
     };
+    const recalc = async () => {
+      const start = parseInt(row._start.value || "", 10) || 0;
+      const last = await lastFit(start);
+      if (auto) {
+        end.value = last;
+        st.values[key]["end"] = last;
+        st.touched[key].add("end");
+        if (!start) end.title = "введите начальную главу";
+        else if (last) end.title = "рассчитано по бюджету";
+        else end.title =
+          "в бюджет не влезает ни одна глава — увеличьте бюджет";
+        return;
+      }
+      const cur = parseInt(end.value || "", 10) || 0;
+      if (cur && last && cur > last) {
+        // ручная глава не влезает — пересчёт до последней влезающей
+        end.value = last;
+        st.values[key]["end"] = last;
+        st.touched[key].add("end");
+        end.title = `не влезает в бюджет — обрезано до главы ${last}`;
+      } else if (cur) {
+        end.title = "вручную (в бюджет влезает)";
+      } else {
+        end.title = "пусто = до последней главы (бюджет обрежет)";
+      }
+    };
+    if (auto) {
+      end.setAttribute("readonly", "");
+      end.classList.add("range-auto");
+    }
     row._start.addEventListener("input", recalc);
     if (budgetIn) budgetIn.addEventListener("input", recalc);
     if (typeSel) typeSel.addEventListener("change", recalc);
     if (promptSel) promptSel.addEventListener("change", recalc);
+    if (!auto) end.addEventListener("input", recalc);
     recalc();
   }
 
@@ -1508,8 +1536,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (rangeRow) body.splice(1, 0, rangeRow);
     // ner_check RAG: после постройки rangeRow — первая раскладка
     if (ragApply) ragApply();
-    // translate_quality: end считает бюджет (start/budget/type/prompt)
-    attachQualityRange(key, byName);
+    // translate_quality: end считает бюджет — простой режим (auto)
+    attachQualityRange(key, byName, "auto");
     return h("div", { class: "run-form" }, body, err, runBtn);
   }
 
@@ -1532,8 +1560,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // диапазон глав — ПЕРВЫМ в списке полей (все стадии с start/end)
     const rangeRow = buildRangeRow(key, spec);
     if (rangeRow) fieldNodes.unshift(rangeRow);
-    // translate_quality: end считает бюджет (start/budget/type/prompt)
-    attachQualityRange(key, fieldWraps);
+    // translate_quality: ручной end с проверкой бюджета — экспертный
+    attachQualityRange(key, fieldWraps, "manual");
 
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны
@@ -1637,11 +1665,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       // в RAG прячем только чипсы ТИПОВ: поля записи (fieldsBar) и
       // степпер остаются — выбранные поля уходят в RAG-промпт
       const ragHidden = [w.chipsBar, w.chipsBox];
+      // RAG не использует: бюджет пакета, порог count, потоки
+      // (RAG-запрос один, без батчей/типов/потоков)
+      const ragNoUse = ["batch_size", "count_threshold", "threads"];
       const applyRagExpert = () => {
         const isRag = sel && sel.value === "rag";
         for (const name of ragNames) {
           const fw = fieldWraps[name];
           if (fw) fw.classList.toggle("hidden", !isRag);
+        }
+        for (const name of ragNoUse) {
+          const fw = fieldWraps[name];
+          if (fw) fw.classList.toggle("hidden", isRag);
         }
         for (const el of ragHidden) {
           el.classList.toggle("hidden", isRag);
@@ -1828,6 +1863,52 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         ),
       );
       fieldNodes.push(help);
+    }
+
+    // translate_check — справка по regexp-проверкам текста главы
+    // (всё найденное — ошибка; заголовок главы не считается)
+    if (key === "translate_check") {
+      fieldNodes.push(
+        h(
+          "details",
+          { class: "regexp-help" },
+          h("summary", {}, "Справка по regexp-проверкам"),
+          h(
+            "div",
+            { class: "regexp-help-body" },
+            h("p", {}, "Каждая строка — regexp по тексту главы "
+              + "(multiline): ВСЁ найденное — ошибка; первое вхождение "
+              + "на первой непустой строке (заголовок главы) не "
+              + "считается."),
+            h("p", {}, "Дефолтные проверки (предзаполнены):"),
+            h("ul", {},
+              h("li", {}, h("code", {}, "[一-鿿【】「」『』]+"),
+                " — иероглифы (остались в переводе)"),
+              h("li", {}, h("code", {}, "[a-zA-Z]+"),
+                " — латиница"),
+              h("li", {}, h("code", {}, "^\\s*Глава\\s+(\\d+|\\[Номер\\])"),
+                " — лишний заголовок «Глава N» в середине текста"),
+            ),
+            h("p", {}, "Свои проверки:"),
+            h("ul", {},
+              h("li", {}, h("code", {}, "^##? .*$"),
+                " — строки-заголовки"),
+              h("li", {}, h("code", {}, "<[^>]+>"), " — HTML-теги"),
+              h("li", {}, h("code", {}, "\\bкнязь\\b"),
+                " — слово «князь» (только целое)"),
+            ),
+            h("p", {}, "Шпаргалка: ", h("code", {}, "^"), " — начало "
+              + "СТРОКИ, ", h("code", {}, "$"), " — конец; ",
+              h("code", {}, "\\d"), " — цифра, ",
+              h("code", {}, "\\s"), " — пробел, ",
+              h("code", {}, "\\b"), " — граница слова; ",
+              h("code", {}, "(a|b)"), " — a или b."),
+            h("p", {}, "Комментарий в конце строки — ",
+              h("code", {}, " # …"), "; пусто в поле = "
+              + "дефолтные проверки."),
+          ),
+        ),
+      );
     }
 
     // compile — предпросмотр обложки/metadata.yaml/страницы поддержки
