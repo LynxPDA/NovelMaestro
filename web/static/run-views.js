@@ -1240,6 +1240,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     let ragApply = null; // ner_check RAG: видимость RAG-полей/диапазона
     const byName = {};
     for (const name of spec.simple || []) {
+      // start/end отдельными полями не рисуем: единая строка
+      // «Главы: [start] – [end]» (buildRangeRow) идёт первой
+      if (name === "start" || name === "end") continue;
       const f = (spec.fields || []).find((x) => x.name === name);
       if (!f) continue;
       const wrap = buildField(key, f);
