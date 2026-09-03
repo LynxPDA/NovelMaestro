@@ -2054,69 +2054,97 @@ async function viewTemplates() {
         : h("span", { class: "fname" }, "📄 " + e.name);
       const actions = h("div", { class: "factions" });
       /* у каталогов шаблонов НИКАКИХ действий — только переход */
-      if (writable && !e.dir) {
-        actions.append(
-          h(
-            "a",
-            {
-              class: "btn btn-sm btn-ghost",
-              href: downloadUrl(full),
-              download: e.name,
-            },
-            "Скачать",
-          ),
-        );
-        actions.append(
-          h(
-            "button",
-            { class: "btn btn-sm btn-ghost", onclick: () => openEdit(full) },
-            "Правка",
-          ),
-        );
-        actions.append(
-          h(
-            "button",
-            {
-              class: "btn btn-sm btn-ghost",
-              onclick: () =>
-                nameModal(
-                  `Переименовать файл ${e.name}`,
-                  "новое имя файла",
-                  async (nm) => {
-                    const dir = st.path ? st.path + "/" : "";
+      if (!e.dir) {
+        /* General — только чтение: «Просмотр» вместо «Правка»,
+           Скачать тоже доступен */
+        if (!writable) {
+          actions.append(
+            h(
+              "button",
+              {
+                class: "btn btn-sm btn-ghost",
+                onclick: () => openEdit(full),
+              },
+              "Просмотр",
+            ),
+          );
+          actions.append(
+            h(
+              "a",
+              {
+                class: "btn btn-sm btn-ghost",
+                href: downloadUrl(full),
+                download: e.name,
+              },
+              "Скачать",
+            ),
+          );
+        } else {
+          actions.append(
+            h(
+              "a",
+              {
+                class: "btn btn-sm btn-ghost",
+                href: downloadUrl(full),
+                download: e.name,
+              },
+              "Скачать",
+            ),
+          );
+          actions.append(
+            h(
+              "button",
+              { class: "btn btn-sm btn-ghost", onclick: () => openEdit(full) },
+              "Правка",
+            ),
+          );
+          actions.append(
+            h(
+              "button",
+              {
+                class: "btn btn-sm btn-ghost",
+                onclick: () =>
+                  nameModal(
+                    `Переименовать файл ${e.name}`,
+                    "новое имя файла",
+                    async (nm) => {
+                      const dir = st.path ? st.path + "/" : "";
+                      await api(
+                        `/templates/${encodeURIComponent(st.set)}/rename`,
+                        {
+                          method: "POST",
+                          body: { src: full, dst: dir + nm },
+                        },
+                      );
+                      toast(`Переименовано: ${e.name} → ${nm}`);
+                      render();
+                    },
+                    e.name,
+                  ),
+              },
+              "Переим.",
+            ),
+          );
+          actions.append(
+            h(
+              "button",
+              {
+                class: "btn btn-sm btn-danger-ghost",
+                onclick: () =>
+                  confirmModal("Удаление файла", full, "УДАЛИТЬ", async () => {
+                    const q = new URLSearchParams({ path: full });
                     await api(
-                      `/templates/${encodeURIComponent(st.set)}/rename`,
-                      {
-                        method: "POST",
-                        body: { src: full, dst: dir + nm },
-                      },
+                      `/templates/${encodeURIComponent(st.set)}/file?${q}`,
+                      { method: "DELETE" },
                     );
-                    toast(`Переименовано: ${e.name} → ${nm}`);
+                    toast(`Удалено: ${full}`);
                     render();
-                  },
-                  e.name,
-                ),
-            },
-            "Переим.",
-          ),
-          h(
-            "button",
-            {
-              class: "btn btn-sm btn-danger-ghost",
-              onclick: () =>
-                confirmModal("Удаление файла", full, "УДАЛИТЬ", async () => {
-                  const q = new URLSearchParams({ path: full });
-                  await api(
-                    `/templates/${encodeURIComponent(st.set)}/file?${q}`,
-                    { method: "DELETE" },
-                  );
-                  toast(`Удалено: ${full}`);
-                  render();
-                }),
-            },
-            "Удалить",
-          ),
-        );
+                  }),
+              },
+              "Удалить",
+            ),
+          );
+        }
       }
       return h("div", { class: "frow" }, nameNode, actions);
     };
@@ -2249,7 +2277,9 @@ async function viewTemplates() {
       return h("div", { class: "files-empty" }, ex.message);
     }
     const ext = extOf(full);
+    const readonly = st.set === "General"; // системный набор — просмотр
     const ed = makeEditor(data.content || "", ext);
+    ed.setReadOnly(readonly);
     const err = h("div", { class: "form-error" });
 
     /* превью md/html — как в редакторе Файлов проекта (sandbox-iframe) */
@@ -2334,7 +2364,8 @@ async function viewTemplates() {
       h(
         "span",
         { class: "editor-meta" },
-        `${full} · ${fmtSize(data.size || 0)}`,
+        `${full} · ${fmtSize(data.size || 0)}`
+        + (readonly ? " · только чтение" : ""),
       ),
       h("span", { class: "spacer" }),
       h("span", { class: "field-help" }, "кегль"),
@@ -2343,7 +2374,7 @@ async function viewTemplates() {
       }),
       findBtn,
       prevBtn,
-      saveBtn,
+      ...(readonly ? [] : [saveBtn]),
     );
     const editorHost = h("div", { class: "editor-cm" }, ed.root);
     return h(

@@ -347,8 +347,9 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--passes", str(form["passes"])]
     if form.get("rag_terms"):
         argv += ["--rag_terms", str(form["rag_terms"])]
-    if form.get("rag_novel"):
-        argv += ["--rag_novel", str(form["rag_novel"])]
+    if form.get("rag_source_type"):
+        argv += ["--rag_source_type", str(form["rag_source_type"])]
+    argv += _range_argv("start", form)
     if form.get("rag_budget") not in (None, ""):
         argv += ["--rag_budget", str(form["rag_budget"])]
     if form.get("rag_prompt_file"):
@@ -363,13 +364,8 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["-c", str(form["count_threshold"])]
     if form.get("fields"):
         argv += ["--fields", str(form["fields"])]
-    # --apply/--auto-apply/--dry-run: «Предпросмотр (--dry-run)» из формы
-    # убран — предпросмотр правок показывают «Проверки» проекта
-    for flag in ("apply", "auto_apply"):
-        if form.get(flag):
-            argv.append(f"--{flag.replace('_', '-')}")
-    if form.get("no_bak"):
-        argv.append("--no-bak")
+    # --apply/--auto-apply/--no-bak убраны из Запусков — правки
+    # применяются только в «Проверках» проекта
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
     re_effort = form.get("reasoning_effort")
@@ -481,8 +477,8 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
                        ("threads", "--threads")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
-    if form.get("exclude_types"):
-        argv += ["--exclude-types", str(form["exclude_types"])]
+    # типы — чипсы (hidden): выбранные = белый список --types;
+    # пусто (все выбраны) — флаг не передаётся (CLI: все типы)
     if form.get("types"):
         argv += ["--types", str(form["types"])]
     if form.get("co_occurrence_pairs"):
@@ -639,8 +635,9 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "exclude_words",
              "label": "Слова-исключения (через запятую)",
              "type": "text", "default": "",
-             "help": "Пусто = TRANSLATE_CHECK_EXCLUDE_WORDS из .env "
-                      "или дефолт скрипта (VIP,MVP,【,】,NPC)"},
+             "help": "Пусто = ничего не исключается; если задано "
+                      "TRANSLATE_CHECK_EXCLUDE_WORDS в .env — поле "
+                      "заполняется оттуда"},
             {"name": "ratio_neighbor", "label": "Ratio соседней стадии",
              "type": "number", "default": "", "step": "0.01",
              "help": "Ожидаемый ratio (напр. polished/redacted ≈ 1.0); "
@@ -892,12 +889,12 @@ STAGE_SPECS: dict[str, dict] = {
              "default": "ner_check_prompt.txt"},
             {"name": "passes", "label": "Режимы",
              "labels": {"whole": "Выбранные типы (одновременно)",
-                         "types": "Выбранные типы (по очереди)",
+                         "types": "Выбранные типы (по отдельности)",
                          "rag": "Точечно по списку (RAG)"},
              "type": "select", "options": ["whole", "types", "rag"],
              "default": "whole",
              "help": "одновременно — весь список выбранных типов разом "
-                      "(батчи по бюджету); по очереди — каждый тип "
+                      "(батчи по бюджету); по отдельности — каждый тип "
                       "отдельно; rag — точечная проверка списка терминов "
                       "по FTS5-фрагментам книги"}, 
             {"name": "batch_size", "label": "Бюджет пакета, СИМВОЛЫ",
@@ -906,25 +903,34 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "1", "min": 1, "max": 16,
              "help": "батчи и типы выполняются параллельно (вместо "
                       "последовательного прохода типов)"},
-            {"name": "count_threshold", "label": "Порог count (> X)",
+            {"name": "count_threshold", "label": "Порог count",
              "type": "number", "default": "0"},
+            # RAG-режим: список терминов, сборка глав в память,
+            # бюджет, промпт-файл (поля видны только в режиме rag)
             {"name": "rag_terms", "label": "RAG: список терминов",
              "type": "textarea", "default": "",
              "help": "Каждый термин с новой строки; тип/перевод "
                       "подтягиваются из ner.json; нужен режим «rag»"},
-            {"name": "rag_novel", "label": "RAG: файл книги (txt)",
-             "type": "files", "dir": "", "ext": [".txt"], "default": "",
-             "help": "Полный текст книги для FTS5-поиска релевантных "
-                      "фрагментов"},
+            {"name": "rag_source_type", "label": "RAG: тип исходного файла",
+             "type": "select",
+             "options": ["chapter", "translated", "redacted", "polished"],
+             "default": "chapter",
+             "help": "Из какого файла главы собирается текст книги "
+                      "для FTS5-поиска (сборка в память, файл не пишется)"},
+            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
+             "type": "number", "default": ""},
+            {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
             {"name": "rag_budget", "label": "RAG: бюджет на термин, СИМВОЛЫ",
              "type": "number", "default": "6000",
              "help": "Сколько релевантного текста (равномерно по книге) "
                       "отдаётся LLM на один термин"},
             {"name": "rag_prompt_file", "label": "RAG: промпт-файл",
              "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "",
-             "help": "Файл с тегом <prompt_rag>; пусто — тот же "
-                      "промпт-файл стадии"},
+             "default": "ner_check_prompt.txt",
+             "autofile": "prompts/ner_check_prompt.txt",
+             "help": "Файл с тегом <prompt_rag>; автоподхват "
+                      "ner_check_prompt.txt; пусто — тот же промпт-файл "
+                      "стадии"},
             # types/fields — скрытые: значения пишет виджет чипсов
             # (типы и поля из ner.json), buildParams собирает их в params;
             # noenv — .env не предзаполняет чипсы (дефолт: все типы и
@@ -933,12 +939,9 @@ STAGE_SPECS: dict[str, dict] = {
              "noenv": True},
             {"name": "fields", "type": "hidden", "default": "",
              "noenv": True},
-            # --apply убран из Запусков: применяется только в «Проверках»
-            # проекта (/api/ner/review/apply шлёт apply напрямую)
-            {"name": "auto_apply", "label": "Автоприменение (--auto-apply)",
-             "type": "bool", "default": False},
-            {"name": "no_bak", "label": "Не создавать .bak (--no-bak)",
-             "type": "bool", "default": False},
+            # --apply/--auto-apply/--no-bak убраны из Запусков:
+            # применяется только в «Проверках» проекта
+            # (/api/ner/review/apply шлёт apply напрямую)
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": ""},
             {"name": "reasoning_effort", "label": "Reasoning effort",
@@ -1032,7 +1035,7 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "ner_file", "label": "NER JSON",
              "type": "files", "dir": "", "ext": [".json"], "default": "ner.json"},
             {"name": "output", "label": "Выходной файл", "type": "text", "default": "wiki.md"},
-            {"name": "as_chapter", "label": "Сохранить как главу вики",
+            {"name": "as_chapter", "label": "Сохранить как главу",
              "type": "bool", "default": False,
              "help": "вместо файла — дополнительная последняя глава "
                       "chapters/00000_{N+1}_Wiki_Новеллы/, название "
@@ -1063,9 +1066,10 @@ STAGE_SPECS: dict[str, dict] = {
              "default": "wiki_prompt.txt"},
             {"name": "top", "label": "Макс. терминов", "type": "number", "default": "80"},
             {"name": "min_count", "label": "Мин. частота термина", "type": "number", "default": "2"},
-            {"name": "exclude_types", "label": "Исключить типы (через запятую)",
-             "type": "text", "default": ""},
-            {"name": "types", "label": "Белый список типов", "type": "text", "default": ""},
+            # типы — скрытые: значение пишет виджет чипсов (как в
+            # ner_check); пусто = все типы (по умолчанию выбраны все)
+            {"name": "types", "type": "hidden", "default": "",
+             "noenv": True},
             {"name": "context_chunks", "label": "Фрагментов контекста на термин",
              "type": "number", "default": "12"},
             {"name": "near_distance", "label": "NEAR-дистанция, ТОКЕНЫ",

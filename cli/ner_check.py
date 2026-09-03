@@ -79,6 +79,7 @@ from core.common import (  # noqa: E402
     atomic_write,
     build_fts_index,
     build_ner_batches,
+    compile_chapter_text,
     emit_progress,
     even_sample,
     find_env_file,
@@ -202,8 +203,24 @@ def build_parser() -> argparse.ArgumentParser:
                    help="RAG-режим: список терминов, каждый с новой строки "
                         "(остальное подтягивается из ner.json).")
     p.add_argument("--rag_novel", default="",
-                   help="RAG-режим: txt-файл книги для FTS5-поиска "
-                        "(релевантные фрагменты по терминам).")
+                   help="RAG-режим (legacy): txt-файл книги для "
+                        "FTS5-поиска (релевантные фрагменты по терминам). "
+                        "Новый способ — --rag_source_type (сборка глав).")
+    p.add_argument("--rag_source_type", default="",
+                   choices=["", "chapter", "translated", "redacted",
+                            "polished"],
+                   help="RAG-режим: тип исходного файла главы для сборки "
+                        "книги в память (chapter/translated/redacted/"
+                        "polished); пусто — legacy --rag_novel файл.")
+    p.add_argument("--chapters_dir", default="chapters",
+                   help="RAG-режим: папка глав для сборки (по умолчанию: "
+                        "./chapters).")
+    p.add_argument("--start", type=int, default=None,
+                   help="RAG-режим: начальная глава сборки (по умолчанию: "
+                        "минимальная найденная).")
+    p.add_argument("--end", type=int, default=None,
+                   help="RAG-режим: конечная глава сборки (по умолчанию: "
+                        "максимальная найденная).")
     p.add_argument("--rag_budget", type=int, default=6000,
                    help="RAG-режим: бюджет релевантного текста на термин, "
                         "СИМВОЛЫ (по умолчанию: 6000).")
@@ -440,19 +457,40 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
     if not terms:
         logger.error("❌ RAG: пустой список терминов (--rag_terms).")
         return 1
-    if not os.path.exists(args.rag_novel):
-        logger.error(f"❌ RAG: файл книги не найден: {args.rag_novel}")
-        return 1
-    try:
-        with open(args.rag_novel, "r", encoding="utf-8") as f:
-            text = f.read()
-    except OSError as exc:
-        logger.error(f"❌ RAG: не удалось прочитать {args.rag_novel}: {exc}")
+    # книга для FTS5: сборка глав в память (--rag_source_type) или
+    # legacy txt-файл (--rag_novel)
+    if args.rag_source_type:
+        text, info = compile_chapter_text(
+            args.chapters_dir, want=args.rag_source_type,
+            start=args.start, end=args.end, logger=logger)
+        if info["written"] == 0:
+            logger.error(f"❌ RAG: не собрано ни одной главы из "
+                         f"{args.chapters_dir} (тип {args.rag_source_type}).")
+            return 1
+        logger.info(f"📚 RAG: сборка {args.chapters_dir} "
+                    f"({args.rag_source_type}): {info['written']} глав, "
+                    f"{len(text)} символов.")
+    elif args.rag_novel:
+        if not os.path.exists(args.rag_novel):
+            logger.error(f"❌ RAG: файл книги не найден: {args.rag_novel}")
+            return 1
+        try:
+            with open(args.rag_novel, "r", encoding="utf-8") as f:
+                text = f.read()
+        except OSError as exc:
+            logger.error(f"❌ RAG: не удалось прочитать "
+                         f"{args.rag_novel}: {exc}")
+            return 1
+        logger.info(f"🔎 RAG: {len(terms)} терминов, "
+                    f"{len(text)} символов книги (--rag_novel).")
+    else:
+        logger.error("❌ RAG: укажите --rag_source_type (сборка глав) "
+                     "или --rag_novel (txt-файл книги).")
         return 1
     data = load_ner_json(args.input, logger)
     items_by_term = {i.get("term", ""): i for i in data}
-    logger.info(f"🔎 RAG: {len(terms)} терминов, "
-                f"{len(text)} символов книги.")
+    if args.rag_source_type:
+        logger.info(f"🔎 RAG: {len(terms)} терминов.")
     db = build_fts_index(text, 1000)
     block = build_rag_block(terms, items_by_term, db, args.rag_budget, logger)
     user_msg = render_prompt(prompt_tpl, block)

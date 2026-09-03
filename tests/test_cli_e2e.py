@@ -138,6 +138,19 @@ def test_tc_check_chapter_missing_and_fatal(tmp_path):
     assert any("[FATAL]" in e for e in errors)
 
 
+def test_tc_load_exclusions_empty_default(tmp_path):
+    """Слова-исключения: пусто = ничего (дефолт VIP,MVP,【,】,NPC
+    убран); TRANSLATE_CHECK_EXCLUDE_WORDS — заполняет."""
+    # без .env — пустой список
+    assert TC.load_exclusions() == []
+    env = tmp_path / ".env"
+    env.write_text("TRANSLATE_CHECK_EXCLUDE_WORDS=VIP,NPC\n",
+                   encoding="utf-8")
+    assert TC.load_exclusions(str(env)) == ["vip", "npc"]
+    env.write_text("TRANSLATE_CHECK_EXCLUDE_WORDS=\n", encoding="utf-8")
+    assert TC.load_exclusions(str(env)) == []
+
+
 def test_tc_main_full_run(tmp_path, monkeypatch, capsys):
     chapters = tmp_path / "chapters"
     chapters.mkdir()

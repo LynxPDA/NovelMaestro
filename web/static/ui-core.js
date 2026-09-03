@@ -522,7 +522,11 @@
               if (
                 inter / gramKeys.length >= threshold &&
                 Object.keys(wgrams).length <= gramKeys.length + 1 &&
-                longestCommonSubstring(en, wordNorm) >= en.length * 0.8
+                /* общая подстрока >= доли длины по порогу (не жёсткие 0.8):
+                   «нити» от «нить» (3/4 = 0.75) находится при пороге 0.1
+                   и даже 0.75; «который»/«морали» отсекаются лишними
+                   n-граммами выше */
+                longestCommonSubstring(en, wordNorm) >= en.length * threshold
               ) {
                 hitWord = true;
               }

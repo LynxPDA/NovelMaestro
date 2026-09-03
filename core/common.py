@@ -493,7 +493,10 @@ def _fuzzy_hit(term_norm, term_ngrams, text_norm, text_ngrams, threshold):
         return False
     lm = difflib.SequenceMatcher(None, term_norm, text_norm) \
         .find_longest_match(0, len(term_norm), 0, len(text_norm))
-    return lm.size >= len(term_norm) * 0.8
+    # общая подстрока — по порогу, не жёсткие 0.8: «нити» от «нить»
+    # (3/4 = 0.75) находится при низком пороге; лишние n-граммы слова
+    # отсекают «который»/«морали» раньше (в find_relevant_ner)
+    return lm.size >= len(term_norm) * threshold
 
 
 def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,

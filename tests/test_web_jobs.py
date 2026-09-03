@@ -884,14 +884,14 @@ def test_simple_fields_per_stage():
 
 
 def test_ner_check_no_report_no_apply():
-    """ner_check: отчёт (ner_report.md) и --apply выпилены из формы
-    Запусков; apply остался в build (его шлёт /api/ner/review/apply)."""
+    """ner_check: отчёт (ner_report.md) и --apply/--auto-apply выпилены
+    из формы Запусков (применение — только в «Проверках»)."""
     spec = STAGE_SPECS["ner_check"]
     assert "report" not in {f["name"] for f in spec["fields"]}
     assert "apply" not in {f["name"] for f in spec["fields"]}
-    argv = build_command("ner_check", {"apply": True, "input": "ner.json"},
-                         {})
-    assert "--apply" in argv
+    assert "auto_apply" not in {f["name"] for f in spec["fields"]}
+    argv = build_command("ner_check", {"apply": True}, {})
+    assert "--apply" not in argv
 
 
 def test_compile_donate_no_autofile():
@@ -1208,10 +1208,15 @@ def test_build_ner_check_flags():
     assert "--fields" not in argv2
 
 
-def test_build_ner_check_no_bak():
-    """no_bak: true → --no-bak в argv; false/нет — флага нет."""
-    argv = build_command("ner_check", {"no_bak": True}, {})
-    assert "--no-bak" in argv
+def test_ner_check_no_apply_no_bak_fields():
+    """auto_apply/no_bak убраны из формы Запусков (применение —
+    только в «Проверках»); build больше не шлёт --auto-apply/--no-bak."""
+    names = {f["name"] for f in STAGE_SPECS["ner_check"]["fields"]}
+    assert "auto_apply" not in names and "no_bak" not in names
+    argv = build_command(
+        "ner_check", {"auto_apply": True, "no_bak": True}, {})
+    assert "--auto-apply" not in argv
+    assert "--no-bak" not in argv
 
 
 def test_ner_check_passes_modes():
@@ -1230,23 +1235,26 @@ def test_ner_check_passes_modes():
 
 
 def test_build_ner_check_rag_flags():
-    """RAG-режим: --rag_terms/--rag_novel/--rag_budget/--rag_prompt_file
-    пробрасываются в argv, если заполнены."""
+    """RAG-режим: --rag_terms/--rag_source_type/диапазон/
+    --rag_budget/--rag_prompt_file пробрасываются в argv."""
     form = {"passes": "rag", "rag_terms": "林凡\n青云宗",
-            "rag_novel": "source/novel.txt", "rag_budget": "4000",
-            "rag_prompt_file": "prompts/rag.txt"}
+            "rag_source_type": "redacted", "start": "1", "end": "9",
+            "rag_budget": "4000", "rag_prompt_file": "prompts/rag.txt"}
     argv = build_command("ner_check", form, {})
     assert "--passes" in argv and argv[argv.index("--passes") + 1] == "rag"
     assert "--rag_terms" in argv
     assert "林凡\n青云宗" in argv
-    assert "--rag_novel" in argv and "source/novel.txt" in argv
+    assert "--rag_source_type" in argv
+    assert argv[argv.index("--rag_source_type") + 1] == "redacted"
+    assert "--start" in argv and "--end" in argv
     assert "--rag_budget" in argv and "4000" in argv
     assert "--rag_prompt_file" in argv and "prompts/rag.txt" in argv
     # пустые — флагов нет
     argv2 = build_command("ner_check", {"passes": "rag"}, {})
     assert "--rag_terms" not in argv2
-    assert "--rag_novel" not in argv2
+    assert "--rag_source_type" not in argv2
     assert "--rag_budget" not in argv2
+    assert "--rag_prompt_file" not in argv2
 
 
 def test_build_ner_check_types_chips_value():
@@ -1303,7 +1311,7 @@ def test_build_translate_check_llm_flags():
 def test_build_wiki_flags():
     form = {"file": "compiled_book.txt", "ner_file": "ner.json",
             "output": "wiki.md", "top": "80", "min_count": "2",
-            "exclude_types": "Other", "types": "Person",
+            "types": "Person",
             "context_chunks": "12", "near_distance": "64",
             "chunk_size": "1000", "co_occurrence_pairs": "Person:Person",
             "co_occurrence_top": "5", "format": "rulate-md",
@@ -1316,6 +1324,20 @@ def test_build_wiki_flags():
     assert "--co-occurrence-pairs" in argv
     assert "--rulate-mode" in argv
     assert "--thinking" in argv and "medium" in argv
+    assert "--types" in argv and "Person" in argv
+    assert "--exclude-types" not in argv
+
+
+def test_build_wiki_no_exclude_types_field():
+    """wiki: exclude_types убран из формы; типы — чипсы (hidden)."""
+    names = {f["name"] for f in STAGE_SPECS["wiki"]["fields"]}
+    assert "exclude_types" not in names
+    assert "types" in names
+    f = next(x for x in STAGE_SPECS["wiki"]["fields"] if x["name"] == "types")
+    assert f["type"] == "hidden" and f.get("noenv")
+    # пусто (все выбраны) — флаг не передаётся
+    assert "--types" not in build_command("wiki", {}, {})
+    assert "--exclude-types" not in build_command("wiki", {}, {})
 
 
 def test_build_wiki_compile_chapters():

@@ -11,7 +11,7 @@ translate_check.py — проверка перевода по цепочке к�
       redacted   vs translated   1.0 ± 0.05
       translated vs chapter      2.1 ± 0.5
   • минимальный размер файла (3072 Б);
-  • остатки иероглифов / латиницы (исключения: VIP, MVP, NPC, 【, 】);
+  • остатки иероглифов / латиницы (исключения — пусто: ничего);
   • заголовок «Глава N» в начале + сквозная последовательность;
   • лишние «Глава N» после 3-й строки;
   • дубли папок / файлов (strict → FATAL, глава пропускается).
@@ -56,15 +56,14 @@ RATIO_ORIGINAL = 2.1          # байт ru / байт zh (эвристика)
 TOL_ORIGINAL = 0.5
 
 # ──────────────────────────────────────────────
-# ИСКЛЮЧЕНИЯ (R9: дефолт — как раньше; переопределяется ключом
+# ИСКЛЮЧЕНИЯ (пусто = ничего не исключается; переопределяется ключом
 # TRANSLATE_CHECK_EXCLUDE_WORDS в .env и флагом --exclude-words)
 # ──────────────────────────────────────────────
-DEFAULT_EXCLUSIONS = ["VIP", "MVP", "【", "】", "NPC"]
 
 
 def load_exclusions(env_path=None) -> list[str]:
     """Слова-исключения: --exclude-words > TRANSLATE_CHECK_EXCLUDE_WORDS
-    (.env) > DEFAULT_EXCLUSIONS. Возвращает список в нижнем регистре."""
+    (.env) > пусто (ничего). Возвращает список в нижнем регистре."""
     raw = None
     try:
         from core.common import find_env_file, parse_dotenv
@@ -72,8 +71,7 @@ def load_exclusions(env_path=None) -> list[str]:
         raw = env.get("TRANSLATE_CHECK_EXCLUDE_WORDS")
     except Exception:  # noqa: BLE001 — .env необязателен
         raw = None
-    words = [w.strip().lower() for w in (raw or "").split(",") if w.strip()]
-    return words or list(DEFAULT_EXCLUSIONS)
+    return [w.strip().lower() for w in (raw or "").split(",") if w.strip()]
 
 # ──────────────────────────────────────────────
 # РЕГУЛЯРНЫЕ ВЫРАЖЕНИЯ
@@ -290,8 +288,8 @@ def main() -> None:
                              "по алфавиту, выводится предупреждение.")
     parser.add_argument("--exclude-words", default=None,
                         help="Слова-исключения через запятую "
-                             "(по умолчанию TRANSLATE_CHECK_EXCLUDE_WORDS "
-                             "из .env)")
+                             "(пусто = ничего; иначе "
+                             "TRANSLATE_CHECK_EXCLUDE_WORDS из .env)")
     # ── настраиваемые коэффициенты пресетов (эвристики: подбираются
     #    опытным путём под конкретную книгу; дефолты — встроенные)
     parser.add_argument("--ratio-neighbor", type=float, default=None,

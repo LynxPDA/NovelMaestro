@@ -501,6 +501,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       // запуска, скрипт их пропускает и перенумеровывает
       p.skip = (st.preview && st.preview.skips) || [];
     }
+    // ner_check · RAG: в простом режиме поля RAG-режима попадают
+    // в параметры как в экспертном (когда выбран режим rag)
+    if (key === "ner_check" && mode === "simple"
+        && String(p["passes"] ?? "") === "rag") {
+      for (const name of ["rag_terms", "rag_source_type",
+                          "rag_budget", "rag_prompt_file"]) {
+        const f = (spec.fields || []).find((x) => x.name === name);
+        if (!f) continue;
+        const v = vals[f.name];
+        if (v !== "" && v != null) p[f.name] = finalFile(f, v);
+      }
+    }
     return p;
   }
 
@@ -898,6 +910,106 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return { chipsBar, chipsBox, guide, loadTypes, fieldsBar, fieldsBox };
   }
 
+  // «Добавить спорные» (RAG): модалка с настройками (тип, коэффициент,
+  // порог count) → спорные термины из ner.json добавляются в поле
+  // rag_terms построчно. Спорно, если max/второй голос < коэффициента.
+  function addDisputedTermsModal(key, textareaWrap) {
+    const err = h("div", { class: "form-error" });
+    const typeSel = h("select", { class: "input" },
+      h("option", { value: "" }, "Все типы"));
+    const ratioInp = h("input", {
+      class: "input", type: "number", min: "1", step: "0.01",
+      value: "1.16",
+    });
+    const countInp = h("input", {
+      class: "input", type: "number", min: "0", value: "0",
+    });
+    const help = h(
+      "div", { class: "field-help" },
+      "Отношение самого большого голоса ко второму по величине; ",
+      "спорно, если разрыв МЕНЬШЕ коэффициента (напр. 173/149 = 1.16). ",
+      "Порог count — только записи с count > X (0 = без порога).",
+    );
+    const modal = h(
+      "div",
+      { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
+      h(
+        "div", { class: "modal" },
+        h("div", { class: "modal-title" }, "Добавить спорные термины"),
+        h("div", { class: "modal-text" }, "Тип:"),
+        typeSel,
+        h("div", { class: "modal-text" }, "Коэффициент (max/2-й):"),
+        ratioInp,
+        h("div", { class: "modal-text" }, "Порог count:"),
+        countInp,
+        help,
+        err,
+        h(
+          "div", { class: "modal-actions" },
+          h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
+          h(
+            "button",
+            {
+              class: "btn btn-primary",
+              onclick: async () => {
+                const ratio = Number(ratioInp.value);
+                if (!Number.isFinite(ratio) || ratio <= 0) {
+                  err.textContent = "Коэффициент — число больше 0";
+                  return;
+                }
+                const threshold = Math.max(0, Number(countInp.value) || 0);
+                const type = typeSel.value;
+                const d = await api(`/ner?project=${section}/${name}`);
+                const terms = new Set();
+                for (const it of d.items || []) {
+                  if (type && it.type !== type) continue;
+                  if (threshold > 0
+                      && !(Number(it.count) > threshold)) continue;
+                  let ok = false;
+                  for (const k of Object.keys(it)) {
+                    if (!k.startsWith("_votes_")) continue;
+                    const v = it[k];
+                    if (!Array.isArray(v)) continue;
+                    const nums = v.map(Number)
+                      .filter((n) => Number.isFinite(n) && n > 0);
+                    if (nums.length < 2) continue;
+                    nums.sort((a, b) => b - a);
+                    if (nums[0] / nums[1] < ratio) ok = true;
+                  }
+                  if (ok) terms.add(it.term);
+                }
+                const cur = String(
+                  st.values[key]["rag_terms"] ?? "").trim();
+                const lines = cur ? cur.split(/\s*\n+/) : [];
+                for (const t of terms) {
+                  if (t && !lines.includes(t)) lines.push(t);
+                }
+                st.values[key]["rag_terms"] = lines.join("\n");
+                st.touched[key].add("rag_terms");
+                const ta = textareaWrap && textareaWrap.querySelector(
+                  "textarea");
+                if (ta) ta.value = lines.join("\n");
+                close();
+              },
+            },
+            "Добавить",
+          ),
+        ),
+      ),
+    );
+    function close() {
+      modal.remove();
+    }
+    // типы — из глоссария (асинхронно)
+    api(`/ner?project=${section}/${name}`).then((d) => {
+      const byType = d.by_type || {};
+      for (const t of Object.keys(byType).sort()) {
+        typeSel.append(h("option", { value: t }, `${t} (${byType[t]})`));
+      }
+    }).catch(() => {});
+    document.body.append(modal);
+  }
+
   // ── диапазон глав: ЕДИНАЯ строка «Главы: [start] – [end]» ────────────
   // для обоих режимов (простой/экспертный); значения пишутся в
   // st.values[key].start/end как и раньше (buildParams их собирает).
@@ -953,6 +1065,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h("div", { class: "preset-desc" }, preset.desc || ""),
     );
     const wraps = [];
+    let ragApply = null; // ner_check RAG: видимость RAG-полей/диапазона
     const byName = {};
     for (const name of spec.simple || []) {
       const f = (spec.fields || []).find((x) => x.name === name);
@@ -978,7 +1091,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (fileSel) fileSel.addEventListener("change", applyNerSimple);
       applyNerSimple();
     }
-    // ner_check: чипсы типов из глоссария после select «Проходы»
+    // ner_check: чипсы типов из глоссария после select «Проходы»;
+    // RAG-поля — строятся всегда, видны только в режиме rag
     if (key === "ner_check" && byName["passes"]) {
       const sel = byName["passes"];
       const wrap = sel.closest ? sel.closest(".field") : null;
@@ -991,8 +1105,45 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
       w.loadTypes();
+      const ragWraps = [];
+      for (const name of ["rag_terms", "rag_source_type",
+                          "rag_budget", "rag_prompt_file"]) {
+        const f = (spec.fields || []).find((x) => x.name === name);
+        if (!f) continue;
+        const rw = buildField(key, f);
+        if (!rw) continue;
+        if (name === "rag_terms") {
+          // кнопка «Добавить спорные» — под списком терминов
+          const addBtn = h(
+            "button",
+            { class: "btn btn-xs btn-ghost", type: "button" },
+            "Добавить спорные",
+          );
+          addBtn.addEventListener("click", () =>
+            addDisputedTermsModal(key, rw));
+          const row = h("div", { class: "ner-add-disputed" }, addBtn);
+          rw.append(row);
+        }
+        ragWraps.push(rw);
+        wraps.push(rw);
+      }
+      ragApply = () => {
+        const isRag = sel.value === "rag";
+        for (const rw of ragWraps) {
+          rw.classList.toggle("hidden", !isRag);
+        }
+        const rr = st.rangeRow;
+        if (rr) rr.classList.toggle("hidden", !isRag);
+      };
+      sel.addEventListener("change", ragApply);
     }
 
+    // wiki: чипсы типов из глоссария (как в ner_check; пусто = все)
+    if (key === "wiki") {
+      const w = nerCheckWidgets(key);
+      wraps.push(w.chipsBar, w.chipsBox);
+      w.loadTypes();
+    }
     // wiki: «Собрать из глав» — прячем входной txt (показываем тип);
     // «Сохранить как главу» — прячем формат, показываем тип файла
     if (key === "wiki" && byName["source"]) {
@@ -1078,6 +1229,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // диапазон глав — ПЕРВЫМ в списке (сразу под карточкой пресета)
     const body = [card, ...wraps];
     if (rangeRow) body.splice(1, 0, rangeRow);
+    // ner_check RAG: после постройки rangeRow — первая раскладка
+    if (ragApply) ragApply();
     return h("div", { class: "run-form" }, body, err, runBtn);
   }
 
@@ -1126,6 +1279,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // формат: обычный/rulate-md/rulate-html (toc/toc_links — только
     // в обычном режиме)
     if (key === "wiki") {
+      // чипсы типов из глоссария (как в ner_check; пусто = все типы)
+      const w = nerCheckWidgets(key);
+      const nerWrap = fieldWraps["ner_file"];
+      const nidx = nerWrap ? fieldNodes.indexOf(nerWrap) : -1;
+      if (nidx >= 0) {
+        fieldNodes.splice(nidx + 1, 0, w.chipsBar, w.chipsBox);
+      }
+      w.loadTypes();
       const srcSel = fieldWraps["source"] && fieldWraps["source"]._input;
       const fmtSel = fieldWraps["format"] && fieldWraps["format"]._input;
       const asChSel =
@@ -1165,7 +1326,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
 
     // ner_check — чипсы типов из глоссария после select «Проходы»;
-    // карточки-пресеты убраны (названия — в select), степпер остаётся
+    // карточки-пресеты убраны (названия — в select), степпер остаётся;
+    // RAG-поля — только в режиме rag (+ кнопка «Добавить спорные»)
     if (key === "ner_check") {
       const passesWrap = fieldWraps["passes"];
       const w = nerCheckWidgets(key);
@@ -1177,6 +1339,30 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
       w.loadTypes();
+      const ragNames = ["rag_terms", "rag_source_type",
+                        "rag_budget", "rag_prompt_file"];
+      const ragWrap = fieldWraps["rag_terms"];
+      if (ragWrap) {
+        const addBtn = h(
+          "button",
+          { class: "btn btn-xs btn-ghost", type: "button" },
+          "Добавить спорные",
+        );
+        addBtn.addEventListener("click", () =>
+          addDisputedTermsModal(key, ragWrap));
+        ragWrap.append(h("div", { class: "ner-add-disputed" }, addBtn));
+      }
+      const sel = passesWrap && passesWrap._input;
+      const applyRagExpert = () => {
+        const isRag = sel && sel.value === "rag";
+        for (const name of ragNames) {
+          const fw = fieldWraps[name];
+          if (fw) fw.classList.toggle("hidden", !isRag);
+        }
+        if (rangeRow) rangeRow.classList.toggle("hidden", !isRag);
+      };
+      if (sel) sel.addEventListener("change", applyRagExpert);
+      applyRagExpert();
     }
 
     // epub (экспертный): справка по regexp (collapsible) + перестройка

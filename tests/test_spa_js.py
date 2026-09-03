@@ -75,14 +75,41 @@ def test_help_view_renders_static_md():
     assert "createContextualFragment" in src
 
 
-def test_glossary_dispute_vars_declared():
-    """Регрессия «пустая вкладка Глоссарий»: dispute/voteKeys/
-    disputeVictims/saveDispute ОБЯЗАНЫ быть объявлены в project-views.js
-    (ReferenceError при рендере nerView оставлял только панели)."""
+def test_templates_general_readonly():
+    """Шаблоны · General: файл открывается в просмотре (read-only),
+    кнопка «Сохранить» не рендерится, «Просмотр» вместо «Правка»."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert "ed.setReadOnly(readonly)" in src
+    assert "const readonly = st.set === \"General\"" in src
+    assert '"Просмотр"' in src
+    assert "только чтение" in src
+    assert "...(readonly ? [] : [saveBtn])" in src
+
+
+def test_ner_check_rag_ui_present():
+    """Запуски ner_check · RAG: условная видимость RAG-полей,
+    кнопка «Добавить спорные», автоподхват промпт-файла."""
+    rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    # RAG-поля строятся и прячутся по режиму (и простой, и экспертный)
+    assert "rag_source_type" in rv
+    assert "rag_budget" in rv and "rag_prompt_file" in rv
+    assert "addDisputedTermsModal" in rv
+    assert "Добавить спорные" in rv
+    assert "classList.toggle(\"hidden\", !isRag)" in rv
+    # автоподхват ner_check_prompt.txt для RAG-промпта
+    st = (REPO / "web" / "stages.py").read_text(encoding="utf-8")
+    assert "ner_check_prompt.txt" in st
+    assert "autofile" in st
+
+
+def test_glossary_dispute_removed():
+    """«Спорные» убраны из вкладки Глоссарий (перенос в Запуски
+    ner_check): dispute-объявления и кнопка отсутствуют — но
+    «Добавить спорные» живёт в run-views.js (RAG)."""
     src = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
-    for decl in ("const LS_DISPUTE_KEY", "const voteKeys",
-                 "let dispute = null", "function saveDispute",
-                 "function disputeVictims"):
-        assert decl in src, f"не найдено объявление: {decl}"
-    # использование внутри nerView — до конца файла (нет дубля вне)
-    assert src.count("function disputeVictims") == 1
+    for decl in ("LS_DISPUTE_KEY", "voteKeys", "saveDispute",
+                 "disputeVictims", "Спорные"):
+        assert decl not in src, f"dispute-код остался: {decl}"
+    rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    assert "Добавить спорные" in rv
+    assert "addDisputedTermsModal" in rv

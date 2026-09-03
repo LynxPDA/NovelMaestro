@@ -18,6 +18,7 @@
     -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --btn-hover: #252d38;
   --log-bg: #0d1117;
+  --bg-soft: #2a2a2a;
 }
 
 /* Светлая тема интерфейса: WEB_UI_THEME=light (системный .env) */
@@ -34,6 +35,7 @@
   --danger: #cf222e;
   --btn-hover: #eaeef2;
   --log-bg: #f6f8fa;
+  --bg-soft: #eaeef2;
 }
 
 /* Светлая тема: белый текст на тёмно-зелёных кнопках (тёмная — как была) */
@@ -220,6 +222,9 @@ body {
 /* выпадающее меню групповых кнопок «+» / «x» глоссария */
 .toolbar-menu {
   position: relative;
+}
+.toolbar-menu .menu-box[hidden] {
+  display: none;
 }
 .toolbar-menu .menu-box {
   position: absolute;
@@ -840,6 +845,10 @@ input[type="number"] {
 }
 .ner-chips-bar .field-help {
   margin: 0;
+}
+/* кнопка «Добавить спорные» под RAG-списком терминов */
+.ner-add-disputed {
+  margin-top: 6px;
 }
 .ner-chips-box {
   display: flex;

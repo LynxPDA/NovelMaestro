@@ -1594,50 +1594,6 @@ function viewProject(section, name, tab) {
       typeFilter = null;
     }
 
-    /* «Спорные»: состояние фильтра (поле голосов + коэффициент) —
-       localStorage; спорно, если max/второй < ratio. */
-    const LS_DISPUTE_KEY = `nerDispute:${section}/${name}`;
-    const voteKeys = [...new Set(
-      data.items.flatMap((it) =>
-        Object.keys(it).filter((k) => k.startsWith("_votes_")),
-      ),
-    )];
-    let dispute = null;
-    try {
-      const saved = JSON.parse(
-        localStorage.getItem(LS_DISPUTE_KEY) || "null",
-      );
-      if (saved && voteKeys.includes(saved.field)) {
-        const ratio = Number(saved.ratio);
-        if (Number.isFinite(ratio) && ratio > 0) dispute = saved;
-      }
-    } catch {
-      dispute = null;
-    }
-    function saveDispute() {
-      try {
-        localStorage.setItem(LS_DISPUTE_KEY, JSON.stringify(dispute));
-      } catch {
-        /* localStorage недоступен — не критично */
-      }
-    }
-    function disputeVictims() {
-      if (!dispute || !voteKeys.length) return [];
-      const field = dispute.field;
-      const out = [];
-      for (const it of data.items) {
-        const v = it[field];
-        if (!Array.isArray(v)) continue;
-        const nums = v
-          .map((x) => Number(x))
-          .filter((n) => Number.isFinite(n) && n > 0);
-        if (nums.length < 2) continue;
-        nums.sort((a, b) => b - a);
-        if (nums[0] / nums[1] < dispute.ratio) out.push(it);
-      }
-      return out;
-    }
-
     function visible() {
       let filtered = UICore.filterNerItems(
         data.items,
@@ -1645,11 +1601,6 @@ function viewProject(section, name, tab) {
         searchFields,
         typeFilter,
       );
-      const disputed = disputeVictims();
-      if (disputed.length) {
-        const set = new Set(disputed);
-        filtered = filtered.filter((it) => set.has(it));
-      }
       return UICore.sortNerItems(filtered, sortField, sortDir);
     }
     function saveCols() {
@@ -2063,109 +2014,7 @@ function viewProject(section, name, tab) {
       });
     });
 
-    /* «Спорные»: настройки (поле голосов + коэффициент) открываются
-       модалкой; фильтр — дополнительный поверх поиска и типов. */
-    const disputeBtn = h(
-      "button",
-      { class: "btn btn-sm btn-ghost", title: "Спорные записи по голосам" },
-      "Спорные",
-    );
-    function refreshDisputeBtn() {
-      if (dispute) {
-        disputeBtn.classList.add("btn-active");
-        const field = dispute.field.replace(/^_votes_/, "");
-        disputeBtn.textContent = `Спорные (${field} ${dispute.ratio})`;
-      } else {
-        disputeBtn.classList.remove("btn-active");
-        disputeBtn.textContent = "Спорные";
-      }
-    }
-    refreshDisputeBtn();
-    disputeBtn.addEventListener("click", () => {
-      const keys = voteKeys.length ? voteKeys : [...knownKeys];
-      const sel = h(
-        "select",
-        { class: "input" },
-        ...keys.map((k) =>
-          h("option", { value: k }, k.replace(/^_votes_/, "") + "  (" + k + ")"),
-        ),
-      );
-      sel.value = dispute ? dispute.field : (voteKeys[0] || "");
-      const ratioInp = h("input", {
-        class: "input",
-        type: "number",
-        min: "1",
-        step: "0.01",
-        value: dispute ? String(dispute.ratio) : "1.16",
-      });
-      const help = h(
-        "div",
-        { class: "field-help" },
-        "Отношение самого большого голоса ко второму по величине; ",
-        "спорно, если разрыв МЕНЬШЕ коэффициента (напр. 173/149 = 1.16). ",
-        "Фильтр — поверх текущего поиска и типов.",
-      );
-      const err2 = h("div", { class: "form-error" });
-      const modal = h(
-        "div",
-        { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-        h(
-          "div",
-          { class: "modal" },
-          h("div", { class: "modal-title" }, "Спорные записи"),
-          h("div", { class: "modal-text" }, "Поле голосования:"),
-          sel,
-          h("div", { class: "modal-text" }, "Коэффициент (max/2-й):"),
-          ratioInp,
-          help,
-          err2,
-          h(
-            "div",
-            { class: "modal-actions" },
-            h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
-            h(
-              "button",
-              {
-                class: "btn btn-primary",
-                onclick: () => {
-                  const ratio = Number(ratioInp.value);
-                  if (!Number.isFinite(ratio) || ratio <= 0) {
-                    err2.textContent = "Коэффициент — число больше 0";
-                    return;
-                  }
-                  dispute = { field: sel.value || voteKeys[0], ratio };
-                  saveDispute();
-                  refreshDisputeBtn();
-                  page = 0;
-                  renderRows();
-                  close();
-                },
-              },
-              "Применить",
-            ),
-            h(
-              "button",
-              {
-                class: "btn btn-ghost",
-                onclick: () => {
-                  dispute = null;
-                  saveDispute();
-                  refreshDisputeBtn();
-                  page = 0;
-                  renderRows();
-                  close();
-                },
-              },
-              "Выключить",
-            ),
-          ),
-        ),
-      );
-      function close() {
-        modal.remove();
-      }
-      document.body.append(modal);
-    });
+
 
     /* поля поиска: как «+ Столбец», по умолчанию все ключи записи */
     const searchFieldsBtn = h(
@@ -2549,7 +2398,6 @@ function viewProject(section, name, tab) {
       h("span", { class: "spacer" }),
       typeBtn,
       colBtn,
-      disputeBtn,
       // «+»: новый столбец или новый термин (меню вместо двух кнопок)
       menuButton("+", "Добавить столбец или термин", [
         { label: "+ Столбец", action: () => addColBtn.click() },

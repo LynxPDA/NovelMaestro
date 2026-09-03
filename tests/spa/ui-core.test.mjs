@@ -239,6 +239,28 @@ test("glossaryMatches: склонения через нечёткий поиск
   assert.deepEqual(hits("这是灵草地", cjk), ["灵草"]);
 });
 
+test("glossaryMatches: «нити» от «нить» — 1 буква разницы", () => {
+  // регрессия: жёсткое LCS >= 0.8 длины отсекало 3/4 = 0.75 даже при
+  // пороге 0.1; теперь общая подстрока меряется по порогу
+  const items = [{ term: "нить", translation: "" }];
+  // n=1, порог 0.1 — пользовательские настройки редактора
+  const loose = UICore.buildGlossaryMatcher(items, 1, 0.1);
+  const ms = UICore.glossaryMatches("он тянул нити ковра", loose);
+  assert.deepEqual(
+    ms.map((m) => "он тянул нити ковра".slice(m.from, m.to)),
+    ["нити"],
+  );
+  // и при дефолтном пороге 0.75 (3/4 грамм = 0.75 ровно) тоже
+  const def = UICore.buildGlossaryMatcher(items, 1, 0.75);
+  assert.deepEqual(
+    UICore.glossaryMatches("нити", def).map((m) => "нити".slice(m.from, m.to)),
+    ["нити"],
+  );
+  // «который» на «кот» — по-прежнему не матчится (лишние n-граммы)
+  const кот = [{ term: "кот", translation: "" }];
+  assert.deepEqual(hits("который", кот), []);
+});
+
 test("glossaryMatches: нормализация — пробелы и пунктуация", () => {
   // normalize_for_search: регистр/пробелы/пунктуация в термине и тексте — как есть;
   // диапазон в оригинале включает пропущенные пробелы и пунктыацию между словами.
