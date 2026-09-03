@@ -645,7 +645,10 @@ def filter_ner_items(items, count_threshold=0, types=None):
     for item in items:
         if types and item.get("type", "") not in types:
             continue
-        if _int_count(item.get("count")) <= count_threshold:
+        # порог 0 — фильтр выключен: записи БЕЗ count (опциональное
+        # поле) не выпадают; иначе — count > порога
+        if count_threshold and \
+                _int_count(item.get("count")) <= count_threshold:
             continue
         out.append(item)
     return out
@@ -703,7 +706,7 @@ def build_ner_batches(items, budget, fields=None):
     попадают в первый батч. Возвращает список списков записей;
     в норме один батч (бюджет ~ контекст сервера)."""
     ordered = sorted(items,
-                     key=lambda it: -((it.get("count") or 0)))
+                     key=lambda it: -_int_count(it.get("count")))
     batches, cur, cur_len = [], [], 0
     for item in ordered:
         block = "\n".join(format_ner_record(item, 0, fields))

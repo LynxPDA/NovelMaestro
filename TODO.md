@@ -15,12 +15,10 @@
 - [x] **2. wiki · универсальные настройки** — теги <wiki_markers>/
       <wiki_type_names_ru>/<wiki_relations_labels>/<wiki_skip_relations>/
       <wiki_type_order> в wiki_prompt.txt; коммит 3c00717.
-- [ ] **3. ner_check · RAG-режим (FTS5)** — новый тег в
-      `wiki_prompt.txt`; сбор релевантного текста FTS5 равномерно
-      по книге (не с начала) в заданный бюджет; вход — список
-      терминов построчно (+ данные из ner.json); в выбранном
-      режиме показывать только релевантные параметры; фильтр по
-      count для всех режимов (default 0).
+- [x] **3. ner_check · RAG-режим (FTS5)** — `--passes rag`,
+      FTS5-утилиты в core.common, тег <prompt_rag>,
+      равномерная выборка even_sample, бюджет rag_budget;
+      отличия → патчи stage=RAG; коммит 9836618.
 - [ ] **4. ner.json · опциональные поля** — проверить, что
       обязательны только term/type/translation; count и остальные
       — опциональны, отсутствие ничего не ломает.

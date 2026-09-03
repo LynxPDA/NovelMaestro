@@ -46,6 +46,24 @@ def test_filter_ner_items():
     assert len(out) == 3
 
 
+def test_filter_ner_items_without_count():
+    """Задача 4: count ОПЦИОНАЛЕН — записи без count не выпадают
+    при дефолтном пороге 0; строковый count нормализуется."""
+    items = [
+        {"term": "A", "type": "Person", "translation": "А"},  # нет count
+        {"term": "B", "type": "Person", "translation": "Б",
+         "count": "12"},  # строка
+        {"term": "C", "type": "Person", "translation": "В",
+         "count": 3},
+    ]
+    out = filter_ner_items(items)  # порог 0 — все
+    assert [i["term"] for i in out] == ["A", "B", "C"]
+    out = filter_ner_items(items, count_threshold=5)
+    assert [i["term"] for i in out] == ["B"]  # 12 > 5; A без count ушла
+    out = filter_ner_items(items, count_threshold=10)
+    assert [i["term"] for i in out] == ["B"]  # строка "12" → int 12
+
+
 def test_format_and_glossary_body_fields():
     # по умолчанию — все поля (кроме служебных с «_»); пустые пропущены
     lines = format_ner_record(ITEMS[0], 1)
@@ -84,7 +102,21 @@ def test_build_ner_batches_sorted_by_count_desc():
     assert [i["count"] for i in batches[0]] == [40, 12, 5]
 
 
-def test_build_ner_batches_split_by_budget():
+def test_build_ner_batches_count_missing_or_string():
+    """Задача 4: count отсутствует/строка — сортировка не падает
+    (нормализация _int_count)."""
+    items = [
+        {"term": "A", "type": "Person", "translation": "А"},
+        {"term": "B", "type": "Person", "translation": "Б",
+         "count": "50"},
+        {"term": "C", "type": "Person", "translation": "В",
+         "count": 10},
+    ]
+    batch = build_ner_batches(items, 10_000)[0]
+    assert [i["term"] for i in batch] == ["B", "C", "A"]
+
+
+def test_build_ner_batches_split_by_budget(): 
     batches = build_ner_batches(ITEMS, budget=200)
     assert len(batches) > 1
     # самые частотные — в первом батче
