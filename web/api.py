@@ -2046,11 +2046,14 @@ def _persist_run_params(ctx: dict, pdir: Path, stage: str,
     сокрытия; ключ хранится как <СТАДИЯ>_API_KEY, fallback — API_KEY).
     Пустые значения НЕ пишутся; системный .env не трогается."""
     from web.stages import env_keys_for
-    # noenv-поля (многострочные regexp epub) в .env не пишем — перевод
-    # строк на пробелы ломает «по одному паттерну на строку»
+    # noenv-поля (типы/поля чипсов, секреты) в .env не пишем
     spec = spec_for(stage)
     noenv = {f["name"] for f in (spec or {}).get("fields", [])
              if f.get("noenv")}
+    # многстрочные regexp (textarea) в .env — одной строкой, переносы
+    # как литерал «\\n» (одно значение .env — одна строка)
+    textareas = {f["name"] for f in (spec or {}).get("fields", [])
+                 if f.get("type") == "textarea"}
     updates: dict[str, str] = {}
     profile = str(params.get("profile") or "")
     for field, value in params.items():
@@ -2062,7 +2065,10 @@ def _persist_run_params(ctx: dict, pdir: Path, stage: str,
         if isinstance(value, bool):
             updates[keys[0]] = "1" if value else "0"
         else:
-            updates[keys[0]] = str(value).strip()
+            v = str(value).strip()
+            if field in textareas:
+                v = v.replace("\n", "\\n")
+            updates[keys[0]] = v
     if not updates:
         return
     env_path = pdir / ".env"
@@ -2273,6 +2279,12 @@ def _stage_spec(ctx: dict) -> dict:
                             if not ((pdir / d if d else pdir) / name).is_file():
                                 continue
                             field["default"] = name
+                        elif field.get("type") == "textarea":
+                            # многстрочные regexp в .env — одной строкой,
+                            # переносы как литерал «\\n» (хвостовой
+                            # перенос — артефакт кодирования)
+                            field["default"] = str(val).replace(
+                                "\\n", "\n").rstrip("\n")
                         else:
                             field["default"] = val
                         break

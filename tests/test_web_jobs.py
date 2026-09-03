@@ -702,56 +702,56 @@ def test_build_epub_to_chapters_clean_patterns_ws():
 
 
 def test_build_translate_check():
-    # подписи пресетов web-формы маппятся на числовой --preset
-    form = {"preset": "redacted", "start": 5, "end": 10, "lenient": True}
+    # тип файлов глав → --check-type; диапазон/режим/исключения — как есть
+    form = {"check_type": "redacted", "start": 5, "end": 10,
+            "lenient": True}
     argv = build_command("translate_check", form, {})
     assert argv[0] == "cli/translate_check.py"
-    assert "--preset" in argv and "2" in argv
+    assert "--check-type" in argv and "redacted" in argv
     assert "--start" in argv and "5" in argv
     assert "--end" in argv and "10" in argv
     assert "--lenient" in argv
-    # без диапазона — только пресет
-    argv2 = build_command("translate_check", {"preset": "polished"}, {})
-    assert "--preset" in argv2 and "1" in argv2
+    # без диапазона — только тип
+    argv2 = build_command("translate_check",
+                          {"check_type": "polished"}, {})
+    assert "--check-type" in argv2 and "polished" in argv2
     assert "--start" not in argv2 and "--end" not in argv2
-    # неизвестная подпись — передаётся как есть
-    argv3 = build_command("translate_check", {"preset": "9"}, {})
-    assert "--preset" in argv3 and "9" in argv3
+    # неизвестный тип — передаётся как есть
+    argv3 = build_command("translate_check", {"check_type": "9"}, {})
+    assert "--check-type" in argv3 and "9" in argv3
     # R9: слова-исключения → --exclude-words
     argv4 = build_command("translate_check",
-                          {"preset": "polished",
+                          {"check_type": "polished",
                            "exclude_words": "VIP,NPC"}, {})
     assert "--exclude-words" in argv4
     assert argv4[argv4.index("--exclude-words") + 1] == "VIP,NPC"
     argv5 = build_command("translate_check",
-                          {"preset": "polished", "exclude_words": ""}, {})
+                          {"check_type": "polished",
+                           "exclude_words": ""}, {})
     assert "--exclude-words" not in argv5
 
 
 def test_build_translate_check_custom_settings():
-    """Задача 5: коэффициенты пресетов, отключаемые проверки —
-    проброс в argv."""
-    form = {"preset": "polished",
-            "ratio_neighbor": "1.1", "tol_neighbor": "0.1",
-            "ratio_original": "2.0", "tol_original": "0.6",
-            "no_nonrussian": True, "no_chapter_order": True,
-            "nonrussian_regex": r"[一-鿿]+",
-            "chapter_regex": r"^Глава\s+(\d+)"}
+    """Коэффициенты «ratio±tol» и regexp-проверки — проброс в argv."""
+    form = {"check_type": "polished",
+            "neighbor": "1.1±0.1", "original": "2.0±0.6",
+            "regexp_checks": "[一-鿿]+ # иероглифы\n[a-zA-Z]+\n"}
     argv = build_command("translate_check", form, {})
-    assert "--ratio-neighbor" in argv and "1.1" in argv
-    assert "--tol-neighbor" in argv and "0.1" in argv
-    assert "--ratio-original" in argv and "2.0" in argv
-    assert "--tol-original" in argv and "0.6" in argv
-    assert "--no-nonrussian" in argv
-    assert "--no-chapter-order" in argv
-    assert "--nonrussian-regex" in argv
-    assert argv[argv.index("--nonrussian-regex") + 1] == r"[一-鿿]+"
-    assert "--chapter-regex" in argv
-    # пустые значения — флагов нет
-    argv2 = build_command("translate_check", {"preset": "polished"}, {})
+    assert "--neighbor" in argv and "1.1±0.1" in argv
+    assert "--original" in argv and "2.0±0.6" in argv
+    assert "--regexp-check" in argv
+    assert argv.count("--regexp-check") == 2
+    # строка уходит как есть (комментарий срезает сам CLI)
+    assert argv[argv.index("--regexp-check") + 1] == "[一-鿿]+ # иероглифы"
+    # старые флаги больше не собираются
     for flag in ("--ratio-neighbor", "--tol-neighbor", "--ratio-original",
                  "--tol-original", "--no-nonrussian", "--no-chapter-order",
-                 "--nonrussian-regex", "--chapter-regex"):
+                 "--nonrussian-regex", "--chapter-regex", "--preset"):
+        assert flag not in argv
+    # пустые значения — флагов нет
+    argv2 = build_command("translate_check",
+                          {"check_type": "polished"}, {})
+    for flag in ("--neighbor", "--original", "--regexp-check"):
         assert flag not in argv2
 
 
@@ -851,9 +851,10 @@ def test_presets_all_stages():
     """У стадий с простым режимом — пресет {title, desc} + непустой
     список simple; params = непустые дефолты полей + overrides;
     LLM-полей нет (скрипты берут сервер из .env). Стадии без simple
-    (translate_check/batch_replace/compile) — только экспертные."""
+    (batch_replace/compile) — только экспертные; translate_check —
+    с пресетом «Проверить перевод» (тип файлов в карточке)."""
     from web.stages import preset_params
-    expert_only = ("translate_check", "batch_replace", "compile")
+    expert_only = ("batch_replace", "compile")
     for key in STAGE_ORDER:
         spec = STAGE_SPECS[key]
         names = {f["name"] for f in spec["fields"]}
@@ -888,6 +889,10 @@ def test_presets_all_stages():
                 expected[f["name"]] = str(d)
         expected.update(spec.get("preset", {}).get("overrides") or {})
         assert params == expected, key
+    # translate_check: пресет есть, simple — тип/диапазон
+    tc = STAGE_SPECS["translate_check"]
+    assert tc.get("preset") is not None
+    assert tc.get("simple") == ["check_type", "start", "end"]
 
 
 def test_simple_fields_per_stage():
@@ -1168,6 +1173,41 @@ def test_stage_spec_env_prefill_global_fallback(jobs_srv, tmp_path,
     # глобальные MODEL → общая модель, PIPELINE_JOBS → дефолт формы
     assert fields["model"]["default"] == "global-model"
     assert fields["jobs"]["default"] == "2"
+
+
+def test_stage_spec_env_prefill_textarea(jobs_srv, tmp_path):
+    """Многстрочные regexp в .env — одной строкой с литералом «\\n»:
+    префилл раскодирует в реальные переносы (textarea)."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / ".env").write_text(
+        "TRANSLATE_CHECK_REGEXP_CHECKS=[一-鿿]+\\n[a-zA-Z]+\\n",
+        encoding="utf-8")
+    res, payload = req(
+        "GET",
+        "/api/stages/translate_check/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    assert fields["regexp_checks"]["default"] == "[一-鿿]+\n[a-zA-Z]+"
+
+
+def test_persist_run_params_textarea_encode(tmp_path):
+    """Запись textarea в .env: переносы кодируются литералом «\\n»
+    (одно значение .env — одна строка)."""
+    from web.api import _persist_run_params
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    pdir.mkdir(parents=True)
+    ctx = {"repo_root": tmp_path}
+    _persist_run_params(ctx, pdir, "batch_replace", {
+        "replacements": "Глава \\d+ -> №\\g<0>\n\\s+ -> ",
+    })
+    env = pdir / ".env"
+    assert env.is_file()
+    text = env.read_text(encoding="utf-8")
+    assert "BATCH_REPLACE_REPLACEMENTS=Глава \\d+ -> №\\g<0>\\n\\s+ ->" \
+        in text
+    assert "\n\\s+ ->" not in text  # реальных переносов нет
 
 
 def test_build_ner_modes():

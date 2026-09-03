@@ -185,31 +185,22 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
 
 
 # подписи пресетов в web-форме → числовой --preset translate_check.py
-PRESET_BY_LABEL = {"polished": "1", "redacted": "2", "translated": "3"}
-
 
 def build_translate_check(form: dict, ctx: dict) -> list[str]:
     argv = ["cli/translate_check.py"]
-    if form.get("preset"):
-        preset = PRESET_BY_LABEL.get(str(form["preset"]), str(form["preset"]))
-        argv += ["--preset", preset]
+    check_type = str(form.get("check_type") or "polished")
+    argv += ["--check-type", check_type]
     argv += _range_argv("start", form)
     if form.get("lenient"):
         argv += ["--lenient"]
     if form.get("exclude_words"):
         argv += ["--exclude-words", str(form["exclude_words"])]
-    for name, flag in (("ratio_neighbor", "--ratio-neighbor"),
-                       ("tol_neighbor", "--tol-neighbor"),
-                       ("ratio_original", "--ratio-original"),
-                       ("tol_original", "--tol-original"),
-                       ("nonrussian_regex", "--nonrussian-regex"),
-                       ("chapter_regex", "--chapter-regex")):
+    for name, flag in (("neighbor", "--neighbor"),
+                       ("original", "--original")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
-    if form.get("no_nonrussian"):
-        argv.append("--no-nonrussian")
-    if form.get("no_chapter_order"):
-        argv.append("--no-chapter-order")
+    for line in _epub_lines(form.get("regexp_checks")):
+        argv += ["--regexp-check", line]
     return argv
 
 
@@ -559,10 +550,12 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "split_patterns",
              "label": "Паттерны разбивки (regexp, по одному на строку)",
              "type": "textarea", "rows": 4, "default": "",
-             "noenv": True,
              "help": "ТОЛЬКО режим regexp. Строка считается маркером, "
                       "если НАЧИНАЕТСЯ с любого паттерна; вся строка "
-                      "становится заголовком главы; пример: «Глава \\d+»"},
+                      "становится заголовком главы; комментарий в конце "
+                      "строки — « # …»; пример: «Глава \\d+»; "
+                      "EPUB_SPLIT_PATTERNS в .env — переносы строк "
+                      "как «\\n»"}, 
             {"name": "chunk_size", "label": "Размер чанка, СИМВОЛЫ",
              "type": "number", "default": "7000",
              "help": "ТОЛЬКО режим «по чанкам»"},
@@ -619,10 +612,16 @@ STAGE_SPECS: dict[str, dict] = {
         "script": "translate_check.py",
         "build": build_translate_check,
         "fields": [
-            {"name": "preset", "label": "Пресет сравнения",
+            {"name": "check_type", "label": "Тип файлов глав",
              "type": "select",
              "options": ["polished", "redacted", "translated"],
-             "default": "polished"},
+             "labels": {"polished": "polished (после полировки)",
+                         "redacted": "redacted (после редактуры)",
+                         "translated": "translated (после перевода)"},
+             "default": "polished",
+             "help": "polished → сравнивается с redacted (соседняя "
+                      "стадия) и chapter (оригинал); redacted → с "
+                      "translated и chapter; translated → только с chapter"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
@@ -634,43 +633,37 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "Пусто = ничего не исключается; если задано "
                       "TRANSLATE_CHECK_EXCLUDE_WORDS в .env — поле "
                       "заполняется оттуда"},
-            {"name": "ratio_neighbor", "label": "Ratio соседней стадии",
-             "type": "number", "default": "", "step": "0.01",
-             "help": "Ожидаемый ratio (напр. polished/redacted ≈ 1.0); "
-                      "эвристика — подбирается опытным путём; пусто = "
-                      "встроенный дефолт"},
-            {"name": "tol_neighbor", "label": "Допуск соседней стадии",
-             "type": "number", "default": "", "step": "0.01",
-             "help": "Допуск ± для ratio соседней стадии (пусто = дефолт)"},
-            {"name": "ratio_original", "label": "Ratio с оригиналом",
-             "type": "number", "default": "", "step": "0.01",
-             "help": "Ожидаемый ratio перевода к chapter (≈2.1); "
-                      "эвристика — подбирается опытным путём; пусто = "
-                      "встроенный дефолт"},
-            {"name": "tol_original", "label": "Допуск с оригиналом",
-             "type": "number", "default": "", "step": "0.01",
-             "help": "Допуск ± для ratio с оригиналом (пусто = дефолт)"},
-            {"name": "no_nonrussian", "label": "Отключить проверку "
-                     "не-русских символов",
-             "type": "bool", "default": False,
-             "help": "Не проверять китайские иероглифы/латиницу "
-                      "(по умолчанию проверка включена)"},
-            {"name": "nonrussian_regex", "label": "Свой regexp "
-                     "не-русских символов",
+            {"name": "neighbor",
+             "label": "Стадия/Стадия (по занимаемому месту)",
              "type": "text", "default": "",
-             "help": "Напр. [一-鿿]+ — только иероглифы; пусто = "
-                      "иероглифы + латиница"},
-            {"name": "no_chapter_order", "label": "Отключить проверку "
-                     "последовательности глав",
-             "type": "bool", "default": False,
-             "help": "Не проверять «Глава N → N+1» и лишние заголовки "
-                      "(по умолчанию включено)"},
-            {"name": "chapter_regex", "label": "Свой формат «Глава N»",
+             "help": "Ожидаемый ratio соседней стадии и допуск: "
+                      "«1.0±0.05» (напр. polished/redacted); пусто = "
+                      "встроенный дефолт"},
+            {"name": "original",
+             "label": "Оригинал/Стадия (по занимаемому месту)",
              "type": "text", "default": "",
-             "help": "Regexp с группой 1 = номер главы; пусто = "
-                      r"^\s*Глава\s+(\d+|\[Номер\])"},
+             "help": "Ожидаемый ratio с оригиналом и допуск: "
+                      "«2.1±0.5» (напр. polished/chapter); пусто = "
+                      "встроенный дефолт"},
+            {"name": "regexp_checks",
+             "label": "Regexp-проверки (по одной на строку)",
+             "type": "textarea", "rows": 4, "default": "",
+             "help": "Каждая строка — regexp по тексту главы (multiline): "
+                      "всё найденное — ошибка; первое вхождение на первой "
+                      "непустой строке (заголовок главы) не считается; "
+                      "^/$ — начало/конец СТРОКИ; комментарий в конце "
+                      "строки — « # …»; пусто = дефолтные проверки "
+                      "(иероглифы, латиница, лишние «Глава N»); "
+                      "TRANSLATE_CHECK_REGEXP_CHECKS в .env — переносы "
+                      "строк как «\\n»"},
         ],
-        # только экспертный режим (без простого/пресета)
+        "preset": {
+            "title": "Проверить перевод",
+            "desc": "Проверка объёмов по цепочке и текста глав "
+                     "(дефолтные regexp-проверки); тип файлов выбирается",
+            "overrides": {"check_type": "polished"},
+        },
+        "simple": ["check_type", "start", "end"],
     },
     "compile": {
         "title": "Компиляция TXT/EPUB/FB2",
@@ -1090,18 +1083,19 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "replacements",
              "label": "Regexp-замены (по одной на строку)",
              "type": "textarea", "rows": 5, "default": "",
-             "noenv": True,
              "help": "Формат: паттерн -> замена (regexp, спецсимволы "
                       "работают). Пустая правая часть — УДАЛЕНИЕ: "
                       "«<div>.*?</div> ->». «^»/«$» — начало/конец "
                       "СТРОКИ; пробелы в паттерне значимы; флаги "
-                      "в конце строки: « |i» (регистр), « |r» (regexp — "
-                      "всегда). "
+                      "в конце строки (до комментария): « |i» (регистр), "
+                      "« |r» (regexp — всегда). "
                       "Примеры: «Глава \\d+ -> Глава №\\g<0>», "
                       "«\\s+ -> » (сжать пробелы), «^  ->» (отступ "
                       "строки), «^(第\\d+章.*)\\n(?=\\1$) ->» "
                       "(строка-дубликат заголовка главы). Строки с # — "
-                      "комментарии"},
+                      "комментарии; комментарий в конце строки — « # …»; "
+                      "BATCH_REPLACE_REPLACEMENTS в .env — переносы "
+                      "строк как «\\n»"},
             {"name": "type", "label": "Тип файлов глав",
              "type": "select", "options": ["polished", "redacted", "translated", "chapter"],
              "default": "polished"},

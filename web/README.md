@@ -110,9 +110,15 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
   обоих режимов (`st.values`): правки в экспертном применяются в
   простом и наоборот. LLM-поля (host/model/api_key) в простом не
   показываются — сервер из `.env` (если заполнены в экспертном —
-  уйдут в запуск). Стадии translate_check/batch_replace/compile —
-  только экспертные (без переключателя). Выбор режима — localStorage
+  уйдут в запуск). Стадии batch_replace/compile — только экспертные
+  (без переключателя); translate_check — с пресетом «Проверить
+  перевод» (тип файлов глав + диапазон). Выбор режима — localStorage
   (`runMode`, по стадиям), дефолт — простой.
+  Многострочные regexp-поля (epub паттерны разбивки, regexp-проверки
+  translate_check, правила batch_replace): комментарий в конце строки —
+  « # …»; в `.env` хранятся одной строкой с переносами как «\\n»
+  (`EPUB_SPLIT_PATTERNS`, `TRANSLATE_CHECK_REGEXP_CHECKS`,
+  `BATCH_REPLACE_REPLACEMENTS`).
   live-лог + SSE (reconnect с backoff при обрыве), прогрессбар
   LLM-стадий (события
   `@@PROGRESS@@` из скриптов, `WEB_PROGRESS=1` ставит JobManager.start в
