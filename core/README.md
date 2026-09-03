@@ -15,7 +15,9 @@
 правила замен «паттерн -> замена»: trim_rule_left / trim_rule_right
   (паддинг у «->»; значимые пробелы «^  » / «  $» и «\s+ -> ») /
   strip_rule_flags (флаги « |i»/« |r» в конце строки правила;
-  разделитель — ровно один пробел: лишние пробелы остаются значимыми)
+  разделитель — ровно один пробел: лишние пробелы остаются значимыми) /
+  strip_line_comment (inline-комментарий « # …» в конце строки правила;
+  «#» без пробела слева — не комментарий; строка с «#» в начале — "")
 NER: load_ner_data / find_relevant_ner (поиск по term+aliases в оригинальном написании) /
   collect_gender_names (поиск имён по translation; пол по наличию (female)/(male) в type)
 ner_check: filter_ner_items (порог count + типы) / format_ner_record /

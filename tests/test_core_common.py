@@ -164,6 +164,21 @@ def test_strip_rule_flags():
     assert C.strip_rule_flags("Хунг -> Хун  |i") == ("Хунг -> Хун ", "i")
 
 
+def test_strip_line_comment():
+    """Inline-комментарий « # …» в конце строки правила: отрезается;
+    «#» без пробела слева — не комментарий; «#» в начале строки —
+    комментарий целиком."""
+    assert C.strip_line_comment("Глава \\d+ -> №\\g<0>  # пояснение") == \
+        "Глава \\d+ -> №\\g<0>"
+    assert C.strip_line_comment("Хунг -> Хун #комм") == "Хунг -> Хун"
+    assert C.strip_line_comment("цвет#[0-9a-f]+ -> X") == \
+        "цвет#[0-9a-f]+ -> X"
+    assert C.strip_line_comment("\s+ ->  |r  # сжатие") == "\s+ ->  |r"
+    assert C.strip_line_comment("# комментарий") == ""
+    assert C.strip_line_comment("## секция") == ""
+    assert C.strip_line_comment("") == ""
+
+
 def test_loop_detection_patterns():
     ok = "Обычный текст перевода без повторов, просто длинное предложение."
     assert not any(r.search(ok) for r in C._LOOP_RES)
