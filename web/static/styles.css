@@ -2078,6 +2078,7 @@ body[data-editor-theme="light"] .editor-area {
   white-space: pre-wrap;
   font-size: 13px;
   background: var(--bg-soft, #2a2a2a);
+  color: var(--text, #e6edf3);
   border: 1px solid var(--border, #444);
   border-radius: 6px;
   padding: 8px;
@@ -2105,6 +2106,7 @@ body[data-editor-theme="light"] .editor-area {
   font-size: 13px;
   line-height: 1.55;
   background: var(--bg-soft, #2a2a2a);
+  color: var(--text, #e6edf3);
   border: 1px solid var(--border, #444);
   border-radius: 6px;
   padding: 8px;
@@ -2135,6 +2137,7 @@ body[data-editor-theme="light"] .editor-area {
   font-size: 12px;
   line-height: 1.45;
   background: var(--bg-soft, #2a2a2a);
+  color: var(--text, #e6edf3);
   border: 1px solid var(--border, #444);
   border-radius: 6px;
   padding: 8px;
