@@ -230,6 +230,10 @@ def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
         argv.append("--no-cover")
     if form.get("epub_meta"):
         argv += ["--epub-meta", str(form["epub_meta"])]
+    if form.get("no_clean"):
+        argv.append("--no-clean")
+    if form.get("clean_regex"):
+        argv += ["--clean-regex", str(form["clean_regex"])]
     # страница поддержки: явный файл или ничего (без автоподхвата)
     if form.get("donate_file"):
         argv += ["--donate-file", str(form["donate_file"])]
@@ -718,7 +722,16 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "files", "dir": "source", "ext": [".txt"],
              "default": "",
              "help": "страница поддержки для EPUB/FB2; пусто = без страницы; "
-                      "файл загружается через «Файлы» (source/)"}, 
+                      "файл загружается через «Файлы» (source/)"},
+            {"name": "no_clean", "label": "Отключить очистку текста",
+             "type": "bool", "default": False,
+             "help": "НЕ удалять строки «Глава N» в теле главы "
+                      "(по умолчанию очистка включена)"},
+            {"name": "clean_regex", "label": "Свой regexp очистки",
+             "type": "text", "default": "",
+             "help": "Строки, совпавшие с regexp, удаляются из тела "
+                      "главы (после 9-й строки); пусто = "
+                      r"^Глава\s+(\d+|\[Номер\])"},
         ],
         # только экспертный режим (без простого/пресета)
     },

@@ -253,6 +253,60 @@ def test_cac_separators_unified(cac_env):
     assert "* . * ." not in content
 
 
+def test_cac_clean_removes_chapter_lines(cac_env):
+    """Задача 6: очистка удаляет «Глава N» в теле главы (после 9-й
+    строки); --no-clean оставляет; --clean-regex — свой формат."""
+    d = cac_env / "chapters" / "00000_3_x"
+    d.mkdir()
+    body = ("Глава 3\n\n"
+            + "\n".join(f"Строка {i}" for i in range(1, 11))
+            + "\nГлава 5 в середине\n\nГлава 7 ближе к концу\n")
+    (d / "polished.txt").write_text(body, encoding="utf-8")
+    CAC.cfg.start, CAC.cfg.end = 1, 3
+    CAC.cfg.clean_enabled = 1
+    CAC.cfg.clean_regex = None
+    CAC.compile_book("txt")
+    content = (Path(CAC.cfg.tmp_dir) / "compiled_1_3_txt.txt").read_text(
+        encoding="utf-8")
+    assert "Глава 5 в середине" not in content
+    assert "Глава 7 ближе к концу" not in content
+    assert "Строка 10" in content  # тело сохранилось
+
+
+def test_cac_clean_disabled(cac_env):
+    """--no-clean: строки «Глава N» остаются в тексте."""
+    d = cac_env / "chapters" / "00000_3_x"
+    d.mkdir()
+    body = ("Глава 3\n\n"
+            + "\n".join(f"Строка {i}" for i in range(1, 11))
+            + "\nГлава 5 в середине\n")
+    (d / "polished.txt").write_text(body, encoding="utf-8")
+    CAC.cfg.start, CAC.cfg.end = 1, 3
+    CAC.cfg.clean_enabled = 0
+    CAC.cfg.clean_regex = None
+    CAC.compile_book("txt")
+    content = (Path(CAC.cfg.tmp_dir) / "compiled_1_3_txt.txt").read_text(
+        encoding="utf-8")
+    assert "Глава 5 в середине" in content
+
+
+def test_cac_clean_custom_regex(cac_env):
+    """--clean-regex: удаляются строки по своему паттерну."""
+    d = cac_env / "chapters" / "00000_3_x"
+    d.mkdir()
+    body = ("Глава 3\n\n"
+            + "\n".join(f"Строка {i}" for i in range(1, 11))
+            + "\nРаздел 4 в середине\n")
+    (d / "polished.txt").write_text(body, encoding="utf-8")
+    CAC.cfg.start, CAC.cfg.end = 1, 3
+    CAC.cfg.clean_enabled = 1
+    CAC.cfg.clean_regex = re.compile(r"^Раздел\s+(\d+)")
+    CAC.compile_book("txt")
+    content = (Path(CAC.cfg.tmp_dir) / "compiled_1_3_txt.txt").read_text(
+        encoding="utf-8")
+    assert "Раздел 4 в середине" not in content
+
+
 def test_cac_title_from_first_line(cac_env):
     """Глава без «Глава N»: заголовок — первая непустая строка
     (вики-глава «Wiki Новеллы»); ###/#### остаются в теле."""

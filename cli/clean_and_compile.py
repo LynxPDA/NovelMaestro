@@ -70,6 +70,8 @@ class Config:
         self.add_donate_page = 1
         self.donate_file = ""             # внешний файл страницы поддержки
         self.compile_type = "polished"   # polished|redacted|translated|chapter
+        self.clean_enabled = 1            # очистка «Глава N» в тексте (вкл)
+        self.clean_regex = None  # type: re.Pattern | None  # свой regexp очистки
 
     @property
     def titles_file(self):
@@ -747,14 +749,18 @@ def compile_book(mode):
                 sep_string = "* * *"
 
             lines = content.splitlines()
-            filtered_lines = []
-            for idx, line in enumerate(lines):
-                if idx >= 9:
-                    clean_line = line.strip()
-                    if re.match(r"^Глава\s+(\d+|\[Номер\])", clean_line):
+            # очистка «Глава N» в теле (default вкл; --no-clean — выкл,
+            # --clean-regex — свой формат заголовка)
+            if cfg.clean_enabled:
+                clean_rx = cfg.clean_regex or re.compile(
+                    r"^Глава\s+(\d+|\[Номер\])")
+                filtered_lines = []
+                for idx, line in enumerate(lines):
+                    if idx >= 9 and clean_rx.match(line.strip()):
                         continue
-                filtered_lines.append(line)
-            content = "\n".join(filtered_lines)
+                    filtered_lines.append(line)
+                lines = filtered_lines
+            content = "\n".join(lines)
 
             if orig_header_match:
                 content = re.sub(r"^Глава\s+\d+.*$", replacement, content,
@@ -889,6 +895,13 @@ def build_parser():
     p.add_argument("--donate-file", default="",
                    help="Файл страницы поддержки (по умолчанию: автопоиск "
                         "./source/donate.txt → ./prompts/donate.txt → встроенный текст)")
+    # ── очистка текста (default вкл): удаление «Глава N» в теле ──
+    p.add_argument("--no-clean", action="store_true",
+                   help="Отключить очистку: НЕ удалять строки «Глава N» "
+                        "в тексте главы (по умолчанию очистка включена)")
+    p.add_argument("--clean-regex", default=None,
+                   help="Свой regexp строк-заголовков для очистки "
+                        "(по умолчанию: ^Глава\\s+(\\d+|\\[Номер\\]))")
     return p
 
 
@@ -908,6 +921,9 @@ def main():
     cfg.fb2_inject_cover = 0 if (args.no_fb2_cover or args.no_cover) else 1
     cfg.add_donate_page = 0 if args.no_donate else 1
     cfg.donate_file = args.donate_file
+    cfg.clean_enabled = 0 if args.no_clean else 1
+    cfg.clean_regex = (re.compile(args.clean_regex)
+                       if args.clean_regex else None)
     try:
         os.makedirs(cfg.tmp_dir, exist_ok=True)
     except OSError as exc:

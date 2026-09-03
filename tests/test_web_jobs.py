@@ -753,6 +753,19 @@ def test_build_clean_and_compile():
     assert "--no-donate" in argv2
 
 
+def test_build_compile_clean_flags():
+    """Задача 6: очистка текста — --no-clean / --clean-regex."""
+    argv = build_command("compile", {"no_clean": True,
+                                      "clean_regex": r"^Глава\s+(\d+)"}, {})
+    assert "--no-clean" in argv
+    assert "--clean-regex" in argv
+    assert argv[argv.index("--clean-regex") + 1] == r"^Глава\s+(\d+)"
+    # дефолт — без флагов (очистка включена)
+    argv2 = build_command("compile", {}, {})
+    assert "--no-clean" not in argv2
+    assert "--clean-regex" not in argv2
+
+
 def test_build_clean_and_compile_cover_meta():
     """единая обложка cover (files из source/) + метаданные — флаги в
     argv; txt-режим — без обложки/метаданных, с --no-cover."""
