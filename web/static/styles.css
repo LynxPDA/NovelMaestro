@@ -1604,6 +1604,26 @@ input[type="number"] {
   margin-bottom: 12px;
 }
 
+.quality-reports {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.quality-reports .check-list {
+  max-height: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.quality-label {
+  white-space: nowrap;
+  color: var(--text-soft, #9aa7b8);
+  font-size: 13px;
+}
+
 .check-msg {
   white-space: pre-wrap;
   font-size: 13px;

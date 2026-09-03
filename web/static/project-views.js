@@ -3025,6 +3025,24 @@ function viewProject(section, name, tab) {
         "tcl",
       ),
     );
+    /* 4 · Оценка перевода (LLM) — md-отчёты translate_quality */
+    const sec4 = h(
+      "div",
+      { class: "review-section" },
+      h(
+        "div",
+        { class: "review-section-title" },
+        "4 · Оценка перевода (LLM)",
+      ),
+      h(
+        "div",
+        { class: "review-section-sub" },
+        "md-отчёты стадии translate_quality "
+          + "(по умолчанию translation_quality_assessment.md)",
+      ),
+    );
+    panel.append(sec4);
+    sec4.append(await renderQualityReports());
     return wrap;
   }
 
@@ -4641,6 +4659,94 @@ function viewProject(section, name, tab) {
 
   render();
   return page;
+}
+
+/* ── Оценка перевода (LLM): md-отчёты translate_quality ── */
+async function renderQualityReports() {
+  /* Секция «Проверки»: выбор md-отчёта из корня проекта + рендер
+     markdown в sandbox-iframe; по умолчанию —
+     translation_quality_assessment.md. */
+  const err = h("div", { class: "form-error" });
+  const empty = h("div", { class: "files-empty" });
+  const sel = h("select", { class: "input" });
+  const frame = h("iframe", {
+    class: "editor-preview-frame preview-adaptive",
+    sandbox: "allow-same-origin",
+    title: "предпросмотр отчёта оценки перевода",
+  });
+  frame.style.display = "none";
+
+  async function renderFile(name) {
+    const q = new URLSearchParams({
+      project: `${section}/${name}`,
+      path: name,
+    });
+    try {
+      const r = await api(`/file?${q}`);
+      const html = window.marked
+        ? window.marked.parse(r.content || "", {
+            mangle: false,
+            headerIds: false,
+          })
+        : "<pre>marked не загружен</pre>";
+      frame.srcdoc = mdPreviewSrcdoc(html);
+      frame.style.display = "block";
+      empty.textContent = "";
+      err.textContent = "";
+    } catch (ex) {
+      err.textContent = ex.message;
+    }
+  }
+
+  async function loadFiles() {
+    const q = new URLSearchParams({ project: `${section}/${name}`, path: "" });
+    let files = [];
+    try {
+      const r = await api(`/files?${q}`);
+      files = (r.entries || [])
+        .filter((e) => !e.dir && e.name.toLowerCase().endsWith(".md"))
+        .sort((a, b) => b.mtime - a.mtime)
+        .map((e) => e.name);
+    } catch (ex) {
+      err.textContent = ex.message;
+    }
+    sel.replaceChildren();
+    if (!files.length) {
+      sel.append(h("option", { value: "" }, "—"));
+      sel.disabled = true;
+      empty.textContent =
+        "Нет отчётов — запустите стадию «Оценка перевода (LLM)» (Запуски)";
+      frame.style.display = "none";
+      return;
+    }
+    sel.disabled = false;
+    for (const f of files) sel.append(h("option", { value: f }, f));
+    const def = files.includes("translation_quality_assessment.md")
+      ? "translation_quality_assessment.md"
+      : files[0];
+    sel.value = def;
+    await renderFile(def);
+  }
+
+  sel.addEventListener("change", () => {
+    if (sel.value) renderFile(sel.value);
+  });
+  frame.addEventListener("load", () => fitPreviewFrame(frame));
+
+  const wrap = h(
+    "div",
+    { class: "quality-reports" },
+    h(
+      "div",
+      { class: "check-list" },
+      h("label", { class: "quality-label" }, "Отчёт:"),
+      sel,
+    ),
+    empty,
+    frame,
+  );
+  await loadFiles();
+  return wrap;
 }
 
 function exportModal(byType, project) {

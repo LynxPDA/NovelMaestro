@@ -411,6 +411,37 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
     return argv
 
 
+def build_translate_quality(form: dict, ctx: dict) -> list[str]:
+    """Стадия «Оценка перевода (LLM)» — translate_quality.py.
+
+    Один LLM-запрос по пакету глав диапазона (тип файлов глав →
+    {translated_text}, chapter.txt → {original_text}); бюджет —
+    СИМВОЛЫ (главы + промпт), пакет обрезается до целого количества
+    глав. Выход — md-отчёт.
+    """
+    argv = ["cli/translate_quality.py"]
+    argv += _range_argv("translate_quality", form)
+    if form.get("type"):
+        argv += ["--type", str(form["type"])]
+    if form.get("prompt_file"):
+        argv += ["--prompt_file", str(form["prompt_file"])]
+    output = str(form.get("output") or "translation_quality_assessment.md")
+    argv += ["--output", output]
+    if form.get("budget") not in (None, ""):
+        argv += ["--budget", str(form["budget"])]
+    if form.get("temperature") not in (None, ""):
+        argv += ["--temperature", str(form["temperature"])]
+    re_effort = form.get("reasoning_effort")
+    if re_effort not in (None, ""):
+        argv += ["--reasoning_effort", str(re_effort)]
+    for name, flag in (("max_retries", "--max_retries"),
+                       ("timeout", "--timeout")):
+        if form.get(name) not in (None, ""):
+            argv += [flag, str(form[name])]
+    argv += _llm_argv(form, ctx, "translate_quality")
+    return argv
+
+
 def build_wiki(form: dict, ctx: dict) -> list[str]:
     """Стадия 7 — генерация вики (wiki.py).
 
@@ -686,7 +717,7 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "source_type", "label": "Исходный файл главы",
+            {"name": "source_type", "label": "Тип файлов глав",
              "type": "select", "options": ["polished", "redacted", "translated", "chapter"],
              "default": "polished"},
             {"name": "chunk_size", "label": "Глав в части",
@@ -983,6 +1014,57 @@ STAGE_SPECS: dict[str, dict] = {
         },
         "simple": ["type", "two_pass", "prompt_file"],
     },
+    "translate_quality": {
+        "title": "Оценка перевода (LLM)",
+        "script": "translate_quality.py",
+        "build": build_translate_quality,
+        "fields": _LLM_FIELDS + [
+            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
+             "type": "number", "default": ""},
+            {"name": "end", "label": "Конечная глава",
+             "type": "number", "default": ""},
+            {"name": "type", "label": "Тип файлов глав",
+             "type": "select",
+             "options": ["chapter", "translated", "redacted", "polished"],
+             "default": "polished",
+             "help": "какой файл главы сравнивается с оригиналом: "
+                      "подставляется в {translated_text} промпта, "
+                      "chapter.txt — в {original_text}"},
+            {"name": "prompt_file", "label": "Промпт-файл",
+             "type": "files", "dir": "prompts", "ext": [".txt"],
+             "default": "translate_quality_prompt.txt",
+             "autofile": "prompts/translate_quality_prompt.txt",
+             "help": "тег <prompt_assessment> (между тегами — комменты); "
+                      "плейсхолдеры {original_text} и {translated_text}; "
+                      "автоподхват translate_quality_prompt.txt"},
+            {"name": "output", "label": "Выходной файл",
+             "type": "text", "default": "translation_quality_assessment.md",
+             "help": "md-отчёт в корне проекта; виден на вкладке "
+                      "«Проверки» → «Оценка перевода (LLM)»"},
+            {"name": "budget", "label": "Бюджет запроса, СИМВОЛЫ",
+             "type": "number", "default": "200000",
+             "help": "главы + промпт; если не влезает — пакет "
+                      "обрезается до целого количества глав (первые "
+                      "диапазона), отсечённые указываются в отчёте"},
+            {"name": "temperature", "label": "Температура (пусто = сервер)",
+             "type": "text", "default": ""},
+            {"name": "reasoning_effort", "label": "Reasoning effort",
+             "type": "text",
+             "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
+             "default": ""},
+            {"name": "max_retries", "label": "Повторы",
+             "type": "number", "default": "3"},
+            {"name": "timeout", "label": "Таймаут LLM-запроса, сек",
+             "type": "number", "default": "300"},
+        ],
+        "preset": {
+            "title": "Оценить перевод",
+            "desc": "Один LLM-запрос по главам диапазона: оригинал "
+                     "vs перевод (polished), дефолтный промпт и бюджет",
+            "overrides": {"type": "polished"},
+        },
+        "simple": ["start", "end", "type", "prompt_file"],
+    },
     "wiki": {
         "title": "Создание Wiki (LLM)",
         "script": "wiki.py",
@@ -1112,7 +1194,8 @@ STAGE_SPECS: dict[str, dict] = {
 # компиляция → вики). Слаги — контракт API, не менять.
 STAGE_ORDER: list[str] = [
     "epub", "ner", "ner_check", "pipeline", "translate_check",
-    "translate_check_llm", "batch_replace", "compile", "wiki",
+    "translate_check_llm", "batch_replace", "translate_quality",
+    "compile", "wiki",
 ]
 
 

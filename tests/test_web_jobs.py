@@ -624,7 +624,8 @@ def test_stage_order_and_titles():
     assert keys == STAGE_ORDER
     assert STAGE_ORDER == [
         "epub", "ner", "ner_check", "pipeline", "translate_check",
-        "translate_check_llm", "batch_replace", "compile", "wiki",
+        "translate_check_llm", "batch_replace", "translate_quality",
+        "compile", "wiki",
     ]
     for key, spec in STAGE_SPECS.items():
         assert ".py" not in spec["title"], key

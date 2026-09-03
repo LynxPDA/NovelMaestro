@@ -203,7 +203,20 @@ CLI — позиционный аргумент.
 | `translate_check` | Проверка перевода | `cli/translate_check.py` | нет |
 | `translate_check_llm` | Проверка перевода (LLM) | `cli/translate_check_llm.py` | да |
 | `batch_replace` | Массовые замены | `cli/batch_replace.py` | нет |
+| `translate_quality` | Оценка перевода (LLM) | `cli/translate_quality.py` | да |
 | `compile` | Компиляция TXT/EPUB/FB2 | `cli/clean_and_compile.py` | нет |
+
+Стадия `translate_quality` — один LLM-запрос по пакету глав: собираются
+`{original_text}` (chapter.txt) и `{translated_text}` (поле `type`,
+«Тип файлов глав») и подставляются в промпт (тег `<prompt_assessment>`,
+`prompts/translate_quality_prompt.txt`). `budget` — СИМВОЛЫ (главы +
+промпт); если не влезает — пакет обрезается до ЦЕЛОГО количества глав
+(первые N диапазона), отсечённые указываются в отчёте. Выход —
+`output` (по умолчанию `translation_quality_assessment.md`, в корне
+проекта): техническая шапка (дата, диапазон, пакет, бюджет, модель) +
+оценка LLM. На вкладке «Проверки» секция «Оценка перевода (LLM)»
+рендерит md-отчёты из корня проекта (выбор файла, дефолт
+`translation_quality_assessment.md`).
 
 Стадия `compile`: режимы `txt` («TXT (Rulate)»), `txt-plain` («TXT»),
 `epub`, `fb2`, `epub-chunks`, `txt-chunks`, `fb2-chunks`. TXT (Rulate)
