@@ -1381,7 +1381,7 @@ def test_build_translate_check_llm_flags():
 
 
 def test_build_wiki_flags():
-    form = {"file": "compiled_book.txt", "ner_file": "ner.json",
+    form = {"source": "txt", "file": "compiled_book.txt", "ner_file": "ner.json",
             "output": "wiki.md", "top": "80", "min_count": "2",
             "types": "Person",
             "context_chunks": "12", "near_distance": "64",

@@ -451,7 +451,7 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
     в обычном режиме (toc/toc_links).
     """
     argv = ["cli/wiki.py"]
-    src = form.get("source") or "txt"
+    src = form.get("source") or "chapters"
     fmt = form.get("format") or "md"
     output = str(form.get("output") or "wiki.md")
     as_chapter = bool(form.get("as_chapter"))
@@ -1080,7 +1080,7 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "select",
              "options": ["txt", "chapters"],
              "labels": {"txt": "Готовый txt", "chapters": "Собрать из глав"},
-             "default": "txt",
+             "default": "chapters",
              "help": "txt — готовый скомпилированный файл; «собрать из глав» — "
                       "склейка chapters/* в память (как в Создании глоссария)"},
             {"name": "file", "label": "Входной txt новеллы (перевод)",
