@@ -1096,6 +1096,12 @@ input[type="number"] {
 .chapters-toolbar .chapters-range {
   width: 130px;
 }
+.chapters-toolbar .preset-range {
+  width: 90px;
+}
+.chapters-toolbar .preset-range-sep {
+  color: var(--muted);
+}
 .chapters-toolbar .spacer {
   flex: 1;
 }

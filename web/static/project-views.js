@@ -3072,26 +3072,19 @@ function viewProject(section, name, tab) {
     delBtn.disabled = true;
     const status = h("span", { class: "review-status" });
     const rows = h("div", { class: "chapters-rows" });
-    // диапазон глав одной строкой (как в «Запусках»), префилл — весь
-    const rangeInput = h("input", {
-      class: "input chapters-range",
-      placeholder: "1 – 50",
-    });
-    attachTooltip(
-      rangeInput,
-      "Диапазон глав: «1 – 50», «5 –», «– 40»; пусто = все",
-    );
+    // диапазон глав — ДВА поля (начало/конец), как в «Запусках»
+    const startIn = h("input", { type: "number", class: "input preset-range" });
+    const endIn = h("input", { type: "number", class: "input preset-range" });
+    attachTooltip(startIn, "Начальная глава; пусто = с первой");
+    attachTooltip(endIn, "Конечная глава; пусто = до последней");
     let inputs = {}; // id → {input, orig}
     let allIds = []; // непрерывный 1..N (для серых ячеек и префилла)
 
-    function parseRange() {
-      const m = String(rangeInput.value || "")
-        .trim()
-        .match(/^\s*(\d+)?\s*[-–]\s*(\d+)?\s*$/);
-      if (!m) return null; // пусто или неверный формат
-      const a = m[1] ? parseInt(m[1], 10) : 1;
-      const b = m[2] ? parseInt(m[2], 10) : (allIds.at(-1) || 0);
-      return { start: Math.min(a, b), end: Math.max(a, b) };
+    function readRange() {
+      const a = parseInt(startIn.value || "", 10) || 1;
+      const b = parseInt(endIn.value || "", 10) || (allIds.at(-1) || 0);
+      if (a > b) return { start: b, end: a };
+      return { start: a, end: b };
     }
 
     async function load() {
@@ -3109,19 +3102,31 @@ function viewProject(section, name, tab) {
         const titles = r.titles || {};
         allIds = Array.isArray(r.all_ids) ? r.all_ids : [];
         const missing = new Set(r.missing || []);
-        const ids = Object.keys(titles)
-          .map(Number)
-          .sort((a, b) => a - b);
-        const range = parseRange();
-        const shown = range
-          ? ids.filter((id) => id >= range.start && id <= range.end)
-          : ids;
-        for (const id of shown) {
+        const range = readRange();
+        let present = 0;
+        let absent = 0;
+        // строки в ПОРЯДКЕ НОМЕРОВ: существующая глава идёт на своём
+        // месте, пропущенная — серой ячейкой «N —» между соседями
+        for (let id = range.start; id <= range.end; id++) {
+          if (missing.has(id)) {
+            absent++;
+            rows.append(
+              h(
+                "div",
+                { class: "chapters-row ch-missing" },
+                h("span", { class: "ch-num" }, String(id)),
+                h("span", { class: "ch-miss-text" }, "—"),
+              ),
+            );
+            continue;
+          }
+          const title = titles[id] ?? "";
+          present++;
           const inp = h("input", {
             class: "input chapters-title",
-            value: titles[id],
+            value: title,
           });
-          inputs[id] = { input: inp, orig: String(titles[id]) };
+          inputs[id] = { input: inp, orig: String(title) };
           inp.addEventListener("input", () => {
             saveBtn.disabled = false;
           });
@@ -3134,36 +3139,17 @@ function viewProject(section, name, tab) {
             ),
           );
         }
-        // серые ячейки пропущенных глав в диапазоне (файла типа нет)
-        if (range) {
-          for (let id = range.start; id <= range.end; id++) {
-            if (missing.has(id)) {
-              rows.append(
-                h(
-                  "div",
-                  { class: "chapters-row ch-missing" },
-                  h("span", { class: "ch-num" }, String(id)),
-                  h("span", { class: "ch-miss-text" }, "—"),
-                ),
-              );
-            }
-          }
-        }
-        const present = shown.length;
-        const absent = range
-          ? allIds.filter((id) => id >= range.start && id <= range.end
-            && missing.has(id)).length
-          : 0;
         saveBtn.disabled = true;
         delBtn.disabled = !present;
-        status.textContent = range
-          ? `Глав: ${present} (${typeSel.value}), нет файла: ${absent}`
-          : (present ? `Глав: ${present} (${typeSel.value})`
-                     : "Файлы не найдены");
+        status.textContent =
+          `Глав: ${present} (${typeSel.value})`
+          + (absent ? `, нет файла: ${absent}` : "")
+          + (present ? "" : " — файлы не найдены");
         // префилл диапазона полным (один раз)
-        if (!rangeInput.dataset.filled && allIds.length) {
-          rangeInput.value = `${allIds[0]} – ${allIds.at(-1)}`;
-          rangeInput.dataset.filled = "1";
+        if (!startIn.dataset.filled && allIds.length) {
+          startIn.value = String(allIds[0]);
+          endIn.value = String(allIds.at(-1));
+          startIn.dataset.filled = "1";
         }
       } catch (ex) {
         status.textContent = ex.message;
@@ -3201,14 +3187,11 @@ function viewProject(section, name, tab) {
       }
     });
 
-    rangeInput.addEventListener("input", load);
+    startIn.addEventListener("input", load);
+    endIn.addEventListener("input", load);
     typeSel.addEventListener("change", load);
     delBtn.addEventListener("click", async () => {
-      const range = parseRange();
-      if (!range) {
-        toast("Укажите диапазон, например 1 – 50");
-        return;
-      }
+      const range = readRange();
       const present = Object.keys(inputs)
         .map(Number)
         .filter((id) => id >= range.start && id <= range.end);
@@ -3216,28 +3199,30 @@ function viewProject(section, name, tab) {
         toast("В диапазоне нет файлов");
         return;
       }
-      if (!confirm(
-        `Удалить файлы ${typeSel.value}.txt глав ${present[0]} – ` +
-        `${present.at(-1)} (${present.length} шт.)?`,
-      )) return;
-      delBtn.disabled = true;
-      try {
-        const q = new URLSearchParams({
-          type: typeSel.value,
-          start: String(range.start),
-          end: String(range.end),
-        });
-        const r = await api(
-          `/projects/${section}/${name}/chapters?${q}`,
-          { method: "DELETE" },
-        );
-        toast(`Удалено файлов: ${r.deleted.length}`);
-        await load();
-      } catch (ex) {
+      // подтверждение — как во всех местах проекта: ввод слова УДАЛИТЬ
+      confirmModal(
+        "Удаление файлов глав",
+        `Будут удалены файлы ${typeSel.value}.txt глав ` +
+        `${present[0]} – ${present.at(-1)} (${present.length} шт.). ` +
+        "Действие необратимо.",
+        "УДАЛИТЬ",
+        async () => {
+          delBtn.disabled = true;
+          const q = new URLSearchParams({
+            type: typeSel.value,
+            start: String(range.start),
+            end: String(range.end),
+          });
+          const r = await api(
+            `/projects/${section}/${name}/chapters?${q}`,
+            { method: "DELETE" },
+          );
+          toast(`Удалено файлов: ${r.deleted.length}`);
+          await load();
+        },
+      ).catch(() => {
         delBtn.disabled = false;
-        status.textContent = ex.message;
-        err.textContent = ex.message;
-      }
+      });
     });
     load();
 
@@ -3247,7 +3232,9 @@ function viewProject(section, name, tab) {
       h("span", { class: "field-label" }, "Тип файлов глав:"),
       typeSel,
       h("span", { class: "field-label" }, "Главы:"),
-      rangeInput,
+      startIn,
+      h("span", { class: "preset-range-sep" }, "–"),
+      endIn,
       h("span", { class: "spacer" }),
       status,
       saveBtn,
