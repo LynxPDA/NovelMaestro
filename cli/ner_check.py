@@ -48,6 +48,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -345,10 +346,16 @@ def resolve_server(args, logger):
 
 
 def get_prompt(args, logger) -> str:
+    """Промпт проверки выбранных типов: тег <prompt_check> из файла;
+    нет тега — файл целиком (обратная совместимость); нет файла —
+    встроенный DEFAULT_NER_CHECK_PROMPT."""
     text = load_prompt(args.prompt_file, logger)
     if not text:
         logger.info("ℹ Внешний промпт не найден — встроенный fallback.")
         return DEFAULT_NER_CHECK_PROMPT
+    m = re.search(r"<prompt_check>(.*?)</prompt_check>", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
     return text
 
 
@@ -466,8 +473,62 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
     return "\n".join(lines)
 
 
+def _rag_patches(found, items_by_term, logger) -> list[dict]:
+    """RAG-ответ — уточнение type/translation: превращаем в патчи,
+    сверяя с текущими значениями в ner.json (old → new)."""
+    entries = []
+    for p in found:
+        term = p.get("term", "")
+        item = items_by_term.get(term)
+        if not item:
+            logger.warning(f"  ⚠ Термин {term!r} не найден в ner.json — "
+                           f"пропущен.")
+            continue
+        for field in ("type", "translation"):
+            new = str(p.get(field, "")).strip()
+            old = str(item.get(field, "")).strip()
+            if not new or new == old:
+                continue
+            e = review_entry({"term": term, "field": field,
+                              "old": old, "new": new,
+                              "reason": p.get("reason", "")},
+                             stage="RAG")
+            if e:
+                entries.append(e)
+    return entries
+
+
+def _rag_query(term, user_msg, args, base_url, api_key, model, logger,
+               items_by_term):
+    """Один термин — один LLM-запрос (блок собран заранее, FTS5-БД
+    не трогаем из воркера). Возвращает (entries, ok)."""
+    logger.info(f"  {term}: запрос {len(user_msg)} символов "
+                f"(бюджет на термин {args.rag_budget})")
+    text_out, err = stream_chat_completion(
+        base_url, model,
+        [{"role": "user", "content": user_msg}],
+        api_key=api_key,
+        max_retries=args.max_retries,
+        timeout=args.timeout, stream_timeout=args.timeout,
+        temperature=args.temperature,
+        reasoning_effort=args.reasoning_effort,
+        max_tokens=args.max_tokens,
+        reference_len=0, logger=logger,
+        label=f"ner_check rag {term}")
+    if err:
+        logger.error(f"  ❌ {term}: LLM: {err}")
+        return [], False
+    found = parse_rag_suggestions(text_out, logger)
+    if found is None:
+        logger.error(f"  ❌ {term}: ответ не распарсился (см. лог выше).")
+        return [], False
+    logger.info(f"  ✔ {term}: определено {len(found)}")
+    return _rag_patches(found, items_by_term, logger), True
+
+
 def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
-    """RAG-режим: список терминов → релевантный текст (FTS5) → LLM.
+    """RAG-режим: каждый термин — ОТДЕЛЬНЫЙ LLM-запрос, параллельно
+    (--threads); бюджет на термин: промпт + фрагменты ≤ rag_budget.
     Возвращает код возврата (0 — ок)."""
     terms = [t.strip() for t in args.rag_terms.split("\n")
              if t.strip()]
@@ -510,58 +571,48 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
         logger.info(f"🔎 RAG: {len(terms)} терминов.")
     db = build_fts_index(text, 1000)
     fields = [f.strip() for f in args.fields.split(",") if f.strip()]
-    block = build_rag_block(terms, items_by_term, db, args.rag_budget,
-                            fields, logger)
-    user_msg = render_prompt(prompt_tpl, block)
-    logger.info(f"  запрос: {len(user_msg)} символов")
-    emit_progress(0, 1, "Точечная проверка (RAG)")
-    text_out, err = stream_chat_completion(
-        base_url, model,
-        [{"role": "user", "content": user_msg}],
-        api_key=api_key,
-        max_retries=args.max_retries,
-        timeout=args.timeout, stream_timeout=args.timeout,
-        temperature=args.temperature,
-        reasoning_effort=args.reasoning_effort,
-        max_tokens=args.max_tokens,
-        reference_len=0, logger=logger,
-        label=f"ner_check rag")
-    emit_progress(1, 1, "Точечная проверка (RAG)")
-    if err:
-        logger.error(f"  ❌ LLM: {err}")
+    # бюджет на термин — ТОЛЬКО фрагменты (промпт не вычитается):
+    # один термин = один запрос, фрагменты влезают в rag_budget
+    logger.info(f"🔎 RAG: {len(terms)} терминов × бюджет {args.rag_budget} "
+                f"(фрагменты на термин), потоков {args.threads}")
+
+    # FTS5-БД — только из главного потока (sqlite thread-bound):
+    # блоки собираем заранее, воркеры только шлют LLM-запросы
+    tasks = []
+    for term in terms:
+        block = build_rag_block([term], items_by_term, db, args.rag_budget,
+                                fields, logger)
+        tasks.append((term, render_prompt(prompt_tpl, block)))
+
+    total = len(tasks)
+    done = 0
+    lock = threading.Lock()
+    entries: list[dict] = []
+    failures = 0
+    emit_progress(0, total, "Точечная проверка (RAG)")
+
+    def worker(term, user_msg):
+        nonlocal done, failures
+        res, ok = _rag_query(term, user_msg, args, base_url, api_key,
+                             model, logger, items_by_term)
+        with lock:
+            entries.extend(res)
+            if not ok:
+                failures += 1
+            done += 1
+            emit_progress(done, total, "Точечная проверка (RAG)")
+
+    workers = max(1, min(args.threads or 1, total))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for _ in ex.map(lambda t: worker(*t), tasks):
+            pass
+
+    if failures == total:
+        logger.error("❌ RAG: все запросы завершились ошибкой.")
         return 1
-    found = parse_rag_suggestions(text_out, logger)
-    if found is None:
-        logger.error("  ❌ Ответ не распарсился (см. лог выше).")
-        return 1
-    logger.info(f"  ✔ Определено: {len(found)} терминов")
-    # RAG-ответ — уточнение type/translation: превращаем в патчи,
-    # сверяя с текущими значениями в ner.json (old → new)
-    entries = []
-    for p in found:
-        term = p.get("term", "")
-        item = items_by_term.get(term)
-        if not item:
-            logger.warning(f"  ⚠ Термин {term!r} не найден в ner.json — "
-                           f"пропущен.")
-            continue
-        for field in ("type", "translation"):
-            new = str(p.get(field, "")).strip()
-            old = str(item.get(field, "")).strip()
-            if not new:
-                continue
-            if field == "translation" and new == old:
-                continue
-            if field == "type":
-                # тип: нормализуем только случай, когда изменился
-                if new == old:
-                    continue
-            e = review_entry({"term": term, "field": field,
-                              "old": old, "new": new,
-                              "reason": p.get("reason", "")},
-                             stage="RAG")
-            if e:
-                entries.append(e)
+    if failures:
+        logger.warning(f"⚠ RAG: {failures} из {total} запросов с ошибкой.")
+    logger.info(f"  ✔ Определено терминов: {len(entries)}")
     if not entries:
         logger.info("  ℹ Уточнений, отличающихся от ner.json, нет.")
     # сохраняем в review-файл (дедуп с накопленным)

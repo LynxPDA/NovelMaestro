@@ -658,7 +658,11 @@ def test_ner_check_rag_main(tmp_path, monkeypatch):
                   "--rag_budget", "1500",
                   "--host", "http://x", "--model", "m"])
     assert rc == 0
-    assert len(calls) == 1
+    # каждый термин — отдельный запрос (новое поведение RAG)
+    assert len(calls) == 2
+    # бюджет на термин — только фрагменты: промпт НЕ вычитается
+    # (запрос по 林凡 с фрагментами больше встроенного промпта)
+    assert len(calls[0]) > 800
     # в запрос попали и термины, и фрагменты книги
     assert "林凡" in calls[0] and "Линь Фан" in calls[0]
     doc = json.loads((tmp_path / "ner_review.json")
@@ -707,3 +711,34 @@ def test_ner_check_rag_missing_files(tmp_path, monkeypatch):
                   "--rag_terms", "林凡", "--rag_novel", "нет.txt",
                   "--host", "http://x", "--model", "m"])
     assert rc == 1 and not calls
+
+
+def test_get_prompt_tag_and_comments(tmp_path, monkeypatch):
+    """Тег <prompt_check> извлекается из файла; комментарии вне тега
+    (# …) в промпт НЕ попадают; без тега — файл целиком."""
+    monkeypatch.chdir(tmp_path)
+    pf = tmp_path / "ner_check_prompt.txt"
+    pf.write_text(
+        "# Комментарий вне тега — не должен попасть в промпт.\n"
+        "<prompt_check>\nТы — редактор. Проверь {glossary}.\n"
+        "</prompt_check>\n# Ещё комментарий после тега.\n",
+        encoding="utf-8")
+    import argparse
+    import logging
+    args = argparse.Namespace(prompt_file=str(pf))
+
+    def _logger():
+        return logging.getLogger("ner_check_test")
+    p = NC.get_prompt(args, _logger())
+    assert "Комментарий вне тега" not in p
+    assert "Ещё комментарий после тега" not in p
+    assert p.startswith("Ты — редактор.") and "{glossary}" in p
+    # без тега — файл целиком (обратная совместимость)
+    pf.write_text("Целиком промпт.\n", encoding="utf-8")
+    args.prompt_file = str(pf)
+    p2 = NC.get_prompt(args, _logger())
+    assert p2 == "Целиком промпт."
+    # нет файла — встроенный fallback
+    args.prompt_file = "нет.txt"
+    p3 = NC.get_prompt(args, _logger())
+    assert p3 == NC.DEFAULT_NER_CHECK_PROMPT
