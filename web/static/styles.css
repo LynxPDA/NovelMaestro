@@ -1093,6 +1093,9 @@ input[type="number"] {
 .chapters-toolbar .chapters-type {
   width: 160px;
 }
+.chapters-toolbar .chapters-range {
+  width: 130px;
+}
 .chapters-toolbar .spacer {
   flex: 1;
 }
@@ -1119,6 +1122,20 @@ input[type="number"] {
 .chapters-title {
   flex: 1;
   min-width: 0;
+}
+/* пропущенная глава (нет файла выбранного типа): серая ячейка */
+.chapters-row.ch-missing {
+  background: transparent;
+  border-style: dashed;
+  opacity: 0.55;
+}
+.chapters-row.ch-missing .ch-num {
+  color: var(--muted);
+}
+.ch-miss-text {
+  flex: 1;
+  color: var(--muted);
+  font-style: italic;
 }
 
 /* ── M7: вкладки, NER, review, конфиг, промпты ─────────── */

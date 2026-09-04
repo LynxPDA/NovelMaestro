@@ -559,6 +559,8 @@ def _register_hub(router: Router) -> None:
                _chapter_titles_get)
     router.add("PUT", "/api/projects/{sec}/{name}/chapters/titles",
                _chapter_titles_put)
+    router.add("DELETE", "/api/projects/{sec}/{name}/chapters",
+               _chapters_delete)
     router.add("GET", "/api/templates", _templates)
 
 
@@ -1025,8 +1027,61 @@ def _chapter_titles_get(ctx: dict) -> dict:
         return {"ok": True, "section": section, "name": name,
                 "type": want, "titles": {}}
     titles = common.read_chapter_titles(chapters_dir, want=want)
+    # all_ids — непрерывный диапазон 1..N по существующим ПАПКАМ глав
+    # (build_chapter_map), а не по titles: файлов типа может не быть вовсе;
+    # missing — номера без файла нужного типа (для серых ячеек)
+    try:
+        ids = sorted({int(k) for k in common.build_chapter_map(chapters_dir)})
+    except (ValueError, TypeError):
+        ids = []
+    all_ids = list(range(1, ids[-1] + 1)) if ids else []
+    missing = [n for n in all_ids if n not in titles]
     return {"ok": True, "section": section, "name": name,
-            "type": want, "titles": titles}
+            "type": want, "titles": titles,
+            "all_ids": all_ids, "missing": missing}
+
+
+def _chapters_delete(ctx: dict) -> dict:
+    """Удалить файлы глав (DELETE …/chapters).
+
+    query: type=polished|redacted|translated|chapter + start/end
+    (диапазон номеров, включительно). Возвращает удалённые номера.
+    """
+    common = _import_common(ctx)
+    pdir, section, name = _project_path(ctx)
+    q = ctx["query"]
+    want = q.get("type", "polished")
+    if want not in ("chapter", "translated", "redacted", "polished"):
+        raise ApiError(400, f"Недопустимый тип: {want}")
+    try:
+        start = int(q.get("start", "")) if q.get("start") else None
+        end = int(q.get("end", "")) if q.get("end") else None
+    except ValueError:
+        raise ApiError(400, "start/end должны быть числами")
+    chapters_dir = pdir / "chapters"
+    if not chapters_dir.is_dir():
+        return {"ok": True, "section": section, "name": name,
+                "type": want, "deleted": []}
+    ch_map = common.build_chapter_map(chapters_dir)
+    deleted = []
+    for num in sorted(ch_map):
+        if start is not None and num < start:
+            continue
+        if end is not None and num > end:
+            continue
+        dirs = ch_map[num]
+        if not dirs:
+            continue
+        f, _msgs = common.find_chapter_file(dirs[-1], num, want=want,
+                                            strict=True)
+        if f:
+            try:
+                os.unlink(f)
+                deleted.append(num)
+            except OSError:
+                pass
+    return {"ok": True, "section": section, "name": name,
+            "type": want, "deleted": deleted}
 
 
 def _chapter_titles_put(ctx: dict) -> dict:

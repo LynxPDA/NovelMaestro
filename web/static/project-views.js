@@ -3068,13 +3068,36 @@ function viewProject(section, name, tab) {
     typeSel.value = st.chaptersType || "polished";
     const saveBtn = h("button", { class: "btn btn-primary" }, "Сохранить");
     saveBtn.disabled = true;
+    const delBtn = h("button", { class: "btn btn-danger" }, "Удалить файлы");
+    delBtn.disabled = true;
     const status = h("span", { class: "review-status" });
     const rows = h("div", { class: "chapters-rows" });
+    // диапазон глав одной строкой (как в «Запусках»), префилл — весь
+    const rangeInput = h("input", {
+      class: "input chapters-range",
+      placeholder: "1 – 50",
+    });
+    attachTooltip(
+      rangeInput,
+      "Диапазон глав: «1 – 50», «5 –», «– 40»; пусто = все",
+    );
     let inputs = {}; // id → {input, orig}
+    let allIds = []; // непрерывный 1..N (для серых ячеек и префилла)
+
+    function parseRange() {
+      const m = String(rangeInput.value || "")
+        .trim()
+        .match(/^\s*(\d+)?\s*[-–]\s*(\d+)?\s*$/);
+      if (!m) return null; // пусто или неверный формат
+      const a = m[1] ? parseInt(m[1], 10) : 1;
+      const b = m[2] ? parseInt(m[2], 10) : (allIds.at(-1) || 0);
+      return { start: Math.min(a, b), end: Math.max(a, b) };
+    }
 
     async function load() {
       st.chaptersType = typeSel.value;
       saveBtn.disabled = true;
+      delBtn.disabled = true;
       status.textContent = "Загрузка…";
       rows.replaceChildren();
       inputs = {};
@@ -3084,10 +3107,16 @@ function viewProject(section, name, tab) {
           `?type=${encodeURIComponent(typeSel.value)}`,
         );
         const titles = r.titles || {};
+        allIds = Array.isArray(r.all_ids) ? r.all_ids : [];
+        const missing = new Set(r.missing || []);
         const ids = Object.keys(titles)
           .map(Number)
           .sort((a, b) => a - b);
-        for (const id of ids) {
+        const range = parseRange();
+        const shown = range
+          ? ids.filter((id) => id >= range.start && id <= range.end)
+          : ids;
+        for (const id of shown) {
           const inp = h("input", {
             class: "input chapters-title",
             value: titles[id],
@@ -3105,10 +3134,37 @@ function viewProject(section, name, tab) {
             ),
           );
         }
+        // серые ячейки пропущенных глав в диапазоне (файла типа нет)
+        if (range) {
+          for (let id = range.start; id <= range.end; id++) {
+            if (missing.has(id)) {
+              rows.append(
+                h(
+                  "div",
+                  { class: "chapters-row ch-missing" },
+                  h("span", { class: "ch-num" }, String(id)),
+                  h("span", { class: "ch-miss-text" }, "—"),
+                ),
+              );
+            }
+          }
+        }
+        const present = shown.length;
+        const absent = range
+          ? allIds.filter((id) => id >= range.start && id <= range.end
+            && missing.has(id)).length
+          : 0;
         saveBtn.disabled = true;
-        status.textContent = ids.length
-          ? `Глав: ${ids.length} (${typeSel.value})`
-          : "Файлы не найдены";
+        delBtn.disabled = !present;
+        status.textContent = range
+          ? `Глав: ${present} (${typeSel.value}), нет файла: ${absent}`
+          : (present ? `Глав: ${present} (${typeSel.value})`
+                     : "Файлы не найдены");
+        // префилл диапазона полным (один раз)
+        if (!rangeInput.dataset.filled && allIds.length) {
+          rangeInput.value = `${allIds[0]} – ${allIds.at(-1)}`;
+          rangeInput.dataset.filled = "1";
+        }
       } catch (ex) {
         status.textContent = ex.message;
       }
@@ -3145,7 +3201,44 @@ function viewProject(section, name, tab) {
       }
     });
 
+    rangeInput.addEventListener("input", load);
     typeSel.addEventListener("change", load);
+    delBtn.addEventListener("click", async () => {
+      const range = parseRange();
+      if (!range) {
+        toast("Укажите диапазон, например 1 – 50");
+        return;
+      }
+      const present = Object.keys(inputs)
+        .map(Number)
+        .filter((id) => id >= range.start && id <= range.end);
+      if (!present.length) {
+        toast("В диапазоне нет файлов");
+        return;
+      }
+      if (!confirm(
+        `Удалить файлы ${typeSel.value}.txt глав ${present[0]} – ` +
+        `${present.at(-1)} (${present.length} шт.)?`,
+      )) return;
+      delBtn.disabled = true;
+      try {
+        const q = new URLSearchParams({
+          type: typeSel.value,
+          start: String(range.start),
+          end: String(range.end),
+        });
+        const r = await api(
+          `/projects/${section}/${name}/chapters?${q}`,
+          { method: "DELETE" },
+        );
+        toast(`Удалено файлов: ${r.deleted.length}`);
+        await load();
+      } catch (ex) {
+        delBtn.disabled = false;
+        status.textContent = ex.message;
+        err.textContent = ex.message;
+      }
+    });
     load();
 
     const toolbar = h(
@@ -3153,15 +3246,19 @@ function viewProject(section, name, tab) {
       { class: "chapters-toolbar" },
       h("span", { class: "field-label" }, "Тип файлов глав:"),
       typeSel,
+      h("span", { class: "field-label" }, "Главы:"),
+      rangeInput,
       h("span", { class: "spacer" }),
       status,
       saveBtn,
+      delBtn,
     );
     const hint = h(
       "div",
       { class: "card-hint" },
       "Название главы — первая непустая строка файла. " +
-        "Правки сохраняются в соответствующие файлы глав одной кнопкой.",
+        "Правки сохраняются в соответствующие файлы глав одной кнопкой; " +
+        "«Удалить файлы» стирает файлы выбранного типа в диапазоне.",
     );
     return h("div", { class: "files-wrap" }, toolbar, hint, err, rows);
   }

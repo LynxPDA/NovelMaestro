@@ -692,6 +692,9 @@ def test_project_chapters_titles(srv_ctx):
                             "?type=polished")
     assert res.status == 200
     assert payload["titles"] == {"1": "Глава 1 Старая"}
+    # all_ids/missing: непрерывный диапазон + номера без файла типа
+    assert payload["all_ids"] == [1]
+    assert payload["missing"] == []
     # тип chapter (chapter.txt) — тоже читается (вкладка «Главы»)
     (ch / "chapter.txt").write_text("\nГлава 1 Исходник\n\nТекст\n",
                                      encoding="utf-8")
@@ -720,6 +723,27 @@ def test_project_chapters_titles(srv_ctx):
                             {"type": "polished", "titles": {"99": "X"}})
     assert res.status == 200
     assert payload["missing"] == [99]
+    # DELETE: удаление файлов глав по типу+диапазону
+    (ch / "translated.txt").write_text("\nПеревод\n\nТекст\n",
+                                        encoding="utf-8")
+    res, payload = _request(port, "DELETE",
+                            "/api/projects/ACTIVE/test_book/chapters"
+                            "?type=translated&start=1&end=5")
+    assert res.status == 200
+    assert payload["deleted"] == [1]
+    assert not (ch / "translated.txt").exists()
+    # polished.txt не тронут (другой тип)
+    assert (ch / "polished.txt").exists()
+    # вне диапазона — ничего
+    res, payload = _request(port, "DELETE",
+                            "/api/projects/ACTIVE/test_book/chapters"
+                            "?type=polished&start=2&end=5")
+    assert res.status == 200 and payload["deleted"] == []
+    # недопустимый тип → 400
+    res, payload = _request(port, "DELETE",
+                            "/api/projects/ACTIVE/test_book/chapters"
+                            "?type=bad")
+    assert res.status == 400
     # дефолтный тип — polished (без ?type)
     res, payload = _request(port, "GET",
                             "/api/projects/ACTIVE/test_book/chapters/titles")
