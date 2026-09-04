@@ -1348,7 +1348,7 @@ def test_build_ner_check_rag_flags():
     нет — RAG-промпт берётся из общего «Промпт-файла» (тег <prompt_rag>)."""
     form = {"passes": "rag", "rag_terms": "林凡\n青云宗",
             "rag_source_type": "redacted", "start": "1", "end": "9",
-            "rag_budget": "4000"}
+            "rag_budget": "4000", "save_interval": "10"}
     argv = build_command("ner_check", form, {})
     assert "--passes" in argv and argv[argv.index("--passes") + 1] == "rag"
     assert "--rag_terms" in argv
@@ -1357,19 +1357,25 @@ def test_build_ner_check_rag_flags():
     assert argv[argv.index("--rag_source_type") + 1] == "redacted"
     assert "--start" in argv and "--end" in argv
     assert "--rag_budget" in argv and "4000" in argv
+    assert "--save-interval" in argv
+    assert argv[argv.index("--save-interval") + 1] == "10"
     assert "--rag_prompt_file" not in argv
     # поле rag_prompt_file убрано из спеки ner_check
     names = {f["name"] for f in STAGE_SPECS["ner_check"]["fields"]}
     assert "rag_prompt_file" not in names
-    # дефолт бюджета RAG — 65536 СИМВОЛОВ
+    # дефолт бюджета RAG — 65536 СИМВОЛОВ; save_interval — 0 (только в конце)
     fb = next(f for f in STAGE_SPECS["ner_check"]["fields"]
               if f["name"] == "rag_budget")
     assert fb["default"] == "65536"
+    fs = next(f for f in STAGE_SPECS["ner_check"]["fields"]
+              if f["name"] == "save_interval")
+    assert fs["default"] == "0"
     # пустые — флагов нет
     argv2 = build_command("ner_check", {"passes": "rag"}, {})
     assert "--rag_terms" not in argv2
     assert "--rag_source_type" not in argv2
     assert "--rag_budget" not in argv2
+    assert "--save-interval" not in argv2
     assert "--rag_prompt_file" not in argv2
 
 

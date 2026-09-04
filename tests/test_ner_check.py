@@ -5,6 +5,8 @@
 статусами, авто-режим. Без сети."""
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -711,6 +713,99 @@ def test_ner_check_rag_missing_files(tmp_path, monkeypatch):
                   "--rag_terms", "林凡", "--rag_novel", "нет.txt",
                   "--host", "http://x", "--model", "m"])
     assert rc == 1 and not calls
+
+
+def test_ner_check_rag_lookup_brackets():
+    """RAG: _ner_lookup — точное совпадение (NFC), затем вариант без
+    скобок 【】; нет записи — None."""
+    items = {"无畏心": {"term": "无畏心"},
+             "白虎仙君": {"term": "白虎仙君"}}
+    hit = NC._ner_lookup(items, "无畏心")
+    assert hit is not None and hit["term"] == "无畏心"
+    hit = NC._ner_lookup(items, "【无畏心】")
+    assert hit is not None and hit["term"] == "无畏心"
+    hit = NC._ner_lookup(items, "白虎仙君")
+    assert hit is not None and hit["term"] == "白虎仙君"
+    assert NC._ner_lookup(items, "虎珀仙君") is None
+
+
+def test_ner_check_rag_patches_warn_hint():
+    """RAG: вариант LLM в скобках находит запись и даёт патч с
+    каноническим term; вариант без записи — warning с близкими."""
+    items = {"无畏心": {"term": "无畏心", "type": "Person",
+                        "translation": "X"},
+             "白虎仙君": {"term": "白虎仙君", "type": "Person",
+                           "translation": "Y"}}
+
+    class L:
+        def __init__(self):
+            self.warns = []
+
+        def warning(self, m):
+            self.warns.append(m)
+
+    lg = L()
+    found = [{"term": "【无畏心】", "type": "Person (male)",
+              "translation": "X", "reason": "p"}]
+    entries = NC._rag_patches(found, items, lg)
+    assert len(entries) == 1
+    assert entries[0]["term"] == "无畏心"  # канонический, без скобок
+    assert not lg.warns
+    found2 = [{"term": "虎珀仙君", "type": "Person",
+               "translation": "Z", "reason": "p"}]
+    assert not NC._rag_patches(found2, items, lg)
+    assert any("白虎仙君" in w for w in lg.warns)
+
+
+def test_ner_check_rag_save_interval(tmp_path, monkeypatch):
+    """RAG: --save-interval 1 — review-файл сохраняется после каждого
+    термина (не только в конце): файл виден ДО завершения прогона."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    (tmp_path / "novel.txt").write_text(
+        "Линь Фан вошёл в зал. " * 50, encoding="utf-8")
+    calls = []
+    gate = threading.Event()
+    responses = [
+        ('[{"term": "林凡", "type": "Person (female)", '
+         '"translation": "Линь Фан", "reason": "p"}]'),
+        ('[{"term": "青云宗", "type": "Location (sect)", '
+         '"translation": "Секта Цинъюнь", "reason": "p2"}]'),
+    ]
+
+    def fake(base_url, model, messages, **kw):
+        calls.append(messages[0]["content"])
+        i = len(calls)
+        if i == 2:
+            gate.wait(10)  # держим второй запрос — проверяем файл
+        return responses[i - 1], None
+
+    monkeypatch.setattr(NC, "stream_chat_completion", fake)
+    rc = [1]
+
+    def run():
+        rc[0] = NC.main(["--input", "ner.json", "--passes", "rag",
+                         "--rag_terms", "林凡\n青云宗\n",
+                         "--rag_novel", "novel.txt",
+                         "--save-interval", "1", "--threads", "1",
+                         "--host", "http://x", "--model", "m"])
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    review = tmp_path / "ner_review.json"
+    for _ in range(200):
+        if review.exists():
+            break
+        time.sleep(0.02)
+    assert review.exists(), "файл не сохранился до конца прогона"
+    doc = json.loads(review.read_text(encoding="utf-8"))
+    assert len(doc["entries"]) == 1  # правка по 林凡 уже на диске
+    gate.set()
+    t.join(timeout=15)
+    assert not t.is_alive() and rc[0] == 0
+    doc2 = json.loads(review.read_text(encoding="utf-8"))
+    assert len(doc2["entries"]) == 2  # финальное сохранение — обе
+    assert [e["term"] for e in doc2["entries"]] == ["林凡", "青云宗"]
 
 
 def test_get_prompt_tag_and_comments(tmp_path, monkeypatch):

@@ -343,6 +343,8 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
     argv += _range_argv("start", form)
     if form.get("rag_budget") not in (None, ""):
         argv += ["--rag_budget", str(form["rag_budget"])]
+    if form.get("save_interval") not in (None, ""):
+        argv += ["--save-interval", str(form["save_interval"])]
     # RAG-промпт — это тот же «Промпт-файл» (внутри тег <prompt_rag>);
     # отдельного --rag_prompt_file нет: CLI берёт --prompt_file
     if form.get("types"):
@@ -925,7 +927,7 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "65536",
              "help": "На ОДИН термин: промпт + фрагменты ≤ бюджету; каждый "
                       "термин — отдельный LLM-запрос (параллельно, "
-                      "«Параллельные пакеты»); фрагменты — равномерно по "
+                      "«Потоков (1–16)»); фрагменты — равномерно по "
                       "книге (FTS5, чанки 1000 симв.), влезают в остаток "
                       "бюджета после промпта"},
             {"name": "passes", "label": "Режимы",
@@ -942,12 +944,12 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "196608"},
             {"name": "threads", "label": "Потоков (1–16)",
              "type": "number", "default": "1", "min": 1, "max": 16,
-             "help": "батчи и типы выполняются параллельно (вместо "
-                      "последовательного прохода типов)"},
+             "help": "батчи, типы и RAG-термины выполняются параллельно "
+                      "(вместо последовательного прохода)"},
             {"name": "count_threshold", "label": "Порог count",
              "type": "number", "default": "0"},
             # RAG-режим: список терминов, сборка глав в память,
-            # бюджет, промпт-файл (поля видны только в режиме rag)
+            # бюджет, сохранение, промпт-файл (поля видны только в rag)
             {"name": "rag_terms", "label": "RAG: список терминов",
              "type": "textarea", "default": "",
              "help": "Каждый термин с новой строки; тип/перевод "
@@ -958,6 +960,10 @@ STAGE_SPECS: dict[str, dict] = {
              "default": "chapter",
              "help": "Из какого файла главы собирается текст книги "
                       "для FTS5-поиска (сборка в память, файл не пишется)"},
+            {"name": "save_interval", "label": "Сохранять каждые N терминов",
+             "type": "number", "default": "0",
+             "help": "RAG: review-файл сохраняется каждые N терминов "
+                      "(0 = только в конце)"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},

@@ -43,12 +43,14 @@ from __future__ import annotations
 
 import argparse
 import copy
+import difflib
 import json
 import os
 import re
 import shutil
 import sys
 import threading
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -226,6 +228,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rag_budget", type=int, default=65536,
                    help="RAG-режим: бюджет релевантного текста на термин, "
                         "СИМВОЛЫ (по умолчанию: 6000).")
+    p.add_argument("--save-interval", type=int, default=0,
+                   help="RAG-режим: сохранять review-файл каждые N "
+                        "терминов (0 = только в конце)")
     p.add_argument("--rag_prompt_file", default=None,
                    help="RAG-режим: файл промпта с тегом <prompt_rag> "
                         "(по умолчанию: тот же --prompt_file).")
@@ -437,7 +442,7 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
     selected = {f.strip() for f in fields} if fields else None
     lines = []
     for term in terms:
-        item = items_by_term.get(term)
+        item = _ner_lookup(items_by_term, term)
         translation = (item or {}).get("translation") or ""
         type_str = (item or {}).get("type") or "?"
         lines.append(f"--- {term} (тип: {type_str}) ---")
@@ -450,7 +455,8 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
                 lines.append("  " + ln)
         else:
             lines.append("  (нет записи в ner.json)")
-        ev = fts_escape(term)
+        # ищем канонический термин (вариант LLM со скобками → запись)
+        ev = fts_escape(item["term"] if item else term)
         hits = fts_search_all(db, f'"{ev}"')
         if not hits and translation:
             # перевод — fallback для переведённых источников
@@ -473,23 +479,47 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
     return "\n".join(lines)
 
 
+def _ner_lookup(items_by_term, term):
+    """Запись ner.json по термину: точное совпадение (NFC), затем без
+    обёрток-скобок 【】「」『』() — LLM часто возвращает вариант с
+    кавычками. Нет записи — None."""
+    nfc = unicodedata.normalize("NFC", str(term))
+    item = items_by_term.get(nfc)
+    if item is not None:
+        return item
+    stripped = re.sub(r"[【】「」『』()（）]", "", nfc)
+    if stripped and stripped != nfc:
+        item = items_by_term.get(stripped)
+        if item is not None:
+            return item
+    return None
+
+
 def _rag_patches(found, items_by_term, logger) -> list[dict]:
     """RAG-ответ — уточнение type/translation: превращаем в патчи,
     сверяя с текущими значениями в ner.json (old → new)."""
     entries = []
     for p in found:
         term = p.get("term", "")
-        item = items_by_term.get(term)
-        if not item:
+        item = _ner_lookup(items_by_term, term)
+        if item is None:
+            # LLM вернула вариант, которого нет в глоссарии (скобки,
+            # слияние имён, опечатка) — правку применить не к чему;
+            # показываем близкие записи, чтобы было видно почему
+            close = difflib.get_close_matches(
+                unicodedata.normalize("NFC", term),
+                list(items_by_term), n=3, cutoff=0.4)
+            hint = f" (похожие: {', '.join(close)})" if close else ""
             logger.warning(f"  ⚠ Термин {term!r} не найден в ner.json — "
-                           f"пропущен.")
+                           f"пропущен.{hint}")
             continue
         for field in ("type", "translation"):
             new = str(p.get(field, "")).strip()
             old = str(item.get(field, "")).strip()
             if not new or new == old:
                 continue
-            e = review_entry({"term": term, "field": field,
+            # term — канонический из ner.json (не вариант LLM со скобками)
+            e = review_entry({"term": item["term"], "field": field,
                               "old": old, "new": new,
                               "reason": p.get("reason", "")},
                              stage="RAG")
@@ -522,8 +552,12 @@ def _rag_query(term, user_msg, args, base_url, api_key, model, logger,
     if found is None:
         logger.error(f"  ❌ {term}: ответ не распарсился (см. лог выше).")
         return [], False
-    logger.info(f"  ✔ {term}: определено {len(found)}")
-    return _rag_patches(found, items_by_term, logger), True
+    # «определено N» — уточнений, которые LLM вернула по фрагментам;
+    # часть может быть пропущена (нет записи в ner.json / совпадает)
+    entries = _rag_patches(found, items_by_term, logger)
+    logger.info(f"  ✔ {term}: определено {len(found)} "
+                f"(правок: {len(entries)})")
+    return entries, True
 
 
 def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
@@ -566,7 +600,8 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
                      "или --rag_novel (txt-файл книги).")
         return 1
     data = load_ner_json(args.input, logger)
-    items_by_term = {i.get("term", ""): i for i in data}
+    items_by_term = {unicodedata.normalize("NFC", i.get("term", "")): i
+                     for i in data}
     if args.rag_source_type:
         logger.info(f"🔎 RAG: {len(terms)} терминов.")
     db = build_fts_index(text, 1000)
@@ -591,6 +626,27 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
     failures = 0
     emit_progress(0, total, "Точечная проверка (RAG)")
 
+    # накопительный review-файл: --save-interval N — сохранять каждые
+    # N терминов (0 = только в конце, как раньше)
+    save_interval = max(0, args.save_interval or 0)
+    meta, existing = load_review_file(args.review, logger)
+    created = (meta or {}).get("created") \
+        or datetime.now().strftime("%Y-%m-%d %H:%M")
+    last_flush = 0
+
+    def flush_review(final=False):
+        nonlocal last_flush
+        if len(entries) == last_flush and not final:
+            return
+        merged, added = merge_review_entries(existing or [], entries, logger)
+        save_review_file(args.review, args.input, created, merged)
+        last_flush = len(entries)
+        if final:
+            logger.info(f"🧩 Правки: {args.review} "
+                        f"(новых: {added}, всего: {len(merged)})")
+        else:
+            logger.info(f"🧩 Правки: {args.review} (всего: {len(merged)})")
+
     def worker(term, user_msg):
         nonlocal done, failures
         res, ok = _rag_query(term, user_msg, args, base_url, api_key,
@@ -601,6 +657,8 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
                 failures += 1
             done += 1
             emit_progress(done, total, "Точечная проверка (RAG)")
+            if save_interval and done % save_interval == 0:
+                flush_review()
 
     workers = max(1, min(args.threads or 1, total))
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -615,14 +673,8 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
     logger.info(f"  ✔ Определено терминов: {len(entries)}")
     if not entries:
         logger.info("  ℹ Уточнений, отличающихся от ner.json, нет.")
-    # сохраняем в review-файл (дедуп с накопленным)
-    meta, existing = load_review_file(args.review, logger)
-    created = (meta or {}).get("created") \
-        or datetime.now().strftime("%Y-%m-%d %H:%M")
-    merged, added = merge_review_entries(existing or [], entries, logger)
-    save_review_file(args.review, args.input, created, merged)
-    logger.info(f"🧩 Правки: {args.review} "
-                f"(новых: {added}, всего: {len(merged)})")
+    # финальное сохранение (с числом новых правок)
+    flush_review(final=True)
     return 0
 
 

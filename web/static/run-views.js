@@ -1630,7 +1630,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
       w.loadTypes();
       const ragNames = ["rag_terms", "rag_source_type",
-                        "rag_budget"];
+                        "rag_budget", "save_interval"];
       const ragWrap = fieldWraps["rag_terms"];
       if (ragWrap) {
         const addBtn = h(
@@ -1646,9 +1646,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       // в RAG прячем только чипсы ТИПОВ: поля записи (fieldsBar) и
       // степпер остаются — выбранные поля уходят в RAG-промпт
       const ragHidden = [w.chipsBar, w.chipsBox];
-      // RAG не использует: бюджет пакета, порог count, потоки
-      // (RAG-запрос один, без батчей/типов/потоков)
-      const ragNoUse = ["batch_size", "count_threshold", "threads"];
+      // RAG не использует: бюджет пакета, порог count
+      // (RAG — отдельный запрос на термин; «Потоков» видно и в RAG:
+      // это параллельные запросы по терминам)
+      const ragNoUse = ["batch_size", "count_threshold"];
       const applyRagExpert = () => {
         const isRag = sel && sel.value === "rag";
         for (const name of ragNames) {
