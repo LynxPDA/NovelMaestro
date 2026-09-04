@@ -43,7 +43,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 from core.common import (  # noqa: E402
     PROGRESS_PREFIX, build_chapter_map, find_env_file, format_ranges,
-    get_server_config, parse_dotenv,
+    get_server_config, parse_dotenv, env_overlay,
 )
 
 # ═══ Константы (канон run_pipeline.py) ═══
@@ -544,8 +544,11 @@ def main() -> None:
     args = ap.parse_args()
 
     log = logging.getLogger("web.pipeline")
-    # PIPELINE_* из .env переопределяют дефолты (R5-H)
+    # PIPELINE_* из .env переопределяют дефолты (R5-H); os.environ
+    # приоритетнее файла (канон §7: окружение > файл)
     env_data = parse_dotenv(find_env_file(args.env_file))
+    env_data = env_overlay(
+        env_data, [f"PIPELINE_{k.upper()}" for k in _DEFAULTS])
     for key, default in list(_DEFAULTS.items()):
         raw = env_data.get(f"PIPELINE_{key.upper()}")
         if raw is None:

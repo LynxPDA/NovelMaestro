@@ -344,6 +344,28 @@ def test_get_server_config_environment_wins(monkeypatch):
     assert C.get_server_config({"HOST": "http://file"})["host"] == "http://file"
 
 
+def test_env_overlay(monkeypatch):
+    """env_overlay: перечисленные ключи перекрываются непустыми
+    значениями os.environ (канон §7: окружение > файл); остальные
+    ключи файла не трогаются, лишние из окружения не подмешиваются."""
+    for k in ("HOST", "MODEL", "NER_HOST"):
+        monkeypatch.delenv(k, raising=False)
+    env = {"HOST": "http://file", "MODEL": "fm", "KEY": "v"}
+    assert C.env_overlay(env, ["HOST"]) == {
+        "HOST": "http://file", "MODEL": "fm", "KEY": "v"}
+    monkeypatch.setenv("HOST", "http://env")
+    assert C.env_overlay(env, ["HOST"]) == {
+        "HOST": "http://env", "MODEL": "fm", "KEY": "v"}
+    # пустое значение окружения = отсутствует (файл остаётся)
+    monkeypatch.setenv("HOST", "   ")
+    assert C.env_overlay(env, ["HOST"])["HOST"] == "http://file"
+    # ключ из окружения вне списка не подмешивается; исходный dict
+    # не мутируется
+    monkeypatch.setenv("NER_HOST", "http://ner")
+    assert C.env_overlay(env, ["HOST"])["HOST"] == "http://file"
+    assert env["HOST"] == "http://file"
+
+
 def test_get_stage_model_environment_wins(monkeypatch):
     for k in ("MODEL", "NER_MODEL"):
         monkeypatch.delenv(k, raising=False)

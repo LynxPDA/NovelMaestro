@@ -78,8 +78,10 @@ def load_exclusions(env_path=None) -> list[str]:
     (.env) > пусто (ничего). Возвращает список в нижнем регистре."""
     raw = None
     try:
-        from core.common import find_env_file, parse_dotenv
-        env = parse_dotenv(env_path or find_env_file())
+        from core.common import env_overlay, find_env_file, parse_dotenv
+        env = env_overlay(
+            parse_dotenv(env_path or find_env_file()),
+            ["TRANSLATE_CHECK_EXCLUDE_WORDS"])
         raw = env.get("TRANSLATE_CHECK_EXCLUDE_WORDS")
     except Exception:  # noqa: BLE001 — .env необязателен
         raw = None

@@ -100,6 +100,20 @@ def find_env_file(explicit=None, start_dir=None):
     return None
 
 
+def env_overlay(env_data: dict, keys) -> dict:
+    """Копия env_data, где перечисленные ключи перекрыты непустыми
+    значениями os.environ (канон §7: окружение > файл). Ключи, которых
+    нет ни в окружении, ни в файле, не добавляются. Секреты в keys
+    передавать не стоит (см. web/api.py: секреты не отдаются в префилл
+    форм)."""
+    out = dict(env_data or {})
+    for k in keys or ():
+        raw = os.environ.get(k)
+        if raw is not None and raw.strip():
+            out[k] = raw.strip()
+    return out
+
+
 def get_server_config(env_data: dict, stage: str = "") -> dict:
     """Сервер → {host, api_key, model}.
 

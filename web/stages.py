@@ -88,8 +88,14 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
     if pdir is not None:
         try:
             from core.common import find_env_file, parse_dotenv
-            env_path = find_env_file(start_dir=pdir)
-            env_data = parse_dotenv(env_path)
+            # слои: системный корневой .env → собственный pdir/.env
+            # (по ключам: пустые значения проектного файла не затеняют
+            # глобальный конфиг)
+            proj_path = Path(pdir) / ".env"
+            sys_env = parse_dotenv(find_env_file())
+            proj_env = parse_dotenv(
+                str(proj_path) if proj_path.is_file() else None)
+            env_data = {**sys_env, **proj_env}
         except Exception as exc:
             log.debug(".env не загружен: %s", exc)
             env_data = {}
@@ -520,13 +526,17 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
 # ── Общие поля сервера для LLM-стадий (вставляются в начало формы) ──
 # значения подтягиваются из .env и вписываются в поля —
 # подсказки «Пусто = …» не нужны (help отсутствует).
+# group: "llm" — декларативная пометка для SPA: в Экспертном режиме эти
+# поля (плюс помеченные в спеках стадий: temperature/reasoning/timeout/
+# retries/threads и т.п.) группируются в конец формы блоком
+# «Настройки LLM» (только отображение; видимость подрежимов не меняется).
 _LLM_FIELDS = [
     {"name": "host", "label": "Сервер LLM",
-     "type": "text", "default": ""},
+     "type": "text", "default": "", "group": "llm"},
     {"name": "model", "label": "Модель",
-     "type": "text", "default": ""},
+     "type": "text", "default": "", "group": "llm"},
     {"name": "api_key", "label": "API-ключ",
-     "type": "password", "default": ""},
+     "type": "password", "default": "", "group": "llm"},
 ]
 
 
@@ -802,10 +812,11 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
             {"name": "jobs", "label": "Потоков (1–16)",
              "type": "number", "default": "4", "min": 1, "max": 16,
+             "group": "llm",
              "help": "СУММАРНО одновременных LLM-запросов: распределяются "
-                      "на параллельные главы и чанки внутри главы "
-                      "(глав много — потоки идут на главы, мало — "
-                      "свободные уходят внутрь главы)"},
+                     "на параллельные главы и чанки внутри главы "
+                     "(глав много — потоки идут на главы, мало — "
+                     "свободные уходят внутрь главы)"},
             {"name": "threads", "type": "hidden", "default": "",
              "noenv": True},
             {"name": "ner_min_count", "label": "Мин. count для глоссария "
@@ -819,15 +830,15 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "имена с count ниже порога НЕ попадают в справочник "
                       "полов; 0 — фильтр выключен"},
             {"name": "timeout", "label": "Таймаут LLM-запроса, сек",
-             "type": "number", "default": "300"},
+             "type": "number", "default": "300", "group": "llm"},
             {"name": "max_retries", "label": "Повторы",
-             "type": "number", "default": "3",
+             "type": "number", "default": "3", "group": "llm",
              "help": "попытки виртуального потока на один LLM-запрос "
-                      "(сеть/стрим)"},
+                     "(сеть/стрим)"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": ""},
+             "type": "text", "default": "", "group": "llm"},
             {"name": "reasoning_effort", "label": "Reasoning effort",
-             "type": "text",
+             "type": "text", "group": "llm",
              "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
              "default": ""},
         ],
@@ -872,7 +883,8 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "ner_prompt.txt"},
             {"name": "threads", "label": "Потоков (1–16)",
-             "type": "number", "default": "4", "min": 1, "max": 16},
+             "type": "number", "default": "4", "min": 1, "max": 16,
+             "group": "llm"},
             {"name": "chunk_size", "label": "Размер чанка, СИМВОЛЫ",
              "type": "number", "default": "7000"},
             {"name": "threshold", "label": "Порог дедупликации (0–1)",
@@ -880,9 +892,9 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "ngram", "label": "N-граммы для латиницы",
              "type": "number", "default": "3"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": ""},
+             "type": "text", "default": "", "group": "llm"},
             {"name": "reasoning", "label": "Reasoning effort",
-             "type": "text",
+             "type": "text", "group": "llm",
              "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
              "default": ""},
             {"name": "two_pass", "label": "Двухпроходная схема",
@@ -900,11 +912,11 @@ STAGE_SPECS: dict[str, dict] = {
                       "Возобновление с места остановки убрано: каждый "
                       "запуск идёт с первого чанка"},
             {"name": "retries", "label": "Повторные попытки",
-             "type": "number", "default": "3",
+             "type": "number", "default": "3", "group": "llm",
              "help": "общее число попыток LLM на чанк: сеть/стрим и "
                       "невалидный формат ответа считаются одинаково"},
             {"name": "timeout", "label": "Таймаут запроса, сек",
-             "type": "number", "default": "300"},
+             "type": "number", "default": "300", "group": "llm"},
         ],
         "preset": {
             "title": "Новый глоссарий",
@@ -950,6 +962,7 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "196608"},
             {"name": "threads", "label": "Потоков (1–16)",
              "type": "number", "default": "1", "min": 1, "max": 16,
+             "group": "llm",
              "help": "батчи, типы и RAG-термины выполняются параллельно "
                       "(вместо последовательного прохода)"},
             {"name": "count_threshold", "label": "Порог count",
@@ -986,15 +999,17 @@ STAGE_SPECS: dict[str, dict] = {
             # применяется только в «Проверках» проекта
             # (/api/ner/review/apply шлёт apply напрямую)
             {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": ""},
+             "type": "text", "default": "", "group": "llm"},
             {"name": "reasoning_effort", "label": "Reasoning effort",
-             "type": "text",
+             "type": "text", "group": "llm",
              "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
              "default": ""},
             {"name": "max_tokens", "label": "Max tokens (серверный лимит), ТОКЕНЫ",
-             "type": "number", "default": "65536"},
-            {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300"},
-            {"name": "max_retries", "label": "Повторы", "type": "number", "default": "3"},
+             "type": "number", "default": "65536", "group": "llm"},
+            {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
+             "group": "llm"},
+            {"name": "max_retries", "label": "Повторы", "type": "number", "default": "3",
+             "group": "llm"},
         ],
         "preset": {
             "title": "Проверить глоссарий",
@@ -1024,18 +1039,21 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "translate_check_prompt.txt"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": ""},
+             "type": "text", "default": "", "group": "llm"},
             {"name": "reasoning_effort", "label": "Reasoning effort",
-             "type": "text",
+             "type": "text", "group": "llm",
              "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
              "default": ""},
-            {"name": "max_retries", "label": "Попытки на запрос", "type": "number", "default": "3"},
-            {"name": "timeout", "label": "Таймаут соединения, сек", "type": "number", "default": "300"},
+            {"name": "max_retries", "label": "Попытки на запрос", "type": "number", "default": "3",
+             "group": "llm"},
+            {"name": "timeout", "label": "Таймаут соединения, сек", "type": "number", "default": "300",
+             "group": "llm"},
             {"name": "stream_timeout", "label": "Таймаут стрима, сек",
-             "type": "number", "default": "300"},
+             "type": "number", "default": "300", "group": "llm"},
             {"name": "retry_empty", "label": "Доп. повторы при пустом ответе",
-             "type": "number", "default": "0"},
-            {"name": "threads", "label": "Параллельные пакеты (1–16)", "type": "number", "default": "4", "min": 1, "max": 16},
+             "type": "number", "default": "0", "group": "llm"},
+            {"name": "threads", "label": "Параллельные пакеты (1–16)", "type": "number", "default": "4", "min": 1, "max": 16,
+             "group": "llm"},
             {"name": "max_fixes_per_chapter", "label": "Лимит правок на главу (0 = нет)",
              "type": "number", "default": "0"},
             {"name": "min_fix_length", "label": "Мин. длина правки, СИМВОЛЫ",
@@ -1083,15 +1101,15 @@ STAGE_SPECS: dict[str, dict] = {
                       "обрезается до целого количества глав (первые "
                       "диапазона), отсечённые указываются в отчёте"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": ""},
+             "type": "text", "default": "", "group": "llm"},
             {"name": "reasoning_effort", "label": "Reasoning effort",
-             "type": "text",
+             "type": "text", "group": "llm",
              "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
              "default": ""},
             {"name": "max_retries", "label": "Повторы",
-             "type": "number", "default": "3"},
+             "type": "number", "default": "3", "group": "llm"},
             {"name": "timeout", "label": "Таймаут LLM-запроса, сек",
-             "type": "number", "default": "300"},
+             "type": "number", "default": "300", "group": "llm"},
         ],
         "preset": {
             "title": "Оценить перевод",
@@ -1176,14 +1194,17 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "text", "default": "Person:Person,Person:Organisation,Person:Artifact"},
             {"name": "co_occurrence_top", "label": "Связей на термин", "type": "number", "default": "5"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": ""},
+             "type": "text", "default": "", "group": "llm"},
             {"name": "thinking", "label": "Reasoning effort",
-             "type": "text",
+             "type": "text", "group": "llm",
              "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
              "default": ""},
-            {"name": "retries", "label": "Повторы", "type": "number", "default": "3"},
-            {"name": "timeout", "label": "Таймаут запроса, сек", "type": "number", "default": "300"},
-            {"name": "threads", "label": "Потоков (1–16)", "type": "number", "default": "4", "min": 1, "max": 16},
+            {"name": "retries", "label": "Повторы", "type": "number", "default": "3",
+             "group": "llm"},
+            {"name": "timeout", "label": "Таймаут запроса, сек", "type": "number", "default": "300",
+             "group": "llm"},
+            {"name": "threads", "label": "Потоков (1–16)", "type": "number", "default": "4", "min": 1, "max": 16,
+             "group": "llm"},
         ],
         "preset": {
             "title": "Создать вики",

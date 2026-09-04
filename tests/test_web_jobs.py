@@ -1208,6 +1208,148 @@ def test_stage_spec_env_prefill_global_fallback(jobs_srv, tmp_path,
     assert fields["jobs"]["default"] == "2"
 
 
+def test_stage_spec_env_prefill_env_var_wins(jobs_srv, tmp_path,
+                                             monkeypatch):
+    """os.environ > .env (канон §7): HOST из окружения (docker compose
+    environment) перекрывает и pdir/.env, и системный .env — иначе
+    форма шлёт --host из файла и переменная деплоя игнорируется."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / ".env").write_text("HOST=http://from-file:1234\n",
+                               encoding="utf-8")
+    monkeypatch.setenv("HOST", "http://from-env:9999")
+    res, payload = req(
+        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    assert fields["host"]["default"] == "http://from-env:9999"
+
+
+def test_stage_spec_env_prefill_project_over_global(jobs_srv, tmp_path,
+                                                    monkeypatch):
+    """Слои префилла: системный .env → pdir/.env ПО КЛЮЧАМ (проект
+    перекрывает только свои ключи; отсутствующие в проектном файле
+    подхватываются из глобального)."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    global_env = tmp_path / ".env"
+    global_env.write_text(
+        "MODEL=global-model\nPIPELINE_JOBS=2\n", encoding="utf-8")
+    import core.common as common
+    monkeypatch.setattr(common, "find_env_file",
+                        lambda *a, **k: str(global_env))
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / ".env").write_text("MODEL=project-model\n", encoding="utf-8")
+    res, payload = req(
+        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    # проектный MODEL перекрывает глобальный по ключу
+    assert fields["model"]["default"] == "project-model"
+    # PIPELINE_JOBS отсутствует в проектном файле — из глобального
+    assert fields["jobs"]["default"] == "2"
+
+
+def test_stage_spec_api_key_not_from_global(jobs_srv, tmp_path,
+                                            monkeypatch):
+    """Секреты в префилл из глобального слоя не отдаются: API_KEY
+    системного .env не попадает в спеку (при --auth маскировка
+    /api/env его не прикрывает). Только собственный файл проекта."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    global_env = tmp_path / ".env"
+    global_env.write_text("API_KEY=super-secret\n", encoding="utf-8")
+    import core.common as common
+    monkeypatch.setattr(common, "find_env_file",
+                        lambda *a, **k: str(global_env))
+    res, payload = req(
+        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    assert fields["api_key"]["default"] == ""
+
+
+def test_stage_spec_api_key_from_project_env(jobs_srv, tmp_path,
+                                             monkeypatch):
+    """Собственный pdir/.env может задавать ключ стадии — он
+    предзаполняется в форму (локальный однопользовательский проект)."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    import core.common as common
+    monkeypatch.setattr(common, "find_env_file",
+                        lambda *a, **k: None)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / ".env").write_text("PIPELINE_API_KEY=proj-key\n",
+                               encoding="utf-8")
+    res, payload = req(
+        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    assert fields["api_key"]["default"] == "proj-key"
+
+
+def test_persist_run_params_llm_deviation(tmp_path, monkeypatch):
+    """LLM-подключение (host/model) пишется в pdir/.env только при
+    отличии от глобального эффективного значения; совпадающее с
+    глобальным значение СНИМАЕТ оверрайд — глобальная смена сервера
+    доезжает до проекта. Прочие поля пишутся как раньше."""
+    from web.api import _persist_run_params
+    monkeypatch.setattr("core.common.find_env_file",
+                        lambda *a, **k: None)
+    monkeypatch.setenv("HOST", "http://global:9999")
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    pdir.mkdir(parents=True)
+    (pdir / ".env").write_text(
+        "PIPELINE_HOST=http://old:1\nNER_CHUNK_SIZE=5\n",
+        encoding="utf-8")
+    ctx = {"repo_root": tmp_path}
+    _persist_run_params(ctx, pdir, "pipeline", {
+        "host": "http://global:9999",   # == глобальному → оверрайд снять
+        "model": "custom-model",         # отличается → пишется
+    })
+    env = {}
+    for line in (pdir / ".env").read_text(encoding="utf-8").splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            k, _, v = line.partition("=")
+            env[k.strip()] = v.strip()
+    assert "PIPELINE_HOST" not in env
+    assert env["PIPELINE_MODEL"] == "custom-model"
+    assert env["NER_CHUNK_SIZE"] == "5"
+
+
+def test_persist_run_params_llm_absent_untouched(tmp_path, monkeypatch):
+    """Поле LLM-подключения не пришло в params (простой режим) —
+    существующий оверрайд в pdir/.env не трогается."""
+    from web.api import _persist_run_params
+    monkeypatch.setattr("core.common.find_env_file",
+                        lambda *a, **k: None)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    pdir.mkdir(parents=True)
+    (pdir / ".env").write_text("PIPELINE_HOST=http://old:1\n",
+                               encoding="utf-8")
+    ctx = {"repo_root": tmp_path}
+    _persist_run_params(ctx, pdir, "pipeline", {"model": "m2"})
+    text = (pdir / ".env").read_text(encoding="utf-8")
+    assert "PIPELINE_HOST=http://old:1" in text
+    assert "PIPELINE_MODEL=m2" in text
+
+
+def test_persist_run_params_llm_equal_no_file(tmp_path, monkeypatch):
+    """Совпадение с глобальным при отсутствии pdir/.env — файл
+    зря не создаётся (удалять нечего)."""
+    from web.api import _persist_run_params
+    monkeypatch.setattr("core.common.find_env_file",
+                        lambda *a, **k: None)
+    monkeypatch.setenv("HOST", "http://global:9999")
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    pdir.mkdir(parents=True)
+    ctx = {"repo_root": tmp_path}
+    _persist_run_params(ctx, pdir, "pipeline",
+                        {"host": "http://global:9999"})
+    assert not (pdir / ".env").exists()
+
+
 def test_stage_spec_env_prefill_textarea(jobs_srv, tmp_path):
     """Многстрочные regexp в .env — одной строкой с литералом «\\n»:
     префилл раскодирует в реальные переносы (textarea)."""

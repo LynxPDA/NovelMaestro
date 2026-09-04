@@ -948,8 +948,12 @@ def test_check_reports_endpoint(srv, tmp_path):
 # R9: настройки запусков (.env)
 
 
-def test_stage_spec_env_defaults(srv, tmp_path):
-    """R9-A: ?project= предзаполняет поля формы из .env проекта."""
+def test_stage_spec_env_defaults(srv, tmp_path, monkeypatch):
+    """R9-A: ?project= предзаполняет поля формы из .env проекта.
+    Глобальный слой (системный .env) отключён монкипатчем — тест
+    герметичен к .env машины разработчика."""
+    monkeypatch.setattr("core.common.find_env_file",
+                        lambda *a, **k: None)
     srv, port, root = srv()
     pdir = _mk_project(root)
     (pdir / ".env").write_text(
