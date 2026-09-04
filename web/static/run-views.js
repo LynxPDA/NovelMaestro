@@ -1326,7 +1326,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     row._start.addEventListener("input", recalc);
     if (budgetIn) budgetIn.addEventListener("input", recalc);
     if (typeSel) typeSel.addEventListener("change", recalc);
-    if (promptSel) promptSel.addEventListener("change", recalc);
     if (!auto) end.addEventListener("input", recalc);
     recalc();
   }
