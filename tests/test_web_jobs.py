@@ -732,6 +732,26 @@ def test_build_translate_check():
                           {"check_type": "polished",
                            "exclude_words": ""}, {})
     assert "--exclude-words" not in argv5
+    # структурные проверки: мин. размер / заголовок / последовательность
+    argv6 = build_command("translate_check",
+                          {"check_type": "polished",
+                           "min_file_size": "5000",
+                           "header_regexp": r"^Раздел\s+\d+",
+                           "sequence_check": False}, {})
+    assert "--min-file-size" in argv6
+    assert argv6[argv6.index("--min-file-size") + 1] == "5000"
+    assert "--header-regexp" in argv6
+    assert "--no-sequence-check" in argv6
+    # дефолты: пустые/включённые — флагов нет
+    argv7 = build_command("translate_check",
+                          {"check_type": "polished"}, {})
+    for flag in ("--min-file-size", "--header-regexp",
+                 "--no-sequence-check"):
+        assert flag not in argv7
+    argv8 = build_command("translate_check",
+                          {"check_type": "polished",
+                           "sequence_check": True}, {})
+    assert "--no-sequence-check" not in argv8
 
 
 def test_build_translate_check_custom_settings():
@@ -1193,6 +1213,28 @@ def test_stage_spec_env_prefill_textarea(jobs_srv, tmp_path):
     assert res.status == 200
     fields = {f["name"]: f for f in payload["spec"]["fields"]}
     assert fields["regexp_checks"]["default"] == "[一-鿿]+\n[a-zA-Z]+"
+
+
+def test_stage_spec_env_prefill_translate_check_struct(jobs_srv, tmp_path):
+    """Новые структурные настройки translate_check предзаполняются из
+    .env: мин. размер (число), заголовок (текст), последовательность
+    (булево — строкой "0")."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / ".env").write_text(
+        "TRANSLATE_CHECK_MIN_FILE_SIZE=5000\n"
+        "TRANSLATE_CHECK_HEADER_REGEXP=^Раздел\\s+\\d+\n"
+        "TRANSLATE_CHECK_SEQUENCE_CHECK=0\n",
+        encoding="utf-8")
+    res, payload = req(
+        "GET",
+        "/api/stages/translate_check/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    assert fields["min_file_size"]["default"] == "5000"
+    assert fields["header_regexp"]["default"] == r"^Раздел\s+\d+"
+    assert fields["sequence_check"]["default"] is False
 
 
 def test_persist_run_params_textarea_encode(tmp_path):

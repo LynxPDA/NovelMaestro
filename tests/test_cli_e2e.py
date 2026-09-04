@@ -91,15 +91,15 @@ def test_tc_check_chapter_regexp_controls(tmp_path):
     assert "中" in joined and "broken" not in joined
 
 
-def test_tc_check_chapter_sequence_always(tmp_path):
-    """Последовательность «Глава N» — структурная проверка, всегда
-    включена (чекбоксы отключения убраны)."""
+def test_tc_check_chapter_sequence_default_on(tmp_path):
+    """Последовательность глав — включена по умолчанию (--no-sequence-check
+    отключает); канон «Глава N» — дефолтный паттерн заголовка."""
     d = _build_valid_chapter(tmp_path, 1)
     broken = ("Глава 1\n\n"
               + "дальше русский текст. " * 90 + "\nГлава 9 лишняя\n")
     (d / "polished.txt").write_text(broken, encoding="utf-8")
     (d / "redacted.txt").write_text(broken, encoding="utf-8")
-    # сбой нумерации — ошибка, отключить нельзя
+    # сбой нумерации — ошибка по умолчанию
     errors, prev = TC.check_chapter(1, str(d), "polished",
                                     [("redacted", 1.0, 0.05)],
                                     strict=False, prev_inner_chapter=5,
@@ -107,7 +107,7 @@ def test_tc_check_chapter_sequence_always(tmp_path):
     joined = "\n".join(errors)
     assert "последовательность" in joined
     assert prev == 1  # номер всё равно обновляется
-    # канон «Глава N» фиксирован: «Раздел 3» — ошибка «Нет «Глава N»»
+    # дефолтный паттерн заголовка фиксирован: «Раздел 3» — ошибка
     custom = ("Раздел 3\n\n" + "дальше русский текст. " * 90)
     (d / "polished.txt").write_text(custom, encoding="utf-8")
     (d / "redacted.txt").write_text(custom, encoding="utf-8")
@@ -117,6 +117,24 @@ def test_tc_check_chapter_sequence_always(tmp_path):
                                     exclusions=[])
     joined = "\n".join(errors)
     assert "Нет «Глава N»" in joined and prev is None
+
+
+def test_tc_check_chapter_sequence_off(tmp_path):
+    """--no-sequence-check: сбой последовательности не ошибка (проверка
+    отключаемая), лишние заголовки по-прежнему ловятся."""
+    d = _build_valid_chapter(tmp_path, 1)
+    broken = ("Глава 1\n\n"
+              + "дальше русский текст. " * 90 + "\nГлава 9 лишняя\n")
+    (d / "polished.txt").write_text(broken, encoding="utf-8")
+    (d / "redacted.txt").write_text(broken, encoding="utf-8")
+    errors, prev = TC.check_chapter(1, str(d), "polished",
+                                    [("redacted", 1.0, 0.05)],
+                                    strict=False, prev_inner_chapter=5,
+                                    exclusions=[], sequence_check=False)
+    joined = "\n".join(errors)
+    assert "последовательность" not in joined
+    assert "Глава 9" in joined  # лишний заголовок — отдельно
+    assert prev == 5
 
 
 def test_tc_check_chapter_missing_and_fatal(tmp_path):

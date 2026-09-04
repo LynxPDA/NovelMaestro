@@ -199,6 +199,12 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
             argv += [flag, str(form[name])]
     for line in _epub_lines(form.get("regexp_checks")):
         argv += ["--regexp-check", line]
+    if form.get("min_file_size") not in (None, ""):
+        argv += ["--min-file-size", str(form["min_file_size"])]
+    if form.get("header_regexp") not in (None, ""):
+        argv += ["--header-regexp", str(form["header_regexp"])]
+    if form.get("sequence_check", True) in (False, "0", 0):
+        argv.append("--no-sequence-check")
     return argv
 
 
@@ -679,10 +685,27 @@ STAGE_SPECS: dict[str, dict] = {
                       "всё найденное — ошибка, проверяются ВСЕ строки "
                       "включая заголовок главы; ^/$ — начало/конец СТРОКИ; "
                       "комментарий в конце строки — « # …»; пусто = "
-                      "дефолтные проверки (иероглифы, латиница); лишние "
-                      "заголовки «Глава N» — структурная проверка; "
+                      "дефолтные проверки (иероглифы, латиница, лишние "
+                      "заголовки «Глава N» — первое совпадение не ошибка); "
                       "TRANSLATE_CHECK_REGEXP_CHECKS в .env — переносы "
                       "строк как «\n»"},
+            {"name": "min_file_size",
+             "label": "Минимальный размер файла (БАЙТЫ)",
+             "type": "number", "default": "3072",
+             "help": "Файл меньше этого размера — ошибка «слишком мал»; "
+                      "пусто = встроенный дефолт 3072 Б"},
+            {"name": "header_regexp",
+             "label": "Заголовок главы (regexp)",
+             "type": "text", "default": "",
+             "help": "Regexp первой непустой строки главы: не совпало — "
+                      "ошибка «Нет „Глава N“ в начале»; пусто = «Глава N» "
+                      "без учёта регистра; ^ — начало строки"},
+            {"name": "sequence_check",
+             "label": "Проверять последовательность глав",
+             "type": "bool", "default": True,
+             "help": "Первое число в первой непустой строке должно быть "
+                      "больше предыдущей главы; выключено — проверка "
+                      "пропускается"},
         ],
         "preset": {
             "title": "Проверить перевод",

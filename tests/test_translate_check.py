@@ -3,6 +3,7 @@
 """cli/translate_check.py — ratio-логика сравнения размеров
 артефактов (остальные ветки — в tests/test_cli_e2e.py)."""
 # pyright: reportMissingImports=false
+import re
 import sys
 from pathlib import Path
 
@@ -127,3 +128,93 @@ def test_check_chapter_no_header(tmp_path):
                                     False, None, exclusions=[])
     assert any("Нет «Глава N» в начале" in e for e in errors)
     assert prev is None
+
+
+# ════════════════════════════════════════════════════════════════════
+# Настраиваемые структурные проверки: --min-file-size / --header-regexp
+# / --no-sequence-check
+
+
+def test_check_chapter_min_file_size(tmp_path):
+    """Минимальный размер файла — настраиваемый (БАЙТЫ)."""
+    d = tmp_path / "00000_4_x"
+    d.mkdir()
+    body = "Глава 4\n\nкороткий текст"
+    (d / "polished.txt").write_text(body, encoding="utf-8")
+    (d / "redacted.txt").write_text(body, encoding="utf-8")
+    comps = [("redacted", 1.0, 0.05)]
+    # дефолт 3072 — файл мал → ошибка
+    errors, _ = TC.check_chapter(4, str(d), "polished", comps,
+                                 False, None, exclusions=[])
+    assert any("слишком мал" in e for e in errors)
+    # меньший минимум — ошибки нет
+    errors, _ = TC.check_chapter(4, str(d), "polished", comps,
+                                 False, None, exclusions=[],
+                                 min_file_size=10)
+    assert not any("слишком мал" in e for e in errors)
+
+
+def test_check_chapter_custom_header_regexp(tmp_path):
+    """Заголовок главы — настраиваемый regexp (--header-regexp)."""
+    d = tmp_path / "00000_5_x"
+    d.mkdir()
+    body = "Раздел 5\n\n" + "русский текст. " * 100
+    (d / "polished.txt").write_text(body, encoding="utf-8")
+    (d / "redacted.txt").write_text(body, encoding="utf-8")
+    comps = [("redacted", 1.0, 0.05)]
+    # дефолтный «Глава N» — не совпало
+    errors, prev = TC.check_chapter(5, str(d), "polished", comps,
+                                    False, None, exclusions=[])
+    assert any("Нет «Глава N» в начале" in e for e in errors)
+    assert prev is None
+    # свой паттерн — проходит, номер извлекается для последовательности
+    hdr = re.compile(r"^Раздел\s+(\d+)", re.MULTILINE)
+    errors, prev = TC.check_chapter(5, str(d), "polished", comps,
+                                    False, 4, exclusions=[],
+                                    header_regexp=hdr)
+    assert not any("Нет «Глава N» в начале" in e for e in errors)
+    assert not any("последовательность" in e for e in errors)
+    assert prev == 5
+
+
+def test_check_chapter_sequence_greater_than(tmp_path):
+    """Последовательность: первое число первой непустой строки должно
+    быть БОЛЬШЕ предыдущего (не ровно N+1)."""
+    d = tmp_path / "00000_6_x"
+    d.mkdir()
+    comps = [("redacted", 1.0, 0.05)]
+
+    def run(chapter_line, prev):
+        body = chapter_line + "\n\n" + "русский текст. " * 100
+        (d / "polished.txt").write_text(body, encoding="utf-8")
+        (d / "redacted.txt").write_text(body, encoding="utf-8")
+        return TC.check_chapter(6, str(d), "polished", comps,
+                                False, prev, exclusions=[])
+
+    # 7 после 5 — пропуск нумерации НЕ ошибка (только «больше»)
+    errors, prev = run("Глава 7", 5)
+    assert not any("последовательность" in e for e in errors)
+    assert prev == 7
+    # 1 после 5 — ошибка
+    errors, prev = run("Глава 1", 5)
+    assert any("последовательность" in e for e in errors)
+    assert prev == 1
+    # равный номер — ошибка
+    errors, _ = run("Глава 5", 5)
+    assert any("последовательность" in e for e in errors)
+
+
+def test_check_chapter_sequence_off(tmp_path):
+    """--no-sequence-check: сбой последовательности не ошибка, номер
+    не накапливается."""
+    d = tmp_path / "00000_7_x"
+    d.mkdir()
+    body = "Глава 1\n\n" + "русский текст. " * 100
+    (d / "polished.txt").write_text(body, encoding="utf-8")
+    (d / "redacted.txt").write_text(body, encoding="utf-8")
+    comps = [("redacted", 1.0, 0.05)]
+    errors, prev = TC.check_chapter(7, str(d), "polished", comps,
+                                    False, 5, exclusions=[],
+                                    sequence_check=False)
+    assert not any("последовательность" in e for e in errors)
+    assert prev == 5  # номер не накапливается
