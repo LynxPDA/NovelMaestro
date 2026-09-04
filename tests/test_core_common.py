@@ -134,14 +134,14 @@ def test_find_exact_match():
 def test_extract_term_context_cjk():
     text = "李小明走进大殿。殿内站着许多人。李小明微微一笑。"
     ctx = C.extract_term_context(text, "李小明", 300)
-    # самое длинное из найденных: предложение с термином + следующее
-    assert ctx == "李小明走进大殿。殿内站着许多人。"
+    # только предложение с термином, самое длинное из найденных
+    assert ctx == "李小明走进大殿。"
 
 
 def test_extract_term_context_latin():
     text = "John walked into the hall. Many people stood inside. John smiled."
     ctx = C.extract_term_context(text, "John", 300)
-    assert ctx == "John walked into the hall. Many people stood inside."
+    assert ctx == "John walked into the hall."
 
 
 def test_extract_term_context_whitespace_tolerant():
@@ -149,7 +149,7 @@ def test_extract_term_context_whitespace_tolerant():
     # (двойные пробелы/перенос строки) — пробелы схлопываются
     text = "Линь  Шуй шёл домой. Потом Линь\nШуй вернулся."
     ctx = C.extract_term_context(text, "Линь Шуй", 300)
-    assert ctx == "Линь Шуй шёл домой. Потом Линь Шуй вернулся."
+    assert ctx == "Потом Линь Шуй вернулся."
 
 
 def test_extract_term_context_max_len_trim():
@@ -159,10 +159,10 @@ def test_extract_term_context_max_len_trim():
     assert len(ctx) <= 20 and "ТЕРМИН" in ctx
 
 
-def test_extract_term_context_max_len_1_2_sentences():
-    # второе предложение не влезает — берётся одно, длиннее термина
-    text = "Короткое. " + "Длинное предложение " * 8 + "."
-    ctx = C.extract_term_context(text, "Короткое", 50)
+def test_extract_term_context_single_sentence():
+    # соседнее предложение не берётся — только предложение с термином
+    text = "Короткое. Второе предложение влезло бы, но не нужно."
+    ctx = C.extract_term_context(text, "Короткое", 300)
     assert ctx == "Короткое."
 
 

@@ -892,8 +892,8 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "Пусто = голосуют translation/type/pinyin; notes, context, translated_context не голосуют. Пример: notes,context"},
             {"name": "context_max_len", "label": "Максимальная длина \"context\"",
              "type": "number", "default": "300",
-             "help": "СИМВОЛЫ: context извлекается из чанка вокруг термина "
-                      "(1–2 предложения), не от LLM; 0 — выключено"},
+             "help": "СИМВОЛЫ: context извлекается из чанка — предложение с "
+                      "термином, не от LLM; 0 — выключено"},
             {"name": "save_interval", "label": "Интервал сохранения ner.json",
              "type": "number", "default": "10",
              "help": "каждые N чанков — промежуточный снапшот глоссария. "

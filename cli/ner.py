@@ -79,8 +79,7 @@ Return result strictly in JSON format:
     "pinyin": "Pinyin with tones",
     "type": "Person (male/female)/Location/Sect/Technique/Artifact/Stage/Race/Other",
     "translation": "Russian Translation",
-    "notes": "Optional comments",
-    "translated_context": "Literary Russian translation of the sentence where the term appears"
+    "notes": "Optional comments"
   }
 ]
 Rules:
@@ -105,7 +104,6 @@ Your job:
 - Fix type if wrong.
 - Remove entries that are generic words, not real named entities.
 - Add any important entities that were missed.
-- Keep "translated_context" accurate.
 
 Return the corrected JSON array in the SAME format. Output ONLY valid JSON.
 
@@ -701,9 +699,9 @@ def process_chunk_pass2(
 def fill_term_context(ners: list[dict], chunk_text: str, max_len: int) -> None:
     """Заполнить поле context из чанка, а не от LLM.
 
-    1–2 предложения вокруг термина, не длиннее max_len СИМВОЛОВ;
+    Предложение с термином, не длиннее max_len СИМВОЛОВ;
     0 — выключено (поле не трогаем). Термин не найден в чанке —
-    оставляем значение как есть (LLM-значение, если было).
+    поле не заполняется (LLM context больше не возвращает).
     """
     if not max_len or max_len <= 0:
         return
@@ -1429,8 +1427,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--context_max_len", type=int, default=300,
         help=("Максимальная длина поля context, СИМВОЛЫ (0 — выключено; "
-              "context извлекается из чанка вокруг термина, 1–2 "
-              "предложения, не от LLM; по умолчанию: 300)."),
+              "context извлекается из чанка — предложение с термином, "
+              "не от LLM; по умолчанию: 300)."),
     )
     parser.add_argument(
         "--compile_chapters", action="store_true",
@@ -1548,8 +1546,8 @@ def main():
 
     if args.context_max_len > 0:
         _log(logger, logging.INFO,
-             f"📝 context: извлекается из чанка вокруг термина "
-             f"(макс. {args.context_max_len} СИМВОЛОВ, 1–2 предложения)")
+             f"📝 context: извлекается из чанка — предложение с термином "
+             f"(макс. {args.context_max_len} СИМВОЛОВ)")
     else:
         _log(logger, logging.INFO,
              "📝 context: извлечение выключено (--context_max_len 0)")

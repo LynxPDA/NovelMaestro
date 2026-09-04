@@ -410,13 +410,12 @@ def _trim_context(text: str, a: int, b: int, s: int, e: int,
 
 def extract_term_context(text: str, term: str,
                           max_len: int | None = 300) -> str:
-    """Контекст термина из текста: 1–2 предложения вокруг вхождения.
+    """Контекст термина из текста: предложение с термином.
 
     Ищет все вхождения термина (NFC; пробелы между словами — любые),
-    для каждого строит кандидата: предложение с термином + соседнее,
-    если оба влезают в max_len СИМВОЛОВ; из кандидатов выбирается
-    самый длинный. Предложение длиннее max_len — обрезается окном
-    вокруг термина. max_len <= 0/None — выключено (вернёт "").
+    для каждого берёт предложение с термином; из найденных выбирается
+    самое длинное. Длиннее max_len СИМВОЛОВ — обрезается окном вокруг
+    термина. max_len <= 0/None — выключено (вернёт "").
     Границы предложений — 。！？.!?… и перевод строки: работает для
     любого языка. Возвращает "" если термин в тексте не найден.
     """
@@ -441,26 +440,8 @@ def extract_term_context(text: str, term: str,
         base = _collapse_ws(text[s:e])
         if len(base) > max_len:
             candidates.append(_trim_context(text, a, b, s, e, max_len))
-            continue
-        candidates.append(base)
-        # 1–2 предложения: следующее и/или предыдущее, если влезают
-        nxt = _sentence_end(text, e)
-        if nxt > e:
-            cand = _collapse_ws(text[s:nxt])
-            if len(cand) <= max_len:
-                candidates.append(cand)
-        prv = s
-        if s > 0:
-            p = s - 1
-            while p >= 0 and (text[p].isspace()
-                              or _SENT_END_RE.search(text[p])):
-                p -= 1
-            if p >= 0:
-                prv = _sentence_start(text, p + 1)
-        if prv < s:
-            cand = _collapse_ws(text[prv:e])
-            if len(cand) <= max_len:
-                candidates.append(cand)
+        else:
+            candidates.append(base)
     if not candidates:
         return ""
     return max(candidates, key=len)

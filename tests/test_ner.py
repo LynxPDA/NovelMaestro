@@ -168,16 +168,16 @@ def test_merge_into(ner_globals):
 
 
 def test_fill_term_context():
-    """context извлекается из чанка (не от LLM); 0 — выключено;
-    термин не найден — значение LLM сохраняется."""
+    """context извлекается из чанка (не от LLM): предложение с
+    термином; 0 — выключено; термин не найден — поле не заполняется."""
     ners = [{"term": "陈阳", "type": "Person"}]
     NER.fill_term_context(ners, "陈阳走进大殿。殿内站着许多人。", 300)
-    assert ners[0]["context"] == "陈阳走进大殿。殿内站着许多人。"
+    assert ners[0]["context"] == "陈阳走进大殿。"
     # выключено — поле не трогаем
     ners2 = [{"term": "陈阳"}]
     NER.fill_term_context(ners2, "陈阳走进大殿。", 0)
     assert "context" not in ners2[0]
-    # термин не найден в чанке — LLM-значение остаётся
+    # термин не найден в чанке — поле не заполняется (LLM его не даёт)
     ners3 = [{"term": "林水", "context": "старый контекст"}]
     NER.fill_term_context(ners3, "陈阳走进大殿。", 300)
     assert ners3[0]["context"] == "старый контекст"
