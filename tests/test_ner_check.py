@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "cli"))
 from core.common import (  # noqa: E402
     apply_ner_patches, build_ner_batches, filter_ner_items,
     format_ner_record, glossary_body, merge_review_entries,
-    parse_ner_patches, parse_review_doc, review_entry,
+    parse_review_doc, review_entry,
 )
 import ner_check as NC  # noqa: E402
 from conftest import SilentLog  # noqa: E402
@@ -127,20 +127,6 @@ def test_build_ner_batches_split_by_budget():
     assert sorted(flat) == sorted(i["term"] for i in ITEMS)
 
 
-def test_parse_ner_patches_variants():
-    ok = '[{"term": "A", "field": "translation", "old": "а", "new": "б"}]'
-    assert parse_ner_patches(ok) is not None
-    # код-забор и мусор вокруг
-    p = parse_ner_patches("вот:\n```json\n" + ok + "\n```\nконец")
-    assert p and p[0]["term"] == "A"
-    # неверное поле / мусорные элементы отсеиваются
-    bad = '[{"term": "A", "field": "context", "old": "x", "new": "y"}, 5]'
-    assert parse_ner_patches(bad) == []
-    assert parse_ner_patches("просто текст") is None
-    assert parse_ner_patches("") is None
-    assert parse_ner_patches("[]") == []
-
-
 def test_review_entry():
     # legacy-патч → запись со статусом по умолчанию
     e = review_entry({"term": "A", "field": "translation", "old": "а",
@@ -148,9 +134,12 @@ def test_review_entry():
     assert e is not None
     assert e["stage"] == "Весь глоссарий" and e["status"] == "принять"
     assert e["applied"] is False and e["reason"] == "r"
-    # некорректные записи отсеиваются
-    assert review_entry({"term": "A", "field": "context",
+    # некорректные записи отсеиваются (count править нельзя;
+    # context/pinyin/reading — теперь правимые поля)
+    assert review_entry({"term": "A", "field": "count",
                          "old": "", "new": ""}) is None
+    assert review_entry({"term": "A", "field": "context",
+                         "old": "", "new": ""}) is not None
     assert review_entry({"term": "", "field": "translation"}) is None
     assert review_entry(5) is None
     # полная запись: регистр/пробелы статуса, field в lower
@@ -260,8 +249,8 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
     calls = []
-    resp = ('```json\n[{"term": "林凡", "field": "translation", '
-            '"old": "Линь Фан", "new": "Лин Фань", "reason": "pinyin"}]\n```')
+    resp = ('```json\n[{"term": "林凡", "translation": "Лин Фань", '
+            '"reason": "pinyin"}]\n```')
     _mock_stream(monkeypatch, resp, calls)
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
                   "--host", "http://x", "--model", "m"])
@@ -271,6 +260,8 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     # в запросе записи идут по count по убыванию
     first = calls[0]
     assert first.index("青云宗") < first.index("火球术") < first.index("林凡")
+    # в промпте перечислены проверяемые поля (term не входит)
+    assert "Проверяемые поля:** type, translation" in first
     # префикс «глоссарий уже проверен» — только в типовых проходах
     prefix = NC.TYPES_STAGE_PREFIX.strip()
     assert prefix not in calls[0]
@@ -282,6 +273,9 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     e = doc["entries"][0]
     assert e["stage"] == "Весь глоссарий"
     assert e["status"] == "принять" and e["applied"] is False
+    # diff с ner.json: old — текущее значение, правка по translation
+    assert e["field"] == "translation"
+    assert e["old"] == "Линь Фан" and e["new"] == "Лин Фань"
     assert not (tmp_path / "ner_patches.json").exists()
     params = doc["params"]
     assert params["бюджет батча"] == 196608
@@ -294,21 +288,25 @@ def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
     """Этап 2 дописывает правки в тот же файл; решения человека живут."""
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
-    resp_whole = ('[{"term": "林凡", "field": "translation", '
-                  '"old": "Линь Фан", "new": "Лин Фань", "reason": "p"}]')
-    resp_skill = ('[{"term": "林凡", "field": "translation", '
-                  '"old": "Линь Фан", "new": "Лин Фань", "reason": "p"},'
-                  '{"term": "火球术", "field": "translation", '
-                  '"old": "Огненный шар", "new": "Шар огня", '
+    resp_whole = ('[{"term": "林凡", "translation": "Лин Фань", '
+                  '"reason": "p"}]')
+    resp_skill = ('[{"term": "林凡", "translation": "Лин Фань", '
+                  '"reason": "p"},'
+                  '{"term": "火球术", "translation": "Шар огня", '
                   '"reason": "p2"}]')
 
     calls = []
 
     def fake(base_url, model, messages, **kw):
         calls.append(messages[0]["content"])
-        # этап 2, проход Skill (3-й запрос): повтор старой правки + новая
-        if len(calls) >= 3:
+        content = messages[0]["content"]
+        # whole (в запросе весь глоссарий): только 林凡
+        if "青云宗" in content:
+            return resp_whole, None
+        # проход Skill (в запросе только 火球术): повтор старой + новая
+        if "火球术" in content:
             return resp_skill, None
+        # проход Person (male): повтор старой правки
         return resp_whole, None
     monkeypatch.setattr(NC, "stream_chat_completion", fake)
 
@@ -432,8 +430,8 @@ def test_ner_check_apply_legacy_patches_array(tmp_path, monkeypatch):
 def test_ner_check_auto_apply_whole(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
-    resp = ('[{"term": "林凡", "field": "translation", '
-            '"old": "Линь Фан", "new": "Лин Фань", "reason": "p"}]')
+    resp = ('[{"term": "林凡", "translation": "Лин Фань", '
+            '"reason": "p"}]')
     calls = []
     _mock_stream(monkeypatch, resp, calls)
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
@@ -457,8 +455,7 @@ def test_ner_check_auto_apply_whole_only(tmp_path, monkeypatch):
 
     def fake(base_url, model, messages, **kw):
         calls.append(messages[0]["content"])
-        return ('[{"term": "林凡", "field": "translation", '
-                '"old": "Линь Фан", "new": "Лин Фань", '
+        return ('[{"term": "林凡", "translation": "Лин Фань", '
                 '"reason": "p"}]'), None
 
     monkeypatch.setattr(NC, "stream_chat_completion", fake)
@@ -533,8 +530,8 @@ def test_ner_check_threads_parallel_types(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
     calls = []
-    resp = ('[{"term": "林凡", "field": "translation", '
-            '"old": "Линь Фан", "new": "Лин Фань", "reason": "p"}]')
+    resp = ('[{"term": "林凡", "translation": "Лин Фань", '
+            '"reason": "p"}]')
     _mock_stream(monkeypatch, resp, calls)
     rc = NC.main(["--input", "ner.json", "--passes", "types",
                   "--threads", "2", "--host", "http://x",
@@ -699,6 +696,55 @@ def test_ner_check_rag_patches_differ(tmp_path, monkeypatch):
     assert e["old"] == "Person (male)" and e["new"] == "Person (female)"
 
 
+def test_ner_check_rag_filters_other_terms(tmp_path, monkeypatch):
+    """RAG: LLM вернула уточнения по терминам, которых нет в списке
+    запроса — отбрасываются (warning); правки — только по запрошенному."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    (tmp_path / "novel.txt").write_text(
+        "Линь Фан вошёл в зал. " * 50, encoding="utf-8")
+    calls = []
+    resp = ('[{"term": "林凡", "type": "Person (female)", '
+            '"translation": "Линь Фан", "reason": "p"},'
+            '{"term": "青云宗", "type": "Location (sect)", '
+            '"translation": "Секта Цинъюнь", "reason": "p2"}]')
+    _mock_stream(monkeypatch, resp, calls)
+    rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                  "--rag_terms", "林凡",
+                  "--rag_novel", "novel.txt",
+                  "--host", "http://x", "--model", "m"])
+    assert rc == 0
+    doc = json.loads((tmp_path / "ner_review.json")
+                     .read_text(encoding="utf-8"))
+    entries = doc["entries"]
+    assert len(entries) == 1  # 青云宗 — не из списка запроса, отброшен
+    assert entries[0]["term"] == "林凡" and entries[0]["field"] == "type"
+
+
+def test_ner_check_whole_multi_field_diff(tmp_path, monkeypatch):
+    """whole: одна исправленная запись от LLM с двумя изменёнными
+    полями → два патча (type + translation) у одного термина."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    resp = ('[{"term": "林凡", "type": "Person (female)", '
+            '"translation": "Лин Фань", "reason": "p"}]')
+    calls = []
+    _mock_stream(monkeypatch, resp, calls)
+    rc = NC.main(["--input", "ner.json", "--passes", "whole",
+                  "--host", "http://x", "--model", "m"])
+    assert rc == 0
+    doc = json.loads((tmp_path / "ner_review.json")
+                     .read_text(encoding="utf-8"))
+    entries = doc["entries"]
+    assert len(entries) == 2
+    by_field = {e["field"]: e for e in entries}
+    assert set(by_field) == {"type", "translation"}
+    assert by_field["type"]["old"] == "Person (male)"
+    assert by_field["type"]["new"] == "Person (female)"
+    assert by_field["translation"]["old"] == "Линь Фан"
+    assert by_field["translation"]["new"] == "Лин Фань"
+
+
 def test_ner_check_rag_missing_files(tmp_path, monkeypatch):
     """RAG: нет файла книги / пустой список терминов — rc=1, без LLM."""
     monkeypatch.chdir(tmp_path)
@@ -716,22 +762,24 @@ def test_ner_check_rag_missing_files(tmp_path, monkeypatch):
 
 
 def test_ner_check_rag_lookup_brackets():
-    """RAG: _ner_lookup — точное совпадение (NFC), затем вариант без
+    """ner_item_lookup: точное совпадение (NFC), затем вариант без
     скобок 【】; нет записи — None."""
+    from core.common import ner_item_lookup
     items = {"无畏心": {"term": "无畏心"},
              "白虎仙君": {"term": "白虎仙君"}}
-    hit = NC._ner_lookup(items, "无畏心")
+    hit = ner_item_lookup(items, "无畏心")
     assert hit is not None and hit["term"] == "无畏心"
-    hit = NC._ner_lookup(items, "【无畏心】")
+    hit = ner_item_lookup(items, "【无畏心】")
     assert hit is not None and hit["term"] == "无畏心"
-    hit = NC._ner_lookup(items, "白虎仙君")
+    hit = ner_item_lookup(items, "白虎仙君")
     assert hit is not None and hit["term"] == "白虎仙君"
-    assert NC._ner_lookup(items, "虎珀仙君") is None
+    assert ner_item_lookup(items, "虎珀仙君") is None
 
 
 def test_ner_check_rag_patches_warn_hint():
-    """RAG: вариант LLM в скобках находит запись и даёт патч с
-    каноническим term; вариант без записи — warning с близкими."""
+    """diff_ner_records: вариант LLM в скобках находит запись и даёт
+    патч с каноническим term; вариант без записи — warning с близкими."""
+    from core.common import diff_ner_records
     items = {"无畏心": {"term": "无畏心", "type": "Person",
                         "translation": "X"},
              "白虎仙君": {"term": "白虎仙君", "type": "Person",
@@ -747,13 +795,15 @@ def test_ner_check_rag_patches_warn_hint():
     lg = L()
     found = [{"term": "【无畏心】", "type": "Person (male)",
               "translation": "X", "reason": "p"}]
-    entries = NC._rag_patches(found, items, lg)
+    entries = diff_ner_records(found, items, ["type", "translation"], lg)
     assert len(entries) == 1
     assert entries[0]["term"] == "无畏心"  # канонический, без скобок
+    assert entries[0]["field"] == "type"
+    assert entries[0]["old"] == "Person" and entries[0]["new"] == "Person (male)"
     assert not lg.warns
     found2 = [{"term": "虎珀仙君", "type": "Person",
                "translation": "Z", "reason": "p"}]
-    assert not NC._rag_patches(found2, items, lg)
+    assert not diff_ner_records(found2, items, ["type", "translation"], lg)
     assert any("白虎仙君" in w for w in lg.warns)
 
 

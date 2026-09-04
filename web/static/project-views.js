@@ -2694,7 +2694,8 @@ function viewProject(section, name, tab) {
         document.body.append(modal);
         newIn.focus();
       }
-      function entryRow(e, i) {
+      function entryRow(e, i, opts) {
+        const cont = opts && opts["cont"]; // продолжение группы термина
         const applied = e["applied"];
         const accepted = e["status"] === "принять";
         const rejected = e["status"] === "отклонить";
@@ -2748,11 +2749,20 @@ function viewProject(section, name, tab) {
         );
         return h(
           "div",
-          { class: "rv-row" + (rejected ? " rv-row-reject" : "") },
+          {
+            class:
+              "rv-row" +
+              (rejected ? " rv-row-reject" : "") +
+              (cont ? " rv-row-cont" : ""),
+          },
           h(
             "div",
             { class: "rv-row-head" },
-            h("span", { class: "rv-row-title" }, entryHead(e)),
+            h(
+              "span",
+              { class: "rv-row-title" },
+              cont && kind === "ner" ? e["field"] || "?" : entryHead(e),
+            ),
             badge,
           ),
           h(
@@ -2861,8 +2871,18 @@ function viewProject(section, name, tab) {
               "div",
               { class: "rv-list" },
               // индекс записи — глобальный (page * RV_PAGE + i):
-              // кнопки правят запись по позиции в parsed.entries
-              slice.map((e, i) => entryRow(e, page * RV_PAGE + i)),
+              // кнопки правят запись по позиции в parsed.entries;
+              // ner: правки одного термина группируются — заголовок
+              // (термин · поле) только у первой, у остальных — поле
+              slice.map((e, i) => {
+                const idx = page * RV_PAGE + i;
+                const prev = parsed.entries[idx - 1];
+                const cont =
+                  kind === "ner" &&
+                  prev != null &&
+                  prev["term"] === e["term"];
+                return entryRow(e, idx, { cont });
+              }),
             ),
             pages > 1
               ? h(

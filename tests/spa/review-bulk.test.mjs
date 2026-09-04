@@ -103,6 +103,7 @@ const DOC = {
 const CONTENT = JSON.stringify(DOC, null, 2);
 
 const putBodies = [];
+let REVIEW_CONTENT = CONTENT;
 async function api(path, opts = {}) {
   const p = path.split("?")[0];
   if ((opts.method || "GET") === "PUT") {
@@ -110,7 +111,8 @@ async function api(path, opts = {}) {
     return { ok: true };
   }
   if (p === "/ner/review") {
-    return { exists: true, content: CONTENT, size: CONTENT.length };
+    return { exists: true, content: REVIEW_CONTENT,
+             size: REVIEW_CONTENT.length };
   }
   if (p === "/translate_check_llm/review") {
     return { exists: false, content: "", size: 0 };
@@ -201,6 +203,38 @@ test("«Отклонить все»: работает по тому же при�
   assert.equal(saved[0]["status"], "отклонить"); // была «принять»
   assert.equal(saved[3]["status"], "отклонить"); // была пустая
   assert.equal(saved[2]["applied"], true);       // применённая — нетронута
+});
+
+test("правки одного термина группируются: заголовок термина только у первой", async () => {
+  REVIEW_CONTENT = JSON.stringify({
+    created: "t",
+    updated: "t",
+    input: "ner.json",
+    entries: [
+      { term: "林凡", field: "type", old: "A", new: "B",
+        status: "", applied: false },
+      { term: "林凡", field: "translation", old: "X", new: "Y",
+        status: "", applied: false },
+      { term: "青云宗", field: "type", old: "C", new: "D",
+        status: "", applied: false },
+    ],
+  }, null, 2);
+  const page = await openReview();
+  const rows = [];
+  (function walk(n) {
+    for (const c of n.children || []) walk(c);
+    if ((n.className || "").split(/\s+/).includes("rv-row")) rows.push(n);
+  })(page);
+  assert.equal(rows.length, 3);
+  // вторая правка 林凡 — продолжение группы, третья (другой термин) — нет
+  assert.ok(!(rows[0].className || "").includes("rv-row-cont"));
+  assert.ok((rows[1].className || "").includes("rv-row-cont"));
+  assert.ok(!(rows[2].className || "").includes("rv-row-cont"));
+  // заголовок: у первой «термин · поле», у продолжения — только поле
+  const titleOf = (row) => row.children[0].children[0].children[0].textContent;
+  assert.equal(titleOf(rows[0]), "林凡 · type");
+  assert.equal(titleOf(rows[1]), "translation");
+  assert.equal(titleOf(rows[2]), "青云宗 · type");
 });
 
 test("все статусы уже установлены — PUT не уходит", async () => {

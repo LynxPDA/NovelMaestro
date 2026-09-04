@@ -1338,6 +1338,19 @@ input[type="number"] {
 .rv-row-reject {
   opacity: 0.75;
 }
+/* продолжение группы правок одного термина: без рамки сверху —
+   визуально связано с первой строкой группы */
+.rv-row-cont {
+  margin-top: -6px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-top: none;
+  padding-top: 4px;
+}
+.rv-row-cont .rv-row-title {
+  font-weight: 500;
+  opacity: 0.8;
+}
 .rv-row-head {
   display: flex;
   align-items: center;

@@ -83,6 +83,7 @@ from core.common import (  # noqa: E402
     build_fts_index,
     build_ner_batches,
     compile_chapter_text,
+    diff_ner_records,
     emit_progress,
     even_sample,
     find_env_file,
@@ -95,8 +96,8 @@ from core.common import (  # noqa: E402
     glossary_body,
     load_prompt,
     merge_review_entries,
+    ner_item_lookup,
     parse_dotenv,
-    parse_ner_patches,
     parse_rag_suggestions,
     parse_review_doc,
     print_env_help,
@@ -120,30 +121,41 @@ TYPES_STAGE_PREFIX = (
     "группы записей.\n\n")
 
 DEFAULT_NER_RAG_PROMPT = """\
-Ты — профессиональный редактор и локализатор. Ниже дан список терминов
-и релевантные фрагменты книги, где эти термины встречаются.
+Ты — профессиональный редактор и локализатор. Ниже дан ОДИН термин
+и релевантные фрагменты книги, где он встречается.
 
-**Твоя задача:** для каждого термина определи/уточни по фрагментам:
-- тип сущности (Person/Location/Organisation/Technique/Artifact/Creature/
-  Stage/Material/Event/… — с полом в скобках для персонажей, напр.
-  Person (male));
-- корректный перевод и контекст употребления.
+**Твоя задача:** уточни ТОЛЬКО запрошенный термин: исправь значения
+выбранных полей, если по фрагментам видно, что текущее значение
+неверно. Неизменённые поля скопируй ДОСЛОВНО.
 
-Отвечай ТОЛЬКО JSON-массивом без markdown-заборов:
-[{"term": "<термин>", "type": "<тип>", "translation": "<перевод>", "reason": "<краткое обоснование по фрагментам>"}]
-Не выдумывай: если по фрагментам тип/перевод не определить — пропусти
-термин (не включай в массив).
+**Проверяемые поля:** {fields}
 
-## ТЕРМИНЫ И ФРАГМЕНТЫ
+### ФОРМАТ ОТВЕТА
+Верни ТОЛЬКО JSON-массив без markdown-заборов — одна запись (или
+пустой массив, если уточнений нет):
+[{"term": "<термин дословно>", "<поле>": "<исправленное значение>", ..., "reason": "<обоснование по фрагментам>"}]
+
+### ВАЖНЫЕ ПРАВИЛА
+1. Термин (term) — идентификатор записи: менять его ЗАПРЕЩЕНО.
+2. Возвращай ТОЛЬКО запрошенный термин — записи по другим терминам
+   не включай.
+3. Поля можно править только из списка «Проверяемые поля»; остальные
+   поля записи не возвращай.
+4. Не выдумывай: если по фрагментам правка не обоснована — верни
+   пустой массив.
+
+## ТЕРМИН И ФРАГМЕНТЫ
 
 {rag_block}
 """
 
 
 DEFAULT_NER_CHECK_PROMPT = """\
-Ты — профессиональный редактор и локализатор. Ниже приведён глоссарий перевода (термины, типы, переводы, контекст, примечания).
+Ты — профессиональный редактор и локализатор. Ниже приведён глоссарий перевода (термины с выбранными полями).
 
-**Твоя задача:** Провести полный анализ глоссария и выявить все ошибки, нарушения логики лора и непоследовательность.
+**Твоя задача:** провести полный анализ глоссария и выявить ошибки,
+нарушения логики лора и непоследовательность; вернуть ИСПРАВЛЕННЫЕ
+записи — те, в которые ты внёс правки в одно или несколько полей.
 
 Оценивай глоссарий по следующим 4 критериям:
 
@@ -165,15 +177,19 @@ DEFAULT_NER_CHECK_PROMPT = """\
 - Непоследовательное использование заглавных и строчных букв (в титулах, названиях навыков, артефактов и топонимов).
 - Разнобой в написании числительных, использовании кавычек, дефисов и пробелов.
 
+**Проверяемые поля:** {fields}
+
 ### ФОРМАТ ОТВЕТА
-Верни ТОЛЬКО JSON-массив без markdown-заборов и пояснений. Каждый элемент:
-{"term": "<term записи дословно>", "field": "translation|type|notes", "old": "<текущее значение поля дословно>", "new": "<исправленное значение>", "reason": "<краткое обоснование>"}
-Если ошибок нет — верни пустой массив: []
+Верни ТОЛЬКО JSON-массив без markdown-заборов и пояснений. Каждый элемент — исправленная запись:
+{"term": "<термин дословно>", "<поле>": "<исправленное значение>", ..., "reason": "<краткое обоснование>"}
+Возвращай ТОЛЬКО записи с изменениями; без изменений — не включай.
+Если правок нет — верни пустой массив: []
 
 ### ВАЖНЫЕ ПРАВИЛА
-1. «old» копируй из записи ДОСЛОВНО (регистр, пробелы, пунктуация) — правка применяется только при точном совпадении.
-2. «field» — только одно из: translation, type, notes.
-3. Системная проблема — отдельный патч на каждый затронутый термин.
+1. Термин (term) — идентификатор записи: менять его ЗАПРЕЩЕНО.
+2. Поля можно править только из списка «Проверяемые поля»; незатронутые
+   поля скопируй в запись ДОСЛОВНО.
+3. Системная проблема — правь все затронутые записи, по одной на термин.
 4. Без удалений: не предлагай удалять дублирующие записи. Для дублей укажи единый перевод.
 5. Строгость: не выдумывай ошибки. Допустимый вариант, не нарушающий консистентность, — пропускай.
 
@@ -364,10 +380,17 @@ def get_prompt(args, logger) -> str:
     return text
 
 
-def render_prompt(prompt_tpl: str, body: str) -> str:
+def render_prompt(prompt_tpl: str, body: str, fields=None) -> str:
+    """Подстановка плейсхолдеров: {glossary}/{rag_block} — тело,
+    {fields} — список проверяемых полей (term не включается)."""
+    fields_line = ", ".join(fields) if fields else "-"
     if "{glossary}" in prompt_tpl:
-        return prompt_tpl.replace("{glossary}", body)
-    return prompt_tpl.rstrip() + "\n\n## ГЛОССАРИЙ\n\n" + body
+        tpl = prompt_tpl.replace("{glossary}", body)
+    elif "{rag_block}" in prompt_tpl:
+        tpl = prompt_tpl.replace("{rag_block}", body)
+    else:
+        tpl = prompt_tpl.rstrip() + "\n\n## ГЛОССАРИЙ\n\n" + body
+    return tpl.replace("{fields}", fields_line)
 
 
 def run_pass_tasks(title, items, prompt_tpl, args, logger):
@@ -381,13 +404,16 @@ def run_pass_tasks(title, items, prompt_tpl, args, logger):
 
 def run_batch(task, prompt_tpl, args, base_url, api_key, model, logger):
     """Один батч проверки (запускается в потоке). Возвращает
-    (title, patches|None) — None при ошибке LLM/парсинга."""
+    (title, records|None) — исправленные записи от LLM; None при
+    ошибке LLM/парсинга. Diff с ner.json — в do_check (нужен
+    полный items_by_term)."""
     title, batch = task
-    fields = [f.strip() for f in args.fields.split(",") if f.strip()]
+    fields = [f.strip() for f in args.fields.split(",") if f.strip()
+              if f.strip() != "term"]
     body = glossary_body(batch, fields)
     tpl = (prompt_tpl if title == "Весь глоссарий"
            else TYPES_STAGE_PREFIX + prompt_tpl)
-    user_msg = render_prompt(tpl, body)
+    user_msg = render_prompt(tpl, body, fields)
     logger.info(f"  батч: {len(batch)} записей, "
                 f"{len(user_msg)} символов запроса")
     text, err = stream_chat_completion(
@@ -404,11 +430,11 @@ def run_batch(task, prompt_tpl, args, base_url, api_key, model, logger):
     if err:
         logger.error(f"  ❌ LLM: {err}")
         return title, None
-    found = parse_ner_patches(text, logger)
+    found = parse_rag_suggestions(text, logger, fields)
     if found is None:
         logger.error("  ❌ Ответ не распарсился (см. лог выше).")
         return title, None
-    logger.info(f"  ✔ Предложено правок: {len(found)}")
+    logger.info(f"  ✔ Исправленных записей: {len(found)}")
     return title, found
 
 
@@ -442,7 +468,7 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
     selected = {f.strip() for f in fields} if fields else None
     lines = []
     for term in terms:
-        item = _ner_lookup(items_by_term, term)
+        item = ner_item_lookup(items_by_term, term)
         translation = (item or {}).get("translation") or ""
         type_str = (item or {}).get("type") or "?"
         lines.append(f"--- {term} (тип: {type_str}) ---")
@@ -479,57 +505,8 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
     return "\n".join(lines)
 
 
-def _ner_lookup(items_by_term, term):
-    """Запись ner.json по термину: точное совпадение (NFC), затем без
-    обёрток-скобок 【】「」『』() — LLM часто возвращает вариант с
-    кавычками. Нет записи — None."""
-    nfc = unicodedata.normalize("NFC", str(term))
-    item = items_by_term.get(nfc)
-    if item is not None:
-        return item
-    stripped = re.sub(r"[【】「」『』()（）]", "", nfc)
-    if stripped and stripped != nfc:
-        item = items_by_term.get(stripped)
-        if item is not None:
-            return item
-    return None
-
-
-def _rag_patches(found, items_by_term, logger) -> list[dict]:
-    """RAG-ответ — уточнение type/translation: превращаем в патчи,
-    сверяя с текущими значениями в ner.json (old → new)."""
-    entries = []
-    for p in found:
-        term = p.get("term", "")
-        item = _ner_lookup(items_by_term, term)
-        if item is None:
-            # LLM вернула вариант, которого нет в глоссарии (скобки,
-            # слияние имён, опечатка) — правку применить не к чему;
-            # показываем близкие записи, чтобы было видно почему
-            close = difflib.get_close_matches(
-                unicodedata.normalize("NFC", term),
-                list(items_by_term), n=3, cutoff=0.4)
-            hint = f" (похожие: {', '.join(close)})" if close else ""
-            logger.warning(f"  ⚠ Термин {term!r} не найден в ner.json — "
-                           f"пропущен.{hint}")
-            continue
-        for field in ("type", "translation"):
-            new = str(p.get(field, "")).strip()
-            old = str(item.get(field, "")).strip()
-            if not new or new == old:
-                continue
-            # term — канонический из ner.json (не вариант LLM со скобками)
-            e = review_entry({"term": item["term"], "field": field,
-                              "old": old, "new": new,
-                              "reason": p.get("reason", "")},
-                             stage="RAG")
-            if e:
-                entries.append(e)
-    return entries
-
-
 def _rag_query(term, user_msg, args, base_url, api_key, model, logger,
-               items_by_term):
+               items_by_term, fields):
     """Один термин — один LLM-запрос (блок собран заранее, FTS5-БД
     не трогаем из воркера). Возвращает (entries, ok)."""
     logger.info(f"  {term}: запрос {len(user_msg)} символов "
@@ -548,15 +525,28 @@ def _rag_query(term, user_msg, args, base_url, api_key, model, logger,
     if err:
         logger.error(f"  ❌ {term}: LLM: {err}")
         return [], False
-    found = parse_rag_suggestions(text_out, logger)
+    found = parse_rag_suggestions(text_out, logger, fields)
     if found is None:
         logger.error(f"  ❌ {term}: ответ не распарсился (см. лог выше).")
         return [], False
-    # «определено N» — уточнений, которые LLM вернула по фрагментам;
-    # часть может быть пропущена (нет записи в ner.json / совпадает)
-    entries = _rag_patches(found, items_by_term, logger)
-    logger.info(f"  ✔ {term}: определено {len(found)} "
-                f"(правок: {len(entries)})")
+    # строго по запрошенному термину: записи по другим терминам —
+    # шум (LLM «уточняет» всё, что видит во фрагментах), отбрасываем
+    wanted = unicodedata.normalize("NFC", term)
+    records = []
+    for rec in found:
+        t = unicodedata.normalize(
+            "NFC", str(rec.get("term", "")).strip())
+        if t != wanted:
+            logger.warning(f"  ⚠ Термин {rec.get('term')!r} — не из "
+                           f"списка запроса, пропущен.")
+            continue
+        records.append(rec)
+    # diff по выбранным полям → review-записи (stage=RAG)
+    patches = diff_ner_records(records, items_by_term, fields, logger)
+    entries = [e for p in patches
+               if (e := review_entry(p, stage="RAG"))]
+    logger.info(f"  ✔ {term}: записей {len(found)}, "
+                f"правок: {len(entries)}")
     return entries, True
 
 
@@ -650,7 +640,7 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
     def worker(term, user_msg):
         nonlocal done, failures
         res, ok = _rag_query(term, user_msg, args, base_url, api_key,
-                             model, logger, items_by_term)
+                             model, logger, items_by_term, fields)
         with lock:
             entries.extend(res)
             if not ok:
@@ -705,6 +695,11 @@ def do_check(args, logger) -> int:
     if not items:
         sys.exit("❌ Нет записей после фильтрации.")
     logger.info(f"📊 После фильтрации: {len(items)} записей.")
+    # эталон для diff: ВСЕ записи ner.json (не только отфильтрованные)
+    items_by_term = {unicodedata.normalize("NFC", i.get("term", "")): i
+                     for i in data}
+    check_fields = [f.strip() for f in args.fields.split(",")
+                    if f.strip() and f.strip() != "term"]
 
     prompt_tpl = get_prompt(args, logger)
     params = {"input": args.input,
@@ -796,7 +791,7 @@ def do_check(args, logger) -> int:
     emit_progress(0, total, "Проверка глоссария")
     if web_progress_enabled():
         logger.info(f"📊 Прогресс: 0/{total}")
-    results = {}  # title -> list[patches]
+    results = {}  # title -> list[records] (исправленные записи от LLM)
     failures = {}  # title -> число упавших батчей
     done = 0
 
@@ -833,10 +828,10 @@ def do_check(args, logger) -> int:
         if title not in seen_titles:
             seen_titles.append(title)
     for title in seen_titles:
-        patches = results.get(title)
+        records = results.get(title)
         failed = failures.get(title, 0)
         n_batches = sum(1 for t, _ in stage_tasks if t == title)
-        if patches is None and failed >= n_batches:
+        if records is None and failed >= n_batches:
             logger.error(f"❌ Этап «{title}» не завершился "
                          f"(LLM/парсинг): {failed}/{n_batches} батчей.")
             if args.auto_apply:
@@ -846,7 +841,14 @@ def do_check(args, logger) -> int:
         if failed:
             logger.warning(f"⚠ Этап «{title}»: {failed}/{n_batches} "
                            f"батчей не завершились — пропущены.")
-        collect(title, patches or [])
+        # diff с эталоном: LLM вернула исправленные записи — правки
+        # (old→new) считаем здесь, сверяя с ner.json
+        records = records or []
+        patches = diff_ner_records(records, items_by_term, check_fields,
+                                   logger)
+        logger.info(f"  ✔ «{title}»: записей от LLM {len(records)}, "
+                    f"правок: {len(patches)}")
+        collect(title, patches)
         if args.auto_apply:
             auto_apply()
 

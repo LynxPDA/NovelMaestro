@@ -23,10 +23,13 @@ NER: load_ner_data / find_relevant_ner (поиск по term+aliases в ориг
 ner_check: filter_ner_items (порог count + типы) / format_ner_record /
   glossary_body / build_ner_batches (count по убыванию, бюджет СИМВОЛЫ;
   fields — какие поля записи передавать LLM, None = все, term — всегда) /
-  parse_ner_patches (JSON-патчи LLM {term,field,old,new,reason},
-  field ∈ translation|type|notes) /
-  parse_rag_suggestions (RAG-уточнения LLM {term,type?,translation?,
-  reason?} — список dict) /
+  parse_rag_suggestions (текст LLM → список записей {term,<поле>,reason};
+  fields — разрешённые поля, term — всегда) /
+  ner_item_lookup (поиск записи по term: NFC, затем вариант без скобок
+  【】「」『』()（）; нет — None) /
+  diff_ner_records (записи LLM ↔ ner.json → сырые патчи
+  {term,field,old,new,reason}: NFC, list/dict через json.dumps,
+  нет записи — warning с близкими терминами) /
 FTS5 (RAG/wiki): build_fts_index (текст → in-memory sqlite, нарезка
   по абзацам с fallback по chunk_size) / fts_escape / fts_search_all /
   fts_search_first / fts_search_ids_all (все — без BM25, в порядке
@@ -36,7 +39,7 @@ FTS5 (RAG/wiki): build_fts_index (текст → in-memory sqlite, нарезк�
   поля английские: stage/status принять|отклонить/applied/old/new,
   накопление по этапам, дедуп по term+field+old+new) /
   apply_ner_patches (status + applied, дубли термина по совпавшему
-  old, сверка old по NFC)
+  old, сверка old по NFC; list/dict-поля new — через json.loads)
 translate_check_llm: fix_entry (ошибка LLM {chapter,fragment,corrected,type,reason}
   → запись review: stage/chapter/file/type/old/new/reason/status/applied, NFC) /
   merge_fix_entries (накопление без затирания, дедуп по chapter+old+new) /

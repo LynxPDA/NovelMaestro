@@ -645,10 +645,27 @@ def collect_gender_names(text, ner_data, threshold=0.75, ngram_size=3,
 # и review-файл для человека (статусы принять/отклонить, накопление
 # по этапам, флаги применения).
 # ══════════════════════════════════════════════════════════════════════
-NER_PATCH_FIELDS = ("translation", "type", "notes")
+NER_PATCH_FIELDS = ("type", "translation", "pinyin", "reading",
+                    "context", "translated_context", "notes", "aliases")
 REVIEW_ACCEPT = "принять"
 REVIEW_REJECT = "отклонить"
 REVIEW_STATUSES = (REVIEW_ACCEPT, REVIEW_REJECT)
+
+
+def ner_item_lookup(items_by_term, term):
+    """Запись ner.json по термину: точное совпадение (NFC), затем
+    вариант без обёрток-скобок 【】「」『』() — LLM часто возвращает
+    термин с кавычками. Нет записи — None."""
+    nfc = unicodedata.normalize("NFC", str(term))
+    item = items_by_term.get(nfc)
+    if item is not None:
+        return item
+    stripped = re.sub(r"[【】「」『』()（）]", "", nfc)
+    if stripped and stripped != nfc:
+        item = items_by_term.get(stripped)
+        if item is not None:
+            return item
+    return None
 
 
 def _int_count(value) -> int:
@@ -744,51 +761,14 @@ def build_ner_batches(items, budget, fields=None):
     return batches
 
 
-def parse_ner_patches(text, logger=None):
-    """Разбор ответа LLM: JSON-массив патчей
-    [{term, field, old, new, reason?}]. Терпим к код-заборам и мусору
-    вокруг JSON. Возвращает список патчей (dict) или None, если не
-    распарсилось. field нормализуется (lower) и проверяется по
-    NER_PATCH_FIELDS."""
-    s = (text or "").strip()
-    s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
-    s = re.sub(r"\s*```$", "", s)
-    start, end = s.find("["), s.rfind("]")
-    if start == -1 or end <= start:
-        if logger:
-            logger.warning("⚠ В ответе LLM не найден JSON-массив.")
-        return None
-    try:
-        raw = json.loads(s[start:end + 1])
-    except json.JSONDecodeError as e:
-        if logger:
-            logger.warning(f"⚠ JSON патчей не распарсился: {e}")
-        return None
-    if not isinstance(raw, list):
-        return None
-    patches = []
-    for p in raw:
-        if not isinstance(p, dict):
-            continue
-        term = str(p.get("term", "")).strip()
-        field = str(p.get("field", "")).strip().lower()
-        if not term or field not in NER_PATCH_FIELDS:
-            continue
-        patches.append({
-            "term": unicodedata.normalize("NFC", term),
-            "field": field,
-            "old": unicodedata.normalize("NFC", str(p.get("old", ""))),
-            "new": unicodedata.normalize("NFC", str(p.get("new", ""))),
-            "reason": str(p.get("reason", "")).strip(),
-        })
-    return patches
-
-
-def parse_rag_suggestions(text, logger=None):
-    """Разбор ответа LLM в RAG-режиме: JSON-массив уточнений
-    [{term, type?, translation?, reason?}]. Терпим к код-заборам.
-    Возвращает список dict (term всегда, type/translation — если есть)
-    или None, если JSON не распарсился."""
+def parse_rag_suggestions(text, logger=None, fields=None):
+    """Разбор ответа LLM: JSON-массив исправленных записей
+    [{term, <выбранные поля>?, reason?}]. Терпим к код-заборам.
+    fields — какие поля извлекать из ответа (None = type/translation).
+    Возвращает список dict (term всегда, поля — если есть) или None,
+    если JSON не распарсился."""
+    allowed = [f.strip().lower() for f in (fields or ("type", "translation"))
+               if f and str(f).strip().lower() != "term"]
     s = (text or "").strip()
     s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
     s = re.sub(r"\s*```$", "", s)
@@ -814,12 +794,57 @@ def parse_rag_suggestions(text, logger=None):
             continue
         item = {"term": term,
                 "reason": str(p.get("reason", "")).strip()}
-        for field in ("type", "translation"):
+        for field in allowed:
             v = str(p.get(field, "")).strip()
             if v:
                 item[field] = unicodedata.normalize("NFC", v)
         out.append(item)
     return out
+
+
+def diff_ner_records(records, items_by_term, fields, logger=None):
+    """Сверка исправленных записей LLM с ner.json → патчи (сырые
+    {term, field, old, new, reason}). records — [{term, <поля>, reason}];
+    items_by_term — term → запись ner.json; fields — проверяемые поля
+    (term — идентификатор, НЕ правится; поле вне NER_PATCH_FIELDS
+    пропускается). Для каждого поля, отличающегося от текущего
+    значения (NFC), создаётся патч; term в патче — канонический из
+    ner.json. Запись без совпадения — warning с близкими терминами."""
+    entries = []
+    for rec in records or []:
+        term = unicodedata.normalize(
+            "NFC", str(rec.get("term", "")).strip())
+        if not term:
+            continue
+        item = ner_item_lookup(items_by_term, term)
+        if item is None:
+            close = difflib.get_close_matches(
+                term, list(items_by_term), n=3, cutoff=0.4)
+            hint = f" (похожие: {', '.join(close)})" if close else ""
+            if logger:
+                logger.warning(f"  ⚠ Термин {term!r} не найден в "
+                               f"ner.json — пропущен.{hint}")
+            continue
+        for field in fields or ():
+            field = str(field).strip().lower()
+            if not field or field == "term" \
+                    or field not in NER_PATCH_FIELDS:
+                continue
+            new = unicodedata.normalize(
+                "NFC", str(rec.get(field, "")).strip())
+            if not new:
+                continue
+            cur = item.get(field)
+            if isinstance(cur, (dict, list)):
+                cur = json.dumps(cur, ensure_ascii=False)
+            old = unicodedata.normalize(
+                "NFC", str(cur if cur is not None else "").strip())
+            if new == old:
+                continue
+            entries.append({"term": item["term"], "field": field,
+                            "old": old, "new": new,
+                            "reason": str(rec.get("reason", "")).strip()})
+    return entries
 
 
 def review_entry(raw, stage=""):
@@ -918,15 +943,28 @@ def apply_ner_patches(items, patches, logger=None):
             continue
         target = None
         for item in cands:
+            # list/dict-поля (aliases) сравниваются как JSON-строка
+            cur = item.get(p["field"])
+            if isinstance(cur, (dict, list)):
+                cur = json.dumps(cur, ensure_ascii=False)
             current = unicodedata.normalize(
-                "NFC", str(item.get(p["field"], "") or ""))
+                "NFC", str(cur if cur is not None else "").strip())
             if current == old:
                 target = item
                 break
         if target is None:
             skipped += 1
             continue
-        target[p["field"]] = p["new"]
+        new_val = p["new"]
+        cur_val = target.get(p["field"])
+        if isinstance(cur_val, (dict, list)):
+            # значение LLM — JSON-строка; не парсится — пропускаем
+            try:
+                new_val = json.loads(new)
+            except (json.JSONDecodeError, TypeError):
+                skipped += 1
+                continue
+        target[p["field"]] = new_val
         p["applied"] = True
         p["applied_at"] = time.strftime("%Y-%m-%d %H:%M")
         applied.append(p)
