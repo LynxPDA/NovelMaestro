@@ -18,8 +18,8 @@ translate_check.py — проверка перевода по цепочке к�
       исключения — пусто: ничего;
   • заголовок главы (--header-regexp; дефолт «Глава N» без учёта
       регистра) + сквозная последовательность: первое число первой
-      непустой строки больше предыдущего (отключается
-      --no-sequence-check);
+      непустой строки ровно на 1 больше предыдущего (N+1;
+      отключается --no-sequence-check);
   • дубли папок / файлов (strict → FATAL, глава пропускается).
 
 ЕДИНИЦЫ: размеры файлов — байты; ratio — безразмерная эвристика
@@ -198,7 +198,8 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
     header_regexp — compiled regexp заголовка главы (первая непустая
       строка); None = дефолтный «Глава N» (без учёта регистра).
     sequence_check — сквозная последовательность: первое число в
-      первой непустой строке должно быть больше предыдущего."""
+      первой непустой строке должно быть ровно на 1 больше
+      предыдущего (N+1)."""
     errors: list[str] = []
     if exclusions is None:
         exclusions = load_exclusions()
@@ -287,17 +288,19 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
         errors.append(f"  - Нет «Глава N» в начале (найдено: '{snippet}')")
     elif sequence_check:
         # сквозная последовательность: первое число в первой непустой
-        # строке должно быть БОЛЬШЕ предыдущего (не ровно N+1)
+        # строке должно быть ровно на 1 больше предыдущего (N+1)
         nums = re.findall(r"\d+", first_line)
         try:
             cur = int(nums[0]) if nums else None
         except (ValueError, OverflowError):
             cur = None
         if cur is not None:
-            if prev_inner_chapter is not None and cur <= prev_inner_chapter:
-                errors.append(f"  - Нарушена последовательность: после Главы "
-                              f"{prev_inner_chapter} → Глава {cur} "
-                              f"(ожидалось больше {prev_inner_chapter})")
+            if prev_inner_chapter is not None:
+                expected = prev_inner_chapter + 1
+                if cur != expected:
+                    errors.append(f"  - Нарушена последовательность: после Главы "
+                                  f"{prev_inner_chapter} → Глава {cur} "
+                                  f"(ожидалась {expected})")
             prev_inner_chapter = cur
 
     return errors, prev_inner_chapter
@@ -323,8 +326,9 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
 заголовки «Глава N» — первое совпадение не ошибка). Заголовок главы
 (первая непустая строка) — --header-regexp (пусто = «Глава N» без
 учёта регистра); сквозная последовательность — первое число первой
-непустой строки больше предыдущего, отключается --no-sequence-check.
-Минимальный размер файла — --min-file-size (БАЙТЫ).
+непустой строки ровно на 1 больше предыдущего (N+1), отключается
+--no-sequence-check. Минимальный размер файла — --min-file-size
+(БАЙТЫ).
 Примеры:
   %(prog)s                                  strict, polished, весь диапазон
   %(prog)s --check-type redacted --start 1 --end 50

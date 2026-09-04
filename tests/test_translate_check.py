@@ -177,9 +177,9 @@ def test_check_chapter_custom_header_regexp(tmp_path):
     assert prev == 5
 
 
-def test_check_chapter_sequence_greater_than(tmp_path):
+def test_check_chapter_sequence_exact_next(tmp_path):
     """Последовательность: первое число первой непустой строки должно
-    быть БОЛЬШЕ предыдущего (не ровно N+1)."""
+    быть ровно на 1 больше предыдущего (N+1)."""
     d = tmp_path / "00000_6_x"
     d.mkdir()
     comps = [("redacted", 1.0, 0.05)]
@@ -191,9 +191,13 @@ def test_check_chapter_sequence_greater_than(tmp_path):
         return TC.check_chapter(6, str(d), "polished", comps,
                                 False, prev, exclusions=[])
 
-    # 7 после 5 — пропуск нумерации НЕ ошибка (только «больше»)
-    errors, prev = run("Глава 7", 5)
+    # 6 после 5 — ровно N+1, ошибки нет
+    errors, prev = run("Глава 6", 5)
     assert not any("последовательность" in e for e in errors)
+    assert prev == 6
+    # пропуск нумерации (7 после 5) — ошибка: ожидалась 6
+    errors, prev = run("Глава 7", 5)
+    assert any("последовательность" in e for e in errors)
     assert prev == 7
     # 1 после 5 — ошибка
     errors, prev = run("Глава 1", 5)
