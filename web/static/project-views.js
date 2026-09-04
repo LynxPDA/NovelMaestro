@@ -2767,6 +2767,37 @@ function viewProject(section, name, tab) {
           actions,
         );
       }
+      async function setAllStatus(status) {
+        err.textContent = "";
+        try {
+          const entries = parsed.isArray ? parsed.doc : parsed.doc["entries"];
+          let doc2 = parsed.doc;
+          let changed = 0;
+          for (let i = 0; i < entries.length; i++) {
+            const e = entries[i] || {};
+            if (e["applied"] || e["status"] === status) continue;
+            const next = UICore.updateReviewEntry(
+              doc2,
+              i,
+              { status: status },
+              parsed.isArray,
+            );
+            if (!next) continue;
+            doc2 = next;
+            changed++;
+          }
+          if (!changed) {
+            toast("Статусы уже установлены");
+            return;
+          }
+          parsed.doc = doc2;
+          await save();
+          renderList();
+          toast(`Установлено «${status}»: ${changed}`);
+        } catch (ex) {
+          err.textContent = ex.message;
+        }
+      }
       function renderList() {
         body.replaceChildren();
         if (!parsed || !parsed.ok) {
@@ -2805,6 +2836,25 @@ function viewProject(section, name, tab) {
                 "span",
                 { class: "badge badge-done" },
                 `применено: ${sum.applied}`,
+              ),
+              h("span", { class: "spacer" }),
+              h(
+                "button",
+                {
+                  class: "btn btn-xs btn-ghost",
+                  title: "Всем неприменённым правкам — статус «принять»",
+                  onclick: () => setAllStatus("принять"),
+                },
+                "Принять все",
+              ),
+              h(
+                "button",
+                {
+                  class: "btn btn-xs btn-ghost",
+                  title: "Всем неприменённым правкам — статус «отклонить»",
+                  onclick: () => setAllStatus("отклонить"),
+                },
+                "Отклонить все",
               ),
             ),
             h(
