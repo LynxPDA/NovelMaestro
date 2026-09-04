@@ -25,6 +25,20 @@ class El {
     this.textContent = "";
     this._attrs = {};
     this._listeners = {};
+    const self = this;
+    this.classList = {
+      toggle(c, force) {
+        const s = new Set(self.className.split(/\s+/).filter(Boolean));
+        const on = force === undefined ? !s.has(c) : !!force;
+        if (on) s.add(c);
+        else s.delete(c);
+        self.className = [...s].join(" ");
+        return on;
+      },
+      add: (c) => this.classList.toggle(c, true),
+      remove: (c) => this.classList.toggle(c, false),
+      contains: (c) => self.className.split(/\s+/).includes(c),
+    };
   }
   append(...kids) {
     for (const k of kids.flat()) if (k != null) this.children.push(k);

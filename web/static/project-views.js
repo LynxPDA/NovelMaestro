@@ -2430,7 +2430,6 @@ function viewProject(section, name, tab) {
   async function reviewView() {
     const wrap = h("div", { class: "review-wrap" });
     const panel = h("div", { class: "review-panel" });
-    wrap.append(panel);
     const q = new URLSearchParams({ project: `${section}/${name}` });
     // карточка LLM-проверки: глоссарий (1) и перевод (3)
     function makeCard(title, path, applyPath, kind) {
@@ -3065,57 +3064,77 @@ function viewProject(section, name, tab) {
         .catch((ex) => (err.textContent = ex.message));
       return card;
     }
-    /* порядок секций: 1 · глоссарий (LLM) → 2 · проверка перевода
-       → 3 · перевод (LLM) — совпадает с нумерацией */
-    panel.append(
+    /* под-вкладки «Проверок»: каждая проверка — своя вкладка; выбор
+       запоминается в localStorage (UI-предпочтения — на клиенте) */
+    const REVIEW_TABS = [
+      { key: "ner", label: "Глоссарий (LLM)" },
+      { key: "tcheck", label: "Проверка перевода" },
+      { key: "tcl", label: "Перевод (LLM)" },
+      { key: "quality", label: "Оценка перевода (LLM)" },
+    ];
+    let curTab = null;
+    try { curTab = localStorage.getItem("reviewTab"); } catch {}
+    if (!REVIEW_TABS.some((t) => t.key === curTab)) curTab = "ner";
+    const items = []; // {key, btn, pane}
+    const bar = h("div", { class: "subtabs" });
+    function setTab(key) {
+      curTab = key;
+      try { localStorage.setItem("reviewTab", key); } catch {}
+      for (const it of items) {
+        it.btn.classList.toggle("subtab-active", it.key === key);
+        it.pane.style.display = it.key === key ? "" : "none";
+      }
+    }
+    for (const t of REVIEW_TABS) {
+      const btn = h(
+        "button",
+        { class: "subtab", onclick: () => setTab(t.key) },
+        t.label,
+      );
+      const pane = h("div", { class: "review-pane" });
+      items.push({ key: t.key, btn, pane });
+      bar.append(btn);
+      panel.append(pane);
+    }
+    const paneOf = (key) => items.find((it) => it.key === key).pane;
+    paneOf("ner").append(
       makeCard(
-        "1 · Проверка глоссария (LLM) — ner_review.json",
+        "Проверка глоссария (LLM) — ner_review.json",
         "/ner/review",
         "/ner/review/apply",
         "ner",
       ),
     );
-    const sec2 = h(
-      "div",
-      { class: "review-section" },
-      h("div", { class: "review-section-title" }, "2 · Проверка перевода"),
+    paneOf("tcheck").append(
       h(
         "div",
         { class: "review-section-sub" },
         "отчёты стадии translate_check (logs/check_*.txt)",
       ),
+      await renderCheckReports(section, name),
     );
-    panel.append(sec2);
-    sec2.append(await renderCheckReports(section, name));
-    panel.append(
+    paneOf("tcl").append(
       makeCard(
-        "3 · Проверка перевода (LLM) — translate_check_llm_review.json",
+        "Проверка перевода (LLM) — translate_check_llm_review.json",
         "/translate_check_llm/review",
         "/translate_check_llm/review/apply",
         "tcl",
       ),
     );
-    /* 4 · Оценка перевода (LLM) — md-отчёты translate_quality */
     /* renderCheckReports/renderQualityReports — глобальные функции
        (см. ниже), принимают (section, name) параметрами — без
        глобалов, иначе вкладка падает с ReferenceError */
-    const sec4 = h(
-      "div",
-      { class: "review-section" },
-      h(
-        "div",
-        { class: "review-section-title" },
-        "4 · Оценка перевода (LLM)",
-      ),
+    paneOf("quality").append(
       h(
         "div",
         { class: "review-section-sub" },
         "md-отчёты стадии translate_quality "
           + "(по умолчанию translation_quality_assessment.md)",
       ),
+      await renderQualityReports(section, name),
     );
-    panel.append(sec4);
-    sec4.append(await renderQualityReports(section, name));
+    wrap.append(bar, panel);
+    setTab(curTab);
     return wrap;
   }
 

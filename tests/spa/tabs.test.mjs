@@ -70,7 +70,11 @@ class El {
    на внешний scope, поэтому document/Node/window кладём на globalThis) ── */
 globalThis.document = {
   createElement: (t) => new El(t),
-  createTextNode: () => new El("#text"),
+  createTextNode: (t) => {
+    const n = new El("#text");
+    n.textContent = String(t);
+    return n;
+  },
   addEventListener() {},
   querySelectorAll: () => [],
 };
@@ -80,7 +84,14 @@ globalThis.window = {
   addEventListener() {},
 };
 globalThis.Node = El;
-globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+globalThis.localStorage = (() => {
+  const m = new Map();
+  return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(String(k), String(v)),
+    removeItem: (k) => m.delete(k),
+  };
+})();
 globalThis.confirm = () => true;
 globalThis.prompt = () => "";
 globalThis.location = { hash: "" };
@@ -188,7 +199,7 @@ for (const tab of TABS) {
   });
 }
 
-test("reviewView: секции 1–4 (глоссарий, перевод, LLM, оценка)", async () => {
+test("reviewView: 4 под-вкладки проверок, активная по умолчанию — первая", async () => {
   const page = viewProject("ACTIVE", "Книга", "review");
   await new Promise((r) => setTimeout(r, 10));
   const texts = [];
@@ -200,7 +211,52 @@ test("reviewView: секции 1–4 (глоссарий, перевод, LLM, �
     for (const c of n.children || []) walk(c);
   })(page);
   const joined = texts.join(" ");
-  assert.match(joined, /Проверка глоссария/);
+  assert.match(joined, /Глоссарий \(LLM\)/);
   assert.match(joined, /Проверка перевода/);
+  assert.match(joined, /Перевод \(LLM\)/);
   assert.match(joined, /Оценка перевода \(LLM\)/);
+  const tabs = [];
+  (function walk2(n) {
+    for (const c of n.children || []) {
+      if ((c.className || "").split(/\s+/).includes("subtab")) tabs.push(c);
+      walk2(c);
+    }
+  })(page);
+  assert.equal(tabs.length, 4);
+  assert.ok(tabs[0].className.includes("subtab-active"));
+});
+
+test("reviewView: переключение под-вкладок (клик) и память в localStorage", async () => {
+  const page = viewProject("ACTIVE", "Книга", "review");
+  await new Promise((r) => setTimeout(r, 10));
+  const tabs = [];
+  const panes = [];
+  (function walk(n) {
+    for (const c of n.children || []) {
+      const cls = (c.className || "").split(/\s+/);
+      if (cls.includes("subtab")) tabs.push(c);
+      if (cls.includes("review-pane")) panes.push(c);
+      walk(c);
+    }
+  })(page);
+  assert.equal(tabs.length, 4);
+  assert.equal(panes.length, 4);
+  // клик по третьей вкладке «Перевод (LLM)»
+  await tabs[2]._listeners["click"][0]();
+  assert.ok(tabs[2].className.includes("subtab-active"));
+  assert.ok(!tabs[0].className.includes("subtab-active"));
+  assert.equal(panes[2].style.display, "");
+  assert.equal(panes[0].style.display, "none");
+  // выбор запомнен: повторное открытие вкладки — активна «tcl»
+  assert.equal(globalThis.localStorage.getItem("reviewTab"), "tcl");
+  const page2 = viewProject("ACTIVE", "Книга", "review");
+  await new Promise((r) => setTimeout(r, 10));
+  const tabs2 = [];
+  (function walk(n) {
+    for (const c of n.children || []) {
+      if ((c.className || "").split(/\s+/).includes("subtab")) tabs2.push(c);
+      walk(c);
+    }
+  })(page2);
+  assert.ok(tabs2[2].className.includes("subtab-active"));
 });

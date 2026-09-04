@@ -1411,6 +1411,29 @@ input[type="number"] {
   margin-top: 6px;
 }
 /* секции единой вкладки «Проверка» (1·LLM / 2·алгоритмич. / 3·LLM) */
+/* под-вкладки «Проверок»: каждая проверка — своя вкладка */
+.subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.subtab {
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+}
+.subtab:hover {
+  color: var(--text);
+}
+.subtab-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 .review-section {
   border: 1px solid var(--border);
   border-top-width: 2px;
