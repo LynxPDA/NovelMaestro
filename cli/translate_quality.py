@@ -61,7 +61,7 @@ from core.common import (  # noqa: E402
 )
 
 DEFAULT_OUTPUT = "translation_quality_assessment.md"
-DEFAULT_BUDGET = 200_000  # СИМВОЛЫ: главы + промпт
+DEFAULT_BUDGET = 200_000  # СИМВОЛЫ: главы (содержимое; промпт не входит)
 
 # ──────────────────────────────────────────────
 # ПРОМПТ
@@ -145,13 +145,11 @@ def collect_chapters(start, end, file_type, chapter_map, logger):
 
 def fit_budget(chapters, orig_by_num: dict, prompt: str, budget: int):
     """Обрезка до ЦЕЛОГО количества глав: главы (оригинал + перевод)
-    + промпт ≤ budget. Возвращает (kept, dropped): kept — список
-    (num, text), dropped — число отсечённых глав (первые N диапазона).
+    ≤ budget (промпт НЕ вычитается — бюджет только на содержимое).
+    Возвращает (kept, dropped): kept — список (num, text), dropped —
+    число отсечённых глав (первые N диапазона).
     """
-    available = budget - len(prompt)
-    if available <= 0:
-        sys.exit(f"Ошибка: промпт ({len(prompt)} симв.) уже больше "
-                 f"бюджета ({budget} симв.) — увеличьте --budget.")
+    available = budget
     total = sum(len(t) + len(orig_by_num.get(n, ""))
                 for n, t in chapters)
     if total <= available:
@@ -224,7 +222,7 @@ def build_report(meta: dict, assessment: str) -> str:
         ("Бюджет запроса", f"{meta['budget']:,} символов".replace(",", " ")),
         ("Размер пакета",
          f"{meta['packet_size']:,} символов".replace(",", " ")
-         + " (главы + промпт)"),
+         + " (фактический запрос: главы + промпт)"),
         ("Модель", meta["model"]),
         ("Сервер", meta["host"]),
         ("Промпт-файл", meta["prompt_file"] or "встроенный"),
@@ -263,7 +261,7 @@ def main() -> int:
                     "пакету глав.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
-Единицы: --budget и размеры пакета — СИМВОЛЫ (главы + промпт);
+Единицы: --budget и размеры пакета — СИМВОЛЫ (главы; промпт НЕ входит);
 max_tokens (32768) — серверный предохранитель, ТОКЕНЫ.
 Промпт-файл: тег <prompt_assessment>; плейсхолдеры {original_text}
 (chapter.txt) и {translated_text} (тип файлов глав).
@@ -305,7 +303,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                         help=f"Выходной md-отчёт (default: "
                              f"{DEFAULT_OUTPUT}).")
     parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET,
-                        help=f"Бюджет запроса, СИМВОЛЫ: главы + промпт; "
+                        help=f"Бюджет запроса, СИМВОЛЫ: главы (содержимое; промпт НЕ входит); "
                              f"если не влезает — пакет обрезается до "
                              f"целого количества глав (default: "
                              f"{DEFAULT_BUDGET}).")
@@ -379,7 +377,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
             if t:
                 orig_by_num[num] = t if t.endswith("\n") else t + "\n"
 
-    # ── Промпт + бюджет (главы: оригинал + перевод + промпт ≤ budget) ──
+    # ── Промпт + бюджет (главы: оригинал + перевод ≤ budget) ──
     prompt = load_assessment_prompt(args.prompt_file, logger)
     kept, dropped = fit_budget(chapters, orig_by_num, prompt, args.budget)
     if not kept:
@@ -422,7 +420,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
 
     # ── Отчёт ──
     meta = {
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "date": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M"),
         "range_requested": (args.start, args.end),
         "range_included": (nums[0], nums[-1]),
         "chapters": len(nums),

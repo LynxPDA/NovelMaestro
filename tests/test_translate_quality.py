@@ -75,10 +75,13 @@ def test_fit_budget_counts_original_and_translation():
     assert dropped == 1
 
 
-def test_fit_budget_prompt_too_big(tmp_path):
-    """Промпт больше бюджета — ранний выход с ошибкой."""
-    with pytest.raises(SystemExit):
-        TQ.fit_budget([(1, "текст")], {}, "п" * 500, budget=10)
+def test_fit_budget_prompt_ignored():
+    """Промпт НЕ вычитается из бюджета (бюджет — только содержимое):
+    огромный промпт не мешает влезанию глав."""
+    ch = [(1, "ааа"), (2, "ббб")]
+    orig = {1: "А", 2: "Б"}
+    kept, dropped = TQ.fit_budget(ch, orig, "п" * 500, budget=100)
+    assert kept == ch and dropped == 0
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -180,7 +183,7 @@ def test_main_budget_trims(tmp_path, monkeypatch):
         "translate_quality.py", "--type", "polished",
         "--start", "1", "--end", "3",
         "--host", "http://h", "--model", "m",
-        "--budget", "790"])
+        "--budget", "60"])
     rc = TQ.main()
     assert rc == 0
     text = (tmp_path / "translation_quality_assessment.md").read_text(
