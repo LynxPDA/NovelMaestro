@@ -19,6 +19,13 @@
       .env в спеку попадал при отсутствии pdir/.env); PIPELINE_* и
       TRANSLATE_CHECK_EXCLUDE_WORDS — тоже окружение > файл;
       env_overlay в core/common.py + таблица §6/доки/тесты.
+- [x] **2. Экспертный режим: блок «Настройки LLM» внизу формы** —
+      LLM-поля (host/api_key/model, temperature, reasoning, max_tokens,
+      таймауты, повторы, потоки) помечены group: "llm" в спеках и
+      группируются в конец формы с разделителем; только порядок
+      отображения — видимость подрежимов (ner_check RAG, wiki,
+      epub) не задета; проверено playwright (pipeline, ner_check
+      whole/rag, epub), node --check и spa-тесты.
 
 ## Текущая сессия (после 0.2.3 — обмен с LLM в ner_check: исправленные записи вместо патчей)
 

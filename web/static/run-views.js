@@ -573,6 +573,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       );
       if (f.help) attachTooltip(wrap, f.help);
       wrap._input = input;
+      wrap._field = f; // группировка экспертной формы (LLM-блок внизу)
       if (key === "epub") wireEpubAutosave(wrap);
       return wrap;
     } else if (f.type === "select") {
@@ -722,6 +723,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     }
     wrap._input = input;
+    wrap._field = f; // группировка экспертной формы (LLM-блок внизу)
     if (key === "epub") wireEpubAutosave(wrap);
     return wrap;
   }
@@ -2003,6 +2005,21 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       });
     }
 
+    // LLM-поля (group: "llm" в спеке) — единым блоком в конце формы:
+    // только порядок узлов, видимость подрежимов не задета (все toggle
+    // идут по fieldWraps[name], а вставленные чипсы/справки остаются
+    // возле своих якорей в основной группе)
+    const mainNodes = [];
+    const llmNodes = [];
+    for (const n of fieldNodes) {
+      (n._field && n._field.group === "llm" ? llmNodes : mainNodes).push(n);
+    }
+    const formNodes = llmNodes.length
+      ? [...mainNodes,
+         h("div", { class: "run-form-group" }, "Настройки LLM"),
+         ...llmNodes]
+      : fieldNodes;
+
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
@@ -2037,7 +2054,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // (batch_replace: реакции на смену типа/диапазона/правил)
     st.curWraps = fieldWraps;
 
-    return h("div", { class: "run-form" }, fieldNodes, err, runBtn);
+    return h("div", { class: "run-form" }, formNodes, err, runBtn);
   }
 
   // ── epub: панель предпросмотра разбивки ──────────────────────────────

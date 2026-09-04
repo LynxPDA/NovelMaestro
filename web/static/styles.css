@@ -780,6 +780,24 @@ input[type="number"] {
   flex-direction: column;
   gap: 12px;
 }
+/* разделитель блока «Настройки LLM» в Экспертном режиме Запусков */
+.run-form-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.run-form-group::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
 
 /* ── «Простой режим / Экспертный» в Запусках ── */
 .run-mode {
