@@ -250,10 +250,10 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
     if action not in (None, ""):
         argv += ["--action", str(action)]
     argv += _range_argv("pipeline", form)
+    # потоки — СУММАРНО (jobs): распределение на главы/чанки делает
+    # сам pipeline.py; отдельного --threads больше нет
     if form.get("jobs") not in (None, ""):
         argv += ["--jobs", str(form["jobs"])]
-    if form.get("threads") not in (None, ""):
-        argv += ["--threads", str(form["threads"])]
     # пороги count: ner_block и имена (пусто/0 = фильтр выключен)
     for flag, name in (("--ner_min_count", "ner_min_count"),
                        ("--names_min_count", "names_min_count")):
@@ -414,7 +414,7 @@ def build_translate_quality(form: dict, ctx: dict) -> list[str]:
 
     Один LLM-запрос по пакету глав диапазона (тип файлов глав →
     {translated_text}, chapter.txt → {original_text}); бюджет —
-    СИМВОЛЫ (главы + промпт), пакет обрезается до целого количества
+    СИМВОЛЫ (главы; промпт НЕ входит), пакет обрезается до целого количества
     глав. Выход — md-отчёт.
     """
     argv = ["cli/translate_quality.py"]
@@ -658,27 +658,31 @@ STAGE_SPECS: dict[str, dict] = {
                       "TRANSLATE_CHECK_EXCLUDE_WORDS в .env — поле "
                       "заполняется оттуда"},
             {"name": "neighbor",
-             "label": "Стадия/Стадия (по занимаемому месту)",
-             "type": "text", "default": "1.0±0.05",
-             "help": "Ожидаемый ratio соседней стадии и допуск: "
-                      "«1.0±0.05» (напр. polished/redacted)"},
+             "label": "Выбранная Стадия/Предыдущая Стадия (по занимаемому месту)",
+             "type": "text", "default": "",
+             "help": "Ожидаемый ratio с предыдущей стадией и допуск: "
+                      "«1.0±0.05» (напр. polished/redacted); пусто = "
+                      "встроенный дефолт; дефолт в .env — "
+                      "TRANSLATE_CHECK_NEIGHBOR"},
             {"name": "original",
-             "label": "Оригинал/Стадия (по занимаемому месту)",
-             "type": "text", "default": "2.1±0.5",
+             "label": "Выбранная Стадия/Оригинал (по занимаемому месту)",
+             "type": "text", "default": "",
              "help": "Ожидаемый ratio с оригиналом и допуск: "
-                      "«2.1±0.5» (напр. polished/chapter)"},
+                      "«2.1±0.5» (напр. polished/chapter); пусто = "
+                      "встроенный дефолт; дефолт в .env — "
+                      "TRANSLATE_CHECK_ORIGINAL"},
             {"name": "regexp_checks",
              "label": "Regexp-проверки (по одной на строку)",
              "type": "textarea", "rows": 4,
-             "default": "[一-鿿【】「」『』]+\n[a-zA-Z]+\n^\\s*Глава\\s+(\\d+|\\[Номер\\])",
+             "default": "",
              "help": "Каждая строка — regexp по тексту главы (multiline): "
-                      "всё найденное — ошибка; первое вхождение на первой "
-                      "непустой строке (заголовок главы) не считается; "
-                      "^/$ — начало/конец СТРОКИ; комментарий в конце "
-                      "строки — « # …»; пусто = дефолтные проверки "
-                      "(иероглифы, латиница, лишние «Глава N»); "
+                      "всё найденное — ошибка, проверяются ВСЕ строки "
+                      "включая заголовок главы; ^/$ — начало/конец СТРОКИ; "
+                      "комментарий в конце строки — « # …»; пусто = "
+                      "дефолтные проверки (иероглифы, латиница); лишние "
+                      "заголовки «Глава N» — структурная проверка; "
                       "TRANSLATE_CHECK_REGEXP_CHECKS в .env — переносы "
-                      "строк как «\\n»"},
+                      "строк как «\n»"},
         ],
         "preset": {
             "title": "Проверить перевод",
@@ -769,14 +773,14 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "jobs", "label": "Параллельных потоков (1–16)",
+            {"name": "jobs", "label": "Потоков (1–16)",
              "type": "number", "default": "4", "min": 1, "max": 16,
-             "help": "главы обрабатываются параллельно; допустимо 1–16"},
-            {"name": "threads", "label": "Потоков на главу, чанки (1–16)",
-             "type": "number", "default": "1", "min": 1, "max": 16,
-             "help": "чанки одной главы; допустимо 1–16; при параллельных "
-                      "главах (jobs>1) держите 1 — иначе упрётесь в лимит "
-                      "запросов"},
+             "help": "СУММАРНО одновременных LLM-запросов: распределяются "
+                      "на параллельные главы и чанки внутри главы "
+                      "(глав много — потоки идут на главы, мало — "
+                      "свободные уходят внутрь главы)"},
+            {"name": "threads", "type": "hidden", "default": "",
+             "noenv": True},
             {"name": "ner_min_count", "label": "Мин. count для глоссария "
              "({ner_block})",
              "type": "number", "default": "0",
@@ -891,8 +895,16 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "ner_check_prompt.txt",
              "autofile": "prompts/ner_check_prompt.txt",
-             "help": "Содержит тег <prompt_rag> для RAG-режима; "
-                      "автоподхват ner_check_prompt.txt"},
+             "help": "Теги: <prompt_check> — проверка выбранных типов, "
+                      "<prompt_rag> — точечная RAG-проверка; комментарии "
+                      "вне тегов — через #; автоподхват ner_check_prompt.txt"}, 
+            {"name": "rag_budget", "label": "RAG: бюджет на термин, СИМВОЛЫ",
+             "type": "number", "default": "65536",
+             "help": "На ОДИН термин: промпт + фрагменты ≤ бюджету; каждый "
+                      "термин — отдельный LLM-запрос (параллельно, "
+                      "«Параллельные пакеты»); фрагменты — равномерно по "
+                      "книге (FTS5, чанки 1000 симв.), влезают в остаток "
+                      "бюджета после промпта"},
             {"name": "passes", "label": "Режимы",
              "labels": {"whole": "Выбранные типы (одновременно)",
                          "types": "Выбранные типы (по отдельности)",
@@ -926,10 +938,7 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "rag_budget", "label": "RAG: бюджет на термин, СИМВОЛЫ",
-             "type": "number", "default": "65536",
-             "help": "Сколько релевантного текста (равномерно по книге) "
-                      "отдаётся LLM на один термин"},
+
             # types/fields — скрытые: значения пишет виджет чипсов
             # (типы и поля из ner.json), buildParams собирает их в params;
             # noenv — .env не предзаполняет чипсы (дефолт: все типы и
@@ -1035,7 +1044,7 @@ STAGE_SPECS: dict[str, dict] = {
                       "«Проверки» → «Оценка перевода (LLM)»"},
             {"name": "budget", "label": "Бюджет запроса, СИМВОЛЫ",
              "type": "number", "default": "200000",
-             "help": "главы + промпт; если не влезает — пакет "
+             "help": "главы (содержимое, промпт НЕ входит); если не влезает — пакет "
                       "обрезается до целого количества глав (первые "
                       "диапазона), отсечённые указываются в отчёте"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",

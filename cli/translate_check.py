@@ -79,19 +79,23 @@ def load_exclusions(env_path=None) -> list[str]:
 # ──────────────────────────────────────────────
 # РЕГУЛЯРНЫЕ ВЫРАЖЕНИЯ
 # ──────────────────────────────────────────────
-CHINESE_REGEX = re.compile(r'[一-鿿【】「」『』]+')
+# Иероглифы — ВСЕ блоки CJK (Basic U+4E00–U+9FFF, Ext A
+# U+3400–U+4DBF, совместимость U+F900–U+FAFF, Ext B–H астральные)
+# + кавычки 【】「」『』: проверка смотрит каждую строку ВКЛЮЧАЯ
+# заголовок главы.
+CHINESE_REGEX = re.compile(
+    r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff'
+    r'\U00020000-\U0002ebef【】「」『』]+')
 ENGLISH_REGEX = re.compile(r'[a-zA-Z]+')
-CHAPTER_LINE_RE = re.compile(r'^\s*Глава\s+(\d+|\[Номер\])',
-                             re.MULTILINE | re.IGNORECASE)
 CHAPTER_REGEX = re.compile(r'^\s*Глава\s+(\d+|\[Номер\])', re.IGNORECASE)
 
 # Дефолтные regexp-проверки текста главы (пусто в --regexp-check =
-# эти строки): всё найденное — ошибка; первое вхождение на первой
-# непустой строке (заголовок главы) ошибкой не считается.
+# эти строки): всё найденное — ошибка; проверяются ВСЕ строки,
+# включая заголовок главы (лишние «Глава N» ловит структурная
+# проверка — см. check_chapter).
 DEFAULT_REGEXP_CHECKS = [
-    r'[一-鿿【】「」『』]+',
+    CHINESE_REGEX.pattern,
     r'[a-zA-Z]+',
-    r'^\s*Глава\s+(\d+|\[Номер\])',
 ]
 
 
@@ -229,24 +233,21 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
         errors.append(f"  - Ошибка чтения файла: {e}")
         return errors, prev_inner_chapter
 
-    # ---- regexp-проверки текста (всё найденное — ошибка; первое
-    #      вхождение на первой непустой строке — заголовок главы) ----
-    non_empty = [l.strip() for l in lines if l.strip()]
-    first_line = non_empty[0] if non_empty else ""
+    # ---- regexp-проверки текста: ВСЕ строки, включая заголовок ----
+    #      (каждая находка — отдельной строкой в отчёте)
     regexes = list(regexp_checks) if regexp_checks is not None \
-        else [CHINESE_REGEX, ENGLISH_REGEX, CHAPTER_LINE_RE]
+        else [CHINESE_REGEX, ENGLISH_REGEX]
     for rx in regexes:
-        hits = list(rx.finditer(content))
-        if hits and first_line and rx.search(first_line):
-            hits = hits[1:]  # заголовок главы — не ошибка
-        bad = [h.group(0) for h in hits if h.group(0).lower() not in exclusions]
-        if bad:
-            preview = ", ".join(bad[:10])
-            tail = f" … (+{len(bad) - 10})" if len(bad) > 10 else ""
-            errors.append(f"  - По паттерну {rx.pattern}: {preview}{tail}")
+        for h in rx.finditer(content):
+            bad = h.group(0)
+            if bad.lower() in exclusions:
+                continue
+            errors.append(f"  - По паттерну {rx.pattern}: {bad}")
 
     # ---- заголовок «Глава N» в начале + сквозная последовательность
     #      (структурные проверки — всегда включены) ----
+    non_empty = [l.strip() for l in lines if l.strip()]
+    first_line = non_empty[0] if non_empty else ""
     m = CHAPTER_REGEX.search(first_line)
     if not m:
         snippet = (first_line[:30] + "…") if len(first_line) > 30 else first_line
@@ -263,6 +264,15 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
                               f"{prev_inner_chapter} → Глава {cur} "
                               f"(ожидалась {expected})")
         prev_inner_chapter = cur
+
+    # ---- лишние заголовки «Глава N» в тексте: все строки, кроме
+    #      первой непустой (сам заголовок главы не ошибка) ----
+    first_idx = next((i for i, l in enumerate(lines) if l.strip()), None)
+    if first_idx is not None:
+        for ln in lines[first_idx + 1:]:
+            if CHAPTER_REGEX.search(ln):
+                errors.append(
+                    f"  - Лишний заголовок главы: {ln.strip()[:80]}")
 
     return errors, prev_inner_chapter
 
@@ -281,10 +291,10 @@ def main() -> None:
   TRANSLATED vs chapter (2.1±0.5)
 Коэффициенты: --neighbor/--original в формате «ratio±tol».
 Regexp-проверки текста (--regexp-check, по одной на строку): всё
-найденное — ошибка; первое вхождение на первой непустой строке
-(заголовок главы) не считается; ^/$ — начало/конец СТРОКИ (multiline);
-комментарий в конце строки — « # …». Пусто = встроенные дефолты
-(иероглифы, латиница, лишние «Глава N»).
+найденное — ошибка, проверяются ВСЕ строки, включая заголовок главы;
+^/$ — начало/конец СТРОКИ (multiline); комментарий в конце строки —
+« # …». Пусто = встроенные дефолты (иероглифы, латиница). Лишние
+заголовки «Глава N» в тексте — отдельная структурная проверка.
 Примеры:
   %(prog)s                                  strict, polished, весь диапазон
   %(prog)s --check-type redacted --start 1 --end 50
@@ -316,13 +326,15 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
     # ── настраиваемые коэффициенты (эвристики: подбираются опытным
     #    путём под конкретную книгу; дефолты — встроенные)
     parser.add_argument("--neighbor", default=None,
-                        help="Стадия/Стадия (по занимаемому месту): "
-                             f"«ratio±tol», напр. «{RATIO_NEIGHBOR}±"
-                             f"{TOL_NEIGHBOR}» (пусто = дефолт)")
+                        help="Выбранная Стадия/Предыдущая Стадия "
+                             "(по занимаемому месту): «ratio±tol», напр. "
+                             f"«{RATIO_NEIGHBOR}±{TOL_NEIGHBOR}» "
+                             "(пусто = встроенный дефолт)")
     parser.add_argument("--original", default=None,
-                        help="Оригинал/Стадия (по занимаемому месту): "
-                             f"«ratio±tol», напр. «{RATIO_ORIGINAL}±"
-                             f"{TOL_ORIGINAL}» (пусто = дефолт)")
+                        help="Выбранная Стадия/Оригинал "
+                             "(по занимаемому месту): «ratio±tol», напр. "
+                             f"«{RATIO_ORIGINAL}±{TOL_ORIGINAL}» "
+                             "(пусто = встроенный дефолт)")
     # ── regexp-проверки текста главы (экспертные)
     parser.add_argument("--regexp-check", action="append", default=[],
                         metavar="RE",

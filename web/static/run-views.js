@@ -1,9 +1,10 @@
   // translate_quality: последняя глава, помещающаяся в бюджет запроса.
   // Размер главы = перевод (тип файлов) + оригинал (chapter.txt);
-  // из бюджета вычитается длина промпта; доступна как глобал — для
-  // node-тестов (vm-контекст), в браузере вызывается из attachQualityRange.
-  function qualityEndByBudget(chapters, start, budget, promptLen, type) {
-    const avail = (budget || 0) - (promptLen || 0);
+  // бюджет — ТОЛЬКО на содержимое, промпт НЕ вычитается; доступна
+  // как глобал — для node-тестов (vm-контекст), в браузере вызывается
+  // из attachQualityRange.
+  function qualityEndByBudget(chapters, start, budget, type) {
+    const avail = budget || 0;
     if (avail <= 0 || !start || !chapters || !chapters.length) return "";
     const art = type + ".txt";
     const rows = chapters
@@ -1275,25 +1276,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     };
     const budgetIn = fieldInput(inputs.budget);
     const typeSel = fieldInput(inputs.type);
-    const promptSel = fieldInput(inputs.prompt_file);
     let tree = null;
-    let promptLen = 0;
-    let promptFile = "";
-    const loadPrompt = async () => {
-      const file = promptSel && promptSel.value ? promptSel.value : "";
-      if (file === promptFile) return;
-      promptFile = file;
-      promptLen = 0;
-      if (!file) return;
-      try {
-        const d = await api(
-          `/prompts/${encodeURIComponent(file)}?project=${section}/${name}`,
-        );
-        promptLen = (d.content || "").length;
-      } catch {
-        promptLen = 0;
-      }
-    };
     // последняя глава, помещающаяся в бюджет от start
     const lastFit = async (start) => {
       if (!tree) {
@@ -1304,12 +1287,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           tree = [];
         }
       }
-      await loadPrompt();
       const raw =
         budgetIn && budgetIn.value !== "" ? budgetIn.value : "200000";
       const budget = parseInt(raw, 10) || 0;
       const type = (typeSel && typeSel.value) || "polished";
-      return qualityEndByBudget(tree, start, budget, promptLen, type);
+      return qualityEndByBudget(tree, start, budget, type);
     };
     const recalc = async () => {
       const start = parseInt(row._start.value || "", 10) || 0;
@@ -1877,17 +1859,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             "div",
             { class: "regexp-help-body" },
             h("p", {}, "Каждая строка — regexp по тексту главы "
-              + "(multiline): ВСЁ найденное — ошибка; первое вхождение "
-              + "на первой непустой строке (заголовок главы) не "
-              + "считается."),
-            h("p", {}, "Дефолтные проверки (предзаполнены):"),
+              + "(multiline): ВСЁ найденное — ошибка, проверяются ВСЕ "
+              + "строки включая заголовок; лишние заголовки «Глава N» "
+              + "ищутся отдельно (структурно)."),
+            h("p", {}, "Дефолтные проверки:"),
             h("ul", {},
               h("li", {}, h("code", {}, "[一-鿿【】「」『』]+"),
                 " — иероглифы (остались в переводе)"),
               h("li", {}, h("code", {}, "[a-zA-Z]+"),
                 " — латиница"),
-              h("li", {}, h("code", {}, "^\\s*Глава\\s+(\\d+|\\[Номер\\])"),
-                " — лишний заголовок «Глава N» в середине текста"),
             ),
             h("p", {}, "Свои проверки:"),
             h("ul", {},

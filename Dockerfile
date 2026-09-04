@@ -12,8 +12,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
 # gosu — переключение root → app в docker-entrypoint.sh (chown каталогов
-# данных, созданных docker от root, требует root-прав).
-RUN apt-get update && apt-get install -y --no-install-recommends gosu \
+# данных, созданных docker от root, требует root-прав); tzdata —
+# локальные часовые пояса для отчётов (местное время, см. TZ в compose).
+RUN apt-get update && apt-get install -y --no-install-recommends gosu tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Зависимости: requests (LLM-клиент), tqdm (прогресс);

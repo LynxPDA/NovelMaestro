@@ -1710,14 +1710,14 @@ def test_jobs_start_validates_numeric_bounds(jobs_srv):
     res, payload = req("POST", "/api/jobs",
                        {"action": "pipeline",
                         "project": "ACTIVE/test_book",
-                        "params": {"jobs": "30", "threads": "1"}})
+                        "params": {"jobs": "30"}})
     assert res.status == 400, payload
     assert "максимум 16" in payload.get("error", "")
-    # threads < 1 — отказ
+    # jobs < 1 — отказ
     res, payload = req("POST", "/api/jobs",
                        {"action": "pipeline",
                         "project": "ACTIVE/test_book",
-                        "params": {"jobs": "2", "threads": "0"}})
+                        "params": {"jobs": "0"}})
     assert res.status == 400, payload
     assert "минимум 1" in payload.get("error", "")
     # допустимые значения проходят (400 дальше не случится: стадия
@@ -1725,7 +1725,7 @@ def test_jobs_start_validates_numeric_bounds(jobs_srv):
     res, payload = req("POST", "/api/jobs",
                        {"action": "pipeline",
                         "project": "ACTIVE/test_book",
-                        "params": {"jobs": "2", "threads": "4"}})
+                        "params": {"jobs": "2"}})
     assert res.status != 400 or "максимум" not in payload.get("error", "")
 
 

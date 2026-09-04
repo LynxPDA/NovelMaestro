@@ -62,4 +62,10 @@ services:
       # WEB_TOKEN: "..."            # при --auth; иначе автогенерация
       # WEB_MAX_UPLOAD_MB: "512"
       # WEB_JOBS_LIMIT: "2"
+      # Дефолты формы «2 · Проверка перевода» (переопределяют /app/.env):
+      # TRANSLATE_CHECK_NEIGHBOR: "1.0±0.05"
+      # TRANSLATE_CHECK_ORIGINAL: "2.1±0.5"
+      # TRANSLATE_CHECK_REGEXP_CHECKS: "[一-鿿【】「」『』]+\n[a-zA-Z]+"
+      # Часовой пояс для отчётов (местное время):
+      # TZ: "Europe/Moscow"
     # HEALTHCHECK зашит в образ (Dockerfile): GET /api/session

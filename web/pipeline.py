@@ -508,9 +508,9 @@ def main() -> None:
                          "7=редактура→полировка, 8=полный цикл")
     ap.add_argument("--start", type=int, default=None, help="Начальная глава")
     ap.add_argument("--end", type=int, default=None, help="Конечная глава")
-    ap.add_argument("--jobs", type=int, default=None, help="Потоков (1–16)")
-    ap.add_argument("--threads", type=int, default=None,
-                    help="Потоков на главу (чанки), 1–16 (по умолчанию 1)")
+    ap.add_argument("--jobs", type=int, default=None,
+                    help="Потоков СУММАРНО (1–16): распределяются на "
+                         "параллельные главы и чанки внутри главы")
     ap.add_argument("--timeout", type=int, default=None,
                     help="Таймаут одного LLM-запроса, сек")
     ap.add_argument("--stream_timeout", type=int, default=None,
@@ -557,9 +557,6 @@ def main() -> None:
             log.warning("PIPELINE_%s=%r не число (%s); дефолт: %r",
                         key.upper(), raw, exc, default)
     args.jobs = args.jobs or _DEFAULTS["jobs"]
-    args.threads = args.threads or 1
-    if not 1 <= args.threads <= 16:
-        ap.error("--threads должен быть 1–16")
     args.timeout = args.timeout or _DEFAULTS["timeout"]
     args.stream_timeout = args.stream_timeout or _DEFAULTS["stream_timeout"]
     args.max_retries = (args.max_retries
@@ -652,8 +649,7 @@ def main() -> None:
     log.info("═" * 60)
     log.info("ТИП РАБОТЫ : %s", action_label)
     log.info("ДИАПАЗОН   : Главы с %d по %d", start, end)
-    log.info("ПОТОКОВ    : %d (главы) × %d (чанки на главу)",
-             args.jobs, args.threads)
+    log.info("ПОТОКОВ    : %d суммарно (главы × чанки)", args.jobs)
     log.info("МОДЕЛЬ     : %s", model or "из .env")
     log.info("СЕРВЕР     : %s", host)
     log.info("ПРОМПТЫ    : %s", " | ".join(
@@ -676,14 +672,23 @@ def main() -> None:
         sys.exit(1)
     log.info("К обработке: %d глав(а/ы)", len(to_process))
 
+    # суммарные потоки: параллельные главы × чанки на главу ≤ jobs;
+    # глав много — потоки идут на главы (чанки 1), мало — свободные
+    # уходят внутрь главы (потоков на главу больше 1)
+    total = args.jobs
+    n_chapters = len(to_process)
+    jobs = min(total, max(1, n_chapters))
+    threads = max(1, total // jobs)
+    log.info("РАЗЛОЖЕНИЕ : %d глав × %d чанков на главу", jobs, threads)
+
     results: dict[int, bool] = {}
-    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = {
             pool.submit(process_chapter, cid, dirs, script, stages,
                         host, api_key, model, args.timeout, log, tracker,
                         args.temperature, args.reasoning_effort,
                         args.stream_timeout, args.max_retries,
-                        args.threads, prompts,
+                        threads, prompts,
                         polish_in=action_spec.get("polish_input"),
                         ner_min_count=args.ner_min_count,
                         names_min_count=args.names_min_count): cid
