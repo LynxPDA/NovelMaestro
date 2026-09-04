@@ -167,6 +167,22 @@ def test_merge_into(ner_globals):
     assert len(target) == 2
 
 
+def test_fill_term_context():
+    """context извлекается из чанка (не от LLM); 0 — выключено;
+    термин не найден — значение LLM сохраняется."""
+    ners = [{"term": "陈阳", "type": "Person"}]
+    NER.fill_term_context(ners, "陈阳走进大殿。殿内站着许多人。", 300)
+    assert ners[0]["context"] == "陈阳走进大殿。殿内站着许多人。"
+    # выключено — поле не трогаем
+    ners2 = [{"term": "陈阳"}]
+    NER.fill_term_context(ners2, "陈阳走进大殿。", 0)
+    assert "context" not in ners2[0]
+    # термин не найден в чанке — LLM-значение остаётся
+    ners3 = [{"term": "林水", "context": "старый контекст"}]
+    NER.fill_term_context(ners3, "陈阳走进大殿。", 300)
+    assert ners3[0]["context"] == "старый контекст"
+
+
 def test_merge_alias_groups():
     data = [
         {"term": "陈阳", "pinyin": "Chen Yang", "count": 10,
@@ -339,6 +355,9 @@ def test_main_two_pass(tmp_path, monkeypatch, ner_reset):
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data and data[0]["term"] == "陈阳"
     assert all(d["term"] != "старый" for d in data)  # кэш НЕ читался
+    # context извлечён из чанка (не от LLM): предложение вокруг термина
+    ctx = data[0].get("context", "")
+    assert "陈阳" in ctx and len(ctx) <= 300
     # файлы возобновления удалены при старте
     assert not (tmp_path / "ner_pass1_cache.json").exists()
     assert not (tmp_path / "ner_pass2_cache.json").exists()
@@ -434,6 +453,22 @@ def test_main_missing_file(tmp_path, monkeypatch, ner_reset):
         "ner.py", "нет_файла.txt", "--host", "http://h", "--model", "m"])
     NER.main()  # возврат без исключения
     assert not (tmp_path / "ner.json").exists()
+
+
+def test_main_context_disabled(tmp_path, monkeypatch, ner_reset):
+    """--context_max_len 0 — context не извлекается из чанка."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "novel.txt").write_text(
+        "陈阳走进大殿。殿内站着许多人。\n", encoding="utf-8")
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (P1_ANSWER, None))
+    monkeypatch.setattr(sys, "argv", [
+        "ner.py", "novel.txt", "--host", "http://h", "--model", "m",
+        "--threads", "1", "--ner_file", "ner.json",
+        "--context_max_len", "0"])
+    NER.main()
+    data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
+    assert data and data[0]["term"] == "陈阳"
+    assert "context" not in data[0]
 
 
 def test_main_ignores_stale_progress(tmp_path, monkeypatch, ner_reset):

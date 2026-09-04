@@ -368,6 +368,105 @@ def find_exact_match(text: str, term: str) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Контекст термина (поле context в глоссарии)
+# ══════════════════════════════════════════════════════════════════════
+
+_SENT_END_RE = re.compile(r"[。！？.!?…\n]")
+
+
+def _sentence_start(text: str, pos: int) -> int:
+    """Начало предложения, содержащего позицию pos (без пунктуации)."""
+    while pos > 0 and not _SENT_END_RE.search(text[pos - 1]):
+        pos -= 1
+    return pos
+
+
+def _sentence_end(text: str, pos: int) -> int:
+    """Конец предложения, содержащего позицию pos (пунктуация включена)."""
+    while pos < len(text) and not _SENT_END_RE.search(text[pos]):
+        pos += 1
+    if pos < len(text) and text[pos] != "\n":
+        pos += 1
+    return pos
+
+
+def _collapse_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _trim_context(text: str, a: int, b: int, s: int, e: int,
+                  max_len: int) -> str:
+    """Окно вокруг термина не длиннее max_len СИМВОЛОВ (как в редакторе)."""
+    term_len = b - a
+    if term_len >= max_len:
+        return _collapse_ws(text[a:a + max_len])
+    left = (max_len - term_len) // 2
+    l = max(s, a - left)
+    r = min(e, l + max_len)
+    if r - l < max_len:
+        l = max(s, r - max_len)
+    return _collapse_ws(text[l:r])
+
+
+def extract_term_context(text: str, term: str,
+                          max_len: int | None = 300) -> str:
+    """Контекст термина из текста: 1–2 предложения вокруг вхождения.
+
+    Ищет все вхождения термина (NFC; пробелы между словами — любые),
+    для каждого строит кандидата: предложение с термином + соседнее,
+    если оба влезают в max_len СИМВОЛОВ; из кандидатов выбирается
+    самый длинный. Предложение длиннее max_len — обрезается окном
+    вокруг термина. max_len <= 0/None — выключено (вернёт "").
+    Границы предложений — 。！？.!?… и перевод строки: работает для
+    любого языка. Возвращает "" если термин в тексте не найден.
+    """
+    if not text or not term or max_len is None:
+        return ""
+    try:
+        max_len = int(max_len)
+    except (TypeError, ValueError):
+        return ""
+    if max_len <= 0:
+        return ""
+    text = unicodedata.normalize("NFC", text)
+    term = unicodedata.normalize("NFC", term).strip()
+    if not term:
+        return ""
+
+    candidates: list[str] = []
+    for m in build_smart_regex(term).finditer(text):
+        a, b = m.span()
+        s = _sentence_start(text, a)
+        e = _sentence_end(text, b)
+        base = _collapse_ws(text[s:e])
+        if len(base) > max_len:
+            candidates.append(_trim_context(text, a, b, s, e, max_len))
+            continue
+        candidates.append(base)
+        # 1–2 предложения: следующее и/или предыдущее, если влезают
+        nxt = _sentence_end(text, e)
+        if nxt > e:
+            cand = _collapse_ws(text[s:nxt])
+            if len(cand) <= max_len:
+                candidates.append(cand)
+        prv = s
+        if s > 0:
+            p = s - 1
+            while p >= 0 and (text[p].isspace()
+                              or _SENT_END_RE.search(text[p])):
+                p -= 1
+            if p >= 0:
+                prv = _sentence_start(text, p + 1)
+        if prv < s:
+            cand = _collapse_ws(text[prv:e])
+            if len(cand) <= max_len:
+                candidates.append(cand)
+    if not candidates:
+        return ""
+    return max(candidates, key=len)
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Правила замен «паттерн -> замена» (batch_replace / epub replace-re)
 # ══════════════════════════════════════════════════════════════════════
 def trim_rule_left(raw: str) -> str:

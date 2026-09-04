@@ -128,7 +128,53 @@ def test_find_exact_match():
     assert not C.find_exact_match("Линь Шуи", "Линь Шуй")
 
 
-def test_trim_rule_left():
+# ══════════════════════════════════════════════════════════════════════
+# extract_term_context — контекст термина из чанка
+# ══════════════════════════════════════════════════════════════════════
+def test_extract_term_context_cjk():
+    text = "李小明走进大殿。殿内站着许多人。李小明微微一笑。"
+    ctx = C.extract_term_context(text, "李小明", 300)
+    # самое длинное из найденных: предложение с термином + следующее
+    assert ctx == "李小明走进大殿。殿内站着许多人。"
+
+
+def test_extract_term_context_latin():
+    text = "John walked into the hall. Many people stood inside. John smiled."
+    ctx = C.extract_term_context(text, "John", 300)
+    assert ctx == "John walked into the hall. Many people stood inside."
+
+
+def test_extract_term_context_whitespace_tolerant():
+    # термин с пробелами; в тексте слова разделены по-другому
+    # (двойные пробелы/перенос строки) — пробелы схлопываются
+    text = "Линь  Шуй шёл домой. Потом Линь\nШуй вернулся."
+    ctx = C.extract_term_context(text, "Линь Шуй", 300)
+    assert ctx == "Линь Шуй шёл домой. Потом Линь Шуй вернулся."
+
+
+def test_extract_term_context_max_len_trim():
+    # длинное предложение без границ — окно вокруг термина
+    text = "前 " * 10 + "ТЕРМИН " + "后 " * 10
+    ctx = C.extract_term_context(text, "ТЕРМИН", 20)
+    assert len(ctx) <= 20 and "ТЕРМИН" in ctx
+
+
+def test_extract_term_context_max_len_1_2_sentences():
+    # второе предложение не влезает — берётся одно, длиннее термина
+    text = "Короткое. " + "Длинное предложение " * 8 + "."
+    ctx = C.extract_term_context(text, "Короткое", 50)
+    assert ctx == "Короткое."
+
+
+def test_extract_term_context_disabled_and_missing():
+    assert C.extract_term_context("текст ТЕРМИН текст", "ТЕРМИН", 0) == ""
+    assert C.extract_term_context("текст ТЕРМИН текст", "ТЕРМИН", None) == ""
+    assert C.extract_term_context("текст", "ТЕРМИН", 300) == ""  # нет вхождения
+    assert C.extract_term_context("", "ТЕРМИН", 300) == ""
+    assert C.extract_term_context("текст", "", 300) == ""
+
+
+def test_trim_rule_left(): 
     """Правила замен: паддинг у «->» убирается, значимые пробелы
     у якорей («^  », «  $») сохраняются."""
     assert C.trim_rule_left("Хунг ") == "Хунг"

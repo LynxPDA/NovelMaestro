@@ -980,6 +980,15 @@ def test_wiki_range_fields_first():
     assert names.index("source") < names.index("file")
 
 
+def test_build_ner_context_max_len():
+    """context_max_len из формы → --context_max_len в argv; пусто — нет."""
+    argv = build_command("ner", {"context_max_len": "500"}, {})
+    assert "--context_max_len" in argv
+    assert argv[argv.index("--context_max_len") + 1] == "500"
+    argv2 = build_command("ner", {}, {})
+    assert "--context_max_len" not in argv2
+
+
 def test_pipeline_no_separate_prompts():
     """pipeline: отдельные промпт-файлы на стадию и режим промптов убраны."""
     spec = STAGE_SPECS["pipeline"]
@@ -1007,6 +1016,7 @@ def test_preset_spot_checks():
     assert params["mode"] == "extract"
     assert "file" not in params
     assert params["ner_file"] == "ner.json"
+    assert params["context_max_len"] == "300"  # дефолт поля context
     # pipeline: полный цикл, дефолты, без диапазона
     params = preset_params(STAGE_SPECS["pipeline"])
     assert params["action"] == "8"

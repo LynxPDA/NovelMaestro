@@ -50,6 +50,7 @@ from core.common import (  # noqa: E402
     compile_chapter_text,
     determine_model,
     emit_progress,
+    extract_term_context,
     find_env_file,
     get_ngrams,
     get_server_config,
@@ -79,8 +80,7 @@ Return result strictly in JSON format:
     "type": "Person (male/female)/Location/Sect/Technique/Artifact/Stage/Race/Other",
     "translation": "Russian Translation",
     "notes": "Optional comments",
-    "context": "Full sentence from text where it appears",
-    "translated_context": "Literary Russian translation of that sentence"
+    "translated_context": "Literary Russian translation of the sentence where the term appears"
   }
 ]
 Rules:
@@ -105,7 +105,7 @@ Your job:
 - Fix type if wrong.
 - Remove entries that are generic words, not real named entities.
 - Add any important entities that were missed.
-- Keep "context" and "translated_context" accurate.
+- Keep "translated_context" accurate.
 
 Return the corrected JSON array in the SAME format. Output ONLY valid JSON.
 
@@ -694,6 +694,29 @@ def process_chunk_pass2(
 
 
 # ══════════════════════════════════════════════════════════════════════
+# КОНТЕКСТ ТЕРМИНА (вместо LLM: извлекается из чанка)
+# ══════════════════════════════════════════════════════════════════════
+
+
+def fill_term_context(ners: list[dict], chunk_text: str, max_len: int) -> None:
+    """Заполнить поле context из чанка, а не от LLM.
+
+    1–2 предложения вокруг термина, не длиннее max_len СИМВОЛОВ;
+    0 — выключено (поле не трогаем). Термин не найден в чанке —
+    оставляем значение как есть (LLM-значение, если было).
+    """
+    if not max_len or max_len <= 0:
+        return
+    for ner in ners:
+        term = str(ner.get("term", "")).strip()
+        if not term:
+            continue
+        ctx = extract_term_context(chunk_text, term, max_len)
+        if ctx:
+            ner["context"] = ctx
+
+
+# ══════════════════════════════════════════════════════════════════════
 # TWO-PASS: КОНВЕЙЕРНАЯ ОБРАБОТКА (PIPELINE)
 # ══════════════════════════════════════════════════════════════════════
 #
@@ -727,6 +750,7 @@ def run_two_pass(
     save_interval: int,
     logger,
     reasoning_effort: str | None = None,
+    context_max_len: int = 300,
 ) -> int:
     """Двухпроходный конвейер NER. Возвращает число УПАВШИХ чанков
     (pass1-ошибка/необработанное исключение; pass2-fallback — не сбой).
@@ -817,6 +841,9 @@ def run_two_pass(
                 _log(logger, logging.INFO,
                      f"✅ Pass2 chunk {idx}/{total}: {len(p2_ners)} entities")
                 tqdm.write(f"✅ Pass2 {idx}: {len(p2_ners)} ent.")
+
+            # context — из чанка (не от LLM): 1–2 предложения вокруг термина
+            fill_term_context(p2_ners, text, context_max_len)
 
             with done_lock:
                 completed[idx] = p2_ners
@@ -1400,6 +1427,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Все поля голосуют (включая notes, context, translated_context).",
     )
     parser.add_argument(
+        "--context_max_len", type=int, default=300,
+        help=("Максимальная длина поля context, СИМВОЛЫ (0 — выключено; "
+              "context извлекается из чанка вокруг термина, 1–2 "
+              "предложения, не от LLM; по умолчанию: 300)."),
+    )
+    parser.add_argument(
         "--compile_chapters", action="store_true",
         help=(
             "Собрать chapters/*/chapter.txt и использовать как вход "
@@ -1513,6 +1546,14 @@ def main():
 
     load_initial_ner(args.ner_file, args.ngram, logger)
 
+    if args.context_max_len > 0:
+        _log(logger, logging.INFO,
+             f"📝 context: извлекается из чанка вокруг термина "
+             f"(макс. {args.context_max_len} СИМВОЛОВ, 1–2 предложения)")
+    else:
+        _log(logger, logging.INFO,
+             "📝 context: извлечение выключено (--context_max_len 0)")
+
     base_url = args.host.rstrip("/")
     if not base_url.endswith("/v1"):
         base_url += "/v1"
@@ -1587,6 +1628,7 @@ def main():
             save_interval=save_interval,
             logger=logger,
             reasoning_effort=args.reasoning_effort,
+            context_max_len=args.context_max_len,
         )
 
     # ════════════════════════════════════════════════════════════════
@@ -1628,6 +1670,8 @@ def main():
                     _log(logger, logging.ERROR, f"⚠️ Chunk {idx}: {err}")
                     tqdm.write(f"⚠️  Chunk {idx}: {err}")
                 elif ners:
+                    fill_term_context(ners, all_chunks[idx],
+                                      args.context_max_len)
                     a, u = update_global_ner(
                         ners, idx, args.threshold, args.ngram, logger,
                     )

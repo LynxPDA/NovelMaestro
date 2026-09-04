@@ -19,7 +19,9 @@
   strip_line_comment (inline-комментарий « # …» в конце строки правила;
   «#» без пробела слева — не комментарий; строка с «#» в начале — "")
 NER: load_ner_data / find_relevant_ner (поиск по term+aliases в оригинальном написании) /
-  collect_gender_names (поиск имён по translation; пол по наличию (female)/(male) в type)
+  collect_gender_names (поиск имён по translation; пол по наличию (female)/(male) в type) /
+  extract_term_context (контекст термина из чанка: 1–2 предложения вокруг вхождения,
+  самое длинное из найденных; max_len — СИМВОЛЫ, 0 = выключено; границы 。！？.!?…\n)
 ner_check: filter_ner_items (порог count + типы) / format_ner_record /
   glossary_body / build_ner_batches (count по убыванию, бюджет СИМВОЛЫ;
   fields — какие поля записи передавать LLM, None = все, term — всегда) /

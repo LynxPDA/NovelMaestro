@@ -320,6 +320,8 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
         argv.append("--two-pass")
     if form.get("keep_fields"):
         argv += ["--keep-fields", str(form["keep_fields"])]
+    if form.get("context_max_len") not in (None, ""):
+        argv += ["--context_max_len", str(form["context_max_len"])]
     argv += _llm_argv(form, ctx, "ner")
     return argv
 
@@ -888,6 +890,10 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "keep_fields", "label": "Поля в голосование (через запятую)",
              "type": "text", "default": "",
              "help": "Пусто = голосуют translation/type/pinyin; notes, context, translated_context не голосуют. Пример: notes,context"},
+            {"name": "context_max_len", "label": "Максимальная длина \"context\"",
+             "type": "number", "default": "300",
+             "help": "СИМВОЛЫ: context извлекается из чанка вокруг термина "
+                      "(1–2 предложения), не от LLM; 0 — выключено"},
             {"name": "save_interval", "label": "Интервал сохранения ner.json",
              "type": "number", "default": "10",
              "help": "каждые N чанков — промежуточный снапшот глоссария. "
