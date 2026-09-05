@@ -4905,6 +4905,12 @@ async function renderQualityReports(section, name) {
   const err = h("div", { class: "form-error" });
   const empty = h("div", { class: "files-empty" });
   const sel = h("select", { class: "input" });
+  // плашки без текста не должны занимать место между селектом и отчётом
+  function syncMsgs() {
+    empty.hidden = !empty.textContent;
+    err.hidden = !err.textContent;
+  }
+  syncMsgs();
   const frame = h("iframe", {
     class: "editor-preview-frame preview-adaptive",
     sandbox: "allow-same-origin",
@@ -4931,9 +4937,11 @@ async function renderQualityReports(section, name) {
       frame.style.display = "block";
       empty.textContent = "";
       err.textContent = "";
+      syncMsgs();
     } catch (ex) {
       err.textContent = ex.message;
       frame.style.display = "none";
+      syncMsgs();
     }
   }
 
@@ -4956,6 +4964,7 @@ async function renderQualityReports(section, name) {
       empty.textContent =
         "Нет отчётов — запустите стадию «Оценка перевода (LLM)» (Запуски)";
       frame.style.display = "none";
+      syncMsgs();
       return;
     }
     sel.disabled = false;
