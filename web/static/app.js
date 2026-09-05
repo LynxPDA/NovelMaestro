@@ -952,7 +952,7 @@ async function viewSettings() {
   const envHost = h("div", { class: "editor-cm editor-cm-small" }, envEd.root);
   const envSave = h("button", { class: "btn btn-sm" }, "Сохранить");
   let envVisible = false;
-  let envWarn = h("div", { class: "form-error env-layer-warn hidden" });
+  const envWarn = h("div", { class: "form-error env-layer-warn hidden" });
   async function loadEnv() {
     envErr.textContent = "";
     try {
@@ -1145,12 +1145,11 @@ async function viewSettings() {
         h(
           "div",
           { class: "page-sub" },
-          "Сервер и LLM-конфиг — системный .env / переменные окружения; " +
-            "внешний вид — в браузере (localStorage)",
+          "внешний вид — в браузере (localStorage); сервер и LLM-конфиг — " +
+            "системный .env / переменные окружения",
         ),
       ),
     ),
-    envCard,
     lookCard,
     h(
       "div",
@@ -1176,6 +1175,7 @@ async function viewSettings() {
         ),
       ),
     ),
+    envCard,
   );
 }
 
