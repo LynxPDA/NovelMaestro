@@ -398,7 +398,13 @@ def find_exact_match(text: str, term: str) -> bool:
 # Контекст термина (поле context в глоссарии)
 # ══════════════════════════════════════════════════════════════════════
 
-_SENT_END_RE = re.compile(r"[。！？.!?…\n]")
+# знаки конца предложения любых языков: CJK, латиница/кириллица,
+# арабский/урду (؟۔), деванагари (।॥), армянский (։), эфиопский (።)
+_SENT_END_RE = re.compile(r"[。！？.!?…؟۔।॥։።\n]")
+# закрывающие кавычки/скобки после знака конца — часть предложения
+# («Он сказал: „Привет!“» — „“ не начинает следующее); зеркало —
+# ui-core.js glossarySentence
+_SENT_CLOSERS = "\"'»》)）]」』】〕›》"
 
 
 def _sentence_start(text: str, pos: int) -> int:
@@ -409,12 +415,27 @@ def _sentence_start(text: str, pos: int) -> int:
 
 
 def _sentence_end(text: str, pos: int) -> int:
-    """Конец предложения, содержащего позицию pos (пунктуация включена)."""
+    """Конец предложения (знак конца + закрывающие кавычки/скобки)."""
     while pos < len(text) and not _SENT_END_RE.search(text[pos]):
         pos += 1
     if pos < len(text) and text[pos] != "\n":
         pos += 1
+    while pos < len(text) and text[pos] in _SENT_CLOSERS:
+        pos += 1
     return pos
+
+
+def _iter_sentences(text: str):
+    """Спаны предложений (start, end) по знакам конца любых языков.
+    Закрывающие кавычки/скобки остаются в предыдущем предложении."""
+    start = 0
+    for m in _SENT_END_RE.finditer(text):
+        end = _sentence_end(text, m.start())
+        if end > start:
+            yield start, end
+        start = end
+    if start < len(text):
+        yield start, len(text)
 
 
 def _collapse_ws(s: str) -> str:
@@ -436,15 +457,22 @@ def _trim_context(text: str, a: int, b: int, s: int, e: int,
 
 
 def extract_term_context(text: str, term: str,
-                          max_len: int | None = 300) -> str:
+                          max_len: int | None = 300,
+                          threshold: float | None = None,
+                          ngram_size: int = 3) -> str:
     """Контекст термина из текста: предложение с термином.
 
     Ищет все вхождения термина (NFC; пробелы между словами — любые),
     для каждого берёт предложение с термином; из найденных выбирается
     самое длинное. Длиннее max_len СИМВОЛОВ — обрезается окном вокруг
-    термина. max_len <= 0/None — выключено (вернёт "").
-    Границы предложений — 。！？.!?… и перевод строки: работает для
-    любого языка. Возвращает "" если термин в тексте не найден.
+    термина. Точных вхождений нет и задан threshold — нечёткий поиск
+    по предложениям: n-граммное перекрытие нормализованных строк
+    >= threshold И longest common substring >= len(term)*threshold
+    (зеркально _fuzzy_hit в find_relevant_ner); CJK-термины — только
+    точный поиск. threshold=None — фолбэк выключен.
+    Границы предложений — знаки конца любых языков (。！？.!?… и др.)
+    и перевод строки: работает для любого языка. Возвращает "" если
+    термин в тексте не найден.
     """
     if not text or not term or max_len is None:
         return ""
@@ -469,6 +497,32 @@ def extract_term_context(text: str, term: str,
             candidates.append(_trim_context(text, a, b, s, e, max_len))
         else:
             candidates.append(base)
+    if not candidates and threshold is not None and not is_cjk(term[0]):
+        # нечёткий фолбэк: предложение чанка, наиболее похожее на термин
+        term_norm = normalize_for_search(term)
+        term_ngrams = get_ngrams(term_norm, n=ngram_size)
+        if term_norm and term_ngrams:
+            best = ""
+            for s, e in _iter_sentences(text):
+                sent_norm = normalize_for_search(text[s:e])
+                sent_ngrams = get_ngrams(sent_norm, n=ngram_size)
+                if not sent_ngrams:
+                    continue
+                if len(term_ngrams & sent_ngrams) / len(term_ngrams) \
+                        < threshold:
+                    continue
+                lm = difflib.SequenceMatcher(
+                    None, term_norm, sent_norm).find_longest_match(
+                    0, len(term_norm), 0, len(sent_norm))
+                if lm.size < len(term_norm) * threshold:
+                    continue
+                sent = _collapse_ws(text[s:e])
+                if len(sent) > max_len:
+                    sent = sent[:max_len]
+                if len(sent) > len(best):
+                    best = sent
+            if best:
+                candidates.append(best)
     if not candidates:
         return ""
     return max(candidates, key=len)

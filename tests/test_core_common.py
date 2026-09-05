@@ -174,6 +174,51 @@ def test_extract_term_context_disabled_and_missing():
     assert C.extract_term_context("текст", "", 300) == ""
 
 
+def test_extract_term_context_closing_quotes():
+    """Закрывающие кавычки/скобки после знака конца — часть предыдущего
+    предложения (не начинают следующее)."""
+    text = "Он сказал: «Привет, Джон!» И ушёл."
+    ctx = C.extract_term_context(text, "Джон", 300)
+    assert ctx == "Он сказал: «Привет, Джон!»"
+    # кавычка без знака конца внутри — не обрывает предложение
+    text2 = "Затем громкий «привет, Джон» разнёсся по залу. Тишина."
+    ctx2 = C.extract_term_context(text2, "Джон", 300)
+    assert ctx2 == "Затем громкий «привет, Джон» разнёсся по залу."
+
+
+def test_extract_term_context_multilang_ends():
+    """Знаки конца любых языков: арабский ؟, деванагари ।, армянский ։."""
+    text = "مرحبا جون كيف حالك. جون ذهب إلى البيت؟"
+    ctx = C.extract_term_context(text, "جون", 300)
+    assert ctx == "مرحبا جون كيف حالك."
+    ctx2 = C.extract_term_context("Сегодня Джон пришёл। Завтра уйдёт.",
+                                  "Джон", 300)
+    assert ctx2 == "Сегодня Джон пришёл।"  # граница по ।, знак в предложении
+
+
+def test_extract_term_context_fuzzy_fallback():
+    """Точного вхождения нет — нечёткий фолбэк по предложениям
+    (n-граммное перекрытие + longest match, порог threshold).
+    Напр. «Линь Шуй» найдётся в «Линь-Шуй» (пунктуация вырезана)."""
+    text = "Утром Линь-Шуй собрался в дорогу. Погода была ясная."
+    # без порога — фолбэк выключен, термин не найден
+    assert C.extract_term_context(text, "Линь Шуй", 300) == ""
+    ctx = C.extract_term_context(text, "Линь Шуй", 300, threshold=0.75)
+    assert ctx == "Утром Линь-Шуй собрался в дорогу."
+    # далеко не похожее предложение не берётся
+    ctx2 = C.extract_term_context(text, "Чжао Минь", 300, threshold=0.75)
+    assert ctx2 == ""
+
+
+def test_extract_term_context_fuzzy_cjk_exact_only():
+    """CJK-термин — только точный поиск (фолбэк не срабатывает)."""
+    text = "李晓明走进大殿。"
+    assert C.extract_term_context(text, "李小明", 300,
+                                  threshold=0.75) == ""
+    assert C.extract_term_context(text, "李晓明", 300,
+                                  threshold=0.75) == "李晓明走进大殿。"
+
+
 def test_trim_rule_left(): 
     """Правила замен: паддинг у «->» убирается, значимые пробелы
     у якорей («^  », «  $») сохраняются."""

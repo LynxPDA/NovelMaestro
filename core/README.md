@@ -28,7 +28,10 @@
 NER: load_ner_data / find_relevant_ner (поиск по term+aliases в оригинальном написании) /
   collect_gender_names (поиск имён по translation; пол по наличию (female)/(male) в type) /
   extract_term_context (контекст термина из чанка: предложение с термином,
-  самое длинное из найденных; max_len — СИМВОЛЫ, 0 = выключено; границы 。！？.!?…\n)
+  самое длинное из найденных; max_len — СИМВОЛЫ, 0 = выключено; границы —
+  знаки конца любых языков (。！？.!?… и др.) + закрывающие кавычки/скобки;
+  точных вхождений нет и threshold задан — нечёткий поиск по предложениям
+  (n-граммное перекрытие, зеркало _fuzzy_hit); CJK — только точный)
 ner_check: filter_ner_items (порог count + типы) / format_ner_record /
   glossary_body / build_ner_batches (count по убыванию, бюджет СИМВОЛЫ;
   fields — какие поля записи передавать LLM, None = все, term — всегда) /

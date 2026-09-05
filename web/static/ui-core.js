@@ -300,14 +300,18 @@
     },
 
     /* предложение вокруг выделения (добавление термина из chapter.txt):
-     * границы 。！？.!?… и перевод строки; не длиннее maxLen СИМВОЛОВ. */
+     * границы — знаки конца предложения любых языков (。！？.!?… и др.)
+     * и перевод строки; закрывающие кавычки/скобки после знака конца —
+     * часть предложения (зеркало core/common.py _SENT_CLOSERS);
+     * не длиннее maxLen СИМВОЛОВ. */
     glossarySentence: (text, from, to, maxLen) => {
       var src = String(text || "");
       var a = Math.max(0, Math.min(Number(from) || 0, src.length));
       var b = Math.max(a, Math.min(Number(to) || 0, src.length));
       var lim = Number(maxLen);
       if (!isFinite(lim) || lim <= 0) lim = 200;
-      var isEnd = (ch) => /[。！？.!?…\n]/.test(ch);
+      var isEnd = (ch) => /[。！？.!?…؟۔।॥։።\n]/.test(ch);
+      var isCloser = (ch) => "\"'»》)）]」』】〕›》".includes(ch);
       var start = a;
       while (start > 0 && !isEnd(src.charAt(start - 1))) start--;
       var end = b;
@@ -318,6 +322,8 @@
         src.charAt(end) !== "\n"
       ) {
         end++;
+        // закрывающие кавычки/скобки — часть предыдущего предложения
+        while (end < src.length && isCloser(src.charAt(end))) end++;
       }
       var sent = src.slice(start, end).replace(/\s+/g, " ").trim();
       if (sent.length <= lim) return sent;

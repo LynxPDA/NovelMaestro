@@ -346,6 +346,16 @@ test("glossarySentence: китайское предложение (。 — гр�
   );
 });
 
+test("glossarySentence: закрывающие кавычки — часть предложения", () => {
+  const t = "Он сказал: «Привет, Джон!» И ушёл.";
+  const from = t.indexOf("Джон");
+  const to = from + "Джон".length;
+  assert.equal(
+    UICore.glossarySentence(t, from, to, 200),
+    "Он сказал: «Привет, Джон!»",
+  );
+});
+
 test("glossarySentence: обрезка до maxLen, термин внутри окна", () => {
   const term = "TERM";
   const t = "а".repeat(180) + term + "б".repeat(180);

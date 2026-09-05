@@ -696,12 +696,16 @@ def process_chunk_pass2(
 # ══════════════════════════════════════════════════════════════════════
 
 
-def fill_term_context(ners: list[dict], chunk_text: str, max_len: int) -> None:
+def fill_term_context(ners: list[dict], chunk_text: str, max_len: int,
+                      threshold: float | None = None,
+                      ngram_size: int = 3) -> None:
     """Заполнить поле context из чанка, а не от LLM.
 
     Предложение с термином, не длиннее max_len СИМВОЛОВ;
-    0 — выключено (поле не трогаем). Термин не найден в чанке —
-    поле не заполняется (LLM context больше не возвращает).
+    0 — выключено (поле не трогаем). Термин не найден в чанке точно —
+    нечёткий поиск по предложениям (threshold/ngram_size — пороги
+    дедупликации термина). Ничего не найдено — поле не заполняется
+    (LLM context больше не возвращает).
     """
     if not max_len or max_len <= 0:
         return
@@ -709,7 +713,9 @@ def fill_term_context(ners: list[dict], chunk_text: str, max_len: int) -> None:
         term = str(ner.get("term", "")).strip()
         if not term:
             continue
-        ctx = extract_term_context(chunk_text, term, max_len)
+        ctx = extract_term_context(chunk_text, term, max_len,
+                                   threshold=threshold,
+                                   ngram_size=ngram_size)
         if ctx:
             ner["context"] = ctx
 
@@ -840,8 +846,10 @@ def run_two_pass(
                      f"✅ Pass2 chunk {idx}/{total}: {len(p2_ners)} entities")
                 tqdm.write(f"✅ Pass2 {idx}: {len(p2_ners)} ent.")
 
-            # context — из чанка (не от LLM): 1–2 предложения вокруг термина
-            fill_term_context(p2_ners, text, context_max_len)
+            # context — из чанка (не от LLM): 1–2 предложения вокруг
+            # термина; неточно — нечёткий поиск (пороги дедупликации)
+            fill_term_context(p2_ners, text, context_max_len,
+                              threshold=threshold, ngram_size=ngram_size)
 
             with done_lock:
                 completed[idx] = p2_ners
@@ -1669,7 +1677,9 @@ def main():
                     tqdm.write(f"⚠️  Chunk {idx}: {err}")
                 elif ners:
                     fill_term_context(ners, all_chunks[idx],
-                                      args.context_max_len)
+                                      args.context_max_len,
+                                      threshold=args.threshold,
+                                      ngram_size=args.ngram)
                     a, u = update_global_ner(
                         ners, idx, args.threshold, args.ngram, logger,
                     )
