@@ -13,6 +13,8 @@ translate_check.py — проверка перевода по цепочке к�
   • минимальный размер файла (--min-file-size, БАЙТЫ; дефолт 3072);
   • regexp-проверки текста главы (--regexp-check, multiline): всё
       найденное — ошибка, проверяются ВСЕ строки включая заголовок;
+      флаг в конце строки правила « |s» — пропустить первое
+      совпадение (первое вхождение — не ошибка);
       по умолчанию — иероглифы (все CJK-блоки), латиница и лишние
       «Глава N» (первое совпадение — заголовок главы, не ошибка);
       исключения — пусто: ничего;
@@ -52,6 +54,27 @@ _bootstrap_core()
 
 from core.common import (build_chapter_map, find_chapter_file,
                          strip_line_comment)  # noqa: E402
+
+
+def parse_regexp_rule(line: str):
+    """Строка правила regexp-проверки → (compiled, skip_first) | None.
+
+    Комментарий « # …» в конце строки срезается; флаг « |s» в конце
+    (разделитель — ровно один пробел, как у « |i»/« |r») — пропустить
+    первое совпадение: первое вхождение паттерна в текст главы — не
+    ошибка (например, лишние заголовки «Глава N»: первое — сам
+    заголовок главы). Пустая/комментарная строка → None.
+    """
+    line = strip_line_comment(line).strip()
+    if not line:
+        return None
+    skip_first = False
+    if line.endswith(" |s"):
+        skip_first = True
+        line = line[:-3].rstrip()
+    if not line:
+        return None
+    return re.compile(line, re.MULTILINE), skip_first
 
 # ──────────────────────────────────────────────
 # НАСТРОЙКИ (настраиваемые коэффициенты)
@@ -191,11 +214,12 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
     """Возвращает (список_ошибок, обновлённый_prev_inner_chapter).
     В список попадают ТОЛЬКО ошибки и предупреждения поиска.
     exclusions — слова-исключения (R9), по умолчанию load_exclusions().
-    regexp_checks — список compiled regexp по тексту главы: всё
-      найденное — ошибка, проверяются ВСЕ строки включая заголовок;
-      None = дефолтные проверки (иероглифы, латиница + лишние
-      заголовки «Глава N»: первое совпадение — заголовок главы, не
-      ошибка, последующие — «Лишний заголовок главы»).
+    regexp_checks — список правил (compiled, skip_first) по тексту
+      главы: всё найденное — ошибка; skip_first — первое совпадение
+      не ошибка (флаг « |s»); None = дефолтные проверки (иероглифы,
+      латиница + лишние заголовки «Глава N»: первое совпадение —
+      заголовок главы, не ошибка, последующие — «Лишний заголовок
+      главы»).
     min_file_size — минимальный размер файла (БАЙТЫ; None = дефолт).
     header_regexp — compiled regexp заголовка главы (первая непустая
       строка); None = дефолтный «Глава N» (без учёта регистра).
@@ -260,25 +284,39 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
         return errors, prev_inner_chapter
 
     # ---- regexp-проверки текста: ВСЕ строки, включая заголовок ----
-    #      дефолтный набор — иероглифы, латиница, заголовки «Глава N»;
-    #      первое совпадение паттерна заголовка — сам заголовок главы
-    #      (не ошибка), последующие — «Лишний заголовок главы»
-    regexes = list(regexp_checks) if regexp_checks is not None \
-        else [CHINESE_REGEX, ENGLISH_REGEX, header_re]
-    for rx in regexes:
+    #      правила пользователя (compiled, skip_first): skip_first —
+    #      первое совпадение не ошибка (флаг « |s»);
+    #      дефолтный набор (regexp_checks is None) — иероглифы,
+    #      латиница, лишние заголовки «Глава N»: первое совпадение
+    #      паттерна заголовка — сам заголовок главы (не ошибка),
+    #      последующие — «Лишний заголовок главы»
+    for rx, skip_first in (regexp_checks or []):
         first_skipped = False
         for h in rx.finditer(content):
             bad = h.group(0)
-            if rx is header_re and not first_skipped:
+            if skip_first and not first_skipped:
                 first_skipped = True
                 continue
             if bad.lower() in exclusions:
                 continue
-            if rx is header_re:
-                errors.append(
-                    f"  - Лишний заголовок главы: {bad.strip()[:80]}")
-            else:
+            errors.append(f"  - По паттерну {rx.pattern}: {bad}")
+    if regexp_checks is None:
+        for rx in (CHINESE_REGEX, ENGLISH_REGEX):
+            for h in rx.finditer(content):
+                bad = h.group(0)
+                if bad.lower() in exclusions:
+                    continue
                 errors.append(f"  - По паттерну {rx.pattern}: {bad}")
+        first_skipped = False
+        for h in header_re.finditer(content):
+            bad = h.group(0)
+            if not first_skipped:
+                first_skipped = True
+                continue
+            if bad.lower() in exclusions:
+                continue
+            errors.append(
+                f"  - Лишний заголовок главы: {bad.strip()[:80]}")
 
     # ---- заголовок главы: первая непустая строка (паттерн
     #      настраиваемый --header-regexp) ----
@@ -324,7 +362,9 @@ def main() -> None:
 Regexp-проверки текста (--regexp-check, по одной на строку): всё
 найденное — ошибка, проверяются ВСЕ строки, включая заголовок главы;
 ^/$ — начало/конец СТРОКИ (multiline); комментарий в конце строки —
-« # …». Пусто = встроенные дефолты (иероглифы, латиница, лишние
+« # …»; флаг в конце строки « |s» — пропустить первое совпадение
+(лишние заголовки «Глава N»: первое — сам заголовок главы).
+Пусто = встроенные дефолты (иероглифы, латиница, лишние
 заголовки «Глава N» — первое совпадение не ошибка). Заголовок главы
 (первая непустая строка) — --header-regexp (пусто = «Глава N» без
 учёта регистра); сквозная последовательность — первое число первой
@@ -376,8 +416,11 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
                         metavar="RE",
                         help="Regexp по тексту главы (multiline): всё "
                              "найденное — ошибка; можно повторять; "
-                             "комментарий в конце строки — « # …»; "
-                             "пусто = дефолтные проверки")
+                             "комментарий в конце строки — « # …»; флаг "
+                             "в конце строки « |s» — пропустить первое "
+                             "совпадение (лишние заголовки: первое — сам "
+                             "заголовок главы); пусто = дефолтные "
+                             "проверки")
     # ── структурные проверки (настраиваемые)
     parser.add_argument("--min-file-size", type=int, default=None,
                         help=f"Минимальный размер файла (БАЙТЫ; по "
@@ -429,9 +472,9 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
     comparisons = comparisons_for(check_type, args.neighbor, args.original)
     regexp_checks = []
     for line in args.regexp_check:
-        line = strip_line_comment(line).strip()
-        if line:
-            regexp_checks.append(re.compile(line, re.MULTILINE))
+        rule = parse_regexp_rule(line)
+        if rule is not None:
+            regexp_checks.append(rule)
     min_file_size = (args.min_file_size if args.min_file_size is not None
                      else MIN_FILE_SIZE)
     header_regex = re.compile(args.header_regexp or DEFAULT_HEADER_PATTERN,
@@ -462,7 +505,7 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
         f"Диапазон глав : {start_cap} – {end_cap}\n"
         f"Папка глав    : {os.path.abspath(chapters_dir)}\n"
         f"Сравнения     : {comp_desc}\n"
-        f"Regexp-проверки: {'; '.join(rx.pattern for rx in regexp_checks)}\n"
+        f"Regexp-проверки: {'; '.join(rx.pattern for rx, _ in regexp_checks)}\n"
         f"Мин. размер   : {min_file_size} Б\n"
         f"Заголовок     : {header_regex.pattern}\n"
         f"Последоват.   : {'вкл' if sequence_check else 'выкл'}\n"

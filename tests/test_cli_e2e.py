@@ -86,7 +86,7 @@ def test_tc_check_chapter_regexp_controls(tmp_path):
     errors, _ = TC.check_chapter(
         1, str(d), "polished", [("redacted", 1.0, 0.05)],
         strict=False, prev_inner_chapter=None,
-        exclusions=[], regexp_checks=[re.compile(r"[一-鿿]+")])
+        exclusions=[], regexp_checks=[(re.compile(r"[一-鿿]+"), False)])
     joined = "\n".join(errors)
     assert "中" in joined and "broken" not in joined
 
