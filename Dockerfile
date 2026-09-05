@@ -40,17 +40,18 @@ COPY . .
 
 # Снимок шаблонов образа: bind-mount ./templates:/app/templates перекрывает
 # содержимое образа — entrypoint копирует General/ и .env.example в пустой
-# хостовый каталог (иначе «Шаблоны» будут пустыми).
+# хостовый каталог (иначе «Шаблоны» будут пустыми) и сидирует системный
+# /app/projects/.env при первом старте.
 RUN mkdir -p /app/templates-dist \
     && cp -a /app/templates/. /app/templates-dist/ \
     && chown -R app:app /app/templates-dist
 
-# Конфиг по умолчанию: копия templates/.env.example → /app/.env
-# (заводские дефолты-фолбэк; корневой .env с секретами в образ НЕ входит —
-# .dockerignore). Реальный системный конфиг в Docker — WEB_ENV_FILE
-# (/app/projects/.env, постоянный том; entrypoint сидирует его из
-# templates-dist, правки вкладки «Настройки» переживают обновление).
-RUN cp /app/templates/.env.example /app/.env && chown app:app /app/.env
+# Заводского /app/.env в образе НЕТ: единственный системный конфиг —
+# WEB_ENV_FILE (/app/projects/.env, постоянный том; entrypoint сидирует
+# его из templates-dist/.env.example, правки вкладки «Настройки»
+# переживают обновление образа). Последний рубеж — встроенные дефолты
+# кода (канон «без .env не падаем»). Корневой .env репо с секретами
+# в образ НЕ входит (.dockerignore).
 
 # USER app НЕ ставится: контейнер стартует от root, docker-entrypoint.sh
 # делает chown каталогов данных и сам переключается на app (gosu).

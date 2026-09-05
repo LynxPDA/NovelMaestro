@@ -1370,6 +1370,44 @@ def test_env_global_respects_web_env_file(jobs_srv, tmp_path, monkeypatch):
     assert payload["keys"] == ["MARK"]
 
 
+def test_env_global_sources_and_env_extra(jobs_srv, tmp_path, monkeypatch):
+    """Прозрачность слоёв (scope=global): sources помечает ключи файла,
+    перекрытые os.environ (правка не применится); env_extra — ключи
+    окружения вне файла (имена, без значений)."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    env_file = tmp_path / "deploy.env"
+    env_file.write_text("HOST=http://file:1\nMODEL=m\n", encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(env_file))
+    monkeypatch.setenv("HOST", "http://env:2")     # перекрывает файл
+    monkeypatch.setenv("WEB_JOBS_LIMIT", "3")      # вне файла
+    monkeypatch.setenv("lowercase_var", "x")       # не ENV_STYLE — мимо
+    monkeypatch.setenv("NVM_BIN", "/x")            # шелл-шум — мимо
+    res, payload = req("GET", "/api/env?scope=global")
+    assert res.status == 200
+    assert payload["sources"] == {"HOST": "env", "MODEL": "file"}
+    assert "WEB_JOBS_LIMIT" in payload["env_extra"]
+    assert "HOST" not in payload["env_extra"] and "MODEL" not \
+        in payload["env_extra"]
+    assert "lowercase_var" not in payload["env_extra"]
+    assert "NVM_BIN" not in payload["env_extra"]
+
+
+def test_is_env_config_key():
+    """Фильтр env_extra: наши ключи — да, шелл-шум сессии — нет."""
+    from web.api import _is_env_config_key
+    for k in ("HOST", "API_KEY", "MODEL", "TZ", "WEB_PORT",
+              "PIPELINE_JOBS", "TRANSLATE_CHECK_NEIGHBOR",
+              "NER_CHUNK_SIZE", "NER_CHECK_SAVE_INTERVAL",
+              "WIKI_MODEL", "BATCH_REPLACE_REPLACEMENTS",
+              "EPUB_SPLIT_PATTERNS", "COMPILE_COVER",
+              "NER_CHECK_HOST", "TRANSLATE_CHECK_LLM_MODEL"):
+        assert _is_env_config_key(k), k
+    for k in ("PATH", "NVM_BIN", "LS_COLORS", "SSH_CLIENT", "AI_AGENT",
+              "lowercase_var", "LANG"):
+        assert not _is_env_config_key(k), k
+
+
 def test_persist_run_params_seed_from_web_env_file(tmp_path, monkeypatch):
     """Сид pdir/.env берётся из WEB_ENV_FILE (системный конфиг в Docker):
     проект наследует пользовательский системный конфиг, а не заводской."""

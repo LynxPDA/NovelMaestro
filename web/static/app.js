@@ -952,6 +952,7 @@ async function viewSettings() {
   const envHost = h("div", { class: "editor-cm editor-cm-small" }, envEd.root);
   const envSave = h("button", { class: "btn btn-sm" }, "Сохранить");
   let envVisible = false;
+  let envWarn = h("div", { class: "form-error env-layer-warn hidden" });
   async function loadEnv() {
     envErr.textContent = "";
     try {
@@ -964,6 +965,27 @@ async function viewSettings() {
           ? "Системный .env (дефолты всех проектов; в Docker — projects/.env в томе)"
           : "Системный .env · значения скрыты (--auth)"
         : "Системный .env не существует — сохраните, чтобы создать";
+      // прозрачность слоёв: перекрытые окружением ключи + окружение
+      // compose имеет приоритет над файлом — правка не применится
+      const over = Object.keys(d.sources || {})
+        .filter((k) => d.sources[k] === "env");
+      const extra = d.env_extra || [];
+      const parts = [];
+      if (over.length) {
+        parts.push(
+          "Перекрыты окружением (правка здесь не применится): "
+            + over.join(", "));
+      }
+      if (extra.length) {
+        parts.push(
+          "Заданы в окружении, но не в файле: " + extra.join(", "));
+      }
+      if (parts.length) {
+        envWarn.textContent = parts.join(" · ");
+        envWarn.classList.remove("hidden");
+      } else {
+        envWarn.classList.add("hidden");
+      }
     } catch (ex) {
       envErr.textContent = ex.message;
     }
@@ -1013,13 +1035,14 @@ async function viewSettings() {
         envSave,
       ),
       envHost,
+      envWarn,
       h(
         "div",
         { class: "field-help" },
         "дефолты для всех проектов; проектный .env (вкладка «Конфиг») " +
           "перекрывает по ключам; в Docker файл живёт в томе projects — " +
-          "правки переживают обновление образа; environment compose " +
-          "приоритетнее файла",
+          "правки переживают обновление образа; WEB_* из environment " +
+          "compose применяются после рестарта сервера",
       ),
       envErr,
     ),
@@ -2141,29 +2164,7 @@ async function viewTemplates() {
       if (!e.dir) {
         /* General — только чтение: «Просмотр» вместо «Правка»,
            Скачать тоже доступен */
-        if (!writable) {
-          actions.append(
-            h(
-              "button",
-              {
-                class: "btn btn-sm btn-ghost",
-                onclick: () => openEdit(full),
-              },
-              "Просмотр",
-            ),
-          );
-          actions.append(
-            h(
-              "a",
-              {
-                class: "btn btn-sm btn-ghost",
-                href: downloadUrl(full),
-                download: e.name,
-              },
-              "Скачать",
-            ),
-          );
-        } else {
+        if (writable) {
           actions.append(
             h(
               "a",
@@ -2226,6 +2227,28 @@ async function viewTemplates() {
                   }),
               },
               "Удалить",
+            ),
+          );
+        } else {
+          actions.append(
+            h(
+              "button",
+              {
+                class: "btn btn-sm btn-ghost",
+                onclick: () => openEdit(full),
+              },
+              "Просмотр",
+            ),
+          );
+          actions.append(
+            h(
+              "a",
+              {
+                class: "btn btn-sm btn-ghost",
+                href: downloadUrl(full),
+                download: e.name,
+              },
+              "Скачать",
             ),
           );
         }

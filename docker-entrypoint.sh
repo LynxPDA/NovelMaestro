@@ -33,10 +33,12 @@ fi
 
 # 3. Системный .env — в постоянном томе projects (WEB_ENV_FILE в
 #    образе указывает на этот файл): правки вкладки «Настройки»
-#    переживают обновление образа. Первый старт — сид из снимка шаблонов.
+#    переживают обновление образа. Первый старт — сид из снимка шаблонов;
+#    ключи LLM внутри — chmod 600, как у .web_secret.
 if [ ! -f /app/projects/.env ] && [ -f /app/templates-dist/.env.example ]; then
     cp /app/templates-dist/.env.example /app/projects/.env
     chown app:app /app/projects/.env
+    chmod 600 /app/projects/.env
 fi
 
 # 4. Запуск сервера от app (не root).

@@ -34,7 +34,7 @@
       .web_secret); entrypoint сидирует его из templates-dist при
       первом старте; core.common.system_env_file (WEB_ENV_FILE →
       find_env_file) — все серверные чтения системного слоя (Настройки,
-      префилл, персист, _llm_argv, web/main._env_cfg) и сиды pdir/.env
+      префилл, персист,_llm_argv, web/main._env_cfg) и сиды pdir/.env
       идут в персистентный файл; скрипты с cwd в проекте находят
       projects/.env подъёмом раньше /app/.env автоматически;
       /app/.env — заводской фолбэк; приоритет: environment compose >
@@ -45,6 +45,17 @@
       тесты WEB_ENV_FILE (GET/PUT global, сид pdir, префилл,
       system_env_file); playwright: правка на «Настройках» доезжает
       до файла в томе.
+- [x] **4. Политика слоёв: compose — только деплой-обвязка** —
+      в docker compose environment задают ТОЛЬКО WEB_* (и TZ); LLM-конфиг
+      и дефолты стадий в compose НЕ задают — их единое место системный
+      .env (вкладка «Настройки» / projects/.env в томе); заводской
+      /app/.env из образа убран (последний рубеж — встроенные дефолты
+      кода); сид projects/.env — chmod 600 (как .web_secret);
+      прозрачность на «Настройках»: GET /api/env scope=global возвращает
+      sources (ключ перекрыт окружением — правка не применится) и
+      env_extra (ключи окружения вне файла), UI показывает оба
+      предупреждения; доки (AGENTS §7, packaging, web/README, help,
+      compose); тест sources/env_extra.
 
 ## Текущая сессия (после 0.2.3 — обмен с LLM в ner_check: исправленные записи вместо патчей)
 

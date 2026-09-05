@@ -1371,12 +1371,33 @@ def _env_no_auth(ctx: dict) -> bool:
     return bool(auth_obj is not None and getattr(auth_obj, "no_auth", False))
 
 
+_ENV_KEY_PREFIXES = ("WEB_", "PIPELINE_", "TRANSLATE_CHECK_", "NER_CHECK_",
+                     "NER_", "BATCH_REPLACE_", "COMPILE_", "WIKI_",
+                     "EPUB_", "CHUNK_", "MIN_LEN_RATIO_")
+_ENV_KEY_SUFFIXES = ("_HOST", "_API_KEY", "_MODEL")
+
+
+def _is_env_config_key(key: str) -> bool:
+    """Похожа ли переменная окружения на ключ конфига NovelMaestro
+    (для env_extra в GET /api/env: только имена наших ключей, без
+    шелл-шума сессии — NVM_BIN, LS_COLORS, PI_* агента и т.п.)."""
+    if key.startswith("PI_"):
+        return False
+    if key in ("HOST", "API_KEY", "MODEL", "TZ"):
+        return True
+    return key.startswith(_ENV_KEY_PREFIXES) \
+        or key.endswith(_ENV_KEY_SUFFIXES)
+
+
 def _env_get(ctx: dict) -> dict:
     """.env (GET /api/env?project=&scope=project|global).
 
     W6: без аутентификации (доверенная LAN) значения ВИДИМЫ — отдаём
     целиком (content). При --auth — только ключи и маска ••••.
     Плюс пометка source: чей файл фактически открыт (project/shared/repo).
+    scope=global — прозрачность слоёв: sources (ключ файла перекрыт
+    os.environ — правка на «Настройках» не применится) и env_extra
+    (ключи окружения, которых нет в файле: WEB_* из compose и т.п.).
     """
     scope = ctx["query"].get("scope", "project")
     p = _env_path(ctx, scope)
@@ -1384,7 +1405,7 @@ def _env_get(ctx: dict) -> dict:
     if not p.is_file():
         return {"ok": True, "scope": scope, "exists": False,
                 "masked": "", "keys": [], "visible": _env_no_auth(ctx),
-                "values": {}, **info}
+                "values": {}, "sources": {}, "env_extra": [], **info}
     text = p.read_text(encoding="utf-8", errors="replace")
     keys = [line.split("=", 1)[0].strip()
             for line in text.splitlines()
@@ -1394,6 +1415,15 @@ def _env_get(ctx: dict) -> dict:
             "visible": _env_no_auth(ctx), **info}
     if _env_no_auth(ctx):
         resp["content"] = text
+    # Прозрачность слоёв (канон «окружение > файл»): какие ключи файла
+    # перекрыты os.environ (правка в файле не применится) и какие ключи
+    # есть в окружении, но не в файле (значения не отдаём — только имена)
+    resp["sources"] = {k: "env" if os.environ.get(k, "").strip()
+                       else "file" for k in keys}
+    resp["env_extra"] = sorted(
+        k for k in os.environ
+        if k not in keys and os.environ.get(k, "").strip()
+        and _is_env_config_key(k))
     # M9: значения НЕсекретных ключей (COMPILE_EPUB_COVER и т.п.) — для
     # предзаполнения селектов в «Настройках»; секреты (API_KEY/TOKEN/…)
     # не отдаются даже без аутентификации (маскировка их и так прячет)
