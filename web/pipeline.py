@@ -43,7 +43,8 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 from core.common import (  # noqa: E402
     PROGRESS_PREFIX, build_chapter_map, find_env_file, format_ranges,
-    get_server_config, parse_dotenv, env_overlay,
+    get_server_config, parse_dotenv, env_overlay, preview_logger,
+    preview_request_payload, write_preview_request,
 )
 
 # ═══ Константы (канон run_pipeline.py) ═══
@@ -553,6 +554,11 @@ def main() -> None:
     ap.add_argument("--ner_fields", default="term,translation,type",
                     help="Поля термина в {ner_block} через запятую "
                          "(aliases снят — авто-алиасы выключены).")
+    ap.add_argument("--preview-request", dest="preview_request",
+                   default=None,
+                   help="ПРЕДПРОСМОТР: первый LLM-запрос действия "
+                        "(стадия 1 цикла, первая глава, чанк 1, "
+                        "1 поток) без сети → JSON-файл.")
     args = ap.parse_args()
 
     log = logging.getLogger("web.pipeline")
@@ -609,7 +615,7 @@ def main() -> None:
     # единая модель конвейера: PIPELINE_MODEL → общая MODEL
     model = args.model or sc["model"] or ""
 
-    if not host:
+    if not host and not args.preview_request:
         log.error("Host LLM-сервера не задан: укажите --host или создайте .env (HOST)")
         sys.exit(1)
 
@@ -630,8 +636,10 @@ def main() -> None:
     action_label = action_spec["name"]
     # общий лог запуска (канон run_pipeline.sh): один файл на запуск
     # для ЛЮБОГО типа работы — logs/{Метка}_{start}-{end}_j{jobs}_{время}.log
-    # (детальные логи по главам — logs/chapters/ как раньше)
-    try:
+    # (детальные логи по главам — logs/chapters/ как раньше);
+    # в режиме предпросмотра файлы логов не создаются
+    if not args.preview_request:
+      try:
         short = {1: "Translate", 2: "Redact", 3: "Polish"}
         common_label = "FullCycle" if stages == [1, 2, 3] \
             else "".join(short[s] for s in stages)
@@ -652,7 +660,7 @@ def main() -> None:
             datefmt="%Y-%m-%d %H:%M:%S"))
         log.addHandler(fh)
         log.info("ОБЩИЙ ЛОГ  : %s", common_log)
-    except OSError as exc:
+      except OSError as exc:
         log.warning("Общий лог запуска не пишется: %s", exc)
     # промпт-файлы — явный общий файл > авто (первый кандидат с тегами
     # из prompts/); пусто = встроенные промпты translate_book.py
@@ -677,6 +685,59 @@ def main() -> None:
              "" if not no_aliases else " (без алиасов)")
     log.info("ВРЕМЯ      : %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     log.info("═" * 60)
+
+    # ── Предпросмотр запроса (--preview-request): первый LLM-запрос
+    #    действия (стадия 1 цикла, первая глава, чанк 1) без сети;
+    #    артефакты и логи запуска не создаются ──
+    if args.preview_request:
+        stage = stages[0]
+        in_name, _ = _STAGE_IO[stage]
+        if stage == 3:
+            in_name = action_spec.get("polish_input") or in_name
+        cid = start if start in chapters else ids[0]
+        in_file = Path(chapters[cid][0]) / in_name
+        if not in_file.is_file():
+            log.error("ПРЕДПРОСМОТР: нет исходника главы %03d: %s",
+                      cid, in_file)
+            sys.exit(1)
+        cmd = build_stage_cmd(
+            stage, script, in_file, Path("tmp") / "preview_out.txt",
+            host, api_key, model, args.timeout, args.temperature,
+            args.reasoning_effort, args.stream_timeout,
+            args.max_retries, 1,
+            prompt_file=prompts.get(stage) or "",
+            ner_min_count=args.ner_min_count,
+            names_min_count=args.names_min_count,
+            ner_fields=args.ner_fields, no_aliases=no_aliases)
+        cmd += ["--preview-request", args.preview_request]
+        proc_env = dict(os.environ)
+        if api_key:
+            proc_env["LLM_API_KEY"] = api_key
+        log.info("ПРЕДПРОСМОТР : %s · глава %03d · чанк 1 · 1 поток",
+                 _STAGE_NAME[stage], cid)
+        try:
+            proc = subprocess.run(cmd, env=proc_env, capture_output=True,
+                                  text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            log.error("ПРЕДПРОСМОТР: таймаут 300 с")
+            sys.exit(1)
+        if proc.returncode != 0:
+            log.error("ПРЕДПРОСМОТР: ошибка (rc=%d)\n%s",
+                      proc.returncode,
+                      grep_errors((proc.stderr or "") + (proc.stdout or "")))
+            sys.exit(1)
+        pv = Path(args.preview_request)
+        if not pv.is_file():
+            log.error("ПРЕДПРОСМОТР: файл не создан: %s", pv)
+            sys.exit(1)
+        try:
+            data = json.loads(pv.read_text(encoding="utf-8"))
+            chars = data.get("chars", {})
+            log.info("ПРЕДПРОСМОТР : OK — %s (user %s симв.)",
+                     pv, chars.get("user", "?"))
+        except (OSError, ValueError):
+            log.info("ПРЕДПРОСМОТР : OK — %s", pv)
+        sys.exit(0)
 
     to_process = {cid: [Path(p) for p in dirs]
                   for cid, dirs in chapters.items() if start <= cid <= end}

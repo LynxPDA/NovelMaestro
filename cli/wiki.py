@@ -54,6 +54,9 @@ from core.common import (  # noqa: E402
     setup_logging as _cc_setup_logging,
     stream_chat_completion,
     web_progress_enabled,
+    preview_logger,
+    preview_request_payload,
+    write_preview_request,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -633,18 +636,19 @@ def _format_term_for_prompt(item: dict) -> str:
 # ГЕНЕРАЦИЯ: СТАТЬЯ ПО ОДНОМУ ТЕРМИНУ
 # ══════════════════════════════════════════════════════════════════════
 
-def generate_article(
+def build_article_prompts(
     item: dict,
     fragments: list[str],
     co_occur: list[tuple[str, str, int]],
     base_type: str,
     system_prompt: str,
-    llm_args: dict,
-    logger,
     type_names_ru: dict | None = None,
     relations_labels: dict | None = None,
     skip_relations: set | None = None,
-) -> str | None:
+) -> tuple[str, str]:
+    """(sys_prompt, user_content) статьи термина: данные термина,
+    взаимосвязи, фрагменты текста; плейсхолдеры системного промпта.
+    Используется и в предпросмотре запроса."""
     translation = _get_translation(item)
     type_names_ru = type_names_ru or TYPE_NAMES_RU
     relations_labels = relations_labels or SECTION_RELATIONS_LABEL
@@ -677,7 +681,27 @@ def generate_article(
         sys_prompt = sys_prompt.replace(
             f"- ### {rel_label} — в контексте данного типа.\n", ""
         )
+    return sys_prompt, user_content
 
+
+def generate_article(
+    item: dict,
+    fragments: list[str],
+    co_occur: list[tuple[str, str, int]],
+    base_type: str,
+    system_prompt: str,
+    llm_args: dict,
+    logger,
+    type_names_ru: dict | None = None,
+    relations_labels: dict | None = None,
+    skip_relations: set | None = None,
+) -> str | None:
+    sys_prompt, user_content = build_article_prompts(
+        item, fragments, co_occur, base_type, system_prompt,
+        type_names_ru=type_names_ru,
+        relations_labels=relations_labels,
+        skip_relations=skip_relations,
+    )
     return llm_request(sys_prompt, user_content, logger=logger, **llm_args)
 
 
@@ -866,6 +890,7 @@ def run_wiki_generation(
     relations_labels: dict | None = None,
     skip_relations: set | None = None,
     type_order: list | None = None,
+    preview_request: str | None = None,
 ) -> None:
 
     # ── Статистика отбора ──
@@ -898,6 +923,12 @@ def run_wiki_generation(
         ]
         _log(logger, logging.INFO,
              f"   После исключения типов: {len(filtered)}")
+
+    # ── Предпросмотр запроса: только первый термин (быстрый путь) ──
+    if preview_request:
+        filtered = filtered[:1]
+        _log(logger, logging.INFO,
+             "🔍 Предпросмотр: контекст только для первого термина")
 
     if not filtered:
         _log(logger, logging.WARNING,
@@ -963,6 +994,39 @@ def run_wiki_generation(
              "⚠️ НИ ОДНОГО фрагмента не найдено! "
              "Проверьте: novel.txt — русский текст, "
              "ner.json содержит корректные translation.")
+
+    # ── Предпросмотр запроса (--preview-request): первая статья ──
+    if preview_request:
+        log = preview_logger("wiki")
+        item0 = filtered[0]
+        trans0 = _get_translation(item0)
+        sys0, user0 = build_article_prompts(
+            item0, fragments_map.get(trans0, []),
+            co_occurrence.get(trans0, []),
+            _get_base_type(item0.get("type")), system_prompt,
+            type_names_ru=type_names_ru,
+            relations_labels=relations_labels,
+            skip_relations=skip_relations,
+        )
+        payload = preview_request_payload(
+            "wiki", f"Статья «{trans0}» (1/{len(filtered)})",
+            llm_args.get("model", ""),
+            [{"role": "system", "content": sys0},
+             {"role": "user", "content": user0}],
+            meta={
+                "terms": above_min,
+                "selected": len(filtered),
+                "min_count": min_count,
+                "top_n": top_n,
+                "context_chunks": context_chunks,
+                "near_distance": near_distance,
+                "fragments": len(fragments_map.get(trans0, [])),
+            })
+        write_preview_request(preview_request, payload)
+        _log(log, logging.INFO,
+             f"✅ Предпросмотр запроса: {preview_request} "
+             f"({len(user0)} симв. user)")
+        return
 
     # ── Задачи: все термины → индивидуальные статьи ──
     total_tasks = len(filtered)
@@ -1243,6 +1307,12 @@ def main():
     )
 
     # ── Co-occurrence ──
+    parser.add_argument(
+        "--preview-request", dest="preview_request", default=None,
+        help="ПРЕДПРОСМОТР: запрос первой статьи Wiki без сети →\n"
+             "JSON-файл (messages + статистика СИМВОЛОВ); контекст\n"
+             "собирается только для первого термина.",
+    )
     g_co = parser.add_argument_group("Co-occurrence (связи между терминами)")
     g_co.add_argument(
         "--co-occurrence-pairs",
@@ -1594,6 +1664,7 @@ def main():
         max_workers=max(1, min(16, args.threads)),
         save_interval=max(1, args.save_interval),
         cache_file=cache_file,
+        preview_request=args.preview_request,
         output_path=args.output,
         co_pairs=co_pairs,
         co_top=args.co_occurrence_top,

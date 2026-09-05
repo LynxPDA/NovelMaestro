@@ -783,6 +783,7 @@ STAGE_SPECS: dict[str, dict] = {
     },
     "pipeline": {
         "title": "Перевод (LLM)",
+        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
         "script": "web/pipeline.py",
         "build": build_pipeline,
         "fields": _LLM_FIELDS + [
@@ -858,6 +859,7 @@ STAGE_SPECS: dict[str, dict] = {
     },
     "ner": {
         "title": "Создание глоссария (LLM)",
+        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
         "script": "ner.py",
         "build": build_ner,
         "fields": _LLM_FIELDS + [
@@ -934,6 +936,7 @@ STAGE_SPECS: dict[str, dict] = {
     },
     "ner_check": {
         "title": "Проверка глоссария (LLM)",
+        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
         "script": "ner_check.py",
         "build": build_ner_check,
         "fields": _LLM_FIELDS + [
@@ -1027,6 +1030,7 @@ STAGE_SPECS: dict[str, dict] = {
     },
     "translate_check_llm": {
         "title": "Проверка перевода (LLM)",
+        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
         "script": "translate_check_llm.py",
         "build": build_translate_check_llm,
         "fields": _LLM_FIELDS + [
@@ -1077,6 +1081,7 @@ STAGE_SPECS: dict[str, dict] = {
     },
     "translate_quality": {
         "title": "Оценка перевода (LLM)",
+        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
         "script": "translate_quality.py",
         "build": build_translate_quality,
         "fields": _LLM_FIELDS + [
@@ -1128,6 +1133,7 @@ STAGE_SPECS: dict[str, dict] = {
     },
     "wiki": {
         "title": "Создание Wiki (LLM)",
+        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
         "script": "wiki.py",
         "build": build_wiki,
         "fields": _LLM_FIELDS + [

@@ -33,8 +33,25 @@
       (n-gram-перекрытие + longest match, порог 0.75 = --threshold
       стадии ner; CJK — только точный); ner.py прокидывает пороги;
       доки (core/README, AGENTS §6); pytest + spa-тесты.
-- [ ] **4. Предпросмотр запроса LLM** — кнопка (экспертный режим) для
-      всех LLM-стадий: эмуляция первого запроса + статистика символов.
+- [x] **4. Предпросмотр запроса LLM** — кнопка (только Экспертный
+      режим, только LLM-стадии — флаг preview в спеке: pipeline, ner,
+      ner_check, translate_check_llm, translate_quality, wiki):
+      эмуляция ПЕРВОГО запроса стадии без сети + модалка (сообщения
+      system/user, статистика СИМВОЛОВ, meta). Реализация: три хелпера
+      в core/common.py (preview_request_payload — сводка символов по
+      ролям; write_preview_request — атомарный JSON; preview_logger —
+      только stderr, файловые логи mode="w" не трогаются) + флаг
+      --preview-request у 6 скриптов (translate_book: чанк 1 режима;
+      ner: pass1 первого чанка; ner_check: первый батч прохода / RAG
+      первого термина; translate_check_llm: pass1 первого батча
+      (compose_batch_text вынесен из process_batch); translate_quality:
+      первый пакет; wiki: первая статья (build_article_prompts вынесен
+      из generate_article, контекст — только для первого термина)) —
+      из того же пути сборки, что реальный запуск; web/pipeline.py:
+      --preview-request = первая стадия действия, первая глава, чанк 1,
+      1 поток (без файлов логов); API POST
+      /api/stages/{key}/preview-request (синхронно, таймаут 300 с);
+      доки (core/README, AGENTS §6, web/README); pytest + spa-тесты.
 
 ## Текущая сессия (после 0.2.3 — слои конфига, группировка LLM-настроек)
 

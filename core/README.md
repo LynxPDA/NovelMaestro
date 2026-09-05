@@ -62,6 +62,10 @@ LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) 
 прогресс (web): web_progress_enabled (флаг WEB_PROGRESS=1 ставит JobManager.start) /
   emit_progress (done, total, label → stdout-строка @@PROGRESS@@ + JSON,
   только в web-режиме; total=None/0 — неопределённый бар; no-op в CLI)
+предпросмотр запроса (web+CLI): preview_request_payload (JSON {stage, label,
+  model, messages, chars — СИМВОЛЫ по ролям + total, meta}) /
+  write_preview_request (атомарная запись) / preview_logger (логгер
+  ТОЛЬКО stderr — файловые логи скриптов mode="w" не трогаются)
 главы: parse_chapter_id / build_chapter_map / find_chapter_file(strict) / format_ranges /
   compile_chapter_text (склейка chapter.txt из папок глав в память,
   (text, info), start/end) / compile_chapter_texts (та же склейка → файл) /

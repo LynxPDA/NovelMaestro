@@ -1130,6 +1130,75 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return { bar, box, loadFields };
   }
 
+  // «Предпросмотр запроса» (LLM-стадии, Экспертный режим): POST
+  // /stages/{key}/preview-request — синхронная эмуляция ПЕРВОГО
+  // LLM-запроса стадии без сети; модалка показывает messages и
+  // статистику символов из payload.
+  async function previewRequestModal(key, spec, mode) {
+    const err = h("div", { class: "form-error" });
+    const host = h("div", { class: "preview-req-body" });
+    const modal = h(
+      "div",
+      { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
+      h(
+        "div", { class: "modal modal-wide" },
+        h("div", { class: "modal-title" }, "Предпросмотр запроса"),
+        err,
+        host,
+        h(
+          "div", { class: "modal-actions" },
+          h("button", { class: "btn btn-ghost", onclick: close }, "Закрыть"),
+        ),
+      ),
+    );
+    function close() {
+      modal.remove();
+    }
+    document.body.append(modal);
+    host.append(h("div", { class: "preview-req-head" }, "Формирование запроса…"));
+    try {
+      const d = await api(`/stages/${key}/preview-request`, {
+        method: "POST",
+        body: {
+          project: `${section}/${name}`,
+          params: buildParams(key, spec, mode),
+        },
+      });
+      host.replaceChildren(previewRequestView(d));
+    } catch (ex) {
+      err.textContent = ex.message;
+      host.replaceChildren();
+    }
+  }
+
+  // содержимое модалки предпросмотра: сводка (label/модель/символы),
+  // meta и сообщения с полными текстами
+  function previewRequestView(d) {
+    const chars = d.chars || {};
+    const nodes = [];
+    nodes.push(h(
+      "div", { class: "preview-req-head" },
+      `${d.label || d.stage || ""} · модель: ${d.model || "?"}`
+      + ` · символов: user ${chars.user ?? "?"}`
+      + (chars.system ? `, system ${chars.system}` : "")
+      + (chars.total != null ? ` (всего ${chars.total})` : ""),
+    ));
+    const meta = d.meta && Object.keys(d.meta).length
+      ? Object.entries(d.meta).map(([k, v]) => `${k}: ${v}`).join(" · ")
+      : null;
+    if (meta) {
+      nodes.push(h("div", { class: "preview-req-head" }, meta));
+    }
+    for (const m of d.messages || []) {
+      nodes.push(h(
+        "div", { class: "preview-req-msg" },
+        h("div", { class: "preview-req-role" }, m.role || "?"),
+        h("pre", { class: "preview-req-text" }, String(m.content ?? "")),
+      ));
+    }
+    return h("div", null, nodes);
+  }
+
   // «Редактировать» промпт из запуска: чтение/правка/сохранение
   // выбранного файла prompts/ (GET/PUT /api/prompts/{name})
   function editPromptModal(fileName) {
@@ -2235,11 +2304,26 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     });
 
+    // «Предпросмотр запроса» — только LLM-стадии (spec.preview),
+    // только в Экспертном режиме
+    const previewBtn = spec.preview
+      ? h("button", { class: "btn btn-ghost",
+                      title: "Эмулировать ПЕРВЫЙ LLM-запрос стадии "
+                            + "(чанк/батч 1) без сети — текст запроса "
+                            + "и статистика символов" },
+                 "Предпросмотр запроса")
+      : null;
+    if (previewBtn) {
+      previewBtn.addEventListener("click", () =>
+        previewRequestModal(key, spec, "expert"));
+    }
+
     // обёртки полей текущей формы — для панели предпросмотра замен
     // (batch_replace: реакции на смену типа/диапазона/правил)
     st.curWraps = fieldWraps;
 
-    return h("div", { class: "run-form" }, formNodes, err, runBtn);
+    return h("div", { class: "run-form" }, formNodes, err,
+             ...(previewBtn ? [previewBtn] : []), runBtn);
   }
 
   // ── epub: панель предпросмотра разбивки ──────────────────────────────

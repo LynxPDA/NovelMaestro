@@ -1451,6 +1451,56 @@ def emit_progress(done: int, total: int | None, label: str = "") -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# ПРЕДПРОСМОТР LLM-ЗАПРОСА (кнопка «Предпросмотр запроса» в Запусках)
+# ══════════════════════════════════════════════════════════════════════
+
+def preview_request_payload(stage, label, model, messages,
+                            meta=None) -> dict:
+    """JSON-структура предпросмотра первого LLM-запроса стадии.
+
+    messages — [{role, content}]; chars — статистика СИМВОЛОВ по
+    ролям и суммарно (токены сервер считает сам). Вызывается
+    скриптами с --preview-request; writes — write_preview_request."""
+    role_chars = {}
+    total = 0
+    for m in messages:
+        n = len(m.get("content") or "")
+        role_chars[m.get("role") or "?"] = n
+        total += n
+    payload = {
+        "stage": stage,
+        "label": label,
+        "model": model or "",
+        "messages": messages,
+        "chars": {**role_chars, "total": total},
+    }
+    if meta:
+        payload["meta"] = meta
+    return payload
+
+
+def write_preview_request(path, payload) -> None:
+    """Атомарная запись JSON предпросмотра (tmp + os.replace)."""
+    atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def preview_logger(name: str = "preview") -> logging.Logger:
+    """Логгер предпросмотра: ТОЛЬКО stderr.
+
+    Лог запуска в web режется stdout-хендлером job'а; файловые логи
+    скриптов открываются в mode="w" — файл предпросмотра туда писать
+    нельзя (затёр бы реальный лог)."""
+    log = logging.getLogger(f"preview.{name}")
+    if not log.handlers:
+        sh = logging.StreamHandler(sys.stderr)
+        sh.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        log.addHandler(sh)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    return log
+
+
+# ══════════════════════════════════════════════════════════════════════
 # FTS5: полнотекстовый индекс (RAG-поиск контекста, wiki, ner_check-rag)
 # ══════════════════════════════════════════════════════════════════════
 def fts_escape(s: str) -> str:

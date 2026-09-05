@@ -76,6 +76,10 @@ from core.common import (
     split_text_smart,
     stream_chat_completion,
     web_progress_enabled,
+    preview_logger,
+    preview_request_payload,
+    write_preview_request,
+
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -177,6 +181,40 @@ def save_result_ordered(fh, idx, text, original):
 # ══════════════════════════════════════════════════════════════════════
 # ОБРАБОТКА ОДНОГО ЧАНКА
 # ══════════════════════════════════════════════════════════════════════
+def build_user_content(mode, prompt, original_text, draft_text,
+                       ner_block, female_block, male_block,
+                       logger=None):
+    """user_content режима: плейсхолдеры промпта → значения.
+
+    translate/polish: {original_text} — обязательный тег-переменная;
+    нет тега — предупреждение (один раз на режим), текст дописывается
+    после промпта, чтобы перевод не сломался. Используется и в
+    предпросмотре запроса (--preview-request)."""
+    if mode == "redact":
+        return (prompt
+                .replace("{ner_block}", ner_block)
+                .replace("{female_names}", female_block)
+                .replace("{male_names}", male_block)
+                .replace("{original_text}", original_text)
+                .replace("{translated_text}", draft_text or ""))
+    if "{original_text}" in prompt:
+        return (prompt
+                .replace("{ner_block}", ner_block)
+                .replace("{female_names}", female_block)
+                .replace("{male_names}", male_block)
+                .replace("{original_text}", original_text))
+    if logger is not None and mode not in _warned_missing_text_tag:
+        _warned_missing_text_tag.add(mode)
+        logger.warning(
+            "Промпт режима %s не содержит {original_text} — "
+            "добавьте тег; текст дописан после промпта", mode)
+    return (prompt
+            .replace("{ner_block}", ner_block)
+            .replace("{female_names}", female_block)
+            .replace("{male_names}", male_block)
+            + "\n\n" + original_text)
+
+
 def process_item(internal_id, original_text, draft_text, ctx):
     """original_text — текст для поиска NER и (в translate/polish) вход;
     draft_text — черновик (только redact)."""
@@ -195,39 +233,11 @@ def process_item(internal_id, original_text, draft_text, ctx):
         min_count=ctx.get("names_min_count", 0))
     female_block = "\n".join(female) if female else "(нет)"
     male_block = "\n".join(male) if male else "(нет)"
-    if ctx["mode"] == "redact":
-        if ner_block == "[]":
-            ner_block = "(Нет специфических терминов)"
-        user_content = (ctx["prompt"]
-                        .replace("{ner_block}", ner_block)
-                        .replace("{female_names}", female_block)
-                        .replace("{male_names}", male_block)
-                        .replace("{original_text}", original_text)
-                        .replace("{translated_text}", draft_text or ""))
-        reference = draft_text or ""
-    else:
-        # translate/polish: {original_text} — обязательный тег-переменная;
-        # нет тега — предупреждение в лог (один раз на режим), текст
-        # дописывается после промпта, чтобы перевод не сломался
-        if "{original_text}" in ctx["prompt"]:
-            user_content = (ctx["prompt"]
-                            .replace("{ner_block}", ner_block)
-                            .replace("{female_names}", female_block)
-                            .replace("{male_names}", male_block)
-                            .replace("{original_text}", original_text))
-        else:
-            mode = ctx["mode"]
-            if mode not in _warned_missing_text_tag:
-                _warned_missing_text_tag.add(mode)
-                ctx["logger"].warning(
-                    "Промпт режима %s не содержит {original_text} — "
-                    "добавьте тег; текст дописан после промпта", mode)
-            user_content = (ctx["prompt"]
-                            .replace("{ner_block}", ner_block)
-                            .replace("{female_names}", female_block)
-                            .replace("{male_names}", male_block)
-                            + "\n\n" + original_text)
-        reference = original_text
+    user_content = build_user_content(
+        ctx["mode"], ctx["prompt"], original_text, draft_text,
+        ner_block, female_block, male_block, ctx["logger"])
+    reference = (draft_text or "" if ctx["mode"] == "redact"
+                 else original_text)
 
     text, err = stream_chat_completion(
         ctx["base_url"], ctx["model"],
@@ -297,6 +307,12 @@ def build_parser():
     p.add_argument("file", help="Вход: txt (translate/polish) или JSON-trace (redact).")
     p.add_argument("--mode", choices=["translate", "redact", "polish"], default=None,
                    help="Режим. Без флага: *.json → redact, иначе translate (legacy).")
+    p.add_argument("--preview-request", dest="preview_request",
+                   default=None,
+                   help="ПРЕДПРОСМОТР: эмулировать ПЕРВЫЙ LLM-запрос "
+                        "(чанк 1) без сети и записать JSON (messages + "
+                        "статистика СИМВОЛОВ) в файл; реальные "
+                        "артефакты не создаются.")
     p.add_argument("--out", default=None,
                    help="Выходной txt. Дефолты: translate=translated_book.txt, "
                         "redact=edited_book.txt, polish=polished_book.txt.")
@@ -478,6 +494,45 @@ def main(argv=None):
             logger.error("❌ Не удалось прочитать вход: %s", exc)
             return 1
         items = [(i, c, None) for i, c in enumerate(chunks)]
+
+    # ── Предпросмотр запроса (--preview-request): эмуляция ПЕРВОГО
+    # LLM-запроса без сети; до создания trace/выходного файла ──
+    if args.preview_request:
+        log = preview_logger("translate_book")
+        log_argv(log)
+        i0, orig0, draft0 = items[0]
+        nb, nb_count = find_relevant_ner(
+            orig0, ner_data, args.ner_threshold, args.ner_ngram,
+            args.ner_fields, automaton=automaton,
+            include_aliases=not args.no_aliases,
+            min_count=args.ner_min_count)
+        if mode == "redact" and nb == "[]":
+            nb = "(Нет специфических терминов)"
+        fem, mal = collect_gender_names(
+            orig0, ner_data, args.ner_threshold, args.ner_ngram,
+            min_count=args.names_min_count)
+        user_content = build_user_content(
+            mode, active_prompt, orig0, draft0, nb,
+            "\n".join(fem) if fem else "(нет)",
+            "\n".join(mal) if mal else "(нет)", log)
+        payload = preview_request_payload(
+            "pipeline",
+            f"{MODE_LABELS.get(mode, mode)} · чанк 1/{len(items)}",
+            model_name, [{"role": "user", "content": user_content}],
+            meta={
+                "mode": mode,
+                "chunks": len(items),
+                "chunk_size": args.chunk_size,
+                "ner_terms": nb_count,
+                "female_names": len(fem),
+                "male_names": len(mal),
+                "prompt_file": args.prompt_file or "",
+                "prompt_source": "внешний" if custom else "встроенный",
+            })
+        write_preview_request(args.preview_request, payload)
+        log.info("✅ Предпросмотр запроса: %s (%d симв. user; чанков: %d)",
+                 args.preview_request, len(user_content), len(items))
+        return 0
 
     # ── Trace ──
     trace_path = os.path.splitext(out_path)[0] + "_trace.json"

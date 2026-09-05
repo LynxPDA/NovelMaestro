@@ -396,3 +396,64 @@ def test_main_translate_no_placeholder_warns_and_appends(tmp_path, monkeypatch):
     assert log_file.is_file()
     log_text = log_file.read_text(encoding="utf-8")
     assert "{original_text}" in log_text and "WARNING" in log_text
+
+
+# ══════════════════════════════════════════════════════════════════════
+# build_user_content / --preview-request
+# ══════════════════════════════════════════════════════════════════════
+
+def test_build_user_content_modes():
+    """build_user_content: redact — все плейсхолдеры; translate — тег
+    {original_text} заменяется ровно один раз."""
+    p = ("G:{ner_block} F:{female_names} M:{male_names} "
+         "O:{original_text} T:{translated_text}")
+    out = TB.build_user_content("redact", p, "ориг", "черн", "[]", "Ф", "М")
+    assert "G:[]" in out and "O:ориг" in out and "T:черн" in out
+    assert "F:Ф" in out and "M:М" in out
+    # translate: {translated_text} не входит в промпт, тег заменён
+    out = TB.build_user_content("translate", "П:{original_text}",
+                                "текст", None, "[]", "(нет)", "(нет)")
+    assert out == "П:текст"
+    assert "{original_text}" not in out
+
+
+def test_build_user_content_missing_tag_appends(monkeypatch):
+    """translate без {original_text}: текст дописан после промпта;
+    предупреждение — один раз на режим (без логгера — без побочных)."""
+    monkeypatch.setattr(TB, "_warned_missing_text_tag", set())
+    out = TB.build_user_content("translate", "ПРОМПТ", "ТЕКСТ", None,
+                                "[]", "ф", "м")
+    assert out.startswith("ПРОМПТ") and out.endswith("ТЕКСТ")
+
+
+def test_main_preview_request(tmp_path, monkeypatch):
+    """--preview-request: JSON первого запроса без сети; артефакты
+    (translated_book.txt, trace) НЕ создаются."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ch.txt").write_text("苏星宇睁开了眼。", encoding="utf-8")
+    (tmp_path / "prompt.txt").write_text(
+        "<translate>\nПереведи:\n{original_text}\n</translate>",
+        encoding="utf-8")
+    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    calls = []
+    monkeypatch.setattr(TB, "stream_chat_completion",
+                        lambda *a, **k: calls.append(1) or ("", ""))
+
+    def fail_open(*a, **k):  # выходной файл не должен открываться
+        raise AssertionError("out-файл открыт в режиме предпросмотра")
+
+    pv = tmp_path / "preview.json"
+    TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
+             "--prompt_file", "prompt.txt", "--threads", "1",
+             "--preview-request", str(pv)])
+    data = json.loads(pv.read_text(encoding="utf-8"))
+    assert data["stage"] == "pipeline" and data["model"] == "модель-х"
+    assert "Переведи" in data["messages"][-1]["content"]
+    assert "苏星宇睁开了眼。" in data["messages"][-1]["content"]
+    assert data["chars"]["user"] > 0
+    assert data["meta"]["chunks"] == 1
+    assert data["meta"]["mode"] == "translate"
+    # сеть не тронута, артефактов нет
+    assert not calls
+    assert not (tmp_path / "translated_book.txt").exists()
+    assert not (tmp_path / "translated_trace.json").exists()

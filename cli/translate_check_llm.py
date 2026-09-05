@@ -71,6 +71,9 @@ from core.common import (  # noqa: E402
     setup_logging,
     stream_chat_completion,
     web_progress_enabled,
+    preview_logger,
+    preview_request_payload,
+    write_preview_request,
 )
 
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "translate_check_prompt.txt")
@@ -559,9 +562,10 @@ def apply_safety(errors, max_fix, min_len, max_chars, logger):
 # ОБРАБОТКА ПАКЕТА
 # ─────────────────────────────────────────────
 
-def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
-                  retries, timeout, stream_timeout, temperature,
-                  reasoning_effort, logger, retry_empty=0):
+def compose_batch_text(batch) -> str:
+    """Текст батча для LLM: заголовки глав («=== Глава N ===», с
+    нумерацией частей для разрезанных) + очищенный текст. Используется
+    и в предпросмотре запроса."""
     ch_counts = defaultdict(int)
     for c in batch:
         ch_counts[c[0]] += 1
@@ -575,7 +579,13 @@ def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
         else:
             hdr = f"=== Глава {c[0]} ==="
         parts.append(f"{hdr}\n{cleaned}")
-    text = "\n".join(parts)
+    return "\n".join(parts)
+
+
+def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
+                  retries, timeout, stream_timeout, temperature,
+                  reasoning_effort, logger, retry_empty=0):
+    text = compose_batch_text(batch)
 
     errors1 = []
     for att in range(1 + retry_empty):
@@ -782,6 +792,11 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
 """,
     )
     # Сервер
+    ap.add_argument("--preview-request", dest="preview_request",
+                   default=None,
+                   help="ПРЕДПРОСМОТР: pass1-запрос первого батча\n"
+                        "без сети → JSON-файл (messages +\n"
+                        "статистика СИМВОЛОВ).")
     ap.add_argument("--host", default=None,
                     help="URL API-сервера (пусто = HOST из .env).")
     ap.add_argument("--model", default=None,
@@ -954,6 +969,29 @@ def do_check(args, logger) -> int:
     batches = build_batches(chapters, args.context_budget, logger)
     if not batches:
         return 1
+
+    # ── Предпросмотр запроса (--preview-request): pass1 первого батча ──
+    if args.preview_request:
+        log = preview_logger("translate_check_llm")
+        log_argv(log)
+        user_text = compose_batch_text(batches[0])
+        payload = preview_request_payload(
+            "translate_check_llm", f"Pass1 · батч 1/{len(batches)}",
+            model_name,
+            [{"role": "system", "content": p1},
+             {"role": "user", "content": user_text}],
+            meta={
+                "batches": len(batches),
+                "context_budget": args.context_budget,
+                "two_pass": bool(args.two_pass),
+                "threads": args.threads,
+                "first_batch_chapters": sorted({c[0] for c in batches[0]}),
+                "prompt_file": args.prompt_file or "",
+            })
+        write_preview_request(args.preview_request, payload)
+        log.info("✅ Предпросмотр запроса: %s (%d симв. user)",
+                 args.preview_request, len(user_text))
+        return 0
 
     stage = f"Главы {args.start}–{args.end} ({args.file_type})"
     params = {"директория глав": args.chapters_dir,

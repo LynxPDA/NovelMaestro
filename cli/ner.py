@@ -62,6 +62,9 @@ from core.common import (  # noqa: E402
     split_text_smart,
     stream_chat_completion,
     web_progress_enabled,
+    preview_logger,
+    preview_request_payload,
+    write_preview_request,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1439,6 +1442,11 @@ def build_parser() -> argparse.ArgumentParser:
               "не от LLM; по умолчанию: 300)."),
     )
     parser.add_argument(
+        "--preview-request", dest="preview_request", default=None,
+        help="ПРЕДПРОСМОТР: pass1-запрос первого чанка без сети → JSON\n"
+             "файл (messages + статистика СИМВОЛОВ).",
+    )
+    parser.add_argument(
         "--compile_chapters", action="store_true",
         help=(
             "Собрать chapters/*/chapter.txt и использовать как вход "
@@ -1605,6 +1613,29 @@ def main():
 
     max_workers = max(1, min(16, args.threads))
     save_interval = max(1, args.save_interval)
+
+    # ── Предпросмотр запроса (--preview-request): pass1 первого чанка ──
+    if args.preview_request:
+        log = preview_logger("ner")
+        log_argv(log)
+        _log(log, logging.INFO, f"🧭 Чанков: {len(all_chunks)}")
+        payload = preview_request_payload(
+            "ner", f"Pass1 · чанк 1/{len(all_chunks)}", model_name,
+            [{"role": "system", "content": pass1_prompt},
+             {"role": "user", "content": all_chunks[0]}],
+            meta={
+                "chunks": len(all_chunks),
+                "chunk_size": args.chunk_size,
+                "two_pass": bool(args.two_pass),
+                "threads": max_workers,
+                "prompt_file": args.prompt_file or "",
+                "input": ("сборка глав" if in_memory_text is not None
+                          else str(args.file)),
+            })
+        write_preview_request(args.preview_request, payload)
+        _log(log, logging.INFO,
+             f"✅ Предпросмотр запроса: {args.preview_request}")
+        return 0
 
     # ════════════════════════════════════════════════════════════════
     # РЕЖИМ: TWO-PASS (конвейерный)

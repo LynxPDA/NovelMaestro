@@ -155,3 +155,23 @@ def test_glossary_dispute_removed():
     rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
     assert "Добавить спорные" in rv
     assert "addDisputedTermsModal" in rv
+
+
+def test_run_views_preview_request():
+    """Запуски: кнопка «Предпросмотр запроса» — только у LLM-стадий
+    (spec.preview) и только в Экспертном режиме; модалка — POST
+    /stages/{key}/preview-request, сводка символов + messages."""
+    src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    # кнопка: по флагу спеки, ghost, идёт в экспертную форму
+    assert "spec.preview" in src
+    assert '"Предпросмотр запроса"' in src
+    assert 'previewRequestModal(key, spec, "expert")' in src
+    # модалка: POST на preview-request и рендер payload
+    assert "async function previewRequestModal(" in src
+    assert "`/stages/${key}/preview-request`" in src
+    assert "previewRequestView(" in src
+    assert "d.chars" in src and "d.messages" in src
+    # previewRequestView не показывает секреты: моделей/меток достаточно;
+    # в простом режиме (simplePanel) кнопки нет — modal зовётся только
+    # с mode "expert"
+    assert '"expert"' in src

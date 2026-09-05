@@ -588,6 +588,41 @@ input[type="number"] {
   justify-content: flex-end;
   gap: 10px;
 }
+/* предпросмотр LLM-запроса (модалка Запусков) */
+.preview-req-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 65vh;
+  min-height: 200px;
+  overflow: auto;
+}
+.preview-req-head {
+  color: var(--muted);
+  font-size: 13px;
+}
+.preview-req-role {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.preview-req-text {
+  margin: 0;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 40vh;
+  overflow: auto;
+}
+
 /* редактор промпта в модалке запусков (высота фиксированная) */
 .editor-modal-body {
   height: 60vh;

@@ -460,3 +460,21 @@ def _write_review_meta(tmp_path, applied=False):
                     "reason": "", "status": "принять",
                     "applied": applied}]},
         ensure_ascii=False), encoding="utf-8")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# compose_batch_text / --preview-request
+# ══════════════════════════════════════════════════════════════════════
+
+def test_compose_batch_text_headers():
+    """Текст батча: заголовок «=== Глава N ===»; разрезанная глава —
+    с нумерацией частей (тот же путь, что в process_batch)."""
+    batch = [(1, "", "", "текст главы один"),
+             (2, "", "", "текст два"),
+             (2, "", "", "продолжение два")]
+    text = FE.compose_batch_text(batch)
+    assert "=== Глава 1 ===\nтекст главы один" in text
+    assert "=== Глава 2 (часть 1/2) ===\nтекст два" in text
+    assert "=== Глава 2 (часть 2/2) ===\nпродолжение два" in text
+    # порядок: главы идут по порядку батча
+    assert text.index("Глава 1") < text.index("Глава 2")

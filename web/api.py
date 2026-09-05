@@ -2953,6 +2953,58 @@ def _batch_replace_preview(ctx: dict) -> dict:
             "segments": segments}
 
 
+# ════════════════════════════════════════════════════════════════════
+# LLM-стадии: предпросмотр первого запроса (--preview-request)
+# ════════════════════════════════════════════════════════════════════
+PREVIEW_REQUEST_FILE = "tmp/preview_request.json"  # относит. cwd = проект
+# стадии, чьи скрипты поддерживают --preview-request
+_PREVIEW_STAGES = {"pipeline", "ner", "ner_check", "translate_check_llm",
+                   "translate_quality", "wiki"}
+
+
+def _preview_request_post(ctx: dict) -> dict:
+    """Предпросмотр первого LLM-запроса стадии
+    (POST /api/stages/{key}/preview-request).
+
+    Тело: {project, params}. Синхронный запуск скрипта стадии с
+    --preview-request tmp/preview_request.json (без сети, cwd=проект);
+    артефакты и логи запуска не создаются. Возвращает payload:
+    stage, label, model, messages, chars (символы), meta."""
+    import subprocess
+    import sys as _sys
+    key = ctx["params"]["key"]
+    if key not in _PREVIEW_STAGES:
+        raise ApiError(404, f"Стадия {key!r} не поддерживает "
+                            f"предпросмотр запроса")
+    pdir, _sec, _name = _project_ctx(ctx)
+    repo = Path(_repo_root(ctx))
+    script = script_path(key, repo)
+    if script is None or not script.is_file():
+        raise ApiError(500, "Скрипт стадии не найден")
+    params = (ctx["body"] or {}).get("params") or {}
+    argv = build_command(key, params, ctx)
+    argv[0] = str(script)
+    argv += ["--preview-request", PREVIEW_REQUEST_FILE]
+    try:
+        proc = subprocess.run(
+            [_sys.executable, *argv], cwd=str(pdir),
+            capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise ApiError(500, "Предпросмотр не уложился в 300 c")
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        raise ApiError(400, f"Ошибка предпросмотра: {err[:500]}")
+    path = pdir / PREVIEW_REQUEST_FILE
+    import json as _json
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise ApiError(500, "Файл предпросмотра не создан или битый")
+    if not isinstance(data, dict) or not data.get("messages"):
+        raise ApiError(500, "Предпросмотр не содержит сообщений")
+    return {"ok": True, **data}
+
+
 
 def _register_jobs(router: Router) -> None:
     router.add("GET", "/api/stages", _stages_list)
@@ -2973,3 +3025,6 @@ def _register_jobs(router: Router) -> None:
                _epub_preview_folder_delete)
     router.add("POST", "/api/stages/batch_replace/preview",
                _batch_replace_preview)
+    # LLM-стадии: предпросмотр первого запроса
+    router.add("POST", "/api/stages/{key}/preview-request",
+               _preview_request_post)

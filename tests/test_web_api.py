@@ -1738,3 +1738,73 @@ def test_epub_preview_skip_propagates(srv_ctx):
                                   "mode": "toc", "skip": [1, 3]}, {})
     assert argv.count("--skip") == 2
     assert argv[argv.index("--skip")] == "--skip"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# LLM-стадии: предпросмотр первого запроса
+# ══════════════════════════════════════════════════════════════════════
+
+def test_preview_request_route(srv_ctx, monkeypatch):
+    """POST /api/stages/{key}/preview-request: синхронный запуск
+    скрипта стадии с --preview-request → payload клиенту; неподдерживаемая
+    стадия — 404."""
+    import subprocess as sp
+
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+
+    def fake_run(argv, **kw):
+        assert "--preview-request" in argv
+        assert argv[argv.index("--preview-request") + 1] == \
+            web_api.PREVIEW_REQUEST_FILE
+        pv = Path(kw["cwd"]) / web_api.PREVIEW_REQUEST_FILE
+        pv.parent.mkdir(parents=True, exist_ok=True)
+        pv.write_text(json.dumps({
+            "stage": "pipeline", "label": "Перевод · чанк 1/2",
+            "model": "модель-х",
+            "messages": [{"role": "user", "content": "Привет"}],
+            "chars": {"user": 6, "total": 6},
+            "meta": {"chunks": 2},
+        }, ensure_ascii=False), encoding="utf-8")
+        return sp.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    res, payload = _request(
+        port, "POST", "/api/stages/pipeline/preview-request",
+        {"project": "ACTIVE/test_book", "params": {}})
+    assert res.status == 200, payload
+    assert payload["ok"] is True
+    assert payload["messages"][0]["content"] == "Привет"
+    assert payload["chars"]["total"] == 6
+    assert payload["meta"]["chunks"] == 2
+
+    # стадия без флага preview — 404
+    res2, payload2 = _request(
+        port, "POST", "/api/stages/epub/preview-request",
+        {"project": "ACTIVE/test_book", "params": {}})
+    assert res2.status == 404, payload2
+
+
+def test_preview_request_route_script_error(srv_ctx, monkeypatch):
+    """Ошибка скрипта предпросмотра (rc≠0) → 400 с хвостом stderr."""
+    import subprocess as sp
+
+    _, port, _ = srv_ctx()
+    _file_project(port, _projects_root_of(srv_ctx))
+
+    def fake_run(argv, **kw):
+        return sp.CompletedProcess(argv, 2, stdout="",
+                                   stderr="ERROR: бум")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    res, payload = _request(
+        port, "POST", "/api/stages/ner/preview-request",
+        {"project": "ACTIVE/test_book", "params": {}})
+    assert res.status == 400, payload
+    assert "бум" in (payload.get("error") or "")
+
+
+def _projects_root_of(srv_ctx):
+    """projects_root из фикстуры srv_ctx (3-й элемент кортежа)."""
+    _, _, projects_root = srv_ctx()
+    return projects_root

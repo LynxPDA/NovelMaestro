@@ -1482,3 +1482,51 @@ def test_log_argv_masks_secrets(tmp_path):
     # max_tokens — не секрет: значение видно в логе
     assert "65536" in text and "--max-tokens=1024" in text
     assert "--max_tokens '••••'" not in text
+
+
+# ══════════════════════════════════════════════════════════════════════
+# предпросмотр запроса (preview_request_payload / write / logger)
+# ══════════════════════════════════════════════════════════════════════
+
+def test_preview_request_payload_chars_and_meta():
+    """Сводка символов по ролям + total; meta — только если задана."""
+    messages = [{"role": "system", "content": "сист"},
+                {"role": "user", "content": "юзер"}]
+    p = C.preview_request_payload("ner", "Pass1 · чанк 1/3", "модель",
+                                  messages, meta={"chunks": 3})
+    assert p["stage"] == "ner" and p["model"] == "модель"
+    assert p["label"] == "Pass1 · чанк 1/3"
+    assert p["chars"] == {"system": 4, "user": 4, "total": 8}
+    assert p["meta"] == {"chunks": 3}
+    assert p["messages"] is messages
+    # без meta ключа нет (не пустой словарь)
+    p2 = C.preview_request_payload("wiki", "L", None, [])
+    assert "meta" not in p2 and p2["model"] == "" and p2["chars"]["total"] == 0
+
+
+def test_preview_request_write_roundtrip(tmp_path):
+    """write_preview_request: атомарная JSON-запись; кириллица
+    сохраняется как есть (ensure_ascii=False)."""
+    payload = C.preview_request_payload(
+        "pipeline", "Перевод · чанк 1/2", "модель-х",
+        [{"role": "user", "content": "Переведи: 主角"}],
+        meta={"mode": "translate"})
+    path = tmp_path / "preview.json"
+    C.write_preview_request(str(path), payload)
+    raw = path.read_text(encoding="utf-8")
+    assert "Переведи: 主角" in raw  # без \\u-экранирования
+    import json as _json
+    assert _json.loads(raw) == payload
+
+
+def test_preview_logger_stderr_only():
+    """preview_logger: только stderr-хендлер, propagate выключен —
+    записи не утекают в файловый лог запуска (mode="w")."""
+    import logging
+    log = C.preview_logger("тест")
+    assert log.handlers, "должен быть хотя бы один хендлер"
+    assert all(getattr(h, "stream", None) is sys.stderr
+               for h in log.handlers)
+    assert not any(isinstance(h, logging.FileHandler)
+                   for h in log.handlers)
+    assert log.propagate is False

@@ -16,7 +16,8 @@ from pathlib import Path
 import pytest
 
 from web.jobs import CHAPTER_PREFIX, JobManager
-from web.stages import build_command, script_path, spec_for
+from web.stages import (STAGE_SPECS, build_command, script_path,
+                        spec_for)
 
 REPO = Path(__file__).resolve().parent.parent
 PIPELINE = REPO / "web" / "pipeline.py"
@@ -34,6 +35,19 @@ FAKE_TRANSLATE = (
     "    from pathlib import Path\n"
     "    Path(out).with_name('translated_trace.json').write_text(\n"
     "        '{\"pairs\":[]}', encoding='utf-8')\n"
+    "print('done', flush=True)\n"
+    "sys.exit(0)\n"
+)
+FAKE_TRANSLATE_PREVIEW = (
+    "import json, sys\n"
+    "args = sys.argv[1:]\n"
+    "assert '--preview-request' in args\n"
+    "pv = args[args.index('--preview-request') + 1]\n"
+    "with open(pv, 'w', encoding='utf-8') as f:\n"
+    "    json.dump({'stage': 'pipeline', 'label': 't', 'model': 'm',\n"
+    "               'messages': [{'role': 'user', 'content': 'x'}],\n"
+    "               'chars': {'system': 0, 'user': 1, 'total': 1},\n"
+    "               'meta': {}}, f)\n"
     "print('done', flush=True)\n"
     "sys.exit(0)\n"
 )
@@ -524,3 +538,42 @@ def test_reader_bad_event_line(tmp_path):
     assert job.status == "done"
     assert job.events == []
     assert any("@@CHAPTER@@" in l for l in job.lines)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# --preview-request: предпросмотр первого запроса
+# ══════════════════════════════════════════════════════════════════════
+
+def test_pipeline_preview_request(tmp_path):
+    """--preview-request: rc=0, JSON предпросмотра записан; артефакты
+    запуска (translated.txt/redacted.txt/polished.txt, общий лог) не
+    создаются; главы не обрабатываются."""
+    proj, fake = _make_project(tmp_path, chapters=(1,))
+    fake.write_text(FAKE_TRANSLATE_PREVIEW, encoding="utf-8")
+    pv = tmp_path / "preview.json"
+    cmd = [sys.executable, str(PIPELINE), "--action", "8",
+           "--script", str(fake), "--preview-request", str(pv),
+           *_PIPELINE_ARGS]
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       timeout=120, cwd=str(proj))
+    assert r.returncode == 0, r.stderr[-500:]
+    data = json.loads(pv.read_text(encoding="utf-8"))
+    assert data["stage"] == "pipeline"
+    assert data["messages"] and data["messages"][0]["role"] == "user"
+    # артефакты стадий и общий лог не созданы
+    ch = proj / "chapters" / "00001_1"
+    assert not (ch / "translated.txt").exists()
+    assert not (ch / "redacted.txt").exists()
+    assert not (ch / "polished.txt").exists()
+    assert not (proj / "logs").exists()
+    # stdout сообщает о предпросмотре
+    assert "ПРЕДПРОСМОТР" in r.stdout
+
+
+def test_llm_stages_preview_flag():
+    """Спека: флаг preview — ровно у шести LLM-стадий (кнопка
+    «Предпросмотр запроса» в SPA, экспертный режим)."""
+    expect = {"pipeline", "ner", "ner_check", "translate_check_llm",
+              "translate_quality", "wiki"}
+    got = {k for k, v in STAGE_SPECS.items() if v.get("preview")}
+    assert got == expect

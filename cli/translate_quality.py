@@ -53,11 +53,14 @@ from core.common import (  # noqa: E402
     load_prompt,
     log_argv,
     parse_dotenv,
+    preview_logger,
+    preview_request_payload,
     print_env_help,
     read_text_safe,
     setup_logging,
     stream_chat_completion,
     web_progress_enabled,
+    write_preview_request,
 )
 
 DEFAULT_OUTPUT = "translation_quality_assessment.md"
@@ -299,6 +302,11 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
     parser.add_argument("--prompt_file", default=None,
                         help="Промпт-файл (тег <prompt_assessment>; без "
                              "тега — файл целиком; пусто = встроенный).")
+    parser.add_argument("--preview-request",
+                        dest="preview_request", default=None,
+                        help="ПРЕДПРОСМОТР: запрос оценки первого\n"
+                             "пакета глав без сети → JSON-файл\n"
+                             "(messages + статистика СИМВОЛОВ).")
     parser.add_argument("--output", default=DEFAULT_OUTPUT,
                         help=f"Выходной md-отчёт (default: "
                              f"{DEFAULT_OUTPUT}).")
@@ -400,6 +408,26 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
     translated_text = "\n".join(translated_parts)
     user_content = build_user_prompt(prompt, original_text, translated_text)
     packet_size = len(user_content)
+
+    # ── Предпросмотр запроса (--preview-request): первый пакет оценки ──
+    if args.preview_request:
+        log = preview_logger("translate_quality")
+        log_argv(log)
+        payload = preview_request_payload(
+            "translate_quality",
+            f"Оценка · главы {nums[0]}–{nums[-1]}", model_name,
+            [{"role": "user", "content": user_content}],
+            meta={
+                "chapters": len(kept),
+                "first": nums[0],
+                "last": nums[-1],
+                "budget": args.budget,
+                "prompt_file": args.prompt_file or "",
+            })
+        write_preview_request(args.preview_request, payload)
+        log.info("✅ Предпросмотр запроса: %s (%d симв. user)",
+                 args.preview_request, packet_size)
+        return 0
 
     if web_progress_enabled():
         emit_progress(0, 1, "Оценка перевода")

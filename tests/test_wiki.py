@@ -496,3 +496,31 @@ def test_main_toc_off(tmp_path, monkeypatch):
     text = (tmp_path / "wiki.md").read_text(encoding="utf-8")
     assert "## Содержание" not in text
     assert "СТАТЬЯ" in text
+
+
+# ══════════════════════════════════════════════════════════════════════
+# build_article_prompts / --preview-request
+# ══════════════════════════════════════════════════════════════════════
+
+def test_build_article_prompts():
+    """(sys, user) статьи термина: плейсхолдеры системного промпта
+    закрыты; данные термина и фрагменты в user_content (тот же путь,
+    что в generate_article и предпросмотре)."""
+    item = {"term": "Мир", "type": "Location",
+            "translation": "Мир", "count": 3}
+    sys_p, user = WIKI.build_article_prompts(
+        item, ["фрагмент текста"], [], "Location",
+        "Система для {translation} · блок {relations_label}")
+    assert "Мир" in sys_p
+    assert "{translation}" not in sys_p and "{relations_label}" not in sys_p
+    assert "ДАННЫЕ ТЕРМИНА" in user
+    assert "фрагмент текста" in user
+    # без co-occurrence блока взаимосвязей нет
+    rel_label = WIKI.SECTION_RELATIONS_LABEL["Location"]
+    assert rel_label not in user
+    # с co-occurrence — блок появляется (заголовок — ВЕРХНИЙ регистр
+    # метки из словаря)
+    _sys2, user2 = WIKI.build_article_prompts(
+        item, [], [("Другой", "Location", 2)], "Location",
+        "Система {translation} {relations_label}")
+    assert rel_label.upper() in user2 and "Другой" in user2

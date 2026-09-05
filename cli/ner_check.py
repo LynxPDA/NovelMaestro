@@ -105,6 +105,9 @@ from core.common import (  # noqa: E402
     setup_logging,
     stream_chat_completion,
     web_progress_enabled,
+    preview_logger,
+    preview_request_payload,
+    write_preview_request,
 )
 
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "ner_check_prompt.txt")
@@ -219,6 +222,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "очереди (каждый тип отдельно); rag — точечная "
                         "проверка спорных терминов по списку с FTS5-"
                         "контекстом.")
+    p.add_argument(
+        "--preview-request", dest="preview_request", default=None,
+        help="ПРЕДПРОСМОТР: первый LLM-запрос прохода без сети →\n"
+             "JSON-файл (messages + статистика СИМВОЛОВ); RAG —\n"
+             "первый термин (сборка FTS5 может занять время).",
+    )
     p.add_argument("--rag_terms", default="",
                    help="RAG-режим: список терминов, каждый с новой строки "
                         "(остальное подтягивается из ner.json).")
@@ -402,6 +411,15 @@ def run_pass_tasks(title, items, prompt_tpl, args, logger):
     return [(title, batch) for batch in batches]
 
 
+def _batch_user_msg(title, batch, prompt_tpl, fields):
+    """user-сообщение батча: тело глоссария + {fields} в промпт
+    (types-проход — с префиксом). Используется и в предпросмотре."""
+    body = glossary_body(batch, fields)
+    tpl = (prompt_tpl if title == "Весь глоссарий"
+           else TYPES_STAGE_PREFIX + prompt_tpl)
+    return render_prompt(tpl, body, fields)
+
+
 def run_batch(task, prompt_tpl, args, base_url, api_key, model, logger):
     """Один батч проверки (запускается в потоке). Возвращает
     (title, records|None) — исправленные записи от LLM; None при
@@ -410,10 +428,7 @@ def run_batch(task, prompt_tpl, args, base_url, api_key, model, logger):
     title, batch = task
     fields = [f.strip() for f in args.fields.split(",") if f.strip()
               if f.strip() != "term"]
-    body = glossary_body(batch, fields)
-    tpl = (prompt_tpl if title == "Весь глоссарий"
-           else TYPES_STAGE_PREFIX + prompt_tpl)
-    user_msg = render_prompt(tpl, body, fields)
+    user_msg = _batch_user_msg(title, batch, prompt_tpl, fields)
     logger.info(f"  батч: {len(batch)} записей, "
                 f"{len(user_msg)} символов запроса")
     text, err = stream_chat_completion(
@@ -610,6 +625,27 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
         tasks.append((term, render_prompt(prompt_tpl, block)))
 
     total = len(tasks)
+    # ── Предпросмотр запроса (--preview-request): RAG первого термина ──
+    if getattr(args, "preview_request", None):
+        log = preview_logger("ner_check")
+        log_argv(log)
+        term, user_msg = tasks[0]
+        payload = preview_request_payload(
+            "ner_check", f"RAG · термин «{term}» (1/{len(tasks)})",
+            model, [{"role": "user", "content": user_msg}],
+            meta={
+                "mode": "rag",
+                "terms": len(terms),
+                "rag_budget": args.rag_budget,
+                "threads": args.threads,
+                "fields": args.fields,
+                "fts5_note": "сборка FTS5-индекса по книге (может "
+                             "занять до пары минут на большой книге)",
+            })
+        write_preview_request(args.preview_request, payload)
+        log.info("✅ Предпросмотр запроса: %s (%d симв. user)",
+                 args.preview_request, len(user_msg))
+        return 0
     done = 0
     lock = threading.Lock()
     entries: list[dict] = []
@@ -778,6 +814,30 @@ def do_check(args, logger) -> int:
     if not stage_tasks:
         logger.info("ℹ Нет батчей — проверять нечего.")
         save_review()
+        return 0
+
+    # ── Предпросмотр запроса (--preview-request): первый батч прохода ──
+    if getattr(args, "preview_request", None):
+        log = preview_logger("ner_check")
+        log_argv(log)
+        title, batch = stage_tasks[0]
+        fields = [f.strip() for f in args.fields.split(",")
+                  if f.strip() and f.strip() != "term"]
+        user_msg = _batch_user_msg(title, batch, prompt_tpl, fields)
+        payload = preview_request_payload(
+            "ner_check", f"{title} · батч 1/{len(stage_tasks)}", model,
+            [{"role": "user", "content": user_msg}],
+            meta={
+                "mode": args.passes,
+                "batches": len(stage_tasks),
+                "batch_records": len(batch),
+                "batch_size": args.batch_size,
+                "fields": args.fields,
+                "threads": args.threads,
+            })
+        write_preview_request(args.preview_request, payload)
+        log.info("✅ Предпросмотр запроса: %s (%d симв. user)",
+                 args.preview_request, len(user_msg))
         return 0
 
     # ── параллельное выполнение: threads потоков на ВСЕ батчи

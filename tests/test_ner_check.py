@@ -887,3 +887,26 @@ def test_get_prompt_tag_and_comments(tmp_path, monkeypatch):
     args.prompt_file = "нет.txt"
     p3 = NC.get_prompt(args, _logger())
     assert p3 == NC.DEFAULT_NER_CHECK_PROMPT
+
+
+# ══════════════════════════════════════════════════════════════════════
+# _batch_user_msg / --preview-request
+# ══════════════════════════════════════════════════════════════════════
+
+def test_batch_user_msg_whole_vs_types():
+    """user-сообщение батча: тело глоссария + поля; types-проход —
+    с префиксом (тот же путь, что в run_batch и предпросмотре)."""
+    batch = [{"term": "Термин", "type": "Person",
+              "translation": "Термин", "count": 5}]
+    fields = ["type", "translation"]
+    whole = NC._batch_user_msg("Весь глоссарий", batch,
+                               "Проверь {glossary} по полям {fields}",
+                               fields)
+    assert "Термин" in whole and "Person" in whole
+    assert "{glossary}" not in whole and "{fields}" not in whole
+    typed = NC._batch_user_msg("Тип: Person", batch,
+                               "Проверь {glossary} по полям {fields}",
+                               fields)
+    assert typed.startswith(NC.TYPES_STAGE_PREFIX)
+    # плейсхолдеры закрыты и в types-варианте
+    assert "{glossary}" not in typed and "{fields}" not in typed
