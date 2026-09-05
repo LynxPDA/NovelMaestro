@@ -258,9 +258,11 @@ def test_review_apply_creates_job(srv, tmp_path):
 
 
 def test_review_apply_passes_no_bak(srv, tmp_path):
-    """no_bak в body → параметр задачи (--no-bak соберётся в argv)."""
+    """no_bak в body → параметр задачи (--no-bak соберётся в argv).
+    ner-путь: argv обязан содержать --apply (применение правок, а не
+    полный LLM-прогон); флаги применения не пишутся в pdir/.env."""
     srv, port, root = srv()
-    _mk_project(root)
+    pdir = _mk_project(root)
     from web.jobs import JobManager
     srv.job_manager = JobManager(tmp_path / "web", repo_root=REPO)
     r = _request(port, "POST", "/api/translate_check_llm/review/apply",
@@ -279,6 +281,12 @@ def test_review_apply_passes_no_bak(srv, tmp_path):
                   {"project": "ACTIVE/demo"})
     job2 = srv.job_manager.get(r2["job"]["id"])
     assert job2 is not None and "--no-bak" not in job2.argv
+    # ner: применение, а не LLM-прогон (регрессия build_ner_check)
+    assert "--apply" in job2.argv
+    # путь «Проверки» не пишет настройки в pdir/.env (apply в .env — шум)
+    env_file = pdir / ".env"
+    if env_file.is_file():
+        assert "NER_CHECK_APPLY" not in env_file.read_text(encoding="utf-8")
 
 
 # ════════════════════════════════════════════════════════════════════

@@ -1639,6 +1639,24 @@ def test_build_ner_check_types_chips_value():
     assert "--no-bak" not in argv3
 
 
+def test_build_ner_check_review_apply_flags():
+    """Путь «Проверки» (ctx[review_apply]): apply/dry_run/no_bak
+    собираются в argv — иначе POST /api/ner/review/apply запускал
+    полный LLM-прогон вместо применения правок. Без маркера
+    (форма Запусков) флаги по-прежнему не собираются."""
+    argv = build_command(
+        "ner_check", {"apply": True, "dry_run": True},
+        {"review_apply": True})
+    assert "--apply" in argv and "--dry-run" in argv
+    argv2 = build_command(
+        "ner_check", {"apply": True, "no_bak": True},
+        {"review_apply": True})
+    assert "--apply" in argv2 and "--no-bak" in argv2
+    # без маркера — флагов нет (форма Запусков их не содержит)
+    argv3 = build_command("ner_check", {"apply": True}, {})
+    assert "--apply" not in argv3 and "--dry-run" not in argv3
+
+
 def test_build_translate_check_llm_no_bak():
     """Флаги применения/бэкапов из «Запусков» всегда выключены."""
     argv = build_command("translate_check_llm", {"no_bak": True}, {})

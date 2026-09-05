@@ -2051,8 +2051,11 @@ def _jobs_start(ctx: dict) -> dict:
             raise ApiError(400, f"«{label}»: минимум {f['min']}")
         if fmax is not None and n > fmax:
             raise ApiError(400, f"«{label}»: максимум {f['max']}")
-    # R9: настройки запуска сохраняются в .env проекта (копия общего)
-    _persist_run_params(ctx, pdir, action, params)
+    # R9: настройки запуска сохраняются в .env проекта (копия общего);
+    # путь «Проверки» (ctx["review_apply"]) — не настройки запуска:
+    # флаги apply/dry_run в pdir/.env — шум, их там быть не должно
+    if not ctx.get("review_apply"):
+        _persist_run_params(ctx, pdir, action, params)
     argv = build_command(action, params, ctx)
     argv[0] = str(script)  # абсолютный путь к скрипту
     jm = _job_manager(ctx)

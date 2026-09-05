@@ -43,6 +43,38 @@ def test_run_views_expert_form_not_async():
     (formPanel вставляет результат как узел) — async вернул бы Promise."""
     src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
     assert "async function expertForm" not in src
+
+
+def test_run_views_stream_ctrl_let():
+    """Регрессия «Assignment to constant variable»: streamCtrl
+    переприсваивается в attachStream/очистке — только let.
+    const ронял SSE до первого подключения: лог пуст, статус
+    (stop/done) без перезагрузки страницы не приходил."""
+    src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    assert "let streamCtrl = null" in src
+    assert "const streamCtrl" not in src
+
+
+def test_app_h_null_attrs_safe():
+    """Регрессия «can't convert null to object» в модалке предпросмотра
+    (h("div", null, …)): h() терпит attrs = null."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert "Object.entries(attrs || {})" in src
+
+
+def test_run_views_chips_persistence():
+    """Выбор чипсов (hidden noenv: types/fields/ner_fields) переживает
+    перезагрузку страницы: chipRestore — в initFormValues, saveChips —
+    в обработчиках чипсов. Иначе запуск уходил не с теми полями,
+    что показаны (перезагрузка сбрасывала выбор на дефолт)."""
+    src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    assert "function chipRestore(" in src
+    assert "chipRestore(key, spec, vals)" in src
+    assert "function saveChips(" in src
+    assert "localStorage.setItem(chipKey(key)" in src
+    # ner_check: дефолт полей, материализованный curFields, — touched
+    # (в простом режиме уходит именно то, что показано чипсами)
+    assert 'st.touched[key].add("fields");' in src
     assert "function expertForm(key, spec)" in src
 
 

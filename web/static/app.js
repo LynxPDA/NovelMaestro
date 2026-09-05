@@ -8,7 +8,8 @@ const state = { auth: false, host: "", tokenSet: false };
 /* ── утилиты ─────────────────────────────────────────────── */
 function h(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
+  // attrs = null валиден (вызовы вида h("div", null, …)) — не падаем
+  for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue; // false — атрибут не ставим
     if (k === "class") node.className = v;
     else if (k === "text") node.textContent = v;

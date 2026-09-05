@@ -331,12 +331,14 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
         common += ["--prompt_file", prompt_file]
     # пороги count: ner_block и имена (дефолты: 0 — выключено, 10);
     # поля {ner_block} — выбор из формы, все 3 стадии;
-    # aliases снят — авто-добавление алиасов выключено (--no_aliases)
+    # aliases снят — авто-добавление алиасов выключено; имя флага —
+    # как в translate_book.py (--no-aliases, через дефис: иначе
+    # argparse стадии 1 ронял конвейер «unrecognized arguments»)
     common += ["--ner_min_count", str(ner_min_count),
                "--names_min_count", str(names_min_count),
                "--ner_fields", str(ner_fields)]
     if no_aliases:
-        common += ["--no_aliases"]
+        common += ["--no-aliases"]
     if stage == 1:
         return [sys.executable, str(script), str(in_file), "--mode",
                 "translate", *common,

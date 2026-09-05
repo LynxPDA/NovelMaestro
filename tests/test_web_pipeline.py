@@ -248,7 +248,9 @@ def test_build_stage_cmd_prompt_override(tmp_path):
 
 def test_build_stage_cmd_ner_fields(tmp_path):
     """поля {ner_block} из формы — во ВСЕ 3 стадии; aliases снят —
-    --no_aliases добавляется (авто-алиасы выключены)."""
+    --no-aliases добавляется (авто-алиасы выключены). Имя флага —
+    как в translate_book.py: через дефис, иначе argparse стадии 1
+    ронял конвейер «unrecognized arguments: --no_aliases»."""
     from web.pipeline import build_stage_cmd
     script = tmp_path / "translate_book.py"
     for stage in (1, 2, 3):
@@ -258,12 +260,12 @@ def test_build_stage_cmd_ner_fields(tmp_path):
         assert "--ner_fields" in cmd
         assert cmd[cmd.index("--ner_fields") + 1] == \
             "term,type,translation,aliases"
-        assert "--no_aliases" not in cmd
+        assert "--no-aliases" not in cmd
     for stage in (1, 2, 3):
         cmd = build_stage_cmd(stage, script, tmp_path / "in",
                               tmp_path / "out", "http://h", "k", "м", 300,
                               ner_fields="term,type", no_aliases=True)
-        assert "--no_aliases" in cmd
+        assert "--no-aliases" in cmd
 
 
 def test_build_pipeline_ner_fields_argv():

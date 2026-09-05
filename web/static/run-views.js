@@ -50,7 +50,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     brSig: "", // batch_replace: сигнатура формы последнего предпросмотра
   };
   const page = h("div", { class: "page" });
-  const streamCtrl = null; // AbortController текущего SSE-стрима
+  let streamCtrl = null; // AbortController текущего SSE-стрима
 
   // ── фактическое состояние артефактов глав (для таблицы конвейера) ──
   async function loadChapterState() {
@@ -546,6 +546,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
     st.values[key] = vals;
     st.touched[key] = new Set();
+    // чипсы полей/типов (hidden noenv) — память по проекту+стадии:
+    // без неё перезагрузка страницы молча сбрасывает выбор чипсов
+    // на дефолт, и запуск уходит не с теми полями, что показаны
+    chipRestore(key, spec, vals);
     // epub: автосохранённые настройки поверх дефолтов/.env
     if (spec.autosave) {
       const saved = epubLoad();
@@ -557,6 +561,45 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           }
         }
       }
+    }
+  }
+
+  // ── память выбора чипсов (hidden noenv: types/fields/ner_fields) ──
+  // localStorage per проект+стадия: значения «невидимых» полей,
+  // которые пишет виджет чипсов; терять их при перезагрузке — тихий
+  // расхождение «что видно ≠ что уйдёт в запуск»
+  function chipKey(key) {
+    return `chips:${section}/${name}:${key}`;
+  }
+
+  function chipRestore(key, spec, vals) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(chipKey(key)) || "{}");
+      if (!saved || typeof saved !== "object") return;
+      for (const f of spec.fields || []) {
+        if (f.type !== "hidden" || !f.noenv) continue;
+        const v = saved[f.name];
+        if (typeof v === "string" && v) {
+          vals[f.name] = v;
+          st.touched[key].add(f.name);
+        }
+      }
+    } catch {
+      /* повреждённый JSON — дефолты */
+    }
+  }
+
+  function saveChips(key, names) {
+    const vals = st.values[key] || {};
+    const data = {};
+    for (const n of names) {
+      const v = vals[n];
+      if (typeof v === "string" && v) data[n] = v;
+    }
+    try {
+      localStorage.setItem(chipKey(key), JSON.stringify(data));
+    } catch {
+      /* приватный режим браузера — живём без памяти */
     }
   }
 
@@ -847,6 +890,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             cb.checked = true; // минимум один тип (как в глоссарии)
           }
           st.touched[key].add("types");
+          saveChips(key, ["types", "fields"]);
           renderChips();
         });
         const n = typeCounts[t];
@@ -863,6 +907,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     selAll.addEventListener("click", () => {
       st.values[key]["types"] = "";
       st.touched[key].add("types");
+      saveChips(key, ["types", "fields"]);
       renderChips();
     });
     selNone.addEventListener("click", () => {
@@ -870,6 +915,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         // минимум один тип (как в глоссарии) — снять все нельзя
         st.values[key]["types"] = typeNames[0];
         st.touched[key].add("types");
+        saveChips(key, ["types", "fields"]);
         renderChips();
       }
     });
@@ -894,12 +940,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       let v = String(st.values[key]["fields"] ?? "").trim();
       if (!v) {
         // дефолт: term + type/translation/notes/context — те, что есть
-        // в реальных данных ner.json (fieldNames уже загружен)
+        // в реальных данных ner.json (fieldNames уже загружен);
+        // касание обязательно — в простом режиме уходит именно он
         const base = ["type", "translation", "notes", "context"].filter(
           (n) => fieldNames.includes(n),
         );
         v = ["term", ...base].join(",");
         st.values[key]["fields"] = v;
+        st.touched[key].add("fields");
       }
       const set = new Set(v.split(",").map((s) => s.trim())
         .filter((s) => s && s !== "term"));
@@ -921,6 +969,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             else set.delete(name); // минимум — «Термин» (неотключаемый)
             st.values[key]["fields"] = [...set].join(",");
             st.touched[key].add("fields");
+            saveChips(key, ["types", "fields"]);
             renderFields();
           });
         }
@@ -943,6 +992,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (fieldNames.length) {
         st.values[key]["fields"] = ["term", ...fieldNames].join(",");
         st.touched[key].add("fields");
+        saveChips(key, ["types", "fields"]);
         renderFields();
       }
     });
@@ -1012,6 +1062,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             .filter((k) => !FIELD_ORDER.includes(k) && k !== "term")
             .sort(),
         ];
+        // сохранённый/устаревший выбор не переживает поля, которых
+        // больше нет в ner.json (зеркально ner_block ниже)
+        const v = String(st.values[key]["fields"] ?? "").trim();
+        if (v) {
+          const ok = v.split(",").map((s) => s.trim())
+            .filter((s) => s === "term" || fieldNames.includes(s));
+          st.values[key]["fields"] = ok.join(",");
+          saveChips(key, ["types", "fields"]);
+        }
         fieldsInfo.textContent =
           "term — всегда; по умолчанию: type, translation, notes, "
           + "context (если есть в данных)";
@@ -1061,6 +1120,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             else set.delete(name); // минимум — «term» (неотключаемый)
             st.values[key]["ner_fields"] = [...set].join(",");
             st.touched[key].add("ner_fields");
+            saveChips(key, ["ner_fields"]);
             render();
           });
         }
@@ -1078,6 +1138,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (fieldNames.length) {
         st.values[key]["ner_fields"] = ["term", ...fieldNames].join(",");
         st.touched[key].add("ner_fields");
+        saveChips(key, ["ner_fields"]);
         render();
       }
     });
@@ -1181,7 +1242,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       `${d.label || d.stage || ""} · модель: ${d.model || "?"}`
       + ` · символов: user ${chars.user ?? "?"}`
       + (chars.system ? `, system ${chars.system}` : "")
-      + (chars.total != null ? ` (всего ${chars.total})` : ""),
+      + (chars.total == null ? "" : ` (всего ${chars.total})`),
     ));
     const meta = d.meta && Object.keys(d.meta).length
       ? Object.entries(d.meta).map(([k, v]) => `${k}: ${v}`).join(" · ")

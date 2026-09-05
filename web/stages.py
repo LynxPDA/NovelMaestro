@@ -370,8 +370,16 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["-c", str(form["count_threshold"])]
     if form.get("fields"):
         argv += ["--fields", str(form["fields"])]
-    # --apply/--auto-apply/--no-bak убраны из Запусков — правки
-    # применяются только в «Проверках» проекта
+    # --apply/--auto-apply/--no-bak убраны из Запусков; флаги применения
+    # собираются только для пути «Проверки» проекта (ctx["review_apply"]
+    # → /api/ner/review/apply), иначе запуск без --apply превращается в
+    # полный LLM-прогон вместо применения правок
+    if ctx.get("review_apply"):
+        for flag in ("apply", "auto_apply", "dry_run"):
+            if form.get(flag):
+                argv.append(f"--{flag.replace('_', '-')}")
+        if form.get("no_bak"):
+            argv.append("--no-bak")
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
     re_effort = form.get("reasoning_effort")
