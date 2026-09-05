@@ -50,7 +50,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     brSig: "", // batch_replace: сигнатура формы последнего предпросмотра
   };
   const page = h("div", { class: "page" });
-  let streamCtrl = null; // AbortController текущего SSE-стрима
+  const streamCtrl = null; // AbortController текущего SSE-стрима
 
   // ── фактическое состояние артефактов глав (для таблицы конвейера) ──
   async function loadChapterState() {
@@ -1023,6 +1023,113 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return { chipsBar, chipsBox, guide, loadTypes, fieldsBar, fieldsBox };
   }
 
+  // чипсы полей {ner_block} (конвейер): term — всегда; «aliases» снят —
+  // оркестратор передаст --no_aliases (авто-алиасы выключены).
+  // Список полей — как в ner_check: базовые всегда, остальные —
+  // ключи из реальных данных ner.json проекта
+  function nerBlockChips(key) {
+    const FIELD_ORDER = ["type", "translation", "aliases", "pinyin",
+      "reading", "context", "translated_context", "notes"];
+    const bar = h("div", { class: "ner-chips-bar" });
+    const info = h("div", { class: "field-help" });
+    const selAll = h(
+      "button",
+      { class: "btn btn-xs btn-ghost", type: "button" },
+      "Выбрать все",
+    );
+    const box = h("div", { class: "ner-chips-box" });
+    let fieldNames = [];
+    function curFields() {
+      const v = String(st.values[key]["ner_fields"] ?? "").trim();
+      const set = new Set(v.split(",").map((s) => s.trim())
+        .filter((s) => s && s !== "term"));
+      set.add("term"); // термин — всегда в блоке
+      return set;
+    }
+    function render() {
+      const cur = curFields();
+      box.replaceChildren();
+      for (const name of ["term", ...fieldNames]) {
+        const isTerm = name === "term";
+        const cb = h("input", { type: "checkbox", class: "checkbox" });
+        cb.checked = isTerm || cur.has(name);
+        cb.disabled = isTerm; // неотключаемый
+        if (!isTerm) {
+          cb.addEventListener("change", () => {
+            const set = new Set(curFields());
+            if (cb.checked) set.add(name);
+            else set.delete(name); // минимум — «term» (неотключаемый)
+            st.values[key]["ner_fields"] = [...set].join(",");
+            st.touched[key].add("ner_fields");
+            render();
+          });
+        }
+        box.append(
+          h(
+            "label",
+            { class: "ner-chip" + (isTerm ? " ner-chip-term" : "") },
+            cb,
+            ` ${name}` + (isTerm ? " (всегда)" : ""),
+          ),
+        );
+      }
+    }
+    selAll.addEventListener("click", () => {
+      if (fieldNames.length) {
+        st.values[key]["ner_fields"] = ["term", ...fieldNames].join(",");
+        st.touched[key].add("ner_fields");
+        render();
+      }
+    });
+    bar.append(
+      h("span", {}, "Поля терминов в {ner_block}:"),
+      selAll,
+      h("span", { class: "spacer" }),
+      info,
+    );
+    const loadFields = async () => {
+      info.textContent = "Загрузка полей из глоссария…";
+      try {
+        const d = await api(`/ner?project=${section}/${name}`);
+        const present = new Set();
+        for (const it of d.items || []) {
+          if (!it || typeof it !== "object") continue;
+          for (const k of Object.keys(it)) {
+            if (!k.startsWith("_")) present.add(k);
+          }
+        }
+        // базовые type/translation/aliases — всегда (стандарт глоссария),
+        // остальные — ключи из данных; ЛЮБОЙ новый ключ — в конец
+        fieldNames = [
+          ...FIELD_ORDER.filter(
+            (n) => n === "type" || n === "translation"
+              || n === "aliases" || present.has(n),
+          ),
+          ...[...present]
+            .filter((k) => !FIELD_ORDER.includes(k) && k !== "term")
+            .sort(),
+        ];
+        // устаревшие значения не остаются выбранными
+        const v = String(st.values[key]["ner_fields"] ?? "").trim();
+        if (v) {
+          const ok = v.split(",").map((s) => s.trim())
+            .filter((s) => s === "term" || fieldNames.includes(s));
+          st.values[key]["ner_fields"] = ok.join(",");
+        }
+        info.textContent =
+          "term — всегда; «aliases» снят — алиасы не добавляются "
+          + "автоматически";
+        render();
+      } catch (ex) {
+        fieldNames = ["type", "translation", "aliases"];
+        info.textContent =
+          `Глоссарий не загружен (${ex.message}) — базовые поля`;
+        render();
+      }
+    };
+    return { bar, box, loadFields };
+  }
+
   // «Редактировать» промпт из запуска: чтение/правка/сохранение
   // выбранного файла prompts/ (GET/PUT /api/prompts/{name})
   function editPromptModal(fileName) {
@@ -1434,6 +1541,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (fileSel) fileSel.addEventListener("change", applyNerSimple);
       applyNerSimple();
     }
+    // pipeline: чипсы полей {ner_block} после промпт-файла
+    if (key === "pipeline" && byName["prompt_file"]) {
+      const nb = nerBlockChips(key);
+      const inp = byName["prompt_file"];
+      const pfWrap = inp && inp.closest ? inp.closest(".field") : null;
+      const idx = pfWrap ? wraps.indexOf(pfWrap) : -1;
+      if (idx >= 0) wraps.splice(idx + 1, 0, nb.bar, nb.box);
+      nb.loadFields();
+    }
     // ner_check: чипсы типов из глоссария после select «Проходы»;
     // RAG-поля — строятся всегда, видны только в режиме rag
     if (key === "ner_check" && byName["passes"]) {
@@ -1608,7 +1724,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     attachQualityRange(key, fieldWraps, "manual");
 
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
-    // режим промптов и отдельные файлы на стадию убраны
+    // режим промптов и отдельные файлы на стадию убраны;
+    // чипсы полей {ner_block} — после «Мин. count для глоссария»
+    if (key === "pipeline") {
+      const nb = nerBlockChips(key);
+      const nmWrap = fieldWraps["ner_min_count"];
+      const idx = nmWrap ? fieldNodes.indexOf(nmWrap) : -1;
+      if (idx >= 0) fieldNodes.splice(idx + 1, 0, nb.bar, nb.box);
+      nb.loadFields();
+    }
 
     // ner — входной файл или сборка глав в память (диапазон виден
     // только когда файл не выбран)

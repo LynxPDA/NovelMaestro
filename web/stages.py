@@ -266,11 +266,16 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
     # сам pipeline.py; отдельного --threads больше нет
     if form.get("jobs") not in (None, ""):
         argv += ["--jobs", str(form["jobs"])]
-    # пороги count: ner_block и имена (пусто/0 = фильтр выключен)
+    # пороги count: ner_block и имена (пусто/0 = фильтр выключен);
+    # поля {ner_block} — чипсы формы (hidden ner_fields), общие для
+    # всех стадий конвейера
     for flag, name in (("--ner_min_count", "ner_min_count"),
                        ("--names_min_count", "names_min_count")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
+    nf = str(form.get("ner_fields") or "").strip()
+    if nf:
+        argv += ["--ner_fields", nf]
     if form.get("timeout") not in (None, ""):
         argv += ["--timeout", str(form["timeout"])]
     if form.get("max_retries") not in (None, ""):
@@ -824,6 +829,8 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "0",
              "help": "термины с count ниже порога НЕ попадают в {ner_block}; "
                       "0 — фильтр выключен (все найденные)"},
+            {"name": "ner_fields", "type": "hidden",
+             "default": "term,type,translation,aliases", "noenv": True},
             {"name": "names_min_count", "label": "Мин. count для имён "
              "({female_names}/{male_names})",
              "type": "number", "default": "10",

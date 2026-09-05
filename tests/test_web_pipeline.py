@@ -232,6 +232,40 @@ def test_build_stage_cmd_prompt_override(tmp_path):
     assert "--prompt_file" not in cmd2
 
 
+def test_build_stage_cmd_ner_fields(tmp_path):
+    """поля {ner_block} из формы — во ВСЕ 3 стадии; aliases снят —
+    --no_aliases добавляется (авто-алиасы выключены)."""
+    from web.pipeline import build_stage_cmd
+    script = tmp_path / "translate_book.py"
+    for stage in (1, 2, 3):
+        cmd = build_stage_cmd(stage, script, tmp_path / "in",
+                              tmp_path / "out", "http://h", "k", "м", 300,
+                              ner_fields="term,type,translation,aliases")
+        assert "--ner_fields" in cmd
+        assert cmd[cmd.index("--ner_fields") + 1] == \
+            "term,type,translation,aliases"
+        assert "--no_aliases" not in cmd
+    for stage in (1, 2, 3):
+        cmd = build_stage_cmd(stage, script, tmp_path / "in",
+                              tmp_path / "out", "http://h", "k", "м", 300,
+                              ner_fields="term,type", no_aliases=True)
+        assert "--no_aliases" in cmd
+
+
+def test_build_pipeline_ner_fields_argv():
+    """hidden-поле ner_fields из формы — в argv оркестратора; пусто —
+    без флага (CLI-дефолт)."""
+    ctx: dict = {}
+    base = {"action": "8", "host": "http://h", "model": "m",
+            "api_key": "k"}
+    argv = build_command("pipeline",
+                         dict(base, ner_fields="term,type,translation"),
+                         ctx)
+    assert argv[argv.index("--ner_fields") + 1] == "term,type,translation"
+    argv2 = build_command("pipeline", dict(base), ctx)
+    assert "--ner_fields" not in argv2
+
+
 def test_build_stage_cmd_single_model(tmp_path):
     """единая модель конвейера — без stage_models: переданная модель
     уходит во все стадии как есть."""
