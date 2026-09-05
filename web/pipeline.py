@@ -72,6 +72,13 @@ _ACTION_SPECS: dict[int, dict] = {
         "name": "Сокращенный цикл: Редактура -> Полировка"},
     8: {"stages": [1, 2, 3],
         "name": "Полный цикл: Перевод -> Редактура -> Полировка"},
+    # расширенный контекст (малоресурсные языки): словарь/правила/примеры
+    # из source/ — тег <translate_lr>, бюджеты в СИМВОЛАХ
+    9: {"stages": [1],
+        "name": "Перевод с расширенным контекстом", "extended": True},
+    10: {"stages": [1, 2, 3],
+        "name": "Полный цикл с расширенным контекстом",
+        "extended": True},
 }
 # Дефолты конвейера. Переопределяются из .env: PIPELINE_TIMEOUT,
 # PIPELINE_STREAM_TIMEOUT, PIPELINE_MAX_RETRIES, PIPELINE_CHUNK_SIZE,
@@ -108,7 +115,9 @@ _PROMPT_COMBINED_CANDIDATES = [
     "prompts/prompts.txt",
     "prompts/translate_book_prompt.txt",
 ]
-_PROMPT_TAGS = ("translate", "redact", "polish")
+# translate_lr — расширенный перевод (действия 9/10); файл с тегом
+# <translate_lr> авто-подхватывается и не считается «без тега стадии»
+_PROMPT_TAGS = ("translate", "translate_lr", "redact", "polish")
 
 
 def emit(ev: dict) -> None:
@@ -272,11 +281,14 @@ def resolve_prompt_paths(combined: str = "") -> dict[int, str]:
 _STAGE_TAG = {1: "translate", 2: "redact", 3: "polish"}
 
 
-def warn_missing_prompt_tag(prompt_file: str, stage: int, log) -> bool:
+def warn_missing_prompt_tag(prompt_file: str, stage: int, log,
+                            extended: bool = False) -> bool:
     """Предупреждение, если общий промпт-файл не содержит тега стадии.
 
     Файл без тегов — легальный режим «промпт целиком», не ругаемся.
     Если теги есть, но нужного нет — стадия уйдёт на встроенный промпт.
+    Расширенный перевод (extended): стадия 1 принимает <translate_lr>
+    с фолбэком на <translate> — предупреждение только когда нет обоих.
     Возвращает True, если тег отсутствует (стадия на встроенном).
     """
     if not prompt_file:
@@ -287,6 +299,16 @@ def warn_missing_prompt_tag(prompt_file: str, stage: int, log) -> bool:
     except OSError:
         return False
     from core.common import get_tagged_prompt
+    if extended and stage == 1:
+        if (get_tagged_prompt(text, "translate_lr")
+                or get_tagged_prompt(text, "translate")):
+            return False
+        if not any(get_tagged_prompt(text, t) for t in _PROMPT_TAGS):
+            return False
+        log.warning("В промпт-файле %s нет тега <translate_lr>/<translate> "
+                    "— стадия «%s» использует ВСТРОЕННЫЙ промпт",
+                    prompt_file, _STAGE_NAME[stage])
+        return True
     tag = _STAGE_TAG[stage]
     if get_tagged_prompt(text, tag):
         return False
@@ -306,7 +328,13 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     ner_min_count: int = 0,
                     names_min_count: int = 10,
                     ner_fields: str = "term,translation,type",
-                    no_aliases: bool = False) -> list[str]:
+                    no_aliases: bool = False,
+                    dict_file: str = "", rules_file: str = "",
+                    examples_file: str = "",
+                    fewshot_k: int = 3, fewshot_threshold: float = 0.3,
+                    rules_budget: int = 2000, examples_budget: int = 4000,
+                    request_budget: int = 0,
+                    dict_fields: str = "term,translation") -> list[str]:
     # единая модель конвейера (PIPELINE_MODEL → MODEL) — без
     # отдельных моделей под translate/redact/polish
     common = [
@@ -339,23 +367,40 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                "--ner_fields", str(ner_fields)]
     if no_aliases:
         common += ["--no-aliases"]
+    # расширенный контекст: флаги только когда задан хоть один файл
+    # (действия 9/10; файлы в source/ — пути относительно проекта)
+    ext_extra = []
+    if dict_file or rules_file or examples_file:
+        if dict_file:
+            ext_extra += ["--dict_file", str(dict_file)]
+        if rules_file:
+            ext_extra += ["--rules_file", str(rules_file)]
+        if examples_file:
+            ext_extra += ["--examples_file", str(examples_file)]
+        ext_extra += ["--fewshot_k", str(fewshot_k),
+                      "--fewshot_threshold", str(fewshot_threshold),
+                      "--rules_budget", str(rules_budget),
+                      "--examples_budget", str(examples_budget),
+                      "--dict_fields", str(dict_fields)]
+        if request_budget:
+            ext_extra += ["--request_budget", str(request_budget)]
     if stage == 1:
         return [sys.executable, str(script), str(in_file), "--mode",
                 "translate", *common,
                 "--chunk_size", str(_DEFAULTS["chunk_size"]),
                 "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
-                "--ner_ngram", str(_DEFAULTS["ner_ngram"])]
+                "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
     if stage == 2:
         return [sys.executable, str(script), str(in_file), "--mode",
                 "redact", *common,
                 "--min_len_ratio", "0.9",
                 "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
-                "--ner_ngram", str(_DEFAULTS["ner_ngram"])]
+                "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
     return [sys.executable, str(script), str(in_file), "--mode",
             "polish", *common,
             "--chunk_size", str(_DEFAULTS["chunk_size"]),
             "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
-            "--ner_ngram", str(_DEFAULTS["ner_ngram"])]
+            "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
 
 
 def grep_errors(text: str, max_lines: int = 20) -> list[str]:
@@ -383,7 +428,13 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     ner_min_count: int = 0,
                     names_min_count: int = 10,
                     ner_fields: str = "term,translation,type",
-                    no_aliases: bool = False) -> bool:
+                    no_aliases: bool = False,
+                    dict_file: str = "", rules_file: str = "",
+                    examples_file: str = "",
+                    fewshot_k: int = 3, fewshot_threshold: float = 0.3,
+                    rules_budget: int = 2000, examples_budget: int = 4000,
+                    request_budget: int = 0,
+                    dict_fields: str = "term,translation") -> bool:
     """Одна глава: стадии по порядку, fail-fast (код 0 + файл + grep).
 
     polish_in — вход полировки вместо дефолтного redacted.txt
@@ -420,7 +471,16 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                                   ner_min_count=ner_min_count,
                                   names_min_count=names_min_count,
                                   ner_fields=ner_fields,
-                                  no_aliases=no_aliases)
+                                  no_aliases=no_aliases,
+                                  dict_file=dict_file,
+                                  rules_file=rules_file,
+                                  examples_file=examples_file,
+                                  fewshot_k=fewshot_k,
+                                  fewshot_threshold=fewshot_threshold,
+                                  rules_budget=rules_budget,
+                                  examples_budget=examples_budget,
+                                  request_budget=request_budget,
+                                  dict_fields=dict_fields)
             proc_env = dict(os.environ)
             if api_key:
                 proc_env["LLM_API_KEY"] = api_key
@@ -517,7 +577,10 @@ def main() -> None:
                     help="Тип работы: 1=перевод, 2=редактура (из перевода), "
                          "3=полировка (из редактуры), 4=полировка (из перевода), "
                          "5=перевод→редактура, 6=перевод→полировка, "
-                         "7=редактура→полировка, 8=полный цикл")
+                         "7=редактура→полировка, 8=полный цикл, "
+                         "9=перевод с расширенным контекстом (словарь/правила/"
+                         "примеры из source/), 10=полный цикл с расширенным "
+                         "контекстом")
     ap.add_argument("--start", type=int, default=None, help="Начальная глава")
     ap.add_argument("--end", type=int, default=None, help="Конечная глава")
     ap.add_argument("--jobs", type=int, default=None,
@@ -556,6 +619,26 @@ def main() -> None:
     ap.add_argument("--ner_fields", default="term,translation,type",
                     help="Поля термина в {ner_block} через запятую "
                          "(aliases снят — авто-алиасы выключены).")
+    # расширенный контекст (действия 9/10): словарь/правила/примеры
+    ap.add_argument("--dict_file", default="",
+                    help="Словарь (source/, формат ner.json) — {dict_block}.")
+    ap.add_argument("--rules_file", default="",
+                    help="Справочник языка (source/, txt/md) — {rules_block}.")
+    ap.add_argument("--examples_file", default="",
+                    help="Пары оригинал→перевод (source/) — few-shot "
+                         "{fewshot_block}.")
+    ap.add_argument("--fewshot_k", type=int, default=3,
+                    help="Макс. примеров на чанк.")
+    ap.add_argument("--fewshot_threshold", type=float, default=0.3,
+                    help="Порог схожести примера с чанком (0–1).")
+    ap.add_argument("--rules_budget", type=int, default=2000,
+                    help="Бюджет правил, СИМВОЛЫ.")
+    ap.add_argument("--examples_budget", type=int, default=4000,
+                    help="Бюджет few-shot блока, СИМВОЛЫ.")
+    ap.add_argument("--request_budget", type=int, default=0,
+                    help="Общий бюджет запроса, СИМВОЛЫ; 0 = выключено.")
+    ap.add_argument("--dict_fields", default="term,translation",
+                    help="Поля словаря в {dict_block} через запятую.")
     ap.add_argument("--preview-request", dest="preview_request",
                    default=None,
                    help="ПРЕДПРОСМОТР: первый LLM-запрос действия "
@@ -636,6 +719,12 @@ def main() -> None:
     action_spec = _ACTION_SPECS[args.action]
     stages = action_spec["stages"]
     action_label = action_spec["name"]
+    # расширенный контекст: файлы словаря/правил/примеров действуют
+    # только для действий 9/10 (иначе молча игнорируются)
+    ext = bool(action_spec.get("extended"))
+    dict_file = args.dict_file if ext else ""
+    rules_file = args.rules_file if ext else ""
+    examples_file = args.examples_file if ext else ""
     # общий лог запуска (канон run_pipeline.sh): один файл на запуск
     # для ЛЮБОГО типа работы — logs/{Метка}_{start}-{end}_j{jobs}_{время}.log
     # (детальные логи по главам — logs/chapters/ как раньше);
@@ -669,7 +758,7 @@ def main() -> None:
     prompts = resolve_prompt_paths(args.prompt_file)
     builtin = {}
     for stage in stages:
-        if warn_missing_prompt_tag(prompts[stage], stage, log):
+        if warn_missing_prompt_tag(prompts[stage], stage, log, ext):
             builtin[stage] = True
     log.info("═" * 60)
     log.info("ТИП РАБОТЫ : %s", action_label)
@@ -685,6 +774,15 @@ def main() -> None:
     no_aliases = "aliases" not in nf_list
     log.info("NER-ПОЛЯ   : %s%s", ",".join(nf_list),
              "" if not no_aliases else " (без алиасов)")
+    if ext:
+        log.info("КОНТЕКСТ   : словарь=%s правила=%s примеры=%s | "
+                 "fewshot_k=%d порог=%.2f | бюджеты СИМВОЛЫ: "
+                 "правила=%d примеры=%d запрос=%d | поля=%s",
+                 dict_file or "—", rules_file or "—",
+                 examples_file or "—", args.fewshot_k,
+                 args.fewshot_threshold, args.rules_budget,
+                 args.examples_budget, args.request_budget,
+                 args.dict_fields)
     log.info("ВРЕМЯ      : %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     log.info("═" * 60)
 
@@ -710,7 +808,15 @@ def main() -> None:
             prompt_file=prompts.get(stage) or "",
             ner_min_count=args.ner_min_count,
             names_min_count=args.names_min_count,
-            ner_fields=args.ner_fields, no_aliases=no_aliases)
+            ner_fields=args.ner_fields, no_aliases=no_aliases,
+            dict_file=dict_file, rules_file=rules_file,
+            examples_file=examples_file,
+            fewshot_k=args.fewshot_k,
+            fewshot_threshold=args.fewshot_threshold,
+            rules_budget=args.rules_budget,
+            examples_budget=args.examples_budget,
+            request_budget=args.request_budget,
+            dict_fields=args.dict_fields)
         cmd += ["--preview-request", args.preview_request]
         proc_env = dict(os.environ)
         if api_key:
@@ -776,7 +882,15 @@ def main() -> None:
                         ner_min_count=args.ner_min_count,
                         names_min_count=args.names_min_count,
                         ner_fields=args.ner_fields,
-                        no_aliases=no_aliases): cid
+                        no_aliases=no_aliases,
+                        dict_file=dict_file, rules_file=rules_file,
+                        examples_file=examples_file,
+                        fewshot_k=args.fewshot_k,
+                        fewshot_threshold=args.fewshot_threshold,
+                        rules_budget=args.rules_budget,
+                        examples_budget=args.examples_budget,
+                        request_budget=args.request_budget,
+                        dict_fields=args.dict_fields): cid
             for cid, dirs in to_process.items()
         }
         for fut in as_completed(futures):

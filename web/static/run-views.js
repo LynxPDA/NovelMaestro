@@ -1855,13 +1855,32 @@ window.viewRun = function viewRun(section, name, attachJobId) {
 
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны;
-    // чипсы полей {ner_block} — после «Мин. count для глоссария»
+    // чипсы полей {ner_block} — после «Мин. count для глоссария»;
+    // расширенный контекст (действия 9/10) — поля словаря/правил/примеров
     if (key === "pipeline") {
       const nb = nerBlockChips(key);
       const nmWrap = fieldWraps["ner_min_count"];
       const idx = nmWrap ? fieldNodes.indexOf(nmWrap) : -1;
       if (idx >= 0) fieldNodes.splice(idx + 1, 0, nb.bar, nb.box);
       nb.loadFields();
+      // словарь/правила/примеры + бюджеты — только для действий 9/10
+      const actionSel = fieldWraps["action"] && fieldWraps["action"]._input;
+      const extNames = ["dict_file", "rules_file", "examples_file",
+                        "fewshot_k", "fewshot_threshold",
+                        "rules_budget", "examples_budget",
+                        "request_budget", "dict_fields"];
+      function applyPipelineAction() {
+        const ext = actionSel && ["9", "10"].includes(
+          String(actionSel.value));
+        for (const name of extNames) {
+          const w = fieldWraps[name];
+          if (w) w.classList.toggle("hidden", !ext);
+        }
+      }
+      if (actionSel) {
+        actionSel.addEventListener("change", applyPipelineAction);
+      }
+      applyPipelineAction();
     }
 
     // ner — входной файл или сборка глав в память (диапазон виден

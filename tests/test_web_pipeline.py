@@ -106,14 +106,15 @@ def test_pipeline_script_path():
 
 
 def test_pipeline_action_options():
-    """Тип работы: 8 вариантов с подписями исходников/циклов;
-    дефолт — полный цикл (8)."""
+    """Тип работы: 10 вариантов с подписями исходников/циклов;
+    дефолт — полный цикл (8); 9/10 — расширенный контекст."""
     from web.stages import _LLM_FIELDS
     spec = spec_for("pipeline")
     assert spec is not None
     action = next(f for f in spec["fields"] if f["name"] == "action")
     assert action["type"] == "select"
-    assert action["options"] == ["1", "2", "3", "4", "5", "6", "7", "8"]
+    assert action["options"] == ["1", "2", "3", "4", "5", "6", "7",
+                                  "8", "9", "10"]
     assert action["default"] == "8"
     labels = action["labels"]
     assert labels["1"] == "Перевод"
@@ -124,6 +125,8 @@ def test_pipeline_action_options():
     assert labels["6"] == "Сокращенный цикл: Перевод -> Полировка"
     assert labels["7"] == "Сокращенный цикл: Редактура -> Полировка"
     assert labels["8"] == "Полный цикл: Перевод -> Редактура -> Полировка"
+    assert labels["9"] == "Перевод с расширенным контекстом"
+    assert labels["10"] == "Полный цикл с расширенным контекстом"
     # единая модель конвейера: PIPELINE_MODEL → MODEL
     model = next(f for f in spec["fields"] if f["name"] == "model")
     assert model in _LLM_FIELDS
@@ -280,6 +283,126 @@ def test_build_pipeline_ner_fields_argv():
     assert argv[argv.index("--ner_fields") + 1] == "term,type,translation"
     argv2 = build_command("pipeline", dict(base), ctx)
     assert "--ner_fields" not in argv2
+
+
+def test_pipeline_extended_action_specs():
+    """Действия 9/10 — расширенный контекст (стадии 1 и 1,2,3)."""
+    from web.pipeline import _ACTION_SPECS
+    a9 = _ACTION_SPECS[9]
+    assert a9["stages"] == [1]
+    assert a9["extended"] is True
+    assert "расширенным контекстом" in a9["name"]
+    a10 = _ACTION_SPECS[10]
+    assert a10["stages"] == [1, 2, 3]
+    assert a10["extended"] is True
+    # обычные действия — без extended
+    assert "extended" not in _ACTION_SPECS[8]
+    assert "extended" not in _ACTION_SPECS[1]
+
+
+def test_build_stage_cmd_extended_context(tmp_path):
+    """Расширенные флаги в команду стадии — только когда задан хоть
+    один файл; иначе ни одного (действия 1–8 не затронуты)."""
+    from web.pipeline import build_stage_cmd
+    script = tmp_path / "translate_book.py"
+    def _cmd(stage, **kw):
+        return build_stage_cmd(stage, script, tmp_path / "in",
+                               tmp_path / "out", "http://h", "k", "м",
+                               300, **kw)
+    # без файлов — нет расширенных флагов ни в одной стадии
+    for stage in (1, 2, 3):
+        cmd = _cmd(stage)
+        assert "--dict_file" not in cmd
+        assert "--rules_file" not in cmd
+        assert "--examples_file" not in cmd
+        assert "--fewshot_k" not in cmd
+        assert "--request_budget" not in cmd
+    # с файлами — флаги во всех стадиях (цикл 10)
+    for stage in (1, 2, 3):
+        cmd = _cmd(stage,
+                   dict_file="source/dict.json",
+                   rules_file="source/rules.md",
+                   examples_file="source/examples.json",
+                   fewshot_k=5, fewshot_threshold=0.2,
+                   rules_budget=1000, examples_budget=2000,
+                   request_budget=16000,
+                   dict_fields="term,translation,type")
+        joined = " ".join(cmd)
+        assert "--dict_file source/dict.json" in joined
+        assert "--rules_file source/rules.md" in joined
+        assert "--examples_file source/examples.json" in joined
+        assert "--fewshot_k 5" in joined
+        assert "--fewshot_threshold 0.2" in joined
+        assert "--rules_budget 1000" in joined
+        assert "--examples_budget 2000" in joined
+        assert "--request_budget 16000" in joined
+        assert "--dict_fields term,translation,type" in joined
+    # request_budget=0 — флаг не передаётся (выключено)
+    cmd = _cmd(1, dict_file="source/dict.json", request_budget=0)
+    assert "--request_budget" not in cmd
+
+
+def test_build_pipeline_extended_argv():
+    """Поля расширенного контекста формы → argv оркестратора."""
+    ctx: dict = {}
+    base = {"action": "9", "host": "http://h", "model": "m",
+            "api_key": "k",
+            "dict_file": "source/dict.json",
+            "rules_file": "source/rules.md",
+            "examples_file": "source/examples.json",
+            "fewshot_k": "4", "fewshot_threshold": "0.25",
+            "rules_budget": "1500", "examples_budget": "3000",
+            "request_budget": "20000",
+            "dict_fields": "term,translation"}
+    argv = build_command("pipeline", base, ctx)
+    joined = " ".join(argv)
+    assert "--action 9" in joined
+    assert "--dict_file source/dict.json" in joined
+    assert "--rules_file source/rules.md" in joined
+    assert "--examples_file source/examples.json" in joined
+    assert "--fewshot_k 4" in joined
+    assert "--fewshot_threshold 0.25" in joined
+    assert "--rules_budget 1500" in joined
+    assert "--examples_budget 3000" in joined
+    assert "--request_budget 20000" in joined
+    assert "--dict_fields term,translation" in joined
+    # пустые поля — без флагов
+    argv2 = build_command("pipeline",
+                          {"action": "9", "host": "http://h",
+                           "model": "m", "api_key": "k"}, ctx)
+    assert "--dict_file" not in " ".join(argv2)
+
+
+def test_warn_missing_prompt_tag_extended(tmp_path, monkeypatch):
+    """Расширенный перевод: <translate_lr> или <translate> — нет
+    предупреждения; нет обоих — предупреждение."""
+    from web.pipeline import warn_missing_prompt_tag
+    monkeypatch.chdir(tmp_path)
+    pr = tmp_path / "prompts"
+    pr.mkdir()
+    pf = "prompts/p.txt"
+    (pr / "p.txt").write_text(
+        "<translate_lr>\nLR\n</translate_lr>\n"
+        "<redact>\nР\n</redact>\n", encoding="utf-8")
+    msgs = []
+    class L:
+        def warning(self, *a): msgs.append(a)
+    # есть <translate_lr> — ок
+    assert not warn_missing_prompt_tag(pf, 1, L(), extended=True)
+    assert not msgs
+    # есть только <translate> — фолбэк, ок
+    (pr / "p.txt").write_text(
+        "<translate>\nТ\n</translate>\n", encoding="utf-8")
+    assert not warn_missing_prompt_tag(pf, 1, L(), extended=True)
+    assert not msgs
+    # нет ни одного — предупреждение + встроенный
+    (pr / "p.txt").write_text(
+        "<polish>\nП\n</polish>\n", encoding="utf-8")
+    assert warn_missing_prompt_tag(pf, 1, L(), extended=True)
+    assert msgs and "translate_lr" in msgs[0][0]
+    # не-расширенный режим — как раньше (тег translate)
+    msgs.clear()
+    assert warn_missing_prompt_tag(pf, 1, L(), extended=False)
 
 
 def test_build_stage_cmd_single_model(tmp_path):

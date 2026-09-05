@@ -289,6 +289,22 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
     # пусто = авто (кандидат с тегами из prompts/)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
+    # расширенный контекст (действия 9/10): словарь/правила/примеры
+    # из source/ + бюджеты (СИМВОЛЫ); файлы приходят как source/имя
+    for name, flag in (("dict_file", "--dict_file"),
+                       ("rules_file", "--rules_file"),
+                       ("examples_file", "--examples_file")):
+        if form.get(name) not in (None, ""):
+            argv += [flag, str(form[name])]
+    for name, flag in (("fewshot_k", "--fewshot_k"),
+                       ("fewshot_threshold", "--fewshot_threshold"),
+                       ("rules_budget", "--rules_budget"),
+                       ("examples_budget", "--examples_budget"),
+                       ("request_budget", "--request_budget")):
+        if form.get(name) not in (None, ""):
+            argv += [flag, str(form[name])]
+    if form.get("dict_fields") not in (None, ""):
+        argv += ["--dict_fields", str(form["dict_fields"])]
     argv += _llm_argv(form, ctx, "pipeline")
     return argv
 
@@ -804,7 +820,8 @@ STAGE_SPECS: dict[str, dict] = {
         "fields": _LLM_FIELDS + [
             {"name": "action", "label": "Тип работы",
              "type": "select",
-             "options": ["1", "2", "3", "4", "5", "6", "7", "8"],
+             "options": ["1", "2", "3", "4", "5", "6", "7", "8",
+                          "9", "10"],
              "default": "8",
              "labels": {
                  "1": "Перевод",
@@ -814,12 +831,57 @@ STAGE_SPECS: dict[str, dict] = {
                  "5": "Сокращенный цикл: Перевод -> Редактура",
                  "6": "Сокращенный цикл: Перевод -> Полировка",
                  "7": "Сокращенный цикл: Редактура -> Полировка",
-                 "8": "Полный цикл: Перевод -> Редактура -> Полировка"},
+                 "8": "Полный цикл: Перевод -> Редактура -> Полировка",
+                 "9": "Перевод с расширенным контекстом",
+                 "10": "Полный цикл с расширенным контекстом"},
              "help": "1=перевод, 2=редактура (исходник - перевод), "
                       "3=полировка (исходник - редактура), "
                       "4=полировка (исходник - перевод), "
                       "5=перевод→редактура, 6=перевод→полировка, "
-                      "7=редактура→полировка, 8=полный цикл"},
+                      "7=редактура→полировка, 8=полный цикл, "
+                      "9=перевод с расширенным контекстом (словарь/правила/"
+                      "примеры из source/), 10=полный цикл с расширенным "
+                      "контекстом"},
+            {"name": "dict_file", "label": "Словарь перевода (dict.json)",
+             "type": "files", "dir": "source", "ext": [".json"],
+             "default": "",
+             "help": "формат как ner.json: term/translation/type?/aliases?/"
+                      "notes?; найденные в чанке записи (и в примерах) "
+                      "попадают в {dict_block}"},
+            {"name": "rules_file", "label": "Правила языка (rules.txt/md)",
+             "type": "files", "dir": "source", "ext": [".txt", ".md"],
+             "default": "",
+             "help": "краткий справочник по языку; целиком в "
+                      "{rules_block} с потолком rules_budget"},
+            {"name": "examples_file",
+             "label": "Пары оригинал→перевод (examples.json)",
+             "type": "files", "dir": "source", "ext": [".json"],
+             "default": "",
+             "help": "массив {original_text, translated_text} (алиасы "
+                      "source/target); релевантные пары — few-shot "
+                      "{fewshot_block}"},
+            {"name": "fewshot_k", "label": "Макс. примеров на чанк",
+             "type": "number", "default": "3", "min": 0, "max": 20,
+             "help": "сколько релевантных пар влезает в few-shot"},
+            {"name": "fewshot_threshold",
+             "label": "Порог схожести примеров (0–1)",
+             "type": "number", "default": "0.3", "min": 0, "max": 1,
+             "step": "0.05",
+             "help": "ниже порога пример отсекается — лучше без примеров, "
+                      "чем с шумными"},
+            {"name": "rules_budget", "label": "Бюджет правил, СИМВОЛЫ",
+             "type": "number", "default": "2000", "min": 0,
+             "help": "потолок длины {rules_block} (0 = без обрезки)"},
+            {"name": "examples_budget", "label": "Бюджет примеров, СИМВОЛЫ",
+             "type": "number", "default": "4000", "min": 0,
+             "help": "потолок длины {fewshot_block} (0 = без обрезки)"},
+            {"name": "request_budget", "label": "Бюджет запроса, СИМВОЛЫ",
+             "type": "number", "default": "24000", "min": 0,
+             "help": "общий бюджет user-запроса (чанк + все блоки); 0 = "
+                      "выключено; превышение — ошибка чанка"},
+            {"name": "dict_fields", "label": "Поля словаря в {dict_block}",
+             "type": "text", "default": "term,translation",
+             "help": "через запятую; aliases добавляются автоматически"},
             {"name": "prompt_file",
              "label": "Общий промпт-файл (теги translate/redact/polish)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
