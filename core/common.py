@@ -767,6 +767,142 @@ def collect_gender_names(text, ner_data, threshold=0.75, ngram_size=3,
 
 
 # ══════════════════════════════════════════════════════════════════════
+# РАСШИРЕННЫЙ КОНТЕКСТ ПЕРЕВОДА: словарь (как ner.json), справочник
+# языка (rules.txt|md) и few-shot пары оригинал→перевод (examples.json).
+# Словарь загружается load_ner_data и ищется find_relevant_ner (механизм
+# глоссария); здесь — только примеры и правила.
+# ══════════════════════════════════════════════════════════════════════
+def load_examples(filepath, ngram_size=3, logger=None):
+    """Загрузка few-shot пар «оригинал → перевод» (examples.json).
+
+    Формат — список записей {"original_text", "translated_text"}
+    (алиасы source/target тоже принимаются) — совместим с
+    translated_trace.json конвейера. Возвращает список dict с кэшем
+    нормализации и n-грамм source-стороны (_norm, _ngrams) — для
+    быстрого релевантного отбора. Пусто/битый файл/нет файла → [].
+    """
+    if not filepath or not os.path.exists(filepath):
+        if logger:
+            logger.warning(f"⚠️ Файл примеров ({filepath}) не найден. "
+                           "Few-shot выключен.")
+        return []
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        if logger:
+            logger.error(f"❌ Ошибка чтения файла примеров: {e}")
+        return []
+    if not isinstance(data, list):
+        if logger:
+            logger.error("❌ examples.json должен быть списком пар "
+                         "{original_text, translated_text}")
+        return []
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        orig = item.get("original_text", item.get("source", ""))
+        trans = item.get("translated_text", item.get("target", ""))
+        if not orig or not trans:
+            continue
+        norm = normalize_for_search(orig)
+        out.append({
+            "original_text": orig,
+            "translated_text": trans,
+            "_norm": norm,
+            "_ngrams": get_ngrams(norm, n=ngram_size)
+                       if len(norm) >= ngram_size else set(),
+        })
+    if logger:
+        logger.info(f"✅ Примеров загружено: {len(out)}"
+                    f" из {len(data)} записей")
+    return out
+
+
+def find_relevant_examples(text, examples, k=3, threshold=0.3,
+                           ngram_size=3, budget=0):
+    """Отбор релевантных few-shot примеров для текста чанка.
+
+    Скоринг — containment: |ngrams(пары) ∩ ngrams(чанка)| / |ngrams(пары)|
+    (language-agnostic, работает и для CJK, и для кириллицы). Жадный
+    отбор топ-K со штрафом за пересечение с уже выбранными
+    (анти-дубликаты: после лучшего примера важно разнообразие);
+    отсечка по порогу — лучше без примеров, чем с шумными; укладка
+    в бюджет СИМВОЛОВ (original+translated обеих сторон).
+
+    Возвращает список пар {"original_text", "translated_text"}.
+    """
+    if not text or not examples:
+        return []
+    text_norm = normalize_for_search(text)
+    if not text_norm:
+        return []
+    text_ngrams = get_ngrams(text_norm, n=ngram_size)
+    scored = []
+    for ex in examples:
+        ex_ngrams = ex.get("_ngrams") or set()
+        if not ex_ngrams:
+            continue
+        score = len(ex_ngrams & text_ngrams) / len(ex_ngrams)
+        if score >= threshold:
+            scored.append((score, ex))
+    scored.sort(key=lambda t: t[0], reverse=True)
+
+    selected, used, total = [], set(), 0
+    for score, ex in scored:
+        if len(selected) >= k:
+            break
+        chars = len(ex["original_text"]) + len(ex["translated_text"])
+        if budget and total + chars > budget:
+            continue
+        ex_ngrams = ex.get("_ngrams") or set()
+        if used and ex_ngrams:
+            overlap = len(ex_ngrams & used) / len(ex_ngrams)
+            if overlap >= 0.7:  # дубликат уже выбранного — пропускаем
+                continue
+        selected.append(ex)
+        used |= ex_ngrams
+        total += chars
+    return selected
+
+
+def format_fewshot_block(examples) -> str:
+    """Few-shot блок для промпта: «=== Пример N ===» + Оригинал:/Перевод:.
+    Пустой список → "" (пустая строка)."""
+    parts = []
+    for i, ex in enumerate(examples, 1):
+        parts.append(
+            f"=== Пример {i} ===\n"
+            f"Оригинал:\n{ex.get('original_text', '')}\n"
+            f"Перевод:\n{ex.get('translated_text', '')}")
+    return "\n\n".join(parts)
+
+
+def load_rules_block(filepath, budget=0, logger=None):
+    """Справочник языка (rules.txt|md) целиком, с потолком бюджета
+    СИМВОЛОВ (обрезка до budget; 0 — без обрезки). Нет файла/ошибка → ""."""
+    if not filepath or not os.path.exists(filepath):
+        if logger:
+            logger.warning(f"⚠️ Файл правил ({filepath}) не найден.")
+        return ""
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError as e:
+        if logger:
+            logger.warning(f"⚠️ Не удалось прочитать правила {filepath}: {e}")
+        return ""
+    content = content.strip()
+    if budget and len(content) > budget:
+        if logger:
+            logger.warning(f"✂️ Правила обрезаны до {budget} символов "
+                           f"(было {len(content)})")
+        content = content[:budget]
+    return content
+
+
+# ══════════════════════════════════════════════════════════════════════
 # NER-CHECK: фильтры/формат/батчи глоссария + правки LLM (JSON-патчи)
 # и review-файл для человека (статусы принять/отклонить, накопление
 # по этапам, флаги применения).

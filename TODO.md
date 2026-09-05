@@ -4,6 +4,41 @@
 > Статусы обновляются по мере выполнения; коммиты — по каждой
 > законченной задаче, а не в конце сессии.
 
+## Текущая сессия (0.3.0 — перевод с расширенным контекстом)
+
+- [ ] **1. core: словарь/правила/примеры для перевода** —
+      `load_examples` (пары original_text/translated_text, алиасы
+      source/target, кэш нормализации и n-грамм source-стороны),
+      `find_relevant_examples` (containment n-грамм, топ-K жадным
+      отбором со штрафом за пересечение, порог — лучше без примеров,
+      чем с шумными; укладка в бюджет СИМВОЛОВ), `format_fewshot_block`
+      (маркеры «=== Пример N ===» + Оригинал:/Перевод:),
+      `load_rules_block` (файл целиком, потолок бюджета СИМВОЛОВ);
+      доки (core/README, AGENTS §6, test_docs) + параметризованные
+      тесты.
+- [ ] **2. cli: расширенный контекст в translate_book.py** — флаги
+      --dict_file/--rules_file/--examples_file/--fewshot_k/
+      --fewshot_threshold/--rules_budget/--examples_budget/
+      --request_budget/--dict_fields; словарь = load_ner_data +
+      find_relevant_ner (поиск по чанку + source-сторонам выбранных
+      примеров); тег `<translate_lr>` (фолбэк `<translate>` → встроенный
+      расширенный промпт); {dict_block}/{rules_block}/{fewshot_block}
+      во всех режимах (нет файла — «(нет)»); бюджет запроса СИМВОЛЫ
+      (превышение — FAIL чанка); meta предпросмотра; тесты через
+      --preview-request и мок LLM.
+- [ ] **3. web: действия 9/10 в pipeline.py** — «Перевод с
+      расширенным контекстом» (стадия 1) и «Полный цикл с расширенным
+      контекстом» (1,2,3); флаги --dict_file/--rules_file/
+      --examples_file/--fewshot_*/--rules_budget/--examples_budget/
+      --request_budget/--dict_fields пробрасываются в translate_book
+      только для расширенных действий; warn_missing_prompt_tag —
+      `<translate_lr>` → `<translate>`; поля формы в stages.py (files
+      dir=source: dict.json/rules.txt|md/examples.json + бюджеты),
+      условная видимость по action в run-views.js; pytest.
+- [ ] **4. templates: секция `<translate_lr>`** в pipeline_prompt.txt
+      (словарь > правила > примеры; примеры — для стиля, не дословно).
+- [ ] **5. docs** — web/README.md, справка полей, TODO.md.
+
 ## Текущая сессия (0.2.5 — флаг |s в regexp-проверках, релиз)
 
 - [x] **1. translate_check: флаг « |s» в regexp-проверках** —

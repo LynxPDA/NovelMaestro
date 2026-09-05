@@ -1130,6 +1130,146 @@ def test_collect_gender_names_empty(text, data):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# РАСШИРЕННЫЙ КОНТЕКСТ: примеры (few-shot), правила, словарь
+# ══════════════════════════════════════════════════════════════════════
+def _pair(orig, trans):
+    return {"original_text": orig, "translated_text": trans}
+
+
+def test_load_examples_ok(tmp_path):
+    f = tmp_path / "examples.json"
+    f.write_text(json.dumps([
+        _pair("第一章 神秘道种", "Глава 1. Таинственное семя дао"),
+        _pair("苏星宇睁开了眼", "Су Синюй открыл глаза"),
+    ], ensure_ascii=False), encoding="utf-8")
+    ex = C.load_examples(str(f), 3, SilentLog())
+    assert len(ex) == 2
+    assert ex[0]["translated_text"] == "Глава 1. Таинственное семя дао"
+    # кэш нормализации и n-грамм source-стороны
+    assert ex[0]["_norm"] == C.normalize_for_search("第一章 神秘道种")
+    assert "神秘道" in ex[0]["_ngrams"]  # 3-грамма "第一章神秘道种"
+
+
+def test_load_examples_aliases_source_target(tmp_path):
+    """Алиасы source/target принимаются (совместимость trace-файлов)."""
+    f = tmp_path / "examples.json"
+    f.write_text(json.dumps([
+        {"source": "原文", "target": "Перевод"},
+    ], ensure_ascii=False), encoding="utf-8")
+    ex = C.load_examples(str(f), 3, SilentLog())
+    assert len(ex) == 1
+    assert ex[0]["original_text"] == "原文"
+    assert ex[0]["translated_text"] == "Перевод"
+
+
+def test_load_examples_skips_bad_records(tmp_path):
+    """Записи без одной из сторон / не dict — пропускаются."""
+    f = tmp_path / "examples.json"
+    f.write_text(json.dumps([
+        {"original_text": "只有原文"},          # нет перевода
+        {"translated_text": "только перевод"},  # нет оригинала
+        "не-объект",
+        _pair("ок", "норм"),
+    ], ensure_ascii=False), encoding="utf-8")
+    ex = C.load_examples(str(f), 3, SilentLog())
+    assert len(ex) == 1 and ex[0]["original_text"] == "ок"
+
+
+def test_load_examples_missing_and_broken(tmp_path):
+    assert C.load_examples(str(tmp_path / "нет.json"), 3, SilentLog()) == []
+    f = tmp_path / "examples.json"
+    f.write_text("не json{", encoding="utf-8")
+    assert C.load_examples(str(f), 3, SilentLog()) == []
+    f.write_text('{"не": "список"}', encoding="utf-8")
+    assert C.load_examples(str(f), 3, SilentLog()) == []
+
+
+def _load_pairs(tmp_path, pairs):
+    f = tmp_path / "examples.json"
+    f.write_text(json.dumps(pairs, ensure_ascii=False), encoding="utf-8")
+    return C.load_examples(str(f), 3, SilentLog())
+
+
+def test_find_relevant_examples_rank_order(tmp_path):
+    chunk = "苏星宇走进了大殿。长老们都在等待。"
+    ex = _load_pairs(tmp_path, [
+        _pair("苏星宇走进了大殿。", "Су Синюй вошёл в зал."),
+        _pair("他去了市场买药。", "Он пошёл на рынок за лекарством."),
+        _pair("长老们都在等待。", "Старейшины ждали."),
+    ])
+    sel = C.find_relevant_examples(chunk, ex, k=2, threshold=0.3,
+                                   ngram_size=3)
+    # топ-2: оба пересекающихся примера, нерелевантный не попал
+    assert len(sel) == 2
+    assert sel[0]["original_text"].startswith("苏星宇")
+    assert any(e["original_text"].startswith("长老") for e in sel)
+    assert not any("市场" in e["original_text"] for e in sel)
+
+
+def test_find_relevant_examples_threshold_cutoff(tmp_path):
+    """Ниже порога — пример отсекается (лучше без шумных)."""
+    ex = _load_pairs(tmp_path, [
+        _pair("совершенно другой текст", "совсем другой перевод"),
+    ])
+    sel = C.find_relevant_examples("苏星宇走进大殿", ex, k=3, threshold=0.3)
+    assert sel == []
+
+
+def test_find_relevant_examples_k_limit(tmp_path):
+    ex = _load_pairs(tmp_path, [
+        _pair(f"相同句子{i} 内容", f"перевод {i}") for i in range(10)
+    ])
+    # все 10 одинаково похожи на чанк (пересечение 2/5 n-грамм = 0.4)
+    chunk = "相同句子3 内容"
+    sel = C.find_relevant_examples(chunk, ex, k=3, threshold=0.3)
+    assert len(sel) == 3
+    assert sel[0]["original_text"] == "相同句子3 内容"  # лучший — первым
+
+
+def test_find_relevant_examples_budget(tmp_path):
+    """Бюджет СИМВОЛОВ ограничивает суммарный размер выбранных пар."""
+    ex = _load_pairs(tmp_path, [
+        _pair("相同句子1 内容" + "字" * 10, "перевод " + "т" * 10),
+        _pair("相同句子2 内容" + "字" * 10, "перевод " + "т" * 10),
+    ])
+    # пара ≈ 18+18 = 36 символов; бюджет 50 — влезает только первая
+    sel = C.find_relevant_examples("相同句子1 内容", ex, k=5,
+                                   threshold=0.2, budget=50)
+    assert len(sel) == 1
+    assert sum(len(e["original_text"]) + len(e["translated_text"])
+               for e in sel) <= 50
+
+
+def test_find_relevant_examples_empty_inputs(tmp_path):
+    assert C.find_relevant_examples("", [], 3) == []
+    assert C.find_relevant_examples("текст", [], 3) == []
+    assert C.find_relevant_examples("   ", [], 3) == []
+
+
+def test_format_fewshot_block():
+    assert C.format_fewshot_block([]) == ""
+    block = C.format_fewshot_block([
+        _pair("原文一", "Перевод один"),
+        _pair("原文二", "Перевод два"),
+    ])
+    assert block.startswith("=== Пример 1 ===")
+    assert "Оригинал:\n原文一\nПеревод:\nПеревод один" in block
+    assert "=== Пример 2 ===" in block
+
+
+def test_load_rules_block(tmp_path):
+    f = tmp_path / "rules.md"
+    f.write_text("Правила:\n1. Глаголы ставятся в конце.\n", encoding="utf-8")
+    text = C.load_rules_block(str(f), 0, SilentLog())
+    assert "Глаголы" in text
+    # бюджет: обрезка
+    text = C.load_rules_block(str(f), 12, SilentLog())
+    assert len(text) <= 12
+    # нет файла → ""
+    assert C.load_rules_block(str(tmp_path / "нет.txt"), 0, SilentLog()) == ""
+
+
+# ══════════════════════════════════════════════════════════════════════
 # МОКИ ДЛЯ stream_chat_completion
 # ══════════════════════════════════════════════════════════════════════
 class _FakeResp:
