@@ -20,6 +20,7 @@
         "prefer-at-js"
       ]
     },
-    "jscpd": { "disable": ["duplicate"] }
+    "jscpd": { "disable": ["duplicate"] },
+    "markdownlint": { "disable": ["MD037"] }
   }
 }
