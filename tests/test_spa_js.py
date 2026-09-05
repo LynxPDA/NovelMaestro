@@ -46,6 +46,27 @@ def test_run_views_expert_form_not_async():
     assert "function expertForm(key, spec)" in src
 
 
+def test_run_views_last_finished_log():
+    """Запуски: лог последнего завершённого запуска остаётся на вкладке
+    стадии (панель — текущий запуск в любом статусе или история стадии
+    из /api/jobs; live-гард — строки чужого запуска не утекают)."""
+    src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    # колонка лога: текущий запуск (любой статус) или история стадии
+    assert "async function logColumn()" in src
+    assert "lastFinishedJob(" in src
+    assert "lazyLastLog(" in src
+    assert 'j.status !== "running"' in src
+    # live-гард onPayload: DOM — только при совпадении стадии запуска
+    assert "st.job.action === st.stage" in src
+    # logPanel параметризован; «Стоп» — только для running, у финала — время
+    assert "function logPanel(view)" in src
+    assert "function stopBtn(job)" in src
+    assert 'job.status === "running"' in src
+    assert "job.finished || job.created" in src
+    # кэш истории стадии инвалидируется при финальном статусе
+    assert "delete st.lastLog[st.job.action]" in src
+
+
 def test_create_project_modal_uploads():
     """Мастер создания: опциональные обложка и исходник → source/."""
     src = (SPA_DIR / "app.js").read_text(encoding="utf-8")

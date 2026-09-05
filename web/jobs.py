@@ -96,7 +96,9 @@ class Job:
     def payload(self) -> dict:
         """Метаданные + хвост буфера + события (для API).
 
-        argv НЕ включается: в argv могут быть секреты (--api_key)."""
+        argv НЕ включается: в argv могут быть секреты (--api_key).
+        Лог — весь кольцевой буфер: завершённый запуск показывается
+        на вкладке стадии после рестарта страницы без SSE."""
         return {
             "id": self.id,
             "action": self.action,
@@ -108,7 +110,7 @@ class Job:
             "finished": self.finished,
             "pid": self.pid,
             "cwd": self.cwd,
-            "lines": self.tail(500),
+            "lines": self.tail(RING_SIZE),
             "events": list(self.events),
             "progress": self.progress,
         }

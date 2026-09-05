@@ -39,6 +39,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     events: [], // события глав конвейера (стадия 3)
     progress: null, // последнее событие прогресса {label, done, total}
     chapterState: null, // фактическое состояние артефактов глав (status API)
+    lastLog: {}, // стадия → последний завершённый запуск (обещание данных)
     gen: 0, // поколение отрисовки — гасит гонки двух render()
     values: {}, // значения формы по стадиям (данные; синхронизация режимов)
     touched: {}, // изменённые пользователем поля по стадиям (Set имён)
@@ -76,9 +77,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         render();
         return;
       }
-      // лог живёт только на вкладке СВОЕЙ стадии активного запуска —
-      // при прикреплении переключаемся на неё; по завершению запуска
-      // панель лога закрывается (история — на «Дашборде» и в «Логах»)
+      // лог живёт на вкладке СВОЕЙ стадии запуска — при прикреплении
+      // переключаемся на неё; по завершению панель остаётся с финальным
+      // статусом (история — на «Дашборде» и в «Логах»)
       st.stage = job.action;
       st.job = job;
       st.log = [];
@@ -183,36 +184,96 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       await activePanel(),
     );
 
-    // правая панель: форма + лог. Лог — ТОЛЬКО активного (running)
-    // запуска и только на вкладке его стадии; по завершению запуска
-    // панель закрывается. История — на «Дашборде» и во вкладке «Логи»
+    // правая панель: форма + лог. Лог — текущий запуск открытой
+    // стадии (ЛЮБОЙ статус: после завершения панель остаётся) или
+    // последний завершённый запуск ЭТОЙ стадии этого проекта.
     const right = h(
       "div",
       { class: "run-col run-col-form" },
       st.stage ? await formPanel() : emptyRun(),
-      st.job &&
-      st.job.status === "running" &&
-      st.job.action === st.stage
-        ? logPanel()
-        : h(
-            "div",
-            { class: "run-empty" },
-            h("div", { text: "Запустите стадию — лог появится здесь" }),
-            h(
-              "div",
-              { class: "run-empty-hint" },
-              "История запусков — ",
-              h("a", { href: "#/dashboard" }, "на Дашборде"),
-              " · логи — ",
-              h(
-                "a",
-                { href: `#/project/${section}/${name}/logs` },
-                "во вкладке «Логи»",
-              ),
-            ),
-          ),
+      await logColumn(),
     );
     return h("div", { class: "run-layout" }, stageList, right);
+  }
+
+  // последний завершённый запуск стадии этого проекта (список /jobs
+  // отсортирован по created по убыванию — первый подходящий и есть)
+  async function lastFinishedJob(key) {
+    try {
+      const r = await api("/jobs");
+      const mine = (r.jobs || []).filter(
+        (j) => j.project === `${section}/${name}`
+          && j.action === key
+          && j.status !== "running",
+      );
+      return mine.length ? mine[0] : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // данные последнего завершённого запуска стадии (кэш по стадии):
+  // лог берётся из payload — SSE не нужен, задание уже завершено
+  async function lazyLastLog(key) {
+    if (!st.lastLog[key]) {
+      st.lastLog[key] = (async () => {
+        const j = await lastFinishedJob(key);
+        if (!j) return null;
+        const r = await api(`/jobs/${j.id}`).catch(() => null);
+        const job = r && r.job;
+        if (!job) return null;
+        return {
+          job,
+          lines: job.lines || [],
+          events: job.events || [],
+          progress: job.progress || null,
+        };
+      })();
+    }
+    return st.lastLog[key];
+  }
+
+  // колонка лога: текущий запуск стадии (любой статус) или последний
+  // завершённый запуск этой стадии; иначе — заглушка
+  async function logColumn() {
+    if (st.stage) {
+      if (st.job && st.job.action === st.stage) {
+        return logPanel({
+          job: st.job,
+          lines: st.log,
+          events: st.events,
+          progress: st.progress,
+          live: true,
+        });
+      }
+      const last = await lazyLastLog(st.stage);
+      if (last) {
+        return logPanel({
+          job: last.job,
+          lines: last.lines,
+          events: last.events,
+          progress: last.progress,
+          live: false,
+        });
+      }
+    }
+    return h(
+      "div",
+      { class: "run-empty" },
+      h("div", { text: "Запустите стадию — лог появится здесь" }),
+      h(
+        "div",
+        { class: "run-empty-hint" },
+        "Лог последнего запуска остаётся на вкладке стадии · история — ",
+        h("a", { href: "#/dashboard" }, "на Дашборде"),
+        " · логи — ",
+        h(
+          "a",
+          { href: `#/project/${section}/${name}/logs` },
+          "во вкладке «Логи»",
+        ),
+      ),
+    );
   }
 
   // карточка активного запуска ВМЕСТО истории запусков
@@ -2489,20 +2550,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     );
   }
 
-  function logPanel() {
-    const job = st.job;
-    const pre = h("pre", { class: "log-area", text: "" });
-    // st.log наполняется ТОЛЬКО SSE-стримом — payload lines
-    // не дублируем (иначе хвост приходит дважды: snapshot + бурст)
-    pre.textContent = st.log.length ? st.log.join("\n") : "(лог пуст)";
-    pre.scrollTop = pre.scrollHeight;
-    const status = h(
-      "span",
-      { class: "badge log-status badge-" + job.status },
-      job.status,
-    );
-    const stopBtn = h("button", { class: "btn btn-sm btn-danger" }, "Стоп");
-    stopBtn.addEventListener("click", async () => {
+  function stopBtn(job) {
+    const btn = h("button", { class: "btn btn-sm btn-danger" }, "Стоп");
+    btn.addEventListener("click", async () => {
       try {
         await api(`/jobs/${job.id}/stop`, { method: "POST" });
         toast("Остановка...");
@@ -2510,6 +2560,21 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         toast(ex.message, "err");
       }
     });
+    return btn;
+  }
+
+  function logPanel(view) {
+    const job = view.job;
+    const pre = h("pre", { class: "log-area", text: "" });
+    pre.textContent = view.lines.length
+      ? view.lines.join("\n")
+      : "(лог пуст)";
+    pre.scrollTop = pre.scrollHeight;
+    const status = h(
+      "span",
+      { class: "badge log-status badge-" + job.status },
+      job.status,
+    );
     const toolbar = h(
       "div",
       { class: "run-panel-title" },
@@ -2521,9 +2586,22 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       ),
       h("span", { class: "spacer" }),
       status,
-      h("span", { class: "progress-line", text: progressLineText() }),
-      stopBtn,
     );
+    if (job.status === "running") {
+      toolbar.append(
+        h("span", { class: "progress-line", text: progressLineText(view) }),
+        stopBtn(job),
+      );
+    } else {
+      toolbar.append(
+        h(
+          "span",
+          { class: "job-time", text: new Date(
+            (job.finished || job.created) * 1000,
+          ).toLocaleString("ru-RU") },
+        ),
+      );
+    }
     // прогрессбар из структурированных событий @@PROGRESS@@
     // (label + трек + done/total + %); без событий — скрыт.
     // Класс log-progress — уникальный селектор для SSE: обычный
@@ -2539,11 +2617,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       ),
       h("span", { class: "progress-text", text: "" }),
     );
-    paintBar(bar);
+    paintBar(bar, view);
     const panel = h("div", { class: "run-panel" }, toolbar, bar, pre);
-    if (st.stage === "pipeline" && st.job && st.job.action === "pipeline") {
-      // конвейер: таблица глав поверх лога
-      const table = chapterTable();
+    if (job.action === "pipeline") {
+      // конвейер: таблица глав поверх лога (и для завершённого запуска —
+      // события приходят из истории запуска)
+      const table = chapterTable(view.events);
       panel.prepend(
         h(
           "div",
@@ -2557,19 +2636,19 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // текстовая строка прогресса («📊 12/636») для тулбара лога
-  function progressLineText() {
+  function progressLineText(view) {
     return UICore.progressText(
-      st.progress,
-      st.job && st.job.status === "running",
+      view.progress,
+      view.job && view.job.status === "running",
     );
   }
 
   // отрисовка прогрессбара в переданный узел (лог-панель и SSE).
   // Все querySelector'ы загардены: чужой узел (например мини-бар без
   // .progress-label) не должен уронить SSE-стрим
-  function paintBar(bar) {
-    const p = st.progress;
-    const running = st.job && st.job.status === "running";
+  function paintBar(bar, view) {
+    const p = view.progress;
+    const running = view.job && view.job.status === "running";
     // пока задача работает, бар ВСЕГДА виден — даже до первого
     // события прогресса («ожидание первого результата…»)
     if (!p && !running) {
@@ -2596,7 +2675,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // таблица глав для конвейера: строки = главы, колонки = стадии 1..3
-  function chapterTable() {
+  function chapterTable(events) {
     const opts = st.options || {};
     const ch = opts.chapters || {};
     // B10: реальные id из options.chapters.ids (опции стадии); без ids
@@ -2607,7 +2686,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const cols = [1, 2, 3];
     const stageSym = { 1: "пер", 2: "ред", 3: "пол" };
     const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
-    const byKey = UICore.chapterByKey(st.events);
+    const byKey = UICore.chapterByKey(events || []);
     const cells = [];
     const range = ids || (() => {
       const min = ch.min == null ? 1 : ch.min;
@@ -2685,8 +2764,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
       // конец стрима (задание завершилось): догнать статус/события;
-      // панель лога закрывается — status больше не running (лог —
-      // только активного запуска)
+      // панель лога ОСТАЁТСЯ на вкладке стадии с финальным статусом
+      // (последний завершённый запуск виден до нового запуска)
       try {
         const r = await api(`/jobs/${jobId}`);
         if (r.job) {
@@ -2749,16 +2828,21 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // разбор одного SSE-payload: лог, события глав, прогресс, статус.
-  // Все querySelector'ы идут по page с гвардами — узел может быть
-  // перерисован/отсутствовать (панель перестроена после завершения)
+  // DOM обновляется только когда панель лога принадлежит текущему
+  // запуску (st.job.action === st.stage): при открытой чужой стадии
+  // строки активного запуска не утекут в панель последнего
+  // завершённого; состояние (st.log/st.events/st.progress) копится
   function onPayload(payload) {
+    const live = !!(st.stage && st.job && st.job.action === st.stage);
     if (payload.type === "line") {
       st.log.push(payload.text);
       if (st.log.length > 2000) st.log.splice(0, st.log.length - 2000);
-      const pre = page.querySelector(".log-area");
-      if (pre) {
-        pre.textContent = st.log.join("\n");
-        pre.scrollTop = pre.scrollHeight;
+      if (live) {
+        const pre = page.querySelector(".log-area");
+        if (pre) {
+          pre.textContent = st.log.join("\n");
+          pre.scrollTop = pre.scrollHeight;
+        }
       }
     } else if (payload.type === "event" && payload.event) {
       const ev = payload.event;
@@ -2771,35 +2855,48 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         );
         if (prev >= 0) st.events[prev] = ev;
         else st.events.push(ev);
-        const t = page.querySelector(".ch-table");
-        if (t) {
-          // B10: строка ищется по data-id (реальные главы), а не
-          // nth-child (позиция) — нумерация может быть разреженной
-          const cell = t.querySelector(
-            `.ch-row[data-id="${ev.id}"] .ch-cell:nth-child(${ev.stage + 1})`,
-          );
-          if (cell) {
-            const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
-            cell.textContent = statusSym[ev.status] || ev.status;
-            cell.className = "ch-cell ch-" + String(ev.status).toLowerCase();
+        if (live) {
+          const t = page.querySelector(".ch-table");
+          if (t) {
+            // B10: строка ищется по data-id (реальные главы), а не
+            // nth-child (позиция) — нумерация может быть разреженной
+            const cell = t.querySelector(
+              `.ch-row[data-id="${ev.id}"] .ch-cell:nth-child(${ev.stage + 1})`,
+            );
+            if (cell) {
+              const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
+              cell.textContent = statusSym[ev.status] || ev.status;
+              cell.className = "ch-cell ch-" + String(ev.status).toLowerCase();
+            }
           }
         }
       }
     } else if (payload.type === "progress" && payload.event) {
       st.progress = payload.event;
-      // лог-бар — по уникальному классу; мини-бар «Активный запуск»
-      // обновляем отдельно (в нём нет .progress-label)
-      const bar = page.querySelector(".log-progress");
-      if (bar) paintBar(bar);
+      // лог-бар — только на живой панели текущей стадии; мини-бар
+      // «Активный запуск» показывается на любой вкладке — всегда
+      if (live) {
+        const bar = page.querySelector(".log-progress");
+        if (bar) {
+          paintBar(bar, { job: st.job, progress: st.progress });
+        }
+        const pl = page.querySelector(".progress-line");
+        if (pl) {
+          pl.textContent = progressLineText({
+            job: st.job,
+            progress: st.progress,
+          });
+        }
+      }
       const mini = page.querySelector(".progress-wrap.mini");
       if (mini) paintMini(mini);
-      const pl = page.querySelector(".progress-line");
-      if (pl) pl.textContent = progressLineText();
     } else if (payload.type === "status") {
       st.job.status = payload.status;
-      // статус — финальное событие стрима: перерисовать сразу,
-      // иначе панель «Активный запуск» и лог остаются со старым
-      // статусом (stopped/done/failed должны закрывать панели)
+      // кэш последнего запуска этой стадии устарел — при возврате
+      // на вкладку данные перечитаются из /jobs/{id}
+      delete st.lastLog[st.job.action];
+      // статус — финальное событие стрима: перерисовать сразу;
+      // панель лога остаётся с финальным статусом (done/failed/stopped)
       render();
     }
   }

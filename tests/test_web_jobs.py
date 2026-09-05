@@ -163,6 +163,9 @@ def test_ring_buffer_cap(tmp_path, fake_script):
         job.append(f"x-{i}")
     assert len(job.lines) == RING_SIZE
     assert job.lines[-1] == f"x-{RING_SIZE + 99}"
+    # payload отдаёт хвост лога = весь буфер: завершённый запуск
+    # показывается на вкладке стадии без SSE (после перезагрузки)
+    assert len(job.payload()["lines"]) == RING_SIZE
 
 
 def test_stop_terminates(tmp_path, fake_script):
