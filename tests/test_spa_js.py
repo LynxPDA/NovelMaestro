@@ -67,6 +67,21 @@ def test_run_views_last_finished_log():
     assert "delete st.lastLog[st.job.action]" in src
 
 
+def test_fit_preview_frame_defers_hidden():
+    """Предпросмотр отчёта в скрытом контейнере (неактивная под-вкладка
+    «Проверки»): load iframe срабатывает при display:none, scrollHeight=0
+    — подгон высоты откладывается до появления кадра (IntersectionObserver),
+    иначе кадр навсегда остаётся 80px; уход со страницы снимает наблюдение."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert "!frame.isConnected || !frame.offsetParent" in src
+    assert "new IntersectionObserver(" in src
+    assert "frame.dataset.fitPending" in src
+    # очистка отложенных подгонов при навигации (кадры выбрасываются)
+    assert 'querySelectorAll("iframe[data-fit-pending]")' in src
+    # повторный вызов снимает предыдущего наблюдателя (новый load)
+    assert "if (frame._fitIO) {" in src
+
+
 def test_create_project_modal_uploads():
     """Мастер создания: опциональные обложка и исходник → source/."""
     src = (SPA_DIR / "app.js").read_text(encoding="utf-8")

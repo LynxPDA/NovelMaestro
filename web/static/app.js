@@ -196,6 +196,33 @@ function mdPreviewSrcdoc(html) {
 }
 
 function fitPreviewFrame(frame) {
+  // Скрытый кадр (не в DOM или внутри display:none, напр. неактивная
+  // под-вкладка «Проверки») не лэится: scrollHeight=0, и после показа
+  // высота так и осталась бы 80px. Откладываем подгон до появления.
+  if (frame._fitIO) {
+    frame._fitIO.disconnect();
+    frame._fitIO = null;
+  }
+  if (!frame.isConnected || !frame.offsetParent) {
+    frame.dataset.fitPending = "1";
+    const io = new IntersectionObserver((entries) => {
+      if (!frame.isConnected) {
+        io.disconnect();
+        frame._fitIO = null;
+        delete frame.dataset.fitPending;
+        return;
+      }
+      if (entries.some((e) => e.isIntersecting)) {
+        io.disconnect();
+        frame._fitIO = null;
+        delete frame.dataset.fitPending;
+        fitPreviewFrame(frame);
+      }
+    });
+    frame._fitIO = io;
+    io.observe(frame);
+    return;
+  }
   try {
     const doc = frame.contentDocument;
     const body = doc && doc.body;
@@ -1743,6 +1770,13 @@ function render() {
     oldPage.dispatchEvent(new CustomEvent("pi-navigate", { bubbles: true }));
   }
   root.replaceChildren();
+  // уход со страницы: кадры скрытых под-вкладок с отложенным подгоном
+  // выбрасываются вместе со старым DOM — снимаем наблюдение (утечка IO)
+  document.querySelectorAll("iframe[data-fit-pending]").forEach((f) => {
+    if (f._fitIO) f._fitIO.disconnect();
+    f._fitIO = null;
+    delete f.dataset.fitPending;
+  });
   if (!state.auth) {
     root.append(viewLogin());
     return;
