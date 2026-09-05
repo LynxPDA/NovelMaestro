@@ -6,10 +6,16 @@
 # Или проще — docker compose (см. docker-compose.yml и packaging/README.md).
 FROM python:3.12-slim
 
+# WEB_ENV_FILE: системный .env — ВНУТРИ постоянного тома projects:
+# правки вкладки «Настройки» (и правки файла на хосте) переживают
+# обновление образа. /app/.env остаётся заводским фолбэком (копия
+# .env.example). Приоритет: environment compose > projects/.env > /app/.env.
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=utf-8 \
     LANG=C.UTF-8 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    WEB_ENV_FILE=/app/projects/.env
 
 # gosu — переключение root → app в docker-entrypoint.sh (chown каталогов
 # данных, созданных docker от root, требует root-прав); tzdata —
@@ -40,9 +46,10 @@ RUN mkdir -p /app/templates-dist \
     && chown -R app:app /app/templates-dist
 
 # Конфиг по умолчанию: копия templates/.env.example → /app/.env
-# (значения по умолчанию; корневой .env с секретами в образ НЕ входит —
-# .dockerignore). Реальные HOST/API_KEY/MODEL — переменными окружения
-# в compose (environment, приоритет окружения над .env-файлом).
+# (заводские дефолты-фолбэк; корневой .env с секретами в образ НЕ входит —
+# .dockerignore). Реальный системный конфиг в Docker — WEB_ENV_FILE
+# (/app/projects/.env, постоянный том; entrypoint сидирует его из
+# templates-dist, правки вкладки «Настройки» переживают обновление).
 RUN cp /app/templates/.env.example /app/.env && chown app:app /app/.env
 
 # USER app НЕ ставится: контейнер стартует от root, docker-entrypoint.sh

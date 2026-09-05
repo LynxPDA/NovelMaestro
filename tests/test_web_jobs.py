@@ -1350,6 +1350,58 @@ def test_persist_run_params_llm_equal_no_file(tmp_path, monkeypatch):
     assert not (pdir / ".env").exists()
 
 
+def test_env_global_respects_web_env_file(jobs_srv, tmp_path, monkeypatch):
+    """WEB_ENV_FILE (Docker: projects/.env в томе) — системный .env для
+    /api/env scope=global: GET читает его, PUT пишет в него — правки
+    вкладки «Настройки» переживают обновление образа."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    env_file = tmp_path / "deploy.env"
+    monkeypatch.setenv("WEB_ENV_FILE", str(env_file))
+    res, payload = req("GET", "/api/env?scope=global")
+    assert res.status == 200 and payload["exists"] is False
+    res, payload = req("PUT", "/api/env",
+                       {"scope": "global", "changes": {"MARK": "v1"}})
+    assert res.status == 200
+    text = env_file.read_text(encoding="utf-8")
+    assert "MARK=v1" in text
+    res, payload = req("GET", "/api/env?scope=global")
+    assert res.status == 200 and payload["exists"]
+    assert payload["keys"] == ["MARK"]
+
+
+def test_persist_run_params_seed_from_web_env_file(tmp_path, monkeypatch):
+    """Сид pdir/.env берётся из WEB_ENV_FILE (системный конфиг в Docker):
+    проект наследует пользовательский системный конфиг, а не заводской."""
+    from web.api import _persist_run_params
+    env_file = tmp_path / "deploy.env"
+    env_file.write_text("HOST=http://sys-env:1\nMODEL=mm\n",
+                        encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(env_file))
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    pdir.mkdir(parents=True)
+    ctx = {"repo_root": tmp_path}
+    _persist_run_params(ctx, pdir, "ner", {"chunk_size": "123"})
+    text = (pdir / ".env").read_text(encoding="utf-8")
+    assert "HOST=http://sys-env:1" in text
+    assert "NER_CHUNK_SIZE=123" in text
+
+
+def test_stage_spec_prefill_from_web_env_file(jobs_srv, tmp_path,
+                                              monkeypatch):
+    """Префилл: глобальный слой = WEB_ENV_FILE (системный .env Docker)."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    env_file = tmp_path / "deploy.env"
+    env_file.write_text("HOST=http://deploy:9\n", encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(env_file))
+    res, payload = req(
+        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    assert fields["host"]["default"] == "http://deploy:9"
+
+
 def test_stage_spec_env_prefill_textarea(jobs_srv, tmp_path):
     """Многстрочные regexp в .env — одной строкой с литералом «\\n»:
     префилл раскодирует в реальные переносы (textarea)."""

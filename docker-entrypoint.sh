@@ -10,11 +10,12 @@
 #     ПЕРЕКРЫВАЕТ содержимое образа — если хостовый каталог пуст,
 #     копируем шаблоны из /app/templates-dist (снимок образа), чтобы
 #     «Шаблоны» не оказались пустыми.
+#  3. Системный .env: в томе projects (WEB_ENV_FILE=/app/projects/.env,
+#     правится вкладкой «Настройки», переживает обновление образа);
+#     первый старт — сид из /app/templates-dist/.env.example.
 #
-# Конфиг .env наружу НЕ пробрасывается: в образе лежит копия
-# templates/.env.example → /app/.env (значения по умолчанию), реальные
-# HOST/API_KEY/MODEL задаются переменными окружения в compose
-# (environment, приоритет: окружение > .env-файл).
+# Конфиг: environment в compose приоритетнее .env-файлов (канон
+# «окружение > файл»).
 
 set -eu
 
@@ -30,5 +31,13 @@ if [ ! -d /app/templates/General ] && [ -d /app/templates-dist ]; then
     chown -R app:app /app/templates
 fi
 
-# 3. Запуск сервера от app (не root).
+# 3. Системный .env — в постоянном томе projects (WEB_ENV_FILE в
+#    образе указывает на этот файл): правки вкладки «Настройки»
+#    переживают обновление образа. Первый старт — сид из снимка шаблонов.
+if [ ! -f /app/projects/.env ] && [ -f /app/templates-dist/.env.example ]; then
+    cp /app/templates-dist/.env.example /app/projects/.env
+    chown app:app /app/projects/.env
+fi
+
+# 4. Запуск сервера от app (не root).
 exec gosu app "$@"

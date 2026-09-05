@@ -1323,15 +1323,26 @@ def _tcl_review_apply(ctx: dict) -> dict:
     return _review_apply(ctx, "translate_check_llm")
 
 
+def _sys_env_path(ctx: dict) -> Path:
+    """Системный (общий) .env: WEB_ENV_FILE (в образе Docker —
+    /app/projects/.env внутри постоянного тома — правки вкладки
+    «Настройки» переживают обновление образа) → корневой .env репо."""
+    override = os.environ.get("WEB_ENV_FILE", "").strip()
+    if override:
+        return Path(override)
+    return _repo_root(ctx) / ".env"
+
+
 def _env_path(ctx: dict, scope: str) -> Path:
     """Файл .env для web-редактирования.
 
     scope=project → ТОЛЬКО pdir/.env (собственный файл проекта; если его
-    нет — хендлеры отвечают exists=False); scope=global → системный
-    корневой .env репо (единый конфиг, вкладка «Настройки»).
+    нет — хендлеры отвечают exists=False); scope=global → системный .env
+    (WEB_ENV_FILE в Docker — projects/.env в томе; иначе корневой .env
+    репо), правится на вкладке «Настройки».
     """
     if scope == "global":
-        return _repo_root(ctx) / ".env"
+        return _sys_env_path(ctx)
     return _project_ctx(ctx)[0] / ".env"
 
 
@@ -1428,7 +1439,7 @@ def _env_put(ctx: dict) -> dict:
         # _persist_run_params: голый .env затенял бы системный
         # (HOST/API_KEY/MODEL) и ломал конфиг LLM проекта
         try:
-            src = _repo_root(ctx) / ".env"
+            src = _sys_env_path(ctx)
             if src.is_file():
                 text = _strip_secret_keys(
                     src.read_text(encoding="utf-8", errors="replace"))
@@ -2161,7 +2172,7 @@ def _persist_run_params(ctx: dict, pdir: Path, stage: str,
     if not env_path.is_file():
         if not updates:
             return  # удалять нечего — файла нет (создавать ради удаления глупо)
-        src = _repo_root(ctx) / ".env"
+        src = _sys_env_path(ctx)
         if not src.is_file():
             src = _repo_root(ctx) / "templates" / ".env.example"
         try:
@@ -2207,7 +2218,7 @@ def _strip_secret_keys(text: str) -> str:
 def _env_ctx(ctx: dict, scope: str) -> tuple[Path, str]:
     """(путь к .env, источник) для scope global/project."""
     if scope == "global":
-        return _repo_root(ctx) / ".env", "shared"
+        return _sys_env_path(ctx), "shared"
     pdir, _s, _n = _project_ctx(ctx)
     return pdir / ".env", "project"
 
@@ -2348,7 +2359,7 @@ def _stage_spec(ctx: dict) -> dict:
             # по ключам) → os.environ по ключам-кандидатам полей. Так
             # HOST/API_KEY/MODEL из docker-compose environment доходят
             # до формы даже при сидированном pdir/.env.
-            sys_env = c.parse_dotenv(c.find_env_file())
+            sys_env = c.parse_dotenv(c.system_env_file())
             proj_path = pdir / ".env"
             proj_env = c.parse_dotenv(
                 str(proj_path) if proj_path.is_file() else None)

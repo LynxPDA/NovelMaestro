@@ -114,6 +114,19 @@ def env_overlay(env_data: dict, keys) -> dict:
     return out
 
 
+def system_env_file() -> str | None:
+    """Системный (общий) .env — дефолты для ВСЕХ проектов: WEB_ENV_FILE
+    (в образе Docker — /app/projects/.env внутри постоянного тома: правки
+    вкладки «Настройки» переживают обновление образа) → find_env_file().
+    WEB_ENV_FILE возвращается даже если файла ещё нет (цель создания).
+    Скрипты с cwd в проекте могут не вызывать: подъём find_env_file и так
+    находит projects/.env раньше заводского /app/.env."""
+    override = os.environ.get("WEB_ENV_FILE", "").strip()
+    if override:
+        return override
+    return find_env_file()
+
+
 def get_server_config(env_data: dict, stage: str = "") -> dict:
     """Сервер → {host, api_key, model}.
 

@@ -123,7 +123,7 @@ argparse («СИМВОЛЫ»/«ТОКЕНЫ»).
 
 | Задача | Функция |
 | --- | --- |
-| .env | `parse_dotenv` / `find_env_file` (системный корневой `.env`, вверх от старта) / `env_overlay` (ключи файла, перекрытые непустым `os.environ`) / `get_server_config` (единый `HOST/API_KEY/MODEL`; стадия непуста — `<СТАДИЯ>_HOST/API_KEY/MODEL` → общие, профили local/remote убраны) / `get_stage_model` (`<СТАДИЯ>_MODEL` → общая `MODEL`) / `print_env_help` |
+| .env | `parse_dotenv` / `find_env_file` (системный корневой `.env`, вверх от старта) / `system_env_file` (системный .env: WEB_ENV_FILE → find_env_file) / `env_overlay` (ключи файла, перекрытые непустым `os.environ`) / `get_server_config` (единый `HOST/API_KEY/MODEL`; стадия непуста — `<СТАДИЯ>_HOST/API_KEY/MODEL` → общие, профили local/remote убраны) / `get_stage_model` (`<СТАДИЯ>_MODEL` → общая `MODEL`) / `print_env_help` |
 | лог | `setup_logging` / `log_argv` (фактическая команда запуска в лог) |
 | модель | `determine_model` (только из аргумента/`.env`; авто через `GET /models` убрано — модель обязательна) |
 | промпты | `load_prompt` (файл целиком) / `get_tagged_prompt` (теги) |
@@ -159,15 +159,23 @@ argparse («СИМВОЛЫ»/«ТОКЕНЫ»).
 интерфейса и редакторов, кегль редакторов и предпросмотра, авто-обновление,
 режим «Простой/Экспертный» в Запусках (`runMode`, per-stage). В .env —
 только серверная конфигурация; WEB_UI_THEME/WEB_EDITOR_THEME/
-WEB_EDITOR_FONT_SIZE удалены, окно редактирования системного .env из
-«Настроек» убрано.
+WEB_EDITOR_FONT_SIZE удалены (внешний вид — в localStorage).
+Системный .env правится на странице «Настройки» (API `/api/env`
+scope=global; редактор вернут — в Docker файл персистентен, см. ниже).
 
 **Слои конфига (обязательны для префилла форм и персиста настроек
 запусков, web/api.py):**
+
 1. `os.environ` — деплой-конфиг (docker compose environment), перекрывает
    файлы по перечисленным ключам (`core.common.env_overlay`);
-2. системный корневой `.env` — дефолты для ВСЕХ проектов (в Docker —
-   шаблонный `/app/.env` из образа);
+2. системный `.env` — дефолты для ВСЕХ проектов (`core.common.system_env_file`):
+   WEB_ENV_FILE, иначе корневой `.env` репо. В Docker (образ)
+   WEB_ENV_FILE=/app/projects/.env — файл внутри постоянного тома:
+   entrypoint сидирует его из шаблона при первом старте, правки вкладки
+   «Настройки» переживают обновление образа; `/app/.env` — заводской
+   фолбэк (копия .env.example из образа); environment compose приоритетнее
+   файла; скрипты с cwd в проекте находят projects/.env подъёмом раньше
+   /app/.env;
 3. `pdir/.env` — ТОЛЬКО локальные переопределения конкретной книги
    (по ключам поверх системного; пустые значения не затеняют глобальные);
 4. LLM-подключение (host/model/api_key) в `pdir/.env` пишется только

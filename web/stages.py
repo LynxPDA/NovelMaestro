@@ -87,12 +87,12 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
     pdir = ctx.get("project_dir") if isinstance(ctx, dict) else None
     if pdir is not None:
         try:
-            from core.common import find_env_file, parse_dotenv
-            # слои: системный корневой .env → собственный pdir/.env
-            # (по ключам: пустые значения проектного файла не затеняют
-            # глобальный конфиг)
+            from core.common import parse_dotenv, system_env_file
+            # слои: системный .env (WEB_ENV_FILE в Docker) → собственный
+            # pdir/.env (по ключам: пустые значения проектного файла не
+            # затеняют глобальный конфиг)
             proj_path = Path(pdir) / ".env"
-            sys_env = parse_dotenv(find_env_file())
+            sys_env = parse_dotenv(system_env_file())
             proj_env = parse_dotenv(
                 str(proj_path) if proj_path.is_file() else None)
             env_data = {**sys_env, **proj_env}

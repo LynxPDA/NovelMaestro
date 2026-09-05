@@ -26,6 +26,25 @@
       отображения — видимость подрежимов (ner_check RAG, wiki,
       epub) не задета; проверено playwright (pipeline, ner_check
       whole/rag, epub), node --check и spa-тесты.
+- [x] **3. Docker: системный .env — в постоянном томе** — /app/.env жил
+      в слое контейнера и сбрасывался к заводским при обновлении образа
+      (и окно правки системного .env было убрано из «Настроек» в c63c3fd
+      именно поэтому). Теперь: WEB_ENV_FILE=/app/projects/.env (ENV
+      образа) — системный .env живёт в томе projects (прецедент
+      .web_secret); entrypoint сидирует его из templates-dist при
+      первом старте; core.common.system_env_file (WEB_ENV_FILE →
+      find_env_file) — все серверные чтения системного слоя (Настройки,
+      префилл, персист, _llm_argv, web/main._env_cfg) и сиды pdir/.env
+      идут в персистентный файл; скрипты с cwd в проекте находят
+      projects/.env подъёмом раньше /app/.env автоматически;
+      /app/.env — заводской фолбэк; приоритет: environment compose >
+      projects/.env > /app/.env; редактор «Системный .env» возвращён
+      на страницу «Настройки» (CM6, чтение/правка через /api/env
+      scope=global, маскирование при --auth); доки (AGENTS §7,
+      core/README, web/README, packaging, help, compose, Dockerfile);
+      тесты WEB_ENV_FILE (GET/PUT global, сид pdir, префилл,
+      system_env_file); playwright: правка на «Настройках» доезжает
+      до файла в томе.
 
 ## Текущая сессия (после 0.2.3 — обмен с LLM в ner_check: исправленные записи вместо патчей)
 

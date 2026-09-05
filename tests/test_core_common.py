@@ -366,6 +366,20 @@ def test_env_overlay(monkeypatch):
     assert env["HOST"] == "http://file"
 
 
+def test_system_env_file(monkeypatch, tmp_path):
+    """system_env_file: WEB_ENV_FILE перекрывает поиск (и возвращается,
+    даже если файла ещё нет — цель создания); без переменной —
+    find_env_file."""
+    monkeypatch.setenv("WEB_ENV_FILE", str(tmp_path / ".env"))
+    assert C.system_env_file() == str(tmp_path / ".env")  # файла нет — ок
+    (tmp_path / ".env").write_text("HOST=x", encoding="utf-8")
+    assert C.system_env_file() == str(tmp_path / ".env")
+    monkeypatch.delenv("WEB_ENV_FILE")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("A=1", encoding="utf-8")
+    assert C.system_env_file() == C.find_env_file()
+
+
 def test_get_stage_model_environment_wins(monkeypatch):
     for k in ("MODEL", "NER_MODEL"):
         monkeypatch.delenv(k, raising=False)

@@ -941,7 +941,90 @@ async function viewNotes() {
   );
 }
 
-function viewSettings() {
+/* ── Настройки: системный .env (WEB_ENV_FILE: Docker — projects/.env
+   в постоянном томе; иначе корневой .env репо) + внешний вид ── */
+async function viewSettings() {
+  /* ── системный .env: дефолты для всех проектов (вкладка проекта
+     «Конфиг» показывает его read-only; правится здесь) ── */
+  const envErr = h("div", { class: "form-error" });
+  const envEd = makeEditor("", "txt");
+  const envMeta = h("div", { class: "review-status" });
+  const envHost = h("div", { class: "editor-cm editor-cm-small" }, envEd.root);
+  const envSave = h("button", { class: "btn btn-sm" }, "Сохранить");
+  let envVisible = false;
+  async function loadEnv() {
+    envErr.textContent = "";
+    try {
+      const d = await api(`/env?scope=global`);
+      envVisible = !!d.visible;
+      envEd.setValue(d.content || d.masked || "");
+      envEd.setReadOnly(!envVisible);
+      envMeta.textContent = d.exists
+        ? envVisible
+          ? "Системный .env (дефолты всех проектов; в Docker — projects/.env в томе)"
+          : "Системный .env · значения скрыты (--auth)"
+        : "Системный .env не существует — сохраните, чтобы создать";
+    } catch (ex) {
+      envErr.textContent = ex.message;
+    }
+  }
+  envSave.addEventListener("click", async () => {
+    envErr.textContent = "";
+    try {
+      if (envVisible) {
+        await api("/env", {
+          method: "PUT",
+          body: { scope: "global", content: envEd.getValue() },
+        });
+      } else {
+        const changes = {};
+        for (const line of envEd.getValue().split("\n")) {
+          if (!line || line.startsWith("#")) continue;
+          const eq = line.indexOf("=");
+          if (eq < 0) continue;
+          const key = line.slice(0, eq).trim();
+          const val = line.slice(eq + 1).trim();
+          if (key && val && val !== "••••") changes[key] = val;
+        }
+        await api("/env", {
+          method: "PUT",
+          body: { scope: "global", changes },
+        });
+      }
+      toast("Системный .env сохранён");
+      await loadEnv();
+    } catch (ex) {
+      envErr.textContent = ex.message;
+    }
+  });
+  await loadEnv();
+  const envCard = h(
+    "div",
+    { class: "review-card" },
+    h("div", { class: "review-card-title" }, "Системный .env"),
+    h(
+      "div",
+      { class: "review-card-body" },
+      h(
+        "div",
+        { class: "files-toolbar" },
+        envMeta,
+        h("span", { class: "spacer" }),
+        envSave,
+      ),
+      envHost,
+      h(
+        "div",
+        { class: "field-help" },
+        "дефолты для всех проектов; проектный .env (вкладка «Конфиг») " +
+          "перекрывает по ключам; в Docker файл живёт в томе projects — " +
+          "правки переживают обновление образа; environment compose " +
+          "приоритетнее файла",
+      ),
+      envErr,
+    ),
+  );
+
   /* ── внешний вид: тема интерфейса, тема/кегль редакторов —
      UI-предпочтения в localStorage браузера (не .env) ── */
   const uiSel = h(
@@ -1039,11 +1122,12 @@ function viewSettings() {
         h(
           "div",
           { class: "page-sub" },
-          "Внешний вид и интерфейс — хранятся в браузере (localStorage); " +
-            "сервер и LLM-конфиг — в .env / переменных окружения",
+          "Сервер и LLM-конфиг — системный .env / переменные окружения; " +
+            "внешний вид — в браузере (localStorage)",
         ),
       ),
     ),
+    envCard,
     lookCard,
     h(
       "div",

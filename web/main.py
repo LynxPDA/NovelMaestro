@@ -58,12 +58,12 @@ JOB_MANAGER = JobManager(Path(__file__).resolve().parent)
 
 
 def _env_cfg() -> dict:
-    """Конфиг из системного корневого .env, os.environ
+    """Конфиг из системного .env (WEB_ENV_FILE в Docker), os.environ
     приоритетнее."""
     cfg: dict = {}
     try:
-        from core.common import find_env_file, parse_dotenv
-        cfg.update(parse_dotenv(find_env_file()))
+        from core.common import parse_dotenv, system_env_file
+        cfg.update(parse_dotenv(system_env_file()))
     except Exception as exc:  # noqa: BLE001 — .env необязателен
         log.debug("Системный .env не читается: %s", exc)
     cfg.update({k: v for k, v in os.environ.items() if v})
