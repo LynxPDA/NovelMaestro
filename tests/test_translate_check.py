@@ -114,72 +114,64 @@ def test_check_chapter_regexp_checks(tmp_path):
     (d / "polished.txt").write_text(clean + "中文", encoding="utf-8")
     errors, _ = TC.check_chapter(2, str(d), "polished", comps,
                                  False, None, exclusions=[],
-                                 regexp_checks=[(rx, False)])
+                                 regexp_checks=[rx])
     assert any("中文" in e for e in errors)
 
 
 def _rule(line: str):
-    """parse_regexp_rule с guard на None (для распаковки в тестах)."""
-    rule = TC.parse_regexp_rule(line)
-    assert rule is not None, f"правило не распарсилось: {line!r}"
-    return rule
+    """parse_regexp_rule с guard на None (атрибуты читаем у not-None)."""
+    rx = TC.parse_regexp_rule(line)
+    assert rx is not None, f"правило не распарсилось: {line!r}"
+    return rx
 
 
 def test_parse_regexp_rule():
-    """Строка правила → (compiled, skip_first) | None: комментарий,
-    флаг « |s», порядок «флаг + комментарий», пустые строки."""
-    rx, skip = _rule("^Глава\\s+\\d+")
+    """Строка правила → compiled | None: пустая/пробельная строка —
+    None, остальное компилируется КАК ЕСТЬ (чистый стандартный
+    regexp, MULTILINE; без срезания комментариев и флагов)."""
+    rx = _rule("^Глава\\s+\\d+")
     assert rx.pattern == "^Глава\\s+\\d+" and rx.flags & re.MULTILINE
-    assert skip is False
-    # комментарий срезается, флаг после комментария не работает —
-    # но «флаг + комментарий» (в таком порядке) — работает
-    rx, skip = _rule("^Глава\\s+\\d+ |s # заголовки")
-    assert rx.pattern == "^Глава\\s+\\d+" and skip is True
-    rx, skip = _rule("^Глава\\s+\\d+ # заголовки")
-    assert rx.pattern == "^Глава\\s+\\d+" and skip is False
+    # « |s» и « # …» больше не special: остаются частью паттерна
+    assert _rule("^Глава\\s+\\d+ |s").pattern == "^Глава\\s+\\d+ |s"
+    assert _rule("^Глава\\d+ # заголовки").pattern == "^Глава\\d+ # заголовки"
     assert TC.parse_regexp_rule("") is None
-    assert TC.parse_regexp_rule("   # только комментарий") is None
+    assert TC.parse_regexp_rule("   ") is None
 
 
 def test_check_chapter_regexp_skip_first(tmp_path):
-    """Флаг « |s»: первое совпадение правила — не ошибка, второе —
-    «По паттерну» (лишние заголовки своими руками)."""
+    """«Пропуск первого вхождения» — стандартным lookbehind (?<=\n):
+    лишние заголовки своими руками; вхождение в 1-й строке файла
+    не совпадает."""
     d = tmp_path / "00000_2_x"
     d.mkdir()
     body = ("Глава 2\n\nнормальный русский текст. " * 40
             + "\n\nГлава 99\nещё текст. " * 40)
     (d / "polished.txt").write_text(body, encoding="utf-8")
     comps = []
-    rx, skip = _rule("^\\s*Глава\\s+\\d+ |s")
+    rx = TC.parse_regexp_rule("(?<=\\n)\\s*Глава\\s+\\d+")
     errors, prev = TC.check_chapter(2, str(d), "polished", comps,
                                     False, None, exclusions=[],
-                                    regexp_checks=[(rx, skip)])
+                                    regexp_checks=[rx])
     assert prev == 2
     assert any("Глава 99" in e for e in errors)
     assert any("По паттерну" in e for e in errors)
     assert not any("Глава 2" in e for e in errors)
-    # тот же паттерн БЕЗ флага: помечается и заголовок главы
-    rx2, skip2 = _rule("^\\s*Глава\\s+\\d+")
+    # тот же паттерн без lookbehind: помечается и заголовок главы
+    rx2 = TC.parse_regexp_rule("^\\s*Глава\\s+\\d+")
     errors, _ = TC.check_chapter(2, str(d), "polished", comps,
                                  False, None, exclusions=[],
-                                 regexp_checks=[(rx2, skip2)])
+                                 regexp_checks=[rx2])
     assert any("Глава 2" in e for e in errors)
     assert any("Глава 99" in e for e in errors)
 
 
-def test_build_header_regex():
-    """--header-regexp: пусто → дефолт; комментарий « # …» срезается
-    (иначе молча становился частью паттерна); строка из одного
-    комментария → дефолт; регистр/ multiline — как раньше."""
-    rx = TC.build_header_regex(None)
-    assert rx.pattern == TC.DEFAULT_HEADER_PATTERN
-    assert rx.flags & re.IGNORECASE and rx.flags & re.MULTILINE
-    rx = TC.build_header_regex("")
-    assert rx.pattern == TC.DEFAULT_HEADER_PATTERN
-    rx = TC.build_header_regex("Глава \\d+\\. # свой формат")
-    assert rx.pattern == "Глава \\d+\\."
-    rx = TC.build_header_regex(" # только комментарий")
-    assert rx.pattern == TC.DEFAULT_HEADER_PATTERN
+def test_default_header_pattern():
+    """Дефолтный паттерн заголовка «Глава N» — IGNORECASE|MULTILINE,
+    поддержка «[Номер]» (--header-regexp компилирует его как есть)."""
+    rx = re.compile(TC.DEFAULT_HEADER_PATTERN,
+                    re.IGNORECASE | re.MULTILINE)
+    assert rx.search("Глава 12") and rx.search("глава [Номер]")
+    assert not rx.search("Приложение 3")
 
 
 def test_check_chapter_no_header(tmp_path):

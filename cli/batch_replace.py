@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-batch_replace.py — массовые замены по внешнему файлу правил (чистый CLI).
+batch_replace.py — массовые замены по regexp-правилам (чистый CLI).
 
-Без интерактивного меню и без LLM. Замены применяются к файлам выбранного
-типа в папках глав. Правила — текстовый файл (по умолчанию
-`prompts/replacements.txt` в папке проекта); формат правил — в
-`cli/batch_replace.py` и `web/static/help.md`.
+Без интерактивного меню и без LLM. Правила приходят аргументами
+--replace («паттерн -> замена», по одному на аргумент; web-стадия
+«Массовые замены» передаёт строки формы). Паттерн — чистый стандартный
+regexp (диалект Python re, MULTILINE: «^»/«$» — начало/конец СТРОКИ);
+без кастомных флагов и комментариев — регистр и прочие режимы задаются
+стандартными inline-флагами ((?i), (?s)…); «#» в паттерне — литерал.
 
 Примеры:
-  python batch_replace.py --dry-run
-  python batch_replace.py --type redacted --start 1 --end 50
-  python batch_replace.py --rules-file my_rules.txt --regex
+  python batch_replace.py --replace "Хунг -> Хунь" --dry-run
+  python batch_replace.py --type redacted --start 1 --end 50 \
+      --replace "(?i)бессмертный -> Бессмертный"
+  python batch_replace.py --replace "\\s+ -> " --replace "^  ->"
 
 Типы файлов (--type): polished (default) | redacted | translated | chapter.
 Единицы: --start/--end — номера глав (канон parse_chapter_id).
@@ -22,7 +25,7 @@ import re
 import sys
 import unicodedata
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 # ── bootstrap: поиск core/common.py подъёмом от скрипта ──
 def _bootstrap_core() -> None:
@@ -45,8 +48,6 @@ from core.common import (  # noqa: E402
     emit_progress,
     find_chapter_file,
     read_text_safe,
-    strip_line_comment,
-    strip_rule_flags,
     trim_rule_left,
     trim_rule_right,
 )
@@ -57,12 +58,10 @@ FILE_TYPES = ("polished", "redacted", "translated", "chapter")
 
 @dataclass
 class Rule:
-    """Одно правило замены."""
-    pattern: str          # исходная левая часть (NFC) — для отчёта
+    """Одно regexp-правило замены («паттерн -> замена», NFC)."""
+    pattern: str          # левая часть (NFC) — для отчёта
     replacement: str      # правая часть (NFC)
-    ignore_case: bool
-    is_regex: bool
-    section: str = ""     # последний заголовок секции «## …»
+    section: str = ""     # источник правил («--replace»)
 
     @property
     def label(self) -> str:
@@ -71,24 +70,17 @@ class Rule:
         return f"{self.section}/{pat}" if self.section else pat
 
     def compile(self):
-        """Компилирует matcher. Возвращает re.Pattern (literal экранируется).
+        """Компилирует matcher. Возвращает re.Pattern.
 
-        MULTILINE: «^»/«$» матчат начало/конец СТРОКИ (literal не
-        страдает — re.escape экранирует якоря).
+        MULTILINE: «^»/«$» матчат начало/конец СТРОКИ. Паттерн — чистый
+        стандартный regexp: регистр и прочие режимы — inline-флагами
+        ((?i), (?s)…) в самом паттерне.
         """
-        flags = re.UNICODE | re.MULTILINE
-        if self.ignore_case:
-            flags |= re.IGNORECASE
-        src = self.pattern if self.is_regex else re.escape(self.pattern)
-        return re.compile(src, flags)
+        return re.compile(self.pattern, re.UNICODE | re.MULTILINE)
 
     def sub(self, compiled, content: str) -> Tuple[str, int]:
-        """Применяет замену. В literal-режиме правая часть — дословно."""
-        if self.is_regex:
-            return compiled.subn(self.replacement, content)
-        # literal: без обработки обратных ссылок в замене
-        repl = self.replacement
-        return compiled.subn(lambda _m: repl, content)
+        """Применяет замену (стандартный subn — с обратными ссылками)."""
+        return compiled.subn(self.replacement, content)
 
 
 def _nfc(s: str) -> str:
@@ -103,20 +95,17 @@ def parse_replace_lines(lines) -> tuple[List[Rule], List[str]]:
 
     Каждая строка — одно regexp-правило; пустая правая часть — удаление.
     Значимые пробелы сохраняются: «^  ->» (отступ строки), «\\s+ -> »
-    (сжатие пробелов). Флаги в конце строки (как в файле правил):
-    « |i» — не учитывать регистр, « |r» — без эффекта (всегда regexp).
-    Возвращает (rules, warnings): битая строка → предупреждение + пропуск.
+    (сжатие пробелов). Паттерн — чистый стандартный regexp: регистр и
+    прочие режимы — inline-флагами ((?i)…); комментариев и кастомных
+    флагов нет, «#» — литерал в паттерне. Возвращает (rules, warnings):
+    битая строка → предупреждение + пропуск.
     """
     rules: List[Rule] = []
     warnings: List[str] = []
     for i, raw in enumerate(lines, 1):
         line = raw.rstrip("\r\n")
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        line = strip_line_comment(line)
         if not line.strip():
             continue
-        line, flags = strip_rule_flags(line)
         if "->" not in line:
             warnings.append(f"строка {i}: нет разделителя «->» — пропущена")
             continue
@@ -127,64 +116,7 @@ def parse_replace_lines(lines) -> tuple[List[Rule], List[str]]:
             warnings.append(f"строка {i}: пустая левая часть — пропущена")
             continue
         rules.append(Rule(pattern=left, replacement=right,
-                          ignore_case="i" in flags, is_regex=True,
                           section="--replace"))
-    return rules, warnings
-
-
-def parse_rules(rules_file, force_regex: bool = False):
-    """Читает файл правил.
-
-    Возвращает (rules: List[Rule], warnings: List[str]).
-    Битая строка → предупреждение + пропуск. Ни одного правила → [].
-    """
-    rules: List[Rule] = []
-    warnings: List[str] = []
-    try:
-        text = read_text_safe(rules_file)
-    except OSError as e:
-        return [], [f"Не удалось прочитать файл правил: {e}"]
-
-    section = ""
-    for lineno, raw in enumerate(text.splitlines(), 1):
-        line = raw.rstrip("\n\r")
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") and not stripped.startswith("##"):
-            continue
-        if stripped.startswith("##"):
-            section = stripped[2:].strip()
-            continue
-
-        # Комментарий в конце строки — « # …» (флаги идут до него)
-        line = strip_line_comment(line)
-        if not line.strip():
-            continue
-
-        # Флаги — в самом конце строки: « |ir» (ровно один пробел перед «|»)
-        line, flags = strip_rule_flags(line)
-
-        # Разделитель: табуляция или первое «->»
-        if "\t" in line:
-            left, right = line.split("\t", 1)
-        elif "->" in line:
-            left, right = line.split("->", 1)
-        else:
-            warnings.append(f"строка {lineno}: нет разделителя «->» — пропущена")
-            continue
-
-        left = trim_rule_left(left)
-        right = trim_rule_right(right)
-        if not left:
-            warnings.append(f"строка {lineno}: пустая левая часть — пропущена")
-            continue
-
-        rules.append(Rule(
-            pattern=left,
-            replacement=right,
-            ignore_case="i" in flags,
-            is_regex=force_regex or "r" in flags,
-            section=section,
-        ))
     return rules, warnings
 
 
@@ -267,8 +199,7 @@ def apply_rules_segments(content: str, rules: List[Rule]):
             new_segs.extend(flush_del(a, b))
             if a != b:
                 new_segs.append(("del", cur[a:b]))
-            rep = m.expand(rule.replacement) if rule.is_regex \
-                else rule.replacement
+            rep = m.expand(rule.replacement)
             if rep:
                 new_segs.append(("ins", rep))
             last = b
@@ -295,12 +226,9 @@ def process_file(filepath, rules: List[Rule], dry_run: bool = False):
 # ══════════════════════════════════════════════════════════════════════
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="Массовые замены по правилам из файла (polished/redacted/translated/chapter).",
+        description="Массовые замены по regexp-правилам (polished/redacted/translated/chapter).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--rules-file", "--rules_file", dest="rules_file",
-                    default="prompts/replacements.txt",
-                    help="Файл правил (default: prompts/replacements.txt).")
     ap.add_argument("--type", dest="file_type", choices=FILE_TYPES,
                     default="polished",
                     help="Тип файлов глав (default: polished).")
@@ -314,10 +242,9 @@ def main(argv=None) -> int:
     ap.add_argument("--replace", action="append", default=[],
                     metavar="PAT -> REPL",
                     help="Regexp-замена (можно несколько); PAT -> пусто — "
-                         "удаление. Флаги в конце строки: « |i» — регистр, "
-                         "« |r» — без эффекта. Если задан, файл правил не читается.")
-    ap.add_argument("--regex", action="store_true",
-                    help="Все строки правил трактовать как regex.")
+                         "удаление. Паттерн — чистый стандартный regexp "
+                         "(Python re, MULTILINE); регистр — inline-флагом "
+                         "(?i); комментариев и кастомных флагов нет.")
     ap.add_argument("--dry-run", "--dry_run", dest="dry_run",
                     action="store_true",
                     help="Показать замены, не изменяя файлы.")
@@ -327,26 +254,13 @@ def main(argv=None) -> int:
     import sys as _sys
     print(f"Запуск: {_shlex.join(_sys.argv)}")
 
-    # ── Правила ──
-    if args.replace:
-        # --replace: только regexp-пары из аргументов (файл не читается)
-        rules, warnings = parse_replace_lines(args.replace)
-        for w in warnings:
-            print(f"⚠ {w}")
-        if not rules:
-            print(f"❌ В --replace нет ни одной корректной замены.")
-            return 1
-    else:
-        rules, warnings = parse_rules(args.rules_file,
-                                      force_regex=args.regex)
-        for w in warnings:
-            print(f"⚠ {w}")
-        if not rules:
-            if warnings and warnings[0].startswith("Не удалось прочитать"):
-                print(f"❌ {warnings[0]}")
-            else:
-                print(f"❌ Файл правил {args.rules_file!r} не содержит ни одной замены.")
-            return 1
+    # ── Правила: только из --replace (файл replacements.txt — deprecated) ──
+    rules, warnings = parse_replace_lines(args.replace)
+    for w in warnings:
+        print(f"⚠ {w}")
+    if not rules:
+        print("❌ В --replace нет ни одной корректной замены.")
+        return 1
 
     # ── Карта глав ──
     chapter_map = build_chapter_map(args.chapters_dir)

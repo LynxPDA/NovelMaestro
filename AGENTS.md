@@ -56,7 +56,8 @@ web/      web-интерфейс: server.py + api.py (роуты/хендлер�
           pipeline.py (web-оркестратор конвейера), static/ (SPA).
           Контракт API — web/README.md.
 cli/  исполнители — чистый CLI (argparse), без интерактивных меню.
-          batch_replace.py — массовые замены по файлу правил (prompts/replacements.txt);
+          batch_replace.py — массовые замены (правила «паттерн -> замена»
+          из формы/аргументов --replace; файл replacements.txt выпилен);
 tools/    вспомогательные утилиты вне конвейера: tampermonkey_rulate_reload.js
           (userscript Rulate, README — tools/README.md).
 templates/ шаблоны новых проектов: общие шаблоны в корне (.env.example);
@@ -131,7 +132,7 @@ argparse («СИМВОЛЫ»/«ТОКЕНЫ»).
 | текст/CJK | `get_ngrams` / `is_cjk` / `is_cjk_string` / `find_exact_match` |
 | поиск терминов | `load_ner_data` + `find_relevant_ner` (+ `normalize_for_search`, `build_smart_regex`) |
 | контекст термина (context) | `extract_term_context` (предложение с термином из чанка; `max_len` — СИМВОЛЫ, 0 = выключено; границы предложений — знаки конца любых языков + закрывающие кавычки/скобки; `threshold`/`ngram_size` — нечёткий фолбэк по предложениям, зеркально `find_relevant_ner`) |
-| правила замен «паттерн -> замена» (batch_replace/epub replace-re) | `trim_rule_left` / `trim_rule_right` (паддинг у «->»; значимые пробелы «^  », «  $» и правая часть «\s+ -> ») / `strip_rule_flags` (флаги « \|i»/« \|r» в конце строки; разделитель — ровно один пробел) / `strip_line_comment` (inline-комментарий « # …» в конце строки; «#» без пробела слева — не комментарий) |
+| правила замен «паттерн -> замена» (batch_replace/epub replace-re) | `trim_rule_left` / `trim_rule_right` (паддинг у «->»; значимые пробелы «^  », «  $» и правая часть «\s+ -> ») |
 | проверка глоссария (ner_check) | `filter_ner_items` (порог count + типы) / `format_ner_record` / `glossary_body` / `build_ner_batches` (count по убыванию, бюджет в СИМВОЛАХ; fields — поля записи для LLM, term — всегда) / `parse_rag_suggestions` (текст LLM → записи; fields — разрешённые поля) / `ner_item_lookup` (поиск записи по term: NFC, затем без скобок) / `diff_ner_records` (записи LLM ↔ ner.json → патчи {term,field,old,new,reason}; NFC; нет записи — warning с близкими) / `review_entry` / `parse_review_doc` / `merge_review_entries` (review-файл: поля английские — `stage`/`status`/`applied`/`old`/`new`, статусы принять/отклонить, накопление) / `apply_ner_patches` (status + applied, дубли термина по совпавшему `old`, list/dict — json) |
 | проверка перевода LLM (translate_check_llm) | `fix_entry` (ошибка LLM → запись review) / `merge_fix_entries` (накопление, дедуп по chapter+old+new) / `apply_fix_to_text` (NFC, первое вхождение) |
 | имена по полу | `collect_gender_names` (polish: поиск по `translation`, пол по наличию `(female)`/`(male)` в `type`) |
@@ -198,6 +199,15 @@ blacklist: raw/draft/translated/original/source/backup).
 Везде, где сравнивается/заменяется русский текст — NFC-нормализация
 (`unicodedata.normalize("NFC", …)`): поиск фрагментов, fix-скрипты,
 замена строк. Кавычки «»/", тире —–-, многоточия …/... считаются разными.
+
+### Regexp-поля (все стадии)
+
+Regexp-поля форм и CLI — чистые стандартные выражения Python `re`
+(MULTILINE: «^»/«$» — начало/конец СТРОКИ); регистр и прочие режимы —
+стандартными inline-флагами ((?i), (?s)…). Кастомные флаги (« |i»,
+« |s») и комментарии « # …» в regexp-полях запрещены: «#» — литерал
+паттерна; особые семантики («пропуск первого совпадения») — только
+встроенными проверками скриптов.
 
 ### JSON-файлы данных (правило консистентности)
 

@@ -455,24 +455,23 @@ def test_parse_replace_re_broken(tmp_path):
         E2C._parse_replace_re([" -> x"])
 
 
-def test_replace_re_inline_comment(tmp_path):
-    """--replace-re: комментарий « # …» в конце строки отрезается;
-    решётка без пробела слева — не комментарий."""
-    from core.common import strip_line_comment
+def test_replace_re_hash_is_literal(tmp_path):
+    """--replace-re: комментариев нет — «#» литерал паттерна/замены
+    (паттерн компилируется как есть)."""
     txt = tmp_path / "c.txt"
-    txt.write_text("Глава 1\nтекст один\n", encoding="utf-8")
-    # main() срезает комментарий у --split-re/--clean-re/--replace-re
-    split_res = [E2C._safe_compile(
-        strip_line_comment("Глава \\d+ # маркер главы"), "split-re")]
+    txt.write_text("Глава 1 # маркер главы\nтекст один\n",
+                   encoding="utf-8")
+    split_res = [E2C._safe_compile("Глава \\d+ # маркер главы",
+                                   "split-re")]
     replace_res = E2C._parse_replace_re([
-        "^(Глава) -> Глава №\\1  # нумерация",
+        "^(Глава) -> №\\1",
         "цвет#[0-9a-f]+ -> X",
     ])
     assert len(replace_res) == 2
-    assert replace_res[0][1] == "Глава №\\1"
+    assert replace_res[0][1] == "№\\1"
     assert replace_res[1][0].pattern == "цвет#[0-9a-f]+"
     entries, *_ = E2C.split_input(txt, "regex", split_res, [], [])
-    assert [e["heading"] for e in entries] == ["Глава 1"]
+    assert [e["heading"] for e in entries] == ["Глава 1 # маркер главы"]
 
 
 def test_replace_re_multiline(tmp_path):
@@ -500,23 +499,23 @@ def test_replace_re_significant_ws(tmp_path):
     assert pat2.sub(" ", "a   b\tc") == "a b c"
 
 
-def test_replace_re_flags_space():
-    """--replace-re: «\\s+ ->  |r» — пробел правой части значим
-    (сжатие), флаг |r — без эффекта (всегда regexp)."""
-    pat, repl = E2C._parse_replace_re(["\\s+ ->  |r"])[0]
+def test_replace_re_significant_space():
+    """--replace-re: пробел правой части значим — «\\s+ -> »
+    (сжатие пробелов, а не удаление)."""
+    pat, repl = E2C._parse_replace_re(["\\s+ -> "])[0]
     assert repl == " "
     assert pat.sub(" ", "a   b") == "a b"
 
 
-def test_replace_re_flags_and_nfc(tmp_path):
-    """--replace-re: « |i» — регистр; текст и паттерн в NFC —
-    NFD-контент (cafe\u0301) совпадает с NFC-паттерном (café)."""
+def test_replace_re_inline_flag_and_nfc(tmp_path):
+    """--replace-re: регистр — inline-флагом (?i); текст и паттерн
+    в NFC — NFD-контент (cafe\u0301) совпадает с NFC-паттерном (café)."""
     txt = tmp_path / "nfc.txt"
     txt.write_text("第1章\ncafe\u0301 ХУНГ\n", encoding="utf-8")
     split_res = [E2C._safe_compile("第\\d+章", "split-re")]
     replace_res = E2C._parse_replace_re([
         "café -> кофе",
-        "хунг -> Хун |i",
+        "(?i)хунг -> Хун",
     ])
     entries, *_ = E2C.split_input(txt, "regex", split_res, [],
                                   replace_res)

@@ -740,105 +740,77 @@ def test_cac_inject_fb2_cover(tmp_path):
 # ══════════════════════════════════════════════════════════════════════
 # cli/batch_replace.py
 # ══════════════════════════════════════════════════════════════════════
-def _rules_file(tmp_path, text):
-    p = tmp_path / "rules.txt"
-    p.write_text(text, encoding="utf-8")
-    return str(p)
+def test_br_parse_replace_lines_basic():
+    """--replace: пары «паттерн -> замена»; пустая правая — удаление;
+    битые строки — предупреждение."""
+    rules, warnings = BR.parse_replace_lines([
+        "Глава \\d+ -> Глава №\\g<0>",
+        "\\(\\d+\\) ->",
+        "без разделителя",
+        " -> пусто",
+    ])
+    assert len(warnings) == 2  # без разделителя + пустая левая
+    assert len(rules) == 2
+    assert rules[0].pattern == "Глава \\d+"
+    assert rules[0].replacement == "Глава №\\g<0>"
+    assert rules[1].replacement == ""  # удаление
+    assert all(r.section == "--replace" for r in rules)
+    # пустой ввод — пустой результат
+    assert BR.parse_replace_lines([]) == ([], [])
 
 
-def test_br_parse_rules_basic(tmp_path):
-    path = _rules_file(tmp_path, "# комментарий\n\n## Секция\nХунг -> Хун\nХунг\tХуну\n")
-    rules, warnings = parse_br(path)
-    assert warnings == []
-    assert [r.pattern for r in rules] == ["Хунг", "Хунг"]
-    assert [r.replacement for r in rules] == ["Хун", "Хуну"]
-    assert all(r.section == "Секция" for r in rules)
-    assert all(not r.is_regex and not r.ignore_case for r in rules)
-
-
-def test_br_parse_rules_flags(tmp_path):
-    path = _rules_file(tmp_path, "Хунг -> Хун |i\nХунг(а) -> Хун\\1 |r\nX -> Y |ir\n")
-    rules, warnings = parse_br(path)
-    assert warnings == []
-    assert rules[0].ignore_case and not rules[0].is_regex
-    assert rules[1].is_regex and not rules[1].ignore_case
-    assert rules[2].is_regex and rules[2].ignore_case
-
-
-def test_br_parse_rules_flags_significant_ws(tmp_path):
-    """Файл правил: лишние пробелы перед флагами значимы —
-    «\\s+ ->  |r» = сжатие пробелов, а не удаление."""
-    path = _rules_file(tmp_path, "\\s+ ->  |r\n")
-    rules, warnings = parse_br(path)
-    assert warnings == []
-    assert rules[0].is_regex and rules[0].replacement == " "
-
-
-def test_br_parse_rules_force_regex(tmp_path):
-    path = _rules_file(tmp_path, "Хунг -> Хун\n")
-    rules, _ = parse_br(path, force_regex=True)
-    assert rules[0].is_regex
-
-
-def test_br_parse_rules_broken_and_empty(tmp_path):
-    path = _rules_file(tmp_path, "нет разделителя\n -> пусто\n")
-    rules, warnings = parse_br(path)
-    assert rules == [] and len(warnings) == 2
-    path2 = _rules_file(tmp_path, "")
-    assert parse_br(path2) == ([], [])
-
-
-def test_br_parse_rules_nfc(tmp_path):
+def test_br_parse_replace_lines_nfc():
     # NFD-паттерн («е» + комбинируемый диерезис) нормализуется в NFC «ё»
-    path = _rules_file(tmp_path, "е\u0308лка -> ёлка\n")
-    rules, _ = parse_br(path)
+    rules, _ = BR.parse_replace_lines(["е\u0308лка -> ёлка"])
     assert rules[0].pattern == unicodedata.normalize("NFC", "е\u0308лка") == "ёлка"
 
 
-def test_br_apply_literal():
-    # строим правила вручную для чистоты
-    r1 = BR.Rule("Хунг", "Хун", False, False)
-    r2 = BR.Rule("Бессмертного Заслуга", "Бессмертного Заслуг", True, False)
-    out, stats = BR.apply_rules("Хунг и Бессмертного заслуга", [r1, r2])
-    assert out == "Хун и Бессмертного Заслуг"
-    assert stats == {"Хунг": 1, "Бессмертного Заслуга": 1}
-
-
-def test_br_apply_literal_backref_is_literal():
-    r = BR.Rule("Хунг", "Хун\\1", False, False)
-    out, stats = BR.apply_rules("Хунг", [r])
-    assert out == "Хун\\1" and stats == {"Хунг": 1}
+def test_br_parse_replace_lines_hash_is_literal():
+    """«#» в правиле — литерал паттерна (комментариев нет)."""
+    rules, _ = BR.parse_replace_lines(["цвет#[0-9a-f]+ -> COLOR"])
+    assert rules[0].pattern == "цвет#[0-9a-f]+"
+    assert rules[0].replacement == "COLOR"
+    rules2, _ = BR.parse_replace_lines(["^ -> #"])   # вставка «#»
+    assert rules2[0].replacement == "#"
 
 
 def test_br_apply_regex_backref():
-    r = BR.Rule("Хунг(а|у)", "Хун\\1", False, True)
+    r = BR.Rule("Хунг(а|у)", "Хун\\1")
     out, stats = BR.apply_rules("Хунга и Хунгу", [r])
     assert out == "Хуна и Хуну" and stats == {"Хунг(а|у)": 2}
 
 
+def test_br_apply_inline_flag():
+    """Регистр — стандартным inline-флагом (?i) в паттерне."""
+    r = BR.Rule("(?i)бессмертного заслуга", "Бессмертного Заслуг")
+    out, stats = BR.apply_rules("Хун и бессмертного Заслуга", [r])
+    assert out == "Хун и Бессмертного Заслуг"
+    assert stats == {"(?i)бессмертного заслуга": 1}
+
+
 def test_br_apply_no_change():
-    r = BR.Rule("Хунг", "Хун", False, False)
+    r = BR.Rule("Хунг", "Хун")
     out, stats = BR.apply_rules("текст", [r])
     assert out == "текст" and stats == {}
 
 
 def test_br_apply_rules_segments_del_ins():
     """Сегменты: удаление/вставка, склейка совпадает с apply_rules."""
-    r1 = BR.Rule("Хунг", "Хун", False, False)
-    r2 = BR.Rule(r"\(\d+\)", "", False, True)
+    r1 = BR.Rule("Хунг", "Хун")
+    r2 = BR.Rule(r"\(\d+\)", "")
     text = "Хунг (12) здесь"
     segs, stats = BR.apply_rules_segments(text, [r1, r2])
     assert "".join(t for k, t in segs if k != "del") == "Хун  здесь"
     assert stats == {"Хунг": 1, r"\(\d+\)": 1}
     assert ("del", "Хунг") in segs and ("ins", "Хун") in segs
     assert ("del", "(12)") in segs
-    # regex с обратной ссылкой — дель/вставка по группам
-    r3 = BR.Rule("Хунг(а|у)", r"Хун\1", False, True)
+    # regexp с обратной ссылкой — дель/вставка по группам
+    r3 = BR.Rule("Хунг(а|у)", r"Хун\1")
     segs2, _ = BR.apply_rules_segments("Хунга и Хунгу", [r3])
     assert "".join(t for k, t in segs2 if k != "del") == "Хуна и Хуну"
     # вставленное первым правилом видно следующим заменам
-    seq = [BR.Rule("Хунг", "Хун", False, False),
-           BR.Rule("Хуна", "Хуня", False, False)]
+    seq = [BR.Rule("Хунг", "Хун"),
+           BR.Rule("Хуна", "Хуня")]
     segs3, stats3 = BR.apply_rules_segments("Хунга", seq)
     assert "".join(t for k, t in segs3 if k != "del") == "Хуня"
     assert stats3 == {"Хунг": 1, "Хуна": 1}
@@ -850,10 +822,10 @@ def test_br_apply_rules_segments_del_ins():
 def test_br_apply_rules_segments_matches_apply_rules():
     """Сегментная склейка ≡ apply_rules при любой последовательности."""
     rules = [
-        BR.Rule("Хунг", "Хун", False, False),
-        BR.Rule("\\s+", " ", False, True),
-        BR.Rule("^  ", "", False, True),
-        BR.Rule(" заслуга", " Заслуга", True, False),
+        BR.Rule("Хунг", "Хун"),
+        BR.Rule("\\s+", " "),
+        BR.Rule("^  ", ""),
+        BR.Rule("(?i) заслуга", " Заслуга"),
     ]
     text = "Хунг   и   Бессмертного заслуга\n  с отступом"
     segs, stats = BR.apply_rules_segments(text, rules)
@@ -865,7 +837,7 @@ def test_br_apply_rules_segments_matches_apply_rules():
 
 def test_br_apply_rules_segments_zero_width_and_empty():
     """Zero-width-якоря («^ ->») и пустой текст."""
-    r = BR.Rule("^", "# ", False, True)
+    r = BR.Rule("^", "# ")
     segs, stats = BR.apply_rules_segments("a\nb", [r])
     assert "".join(t for k, t in segs if k != "del") == "# a\n# b"
     assert stats == {"^": 2}
@@ -873,25 +845,6 @@ def test_br_apply_rules_segments_zero_width_and_empty():
     segs2, stats2 = BR.apply_rules_segments("", [r])
     assert "".join(t for k, t in segs2 if k != "del") == "# "
     assert stats2 == {"^": 1}
-
-
-def test_br_parse_replace_lines():
-    """--replace: пары «паттерн -> замена», пустая правая — удаление."""
-    rules, warnings = BR.parse_replace_lines([
-        "Глава \\d+ -> Глава №\\g<0>",
-        "\\(\\d+\\) ->",
-        "# комментарий",
-        "без разделителя",
-        " -> пусто",
-    ])
-    assert len(warnings) == 2  # без разделителя + пустая левая
-    assert len(rules) == 2
-    assert rules[0].is_regex and rules[0].pattern == "Глава \\d+"
-    assert rules[0].replacement == "Глава №\\g<0>"
-    assert rules[1].replacement == ""  # удаление
-    # NFC-нормализация
-    rules2, _ = BR.parse_replace_lines(["е\u0308лка -> ёлка"])
-    assert rules2[0].pattern == "ёлка"
 
 
 def test_br_parse_replace_lines_ws():
@@ -908,70 +861,21 @@ def test_br_parse_replace_lines_ws():
     assert rules[2].pattern == "^ +"
 
 
-def test_br_parse_replace_lines_flags():
-    """--replace: флаги « |i»/« |r» в конце строки (как в файле правил);
-    «\\s+ ->  |r» — пробел правой части значим (сжатие)."""
-    rules, warnings = BR.parse_replace_lines([
-        "Хунг -> Хун |i",
-        "\\s+ ->  |r",
-        "^(第\\d+章.*)\\n(?=\\1$) -> |ir",
-    ])
-    assert warnings == []
-    assert rules[0].ignore_case and rules[0].replacement == "Хун"
-    assert rules[1].replacement == " "      # сжатие, а не удаление
-    assert rules[2].replacement == "" and rules[2].ignore_case
-    assert all(r.is_regex for r in rules)
-
-
-def test_br_inline_comments():
-    """Inline-комментарий « # …» в конце строки правила: отрезается
-    у --replace и в файле правил; «#» без пробела слева — не комментарий."""
-    rules, warnings = BR.parse_replace_lines([
-        "Глава \\d+ -> Глава №\\g<0>  # нумерация глав",
-        "цвет#[0-9a-f]+ -> COLOR  # hex-цвет — не комментарий",
-        "\s+ ->  |r  # сжатие пробелов",
-    ])
-    assert warnings == []
-    assert rules[0].pattern == "Глава \\d+"
-    assert rules[0].replacement == "Глава №\\g<0>"
-    # решётка без пробела слева — не комментарий, паттерн сохраняется
-    assert rules[1].pattern == "цвет#[0-9a-f]+"
-    assert rules[1].replacement == "COLOR"
-    # флаги идут ДО комментария
-    assert rules[2].is_regex and rules[2].replacement == " "
-
-
-def test_br_rules_file_inline_comments(tmp_path):
-    """Файл правил: « # …» в конце строки — комментарий; строка
-    целиком с «#» в начале — тоже комментарий."""
-    path = _rules_file(tmp_path, (
-        "# общий комментарий\n"
-        "Хунг -> Хун  # имя героя\n"
-        "Хунг(а) -> Хун\\1 |i  # с флагом\n"
-        "\n"
-    ))
-    rules, warnings = parse_br(path)
-    assert warnings == []
-    assert [r.pattern for r in rules] == ["Хунг", "Хунг(а)"]
-    assert [r.replacement for r in rules] == ["Хун", "Хун\\1"]
-    assert rules[1].ignore_case
-
-
 def test_br_multiline_anchors():
     """MULTILINE: «^»/«$» матчат СТРОКИ — отступы в начале строки
     и дубликаты заголовков глав."""
-    r1 = BR.Rule("^  ", "", False, True)
+    r1 = BR.Rule("^  ", "")
     out, stats = BR.apply_rules("  абзац\nне трогаем\n   три\n", [r1])
     assert out == "абзац\nне трогаем\n три\n"
     assert stats == {"^  ": 2}
-    r2 = BR.Rule("^(第\\d+章.*)\\n(?=\\1$)", "", False, True)
+    r2 = BR.Rule("^(第\\d+章.*)\\n(?=\\1$)", "")
     out2, stats2 = BR.apply_rules("第1章 标题\n第1章 标题\n正文\n", [r2])
     assert out2 == "第1章 标题\n正文\n"
     assert stats2 == {"^(第\\d+章.*)\\n(?=\\1$)": 1}
 
 
 def test_br_main_replace_flag(tmp_path, capsys):
-    """--replace применяется вместо файла правил (dry-run)."""
+    """--replace применяется к главам (dry-run)."""
     ch = tmp_path / "chapters" / "00000_1_Глава_1"
     ch.mkdir(parents=True)
     (ch / "polished.txt").write_text(
@@ -994,8 +898,3 @@ def test_br_main_replace_broken(tmp_path, capsys):
                   "--replace", "без разделителя"])
     assert rc == 1
     assert "нет разделителя" in capsys.readouterr().out
-
-
-def parse_br(path, force_regex=False):
-    """Шорткат: parse_rules с распаковкой."""
-    return BR.parse_rules(path, force_regex=force_regex)

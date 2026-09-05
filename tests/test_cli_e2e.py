@@ -86,7 +86,7 @@ def test_tc_check_chapter_regexp_controls(tmp_path):
     errors, _ = TC.check_chapter(
         1, str(d), "polished", [("redacted", 1.0, 0.05)],
         strict=False, prev_inner_chapter=None,
-        exclusions=[], regexp_checks=[(re.compile(r"[一-鿿]+"), False)])
+        exclusions=[], regexp_checks=[re.compile(r"[一-鿿]+")])
     joined = "\n".join(errors)
     assert "中" in joined and "broken" not in joined
 
@@ -659,19 +659,15 @@ def _br_chapter(tmp_path, num, text="Хунг пришёл."):
     return d, f
 
 
-def _br_rules(tmp_path, text="Хунг -> Хун\n"):
-    p = tmp_path / "prompts" / "replacements.txt"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text, encoding="utf-8")
-    return p
+def _br_argv(rule="Хунг -> Хун"):
+    """argv batch_replace: правило из --replace (файл правил выплен)."""
+    return ["batch_replace.py", "--replace", rule]
 
 
 def test_br_main_dry_run(tmp_path, monkeypatch, capsys):
-    _br_rules(tmp_path)
     d, f = _br_chapter(tmp_path, 1)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv",
-                        ["batch_replace.py", "--dry-run"])
+    monkeypatch.setattr(sys, "argv", _br_argv() + ["--dry-run"])
     assert BR.main() == 0
     out = capsys.readouterr().out
     assert "[DRY]" in out and "Всего замен:     1" in out
@@ -679,36 +675,33 @@ def test_br_main_dry_run(tmp_path, monkeypatch, capsys):
 
 
 def test_br_main_apply(tmp_path, monkeypatch, capsys):
-    _br_rules(tmp_path)
     d, f = _br_chapter(tmp_path, 1)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["batch_replace.py"])
+    monkeypatch.setattr(sys, "argv", _br_argv())
     assert BR.main() == 0
     assert f.read_text(encoding="utf-8") == "Хун пришёл."
     assert "[FIX]" in capsys.readouterr().out
 
 
 def test_br_main_type_filter(tmp_path, monkeypatch):
-    _br_rules(tmp_path)
     d, _ = _br_chapter(tmp_path, 1)
     red = d / "redacted.txt"
     red.write_text("Хунг пришёл.", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv",
-                        ["batch_replace.py", "--type", "redacted"])
+                        _br_argv() + ["--type", "redacted"])
     assert BR.main() == 0
     assert red.read_text(encoding="utf-8") == "Хун пришёл."
     assert (d / "polished.txt").read_text(encoding="utf-8") == "Хунг пришёл."
 
 
 def test_br_main_range(tmp_path, monkeypatch):
-    _br_rules(tmp_path)
     _, f1 = _br_chapter(tmp_path, 1)
     _, f2 = _br_chapter(tmp_path, 2)
     _, f3 = _br_chapter(tmp_path, 3)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv",
-                        ["batch_replace.py", "--start", "2", "--end", "2"])
+                        _br_argv() + ["--start", "2", "--end", "2"])
     assert BR.main() == 0
     assert f1.read_text(encoding="utf-8") == "Хунг пришёл."
     assert f2.read_text(encoding="utf-8") == "Хун пришёл."
@@ -716,17 +709,16 @@ def test_br_main_range(tmp_path, monkeypatch):
 
 
 def test_br_main_no_rules(tmp_path, monkeypatch, capsys):
-    _br_rules(tmp_path, text="# пусто\n")
     _br_chapter(tmp_path, 1)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["batch_replace.py"])
     assert BR.main() == 1
-    assert "не содержит ни одной замены" in capsys.readouterr().out
+    assert "нет ни одной корректной замены" in capsys.readouterr().out
 
 
-def test_br_main_missing_rules_file(tmp_path, monkeypatch, capsys):
+def test_br_main_broken_rule(tmp_path, monkeypatch, capsys):
     _br_chapter(tmp_path, 1)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["batch_replace.py"])
+    monkeypatch.setattr(sys, "argv", _br_argv(rule="нет разделителя"))
     assert BR.main() == 1
-    assert "Не удалось прочитать" in capsys.readouterr().out
+    assert "нет разделителя" in capsys.readouterr().out

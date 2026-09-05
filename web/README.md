@@ -271,9 +271,9 @@ yaml/yml) — метаданные; пусто = авто `metadata.yaml`. `dona
 
 Стадия `batch_replace` — массовые замены: поле `replacements` —
 regexp-пары «паттерн -> замена» по одной на строку (пустая правая
-часть — удаление), уходят в CLI как `--replace`; файл правил и
-literal-режим остались только в CLI (`--rules-file`, `--regex`), в UI
-используется только regexp.
+часть — удаление), уходят в CLI как `--replace`; паттерн — чистый
+стандартный regexp (Python `re`), регистр — inline-флагом `(?i)`;
+файл правил `replacements.txt` и literal-режим выплены.
 
 Стадия `wiki` — источник текста: «Готовый txt» (как раньше) или
 «Собрать из глав» (`source=chapters` → `--compile-chapters`, склейка

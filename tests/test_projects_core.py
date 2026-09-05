@@ -250,20 +250,20 @@ def test_fill_project_from_template(tmp_path):
 
 
 def test_fill_template_general_files(tmp_path):
-    """info.md/donate.txt/replacements.txt из General попадают в проект."""
+    """info.md/donate.txt/файл из prompts из General попадают в проект."""
     tpl = tmp_path / "T"
     (tpl / "prompts").mkdir(parents=True)
     (tpl / "source").mkdir(parents=True)
     (tpl / "source" / "info.md").write_text("# Инфо", encoding="utf-8")
     (tpl / "source" / "donate.txt").write_text("Донат", encoding="utf-8")
-    (tpl / "prompts" / "replacements.txt").write_text("A -> B", encoding="utf-8")
+    (tpl / "prompts" / "extra_rules.txt").write_text("A -> B", encoding="utf-8")
     pdir = tmp_path / "proj"
     copied = P.fill_project_from_template(pdir, tpl)
     assert "source/info.md" in copied
     assert "source/donate.txt" in copied
-    assert "prompts/replacements.txt" in copied
+    assert "prompts/extra_rules.txt" in copied
     assert (pdir / "source" / "info.md").read_text(encoding="utf-8") == "# Инфо"
-    assert (pdir / "prompts" / "replacements.txt").read_text(encoding="utf-8") == "A -> B"
+    assert (pdir / "prompts" / "extra_rules.txt").read_text(encoding="utf-8") == "A -> B"
 
 
 def test_write_project_metadata(tmp_path):

@@ -24,6 +24,17 @@
       „Ручной“)» в epub (разбивка/замены, флаги |i/|r); в шпаргалке
       translate_check — (?<=\n)-обход без |s и различия флагов
       (|i/|r replacements здесь не работают); pytest.
+- [x] **4. Чистые стандартные regexp (после релиза 0.2.5 — поедет в
+      следующий)** — выпилен replacements.txt (файл правил batch_replace:
+      parse_rules/--rules-file/--regex/literal-режим/«## секции»);
+      удалены кастомный синтаксис и комментарии во всех regexp-полях
+      (флаги « |i»/« |r»/« |s», « # …»; strip_rule_flags/strip_line_comment
+      из core удалены): регистр — inline-флагом (?i), «#» — литерал,
+      «пропуск первого вхождения» — (?<=\n) (пример в справках);
+      batch_replace — только правила из --replace/формы;
+      --header-regexp компилируется как есть; справки web (stages,
+      run-views, help.md, README/DEVELOPERS/AGENTS/core) переписаны;
+      pytest (1117).
 
 ## Текущая сессия (0.2.4 — лог запусков, поля {ner_block}, контекст термина, предпросмотр запроса, релиз)
 
