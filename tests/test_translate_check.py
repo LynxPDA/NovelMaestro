@@ -167,6 +167,21 @@ def test_check_chapter_regexp_skip_first(tmp_path):
     assert any("Глава 99" in e for e in errors)
 
 
+def test_build_header_regex():
+    """--header-regexp: пусто → дефолт; комментарий « # …» срезается
+    (иначе молча становился частью паттерна); строка из одного
+    комментария → дефолт; регистр/ multiline — как раньше."""
+    rx = TC.build_header_regex(None)
+    assert rx.pattern == TC.DEFAULT_HEADER_PATTERN
+    assert rx.flags & re.IGNORECASE and rx.flags & re.MULTILINE
+    rx = TC.build_header_regex("")
+    assert rx.pattern == TC.DEFAULT_HEADER_PATTERN
+    rx = TC.build_header_regex("Глава \\d+\\. # свой формат")
+    assert rx.pattern == "Глава \\d+\\."
+    rx = TC.build_header_regex(" # только комментарий")
+    assert rx.pattern == TC.DEFAULT_HEADER_PATTERN
+
+
 def test_check_chapter_no_header(tmp_path):
     """Нет «Глава N» в начале — структурная ошибка (всегда включена)."""
     d = tmp_path / "00000_3_x"

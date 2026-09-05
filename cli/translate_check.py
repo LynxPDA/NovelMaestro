@@ -76,6 +76,21 @@ def parse_regexp_rule(line: str):
         return None
     return re.compile(line, re.MULTILINE), skip_first
 
+
+def build_header_regex(raw: str | None) -> re.Pattern:
+    """Значение --header-regexp → compiled регекс заголовка главы.
+
+    Пусто → дефолтный «Глава N» (без учёта регистра); комментарий
+    « # …» в конце срезается (унификация с другими regexp-полями —
+    иначе комментарий молча становился частью паттерна); строка из
+    одного комментария → дефолт. Флаги не поддерживаются.
+    """
+    line = (raw or "").strip()
+    if not line:
+        line = DEFAULT_HEADER_PATTERN
+    line = strip_line_comment(line).strip() or DEFAULT_HEADER_PATTERN
+    return re.compile(line, re.IGNORECASE | re.MULTILINE)
+
 # ──────────────────────────────────────────────
 # НАСТРОЙКИ (настраиваемые коэффициенты)
 # ──────────────────────────────────────────────
@@ -428,7 +443,9 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
     parser.add_argument("--header-regexp", default=None,
                         help="Regexp заголовка главы (первая непустая "
                              "строка; пусто = «Глава N» без учёта "
-                             "регистра; ^ — начало СТРОКИ)")
+                             "регистра; ^ — начало СТРОКИ; комментарий "
+                             "в конце — « # …» срезается; флаги не "
+                             "поддерживаются)")
     parser.add_argument("--no-sequence-check", action="store_true",
                         default=False,
                         help="Отключить проверку сквозной "
@@ -477,8 +494,7 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
             regexp_checks.append(rule)
     min_file_size = (args.min_file_size if args.min_file_size is not None
                      else MIN_FILE_SIZE)
-    header_regex = re.compile(args.header_regexp or DEFAULT_HEADER_PATTERN,
-                              re.IGNORECASE | re.MULTILINE)
+    header_regex = build_header_regex(args.header_regexp)
     sequence_check = not args.no_sequence_check
 
     print("--------------------------------------")
