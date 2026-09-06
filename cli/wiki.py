@@ -48,6 +48,7 @@ from core.common import (  # noqa: E402
     fts_search_first,
     fts_search_ids_all,
     get_server_config,
+    get_tagged_prompt,
     log_argv as _cc_log_argv,
     parse_dotenv,
     print_env_help,
@@ -563,11 +564,11 @@ def llm_request(
 def _load_json_tag(content: str, tag: str, logger, default):
     """Достаёт JSON-значение из тега <tag>...</tag>; битый JSON —
     предупреждение и default (настройка не критична)."""
-    m = re.search(rf"<{tag}>(.*?)</{tag}>", content, re.DOTALL)
+    m = get_tagged_prompt(content, tag)
     if not m:
         return default
     try:
-        return json.loads(m.group(1).strip())
+        return json.loads(m)
     except json.JSONDecodeError as e:
         _log(logger, logging.WARNING,
              f"⚠️ Тег <{tag}>: битый JSON ({e}) — встроенные значения.")
@@ -592,12 +593,9 @@ def load_wiki_prompts(filepath: str, logger) -> dict[str, object]:
         return {}
 
     result: dict[str, object] = {}
-    m = re.search(
-        r"<prompt_wiki_article>(.*?)</prompt_wiki_article>",
-        content, re.DOTALL,
-    )
+    m = get_tagged_prompt(content, "prompt_wiki_article")
     if m:
-        result["article"] = m.group(1).strip()
+        result["article"] = m
 
     if not result:
         result["article"] = content.strip()

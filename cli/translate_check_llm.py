@@ -63,6 +63,7 @@ from core.common import (  # noqa: E402
     find_env_file,
     fix_entry,
     get_server_config,
+    get_tagged_prompt,
     log_argv,
     merge_fix_entries,
     parse_dotenv,
@@ -318,12 +319,12 @@ def load_prompts(prompt_file, logger):
         except OSError as exc:
             logger.warning(f"Промпт-файл не читается ({exc}): {prompt_file}")
             return p1, p2
-        m1 = re.search(r'<pass1>(.*?)</pass1>', content, re.DOTALL)
-        m2 = re.search(r'<pass2>(.*?)</pass2>', content, re.DOTALL)
+        m1 = get_tagged_prompt(content, "pass1")
+        m2 = get_tagged_prompt(content, "pass2")
         if m1:
-            p1 = m1.group(1).strip()
+            p1 = m1
         if m2:
-            p2 = m2.group(1).strip()
+            p2 = m2
         if not m1 and not m2:
             logger.warning("Теги <pass1>/<pass2> не найдены, встроенные.")
         elif not m1:

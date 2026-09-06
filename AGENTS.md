@@ -223,9 +223,15 @@ translate_check_llm_review.json и т.п.) — ПО УМОЛЧАНИЮ на ан
 ### Промпты
 
 - Внешние промпты хранятся в `prompts/` проекта; формат — теги:
-  `<translate>/<redact>/<polish>`, `<pass1>/<pass2>`, `<prompt_pass1/2>`,
-  `<prompt_wiki_article>`; файл БЕЗ тегов = промпт этапа целиком
-  (допустимый режим «отдельный файл на этап», не legacy).
+  `<translate>/<translate_lr>/<redact>/<polish>`, `<pass1>/<pass2>`,
+  `<prompt_pass1/2>`, `<prompt_ner_check>/<prompt_rag>`,
+  `<prompt_assessment>`, `<prompt_wiki_article>` + JSON-теги wiki
+  (`<wiki_markers>`, `<wiki_default_markers>`, `<wiki_type_names_ru>`,
+  `<wiki_relations_labels>`, `<wiki_skip_relations>`, `<wiki_type_order>`);
+  файл БЕЗ тегов = промпт этапа целиком (допустимый режим «отдельный
+  файл на этап», не legacy). Теги во всех скриптах достаются единым
+  `get_tagged_prompt` (открывающий тег — только в начале строки:
+  упоминания тегов в «#»-комментариях не захватываются).
 - Встроенные промпты в скриптах (DEFAULT_*/PASS1_PROMPT) — только fallback.
   Меняя встроенный промпт, синхронизируй смысл с внешним шаблоном, если есть.
 - Плейсхолдеры: `{ner_block}`, `{original_text}`, `{translated_text}`,

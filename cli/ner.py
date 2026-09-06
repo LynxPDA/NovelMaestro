@@ -53,6 +53,7 @@ from core.common import (  # noqa: E402
     extract_term_context,
     find_env_file,
     get_ngrams,
+    get_tagged_prompt,
     get_server_config,
     is_cjk_string,
     log_argv,
@@ -510,13 +511,13 @@ def load_two_pass_prompts(filepath: str, logger) -> tuple[str, str | None]:
         _log(logger, logging.ERROR, f"⚠️ Не удалось прочитать prompt_file: {e}")
         return SYSTEM_PROMPT_PASS1, None
 
-    p1 = re.search(r"<prompt_pass1>(.*?)</prompt_pass1>", content, re.DOTALL)
-    p2 = re.search(r"<prompt_pass2>(.*?)</prompt_pass2>", content, re.DOTALL)
+    p1 = get_tagged_prompt(content, "prompt_pass1")
+    p2 = get_tagged_prompt(content, "prompt_pass2")
 
     if p1 and p2:
-        pass1, pass2 = p1.group(1).strip(), p2.group(1).strip()
+        pass1, pass2 = p1, p2
     elif p1:
-        pass1 = p1.group(1).strip()
+        pass1 = p1
         _log(logger, logging.WARNING,
              "⚠️ В промпт-файле нет тега <prompt_pass2> — "
              "pass2 будет ВСТРОЕННЫМ.")
@@ -526,7 +527,7 @@ def load_two_pass_prompts(filepath: str, logger) -> tuple[str, str | None]:
              "⚠️ В промпт-файле нет тега <prompt_pass1> — "
              "pass1 будет ВСТРОЕННЫМ.")
         pass1 = SYSTEM_PROMPT_PASS1
-        pass2 = p2.group(1).strip()
+        pass2 = p2
     else:
         _log(logger, logging.INFO,
              "📝 Теги не найдены — файл целиком используется как pass1.")

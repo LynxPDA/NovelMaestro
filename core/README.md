@@ -16,7 +16,11 @@
 лог/модель: setup_logging / log_argv (фактическая команда запуска,
   значения --*api_key*/*token*/*secret* маскируются — M2) /
   determine_model (только из аргумента/`.env`; авто через GET /models убрано)
-промпты: load_prompt / get_tagged_prompt
+промпты: load_prompt (файл целиком) / get_tagged_prompt (теги;
+  открывающий тег — только в начале строки, поэтому упоминания
+  тегов в «#»-комментариях не захватываются; все скрипты —
+  translate_book, ner, ner_check, wiki, translate_check_llm,
+  translate_quality, web/pipeline — берут теги отсюда)
 текст (СИМВОЛЫ): split_text_smart / get_ngrams / is_cjk / is_cjk_string /
   normalize_for_search / build_smart_regex / find_exact_match
 правила замен «паттерн -> замена»: trim_rule_left / trim_rule_right
