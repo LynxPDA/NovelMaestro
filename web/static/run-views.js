@@ -71,6 +71,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       st.stage = job.action;
       st.job = job;
       st.log = [];
+      st.events = job.events ? [...job.events] : [];
       st.progress = job.progress || null;
       await render();
       attachStream(jobId);
@@ -210,6 +211,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return {
           job,
           lines: job.lines || [],
+          events: job.events || [],
           progress: job.progress || null,
         };
       })();
@@ -225,6 +227,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return logPanel({
           job: st.job,
           lines: st.log,
+          events: st.events,
           progress: st.progress,
           live: true,
         });
@@ -234,6 +237,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return logPanel({
           job: last.job,
           lines: last.lines,
+          events: last.events,
           progress: last.progress,
           live: false,
         });
@@ -1810,6 +1814,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         });
         st.job = r.job;
         st.log = [];
+        st.events = [];
         st.progress = r.job.progress || null;
         await render(); // дождаться DOM лога, иначе attachStream не найдёт его
         attachStream(r.job.id);
@@ -2387,6 +2392,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         });
         st.job = r.job;
         st.log = [];
+        st.events = [];
         st.progress = r.job.progress || null;
         await render(); // дождаться DOM лога, иначе attachStream не найдёт его
         attachStream(r.job.id);
@@ -2917,7 +2923,22 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h("span", { class: "progress-text", text: "" }),
     );
     paintBar(bar, view);
-    return h("div", { class: "run-panel" }, toolbar, bar, pre);
+    const panel = h("div", { class: "run-panel" }, toolbar, bar, pre);
+    if (job.action === "pipeline") {
+      // интерактивная визуализация лога: таблица глав с состоянием
+      // стадий ПОД логом (только главы заданного диапазона формы;
+      // пустой диапазон = все главы). События приходят из SSE или
+      // из истории запуска — таблица отражает и завершённые прогоны
+      panel.append(
+        h(
+          "div",
+          { class: "run-panel-title" },
+          "Главы · перевод → редактура → полировка",
+        ),
+        chapterTable(view.events),
+      );
+    }
+    return panel;
   }
 
   // текстовая строка прогресса («📊 12/636») для тулбара лога
@@ -2957,6 +2978,84 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         : running
           ? "ожидание первого результата…"
           : "";
+  }
+
+  // свёртка событий конвейера: {"id:stage" → status} (дедуп в onPayload
+  // уже гарантирует одно событие на пару, ключ — строка для клетки)
+  function chapterByKey(events) {
+    const byKey = {};
+    for (const ev of events || []) {
+      byKey[ev.id + ":" + ev.stage] = ev.status;
+    }
+    return byKey;
+  }
+
+  // диапазон глав для таблицы конвейера: из формы (st.values.pipeline,
+  // с автоподхватом диапазона опций); строки — реальные id глав.
+  // Пустой/неполный диапазон = все главы из опций
+  function chapterRange() {
+    const ch = (st.options || {}).chapters || {};
+    const ids = Array.isArray(ch.ids) && ch.ids.length
+      ? ch.ids
+      : [];
+    const v = st.values.pipeline || {};
+    const s = parseInt(v.start, 10);
+    const e = parseInt(v.end, 10);
+    // границы заданы частично/некорректно — игнорируем эту границу
+    const lo = Number.isFinite(s) ? s : null;
+    const hi = Number.isFinite(e) ? e : (lo == null ? null : lo);
+    if (lo == null && hi == null) return ids;
+    return ids.filter((id) =>
+      (lo == null || id >= lo) && (hi == null || id <= hi));
+  }
+
+  // таблица глав конвейера (под логом): строки = главы диапазона,
+  // колонки = стадии 1..3; клетки из событий запуска (без событий —
+  // «·»: стадии ещё не дошли). Данные из истории — то же самое
+  function chapterTable(events) {
+    const cols = [1, 2, 3];
+    const stageSym = { 1: "пер", 2: "ред", 3: "пол" };
+    const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
+    const byKey = chapterByKey(events || []);
+    const cells = [];
+    const range = chapterRange();
+    for (const id of range) {
+      const row = [h("th", { class: "ch-num" }, String(id))];
+      for (const stage of cols) {
+        const s = byKey[id + ":" + stage];
+        const cls = s
+          ? "ch-cell ch-" + String(s).toLowerCase()
+          : "ch-cell ch-pending";
+        row.push(
+          h(
+            "td",
+            { class: cls, title: `${stageSym[stage]}: ${s || "—"}` },
+            s ? statusSym[s] || s : "·",
+          ),
+        );
+      }
+      cells.push(h("tr", { class: "ch-row", "data-id": id }, row));
+    }
+    if (!cells.length) {
+      return h("div", { class: "empty" }, "Главы не найдены");
+    }
+    return h(
+      "table",
+      { class: "ch-table" },
+      h(
+        "thead",
+        {},
+        h(
+          "tr",
+          {},
+          h("th", {}, "#"),
+          h("th", {}, "перевод"),
+          h("th", {}, "редактура"),
+          h("th", {}, "полировка"),
+        ),
+      ),
+      h("tbody", {}, cells),
+    );
   }
 
   // стрим лога после старта. единственный источник лога —
@@ -3083,6 +3182,37 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
       const mini = page.querySelector(".progress-wrap.mini");
       if (mini) paintMini(mini);
+    } else if (payload.type === "event" && payload.event) {
+      const ev = payload.event;
+      // таблица глав — только pipeline-события (числовой stage);
+      // иначе селектор будет невалидным и уронит стрим
+      if (ev && ev.id != null && typeof ev.stage === "number") {
+        // дедуп: snapshot стрима повторяет события из attachToJob
+        const prev = st.events.findIndex(
+          (e) => e.id === ev.id && e.stage === ev.stage,
+        );
+        if (prev >= 0) st.events[prev] = ev;
+        else st.events.push(ev);
+        if (live) {
+          // интерактивная визуализация: клетка таблицы под логом
+          // обновляется сразу (строка ищется по data-id — реальная
+          // глава, а не позиция: нумерация может быть разреженной).
+          // Главы вне диапазона формы в таблице нет — событие
+          // копится в st.events и появится при перерисовке
+          const t = page.querySelector(".ch-table");
+          if (t) {
+            const cell = t.querySelector(
+              `.ch-row[data-id="${ev.id}"] .ch-cell:nth-child(${ev.stage + 1})`,
+            );
+            if (cell) {
+              const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
+              cell.textContent = statusSym[ev.status] || ev.status;
+              cell.className = "ch-cell ch-"
+                + String(ev.status).toLowerCase();
+            }
+          }
+        }
+      }
     } else if (payload.type === "status") {
       st.job.status = payload.status;
       // кэш последнего запуска этой стадии устарел — при возврате
