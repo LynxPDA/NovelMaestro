@@ -2526,21 +2526,24 @@ def _stage_options(ctx: dict) -> dict:
         if pr.is_dir():
             out["options"]["prompts"] = sorted(
                 f.name for f in pr.iterdir() if f.is_file())
-        # pipeline: автоподхват общего промпт-файла с тегами — ровно
-        # тот, что выберет auto-режим конвейера (первый существующий
-        # кандидат из _PROMPT_COMBINED_CANDIDATES с тегами)
-        if ctx["params"]["key"] == "pipeline":
-            for cand in ("pipeline_prompt.txt", "prompts.txt",
-                         "translate_book_prompt.txt"):
-                f = pdir / "prompts" / cand
-                try:
-                    text = f.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    continue
-                if any(common.get_tagged_prompt(text, tag)
-                       for tag in ("translate", "redact", "polish")):
-                    out["options"]["auto_prompt"] = f"prompts/{cand}"
-                    break
+        # автоподхват общего промпт-файла с тегами — ровно тот, что
+        # выберет auto-режим конвейера (первый существующий кандидат
+        # из _PROMPT_COMBINED_CANDIDATES с тегами). Считается для
+        # ЛЮБОЙ стадии: кэш опций общий на проект — иначе при первом
+        # запросе чужой стадии pipeline получал кэш без auto_prompt,
+        # и «Общий промпт-файл» оставался пустым при живом файле
+        for cand in ("pipeline_prompt.txt", "prompts.txt",
+                     "translate_book_prompt.txt"):
+            f = pdir / "prompts" / cand
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if any(common.get_tagged_prompt(text, tag)
+                   for tag in ("translate_lr", "translate",
+                               "redact", "polish")):
+                out["options"]["auto_prompt"] = f"prompts/{cand}"
+                break
         # файлы корня проекта (для полей files с dir="");
         # dot-файлы (.env, .web_secret) не показываем — секреты
         root = sorted(f.name for f in pdir.iterdir()

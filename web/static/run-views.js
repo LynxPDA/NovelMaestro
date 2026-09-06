@@ -406,6 +406,22 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // синхронизация режимов: значения формы — общие (st.values),
     // инициализация один раз на выбор стадии (дефолты + .env-префилл)
     if (!st.values[key]) initFormValues(key, spec);
+    // pipeline: автоподхват «Общего промпт-файла» при КАЖДОМ рендере —
+    // файл мог появиться после первой инициализации формы (значения
+    // кешируются на страницу); пустой выбор добиваем кандидатом auto
+    if (key === "pipeline" && st.options.auto_prompt) {
+      const v = st.values[key];
+      const pf = (spec.fields || []).find((x) => x.name === "prompt_file");
+      const auto = UICore.fileBase(st.options.auto_prompt);
+      const pool = (st.options.prompts || []).filter(
+        (n) => !(pf && pf.ext || []).length
+          || (pf.ext || []).some(
+            (e) => n.toLowerCase().endsWith(e.toLowerCase())),
+      );
+      if (v && pf && !v.prompt_file && pool.includes(auto)) {
+        v.prompt_file = auto;
+      }
+    }
     // «Простой режим» — только для стадий с пресетом (spec.simple);
     // translate_check/batch_replace/compile — только экспертные,
     // переключатель не показываем
@@ -1856,26 +1872,27 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны;
     // чипсы полей {ner_block} — после «Мин. count для глоссария»;
-    // расширенный контекст (действия 9/10) — поля словаря/правил/примеров
+    // расширенный контекст (действие 9) — поля словаря/правил/примеров
     if (key === "pipeline") {
       const nb = nerBlockChips(key);
       const nmWrap = fieldWraps["ner_min_count"];
       const idx = nmWrap ? fieldNodes.indexOf(nmWrap) : -1;
       if (idx >= 0) fieldNodes.splice(idx + 1, 0, nb.bar, nb.box);
       nb.loadFields();
-      // словарь/правила/примеры + бюджеты — только для действий 9/10
+      // словарь/правила/примеры + бюджеты — только для действия 9;
+      // «Мин. count для имён» не участвует (имены — только в polish)
       const actionSel = fieldWraps["action"] && fieldWraps["action"]._input;
       const extNames = ["dict_file", "rules_file", "examples_file",
                         "fewshot_k", "fewshot_threshold",
-                        "rules_budget", "examples_budget",
-                        "request_budget", "dict_fields"];
+                        "request_budget"];
       function applyPipelineAction() {
-        const ext = actionSel && ["9", "10"].includes(
-          String(actionSel.value));
+        const ext = actionSel && String(actionSel.value) === "9";
         for (const name of extNames) {
           const w = fieldWraps[name];
           if (w) w.classList.toggle("hidden", !ext);
         }
+        const nmw = fieldWraps["names_min_count"];
+        if (nmw) nmw.classList.toggle("hidden", ext);
       }
       if (actionSel) {
         actionSel.addEventListener("change", applyPipelineAction);

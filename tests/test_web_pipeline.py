@@ -106,15 +106,15 @@ def test_pipeline_script_path():
 
 
 def test_pipeline_action_options():
-    """Тип работы: 10 вариантов с подписями исходников/циклов;
-    дефолт — полный цикл (8); 9/10 — расширенный контекст."""
+    """Тип работы: 9 вариантов с подписями исходников/циклов;
+    дефолт — полный цикл (8); 9 — расширенный контекст."""
     from web.stages import _LLM_FIELDS
     spec = spec_for("pipeline")
     assert spec is not None
     action = next(f for f in spec["fields"] if f["name"] == "action")
     assert action["type"] == "select"
     assert action["options"] == ["1", "2", "3", "4", "5", "6", "7",
-                                  "8", "9", "10"]
+                                  "8", "9"]
     assert action["default"] == "8"
     labels = action["labels"]
     assert labels["1"] == "Перевод"
@@ -126,7 +126,6 @@ def test_pipeline_action_options():
     assert labels["7"] == "Сокращенный цикл: Редактура -> Полировка"
     assert labels["8"] == "Полный цикл: Перевод -> Редактура -> Полировка"
     assert labels["9"] == "Перевод с расширенным контекстом"
-    assert labels["10"] == "Полный цикл с расширенным контекстом"
     # единая модель конвейера: PIPELINE_MODEL → MODEL
     model = next(f for f in spec["fields"] if f["name"] == "model")
     assert model in _LLM_FIELDS
@@ -286,18 +285,16 @@ def test_build_pipeline_ner_fields_argv():
 
 
 def test_pipeline_extended_action_specs():
-    """Действия 9/10 — расширенный контекст (стадии 1 и 1,2,3)."""
+    """Действие 9 — расширенный контекст (стадия 1)."""
     from web.pipeline import _ACTION_SPECS
     a9 = _ACTION_SPECS[9]
     assert a9["stages"] == [1]
     assert a9["extended"] is True
     assert "расширенным контекстом" in a9["name"]
-    a10 = _ACTION_SPECS[10]
-    assert a10["stages"] == [1, 2, 3]
-    assert a10["extended"] is True
-    # обычные действия — без extended
+    # действия 1–8 — без extended, действия 10 больше нет
     assert "extended" not in _ACTION_SPECS[8]
     assert "extended" not in _ACTION_SPECS[1]
+    assert 10 not in _ACTION_SPECS
 
 
 def test_build_stage_cmd_extended_context(tmp_path):
@@ -317,26 +314,33 @@ def test_build_stage_cmd_extended_context(tmp_path):
         assert "--examples_file" not in cmd
         assert "--fewshot_k" not in cmd
         assert "--request_budget" not in cmd
-    # с файлами — флаги во всех стадиях (цикл 10)
+    # с файлами — флаги во всех стадиях (для циклов с редактурой/полировкой
+    # тоже пробрасываются — задействуются только при действии 9)
     for stage in (1, 2, 3):
         cmd = _cmd(stage,
                    dict_file="source/dict.json",
                    rules_file="source/rules.md",
                    examples_file="source/examples.json",
                    fewshot_k=5, fewshot_threshold=0.2,
-                   rules_budget=1000, examples_budget=2000,
                    request_budget=16000,
-                   dict_fields="term,translation,type")
+                   ner_file="my_ner.json")
         joined = " ".join(cmd)
         assert "--dict_file source/dict.json" in joined
         assert "--rules_file source/rules.md" in joined
         assert "--examples_file source/examples.json" in joined
         assert "--fewshot_k 5" in joined
         assert "--fewshot_threshold 0.2" in joined
-        assert "--rules_budget 1000" in joined
-        assert "--examples_budget 2000" in joined
         assert "--request_budget 16000" in joined
-        assert "--dict_fields term,translation,type" in joined
+        # ner_file — не расширенный флаг: перекрывает ner.json во всех
+        # стадиях и без расширенных файлов
+        assert "--ner_file my_ner.json" in joined
+    # ner_file без расширенного контекста — тоже прокидывается
+    for stage in (1, 2, 3):
+        cmd = _cmd(stage, ner_file="my_ner.json")
+        assert cmd[cmd.index("--ner_file") + 1] == "my_ner.json"
+    # без ner_file — дефолт ner.json
+    cmd = _cmd(1)
+    assert cmd[cmd.index("--ner_file") + 1] == "ner.json"
     # request_budget=0 — флаг не передаётся (выключено)
     cmd = _cmd(1, dict_file="source/dict.json", request_budget=0)
     assert "--request_budget" not in cmd
@@ -351,9 +355,8 @@ def test_build_pipeline_extended_argv():
             "rules_file": "source/rules.md",
             "examples_file": "source/examples.json",
             "fewshot_k": "4", "fewshot_threshold": "0.25",
-            "rules_budget": "1500", "examples_budget": "3000",
             "request_budget": "20000",
-            "dict_fields": "term,translation"}
+            "ner_file": "my_ner.json"}
     argv = build_command("pipeline", base, ctx)
     joined = " ".join(argv)
     assert "--action 9" in joined
@@ -362,15 +365,14 @@ def test_build_pipeline_extended_argv():
     assert "--examples_file source/examples.json" in joined
     assert "--fewshot_k 4" in joined
     assert "--fewshot_threshold 0.25" in joined
-    assert "--rules_budget 1500" in joined
-    assert "--examples_budget 3000" in joined
     assert "--request_budget 20000" in joined
-    assert "--dict_fields term,translation" in joined
+    assert "--ner_file my_ner.json" in joined
     # пустые поля — без флагов
     argv2 = build_command("pipeline",
                           {"action": "9", "host": "http://h",
                            "model": "m", "api_key": "k"}, ctx)
     assert "--dict_file" not in " ".join(argv2)
+    assert "--ner_file" not in " ".join(argv2)
 
 
 def test_warn_missing_prompt_tag_extended(tmp_path, monkeypatch):
