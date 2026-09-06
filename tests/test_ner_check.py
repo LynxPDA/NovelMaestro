@@ -865,14 +865,16 @@ def test_ner_check_rag_save_interval(tmp_path, monkeypatch):
 
 
 def test_get_prompt_tag_and_comments(tmp_path, monkeypatch):
-    """Тег <prompt_check> извлекается из файла; комментарии вне тега
-    (# …) в промпт НЕ попадают; без тега — файл целиком."""
+    """Тег <prompt_ner_check> извлекается из файла; комментарии вне
+    тега (# …) в промпт НЕ попадают; упоминание ДРУГОГО тега в
+    комментарии не захватывается (тег — только в начале строки);
+    без тега — файл целиком."""
     monkeypatch.chdir(tmp_path)
     pf = tmp_path / "ner_check_prompt.txt"
     pf.write_text(
         "# Комментарий вне тега — не должен попасть в промпт.\n"
-        "<prompt_check>\nТы — редактор. Проверь {glossary}.\n"
-        "</prompt_check>\n# Ещё комментарий после тега.\n",
+        "<prompt_ner_check>\nТы — редактор. Проверь {glossary}.\n"
+        "</prompt_ner_check>\n# Ещё комментарий после тега.\n",
         encoding="utf-8")
     import argparse
     import logging
@@ -884,6 +886,14 @@ def test_get_prompt_tag_and_comments(tmp_path, monkeypatch):
     assert "Комментарий вне тега" not in p
     assert "Ещё комментарий после тега" not in p
     assert p.startswith("Ты — редактор.") and "{glossary}" in p
+    # упоминание тега в комментарии (не в начале строки) не захватывается
+    pf.write_text(
+        "# RAG: если тег <prompt_rag> не нужен — удали его.\n"
+        "<prompt_ner_check>\nТЕЛО.\n</prompt_ner_check>\n",
+        encoding="utf-8")
+    args.prompt_file = str(pf)
+    p = NC.get_prompt(args, _logger())
+    assert p == "ТЕЛО."
     # без тега — файл целиком (обратная совместимость)
     pf.write_text("Целиком промпт.\n", encoding="utf-8")
     args.prompt_file = str(pf)

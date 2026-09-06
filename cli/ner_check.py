@@ -46,7 +46,6 @@ import copy
 import difflib
 import json
 import os
-import re
 import shutil
 import sys
 import threading
@@ -93,6 +92,7 @@ from core.common import (  # noqa: E402
     fts_escape,
     fts_search_all,
     get_server_config,
+    get_tagged_prompt,
     glossary_body,
     load_prompt,
     merge_review_entries,
@@ -124,31 +124,57 @@ TYPES_STAGE_PREFIX = (
     "группы записей.\n\n")
 
 DEFAULT_NER_RAG_PROMPT = """\
-Ты — профессиональный редактор и локализатор. Ниже дан ОДИН термин
-(запись JSON с полем "examples" — фрагменты книги, где он
-встречается).
+Ты — профессиональный редактор и локализатор. Ниже дана ОДНА запись
+глоссария ({ner_block}) и релевантные фрагменты книги ({rag_block}),
+где термин встречается.
 
 **Твоя задача:** уточни ТОЛЬКО запрошенный термин: исправь значения
 выбранных полей, если по фрагментам видно, что текущее значение
 неверно. Неизменённые поля скопируй ДОСЛОВНО.
 
+Оценивай запись по следующим критериям:
+
+**1. Корректность и соответствие контексту (фрагменты)**
+- Неверный перевод, искажение смысла или неверный тип сущности
+  (например, Person вместо Location) — с опорой на фрагменты.
+- Отсутствие адаптации (калькирование оригинала, неестественное
+  звучание).
+
+**2. Консистентность внутри записи**
+- Противоречия между переводом, типом, контекстом и примечаниями
+  (notes); несоответствие перевода роду/числу, видимому из
+  фрагментов.
+
+**3. Стилистика и грамматика**
+- Грамматические ошибки, несогласования падежей/родов.
+- Смешение стилей (например, неуместные архаизмы рядом с современным
+  сленгом).
+
+**4. Форматирование, типографика и капитализация**
+- Непоследовательные заглавные/строчные (титулы, названия навыков,
+  артефактов, топонимов); разнобой в числительных, кавычках, дефисах.
+
 **Проверяемые поля:** {fields}
 
 ### ФОРМАТ ОТВЕТА
-Верни ТОЛЬКО JSON-массив без markdown-заборов — одна запись (или
-пустой массив, если уточнений нет):
+Верни ТОЛЬКО JSON-массив без markdown-заборов и пояснений — одна
+запись (или пустой массив, если уточнений нет):
 [{"term": "<термин дословно>", "<поле>": "<исправленное значение>", ..., "reason": "<обоснование по фрагментам>"}]
 
 ### ВАЖНЫЕ ПРАВИЛА
 1. Термин (term) — идентификатор записи: менять его ЗАПРЕЩЕНО.
 2. Возвращай ТОЛЬКО запрошенный термин — записи по другим терминам
    не включай.
-3. Поля можно править только из списка «Проверяемые поля»; остальные
-   поля записи не возвращай.
-4. Не выдумывай: если по фрагментам правка не обоснована — верни
-   пустой массив.
+3. Поля можно править только из списка «Проверяемые поля»;
+   незатронутые поля скопируй в запись ДОСЛОВНО.
+4. Без выдумок: если по фрагментам правка не обоснована — верни
+   пустой массив [].
 
-## ТЕРМИН И ФРАГМЕНТЫ
+## ЗАПИСЬ ГЛОССАРИЯ
+
+{ner_block}
+
+## ФРАГМЕНТЫ КНИГИ
 
 {rag_block}
 """
@@ -377,30 +403,68 @@ def resolve_server(args, logger):
 
 
 def get_prompt(args, logger) -> str:
-    """Промпт проверки выбранных типов: тег <prompt_check> из файла;
-    нет тега — файл целиком (обратная совместимость); нет файла —
-    встроенный DEFAULT_NER_CHECK_PROMPT."""
+    """Промпт проверки выбранных типов: тег <prompt_ner_check> из
+    файла; нет тега — файл целиком (обратная совместимость); нет
+    файла — встроенный DEFAULT_NER_CHECK_PROMPT."""
     text = load_prompt(args.prompt_file, logger)
     if not text:
         logger.info("ℹ Внешний промпт не найден — встроенный fallback.")
         return DEFAULT_NER_CHECK_PROMPT
-    m = re.search(r"<prompt_check>(.*?)</prompt_check>", text, re.DOTALL)
+    m = get_tagged_prompt(text, "prompt_ner_check")
     if m:
-        return m.group(1).strip()
+        return m
     return text
 
 
 def render_prompt(prompt_tpl: str, body: str, fields=None) -> str:
-    """Подстановка плейсхолдеров: {glossary}/{rag_block} — тело,
-    {fields} — список проверяемых полей (term не включается)."""
+    """Подстановка плейсхолдеров whole/types-проходов: {glossary} —
+    тело, {fields} — список проверяемых полей (term не включается)."""
     fields_line = ", ".join(fields) if fields else "-"
     if "{glossary}" in prompt_tpl:
         tpl = prompt_tpl.replace("{glossary}", body)
-    elif "{rag_block}" in prompt_tpl:
-        tpl = prompt_tpl.replace("{rag_block}", body)
     else:
         tpl = prompt_tpl.rstrip() + "\n\n## ГЛОССАРИЙ\n\n" + body
     return tpl.replace("{fields}", fields_line)
+
+
+def render_rag_prompt(prompt_tpl: str, record: str, examples: str,
+                      fields=None) -> str:
+    """Подстановка RAG-промпта: {ner_block} — JSON-запись термина
+    (как во всех глоссарных вставках), {rag_block} — только
+    фрагменты (JSON-массив строк), {fields} — проверяемые поля.
+
+    Legacy: во внешних промпт-файлах проектов встречается вариант
+    с единым {rag_block} (запись + фрагменты одной вставкой) — он
+    продолжает работать: если {ner_block} в шаблоне нет, в
+    {rag_block} подставляется комбинированный блок."""
+    fields_line = ", ".join(fields) if fields else "-"
+    if "{ner_block}" in prompt_tpl:
+        tpl = prompt_tpl.replace("{ner_block}", record)
+        tpl = tpl.replace("{rag_block}", examples)
+        if "{ner_block}" not in tpl and "{rag_block}" not in tpl:
+            return tpl.replace("{fields}", fields_line)
+    elif "{rag_block}" in prompt_tpl:
+        combined = build_rag_block_json(record, examples)
+        tpl = prompt_tpl.replace("{rag_block}", combined)
+        return tpl.replace("{fields}", fields_line)
+    # плейсхолдеров нет — добавляем в конец
+    tpl = (prompt_tpl.rstrip()
+           + "\n\n## ЗАПИСЬ ГЛОССАРИЯ\n\n" + record
+           + "\n\n## ФРАГМЕНТЫ КНИГИ\n\n" + examples + "\n")
+    return tpl.replace("{fields}", fields_line)
+
+
+def build_rag_block_json(record: str, examples: str) -> str:
+    """Комбинированный блок для legacy-шаблонов: запись + фрагменты
+    одной вставкой (формат прежнего {rag_block})."""
+    try:
+        rec = json.loads(record)
+        rec["examples"] = json.loads(examples) if examples.strip() else []
+    except ValueError:
+        # теоретически невозможно (запись/фрагменты собираются здесь же),
+        # но падать на этапе сборки промпта недопустимо
+        return record + "\n\n" + examples
+    return json.dumps(rec, ensure_ascii=False, indent=1)
 
 
 def run_pass_tasks(title, items, prompt_tpl, args, logger):
@@ -455,33 +519,79 @@ def run_batch(task, prompt_tpl, args, base_url, api_key, model, logger):
 
 
 def load_rag_prompt(prompt_file: str, logger) -> str:
-    """RAG-промпт: тег <prompt_rag> из файла (или --rag_prompt_file,
-    или --prompt_file); нет тега — встроенный DEFAULT_NER_RAG_PROMPT."""
-    for f in (prompt_file,):
-        if not f or not os.path.exists(f):
-            continue
+    """RAG-промпт: тег <prompt_rag> из файла; нет тега — встроенный
+    DEFAULT_NER_RAG_PROMPT."""
+    if prompt_file and os.path.exists(prompt_file):
         try:
-            text = open(f, "r", encoding="utf-8").read()
+            text = open(prompt_file, "r", encoding="utf-8").read()
         except OSError:
-            continue
-        m = re.search(r"<prompt_rag>(.*?)</prompt_rag>", text, re.DOTALL)
+            text = ""
+        m = get_tagged_prompt(text, "prompt_rag")
         if m:
-            return m.group(1).strip()
+            return m
     logger.info("ℹ RAG-промпт: тег <prompt_rag> не найден — встроенный "
                 "fallback.")
     return DEFAULT_NER_RAG_PROMPT
 
 
+def build_rag_record(term, items_by_term, fields=None) -> str:
+    """JSON-запись термина для {ner_block}: одна строка — {"term",
+    поля записи…} (без фрагментов; «no_record»: true, если записи
+    нет в ner.json). Единый JSON-формат глоссарных вставок."""
+    selected = {f.strip() for f in fields} if fields else None
+    item = ner_item_lookup(items_by_term, term)
+    rec = {"term": term}
+    if item:
+        rec.update({k: v for k, v in
+                    format_ner_record(item, selected).items()
+                    if k != "term"})
+    else:
+        rec["no_record"] = True
+    return json.dumps(rec, ensure_ascii=False)
+
+
+def build_rag_examples(term, items_by_term, db, budget) -> str:
+    """Фрагменты книги для {rag_block}: JSON-массив строк (только
+    контекст, без записи термина). FTS5-поиск по term (исходный
+    термин — для chapter-источника), при пустом результате — по
+    translation (переведённые источники); равномерная выборка (не
+    только начало книги), бюджет — budget СИМВОЛОВ."""
+    item = ner_item_lookup(items_by_term, term)
+    translation = (item or {}).get("translation") or ""
+    ev = fts_escape(item["term"] if item else term)
+    hits = fts_search_all(db, f'"{ev}"')
+    if not hits and translation:
+        # перевод — fallback для переведённых источников
+        # (translated/redacted/polished)
+        ev = fts_escape(translation)
+        hits = fts_search_all(db, f'"{ev}"')
+    examples = []
+    if hits:
+        frags = even_sample(hits, max(1, budget // 1500))
+        # нарезаем фрагменты по остатку бюджета
+        used = 0
+        for f in frags:
+            if used >= budget:
+                break
+            take = min(len(f), budget - used)
+            examples.append(f[:take])
+            used += take
+    return "[\n" + ",\n".join(
+        "  " + json.dumps(e, ensure_ascii=False)
+        for e in examples) + "\n]"
+
+
 def build_rag_block(terms, items_by_term, db, budget, fields=None,
                     logger=None):
-    """Собирает блок «термины + релевантные фрагменты» для RAG-промпта:
-    JSON-массив, по одной записи на строку — {"term", поля записи...,
-    "examples": [фрагменты]}. fields — поля записи ner.json,
-    передаваемые LLM (термин — всегда; дефолт — type/translation);
-    фрагменты — FTS5-поиск по term (исходный термин — для
-    chapter-источника), при пустом результате — по translation
-    (переведённые источники), равномерная выборка (не только начало
-    книги), суммарный бюджет — budget СИМВОЛОВ."""
+    """Комбинированный блок «термины + релевантные фрагменты» для
+    legacy-шаблонов с единым {rag_block}: JSON-массив, по одной
+    записи на строку — {"term", поля записи…, "examples":
+    [фрагменты]}. fields — поля записи ner.json, передаваемые LLM
+    (термин — всегда; дефолт — type/translation); фрагменты —
+    FTS5-поиск по term (исходный термин — для chapter-источника),
+    при пустом результате — по translation (переведённые
+    источники), равномерная выборка (не только начало книги),
+    суммарный бюджет — budget СИМВОЛОВ."""
     selected = {f.strip() for f in fields} if fields else None
     records = []
     for term in terms:
@@ -620,9 +730,14 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
     # блоки собираем заранее, воркеры только шлют LLM-запросы
     tasks = []
     for term in terms:
-        block = build_rag_block([term], items_by_term, db, args.rag_budget,
-                                fields, logger)
-        tasks.append((term, render_prompt(prompt_tpl, block)))
+        # новая схема: {ner_block} — JSON-запись, {rag_block} — только
+        # фрагменты; legacy-шаблоны с единым {rag_block} поддерживаются
+        # (комбинированный блок в render_rag_prompt)
+        record = build_rag_record(term, items_by_term, fields)
+        examples = build_rag_examples(term, items_by_term, db,
+                                      args.rag_budget)
+        tasks.append((term, render_rag_prompt(prompt_tpl, record,
+                                              examples, fields)))
 
     total = len(tasks)
     # ── Предпросмотр запроса (--preview-request): RAG первого термина ──

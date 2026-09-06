@@ -289,10 +289,15 @@ def load_prompt(path, logger=None):
 
 
 def get_tagged_prompt(content: str, tag: str):
-    """Извлекает <tag>...</tag> (DOTALL). Тега нет → None."""
+    """Извлекает <tag>…</tag> (DOTALL). Тега нет → None.
+
+    Открывающий тег распознаётся только В НАЧАЛЕ строки (допустимы
+    отступы): упоминания вида «# Если тег <x> не нужен...» в
+    комментариях промпт-файлов не захватываются. Закрывающий тег —
+    без якоря: он может стоять в конце строки с текстом (…</tag>)."""
     if not content:
         return None
-    m = re.search(rf"<{tag}>(.*?)</{tag}>", content, re.DOTALL)
+    m = re.search(rf"(?ms)^[ \t]*<{tag}>(.*?)</{tag}>", content)
     return m.group(1).strip() if m else None
 
 
