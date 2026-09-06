@@ -155,10 +155,13 @@ def test_ner_export_text(srv, tmp_path):
     _mk_ner(_mk_project(root))
     q = _q("ACTIVE/demo") + "&format=text"
     r = _request(port, "GET", f"/api/ner/export?{q}")
-    assert r["ok"] and r["name"] == "ner_analysis.txt"
-    assert "Чэнь Ян" in r["content"]
+    assert r["ok"] and r["name"] == "ner_analysis.jsonl"
+    assert "Чэнь Ян" in r["content"]  # JSONL: по записи на строку
+    lines = [json.loads(l) for l in r["content"].strip().splitlines()]
+    assert {rec["term"] for rec in lines} == {"陈阳", "林水", "青云宗"}
+    assert lines[0]["translation"] == "Чэнь Ян"
     # R6-C: aliases/голоса не экспортируются (опции убраны)
-    assert "aliases:" not in r["content"]
+    assert "aliases" not in r["content"]
 
 
 def test_ner_export_names(srv, tmp_path):

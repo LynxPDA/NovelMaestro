@@ -449,14 +449,13 @@ def test_build_parser_extended_flags():
                       "--rules_file", "source/rules.md",
                       "--examples_file", "source/examples.json",
                       "--fewshot_k", "5", "--fewshot_threshold", "0.2",
-                      "--rules_budget", "1000", "--examples_budget", "2000",
-                      "--request_budget", "16000",
-                      "--dict_fields", "term,translation,type"])
+                      "--request_budget", "16000"])
     assert a.dict_file == "source/dict.json"
     assert a.fewshot_k == 5 and a.fewshot_threshold == 0.2
-    assert a.rules_budget == 1000 and a.examples_budget == 2000
     assert a.request_budget == 16000
-    assert a.dict_fields == "term,translation,type"
+    assert not hasattr(a, "rules_budget")
+    assert not hasattr(a, "examples_budget")
+    assert not hasattr(a, "dict_fields")
 
 
 def test_process_item_extended_blocks(monkeypatch):
@@ -474,7 +473,6 @@ def test_process_item_extended_blocks(monkeypatch):
                  "type": "Person"}], d)
     d.close()
     ctx["dict_data"], ctx["dict_automaton"] = _lnd(d.name, 3, SilentLog())
-    ctx["dict_fields"] = "term,translation"
     # примеры — через настоящий load_examples (кэш n-грамм)
     import tempfile as _tf
     e = _tf.NamedTemporaryFile("w", suffix=".json", delete=False,
@@ -488,7 +486,6 @@ def test_process_item_extended_blocks(monkeypatch):
     e.close()
     ctx["examples"] = TB.load_examples(e.name, 3, SilentLog())
     ctx["fewshot_k"], ctx["fewshot_threshold"] = 2, 0.3
-    ctx["examples_budget"] = 0
     ctx["rules_block"] = "Глагол в конце."
     ctx["request_budget"] = 0
     ctx["prompt"] = ("D:{dict_block} R:{rules_block} "
@@ -502,7 +499,7 @@ def test_process_item_extended_blocks(monkeypatch):
     assert text == "ПЕРЕВОД"
     c = captured["content"]
     assert "Су Синюй" in c                      # словарь найден по чанку
-    assert "Оригинал:\n苏星宇走进了大殿。" in c   # пример релевантен
+    assert '"original_text": "苏星宇走进了大殿。"' in c  # пример релевантен
     assert "他去了市场" not in c                  # нерелевантный пример отсечён
     assert "R:Глагол в конце." in c
 
@@ -595,8 +592,10 @@ def test_main_extended_context_translate_lr(tmp_path, monkeypatch):
     assert "Обычный промпт." not in c      # <translate_lr> победил
     assert "D:" in c and "Су Синюй" in c
     assert "R:Правила: глагол в конце" in c
-    assert "=== Пример 1 ===" in c
-    assert "Оригинал:\n苏星宇走进了大殿。" in c
+    # few-shot — JSON-массив пар
+    assert '"original_text": "苏星宇走进了大殿。"' in c
+    assert '"translated_text": "Су Синюй вошёл в зал."' in c
+    assert "他去了市场" not in c
 
 
 def test_main_extended_without_files_plain_prompt(tmp_path, monkeypatch):
@@ -646,7 +645,7 @@ def test_main_preview_extended_blocks(tmp_path, monkeypatch):
     content = data["messages"][-1]["content"]
     assert "Су Синюй" in content
     assert "Правило одно." in content
-    assert "=== Пример 1 ===" in content
+    assert '"original_text": "苏星宇走进了大殿。"' in content
     assert data["meta"]["dict_terms"] == 1
     assert data["meta"]["examples"] == 1
     assert data["meta"]["rules_chars"] > 0

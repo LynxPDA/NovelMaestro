@@ -5010,7 +5010,7 @@ function exportModal(byType, project) {
   fmtJson.checked = true;
   const fmtPairs = [
     [fmtJson, "JSON — полные записи"],
-    [fmtText, "Текст — записи (Термин, Тип, Перевод)"],
+    [fmtText, "JSONL — записи по одной на строку"],
     [fmtNames, "Текст — имена (женские/мужские)"],
   ];
   const cntInp = h("input", {

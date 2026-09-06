@@ -25,23 +25,28 @@ NER: load_ner_data / find_relevant_ner (поиск по term+aliases в ориг
   collect_gender_names (поиск имён по translation; пол по наличию (female)/(male) в type) /
   extract_term_context (контекст термина из чанка: предложение с термином,
 расширенный контекст перевода (словарь/правила/примеры): словарь — тот же
-  load_ner_data + find_relevant_ner (формат ner.json, поиск по чанку +
-  source-сторонам выбранных примеров) /
+  load_ner_data + find_relevant_dict (формат ner.json, автодетект
+  направления: совпадения по term и translation, где больше — та
+  сторона; поиск по чанку + сторонам выбранных примеров) /
   load_examples (few-shot пары {original_text, translated_text}, алиасы
-  source/target — совместимо с translated_trace.json; кэш нормализации и
-  n-грамм source-стороны) /
-  find_relevant_examples (containment n-грамм, топ-K жадным отбором со
-  штрафом за пересечение — анти-дубликаты; отсечка по порогу — лучше без
-  примеров, чем с шумными; бюджет СИМВОЛЫ) /
-  format_fewshot_block (маркеры «=== Пример N ===» + Оригинал:/Перевод:) /
-  load_rules_block (справочник языка txt|md целиком, потолок бюджета СИМВОЛЫ)
+  source/target — совместимо с translated_trace.json; кэш нормализации
+  и n-грамм обеих сторон) /
+  find_relevant_examples (containment n-грамм по обеим сторонам пары —
+  автодетект направления, топ-K жадным отбором со штрафом за
+  пересечение — анти-дубликаты; отсечка по порогу — лучше без
+  примеров, чем с шумными) /
+  format_fewshot_block (JSON-массив пар, по одной на строку) /
+  load_rules_block (справочник языка txt|md целиком)
 контекст термина (продолжение):
   самое длинное из найденных; max_len — СИМВОЛЫ, 0 = выключено; границы —
   знаки конца любых языков (。！？.!?… и др.) + закрывающие кавычки/скобки;
   точных вхождений нет и threshold задан — нечёткий поиск по предложениям
   (n-граммное перекрытие, зеркало _fuzzy_hit); CJK — только точный)
-ner_check: filter_ner_items (порог count + типы) / format_ner_record /
-  glossary_body / build_ner_batches (count по убыванию, бюджет СИМВОЛЫ;
+ner_check: filter_ner_items (порог count + типы) / format_ner_record
+  (запись как JSON-объект для промптов: term — всегда, fields —
+  какие поля, None = все; aliases списком) /
+  glossary_body (JSON-массив записей, по одной на строку) /
+  build_ner_batches (count по убыванию, бюджет СИМВОЛЫ;
   fields — какие поля записи передавать LLM, None = все, term — всегда) /
   parse_rag_suggestions (текст LLM → список записей {term,<поле>,reason};
   fields — разрешённые поля, term — всегда) /

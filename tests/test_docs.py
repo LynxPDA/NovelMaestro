@@ -31,7 +31,7 @@ CORE_API = [
     "trim_rule_left", "trim_rule_right",
     "load_ner_data", "find_relevant_ner", "collect_gender_names",
     "load_examples", "find_relevant_examples", "format_fewshot_block",
-    "load_rules_block",
+    "load_rules_block", "find_relevant_dict",
     "normalize_for_search", "build_smart_regex", "extract_term_context",
     "filter_ner_items", "format_ner_record", "glossary_body",
     "build_ner_batches", "parse_rag_suggestions", "ner_item_lookup",

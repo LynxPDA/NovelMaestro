@@ -778,8 +778,9 @@ def load_examples(filepath, ngram_size=3, logger=None):
     Формат — список записей {"original_text", "translated_text"}
     (алиасы source/target тоже принимаются) — совместим с
     translated_trace.json конвейера. Возвращает список dict с кэшем
-    нормализации и n-грамм source-стороны (_norm, _ngrams) — для
-    быстрого релевантного отбора. Пусто/битый файл/нет файла → [].
+    нормализации и n-грамм ОБЕИХ сторон (_ngrams, _ngrams_t) — для
+    релевантного отбора с автодетектом направления перевода.
+    Пусто/битый файл/нет файла → [].
     """
     if not filepath or not os.path.exists(filepath):
         if logger:
@@ -807,12 +808,15 @@ def load_examples(filepath, ngram_size=3, logger=None):
         if not orig or not trans:
             continue
         norm = normalize_for_search(orig)
+        norm_t = normalize_for_search(trans)
         out.append({
             "original_text": orig,
             "translated_text": trans,
             "_norm": norm,
             "_ngrams": get_ngrams(norm, n=ngram_size)
                        if len(norm) >= ngram_size else set(),
+            "_ngrams_t": get_ngrams(norm_t, n=ngram_size)
+                         if len(norm_t) >= ngram_size else set(),
         })
     if logger:
         logger.info(f"✅ Примеров загружено: {len(out)}"
@@ -821,17 +825,21 @@ def load_examples(filepath, ngram_size=3, logger=None):
 
 
 def find_relevant_examples(text, examples, k=3, threshold=0.3,
-                           ngram_size=3, budget=0):
+                           ngram_size=3):
     """Отбор релевантных few-shot примеров для текста чанка.
 
-    Скоринг — containment: |ngrams(пары) ∩ ngrams(чанка)| / |ngrams(пары)|
-    (language-agnostic, работает и для CJK, и для кириллицы). Жадный
-    отбор топ-K со штрафом за пересечение с уже выбранными
-    (анти-дубликаты: после лучшего примера важно разнообразие);
-    отсечка по порогу — лучше без примеров, чем с шумными; укладка
-    в бюджет СИМВОЛОВ (original+translated обеих сторон).
+    Скоринг — containment по ОБЕИМ сторонам пары (автодетект
+    направления перевода: пара считается по стороне, где совпадений
+    больше — исходный язык или язык перевода):
+    max(|ngrams(src) ∩ ngrams(text)|/|ngrams(src)|,
+        |ngrams(tgt) ∩ ngrams(text)|/|ngrams(tgt)|).
+    Жадный отбор топ-K со штрафом за пересечение с уже выбранными
+    (анти-дубликаты); отсечка по порогу — лучше без примеров, чем
+    с шумными.
 
-    Возвращает список пар {"original_text", "translated_text"}.
+    Возвращает список пар {"original_text", "translated_text",
+    "_side"} — _side: сторона, по которой пример найден ("src"/
+    "tgt").
     """
     if not text or not examples:
         return []
@@ -841,47 +849,49 @@ def find_relevant_examples(text, examples, k=3, threshold=0.3,
     text_ngrams = get_ngrams(text_norm, n=ngram_size)
     scored = []
     for ex in examples:
-        ex_ngrams = ex.get("_ngrams") or set()
-        if not ex_ngrams:
-            continue
-        score = len(ex_ngrams & text_ngrams) / len(ex_ngrams)
+        src_ngrams = ex.get("_ngrams") or set()
+        tgt_ngrams = ex.get("_ngrams_t") or set()
+        src_score = (len(src_ngrams & text_ngrams) / len(src_ngrams)
+                     if src_ngrams else 0.0)
+        tgt_score = (len(tgt_ngrams & text_ngrams) / len(tgt_ngrams)
+                     if tgt_ngrams else 0.0)
+        score, side = ((src_score, "src") if src_score >= tgt_score
+                       else (tgt_score, "tgt"))
         if score >= threshold:
-            scored.append((score, ex))
+            scored.append((score, side, ex))
     scored.sort(key=lambda t: t[0], reverse=True)
 
-    selected, used, total = [], set(), 0
-    for score, ex in scored:
+    selected, used = [], set()
+    for score, side, ex in scored:
         if len(selected) >= k:
             break
-        chars = len(ex["original_text"]) + len(ex["translated_text"])
-        if budget and total + chars > budget:
-            continue
-        ex_ngrams = ex.get("_ngrams") or set()
+        ex_ngrams = ex.get("_ngrams" if side == "src" else "_ngrams_t") \
+            or set()
         if used and ex_ngrams:
             overlap = len(ex_ngrams & used) / len(ex_ngrams)
             if overlap >= 0.7:  # дубликат уже выбранного — пропускаем
                 continue
-        selected.append(ex)
+        selected.append({"original_text": ex["original_text"],
+                         "translated_text": ex["translated_text"],
+                         "_side": side})
         used |= ex_ngrams
-        total += chars
     return selected
 
 
 def format_fewshot_block(examples) -> str:
-    """Few-shot блок для промпта: «=== Пример N ===» + Оригинал:/Перевод:.
+    """Few-shot блок для промпта: JSON-массив пар, по одной на строку.
     Пустой список → "" (пустая строка)."""
-    parts = []
-    for i, ex in enumerate(examples, 1):
-        parts.append(
-            f"=== Пример {i} ===\n"
-            f"Оригинал:\n{ex.get('original_text', '')}\n"
-            f"Перевод:\n{ex.get('translated_text', '')}")
-    return "\n\n".join(parts)
+    if not examples:
+        return ""
+    return _json_one_per_line(
+        {"original_text": ex.get("original_text", ""),
+         "translated_text": ex.get("translated_text", "")}
+        for ex in examples)
 
 
-def load_rules_block(filepath, budget=0, logger=None):
-    """Справочник языка (rules.txt|md) целиком, с потолком бюджета
-    СИМВОЛОВ (обрезка до budget; 0 — без обрезки). Нет файла/ошибка → ""."""
+def load_rules_block(filepath, logger=None):
+    """Справочник языка (rules.txt|md) целиком. Нет файла/ошибка →
+    "" (общий потолок — --request_budget запроса)."""
     if not filepath or not os.path.exists(filepath):
         if logger:
             logger.warning(f"⚠️ Файл правил ({filepath}) не найден.")
@@ -893,13 +903,50 @@ def load_rules_block(filepath, budget=0, logger=None):
         if logger:
             logger.warning(f"⚠️ Не удалось прочитать правила {filepath}: {e}")
         return ""
-    content = content.strip()
-    if budget and len(content) > budget:
-        if logger:
-            logger.warning(f"✂️ Правила обрезаны до {budget} символов "
-                           f"(было {len(content)})")
-        content = content[:budget]
-    return content
+    return content.strip()
+
+
+def find_relevant_dict(text, dict_data, threshold, ngram_size,
+                       ner_fields="term,translation", automaton=None,
+                       include_aliases=True):
+    """Поиск по словарю перевода с автодетектом направления.
+
+    Направление перевода может быть любым, поэтому совпадения ищутся
+    по ОБОИМ сторонам записей (term и translation): где нашлось
+    больше — та сторона и выбирается. Для translation-стороны строю
+    перевёрнутые копии записей (term ↔ translation, aliases — сторона
+    оригинала — снимаются) с тем же кэшем _term_norm/_ngrams.
+    Возвращаемые записи всегда в канонической ориентации
+    (term = сторона, найденная в тексте; translation = противоположная).
+
+    Возвращает (JSON-строка, count) — как find_relevant_ner."""
+    if not text or not dict_data:
+        return "[]", 0
+    term_res, term_count = find_relevant_ner(
+        text, dict_data, threshold, ngram_size, ner_fields,
+        automaton=automaton, include_aliases=include_aliases,
+        min_count=0)
+    rev_data = []
+    for item in dict_data:
+        trans = str(item.get("translation") or "").strip()
+        if not trans:
+            continue
+        norm = normalize_for_search(trans)
+        rev = {k: v for k, v in item.items() if not k.startswith("_")}
+        rev["term"] = trans
+        rev["translation"] = item.get("term", "")
+        rev.pop("aliases", None)
+        rev["_term_norm"] = norm
+        rev["_term_lower"] = norm
+        rev["_ngrams"] = get_ngrams(norm, n=ngram_size) \
+            if len(norm) >= ngram_size else set()
+        rev_data.append(rev)
+    rev_res, rev_count = find_relevant_ner(
+        text, rev_data, threshold, ngram_size, ner_fields,
+        automaton=None, include_aliases=False, min_count=0)
+    if rev_count > term_count:
+        return rev_res, rev_count
+    return term_res, term_count
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -964,43 +1011,52 @@ NER_RECORD_FIELDS = (
 )
 
 
-def format_ner_record(item, idx, fields=None):
-    """Блок одной записи глоссария (список строк). idx — номер записи.
-    fields — какие поля передавать LLM (None = все); term — всегда.
-    Неизвестные ключи (новые поля ner.json) идут после известных."""
+def format_ner_record(item, fields=None):
+    """Запись глоссария как JSON-объект для промптов (dict).
+
+    term — всегда первым; fields — какие поля передавать LLM
+    (None = все); известные поля идут в каноническом порядке
+    (NER_RECORD_FIELDS), неизвестные ключи (новые поля ner.json) —
+    после них; пустые значения и пустые aliases опускаются.
+    aliases остаются списком."""
     selected = {f.strip() for f in fields} if fields else None
-    lines = [f"--- Запись {idx} ---", f"term: {item.get('term', '')}"]
+    out = {"term": item.get("term", "")}
     ordered = list(NER_RECORD_FIELDS) + [k for k in item
-                                        if k not in NER_RECORD_FIELDS
-                                        and k != "term"
-                                        and not k.startswith("_")]
+                                         if k not in NER_RECORD_FIELDS
+                                         and k != "term"
+                                         and not k.startswith("_")]
     for field in ordered:
         if selected is not None and field not in selected:
             continue
         value = item.get(field)
         if field == "aliases":
-            aliases = value or []
-            if not aliases:
+            if not value:
                 continue
-            lines.append(f"aliases: {', '.join(str(a) for a in aliases)}")
-            continue
-        if isinstance(value, (dict, list)):
-            value = json.dumps(value, ensure_ascii=False)
-        value = "" if value is None else str(value).strip()
-        if not value:
-            continue
-        lines.append(f"{field}: {value}")
-    lines.append("")
-    return lines
+        elif isinstance(value, (dict, list)):
+            if not value:
+                continue
+        else:
+            value = "" if value is None else str(value).strip()
+            if not value:
+                continue
+        out[field] = value
+    return out
+
+
+def _json_one_per_line(records) -> str:
+    """JSON-массив, по одному объекту на строку — компромактный и
+    читаемый для LLM формат вставки записей в промпты."""
+    if not records:
+        return "[]"
+    lines = ",\n".join(
+        "  " + json.dumps(r, ensure_ascii=False) for r in records)
+    return "[\n" + lines + "\n]"
 
 
 def glossary_body(items, fields=None):
-    """Тело глоссария для промпта: записи с перенумерацией 1..N.
-    fields — список полей записи для LLM (None = все)."""
-    lines = []
-    for i, item in enumerate(items, 1):
-        lines.extend(format_ner_record(item, i, fields))
-    return "\n".join(lines)
+    """Тело глоссария для промпта: JSON-массив записей (по одной на
+    строку). fields — список полей записи для LLM (None = все)."""
+    return _json_one_per_line(format_ner_record(it, fields) for it in items)
 
 
 def build_ner_batches(items, budget, fields=None):
@@ -1012,7 +1068,8 @@ def build_ner_batches(items, budget, fields=None):
                      key=lambda it: -_int_count(it.get("count")))
     batches, cur, cur_len = [], [], 0
     for item in ordered:
-        block = "\n".join(format_ner_record(item, 0, fields))
+        block = json.dumps(
+            format_ner_record(item, fields), ensure_ascii=False)
         if cur and cur_len + len(block) > budget:
             batches.append(cur)
             cur, cur_len = [], 0

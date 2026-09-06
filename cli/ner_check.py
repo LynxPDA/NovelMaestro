@@ -125,7 +125,8 @@ TYPES_STAGE_PREFIX = (
 
 DEFAULT_NER_RAG_PROMPT = """\
 Ты — профессиональный редактор и локализатор. Ниже дан ОДИН термин
-и релевантные фрагменты книги, где он встречается.
+(запись JSON с полем "examples" — фрагменты книги, где он
+встречается).
 
 **Твоя задача:** уточни ТОЛЬКО запрошенный термин: исправь значения
 выбранных полей, если по фрагментам видно, что текущее значение
@@ -473,29 +474,26 @@ def load_rag_prompt(prompt_file: str, logger) -> str:
 
 def build_rag_block(terms, items_by_term, db, budget, fields=None,
                     logger=None):
-    """Собирает блок «термины + релевантные фрагменты» для RAG-промпта.
-    fields — поля записи ner.json, передаваемые LLM (термин — всегда,
-    в заголовке; дефолт — type/translation); фрагменты — FTS5-поиск по
-    term (исходный термин — для chapter-источника), при пустом
-    результате — по translation (переведённые источники), равномерная
-    выборка (не только начало книги), суммарный бюджет — budget
-    СИМВОЛОВ."""
+    """Собирает блок «термины + релевантные фрагменты» для RAG-промпта:
+    JSON-массив, по одной записи на строку — {"term", поля записи...,
+    "examples": [фрагменты]}. fields — поля записи ner.json,
+    передаваемые LLM (термин — всегда; дефолт — type/translation);
+    фрагменты — FTS5-поиск по term (исходный термин — для
+    chapter-источника), при пустом результате — по translation
+    (переведённые источники), равномерная выборка (не только начало
+    книги), суммарный бюджет — budget СИМВОЛОВ."""
     selected = {f.strip() for f in fields} if fields else None
-    lines = []
+    records = []
     for term in terms:
         item = ner_item_lookup(items_by_term, term)
         translation = (item or {}).get("translation") or ""
-        type_str = (item or {}).get("type") or "?"
-        lines.append(f"--- {term} (тип: {type_str}) ---")
-        # выбранные поля записи (термин уже в заголовке)
+        rec = {"term": term}
         if item:
-            rec = format_ner_record(item, 0, selected)
-            for ln in rec[1:]:
-                if ln.startswith("term:"):
-                    continue
-                lines.append("  " + ln)
+            rec.update({k: v for k, v in
+                        format_ner_record(item, selected).items()
+                        if k != "term"})
         else:
-            lines.append("  (нет записи в ner.json)")
+            rec["no_record"] = True
         # ищем канонический термин (вариант LLM со скобками → запись)
         ev = fts_escape(item["term"] if item else term)
         hits = fts_search_all(db, f'"{ev}"')
@@ -504,20 +502,22 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
             # (translated/redacted/polished)
             ev = fts_escape(translation)
             hits = fts_search_all(db, f'"{ev}"')
-        if not hits:
-            lines.append("  (термин не найден в тексте)")
-            continue
-        frags = even_sample(hits, max(1, budget // 1500))
-        # нарезаем фрагменты по остатку бюджета
-        used = 0
-        for f in frags:
-            if used >= budget:
-                break
-            take = min(len(f), budget - used)
-            lines.append(f"  · {f[:take]}")
-            used += take
-        lines.append("")
-    return "\n".join(lines)
+        examples = []
+        if hits:
+            frags = even_sample(hits, max(1, budget // 1500))
+            # нарезаем фрагменты по остатку бюджета
+            used = 0
+            for f in frags:
+                if used >= budget:
+                    break
+                take = min(len(f), budget - used)
+                examples.append(f[:take])
+                used += take
+        rec["examples"] = examples
+        records.append(rec)
+    return "[\n" + ",\n".join(
+        "  " + json.dumps(r, ensure_ascii=False)
+        for r in records) + "\n]"
 
 
 def _rag_query(term, user_msg, args, base_url, api_key, model, logger,

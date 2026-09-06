@@ -73,6 +73,7 @@ from core.common import (
     determine_model,
     emit_progress,
     find_env_file,
+    find_relevant_dict,
     find_relevant_examples,
     find_relevant_ner,
     format_fewshot_block,
@@ -282,20 +283,20 @@ def process_item(internal_id, original_text, draft_text, ctx):
         original_text, ctx.get("examples") or [],
         k=ctx.get("fewshot_k", 3),
         threshold=ctx.get("fewshot_threshold", 0.3),
-        ngram_size=ctx["ner_ngram"],
-        budget=ctx.get("examples_budget", 0))
+        ngram_size=ctx["ner_ngram"])
     fewshot_block = format_fewshot_block(examples) if examples else "(нет)"
     if ctx.get("dict_data"):
-        # словарь: текст чанка + source-стороны выбранных примеров
+        # словарь: текст чанка + стороны выбранных примеров, по которым
+        # они найдены (сторона словаря — автодетект по числу совпадений)
         dict_search = original_text
         if examples:
             dict_search += "\n" + "\n".join(
-                e["original_text"] for e in examples)
-        dict_block, dict_count = find_relevant_ner(
+                e["original_text"] if e.get("_side") == "src"
+                else e["translated_text"] for e in examples)
+        dict_block, dict_count = find_relevant_dict(
             dict_search, ctx["dict_data"], ctx["ner_threshold"],
-            ctx["ner_ngram"], ctx.get("dict_fields", "term,translation"),
-            automaton=ctx.get("dict_automaton"),
-            include_aliases=True, min_count=0)
+            ctx["ner_ngram"],
+            automaton=ctx.get("dict_automaton"))
     else:
         dict_block, dict_count = "(нет)", 0
     rules_block = ctx.get("rules_block") or ""
@@ -309,8 +310,7 @@ def process_item(internal_id, original_text, draft_text, ctx):
     budget = ctx.get("request_budget", 0)
     if budget and len(user_content) > budget:
         err = (f"Превышен бюджет запроса: {len(user_content)} > {budget} "
-               f"символов. Уменьшите --chunk_size или бюджеты блоков "
-               f"(--rules_budget/--examples_budget).")
+               f"символов. Уменьшите --chunk_size или --request_budget.")
         fb = f"\n[FAIL: {err}]\n{original_text}\n[FAIL: {err}]\n"
         return internal_id, fb, f"Chunk {internal_id} FAIL: {err}"
     reference = (draft_text or "" if ctx["mode"] == "redact"
@@ -433,18 +433,12 @@ def build_parser():
     p.add_argument("--fewshot_k", type=int, default=3,
                    help="Макс. число примеров на чанк (few-shot).")
     p.add_argument("--fewshot_threshold", type=float, default=0.3,
-                   help="Порог схожести примера с чанком (0–1); ниже "
-                        "порога пример не берётся.")
-    p.add_argument("--rules_budget", type=int, default=2000,
-                   help="Макс. длина правил в промпте, СИМВОЛЫ.")
-    p.add_argument("--examples_budget", type=int, default=4000,
-                   help="Макс. длина few-shot блока, СИМВОЛЫ.")
+                   help="Порог схожести примера с чанком (0–1): доля "
+                        "n-грамм стороны примера, найденных в чанке; "
+                        "ниже порога пример не берётся.")
     p.add_argument("--request_budget", type=int, default=0,
                    help="Общий бюджет user-запроса, СИМВОЛЫ; 0 = выключено; "
                         "превышение — ошибка чанка.")
-    p.add_argument("--dict_fields", type=str, default="term,translation",
-                   help="Поля словаря в {dict_block} через запятую; "
-                        "aliases добавляются автоматически.")
     # Промпт
     p.add_argument("--prompt_file", default=None,
                    help="Внешний промпт (теги <translate>/<redact>/<polish> "
@@ -567,8 +561,7 @@ def main(argv=None):
             logger.warning(f"⚠️ Примеры не загружены: {args.examples_file}")
     rules_block = ""
     if args.rules_file:
-        rules_block = load_rules_block(
-            args.rules_file, args.rules_budget, logger)
+        rules_block = load_rules_block(args.rules_file, logger)
         if not rules_block:
             logger.warning(f"⚠️ Правила не загружены: {args.rules_file}")
     if extended:
@@ -660,19 +653,17 @@ def main(argv=None):
         ex0 = find_relevant_examples(
             orig0, examples, k=args.fewshot_k,
             threshold=args.fewshot_threshold,
-            ngram_size=args.ner_ngram,
-            budget=args.examples_budget)
+            ngram_size=args.ner_ngram)
         fs0 = format_fewshot_block(ex0) if ex0 else "(нет)"
         if dict_data:
             dict_search = orig0
             if ex0:
                 dict_search += "\n" + "\n".join(
-                    e["original_text"] for e in ex0)
-            db0, dc0 = find_relevant_ner(
+                    e["original_text"] if e.get("_side") == "src"
+                    else e["translated_text"] for e in ex0)
+            db0, dc0 = find_relevant_dict(
                 dict_search, dict_data, args.ner_threshold,
-                args.ner_ngram, args.dict_fields,
-                automaton=dict_automaton, include_aliases=True,
-                min_count=0)
+                args.ner_ngram, automaton=dict_automaton)
         else:
             db0, dc0 = "(нет)", 0
         rb0 = rules_block or "(нет)"
@@ -734,10 +725,8 @@ def main(argv=None):
                        else preset["min_len_ratio"]),
         # расширенный контекст
         dict_data=dict_data, dict_automaton=dict_automaton,
-        dict_fields=args.dict_fields,
         examples=examples, fewshot_k=args.fewshot_k,
         fewshot_threshold=args.fewshot_threshold,
-        examples_budget=args.examples_budget,
         rules_block=rules_block, request_budget=args.request_budget,
         logger=logger,
     )

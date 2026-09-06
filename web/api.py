@@ -1185,7 +1185,7 @@ def _ner_export(ctx: dict) -> dict:
     """Экспорт глоссария для анализа (GET /api/ner/export?project=&format=…).
 
     format=json  → полные записи JSON;
-    format=text  → записи текстом (format_ner_record, Термин/Тип/Перевод);
+    format=text  → JSONL по записи на строку (format_ner_record);
     format=names → имена по полу (женские/мужские).
     Общие фильтры: count_threshold, types.
     Возвращает {ok, name, content} — фронт скачивает файлом.
@@ -1231,11 +1231,14 @@ def _ner_export(ctx: dict) -> dict:
         return {"ok": True, "name": "ner_export.json", "content": content,
                 "total": len(filtered)}
     if fmt == "text":
-        lines: list[str] = []
-        for i, item in enumerate(filtered, 1):
-            lines.extend(common.format_ner_record(item, i))
-        return {"ok": True, "name": "ner_analysis.txt",
-                "content": "\n".join(lines), "total": len(filtered)}
+        # JSONL — по одной записи на строку (тот же формат, что в
+        # промптах: format_ner_record)
+        content = "\n".join(
+            _json.dumps(common.format_ner_record(item),
+                        ensure_ascii=False)
+            for item in filtered) + "\n"
+        return {"ok": True, "name": "ner_analysis.jsonl",
+                "content": content, "total": len(filtered)}
     # names: имена по полу
     female_types = _csv("female_types") or ["Person (female)"]
     male_types = _csv("male_types") or ["Person (male)"]

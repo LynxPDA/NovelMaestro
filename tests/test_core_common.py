@@ -1013,6 +1013,65 @@ def test_find_relevant_ner_fuzzy_match():
 def test_find_relevant_ner_empty_inputs(tmp_path):
     data, automaton = C.load_ner_data(_write_ner(tmp_path), 3, SilentLog())
     assert C.find_relevant_ner("", data, 0.7, 3, "term") == ("[]", 0)
+
+
+def test_find_relevant_dict_normal_direction(tmp_path):
+    """Обычное направление (чанк на языке term): записи с term-стороны,
+    ориентация каноническая."""
+    f = tmp_path / "dict.json"
+    f.write_text(json.dumps([
+        {"term": "苏星宇", "translation": "Су Синюй"},
+        {"term": "大殿", "translation": "великий зал"},
+    ], ensure_ascii=False), encoding="utf-8")
+    data, automaton = C.load_ner_data(str(f), 3, SilentLog())
+    s, cnt = C.find_relevant_dict("苏星宇走进了大殿", data, 0.7, 3,
+                                  automaton=automaton)
+    recs = json.loads(s)
+    assert cnt == 2
+    assert recs[0]["term"] == "苏星宇"
+    assert recs[0]["translation"] == "Су Синюй"
+
+
+def test_find_relevant_dict_reverse_direction(tmp_path):
+    """Обратное направление: чанк на языке translation — автодетект
+    выбирает translation-сторону, записи переворачиваются."""
+    f = tmp_path / "dict.json"
+    f.write_text(json.dumps([
+        {"term": "苏星宇", "translation": "Су Синюй"},
+        {"term": "大殿", "translation": "великий зал"},
+    ], ensure_ascii=False), encoding="utf-8")
+    data, automaton = C.load_ner_data(str(f), 3, SilentLog())
+    s, cnt = C.find_relevant_dict(
+        "Су Синюй вошёл в великий зал.", data, 0.7, 3,
+        automaton=automaton)
+    recs = json.loads(s)
+    assert cnt == 2
+    # term = сторона, найденная в тексте; translation — противоположная
+    by_term = {r["term"]: r for r in recs}
+    assert by_term["Су Синюй"]["translation"] == "苏星宇"
+    assert by_term["великий зал"]["translation"] == "大殿"
+
+
+def test_find_relevant_dict_prefers_bigger_side(tmp_path):
+    """Совпадения на обеих сторонах — берётся та, где больше записей."""
+    f = tmp_path / "dict.json"
+    f.write_text(json.dumps([
+        {"term": "苏星宇", "translation": "Су Синюй"},
+        {"term": "长老", "translation": "старейшина"},
+        {"term": "大殿", "translation": "зал"},
+    ], ensure_ascii=False), encoding="utf-8")
+    data, automaton = C.load_ner_data(str(f), 3, SilentLog())
+    # term-сторона: 2 совпадения (苏星宇, 长老); translation: 1 (зал)
+    s, cnt = C.find_relevant_dict("苏星宇和长老。 зал", data, 0.7, 3,
+                                  automaton=automaton)
+    recs = json.loads(s)
+    assert cnt == 2
+    assert {r["term"] for r in recs} == {"苏星宇", "长老"}
+
+
+def test_find_relevant_dict_empty_inputs():
+    assert C.find_relevant_dict("", [], 0.7, 3) == ("[]", 0)
+    assert C.find_relevant_dict("текст", [], 0.7, 3) == ("[]", 0)
     assert C.find_relevant_ner("текст", [], 0.7, 3, "term") == ("[]", 0)
 
 
@@ -1226,18 +1285,23 @@ def test_find_relevant_examples_k_limit(tmp_path):
     assert sel[0]["original_text"] == "相同句子3 内容"  # лучший — первым
 
 
-def test_find_relevant_examples_budget(tmp_path):
-    """Бюджет СИМВОЛОВ ограничивает суммарный размер выбранных пар."""
+def test_find_relevant_examples_side_autodetect(tmp_path):
+    """Автодетект направления: пара считается по стороне, где
+    совпадений больше (исходный язык или язык перевода)."""
     ex = _load_pairs(tmp_path, [
-        _pair("相同句子1 内容" + "字" * 10, "перевод " + "т" * 10),
-        _pair("相同句子2 内容" + "字" * 10, "перевод " + "т" * 10),
+        _pair("苏星宇走进了大殿。", "Су Синюй вошёл в зал."),
     ])
-    # пара ≈ 18+18 = 36 символов; бюджет 50 — влезает только первая
-    sel = C.find_relevant_examples("相同句子1 内容", ex, k=5,
-                                   threshold=0.2, budget=50)
-    assert len(sel) == 1
-    assert sum(len(e["original_text"]) + len(e["translated_text"])
-               for e in sel) <= 50
+    # обычное направление: чанк на исходном языке → сторона src
+    sel = C.find_relevant_examples("长老们看着苏星宇走进了大殿", ex,
+                                   k=1, threshold=0.3)
+    assert len(sel) == 1 and sel[0]["_side"] == "src"
+    # обратное: чанк на языке перевода → сторона tgt
+    sel = C.find_relevant_examples("Здесь Су Синюй вошёл в зал.", ex,
+                                   k=1, threshold=0.3)
+    assert len(sel) == 1 and sel[0]["_side"] == "tgt"
+    # обе стороны мимо порога — пусто
+    assert C.find_relevant_examples("совершенно другой текст", ex,
+                                    k=1, threshold=0.3) == []
 
 
 def test_find_relevant_examples_empty_inputs(tmp_path):
@@ -1252,21 +1316,20 @@ def test_format_fewshot_block():
         _pair("原文一", "Перевод один"),
         _pair("原文二", "Перевод два"),
     ])
-    assert block.startswith("=== Пример 1 ===")
-    assert "Оригинал:\n原文一\nПеревод:\nПеревод один" in block
-    assert "=== Пример 2 ===" in block
+    # JSON-массив, по одной паре на строку; служебный _side не утекает
+    assert block.startswith("[") and block.endswith("]")
+    assert '{"original_text": "原文一", "translated_text": "Перевод один"}' in block
+    assert '{"original_text": "原文二", "translated_text": "Перевод два"}' in block
+    assert "_side" not in block
 
 
 def test_load_rules_block(tmp_path):
     f = tmp_path / "rules.md"
     f.write_text("Правила:\n1. Глаголы ставятся в конце.\n", encoding="utf-8")
-    text = C.load_rules_block(str(f), 0, SilentLog())
+    text = C.load_rules_block(str(f), SilentLog())
     assert "Глаголы" in text
-    # бюджет: обрезка
-    text = C.load_rules_block(str(f), 12, SilentLog())
-    assert len(text) <= 12
     # нет файла → ""
-    assert C.load_rules_block(str(tmp_path / "нет.txt"), 0, SilentLog()) == ""
+    assert C.load_rules_block(str(tmp_path / "нет.txt"), SilentLog()) == ""
 
 
 # ══════════════════════════════════════════════════════════════════════

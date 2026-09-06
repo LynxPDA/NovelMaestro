@@ -68,34 +68,34 @@ def test_filter_ner_items_without_count():
 
 def test_format_and_glossary_body_fields():
     # по умолчанию — все поля (кроме служебных с «_»); пустые пропущены
-    lines = format_ner_record(ITEMS[0], 1)
-    assert lines[0] == "--- Запись 1 ---"
-    assert "term: 林凡" in lines and "context: герой" in lines
-    assert not any(l.startswith("notes:") for l in lines)
+    rec = format_ner_record(ITEMS[0])
+    assert rec["term"] == "林凡" and rec["context"] == "герой"
+    assert "notes" not in rec
     # fields — только выбранные; term всегда; count не показывается
-    lines = format_ner_record(ITEMS[0], 1, fields=["term", "type"])
-    assert any(l.startswith("type:") for l in lines)
-    assert not any(l.startswith("translation:") for l in lines)
-    assert not any(l.startswith("context:") for l in lines)
-    assert not any(l.startswith("count:") for l in lines)
-    # aliases — только когда выбраны; голоса больше не выводятся
+    rec = format_ner_record(ITEMS[0], fields=["term", "type"])
+    assert rec["type"] == "Person (male)"
+    assert "translation" not in rec
+    assert "context" not in rec
+    assert "count" not in rec
+    # aliases — только когда выбраны; голоса больше не выводятся;
+    # aliases остаются списком
     item = dict(ITEMS[1], aliases=["Цинъюнь"],
                 _votes_translation={"а": 2, "б": 1})
     body = glossary_body([item], fields=["term", "aliases"])
-    assert "aliases: Цинъюнь" in body
+    assert '"aliases": ["Цинъюнь"]' in body
     assert "_votes" not in body
     body_all = glossary_body(ITEMS[:2])
-    assert "--- Запись 1 ---" in body_all and "--- Запись 2 ---" in body_all
+    assert '"term": "林凡"' in body_all and '"term": "青云宗"' in body_all
     # новое поле записи (неизвестный ключ ner.json) — рендерится после
     # известных; в выбранный набор — только когда явно выбрано
     item = dict(ITEMS[0], gender_history="устойчиво",
                 extra_field=["а", "б"])
-    lines = format_ner_record(item, 1)
-    assert any(l.startswith("gender_history: ") for l in lines)
-    assert 'extra_field: ["а", "б"]' in lines
-    lines_sel = format_ner_record(item, 1, fields=["term", "type"])
-    assert not any(l.startswith("gender_history") for l in lines_sel)
-    assert not any(l.startswith("extra_field") for l in lines_sel)
+    rec = format_ner_record(item)
+    assert rec["gender_history"] == "устойчиво"
+    assert rec["extra_field"] == ["а", "б"]
+    rec_sel = format_ner_record(item, fields=["term", "type"])
+    assert "gender_history" not in rec_sel
+    assert "extra_field" not in rec_sel
 
 
 def test_build_ner_batches_sorted_by_count_desc():
@@ -571,7 +571,8 @@ def test_ner_check_threads_overall_progress(tmp_path, monkeypatch):
 # ──────────────────────────────────────────────────────────────────────
 def test_ner_check_rag_builds_block(tmp_path):
     """build_rag_block: термины из ner.json + релевантные фрагменты
-    книги равномерно (не с начала), бюджет соблюдается."""
+    книги равномерно (не с начала), бюджет соблюдается; блок — JSON
+    (примеры в поле examples)."""
     from core.common import build_fts_index
     text = "\n\n".join([
         "Линь Фан вошёл в зал. " * 20,
@@ -584,13 +585,14 @@ def test_ner_check_rag_builds_block(tmp_path):
     block = NC.build_rag_block(
         ["林凡", "青云宗", "火球术"], items_by_term, db, 2000,
         logger=SilentLog())
-    assert "林凡" in block and "Секта Цинъюнь" in block
-    assert "Линь Фан" in block  # фрагмент по переводу
+    recs = json.loads(block)
+    assert [r["term"] for r in recs] == ["林凡", "青云宗", "火球术"]
+    by_term = {r["term"]: r for r in recs}
+    assert any("Линь Фан" in e for e in by_term["林凡"]["examples"])
+    assert any("Цинъюнь" in e for e in by_term["青云宗"]["examples"])
     # бюджет: суммарная длина фрагментов ≤ бюджет × число терминов
-    import re as _re
-    frag_lines = [l for l in block.splitlines() if l.startswith("  · ")]
-    assert len(frag_lines) > 0
-    assert sum(len(l) for l in frag_lines) <= 2000 * 3 + 1000
+    total = sum(len(e) for r in recs for e in r["examples"])
+    assert total <= 2000 * 3 + 1000
 
 
 def test_ner_check_rag_searches_by_term(tmp_path):
@@ -617,27 +619,31 @@ def test_ner_check_rag_searches_by_term(tmp_path):
 
 def test_ner_check_rag_block_fields(tmp_path):
     """RAG: выбранные поля записи (fields) уходят в промпт, остальные
-    поля — нет; term — всегда в заголовке."""
+    поля — нет; term — всегда; блок — JSON."""
     from core.common import build_fts_index
     text = "Линь Фан вошёл в зал. " * 20
     db = build_fts_index(text, 1000)
     items_by_term = {i["term"]: i for i in ITEMS}
     block = NC.build_rag_block(["林凡"], items_by_term, db, 2000,
                                ["term", "type", "translation"])
-    assert "(тип: Person (male))" in block
-    assert "type: Person (male)" in block
-    assert "translation: Линь Фан" in block
-    assert "context:" not in block  # поле не выбрано
+    rec = json.loads(block)[0]
+    assert rec["term"] == "林凡"
+    assert rec["type"] == "Person (male)"
+    assert rec["translation"] == "Линь Фан"
+    assert "context" not in rec  # поле не выбрано
+    assert rec["examples"] and "Линь Фан вошёл" in rec["examples"][0]
     # notes/context — при выборе
     block2 = NC.build_rag_block(["青云宗"], items_by_term, db, 2000,
                                 ["term", "type", "translation", "notes"])
-    assert "notes: палладия" in block2
-    assert "context:" not in block2
+    rec2 = json.loads(block2)[0]
+    assert rec2["notes"] == "палладия"
+    assert "context" not in rec2
     # fields=None — все поля (как format_ner_record)
     block3 = NC.build_rag_block(["青云宗"], items_by_term, db, 2000)
-    assert "type: Location" in block3
-    assert "translation: Секта Цинъюнь" in block3
-    assert "notes: палладия" in block3
+    rec3 = json.loads(block3)[0]
+    assert rec3["type"] == "Location"
+    assert rec3["translation"] == "Секта Цинъюнь"
+    assert "палладия" in rec3["notes"]
 
 
 def test_ner_check_rag_main(tmp_path, monkeypatch):
