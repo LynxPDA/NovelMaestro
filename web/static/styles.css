@@ -12,6 +12,8 @@
   --accent-dim: #238636;
   --accent-2: #d29922;
   --danger: #f85149;
+  --ch-ok: #3fb950;
+  --ch-skip: #e3b341;
   --radius: 8px;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
   --sans:
@@ -33,6 +35,8 @@
   --accent-dim: #238636;
   --accent-2: #9a6700;
   --danger: #cf222e;
+  --ch-ok: #1a7f37;
+  --ch-skip: #9a6700;
   --btn-hover: #eaeef2;
   --log-bg: #f6f8fa;
   --bg-soft: #eaeef2;
@@ -1112,24 +1116,25 @@ input[type="number"] {
   color: var(--text-dim);
 }
 .ch-num {
-  color: var(--text-dim);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 .ch-cell {
   min-width: 52px;
-  font-size: 13px;
+  font-size: 15px;
+  font-weight: 600;
 }
 .ch-ok {
-  color: #2ecc71;
+  color: var(--ch-ok);
 }
 .ch-error {
   color: var(--danger);
 }
 .ch-skip {
-  color: #f39c12;
+  color: var(--ch-skip);
 }
 .ch-pending {
-  color: var(--text-dim);
+  color: var(--muted);
 }
 
 /* ── вкладка «Главы»: названия глав (тип файлов + правка) ── */

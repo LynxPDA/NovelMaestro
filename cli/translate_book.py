@@ -172,9 +172,12 @@ Output Format
 # ══════════════════════════════════════════════════════════════════════
 MODE_PRESETS = {
     #            min_len_ratio  max_retries  threads_cap  trace_default
-    "translate": dict(min_len_ratio=0.5, max_retries=3,  threads_cap=16, trace_default=True),
-    "redact":    dict(min_len_ratio=0.9, max_retries=3,  threads_cap=64, trace_default=False),
-    "polish":    dict(min_len_ratio=0.9, max_retries=3,  threads_cap=16, trace_default=False),
+    # min_len_ratio отключён (0.0): контроль соотношения длин — стадия
+    # «Проверка перевода» (translate_check); тут только защита от
+    # пустого ответа (в stream_chat_completion всегда)
+    "translate": dict(min_len_ratio=0.0, max_retries=3,  threads_cap=16, trace_default=True),
+    "redact":    dict(min_len_ratio=0.0, max_retries=3,  threads_cap=64, trace_default=False),
+    "polish":    dict(min_len_ratio=0.0, max_retries=3,  threads_cap=16, trace_default=False),
 }
 
 # человекочитаемые фазы для web-прогресса (emit_progress)
@@ -471,8 +474,10 @@ def build_parser():
     p.add_argument("--max_retries", type=int, default=None,
                    help="Попытки на чанк. Дефолты: 3 (все режимы).")
     p.add_argument("--min_len_ratio", type=float, default=None,
-                   help="Мин. отношение длины результата к входу. "
-                        "Дефолты: translate=0.5, redact/polish=0.9.")
+                   help="Мин. отношение длины результата к входу "
+                        "(СИМВОЛЫ). По умолчанию отключено (0.0) — "
+                        "контроль размера делает «Проверка перевода». "
+                        "Защита от пустого ответа работает всегда.")
     # Trace
     p.add_argument("--trace", action=argparse.BooleanOptionalAction, default=None,
                    help="Писать *_trace.json (default: только в translate).")

@@ -387,7 +387,6 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
     if stage == 2:
         return [sys.executable, str(script), str(in_file), "--mode",
                 "redact", *common,
-                "--min_len_ratio", "0.9",
                 "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
                 "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
     return [sys.executable, str(script), str(in_file), "--mode",

@@ -138,7 +138,10 @@ def test_parser_legacy():
 def test_mode_presets():
     assert TB.MODE_PRESETS["translate"]["trace_default"] is True
     assert TB.MODE_PRESETS["polish"]["trace_default"] is False
-    assert TB.MODE_PRESETS["redact"]["min_len_ratio"] == 0.9
+    # min_len_ratio отключён во всех режимах (0.0): контроль длин —
+    # стадия «Проверка перевода»; пустой ответ ловит стрим всегда
+    for mode in ("translate", "redact", "polish"):
+        assert TB.MODE_PRESETS[mode]["min_len_ratio"] == 0.0
     assert TB.MODE_PRESETS["polish"]["max_retries"] == 3
     assert TB.MODE_PRESETS["translate"]["max_retries"] == 3
     assert TB.MODE_PRESETS["redact"]["max_retries"] == 3
