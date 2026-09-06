@@ -1113,7 +1113,7 @@ input[type="number"] {
 .ch-table thead th {
   background: color-mix(in srgb, var(--bg) 60%, var(--border));
   font-weight: 600;
-  color: var(--text-dim);
+  color: var(--muted);
 }
 .ch-num {
   color: var(--muted);
