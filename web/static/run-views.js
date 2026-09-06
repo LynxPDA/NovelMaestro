@@ -38,7 +38,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     log: [], // строки лога текущего запуска (ТОЛЬКО из SSE-стрима)
     events: [], // события глав конвейера (стадия 3)
     progress: null, // последнее событие прогресса {label, done, total}
-    chapterState: null, // фактическое состояние артефактов глав (status API)
     lastLog: {}, // стадия → последний завершённый запуск (обещание данных)
     gen: 0, // поколение отрисовки — гасит гонки двух render()
     values: {}, // значения формы по стадиям (данные; синхронизация режимов)
@@ -51,17 +50,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
-
-  // ── фактическое состояние артефактов глав (для таблицы конвейера) ──
-  async function loadChapterState() {
-    try {
-      const r = await api(`/projects/${section}/${name}/status`);
-      const ch = r.status && r.status.chapters;
-      st.chapterState = ch && typeof ch === "object" ? ch : null;
-    } catch {
-      st.chapterState = null;
-    }
-  }
 
   // ── прикрепление к конкретному запуску (лог + SSE + управление) ──
   async function attachToJob(jobId) {
@@ -83,10 +71,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       st.stage = job.action;
       st.job = job;
       st.log = [];
-      st.events = [];
       st.progress = job.progress || null;
-      if (job.events) st.events = job.events;
-      await loadChapterState();
       await render();
       attachStream(jobId);
     } catch (ex) {
@@ -225,7 +210,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return {
           job,
           lines: job.lines || [],
-          events: job.events || [],
           progress: job.progress || null,
         };
       })();
@@ -241,7 +225,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return logPanel({
           job: st.job,
           lines: st.log,
-          events: st.events,
           progress: st.progress,
           live: true,
         });
@@ -251,7 +234,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return logPanel({
           job: last.job,
           lines: last.lines,
-          events: last.events,
           progress: last.progress,
           live: false,
         });
@@ -789,7 +771,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       upInput.addEventListener("change", async () => {
         if (!upInput.files || !upInput.files.length) return;
         const form = new FormData();
-        // B3: dir="" (поля корня проекта — ner_file, wiki file) —
+        // B3: dir="" (поля корня проекта — wiki file и т.п.) —
         // загружаем в корень проекта, иначе файл не появится в селекте
         form.append("dest", dir || "");
         for (const f2 of upInput.files) {
@@ -1828,9 +1810,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         });
         st.job = r.job;
         st.log = [];
-        st.events = [];
         st.progress = r.job.progress || null;
-        await loadChapterState();
         await render(); // дождаться DOM лога, иначе attachStream не найдёт его
         attachStream(r.job.id);
       } catch (ex) {
@@ -1900,32 +1880,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       applyPipelineAction();
     }
 
-    // ner — входной файл или сборка глав в память (диапазон виден
-    // только когда файл не выбран)
-    if (key === "ner") {
-      const modeSel = fieldWraps["mode"] && fieldWraps["mode"]._input;
-      const fileSel =
-        fieldWraps["file"] && fieldWraps["file"]._input
-          && fieldWraps["file"]._input._sel;
-      function applyNerMode() {
-        const noFile = !(fileSel && fileSel.value);
-        if (rangeRow) {
-          rangeRow.classList.toggle("hidden", !noFile);
-        }
-      }
-      if (modeSel) modeSel.addEventListener("change", applyNerMode);
-      if (fileSel) fileSel.addEventListener("change", applyNerMode);
-      applyNerMode();
-    }
-
     // wiki — источник текста: «Готовый txt» ↔ «Собрать из глав»;
     // формат: обычный/rulate-md/rulate-html (toc/toc_links — только
     // в обычном режиме)
     if (key === "wiki") {
       // чипсы типов из глоссария (как в ner_check; пусто = все типы)
       const w = nerCheckWidgets(key);
-      const nerWrap = fieldWraps["ner_file"];
-      const nidx = nerWrap ? fieldNodes.indexOf(nerWrap) : -1;
+      const outWrap = fieldWraps["output"];
+      const nidx = outWrap ? fieldNodes.indexOf(outWrap) : -1;
       if (nidx >= 0) {
         fieldNodes.splice(nidx + 1, 0, w.chipsBar, w.chipsBox);
       }
@@ -2425,9 +2387,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         });
         st.job = r.job;
         st.log = [];
-        st.events = [];
         st.progress = r.job.progress || null;
-        await loadChapterState();
         await render(); // дождаться DOM лога, иначе attachStream не найдёт его
         attachStream(r.job.id);
       } catch (ex) {
@@ -2957,21 +2917,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h("span", { class: "progress-text", text: "" }),
     );
     paintBar(bar, view);
-    const panel = h("div", { class: "run-panel" }, toolbar, bar, pre);
-    if (job.action === "pipeline") {
-      // конвейер: таблица глав поверх лога (и для завершённого запуска —
-      // события приходят из истории запуска)
-      const table = chapterTable(view.events);
-      panel.prepend(
-        h(
-          "div",
-          { class: "run-panel-title" },
-          "Главы · перевод → редактура → полировка",
-        ),
-        table,
-      );
-    }
-    return panel;
+    return h("div", { class: "run-panel" }, toolbar, bar, pre);
   }
 
   // текстовая строка прогресса («📊 12/636») для тулбара лога
@@ -3013,68 +2959,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           : "";
   }
 
-  // таблица глав для конвейера: строки = главы, колонки = стадии 1..3
-  function chapterTable(events) {
-    const opts = st.options || {};
-    const ch = opts.chapters || {};
-    // B10: реальные id из options.chapters.ids (опции стадии); без ids
-    // (старый сервер) — диапазон min..max как раньше
-    const ids = Array.isArray(ch.ids) && ch.ids.length
-      ? ch.ids
-      : null;
-    const cols = [1, 2, 3];
-    const stageSym = { 1: "пер", 2: "ред", 3: "пол" };
-    const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
-    const byKey = UICore.chapterByKey(events || []);
-    const cells = [];
-    const range = ids || (() => {
-      const min = ch.min == null ? 1 : ch.min;
-      const max = ch.max == null ? 20 : ch.max;
-      const out = [];
-      for (let i = min; i <= max; i++) out.push(i);
-      return out;
-    })();
-    const stateByStage = { 1: "translate", 2: "redact", 3: "polish" };
-    for (const id of range) {
-      const row = [h("th", { class: "ch-num" }, String(id))];
-      for (const stage of cols) {
-        // событие текущего запуска > фактическое состояние артефактов
-        // (статус проекта) > «·»
-        let s = byKey[id + ":" + stage];
-        if (!s) {
-          const stCh = st.chapterState && st.chapterState[id];
-          if (stCh && stCh[stateByStage[stage]]) s = "OK";
-        }
-        const cls = s ? "ch-cell ch-" + s.toLowerCase() : "ch-cell ch-pending";
-        row.push(
-          h(
-            "td",
-            { class: cls, title: `${stageSym[stage]}: ${s || "—"}` },
-            s ? statusSym[s] || s : "·",
-          ),
-        );
-      }
-      cells.push(h("tr", { class: "ch-row", "data-id": id }, row));
-    }
-    return h(
-      "table",
-      { class: "ch-table" },
-      h(
-        "thead",
-        {},
-        h(
-          "tr",
-          {},
-          h("th", {}, "#"),
-          h("th", {}, "перевод"),
-          h("th", {}, "редактура"),
-          h("th", {}, "полировка"),
-        ),
-      ),
-      h("tbody", {}, cells),
-    );
-  }
-
   // стрим лога после старта. единственный источник лога —
   // SSE (стартовый бурст сервера уже содержит хвост), payload lines не
   // дублируем; AbortController гасит старый стрим при уходе со страницы.
@@ -3108,17 +2992,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       try {
         const r = await api(`/jobs/${jobId}`);
         if (r.job) {
-          if (r.job.events) st.events = r.job.events;
           if (r.job.status) st.job.status = r.job.status;
         }
       } catch {
         /* статус уже есть */
       }
       // B5: после завершения запуска могли появиться новые файлы
-      // (ner.json, wiki.md) — форма перечитает опции при рендере;
-      // таблица глав — по свежему состоянию артефактов
+      // (ner.json, wiki.md) — форма перечитает опции при рендере
       st.options = null;
-      await loadChapterState();
       render();
     } finally {
       streamCtrl = null;
@@ -3170,7 +3051,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // DOM обновляется только когда панель лога принадлежит текущему
   // запуску (st.job.action === st.stage): при открытой чужой стадии
   // строки активного запуска не утекут в панель последнего
-  // завершённого; состояние (st.log/st.events/st.progress) копится
+  // завершённого; состояние (st.log/st.progress) копится
   function onPayload(payload) {
     const live = !!(st.stage && st.job && st.job.action === st.stage);
     if (payload.type === "line") {
@@ -3181,33 +3062,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         if (pre) {
           pre.textContent = st.log.join("\n");
           pre.scrollTop = pre.scrollHeight;
-        }
-      }
-    } else if (payload.type === "event" && payload.event) {
-      const ev = payload.event;
-      // таблица глав — только pipeline-события (числовой stage);
-      // иначе селектор будет невалидным и уронит стрим
-      if (ev && ev.id != null && typeof ev.stage === "number") {
-        // дедуп: snapshot стрима повторяет события из attachToJob
-        const prev = st.events.findIndex(
-          (e) => e.id === ev.id && e.stage === ev.stage,
-        );
-        if (prev >= 0) st.events[prev] = ev;
-        else st.events.push(ev);
-        if (live) {
-          const t = page.querySelector(".ch-table");
-          if (t) {
-            // B10: строка ищется по data-id (реальные главы), а не
-            // nth-child (позиция) — нумерация может быть разреженной
-            const cell = t.querySelector(
-              `.ch-row[data-id="${ev.id}"] .ch-cell:nth-child(${ev.stage + 1})`,
-            );
-            if (cell) {
-              const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
-              cell.textContent = statusSym[ev.status] || ev.status;
-              cell.className = "ch-cell ch-" + String(ev.status).toLowerCase();
-            }
-          }
         }
       }
     } else if (payload.type === "progress" && payload.event) {

@@ -266,16 +266,6 @@
       return options.includes(v) ? v : def;
     },
 
-    /* ── свёртка событий конвейера: {id:stage → status} ── */
-    chapterByKey: (events) => {
-      var byKey = {};
-      for (var i = 0; i < (events || []).length; i++) {
-        var ev = events[i];
-        byKey[ev.id + ":" + ev.stage] = ev.status;
-      }
-      return byKey;
-    },
-
     /* ── дерево каталога из плоского списка путей (шаблоны) ── */
     dirEntries: (files, prefix) => {
       var entries = [];

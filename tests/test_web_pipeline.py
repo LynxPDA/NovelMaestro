@@ -322,8 +322,7 @@ def test_build_stage_cmd_extended_context(tmp_path):
                    rules_file="source/rules.md",
                    examples_file="source/examples.json",
                    fewshot_k=5, fewshot_threshold=0.2,
-                   request_budget=16000,
-                   ner_file="my_ner.json")
+                   request_budget=16000)
         joined = " ".join(cmd)
         assert "--dict_file source/dict.json" in joined
         assert "--rules_file source/rules.md" in joined
@@ -331,16 +330,8 @@ def test_build_stage_cmd_extended_context(tmp_path):
         assert "--fewshot_k 5" in joined
         assert "--fewshot_threshold 0.2" in joined
         assert "--request_budget 16000" in joined
-        # ner_file — не расширенный флаг: перекрывает ner.json во всех
-        # стадиях и без расширенных файлов
-        assert "--ner_file my_ner.json" in joined
-    # ner_file без расширенного контекста — тоже прокидывается
-    for stage in (1, 2, 3):
-        cmd = _cmd(stage, ner_file="my_ner.json")
-        assert cmd[cmd.index("--ner_file") + 1] == "my_ner.json"
-    # без ner_file — дефолт ner.json
-    cmd = _cmd(1)
-    assert cmd[cmd.index("--ner_file") + 1] == "ner.json"
+        # глоссарий — всегда канонический ner.json (выбор из web убран)
+        assert "--ner_file ner.json" in joined
     # request_budget=0 — флаг не передаётся (выключено)
     cmd = _cmd(1, dict_file="source/dict.json", request_budget=0)
     assert "--request_budget" not in cmd
@@ -355,8 +346,7 @@ def test_build_pipeline_extended_argv():
             "rules_file": "source/rules.md",
             "examples_file": "source/examples.json",
             "fewshot_k": "4", "fewshot_threshold": "0.25",
-            "request_budget": "20000",
-            "ner_file": "my_ner.json"}
+            "request_budget": "20000"}
     argv = build_command("pipeline", base, ctx)
     joined = " ".join(argv)
     assert "--action 9" in joined
@@ -366,7 +356,7 @@ def test_build_pipeline_extended_argv():
     assert "--fewshot_k 4" in joined
     assert "--fewshot_threshold 0.25" in joined
     assert "--request_budget 20000" in joined
-    assert "--ner_file my_ner.json" in joined
+    assert "--ner_file" not in joined
     # пустые поля — без флагов
     argv2 = build_command("pipeline",
                           {"action": "9", "host": "http://h",

@@ -926,7 +926,7 @@ def test_simple_fields_per_stage():
     поля показываются в простом режиме к карточке пресета."""
     expected = {
         "epub": ["input"],
-        "ner": ["mode", "file", "prompt_file", "two_pass"],
+        "ner": ["prompt_file", "two_pass"],
         "ner_check": ["prompt_file", "passes"],
         "pipeline": ["action", "prompt_file"],
         "translate_check_llm": ["type", "two_pass", "prompt_file"],
@@ -1014,26 +1014,26 @@ def test_preset_spot_checks():
     """Точечные проверки: что реально уедет в params при нажатии
     «Запустить» в простом режиме."""
     from web.stages import preset_params
-    # ner: новый глоссарий без входного txt — сборка глав в память
+    # ner: вход — всегда сборка глав в память; глоссарий — ner.json
     params = preset_params(STAGE_SPECS["ner"])
-    assert params["mode"] == "extract"
-    assert "file" not in params
-    assert params["ner_file"] == "ner.json"
+    assert "mode" not in params and "file" not in params
+    assert "ner_file" not in params
     assert params["context_max_len"] == "300"  # дефолт поля context
     # pipeline: полный цикл, дефолты, без диапазона
     params = preset_params(STAGE_SPECS["pipeline"])
     assert params["action"] == "8"
     assert params["jobs"] == "4"
     assert "start" not in params and "end" not in params
+    assert "ner_file" not in params
     # epub: простой режим — только TOC-разбивка, исходник обязателен
     # (автоподхвата нет); пресет фиксирует режим toc
     params = preset_params(STAGE_SPECS["epub"])
     assert params["mode"] == "toc"
     assert params["title_limit"] == "50"
     assert "input" not in params
-    # wiki: ner.json + дефолтные настройки
+    # wiki: без выбора глоссария (ner.json — дефолт CLI)
     params = preset_params(STAGE_SPECS["wiki"])
-    assert params["ner_file"] == "ner.json"
+    assert "ner_file" not in params
     assert params["top"] == "80"
 
 
@@ -1094,17 +1094,17 @@ def test_m5_stages_in_specs():
 
 
 def test_build_ner_defaults_and_flags():
-    form = {"file": "compiled_book.txt", "ner_file": "ner.json",
-            "prompt_file": "prompts/ner.txt", "threads": "4",
+    form = {"prompt_file": "prompts/ner.txt", "threads": "4",
             "chunk_size": "7000", "threshold": "0.75", "ngram": "3",
             "two_pass": True,
             "save_interval": "10", "retries": "3", "timeout": "900"}
     argv = build_command("ner", form, {})
     assert argv[0] == "cli/ner.py"
-    assert "compiled_book.txt" in argv
+    assert "--compile_chapters" in argv
     assert "--two-pass" in argv
     assert "--chunk_size" in argv and "7000" in argv
     assert "--save-interval" in argv
+    assert "--ner_file" not in argv
     # пустые значения не дают флагов
     assert "--reasoning-effort" not in argv
     assert "--temperature" not in argv
@@ -1500,54 +1500,45 @@ def test_persist_run_params_textarea_encode(tmp_path):
     assert "\n\\s+ ->" not in text  # реальных переносов нет
 
 
-def test_build_ner_modes():
-    """extract / finetune (файл или --compile_chapters); режимы compile
-    и postprocess из формы убраны."""
-    mode_field = next(f for f in STAGE_SPECS["ner"]["fields"]
-                      if f["name"] == "mode")
-    assert "compile" not in mode_field["options"]
-    assert "postprocess" not in mode_field["options"]
+def test_build_ner_always_compile_chapters():
+    """Форма ner без mode/file/ner_file: вход — всегда сборка глав в
+    память (--compile_chapters + диапазон); глоссарий — канонический
+    ner.json (дефолт CLI, из web не передаётся)."""
+    names = [f["name"] for f in STAGE_SPECS["ner"]["fields"]]
+    assert "mode" not in names and "file" not in names
+    assert "ner_file" not in names
 
-    # extract/finetune без файла: --compile_chapters + диапазон глав
-    for mode in ("extract", "finetune"):
-        argv = build_command(
-            "ner", {"mode": mode, "start": "1", "end": "20",
-                    "ner_file": "ner.json", "threads": "4"}, {})
-        assert argv[1] == "--compile_chapters"
-        assert "--start" in argv and "1" in argv
-        assert "--end" in argv and "20" in argv
-        # LLM-флаги собираются
-        assert "--threads" in argv and "4" in argv
-
-    # extract / finetune с файлом: файл позиционный, без сборки
-    for mode in ("extract", "finetune"):
-        argv = build_command(
-            "ner", {"mode": mode, "file": "book.txt",
-                    "ner_file": "ner.json", "threads": "4"}, {})
-        assert "book.txt" in argv
-        assert "--compile_chapters" not in argv
-        assert "--threads" in argv
-
-    # постпроцессинг убран: флаги strip-meta/min-count не строятся ни в
-    # каком режиме
     argv = build_command(
-        "ner", {"mode": "finetune", "file": "book.txt",
-                "ner_file": "ner.json", "strip_meta": True,
-                "min_count": "2"}, {})
-    assert "--strip-meta" not in argv and "--min-count" not in argv
+        "ner", {"start": "1", "end": "20", "threads": "4"}, {})
+    assert argv[1] == "--compile_chapters"
+    assert "--start" in argv and "1" in argv
+    assert "--end" in argv and "20" in argv
+    # LLM-флаги собираются
+    assert "--threads" in argv and "4" in argv
+    # ner_file из формы не прокидывается (даже если попал в params)
+    argv2 = build_command(
+        "ner", {"file": "book.txt", "ner_file": "custom.json"}, {})
+    assert "book.txt" not in argv2
+    assert "--ner_file" not in argv2
+    assert argv2[1] == "--compile_chapters"
+
+    # постпроцессинг убран: флаги strip-meta/min-count не строятся
+    argv3 = build_command("ner", {"strip_meta": True, "min_count": "2"}, {})
+    assert "--strip-meta" not in argv3 and "--min-count" not in argv3
 
 
 def test_build_ner_check_flags():
     """exclude-words/aliases/votes убраны; поля — единым --fields;
     «Предпросмотр (--dry-run)» из формы убран (предпросмотр —
-    в «Проверках» проекта)."""
-    form = {"input": "ner.json",
-            "review": "ner_review.json", "passes": "types",
+    в «Проверках» проекта); вход/review — канонические имена без
+    выбора из web."""
+    form = {"passes": "types",
             "types": "Person", "count_threshold": "2",
-            "fields": "term,type,context", "dry_run": True}
+            "fields": "term,type,context", "dry_run": True,
+            "input": "custom.json", "review": "custom_review.json"}
     argv = build_command("ner_check", form, {})
     assert argv[0] == "cli/ner_check.py"
-    assert "--input" in argv and "ner.json" in argv
+    assert "--input" not in argv and "--review" not in argv
     assert "--passes" in argv and "types" in argv
     assert "-c" in argv and "2" in argv
     assert "--fields" in argv

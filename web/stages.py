@@ -302,8 +302,6 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
                        ("request_budget", "--request_budget")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
-    if form.get("ner_file") not in (None, ""):
-        argv += ["--ner_file", str(form["ner_file"])]
     argv += _llm_argv(form, ctx, "pipeline")
     return argv
 
@@ -311,20 +309,14 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
 def build_ner(form: dict, ctx: dict) -> list[str]:
     """Стадия 2 — извлечение NER (ner.py).
 
-    Режимы: extract (новый глоссарий), finetune (дообучение на
-    существующий ner.json). Вход: выбранный файл (позиционный
-    аргумент) ИЛИ сборка глав в память (--compile_chapters,
-    опционально start/end). LLM-флаги — для обоих режимов.
+    Вход — всегда сборка глав в память (--compile_chapters,
+    опционально start/end). Глоссарий — канонический ner.json:
+    отсутствует — создаётся новый, существует — дообучение
+    (ner.py сам загружает существующий файл). LLM-флаги — для
+    обоих случаев.
     """
-    argv = ["cli/ner.py"]
-    mode = form.get("mode") or "extract"
-    if form.get("file"):
-        argv.append(str(form["file"]))
-    else:
-        argv.append("--compile_chapters")
-        argv += _range_argv("start", form)
-    if form.get("ner_file"):
-        argv += ["--ner_file", str(form["ner_file"])]
+    argv = ["cli/ner.py", "--compile_chapters"]
+    argv += _range_argv("start", form)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     for name, flag in (("threads", "--threads"),
@@ -355,11 +347,8 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
 def build_ner_check(form: dict, ctx: dict) -> list[str]:
     """Стадия n — проверка глоссария (ner_check.py)."""
     argv = ["cli/ner_check.py"]
-    if form.get("input"):
-        argv += ["--input", str(form["input"])]
-    # --report удалён: отчёт ner_report.md не нужен (выпилен из web и cli)
-    if form.get("review"):
-        argv += ["--review", str(form["review"])]
+    # вход и review — канонические ner.json / ner_review.json
+    # (выбор файлов из web убран)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     if form.get("passes"):
@@ -422,8 +411,8 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
         argv.append("--two_pass")
     if form.get("context_budget") not in (None, ""):
         argv += ["--context_budget", str(form["context_budget"])]
-    if form.get("review"):
-        argv += ["--review", str(form["review"])]
+    # review — канонический translate_check_llm_review.json
+    # (выбор файла из web убран; его же читает «Правки»)
     # флаги применения/предпросмотра/бэкапов собираются только для пути
     # «Проверка» проекта (ctx["review_apply"]); из «Запусков» (форма без
     # этих чекбоксов) они всегда выключены
@@ -441,7 +430,6 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
         argv += ["--reasoning_effort", str(form["reasoning_effort"])]
     for name, flag in (("max_retries", "--max_retries"),
                        ("timeout", "--timeout"),
-                       ("stream_timeout", "--stream_timeout"),
                        ("retry_empty", "--retry_empty"),
                        ("threads", "--threads"),
                        ("max_fixes_per_chapter", "--max_fixes_per_chapter"),
@@ -449,6 +437,10 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
                        ("max_changed_chars", "--max_changed_chars")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
+    # единый таймаут: стриму — то же значение (форма показывает
+    # одно поле «Таймаут, сек»)
+    if form.get("timeout") not in (None, ""):
+        argv += ["--stream_timeout", str(form["timeout"])]
     argv += _llm_argv(form, ctx, "translate_check_llm")
     return argv
 
@@ -523,8 +515,7 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
             argv.append("--no-toc-links")
         if output:
             argv += ["--output", output]
-    if form.get("ner_file"):
-        argv += ["--ner_file", str(form["ner_file"])]
+    # ner_file не передаётся: глоссарий — всегда ner.json (дефолт CLI)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     for name, flag in (("top", "--top"), ("min_count", "--min-count"),
@@ -902,17 +893,12 @@ STAGE_SPECS: dict[str, dict] = {
                       "0 — фильтр выключен (все найденные)"},
             {"name": "ner_fields", "type": "hidden",
              "default": "term,type,translation,aliases", "noenv": True},
-            {"name": "ner_file", "label": "Входной JSON (ner.json)",
-             "type": "files", "dir": "", "ext": [".json"],
-             "default": "",
-             "help": "файл глоссария в корне проекта; пусто = ner.json; "
-                      "используется всеми стадиями конвейера"},
             {"name": "names_min_count", "label": "Мин. count для имён "
              "({female_names}/{male_names})",
              "type": "number", "default": "10",
              "help": "имена с count ниже порога НЕ попадают в справочник "
                       "полов; 0 — фильтр выключен"},
-            {"name": "timeout", "label": "Таймаут LLM-запроса, сек",
+            {"name": "timeout", "label": "Таймаут, сек",
              "type": "number", "default": "300", "group": "llm"},
             {"name": "max_retries", "label": "Повторы",
              "type": "number", "default": "3", "group": "llm",
@@ -938,31 +924,13 @@ STAGE_SPECS: dict[str, dict] = {
         "script": "ner.py",
         "build": build_ner,
         "fields": _LLM_FIELDS + [
-            {"name": "mode", "label": "Режим",
-             "type": "select",
-             "options": ["extract", "finetune"],
-             "default": "extract",
-             "labels": {
-                 "extract": "Новый глоссарий (автоматический)",
-                 "finetune": "Дообучение",
-             },
-             "help": "новый глоссарий: извлечение терминов в ner.json. "
-                      "дообучение: термины добавятся к существующему ner.json. "
-                      "Вход: выбранный txt или сборка глав chapters/*/chapter.txt "
-                      "в память (диапазон ниже, пусто = все главы)."},
-            {"name": "file", "label": "Входной txt",
-             "type": "files", "dir": "", "ext": [".txt"], "default": "",
-             "help": "необязателен: выбран — работаем с ним; пусто — сборка "
-                      "глав chapters/*/chapter.txt в память (диапазон ниже)"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": "",
-             "help": "когда входной файл не выбран (сборка глав); пусто = с первой"},
+             "help": "сборка глав chapters/*/chapter.txt в память; "
+                      "пусто = с первой"},
             {"name": "end", "label": "Конечная глава (ГЛАВЫ)",
              "type": "number", "default": "",
-             "help": "когда входной файл не выбран (сборка глав); пусто = до последней"},
-            {"name": "ner_file", "label": "Глоссарий ner.json",
-             "type": "files", "dir": "", "ext": [".json"], "default": "ner.json",
-             "help": "«новый глоссарий» — создастся новый; «дообучение» — термины добавятся к существующему"},
+             "help": "сборка глав в память; пусто = до последней"},
             {"name": "prompt_file", "label": "Промпт-файл (теги pass1/pass2)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "ner_prompt.txt"},
@@ -999,15 +967,15 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "3", "group": "llm",
              "help": "общее число попыток LLM на чанк: сеть/стрим и "
                       "невалидный формат ответа считаются одинаково"},
-            {"name": "timeout", "label": "Таймаут запроса, сек",
+            {"name": "timeout", "label": "Таймаут, сек",
              "type": "number", "default": "300", "group": "llm"},
         ],
         "preset": {
-            "title": "Новый глоссарий",
-            "desc": "Извлечение терминов в ner.json: входной txt или "
-                    "сборка глав в память (все главы)",
+            "title": "Создать глоссарий",
+            "desc": "Извлечение терминов в ner.json: сборка глав "
+                    "в память (все главы); есть ner.json — дообучение",
         },
-        "simple": ["mode", "file", "prompt_file", "two_pass"],
+        "simple": ["prompt_file", "two_pass"],
     },
     "ner_check": {
         "title": "Проверка глоссария (LLM)",
@@ -1015,17 +983,14 @@ STAGE_SPECS: dict[str, dict] = {
         "script": "ner_check.py",
         "build": build_ner_check,
         "fields": _LLM_FIELDS + [
-            {"name": "input", "label": "Входной JSON (ner.json)",
-             "type": "files", "dir": "", "ext": [".json"], "default": "ner.json"},
-            {"name": "review", "label": "Review-файл правок",
-             "type": "text", "default": "ner_review.json"},
             {"name": "prompt_file", "label": "Промпт-файл",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "ner_check_prompt.txt",
              "autofile": "prompts/ner_check_prompt.txt",
-             "help": "Теги: <prompt_check> — проверка выбранных типов, "
-                      "<prompt_rag> — точечная RAG-проверка; комментарии "
-                      "вне тегов — через #; автоподхват ner_check_prompt.txt"}, 
+             "help": "Теги: <prompt_ner_check> — проверка выбранных "
+                      "типов, <prompt_rag> — точечная RAG-проверка; "
+                      "комментарии вне тегов — через #; автоподхват "
+                      "ner_check_prompt.txt"},
             {"name": "rag_budget", "label": "RAG: бюджет на термин, СИМВОЛЫ",
              "type": "number", "default": "65536",
              "help": "На ОДИН термин: промпт + фрагменты ≤ бюджету; каждый "
@@ -1119,8 +1084,6 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "bool", "default": False},
             {"name": "context_budget", "label": "Бюджет контекста на пакет, СИМВОЛЫ",
              "type": "number", "default": "75000"},
-            {"name": "review", "label": "Review-файл правок",
-             "type": "text", "default": "translate_check_llm_review.json"},
             {"name": "prompt_file", "label": "Промпт-файл (теги pass1/pass2)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "translate_check_prompt.txt"},
@@ -1132,10 +1095,9 @@ STAGE_SPECS: dict[str, dict] = {
              "default": ""},
             {"name": "max_retries", "label": "Попытки на запрос", "type": "number", "default": "3",
              "group": "llm"},
-            {"name": "timeout", "label": "Таймаут соединения, сек", "type": "number", "default": "300",
-             "group": "llm"},
-            {"name": "stream_timeout", "label": "Таймаут стрима, сек",
-             "type": "number", "default": "300", "group": "llm"},
+            {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
+             "group": "llm",
+             "help": "единый таймаут: соединение и стрим"},
             {"name": "retry_empty", "label": "Доп. повторы при пустом ответе",
              "type": "number", "default": "0", "group": "llm"},
             {"name": "threads", "label": "Параллельные пакеты (1–16)", "type": "number", "default": "4", "min": 1, "max": 16,
@@ -1195,7 +1157,7 @@ STAGE_SPECS: dict[str, dict] = {
              "default": ""},
             {"name": "max_retries", "label": "Повторы",
              "type": "number", "default": "3", "group": "llm"},
-            {"name": "timeout", "label": "Таймаут LLM-запроса, сек",
+            {"name": "timeout", "label": "Таймаут, сек",
              "type": "number", "default": "300", "group": "llm"},
         ],
         "preset": {
@@ -1232,8 +1194,6 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "select", "options": ["chapter", "translated", "redacted", "polished"],
              "default": "chapter",
              "help": "при источнике «Собрать из глав»"},
-            {"name": "ner_file", "label": "NER JSON",
-             "type": "files", "dir": "", "ext": [".json"], "default": "ner.json"},
             {"name": "output", "label": "Выходной файл", "type": "text", "default": "wiki.md"},
             {"name": "as_chapter", "label": "Сохранить как главу",
              "type": "bool", "default": False,
@@ -1289,7 +1249,7 @@ STAGE_SPECS: dict[str, dict] = {
              "default": ""},
             {"name": "retries", "label": "Повторы", "type": "number", "default": "3",
              "group": "llm"},
-            {"name": "timeout", "label": "Таймаут запроса, сек", "type": "number", "default": "300",
+            {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
              "group": "llm"},
             {"name": "threads", "label": "Потоков (1–16)", "type": "number", "default": "4", "min": 1, "max": 16,
              "group": "llm"},

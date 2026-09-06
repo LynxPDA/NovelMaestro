@@ -100,21 +100,6 @@ test("clampFont: из опций, иначе дефолт", () => {
   assert.equal(UICore.clampFont(7, [5, 7, 10, 12, 14], 12), 7); // легаси 7 → 12
 });
 
-test("chapterByKey: свёртка событий", () => {
-  const events = [
-    { id: 1, stage: 1, status: "OK" },
-    { id: 1, stage: 2, status: "ERROR" },
-    { id: 2, stage: 1, status: "OK" },
-  ];
-  assert.deepEqual(UICore.chapterByKey(events), {
-    "1:1": "OK",
-    "1:2": "ERROR",
-    "2:1": "OK",
-  });
-  assert.deepEqual(UICore.chapterByKey(null), {});
-  assert.deepEqual(UICore.chapterByKey([]), {});
-});
-
 test("dirEntries: плоский список → дерево каталога", () => {
   const files = [
     "prompts/translate.txt",

@@ -329,8 +329,7 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     dict_file: str = "", rules_file: str = "",
                     examples_file: str = "",
                     fewshot_k: int = 3, fewshot_threshold: float = 0.3,
-                    request_budget: int = 0,
-                    ner_file: str = "") -> list[str]:
+                    request_budget: int = 0) -> list[str]:
     # единая модель конвейера (PIPELINE_MODEL → MODEL) — без
     # отдельных моделей под translate/redact/polish
     common = [
@@ -342,7 +341,8 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
         "--max_retries", str(max_retries if max_retries is not None
                               else _DEFAULTS["max_retries"]),
         "--out", str(out_file),
-        "--ner_file", str(ner_file) if ner_file else "ner.json",
+        # глоссарий — всегда канонический ner.json (выбор файла убран)
+        "--ner_file", "ner.json",
     ]
     # P1 (AUDIT #2): ключ не попадает в argv — передаётся через
     # окружение subprocess (LLM_API_KEY), см. process_chapter.
@@ -426,8 +426,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     dict_file: str = "", rules_file: str = "",
                     examples_file: str = "",
                     fewshot_k: int = 3, fewshot_threshold: float = 0.3,
-                    request_budget: int = 0,
-                    ner_file: str = "") -> bool:
+                    request_budget: int = 0) -> bool:
     """Одна глава: стадии по порядку, fail-fast (код 0 + файл + grep).
 
     polish_in — вход полировки вместо дефолтного redacted.txt
@@ -470,8 +469,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                                   examples_file=examples_file,
                                   fewshot_k=fewshot_k,
                                   fewshot_threshold=fewshot_threshold,
-                                  request_budget=request_budget,
-                                  ner_file=ner_file)
+                                  request_budget=request_budget)
             proc_env = dict(os.environ)
             if api_key:
                 proc_env["LLM_API_KEY"] = api_key
@@ -623,9 +621,6 @@ def main() -> None:
                     help="Порог схожести примера с чанком (0–1).")
     ap.add_argument("--request_budget", type=int, default=0,
                     help="Общий бюджет запроса, СИМВОЛЫ; 0 = выключено.")
-    ap.add_argument("--ner_file", default="",
-                    help="Входной JSON глоссария; пусто = ner.json "
-                         "в корне проекта.")
     ap.add_argument("--preview-request", dest="preview_request",
                    default=None,
                    help="ПРЕДПРОСМОТР: первый LLM-запрос действия "
@@ -764,11 +759,10 @@ def main() -> None:
     if ext:
         log.info("КОНТЕКСТ   : словарь=%s правила=%s примеры=%s | "
                  "fewshot_k=%d порог=%.2f | бюджет запроса СИМВОЛЫ: "
-                 "%d | ner_file=%s",
+                 "%d",
                  dict_file or "—", rules_file or "—",
                  examples_file or "—", args.fewshot_k,
-                 args.fewshot_threshold, args.request_budget,
-                 args.ner_file or "ner.json")
+                 args.fewshot_threshold, args.request_budget)
     log.info("ВРЕМЯ      : %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     log.info("═" * 60)
 
@@ -799,8 +793,7 @@ def main() -> None:
             examples_file=examples_file,
             fewshot_k=args.fewshot_k,
             fewshot_threshold=args.fewshot_threshold,
-            request_budget=args.request_budget,
-            ner_file=args.ner_file)
+            request_budget=args.request_budget)
         cmd += ["--preview-request", args.preview_request]
         proc_env = dict(os.environ)
         if api_key:
@@ -871,8 +864,7 @@ def main() -> None:
                         examples_file=examples_file,
                         fewshot_k=args.fewshot_k,
                         fewshot_threshold=args.fewshot_threshold,
-                        request_budget=args.request_budget,
-                        ner_file=args.ner_file): cid
+                        request_budget=args.request_budget): cid
             for cid, dirs in to_process.items()
         }
         for fut in as_completed(futures):
