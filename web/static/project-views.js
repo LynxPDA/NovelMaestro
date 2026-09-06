@@ -3068,7 +3068,7 @@ function viewProject(section, name, tab) {
        запоминается в localStorage (UI-предпочтения — на клиенте) */
     const REVIEW_TABS = [
       { key: "ner", label: "Глоссарий (LLM)" },
-      { key: "tcheck", label: "Проверка перевода" },
+      { key: "tcheck", label: "Перевод" },
       { key: "tcl", label: "Перевод (LLM)" },
       { key: "quality", label: "Оценка перевода (LLM)" },
     ];

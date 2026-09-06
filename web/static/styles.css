@@ -1109,6 +1109,9 @@ input[type="number"] {
   border: 1px solid var(--border);
   padding: 4px 8px;
   text-align: center;
+  /* таблица живёт на разных панелях (Запуски — surface, Статус —
+     bg); явный фон — отметки одинаково читаются в обоих местах */
+  background: var(--bg);
 }
 .ch-table thead th {
   background: color-mix(in srgb, var(--bg) 60%, var(--border));

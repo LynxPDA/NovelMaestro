@@ -171,7 +171,7 @@ LLM-конфиг и дефолты стадий — только в систем
 localStorage):
 
 1. **Глоссарий (LLM)** — `ner_review.json`;
-2. **Проверка перевода** — отчёты стадии translate_check
+2. **Перевод** — отчёты стадии translate_check
    (logs/check_*.txt);
 3. **Перевод (LLM)** — `translate_check_llm_review.json`;
 4. **Оценка перевода (LLM)** — md-отчёты translate_quality.
