@@ -258,6 +258,9 @@ translate_check_llm_review.json и т.п.) — ПО УМОЛЧАНИЮ на ан
 `chapter.txt → translated.txt (+translated_trace.json) → redacted.txt →
 polished.txt`. Trace-JSON — мост translate→redact (пары original/translated);
 polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксирован.
+Глоссарий — всегда `ner.json` в корне проекта (чтение и сохранение во
+всех стадиях; выбор файла в web убран); review-файлы правок —
+`ner_review.json` / `translate_check_llm_review.json`.
 
 ## 8. Запреты
 
