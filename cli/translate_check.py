@@ -18,10 +18,9 @@ translate_check.py — проверка перевода по цепочке к�
       по умолчанию — иероглифы (все CJK-блоки), латиница и лишние
       «Глава N» (первое совпадение — заголовок главы, не ошибка);
       исключения — пусто: ничего;
-  • заголовок главы (--header-regexp; дефолт «Глава N» без учёта
-      регистра) + сквозная последовательность: первое число первой
-      непустой строки ровно на 1 больше предыдущего (N+1;
-      отключается --no-sequence-check);
+  • заголовок главы («Глава N» без учёта регистра) + сквозная
+      последовательность: первое число первой непустой строки ровно
+      на 1 больше предыдущего (N+1; отключается --no-sequence-check);
   • дубли папок / файлов (strict → FATAL, глава пропускается).
 
 ЕДИНИЦЫ: размеры файлов — байты; ratio — безразмерная эвристика
@@ -75,10 +74,10 @@ def parse_regexp_rule(line: str):
 MIN_FILE_SIZE = 3072          # байты
 RATIO_NEIGHBOR = 1.0          # безразмерно
 
-# Паттерн заголовка главы: первая непустая строка (проверка
-# --header-regexp) + поиск лишних заголовков в тексте (первое
-# совпадение — сам заголовок главы, не ошибка; последующие —
-# «Лишний заголовок главы»). По умолчанию — без учёта регистра.
+# Паттерн заголовка главы (канон): первая непустая строка + поиск
+# лишних заголовков в тексте (первое совпадение — сам заголовок
+# главы, не ошибка; последующие — «Лишний заголовок главы»). Без
+# учёта регистра.
 TOL_NEIGHBOR = 0.05
 RATIO_ORIGINAL = 2.1          # байт ru / байт zh (эвристика)
 TOL_ORIGINAL = 0.5
@@ -120,7 +119,7 @@ DEFAULT_HEADER_PATTERN = r'^\s*Глава\s+(\d+|\[Номер\])'
 # эти строки): всё найденное — ошибка; проверяются ВСЕ строки,
 # включая заголовок главы. Лишние заголовки «Глава N» — последняя
 # строка: первое совпадение — заголовок главы (не ошибка), остальные
-# — «Лишний заголовок главы»; паттерн — настраиваемый --header-regexp.
+# — «Лишний заголовок главы».
 DEFAULT_REGEXP_CHECKS = [
     CHINESE_REGEX.pattern,
     r'[a-zA-Z]+',
@@ -203,7 +202,7 @@ def compare_sizes(check_label, ref_label, check_size, ref_size,
 def check_chapter(chapter_num, dir_path, check_type, comparisons,
                   strict, prev_inner_chapter, exclusions=None,
                   regexp_checks=None, min_file_size=None,
-                  header_regexp=None, sequence_check=True):
+                  sequence_check=True):
     """Возвращает (список_ошибок, обновлённый_prev_inner_chapter).
     В список попадают ТОЛЬКО ошибки и предупреждения поиска.
     exclusions — слова-исключения (R9), по умолчанию load_exclusions().
@@ -215,8 +214,6 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
       заголовок главы, не ошибка, последующие — «Лишний заголовок
       главы»).
     min_file_size — минимальный размер файла (БАЙТЫ; None = дефолт).
-    header_regexp — compiled regexp заголовка главы (первая непустая
-      строка); None = дефолтный «Глава N» (без учёта регистра).
     sequence_check — сквозная последовательность: первое число в
       первой непустой строке должно быть ровно на 1 больше
       предыдущего (N+1)."""
@@ -224,10 +221,8 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
     if exclusions is None:
         exclusions = load_exclusions()
     min_size = MIN_FILE_SIZE if min_file_size is None else min_file_size
-    header_re = (header_regexp
-                 if header_regexp is not None
-                 else re.compile(DEFAULT_HEADER_PATTERN,
-                                 re.IGNORECASE | re.MULTILINE))
+    header_re = re.compile(DEFAULT_HEADER_PATTERN,
+                           re.IGNORECASE | re.MULTILINE)
 
     # ---- целевой файл (единый поиск из core.common) ----
     file_path, msgs = find_chapter_file(
@@ -307,8 +302,7 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
             errors.append(
                 f"  - Лишний заголовок главы: {bad.strip()[:80]}")
 
-    # ---- заголовок главы: первая непустая строка (паттерн
-    #      настраиваемый --header-regexp) ----
+    # ---- заголовок главы: первая непустая строка («Глава N») ----
     non_empty = [l.strip() for l in lines if l.strip()]
     first_line = non_empty[0] if non_empty else ""
     m = header_re.search(first_line)
@@ -355,9 +349,9 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
 (?i); комментариев и кастомных флагов нет («#» — литерал в
 паттерне). Пусто = встроенные дефолты (иероглифы, латиница, лишние
 заголовки «Глава N» — первое совпадение не ошибка). Заголовок главы
-(первая непустая строка) — --header-regexp (пусто = «Глава N» без
-учёта регистра); сквозная последовательность — первое число первой
-непустой строки ровно на 1 больше предыдущего (N+1), отключается
+(первая непустая строка) — канон «Глава N» без учёта регистра;
+сквозная последовательность — первое число первой непустой строки
+ровно на 1 больше предыдущего (N+1), отключается
 --no-sequence-check. Минимальный размер файла — --min-file-size
 (БАЙТЫ).
 Примеры:
@@ -413,12 +407,6 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
     parser.add_argument("--min-file-size", type=int, default=None,
                         help=f"Минимальный размер файла (БАЙТЫ; по "
                              f"умолчанию {MIN_FILE_SIZE})")
-    parser.add_argument("--header-regexp", default=None,
-                        help="Regexp заголовка главы (первая непустая "
-                             "строка; пусто = «Глава N» без учёта "
-                             "регистра; ^ — начало СТРОКИ; комментарий "
-                             "в конце — « # …» срезается; флаги не "
-                             "поддерживаются)")
     parser.add_argument("--no-sequence-check", action="store_true",
                         default=False,
                         help="Отключить проверку сквозной "
@@ -467,8 +455,6 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
             regexp_checks.append(rx)
     min_file_size = (args.min_file_size if args.min_file_size is not None
                      else MIN_FILE_SIZE)
-    header_regex = re.compile(args.header_regexp or DEFAULT_HEADER_PATTERN,
-                              re.IGNORECASE | re.MULTILINE)
     sequence_check = not args.no_sequence_check
 
     print("--------------------------------------")
@@ -497,7 +483,7 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
         f"Сравнения     : {comp_desc}\n"
         f"Regexp-проверки: {'; '.join(rx.pattern for rx in regexp_checks)}\n"
         f"Мин. размер   : {min_file_size} Б\n"
-        f"Заголовок     : {header_regex.pattern}\n"
+        f"Заголовок     : {DEFAULT_HEADER_PATTERN} (канон)\n"
         f"Последоват.   : {'вкл' if sequence_check else 'выкл'}\n"
         f"Режим         : {'strict' if strict else 'lenient'}\n"
         f"Исключения    : {', '.join(exclusions)}\n"
@@ -544,7 +530,6 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
             exclusions=exclusions,
             regexp_checks=regexp_checks or None,
             min_file_size=min_file_size,
-            header_regexp=header_regex,
             sequence_check=sequence_check,
         )
 

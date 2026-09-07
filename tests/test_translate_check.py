@@ -167,7 +167,7 @@ def test_check_chapter_regexp_skip_first(tmp_path):
 
 def test_default_header_pattern():
     """Дефолтный паттерн заголовка «Глава N» — IGNORECASE|MULTILINE,
-    поддержка «[Номер]» (--header-regexp компилирует его как есть)."""
+    поддержка «[Номер]» (канон, компилируется как есть)."""
     rx = re.compile(TC.DEFAULT_HEADER_PATTERN,
                     re.IGNORECASE | re.MULTILINE)
     assert rx.search("Глава 12") and rx.search("глава [Номер]")
@@ -187,7 +187,7 @@ def test_check_chapter_no_header(tmp_path):
 
 
 # ════════════════════════════════════════════════════════════════════
-# Настраиваемые структурные проверки: --min-file-size / --header-regexp
+# Настраиваемые структурные проверки: --min-file-size
 # / --no-sequence-check
 
 
@@ -210,27 +210,19 @@ def test_check_chapter_min_file_size(tmp_path):
     assert not any("слишком мал" in e for e in errors)
 
 
-def test_check_chapter_custom_header_regexp(tmp_path):
-    """Заголовок главы — настраиваемый regexp (--header-regexp)."""
+def test_check_chapter_header_canon_only(tmp_path):
+    """Заголовок главы — только канон «Глава N» (--header-regexp
+    удалён): нестандартный «Раздел 5» — структурная ошибка."""
     d = tmp_path / "00000_5_x"
     d.mkdir()
     body = "Раздел 5\n\n" + "русский текст. " * 100
     (d / "polished.txt").write_text(body, encoding="utf-8")
     (d / "redacted.txt").write_text(body, encoding="utf-8")
     comps = [("redacted", 1.0, 0.05)]
-    # дефолтный «Глава N» — не совпало
     errors, prev = TC.check_chapter(5, str(d), "polished", comps,
                                     False, None, exclusions=[])
     assert any("Нет «Глава N» в начале" in e for e in errors)
     assert prev is None
-    # свой паттерн — проходит, номер извлекается для последовательности
-    hdr = re.compile(r"^Раздел\s+(\d+)", re.MULTILINE)
-    errors, prev = TC.check_chapter(5, str(d), "polished", comps,
-                                    False, 4, exclusions=[],
-                                    header_regexp=hdr)
-    assert not any("Нет «Глава N» в начале" in e for e in errors)
-    assert not any("последовательность" in e for e in errors)
-    assert prev == 5
 
 
 def test_check_chapter_sequence_exact_next(tmp_path):

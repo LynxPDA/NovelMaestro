@@ -736,7 +736,7 @@ def test_build_translate_check():
                            "exclude_words": ""}, {})
     assert "--exclude-words" not in argv5
     # структурные проверки: мин. размер / последовательность
-    # (header_regexp убран из web-формы: CLI оставил для совместимости)
+    # (header_regexp удалён целиком — из web-формы и CLI)
     argv6 = build_command("translate_check",
                           {"check_type": "polished",
                            "min_file_size": "5000",
@@ -750,6 +750,11 @@ def test_build_translate_check():
     for flag in ("--min-file-size", "--header-regexp",
                  "--no-sequence-check"):
         assert flag not in argv7
+    # --header-regexp удалён из CLI: build его больше не передаёт
+    argv9 = build_command("translate_check",
+                          {"check_type": "polished",
+                           "header_regexp": "^Раздел\\s+\\d+"}, {})
+    assert "--header-regexp" not in argv9
     argv8 = build_command("translate_check",
                           {"check_type": "polished",
                            "sequence_check": True}, {})
@@ -1462,7 +1467,8 @@ def test_stage_spec_env_prefill_textarea(jobs_srv, tmp_path):
 def test_stage_spec_env_prefill_translate_check_struct(jobs_srv, tmp_path):
     """Структурные настройки translate_check предзаполняются из
     .env: мин. размер (число), последовательность (булево — строкой
-    "0"). header_regexp убран из web-формы — env-ключ игнорируется."""
+    "0"). header_regexp удалён целиком (web и CLI) — env-ключ
+    игнорируется."""
     port, req, _jm = jobs_srv
     _make_project(port, req)
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
