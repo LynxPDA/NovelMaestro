@@ -475,6 +475,33 @@ def test_cac_fb2_title_not_duplicated(cac_env):
     assert "Глава 1" not in sec_no_title
 
 
+def test_cac_separators_rendered_in_books(cac_env):
+    """EPUB/FB2: сепаратор — центрированный абзац «* * *», без
+    экранирования эпохи pandoc («\\*») ни в книге, ни в compiled-txt.
+    Регрессия: sep_string r"\\* \\* \\*" остался от pandoc и рендерил
+    бэкслеши в нативной генерации (EPUB не узнавал сепаратор, FB2 —
+    и подавно)."""
+    import zipfile
+    CAC.cfg.add_donate_page = 0
+    CAC.cfg.epub_cover = str(Path(CAC.cfg.tmp_dir) / "нет.jpg")
+    CAC.cfg.fb2_inject_cover = 0
+    CAC.compile_book("epub")
+    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.epub"
+    with zipfile.ZipFile(epub) as zf:
+        ch1 = zf.read("OEBPS/chapter_0001.xhtml").decode("utf-8")
+    assert '<p style="text-align:center">* * *</p>' in ch1
+    assert "\\*" not in ch1
+    CAC.compile_book("fb2")
+    fb2 = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.fb2"
+    content = fb2.read_text(encoding="utf-8")
+    assert '<p style="text-align:center">* * *</p>' in content
+    assert "\\*" not in content
+    # сайд-артефакт compiled-тхт (epub) тоже без экранирования
+    compiled = Path(CAC.cfg.tmp_dir) / "compiled_1_2_epub.txt"
+    assert "\\*" not in compiled.read_text(encoding="utf-8")
+    assert "* * *" in compiled.read_text(encoding="utf-8")
+
+
 def test_cac_load_donate_page_no_file(cac_env, monkeypatch, tmp_path):
     """load_donate_page: None если файла нет (нет хардкода)."""
     monkeypatch.chdir(tmp_path)

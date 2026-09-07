@@ -565,8 +565,12 @@ def build_fb2_native(chapters_data, meta, cover_path, output_path):
 
     sections = []
     for ch in chapters_data:
+        # разделитель «* * *» — центрированный абзаец (как в EPUB),
+        # остальное — обычные абзацы
         paras = '\n'.join(
-            f'      <p>{_esc(p)}</p>' for p in ch['body'] if p.strip()
+            '      <p style="text-align:center">* * *</p>'
+            if p.strip() in ('* * *', '***') else f'      <p>{_esc(p)}</p>'
+            for p in ch['body'] if p.strip()
         )
         sections.append(
             f'    <section>\n'
@@ -734,9 +738,12 @@ def compile_book(mode):
                 final_title = orig_header
 
             if mode in ("epub", "fb2"):
-                # epub/fb2 — заголовок отдельно (title)
+                # epub/fb2 — заголовок отдельно (title); сепаратор —
+                # чистый «* * *» (нативная генерация рендерит его
+                # центрированным абзацем, экранирование эпохи pandoc
+                # больше не нужно и ломало вывод)
                 replacement = f"# {final_title}"
-                sep_string = r"\* \* \*"
+                sep_string = "* * *"
             elif mode == "txt-plain":
                 # txt-plain — заголовок КАК В ПЕРЕВОДЕ, без markdown-
                 # префикса: только очистка и компиляция
