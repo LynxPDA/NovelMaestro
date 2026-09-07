@@ -768,28 +768,39 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         vals[f.name] = sel.value;
         touched.add(f.name);
       });
-      // загрузка своего файла / редактирование выбранного (промпты)
+      // загрузка своего файла / редактирование выбранного (текстовые:
+      // промпты, метаданные YAML, страница поддержки)
       const row = h("div", { class: "field-row" }, input);
       const upInput = h("input", { type: "file", class: "hidden" });
-      // промпт-файлы (dir=prompts, .txt): выбранный промпт редактируется
-      // прямо из запуска («Редактировать» вместо «Загрузить»)
-      const isPrompt = dir === "prompts"
-        && (f.ext || []).includes(".txt");
+      // редактируемые файлы: промпты (dir=prompts, .txt) и поля с
+      // флагом editable в спеке (compile: метаданные/донат — правка
+      // выбранного файла прямо из запуска, «Редактировать» вместо
+      // «Загрузить»; пустой выбор — «Загрузить» как у промптов)
+      const isEditable = (dir === "prompts"
+        && (f.ext || []).includes(".txt")) || Boolean(f.editable);
       const upBtn = h(
         "button",
         { class: "btn btn-sm btn-ghost" },
         "Загрузить",
       );
       function refreshPromptBtn() {
-        if (!isPrompt) {
+        if (!isEditable) {
           upBtn.textContent = "Загрузить";
           return;
         }
         upBtn.textContent = sel.value ? "Редактировать" : "Загрузить";
       }
       upBtn.addEventListener("click", () => {
-        if (isPrompt && sel.value) {
-          editPromptModal(sel.value);
+        if (isEditable && sel.value) {
+          // промпты: editFileModal ждёт имя файла в prompts/ (API
+          // /api/prompts/{name}); прочие — путь внутри проекта
+          // (dir/имя, напр. source/metadata.yaml)
+          const relPath = dir === "prompts" ? sel.value
+            : dir ? `${dir}/${sel.value}` : sel.value;
+          editFileModal(relPath, {
+            prompt: dir === "prompts",
+            title: f.label ? `${f.label}: ${sel.value}` : relPath,
+          });
         } else {
           upInput.click();
         }
@@ -1308,9 +1319,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return h("div", null, nodes);
   }
 
-  // «Редактировать» промпт из запуска: чтение/правка/сохранение
-  // выбранного файла prompts/ (GET/PUT /api/prompts/{name})
-  function editPromptModal(fileName) {
+  // «Редактировать» файл из запуска (editFileModal ниже): промпт —
+  // чтение/правка/сохранение через GET/PUT /api/prompts/{name}; файлы
+  // source/ (метаданные YAML, страница поддержки) — через /api/file.
+  // Редактор файла в модалке: промпты — через /api/prompts, прочие
+  // файлы проекта (метаданные YAML, страница поддержки) — через
+  // /api/file (любой относительный путь). makeEditor/extOf — из
+  // app.js (глобальные; к моменту клика уже загружены).
+  function editFileModal(relPath, opts = {}) {
+    const isPromptFile = Boolean(opts.prompt);
+    const title = opts.title || relPath;
     const err = h("div", { class: "form-error" });
     const host = h("div", { class: "editor-modal-body" });
     const modal = h(
@@ -1318,7 +1336,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
       h(
         "div", { class: "modal modal-wide" },
-        h("div", { class: "modal-title" }, `Промпт: ${fileName}`),
+        h("div", { class: "modal-title" }, title),
         host,
         err,
         h(
@@ -1335,12 +1353,20 @@ window.viewRun = function viewRun(section, name, attachJobId) {
                   return;
                 }
                 try {
-                  await api(`/prompts/${encodeURIComponent(fileName)}`, {
-                    method: "PUT",
-                    body: { project: `${section}/${name}`,
-                            content: ed.getValue() },
-                  });
-                  toast(`Сохранено: ${fileName}`);
+                  if (isPromptFile) {
+                    await api(`/prompts/${encodeURIComponent(relPath)}`, {
+                      method: "PUT",
+                      body: { project: `${section}/${name}`,
+                              content: ed.getValue() },
+                    });
+                  } else {
+                    await api("/file", {
+                      method: "PUT",
+                      body: { project: `${section}/${name}`,
+                              path: relPath, content: ed.getValue() },
+                    });
+                  }
+                  toast(`Сохранено: ${relPath}`);
                   close();
                 } catch (ex) {
                   err.textContent = ex.message;
@@ -1355,12 +1381,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     let ed = null;
     (async () => {
       try {
-        const d = await api(
-          `/prompts/${encodeURIComponent(fileName)}?project=${section}/${name}`,
-        );
-        // makeEditor/extOf — из app.js (глобальные; к моменту клика
-        // уже загружены)
-        ed = makeEditor(d.content || "", extOf(fileName));
+        const d = isPromptFile
+          ? await api(
+              `/prompts/${encodeURIComponent(relPath)}?project=${section}/${name}`,
+            )
+          : await api(
+              `/file?project=${section}/${name}`
+                + `&path=${encodeURIComponent(relPath)}`,
+            );
+        ed = makeEditor(d.content || "", extOf(relPath));
         host.append(h("div", { class: "editor-cm" }, ed.root));
       } catch (ex) {
         err.textContent = ex.message;

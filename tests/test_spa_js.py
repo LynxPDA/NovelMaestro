@@ -179,16 +179,26 @@ def test_ner_check_rag_ui_present():
 
 def test_prompt_edit_button():
     """Запуски (LLM): промпт не выбран — «Загрузить»; выбран —
-    «Редактировать» (просмотр/правка/сохранение через /api/prompts)."""
+    «Редактировать» (просмотр/правка/сохранение через /api/prompts).
+    Флаг editable в спеке расширяет кнопку на текстовые файлы из
+    source/ (compile: метаданные YAML, страница поддержки) — те же
+    модалки, но через /api/file."""
     rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
-    assert "function editPromptModal(fileName)" in rv
-    assert "isPrompt" in rv  # только dir=prompts, .txt
+    assert "function editFileModal(relPath, opts = {})" in rv
+    assert "isEditable" in rv  # dir=prompts+.txt или f.editable
     assert "upBtn.textContent = sel.value ? \"Редактировать\" : \"Загрузить\"" \
         in rv
-    assert "/prompts/${encodeURIComponent(fileName)}" in rv
-    assert "makeEditor(d.content || \"\", extOf(fileName))" in rv
-    # редактор промпта — модалка с сохранением
+    assert "/prompts/${encodeURIComponent(relPath)}" in rv
+    assert "/file?project=${section}/${name}" in rv  # чтение source-файлов
+    assert "makeEditor(d.content || \"\", extOf(relPath))" in rv
+    # редактор файла — модалка с сохранением
     assert "Сохранить" in rv and "editor-modal-body" in rv
+    # спека: compile epub_meta/donate_file — editable, cover — нет
+    from web.stages import STAGE_SPECS
+    fields = {f["name"]: f for f in STAGE_SPECS["compile"]["fields"]}
+    assert fields["epub_meta"].get("editable") is True
+    assert fields["donate_file"].get("editable") is True
+    assert not fields["cover"].get("editable")
 
 
 def test_glossary_dispute_removed():
