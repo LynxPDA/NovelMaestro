@@ -227,7 +227,8 @@ CDN в рантайме). Подробный контракт (роуты API, J
   grep слов-ошибок `_ERROR_RE`);
 - `web/jobs.py` — JobManager: Popen c `start_new_session` +
   reader-поток + SSE; killpg по группе; лимит параллельности
-  `WEB_JOBS_LIMIT` (429), одна стадия на проект (409);
+  `WEB_JOBS_LIMIT` (429), одна стадия на проект (409); журнал
+  следует за проектом при move/rename (`update_project_path`);
 - `web/api.py` — роуты; `_stage_options` — опции форм (главы, source-пул
   со всеми файлами, auto_prompt); `_env_put` — сид из системного `.env`
   без секретов при отсутствии `pdir/.env`.
