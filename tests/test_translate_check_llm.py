@@ -110,7 +110,7 @@ def test_query_llm_raw_delegates(monkeypatch):
     seen = {}
 
     def fake_stream(base_url, model, messages, **kw):
-        seen.update(kw=kw, n=len(messages))
+        seen.update(messages=messages, kw=kw, n=len(messages))
         return "ОТВЕТ", ""
 
     monkeypatch.setattr(FE, "stream_chat_completion", fake_stream)
@@ -118,6 +118,10 @@ def test_query_llm_raw_delegates(monkeypatch):
                            None, SilentLog(), "[X]")
     assert out == "ОТВЕТ"
     assert seen["n"] == 2 and seen["kw"]["max_tokens"] == 32768
+    # унифицированный формат: промпт в user, system пустой
+    assert seen["messages"] == [
+        {"role": "system", "content": ""},
+        {"role": "user", "content": "с\n\nю"}]
 
 
 def test_process_batch_one_pass(monkeypatch):

@@ -80,6 +80,7 @@ from core.common import (
     get_server_config,
     get_stage_model,
     get_tagged_prompt,
+    llm_messages,
     load_examples,
     load_ner_data,
     load_prompt,
@@ -321,7 +322,7 @@ def process_item(internal_id, original_text, draft_text, ctx):
 
     text, err = stream_chat_completion(
         ctx["base_url"], ctx["model"],
-        [{"role": "user", "content": user_content}],
+        llm_messages(user_content),
         api_key=ctx["api_key"],
         max_retries=ctx["max_retries"],
         timeout=ctx["timeout"],
@@ -681,7 +682,7 @@ def main(argv=None):
         payload = preview_request_payload(
             "pipeline",
             f"{MODE_LABELS.get(mode, mode)} · чанк 1/{len(items)}",
-            model_name, [{"role": "user", "content": user_content}],
+            model_name, llm_messages(user_content),
             meta={
                 "mode": mode,
                 "chunks": len(items),

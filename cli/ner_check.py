@@ -94,6 +94,7 @@ from core.common import (  # noqa: E402
     get_server_config,
     get_tagged_prompt,
     glossary_body,
+    llm_messages,
     load_prompt,
     merge_review_entries,
     ner_item_lookup,
@@ -498,7 +499,7 @@ def run_batch(task, prompt_tpl, args, base_url, api_key, model, logger):
                 f"{len(user_msg)} символов запроса")
     text, err = stream_chat_completion(
         base_url, model,
-        [{"role": "user", "content": user_msg}],
+        llm_messages(user_msg),
         api_key=api_key,
         max_retries=args.max_retries,
         timeout=args.timeout, stream_timeout=args.timeout,
@@ -638,7 +639,7 @@ def _rag_query(term, user_msg, args, base_url, api_key, model, logger,
                 f"(бюджет на термин {args.rag_budget})")
     text_out, err = stream_chat_completion(
         base_url, model,
-        [{"role": "user", "content": user_msg}],
+        llm_messages(user_msg),
         api_key=api_key,
         max_retries=args.max_retries,
         timeout=args.timeout, stream_timeout=args.timeout,
@@ -747,7 +748,7 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
         term, user_msg = tasks[0]
         payload = preview_request_payload(
             "ner_check", f"RAG · термин «{term}» (1/{len(tasks)})",
-            model, [{"role": "user", "content": user_msg}],
+            model, llm_messages(user_msg),
             meta={
                 "mode": "rag",
                 "terms": len(terms),
@@ -941,7 +942,7 @@ def do_check(args, logger) -> int:
         user_msg = _batch_user_msg(title, batch, prompt_tpl, fields)
         payload = preview_request_payload(
             "ner_check", f"{title} · батч 1/{len(stage_tasks)}", model,
-            [{"role": "user", "content": user_msg}],
+            llm_messages(user_msg),
             meta={
                 "mode": args.passes,
                 "batches": len(stage_tasks),

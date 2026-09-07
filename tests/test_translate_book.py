@@ -183,7 +183,7 @@ def test_main_prompt_missing_tag_falls_back_to_builtin(tmp_path, monkeypatch):
         encoding="utf-8")
     seen = {}
     def fake_stream(base_url, model, messages, *a, **k):
-        seen["content"] = messages[0]["content"]
+        seen["content"] = messages[-1]["content"]
         return ("ПЕРЕВОД", "")
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "м")
@@ -279,7 +279,7 @@ def test_main_polish_gender_placeholders(tmp_path, monkeypatch):
     captured = {}
 
     def fake_stream(base_url, model, messages, **kw):
-        captured["content"] = messages[0]["content"]
+        captured["content"] = messages[-1]["content"]
         return ("ОТПОЛИРОВАНО", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
@@ -317,7 +317,7 @@ def test_main_polish_min_count_filters_names(tmp_path, monkeypatch):
     captured = {}
 
     def fake_stream(base_url, model, messages, **kw):
-        captured["content"] = messages[0]["content"]
+        captured["content"] = messages[-1]["content"]
         return ("ОТПОЛИРОВАНО", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
@@ -350,7 +350,7 @@ def test_main_translate_original_text_placeholder(tmp_path, monkeypatch):
     captured = {}
 
     def fake_stream(base_url, model, messages, **kw):
-        captured["content"] = messages[0]["content"]
+        captured["content"] = messages[-1]["content"]
         return ("ПЕРЕВОД", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
@@ -382,7 +382,7 @@ def test_main_translate_no_placeholder_warns_and_appends(tmp_path, monkeypatch):
     monkeypatch.setattr(TB, "_warned_missing_text_tag", set())
 
     def fake_stream(base_url, model, messages, **kw):
-        captured["content"] = messages[0]["content"]
+        captured["content"] = messages[-1]["content"]
         return ("ПЕРЕВОД", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
@@ -496,7 +496,7 @@ def test_process_item_extended_blocks(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         TB, "stream_chat_completion",
-        lambda *a, **k: (captured.update(content=a[2][0]["content"]) or
+        lambda *a, **k: (captured.update(content=a[2][-1]["content"]) or
                          ("ПЕРЕВОД", "")))
     idx, text, info = TB.process_item(0, "苏星宇走进了大殿。", None, ctx)
     assert text == "ПЕРЕВОД"
@@ -581,7 +581,7 @@ def test_main_extended_context_translate_lr(tmp_path, monkeypatch):
     captured = {}
 
     def fake_stream(base_url, model, messages, **kw):
-        captured["content"] = messages[0]["content"]
+        captured["content"] = messages[-1]["content"]
         return ("ПЕРЕВОД", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
@@ -613,7 +613,7 @@ def test_main_extended_without_files_plain_prompt(tmp_path, monkeypatch):
     captured = {}
 
     def fake_stream(base_url, model, messages, **kw):
-        captured["content"] = messages[0]["content"]
+        captured["content"] = messages[-1]["content"]
         return ("ПЕРЕВОД", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)

@@ -64,6 +64,7 @@ from core.common import (  # noqa: E402
     fix_entry,
     get_server_config,
     get_tagged_prompt,
+    llm_messages,
     log_argv,
     merge_fix_entries,
     parse_dotenv,
@@ -451,8 +452,7 @@ def query_llm_raw(user_msg, sys_prompt, base_url, model, api_key,
     предохранитель)."""
     text, _err = stream_chat_completion(
         base_url, model,
-        [{"role": "system", "content": sys_prompt},
-         {"role": "user", "content": user_msg}],
+        llm_messages(sys_prompt, user_msg),
         api_key=api_key,
         max_retries=max_retries,
         timeout=timeout,
@@ -980,8 +980,7 @@ def do_check(args, logger) -> int:
         payload = preview_request_payload(
             "translate_check_llm", f"Pass1 · батч 1/{len(batches)}",
             model_name,
-            [{"role": "system", "content": p1},
-             {"role": "user", "content": user_text}],
+            llm_messages(p1, user_text),
             meta={
                 "batches": len(batches),
                 "context_budget": args.context_budget,

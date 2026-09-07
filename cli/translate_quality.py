@@ -50,6 +50,7 @@ from core.common import (  # noqa: E402
     find_env_file,
     get_server_config,
     get_tagged_prompt,
+    llm_messages,
     load_prompt,
     log_argv,
     parse_dotenv,
@@ -192,7 +193,7 @@ def llm_request(user_content, base_url, model, api_key,
     max_tokens=32768 — серверный предохранитель, ТОКЕНЫ."""
     text, _err = stream_chat_completion(
         base_url, model,
-        [{"role": "user", "content": user_content}],
+        llm_messages(user_content),
         api_key=api_key,
         max_retries=max_retries,
         timeout=timeout,
@@ -416,7 +417,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
         payload = preview_request_payload(
             "translate_quality",
             f"Оценка · главы {nums[0]}–{nums[-1]}", model_name,
-            [{"role": "user", "content": user_content}],
+            llm_messages(user_content),
             meta={
                 "chapters": len(kept),
                 "first": nums[0],

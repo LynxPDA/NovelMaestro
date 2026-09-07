@@ -56,6 +56,7 @@ from core.common import (  # noqa: E402
     get_tagged_prompt,
     get_server_config,
     is_cjk_string,
+    llm_messages,
     log_argv,
     parse_dotenv,
     print_env_help,
@@ -580,8 +581,7 @@ def llm_request(
     for attempt in range(attempts):
         text, err = stream_chat_completion(
             base_url, model,
-            [{"role": "system", "content": system_prompt},
-             {"role": "user", "content": user_content}],
+            llm_messages(system_prompt, user_content),
             api_key=api_key,
             max_retries=1,  # бюджет попыток — в общем цикле здесь
             timeout=timeout,
@@ -1622,8 +1622,7 @@ def main():
         _log(log, logging.INFO, f"🧭 Чанков: {len(all_chunks)}")
         payload = preview_request_payload(
             "ner", f"Pass1 · чанк 1/{len(all_chunks)}", model_name,
-            [{"role": "system", "content": pass1_prompt},
-             {"role": "user", "content": all_chunks[0]}],
+            llm_messages(pass1_prompt, all_chunks[0]),
             meta={
                 "chunks": len(all_chunks),
                 "chunk_size": args.chunk_size,

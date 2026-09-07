@@ -240,7 +240,7 @@ def _write_ner(tmp_path):
 
 def _mock_stream(monkeypatch, response, calls):
     def fake(base_url, model, messages, **kw):
-        calls.append(messages[0]["content"])
+        calls.append(messages[-1]["content"])
         return response, None
     monkeypatch.setattr(NC, "stream_chat_completion", fake)
 
@@ -298,8 +298,8 @@ def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
     calls = []
 
     def fake(base_url, model, messages, **kw):
-        calls.append(messages[0]["content"])
-        content = messages[0]["content"]
+        calls.append(messages[-1]["content"])
+        content = messages[-1]["content"]
         # whole (в запросе весь глоссарий): только 林凡
         if "青云宗" in content:
             return resp_whole, None
@@ -454,7 +454,7 @@ def test_ner_check_auto_apply_whole_only(tmp_path, monkeypatch):
     calls = []
 
     def fake(base_url, model, messages, **kw):
-        calls.append(messages[0]["content"])
+        calls.append(messages[-1]["content"])
         return ('[{"term": "林凡", "translation": "Лин Фань", '
                 '"reason": "p"}]'), None
 
@@ -830,7 +830,7 @@ def test_ner_check_rag_save_interval(tmp_path, monkeypatch):
     ]
 
     def fake(base_url, model, messages, **kw):
-        calls.append(messages[0]["content"])
+        calls.append(messages[-1]["content"])
         i = len(calls)
         if i == 2:
             gate.wait(10)  # держим второй запрос — проверяем файл

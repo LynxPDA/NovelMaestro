@@ -197,7 +197,8 @@ def test_ner_load_two_pass_prompts(tmp_path):
 
 
 def test_ner_llm_request_delegates(monkeypatch):
-    """llm_request обязан идти через единый stream_chat_completion."""
+    """llm_request обязан идти через единый stream_chat_completion;
+    messages — унифицированные: промпт в user, system пустой."""
     seen = {}
 
     def fake_stream(base_url, model, messages, **kw):
@@ -208,7 +209,9 @@ def test_ner_llm_request_delegates(monkeypatch):
     text, err = NER.llm_request("система", "запрос", "http://h", "модель",
                                 "ключ", 3, 300, 0.1, SilentLog())
     assert (text, err) == ("ОТВЕТ", None)
-    assert seen["messages"][0]["role"] == "system"
+    assert seen["messages"] == [
+        {"role": "system", "content": ""},
+        {"role": "user", "content": "система\n\nзапрос"}]
     assert seen["reasoning_effort"] is None  # пусто = дефолт сервера, не передаём
     assert seen["max_tokens"] == 65536
     assert seen["max_retries"] == 1  # бюджет ретраев — общий цикл llm_request
@@ -380,13 +383,20 @@ def test_wiki_no_cache_functions():
 
 
 def test_wiki_llm_request_delegates(monkeypatch):
+    """Единый формат messages: промпт и данные — в user, system пустой."""
+    seen = {}
+
     def fake_stream(base_url, model, messages, **kw):
+        seen["messages"] = messages
         return "СТАТЬЯ", ""
 
     monkeypatch.setattr(WIKI, "stream_chat_completion", fake_stream)
     out = WIKI.llm_request("с", "ю", "http://h", "m", "k", 1, 60,
                            None, None, SilentLog())
     assert out == "СТАТЬЯ"
+    assert seen["messages"] == [
+        {"role": "system", "content": ""},
+        {"role": "user", "content": "с\n\nю"}]
 
 
 # ══════════════════════════════════════════════════════════════════════

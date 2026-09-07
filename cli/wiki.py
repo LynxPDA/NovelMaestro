@@ -49,6 +49,7 @@ from core.common import (  # noqa: E402
     fts_search_ids_all,
     get_server_config,
     get_tagged_prompt,
+    llm_messages,
     log_argv as _cc_log_argv,
     parse_dotenv,
     print_env_help,
@@ -542,8 +543,7 @@ def llm_request(
     задано — шлём как есть (none = явное отключение)."""
     text, _err = stream_chat_completion(
         base_url, model,
-        [{"role": "system", "content": system_prompt},
-         {"role": "user", "content": user_content}],
+        llm_messages(system_prompt, user_content),
         api_key=api_key,
         max_retries=max_retries,
         timeout=timeout,
@@ -974,8 +974,7 @@ def run_wiki_generation(
         payload = preview_request_payload(
             "wiki", f"Статья «{trans0}» (1/{len(filtered)})",
             llm_args.get("model", ""),
-            [{"role": "system", "content": sys0},
-             {"role": "user", "content": user0}],
+            llm_messages(sys0, user0),
             meta={
                 "terms": above_min,
                 "selected": len(filtered),
