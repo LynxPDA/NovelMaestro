@@ -59,13 +59,16 @@ def test_check_chapter_exclusions(tmp_path):
     (d / "polished.txt").write_text(text, encoding="utf-8")
     (d / "redacted.txt").write_text(text, encoding="utf-8")
     comps = [("redacted", 1.0, 0.05)]
-    # без исключений — VIP даёт ошибку
+    latin = TC.parse_regexp_rule("[a-zA-Z]+")
+    # без исключений — VIP даёт ошибку латиницы
     errors, _ = TC.check_chapter(1, str(d), "polished", comps,
-                                 False, None, exclusions=[])
+                                 False, None, exclusions=[],
+                                 regexp_checks=[latin])
     assert any("VIP" in e for e in errors)
     # с исключением — чисто
     errors, _ = TC.check_chapter(1, str(d), "polished", comps,
-                                 False, None, exclusions=["vip"])
+                                 False, None, exclusions=["vip"],
+                                 regexp_checks=[latin])
     assert not any("VIP" in e for e in errors)
 
 
@@ -94,19 +97,28 @@ def test_comparisons_for():
 
 
 def test_check_chapter_regexp_checks(tmp_path):
-    """regexp-проверки: всё найденное — ошибка; заголовок главы — нет."""
+    """regexp-проверки: пусто = без проверок; явный набор — всё
+    найденное — ошибка."""
     d = tmp_path / "00000_2_x"
     d.mkdir()
     body = ("Глава 2\n\nнормальный русский текст. " * 40
             + "\n\nГлава 99\nещё текст. " * 40)
     (d / "polished.txt").write_text(body, encoding="utf-8")
     comps = []
-    # дефолтные проверки: лишняя «Глава 99» — ошибка, первая — нет
+    # пусто = без проверок: даже лишняя «Глава 99» не ошибка
     errors, prev = TC.check_chapter(2, str(d), "polished", comps,
                                     False, None, exclusions=[])
     assert prev == 2
+    assert not any("По паттерну" in e for e in errors)
+    # явный набор (как в предзаполнении web-формы): лишняя «Глава 99»
+    # ловится lookbehind-правилом, заголовок в первой строке — нет
+    checks = [TC.parse_regexp_rule(l) for l in
+              ("(?<=\\n)\\s*Глава\\s+\\d+", "[一-鿿]+", "[a-zA-Z]+")]
+    errors, _ = TC.check_chapter(2, str(d), "polished", comps,
+                                 False, None, exclusions=[],
+                                 regexp_checks=[c for c in checks if c])
     assert any("Глава 99" in e for e in errors)
-    assert not any("Глава 2" in e for e in errors)
+    assert not any(e.rstrip().endswith("Глава 2") for e in errors)
     # кастомный паттерн: только иероглифы
     import re as _re
     rx = _re.compile(r"[一-鿿]+", _re.MULTILINE)
@@ -165,25 +177,25 @@ def test_check_chapter_regexp_skip_first(tmp_path):
     assert any("Глава 99" in e for e in errors)
 
 
-def test_default_header_pattern():
-    """Дефолтный паттерн заголовка «Глава N» — IGNORECASE|MULTILINE,
-    поддержка «[Номер]» (канон, компилируется как есть)."""
-    rx = re.compile(TC.DEFAULT_HEADER_PATTERN,
-                    re.IGNORECASE | re.MULTILINE)
-    assert rx.search("Глава 12") and rx.search("глава [Номер]")
-    assert not rx.search("Приложение 3")
-
-
 def test_check_chapter_no_header(tmp_path):
-    """Нет «Глава N» в начале — структурная ошибка (всегда включена)."""
+    """Проверки заголовка в коде больше нет: «первая строка =
+    заголовок» — regexp-правило пользователя (negative lookahead).
+    Без правил — ошибок нет; с правилом — есть."""
     d = tmp_path / "00000_3_x"
     d.mkdir()
     body = ("просто текст без заголовка. " * 60)
     (d / "polished.txt").write_text(body, encoding="utf-8")
+    # без правил — чисто, prev не обновлён (числа в первой строке нет)
     errors, prev = TC.check_chapter(3, str(d), "polished", [],
                                     False, None, exclusions=[])
-    assert any("Нет «Глава N» в начале" in e for e in errors)
+    assert not any("По паттерну" in e for e in errors)
     assert prev is None
+    # идиома из справки: первая строка не «Глава N» → ошибка
+    rx = TC.parse_regexp_rule(r"\A(?!\s*Глава\s+(\d+|\[Номер\])).+")
+    errors, _ = TC.check_chapter(3, str(d), "polished", [],
+                                 False, None, exclusions=[],
+                                 regexp_checks=[rx])
+    assert any("По паттерну" in e for e in errors)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -211,8 +223,9 @@ def test_check_chapter_min_file_size(tmp_path):
 
 
 def test_check_chapter_header_canon_only(tmp_path):
-    """Заголовок главы — только канон «Глава N» (--header-regexp
-    удалён): нестандартный «Раздел 5» — структурная ошибка."""
+    """Канона заголовка в коде больше нет: нестандартный «Раздел 5» —
+    не ошибка (если пользователь не задал своё regexp-правило);
+    число из первой строки участвует в последовательности."""
     d = tmp_path / "00000_5_x"
     d.mkdir()
     body = "Раздел 5\n\n" + "русский текст. " * 100
@@ -221,8 +234,8 @@ def test_check_chapter_header_canon_only(tmp_path):
     comps = [("redacted", 1.0, 0.05)]
     errors, prev = TC.check_chapter(5, str(d), "polished", comps,
                                     False, None, exclusions=[])
-    assert any("Нет «Глава N» в начале" in e for e in errors)
-    assert prev is None
+    assert not any("Нет «Глава N»" in e for e in errors)
+    assert prev == 5  # число из первой строки накапливается
 
 
 def test_check_chapter_sequence_exact_next(tmp_path):
@@ -258,7 +271,7 @@ def test_check_chapter_sequence_exact_next(tmp_path):
 
 def test_check_chapter_sequence_off(tmp_path):
     """--no-sequence-check: сбой последовательности не ошибка, номер
-    не накапливается."""
+    не накапливается (prev остаётся входным)."""
     d = tmp_path / "00000_7_x"
     d.mkdir()
     body = "Глава 1\n\n" + "русский текст. " * 100
@@ -270,3 +283,17 @@ def test_check_chapter_sequence_off(tmp_path):
                                     sequence_check=False)
     assert not any("последовательность" in e for e in errors)
     assert prev == 5  # номер не накапливается
+
+def test_check_chapter_sequence_no_number_in_first_line(tmp_path):
+    """Первая непустая строка без числа: prev не обновляется —
+    следующая глава сравнивается с последним найденным номером."""
+    d = tmp_path / "00000_8_x"
+    d.mkdir()
+    body = "Пролог\n\n" + "русский текст. " * 100
+    (d / "polished.txt").write_text(body, encoding="utf-8")
+    (d / "redacted.txt").write_text(body, encoding="utf-8")
+    comps = [("redacted", 1.0, 0.05)]
+    errors, prev = TC.check_chapter(8, str(d), "polished", comps,
+                                    False, 5, exclusions=[])
+    assert not any("последовательность" in e for e in errors)
+    assert prev == 5  # числа нет — prev не изменился

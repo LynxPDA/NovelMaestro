@@ -103,30 +103,6 @@ def load_exclusions(env_path=None) -> list[str]:
     return [w.strip().lower() for w in (raw or "").split(",") if w.strip()]
 
 # ──────────────────────────────────────────────
-# РЕГУЛЯРНЫЕ ВЫРАЖЕНИЯ
-# ──────────────────────────────────────────────
-# Иероглифы — ВСЕ блоки CJK (Basic U+4E00–U+9FFF, Ext A
-# U+3400–U+4DBF, совместимость U+F900–U+FAFF, Ext B–H астральные)
-# + кавычки 【】「」『』: проверка смотрит каждую строку ВКЛЮЧАЯ
-# заголовок главы.
-CHINESE_REGEX = re.compile(
-    r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff'
-    r'\U00020000-\U0002ebef【】「」『』]+')
-ENGLISH_REGEX = re.compile(r'[a-zA-Z]+')
-DEFAULT_HEADER_PATTERN = r'^\s*Глава\s+(\d+|\[Номер\])'
-
-# Дефолтные regexp-проверки текста главы (пусто в --regexp-check =
-# эти строки): всё найденное — ошибка; проверяются ВСЕ строки,
-# включая заголовок главы. Лишние заголовки «Глава N» — последняя
-# строка: первое совпадение — заголовок главы (не ошибка), остальные
-# — «Лишний заголовок главы».
-DEFAULT_REGEXP_CHECKS = [
-    CHINESE_REGEX.pattern,
-    r'[a-zA-Z]+',
-    DEFAULT_HEADER_PATTERN,
-]
-
-
 def _write_report(report_path: str, text: str, mode: str = "a") -> None:
     """Запись в отчёт с понятной ошибкой вместо молчаливого падения."""
     try:
@@ -209,10 +185,7 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
     regexp_checks — список compiled regexp по тексту главы: всё
       найденное — ошибка (чистый стандартный regexp, без флагов и
       комментариев; «пропуск первого вхождения» — стандартно, см.
-      parse_regexp_rule); None = дефолтные проверки (иероглифы,
-      латиница + лишние заголовки «Глава N»: первое совпадение —
-      заголовок главы, не ошибка, последующие — «Лишний заголовок
-      главы»).
+      parse_regexp_rule); пусто = без regexp-проверок.
     min_file_size — минимальный размер файла (БАЙТЫ; None = дефолт).
     sequence_check — сквозная последовательность: первое число в
       первой непустой строке должно быть ровно на 1 больше
@@ -221,8 +194,6 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
     if exclusions is None:
         exclusions = load_exclusions()
     min_size = MIN_FILE_SIZE if min_file_size is None else min_file_size
-    header_re = re.compile(DEFAULT_HEADER_PATTERN,
-                           re.IGNORECASE | re.MULTILINE)
 
     # ---- целевой файл (единый поиск из core.common) ----
     file_path, msgs = find_chapter_file(
@@ -273,45 +244,22 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
         return errors, prev_inner_chapter
 
     # ---- regexp-проверки текста: ВСЕ строки, включая заголовок ----
-    #      правила пользователя — чистый стандартный regexp; дефолтный
-    #      набор (regexp_checks is None) — иероглифы, латиница, лишние
-    #      заголовки «Глава N»: первое совпадение паттерна заголовка —
-    #      сам заголовок главы (не ошибка), последующие — «Лишний
-    #      заголовок главы»
+    # ---- regexp-проверки текста: ВСЕ строки, включая заголовок ----
+    #      правила пользователя — чистый стандартный regexp; пусто =
+    #      без проверок (весь набор — в предзаполнении web-формы)
     for rx in (regexp_checks or []):
         for h in rx.finditer(content):
             bad = h.group(0)
             if bad.lower() in exclusions:
                 continue
             errors.append(f"  - По паттерну {rx.pattern}: {bad}")
-    if regexp_checks is None:
-        for rx in (CHINESE_REGEX, ENGLISH_REGEX):
-            for h in rx.finditer(content):
-                bad = h.group(0)
-                if bad.lower() in exclusions:
-                    continue
-                errors.append(f"  - По паттерну {rx.pattern}: {bad}")
-        first_skipped = False
-        for h in header_re.finditer(content):
-            bad = h.group(0)
-            if not first_skipped:
-                first_skipped = True
-                continue
-            if bad.lower() in exclusions:
-                continue
-            errors.append(
-                f"  - Лишний заголовок главы: {bad.strip()[:80]}")
 
-    # ---- заголовок главы: первая непустая строка («Глава N») ----
+    # ---- последовательность глав (единственный хардкод, отключаемый):
+    #      первое число первой непустой строки — ровно на 1 больше
+    #      предыдущего (N+1); строки без числа её не обновляют
     non_empty = [l.strip() for l in lines if l.strip()]
     first_line = non_empty[0] if non_empty else ""
-    m = header_re.search(first_line)
-    if not m:
-        snippet = (first_line[:30] + "…") if len(first_line) > 30 else first_line
-        errors.append(f"  - Нет «Глава N» в начале (найдено: '{snippet}')")
-    elif sequence_check:
-        # сквозная последовательность: первое число в первой непустой
-        # строке должно быть ровно на 1 больше предыдущего (N+1)
+    if sequence_check:
         nums = re.findall(r"\d+", first_line)
         try:
             cur = int(nums[0]) if nums else None
@@ -347,13 +295,14 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
 ^/$ — начало/конец СТРОКИ (multiline); комментарий в конце строки —
 чистый стандартный regexp (Python re): регистр — inline-флагом
 (?i); комментариев и кастомных флагов нет («#» — литерал в
-паттерне). Пусто = встроенные дефолты (иероглифы, латиница, лишние
-заголовки «Глава N» — первое совпадение не ошибка). Заголовок главы
-(первая непустая строка) — канон «Глава N» без учёта регистра;
-сквозная последовательность — первое число первой непустой строки
-ровно на 1 больше предыдущего (N+1), отключается
---no-sequence-check. Минимальный размер файла — --min-file-size
-(БАЙТЫ).
+паттерне). Пусто = без проверок; рекомендуемый набор — в
+предзаполнении web-формы. Проверка «первая строка = заголовок
+главы» выражается как \\A(?!\\s*Глава\\s+(\\d+|\\[Номер\\])) —
+отрицательный lookahead (совпадение нулевой длины); прямая
+семантика «первая строка НЕ заголовок → ошибка» встроенной нет. Сквозная
+последовательность — первое число первой непустой строки ровно на 1
+больше предыдущего (N+1), отключается --no-sequence-check.
+Минимальный размер файла — --min-file-size (БАЙТЫ).
 Примеры:
   %(prog)s                                  strict, polished, весь диапазон
   %(prog)s --check-type redacted --start 1 --end 50
@@ -402,7 +351,7 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
                              "чистый стандартный regexp (Python re); "
                              "регистр — inline-флагом (?i); "
                              "комментариев и кастомных флагов нет; "
-                             "пусто = дефолтные проверки")
+                             "пусто = без проверок")
     # ── структурные проверки (настраиваемые)
     parser.add_argument("--min-file-size", type=int, default=None,
                         help=f"Минимальный размер файла (БАЙТЫ; по "
@@ -483,7 +432,6 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
         f"Сравнения     : {comp_desc}\n"
         f"Regexp-проверки: {'; '.join(rx.pattern for rx in regexp_checks)}\n"
         f"Мин. размер   : {min_file_size} Б\n"
-        f"Заголовок     : {DEFAULT_HEADER_PATTERN} (канон)\n"
         f"Последоват.   : {'вкл' if sequence_check else 'выкл'}\n"
         f"Режим         : {'strict' if strict else 'lenient'}\n"
         f"Исключения    : {', '.join(exclusions)}\n"
