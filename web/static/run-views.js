@@ -899,8 +899,53 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     );
     const chipsBox = h("div", { class: "ner-chips-box" });
     let typeNames = [];
-    let typeCounts = {};
-    let allItems = []; // записи ner.json — для динамического счётчика (wiki)
+    let allItems = []; // записи ner.json — динамические счётчики (унификация с wiki)
+    // настройки счётчиков: ner_check — «Порог count»; wiki —
+    // «Мин. частота термина» и «Макс. терминов». Обновляются извне
+    // (updateCounts) при изменении полей формы — как в wiki
+    let threshold = 0;  // ner_check: записи с count > порога (0 — без фильтра)
+    let minCount = 0;   // wiki: записи с count >= порога и translation
+    let top = 0;        // wiki: потолок терминов (top-N по count)
+    const isWiki = key === "wiki";
+    const _intOr = (v, def) => {
+      const n = parseInt(v, 10);
+      return Number.isFinite(n) ? n : def;
+    };
+    // базовый тип как в wiki.py::_get_base_type: хвост «(…)» срезается,
+    // известные типы нормализуются — выбор чипсов = белый список --types
+    const WIKI_TYPE_MAP = {
+      "Base Term": "Other",
+      "Sect": "Organisation",
+      "Cultivation Stage": "Stage",
+      "Location (Body)": "Location",
+    };
+    const baseType = (t) => {
+      const s = String((t == null ? "" : t)).trim();
+      const b = s.replace(/\s*\(.*?\)\s*$/, "").trim();
+      return WIKI_TYPE_MAP[b] || b || "Other";
+    };
+    // тип записи для чипса: wiki — базовый (как в CLI), ner_check —
+    // сырой (точное сравнение в filter_ner_items); «?» — как в /api/ner
+    const chipType = (it) =>
+      isWiki ? baseType(it.type) : String(it.type || "?");
+    // проходит ли запись порог стадии (семантика фильтра скрипта)
+    function passFilter(it) {
+      const cnt = Number(it.count) || 0;
+      if (isWiki) {
+        return cnt >= minCount && String(it.translation || "").trim() !== "";
+      }
+      return threshold <= 0 || cnt > threshold;
+    }
+    // записи одного типа после порога — динамический счётчик чипса
+    function countFor(t) {
+      let n = 0;
+      for (const it of allItems) {
+        if (!it || typeof it !== "object") continue;
+        if (chipType(it) !== t) continue;
+        if (passFilter(it)) n++;
+      }
+      return n;
+    }
     // null = все типы (пустое значение), список — выбранные
     function curTypes() {
       const v = String(st.values[key]["types"] ?? "");
@@ -929,23 +974,61 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           st.touched[key].add("types");
           saveChips(key, ["types", "fields"]);
           renderChips();
+          updateInfo();
         });
-        const n = typeCounts[t];
+        const n = countFor(t);
         chipsBox.append(
           h(
             "label",
             { class: "ner-chip" },
             cb,
-            ` ${t}` + (n == null ? "" : ` (${n})`),
+            ` ${t} (${n})`,
           ),
         );
       }
+    }
+    // строка-счётчик над чипсами: сколько терминов уйдёт в запрос стадии
+    function updateInfo() {
+      if (!allItems.length) return; // «Глоссарий пуст…» не перезаписываем
+      const sel = curTypes();
+      const items = allItems.filter((it) => it && typeof it === "object");
+      let fit;
+      if (isWiki) {
+        let pool = items;
+        if (sel) pool = pool.filter((it) => sel.includes(baseType(it.type)));
+        pool = pool.filter(passFilter);
+        pool.sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0));
+        fit = Math.min(pool.length, top);
+      } else {
+        fit = items.filter((it) =>
+          (!sel || sel.includes(chipType(it)))
+          && passFilter(it)).length;
+      }
+      chipsInfo.textContent =
+        `${typeNames.length} тип(ов) · ${fit} из ${items.length} `
+        + `терминов попадут в ${isWiki ? "запрос" : "проверку"}`
+        + ` · пусто = все типы`;
+    }
+    // настройки изменились (поле формы) — пересчитать чипсы и счётчик
+    function updateCounts(opts = {}) {
+      if (opts.threshold != null) {
+        threshold = Math.max(0, _intOr(opts.threshold, 0));
+      }
+      if (opts.minCount != null) {
+        minCount = Math.max(0, _intOr(opts.minCount, 2));
+      }
+      if (opts.top != null) {
+        top = Math.max(1, _intOr(opts.top, 80));
+      }
+      renderChips();
+      updateInfo();
     }
     selAll.addEventListener("click", () => {
       st.values[key]["types"] = "";
       st.touched[key].add("types");
       saveChips(key, ["types", "fields"]);
       renderChips();
+      updateInfo();
     });
     selNone.addEventListener("click", () => {
       if (typeNames.length) {
@@ -954,6 +1037,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         st.touched[key].add("types");
         saveChips(key, ["types", "fields"]);
         renderChips();
+        updateInfo();
       }
     });
     chipsBar.append(
@@ -1062,10 +1146,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       chipsInfo.textContent = "Загрузка типов из глоссария…";
       try {
         const d = await api(`/ner?project=${section}/${name}`);
-        const byType = d.by_type || {};
-        typeNames = Object.keys(byType).sort();
-        typeCounts = byType;
         allItems = d.items || [];
+        // wiki — базовые типы (белый список --types сравнивается
+        // с _get_base_type в CLI); ner_check — сырые значения type
+        typeNames = isWiki
+          ? [...new Set(allItems.map((it) =>
+              it && typeof it === "object" ? baseType(it.type) : "Other"))].sort()
+          : Object.keys(d.by_type || {}).sort();
         if (!typeNames.length) {
           chipsInfo.textContent =
             "Глоссарий пуст — сначала создайте его стадией «Создание глоссария»";
@@ -1079,9 +1166,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             ok.length === typeNames.length ? "" : ok.join(",");
           if (!ok.length) st.values[key]["types"] = typeNames[0];
         }
-        chipsInfo.textContent =
-          `${typeNames.length} тип(ов) в глоссарии · пусто = все`;
         renderChips();
+        updateInfo();
         // поля записей — из реальных ключей ner.json (динамически)
         const present = new Set();
         for (const it of d.items || []) {
@@ -1117,28 +1203,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         chipsInfo.textContent = ex.message;
       }
     };
-    // wiki: счётчик «N типов · K терминов попадут в запрос» —
-    // пересчитывается при изменении top/min_count (top-N по count
-    // среди записей с count ≥ порога и translation, как в wiki.py)
-    function updateTermCount(topV, minV) {
-      if (!allItems.length) return;
-      const top = Math.max(1, parseInt(topV, 10) || 80);
-      const minC = Math.max(1, parseInt(minV, 10) || 2);
-      const sel = curTypes();
-      const base = (t) => String(t || "Other").replace(/\s*\(.*?\)\s*$/, "").trim()
-        || "Other";
-      let pool = allItems;
-      if (sel) pool = pool.filter((it) => sel.includes(base(it.type)));
-      pool = pool.filter((it) =>
-        (Number(it.count) || 0) >= minC && String(it.translation || "").trim());
-      pool.sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0));
-      const fit = Math.min(pool.length, top);
-      chipsInfo.textContent =
-        `${typeNames.length} тип(ов) · ${fit} из ${allItems.length} `
-        + `терминов попадут в запрос · пусто = все типы`;
-    }
     return { chipsBar, chipsBox, guide, loadTypes, fieldsBar, fieldsBox,
-             updateTermCount };
+             updateCounts };
   }
 
   // чипсы полей {ner_block} (конвейер): term — всегда; «aliases» снят —
@@ -1771,6 +1837,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
       w.loadTypes();
+      // счётчики типов/терминов — динамически по «Порог count»
+      // (унификация с wiki)
+      const recalcCounts = () => w.updateCounts({
+        threshold: byName["count_threshold"]
+          ? byName["count_threshold"].value : "",
+      });
+      const thInp = byName["count_threshold"];
+      if (thInp) thInp.addEventListener("input", recalcCounts);
+      recalcCounts();
       const ragWraps = [];
       // в RAG прячем только чипсы ТИПОВ: поля записи (fieldsBar) и
       // степпер остаются — выбранные поля уходят в RAG-промпт
@@ -1810,15 +1885,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       sel.addEventListener("change", ragApply);
     }
 
-    // wiki: чипсы типов из глоссария (как в ner_check; пусто = все);
-    // счётчик терминов — динамически по top/min_count
+    // wiki: чипсы типов из глоссария (базовые типы, как в CLI;
+    // пусто = все); счётчик терминов — динамически по top/min_count
     if (key === "wiki") {
       const w = nerCheckWidgets(key);
       wraps.push(w.chipsBar, w.chipsBox);
       w.loadTypes();
-      const recalc = () => w.updateTermCount(
-        byName["top"] ? byName["top"].value : "",
-        byName["min_count"] ? byName["min_count"].value : "");
+      const recalc = () => w.updateCounts({
+        top: byName["top"] ? byName["top"].value : "",
+        minCount: byName["min_count"] ? byName["min_count"].value : "",
+      });
       for (const nm of ["top", "min_count"]) {
         const inp = byName[nm];
         if (inp) inp.addEventListener("input", recalc);
@@ -1982,11 +2058,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         fieldNodes.splice(nidx + 1, 0, w.chipsBar, w.chipsBox);
       }
       w.loadTypes();
-      const recalcTerms = () => w.updateTermCount(
-        fieldWraps["top"] && fieldWraps["top"]._input
+      const recalcTerms = () => w.updateCounts({
+        top: fieldWraps["top"] && fieldWraps["top"]._input
           ? fieldWraps["top"]._input.value : "",
-        fieldWraps["min_count"] && fieldWraps["min_count"]._input
-          ? fieldWraps["min_count"]._input.value : "");
+        minCount: fieldWraps["min_count"] && fieldWraps["min_count"]._input
+          ? fieldWraps["min_count"]._input.value : "",
+      });
       for (const nm of ["top", "min_count"]) {
         const inp = fieldWraps[nm] && fieldWraps[nm]._input;
         if (inp) inp.addEventListener("input", recalcTerms);
@@ -2046,6 +2123,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       w.loadTypes();
       const ragNames = ["rag_terms", "rag_source_type",
                         "rag_budget", "save_interval"];
+      // счётчики типов/терминов — динамически по «Порог count»
+      // (унификация с wiki)
+      const recalcCounts = () => w.updateCounts({
+        threshold: fieldWraps["count_threshold"]
+          && fieldWraps["count_threshold"]._input
+          ? fieldWraps["count_threshold"]._input.value : "",
+      });
+      const thInp = fieldWraps["count_threshold"]
+        && fieldWraps["count_threshold"]._input;
+      if (thInp) thInp.addEventListener("input", recalcCounts);
+      recalcCounts();
       const ragWrap = fieldWraps["rag_terms"];
       if (ragWrap) {
         const addBtn = h(
