@@ -139,7 +139,9 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
   запусков — `web/job_logs/jobs.json` (внутри `job_logs/`, чтобы в
   docker переживать пересоздание контейнера — volume), хвост
   лога/событий — `web/job_logs/{id}.log` (переживает рестарт
-  сервера).
+  сервера). При move/rename проекта журнал следует за проектом:
+  project/cwd у его записей переписываются (`JobManager.update_project_path`),
+  иначе логи стадии после переноса в другой раздел «пропадали бы».
 - **Дашборд**: «Последние запуски» — до 20 записей
   (`MAX_HISTORY=20`), колонки Задача/Проект/Статус/Прогресс/Дата; клик
   по строке ведёт на Запуски проекта (без job id); кнопка «Очистить»
@@ -351,7 +353,7 @@ Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
 | --- | --- | --- |
 | GET/POST | `/api/session`, `/api/login`, `/api/logout` | сессия, вход по токену |
 | GET | `/api/dashboard`, `/api/state`, `/api/sections`, `/api/projects` | дашборд (`running_jobs` — все активные; `recent_jobs` — до 20), hub |
-| POST | `/api/projects` (создание) | + move/rename/copy/delete |
+| POST | `/api/projects` (создание) | + move/rename/copy/delete; move/rename переписывают project/cwd в журнале запусков — история следует за проектом |
 | GET | `/api/projects/{s}/{n}/tree`, `/api/stats` | главы+артефакты, статистика (раунд 23: артефакты включают легаси `*_перевод/редактура/полировка`) |
 | GET | `/api/projects/{s}/{n}/status` | таблица готовности глав (раунд 21): по-главные флаги translate/redact/polish + ner/wiki/compiled; кеш по сигнатуре mtime |
 | GET/PUT | `/api/projects/{s}/{n}/chapters/titles` | названия глав (вкладка «Главы»): GET `?type=polished\|redacted\|translated\|chapter` → `{titles: {номер: первая непустая строка}, all_ids: непрерывный 1..N по папкам, missing: номера без файла типа}`; PUT `{type, titles: {номер: строка}}` — замена первой строки в файлах глав (NFC), → `{updated, missing, warnings}` |

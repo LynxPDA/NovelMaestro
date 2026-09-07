@@ -430,6 +430,22 @@ class JobManager:
                     return j
         return None
 
+    def update_project_path(self, old_project: str, new_project: str,
+                            new_cwd: Path) -> int:
+        """Журнал следует за проектом: после move/rename переписать
+        project/cwd у его запусков (SPA фильтрует историю по
+        project = «раздел/имя» — без этого логи стадии «пропадают»).
+        Возвращает число переписанных записей."""
+        with self._lock:
+            touched = [j for j in self._jobs.values()
+                       if j.project == old_project]
+            for j in touched:
+                j.project = new_project
+                j.cwd = str(new_cwd)
+        if touched:
+            self._persist()
+        return len(touched)
+
     def start(self, action: str, title: str, project: str,
               argv: list[str], cwd: Path,
               env: dict | None = None) -> Job:

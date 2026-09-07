@@ -105,6 +105,40 @@ def test_start_done(tmp_path, fake_script):
     assert job.lines[-1] == "line-9"
 
 
+def test_update_project_path(tmp_path, fake_script):
+    """Move/rename: журнал следует за проектом — project/cwd у его
+    запусков переписаны (в jobs.json тоже), чужие запуски не тронуты."""
+    jm = JobManager(tmp_path, python="python3")
+    old_dir = tmp_path / "projects" / "ACTIVE" / "book"
+    new_dir = tmp_path / "projects" / "DONE" / "book"
+    old_dir.mkdir(parents=True)
+    new_dir.parent.mkdir(parents=True)
+    j1 = jm.start("pipeline", "Перевод", "ACTIVE/book",
+                  [str(fake_script / "ok.py")], old_dir)
+    j2 = jm.start("ner", "NER", "HOLD/other",
+                  [str(fake_script / "ok.py")], tmp_path)
+    _wait_status(jm, j1.id, "done")
+    _wait_status(jm, j2.id, "done")
+    assert jm.update_project_path(
+        "ACTIVE/book", "DONE/book", new_dir) == 1
+    jobs = {j["id"]: j for j in jm.list()}
+    assert jobs[j1.id]["project"] == "DONE/book"
+    assert jobs[j1.id]["cwd"] == str(new_dir)
+    assert jobs[j2.id]["project"] == "HOLD/other"
+    store = json.loads(
+        (tmp_path / "job_logs" / "jobs.json").read_text(encoding="utf-8"))
+    rec = {r["id"]: r for r in store}
+    assert rec[j1.id]["project"] == "DONE/book"
+    assert rec[j2.id]["project"] == "HOLD/other"
+
+
+def test_update_project_path_no_jobs(tmp_path):
+    """Нет запусков проекта — 0 переписанных, без падений и записи."""
+    jm = JobManager(tmp_path, python="python3")
+    assert jm.update_project_path(
+        "ACTIVE/book", "DONE/book", tmp_path) == 0
+
+
 def test_start_failed(tmp_path, fake_script):
     jm = JobManager(tmp_path, python="python3")
     job = jm.start("test", "Тест", "ACTIVE/x",

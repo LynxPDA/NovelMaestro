@@ -9,6 +9,7 @@ hub_state, ACTIONS из run.py, дерево глав, шаблоны.
 import http.client
 import json
 import threading
+import time
 from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Callable
@@ -232,7 +233,22 @@ def test_create_project_bad_section(srv_ctx):
 # ════════════════════════════════════════════════════════════════════
 # управление: move / rename / copy / delete
 
-def test_move_project(srv_ctx):
+def _seed_job(srv, projects_root: Path, tmp_path: Path,
+              project: str) -> Any:
+    """Завершённый запуск в менеджере (фейковый скрипт — без сети).
+    Менеджер прикрепляется к серверу лениво — инициализируем через API."""
+    script = tmp_path / "fake_stage.py"
+    script.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+    jm = srv.job_manager
+    job = jm.start("pipeline", "Перевод", project,
+                   [str(script)], projects_root / project)
+    deadline = time.time() + 15
+    while time.time() < deadline and jm.get(job.id).status == "running":
+        time.sleep(0.05)
+    return job
+
+
+def test_move_project(srv_ctx, tmp_path):
     _, port, projects_root = srv_ctx()
     _create_project(port, projects_root)
     res, payload = _request(port, "POST", "/api/projects/move",
@@ -242,6 +258,23 @@ def test_move_project(srv_ctx):
     assert payload["section"] == "HOLD"
     assert not (projects_root / "ACTIVE" / "test_book").exists()
     assert (projects_root / "HOLD" / "test_book").is_dir()
+
+
+def test_move_project_keeps_job_log(srv_ctx, tmp_path):
+    """Перенос в другой раздел: журнал запусков следует за проектом
+    (SPA фильтрует историю по project = «раздел/имя»)."""
+    srv, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    _request(port, "GET", "/api/jobs")  # job_manager лениво прикрепляется
+    job = _seed_job(srv, projects_root, tmp_path, "ACTIVE/test_book")
+    res, payload = _request(port, "POST", "/api/projects/move",
+                            {"section": "ACTIVE", "name": "test_book",
+                             "dst": "HOLD"})
+    assert res.status == 200, payload
+    _, jobs = _request(port, "GET", "/api/jobs")
+    mine = [j for j in jobs["jobs"] if j["id"] == job.id]
+    assert mine and mine[0]["project"] == "HOLD/test_book"
+    assert mine[0]["cwd"] == str(projects_root / "HOLD" / "test_book")
 
 
 def test_move_project_unknown_section(srv_ctx):
@@ -262,6 +295,23 @@ def test_rename_project(srv_ctx):
     assert res.status == 200, payload
     assert payload["name"] == "renamed_book"
     assert (projects_root / "ACTIVE" / "renamed_book").is_dir()
+
+
+def test_rename_project_keeps_job_log(srv_ctx, tmp_path):
+    """Переименование: журнал запусков следует за проектом."""
+    srv, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    _request(port, "GET", "/api/jobs")  # job_manager лениво прикрепляется
+    job = _seed_job(srv, projects_root, tmp_path, "ACTIVE/test_book")
+    res, payload = _request(port, "POST", "/api/projects/rename",
+                            {"section": "ACTIVE", "name": "test_book",
+                             "new_name": "renamed_book"})
+    assert res.status == 200, payload
+    _, jobs = _request(port, "GET", "/api/jobs")
+    mine = [j for j in jobs["jobs"] if j["id"] == job.id]
+    assert mine and mine[0]["project"] == "ACTIVE/renamed_book"
+    assert mine[0]["cwd"] == str(
+        projects_root / "ACTIVE" / "renamed_book")
 
 
 def test_copy_project(srv_ctx):
