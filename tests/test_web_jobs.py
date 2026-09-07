@@ -821,7 +821,8 @@ def test_build_compile_no_clean_fields():
 
 def test_build_clean_and_compile_cover_meta():
     """единая обложка cover (files из source/) + метаданные — флаги в
-    argv; txt-режим — без обложки/метаданных, с --no-cover."""
+    argv; txt-режимы — без обложки/метаданных/доната (--no-cover
+    --no-donate), поля формы в этих режимах спрятаны."""
     form = {"mode": "epub",
             "cover": "source/cover2.png",
             "epub_meta": "source/metadata2.yaml"}
@@ -834,6 +835,18 @@ def test_build_clean_and_compile_cover_meta():
     assert "--epub-meta" not in argv2
     assert "--fb2-cover" not in argv2
     assert "--no-cover" in argv2
+    assert "--no-donate" in argv2
+    # книжные chunks — те же флаги, что и у цельных epub/fb2
+    for mode in ("fb2", "epub-chunks", "fb2-chunks"):
+        argv3 = build_command("compile", {"mode": mode,
+                                          "cover": "source/cover.png"}, {})
+        assert "--epub-cover" in argv3 or mode.startswith("fb2"), mode
+    argv4 = build_command("compile",
+                          {"mode": "txt-chunks",
+                           "cover": "source/cover.png",
+                           "donate_file": "source/donate.txt"}, {})
+    assert "--no-cover" in argv4 and "--no-donate" in argv4
+    assert "--epub-cover" not in argv4 and "--donate-file" not in argv4
 
 
 def test_build_batch_replace():
@@ -952,14 +965,22 @@ def test_ner_check_no_report_no_apply():
     assert "--apply" not in argv
 
 
-def test_compile_donate_no_autofile():
-    """compile: donate_file — files из source/ (.txt) БЕЗ autofile:
-    пусто = без страницы поддержки (--no-donate)."""
+def test_compile_autofile_defaults():
+    """compile: файлы source/ автоподхватываются по умолчанию:
+    donate_file — source/donate.txt; обложка — cover.jpg/jpeg/png/webp;
+    метаданные — source/metadata.yaml (кандидаты — в спеке)."""
     spec = STAGE_SPECS["compile"]
-    f = next(x for x in spec["fields"] if x["name"] == "donate_file")
-    assert f["type"] == "files" and f["dir"] == "source"
-    assert ".txt" in (f.get("ext") or [])
-    assert not f.get("autofile")
+    by_name = {f["name"]: f for f in spec["fields"]}
+    d = by_name["donate_file"]
+    assert d["type"] == "files" and d["dir"] == "source"
+    assert ".txt" in (d.get("ext") or [])
+    assert "source/donate.txt" in (d.get("autofile") or [])
+    cov = by_name["cover"]
+    for cand in ("source/cover.jpg", "source/cover.jpeg",
+                 "source/cover.png", "source/cover.webp"):
+        assert cand in (cov.get("autofile") or []), cand
+    meta = by_name["epub_meta"]
+    assert "source/metadata.yaml" in (meta.get("autofile") or [])
 
 
 def test_compile_cover_meta_fields():

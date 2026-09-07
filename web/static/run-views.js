@@ -408,6 +408,29 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         v.prompt_file = auto;
       }
     }
+    // files-поля с autofile (compile: обложка/метаданные/донат):
+    // добор кандидата при КАЖДОМ рендере — файл мог появиться после
+    // первой инициализации формы (загрузка через «Файлы»); осознанный
+    // выбор пользователя (касание поля, вкл. «—») не перекрывается
+    if (st.values[key]) {
+      const vals = st.values[key];
+      const touched = st.touched[key] || new Set();
+      for (const f of spec.fields || []) {
+        if (f.type !== "files" || !f.autofile || vals[f.name]) continue;
+        if (touched.has(f.name)) continue;
+        const pool = (f.dir || "") === "source"
+          ? st.options.source || []
+          : (f.dir || "") === "prompts"
+            ? st.options.prompts || []
+            : st.options.root || [];
+        const cands = Array.isArray(f.autofile)
+          ? f.autofile : [f.autofile];
+        for (const c of cands) {
+          const base = UICore.fileBase(c);
+          if (pool.includes(base)) { vals[f.name] = base; break; }
+        }
+      }
+    }
     // «Простой режим» — только для стадий с пресетом (spec.simple);
     // translate_check/batch_replace/compile — только экспертные,
     // переключатель не показываем

@@ -213,14 +213,20 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
 
 
 def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
-    argv = ["cli/clean_and_compile.py",
-            "--mode", str(form.get("mode", "txt"))]
+    mode = str(form.get("mode", "txt"))
+    argv = ["cli/clean_and_compile.py", "--mode", mode]
     argv += _range_argv("start", form)
     if form.get("source_type"):
         argv += ["--source-type", str(form["source_type"])]
     if form.get("chunk_size"):
         argv += ["--chunk-size", str(form["chunk_size"])]
     # --tmp-dir убран из web: compiled_*/book_* пишутся в корень проекта
+    # обложка/метаданные/донат относятся только к книжным форматам
+    # (в txt-режимах форма их прячет — и в argv они не попадают)
+    book = mode in ("epub", "fb2", "epub-chunks", "fb2-chunks")
+    if not book:
+        argv += ["--no-cover", "--no-donate"]
+        return argv
     # единая обложка для EPUB и FB2; пусто = без обложки (--no-cover)
     cover = form.get("cover")
     if cover:
@@ -764,12 +770,14 @@ STAGE_SPECS: dict[str, dict] = {
              "labels": {"txt": "TXT (Rulate)", "txt-plain": "TXT",
                         "epub": "EPUB", "fb2": "FB2",
                          "epub-chunks": "EPUB частями",
-                         "txt-chunks": "TXT частями",
+                         "txt-chunks": "TXT (Rulate) частями",
                          "fb2-chunks": "FB2 частями"},
              "default": "txt",
              "help": "TXT (Rulate) — заголовки «# [Название :|: N]» для "
                       "загрузки на rulate; TXT — обычный txt без "
-                      "rulate-форматирования"},
+                      "rulate-форматирования; * частями — та же сборка "
+                      "по --chunk-size глав на файл (txt-chunks — тот же "
+                      "Rulate-формат, по частям)"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
@@ -783,19 +791,28 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "files", "dir": "source",
              "ext": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"],
              "default": "",
+             "autofile": ["source/cover.jpg", "source/cover.jpeg",
+                          "source/cover.png", "source/cover.webp"],
              "help": "единая обложка для EPUB и FB2; пусто = без обложки; "
-                      "варианты обложек загружаются через «Файлы»"},
+                      "по умолчанию автоподхват cover.jpg/jpeg/png/webp "
+                      "из source/; варианты обложек загружаются через "
+                      "«Файлы»"},
             {"name": "epub_meta", "label": "Метаданные (YAML)",
              "type": "files", "dir": "source",
              "ext": [".yaml", ".yml"],
              "default": "",
-             "help": "пусто = source/metadata.yaml; любой yaml/yml из source/ "
-                      "(несколько наборов метаданных)"},
+             "autofile": ["source/metadata.yaml"],
+             "help": "пусто = source/metadata.yaml; по умолчанию "
+                      "автоподхват metadata.yaml из source/; другой "
+                      "yaml/yml из source/ выбирается вручную (несколько "
+                      "наборов метаданных)"},
             {"name": "donate_file", "label": "Файл страницы поддержки",
              "type": "files", "dir": "source", "ext": [".txt"],
              "default": "",
-             "help": "страница поддержки для EPUB/FB2; пусто = без страницы; "
-                      "файл загружается через «Файлы» (source/)"},
+             "autofile": ["source/donate.txt"],
+             "help": "страница поддержки для EPUB/FB2; пусто = без "
+                      "страницы; по умолчанию автоподхват donate.txt из "
+                      "source/; файл загружается через «Файлы» (source/)"},
         ],
         # только экспертный режим (без простого/пресета)
     },
