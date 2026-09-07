@@ -373,11 +373,10 @@ def test_wiki_load_prompts(tmp_path):
     assert WIKI.load_wiki_prompts(str(tmp_path / "нет"), SilentLog()) == {}
 
 
-def test_wiki_cache_roundtrip(tmp_path):
-    f = str(tmp_path / "cache.json")
-    WIKI.save_wiki_cache(f, {"Чэнь Ян": "статья"})
-    assert WIKI.load_wiki_cache(f, SilentLog()) == {"Чэнь Ян": "статья"}
-    assert WIKI.load_wiki_cache(str(tmp_path / "нет"), SilentLog()) == {}
+def test_wiki_no_cache_functions():
+    """Кэш wiki удалён: функций load/save_wiki_cache больше нет."""
+    assert not hasattr(WIKI, "save_wiki_cache")
+    assert not hasattr(WIKI, "load_wiki_cache")
 
 
 def test_wiki_llm_request_delegates(monkeypatch):

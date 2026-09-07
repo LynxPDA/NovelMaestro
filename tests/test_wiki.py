@@ -205,29 +205,16 @@ def test_run_generation(tmp_path, monkeypatch):
         llm_args={"base_url": "h", "model": "m", "api_key": "",
                   "max_retries": 1, "timeout": 10, "temperature": None,
                   "thinking": None},
-        max_workers=1, save_interval=5, cache_file=str(tmp_path / "c.json"),
-        output_path=out, co_pairs=[], co_top=5, rulate=False,
+        max_workers=1, output_path=out, co_pairs=[], co_top=5, rulate=False,
         logger=SilentLog(),
     )
     text = Path(out).read_text(encoding="utf-8")
     assert "СТАТЬЯ О ГЕРОЕ" in text
     assert "Линь Шуй" in text
-    # кэш сохранён
-    cache = json.loads((tmp_path / "c.json").read_text(encoding="utf-8"))
-    assert "article_Линь Шуй" in cache
-
-
 def test_run_generation_cache_hit(tmp_path, monkeypatch):
-    """Статья в кэше — LLM не вызывается."""
-    cache_file = tmp_path / "c.json"
-    cache_file.write_text(json.dumps(
-        {"article_Линь Шуй": "ИЗ КЭША"}, ensure_ascii=False),
-        encoding="utf-8")
-
-    def boom(*a, **k):
-        raise AssertionError("LLM не должен вызываться")
-
-    monkeypatch.setattr(WIKI, "llm_request", boom)
+    """Кэш wiki удалён: LLM вызывается всегда, свежие данные."""
+    monkeypatch.setattr(WIKI, "llm_request",
+                        lambda *a, **k: "СВЕЖАЯ СТАТЬЯ")
     db = WIKI.build_fts_index(_NOVEL, 1000, SilentLog())
     ner = [{"term": "林水", "translation": "Линь Шуй",
             "type": "Person (female)", "count": 5}]
@@ -236,9 +223,10 @@ def test_run_generation_cache_hit(tmp_path, monkeypatch):
         ner, db, set(), 10, 2, 8, 64, "Статья о {translation}.",
         {"base_url": "h", "model": "m", "api_key": "", "max_retries": 1,
          "timeout": 10, "temperature": None, "thinking": None},
-        1, 5, str(cache_file), out, [], 5, False, SilentLog(),
+        1, out, [], 5, False, SilentLog(),
     )
-    assert "ИЗ КЭША" in Path(out).read_text(encoding="utf-8")
+    assert "СВЕЖАЯ СТАТЬЯ" in Path(out).read_text(encoding="utf-8")
+    assert "СВЕЖАЯ СТАТЬЯ" in Path(out).read_text(encoding="utf-8")
 
 
 def test_run_generation_empty(tmp_path, monkeypatch):
@@ -252,7 +240,7 @@ def test_run_generation_empty(tmp_path, monkeypatch):
         ner, db, set(), 10, 2, 8, 64, "Статья о {translation}.",
         {"base_url": "h", "model": "m", "api_key": "", "max_retries": 1,
          "timeout": 10, "temperature": None, "thinking": None},
-        1, 5, str(tmp_path / "c.json"), out, [], 5, False, SilentLog(),
+        1, out, [], 5, False, SilentLog(),
     )
     assert not Path(out).exists()
 
@@ -268,7 +256,7 @@ def test_run_generation_llm_fail(tmp_path, monkeypatch):
         ner, db, set(), 10, 2, 8, 64, "Статья о {translation}.",
         {"base_url": "h", "model": "m", "api_key": "", "max_retries": 1,
          "timeout": 10, "temperature": None, "thinking": None},
-        1, 5, str(tmp_path / "c.json"), out, [], 5, False, SilentLog(),
+        1, out, [], 5, False, SilentLog(),
     )
     assert not Path(out).exists()
 
@@ -297,7 +285,8 @@ def test_main_full(tmp_path, monkeypatch):
     WIKI.main()
     text = (tmp_path / "wiki.md").read_text(encoding="utf-8")
     assert "СТАТЬЯ ГЕРОЯ" in text and "Линь Шуй" in text
-    assert (tmp_path / "tmp" / "wiki_cache.json").is_file()
+    # кэш удалён: tmp/ больше не создаётся
+    assert not (tmp_path / "tmp" / "wiki_cache.json").exists()
 
 
 def test_main_missing_files(tmp_path, monkeypatch):

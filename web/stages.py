@@ -207,8 +207,6 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--regexp-check", line]
     if form.get("min_file_size") not in (None, ""):
         argv += ["--min-file-size", str(form["min_file_size"])]
-    if form.get("header_regexp") not in (None, ""):
-        argv += ["--header-regexp", str(form["header_regexp"])]
     if form.get("sequence_check", True) in (False, "0", 0):
         argv.append("--no-sequence-check")
     return argv
@@ -522,7 +520,6 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
                        ("context_chunks", "--context-chunks"),
                        ("near_distance", "--near-distance"),
                        ("chunk_size", "--chunk-size"),
-                       ("save_interval", "--save-interval"),
                        ("co_occurrence_top", "--co-occurrence-top"),
                        ("retries", "--retries"), ("timeout", "--timeout"),
                        ("threads", "--threads")):
@@ -714,18 +711,20 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "regexp_checks",
              "label": "Regexp-проверки (по одной на строку)",
              "type": "textarea", "rows": 4,
-             "default": "",
+             "default": "(?<=\\n)\\s*Глава\\s+\\d+",
              "help": "Каждая строка — чистый стандартный regexp "
                       "(Python re, MULTILINE): всё найденное — ошибка, "
                       "проверяются ВСЕ строки включая заголовок главы; "
                       "^/$ — начало/конец СТРОКИ; регистр — "
                       "inline-флагом (?i); комментариев и кастомных "
-                      "флагов нет («#» — литерал); «пропуск первого "
-                      "вхождения» — стандартно: «(?<=\\n)паттерн» "
-                      "(вхождение в 1-й строке файла не совпадёт); "
-                      "пусто = дефолтные проверки (иероглифы, латиница, "
-                      "лишние заголовки «Глава N» — первое совпадение "
-                      "не ошибка); "
+                      "флагов нет («#» — литерал). "
+                      "Предзаполнено: лишние заголовки «Глава N» — "
+                      "lookbehind (?<=\\n) пропускает заголовок в "
+                      "первой строке файла, ловит повтор в теле текста. "
+                      "Пусто = дефолтные проверки (иероглифы, латиница, "
+                      "лишние заголовки «Глава N»); «пропуск первого "
+                      "вхождения» своего правила — так же: "
+                      "«(?<=\\n)паттерн»; "
                       "TRANSLATE_CHECK_REGEXP_CHECKS в .env — переносы "
                       "строк как «\n»"},
             {"name": "min_file_size",
@@ -733,13 +732,6 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "3072",
              "help": "Файл меньше этого размера — ошибка «слишком мал»; "
                       "пусто = встроенный дефолт 3072 Б"},
-            {"name": "header_regexp",
-             "label": "Заголовок главы (regexp)",
-             "type": "text", "default": "",
-             "help": "Regexp первой непустой строки главы: не совпало — "
-                      "ошибка «Нет „Глава N“ в начале»; пусто = «Глава N» "
-                      "без учёта регистра; ^ — начало строки; чистый "
-                      "стандартный regexp — без комментариев и флагов"},
             {"name": "sequence_check",
              "label": "Проверять последовательность глав",
              "type": "bool", "default": True,
@@ -1191,8 +1183,8 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "files", "dir": "", "ext": [".txt"], "default": "",
              "help": "нужен при источнике «Готовый txt»"},
             {"name": "type", "label": "Тип файлов глав",
-             "type": "select", "options": ["chapter", "translated", "redacted", "polished"],
-             "default": "chapter",
+             "type": "select", "options": ["polished", "chapter", "translated", "redacted"],
+             "default": "polished",
              "help": "при источнике «Собрать из глав»"},
             {"name": "output", "label": "Выходной файл", "type": "text", "default": "wiki.md"},
             {"name": "as_chapter", "label": "Сохранить как главу",
@@ -1236,8 +1228,6 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "64"},
             {"name": "chunk_size", "label": "Размер чанка FTS5, СИМВОЛЫ",
              "type": "number", "default": "1000"},
-            {"name": "save_interval", "label": "Интервал сохранения кэша",
-             "type": "number", "default": "5"},
             {"name": "co_occurrence_pairs", "label": "Пары типов для связей",
              "type": "text", "default": "Person:Person,Person:Organisation,Person:Artifact"},
             {"name": "co_occurrence_top", "label": "Связей на термин", "type": "number", "default": "5"},

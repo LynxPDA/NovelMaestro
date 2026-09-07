@@ -600,7 +600,8 @@ def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
             errors1 = parsed
             break
         if att < retry_empty:
-            logger.info(f"[P1] Пусто, повтор {att+2}/{1+retry_empty}")
+            logger.info(f"[P1] LLM вернул пустой/нераспарсенный ответ — "
+                        f"повтор {att+2}/{1+retry_empty}")
     if not errors1:
         return []
     if not two_pass:

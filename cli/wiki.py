@@ -704,35 +704,6 @@ def generate_article(
 
 
 # ══════════════════════════════════════════════════════════════════════
-# КЭШ
-# ══════════════════════════════════════════════════════════════════════
-
-def load_wiki_cache(filepath: str, logger) -> dict:
-    if not os.path.exists(filepath):
-        return {}
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        _log(logger, logging.INFO, f"📂 Загружен wiki-кэш: {len(data)} записей")
-        return data
-    except Exception as e:
-        _log(logger, logging.ERROR, f"⚠️ Ошибка чтения кэша: {e}")
-        return {}
-
-
-def save_wiki_cache(filepath: str, cache: dict) -> None:
-    tmp = filepath + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        os.replace(tmp, filepath)
-    except OSError as exc:
-        # кэш некритичен: молча пропускаем, wiki соберётся заново
-        print(f"⚠️ Ошибка записи кэша: {exc}")
-
-
-# ══════════════════════════════════════════════════════════════════════
 # СБОРКА WIKI (Markdown)
 # ══════════════════════════════════════════════════════════════════════
 
@@ -871,8 +842,6 @@ def run_wiki_generation(
     system_prompt: str,
     llm_args: dict,
     max_workers: int,
-    save_interval: int,
-    cache_file: str,
     output_path: str,
     co_pairs: list[tuple[str, str]],
     co_top: int,
@@ -947,10 +916,6 @@ def run_wiki_generation(
 
     _log(logger, logging.INFO,
          f"📊 Группы: {', '.join(f'{k}({len(v)})' for k, v in groups.items())}")
-
-    # ── Кэш ──
-    cache = load_wiki_cache(cache_file, logger)
-    cache_lock = threading.Lock()
 
     # ── Co-occurrence (мультитипный) ──
     co_occurrence: dict[str, list[tuple[str, str, int]]] = {}
@@ -1037,14 +1002,8 @@ def run_wiki_generation(
     # ── Функция генерации одной статьи ──
     def _gen_one(item: dict) -> tuple[str, str, str | None, int]:
         trans = _get_translation(item)
-        cache_key = f"article_{trans}"
         base_type = _get_base_type(item.get("type"))
         count = item.get("count", 0)
-
-        with cache_lock:
-            if cache_key in cache:
-                return base_type, trans, cache[cache_key], count
-
         frags = fragments_map.get(trans, [])
         co = co_occurrence.get(trans, [])
         result = generate_article(
@@ -1054,9 +1013,6 @@ def run_wiki_generation(
             relations_labels=relations_labels,
             skip_relations=skip_relations,
         )
-        if result:
-            with cache_lock:
-                cache[cache_key] = result
         return base_type, trans, result, count
 
     # ── Потоки ──
@@ -1094,13 +1050,8 @@ def run_wiki_generation(
             completed += 1
             pbar.update(1)
             emit_progress(completed, total_tasks, "Генерация статей")
-            if completed % save_interval == 0:
-                with cache_lock:
-                    save_wiki_cache(cache_file, cache)
 
     pbar.close()
-    with cache_lock:
-        save_wiki_cache(cache_file, cache)
 
     # ── Сборка ──
     if as_chapter:
@@ -1296,14 +1247,6 @@ def main():
         metavar="N",
         help="Размер чанка в символах для FTS5 индекса (по умолчанию: 1000).",
     )
-    g_gen.add_argument(
-        "--save-interval",
-        type=int,
-        default=5,
-        metavar="N",
-        help="Интервал сохранения кэша (каждые N статей, по умолчанию: 5).",
-    )
-
     # ── Co-occurrence ──
     parser.add_argument(
         "--preview-request", dest="preview_request", default=None,
@@ -1471,12 +1414,10 @@ def main():
     # ── Логирование ──
     try:
         os.makedirs("logs", exist_ok=True)
-        os.makedirs("tmp", exist_ok=True)
     except OSError as exc:
-        print(f"Не удалось создать logs/tmp: {exc}")
+        print(f"Не удалось создать logs: {exc}")
         return 1
     log_path = os.path.join("logs", "wiki_generation.log")
-    cache_file = os.path.join("tmp", "wiki_cache.json")
 
     logger = _setup_logging(log_path)
     _cc_log_argv(logger)
@@ -1660,8 +1601,6 @@ def main():
         system_prompt=system_prompt,
         llm_args=llm_args,
         max_workers=max(1, min(16, args.threads)),
-        save_interval=max(1, args.save_interval),
-        cache_file=cache_file,
         preview_request=args.preview_request,
         output_path=args.output,
         co_pairs=co_pairs,

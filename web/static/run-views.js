@@ -866,6 +866,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const chipsBox = h("div", { class: "ner-chips-box" });
     let typeNames = [];
     let typeCounts = {};
+    let allItems = []; // записи ner.json — для динамического счётчика (wiki)
     // null = все типы (пустое значение), список — выбранные
     function curTypes() {
       const v = String(st.values[key]["types"] ?? "");
@@ -1030,6 +1031,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         const byType = d.by_type || {};
         typeNames = Object.keys(byType).sort();
         typeCounts = byType;
+        allItems = d.items || [];
         if (!typeNames.length) {
           chipsInfo.textContent =
             "Глоссарий пуст — сначала создайте его стадией «Создание глоссария»";
@@ -1081,7 +1083,28 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         chipsInfo.textContent = ex.message;
       }
     };
-    return { chipsBar, chipsBox, guide, loadTypes, fieldsBar, fieldsBox };
+    // wiki: счётчик «N типов · K терминов попадут в запрос» —
+    // пересчитывается при изменении top/min_count (top-N по count
+    // среди записей с count ≥ порога и translation, как в wiki.py)
+    function updateTermCount(topV, minV) {
+      if (!allItems.length) return;
+      const top = Math.max(1, parseInt(topV, 10) || 80);
+      const minC = Math.max(1, parseInt(minV, 10) || 2);
+      const sel = curTypes();
+      const base = (t) => String(t || "Other").replace(/\s*\(.*?\)\s*$/, "").trim()
+        || "Other";
+      let pool = allItems;
+      if (sel) pool = pool.filter((it) => sel.includes(base(it.type)));
+      pool = pool.filter((it) =>
+        (Number(it.count) || 0) >= minC && String(it.translation || "").trim());
+      pool.sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0));
+      const fit = Math.min(pool.length, top);
+      chipsInfo.textContent =
+        `${typeNames.length} тип(ов) · ${fit} из ${allItems.length} `
+        + `терминов попадут в запрос · пусто = все типы`;
+    }
+    return { chipsBar, chipsBox, guide, loadTypes, fieldsBar, fieldsBox,
+             updateTermCount };
   }
 
   // чипсы полей {ner_block} (конвейер): term — всегда; «aliases» снят —
@@ -1735,11 +1758,20 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       sel.addEventListener("change", ragApply);
     }
 
-    // wiki: чипсы типов из глоссария (как в ner_check; пусто = все)
+    // wiki: чипсы типов из глоссария (как в ner_check; пусто = все);
+    // счётчик терминов — динамически по top/min_count
     if (key === "wiki") {
       const w = nerCheckWidgets(key);
       wraps.push(w.chipsBar, w.chipsBox);
       w.loadTypes();
+      const recalc = () => w.updateTermCount(
+        byName["top"] ? byName["top"].value : "",
+        byName["min_count"] ? byName["min_count"].value : "");
+      for (const nm of ["top", "min_count"]) {
+        const inp = byName[nm];
+        if (inp) inp.addEventListener("input", recalc);
+      }
+      recalc();
     }
     // wiki: «Собрать из глав» — прячем входной txt (показываем тип);
     // «Сохранить как главу» — прячем формат, показываем тип файла
@@ -1889,7 +1921,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // формат: обычный/rulate-md/rulate-html (toc/toc_links — только
     // в обычном режиме)
     if (key === "wiki") {
-      // чипсы типов из глоссария (как в ner_check; пусто = все типы)
+      // чипсы типов из глоссария (как в ner_check; пусто = все типы);
+      // счётчик терминов — динамически по top/min_count
       const w = nerCheckWidgets(key);
       const outWrap = fieldWraps["output"];
       const nidx = outWrap ? fieldNodes.indexOf(outWrap) : -1;
@@ -1897,6 +1930,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         fieldNodes.splice(nidx + 1, 0, w.chipsBar, w.chipsBox);
       }
       w.loadTypes();
+      const recalcTerms = () => w.updateTermCount(
+        fieldWraps["top"] && fieldWraps["top"]._input
+          ? fieldWraps["top"]._input.value : "",
+        fieldWraps["min_count"] && fieldWraps["min_count"]._input
+          ? fieldWraps["min_count"]._input.value : "");
+      for (const nm of ["top", "min_count"]) {
+        const inp = fieldWraps[nm] && fieldWraps[nm]._input;
+        if (inp) inp.addEventListener("input", recalcTerms);
+      }
+      recalcTerms();
       const srcSel = fieldWraps["source"] && fieldWraps["source"]._input;
       const fmtSel = fieldWraps["format"] && fieldWraps["format"]._input;
       const asChSel =
