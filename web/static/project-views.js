@@ -2555,6 +2555,7 @@ function viewProject(section, name, tab) {
         const parts = [];
         if (e["stage"]) parts.push(e["stage"]);
         if (e["applied_at"]) parts.push(`применено: ${e["applied_at"]}`);
+        if (e["note"]) parts.push(e["note"]);
         return parts.join(" · ");
       }
       function gotoEntry(e) {

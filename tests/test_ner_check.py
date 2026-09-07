@@ -197,6 +197,11 @@ def test_apply_ner_patches():
     assert len(applied) == 2 and skipped == 3
     assert items[0]["translation"] == "Лин Фань"
     assert items[1]["type"] == "Technique"
+    # причины пропуска записаны в патчи (note), успешные — без note
+    assert "термин не найден" in patches[3]["note"]
+    assert "не совпадает" in patches[1]["note"]
+    assert "не совпадает" in patches[4]["note"]
+    assert not patches[0].get("note") and not patches[2].get("note")
 
 
 def test_apply_ner_patches_statuses_and_duplicates():

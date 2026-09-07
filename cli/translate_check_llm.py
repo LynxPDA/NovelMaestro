@@ -720,7 +720,9 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
     Группировка по файлу, замены последовательные (NFC, первое
     вхождение). Бэкап <файл>.bak перед первой записью (кроме
     no_bak=True). Помечает записи in-place: применено=True +
-    «дата применения». Возвращает (applied, skipped)."""
+    «дата применения»; пропущенные получают note с причиной
+    (файл не найден / фрагмент не найден — текст менялся после
+    проверки). Возвращает (applied, skipped)."""
     pending = [e for e in entries
                if e.get("status", REVIEW_ACCEPT) == REVIEW_ACCEPT
                and not e.get("applied")]
@@ -729,7 +731,8 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
     for e in pending:
         fp = resolve_entry_path(e, file_type, chapter_map, logger)
         if not fp:
-            logger.warning(f"  ⚠ Гл.{e.get('глава')}: файл не найден — "
+            e["note"] = "файл главы не найден"
+            logger.warning(f"  ⚠ Гл.{e.get('chapter')}: файл не найден — "
                            f"правка пропущена.")
             skipped += 1
             continue
@@ -748,6 +751,8 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
         for e in group:
             nt, ok = apply_fix_to_text(cur, e["old"], e["new"])
             if not ok:
+                e["note"] = ("фрагмент не найден — текст главы менялся "
+                             "после проверки")
                 logger.info(f"  ⚠ Гл.{e['chapter']}: фрагмент не найден — "
                             f"пропуск.")
                 skipped += 1
@@ -755,6 +760,7 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
             cur, changed = nt, True
             e["applied"] = True
             e["applied_at"] = now
+            e.pop("note", None)
             applied.append(e)
             logger.info(f"  ✔ Гл.{e['chapter']} [{e.get('type') or '?'}]: "
                         f"«{e['old'][:60]}» → «{e['new'][:60]}»")

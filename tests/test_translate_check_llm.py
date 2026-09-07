@@ -273,6 +273,39 @@ def test_apply_fix_entries_no_bak(tmp_path):
     assert not (fp.parent / "polished.txt.bak").exists()
 
 
+def test_apply_fix_entries_stale_fragment_note(tmp_path):
+    """Правка с устаревшим фрагментом: skip + note с причиной;
+    после исправления текста та же правка применяется, note снимается."""
+    ch_dir, cmap = _mk_chapters(tmp_path, {1: "первый текст главы один."})
+    fp = str(Path(ch_dir) / "00000_1_t" / "polished.txt")
+    entries = [
+        {"stage": "s", "chapter": 1, "file": fp,
+         "old": "фрагмент которого нет", "new": "новый",
+         "type": "", "reason": "", "status": C.REVIEW_ACCEPT,
+         "applied": False},
+    ]
+    applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
+                                            SilentLog())
+    assert (len(applied), skipped) == (0, 1)
+    assert "фрагмент не найден" in entries[0]["note"]
+    assert not entries[0]["applied"]
+    # глава не находится вообще (нет ни файла, ни папки в карте) —
+    # другая причина в note (устаревший file → фолбэк по карте глав)
+    entries[0]["file"] = "/nonexistent/polished.txt"
+    entries[0]["chapter"] = 99
+    entries[0]["old"] = "первый текст"
+    applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
+                                            SilentLog())
+    assert (len(applied), skipped) == (0, 1)
+    assert "файл главы не найден" in entries[0]["note"]
+    # фолбэк по карте глав: чужой file игнорируется, глава находится
+    entries[0]["chapter"] = 1
+    applied, _ = FE.apply_fix_entries(entries, "polished", cmap,
+                                      SilentLog())
+    assert len(applied) == 1
+    assert entries[0]["applied"] and "note" not in entries[0]
+
+
 def test_apply_fix_entries_sequential_same_file(tmp_path):
     ch_dir, cmap = _mk_chapters(
         tmp_path, {1: "альфа и омега в одной строке текста."})

@@ -1242,7 +1242,9 @@ def apply_ner_patches(items, patches, logger=None):
     Правка ложится на ПЕРВУЮ запись термина с совпавшим old — это
     корректно и для дублей термина с разными значениями поля.
     Успешные записи помечаются in-place: применено=True +
-    «дата применения». Возвращает (applied: список dict,
+    «дата применения»; неприменимые получают note с причиной
+    (термин не найден / значение поля не совпадает — глоссарий
+    менялся после проверки). Возвращает (applied: список dict,
     skipped: int — отклонённые/уже применённые/не совпавшие)."""
     index = {}
     for item in items:
@@ -1258,6 +1260,7 @@ def apply_ner_patches(items, patches, logger=None):
         term = unicodedata.normalize("NFC", str(p.get("term", "")))
         cands = index.get(term)
         if not cands:
+            p["note"] = "термин не найден в ner.json"
             skipped += 1
             continue
         old = unicodedata.normalize("NFC", str(p.get("old", "")))
@@ -1277,6 +1280,8 @@ def apply_ner_patches(items, patches, logger=None):
                 target = item
                 break
         if target is None:
+            p["note"] = ("текущее значение поля не совпадает — "
+                         "глоссарий менялся после проверки")
             skipped += 1
             continue
         new_val = p["new"]

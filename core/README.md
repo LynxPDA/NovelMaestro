@@ -68,10 +68,14 @@ FTS5 (RAG/wiki): build_fts_index (текст → in-memory sqlite, нарезк�
   поля английские: stage/status принять|отклонить/applied/old/new,
   накопление по этапам, дедуп по term+field+old+new) /
   apply_ner_patches (status + applied, дубли термина по совпавшему
-  old, сверка old по NFC; list/dict-поля new — через json.loads)
+  old, сверка old по NFC; list/dict-поля new — через json.loads;
+  неприменимое — note с причиной в патче)
 translate_check_llm: fix_entry (ошибка LLM {chapter,fragment,corrected,type,reason}
   → запись review: stage/chapter/file/type/old/new/reason/status/applied, NFC) /
   merge_fix_entries (накопление без затирания, дедуп по chapter+old+new) /
+  apply_fix_to_text (NFC, первое вхождение); apply_fix_entries помечает
+  пропуски полем note (файл не найден / фрагмент не найден — текст
+  главы менялся после проверки)
   apply_fix_to_text (одна замена фрагмента, NFC, первое вхождение)
 LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) → (text, err);
   ретраи ТОЛЬКО 408/425/429/5xx + Retry-After/backoff+jitter (H3) /
