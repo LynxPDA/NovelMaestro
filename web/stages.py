@@ -359,15 +359,20 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--prompt_file", str(form["prompt_file"])]
     if form.get("passes"):
         argv += ["--passes", str(form["passes"])]
-    if form.get("rag_terms"):
-        argv += ["--rag_terms", str(form["rag_terms"])]
-    if form.get("rag_source_type"):
-        argv += ["--rag_source_type", str(form["rag_source_type"])]
-    argv += _range_argv("start", form)
-    if form.get("rag_budget") not in (None, ""):
-        argv += ["--rag_budget", str(form["rag_budget"])]
-    if form.get("save_interval") not in (None, ""):
-        argv += ["--save-interval", str(form["save_interval"])]
+    # RAG-поля — ТОЛЬКО в режиме rag: форма помнит значения из прошлого
+    # RAG-запуска (touched/.env-префилл), в других режимах они мусор
+    if str(form.get("passes") or "") == "rag":
+        if form.get("rag_terms"):
+            argv += ["--rag_terms", str(form["rag_terms"])]
+        if form.get("rag_source_type"):
+            argv += ["--rag_source_type", str(form["rag_source_type"])]
+        argv += _range_argv("start", form)
+        if form.get("rag_budget") not in (None, ""):
+            argv += ["--rag_budget", str(form["rag_budget"])]
+        if form.get("save_interval") not in (None, ""):
+            argv += ["--save-interval", str(form["save_interval"])]
+    # иначе RAG-поля (память формы с прошлого RAG-запуска) молча
+    # отбрасываются — в argv им делать нечего
     # RAG-промпт — это тот же «Промпт-файл» (внутри тег <prompt_rag>);
     # отдельного --rag_prompt_file нет: CLI берёт --prompt_file
     if form.get("types"):

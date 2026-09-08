@@ -1641,6 +1641,35 @@ def test_ner_check_passes_modes():
     argv2 = build_command("ner_check", {"passes": "types"}, {})
     assert "--passes" in argv2 and "types" in argv2
 
+def test_build_ner_check_rag_leak_to_types():
+    """RAG-поля не уезжают в argv вне режима rag: форма помнит значения
+    с прошлого RAG-запуска (touched/.env-префилл), режимы — разные
+    смыслы, мусорные флаги в argv недопустимы."""
+    form = {"passes": "types", "types": "Class",
+            # остатки прошлого RAG-запуска:
+            "rag_terms": "苏幕遮\n林追风", "rag_source_type": "chapter",
+            "rag_budget": "65536", "save_interval": "0"}
+    argv = build_command("ner_check", form, {})
+    assert "--rag_terms" not in argv
+    assert "--rag_source_type" not in argv
+    assert "--rag_budget" not in argv
+    assert "--save-interval" not in argv
+    assert "--passes" in argv and "types" in argv
+    # в режиме rag — всё на месте
+    form["passes"] = "rag"
+    argv2 = build_command("ner_check", form, {})
+    assert "--rag_terms" in argv2
+    assert "苏幕遮\n林追风" in argv2
+    assert "--rag_source_type" in argv2
+    assert "--rag_budget" in argv2 and "65536" in argv2
+    assert "--save-interval" in argv2
+    # passes=rag без терминов — флаги RAG не передаются (кроме бюджета):
+    # CLI сам откажет с внятной ошибкой
+    argv3 = build_command("ner_check", {"passes": "rag",
+                                        "rag_budget": "4000"}, {})
+    assert "--rag_terms" not in argv3
+    assert "--rag_budget" in argv3
+
 
 def test_build_ner_check_rag_flags():
     """RAG-режим: --rag_terms/--rag_source_type/диапазон/

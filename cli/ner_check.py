@@ -848,6 +848,10 @@ def patches_table(patches, offset=0) -> str:
 def do_check(args, logger) -> int:
     base_url, api_key, model, _ = resolve_server(args, logger)
 
+    if args.passes != "rag" and args.rag_terms.strip():
+        logger.warning(
+            "⚠️ --rag_terms указан, но режим %s — список игнорируется "
+            "(RAG-термины работают только с --passes rag)", args.passes)
     if args.passes == "rag":
         prompt_tpl = load_rag_prompt(args.rag_prompt_file or args.prompt_file,
                                      logger)

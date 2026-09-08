@@ -931,3 +931,22 @@ def test_batch_user_msg_whole_vs_types():
     assert typed.startswith(NC.TYPES_STAGE_PREFIX)
     # плейсхолдеры закрыты и в types-варианте
     assert "{glossary}" not in typed and "{fields}" not in typed
+
+def test_ner_check_rag_terms_ignored_outside_rag(tmp_path, caplog,
+                                                 monkeypatch):
+    """--rag_terms вне режима rag — предупреждение и игнор (режимы
+    passes — разные смыслы, мусорные RAG-флаги не выполняются)."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    calls = []
+    _mock_stream(monkeypatch, ('[{"term": "林凡", "translation": "Лин Фань", '
+                               '"reason": "p"}]'), calls)
+    with caplog.at_level(logging.WARNING):
+        rc = NC.main(["--input", "ner.json", "--passes", "whole",
+                      "--model", "m",
+                      "--rag_terms", "苏幕遮\n林追风"])
+    assert rc == 0
+    assert "игнорируется" in caplog.text
+    # единственный запрос — типовой проход, RAG не запускался
+    assert len(calls) == 1

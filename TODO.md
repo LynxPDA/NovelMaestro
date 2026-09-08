@@ -19,6 +19,16 @@
       (fallback — байты на не-utf8); остальные бюджеты проверены:
       считаются по фактическому тексту в Python (translate_book,
       ner_check, translate_check_llm, wiki) — ошибки не имеют.
+- [x] **3. ner_check: RAG-поля текут в другие режимы** — форма помнит
+      значения прошлого RAG-запуска (touched/.env-префилл),
+      build_ner_check передавал --rag_terms/--rag_source_type/
+      --rag_budget/--save-interval в argv при любом режиме passes.
+      Исправлено: RAG-поля — только при passes=rag (web/stages.py);
+      CLI-страховка — warning при --rag_terms вне режима rag
+      (cli/ner_check.py). Аналогичный аудит других стадий:
+      pipeline (dict/rules/examples — гейтится extended-действием 9 в
+      web/pipeline.py) и wiki (as_chapter/save_type/toc — гейтится в
+      CLI) защищены.
 
 ## Сессия после 0.2.7 (продолжение)
 
