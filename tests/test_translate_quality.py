@@ -164,7 +164,7 @@ def test_main_e2e_report(tmp_path, monkeypatch):
         "--budget", "200000"])
     rc = TQ.main()
     assert rc == 0
-    out = (tmp_path / "translation_quality_assessment.md")
+    out = (tmp_path / "tmp" / "translation_quality_assessment.md")
     assert out.exists()
     text = out.read_text(encoding="utf-8")
     assert "Оценка качества перевода" in text
@@ -186,7 +186,7 @@ def test_main_budget_trims(tmp_path, monkeypatch):
         "--budget", "60"])
     rc = TQ.main()
     assert rc == 0
-    text = (tmp_path / "translation_quality_assessment.md").read_text(
+    text = (tmp_path / "tmp" / "translation_quality_assessment.md").read_text(
         encoding="utf-8")
     assert "отсечено" in text
 
@@ -201,7 +201,7 @@ def test_main_empty_llm_returns_1(tmp_path, monkeypatch):
         "translate_quality.py", "--start", "1", "--end", "1",
         "--host", "http://h", "--model", "m"])
     assert TQ.main() == 1
-    assert not (tmp_path / "translation_quality_assessment.md").exists()
+    assert not (tmp_path / "tmp" / "translation_quality_assessment.md").exists()
 
 
 def test_main_no_chapters(tmp_path, monkeypatch):

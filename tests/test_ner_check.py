@@ -21,7 +21,7 @@ from core.common import (  # noqa: E402
     parse_review_doc, review_entry,
 )
 import ner_check as NC  # noqa: E402
-from conftest import SilentLog  # noqa: E402
+from conftest import SilentLog, ensure_tmp  # noqa: E402
 
 ITEMS = [
     {"term": "林凡", "type": "Person (male)", "translation": "Линь Фан",
@@ -272,7 +272,7 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     assert prefix not in calls[0]
     # параметры прогона сохранены в meta review-файла
     # правки — в накопительном ner_review.json (дедуп между проходами)
-    doc = json.loads((tmp_path / "ner_review.json")
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     assert len(doc["entries"]) == 1
     e = doc["entries"][0]
@@ -320,10 +320,10 @@ def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
                    "--model", "m"])
     assert rc == 0
     # человек отклонил правку
-    doc = json.loads((tmp_path / "ner_review.json")
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     doc["entries"][0]["status"] = "отклонить"
-    (tmp_path / "ner_review.json").write_text(
+    ensure_tmp(tmp_path); (tmp_path / "tmp" / "ner_review.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
 
     # этап 2: по типам; LLM повторяет старую правку + даёт новую
@@ -331,7 +331,7 @@ def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
                   "--types", "Person (male),Skill",
                    "--model", "m"])
     assert rc == 0
-    doc = json.loads((tmp_path / "ner_review.json")
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     entries = doc["entries"]
     assert len(entries) == 2
@@ -357,25 +357,25 @@ def test_ner_check_apply_dry_run_and_real(tmp_path, monkeypatch):
          "old": "Огненный шар", "new": "не должно", "reason": "r",
          "status": "отклонить", "applied": False},  # отклонено человеком
     ]}
-    (tmp_path / "ner_review.json").write_text(
+    ensure_tmp(tmp_path); (tmp_path / "tmp" / "ner_review.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     # dry-run: файлы не меняются
     rc = NC.main(["--apply", "--dry-run", "--input", "ner.json"])
     assert rc == 0
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Линь Фан"
-    assert not (tmp_path / "ner.json.bak").exists()
+    assert not (tmp_path / "tmp" / "ner.json.bak").exists()
     # реальное применение: бэкап + правка + лог с этапами
     rc = NC.main(["--apply", "--input", "ner.json"])
     assert rc == 0
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
     assert data[2]["translation"] == "Огненный шар"   # отклонённое цело
-    assert (tmp_path / "ner.json.bak").exists()
+    assert (tmp_path / "tmp" / "ner.json.bak").exists()
     # отчёт ner_changes.md удалён (не нужен) — файл не создаётся
     assert not (tmp_path / "ner_changes.md").exists()
     # флаги «применено» сохранены в файл правок
-    doc2 = json.loads((tmp_path / "ner_review.json")
+    doc2 = json.loads((tmp_path / "tmp" / "ner_review.json")
                       .read_text(encoding="utf-8"))
     assert doc2["entries"][0]["applied"] is True
     assert "applied_at" in doc2["entries"][0]
@@ -396,24 +396,24 @@ def test_ner_check_apply_no_bak(tmp_path, monkeypatch):
          "old": "Линь Фан", "new": "Лин Фань", "reason": "r",
          "status": "принять", "applied": False},
     ]}
-    (tmp_path / "ner_review.json").write_text(
+    ensure_tmp(tmp_path); (tmp_path / "tmp" / "ner_review.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     rc = NC.main(["--apply", "--no-bak", "--input", "ner.json"])
     assert rc == 0
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
-    assert not (tmp_path / "ner.json.bak").exists()
+    assert not (tmp_path / "tmp" / "ner.json.bak").exists()
     # без --no-bak бэкап создаётся (по умолчанию): новая правка
     doc2 = {"created": "t", "input": "ner.json", "entries": [
         {"stage": "Весь глоссарий", "term": "青云宗", "field": "translation",
          "old": "Секта Цинъюнь", "new": "Секта Цинъюнь (гл.)", "reason": "r",
          "status": "принять", "applied": False},
     ]}
-    (tmp_path / "ner_review.json").write_text(
+    ensure_tmp(tmp_path); (tmp_path / "tmp" / "ner_review.json").write_text(
         json.dumps(doc2, ensure_ascii=False), encoding="utf-8")
     rc = NC.main(["--apply", "--input", "ner.json"])
     assert rc == 0
-    assert (tmp_path / "ner.json.bak").exists()
+    assert (tmp_path / "tmp" / "ner.json.bak").exists()
 
 
 def test_ner_check_apply_legacy_patches_array(tmp_path, monkeypatch):
@@ -444,8 +444,8 @@ def test_ner_check_auto_apply_whole(tmp_path, monkeypatch):
     assert rc == 0
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
-    assert (tmp_path / "ner.json.bak").exists()
-    doc = json.loads((tmp_path / "ner_review.json")
+    assert (tmp_path / "tmp" / "ner.json.bak").exists()
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     assert doc["entries"][0]["applied"] is True
     assert not (tmp_path / "ner_changes.md").exists()
@@ -471,7 +471,7 @@ def test_ner_check_auto_apply_whole_only(tmp_path, monkeypatch):
     assert len(calls) == 1
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
-    assert (tmp_path / "ner.json.bak").exists()
+    assert (tmp_path / "tmp" / "ner.json.bak").exists()
 
 
 def test_ner_check_passes_all_rejected(tmp_path, monkeypatch):
@@ -496,7 +496,7 @@ def test_ner_check_auto_apply_fail_fast(tmp_path, monkeypatch):
     # нер.json не тронут, бэкапа нет
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Линь Фан"
-    assert not (tmp_path / "ner.json.bak").exists()
+    assert not (tmp_path / "tmp" / "ner.json.bak").exists()
 
 
 def test_ner_check_llm_error_does_not_crash(tmp_path, monkeypatch):
@@ -510,7 +510,7 @@ def test_ner_check_llm_error_does_not_crash(tmp_path, monkeypatch):
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
                   "--host", "http://x", "--model", "m"])
     assert rc == 0
-    doc = json.loads((tmp_path / "ner_review.json")
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     assert doc["entries"] == []
     # отчёт удалён: файла быть не должно, скрипт не падает
@@ -544,7 +544,7 @@ def test_ner_check_threads_parallel_types(tmp_path, monkeypatch):
     assert rc == 0
     # три типа → три батча (по одному на тип) — все запрошены
     assert len(calls) == 3
-    doc = json.loads((tmp_path / "ner_review.json")
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     stages = [e["stage"] for e in doc["entries"]]
     # правки дедуплицируются (одинаковый ответ) — но этап записан
@@ -675,7 +675,7 @@ def test_ner_check_rag_main(tmp_path, monkeypatch):
     assert len(calls[0]) > 800
     # в запрос попали и термины, и фрагменты книги
     assert "林凡" in calls[0] and "Линь Фан" in calls[0]
-    doc = json.loads((tmp_path / "ner_review.json")
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     # 林凡 уже Person (male) и Линь Фан — уточнений нет → пусто
     assert doc["entries"] == []
@@ -697,7 +697,7 @@ def test_ner_check_rag_patches_differ(tmp_path, monkeypatch):
                   "--rag_novel", "novel.txt",
                   "--host", "http://x", "--model", "m"])
     assert rc == 0
-    doc = json.loads((tmp_path / "ner_review.json")
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     entries = doc["entries"]
     assert len(entries) == 1
@@ -725,7 +725,7 @@ def test_ner_check_rag_filters_other_terms(tmp_path, monkeypatch):
                   "--rag_novel", "novel.txt",
                   "--host", "http://x", "--model", "m"])
     assert rc == 0
-    doc = json.loads((tmp_path / "ner_review.json")
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     entries = doc["entries"]
     assert len(entries) == 1  # 青云宗 — не из списка запроса, отброшен
@@ -744,7 +744,7 @@ def test_ner_check_whole_multi_field_diff(tmp_path, monkeypatch):
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
                   "--host", "http://x", "--model", "m"])
     assert rc == 0
-    doc = json.loads((tmp_path / "ner_review.json")
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     entries = doc["entries"]
     assert len(entries) == 2
@@ -853,7 +853,7 @@ def test_ner_check_rag_save_interval(tmp_path, monkeypatch):
 
     t = threading.Thread(target=run, daemon=True)
     t.start()
-    review = tmp_path / "ner_review.json"
+    review = tmp_path / "tmp" / "ner_review.json"
     for _ in range(200):
         if review.exists():
             break

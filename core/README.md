@@ -87,7 +87,9 @@ translate_check_llm: fix_entry (ошибка LLM {chapter,fragment,corrected,typ
 LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) → (text, err);
   ретраи ТОЛЬКО 408/425/429/5xx + Retry-After/backoff+jitter (H3) /
   llm_messages (унифицированный формат messages всех стадий и предпросмотра:
-  промпт и данные — в user через пустую строку, system присутствует, но пустой)
+  промпт и данные — в user через пустую строку; разметка промпта тегами
+  <system>…</system> / <user>…</user> переносит блоки в system/user,
+  без разметки весь промпт в user, system пустой)
 ФС: atomic_write / read_text_safe (utf-8 → cp1251 → gb18030 — B7)
 прогресс (web): web_progress_enabled (флаг WEB_PROGRESS=1 ставит JobManager.start) /
   emit_progress (done, total, label → stdout-строка @@PROGRESS@@ + JSON,

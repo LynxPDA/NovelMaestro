@@ -218,12 +218,14 @@ def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
     argv += _range_argv("start", form)
     if form.get("source_type"):
         argv += ["--source-type", str(form["source_type"])]
-    if form.get("chunk_size"):
+    # разбивка на части по «Глав в части» (>0) — для любого режима;
+    # пусто/0 — одна сборка без разбивки
+    if form.get("chunk_size") not in (None, "", 0):
         argv += ["--chunk-size", str(form["chunk_size"])]
-    # --tmp-dir убран из web: compiled_*/book_* пишутся в корень проекта
+    # --tmp-dir не передаётся: рабочие файлы — tmp/ проекта (дефолт CLI)
     # обложка/метаданные/донат относятся только к книжным форматам
     # (в txt-режимах форма их прячет — и в argv они не попадают)
-    book = mode in ("epub", "fb2", "epub-chunks", "fb2-chunks")
+    book = mode in ("epub", "fb2")
     if not book:
         argv += ["--no-cover", "--no-donate"]
         return argv
@@ -765,19 +767,13 @@ STAGE_SPECS: dict[str, dict] = {
         "fields": [
             {"name": "mode", "label": "Режим",
              "type": "select",
-             "options": ["txt", "txt-plain", "epub", "fb2", "epub-chunks",
-                         "txt-chunks", "fb2-chunks"],
+             "options": ["txt", "txt-plain", "epub", "fb2"],
              "labels": {"txt": "TXT (Rulate)", "txt-plain": "TXT",
-                        "epub": "EPUB", "fb2": "FB2",
-                         "epub-chunks": "EPUB частями",
-                         "txt-chunks": "TXT (Rulate) частями",
-                         "fb2-chunks": "FB2 частями"},
+                        "epub": "EPUB", "fb2": "FB2"},
              "default": "txt",
              "help": "TXT (Rulate) — заголовки «# [Название :|: N]» для "
                       "загрузки на rulate; TXT — обычный txt без "
-                      "rulate-форматирования; * частями — та же сборка "
-                      "по --chunk-size глав на файл (txt-chunks — тот же "
-                      "Rulate-формат, по частям)"},
+                      "rulate-форматирования"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
@@ -786,7 +782,9 @@ STAGE_SPECS: dict[str, dict] = {
              "default": "polished"},
             {"name": "chunk_size", "label": "Глав в части",
              "type": "number", "default": "",
-             "help": "для *-chunks режимов; пусто = дефолт (epub=50, txt=500, fb2=50)"},
+             "help": "указано (>0) — диапазон разбивается на части по "
+                      "столько глав (файл на каждую часть), для любого "
+                      "режима; пусто/0 = без разбивки"},
             {"name": "cover", "label": "Обложка",
              "type": "files", "dir": "source",
              "ext": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"],

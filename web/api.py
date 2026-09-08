@@ -1266,10 +1266,10 @@ def _ner_export(ctx: dict) -> dict:
 
 
 def _review_file(ctx: dict, fname: str) -> Path:
-    """Файл review внутри проекта (ner_review.json /
-    translate_check_llm_review.json)."""
+    """Файл review внутри tmp/ проекта (tmp/ner_review.json /
+    tmp/translate_check_llm_review.json — рабочие файлы)."""
     pdir, _section, _name = _project_ctx(ctx)
-    return pdir / fname
+    return pdir / "tmp" / fname
 
 
 def _review_get(ctx: dict, fname: str) -> dict:

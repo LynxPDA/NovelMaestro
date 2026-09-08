@@ -558,7 +558,7 @@ def test_main_check_no_errors(tmp_path, monkeypatch):
 # ══════════════════════════════════════════════════════════════════════
 
 def _write_review_meta(tmp_path, applied=False):
-    (tmp_path / "translate_check_llm_review.json").write_text(json.dumps({
+    (tmp_path / "tmp" / "translate_check_llm_review.json").write_text(json.dumps({
         "created": "x",
         "params": {"тип файлов": "polished", "начало": 3, "конец": 9},
         "entries": [{"stage": "Главы 3–9 (polished)", "chapter": 3,

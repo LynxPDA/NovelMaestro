@@ -870,13 +870,17 @@ def test_build_clean_and_compile_cover_meta():
     assert "--fb2-cover" not in argv2
     assert "--no-cover" in argv2
     assert "--no-donate" in argv2
-    # книжные chunks — те же флаги, что и у цельных epub/fb2
-    for mode in ("fb2", "epub-chunks", "fb2-chunks"):
-        argv3 = build_command("compile", {"mode": mode,
-                                          "cover": "source/cover.png"}, {})
-        assert "--epub-cover" in argv3 or mode.startswith("fb2"), mode
+    # книжные режимы — те же флаги, что и у цельных epub/fb2;
+    # разбивка теперь через chunk_size (режимы *-chunks убраны)
+    argv3 = build_command("compile", {"mode": "fb2",
+                                      "cover": "source/cover.png"}, {})
+    assert "--fb2-cover" in argv3
+    argv5 = build_command("compile", {"mode": "epub",
+                                      "cover": "source/cover.png",
+                                      "chunk_size": 50}, {})
+    assert "--epub-cover" in argv5 and "--chunk-size" in argv5
     argv4 = build_command("compile",
-                          {"mode": "txt-chunks",
+                          {"mode": "txt",
                            "cover": "source/cover.png",
                            "donate_file": "source/donate.txt"}, {})
     assert "--no-cover" in argv4 and "--no-donate" in argv4

@@ -80,3 +80,8 @@ def fake_env(tmp_path) -> str:
                    "API_KEY=testkey\n"
                    "MODEL=testmodel\n", encoding="utf-8")
     return str(env)
+
+
+def ensure_tmp(tmp_path):
+    """Каталог tmp/ проекта (рабочие файлы) для тестов."""
+    (tmp_path / "tmp").mkdir(exist_ok=True)

@@ -2510,9 +2510,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       fieldNodes.push(preview);
       function applyCompileMode() {
         const m = (modeSel && modeSel.value) || "txt";
-        const book =
-          m === "epub" || m === "fb2" || m === "epub-chunks"
-          || m === "fb2-chunks";
+        const book = m === "epub" || m === "fb2";
         for (const name of ["cover", "epub_meta", "donate_file"]) {
           const w = fieldWraps[name];
           if (w) w.classList.toggle("hidden", !book);

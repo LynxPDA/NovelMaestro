@@ -1486,16 +1486,42 @@ def find_fragment_owner(chapter_map, frag, claimed=None, want="polished",
 # LLM: единый стрим-запрос (гигиена стрима — одна реализация на всех)
 # ══════════════════════════════════════════════════════════════════════
 
+_ROLE_TAG_RE = re.compile(r"(?ms)^[ \t]*<(system|user)>(.*?)</\1>")
+
+
 def llm_messages(prompt: str, data: str = "") -> list[dict]:
     """Единый формат messages всех LLM-запросов (скрипты и предпросмотр).
 
-    Промпт и данные уходят в user (данные дописываются через пустую
-    строку); system в запросе присутствует, но пустой. Один аргумент —
+    Промпт может размечаться тегами <system>…</system> и
+    <user>…</user> (открывающий тег — только в начале строки):
+    содержимое system-блоков уходит в системное сообщение, остальной
+    текст (вне тегов и user-блоки, по порядку) — в user. Без тегов
+    весь промпт уходит в user, system остаётся пустым (как раньше).
+    data дописывается в user через пустую строку. Один аргумент —
     просто данные (скрипты, где промпт уже внутри user-контента).
-    Фактический запрос и предпросмотр строятся одной функцией —
-    всегда совпадают."""
-    content = f"{prompt}\n\n{data}" if data else prompt
-    return [{"role": "system", "content": ""},
+    Системные тексты отдельных скриптов (ner/wiki/проверки) оборачиваются
+    в <system>…</system> на стороне вызывающего. Фактический запрос
+    и предпросмотр строятся одной функцией — всегда совпадают."""
+    if not _ROLE_TAG_RE.search(prompt):
+        content = f"{prompt}\n\n{data}" if data else prompt
+        return [{"role": "system", "content": ""},
+                {"role": "user", "content": content}]
+    sys_chunks, user_chunks, last = [], [], 0
+    for m in _ROLE_TAG_RE.finditer(prompt):
+        piece = prompt[last:m.start()]
+        if piece.strip():
+            user_chunks.append(piece.strip())
+        if m.group(1) == "system":
+            sys_chunks.append(m.group(2).strip())
+        else:
+            user_chunks.append(m.group(2).strip())
+        last = m.end()
+    tail = prompt[last:]
+    if tail.strip():
+        user_chunks.append(tail.strip())
+    user_text = "\n\n".join(user_chunks)
+    content = f"{user_text}\n\n{data}" if data else user_text
+    return [{"role": "system", "content": "\n\n".join(sys_chunks)},
             {"role": "user", "content": content}]
 
 

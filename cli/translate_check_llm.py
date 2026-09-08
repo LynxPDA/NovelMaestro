@@ -82,13 +82,14 @@ from core.common import (  # noqa: E402
 )
 
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "translate_check_prompt.txt")
-DEFAULT_REVIEW = "translate_check_llm_review.json"
+DEFAULT_REVIEW = "tmp/translate_check_llm_review.json"
 
 # ─────────────────────────────────────────────
 # ВСТРОЕННЫЕ ПРОМПТЫ
 # ─────────────────────────────────────────────
 
 PASS1_PROMPT = """\
+<system>
 Ты — профессиональный редактор перевода веб-новелл на русский язык.
 Тебе дан текст одной или нескольких глав перевода. Найди ТОЛЬКО критические ошибки.
 
@@ -179,9 +180,11 @@ PASS1_PROMPT = """\
 }
 ]
 Если ошибок нет — верни пустой массив: []
+</system>
 """
 
 PASS2_PROMPT = """\
+<system>
 Ты — старший редактор, выполняющий ВЕРИФИКАЦИЮ найденных ошибок.
 
 Тебе дан:
@@ -269,6 +272,7 @@ PASS2_PROMPT = """\
 
 Верни ТОЛЬКО confirmed и new. Отклонённые (rejected) НЕ включай.
 Если все отклонены и новых нет — верни: []
+</system>
 """
 
 # ГИБКИЙ ПОИСК ФАЙЛА (адаптер над core.common.find_chapter_file)

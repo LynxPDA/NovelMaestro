@@ -77,10 +77,11 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
   «Все / набор» (всё снять нельзя — остаётся первый пункт, «Все» сверху;
   подписи кнопок «Все поля/типы/столбцы» → «Поля/Типы/Столбцы (N)»);
   тултипы на всех кнопках; review-флоу:
-  `ner_review.json` / `translate_check_llm_review.json`.
+  `tmp/ner_review.json` / `tmp/translate_check_llm_review.json`.
 - **Проверка** (W7): отчёты translate_check (`logs/check_*.txt`) — таблица
   «глава → папка → ошибки» с переходом в «Файлы», FATAL подсвечен;
-  LLM-карточки (`ner_review.json` / `translate_check_llm_review.json`) —
+  LLM-карточки (`tmp/ner_review.json` /
+  `tmp/translate_check_llm_review.json`) —
   переключатель «Список правок / Редактор JSON»: список отдельных правок
   со сводкой (всего/принято/отклонено/применено), кнопки «Принять»,
   «Отклонить», «Откорректировать» (Было/Стало/Причина — JSON: old/new/reason)
@@ -194,7 +195,8 @@ WEB_JOBS_LIMIT WEB_PROJECTS_DIR`) > дефолт. `--projects-dir`/`WEB_PROJECTS
 - **Глоссарий — всегда ner.json**: по архитектуре проекта чтение и
   сохранение глоссария во всех стадиях — файл `ner.json` в корне
   проекта (выбор файла в формах убран). Review-файлы правок — тоже
-  без выбора: `ner_review.json` и `translate_check_llm_review.json`
+  без выбора: `tmp/ner_review.json` и
+  `tmp/translate_check_llm_review.json`
   (их же читают вкладки «Правки»). Форма ner без режима: `ner.json`
   отсутствует — создаётся новый, существует — дообучение; вход —
   всегда сборка глав из диапазона. Таймаут в формах — один

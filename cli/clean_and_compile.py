@@ -44,6 +44,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core.common import (  # noqa: E402
+    atomic_write,
     build_chapter_map as common_build_chapter_map,
     find_chapter_file as common_find_chapter_file,
 )
@@ -74,6 +75,7 @@ class Config:
 
     @property
     def titles_file(self):
+        # файл заголовков — тоже рабочий файл: в tmp/ проекта
         return os.path.join(self.tmp_dir, f"titles_{self.start}_{self.end}.txt")
 
     def get_actual_titles_file(self):
@@ -627,22 +629,6 @@ def build_fb2_native(chapters_data, meta, cover_path, output_path):
 
 
 # ==========================================
-# ИМЯ ЭКСПОРТА (имя проекта + диапазон)
-# ==========================================
-def _export_label() -> str:
-    """Метка имени файла экспорта: NFC + санитизация basename cwd.
-
-    Имя папки проекта (валидируется valid_project_name) превращается
-    в безопасную метку: пробелы → '_', ведущие/хвостовые '.'/'_' срезаются;
-    пустой результат → fallback "book". Только epub/fb2 (compiled_* не трогаем).
-    """
-    import unicodedata
-    label = unicodedata.normalize("NFC", os.path.basename(os.getcwd())).strip()
-    label = label.replace(" ", "_").strip("._")
-    return label or "book"
-
-
-# ==========================================
 # ЗАГРУЗКА КАСТОМНЫХ ЗАГОЛОВКОВ
 # ==========================================
 def load_custom_titles():
@@ -662,11 +648,42 @@ def load_custom_titles():
                         custom_titles[chapter_num] = parts[1]
     return custom_titles
 
+def _book_label() -> str:
+    """Метка имени файла: NFC + санитизация basename cwd.
+
+    Имя папки проекта (валидируется valid_project_name) превращается
+    в безопасную метку: пробелы → '_', ведущие/хвостовые '.'/'_'
+    срезаются; пустой результат → fallback "book"."""
+    import unicodedata
+    label = unicodedata.normalize("NFC", os.path.basename(os.getcwd())).strip()
+    label = label.replace(" ", "_").strip("._")
+    return label or "book"
+
+
+def output_base(start=None, end=None, ext="txt") -> str:
+    """Имя выходного файла сборки с названием проекта:
+    <проект>_<начало>_<конец>[.<ext>] (или без суффикса диапазона для
+    epub/fb2). Все файлы сборки — единое именование (compiled_*
+    упразднены)."""
+    label = _book_label()
+    s = cfg.start if start is None else start
+    e = cfg.end if end is None else end
+    if ext in ("epub", "fb2"):
+        return f"{label}_{s}_{e}.{ext}"
+    return f"{label}_{s}_{e}_{ext}.txt"
+
+
 # ==========================================
 # СБОРКА КНИГИ
 # ==========================================
 def compile_book(mode):
-    output_file = os.path.join(cfg.tmp_dir, f"compiled_{cfg.start}_{cfg.end}_{mode}.txt")
+    """Сборка диапазона cfg.start–cfg.end в один файл (атомарно).
+
+    Тело копится в памяти и пишется одной операцией (atomic_write):
+    обрыв прогона не оставляет битого файла. Лог —
+    logs/build_log_<mode>.txt; epub/fb2 рядом с промежуточным txt в
+    tmp/ проекта."""
+    output_file = os.path.join(cfg.tmp_dir, output_base(ext=mode))
     try:
         os.makedirs("logs", exist_ok=True)
     except OSError as exc:
@@ -677,20 +694,18 @@ def compile_book(mode):
     missing_chapters = []
     chapter_map = build_chapter_map(cfg.base_dir)
     chapters_data = []
-
+    parts = []   # тело сборки в памяти — запись атомарная одной операцией
     try:
-        out_txt = open(output_file, "w", encoding="utf-8")
         out_log = open(log_file_path, "w", encoding="utf-8")
     except OSError as exc:
-        print(f"Ошибка: не удалось создать файлы сборки: {exc}")
+        print(f"Ошибка: не удалось создать лог сборки: {exc}")
         return 1
-    with out_txt, out_log:
+    try:
         log("==========================================", out_log)
         log(f"Начало сборки ({mode}): {output_file}", out_log)
         log(f"Кастомные заголовки: {len(custom_titles)}", out_log)
         log(f"Время старта: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", out_log)
         log("==========================================", out_log)
-
         for i in range(cfg.start, cfg.end + 1):
             order_val = str(i) if cfg.set_order == 1 else ""
             tag_suffix = ""
@@ -781,9 +796,9 @@ def compile_book(mode):
             chapters_data.append({"title": final_title, "body": body_for_book})
 
             if mode == "fb2":
-                out_txt.write("\n\n".join(cleaned_lines) + "\n\n")
+                parts.append("\n\n".join(cleaned_lines) + "\n\n")
             else:
-                out_txt.write("\n".join(cleaned_lines) + "\n\n")
+                parts.append("\n".join(cleaned_lines) + "\n\n")
 
         if mode in ("epub", "fb2") and cfg.add_donate_page == 1:
             donate_result = load_donate_page(cfg.donate_file or None)
@@ -791,7 +806,7 @@ def compile_book(mode):
                 donate_title, donate_body = donate_result
                 log("[ИНФО] Добавление страницы поддержки проекта...", out_log)
                 support_text = f"# {donate_title}\n\n" + "\n".join(donate_body) + "\n\n"
-                out_txt.write(support_text)
+                parts.append(support_text)
                 chapters_data.append({"title": donate_title, "body": donate_body})
             else:
                 log("[ИНФО] Файл donate.txt не найден — страница поддержки пропущена.", out_log)
@@ -800,20 +815,19 @@ def compile_book(mode):
         log(f"Сборка {mode} завершена: {output_file}", out_log)
         if missing_chapters:
             log(f"ПРОПУЩЕНО ГЛАВ: {len(missing_chapters)} ({', '.join(missing_chapters)})", out_log)
+        atomic_write(output_file, "".join(parts))
+    finally:
+        out_log.close()
 
     # Нативная генерация EPUB (без pandoc)
     if mode == "epub":
-        label = _export_label()
-        epub_output = os.path.join(
-            cfg.tmp_dir, f"{label}_{cfg.start}_{cfg.end}.epub")
+        epub_output = os.path.join(cfg.tmp_dir, output_base(ext="epub"))
         meta = parse_yaml_meta(cfg.epub_meta) if os.path.isfile(cfg.epub_meta) else {}
         build_epub_native(chapters_data, meta, cfg.epub_cover, epub_output)
 
     # Нативная генерация FB2 (без pandoc)
     if mode == "fb2":
-        label = _export_label()
-        fb2_output = os.path.join(
-            cfg.tmp_dir, f"{label}_{cfg.start}_{cfg.end}.fb2")
+        fb2_output = os.path.join(cfg.tmp_dir, output_base(ext="fb2"))
         meta = parse_yaml_meta(cfg.epub_meta) if os.path.isfile(cfg.epub_meta) else {}
         cover = cfg.fb2_cover if cfg.fb2_inject_cover == 1 else None
         build_fb2_native(chapters_data, meta, cover, fb2_output)
@@ -822,7 +836,10 @@ def compile_book(mode):
 # СБОРКА ЧАСТЯМИ
 # ==========================================
 def compile_chunks(mode, chunk_size):
-    """mode: 'epub' | 'txt' | 'fb2'; chunk_size — глав в одной части."""
+    """Разбивка диапазона на части по chunk_size глав (chunk_size > 0).
+
+    mode: 'epub' | 'txt' | 'fb2'; каждая часть собирается через
+    compile_book (имя части — output_base текущего поддиапазона)."""
     orig_start, orig_end = cfg.start, cfg.end
     current_start = orig_start
     while current_start <= orig_end:
@@ -837,8 +854,6 @@ def compile_chunks(mode, chunk_size):
 # ==========================================
 # CLI
 # ==========================================
-CHUNK_DEFAULTS = {"epub": 50, "txt": 500, "fb2": 50}
-
 def build_parser():
     p = argparse.ArgumentParser(
         description="Компиляция глав в TXT/EPUB/FB2 (чистый CLI, без меню).",
@@ -848,19 +863,16 @@ def build_parser():
 Примеры:
   %(prog)s --mode txt
   %(prog)s --mode epub --start 1 --end 120 --no-donate
-  %(prog)s --mode epub-chunks --chunk-size 50
+  %(prog)s --mode epub --chunk-size 50
   %(prog)s --mode fb2 --source-type redacted
 Интерактивный режим — лаунчер tools/run_clean_and_compile.py.
 """,
     )
     p.add_argument("--mode", required=True,
-                   choices=["txt", "txt-plain", "epub", "fb2",
-                            "epub-chunks", "txt-chunks", "fb2-chunks"],
-                   help="Действие: сборка (txt-plain/txt/epub/fb2) или "
-                        "сборка частями (*-chunks). txt = TXT (Rulate) "
-                        "с тегами «# [Название :|: N]»; txt-plain — TXT "
-                        "как в переводе: заголовки без markdown-префиксов, "
-                        "только очистка и компиляция")
+                   choices=["txt", "txt-plain", "epub", "fb2"],
+                   help="Формат сборки. txt = TXT (Rulate) с тегами "
+                        "«# [Название :|: N]»; txt-plain — TXT как в "
+                        "переводе: заголовки без markdown-префиксов")
     p.add_argument("--start", type=int, default=None,
                    help="Начальная глава (по умолчанию: минимальная найденная)")
     p.add_argument("--end", type=int, default=None,
@@ -871,10 +883,11 @@ def build_parser():
                    choices=["polished", "redacted", "translated", "chapter"],
                    help="Тип исходного файла главы (по умолчанию: polished)")
     p.add_argument("--chunk-size", type=int, default=None,
-                   help="Глав в одной части для *-chunks (по умолчанию: "
-                        "epub=50, txt=500, fb2=50). Единица — ГЛАВЫ.")
-    p.add_argument("--tmp-dir", default=".",
-                   help="Каталог для compiled_*/book_*/titles_* (по умолчанию: .)")
+                   help="Глав в одной части: указано (>0) — диапазон "
+                        "разбивается на части для ЛЮБОГО режима; пусто/0 "
+                        "= одна сборка без разбивки. Единица — ГЛАВЫ.")
+    p.add_argument("--tmp-dir", default="tmp",
+                   help="Каталог рабочих файлов сборки (по умолчанию: tmp)")
     p.add_argument("--epub-cover", default="./source/cover.jpg",
                    help="Обложка для EPUB (по умолчанию: ./source/cover.jpg)")
     p.add_argument("--epub-meta", default="./source/metadata.yaml",
@@ -930,14 +943,13 @@ def main():
           f"источник: {cfg.compile_type} | папка: {cfg.base_dir}")
 
     mode = args.mode
-    if mode in ("txt", "txt-plain", "epub", "fb2"):
+    chunk_size = args.chunk_size or 0
+    if chunk_size < 0:
+        sys.exit("❌ --chunk-size должен быть >= 0 (0 = без разбивки).")
+    if chunk_size == 0:
         compile_book(mode)
-    else:  # *-chunks
-        base_mode = mode.split("-", 1)[0]  # epub|txt|fb2
-        chunk_size = args.chunk_size or CHUNK_DEFAULTS[base_mode]
-        if chunk_size <= 0:
-            sys.exit("❌ --chunk-size должен быть > 0.")
-        compile_chunks(base_mode, chunk_size)
+    else:
+        compile_chunks(mode, chunk_size)
 
 
 if __name__ == "__main__":

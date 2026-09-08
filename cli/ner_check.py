@@ -112,7 +112,20 @@ from core.common import (  # noqa: E402
 )
 
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "ner_check_prompt.txt")
-DEFAULT_REVIEW = "ner_review.json"
+DEFAULT_REVIEW = "tmp/ner_review.json"
+
+
+def _bak_path(input_path: str) -> str:
+    """Бэкап глоссария — рабочий файл: ner.json.bak в tmp/ проекта
+    (рядом с review-файлом), имя исходника сохраняется. tmp/
+    создаётся при необходимости (применение может идти раньше
+    любой LLM-стадии)."""
+    try:
+        os.makedirs("tmp", exist_ok=True)
+    except OSError as exc:
+        raise OSError(f"Не удалось создать tmp/: {exc}") from exc
+    base = os.path.basename(input_path)
+    return os.path.join("tmp", base + ".bak")
 DEFAULT_BATCH_SIZE = 196608  # СИМВОЛЫ (~65536 токенов)
 
 # Префикс запроса типовых этапов (этап 2): глоссарий уже выверен целиком —
@@ -238,7 +251,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--review", "--patches", dest="review",
                    default=DEFAULT_REVIEW,
                    help="Накопительный файл правок для человека "
-                        "(по умолчанию: ner_review.json). Понимает и "
+                        "(по умолчанию: tmp/ner_review.json). Понимает и "
                         "legacy-массив патчей (старый ner_patches.json).")
     p.add_argument("--prompt_file", default=DEFAULT_PROMPT_FILE,
                    help="Внешний промпт; плейсхолдер {glossary}. "
@@ -896,9 +909,10 @@ def do_check(args, logger) -> int:
         applied, skipped = apply_ner_patches(data, entries, logger)
         if applied:
             if not args.no_bak and not backed_up:
-                shutil.copy2(args.input, args.input + ".bak")
+                bak = _bak_path(args.input)
+                shutil.copy2(args.input, bak)
                 backed_up = True
-                logger.info(f"💾 Бэкап: {args.input}.bak")
+                logger.info(f"💾 Бэкап: {bak}")
             atomic_write(args.input,
                          json.dumps(data, ensure_ascii=False, indent=2))
         save_review()
@@ -1070,8 +1084,9 @@ def do_apply(args, logger) -> int:
                         f"{p['old']!r} → {p['new']!r}")
         return 0
     if not args.no_bak:
-        shutil.copy2(args.input, args.input + ".bak")
-        logger.info(f"💾 Бэкап: {args.input}.bak")
+        bak = _bak_path(args.input)
+        shutil.copy2(args.input, bak)
+        logger.info(f"💾 Бэкап: {bak}")
     atomic_write(args.input, json.dumps(data, ensure_ascii=False, indent=2))
     save_review_file(args.review, args.input,
                      (meta or {}).get("created")

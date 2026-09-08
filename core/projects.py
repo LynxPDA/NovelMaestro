@@ -633,12 +633,13 @@ def list_projects(projects_root: Path, section: str) -> list:
 
 
 def _has_compiled(pdir: Path) -> bool:
-    """Есть ли скомпилированные файлы (clean_and_compile пишет их в cwd
-    проекта по умолчанию, либо в tmp//output/ при --out).
+    """Есть ли скомпилированные файлы (clean_and_compile пишет их в
+    tmp/ проекта; старые версии писали в корень или output/).
 
-    экспорты EPUB/FB2 — '{имя_проекта}_{start}_{end}.{ext}';
-    легаси-паттерн book_* тоже распознаётся."""
-    new_pats = (f"{pdir.name}_*.epub", f"{pdir.name}_*.fb2")
+    Паттерны: '{имя_проекта}_{start}_{end}[.epub/.fb2/_txt.txt]';
+    легаси compiled_*/book_* тоже распознаются."""
+    new_pats = (f"{pdir.name}_*.epub", f"{pdir.name}_*.fb2",
+                f"{pdir.name}_*_txt.txt", f"{pdir.name}_*_txt-plain.txt")
     for d in (pdir, pdir / "tmp", pdir / "output"):
         if not d.is_dir():
             continue

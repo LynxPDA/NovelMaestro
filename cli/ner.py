@@ -75,6 +75,7 @@ from core.common import (  # noqa: E402
 # ══════════════════════════════════════════════════════════════════════
 
 SYSTEM_PROMPT_PASS1 = """
+<system>
 Analyze the provided text and extract Named Entities (NER) useful for consistent
 translation (fantasy terms, names, locations, specific abilities).
 Return result strictly in JSON format:
@@ -94,9 +95,11 @@ Rules:
 - If no entities found, return [].
 Output ONLY valid JSON.
 Text for work:
+</system>
 """
 
 SYSTEM_PROMPT_PASS2 = """
+<system>
 You are a quality-control reviewer for a Chinese web-novel translation glossary.
 You will receive:
 1. A chunk of the original Chinese text.
@@ -117,11 +120,12 @@ Return the corrected JSON array in the SAME format. Output ONLY valid JSON.
 
 === EXTRACTED NER (to review) ===
 {ner_json}
+</system>
 """
 
 SYSTEM_PROMPT_PASS2_SYS = (
-    "You are a meticulous editor verifying a translation glossary. "
-    "Output ONLY valid JSON."
+    "<system>You are a meticulous editor verifying a translation "
+    "glossary. Output ONLY valid JSON.</system>"
 )
 
 # ══════════════════════════════════════════════════════════════════════

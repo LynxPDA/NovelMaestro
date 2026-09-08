@@ -150,20 +150,21 @@ def test_project_stats(tmp_path):
     # канонические и легаси-имена не должны двойно считаться в одной главе
     (ch / "003" / "translated.txt").write_text("ru")
     assert "2/2/2" in P.project_stats(pdir)
-    # compiled-файлы в КОРНЕ проекта (clean_and_compile --out по умолчанию)
+    # compiled-файлы в tmp/ проекта (рабочие файлы сборки — задача 5)
     pdir2 = tmp_path / "Книга2"
     pdir2.mkdir()
-    (pdir2 / "compiled_5_10_txt.txt").write_text("ok")
+    (pdir2 / "tmp").mkdir()
+    (pdir2 / "tmp" / "Книга2_5_10_txt.txt").write_text("ok")
     assert "compiled: ✓" in P.project_stats(pdir2)
-    (pdir2 / "compiled_5_10_txt.txt").unlink()
-    (pdir2 / "book_5_10.epub").write_text("ok")
+    (pdir2 / "tmp" / "Книга2_5_10_txt.txt").unlink()
+    (pdir2 / "tmp" / "Книга2_5_10.epub").write_text("ok")
     assert "compiled: ✓" in P.project_stats(pdir2)
-    # экспорты по имени проекта {Имя}_{start}_{end}.epub/.fb2
-    (pdir2 / "book_5_10.epub").unlink()
-    (pdir2 / "Книга2_5_10.epub").write_text("ok")
+    # экспорты по имени проекта {Имя}_{start}_{end}.epub/.fb2 (в tmp/)
+    (pdir2 / "tmp" / "Книга2_5_10.epub").unlink()
+    (pdir2 / "tmp" / "Книга2_5_10.epub").write_text("ok")
     assert "compiled: ✓" in P.project_stats(pdir2)
-    (pdir2 / "Книга2_5_10.epub").unlink()
-    (pdir2 / "Книга2_5_10.fb2").write_text("ok")
+    (pdir2 / "tmp" / "Книга2_5_10.epub").unlink()
+    (pdir2 / "tmp" / "Книга2_5_10.fb2").write_text("ok")
     assert "compiled: ✓" in P.project_stats(pdir2)
 
 

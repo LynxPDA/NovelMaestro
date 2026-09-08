@@ -222,6 +222,11 @@ translate_check_llm_review.json и т.п.) — ПО УМОЛЧАНИЮ на ан
 
 ### Промпты
 
+- Разметка запроса: содержимое `<system>…</system>` уходит в
+  системное сообщение LLM, остальное (и `<user>…</user>`) — в user
+  (`llm_messages`); без разметки весь промпт в user. В промптах —
+  только реально обрабатываемые теги; данные размечаются текстовыми
+  маркерами («=== ГЛОССАРИЙ ===» и т.п.), фиктивной xml-разметки нет.
 - Внешние промпты хранятся в `prompts/` проекта; формат — теги:
   `<translate>/<translate_lr>/<redact>/<polish>`, `<pass1>/<pass2>`,
   `<prompt_pass1/2>`, `<prompt_ner_check>/<prompt_rag>`,
@@ -265,8 +270,10 @@ translate_check_llm_review.json и т.п.) — ПО УМОЛЧАНИЮ на ан
 polished.txt`. Trace-JSON — мост translate→redact (пары original/translated);
 polish trace НЕ пишет. `_STAGE_IO` в `web/pipeline.py` — фиксирован.
 Глоссарий — всегда `ner.json` в корне проекта (чтение и сохранение во
-всех стадиях; выбор файла в web убран); review-файлы правок —
-`ner_review.json` / `translate_check_llm_review.json`.
+всех стадиях; выбор файла в web убран); review-файлы правок — рабочие,
+в tmp/ проекта: ner_review.json / translate_check_llm_review.json
+(бэкап глоссария и отчёт оценки качества — тоже в tmp/; сборки compile
+— в tmp/, имя `<проект>_<начало>_<конец>…`).
 
 ## 8. Запреты
 

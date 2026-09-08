@@ -8,7 +8,7 @@ translate_quality.py — оценка качества перевода (LLM).
 глав»), подставляются в промпт и отправляются на оценку. Если главы +
 промпт не влезают в --budget (СИМВОЛЫ) — пакет обрезается до ЦЕЛОГО
 количества глав (первые N диапазона). Результат — Markdown-отчёт
-(по умолчанию translation_quality_assessment.md): техническая шапка
+(по умолчанию tmp/translation_quality_assessment.md): техническая шапка
 (дата, диапазон, пакет, бюджет, модель) + текст оценки LLM.
 
 Промпт-файл: тег <prompt_assessment> (между тегами можно писать
@@ -64,7 +64,7 @@ from core.common import (  # noqa: E402
     write_preview_request,
 )
 
-DEFAULT_OUTPUT = "translation_quality_assessment.md"
+DEFAULT_OUTPUT = "tmp/translation_quality_assessment.md"
 DEFAULT_BUDGET = 200_000  # СИМВОЛЫ: главы (содержимое; промпт не входит)
 
 # ──────────────────────────────────────────────

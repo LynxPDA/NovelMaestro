@@ -220,7 +220,7 @@ def test_ner_review_put_get(srv, tmp_path):
     r = _request(port, "PUT", "/api/ner/review",
                  {"project": "ACTIVE/demo", "content": json.dumps(doc)})
     assert r["ok"]
-    assert (pdir / "ner_review.json").is_file()
+    assert (pdir / "tmp" / "ner_review.json").is_file()
     r = _request(port, "GET", f"/api/ner/review?{_q('ACTIVE/demo')}")
     assert r["exists"] is True
     assert json.loads(r["content"]) == doc

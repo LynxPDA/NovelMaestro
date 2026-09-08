@@ -2777,6 +2777,31 @@ function viewProject(section, name, tab) {
           actions,
         );
       }
+      function clearAllEntries() {
+        const n = parsed && parsed.entries ? parsed.entries.length : 0;
+        confirmModal(
+          "Очистить правки",
+          `Будут удалены все правки из файла (${n} шт.)`,
+          "УДАЛИТЬ",
+          async () => {
+            err.textContent = "";
+            try {
+              const empty = parsed && parsed.isArray ? [] : { entries: [] };
+              await api(path, {
+                method: "PUT",
+                body: {
+                  project: `${section}/${name}`,
+                  content: JSON.stringify(empty, null, 2),
+                },
+              });
+              toast("Все правки удалены");
+              refresh();
+            } catch (ex) {
+              err.textContent = ex.message;
+            }
+          },
+        );
+      }
       async function setAllStatus(status) {
         err.textContent = "";
         try {
@@ -2865,6 +2890,26 @@ function viewProject(section, name, tab) {
                   onclick: () => setAllStatus("отклонить"),
                 },
                 "Отклонить все",
+              ),
+              h(
+                "button",
+                {
+                  class: "btn btn-xs",
+                  title:
+                    "Применить все правки со статусом «принять» (как кнопка «Применить» внизу)",
+                  onclick: () => runApply(false),
+                },
+                "Применить все принятые",
+              ),
+              h(
+                "button",
+                {
+                  class: "btn btn-xs btn-ghost rv-clear",
+                  title: "Удалить все правки из файла",
+                  onclick: () =>
+                    clearAllEntries(),
+                },
+                "Очистить",
               ),
             ),
             h(
@@ -2998,39 +3043,6 @@ function viewProject(section, name, tab) {
           err.textContent = ex.message;
         }
       });
-      const clearBtn = h(
-        "button",
-        {
-          class: "btn btn-sm btn-ghost rv-clear",
-          title: "Удалить все правки из файла",
-        },
-        "Очистить",
-      );
-      clearBtn.addEventListener("click", () => {
-        const n = parsed && parsed.entries ? parsed.entries.length : 0;
-        confirmModal(
-          "Очистить правки",
-          `Будут удалены все правки из файла (${n} шт.)`,
-          "УДАЛИТЬ",
-          async () => {
-            err.textContent = "";
-            try {
-              const empty = parsed && parsed.isArray ? [] : { entries: [] };
-              await api(path, {
-                method: "PUT",
-                body: {
-                  project: `${section}/${name}`,
-                  content: JSON.stringify(empty, null, 2),
-                },
-              });
-              toast("Все правки удалены");
-              refresh();
-            } catch (ex) {
-              err.textContent = ex.message;
-            }
-          },
-        );
-      });
       const actionsBar = h(
         "div",
         { class: "review-actions" },
@@ -3038,7 +3050,6 @@ function viewProject(section, name, tab) {
         applyBtn,
         bakBox,
         h("span", { class: "spacer" }),
-        clearBtn,
         saveBtn,
       );
       function renderEditor() {

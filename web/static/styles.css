@@ -1373,6 +1373,10 @@ input[type="number"] {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  align-items: center;
+}
+.review-summary .spacer {
+  flex: 1;
 }
 .badge-accept {
   background: color-mix(in srgb, #2ecc71 15%, transparent);
