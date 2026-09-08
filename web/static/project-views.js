@@ -3140,8 +3140,8 @@ function viewProject(section, name, tab) {
       h(
         "div",
         { class: "review-section-sub" },
-        "md-отчёты стадии translate_quality "
-          + "(по умолчанию translation_quality_assessment.md)",
+        "md-отчёт стадии translate_quality "
+          + "(tmp/translation_quality_assessment.md)",
       ),
       await renderQualityReports(section, name),
     );
@@ -4909,15 +4909,13 @@ function viewProject(section, name, tab) {
   return page;
 }
 
-/* ── Оценка перевода (LLM): md-отчёты translate_quality ── */
+/* ── Оценка перевода (LLM): md-отчёт translate_quality ── */
 async function renderQualityReports(section, name) {
-  /* Секция «Проверки»: выбор md-отчёта из корня проекта + рендер
-     markdown в sandbox-iframe; по умолчанию —
-     translation_quality_assessment.md. */
+  /* Секция «Проверки»: рендер фиксированного отчёта
+     tmp/translation_quality_assessment.md в sandbox-iframe;
+     выбор файла убран — имя отчёта фиксируется стадией. */
   const err = h("div", { class: "form-error" });
   const empty = h("div", { class: "files-empty" });
-  const sel = h("select", { class: "input" });
-  // плашки без текста не должны занимать место между селектом и отчётом
   function syncMsgs() {
     empty.hidden = !empty.textContent;
     err.hidden = !err.textContent;
@@ -4930,83 +4928,41 @@ async function renderQualityReports(section, name) {
   });
   frame.style.display = "none";
 
-  async function renderFile(fname) {
-    // fname — имя файла отчёта; name — имя проекта (замыкание):
-    // не перекрывать, иначе project=раздел/отчёт → 404 и пустой экран
-    const q = new URLSearchParams({
-      project: `${section}/${name}`,
-      path: fname,
-    });
-    try {
-      const r = await api(`/file?${q}`);
-      const html = window.marked
-        ? window.marked.parse(r.content || "", {
-            mangle: false,
-            headerIds: false,
-          })
-        : "<pre>marked не загружен</pre>";
-      frame.srcdoc = mdPreviewSrcdoc(html);
-      frame.style.display = "block";
-      empty.textContent = "";
-      err.textContent = "";
-      syncMsgs();
-    } catch (ex) {
-      err.textContent = ex.message;
-      frame.style.display = "none";
-      syncMsgs();
-    }
-  }
-
-  async function loadFiles() {
-    const q = new URLSearchParams({ project: `${section}/${name}`, path: "" });
-    let files = [];
-    try {
-      const r = await api(`/files?${q}`);
-      files = (r.entries || [])
-        .filter((e) => !e.dir && e.name.toLowerCase().endsWith(".md"))
-        .sort((a, b) => b.mtime - a.mtime)
-        .map((e) => e.name);
-    } catch (ex) {
-      err.textContent = ex.message;
-    }
-    sel.replaceChildren();
-    if (!files.length) {
-      sel.append(h("option", { value: "" }, "—"));
-      sel.disabled = true;
-      empty.textContent =
-        "Нет отчётов — запустите стадию «Оценка перевода (LLM)» (Запуски)";
-      frame.style.display = "none";
-      syncMsgs();
-      return;
-    }
-    sel.disabled = false;
-    for (const f of files) sel.append(h("option", { value: f }, f));
-    const def = files.includes("translation_quality_assessment.md")
-      ? "translation_quality_assessment.md"
-      : files[0];
-    sel.value = def;
-    await renderFile(def);
-  }
-
-  sel.addEventListener("change", () => {
-    if (sel.value) renderFile(sel.value);
+  const q = new URLSearchParams({
+    project: `${section}/${name}`,
+    path: "tmp/translation_quality_assessment.md",
   });
-  frame.addEventListener("load", () => fitPreviewFrame(frame));
-
   const wrap = h(
     "div",
     { class: "quality-reports" },
-    h(
-      "div",
-      { class: "check-list" },
-      h("label", { class: "quality-label" }, "Отчёт:"),
-      sel,
-    ),
     empty,
     err,
     frame,
   );
-  await loadFiles();
+  try {
+    const r = await api(`/file?${q}`);
+    if (r.missing) {
+      empty.textContent =
+        "Нет отчёта — запустите стадию «Оценка перевода (LLM)» (Запуски)";
+      syncMsgs();
+      return wrap;
+    }
+    const html = window.marked
+      ? window.marked.parse(r.content || "", {
+          mangle: false,
+          headerIds: false,
+        })
+      : "<pre>marked не загружен</pre>";
+    frame.srcdoc = mdPreviewSrcdoc(html);
+    frame.style.display = "block";
+  } catch (ex) {
+    err.textContent = ex.message;
+    empty.textContent =
+      "Нет отчёта — запустите стадию «Оценка перевода (LLM)» (Запуски)";
+  }
+  syncMsgs();
+  frame.addEventListener("load", () => fitPreviewFrame(frame));
+
   return wrap;
 }
 

@@ -213,8 +213,9 @@ def test_main_no_chapters(tmp_path, monkeypatch):
     assert TQ.main() == 1
 
 
-def test_main_custom_output(tmp_path, monkeypatch):
-    """--output задаёт имя отчёта; тег-промпт из файла."""
+def test_main_fixed_output(tmp_path, monkeypatch):
+    """Имя отчёта фиксировано (--output убран): tmp/translation_quality_
+    assessment.md; тег-промпт из файла."""
     make_chapters(tmp_path, 1)
     (tmp_path / "p.txt").write_text(
         "<prompt_assessment>оцени</prompt_assessment>\n",
@@ -224,7 +225,7 @@ def test_main_custom_output(tmp_path, monkeypatch):
     monkeypatch.setattr(TQ, "llm_request", lambda *a, **k: "хорошо")
     monkeypatch.setattr(sys, "argv", [
         "translate_quality.py", "--start", "1", "--end", "1",
-        "--prompt_file", "p.txt", "--output", "reports/my.md",
+        "--prompt_file", "p.txt",
         "--host", "http://h", "--model", "m"])
     assert TQ.main() == 0
-    assert (tmp_path / "reports" / "my.md").exists()
+    assert (tmp_path / "tmp" / "translation_quality_assessment.md").exists()

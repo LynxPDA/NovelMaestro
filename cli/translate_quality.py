@@ -7,8 +7,8 @@ translate_quality.py — оценка качества перевода (LLM).
 {original_text} (chapter.txt) и {translated_text} (выбранный «Тип файлов
 глав»), подставляются в промпт и отправляются на оценку. Если главы +
 промпт не влезают в --budget (СИМВОЛЫ) — пакет обрезается до ЦЕЛОГО
-количества глав (первые N диапазона). Результат — Markdown-отчёт
-(по умолчанию tmp/translation_quality_assessment.md): техническая шапка
+количества глав (первые N диапазона). Результат — Markdown-отчёт tmp/translation_quality_assessment.md
+(имя фиксировано, без --output): техническая шапка
 (дата, диапазон, пакет, бюджет, модель) + текст оценки LLM.
 
 Промпт-файл: тег <prompt_assessment> (между тегами можно писать
@@ -64,7 +64,7 @@ from core.common import (  # noqa: E402
     write_preview_request,
 )
 
-DEFAULT_OUTPUT = "tmp/translation_quality_assessment.md"
+DEFAULT_OUTPUT = "tmp/translation_quality_assessment.md"  # фиксировано
 DEFAULT_BUDGET = 200_000  # СИМВОЛЫ: главы (содержимое; промпт не входит)
 
 # ──────────────────────────────────────────────
@@ -308,9 +308,6 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                         help="ПРЕДПРОСМОТР: запрос оценки первого\n"
                              "пакета глав без сети → JSON-файл\n"
                              "(messages + статистика СИМВОЛОВ).")
-    parser.add_argument("--output", default=DEFAULT_OUTPUT,
-                        help=f"Выходной md-отчёт (default: "
-                             f"{DEFAULT_OUTPUT}).")
     parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET,
                         help=f"Бюджет запроса, СИМВОЛЫ: главы (содержимое; промпт НЕ входит); "
                              f"если не влезает — пакет обрезается до "
@@ -461,7 +458,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
         "host": base_url,
         "prompt_file": args.prompt_file or "",
     }
-    write_report(args.output, meta, assessment, logger)
+    write_report(DEFAULT_OUTPUT, meta, assessment, logger)
     return 0
 
 

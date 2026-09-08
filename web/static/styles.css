@@ -1760,12 +1760,6 @@ input[type="number"] {
   margin-bottom: 0;
 }
 
-.quality-label {
-  white-space: nowrap;
-  color: var(--text-soft, #9aa7b8);
-  font-size: 13px;
-}
-
 .check-msg {
   white-space: pre-wrap;
   font-size: 13px;

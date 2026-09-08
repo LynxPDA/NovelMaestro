@@ -457,7 +457,7 @@ def build_translate_quality(form: dict, ctx: dict) -> list[str]:
     Один LLM-запрос по пакету глав диапазона (тип файлов глав →
     {translated_text}, chapter.txt → {original_text}); бюджет —
     СИМВОЛЫ (главы; промпт НЕ входит), пакет обрезается до целого количества
-    глав. Выход — md-отчёт.
+    глав. Выход — md-отчёт tmp/translation_quality_assessment.md (фиксирован).
     """
     argv = ["cli/translate_quality.py"]
     argv += _range_argv("translate_quality", form)
@@ -465,8 +465,7 @@ def build_translate_quality(form: dict, ctx: dict) -> list[str]:
         argv += ["--type", str(form["type"])]
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
-    output = str(form.get("output") or "translation_quality_assessment.md")
-    argv += ["--output", output]
+    # выходной файл фиксирован: tmp/translation_quality_assessment.md
     if form.get("budget") not in (None, ""):
         argv += ["--budget", str(form["budget"])]
     if form.get("temperature") not in (None, ""):
@@ -1158,10 +1157,6 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "тег <prompt_assessment> (между тегами — комменты); "
                       "плейсхолдеры {original_text} и {translated_text}; "
                       "автоподхват translate_quality_prompt.txt"},
-            {"name": "output", "label": "Выходной файл",
-             "type": "text", "default": "translation_quality_assessment.md",
-             "help": "md-отчёт в корне проекта; виден на вкладке "
-                      "«Проверки» → «Оценка перевода (LLM)»"},
             {"name": "budget", "label": "Бюджет запроса, СИМВОЛЫ",
              "type": "number", "default": "200000",
              "help": "главы (содержимое, промпт НЕ входит); если не влезает — пакет "
