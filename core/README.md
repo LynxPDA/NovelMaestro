@@ -73,10 +73,17 @@ FTS5 (RAG/wiki): build_fts_index (текст → in-memory sqlite, нарезк�
 translate_check_llm: fix_entry (ошибка LLM {chapter,fragment,corrected,type,reason}
   → запись review: stage/chapter/file/type/old/new/reason/status/applied, NFC) /
   merge_fix_entries (накопление без затирания, дедуп по chapter+old+new) /
-  apply_fix_to_text (NFC, первое вхождение); apply_fix_entries помечает
-  пропуски полем note (файл не найден / фрагмент не найден — текст
-  главы менялся после проверки)
-  apply_fix_to_text (одна замена фрагмента, NFC, первое вхождение)
+  apply_fix_to_text (одна замена фрагмента, NFC, первое вхождение) /
+  flex_fragment_pattern (типографически-мягкий паттерн цитаты: кавычки «»“”"",
+  тире —–−, многоточие …/... и пробелы эквивалентны) /
+  apply_flex_fix (замена: точная NFC-замена, иначе найденный мягким паттерном СПАН,
+  new вставляется как есть) /
+  find_fragment_owner (где цитата реально живёт: (глава|None, причина|None);
+  гейт — ровно одно совпадение ровно в одной главе на всю книгу, глава claimed
+  исключается, короткие (< min_len) не ищутся); apply_fix_entries помечает
+  пропуски полем note (причины find_fragment_owner: не найдена / не однозначно /
+  слишком короткая); непопавшие точно цитаты перепривязываются на реальную главу
+  (дрейф атрибуции LLM ±1), в dry-run применение и перепривязка откатываются
 LLM: stream_chat_completion ([DONE]/finish_reason/loop/cut/empty/min_len_ratio) → (text, err);
   ретраи ТОЛЬКО 408/425/429/5xx + Retry-After/backoff+jitter (H3) /
   llm_messages (унифицированный формат messages всех стадий и предпросмотра:

@@ -1383,6 +1383,105 @@ def apply_fix_to_text(text, old, new):
     return tn.replace(on, unicodedata.normalize("NFC", str(new)), 1), True
 
 
+_QUOTE_CLASS = '["«»“”„]'
+_DASH_CLASS = '[-–—−]'
+_ELLIPSIS = r'(?:\.{3}|…)'
+
+
+def flex_fragment_pattern(text):
+    """Типографически-мягкий паттерн цитаты для re-поиска (в обе
+    стороны): двойные кавычки (/«/»/“/”/„), тире (-/–/—/−) и
+    многоточие (.../…) — символьные классы/альтернативы; пробелы —
+    \\s+. Возвращает строку-паттерн; для текста без типографики
+    совпадает с re.escape(text)."""
+    s = unicodedata.normalize("NFC", str(text))
+    out = []
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch in '"«»“”„':
+            out.append(_QUOTE_CLASS)
+        elif ch in '-–—−':
+            out.append(_DASH_CLASS)
+        elif ch == '…':
+            out.append(_ELLIPSIS)
+        elif ch == '.':
+            j = i
+            while j < len(s) and s[j] == '.':
+                j += 1
+            out.append(_ELLIPSIS if j - i == 3 else re.escape('.' * (j - i)))
+            i = j
+            continue
+        elif ch.isspace():
+            out.append(r'\s+')
+        else:
+            out.append(re.escape(ch))
+        i += 1
+    return ''.join(out)
+
+
+def apply_flex_fix(text, old, new):
+    """Замена фрагмента: сначала точная (NFC), затем типографически-
+    мягкая (flex_fragment_pattern) — заменяется найденный СПАН, new
+    вставляется как есть (NFC). Возвращает (новый_текст, True) или
+    (None, False), если фрагмент не найден ни точно, ни мягко."""
+    tn = unicodedata.normalize("NFC", text)
+    on = unicodedata.normalize("NFC", str(old))
+    if on in tn:
+        return tn.replace(on, unicodedata.normalize("NFC", str(new)), 1), True
+    m = re.search(flex_fragment_pattern(on), tn)
+    if not m:
+        return None, False
+    return (tn[:m.start()] + unicodedata.normalize("NFC", str(new))
+            + tn[m.end():], True)
+
+
+def find_fragment_owner(chapter_map, frag, claimed=None, want="polished",
+                        min_len=20, logger=None):
+    """Где цитата реально живёт: (номер главы | None, причина | None).
+
+    Ищет фрагмент по файлам ВСЕХ глав (файл типа want, без подмен
+    типов); глава claimed пропускается (сама себе не кандидат).
+    Совпадение засчитывается точное (NFC) или
+    типографически-мягкое (flex_fragment_pattern); при нескольких
+    кандидатах остаётся только совпадение наибольшей длины, и если
+    их больше одного — цитата неоднозначна (None). Гейт: правка
+    перепривязывается только при РОВНО ОДНОМ совпадении на всю
+    книгу. Короткие цитаты (короче min_len симв.) не ищутся —
+    слишком велик риск ложного совпадения."""
+    frag = unicodedata.normalize("NFC", str(frag))
+    if len(frag) < min_len:
+        return None, f"фрагмент короче {min_len} симв. — не ищется"
+    flex = flex_fragment_pattern(frag)
+    soft = flex != re.escape(frag)
+    scored = []  # (длина совпадения, номер главы)
+    for num, dirs in chapter_map.items():
+        if num == claimed:
+            continue
+        fp, _w = find_chapter_file(dirs[0], num, want=want,
+                                   strict_types=True)
+        if not fp:
+            continue
+        try:
+            text = unicodedata.normalize("NFC", read_text_safe(fp))
+        except Exception:
+            continue
+        if frag in text:
+            scored.append((len(frag), num))
+        elif soft:
+            m = re.search(flex, text)
+            if m:
+                scored.append((m.end() - m.start(), num))
+    if not scored:
+        return None, "цитата не найдена в книге"
+    scored.sort(key=lambda x: -x[0])
+    best = scored[0][0]
+    tops = [num for ln, num in scored if ln >= best]
+    if len(tops) > 1:
+        return None, f"цитата найдена в главах {sorted(tops)} — не однозначно"
+    return tops[0], None
+
+
 # ══════════════════════════════════════════════════════════════════════
 # LLM: единый стрим-запрос (гигиена стрима — одна реализация на всех)
 # ══════════════════════════════════════════════════════════════════════

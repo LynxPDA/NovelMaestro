@@ -5,6 +5,7 @@
 логирование, файловые утилиты, детектор зацикливания."""
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -1705,3 +1706,56 @@ def test_preview_logger_stderr_only():
     assert not any(isinstance(h, logging.FileHandler)
                    for h in log.handlers)
     assert log.propagate is False
+
+
+# ══════════════════════════════════════════════════════════════════════
+# flex_fragment_pattern / find_fragment_owner (переаттестация цитат)
+# ══════════════════════════════════════════════════════════════════════
+
+def test_flex_fragment_pattern_matches_typography():
+    """Мягкий паттерн: кавычки «»/"", тире, многоточие и пробелы
+    эквивалентны; обычный текст работает как re.escape."""
+    pat = C.flex_fragment_pattern('Он сказал: «стой… стрелять» — и замолчал')
+    text = 'Он сказал: "стой... стрелять" - и замолчал сразу'
+    assert re.search(pat, text)
+    # короткий репрезентативный набор
+    assert re.search(C.flex_fragment_pattern("а — б"), "а – б")
+    assert re.search(C.flex_fragment_pattern("а «б»"), 'а "б"')
+    # пробелы становятся \s+, остальное — re.escape
+    assert C.flex_fragment_pattern("просто текст") == "просто\\s+текст"
+    # точка не становится «любым символом»
+    assert not re.search(C.flex_fragment_pattern("а.б"), "аXб")
+
+
+def test_find_fragment_owner_unique(tmp_path):
+    """Цитата ровно в одной главе → её номер; claimed исключается."""
+    ch_dir = tmp_path / "chapters"
+    for num, text in {1: "начало текст без цитаты.", 2: "здесь уникальная фраза про дракона.",
+                      3: "третья глава тоже без неё."}.items():
+        d = ch_dir / f"00000_{num}_t"
+        d.mkdir(parents=True)
+        (d / "polished.txt").write_text(text, encoding="utf-8")
+    cmap = C.build_chapter_map(str(ch_dir), SilentLog())
+    ch, why = C.find_fragment_owner(cmap, "уникальная фраза про дракона",
+                                    claimed=1, want="polished")
+    assert (ch, why) == (2, None)
+    # claimed совпадает с владельцем → не кандидат, ничего не найдено
+    ch, why = C.find_fragment_owner(cmap, "уникальная фраза про дракона",
+                                    claimed=2, want="polished")
+    assert ch is None and why is not None and "не найдена" in why
+
+
+def test_find_fragment_owner_ambiguous_and_short(tmp_path):
+    """Несколько равных совпадений → None; короткие цитаты не ищутся."""
+    ch_dir = tmp_path / "chapters"
+    frag = "повторяющаяся фраза в двух главах книги"
+    for num, text in {1: f"вот {frag} тут.", 2: "пусто.", 3: f"и {frag} здесь."}.items():
+        d = ch_dir / f"00000_{num}_t"
+        d.mkdir(parents=True)
+        (d / "polished.txt").write_text(text, encoding="utf-8")
+    cmap = C.build_chapter_map(str(ch_dir), SilentLog())
+    ch, why = C.find_fragment_owner(cmap, frag, want="polished")
+    assert ch is None and why is not None and "не однозначно" in why
+    # короткий фрагмент
+    ch, why = C.find_fragment_owner(cmap, "пусто.", want="polished")
+    assert ch is None and why is not None and "короче" in why

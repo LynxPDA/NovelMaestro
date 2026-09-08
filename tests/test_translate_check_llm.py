@@ -287,7 +287,7 @@ def test_apply_fix_entries_stale_fragment_note(tmp_path):
     applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
                                             SilentLog())
     assert (len(applied), skipped) == (0, 1)
-    assert "фрагмент не найден" in entries[0]["note"]
+    assert "не найдена" in entries[0]["note"]
     assert not entries[0]["applied"]
     # глава не находится вообще (нет ни файла, ни папки в карте) —
     # другая причина в note (устаревший file → фолбэк по карте глав)
@@ -304,6 +304,76 @@ def test_apply_fix_entries_stale_fragment_note(tmp_path):
                                       SilentLog())
     assert len(applied) == 1
     assert entries[0]["applied"] and "note" not in entries[0]
+
+
+def test_apply_fix_entries_reattach_unique(tmp_path):
+    """Фаза 2: цитата LLM реально в другой главе, совпадение ровно одно
+    на всю книгу → правка перепривязывается и применяется; запись
+    переезжает (chapter/file обновлены)."""
+    ch_dir, cmap = _mk_chapters(tmp_path, {
+        1: "текст первой главы с ошибкой йстрово.",
+        2: "текст второй главы, тут чисто.",
+        3: "текст третьей главы, тоже чисто.",
+    })
+    entries = [{
+        "stage": "s", "chapter": 2, "file": "",
+        "old": "текст первой главы с ошибкой йстрово",
+        "new": "текст первой главы с ошибкой истово",
+        "type": "typo", "reason": "", "status": C.REVIEW_ACCEPT,
+        "applied": False,
+    }]
+    applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
+                                            SilentLog())
+    assert (len(applied), skipped) == (1, 0)
+    assert entries[0]["chapter"] == 1
+    assert entries[0]["applied"] is True
+    fp1 = Path(ch_dir) / "00000_1_t" / "polished.txt"
+    fp2 = Path(ch_dir) / "00000_2_t" / "polished.txt"
+    assert "йстрово" not in fp1.read_text(encoding="utf-8")
+    assert (fp1.parent / "polished.txt.bak").exists()
+    assert not (fp2.parent / "polished.txt.bak").exists()
+
+
+def test_apply_fix_entries_reattach_ambiguous_kept_unapplied(tmp_path):
+    """Фаза 2, защита: цитата встречается в нескольких главах —
+    правка НЕ применяется (note), чужой текст не тронут."""
+    frag = "общая фраза встречается дважды в книге"
+    ch_dir, cmap = _mk_chapters(tmp_path, {
+        1: f"начало. {frag}. продолжение.",
+        2: "текст второй главы.",
+        3: f"другая глава, но {frag} тоже здесь.",
+    })
+    entries = [{"stage": "s", "chapter": 2, "file": "", "old": frag,
+                "new": "исправленный вариант фразы", "type": "",
+                "reason": "", "status": C.REVIEW_ACCEPT,
+                "applied": False}]
+    applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
+                                            SilentLog())
+    assert (len(applied), skipped) == (0, 1)
+    assert not entries[0]["applied"]
+    assert "не однозначно" in entries[0]["note"]
+    assert frag in (Path(ch_dir) / "00000_1_t" /
+                    "polished.txt").read_text(encoding="utf-8")
+
+
+def test_apply_fix_entries_reattach_typography(tmp_path):
+    """Фаза 2: цитата с другой типографикой (кавычки/многоточие)
+    находится мягким паттерном и перепривязывается (гейт тот же)."""
+    ch_dir, cmap = _mk_chapters(tmp_path, {
+        1: "речь героя: «стой, стрелять нельзя… кто здесь?» — и тишина.",
+        2: "другая глава без этой сцены.",
+    })
+    entries = [{"stage": "s", "chapter": 2, "file": "",
+                "old": 'речь героя: "стой, стрелять нельзя... кто здесь?"',
+                "new": "правленая реплика героя", "type": "",
+                "reason": "", "status": C.REVIEW_ACCEPT,
+                "applied": False}]
+    applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
+                                            SilentLog())
+    assert (len(applied), skipped) == (1, 0)
+    assert entries[0]["chapter"] == 1
+    assert "правленая реплика" in (Path(ch_dir) / "00000_1_t" /
+                                   "polished.txt").read_text(encoding="utf-8")
 
 
 def test_apply_fix_entries_sequential_same_file(tmp_path):

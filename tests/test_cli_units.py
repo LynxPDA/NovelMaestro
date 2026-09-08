@@ -456,6 +456,25 @@ def test_re_validate_errors():
     assert out[1]["chapter"] == 2   # фрагмент нашли в главе 2
 
 
+def test_re_validate_errors_drift_and_typography():
+    """Дрейф атрибуции: LLM указала главу из батча, но цитата живёт
+    в соседней — сверка ловит и перепривязывает; типографика
+    (кавычки/тире/многоточия) не считается промахом."""
+    batch = {5: "Он резко развернулся, и с глухим звустом… стрела марионетки пробила плечо.",
+             6: "Совсем другой текст шестой главы без цитат"}
+    errors = [
+        # цитата из гл.6, а указана гл.5 → перепривязка на 6
+        {"chapter": 5, "fragment": "Совсем другой текст шестой главы", "corrected": "правкa"},
+        # типографика: LLM процитировала с ASCII-многоточием вместо «…» — совпадает мягко
+        {"chapter": 5, "fragment": "с глухим звустом... стрела", "corrected": "правкa"},
+        # цитаты нет ни в одной главе батча → отклонение
+        {"chapter": 5, "fragment": "фраза из совсем другой книги здесь", "corrected": "правкa"},
+    ]
+    out = RE.validate_errors(errors, {5, 6}, batch, SilentLog())
+    assert len(out) == 2
+    assert out[0]["chapter"] == 6
+    assert out[1]["chapter"] == 5
+
 def test_re_apply_safety():
     errors = [
         {"chapter": 1, "fragment": "ааааа", "corrected": "ббббб"},

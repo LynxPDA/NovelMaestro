@@ -55,13 +55,16 @@ from core.common import (  # noqa: E402
     REVIEW_ACCEPT,
     REVIEW_REJECT,
     apply_fix_to_text,
+    apply_flex_fix,
     atomic_write,
     build_chapter_map,
     determine_model,
     emit_progress,
+    find_fragment_owner,
     find_chapter_file as common_find_chapter_file,
     find_env_file,
     fix_entry,
+    flex_fragment_pattern,
     get_server_config,
     get_tagged_prompt,
     llm_messages,
@@ -500,8 +503,27 @@ def _to_int(v):
     return None
 
 
+def _frag_in_text(frag, text):
+    """Цитата в тексте: точное NFC-вхождение, иначе типографически-
+    мягкое (кавычки/тире/многоточия/пробелы — flex_fragment_pattern).
+    LLM процитировала текст в другой нормализации — это не повод
+    отклонять правку."""
+    frag_n = unicodedata.normalize("NFC", frag)
+    text_n = unicodedata.normalize("NFC", text)
+    if frag_n in text_n:
+        return True
+    flex = flex_fragment_pattern(frag)
+    return flex != re.escape(frag_n) and re.search(flex, text_n) is not None
+
 def validate_errors(errors, valid_ch, batch_contents, logger):
-    out = []
+    """Сверка ответа LLM с фактическим текстом батча. Дрейф атрибуции
+    (LLM указала соседнюю главу) отсекается здесь: цитата обязана
+    найтись в заявленной главе (точно или типографически-мягко —
+    flex_fragment_pattern), иначе правка перепривязывается на
+    единственную главу батча с совпадением; ни одна — отклонение.
+    Раньше сверка была только при чужом номере главы, и сдвиг ±1
+    проходил насквозь."""
+    out, dropped, moved = [], 0, 0
     for e in errors:
         ch = _to_int(e.get("chapter"))
         if ch is None:
@@ -511,21 +533,28 @@ def validate_errors(errors, valid_ch, batch_contents, logger):
             continue
         if frag.strip() == corr.strip():
             continue
-        if ch not in valid_ch:
-            found = None
-            for oc, ocont in batch_contents.items():
-                if frag in ocont:
-                    found = oc
-                    break
-            if found is not None:
-                ch = found
-            else:
-                continue
-        e["chapter"] = ch
-        out.append(e)
-    rej = len(errors) - len(out)
+        cont = batch_contents.get(ch, "")
+        if cont and _frag_in_text(frag, cont):
+            e["chapter"] = ch
+            out.append(e)
+            continue
+        found = [oc for oc, ocont in batch_contents.items()
+                 if ocont and _frag_in_text(frag, ocont)]
+        if len(found) == 1:
+            moved += 1
+            logger.info(f"  ↪ Цитата не в гл.{ch}, а в гл.{found[0]} — "
+                        f"правка перепривязана.")
+            e["chapter"] = found[0]
+            out.append(e)
+            continue
+        dropped += 1
+        continue
+    rej = dropped
     if rej:
         logger.info(f"Валидация: отклонено {rej}/{len(errors)}")
+    if moved:
+        logger.info(f"Валидация: перепривязано {moved} правок на "
+                    f"реальные главы.")
     return out
 
 
@@ -717,12 +746,15 @@ def resolve_entry_path(entry, file_type, chapter_map, logger=None):
 def apply_fix_entries(entries, file_type, chapter_map, logger,
                       dry_run=False, no_bak=False):
     """Применение принятых неприменённых правок к файлам глав.
-    Группировка по файлу, замены последовательные (NFC, первое
-    вхождение). Бэкап <файл>.bak перед первой записью (кроме
+    Две фазы: точная/типографическая (группировка по файлу, замены
+    последовательные — apply_flex_fix), затем — для пропущенных —
+    переаттестация: цитата ищется по ВСЕЙ книге (find_fragment_owner)
+    и правка перепривязывается на главу только при РОВНО ОДНОМ
+    совпадении на всю книгу (дрейф атрибуции LLM ±1; защита от
+    чужого текста). Бэкап <файл>.bak перед первой записью (кроме
     no_bak=True). Помечает записи in-place: применено=True +
     «дата применения»; пропущенные получают note с причиной
-    (файл не найден / фрагмент не найден — текст менялся после
-    проверки). Возвращает (applied, skipped)."""
+    (из find_fragment_owner). Возвращает (applied, skipped)."""
     pending = [e for e in entries
                if e.get("status", REVIEW_ACCEPT) == REVIEW_ACCEPT
                and not e.get("applied")]
@@ -740,6 +772,8 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
         by_file[fp].append(e)
     applied = []
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    reattached = []   # (запись, прежний chapter) — во вторую фазу
+    moved = []        # (запись, прежний chapter, прежний file) — откат dry-run
     for fp, group in by_file.items():
         try:
             text = read_text_safe(fp)
@@ -749,13 +783,9 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
             continue
         cur, changed = text, False
         for e in group:
-            nt, ok = apply_fix_to_text(cur, e["old"], e["new"])
+            nt, ok = apply_flex_fix(cur, e["old"], e["new"])
             if not ok:
-                e["note"] = ("фрагмент не найден — текст главы менялся "
-                             "после проверки")
-                logger.info(f"  ⚠ Гл.{e['chapter']}: фрагмент не найден — "
-                            f"пропуск.")
-                skipped += 1
+                reattached.append((e, e.get("chapter")))
                 continue
             cur, changed = nt, True
             e["applied"] = True
@@ -768,10 +798,61 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
             if not no_bak:
                 shutil.copy2(fp, fp + ".bak")
             atomic_write(fp, cur)
+    # Фаза 2: переаттестация пропущенных — только однозначные по всей книге
+    for e, claimed in reattached:
+        claimed = claimed if claimed is not None else e.get("chapter")
+        ch, why = find_fragment_owner(chapter_map, e["old"],
+                                      claimed=claimed, want=file_type,
+                                      logger=logger)
+        if ch is None:
+            e["note"] = why or "фрагмент не найден в книге"
+            logger.info(f"  ⚠ Гл.{claimed}: {e['note']} — пропуск.")
+            skipped += 1
+            continue
+        logger.info(f"  ↪ Гл.{claimed}: цитата реально в гл.{ch} — "
+                    f"правка перепривязана.")
+        e["chapter"] = ch
+        e.pop("note", None)
+        fp2, _w = common_find_chapter_file(chapter_map[ch][0], ch,
+                                           want=file_type,
+                                           strict_types=True)
+        if not fp2:
+            e["chapter"] = claimed
+            e["note"] = "файл найденной главы не открылся"
+            skipped += 1
+            continue
+        e["file"] = fp2
+        try:
+            text = read_text_safe(fp2)
+        except Exception as ex:
+            e["chapter"] = claimed
+            e["note"] = f"файл найденной главы не читается: {ex}"
+            skipped += 1
+            continue
+        nt, ok = apply_flex_fix(text, e["old"], e["new"])
+        if not ok:
+            e["chapter"] = claimed
+            e["note"] = "фрагмент не найден в найденной главе"
+            skipped += 1
+            continue
+        if not dry_run:
+            if not no_bak:
+                shutil.copy2(fp2, fp2 + ".bak")
+            atomic_write(fp2, nt)
+        else:
+            moved.append((e, claimed, e.get("file")))
+        e["applied"] = True
+        e["applied_at"] = now
+        e.pop("note", None)
+        applied.append(e)
+        logger.info(f"  ✔ Гл.{ch} (перепривязана) [{e.get('type') or '?'}]: "
+                    f"«{e['old'][:60]}» → «{e['new'][:60]}»")
     if dry_run and applied:
         for e in applied:          # dry-run ничего не применяет
             e["applied"] = False
             e.pop("applied_at", None)
+        for e, oc, of in moved:    # и перепривязку откатывает
+            e["chapter"], e["file"] = oc, of
     return applied, skipped
 
 

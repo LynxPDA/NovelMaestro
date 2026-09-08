@@ -38,6 +38,7 @@ CORE_API = [
     "diff_ner_records", "apply_ner_patches",
     "review_entry", "parse_review_doc", "merge_review_entries",
     "fix_entry", "merge_fix_entries", "apply_fix_to_text",
+    "flex_fragment_pattern", "find_fragment_owner",
     "stream_chat_completion", "llm_messages",
     "atomic_write", "read_text_safe",
     "web_progress_enabled", "emit_progress",
