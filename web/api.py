@@ -982,7 +982,9 @@ def _project_stats(ctx: dict) -> dict:
 
 
 def _project_tree(ctx: dict) -> dict:
-    """Дерево глав: номер, папка, артефакты с размерами.
+    """Дерево глав: номер, папка, артефакты с размерами в СИМВОЛАХ
+    (не байты: клиент считает бюджет запроса translate_quality в
+    символах; байты кириллицы/CJK дают расхождение до ~3×).
 
     помимо канонических имён — легаси-суффиксы старых проектов:
     ``*_translated.txt``, ``*_redacted.txt``, ``*_polished.txt``
@@ -997,6 +999,13 @@ def _project_tree(ctx: dict) -> dict:
     artifacts = ("chapter.txt", "translated.txt", "translated_trace.json",
                  "redacted.txt", "polished.txt")
     legacy_sfx = ("_translated.txt", "_redacted.txt", "_polished.txt")
+    def _char_size(f: Path) -> int:
+        # utf-8 почти всегда (наши артефакты); ошибки — длина байтов
+        try:
+            return len(f.read_bytes().decode("utf-8"))
+        except UnicodeDecodeError:
+            return f.stat().st_size
+
     items = []
     for num in sorted(chapter_map):
         for dir_str in chapter_map[num]:
@@ -1005,14 +1014,14 @@ def _project_tree(ctx: dict) -> dict:
             for art in artifacts:
                 f = d / art
                 if f.is_file():
-                    entry["artifacts"][art] = f.stat().st_size
+                    entry["artifacts"][art] = _char_size(f)
             try:
                 entries = list(d.iterdir())
             except OSError:
                 entries = []
             for f in entries:
                 if f.is_file() and f.name.endswith(legacy_sfx):
-                    entry["artifacts"][f.name] = f.stat().st_size
+                    entry["artifacts"][f.name] = _char_size(f)
             items.append(entry)
     return {"ok": True, "section": section, "name": name,
             "chapters": items}

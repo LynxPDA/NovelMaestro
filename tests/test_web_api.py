@@ -727,6 +727,24 @@ def test_project_tree_legacy_artifacts(srv_ctx):
     assert "chapter1_translated_trace.json" not in arts
 
 
+def test_project_tree_sizes_in_chars(srv_ctx):
+    """Размеры артефактов в /tree — СИМВОЛЫ, не байты: клиент считает
+    бюджет translate_quality в символах (utf-8 кириллицы — 2 байта/сим.)."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    ch = projects_root / "ACTIVE" / "test_book" / "chapters" / "00003_1"
+    ch.mkdir(parents=True)
+    text = "Глава про перевод" * 10  # 170 симв., 320 байта (кириллица — 2 б.)
+    (ch / "chapter.txt").write_text(text, encoding="utf-8")
+    (ch / "polished.txt").write_text(text, encoding="utf-8")
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/tree")
+    assert res.status == 200
+    entry = payload["chapters"][0]
+    assert entry["artifacts"]["chapter.txt"] == len(text)
+    assert entry["artifacts"]["polished.txt"] == len(text)
+    assert len(text.encode("utf-8")) == 320  # байт больше символов — не путать
+
 def test_project_chapters_titles(srv_ctx):
     """GET/PUT /api/projects/{s}/{n}/chapters/titles — названия глав."""
     _, port, projects_root = srv_ctx()

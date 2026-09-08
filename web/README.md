@@ -267,8 +267,9 @@ CLI — позиционный аргумент.
 `prompts/translate_quality_prompt.txt`). `budget` — СИМВОЛЫ (главы +
 промпт); если не влезает — пакет обрезается до ЦЕЛОГО количества глав
 (первые N диапазона), отсечённые указываются в отчёте. Выход —
-`tmp/translation_quality_assessment.md` (имя фиксировано, поле/флаг
-`--output` убраны): техническая шапка (дата, диапазон, пакет, бюджет,
+`tmp/translation_quality_assessment.md` (в web имя фиксировано,
+поле «Выходной файл» убрано; в CLI переопределяется `--output`):
+техническая шапка (дата, диапазон, пакет, бюджет,
 модель) + оценка LLM. На вкладке «Проверки» секция «Оценка перевода
 (LLM)» рендерит этот отчёт (без выбора файла).
 
@@ -366,7 +367,7 @@ Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
 | GET/POST | `/api/session`, `/api/login`, `/api/logout` | сессия, вход по токену |
 | GET | `/api/dashboard`, `/api/state`, `/api/sections`, `/api/projects` | дашборд (`running_jobs` — все активные; `recent_jobs` — до 20), hub |
 | POST | `/api/projects` (создание) | + move/rename/copy/delete; move/rename переписывают project/cwd в журнале запусков — история следует за проектом |
-| GET | `/api/projects/{s}/{n}/tree`, `/api/stats` | главы+артефакты, статистика (раунд 23: артефакты включают легаси `*_перевод/редактура/полировка`) |
+| GET | `/api/projects/{s}/{n}/tree`, `/api/stats` | главы+артефакты (размеры артефактов — СИМВОЛЫ, не байты: бюджет translate_quality считается в символах), статистика (раунд 23: артефакты включают легаси `*_перевод/редактура/полировка`) |
 | GET | `/api/projects/{s}/{n}/status` | таблица готовности глав (раунд 21): по-главные флаги translate/redact/polish + ner/wiki/compiled; кеш по сигнатуре mtime |
 | GET/PUT | `/api/projects/{s}/{n}/chapters/titles` | названия глав (вкладка «Главы»): GET `?type=polished\|redacted\|translated\|chapter` → `{titles: {номер: первая непустая строка}, all_ids: непрерывный 1..N по папкам, missing: номера без файла типа}`; PUT `{type, titles: {номер: строка}}` — замена первой строки в файлах глав (NFC), → `{updated, missing, warnings}` |
 | DELETE | `/api/projects/{s}/{n}/chapters?type=&start=&end=` | удаление файлов глав выбранного типа в диапазоне (вкладка «Главы» — «Удалить файлы»), → `{deleted: [номера]}` |
