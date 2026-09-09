@@ -24,6 +24,8 @@ from pathlib import Path
 
 import unicodedata
 
+from web.version import app_version  # noqa: E402
+
 log = logging.getLogger("web")
 
 # Кеш stats без TTL: вместо времени — сигнатура состояния (mtime папок
@@ -267,6 +269,7 @@ def _session(ctx: dict) -> dict:
         "authenticated": ctx["authenticated"],
         "token_set": ctx["auth"].token_set(),
         "host": ctx["host"],
+        "version": app_version(),
     }
 
 

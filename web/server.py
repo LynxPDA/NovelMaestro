@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import cast
 
 from web.auth import COOKIE_NAME, Auth, csrf_ok
+from web.version import app_version
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_JSON_BODY = 16 * 1024 * 1024  # 16 МБ — лимит JSON-тел
@@ -98,7 +99,7 @@ class Router:
 # Обработчик запросов
 # ════════════════════════════════════════════════════════════════════
 class Handler(BaseHTTPRequestHandler):
-    server_version = "web/0.1.1"
+    server_version = f"NovelMaestro/{app_version()}"
     protocol_version = "HTTP/1.1"
 
     # ── служебное ──────────────────────────────────────────────

@@ -74,6 +74,45 @@ def test_session_unauthenticated(srv_ctx):
     assert payload["token_set"] is True
 
 
+def test_session_version(srv_ctx, monkeypatch):
+    """Сессия несёт версию сборки (источник: NOVELMAESTRO_VERSION →
+    VERSION в корне репо → фолбэк web/version.py)."""
+    from web import version as version_mod
+    _, port = srv_ctx(Auth("sekret-token"))
+    # окружение перекрывает файл
+    monkeypatch.setattr(version_mod, "_app_version", None)
+    monkeypatch.setenv("NOVELMAESTRO_VERSION", "9.9.9-test")
+    _, payload = _request(port, "GET", "/api/session", cookie=None, xrw=None)
+    assert payload["version"] == "9.9.9-test"
+    # без окружения — читается VERSION из корня репо
+    monkeypatch.setattr(version_mod, "_app_version", None)
+    monkeypatch.delenv("NOVELMAESTRO_VERSION", raising=False)
+    _, payload = _request(port, "GET", "/api/session", cookie=None, xrw=None)
+    assert payload["version"] == (version_mod.Path(
+        version_mod.__file__).parent.parent / "VERSION").read_text(
+        encoding="utf-8").strip()
+    assert payload["version"]  # непустая
+
+
+def test_app_version_file_and_fallback(tmp_path, monkeypatch):
+    """app_version(): NOVELMAESTRO_VERSION > файл VERSION > фолбэк."""
+    from web import version as version_mod
+    monkeypatch.setattr(version_mod, "_app_version", None)
+    monkeypatch.setenv("NOVELMAESTRO_VERSION", "1.2.3")
+    assert version_mod.app_version() == "1.2.3"
+    monkeypatch.setattr(version_mod, "_app_version", None)
+    monkeypatch.delenv("NOVELMAESTRO_VERSION", raising=False)
+    # в тестовом окружении файл VERSION репо существует (0.2.9+)
+    assert version_mod.app_version()
+    # фолбэк — если файла нет и окружение пусто
+    fake_root = tmp_path / "web"
+    fake_root.mkdir()
+    monkeypatch.setattr(version_mod, "Path",
+                        lambda *a: tmp_path / "nonexistent" / "VERSION")
+    monkeypatch.setattr(version_mod, "_app_version", None)
+    assert version_mod.app_version() == version_mod._FALLBACK
+
+
 def test_login_wrong_token(srv_ctx):
     _, port = srv_ctx(Auth("sekret-token"))
     res, payload = _request(port, "POST", "/api/login", body={"token": "bad"})

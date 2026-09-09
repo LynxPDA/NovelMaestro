@@ -364,7 +364,7 @@ Markdown), `rulate-md`, `rulate-html` (заголовки — `span font-size`,
 
 | Метод | Путь | Назначение |
 | --- | --- | --- |
-| GET/POST | `/api/session`, `/api/login`, `/api/logout` | сессия, вход по токену |
+| GET/POST | `/api/session`, `/api/login`, `/api/logout` | сессия, вход по токену; `session` несёт `version` — версия сборки (источник: `web/version.py` → `VERSION` в корне репо, обновляется при релизе) |
 | GET | `/api/dashboard`, `/api/state`, `/api/sections`, `/api/projects` | дашборд (`running_jobs` — все активные; `recent_jobs` — до 20), hub |
 | POST | `/api/projects` (создание) | + move/rename/copy/delete; move/rename переписывают project/cwd в журнале запусков — история следует за проектом |
 | GET | `/api/projects/{s}/{n}/tree`, `/api/stats` | главы+артефакты (размеры артефактов — СИМВОЛЫ, не байты: бюджет translate_quality считается в символах), статистика (раунд 23: артефакты включают легаси `*_перевод/редактура/полировка`) |

@@ -1731,6 +1731,9 @@ function layout(content) {
     nav("templates", "Шаблоны"),
     nav("notes", "Заметки"),
     nav("help", "Справка"),
+    // версия сборки — из /api/session (едет с CHANGELOG.md при релизе)
+    h("div", { class: "sidebar-version", title: "Версия NovelMaestro" },
+      "v" + (state.version || "?")),
   );
   return h(
     "div",
@@ -2658,6 +2661,7 @@ async function boot() {
     state.auth = !!s.authenticated;
     state.host = s.host || "";
     state.tokenSet = !!s.token_set;
+    state.version = s.version || "";
   } catch {
     state.auth = false;
   }
