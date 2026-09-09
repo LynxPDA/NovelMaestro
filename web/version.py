@@ -4,7 +4,7 @@
 version.py — версия NovelMaestro, единый источник для API, HTTP-сервера и UI.
 
 Приоритет: NOVELMAESTRO_VERSION (окружение) → файл VERSION в корне репо
-(обновляется при релизе вместе с CHANGELOG.md) → встроенный фолбэк.
+(обновляется при релизе) → встроенный фолбэк.
 """
 from __future__ import annotations
 
