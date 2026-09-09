@@ -1872,6 +1872,39 @@ def test_preview_request_route_script_error(srv_ctx, monkeypatch):
     assert "бум" in (payload.get("error") or "")
 
 
+def test_epub_preview_utf8_env(srv_ctx, monkeypatch):
+    """Регресс Windows: потомок печатает «→»/кириллицу — синхронный
+    запуск предпросмотра обязан задать потомку PYTHONIOENCODING=utf-8
+    и читать пайп как utf-8 (иначе cp1251 → UnicodeEncodeError)."""
+    import subprocess as sp
+
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    captured = {}
+
+    def fake_run(argv, **kw):
+        captured.update(kw)
+        captured["argv"] = argv
+        pv = Path(kw["cwd"]) / web_api.EPUB_PREVIEW_FILE
+        pv.parent.mkdir(parents=True, exist_ok=True)
+        pv.write_text(json.dumps(
+            {"source": "book.epub", "num_offset": 1, "title_limit": 50,
+             "entries": [{"seq": 0, "num": 1, "folder": "00000_1_Глава_1",
+                          "heading": "Глава 1", "text": "текст"}]},
+            ensure_ascii=False), encoding="utf-8")
+        return sp.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    res, payload = _request(port, "POST", "/api/stages/epub/preview",
+                            {"project": "ACTIVE/test_book",
+                             "params": {"input": "source/book.epub",
+                                        "mode": "toc"}})
+    assert res.status == 200, payload
+    env = captured.get("env") or {}
+    assert env.get("PYTHONIOENCODING") == "utf-8"
+    assert captured.get("encoding") == "utf-8"
+
+
 def _projects_root_of(srv_ctx):
     """projects_root из фикстуры srv_ctx (3-й элемент кортежа)."""
     _, _, projects_root = srv_ctx()

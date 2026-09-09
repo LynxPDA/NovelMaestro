@@ -806,7 +806,8 @@ def main() -> None:
                  _STAGE_NAME[stage], cid)
         try:
             proc = subprocess.run(cmd, env=proc_env, capture_output=True,
-                                  text=True, timeout=300)
+                                  text=True, encoding="utf-8",
+                                  errors="replace", timeout=300)
         except subprocess.TimeoutExpired:
             log.error("ПРЕДПРОСМОТР: таймаут 300 с")
             sys.exit(1)

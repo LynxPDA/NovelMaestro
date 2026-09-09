@@ -2841,10 +2841,16 @@ def _epub_preview_run(ctx: dict, pdir: Path, params: dict,
     argv += ["--preview-json", EPUB_PREVIEW_FILE]
     for s in skip or []:
         argv += ["--skip", str(s)]
+    # stdout потомка — utf-8 (на Windows иначе cp1251 → UnicodeEncodeError
+    # на стрелках/значках в тексте предпросмотра; см. PYTHONIOENCODING
+    # в web/jobs.py)
+    proc_env = dict(os.environ)
+    proc_env.setdefault("PYTHONIOENCODING", "utf-8")
     try:
         proc = subprocess.run(
             [_sys.executable, *argv], cwd=str(pdir),
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=120, env=proc_env)
     except subprocess.TimeoutExpired:
         raise ApiError(500, "Предпросмотр не уложился в 120 c — "
                             "уменьшите исходник")
@@ -3013,10 +3019,13 @@ def _preview_request_post(ctx: dict) -> dict:
     argv = build_command(key, params, ctx)
     argv[0] = str(script)
     argv += ["--preview-request", PREVIEW_REQUEST_FILE]
+    proc_env = dict(os.environ)
+    proc_env.setdefault("PYTHONIOENCODING", "utf-8")
     try:
         proc = subprocess.run(
             [_sys.executable, *argv], cwd=str(pdir),
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=300, env=proc_env)
     except subprocess.TimeoutExpired:
         raise ApiError(500, "Предпросмотр не уложился в 300 c")
     if proc.returncode != 0:

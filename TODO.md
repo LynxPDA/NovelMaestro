@@ -17,6 +17,12 @@
       а читались как utf-8 → U+FFFD. Исправлено: `PYTHONIOENCODING=utf-8`
       в окружении потомков (`web/jobs.py`, `web/pipeline.py`) + явное
       `encoding="utf-8"` в Popen конвейера.
+- [x] **6. Windows: предпросмотр разбивки epub падал** —
+      UnicodeEncodeError (cp1251, «→») в синхронных запусках
+      `subprocess.run` из `web/api.py` (epub/preview и
+      preview-request): env без PYTHONIOENCODING и чтение пайпа в
+      локали. Исправлено тем же паттерном (env + encoding/errors),
+      регресс-тест test_epub_preview_utf8_env.
       `tmp/translation_quality_assessment.md` зафиксировано в web:
       поле «Выходной файл» из формы Запусков удалено (`--output` в CLI
       сохранён); вкладка «Проверки» → «Оценка перевода (LLM)»
