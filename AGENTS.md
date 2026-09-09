@@ -137,10 +137,10 @@ Regexp-поля форм и CLI — чистые стандартные выра
 
 ### Промпты
 
-- Разметка запроса: содержимое `<system>…</system>` уходит в системное сообщение LLM, остальное (и `<user>…</user>`) — в user (`llm_messages`); без разметки весь промпт в user. В промптах — только реально обрабатываемые теги; данные размечаются текстовыми маркерами («=== ГЛОССАРИЙ ===» и т.п.), фиктивной xml-разметки нет.
+- Разметка запроса: содержимое `<system>…</system>` уходит в системное сообщение LLM, остальное (и `<user>…</user>`) — в user (`llm_messages`); без разметки весь промпт в user. Правила и описательные константы — в `<system>`, задание и переменные данные — в `<user>`; данные вставляются ТОЛЬКО через плейсхолдеры-переменные, дописывание данных в конец промпта кодом — только fallback для старых внешних промптов без плейсхолдера (с предупреждением). В промптах — только реально обрабатываемые теги; данные размечаются текстовыми маркерами («=== ГЛОССАРИЙ ===» и т.п.), фиктивной xml-разметки нет.
 - Внешние промпты хранятся в `prompts/` проекта; формат — теги: `<translate>/<translate_lr>/<redact>/<polish>`, `<pass1>/<pass2>`, `<prompt_pass1/2>`, `<prompt_ner_check>/<prompt_rag>`, `<prompt_assessment>`, `<prompt_wiki_article>` + JSON-теги wiki (`<wiki_markers>`, `<wiki_default_markers>`, `<wiki_type_names_ru>`, `<wiki_relations_labels>`, `<wiki_skip_relations>`, `<wiki_type_order>`); файл БЕЗ тегов = промпт этапа целиком (допустимый режим «отдельный файл на этап», не legacy). Теги во всех скриптах достаются единым `get_tagged_prompt` (открывающий тег — только в начале строки: упоминания тегов в «#»-комментариях не захватываются).
 - Встроенные промпты в скриптах (DEFAULT_*/PASS1_PROMPT) — только fallback. Меняя встроенный промпт, синхронизируй смысл с внешним шаблоном, если есть.
-- Плейсхолдеры: `{ner_block}`, `{original_text}`, `{translated_text}`, `{female_names}`, `{male_names}` (polish: имена из ner.json по полю `translation`, пол по наличию `(female)`/`(male)` в `type`).
+- Плейсхолдеры: `{ner_block}`, `{original_text}`, `{translated_text}`, `{female_names}`, `{male_names}` (polish: имена из ner.json по полю `translation`, пол по наличию `(female)`/`(male)` в `type`); `{dict_block}`, `{rules_block}`, `{fewshot_block}` (translate_lr); `{chunk_text}`, `{ner_json}` (ner); `{glossary}`, `{fields}`, `{ner_block}`, `{rag_block}` (ner_check); `{batch_text}`, `{errors_json}` (translate_check_llm). Форматирующие `{translation}`/`{relations_label}` — в системном шаблоне wiki.
 
 ### Логирование
 

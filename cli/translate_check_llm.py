@@ -181,6 +181,11 @@ PASS1_PROMPT = """\
 ]
 Если ошибок нет — верни пустой массив: []
 </system>
+<user>
+=== ТЕКСТ ГЛАВ ===
+
+{batch_text}
+</user>
 """
 
 PASS2_PROMPT = """\
@@ -273,6 +278,15 @@ PASS2_PROMPT = """\
 Верни ТОЛЬКО confirmed и new. Отклонённые (rejected) НЕ включай.
 Если все отклонены и новых нет — верни: []
 </system>
+<user>
+=== ОРИГИНАЛЬНЫЙ ТЕКСТ ===
+
+{batch_text}
+
+=== НАЙДЕННЫЕ ОШИБКИ ===
+
+{errors_json}
+</user>
 """
 
 # ГИБКИЙ ПОИСК ФАЙЛА (адаптер над core.common.find_chapter_file)
@@ -319,6 +333,11 @@ def detect_chapter_range(chapter_map):
 # ─────────────────────────────────────────────
 
 def load_prompts(prompt_file, logger):
+    """Внешние промпты (теги <pass1>/<pass2>) или встроенные.
+    Разметка запроса: правила — в <system>, данные — в <user> через
+    переменные {batch_text} (pass1) и {batch_text}/{errors_json}
+    (pass2); у старых внешних промптов без плейсхолдеров данные
+    дописываются после промпта (render_pass1_prompt/render_pass2_prompt)."""
     p1, p2 = PASS1_PROMPT, PASS2_PROMPT
     if prompt_file and os.path.isfile(prompt_file):
         try:
@@ -616,6 +635,28 @@ def compose_batch_text(batch) -> str:
     return "\n".join(parts)
 
 
+def render_pass1_prompt(prompt_tpl: str, batch_text: str) -> str:
+    """user-контент pass1: текст батча — через переменную {batch_text}.
+    Нет плейсхолдера (старый внешний промпт) — текст дописывается
+    после промпта (прежнее поведение). Используется и в предпросмотре."""
+    if "{batch_text}" in prompt_tpl:
+        return prompt_tpl.replace("{batch_text}", batch_text)
+    return f"{prompt_tpl}\n\n{batch_text}"
+
+
+def render_pass2_prompt(prompt_tpl: str, batch_text: str,
+                        errors_json: str) -> str:
+    """user-контент pass2: текст и найденные ошибки — через переменные
+    {batch_text}/{errors_json}. Нет плейсхолдеров (старый внешний
+    промпт) — данные дописываются после промпта (прежнее поведение)."""
+    if "{batch_text}" in prompt_tpl or "{errors_json}" in prompt_tpl:
+        return (prompt_tpl
+                .replace("{batch_text}", batch_text)
+                .replace("{errors_json}", errors_json))
+    return (f"{prompt_tpl}\n\n=== ОРИГИНАЛЬНЫЙ ТЕКСТ ===\n{batch_text}"
+            f"\n\n=== НАЙДЕННЫЕ ОШИБКИ ===\n{errors_json}")
+
+
 def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
                   retries, timeout, stream_timeout, temperature,
                   reasoning_effort, logger, retry_empty=0):
@@ -623,7 +664,8 @@ def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
 
     errors1 = []
     for att in range(1 + retry_empty):
-        raw = query_llm_raw(text, p1, base_url, model, api_key,
+        raw = query_llm_raw(render_pass1_prompt(p1, text), "",
+                            base_url, model, api_key,
                             retries, timeout, stream_timeout, temperature,
                             reasoning_effort, logger, "[P1]")
         if raw is None:
@@ -641,8 +683,8 @@ def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
         return errors1
 
     ej = json.dumps(errors1, ensure_ascii=False, indent=2)
-    user2 = f"=== ОРИГИНАЛЬНЫЙ ТЕКСТ ===\n{text}\n\n=== НАЙДЕННЫЕ ОШИБКИ ===\n{ej}"
-    raw2 = query_llm_raw(user2, p2, base_url, model, api_key,
+    user2 = render_pass2_prompt(p2, text, ej)
+    raw2 = query_llm_raw(user2, "", base_url, model, api_key,
                          retries, timeout, stream_timeout, temperature,
                          reasoning_effort, logger, "[P2]")
     if raw2 is None:
@@ -1067,11 +1109,11 @@ def do_check(args, logger) -> int:
     if args.preview_request:
         log = preview_logger("translate_check_llm")
         log_argv(log)
-        user_text = compose_batch_text(batches[0])
+        user_text = render_pass1_prompt(p1, compose_batch_text(batches[0]))
         payload = preview_request_payload(
             "translate_check_llm", f"Pass1 · батч 1/{len(batches)}",
             model_name,
-            llm_messages(p1, user_text),
+            llm_messages(user_text),
             meta={
                 "batches": len(batches),
                 "context_budget": args.context_budget,

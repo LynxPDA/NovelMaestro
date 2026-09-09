@@ -6,6 +6,23 @@
 
 ## Текущая сессия
 
+- [x] **Разделение system/user и переменные данных во всех LLM-промптах** —
+      правила и описательные константы — в `<system>`, задание и переменные
+      данные — в `<user>` строго через плейсхолдеры (без дописывания в
+      конец кодом). Затронуты: ner (pass1 `{chunk_text}`, pass2
+      `{chunk_text}`+`{ner_json}`, убран перетирающий SYSTEM_PROMPT_PASS2_SYS),
+      ner_check (типовой префикс — внутрь `<system>`), translate_check_llm
+      (`{batch_text}`/`{errors_json}`, рендер render_pass1_prompt/
+      render_pass2_prompt с fallback для старых внешних промптов),
+      translate_quality (`<system>/<user>` в дефолте и шаблоне), wiki
+      (починен осиротевший `</system>` — system был ПУСТЫМ во всех
+      запросах; легаси-шаблон оборачивается в `<system>` кодом),
+      translate_book (3 встроенных промпта). Шаблоны General:
+      pipeline/ner/ner_check/translate_check/translate_quality/wiki —
+      данные перенесены в `<user>`. Guard-тест test_prompt_structure.py
+      (плейсхолдеры данных не в `<system>`); конвенция зафиксирована
+      в AGENTS.md §7. Промпты в projects/*/prompts/ не тронуты
+      (fallback сохраняет совместимость).
 - [x] **4. Версия сборки в web** — новый модуль `web/version.py`
       (приоритет: NOVELMAESTRO_VERSION → файл `VERSION` в корне репо →
       фолбэк; файл VERSION обновляется при релизе вместе с

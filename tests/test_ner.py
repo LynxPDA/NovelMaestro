@@ -299,9 +299,9 @@ def test_run_two_pass_pass2_fallback(tmp_path, monkeypatch, ner_globals):
     p1_answer = '[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян"}]'
     calls = []
 
-    def fake_llm(system_prompt, user_content, *a, **k):
-        calls.append(system_prompt)
-        if system_prompt == "ПРОМПТ1":
+    def fake_llm(user_content, *a, **k):
+        calls.append(user_content)
+        if "EXTRACTED NER" not in user_content:  # pass1, не pass2
             return p1_answer, None
         return None, "Pass2 fail after 1 retries"  # pass2 не отвечает
 
@@ -327,9 +327,9 @@ P2_ANSWER = ('[{"term": "陈阳", "type": "Person (male)", '
              '"status": "confirmed"}]')
 
 
-def _fake_llm(system_prompt, user_content, *a, **k):
-    # pass2 получает особый системный промпт
-    if system_prompt == NER.SYSTEM_PROMPT_PASS2_SYS:
+def _fake_llm(user_content, *a, **k):
+    # pass2 получает данные с маркером «EXTRACTED NER»
+    if "EXTRACTED NER" in user_content:
         return P2_ANSWER, None
     return P1_ANSWER, None
 

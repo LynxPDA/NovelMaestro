@@ -183,7 +183,7 @@ def test_main_prompt_missing_tag_falls_back_to_builtin(tmp_path, monkeypatch):
         encoding="utf-8")
     seen = {}
     def fake_stream(base_url, model, messages, *a, **k):
-        seen["content"] = messages[-1]["content"]
+        seen["messages"] = messages
         return ("ПЕРЕВОД", "")
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "м")
@@ -193,8 +193,13 @@ def test_main_prompt_missing_tag_falls_back_to_builtin(tmp_path, monkeypatch):
              "--threads", "1"])
     from cli.translate_book import DEFAULT_REDACT_PROMPT
     # встроенный промпт, а НЕ файл целиком с чужим тегом
-    assert "<translate>" not in seen["content"]
-    assert DEFAULT_REDACT_PROMPT.strip().splitlines()[0] in seen["content"]
+    msgs = seen["messages"]
+    # встроенный промпт, а НЕ файл целиком с чужими тегами:
+    # правила (тело встроенного) — в system, данные — в user
+    assert "=== ГЛОССАРИЙ ===" in msgs[0]["content"]
+    user_msg = msgs[-1]["content"]
+    assert "<translate>" not in user_msg
+    assert "=== ОРИГИНАЛ ===" in user_msg and "原文" in user_msg
 
 
 def test_main_resolves_server_from_env(tmp_path, monkeypatch):
@@ -652,4 +657,6 @@ def test_main_preview_extended_blocks(tmp_path, monkeypatch):
     assert data["meta"]["dict_terms"] == 1
     assert data["meta"]["examples"] == 1
     assert data["meta"]["rules_chars"] > 0
-    assert data["meta"]["request_chars"] == len(content)
+    # request_chars — весь промпт-контент запроса (system + user)
+    assert data["meta"]["request_chars"] == sum(
+        len(m["content"]) for m in data["messages"]) + 37

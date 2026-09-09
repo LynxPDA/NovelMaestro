@@ -77,6 +77,7 @@ def _setup_logging(log_path: str) -> logging.Logger:
 # ══════════════════════════════════════════════════════════════════════
 
 SYSTEM_WIKI_ARTICLE = """\
+<system>
 Ты — автор-составитель энциклопедии по веб-новелле.
 На основе предоставленных данных напиши энциклопедическую статью.
 
@@ -99,8 +100,7 @@ SYSTEM_WIKI_ARTICLE = """\
 - Стиль: информативный, лаконичный, без воды. Язык: русский.
 - Формат: чистый Markdown. Без JSON, без блоков кода.
 - Объём: 200–800 слов.
-</system>
-"""
+</system>"""
 
 # ══════════════════════════════════════════════════════════════════════
 # МАРКЕРЫ ОПИСАНИЯ (с учётом склонений и родов)
@@ -544,7 +544,7 @@ def llm_request(
     задано — шлём как есть (none = явное отключение)."""
     text, _err = stream_chat_completion(
         base_url, model,
-        llm_messages(system_prompt, user_content),
+        llm_messages(system_prompt, data=user_content),
         api_key=api_key,
         max_retries=max_retries,
         timeout=timeout,
@@ -673,7 +673,11 @@ def build_article_prompts(
     user_content = "\n".join(user_parts)
 
     rel_label = relations_labels.get(base_type, "Примечания")
-    sys_prompt = system_prompt.replace("{translation}", _capitalize_first(translation))
+    tpl = system_prompt.strip()
+    # шаблон без разметки (легаси) — целиком системный
+    if not tpl.startswith("<system>"):
+        tpl = f"<system>\n{tpl}\n</system>"
+    sys_prompt = tpl.replace("{translation}", _capitalize_first(translation))
     sys_prompt = sys_prompt.replace("{relations_label}", rel_label)
 
     if base_type in skip_relations:

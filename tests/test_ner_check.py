@@ -245,7 +245,7 @@ def _write_ner(tmp_path):
 
 def _mock_stream(monkeypatch, response, calls):
     def fake(base_url, model, messages, **kw):
-        calls.append(messages[-1]["content"])
+        calls.append(messages)  # полный список сообщений (system + user)
         return response, None
     monkeypatch.setattr(NC, "stream_chat_completion", fake)
 
@@ -262,11 +262,14 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     assert rc == 0
     # один проход «Весь глоссарий» (типы — отдельным режимом)
     assert len(calls) == 1
+    msgs = calls[0]
+    assert msgs[0]["role"] == "system"
+    assert msgs[-1]["role"] == "user"
+    # правила/поля — в system, данные — в user (разметка запроса)
+    assert "Проверяемые поля:** type, translation" in msgs[0]["content"]
     # в запросе записи идут по count по убыванию
-    first = calls[0]
+    first = msgs[-1]["content"]
     assert first.index("青云宗") < first.index("火球术") < first.index("林凡")
-    # в промпте перечислены проверяемые поля (term не входит)
-    assert "Проверяемые поля:** type, translation" in first
     # префикс «глоссарий уже проверен» — только в типовых проходах
     prefix = NC.TYPES_STAGE_PREFIX.strip()
     assert prefix not in calls[0]
@@ -672,9 +675,10 @@ def test_ner_check_rag_main(tmp_path, monkeypatch):
     assert len(calls) == 2
     # бюджет на термин — только фрагменты: промпт НЕ вычитается
     # (запрос по 林凡 с фрагментами больше встроенного промпта)
-    assert len(calls[0]) > 800
+    assert len(calls[0][-1]["content"]) > 800
     # в запрос попали и термины, и фрагменты книги
-    assert "林凡" in calls[0] and "Линь Фан" in calls[0]
+    c0 = calls[0][-1]["content"]
+    assert "林凡" in c0 and "Линь Фан" in c0
     doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     # 林凡 уже Person (male) и Линь Фан — уточнений нет → пусто

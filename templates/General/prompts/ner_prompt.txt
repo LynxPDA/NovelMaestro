@@ -103,9 +103,12 @@
     "notes": "Комментарии, сомнения, альтернативные переводы"
   }
 ]
-
-Текст для работы:
 </system>
+<user>
+=== ТЕКСТ ДЛЯ РАБОТЫ ===
+
+{chunk_text}
+</user>
 </prompt_pass1>
 
 <prompt_pass2>
@@ -208,13 +211,14 @@
 ]
 
 Если все записи оказались мусором — верни [].
+</system>
+<user>
+=== ORIGINAL TEXT ===
+
+{chunk_text}
 
 === EXTRACTED NER (to review) ===
 
 {ner_json}
-
-=== ORIGINAL TEXT ===
-
-{chunk_text}
-</system>
+</user>
 </prompt_pass2>

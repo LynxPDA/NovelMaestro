@@ -94,8 +94,12 @@ Rules:
 - Skip generic words that need no glossary entry.
 - If no entities found, return [].
 Output ONLY valid JSON.
-Text for work:
 </system>
+<user>
+=== ТЕКСТ ДЛЯ АНАЛИЗА ===
+
+{chunk_text}
+</user>
 """
 
 SYSTEM_PROMPT_PASS2 = """
@@ -114,19 +118,17 @@ Your job:
 - Add any important entities that were missed.
 
 Return the corrected JSON array in the SAME format. Output ONLY valid JSON.
-
+</system>
+<user>
 === ORIGINAL TEXT ===
+
 {chunk_text}
 
 === EXTRACTED NER (to review) ===
-{ner_json}
-</system>
-"""
 
-SYSTEM_PROMPT_PASS2_SYS = (
-    "<system>You are a meticulous editor verifying a translation "
-    "glossary. Output ONLY valid JSON.</system>"
-)
+{ner_json}
+</user>
+"""
 
 # ══════════════════════════════════════════════════════════════════════
 # КОНСТАНТЫ
@@ -619,6 +621,15 @@ def llm_request(
 # ══════════════════════════════════════════════════════════════════════
 
 
+def _pass1_user_content(prompt: str, text: str) -> str:
+    """user-контент pass1: текст чанка — через переменную {chunk_text}.
+    Нет плейсхолдера (старый внешний промпт) — текст дописывается
+    после промпта (прежнее поведение). Используется и в предпросмотре."""
+    if "{chunk_text}" in prompt:
+        return prompt.replace("{chunk_text}", text)
+    return f"{prompt}\n\n{text}"
+
+
 def process_chunk_pass1(
     index: int,
     text: str,
@@ -640,8 +651,8 @@ def process_chunk_pass1(
         return None if ners is not None else "Invalid NER format"
 
     raw, err = llm_request(
-        system_prompt, text, base_url, model, api_key,
-        max_retries, timeout, temperature, logger,
+        _pass1_user_content(system_prompt, text), "", base_url, model,
+        api_key, max_retries, timeout, temperature, logger,
         reasoning_effort=reasoning_effort,
         validator=_validate,
     )
@@ -684,7 +695,7 @@ def process_chunk_pass2(
         return None if ners is not None else "Pass2: invalid format"
 
     raw, err = llm_request(
-        SYSTEM_PROMPT_PASS2_SYS, user_content, base_url, model,
+        user_content, "", base_url, model,
         api_key, max_retries, timeout, temperature, logger,
         reasoning_effort=reasoning_effort,
         validator=_validate,
@@ -1594,6 +1605,10 @@ def main():
         if "{chunk_text}" not in pass2_prompt or "{ner_json}" not in pass2_prompt:
             _log(logger, logging.WARNING,
                  "⚠️ Pass2 промпт не содержит {chunk_text} и/или {ner_json}.")
+    if "{chunk_text}" not in pass1_prompt:
+        _log(logger, logging.WARNING,
+             "⚠️ Pass1 промпт не содержит {chunk_text} — текст чанка "
+             "дописывается после промпта.")
 
     if in_memory_text is not None:
         full_text = in_memory_text
@@ -1626,7 +1641,7 @@ def main():
         _log(log, logging.INFO, f"🧭 Чанков: {len(all_chunks)}")
         payload = preview_request_payload(
             "ner", f"Pass1 · чанк 1/{len(all_chunks)}", model_name,
-            llm_messages(pass1_prompt, all_chunks[0]),
+            llm_messages(_pass1_user_content(pass1_prompt, all_chunks[0])),
             meta={
                 "chunks": len(all_chunks),
                 "chunk_size": args.chunk_size,

@@ -128,7 +128,7 @@ def test_process_batch_one_pass(monkeypatch):
     calls = []
 
     def fake_q(user, sysp, *a, **k):
-        calls.append(sysp)
+        calls.append(user)
         return '[{"chapter": 1, "fragment": "фрагмент длинный", "corrected": "правкa"}]'
 
     monkeypatch.setattr(FE, "query_llm_raw", fake_q)
@@ -139,6 +139,8 @@ def test_process_batch_one_pass(monkeypatch):
     assert out is not None
     assert len(out) == 1 and out[0]["chapter"] == 1
     assert len(calls) == 1  # только P1
+    # правила pass1 — в system, текст батча — в user (через {batch_text})
+    assert "П1" in calls[0] and "Глава 1" in calls[0]
 
 
 def test_process_batch_two_pass(monkeypatch):
