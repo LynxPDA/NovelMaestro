@@ -113,13 +113,20 @@ docker compose up -d --build
 
 ## Настройка LLM-сервера
 
-Программа работает с любым OpenAI-совместимым сервером (vLLM, Ollama, LM Studio и т.п.). Подключение задаётся в файле `.env` (шаблон — `templates/.env.example`; в Docker — переменными окружения в `docker-compose.yml`, секция `environment`):
+Программа работает с любым [OI]-совместимым сервером — локальным или облачным:
+
+- **Локальный** (рекомендуется, бесплатно и приватно): [llama.cpp](https://github.com/ggml-org/llama.cpp); также подходят vLLM, Ollama, LM Studio;
+- **Облачный**: [RouterAI](https://routerai.ru) — единый [OI]-совместимый API (`https://routerai.ru/api/v1`) к 100+ моделям с оплатой в рублях.
+
+Подключение задаётся в файле `.env` (шаблон — `templates/.env.example`; в Docker — переменными окружения в `docker-compose.yml`, секция `environment`):
 
 ```ini
-HOST=http://localhost:8080/v1
-API_KEY=your-api-key
-MODEL=название-модели
+HOST=https://routerai.ru/api/v1     # или адрес локального сервера, напр. http://localhost:8080/v1
+API_KEY=your-api-key                # локальный сервер может работать без ключа
+MODEL=google/gemma-4-31b-it         # рекомендуемая модель (сент. 2026) — см. ниже
 ```
+
+**Рекомендуемая модель для перевода** (на сентябрь 2026 года) — `google/gemma-4-31b-it` в режиме рассуждений **high**: в формах стадий задайте «Reasoning effort» = `high` (локально через llama.cpp — GGUF-сборка Gemma 4 31B IT, режим размышления включается чат-шаблоном модели).
 
 Можно задать отдельный сервер для конкретной стадии: `<СТАДИЯ>_HOST`, `<СТАДИЯ>_API_KEY`, `<СТАДИЯ>_MODEL` (например `NER_MODEL`, `WIKI_HOST`). Без `.env` программа не падает — предложит ввести параметры вручную.
 
