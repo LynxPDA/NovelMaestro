@@ -459,6 +459,11 @@ class JobManager:
             # каждый web-запуск — в режиме структурированного
             # прогресса (emit_progress в скриптах; tqdm отключается)
             proc_env["WEB_PROGRESS"] = "1"
+            # Windows: stdout/stderr потомков — строго utf-8, иначе
+            # кириллица лога пишется в пайп в cp1251 и читается
+            # здесь как utf-8 → ромбы U+FFFD; символы прогресса
+            # (✦/📊) в cp1251 непредставимы → «?». На POSIX не мешает.
+            proc_env.setdefault("PYTHONIOENCODING", "utf-8")
             proc = subprocess.Popen(
                 [self.python] + argv,
                 cwd=str(cwd),

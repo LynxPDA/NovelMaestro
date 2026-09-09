@@ -6,7 +6,17 @@
 
 ## Текущая сессия
 
-- [x] **1. Оценка перевода (LLM): фиксированный отчёт** — имя
+- [x] **4. Версия сборки в web** — новый модуль `web/version.py`
+      (приоритет: NOVELMAESTRO_VERSION → файл `VERSION` в корне репо →
+      фолбэк; файл VERSION обновляется при релизе вместе с
+      CHANGELOG.md); версия отдаётся в `/api/session`, видна внизу
+      сайдбара SPA (`.sidebar-version`) и в HTTP-заголовке
+      `Server: NovelMaestro/<версия>`.
+- [x] **5. Windows: кириллица в логах Запусков — ромбы** — потомки
+      web-сервера писали в stdout-пайп в локальной кодировке (cp1251),
+      а читались как utf-8 → U+FFFD. Исправлено: `PYTHONIOENCODING=utf-8`
+      в окружении потомков (`web/jobs.py`, `web/pipeline.py`) + явное
+      `encoding="utf-8"` в Popen конвейера.
       `tmp/translation_quality_assessment.md` зафиксировано в web:
       поле «Выходной файл» из формы Запусков удалено (`--output` в CLI
       сохранён); вкладка «Проверки» → «Оценка перевода (LLM)»

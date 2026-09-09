@@ -472,6 +472,9 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
             proc_env = dict(os.environ)
             if api_key:
                 proc_env["LLM_API_KEY"] = api_key
+            # stdout потомков — строго utf-8 (на Windows иначе cp1251 →
+            # ромбы в логе; см. PYTHONIOENCODING в web/jobs.py)
+            proc_env.setdefault("PYTHONIOENCODING", "utf-8")
             try:
                 # Popen + построчное чтение — строки @@PROGRESS@@
                 # потомка ретранслируются в свой stdout (JobManager пробросит
@@ -480,6 +483,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     text=True, env=proc_env, bufsize=1,
+                    encoding="utf-8", errors="replace",
                 )
             except OSError as exc:
                 log.error("Глава %03d | [%s] Не удалось запустить: %s",
@@ -797,6 +801,7 @@ def main() -> None:
         proc_env = dict(os.environ)
         if api_key:
             proc_env["LLM_API_KEY"] = api_key
+        proc_env.setdefault("PYTHONIOENCODING", "utf-8")
         log.info("ПРЕДПРОСМОТР : %s · глава %03d · чанк 1 · 1 поток",
                  _STAGE_NAME[stage], cid)
         try:
