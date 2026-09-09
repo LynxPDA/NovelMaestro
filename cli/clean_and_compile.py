@@ -61,6 +61,7 @@ class Config:
         self.volume = ""
         self.base_dir = "./chapters"
         self.tmp_dir = "."
+        self.out_dir = "."           # финальные сборки — корень проекта
         self.epub_cover = "./source/cover.jpg"
         self.epub_meta = "./source/metadata.yaml"
         self.epub_chunk_size = 50
@@ -681,9 +682,10 @@ def compile_book(mode):
 
     Тело копится в памяти и пишется одной операцией (atomic_write):
     обрыв прогона не оставляет битого файла. Лог —
-    logs/build_log_<mode>.txt; epub/fb2 рядом с промежуточным txt в
-    tmp/ проекта."""
-    output_file = os.path.join(cfg.tmp_dir, output_base(ext=mode))
+    logs/build_log_<mode>.txt. Финальные файлы — в корень проекта
+    (cfg.out_dir); для epub/fb2 промежуточный txt НЕ пишется —
+    нативный билдер собирает книгу из памяти (chapters_data)."""
+    output_file = os.path.join(cfg.out_dir, output_base(ext=mode))
     try:
         os.makedirs("logs", exist_ok=True)
     except OSError as exc:
@@ -815,19 +817,22 @@ def compile_book(mode):
         log(f"Сборка {mode} завершена: {output_file}", out_log)
         if missing_chapters:
             log(f"ПРОПУЩЕНО ГЛАВ: {len(missing_chapters)} ({', '.join(missing_chapters)})", out_log)
-        atomic_write(output_file, "".join(parts))
+        # txt-режимы — финальный файл; epub/fb2 — промежуточный txt
+        # не нужен (книга собирается из chapters_data) — не пишем
+        if mode not in ("epub", "fb2"):
+            atomic_write(output_file, "".join(parts))
     finally:
         out_log.close()
 
     # Нативная генерация EPUB (без pandoc)
     if mode == "epub":
-        epub_output = os.path.join(cfg.tmp_dir, output_base(ext="epub"))
+        epub_output = os.path.join(cfg.out_dir, output_base(ext="epub"))
         meta = parse_yaml_meta(cfg.epub_meta) if os.path.isfile(cfg.epub_meta) else {}
         build_epub_native(chapters_data, meta, cfg.epub_cover, epub_output)
 
     # Нативная генерация FB2 (без pandoc)
     if mode == "fb2":
-        fb2_output = os.path.join(cfg.tmp_dir, output_base(ext="fb2"))
+        fb2_output = os.path.join(cfg.out_dir, output_base(ext="fb2"))
         meta = parse_yaml_meta(cfg.epub_meta) if os.path.isfile(cfg.epub_meta) else {}
         cover = cfg.fb2_cover if cfg.fb2_inject_cover == 1 else None
         build_fb2_native(chapters_data, meta, cover, fb2_output)
@@ -849,7 +854,7 @@ def compile_chunks(mode, chunk_size):
         compile_book(mode)
         current_start = current_end + 1
     cfg.start, cfg.end = orig_start, orig_end
-    print(f"\nВсе части {mode.upper()} сгенерированы в {cfg.tmp_dir}!")
+    print(f"\nВсе части {mode.upper()} сгенерированы в {cfg.out_dir}!")
 
 # ==========================================
 # CLI
@@ -888,6 +893,9 @@ def build_parser():
                         "= одна сборка без разбивки. Единица — ГЛАВЫ.")
     p.add_argument("--tmp-dir", default="tmp",
                    help="Каталог рабочих файлов сборки (по умолчанию: tmp)")
+    p.add_argument("--out-dir", default=".",
+                   help="Каталог финальных сборок TXT/EPUB/FB2 "
+                        "(по умолчанию: корень проекта)")
     p.add_argument("--epub-cover", default="./source/cover.jpg",
                    help="Обложка для EPUB (по умолчанию: ./source/cover.jpg)")
     p.add_argument("--epub-meta", default="./source/metadata.yaml",
@@ -915,6 +923,7 @@ def main():
 
     cfg.base_dir = args.chapters_dir
     cfg.tmp_dir = args.tmp_dir
+    cfg.out_dir = args.out_dir
     cfg.compile_type = args.source_type
     cfg.epub_cover = "" if args.no_cover else resolve_cover_path(args.epub_cover)
     cfg.epub_meta = args.epub_meta
@@ -926,6 +935,11 @@ def main():
         os.makedirs(cfg.tmp_dir, exist_ok=True)
     except OSError as exc:
         print(f"Ошибка: не удалось создать {cfg.tmp_dir}: {exc}")
+        return 1
+    try:
+        os.makedirs(cfg.out_dir, exist_ok=True)
+    except OSError as exc:
+        print(f"Ошибка: не удалось создать {cfg.out_dir}: {exc}")
         return 1
 
     # ── диапазон глав ──

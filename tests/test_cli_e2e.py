@@ -218,7 +218,9 @@ def cac_env(tmp_path, monkeypatch):
     monkeypatch.chdir(proj_dir)
     old = {k: v for k, v in vars(CAC.cfg).items()}
     CAC.cfg.base_dir = str(chapters)
-    CAC.cfg.tmp_dir = str(tmp_path)
+    # финальные сборки — корень проекта; рабочие файлы (titles) — tmp/
+    CAC.cfg.out_dir = str(proj_dir)
+    CAC.cfg.tmp_dir = str(proj_dir / "tmp")
     CAC.cfg.start, CAC.cfg.end = 1, 2
     CAC.cfg.compile_type = "polished"
     CAC.cfg.set_order = 1
@@ -239,10 +241,11 @@ def test_cac_titles_mode_removed(cac_env):
 
 def test_cac_compile_txt(cac_env):
     # кастомные заголовки подхватываются из titles-файла
+    Path(CAC.cfg.tmp_dir).mkdir(exist_ok=True)
     Path(CAC.cfg.titles_file).write_text(
         "1:::Глава 1 (правленый)\n2:::Глава 2 (правленый)\n", encoding="utf-8")
     CAC.compile_book("txt")
-    out = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2_txt.txt"
+    out = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2_txt.txt"
     assert out.is_file()
     content = out.read_text(encoding="utf-8")
     assert "[Глава 1 (правленый) :|: 1]" in content
@@ -256,7 +259,7 @@ def test_cac_compile_txt_plain(cac_env):
     """txt-plain: заголовки КАК В ПЕРЕВОДЕ — без markdown-префиксов
     и rulate-тегов «[:|:]» (в отличие от txt = TXT (Rulate))."""
     CAC.compile_book("txt-plain")
-    out = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2_txt-plain.txt"
+    out = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2_txt-plain.txt"
     assert out.is_file()
     content = out.read_text(encoding="utf-8")
     assert "Глава 1" in content
@@ -277,7 +280,7 @@ def test_cac_separators_unified(cac_env):
         encoding="utf-8")
     CAC.cfg.start, CAC.cfg.end = 1, 3
     CAC.compile_book("txt")
-    out = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_3_txt.txt"
+    out = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_3_txt.txt"
     content = out.read_text(encoding="utf-8")
     # 4 разделителя из главы 3 + 2 из глав 1–2 (фикстура: «. . .»)
     assert content.count("* * *") == 6
@@ -297,7 +300,7 @@ def test_cac_no_clean_keeps_chapter_lines(cac_env):
     (d / "polished.txt").write_text(body, encoding="utf-8")
     CAC.cfg.start, CAC.cfg.end = 1, 3
     CAC.compile_book("txt")
-    content = (Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_3_txt.txt").read_text(
+    content = (Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_3_txt.txt").read_text(
         encoding="utf-8")
     assert "Глава 5 в середине" in content
     assert "Глава 7 ближе к концу" in content
@@ -314,7 +317,7 @@ def test_cac_title_from_first_line(cac_env):
         encoding="utf-8")
     CAC.cfg.start, CAC.cfg.end = 1, 3
     CAC.compile_book("txt")
-    out = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_3_txt.txt"
+    out = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_3_txt.txt"
     content = out.read_text(encoding="utf-8")
     assert "[Wiki Новеллы :|: 3]" in content   # заголовок из первой строки
     assert "### Линь Шуй" in content           # внутренние заголовки целы
@@ -329,7 +332,7 @@ def test_cac_title_from_prologue_first_line(cac_env):
         "Пролог. Пример\n\nТекст пролога.\n", encoding="utf-8")
     CAC.cfg.start, CAC.cfg.end = 1, 3
     CAC.compile_book("txt")
-    out = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_3_txt.txt"
+    out = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_3_txt.txt"
     content = out.read_text(encoding="utf-8")
     assert "[Пролог. Пример :|: 3]" in content
     assert "Пролог. Пример" not in content.replace("[Пролог. Пример :|: 3]", "")
@@ -347,7 +350,7 @@ def test_cac_epub_wiki_chapter_title(cac_env):
     CAC.cfg.start, CAC.cfg.end = 1, 3
     CAC.cfg.epub_cover = str(Path(CAC.cfg.tmp_dir) / "nonexistent.jpg")
     CAC.compile_book("epub")
-    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_3.epub"
+    epub = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_3.epub"
     assert epub.is_file()
     with zipfile.ZipFile(epub) as zf:
         nav = zf.read("OEBPS/nav.xhtml").decode("utf-8")
@@ -363,7 +366,7 @@ def test_cac_epub_wiki_chapter_title(cac_env):
 
 def test_cac_compile_txt_no_titles_fallback(cac_env):
     CAC.compile_book("txt")
-    out = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2_txt.txt"
+    out = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2_txt.txt"
     content = out.read_text(encoding="utf-8")
     assert "[Глава 1 :|: 1]" in content   # заголовок из самого файла
 
@@ -371,11 +374,12 @@ def test_cac_compile_txt_no_titles_fallback(cac_env):
 def test_cac_compile_epub_native(cac_env):
     """Нативная генерация EPUB: ZIP-структура, обложка, главы."""
     import zipfile
+    Path(CAC.cfg.tmp_dir).mkdir(exist_ok=True)
     cover = Path(CAC.cfg.tmp_dir) / "cover.jpg"
     cover.write_bytes(b"fake")
     CAC.cfg.epub_cover = str(cover)
     CAC.compile_book("epub")
-    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.epub"
+    epub = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.epub"
     assert epub.is_file(), "EPUB не создан"
     with zipfile.ZipFile(epub) as zf:
         names = zf.namelist()
@@ -399,7 +403,7 @@ def test_cac_compile_epub_no_cover(cac_env):
     import zipfile
     CAC.cfg.epub_cover = str(Path(CAC.cfg.tmp_dir) / "nonexistent.jpg")
     CAC.compile_book("epub")
-    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.epub"
+    epub = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.epub"
     assert epub.is_file()
     with zipfile.ZipFile(epub) as zf:
         names = zf.namelist()
@@ -409,6 +413,7 @@ def test_cac_compile_epub_no_cover(cac_env):
 
 def test_cac_compile_fb2_native(cac_env):
     """Нативная генерация FB2: XML-структура, обложка, donate-страница."""
+    Path(CAC.cfg.tmp_dir).mkdir(exist_ok=True)
     cover = Path(CAC.cfg.tmp_dir) / "cover.jpg"
     cover.write_bytes(b"fake")
     CAC.cfg.fb2_cover = str(cover)
@@ -418,7 +423,7 @@ def test_cac_compile_fb2_native(cac_env):
     (src / "donate.txt").write_text(
         "# Поддержать проект\n\nТестовая ссылка\n", encoding="utf-8")
     CAC.compile_book("fb2")
-    fb2 = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.fb2"
+    fb2 = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.fb2"
     assert fb2.is_file(), "FB2 не создан"
     content = fb2.read_text(encoding="utf-8")
     assert "<coverpage>" in content                         # обложка нативно
@@ -437,7 +442,7 @@ def test_cac_compile_fb2_no_cover(cac_env):
     """FB2 без обложки (--no-fb2-cover) — coverpage отсутствует."""
     CAC.cfg.fb2_inject_cover = 0
     CAC.compile_book("fb2")
-    fb2 = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.fb2"
+    fb2 = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.fb2"
     assert fb2.is_file()
     content = fb2.read_text(encoding="utf-8")
     assert "<coverpage>" not in content
@@ -449,7 +454,7 @@ def test_cac_epub_title_not_duplicated(cac_env):
     import re, zipfile
     CAC.cfg.add_donate_page = 0
     CAC.compile_book("epub")
-    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.epub"
+    epub = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.epub"
     with zipfile.ZipFile(epub) as zf:
         ch1 = zf.read("OEBPS/chapter_0001.xhtml").decode("utf-8")
     m = re.search(r"<body>.*</body>", ch1, re.DOTALL)
@@ -465,7 +470,7 @@ def test_cac_fb2_title_not_duplicated(cac_env):
     import re
     CAC.cfg.add_donate_page = 0
     CAC.compile_book("fb2")
-    fb2 = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.fb2"
+    fb2 = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.fb2"
     content = fb2.read_text(encoding="utf-8")
     m = re.search(r"<section>(.*?)</section>", content, re.DOTALL)
     assert m is not None
@@ -486,13 +491,13 @@ def test_cac_separators_rendered_in_books(cac_env):
     CAC.cfg.epub_cover = str(Path(CAC.cfg.tmp_dir) / "нет.jpg")
     CAC.cfg.fb2_inject_cover = 0
     CAC.compile_book("epub")
-    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.epub"
+    epub = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.epub"
     with zipfile.ZipFile(epub) as zf:
         ch1 = zf.read("OEBPS/chapter_0001.xhtml").decode("utf-8")
     assert '<p style="text-align:center">* * *</p>' in ch1
     assert "\\*" not in ch1
     CAC.compile_book("fb2")
-    fb2 = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.fb2"
+    fb2 = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.fb2"
     content = fb2.read_text(encoding="utf-8")
     assert '<p style="text-align:center">* * *</p>' in content
     assert "\\*" not in content
@@ -541,7 +546,7 @@ def test_cac_compile_epub_donate_external(cac_env, monkeypatch):
         "# Поддержать нас\n\nСсылка сюда\n", encoding="utf-8")
     CAC.cfg.donate_file = ""
     CAC.compile_book("epub")
-    epub = Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_2.epub"
+    epub = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.epub"
     with zipfile.ZipFile(epub) as zf:
         names = zf.namelist()
         # Последняя глава — donate
@@ -551,10 +556,23 @@ def test_cac_compile_epub_donate_external(cac_env, monkeypatch):
 
 def test_cac_compile_chunks(cac_env):
     CAC.compile_chunks("txt", 1)
-    assert (Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_1_1_txt.txt").is_file()
-    assert (Path(CAC.cfg.tmp_dir) / "Тестовая_Книга_2_2_txt.txt").is_file()
+    assert (Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_1_txt.txt").is_file()
+    assert (Path(CAC.cfg.out_dir) / "Тестовая_Книга_2_2_txt.txt").is_file()
     # диапазон восстановлен
     assert (CAC.cfg.start, CAC.cfg.end) == (1, 2)
+
+
+def test_cac_output_locations(cac_env):
+    """Финальные сборки — в out_dir (корень проекта); для epub/fb2
+    промежуточный txt НЕ пишется (книга собирается из памяти)."""
+    CAC.cfg.epub_cover = ""
+    CAC.compile_book("epub")
+    assert (Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.epub").is_file()
+    # промежуточный txt для epub не создавался
+    assert not (Path(CAC.cfg.out_dir)
+                / "Тестовая_Книга_1_2_txt.txt").exists()
+    CAC.compile_book("txt")
+    assert (Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2_txt.txt").is_file()
 
 
 def test_cac_main_argparse(cac_env, monkeypatch):
@@ -562,7 +580,8 @@ def test_cac_main_argparse(cac_env, monkeypatch):
         "clean_and_compile.py", "--mode", "txt",
         "--chapters-dir", CAC.cfg.base_dir, "--tmp-dir", str(cac_env)])
     CAC.main()
-    assert (cac_env / "Тестовая_Книга_1_2_txt.txt").is_file()
+    # финальная сборка — в корень проекта (дефолт --out-dir = cwd)
+    assert (cac_env / "Тестовая_Книга" / "Тестовая_Книга_1_2_txt.txt").is_file()
 
 
 def test_cac_main_bad_range(cac_env, monkeypatch):
@@ -575,27 +594,27 @@ def test_cac_main_bad_range(cac_env, monkeypatch):
 
 def test_cac_chunk_size_splits_any_mode(cac_env, monkeypatch):
     """--chunk-size >0 разбивает ЛЮБОЙ режим на части; имена с
-    названием проекта; рабочие файлы в tmp/ проекта."""
+    названием проекта; финальные файлы — корень проекта."""
     monkeypatch.setattr(sys, "argv", [
         "clean_and_compile.py", "--mode", "txt",
         "--chapters-dir", CAC.cfg.base_dir, "--tmp-dir", "tmp",
         "--chunk-size", "1"])
     CAC.main()
-    # cwd теста = папка проекта Тестовая_Книга → tmp/ внутри неё
-    assert (cac_env / "Тестовая_Книга" / "tmp"
+    # cwd теста = папка проекта Тестовая_Книга → файлы в её корне
+    assert (cac_env / "Тестовая_Книга"
             / "Тестовая_Книга_1_1_txt.txt").is_file()
-    assert (cac_env / "Тестовая_Книга" / "tmp"
+    assert (cac_env / "Тестовая_Книга"
             / "Тестовая_Книга_2_2_txt.txt").is_file()
 
 def test_cac_chunk_size_zero_single(cac_env, monkeypatch):
-    """chunk-size 0/пусто — одна сборка без разбивки (файл в tmp/)."""
+    """chunk-size 0/пусто — одна сборка без разбивки (файл в корне)."""
     monkeypatch.setattr(sys, "argv", [
         "clean_and_compile.py", "--mode", "txt",
         "--chapters-dir", CAC.cfg.base_dir, "--tmp-dir", "tmp"])
     CAC.main()
-    assert (cac_env / "Тестовая_Книга" / "tmp"
+    assert (cac_env / "Тестовая_Книга"
             / "Тестовая_Книга_1_2_txt.txt").is_file()
-    assert not (cac_env / "Тестовая_Книга" / "tmp"
+    assert not (cac_env / "Тестовая_Книга"
                 / "Тестовая_Книга_1_1_txt.txt").exists()
 
 def test_cac_mode_choices_no_chunks_suffix(cac_env):
