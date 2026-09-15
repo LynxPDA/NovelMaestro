@@ -499,6 +499,13 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.fname-icon {
+  color: var(--muted);
+  flex: none;
 }
 a.fname {
   color: var(--text);

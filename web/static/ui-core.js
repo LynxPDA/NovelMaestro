@@ -74,8 +74,10 @@
   };
   function icon(name, cls) {
     var body = ICON_PATHS[name] || '<rect width="14" height="14" x="5" y="5" rx="1"/>';
+    // xmlns обязателен: строка разбирается DOMParser-ом (image/svg+xml),
+    // без него элементы попадают вне svg-namespace и не рендерятся
     return (
-      '<svg class="icon' + (cls ? " " + cls : "") +
+      '<svg xmlns="http://www.w3.org/2000/svg" class="icon' + (cls ? " " + cls : "") +
       '" viewBox="0 0 24 24" width="16" height="16" fill="none" ' +
       'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
       'stroke-linejoin="round" aria-hidden="true">' + body + "</svg>"

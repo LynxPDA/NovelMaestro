@@ -517,9 +517,9 @@ test("fileIcon: имя SVG-иконки по папке и расширению"
   assert.equal(UICore.fileIcon({ name: "A.TXT" }), "file-text"); // lower
 });
 
-test("icon: svg-строка с путём, aria-hidden и классом", () => {
+test("icon: svg-строка с путём, xmlns, aria-hidden и классом", () => {
   const svg = UICore.icon("folder");
-  assert.match(svg, /^<svg class="icon"/);
+  assert.match(svg, /^<svg xmlns="http:\/\/www.w3.org\/2000\/svg" class="icon"/);
   assert.ok(svg.includes('aria-hidden="true"'));
   assert.ok(svg.includes("<path")); // тело иконки не пустое
   assert.match(UICore.icon("folder", "extra"), /class="icon extra"/);
