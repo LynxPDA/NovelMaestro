@@ -1694,14 +1694,108 @@ function viewUnknown(route) {
   );
 }
 
-/* ── каркас страницы ─────────────────────────────────────── */
+/* SVG-иконка как DOM-узел (строку UICore.icon нельзя дать h() —
+   экранирует). Разбор XML-парсером (не innerHTML): строка —
+   доверенная константа из ui-core, скрипты в xml-режиме не исполняются. */
+function iconEl(name, cls) {
+  const span = h("span", {
+    class: "icon-wrap" + (cls ? " " + cls : ""),
+  });
+  const doc = new DOMParser().parseFromString(
+    UICore.icon(name),
+    "image/svg+xml",
+  );
+  const svg = doc.documentElement;
+  if (svg && svg.nodeName === "svg" && !svg.querySelector("parsererror")) {
+    span.append(document.importNode(svg, true));
+  }
+  return span;
+}
+
+/* Кнопка «⋮» с выпадающим меню (действия строки, меню пользователя).
+   items: [{label, danger, onclick, href, aria}] — href-пункты — ссылки.
+   Закрытие: клик вне, Escape, повторный клик по кнопке. */
+function menuBtn(items, ariaLabel = "Дополнительные действия") {
+  const btn = h("button", {
+    class: "btn btn-sm btn-ghost kebab-btn",
+    "aria-label": ariaLabel,
+    "aria-haspopup": "menu",
+    "aria-expanded": "false",
+  });
+  btn.append(iconEl("kebab"));
+  const menu = h("div", { class: "user-menu hidden", role: "menu" });
+  for (const it of items) {
+    const cls =
+      "user-menu-item" + (it.danger ? " user-menu-danger" : "");
+    if (it.href) {
+      menu.append(
+        h("a", { class: cls, href: it.href, role: "menuitem" }, it.label),
+      );
+    } else {
+      menu.append(
+        h(
+          "button",
+          {
+            class: cls,
+            role: "menuitem",
+            onclick: () => {
+              close();
+              if (it.onclick) it.onclick();
+            },
+          },
+          it.label,
+        ),
+      );
+    }
+  }
+  function close() {
+    menu.classList.add("hidden");
+    btn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("click", onDoc, true);
+    document.removeEventListener("keydown", onKey, true);
+  }
+  function open() {
+    menu.classList.remove("hidden");
+    btn.setAttribute("aria-expanded", "true");
+    document.addEventListener("click", onDoc, true);
+    document.addEventListener("keydown", onKey, true);
+  }
+  function onDoc(ev) {
+    if (!menu.contains(ev.target) && !btn.contains(ev.target)) close();
+  }
+  function onKey(ev) {
+    if (ev.key === "Escape") close();
+  }
+  btn.addEventListener("click", () => {
+    if (menu.classList.contains("hidden")) open();
+    else close();
+  });
+  const wrap = h("div", { class: "menu-wrap" }, btn, menu);
+  return wrap;
+}
+
+/* ── каркас страницы: шапка с глобальной навигацией (сайдбара нет —
+   6 статичных пунктов дешевле держать в шапке, контенту нужна ширина) ── */
+const NAV_ITEMS = [
+  ["dashboard", "Дашборд", "dashboard"],
+  ["hub", "Проекты", "folder"],
+  ["templates", "Шаблоны", "layers"],
+  ["notes", "Заметки", "file-text"],
+  ["settings", "Настройки", "sliders"],
+  ["help", "Справка", "help"],
+];
+
 function layout(content) {
   const route = parseRoute();
-  const nav = (view, label) =>
+  // проект — часть раздела «Проекты»: подсветить соответствующий пункт
+  const activeView = route.view === "project" || route.view === "run"
+    ? "hub"
+    : route.view;
+  const nav = ([view, label, ic]) =>
     h(
       "a",
       {
-        class: "nav-item" + (route.view === view ? " nav-item-active" : ""),
+        class: "nav-item" + (activeView === view ? " nav-item-active" : ""),
         href: `#/${view}`,
         // повторный клик по той же вкладке — полный рендер
         // (сброс внутреннего состояния: у «Шаблонов» — выход из набора)
@@ -1712,42 +1806,47 @@ function layout(content) {
           }
         },
       },
-      label,
+      iconEl(ic),
+      h("span", { class: "nav-label" }, label),
     );
+  const userMenu = menuBtn(
+    [
+      { label: "О программе", href: "#/help" },
+      {
+        label: "Выйти",
+        danger: true,
+        onclick: () => logout(),
+      },
+    ],
+    "Меню пользователя",
+  );
+  // версия сборки — из /api/session (едет с CHANGELOG.md при релизе);
+  // жила в футере сайдбара — после его сноса переехала в меню «⋮»
+  const ver = h(
+    "div",
+    { class: "user-menu-version", title: "Версия NovelMaestro" },
+    "v" + (state.version || "?"),
+  );
+  userMenu.querySelector(".user-menu").prepend(ver);
+  const topRight = h(
+    "div",
+    { class: "topbar-right" },
+    // место индикатора активного запуска (заполняет app-run-slot)
+    h("div", { class: "run-slot", id: "app-run-slot" }),
+    userMenu,
+  );
   const header = h(
     "header",
     { class: "topbar" },
-    h("div", { class: "brand" }, "NovelMaestro"),
+    h("a", { class: "brand", href: "#/dashboard" }, "NovelMaestro"),
     h(
-      "div",
-      { class: "topbar-right" },
-      h("button", { class: "btn btn-ghost", onclick: logout }, "Выйти"),
+      "nav",
+      { class: "topnav", "aria-label": "Основная навигация" },
+      NAV_ITEMS.map(nav),
     ),
+    topRight,
   );
-  const sidebar = h(
-    "nav",
-    { class: "sidebar" },
-    nav("dashboard", "Дашборд"),
-    nav("hub", "Проекты"),
-    nav("settings", "Настройки"),
-    nav("templates", "Шаблоны"),
-    nav("notes", "Заметки"),
-    nav("help", "Справка"),
-    // версия сборки — из /api/session (едет с CHANGELOG.md при релизе)
-    h("div", { class: "sidebar-version", title: "Версия NovelMaestro" },
-      "v" + (state.version || "?")),
-  );
-  return h(
-    "div",
-    { class: "layout" },
-    header,
-    h(
-      "div",
-      { class: "body" },
-      sidebar,
-      h("main", { class: "content" }, content),
-    ),
-  );
+  return h("div", { class: "layout" }, header, h("main", { class: "content" }, content));
 }
 
 /* ── роутер и рендер ─────────────────────────────────────── */
@@ -2204,9 +2303,10 @@ async function viewTemplates() {
                 setPath(full);
               },
             },
-            "📁 " + e.name,
+            iconEl("folder", "fname-icon"),
+            e.name,
           )
-        : h("span", { class: "fname" }, "📄 " + e.name);
+        : h("span", { class: "fname" }, iconEl("file", "fname-icon"), e.name);
       const actions = h("div", { class: "factions" });
       /* у каталогов шаблонов НИКАКИХ действий — только переход */
       if (!e.dir) {

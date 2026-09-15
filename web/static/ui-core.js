@@ -16,33 +16,100 @@
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
-  /* ── иконки файлов (карта расширений; кросс-файловый хелпер) ── */
+  /* ── SVG-иконки (24×24, stroke=currentColor — красятся темой;
+   * вместо эмодзи: одинаковый рендер на всех ОС, базовая линия,
+   * кегль). Возвращает СТРОКУ — вставка через innerHTML (h() экранирует
+   * текст). Неизвестное имя — безымянная заглушка-квадрат. */
+  var ICON_PATHS = {
+    dashboard:
+      '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+    folder:
+      '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+    sliders:
+      '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
+    layers:
+      '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+    "file-text":
+      '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+    help:
+      '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+    logout:
+      '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>',
+    kebab:
+      '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+    download:
+      '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+    pencil:
+      '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
+    trash:
+      '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    search:
+      '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    activity:
+      '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+    book:
+      '<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>',
+    braces:
+      '<path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"/><path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/>',
+    image:
+      '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+    table:
+      '<path d="M12 3v18"/><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/>',
+    file:
+      '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+    list:
+      '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
+    terminal:
+      '<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+    clock:
+      '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    folderUp:
+      '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="m9 13 3-3 3 3"/>',
+    plus:
+      '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    folderPlus:
+      '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="M9 13h6"/>',
+    refresh:
+      '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  };
+  function icon(name, cls) {
+    var body = ICON_PATHS[name] || '<rect width="14" height="14" x="5" y="5" rx="1"/>';
+    return (
+      '<svg class="icon' + (cls ? " " + cls : "") +
+      '" viewBox="0 0 24 24" width="16" height="16" fill="none" ' +
+      'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+      'stroke-linejoin="round" aria-hidden="true">' + body + "</svg>"
+    );
+  }
+
+  /* ── иконки файлов: имя SVG-иконки по расширению (карта расширений;
+   * кросс-файловый хелпер). svg-строку даёт icon(). ── */
   var F_ICONS = {
-    txt: "📄",
-    json: "🧾",
-    md: "📝",
-    yaml: "📋",
-    yml: "📋",
-    png: "🖼",
-    jpg: "🖼",
-    jpeg: "🖼",
-    webp: "🖼",
-    gif: "🖼",
-    epub: "📚",
-    log: "📜",
-    csv: "📊",
-    py: "🐍",
+    txt: "file-text",
+    json: "braces",
+    md: "file-text",
+    yaml: "list",
+    yml: "list",
+    png: "image",
+    jpg: "image",
+    jpeg: "image",
+    webp: "image",
+    gif: "image",
+    epub: "book",
+    log: "file-text",
+    csv: "table",
+    py: "file",
   };
 
   function fileIcon(entry) {
-    if (!entry) return "📄";
-    if (entry.dir) return "📁";
+    if (!entry) return "file";
+    if (entry.dir) return "folder";
     var ext = (
       String(entry.name || "")
         .split(".")
         .pop() || ""
     ).toLowerCase();
-    return F_ICONS[ext] || "📄";
+    return F_ICONS[ext] || "file";
   }
 
   /* ── порт логики поиска терминов из core.common / translate_book.py ──
@@ -185,6 +252,41 @@
     return list;
   }
 
+  /* ── относительное время («3 ч назад») по unix-секундам ──
+   * < 60 с — «только что»; < 60 мин — «N мин назад»; < 24 ч — «N ч назад»;
+   * < 7 дн — «N дн назад»; дальше — дата ДД.ММ.ГГГГ. Абсолютное время —
+   * в tooltip звонящего (title = relTimeAbs). */
+  function relTime(seconds) {
+    var t = Number(seconds);
+    if (!Number.isFinite(t) || t <= 0) return "";
+    var d = new Date(t * 1000);
+    var diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 0) diff = 0;
+    if (diff < 60) return "только что";
+    if (diff < 3600) {
+      var m = Math.floor(diff / 60);
+      return m + " мин назад";
+    }
+    if (diff < 86400) {
+      var hh = Math.floor(diff / 3600);
+      return hh + " ч назад";
+    }
+    if (diff < 7 * 86400) {
+      var dd = Math.floor(diff / 86400);
+      return dd + " дн назад";
+    }
+    var p = (n) => n < 10 ? "0" + n : String(n);
+    return (
+      p(d.getDate()) + "." + p(d.getMonth() + 1) + "." + d.getFullYear()
+    );
+  }
+  /* абсолютное время для tooltip (тот же формат, что был в списках) */
+  function relTimeAbs(seconds) {
+    var t = Number(seconds);
+    if (!Number.isFinite(t) || t <= 0) return "";
+    return new Date(t * 1000).toLocaleString("ru-RU");
+  }
+
   var UICore = {
     /* ── русские названия полей записи глоссария ──
        единый словарь: вкладка «Глоссарий» (колонки и модалки).
@@ -224,12 +326,12 @@
 
     /* ── текстовая строка прогресса (тулбар лога) ── */
     progressText: (p, running) => {
-      if (!p) return running ? "📊 ожидание первого результата…" : "";
+      if (!p) return running ? "ожидание первого результата…" : "";
       var total = p.total || 0;
       var label = p.label || "";
       return total > 0
-        ? "📊 " + label + " " + p.done + "/" + total
-        : "📊 " + label + " " + p.done + " …";
+        ? label + " " + p.done + "/" + total
+        : label + " " + p.done + " …";
     },
 
     /* ── C/D: bool из .env-строк ("0"/"1"/"true"/…) ── */
@@ -587,6 +689,10 @@
     /* иконка файла по имени/папке (карта F_ICONS) */
     fileIcon: fileIcon,
 
+    /* SVG-иконка по имени (строка <svg>; вставка через innerHTML) */
+    icon: icon,
+    iconNames: Object.keys(ICON_PATHS),
+
     /* иммутабельное удаление записи: новый doc без индекса; «обновлён»
      * проставляется текущим временем. Вне диапазона/без «правки» — null. */
     removeReviewEntry: (doc, index, isArray) => {
@@ -617,6 +723,10 @@
       }
       return sum;
     },
+
+    /* относительное время + абсолютное для tooltip */
+    relTime: relTime,
+    relTimeAbs: relTimeAbs,
 
     nerCellText: nerCellText,
     nextNerSort: nextNerSort,

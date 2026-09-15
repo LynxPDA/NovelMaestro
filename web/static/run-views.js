@@ -3105,7 +3105,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return panel;
   }
 
-  // текстовая строка прогресса («📊 12/636») для тулбара лога
+  /* текстовая строка прогресса («Перевод 12/636») для тулбара лога */
   function progressLineText(view) {
     return UICore.progressText(
       view.progress,

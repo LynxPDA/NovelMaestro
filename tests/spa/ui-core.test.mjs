@@ -36,7 +36,7 @@ test("progressPct: зажим и границы", () => {
 test("progressText: без событий у running-задачи", () => {
   assert.equal(
     UICore.progressText(null, true),
-    "📊 ожидание первого результата…",
+    "ожидание первого результата…",
   );
   assert.equal(UICore.progressText(null, false), "");
 });
@@ -44,11 +44,11 @@ test("progressText: без событий у running-задачи", () => {
 test("progressText: done/total и label", () => {
   assert.equal(
     UICore.progressText({ done: 12, total: 636, label: "перевод" }, true),
-    "📊 перевод 12/636",
+    "перевод 12/636",
   );
   assert.equal(
     UICore.progressText({ done: 5, total: 0, label: "wiki" }, true),
-    "📊 wiki 5 …",
+    "wiki 5 …",
   );
 });
 
@@ -505,15 +505,50 @@ test("updateReviewEntry: legacy-массив и границы", () => {
   assert.equal(UICore.updateReviewEntry(null, 0, {}, true), null);
 });
 
-test("fileIcon: папка и расширения", () => {
-  assert.equal(UICore.fileIcon({ dir: true }), "📁");
-  assert.equal(UICore.fileIcon({ name: "ch.txt" }), "📄");
-  assert.equal(UICore.fileIcon({ name: "ner.json" }), "🧾");
-  assert.equal(UICore.fileIcon({ name: "README.md" }), "📝");
-  assert.equal(UICore.fileIcon({ name: "x.png" }), "🖼");
-  assert.equal(UICore.fileIcon({ name: "noext" }), "📄");
-  assert.equal(UICore.fileIcon(null), "📄");
-  assert.equal(UICore.fileIcon({ name: "A.TXT" }), "📄"); // lower
+test("fileIcon: имя SVG-иконки по папке и расширению", () => {
+  assert.equal(UICore.fileIcon({ dir: true }), "folder");
+  assert.equal(UICore.fileIcon({ name: "ch.txt" }), "file-text");
+  assert.equal(UICore.fileIcon({ name: "ner.json" }), "braces");
+  assert.equal(UICore.fileIcon({ name: "README.md" }), "file-text");
+  assert.equal(UICore.fileIcon({ name: "x.png" }), "image");
+  assert.equal(UICore.fileIcon({ name: "x.epub" }), "book");
+  assert.equal(UICore.fileIcon({ name: "noext" }), "file");
+  assert.equal(UICore.fileIcon(null), "file");
+  assert.equal(UICore.fileIcon({ name: "A.TXT" }), "file-text"); // lower
+});
+
+test("icon: svg-строка с путём, aria-hidden и классом", () => {
+  const svg = UICore.icon("folder");
+  assert.match(svg, /^<svg class="icon"/);
+  assert.ok(svg.includes('aria-hidden="true"'));
+  assert.ok(svg.includes("<path")); // тело иконки не пустое
+  assert.match(UICore.icon("folder", "extra"), /class="icon extra"/);
+  // неизвестное имя — заглушка, не undefined/исключение
+  assert.ok(UICore.icon("нет-такой").includes("<rect"));
+});
+
+test("icon: все имена из iconNames рендерятся без исключений", () => {
+  for (const name of UICore.iconNames) {
+    assert.ok(
+      UICore.icon(name).startsWith("<svg"),
+      `иконка ${name} не рендерится`,
+    );
+  }
+});
+
+test("relTime: пороги и абсолютное время в tooltip", () => {
+  const now = Date.now() / 1000;
+  assert.equal(UICore.relTime(now - 5), "только что");
+  assert.equal(UICore.relTime(now - 5 * 60), "5 мин назад");
+  assert.equal(UICore.relTime(now - 3 * 3600), "3 ч назад");
+  assert.equal(UICore.relTime(now - 2 * 86400), "2 дн назад");
+  // старше недели — дата ДД.ММ.ГГГГ
+  assert.match(UICore.relTime(now - 30 * 86400), /^\d{2}\.\d{2}\.\d{4}$/);
+  // мусор — пустая строка
+  assert.equal(UICore.relTime(0), "");
+  assert.equal(UICore.relTime(undefined), "");
+  assert.match(UICore.relTimeAbs(now - 60), /\d{2}\.\d{2}\.\d{4}/);
+  assert.equal(UICore.relTimeAbs(null), "");
 });
 
 test("removeReviewEntry: удаление в объекте, «обновлён» обновляется", () => {

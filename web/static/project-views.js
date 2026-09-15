@@ -274,6 +274,13 @@ function viewProject(section, name, tab, job) {
           .slice(fPage * FILES_PAGE_SIZE, (fPage + 1) * FILES_PAGE_SIZE)
           .map((e) => fileRow(e)),
       );
+      // одна страница — пагинация не нужна, достаточно счётчика
+      if (pages <= 1) {
+        fPager.replaceChildren(
+          h("span", { class: "ner-pager-info" }, `файлов: ${entries.length}`),
+        );
+        return;
+      }
       fPager.replaceChildren(
         h(
           "button",
@@ -338,20 +345,53 @@ function viewProject(section, name, tab, job) {
           {
             class: "fname",
             href: "#",
+            title: e.dir ? "" : UICore.relTimeAbs(e.mtime),
             onclick: (ev) => {
               ev.preventDefault();
               setPath(full);
             },
           },
-          UICore.fileIcon(e) + " " + e.name,
+          iconEl(UICore.fileIcon(e), "fname-icon"),
+          e.name,
         )
-      : h("span", { class: "fname" }, UICore.fileIcon(e) + " " + e.name);
+      : h(
+          "span",
+          {
+            class: "fname",
+            title: UICore.relTimeAbs(e.mtime),
+            ondblclick: () => openEditor(full),
+          },
+          iconEl(UICore.fileIcon(e), "fname-icon"),
+          e.name,
+        );
     const actions = h("div", { class: "factions" });
-    /* «Переим.» — и у файлов, и у каталогов (POST /api/file/rename) */
-    const renameBtn = h(
-      "button",
+    /* на виду — только безопасные действия, деструктивные/редкие — в «⋮» */
+    if (!e.dir) {
+      actions.append(
+        h(
+          "a",
+          {
+            class: "btn btn-sm btn-ghost",
+            href: downloadUrl(full),
+            download: e.name,
+            "aria-label": `Скачать ${e.name}`,
+          },
+          "Скачать",
+        ),
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            "aria-label": `Править ${e.name}`,
+            onclick: () => openEditor(full),
+          },
+          "Правка",
+        ),
+      );
+    }
+    const menuItems = [
       {
-        class: "btn btn-sm btn-ghost",
+        label: "Переименовать…",
         onclick: () =>
           nameModal(
             `Переименовать ${e.dir ? "каталог" : "файл"} ${e.name}`,
@@ -371,60 +411,33 @@ function viewProject(section, name, tab, job) {
             e.name,
           ),
       },
-      "Переим.",
-    );
+    ];
     if (!e.dir) {
-      actions.append(
-        h(
-          "a",
-          {
-            class: "btn btn-sm btn-ghost",
-            href: downloadUrl(full),
-            download: e.name,
-          },
-          "Скачать",
-        ),
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            onclick: () => openEditor(full),
-          },
-          "Правка",
-        ),
-      );
+      menuItems.push({
+        label: "Удалить…",
+        danger: true,
+        onclick: () =>
+          confirmModal(
+            `Удаление ${e.dir ? "каталога" : "файла"}`,
+            full,
+            "УДАЛИТЬ",
+            async () => {
+              const dq = new URLSearchParams({
+                project: `${section}/${name}`,
+                path: full,
+              });
+              await api(`/file?${dq}`, { method: "DELETE" });
+              toast(`Удалено: ${full}`);
+              render();
+            },
+          ),
+      });
     }
-    actions.append(renameBtn);
-    actions.append(
-      h(
-        "button",
-        {
-          class: "btn btn-sm btn-danger-ghost",
-          onclick: () =>
-            confirmModal(
-              `Удаление ${e.dir ? "каталога" : "файла"}`,
-              full,
-              "УДАЛИТЬ",
-              async () => {
-                const dq = new URLSearchParams({
-                  project: `${section}/${name}`,
-                  path: full,
-                });
-                await api(`/file?${dq}`, { method: "DELETE" });
-                toast(`Удалено: ${full}`);
-                render();
-              },
-            ),
-        },
-        "Удалить",
-      ),
-    );
+    actions.append(menuBtn(menuItems, `Действия с ${e.name}`));
     const meta = h(
       "div",
       { class: "fmeta" },
-      e.dir
-        ? ""
-        : `${fmtSize(e.size)} · ${new Date(e.mtime * 1000).toLocaleString("ru-RU")}`,
+      e.dir ? "" : `${fmtSize(e.size)} · ${UICore.relTime(e.mtime)}`,
     );
     return h("div", { class: "frow" }, nameNode, meta, actions);
   }
@@ -4325,8 +4338,8 @@ function viewProject(section, name, tab, job) {
           const btn = h(
             "button",
             { class: "btn btn-sm btn-ghost prompt-item" },
-            `📁 ${e.name}/`,
           );
+          btn.append(iconEl("folder", "fname-icon"), `${e.name}/`);
           btn.addEventListener("click", () => {
             st.logPath = cur ? `${cur}/${e.name}` : e.name;
             render();
