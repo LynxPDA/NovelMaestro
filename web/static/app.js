@@ -812,7 +812,7 @@ function sectionBlock(section, projects, sectionActive, statsMap) {
             // короткий #/run/… — не ломаем закладки)
             href: `#/project/${section.name}/${name}/run`,
           },
-          "▶ Запуски",
+          "Запуски",
         ),
         h(
           "button",
@@ -1442,7 +1442,7 @@ async function viewDashboard() {
                 class: "btn btn-sm btn-ghost",
                 href: `#/project/${hub.section}/${hub.project}/run`,
               },
-              "▶ Запуски",
+              "Запуски",
             ),
           ),
         )

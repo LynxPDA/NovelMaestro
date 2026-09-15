@@ -632,6 +632,8 @@ input[type="number"] {
   cursor: pointer;
   font-family: var(--sans);
   text-decoration: none;
+  /* без переноса: «▶ Запуски» на 2 строки ломает ряд кнопок */
+  white-space: nowrap;
 }
 .btn:hover {
   background: var(--btn-hover);
@@ -699,6 +701,7 @@ input[type="number"] {
 .project-card .card-actions {
   margin-top: 12px;
   display: flex;
+  align-items: center;
   gap: 8px;
 }
 
@@ -1724,8 +1727,15 @@ input[type="number"] {
   margin-bottom: 8px;
 }
 .prompt-item {
+  /* flex: строки логов с иконкой папки — без gap svg слипается с текстом */
+  display: flex;
+  align-items: center;
+  gap: 8px;
   text-align: left;
-  justify-content: flex-start;
+}
+.prompt-item .icon-wrap {
+  color: var(--muted);
+  flex: none;
 }
 .prompt-name {
   color: var(--text-dim);
