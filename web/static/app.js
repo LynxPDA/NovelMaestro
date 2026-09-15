@@ -2844,14 +2844,17 @@ function commandPalette() {
       const hub = await loadHub();
       for (const sec of hub.sections || []) {
         for (const p of hub.bySection[sec.name] || []) {
+          // bySection — массив ИМЁН (GET /api/projects?section= → projects)
           items.push({
-            label: p.name,
+            label: String(p),
             hint: `проект · ${sec.name}`,
             ic: "folder",
-            href: `#/project/${sec.name}/${p.name}`,
+            href: `#/project/${sec.name}/${p}`,
           });
         }
       }
+      // проекты пришли после открытия — перевыборка текущего запроса
+      if (backdrop.isConnected) match();
     } catch {
       /* проекты недоступны — палитра остаётся с разделами */
     }
