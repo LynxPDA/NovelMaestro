@@ -6,6 +6,22 @@ const _reviewWatchers = new Map();
    проверок (вкладка «Проверка»). Был глобалом app.js и пропал при
    рефакторинге (c60ac00) — без него вкладки падают с ReferenceError. */
 const PAGE_SIZE = 200;
+/* вкладки проекта — реестр (кей и подпись): рендер вкладок и палитра
+   Ctrl+K (app.js); ключ «files» — вкладка по умолчанию */
+const PROJECT_TABS = [
+  ["files", "Файлы"],
+  ["run", "Запуски"],
+  ["editor", "Редактор"],
+  ["ner", "Глоссарий"],
+  ["review", "Проверки"],
+  ["chapters", "Главы"],
+  ["status", "Статус"],
+  ["config", "Конфиг"],
+  ["prompts", "Промпты"],
+  ["logs", "Логи"],
+  ["notes", "Заметки"],
+];
+
 /* eslint-disable-next-line no-unused-vars -- глобал SPA, вызывается из app.js */
 function viewProject(section, name, tab, job) {
   const st = {
@@ -47,19 +63,7 @@ function viewProject(section, name, tab, job) {
     render();
   }
 
-  const TABS = [
-    ["files", "Файлы"],
-    ["run", "Запуски"],
-    ["editor", "Редактор"],
-    ["ner", "Глоссарий"],
-    ["review", "Проверки"],
-    ["chapters", "Главы"],
-    ["status", "Статус"],
-    ["config", "Конфиг"],
-    ["prompts", "Промпты"],
-    ["logs", "Логи"],
-    ["notes", "Заметки"],
-  ];
+  const TABS = PROJECT_TABS;
   // роут #/project/раздел/книга/<вкладка>[/<jobId>] — открыть конкретную
   // вкладку (например, #/.../logs из чипсов логов); job (4-й аргумент из
   // роутера, короткий #/run/…/<id>) — лог конкретного запуска

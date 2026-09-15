@@ -1286,8 +1286,8 @@ async function viewDashboard() {
       h("span", { class: "job-time" }, j.project),
       h(
         "span",
-        { class: "job-time" },
-        `строк: ${logLines.length} · создан ${new Date((j.created || 0) * 1000).toLocaleTimeString()}`,
+        { class: "job-time", title: UICore.relTimeAbs(j.created) },
+        `строк: ${logLines.length} · ${UICore.relTime(j.created) || "создан " + new Date((j.created || 0) * 1000).toLocaleTimeString()}`,
       ),
       h(
         "button",
@@ -1359,7 +1359,11 @@ async function viewDashboard() {
       h("td", { class: "ner-type" }, j.project),
       h("td", {}, h("span", { class: "badge badge-" + j.status }, j.status)),
       h("td", {}, miniBar(j.progress, j.status) || "—"),
-      h("td", {}, new Date((j.created || 0) * 1000).toLocaleString()),
+      h(
+        "td",
+        { title: UICore.relTimeAbs(j.created) },
+        UICore.relTime(j.created) || "—",
+      ),
     ),
   );
   const recentCard = h(
@@ -1849,6 +1853,58 @@ function layout(content) {
   return h("div", { class: "layout" }, header, h("main", { class: "content" }, content));
 }
 
+/* ── индикатор активных запусков в шапке ───────────────────
+   Лёгкий опрос GET /api/jobs/active (без истории) каждые 10 с и
+   после каждого рендера: pill «⟳ Метка N/M» — клик ведёт на вкладку
+   «Запуски» проекта. Активный запуск виден с любого экрана. */
+let runPollTimer = null;
+
+function updateRunPill() {
+  const slot = document.getElementById("app-run-slot");
+  if (!slot || !state.auth) return;
+  api("/jobs/active")
+    .then((d) => {
+      const jobs = (d.jobs || []).filter((j) => j.status === "running");
+      slot.replaceChildren();
+      if (!jobs.length) return;
+      const j = jobs[0];
+      const p = j.progress;
+      const pct = p ? UICore.progressPct(p.done, p.total) : 0;
+      const label = j.title || j.action || "запуск";
+      const more = jobs.length > 1 ? ` · ещё ${jobs.length - 1}` : "";
+      const pill = h(
+        "a",
+        {
+          class: "run-pill",
+          href: `#/project/${j.project}/run`,
+          title: `Активных запусков: ${jobs.length} — открыть лог`,
+        },
+        iconEl("activity"),
+        h("span", { class: "run-pill-label" }, label + more),
+        p && p.total
+          ? h("span", { class: "run-pill-count" }, `${p.done}/${p.total}`)
+          : null,
+        h(
+          "span",
+          { class: "run-pill-track" },
+          h("span", {
+            class: "run-pill-fill",
+            style: `width:${pct}%`,
+          }),
+        ),
+      );
+      slot.append(pill);
+    })
+    .catch(() => {
+      /* нет связи — pill просто не показывается */
+    });
+}
+
+function ensureRunPolling() {
+  if (runPollTimer) return;
+  runPollTimer = setInterval(updateRunPill, 10000);
+}
+
 /* ── роутер и рендер ─────────────────────────────────────── */
 function parseRoute() {
   return UICore.parseRoute(location.hash);
@@ -1883,9 +1939,15 @@ function render() {
     delete f.dataset.fitPending;
   });
   if (!state.auth) {
+    if (runPollTimer) {
+      clearInterval(runPollTimer);
+      runPollTimer = null;
+    }
     root.append(viewLogin());
     return;
   }
+  ensureRunPolling(); // после логина — pill запусков в шапке живёт
+  updateRunPill();
   const route = parseRoute();
   const gen = ++renderGen; // поколение этого рендера
   if (route.view === "dashboard") {
@@ -2755,7 +2817,159 @@ async function viewHelp() {
 }
 
 /* ── старт ───────────────────────────────────────────────── */
+/* ── command palette (Ctrl+K): навигация без перекомпоновки ──
+   Экраны, вкладки проекта и проекты всех разделов. Фильтр —
+   подстрока (регистронезависимо), Enter — переход, стрелки/Escape. */
+function commandPalette() {
+  if (document.querySelector(".palette-backdrop")) return;
+  const route = parseRoute();
+  const isProject = route.view === "project" || route.view === "run";
+  const items = [];
+  for (const [view, label, ic] of NAV_ITEMS) {
+    items.push({ label, hint: "раздел", ic, href: `#/${view}` });
+  }
+  if (isProject) {
+    const proj = `#/project/${route.rest[0]}/${route.rest[1]}`;
+    for (const [key, label] of PROJECT_TABS) {
+      items.push({
+        label,
+        hint: `${route.rest[0]}/${route.rest[1]}`,
+        ic: "file-text",
+        href: key === "run" ? `${proj}/run` : `${proj}/${key}`,
+      });
+    }
+  }
+  (async () => {
+    try {
+      const hub = await loadHub();
+      for (const sec of hub.sections || []) {
+        for (const p of hub.bySection[sec.name] || []) {
+          items.push({
+            label: p.name,
+            hint: `проект · ${sec.name}`,
+            ic: "folder",
+            href: `#/project/${sec.name}/${p.name}`,
+          });
+        }
+      }
+    } catch {
+      /* проекты недоступны — палитра остаётся с разделами */
+    }
+  })();
+  const input = h("input", {
+    class: "input palette-input",
+    placeholder: "Переход: экран, вкладка или проект…",
+    "aria-label": "Поиск навигации",
+  });
+  const list = h("div", {
+    class: "palette-list",
+    role: "listbox",
+    "aria-label": "Результаты",
+  });
+  let sel = 0;
+  let shown = [];
+  function match() {
+    const qq = input.value.trim().toLowerCase();
+    shown = items.filter(
+      (it) =>
+        !qq ||
+        it.label.toLowerCase().includes(qq) ||
+        it.hint.toLowerCase().includes(qq),
+    );
+    sel = 0;
+    renderList();
+  }
+  function renderList() {
+    list.replaceChildren(
+      ...shown.map((it, i) =>
+        h(
+          "div",
+          {
+            class: "palette-item" + (i === sel ? " palette-item-active" : ""),
+            role: "option",
+            "aria-selected": i === sel ? "true" : "false",
+            onclick: () => go(i),
+            onmouseenter: () => {
+              sel = i;
+              paint();
+            },
+          },
+          iconEl(it.ic),
+          h("span", { class: "palette-item-label" }, it.label),
+          h("span", { class: "palette-item-hint" }, it.hint),
+        ),
+      ),
+    );
+  }
+  function paint() {
+    [...list.children].forEach((el, i) => {
+      el.classList.toggle("palette-item-active", i === sel);
+      el.setAttribute("aria-selected", i === sel ? "true" : "false");
+    });
+  }
+  function go(i) {
+    const it = shown[i];
+    close();
+    if (it) location.hash = it.href;
+  }
+  function close() {
+    backdrop.remove();
+    document.removeEventListener("keydown", onKey, true);
+  }
+  function onKey(e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      sel = Math.min(shown.length - 1, sel + 1);
+      paint();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      sel = Math.max(0, sel - 1);
+      paint();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      go(sel);
+    }
+  }
+  input.addEventListener("input", match);
+  const backdrop = h(
+    "div",
+    {
+      class: "modal-backdrop palette-backdrop",
+      onclick: (e) => {
+        if (e.target === backdrop) close();
+      },
+    },
+    h(
+      "div",
+      { class: "palette", role: "dialog", "aria-label": "Навигация" },
+      input,
+      list,
+      h(
+        "div",
+        { class: "palette-hint" },
+        "↑↓ — выбор · Enter — перейти · Esc — закрыть",
+      ),
+    ),
+  );
+  document.body.append(backdrop);
+  document.addEventListener("keydown", onKey, true);
+  match();
+  input.focus();
+}
+
 async function boot() {
+  // Ctrl+K — command palette (переход по экранам/вкладкам/проектам);
+  // «л» — та же физическая клавиша в русской раскладке
+  window.addEventListener("keydown", (e) => {
+    const k = (e.key || "").toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && (k === "k" || k === "л")) {
+      e.preventDefault();
+      if (state.auth) commandPalette();
+    }
+  });
   // Esc закрывает верхнюю модалку (W9)
   window.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;

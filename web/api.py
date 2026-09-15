@@ -2284,6 +2284,13 @@ def _jobs_list(ctx: dict) -> dict:
     return {"ok": True, "jobs": jm.list()}
 
 
+def _jobs_active(ctx: dict) -> dict:
+    """Только активные запуски (GET /api/jobs/active) — лёгкий опрос
+    для индикатора в шапке SPA (в отличие от /api/jobs — без истории)."""
+    jm = _job_manager(ctx)
+    active = [j for j in jm.list() if j.get("status") == "running"]
+    return {"ok": True, "jobs": active}
+
 def _jobs_get(ctx: dict) -> dict:
     """Детали запуска + хвост буфера (GET /api/jobs/{id})."""
     jm = _job_manager(ctx)
@@ -3047,6 +3054,7 @@ def _register_jobs(router: Router) -> None:
     router.add("GET", "/api/stages", _stages_list)
     router.add("POST", "/api/jobs", _jobs_start)
     router.add("GET", "/api/jobs", _jobs_list)
+    router.add("GET", "/api/jobs/active", _jobs_active)
     router.add("DELETE", "/api/jobs", _jobs_clear)
     router.add("GET", "/api/jobs/{id}", _jobs_get)
     router.add("POST", "/api/jobs/{id}/stop", _jobs_stop)

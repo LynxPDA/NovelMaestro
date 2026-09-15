@@ -458,6 +458,25 @@ def test_progress_http(jobs_srv, fake_script):
     assert recent and recent[0].get("progress"), "дашборд без progress"
 
 
+def test_jobs_active_http(jobs_srv, fake_script):
+    """HTTP: GET /api/jobs/active — только running, без истории (pill шапки)."""
+    port, req, jm = jobs_srv
+    # пустой список до запуска
+    res, payload = req("GET", "/api/jobs/active")
+    assert res.status == 200
+    assert payload["jobs"] == []
+    # завершённый запуск не попадает в active
+    job = jm.start("test", "Тест", "ACTIVE/x",
+                   [str(fake_script / "ok.py")], Path("."))
+    _wait_status(jm, job.id, "done")
+    res, payload = req("GET", "/api/jobs/active")
+    assert res.status == 200
+    assert payload["jobs"] == []
+    # history заполнена, но active пуст
+    res, payload = req("GET", "/api/jobs")
+    assert len(payload["jobs"]) == 1
+
+
 def test_reconcile_dead_pid(tmp_path, fake_script):
     """R15: «running»-запуск с мёртвым pid при загрузке → failed
     (процесс не пережил рестарт сервера)."""
