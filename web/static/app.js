@@ -808,7 +808,9 @@ function sectionBlock(section, projects, sectionActive, statsMap) {
           "a",
           {
             class: "btn btn-sm btn-ghost",
-            href: `#/run/${section.name}/${name}`,
+            // «Запуски» — вкладка проекта (роут поддерживает и
+            // короткий #/run/… — не ломаем закладки)
+            href: `#/project/${section.name}/${name}/run`,
           },
           "▶ Запуски",
         ),
@@ -1275,9 +1277,9 @@ async function viewDashboard() {
         "a",
         {
           class: "dash-run-title",
-          // активные запуски — на страницу «Запуски» проекта
+          // активные запуски — на вкладку «Запуски» проекта
           // (авто-подхват активного запуска), история — там же
-          href: `#/run/${j.project}`,
+          href: `#/project/${j.project}/run`,
         },
         j.title || j.action || "запуск",
       ),
@@ -1299,7 +1301,7 @@ async function viewDashboard() {
         "a",
         {
           class: "btn btn-sm btn-primary",
-          href: `#/run/${j.project}`,
+          href: `#/project/${j.project}/run`,
         },
         "Открыть",
       ),
@@ -1347,10 +1349,10 @@ async function viewDashboard() {
       "tr",
       {
         class: "dash-recent-row",
-        // клик по истории — в проект на вкладку Запуски,
+        // клик по истории — в проект на вкладку «Запуски»,
         // а не в конкретный (возможно завершённый) запуск с логом
         onclick: () => {
-          location.hash = `#/run/${j.project}`;
+          location.hash = `#/project/${j.project}/run`;
         },
       },
       h("td", {}, j.title || j.action),
@@ -1434,7 +1436,7 @@ async function viewDashboard() {
               "a",
               {
                 class: "btn btn-sm btn-ghost",
-                href: `#/run/${hub.section}/${hub.project}`,
+                href: `#/project/${hub.section}/${hub.project}/run`,
               },
               "▶ Запуски",
             ),
@@ -1801,7 +1803,15 @@ function render() {
     notes: viewNotes,
     help: viewHelp,
     project: () => viewProject(route.rest[0], route.rest[1], route.rest[2]),
-    run: () => window.viewRun(route.rest[0], route.rest[1], route.rest[2]),
+    // «Запуски» — вкладка проекта; короткий #/run/… (закладки) —
+    // тот же вид внутри проекта
+    run: () =>
+      viewProject(
+        route.rest[0],
+        route.rest[1],
+        "run",
+        route.rest[2],
+      ),
   };
   const fn = views[route.view] || (() => viewUnknown(route.view));
   Promise.resolve(fn()).then((node) => {

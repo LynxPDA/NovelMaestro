@@ -15,6 +15,12 @@ const SRC = readFileSync(
   new URL("../../web/static/project-views.js", import.meta.url),
   "utf8",
 );
+/* run-views.js — код вкладки «Запуски» (window.viewRun зовётся из
+   project-views при st.view === "run") */
+const RUN_SRC = readFileSync(
+  new URL("../../web/static/run-views.js", import.meta.url),
+  "utf8",
+);
 
 /* ── минимальный DOM ─────────────────────────────────────────────── */
 class El {
@@ -138,7 +144,12 @@ async function api(path, opts = {}) {
   if (p.startsWith("/prompts")) return { files: [], content: "" };
   if (p.startsWith("/logs")) return { logs: [], content: "" };
   if (p === "/ner/export") return { ok: true, content: "" };
-  if (p.startsWith("/jobs")) return { job: {} };
+  if (p === "/jobs") return { jobs: [] };
+  if (p.startsWith("/jobs/")) return { job: {} };
+  if (p === "/stages") return { stages: [] };
+  if (p.startsWith("/stages/")) {
+    return { spec: { fields: [], simple: [] }, options: {} };
+  }
   return { ok: true };
 }
 
@@ -181,12 +192,13 @@ const sandbox = {
   UICore,
 };
 vm.createContext(sandbox);
+vm.runInContext(RUN_SRC, sandbox); // window.viewRun — вкладка «Запуски»
 vm.runInContext(SRC, sandbox);
 const viewProject = sandbox.viewProject;
 
 /* все вкладки страницы проекта: viewProject(section, name, tab) */
-const TABS = ["files", "editor", "ner", "review", "chapters", "status",
-              "config", "prompts", "logs", "notes"];
+const TABS = ["files", "run", "editor", "ner", "review", "chapters",
+              "status", "config", "prompts", "logs", "notes"];
 
 for (const tab of TABS) {
   test(`вкладка «${tab}» рендерится без ReferenceError`, async () => {

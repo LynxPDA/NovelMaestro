@@ -7,7 +7,7 @@ const _reviewWatchers = new Map();
    рефакторинге (c60ac00) — без него вкладки падают с ReferenceError. */
 const PAGE_SIZE = 200;
 /* eslint-disable-next-line no-unused-vars -- глобал SPA, вызывается из app.js */
-function viewProject(section, name, tab) {
+function viewProject(section, name, tab, job) {
   const st = {
     view: "files", // tab (третий сегмент роута) может открыть свою вкладку
     path: "",
@@ -17,6 +17,7 @@ function viewProject(section, name, tab) {
     search: null,
     editor: null, // вкладка «Редактор» (глава/панели/подсветка)
     chaptersType: null, // тип файлов во вкладке «Главы» (localStorage-нет)
+    runJob: null, // jobId из роута (лог конкретного запуска на «Запусках»)
   };
   const page = h("div", { class: "page" });
 
@@ -34,6 +35,12 @@ function viewProject(section, name, tab) {
   }
 
   function setView(view) {
+    if (view === st.view) return;
+    // старому телу вкладки — сигнал ухода (run-views гасит SSE-стрим,
+    // скрытые таймеры и т.п.) до замены DOM; смена вкладки — локальный
+    // рендер (pi-navigate из app.js не диспатчится: view тот же)
+    const body = page.querySelector(".project-body");
+    if (body) body.dispatchEvent(new CustomEvent("pi-navigate"));
     st.view = view;
     st.edit = null;
     st.search = null;
@@ -42,6 +49,7 @@ function viewProject(section, name, tab) {
 
   const TABS = [
     ["files", "Файлы"],
+    ["run", "Запуски"],
     ["editor", "Редактор"],
     ["ner", "Глоссарий"],
     ["review", "Проверки"],
@@ -52,9 +60,13 @@ function viewProject(section, name, tab) {
     ["logs", "Логи"],
     ["notes", "Заметки"],
   ];
-  // роут #/project/раздел/книга/<вкладка> — открыть конкретную
-  // вкладку (например, #/.../logs из страницы «Запуски»)
-  if (tab && TABS.some((t) => t[0] === tab)) st.view = tab;
+  // роут #/project/раздел/книга/<вкладка>[/<jobId>] — открыть конкретную
+  // вкладку (например, #/.../logs из чипсов логов); job (4-й аргумент из
+  // роутера, короткий #/run/…/<id>) — лог конкретного запуска
+  if (tab && TABS.some((t) => t[0] === tab)) {
+    st.view = tab;
+    if (tab === "run") st.runJob = job || null;
+  }
 
   async function render() {
     page.replaceChildren();
@@ -66,11 +78,6 @@ function viewProject(section, name, tab) {
         { class: "page-header-main" },
         h("h1", { class: "page-title" }, name),
         h("div", { class: "page-sub" }, `${section} · проект`),
-      ),
-      h(
-        "a",
-        { class: "btn btn-sm", href: `#/run/${section}/${name}` },
-        "▶ Запуски",
       ),
     );
     const tabs = h(
@@ -90,6 +97,8 @@ function viewProject(section, name, tab) {
     let body;
     if (st.edit) body = await editorView();
     else if (st.view === "editor") body = await editorTabView();
+    else if (st.view === "run")
+      body = window.viewRun(section, name, st.runJob || undefined);
     else if (st.view === "ner") body = await nerView();
     else if (st.view === "review") body = await reviewView();
     else if (st.view === "chapters") body = await chaptersView();
@@ -99,7 +108,13 @@ function viewProject(section, name, tab) {
     else if (st.view === "logs") body = await logsView();
     else if (st.view === "notes") body = await notesView();
     else body = await filesView();
-    page.append(header, tabs, body);
+    page.append(header, tabs);
+    if (body) {
+      // якорь для pi-navigate при локальной смене вкладки (setView):
+      // run-views гасит SSE-стрим своего экземпляра по этому событию
+      body.classList.add("project-body");
+      page.append(body);
+    }
     if (st.edit && st.search && st._ed && st._ed.isCM) {
       // открыть CM-поиск с фрагментом ошибки после монтирования редактора
       const q = st.search;
@@ -4614,7 +4629,7 @@ function viewProject(section, name, tab) {
       return h(
         "div",
         { class: "files-empty" },
-        "Нет отчётов — запустите стадию translate_check (экран «Запуски», стадия 4)",
+        "Нет отчётов — запустите стадию translate_check (вкладка «Запуски», стадия 4)",
       );
     }
     let current = data.reports[0];
@@ -4733,7 +4748,7 @@ function viewProject(section, name, tab) {
         body.append(
           h("div", { class: "files-empty" },
             "Нет отчётов — запустите стадию translate_check "
-            + "(экран «Запуски», стадия 4)"),
+            + "(вкладка «Запуски», стадия 4)"),
         );
         pager.replaceChildren();
         return;
@@ -4943,7 +4958,7 @@ async function renderQualityReports(section, name) {
     const r = await api(`/file?${q}`);
     if (r.missing) {
       empty.textContent =
-        "Нет отчёта — запустите стадию «Оценка перевода (LLM)» (Запуски)";
+        "Нет отчёта — запустите стадию «Оценка перевода (LLM)» (вкладка «Запуски»)";
       syncMsgs();
       return wrap;
     }
@@ -4958,7 +4973,7 @@ async function renderQualityReports(section, name) {
   } catch (ex) {
     err.textContent = ex.message;
     empty.textContent =
-      "Нет отчёта — запустите стадию «Оценка перевода (LLM)» (Запуски)";
+      "Нет отчёта — запустите стадию «Оценка перевода (LLM)» (вкладка «Запуски»)";
   }
   syncMsgs();
   frame.addEventListener("load", () => fitPreviewFrame(frame));

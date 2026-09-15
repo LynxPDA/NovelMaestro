@@ -28,8 +28,9 @@
     return last;
   }
 
-// глобал для роутера app.js (plain-script: window.viewRun вызывается
-// из app.js напрямую); явная привязка — чтобы линтер видел использование
+// Вкладка «Запуски» проекта (глобал: window.viewRun вызывается
+// из project-views.js, вкладка «run»); явная привязка — чтобы линтер
+// видел использование
 window.viewRun = function viewRun(section, name, attachJobId) {
 
   const st = {
@@ -121,28 +122,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   async function render() {
     const gen = ++st.gen;
     page.replaceChildren();
-    const header = h(
-      "div",
-      { class: "page-header" },
-      h(
-        "div",
-        { class: "page-header-main" },
-        h("h1", { class: "page-title" }, "Запуски"),
-        h(
-          "div",
-          { class: "page-sub" },
-          `${section}/${name} · стадии пайплайна`,
-        ),
-      ),
-      h(
-        "a",
-        { class: "btn btn-sm btn-ghost", href: `#/project/${section}/${name}` },
-        "← Файлы",
-      ),
-    );
+    // заголовка нет — вкладка живёт в шапке проекта (project-views)
     const body = await runBody();
     if (gen !== st.gen) return; // устаревший рендер — не рисовать
-    page.append(header, body);
+    page.append(body);
   }
 
   async function runBody() {
@@ -297,9 +280,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         "a",
         {
           class: "btn btn-sm btn-primary",
-          // id в URL (не голый #/run/…): повторный клик по той же
+          // id в URL (не голая вкладка): повторный клик по той же
           // странице перечитает запуск и обновит висящий статус
-          href: `#/run/${section}/${name}/${j.id}`,
+          href: `#/project/${section}/${name}/run/${j.id}`,
         },
         "Показать",
       ),
@@ -3406,9 +3389,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
   }
 
-  // уход со страницы (новый view в #app): гасим стрим, чтобы старый
-  // экземпляр не держал SSE и не мутировал detached-узлы
-  page.addEventListener(
+  // уход со страницы (смена вкладки проекта или переход на другой
+  // view): гасим стрим, чтобы старый экземпляр не держал SSE и не
+  // мутировал detached-узлы. Слушаем на document: pi-navigate
+  // диспатчится на старом узле (project-views при смене вкладки) или
+  // на .page всего вида (app.js) — в обоих событие доходит по bubble
+  document.addEventListener(
     "pi-navigate",
     () => {
       if (streamCtrl) streamCtrl.abort();
@@ -3417,8 +3403,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     { once: true },
   );
 
-  // авто-прикрепление: jobId из URL (#/run/sec/name/{jobId}) или
-  // активный запуск проекта (вернулись на страницу — управление не потеряно)
+  // авто-прикрепление: jobId из роута (короткий #/run/…/<id> и
+  // «Показать») — конкретный запуск; иначе активный запуск проекта
+  // (вернулись на вкладку — управление не потеряно)
   if (attachJobId && /^[0-9a-f]{12}$/.test(attachJobId)) {
     attachToJob(attachJobId);
   } else {
