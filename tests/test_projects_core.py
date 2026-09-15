@@ -773,6 +773,30 @@ def test_project_progress_table_empty(tmp_path):
     assert st["wiki"] == {"exists": False, "articles": 0}
     assert st["compiled"] == []
 
+def test_project_progress_table_wiki_rulate(tmp_path):
+    """wiki.md rulate-сборки: заголовки сдвинуты на ### (shift_headings)
+    — статьи считаются по ###, а подзаголовки #### и оглавление — нет."""
+    pdir = tmp_path / "rulate"
+    pdir.mkdir()
+    (pdir / "wiki.md").write_text(
+        "# [Wiki — Энциклопедия новеллы :|:  :|:  :|: ]\n"
+        "### Аньлэ\n#### Описание\nтекст\n---\n"
+        "### Ли Юань\n#### Описание\nтекст\n---\n"
+        "### Лу Ишань\n",
+        encoding="utf-8")
+    st = P.project_progress_table(pdir)
+    assert st["wiki"] == {"exists": True, "articles": 3}
+    # обычный режим: «## Содержание» и подзаголовки «### » не считаются
+    pdir2 = tmp_path / "plain"
+    pdir2.mkdir()
+    (pdir2 / "wiki.md").write_text(
+        "# Wiki\n## Содержание\n- Аньлэ\n---\n"
+        "## Аньлэ\n### Описание\n### Взаимосвязи\n---\n"
+        "## Ли Юань\n",
+        encoding="utf-8")
+    st2 = P.project_progress_table(pdir2)
+    assert st2["wiki"] == {"exists": True, "articles": 2}
+
 
 def test_project_progress_table_legacy_names(tmp_path):
     # легаси-артефакты: суффиксы _translated.txt (канон папок — тот же)

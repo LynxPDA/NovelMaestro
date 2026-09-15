@@ -703,7 +703,7 @@ def project_progress_table(pdir: Path) -> dict:
        "counts": {"chapters": N, "translate": N, "redact": N,
                    "polish": N},
        "ner": {"exists": bool, "terms": N},
-       "wiki": {"exists": bool, "articles": N},
+       "wiki": {"exists": bool, "articles": N},  # rulate-сборка (###) тоже считается
        "compiled": [имена файлов]}
     Имена артефактов — канонические ИЛИ легаси-суффиксы (как
     project_stats); номера глав — канон parse_chapter_id (core.common).
@@ -748,9 +748,21 @@ def project_progress_table(pdir: Path) -> dict:
     if wf.is_file():
         wiki["exists"] = True
         try:
-            text = wf.read_text(encoding="utf-8", errors="replace")
-            wiki["articles"] = sum(1 for line in text.splitlines()
-                                    if line.startswith("## "))
+            lines = wf.read_text(encoding="utf-8",
+                                  errors="replace").splitlines()
+            # Статья — «## Имя» (обычный режим). В rulate-режиме заголовки
+            # сдвинуты на уровень глубже (_shift_headings в cli/wiki.py):
+            # статейный — «### Имя», подзаголовки — «#### »; «## » там нет.
+            # Опознание по наличию «## » вне «## Содержание» — иначе
+            # подзаголовки «### Описание» обычного режима дали бы лишнее.
+            h2 = [l for l in lines
+                  if l.startswith("## ")
+                  and not l.startswith("## Содержание")]
+            if h2:
+                wiki["articles"] = len(h2)
+            else:
+                wiki["articles"] = sum(
+                    1 for l in lines if l.startswith("### "))
         except OSError:
             pass
     prefix = f"{pdir.name}_"
