@@ -4588,7 +4588,8 @@ function viewProject(section, name, tab, job) {
       }
     }
     await loadNotes();
-    setMode("code");
+    // по умолчанию — отрендеренный вид (правка — по кнопке «Код»)
+    setMode("md");
     return h(
       "div",
       { class: "page" },
