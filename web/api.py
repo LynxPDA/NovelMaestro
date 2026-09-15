@@ -36,6 +36,9 @@ log = logging.getLogger("web")
 _STATS_CACHE: dict[str, dict] = {}   # key "sec/name" → {"sig", "stats"}
 _STATS_LOCK = threading.Lock()
 _STATS_CACHE_FILE = ".stats_cache.json"  # в корне projects/ (рядом с hub_state)
+# версия методики расчёта статуса: изменение project_progress_table
+# делает старые записи кеша неверными (сигнатура mtime их не ловит)
+_STATUS_CACHE_VER = 2
 _CACHE_LOADED: set[str] = set()      # корни, для которых загружен дисковой кеш
 
 from web.auth import COOKIE_NAME
@@ -673,7 +676,7 @@ def _invalidate_stats_entry(root: Path, sec: str, name: str) -> None:
     """
     with _STATS_LOCK:
         key = _stats_cache_key(root, sec, name)
-        for k in (key, key + ":status"):
+        for k in (key, key + f":status:v{_STATUS_CACHE_VER}"):
             _STATS_CACHE.pop(k, None)
         _save_stats_cache(root)
 
@@ -702,12 +705,13 @@ def _cached_stats(prj, root: Path, sec: str, name: str) -> str:
 
 
 def _cached_status(prj, root: Path, sec: str, name: str) -> dict:
-    """Таблица готовности глав: кеш по сигнатуре (как stats), ключ :status.
+    """Таблица готовности глав: кеш по сигнатуре (как stats).
 
-    Сигнатура та же (_stats_signature): mtime папок глав покрывает
-    появление/удаление артефактов, ner.json/wiki.md — свои mtime.
+    Ключ с версией методики (_STATUS_CACHE_VER): правка расчёта
+    (напр. счётчик статей rulate-wiki) инвалидирует старые записи —
+    сигнатура mtime wiki.md их не ловит.
     """
-    key = _stats_cache_key(root, sec, name) + ":status"
+    key = _stats_cache_key(root, sec, name) + f":status:v{_STATUS_CACHE_VER}"
     pdir = root / sec / name
     sig = _stats_signature(pdir)
     with _STATS_LOCK:
