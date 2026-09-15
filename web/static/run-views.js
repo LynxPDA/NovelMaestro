@@ -145,7 +145,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const stageList = h(
       "div",
       { class: "run-col run-col-stages" },
-      h("div", { class: "run-panel-title" }, "Стадии"),
       h(
         "div",
         { class: "stage-grid" },

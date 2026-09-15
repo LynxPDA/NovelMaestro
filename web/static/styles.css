@@ -738,6 +738,8 @@ input[type="number"] {
   grid-template-columns: 305px 1fr;
   gap: 16px;
   align-items: start;
+  /* вкладка «Запуски» — отступ от панели вкладок проекта */
+  margin-top: 14px;
 }
 .run-col {
   display: flex;
