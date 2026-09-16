@@ -8,6 +8,7 @@
 """
 import json
 import time
+import types
 from pathlib import Path
 from typing import cast
 
@@ -60,6 +61,33 @@ FAKE_BAD_PROGRESS = (
     "print('@@PROGRESS@@not-json', flush=True)\n"
     "sys.exit(0)\n"
 )
+
+# Windows-модуль signal: ровно 7 имён UCRT — SIGKILL/SIGHUP/SIGQUIT там
+# НЕ существуют (константы добавляются в CPython под #ifdef, а signal.h
+# Windows их не определяет). В такой среде старый stop() падал с
+# AttributeError → HTTP 500 «Внутренняя ошибка сервера».
+WIN_SIGNAL = types.SimpleNamespace(
+    SIGABRT=22, SIGBREAK=21, SIGFPE=8, SIGILL=4, SIGINT=2,
+    SIGSEGV=11, SIGTERM=15,
+)
+
+
+class FakeProc:
+    """Псевдо-Popen: проверка nt-ветки остановки без реальных процессов."""
+
+    pid = 4242
+
+    def __init__(self):
+        self.calls = []
+
+    def terminate(self):
+        self.calls.append("terminate")
+
+    def kill(self):
+        self.calls.append("kill")
+
+    def wait(self, timeout=None):
+        return 1
 
 
 @pytest.fixture()
@@ -2042,9 +2070,9 @@ def _make_project(port, req, name="test_book"):
     return name
 
 
-def test_job_start_windows_flags(monkeypatch, tmp_path):
+def test_job_start_windows_flags(monkeypatch):
     """B6 (AUDIT): на Windows — CREATE_NEW_PROCESS_GROUP вместо
-    start_new_session (иначе ValueError); сигналы — terminate/kill."""
+    start_new_session (иначе ValueError)."""
     import web.jobs as J
     monkeypatch.setattr(J.os, "name", "nt")
     kw = J._popen_kwargs()
@@ -2054,28 +2082,90 @@ def test_job_start_windows_flags(monkeypatch, tmp_path):
     monkeypatch.setattr(J.os, "name", "posix")
     assert J._popen_kwargs() == {"start_new_session": True}
 
-    # JobManager создаём ДО патча nt — pathlib резолвится по os.name
-    jm = JobManager(tmp_path / "web")
 
-    # сигнал на Windows: kill() для SIGKILL, terminate() для SIGTERM (нет killpg)
+def test_kill_tree_windows_taskkill(monkeypatch):
+    """Windows: остановка — taskkill /F /T (дерево целиком); обращений
+    к константам сигналов быть не должно: signal.SIGKILL на Windows
+    не существует (AttributeError ронял stop с HTTP 500)."""
+    import web.jobs as J
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append(argv)
+        return types.SimpleNamespace(returncode=0)
+
     monkeypatch.setattr(J.os, "name", "nt")
+    # Windows-подобный модуль signal: семь имён UCRT, SIGKILL отсутствует
+    monkeypatch.setattr(J, "signal", WIN_SIGNAL, raising=False)
+    J._kill_tree(4242, runner=runner)
+    assert calls == [["taskkill", "/F", "/T", "/PID", "4242"]]
 
-    class FakeProc:
-        def __init__(self):
-            self.calls = []
 
-        def terminate(self):
-            self.calls.append("terminate")
+def test_kill_tree_windows_fallback(monkeypatch):
+    """Windows: taskkill недоступен/ошибка → fallback terminate()/kill()
+    (снимает только сам процесс — потомки могут выжить, см. докстринг
+    _kill_tree; force выбирает kill вместо terminate)."""
+    import web.jobs as J
 
-        def kill(self):
-            self.calls.append("kill")
+    def runner(argv, **kwargs):
+        return types.SimpleNamespace(returncode=1)
 
+    monkeypatch.setattr(J.os, "name", "nt")
+    monkeypatch.setattr(J, "signal", WIN_SIGNAL, raising=False)
     fp = FakeProc()
-    jm._signal_group(cast(J.subprocess.Popen, fp), J.signal.SIGTERM)
+    J._kill_tree(4242, runner=runner,
+                 proc=cast(J.subprocess.Popen, fp))
     assert fp.calls == ["terminate"]
-    fp.calls.clear()
-    jm._signal_group(cast(J.subprocess.Popen, fp), J.signal.SIGKILL)
-    assert fp.calls == ["kill"]
+    fp2 = FakeProc()
+    J._kill_tree(4242, force=True, runner=runner,
+                 proc=cast(J.subprocess.Popen, fp2))
+    assert fp2.calls == ["kill"]
+
+
+def test_kill_tree_posix_signals(monkeypatch):
+    """POSIX: сигнал группе процессов — SIGTERM, после грейса SIGKILL;
+    ошибка killpg — сигнал самому процессу."""
+    import signal as real_signal
+
+    import web.jobs as J
+    monkeypatch.setattr(J.os, "name", "posix")
+    seen = []
+    monkeypatch.setattr(J.os, "killpg",
+                        lambda pid, sig: seen.append((pid, sig)),
+                        raising=False)
+    J._kill_tree(4242)
+    assert seen == [(4242, real_signal.SIGTERM)]
+    J._kill_tree(4242, force=True)
+    assert seen[-1] == (4242, real_signal.SIGKILL)
+
+    def boom(pid, sig):
+        raise PermissionError("нет прав на группу")
+
+    monkeypatch.setattr(J.os, "killpg", boom, raising=False)
+    sent = []
+    monkeypatch.setattr(J.os, "kill",
+                        lambda pid, sig: sent.append(sig), raising=False)
+    J._kill_tree(4242)
+    assert sent == [real_signal.SIGTERM]
+
+
+def test_stop_windows_live_job(monkeypatch, tmp_path):
+    """Регресс бага портативной сборки Windows: stop() живого запуска
+    НЕ падает с AttributeError (signal.SIGKILL на Windows нет — был
+    HTTP 500 «Внутренняя ошибка сервера», процесс не останавливался)."""
+    import web.jobs as J
+    # Job и JobManager создаём ДО патча nt — pathlib резолвится по os.name
+    jm = JobManager(tmp_path / "web")
+    job = J.Job("pipeline", "Перевод (LLM)", "ACTIVE/x", [], Path("."))
+    job.proc = cast(J.subprocess.Popen, FakeProc())
+    job.pid = FakeProc.pid
+    jm._jobs[job.id] = job
+    monkeypatch.setattr(J.os, "name", "nt")
+    monkeypatch.setattr(J, "signal", WIN_SIGNAL, raising=False)
+    monkeypatch.setattr(J, "_taskkill", lambda pid, runner=None: 0)
+    stopped = jm.stop(job.id)
+    assert stopped is not None and stopped.status == "stopped"
+    _wait_status(jm, job.id, "stopped")
 
 
 def test_jobs_get_after_restart_has_lines(jobs_srv, fake_script):
@@ -2215,6 +2305,28 @@ def test_jobs_stop_api(jobs_srv, fake_script):
     # повторный stop несуществующего → 404
     res, payload = req("POST", "/api/jobs/nope/stop")
     assert res.status == 404
+
+
+def test_jobs_stop_api_windows(monkeypatch, jobs_srv, fake_script):
+    """Регресс бага портативной сборки: POST /api/jobs/{id}/stop на
+    Windows-ветке — 200 «stopped», а не 500 «Внутренняя ошибка сервера»
+    (старый код падал на signal.SIGKILL, которого на Windows нет)."""
+    import web.jobs as J
+    _port, req, jm = jobs_srv
+    job = jm.start("pipeline", "Перевод (LLM)", "ACTIVE/x",
+                   [str(fake_script / "hang.py")], Path("."))
+    _wait_status(jm, job.id, "running")
+    monkeypatch.setattr(J.os, "name", "nt")
+    monkeypatch.setattr(J, "signal", WIN_SIGNAL, raising=False)
+    monkeypatch.setattr(J, "_taskkill", lambda pid, runner=None: 0)
+    res, payload = req("POST", f"/api/jobs/{job.id}/stop")
+    assert res.status == 200, payload
+    assert payload.get("status") == "stopped"
+    _wait_status(jm, job.id, "stopped")
+    # патчи снялись — процесс снимаем по-настоящему (не оставляем сироту)
+    monkeypatch.undo()
+    if job.proc is not None:
+        job.proc.kill()
 
 
 def test_jobs_limit_enforced(jobs_srv, monkeypatch):

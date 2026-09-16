@@ -162,7 +162,7 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`, `
 
 - `web/stages.py::STAGE_SPECS` — реестр стадий: поля форм, build-функции сборки argv, пресеты простого режима;
 - `web/pipeline.py` — web-оркестратор конвейера: `@@CHAPTER@@`-события для таблицы глав, fail-fast (returncode 0 + непустой выходной файл + grep слов-ошибок `_ERROR_RE`);
-- `web/jobs.py` — JobManager: Popen c `start_new_session` + reader-поток + SSE; killpg по группе; лимит параллельности `WEB_JOBS_LIMIT` (429), одна стадия на проект (409); журнал следует за проектом при move/rename (`update_project_path`);
+- `web/jobs.py` — JobManager: Popen c `start_new_session` + reader-поток + SSE; остановка дерева процессов `_kill_tree` (POSIX killpg: SIGTERM → 5 с → SIGKILL; Windows — `taskkill /F /T`); лимит параллельности `WEB_JOBS_LIMIT` (429), одна стадия на проект (409); журнал следует за проектом при move/rename (`update_project_path`);
 - `web/api.py` — роуты; `_stage_options` — опции форм (главы, source-пул со всеми файлами, auto_prompt); `_env_put` — сид из системного `.env` без секретов при отсутствии `pdir/.env`.
 
 ## Настройки web-сервера

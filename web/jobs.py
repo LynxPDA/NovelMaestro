@@ -6,8 +6,11 @@ jobs.py — менеджер запусков стадий (M4).
 - запуск скрипта subprocess'ом с cwd=папка проекта;
 - кольцевой буфер строк (RING_SIZE=5000);
 - SSE-подписчики: очередь событий на job (line/status);
-- stop: сигнал группе процессов (start_new_session + killpg),
-  SIGTERM → 5 с → SIGKILL — потомки (translate_book.py и др.) не осиротеют;
+- stop: остановка запуска ВМЕСТЕ с потомками — POSIX: сигнал группе
+  процессов (start_new_session + killpg), SIGTERM → 5 с → SIGKILL;
+  Windows: tree-kill `taskkill /F /T` (групп процессов/сигналов там нет,
+  terminate() бьёт только по родителю) — translate_book.py и др. не
+  осиротеют и не держат унаследованный stdout-пайп;
 - персистентность: метаданные в jobs.json, хвост лога в job_logs/{id}.log
   (+ события в job_logs/{id}.events.json); argv не сериализуется (секреты);
 - прогресс: строки @@PROGRESS@@ от скриптов (web-режим WEB_PROGRESS=1)
@@ -37,6 +40,9 @@ RING_SIZE = 5000
 # Сайдкары хвоста лога/событий (web/job_logs/{id}.log + {id}.events.json)
 JOB_LOGS_DIRNAME = "job_logs"
 STOP_GRACE = 5.0  # секунд между terminate и kill
+# Windows: таймаут taskkill — зависший вызов не должен клинить поток
+# обработки HTTP-запроса (stop() зовётся из хендлера)
+TASKKILL_TIMEOUT = 10.0
 SSE_PING = 15.0  # секунд между ping в стриме
 # B1: период опроса «сирот» — running-запусков без reader'а (после
 # рестарта сервера); смерть pid → статус failed + persist
@@ -57,6 +63,60 @@ def _popen_kwargs() -> dict:
         # константа есть только на Windows; 0x200 — её значение
         return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)}
     return {"start_new_session": True}
+
+
+def _taskkill(pid: int, runner=subprocess.run) -> int:
+    """Windows: снять дерево процессов (taskkill /F /T). Код возврата.
+
+    Только terminate()/kill() — не вариант: они бьют лишь по родителю,
+    потомки (translate_book.py) выживают и держат унаследованный
+    stdout-пайп — reader не увидит EOF. runner — шов для тестов."""
+    res = runner(["taskkill", "/F", "/T", "/PID", str(pid)],
+                 capture_output=True, timeout=TASKKILL_TIMEOUT)
+    return res.returncode
+
+
+def _kill_tree(pid: int | None, force: bool = False,
+               proc: subprocess.Popen | None = None,
+               runner=subprocess.run) -> None:
+    """Остановить запуск ВМЕСТЕ с потомками (конвейер + translate_book.py).
+
+    POSIX: запуск поднят в собственной сессии (start_new_session), группа
+    процессов = сам запуск, поэтому сигнал группе достаётся и потомкам;
+    двухфазность SIGTERM → STOP_GRACE → SIGKILL, force выбирает сигнал.
+    Windows: групп процессов и SIGTERM/SIGKILL нет — tree-kill
+    `taskkill /F /T` (остановка всегда жёсткая); terminate()/kill() —
+    только fallback при недоступном taskkill (бьёт по родителю одному).
+    Ссылки на константы сигналов — только в POSIX-ветке: на Windows
+    модуль signal содержит лишь семь имён UCRT (SIGKILL отсутствует),
+    обращение к нему из кросс-платформенного кода роняло stop с 500."""
+    if not pid:
+        return
+    if os.name == "nt":
+        try:
+            if _taskkill(pid, runner=runner) == 0:
+                return
+            log.debug("taskkill вернул ненулевой код (pid=%s)", pid)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log.debug("taskkill не сработал (%s), pid=%s", exc, pid)
+        if proc is None:
+            return
+        try:  # fallback: снять хотя бы сам процесс (потомки могут выжить)
+            (proc.kill if force else proc.terminate)()
+        except OSError as exc:
+            log.debug("Windows-остановка не сработала (%s), pid=%s",
+                      exc, pid)
+        return
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    try:
+        os.killpg(pid, sig)
+    except (AttributeError, OSError, PermissionError) as exc:
+        log.debug("killpg не сработал (%s), сигнал процессу pid=%s",
+                  exc, pid)
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass
 
 
 class Job:
@@ -327,21 +387,24 @@ class JobManager:
     # ── reconcile: «running» после рестарта ─────────────────────
     @staticmethod
     def _pid_alive(pid: int | None) -> bool:
-        """Жив ли процесс по pid (сигнал 0; Windows — нет доступа).
+        """Жив ли процесс по pid.
 
-        Зомби (state Z) считается мёртвым: kill(pid, 0) на зомби не
-        бросает ошибку, но процесс уже завершился (его заберёт init)."""
+        POSIX: сигнал 0; зомби (state Z в /proc/<pid>/stat) считается
+        мёртвым — kill(pid, 0) на зомби не бросает ошибку, но процесс
+        уже завершился (его заберёт init). Windows: os.kill(pid, 0) —
+        просто OpenProcess (сигналов там нет), зомби не бывает —
+        /proc-проверка имеет смысл только на POSIX."""
         if not pid:
             return False
-        # зомби: /proc/<pid>/stat, поле состояния (3-е) == 'Z'
-        try:
-            stat = open(f"/proc/{pid}/stat", "rb").read().decode(
-                "utf-8", errors="replace")
-            fields = stat.split()
-            if len(fields) > 2 and fields[2] == "Z":
-                return False
-        except OSError:
-            pass
+        if os.name != "nt":
+            try:
+                stat = open(f"/proc/{pid}/stat", "rb").read().decode(
+                    "utf-8", errors="replace")
+                fields = stat.split()
+                if len(fields) > 2 and fields[2] == "Z":
+                    return False
+            except OSError:
+                pass
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
@@ -393,33 +456,6 @@ class JobManager:
                          "— помечен failed", job.id, job.pid)
         if changed:
             self._persist()
-
-    # ── остановка группы процессов ──────────────────────
-    def _signal_group(self, proc: subprocess.Popen, sig: int) -> None:
-        """Сигнал группе процессов (start_new_session) с fallback на процесс.
-        B6 (AUDIT): на Windows групп процессов/killpg нет — per-process
-        (terminate/kill — единственный доступный механизм)."""
-        if os.name == "nt":
-            # SIGTERM/SIGKILL на Windows не передаются send_signal —
-            # TerminateProcess через terminate()/kill()
-            try:
-                if sig == signal.SIGKILL:
-                    proc.kill()
-                else:
-                    proc.terminate()
-            except OSError as exc:
-                log.debug("Windows-сигнал не сработал (%s), pid=%s",
-                          exc, proc.pid)
-            return
-        try:
-            os.killpg(proc.pid, sig)
-        except (AttributeError, OSError, PermissionError) as exc:
-            log.debug("killpg не сработал (%s), сигнал процессу pid=%s",
-                      exc, proc.pid)
-            try:
-                proc.send_signal(sig)
-            except OSError:
-                pass
 
     # ── CRUD ─────────────────────────────────────────────────
     def running_on(self, project: str) -> Job | None:
@@ -551,10 +587,12 @@ class JobManager:
             self._persist()
 
     def stop(self, job_id: str) -> Job | None:
-        """Сигнал группе (SIGTERM) → 5 с → SIGKILL. Возвращает job или None.
+        """Остановить запуск вместе с потомками: POSIX — SIGTERM группе
+        → 5 с → SIGKILL, Windows — taskkill /F /T (дерево целиком).
+        Возвращает job или None.
 
         Работает и для «сирот» после рестарта сервера: proc отсутствует,
-        но pid жив — сигнал уходит группе по pid (killpg)."""
+        но pid жив — остановка по pid."""
         job = self.get(job_id)
         if job is None or job.status != "running":
             return job
@@ -567,61 +605,34 @@ class JobManager:
             self._persist()
             job.notify(("status", job.status))
             return job
-        if proc is not None:
-            self._signal_group(proc, signal.SIGTERM)
-        else:
-            # сирота: сигнал группе по pid (killpg как в _signal_group)
-            self._signal_group_pid(job.pid, signal.SIGTERM)
+        # статус фиксируем ДО сигнала: умерший процесс reader может
+        # пометить failed раньше, чем stop() вернёт управление
         job.status = "stopped"  # reader перезапишет только если не done
+        _kill_tree(job.pid, proc=proc)
 
         def _kill_later() -> None:
             if proc is not None:
                 try:
                     proc.wait(timeout=STOP_GRACE)
                 except subprocess.TimeoutExpired:
-                    self._signal_group(proc, signal.SIGKILL)
+                    _kill_tree(job.pid, force=True, proc=proc)
                     try:
                         proc.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        log.warning("Процесс pid=%s не завершился после SIGKILL",
-                                    proc.pid)
+                        log.warning("Процесс pid=%s не завершился после "
+                                    "жёсткой остановки", proc.pid)
             else:
-                # сирота: ждём смерти по pid, потом SIGKILL
+                # сирота: ждём смерти по pid, потом жёсткая остановка
                 end = time.time() + STOP_GRACE
                 while time.time() < end and self._pid_alive(job.pid):
                     time.sleep(0.2)
                 if self._pid_alive(job.pid):
-                    self._signal_group_pid(job.pid, signal.SIGKILL)
+                    _kill_tree(job.pid, force=True)
             job.finished = time.time()
             job.notify(("status", job.status))
             self._persist()
         threading.Thread(target=_kill_later, daemon=True).start()
         return job
-
-    def _signal_group_pid(self, pid: int | None, sig: int) -> None:
-        """Сигнал группе процессов по pid (для сирот без Popen)."""
-        if not pid:
-            return
-        if os.name == "nt":
-            # Windows: per-process (killpg нет) — только процесс
-            try:
-                if sig == signal.SIGKILL:
-                    subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                                   capture_output=True)
-                else:
-                    subprocess.run(["taskkill", "/PID", str(pid)],
-                                   capture_output=True)
-            except OSError as exc:
-                log.debug("Windows-сигнал не сработал (%s), pid=%s", exc, pid)
-            return
-        try:
-            os.killpg(pid, sig)
-        except (AttributeError, OSError, PermissionError) as exc:
-            log.debug("killpg по pid не сработал (%s), сигнал pid=%s", exc, pid)
-            try:
-                os.kill(pid, sig)
-            except OSError:
-                pass
 
     def shutdown(self) -> None:
         """Остановка всех активных запусков (вызывается при завершении
@@ -655,13 +666,11 @@ class JobManager:
         if job is None:
             return False
         # B2: remove останавливает и сирот (proc=None, но pid жив) —
-        # раньше SIGTERM уходил только при живом Popen, и удаление из
+        # остановка уходит и без живого Popen, иначе удаление из
         # истории оставляло процесс работать
-        if job.status == "running":
-            if job.proc is not None:
-                self._signal_group(job.proc, signal.SIGTERM)
-            elif self._pid_alive(job.pid):
-                self._signal_group_pid(job.pid, signal.SIGTERM)
+        if job.status == "running" and (job.proc is not None
+                                        or self._pid_alive(job.pid)):
+            _kill_tree(job.pid, proc=job.proc)
         self._drop_sidecar(job_id)
         self._persist()
         return True
