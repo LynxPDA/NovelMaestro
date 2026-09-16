@@ -308,6 +308,9 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
                        ("request_budget", "--request_budget")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
+    # размер чанка перевода/полировки (СИМВОЛЫ); редактура — глава целиком
+    if form.get("chunk_size") not in (None, ""):
+        argv += ["--chunk_size", str(form["chunk_size"])]
     argv += _llm_argv(form, ctx, "pipeline")
     return argv
 
@@ -896,6 +899,12 @@ STAGE_SPECS: dict[str, dict] = {
                       "пусто = авто (первый кандидат с тегами из prompts/); "
                       "недостающий тег стадии — предупреждение + встроенный "
                       "промпт"},
+            {"name": "chunk_size", "label": "Размер чанка, СИМВОЛЫ",
+             "type": "number", "default": "7000", "min": 1,
+             "help": "чанкование текста для перевода и полировки — "
+                      "действует в ЛЮБОМ выбранном типе работы; "
+                      "редактура идёт главой целиком; пусто = "
+                      "PIPELINE_CHUNK_SIZE из .env → 7000"},
             {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
              "type": "number", "default": ""},
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},

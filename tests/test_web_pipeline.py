@@ -270,6 +270,18 @@ def test_build_stage_cmd_ner_fields(tmp_path):
         assert "--no-aliases" in cmd
 
 
+def test_build_pipeline_chunk_size_argv():
+    """размер чанка из экспертной формы — в argv оркестратора; пусто —
+    без флага (CLI-дефолт pipeline.py: PIPELINE_CHUNK_SIZE → 7000)."""
+    ctx: dict = {}
+    base = {"action": "8", "host": "http://h", "model": "m",
+            "api_key": "k"}
+    argv = build_command("pipeline", dict(base, chunk_size="3500"), ctx)
+    assert argv[argv.index("--chunk_size") + 1] == "3500"
+    argv2 = build_command("pipeline", dict(base), ctx)
+    assert "--chunk_size" not in argv2
+
+
 def test_build_pipeline_ner_fields_argv():
     """hidden-поле ner_fields из формы — в argv оркестратора; пусто —
     без флага (CLI-дефолт)."""
@@ -282,6 +294,17 @@ def test_build_pipeline_ner_fields_argv():
     assert argv[argv.index("--ner_fields") + 1] == "term,type,translation"
     argv2 = build_command("pipeline", dict(base), ctx)
     assert "--ner_fields" not in argv2
+
+
+def test_pipeline_spec_chunk_size_field():
+    """поле chunk_size — в экспертной форме pipeline (не в simple),
+    единица — СИМВОЛЫ; проброс в argv уже покрыт отдельным тестом."""
+    spec = spec_for("pipeline")
+    assert spec is not None
+    f = next(x for x in spec["fields"] if x["name"] == "chunk_size")
+    assert "СИМВОЛЫ" in f["label"]
+    assert f["default"] == "7000"
+    assert "chunk_size" not in spec.get("simple", [])
 
 
 def test_pipeline_extended_action_specs():
@@ -414,6 +437,26 @@ def test_build_stage_cmd_single_model(tmp_path):
     cmd4 = build_stage_cmd(1, script, tmp_path / "in", tmp_path / "out",
                            "http://h", "k", "м", 300, threads=4)
     assert "--threads 4" in " ".join(cmd4)
+
+
+def test_build_stage_cmd_chunk_size(tmp_path):
+    """размер чанка (СИМВОЛЫ) из формы — в стадии 1/3 (перевод,
+    полировка); редактура (2) идёт главой целиком — без --chunk_size;
+    пусто — дефолт _DEFAULTS (PIPELINE_CHUNK_SIZE из .env)."""
+    from web.pipeline import build_stage_cmd, _DEFAULTS
+    script = tmp_path / "translate_book.py"
+    for stage in (1, 3):
+        cmd = build_stage_cmd(stage, script, tmp_path / "in",
+                              tmp_path / "out", "http://h", "k", "м", 300,
+                              chunk_size=3500)
+        assert cmd[cmd.index("--chunk_size") + 1] == "3500"
+        cmd2 = build_stage_cmd(stage, script, tmp_path / "in",
+                               tmp_path / "out", "http://h", "k", "м", 300)
+        assert cmd2[cmd2.index("--chunk_size") + 1] == \
+            str(_DEFAULTS["chunk_size"])
+    cmd3 = build_stage_cmd(2, script, tmp_path / "in", tmp_path / "out",
+                           "http://h", "k", "м", 300, chunk_size=3500)
+    assert "--chunk_size" not in cmd3
 
 
 def test_build_stage_cmd_max_retries(tmp_path):

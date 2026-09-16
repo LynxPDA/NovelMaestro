@@ -329,7 +329,8 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     dict_file: str = "", rules_file: str = "",
                     examples_file: str = "",
                     fewshot_k: int = 3, fewshot_threshold: float = 0.3,
-                    request_budget: int = 0) -> list[str]:
+                    request_budget: int = 0,
+                    chunk_size: int | None = None) -> list[str]:
     # единая модель конвейера (PIPELINE_MODEL → MODEL) — без
     # отдельных моделей под translate/redact/polish
     common = [
@@ -378,10 +379,14 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                       "--fewshot_threshold", str(fewshot_threshold)]
         if request_budget:
             ext_extra += ["--request_budget", str(request_budget)]
+    # размер чанка перевода/полировки (СИМВОЛЫ): форма > дефолт
+    # (_DEFAULTS["chunk_size"] ← PIPELINE_CHUNK_SIZE из .env);
+    # редактура идёт главой целиком — стадии 2 чанк не нужен
+    cs = str(chunk_size if chunk_size else _DEFAULTS["chunk_size"])
     if stage == 1:
         return [sys.executable, str(script), str(in_file), "--mode",
                 "translate", *common,
-                "--chunk_size", str(_DEFAULTS["chunk_size"]),
+                "--chunk_size", cs,
                 "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
                 "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
     if stage == 2:
@@ -391,7 +396,7 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                 "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
     return [sys.executable, str(script), str(in_file), "--mode",
             "polish", *common,
-            "--chunk_size", str(_DEFAULTS["chunk_size"]),
+            "--chunk_size", cs,
             "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
             "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
 
@@ -425,7 +430,8 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     dict_file: str = "", rules_file: str = "",
                     examples_file: str = "",
                     fewshot_k: int = 3, fewshot_threshold: float = 0.3,
-                    request_budget: int = 0) -> bool:
+                    request_budget: int = 0,
+                    chunk_size: int | None = None) -> bool:
     """Одна глава: стадии по порядку, fail-fast (код 0 + файл + grep).
 
     polish_in — вход полировки вместо дефолтного redacted.txt
@@ -468,7 +474,8 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                                   examples_file=examples_file,
                                   fewshot_k=fewshot_k,
                                   fewshot_threshold=fewshot_threshold,
-                                  request_budget=request_budget)
+                                  request_budget=request_budget,
+                                  chunk_size=chunk_size)
             proc_env = dict(os.environ)
             if api_key:
                 proc_env["LLM_API_KEY"] = api_key
@@ -624,6 +631,10 @@ def main() -> None:
                     help="Порог схожести примера с чанком (0–1).")
     ap.add_argument("--request_budget", type=int, default=0,
                     help="Общий бюджет запроса, СИМВОЛЫ; 0 = выключено.")
+    ap.add_argument("--chunk_size", type=int, default=None,
+                    help="Размер чанка перевода/полировки, СИМВОЛЫ "
+                         "(пусто = PIPELINE_CHUNK_SIZE из .env → дефолт); "
+                         "редактура идёт главой целиком.")
     ap.add_argument("--preview-request", dest="preview_request",
                    default=None,
                    help="ПРЕДПРОСМОТР: первый LLM-запрос действия "
@@ -653,6 +664,7 @@ def main() -> None:
     args.max_retries = (args.max_retries
                         if args.max_retries is not None
                         else _DEFAULTS["max_retries"])
+    args.chunk_size = args.chunk_size or _DEFAULTS["chunk_size"]
 
     if not 1 <= args.jobs <= 16:
         ap.error("--jobs должен быть 1–16")
@@ -759,6 +771,8 @@ def main() -> None:
     no_aliases = "aliases" not in nf_list
     log.info("NER-ПОЛЯ   : %s%s", ",".join(nf_list),
              "" if not no_aliases else " (без алиасов)")
+    log.info("ЧАНК       : %d СИМВОЛОВ (перевод/полировка)",
+             args.chunk_size)
     if ext:
         log.info("КОНТЕКСТ   : словарь=%s правила=%s примеры=%s | "
                  "fewshot_k=%d порог=%.2f | бюджет запроса СИМВОЛЫ: "
@@ -796,7 +810,8 @@ def main() -> None:
             examples_file=examples_file,
             fewshot_k=args.fewshot_k,
             fewshot_threshold=args.fewshot_threshold,
-            request_budget=args.request_budget)
+            request_budget=args.request_budget,
+            chunk_size=args.chunk_size)
         cmd += ["--preview-request", args.preview_request]
         proc_env = dict(os.environ)
         if api_key:
@@ -869,7 +884,8 @@ def main() -> None:
                         examples_file=examples_file,
                         fewshot_k=args.fewshot_k,
                         fewshot_threshold=args.fewshot_threshold,
-                        request_budget=args.request_budget): cid
+                        request_budget=args.request_budget,
+                        chunk_size=args.chunk_size): cid
             for cid, dirs in to_process.items()
         }
         for fut in as_completed(futures):
