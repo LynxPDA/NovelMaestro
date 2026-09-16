@@ -52,6 +52,62 @@ test("progressText: done/total и label", () => {
   );
 });
 
+test("etaDuration: секунды/минуты/часы", () => {
+  assert.equal(UICore.etaDuration(45), "45 с");
+  assert.equal(UICore.etaDuration(59.4), "59 с");
+  assert.equal(UICore.etaDuration(60), "1 мин");
+  assert.equal(UICore.etaDuration(725), "12 мин");
+  assert.equal(UICore.etaDuration(3600), "1 ч");
+  assert.equal(UICore.etaDuration(3900), "1 ч 5 мин");
+  // мусор и отрицательные — «0 с»
+  assert.equal(UICore.etaDuration(-5), "0 с");
+  assert.equal(UICore.etaDuration(NaN), "0 с");
+  assert.equal(UICore.etaDuration(undefined), "0 с");
+});
+
+test("etaClock: часы:минуты, две цифры", () => {
+  const clock = UICore.etaClock(new Date(2026, 0, 1, 9, 5).getTime());
+  assert.match(clock, /^\d{2}:\d{2}$/);
+  assert.equal(clock.slice(0, 2), "09");
+});
+
+test("etaRemaining: скорость по окну выборок", () => {
+  // 10 единиц за 100 c → 0.1/с; осталось 80 → 800 c
+  const win = [
+    { t: 1000, done: 10, total: 100 },
+    { t: 1100, done: 20, total: 100 },
+  ];
+  assert.equal(UICore.etaRemaining(win, 20, 100, 1100, 900), 800);
+});
+
+test("etaRemaining: фолбэк от старта запуска", () => {
+  // окно ещё короткое (span=0): 20 сделано за 200 c → остаток 80/0.1 = 800
+  const one = [{ t: 1100, done: 20, total: 100 }];
+  assert.equal(
+    UICore.etaRemaining(one, 20, 100, 1100, 900),
+    800,
+  );
+  // нет выборок, нет created — оценить нечего
+  assert.equal(UICore.etaRemaining([], 20, 100, 1100, null), null);
+  // стоит на месте (окно без прогресса) и created нет — null
+  const stuck = [
+    { t: 1000, done: 10, total: 100 },
+    { t: 1100, done: 10, total: 100 },
+  ];
+  assert.equal(UICore.etaRemaining(stuck, 10, 100, 1100, null), null);
+});
+
+test("etaRemaining: границы — нет данных для оценки", () => {
+  const win = [
+    { t: 1000, done: 10, total: 100 },
+    { t: 1100, done: 20, total: 100 },
+  ];
+  assert.equal(UICore.etaRemaining(win, 0, 100, 1100, 900), null); // не начали
+  assert.equal(UICore.etaRemaining(win, 100, 100, 1100, 900), null); // всё готово
+  assert.equal(UICore.etaRemaining(win, 20, 0, 1100, 900), null); // нет total
+  assert.equal(UICore.etaRemaining(null, 20, 100, 1100, 900), 800); // фолбэк
+});
+
 test("boolOn: строки .env", () => {
   assert.equal(UICore.boolOn("1"), true);
   assert.equal(UICore.boolOn("0"), false);

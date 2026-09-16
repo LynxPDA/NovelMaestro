@@ -336,6 +336,50 @@
         : label + " " + p.done + " …";
     },
 
+    /* ── ETA завершения запуска (по скорости событий прогресса) ── */
+
+    /* Длительность по-русски: «45 с», «12 мин», «1 ч 5 мин». */
+    etaDuration: (sec) => {
+      var s = Math.max(0, Math.round(Number(sec) || 0));
+      if (s < 60) return s + " с";
+      var m = Math.round(s / 60);
+      if (m < 60) return m + " мин";
+      var h = Math.floor(m / 60);
+      var rest = m % 60;
+      return h + " ч" + (rest ? " " + rest + " мин" : "");
+    },
+
+    /* Часы завершения («14:35») из мс-таймстампа. */
+    etaClock: (ms) =>
+      new Date(ms).toLocaleTimeString("ru-RU", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+
+    /* Остаток в секундах: скорость — по окну выборок прогресса
+       samples = [{t, done, total}] (t — сек, окно пишет вызывающий);
+       окно пустое/короткое или стоит на месте — фолбэк от старта
+       запуска (created, сек). Оценить нечего — null. */
+    etaRemaining: (samples, done, total, now, created) => {
+      done = Number(done) || 0;
+      total = Number(total) || 0;
+      if (total <= 0 || done <= 0 || done >= total) return null;
+      var rate = 0;
+      if (samples && samples.length) {
+        var first = samples[0];
+        var span = now - first.t;
+        var lastDone = samples[samples.length - 1].done;
+        if (span > 0 && lastDone > first.done) {
+          rate = (lastDone - first.done) / span;
+        }
+      }
+      if (rate <= 0 && created) {
+        rate = done / Math.max(1, now - created);
+      }
+      if (rate <= 0) return null;
+      return (total - done) / rate;
+    },
+
     /* ── C/D: bool из .env-строк ("0"/"1"/"true"/…) ── */
     boolOn: (v) => {
       if (v === true || v === 1) return true;

@@ -264,7 +264,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       panel.append(h("div", { class: "empty" }, "Нет активного запуска"));
       return panel;
     }
-    const bar = miniBar(j.progress, j.status);
+    const bar = miniBar(j.progress, j.status, j);
     const row = h(
       "div",
       { class: "job-row" },
@@ -307,13 +307,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // текст мини-бара активного запуска (общий для отрисовки и SSE)
-  function miniProgressText(p) {
+  function miniProgressText(p, job) {
     if (!p) return "ожидание…";
     const total = p.total ? p.total : 0;
-    return (p.label || "") + (total > 0 ? ` ${p.done}/${p.total}` : "");
+    return (p.label || "") + (total > 0 ? ` ${p.done}/${p.total}` : "")
+      + etaShort(job, p);
   }
 
-  function miniBar(p, status) {
+  function miniBar(p, status, job) {
     // у running-задачи без событий прогресса бар всё равно
     // виден («ожидание…») — раньше возвращался null и виджет молчал
     if (!p && status !== "running") return null;
@@ -328,12 +329,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         { class: "progress-track" },
         h("div", { class: "progress-fill", style: "width:" + pct + "%" }),
       ),
-      h("span", { class: "progress-text" }, miniProgressText(p)),
+      h("span", { class: "progress-text" }, miniProgressText(p, job)),
     );
   }
 
   // живое обновление мини-бара из SSE (fill + текст)
-  function paintMini(bar) {
+  function paintMini(bar, job) {
     const p = st.progress;
     const total = p && p.total ? p.total : 0;
     const done = p ? p.done : 0;
@@ -341,7 +342,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const fill = bar.querySelector(".progress-fill");
     if (fill) fill.style.width = pct + "%";
     const text = bar.querySelector(".progress-text");
-    if (text) text.textContent = miniProgressText(p);
+    if (text) text.textContent = miniProgressText(p, job);
   }
 
   function emptyRun() {
@@ -3113,6 +3114,65 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     );
   }
 
+  /* ── ETA завершения запуска: окно выборок @@PROGRESS@@ ──
+     Выборки пишутся с шагом ≥5 c, окно 15 точек (≈ минута) — скорость
+     из окна устойчивее к разным размерам глав, чем пара соседних
+     событий. Изменение total (новый диапазон) сбрасывает окно,
+     финальный статус — чистит. Пока выборок мало — фолбэк от старта
+     запуска (job.created): консервативно переоценивает остаток. */
+  const ETA_STEP = 5; // сек между выборками
+  const ETA_WINDOW = 15; // точек в скользящем окне
+  const ETA_MAX_JOBS = 50; // страховка от роста Map
+  const etaSamples = new Map(); // job.id → [{t, done, total}]
+
+  function recordSample(job, p, done) {
+    const total = Number(p.total) || 0;
+    let s = etaSamples.get(job.id);
+    if (!s || !s.length || s[s.length - 1].total !== total) {
+      if (!etaSamples.has(job.id) && etaSamples.size >= ETA_MAX_JOBS) {
+        etaSamples.delete(etaSamples.keys().next().value);
+      }
+      s = [];
+      etaSamples.set(job.id, s);
+    }
+    const now = Date.now() / 1000;
+    const last = s[s.length - 1];
+    if (!last || now - last.t >= ETA_STEP) {
+      s.push({ t: now, done, total });
+      if (s.length > ETA_WINDOW) s.shift();
+    }
+    return s;
+  }
+
+  /* {remaining, finishAt} | null — данные для текстов оценки */
+  function etaOf(job, p) {
+    if (!job || !job.id || !p || !p.total) return null;
+    const done = Number(p.done) || 0;
+    const remaining = UICore.etaRemaining(
+      recordSample(job, p, done),
+      done,
+      Number(p.total) || 0,
+      Date.now() / 1000,
+      job.created,
+    );
+    if (remaining == null) return null;
+    return { remaining, finishAt: Date.now() + remaining * 1000 };
+  }
+
+  /* « · осталось ≈ 12 мин · до 14:35» — для текста бара с процентами */
+  function etaSuffix(job, p) {
+    const e = etaOf(job, p);
+    if (!e) return "";
+    return " · осталось ≈ " + UICore.etaDuration(e.remaining)
+      + " · до " + UICore.etaClock(e.finishAt);
+  }
+
+  /* « · ≈ 12 мин» — короткая форма для мини-бара */
+  function etaShort(job, p) {
+    const e = etaOf(job, p);
+    return e ? " · ≈ " + UICore.etaDuration(e.remaining) : "";
+  }
+
   // отрисовка прогрессбара в переданный узел (лог-панель и SSE).
   // Все querySelector'ы загардены: чужой узел (например мини-бар без
   // .progress-label) не должен уронить SSE-стрим
@@ -3134,14 +3194,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const fill = bar.querySelector(".progress-fill");
     if (fill) fill.style.width = pct + "%";
     const text = bar.querySelector(".progress-text");
-    if (text)
+    if (text) {
+      text.title = "Оценка времени — по текущей скорости выполнения; "
+        + "зависит от размера глав и скорости LLM-сервера";
       text.textContent = p
         ? total > 0
-          ? `${p.done}/${total} · ${pct}%`
+          ? `${p.done}/${total} · ${pct}%` + etaSuffix(view.job, p)
           : `${p.done} …`
         : running
           ? "ожидание первого результата…"
           : "";
+    }
   }
 
   // свёртка событий конвейера: {"id:stage" → status} (дедуп в onPayload
@@ -3345,7 +3408,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
       const mini = page.querySelector(".progress-wrap.mini");
-      if (mini) paintMini(mini);
+      if (mini) paintMini(mini, st.job);
     } else if (payload.type === "event" && payload.event) {
       const ev = payload.event;
       // таблица глав — только pipeline-события (числовой stage);
@@ -3379,6 +3442,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     } else if (payload.type === "status") {
       st.job.status = payload.status;
+      etaSamples.delete(st.job.id); // окно ETA больше не нужно
       // кэш последнего запуска этой стадии устарел — при возврате
       // на вкладку данные перечитаются из /jobs/{id}
       delete st.lastLog[st.job.action];
