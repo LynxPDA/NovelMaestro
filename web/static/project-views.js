@@ -3487,21 +3487,11 @@ function viewProject(section, name, tab, job) {
     const err = h("div", { class: "form-error" });
     const q = new URLSearchParams({ project: `${section}/${name}` });
 
-    /* — .env: только собственный .env проекта (общий — на главной,
+    /* — .env: только собственный .env проекта (системный — на главной,
          вкладка «Настройки») — */
     const envCard = h("div", { class: "review-card" });
     const envEd = makeEditor("", "txt");
     const envMeta = h("div", { class: "review-status" });
-    const modeSel = h("select", { class: "input" });
-    modeSel.append(
-      h("option", { value: "shared" }, "Использовать общий .env"),
-      h("option", { value: "own" }, "Свой .env проекта"),
-    );
-    attachTooltip(
-      modeSel,
-      "Общий .env — системный (read-only, правится на главной); "
-        + "собственный .env проекта — перекрывает общий для этой книги",
-    );
     const envToolbar = h("div", { class: "files-toolbar" });
     const envBody = h(
       "div",
@@ -3517,11 +3507,9 @@ function viewProject(section, name, tab, job) {
     );
     let hasOwn = false;
     let envVisible = false;
-    /* select активен — «Общий .env» показывает системный
-       (read-only, сохранять из проекта НЕЛЬЗЯ — редактируется на
-       главной), «Свой .env» — редактор проекта (создание/правка/
-       удаление). loadEnv НЕ трогает modeSel — иначе выбор пользователя
-       сбрасывался (баг). */
+    /* Редактор — только собственный .env проекта; системный (общий)
+       правится на главной («Настройки»), его содержимое можно
+       скопировать кнопкой «Дублировать из общего». */
     async function loadEnv() {
       err.textContent = "";
       try {
@@ -3530,16 +3518,6 @@ function viewProject(section, name, tab, job) {
         envVisible = !!d.visible;
         envEd.setValue(hasOwn ? d.content || d.masked || "" : "");
         envEd.setReadOnly(false);
-        renderEnvToolbar();
-      } catch (ex) {
-        err.textContent = ex.message;
-      }
-    }
-    async function loadSharedEnv() {
-      try {
-        const d = await api(`/env?scope=global`);
-        envEd.setValue(d.content || d.masked || "");
-        envEd.setReadOnly(true);
         renderEnvToolbar();
       } catch (ex) {
         err.textContent = ex.message;
@@ -3631,11 +3609,6 @@ function viewProject(section, name, tab, job) {
             await api(`/env?${q}&scope=project`, { method: "DELETE" });
             toast(".env проекта удалён");
             await loadEnv();
-            // после удаления проект возвращается к системному
-            if (!hasOwn) {
-              modeSel.value = "shared";
-              await loadSharedEnv();
-            }
           } catch (ex) {
             err.textContent = ex.message;
           }
@@ -3644,38 +3617,21 @@ function viewProject(section, name, tab, job) {
     );
     function renderEnvToolbar() {
       envToolbar.replaceChildren();
-      envToolbar.append(modeSel, h("span", { class: "spacer" }));
-      if (modeSel.value === "shared") {
-        // системный .env — read-only, из проекта сохранять нельзя;
-        // «Удалить .env» в этом режиме не показываем: удаление —
-        // только из режима «Свой .env проекта»
+      envToolbar.append(h("span", { class: "spacer" }));
+      if (hasOwn) {
         envMeta.textContent =
-          "Системный .env (projects/.env) — read-only, редактируется на главной, вкладка «Настройки»";
-      } else if (hasOwn) {
-        envMeta.textContent =
-          "собственный .env" +
-          (envVisible ? "" : " · значения скрыты (--auth)");
+          "собственный .env (перекрывает системный для этой книги)"
+            + (envVisible ? "" : " · значения скрыты (--auth)");
         envToolbar.append(envSave, envDel);
       } else {
         envMeta.textContent =
-          "своего .env нет — создайте: дублируйте из общего или шаблона, либо напишите с нуля";
+          "своего .env нет — проект работает от системного (правится на "
+            + "главной, вкладка «Настройки»); создайте свой: дублируйте "
+            + "из общего или шаблона, либо напишите с нуля";
         envToolbar.append(dupSharedBtn, dupTplBtn, envSave);
       }
     }
-    modeSel.addEventListener("change", async () => {
-      if (modeSel.value === "shared") await loadSharedEnv();
-      else await loadEnv();
-    });
-    async function initEnv() {
-      await loadEnv();
-      // порядок важен: сначала выбор режима, потом рендер тулбара —
-      // иначе кнопки рисуются для старого значения select (баг:
-      // при «Своём .env» по умолчанию не было «Сохранить»)
-      modeSel.value = hasOwn ? "own" : "shared";
-      renderEnvToolbar();
-      if (modeSel.value === "shared") await loadSharedEnv();
-    }
-    await initEnv();
+    await loadEnv();
 
     /* — Обложка — */
     const coverCard = h("div", { class: "review-card" });
