@@ -41,6 +41,13 @@ services:
     # доступны для ручной правки. Иной uid: поменяйте useradd -u 1000
     # в Dockerfile (или задайте user: "${UID}:${GID}" — но тогда
     # entrypoint не сможет chown каталоги, созданные docker от root).
+    # LLM-сервер на хосте: в bridge-сети контейнера 127.0.0.1 — это сам
+    # контейнер, поэтому HOST=http://127.0.0.1:9989 из .env внутри него не
+    # работает (Connection refused). host-gateway резолвит в контейнере
+    # host.docker.internal в адрес хоста — писать в .env:
+    # HOST=http://host.docker.internal:<порт>/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8756:8756"                 # web-интерфейс
     volumes:
