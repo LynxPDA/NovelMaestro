@@ -41,13 +41,16 @@ services:
     # доступны для ручной правки. Иной uid: поменяйте useradd -u 1000
     # в Dockerfile (или задайте user: "${UID}:${GID}" — но тогда
     # entrypoint не сможет chown каталоги, созданные docker от root).
-    # LLM-сервер на хосте: в bridge-сети контейнера 127.0.0.1 — это сам
-    # контейнер, поэтому HOST=http://127.0.0.1:9989 из .env внутри него не
-    # работает (Connection refused). host-gateway резолвит в контейнере
-    # host.docker.internal в адрес хоста — писать в .env:
-    # HOST=http://host.docker.internal:<порт>/v1
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # LLM-сервер на хосте (llama.cpp и т.п.): в bridge-сети контейнера
+    # 127.0.0.1 — это сам контейнер, поэтому HOST=http://127.0.0.1:9989 из
+    # .env внутри него даёт Connection refused. Нужен адрес хоста: либо
+    # host.docker.internal (раскомментируйте extra_hosts ниже — Engine
+    # ≥ 20.10, т.е. любой, где работает compose v2), либо LAN-IP хоста.
+    # По умолчанию выключено: в шаблоне .env стоит облачный API, там все
+    # адреса внешние и резолвер хоста не нужен.
+    # extra_hosts:                            # LLM-сервер на хосте
+    #   - "host.docker.internal:host-gateway"
+    #   # и в .env: HOST=http://host.docker.internal:9989/v1
     ports:
       - "8756:8756"                 # web-интерфейс
     volumes:

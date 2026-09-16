@@ -48,13 +48,16 @@ docker run -d -p 8756:8756 \
 
 ### LLM-сервер на хосте (почему 127.0.0.1:9989 «не подключается»)
 
-В bridge-сети контейнера `127.0.0.1` — это **сам контейнер**, а не хост: `HOST=http://127.0.0.1:9989` из `.env` внутри него даёт `Connection refused` (`[Errno 111]`), сколько бы раз вы ни пересоздавали контейнер. Правильный адрес хоста — `host.docker.internal`, который резолвит `extra_hosts: ["host.docker.internal:host-gateway"]` (уже прописан в `docker-compose.yml`; без этой строки имя не резолвится — `Name or service not known`).
+В bridge-сети контейнера `127.0.0.1` — это **сам контейнер**, а не хост: `HOST=http://127.0.0.1:9989` из `.env` внутри него даёт `Connection refused` (`[Errno 111]`), сколько бы раз вы ни пересоздавали контейнер. В shipped-конфиге такое не встречается: в шаблоне `.env` стоит облачный API (`HOST=https://routerai.ru/api/v1`), а он из контейнера виден как есть. Схема ниже — для своего локального сервера на той же машине.
+
+Адрес хоста из контейнера — `host.docker.internal`; чтобы он резолвился, в `docker-compose.yml` нужен `extra_hosts: ["host.docker.internal:host-gateway"]` (в шаблоне он **закомментирован** — раскомментируйте; без него имя не резолвится — `Name or service not known`).
 
 1. Сервер LLM на хосте должен слушать не только loopback — запускайте его на `0.0.0.0` (у llama.cpp — `--host 0.0.0.0`; проверка на хосте: `ss -ltnp | grep 9989` → `0.0.0.0:9989`, а не `127.0.0.1:9989`).
-2. В системном `.env` (вкладка «Настройки» или `projects/.env` на хосте) — адрес хоста через гейтвей: `HOST=http://host.docker.internal:9989/v1`.
-3. Проектные `pdir/.env` перекрывают системный по ключам: если в книге остались `HOST`/`PIPELINE_HOST`/`TRANSLATE_CHECK_LLM_HOST` со `127.0.0.1` — правьте и их (или удалите строки, тогда действует системный `.env`).
-4. Пересоздать контейнер (compose перечитывается только при пересоздании): `docker compose up -d`.
-5. Проверить из контейнера: `docker exec novelmaestro python3 -c "import urllib.request;print(urllib.request.urlopen('http://host.docker.internal:9989/v1/models',timeout=5).status)"` → `200`.
+2. В `docker-compose.yml` раскомментируйте `extra_hosts` (host-gateway).
+3. В системном `.env` (вкладка «Настройки» или `projects/.env` на хосте) — адрес хоста через гейтвей: `HOST=http://host.docker.internal:9989/v1` (9989 — порт вашего сервера).
+4. Проектные `pdir/.env` перекрывают системный по ключам: если в книге остались `HOST`/`PIPELINE_HOST`/`TRANSLATE_CHECK_LLM_HOST` со `127.0.0.1` — правьте и их (или удалите строки, тогда действует системный `.env`).
+5. Пересоздать контейнер (compose перечитывается только при пересоздании): `docker compose up -d`.
+6. Проверить из контейнера: `docker exec novelmaestro python3 -c "import urllib.request;print(urllib.request.urlopen('http://host.docker.internal:9989/v1/models',timeout=5).status)"` → `200`.
 
 Альтернативы: вместо `host.docker.internal` — LAN-адрес хоста (`HOST=http://192.168.1.8:9989/v1`) или гейтвей default-сети Docker (`http://172.17.0.1:9989/v1`: работает и без `extra_hosts`, но адрес `docker0` может измениться); либо `network_mode: "host"` — тогда `127.0.0.1:9989` работает как есть, зато `ports:` перестают действовать, а web-интерфейс слушает хостовый `WEB_PORT` (только Linux).
 
