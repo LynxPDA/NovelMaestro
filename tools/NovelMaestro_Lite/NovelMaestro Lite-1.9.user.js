@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      1.10
 // @description  Универсальный переводчик новелл с глоссарием по книгам и стримингом
 // @author       NovelMaestro
 // @match        *://*/*
@@ -10,10 +10,10 @@
 // @run-at       document-idle
 // ==/UserScript==
 
-(function() {
-    'use strict';
+(() => {
+    
 
-    const APP_VERSION = '1.9';
+    const APP_VERSION = '1.10';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -28,7 +28,7 @@
         maxRetries: 3,
         glossarySource: 'book',
         translationPrompt: 'Переведи следующий текст с {sourceLang} на {targetLang}.\n\nГЛОССАРИЙ ТЕРМИНОВ (обязательно используй эти переводы, сохраняй пол персонажей):\n{glossary}\n\nВАЖНО:\n- Имена и термины переводи точно по глоссарию\n- Сохраняй пол персонажей (он/она) согласно глоссарию\n- Сохраняй стиль оригинала\n- Сохраняй разбивку на абзацы\n- Возвращай ТОЛЬКО перевод, без комментариев\n\nТекст:\n{text}',
-        extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang} Только 1 вариант перевода!",\n  "type": "character|location|artifact|organization|term",\n  "gender": "male|female|neutral|null"\n}\n\ntype - тип:\n- character: персонаж (живое существо)\n- location: место, город, страна\n- artifact: предмет, артефакт, оружие\n- organization: организация, клан, гильдия\n- term: общий термин, понятие\n\ngender - пол (только для character):\n- male: мужской\n- female: женский\n- neutral: нейтральный/неизвестно\n- null: для не-персонажей\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
+        extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang} Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
         fuzzySearchThreshold: 0.7,
         autoNER: true
     };
@@ -141,7 +141,7 @@
     function pageCacheKey() { return location.href.split('#')[0]; }
 
     function suggestBookKeyFromUrl() {
-        let key = location.pathname
+        const key = location.pathname
             .replace(/\/(chapter|ch|c|p|page|volume|v|ep|episode|txt)\/?\d+\/?/gi, '/')
             .replace(/\/\d+\/?$/, '/')
             .replace(/\/+$/, '')
@@ -205,6 +205,68 @@
         return cur ? { ...(cur.book.glossary || {}) } : {};
     }
 
+    // ===== ТИПЫ И ПОЛ (совместимость с ner.json конвейера) =====
+    // Канон полного конвейера: пол живёт ВНУТРИ type — «Person (male)»,
+    // «Creature (female)», «Person (unknown)» (см. core/common.py::_gender_of_type).
+
+    function genderOf(typeStr) {
+        const t = String(typeStr || '').toLowerCase();
+        if (t.includes('(female)')) return 'female';
+        if (t.includes('(male)')) return 'male';
+        if (t.includes('(unknown)')) return 'unknown';
+        return '';
+    }
+
+    // Старый формат Lite: enum-типы character/location/… и отдельное поле
+    // gender (male/female/neutral/null) — приводим к канону конвейера:
+    // тип «Person (male)» и т.п., поле gender выпиливается.
+    const LEGACY_TYPE_MAP = { character: 'Person', creature: 'Creature', location: 'Location', artifact: 'Artifact', organization: 'Organisation', organisation: 'Organisation', term: 'Term', other: 'Other' };
+    function migrateEntry(t) {
+        if (!t || typeof t !== 'object') return t;
+        // 1) enum-тип или пустой type → каноническое имя (baseType = 'Person' и т.п.)
+        const rawType = String(t.type || '').trim();
+        const legacy = LEGACY_TYPE_MAP[rawType.toLowerCase()];
+        let base = legacy || rawType.replace(/\s*\((?:male|female|unknown)\)\s*$/i, '').trim();
+        // 2) пол: из type, иначе из старого поля gender; neutral → (unknown)
+        let gender = genderOf(t.type);
+        if (!gender && t.gender && t.gender !== 'null') {
+            gender = t.gender === 'neutral' ? 'unknown' : t.gender;
+        }
+        if (!base) base = gender ? 'Person' : 'Term';
+        t.type = (gender === 'male' || gender === 'female' || gender === 'unknown')
+            ? `${base} (${gender})` : base;
+        delete t.gender;
+        return t;
+    }
+
+    // Типы, реально присутствующие в глоссарии — база для подсказок UI.
+    function glossaryTypes(glossary) {
+        const types = new Set();
+        for (const t of Object.values(glossary || {})) {
+            const ty = String(t && t.type || '').trim();
+            if (ty) types.add(ty);
+        }
+        return [...types].sort((a, b) => a.localeCompare(b, 'ru'));
+    }
+
+    // Список подсказок: типы глоссария + канонические примеры конвейера.
+    function updateTypeDatalist() {
+        const dl = $('#nm-type-list');
+        if (!dl) return;
+        const suggestions = ['Person (male)', 'Person (female)', 'Person (unknown)',
+            'Creature (male)', 'Creature (female)', 'Location', 'Artifact',
+            'Organisation', 'Term'];
+        for (const ty of glossaryTypes(getGlossaryForView())) {
+            if (!suggestions.includes(ty)) suggestions.push(ty);
+        }
+        dl.innerHTML = '';
+        for (const ty of suggestions) {
+            const opt = document.createElement('option');
+            opt.value = ty;
+            dl.appendChild(opt);
+        }
+    }
+
     function findRelevantTerms(text) {
         const relevant = [];
         const glossary = getGlossaryForTranslation();
@@ -222,12 +284,11 @@
 
     function formatGlossaryForPrompt(terms) {
         if (terms.length === 0) return '(глоссарий пуст)';
-        const typeLabels = { character: 'Персонаж', location: 'Место', artifact: 'Артефакт', organization: 'Организация', term: 'Термин' };
-        const genderLabels = { male: 'муж.', female: 'жен.', neutral: 'нейтр.' };
+        // Пол передаётся как в конвейере — внутри type: «Person (male)».
         return terms.map(t => {
-            let d = `- "${t.term}" → "${t.translation}" [${typeLabels[t.type] || t.type}]`;
-            if (t.type === 'character' && t.gender && t.gender !== 'null') d += ` (${genderLabels[t.gender] || t.gender})`;
-            return d;
+            const g = genderOf(t.type);
+            const note = g === 'female' ? ' (жен. род)' : g === 'male' ? ' (муж. род)' : '';
+            return `- "${t.term}" → "${t.translation}" [${t.type || 'Term'}]${note}`;
         }).join('\n');
     }
 
@@ -336,13 +397,8 @@
                 outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.1);
             }
             .nm-delete-cell { background: #dc2626; color: white; border: none; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-            .nm-badge { padding: 3px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; }
-            .nm-badge-character { background: #dbeafe; color: #1e40af; }
-            .nm-badge-location { background: #dcfce7; color: #166534; }
-            .nm-badge-artifact { background: #fef3c7; color: #92400e; }
-            .nm-badge-organization { background: #e0e7ff; color: #3730a3; }
-            .nm-badge-term { background: #f3f4f6; color: #374151; }
             .nm-count-cell { text-align: center; font-weight: 600; color: #6b7280; }
+            .nm-gender-cell { text-align: center; font-size: 14px; color: #6b7280; cursor: help; }
             .nm-count-cell.high { color: #059669; }
             .nm-count-cell.med { color: #d97706; }
             .nm-status { padding: 12px; border-radius: 6px; margin-top: 12px; display: none; }
@@ -353,7 +409,7 @@
             .nm-help { background: #f3f4f6; padding: 12px; border-radius: 6px; font-size: 13px; color: #6b7280; margin-bottom: 16px; }
             .nm-glossary-count { background: #2563eb; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; margin-left: 8px; }
             .nm-add-form {
-                display: grid; grid-template-columns: 1fr 1fr auto auto auto;
+                display: grid; grid-template-columns: 1fr 1fr 1.4fr auto;
                 gap: 8px; padding: 12px; background: #eff6ff; border-radius: 6px;
                 border: 1px solid #bfdbfe; margin-bottom: 12px;
             }
@@ -398,7 +454,9 @@
     host.id = 'nm-lite-host';
     document.documentElement.appendChild(host);
     const shadow = host.attachShadow({ mode: 'open' });
-    shadow.innerHTML = `
+    // Статический каркас UI (без пользовательских данных) — через
+    // createContextualFragment, чтобы не использовать присваивание innerHTML.
+    const uiFrag = document.createRange().createContextualFragment(`
         ${styles}
         <div id="nm-root">
             <div id="nm-buttons">
@@ -440,19 +498,8 @@
                         <div class="nm-add-form">
                             <input type="text" id="new-term" placeholder="Термин">
                             <input type="text" id="new-translation" placeholder="Перевод">
-                            <select id="new-type">
-                                <option value="character">Персонаж</option>
-                                <option value="location">Место</option>
-                                <option value="artifact">Артефакт</option>
-                                <option value="organization">Организация</option>
-                                <option value="term" selected>Термин</option>
-                            </select>
-                            <select id="new-gender">
-                                <option value="null">—</option>
-                                <option value="male">Мужской</option>
-                                <option value="female">Женский</option>
-                                <option value="neutral">Нейтральный</option>
-                            </select>
+                            <input type="text" id="new-type" list="nm-type-list" placeholder="Тип (Person (male), Location…)" value="Person (male)">
+                            <datalist id="nm-type-list"></datalist>
                             <button class="nm-btn nm-btn-primary" id="btn-add-term" style="margin:0;">+ Добавить</button>
                         </div>
 
@@ -464,7 +511,7 @@
                         </div>
 
                         <div class="nm-filter-row">
-                            <input type="text" id="glossary-filter" placeholder="🔍 Фильтр по термину или переводу...">
+                            <input type="text" id="glossary-filter" placeholder="🔍 Фильтр по термину, переводу или типу...">
                         </div>
 
                         <div id="glossary-list"></div>
@@ -592,7 +639,8 @@
                 <button class="nm-btn nm-btn-danger" id="btn-cancel" style="margin-top:12px;width:100%;">Отменить</button>
             </div>
         </div>
-    `;
+    `);
+    shadow.appendChild(uiFrag);
 
     const $ = sel => shadow.querySelector(sel);
     const $$ = sel => shadow.querySelectorAll(sel);
@@ -667,11 +715,15 @@
         const key = managedBookKey;
 
         if (!key || !books[key]) {
-            area.innerHTML = `
-                <div class="nm-help">⚠️ Текущая страница не привязана к книге.</div>
-                <button class="nm-btn nm-btn-primary" id="btn-define-book">📚 Привязать текущую страницу к книге</button>
-            `;
-            $('#btn-define-book').addEventListener('click', openBookModal);
+            const help = document.createElement('div');
+            help.className = 'nm-help';
+            help.textContent = '⚠️ Текущая страница не привязана к книге.';
+            const btn = document.createElement('button');
+            btn.className = 'nm-btn nm-btn-primary';
+            btn.id = 'btn-define-book';
+            btn.textContent = '📚 Привязать текущую страницу к книге';
+            btn.addEventListener('click', openBookModal);
+            area.replaceChildren(help, btn);
             return;
         }
 
@@ -679,33 +731,57 @@
         const terms = Object.keys(book.glossary || {}).length;
         const nerPages = Object.keys(book.nerDone || {}).length;
 
-        area.innerHTML = `
-            <div class="nm-book-info">
-                <strong>📖 ${book.name || 'Без названия'}</strong><br>
-                <small style="color:#6b7280;">URL: ${key}</small><br>
-                <small style="color:#6b7280;">Терминов: ${terms} | Страниц с извлечёнными терминами: ${nerPages}</small>
-            </div>
-            <div class="nm-input-group"><label>Название книги:</label>
-                <input type="text" class="nm-input" id="book-name-edit" value="${(book.name || '').replace(/"/g, '&quot;')}">
-            </div>
-            <div class="nm-input-group"><label>URL книги:</label>
-                <input type="text" class="nm-input" id="book-key-edit" value="${key.replace(/"/g, '&quot;')}">
-            </div>
-            <button class="nm-btn nm-btn-primary" id="btn-save-book">💾 Сохранить</button>
-            <button class="nm-btn nm-btn-danger" id="btn-delete-book">🗑 Удалить книгу</button>
-        `;
+        const info = document.createElement('div');
+        info.className = 'nm-book-info';
+        const strong = document.createElement('strong');
+        strong.textContent = `📖 ${book.name || 'Без названия'}`;
+        const urlLine = document.createElement('small');
+        urlLine.setAttribute('style', 'color:#6b7280;');
+        urlLine.textContent = `URL: ${key}`;
+        const statsLine = document.createElement('small');
+        statsLine.setAttribute('style', 'color:#6b7280;');
+        statsLine.textContent = `Терминов: ${terms} | Страниц с извлечёнными терминами: ${nerPages}`;
+        info.append(strong, document.createElement('br'), urlLine, document.createElement('br'), statsLine);
+
+        const mkGroup = (labelText, inputId, value) => {
+            const group = document.createElement('div');
+            group.className = 'nm-input-group';
+            const label = document.createElement('label');
+            label.textContent = labelText;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'nm-input';
+            input.id = inputId;
+            input.value = value;
+            group.append(label, input);
+            return group;
+        };
+
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'nm-btn nm-btn-primary';
+        saveBtn.id = 'btn-save-book';
+        saveBtn.textContent = '💾 Сохранить';
+        const delBtn = document.createElement('button');
+        delBtn.className = 'nm-btn nm-btn-danger';
+        delBtn.id = 'btn-delete-book';
+        delBtn.textContent = '🗑 Удалить книгу';
+
+        area.replaceChildren(info,
+            mkGroup('Название книги:', 'book-name-edit', book.name || ''),
+            mkGroup('URL книги:', 'book-key-edit', key),
+            saveBtn, delBtn);
 
         $('#btn-save-book').addEventListener('click', () => {
             const newName = $('#book-name-edit').value.trim();
             const newKey = $('#book-key-edit').value.trim();
             if (!newKey) { showStatus('URL не может быть пустым', 'error', 'status-book'); return; }
-            if (newKey !== key) {
+            if (newKey === key) {
+                book.name = newName;
+            } else {
                 books[newKey] = { ...book, name: newName };
                 delete books[key];
                 if (currentBookKey === key) currentBookKey = newKey;
                 managedBookKey = newKey;
-            } else {
-                book.name = newName;
             }
             GM_setValue('books', books);
             showStatus('Сохранено!', 'success', 'status-book');
@@ -763,10 +839,19 @@
         });
     }
 
+    // Заглушка «пусто / ничего не найдено» — контейнер таблицы глоссария.
+    function showGlossaryPlaceholder(container, text) {
+        const p = document.createElement('p');
+        p.setAttribute('style', 'color:#6b7280;text-align:center;padding:20px;');
+        p.textContent = text;
+        container.replaceChildren(p);
+    }
+
     function updateGlossaryUI() {
         const container = $('#glossary-list');
         const pagination = $('#glossary-pagination');
         const glossary = getGlossaryForView();
+        updateTypeDatalist();
 
         // Фильтр
         let entries = Object.entries(glossary);
@@ -774,6 +859,7 @@
             const f = normalize(glossaryFilter);
             entries = entries.filter(([, t]) =>
                 normalize(t.term).includes(f) || normalize(t.translation).includes(f)
+                || normalize(t.type || '').includes(f)
             );
         }
 
@@ -790,70 +876,101 @@
         $('#glossary-count').textContent = Object.keys(glossary).length;
 
         if (Object.keys(glossary).length === 0) {
-            container.innerHTML = '<p style="color:#6b7280;text-align:center;padding:20px;">Глоссарий пуст</p>';
-            pagination.innerHTML = '';
+            showGlossaryPlaceholder(container, 'Глоссарий пуст');
+            pagination.replaceChildren();
             return;
         }
 
         if (entries.length === 0) {
-            container.innerHTML = '<p style="color:#6b7280;text-align:center;padding:20px;">Ничего не найдено по фильтру</p>';
-            pagination.innerHTML = '';
+            showGlossaryPlaceholder(container, 'Ничего не найдено по фильтру');
+            pagination.replaceChildren();
             return;
         }
 
         const sortIcon = (field) => {
-            if (glossarySort.field !== field) return '<span class="nm-sort">↕</span>';
-            return `<span class="nm-sort">${glossarySort.dir === 'asc' ? '↑' : '↓'}</span>`;
+            if (glossarySort.field !== field) return '↕';
+            return glossarySort.dir === 'asc' ? '↑' : '↓';
         };
         const activeClass = (field) => glossarySort.field === field ? 'active-sort' : '';
 
-        const typeLabels = { character: 'Персонаж', location: 'Место', artifact: 'Артефакт', organization: 'Организация', term: 'Термин' };
+        const table = document.createElement('table');
+        table.className = 'nm-glossary-table';
+        const thead = document.createElement('thead');
+        const hrow = document.createElement('tr');
+        const makeTh = (label, field, extraClass, extraStyle) => {
+            const th = document.createElement('th');
+            if (field) th.dataset.sort = field;
+            if (extraClass) th.className = extraClass;
+            if (extraStyle) th.setAttribute('style', extraStyle);
+            th.append(`${label} `);
+            if (field) {
+                const icon = document.createElement('span');
+                icon.className = 'nm-sort';
+                icon.textContent = sortIcon(field);
+                th.appendChild(icon);
+            }
+            return th;
+        };
+        hrow.append(
+            makeTh('Термин', 'term', activeClass('term')),
+            makeTh('Перевод', 'translation', activeClass('translation')),
+            makeTh('Тип', 'type', activeClass('type')),
+            makeTh('Пол', null),
+            makeTh('Частота', 'count', activeClass('count'), 'text-align:center;'),
+            makeTh('Действия', null, null, 'width:60px;')
+        );
+        thead.appendChild(hrow);
+        table.appendChild(thead);
 
-        const rows = pageEntries.map(([id, t]) => {
+        const tbody = document.createElement('tbody');
+        for (const [id, t] of pageEntries) {
             const count = t.count || 0;
             const countClass = count >= 5 ? 'high' : count >= 2 ? 'med' : '';
-            return `
-                <tr data-id="${id}">
-                    <td><input type="text" value="${String(t.term).replace(/"/g, '&quot;')}" data-field="term"></td>
-                    <td><input type="text" value="${String(t.translation).replace(/"/g, '&quot;')}" data-field="translation"></td>
-                    <td>
-                        <select data-field="type">
-                            <option value="character" ${t.type === 'character' ? 'selected' : ''}>Персонаж</option>
-                            <option value="location" ${t.type === 'location' ? 'selected' : ''}>Место</option>
-                            <option value="artifact" ${t.type === 'artifact' ? 'selected' : ''}>Артефакт</option>
-                            <option value="organization" ${t.type === 'organization' ? 'selected' : ''}>Организация</option>
-                            <option value="term" ${t.type === 'term' ? 'selected' : ''}>Термин</option>
-                        </select>
-                    </td>
-                    <td>
-                        <select data-field="gender" ${t.type !== 'character' ? 'disabled' : ''}>
-                            <option value="null" ${t.gender === 'null' ? 'selected' : ''}>—</option>
-                            <option value="male" ${t.gender === 'male' ? 'selected' : ''}>♂</option>
-                            <option value="female" ${t.gender === 'female' ? 'selected' : ''}>♀</option>
-                            <option value="neutral" ${t.gender === 'neutral' ? 'selected' : ''}>⚥</option>
-                        </select>
-                    </td>
-                    <td class="nm-count-cell ${countClass}">${count}</td>
-                    <td><button class="nm-delete-cell" title="Удалить">✕</button></td>
-                </tr>
-            `;
-        }).join('');
+            const gender = genderOf(t.type);
+            const genderTitle = gender === 'female' ? '♀ жен. (внутри типа)'
+                : gender === 'male' ? '♂ муж. (внутри типа)'
+                : gender === 'unknown' ? '⚥ пол неизвестен (внутри типа)'
+                : 'пол не указан (для персонажей — в скобках в типе, напр. «Person (male)»)';
 
-        container.innerHTML = `
-            <table class="nm-glossary-table">
-                <thead>
-                    <tr>
-                        <th class="${activeClass('term')}" data-sort="term">Термин ${sortIcon('term')}</th>
-                        <th class="${activeClass('translation')}" data-sort="translation">Перевод ${sortIcon('translation')}</th>
-                        <th class="${activeClass('type')}" data-sort="type">Тип ${sortIcon('type')}</th>
-                        <th class="${activeClass('gender')}" data-sort="gender">Пол ${sortIcon('gender')}</th>
-                        <th class="${activeClass('count')}" data-sort="count" style="text-align:center;">Частота ${sortIcon('count')}</th>
-                        <th style="width:60px;">Действия</th>
-                    </tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>
-        `;
+            const tr = document.createElement('tr');
+            tr.dataset.id = id;
+            const makeCell = (value, field, list) => {
+                const td = document.createElement('td');
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                inp.value = value;
+                inp.dataset.field = field;
+                if (list) inp.setAttribute('list', list);
+                td.appendChild(inp);
+                return td;
+            };
+            tr.appendChild(makeCell(t.term, 'term'));
+            tr.appendChild(makeCell(t.translation, 'translation'));
+            tr.appendChild(makeCell(t.type || '', 'type', 'nm-type-list'));
+
+            const gTd = document.createElement('td');
+            gTd.className = 'nm-gender-cell';
+            gTd.title = genderTitle;
+            gTd.textContent = gender === 'female' ? '♀' : gender === 'male' ? '♂' : gender === 'unknown' ? '⚥' : '—';
+            tr.appendChild(gTd);
+
+            const cTd = document.createElement('td');
+            cTd.className = `nm-count-cell ${countClass}`;
+            cTd.textContent = count;
+            tr.appendChild(cTd);
+
+            const dTd = document.createElement('td');
+            const del = document.createElement('button');
+            del.className = 'nm-delete-cell';
+            del.title = 'Удалить';
+            del.textContent = '✕';
+            dTd.appendChild(del);
+            tr.appendChild(dTd);
+
+            tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        container.replaceChildren(table);
 
         // Обработчики сортировки
         container.querySelectorAll('th[data-sort]').forEach(th => {
@@ -874,16 +991,18 @@
         // Обработчики ячеек
         container.querySelectorAll('tr[data-id]').forEach(row => {
             const id = row.dataset.id;
-            row.querySelectorAll('input, select').forEach(inp => {
+            row.querySelectorAll('input').forEach(inp => {
                 inp.addEventListener('change', function() {
                     const field = this.dataset.field;
                     const g = getGlossaryForView();
                     if (!g[id]) return;
-                    g[id][field] = this.value;
+                    g[id][field] = this.value.trim();
                     if (field === 'type') {
-                        const gSel = row.querySelector('[data-field="gender"]');
-                        if (this.value !== 'character') { g[id].gender = 'null'; gSel.disabled = true; gSel.value = 'null'; }
-                        else gSel.disabled = false;
+                        const cell = row.querySelector('.nm-gender-cell');
+                        if (cell) {
+                            const gen = genderOf(g[id].type);
+                            cell.textContent = gen === 'female' ? '♀' : gen === 'male' ? '♂' : gen === 'unknown' ? '⚥' : '—';
+                        }
                     }
                     saveGlossary(g);
                     updateGlossaryUI();
@@ -905,13 +1024,19 @@
     }
 
     function renderPagination(container, totalPages, totalItems) {
+        const pageInfo = (text) => {
+            const span = document.createElement('span');
+            span.className = 'nm-page-info';
+            span.textContent = text;
+            return span;
+        };
         if (totalPages <= 1) {
-            container.innerHTML = `<span class="nm-page-info">Всего: ${totalItems}</span>`;
+            container.replaceChildren(pageInfo(`Всего: ${totalItems}`));
             return;
         }
 
         const maxVisiblePages = 7;
-        let pages = [];
+        const pages = [];
         if (totalPages <= maxVisiblePages) {
             for (let i = 0; i < totalPages; i++) pages.push(i);
         } else {
@@ -924,14 +1049,32 @@
             pages.push(totalPages - 1);
         }
 
-        let html = `<button class="nm-prev-btn" ${glossaryPage === 0 ? 'disabled' : ''}>‹</button>`;
+        const frag = document.createDocumentFragment();
+        const navBtn = (label, cls, disabled) => {
+            const b = document.createElement('button');
+            b.textContent = label;
+            b.className = cls;
+            b.disabled = disabled;
+            return b;
+        };
+        frag.appendChild(navBtn('‹', 'nm-prev-btn', glossaryPage === 0));
         for (const p of pages) {
-            if (p === -1) html += `<span style="padding:0 4px;color:#9ca3af;">…</span>`;
-            else html += `<button class="nm-page-btn ${p === glossaryPage ? 'active' : ''}" data-page="${p}">${p + 1}</button>`;
+            if (p === -1) {
+                const dots = document.createElement('span');
+                dots.setAttribute('style', 'padding:0 4px;color:#9ca3af;');
+                dots.textContent = '…';
+                frag.appendChild(dots);
+            } else {
+                const b = document.createElement('button');
+                b.className = 'nm-page-btn' + (p === glossaryPage ? ' active' : '');
+                b.dataset.page = p;
+                b.textContent = p + 1;
+                frag.appendChild(b);
+            }
         }
-        html += `<button class="nm-next-btn" ${glossaryPage === totalPages - 1 ? 'disabled' : ''}>›</button>`;
-        html += `<span class="nm-page-info">Стр. ${glossaryPage + 1} из ${totalPages} • Всего: ${totalItems}</span>`;
-        container.innerHTML = html;
+        frag.appendChild(navBtn('›', 'nm-next-btn', glossaryPage === totalPages - 1));
+        frag.appendChild(pageInfo(`Стр. ${glossaryPage + 1} из ${totalPages} • Всего: ${totalItems}`));
+        container.replaceChildren(frag);
 
         container.querySelector('.nm-prev-btn').addEventListener('click', () => {
             if (glossaryPage > 0) { glossaryPage--; updateGlossaryUI(); }
@@ -986,7 +1129,7 @@
                 if (isAbort && timeout > 0 && attempt >= maxRetries) {
                     throw new Error(`Таймаут ${timeout}мс истёк после ${maxRetries + 1} попыток`);
                 }
-                const delay = Math.min(5000, 500 * Math.pow(2, attempt));
+                const delay = Math.min(5000, 500 * 2 ** attempt);
                 await new Promise(r => setTimeout(r, delay));
             }
         }
@@ -1077,11 +1220,11 @@
                 if (data.error) throw new Error(data.error.message || 'API error');
                 continue;
             }
-            let result = data.choices[0].message.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+            const result = data.choices[0].message.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
             const m = result.match(/\[[\s\S]*\]/);
             if (!m) continue;
             let extracted;
-            try { extracted = JSON.parse(m[0]); } catch (e) { continue; }
+            try { extracted = JSON.parse(m[0]); } catch { continue; }
 
             for (const item of extracted) {
                 if (!item || !item.term || !item.translation) continue;
@@ -1101,13 +1244,12 @@
                     glossary[existingId].count = (glossary[existingId].count || 0) + 1;
                     incremented++;
                 } else {
-                    glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = {
+                    glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = migrateEntry({
                         term: item.term,
                         translation: item.translation,
-                        type: item.type || 'term',
-                        gender: item.gender || 'null',
+                        type: String(item.type || '').trim() || 'Term',
                         count: 1
-                    };
+                    });
                     added++;
                 }
             }
@@ -1193,7 +1335,7 @@
                                 const pct = setProgressByParagraphs(all, totalParas);
                                 $('#stream-status').textContent = `Чанк ${i + 1}/${chunks.length} • ~${pct}%`;
                             }
-                        } catch (e) {}
+                        } catch { /* не-JSON data-строка — пропускаем */ }
                     }
                 }
                 fullTranslation += (fullTranslation ? '\n\n' : '') + chunkTranslation;
@@ -1284,7 +1426,7 @@
             }
         }
         glossary[`${normalize(term)}_${Date.now()}`] = {
-            term, translation, type: $('#new-type').value, gender: $('#new-gender').value, count: 1
+            term, translation, type: $('#new-type').value.trim() || 'Term', count: 1
         };
         saveGlossary(glossary);
         $('#new-term').value = '';
@@ -1304,9 +1446,12 @@
             reader.onload = ev => {
                 try {
                     const imported = JSON.parse(ev.target.result);
+                    // Формат ner.json конвейера — массив записей; старый экспорт Lite — объект.
+                    const srcList = Array.isArray(imported) ? imported : Object.entries(imported).map(([, v]) => v);
                     const glossary = getGlossaryForView();
                     let added = 0, incremented = 0;
-                    for (const [id, t] of Object.entries(imported)) {
+                    for (const raw of srcList) {
+                        const t = migrateEntry({ ...raw });
                         if (!t || !t.term || !t.translation) continue;
                         let existingId = null;
                         for (const [exId, ex] of Object.entries(glossary)) {
@@ -1315,11 +1460,13 @@
                             }
                         }
                         if (existingId) {
-                            const importedCount = typeof t.count === 'number' ? t.count : 1;
-                            glossary[existingId].count = (glossary[existingId].count || 0) + importedCount;
+                            const importedCount = parseInt(t.count, 10);
+                            glossary[existingId].count = (glossary[existingId].count || 0) + (Number.isFinite(importedCount) && importedCount > 0 ? importedCount : 1);
                             incremented++;
                         } else {
-                            glossary[id] = { ...t, count: typeof t.count === 'number' ? t.count : 1 };
+                            const nid = `${normalize(t.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+                            const importedCount = parseInt(t.count, 10);
+                            glossary[nid] = { ...t, count: Number.isFinite(importedCount) && importedCount > 0 ? importedCount : 1 };
                             added++;
                         }
                     }
@@ -1545,5 +1692,20 @@
     $('#btn-autofill-url').addEventListener('click', () => { $('#book-modal-url').value = suggestBookKeyFromUrl(); });
 
     currentBookKey = findBookByUrl();
+
+    // Миграция старых записей Lite (пол в отдельном поле gender) в канон
+    // ner.json конвейера (пол внутри type) — один проход при загрузке.
+    let migrated = false;
+    const migrateCount = g => {
+        for (const t of Object.values(g || {})) {
+            const before = JSON.stringify(t);
+            migrateEntry(t);
+            if (JSON.stringify(t) !== before) migrated = true;
+        }
+    };
+    migrateCount(globalGlossary);
+    for (const b of Object.values(books)) migrateCount(b.glossary);
+    if (migrated) { GM_setValue('globalGlossary', globalGlossary); GM_setValue('books', books); }
+
     console.log(`NovelMaestro Lite v${APP_VERSION} загружен. Книга:`, currentBookKey || 'не определена');
 })();
