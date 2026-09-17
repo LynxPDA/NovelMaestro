@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.11
+// @version      1.12
 // @description  Универсальный переводчик новелл с глоссарием по книгам и стримингом
 // @author       NovelMaestro
 // @match        *://*/*
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 (() => {
-    const APP_VERSION = '1.11';
+    const APP_VERSION = '1.12';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -24,8 +24,9 @@
         targetLang: 'Русский',
         reasoningEffort: 'None',
         chunkSize: 30000,
-        requestTimeout: 0,
+        requestTimeout: 30000,
         maxRetries: 3,
+        localModel: false,
         glossarySource: 'book',
         translationPrompt: 'Переведи следующий текст с {sourceLang} на {targetLang}.\n\nГЛОССАРИЙ ТЕРМИНОВ (обязательно используй эти переводы, сохраняй пол персонажей):\n{glossary}\n\nВАЖНО:\n- Имена и термины переводи точно по глоссарию\n- Сохраняй пол персонажей (он/она) согласно глоссарию\n- Сохраняй стиль оригинала\n- Сохраняй разбивку на абзацы\n- Возвращай ТОЛЬКО перевод, без комментариев\n\nТекст:\n{text}',
         extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang} Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
@@ -381,6 +382,9 @@
             #nm-streaming-panel.active { display: block; }
             .nm-progress-bar { width: 100%; height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; margin-top: 8px; }
             .nm-progress-fill { height: 100%; background: linear-gradient(90deg,#2563eb,#3b82f6); transition: width .3s; width: 0%; }
+            .nm-progress-fill.retry { background: repeating-linear-gradient(45deg, #f59e0b 0 10px, #fbbf24 10px 20px); background-size: 28.3px 28.3px; animation: nm-retry-stripes .8s linear infinite; }
+            @keyframes nm-retry-stripes { to { background-position: 28.3px 0; } }
+            .nm-input:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
             .nm-checkbox-group { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
             .nm-checkbox-group input { width: 18px; height: 18px; cursor: pointer; }
             .nm-checkbox-group label { margin: 0; cursor: pointer; }
@@ -478,7 +482,13 @@
                         <div class="nm-section">
                             <h3>🤖 API</h3>
                             <div class="nm-input-group"><label>API Host:</label><input type="text" class="nm-input" id="api-host"></div>
-                            <div class="nm-input-group"><label>API Key:</label><input type="password" class="nm-input" id="api-key"></div>
+                            <div class="nm-input-group"><label>API Key:</label><input type="password" class="nm-input" id="api-key">
+                                <small>Пустой API Key разрешён при включённом чекбоксе ниже.</small>
+                            </div>
+                            <div class="nm-checkbox-group">
+                                <input type="checkbox" id="local-model">
+                                <label for="local-model">🖥️ Локальная модель без API-ключа (заголовок Authorization не отправляется)</label>
+                            </div>
                             <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
                             <div class="nm-input-group"><label>Уровень reasoning:</label>
                                 <input type="text" class="nm-input" id="reasoning-effort" list="nm-reasoning-list" placeholder="None">
@@ -496,13 +506,13 @@
                         </div>
                         <div class="nm-section">
                             <h3>🌐 Сеть</h3>
-                            <div class="nm-input-group"><label>Таймаут запроса (мс):</label>
+                            <div class="nm-input-group"><label>Таймаут зависания (мс):</label>
                                 <input type="number" class="nm-input" id="request-timeout" min="0" step="1000">
-                                <small>0 = без таймаута. Рекомендовано для длинных переводов: 120000–300000.</small>
+                                <small>0 = без таймаута. Обычно — общий лимит запроса; при стриминге — это пауза без данных: не пришло ни одного символа за это время — запрос считается зависшим и повторяется (с ретраями). По умолчанию 30000.</small>
                             </div>
                             <div class="nm-input-group"><label>Количество ретраев при ошибке:</label>
                                 <input type="number" class="nm-input" id="max-retries" min="0" max="10">
-                                <small>Повторные попытки при сетевых ошибках (не при 4xx/5xx).</small>
+                                <small>Повторные попытки при сетевых ошибках, таймаутах и зависании стриминга (не при HTTP 4xx/5xx). Незаконченный чанк зависшего запроса при ретрае переводится заново; на прогрессбаре ретрай — оранжевые полосы.</small>
                             </div>
                         </div>
                         <div class="nm-section">
@@ -551,7 +561,7 @@
                                 <textarea class="nm-textarea" id="extraction-prompt"></textarea>
                             </div>
                         </div>
-                        <button class="nm-btn nm-btn-primary" id="btn-save-settings">💾 Сохранить настройки</button>
+                        <div class="nm-help" style="margin-bottom:8px;">ℹ️ Настройки сохраняются автоматически при каждом изменении — отдельная кнопка сохранения не нужна.</div>
                         <button class="nm-btn nm-btn-secondary" id="btn-reset-settings">Сбросить настройки</button>
                         <div class="nm-status" id="status-settings"></div>
 
@@ -587,7 +597,7 @@
             </div>
 
             <div id="nm-streaming-panel">
-                <div style="font-weight:600;margin-bottom:8px;">🔄 Перевод...</div>
+                <div id="stream-title" style="font-weight:600;margin-bottom:8px;">🔄 Перевод...</div>
                 <div id="stream-status" style="font-size:13px;color:#6b7280;">Подготовка...</div>
                 <div class="nm-progress-bar"><div class="nm-progress-fill" id="progress-fill"></div></div>
                 <button class="nm-btn nm-btn-danger" id="btn-cancel" style="margin-top:12px;width:100%;">Отменить</button>
@@ -604,6 +614,7 @@
     const streamingPanel = $('#nm-streaming-panel');
     let isTranslating = false;
     let cancelRequested = false;
+    let activeReader = null;
 
     // ===== UI-СЛУЖЕБНЫЕ =====
     function showStatus(msg, type = 'info', id = 'status-book') {
@@ -1005,143 +1016,232 @@
     }
 
     // ===== HTTP с GM_xmlhttpRequest (обход CORS/Mixed Content) =====
+    function makeAbortError(isTimeout) {
+        const e = new Error(isTimeout ? 'Таймаут запроса' : 'Запрос прерван');
+        e.name = 'AbortError';
+        e.isTimeout = !!isTimeout;
+        return e;
+    }
+
+    // менеджер скриптов без стриминга: весь ответ оборачивается в однократный «поток»
+    function streamFromBody(text) {
+        const encoded = new TextEncoder().encode(text || '');
+        return new ReadableStream({ start(c) { c.enqueue(encoded); c.close(); } });
+    }
+
     function customFetch(url, options, isStream = false) {
         if (typeof GM_xmlhttpRequest === 'undefined') {
             return fetch(url, options);
         }
 
         return new Promise((resolve, reject) => {
+            let settled = false;
+            let req = null;
+            const abort = () => { try { if (req) req.abort(); } catch {} };
+            const settleResolve = (v) => { if (!settled) { settled = true; resolve(v); } };
+            const settleReject = (e) => { if (!settled) { settled = true; reject(e); } };
+            const parseInfo = (response) => {
+                const info = { status: response.status || 0, statusText: response.statusText || '', headers: new Headers(), abort };
+                if (response.responseHeaders) {
+                    response.responseHeaders.split(/\r?\n/).forEach(line => {
+                        const i = line.indexOf(':');
+                        if (i > 0) info.headers.append(line.slice(0, i).trim(), line.slice(i + 1).trim());
+                    });
+                }
+                return info;
+            };
+            const httpError = (info, body) => {
+                const err = new Error(`HTTP ${info.status}: ${String(body || '').slice(0, 200)}`);
+                err.status = info.status;
+                return err;
+            };
+
             const reqOptions = {
                 method: options.method || 'GET',
                 url: url,
                 headers: options.headers || {},
                 data: options.body,
                 responseType: isStream ? 'stream' : 'text',
-                onload: function(response) {
-                    if (isStream) {
-                        reject(new Error('Стриминг не удался (onload вместо onloadstart)'));
-                        return;
+                onerror: () => settleReject(new Error('NetworkError: Failed to fetch')),
+                // без onabort прерванный по таймауту GM-запрос не приводил промис в завершённое состояние — запрос висел навсегда
+                onabort: () => settleReject(makeAbortError(false)),
+                ontimeout: () => settleReject(makeAbortError(true))
+            };
+
+            if (isStream) {
+                // стриминг: поток приходит в onloadstart, но статус проверяем заранее —
+                // ошибочный ответ не должен притворяться «пустым» стримом
+                reqOptions.onloadstart = (response) => {
+                    const info = parseInfo(response);
+                    if (info.status >= 400) { settleReject(httpError(info, response.responseText)); return; }
+                    const stream = response.response;
+                    if (stream && typeof stream.getReader === 'function') {
+                        settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body: stream }));
                     }
-                    const respObj = {
-                        ok: response.status >= 200 && response.status < 300,
-                        status: response.status,
-                        statusText: response.statusText,
-                        headers: new Headers(),
-                        text: () => Promise.resolve(response.responseText),
+                };
+                reqOptions.onload = (response) => {
+                    const info = parseInfo(response);
+                    if (info.status >= 400) { settleReject(httpError(info, response.responseText)); return; }
+                    settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body: streamFromBody(response.responseText) }));
+                };
+            } else {
+                reqOptions.onload = (response) => {
+                    const info = parseInfo(response);
+                    const body = response.responseText || '';
+                    const resp = Object.assign(info, {
+                        ok: info.status >= 200 && info.status < 300,
+                        text: () => Promise.resolve(body),
                         json: () => {
                             try {
-                                return Promise.resolve(JSON.parse(response.responseText));
-                            } catch(e) {
+                                return Promise.resolve(JSON.parse(body));
+                            } catch (e) {
                                 return Promise.reject(e);
                             }
                         }
-                    };
-                    if (response.responseHeaders) {
-                        response.responseHeaders.split('\r\n').forEach(line => {
-                            const parts = line.split(': ');
-                            if (parts.length >= 2) {
-                                respObj.headers.append(parts[0], parts.slice(1).join(': '));
-                            }
-                        });
-                    }
-                    if (!respObj.ok) {
-                        const err = new Error(`HTTP ${respObj.status}: ${response.responseText.slice(0, 200)}`);
-                        err.status = respObj.status;
-                        reject(err);
-                    } else {
-                        resolve(respObj);
-                    }
-                },
-                onloadstart: function(response) {
-                    if (isStream) {
-                        const stream = response.response;
-                        if (stream && typeof stream.getReader === 'function') {
-                            resolve({
-                                ok: true,
-                                status: 200,
-                                body: stream
-                            });
-                        } else {
-                            reject(new Error('Стриминг не поддерживается данным менеджером скриптов'));
-                        }
-                    }
-                },
-                onerror: function(err) {
-                    reject(new Error(`NetworkError: ${err.statusText || 'Failed to fetch'}`));
-                },
-                ontimeout: function() {
-                    reject(new Error('Request Timeout'));
-                }
-            };
+                    });
+                    if (resp.ok) settleResolve(resp);
+                    else settleReject(httpError(info, body));
+                };
+            }
 
-            const req = GM_xmlhttpRequest(reqOptions);
-
+            req = GM_xmlhttpRequest(reqOptions);
             if (options.signal) {
-                if (options.signal.aborted) {
-                    req.abort();
-                    reject(new DOMException('Aborted', 'AbortError'));
-                    return;
-                }
-                options.signal.addEventListener('abort', () => {
-                    req.abort();
-                });
+                if (options.signal.aborted) { abort(); settleReject(makeAbortError(false)); return; }
+                options.signal.addEventListener('abort', () => { abort(); settleReject(makeAbortError(false)); });
             }
         });
     }
 
-    async function fetchWithRetry(url, options, isStream = false) {
-        const timeout = config.requestTimeout > 0 ? config.requestTimeout : 0;
-        const maxRetries = isStream ? 0 : (config.maxRetries || 0);
-        let lastErr;
+    // Одна попытка запроса. Таймаут: обычный запрос — общее время; стриминг — время
+    // без единого символа (зависание). AbortController новый на каждую попытку:
+    // переиспользованный aborted-сигнал мгновенно убивал все ретраи (старый баг).
+    async function fetchAttempt(url, options, isStream, timeout, cb) {
+        const controller = timeout > 0 ? new AbortController() : null;
+        const attemptOptions = controller ? { ...options, signal: controller.signal } : options;
+        let timer = null;
+        let abortedByTimer = false;
+        let reader = null;
+        const arm = () => {
+            if (!controller) return;
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => {
+                abortedByTimer = true;
+                // AbortSignal не доходит до reader'а некоторых менеджеров: закрываем читателя явно
+                if (reader) { try { reader.cancel(); } catch {} }
+                controller.abort();
+            }, timeout);
+        };
+        const disarm = () => { if (timer) { clearTimeout(timer); timer = null; } };
 
-        for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            let controller = null;
-            let timer = null;
-
-            if (timeout > 0) {
-                controller = new AbortController();
-                timer = setTimeout(() => controller.abort(), timeout);
-                options = { ...options, signal: controller.signal };
-            }
-
-            try {
-                const resp = await customFetch(url, options, isStream);
-                if (timer) clearTimeout(timer);
-
-                if (!resp.ok && !isStream) {
+        arm();
+        try {
+            const resp = await customFetch(url, attemptOptions, isStream);
+            if (!isStream) {
+                if (!resp.ok) {
                     const errText = await resp.text().catch(() => '');
                     const err = new Error(`HTTP ${resp.status}: ${errText.slice(0, 200)}`);
                     err.status = resp.status;
                     throw err;
                 }
                 return resp;
-            } catch (e) {
-                if (timer) clearTimeout(timer);
-                lastErr = e;
-                const isAbort = e.name === 'AbortError';
-                const isHttpErr = e.status && e.status >= 400;
+            }
 
-                if (isHttpErr || attempt >= maxRetries) throw e;
-                if (isAbort && timeout > 0 && attempt >= maxRetries) {
-                    throw new Error(`Таймаут ${timeout}мс истёк после ${maxRetries + 1} попыток`);
+            if (!resp || !resp.body || typeof resp.body.getReader !== 'function') {
+                throw new Error('Сервер не поддерживает стриминг');
+            }
+            reader = resp.body.getReader();
+            activeReader = reader;
+            const decoder = new TextDecoder();
+            let text = '';
+            let buffer = '';
+            const handleLine = (line) => {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('data:')) return;
+                const payload = trimmed.slice(5).trim();
+                if (payload === '[DONE]') return;
+                try {
+                    const parsed = JSON.parse(payload);
+                    const content = parsed.choices?.[0]?.delta?.content || '';
+                    if (content) { text += content; if (cb.onDelta) cb.onDelta(content); }
+                } catch { /* не-JSON data-строка — пропускаем */ }
+            };
+
+            while (true) {
+                if (cancelRequested) break;
+                let done, value;
+                try {
+                    ({ done, value } = await reader.read());
+                } catch (e) {
+                    // при отмене стрима read() может не завершиться, а отвалиться —
+                    // это тот же конец потока: разбор сделает abortedByTimer/cancelRequested
+                    if (abortedByTimer || cancelRequested) break;
+                    throw e;
                 }
-                const delay = Math.min(5000, 500 * 2 ** attempt);
+                if (cancelRequested) break;
+                if (abortedByTimer) break;
+                if (done) break;
+                arm();
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+                lines.forEach(handleLine);
+            }
+            if (!cancelRequested && !abortedByTimer) {
+                // сбрасываем декодер и последнюю data-строку без перевода строки в конце
+                buffer += decoder.decode();
+                handleLine(buffer);
+            }
+            if (cancelRequested) throw new Error('Отменено пользователем');
+            if (abortedByTimer) throw makeAbortError(true);
+            return { text };
+        } finally {
+            disarm();
+            if (reader && activeReader === reader) activeReader = null;
+        }
+    }
+
+    async function fetchWithRetry(url, options, isStream = false, cb = {}) {
+        const timeout = config.requestTimeout > 0 ? config.requestTimeout : 0;
+        const maxRetries = config.maxRetries || 0;
+        const attemptsTotal = maxRetries + 1;
+        let lastErr;
+
+        for (let attempt = 1; attempt <= attemptsTotal; attempt++) {
+            if (cancelRequested) throw new Error('Отменено пользователем');
+            try {
+                return await fetchAttempt(url, options, isStream, timeout, cb);
+            } catch (e) {
+                if (e.name === 'AbortError') {
+                    e.isTimeout = true;
+                    e.message = `Таймаут ${timeout}мс: запрос завис`;
+                }
+                lastErr = e;
+                if (e.status >= 400 || cancelRequested || attempt >= attemptsTotal) throw e;
+                if (cb.onRetry) cb.onRetry({ nextAttempt: attempt + 1, attemptsTotal, isTimeout: !!e.isTimeout, message: e.message || 'Сетевая ошибка' });
+                const delay = Math.min(5000, 500 * 2 ** (attempt - 1));
                 await new Promise(r => setTimeout(r, delay));
             }
         }
         throw lastErr;
     }
 
-    async function callLLM(messages, temperature, stream) {
+    function llmRequestOptions(messages, temperature, stream) {
         const body = { model: config.model, messages, temperature, stream: !!stream };
         const re = String(config.reasoningEffort ?? '').trim();
         // Не передаём 'None' в API, чтобы избежать ошибок валидации у провайдеров
         if (re !== '' && re.toLowerCase() !== 'none') body.reasoning_effort = re;
-        return await fetchWithRetry(config.apiHost.replace(/\/$/, '') + '/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` },
-            body: JSON.stringify(body)
-        }, stream);
+        const headers = { 'Content-Type': 'application/json' };
+        // локальная модель без ключа: заголовок Authorization не отправляется вовсе
+        if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+        return {
+            url: config.apiHost.replace(/\/$/, '') + '/chat/completions',
+            options: { method: 'POST', headers, body: JSON.stringify(body) }
+        };
+    }
+
+    async function callLLM(messages, temperature, stream, cb = {}) {
+        const { url, options } = llmRequestOptions(messages, temperature, stream);
+        return await fetchWithRetry(url, options, !!stream, cb);
     }
 
     // ===== ПРОВЕРКА СЕРВЕРА =====
@@ -1151,35 +1251,17 @@
         statusEl.textContent = '🔌 Проверяю сервер...';
 
         if (!config.apiHost) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Host'; return; }
-        if (!config.apiKey) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Key'; return; }
+        if (!config.apiKey && !config.localModel) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Key (или включите «Локальная модель без API-ключа»)'; return; }
         if (!config.model) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указана модель'; return; }
 
         const start = Date.now();
         try {
-            const body = {
-                model: config.model,
-                messages: [{ role: 'user', content: 'ping' }],
-                max_tokens: 5,
-                temperature: 0
-            };
-            const re = String(config.reasoningEffort ?? '').trim();
-            if (re !== '' && re.toLowerCase() !== 'none') body.reasoning_effort = re;
-
-            const resp = await fetchWithRetry(config.apiHost.replace(/\/$/, '') + '/chat/completions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` },
-                body: JSON.stringify(body)
-            }, false);
-
+            const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, false);
+            const payload = JSON.parse(options.body);
+            payload.max_tokens = 5;
+            const resp = await fetchWithRetry(url, { ...options, body: JSON.stringify(payload) }, false);
             const elapsed = Date.now() - start;
             const data = await resp.json().catch(() => null);
-
-            if (!resp.ok) {
-                const msg = data?.error?.message || `HTTP ${resp.status}`;
-                statusEl.className = 'nm-server-status show err';
-                statusEl.textContent = `❌ Ошибка: ${msg} (${elapsed}мс)`;
-                return;
-            }
 
             if (data && data.error) {
                 statusEl.className = 'nm-server-status show err';
@@ -1191,9 +1273,9 @@
                 let preview = '';
                 try {
                     preview = await resp.text();
-                } catch(e) {}
+                } catch {}
                 statusEl.className = 'nm-server-status show err';
-                statusEl.textContent = `❌ Некорректный ответ API: ${(preview || 'Пустой ответ').slice(0, 150)} (${elapsed}мс)`;
+                statusEl.textContent = `❌ Некорректный ответ API: ${(String(preview).trim() || 'Пустой ответ').slice(0, 150)} (${elapsed}мс)`;
                 return;
             }
 
@@ -1206,26 +1288,50 @@
         }
     }
 
-    // ===== ИЗВЛЕЧЕНИЕ ТЕРМИНОВ (со счётчиком) =====
-    async function extractTermsFromText(text, targetKey) {
+    // ===== ИЗВЛЕЧЕНИЕ ТЕРМИНОВ (со стримингом и прогресс-баром) =====
+    // Эвристика прогресса: ожидаемый размер ответа с терминами ≈ 2× размера
+    // исходного чанка (размер чанка — примерно половина ожидаемого размера
+    // ответа). Проценты считаются по символам, полученным от LLM стримингом.
+    const NER_RESPONSE_RATIO = 2;
+
+    async function extractTermsFromText(text, targetKey, onProgress) {
         const chunks = splitByNewlines(text, config.chunkSize);
         const glossary = targetKey === 'global' ? { ...globalGlossary }
                        : (books[targetKey] ? { ...(books[targetKey].glossary || {}) } : {});
+        const expectedTotal = Math.max(1, Math.round(text.length * NER_RESPONSE_RATIO));
+        let streamed = 0;
         let added = 0, incremented = 0;
+        const emitProgress = (i, retry) => {
+            if (onProgress) {
+                onProgress({
+                    chunk: i + 1,
+                    total: chunks.length,
+                    pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)),
+                    retry: retry || null
+                });
+            }
+        };
 
         for (let i = 0; i < chunks.length; i++) {
             if (cancelRequested) break;
+            const charsBefore = streamed;
             const userPrompt = config.extractionPrompt
                 .replace('{targetLang}', config.targetLang)
                 .replace('{text}', chunks[i]);
 
-            const response = await callLLM([{ role: 'user', content: userPrompt }], 0.3, false);
-            const data = await response.json();
-            if (!data.choices || !data.choices[0]) {
-                if (data.error) throw new Error(data.error.message || 'API error');
-                continue;
+            let result;
+            try {
+                const res = await callLLM([{ role: 'user', content: userPrompt }], 0.3, true, {
+                    onDelta: (piece) => { streamed += piece.length; emitProgress(i); },
+                    onRetry: (info) => { streamed = charsBefore; emitProgress(i, info); }
+                });
+                result = res.text;
+            } catch (e) {
+                if (cancelRequested) { emitProgress(i); break; }
+                throw e;
             }
-            const result = data.choices[0].message.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+
+            result = result.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
             const m = result.match(/\[[\s\S]*\]/);
             if (!m) continue;
             let extracted;
@@ -1276,29 +1382,27 @@
         }
     }
 
-    function setProgressByParagraphs(translatedText, totalParas) {
-        const done = paragraphsOf(translatedText).length;
-        const pct = totalParas > 0 ? Math.min(99, Math.round((done / totalParas) * 100)) : 0;
-        $('#progress-fill').style.width = pct + '%';
-        return pct;
-    }
-
-    async function translateWithStreaming(element) {
-        const originalText = extractMainText(element);
+    async function translateWithStreaming(element, originalText) {
         const totalParas = paragraphsOf(originalText).length;
         if (totalParas === 0) { $('#stream-status').textContent = '❌ Текст не найден'; return; }
 
         const chunks = splitByNewlines(originalText, config.chunkSize);
-        isTranslating = true;
-        cancelRequested = false;
-        streamingPanel.classList.add('active');
-        $('#btn-translate').disabled = true;
+        const fill = $('#progress-fill');
+        fill.classList.remove('retry');
 
         let fullTranslation = '';
+        const setProgress = (all) => {
+            const done = paragraphsOf(all).length;
+            const pct = totalParas > 0 ? Math.min(99, Math.round((done / totalParas) * 100)) : 0;
+            fill.style.width = pct + '%';
+            return pct;
+        };
+
         try {
             element.innerHTML = '';
             for (let i = 0; i < chunks.length; i++) {
                 if (cancelRequested) throw new Error('Отменено пользователем');
+                fill.classList.remove('retry');
                 $('#stream-status').textContent = `Чанк ${i + 1}/${chunks.length} • абзацев в источнике: ${totalParas}`;
 
                 const glossaryText = formatGlossaryForPrompt(findRelevantTerms(chunks[i]));
@@ -1308,54 +1412,46 @@
                     .replace('{glossary}', glossaryText)
                     .replace('{text}', chunks[i]);
 
-                const response = await callLLM([{ role: 'user', content: userPrompt }], 0.7, true);
-                if (!response.body) throw new Error('Сервер не поддерживает стриминг');
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
                 let chunkTranslation = '';
-                let buffer = '';
-
-                while (true) {
-                    if (cancelRequested) { reader.cancel(); throw new Error('Отменено пользователем'); }
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-                    for (const line of lines) {
-                        const trimmed = line.trim();
-                        if (!trimmed.startsWith('data:')) continue;
-                        const payload = trimmed.slice(5).trim();
-                        if (payload === '[DONE]') continue;
-                        try {
-                            const parsed = JSON.parse(payload);
-                            const content = parsed.choices?.[0]?.delta?.content || '';
-                            if (content) {
-                                chunkTranslation += content;
-                                const all = fullTranslation + (fullTranslation ? '\n\n' : '') + chunkTranslation;
-                                renderTranslationInto(element, all);
-                                const pct = setProgressByParagraphs(all, totalParas);
-                                $('#stream-status').textContent = `Чанк ${i + 1}/${chunks.length} • ~${pct}%`;
-                            }
-                        } catch { /* не-JSON data-строка — пропускаем */ }
+                const res = await callLLM([{ role: 'user', content: userPrompt }], 0.7, true, {
+                    onDelta: (content) => {
+                        chunkTranslation += content;
+                        const all = fullTranslation + (fullTranslation ? '\n\n' : '') + chunkTranslation;
+                        renderTranslationInto(element, all);
+                        const pct = setProgress(all);
+                        $('#stream-status').textContent = `Чанк ${i + 1}/${chunks.length} • ~${pct}%`;
+                    },
+                    onRetry: (info) => {
+                        // при ретрае чанк переводится целиком заново — незакрытый кусок сбрасываем
+                        chunkTranslation = '';
+                        renderTranslationInto(element, fullTranslation);
+                        setProgress(fullTranslation);
+                        fill.classList.add('retry');
+                        $('#stream-status').textContent = `⏱ ${info.message} — повторная попытка ${info.nextAttempt}/${info.attemptsTotal}`;
                     }
-                }
-                fullTranslation += (fullTranslation ? '\n\n' : '') + chunkTranslation;
+                });
+                fullTranslation += (fullTranslation ? '\n\n' : '') + res.text;
+                fill.classList.remove('retry');
+                renderTranslationInto(element, fullTranslation);
+                setProgress(fullTranslation);
             }
             $('#stream-status').textContent = '✅ Перевод завершён!';
-            $('#progress-fill').style.width = '100%';
+            fill.style.width = '100%';
         } catch (error) {
             $('#stream-status').textContent = '❌ ' + error.message;
             if (fullTranslation) renderTranslationInto(element, fullTranslation + '\n\n[ПЕРЕВОД ПРЕРВАН: ' + error.message + ']');
         } finally {
-            isTranslating = false;
-            $('#btn-translate').disabled = false;
-            setTimeout(() => {
-                streamingPanel.classList.remove('active');
-                $('#progress-fill').style.width = '0%';
-            }, 2500);
+            fill.classList.remove('retry');
         }
+    }
+
+    function updateExtractionProgress(st) {
+        const fill = $('#progress-fill');
+        fill.classList.toggle('retry', !!st.retry);
+        fill.style.width = st.pct + '%';
+        $('#stream-status').textContent = st.retry
+            ? `⏱ ${st.retry.message} — повторная попытка ${st.retry.nextAttempt}/${st.retry.attemptsTotal}`
+            : `🔍 Термины: чанк ${st.chunk}/${st.total} • ~${st.pct}%`;
     }
 
     async function handleTranslate() {
@@ -1366,52 +1462,90 @@
         const element = findContentElement();
         const text = extractMainText(element);
         if (!text.trim()) { alert('Текст не найден на странице'); return; }
-        if (!config.apiKey) { alert('Укажите API Key в настройках (⚙️)'); openModal(); return; }
+        if (!config.apiKey && !config.localModel) { alert('Укажите API Key в настройках (⚙️) или включите «Локальная модель без API-ключа»'); openModal(); return; }
 
+        isTranslating = true;
+        cancelRequested = false;
         streamingPanel.classList.add('active');
         $('#progress-fill').style.width = '0%';
+        $('#btn-translate').disabled = true;
 
-        if (config.autoNER) {
-            if (isNerDoneForPage(currentBookKey)) {
-                $('#stream-status').textContent = '✨ Термины для этой страницы уже извлекались';
-                await new Promise(r => setTimeout(r, 800));
-            } else {
-                $('#stream-status').textContent = '🔍 Извлечение терминов...';
-                try {
-                    const { added, incremented } = await extractTermsFromText(text, currentBookKey);
-                    markNerDone(currentBookKey);
-                    $('#stream-status').textContent = `✨ +${added} новых, обновлено частот: ${incremented}`;
+        try {
+            if (config.autoNER) {
+                $('#stream-title').textContent = '🔍 Извлечение терминов';
+                if (isNerDoneForPage(currentBookKey)) {
+                    $('#stream-status').textContent = '✨ Термины для этой страницы уже извлекались';
                     await new Promise(r => setTimeout(r, 800));
-                } catch (error) {
-                    $('#stream-status').textContent = '⚠️ NER: ' + error.message;
-                    await new Promise(r => setTimeout(r, 1500));
+                } else {
+                    try {
+                        const { added, incremented } = await extractTermsFromText(text, currentBookKey, updateExtractionProgress);
+                        markNerDone(currentBookKey);
+                        $('#progress-fill').style.width = '100%';
+                        $('#stream-status').textContent = `✨ +${added} новых, обновлено частот: ${incremented}`;
+                        await new Promise(r => setTimeout(r, 800));
+                    } catch (error) {
+                        if (!cancelRequested) {
+                            $('#stream-status').textContent = '⚠️ NER: ' + error.message;
+                            await new Promise(r => setTimeout(r, 1500));
+                        }
+                    }
                 }
             }
+            if (cancelRequested) {
+                $('#stream-title').textContent = '⏹ Отменено';
+                $('#stream-status').textContent = 'Отменено пользователем';
+                return;
+            }
+            $('#stream-title').textContent = '🔄 Перевод...';
+            await translateWithStreaming(element, text);
+        } finally {
+            isTranslating = false;
+            $('#btn-translate').disabled = false;
+            setTimeout(() => {
+                streamingPanel.classList.remove('active');
+                $('#progress-fill').style.width = '0%';
+                $('#progress-fill').classList.remove('retry');
+            }, 2500);
         }
-
-        await translateWithStreaming(element);
     }
 
     async function handleExtractTerms() {
+        if (isTranslating) return;
         const current = getCurrentBook();
         const targetKey = currentGlossaryMode === 'global' ? 'global'
                         : (selectedBookKey || (current ? current.key : null));
         if (!targetKey) { showStatus('Сначала определите книгу', 'error', 'status-glossary'); return; }
-        if (!config.apiKey) { showStatus('Укажите API Key в настройках', 'error', 'status-glossary'); return; }
+        if (!config.apiKey && !config.localModel) { showStatus('Укажите API Key в настройках или включите «Локальная модель без API-ключа»', 'error', 'status-glossary'); return; }
 
         const element = findContentElement();
         const text = extractMainText(element);
         if (!text.trim()) { showStatus('Текст не найден', 'error', 'status-glossary'); return; }
 
-        showStatus('Извлечение терминов (игнорирует кэш страниц)...', 'info', 'status-glossary');
+        isTranslating = true;
+        cancelRequested = false;
+        $('#stream-title').textContent = '🔍 Извлечение терминов';
+        streamingPanel.classList.add('active');
+        $('#progress-fill').style.width = '0%';
+        $('#progress-fill').classList.remove('retry');
+        showStatus('Извлечение терминов...', 'info', 'status-glossary');
         try {
-            const { added, incremented } = await extractTermsFromText(text, targetKey);
+            const { added, incremented } = await extractTermsFromText(text, targetKey, updateExtractionProgress);
             if (targetKey !== 'global') markNerDone(targetKey);
-            showStatus(`✨ +${added} новых, обновлено частот: ${incremented}`, 'success', 'status-glossary');
+            $('#progress-fill').style.width = '100%';
+            showStatus(cancelRequested
+                ? `⏹ Извлечение остановлено: +${added} новых, обновлено частот: ${incremented}`
+                : `✨ +${added} новых, обновлено частот: ${incremented}`, 'success', 'status-glossary');
             updateGlossaryUI();
             refreshBookTab();
         } catch (error) {
             showStatus('Ошибка: ' + error.message, 'error', 'status-glossary');
+        } finally {
+            isTranslating = false;
+            setTimeout(() => {
+                streamingPanel.classList.remove('active');
+                $('#progress-fill').style.width = '0%';
+                $('#progress-fill').classList.remove('retry');
+            }, 1200);
         }
     }
 
@@ -1509,7 +1643,7 @@
         showStatus('Глоссарий очищен', 'success', 'status-glossary');
     }
 
-    // ===== НАСТРОЙКИ =====
+    // ===== НАСТРОЙКИ (автосохранение) =====
     function loadSettings() {
         $('#api-host').value = config.apiHost;
         $('#api-key').value = config.apiKey;
@@ -1521,30 +1655,58 @@
         $('#source-lang').value = config.sourceLang;
         $('#target-lang').value = config.targetLang;
         $('#fuzzy-threshold').value = config.fuzzySearchThreshold;
-        $('#auto-ner').checked = config.autoNER;
+        $('#auto-ner').checked = !!config.autoNER;
+        $('#local-model').checked = !!config.localModel;
+        $('#api-key').disabled = !!config.localModel;
         $$('input[name="glossary-source"]').forEach(r => { r.checked = (r.value === config.glossarySource); });
         $('#translation-prompt').value = config.translationPrompt;
         $('#extraction-prompt').value = config.extractionPrompt;
     }
 
-    function saveSettings() {
-        config.apiHost = $('#api-host').value.trim();
-        config.apiKey = $('#api-key').value.trim();
-        config.model = $('#model').value.trim();
-        config.reasoningEffort = $('#reasoning-effort').value;
-        config.requestTimeout = parseInt($('#request-timeout').value) || 0;
-        config.maxRetries = Math.max(0, parseInt($('#max-retries').value) || 0);
-        config.chunkSize = parseInt($('#chunk-size').value) || 30000;
-        config.sourceLang = $('#source-lang').value;
-        config.targetLang = $('#target-lang').value;
-        config.fuzzySearchThreshold = parseFloat($('#fuzzy-threshold').value);
-        config.autoNER = $('#auto-ner').checked;
-        const radio = shadow.querySelector('input[name="glossary-source"]:checked');
-        config.glossarySource = radio ? radio.value : 'book';
-        config.translationPrompt = $('#translation-prompt').value;
-        config.extractionPrompt = $('#extraction-prompt').value;
+    // Настройки сохраняются сами: любое изменение поля с дебаунсом пишется в хранилище.
+    const SETTING_FIELDS = [
+        ['#api-host', 'apiHost', v => v.trim()],
+        ['#api-key', 'apiKey', v => v.trim()],
+        ['#model', 'model', v => v.trim()],
+        ['#reasoning-effort', 'reasoningEffort', v => v],
+        ['#request-timeout', 'requestTimeout', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 0 ? n : 0; }],
+        ['#max-retries', 'maxRetries', v => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : 3; }],
+        ['#chunk-size', 'chunkSize', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : DEFAULT_CONFIG.chunkSize; }],
+        ['#source-lang', 'sourceLang', v => v],
+        ['#target-lang', 'targetLang', v => v],
+        ['#fuzzy-threshold', 'fuzzySearchThreshold', v => { const f = parseFloat(v); return Number.isFinite(f) ? f : DEFAULT_CONFIG.fuzzySearchThreshold; }],
+        ['#translation-prompt', 'translationPrompt', v => v],
+        ['#extraction-prompt', 'extractionPrompt', v => v]
+    ];
+    let settingsSaveTimer = null;
+    function persistSettings() {
         GM_setValue('config', config);
-        showStatus('Настройки сохранены!', 'success', 'status-settings');
+        showStatus('✅ Настройки сохранены автоматически', 'success', 'status-settings');
+    }
+    function scheduleSettingsSave() {
+        clearTimeout(settingsSaveTimer);
+        settingsSaveTimer = setTimeout(persistSettings, 400);
+    }
+    function bindSettingsAutoSave() {
+        for (const [sel, key, parse] of SETTING_FIELDS) {
+            const el = $(sel);
+            const save = () => { config[key] = parse(el.value); scheduleSettingsSave(); };
+            el.addEventListener('input', save);
+            el.addEventListener('change', save);
+        }
+        const autoNer = $('#auto-ner');
+        autoNer.addEventListener('change', () => { config.autoNER = autoNer.checked; scheduleSettingsSave(); });
+        const localModel = $('#local-model');
+        localModel.addEventListener('change', () => {
+            config.localModel = localModel.checked;
+            $('#api-key').disabled = localModel.checked;
+            scheduleSettingsSave();
+        });
+        $$('input[name="glossary-source"]').forEach(r => {
+            r.addEventListener('change', () => {
+                if (r.checked) { config.glossarySource = r.value; scheduleSettingsSave(); }
+            });
+        });
     }
 
     function resetSettings() {
@@ -1678,17 +1840,28 @@
     $('#btn-import').addEventListener('click', importGlossary);
     $('#btn-export').addEventListener('click', exportGlossary);
     $('#btn-clear-glossary').addEventListener('click', clearGlossary);
-    $('#btn-save-settings').addEventListener('click', saveSettings);
     $('#btn-reset-settings').addEventListener('click', resetSettings);
     $('#btn-check-server').addEventListener('click', checkServer);
     $('#btn-full-export').addEventListener('click', exportAllData);
     $('#btn-full-import').addEventListener('click', importAllData);
-    $('#btn-cancel').addEventListener('click', () => { cancelRequested = true; });
+    $('#btn-cancel').addEventListener('click', () => {
+        cancelRequested = true;
+        // при зависании read() флаг сам не срабатывает: будим стрим отменой читателя
+        if (activeReader) { try { activeReader.cancel(); } catch {} }
+    });
     $('#btn-save-new-book').addEventListener('click', saveNewBook);
     $('#btn-cancel-new-book').addEventListener('click', () => bookModal.classList.remove('active'));
     $('#btn-autofill-url').addEventListener('click', () => { $('#book-modal-url').value = suggestBookKeyFromUrl(); });
 
     currentBookKey = findBookByUrl();
+    bindSettingsAutoSave();
+
+    // разовая миграция: старый дефолт requestTimeout=0 → 30-секундный таймаут зависания
+    if (config.requestTimeout === 0 && !config.timeoutMigrated) {
+        config.requestTimeout = 30000;
+        config.timeoutMigrated = true;
+        GM_setValue('config', config);
+    }
 
     let migrated = false;
     const migrateCount = g => {
