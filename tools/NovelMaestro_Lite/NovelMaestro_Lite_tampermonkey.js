@@ -1,19 +1,19 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.10
+// @version      1.11
 // @description  Универсальный переводчик новелл с глоссарием по книгам и стримингом
 // @author       NovelMaestro
 // @match        *://*/*
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_xmlhttpRequest
+// @connect      *
 // @run-at       document-idle
 // ==/UserScript==
 
 (() => {
-    
-
-    const APP_VERSION = '1.10';
+    const APP_VERSION = '1.11';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -24,7 +24,7 @@
         targetLang: 'Русский',
         reasoningEffort: 'None',
         chunkSize: 30000,
-        requestTimeout: 0,          // мс; 0 = без таймаута
+        requestTimeout: 0,
         maxRetries: 3,
         glossarySource: 'book',
         translationPrompt: 'Переведи следующий текст с {sourceLang} на {targetLang}.\n\nГЛОССАРИЙ ТЕРМИНОВ (обязательно используй эти переводы, сохраняй пол персонажей):\n{glossary}\n\nВАЖНО:\n- Имена и термины переводи точно по глоссарию\n- Сохраняй пол персонажей (он/она) согласно глоссарию\n- Сохраняй стиль оригинала\n- Сохраняй разбивку на абзацы\n- Возвращай ТОЛЬКО перевод, без комментариев\n\nТекст:\n{text}',
@@ -41,7 +41,6 @@
     let selectedBookKey = null;
     let managedBookKey = null;
 
-    // Состояние таблицы глоссария
     let glossarySort = { field: 'count', dir: 'desc' };
     let glossaryPage = 0;
     const PAGE_SIZE = 25;
@@ -51,16 +50,13 @@
     const MAX_CACHE_SIZE = 1000;
 
     // ===== УТИЛИТЫ ПОИСКА =====
-
     function normalize(str) { return String(str).trim().toLowerCase(); }
-
     function ngrams(str, n = 2) {
         const s = normalize(str);
         const grams = new Set();
         for (let i = 0; i <= s.length - n; i++) grams.add(s.slice(i, i + n));
         return grams;
     }
-
     function getCachedNgrams(str) {
         if (ngramCache.has(str)) return ngramCache.get(str);
         if (ngramCache.size >= MAX_CACHE_SIZE) ngramCache.clear();
@@ -68,7 +64,6 @@
         ngramCache.set(str, g);
         return g;
     }
-
     function ngramSimilarity(a, b) {
         const g1 = getCachedNgrams(a), g2 = getCachedNgrams(b);
         if (g1.size === 0 || g2.size === 0) return 0;
@@ -78,15 +73,12 @@
         const union = g1.size + g2.size - inter;
         return union === 0 ? 0 : inter / union;
     }
-
     function splitIntoWords(term) {
         const cjk = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/;
         if (cjk.test(term)) return [term];
         return term.split(/\s+/).filter(w => w.length > 0);
     }
-
     function isLetterOrDigit(ch) { return /[\p{L}\p{N}]/u.test(ch); }
-
     function matchWordWithBoundary(text, word) {
         const w = normalize(word), t = text.toLowerCase();
         let idx = 0;
@@ -98,7 +90,6 @@
         }
         return false;
     }
-
     function fuzzyMatchWord(text, word, threshold) {
         for (const w of splitIntoWords(word)) {
             if (matchWordWithBoundary(text, w)) continue;
@@ -115,11 +106,7 @@
         }
         return true;
     }
-
-    function paragraphsOf(text) {
-        return text.split(/\n+/).map(s => s.trim()).filter(s => s.length > 0);
-    }
-
+    function paragraphsOf(text) { return text.split(/\n+/).map(s => s.trim()).filter(s => s.length > 0); }
     function splitByNewlines(text, chunkSize) {
         const paras = paragraphsOf(text);
         const chunks = [];
@@ -137,9 +124,7 @@
     }
 
     // ===== КНИГИ И КЭШ NER =====
-
     function pageCacheKey() { return location.href.split('#')[0]; }
-
     function suggestBookKeyFromUrl() {
         const key = location.pathname
             .replace(/\/(chapter|ch|c|p|page|volume|v|ep|episode|txt)\/?\d+\/?/gi, '/')
@@ -148,24 +133,20 @@
             .replace(/^\/+/, '');
         return location.hostname + (key ? '/' + key : '');
     }
-
     function findBookByUrl() {
         const url = location.href;
         for (const key of Object.keys(books)) if (url.includes(key)) return key;
         return null;
     }
-
     function getCurrentBook() {
         if (!currentBookKey) currentBookKey = findBookByUrl();
         if (currentBookKey && books[currentBookKey]) return { key: currentBookKey, book: books[currentBookKey] };
         return null;
     }
-
     function isNerDoneForPage(bookKey) {
         const b = books[bookKey];
         return !!(b && b.nerDone && b.nerDone[pageCacheKey()]);
     }
-
     function markNerDone(bookKey) {
         const b = books[bookKey];
         if (!b) return;
@@ -173,7 +154,6 @@
         b.nerDone[pageCacheKey()] = Date.now();
         GM_setValue('books', books);
     }
-
     function clearNerCache(bookKey) {
         const b = books[bookKey];
         if (!b) return;
@@ -182,13 +162,11 @@
     }
 
     // ===== ГЛОССАРИИ =====
-
     function getGlossaryForView() {
         if (currentGlossaryMode === 'global') return globalGlossary;
         const key = selectedBookKey || currentBookKey;
         return (key && books[key]) ? (books[key].glossary || {}) : {};
     }
-
     function saveGlossary(glossary, targetKey) {
         if (targetKey === 'global' || (currentGlossaryMode === 'global' && !targetKey)) {
             globalGlossary = glossary;
@@ -198,16 +176,11 @@
             if (key && books[key]) { books[key].glossary = glossary; GM_setValue('books', books); }
         }
     }
-
     function getGlossaryForTranslation() {
         if (config.glossarySource === 'global') return { ...globalGlossary };
         const cur = getCurrentBook();
         return cur ? { ...(cur.book.glossary || {}) } : {};
     }
-
-    // ===== ТИПЫ И ПОЛ (совместимость с ner.json конвейера) =====
-    // Канон полного конвейера: пол живёт ВНУТРИ type — «Person (male)»,
-    // «Creature (female)», «Person (unknown)» (см. core/common.py::_gender_of_type).
 
     function genderOf(typeStr) {
         const t = String(typeStr || '').toLowerCase();
@@ -216,27 +189,17 @@
         if (t.includes('(unknown)')) return 'unknown';
         return '';
     }
-
-    // Возвращает type с заменённым суффиксом пола: «Location» + male →
-    // «Location (male)», «Person (female)» + '' → «Person». Пустой type при
-    // установке пола получает базу «Person» (пол бывает только у персонажей).
     function withGender(typeStr, gender) {
         const base = String(typeStr || '').replace(/\s*\((?:male|female|unknown)\)\s*$/i, '').trim();
         if (!gender) return base;
         return `${base || 'Person'} (${gender})`;
     }
-
-    // Старый формат Lite: enum-типы character/location/… и отдельное поле
-    // gender (male/female/neutral/null) — приводим к канону конвейера:
-    // тип «Person (male)» и т.п., поле gender выпиливается.
     const LEGACY_TYPE_MAP = { character: 'Person', creature: 'Creature', location: 'Location', artifact: 'Artifact', organization: 'Organisation', organisation: 'Organisation', term: 'Term', other: 'Other' };
     function migrateEntry(t) {
         if (!t || typeof t !== 'object') return t;
-        // 1) enum-тип или пустой type → каноническое имя (baseType = 'Person' и т.п.)
         const rawType = String(t.type || '').trim();
         const legacy = LEGACY_TYPE_MAP[rawType.toLowerCase()];
         let base = legacy || rawType.replace(/\s*\((?:male|female|unknown)\)\s*$/i, '').trim();
-        // 2) пол: из type, иначе из старого поля gender; neutral → (unknown)
         let gender = genderOf(t.type);
         if (!gender && t.gender && t.gender !== 'null') {
             gender = t.gender === 'neutral' ? 'unknown' : t.gender;
@@ -247,8 +210,6 @@
         delete t.gender;
         return t;
     }
-
-    // Типы, реально присутствующие в глоссарии — база для подсказок UI.
     function glossaryTypes(glossary) {
         const types = new Set();
         for (const t of Object.values(glossary || {})) {
@@ -257,8 +218,6 @@
         }
         return [...types].sort((a, b) => a.localeCompare(b, 'ru'));
     }
-
-    // Список подсказок: типы глоссария + канонические примеры конвейера.
     function updateTypeDatalist() {
         const dl = $('#nm-type-list');
         if (!dl) return;
@@ -275,7 +234,6 @@
             dl.appendChild(opt);
         }
     }
-
     function findRelevantTerms(text) {
         const relevant = [];
         const glossary = getGlossaryForTranslation();
@@ -290,15 +248,12 @@
         }
         return unique;
     }
-
     function formatGlossaryForPrompt(terms) {
         if (terms.length === 0) return '(глоссарий пуст)';
-        // Пол передаётся как в конвейере — внутри type: «Person (male)».
         return terms.map(t => `- "${t.term}" → "${t.translation}" [${t.type || 'Term'}]`).join('\n');
     }
 
     // ===== ИЗВЛЕЧЕНИЕ КОНТЕНТА =====
-
     function findContentElement() {
         const selectors = [
             '.chapter-content', '.chapter-inner', '.txtnav', '.txt-content', '#txt-content',
@@ -320,14 +275,12 @@
         }
         return bestEl || document.body;
     }
-
     const HIDE_SELECTORS = [
         'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'script', 'style',
         '.txtinfo', '.txtright', '.contentadv', '.bottom-ad', '.bottom-ad2',
         '.ad', '.ads', '.advertisement', '.hide720', '.tools', '.bread', '.page1',
         '.yueduad1', '.nav-buttons', '.portlet-title', '.actions'
     ];
-
     function extractMainText(element) {
         const hidden = [];
         for (const sel of HIDE_SELECTORS) {
@@ -345,7 +298,6 @@
     }
 
     // ===== UI (SHADOW DOM) =====
-
     const styles = `
         <style>
             #nm-root, #nm-root * { letter-spacing: normal; word-spacing: normal; text-indent: 0; box-sizing: border-box; }
@@ -458,8 +410,6 @@
     host.id = 'nm-lite-host';
     document.documentElement.appendChild(host);
     const shadow = host.attachShadow({ mode: 'open' });
-    // Статический каркас UI (без пользовательских данных) — через
-    // createContextualFragment, чтобы не использовать присваивание innerHTML.
     const uiFrag = document.createRange().createContextualFragment(`
         ${styles}
         <div id="nm-root">
@@ -539,7 +489,7 @@
                                     <option value="medium"></option>
                                     <option value="high"></option>
                                 </datalist>
-                                <small>Пусто — параметр не передаётся. None — выключает рассуждения. Любое другое значение передаётся как есть.</small>
+                                <small>Пусто или 'None' — параметр не передаётся. Любое другое значение передаётся как есть.</small>
                             </div>
                             <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
                             <div class="nm-server-status" id="server-status"></div>
@@ -656,7 +606,6 @@
     let cancelRequested = false;
 
     // ===== UI-СЛУЖЕБНЫЕ =====
-
     function showStatus(msg, type = 'info', id = 'status-book') {
         const el = $('#' + id);
         if (!el) return;
@@ -667,7 +616,6 @@
         const el = $('#' + id);
         if (el) { el.className = 'nm-status'; el.style.display = 'none'; }
     }
-
     function openModal() {
         modal.classList.add('active');
         refreshBookTab();
@@ -679,7 +627,6 @@
         modal.classList.remove('active');
         ['status-book', 'status-glossary', 'status-settings', 'status-backup'].forEach(hideStatus);
     }
-
     function openBookModal() {
         $('#book-modal-url').value = suggestBookKeyFromUrl();
         $('#book-modal-name').value = document.title.replace(/\s*[-–—|].*$/, '').trim();
@@ -687,15 +634,12 @@
     }
 
     // ===== ВКЛАДКА "КНИГА" =====
-
     function refreshBookTab() {
         const select = $('#book-select');
         const keys = Object.keys(books);
-
         if (!managedBookKey || !books[managedBookKey]) {
             managedBookKey = currentBookKey || keys[0] || null;
         }
-
         select.innerHTML = '';
         if (keys.length === 0) {
             const opt = document.createElement('option');
@@ -713,11 +657,9 @@
         }
         renderBookManageArea();
     }
-
     function renderBookManageArea() {
         const area = $('#book-manage-area');
         const key = managedBookKey;
-
         if (!key || !books[key]) {
             const help = document.createElement('div');
             help.className = 'nm-help';
@@ -730,11 +672,9 @@
             area.replaceChildren(help, btn);
             return;
         }
-
         const book = books[key];
         const terms = Object.keys(book.glossary || {}).length;
         const nerPages = Object.keys(book.nerDone || {}).length;
-
         const info = document.createElement('div');
         info.className = 'nm-book-info';
         const strong = document.createElement('strong');
@@ -746,7 +686,6 @@
         statsLine.setAttribute('style', 'color:#6b7280;');
         statsLine.textContent = `Терминов: ${terms} | Страниц с извлечёнными терминами: ${nerPages}`;
         info.append(strong, document.createElement('br'), urlLine, document.createElement('br'), statsLine);
-
         const mkGroup = (labelText, inputId, value) => {
             const group = document.createElement('div');
             group.className = 'nm-input-group';
@@ -760,7 +699,6 @@
             group.append(label, input);
             return group;
         };
-
         const saveBtn = document.createElement('button');
         saveBtn.className = 'nm-btn nm-btn-primary';
         saveBtn.id = 'btn-save-book';
@@ -769,12 +707,10 @@
         delBtn.className = 'nm-btn nm-btn-danger';
         delBtn.id = 'btn-delete-book';
         delBtn.textContent = '🗑 Удалить книгу';
-
         area.replaceChildren(info,
             mkGroup('Название книги:', 'book-name-edit', book.name || ''),
             mkGroup('URL книги:', 'book-key-edit', key),
             saveBtn, delBtn);
-
         $('#btn-save-book').addEventListener('click', () => {
             const newName = $('#book-name-edit').value.trim();
             const newKey = $('#book-key-edit').value.trim();
@@ -792,7 +728,6 @@
             refreshBookTab();
             refreshGlossarySelector();
         });
-
         $('#btn-delete-book').addEventListener('click', () => {
             if (confirm(`Удалить книгу "${books[key].name || key}" вместе с её глоссарием и кэшем извлечения?`)) {
                 delete books[key];
@@ -808,7 +743,6 @@
     }
 
     // ===== ВКЛАДКА "ГЛОССАРИЙ" =====
-
     function refreshGlossarySelector() {
         const selector = $('#glossary-selector');
         selector.innerHTML = '<option value="global">🌍 Глобальный глоссарий</option>';
@@ -823,17 +757,14 @@
         selector.value = target;
         applyGlossarySelectorValue(target);
     }
-
     function applyGlossarySelectorValue(value) {
         if (value === 'global') { currentGlossaryMode = 'global'; selectedBookKey = null; }
         else if (value.startsWith('book:')) { currentGlossaryMode = 'book'; selectedBookKey = value.slice(5); }
     }
-
     function sortGlossaryEntries(entries) {
         const { field, dir } = glossarySort;
         if (!field || !dir) return entries;
         const sign = dir === 'desc' ? -1 : 1;
-        // Пол живёт внутри type — сортировка по производному значению.
         const valueOf = (e) => field === 'gender' ? genderOf(e[1].type) : e[1][field];
         return [...entries].sort((a, b) => {
             const va = valueOf(a);
@@ -844,22 +775,17 @@
             return sa.localeCompare(sb) * sign;
         });
     }
-
-    // Заглушка «пусто / ничего не найдено» — контейнер таблицы глоссария.
     function showGlossaryPlaceholder(container, text) {
         const p = document.createElement('p');
         p.setAttribute('style', 'color:#6b7280;text-align:center;padding:20px;');
         p.textContent = text;
         container.replaceChildren(p);
     }
-
     function updateGlossaryUI() {
         const container = $('#glossary-list');
         const pagination = $('#glossary-pagination');
         const glossary = getGlossaryForView();
         updateTypeDatalist();
-
-        // Фильтр
         let entries = Object.entries(glossary);
         if (glossaryFilter) {
             const f = normalize(glossaryFilter);
@@ -868,37 +794,28 @@
                 || normalize(t.type || '').includes(f)
             );
         }
-
-        // Сортировка
         entries = sortGlossaryEntries(entries);
-
-        // Пагинация
         const totalPages = Math.max(1, Math.ceil(entries.length / PAGE_SIZE));
         if (glossaryPage >= totalPages) glossaryPage = totalPages - 1;
         if (glossaryPage < 0) glossaryPage = 0;
         const start = glossaryPage * PAGE_SIZE;
         const pageEntries = entries.slice(start, start + PAGE_SIZE);
-
         $('#glossary-count').textContent = Object.keys(glossary).length;
-
         if (Object.keys(glossary).length === 0) {
             showGlossaryPlaceholder(container, 'Глоссарий пуст');
             pagination.replaceChildren();
             return;
         }
-
         if (entries.length === 0) {
             showGlossaryPlaceholder(container, 'Ничего не найдено по фильтру');
             pagination.replaceChildren();
             return;
         }
-
         const sortIcon = (field) => {
             if (glossarySort.field !== field) return '↕';
             return glossarySort.dir === 'asc' ? '↑' : '↓';
         };
         const activeClass = (field) => glossarySort.field === field ? 'active-sort' : '';
-
         const table = document.createElement('table');
         table.className = 'nm-glossary-table';
         const thead = document.createElement('thead');
@@ -927,7 +844,6 @@
         );
         thead.appendChild(hrow);
         table.appendChild(thead);
-
         const tbody = document.createElement('tbody');
         for (const [id, t] of pageEntries) {
             const count = t.count || 0;
@@ -948,8 +864,6 @@
             tr.appendChild(makeCell(t.term, 'term'));
             tr.appendChild(makeCell(t.translation, 'translation'));
             tr.appendChild(makeCell(t.type || '', 'type', 'nm-type-list'));
-
-            // Пол — ниспадающий список; значение живёт внутри type.
             const gTd = document.createElement('td');
             const gSel = document.createElement('select');
             gSel.dataset.field = 'gender';
@@ -963,12 +877,10 @@
             }
             gTd.appendChild(gSel);
             tr.appendChild(gTd);
-
             const cTd = document.createElement('td');
             cTd.className = `nm-count-cell ${countClass}`;
             cTd.textContent = count;
             tr.appendChild(cTd);
-
             const dTd = document.createElement('td');
             const del = document.createElement('button');
             del.className = 'nm-delete-cell';
@@ -976,13 +888,10 @@
             del.textContent = '✕';
             dTd.appendChild(del);
             tr.appendChild(dTd);
-
             tbody.appendChild(tr);
         }
         table.appendChild(tbody);
         container.replaceChildren(table);
-
-        // Обработчики сортировки
         container.querySelectorAll('th[data-sort]').forEach(th => {
             th.addEventListener('click', () => {
                 const field = th.dataset.sort;
@@ -997,8 +906,6 @@
                 updateGlossaryUI();
             });
         });
-
-        // Обработчики ячеек
         container.querySelectorAll('tr[data-id]').forEach(row => {
             const id = row.dataset.id;
             row.querySelectorAll('input, select').forEach(inp => {
@@ -1007,14 +914,12 @@
                     const g = getGlossaryForView();
                     if (!g[id]) return;
                     if (field === 'gender') {
-                        // Список пола → перестраиваем суффикс типа.
                         g[id].type = withGender(g[id].type, this.value);
                         const tInp = row.querySelector('input[data-field="type"]');
                         if (tInp) tInp.value = g[id].type;
                     } else {
                         g[id][field] = this.value.trim();
                         if (field === 'type') {
-                            // Правка типа → синхронизировать список пола.
                             const gSel = row.querySelector('select[data-field="gender"]');
                             if (gSel) gSel.value = genderOf(g[id].type);
                         }
@@ -1033,11 +938,8 @@
                 }
             });
         });
-
-        // Пагинация
         renderPagination(pagination, totalPages, entries.length);
     }
-
     function renderPagination(container, totalPages, totalItems) {
         const pageInfo = (text) => {
             const span = document.createElement('span');
@@ -1049,7 +951,6 @@
             container.replaceChildren(pageInfo(`Всего: ${totalItems}`));
             return;
         }
-
         const maxVisiblePages = 7;
         const pages = [];
         if (totalPages <= maxVisiblePages) {
@@ -1063,7 +964,6 @@
             if (end < totalPages - 2) pages.push(-1);
             pages.push(totalPages - 1);
         }
-
         const frag = document.createDocumentFragment();
         const navBtn = (label, cls, disabled) => {
             const b = document.createElement('button');
@@ -1090,7 +990,6 @@
         frag.appendChild(navBtn('›', 'nm-next-btn', glossaryPage === totalPages - 1));
         frag.appendChild(pageInfo(`Стр. ${glossaryPage + 1} из ${totalPages} • Всего: ${totalItems}`));
         container.replaceChildren(frag);
-
         container.querySelector('.nm-prev-btn').addEventListener('click', () => {
             if (glossaryPage > 0) { glossaryPage--; updateGlossaryUI(); }
         });
@@ -1105,7 +1004,90 @@
         });
     }
 
-    // ===== LLM / HTTP с ретраями и таймаутом =====
+    // ===== HTTP с GM_xmlhttpRequest (обход CORS/Mixed Content) =====
+    function customFetch(url, options, isStream = false) {
+        if (typeof GM_xmlhttpRequest === 'undefined') {
+            return fetch(url, options);
+        }
+
+        return new Promise((resolve, reject) => {
+            const reqOptions = {
+                method: options.method || 'GET',
+                url: url,
+                headers: options.headers || {},
+                data: options.body,
+                responseType: isStream ? 'stream' : 'text',
+                onload: function(response) {
+                    if (isStream) {
+                        reject(new Error('Стриминг не удался (onload вместо onloadstart)'));
+                        return;
+                    }
+                    const respObj = {
+                        ok: response.status >= 200 && response.status < 300,
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: new Headers(),
+                        text: () => Promise.resolve(response.responseText),
+                        json: () => {
+                            try {
+                                return Promise.resolve(JSON.parse(response.responseText));
+                            } catch(e) {
+                                return Promise.reject(e);
+                            }
+                        }
+                    };
+                    if (response.responseHeaders) {
+                        response.responseHeaders.split('\r\n').forEach(line => {
+                            const parts = line.split(': ');
+                            if (parts.length >= 2) {
+                                respObj.headers.append(parts[0], parts.slice(1).join(': '));
+                            }
+                        });
+                    }
+                    if (!respObj.ok) {
+                        const err = new Error(`HTTP ${respObj.status}: ${response.responseText.slice(0, 200)}`);
+                        err.status = respObj.status;
+                        reject(err);
+                    } else {
+                        resolve(respObj);
+                    }
+                },
+                onloadstart: function(response) {
+                    if (isStream) {
+                        const stream = response.response;
+                        if (stream && typeof stream.getReader === 'function') {
+                            resolve({
+                                ok: true,
+                                status: 200,
+                                body: stream
+                            });
+                        } else {
+                            reject(new Error('Стриминг не поддерживается данным менеджером скриптов'));
+                        }
+                    }
+                },
+                onerror: function(err) {
+                    reject(new Error(`NetworkError: ${err.statusText || 'Failed to fetch'}`));
+                },
+                ontimeout: function() {
+                    reject(new Error('Request Timeout'));
+                }
+            };
+
+            const req = GM_xmlhttpRequest(reqOptions);
+
+            if (options.signal) {
+                if (options.signal.aborted) {
+                    req.abort();
+                    reject(new DOMException('Aborted', 'AbortError'));
+                    return;
+                }
+                options.signal.addEventListener('abort', () => {
+                    req.abort();
+                });
+            }
+        });
+    }
 
     async function fetchWithRetry(url, options, isStream = false) {
         const timeout = config.requestTimeout > 0 ? config.requestTimeout : 0;
@@ -1123,10 +1105,9 @@
             }
 
             try {
-                const resp = await fetch(url, options);
+                const resp = await customFetch(url, options, isStream);
                 if (timer) clearTimeout(timer);
 
-                // Не ретраим на 4xx/5xx
                 if (!resp.ok && !isStream) {
                     const errText = await resp.text().catch(() => '');
                     const err = new Error(`HTTP ${resp.status}: ${errText.slice(0, 200)}`);
@@ -1154,7 +1135,8 @@
     async function callLLM(messages, temperature, stream) {
         const body = { model: config.model, messages, temperature, stream: !!stream };
         const re = String(config.reasoningEffort ?? '').trim();
-        if (re !== '') body.reasoning_effort = re;
+        // Не передаём 'None' в API, чтобы избежать ошибок валидации у провайдеров
+        if (re !== '' && re.toLowerCase() !== 'none') body.reasoning_effort = re;
         return await fetchWithRetry(config.apiHost.replace(/\/$/, '') + '/chat/completions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` },
@@ -1163,7 +1145,6 @@
     }
 
     // ===== ПРОВЕРКА СЕРВЕРА =====
-
     async function checkServer() {
         const statusEl = $('#server-status');
         statusEl.className = 'nm-server-status show loading';
@@ -1182,7 +1163,7 @@
                 temperature: 0
             };
             const re = String(config.reasoningEffort ?? '').trim();
-            if (re !== '') body.reasoning_effort = re;
+            if (re !== '' && re.toLowerCase() !== 'none') body.reasoning_effort = re;
 
             const resp = await fetchWithRetry(config.apiHost.replace(/\/$/, '') + '/chat/completions', {
                 method: 'POST',
@@ -1200,9 +1181,19 @@
                 return;
             }
 
-            if (!data || !data.choices || !data.choices[0]) {
+            if (data && data.error) {
                 statusEl.className = 'nm-server-status show err';
-                statusEl.textContent = `❌ Некорректный ответ API (${elapsed}мс)`;
+                statusEl.textContent = `❌ Ошибка API: ${data.error.message || JSON.stringify(data.error)} (${elapsed}мс)`;
+                return;
+            }
+
+            if (!data || !data.choices || !data.choices[0]) {
+                let preview = '';
+                try {
+                    preview = await resp.text();
+                } catch(e) {}
+                statusEl.className = 'nm-server-status show err';
+                statusEl.textContent = `❌ Некорректный ответ API: ${(preview || 'Пустой ответ').slice(0, 150)} (${elapsed}мс)`;
                 return;
             }
 
@@ -1216,7 +1207,6 @@
     }
 
     // ===== ИЗВЛЕЧЕНИЕ ТЕРМИНОВ (со счётчиком) =====
-
     async function extractTermsFromText(text, targetKey) {
         const chunks = splitByNewlines(text, config.chunkSize);
         const glossary = targetKey === 'global' ? { ...globalGlossary }
@@ -1244,7 +1234,6 @@
             for (const item of extracted) {
                 if (!item || !item.term || !item.translation) continue;
 
-                // Ищем существующий: точное совпадение -> fuzzy
                 let existingId = null;
                 for (const [id, ex] of Object.entries(glossary)) {
                     if (normalize(ex.term) === normalize(item.term)) { existingId = id; break; }
@@ -1276,7 +1265,6 @@
     }
 
     // ===== ПЕРЕВОД =====
-
     function renderTranslationInto(element, text) {
         const paras = paragraphsOf(text);
         element.innerHTML = '';
@@ -1428,7 +1416,6 @@
     }
 
     // ===== ГЛОССАРИЙ: CRUD =====
-
     function addTerm() {
         const term = $('#new-term').value.trim();
         const translation = $('#new-translation').value.trim();
@@ -1461,7 +1448,6 @@
             reader.onload = ev => {
                 try {
                     const imported = JSON.parse(ev.target.result);
-                    // Формат ner.json конвейера — массив записей; старый экспорт Lite — объект.
                     const srcList = Array.isArray(imported) ? imported : Object.entries(imported).map(([, v]) => v);
                     const glossary = getGlossaryForView();
                     let added = 0, incremented = 0;
@@ -1524,7 +1510,6 @@
     }
 
     // ===== НАСТРОЙКИ =====
-
     function loadSettings() {
         $('#api-host').value = config.apiHost;
         $('#api-key').value = config.apiKey;
@@ -1590,7 +1575,6 @@
     }
 
     // ===== ПОЛНЫЙ БЭКАП =====
-
     function exportAllData() {
         const backup = {
             version: APP_VERSION,
@@ -1636,7 +1620,6 @@
                     GM_setValue('globalGlossary', globalGlossary);
                     GM_setValue('books', books);
 
-                    // Сбросить состояние
                     currentBookKey = findBookByUrl();
                     managedBookKey = null;
                     selectedBookKey = null;
@@ -1658,7 +1641,6 @@
     }
 
     // ===== СОБЫТИЯ =====
-
     $('#btn-translate').addEventListener('click', handleTranslate);
     $('#btn-settings').addEventListener('click', openModal);
     $('#nm-close').addEventListener('click', closeModal);
@@ -1708,8 +1690,6 @@
 
     currentBookKey = findBookByUrl();
 
-    // Миграция старых записей Lite (пол в отдельном поле gender) в канон
-    // ner.json конвейера (пол внутри type) — один проход при загрузке.
     let migrated = false;
     const migrateCount = g => {
         for (const t of Object.values(g || {})) {
