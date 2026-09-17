@@ -285,11 +285,7 @@
     function formatGlossaryForPrompt(terms) {
         if (terms.length === 0) return '(глоссарий пуст)';
         // Пол передаётся как в конвейере — внутри type: «Person (male)».
-        return terms.map(t => {
-            const g = genderOf(t.type);
-            const note = g === 'female' ? ' (жен. род)' : g === 'male' ? ' (муж. род)' : '';
-            return `- "${t.term}" → "${t.translation}" [${t.type || 'Term'}]${note}`;
-        }).join('\n');
+        return terms.map(t => `- "${t.term}" → "${t.translation}" [${t.type || 'Term'}]`).join('\n');
     }
 
     // ===== ИЗВЛЕЧЕНИЕ КОНТЕНТА =====
