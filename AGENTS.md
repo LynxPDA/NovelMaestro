@@ -30,8 +30,10 @@ web/      web-интерфейс: server.py + api.py (роуты/хендлер�
 cli/  исполнители — чистый CLI (argparse), без интерактивных меню.
           batch_replace.py — массовые замены (правила «паттерн -> замена»
           из формы/аргументов --replace; файл replacements.txt выпилен);
-tools/    вспомогательные утилиты вне конвейера: tampermonkey_rulate_reload.js
-          (userscript Rulate, README — tools/README.md).
+tools/    вспомогательные утилиты вне конвейера: rulate_reload/
+          (userscript Rulate, README — tools/rulate_reload/README.md),
+          NovelMaestro_Lite/ (юзерскрипт-переводчик, README —
+          tools/NovelMaestro_Lite/README.md).
 templates/ шаблоны новых проектов: общие шаблоны в корне (.env.example);
           подпапки по типу книги — жанру и
           языку (General/) с промптами, metadata.yaml и donate.txt.
