@@ -217,6 +217,15 @@
         return '';
     }
 
+    // Возвращает type с заменённым суффиксом пола: «Location» + male →
+    // «Location (male)», «Person (female)» + '' → «Person». Пустой type при
+    // установке пола получает базу «Person» (пол бывает только у персонажей).
+    function withGender(typeStr, gender) {
+        const base = String(typeStr || '').replace(/\s*\((?:male|female|unknown)\)\s*$/i, '').trim();
+        if (!gender) return base;
+        return `${base || 'Person'} (${gender})`;
+    }
+
     // Старый формат Lite: enum-типы character/location/… и отдельное поле
     // gender (male/female/neutral/null) — приводим к канону конвейера:
     // тип «Person (male)» и т.п., поле gender выпиливается.
@@ -394,7 +403,6 @@
             }
             .nm-delete-cell { background: #dc2626; color: white; border: none; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
             .nm-count-cell { text-align: center; font-weight: 600; color: #6b7280; }
-            .nm-gender-cell { text-align: center; font-size: 14px; color: #6b7280; cursor: help; }
             .nm-count-cell.high { color: #059669; }
             .nm-count-cell.med { color: #d97706; }
             .nm-status { padding: 12px; border-radius: 6px; margin-top: 12px; display: none; }
@@ -825,9 +833,11 @@
         const { field, dir } = glossarySort;
         if (!field || !dir) return entries;
         const sign = dir === 'desc' ? -1 : 1;
+        // Пол живёт внутри type — сортировка по производному значению.
+        const valueOf = (e) => field === 'gender' ? genderOf(e[1].type) : e[1][field];
         return [...entries].sort((a, b) => {
-            const va = a[1][field];
-            const vb = b[1][field];
+            const va = valueOf(a);
+            const vb = valueOf(b);
             if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * sign;
             const sa = String(va ?? '').toLowerCase();
             const sb = String(vb ?? '').toLowerCase();
@@ -911,7 +921,7 @@
             makeTh('Термин', 'term', activeClass('term')),
             makeTh('Перевод', 'translation', activeClass('translation')),
             makeTh('Тип', 'type', activeClass('type')),
-            makeTh('Пол', null),
+            makeTh('Пол', 'gender', activeClass('gender')),
             makeTh('Частота', 'count', activeClass('count'), 'text-align:center;'),
             makeTh('Действия', null, null, 'width:60px;')
         );
@@ -923,11 +933,6 @@
             const count = t.count || 0;
             const countClass = count >= 5 ? 'high' : count >= 2 ? 'med' : '';
             const gender = genderOf(t.type);
-            const genderTitle = gender === 'female' ? '♀ жен. (внутри типа)'
-                : gender === 'male' ? '♂ муж. (внутри типа)'
-                : gender === 'unknown' ? '⚥ пол неизвестен (внутри типа)'
-                : 'пол не указан (для персонажей — в скобках в типе, напр. «Person (male)»)';
-
             const tr = document.createElement('tr');
             tr.dataset.id = id;
             const makeCell = (value, field, list) => {
@@ -944,10 +949,19 @@
             tr.appendChild(makeCell(t.translation, 'translation'));
             tr.appendChild(makeCell(t.type || '', 'type', 'nm-type-list'));
 
+            // Пол — ниспадающий список; значение живёт внутри type.
             const gTd = document.createElement('td');
-            gTd.className = 'nm-gender-cell';
-            gTd.title = genderTitle;
-            gTd.textContent = gender === 'female' ? '♀' : gender === 'male' ? '♂' : gender === 'unknown' ? '⚥' : '—';
+            const gSel = document.createElement('select');
+            gSel.dataset.field = 'gender';
+            gSel.title = 'Пол персонажа — хранится внутри типа: «Person (male)» и т.п.';
+            for (const [val, label] of [['', '—'], ['male', '♂ муж.'], ['female', '♀ жен.'], ['unknown', '⚖ неопр.']]) {
+                const opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = label;
+                if (gender === val) opt.selected = true;
+                gSel.appendChild(opt);
+            }
+            gTd.appendChild(gSel);
             tr.appendChild(gTd);
 
             const cTd = document.createElement('td');
@@ -987,17 +1001,22 @@
         // Обработчики ячеек
         container.querySelectorAll('tr[data-id]').forEach(row => {
             const id = row.dataset.id;
-            row.querySelectorAll('input').forEach(inp => {
+            row.querySelectorAll('input, select').forEach(inp => {
                 inp.addEventListener('change', function() {
                     const field = this.dataset.field;
                     const g = getGlossaryForView();
                     if (!g[id]) return;
-                    g[id][field] = this.value.trim();
-                    if (field === 'type') {
-                        const cell = row.querySelector('.nm-gender-cell');
-                        if (cell) {
-                            const gen = genderOf(g[id].type);
-                            cell.textContent = gen === 'female' ? '♀' : gen === 'male' ? '♂' : gen === 'unknown' ? '⚥' : '—';
+                    if (field === 'gender') {
+                        // Список пола → перестраиваем суффикс типа.
+                        g[id].type = withGender(g[id].type, this.value);
+                        const tInp = row.querySelector('input[data-field="type"]');
+                        if (tInp) tInp.value = g[id].type;
+                    } else {
+                        g[id][field] = this.value.trim();
+                        if (field === 'type') {
+                            // Правка типа → синхронизировать список пола.
+                            const gSel = row.querySelector('select[data-field="gender"]');
+                            if (gSel) gSel.value = genderOf(g[id].type);
                         }
                     }
                     saveGlossary(g);
