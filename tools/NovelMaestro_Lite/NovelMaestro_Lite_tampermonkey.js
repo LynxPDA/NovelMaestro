@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.21
+// @version      1.22
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @match        *://*/*
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 (() => {
-    const APP_VERSION = '1.21';
+    const APP_VERSION = '1.22';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -62,6 +62,7 @@
     let readerState = null;
     let offlineReaderMode = false;
     let offlineUrls = [];
+    let offlineIndex = 0;
     let elementTrainingMode = false;
     let pendingTranslateAfterTraining = false;
     let trainingHighlightedEl = null;
@@ -210,7 +211,8 @@
         try { const raw = localStorage.getItem(CACHE_PREFIX + url); return raw ? JSON.parse(raw) : null; } catch { return null; }
     }
     function cacheSet(url, data, bookKey) {
-        if (config.cacheLimit === 0) return;
+        // пустые записи (закрывший читалку поток не застал readerState) в кэш не попадают
+        if (config.cacheLimit === 0 || !data || !data.text) return;
         try { localStorage.setItem(CACHE_PREFIX + url, JSON.stringify(data)); } catch { return; }
         if (!bookKey) return;
         const index = getCacheIndex();
@@ -225,8 +227,31 @@
         }
         setCacheIndex(index);
     }
+    // порядок следования глав восстанавливаем цепочкой prev/next из кэшированных
+    // данных: переводили вразноброс — в офлайн-читалке всё равно по порядку;
+    // несколько несвязанных цепочек и петли дописываются/обрываются по времени
     function cacheGetBookEntries(bookKey) {
-        return (getCacheIndex()[bookKey] || []).slice().sort((a, b) => a.ts - b.ts);
+        const raw = (getCacheIndex()[bookKey] || []).slice().sort((a, b) => a.ts - b.ts);
+        const nodes = raw.map(e => ({ url: e.url, ts: e.ts, title: e.title || '' }));
+        const byUrl = new Map(nodes.map(n => [n.url, n]));
+        for (const n of nodes) {
+            const d = cacheGet(n.url);
+            n._prev = d && d.prevUrl && d.prevUrl !== n.url ? byUrl.get(d.prevUrl) || null : null;
+            n._next = d && d.nextUrl && d.nextUrl !== n.url ? byUrl.get(d.nextUrl) || null : null;
+        }
+        const ordered = [];
+        const seen = new Set();
+        const walk = (start) => {
+            let cur = start;
+            while (cur && !seen.has(cur.url)) {
+                seen.add(cur.url);
+                ordered.push(cur);
+                cur = cur._next;
+            }
+        };
+        for (const n of nodes) if (!n._prev && !seen.has(n.url)) walk(n);
+        for (const n of nodes) if (!seen.has(n.url)) walk(n);
+        return ordered;
     }
     function cacheBookChapterCount(bookKey) {
         return cacheGetBookEntries(bookKey).filter(e => { const d = cacheGet(e.url); return d && d.text; }).length;
@@ -726,6 +751,14 @@
             #nm-reader-mode.nm-reader-dark .nm-reader-nav button { color: #c6c6bf; border-color: #3a3d46; background: rgba(255,255,255,.04); }
             #nm-reader-mode.nm-reader-dark .nm-reader-nav button:hover { background: #23262e; }
             .nm-reader-nav button:disabled { opacity: .35; cursor: not-allowed; }
+            .nm-offline-toc { display: none; position: absolute; inset: 0; background: rgba(0,0,0,.55); z-index: 30; }
+            .nm-offline-toc.active { display: flex; align-items: flex-start; justify-content: center; }
+            .nm-offline-toc-panel { background: #ffffff; color: #111827; border-radius: 12px; width: min(520px, calc(100vw - 32px)); max-height: 78vh; overflow-y: auto; margin-top: 8vh; padding: 12px; }
+            #nm-reader-mode.nm-reader-dark .nm-offline-toc-panel { background: #1f232b; color: #e2e2dc; }
+            .nm-offline-toc-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
+            .nm-offline-toc-head button { border: none; background: none; font-size: 18px; cursor: pointer; color: inherit; line-height: 1; }
+            #nm-offline-toc-list button { display: block; width: 100%; text-align: left; border: none; border-bottom: 1px solid rgba(128,128,128,.18); background: none; color: inherit; padding: 11px 8px; font-size: 14px; cursor: pointer; }
+            #nm-offline-toc-list button.current { font-weight: 700; }
             #reader-preload-status { font-size: 12px; opacity: .65; display: none; }
 
             /* ===== ОБУЧЕНИЕ ===== */
@@ -763,6 +796,8 @@
                 /* на телефоне панель — компактнее и только иконками (подписи скрыты) */
                 .nm-reader-nav button { min-height: 40px; padding: 8px 14px; font-size: 15px; flex: 0 1 auto; }
                 .nm-reader-nav .nm-nav-label { display: none; }
+                .nm-offline-toc-panel { width: calc(100vw - 24px); max-height: 88vh; margin-top: 4vh; }
+                #nm-offline-toc-list button { padding: 13px 10px; }
                 .nm-training-instructions { max-width: calc(100vw - 16px); top: 8px; padding: 8px 10px; font-size: 11px; }
                 .nm-training-instructions h3 { font-size: 13px; margin-bottom: 4px; }
                 .nm-training-instructions .nm-btn { padding: 7px 12px; font-size: 12px; margin-top: 6px; }
@@ -1033,6 +1068,12 @@
                         <button id="reader-toc" title="Оглавление">☰<span class="nm-nav-label"> Оглавление</span></button>
                         <button id="reader-next" title="Следующая глава">→<span class="nm-nav-label"> Следующая</span></button>
                         <span id="reader-preload-status"></span>
+                    </div>
+                </div>
+                <div class="nm-offline-toc" id="nm-offline-toc">
+                    <div class="nm-offline-toc-panel">
+                        <div class="nm-offline-toc-head"><span>📚 Переведённые главы</span><button type="button" id="nm-offline-toc-close" title="Закрыть">✕</button></div>
+                        <div id="nm-offline-toc-list"></div>
                     </div>
                 </div>
             </div>
@@ -1353,7 +1394,20 @@
             coverGroup, saveBtn, readBtn, exportTxtBtn, openSiteBtn, delBtn);
         readBtn.addEventListener('click', () => openOfflineReader(key));
         exportTxtBtn.addEventListener('click', () => exportBookToTxt(key));
-        openSiteBtn.addEventListener('click', () => { if (/^https?:/i.test(key)) openExternalTab(key); });
+        openSiteBtn.title = 'Оглавление (если обучено) или последняя читанная глава';
+        openSiteBtn.addEventListener('click', () => {
+            // оглавление, если оно обучено (tocUrl есть в кэшированных главах);
+            // иначе — последняя по времени переводa глава; если кэш пуст — URL книги
+            const entries = cacheGetBookEntries(key);
+            let target = '';
+            for (const e of entries) { const d = cacheGet(e.url); if (d && d.tocUrl) { target = d.tocUrl; break; } }
+            if (!target) {
+                const last = entries.slice().sort((a, b) => b.ts - a.ts)[0];
+                if (last) target = last.url;
+            }
+            if (!target && /^https?:/i.test(key)) target = key;
+            if (target) openExternalTab(target);
+        });
         $('#btn-save-book').addEventListener('click', () => {
             const newName = $('#book-name-edit').value.trim();
             const newKey = $('#book-key-edit').value.trim();
@@ -2073,6 +2127,7 @@
         buttonsBar.style.display = '';
         readerState = null;
         $('#reader-retranslate').style.display = '';
+        $('#nm-offline-toc').classList.remove('active');
         progressHide();
     }
     function updateNavButtons() {
@@ -2080,7 +2135,8 @@
         $('#reader-retranslate').disabled = busy;
         $('#reader-prev').disabled = busy || !(readerState && readerState.prevUrl);
         $('#reader-next').disabled = busy || !(readerState && readerState.nextUrl);
-        $('#reader-toc').disabled = busy || !(readerState && readerState.tocUrl);
+        // в офлайне ☰ — своё окно списка, она активна когда глав больше одной
+        $('#reader-toc').disabled = busy || (offlineReaderMode ? offlineUrls.length < 2 : !(readerState && readerState.tocUrl));
         $('#reader-prev').style.display = readerState && readerState.prevUrl ? '' : 'none';
         $('#reader-next').style.display = readerState && readerState.nextUrl ? '' : 'none';
         $('#reader-toc').style.display = readerState && readerState.tocUrl ? '' : 'none';
@@ -2115,11 +2171,13 @@
         // в офлайне повторный перевод живой страницы не имеет смысла
         $('#reader-retranslate').style.display = 'none';
         renderOfflineChapter(0);
+        renderOfflineToc();
     }
     function renderOfflineChapter(idx) {
+        offlineIndex = idx;
         const url = offlineUrls[idx];
         const cached = cacheGet(url) || {};
-        // офлайн-навигация — по соседям в порядке кэширования, а не по живым ссылкам
+        // офлайн-навигация — по соседям восстановленной цепочки глав
         setReaderState({
             url,
             title: cached.title || `Глава ${idx + 1}`,
@@ -2128,9 +2186,28 @@
             prevUrl: idx > 0 ? offlineUrls[idx - 1] : null,
             tocUrl: null
         }, true);
+        // ☰ в офлайне — список переведённых глав (когда их больше одной)
+        $('#reader-toc').style.display = offlineUrls.length > 1 ? '' : 'none';
         const statusBtn = $('#reader-preload-status');
         statusBtn.textContent = `📴 Оффлайн • глава ${idx + 1} из ${offlineUrls.length} из кэша`;
         statusBtn.style.display = '';
+    }
+    function renderOfflineToc() {
+        const list = $('#nm-offline-toc-list');
+        const items = offlineUrls.map((u, i) => {
+            const d = cacheGet(u) || {};
+            const b = document.createElement('button');
+            b.type = 'button';
+            if (i === offlineIndex) b.classList.add('current');
+            const t = String(d.title || '').trim() || u.replace(/^https?:\/\//, '');
+            b.textContent = `${i + 1}. ${t}`;
+            b.addEventListener('click', () => {
+                $('#nm-offline-toc').classList.remove('active');
+                renderOfflineChapter(i);
+            });
+            return b;
+        });
+        list.replaceChildren(...items);
     }
     function gotoChapter(url) {
         if (!url || isTranslating) return;
@@ -2287,8 +2364,10 @@
                     readerState.tocUrl = nav.tocUrl;
                 }
                 updateNavButtons();
-                // в кэш — только завершённый перевод; частичный остаётся лишь на экране
-                if (translationResult.completed && full) cacheSet(url, { ...readerState }, current.key);
+                // в кэш — только завершённый перевод (данные собираем из локальных
+                // переменных: readerState мог быть обнулён закрытой читалкой);
+                // частичный остаётся лишь на экране
+                if (translationResult.completed && full) cacheSet(url, { url, title: document.title, text: full, ...nav }, current.key);
             }
             if (!cancelRequested && config.preemptiveCount > 0 && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl, config.preemptiveCount);
         } finally {
@@ -2797,7 +2876,14 @@
     });
     $('#reader-prev').addEventListener('click', () => gotoChapter(readerState && readerState.prevUrl));
     $('#reader-next').addEventListener('click', () => gotoChapter(readerState && readerState.nextUrl));
+    $('#nm-offline-toc-close').addEventListener('click', () => $('#nm-offline-toc').classList.remove('active'));
+    $('#nm-offline-toc').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.classList.remove('active'); });
     $('#reader-toc').addEventListener('click', () => {
+        // в офлайн-читалке ☰ — свой список переведённых глав, без перехода
+        if (offlineReaderMode) {
+            if (offlineUrls.length > 1) $('#nm-offline-toc').classList.add('active');
+            return;
+        }
         if (!readerState || !readerState.tocUrl) return;
         let target = null;
         try { target = new URL(readerState.tocUrl, location.href); } catch { return; }
