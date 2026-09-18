@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.16
+// @version      1.17
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @match        *://*/*
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 (() => {
-    const APP_VERSION = '1.16';
+    const APP_VERSION = '1.17';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -999,6 +999,67 @@
     let cancelRequested = false;
     let activeReader = null;
 
+    // ===== МИНИ-ОКНО ИЗВЛЕЧЕНИЯ ТЕРМИНОВ =====
+    // Ручной NER живёт в маленьком плавающем окне, а не в читалке
+    (function initMiniExtractPopup() {
+        const st = document.createElement('style');
+        st.textContent = `
+            .nm-mini-modal { position: fixed; right: 16px; bottom: 84px; z-index: 2147483646; width: min(380px, calc(100vw - 24px)); background: #ffffff; color: #111827; border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); padding: 12px; display: none; }
+            .nm-mini-modal.active { display: block; }
+            .nm-mini-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-weight: 600; margin-bottom: 8px; }
+            .nm-mini-header button { border: none; background: none; font-size: 18px; cursor: pointer; color: inherit; padding: 4px; line-height: 1; }
+            .nm-mini-status { margin-top: 6px; font-size: 12px; opacity: 0.75; word-break: break-word; }
+            #nm-root.nm-ui-dark .nm-mini-modal { background: #1f232b; color: #e2e2dc; }
+            @media (max-width: 720px) {
+                .nm-mini-modal { left: 12px; right: 12px; width: auto; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+            }
+        `;
+        shadow.appendChild(st);
+        const popup = document.createElement('div');
+        popup.id = 'nm-extract-popup';
+        popup.className = 'nm-mini-modal';
+        popup.innerHTML = `
+            <div class="nm-mini-header">
+                <span>✨ Извлечение терминов</span>
+                <button type="button" id="nm-extract-close" title="Скрыть">✕</button>
+            </div>
+            <div class="nm-progress-bar"><div class="nm-progress-fill" id="nm-extract-fill"></div></div>
+            <div class="nm-mini-status" id="nm-extract-status">Подготовка...</div>
+            <button class="nm-btn nm-btn-danger nm-btn-sm" id="nm-extract-cancel" style="margin-top:10px;">Отменить</button>
+        `;
+        rootEl.appendChild(popup);
+    })();
+    function extractMiniShow() {
+        $('#nm-extract-popup').classList.add('active');
+        const f = $('#nm-extract-fill');
+        f.style.width = '0%';
+        f.classList.remove('retry');
+        $('#nm-extract-status').textContent = 'Подготовка...';
+    }
+    function extractMiniStatus(text) { $('#nm-extract-status').textContent = text; }
+    function extractMiniHide(delay = 2200) {
+        setTimeout(() => {
+            const popup = $('#nm-extract-popup');
+            if (popup) popup.classList.remove('active');
+        }, delay);
+    }
+    function updateExtractionProgressMini(st) {
+        const fill = $('#nm-extract-fill');
+        if (!fill) return;
+        fill.classList.toggle('retry', !!st.retry);
+        fill.style.width = st.pct + '%';
+        extractMiniStatus(st.retry
+            ? `⏱ ${st.retry.message} — повтор ${st.retry.nextAttempt}/${st.retry.attemptsTotal}`
+            : `🔍 Термины: чанк ${st.chunk}/${st.total} • ~${st.pct}%`);
+    }
+    $('#nm-extract-cancel').addEventListener('click', () => {
+        cancelRequested = true;
+        if (activeReader) { try { activeReader.cancel(); } catch {} }
+    });
+    $('#nm-extract-close').addEventListener('click', () => {
+        if (!isTranslating) $('#nm-extract-popup').classList.remove('active');
+    });
+
     // ===== ПРОГРЕСС =====
     function progressShow(title) {
         if (!readerModeActive) openReaderShell(null);
@@ -1024,6 +1085,7 @@
     function showStatus(msg, type = 'info', id = 'status-book') {
         const el = $('#' + id);
         if (!el) return;
+        el.style.removeProperty('display');
         el.textContent = msg;
         el.className = 'nm-status ' + type;
     }
@@ -1413,6 +1475,8 @@
             let settled = false;
             let req = null;
             const abort = () => { try { if (req) req.abort(); } catch {} };
+            // внешний колбэк: таймаут/отмена могут прервать GM-запрос и без signal
+            if (typeof options.getAbort === 'function') { try { options.getAbort(abort); } catch {} }
             const settleResolve = (v) => { if (!settled) { settled = true; resolve(v); } };
             const settleReject = (e) => { if (!settled) { settled = true; reject(e); } };
             const parseInfo = (response) => {
@@ -1474,38 +1538,59 @@
             }
         });
     }
-    async function fetchAttempt(url, options, isStream, timeoutSec, cb) {
+    async function fetchAttempt(url, options, isStream, timeoutSec, cb = {}) {
         const timeoutMs = timeoutSec > 0 ? timeoutSec * 1000 : 0;
-        const controller = timeoutMs > 0 ? new AbortController() : null;
-        const attemptOptions = controller ? { ...options, signal: controller.signal } : options;
-        let timer = null, abortedByTimer = false, reader = null;
-        const arm = () => {
-            if (!controller) return;
-            if (timer) clearTimeout(timer);
-            timer = setTimeout(() => {
-                abortedByTimer = true;
-                if (reader) { try { reader.cancel(); } catch {} }
-                controller.abort();
-            }, timeoutMs);
+        const controller = new AbortController();
+        let reader = null, timer = null, cancelWatcher = null, underlyingAbort = null, failed = false;
+        // Гонка-промиис, который только отвергается: с ним мы гарантированно выходим
+        // из await, даже если reader.cancel() не разбудил зависший read потока
+        let rejectWatch = null;
+        const watchPromise = new Promise((_, rej) => { rejectWatch = rej; });
+        const fail = (err) => {
+            if (failed) return;
+            failed = true;
+            if (timer) { clearTimeout(timer); timer = null; }
+            if (cancelWatcher) { clearInterval(cancelWatcher); cancelWatcher = null; }
+            try { if (reader) reader.cancel(); } catch {}
+            try { if (underlyingAbort) underlyingAbort(); } catch {}
+            try { controller.abort(); } catch {}
+            if (rejectWatch) rejectWatch(err);
         };
-        const disarm = () => { if (timer) { clearTimeout(timer); timer = null; } };
+        // Таймаут передооружается только приходе полезных токенов:
+        // пустые SSE-пинги без контента его не сбрасывают
+        const arm = () => {
+            if (!timeoutMs || failed) return;
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => fail(makeAbortError(true)), timeoutMs);
+        };
+        cancelWatcher = setInterval(() => {
+            if (cancelRequested) fail(new Error('Отменено пользователем'));
+        }, 200);
+        if (cancelRequested) fail(new Error('Отменено пользователем'));
         arm();
+        const readRespText = async (resp) => {
+            try {
+                if (resp && typeof resp.text === 'function') return await resp.text();
+                if (resp && resp.body) return await new Response(resp.body).text();
+            } catch {}
+            return '';
+        };
         try {
-            const resp = await customFetch(url, attemptOptions, isStream);
-            if (!isStream) {
-                if (!resp.ok) {
-                    const errText = await resp.text().catch(() => '');
-                    const err = new Error(`HTTP ${resp.status}: ${errText.slice(0, 200)}`);
-                    err.status = resp.status;
-                    throw err;
-                }
-                return resp;
+            const fetchPromise = customFetch(url, { ...options, signal: controller.signal, getAbort: (fn) => { underlyingAbort = fn; } }, isStream);
+            fetchPromise.catch(() => {});
+            const resp = await Promise.race([fetchPromise, watchPromise]);
+            if (!resp.ok) {
+                const errText = await readRespText(resp);
+                const err = new Error(`HTTP ${resp.status}: ${String(errText).slice(0, 200)}`);
+                err.status = resp.status;
+                throw err;
             }
-            if (!resp || !resp.body || typeof resp.body.getReader !== 'function') throw new Error('Сервер не поддерживает стриминг');
+            if (!isStream) return resp;
+            if (!resp.body || typeof resp.body.getReader !== 'function') throw new Error('Сервер не поддерживает стриминг');
             reader = resp.body.getReader();
             activeReader = reader;
             const decoder = new TextDecoder();
-            let text = '', buffer = '';
+            let text = '', buffer = '', streamError = null;
             const handleLine = (line) => {
                 const trimmed = line.trim();
                 if (!trimmed.startsWith('data:')) return;
@@ -1513,28 +1598,63 @@
                 if (payload === '[DONE]') return;
                 try {
                     const parsed = JSON.parse(payload);
-                    const content = parsed.choices?.[0]?.delta?.content || '';
+                    if (parsed && parsed.error) {
+                        // ошибка в SSE-потоке (неверная модель/ключ) — фатальна, без ретраев
+                        const errMsg = parsed.error.message || JSON.stringify(parsed.error);
+                        streamError = new Error(errMsg);
+                        if (typeof parsed.error.code === 'number') streamError.status = parsed.error.code;
+                        streamError.isFatal = /invalid|api key|api_key|authentication|unauthorized|forbidden|model|not found|does not exist|unsupported/i.test(errMsg);
+                        return;
+                    }
+                    const content = parsed?.choices?.[0]?.delta?.content || '';
                     if (content) { text += content; if (cb.onDelta) cb.onDelta(content); }
                 } catch {}
             };
             while (true) {
-                if (cancelRequested) break;
-                let done, value;
-                try { ({ done, value } = await reader.read()); }
-                catch (e) { if (abortedByTimer || cancelRequested) break; throw e; }
-                if (cancelRequested || abortedByTimer || done) break;
-                arm();
+                if (failed) break;
+                if (cancelRequested) { fail(new Error('Отменено пользователем')); break; }
+                const beforeLen = text.length;
+                const readPromise = reader.read();
+                readPromise.catch(() => {});
+                const { done, value } = await Promise.race([readPromise, watchPromise]);
+                if (done) break;
                 buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
+                const lines = buffer.split(/\r?\n/);
                 buffer = lines.pop();
-                lines.forEach(handleLine);
+                for (const line of lines) {
+                    handleLine(line);
+                    if (streamError) throw streamError;
+                }
+                if (text.length > beforeLen) arm();
             }
-            if (!cancelRequested && !abortedByTimer) { buffer += decoder.decode(); handleLine(buffer); }
+            if (!failed && !cancelRequested) { buffer += decoder.decode(); handleLine(buffer); }
             if (cancelRequested) throw new Error('Отменено пользователем');
-            if (abortedByTimer) throw makeAbortError(true);
+            if (failed) throw makeAbortError(true);
+            if (!text.trim()) {
+                // некоторые серверы шлют ошибку в stream-режиме обычным JSON-телом
+                const tail = (buffer || '').trim();
+                if (tail.startsWith('{')) {
+                    try {
+                        const parsed = JSON.parse(tail);
+                        if (parsed && parsed.error) {
+                            const err = new Error(parsed.error.message || JSON.stringify(parsed.error));
+                            err.isFatal = /invalid|api key|api_key|authentication|unauthorized|forbidden|model|not found|does not exist|unsupported/i.test(err.message);
+                            throw err;
+                        }
+                    } catch (e) { if (e && e.message && !/JSON/i.test(e.message)) throw e; }
+                }
+                // пустой completion (чаще всего — неверная модель) не считается результатом
+                const err = new Error('Пустой ответ модели. Проверьте модель, права и параметры запроса.');
+                err.isFatal = true;
+                throw err;
+            }
             return { text };
+        } catch (e) {
+            if (e && e.name === 'AbortError') e.isTimeout = true;
+            throw e;
         } finally {
-            disarm();
+            if (timer) clearTimeout(timer);
+            if (cancelWatcher) clearInterval(cancelWatcher);
             if (reader && activeReader === reader) activeReader = null;
         }
     }
@@ -1547,9 +1667,10 @@
             try {
                 return await fetchAttempt(url, options, isStream, timeout, cb);
             } catch (e) {
-                if (e.name === 'AbortError') { e.isTimeout = true; e.message = `Таймаут ${timeout}с: запрос завис`; }
+                if (cancelRequested) throw new Error('Отменено пользователем');
+                if (e.name === 'AbortError') { e.isTimeout = true; e.message = `Таймаут ${timeout}с: нет полезных данных`; }
                 lastErr = e;
-                if (e.status >= 400 || cancelRequested || attempt >= attemptsTotal) throw e;
+                if (e.status >= 400 || e.isFatal || cancelRequested || attempt >= attemptsTotal) throw e;
                 if (cb.onRetry) cb.onRetry({ nextAttempt: attempt + 1, attemptsTotal, isTimeout: !!e.isTimeout, message: e.message || 'Сетевая ошибка' });
                 await new Promise(r => setTimeout(r, Math.min(5000, 500 * 2 ** (attempt - 1))));
             }
@@ -1602,12 +1723,12 @@
         const chunks = splitByNewlines(text, config.chunkSize);
         const glossary = targetKey === 'global' ? { ...globalGlossary } : (books[targetKey] ? { ...(books[targetKey].glossary || {}) } : {});
         const expectedTotal = Math.max(1, Math.round(text.length * NER_RESPONSE_RATIO));
-        let streamed = 0, added = 0, incremented = 0;
+        let streamed = 0, added = 0, incremented = 0, canceled = false;
         const emitProgress = (i, retry) => {
             if (onProgress) onProgress({ chunk: i + 1, total: chunks.length, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null });
         };
         for (let i = 0; i < chunks.length; i++) {
-            if (cancelRequested) break;
+            if (cancelRequested) { canceled = true; break; }
             const charsBefore = streamed;
             const userPrompt = config.extractionPrompt.replace('{targetLang}', config.targetLang).replace('{text}', chunks[i]);
             let result;
@@ -1618,7 +1739,7 @@
                 });
                 result = res.text;
             } catch (e) {
-                if (cancelRequested) { emitProgress(i); break; }
+                if (cancelRequested) { canceled = true; emitProgress(i); break; }
                 throw e;
             }
             result = result.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
@@ -1648,7 +1769,7 @@
         }
         if (targetKey === 'global') { globalGlossary = glossary; GM_setValue('globalGlossary', globalGlossary); }
         else if (books[targetKey]) { books[targetKey].glossary = glossary; GM_setValue('books', books); }
-        return { added, incremented };
+        return { added, incremented, canceled };
     }
 
     // ===== ПЕРЕВОД =====
@@ -1663,11 +1784,11 @@
     }
     async function translateWithStreaming(element, originalText) {
         const totalParas = paragraphsOf(originalText).length;
-        if (totalParas === 0) { progressStatus('❌ Текст не найден'); return ''; }
+        if (totalParas === 0) { progressStatus('❌ Текст не найден'); return { text: '', completed: false }; }
         const chunks = splitByNewlines(originalText, config.chunkSize);
         const fill = progressFill();
         fill.classList.remove('retry');
-        let fullTranslation = '';
+        let fullTranslation = '', completed = false;
         const setProgress = (all) => {
             const done = paragraphsOf(all).length;
             const pct = totalParas > 0 ? Math.min(99, Math.round((done / totalParas) * 100)) : 0;
@@ -1708,15 +1829,18 @@
                 renderTranslationInto(element, fullTranslation);
                 setProgress(fullTranslation);
             }
+            completed = true;
             progressStatus('✅ Перевод завершён!');
             fill.style.width = '100%';
         } catch (error) {
             progressStatus('❌ ' + error.message);
+            // частичный перевод остаётся на экране, но completed=false — в кэш он не попадёт
             if (fullTranslation) renderTranslationInto(element, fullTranslation + '\n\n[ПЕРЕВОД ПРЕРВАН: ' + error.message + ']');
+            else renderTranslationInto(element, '');
         } finally {
             fill.classList.remove('retry');
         }
-        return fullTranslation;
+        return { text: fullTranslation, completed };
     }
     async function translateTextBackground(text) {
         const chunks = splitByNewlines(text, config.chunkSize);
@@ -1768,7 +1892,12 @@
         readerMode.classList.add('active');
         buttonsBar.style.display = 'none';
         applyTheme();
-        if (loadingText) readerContent.innerHTML = `<div class="nm-reader-loading">${loadingText}</div>`;
+        if (loadingText) {
+            const div = document.createElement('div');
+            div.className = 'nm-reader-loading';
+            div.textContent = loadingText;
+            readerContent.replaceChildren(div);
+        }
         updateNavButtons();
     }
     function closeReader() {
@@ -1797,10 +1926,26 @@
         }
         updateNavButtons();
     }
+    // новую вкладку открываем временным якорем с rel=noopener, а не window.open:
+    // переход по главам остаётся той же ссылкой того же сайта, без навигации текущей страницы
+    function openExternalTab(href) {
+        const a = document.createElement('a');
+        a.href = href;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        document.body.append(a);
+        a.click();
+        a.remove();
+    }
     function gotoChapter(url) {
         if (!url || isTranslating) return;
+        let target = null;
+        try { target = new URL(url, location.href); } catch { return; }
+        if (target.protocol !== 'http:' && target.protocol !== 'https:') return;
+        // навигация читалки — только по этому же сайту; чужой хост открываем новой вкладкой
+        if (target.hostname !== location.hostname) { openExternalTab(target.href); return; }
         sessionStorage.setItem('nm_auto_reader', '1');
-        location.href = url;
+        location.assign(target.href);
     }
     async function pretranslateNext(nextUrl) {
         if (!nextUrl || !config.preemptiveTranslation) return;
@@ -1876,7 +2021,9 @@
                 if (config.autoNER && !isNerDoneForPage(current.key)) {
                     const liveText = extractMainText(findContentElement());
                     if (liveText.trim()) {
-                        extractTermsFromText(liveText, current.key, null).then(() => markNerDone(current.key)).catch(() => {});
+                        extractTermsFromText(liveText, current.key, null).then(res => {
+                            if (res && !res.canceled) markNerDone(current.key);
+                        }).catch(() => {});
                     }
                 }
             } else {
@@ -1890,11 +2037,16 @@
                         await new Promise(r => setTimeout(r, 500));
                     } else {
                         try {
-                            const { added, incremented } = await extractTermsFromText(text, current.key, updateExtractionProgress);
-                            markNerDone(current.key);
+                            const nerResult = await extractTermsFromText(text, current.key, updateExtractionProgress);
                             progressFill().style.width = '100%';
-                            progressStatus(`✨ +${added} новых, обновлено частот: ${incremented}`);
-                            await new Promise(r => setTimeout(r, 800));
+                            if (nerResult.canceled) {
+                                progressStatus(`⏹ NER остановлен: +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`);
+                                await new Promise(r => setTimeout(r, 500));
+                            } else {
+                                markNerDone(current.key);
+                                progressStatus(`✨ +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`);
+                                await new Promise(r => setTimeout(r, 800));
+                            }
                         } catch (error) {
                             if (!cancelRequested) {
                                 progressStatus('⚠️ NER: ' + error.message);
@@ -1910,7 +2062,8 @@
                     return;
                 }
                 progressShow(ignoreCache ? '🔄 Повторный перевод...' : '🔄 Перевод...');
-                const full = await translateWithStreaming(readerContent, text);
+                const translationResult = await translateWithStreaming(readerContent, text);
+                const full = translationResult.text || '';
                 // навигация обновляется по живой странице независимо от успеха перевода
                 const nav = resolveNavFromLive();
                 if (readerState) {
@@ -1920,9 +2073,10 @@
                     readerState.tocUrl = nav.tocUrl;
                 }
                 updateNavButtons();
-                if (full) cacheSet(url, { ...readerState });
+                // в кэш — только завершённый перевод; частичный остаётся лишь на экране
+                if (translationResult.completed && full) cacheSet(url, { ...readerState });
             }
-            if (config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
+            if (!cancelRequested && config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
         } finally {
             isTranslating = false;
             $('#btn-translate').disabled = false;
@@ -1940,33 +2094,22 @@
         const element = findContentElement();
         const text = extractMainText(element);
         if (!text.trim()) { alert('Текст не найден'); return; }
-        const weOpenedReader = !readerModeActive;
-        if (weOpenedReader) openReaderShell('✨ Извлечение терминов…');
         isTranslating = true;
         cancelRequested = false;
-        progressShow('🔍 Извлечение терминов');
+        extractMiniShow();
         try {
-            const { added, incremented } = await extractTermsFromText(text, targetKey, updateExtractionProgress);
-            if (targetKey !== 'global') markNerDone(targetKey);
-            progressFill().style.width = '100%';
-            const msg = cancelRequested
-                ? `⏹ Остановлено: +${added} новых, обновлено частот: ${incremented}`
-                : `✨ +${added} новых, обновлено частот: ${incremented}`;
-            progressStatus(msg);
+            const result = await extractTermsFromText(text, targetKey, updateExtractionProgressMini);
+            if (targetKey !== 'global' && !result.canceled) markNerDone(targetKey);
+            extractMiniStatus(result.canceled
+                ? `⏹ Остановлено: +${result.added} новых, обновлено частот: ${result.incremented}`
+                : `✨ +${result.added} новых, обновлено частот: ${result.incremented}`);
             updateGlossaryUI();
             refreshBookTab();
-            if (weOpenedReader) {
-                readerContent.innerHTML = `<div class="nm-reader-loading">${msg}</div>`;
-                setTimeout(() => { progressHide(); closeReader(); }, 2500);
-            } else {
-                setTimeout(progressHide, 2500);
-            }
         } catch (error) {
-            progressStatus('❌ ' + error.message);
-            setTimeout(progressHide, 2500);
+            extractMiniStatus('❌ ' + error.message);
         } finally {
             isTranslating = false;
-            updateNavButtons();
+            extractMiniHide(2600);
         }
     }
 
@@ -2029,7 +2172,7 @@
         const classes = Array.from(element.classList);
         for (const cls of classes) {
             const sel = '.' + cssEsc(cls);
-            try { if (document.querySelectorAll(sel).length === 1) return sel; } catch (e) {}
+            try { if (document.querySelectorAll(sel).length === 1) return sel; } catch {}
         }
         const path = [];
         let current = element;
@@ -2329,7 +2472,12 @@
     });
     $('#reader-prev').addEventListener('click', () => gotoChapter(readerState && readerState.prevUrl));
     $('#reader-next').addEventListener('click', () => gotoChapter(readerState && readerState.nextUrl));
-    $('#reader-toc').addEventListener('click', () => { if (readerState && readerState.tocUrl) window.open(readerState.tocUrl, '_blank'); });
+    $('#reader-toc').addEventListener('click', () => {
+        if (!readerState || !readerState.tocUrl) return;
+        let target = null;
+        try { target = new URL(readerState.tocUrl, location.href); } catch { return; }
+        if (target.protocol === 'http:' || target.protocol === 'https:') openExternalTab(target.href);
+    });
     $('#reader-cancel').addEventListener('click', () => {
         cancelRequested = true;
         if (activeReader) { try { activeReader.cancel(); } catch {} }
