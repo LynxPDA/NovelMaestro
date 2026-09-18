@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.24
+// @version      1.25
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @match        *://*/*
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 (() => {
-    const APP_VERSION = '1.24';
+    const APP_VERSION = '1.25';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -27,27 +27,24 @@
         requestTimeout: 10, // СЕКУНДЫ (0 = без таймаута)
         maxRetries: 3,
         localModel: false,
-        glossarySource: 'book',
         translationPrompt: 'Переведи следующий текст с {sourceLang} на {targetLang}.\n\nГЛОССАРИЙ ТЕРМИНОВ (обязательно используй эти переводы, сохраняй пол персонажей):\n{glossary}\n\nВАЖНО:\n- Имена и термины переводи точно по глоссарию\n- Сохраняй пол персонажей (он/она) согласно глоссарию\n- Сохраняй стиль оригинала\n- Сохраняй разбивку на абзацы\n- Возвращай ТОЛЬКО перевод, без комментариев\n\nТекст:\n{text}',
         extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины. Перевод терминов должен быть на {targetLang}.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang}. Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
         fuzzySearchThreshold: 0.7,
         autoNER: true,
+        preemptiveTranslation: true, // автоперевод следующей главы в фоне
         readerTheme: 'light',
         readerFontFamily: 'Georgia, serif',
         readerFontSize: 14,
         readerLineHeight: 1.6,
         readerParagraphSpacing: 1.2,
-        readerContentWidth: 80,
-        preemptiveCount: 1, // сколько следующих глав автопереводить в фоне (0 — выключено)
-        cacheLimit: 10 // переводы глав в кэше (0 — не сохранять, -1 — без ограничений)
+        readerContentWidth: 80
     };
 
+    // В GM-хранилище расширения — только список книг и настройки: глоссарии
+    // (мегабайты) и кэш переводов живут в IndexedDB каждого сайта отдельно.
     let config = { ...DEFAULT_CONFIG, ...GM_getValue('config', {}) };
     let books = GM_getValue('books', {});
-    let globalGlossary = GM_getValue('globalGlossary', {});
     let currentBookKey = null;
-    let currentGlossaryMode = 'book';
-    let selectedBookKey = null;
     let managedBookKey = null;
 
     let glossarySort = { field: 'count', dir: 'desc' };
@@ -60,9 +57,6 @@
 
     let readerModeActive = false;
     let readerState = null;
-    let offlineReaderMode = false;
-    let offlineUrls = [];
-    let offlineIndex = 0;
     let elementTrainingMode = false;
     let pendingTranslateAfterTraining = false;
     let trainingHighlightedEl = null;
@@ -189,149 +183,127 @@
         const cur = getCurrentBook();
         return (cur && cur.book.selectors) ? cur.book.selectors : {};
     }
-    function isNerDoneForPage(bookKey) {
-        const b = books[bookKey];
-        return !!(b && b.nerDone && b.nerDone[pageCacheKey()]);
-    }
+    function isNerDoneForPage(bookKey) { return !!(siteNerDone[bookKey] && siteNerDone[bookKey][pageCacheKey()]); }
     function markNerDone(bookKey) {
-        const b = books[bookKey];
-        if (!b) return;
-        if (!b.nerDone) b.nerDone = {};
-        b.nerDone[pageCacheKey()] = Date.now();
-        GM_setValue('books', books);
+        if (!siteNerDone[bookKey]) siteNerDone[bookKey] = {};
+        siteNerDone[bookKey][pageCacheKey()] = Date.now();
+        dbPut('n/' + bookKey, siteNerDone[bookKey]);
     }
     function clearNerCache(bookKey) {
-        const b = books[bookKey];
-        if (!b) return;
-        b.nerDone = {};
-        GM_setValue('books', books);
+        siteNerDone[bookKey] = {};
+        dbPut('n/' + bookKey, siteNerDone[bookKey]);
     }
 
-    // ===== КЭШ ГЛАВ =====
-    // Кэш живёт в GM-хранилище, а НЕ в localStorage страницы: localStorage по-доменный,
-    // и при управлении книгой с чужого сайта (например с google.com) её главы просто
-    // не видны. Одна структура: entries {url: данные} + index {ключ книги: [{url, ts}]}.
-    const CACHE_STORAGE_KEY = 'chapterCache';
-    let chapterCache = (() => {
+    // ===== ДАННЫЕ САЙТА: IndexedDB этого origin =====
+    // Глоссарии книг, отметки NER и rolling-кэш переводов живут в IndexedDB того сайта,
+    // где стоят книги: GM-хранилище такой объём не тянет, а localStorage ограничен
+    // ~5 МБ на origin и сюда не влезает. Кэш — только текущая и следующая главы.
+    const DB_NAME = 'NovelMaestroLite';
+    const DB_STORE = 'kv';
+    const CACHE_CHAPTERS = 2;
+    let dbPromise = null;
+    function openDb() {
+        if (!dbPromise) {
+            dbPromise = new Promise((resolve) => {
+                try {
+                    const req = indexedDB.open(DB_NAME, 1);
+                    req.onupgradeneeded = () => { try { req.result.createObjectStore(DB_STORE); } catch { /* уже создан */ } };
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => resolve(null);
+                } catch { resolve(null); }
+            });
+        }
+        return dbPromise;
+    }
+    async function dbPut(key, value) {
+        const db = await openDb(); if (!db) return;
         try {
-            const saved = GM_getValue(CACHE_STORAGE_KEY, null);
-            if (saved && saved.entries && saved.index) return saved;
-        } catch { /* повреждённый кэш начинаем с чистого */ }
-        return { entries: {}, index: {} };
-    })();
-    function saveChapterCache() { try { GM_setValue(CACHE_STORAGE_KEY, chapterCache); } catch {} }
-    function getCacheIndex() { return chapterCache.index; }
-    function setCacheIndex(index) { chapterCache.index = index; saveChapterCache(); }
-    function cacheGet(url) { return chapterCache.entries[url] || null; }
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(DB_STORE, 'readwrite');
+                tx.objectStore(DB_STORE).put(value, key);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        } catch (e) { console.warn('[NovelMaestro] Запись в IndexedDB:', e && e.message); }
+    }
+    async function dbDelete(key) {
+        const db = await openDb(); if (!db) return;
+        try {
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(DB_STORE, 'readwrite');
+                tx.objectStore(DB_STORE).delete(key);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        } catch (e) { console.warn('[NovelMaestro] Удаление из IndexedDB:', e && e.message); }
+    }
+    // зеркало хранилища origin в памяти: заполняется один раз при загрузке страницы
+    let siteGlossaries = {};    // bookKey → объект глоссария
+    let siteNerDone = {};       // bookKey → {pageCacheKey: ts}
+    let siteChapterCache = {};  // bookKey → [{url, ts, data}] ≤ CACHE_CHAPTERS, в порядке чтения
+    async function loadSiteData() {
+        const db = await openDb();
+        if (!db) return;
+        try {
+            const pairs = await new Promise((resolve, reject) => {
+                const tx = db.transaction(DB_STORE, 'readonly');
+                const store = tx.objectStore(DB_STORE);
+                const kReq = store.getAllKeys();
+                const vReq = store.getAll();
+                tx.oncomplete = () => resolve(Array.from(kReq.result || [], (k, i) => [String(k), (vReq.result || [])[i]]));
+                tx.onerror = () => reject(tx.error);
+            });
+            for (const [k, v] of pairs) {
+                if (k.startsWith('g/')) siteGlossaries[k.slice(2)] = v || {};
+                else if (k.startsWith('n/')) siteNerDone[k.slice(2)] = v || {};
+                else if (k.startsWith('c/')) siteChapterCache[k.slice(2)] = v || [];
+            }
+        } catch (e) { console.warn('[NovelMaestro] IndexedDB:', e && e.message); }
+    }
+    function bookGlossary(bookKey) {
+        if (!bookKey) return {};
+        if (!siteGlossaries[bookKey]) siteGlossaries[bookKey] = {};
+        return siteGlossaries[bookKey];
+    }
+    // ===== КЭШ ГЛАВ (rolling: текущая + следующая) =====
+    function cacheGet(url) {
+        for (const list of Object.values(siteChapterCache)) {
+            for (const e of list) if (e.url === url) return e.data;
+        }
+        return null;
+    }
     function cacheSet(url, data, bookKey) {
-        // пустые записи (закрывший читалку поток не застал readerState) в кэш не попадают;
-        // частичный перевод не кэшируется вовсе
-        if (config.cacheLimit === 0 || !data || !data.text) return;
-        data.ts = Date.now();
-        chapterCache.entries[url] = data;
-        if (bookKey) {
-            const entries = chapterCache.index[bookKey] || (chapterCache.index[bookKey] = []);
-            const existing = entries.find(e => e.url === url);
-            if (existing) existing.ts = data.ts;
-            else entries.push({ url, ts: data.ts, title: data.title || '' });
-            if (config.cacheLimit > 0 && entries.length > config.cacheLimit) {
-                entries.sort((a, b) => b.ts - a.ts);
-                entries.slice(config.cacheLimit).forEach(e => { delete chapterCache.entries[e.url]; });
-                chapterCache.index[bookKey] = entries.slice(0, config.cacheLimit);
-            }
-        }
-        saveChapterCache();
+        // пустые записи в кэш не попадают; частичный (прерванный) перевод не кэшируется
+        if (!bookKey || !data || !data.text) return;
+        const list = (siteChapterCache[bookKey] || []).filter(e => e.url !== url);
+        list.push({ url, ts: Date.now(), data });
+        // порядок — по времени перевода: при последовательном чтении он совпадает с порядком чтения
+        list.sort((a, b) => a.ts - b.ts);
+        while (list.length > CACHE_CHAPTERS) list.shift();
+        siteChapterCache[bookKey] = list;
+        dbPut('c/' + bookKey, list);
     }
-    // порядок следования глав восстанавливаем цепочкой prev/next из кэшированных
-    // данных: переводили вразноброс — в офлайн-читалке всё равно по порядку;
-    // несколько несвязанных цепочек и петли дописываются/обрываются по времени
-    function cacheGetBookEntries(bookKey) {
-        const raw = (getCacheIndex()[bookKey] || []).slice().sort((a, b) => a.ts - b.ts);
-        const nodes = raw.map(e => ({ url: e.url, ts: e.ts, title: e.title || '' }));
-        const byUrl = new Map(nodes.map(n => [n.url, n]));
-        for (const n of nodes) {
-            const d = cacheGet(n.url);
-            n._prev = d && d.prevUrl && d.prevUrl !== n.url ? byUrl.get(d.prevUrl) || null : null;
-            n._next = d && d.nextUrl && d.nextUrl !== n.url ? byUrl.get(d.nextUrl) || null : null;
-        }
-        const ordered = [];
-        const seen = new Set();
-        const walk = (start) => {
-            let cur = start;
-            while (cur && !seen.has(cur.url)) {
-                seen.add(cur.url);
-                ordered.push(cur);
-                cur = cur._next;
-            }
-        };
-        for (const n of nodes) if (!n._prev && !seen.has(n.url)) walk(n);
-        for (const n of nodes) if (!seen.has(n.url)) walk(n);
-        return ordered;
-    }
-    function cacheBookChapterCount(bookKey) {
-        return cacheGetBookEntries(bookKey).filter(e => { const d = cacheGet(e.url); return d && d.text; }).length;
-    }
+    function cacheBookChapterCount(bookKey) { return (siteChapterCache[bookKey] || []).length; }
     function cacheClearBook(bookKey) {
-        (chapterCache.index[bookKey] || []).forEach(e => { delete chapterCache.entries[e.url]; });
-        delete chapterCache.index[bookKey];
-        saveChapterCache();
-    }
-    // однократная миграция старого кэша: он лежал в localStorage каждого сайта —
-    // что видно с этого origin — переносим в GM-хранилище и удаляем старые ключи
-    function migrateLegacyCache() {
-        let changed = false;
-        try {
-            const rawIdx = localStorage.getItem('nm_cache_index');
-            if (rawIdx) {
-                let legacy = null;
-                try { legacy = JSON.parse(rawIdx); } catch { /* повреждено */ }
-                if (legacy && typeof legacy === 'object') {
-                    for (const [bk, list] of Object.entries(legacy)) {
-                        const cur = chapterCache.index[bk] = chapterCache.index[bk] || [];
-                        const have = new Set(cur.map(e => e.url));
-                        for (const e of (Array.isArray(list) ? list : [])) if (e && e.url && !have.has(e.url)) { cur.push(e); changed = true; }
-                    }
-                }
-                localStorage.removeItem('nm_cache_index');
-                changed = true;
-            }
-            const legacyKeys = [];
-            for (let i = 0; i < localStorage.length; i++) {
-                const k = localStorage.key(i);
-                if (k && k.startsWith('nm_cc_')) legacyKeys.push(k);
-            }
-            for (const k of legacyKeys) {
-                const url = k.slice('nm_cc_'.length);
-                let data = null;
-                try { data = JSON.parse(localStorage.getItem(k)); } catch { /* повреждено */ }
-                localStorage.removeItem(k);
-                if (!data || !data.text || chapterCache.entries[url]) continue;
-                chapterCache.entries[url] = data;
-                changed = true;
-            }
-        } catch { /* localStorage недоступен — миграции нет */ }
-        if (changed) saveChapterCache();
+        delete siteChapterCache[bookKey];
+        dbDelete('c/' + bookKey);
     }
 
     // ===== ГЛОССАРИИ =====
+    // Глобальный глоссарий убран: книга определяется по URL страницы, её глоссарий
+    // лежит в IndexedDB этого сайта (siteGlossaries).
     function getGlossaryForView() {
-        if (currentGlossaryMode === 'global') return globalGlossary;
-        const key = selectedBookKey || currentBookKey;
-        return (key && books[key]) ? (books[key].glossary || {}) : {};
+        return currentBookKey && books[currentBookKey] ? bookGlossary(currentBookKey) : {};
     }
-    function saveGlossary(glossary, targetKey) {
-        if (targetKey === 'global' || (currentGlossaryMode === 'global' && !targetKey)) {
-            globalGlossary = glossary;
-            GM_setValue('globalGlossary', globalGlossary);
-        } else {
-            const key = targetKey || selectedBookKey || currentBookKey;
-            if (key && books[key]) { books[key].glossary = glossary; GM_setValue('books', books); }
-        }
+    function saveGlossary(glossary) {
+        const key = currentBookKey;
+        if (!key || !books[key]) return;
+        siteGlossaries[key] = glossary;
+        dbPut('g/' + key, glossary);
     }
     function getGlossaryForTranslation() {
-        if (config.glossarySource === 'global') return { ...globalGlossary };
-        const cur = getCurrentBook();
-        return cur ? { ...(cur.book.glossary || {}) } : {};
+        if (!currentBookKey || !books[currentBookKey]) return {};
+        return { ...bookGlossary(currentBookKey) };
     }
     function genderOf(typeStr) {
         const t = String(typeStr || '').toLowerCase();
@@ -802,14 +774,6 @@
             #nm-reader-mode.nm-reader-dark .nm-reader-nav button { color: #c6c6bf; border-color: #3a3d46; background: rgba(255,255,255,.04); }
             #nm-reader-mode.nm-reader-dark .nm-reader-nav button:hover { background: #23262e; }
             .nm-reader-nav button:disabled { opacity: .35; cursor: not-allowed; }
-            .nm-offline-toc { display: none; position: absolute; inset: 0; background: rgba(0,0,0,.55); z-index: 30; }
-            .nm-offline-toc.active { display: flex; align-items: flex-start; justify-content: center; }
-            .nm-offline-toc-panel { background: #ffffff; color: #111827; border-radius: 12px; width: min(520px, calc(100vw - 32px)); max-height: 78vh; overflow-y: auto; margin-top: 8vh; padding: 12px; }
-            #nm-reader-mode.nm-reader-dark .nm-offline-toc-panel { background: #1f232b; color: #e2e2dc; }
-            .nm-offline-toc-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
-            .nm-offline-toc-head button { border: none; background: none; font-size: 18px; cursor: pointer; color: inherit; line-height: 1; }
-            #nm-offline-toc-list button { display: block; width: 100%; text-align: left; border: none; border-bottom: 1px solid rgba(128,128,128,.18); background: none; color: inherit; padding: 11px 8px; font-size: 14px; cursor: pointer; }
-            #nm-offline-toc-list button.current { font-weight: 700; }
             #reader-preload-status { font-size: 12px; opacity: .65; display: none; }
 
             /* ===== ОБУЧЕНИЕ ===== */
@@ -847,8 +811,6 @@
                 /* на телефоне панель — компактнее и только иконками (подписи скрыты) */
                 .nm-reader-nav button { min-height: 40px; padding: 8px 14px; font-size: 15px; flex: 0 1 auto; }
                 .nm-reader-nav .nm-nav-label { display: none; }
-                .nm-offline-toc-panel { width: calc(100vw - 24px); max-height: 88vh; margin-top: 4vh; }
-                #nm-offline-toc-list button { padding: 13px 10px; }
                 .nm-training-instructions { max-width: calc(100vw - 16px); top: 8px; padding: 8px 10px; font-size: 11px; }
                 .nm-training-instructions h3 { font-size: 13px; margin-bottom: 4px; }
                 .nm-training-instructions .nm-btn { padding: 7px 12px; font-size: 12px; margin-top: 6px; }
@@ -911,12 +873,8 @@
                         <div class="nm-status" id="status-book"></div>
                     </div>
                     <div class="nm-tab-content" id="tab-glossary">
-                        <div class="nm-input-group">
-                            <label>Работать с:</label>
-                            <select class="nm-select" id="glossary-selector">
-                                <option value="global">🌍 Глобальный глоссарий</option>
-                            </select>
-                        </div>
+                        <div class="nm-help" id="glossary-book-hint" style="display:none;">📚 У каждой книги свой глоссарий; он хранится в памяти браузера для сайта книги. Откройте страницу книги — она определяется по заданному URL (например <code>…/fiction/58180/…</code>) — и глоссарий появится здесь.</div>
+                        <div id="glossary-body">
                         <div class="nm-add-form">
                             <input type="text" id="new-term" placeholder="Термин">
                             <input type="text" id="new-translation" placeholder="Перевод">
@@ -936,6 +894,7 @@
                         <div id="glossary-list"></div>
                         <div class="nm-pagination" id="glossary-pagination"></div>
                         <div class="nm-status" id="status-glossary"></div>
+                        </div>
                     </div>
                     <div class="nm-tab-content" id="tab-settings">
                         <div class="nm-section">
@@ -980,20 +939,11 @@
                             <div class="nm-input-group"><label>Размер чанка (символов):</label>
                                 <input type="number" class="nm-input" id="chunk-size" min="1000" max="100000" step="1000">
                             </div>
-                            <div class="nm-input-group"><label>Глоссарий при переводе:</label>
-                                <div class="nm-radio-group">
-                                    <label><input type="radio" name="glossary-source" value="book"> 📚 Текущей книги</label>
-                                    <label><input type="radio" name="glossary-source" value="global"> 🌍 Глобальный</label>
-                                </div>
+                            <div class="nm-checkbox-group">
+                                <input type="checkbox" id="preemptive-translate">
+                                <label for="preemptive-translate">🚀 Автоперевод следующей главы в фоне</label>
                             </div>
-                            <div class="nm-input-group"><label>🚀 Автоперевод следующих глав (количество):</label>
-                                <input type="number" class="nm-input" id="preemptive-count" min="0" max="20" step="1">
-                                <small>0 — переводить только текущую главу, 1 — следующую в фоне (по умолчанию), N — цепочкой перевести следующие N глав подряд.</small>
-                            </div>
-                            <div class="nm-input-group"><label>Кэш переведённых глав (количество):</label>
-                                <input type="number" class="nm-input" id="cache-limit" min="-1" max="500" step="1">
-                                <small>0 = не сохранять, -1 = без ограничений, по умолчанию последние 10 глав. Кэш хранится в браузере (localStorage) — из него работают офлайн-читалка и экспорт TXT.</small>
-                            </div>
+                            <small>Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT.</small>
                         </div>
                         <div class="nm-section">
                             <h3>🌐 Сеть</h3>
@@ -1119,12 +1069,6 @@
                         <button id="reader-toc" title="Оглавление">☰<span class="nm-nav-label"> Оглавление</span></button>
                         <button id="reader-next" title="Следующая глава">→<span class="nm-nav-label"> Следующая</span></button>
                         <span id="reader-preload-status"></span>
-                    </div>
-                </div>
-                <div class="nm-offline-toc" id="nm-offline-toc">
-                    <div class="nm-offline-toc-panel">
-                        <div class="nm-offline-toc-head"><span>📚 Переведённые главы</span><button type="button" id="nm-offline-toc-close" title="Закрыть">✕</button></div>
-                        <div id="nm-offline-toc-list"></div>
                     </div>
                 </div>
             </div>
@@ -1274,7 +1218,6 @@
         modal.classList.add('active');
         dropdownMenu.classList.remove('active');
         refreshBookTab();
-        refreshGlossarySelector();
         updateGlossaryUI();
         loadSettings();
     }
@@ -1316,7 +1259,7 @@
         if (!key || !books[key]) {
             const help = document.createElement('div');
             help.className = 'nm-help';
-            help.textContent = '⚠️ Текущая страница не привязана к книге.';
+            help.textContent = '⚠️ Книг пока нет — откройте страницу книги (она определяется по заданному URL) и привяжите её.';
             const btn = document.createElement('button');
             btn.className = 'nm-btn nm-btn-primary';
             btn.textContent = '📚 Привязать текущую страницу к книге';
@@ -1325,8 +1268,8 @@
             return;
         }
         const book = books[key];
-        const terms = Object.keys(book.glossary || {}).length;
-        const nerPages = Object.keys(book.nerDone || {}).length;
+        const terms = Object.keys(siteGlossaries[key] || {}).length;
+        const nerPages = Object.keys(siteNerDone[key] || {}).length;
         const cachedCount = cacheBookChapterCount(key);
         const info = document.createElement('div');
         info.className = 'nm-book-info';
@@ -1421,11 +1364,6 @@
         saveBtn.className = 'nm-btn nm-btn-primary';
         saveBtn.id = 'btn-save-book';
         saveBtn.textContent = '💾 Сохранить';
-        const readBtn = document.createElement('button');
-        readBtn.className = 'nm-btn nm-btn-success';
-        readBtn.id = 'btn-read-cache';
-        readBtn.textContent = '📖 Читать из кэша';
-        readBtn.disabled = cachedCount === 0;
         const exportTxtBtn = document.createElement('button');
         exportTxtBtn.className = 'nm-btn nm-btn-secondary';
         exportTxtBtn.id = 'btn-export-txt';
@@ -1442,21 +1380,18 @@
         area.replaceChildren(info,
             mkGroup('Название книги:', 'book-name-edit', book.name || ''),
             mkGroup('URL книги:', 'book-key-edit', key),
-            coverGroup, saveBtn, readBtn, exportTxtBtn, openSiteBtn, delBtn);
-        readBtn.addEventListener('click', () => openOfflineReader(key));
-        exportTxtBtn.addEventListener('click', () => exportBookToTxt(key));
-        openSiteBtn.title = 'Оглавление (если обучено) или последняя читанная глава';
+            coverGroup, saveBtn, exportTxtBtn, openSiteBtn, delBtn);
+        exportTxtBtn.title = 'Экспортирует кэшированные переводы глав (текущая и следующая) в TXT';
+        // экспорт TXT — перевод текущей страницы; на чужом origin для книги нечего экспортировать
+        exportTxtBtn.title = 'Экспортирует перевод текущей страницы в TXT';
+        const cd = key === currentBookKey ? cacheGet(pageCacheKey()) : null;
+        exportTxtBtn.disabled = !(cd && cd.text);
+        exportTxtBtn.addEventListener('click', exportChapterToTxt);
+        openSiteBtn.title = 'Оглавление (если обучено) или последняя переведённая глава';
         openSiteBtn.addEventListener('click', () => {
-            // оглавление, если оно обучено (tocUrl есть в кэшированных главах);
-            // иначе — последняя по времени переводa глава; если кэш пуст — URL книги
-            const entries = cacheGetBookEntries(key);
-            let target = '';
-            for (const e of entries) { const d = cacheGet(e.url); if (d && d.tocUrl) { target = d.tocUrl; break; } }
-            if (!target) {
-                const last = entries.slice().sort((a, b) => b.ts - a.ts)[0];
-                if (last) target = last.url;
-            }
-            if (!target && /^https?:/i.test(key)) target = key;
+            // адрес открытия хранится в записи книги: выученное оглавление, иначе
+            // последняя переведённая глава; если переводов ещё не было — URL книги
+            const target = book.openUrl || (/^https?:/i.test(key) ? key : '');
             if (target) openExternalTab(target);
         });
         $('#btn-save-book').addEventListener('click', () => {
@@ -1466,9 +1401,11 @@
             const cover = coverInput.value.trim();
             if (newKey === key) { book.name = newName; book.coverUrl = cover; }
             else {
-                // кэш глав привязан к URL-ключу книги — переносим его на новый ключ
-                const index = getCacheIndex();
-                if (index[key]) { index[newKey] = index[key]; delete index[key]; setCacheIndex(index); }
+                // данные книги привязаны к URL-ключу в IndexedDB этого сайта — переносим
+                for (const [p, store] of [['g/', siteGlossaries], ['n/', siteNerDone], ['c/', siteChapterCache]]) {
+                    if (key in store) { store[newKey] = store[key]; delete store[key]; dbPut(p + newKey, store[newKey]); }
+                    dbDelete(p + key);
+                }
                 books[newKey] = { ...book, name: newName, coverUrl: cover };
                 delete books[key];
                 if (currentBookKey === key) currentBookKey = newKey;
@@ -1477,42 +1414,28 @@
             GM_setValue('books', books);
             showStatus('Сохранено!', 'success', 'status-book');
             refreshBookTab();
-            refreshGlossarySelector();
+            updateGlossaryUI();
         });
         $('#btn-delete-book').addEventListener('click', () => {
-            if (confirm(`Удалить книгу "${books[key].name || key}" вместе с её глоссарием, кэшем извлечения и кэшем переводов глав?`)) {
+            if (confirm(`Удалить книгу "${books[key].name || key}" из списка? Её глоссарий, кэш извлечения и кэш переводов глав в памяти этого браузера тоже будут удалены.`)) {
                 cacheClearBook(key);
+                delete siteGlossaries[key];
+                delete siteNerDone[key];
+                dbDelete('g/' + key);
+                dbDelete('n/' + key);
                 delete books[key];
                 if (currentBookKey === key) currentBookKey = null;
                 managedBookKey = null;
                 GM_setValue('books', books);
                 showStatus('Книга удалена', 'success', 'status-book');
                 refreshBookTab();
-                refreshGlossarySelector();
                 updateGlossaryUI();
             }
         });
     }
 
     // ===== ВКЛАДКА "ГЛОССАРИЙ" =====
-    function refreshGlossarySelector() {
-        const selector = $('#glossary-selector');
-        selector.innerHTML = '<option value="global">🌍 Глобальный глоссарий</option>';
-        for (const [key, book] of Object.entries(books)) {
-            const opt = document.createElement('option');
-            opt.value = 'book:' + key;
-            opt.textContent = `📚 ${book.name || key}${key === currentBookKey ? '  (текущая страница)' : ''}`;
-            selector.appendChild(opt);
-        }
-        const target = selectedBookKey && books[selectedBookKey] ? 'book:' + selectedBookKey
-                     : (currentBookKey && books[currentBookKey] ? 'book:' + currentBookKey : 'global');
-        selector.value = target;
-        applyGlossarySelectorValue(target);
-    }
-    function applyGlossarySelectorValue(value) {
-        if (value === 'global') { currentGlossaryMode = 'global'; selectedBookKey = null; }
-        else if (value.startsWith('book:')) { currentGlossaryMode = 'book'; selectedBookKey = value.slice(5); }
-    }
+    // Глоссарий только для книги текущей страницы: вне страницы книги — подсказка вместо формы.
     function sortGlossaryEntries(entries) {
         const { field, dir } = glossarySort;
         if (!field || !dir) return entries;
@@ -1531,6 +1454,10 @@
         container.replaceChildren(p);
     }
     function updateGlossaryUI() {
+        const noBook = !currentBookKey || !books[currentBookKey];
+        $('#glossary-book-hint').style.display = noBook ? '' : 'none';
+        $('#glossary-body').style.display = noBook ? 'none' : '';
+        if (noBook) return;
         const container = $('#glossary-list');
         const pagination = $('#glossary-pagination');
         const glossary = getGlossaryForView();
@@ -1990,7 +1917,7 @@
     const NER_RESPONSE_RATIO = 2;
     async function extractTermsFromText(text, targetKey, onProgress) {
         const chunks = splitByNewlines(text, config.chunkSize);
-        const glossary = targetKey === 'global' ? { ...globalGlossary } : (books[targetKey] ? { ...(books[targetKey].glossary || {}) } : {});
+        const glossary = { ...bookGlossary(targetKey) };
         const expectedTotal = Math.max(1, Math.round(text.length * NER_RESPONSE_RATIO));
         let streamed = 0, added = 0, incremented = 0, canceled = false;
         const emitProgress = (i, retry) => {
@@ -2037,8 +1964,7 @@
                 }
             }
         }
-        if (targetKey === 'global') { globalGlossary = glossary; GM_setValue('globalGlossary', globalGlossary); }
-        else if (books[targetKey]) { books[targetKey].glossary = glossary; GM_setValue('books', books); }
+        if (books[targetKey]) { siteGlossaries[targetKey] = glossary; dbPut('g/' + targetKey, glossary); }
         return { added, incremented, canceled };
     }
 
@@ -2172,13 +2098,10 @@
     }
     function closeReader() {
         readerModeActive = false;
-        offlineReaderMode = false;
-        offlineUrls = [];
         readerMode.classList.remove('active');
         buttonsBar.style.display = '';
         readerState = null;
         $('#reader-retranslate').style.display = '';
-        $('#nm-offline-toc').classList.remove('active');
         progressHide();
     }
     function updateNavButtons() {
@@ -2186,8 +2109,7 @@
         $('#reader-retranslate').disabled = busy;
         $('#reader-prev').disabled = busy || !(readerState && readerState.prevUrl);
         $('#reader-next').disabled = busy || !(readerState && readerState.nextUrl);
-        // в офлайне ☰ — своё окно списка, она активна когда глав больше одной
-        $('#reader-toc').disabled = busy || (offlineReaderMode ? offlineUrls.length < 2 : !(readerState && readerState.tocUrl));
+        $('#reader-toc').disabled = busy || !(readerState && readerState.tocUrl);
         $('#reader-prev').style.display = readerState && readerState.prevUrl ? '' : 'none';
         $('#reader-next').style.display = readerState && readerState.nextUrl ? '' : 'none';
         $('#reader-toc').style.display = readerState && readerState.tocUrl ? '' : 'none';
@@ -2212,61 +2134,8 @@
         a.click();
         a.remove();
     }
-    function openOfflineReader(bookKey) {
-        const entries = cacheGetBookEntries(bookKey).filter(e => { const d = cacheGet(e.url); return d && d.text; });
-        if (!entries.length) { showStatus('В кэше нет переведённых глав', 'error', 'status-book'); return; }
-        closeModal();
-        offlineReaderMode = true;
-        offlineUrls = entries.map(e => e.url);
-        openReaderShell(null);
-        // в офлайне повторный перевод живой страницы не имеет смысла
-        $('#reader-retranslate').style.display = 'none';
-        renderOfflineChapter(0);
-        renderOfflineToc();
-    }
-    function renderOfflineChapter(idx) {
-        offlineIndex = idx;
-        const url = offlineUrls[idx];
-        const cached = cacheGet(url) || {};
-        // офлайн-навигация — по соседям восстановленной цепочки глав
-        setReaderState({
-            url,
-            title: cached.title || `Глава ${idx + 1}`,
-            text: cached.text || '',
-            nextUrl: idx + 1 < offlineUrls.length ? offlineUrls[idx + 1] : null,
-            prevUrl: idx > 0 ? offlineUrls[idx - 1] : null,
-            tocUrl: null
-        }, true);
-        // ☰ в офлайне — список переведённых глав (когда их больше одной)
-        $('#reader-toc').style.display = offlineUrls.length > 1 ? '' : 'none';
-        const statusBtn = $('#reader-preload-status');
-        statusBtn.textContent = `📴 Оффлайн • глава ${idx + 1} из ${offlineUrls.length} из кэша`;
-        statusBtn.style.display = '';
-    }
-    function renderOfflineToc() {
-        const list = $('#nm-offline-toc-list');
-        const items = offlineUrls.map((u, i) => {
-            const d = cacheGet(u) || {};
-            const b = document.createElement('button');
-            b.type = 'button';
-            if (i === offlineIndex) b.classList.add('current');
-            const t = String(d.title || '').trim() || u.replace(/^https?:\/\//, '');
-            b.textContent = `${i + 1}. ${t}`;
-            b.addEventListener('click', () => {
-                $('#nm-offline-toc').classList.remove('active');
-                renderOfflineChapter(i);
-            });
-            return b;
-        });
-        list.replaceChildren(...items);
-    }
     function gotoChapter(url) {
         if (!url || isTranslating) return;
-        if (offlineReaderMode) {
-            const idx = offlineUrls.indexOf(url);
-            if (idx >= 0) renderOfflineChapter(idx);
-            return;
-        }
         let target = null;
         try { target = new URL(url, location.href); } catch { return; }
         if (target.protocol !== 'http:' && target.protocol !== 'https:') return;
@@ -2275,26 +2144,19 @@
         sessionStorage.setItem('nm_auto_reader', '1');
         location.assign(target.href);
     }
-    // автоперевод следующих глав: цепочка из config.preemptiveCount глав; кэшированные
-    // главы проходим транзитом (их навигация сохранена в кэше), петля последней главы
-    // (next == сама страница) останавливает цепочку
-    async function pretranslateNext(nextUrl, remaining) {
-        if (!nextUrl || remaining <= 0 || config.cacheLimit === 0) return;
-        if (preemptiveRunning.has(nextUrl)) return;
+    // автоперевод одной следующей главы в фоне (чекбокс в настройках);
+    // уже закешированная глава пропускается, петля последней главы — тоже
+    async function pretranslateNext(nextUrl) {
+        if (!nextUrl || !config.preemptiveTranslation) return;
+        if (preemptiveRunning.has(nextUrl) || cacheGet(nextUrl)) return;
+        const cur = getCurrentBook();
         const sel = getBookSelectors();
-        if (!sel.content) return;
-        const cached = cacheGet(nextUrl);
-        if (cached) {
-            if (remaining > 1 && cached.nextUrl && cached.nextUrl !== nextUrl) return pretranslateNext(cached.nextUrl, remaining - 1);
-            return;
-        }
+        if (!cur || !sel.content) return;
         preemptiveRunning.add(nextUrl);
         const statusBtn = $('#reader-preload-status');
-        const total = config.preemptiveCount;
-        const no = total - remaining + 1;
         try {
             statusBtn.style.display = '';
-            statusBtn.textContent = total > 1 ? `⏳ Автоперевод ${no}/${total}…` : '⏳ Следующая глава переводится в фоне…';
+            statusBtn.textContent = '⏳ Следующая глава переводится в фоне…';
             const resp = await customFetch(nextUrl, {}, false);
             const html = await resp.text();
             const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -2302,17 +2164,14 @@
             if (!text.trim()) throw new Error('Не найден текст в следующей главе');
             const translated = await translateTextBackground(text);
             cacheSet(nextUrl, {
+                url: nextUrl,
                 title: doc.title || '',
                 text: translated,
                 nextUrl: resolveNavHref(doc, sel.next, nextUrl, 'next'),
                 prevUrl: resolveNavHref(doc, sel.prev, nextUrl, 'prev'),
                 tocUrl: resolveNavHref(doc, sel.toc, nextUrl, 'toc')
-            }, currentBookKey);
-            if (remaining > 1) {
-                const nxt = resolveNavHref(doc, sel.next, nextUrl, 'next');
-                if (nxt && nxt !== nextUrl) { await pretranslateNext(nxt, remaining - 1); return; }
-            }
-            statusBtn.textContent = total > 1 ? `✅ Автоперевод: сохранено ${no}/${total}` : '✅ Следующая глава готова';
+            }, cur.key);
+            statusBtn.textContent = '✅ Следующая глава готова';
             setTimeout(() => { statusBtn.style.display = 'none'; }, 4000);
         } catch (e) {
             console.warn('[NovelMaestro] Автоперевод:', e.message);
@@ -2351,6 +2210,10 @@
         // readerState создаётся СРАЗУ по живой странице — кнопки навигации
         // доступны даже если перевод отменён или не удался
         setReaderState({ url, title: document.title, text: '', ...resolveNavFromLive() }, false);
+        // адрес «Открыть на сайте»: выученное оглавление, иначе эта глава
+        // (последняя переведённая)
+        current.book.openUrl = readerState.tocUrl || url;
+        GM_setValue('books', books);
         progressShow(ignoreCache ? '🔄 Повторный перевод...' : '🔄 Перевод...');
         $('#btn-translate').disabled = true;
         try {
@@ -2420,7 +2283,7 @@
                 // частичный остаётся лишь на экране
                 if (translationResult.completed && full) cacheSet(url, { url, title: document.title, text: full, ...nav }, current.key);
             }
-            if (!cancelRequested && config.preemptiveCount > 0 && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl, config.preemptiveCount);
+            if (!cancelRequested && config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
         } finally {
             isTranslating = false;
             $('#btn-translate').disabled = false;
@@ -2432,8 +2295,7 @@
         if (isTranslating) return;
         dropdownMenu.classList.remove('active');
         const current = getCurrentBook();
-        const targetKey = currentGlossaryMode === 'global' ? 'global' : (selectedBookKey || (current ? current.key : null));
-        if (!targetKey) { alert('Сначала определите книгу'); openBookModal(); return; }
+        if (!current) { alert('Глоссарий привязан к книге — откройте её страницу (книга определяется по заданному URL)'); openBookModal(); return; }
         if (!config.apiKey && !config.localModel) { alert('Укажите API Key в настройках или включите «Локальная модель без API-ключа»'); openModal(); return; }
         const element = findContentElement();
         const text = extractMainText(element);
@@ -2443,7 +2305,7 @@
         extractMiniShow();
         try {
             const result = await extractTermsFromText(text, targetKey, updateExtractionProgressMini);
-            if (targetKey !== 'global' && !result.canceled) markNerDone(targetKey);
+            if (!result.canceled) markNerDone(targetKey);
             extractMiniStatus(result.canceled
                 ? `⏹ Остановлено: +${result.added} новых, обновлено частот: ${result.incremented}`
                 : `✨ +${result.added} новых, обновлено частот: ${result.incremented}`);
@@ -2645,15 +2507,13 @@
         document.querySelectorAll('[class*="cover"], [id*="cover"]').forEach(el => scan(el));
         return [...candidates].slice(0, 12);
     }
-    function exportBookToTxt(bookKey) {
-        const entries = cacheGetBookEntries(bookKey).filter(e => { const d = cacheGet(e.url); return d && d.text; });
-        if (!entries.length) { showStatus('Нет переведённых глав в кэше — нечего экспортировать', 'error', 'status-book'); return; }
-        const bookName = (books[bookKey] && books[bookKey].name) || bookKey;
-        let fullText = `«${bookName}» — ${entries.length} глав, экспорт ${new Date().toLocaleString('ru-RU')}\n${'='.repeat(60)}\n\n`;
-        entries.forEach((e, i) => {
-            const d = cacheGet(e.url);
-            fullText += `Глава ${i + 1}${d.title ? `: ${d.title}` : ''}\n\n${d.text}\n\n\n`;
-        });
+    // экспорт TXT — текущая переведённая страница: её кэшированный перевод
+    function exportChapterToTxt() {
+        const data = cacheGet(pageCacheKey());
+        if (!data || !data.text) { showStatus('Текущая страница ещё не переведена — нечего экспортировать', 'error', 'status-book'); return; }
+        const bookName = (currentBookKey && books[currentBookKey] && books[currentBookKey].name) || 'chapter';
+        const title = String(data.title || document.title || '').trim();
+        let fullText = `«${bookName}»${title ? ` — ${title}` : ''}\n${'='.repeat(60)}\n\n${data.text}\n`;
         const blob = new Blob([fullText], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -2661,7 +2521,7 @@
         a.download = `${String(bookName).replace(/[^\wа-яА-ЯёЁ \-]/g, '').trim().slice(0, 60) || 'book'}_translated.txt`;
         a.click();
         URL.revokeObjectURL(url);
-        showStatus(`TXT экспортирован: ${entries.length} глав`, 'success', 'status-book');
+        showStatus('TXT экспортирован: текущая переведённая страница', 'success', 'status-book');
     }
 
     // ===== ГЛОССАРИЙ CRUD =====
@@ -2720,7 +2580,7 @@
     }
     function exportGlossary() {
         const glossary = getGlossaryForView();
-        const name = currentGlossaryMode === 'global' ? 'global' : (selectedBookKey || 'book');
+        const name = (currentBookKey && books[currentBookKey] && books[currentBookKey].name) || 'book';
         const blob = new Blob([JSON.stringify(glossary, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -2731,12 +2591,11 @@
         showStatus('Глоссарий экспортирован!', 'success', 'status-glossary');
     }
     function clearGlossary() {
-        const isGlobal = currentGlossaryMode === 'global';
-        const bookKey = isGlobal ? null : (selectedBookKey || currentBookKey);
-        const label = isGlobal ? 'глобальный глоссарий' : `глоссарий книги "${books[bookKey] ? books[bookKey].name : bookKey}"`;
-        if (!confirm(`Очистить ${label}?` + (!isGlobal && bookKey ? '\nКэш страниц с извлечёнными терминами тоже будет очищен.' : ''))) return;
+        const bookKey = currentBookKey;
+        if (!bookKey || !books[bookKey]) return;
+        if (!confirm(`Очистить глоссарий книги "${books[bookKey].name || bookKey}"? Кэш страниц с извлечёнными терминами тоже будет очищен.`)) return;
         saveGlossary({});
-        if (!isGlobal && bookKey) clearNerCache(bookKey);
+        clearNerCache(bookKey);
         glossaryPage = 0;
         updateGlossaryUI();
         refreshBookTab();
@@ -2752,21 +2611,19 @@
         $('#request-timeout').value = config.requestTimeout;
         $('#max-retries').value = config.maxRetries;
         $('#chunk-size').value = config.chunkSize;
-        $('#cache-limit').value = config.cacheLimit;
         $('#source-lang').value = config.sourceLang;
         $('#target-lang').value = config.targetLang;
         $('#fuzzy-threshold').value = config.fuzzySearchThreshold;
         $('#auto-ner').checked = !!config.autoNER;
         $('#local-model').checked = !!config.localModel;
         $('#api-key').disabled = !!config.localModel;
-        $('#preemptive-count').value = config.preemptiveCount;
+        $('#preemptive-translate').checked = !!config.preemptiveTranslation;
         $('#reader-theme').value = config.readerTheme;
         $('#reader-font-family').value = config.readerFontFamily;
         $('#reader-font-size').value = config.readerFontSize;
         $('#reader-line-height').value = config.readerLineHeight;
         $('#reader-paragraph-spacing').value = config.readerParagraphSpacing;
         $('#reader-content-width').value = config.readerContentWidth;
-        $$('input[name="glossary-source"]').forEach(r => { r.checked = (r.value === config.glossarySource); });
         $('#translation-prompt').value = config.translationPrompt;
         $('#extraction-prompt').value = config.extractionPrompt;
     }
@@ -2778,8 +2635,6 @@
         ['#request-timeout', 'requestTimeout', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 0 ? n : 10; }],
         ['#max-retries', 'maxRetries', v => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : 3; }],
         ['#chunk-size', 'chunkSize', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : DEFAULT_CONFIG.chunkSize; }],
-        ['#cache-limit', 'cacheLimit', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= -1 ? Math.min(500, n) : DEFAULT_CONFIG.cacheLimit; }],
-        ['#preemptive-count', 'preemptiveCount', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 0 ? Math.min(20, n) : DEFAULT_CONFIG.preemptiveCount; }],
         ['#source-lang', 'sourceLang', v => v],
         ['#target-lang', 'targetLang', v => v],
         ['#fuzzy-threshold', 'fuzzySearchThreshold', v => { const f = parseFloat(v); return Number.isFinite(f) ? f : DEFAULT_CONFIG.fuzzySearchThreshold; }],
@@ -2815,9 +2670,7 @@
             $('#api-key').disabled = this.checked;
             scheduleSettingsSave();
         });
-        $$('input[name="glossary-source"]').forEach(r => {
-            r.addEventListener('change', () => { if (r.checked) { config.glossarySource = r.value; scheduleSettingsSave(); } });
-        });
+        $('#preemptive-translate').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
     }
     function resetSettings() {
         if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;
@@ -2832,25 +2685,25 @@
         const name = $('#book-modal-name').value.trim();
         if (!url) { alert('Укажите URL книги'); return; }
         if (books[url] && !confirm('Книга с таким URL уже существует. Заменить название (глоссарий сохранится)?')) return;
+        // в записи книги — только метаданные; глоссарий и кэш — в IndexedDB её сайта
         books[url] = {
+            ...books[url],
             name: name || 'Без названия',
-            glossary: books[url] ? books[url].glossary || {} : {},
-            nerDone: books[url] ? books[url].nerDone || {} : {},
             selectors: books[url] ? books[url].selectors || {} : {},
-            coverUrl: books[url] ? books[url].coverUrl || '' : ''
+            coverUrl: books[url] ? books[url].coverUrl || '' : '',
+            openUrl: (books[url] && books[url].openUrl) || url
         };
         currentBookKey = url;
         managedBookKey = url;
         GM_setValue('books', books);
         bookModal.classList.remove('active');
         refreshBookTab();
-        refreshGlossarySelector();
         updateGlossaryUI();
     }
 
     // ===== БЭКАП =====
     function exportAllData() {
-        const backup = { version: APP_VERSION, exportedAt: new Date().toISOString(), config, globalGlossary, books, chapterCache };
+        const backup = { version: APP_VERSION, exportedAt: new Date().toISOString(), config, books };
         const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -2858,7 +2711,7 @@
         a.download = `novelmaestro-backup-${new Date().toISOString().slice(0, 10)}.json`;
         a.click();
         URL.revokeObjectURL(url);
-        showStatus(`Экспортировано: ${Object.keys(books).length} книг, ${Object.keys(globalGlossary).length} глобальных терминов`, 'success', 'status-backup');
+        showStatus(`Экспортировано: ${Object.keys(books).length} книг. Глоссарии и кэш переводов — в памяти браузера каждого сайта: сохраняйте их экспорт/импортом глоссария на странице книги`, 'success', 'status-backup');
     }
     function importAllData() {
         const input = document.createElement('input');
@@ -2870,24 +2723,18 @@
                 try {
                     const backup = JSON.parse(ev.target.result);
                     if (!backup.version || !backup.config) throw new Error('Неверный формат файла бэкапа');
-                    const msg = `Импорт бэкапа (v${backup.version} от ${backup.exportedAt || '?'})\n\nКниг: ${Object.keys(backup.books || {}).length}\nГлобальных терминов: ${Object.keys(backup.globalGlossary || {}).length}\n\nВНИМАНИЕ: текущие данные будут ЗАМЕНЕНЫ. Продолжить?`;
+                    const msg = `Импорт бэкапа (v${backup.version} от ${backup.exportedAt || '?'})\n\nКниг: ${Object.keys(backup.books || {}).length}\n\nВНИМАНИЕ: список книг и настройки будут ЗАМЕНЕНЫ (глоссарии и кэш сайтов — нет). Продолжить?`;
                     if (!confirm(msg)) return;
                     config = { ...DEFAULT_CONFIG, ...backup.config };
-                    globalGlossary = backup.globalGlossary || {};
                     books = backup.books || {};
-                    chapterCache = backup.chapterCache && backup.chapterCache.entries && backup.chapterCache.index ? backup.chapterCache : { entries: {}, index: {} };
-                    GM_setValue('chapterCache', chapterCache);
                     GM_setValue('config', config);
-                    GM_setValue('globalGlossary', globalGlossary);
                     GM_setValue('books', books);
                     currentBookKey = findBookByUrl();
                     managedBookKey = null;
-                    selectedBookKey = null;
                     glossaryPage = 0;
                     loadSettings();
                     applyTheme();
                     refreshBookTab();
-                    refreshGlossarySelector();
                     updateGlossaryUI();
                     showStatus('✅ Бэкап успешно импортирован!', 'success', 'status-backup');
                 } catch (err) { showStatus('Ошибка импорта: ' + err.message, 'error', 'status-backup'); }
@@ -2929,14 +2776,7 @@
     });
     $('#reader-prev').addEventListener('click', () => gotoChapter(readerState && readerState.prevUrl));
     $('#reader-next').addEventListener('click', () => gotoChapter(readerState && readerState.nextUrl));
-    $('#nm-offline-toc-close').addEventListener('click', () => $('#nm-offline-toc').classList.remove('active'));
-    $('#nm-offline-toc').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.classList.remove('active'); });
     $('#reader-toc').addEventListener('click', () => {
-        // в офлайн-читалке ☰ — свой список переведённых глав, без перехода
-        if (offlineReaderMode) {
-            if (offlineUrls.length > 1) $('#nm-offline-toc').classList.add('active');
-            return;
-        }
         if (!readerState || !readerState.tocUrl) return;
         let target = null;
         try { target = new URL(readerState.tocUrl, location.href); } catch { return; }
@@ -2961,7 +2801,6 @@
         });
     });
     $('#book-select').addEventListener('change', function() { managedBookKey = this.value || null; renderBookManageArea(); });
-    $('#glossary-selector').addEventListener('change', function() { applyGlossarySelectorValue(this.value); glossaryPage = 0; updateGlossaryUI(); });
     $('#glossary-filter').addEventListener('input', function() { glossaryFilter = this.value; glossaryPage = 0; updateGlossaryUI(); });
     $('#btn-extract-terms').addEventListener('click', handleExtractTerms);
     $('#btn-add-term').addEventListener('click', addTerm);
@@ -2977,25 +2816,6 @@
     $('#btn-autofill-url').addEventListener('click', () => { $('#book-modal-url').value = suggestBookKeyFromUrl(); });
 
     // ===== ИНИЦИАЛИЗАЦИЯ =====
-    migrateLegacyCache();
-    // осиротевшие записи перевода глав (книга была создана с URL другой главы) —
-    // привязываем к книге по родительскому каталогу URL главы
-    (function attachOrphanEntries() {
-        const indexed = new Set();
-        Object.values(chapterCache.index).forEach(list => (list || []).forEach(e => indexed.add(e.url)));
-        let changed = false;
-        for (const [url, data] of Object.entries(chapterCache.entries)) {
-            if (indexed.has(url)) continue;
-            const parent = url.split('#')[0].replace(/\/[^/]*\/?$/, '');
-            if (!parent || parent.length <= 8) continue;
-            let target = books[parent] ? parent : null;
-            if (!target) for (const bk of Object.keys(books)) if (bk.startsWith(parent + '/')) { target = bk; break; }
-            if (!target) continue;
-            (chapterCache.index[target] = chapterCache.index[target] || []).push({ url, ts: data.ts || 0, title: data.title || '' });
-            changed = true;
-        }
-        if (changed) saveChapterCache();
-    })();
     currentBookKey = findBookByUrl();
     bindSettingsAutoSave();
     applyTheme();
@@ -3017,31 +2837,34 @@
         config.readerContentWidth = DEFAULT_CONFIG.readerContentWidth;
         cfgMigrated = true;
     }
-    // опережающий перевод: булев чекбокс → количество глав (0..20)
-    if (typeof config.preemptiveTranslation === 'boolean') {
-        config.preemptiveCount = config.preemptiveTranslation ? 1 : 0;
-        delete config.preemptiveTranslation;
+    // наследие эпохи GM-кэша: количество опережаемых глав и лимит кэша убраны,
+    // смысл количества наследует чекбокс автоперевода следующей главы
+    if ('preemptiveCount' in config) {
+        if (typeof config.preemptiveTranslation !== 'boolean') config.preemptiveTranslation = config.preemptiveCount > 0;
+        delete config.preemptiveCount;
         cfgMigrated = true;
     }
-    if (typeof config.preemptiveCount !== 'number' || !Number.isFinite(config.preemptiveCount) || config.preemptiveCount < 0) {
-        config.preemptiveCount = DEFAULT_CONFIG.preemptiveCount;
-        cfgMigrated = true;
-    }
+    if ('cacheLimit' in config) { delete config.cacheLimit; cfgMigrated = true; }
+    if ('glossarySource' in config) { delete config.glossarySource; cfgMigrated = true; }
     if (cfgMigrated) GM_setValue('config', config);
-    let migrated = false;
-    const migrateCount = g => {
-        for (const t of Object.values(g || {})) {
-            const before = JSON.stringify(t);
-            migrateEntry(t);
-            if (JSON.stringify(t) !== before) migrated = true;
-        }
-    };
-    migrateCount(globalGlossary);
-    for (const b of Object.values(books)) migrateCount(b.glossary);
-    if (migrated) { GM_setValue('globalGlossary', globalGlossary); GM_setValue('books', books); }
-    if (sessionStorage.getItem('nm_auto_reader')) {
-        sessionStorage.removeItem('nm_auto_reader');
-        setTimeout(() => handleTranslate(), 400);
+    // наследие GM-эпохи удаляем совсем (данные не мигрируем — скрипт в разработке)
+    for (const k of ['chapterCache', 'globalGlossary']) {
+        if (typeof GM_deleteValue === 'function') GM_deleteValue(k);
+        else GM_setValue(k, null);
     }
+    // записи книг теперь содержат только метаданные: глоссарии и nerDone из GM убираем
+    let booksChanged = false;
+    for (const b of Object.values(books)) {
+        if ('glossary' in b || 'nerDone' in b) { delete b.glossary; delete b.nerDone; booksChanged = true; }
+    }
+    if (booksChanged) GM_setValue('books', books);
+    // данные сайта грузим из IndexedDB асинхронно; автозапуск перевода при переходе
+    // с другой главы дожидается, чтобы не потерять кэш и отметки NER
+    const autoRun = !!sessionStorage.getItem('nm_auto_reader');
+    sessionStorage.removeItem('nm_auto_reader');
+    loadSiteData().then(() => {
+        if (modal.classList.contains('active')) { refreshBookTab(); updateGlossaryUI(); }
+        if (autoRun) setTimeout(() => handleTranslate(), 400);
+    });
     console.log(`NovelMaestro Lite v${APP_VERSION} загружен. Книга:`, currentBookKey || 'не определена');
 })();
