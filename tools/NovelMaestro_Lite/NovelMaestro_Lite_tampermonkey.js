@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.22
+// @version      1.23
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @match        *://*/*
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 (() => {
-    const APP_VERSION = '1.22';
+    const APP_VERSION = '1.23';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -34,10 +34,10 @@
         autoNER: true,
         readerTheme: 'light',
         readerFontFamily: 'Georgia, serif',
-        readerFontSize: 18,
+        readerFontSize: 14,
         readerLineHeight: 1.6,
         readerParagraphSpacing: 1.2,
-        readerContentWidth: 66,
+        readerContentWidth: 80,
         preemptiveCount: 1, // сколько следующих глав автопереводить в фоне (0 — выключено)
         cacheLimit: 10 // переводы глав в кэше (0 — не сохранять, -1 — без ограничений)
     };
@@ -166,6 +166,17 @@
         const url = location.href;
         const baseUrl = suggestBookKeyFromUrl();
         for (const key of Object.keys(books)) if (url.includes(key) || key === baseUrl) return key;
+        // книга могла быть создана с URL другой главы: соседние главы живут в одном
+        // родительском каталоге — точное совпадение с ним, иначе самый глубокий ключ в нём
+        const parent = baseUrl.replace(/\/[^/]*\/?$/, '');
+        if (parent && parent !== baseUrl && parent.length > 8) {
+            if (books[parent]) return parent;
+            let best = null;
+            for (const key of Object.keys(books)) {
+                if (key.startsWith(parent + '/') && (!best || key.length < best.length)) best = key;
+            }
+            if (best) return best;
+        }
         for (const key of Object.keys(books)) if (baseUrl.includes(key) || key.includes(baseUrl)) return key;
         return null;
     }
@@ -333,6 +344,7 @@
         const relevant = [];
         const glossary = getGlossaryForTranslation();
         for (const [id, t] of Object.entries(glossary)) {
+            if (!t || !t.term) continue; // битая запись глоссария не роняет перевод
             if (fuzzyMatchWord(text, t.term, config.fuzzySearchThreshold)) relevant.push({ ...t, id });
         }
         const unique = [];
@@ -2924,10 +2936,43 @@
     $('#btn-autofill-url').addEventListener('click', () => { $('#book-modal-url').value = suggestBookKeyFromUrl(); });
 
     // ===== ИНИЦИАЛИЗАЦИЯ =====
+    // осиротевшие переводы глав (книга была создана с URL другой главы и страницы
+    // не совпали) — привязываем к книге по родительскому каталогу URL главы
+    (function migrateOrphanCache() {
+        const index = getCacheIndex();
+        const indexed = new Set();
+        Object.values(index).forEach(list => (list || []).forEach(e => indexed.add(e.url)));
+        let changed = false;
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (!k || !k.startsWith(CACHE_PREFIX)) continue;
+            const url = k.slice(CACHE_PREFIX.length);
+            if (indexed.has(url)) continue;
+            const parent = url.split('#')[0].replace(/\/[^/]*\/?$/, '');
+            if (!parent || parent.length <= 8) continue;
+            let target = books[parent] ? parent : null;
+            if (!target) for (const key of Object.keys(books)) if (key.startsWith(parent + '/')) { target = key; break; }
+            if (!target) continue;
+            let data = null;
+            try { data = JSON.parse(localStorage.getItem(k)); } catch { /* damaged */ }
+            if (!data || !data.text) continue;
+            (index[target] = index[target] || []).push({ url, ts: 0, title: data.title || '' });
+            changed = true;
+        }
+        if (changed) setCacheIndex(index);
+    })();
     currentBookKey = findBookByUrl();
     bindSettingsAutoSave();
     applyTheme();
     let cfgMigrated = false;
+    // дефолты читалки: 18px/66% → 14px/80% (сбрасываются только старые дефолты,
+    // пользовательские размеры остаются); выполняется один раз на установку
+    if (!config.readerDefaultsV2) {
+        if (config.readerFontSize === 18) config.readerFontSize = 14;
+        if (config.readerContentWidth === 66) config.readerContentWidth = 80;
+        config.readerDefaultsV2 = true;
+        cfgMigrated = true;
+    }
     if (typeof config.requestTimeout === 'number' && config.requestTimeout > 1000) {
         config.requestTimeout = Math.max(1, Math.round(config.requestTimeout / 1000));
         cfgMigrated = true;
