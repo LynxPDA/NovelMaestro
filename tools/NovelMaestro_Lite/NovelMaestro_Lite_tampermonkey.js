@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.17
+// @version      1.18
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @match        *://*/*
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 (() => {
-    const APP_VERSION = '1.17';
+    const APP_VERSION = '1.18';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -37,7 +37,7 @@
         readerFontSize: 18,
         readerLineHeight: 1.6,
         readerParagraphSpacing: 1.2,
-        readerContentWidth: 700,
+        readerContentWidth: 66,
         preemptiveTranslation: true
     };
 
@@ -655,7 +655,7 @@
             .nm-reader-topbar-buttons button { border: none; border-radius: 6px; cursor: pointer; font-size: 15px; padding: 6px 10px; }
             #nm-reader-mode.nm-reader-light .nm-reader-topbar-buttons button { background: #e8e2d6; color: #26221c; }
             #nm-reader-mode.nm-reader-dark .nm-reader-topbar-buttons button { background: #2a2d35; color: #d8d8d3; }
-            .nm-reader-content { margin: 0 auto; padding: 70px 20px 150px; }
+            .nm-reader-content { margin: 0 auto; padding: 70px 20px 150px; max-width: var(--nm-content-width, 66%); }
             .nm-reader-content p { text-align: justify; }
             .nm-reader-loading { text-align: center; padding: 60px 0; font-size: 16px; opacity: .7; }
             .nm-reader-bottombar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; display: flex; flex-direction: column; gap: 8px; align-items: center; padding: 10px 14px 12px; backdrop-filter: blur(6px); }
@@ -690,6 +690,30 @@
             .nm-training-buttons { display: flex; flex-direction: column; gap: 6px; }
             .nm-training-buttons button { padding: 9px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; text-align: left; color: white; }
             .nm-training-buttons button:hover { opacity: .9; }
+
+            /* ===== МОБИЛЬНАЯ АДАПТАЦИЯ =====
+               указатель coarse ловит телефон даже в режиме «полной версии сайта» */
+            @media (max-width: 768px), (pointer: coarse) {
+                #nm-buttons { bottom: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); }
+                .nm-btn-float { min-width: 52px; min-height: 52px; font-size: 22px; padding: 14px 16px; }
+                .nm-dropdown-menu { min-width: 0; width: min(320px, calc(100vw - 24px)); bottom: 66px; }
+                .nm-dropdown-item { white-space: normal; padding: 12px 14px; }
+                .nm-modal.active { align-items: stretch; justify-content: stretch; }
+                .nm-modal-content { width: 100%; max-width: 100%; height: 100%; max-height: 100%; border-radius: 0; padding: 14px; padding: calc(14px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom)); }
+                .nm-tabs { overflow-x: auto; flex-wrap: nowrap; }
+                .nm-tab { flex-shrink: 0; white-space: nowrap; padding: 10px 14px; }
+                .nm-input, .nm-textarea, .nm-select, .nm-glossary-table input, .nm-glossary-table select, .nm-add-form input, .nm-add-form select, .nm-filter-row input { font-size: 16px; }
+                .nm-add-form { grid-template-columns: 1fr; }
+                #glossary-list { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+                .nm-glossary-table { min-width: 620px; }
+                .nm-reader-topbar { padding: 8px 10px; padding: calc(8px + env(safe-area-inset-top)) 10px 8px; }
+                .nm-reader-bottombar { padding: 8px 10px 10px; padding: 8px 10px calc(10px + env(safe-area-inset-bottom)); }
+                #nm-reader-mode .nm-reader-content { max-width: 100%; padding: 60px 12px 120px; padding-top: calc(60px + env(safe-area-inset-top)); }
+                .nm-reader-nav button { min-height: 44px; padding: 8px 14px; font-size: 13px; flex: 1 1 auto; }
+                .nm-training-instructions { max-width: calc(100vw - 24px); padding: 10px 12px; font-size: 12px; }
+                .nm-training-popup { max-width: calc(100vw - 24px); }
+                .nm-training-buttons button { padding: 11px 14px; }
+            }
         </style>
     `;
 
@@ -872,8 +896,8 @@
                             <div class="nm-input-group"><label>Отступ между абзацами (em):</label>
                                 <input type="number" class="nm-input" id="reader-paragraph-spacing" min="0.2" max="4" step="0.1">
                             </div>
-                            <div class="nm-input-group"><label>Ширина колонки (px):</label>
-                                <input type="number" class="nm-input" id="reader-content-width" min="400" max="1400" step="50">
+                            <div class="nm-input-group"><label>Ширина колонки (% экрана):</label>
+                                <input type="number" class="nm-input" id="reader-content-width" min="30" max="100" step="5">
                             </div>
                         </div>
                         <div class="nm-section">
@@ -1010,7 +1034,7 @@
             .nm-mini-header button { border: none; background: none; font-size: 18px; cursor: pointer; color: inherit; padding: 4px; line-height: 1; }
             .nm-mini-status { margin-top: 6px; font-size: 12px; opacity: 0.75; word-break: break-word; }
             #nm-root.nm-ui-dark .nm-mini-modal { background: #1f232b; color: #e2e2dc; }
-            @media (max-width: 720px) {
+            @media (max-width: 768px), (pointer: coarse) {
                 .nm-mini-modal { left: 12px; right: 12px; width: auto; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
             }
         `;
@@ -1878,7 +1902,7 @@
         readerContent.style.fontFamily = config.readerFontFamily;
         readerContent.style.fontSize = config.readerFontSize + 'px';
         readerContent.style.lineHeight = config.readerLineHeight;
-        readerContent.style.maxWidth = config.readerContentWidth + 'px';
+        readerContent.style.setProperty('--nm-content-width', config.readerContentWidth + '%');
         let dyn = $('#nm-reader-dyn');
         if (!dyn) {
             dyn = document.createElement('style');
@@ -2333,7 +2357,7 @@
         ['#reader-font-size', 'readerFontSize', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : DEFAULT_CONFIG.readerFontSize; }],
         ['#reader-line-height', 'readerLineHeight', v => { const f = parseFloat(v); return Number.isFinite(f) ? f : DEFAULT_CONFIG.readerLineHeight; }],
         ['#reader-paragraph-spacing', 'readerParagraphSpacing', v => { const f = parseFloat(v); return Number.isFinite(f) ? f : DEFAULT_CONFIG.readerParagraphSpacing; }],
-        ['#reader-content-width', 'readerContentWidth', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : DEFAULT_CONFIG.readerContentWidth; }],
+        ['#reader-content-width', 'readerContentWidth', v => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(100, Math.max(30, n)) : DEFAULT_CONFIG.readerContentWidth; }],
         ['#translation-prompt', 'translationPrompt', v => v],
         ['#extraction-prompt', 'extractionPrompt', v => v]
     ];
@@ -2516,10 +2540,17 @@
     currentBookKey = findBookByUrl();
     bindSettingsAutoSave();
     applyTheme();
+    let cfgMigrated = false;
     if (typeof config.requestTimeout === 'number' && config.requestTimeout > 1000) {
         config.requestTimeout = Math.max(1, Math.round(config.requestTimeout / 1000));
-        GM_setValue('config', config);
+        cfgMigrated = true;
     }
+    // старые значения ширины колонки были в пикселях, новые — проценты ширины экрана (30-100)
+    if (typeof config.readerContentWidth === 'number' && config.readerContentWidth > 100) {
+        config.readerContentWidth = DEFAULT_CONFIG.readerContentWidth;
+        cfgMigrated = true;
+    }
+    if (cfgMigrated) GM_setValue('config', config);
     let migrated = false;
     const migrateCount = g => {
         for (const t of Object.values(g || {})) {
