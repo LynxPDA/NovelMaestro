@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.20
+// @version      1.21
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @match        *://*/*
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 (() => {
-    const APP_VERSION = '1.20';
+    const APP_VERSION = '1.21';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -29,7 +29,7 @@
         localModel: false,
         glossarySource: 'book',
         translationPrompt: 'Переведи следующий текст с {sourceLang} на {targetLang}.\n\nГЛОССАРИЙ ТЕРМИНОВ (обязательно используй эти переводы, сохраняй пол персонажей):\n{glossary}\n\nВАЖНО:\n- Имена и термины переводи точно по глоссарию\n- Сохраняй пол персонажей (он/она) согласно глоссарию\n- Сохраняй стиль оригинала\n- Сохраняй разбивку на абзацы\n- Возвращай ТОЛЬКО перевод, без комментариев\n\nТекст:\n{text}',
-        extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang} Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
+        extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины. Перевод терминов должен быть на {targetLang}.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang}. Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
         fuzzySearchThreshold: 0.7,
         autoNER: true,
         readerTheme: 'light',
@@ -38,7 +38,7 @@
         readerLineHeight: 1.6,
         readerParagraphSpacing: 1.2,
         readerContentWidth: 66,
-        preemptiveTranslation: true,
+        preemptiveCount: 1, // сколько следующих глав автопереводить в фоне (0 — выключено)
         cacheLimit: 10 // переводы глав в кэше (0 — не сохранять, -1 — без ограничений)
     };
 
@@ -534,14 +534,14 @@
                 if (pick) { const h = absHref(pick, baseUrl); if (h) return h; }
             }
         }
+        // toc — только по выученной сигнатуре: универсальной надёжной эвристики для
+        // оглавления нет, а ложная кнопка хуже, чем её отсутствие
         if (type !== 'toc') {
             const rel = tryQuery(root, type === 'next' ? 'a[rel="next"]' : 'a[rel="prev"]');
             if (rel) { const h = absHref(rel, baseUrl); if (h) return h; }
+            const pick = pickLink(Array.from(root.querySelectorAll ? root.querySelectorAll('a') : []), type);
+            if (pick) { const h = absHref(pick, baseUrl); if (h) return h; }
         }
-        // общий фолбэк по всей странице для всех типов, включая toc: мобильная версия
-        // сайта часто имеет другую структуру, и десктопные выученные сигнатуры не работают
-        const pick = pickLink(Array.from(root.querySelectorAll ? root.querySelectorAll('a') : []), type);
-        if (pick) { const h = absHref(pick, baseUrl); if (h) return h; }
         return null;
     }
     function resolveNavFromLive() {
@@ -759,7 +759,10 @@
                 .nm-reader-topbar { padding: 8px 10px; padding: calc(8px + env(safe-area-inset-top)) 10px 8px; }
                 .nm-reader-bottombar { padding: 8px 10px 10px; padding: 8px 10px calc(10px + env(safe-area-inset-bottom)); }
                 #nm-reader-mode .nm-reader-content { max-width: 100%; padding: 60px 12px 120px; padding-top: calc(60px + env(safe-area-inset-top)); }
-                .nm-reader-nav button { min-height: 44px; padding: 8px 14px; font-size: 13px; flex: 1 1 auto; }
+                .nm-reader-nav { gap: 6px; }
+                /* на телефоне панель — компактнее и только иконками (подписи скрыты) */
+                .nm-reader-nav button { min-height: 40px; padding: 8px 14px; font-size: 15px; flex: 0 1 auto; }
+                .nm-reader-nav .nm-nav-label { display: none; }
                 .nm-training-instructions { max-width: calc(100vw - 16px); top: 8px; padding: 8px 10px; font-size: 11px; }
                 .nm-training-instructions h3 { font-size: 13px; margin-bottom: 4px; }
                 .nm-training-instructions .nm-btn { padding: 7px 12px; font-size: 12px; margin-top: 6px; }
@@ -897,9 +900,9 @@
                                     <label><input type="radio" name="glossary-source" value="global"> 🌍 Глобальный</label>
                                 </div>
                             </div>
-                            <div class="nm-checkbox-group">
-                                <input type="checkbox" id="preemptive-translation">
-                                <label for="preemptive-translation">🚀 Опережающий перевод (следующая глава переводится в фоне)</label>
+                            <div class="nm-input-group"><label>🚀 Автоперевод следующих глав (количество):</label>
+                                <input type="number" class="nm-input" id="preemptive-count" min="0" max="20" step="1">
+                                <small>0 — переводить только текущую главу, 1 — следующую в фоне (по умолчанию), N — цепочкой перевести следующие N глав подряд.</small>
                             </div>
                             <div class="nm-input-group"><label>Кэш переведённых глав (количество):</label>
                                 <input type="number" class="nm-input" id="cache-limit" min="-1" max="500" step="1">
@@ -1025,10 +1028,10 @@
                         <div id="reader-progress-status">Подготовка...</div>
                     </div>
                     <div class="nm-reader-nav">
-                        <button id="reader-retranslate" title="Перевести текущую главу заново (игнорирует кэш)">🌐 Перевести</button>
-                        <button id="reader-prev">← Предыдущая</button>
-                        <button id="reader-toc">☰ Оглавление</button>
-                        <button id="reader-next">Следующая →</button>
+                        <button id="reader-retranslate" title="Перевести текущую главу заново (игнорирует кэш)">🌐<span class="nm-nav-label"> Перевести</span></button>
+                        <button id="reader-prev" title="Предыдущая глава">←<span class="nm-nav-label"> Предыдущая</span></button>
+                        <button id="reader-toc" title="Оглавление">☰<span class="nm-nav-label"> Оглавление</span></button>
+                        <button id="reader-next" title="Следующая глава">→<span class="nm-nav-label"> Следующая</span></button>
                         <span id="reader-preload-status"></span>
                     </div>
                 </div>
@@ -1891,7 +1894,8 @@
         for (let i = 0; i < chunks.length; i++) {
             if (cancelRequested) { canceled = true; break; }
             const charsBefore = streamed;
-            const userPrompt = config.extractionPrompt.replace('{targetLang}', config.targetLang).replace('{text}', chunks[i]);
+            // replaceAll: плейсхолдеры в промптах могут встречаться несколько раз
+            const userPrompt = config.extractionPrompt.replaceAll('{targetLang}', config.targetLang).replaceAll('{text}', chunks[i]);
             let result;
             try {
                 const res = await callLLM([{ role: 'user', content: userPrompt }], 0.3, true, {
@@ -1964,10 +1968,10 @@
                 progressStatus(`Чанк ${i + 1}/${chunks.length} • абзацев в источнике: ${totalParas}`);
                 const glossaryText = formatGlossaryForPrompt(findRelevantTerms(chunks[i]));
                 const userPrompt = config.translationPrompt
-                    .replace('{sourceLang}', config.sourceLang)
-                    .replace('{targetLang}', config.targetLang)
-                    .replace('{glossary}', glossaryText)
-                    .replace('{text}', chunks[i]);
+                    .replaceAll('{sourceLang}', config.sourceLang)
+                    .replaceAll('{targetLang}', config.targetLang)
+                    .replaceAll('{glossary}', glossaryText)
+                    .replaceAll('{text}', chunks[i]);
                 let chunkTranslation = '';
                 const res = await callLLM([{ role: 'user', content: userPrompt }], 0.7, true, {
                     onDelta: (content) => {
@@ -2009,10 +2013,10 @@
         for (const chunk of chunks) {
             const glossaryText = formatGlossaryForPrompt(findRelevantTerms(chunk));
             const userPrompt = config.translationPrompt
-                .replace('{sourceLang}', config.sourceLang)
-                .replace('{targetLang}', config.targetLang)
-                .replace('{glossary}', glossaryText)
-                .replace('{text}', chunk);
+                .replaceAll('{sourceLang}', config.sourceLang)
+                .replaceAll('{targetLang}', config.targetLang)
+                .replaceAll('{glossary}', glossaryText)
+                .replaceAll('{text}', chunk);
             const resp = await callLLM([{ role: 'user', content: userPrompt }], 0.7, false);
             const data = await resp.json().catch(() => null);
             const piece = data && data.choices && data.choices[0] && data.choices[0].message ? (data.choices[0].message.content || '') : '';
@@ -2143,16 +2147,26 @@
         sessionStorage.setItem('nm_auto_reader', '1');
         location.assign(target.href);
     }
-    async function pretranslateNext(nextUrl) {
-        if (!nextUrl || !config.preemptiveTranslation || config.cacheLimit === 0) return;
-        if (cacheGet(nextUrl) || preemptiveRunning.has(nextUrl)) return;
+    // автоперевод следующих глав: цепочка из config.preemptiveCount глав; кэшированные
+    // главы проходим транзитом (их навигация сохранена в кэше), петля последней главы
+    // (next == сама страница) останавливает цепочку
+    async function pretranslateNext(nextUrl, remaining) {
+        if (!nextUrl || remaining <= 0 || config.cacheLimit === 0) return;
+        if (preemptiveRunning.has(nextUrl)) return;
         const sel = getBookSelectors();
         if (!sel.content) return;
+        const cached = cacheGet(nextUrl);
+        if (cached) {
+            if (remaining > 1 && cached.nextUrl && cached.nextUrl !== nextUrl) return pretranslateNext(cached.nextUrl, remaining - 1);
+            return;
+        }
         preemptiveRunning.add(nextUrl);
         const statusBtn = $('#reader-preload-status');
+        const total = config.preemptiveCount;
+        const no = total - remaining + 1;
         try {
             statusBtn.style.display = '';
-            statusBtn.textContent = '⏳ Следующая глава переводится в фоне…';
+            statusBtn.textContent = total > 1 ? `⏳ Автоперевод ${no}/${total}…` : '⏳ Следующая глава переводится в фоне…';
             const resp = await customFetch(nextUrl, {}, false);
             const html = await resp.text();
             const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -2166,10 +2180,14 @@
                 prevUrl: resolveNavHref(doc, sel.prev, nextUrl, 'prev'),
                 tocUrl: resolveNavHref(doc, sel.toc, nextUrl, 'toc')
             }, currentBookKey);
-            statusBtn.textContent = '✅ Следующая глава готова';
+            if (remaining > 1) {
+                const nxt = resolveNavHref(doc, sel.next, nextUrl, 'next');
+                if (nxt && nxt !== nextUrl) { await pretranslateNext(nxt, remaining - 1); return; }
+            }
+            statusBtn.textContent = total > 1 ? `✅ Автоперевод: сохранено ${no}/${total}` : '✅ Следующая глава готова';
             setTimeout(() => { statusBtn.style.display = 'none'; }, 4000);
         } catch (e) {
-            console.warn('[NovelMaestro] Опережающий перевод:', e.message);
+            console.warn('[NovelMaestro] Автоперевод:', e.message);
             statusBtn.style.display = 'none';
         } finally {
             preemptiveRunning.delete(nextUrl);
@@ -2272,7 +2290,7 @@
                 // в кэш — только завершённый перевод; частичный остаётся лишь на экране
                 if (translationResult.completed && full) cacheSet(url, { ...readerState }, current.key);
             }
-            if (!cancelRequested && config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
+            if (!cancelRequested && config.preemptiveCount > 0 && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl, config.preemptiveCount);
         } finally {
             isTranslating = false;
             $('#btn-translate').disabled = false;
@@ -2611,7 +2629,7 @@
         $('#auto-ner').checked = !!config.autoNER;
         $('#local-model').checked = !!config.localModel;
         $('#api-key').disabled = !!config.localModel;
-        $('#preemptive-translation').checked = !!config.preemptiveTranslation;
+        $('#preemptive-count').value = config.preemptiveCount;
         $('#reader-theme').value = config.readerTheme;
         $('#reader-font-family').value = config.readerFontFamily;
         $('#reader-font-size').value = config.readerFontSize;
@@ -2631,6 +2649,7 @@
         ['#max-retries', 'maxRetries', v => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : 3; }],
         ['#chunk-size', 'chunkSize', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : DEFAULT_CONFIG.chunkSize; }],
         ['#cache-limit', 'cacheLimit', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= -1 ? Math.min(500, n) : DEFAULT_CONFIG.cacheLimit; }],
+        ['#preemptive-count', 'preemptiveCount', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 0 ? Math.min(20, n) : DEFAULT_CONFIG.preemptiveCount; }],
         ['#source-lang', 'sourceLang', v => v],
         ['#target-lang', 'targetLang', v => v],
         ['#fuzzy-threshold', 'fuzzySearchThreshold', v => { const f = parseFloat(v); return Number.isFinite(f) ? f : DEFAULT_CONFIG.fuzzySearchThreshold; }],
@@ -2666,7 +2685,6 @@
             $('#api-key').disabled = this.checked;
             scheduleSettingsSave();
         });
-        $('#preemptive-translation').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
         $$('input[name="glossary-source"]').forEach(r => {
             r.addEventListener('change', () => { if (r.checked) { config.glossarySource = r.value; scheduleSettingsSave(); } });
         });
@@ -2831,6 +2849,16 @@
     // старые значения ширины колонки были в пикселях, новые — проценты ширины экрана (30-100)
     if (typeof config.readerContentWidth === 'number' && config.readerContentWidth > 100) {
         config.readerContentWidth = DEFAULT_CONFIG.readerContentWidth;
+        cfgMigrated = true;
+    }
+    // опережающий перевод: булев чекбокс → количество глав (0..20)
+    if (typeof config.preemptiveTranslation === 'boolean') {
+        config.preemptiveCount = config.preemptiveTranslation ? 1 : 0;
+        delete config.preemptiveTranslation;
+        cfgMigrated = true;
+    }
+    if (typeof config.preemptiveCount !== 'number' || !Number.isFinite(config.preemptiveCount) || config.preemptiveCount < 0) {
+        config.preemptiveCount = DEFAULT_CONFIG.preemptiveCount;
         cfgMigrated = true;
     }
     if (cfgMigrated) GM_setValue('config', config);
