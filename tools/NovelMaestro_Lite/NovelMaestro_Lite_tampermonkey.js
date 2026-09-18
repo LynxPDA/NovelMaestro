@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.23
+// @version      1.24
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @match        *://*/*
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 (() => {
-    const APP_VERSION = '1.23';
+    const APP_VERSION = '1.24';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -208,35 +208,39 @@
     }
 
     // ===== КЭШ ГЛАВ =====
-    // Переводы глав хранятся в localStorage персистентно: из них работает офлайн-читалка
-    // и экспорт; индекс по книгам хранит главы в порядке добавления (порядок чтения).
-    const CACHE_PREFIX = 'nm_cc_';
-    const CACHE_INDEX_KEY = 'nm_cache_index';
-    function getCacheIndex() {
-        try { return JSON.parse(localStorage.getItem(CACHE_INDEX_KEY)) || {}; } catch { return {}; }
-    }
-    function setCacheIndex(index) {
-        try { localStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index)); } catch {}
-    }
-    function cacheGet(url) {
-        try { const raw = localStorage.getItem(CACHE_PREFIX + url); return raw ? JSON.parse(raw) : null; } catch { return null; }
-    }
+    // Кэш живёт в GM-хранилище, а НЕ в localStorage страницы: localStorage по-доменный,
+    // и при управлении книгой с чужого сайта (например с google.com) её главы просто
+    // не видны. Одна структура: entries {url: данные} + index {ключ книги: [{url, ts}]}.
+    const CACHE_STORAGE_KEY = 'chapterCache';
+    let chapterCache = (() => {
+        try {
+            const saved = GM_getValue(CACHE_STORAGE_KEY, null);
+            if (saved && saved.entries && saved.index) return saved;
+        } catch { /* повреждённый кэш начинаем с чистого */ }
+        return { entries: {}, index: {} };
+    })();
+    function saveChapterCache() { try { GM_setValue(CACHE_STORAGE_KEY, chapterCache); } catch {} }
+    function getCacheIndex() { return chapterCache.index; }
+    function setCacheIndex(index) { chapterCache.index = index; saveChapterCache(); }
+    function cacheGet(url) { return chapterCache.entries[url] || null; }
     function cacheSet(url, data, bookKey) {
-        // пустые записи (закрывший читалку поток не застал readerState) в кэш не попадают
+        // пустые записи (закрывший читалку поток не застал readerState) в кэш не попадают;
+        // частичный перевод не кэшируется вовсе
         if (config.cacheLimit === 0 || !data || !data.text) return;
-        try { localStorage.setItem(CACHE_PREFIX + url, JSON.stringify(data)); } catch { return; }
-        if (!bookKey) return;
-        const index = getCacheIndex();
-        const entries = index[bookKey] || (index[bookKey] = []);
-        const existing = entries.find(e => e.url === url);
-        if (existing) existing.ts = Date.now();
-        else entries.push({ url, ts: Date.now(), title: data.title || '' });
-        if (config.cacheLimit > 0 && entries.length > config.cacheLimit) {
-            entries.sort((a, b) => b.ts - a.ts);
-            entries.slice(config.cacheLimit).forEach(e => { try { localStorage.removeItem(CACHE_PREFIX + e.url); } catch {} });
-            index[bookKey] = entries.slice(0, config.cacheLimit);
+        data.ts = Date.now();
+        chapterCache.entries[url] = data;
+        if (bookKey) {
+            const entries = chapterCache.index[bookKey] || (chapterCache.index[bookKey] = []);
+            const existing = entries.find(e => e.url === url);
+            if (existing) existing.ts = data.ts;
+            else entries.push({ url, ts: data.ts, title: data.title || '' });
+            if (config.cacheLimit > 0 && entries.length > config.cacheLimit) {
+                entries.sort((a, b) => b.ts - a.ts);
+                entries.slice(config.cacheLimit).forEach(e => { delete chapterCache.entries[e.url]; });
+                chapterCache.index[bookKey] = entries.slice(0, config.cacheLimit);
+            }
         }
-        setCacheIndex(index);
+        saveChapterCache();
     }
     // порядок следования глав восстанавливаем цепочкой prev/next из кэшированных
     // данных: переводили вразноброс — в офлайн-читалке всё равно по порядку;
@@ -268,10 +272,45 @@
         return cacheGetBookEntries(bookKey).filter(e => { const d = cacheGet(e.url); return d && d.text; }).length;
     }
     function cacheClearBook(bookKey) {
-        const index = getCacheIndex();
-        (index[bookKey] || []).forEach(e => { try { localStorage.removeItem(CACHE_PREFIX + e.url); } catch {} });
-        delete index[bookKey];
-        setCacheIndex(index);
+        (chapterCache.index[bookKey] || []).forEach(e => { delete chapterCache.entries[e.url]; });
+        delete chapterCache.index[bookKey];
+        saveChapterCache();
+    }
+    // однократная миграция старого кэша: он лежал в localStorage каждого сайта —
+    // что видно с этого origin — переносим в GM-хранилище и удаляем старые ключи
+    function migrateLegacyCache() {
+        let changed = false;
+        try {
+            const rawIdx = localStorage.getItem('nm_cache_index');
+            if (rawIdx) {
+                let legacy = null;
+                try { legacy = JSON.parse(rawIdx); } catch { /* повреждено */ }
+                if (legacy && typeof legacy === 'object') {
+                    for (const [bk, list] of Object.entries(legacy)) {
+                        const cur = chapterCache.index[bk] = chapterCache.index[bk] || [];
+                        const have = new Set(cur.map(e => e.url));
+                        for (const e of (Array.isArray(list) ? list : [])) if (e && e.url && !have.has(e.url)) { cur.push(e); changed = true; }
+                    }
+                }
+                localStorage.removeItem('nm_cache_index');
+                changed = true;
+            }
+            const legacyKeys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith('nm_cc_')) legacyKeys.push(k);
+            }
+            for (const k of legacyKeys) {
+                const url = k.slice('nm_cc_'.length);
+                let data = null;
+                try { data = JSON.parse(localStorage.getItem(k)); } catch { /* повреждено */ }
+                localStorage.removeItem(k);
+                if (!data || !data.text || chapterCache.entries[url]) continue;
+                chapterCache.entries[url] = data;
+                changed = true;
+            }
+        } catch { /* localStorage недоступен — миграции нет */ }
+        if (changed) saveChapterCache();
     }
 
     // ===== ГЛОССАРИИ =====
@@ -2811,7 +2850,7 @@
 
     // ===== БЭКАП =====
     function exportAllData() {
-        const backup = { version: APP_VERSION, exportedAt: new Date().toISOString(), config, globalGlossary, books };
+        const backup = { version: APP_VERSION, exportedAt: new Date().toISOString(), config, globalGlossary, books, chapterCache };
         const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -2836,6 +2875,8 @@
                     config = { ...DEFAULT_CONFIG, ...backup.config };
                     globalGlossary = backup.globalGlossary || {};
                     books = backup.books || {};
+                    chapterCache = backup.chapterCache && backup.chapterCache.entries && backup.chapterCache.index ? backup.chapterCache : { entries: {}, index: {} };
+                    GM_setValue('chapterCache', chapterCache);
                     GM_setValue('config', config);
                     GM_setValue('globalGlossary', globalGlossary);
                     GM_setValue('books', books);
@@ -2936,30 +2977,24 @@
     $('#btn-autofill-url').addEventListener('click', () => { $('#book-modal-url').value = suggestBookKeyFromUrl(); });
 
     // ===== ИНИЦИАЛИЗАЦИЯ =====
-    // осиротевшие переводы глав (книга была создана с URL другой главы и страницы
-    // не совпали) — привязываем к книге по родительскому каталогу URL главы
-    (function migrateOrphanCache() {
-        const index = getCacheIndex();
+    migrateLegacyCache();
+    // осиротевшие записи перевода глав (книга была создана с URL другой главы) —
+    // привязываем к книге по родительскому каталогу URL главы
+    (function attachOrphanEntries() {
         const indexed = new Set();
-        Object.values(index).forEach(list => (list || []).forEach(e => indexed.add(e.url)));
+        Object.values(chapterCache.index).forEach(list => (list || []).forEach(e => indexed.add(e.url)));
         let changed = false;
-        for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
-            if (!k || !k.startsWith(CACHE_PREFIX)) continue;
-            const url = k.slice(CACHE_PREFIX.length);
+        for (const [url, data] of Object.entries(chapterCache.entries)) {
             if (indexed.has(url)) continue;
             const parent = url.split('#')[0].replace(/\/[^/]*\/?$/, '');
             if (!parent || parent.length <= 8) continue;
             let target = books[parent] ? parent : null;
-            if (!target) for (const key of Object.keys(books)) if (key.startsWith(parent + '/')) { target = key; break; }
+            if (!target) for (const bk of Object.keys(books)) if (bk.startsWith(parent + '/')) { target = bk; break; }
             if (!target) continue;
-            let data = null;
-            try { data = JSON.parse(localStorage.getItem(k)); } catch { /* damaged */ }
-            if (!data || !data.text) continue;
-            (index[target] = index[target] || []).push({ url, ts: 0, title: data.title || '' });
+            (chapterCache.index[target] = chapterCache.index[target] || []).push({ url, ts: data.ts || 0, title: data.title || '' });
             changed = true;
         }
-        if (changed) setCacheIndex(index);
+        if (changed) saveChapterCache();
     })();
     currentBookKey = findBookByUrl();
     bindSettingsAutoSave();
