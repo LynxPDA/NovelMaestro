@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.18
+// @version      1.19
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @match        *://*/*
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 (() => {
-    const APP_VERSION = '1.18';
+    const APP_VERSION = '1.19';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -38,7 +38,8 @@
         readerLineHeight: 1.6,
         readerParagraphSpacing: 1.2,
         readerContentWidth: 66,
-        preemptiveTranslation: true
+        preemptiveTranslation: true,
+        cacheLimit: 10 // переводы глав в кэше (0 — не сохранять, -1 — без ограничений)
     };
 
     let config = { ...DEFAULT_CONFIG, ...GM_getValue('config', {}) };
@@ -59,10 +60,16 @@
 
     let readerModeActive = false;
     let readerState = null;
+    let offlineReaderMode = false;
+    let offlineUrls = [];
     let elementTrainingMode = false;
     let pendingTranslateAfterTraining = false;
     let trainingHighlightedEl = null;
     let trainingPopupTarget = null;
+    // двойной тап на тач-устройствах: первый тап только подсвечивает элемент
+    let lastTapTime = 0;
+    let lastTapTarget = null;
+    const DOUBLE_TAP_DELAY = 350;
     const preemptiveRunning = new Set();
 
     // ===== УТИЛИТЫ ПОИСКА =====
@@ -183,11 +190,46 @@
     }
 
     // ===== КЭШ ГЛАВ =====
-    function cacheGet(url) {
-        try { const raw = sessionStorage.getItem('nm_cc_' + url); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+    // Переводы глав хранятся в localStorage персистентно: из них работает офлайн-читалка
+    // и экспорт; индекс по книгам хранит главы в порядке добавления (порядок чтения).
+    const CACHE_PREFIX = 'nm_cc_';
+    const CACHE_INDEX_KEY = 'nm_cache_index';
+    function getCacheIndex() {
+        try { return JSON.parse(localStorage.getItem(CACHE_INDEX_KEY)) || {}; } catch { return {}; }
     }
-    function cacheSet(url, data) {
-        try { sessionStorage.setItem('nm_cc_' + url, JSON.stringify(data)); } catch (e) {}
+    function setCacheIndex(index) {
+        try { localStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index)); } catch {}
+    }
+    function cacheGet(url) {
+        try { const raw = localStorage.getItem(CACHE_PREFIX + url); return raw ? JSON.parse(raw) : null; } catch { return null; }
+    }
+    function cacheSet(url, data, bookKey) {
+        if (config.cacheLimit === 0) return;
+        try { localStorage.setItem(CACHE_PREFIX + url, JSON.stringify(data)); } catch { return; }
+        if (!bookKey) return;
+        const index = getCacheIndex();
+        const entries = index[bookKey] || (index[bookKey] = []);
+        const existing = entries.find(e => e.url === url);
+        if (existing) existing.ts = Date.now();
+        else entries.push({ url, ts: Date.now(), title: data.title || '' });
+        if (config.cacheLimit > 0 && entries.length > config.cacheLimit) {
+            entries.sort((a, b) => b.ts - a.ts);
+            entries.slice(config.cacheLimit).forEach(e => { try { localStorage.removeItem(CACHE_PREFIX + e.url); } catch {} });
+            index[bookKey] = entries.slice(0, config.cacheLimit);
+        }
+        setCacheIndex(index);
+    }
+    function cacheGetBookEntries(bookKey) {
+        return (getCacheIndex()[bookKey] || []).slice().sort((a, b) => a.ts - b.ts);
+    }
+    function cacheBookChapterCount(bookKey) {
+        return cacheGetBookEntries(bookKey).filter(e => { const d = cacheGet(e.url); return d && d.text; }).length;
+    }
+    function cacheClearBook(bookKey) {
+        const index = getCacheIndex();
+        (index[bookKey] || []).forEach(e => { try { localStorage.removeItem(CACHE_PREFIX + e.url); } catch {} });
+        delete index[bookKey];
+        setCacheIndex(index);
     }
 
     // ===== ГЛОССАРИИ =====
@@ -437,9 +479,9 @@
 
     // ===== НАВИГАЦИЯ =====
     const NAV_TEXT = {
-        next: /next|впер[её]д|след|→|»|>/i,
-        prev: /prev(ious)?|назад|пред|←|«|</i,
-        toc: /contents?|оглавл[её]н|содерж|index|toc/i
+        next: /next|впер[её]д|след|дал[её]е|→|»|>|下一页|下页|下一章|下章|继续|chương\s*sau|tiếp theo/i,
+        prev: /prev(ious)?|назад|пред|←|«|<|上一页|上页|上一章|前章|chương\s*trước|trang trước/i,
+        toc: /contents?|оглавл[её]н|содерж|index|toc|список глав|каталог|目录/i
     };
     function absHref(a, base) {
         if (!a) return null;
@@ -489,9 +531,11 @@
         if (type !== 'toc') {
             const rel = tryQuery(root, type === 'next' ? 'a[rel="next"]' : 'a[rel="prev"]');
             if (rel) { const h = absHref(rel, baseUrl); if (h) return h; }
-            const pick = pickLink(Array.from(root.querySelectorAll ? root.querySelectorAll('a') : []), type);
-            if (pick) { const h = absHref(pick, baseUrl); if (h) return h; }
         }
+        // общий фолбэк по всей странице для всех типов, включая toc: мобильная версия
+        // сайта часто имеет другую структуру, и десктопные выученные сигнатуры не работают
+        const pick = pickLink(Array.from(root.querySelectorAll ? root.querySelectorAll('a') : []), type);
+        if (pick) { const h = absHref(pick, baseUrl); if (h) return h; }
         return null;
     }
     function resolveNavFromLive() {
@@ -710,9 +754,11 @@
                 .nm-reader-bottombar { padding: 8px 10px 10px; padding: 8px 10px calc(10px + env(safe-area-inset-bottom)); }
                 #nm-reader-mode .nm-reader-content { max-width: 100%; padding: 60px 12px 120px; padding-top: calc(60px + env(safe-area-inset-top)); }
                 .nm-reader-nav button { min-height: 44px; padding: 8px 14px; font-size: 13px; flex: 1 1 auto; }
-                .nm-training-instructions { max-width: calc(100vw - 24px); padding: 10px 12px; font-size: 12px; }
-                .nm-training-popup { max-width: calc(100vw - 24px); }
-                .nm-training-buttons button { padding: 11px 14px; }
+                .nm-training-instructions { max-width: calc(100vw - 16px); top: 8px; padding: 8px 10px; font-size: 11px; }
+                .nm-training-instructions h3 { font-size: 13px; margin-bottom: 4px; }
+                .nm-training-instructions .nm-btn { padding: 7px 12px; font-size: 12px; margin-top: 6px; }
+                .nm-training-popup { max-width: calc(100vw - 16px); min-width: 200px; }
+                .nm-training-buttons button { padding: 9px 10px; font-size: 12px; }
             }
         </style>
     `;
@@ -847,6 +893,10 @@
                             <div class="nm-checkbox-group">
                                 <input type="checkbox" id="preemptive-translation">
                                 <label for="preemptive-translation">🚀 Опережающий перевод (следующая глава переводится в фоне)</label>
+                            </div>
+                            <div class="nm-input-group"><label>Кэш переведённых глав (количество):</label>
+                                <input type="number" class="nm-input" id="cache-limit" min="-1" max="500" step="1">
+                                <small>0 = не сохранять, -1 = без ограничений, по умолчанию последние 10 глав. Кэш хранится в браузере (localStorage) — из него работают офлайн-читалка и экспорт TXT.</small>
                             </div>
                         </div>
                         <div class="nm-section">
@@ -983,6 +1033,7 @@
                     <h3>🎯 Режим обучения элементам</h3>
                     <div>
                         Наведите курсор на элемент и кликните по нему, затем выберите тип:<br>
+                        <span id="nm-touch-hint" style="display:none;">📱 На телефоне: выделяйте элемент <b>двойным тапом</b> — одиночный тап только подсвечивает.<br></span>
                         <b>📄 Блок текста</b> (обязательно) • <b>← Назад</b> • <b>→ Вперёд</b> • <b>☰ Оглавление</b> (необязательно).<br>
                         Обучение работает как эвристика на всю книгу: на других главах элементы будут найдены по структуре страницы.<br>
                         Когда закончите — нажмите «✅ Готово».
@@ -1174,6 +1225,7 @@
         const book = books[key];
         const terms = Object.keys(book.glossary || {}).length;
         const nerPages = Object.keys(book.nerDone || {}).length;
+        const cachedCount = cacheBookChapterCount(key);
         const info = document.createElement('div');
         info.className = 'nm-book-info';
         const strong = document.createElement('strong');
@@ -1183,7 +1235,7 @@
         urlLine.textContent = `URL: ${key}`;
         const statsLine = document.createElement('small');
         statsLine.setAttribute('style', 'color:#6b7280;display:block;');
-        statsLine.textContent = `Терминов: ${terms} | Страниц с извлечёнными терминами: ${nerPages}`;
+        statsLine.textContent = `Терминов: ${terms} | Страниц с извлечёнными терминами: ${nerPages} | Переведённых глав в кэше: ${cachedCount}`;
         const sel = book.selectors || {};
         const trained = [];
         if (sel.content) trained.push('📄 текст');
@@ -1207,10 +1259,80 @@
             group.append(label, input);
             return group;
         };
+        // обложка: URL-поле, поиск картинок на странице, предпросмотр и кандидаты
+        const coverGroup = document.createElement('div');
+        coverGroup.className = 'nm-input-group';
+        const coverLabel = document.createElement('label');
+        coverLabel.textContent = 'Обложка книги (URL):';
+        const coverRow = document.createElement('div');
+        coverRow.className = 'nm-url-edit';
+        const coverInput = document.createElement('input');
+        coverInput.type = 'text';
+        coverInput.className = 'nm-input';
+        coverInput.id = 'book-cover-edit';
+        coverInput.placeholder = 'https://…/cover.jpg';
+        coverInput.value = book.coverUrl || '';
+        const findCoversBtn = document.createElement('button');
+        findCoversBtn.className = 'nm-btn nm-btn-sm nm-btn-secondary';
+        findCoversBtn.id = 'btn-find-covers';
+        findCoversBtn.textContent = '🖼 Найти на странице';
+        coverRow.append(coverInput, findCoversBtn);
+        const coverPreview = document.createElement('img');
+        coverPreview.id = 'cover-preview';
+        coverPreview.setAttribute('style', 'max-width:120px;max-height:180px;border-radius:6px;border:1px solid #d1d5db;margin-top:8px;display:none;');
+        // битая ссылка на обложку не должна показывать пустую рамку
+        coverPreview.addEventListener('error', () => { coverPreview.style.display = 'none'; });
+        if (book.coverUrl) { coverPreview.src = book.coverUrl; coverPreview.style.display = 'block'; }
+        const coverCandidates = document.createElement('div');
+        coverCandidates.id = 'cover-candidates';
+        coverCandidates.setAttribute('style', 'display:none;gap:8px;flex-wrap:wrap;margin-top:8px;');
+        coverGroup.append(coverLabel, coverRow, coverPreview, coverCandidates);
+        findCoversBtn.addEventListener('click', () => {
+            const found = findCoverCandidates();
+            if (!found.length) {
+                const none = document.createElement('small');
+                none.setAttribute('style', 'color:#6b7280;');
+                none.textContent = 'На странице не найдено картинок-кандидатов';
+                coverCandidates.replaceChildren(none);
+            } else {
+                coverCandidates.replaceChildren(...found.map(cu => {
+                    const img = document.createElement('img');
+                    img.src = cu;
+                    img.title = cu;
+                    img.setAttribute('style', 'max-width:80px;max-height:120px;border-radius:4px;cursor:pointer;border:2px solid transparent;');
+                    img.addEventListener('click', () => {
+                        coverInput.value = cu;
+                        coverPreview.src = cu;
+                        coverPreview.style.display = 'block';
+                    });
+                    return img;
+                }));
+            }
+            coverCandidates.style.display = 'flex';
+        });
+        coverInput.addEventListener('input', () => {
+            const v = coverInput.value.trim();
+            if (v) { coverPreview.src = v; coverPreview.style.display = 'block'; }
+            else coverPreview.style.display = 'none';
+        });
         const saveBtn = document.createElement('button');
         saveBtn.className = 'nm-btn nm-btn-primary';
         saveBtn.id = 'btn-save-book';
         saveBtn.textContent = '💾 Сохранить';
+        const readBtn = document.createElement('button');
+        readBtn.className = 'nm-btn nm-btn-success';
+        readBtn.id = 'btn-read-cache';
+        readBtn.textContent = '📖 Читать из кэша';
+        readBtn.disabled = cachedCount === 0;
+        const exportTxtBtn = document.createElement('button');
+        exportTxtBtn.className = 'nm-btn nm-btn-secondary';
+        exportTxtBtn.id = 'btn-export-txt';
+        exportTxtBtn.textContent = '📄 Экспорт TXT';
+        exportTxtBtn.disabled = cachedCount === 0;
+        const openSiteBtn = document.createElement('button');
+        openSiteBtn.className = 'nm-btn nm-btn-secondary';
+        openSiteBtn.id = 'btn-open-site';
+        openSiteBtn.textContent = '🔗 Открыть на сайте';
         const delBtn = document.createElement('button');
         delBtn.className = 'nm-btn nm-btn-danger';
         delBtn.id = 'btn-delete-book';
@@ -1218,14 +1340,21 @@
         area.replaceChildren(info,
             mkGroup('Название книги:', 'book-name-edit', book.name || ''),
             mkGroup('URL книги:', 'book-key-edit', key),
-            saveBtn, delBtn);
+            coverGroup, saveBtn, readBtn, exportTxtBtn, openSiteBtn, delBtn);
+        readBtn.addEventListener('click', () => openOfflineReader(key));
+        exportTxtBtn.addEventListener('click', () => exportBookToTxt(key));
+        openSiteBtn.addEventListener('click', () => { if (/^https?:/i.test(key)) openExternalTab(key); });
         $('#btn-save-book').addEventListener('click', () => {
             const newName = $('#book-name-edit').value.trim();
             const newKey = $('#book-key-edit').value.trim();
             if (!newKey) { showStatus('URL не может быть пустым', 'error', 'status-book'); return; }
-            if (newKey === key) book.name = newName;
+            const cover = coverInput.value.trim();
+            if (newKey === key) { book.name = newName; book.coverUrl = cover; }
             else {
-                books[newKey] = { ...book, name: newName };
+                // кэш глав привязан к URL-ключу книги — переносим его на новый ключ
+                const index = getCacheIndex();
+                if (index[key]) { index[newKey] = index[key]; delete index[key]; setCacheIndex(index); }
+                books[newKey] = { ...book, name: newName, coverUrl: cover };
                 delete books[key];
                 if (currentBookKey === key) currentBookKey = newKey;
                 managedBookKey = newKey;
@@ -1236,7 +1365,8 @@
             refreshGlossarySelector();
         });
         $('#btn-delete-book').addEventListener('click', () => {
-            if (confirm(`Удалить книгу "${books[key].name || key}" вместе с её глоссарием и кэшем извлечения?`)) {
+            if (confirm(`Удалить книгу "${books[key].name || key}" вместе с её глоссарием, кэшем извлечения и кэшем переводов глав?`)) {
+                cacheClearBook(key);
                 delete books[key];
                 if (currentBookKey === key) currentBookKey = null;
                 managedBookKey = null;
@@ -1926,9 +2056,12 @@
     }
     function closeReader() {
         readerModeActive = false;
+        offlineReaderMode = false;
+        offlineUrls = [];
         readerMode.classList.remove('active');
         buttonsBar.style.display = '';
         readerState = null;
+        $('#reader-retranslate').style.display = '';
         progressHide();
     }
     function updateNavButtons() {
@@ -1961,8 +2094,40 @@
         a.click();
         a.remove();
     }
+    function openOfflineReader(bookKey) {
+        const entries = cacheGetBookEntries(bookKey).filter(e => { const d = cacheGet(e.url); return d && d.text; });
+        if (!entries.length) { showStatus('В кэше нет переведённых глав', 'error', 'status-book'); return; }
+        closeModal();
+        offlineReaderMode = true;
+        offlineUrls = entries.map(e => e.url);
+        openReaderShell(null);
+        // в офлайне повторный перевод живой страницы не имеет смысла
+        $('#reader-retranslate').style.display = 'none';
+        renderOfflineChapter(0);
+    }
+    function renderOfflineChapter(idx) {
+        const url = offlineUrls[idx];
+        const cached = cacheGet(url) || {};
+        // офлайн-навигация — по соседям в порядке кэширования, а не по живым ссылкам
+        setReaderState({
+            url,
+            title: cached.title || `Глава ${idx + 1}`,
+            text: cached.text || '',
+            nextUrl: idx + 1 < offlineUrls.length ? offlineUrls[idx + 1] : null,
+            prevUrl: idx > 0 ? offlineUrls[idx - 1] : null,
+            tocUrl: null
+        }, true);
+        const statusBtn = $('#reader-preload-status');
+        statusBtn.textContent = `📴 Оффлайн • глава ${idx + 1} из ${offlineUrls.length} из кэша`;
+        statusBtn.style.display = '';
+    }
     function gotoChapter(url) {
         if (!url || isTranslating) return;
+        if (offlineReaderMode) {
+            const idx = offlineUrls.indexOf(url);
+            if (idx >= 0) renderOfflineChapter(idx);
+            return;
+        }
         let target = null;
         try { target = new URL(url, location.href); } catch { return; }
         if (target.protocol !== 'http:' && target.protocol !== 'https:') return;
@@ -1972,7 +2137,7 @@
         location.assign(target.href);
     }
     async function pretranslateNext(nextUrl) {
-        if (!nextUrl || !config.preemptiveTranslation) return;
+        if (!nextUrl || !config.preemptiveTranslation || config.cacheLimit === 0) return;
         if (cacheGet(nextUrl) || preemptiveRunning.has(nextUrl)) return;
         const sel = getBookSelectors();
         if (!sel.content) return;
@@ -1993,7 +2158,7 @@
                 nextUrl: resolveNavHref(doc, sel.next, nextUrl, 'next'),
                 prevUrl: resolveNavHref(doc, sel.prev, nextUrl, 'prev'),
                 tocUrl: resolveNavHref(doc, sel.toc, nextUrl, 'toc')
-            });
+            }, currentBookKey);
             statusBtn.textContent = '✅ Следующая глава готова';
             setTimeout(() => { statusBtn.style.display = 'none'; }, 4000);
         } catch (e) {
@@ -2098,7 +2263,7 @@
                 }
                 updateNavButtons();
                 // в кэш — только завершённый перевод; частичный остаётся лишь на экране
-                if (translationResult.completed && full) cacheSet(url, { ...readerState });
+                if (translationResult.completed && full) cacheSet(url, { ...readerState }, current.key);
             }
             if (!cancelRequested && config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
         } finally {
@@ -2156,9 +2321,20 @@
         e.stopPropagation();
         const el = trainingHighlightedEl || e.target;
         if (!el || el.nodeType !== 1) return;
+        // на тач-устройствах требуем двойной тап: первый тап лишь подсвечивает элемент
+        const isTouch = (typeof e.pointerType === 'string' && e.pointerType === 'touch') ||
+            (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+        if (isTouch) {
+            const now = Date.now();
+            if (!(lastTapTarget === el && now - lastTapTime < DOUBLE_TAP_DELAY)) {
+                lastTapTime = now; lastTapTarget = el;
+                return;
+            }
+            lastTapTime = 0; lastTapTarget = null;
+        }
         trainingPopupTarget = el;
         const rect = el.getBoundingClientRect();
-        const popupW = 250, popupH = 250;
+        const popupW = Math.min(250, window.innerWidth - 24), popupH = 250;
         let top = rect.bottom + 8;
         if (top + popupH > window.innerHeight) top = Math.max(8, rect.top - popupH - 8);
         let left = Math.min(Math.max(8, rect.left), window.innerWidth - popupW - 8);
@@ -2175,6 +2351,9 @@
             return;
         }
         elementTrainingMode = true;
+        lastTapTime = 0; lastTapTarget = null;
+        const touchHint = shadow.querySelector('#nm-touch-hint');
+        if (touchHint && window.matchMedia('(pointer: coarse)').matches) touchHint.style.display = 'inline';
         dropdownMenu.classList.remove('active');
         elementTraining.classList.add('active');
         trainingPopup.classList.remove('active');
@@ -2190,6 +2369,7 @@
         if (trainingHighlightedEl) { trainingHighlightedEl.classList.remove('nm-training-highlight'); trainingHighlightedEl = null; }
         document.querySelectorAll('.nm-training-picked').forEach(el => el.classList.remove('nm-training-picked'));
         trainingPopupTarget = null;
+        lastTapTime = 0; lastTapTarget = null;
     }
     function generateCSSSelector(element) {
         if (element.id) return '#' + cssEsc(element.id);
@@ -2234,6 +2414,48 @@
             if (sel.content) runTranslationFlow(false);
             else alert('Не обучен блок текста — читалка не запущена.');
         }
+    }
+
+    // ===== КНИГА: ОБЛОЖКА И ЭКСПОРТ TXT =====
+    function findCoverCandidates() {
+        const candidates = new Set();
+        const add = (u) => { try { const abs = new URL(u, location.href).href; if (/^https?:/i.test(abs)) candidates.add(abs); } catch {} };
+        const meta = document.querySelector('meta[property="og:image"], meta[name="og:image"], meta[property="twitter:image"], meta[property="twitter:image:src"]');
+        if (meta && meta.content) add(meta.content);
+        document.querySelectorAll('link[rel="image_src"]').forEach(l => { if (l.href) add(l.href); });
+        const seen = new Set();
+        const scan = (root) => {
+            if (!root || !root.querySelectorAll) return;
+            root.querySelectorAll('img').forEach(img => {
+                const src = img.currentSrc || img.src;
+                if (!src || seen.has(src)) return;
+                // layout-размер (атрибуты) честнее natural: lazy-load картинки часто 1x1-заглушки
+                const w = img.width || img.naturalWidth || 0, h = img.height || img.naturalHeight || 0;
+                // обложка обычно вертикальная; lazy-load картинки без размеров тоже проускаем
+                if ((w >= 120 && h >= 160) || (!w && !h)) { seen.add(src); add(src); }
+            });
+        };
+        scan(findContentElement());
+        document.querySelectorAll('[class*="cover"], [id*="cover"]').forEach(el => scan(el));
+        return [...candidates].slice(0, 12);
+    }
+    function exportBookToTxt(bookKey) {
+        const entries = cacheGetBookEntries(bookKey).filter(e => { const d = cacheGet(e.url); return d && d.text; });
+        if (!entries.length) { showStatus('Нет переведённых глав в кэше — нечего экспортировать', 'error', 'status-book'); return; }
+        const bookName = (books[bookKey] && books[bookKey].name) || bookKey;
+        let fullText = `«${bookName}» — ${entries.length} глав, экспорт ${new Date().toLocaleString('ru-RU')}\n${'='.repeat(60)}\n\n`;
+        entries.forEach((e, i) => {
+            const d = cacheGet(e.url);
+            fullText += `Глава ${i + 1}${d.title ? `: ${d.title}` : ''}\n\n${d.text}\n\n\n`;
+        });
+        const blob = new Blob([fullText], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${String(bookName).replace(/[^\wа-яА-ЯёЁ \-]/g, '').trim().slice(0, 60) || 'book'}_translated.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showStatus(`TXT экспортирован: ${entries.length} глав`, 'success', 'status-book');
     }
 
     // ===== ГЛОССАРИЙ CRUD =====
@@ -2324,6 +2546,7 @@
         $('#request-timeout').value = config.requestTimeout;
         $('#max-retries').value = config.maxRetries;
         $('#chunk-size').value = config.chunkSize;
+        $('#cache-limit').value = config.cacheLimit;
         $('#source-lang').value = config.sourceLang;
         $('#target-lang').value = config.targetLang;
         $('#fuzzy-threshold').value = config.fuzzySearchThreshold;
@@ -2349,6 +2572,7 @@
         ['#request-timeout', 'requestTimeout', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 0 ? n : 10; }],
         ['#max-retries', 'maxRetries', v => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : 3; }],
         ['#chunk-size', 'chunkSize', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : DEFAULT_CONFIG.chunkSize; }],
+        ['#cache-limit', 'cacheLimit', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= -1 ? Math.min(500, n) : DEFAULT_CONFIG.cacheLimit; }],
         ['#source-lang', 'sourceLang', v => v],
         ['#target-lang', 'targetLang', v => v],
         ['#fuzzy-threshold', 'fuzzySearchThreshold', v => { const f = parseFloat(v); return Number.isFinite(f) ? f : DEFAULT_CONFIG.fuzzySearchThreshold; }],
@@ -2406,7 +2630,8 @@
             name: name || 'Без названия',
             glossary: books[url] ? books[url].glossary || {} : {},
             nerDone: books[url] ? books[url].nerDone || {} : {},
-            selectors: books[url] ? books[url].selectors || {} : {}
+            selectors: books[url] ? books[url].selectors || {} : {},
+            coverUrl: books[url] ? books[url].coverUrl || '' : ''
         };
         currentBookKey = url;
         managedBookKey = url;
