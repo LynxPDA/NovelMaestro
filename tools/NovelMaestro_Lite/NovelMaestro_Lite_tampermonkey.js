@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.19
+// @version      1.20
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @match        *://*/*
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 (() => {
-    const APP_VERSION = '1.19';
+    const APP_VERSION = '1.20';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -66,10 +66,16 @@
     let pendingTranslateAfterTraining = false;
     let trainingHighlightedEl = null;
     let trainingPopupTarget = null;
-    // двойной тап на тач-устройствах: первый тап только подсвечивает элемент
-    let lastTapTime = 0;
-    let lastTapTarget = null;
+    // обучение на тач-устройствах — отдельный touch-конвейер: отменяемый touchend
+    // подавляет синтетические click/переход по ссылке и long-press-меню браузера,
+    // одиночный тап только подсвечивает, двойной тап или удержание открывают попап
+    let trainTapEl = null;
+    let trainTapTime = 0;
+    let trainTouchT = 0;
+    let trainTouchXY = null;
+    let trainTouchHandledAt = 0;
     const DOUBLE_TAP_DELAY = 350;
+    const LONG_PRESS_DELAY = 450;
     const preemptiveRunning = new Set();
 
     // ===== УТИЛИТЫ ПОИСКА =====
@@ -318,7 +324,7 @@
     }
 
     // ===== СИГНАТУРЫ ЭЛЕМЕНТОВ =====
-    function cssEsc(s) { try { return CSS.escape(s); } catch (e) { return s; } }
+    function cssEsc(s) { try { return CSS.escape(s); } catch { return s; } }
     function elementSignature(el) {
         const sig = {
             sel: generateCSSSelector(el),
@@ -345,10 +351,10 @@
         return a.tag;
     }
     function tryQuery(root, sel) {
-        try { return root.querySelector(sel); } catch (e) { return null; }
+        try { return root.querySelector(sel); } catch { return null; }
     }
     function tryQueryAll(root, sel) {
-        try { return Array.from(root.querySelectorAll(sel)); } catch (e) { return []; }
+        try { return Array.from(root.querySelectorAll(sel)); } catch { return []; }
     }
     function findBySignature(root, sig) {
         if (!sig) return null;
@@ -487,7 +493,7 @@
         if (!a) return null;
         const h = a.getAttribute && (a.getAttribute('href') || '');
         if (!h || h === '#' || /^javascript:/i.test(h)) return null;
-        try { return new URL(h, base).href.split('#')[0]; } catch (e) { return null; }
+        try { return new URL(h, base).href.split('#')[0]; } catch { return null; }
     }
     function pickLink(links, type) {
         const re = NAV_TEXT[type];
@@ -770,6 +776,7 @@
         st.textContent = `
             .nm-training-highlight { outline: 3px solid #2563eb !important; outline-offset: 2px; background-color: rgba(37,99,235,.12) !important; cursor: crosshair !important; }
             .nm-training-picked { outline: 3px solid #059669 !important; outline-offset: 2px; }
+            body.nm-training-on { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
         `;
         document.head.appendChild(st);
     })();
@@ -1033,7 +1040,7 @@
                     <h3>🎯 Режим обучения элементам</h3>
                     <div>
                         Наведите курсор на элемент и кликните по нему, затем выберите тип:<br>
-                        <span id="nm-touch-hint" style="display:none;">📱 На телефоне: выделяйте элемент <b>двойным тапом</b> — одиночный тап только подсвечивает.<br></span>
+                        <span id="nm-touch-hint" style="display:none;">📱 На телефоне: одиночный тап — только подсветка; <b>двойной тап или удержание ~0,5 с</b> — выбор.<br></span>
                         <b>📄 Блок текста</b> (обязательно) • <b>← Назад</b> • <b>→ Вперёд</b> • <b>☰ Оглавление</b> (необязательно).<br>
                         Обучение работает как эвристика на всю книгу: на других главах элементы будут найдены по структуре страницы.<br>
                         Когда закончите — нажмите «✅ Готово».
@@ -2307,31 +2314,12 @@
         const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
         return path.includes(host);
     }
-    function onTrainMouseOver(e) {
-        if (!elementTrainingMode || trainingIgnore(e)) return;
-        const el = e.target;
-        if (!el || el.nodeType !== 1 || el === document.documentElement) return;
+    function trainHighlight(el) {
         if (trainingHighlightedEl && trainingHighlightedEl !== el) trainingHighlightedEl.classList.remove('nm-training-highlight');
         trainingHighlightedEl = el;
         el.classList.add('nm-training-highlight');
     }
-    function onTrainClick(e) {
-        if (!elementTrainingMode || trainingIgnore(e)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const el = trainingHighlightedEl || e.target;
-        if (!el || el.nodeType !== 1) return;
-        // на тач-устройствах требуем двойной тап: первый тап лишь подсвечивает элемент
-        const isTouch = (typeof e.pointerType === 'string' && e.pointerType === 'touch') ||
-            (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
-        if (isTouch) {
-            const now = Date.now();
-            if (!(lastTapTarget === el && now - lastTapTime < DOUBLE_TAP_DELAY)) {
-                lastTapTime = now; lastTapTarget = el;
-                return;
-            }
-            lastTapTime = 0; lastTapTarget = null;
-        }
+    function openTrainPopupFor(el) {
         trainingPopupTarget = el;
         const rect = el.getBoundingClientRect();
         const popupW = Math.min(250, window.innerWidth - 24), popupH = 250;
@@ -2342,6 +2330,66 @@
         trainingPopup.style.left = left + 'px';
         trainingPopup.classList.add('active');
     }
+    function onTrainTouchStart(e) {
+        if (!elementTrainingMode || trainingIgnore(e) || (e.touches && e.touches.length > 1)) return;
+        trainTouchHandledAt = Date.now();
+        const el = e.target;
+        if (!el || el.nodeType !== 1) return;
+        trainHighlight(el);
+        trainTouchT = Date.now();
+        const t = e.touches && e.touches[0];
+        trainTouchXY = t ? [t.clientX, t.clientY] : null;
+    }
+    function onTrainTouchEnd(e) {
+        if (!elementTrainingMode || trainingIgnore(e)) return;
+        // отменённый touchend подавляет синтетический click и long-press-меню:
+        // от тапов обучения сайт не реагирует (ссылки не открываются, выделения нет)
+        e.preventDefault();
+        e.stopPropagation();
+        trainTouchHandledAt = Date.now();
+        const el = trainingHighlightedEl || e.target;
+        if (!el || el.nodeType !== 1) return;
+        const t = e.changedTouches && e.changedTouches[0];
+        // свайп (прокрутка) — не выбор элемента
+        if (t && trainTouchXY && Math.hypot(t.clientX - trainTouchXY[0], t.clientY - trainTouchXY[1]) > 15) { trainTapEl = null; return; }
+        if (Date.now() - trainTouchT >= LONG_PRESS_DELAY) {
+            trainTapEl = null;
+            openTrainPopupFor(el);
+            return;
+        }
+        const now = Date.now();
+        // двойной тап по тому же элементу (или его внутреннему) — выбор
+        if (trainTapEl && (trainTapEl === el || trainTapEl.contains(el) || el.contains(trainTapEl)) && now - trainTapTime < DOUBLE_TAP_DELAY) {
+            trainTapEl = null;
+            openTrainPopupFor(el);
+        } else {
+            trainTapEl = el;
+            trainTapTime = now;
+        }
+    }
+    function onTrainTouchCancel() { trainTapEl = null; }
+    function onTrainContextMenu(e) {
+        if (elementTrainingMode) e.preventDefault();
+    }
+    function onTrainMouseOver(e) {
+        if (!elementTrainingMode || trainingIgnore(e)) return;
+        // на тач-устройствах тапы уже обработаны touch-конвейером (мышь-эмуляция идёт следом)
+        if (Date.now() - trainTouchHandledAt < 800) return;
+        const el = e.target;
+        if (!el || el.nodeType !== 1 || el === document.documentElement) return;
+        if (trainingHighlightedEl && trainingHighlightedEl !== el) trainingHighlightedEl.classList.remove('nm-training-highlight');
+        trainingHighlightedEl = el;
+        el.classList.add('nm-training-highlight');
+    }
+    function onTrainClick(e) {
+        if (!elementTrainingMode || trainingIgnore(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (Date.now() - trainTouchHandledAt < 800) return;
+        const el = trainingHighlightedEl || e.target;
+        if (!el || el.nodeType !== 1) return;
+        openTrainPopupFor(el);
+    }
     function startElementTraining() {
         const cur = getCurrentBook();
         if (!cur) {
@@ -2351,14 +2399,19 @@
             return;
         }
         elementTrainingMode = true;
-        lastTapTime = 0; lastTapTarget = null;
+        trainTapEl = null; trainTouchXY = null;
         const touchHint = shadow.querySelector('#nm-touch-hint');
         if (touchHint && window.matchMedia('(pointer: coarse)').matches) touchHint.style.display = 'inline';
         dropdownMenu.classList.remove('active');
         elementTraining.classList.add('active');
         trainingPopup.classList.remove('active');
+        document.body.classList.add('nm-training-on');
         document.addEventListener('mouseover', onTrainMouseOver, true);
         document.addEventListener('click', onTrainClick, true);
+        document.addEventListener('touchstart', onTrainTouchStart, true);
+        document.addEventListener('touchend', onTrainTouchEnd, { capture: true, passive: false });
+        document.addEventListener('touchcancel', onTrainTouchCancel, true);
+        document.addEventListener('contextmenu', onTrainContextMenu, true);
     }
     function stopElementTraining() {
         elementTrainingMode = false;
@@ -2366,10 +2419,15 @@
         trainingPopup.classList.remove('active');
         document.removeEventListener('mouseover', onTrainMouseOver, true);
         document.removeEventListener('click', onTrainClick, true);
+        document.removeEventListener('touchstart', onTrainTouchStart, true);
+        document.removeEventListener('touchend', onTrainTouchEnd, true);
+        document.removeEventListener('touchcancel', onTrainTouchCancel, true);
+        document.removeEventListener('contextmenu', onTrainContextMenu, true);
+        document.body.classList.remove('nm-training-on');
         if (trainingHighlightedEl) { trainingHighlightedEl.classList.remove('nm-training-highlight'); trainingHighlightedEl = null; }
         document.querySelectorAll('.nm-training-picked').forEach(el => el.classList.remove('nm-training-picked'));
         trainingPopupTarget = null;
-        lastTapTime = 0; lastTapTarget = null;
+        trainTapEl = null;
     }
     function generateCSSSelector(element) {
         if (element.id) return '#' + cssEsc(element.id);
