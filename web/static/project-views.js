@@ -2389,17 +2389,19 @@ function viewProject(section, name, tab, job) {
       page = 0;
       renderRows();
     };
-    // групповая кнопка: открывает меню действий, закрывает по клику вне
+    /* Групповая кнопка: общее fixed-меню (window.toggleMenu из app.js) —
+       позиционируется от вьюпорта и разворачивается вверх у нижнего края. */
     function menuButton(icon, title, items) {
-      const box = h("div", { class: "menu-box", hidden: true });
+      const box = h("div", { class: "menu-box hidden", role: "menu" });
       for (const it of items) {
         box.append(
           h(
             "button",
             {
               class: "btn btn-sm btn-ghost menu-item",
+              role: "menuitem",
               onclick: () => {
-                box.hidden = true;
+                window.closeMenus();
                 it.action();
               },
             },
@@ -2409,16 +2411,16 @@ function viewProject(section, name, tab, job) {
       }
       const btn = h(
         "button",
-        { class: "btn btn-sm btn-ghost", title, onclick: () => {
-          box.hidden = !box.hidden;
-        } },
+        {
+          class: "btn btn-sm btn-ghost",
+          title,
+          "aria-haspopup": "menu",
+          "aria-expanded": "false",
+          onclick: () => window.toggleMenu(btn, box),
+        },
         icon,
       );
-      const wrap = h("div", { class: "toolbar-menu" }, btn, box);
-      document.addEventListener("click", (e) => {
-        if (!wrap.contains(e.target)) box.hidden = true;
-      });
-      return wrap;
+      return h("div", { class: "toolbar-menu" }, btn, box);
     }
     /* Экспорт для анализа: настройки в модалке, файл скачивается */
     const exportBtn = h(

@@ -232,3 +232,38 @@ def test_run_views_preview_request():
     # в простом режиме (simplePanel) кнопки нет — modal зовётся только
     # с mode "expert"
     assert '"expert"' in src
+
+
+def test_dropdown_menus_are_fixed_positioned():
+    """Регрессия «у нижней строки списка не хватает места для меню «⋮»»:
+    dropdown был position:absolute от строки, а карточка списка файлов
+    (.files-list) с overflow:hidden обрезала его по собственной высоте —
+    у последней строки из 78px меню оставалось ~4px. Меню обязано быть
+    position:fixed: ancestor-overflow fixed-потомка не режет, а
+    разворот вверх и зажим по краям окна (UICore.menuPlacement) доводят
+    его целиком. Координаты ставит JS — жёсткие top/right/left в CSS
+    здесь запрещены."""
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    views = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+
+    def rule(name):
+        i = css.index(name)
+        return css[i:css.index("}", i)]
+
+    for name in (".user-menu {", ".toolbar-menu .menu-box {"):
+        body = rule(name)
+        assert "position: fixed" in body, f"{name} обязано быть position:fixed"
+        assert "position: absolute" not in body
+        assert "calc(100%" not in body, f"{name}: якорь по кнопке ставит placeMenu"
+
+    # скрытие — общим классом .hidden (attribute-механизм [hidden] убран)
+    assert ".menu-box[hidden]" not in css
+    assert 'class: "menu-box hidden"' in views
+    # оба вида меню идут через общий переключатель, а не свои слушатели
+    assert "window.toggleMenu(btn, box)" in views
+    assert "btn.addEventListener(\"click\", () => toggleMenu(btn, menu));" in app
+    assert "window.closeMenus()" in views
+    # геометрия — одна чистая функция; слежение за скроллом/ресайзом
+    assert "UICore.menuPlacement(" in app
+    assert "if (!menu.isConnected)" in app, "перерисовка строки не оставляет висящее меню"

@@ -714,3 +714,50 @@ test("isCjkString: суррогатные пары не считаются за 
   assert.equal(UICore.isCjkString(""), false);
   assert.equal(UICore.isCjkString(null), false);
 });
+
+/* ── menuPlacement: координаты выпадающего меню («⋮») ──────────────
+   Регрессия «у нижней строки списка меню не влезает»: dropdown был
+   position:absolute от строки и обрезался карточкой .files-list
+   (overflow:hidden) — из 78px меню оставалось ~4px. Меню теперь
+   position:fixed, геометрию считает эта функция. */
+const BTN = { top: 100, bottom: 140, left: 900, right: 940 }; // правый край 940
+
+test("menuPlacement: есть место снизу — меню под кнопкой", () => {
+  const p = UICore.menuPlacement(BTN, { width: 180, height: 78 }, { width: 1280, height: 800 });
+  assert.equal(p.top, 146); // bottom(140) + gap(6)
+  assert.equal(p.left, 760); // right(940) - width(180)
+});
+
+test("menuPlacement: снизу не влезает — разворот вверх", () => {
+  // кнопка у самого низа окна: меню вниз вылезло бы за вьюпорт
+  const btn = { top: 640, bottom: 669, left: 900, right: 940 };
+  const p = UICore.menuPlacement(btn, { width: 180, height: 78 }, { width: 1280, height: 720 }, 6, 8);
+  assert.equal(p.top, 556); // 640 - 6 - 78
+  assert.ok(p.top + 78 <= 720, "меню целиком над кнопкой и в окне");
+});
+
+test("menuPlacement: узкое окно — меню не вылезает за левый край", () => {
+  const btn = { top: 100, bottom: 140, left: 20, right: 60 };
+  const p = UICore.menuPlacement(btn, { width: 180, height: 78 }, { width: 200, height: 800 }, 6, 8);
+  assert.equal(p.left, 8); // прижато к левому краю (edge)
+  assert.ok(p.left + 180 <= 200);
+});
+
+test("menuPlacement: меню шире окна — не уходит за правый край", () => {
+  const btn = { top: 100, bottom: 140, left: 300, right: 340 };
+  const p = UICore.menuPlacement(btn, { width: 500, height: 78 }, { width: 360, height: 800 }, 6, 8);
+  assert.equal(p.left, 8);
+  assert.ok(p.left + 500 > 360, "объективно шире окна, но левый край в пределах");
+});
+
+test("menuPlacement: очень низкое окно — верхний край не отрицательный", () => {
+  const btn = { top: 40, bottom: 69, left: 10, right: 50 };
+  const p = UICore.menuPlacement(btn, { width: 180, height: 200 }, { width: 400, height: 240 }, 6, 8);
+  assert.ok(p.top >= 0 && p.top + 200 <= 240, `меню прижато в окне: ${JSON.stringify(p)}`);
+});
+
+test("menuPlacement: дефолтные gap/edge применяются без аргументов", () => {
+  const btn = { top: 0, bottom: 100, left: 0, right: 200 };
+  const p = UICore.menuPlacement(btn, { width: 100, height: 50 }, { width: 1000, height: 1000 });
+  assert.deepEqual(p, { top: 106, left: 100 });
+});

@@ -277,9 +277,10 @@ body {
   padding: 6px 8px;
 }
 .user-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
+  /* fixed, а не absolute: карточка списка файлов (.files-list,
+     overflow:hidden) обрезала бы dropdown по своей высоте;
+     координаты от вьюпорта ставит placeMenu (app.js) */
+  position: fixed;
   min-width: 180px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -411,17 +412,13 @@ body {
 .files-toolbar .spacer {
   flex: 1;
 }
-/* выпадающее меню групповых кнопок «+» / «x» глоссария */
+/* выпадающее меню групповых кнопок «+» / «x» глоссария
+   (скрытие — общим .hidden; позиционирует placeMenu, как user-menu) */
 .toolbar-menu {
   position: relative;
 }
-.toolbar-menu .menu-box[hidden] {
-  display: none;
-}
 .toolbar-menu .menu-box {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  position: fixed;
   z-index: 30;
   min-width: 190px;
   padding: 6px;
@@ -1146,8 +1143,6 @@ input[type="number"] {
 .ner-chip-term {
   cursor: default;
   opacity: 0.75;
-}
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .ner-chip .checkbox {
   width: 14px;

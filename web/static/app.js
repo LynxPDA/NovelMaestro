@@ -1717,9 +1717,97 @@ function iconEl(name, cls) {
   return span;
 }
 
+/* ── выпадающие меню (kebab «⋮» и групповые кнопки тулбара) ────────
+   Меню позиционируется position:fixed ОТ ВЬЮПОРТА, а не absolute от
+   строки: карточка списка файлов (.files-list) с overflow:hidden
+   обрезала dropdown по собственной высоте — у последней строки из
+   78px меню оставалось ~4px. Ancestor-overflow fixed-потомка не
+   режет, а разворот вверх и зажим по краям окна доводят меню целиком.
+   Узел меню всегда живёт в своей строке — в DOM ничего не переносим. */
+const MENU_GAP = 6; // зазор кнопка ↔ меню, px
+const MENU_EDGE = 8; // минимальный отступ от края окна, px
+
+let _openMenu = null; // { btn, menu } — открыто максимум одно меню
+
+/* Координаты fixed-меню по кнопке — вся геометрия в UICore.menuPlacement
+   (чистая функция, юнит-тесты tests/spa/ui-core.test.mjs). */
+function placeMenu(btn, menu) {
+  if (!menu.isConnected) { // строку перерисовали при открытом меню
+    closeMenus();
+    return;
+  }
+  const p = UICore.menuPlacement(
+    btn.getBoundingClientRect(),
+    { width: menu.offsetWidth, height: menu.offsetHeight },
+    { width: window.innerWidth, height: window.innerHeight },
+    MENU_GAP,
+    MENU_EDGE,
+  );
+  menu.style.top = `${p.top}px`;
+  menu.style.left = `${p.left}px`;
+}
+
+function closeMenus() {
+  if (!_openMenu) return;
+  const { btn, menu } = _openMenu;
+  _openMenu = null;
+  menu.style.top = "";
+  menu.style.left = "";
+  menu.classList.add("hidden");
+  btn.setAttribute("aria-expanded", "false");
+}
+
+function openMenu(btn, menu) {
+  closeMenus(); // одно меню на страницу
+  menu.classList.remove("hidden");
+  btn.setAttribute("aria-expanded", "true");
+  _openMenu = { btn, menu };
+  placeMenu(btn, menu);
+}
+
+/* Переключатель кнопок-меню: та же кнопка — закрыть, другая — открыть. */
+function toggleMenu(btn, menu) {
+  if (_openMenu && _openMenu.menu === menu) closeMenus();
+  else openMenu(btn, menu);
+}
+
+// capture: срабатывает раньше обработчика кнопки — повторный клик своей
+// же кнопки не закрывается дважды, клик по пункту меню не закрывает раньше действия
+document.addEventListener(
+  "click",
+  (ev) => {
+    if (!_openMenu) return;
+    const { btn, menu } = _openMenu;
+    if (menu.contains(ev.target) || btn.contains(ev.target)) return;
+    closeMenus();
+  },
+  true,
+);
+document.addEventListener(
+  "keydown",
+  (ev) => {
+    if (ev.key === "Escape") closeMenus();
+  },
+  true,
+);
+// fixed-меню не привязано к потоку — едет за кнопкой при скролле/ресайзе
+window.addEventListener("resize", () => {
+  if (_openMenu) placeMenu(_openMenu.btn, _openMenu.menu);
+});
+document.addEventListener(
+  "scroll",
+  () => {
+    if (_openMenu) placeMenu(_openMenu.btn, _openMenu.menu);
+  },
+  true,
+);
+// кросс-файловый хелпер: групповые кнопки «+»/«x» глоссария рендерит
+// project-views.js — общее меню позиционируется одной функцией
+window.closeMenus = closeMenus;
+window.toggleMenu = toggleMenu;
+
 /* Кнопка «⋮» с выпадающим меню (действия строки, меню пользователя).
-   items: [{label, danger, onclick, href, aria}] — href-пункты — ссылки.
-   Закрытие: клик вне, Escape, повторный клик по кнопке. */
+   items: [{label, danger, onclick, href, aria}] — href-пункты — ссылки. */
 function menuBtn(items, ariaLabel = "Дополнительные действия") {
   const btn = h("button", {
     class: "btn btn-sm btn-ghost kebab-btn",
@@ -1744,7 +1832,7 @@ function menuBtn(items, ariaLabel = "Дополнительные действи
             class: cls,
             role: "menuitem",
             onclick: () => {
-              close();
+              closeMenus();
               if (it.onclick) it.onclick();
             },
           },
@@ -1753,30 +1841,8 @@ function menuBtn(items, ariaLabel = "Дополнительные действи
       );
     }
   }
-  function close() {
-    menu.classList.add("hidden");
-    btn.setAttribute("aria-expanded", "false");
-    document.removeEventListener("click", onDoc, true);
-    document.removeEventListener("keydown", onKey, true);
-  }
-  function open() {
-    menu.classList.remove("hidden");
-    btn.setAttribute("aria-expanded", "true");
-    document.addEventListener("click", onDoc, true);
-    document.addEventListener("keydown", onKey, true);
-  }
-  function onDoc(ev) {
-    if (!menu.contains(ev.target) && !btn.contains(ev.target)) close();
-  }
-  function onKey(ev) {
-    if (ev.key === "Escape") close();
-  }
-  btn.addEventListener("click", () => {
-    if (menu.classList.contains("hidden")) open();
-    else close();
-  });
-  const wrap = h("div", { class: "menu-wrap" }, btn, menu);
-  return wrap;
+  btn.addEventListener("click", () => toggleMenu(btn, menu));
+  return h("div", { class: "menu-wrap" }, btn, menu);
 }
 
 /* ── каркас страницы: шапка с глобальной навигацией (сайдбара нет —

@@ -318,6 +318,27 @@
       return { view: view || "hub", rest: parts };
     },
 
+    /* ── выпадающие меню: координаты от вьюпорта ──
+       btn — rect кнопки {top,bottom,left,right}, box — размеры меню
+       {width,height}, vp — размеры окна. Меню обязано быть position:fixed:
+       только его не режет ancestor overflow:hidden (карточка списка
+       файлов). Приоритет — вниз от кнопки; если снизу не влезает, а сверху
+       влезает — разворот вверх; затем зажим по краям окна. Правый край меню
+       прижат к правому краю кнопки. Возвращает {top,left} в px. */
+    menuPlacement: (btn, box, vp, gap, edge) => {
+      var g = gap === undefined ? 6 : gap;
+      var e = edge === undefined ? 8 : edge;
+      var top = btn.bottom + g;
+      if (top + box.height > vp.height - e && btn.top - g - box.height >= e)
+        top = btn.top - g - box.height;
+      top = Math.max(e, Math.min(top, vp.height - box.height - e));
+      var left = Math.max(
+        e,
+        Math.min(btn.right - box.width, vp.width - box.width - e),
+      );
+      return { top: Math.round(top), left: Math.round(left) };
+    },
+
     /* ── прогресс: проценты с зажимом 0..100 ── */
     progressPct: (done, total) => {
       var t = total ? total : 0;
