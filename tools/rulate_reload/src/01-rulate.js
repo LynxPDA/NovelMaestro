@@ -1,19 +1,3 @@
-// ==UserScript==
-// @name         Rulate: массовое обновление глав из .txt
-// @namespace    rulate.bulk.update
-// @version      2.1.7
-// @description  Льёт перевод глав на tl.rulate.ru из .txt. Смена названий. Глобальная пауза с рандомом. Диапазон глав. Fallback по названию. Обработка дробных/диапазонных номеров. Отчёт по ненайденным и нестандартным.
-// @match        *://tl.rulate.ru/book/*
-// @match        *://rulate.ru/book/*
-// @grant        GM_addStyle
-// @run-at       document-idle
-// ==/UserScript==
-// СОБРАНО из src/ и meta.js — локальная правка будет перезаписана:
-//   python3 tools/build_userscripts.py
-
-(function () {
-'use strict';
-
 const CFG = {
   delayMs: 2100,
   jitterMs: 0,
@@ -636,4 +620,3 @@ $('ru-dry').onclick = () => launch(true);
 $('ru-start').onclick = () => launch(false);
 
 log('Готово. Панель перетаскивается. Выберите .txt.', 'ok');
-})();

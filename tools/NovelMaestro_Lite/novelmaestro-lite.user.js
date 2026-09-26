@@ -11,6 +11,8 @@
 // @connect      *
 // @run-at       document-idle
 // ==/UserScript==
+// СОБРАНО из src/ и meta.js — локальная правка будет перезаписана:
+//   python3 tools/build_userscripts.py
 
 (() => {
     const APP_VERSION = '1.25';
