@@ -6,11 +6,13 @@
 
 Юзерскрипт для браузера (Tampermonkey/Violentmonkey): массовое обновление переводов глав на **tl.rulate.ru** (и `rulate.ru`) из локального `.txt` — льёт текст главы и/или меняет название, с паузами, проверкой и dry-run.
 
+`rulate-bulk-update.user.js` — **собранный** файл: он склеен из `meta.js` (баннер `==UserScript==`, единственный источник `@version`) и `src/00-open.js` + `src/01-rulate.js` + `src/99-close.js` (обёртка и тело). Правки — в `src/`, затем `python3 tools/build_userscripts.py --script rulate_reload`. Файл на 637 строк сознательно остаётся **одной** частью: читается целиком, дробить его ради раскладки незачем.
+
 ### Установка
 
 1. Установите расширение **Tampermonkey** (Chrome/Firefox/Edge).
-2. Откройте панель расширения → «Создать новый скрипт».
-3. Вставьте содержимое `tools/rulate_reload/rulate-bulk-update.user.js` целиком и сохраните (Ctrl+S).
+2. Поставьте скрипт по ссылке (менеджер покажет окно установки и будет обновлять по `@updateURL`) — `https://cdn.jsdelivr.net/gh/LynxPDA/NovelMaestro@main/tools/rulate_reload/rulate-bulk-update.user.js` или запасной путь `https://raw.githubusercontent.com/LynxPDA/NovelMaestro/main/tools/rulate_reload/rulate-bulk-update.user.js`.
+3. Или вручную: панель расширения → «Создать новый скрипт» → вставить содержимое `tools/rulate_reload/rulate-bulk-update.user.js` целиком → сохранить (Ctrl+S).
 4. Откройте книгу на Rulate: `https://tl.rulate.ru/book/<id>` — в правом нижнем углу появится панель **«RL · обновление глав v2.1»**.
 
 Скрипт работает **от имени вашей учётки** (куки сайта), поэтому перед использованием залогиньтесь на Rulate в том же браузере.
@@ -47,7 +49,7 @@
 
 ### Настройки
 
-Ключевые дефолты — константа `CFG` в начале файла (можно править до установки, либо через поля панели):
+Ключевые дефолты — константа `CFG` в начале тела (`src/01-rulate.js`; можно править до установки, либо через поля панели):
 
 | Поле панели | CFG | Назначение |
 | --- | --- | --- |
