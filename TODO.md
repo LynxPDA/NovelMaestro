@@ -285,6 +285,32 @@
       cacheLimit/glossarySource; smoke переписан: основной 34 +
       мобильный 32 + миграция 12 — зелёные.
 
+- [x] **Юзерскрипты tools/: канон .user.js, раскладка на части и сборщик** —
+      имена приведены к конвенции юзерскриптов
+      (NovelMaestro_Lite_tampermonkey.js → novelmaestro-lite.user.js,
+      tampermonkey_rulate_reload.js → rulate-bulk-update.user.js);
+      Lite разрезан по существующим маркерам секций на 23 части
+      (src/NN-slug.js, IIFE-обёртка — 00-open.js/99-close.js), rulate
+      сознательно остался одной частью (637 строк читаемы целиком);
+      баннеры meta.js — единственный источник @version (в теле — токен
+      {{VERSION}}), добавлены @license/@homepageURL/@downloadURL/@updateURL
+      (jsDelivr @main, MIME application/javascript; raw — запасной путь);
+      tools/build_userscripts.py — сознательно тупая конкатенация без
+      переотступов и минификации: собранные артефакты побайтово совпали
+      с прежними (в diff только новые строки баннера);
+      tests/test_tools_userscripts.py (21 тест) сторожит рассинхрон
+      артефакта со сборкой, порядок частей, полноту метаданных и
+      node --check; .github/workflows/userscripts.yml — сборка/проверка,
+      ассеты релиза и PURGE кэша CDN; tests 1221 зелёные.
+
+- [ ] **Юзерскрипты: выкладка в каталоги и решение по @noframes/@namespace** —
+      выложить оба скрипта на GreasyFork/GreasyArchive (каталоги ре-хостят
+      код сами, синхронизации с репо нет — ручная операция на каждый
+      релиз); проверить ассеты релиза и PURGE jsDelivr после первого
+      релиза с новыми именами; решить @noframes для Lite (сейчас скрипт
+      живёт и в iframe) и менять ли @namespace на репозиторный (смена =
+      дубль установки у уже поставивших).
+
 ## Сессия после 0.2.7 (продолжение)
 
 - [x] **8. Релиз 0.2.10** — CHANGELOG (версия сборки в web: сайдбар /
