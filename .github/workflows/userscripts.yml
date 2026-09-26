@@ -1,0 +1,90 @@
+# Юзерскрипты tools/: сборка из src/, проверка и выкладка на релиз.
+#
+# Публикуемый файл — один (менеджеры скриптов ставят один .user.js), поэтому
+# артефакты собираются из tools/<скрипт>/src/* и прикрепляются к релизу.
+#
+# Запуск: вкладка Actions → «Userscripts build» → «Run workflow» (кнопка),
+# или автоматически при пуше тега v* — тогда файлы докладываются к релизу
+# этого тега и сбрасывается кэш CDN.
+#
+# p.s. requests ставится только ради core.common: из него сборщик берёт
+# atomic_write и log_argv (свой атомарный запись-хелпер не изводим).
+
+name: Userscripts build
+
+on:
+  workflow_dispatch:          # ручная пересборка и выкладка по кнопке
+  push:
+    tags: ["v*"]              # автоматически по тегу v1.2.3
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # креды не оставляем в workspace: сборка работает только со своими файлами
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Зависимости (только requests — для core.common)
+        run: python3 -m pip install --quiet requests
+
+      - name: Артефакты обязаны совпадать со сборкой
+        run: python3 tools/build_userscripts.py --check --node-check
+
+      - name: Собрать и разложить по dist/
+        run: |
+          python3 tools/build_userscripts.py
+          mkdir -p dist
+          for f in tools/*/*.user.js; do
+            cp "$f" "dist/$(basename "$f")"
+            echo "готово: $(basename "$f") ($(wc -l < "$f") строк)"
+          done
+
+      - name: Загрузить артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: userscripts
+          path: dist/*.user.js
+          if-no-files-found: error
+
+      - name: Прикрепить к релизу (только по тегу)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            gh release upload "${{ github.ref_name }}" dist/*.user.js --clobber
+          else
+            # релиз ещё не создан (windows.yml может идти параллельно) —
+            # доложить позже кнопкой «Run workflow» этого воркфлоу
+            echo "::warning::релиз ${{ github.ref_name }} ещё не существует — юзерскрипты не прикреплены"
+          fi
+
+      - name: Сбросить кэш CDN (только по тегу)
+        if: github.event_name == 'push'
+        run: |
+          # @downloadURL/@updateURL указывают на jsDelivr по ветке main и
+          # кэшируются надолго — после релиза кэш чистим вручную запросом
+          for f in tools/*/*.user.js; do
+            url="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}"
+            echo "PURGE ${url} → $(curl -s -m 30 -X PURGE "$url" || echo нет-ответа)"
+          done
+
+      - name: Ссылки для установки
+        run: |
+          echo "### Ссылки установки (jsDelivr, MIME application/javascript)"
+          for f in tools/*/*.user.js; do
+            echo "- $(basename "$f"): https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}"
+          done
