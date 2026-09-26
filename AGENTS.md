@@ -33,7 +33,15 @@ cli/  исполнители — чистый CLI (argparse), без интер�
 tools/    вспомогательные утилиты вне конвейера: rulate_reload/
           (userscript Rulate, README — tools/rulate_reload/README.md),
           NovelMaestro_Lite/ (юзерскрипт-переводчик, README —
-          tools/NovelMaestro_Lite/README.md).
+          tools/NovelMaestro_Lite/README.md). Юзерскрипт лежит раскладкой:
+          meta.js (баннер ==UserScript==, единственный источник @version) +
+          src/NN-slug.js (части, уже на финальном отступе внутри IIFE;
+          00-open.js и 99-close.js — сама обёртка). Публикуемый
+          <имя>.user.js — собранный файл, руками не правится:
+          python3 tools/build_userscripts.py (--check сверяет артефакт со
+          сборкой). Порядок частей = порядок секций, менять его нельзя.
+          Дробим только Lite (2,9 тыс. строк); rulate остаётся одной
+          частью — 637 строк читаемы целиком.
 templates/ шаблоны новых проектов: общие шаблоны в корне (.env.example);
           подпапки по типу книги — жанру и
           языку (General/) с промптами, metadata.yaml и donate.txt.
@@ -226,6 +234,7 @@ git add -A && git commit -m "…" && git push origin
 - `tests/test_web_pipeline.py` — web-оркестратор `web/pipeline.py` (Tracker, build_stage_cmd, grep_errors, process_chapter, main);
 - `tests/test_web_api.py` / `tests/test_web_jobs.py` / `tests/test_web_m7.py` / `tests/test_web_server.py` / `tests/test_web_sandbox.py` — web-слой (роуты, JobManager, SSE, env-редактор, NER-экспорт) на реальном HTTP-сервере без сети;
 - `tests/test_docs.py` — сверка доков (`core/README.md`, AGENTS.md §6) с кодом;
+- `tests/test_tools_userscripts.py` — юзерскрипты `tools/`: собранный `.user.js` побайтово равен закоммиченному, части нумерованы и держат обёртку, версия берётся из `meta.js`, канон метаданных и ссылки установки, `node --check` по артефактам;
 - `tests/test_architecture.py` — регресс-гарды архитектуры (§3: запрет `input()` и UI-импортов в `cli/`, единый стрим, bootstrap, web-раскладка, run.py — лаунчер web, отсутствие backends/cli|tui).
 
 ## 11. Правила коммитов

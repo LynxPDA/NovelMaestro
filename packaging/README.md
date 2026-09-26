@@ -182,6 +182,7 @@ Actions → нужный воркфлоу → «Run workflow» — собира�
    | --- | --- | --- |
    | `docker.yml` | кнопка «Run workflow» **или** пуш тега `v*` | образ `ghcr.io/<владелец>/<репо>:latest` (+ `:<версия>` по тегу), linux/amd64 + arm64 |
    | `windows.yml` | кнопка «Run workflow» (поля: версия Python, метка) **или** пуш тега `v*` | zip портативной сборки: артефакт Actions + (по тегу) GitHub Release |
+   | `userscripts.yml` | кнопка «Run workflow» **или** пуш тега `v*` | проверка `build_userscripts.py --check --node-check`, артефакт Actions с `.user.js`, (по тегу) ассеты релиза + чистка кэша jsDelivr |
 
    Собирать можно хоть каждый день по кнопке; релизы — вручную через тег (`git tag v1.2.3 && git push origin v1.2.3`) или из формы workflow_dispatch.
 
