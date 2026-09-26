@@ -2,7 +2,7 @@
 
 Утилиты вне конвейера NovelMaestro (не `cli/`, не `web/`).
 
-## tampermonkey_rulate_reload.js
+## rulate-bulk-update.user.js
 
 Юзерскрипт для браузера (Tampermonkey/Violentmonkey): массовое обновление переводов глав на **tl.rulate.ru** (и `rulate.ru`) из локального `.txt` — льёт текст главы и/или меняет название, с паузами, проверкой и dry-run.
 
@@ -10,7 +10,7 @@
 
 1. Установите расширение **Tampermonkey** (Chrome/Firefox/Edge).
 2. Откройте панель расширения → «Создать новый скрипт».
-3. Вставьте содержимое `tools/rulate_reload/tampermonkey_rulate_reload.js` целиком и сохраните (Ctrl+S).
+3. Вставьте содержимое `tools/rulate_reload/rulate-bulk-update.user.js` целиком и сохраните (Ctrl+S).
 4. Откройте книгу на Rulate: `https://tl.rulate.ru/book/<id>` — в правом нижнем углу появится панель **«RL · обновление глав v2.1»**.
 
 Скрипт работает **от имени вашей учётки** (куки сайта), поэтому перед использованием залогиньтесь на Rulate в том же браузере.
