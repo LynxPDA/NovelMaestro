@@ -3,7 +3,10 @@
         <style>
             #nm-root, #nm-root * { letter-spacing: normal; word-spacing: normal; text-indent: 0; box-sizing: border-box; }
             #nm-root { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; color: #111827; }
-            #nm-buttons { position: fixed; bottom: 20px; right: 20px; z-index: 2147483640; display: flex; gap: 8px; }
+            /* одна плавающая кнопка — меню; в покое полупрозрачна, чтобы не мешать
+               чтению, полный цвет при наведении или фокусе */
+            #nm-buttons { position: fixed; bottom: 20px; right: 20px; z-index: 2147483640; display: flex; gap: 8px; opacity: .55; transition: opacity .18s ease; }
+            #nm-buttons:hover, #nm-buttons:focus-within { opacity: 1; }
             .nm-btn-float { background: #2563eb; color: white; border: none; padding: 12px 16px; border-radius: 8px; cursor: pointer; font-size: 20px; min-width: 50px; box-shadow: 0 4px 12px rgba(37,99,235,.3); transition: all .2s; }
             .nm-btn-float:hover { background: #1d4ed8; transform: translateY(-2px); }
             .nm-btn-float:disabled { background: #93c5fd; cursor: not-allowed; transform: none; }
@@ -12,6 +15,8 @@
             .nm-menu-wrap { position: relative; }
             .nm-dropdown-menu { position: absolute; bottom: 58px; right: 0; background: white; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.25); padding: 6px; display: none; min-width: 240px; flex-direction: column; gap: 2px; }
             .nm-dropdown-menu.active { display: flex; }
+            /* в верхней панели читалки меню раскрывается вниз */
+            .nm-menu-down .nm-dropdown-menu { bottom: auto; top: 42px; }
             .nm-dropdown-item { padding: 10px 14px; border: none; background: none; text-align: left; cursor: pointer; border-radius: 6px; font-size: 14px; color: #111827; white-space: nowrap; }
             .nm-dropdown-item:hover { background: #f3f4f6; }
             .nm-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 2147483647; }
@@ -148,6 +153,13 @@
             .nm-reader-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .nm-reader-topbar-buttons { display: flex; gap: 6px; flex-shrink: 0; }
             .nm-reader-topbar-buttons button { border: none; border-radius: 6px; cursor: pointer; font-size: 15px; padding: 6px 10px; }
+            #nm-reader-mode .nm-reader-topbar .nm-dropdown-menu { min-width: 250px; }
+            #nm-reader-mode.nm-reader-light .nm-reader-topbar .nm-dropdown-menu { background: #faf7f0; border: 1px solid #e5ded2; }
+            #nm-reader-mode.nm-reader-dark .nm-reader-topbar .nm-dropdown-menu { background: #16181d; border: 1px solid #2a2d35; }
+            #nm-reader-mode.nm-reader-light .nm-reader-topbar .nm-dropdown-item { color: #26221c; }
+            #nm-reader-mode.nm-reader-dark .nm-reader-topbar .nm-dropdown-item { color: #d8d8d3; }
+            #nm-reader-mode.nm-reader-light .nm-reader-topbar .nm-dropdown-item:hover { background: #efe9dd; }
+            #nm-reader-mode.nm-reader-dark .nm-reader-topbar .nm-dropdown-item:hover { background: #23262e; }
             #nm-reader-mode.nm-reader-light .nm-reader-topbar-buttons button { background: #e8e2d6; color: #26221c; }
             #nm-reader-mode.nm-reader-dark .nm-reader-topbar-buttons button { background: #2a2d35; color: #d8d8d3; }
             .nm-reader-content { margin: 0 auto; padding: 70px 20px 150px; max-width: var(--nm-content-width, 66%); }
@@ -190,7 +202,8 @@
                указатель coarse ловит телефон даже в режиме «полной версии сайта» */
             @media (max-width: 768px), (pointer: coarse) {
                 #nm-buttons { bottom: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); }
-                .nm-btn-float { min-width: 52px; min-height: 52px; font-size: 22px; padding: 14px 16px; }
+                /* меньше стала, но осталась в пределах касания (44px) */
+                .nm-btn-float { min-width: 44px; min-height: 44px; font-size: 20px; padding: 10px 12px; }
                 .nm-dropdown-menu { min-width: 0; width: min(320px, calc(100vw - 24px)); bottom: 66px; }
                 .nm-dropdown-item { white-space: normal; padding: 12px 14px; }
                 .nm-modal.active { align-items: stretch; justify-content: stretch; }

@@ -68,7 +68,7 @@
         fill.style.width = st.pct + '%';
         extractMiniStatus(st.retry
             ? `⏱ ${st.retry.message} — повтор ${st.retry.nextAttempt}/${st.retry.attemptsTotal}`
-            : `🔍 Термины: чанк ${st.chunk}/${st.total} • ~${st.pct}%`);
+            : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.chunk}/${st.resumed + 1})` : ''} • ~${st.pct}%`);
     }
     $('#nm-extract-cancel').addEventListener('click', () => {
         cancelRequested = true;

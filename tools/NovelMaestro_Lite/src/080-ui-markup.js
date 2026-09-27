@@ -7,14 +7,15 @@
         ${styles}
         <div id="nm-root">
             <div id="nm-buttons">
-                <button class="nm-btn-float" id="btn-translate" title="Перевести / открыть читалку">🌐</button>
                 <div class="nm-menu-wrap">
-                    <button class="nm-btn-float nm-menu" id="btn-menu" title="Меню">⋮</button>
+                    <button class="nm-btn-float nm-menu" id="btn-menu" title="NovelMaestro Lite">⋮</button>
                     <div class="nm-dropdown-menu" id="dropdown-menu">
+                        <button class="nm-dropdown-item" id="btn-translate">🌐 Перевести / читать</button>
+                        <button class="nm-dropdown-item" id="btn-book-menu">➕ Добавить книгу</button>
                         <button class="nm-dropdown-item" id="btn-settings-menu">⚙️ Настройки</button>
                         <button class="nm-dropdown-item" id="btn-extract-menu">✨ Извлечь термины вручную</button>
-                        <button class="nm-dropdown-item" id="btn-train-menu">🎯 Обучить элементам (текущая книга)</button>
-                        <button class="nm-dropdown-item" id="btn-theme-menu">🌓 Тема: светлая / тёмная</button>
+                        <button class="nm-dropdown-item" id="btn-train-menu">🎯 Обучить элементам</button>
+                        <button class="nm-dropdown-item" id="btn-theme-menu">🌓 Тема</button>
                     </div>
                 </div>
             </div>
@@ -215,8 +216,14 @@
                 <div class="nm-reader-topbar">
                     <div class="nm-reader-title" id="reader-title"></div>
                     <div class="nm-reader-topbar-buttons">
-                        <button id="reader-theme-toggle" title="Сменить тему">🌓</button>
-                        <button id="reader-settings" title="Настройки">⚙️</button>
+                        <div class="nm-menu-wrap nm-menu-down">
+                            <button id="reader-menu" title="Ещё">⋮</button>
+                            <div class="nm-dropdown-menu" id="reader-dropdown">
+                                <button class="nm-dropdown-item" id="reader-retranslate">🌐 Перевести эту главу заново</button>
+                                <button class="nm-dropdown-item" id="reader-theme-toggle">🌓 Сменить тему</button>
+                                <button class="nm-dropdown-item" id="reader-settings">⚙️ Настройки</button>
+                            </div>
+                        </div>
                         <button id="reader-close" title="Закрыть читалку">✕</button>
                     </div>
                 </div>
@@ -231,7 +238,6 @@
                         <div id="reader-progress-status">Подготовка...</div>
                     </div>
                     <div class="nm-reader-nav">
-                        <button id="reader-retranslate" title="Перевести текущую главу заново (игнорирует кэш)">🌐<span class="nm-nav-label"> Перевести</span></button>
                         <button id="reader-prev" title="Предыдущая глава">←<span class="nm-nav-label"> Предыдущая</span></button>
                         <button id="reader-toc" title="Оглавление">☰<span class="nm-nav-label"> Оглавление</span></button>
                         <button id="reader-next" title="Следующая глава">→<span class="nm-nav-label"> Следующая</span></button>
