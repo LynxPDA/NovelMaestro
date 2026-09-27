@@ -112,6 +112,7 @@
                 if (k.startsWith('g/')) siteGlossaries[k.slice(2)] = v || {};
                 else if (k.startsWith('n/')) siteNerDone[k.slice(2)] = v || {};
                 else if (k.startsWith('c/')) siteChapterCache[k.slice(2)] = v || [];
+                else if (k.startsWith('j/')) siteJobs[k.slice(2)] = v || {};
             }
         } catch (e) { console.warn('[NovelMaestro] IndexedDB:', e && e.message); }
     }
@@ -142,5 +143,50 @@
     function cacheClearBook(bookKey) {
         delete siteChapterCache[bookKey];
         dbDelete('c/' + bookKey);
+        jobClear(bookKey);
+    }
+
+    // ===== ФОНОВАЯ РАБОТА: ПРОДОЛЖИТЬ, А НЕ НАЧАТЬ ЗАНОВО =====
+    // Прерванный фоновый перевод (пользователь ушёл на следующую главу, пока чанки
+    // не дошли) и прогресс NER хранятся отдельной записью на книгу — в rolling-кэш
+    // частичные главы не попадают и не вытесняют готовые. Поле hash — хэш исходного
+    // текста главы: текст изменился — частичные данные не релевантны, начать заново.
+    // FNV-1a: длина текста важна, криптостойкость нет.
+    function textHash(str) {
+        let h = 0x811c9dc5;
+        for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+        return h.toString(16);
+    }
+    let siteJobs = {};
+    // запись живёт, пока относится к той же странице книги
+    function jobOf(bookKey, url = pageCacheKey()) {
+        const job = siteJobs[bookKey];
+        return (job && job.url === url) ? job : null;
+    }
+    // поля дополняют друг друга: NER пишет nerDone/nerTotal, перевод — parts/total;
+    // пустые поля не затираются (jobPut вызывается с одного места за раз)
+    function jobPut(bookKey, job) {
+        if (!bookKey) return;
+        const prev = siteJobs[bookKey];
+        const next = (prev && prev.url === job.url) ? { ...prev, ...job } : job;
+        if (!next.parts) delete next.parts;
+        if (!next.nerDone) delete next.nerDone;
+        siteJobs[bookKey] = next;
+        dbPut('j/' + bookKey, next);
+    }
+    function jobClear(bookKey) {
+        if (!bookKey) return;
+        delete siteJobs[bookKey];
+        dbDelete('j/' + bookKey);
+    }
+    // NER закончил все чанки: снимаем его часть записи; если в этой же записи
+    // лежит незаконченный перевод — она остаётся
+    function jobClearNer(bookKey) {
+        const job = siteJobs[bookKey];
+        if (!job) return;
+        delete job.nerDone;
+        delete job.nerTotal;
+        if ((job.parts || []).some(p => p)) dbPut('j/' + bookKey, job);
+        else jobClear(bookKey);
     }
 

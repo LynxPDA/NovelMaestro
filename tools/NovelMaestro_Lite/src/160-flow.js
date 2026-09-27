@@ -23,7 +23,12 @@
         const url = pageCacheKey();
         isTranslating = true;
         cancelRequested = false;
-        openReaderShell('⏳ Подготовка главы…');
+        // «перевести заново» значит начать с чистого листа — фоновое задание сбрасывается
+        if (ignoreCache) jobClear(current.key);
+        const job = ignoreCache ? null : jobOf(current.key);
+        const resumed = job && Array.isArray(job.parts) ? job.parts.filter(p => p).length : 0;
+        const title = resumed ? '▶️ Продолжаю фоновый перевод…' : (ignoreCache ? '🔄 Повторный перевод…' : '🔄 Перевод…');
+        openReaderShell(title);
         // readerState создаётся СРАЗУ по живой странице — кнопки навигации
         // доступны даже если перевод отменён или не удался
         setReaderState({ url, title: document.title, text: '', ...resolveNavFromLive() }, false);
@@ -31,8 +36,7 @@
         // (последняя переведённая)
         current.book.openUrl = readerState.tocUrl || url;
         GM_setValue('books', books);
-        progressShow(ignoreCache ? '🔄 Повторный перевод...' : '🔄 Перевод...');
-        $('#btn-translate').disabled = true;
+        progressShow(title);
         try {
             const cached = ignoreCache ? null : cacheGet(url);
             if (cached && cached.text) {
@@ -40,6 +44,7 @@
                 progressShow('📖 Глава из кэша');
                 progressStatus('✅ Перевод уже был готов (опережающий перевод)');
                 progressFill().style.width = '100%';
+                jobClear(current.key);
                 if (config.autoNER && !isNerDoneForPage(current.key)) {
                     const liveText = extractMainText(findContentElement());
                     if (liveText.trim()) {
@@ -65,8 +70,13 @@
                                 progressStatus(`⏹ NER остановлен: +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`);
                                 await new Promise(r => setTimeout(r, 500));
                             } else {
-                                markNerDone(current.key);
-                                progressStatus(`✨ +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`);
+                                // часть чанков могла остаться без валидного JSON —
+                                // страницу не помечаем обработанной, чтобы можно было
+                                // повторить именно её
+                                if (!nerResult.skipped) markNerDone(current.key);
+                                progressStatus(`✨ +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`
+                                    + (nerResult.resumed ? ` • продолжен с чанка ${nerResult.resumed + 1}` : '')
+                                    + (nerResult.skipped ? ` • ⚠️ чанков без валидного ответа: ${nerResult.skipped} (${nerResult.skippedReason})` : ''));
                                 await new Promise(r => setTimeout(r, 800));
                             }
                         } catch (error) {
@@ -80,11 +90,11 @@
                 if (cancelRequested) {
                     progressShow('⏹ Отменено');
                     progressStatus('Отменено пользователем');
-                    readerContent.innerHTML = '<div class="nm-reader-loading">⏹ Перевод отменён<br><small>Нажмите «🌐 Перевести» внизу, чтобы повторить</small></div>';
+                    readerContent.innerHTML = '<div class="nm-reader-loading">⏹ Перевод отменён<br><small>Меню ⋮ → «🌐 Перевести» продолжит с сохранённого места</small></div>';
                     return;
                 }
-                progressShow(ignoreCache ? '🔄 Повторный перевод...' : '🔄 Перевод...');
-                const translationResult = await translateWithStreaming(readerContent, text);
+                progressShow(title);
+                const translationResult = await translateWithStreaming(readerContent, text, { bookKey: current.key });
                 const full = translationResult.text || '';
                 // навигация обновляется по живой странице независимо от успеха перевода
                 const nav = resolveNavFromLive();
@@ -97,13 +107,13 @@
                 updateNavButtons();
                 // в кэш — только завершённый перевод (данные собираем из локальных
                 // переменных: readerState мог быть обнулён закрытой читалкой);
-                // частичный остаётся лишь на экране
+                // незаконченный остаётся в фоновом задании
                 if (translationResult.completed && full) cacheSet(url, { url, title: document.title, text: full, ...nav }, current.key);
+                else if (full) progressStatus(`⏳ Сохранено ${full.length} зн. перевода — продолжится автоматически`);
             }
             if (!cancelRequested && config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
         } finally {
             isTranslating = false;
-            $('#btn-translate').disabled = false;
             updateNavButtons();
             setTimeout(progressHide, 2500);
         }
@@ -121,11 +131,12 @@
         cancelRequested = false;
         extractMiniShow();
         try {
-            const result = await extractTermsFromText(text, targetKey, updateExtractionProgressMini);
-            if (!result.canceled) markNerDone(targetKey);
-            extractMiniStatus(result.canceled
-                ? `⏹ Остановлено: +${result.added} новых, обновлено частот: ${result.incremented}`
-                : `✨ +${result.added} новых, обновлено частот: ${result.incremented}`);
+            const result = await extractTermsFromText(text, current.key, updateExtractionProgressMini);
+            if (!result.canceled && !result.skipped) markNerDone(current.key);
+            extractMiniStatus((result.canceled ? '⏹ Остановлено: ' : '✨ ')
+                + `+${result.added} новых, обновлено частот: ${result.incremented}`
+                + (result.resumed ? ` • продолжен с чанка ${result.resumed + 1}` : '')
+                + (result.skipped ? ` • ⚠️ без валидного ответа: ${result.skipped} (${result.skippedReason})` : ''));
             updateGlossaryUI();
             refreshBookTab();
         } catch (error) {
@@ -135,4 +146,3 @@
             extractMiniHide(2600);
         }
     }
-

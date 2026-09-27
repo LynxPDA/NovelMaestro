@@ -87,62 +87,90 @@
     const LONG_PRESS_DELAY = 450;
     const preemptiveRunning = new Set();
 
-    // ===== УТИЛИТЫ ПОИСКА =====
-    function normalize(str) { return String(str).trim().toLowerCase(); }
-    function ngrams(str, n = 2) {
-        const s = normalize(str);
+    // ===== ПОИСК ТЕРМИНОВ: зеркало core/common.py =====
+    // Нормализация единая с конвейером (core normalize_for_search): NFC → lower →
+    // пробелы и пунктуация вычёркиваются. Границы слов не требуются: с прежним
+    // требованием «не буква рядом» термины не находились внутри CJK-предложений
+    // (перед именем стоит иероглиф-буква) и в бесслотных текстах (тай, лаос,
+    // кхмер, бирма, тибет).
+    const SEARCH_DROP_RE = /[\s　​.,!?;:()«»"'’‘…—–\-]+/g;
+    // размер n-грамм совпадает с core (get_ngrams n=3): порог в настройках значит
+    // одно и то же в web-конвейере и в Lite
+    const NGRAM_SIZE = 3;
+
+    function normalize(str) {
+        return String(str ?? '').normalize('NFC').toLowerCase().replace(SEARCH_DROP_RE, '');
+    }
+    function ngrams(normText, n = NGRAM_SIZE) {
+        if (!normText) return new Set();
+        if (normText.length < n) return new Set([normText]);
         const grams = new Set();
-        for (let i = 0; i <= s.length - n; i++) grams.add(s.slice(i, i + n));
+        for (let i = 0; i + n <= normText.length; i++) grams.add(normText.slice(i, i + n));
         return grams;
     }
-    function getCachedNgrams(str) {
-        if (ngramCache.has(str)) return ngramCache.get(str);
+    // кэш — только для коротких строк (терминов): n-граммы чанка считаются один раз
+    // на вызов и в кэш не кладутся
+    function getCachedNgrams(normText) {
+        if (ngramCache.has(normText)) return ngramCache.get(normText);
         if (ngramCache.size >= MAX_CACHE_SIZE) ngramCache.clear();
-        const g = ngrams(str);
-        ngramCache.set(str, g);
+        const g = ngrams(normText);
+        ngramCache.set(normText, g);
         return g;
     }
-    function ngramSimilarity(a, b) {
-        const g1 = getCachedNgrams(a), g2 = getCachedNgrams(b);
-        if (g1.size === 0 || g2.size === 0) return 0;
-        let inter = 0;
-        const [sm, lg] = g1.size < g2.size ? [g1, g2] : [g2, g1];
-        sm.forEach(g => { if (lg.has(g)) inter++; });
-        const union = g1.size + g2.size - inter;
-        return union === 0 ? 0 : inter / union;
+    // CJK-термин (первый символ — иероглиф/кана/хангыль) ищется только точно:
+    // нечёткость на иероглифике даёт сплошные ложные срабатывания (core is_cjk)
+    function isCjkChar(ch) {
+        const cp = ch ? ch.codePointAt(0) : 0;
+        return (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF)
+            || (cp >= 0x20000 && cp <= 0x2A6DF) || (cp >= 0x2A700 && cp <= 0x2B73F)
+            || (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0x2F800 && cp <= 0x2FA1F)
+            || (cp >= 0x3040 && cp <= 0x309F) || (cp >= 0x30A0 && cp <= 0x30FF)
+            || (cp >= 0xAC00 && cp <= 0xD7AF);
     }
-    function splitIntoWords(term) {
-        const cjk = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/;
-        if (cjk.test(term)) return [term];
-        return term.split(/\s+/).filter(w => w.length > 0);
+    // длина самой длинной общей подстроки (core: SequenceMatcher.find_longest_match);
+    // DP двумя строками — термин короткий, и путь включается только для терминов,
+    // уже прошедших n-граммный порог
+    function longestCommonRun(term, text) {
+        let prev = new Uint16Array(text.length + 1);
+        let cur = new Uint16Array(text.length + 1);
+        let best = 0;
+        for (let i = 1; i <= term.length; i++) {
+            cur.fill(0);
+            for (let j = 1; j <= text.length; j++) {
+                if (term.charCodeAt(i - 1) === text.charCodeAt(j - 1)) {
+                    const v = prev[j - 1] + 1;
+                    cur[j] = v;
+                    if (v > best) best = v;
+                }
+            }
+            const swap = prev; prev = cur; cur = swap;
+        }
+        return best;
     }
-    function isLetterOrDigit(ch) { return /[\p{L}\p{N}]/u.test(ch); }
-    function matchWordWithBoundary(text, word) {
-        const w = normalize(word), t = text.toLowerCase();
-        let idx = 0;
-        while ((idx = t.indexOf(w, idx)) !== -1) {
-            const before = idx > 0 ? t[idx - 1] : ' ';
-            const after = idx + w.length < t.length ? t[idx + w.length] : ' ';
-            if (!isLetterOrDigit(before) && !isLetterOrDigit(after)) return true;
-            idx += 1;
+    // «термин (или алиас) есть в тексте»: точное вхождение нормализованных строк,
+    // иначе нечёткое — перекрытие n-грамм от термина >= threshold И общая подстрока
+    // >= len(термина) * threshold (core _fuzzy_hit). textNorm/textG — уже
+    // нормализованный текст и его n-граммы (считаются один раз на чанк)
+    function termHitsText(entry, textNorm, textG, threshold) {
+        const variants = [entry && entry.term, ...((entry && entry.aliases) || [])]
+            .map(v => normalize(v)).filter(v => v);
+        if (!variants.length || !textNorm) return false;
+        for (const v of variants) {
+            if (textNorm.indexOf(v) !== -1) return true;
+            if (isCjkChar(v[0])) continue;
+            const vg = getCachedNgrams(v);
+            if (!vg.size) continue;
+            let inter = 0;
+            for (const g of vg) { if (textG.has(g)) inter++; }
+            if (inter / vg.size >= threshold
+                && longestCommonRun(v, textNorm) >= v.length * threshold) { return true; }
         }
         return false;
     }
-    function fuzzyMatchWord(text, word, threshold) {
-        for (const w of splitIntoWords(word)) {
-            if (matchWordWithBoundary(text, w)) continue;
-            const t = text.toLowerCase(), wl = normalize(w);
-            let found = false;
-            for (let i = 0; i <= t.length - wl.length; i++) {
-                if (ngramSimilarity(w, t.slice(i, i + wl.length)) >= threshold) {
-                    const before = i > 0 ? t[i - 1] : ' ';
-                    const after = i + wl.length < t.length ? t[i + wl.length] : ' ';
-                    if (!isLetterOrDigit(before) && !isLetterOrDigit(after)) { found = true; break; }
-                }
-            }
-            if (!found) return false;
-        }
-        return true;
+    // та же семантика для пары «строка ↔ строка» (фильтр и слияние глоссария)
+    function termMatchesText(haystack, needle, threshold) {
+        const textNorm = normalize(haystack);
+        return termHitsText({ term: needle }, textNorm, ngrams(textNorm), threshold);
     }
     function paragraphsOf(text) { return text.split(/\n+/).map(s => s.trim()).filter(s => s.length > 0); }
     function splitByNewlines(text, chunkSize) {
@@ -156,7 +184,6 @@
         if (cur) chunks.push(cur);
         return chunks.length > 0 ? chunks : [text];
     }
-
     // ===== КНИГИ =====
     function pageCacheKey() { return location.href.split('#')[0]; }
     function suggestBookKeyFromUrl() {
@@ -271,6 +298,7 @@
                 if (k.startsWith('g/')) siteGlossaries[k.slice(2)] = v || {};
                 else if (k.startsWith('n/')) siteNerDone[k.slice(2)] = v || {};
                 else if (k.startsWith('c/')) siteChapterCache[k.slice(2)] = v || [];
+                else if (k.startsWith('j/')) siteJobs[k.slice(2)] = v || {};
             }
         } catch (e) { console.warn('[NovelMaestro] IndexedDB:', e && e.message); }
     }
@@ -301,6 +329,51 @@
     function cacheClearBook(bookKey) {
         delete siteChapterCache[bookKey];
         dbDelete('c/' + bookKey);
+        jobClear(bookKey);
+    }
+
+    // ===== ФОНОВАЯ РАБОТА: ПРОДОЛЖИТЬ, А НЕ НАЧАТЬ ЗАНОВО =====
+    // Прерванный фоновый перевод (пользователь ушёл на следующую главу, пока чанки
+    // не дошли) и прогресс NER хранятся отдельной записью на книгу — в rolling-кэш
+    // частичные главы не попадают и не вытесняют готовые. Поле hash — хэш исходного
+    // текста главы: текст изменился — частичные данные не релевантны, начать заново.
+    // FNV-1a: длина текста важна, криптостойкость нет.
+    function textHash(str) {
+        let h = 0x811c9dc5;
+        for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+        return h.toString(16);
+    }
+    let siteJobs = {};
+    // запись живёт, пока относится к той же странице книги
+    function jobOf(bookKey, url = pageCacheKey()) {
+        const job = siteJobs[bookKey];
+        return (job && job.url === url) ? job : null;
+    }
+    // поля дополняют друг друга: NER пишет nerDone/nerTotal, перевод — parts/total;
+    // пустые поля не затираются (jobPut вызывается с одного места за раз)
+    function jobPut(bookKey, job) {
+        if (!bookKey) return;
+        const prev = siteJobs[bookKey];
+        const next = (prev && prev.url === job.url) ? { ...prev, ...job } : job;
+        if (!next.parts) delete next.parts;
+        if (!next.nerDone) delete next.nerDone;
+        siteJobs[bookKey] = next;
+        dbPut('j/' + bookKey, next);
+    }
+    function jobClear(bookKey) {
+        if (!bookKey) return;
+        delete siteJobs[bookKey];
+        dbDelete('j/' + bookKey);
+    }
+    // NER закончил все чанки: снимаем его часть записи; если в этой же записи
+    // лежит незаконченный перевод — она остаётся
+    function jobClearNer(bookKey) {
+        const job = siteJobs[bookKey];
+        if (!job) return;
+        delete job.nerDone;
+        delete job.nerTotal;
+        if ((job.parts || []).some(p => p)) dbPut('j/' + bookKey, job);
+        else jobClear(bookKey);
     }
 
     // ===== ГЛОССАРИИ =====
@@ -366,17 +439,20 @@
         }
     }
     function findRelevantTerms(text) {
-        const relevant = [];
         const glossary = getGlossaryForTranslation();
-        for (const [id, t] of Object.entries(glossary)) {
-            if (!t || !t.term) continue; // битая запись глоссария не роняет перевод
-            if (fuzzyMatchWord(text, t.term, config.fuzzySearchThreshold)) relevant.push({ ...t, id });
-        }
+        const textNorm = normalize(text);
+        if (!textNorm) return [];
+        // n-граммы текста считаются один раз на чанк, а не на термин
+        const textG = ngrams(textNorm);
         const unique = [];
         const seen = new Set();
-        for (const item of relevant) {
-            const k = normalize(item.term);
-            if (!seen.has(k)) { seen.add(k); unique.push(item); }
+        for (const [id, t] of Object.entries(glossary)) {
+            if (!t || !t.term) continue; // битая запись глоссария не роняет перевод
+            if (!termHitsText(t, textNorm, textG, config.fuzzySearchThreshold)) continue;
+            const k = normalize(t.term);
+            if (seen.has(k)) continue;
+            seen.add(k);
+            unique.push({ ...t, id });
         }
         return unique;
     }
@@ -1929,60 +2005,171 @@
 
     // ===== NER =====
     const NER_RESPONSE_RATIO = 2;
+    // модель обязана вернуть JSON-массив объектов; ответ приходит и в ```json
+    // fences, и одним объектом, и в обёртке {"terms": [...]} — всё это разбирается.
+    // Битый JSON — не «пустой чанк», а повод переспросить
+    const NER_PARSE_ATTEMPTS = 3;
+
+    function extractJsonArray(raw) {
+        const text = String(raw || '').replace(/```json/gi, '').replace(/```/g, '').trim();
+        const aStart = text.indexOf('[');
+        const aEnd = text.lastIndexOf(']');
+        if (aStart !== -1 && aEnd > aStart) {
+            try {
+                const arr = JSON.parse(text.slice(aStart, aEnd + 1));
+                if (Array.isArray(arr)) return arr;
+            } catch { /* ниже — попытка с объектом */ }
+        }
+        const oStart = text.indexOf('{');
+        const oEnd = text.lastIndexOf('}');
+        if (oStart !== -1 && oEnd > oStart) {
+            try {
+                const obj = JSON.parse(text.slice(oStart, oEnd + 1));
+                if (Array.isArray(obj)) return obj;
+                for (const v of Object.values(obj)) if (Array.isArray(v)) return v;
+                if (typeof obj.term === 'string' || typeof obj.translation === 'string') return [obj];
+            } catch { return null; }
+        }
+        return null;
+    }
+    // минимально необходимые поля — term и translation; type приводится, aliases
+    // сохраняются, если пришли (совместимость с ner.json конвейера)
+    function normalizeNerItem(raw) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const term = String(raw.term ?? '').trim();
+        const translation = String(raw.translation ?? '').trim();
+        if (!term || !translation) return null;
+        const item = { term, translation, type: String(raw.type ?? '').trim() || 'Term', count: 1 };
+        const aliases = Array.isArray(raw.aliases) ? raw.aliases.map(a => String(a).trim()).filter(Boolean) : [];
+        if (aliases.length) item.aliases = aliases;
+        return item;
+    }
+    // один чанк → записи: сетевые повторы и таймауты уже внутри callLLM, здесь
+    // повтор для случая «ответ пришёл, но не годится»: не JSON и пустой completion
+    async function requestNerChunk(chunkText, onChunk) {
+        const userPrompt = config.extractionPrompt
+            .replaceAll('{targetLang}', config.targetLang)
+            .replaceAll('{text}', chunkText);
+        let lastErr = null;
+        for (let attempt = 1; attempt <= NER_PARSE_ATTEMPTS; attempt++) {
+            let res = null;
+            try {
+                res = await callLLM([{ role: 'user', content: userPrompt }], 0.3, true, onChunk);
+            } catch (error) {
+                // isFatal — настоящий HTTP-ответ (401, нет модели): повторять его
+                // бессмысленно; пустой completion — как раз случай «переспросить»
+                if (error.isFatal && !/Пустой ответ/.test(error.message || '')) throw error;
+                lastErr = error;
+            }
+            const arr = res ? extractJsonArray(res.text) : null;
+            if (arr) {
+                const items = [];
+                let bad = 0;
+                for (const raw of arr) {
+                    const item = normalizeNerItem(raw);
+                    if (item) items.push(item);
+                    else bad++;
+                }
+                return { items, bad };
+            }
+            if (cancelRequested) throw new Error('Отменено пользователем');
+            lastErr = lastErr || new Error('Модель вернула не JSON-массив');
+            // тот же прогресс-хелпер: повтор показывает причину и свой номер
+            if (attempt < NER_PARSE_ATTEMPTS && onChunk && onChunk.onRetry) {
+                onChunk.onRetry({ message: lastErr.message, nextAttempt: attempt + 1, attemptsTotal: NER_PARSE_ATTEMPTS });
+            }
+        }
+        throw lastErr || new Error('NER: модель не ответила');
+    }
     async function extractTermsFromText(text, targetKey, onProgress) {
+        if (!books[targetKey]) return { added: 0, incremented: 0, canceled: false, skipped: 0, badItems: 0, resumed: 0, skippedReason: '' };
         const chunks = splitByNewlines(text, config.chunkSize);
         const glossary = { ...bookGlossary(targetKey) };
-        const expectedTotal = Math.max(1, Math.round(text.length * NER_RESPONSE_RATIO));
-        let streamed = 0, added = 0, incremented = 0, canceled = false;
+        const hash = textHash(text);
+        const expectedTotal = Math.max(1, text.length * NER_RESPONSE_RATIO);
+        let streamed = 0, added = 0, incremented = 0, skipped = 0, badItems = 0, canceled = false, skippedReason = '';
+        // прерванный прогон продолжается с того же чанка (та же страница, тот же
+        // исходный текст, то же чанкование)
+        const stored = jobOf(targetKey);
+        let startChunk = 0;
+        if (stored && stored.hash === hash && stored.nerTotal === chunks.length && stored.nerDone > 0) {
+            startChunk = Math.min(stored.nerDone, chunks.length);
+        }
         const emitProgress = (i, retry) => {
-            if (onProgress) onProgress({ chunk: i + 1, total: chunks.length, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null });
+            if (onProgress) onProgress({ chunk: i + 1, total: chunks.length, resumed: startChunk, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null });
         };
         for (let i = 0; i < chunks.length; i++) {
             if (cancelRequested) { canceled = true; break; }
+            if (i < startChunk) { emitProgress(i); continue; }
             const charsBefore = streamed;
-            // replaceAll: плейсхолдеры в промптах могут встречаться несколько раз
-            const userPrompt = config.extractionPrompt.replaceAll('{targetLang}', config.targetLang).replaceAll('{text}', chunks[i]);
-            let result;
+            const onChunk = {
+                onDelta: (piece) => { streamed += piece.length; emitProgress(i); },
+                onRetry: (info) => { streamed = charsBefore; emitProgress(i, info); }
+            };
             try {
-                const res = await callLLM([{ role: 'user', content: userPrompt }], 0.3, true, {
-                    onDelta: (piece) => { streamed += piece.length; emitProgress(i); },
-                    onRetry: (info) => { streamed = charsBefore; emitProgress(i, info); }
-                });
-                result = res.text;
-            } catch (e) {
-                if (cancelRequested) { canceled = true; emitProgress(i); break; }
-                throw e;
-            }
-            result = result.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-            const m = result.match(/\[[\s\S]*\]/);
-            if (!m) continue;
-            let extracted;
-            try { extracted = JSON.parse(m[0]); } catch { continue; }
-            for (const item of extracted) {
-                if (!item || !item.term || !item.translation) continue;
-                let existingId = null;
-                for (const [id, ex] of Object.entries(glossary)) {
-                    if (normalize(ex.term) === normalize(item.term)) { existingId = id; break; }
-                }
-                if (!existingId) {
+                const { items, bad } = await requestNerChunk(chunks[i], onChunk);
+                badItems += bad;
+                for (const item of items) {
+                    let existingId = null;
                     for (const [id, ex] of Object.entries(glossary)) {
-                        if (fuzzyMatchWord(ex.term, item.term, config.fuzzySearchThreshold)) { existingId = id; break; }
+                        if (normalize(ex.term) === normalize(item.term)) { existingId = id; break; }
+                    }
+                    if (!existingId) {
+                        for (const [id, ex] of Object.entries(glossary)) {
+                            if (termMatchesText(ex.term, item.term, config.fuzzySearchThreshold)) { existingId = id; break; }
+                        }
+                    }
+                    if (existingId) { glossary[existingId].count = (glossary[existingId].count || 0) + 1; incremented++; }
+                    else {
+                        glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = migrateEntry(item);
+                        added++;
                     }
                 }
-                if (existingId) { glossary[existingId].count = (glossary[existingId].count || 0) + 1; incremented++; }
-                else {
-                    glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = migrateEntry({
-                        term: item.term, translation: item.translation, type: String(item.type || '').trim() || 'Term', count: 1
-                    });
-                    added++;
-                }
+            } catch (error) {
+                if (cancelRequested) { canceled = true; emitProgress(i); break; }
+                // битый формат одного чанка не роняет весь прогон, но чанк остаётся
+                // необработанным — поэтому отметка «NER сделан» не ставится
+                skipped++;
+                skippedReason = error.message || 'нет данных';
+                emitProgress(i);
+                continue;
             }
+            // глоссарий и отметка чанка пишется после каждого чанка: при уходе с
+            // страницы сделанное не теряется
+            siteGlossaries[targetKey] = glossary;
+            dbPut('g/' + targetKey, glossary);
+            jobPut(targetKey, { url: pageCacheKey(), hash, nerDone: i + 1, nerTotal: chunks.length });
         }
-        if (books[targetKey]) { siteGlossaries[targetKey] = glossary; dbPut('g/' + targetKey, glossary); }
-        return { added, incremented, canceled };
+        siteGlossaries[targetKey] = glossary;
+        dbPut('g/' + targetKey, glossary);
+        if (!skipped && !canceled) jobClearNer(targetKey);
+        return { added, incremented, canceled, skipped, badItems, resumed: startChunk, skippedReason };
     }
-
     // ===== ПЕРЕВОД =====
+    // промпт чанка: глоссарий подбирается под сам чанк, плейсхолдеры меняются
+    // replaceAll — в промптах плейсхолдер может встречаться несколько раз
+    function chunkUserPrompt(chunkText) {
+        const glossaryText = formatGlossaryForPrompt(findRelevantTerms(chunkText));
+        return config.translationPrompt
+            .replaceAll('{sourceLang}', config.sourceLang)
+            .replaceAll('{targetLang}', config.targetLang)
+            .replaceAll('{glossary}', glossaryText)
+            .replaceAll('{text}', chunkText);
+    }
+    // часть главы по чанкам: '' — чанк не переведён. Прерванная работа сохраняется
+    // целиком, повторный запуск продолжает с первого незакрытого чанка
+    function jobParts(bookKey, pageUrl, chunks, hash) {
+        const stored = bookKey ? jobOf(bookKey, pageUrl) : null;
+        if (stored && stored.hash === hash && Array.isArray(stored.parts) && stored.parts.length === chunks.length) {
+            return chunks.map((_, i) => String(stored.parts[i] || ''));
+        }
+        return chunks.map(() => '');
+    }
+    function jobSave(bookKey, pageUrl, hash, parts) {
+        if (!bookKey) return;
+        jobPut(bookKey, { url: pageUrl, hash, parts, total: parts.length });
+    }
+    function joinParts(parts) { return parts.filter(p => p).join('\n\n'); }
     function renderTranslationInto(element, text) {
         const paras = paragraphsOf(text);
         element.innerHTML = '';
@@ -1992,13 +2179,18 @@
             element.appendChild(p);
         }
     }
-    async function translateWithStreaming(element, originalText) {
-        const totalParas = paragraphsOf(originalText).length;
-        if (totalParas === 0) { progressStatus('❌ Текст не найден'); return { text: '', completed: false }; }
+    async function translateWithStreaming(element, originalText, job = {}) {
         const chunks = splitByNewlines(originalText, config.chunkSize);
+        const totalParas = paragraphsOf(originalText).length;
+        if (totalParas === 0) { progressStatus('Текст не найден'); return { text: '', completed: false, resumed: 0 }; }
+        const bookKey = job.bookKey;
+        const pageUrl = job.url || pageCacheKey();
+        const hash = textHash(originalText);
+        const parts = jobParts(bookKey, pageUrl, chunks, hash);
+        const resumed = parts.filter(p => p).length;
         const fill = progressFill();
         fill.classList.remove('retry');
-        let fullTranslation = '', completed = false;
+        let completed = false;
         const setProgress = (all) => {
             const done = paragraphsOf(all).length;
             const pct = totalParas > 0 ? Math.min(99, Math.round((done / totalParas) * 100)) : 0;
@@ -2007,68 +2199,70 @@
         };
         try {
             element.innerHTML = '';
+            if (resumed) renderTranslationInto(element, joinParts(parts));
             for (let i = 0; i < chunks.length; i++) {
                 if (cancelRequested) throw new Error('Отменено пользователем');
+                if (parts[i]) continue;
                 fill.classList.remove('retry');
-                progressStatus(`Чанк ${i + 1}/${chunks.length} • абзацев в источнике: ${totalParas}`);
-                const glossaryText = formatGlossaryForPrompt(findRelevantTerms(chunks[i]));
-                const userPrompt = config.translationPrompt
-                    .replaceAll('{sourceLang}', config.sourceLang)
-                    .replaceAll('{targetLang}', config.targetLang)
-                    .replaceAll('{glossary}', glossaryText)
-                    .replaceAll('{text}', chunks[i]);
+                progressStatus(`Чанк ${i + 1}/${chunks.length} • абзацев в источнике: ${totalParas}`
+                    + (resumed ? ` • продолжаю (${resumed}/${chunks.length} уже готово)` : ''));
                 let chunkTranslation = '';
-                const res = await callLLM([{ role: 'user', content: userPrompt }], 0.7, true, {
+                const res = await callLLM([{ role: 'user', content: chunkUserPrompt(chunks[i]) }], 0.7, true, {
                     onDelta: (content) => {
                         chunkTranslation += content;
-                        const all = fullTranslation + (fullTranslation ? '\n\n' : '') + chunkTranslation;
+                        const all = joinParts(parts.map((p, j) => (j === i ? chunkTranslation : p)));
                         renderTranslationInto(element, all);
                         const pct = setProgress(all);
                         progressStatus(`Чанк ${i + 1}/${chunks.length} • ~${pct}%`);
                     },
                     onRetry: (info) => {
                         chunkTranslation = '';
-                        renderTranslationInto(element, fullTranslation);
-                        setProgress(fullTranslation);
+                        renderTranslationInto(element, joinParts(parts));
+                        setProgress(joinParts(parts));
                         fill.classList.add('retry');
                         progressStatus(`⏱ ${info.message} — повтор ${info.nextAttempt}/${info.attemptsTotal}`);
                     }
                 });
-                fullTranslation += (fullTranslation ? '\n\n' : '') + res.text;
+                parts[i] = res.text;
+                jobSave(bookKey, pageUrl, hash, parts);
                 fill.classList.remove('retry');
-                renderTranslationInto(element, fullTranslation);
-                setProgress(fullTranslation);
+                renderTranslationInto(element, joinParts(parts));
+                setProgress(joinParts(parts));
             }
             completed = true;
             progressStatus('✅ Перевод завершён!');
             fill.style.width = '100%';
         } catch (error) {
             progressStatus('❌ ' + error.message);
-            // частичный перевод остаётся на экране, но completed=false — в кэш он не попадёт
-            if (fullTranslation) renderTranslationInto(element, fullTranslation + '\n\n[ПЕРЕВОД ПРЕРВАН: ' + error.message + ']');
+            // частичный перевод остаётся на экране и в задании — на следующей
+            // загрузке страницы он продолжится, а не начнётся заново
+            if (joinParts(parts)) renderTranslationInto(element, joinParts(parts) + '\n\n[ПЕРЕВОД ПРЕРВАН: ' + error.message + ']');
             else renderTranslationInto(element, '');
         } finally {
             fill.classList.remove('retry');
+            if (bookKey) {
+                if (completed) jobClear(bookKey);
+                else jobSave(bookKey, pageUrl, hash, parts);
+            }
         }
-        return { text: fullTranslation, completed };
+        return { text: joinParts(parts), completed, resumed };
     }
-    async function translateTextBackground(text) {
+    // фоновый перевод следующей главы: тот же механизм чанков и того же задания
+    async function translateTextBackground(text, job = {}) {
         const chunks = splitByNewlines(text, config.chunkSize);
-        let full = '';
-        for (const chunk of chunks) {
-            const glossaryText = formatGlossaryForPrompt(findRelevantTerms(chunk));
-            const userPrompt = config.translationPrompt
-                .replaceAll('{sourceLang}', config.sourceLang)
-                .replaceAll('{targetLang}', config.targetLang)
-                .replaceAll('{glossary}', glossaryText)
-                .replaceAll('{text}', chunk);
-            const resp = await callLLM([{ role: 'user', content: userPrompt }], 0.7, false);
+        const pageUrl = job.url || pageCacheKey();
+        const hash = textHash(text);
+        const parts = jobParts(job.bookKey, pageUrl, chunks, hash);
+        for (let i = 0; i < chunks.length; i++) {
+            if (parts[i]) continue;
+            const resp = await callLLM([{ role: 'user', content: chunkUserPrompt(chunks[i]) }], 0.7, false);
             const data = await resp.json().catch(() => null);
             const piece = data && data.choices && data.choices[0] && data.choices[0].message ? (data.choices[0].message.content || '') : '';
             if (!piece) throw new Error('Пустой ответ при фоновом переводе');
-            full += (full ? '\n\n' : '') + piece;
+            parts[i] = piece;
+            jobSave(job.bookKey, pageUrl, hash, parts);
         }
-        return full;
+        return joinParts(parts);
     }
     function updateExtractionProgress(st) {
         const fill = progressFill();
@@ -2076,9 +2270,8 @@
         fill.style.width = st.pct + '%';
         progressStatus(st.retry
             ? `⏱ ${st.retry.message} — повтор ${st.retry.nextAttempt}/${st.retry.attemptsTotal}`
-            : `🔍 Термины: чанк ${st.chunk}/${st.total} • ~${st.pct}%`);
+            : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.chunk}/${st.resumed + 1})` : ''} • ~${st.pct}%`);
     }
-
     // ===== ЧИТАЛКА =====
     function applyTheme() {
         const dark = config.readerTheme === 'dark';
@@ -2176,7 +2369,7 @@
             const doc = new DOMParser().parseFromString(html, 'text/html');
             const text = extractTextFromDoc(doc, sel.content);
             if (!text.trim()) throw new Error('Не найден текст в следующей главе');
-            const translated = await translateTextBackground(text);
+            const translated = await translateTextBackground(text, { bookKey: cur.key, url: nextUrl });
             cacheSet(nextUrl, {
                 url: nextUrl,
                 title: doc.title || '',
@@ -2220,7 +2413,12 @@
         const url = pageCacheKey();
         isTranslating = true;
         cancelRequested = false;
-        openReaderShell('⏳ Подготовка главы…');
+        // «перевести заново» значит начать с чистого листа — фоновое задание сбрасывается
+        if (ignoreCache) jobClear(current.key);
+        const job = ignoreCache ? null : jobOf(current.key);
+        const resumed = job && Array.isArray(job.parts) ? job.parts.filter(p => p).length : 0;
+        const title = resumed ? '▶️ Продолжаю фоновый перевод…' : (ignoreCache ? '🔄 Повторный перевод…' : '🔄 Перевод…');
+        openReaderShell(title);
         // readerState создаётся СРАЗУ по живой странице — кнопки навигации
         // доступны даже если перевод отменён или не удался
         setReaderState({ url, title: document.title, text: '', ...resolveNavFromLive() }, false);
@@ -2228,8 +2426,7 @@
         // (последняя переведённая)
         current.book.openUrl = readerState.tocUrl || url;
         GM_setValue('books', books);
-        progressShow(ignoreCache ? '🔄 Повторный перевод...' : '🔄 Перевод...');
-        $('#btn-translate').disabled = true;
+        progressShow(title);
         try {
             const cached = ignoreCache ? null : cacheGet(url);
             if (cached && cached.text) {
@@ -2237,6 +2434,7 @@
                 progressShow('📖 Глава из кэша');
                 progressStatus('✅ Перевод уже был готов (опережающий перевод)');
                 progressFill().style.width = '100%';
+                jobClear(current.key);
                 if (config.autoNER && !isNerDoneForPage(current.key)) {
                     const liveText = extractMainText(findContentElement());
                     if (liveText.trim()) {
@@ -2262,8 +2460,13 @@
                                 progressStatus(`⏹ NER остановлен: +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`);
                                 await new Promise(r => setTimeout(r, 500));
                             } else {
-                                markNerDone(current.key);
-                                progressStatus(`✨ +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`);
+                                // часть чанков могла остаться без валидного JSON —
+                                // страницу не помечаем обработанной, чтобы можно было
+                                // повторить именно её
+                                if (!nerResult.skipped) markNerDone(current.key);
+                                progressStatus(`✨ +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`
+                                    + (nerResult.resumed ? ` • продолжен с чанка ${nerResult.resumed + 1}` : '')
+                                    + (nerResult.skipped ? ` • ⚠️ чанков без валидного ответа: ${nerResult.skipped} (${nerResult.skippedReason})` : ''));
                                 await new Promise(r => setTimeout(r, 800));
                             }
                         } catch (error) {
@@ -2277,11 +2480,11 @@
                 if (cancelRequested) {
                     progressShow('⏹ Отменено');
                     progressStatus('Отменено пользователем');
-                    readerContent.innerHTML = '<div class="nm-reader-loading">⏹ Перевод отменён<br><small>Нажмите «🌐 Перевести» внизу, чтобы повторить</small></div>';
+                    readerContent.innerHTML = '<div class="nm-reader-loading">⏹ Перевод отменён<br><small>Меню ⋮ → «🌐 Перевести» продолжит с сохранённого места</small></div>';
                     return;
                 }
-                progressShow(ignoreCache ? '🔄 Повторный перевод...' : '🔄 Перевод...');
-                const translationResult = await translateWithStreaming(readerContent, text);
+                progressShow(title);
+                const translationResult = await translateWithStreaming(readerContent, text, { bookKey: current.key });
                 const full = translationResult.text || '';
                 // навигация обновляется по живой странице независимо от успеха перевода
                 const nav = resolveNavFromLive();
@@ -2294,13 +2497,13 @@
                 updateNavButtons();
                 // в кэш — только завершённый перевод (данные собираем из локальных
                 // переменных: readerState мог быть обнулён закрытой читалкой);
-                // частичный остаётся лишь на экране
+                // незаконченный остаётся в фоновом задании
                 if (translationResult.completed && full) cacheSet(url, { url, title: document.title, text: full, ...nav }, current.key);
+                else if (full) progressStatus(`⏳ Сохранено ${full.length} зн. перевода — продолжится автоматически`);
             }
             if (!cancelRequested && config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
         } finally {
             isTranslating = false;
-            $('#btn-translate').disabled = false;
             updateNavButtons();
             setTimeout(progressHide, 2500);
         }
@@ -2318,11 +2521,12 @@
         cancelRequested = false;
         extractMiniShow();
         try {
-            const result = await extractTermsFromText(text, targetKey, updateExtractionProgressMini);
-            if (!result.canceled) markNerDone(targetKey);
-            extractMiniStatus(result.canceled
-                ? `⏹ Остановлено: +${result.added} новых, обновлено частот: ${result.incremented}`
-                : `✨ +${result.added} новых, обновлено частот: ${result.incremented}`);
+            const result = await extractTermsFromText(text, current.key, updateExtractionProgressMini);
+            if (!result.canceled && !result.skipped) markNerDone(current.key);
+            extractMiniStatus((result.canceled ? '⏹ Остановлено: ' : '✨ ')
+                + `+${result.added} новых, обновлено частот: ${result.incremented}`
+                + (result.resumed ? ` • продолжен с чанка ${result.resumed + 1}` : '')
+                + (result.skipped ? ` • ⚠️ без валидного ответа: ${result.skipped} (${result.skippedReason})` : ''));
             updateGlossaryUI();
             refreshBookTab();
         } catch (error) {
@@ -2332,7 +2536,6 @@
             extractMiniHide(2600);
         }
     }
-
     // ===== ОБУЧЕНИЕ =====
     function trainingIgnore(e) {
         const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
@@ -2545,7 +2748,7 @@
         if (!term || !translation) { showStatus('Заполните термин и перевод', 'error', 'status-glossary'); return; }
         const glossary = getGlossaryForView();
         for (const ex of Object.values(glossary)) {
-            if (normalize(ex.term) === normalize(term) || fuzzyMatchWord(ex.term, term, config.fuzzySearchThreshold)) {
+            if (normalize(ex.term) === normalize(term) || termMatchesText(ex.term, term, config.fuzzySearchThreshold)) {
                 showStatus(`Похожий термин уже есть: "${ex.term}"`, 'error', 'status-glossary');
                 return;
             }
@@ -2576,7 +2779,7 @@
                         if (!t || !t.term || !t.translation) continue;
                         let existingId = null;
                         for (const [exId, ex] of Object.entries(glossary)) {
-                            if (normalize(ex.term) === normalize(t.term) || fuzzyMatchWord(ex.term, t.term, config.fuzzySearchThreshold)) { existingId = exId; break; }
+                            if (normalize(ex.term) === normalize(t.term) || termMatchesText(ex.term, t.term, config.fuzzySearchThreshold)) { existingId = exId; break; }
                         }
                         const importedCount = parseInt(t.count, 10);
                         const cnt = Number.isFinite(importedCount) && importedCount > 0 ? importedCount : 1;

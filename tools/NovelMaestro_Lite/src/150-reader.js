@@ -95,7 +95,7 @@
             const doc = new DOMParser().parseFromString(html, 'text/html');
             const text = extractTextFromDoc(doc, sel.content);
             if (!text.trim()) throw new Error('Не найден текст в следующей главе');
-            const translated = await translateTextBackground(text);
+            const translated = await translateTextBackground(text, { bookKey: cur.key, url: nextUrl });
             cacheSet(nextUrl, {
                 url: nextUrl,
                 title: doc.title || '',

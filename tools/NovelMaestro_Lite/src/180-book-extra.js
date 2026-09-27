@@ -45,7 +45,7 @@
         if (!term || !translation) { showStatus('Заполните термин и перевод', 'error', 'status-glossary'); return; }
         const glossary = getGlossaryForView();
         for (const ex of Object.values(glossary)) {
-            if (normalize(ex.term) === normalize(term) || fuzzyMatchWord(ex.term, term, config.fuzzySearchThreshold)) {
+            if (normalize(ex.term) === normalize(term) || termMatchesText(ex.term, term, config.fuzzySearchThreshold)) {
                 showStatus(`Похожий термин уже есть: "${ex.term}"`, 'error', 'status-glossary');
                 return;
             }
@@ -76,7 +76,7 @@
                         if (!t || !t.term || !t.translation) continue;
                         let existingId = null;
                         for (const [exId, ex] of Object.entries(glossary)) {
-                            if (normalize(ex.term) === normalize(t.term) || fuzzyMatchWord(ex.term, t.term, config.fuzzySearchThreshold)) { existingId = exId; break; }
+                            if (normalize(ex.term) === normalize(t.term) || termMatchesText(ex.term, t.term, config.fuzzySearchThreshold)) { existingId = exId; break; }
                         }
                         const importedCount = parseInt(t.count, 10);
                         const cnt = Number.isFinite(importedCount) && importedCount > 0 ? importedCount : 1;

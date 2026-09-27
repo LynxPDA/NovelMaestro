@@ -61,17 +61,20 @@
         }
     }
     function findRelevantTerms(text) {
-        const relevant = [];
         const glossary = getGlossaryForTranslation();
-        for (const [id, t] of Object.entries(glossary)) {
-            if (!t || !t.term) continue; // битая запись глоссария не роняет перевод
-            if (fuzzyMatchWord(text, t.term, config.fuzzySearchThreshold)) relevant.push({ ...t, id });
-        }
+        const textNorm = normalize(text);
+        if (!textNorm) return [];
+        // n-граммы текста считаются один раз на чанк, а не на термин
+        const textG = ngrams(textNorm);
         const unique = [];
         const seen = new Set();
-        for (const item of relevant) {
-            const k = normalize(item.term);
-            if (!seen.has(k)) { seen.add(k); unique.push(item); }
+        for (const [id, t] of Object.entries(glossary)) {
+            if (!t || !t.term) continue; // битая запись глоссария не роняет перевод
+            if (!termHitsText(t, textNorm, textG, config.fuzzySearchThreshold)) continue;
+            const k = normalize(t.term);
+            if (seen.has(k)) continue;
+            seen.add(k);
+            unique.push({ ...t, id });
         }
         return unique;
     }
