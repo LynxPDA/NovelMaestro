@@ -7,6 +7,7 @@
 // @license      MIT
 // @homepageURL  https://github.com/LynxPDA/NovelMaestro
 // @supportURL   https://github.com/LynxPDA/NovelMaestro/issues
+// @noframes
 // @match        *://*/*
 // @grant        GM_setValue
 // @grant        GM_getValue

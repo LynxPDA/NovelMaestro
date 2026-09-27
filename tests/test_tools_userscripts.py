@@ -126,6 +126,18 @@ def test_meta_has_canonical_keys(script, artifact):
         f"{artifact}: @namespace должен быть URL репо, сейчас {ns}"
 
 
+def test_lite_runs_only_in_top_document():
+    """Lite обязана нести @noframes: без неё скрипт поднимается в каждом
+    совпавшем фрейме (проверено на живых страницах — там дублировались и
+    теневой хост, и набор плавающих кнопок)."""
+    banner = banner_of(TOOLS / "NovelMaestro_Lite" / SCRIPTS["NovelMaestro_Lite"])
+    lines = [ln for ln in banner.splitlines() if "@noframes" in ln]
+    assert len(lines) == 1, f"@noframes должна быть одна, сейчас: {lines}"
+    # ключ без значения: текст рядом менеджер прочтёт как значение @noframes
+    assert re.fullmatch(r"//[ \t]*@noframes[ \t]*", lines[0].rstrip()), \
+        f"@noframes должна быть без значения: {lines[0]!r}"
+
+
 @pytest.mark.parametrize("script,artifact", sorted(SCRIPTS.items()))
 def test_update_urls_point_at_the_repo_path(script, artifact):
     """@downloadURL/@updateURL ведут на jsDelivr по фактическому пути артефакта."""
