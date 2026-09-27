@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Rulate: массовое обновление глав из .txt
-// @namespace    rulate.bulk.update
+// @namespace    https://github.com/LynxPDA/NovelMaestro
 // @version      2.1.7
 // @description  Льёт перевод глав на tl.rulate.ru из .txt. Смена названий. Глобальная пауза с рандомом. Диапазон глав. Fallback по названию. Обработка дробных/диапазонных номеров. Отчёт по ненайденным и нестандартным.
 // @author       NovelMaestro
 // @license      MIT
 // @homepageURL  https://github.com/LynxPDA/NovelMaestro
+// @supportURL   https://github.com/LynxPDA/NovelMaestro/issues
 // @match        *://tl.rulate.ru/book/*
 // @match        *://rulate.ru/book/*
 // @grant        GM_addStyle

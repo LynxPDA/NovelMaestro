@@ -9,9 +9,13 @@
 
     tools/<скрипт>/<имя>.user.js   — артефакт: генерируется, руками не править
     tools/<скрипт>/meta.js         — баннер ==UserScript==, единственный источник @version
-    tools/<скрипт>/src/00-open.js  — открывающая строка IIFE-обёртки
-    tools/<скрипт>/src/NN-slug.js  — части, УЖЕ лежащие на финальном отступе
-    tools/<скрипт>/src/99-close.js — закрывающая строка обёртки
+    tools/<скрипт>/src/000-open.js  — открывающая строка IIFE-обёртки
+    tools/<скрипт>/src/NNN-slug.js  — части, УЖЕ лежащие на финальном отступе
+    tools/<скрипт>/src/900-close.js — закрывающая строка обёртки
+
+Нумерация частей — с шагом 10 (010, 020, 030 …): вставка новой части — это
+новый файл 025-*.js, а не переименование всего хвоста. Имена сортируются как
+числа, порядок склейки = порядок имён.
 
 Сборщик сознательно тупой: баннер, пустая строка, части в порядке имён —
 без переотступов, переносов и минификации. Единственные преобразования —
@@ -43,8 +47,8 @@ from pathlib import Path
 
 VERSION_TOKEN = "{{VERSION}}"
 VERSION_RE = re.compile(r"^//[ \t]*@version[ \t]+(\S+)[ \t]*$", re.MULTILINE)
-OPEN_PART = "00-open.js"
-CLOSE_PART = "99-close.js"
+OPEN_PART = "000-open.js"
+CLOSE_PART = "900-close.js"
 TOOLS_DIR = Path(__file__).resolve().parent
 
 logger = logging.getLogger("userscripts")

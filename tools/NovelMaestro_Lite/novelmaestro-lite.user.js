@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
-// @namespace    http://tampermonkey.net/
+// @namespace    https://github.com/LynxPDA/NovelMaestro
 // @version      1.25
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
 // @homepageURL  https://github.com/LynxPDA/NovelMaestro
+// @supportURL   https://github.com/LynxPDA/NovelMaestro/issues
 // @match        *://*/*
 // @grant        GM_setValue
 // @grant        GM_getValue

@@ -35,9 +35,11 @@ REPO_SLUG = "LynxPDA/NovelMaestro"
 CDN = "https://cdn.jsdelivr.net/gh/"
 # канон метаданных юзерскрипта: без них скрипт в каталоге выглядит сырым
 REQUIRED_KEYS = ["@name", "@namespace", "@version", "@description", "@author",
-                 "@license", "@homepageURL", "@match", "@grant", "@run-at",
-                 "@downloadURL", "@updateURL"]
-PART_RE = re.compile(r"^\d{2}-[a-z0-9][a-z0-9-]*\.js$")
+                 "@license", "@homepageURL", "@supportURL", "@match", "@grant",
+                 "@run-at", "@downloadURL", "@updateURL"]
+# нумерация частей с шагом 10: вставка части = новый файл 020-*.js, а не
+# переименование всего хвоста
+PART_RE = re.compile(r"^\d{2}0-[a-z0-9][a-z0-9-]*\.js$")
 
 
 def run_builder(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess:
@@ -87,11 +89,11 @@ def test_artifact_name_follows_userscript_canon(script, artifact):
 
 @pytest.mark.parametrize("script", sorted(SCRIPTS))
 def test_wrapper_lives_in_parts_not_in_builder(script):
-    """Части нумерованы; IIFE-обёртка — 00-open.js/99-close.js, а не код сборщика."""
+    """Части нумерованы; IIFE-обёртка — 000-open.js/900-close.js, а не код сборщика."""
     parts = sorted((TOOLS / script / "src").glob("*.js"))
     assert parts, f"{script}: нет частей"
     for p in parts:
-        assert PART_RE.match(p.name), f"имя части вне схемы NN-slug.js: {p.name}"
+        assert PART_RE.match(p.name), f"имя части вне схемы NN0-slug.js: {p.name}"
     assert parts[0].name == B.OPEN_PART and parts[-1].name == B.CLOSE_PART
     assert parts[0].read_text(encoding="utf-8").lstrip().startswith("("), \
         f"{script}/{B.OPEN_PART} обязан открывать IIFE"
@@ -117,6 +119,11 @@ def test_meta_has_canonical_keys(script, artifact):
         assert re.search(rf"^//[ \t]*{key}\b", banner, re.MULTILINE), \
             f"{artifact}: в блоке метаданных нет {key}"
     assert banner.count("@version") == 1, f"{artifact}: строка @version должна быть одна"
+    # namespace = URL репо: скрипты ещё не распространялись, менять его поздно
+    # нельзя — у уже поставивших менеджер опознаёт скрипт по name+namespace
+    ns = re.search(r"^//[ \t]*@namespace[ \t]+(\S+)", banner, re.MULTILINE).group(1)
+    assert ns == f"https://github.com/{REPO_SLUG}", \
+        f"{artifact}: @namespace должен быть URL репо, сейчас {ns}"
 
 
 @pytest.mark.parametrize("script,artifact", sorted(SCRIPTS.items()))
@@ -139,7 +146,7 @@ def test_lite_version_has_single_source():
     parts = sorted((TOOLS / "NovelMaestro_Lite" / "src").glob("*.js"))
     with_token = [p for p in parts if B.VERSION_TOKEN in B.read_lf(p)]
     assert len(with_token) == 1, "токен версии обязан быть ровно в одной части"
-    assert with_token[0].name == "01-config.js", "токен версии переехал из 01-config.js"
+    assert with_token[0].name == "010-config.js", "токен версии переехал из 010-config.js"
     assert f"const APP_VERSION = '{version}'" not in B.read_lf(with_token[0]), \
         "в части остался литерал версии"
     artifact = (TOOLS / "NovelMaestro_Lite" / SCRIPTS["NovelMaestro_Lite"]).read_text(encoding="utf-8")

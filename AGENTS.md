@@ -35,8 +35,8 @@ tools/    вспомогательные утилиты вне конвейер�
           NovelMaestro_Lite/ (юзерскрипт-переводчик, README —
           tools/NovelMaestro_Lite/README.md). Юзерскрипт лежит раскладкой:
           meta.js (баннер ==UserScript==, единственный источник @version) +
-          src/NN-slug.js (части, уже на финальном отступе внутри IIFE;
-          00-open.js и 99-close.js — сама обёртка). Публикуемый
+          src/NNN-slug.js (части, уже на финальном отступе внутри IIFE;
+          000-open.js и 900-close.js — сама обёртка). Публикуемый
           <имя>.user.js — собранный файл, руками не правится:
           python3 tools/build_userscripts.py (--check сверяет артефакт со
           сборкой). Порядок частей = порядок секций, менять его нельзя.
