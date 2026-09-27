@@ -9,8 +9,13 @@
         const encoded = new TextEncoder().encode(text || '');
         return new ReadableStream({ start(c) { c.enqueue(encoded); c.close(); } });
     }
+    // менеджер может не уметь стрим: Violentmonkey реализует GM_xmlhttpRequest на XHR
+    // и на неизвестном responseType предупреждает в консоль, отдавая текст целиком.
+    // Запоминаем это один раз и дальше просим text — ответ всё равно приходит целиком.
+    let gmStreamSupported = null;
     function customFetch(url, options, isStream = false) {
         if (typeof GM_xmlhttpRequest === 'undefined') return fetch(url, options);
+        if (isStream && gmStreamSupported === false) isStream = false;
         return new Promise((resolve, reject) => {
             let settled = false;
             let req = null;
@@ -50,12 +55,14 @@
                     if (info.status >= 400) { settleReject(httpError(info, response.responseText)); return; }
                     const stream = response.response;
                     if (stream && typeof stream.getReader === 'function') {
+                        gmStreamSupported = true;
                         settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body: stream }));
                     }
                 };
                 reqOptions.onload = (response) => {
                     const info = parseInfo(response);
                     if (info.status >= 400) { settleReject(httpError(info, response.responseText)); return; }
+                    if (isStream) gmStreamSupported = false;
                     settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body: streamFromBody(response.responseText) }));
                 };
             } else {
@@ -126,7 +133,11 @@
                 throw err;
             }
             if (!isStream) return resp;
-            if (!resp.body || typeof resp.body.getReader !== 'function') throw new Error('Сервер не поддерживает стриминг');
+            if (!resp.body || typeof resp.body.getReader !== 'function') {
+                // XHR-реализация GM_xmlhttpRequest (Violentmonkey) отдаёт тело целиком:
+                // те же строки SSE, тот же разбор — просто без посимвольной выдачи
+                resp.body = streamFromBody(await readRespText(resp));
+            }
             reader = resp.body.getReader();
             activeReader = reader;
             const decoder = new TextDecoder();
@@ -171,9 +182,16 @@
             if (cancelRequested) throw new Error('Отменено пользователем');
             if (failed) throw makeAbortError(true);
             if (!text.trim()) {
-                // некоторые серверы шлют ошибку в stream-режиме обычным JSON-телом
+                // сервер мог ответить на stream-запрос обычным JSON-телом: ошибкой —
+                // или готовым completion (choices[0].message.content), который тоже
+                // нужно принять, а не считать пустым ответом
                 const tail = (buffer || '').trim();
                 if (tail.startsWith('{')) {
+                    try {
+                        const parsed = JSON.parse(tail);
+                        const one = parsed?.choices?.[0]?.message?.content;
+                        if (typeof one === 'string' && one.trim()) return { text: one };
+                    } catch { /* не JSON — разбор ниже */ }
                     try {
                         const parsed = JSON.parse(tail);
                         if (parsed && parsed.error) {
