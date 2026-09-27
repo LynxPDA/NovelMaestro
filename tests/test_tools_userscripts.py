@@ -37,9 +37,9 @@ CDN = "https://cdn.jsdelivr.net/gh/"
 REQUIRED_KEYS = ["@name", "@namespace", "@version", "@description", "@author",
                  "@license", "@homepageURL", "@supportURL", "@match", "@grant",
                  "@run-at", "@downloadURL", "@updateURL"]
-# нумерация частей с шагом 10: вставка части = новый файл 020-*.js, а не
-# переименование всего хвоста
-PART_RE = re.compile(r"^\d{2}0-[a-z0-9][a-z0-9-]*\.js$")
+# нумерация частей с шагом 10: вставка части = новый файл 025-*.js, а не
+# переименование всего хвоста (последняя цифра у вставки может быть любой)
+PART_RE = re.compile(r"^\d{3}-[a-z0-9][a-z0-9-]*\.js$")
 
 
 def run_builder(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess:
