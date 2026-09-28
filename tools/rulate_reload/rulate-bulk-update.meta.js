@@ -11,6 +11,12 @@
 // @match        *://rulate.ru/book/*
 // @grant        GM_addStyle
 // @run-at       document-idle
+// @downloadURL  https://raw.githubusercontent.com/LynxPDA/NovelMaestro/main/tools/rulate_reload/rulate-bulk-update.user.js
+// @updateURL    https://raw.githubusercontent.com/LynxPDA/NovelMaestro/main/tools/rulate_reload/rulate-bulk-update.meta.js
 // ==/UserScript==
 // СОБРАНО из src/ и meta.js — локальная правка будет перезаписана:
 //   python3 tools/build_userscripts.py
+
+// Служебный файл проверки обновлений: только блок метаданных.
+// Не редактировать — собирается tools/build_userscripts.py из meta.js;
+// полный скрипт — rulate-bulk-update.user.js.

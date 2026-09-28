@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.27
+// @version      1.28
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -14,8 +14,8 @@
 // @grant        GM_xmlhttpRequest
 // @connect      *
 // @run-at       document-idle
-// @downloadURL  https://cdn.jsdelivr.net/gh/LynxPDA/NovelMaestro@main/tools/NovelMaestro_Lite/novelmaestro-lite.user.js
-// @updateURL    https://cdn.jsdelivr.net/gh/LynxPDA/NovelMaestro@main/tools/NovelMaestro_Lite/novelmaestro-lite.user.js
+// @downloadURL  https://raw.githubusercontent.com/LynxPDA/NovelMaestro/main/tools/NovelMaestro_Lite/novelmaestro-lite.user.js
+// @updateURL    https://raw.githubusercontent.com/LynxPDA/NovelMaestro/main/tools/NovelMaestro_Lite/novelmaestro-lite.meta.js
 // ==/UserScript==
 // СОБРАНО из src/ и meta.js — локальная правка будет перезаписана:
 //   python3 tools/build_userscripts.py
@@ -27,7 +27,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.27';
+    const APP_VERSION = '1.28';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {

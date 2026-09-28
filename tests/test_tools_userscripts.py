@@ -32,7 +32,10 @@ _spec.loader.exec_module(B)
 SCRIPTS = {"NovelMaestro_Lite": "novelmaestro-lite.user.js",
            "rulate_reload": "rulate-bulk-update.user.js"}
 REPO_SLUG = "LynxPDA/NovelMaestro"
-CDN = "https://cdn.jsdelivr.net/gh/"
+# проверка обновлений ходит на raw GitHub: CDN ветки отдаёт файл с
+# cache-control: public, max-age=604800, и пуш кэш не снимает — менеджер
+# неделями видел бы прежний @version
+RAW = "https://raw.githubusercontent.com/"
 # канон метаданных юзерскрипта: без них скрипт в каталоге выглядит сырым
 REQUIRED_KEYS = ["@name", "@namespace", "@version", "@description", "@author",
                  "@license", "@homepageURL", "@supportURL", "@match", "@grant",
@@ -140,16 +143,22 @@ def test_lite_runs_only_in_top_document():
 
 @pytest.mark.parametrize("script,artifact", sorted(SCRIPTS.items()))
 def test_update_urls_point_at_the_repo_path(script, artifact):
-    """@downloadURL/@updateURL ведут на jsDelivr по фактическому пути артефакта."""
+    """@downloadURL/@updateURL дописаны сборщиком и ведут на raw по пути файла."""
     banner = banner_of(TOOLS / script / artifact)
-    for key in ("@downloadURL", "@updateURL"):
+    assert B.RAW_BASE == RAW + REPO_SLUG + "/main", \
+        f"ссылка обновлений ведёт не в ветку репо: {B.RAW_BASE}"
+    meta_name = artifact[: -len(".user.js")] + ".meta.js"
+    for key, tail in (("@downloadURL", artifact), ("@updateURL", meta_name)):
         m = re.search(rf"^//[ \t]*{key}[ \t]+(\S+)", banner, re.MULTILINE)
         assert m, f"{artifact}: нет {key}"
         url = m.group(1)
-        assert url.startswith(CDN + REPO_SLUG + "@"), \
-            f"{artifact}: {key} ведёт не на jsDelivr: {url}"
-        assert url.endswith(f"/tools/{script}/{artifact}"), \
+        assert url.startswith(B.RAW_BASE + "/"), f"{artifact}: {key} ведёт не на raw: {url}"
+        assert url.endswith(f"/tools/{script}/{tail}"), \
             f"{artifact}: {key} разошёлся с путём файла: {url}"
+    # ключи дописывает сборщик — в рукописном баннере им не место
+    src_meta = B.read_lf(TOOLS / script / "meta.js")
+    assert "@downloadURL" not in src_meta and "@updateURL" not in src_meta, \
+        f"{script}/meta.js: ссылки обновлений должны приходить из сборки"
 
 
 def test_lite_version_has_single_source():
@@ -165,10 +174,30 @@ def test_lite_version_has_single_source():
     assert f"const APP_VERSION = '{version}';" in artifact, "версия не доехала в артефакт"
 
 
+@pytest.mark.parametrize("script,artifact", sorted(SCRIPTS.items()))
+def test_meta_file_is_metadata_only(script, artifact):
+    """Спутник .meta.js: тот же баннер, та же версия и ни строки кода — именно его
+    опрашивает менеджер, поэтому он обязан оставаться крошечным."""
+    meta_name = artifact[: -len(".user.js")] + ".meta.js"
+    meta_file = TOOLS / script / meta_name
+    assert meta_file.is_file(), f"{meta_name}: файл проверки обновлений не собран"
+    body = meta_file.read_text(encoding="utf-8")
+    assert banner_of(meta_file) == banner_of(TOOLS / script / artifact), \
+        f"{meta_name}: блок метаданных разошёлся с артефактом"
+    version = B.script_version(B.read_lf(TOOLS / script / "meta.js"))
+    assert body.count("@version") == 1 and version in body, f"{meta_name}: версия разошлась"
+    tail = body[body.find("// ==/UserScript==") + len("// ==/UserScript=="):].strip()
+    for line in tail.splitlines():
+        line = line.strip()
+        assert not line or line.startswith("//"), f"{meta_name}: в файле появился код: {line}"
+    assert len(body.splitlines()) < 30, f"{meta_name}: разросся — это файл проверки обновлений"
+
+
 @pytest.mark.parametrize("script", sorted(SCRIPTS))
 def test_no_crlf_anywhere(script):
     """Репо LF: CRLF сборщик нормализует, но в git ему там быть не должно."""
     paths = [TOOLS / script / SCRIPTS[script], TOOLS / script / "meta.js",
+             *sorted((TOOLS / script).glob("*.meta.js")),
              *sorted((TOOLS / script / "src").glob("*.js"))]
     for p in paths:
         assert "\r" not in p.read_text(encoding="utf-8"), f"{p}: перевод строк CRLF"
@@ -195,6 +224,11 @@ def test_check_detects_stale_and_accepts_fresh(tmp_path, script, artifact):
     stale = run_builder_in(tmp_path, "--script", script, "--check")
     assert stale.returncode != 0, "пустой артефакт не был распознан как устаревший"
     assert artifact in stale.stderr and "расходится" in stale.stderr, stale.stderr
+    # у .meta.js своя жизнь — рассинхрон тоже должен ловиться
+    (dest / artifact).write_text(next(x for x in (TOOLS / script).glob("*.user.js")).read_text(encoding="utf-8"), encoding="utf-8")
+    (dest / (artifact[: -len(".user.js")] + ".meta.js")).write_text("", encoding="utf-8")
+    stale_meta = run_builder_in(tmp_path, "--script", script, "--check")
+    assert stale_meta.returncode != 0, "пустой .meta.js не был распознан как устаревший"
 
     body = next(p for p in sorted((dest / "src").glob("*.js")) if p.name != B.OPEN_PART)
     body.write_text(B.read_lf(body) + "\n// правка части без пересборки\n", encoding="utf-8")

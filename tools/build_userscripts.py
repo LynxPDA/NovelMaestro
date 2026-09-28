@@ -8,6 +8,8 @@
 каталоге скрипта:
 
     tools/<скрипт>/<имя>.user.js   — артефакт: генерируется, руками не править
+    tools/<скрипт>/<имя>.meta.js   — он же для проверки обновлений: тот же баннер
+                                     без тела (его и опрашивает менеджер)
     tools/<скрипт>/meta.js         — баннер ==UserScript==, единственный источник @version
     tools/<скрипт>/src/000-open.js  — открывающая строка IIFE-обёртки
     tools/<скрипт>/src/NNN-slug.js  — части, УЖЕ лежащие на финальном отступе
@@ -16,6 +18,11 @@
 Нумерация частей — с шагом 10 (010, 020, 030 …): вставка новой части — это
 новый файл 025-*.js, а не переименование всего хвоста. Имена сортируются как
 числа, порядок склейки = порядок имён.
+
+Ссылки `@downloadURL`/`@updateURL` в баннер дописывает сборщик, и ведут они на
+raw GitHub, а не на CDN: jsDelivr отдаёт файлы ветки с
+`cache-control: public, max-age=604800`, пуш кэш не снимает, и менеджер может
+неделей видеть старый `@version`. raw отдаёт то же самое с `max-age=300`.
 
 Сборщик сознательно тупой: баннер, пустая строка, части в порядке имён —
 без переотступов, переносов и минификации. Единственные преобразования —
@@ -47,6 +54,9 @@ from pathlib import Path
 
 VERSION_TOKEN = "{{VERSION}}"
 VERSION_RE = re.compile(r"^//[ \t]*@version[ \t]+(\S+)[ \t]*$", re.MULTILINE)
+META_CLOSE_RE = re.compile(r"^//[ \t]*==/UserScript==", re.MULTILINE)
+# Ссылка проверки обновлений: raw GitHub той же ветки, в которой живёт репо
+RAW_BASE = "https://raw.githubusercontent.com/LynxPDA/NovelMaestro/main"
 OPEN_PART = "000-open.js"
 CLOSE_PART = "900-close.js"
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -108,10 +118,36 @@ def script_version(meta: str) -> str:
     return m.group(1)
 
 
-def build_script(d: Path) -> tuple[Path, str, int]:
-    """Собрать артефакт каталога: (путь артефакта, собранный текст, число частей)."""
+def script_urls(d: Path, artifact: Path) -> tuple[str, str]:
+    """(ссылка установки, ссылка проверки обновлений) этого артефакта."""
+    rel = artifact.relative_to(TOOLS_DIR.parent).as_posix()
+    return f"{RAW_BASE}/{rel}", f"{RAW_BASE}/{rel[:-8]}.meta.js"
+
+
+def inject_urls(meta: str, urls: tuple[str, str]) -> str:
+    """Дописать @downloadURL/@updateURL перед закрывающим тегом блока метаданных.
+
+    В `meta.js` их быть не должно: путь вычисляется из раскладки, и руками его
+    держать нельзя — переезд скрипта по дереву молча сломал бы обновления.
+    """
+    if "@downloadURL" in meta or "@updateURL" in meta:
+        raise SystemExit("meta.js: @downloadURL/@updateURL дописывает сборщик "
+                         "— уберите их из баннера")
+    m = list(META_CLOSE_RE.finditer(meta))
+    if not m:
+        raise SystemExit("meta.js: не найден закрывающий тег «// ==/UserScript==»")
+    start = m[-1].start()
+    block = f"// @downloadURL  {urls[0]}\n// @updateURL    {urls[1]}\n"
+    return meta[:start] + block + meta[start:]
+
+
+def build_script(d: Path) -> tuple[Path, str, Path, str, int]:
+    """Собрать каталог: (артефакт, текст артефакта, файл метаданных, его текст, части)."""
     meta = read_lf(d / "meta.js")
     version = script_version(meta)
+    artifact = sorted(d.glob("*.user.js"))[0]
+    urls = script_urls(d, artifact)
+    meta = inject_urls(meta.rstrip("\n") + "\n", urls)
     parts = sorted((d / "src").glob("*.js"))
     if not parts:
         raise SystemExit(f"{d}/src: нет ни одной части")
@@ -123,7 +159,11 @@ def build_script(d: Path) -> tuple[Path, str, int]:
         text += "\n"
     if VERSION_TOKEN in text:
         raise SystemExit(f"{d}: в собранном артефакте остался {VERSION_TOKEN}")
-    return sorted(d.glob("*.user.js"))[0], text, len(parts)
+    meta_file = artifact.with_name(artifact.name[:-8] + ".meta.js")
+    meta_text = meta.rstrip("\n") + "\n\n// Служебный файл проверки обновлений: только блок метаданных.\n" \
+        "// Не редактировать — собирается tools/build_userscripts.py из meta.js;\n" \
+        f"// полный скрипт — {artifact.name}.\n"
+    return artifact, text, meta_file, meta_text, len(parts)
 
 
 def first_diff(old: str, new: str, context: int = 2, limit: int = 14) -> str:
@@ -164,27 +204,31 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list:
         for d in dirs:
-            art, text, n = build_script(d)
+            art, text, _mf, _mt, n = build_script(d)
             print(f"{d.name}: {art.name} v{script_version(read_lf(d / 'meta.js'))} "
                   f"({n} частей, {len(text.splitlines())} строк)")
         return 0
 
     stale = []
     for d in dirs:
-        art, text, n = build_script(d)
+        art, text, meta_file, meta_text, n = build_script(d)
         version = script_version(read_lf(d / "meta.js"))
         if args.check:
-            current = read_lf(art) if art.exists() else ""
-            if current == text:
-                logger.info("%s: %s актуален (%d частей, v%s)", d.name, art.name, n, version)
-            else:
-                logger.error("%s: %s расходится со сборкой:\n%s", d.name, art.name,
-                             first_diff(current, text))
+            for path, want in ((art, text), (meta_file, meta_text)):
+                current = read_lf(path) if path.exists() else ""
+                if current == want:
+                    continue
+                logger.error("%s: %s расходится со сборкой:\n%s", d.name, path.name,
+                             first_diff(current, want))
                 stale.append(d.name)
+            if d.name not in stale:
+                logger.info("%s: %s и %s актуальны (%d частей, v%s)",
+                            d.name, art.name, meta_file.name, n, version)
         else:
             atomic_write(str(art), text)
-            logger.info("%s: собран %s (%d частей, v%s, %d строк)", d.name, art.name, n,
-                        version, len(text.splitlines()))
+            atomic_write(str(meta_file), meta_text)
+            logger.info("%s: собраны %s и %s (%d частей, v%s, %d строк)", d.name, art.name,
+                        meta_file.name, n, version, len(text.splitlines()))
         if args.node_check:
             node_check(art)
 
