@@ -75,16 +75,22 @@ jobs:
       - name: Сбросить кэш CDN (только по тегу)
         if: github.event_name == 'push'
         run: |
-          # @downloadURL/@updateURL указывают на jsDelivr по ветке main и
-          # кэшируются надолго — после релиза кэш чистим вручную запросом
-          for f in tools/*/*.user.js; do
+          # Обновления ходят на raw (max-age=300), но CDN остаётся зеркалом
+          # установки и для него пуш кэш не снимает кэш ветки — чистим запросом.
+          # Обычного GET для сброса недостаточно: нужен именно метод PURGE.
+          for f in tools/*/*.user.js tools/*/*.meta.js; do
             url="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}"
             echo "PURGE ${url} → $(curl -s -m 30 -X PURGE "$url" || echo нет-ответа)"
           done
 
       - name: Ссылки для установки
         run: |
-          echo "### Ссылки установки (jsDelivr, MIME application/javascript)"
+          echo "### Ссылки установки (raw — основной путь, ≤5 минут на обновление)"
+          for f in tools/*/*.user.js; do
+            echo "- $(basename "$f"): https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/${f}"
+          done
+          echo
+          echo "### Зеркало (jsDelivr, MIME application/javascript)"
           for f in tools/*/*.user.js; do
             echo "- $(basename "$f"): https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}"
           done
