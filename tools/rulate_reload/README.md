@@ -11,7 +11,7 @@
 ### Установка
 
 1. Установите расширение **Tampermonkey** (Chrome/Firefox/Edge).
-2. Поставьте скрипт по ссылке (менеджер покажет окно установки и будет обновлять по `@updateURL`) — `https://cdn.jsdelivr.net/gh/LynxPDA/NovelMaestro@main/tools/rulate_reload/rulate-bulk-update.user.js` или запасной путь `https://raw.githubusercontent.com/LynxPDA/NovelMaestro/main/tools/rulate_reload/rulate-bulk-update.user.js`.
+2. Поставьте скрипт по ссылке (менеджер покажет окно установки и будет обновлять по `@updateURL`, он указывает на `rulate-bulk-update.meta.js`) — `https://raw.githubusercontent.com/LynxPDA/NovelMaestro/main/tools/rulate_reload/rulate-bulk-update.user.js`; зеркало — `https://cdn.jsdelivr.net/gh/LynxPDA/NovelMaestro@main/tools/rulate_reload/rulate-bulk-update.user.js` (файлы ветки на CDN кэшируются на неделю, для проверки обновлений оно хуже).
 3. Или вручную: панель расширения → «Создать новый скрипт» → вставить содержимое `tools/rulate_reload/rulate-bulk-update.user.js` целиком → сохранить (Ctrl+S).
 4. Откройте книгу на Rulate: `https://tl.rulate.ru/book/<id>` — в правом нижнем углу появится панель **«RL · обновление глав v2.1»**.
 
