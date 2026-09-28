@@ -27,7 +27,8 @@
         GM_setValue('gmStreamMode', mode);
     }
     function customFetch(url, options, isStream = false) {
-        if (typeof GM_xmlhttpRequest === 'undefined') return fetch(url, options);
+        // страница вместо менеджера: обход фонового канала (GM_xmlhttpRequest)
+        if (typeof GM_xmlhttpRequest === 'undefined' || config.gmTransport === 'page') return fetch(url, options);
         return new Promise((resolve, reject) => {
             let settled = false;
             let req = null;
@@ -368,7 +369,8 @@
     async function checkServer() {
         const statusEl = $('#server-status');
         const transport = typeof GM_xmlhttpRequest === 'undefined' ? 'fetch'
-            : (gmStreamMode === 'text' ? 'менеджер · XHR (тело целиком)' : 'менеджер · поток');
+            : (config.gmTransport === 'page' ? 'fetch из страницы'
+                : (gmStreamMode === 'text' ? 'менеджер · XHR (тело целиком)' : 'менеджер · поток'));
         const base = apiBase();
         if (!base) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Host'; return; }
         if (!config.apiKey && !config.localModel) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Key (или включите «Локальная модель без API-ключа»)'; return; }

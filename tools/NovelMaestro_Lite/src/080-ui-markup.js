@@ -122,6 +122,11 @@
                                 <input type="number" class="nm-input" id="max-retries" min="0" max="10">
                                 <small>Повторные попытки при сетевых ошибках, таймаутах и зависании стриминга (не при HTTP 4xx/5xx).</small>
                             </div>
+                            <div class="nm-checkbox-group">
+                                <input type="checkbox" id="gm-transport">
+                                <label for="gm-transport">Сеть из страницы (fetch), без канала менеджера</label>
+                                <small>Обход фонового канала менеджера (GM_xmlhttpRequest): запросы идут прямо из страницы. Спасает, когда Violentmonkey на устройстве не отдаёт ответы вообще — в трассе проверки висит только «rs1 +0б». Нужен CORS-доступ хоста: у большинства OpenAI-совместимых серверов он открыт. Tampermonkey не нуждается.</small>
+                            </div>
                         </div>
                         <div class="nm-section">
                             <h3>🔍 Глоссарий</h3>

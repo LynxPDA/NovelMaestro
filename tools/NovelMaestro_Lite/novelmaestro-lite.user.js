@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.34
+// @version      1.35
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.34';
+    const APP_VERSION = '1.35';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -81,6 +81,7 @@
         requestTimeout: 60, // СЕКУНДЫ (0 = без таймаута): у стрима — пауза между токенами, у обычного запроса — ожидание всего ответа
         maxRetries: 3,
         localModel: false,
+        gmTransport: 'auto',
         translationPrompt: 'Переведи следующий текст с {sourceLang} на {targetLang}.\n\nГЛОССАРИЙ ТЕРМИНОВ (обязательно используй эти переводы, сохраняй пол персонажей):\n{glossary}\n\nВАЖНО:\n- Имена и термины переводи точно по глоссарию\n- Сохраняй пол персонажей (он/она) согласно глоссарию\n- Сохраняй стиль оригинала\n- Сохраняй разбивку на абзацы\n- Возвращай ТОЛЬКО перевод, без комментариев\n\nТекст:\n{text}',
         extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины. Перевод терминов должен быть на {targetLang}.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang}. Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
         fuzzySearchThreshold: 0.7,
@@ -1095,6 +1096,11 @@
                                 <input type="number" class="nm-input" id="max-retries" min="0" max="10">
                                 <small>Повторные попытки при сетевых ошибках, таймаутах и зависании стриминга (не при HTTP 4xx/5xx).</small>
                             </div>
+                            <div class="nm-checkbox-group">
+                                <input type="checkbox" id="gm-transport">
+                                <label for="gm-transport">Сеть из страницы (fetch), без канала менеджера</label>
+                                <small>Обход фонового канала менеджера (GM_xmlhttpRequest): запросы идут прямо из страницы. Спасает, когда Violentmonkey на устройстве не отдаёт ответы вообще — в трассе проверки висит только «rs1 +0б». Нужен CORS-доступ хоста: у большинства OpenAI-совместимых серверов он открыт. Tampermonkey не нуждается.</small>
+                            </div>
                         </div>
                         <div class="nm-section">
                             <h3>🔍 Глоссарий</h3>
@@ -1824,7 +1830,8 @@
         GM_setValue('gmStreamMode', mode);
     }
     function customFetch(url, options, isStream = false) {
-        if (typeof GM_xmlhttpRequest === 'undefined') return fetch(url, options);
+        // страница вместо менеджера: обход фонового канала (GM_xmlhttpRequest)
+        if (typeof GM_xmlhttpRequest === 'undefined' || config.gmTransport === 'page') return fetch(url, options);
         return new Promise((resolve, reject) => {
             let settled = false;
             let req = null;
@@ -2165,7 +2172,8 @@
     async function checkServer() {
         const statusEl = $('#server-status');
         const transport = typeof GM_xmlhttpRequest === 'undefined' ? 'fetch'
-            : (gmStreamMode === 'text' ? 'менеджер · XHR (тело целиком)' : 'менеджер · поток');
+            : (config.gmTransport === 'page' ? 'fetch из страницы'
+                : (gmStreamMode === 'text' ? 'менеджер · XHR (тело целиком)' : 'менеджер · поток'));
         const base = apiBase();
         if (!base) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Host'; return; }
         if (!config.apiKey && !config.localModel) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Key (или включите «Локальная модель без API-ключа»)'; return; }
@@ -3059,6 +3067,7 @@
         $('#local-model').checked = !!config.localModel;
         $('#api-key').disabled = !!config.localModel;
         $('#preemptive-translate').checked = !!config.preemptiveTranslation;
+        $('#gm-transport').checked = config.gmTransport === 'page';
         $('#reader-theme').value = config.readerTheme;
         $('#reader-font-family').value = config.readerFontFamily;
         $('#reader-font-size').value = config.readerFontSize;
@@ -3112,6 +3121,7 @@
             scheduleSettingsSave();
         });
         $('#preemptive-translate').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
+        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'page' : 'auto'; scheduleSettingsSave(); });
     }
     function resetSettings() {
         if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;

@@ -14,6 +14,7 @@
         $('#local-model').checked = !!config.localModel;
         $('#api-key').disabled = !!config.localModel;
         $('#preemptive-translate').checked = !!config.preemptiveTranslation;
+        $('#gm-transport').checked = config.gmTransport === 'page';
         $('#reader-theme').value = config.readerTheme;
         $('#reader-font-family').value = config.readerFontFamily;
         $('#reader-font-size').value = config.readerFontSize;
@@ -67,6 +68,7 @@
             scheduleSettingsSave();
         });
         $('#preemptive-translate').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
+        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'page' : 'auto'; scheduleSettingsSave(); });
     }
     function resetSettings() {
         if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;
