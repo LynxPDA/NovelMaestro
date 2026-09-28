@@ -73,13 +73,18 @@
                 // сами в accum, повтор того же куска (readystatechange и load по
                 // одному readyState) отбрасываем по lastPiece.
                 let sink = null, delivered = 0, accum = '', lastPiece = null;
+                // что реально передал менеджер: без этой трассы «зависает» неотличить
+                // от «молчит» — её печатает строка проверки сервера
+                const traceLog = [], t0req = Date.now();
                 const absorb = (response) => {
+                    const was = accum.length;
                     for (const raw of [response.responseText, response.response]) {
                         const piece = typeof raw === 'string' ? raw : '';
                         if (!piece || piece === lastPiece) continue;
                         lastPiece = piece;
                         accum = (piece.length >= accum.length && piece.startsWith(accum)) ? piece : accum + piece;
                     }
+                    return accum.length - was;
                 };
                 const feed = (done) => {
                     if (!sink) return;
@@ -94,12 +99,12 @@
                     const stream = response.response;
                     if (stream && typeof stream.getReader === 'function') {
                         gmSetStreamMode('stream');
-                        settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body: stream }));
+                        settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body: stream, trace: traceLog }));
                         return;
                     }
                     gmSetStreamMode('text');
                     const body = new ReadableStream({ start(c) { sink = c; } });
-                    settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body }));
+                    settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body, trace: traceLog }));
                 };
                 const guard = (response) => {
                     const info = parseInfo(response);
@@ -107,8 +112,11 @@
                     settleReject(httpError(info, response.responseText));
                     return false;
                 };
-                const grow = (response) => { if (guard(response)) { settleBody(response); absorb(response); feed(false); } };
-                const finish = (response) => { if (guard(response)) { settleBody(response); absorb(response); feed(true); } };
+                const note = (response) => {
+                    if (traceLog.length < 8) traceLog.push(`rs${response.readyState} +${absorb(response)}б @${Date.now() - t0req}мс`);
+                };
+                const grow = (response) => { if (!guard(response)) return; settleBody(response); note(response); feed(false); };
+                const finish = (response) => { if (!guard(response)) return; settleBody(response); note(response); feed(true); };
                 reqOptions.onloadstart = grow;
                 reqOptions.onprogress = grow;
                 // XHR-менеджер пишет новые куски именно в readystatechange: без него
@@ -150,12 +158,14 @@
         if (e.isTimeout) return `таймаут ${ms}мс • ответа от ${target} нет`;
         if (e.isNet) return `сеть недоступна (${ms}мс) • ${target}`
             + (/^http:/i.test(fullUrl || target) ? ' • http-адрес мог быть отсеян HTTPS-only режимом браузера' : '');
-        return `${e.message || 'ошибка'} (${ms}мс)`;
+        return `${e.message || 'ошибка'} (${ms}мс)` + (e.trace ? ` • события: ${e.trace}` : '');
     }
     async function fetchAttempt(url, options, isStream, timeoutSec, cb = {}) {
         const timeoutMs = timeoutSec > 0 ? timeoutSec * 1000 : 0;
         const controller = new AbortController();
         let reader = null, timer = null, cancelWatcher = null, underlyingAbort = null, failed = false;
+        // трассу ведёт customFetch; здесь она только попадает в ответ и в текст ошибки
+        const traceLog = [];
         // Гонка-промиис, который только отвергается: с ним мы гарантированно выходим
         // из await, даже если reader.cancel() не разбудил зависший read потока
         let rejectWatch = null;
@@ -170,13 +180,15 @@
             try { controller.abort(); } catch {}
             if (rejectWatch) rejectWatch(err);
         };
-        // Таймаут передооружается только приходе полезных токенов: пустые SSE-пинги
+        // Таймаут передооружается только на приходе полезных токенов: пустые SSE-пинги
         // без контента его не сбрасывают. В режиме целого ответа (XHR-менеджер)
         // пауза между токенами неотличима от ожидания всего ответа, поэтому таймер
         // не участвует — такой запрос держит менеджер, отмена остаётся кнопкой.
+        // Для проверки сервера (cb.deadline) он остаётся общим дедлайном: там ждать
+        // нечего, а висящее соединение и есть результат проверки.
         const arm = () => {
             if (failed) return;
-            if (!timeoutMs || (isStream && gmStreamMode !== 'stream')) {
+            if (!timeoutMs || (isStream && gmStreamMode !== 'stream' && !cb.deadline)) {
                 // снимается и уже взведённый таймер: иначе первый же ответ в новом
                 // режиме всё равно погибал бы по паузе
                 if (timer) { clearTimeout(timer); timer = null; }
@@ -201,6 +213,7 @@
             const fetchPromise = customFetch(url, { ...options, signal: controller.signal, getAbort: (fn) => { underlyingAbort = fn; } }, isStream);
             fetchPromise.catch(() => {});
             const resp = await Promise.race([fetchPromise, watchPromise]);
+            if (Array.isArray(resp.trace)) { traceLog.length = 0; traceLog.push(...resp.trace); }
             // режим мог определиться в ходе этого ответа — перезапускаем таймер по
             // его правилам: для потока он нужен, для целого тела — не нужен
             arm();
@@ -208,6 +221,7 @@
                 const errText = await readRespText(resp);
                 const err = new Error(`HTTP ${resp.status}: ${String(errText).slice(0, 200)}`);
                 err.status = resp.status;
+                err.trace = traceLog.join(' ');
                 throw err;
             }
             if (!isStream) return resp;
@@ -219,7 +233,7 @@
             reader = resp.body.getReader();
             activeReader = reader;
             const decoder = new TextDecoder();
-            let text = '', buffer = '', streamError = null;
+            let text = '', buffer = '', streamError = null, streamModel = '';
             const handleLine = (line) => {
                 const trimmed = line.trim();
                 if (!trimmed.startsWith('data:')) return;
@@ -235,6 +249,7 @@
                         streamError.isFatal = /invalid|api key|api_key|authentication|unauthorized|forbidden|model|not found|does not exist|unsupported/i.test(errMsg);
                         return;
                     }
+                    if (parsed && typeof parsed.model === 'string' && parsed.model) streamModel = parsed.model;
                     const content = parsed?.choices?.[0]?.delta?.content || '';
                     if (content) { text += content; if (cb.onDelta) cb.onDelta(content); }
                 } catch {}
@@ -254,11 +269,20 @@
                     handleLine(line);
                     if (streamError) throw streamError;
                 }
-                if (text.length > beforeLen) arm();
+                if (text.length > beforeLen) {
+                    arm();
+                    // пингу проверки достаточно одного токена: закрываем соединение,
+                    // не дожидаясь, пока сервер оборвёт свой SSE-поток
+                    if (cb.stopOnFirstContent) break;
+                }
             }
             if (!failed && !cancelRequested) { buffer += decoder.decode(); handleLine(buffer); }
-            if (cancelRequested) throw new Error('Отменено пользователем');
-            if (failed) throw makeAbortError(true);
+            if (cancelRequested) { const e = new Error('Отменено пользователем'); e.trace = traceLog.join(' '); throw e; }
+            if (failed) { const e = makeAbortError(true); e.trace = traceLog.join(' '); throw e; }
+            if (cb.stopOnFirstContent && text.trim()) {
+                try { if (underlyingAbort) underlyingAbort(); } catch {}
+                return { text, model: streamModel, trace: traceLog.join(' ') };
+            }
             if (!text.trim()) {
                 // сервер мог ответить на stream-запрос обычным JSON-телом: ошибкой —
                 // или готовым completion (choices[0].message.content), который тоже
@@ -358,23 +382,18 @@
         };
         show('loading', `🔌 Проверяю ${target}… (${transport}, таймаут ${timeout || '∞'}с)`);
         // Первым идёт короткий пинг чата — это ровно тот запрос, которым Lite переводит.
+        // Стримом и с выходом по первому токену: серверы, отвечающие SSE и не спешащие
+        // закрывать соединение (на них не-стримовый пинг висел до таймаута), отвечают
+        // сразу; соединение закрываем сами, не дожидаясь их вежливости.
         const t0 = Date.now();
-        const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, false);
+        const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, true);
         const payload = JSON.parse(options.body);
         payload.max_tokens = 1;
         try {
-            const resp = await fetchAttempt(url, { ...options, body: JSON.stringify(payload) }, false, timeout, {});
-            const data = await resp.json().catch(() => null);
-            if (data && data.error) {
-                show('err', `⚠️ Сервер отвечает, чат отказал: ${data.error.message || JSON.stringify(data.error)} • ${Date.now() - t0}мс • ${transport}`);
-                return;
-            }
-            if (!data || !data.choices || !data.choices[0]) {
-                show('err', `⚠️ Сервер ответил, но не в формате chat/completions (нет choices[0]) • ${Date.now() - t0}мс • ${transport}`);
-                return;
-            }
-            const got = String(data.choices[0]?.message?.content || '').trim();
-            show('ok', `✅ Сервер доступен • ${target} • пинг ${Date.now() - t0}мс • модель ${config.model}`
+            const res = await fetchAttempt(url, { ...options, body: JSON.stringify(payload) }, true, timeout,
+                { stopOnFirstContent: true, deadline: true });
+            const got = String(res.text || '').trim();
+            show('ok', `✅ Сервер доступен • ${target} • пинг ${Date.now() - t0}мс • модель ${res.model || config.model}`
                 + (got ? ` • ответ: ${got.slice(0, 24)}` : '') + ` • ${transport}`);
         } catch (e) {
             // Пинг не дошёл — отличаем «адрес недоступен» от «модель думает дольше
