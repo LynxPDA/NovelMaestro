@@ -708,8 +708,6 @@
             .nm-menu-wrap { position: relative; }
             .nm-dropdown-menu { position: absolute; bottom: 58px; right: 0; background: white; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.25); padding: 6px; display: none; min-width: 240px; flex-direction: column; gap: 2px; }
             .nm-dropdown-menu.active { display: flex; }
-            /* в верхней панели читалки меню раскрывается вниз */
-            .nm-menu-down .nm-dropdown-menu { bottom: auto; top: 42px; }
             .nm-dropdown-item { padding: 10px 14px; border: none; background: none; text-align: left; cursor: pointer; border-radius: 6px; font-size: 14px; color: #111827; white-space: nowrap; }
             .nm-dropdown-item:hover { background: #f3f4f6; }
             .nm-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 2147483647; }
@@ -846,13 +844,6 @@
             .nm-reader-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .nm-reader-topbar-buttons { display: flex; gap: 6px; flex-shrink: 0; }
             .nm-reader-topbar-buttons button { border: none; border-radius: 6px; cursor: pointer; font-size: 15px; padding: 6px 10px; }
-            #nm-reader-mode .nm-reader-topbar .nm-dropdown-menu { min-width: 250px; }
-            #nm-reader-mode.nm-reader-light .nm-reader-topbar .nm-dropdown-menu { background: #faf7f0; border: 1px solid #e5ded2; }
-            #nm-reader-mode.nm-reader-dark .nm-reader-topbar .nm-dropdown-menu { background: #16181d; border: 1px solid #2a2d35; }
-            #nm-reader-mode.nm-reader-light .nm-reader-topbar .nm-dropdown-item { color: #26221c; }
-            #nm-reader-mode.nm-reader-dark .nm-reader-topbar .nm-dropdown-item { color: #d8d8d3; }
-            #nm-reader-mode.nm-reader-light .nm-reader-topbar .nm-dropdown-item:hover { background: #efe9dd; }
-            #nm-reader-mode.nm-reader-dark .nm-reader-topbar .nm-dropdown-item:hover { background: #23262e; }
             #nm-reader-mode.nm-reader-light .nm-reader-topbar-buttons button { background: #e8e2d6; color: #26221c; }
             #nm-reader-mode.nm-reader-dark .nm-reader-topbar-buttons button { background: #2a2d35; color: #d8d8d3; }
             .nm-reader-content { margin: 0 auto; padding: 70px 20px 150px; max-width: var(--nm-content-width, 66%); }
@@ -1152,14 +1143,9 @@
                 <div class="nm-reader-topbar">
                     <div class="nm-reader-title" id="reader-title"></div>
                     <div class="nm-reader-topbar-buttons">
-                        <div class="nm-menu-wrap nm-menu-down">
-                            <button id="reader-menu" title="Ещё">⋮</button>
-                            <div class="nm-dropdown-menu" id="reader-dropdown">
-                                <button class="nm-dropdown-item" id="reader-retranslate">🌐 Перевести эту главу заново</button>
-                                <button class="nm-dropdown-item" id="reader-theme-toggle">🌓 Сменить тему</button>
-                                <button class="nm-dropdown-item" id="reader-settings">⚙️ Настройки</button>
-                            </div>
-                        </div>
+                        <button id="reader-retranslate" title="Перевести текущую главу заново (игнорирует кэш)">🌐</button>
+                        <button id="reader-theme-toggle" title="Сменить тему">🌓</button>
+                        <button id="reader-settings" title="Настройки">⚙️</button>
                         <button id="reader-close" title="Закрыть читалку">✕</button>
                     </div>
                 </div>
@@ -3001,14 +2987,9 @@
     // ===== СОБЫТИЯ =====
     $('#btn-translate').addEventListener('click', handleTranslate);
     menuBtn.addEventListener('click', (e) => { e.stopPropagation(); dropdownMenu.classList.toggle('active'); });
-    // читалка: ⋮ над текстом раскрывает свои пункты; клик мимо закрывает оба меню
-    const readerMenu = $('#reader-menu');
-    const readerDropdown = $('#reader-dropdown');
-    readerMenu.addEventListener('click', (e) => { e.stopPropagation(); readerDropdown.classList.toggle('active'); });
     document.addEventListener('click', (e) => {
         const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
         if (!path.includes(menuBtn) && !path.includes(dropdownMenu)) dropdownMenu.classList.remove('active');
-        if (!path.includes(readerMenu) && !path.includes(readerDropdown)) readerDropdown.classList.remove('active');
     }, true);
     $('#btn-book-menu').addEventListener('click', () => { dropdownMenu.classList.remove('active'); openBookModal(); });
     $('#btn-settings-menu').addEventListener('click', openModal);
@@ -3032,7 +3013,6 @@
     $('#reader-settings').addEventListener('click', openModal);
     $('#reader-retranslate').addEventListener('click', () => {
         if (isTranslating) return;
-        readerDropdown.classList.remove('active');
         runTranslationFlow(true);
     });
     $('#reader-prev').addEventListener('click', () => gotoChapter(readerState && readerState.prevUrl));

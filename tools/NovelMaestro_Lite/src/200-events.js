@@ -1,14 +1,9 @@
     // ===== СОБЫТИЯ =====
     $('#btn-translate').addEventListener('click', handleTranslate);
     menuBtn.addEventListener('click', (e) => { e.stopPropagation(); dropdownMenu.classList.toggle('active'); });
-    // читалка: ⋮ над текстом раскрывает свои пункты; клик мимо закрывает оба меню
-    const readerMenu = $('#reader-menu');
-    const readerDropdown = $('#reader-dropdown');
-    readerMenu.addEventListener('click', (e) => { e.stopPropagation(); readerDropdown.classList.toggle('active'); });
     document.addEventListener('click', (e) => {
         const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
         if (!path.includes(menuBtn) && !path.includes(dropdownMenu)) dropdownMenu.classList.remove('active');
-        if (!path.includes(readerMenu) && !path.includes(readerDropdown)) readerDropdown.classList.remove('active');
     }, true);
     $('#btn-book-menu').addEventListener('click', () => { dropdownMenu.classList.remove('active'); openBookModal(); });
     $('#btn-settings-menu').addEventListener('click', openModal);
@@ -32,7 +27,6 @@
     $('#reader-settings').addEventListener('click', openModal);
     $('#reader-retranslate').addEventListener('click', () => {
         if (isTranslating) return;
-        readerDropdown.classList.remove('active');
         runTranslationFlow(true);
     });
     $('#reader-prev').addEventListener('click', () => gotoChapter(readerState && readerState.prevUrl));

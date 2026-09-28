@@ -216,14 +216,9 @@
                 <div class="nm-reader-topbar">
                     <div class="nm-reader-title" id="reader-title"></div>
                     <div class="nm-reader-topbar-buttons">
-                        <div class="nm-menu-wrap nm-menu-down">
-                            <button id="reader-menu" title="Ещё">⋮</button>
-                            <div class="nm-dropdown-menu" id="reader-dropdown">
-                                <button class="nm-dropdown-item" id="reader-retranslate">🌐 Перевести эту главу заново</button>
-                                <button class="nm-dropdown-item" id="reader-theme-toggle">🌓 Сменить тему</button>
-                                <button class="nm-dropdown-item" id="reader-settings">⚙️ Настройки</button>
-                            </div>
-                        </div>
+                        <button id="reader-retranslate" title="Перевести текущую главу заново (игнорирует кэш)">🌐</button>
+                        <button id="reader-theme-toggle" title="Сменить тему">🌓</button>
+                        <button id="reader-settings" title="Настройки">⚙️</button>
                         <button id="reader-close" title="Закрыть читалку">✕</button>
                     </div>
                 </div>
