@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.31
+// @version      1.32
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.31';
+    const APP_VERSION = '1.32';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -1863,14 +1863,25 @@
                 ontimeout: () => settleReject(makeAbortError(true))
             };
             if (isStream) {
-                // тело может приходить потоком или растущим responseText; во втором
-                // случае поток наполняем сами — SSE-разбор остаётся одним кодом
-                let sink = null, delivered = 0;
-                const feed = (raw, done) => {
+                // У потоковых менеджеров (Tampermonkey) тело приходит ReadableStream.
+                // У XHR-менеджеров (Violentmonkey) тело приходит НЕ накопленным:
+                // каждое событие несёт очередной кусок — нередко только в response,
+                // а responseText пуст; load же приходит уже пустым. Куски собираем
+                // сами в accum, повтор того же куска (readystatechange и load по
+                // одному readyState) отбрасываем по lastPiece.
+                let sink = null, delivered = 0, accum = '', lastPiece = null;
+                const absorb = (response) => {
+                    for (const raw of [response.responseText, response.response]) {
+                        const piece = typeof raw === 'string' ? raw : '';
+                        if (!piece || piece === lastPiece) continue;
+                        lastPiece = piece;
+                        accum = (piece.length >= accum.length && piece.startsWith(accum)) ? piece : accum + piece;
+                    }
+                };
+                const feed = (done) => {
                     if (!sink) return;
-                    const body = String(raw || '');
-                    if (body.length > delivered) { try { sink.enqueue(new TextEncoder().encode(body.slice(delivered))); } catch { /* поток закрыт */ } }
-                    delivered = Math.max(delivered, body.length);
+                    if (accum.length > delivered) { try { sink.enqueue(new TextEncoder().encode(accum.slice(delivered))); } catch { /* поток закрыт */ } }
+                    delivered = accum.length;
                     if (done) { try { sink.close(); } catch { /* уже закрыт */ } sink = null; }
                 };
                 // первый же сигнал решает, с каким менеджером имеем дело
@@ -1893,10 +1904,13 @@
                     settleReject(httpError(info, response.responseText));
                     return false;
                 };
-                const grow = (response) => { if (guard(response)) { settleBody(response); feed(response.responseText, false); } };
-                const finish = (response) => { if (guard(response)) { settleBody(response); feed(response.responseText, true); } };
+                const grow = (response) => { if (guard(response)) { settleBody(response); absorb(response); feed(false); } };
+                const finish = (response) => { if (guard(response)) { settleBody(response); absorb(response); feed(true); } };
                 reqOptions.onloadstart = grow;
                 reqOptions.onprogress = grow;
+                // XHR-менеджер пишет новые куски именно в readystatechange: без него
+                // до скрипта доходит только первый кусок тела
+                reqOptions.onreadystatechange = grow;
                 reqOptions.onload = finish;
             } else {
                 reqOptions.onload = (response) => {
