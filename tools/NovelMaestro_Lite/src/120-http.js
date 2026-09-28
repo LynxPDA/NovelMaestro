@@ -322,6 +322,11 @@
         const { url, options } = llmRequestOptions(messages, temperature, stream);
         return await fetchWithRetry(url, options, !!stream, cb);
     }
+    // GET /models у провайдера весит сотни килобайт (у routerai.ru — 528 моделей,
+    // ~876КБ), поэтому он получает собственный запас времени и в проверке участвует
+    // только как диагноз. Пользовательский requestTimeout остаётся как есть: он
+    // относится к настоящим запросам перевода.
+    const CHECK_TIMEOUT_MIN = 60;
     async function checkServer() {
         const statusEl = $('#server-status');
         const transport = typeof GM_xmlhttpRequest === 'undefined' ? 'fetch'
@@ -332,36 +337,48 @@
         if (!config.model) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указана модель'; return; }
         const target = requestTarget(base);
         const timeout = config.requestTimeout > 0 ? config.requestTimeout : 0;
+        const diagTimeout = Math.max(timeout, CHECK_TIMEOUT_MIN);
         const show = (cls, text) => {
             statusEl.className = `nm-server-status show ${cls}`;
             statusEl.textContent = text;
         };
-        show('loading', `🔌 Проверяю ${target}… (${transport})`);
-        // Сначала дешёвый GET /models: он отвечает за доли секунды и отличает
-        // «адрес недоступен» от «модель думает дольше таймаута».
+        show('loading', `🔌 Проверяю ${target}… (${transport}, таймаут ${timeout || '∞'}с)`);
+        // Первым идёт короткий пинг чата — это ровно тот запрос, которым Lite переводит.
         const t0 = Date.now();
-        let models = null;
-        try {
-            const resp = await fetchAttempt(base + '/models', { method: 'GET', headers: apiHeaders(false) }, false, timeout, {});
-            const data = await resp.json().catch(() => null);
-            const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
-            models = list.length ? `${list.length} модел${list.length === 1 ? 'ь' : (list.length < 5 ? 'и' : 'ей')}` : 'список пуст';
-        } catch (e) {
-            show('err', `❌ ${describeError(e, target, Date.now() - t0, base)} • ${transport}`);
-            return;
-        }
-        // /models отвечает — значит сеть и адрес в порядке: проверяем сам чат.
-        const t1 = Date.now();
         const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, false);
         const payload = JSON.parse(options.body);
-        payload.max_tokens = 5;
+        payload.max_tokens = 1;
         try {
             const resp = await fetchAttempt(url, { ...options, body: JSON.stringify(payload) }, false, timeout, {});
             const data = await resp.json().catch(() => null);
-            if (data && data.error) { show('err', `⚠️ Сервер отвечает (${models}), чат отказал: ${data.error.message || JSON.stringify(data.error)} • ${Date.now() - t1}мс`); return; }
-            if (!data || !data.choices || !data.choices[0]) { show('err', `⚠️ Сервер отвечает (${models}), но чат прислал непонятное тело • ${Date.now() - t1}мс`); return; }
-            show('ok', `✅ Сервер доступен • ${target} • /models: ${models} • пинг ${Date.now() - t1}мс • ${transport}`);
+            if (data && data.error) {
+                show('err', `⚠️ Сервер отвечает, чат отказал: ${data.error.message || JSON.stringify(data.error)} • ${Date.now() - t0}мс • ${transport}`);
+                return;
+            }
+            if (!data || !data.choices || !data.choices[0]) {
+                show('err', `⚠️ Сервер ответил, но не в формате chat/completions (нет choices[0]) • ${Date.now() - t0}мс • ${transport}`);
+                return;
+            }
+            const got = String(data.choices[0]?.message?.content || '').trim();
+            show('ok', `✅ Сервер доступен • ${target} • пинг ${Date.now() - t0}мс • модель ${config.model}`
+                + (got ? ` • ответ: ${got.slice(0, 24)}` : '') + ` • ${transport}`);
         } catch (e) {
-            show('err', `⚠️ /models отвечает (${models}), чат — нет: ${describeError(e, requestTarget(url), Date.now() - t1, url)} • ${transport}`);
+            // Пинг не дошёл — отличаем «адрес недоступен» от «модель думает дольше
+            // таймаута». Диагностический GET /models идёт со своим запасом: он тяжелый.
+            const main = describeError(e, target, Date.now() - t0, url);
+            show('loading', `⏳ ${main} • проверяю /models как диагноз…`);
+            const t1 = Date.now();
+            let note;
+            try {
+                const resp = await fetchAttempt(base + '/models', { method: 'GET', headers: apiHeaders(false) }, false, diagTimeout, {});
+                const data = await resp.json().catch(() => null);
+                const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+                note = `/models отвечает за ${Date.now() - t1}мс (${list.length} моделей, `
+                    + (list.some(m => m && m.id === config.model) ? `модель «${config.model}» есть` : `модели «${config.model}» в списке НЕТ`)
+                    + ') — значит канал есть, смотрите время ответа модели';
+            } catch (e2) {
+                note = `/models тоже молчит: ${describeError(e2, target, Date.now() - t1, base)}`;
+            }
+            show('err', `❌ ${main} • ${note} • ${transport}`);
         }
     }
