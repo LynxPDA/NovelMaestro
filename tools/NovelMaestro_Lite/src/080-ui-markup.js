@@ -11,11 +11,10 @@
                     <button class="nm-btn-float nm-menu" id="btn-menu" title="NovelMaestro Lite">⋮</button>
                     <div class="nm-dropdown-menu" id="dropdown-menu">
                         <button class="nm-dropdown-item" id="btn-translate">🌐 Перевести / читать</button>
-                        <button class="nm-dropdown-item" id="btn-book-menu">➕ Добавить книгу</button>
-                        <button class="nm-dropdown-item" id="btn-settings-menu">⚙️ Настройки</button>
                         <button class="nm-dropdown-item" id="btn-extract-menu">✨ Извлечь термины вручную</button>
+                        <button class="nm-dropdown-item" id="btn-book-menu">➕ Добавить книгу</button>
                         <button class="nm-dropdown-item" id="btn-train-menu">🎯 Обучить элементам</button>
-                        <button class="nm-dropdown-item" id="btn-theme-menu">🌓 Тема</button>
+                        <button class="nm-dropdown-item" id="btn-settings-menu">⚙️ Настройки</button>
                     </div>
                 </div>
             </div>
@@ -138,6 +137,7 @@
                             <h3>📖 Читалка</h3>
                             <div class="nm-input-group"><label>Тема:</label>
                                 <select class="nm-select" id="reader-theme">
+                                    <option value="auto">🌗 Как в системе</option>
                                     <option value="light">☀️ Светлая</option>
                                     <option value="dark">🌙 Тёмная</option>
                                 </select>

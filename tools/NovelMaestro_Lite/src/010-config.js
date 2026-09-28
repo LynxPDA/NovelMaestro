@@ -17,13 +17,19 @@
         fuzzySearchThreshold: 0.7,
         autoNER: true,
         preemptiveTranslation: true, // автоперевод следующей главы в фоне
-        readerTheme: 'light',
+        // 'auto' — следовать системной теме; 'dark'/'light' — ручной выбор кнопкой в читалке
+        readerTheme: 'auto',
         readerFontFamily: 'Georgia, serif',
         readerFontSize: 14,
         readerLineHeight: 1.6,
         readerParagraphSpacing: 1.2,
         readerContentWidth: 80
     };
+
+    // Тема интерфейса и читалки: по умолчанию «как в системе», кнопка в читалке ходит
+    // по кольцу auto → тёмная → светлая → auto.
+    const THEME_MODE_LABELS = { auto: 'как в системе', dark: 'тёмная', light: 'светлая' };
+    const THEME_MODE_CYCLE = { auto: 'dark', dark: 'light', light: 'auto' };
 
     // В GM-хранилище расширения — только список книг и настройки: глоссарии
     // (мегабайты) и кэш переводов живут в IndexedDB каждого сайта отдельно.

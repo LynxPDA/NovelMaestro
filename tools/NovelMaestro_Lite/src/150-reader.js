@@ -1,6 +1,12 @@
     // ===== ЧИТАЛКА =====
+    // Тема «как в системе» должна реагировать на смену системной сразу, без перезагрузки
+    // страницы; MediaQueryList.addEventListener появился позже addListener.
+    const systemDark = matchMedia('(prefers-color-scheme: dark)');
+    function effectiveTheme() {
+        return config.readerTheme === 'auto' ? (systemDark.matches ? 'dark' : 'light') : config.readerTheme;
+    }
     function applyTheme() {
-        const dark = config.readerTheme === 'dark';
+        const dark = effectiveTheme() === 'dark';
         readerMode.classList.remove('nm-reader-light', 'nm-reader-dark');
         readerMode.classList.add(dark ? 'nm-reader-dark' : 'nm-reader-light');
         rootEl.classList.toggle('nm-ui-dark', dark);
@@ -15,7 +21,16 @@
             shadow.appendChild(dyn);
         }
         dyn.textContent = `#nm-reader-mode .nm-reader-content p { margin: 0 0 ${config.readerParagraphSpacing}em 0; }`;
+        const toggle = $('#reader-theme-toggle');
+        if (toggle) toggle.title = `Тема: ${THEME_MODE_LABELS[config.readerTheme] || config.readerTheme} — нажать, чтобы переключить`;
     }
+    try {
+        if (typeof systemDark.addEventListener === 'function') {
+            systemDark.addEventListener('change', () => { if (config.readerTheme === 'auto') applyTheme(); });
+        } else if (typeof systemDark.addListener === 'function') {
+            systemDark.addListener(() => { if (config.readerTheme === 'auto') applyTheme(); });
+        }
+    } catch { /* браузер без media-слушателя — тема просто не обновится на лету */ }
     function openReaderShell(loadingText) {
         readerModeActive = true;
         readerMode.classList.add('active');

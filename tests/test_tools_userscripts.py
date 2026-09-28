@@ -36,6 +36,17 @@ REPO_SLUG = "LynxPDA/NovelMaestro"
 # cache-control: public, max-age=604800, и пуш кэш не снимает — менеджер
 # неделями видел бы прежний @version
 RAW = "https://raw.githubusercontent.com/"
+# @connect: special-значения из спеки + типовые хосты; Lite ходит в LLM-серверы,
+# rulate работает только с самим сайтом
+CONNECT_SPECIALS = {"self", "localhost", "*"}
+CONNECT_COMMON = ["self", "localhost"]
+CONNECT_HOST_RE = re.compile(r"[-a-z0-9]+(?:\.[-a-z0-9]+)+")
+CONNECT_EXPECT = {
+    "NovelMaestro_Lite": ("routerai.ru", "routerapi.ru", "zveno.ai", "api.openai.com",
+                          "openrouter.ai", "api.anthropic.com",
+                          "generativelanguage.googleapis.com", "api.deepseek.com"),
+    "rulate_reload": ("rulate.ru", "tl.rulate.ru"),
+}
 # канон метаданных юзерскрипта: без них скрипт в каталоге выглядит сырым
 REQUIRED_KEYS = ["@name", "@namespace", "@version", "@description", "@author",
                  "@license", "@homepageURL", "@supportURL", "@match", "@grant",
@@ -161,6 +172,25 @@ def test_update_urls_point_at_the_repo_path(script, artifact):
         f"{script}/meta.js: ссылки обновлений должны приходить из сборки"
 
 
+@pytest.mark.parametrize("script,artifact", sorted(SCRIPTS.items()))
+def test_connect_block_declares_common_hosts(script, artifact):
+    """@connect перечисляет типовые хосты: менеджер не должен выставлять диалог доступа.
+
+    На мобильном Firefox диалог разрешения может вообще не показываться — запрос просто
+    висит до таймаута, поэтому частые провайдеры выписаны явно, а `*` оставлен последним
+    ради кнопки «Всегда разрешать для всех доменов»."""
+    banner = banner_of(TOOLS / script / artifact)
+    values = re.findall(r"^//[ \t]*@connect[ \t]+(\S+)", banner, re.MULTILINE)
+    assert values, f"{artifact}: блок @connect пуст"
+    assert len(values) == len(set(values)), f"{artifact}: в @connect дубли: {values}"
+    assert values[-1] == "*", f"{artifact}: @connect * обязан быть последним: {values}"
+    for value in values:
+        assert value in CONNECT_SPECIALS or CONNECT_HOST_RE.fullmatch(value), \
+            f"{artifact}: @connect {value!r} — не домен, не self и не localhost"
+    for want in (*CONNECT_COMMON, *CONNECT_EXPECT.get(script, ())):
+        assert want in values, f"{artifact}: в @connect нет {want!r}"
+
+
 def test_lite_version_has_single_source():
     """@version в meta.js — единственный текст версии: в части только токен."""
     version = B.script_version(B.read_lf(TOOLS / "NovelMaestro_Lite" / "meta.js"))
@@ -190,7 +220,7 @@ def test_meta_file_is_metadata_only(script, artifact):
     for line in tail.splitlines():
         line = line.strip()
         assert not line or line.startswith("//"), f"{meta_name}: в файле появился код: {line}"
-    assert len(body.splitlines()) < 30, f"{meta_name}: разросся — это файл проверки обновлений"
+    assert len(body.splitlines()) < 90, f"{meta_name}: разросся — это файл проверки обновлений"
 
 
 @pytest.mark.parametrize("script", sorted(SCRIPTS))

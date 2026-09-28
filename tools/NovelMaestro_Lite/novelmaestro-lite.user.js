@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.30
+// @version      1.31
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -12,6 +12,46 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
+// @connect      self
+// @connect      localhost
+// @connect      routerai.ru
+// @connect      routerapi.ru
+// @connect      zveno.ai
+// @connect      api.openai.com
+// @connect      openrouter.ai
+// @connect      api.anthropic.com
+// @connect      generativelanguage.googleapis.com
+// @connect      api.githubcopilot.com
+// @connect      models.inference.ai.azure.com
+// @connect      api-inference.huggingface.co
+// @connect      api-inference.router.huggingface.tech
+// @connect      api.groq.com
+// @connect      api.together.xyz
+// @connect      api.fireworks.ai
+// @connect      api.deepinfra.com
+// @connect      api.cerebras.ai
+// @connect      api.sambanova.ai
+// @connect      api.mistral.ai
+// @connect      api.x.ai
+// @connect      api.cohere.com
+// @connect      api.ai21.com
+// @connect      integrate.api.nvidia.com
+// @connect      api.replicate.com
+// @connect      api.deepseek.com
+// @connect      api.moonshot.cn
+// @connect      api.moonshot.ai
+// @connect      open.bigmodel.cn
+// @connect      api.minimaxi.com
+// @connect      dashscope.aliyuncs.com
+// @connect      ark.cn-beijing.volces.com
+// @connect      qianfan.baidubce.com
+// @connect      api.hunyuan.tencentcloud.com
+// @connect      api.stepfun.com
+// @connect      api.lingyiwanwu.com
+// @connect      api.siliconflow.com
+// @connect      api.siliconflow.cn
+// @connect      api.novita.ai
+// @connect      api.ppio.com
 // @connect      *
 // @run-at       document-idle
 // @downloadURL  https://raw.githubusercontent.com/LynxPDA/NovelMaestro/main/tools/NovelMaestro_Lite/novelmaestro-lite.user.js
@@ -27,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.30';
+    const APP_VERSION = '1.31';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -46,13 +86,19 @@
         fuzzySearchThreshold: 0.7,
         autoNER: true,
         preemptiveTranslation: true, // автоперевод следующей главы в фоне
-        readerTheme: 'light',
+        // 'auto' — следовать системной теме; 'dark'/'light' — ручной выбор кнопкой в читалке
+        readerTheme: 'auto',
         readerFontFamily: 'Georgia, serif',
         readerFontSize: 14,
         readerLineHeight: 1.6,
         readerParagraphSpacing: 1.2,
         readerContentWidth: 80
     };
+
+    // Тема интерфейса и читалки: по умолчанию «как в системе», кнопка в читалке ходит
+    // по кольцу auto → тёмная → светлая → auto.
+    const THEME_MODE_LABELS = { auto: 'как в системе', dark: 'тёмная', light: 'светлая' };
+    const THEME_MODE_CYCLE = { auto: 'dark', dark: 'light', light: 'auto' };
 
     // В GM-хранилище расширения — только список книг и настройки: глоссарии
     // (мегабайты) и кэш переводов живут в IndexedDB каждого сайта отдельно.
@@ -938,11 +984,10 @@
                     <button class="nm-btn-float nm-menu" id="btn-menu" title="NovelMaestro Lite">⋮</button>
                     <div class="nm-dropdown-menu" id="dropdown-menu">
                         <button class="nm-dropdown-item" id="btn-translate">🌐 Перевести / читать</button>
-                        <button class="nm-dropdown-item" id="btn-book-menu">➕ Добавить книгу</button>
-                        <button class="nm-dropdown-item" id="btn-settings-menu">⚙️ Настройки</button>
                         <button class="nm-dropdown-item" id="btn-extract-menu">✨ Извлечь термины вручную</button>
+                        <button class="nm-dropdown-item" id="btn-book-menu">➕ Добавить книгу</button>
                         <button class="nm-dropdown-item" id="btn-train-menu">🎯 Обучить элементам</button>
-                        <button class="nm-dropdown-item" id="btn-theme-menu">🌓 Тема</button>
+                        <button class="nm-dropdown-item" id="btn-settings-menu">⚙️ Настройки</button>
                     </div>
                 </div>
             </div>
@@ -1065,6 +1110,7 @@
                             <h3>📖 Читалка</h3>
                             <div class="nm-input-group"><label>Тема:</label>
                                 <select class="nm-select" id="reader-theme">
+                                    <option value="auto">🌗 Как в системе</option>
                                     <option value="light">☀️ Светлая</option>
                                     <option value="dark">🌙 Тёмная</option>
                                 </select>
@@ -2403,8 +2449,14 @@
             : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.chunk}/${st.resumed + 1})` : ''} • ~${st.pct}%`);
     }
     // ===== ЧИТАЛКА =====
+    // Тема «как в системе» должна реагировать на смену системной сразу, без перезагрузки
+    // страницы; MediaQueryList.addEventListener появился позже addListener.
+    const systemDark = matchMedia('(prefers-color-scheme: dark)');
+    function effectiveTheme() {
+        return config.readerTheme === 'auto' ? (systemDark.matches ? 'dark' : 'light') : config.readerTheme;
+    }
     function applyTheme() {
-        const dark = config.readerTheme === 'dark';
+        const dark = effectiveTheme() === 'dark';
         readerMode.classList.remove('nm-reader-light', 'nm-reader-dark');
         readerMode.classList.add(dark ? 'nm-reader-dark' : 'nm-reader-light');
         rootEl.classList.toggle('nm-ui-dark', dark);
@@ -2419,7 +2471,16 @@
             shadow.appendChild(dyn);
         }
         dyn.textContent = `#nm-reader-mode .nm-reader-content p { margin: 0 0 ${config.readerParagraphSpacing}em 0; }`;
+        const toggle = $('#reader-theme-toggle');
+        if (toggle) toggle.title = `Тема: ${THEME_MODE_LABELS[config.readerTheme] || config.readerTheme} — нажать, чтобы переключить`;
     }
+    try {
+        if (typeof systemDark.addEventListener === 'function') {
+            systemDark.addEventListener('change', () => { if (config.readerTheme === 'auto') applyTheme(); });
+        } else if (typeof systemDark.addListener === 'function') {
+            systemDark.addListener(() => { if (config.readerTheme === 'auto') applyTheme(); });
+        }
+    } catch { /* браузер без media-слушателя — тема просто не обновится на лету */ }
     function openReaderShell(loadingText) {
         readerModeActive = true;
         readerMode.classList.add('active');
@@ -3102,18 +3163,13 @@
     $('#btn-settings-menu').addEventListener('click', openModal);
     $('#btn-extract-menu').addEventListener('click', handleExtractTerms);
     $('#btn-train-menu').addEventListener('click', () => { pendingTranslateAfterTraining = false; startElementTraining(); });
-    $('#btn-theme-menu').addEventListener('click', () => {
-        config.readerTheme = config.readerTheme === 'light' ? 'dark' : 'light';
-        GM_setValue('config', config);
-        applyTheme();
-        dropdownMenu.classList.remove('active');
-    });
     $('#nm-close').addEventListener('click', closeModal);
     modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
     bookModal.addEventListener('click', e => { if (e.target === bookModal) bookModal.classList.remove('active'); });
     $('#reader-close').addEventListener('click', closeReader);
     $('#reader-theme-toggle').addEventListener('click', () => {
-        config.readerTheme = config.readerTheme === 'light' ? 'dark' : 'light';
+        // три состояния: как в системе → тёмная → светлая; кнопка показывает текущее в title
+        config.readerTheme = THEME_MODE_CYCLE[config.readerTheme] || 'auto';
         GM_setValue('config', config);
         applyTheme();
     });

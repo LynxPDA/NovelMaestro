@@ -9,18 +9,13 @@
     $('#btn-settings-menu').addEventListener('click', openModal);
     $('#btn-extract-menu').addEventListener('click', handleExtractTerms);
     $('#btn-train-menu').addEventListener('click', () => { pendingTranslateAfterTraining = false; startElementTraining(); });
-    $('#btn-theme-menu').addEventListener('click', () => {
-        config.readerTheme = config.readerTheme === 'light' ? 'dark' : 'light';
-        GM_setValue('config', config);
-        applyTheme();
-        dropdownMenu.classList.remove('active');
-    });
     $('#nm-close').addEventListener('click', closeModal);
     modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
     bookModal.addEventListener('click', e => { if (e.target === bookModal) bookModal.classList.remove('active'); });
     $('#reader-close').addEventListener('click', closeReader);
     $('#reader-theme-toggle').addEventListener('click', () => {
-        config.readerTheme = config.readerTheme === 'light' ? 'dark' : 'light';
+        // три состояния: как в системе → тёмная → светлая; кнопка показывает текущее в title
+        config.readerTheme = THEME_MODE_CYCLE[config.readerTheme] || 'auto';
         GM_setValue('config', config);
         applyTheme();
     });
