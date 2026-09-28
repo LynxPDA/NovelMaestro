@@ -1760,13 +1760,25 @@
         const encoded = new TextEncoder().encode(text || '');
         return new ReadableStream({ start(c) { c.enqueue(encoded); c.close(); } });
     }
-    // менеджер может не уметь стрим: Violentmonkey реализует GM_xmlhttpRequest на XHR
-    // и на неизвестном responseType предупреждает в консоль, отдавая текст целиком.
-    // Запоминаем это один раз и дальше просим text — ответ всё равно приходит целиком.
-    let gmStreamSupported = null;
+    // Менеднеры реализуют GM_xmlhttpRequest по-разному: Tampermonkey умеет отдать
+    // ReadableStream (responseType:'stream'), Violentmonkey сидит на XHR — на
+    // неизвестном responseType он только пишет в консоль и отдаёт тело целиком.
+    // Режим запоминается в GM-хранилище: 'stream' — токены приходят потоком,
+    // 'text' — тело приходит одним куском (или растущим responseText).
+    // Режим определяется сразу, а не первым ответом: XHR-менеджер присылает
+    // loadstart уже вместе с ответом, и таймер успевает убить долгий запрос.
+    // GM_info.scriptHandler — как раз для этого; если менеджер не опознан, первый
+    // стрим-запрос идёт терпеливо, режим выяснится по нему.
+    const gmHandlerName = (typeof GM_info !== 'undefined' && GM_info && GM_info.scriptHandler) || '';
+    let gmStreamMode = GM_getValue('gmStreamMode', null);
+    if (/violentmonkey/i.test(gmHandlerName)) gmStreamMode = 'text';
+    function gmSetStreamMode(mode) {
+        if (gmStreamMode === mode) return;
+        gmStreamMode = mode;
+        GM_setValue('gmStreamMode', mode);
+    }
     function customFetch(url, options, isStream = false) {
         if (typeof GM_xmlhttpRequest === 'undefined') return fetch(url, options);
-        if (isStream && gmStreamSupported === false) isStream = false;
         return new Promise((resolve, reject) => {
             let settled = false;
             let req = null;
@@ -1795,27 +1807,49 @@
                 url: url,
                 headers: options.headers || {},
                 data: options.body,
-                responseType: isStream ? 'stream' : 'text',
+                // у XHR-менеджера 'stream' просят напрасно: он не знает его и пишет
+                // в консоль — просим text, тело всё равно придёт тем же потоком
+                responseType: (isStream && gmStreamMode !== 'text') ? 'stream' : 'text',
                 onerror: () => settleReject(new Error('NetworkError: Failed to fetch')),
                 onabort: () => settleReject(makeAbortError(false)),
                 ontimeout: () => settleReject(makeAbortError(true))
             };
             if (isStream) {
-                reqOptions.onloadstart = (response) => {
+                // тело может приходить потоком или растущим responseText; во втором
+                // случае поток наполняем сами — SSE-разбор остаётся одним кодом
+                let sink = null, delivered = 0;
+                const feed = (raw, done) => {
+                    if (!sink) return;
+                    const body = String(raw || '');
+                    if (body.length > delivered) { try { sink.enqueue(new TextEncoder().encode(body.slice(delivered))); } catch { /* поток закрыт */ } }
+                    delivered = Math.max(delivered, body.length);
+                    if (done) { try { sink.close(); } catch { /* уже закрыт */ } sink = null; }
+                };
+                // первый же сигнал решает, с каким менеджером имеем дело
+                const settleBody = (response) => {
+                    if (settled) return;
                     const info = parseInfo(response);
-                    if (info.status >= 400) { settleReject(httpError(info, response.responseText)); return; }
                     const stream = response.response;
                     if (stream && typeof stream.getReader === 'function') {
-                        gmStreamSupported = true;
+                        gmSetStreamMode('stream');
                         settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body: stream }));
+                        return;
                     }
+                    gmSetStreamMode('text');
+                    const body = new ReadableStream({ start(c) { sink = c; } });
+                    settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body }));
                 };
-                reqOptions.onload = (response) => {
+                const guard = (response) => {
                     const info = parseInfo(response);
-                    if (info.status >= 400) { settleReject(httpError(info, response.responseText)); return; }
-                    if (isStream) gmStreamSupported = false;
-                    settleResolve(Object.assign(info, { ok: true, status: info.status || 200, body: streamFromBody(response.responseText) }));
+                    if (info.status < 400) return true;
+                    settleReject(httpError(info, response.responseText));
+                    return false;
                 };
+                const grow = (response) => { if (guard(response)) { settleBody(response); feed(response.responseText, false); } };
+                const finish = (response) => { if (guard(response)) { settleBody(response); feed(response.responseText, true); } };
+                reqOptions.onloadstart = grow;
+                reqOptions.onprogress = grow;
+                reqOptions.onload = finish;
             } else {
                 reqOptions.onload = (response) => {
                     const info = parseInfo(response);
@@ -1854,10 +1888,18 @@
             try { controller.abort(); } catch {}
             if (rejectWatch) rejectWatch(err);
         };
-        // Таймаут передооружается только приходе полезных токенов:
-        // пустые SSE-пинги без контента его не сбрасывают
+        // Таймаут передооружается только приходе полезных токенов: пустые SSE-пинги
+        // без контента его не сбрасывают. В режиме целого ответа (XHR-менеджер)
+        // пауза между токенами неотличима от ожидания всего ответа, поэтому таймер
+        // не участвует — такой запрос держит менеджер, отмена остаётся кнопкой.
         const arm = () => {
-            if (!timeoutMs || failed) return;
+            if (failed) return;
+            if (!timeoutMs || (isStream && gmStreamMode !== 'stream')) {
+                // снимается и уже взведённый таймер: иначе первый же ответ в новом
+                // режиме всё равно погибал бы по паузе
+                if (timer) { clearTimeout(timer); timer = null; }
+                return;
+            }
             if (timer) clearTimeout(timer);
             timer = setTimeout(() => fail(makeAbortError(true)), timeoutMs);
         };
@@ -1877,6 +1919,9 @@
             const fetchPromise = customFetch(url, { ...options, signal: controller.signal, getAbort: (fn) => { underlyingAbort = fn; } }, isStream);
             fetchPromise.catch(() => {});
             const resp = await Promise.race([fetchPromise, watchPromise]);
+            // режим мог определиться в ходе этого ответа — перезапускаем таймер по
+            // его правилам: для потока он нужен, для целого тела — не нужен
+            arm();
             if (!resp.ok) {
                 const errText = await readRespText(resp);
                 const err = new Error(`HTTP ${resp.status}: ${String(errText).slice(0, 200)}`);
