@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.28
+// @version      1.29
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -27,7 +27,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.28';
+    const APP_VERSION = '1.29';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -38,7 +38,7 @@
         targetLang: 'Русский',
         reasoningEffort: 'None',
         chunkSize: 30000,
-        requestTimeout: 10, // СЕКУНДЫ (0 = без таймаута)
+        requestTimeout: 60, // СЕКУНДЫ (0 = без таймаута): у стрима — пауза между токенами, у обычного запроса — ожидание всего ответа
         maxRetries: 3,
         localModel: false,
         translationPrompt: 'Переведи следующий текст с {sourceLang} на {targetLang}.\n\nГЛОССАРИЙ ТЕРМИНОВ (обязательно используй эти переводы, сохраняй пол персонажей):\n{glossary}\n\nВАЖНО:\n- Имена и термины переводи точно по глоссарию\n- Сохраняй пол персонажей (он/она) согласно глоссарию\n- Сохраняй стиль оригинала\n- Сохраняй разбивку на абзацы\n- Возвращай ТОЛЬКО перевод, без комментариев\n\nТекст:\n{text}',
@@ -1044,7 +1044,7 @@
                             <h3>🌐 Сеть</h3>
                             <div class="nm-input-group"><label>Таймаут (с):</label>
                                 <input type="number" class="nm-input" id="request-timeout" min="0" step="1">
-                                <small>0 = без таймаута. При стриминге — пауза без данных: не пришло ни одного символа за это время — запрос завис и повторяется. По умолчанию 10.</small>
+                                <small>СЕК. 0 = без таймаута. При стриминге это пауза между токенами: ни одного символа за это время — запрос считается зависшим и повторяется. У запроса без стрима (например, «Проверить сервер») это ожидание всего ответа: локальная модель на телефоне легко думает дольше 10 секунд. По умолчанию 60.</small>
                             </div>
                             <div class="nm-input-group"><label>Количество ретраев при ошибке:</label>
                                 <input type="number" class="nm-input" id="max-retries" min="0" max="10">
@@ -1798,8 +1798,10 @@
                 return info;
             };
             const httpError = (info, body) => {
-                const err = new Error(`HTTP ${info.status}: ${String(body || '').slice(0, 200)}`);
+                const err = new Error(`HTTP ${info.status}`);
                 err.status = info.status;
+                err.statusText = info.statusText || '';
+                err.body = String(body || '').slice(0, 200);
                 return err;
             };
             const reqOptions = {
@@ -1810,7 +1812,7 @@
                 // у XHR-менеджера 'stream' просят напрасно: он не знает его и пишет
                 // в консоль — просим text, тело всё равно придёт тем же потоком
                 responseType: (isStream && gmStreamMode !== 'text') ? 'stream' : 'text',
-                onerror: () => settleReject(new Error('NetworkError: Failed to fetch')),
+                onerror: () => settleReject(Object.assign(new Error('сеть недоступна'), { isNet: true })),
                 onabort: () => settleReject(makeAbortError(false)),
                 ontimeout: () => settleReject(makeAbortError(true))
             };
@@ -1869,6 +1871,23 @@
                 options.signal.addEventListener('abort', () => { abort(); settleReject(makeAbortError(false)); });
             }
         });
+    }
+/** Куда именно били — без этого с телефона не понять, смотреть на адрес или на модель. */
+    function requestTarget(url) {
+        try {
+            const u = new URL(url);
+            const path = u.pathname.replace(/\/+$/, '');
+            return u.host + (path && path !== '/' ? path : '');
+        } catch { return String(url || ''); }
+    }
+    /** Одна строка о причине отказа: HTTP-код, таймаут или недоступный адрес. */
+    function describeError(e, target, ms, fullUrl) {
+        if (!e) return `неизвестная ошибка (${ms}мс)`;
+        if (e.status) return `HTTP ${e.status}${e.statusText ? ' ' + e.statusText : ''} • ${e.body || 'тело пустое'}`;
+        if (e.isTimeout) return `таймаут ${ms}мс • ответа от ${target} нет`;
+        if (e.isNet) return `сеть недоступна (${ms}мс) • ${target}`
+            + (/^http:/i.test(fullUrl || target) ? ' • http-адрес мог быть отсеян HTTPS-only режимом браузера' : '');
+        return `${e.message || 'ошибка'} (${ms}мс)`;
     }
     async function fetchAttempt(url, options, isStream, timeoutSec, cb = {}) {
         const timeoutMs = timeoutSec > 0 ? timeoutSec * 1000 : 0;
@@ -2022,7 +2041,10 @@
                 return await fetchAttempt(url, options, isStream, timeout, cb);
             } catch (e) {
                 if (cancelRequested) throw new Error('Отменено пользователем');
-                if (e.name === 'AbortError') { e.isTimeout = true; e.message = `Таймаут ${timeout}с: нет полезных данных`; }
+                if (e.name === 'AbortError') {
+                    e.isTimeout = true;
+                    e.message = isStream ? `таймаут ${timeout}с без токенов` : `таймаут ${timeout}с без ответа`;
+                }
                 lastErr = e;
                 if (e.status >= 400 || e.isFatal || cancelRequested || attempt >= attemptsTotal) throw e;
                 if (cb.onRetry) cb.onRetry({ nextAttempt: attempt + 1, attemptsTotal, isTimeout: !!e.isTimeout, message: e.message || 'Сетевая ошибка' });
@@ -2031,15 +2053,20 @@
         }
         throw lastErr;
     }
+    /** Единая точка сборки адреса API: хвостовой слэш в настройках не удваивает //. */
+    function apiBase() { return String(config.apiHost || '').trim().replace(/\/+$/, ''); }
+    function apiHeaders(json) {
+        const h = json ? { 'Content-Type': 'application/json' } : {};
+        if (config.apiKey) h.Authorization = `Bearer ${config.apiKey}`;
+        return h;
+    }
     function llmRequestOptions(messages, temperature, stream) {
         const body = { model: config.model, messages, temperature, stream: !!stream };
         const re = String(config.reasoningEffort ?? '').trim();
         if (re !== '' && re.toLowerCase() !== 'none') body.reasoning_effort = re;
-        const headers = { 'Content-Type': 'application/json' };
-        if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
         return {
-            url: config.apiHost.replace(/\/$/, '') + '/chat/completions',
-            options: { method: 'POST', headers, body: JSON.stringify(body) }
+            url: apiBase() + '/chat/completions',
+            options: { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(body) }
         };
     }
     async function callLLM(messages, temperature, stream, cb = {}) {
@@ -2048,29 +2075,47 @@
     }
     async function checkServer() {
         const statusEl = $('#server-status');
-        statusEl.className = 'nm-server-status show loading';
-        statusEl.textContent = '🔌 Проверяю сервер...';
-        if (!config.apiHost) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Host'; return; }
+        const transport = typeof GM_xmlhttpRequest === 'undefined' ? 'fetch'
+            : (gmStreamMode === 'text' ? 'менеджер · XHR (тело целиком)' : 'менеджер · поток');
+        const base = apiBase();
+        if (!base) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Host'; return; }
         if (!config.apiKey && !config.localModel) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Key (или включите «Локальная модель без API-ключа»)'; return; }
         if (!config.model) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указана модель'; return; }
-        const start = Date.now();
+        const target = requestTarget(base);
+        const timeout = config.requestTimeout > 0 ? config.requestTimeout : 0;
+        const show = (cls, text) => {
+            statusEl.className = `nm-server-status show ${cls}`;
+            statusEl.textContent = text;
+        };
+        show('loading', `🔌 Проверяю ${target}… (${transport})`);
+        // Сначала дешёвый GET /models: он отвечает за доли секунды и отличает
+        // «адрес недоступен» от «модель думает дольше таймаута».
+        const t0 = Date.now();
+        let models = null;
         try {
-            const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, false);
-            const payload = JSON.parse(options.body);
-            payload.max_tokens = 5;
-            const resp = await fetchWithRetry(url, { ...options, body: JSON.stringify(payload) }, false);
-            const elapsed = Date.now() - start;
+            const resp = await fetchAttempt(base + '/models', { method: 'GET', headers: apiHeaders(false) }, false, timeout, {});
             const data = await resp.json().catch(() => null);
-            if (data && data.error) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = `❌ Ошибка API: ${data.error.message || JSON.stringify(data.error)} (${elapsed}мс)`; return; }
-            if (!data || !data.choices || !data.choices[0]) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Некорректный ответ API'; return; }
-            statusEl.className = 'nm-server-status show ok';
-            statusEl.textContent = `✅ Сервер доступен • модель ${config.model} • ${elapsed}мс`;
+            const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+            models = list.length ? `${list.length} модел${list.length === 1 ? 'ь' : (list.length < 5 ? 'и' : 'ей')}` : 'список пуст';
         } catch (e) {
-            statusEl.className = 'nm-server-status show err';
-            statusEl.textContent = `❌ ${e.message} (${Date.now() - start}мс)`;
+            show('err', `❌ ${describeError(e, target, Date.now() - t0, base)} • ${transport}`);
+            return;
+        }
+        // /models отвечает — значит сеть и адрес в порядке: проверяем сам чат.
+        const t1 = Date.now();
+        const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, false);
+        const payload = JSON.parse(options.body);
+        payload.max_tokens = 5;
+        try {
+            const resp = await fetchAttempt(url, { ...options, body: JSON.stringify(payload) }, false, timeout, {});
+            const data = await resp.json().catch(() => null);
+            if (data && data.error) { show('err', `⚠️ Сервер отвечает (${models}), чат отказал: ${data.error.message || JSON.stringify(data.error)} • ${Date.now() - t1}мс`); return; }
+            if (!data || !data.choices || !data.choices[0]) { show('err', `⚠️ Сервер отвечает (${models}), но чат прислал непонятное тело • ${Date.now() - t1}мс`); return; }
+            show('ok', `✅ Сервер доступен • ${target} • /models: ${models} • пинг ${Date.now() - t1}мс • ${transport}`);
+        } catch (e) {
+            show('err', `⚠️ /models отвечает (${models}), чат — нет: ${describeError(e, requestTarget(url), Date.now() - t1, url)} • ${transport}`);
         }
     }
-
     // ===== NER =====
     const NER_RESPONSE_RATIO = 2;
     // модель обязана вернуть JSON-массив объектов; ответ приходит и в ```json
