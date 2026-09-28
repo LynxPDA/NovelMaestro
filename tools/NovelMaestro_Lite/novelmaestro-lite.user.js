@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.33
+// @version      1.34
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.33';
+    const APP_VERSION = '1.34';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -1952,7 +1952,7 @@
     function describeError(e, target, ms, fullUrl) {
         if (!e) return `неизвестная ошибка (${ms}мс)`;
         if (e.status) return `HTTP ${e.status}${e.statusText ? ' ' + e.statusText : ''} • ${e.body || 'тело пустое'}`;
-        if (e.isTimeout) return `таймаут ${ms}мс • ответа от ${target} нет`;
+        if (e.isTimeout) return `таймаут ${ms}мс • ответа от ${target} нет` + (e.trace ? ` • события: ${e.trace}` : '');
         if (e.isNet) return `сеть недоступна (${ms}мс) • ${target}`
             + (/^http:/i.test(fullUrl || target) ? ' • http-адрес мог быть отсеян HTTPS-only режимом браузера' : '');
         return `${e.message || 'ошибка'} (${ms}мс)` + (e.trace ? ` • события: ${e.trace}` : '');
@@ -2064,7 +2064,7 @@
                 buffer = lines.pop();
                 for (const line of lines) {
                     handleLine(line);
-                    if (streamError) throw streamError;
+                    if (streamError) { streamError.trace = traceLog.join(' '); throw streamError; }
                 }
                 if (text.length > beforeLen) {
                     arm();

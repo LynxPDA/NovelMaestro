@@ -155,7 +155,7 @@
     function describeError(e, target, ms, fullUrl) {
         if (!e) return `неизвестная ошибка (${ms}мс)`;
         if (e.status) return `HTTP ${e.status}${e.statusText ? ' ' + e.statusText : ''} • ${e.body || 'тело пустое'}`;
-        if (e.isTimeout) return `таймаут ${ms}мс • ответа от ${target} нет`;
+        if (e.isTimeout) return `таймаут ${ms}мс • ответа от ${target} нет` + (e.trace ? ` • события: ${e.trace}` : '');
         if (e.isNet) return `сеть недоступна (${ms}мс) • ${target}`
             + (/^http:/i.test(fullUrl || target) ? ' • http-адрес мог быть отсеян HTTPS-only режимом браузера' : '');
         return `${e.message || 'ошибка'} (${ms}мс)` + (e.trace ? ` • события: ${e.trace}` : '');
@@ -267,7 +267,7 @@
                 buffer = lines.pop();
                 for (const line of lines) {
                     handleLine(line);
-                    if (streamError) throw streamError;
+                    if (streamError) { streamError.trace = traceLog.join(' '); throw streamError; }
                 }
                 if (text.length > beforeLen) {
                     arm();
