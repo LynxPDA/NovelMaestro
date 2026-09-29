@@ -262,7 +262,7 @@ python3 -m pytest tests/ -q --cov=core --cov=cli --cov=web  # покрытие
 - `tests/test_architecture.py` — регресс-гарды архитектуры;
 - `tests/test_spa_js.py` + `tests/spa/*.test.mjs` — SPA (node --check, node --test чистых функций).
 
-Тесты НЕ ходят в сеть: LLM только мокать (monkeypatch на `stream_chat_completion`, на уровне транспорта — на `core.transport.open_stream` / `request_json`), данные — во временных папках pytest (`tmp_path`).
+Тесты НЕ ходят в сеть: LLM только мокать (monkeypatch на `stream_chat_completion`, на уровне транспорта — на `core.transport.open_stream`, бэкенд — на `core.transport.reset_client`), данные — во временных папках pytest (`tmp_path`).
 
 ## Соглашения
 
