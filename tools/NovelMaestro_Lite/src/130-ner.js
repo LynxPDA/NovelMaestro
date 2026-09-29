@@ -116,7 +116,7 @@
                     }
                     if (existingId) { glossary[existingId].count = (glossary[existingId].count || 0) + 1; incremented++; }
                     else {
-                        glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = migrateEntry(item);
+                        glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = normalizeTerm(item);
                         added++;
                     }
                 }

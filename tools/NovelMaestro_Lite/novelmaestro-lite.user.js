@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.40
+// @version      1.41
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.40';
+    const APP_VERSION = '1.41';
 
     // ===== КОНФИГУРАЦИЯ =====
     // Штатный промпт перевода (редактируемое поле Настроек). Плейсхолдеры те же,
@@ -123,9 +123,6 @@
         'Текст:',
         '{text}',
     ].join('\n');
-    // Прежний встроенный промпт — эталон миграции: если в хранилище лежит строка,
-    // равная ему, промпт руками не трогали и можно поставить новый.
-    const LEGACY_TRANSLATION_PROMPT = 'Переведи следующий текст с {sourceLang} на {targetLang}.\n\nГЛОССАРИЙ ТЕРМИНОВ (обязательно используй эти переводы, сохраняй пол персонажей):\n{glossary}\n\nВАЖНО:\n- Имена и термины переводи точно по глоссарию\n- Сохраняй пол персонажей (он/она) согласно глоссарию\n- Сохраняй стиль оригинала\n- Сохраняй разбивку на абзацы\n- Возвращай ТОЛЬКО перевод, без комментариев\n\nТекст:\n{text}';
     const DEFAULT_CONFIG = {
         apiHost: 'https://routerai.ru/api/v1',
         apiKey: '',
@@ -161,14 +158,6 @@
     // В GM-хранилище расширения — только список книг и настройки: глоссарии
     // (мегабайты) и кэш переводов живут в IndexedDB каждого сайта отдельно.
     let config = { ...DEFAULT_CONFIG, ...GM_getValue('config', {}) };
-    // Миграция штатного промпта: в GM-хранилище лежит вся конфигурация целиком,
-    // поэтому новый встроенный текст дожил бы только до первой сохраненной копии.
-    // Кого промпт не касался (равен старому эталону) — переводим на новый;
-    // самописные правки не трогаем.
-    if (config.translationPrompt === LEGACY_TRANSLATION_PROMPT) {
-        config.translationPrompt = DEFAULT_CONFIG.translationPrompt;
-        GM_setValue('config', config);
-    }
     let books = GM_getValue('books', {});
     let currentBookKey = null;
     let managedBookKey = null;
@@ -516,17 +505,16 @@
         if (!gender) return base;
         return `${base || 'Person'} (${gender})`;
     }
-    const LEGACY_TYPE_MAP = { character: 'Person', creature: 'Creature', location: 'Location', artifact: 'Artifact', organization: 'Organisation', organisation: 'Organisation', term: 'Term', other: 'Other' };
-    function migrateEntry(t) {
+    // Нормализация типов: карта ловит синонимы и регистровые варианты, которые
+    // приходят от LLM (промпт просит «Person (male)», попадаются и другие); пол
+    // персонажа хранится в самом type в скобках.
+    const TYPE_MAP = { character: 'Person', creature: 'Creature', location: 'Location', artifact: 'Artifact', organization: 'Organisation', organisation: 'Organisation', term: 'Term', other: 'Other' };
+    function normalizeTerm(t) {
         if (!t || typeof t !== 'object') return t;
         const rawType = String(t.type || '').trim();
-        const legacy = LEGACY_TYPE_MAP[rawType.toLowerCase()];
-        let base = legacy || rawType.replace(/\s*\((?:male|female|unknown)\)\s*$/i, '').trim();
-        let gender = genderOf(t.type);
-        if (!gender && t.gender && t.gender !== 'null') gender = t.gender === 'neutral' ? 'unknown' : t.gender;
-        if (!base) base = gender ? 'Person' : 'Term';
+        const base = (TYPE_MAP[rawType.toLowerCase()] || rawType).replace(/\s*\((?:male|female|unknown)\)\s*$/i, '').trim();
+        const gender = genderOf(t.type);
         t.type = (gender === 'male' || gender === 'female' || gender === 'unknown') ? `${base} (${gender})` : base;
-        delete t.gender;
         return t;
     }
     function glossaryTypes(glossary) {
@@ -2439,7 +2427,7 @@
                     }
                     if (existingId) { glossary[existingId].count = (glossary[existingId].count || 0) + 1; incremented++; }
                     else {
-                        glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = migrateEntry(item);
+                        glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = normalizeTerm(item);
                         added++;
                     }
                 }
@@ -3134,7 +3122,7 @@
                     const glossary = getGlossaryForView();
                     let added = 0, incremented = 0;
                     for (const raw of srcList) {
-                        const t = migrateEntry({ ...raw });
+                        const t = normalizeTerm({ ...raw });
                         if (!t || !t.term || !t.translation) continue;
                         let existingId = null;
                         for (const [exId, ex] of Object.entries(glossary)) {
@@ -3357,49 +3345,10 @@
     $('#btn-cancel-new-book').addEventListener('click', () => bookModal.classList.remove('active'));
     $('#btn-autofill-url').addEventListener('click', () => { $('#book-modal-url').value = suggestBookKeyFromUrl(); });
 
-    // ===== ИНИЦИАЛИЗАЦИЯ =====
+// ===== ИНИЦИАЛИЗАЦИЯ =====
     currentBookKey = findBookByUrl();
     bindSettingsAutoSave();
     applyTheme();
-    let cfgMigrated = false;
-    // дефолты читалки: 18px/66% → 14px/80% (сбрасываются только старые дефолты,
-    // пользовательские размеры остаются); выполняется один раз на установку
-    if (!config.readerDefaultsV2) {
-        if (config.readerFontSize === 18) config.readerFontSize = 14;
-        if (config.readerContentWidth === 66) config.readerContentWidth = 80;
-        config.readerDefaultsV2 = true;
-        cfgMigrated = true;
-    }
-    if (typeof config.requestTimeout === 'number' && config.requestTimeout > 1000) {
-        config.requestTimeout = Math.max(1, Math.round(config.requestTimeout / 1000));
-        cfgMigrated = true;
-    }
-    // старые значения ширины колонки были в пикселях, новые — проценты ширины экрана (30-100)
-    if (typeof config.readerContentWidth === 'number' && config.readerContentWidth > 100) {
-        config.readerContentWidth = DEFAULT_CONFIG.readerContentWidth;
-        cfgMigrated = true;
-    }
-    // наследие эпохи GM-кэша: количество опережаемых глав и лимит кэша убраны,
-    // смысл количества наследует чекбокс автоперевода следующей главы
-    if ('preemptiveCount' in config) {
-        if (typeof config.preemptiveTranslation !== 'boolean') config.preemptiveTranslation = config.preemptiveCount > 0;
-        delete config.preemptiveCount;
-        cfgMigrated = true;
-    }
-    if ('cacheLimit' in config) { delete config.cacheLimit; cfgMigrated = true; }
-    if ('glossarySource' in config) { delete config.glossarySource; cfgMigrated = true; }
-    if (cfgMigrated) GM_setValue('config', config);
-    // наследие GM-эпохи удаляем совсем (данные не мигрируем — скрипт в разработке)
-    for (const k of ['chapterCache', 'globalGlossary']) {
-        if (typeof GM_deleteValue === 'function') GM_deleteValue(k);
-        else GM_setValue(k, null);
-    }
-    // записи книг теперь содержат только метаданные: глоссарии и nerDone из GM убираем
-    let booksChanged = false;
-    for (const b of Object.values(books)) {
-        if ('glossary' in b || 'nerDone' in b) { delete b.glossary; delete b.nerDone; booksChanged = true; }
-    }
-    if (booksChanged) GM_setValue('books', books);
     // данные сайта грузим из IndexedDB асинхронно; автозапуск перевода при переходе
     // с другой главы дожидается, чтобы не потерять кэш и отметки NER
     const autoRun = !!sessionStorage.getItem('nm_auto_reader');

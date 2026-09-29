@@ -26,17 +26,16 @@
         if (!gender) return base;
         return `${base || 'Person'} (${gender})`;
     }
-    const LEGACY_TYPE_MAP = { character: 'Person', creature: 'Creature', location: 'Location', artifact: 'Artifact', organization: 'Organisation', organisation: 'Organisation', term: 'Term', other: 'Other' };
-    function migrateEntry(t) {
+    // Нормализация типов: карта ловит синонимы и регистровые варианты, которые
+    // приходят от LLM (промпт просит «Person (male)», попадаются и другие); пол
+    // персонажа хранится в самом type в скобках.
+    const TYPE_MAP = { character: 'Person', creature: 'Creature', location: 'Location', artifact: 'Artifact', organization: 'Organisation', organisation: 'Organisation', term: 'Term', other: 'Other' };
+    function normalizeTerm(t) {
         if (!t || typeof t !== 'object') return t;
         const rawType = String(t.type || '').trim();
-        const legacy = LEGACY_TYPE_MAP[rawType.toLowerCase()];
-        let base = legacy || rawType.replace(/\s*\((?:male|female|unknown)\)\s*$/i, '').trim();
-        let gender = genderOf(t.type);
-        if (!gender && t.gender && t.gender !== 'null') gender = t.gender === 'neutral' ? 'unknown' : t.gender;
-        if (!base) base = gender ? 'Person' : 'Term';
+        const base = (TYPE_MAP[rawType.toLowerCase()] || rawType).replace(/\s*\((?:male|female|unknown)\)\s*$/i, '').trim();
+        const gender = genderOf(t.type);
         t.type = (gender === 'male' || gender === 'female' || gender === 'unknown') ? `${base} (${gender})` : base;
-        delete t.gender;
         return t;
     }
     function glossaryTypes(glossary) {

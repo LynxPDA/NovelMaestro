@@ -79,7 +79,7 @@
                     const glossary = getGlossaryForView();
                     let added = 0, incremented = 0;
                     for (const raw of srcList) {
-                        const t = migrateEntry({ ...raw });
+                        const t = normalizeTerm({ ...raw });
                         if (!t || !t.term || !t.translation) continue;
                         let existingId = null;
                         for (const [exId, ex] of Object.entries(glossary)) {
