@@ -300,14 +300,6 @@
             if (!failed && !cancelRequested) { buffer += decoder.decode(); handleLine(buffer); }
             if (cancelRequested) { const e = new Error('Отменено пользователем'); e.trace = traceLog.join(' '); throw e; }
             if (failed) { const e = makeAbortError(true); e.trace = traceLog.join(' '); throw e; }
-            if (!sawDone) {
-                // сервер закрыл поток без [DONE] и без finish_reason: это обрыв,
-                // а не конец — оборванный огрызок не считается результатом, ретраим
-                const e = new Error(`обрыв ответа: соединение закрыто без [DONE] (${text.length} симв.)`);
-                e.isCut = true;
-                e.trace = traceLog.join(' ');
-                throw e;
-            }
             if (cb.stopOnFirstContent && text.trim()) {
                 try { if (underlyingAbort) underlyingAbort(); } catch {}
                 return { text, model: streamModel, trace: traceLog.join(' ') };
@@ -336,6 +328,15 @@
                 const err = new Error('Пустой ответ модели. Проверьте модель, права и параметры запроса.');
                 err.isFatal = true;
                 throw err;
+            }
+            // сторож завершённости — именно здесь: пинг проверки выходит на первом
+            // токене (до [DONE]) и пустой ответ свёрнут выше; сюда доходит только
+            // полноценный стрим — закрытый без [DONE] и без finish_reason, это обрыв
+            if (!sawDone) {
+                const e = new Error(`обрыв ответа: соединение закрыто без [DONE] (${text.length} симв.)`);
+                e.isCut = true;
+                e.trace = traceLog.join(' ');
+                throw e;
             }
             return { text };
         } catch (e) {
