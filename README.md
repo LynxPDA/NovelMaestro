@@ -38,18 +38,21 @@ EPUB/TXT → главы → глоссарий → перевод → редак
 ### Linux/macOS (и Windows с Python) — venv
 
 ```bash
-# 1. Создать и активировать venv (Python 3.10+)
-python3 -m venv .venv && source .venv/bin/activate   # Linux/macOS
-# Windows: py -m venv .venv && .venv\Scripts\activate
+# 1. Создать venv, поставить зависимости и показать активный стек
+./dev.sh setup
 
-# 2. Установить зависимости
-pip install -r requirements.txt
-
-# 3. Запустить web-интерфейс
-python3 run.py
+# 2. Запустить web-интерфейс (в том же venv)
+./dev.sh run
 ```
 
-(на Windows вместо `python3` — `python run.py` или `py run.py`)
+`dev.sh` — обёртка над venv для разработки (`setup` / `run` / `test` / `deps` / `shell` / `clean`): внутри него команды остаются обычными `python3 …`. вручную тот же путь — обычная схема venv:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # Linux/macOS
+pip install -r requirements.txt && python3 run.py
+```
+
+(на Windows вместо `python3` — `python run.py` или `py run.py`; venv: `py -m venv .venv && .venv\Scripts\activate`)
 
 Допустимая альтернатива без venv — системный Python (Debian/Ubuntu):
 
@@ -150,14 +153,15 @@ MODEL=google/gemma-4-31b-it         # рекомендуемая модель (�
 - **Справка** в приложении (вкладка слева) — инструкции по проектам, стадиям и регулярным выражениям;
 - [DEVELOPERS.md](DEVELOPERS.md) — техническая документация для разработчиков (архитектура, конвейер, конфигурация, тесты);
 - [web/README.md](web/README.md) — контракт web-слоя и API;
-- [tools/README.md](tools/README.md) — вспомогательные утилиты вне конвейера: юзерскрипты (Lite, Rulate) и их сборка;
+- [tools/README.md](tools/README.md) — вспомогательные утилиты вне конвейера: юзерскрипты (Lite, Rulate), их сборка и манифест локальных библиотек SPA;
 - [AGENTS.md](AGENTS.md) — правила для AI-агентов.
 
 ## Зависимости
 
 | Пакет (pip / apt) | Назначение | Обязательность |
 | --- | --- | --- |
-| `requests` / `python3-requests` | HTTP-запросы к LLM | обязательный |
+| `httpx` / — | HTTP-транспорт LLM (пул соединений, раздельные connect/read таймауты) | рекомендуемый (без него — requests) |
+| `requests` / `python3-requests` | HTTP-запросы к LLM | обязательный (фолбэк транспорта) |
 | `tqdm` / `python3-tqdm` | прогресс-бары | обязательный |
 | `pyahocorasick` / `python3-ahocorasick` | быстрый поиск терминов | опциональный (есть regex-fallback) |
 | `pytest` / `python3-pytest` | тесты | только для разработки |

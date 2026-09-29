@@ -11,8 +11,11 @@
 
 ## 2. Окружение
 
-- **Зависимости: venv — рекомендуемый способ установки** и на Windows, и на Linux; системный python3 + apt-пакеты — допустимая альтернатива. Команды в коде и доках остаются унифицированными (`python3`); не пиши `.venv/bin/python3` в код и документацию.
-- Зависимости: `requests`, `tqdm`, `pyahocorasick` (опционален — есть regex fallback), `pytest` (тесты). Единый pip-список — `requirements.txt`. Принцип: stdlib + requests; новые тяжёлые зависимости не добавлять, опциональные пакеты обязаны иметь fallback.
+- **Зависимости: venv — рекомендуемый способ установки** и на Windows, и на Linux; системный python3 + apt-пакеты — допустимая альтернатива. Команды в коде и доках остаются унифицированными (`python3`); не пиши `.venv/bin/python3` в код и документацию. В разработке venv поднимает `./dev.sh` (`setup|test|run|deps|shell|clean`): скрипт **активирует** окружение, поэтому внутри него команды остаются `python3 …`.
+- Зависимости: `requests` (фолбэк транспорта) + `tqdm`; **рекомендуемая** `httpx` — основной HTTP-транспорт LLM (переиспользование соединений, раздельные connect/write/read таймауты); опциональны `pyahocorasick` (иначе regex-фолбэк) и `pytest` (тесты). Единый pip-список — `requirements.txt`; активный стек печатает `python3 -m core.deps` (и он же — первой строкой в логе сервера). Принцип: stdlib + одна HTTP-библиотека; опциональные пакеты обязаны иметь fallback, «красивые» библиотеки ради красивости не добавляются.
+- HTTP-клиент в коде импортирует **только** `core/transport.py`: `stream_chat_completion` ходит через `open_stream()`, `iter_lines()` отдаёт строки SSE. `requests.post(...)`/`iter_lines()`/`iter_content()` прямо в `cli/` и `web/` запрещены (страж `tests/test_architecture.py`).
+- **Осознанные отказы** (аргументы — в `TODO.md`, блок «Миграция на внешние библиотеки»): `python-dotenv` (его парсер съедает `#` в значениях и раскрывает `${VAR}` — ломает семантику regexp-полей, §7), `tenacity` (политика ретраев одна и она не про исключения), `psutil` (снятие дерева процессов закрыто stdlib-кодом: `killpg`/`taskkill`; пакет = бинарное колесо + третья ветка остановки), `uvicorn`/`fastapi`/ASGI (сервер синхронный и однопользовательский: SSE-соединений ровно столько, сколько открытых вкладок, рабочих потоков — десятки; переписывание web-слоя не решает нашей задачи), `tiktoken` (BPE-файлы из сети ломают офлайн-установку).
+- **Фронтенд офлайн.** Все сторонние JS-библиотеки лежат в `web/static/vendor/`, внешних `src`/`href` в SPA быть не может. Состав, версии, лицензии и sha256 описывает манифест `web/static/vendor/vendor.lock.json`; гейт — `python3 tools/vendor_assets.py check` (он же ловит молчаливую подмену файла и возврат удалённого `alpine.min.js`: SPA на ванильном JS, Alpine не возвращать).
 - **Кроссплатформенность.** Целевая среда — Linux/macOS (системный `python3`), но код и доки не должны ломаться на Windows:
   - команды в коде/доках — `python3` (Unix); на Windows `python3` нет, поэтому в README указывать явно «на Windows: `python run.py` или `py run.py`»;
   - web-сервер — чистый stdlib (`http.server`), SPA — ванильный JS без сборки; никаких платформозависимых библиотек;
@@ -22,10 +25,14 @@
 
 ```text
 core/     общий код: common.py (логика) + projects.py (менеджмент
-          проектов). НЕ скрипты. Интерактива (ui/tui) больше нет.
+          проектов) + transport.py (единственная точка выхода в сеть:
+          httpx, фолбэк requests) + deps.py (реестр внешних зависимостей:
+          что установлено и чем прикрыто). НЕ скрипты. Интерактива
+          (ui/tui) больше нет.
 web/      web-интерфейс: server.py + api.py (роуты/хендлеры), stages.py
           (реестр стадий и сборка argv), jobs.py (JobManager + SSE),
-          pipeline.py (web-оркестратор конвейера), static/ (SPA).
+          pipeline.py (web-оркестратор конвейера), static/ (SPA; локальные
+          библиотеки — static/vendor/ + манифест vendor.lock.json).
           Контракт API — web/README.md.
 cli/  исполнители — чистый CLI (argparse), без интерактивных меню.
           batch_replace.py — массовые замены (правила «паттерн -> замена»
@@ -41,6 +48,8 @@ tools/    вспомогательные утилиты вне конвейер�
           <имя>.user.js — собранный файл, руками не правится:
           python3 tools/build_userscripts.py (--check сверяет артефакт со
           сборкой). Порядок частей = порядок секций, менять его нельзя.
+          Плюс vendor_assets.py — манифест локальных библиотек SPA
+          (check/list/lock/fetch, офлайн-гейт index.html).
           Дробим только Lite (3,1 тыс. строк); rulate остаётся одной
           частью — 637 строк читаемы целиком.
 templates/ шаблоны новых проектов: общие шаблоны в корне (.env.example);
@@ -91,7 +100,7 @@ from core.common import ...  # noqa: E402
 
 Если меняешь размер/бюджет — проверь, что единица верная, и укажи её в help argparse («СИМВОЛЫ»/«ТОКЕНЫ»).
 
-## 6. Что использовать из core/common.py (не изобретай заново)
+## 6. Что использовать из core/ (не изобретай заново)
 
 | Задача | Функция |
 | --- | --- |
@@ -109,15 +118,17 @@ from core.common import ...  # noqa: E402
 | проверка глоссария (ner_check) | `filter_ner_items` (порог count + типы) / `format_ner_record` (запись как JSON-объект: term — всегда, fields — поля для LLM, None = все) / `glossary_body` (JSON-массив записей, по одной на строку) / `build_ner_batches` (count по убыванию, бюджет в СИМВОЛАХ; fields — поля записи для LLM, term — всегда) / `parse_rag_suggestions` (текст LLM → записи; fields — разрешённые поля) / `ner_item_lookup` (поиск записи по term: NFC, затем без скобок) / `diff_ner_records` (записи LLM ↔ ner.json → патчи {term,field,old,new,reason}; NFC; нет записи — warning с близкими) / `review_entry` / `parse_review_doc` / `merge_review_entries` (review-файл: поля английские — `stage`/`status`/`applied`/`old`/`new`, статусы принять/отклонить, накопление) / `apply_ner_patches` (status + applied, дубли термина по совпавшему `old`, list/dict — json; неприменимое — `note` с причиной) |
 | проверка перевода LLM (translate_check_llm) | `fix_entry` (ошибка LLM → запись review) / `merge_fix_entries` (накопление, дедуп по chapter+old+new) / `apply_fix_to_text` (NFC, первое вхождение) / `flex_fragment_pattern` (типографически-мягкий паттерн цитаты в обе стороны: кавычки «»“”", тире —–−, …/... и пробелы эквивалентны) / `apply_flex_fix` (замена: точная NFC, иначе найденный мягким паттерном спан) / `find_fragment_owner` (где цитата реально живёт: (глава\|None, причина\|None); гейт — ровно 1 совпадение ровно в 1 главе на всю книгу, глава claimed исключается, короткие не ищутся) |
 | имена по полу | `collect_gender_names` (polish: поиск по `translation`, пол по наличию `(female)`/`(male)` в `type`) |
-| запрос к LLM | **ТОЛЬКО** `stream_chat_completion` — единая гигиена стрима ([DONE]/finish_reason, loop-детект, cut, empty, min_len_ratio) → `(text, err)`; messages — `llm_messages` (унификация: промпт и данные в user, system — пустое поле в запросе; фактический запрос и предпросмотр строятся одной функцией) |
+| запрос к LLM | **ТОЛЬКО** `stream_chat_completion` — единая гигиена стрима ([DONE]/finish_reason, loop-детект, cut, empty, min_len_ratio) → `(text, err)`; transport-ошибки (`ConnectTimeout`/`ReadTimeout`/`BrokenStream`/`TransportError`) она превращает в `(«», err)` — наружу не бросает; messages — `llm_messages` (унификация: промпт и данные в user, system — пустое поле в запросе; фактический запрос и предпросмотр строятся одной функцией) |
 | запись файла | `atomic_write` (tmp + fsync + os.replace) |
 | чтение | `read_text_safe` (utf-8 → cp1251 fallback) |
 | прогресс web | `web_progress_enabled` (флаг `WEB_PROGRESS=1`) / `emit_progress` (done, total, label → `@@PROGRESS@@` + JSON; только в web-режиме, no-op в CLI) |
 | предпросмотр запроса (web+CLI) | `preview_request_payload` (JSON {stage, label, model, messages, chars — СИМВОЛЫ, tokens — оценка, meta}) / `write_preview_request` (атомарная запись) / `preview_logger` (только stderr) |
 | главы | `parse_chapter_id` / `build_chapter_map` / `find_chapter_file` / `format_ranges` / `compile_chapter_text` (склейка `chapter.txt` из папок в память, `(text, info)`, `start/end`) / `compile_chapter_texts` (та же склейка → файл) / `read_chapter_titles` / `write_chapter_titles` (названия глав: первая непустая строка, чтение/замена) |
+| HTTP-транспорт (core/transport.py) | **ТОЛЬКО** `open_stream` (POST JSON → контекстный менеджер `ResponseStream`: `status_code`, `headers`, `iter_lines()` — байтовые строки SSE без `\n`; выход из контекста закрывает соединение) / `backend()` (`httpx` или `requests`) / `installed_backends()` / `reset_client()` (тесты) + нормализованные ошибки `TransportError`, `ConnectTimeout`, `ReadTimeout`, `BrokenStream` — одинаковые у обоих бэкендов |
+| зависимости (core/deps.py) | `ROLES` (роли и их кандидаты: httpx→requests, pyahocorasick→regex, tqdm, pytest) / `status` (строка на роль: активный бэкенд, `degraded` — работа на фолбэке) / `format_status` (одна строка в лог сервера) / `missing_hint` / `main` (`python3 -m core.deps`) |
 | проекты | **ТОЛЬКО** `core/projects.py`: `DEFAULT_SECTIONS` (ACTIVE/HOLD/DONE, алиас `SECTIONS`) / `load_sections` / `save_sections` / `create_section` / `rename_section` (в существующий — перенос проектов) / `delete_section` (непустой — отказ) / `ensure_projects_root` / `valid_project_name` / `sanitize_project_name` / `list_projects` / `project_stats` / `project_progress_table` / `create_project` / `move_project` / `rename_project` / `copy_project` / `delete_project` / `list_template_sets` / `TEMPLATE_SKELETON` (`prompts`+`source`) / `_ensure_template_skeleton` (идемпотентный ремонт скелета) / `create_template_set` (каркас prompts/+source/) / `create_template_dir` (всегда ошибка — каталоги неизменяемы) / `copy_template_set` / `delete_template_set` / `templates_files` (пустые каталоги как `path/`) / `read_template_file` / `write_template_file` / `delete_template_file` (каталог → ошибка; `str \| None`) / `template_file_info` / `move_template_file` (только файлы; каталог → ошибка) / `fill_project_from_template` / `render_metadata` / `write_project_metadata` |
 
-Запрещено: свои парсеры .env, свои стрим-обработчики SSE, свои парсеры имён главных папок. Добавил функцию в таблицу — обнови и `core/README.md`, и `tests/test_docs.py` (сверка доков с кодом).
+Запрещено: свои парсеры .env, свои стрим-обработчики SSE, свои парсеры имён главных папок, прямой импорт `requests`/`httpx` вне `core/transport.py`. Добавил функцию в таблицу — обнови и `core/README.md`, и `tests/test_docs.py` (сверка доков с кодом).
 
 ## 7. Ключевые конвенции
 
@@ -231,12 +242,14 @@ git add -A && git commit -m "…" && git push origin
 - `tests/conftest.py` — общие хелперы (SilentLog, make_ru_chapter_file, feed, fake_env);
 - `tests/test_core_common.py` — `core/common.py` целиком (стрим SSE моками, .env, чанкование, NER-поиск, имена по полу, канон глав);
 - `tests/test_projects_core.py` — `core/projects.py` (создание/перенос/переименование, tmp_path);
+- `tests/test_core_transport.py` — `core/transport.py`: выбор бэкенда, нарезка SSE на строки (терминатор отсечен, `[DONE]` и finish_reason видны), нормализация ошибок, живой раунд-трип через stdlib-сервер на обоих бэкендах;
 - `tests/test_run_flows.py` — `run.py` (bootstrap, лаунчер web);
 - по одному файлу на скрипт: `tests/test_translate_book.py`, `tests/test_ner.py`, `tests/test_ner_check.py`, `tests/test_translate_check_llm.py`, `tests/test_wiki.py`, `tests/test_epub_to_chapters.py`, `tests/test_translate_check.py` — чистые функции + оркестраторы (`run_two_pass`, `run_wiki_generation`) и `main()` с моками LLM;
 - `tests/test_cli_units.py` / `tests/test_cli_e2e.py` — чистые функции и прогоны `main()` остальных `cli/` без сети (batch_replace, clean_and_compile, translate_check и др.);
 - `tests/test_web_pipeline.py` — web-оркестратор `web/pipeline.py` (Tracker, build_stage_cmd, grep_errors, process_chapter, main);
 - `tests/test_web_api.py` / `tests/test_web_jobs.py` / `tests/test_web_m7.py` / `tests/test_web_server.py` / `tests/test_web_sandbox.py` — web-слой (роуты, JobManager, SSE, env-редактор, NER-экспорт) на реальном HTTP-сервере без сети;
 - `tests/test_docs.py` — сверка доков (`core/README.md`, AGENTS.md §6) с кодом;
+- `tests/test_tools_vendor.py` — `tools/vendor_assets.py`: файлы вендора == манифест (sha256/размер), ни одной ссылки на CDN в SPA, удалённые библиотеки не возвращаются;
 - `tests/test_tools_userscripts.py` — юзерскрипты `tools/`: собранный `.user.js` побайтово равен закоммиченному, части нумерованы и держат обёртку, версия берётся из `meta.js`, канон метаданных и ссылки установки, `node --check` по артефактам, плюс `node --test` по `tests/tools/*.test.mjs`;
 - `tests/tools/lite-reasoning.test.mjs` — node-тесты чистой логики Lite (части — один IIFE, поэтому подопытный блок вырезается из артефакта по маркерам и исполняется на заглушках): какие reasoning/thinking-ключи уходят в тело запроса, финальное состояние панели прогресса и жизнь флага отмены;
 - `tests/test_architecture.py` — регресс-гарды архитектуры (§3: запрет `input()` и UI-импортов в `cli/`, единый стрим, bootstrap, web-раскладка, run.py — лаунчер web, отсутствие backends/cli|tui).

@@ -160,7 +160,7 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`, `
 
 ## Web-слой
 
-Сервер — чистый stdlib (`http.server`), SPA — ванильный JS без сборки (vendored: Alpine.js/CodeMirror/marked в `static/vendor/`, без CDN в рантайме). Подробный контракт (роуты API, JobManager, SSE, песочница, прогресс) — в [web/README.md](web/README.md).
+Сервер — чистый stdlib (`http.server`, `ThreadingHTTPServer`: долгая стадия не блокирует UI; `protocol_version="HTTP/1.1"` — keep-alive, длинный SSE не выдирает соединение из пула браузера; `daemon_threads=True` — поток не держит контейнер; `Handler.timeout` — общий idle-таймаут, глушащий застрявшие потоки), SPA — ванильный JS без сборки. Внешние библиотеки SPA (`CodeMirror`, `marked`) лежат в `static/vendor/` и описаны в манифесте `static/vendor/vendor.lock.json` (версии, лицензии, sha256): ни одного CDN в рантайме, интерфейс работает офлайн; проверка — `python3 tools/vendor_assets.py check`. Alpine.js из вендора удалён: SPA на ванильном JS, возвращать его не надо. Подробный контракт (роуты API, JobManager, SSE, песочница, прогресс) — в [web/README.md](web/README.md).
 
 Ключевые точки:
 
@@ -262,7 +262,7 @@ python3 -m pytest tests/ -q --cov=core --cov=cli --cov=web  # покрытие
 - `tests/test_architecture.py` — регресс-гарды архитектуры;
 - `tests/test_spa_js.py` + `tests/spa/*.test.mjs` — SPA (node --check, node --test чистых функций).
 
-Тесты НЕ ходят в сеть: LLM только мокать (monkeypatch на `stream_chat_completion` / `requests.post`), данные — во временных папках pytest (`tmp_path`).
+Тесты НЕ ходят в сеть: LLM только мокать (monkeypatch на `stream_chat_completion`, на уровне транспорта — на `core.transport.open_stream` / `request_json`), данные — во временных папках pytest (`tmp_path`).
 
 ## Соглашения
 
