@@ -135,3 +135,20 @@ def test_no_legacy_launcher_names():
             f"{doc}: устаревшие имена лаунчеров (start_*)"
         assert "redact_errors" not in text, \
             f"{doc}: устаревшее имя redact_errors (теперь translate_check_llm)"
+
+
+def test_requirements_cover_declared_roles():
+    """pip-списки и реестр ролей не разъезжаются: каждый кандидат роли
+    объявлен в requirements*.txt (тесты — только в dev-списке)."""
+    runtime = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    dev = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+    assert "-r requirements.txt" in dev, "requirements-dev.txt не включает рантайм"
+    names = {c["pip"] for role in D.ROLES for c in role["candidates"] if c["pip"]}
+    for pip in sorted(names):
+        in_runtime = re.search(rf"^{pip}$", runtime, re.M) is not None
+        in_dev = re.search(rf"^{pip}\b", dev, re.M) is not None
+        assert in_runtime or in_dev, f"{pip}: роль в core/deps.py есть, в списках нет"
+        if pip == "pytest":
+            assert not in_runtime, "pytest не должен попадать в рантайм/образ"
+    for pip in ("httpx", "requests", "tqdm", "pyahocorasick", "pytest"):
+        assert pip in names, f"{pip}: есть в requirements, но не в реестре ролей"

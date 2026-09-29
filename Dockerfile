@@ -23,9 +23,12 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends gosu tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# Зависимости: requests (LLM-клиент), tqdm (прогресс);
-# pyahocorasick — опционально (ускоряет NER; без него — regex-fallback).
-RUN pip install --no-cache-dir requests tqdm pyahocorasick
+# Зависимости — одним слоем и из одного списка (requirements.txt): httpx —
+# основной HTTP-транспорт LLM (пул соединений), requests — его фолбэк,
+# tqdm — прогресс, pyahocorasick — опционально (ускоряет NER; без него
+# regex-fallback). Тесты в образ НЕ попадают: они в requirements-dev.txt.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Не-root пользователь с uid=1000 (типичный первый пользователь Linux;
 # Docker Desktop виртуализует владельца). Файлы, созданные контейнером

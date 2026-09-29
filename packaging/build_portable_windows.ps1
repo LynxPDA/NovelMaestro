@@ -73,11 +73,12 @@ Write-Host "Устанавливаю pip…"
 if ($LASTEXITCODE -ne 0) { throw "pip не установился (код $LASTEXITCODE)" }
 
 # ── 4. Зависимости ──────────────────────────────────────────────────
-# pyahocorasick — опционально (ускоряет NER). Если колеса нет и нет
-# компилятора — сборка упадёт, НО приложение работает: regex-fallback.
-Write-Host "Устанавливаю requests, tqdm…"
-& $pyExe -m pip install --no-warn-script-location --disable-pip-version-check requests tqdm
-if ($LASTEXITCODE -ne 0) { throw "Не удалось установить requests/tqdm" }
+# Список совпадает с requirements.txt и повторён здесь осознанно:
+# pyahocorasick ставится отдельным шагом, его отсутствие не ошибка сборки.
+# httpx — основной HTTP-транспорт LLM (пул соединений), requests — фолбэк.
+Write-Host "Устанавливаю httpx, requests, tqdm…"
+& $pyExe -m pip install --no-warn-script-location --disable-pip-version-check httpx requests tqdm
+if ($LASTEXITCODE -ne 0) { throw "Не удалось установить httpx/requests/tqdm" }
 Write-Host "Устанавливаю pyahocorasick (опционально)…"
 & $pyExe -m pip install --no-warn-script-location --disable-pip-version-check pyahocorasick
 if ($LASTEXITCODE -ne 0) {

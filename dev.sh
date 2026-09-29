@@ -5,7 +5,7 @@
 #   1. свежий системный Python обычно PEP 668 («externally-managed»): pip в него
 #      не ставит пакеты, разработка без venv упирается в ошибку окружения;
 #   2. все внешние зависимости и их версии живут в одном месте
-#      (requirements.txt) и не трогают систему;
+#      (requirements.txt + requirements-dev.txt) и не трогают систему;
 #   3. каталог venv (.venv) уже в .gitignore — в git он не появляется.
 #
 # При этом команды проекта в коде и документации остаются унифицированными
@@ -14,7 +14,7 @@
 #
 # Windows (PowerShell), вместо этого скрипта:
 #   py -m venv .venv ; . .venv\Scripts\Activate.ps1
-#   python -m pip install -r requirements.txt
+#   python -m pip install -r requirements-dev.txt
 #   python run.py            # или: python -m pytest tests/ -q
 #
 # .venv уже в .gitignore (venv/, env/, .venv/) — добавлять нечего.
@@ -43,9 +43,9 @@ activate() {
 
 cmd_setup() {
     activate
-    log "ставлю зависимости (requirements.txt)"
+    log "ставлю зависимости (requirements-dev.txt)"
     python3 -m pip install --quiet --upgrade pip
-    python3 -m pip install --quiet -r "$REPO/requirements.txt"
+    python3 -m pip install --quiet -r "$REPO/requirements-dev.txt"
     python3 -m core.deps
 }
 

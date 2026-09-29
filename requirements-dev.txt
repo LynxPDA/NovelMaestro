@@ -1,0 +1,9 @@
+# NovelMaestro: зависимости для разработки (./dev.sh setup ставит этот файл)
+#
+# Боевой рантайм — requirements.txt (он подключается здесь же, тесты не
+# единственный слой). В Docker и портативную сборку pytest НЕ попадает:
+# они ставят requirements.txt.
+
+-r requirements.txt
+
+pytest          # тесты: python3 -m pytest tests/ -q

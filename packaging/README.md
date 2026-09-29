@@ -33,7 +33,7 @@ docker run -d -p 8756:8756 \
 
 ### Что внутри образа
 
-- `python:3.12-slim` + `requests`, `tqdm`, `pyahocorasick` (опционален; без него NER работает через regex-fallback, медленнее);
+- `python:3.12-slim` + зависимости одним слоем из `requirements.txt`: `httpx` (основной HTTP-транспорт LLM), `requests` (его фолбэк), `tqdm`, `pyahocorasick` (опционален; без него NER работает через regex-fallback, медленнее). Тестов в образе нет — они в `requirements-dev.txt`;
 - весь код приложения в `/app` (исключены `.dockerignore`: `projects/`, `tests/`, `logs/`, git и т.п.);
 - запуск: `docker-entrypoint.sh` → `python3 web/main.py --host 0.0.0.0` — тот же CLI, что и локально (`--port`, `--auth`, `--token`, `--max-upload-mb`, `--jobs-limit`, `--projects-dir` — всё работает);
 - entrypoint (от root) чинит владельца bind-mount каталогов (`projects/`, `templates/`, `web/job_logs/`) на `app` (uid 1000) — docker создаёт их от root, если папок нет на хосте — и переключается на `app` через gosu;
@@ -107,7 +107,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_portable_windows.ps1
 
 ```text
 novelmaestro-portable\
-├── python\            # интерпретатор Python (embeddable 3.12) + requests/tqdm/pyahocorasick
+├── python\            # интерпретатор Python (embeddable 3.12) + httpx/requests/tqdm/pyahocorasick
 ├── core\  cli\  web\  templates\  run.py  …
 ├── start.bat          # запуск: web-сервер + браузер
 └── START.txt          # краткая инструкция по запуску и настройке
