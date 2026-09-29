@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "note": "Локальные библиотеки SPA. Всё раздаётся с этого каталога: интерфейс работает без сети. Верию, происхождение и sha256 описывает tools/vendor_assets.py (check/list/lock/fetch).",
+  "assets": [
+    {
+      "file": "codemirror.min.js",
+      "name": "codemirror",
+      "package": "codemirror (@codemirror/* — самосборный бандл)",
+      "version": "6",
+      "license": "MIT",
+      "homepage": "https://codemirror.net",
+      "kind": "bundle",
+      "url": "",
+      "sha256": "25930e30c03a5c37000b827d0f1bcfa9b82c510759d1a2ca769c6da1c8f45ce3",
+      "bytes": 668473
+    },
+    {
+      "file": "marked.min.js",
+      "name": "marked",
+      "package": "marked",
+      "version": "12.0.2",
+      "license": "MIT",
+      "homepage": "https://github.com/markedjs/marked",
+      "kind": "url",
+      "url": "https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js",
+      "sha256": "15fabce5b65898b32b03f5ed25e9f891a729ad4c0d6d877110a7744aa847a894",
+      "bytes": 35479
+    }
+  ]
+}
