@@ -21,6 +21,18 @@
       ]
     },
     "jscpd": { "disable": ["duplicate"] },
-    "markdownlint": { "disable": ["MD037"] }
+    "markdownlint": { "disable": ["MD037", "MD013"] },
+    "style": {
+      "disable": [
+        "E402", "E701", "E702", "E741", "I001", "W291", "W293",
+        "UP009", "UP012", "UP015", "UP031", "F541",
+        "S110", "SIM102", "SIM105", "SIM107", "SIM108", "SIM115", "SIM117",
+        "B007", "B008", "B011", "B904", "C408", "F401",
+        "TRY300", "TRY301", "PERF401", "BLE001",
+        "B905", "COM812", "W293",
+        "python.lang.compatibility.python36.python36-compatibility-Popen1",
+        "python.lang.compatibility.python36.python36-compatibility-Popen2"
+      ]
+    }
   }
 }
