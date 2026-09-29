@@ -30,8 +30,9 @@ web/      web-интерфейс: server.py + api.py (роуты/хендлер�
 cli/  исполнители — чистый CLI (argparse), без интерактивных меню.
           batch_replace.py — массовые замены (правила «паттерн -> замена»
           из формы/аргументов --replace; файл replacements.txt выпилен);
-tools/    вспомогательные утилиты вне конвейера: rulate_reload/
-          (userscript Rulate, README — tools/rulate_reload/README.md),
+tools/    вспомогательные утилиты вне конвейера (README — tools/README.md):
+          rulate_reload/ (userscript Rulate,
+          README — tools/rulate_reload/README.md),
           NovelMaestro_Lite/ (юзерскрипт-переводчик, README —
           tools/NovelMaestro_Lite/README.md). Юзерскрипт лежит раскладкой:
           meta.js (баннер ==UserScript==, единственный источник @version) +

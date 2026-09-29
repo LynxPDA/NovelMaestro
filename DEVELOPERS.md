@@ -8,6 +8,7 @@
 | [AGENTS.md](AGENTS.md) | Правила и ограничения для AI-агентов (контракт) |
 | [core/README.md](core/README.md) | API общего модуля `core/` |
 | [web/README.md](web/README.md) | Контракт web-слоя и API |
+| [tools/README.md](tools/README.md) | Вспомогательные утилиты вне конвейера: обзор и сборка |
 | [tools/rulate_reload/README.md](tools/rulate_reload/README.md) | Юзерскрипт массового обновления глав на Rulate |
 | [tools/NovelMaestro_Lite/README.md](tools/NovelMaestro_Lite/README.md) | Юзерскрипт-переводчик NovelMaestro Lite |
 | [packaging/README.md](packaging/README.md) | Релизные сборки (Docker, Windows) |
@@ -24,9 +25,9 @@ web/      web-интерфейс: server.py + api.py (роуты/хендлер�
           pipeline.py (web-оркестратор конвейера), static/ (SPA).
           Контракт API — web/README.md.
 cli/      исполнители — чистый CLI (argparse), без интерактивных меню.
-tools/    вспомогательные утилиты вне конвейера: два юзерскрипта
-          (meta.js + src/NNN-slug.js → собранные <имя>.user.js и <имя>.meta.js) и
-          build_userscripts.py — сборщик.
+tools/    вспомогательные утилиты вне конвейера (README — tools/README.md):
+          два юзерскрипта (meta.js + src/NNN-slug.js → собранные
+          <имя>.user.js и <имя>.meta.js) и build_userscripts.py — сборщик.
 templates/ шаблоны новых проектов: общие (.env.example) + подпапки
           по типу книги (General/ с prompts/, source/ и donate.txt).
 run.py    лаунчер: python3 run.py → web/main.py (+браузер).
