@@ -20,16 +20,17 @@ import re
 import json
 import shutil
 import argparse
+import importlib.util
 import threading
 import unicodedata
 from datetime import datetime
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-try:
-    import requests  # noqa: F401 — проверка зависимости (LLM через core.common)
-except ImportError:
-    sys.exit("❌ Требуется: pip install requests")
+# Транспорт LLM один на всех — core/transport.py: httpx (основной) или
+# requests (фолбэк). Проверка без импорта: сама библиотека скрипту не нужна.
+if not any(importlib.util.find_spec(m) for m in ("httpx", "requests")):
+    sys.exit("❌ Требуется: pip install httpx requests")
 
 try:
     from tqdm import tqdm

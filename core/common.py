@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 core/common.py — единый общий модуль проекта NovelMaestro.
-Замена core/utils.py. Зависимости: stdlib + requests (+ опционально pyahocorasick).
+Замена core/utils.py. Зависимости: stdlib + одна HTTP-библиотека (транспорт —
+core/transport.py: httpx, фолбэк requests) + опционально pyahocorasick.
 Токенизатор НЕ нужен: счёт токенов — оценка estimate_tokens (stdlib).
+Активный стек зависимостей печатает `python3 -m core.deps`.
 
 СОГЛАШЕНИЕ О ЕДИНИЦАХ (важно):
   • Размеры LLM-запросов — в ТОКЕНАХ: chunk_size, request_budget,
@@ -26,7 +28,8 @@ core/common.py — единый общий модуль проекта NovelMaes
   текст         split_text_smart, get_ngrams, is_cjk, is_cjk_string,
                 normalize_for_search, build_smart_regex, find_exact_match
   NER           load_ner_data, find_relevant_ner
-  LLM           stream_chat_completion
+  LLM           stream_chat_completion (транспорт — core/transport.py)
+  зависимости   core/deps.py: реестр внешних библиотек и фолбэков
   файловая ФС   atomic_write, read_text_safe
   главы         parse_chapter_id, build_chapter_map, find_chapter_file,
                 format_ranges, compile_chapter_text, compile_chapter_texts
@@ -49,7 +52,11 @@ import unicodedata
 from math import ceil
 from collections import defaultdict
 
-import requests
+# Внутри пакета — относительные импорты: core импортируется целиком как пакет
+# (bootstrap добавляет в sys.path корень репо, а не core/), а относительная
+# форма остаётся разрешимой для анализаторов, у которых core/ — корень поиска
+from . import transport
+from .transport import (BrokenStream, ConnectTimeout, ReadTimeout, open_stream)
 
 # ══════════════════════════════════════════════════════════════════════
 # .ENV / КОНФИГ (stdlib, без внешних зависимостей)
@@ -1719,8 +1726,9 @@ def stream_chat_completion(
     last_err = "Unknown"
     for attempt in range(max(1, max_retries)):
         try:
-            with requests.post(url, headers=headers, json=payload, stream=True,
-                               timeout=(timeout, stream_timeout)) as resp:
+            with open_stream(url, headers=headers, payload=payload,
+                             connect_timeout=timeout,
+                             read_timeout=stream_timeout) as resp:
                 if resp.status_code != 200:
                     last_err = f"HTTP {resp.status_code}"
                     # H3 (AUDIT): ретраим ТОЛЬКО 408/425/429/5xx;
@@ -1774,11 +1782,11 @@ def stream_chat_completion(
                     last_err = "Length ratio check failed"
                     time.sleep(_retry_wait(attempt)); continue
                 return full, ""
-        except requests.exceptions.ReadTimeout:
+        except ReadTimeout:
             last_err = f"Read timeout ({stream_timeout}s)"
-        except requests.exceptions.Timeout:
+        except ConnectTimeout:
             last_err = "Conn timeout"
-        except requests.exceptions.ChunkedEncodingError:
+        except BrokenStream:
             last_err = "Chunked error"
         except Exception as e:  # noqa: BLE001
             last_err = str(e)

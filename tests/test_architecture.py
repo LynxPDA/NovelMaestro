@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """Архитектурные стражи (AGENTS.md §3–§4, web-first):
 статические проверки по исходникам. Ловят будущие правки, ломающие
-слоистость, единую LLM-гигиену и web-канон (без cli/tui)."""
+слоистость, единую LLM-гигиену (один транспорт — core/transport.py),
+политику внешних библиотек и web-канон (без cli/tui)."""
 import re
 import sys
 from pathlib import Path
@@ -76,6 +77,25 @@ def test_script_uses_core_stream_not_requests_post(script):
         f"{script.name}: свой SSE-обработчик запрещён"
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Внешние библиотеки: HTTP-клиент импортирует ТОЛЬКО core/transport.py
+# ══════════════════════════════════════════════════════════════════════
+HTTP_IMPORT_RE = re.compile(r"^\s*(?:import|from)\s+(?:requests|httpx)\b", re.M)
+ENTRYPOINTS = [CORE, ROOT / "run.py", *SCRIPTS, *WEB]
+
+
+@pytest.mark.parametrize("entry", ENTRYPOINTS, ids=lambda p: p.name)
+def test_only_transport_imports_http_library(entry):
+    """Точка выхода в сеть одна: httpx/requests видит только транспорт."""
+    if entry.name == "transport.py":
+        pytest.skip("транспорт — единственное место HTTP-библиотек")
+    src = entry.read_text(encoding="utf-8")
+    found = HTTP_IMPORT_RE.search(src)
+    assert found is None, (
+        f"{entry.name}: HTTP-библиотека импортируется напрямую — "
+        f"только core/transport.py ({found.group(0).strip()})")
+
+
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
 def test_script_has_no_local_determine_model(script):
     src = script.read_text(encoding="utf-8")
@@ -93,6 +113,13 @@ def test_entry_has_bootstrap(entry):
         pytest.skip("модуль не импортирует core — bootstrap не обязателен")
     assert "_bootstrap_core" in src, f"{entry.name}: нет bootstrap-паттерна (§4)"
     assert "sys.path" in src
+
+
+@pytest.mark.parametrize("module", WEB, ids=lambda p: p.name)
+def test_web_module_does_not_call_http_directly(module):
+    """web-слой не ходит в LLM сам: процессы стадий — subprocess, HTTP — там."""
+    src = module.read_text(encoding="utf-8")
+    assert "iter_lines" not in src, f"{module.name}: свой SSE-обработчик запрещён"
 
 
 @pytest.mark.parametrize("module", WEB, ids=lambda p: p.name)

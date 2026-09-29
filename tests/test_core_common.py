@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """core/common.py — полное покрытие: P0-канон (главы, .env, промпты,
-текст, NER-поиск), стрим LLM (моки requests), determine_model,
-логирование, файловые утилиты, детектор зацикливания."""
+текст, NER-поиск), стрим LLM (мок транспорта core/transport.py),
+determine_model, логирование, файловые утилиты, детектор зацикливания."""
 import json
 import os
 import re
@@ -10,7 +10,6 @@ import sys
 from pathlib import Path
 
 import pytest
-import requests as real_requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core import common as C  # noqa: E402
@@ -1368,6 +1367,8 @@ def test_load_rules_block(tmp_path):
 # МОКИ ДЛЯ stream_chat_completion
 # ══════════════════════════════════════════════════════════════════════
 class _FakeResp:
+    """Заглушка ResponseStream из core/transport.py (тот же контракт)."""
+
     def __init__(self, lines=(), status=200, headers=None):
         self._lines = list(lines)
         self.status_code = status
@@ -1397,13 +1398,18 @@ def _sse(parts, finish=None, done=True, raw_extra=()):
 
 
 def _patch_post(monkeypatch, lines=(), status=200, capture=None):
-    def fake_post(url, headers=None, json=None, stream=None, timeout=None):
+    """Мок единого шва транспорта: core.common.open_stream(url, headers=…,
+    payload=…, connect_timeout=…, read_timeout=…). В capture — прежние ключи
+    (json/timeout), чтобы проверки payload не переписывать."""
+
+    def fake_open_stream(url, *, headers=None, payload=None,
+                        connect_timeout=None, read_timeout=None):
         if capture is not None:
-            capture.update(url=url, headers=headers or {}, json=json or {},
-                           timeout=timeout)
+            capture.update(url=url, headers=headers or {}, json=payload or {},
+                           timeout=(connect_timeout, read_timeout))
         return _FakeResp(lines, status)
 
-    monkeypatch.setattr(C.requests, "post", fake_post)
+    monkeypatch.setattr(C, "open_stream", fake_open_stream)
 
 
 @pytest.fixture(autouse=True)
@@ -1522,11 +1528,11 @@ def test_stream_http_401_no_retry(monkeypatch):
     """H3 (AUDIT): 401/403/404 — НЕ ретраим (битый ключ/запрос)."""
     calls = {"n": 0}
 
-    def fake_post(url, headers=None, json=None, stream=None, timeout=None):
+    def fake_open_stream(url, **kw):
         calls["n"] += 1
         return _FakeResp([], status=401)
 
-    monkeypatch.setattr(C.requests, "post", fake_post)
+    monkeypatch.setattr(C, "open_stream", fake_open_stream)
     text, err = C.stream_chat_completion("h", "m", [], max_retries=5)
     assert text is None and err == "HTTP 401" and calls["n"] == 1
 
@@ -1535,13 +1541,13 @@ def test_stream_http_429_retries_with_retry_after(monkeypatch):
     """H3: 429 ретраится; Retry-After уважается (sleep замокан)."""
     calls = {"n": 0}
 
-    def fake_post(url, headers=None, json=None, stream=None, timeout=None):
+    def fake_open_stream(url, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
             return _FakeResp([], status=429, headers={"Retry-After": "3"})
         return _FakeResp(_sse(["после паузы"]))
 
-    monkeypatch.setattr(C.requests, "post", fake_post)
+    monkeypatch.setattr(C, "open_stream", fake_open_stream)
     text, err = C.stream_chat_completion("h", "m", [], max_retries=3)
     assert err == "" and text == "после паузы" and calls["n"] == 2
 
@@ -1550,11 +1556,11 @@ def test_stream_http_500_retries_then_fails(monkeypatch):
     """H3: 5xx ретраится до исчерпания попыток."""
     calls = {"n": 0}
 
-    def fake_post(url, headers=None, json=None, stream=None, timeout=None):
+    def fake_open_stream(url, **kw):
         calls["n"] += 1
         return _FakeResp([], status=503)
 
-    monkeypatch.setattr(C.requests, "post", fake_post)
+    monkeypatch.setattr(C, "open_stream", fake_open_stream)
     text, err = C.stream_chat_completion("h", "m", [], max_retries=3)
     assert text is None and err == "HTTP 503" and calls["n"] == 3
 
@@ -1574,36 +1580,36 @@ def test_stream_garbage_lines_skipped(monkeypatch):
 def test_stream_timeouts_and_retry_success(monkeypatch):
     calls = {"n": 0}
 
-    def fake_post(url, headers=None, json=None, stream=None, timeout=None):
+    def fake_open_stream(url, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise real_requests.exceptions.ReadTimeout()
+            raise C.ReadTimeout()
         if calls["n"] == 2:
-            raise real_requests.exceptions.Timeout()
+            raise C.ConnectTimeout()
         if calls["n"] == 3:
-            raise real_requests.exceptions.ChunkedEncodingError()
+            raise C.BrokenStream()
         return _FakeResp(_sse(["успех после ретраев"]))
 
-    monkeypatch.setattr(C.requests, "post", fake_post)
+    monkeypatch.setattr(C, "open_stream", fake_open_stream)
     text, err = C.stream_chat_completion("h", "m", [], max_retries=5)
     assert err == "" and text == "успех после ретраев" and calls["n"] == 4
 
 
 def test_stream_timeout_exhausts_retries(monkeypatch):
-    def fake_post(*a, **k):
-        raise real_requests.exceptions.ReadTimeout()
+    def fake_open_stream(*a, **k):
+        raise C.ReadTimeout()
 
-    monkeypatch.setattr(C.requests, "post", fake_post)
+    monkeypatch.setattr(C, "open_stream", fake_open_stream)
     text, err = C.stream_chat_completion("h", "m", [], max_retries=2,
                                          stream_timeout=900)
     assert text is None and err == "Read timeout (900s)"
 
 
 def test_stream_generic_exception_and_logger(monkeypatch, caplog):
-    def fake_post(*a, **k):
+    def fake_open_stream(*a, **k):
         raise RuntimeError("всё сломалось")
 
-    monkeypatch.setattr(C.requests, "post", fake_post)
+    monkeypatch.setattr(C, "open_stream", fake_open_stream)
     log = SilentLog()
     text, err = C.stream_chat_completion("h", "m", [], max_retries=1,
                                          logger=log, label="[ТЕСТ]")

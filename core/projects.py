@@ -708,7 +708,7 @@ def project_progress_table(pdir: Path) -> dict:
     Имена артефактов — канонические ИЛИ легаси-суффиксы (как
     project_stats); номера глав — канон parse_chapter_id (core.common).
     """
-    from core.common import parse_chapter_id  # лениво: избегаем циклов
+    from .common import parse_chapter_id  # лениво: избегаем циклов
 
     pdir = Path(pdir)
     ch = pdir / "chapters"

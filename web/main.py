@@ -46,6 +46,7 @@ def _bootstrap_core() -> None:
 
 
 _bootstrap_core()
+from core.deps import format_status as deps_status  # noqa: E402
 from core.projects import ensure_projects_root  # noqa: E402
 
 from web import api, auth, server  # noqa: E402
@@ -229,6 +230,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     use_auth = args.auth and not args.no_auth
     _setup_logging()
+    # активный стек внешних библиотек: деградация видна сразу, а не после
+    # «почему NER такой медленный» (реестр — core/deps.py)
+    log.info("Стек зависимостей: %s", deps_status())
     projects_root = _find_repo_root() / "projects"
     if args.projects_dir:
         projects_root = Path(args.projects_dir).expanduser().resolve()

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import importlib.util
 import json
 import os
 import shutil
@@ -52,10 +53,10 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-try:
-    import requests  # noqa: F401 — проверка зависимости (LLM через core.common)
-except ImportError:
-    sys.exit("❌ Требуется: pip install requests")
+# Транспорт LLM один на всех — core/transport.py: httpx (основной) или
+# requests (фолбэк). Проверка без импорта: сама библиотека скрипту не нужна.
+if not any(importlib.util.find_spec(m) for m in ("httpx", "requests")):
+    sys.exit("❌ Требуется: pip install httpx requests")
 
 # ── bootstrap: поиск core/common.py подъёмом от скрипта ──
 def _bootstrap_core() -> None:

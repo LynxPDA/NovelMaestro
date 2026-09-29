@@ -3,10 +3,11 @@
 """Свежесть документации: AGENTS.md ↔ код, пути из быстрой проверки.
 
 Страховка от рассинхрона: имена функций в таблице §6 AGENTS.md обязаны
-существовать в core/common.py и core/projects.py и упоминаться в самом
-файле; пути в backticks (cli/, web/, tests/, *.md, run.py) —
-существовать. Добавил функцию в таблицу §6 — добавь её и сюда
-(CORE_API/PROJECTS_API). Запуск: python3 -m pytest tests/ -q"""
+существовать в core/common.py, core/projects.py, core/transport.py,
+core/deps.py и упоминаться в самом файле; пути в backticks (cli/, web/,
+tests/, *.md, run.py) — существовать. Добавил функцию в таблицу §6 —
+добавь её и сюда (CORE_API/PROJECTS_API/TRANSPORT_API/DEPS_API).
+Запуск: python3 -m pytest tests/ -q"""
 import re
 import sys
 from pathlib import Path
@@ -16,7 +17,9 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from core import common as C  # noqa: E402
+from core import deps as D  # noqa: E402
 from core import projects as PRJ  # noqa: E402
+from core import transport as T  # noqa: E402
 
 AGENTS_MD = ROOT / "AGENTS.md"
 
@@ -58,6 +61,14 @@ PROJECTS_API = ["SECTIONS", "DEFAULT_SECTIONS", "load_sections",
                 "create_template_dir", "render_metadata",
                 "fill_project_from_template", "write_project_metadata",
                 "delete_project", "copy_project"]
+# Зеркало API core/transport.py (единственная точка выхода в сеть)
+TRANSPORT_API = ["TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStream",
+                 "ResponseStream", "open_stream", "backend", "installed_backends",
+                 "reset_client"]
+# Зеркало API core/deps.py (реестр внешних зависимостей)
+DEPS_API = ["ROLES", "status", "format_status", "missing_hint"]
+
+
 def _agents_text() -> str:
     assert AGENTS_MD.is_file(), "AGENTS.md отсутствует в корне репо"
     return AGENTS_MD.read_text(encoding="utf-8")
@@ -85,6 +96,20 @@ def test_projects_api_mentioned_in_agents_md(name):
 @pytest.mark.parametrize("name", CORE_API)
 def test_core_api_mentioned_in_agents_md(name):
     """Таблица §6 не потеряла ни одной функции из зеркала."""
+    assert re.search(rf"\b{name}\b", _agents_text()), \
+        f"{name} не упоминается в AGENTS.md — таблица §6 устарела"
+
+
+@pytest.mark.parametrize("name", TRANSPORT_API + DEPS_API)
+def test_transport_deps_api_exists_in_code(name):
+    """API транспорта и реестра зависимостей существует в core (зеркало §6)."""
+    module = T if name in TRANSPORT_API else D
+    assert hasattr(module, name), f"{module.__name__}.{name} исчезла"
+
+
+@pytest.mark.parametrize("name", TRANSPORT_API + DEPS_API)
+def test_transport_deps_api_mentioned_in_agents_md(name):
+    """Строки §6 про транспорт и зависимости полные: имён там терять нельзя."""
     assert re.search(rf"\b{name}\b", _agents_text()), \
         f"{name} не упоминается в AGENTS.md — таблица §6 устарела"
 
