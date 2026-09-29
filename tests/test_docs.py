@@ -26,6 +26,7 @@ CORE_API = [
     "get_server_config", "get_stage_model", "print_env_help",
     "setup_logging", "log_argv", "determine_model",
     "load_prompt", "get_tagged_prompt",
+    "estimate_tokens", "split_at_tokens", "trim_to_tokens",
     "split_text_smart",
     "get_ngrams", "is_cjk", "is_cjk_string", "find_exact_match",
     "trim_rule_left", "trim_rule_right",

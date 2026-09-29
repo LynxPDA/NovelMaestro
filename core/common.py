@@ -3,16 +3,21 @@
 """
 core/common.py — единый общий модуль проекта NovelMaestro.
 Замена core/utils.py. Зависимости: stdlib + requests (+ опционально pyahocorasick).
-tiktoken НЕ используется и не требуется.
+Токенизатор НЕ нужен: счёт токенов — оценка estimate_tokens (stdlib).
 
 СОГЛАШЕНИЕ О ЕДИНИЦАХ (важно):
-  • ВСЕ внутренние расчёты — в СИМВОЛАХ: chunk_size, context_budget,
-    min_len_ratio (безразмерная), пороги длин.
-  • ТОКЕНЫ встречаются ТОЛЬКО в двух местах:
-      - max_tokens в payload — серверный предохранитель, не расчёт;
-      - --near-distance в wiki.py — дистанция FTS5 NEAR (природа FTS5).
+  • Размеры LLM-запросов — в ТОКЕНАХ: chunk_size, request_budget,
+    context_budget, batch_size/rag_budget, budget (translate_quality),
+    размер чанков FTS5 — везде оценка estimate_tokens (±20–30%,
+    язык-осведомлённая).
+  • СИМВОЛЫ остаются: min_len_ratio (безразмерное отношение длин,
+    считается в символах), context_max_len (контекст термина), длины
+    названий каталогов, min_fix_length, max_changed_chars.
+  • max_tokens в payload — серверный предохранитель (ТОКЕНЫ);
+    --near-distance в wiki.py — дистанция FTS5 NEAR (природа FTS5).
 
 СОДЕРЖИМОЕ (для заимствований):
+  токены       estimate_tokens (таблица весов по скриптам + фолбэк)
   конфиг/.env   parse_dotenv, find_env_file,
                 get_server_config, get_stage_model, print_env_help
   логирование   setup_logging
@@ -28,6 +33,7 @@ tiktoken НЕ используется и не требуется.
 """
 from __future__ import annotations
 
+import bisect
 import difflib
 import json
 import logging
@@ -40,6 +46,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+from math import ceil
 from collections import defaultdict
 
 import requests
@@ -54,7 +61,7 @@ def parse_dotenv(path) -> dict:
     if not path or not os.path.isfile(path):
         return result
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -279,7 +286,7 @@ def load_prompt(path, logger=None):
     if not path or not os.path.isfile(path):
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read().strip()
         return content or None
     except OSError as e:
@@ -302,7 +309,128 @@ def get_tagged_prompt(content: str, tag: str):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# ТЕКСТ (всё в символах)
+# ТОКЕНЫ (язык-осведомлённая оценка числа токенов)
+# ══════════════════════════════════════════════════════════════════════
+# Веса «токенов на символ» по скриптам — средние значения современных
+# BPE чат-моделей. Абсолютная точность не нужна: важно, чтобы один и тот
+# же chunk_size означал реалистичный бюджет запроса и на русском,
+# и на китайском/японском/корейском/тайском текстах.
+_TOKEN_RANGES = tuple(sorted((
+    # латиница (включая расширенную и вьетнамскую с диакритикой)
+    (0x0041, 0x005A, 0.30), (0x0061, 0x007A, 0.30),
+    (0x00C0, 0x024F, 0.30), (0x1E00, 0x1EFF, 0.30),
+    # кириллица (включая расширенную)
+    (0x0400, 0x052F, 0.30),
+    # греческий
+    (0x0370, 0x03FF, 0.35), (0x1F00, 0x1FFF, 0.35),
+    # иврит
+    (0x0590, 0x05FF, 0.40), (0xFB1D, 0xFB4F, 0.40),
+    # арабский
+    (0x0600, 0x06FF, 0.50), (0x0750, 0x077F, 0.50),
+    (0x0870, 0x08FF, 0.50), (0xFB50, 0xFDFF, 0.50),
+    (0xFE70, 0xFEFF, 0.50),
+    # индийские (деванагари … сингальский)
+    (0x0900, 0x0DFF, 0.55),
+    # тайский, лаосский, кхмерский, мьянманский
+    (0x0E00, 0x0EFF, 0.60), (0x1780, 0x17FF, 0.60),
+    (0x19E0, 0x19FF, 0.60), (0x1000, 0x109F, 0.60),
+    # хангыль
+    (0x1100, 0x11FF, 0.80), (0x3130, 0x318F, 0.80),
+    (0xA960, 0xA97F, 0.80), (0xAC00, 0xD7AF, 0.80),
+    (0xD7B0, 0xD7FF, 0.80),
+    # каны
+    (0x3040, 0x30FF, 1.00), (0x31F0, 0x31FF, 1.00),
+    # CJK-идеографы (база + расширения A/B/C/D + совместимые)
+    (0x3400, 0x4DBF, 1.00), (0x4E00, 0x9FFF, 1.00),
+    (0xF900, 0xFAFF, 1.00), (0x20000, 0x2FA1F, 1.00),
+)))
+# Фолбэки для всего, чего нет в таблице: неучтённую письменность считаем
+# с запасом — пересчёт безопаснее недоучёта (чанк станет меньше,
+# ничего не обрежется).
+_TOKEN_WEIGHT_OTHER = 0.50   # буквы неучтённых скриптов и цифры
+_TOKEN_WEIGHT_PUNCT = 0.35   # знаки препинания, символы, эмодзи
+_TOKEN_RESERVE = 1.1         # запас оценки, +10%
+_TOKEN_RANGE_LOS = tuple(lo for lo, _, _ in _TOKEN_RANGES)
+
+
+def _token_weight(cp: int):
+    """Вес токена для кодовой точки по таблице; None — вне таблицы."""
+    i = bisect.bisect_right(_TOKEN_RANGE_LOS, cp) - 1
+    if i >= 0 and cp <= _TOKEN_RANGES[i][1]:
+        return _TOKEN_RANGES[i][2]
+    return None
+
+
+def estimate_tokens(text) -> int:
+    """Язык-осведомлённая ОЦЕНКА числа токенов (±20–30%).
+
+    Основные скрипты веб-новелл — в таблице _TOKEN_RANGES: латиница/
+    кириллица ~0.30 токена на символ, CJK-идеографы и каны ~1.0,
+    хангыль ~0.8, тайский/лаосский/кхмерский/мьянманский ~0.6,
+    индийские ~0.55, арабский ~0.5, иврит ~0.4, греческий ~0.35.
+    Буквы неучтённых скриптов и цифры — фолбэк 0.5 (пересчёт
+    безопаснее недоучёта); знаки препинания/символы/эмодзи — 0.35.
+    Подряд идущие пробельные символы (любых языков, включая U+3000) —
+    1 токен. Итог — округление вверх с запасом +10%; пустая строка — 0.
+    Единицы размеров запросов (chunk_size, бюджеты) — ТОКЕНЫ;
+    min_len_ratio остаётся символьным отношением длин."""
+    if not text:
+        return 0
+    total = 0.0
+    in_ws = False
+    for ch in str(text):
+        if ch.isspace():
+            if not in_ws:
+                total += 1.0
+                in_ws = True
+            continue
+        in_ws = False
+        w = _token_weight(ord(ch))
+        if w is None:
+            w = (_TOKEN_WEIGHT_OTHER
+                 if unicodedata.category(ch)[0] in ("L", "N")
+                 else _TOKEN_WEIGHT_PUNCT)
+        total += w
+    return ceil(total * _TOKEN_RESERVE)
+
+
+def split_at_tokens(text: str, budget: int) -> tuple[str, str]:
+    """Граница budget ТОКЕНОВ (оценка estimate_tokens) в тексте.
+
+    Возвращает (голова ≤ budget, хвост); если весь текст влезает —
+    (text, ""). Один проход с теми же весами, что estimate_tokens."""
+    text = text or ""
+    if not text or budget <= 0:
+        return "", text
+    total = 0.0
+    in_ws = False
+    limit = budget / _TOKEN_RESERVE
+    for i, ch in enumerate(text):
+        if ch.isspace():
+            if not in_ws:
+                total += 1.0
+                in_ws = True
+            continue
+        in_ws = False
+        w = _token_weight(ord(ch))
+        if w is None:
+            w = (_TOKEN_WEIGHT_OTHER
+                 if unicodedata.category(ch)[0] in ("L", "N")
+                 else _TOKEN_WEIGHT_PUNCT)
+        total += w
+        if total > limit:
+            return text[:i], text[i:]
+    return text, ""
+
+
+def trim_to_tokens(text: str, budget: int) -> str:
+    """Начало текста не длиннее budget ТОКЕНОВ (оценка estimate_tokens);
+    если весь текст влезает — возвращается целиком."""
+    return split_at_tokens(text, budget)[0]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ТЕКСТ
 # ══════════════════════════════════════════════════════════════════════
 def get_ngrams(text, n=3) -> set:
     """Множество n-грамм строки (lower)."""
@@ -314,25 +442,29 @@ def get_ngrams(text, n=3) -> set:
     return {text[i:i + n] for i in range(len(text) - n + 1)}
 
 
-def split_text_smart(text, target_chars=7000, multiplier=1.3, logger=None):
-    """Разбивка на чанки ПО СИМВОЛАМ (абзацы → предложения).
-    hard_limit = target * multiplier."""
+def split_text_smart(text, target_tokens=7000, multiplier=1.3, logger=None):
+    """Разбивка на чанки ПО ТОКЕНАМ (абзацы → предложения).
+
+    target_tokens — целевой размер чанка в ТОКЕНАХ (оценка
+    estimate_tokens); hard_limit = target * multiplier. Имена флагов
+    --chunk_size в CLI/env сохранены по решению пользователя, единица —
+    токены."""
     if logger:
-        logger.info(f"✂️  Разбиение текста (цель: {target_chars} символов)...")
+        logger.info(f"✂️  Разбиение текста (цель: {target_tokens} токенов)...")
     lines = text.splitlines(keepends=True)
     chunks, current_chunk = [], []
     current_len = 0
     try:
-        hard_limit = int(target_chars * multiplier)
+        hard_limit = int(target_tokens * multiplier)
     except (TypeError, ValueError, OverflowError):
-        hard_limit = target_chars
+        hard_limit = target_tokens
     sent_re = re.compile(r"(?<=[.!?。؟؟;；])\s+")
     for line in lines:
-        line_len = len(line)
+        line_len = estimate_tokens(line)
         if line_len > hard_limit:
             sentences = sent_re.split(line.rstrip("\n"))
             for sent in sentences:
-                sent_len = len(sent)
+                sent_len = estimate_tokens(sent)
                 if current_len + sent_len > hard_limit and current_chunk:
                     chunks.append("".join(current_chunk))
                     current_chunk, current_len = [], 0
@@ -346,7 +478,7 @@ def split_text_smart(text, target_chars=7000, multiplier=1.3, logger=None):
             current_chunk, current_len = [], 0
         current_chunk.append(line)
         current_len += line_len
-        if current_len >= target_chars:
+        if current_len >= target_tokens:
             chunks.append("".join(current_chunk))
             current_chunk, current_len = [], 0
     if current_chunk:
@@ -454,11 +586,11 @@ def _trim_context(text: str, a: int, b: int, s: int, e: int,
     if term_len >= max_len:
         return _collapse_ws(text[a:a + max_len])
     left = (max_len - term_len) // 2
-    l = max(s, a - left)
-    r = min(e, l + max_len)
-    if r - l < max_len:
-        l = max(s, r - max_len)
-    return _collapse_ws(text[l:r])
+    lo = max(s, a - left)
+    hi = min(e, lo + max_len)
+    if hi - lo < max_len:
+        lo = max(s, hi - max_len)
+    return _collapse_ws(text[lo:hi])
 
 
 def extract_term_context(text: str, term: str,
@@ -582,7 +714,7 @@ def load_ner_data(filepath, ngram_size, logger):
         logger.warning(f"⚠️ NER file ({filepath}) not found. Working without dictionary.")
         return [], None
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         logger.error(f"❌ Error reading NER file: {e}")
@@ -793,7 +925,7 @@ def load_examples(filepath, ngram_size=3, logger=None):
                            "Few-shot выключен.")
         return []
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         if logger:
@@ -902,7 +1034,7 @@ def load_rules_block(filepath, logger=None):
             logger.warning(f"⚠️ Файл правил ({filepath}) не найден.")
         return ""
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             content = f.read()
     except OSError as e:
         if logger:
@@ -1034,10 +1166,8 @@ def format_ner_record(item, fields=None):
         if selected is not None and field not in selected:
             continue
         value = item.get(field)
-        if field == "aliases":
-            if not value:
-                continue
-        elif isinstance(value, (dict, list)):
+        # aliases и dict/list пишутся как есть; скаляры — в str
+        if field == "aliases" or isinstance(value, (dict, list)):
             if not value:
                 continue
         else:
@@ -1065,7 +1195,7 @@ def glossary_body(items, fields=None):
 
 
 def build_ner_batches(items, budget, fields=None):
-    """Резка глоссария на батчи по бюджету (СИМВОЛЫ).
+    """Резка глоссария на батчи по бюджету (ТОКЕНЫ, estimate_tokens).
     Записи сортируются по count по убыванию — самые частотные термины
     попадают в первый батч. Возвращает список списков записей;
     в норме один батч (бюджет ~ контекст сервера)."""
@@ -1075,11 +1205,12 @@ def build_ner_batches(items, budget, fields=None):
     for item in ordered:
         block = json.dumps(
             format_ner_record(item, fields), ensure_ascii=False)
-        if cur and cur_len + len(block) > budget:
+        blen = estimate_tokens(block)
+        if cur and cur_len + blen > budget:
             batches.append(cur)
             cur, cur_len = [], 0
         cur.append(item)
-        cur_len += len(block)
+        cur_len += blen
     if cur:
         batches.append(cur)
     return batches
@@ -1464,7 +1595,9 @@ def find_fragment_owner(chapter_map, frag, claimed=None, want="polished",
             continue
         try:
             text = unicodedata.normalize("NFC", read_text_safe(fp))
-        except Exception:
+        except Exception as exc:
+            if logger:
+                logger.debug("Пропуск главы %s: %s", num, exc)
             continue
         if frag in text:
             scored.append((len(frag), num))
@@ -1562,8 +1695,10 @@ def stream_chat_completion(
     """Стрим-запрос к OpenAI-совместимому API.
     Возвращает (text | None, error_str).
     Гигиена: [DONE]/finish_reason, детект зацикливания, обрезка max_tokens,
-    пустой ответ, min_len_ratio к reference_len (в символах).
-    max_tokens — серверный предел (ТОКЕНЫ), всё остальное — символы.
+    пустой ответ, min_len_ratio к reference_len (символьное отношение
+    длин остаётся СИМВОЛЬНЫМ специально: в токенах оно меняло бы смысл
+    для CJK→RU). max_tokens — серверный предел (ТОКЕНЫ); размеры
+    запросов — ТОКЕНЫ (оценка estimate_tokens).
     reasoning_effort: None — поле не шлём (дефолт сервера); строка —
     шлём как есть (в т.ч. "none" — отключение рассуждений)."""
     url = f"{base_url}/chat/completions"
@@ -1700,7 +1835,7 @@ def read_text_safe(path) -> str:
     text = None
     for enc in ("utf-8", "cp1251"):
         try:
-            with open(path, "r", encoding=enc) as f:
+            with open(path, encoding=enc) as f:
                 text = f.read()
         except UnicodeDecodeError:
             continue
@@ -1708,14 +1843,14 @@ def read_text_safe(path) -> str:
             break  # вероятный GBK — пробуем gb18030
         return text
     try:
-        with open(path, "r", encoding="gb18030") as f:
+        with open(path, encoding="gb18030") as f:
             return f.read()
     except UnicodeDecodeError:
         pass
     if text is not None:
         return text  # оба «успешны», но оба мусорные — историческое поведение
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             return f.read()
     except OSError:
         raise  # файл не существует/не читается — как и раньше (OSError)
@@ -1766,20 +1901,27 @@ def preview_request_payload(stage, label, model, messages,
     """JSON-структура предпросмотра первого LLM-запроса стадии.
 
     messages — [{role, content}]; chars — статистика СИМВОЛОВ по
-    ролям и суммарно (токены сервер считает сам). Вызывается
+    ролям и суммарно (отображаемая), tokens — ОЦЕНКА токенов
+    (estimate_tokens) — единица размеров запросов. Вызывается
     скриптами с --preview-request; writes — write_preview_request."""
     role_chars = {}
-    total = 0
+    role_tokens = {}
+    total_chars = 0
+    total_tokens = 0
     for m in messages:
-        n = len(m.get("content") or "")
-        role_chars[m.get("role") or "?"] = n
-        total += n
+        content = m.get("content") or ""
+        role = m.get("role") or "?"
+        role_chars[role] = len(content)
+        role_tokens[role] = estimate_tokens(content)
+        total_chars += len(content)
+        total_tokens += role_tokens[role]
     payload = {
         "stage": stage,
         "label": label,
         "model": model or "",
         "messages": messages,
-        "chars": {**role_chars, "total": total},
+        "chars": {**role_chars, "total": total_chars},
+        "tokens": {**role_tokens, "total": total_tokens},
     }
     if meta:
         payload["meta"] = meta
@@ -1830,7 +1972,8 @@ def _cjk_space(text: str) -> str:
 
 def build_fts_index(text: str, chunk_size: int, logger=None) -> sqlite3.Connection:
     """FTS5-индекс текста в памяти: нарезка на чанки по абзацам
-    (fallback — по chunk_size). Возвращает sqlite3.Connection с таблицей
+    (fallback — по chunk_size). chunk_size — ТОКЕНЫ (оценка
+    estimate_tokens). Возвращает sqlite3.Connection с таблицей
     chunks(searchable, content UNINDEXED, chunk_id UNINDEXED): searchable
     — с пробелами вокруг иероглифов (unicode61 токенизирует сплошную
     CJK-строку одним токеном, подстрока-термин не матчится), content —
@@ -1838,21 +1981,28 @@ def build_fts_index(text: str, chunk_size: int, logger=None) -> sqlite3.Connecti
     paragraphs = re.split(r'\n\s*\n', text)
     chunks: list[str] = []
     current = ""
+    cur_tokens = 0
     for para in paragraphs:
         para = para.strip()
         if not para:
             continue
-        if len(current) + len(para) + 2 > chunk_size and current:
+        if current and cur_tokens + estimate_tokens(para) > chunk_size:
             chunks.append(current)
-            current = para
+            current, cur_tokens = para, estimate_tokens(para)
         else:
             current = current + "\n" + para if current else para
+            cur_tokens = estimate_tokens(current)
     if current:
         chunks.append(current)
 
-    if len(chunks) <= 1 and len(text) > chunk_size:
-        chunks = [text[i:i + chunk_size]
-                  for i in range(0, len(text), chunk_size)]
+    if len(chunks) <= 1 and estimate_tokens(text) > chunk_size:
+        # сплошной текст без абзацев —резка по оценке токенов
+        chunks, rest = [], text
+        while rest:
+            head, rest = split_at_tokens(rest, chunk_size)
+            if not head:
+                head, rest = rest[:1], rest[1:]
+            chunks.append(head)
 
     db = sqlite3.connect(":memory:")
     db.execute(

@@ -64,35 +64,66 @@ def test_normalize_for_search():
 
 def test_split_text_smart_limits():
     text = ("АБВ. " * 200 + "\n") * 20  # ~100k символов
-    chunks = C.split_text_smart(text, target_chars=7000, multiplier=1.3)
+    chunks = C.split_text_smart(text, target_tokens=7000, multiplier=1.3)
     hard = int(7000 * 1.3)
-    assert all(len(c) <= hard + 5 for c in chunks)
+    assert all(C.estimate_tokens(c) <= hard + 60 for c in chunks)
     assert sum(len(c) for c in chunks) >= len(text)  # ничего не потеряно
 
 
 def test_split_text_smart_long_line():
     one_line = ("Предложение номер раз. " * 500) + "\n"  # длиннее hard limit
     hard = int(1000 * 1.2)
-    chunks = C.split_text_smart(one_line, target_chars=1000, multiplier=1.2)
+    chunks = C.split_text_smart(one_line, target_tokens=1000, multiplier=1.2)
     assert len(chunks) > 1
     # грань: на каждое предложение добавляется « \n», но current_len считает
-    # только длину предложения — реальный чанк чуть больше hard limit
-    assert all(len(c) <= hard + 150 for c in chunks)
+    # только оценку предложения — реальный чанк чуть больше hard limit
+    # запас +10% начисляется и на границы предложений внутри чанка
+    assert all(C.estimate_tokens(c) <= hard + 250 for c in chunks)
     assert sum(len(c) for c in chunks) >= len(one_line)
 
 
 def test_split_text_smart_small():
-    assert C.split_text_smart("короткий текст", target_chars=7000) == ["короткий текст"]
+    assert C.split_text_smart("короткий текст", target_tokens=7000) == ["короткий текст"]
 
 
 def test_split_text_smart_with_logger_and_flush():
     # несколько строк, каждая меньше hard, но сумма превышает —
     # покрывает flush-ветку по накоплению
     text = "\n".join(f"строка текста номер {i}." for i in range(50))
-    chunks = C.split_text_smart(text, target_chars=100, multiplier=1.5,
+    chunks = C.split_text_smart(text, target_tokens=100, multiplier=1.5,
                                 logger=SilentLog())
     assert len(chunks) > 1
-    assert all(len(c) <= 160 for c in chunks)
+    assert all(C.estimate_tokens(c) <= int(100 * 1.5) + 30 for c in chunks)
+
+
+# ══════════════════════════════════════════════════════════════════
+# estimate_tokens — язык-осведомлённая оценка (ТОКЕНЫ)
+# ══════════════════════════════════════════════════════════════════
+@pytest.mark.parametrize("text,expected", [
+    ("", 0),                       # пустая строка
+    ("   \n  ", 2),                # прогон пробельных — 1 токен + запас +10%
+    ("Привет, мир! Это тестовый русский текст.", 18),
+    ("林凡说。", 4),      # CJK: ~1 токен на иероглиф и знак конца
+    ("こんにちは", 6),             # каны — likewise ~1/символ
+    ("안녕하세요", 5),              # хангыль — 0.8/символ
+    ("สวัสดี", 4),                 # тайский — 0.6/символ
+    ("Xin chào", 4),      # вьетнамская латиница с диакритикой — 0.3
+    ("مرحبا بالعالم", 8),         # арабский — 0.5/символ
+    ("नमस्ते दुनिया", 9),          # деванагари — 0.55
+    ("Բարև", 3),               # армянский (вне таблицы) — фолбэк 0.5
+    ("2026", 3),                   # цифры — 0.5/символ
+    ("😀🔥", 1),                    # эмодзи — 0.35/символ
+])
+def test_estimate_tokens_scripts(text, expected):
+    assert C.estimate_tokens(text) == expected
+
+
+def test_estimate_tokens_scripts_ratio():
+    # один смысл по длине: китайский считается ~1 токен/иероглиф,
+    # русский — примерно втрое меньше символами
+    assert C.estimate_tokens("字" * 100) > 3 * C.estimate_tokens("ж" * 100)
+    # неучтённая письменность считается с запасом против кириллицы
+    assert C.estimate_tokens("Բ" * 100) > C.estimate_tokens("ж" * 100)
 
 
 def test_is_cjk():
@@ -220,7 +251,7 @@ def test_extract_term_context_fuzzy_cjk_exact_only():
                                   threshold=0.75) == "李晓明走进大殿。"
 
 
-def test_trim_rule_left(): 
+def test_trim_rule_left():
     """Правила замен: паддинг у «->» убирается, значимые пробелы
     у якорей («^  », «  $») сохраняются."""
     assert C.trim_rule_left("Хунг ") == "Хунг"
@@ -697,12 +728,12 @@ def test_first_nonempty_line_chunk_cut(tmp_path):
     ТОЛЬКО первая строка, а не весь буфер (иначе utf-8 падает и
     фолбек cp1251 даёт «Р“Р»Р°РІР°»-кракозябры).
     """
-    head = "Глава 1. Проиграл всё\n\n".encode("utf-8")
-    filler = "Текст главы. ".encode("utf-8") * 120
+    head = "Глава 1. Проиграл всё\n\n".encode()
+    filler = "Текст главы. ".encode() * 120
     buf = head + filler
     assert len(buf) < 4095
     buf += b"x" * (4095 - len(buf))
-    buf += "Ж".encode("utf-8") + "\nхвост".encode("utf-8")
+    buf += "Ж".encode() + "\nхвост".encode()
     p = tmp_path / "polished.txt"
     p.write_bytes(buf)
     assert C._first_nonempty_line(str(p)) == "Глава 1. Проиграл всё"
@@ -1473,7 +1504,7 @@ def test_stream_min_len_ratio(monkeypatch):
 
 def test_stream_min_len_ratio_passes(monkeypatch):
     # разнообразный текст, чтобы не сработал loop-детект
-    varied = "Слово%d отличается. " % 1 + "".join(f"фраза{i} " for i in range(120))
+    varied = "Слово1 отличается. " + "".join(f"фраза{i} " for i in range(120))
     _patch_post(monkeypatch, _sse([varied]))
     text, err = C.stream_chat_completion("h", "m", [], max_retries=1,
                                          min_len_ratio=0.5,
