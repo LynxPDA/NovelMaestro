@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Зависимости (только requests — для core.common)
+      - name: Зависимости (один кандидат транспорта — для core.common)
         run: python3 -m pip install --quiet requests
 
       - name: Артефакты обязаны совпадать со сборкой
