@@ -69,8 +69,6 @@
     $('#btn-clear-glossary').addEventListener('click', clearGlossary);
     $('#btn-reset-settings').addEventListener('click', resetSettings);
     $('#btn-check-server').addEventListener('click', checkServer);
-    $('#btn-full-export').addEventListener('click', exportAllData);
-    $('#btn-full-import').addEventListener('click', importAllData);
     $('#btn-save-new-book').addEventListener('click', saveNewBook);
     $('#btn-cancel-new-book').addEventListener('click', () => bookModal.classList.remove('active'));
     $('#btn-autofill-url').addEventListener('click', () => { $('#book-modal-url').value = suggestBookKeyFromUrl(); });

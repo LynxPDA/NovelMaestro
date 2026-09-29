@@ -15,7 +15,7 @@
         $('#local-model').checked = !!config.localModel;
         $('#api-key').disabled = !!config.localModel;
         $('#preemptive-translate').checked = !!config.preemptiveTranslation;
-        $('#gm-transport').checked = (config.gmTransport === 'auto' ? 'page' : config.gmTransport) === 'page';
+        $('#gm-transport').checked = (config.gmTransport === 'auto' ? 'page' : config.gmTransport) === 'manager';
         $('#reader-theme').value = config.readerTheme;
         $('#reader-font-family').value = config.readerFontFamily;
         $('#reader-font-size').value = config.readerFontSize;
@@ -70,7 +70,7 @@
             scheduleSettingsSave();
         });
         $('#preemptive-translate').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
-        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'page' : 'manager'; scheduleSettingsSave(); });
+        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'manager' : 'page'; scheduleSettingsSave(); });
     }
     function resetSettings() {
         if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;
@@ -101,46 +101,4 @@
         updateGlossaryUI();
     }
 
-    // ===== БЭКАП =====
-    function exportAllData() {
-        const backup = { version: APP_VERSION, exportedAt: new Date().toISOString(), config, books };
-        const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `novelmaestro-backup-${new Date().toISOString().slice(0, 10)}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-        showStatus(`Экспортировано: ${Object.keys(books).length} книг. Глоссарии и кэш переводов — в памяти браузера каждого сайта: сохраняйте их экспорт/импортом глоссария на странице книги`, 'success', 'status-backup');
-    }
-    function importAllData() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-        input.onchange = e => {
-            const reader = new FileReader();
-            reader.onload = ev => {
-                try {
-                    const backup = JSON.parse(ev.target.result);
-                    if (!backup.version || !backup.config) throw new Error('Неверный формат файла бэкапа');
-                    const msg = `Импорт бэкапа (v${backup.version} от ${backup.exportedAt || '?'})\n\nКниг: ${Object.keys(backup.books || {}).length}\n\nВНИМАНИЕ: список книг и настройки будут ЗАМЕНЕНЫ (глоссарии и кэш сайтов — нет). Продолжить?`;
-                    if (!confirm(msg)) return;
-                    config = { ...DEFAULT_CONFIG, ...backup.config };
-                    books = backup.books || {};
-                    GM_setValue('config', config);
-                    GM_setValue('books', books);
-                    currentBookKey = findBookByUrl();
-                    managedBookKey = null;
-                    glossaryPage = 0;
-                    loadSettings();
-                    applyTheme();
-                    refreshBookTab();
-                    updateGlossaryUI();
-                    showStatus('✅ Бэкап успешно импортирован!', 'success', 'status-backup');
-                } catch (err) { showStatus('Ошибка импорта: ' + err.message, 'error', 'status-backup'); }
-            };
-            reader.readAsText(e.target.files[0]);
-        };
-        input.click();
-    }
 

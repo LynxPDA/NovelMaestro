@@ -95,8 +95,6 @@
             .nm-server-status.ok { background: #d1fae5; color: #065f46; }
             .nm-server-status.err { background: #fee2e2; color: #991b1b; }
             .nm-server-status.loading { background: #fef3c7; color: #92400e; }
-            .nm-backup-section { margin-top: 24px; padding-top: 20px; border-top: 2px solid #e5e7eb; }
-            .nm-backup-section h3 { font-size: 15px; color: #1f2937; margin-bottom: 8px; }
 
             /* ===== ТЁМНЫЙ UI (меню, модалки, попапы) ===== */
             #nm-root.nm-ui-dark, #nm-root.nm-ui-dark .nm-modal-content { color: #e2e2dc; }
@@ -135,8 +133,6 @@
             #nm-root.nm-ui-dark .nm-server-status.ok { background: #123524; color: #7ee2b8; }
             #nm-root.nm-ui-dark .nm-server-status.err { background: #3d1d1d; color: #f3b4b4; }
             #nm-root.nm-ui-dark .nm-server-status.loading { background: #3d3116; color: #e8c37a; }
-            #nm-root.nm-ui-dark .nm-backup-section { border-color: #3a3f4a; }
-            #nm-root.nm-ui-dark .nm-backup-section h3 { color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-training-instructions, #nm-root.nm-ui-dark .nm-training-popup { background: #1f232b; color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-training-popup h4 { color: #c6c9d0; }
 

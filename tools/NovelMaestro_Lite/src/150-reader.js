@@ -22,7 +22,12 @@
         }
         dyn.textContent = `#nm-reader-mode .nm-reader-content p { margin: 0 0 ${config.readerParagraphSpacing}em 0; }`;
         const toggle = $('#reader-theme-toggle');
-        if (toggle) toggle.title = `Тема: ${THEME_MODE_LABELS[config.readerTheme] || config.readerTheme} — нажать, чтобы переключить`;
+        if (toggle) {
+            // режим прямо в надписи: при светлой системной переход «система→светлая»
+            // визуально ничто, без надписи кажется, что кнопка не работает
+            toggle.textContent = `🌓 Тема: ${THEME_MODE_LABELS[config.readerTheme] || config.readerTheme}`;
+            toggle.title = 'Переключить: как в системе → тёмная → светлая';
+        }
     }
     try {
         if (typeof systemDark.addEventListener === 'function') {

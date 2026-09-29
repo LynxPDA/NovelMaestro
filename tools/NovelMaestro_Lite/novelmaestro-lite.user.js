@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.38
+// @version      1.39
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.38';
+    const APP_VERSION = '1.39';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -836,8 +836,6 @@
             .nm-server-status.ok { background: #d1fae5; color: #065f46; }
             .nm-server-status.err { background: #fee2e2; color: #991b1b; }
             .nm-server-status.loading { background: #fef3c7; color: #92400e; }
-            .nm-backup-section { margin-top: 24px; padding-top: 20px; border-top: 2px solid #e5e7eb; }
-            .nm-backup-section h3 { font-size: 15px; color: #1f2937; margin-bottom: 8px; }
 
             /* ===== ТЁМНЫЙ UI (меню, модалки, попапы) ===== */
             #nm-root.nm-ui-dark, #nm-root.nm-ui-dark .nm-modal-content { color: #e2e2dc; }
@@ -876,8 +874,6 @@
             #nm-root.nm-ui-dark .nm-server-status.ok { background: #123524; color: #7ee2b8; }
             #nm-root.nm-ui-dark .nm-server-status.err { background: #3d1d1d; color: #f3b4b4; }
             #nm-root.nm-ui-dark .nm-server-status.loading { background: #3d3116; color: #e8c37a; }
-            #nm-root.nm-ui-dark .nm-backup-section { border-color: #3a3f4a; }
-            #nm-root.nm-ui-dark .nm-backup-section h3 { color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-training-instructions, #nm-root.nm-ui-dark .nm-training-popup { background: #1f232b; color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-training-popup h4 { color: #c6c9d0; }
 
@@ -1110,8 +1106,8 @@
                             </div>
                             <div class="nm-checkbox-group">
                                 <input type="checkbox" id="gm-transport">
-                                <label for="gm-transport">Сеть из страницы (fetch), канал менеджера — запасной</label>
-                                <small>Режим по умолчанию: запросы идут прямо из страницы и не зависят от фонового канала менеджера (GM_xmlhttpRequest) — у Violentmonkey на части устройств он сломан (в трассе проверки висит только «rs1 +0б»). Хост закрыт CORS — запрос автоматически повторится каналом менеджера. Снимите галочку для старых порядков: сразу и всегда через менеджер.</small>
+                                <label for="gm-transport">Весь трафик только каналом менеджера (GM_xmlhttpRequest)</label>
+                                <small>Галочка — старые порядки (всё через менеджер). По умолчанию снята: запросы идут из страницы, канал менеджера подключается сам при CORS-ошибке.</small>
                             </div>
                         </div>
                         <div class="nm-section">
@@ -1167,13 +1163,6 @@
                         <div class="nm-help" style="margin-bottom:8px;">ℹ️ Настройки сохраняются автоматически при каждом изменении.</div>
                         <button class="nm-btn nm-btn-secondary" id="btn-reset-settings">Сбросить настройки</button>
                         <div class="nm-status" id="status-settings"></div>
-                        <div class="nm-backup-section">
-                            <h3>💾 Полный бэкап</h3>
-                            <p style="font-size:13px;color:#6b7280;margin:0 0 8px 0;">Экспортирует/импортирует <b>все</b> данные: книги с глоссариями, кэш NER, глобальный глоссарий, настройки.</p>
-                            <button class="nm-btn nm-btn-secondary" id="btn-full-export">📤 Экспорт всех данных</button>
-                            <button class="nm-btn nm-btn-secondary" id="btn-full-import">📥 Импорт всех данных</button>
-                            <div class="nm-status" id="status-backup"></div>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -1386,7 +1375,7 @@
     }
     function closeModal() {
         modal.classList.remove('active');
-        ['status-book', 'status-glossary', 'status-settings', 'status-backup'].forEach(hideStatus);
+        ['status-book', 'status-glossary', 'status-settings'].forEach(hideStatus);
     }
     function openBookModal() {
         $('#book-modal-url').value = suggestBookKeyFromUrl();
@@ -2562,7 +2551,12 @@
         }
         dyn.textContent = `#nm-reader-mode .nm-reader-content p { margin: 0 0 ${config.readerParagraphSpacing}em 0; }`;
         const toggle = $('#reader-theme-toggle');
-        if (toggle) toggle.title = `Тема: ${THEME_MODE_LABELS[config.readerTheme] || config.readerTheme} — нажать, чтобы переключить`;
+        if (toggle) {
+            // режим прямо в надписи: при светлой системной переход «система→светлая»
+            // визуально ничто, без надписи кажется, что кнопка не работает
+            toggle.textContent = `🌓 Тема: ${THEME_MODE_LABELS[config.readerTheme] || config.readerTheme}`;
+            toggle.title = 'Переключить: как в системе → тёмная → светлая';
+        }
     }
     try {
         if (typeof systemDark.addEventListener === 'function') {
@@ -3137,7 +3131,7 @@
         $('#local-model').checked = !!config.localModel;
         $('#api-key').disabled = !!config.localModel;
         $('#preemptive-translate').checked = !!config.preemptiveTranslation;
-        $('#gm-transport').checked = (config.gmTransport === 'auto' ? 'page' : config.gmTransport) === 'page';
+        $('#gm-transport').checked = (config.gmTransport === 'auto' ? 'page' : config.gmTransport) === 'manager';
         $('#reader-theme').value = config.readerTheme;
         $('#reader-font-family').value = config.readerFontFamily;
         $('#reader-font-size').value = config.readerFontSize;
@@ -3192,7 +3186,7 @@
             scheduleSettingsSave();
         });
         $('#preemptive-translate').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
-        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'page' : 'manager'; scheduleSettingsSave(); });
+        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'manager' : 'page'; scheduleSettingsSave(); });
     }
     function resetSettings() {
         if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;
@@ -3223,48 +3217,6 @@
         updateGlossaryUI();
     }
 
-    // ===== БЭКАП =====
-    function exportAllData() {
-        const backup = { version: APP_VERSION, exportedAt: new Date().toISOString(), config, books };
-        const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `novelmaestro-backup-${new Date().toISOString().slice(0, 10)}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-        showStatus(`Экспортировано: ${Object.keys(books).length} книг. Глоссарии и кэш переводов — в памяти браузера каждого сайта: сохраняйте их экспорт/импортом глоссария на странице книги`, 'success', 'status-backup');
-    }
-    function importAllData() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-        input.onchange = e => {
-            const reader = new FileReader();
-            reader.onload = ev => {
-                try {
-                    const backup = JSON.parse(ev.target.result);
-                    if (!backup.version || !backup.config) throw new Error('Неверный формат файла бэкапа');
-                    const msg = `Импорт бэкапа (v${backup.version} от ${backup.exportedAt || '?'})\n\nКниг: ${Object.keys(backup.books || {}).length}\n\nВНИМАНИЕ: список книг и настройки будут ЗАМЕНЕНЫ (глоссарии и кэш сайтов — нет). Продолжить?`;
-                    if (!confirm(msg)) return;
-                    config = { ...DEFAULT_CONFIG, ...backup.config };
-                    books = backup.books || {};
-                    GM_setValue('config', config);
-                    GM_setValue('books', books);
-                    currentBookKey = findBookByUrl();
-                    managedBookKey = null;
-                    glossaryPage = 0;
-                    loadSettings();
-                    applyTheme();
-                    refreshBookTab();
-                    updateGlossaryUI();
-                    showStatus('✅ Бэкап успешно импортирован!', 'success', 'status-backup');
-                } catch (err) { showStatus('Ошибка импорта: ' + err.message, 'error', 'status-backup'); }
-            };
-            reader.readAsText(e.target.files[0]);
-        };
-        input.click();
-    }
 
     // ===== СОБЫТИЯ =====
     $('#btn-translate').addEventListener('click', handleTranslate);
@@ -3337,8 +3289,6 @@
     $('#btn-clear-glossary').addEventListener('click', clearGlossary);
     $('#btn-reset-settings').addEventListener('click', resetSettings);
     $('#btn-check-server').addEventListener('click', checkServer);
-    $('#btn-full-export').addEventListener('click', exportAllData);
-    $('#btn-full-import').addEventListener('click', importAllData);
     $('#btn-save-new-book').addEventListener('click', saveNewBook);
     $('#btn-cancel-new-book').addEventListener('click', () => bookModal.classList.remove('active'));
     $('#btn-autofill-url').addEventListener('click', () => { $('#book-modal-url').value = suggestBookKeyFromUrl(); });

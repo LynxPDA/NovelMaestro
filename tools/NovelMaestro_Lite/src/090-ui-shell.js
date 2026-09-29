@@ -120,7 +120,7 @@
     }
     function closeModal() {
         modal.classList.remove('active');
-        ['status-book', 'status-glossary', 'status-settings', 'status-backup'].forEach(hideStatus);
+        ['status-book', 'status-glossary', 'status-settings'].forEach(hideStatus);
     }
     function openBookModal() {
         $('#book-modal-url').value = suggestBookKeyFromUrl();

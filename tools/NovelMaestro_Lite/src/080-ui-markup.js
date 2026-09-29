@@ -127,8 +127,8 @@
                             </div>
                             <div class="nm-checkbox-group">
                                 <input type="checkbox" id="gm-transport">
-                                <label for="gm-transport">Сеть из страницы (fetch), канал менеджера — запасной</label>
-                                <small>Режим по умолчанию: запросы идут прямо из страницы и не зависят от фонового канала менеджера (GM_xmlhttpRequest) — у Violentmonkey на части устройств он сломан (в трассе проверки висит только «rs1 +0б»). Хост закрыт CORS — запрос автоматически повторится каналом менеджера. Снимите галочку для старых порядков: сразу и всегда через менеджер.</small>
+                                <label for="gm-transport">Весь трафик только каналом менеджера (GM_xmlhttpRequest)</label>
+                                <small>Галочка — старые порядки (всё через менеджер). По умолчанию снята: запросы идут из страницы, канал менеджера подключается сам при CORS-ошибке.</small>
                             </div>
                         </div>
                         <div class="nm-section">
@@ -184,13 +184,6 @@
                         <div class="nm-help" style="margin-bottom:8px;">ℹ️ Настройки сохраняются автоматически при каждом изменении.</div>
                         <button class="nm-btn nm-btn-secondary" id="btn-reset-settings">Сбросить настройки</button>
                         <div class="nm-status" id="status-settings"></div>
-                        <div class="nm-backup-section">
-                            <h3>💾 Полный бэкап</h3>
-                            <p style="font-size:13px;color:#6b7280;margin:0 0 8px 0;">Экспортирует/импортирует <b>все</b> данные: книги с глоссариями, кэш NER, глобальный глоссарий, настройки.</p>
-                            <button class="nm-btn nm-btn-secondary" id="btn-full-export">📤 Экспорт всех данных</button>
-                            <button class="nm-btn nm-btn-secondary" id="btn-full-import">📥 Импорт всех данных</button>
-                            <div class="nm-status" id="status-backup"></div>
-                        </div>
                     </div>
                 </div>
             </div>

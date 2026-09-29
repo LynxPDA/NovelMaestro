@@ -165,6 +165,8 @@ def test_lite_reader_ui_invariants():
     assert ids == ["reader-export", "reader-retranslate", "reader-theme-toggle", "reader-settings"], \
         f"порядок панели ⋮ читалки изменился: {ids}"
     assert 'id="btn-export-txt"' not in text, "экспорт TXT вернулся в карточку книги"
+    assert 'btn-full-export' not in text, 'полный бэкап должен быть удалён из настроек'
+    assert 'Тема: ${THEME_MODE_LABELS' in text, 'кнопка темы читалки не подписывает режим' 
     assert 'id="glossary-current-only"' in text, "тумблер «только текущая страница» пропал"
     assert "gmTransport: 'page'" in text and "glossaryCurrentPageOnly: false" in text, \
         "дефолты транспорта/глоссария изменились — обнови тест"
