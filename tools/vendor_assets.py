@@ -33,7 +33,7 @@ import hashlib
 import json
 import re
 import sys
-import urllib.request
+from urllib.request import urlopen
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -66,17 +66,18 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def asset_files(vendor: Path = VENDOR_DIR) -> list[Path]:
+def asset_files(vendor: Path | None = None) -> list[Path]:
     """Файлы вендора (без манифеста), в стабильном порядке."""
+    vendor = VENDOR_DIR if vendor is None else vendor
     if not vendor.is_dir():
         return []
     return sorted(p for p in vendor.iterdir()
                   if p.is_file() and p.name != LOCK_NAME)
 
 
-def load_lock(vendor: Path = VENDOR_DIR) -> dict:
+def load_lock(vendor: Path | None = None) -> dict:
     """Манифест → dict; нет файла/битый JSON → {} (не падает)."""
-    lock = vendor / LOCK_NAME
+    lock = (VENDOR_DIR if vendor is None else vendor) / LOCK_NAME
     if not lock.is_file():
         return {}
     try:
@@ -86,12 +87,13 @@ def load_lock(vendor: Path = VENDOR_DIR) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def build_lock(vendor: Path = VENDOR_DIR) -> dict:
+def build_lock(vendor: Path | None = None) -> dict:
     """Манифест по фактическому содержимому каталога.
 
     Метаданные уже объявленных записей сохраняются (сопоставление по имени
     файла); для нового файла они пустые — их заполняет человек.
     """
+    vendor = VENDOR_DIR if vendor is None else vendor
     old = {a.get("file"): a for a in load_lock(vendor).get("assets", [])}
     assets = []
     for path in asset_files(vendor):
@@ -106,9 +108,9 @@ def build_lock(vendor: Path = VENDOR_DIR) -> dict:
             "assets": assets}
 
 
-def write_lock(lock: dict, vendor: Path = VENDOR_DIR) -> Path:
+def write_lock(lock: dict, vendor: Path | None = None) -> Path:
     """Каноническая запись манифеста (стабильный diff в git)."""
-    target = vendor / LOCK_NAME
+    target = (VENDOR_DIR if vendor is None else vendor) / LOCK_NAME
     target.write_text(json.dumps(lock, ensure_ascii=False, indent=2) + "\n",
                       encoding="utf-8")
     return target
@@ -117,8 +119,9 @@ def write_lock(lock: dict, vendor: Path = VENDOR_DIR) -> Path:
 # ══════════════════════════════════════════════════════════════════════
 # Проверки
 # ══════════════════════════════════════════════════════════════════════
-def check_lock(vendor: Path = VENDOR_DIR) -> list[str]:
+def check_lock(vendor: Path | None = None) -> list[str]:
     """Файлы вендора против манифеста. Возвращает список проблем."""
+    vendor = VENDOR_DIR if vendor is None else vendor
     problems: list[str] = []
     lock = load_lock(vendor)
     if not lock:
@@ -148,8 +151,9 @@ def check_lock(vendor: Path = VENDOR_DIR) -> list[str]:
     return problems
 
 
-def check_offline(static: Path = STATIC_DIR) -> list[str]:
+def check_offline(static: Path | None = None) -> list[str]:
     """SPA не тянет ассеты извне: локальные пути или data:-URI."""
+    static = STATIC_DIR if static is None else static
     problems: list[str] = []
     index = static / "index.html"
     if not index.is_file():
@@ -210,41 +214,46 @@ def cmd_lock(_args: argparse.Namespace) -> int:
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
-    """Скачать декларированный ассет и проверить хэш (только разработка)."""
+    """Скачать декларированный ассет и обновить им манифест (только разработка).
+
+    Версия живёт прямо в URL ассета, поэтому `--version` подменяет её и в URL,
+    и в записи манифеста. Расхождение хэша — это и есть смена версии: без
+    явного `--yes` она не принимается.
+    """
     lock = load_lock()
     row = next((a for a in lock.get("assets", [])
-                if a.get("name") == args.name or a.get("file") == args.name), None)
+                if args.name in (a.get("name"), a.get("file"))), None)
     if row is None:
         print(f"❌ {args.name} нет в манифесте — сначала внесите его туда")
         return 1
-    if args.version:
-        row["version"] = args.version
-    url = row.get("url") or ""
+    url = str(row.get("url") or "")
     if not url:
-        print(f"❌ {row['file']}: в манифесте нет url (собирается вручную) — "
-              f"обновляйте файл руками")
+        print(f"❌ {row['file']}: в манифесте нет url (самосборный бандл) — "
+              f"такие файлы обновляются руками")
         return 1
     if args.version:
-        url = url.replace(row.get("version_old", ""), args.version) \
-            if row.get("version_old") else url
+        if row.get("version"):
+            url = url.replace(str(row["version"]), args.version)
+        else:
+            print(f"⚠ {row['file']}: версия в манифесте не указана — качаю url как есть")
     print(f"⬇ {url}")
     try:
-        with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310
+        with urlopen(url, timeout=60) as resp:  # noqa: S310 — только разработка
             data = resp.read()
     except Exception as exc:  # noqa: BLE001 — сеть вне доверия
         print(f"❌ Скачивание не удалось: {exc}")
         return 1
-    target = VENDOR_DIR / row["file"]
     digest = hashlib.sha256(data).hexdigest()
     if row.get("sha256") and digest != row["sha256"] and not args.yes:
         print(f"⚠ Хэш отличается: было {row['sha256'][:16]}…, стало {digest[:16]}…")
-        print("  Это смена версии? Перезапишите манифест (lock) и повторите с --yes")
+        print("  Смена версии? Повторите с --yes — файл и манифест обновятся")
         return 1
-    target.write_bytes(data)
-    print(f"✅ {target.relative_to(REPO)}: {len(data)} Б, sha256 {digest[:16]}…")
-    fresh = build_lock()
-    write_lock(fresh)
-    print("  манифест обновлён")
+    (VENDOR_DIR / row["file"]).write_bytes(data)
+    row["sha256"], row["bytes"] = digest, len(data)
+    if args.version:
+        row["version"] = args.version
+    write_lock(lock)
+    print(f"✅ {row['file']}: {len(data)} Б, sha256 {digest[:16]}… — манифест обновлён")
     return 0
 
 

@@ -221,9 +221,74 @@ def test_cli_fetch_requires_name():
 def test_cli_fetch_refuses_bundle_without_url(capsys):
     """Самосборный бандл нельзя «перекачать» — у него нет URL."""
     assert V.main(["fetch", "--name", "codemirror"]) == 1
-    assert "собирается вручную" in capsys.readouterr().out
+    assert "самосборный бандл" in capsys.readouterr().out
 
 
 def test_cli_fetch_reports_unknown_asset(capsys):
     assert V.main(["fetch", "--name", "vue"]) == 1
     assert "нет в манифесте" in capsys.readouterr().out
+
+
+# ══════════════════════════════════════════════════════════════════════
+# fetch: обновление ассета (сеть мокана, репозиторий не трогаем)
+# ══════════════════════════════════════════════════════════════════════
+class _FakeResp:
+    """Ответ urllib с готовым телом (контекстный менеджер, как настоящий)."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.fixture()
+def fetch_env(sandbox, monkeypatch):
+    """Песочница + мок urlopen: возвращает (vendor, список запрошенных URL)."""
+    urls = []
+
+    def _fake_urlopen(url, timeout=None, **_kw):
+        urls.append(url)
+        return _FakeResp(b"/*! marked v13.0.0 - a markdown parser */\n")
+
+    monkeypatch.setattr(V, "VENDOR_DIR", sandbox["vendor"])
+    monkeypatch.setattr(V, "STATIC_DIR", sandbox["static"])
+    monkeypatch.setattr(V, "urlopen", _fake_urlopen)
+    return sandbox["vendor"], urls
+
+
+def _args(**kw):
+    ns = __import__("argparse").Namespace
+    return ns(name=kw.get("name"), version=kw.get("version"),
+              yes=kw.get("yes", False))
+
+
+def test_fetch_updates_file_and_manifest(fetch_env):
+    vendor, urls = fetch_env
+    assert V.main(["fetch", "--name", "marked", "--version", "13.0.0",
+                   "--yes"]) == 0
+    payload = b"/*! marked v13.0.0 - a markdown parser */\n"
+    assert (vendor / "marked.min.js").read_bytes() == payload
+    # версия подменена и в URL запроса, и в записи манифеста
+    assert "13.0.0" in urls[0] and "12.0.2" not in urls[0]
+    row = next(a for a in V.load_lock(vendor)["assets"]
+               if a["file"] == "marked.min.js")
+    assert row["version"] == "13.0.0"
+    assert row["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert row["bytes"] == len(payload)
+    # и гейт после обновления проходит
+    assert V.check_lock(vendor) == []
+
+
+def test_fetch_refuses_hash_change_without_yes(fetch_env):
+    vendor, urls = fetch_env
+    before = (vendor / "marked.min.js").read_bytes()
+    assert V.main(["fetch", "--name", "marked"]) == 1
+    assert (vendor / "marked.min.js").read_bytes() == before
+    assert len(urls) == 1
