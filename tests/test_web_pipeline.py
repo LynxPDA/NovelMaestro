@@ -298,11 +298,11 @@ def test_build_pipeline_ner_fields_argv():
 
 def test_pipeline_spec_chunk_size_field():
     """поле chunk_size — в экспертной форме pipeline (не в simple),
-    единица — СИМВОЛЫ; проброс в argv уже покрыт отдельным тестом."""
+    единица — ТОКЕНЫ (оценка); проброс в argv покрыт отдельным тестом."""
     spec = spec_for("pipeline")
     assert spec is not None
     f = next(x for x in spec["fields"] if x["name"] == "chunk_size")
-    assert "СИМВОЛЫ" in f["label"]
+    assert "ТОКЕНЫ" in f["label"]
     assert f["default"] == "7000"
     assert "chunk_size" not in spec.get("simple", [])
 

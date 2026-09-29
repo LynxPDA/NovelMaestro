@@ -1739,10 +1739,10 @@ def test_build_ner_check_rag_flags():
     # поле rag_prompt_file убрано из спеки ner_check
     names = {f["name"] for f in STAGE_SPECS["ner_check"]["fields"]}
     assert "rag_prompt_file" not in names
-    # дефолт бюджета RAG — 65536 СИМВОЛОВ; save_interval — 0 (только в конце)
+    # дефолт бюджета RAG — 22000 ТОКЕНОВ (оценка); save_interval — 0 (только в конце)
     fb = next(f for f in STAGE_SPECS["ner_check"]["fields"]
               if f["name"] == "rag_budget")
-    assert fb["default"] == "65536"
+    assert fb["default"] == "22000"
     fs = next(f for f in STAGE_SPECS["ner_check"]["fields"]
               if f["name"] == "save_interval")
     assert fs["default"] == "0"

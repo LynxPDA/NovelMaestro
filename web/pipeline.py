@@ -43,8 +43,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 from core.common import (  # noqa: E402
     PROGRESS_PREFIX, build_chapter_map, find_env_file, format_ranges,
-    get_server_config, parse_dotenv, env_overlay, preview_logger,
-    preview_request_payload, write_preview_request,
+    get_server_config, parse_dotenv, env_overlay,
 )
 
 # ═══ Константы (канон run_pipeline.py) ═══
@@ -84,7 +83,7 @@ _DEFAULTS = {
     "timeout": 300,        # сек на один LLM-запрос внутри стадии
     "stream_timeout": 300,  # сек простоя стрима
     "max_retries": 3,
-    "chunk_size": 7000,    # СИМВОЛЫ
+    "chunk_size": 7000,    # ТОКЕНЫ (оценка estimate_tokens)
     "ner_threshold": 0.75,
     "ner_ngram": 3,
     "jobs": 4,
@@ -366,7 +365,7 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
         common += ["--no-aliases"]
     # расширенный контекст: флаги только когда задан хоть один файл
     # (действие 9; файлы в source/ — пути относительно проекта);
-    # общий потолок запроса — --request_budget (СИМВОЛЫ)
+    # общий потолок запроса — --request_budget (ТОКЕНЫ, оценка)
     ext_extra = []
     if dict_file or rules_file or examples_file:
         if dict_file:
@@ -379,7 +378,7 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                       "--fewshot_threshold", str(fewshot_threshold)]
         if request_budget:
             ext_extra += ["--request_budget", str(request_budget)]
-    # размер чанка перевода/полировки (СИМВОЛЫ): форма > дефолт
+    # размер чанка перевода/полировки (ТОКЕНЫ): форма > дефолт
     # (_DEFAULTS["chunk_size"] ← PIPELINE_CHUNK_SIZE из .env);
     # редактура идёт главой целиком — стадии 2 чанк не нужен
     cs = str(chunk_size if chunk_size else _DEFAULTS["chunk_size"])
@@ -630,9 +629,10 @@ def main() -> None:
     ap.add_argument("--fewshot_threshold", type=float, default=0.3,
                     help="Порог схожести примера с чанком (0–1).")
     ap.add_argument("--request_budget", type=int, default=0,
-                    help="Общий бюджет запроса, СИМВОЛЫ; 0 = выключено.")
+                    help="Общий бюджет запроса, ТОКЕНЫ (оценка); "
+                         "0 = выключено.")
     ap.add_argument("--chunk_size", type=int, default=None,
-                    help="Размер чанка перевода/полировки, СИМВОЛЫ "
+                    help="Размер чанка перевода/полировки, ТОКЕНЫ (оценка) "
                          "(пусто = PIPELINE_CHUNK_SIZE из .env → дефолт); "
                          "редактура идёт главой целиком.")
     ap.add_argument("--preview-request", dest="preview_request",
@@ -771,11 +771,11 @@ def main() -> None:
     no_aliases = "aliases" not in nf_list
     log.info("NER-ПОЛЯ   : %s%s", ",".join(nf_list),
              "" if not no_aliases else " (без алиасов)")
-    log.info("ЧАНК       : %d СИМВОЛОВ (перевод/полировка)",
+    log.info("ЧАНК       : %d ТОКЕНОВ (оценка; перевод/полировка)",
              args.chunk_size)
     if ext:
         log.info("КОНТЕКСТ   : словарь=%s правила=%s примеры=%s | "
-                 "fewshot_k=%d порог=%.2f | бюджет запроса СИМВОЛЫ: "
+                 "fewshot_k=%d порог=%.2f | бюджет запроса ТОКЕНОВ: "
                  "%d",
                  dict_file or "—", rules_file or "—",
                  examples_file or "—", args.fewshot_k,

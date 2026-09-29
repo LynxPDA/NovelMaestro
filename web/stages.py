@@ -119,12 +119,11 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
         log.debug("Сервер из .env не применён: %s", exc)
     if host:
         argv += ["--host", host]
-    if api_key:
-        # P1 (AUDIT #2): ключ не попадает в argv (виден в ps) — он
-        # уходит в окружение subprocess через ctx["_llm_api_key"]
-        # (JobManager.start env), а скрипты читают LLM_API_KEY.
-        if isinstance(ctx, dict):
-            ctx["_llm_api_key"] = api_key
+    # P1 (AUDIT #2): ключ не попадает в argv (виден в ps) — он
+    # уходит в окружение subprocess через ctx["_llm_api_key"]
+    # (JobManager.start env), а скрипты читают LLM_API_KEY.
+    if api_key and isinstance(ctx, dict):
+        ctx["_llm_api_key"] = api_key
     if model:
         argv += ["--model", model]
     return argv
@@ -168,13 +167,12 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
     # «Замены и очистки (replace)» из формы epub убраны — замены после
     # разбивки делает отдельная стадия batch_replace (у неё же
     # предпросмотр с подсветкой)
-    if mode == "chunk":
-        if form.get("chunk_size") not in (None, ""):
-            argv += ["--chunk-size", str(form["chunk_size"])]
+    if mode == "chunk" and form.get("chunk_size") not in (None, ""):
+        argv += ["--chunk-size", str(form["chunk_size"])]
     # маска нужна и в chunk-режиме, и при переопределении названий
-    if mode == "chunk" or form.get("rename_chapters"):
-        if form.get("chunk_mask"):
-            argv += ["--chunk-mask", str(form["chunk_mask"])]
+    if (mode == "chunk" or form.get("rename_chapters")) and form.get(
+            "chunk_mask"):
+        argv += ["--chunk-mask", str(form["chunk_mask"])]
     if form.get("rename_chapters"):
         argv.append("--rename-chapters")
     if form.get("title_limit") not in (None, ""):
@@ -296,7 +294,7 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     # расширенный контекст (действие 9): словарь/правила/примеры
-    # из source/ + общий бюджет запроса (СИМВОЛЫ); файлы приходят
+    # из source/ + общий бюджет запроса (ТОКЕНЫ); файлы приходят
     # как source/имя
     for name, flag in (("dict_file", "--dict_file"),
                        ("rules_file", "--rules_file"),
@@ -308,7 +306,7 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
                        ("request_budget", "--request_budget")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
-    # размер чанка перевода/полировки (СИМВОЛЫ); редактура — глава целиком
+    # размер чанка перевода/полировки (ТОКЕНЫ); редактура — глава целиком
     if form.get("chunk_size") not in (None, ""):
         argv += ["--chunk_size", str(form["chunk_size"])]
     argv += _llm_argv(form, ctx, "pipeline")
@@ -464,7 +462,8 @@ def build_translate_quality(form: dict, ctx: dict) -> list[str]:
 
     Один LLM-запрос по пакету глав диапазона (тип файлов глав →
     {translated_text}, chapter.txt → {original_text}); бюджет —
-    СИМВОЛЫ (главы; промпт НЕ входит), пакет обрезается до целого количества
+    ТОКЕНЫ — оценка estimate_tokens (главы; промпт НЕ входит), пакет
+    обрезается до целого количества
     глав. Выход — md-отчёт tmp/translation_quality_assessment.md (фиксирован).
     """
     argv = ["cli/translate_quality.py"]
@@ -636,10 +635,10 @@ STAGE_SPECS: dict[str, dict] = {
                       "regexp — без комментариев и флагов; "
                       "пример: «Глава \\d+»; "
                       "EPUB_SPLIT_PATTERNS в .env — переносы строк "
-                      "как «\\n»"}, 
-            {"name": "chunk_size", "label": "Размер чанка, СИМВОЛЫ",
+                      "как «\\n»"},
+            {"name": "chunk_size", "label": "Размер чанка, ТОКЕНЫ",
              "type": "number", "default": "7000",
-             "help": "ТОЛЬКО режим «по чанкам»"},
+             "help": "ТОЛЬКО режим «по чанкам»; оценка токенов"},
             {"name": "chunk_mask",
              "label": "Маска названия глав",
              "type": "text", "default": "Chapter {num}",
@@ -887,10 +886,10 @@ STAGE_SPECS: dict[str, dict] = {
                       "n-граммы примера есть в чанке; примеры ниже "
                       "порога отбрасываются — лучше без примеров, чем "
                       "с шумными"},
-            {"name": "request_budget", "label": "Бюджет запроса, СИМВОЛЫ",
+            {"name": "request_budget", "label": "Бюджет запроса, ТОКЕНЫ",
              "type": "number", "default": "24000", "min": 0,
-             "help": "общий бюджет user-запроса (чанк + все блоки); 0 = "
-                      "выключено; превышение — ошибка чанка"},
+             "help": "общий бюджет user-запроса (чанк + все блоки), оценка "
+                      "токенов; 0 = выключено; превышение — ошибка чанка"},
             {"name": "prompt_file",
              "label": "Общий промпт-файл (теги translate/redact/polish)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
@@ -899,9 +898,10 @@ STAGE_SPECS: dict[str, dict] = {
                       "пусто = авто (первый кандидат с тегами из prompts/); "
                       "недостающий тег стадии — предупреждение + встроенный "
                       "промпт"},
-            {"name": "chunk_size", "label": "Размер чанка, СИМВОЛЫ",
+            {"name": "chunk_size", "label": "Размер чанка, ТОКЕНЫ",
              "type": "number", "default": "7000", "min": 1,
-             "help": "чанкование текста для перевода и полировки — "
+             "help": "чанкование текста для перевода и полировки (оценка "
+                      "токенов) — "
                       "действует в ЛЮБОМ выбранном типе работы; "
                       "редактура идёт главой целиком; пусто = "
                       "PIPELINE_CHUNK_SIZE из .env → 7000"},
@@ -968,8 +968,8 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "threads", "label": "Потоков (1–16)",
              "type": "number", "default": "4", "min": 1, "max": 16,
              "group": "llm"},
-            {"name": "chunk_size", "label": "Размер чанка, СИМВОЛЫ",
-             "type": "number", "default": "7000"},
+            {"name": "chunk_size", "label": "Размер чанка, ТОКЕНЫ",
+             "type": "number", "default": "5500"},
             {"name": "threshold", "label": "Порог дедупликации (0–1)",
              "type": "number", "default": "0.75"},
             {"name": "ngram", "label": "N-граммы для латиницы",
@@ -1022,12 +1022,13 @@ STAGE_SPECS: dict[str, dict] = {
                       "типов, <prompt_rag> — точечная RAG-проверка; "
                       "комментарии вне тегов — через #; автоподхват "
                       "ner_check_prompt.txt"},
-            {"name": "rag_budget", "label": "RAG: бюджет на термин, СИМВОЛЫ",
-             "type": "number", "default": "65536",
-             "help": "На ОДИН термин: промпт + фрагменты ≤ бюджету; каждый "
+            {"name": "rag_budget", "label": "RAG: бюджет на термин, ТОКЕНЫ",
+             "type": "number", "default": "22000",
+             "help": "На ОДИН термин: промпт + фрагменты ≤ бюджету (оценка "
+                      "токенов); каждый "
                       "термин — отдельный LLM-запрос (параллельно, "
                       "«Потоков (1–16)»); фрагменты — равномерно по "
-                      "книге (FTS5, чанки 1000 симв.), влезают в остаток "
+                      "книге (FTS5, чанки 350 токенов), влезают в остаток "
                       "бюджета после промпта"},
             {"name": "passes", "label": "Режимы",
              "labels": {"whole": "Выбранные типы (одновременно)",
@@ -1038,9 +1039,9 @@ STAGE_SPECS: dict[str, dict] = {
              "help": "одновременно — весь список выбранных типов разом "
                       "(батчи по бюджету); по отдельности — каждый тип "
                       "отдельно; rag — точечная проверка списка терминов "
-                      "по FTS5-фрагментам книги"}, 
-            {"name": "batch_size", "label": "Бюджет пакета, СИМВОЛЫ",
-             "type": "number", "default": "196608"},
+                      "по FTS5-фрагментам книги"},
+            {"name": "batch_size", "label": "Бюджет пакета, ТОКЕНЫ",
+             "type": "number", "default": "65536"},
             {"name": "threads", "label": "Потоков (1–16)",
              "type": "number", "default": "1", "min": 1, "max": 16,
              "group": "llm",
@@ -1113,8 +1114,8 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
             {"name": "two_pass", "label": "Второй проход верификации",
              "type": "bool", "default": False},
-            {"name": "context_budget", "label": "Бюджет контекста на пакет, СИМВОЛЫ",
-             "type": "number", "default": "75000"},
+            {"name": "context_budget", "label": "Бюджет контекста на пакет, ТОКЕНЫ",
+             "type": "number", "default": "25000"},
             {"name": "prompt_file", "label": "Промпт-файл (теги pass1/pass2)",
              "type": "files", "dir": "prompts", "ext": [".txt"],
              "default": "translate_check_prompt.txt"},
@@ -1317,7 +1318,7 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
         ],
         # только экспертный режим (без простого/пресета)
-    }, 
+    },
 }
 
 # Порядок отображения стадий в «Запусках» (логика конвейера: разбор →
