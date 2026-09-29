@@ -13,6 +13,16 @@
     modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
     bookModal.addEventListener('click', e => { if (e.target === bookModal) bookModal.classList.remove('active'); });
     $('#reader-close').addEventListener('click', closeReader);
+    $('#reader-menu').addEventListener('click', (e) => { e.stopPropagation(); $('#reader-menu-panel').classList.toggle('active'); });
+    $('#reader-export').addEventListener('click', () => exportChapterToTxt());
+    // клик мимо панели меню читалки закрывает её (внутри shadow — composedPath)
+    shadow.addEventListener('click', (e) => {
+        const panel = $('#reader-menu-panel');
+        if (panel && panel.classList.contains('active')) {
+            const path = e.composedPath();
+            if (!path.includes(panel) && !path.includes($('#reader-menu'))) panel.classList.remove('active');
+        }
+    });
     $('#reader-theme-toggle').addEventListener('click', () => {
         // три состояния: как в системе → тёмная → светлая; кнопка показывает текущее в title
         config.readerTheme = THEME_MODE_CYCLE[config.readerTheme] || 'auto';

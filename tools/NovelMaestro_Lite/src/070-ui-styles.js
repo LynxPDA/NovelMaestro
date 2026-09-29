@@ -153,6 +153,14 @@
             .nm-reader-topbar-buttons button { border: none; border-radius: 6px; cursor: pointer; font-size: 15px; padding: 6px 10px; }
             #nm-reader-mode.nm-reader-light .nm-reader-topbar-buttons button { background: #e8e2d6; color: #26221c; }
             #nm-reader-mode.nm-reader-dark .nm-reader-topbar-buttons button { background: #2a2d35; color: #d8d8d3; }
+            .nm-reader-menu-panel { display: none; position: absolute; top: calc(100% + 2px); right: 10px; flex-direction: column; gap: 4px; padding: 8px; border-radius: 10px; z-index: 6; min-width: 210px; }
+            .nm-reader-menu-panel.active { display: flex; }
+            .nm-reader-menu-panel button { border: none; border-radius: 6px; cursor: pointer; font-size: 14px; padding: 8px 10px; text-align: left; white-space: nowrap; }
+            #nm-reader-mode.nm-reader-light .nm-reader-menu-panel { background: rgba(250,247,240,.97); border: 1px solid #e5ded2; box-shadow: 0 6px 20px rgba(0,0,0,.15); }
+            #nm-reader-mode.nm-reader-dark .nm-reader-menu-panel { background: rgba(22,24,29,.97); border: 1px solid #2a2d35; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+            #nm-reader-mode.nm-reader-light .nm-reader-menu-panel button { background: #e8e2d6; color: #26221c; }
+            #nm-reader-mode.nm-reader-dark .nm-reader-menu-panel button { background: #2a2d35; color: #d8d8d3; }
+            .nm-current-only { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; white-space: nowrap; cursor: pointer; }
             .nm-reader-content { margin: 0 auto; padding: 70px 20px 150px; max-width: var(--nm-content-width, 66%); }
             .nm-reader-content p { text-align: justify; }
             .nm-reader-loading { text-align: center; padding: 60px 0; font-size: 16px; opacity: .7; }

@@ -26,9 +26,7 @@
         gmStreamMode = mode;
         GM_setValue('gmStreamMode', mode);
     }
-    function customFetch(url, options, isStream = false) {
-        // страница вместо менеджера: обход фонового канала (GM_xmlhttpRequest)
-        if (typeof GM_xmlhttpRequest === 'undefined' || config.gmTransport === 'page') return fetch(url, options);
+    function gmFetch(url, options, isStream = false) {
         return new Promise((resolve, reject) => {
             let settled = false;
             let req = null;
@@ -144,6 +142,24 @@
             }
         });
     }
+    /**
+     * Транспорт по умолчанию — fetch из страницы: он не зависит от мостика
+     * контент↔фон менеджера (у Violentmonkey на части устройств он сломан).
+     * Хост закрыт CORS — тот же запрос один раз уходит каналом менеджера.
+     */
+    async function customFetch(url, options, isStream = false) {
+        const mode = config.gmTransport === 'auto' ? 'page' : config.gmTransport;
+        const gmAvailable = typeof GM_xmlhttpRequest !== 'undefined';
+        if (!gmAvailable || mode === 'page') {
+            try {
+                return await fetch(url, options);
+            } catch (e) {
+                if (gmAvailable && e && (e.isNet || e.name === 'TypeError')) return gmFetch(url, options, isStream);
+                throw e;
+            }
+        }
+        return gmFetch(url, options, isStream);
+    }
 /** Куда именно били — без этого с телефона не понять, смотреть на адрес или на модель. */
     function requestTarget(url) {
         try {
@@ -234,12 +250,12 @@
             reader = resp.body.getReader();
             activeReader = reader;
             const decoder = new TextDecoder();
-            let text = '', buffer = '', streamError = null, streamModel = '';
+            let text = '', buffer = '', streamError = null, streamModel = '', sawDone = false;
             const handleLine = (line) => {
                 const trimmed = line.trim();
                 if (!trimmed.startsWith('data:')) return;
                 const payload = trimmed.slice(5).trim();
-                if (payload === '[DONE]') return;
+                if (payload === '[DONE]') { sawDone = true; return; }
                 try {
                     const parsed = JSON.parse(payload);
                     if (parsed && parsed.error) {
@@ -251,7 +267,11 @@
                         return;
                     }
                     if (parsed && typeof parsed.model === 'string' && parsed.model) streamModel = parsed.model;
-                    const content = parsed?.choices?.[0]?.delta?.content || '';
+                    const choice = parsed?.choices?.[0];
+                    // finish_reason — второй законный терминатор: сервер мог закрыть
+                    // поток без [DONE], но сказать, что закончил осознанно
+                    if (choice && choice.finish_reason && choice.finish_reason !== 'null') sawDone = true;
+                    const content = choice?.delta?.content || '';
                     if (content) { text += content; if (cb.onDelta) cb.onDelta(content); }
                 } catch {}
             };
@@ -280,6 +300,14 @@
             if (!failed && !cancelRequested) { buffer += decoder.decode(); handleLine(buffer); }
             if (cancelRequested) { const e = new Error('Отменено пользователем'); e.trace = traceLog.join(' '); throw e; }
             if (failed) { const e = makeAbortError(true); e.trace = traceLog.join(' '); throw e; }
+            if (!sawDone) {
+                // сервер закрыл поток без [DONE] и без finish_reason: это обрыв,
+                // а не конец — оборванный огрызок не считается результатом, ретраим
+                const e = new Error(`обрыв ответа: соединение закрыто без [DONE] (${text.length} симв.)`);
+                e.isCut = true;
+                e.trace = traceLog.join(' ');
+                throw e;
+            }
             if (cb.stopOnFirstContent && text.trim()) {
                 try { if (underlyingAbort) underlyingAbort(); } catch {}
                 return { text, model: streamModel, trace: traceLog.join(' ') };
@@ -368,8 +396,9 @@
     const CHECK_TIMEOUT_MIN = 60;
     async function checkServer() {
         const statusEl = $('#server-status');
+        const gmMode = config.gmTransport === 'auto' ? 'page' : config.gmTransport;
         const transport = typeof GM_xmlhttpRequest === 'undefined' ? 'fetch'
-            : (config.gmTransport === 'page' ? 'fetch из страницы'
+            : (gmMode === 'page' ? 'fetch из страницы'
                 : (gmStreamMode === 'text' ? 'менеджер · XHR (тело целиком)' : 'менеджер · поток'));
         const base = apiBase();
         if (!base) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Host'; return; }

@@ -36,6 +36,13 @@
         a.click();
         URL.revokeObjectURL(url);
         showStatus('TXT экспортирован: текущая переведённая страница', 'success', 'status-book');
+        // в читалке статус-блоки модалки невидимы — ответ показываем в её нижней строке
+        const rs = $('#reader-preload-status');
+        if (rs && readerModeActive) {
+            rs.style.display = '';
+            rs.textContent = '✅ TXT сохранён';
+            setTimeout(() => { rs.style.display = 'none'; }, 3000);
+        }
     }
 
     // ===== ГЛОССАРИЙ CRUD =====

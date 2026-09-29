@@ -57,6 +57,9 @@
                         </div>
                         <div class="nm-filter-row">
                             <input type="text" id="glossary-filter" placeholder="🔍 Фильтр по термину, переводу или типу...">
+                            <label class="nm-current-only" title="Показывать только термины, которые встречаются на открытой странице (тот же матчинг, что и при переводе)">
+                                <input type="checkbox" id="glossary-current-only"> только текущая страница
+                            </label>
                         </div>
                         <div id="glossary-list"></div>
                         <div class="nm-pagination" id="glossary-pagination"></div>
@@ -110,7 +113,7 @@
                                 <input type="checkbox" id="preemptive-translate">
                                 <label for="preemptive-translate">🚀 Автоперевод следующей главы в фоне</label>
                             </div>
-                            <small>Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT.</small>
+                            <small>Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT (кнопка в читалке).</small>
                         </div>
                         <div class="nm-section">
                             <h3>🌐 Сеть</h3>
@@ -124,8 +127,8 @@
                             </div>
                             <div class="nm-checkbox-group">
                                 <input type="checkbox" id="gm-transport">
-                                <label for="gm-transport">Сеть из страницы (fetch), без канала менеджера</label>
-                                <small>Обход фонового канала менеджера (GM_xmlhttpRequest): запросы идут прямо из страницы. Спасает, когда Violentmonkey на устройстве не отдаёт ответы вообще — в трассе проверки висит только «rs1 +0б». Нужен CORS-доступ хоста: у большинства OpenAI-совместимых серверов он открыт. Tampermonkey не нуждается.</small>
+                                <label for="gm-transport">Сеть из страницы (fetch), канал менеджера — запасной</label>
+                                <small>Режим по умолчанию: запросы идут прямо из страницы и не зависят от фонового канала менеджера (GM_xmlhttpRequest) — у Violentmonkey на части устройств он сломан (в трассе проверки висит только «rs1 +0б»). Хост закрыт CORS — запрос автоматически повторится каналом менеджера. Снимите галочку для старых порядков: сразу и всегда через менеджер.</small>
                             </div>
                         </div>
                         <div class="nm-section">
@@ -221,10 +224,14 @@
                 <div class="nm-reader-topbar">
                     <div class="nm-reader-title" id="reader-title"></div>
                     <div class="nm-reader-topbar-buttons">
-                        <button id="reader-retranslate" title="Перевести текущую главу заново (игнорирует кэш)">🌐</button>
-                        <button id="reader-theme-toggle" title="Сменить тему">🌓</button>
-                        <button id="reader-settings" title="Настройки">⚙️</button>
+                        <button id="reader-menu" title="Меню читалки">⋮</button>
                         <button id="reader-close" title="Закрыть читалку">✕</button>
+                    </div>
+                    <div class="nm-reader-menu-panel" id="reader-menu-panel">
+                        <button id="reader-export" title="Сохранить перевод текущей главы в TXT">📄 Экспорт TXT</button>
+                        <button id="reader-retranslate" title="Перевести текущую главу заново (игнорирует кэш)">🌐 Перевести заново</button>
+                        <button id="reader-theme-toggle" title="Сменить тему">🌓 Тема</button>
+                        <button id="reader-settings" title="Настройки">⚙️ Настройки</button>
                     </div>
                 </div>
                 <div class="nm-reader-content" id="reader-content"></div>

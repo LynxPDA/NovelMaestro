@@ -11,10 +11,11 @@
         $('#target-lang').value = config.targetLang;
         $('#fuzzy-threshold').value = config.fuzzySearchThreshold;
         $('#auto-ner').checked = !!config.autoNER;
+        $('#glossary-current-only').checked = !!config.glossaryCurrentPageOnly;
         $('#local-model').checked = !!config.localModel;
         $('#api-key').disabled = !!config.localModel;
         $('#preemptive-translate').checked = !!config.preemptiveTranslation;
-        $('#gm-transport').checked = config.gmTransport === 'page';
+        $('#gm-transport').checked = (config.gmTransport === 'auto' ? 'page' : config.gmTransport) === 'page';
         $('#reader-theme').value = config.readerTheme;
         $('#reader-font-family').value = config.readerFontFamily;
         $('#reader-font-size').value = config.readerFontSize;
@@ -62,13 +63,14 @@
             el.addEventListener('change', save);
         }
         $('#auto-ner').addEventListener('change', function() { config.autoNER = this.checked; scheduleSettingsSave(); });
+        $('#glossary-current-only').addEventListener('change', function() { config.glossaryCurrentPageOnly = this.checked; glossaryPage = 0; scheduleSettingsSave(); updateGlossaryUI(); });
         $('#local-model').addEventListener('change', function() {
             config.localModel = this.checked;
             $('#api-key').disabled = this.checked;
             scheduleSettingsSave();
         });
         $('#preemptive-translate').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
-        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'page' : 'auto'; scheduleSettingsSave(); });
+        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'page' : 'manager'; scheduleSettingsSave(); });
     }
     function resetSettings() {
         if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;

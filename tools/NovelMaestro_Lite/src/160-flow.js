@@ -32,6 +32,7 @@
         // readerState создаётся СРАЗУ по живой странице — кнопки навигации
         // доступны даже если перевод отменён или не удался
         setReaderState({ url, title: document.title, text: '', ...resolveNavFromLive() }, false);
+        let flowCompleted = false;
         // адрес «Открыть на сайте»: выученное оглавление, иначе эта глава
         // (последняя переведённая)
         current.book.openUrl = readerState.tocUrl || url;
@@ -45,6 +46,7 @@
                 progressStatus('✅ Перевод уже был готов (опережающий перевод)');
                 progressFill().style.width = '100%';
                 jobClear(current.key);
+                flowCompleted = true;
                 if (config.autoNER && !isNerDoneForPage(current.key)) {
                     const liveText = extractMainText(findContentElement());
                     if (liveText.trim()) {
@@ -108,14 +110,25 @@
                 // в кэш — только завершённый перевод (данные собираем из локальных
                 // переменных: readerState мог быть обнулён закрытой читалкой);
                 // незаконченный остаётся в фоновом задании
-                if (translationResult.completed && full) cacheSet(url, { url, title: document.title, text: full, ...nav }, current.key);
-                else if (full) progressStatus(`⏳ Сохранено ${full.length} зн. перевода — продолжится автоматически`);
+                if (translationResult.completed && full) {
+                    cacheSet(url, { url, title: document.title, text: full, ...nav }, current.key);
+                    flowCompleted = true;
+                } else if (full) {
+                    progressShow('⏳ Перевод не завершён');
+                    progressStatus(`${translationResult.error || 'обрыв связи'} • сохранено ${full.length} зн.`
+                        + ' • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
+                } else {
+                    progressShow('⏳ Перевод не завершён');
+                    progressStatus(`${translationResult.error || 'обрыв связи'} • ни один чанк не дошёл целиком`);
+                }
             }
             if (!cancelRequested && config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
         } finally {
             isTranslating = false;
             updateNavButtons();
-            setTimeout(progressHide, 2500);
+            // оборванный перевод НЕ прячет прогресс: панель с причиной остаётся
+            // перед глазами, а не превращается в «всё готово»
+            if (flowCompleted) setTimeout(progressHide, 2500);
         }
     }
     async function handleExtractTerms() {

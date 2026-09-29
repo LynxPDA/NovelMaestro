@@ -43,7 +43,7 @@
         const resumed = parts.filter(p => p).length;
         const fill = progressFill();
         fill.classList.remove('retry');
-        let completed = false;
+        let completed = false, errMessage = '';
         const setProgress = (all) => {
             const done = paragraphsOf(all).length;
             const pct = totalParas > 0 ? Math.min(99, Math.round((done / totalParas) * 100)) : 0;
@@ -86,7 +86,8 @@
             progressStatus('✅ Перевод завершён!');
             fill.style.width = '100%';
         } catch (error) {
-            progressStatus('❌ ' + error.message);
+            errMessage = error.message || 'неизвестная ошибка';
+            progressStatus('❌ ' + errMessage);
             // частичный перевод остаётся на экране и в задании — на следующей
             // загрузке страницы он продолжится, а не начнётся заново
             if (joinParts(parts)) renderTranslationInto(element, joinParts(parts) + '\n\n[ПЕРЕВОД ПРЕРВАН: ' + error.message + ']');
@@ -98,7 +99,7 @@
                 else jobSave(bookKey, pageUrl, hash, parts);
             }
         }
-        return { text: joinParts(parts), completed, resumed };
+        return { text: joinParts(parts), completed, resumed, error: errMessage };
     }
     // фоновый перевод следующей главы: тот же механизм чанков и того же задания
     async function translateTextBackground(text, job = {}) {

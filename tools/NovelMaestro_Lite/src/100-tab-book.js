@@ -131,11 +131,6 @@
         saveBtn.className = 'nm-btn nm-btn-primary';
         saveBtn.id = 'btn-save-book';
         saveBtn.textContent = '💾 Сохранить';
-        const exportTxtBtn = document.createElement('button');
-        exportTxtBtn.className = 'nm-btn nm-btn-secondary';
-        exportTxtBtn.id = 'btn-export-txt';
-        exportTxtBtn.textContent = '📄 Экспорт TXT';
-        exportTxtBtn.disabled = cachedCount === 0;
         const openSiteBtn = document.createElement('button');
         openSiteBtn.className = 'nm-btn nm-btn-secondary';
         openSiteBtn.id = 'btn-open-site';
@@ -147,13 +142,7 @@
         area.replaceChildren(info,
             mkGroup('Название книги:', 'book-name-edit', book.name || ''),
             mkGroup('URL книги:', 'book-key-edit', key),
-            coverGroup, saveBtn, exportTxtBtn, openSiteBtn, delBtn);
-        exportTxtBtn.title = 'Экспортирует кэшированные переводы глав (текущая и следующая) в TXT';
-        // экспорт TXT — перевод текущей страницы; на чужом origin для книги нечего экспортировать
-        exportTxtBtn.title = 'Экспортирует перевод текущей страницы в TXT';
-        const cd = key === currentBookKey ? cacheGet(pageCacheKey()) : null;
-        exportTxtBtn.disabled = !(cd && cd.text);
-        exportTxtBtn.addEventListener('click', exportChapterToTxt);
+            coverGroup, saveBtn, openSiteBtn, delBtn);
         openSiteBtn.title = 'Оглавление (если обучено) или последняя переведённая глава';
         openSiteBtn.addEventListener('click', () => {
             // адрес открытия хранится в записи книги: выученное оглавление, иначе

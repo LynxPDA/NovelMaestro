@@ -27,6 +27,19 @@
         const glossary = getGlossaryForView();
         updateTypeDatalist();
         let entries = Object.entries(glossary);
+        // «только текущая страница»: те же матчеры, что при переводе
+        let pageMode = false;
+        if (config.glossaryCurrentPageOnly) {
+            const pageText = normalize(extractMainText(findContentElement()));
+            if (pageText) {
+                pageMode = true;
+                entries = entries.filter(([, t]) => termMatchesText(pageText, t.term, config.fuzzySearchThreshold));
+            } else {
+                $('#status-glossary').className = 'nm-status show error';
+                $('#status-glossary').textContent = 'Блок текста страницы не найден — показан весь глоссарий';
+                setTimeout(() => { $('#status-glossary').classList.remove('show'); }, 4000);
+            }
+        }
         if (glossaryFilter) {
             const f = normalize(glossaryFilter);
             entries = entries.filter(([, t]) =>
@@ -38,9 +51,9 @@
         if (glossaryPage < 0) glossaryPage = 0;
         const start = glossaryPage * PAGE_SIZE;
         const pageEntries = entries.slice(start, start + PAGE_SIZE);
-        $('#glossary-count').textContent = Object.keys(glossary).length;
+        $('#glossary-count').textContent = pageMode ? `${entries.length}/${Object.keys(glossary).length}` : Object.keys(glossary).length;
         if (Object.keys(glossary).length === 0) { showGlossaryPlaceholder(container, 'Глоссарий пуст'); pagination.replaceChildren(); return; }
-        if (entries.length === 0) { showGlossaryPlaceholder(container, 'Ничего не найдено по фильтру'); pagination.replaceChildren(); return; }
+        if (entries.length === 0) { showGlossaryPlaceholder(container, pageMode ? 'На этой странице терминов из глоссария нет' : 'Ничего не найдено по фильтру'); pagination.replaceChildren(); return; }
         const sortIcon = (field) => glossarySort.field !== field ? '↕' : (glossarySort.dir === 'asc' ? '↑' : '↓');
         const activeClass = (field) => glossarySort.field === field ? 'active-sort' : '';
         const table = document.createElement('table');

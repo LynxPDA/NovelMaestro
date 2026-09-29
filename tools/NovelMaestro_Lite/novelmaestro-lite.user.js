@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.35
+// @version      1.37
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.35';
+    const APP_VERSION = '1.37';
 
     // ===== КОНФИГУРАЦИЯ =====
     const DEFAULT_CONFIG = {
@@ -81,11 +81,12 @@
         requestTimeout: 60, // СЕКУНДЫ (0 = без таймаута): у стрима — пауза между токенами, у обычного запроса — ожидание всего ответа
         maxRetries: 3,
         localModel: false,
-        gmTransport: 'auto',
+        gmTransport: 'page',
         translationPrompt: 'Переведи следующий текст с {sourceLang} на {targetLang}.\n\nГЛОССАРИЙ ТЕРМИНОВ (обязательно используй эти переводы, сохраняй пол персонажей):\n{glossary}\n\nВАЖНО:\n- Имена и термины переводи точно по глоссарию\n- Сохраняй пол персонажей (он/она) согласно глоссарию\n- Сохраняй стиль оригинала\n- Сохраняй разбивку на абзацы\n- Возвращай ТОЛЬКО перевод, без комментариев\n\nТекст:\n{text}',
         extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины. Перевод терминов должен быть на {targetLang}.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang}. Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
         fuzzySearchThreshold: 0.7,
         autoNER: true,
+        glossaryCurrentPageOnly: false,
         preemptiveTranslation: true, // автоперевод следующей главы в фоне
         // 'auto' — следовать системной теме; 'dark'/'light' — ручной выбор кнопкой в читалке
         readerTheme: 'auto',
@@ -893,6 +894,14 @@
             .nm-reader-topbar-buttons button { border: none; border-radius: 6px; cursor: pointer; font-size: 15px; padding: 6px 10px; }
             #nm-reader-mode.nm-reader-light .nm-reader-topbar-buttons button { background: #e8e2d6; color: #26221c; }
             #nm-reader-mode.nm-reader-dark .nm-reader-topbar-buttons button { background: #2a2d35; color: #d8d8d3; }
+            .nm-reader-menu-panel { display: none; position: absolute; top: calc(100% + 2px); right: 10px; flex-direction: column; gap: 4px; padding: 8px; border-radius: 10px; z-index: 6; min-width: 210px; }
+            .nm-reader-menu-panel.active { display: flex; }
+            .nm-reader-menu-panel button { border: none; border-radius: 6px; cursor: pointer; font-size: 14px; padding: 8px 10px; text-align: left; white-space: nowrap; }
+            #nm-reader-mode.nm-reader-light .nm-reader-menu-panel { background: rgba(250,247,240,.97); border: 1px solid #e5ded2; box-shadow: 0 6px 20px rgba(0,0,0,.15); }
+            #nm-reader-mode.nm-reader-dark .nm-reader-menu-panel { background: rgba(22,24,29,.97); border: 1px solid #2a2d35; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+            #nm-reader-mode.nm-reader-light .nm-reader-menu-panel button { background: #e8e2d6; color: #26221c; }
+            #nm-reader-mode.nm-reader-dark .nm-reader-menu-panel button { background: #2a2d35; color: #d8d8d3; }
+            .nm-current-only { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; white-space: nowrap; cursor: pointer; }
             .nm-reader-content { margin: 0 auto; padding: 70px 20px 150px; max-width: var(--nm-content-width, 66%); }
             .nm-reader-content p { text-align: justify; }
             .nm-reader-loading { text-align: center; padding: 60px 0; font-size: 16px; opacity: .7; }
@@ -1031,6 +1040,9 @@
                         </div>
                         <div class="nm-filter-row">
                             <input type="text" id="glossary-filter" placeholder="🔍 Фильтр по термину, переводу или типу...">
+                            <label class="nm-current-only" title="Показывать только термины, которые встречаются на открытой странице (тот же матчинг, что и при переводе)">
+                                <input type="checkbox" id="glossary-current-only"> только текущая страница
+                            </label>
                         </div>
                         <div id="glossary-list"></div>
                         <div class="nm-pagination" id="glossary-pagination"></div>
@@ -1084,7 +1096,7 @@
                                 <input type="checkbox" id="preemptive-translate">
                                 <label for="preemptive-translate">🚀 Автоперевод следующей главы в фоне</label>
                             </div>
-                            <small>Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT.</small>
+                            <small>Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT (кнопка в читалке).</small>
                         </div>
                         <div class="nm-section">
                             <h3>🌐 Сеть</h3>
@@ -1098,8 +1110,8 @@
                             </div>
                             <div class="nm-checkbox-group">
                                 <input type="checkbox" id="gm-transport">
-                                <label for="gm-transport">Сеть из страницы (fetch), без канала менеджера</label>
-                                <small>Обход фонового канала менеджера (GM_xmlhttpRequest): запросы идут прямо из страницы. Спасает, когда Violentmonkey на устройстве не отдаёт ответы вообще — в трассе проверки висит только «rs1 +0б». Нужен CORS-доступ хоста: у большинства OpenAI-совместимых серверов он открыт. Tampermonkey не нуждается.</small>
+                                <label for="gm-transport">Сеть из страницы (fetch), канал менеджера — запасной</label>
+                                <small>Режим по умолчанию: запросы идут прямо из страницы и не зависят от фонового канала менеджера (GM_xmlhttpRequest) — у Violentmonkey на части устройств он сломан (в трассе проверки висит только «rs1 +0б»). Хост закрыт CORS — запрос автоматически повторится каналом менеджера. Снимите галочку для старых порядков: сразу и всегда через менеджер.</small>
                             </div>
                         </div>
                         <div class="nm-section">
@@ -1195,10 +1207,14 @@
                 <div class="nm-reader-topbar">
                     <div class="nm-reader-title" id="reader-title"></div>
                     <div class="nm-reader-topbar-buttons">
-                        <button id="reader-retranslate" title="Перевести текущую главу заново (игнорирует кэш)">🌐</button>
-                        <button id="reader-theme-toggle" title="Сменить тему">🌓</button>
-                        <button id="reader-settings" title="Настройки">⚙️</button>
+                        <button id="reader-menu" title="Меню читалки">⋮</button>
                         <button id="reader-close" title="Закрыть читалку">✕</button>
+                    </div>
+                    <div class="nm-reader-menu-panel" id="reader-menu-panel">
+                        <button id="reader-export" title="Сохранить перевод текущей главы в TXT">📄 Экспорт TXT</button>
+                        <button id="reader-retranslate" title="Перевести текущую главу заново (игнорирует кэш)">🌐 Перевести заново</button>
+                        <button id="reader-theme-toggle" title="Сменить тему">🌓 Тема</button>
+                        <button id="reader-settings" title="Настройки">⚙️ Настройки</button>
                     </div>
                 </div>
                 <div class="nm-reader-content" id="reader-content"></div>
@@ -1511,11 +1527,6 @@
         saveBtn.className = 'nm-btn nm-btn-primary';
         saveBtn.id = 'btn-save-book';
         saveBtn.textContent = '💾 Сохранить';
-        const exportTxtBtn = document.createElement('button');
-        exportTxtBtn.className = 'nm-btn nm-btn-secondary';
-        exportTxtBtn.id = 'btn-export-txt';
-        exportTxtBtn.textContent = '📄 Экспорт TXT';
-        exportTxtBtn.disabled = cachedCount === 0;
         const openSiteBtn = document.createElement('button');
         openSiteBtn.className = 'nm-btn nm-btn-secondary';
         openSiteBtn.id = 'btn-open-site';
@@ -1527,13 +1538,7 @@
         area.replaceChildren(info,
             mkGroup('Название книги:', 'book-name-edit', book.name || ''),
             mkGroup('URL книги:', 'book-key-edit', key),
-            coverGroup, saveBtn, exportTxtBtn, openSiteBtn, delBtn);
-        exportTxtBtn.title = 'Экспортирует кэшированные переводы глав (текущая и следующая) в TXT';
-        // экспорт TXT — перевод текущей страницы; на чужом origin для книги нечего экспортировать
-        exportTxtBtn.title = 'Экспортирует перевод текущей страницы в TXT';
-        const cd = key === currentBookKey ? cacheGet(pageCacheKey()) : null;
-        exportTxtBtn.disabled = !(cd && cd.text);
-        exportTxtBtn.addEventListener('click', exportChapterToTxt);
+            coverGroup, saveBtn, openSiteBtn, delBtn);
         openSiteBtn.title = 'Оглавление (если обучено) или последняя переведённая глава';
         openSiteBtn.addEventListener('click', () => {
             // адрес открытия хранится в записи книги: выученное оглавление, иначе
@@ -1610,6 +1615,19 @@
         const glossary = getGlossaryForView();
         updateTypeDatalist();
         let entries = Object.entries(glossary);
+        // «только текущая страница»: те же матчеры, что при переводе
+        let pageMode = false;
+        if (config.glossaryCurrentPageOnly) {
+            const pageText = normalize(extractMainText(findContentElement()));
+            if (pageText) {
+                pageMode = true;
+                entries = entries.filter(([, t]) => termMatchesText(pageText, t.term, config.fuzzySearchThreshold));
+            } else {
+                $('#status-glossary').className = 'nm-status show error';
+                $('#status-glossary').textContent = 'Блок текста страницы не найден — показан весь глоссарий';
+                setTimeout(() => { $('#status-glossary').classList.remove('show'); }, 4000);
+            }
+        }
         if (glossaryFilter) {
             const f = normalize(glossaryFilter);
             entries = entries.filter(([, t]) =>
@@ -1621,9 +1639,9 @@
         if (glossaryPage < 0) glossaryPage = 0;
         const start = glossaryPage * PAGE_SIZE;
         const pageEntries = entries.slice(start, start + PAGE_SIZE);
-        $('#glossary-count').textContent = Object.keys(glossary).length;
+        $('#glossary-count').textContent = pageMode ? `${entries.length}/${Object.keys(glossary).length}` : Object.keys(glossary).length;
         if (Object.keys(glossary).length === 0) { showGlossaryPlaceholder(container, 'Глоссарий пуст'); pagination.replaceChildren(); return; }
-        if (entries.length === 0) { showGlossaryPlaceholder(container, 'Ничего не найдено по фильтру'); pagination.replaceChildren(); return; }
+        if (entries.length === 0) { showGlossaryPlaceholder(container, pageMode ? 'На этой странице терминов из глоссария нет' : 'Ничего не найдено по фильтру'); pagination.replaceChildren(); return; }
         const sortIcon = (field) => glossarySort.field !== field ? '↕' : (glossarySort.dir === 'asc' ? '↑' : '↓');
         const activeClass = (field) => glossarySort.field === field ? 'active-sort' : '';
         const table = document.createElement('table');
@@ -1829,9 +1847,7 @@
         gmStreamMode = mode;
         GM_setValue('gmStreamMode', mode);
     }
-    function customFetch(url, options, isStream = false) {
-        // страница вместо менеджера: обход фонового канала (GM_xmlhttpRequest)
-        if (typeof GM_xmlhttpRequest === 'undefined' || config.gmTransport === 'page') return fetch(url, options);
+    function gmFetch(url, options, isStream = false) {
         return new Promise((resolve, reject) => {
             let settled = false;
             let req = null;
@@ -1947,6 +1963,24 @@
             }
         });
     }
+    /**
+     * Транспорт по умолчанию — fetch из страницы: он не зависит от мостика
+     * контент↔фон менеджера (у Violentmonkey на части устройств он сломан).
+     * Хост закрыт CORS — тот же запрос один раз уходит каналом менеджера.
+     */
+    async function customFetch(url, options, isStream = false) {
+        const mode = config.gmTransport === 'auto' ? 'page' : config.gmTransport;
+        const gmAvailable = typeof GM_xmlhttpRequest !== 'undefined';
+        if (!gmAvailable || mode === 'page') {
+            try {
+                return await fetch(url, options);
+            } catch (e) {
+                if (gmAvailable && e && (e.isNet || e.name === 'TypeError')) return gmFetch(url, options, isStream);
+                throw e;
+            }
+        }
+        return gmFetch(url, options, isStream);
+    }
 /** Куда именно били — без этого с телефона не понять, смотреть на адрес или на модель. */
     function requestTarget(url) {
         try {
@@ -2037,12 +2071,12 @@
             reader = resp.body.getReader();
             activeReader = reader;
             const decoder = new TextDecoder();
-            let text = '', buffer = '', streamError = null, streamModel = '';
+            let text = '', buffer = '', streamError = null, streamModel = '', sawDone = false;
             const handleLine = (line) => {
                 const trimmed = line.trim();
                 if (!trimmed.startsWith('data:')) return;
                 const payload = trimmed.slice(5).trim();
-                if (payload === '[DONE]') return;
+                if (payload === '[DONE]') { sawDone = true; return; }
                 try {
                     const parsed = JSON.parse(payload);
                     if (parsed && parsed.error) {
@@ -2054,7 +2088,11 @@
                         return;
                     }
                     if (parsed && typeof parsed.model === 'string' && parsed.model) streamModel = parsed.model;
-                    const content = parsed?.choices?.[0]?.delta?.content || '';
+                    const choice = parsed?.choices?.[0];
+                    // finish_reason — второй законный терминатор: сервер мог закрыть
+                    // поток без [DONE], но сказать, что закончил осознанно
+                    if (choice && choice.finish_reason && choice.finish_reason !== 'null') sawDone = true;
+                    const content = choice?.delta?.content || '';
                     if (content) { text += content; if (cb.onDelta) cb.onDelta(content); }
                 } catch {}
             };
@@ -2083,6 +2121,14 @@
             if (!failed && !cancelRequested) { buffer += decoder.decode(); handleLine(buffer); }
             if (cancelRequested) { const e = new Error('Отменено пользователем'); e.trace = traceLog.join(' '); throw e; }
             if (failed) { const e = makeAbortError(true); e.trace = traceLog.join(' '); throw e; }
+            if (!sawDone) {
+                // сервер закрыл поток без [DONE] и без finish_reason: это обрыв,
+                // а не конец — оборванный огрызок не считается результатом, ретраим
+                const e = new Error(`обрыв ответа: соединение закрыто без [DONE] (${text.length} симв.)`);
+                e.isCut = true;
+                e.trace = traceLog.join(' ');
+                throw e;
+            }
             if (cb.stopOnFirstContent && text.trim()) {
                 try { if (underlyingAbort) underlyingAbort(); } catch {}
                 return { text, model: streamModel, trace: traceLog.join(' ') };
@@ -2171,8 +2217,9 @@
     const CHECK_TIMEOUT_MIN = 60;
     async function checkServer() {
         const statusEl = $('#server-status');
+        const gmMode = config.gmTransport === 'auto' ? 'page' : config.gmTransport;
         const transport = typeof GM_xmlhttpRequest === 'undefined' ? 'fetch'
-            : (config.gmTransport === 'page' ? 'fetch из страницы'
+            : (gmMode === 'page' ? 'fetch из страницы'
                 : (gmStreamMode === 'text' ? 'менеджер · XHR (тело целиком)' : 'менеджер · поток'));
         const base = apiBase();
         if (!base) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Host'; return; }
@@ -2407,7 +2454,7 @@
         const resumed = parts.filter(p => p).length;
         const fill = progressFill();
         fill.classList.remove('retry');
-        let completed = false;
+        let completed = false, errMessage = '';
         const setProgress = (all) => {
             const done = paragraphsOf(all).length;
             const pct = totalParas > 0 ? Math.min(99, Math.round((done / totalParas) * 100)) : 0;
@@ -2450,7 +2497,8 @@
             progressStatus('✅ Перевод завершён!');
             fill.style.width = '100%';
         } catch (error) {
-            progressStatus('❌ ' + error.message);
+            errMessage = error.message || 'неизвестная ошибка';
+            progressStatus('❌ ' + errMessage);
             // частичный перевод остаётся на экране и в задании — на следующей
             // загрузке страницы он продолжится, а не начнётся заново
             if (joinParts(parts)) renderTranslationInto(element, joinParts(parts) + '\n\n[ПЕРЕВОД ПРЕРВАН: ' + error.message + ']');
@@ -2462,7 +2510,7 @@
                 else jobSave(bookKey, pageUrl, hash, parts);
             }
         }
-        return { text: joinParts(parts), completed, resumed };
+        return { text: joinParts(parts), completed, resumed, error: errMessage };
     }
     // фоновый перевод следующей главы: тот же механизм чанков и того же задания
     async function translateTextBackground(text, job = {}) {
@@ -2654,6 +2702,7 @@
         // readerState создаётся СРАЗУ по живой странице — кнопки навигации
         // доступны даже если перевод отменён или не удался
         setReaderState({ url, title: document.title, text: '', ...resolveNavFromLive() }, false);
+        let flowCompleted = false;
         // адрес «Открыть на сайте»: выученное оглавление, иначе эта глава
         // (последняя переведённая)
         current.book.openUrl = readerState.tocUrl || url;
@@ -2667,6 +2716,7 @@
                 progressStatus('✅ Перевод уже был готов (опережающий перевод)');
                 progressFill().style.width = '100%';
                 jobClear(current.key);
+                flowCompleted = true;
                 if (config.autoNER && !isNerDoneForPage(current.key)) {
                     const liveText = extractMainText(findContentElement());
                     if (liveText.trim()) {
@@ -2730,14 +2780,25 @@
                 // в кэш — только завершённый перевод (данные собираем из локальных
                 // переменных: readerState мог быть обнулён закрытой читалкой);
                 // незаконченный остаётся в фоновом задании
-                if (translationResult.completed && full) cacheSet(url, { url, title: document.title, text: full, ...nav }, current.key);
-                else if (full) progressStatus(`⏳ Сохранено ${full.length} зн. перевода — продолжится автоматически`);
+                if (translationResult.completed && full) {
+                    cacheSet(url, { url, title: document.title, text: full, ...nav }, current.key);
+                    flowCompleted = true;
+                } else if (full) {
+                    progressShow('⏳ Перевод не завершён');
+                    progressStatus(`${translationResult.error || 'обрыв связи'} • сохранено ${full.length} зн.`
+                        + ' • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
+                } else {
+                    progressShow('⏳ Перевод не завершён');
+                    progressStatus(`${translationResult.error || 'обрыв связи'} • ни один чанк не дошёл целиком`);
+                }
             }
             if (!cancelRequested && config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
         } finally {
             isTranslating = false;
             updateNavButtons();
-            setTimeout(progressHide, 2500);
+            // оборванный перевод НЕ прячет прогресс: панель с причиной остаётся
+            // перед глазами, а не превращается в «всё готово»
+            if (flowCompleted) setTimeout(progressHide, 2500);
         }
     }
     async function handleExtractTerms() {
@@ -2971,6 +3032,13 @@
         a.click();
         URL.revokeObjectURL(url);
         showStatus('TXT экспортирован: текущая переведённая страница', 'success', 'status-book');
+        // в читалке статус-блоки модалки невидимы — ответ показываем в её нижней строке
+        const rs = $('#reader-preload-status');
+        if (rs && readerModeActive) {
+            rs.style.display = '';
+            rs.textContent = '✅ TXT сохранён';
+            setTimeout(() => { rs.style.display = 'none'; }, 3000);
+        }
     }
 
     // ===== ГЛОССАРИЙ CRUD =====
@@ -3064,10 +3132,11 @@
         $('#target-lang').value = config.targetLang;
         $('#fuzzy-threshold').value = config.fuzzySearchThreshold;
         $('#auto-ner').checked = !!config.autoNER;
+        $('#glossary-current-only').checked = !!config.glossaryCurrentPageOnly;
         $('#local-model').checked = !!config.localModel;
         $('#api-key').disabled = !!config.localModel;
         $('#preemptive-translate').checked = !!config.preemptiveTranslation;
-        $('#gm-transport').checked = config.gmTransport === 'page';
+        $('#gm-transport').checked = (config.gmTransport === 'auto' ? 'page' : config.gmTransport) === 'page';
         $('#reader-theme').value = config.readerTheme;
         $('#reader-font-family').value = config.readerFontFamily;
         $('#reader-font-size').value = config.readerFontSize;
@@ -3115,13 +3184,14 @@
             el.addEventListener('change', save);
         }
         $('#auto-ner').addEventListener('change', function() { config.autoNER = this.checked; scheduleSettingsSave(); });
+        $('#glossary-current-only').addEventListener('change', function() { config.glossaryCurrentPageOnly = this.checked; glossaryPage = 0; scheduleSettingsSave(); updateGlossaryUI(); });
         $('#local-model').addEventListener('change', function() {
             config.localModel = this.checked;
             $('#api-key').disabled = this.checked;
             scheduleSettingsSave();
         });
         $('#preemptive-translate').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
-        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'page' : 'auto'; scheduleSettingsSave(); });
+        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'page' : 'manager'; scheduleSettingsSave(); });
     }
     function resetSettings() {
         if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;
@@ -3210,6 +3280,16 @@
     modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
     bookModal.addEventListener('click', e => { if (e.target === bookModal) bookModal.classList.remove('active'); });
     $('#reader-close').addEventListener('click', closeReader);
+    $('#reader-menu').addEventListener('click', (e) => { e.stopPropagation(); $('#reader-menu-panel').classList.toggle('active'); });
+    $('#reader-export').addEventListener('click', () => exportChapterToTxt());
+    // клик мимо панели меню читалки закрывает её (внутри shadow — composedPath)
+    shadow.addEventListener('click', (e) => {
+        const panel = $('#reader-menu-panel');
+        if (panel && panel.classList.contains('active')) {
+            const path = e.composedPath();
+            if (!path.includes(panel) && !path.includes($('#reader-menu'))) panel.classList.remove('active');
+        }
+    });
     $('#reader-theme-toggle').addEventListener('click', () => {
         // три состояния: как в системе → тёмная → светлая; кнопка показывает текущее в title
         config.readerTheme = THEME_MODE_CYCLE[config.readerTheme] || 'auto';

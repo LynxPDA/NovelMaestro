@@ -152,6 +152,25 @@ def test_lite_runs_only_in_top_document():
         f"@noframes должна быть без значения: {lines[0]!r}"
 
 
+def test_lite_reader_ui_invariants():
+    """Читалка: топбар — только ⋮ и ✕; порядок панели ⋮; экспорт TXT не в карточке книги;
+    тумблер «только текущая страница» и транспорты по умолчанию."""
+    art = TOOLS / "NovelMaestro_Lite" / "novelmaestro-lite.user.js"
+    text = art.read_text(encoding="utf-8")
+    top = re.search(r'nm-reader-topbar-buttons"\s*>\s*<button id="reader-menu".*?✕</button>\s*</div>', text, re.S)
+    assert top, "в топбаре читалки остались лишние кнопки (или изменилась разметка)"
+    panel = re.search(r'id="reader-menu-panel">(.*?)</div>', text, re.S)
+    assert panel, "нет панели ⋮ читалки"
+    ids = re.findall(r'id="(reader-[a-z-]+)"', panel.group(1))
+    assert ids == ["reader-export", "reader-retranslate", "reader-theme-toggle", "reader-settings"], \
+        f"порядок панели ⋮ читалки изменился: {ids}"
+    assert 'id="btn-export-txt"' not in text, "экспорт TXT вернулся в карточку книги"
+    assert 'id="glossary-current-only"' in text, "тумблер «только текущая страница» пропал"
+    assert "gmTransport: 'page'" in text and "glossaryCurrentPageOnly: false" in text, \
+        "дефолты транспорта/глоссария изменились — обнови тест"
+    assert "sawDone" in text and "без [DONE]" in text, "исчез контроль завершения ответа"
+
+
 @pytest.mark.parametrize("script,artifact", sorted(SCRIPTS.items()))
 def test_update_urls_point_at_the_repo_path(script, artifact):
     """@downloadURL/@updateURL дописаны сборщиком и ведут на raw по пути файла."""
