@@ -16,17 +16,19 @@ pass1 → pass2 для одного чанка, затем берёт следу
 остановки убрано. Снапшоты ner.json — защита от падения, не кэш.
 """
 
-import os
 import argparse
-import time
+import contextlib
+import copy
 import json
 import logging
-import threading
-import unicodedata
+import os
 import re
-import copy
 import sys
+import threading
+import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from tqdm import tqdm
 
 # ── bootstrap: поиск core/common.py подъёмом от скрипта ──
@@ -53,19 +55,19 @@ from core.common import (  # noqa: E402
     extract_term_context,
     find_env_file,
     get_ngrams,
-    get_tagged_prompt,
     get_server_config,
+    get_tagged_prompt,
     is_cjk_string,
     llm_messages,
     log_argv,
     parse_dotenv,
+    preview_logger,
+    preview_request_payload,
     print_env_help,
     setup_logging,
     split_text_smart,
     stream_chat_completion,
     web_progress_enabled,
-    preview_logger,
-    preview_request_payload,
     write_preview_request,
 )
 
@@ -157,10 +159,8 @@ EXTRA_VOTED_FIELDS: set[str] = set()
 
 def _flush_log(logger) -> None:
     for handler in logger.handlers:
-        try:
+        with contextlib.suppress(Exception):
             handler.flush()
-        except Exception:
-            pass
 
 
 def _log(logger, level: int, msg: str) -> None:
@@ -332,9 +332,7 @@ def _is_votable(field: str) -> bool:
         return False
     if field in EXTRA_VOTED_FIELDS:
         return True
-    if field in DEFAULT_NON_VOTED_FIELDS:
-        return False
-    return True
+    return field not in DEFAULT_NON_VOTED_FIELDS
 
 
 def _is_storable(field: str) -> bool:
@@ -442,7 +440,7 @@ def load_initial_ner(filepath: str, ngram_size: int, logger) -> None:
     if not os.path.exists(filepath):
         return
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
         for item in data:
             term = item.get("term", "")
@@ -512,7 +510,7 @@ def cleanup_stale_resume_files(file_dir: str, logger) -> None:
 
 def load_two_pass_prompts(filepath: str, logger) -> tuple[str, str | None]:
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             content = f.read()
     except Exception as e:
         _log(logger, logging.ERROR, f"⚠️ Не удалось прочитать prompt_file: {e}")
@@ -975,7 +973,7 @@ def _compute_final_ner(
                 else:
                     g["last_write"][field] = val
     candidates: list[dict] = []
-    for norm, g in groups.items():
+    for _norm, g in groups.items():
         item = {
             "term": g["term"], "count": g["count"],
             "_source_chunks": g["source_chunks"],
@@ -1220,7 +1218,7 @@ def merge_alias_groups(ner_data: list[dict], logger) -> int:
     merged = 0
     to_remove: set[int] = set()
 
-    for key, indices in groups.items():
+    for _key, indices in groups.items():
         if len(indices) < 2:
             continue
 
@@ -1354,7 +1352,8 @@ def build_parser() -> argparse.ArgumentParser:
             "    alias-merge по звучанию не выполняется.\n"
             "\n"
             "Единицы:\n"
-            "  --chunk_size — СИМВОЛЫ; --threshold (0.0–1.0) и --ngram — безразмерно/символы;\n"
+            "  --chunk_size — ТОКЕНЫ (оценка estimate_tokens);\n"
+            "  --context_max_len — СИМВОЛЫ; --threshold (0.0–1.0) и --ngram — безразмерно;\n"
             "  max_tokens (65536) — серверный предохранитель, ТОКЕНЫ.\n"
             ),
     )
@@ -1393,8 +1392,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--env_file", default=None, help="Явный путь к .env.",
     )
     parser.add_argument(
-        "--chunk_size", type=int, default=7000,
-        help="Размер чанка в символах (по умолчанию: 7000).",
+        "--chunk_size", type=int, default=5500,
+        help="Размер чанка, ТОКЕНЫ — оценка estimate_tokens "
+             "(по умолчанию: 5500).",
     )
     parser.add_argument(
         "--retries", type=int, default=3,
@@ -1601,10 +1601,11 @@ def main():
         if p2:
             pass2_prompt = p2
 
-    if args.two_pass:
-        if "{chunk_text}" not in pass2_prompt or "{ner_json}" not in pass2_prompt:
-            _log(logger, logging.WARNING,
-                 "⚠️ Pass2 промпт не содержит {chunk_text} и/или {ner_json}.")
+    if (args.two_pass
+            and ("{chunk_text}" not in pass2_prompt
+                 or "{ner_json}" not in pass2_prompt)):
+        _log(logger, logging.WARNING,
+             "⚠️ Pass2 промпт не содержит {chunk_text} и/или {ner_json}.")
     if "{chunk_text}" not in pass1_prompt:
         _log(logger, logging.WARNING,
              "⚠️ Pass1 промпт не содержит {chunk_text} — текст чанка "
@@ -1617,13 +1618,13 @@ def main():
              f"({len(full_text)} символов, файл не создаётся)")
     else:
         try:
-            with open(args.file, "r", encoding="utf-8") as f:
+            with open(args.file, encoding="utf-8") as f:
                 full_text = f.read()
         except OSError as exc:
             parser.error(f"Файл не читается: {exc}")
 
     all_chunks = split_text_smart(
-        full_text, target_chars=args.chunk_size, logger=logger
+        full_text, target_tokens=args.chunk_size, logger=logger
     )
     _flush_log(logger)
 
@@ -1771,9 +1772,8 @@ def main():
          f"🏁 Готово. Терминов: {len(global_ner_data)}. Файл: {args.ner_file}")
 
     # H4 (AUDIT): все чанки упали → код 1 (частичный успех — 0 + warning)
-    if failed_chunks:
-        if failed_chunks == len(all_chunks):
-            return 1
+    if failed_chunks and failed_chunks == len(all_chunks):
+        return 1
     return 0
 
 

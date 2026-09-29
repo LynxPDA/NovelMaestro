@@ -58,19 +58,19 @@ def test_fit_budget_all_fits():
 
 def test_fit_budget_trims_to_whole_chapters():
     """Не влезает — первые N целых глав (оригинал+перевод), порядок
-    сохраняется."""
+    сохраняется. Единица — ТОКЕНЫ (оценка): глава ~40 (33+7)."""
     ch = [(1, "а" * 100), (2, "б" * 100), (3, "в" * 100)]
     orig = {1: "А" * 20, 2: "Б" * 20, 3: "В" * 20}
-    kept, dropped = TQ.fit_budget(ch, orig, "промпт", budget=230)
+    kept, dropped = TQ.fit_budget(ch, orig, "промпт", budget=50)
     assert [n for n, _ in kept] == [1]
     assert dropped == 2
 
 
 def test_fit_budget_counts_original_and_translation():
-    """Размер главы = перевод + оригинал: 100+20=120, влезают 2."""
+    """Размер главы = перевод + оригинал (ТОКЕНЫ, оценка ~40), влезают 2."""
     ch = [(1, "а" * 100), (2, "б" * 100), (3, "в" * 100)]
     orig = {1: "А" * 20, 2: "Б" * 20, 3: "В" * 20}
-    kept, dropped = TQ.fit_budget(ch, orig, "промпт", budget=260)
+    kept, dropped = TQ.fit_budget(ch, orig, "промпт", budget=90)
     assert [n for n, _ in kept] == [1, 2]
     assert dropped == 1
 

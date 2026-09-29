@@ -11,7 +11,9 @@ translate_book.py — ЕДИНЫЙ скрипт LLM-обработки текс�
 Авто-режим (без --mode): вход *.json → redact, иначе translate
 (обратная совместимость со старыми вызовами).
 
-ЕДИНИЦЫ: --chunk_size, --min_len_ratio-пороги и длины — СИМВОЛЫ;
+ЕДИНИЦЫ: --chunk_size и --request_budget — ТОКЕНЫ (оценка
+estimate_tokens); --min_len_ratio-пороги и длины — СИМВОЛЫ
+(символьное отношение длин остаётся символьным специально);
 max_tokens — серверный предохранитель (ТОКЕНЫ), не расчёт.
 
 Промпты: --prompt_file БЕЗ тегов = промпт текущего режима (файл целиком);
@@ -32,7 +34,7 @@ txt/md), --examples_file (пары оригинал→перевод для few-
 source-сторонам выбранных примеров. Любой из трёх файлов переводит
 translate в расширенный режим: тег <translate_lr> (фолбэк <translate>
 → встроенный расширенный промпт). --request_budget — общий бюджет
-user-запроса в СИМВОЛАХ (0 = выключено); превышение — ошибка чанка.
+user-запроса в ТОКЕНАХ (оценка; 0 = выключено); превышение — ошибка чанка.
 
 Сервер: --host/--model/--api_key (CLI) > HOST/API_KEY/MODEL из .env
 (единая модель скрипта — без отдельных моделей под режимы).
@@ -72,6 +74,7 @@ from core.common import (
     collect_gender_names,
     determine_model,
     emit_progress,
+    estimate_tokens,
     find_env_file,
     find_relevant_dict,
     find_relevant_examples,
@@ -87,13 +90,13 @@ from core.common import (
     load_rules_block,
     log_argv,
     parse_dotenv,
+    preview_logger,
+    preview_request_payload,
     print_env_help,
     setup_logging,
     split_text_smart,
     stream_chat_completion,
     web_progress_enabled,
-    preview_logger,
-    preview_request_payload,
     write_preview_request,
 
 )
@@ -248,9 +251,9 @@ MODE_PRESETS = {
     # min_len_ratio отключён (0.0): контроль соотношения длин — стадия
     # «Проверка перевода» (translate_check); тут только защита от
     # пустого ответа (в stream_chat_completion всегда)
-    "translate": dict(min_len_ratio=0.0, max_retries=3,  threads_cap=16, trace_default=True),
-    "redact":    dict(min_len_ratio=0.0, max_retries=3,  threads_cap=64, trace_default=False),
-    "polish":    dict(min_len_ratio=0.0, max_retries=3,  threads_cap=16, trace_default=False),
+    "translate": {"min_len_ratio": 0.0, "max_retries": 3, "threads_cap": 16, "trace_default": True},
+    "redact": {"min_len_ratio": 0.0, "max_retries": 3, "threads_cap": 64, "trace_default": False},
+    "polish": {"min_len_ratio": 0.0, "max_retries": 3, "threads_cap": 16, "trace_default": False},
 }
 
 # человекочитаемые фазы для web-прогресса (emit_progress)
@@ -369,12 +372,12 @@ def process_item(internal_id, original_text, draft_text, ctx):
             dict_search += "\n" + "\n".join(
                 e["original_text"] if e.get("_side") == "src"
                 else e["translated_text"] for e in examples)
-        dict_block, dict_count = find_relevant_dict(
+        dict_block, _ = find_relevant_dict(
             dict_search, ctx["dict_data"], ctx["ner_threshold"],
             ctx["ner_ngram"],
             automaton=ctx.get("dict_automaton"))
     else:
-        dict_block, dict_count = "(нет)", 0
+        dict_block, _ = "(нет)", 0
     rules_block = ctx.get("rules_block") or ""
 
     user_content = build_user_content(
@@ -382,11 +385,13 @@ def process_item(internal_id, original_text, draft_text, ctx):
         ner_block, female_block, male_block,
         dict_block=dict_block, rules_block=rules_block or "(нет)",
         fewshot_block=fewshot_block, logger=ctx["logger"])
-    # общий бюджет запроса (СИМВОЛЫ): превышение — ошибка чанка
+    # общий бюджет запроса (ТОКЕНЫ, оценка): превышение — ошибка чанка
     budget = ctx.get("request_budget", 0)
-    if budget and len(user_content) > budget:
-        err = (f"Превышен бюджет запроса: {len(user_content)} > {budget} "
-               f"символов. Уменьшите --chunk_size или --request_budget.")
+    n_tokens = estimate_tokens(user_content)
+    if budget and n_tokens > budget:
+        err = (f"Превышен бюджет запроса: {n_tokens} > {budget} "
+               f"токенов (оценка). Уменьшите --chunk_size или "
+               f"--request_budget.")
         fb = f"\n[FAIL: {err}]\n{original_text}\n[FAIL: {err}]\n"
         return internal_id, fb, f"Chunk {internal_id} FAIL: {err}"
     reference = (draft_text or "" if ctx["mode"] == "redact"
@@ -455,10 +460,11 @@ def build_parser():
   --rules_file     справочник языка (txt/md) → {rules_block}
   --examples_file  пары оригинал→перевод → few-shot {fewshot_block}
   Промпт: тег <translate_lr> приоритетнее <translate>.
-  --request_budget — общий бюджет запроса, СИМВОЛЫ (0 = выключено).
+  --request_budget — общий бюджет запроса, ТОКЕНЫ — оценка (0 = выключено).
 
 Единицы:
-  --chunk_size, длины и min_len_ratio — СИМВОЛЫ;
+  --chunk_size и --request_budget — ТОКЕНЫ (оценка estimate_tokens);
+  длины и min_len_ratio — СИМВОЛЫ (символьное отношение длин);
   max_tokens — серверный предохранитель (ТОКЕНЫ), не внутренний расчёт.
 
 Сервер (приоритет): CLI --host/--model/--api_key > HOST/API_KEY/MODEL из .env
@@ -472,7 +478,7 @@ def build_parser():
                    default=None,
                    help="ПРЕДПРОСМОТР: эмулировать ПЕРВЫЙ LLM-запрос "
                         "(чанк 1) без сети и записать JSON (messages + "
-                        "статистика СИМВОЛОВ) в файл; реальные "
+                        "статистика СИМВОЛОВ и оценка ТОКЕНОВ) в файл; реальные "
                         "артефакты не создаются.")
     p.add_argument("--out", default=None,
                    help="Выходной txt. Дефолты: translate=translated_book.txt, "
@@ -513,7 +519,8 @@ def build_parser():
                         "n-грамм стороны примера, найденных в чанке; "
                         "ниже порога пример не берётся.")
     p.add_argument("--request_budget", type=int, default=0,
-                   help="Общий бюджет user-запроса, СИМВОЛЫ; 0 = выключено; "
+                   help="Общий бюджет user-запроса, ТОКЕНЫ — оценка "
+                        "estimate_tokens; 0 = выключено; "
                         "превышение — ошибка чанка.")
     # Промпт
     p.add_argument("--prompt_file", default=None,
@@ -527,9 +534,10 @@ def build_parser():
     p.add_argument("--model", default=None,
                    help="Модель: --model или MODEL в .env (обязательна).")
     p.add_argument("--env_file", default=None, help="Явный путь к .env.")
-    # Чанкование (символы)
-    p.add_argument("--chunk_size", type=int, default=800,
-                   help="Целевой размер чанка, СИМВОЛЫ (default: 800).")
+    # Чанкование (токены, оценка)
+    p.add_argument("--chunk_size", type=int, default=300,
+                   help="Целевой размер чанка, ТОКЕНЫ — оценка "
+                        "estimate_tokens (default: 300).")
     p.add_argument("--multiplier", type=float, default=1.1,
                    help="Коэффициент жёсткого лимита чанка.")
     # Генерация
@@ -694,7 +702,7 @@ def main(argv=None):
     # ── Входные элементы ──
     if mode == "redact":
         try:
-            with open(args.file, "r", encoding="utf-8") as f:
+            with open(args.file, encoding="utf-8") as f:
                 json_chunks = json.load(f)
         except Exception as e:
             logger.error(f"❌ Error reading JSON: {e}")
@@ -704,7 +712,7 @@ def main(argv=None):
                  for i, c in enumerate(json_chunks)]
     else:
         try:
-            with open(args.file, "r", encoding="utf-8") as f:
+            with open(args.file, encoding="utf-8") as f:
                 chunks = split_text_smart(f.read(), args.chunk_size,
                                           args.multiplier, logger)
         except OSError as exc:
@@ -787,41 +795,39 @@ def main(argv=None):
             logger.error("❌ Не удалось создать trace: %s", exc)
             return 1
 
-    ctx = dict(
-        mode=mode, ner_data=ner_data, automaton=automaton,
-        ner_threshold=args.ner_threshold, ner_ngram=args.ner_ngram,
-        ner_fields=args.ner_fields, include_aliases=not args.no_aliases,
-        ner_min_count=args.ner_min_count,
-        names_min_count=args.names_min_count,
-        prompt=active_prompt, base_url=base_url, model=model_name,
-        api_key=api_key,
-        max_retries=(args.max_retries if args.max_retries is not None
-                     else preset["max_retries"]),
-        timeout=args.timeout, stream_timeout=args.stream_timeout,
-        temperature=args.temperature, reasoning_effort=args.reasoning_effort,
-        min_len_ratio=(args.min_len_ratio if args.min_len_ratio is not None
-                       else preset["min_len_ratio"]),
+    ctx = {
+        "mode": mode, "ner_data": ner_data, "automaton": automaton,
+        "ner_threshold": args.ner_threshold, "ner_ngram": args.ner_ngram,
+        "ner_fields": args.ner_fields,
+        "include_aliases": not args.no_aliases,
+        "ner_min_count": args.ner_min_count,
+        "names_min_count": args.names_min_count,
+        "prompt": active_prompt, "base_url": base_url, "model": model_name,
+        "api_key": api_key,
+        "max_retries": (args.max_retries if args.max_retries is not None
+                        else preset["max_retries"]),
+        "timeout": args.timeout, "stream_timeout": args.stream_timeout,
+        "temperature": args.temperature,
+        "reasoning_effort": args.reasoning_effort,
+        "min_len_ratio": (args.min_len_ratio
+                          if args.min_len_ratio is not None
+                          else preset["min_len_ratio"]),
         # расширенный контекст
-        dict_data=dict_data, dict_automaton=dict_automaton,
-        examples=examples, fewshot_k=args.fewshot_k,
-        fewshot_threshold=args.fewshot_threshold,
-        rules_block=rules_block, request_budget=args.request_budget,
-        logger=logger,
-    )
+        "dict_data": dict_data, "dict_automaton": dict_automaton,
+        "examples": examples, "fewshot_k": args.fewshot_k,
+        "fewshot_threshold": args.fewshot_threshold,
+        "rules_block": rules_block, "request_budget": args.request_budget,
+        "logger": logger,
+    }
 
     try:
         workers = max(1, int(min(preset["threads_cap"], args.threads)))
     except (TypeError, ValueError):
         workers = 1
     try:
-        with open(out_path, "w", encoding="utf-8"):
-            pass  # очистка
-        fh = open(out_path, "a", encoding="utf-8")
-    except OSError as exc:
-        logger.error("❌ Не удалось открыть выход: %s", exc)
-        return 1
-    with fh:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
+        # открытие на запись сразу очищает старый выход
+        with open(out_path, "w", encoding="utf-8") as fh, \
+                ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {ex.submit(process_item, i, orig, draft, ctx): i
                     for i, orig, draft in items}
             pbar = tqdm(total=len(items), unit="chunk", disable=_web_mode)
@@ -858,6 +864,9 @@ def main(argv=None):
                     if _web_mode and done % 10 == 0:
                         logger.info(f"📊 Прогресс: {done}/{len(items)}")
             pbar.close()
+    except OSError as exc:
+        logger.error("❌ Не удалось открыть выход: %s", exc)
+        return 1
 
     if _trace_on and _trace:
         tmp = trace_path + ".tmp"

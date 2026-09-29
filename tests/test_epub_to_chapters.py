@@ -117,7 +117,7 @@ def test_split_input_chunk(tmp_path):
     txt = tmp_path / "book.txt"
     _write_txt(txt, "текст без маркеров. " * 800)
     entries, *_ = E2C.split_input(txt, "chunk", [], [],
-                                  chunk_size=3000,
+                                  chunk_size=1000,
                                   chunk_mask="Часть {num}")
     assert len(entries) >= 4
     assert entries[0]["heading"] == "Часть 1"

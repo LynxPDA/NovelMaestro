@@ -515,7 +515,7 @@ def test_process_item_extended_blocks(monkeypatch):
 def test_process_item_request_budget_exceeded(monkeypatch):
     """--request_budget: превышение — FAIL чанка до вызова LLM."""
     ctx = _ctx("translate")
-    ctx["request_budget"] = 20
+    ctx["request_budget"] = 5  # ТОКЕНЫ (оценка): запрос заведомо больше
     ctx["prompt"] = "ПРОМПТ ДЛИННЕЕ БЮДЖЕТА {original_text}"
     called = []
     monkeypatch.setattr(TB, "stream_chat_completion",

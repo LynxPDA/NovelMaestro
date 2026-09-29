@@ -6,17 +6,18 @@ RAG-подход: SQLite FTS5 индекс → извлечение контек
 Поиск в FTS5 ведётся СТРОГО по полю translation (русский перевод).
 Каждый термин получает индивидуальную статью (detailed-подход).
 """
-import os
 import argparse
 import json
 import logging
+import os
+import re
 import sqlite3
+import sys
 import threading
 import time
-import re
-import sys
-from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
+
 from tqdm import tqdm
 
 # ── bootstrap: поиск core/common.py подъёмом от скрипта ──
@@ -52,12 +53,12 @@ from core.common import (  # noqa: E402
     llm_messages,
     log_argv as _cc_log_argv,
     parse_dotenv,
+    preview_logger,
+    preview_request_payload,
     print_env_help,
     setup_logging as _cc_setup_logging,
     stream_chat_completion,
     web_progress_enabled,
-    preview_logger,
-    preview_request_payload,
     write_preview_request,
 )
 
@@ -1132,7 +1133,8 @@ def main():
             "  python wiki.py --as-chapter --compile-chapters --type polished\n"
             "\n"
             "Единицы:\n"
-            "  --chunk-size и размеры текста — СИМВОЛЫ;\n"
+            "  --chunk-size — ТОКЕНЫ (оценка estimate_tokens);\n"
+            "  размеры текста в логах — СИМВОЛЫ;\n"
             "  --context-chunks / --top / --min-count — штуки/пороги count;\n"
             "  --near-distance — дистанция FTS5 NEAR, ТОКЕНЫ (природа FTS5);\n"
             "  max_tokens (65536) — серверный предохранитель, ТОКЕНЫ.\n"
@@ -1247,9 +1249,10 @@ def main():
     g_gen.add_argument(
         "--chunk-size",
         type=int,
-        default=1000,
+        default=350,
         metavar="N",
-        help="Размер чанка в символах для FTS5 индекса (по умолчанию: 1000).",
+        help="Размер чанка для FTS5 индекса, ТОКЕНЫ (оценка; "
+             "по умолчанию: 350).",
     )
     # ── Co-occurrence ──
     parser.add_argument(

@@ -8,8 +8,8 @@
          TXT не принимается; дубль названия главы в тексте удаляется;
   regex  ручная разбивка: каждая строка, начинающаяся с любого
          --split-re, — начало новой главы (вся строка — заголовок);
-  chunk  разбивка по чанкам --chunk-size (СИМВОЛЫ), названия — по маске
-         --chunk-mask (обязателен {num}).
+  chunk  разбивка по чанкам --chunk-size (ТОКЕНЫ, оценка), названия — по
+         маске --chunk-mask (обязателен {num}).
 
 Каталоги глав: <нули>_<номер>_<заголовок> — канон core.common.parse_chapter_id;
 нули добивают ширину 6: 00000_1, 0000_12, 000_177, 0_12345.
@@ -288,12 +288,13 @@ def split_by_patterns(text: str, split_res) -> list[tuple[str, str]]:
 
 def split_by_chunks(text: str, chunk_size: int,
                     mask: str) -> list[tuple[str, str]]:
-    """Чанки фиксированного размера (СИМВОЛЫ); заголовки — по маске."""
+    """Чанки фиксированного размера (ТОКЕНЫ, оценка estimate_tokens);
+    заголовки — по маске."""
     if "{num}" not in mask:
         sys.exit("Маска названия чанка должна содержать {num} "
                  "(например «Глава {num}»)")
     from core.common import split_text_smart
-    chunks = split_text_smart(text, target_chars=chunk_size)
+    chunks = split_text_smart(text, target_tokens=chunk_size)
     sections: list[tuple[str, str]] = []
     for i, ch in enumerate(chunks, 1):
         if ch.strip():
@@ -717,8 +718,8 @@ def build_parser():
          TXT не принимается; дубль названия главы в тексте удаляется;
   regex  ручная разбивка: каждая строка, начинающаяся с любого
          --split-re, — начало новой главы (вся строка — заголовок);
-  chunk  разбивка по чанкам --chunk-size (СИМВОЛЫ), названия — по маске
-         --chunk-mask (обязателен {num}).
+  chunk  разбивка по чанкам --chunk-size (ТОКЕНЫ, оценка), названия — по
+         маске --chunk-mask (обязателен {num}).
 
 Каталоги глав: <нули>_<номер>_<заголовок> — канон parse_chapter_id;
 нули добивают ширину 6: 00000_1, 0000_12, 000_177, 0_12345.
@@ -761,7 +762,8 @@ def build_parser():
 
     g = p.add_argument_group("Разбивка по чанкам")
     g.add_argument("--chunk-size", type=int, default=7000, metavar="N",
-                   help="Размер чанка, СИМВОЛЫ (default: 7000)")
+                   help="Размер чанка, ТОКЕНЫ — оценка estimate_tokens "
+                        "(default: 7000)")
     g.add_argument("--chunk-mask", default="Chapter {num}", metavar="MASK",
                    help="Маска названия (чанка или переопределённых глав), "
                         "{num} — номер (default: «Chapter {num}»)")
@@ -837,7 +839,7 @@ def main():
 
     print(f"\n  Файл:    {input_file.name}")
     print(f"  Режим:   {mode}"
-          + (f" · чанк {args.chunk_size} симв. · маска «{args.chunk_mask}»"
+          + (f" · чанк {args.chunk_size} ток. · маска «{args.chunk_mask}»"
              if mode == "chunk" else "")
           + (f" · переопределение названий «{args.chunk_mask}»"
              if args.rename_chapters else ""))

@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import difflib
 import json
 import os
 import shutil
@@ -84,10 +83,10 @@ from core.common import (  # noqa: E402
     compile_chapter_text,
     diff_ner_records,
     emit_progress,
+    estimate_tokens,
     even_sample,
-    find_env_file,
-    log_argv,
     filter_ner_items,
+    find_env_file,
     format_ner_record,
     fts_escape,
     fts_search_all,
@@ -96,18 +95,20 @@ from core.common import (  # noqa: E402
     glossary_body,
     llm_messages,
     load_prompt,
+    log_argv,
     merge_review_entries,
     ner_item_lookup,
     parse_dotenv,
     parse_rag_suggestions,
     parse_review_doc,
+    preview_logger,
+    preview_request_payload,
     print_env_help,
     review_entry,
     setup_logging,
     stream_chat_completion,
+    trim_to_tokens,
     web_progress_enabled,
-    preview_logger,
-    preview_request_payload,
     write_preview_request,
 )
 
@@ -126,7 +127,7 @@ def _bak_path(input_path: str) -> str:
         raise OSError(f"Не удалось создать tmp/: {exc}") from exc
     base = os.path.basename(input_path)
     return os.path.join("tmp", base + ".bak")
-DEFAULT_BATCH_SIZE = 196608  # СИМВОЛЫ (~65536 токенов)
+DEFAULT_BATCH_SIZE = 65536  # ТОКЕНОВ (оценка estimate_tokens)
 
 # Префикс запроса типовых этапов (этап 2): глоссарий уже выверен целиком —
 # не перетирать уже унифицированные решения этапа 1.
@@ -271,7 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--preview-request", dest="preview_request", default=None,
         help="ПРЕДПРОСМОТР: первый LLM-запрос прохода без сети →\n"
-             "JSON-файл (messages + статистика СИМВОЛОВ); RAG —\n"
+             "JSON-файл (messages + статистика символов и токенов); RAG —\n"
              "первый термин (сборка FTS5 может занять время).",
     )
     p.add_argument("--rag_terms", default="",
@@ -296,9 +297,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--end", type=int, default=None,
                    help="RAG-режим: конечная глава сборки (по умолчанию: "
                         "максимальная найденная).")
-    p.add_argument("--rag_budget", type=int, default=65536,
+    p.add_argument("--rag_budget", type=int, default=22000,
                    help="RAG-режим: бюджет релевантного текста на термин, "
-                        "СИМВОЛЫ (по умолчанию: 6000).")
+                        "ТОКЕНЫ (оценка; по умолчанию: 22000).")
     p.add_argument("--save-interval", type=int, default=0,
                    help="RAG-режим: сохранять review-файл каждые N "
                         "терминов (0 = только в конце)")
@@ -309,8 +310,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Ограничить проходы по типам (через запятую). "
                         "Пусто = все типы ner.json.")
     p.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE,
-                   help="Бюджет батча, СИМВОЛЫ (по умолчанию: 196608 "
-                        "≈ 65536 токенов).")
+                   help="Бюджет батча, ТОКЕНЫ (оценка; по умолчанию: "
+                        "65536).")
     p.add_argument("--threads", type=int, default=1,
                    help="Параллельных потоков (1..16): батчи и типы "
                         "выполняются одновременно (по умолчанию: 1).")
@@ -522,7 +523,7 @@ def run_batch(task, prompt_tpl, args, base_url, api_key, model, logger):
               if f.strip() != "term"]
     user_msg = _batch_user_msg(title, batch, prompt_tpl, fields)
     logger.info(f"  батч: {len(batch)} записей, "
-                f"{len(user_msg)} символов запроса")
+                f"{estimate_tokens(user_msg)} токенов запроса (оценка)")
     text, err = stream_chat_completion(
         base_url, model,
         llm_messages(user_msg),
@@ -582,7 +583,7 @@ def build_rag_examples(term, items_by_term, db, budget) -> str:
     контекст, без записи термина). FTS5-поиск по term (исходный
     термин — для chapter-источника), при пустом результате — по
     translation (переведённые источники); равномерная выборка (не
-    только начало книги), бюджет — budget СИМВОЛОВ."""
+    только начало книги), бюджет — budget ТОКЕНОВ (оценка)."""
     item = ner_item_lookup(items_by_term, term)
     translation = (item or {}).get("translation") or ""
     ev = fts_escape(item["term"] if item else term)
@@ -594,15 +595,17 @@ def build_rag_examples(term, items_by_term, db, budget) -> str:
         hits = fts_search_all(db, f'"{ev}"')
     examples = []
     if hits:
-        frags = even_sample(hits, max(1, budget // 1500))
-        # нарезаем фрагменты по остатку бюджета
+        frags = even_sample(hits, max(1, budget // 500))
+        # нарезаем фрагменты по остатку бюджета (ТОКЕНЫ, оценка)
         used = 0
         for f in frags:
             if used >= budget:
                 break
-            take = min(len(f), budget - used)
-            examples.append(f[:take])
-            used += take
+            part = trim_to_tokens(f, budget - used)
+            if not part:
+                break
+            examples.append(part)
+            used += estimate_tokens(part)
     return "[\n" + ",\n".join(
         "  " + json.dumps(e, ensure_ascii=False)
         for e in examples) + "\n]"
@@ -618,7 +621,7 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
     FTS5-поиск по term (исходный термин — для chapter-источника),
     при пустом результате — по translation (переведённые
     источники), равномерная выборка (не только начало книги),
-    суммарный бюджет — budget СИМВОЛОВ."""
+    суммарный бюджет — budget ТОКЕНОВ (оценка)."""
     selected = {f.strip() for f in fields} if fields else None
     records = []
     for term in terms:
@@ -641,15 +644,17 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
             hits = fts_search_all(db, f'"{ev}"')
         examples = []
         if hits:
-            frags = even_sample(hits, max(1, budget // 1500))
-            # нарезаем фрагменты по остатку бюджета
+            frags = even_sample(hits, max(1, budget // 500))
+            # нарезаем фрагменты по остатку бюджета (ТОКЕНЫ, оценка)
             used = 0
             for f in frags:
                 if used >= budget:
                     break
-                take = min(len(f), budget - used)
-                examples.append(f[:take])
-                used += take
+                part = trim_to_tokens(f, budget - used)
+                if not part:
+                    break
+                examples.append(part)
+                used += estimate_tokens(part)
         rec["examples"] = examples
         records.append(rec)
     return "[\n" + ",\n".join(
@@ -661,7 +666,8 @@ def _rag_query(term, user_msg, args, base_url, api_key, model, logger,
                items_by_term, fields):
     """Один термин — один LLM-запрос (блок собран заранее, FTS5-БД
     не трогаем из воркера). Возвращает (entries, ok)."""
-    logger.info(f"  {term}: запрос {len(user_msg)} символов "
+    logger.info(f"  {term}: запрос "
+                f"{estimate_tokens(user_msg)} токенов (оценка) "
                 f"(бюджет на термин {args.rag_budget})")
     text_out, err = stream_chat_completion(
         base_url, model,
@@ -723,7 +729,7 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
             return 1
         logger.info(f"📚 RAG: сборка {args.chapters_dir} "
                     f"({args.rag_source_type}): {info['written']} глав, "
-                    f"{len(text)} символов.")
+                    f"{estimate_tokens(text)} токенов (оценка).")
     elif args.rag_novel:
         if not os.path.exists(args.rag_novel):
             logger.error(f"❌ RAG: файл книги не найден: {args.rag_novel}")
@@ -736,7 +742,8 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
                          f"{args.rag_novel}: {exc}")
             return 1
         logger.info(f"🔎 RAG: {len(terms)} терминов, "
-                    f"{len(text)} символов книги (--rag_novel).")
+                    f"{estimate_tokens(text)} токенов книги "
+                    f"(--rag_novel, оценка).")
     else:
         logger.error("❌ RAG: укажите --rag_source_type (сборка глав) "
                      "или --rag_novel (txt-файл книги).")
@@ -746,7 +753,7 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
                      for i in data}
     if args.rag_source_type:
         logger.info(f"🔎 RAG: {len(terms)} терминов.")
-    db = build_fts_index(text, 1000)
+    db = build_fts_index(text, 350)
     fields = [f.strip() for f in args.fields.split(",") if f.strip()]
     # бюджет на термин — ТОЛЬКО фрагменты (промпт не вычитается):
     # один термин = один запрос, фрагменты влезают в rag_budget

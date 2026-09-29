@@ -60,6 +60,7 @@ from core.common import (  # noqa: E402
     build_chapter_map,
     determine_model,
     emit_progress,
+    estimate_tokens,
     find_fragment_owner,
     find_chapter_file as common_find_chapter_file,
     find_env_file,
@@ -71,13 +72,13 @@ from core.common import (  # noqa: E402
     log_argv,
     merge_fix_entries,
     parse_dotenv,
+    preview_logger,
+    preview_request_payload,
     print_env_help,
     read_text_safe,
     setup_logging,
     stream_chat_completion,
     web_progress_enabled,
-    preview_logger,
-    preview_request_payload,
     write_preview_request,
 )
 
@@ -378,27 +379,28 @@ def strip_chapter_headers(content):
 # ЧАНКИ
 # ─────────────────────────────────────────────
 
-def split_into_chunks(content, max_size):
-    if len(content) <= max_size:
+def split_into_chunks(content, max_tokens):
+    """Чанкование ПО ТОКЕНАМ (оценка estimate_tokens): абзацы → строки."""
+    if estimate_tokens(content) <= max_tokens:
         return [content]
     chunks, current, cur_size = [], [], 0
     for para in content.split("\n\n"):
-        ps = len(para) + 2
-        if cur_size + ps > max_size and current:
+        ps = estimate_tokens(para) + 1
+        if cur_size + ps > max_tokens and current:
             chunks.append("\n\n".join(current))
             current, cur_size = [], 0
-        if ps > max_size:
+        if ps > max_tokens:
             if current:
                 chunks.append("\n\n".join(current))
                 current, cur_size = [], 0
             lines, buf, ls = para.split("\n"), [], 0
             for line in lines:
-                l = len(line) + 1
-                if ls + l > max_size and buf:
+                lt = estimate_tokens(line) + 1
+                if ls + lt > max_tokens and buf:
                     chunks.append("\n".join(buf))
                     buf, ls = [], 0
                 buf.append(line)
-                ls += l
+                ls += lt
             if buf:
                 chunks.append("\n".join(buf))
         else:
@@ -425,11 +427,12 @@ def collect_chapters(start, end, file_type, budget, chapter_map, logger):
         if fp is None or content is None:
             skipped += 1
             continue
-        if len(content) + OV > budget:
+        if estimate_tokens(content) + OV > budget:
             mc = budget - OV
             ch = split_into_chunks(content, mc)
             chunked += 1
-            logger.info(f"Глава {i}: {len(content)} симв. → {len(ch)} чанков")
+            logger.info(f"Глава {i}: {estimate_tokens(content)} ток. "
+                        f"(оценка) → {len(ch)} чанков")
             for c in ch:
                 chapters.append((i, fp, paths[0], c))
             continue
@@ -453,7 +456,7 @@ def build_batches(chapters, budget, logger):
     batches, cur, size = [], [], 0
     OV = 200
     for item in chapters:
-        s = len(item[3]) + OV
+        s = estimate_tokens(item[3]) + OV
         if cur and size + s > budget:
             batches.append(cur)
             cur, size = [], 0
@@ -461,7 +464,8 @@ def build_batches(chapters, budget, logger):
         size += s
     if cur:
         batches.append(cur)
-    logger.info(f"Пакетов: {len(batches)} (бюджет: {budget})")
+    logger.info(f"Пакетов: {len(batches)} "
+                f"(бюджет: {budget} токенов, оценка)")
     return batches
 
 
@@ -586,7 +590,8 @@ def validate_errors(errors, valid_ch, batch_contents, logger):
 # ─────────────────────────────────────────────
 
 def _changed(f, c):
-    d = sum(1 for a, b in zip(f, c) if a != b)
+    # разная длина пар — ожидаемое состояние, strict=False осознанно
+    d = sum(1 for a, b in zip(f, c, strict=False) if a != b)
     return d + abs(len(f) - len(c))
 
 
@@ -919,7 +924,8 @@ def build_parser():
   --apply           применить правки со статусом «принять» (без LLM);
   --apply --dry-run предпросмотр применения;
   --auto-apply      сразу применить всё найденное (без человека).
-Единицы: --context_budget, --min_fix_length, --max_changed_chars — СИМВОЛЫ;
+Единицы: --context_budget — ТОКЕНЫ (оценка estimate_tokens); --min_fix_length,
+--max_changed_chars — СИМВОЛЫ;
 max_tokens (32768) — серверный предохранитель, ТОКЕНЫ.
 Сервер: --host/--model/--api_key (CLI) > HOST/API_KEY/MODEL из .env
 (модель: TRANSLATE_CHECK_LLM_MODEL → MODEL).
@@ -931,7 +937,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                    default=None,
                    help="ПРЕДПРОСМОТР: pass1-запрос первого батча\n"
                         "без сети → JSON-файл (messages +\n"
-                        "статистика СИМВОЛОВ).")
+                        "статистика символов и токенов).")
     ap.add_argument("--host", default=None,
                     help="URL API-сервера (пусто = HOST из .env).")
     ap.add_argument("--model", default=None,
@@ -952,8 +958,9 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
     # Режим
     ap.add_argument("--two_pass", action="store_true",
                     help="Второй проход верификации (pass2).")
-    ap.add_argument("--context_budget", type=int, default=75000,
-                    help="Бюджет контекста на пакет, СИМВОЛЫ (default: 75000).")
+    ap.add_argument("--context_budget", type=int, default=25000,
+                    help="Бюджет контекста на пакет, ТОКЕНЫ (оценка; "
+                         "default: 25000).")
     # Review-файл и применение
     ap.add_argument("--review", default=DEFAULT_REVIEW,
                     help=f"Накопительный файл правок (default: "
@@ -1057,9 +1064,9 @@ def do_apply(args, logger) -> int:
                      or datetime.now().strftime("%Y-%m-%d %H:%M"),
                      entries, meta=meta)
     logger.info(f"✅ Главы обновлены ({len(applied)} правок"
-                + ("; без бэкапов" if args.no_bak else "; бэкапы "
-                  f"<файл>.bak") + "); флаги «применено» сохранены "
-                f"в {args.review}")
+                + ("; без бэкапов" if args.no_bak
+                   else "; бэкапы <файл>.bak")
+                + f"); флаги «применено» сохранены в {args.review}")
     return 0
 
 

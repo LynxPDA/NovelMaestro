@@ -6,7 +6,7 @@ translate_quality.py — оценка качества перевода (LLM).
 Один LLM-запрос по пакету глав из указанного диапазона: собираются
 {original_text} (chapter.txt) и {translated_text} (выбранный «Тип файлов
 глав»), подставляются в промпт и отправляются на оценку. Если главы +
-промпт не влезают в --budget (СИМВОЛЫ) — пакет обрезается до ЦЕЛОГО
+промпт не влезают в --budget (ТОКЕНЫ, оценка) — пакет обрезается до ЦЕЛОГО
 количества глав (первые N диапазона). Результат — Markdown-отчёт (по умолчанию и в web — фиксированный
 tmp/translation_quality_assessment.md; CLI можно переопределить
 --output): техническая шапка (дата, диапазон, пакет, бюджет, модель)
@@ -16,7 +16,8 @@ tmp/translation_quality_assessment.md; CLI можно переопределит
 комментарии — код берёт содержимое тега); файл без тегов — целиком.
 Плейсхолдеры: {original_text}, {translated_text}.
 
-ЕДИНИЦЫ: --budget и размеры пакета — СИМВОЛЫ; max_tokens (32768) —
+ЕДИНИЦЫ: --budget и размеры пакета — ТОКЕНЫ (оценка estimate_tokens);
+max_tokens (32768) —
 серверный предохранитель, ТОКЕНЫ. Форматы папок глав — единый канон
 core.common.parse_chapter_id.
 """
@@ -26,7 +27,6 @@ import argparse
 import os
 import sys
 from datetime import datetime
-from pathlib import Path
 
 
 def _bootstrap_core() -> None:
@@ -47,12 +47,12 @@ from core.common import (  # noqa: E402
     build_chapter_map,
     determine_model,
     emit_progress,
+    estimate_tokens,
     find_chapter_file,
     find_env_file,
     get_server_config,
     get_tagged_prompt,
     llm_messages,
-    load_prompt,
     log_argv,
     parse_dotenv,
     preview_logger,
@@ -66,7 +66,7 @@ from core.common import (  # noqa: E402
 )
 
 DEFAULT_OUTPUT = "tmp/translation_quality_assessment.md"  # web: фиксирован
-DEFAULT_BUDGET = 200_000  # СИМВОЛЫ: главы (содержимое; промпт не входит)
+DEFAULT_BUDGET = 65_000  # ТОКЕНОВ (оценка): главы (содержимое; промпт не входит)
 
 # ──────────────────────────────────────────────
 # ПРОМПТ
@@ -165,14 +165,15 @@ def fit_budget(chapters, orig_by_num: dict, prompt: str, budget: int):
     число отсечённых глав (первые N диапазона).
     """
     available = budget
-    total = sum(len(t) + len(orig_by_num.get(n, ""))
+    total = sum(estimate_tokens(t) + estimate_tokens(orig_by_num.get(n, ""))
                 for n, t in chapters)
     if total <= available:
         return chapters, 0
     kept: list[tuple[int, str]] = []
     size = 0
     for item in chapters:
-        s = len(item[1]) + len(orig_by_num.get(item[0], ""))
+        s = (estimate_tokens(item[1])
+             + estimate_tokens(orig_by_num.get(item[0], "")))
         if size + s <= available:
             kept.append(item)
             size += s
@@ -276,7 +277,7 @@ def main() -> int:
                     "пакету глав.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
-Единицы: --budget и размеры пакета — СИМВОЛЫ (главы; промпт НЕ входит);
+Единицы: --budget и размеры пакета — ТОКЕНЫ (оценка; главы; промпт НЕ входит);
 max_tokens (32768) — серверный предохранитель, ТОКЕНЫ.
 Промпт-файл: тег <prompt_assessment>; плейсхолдеры {original_text}
 (chapter.txt) и {translated_text} (тип файлов глав).
@@ -284,7 +285,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
 (модель: TRANSLATE_QUALITY_MODEL → MODEL).
 Примеры:
   %(prog)s --type polished --start 1 --end 50
-  %(prog)s --prompt_file prompts/translate_quality_prompt.txt --budget 200000
+  %(prog)s --prompt_file prompts/translate_quality_prompt.txt --budget 65000
 """,
     )
     # Сервер
@@ -318,12 +319,12 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                         dest="preview_request", default=None,
                         help="ПРЕДПРОСМОТР: запрос оценки первого\n"
                              "пакета глав без сети → JSON-файл\n"
-                             "(messages + статистика СИМВОЛОВ).")
+                             "(messages + статистика символов и токенов).")
     parser.add_argument("--output", default=DEFAULT_OUTPUT,
                         help=f"Выходной md-отчёт (default: "
                              f"{DEFAULT_OUTPUT}; в web — фиксирован).")
     parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET,
-                        help=f"Бюджет запроса, СИМВОЛЫ: главы (содержимое; промпт НЕ входит); "
+                        help=f"Бюджет запроса, ТОКЕНЫ (оценка): главы (содержимое; промпт НЕ входит); "
                              f"если не влезает — пакет обрезается до "
                              f"целого количества глав (default: "
                              f"{DEFAULT_BUDGET}).")
@@ -402,7 +403,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
     kept, dropped = fit_budget(chapters, orig_by_num, prompt, args.budget)
     if not kept:
         logger.error("❌ Ни одна глава не влезает в бюджет "
-                     f"({args.budget} симв.).")
+                     f"({args.budget} токенов, оценка).")
         return 1
     if dropped:
         logger.warning(f"⚠️ Бюджет: отсечено {dropped} глав "
@@ -419,7 +420,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
     original_text = "\n".join(original_parts)
     translated_text = "\n".join(translated_parts)
     user_content = build_user_prompt(prompt, original_text, translated_text)
-    packet_size = len(user_content)
+    packet_size = estimate_tokens(user_content)
 
     # ── Предпросмотр запроса (--preview-request): первый пакет оценки ──
     if args.preview_request:
@@ -437,14 +438,15 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                 "prompt_file": args.prompt_file or "",
             })
         write_preview_request(args.preview_request, payload)
-        log.info("✅ Предпросмотр запроса: %s (%d симв. user)",
+        log.info("✅ Предпросмотр запроса: %s (%d токенов user, оценка)",
                  args.preview_request, packet_size)
         return 0
 
     if web_progress_enabled():
         emit_progress(0, 1, "Оценка перевода")
     logger.info(f"Пакет: глав {nums[0]}–{nums[-1]} ({len(nums)}), "
-                f"размер {packet_size:,} симв.".replace(",", " "))
+                f"размер {packet_size:,} токенов "
+                f"(оценка)".replace(",", " "))
 
     # ── LLM ──
     print(f"Запрос к LLM ({model_name}) по главам {nums[0]}–{nums[-1]}…")

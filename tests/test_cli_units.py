@@ -414,12 +414,13 @@ def test_re_strip_chapter_headers():
 def test_re_split_into_chunks():
     assert RE.split_into_chunks("маленький", 1000) == ["маленький"]
     paras = "\n\n".join("абзац номер %d" % i for i in range(50))
-    chunks = RE.split_into_chunks(paras, 100)
+    # единица — ТОКЕНЫ (оценка): кириллица ~0.33 токена на символ
+    chunks = RE.split_into_chunks(paras, 30)
     assert len(chunks) > 1
-    assert all(len(c) <= 100 for c in chunks)
+    assert all(RE.estimate_tokens(c) <= 60 for c in chunks)
     # гигантский абзац без переносов режется по строкам/жёстко
     huge = "х" * 500
-    chunks = RE.split_into_chunks(huge, 100)
+    chunks = RE.split_into_chunks(huge, 30)
     assert sum(len(c) for c in chunks) >= 500
 
 
@@ -498,7 +499,8 @@ def test_re_apply_safety():
 def test_re_build_batches():
     chapters = [(1, "f", "d", "х" * 300), (2, "f", "d", "х" * 300),
                 (3, "f", "d", "х" * 300)]
-    batches = RE.build_batches(chapters, 700, SilentLog())  # 300+200 OV = 500/шт
+    # 300 символов кириллицы ≈ 99 токенов + OV 200 → ~299 токенов/шт
+    batches = RE.build_batches(chapters, 500, SilentLog())
     assert len(batches) == 3 and all(len(b) == 1 for b in batches)
     batches = RE.build_batches(chapters, 5000, SilentLog())
     assert len(batches) == 1 and len(batches[0]) == 3
@@ -531,8 +533,8 @@ def test_re_collect_chapters_and_chunking(tmp_path):
     d2.mkdir()
     (d2 / "polished.txt").write_text("текст второй", encoding="utf-8")
     cmap = {1: [str(d1)], 2: [str(d2)]}
-    # бюджет меньше главы → чанкование
-    chapters = RE.collect_chapters(1, 2, "polished", 2000, cmap, SilentLog())
+    # бюджет меньше главы (в ТОКЕНАХ, оценка) → чанкование
+    chapters = RE.collect_chapters(1, 2, "polished", 300, cmap, SilentLog())
     assert len(chapters) > 2
     assert all(ch[0] in (1, 2) for ch in chapters)
     # пропуск отсутствующих

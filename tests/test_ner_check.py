@@ -118,8 +118,9 @@ def test_build_ner_batches_count_missing_or_string():
     assert [i["term"] for i in batch] == ["B", "C", "A"]
 
 
-def test_build_ner_batches_split_by_budget(): 
-    batches = build_ner_batches(ITEMS, budget=200)
+def test_build_ner_batches_split_by_budget():
+    # бюджет — ТОКЕНЫ (оценка): блоки записей ~46/55/45 токенов
+    batches = build_ner_batches(ITEMS, budget=100)
     assert len(batches) > 1
     # самые частотные — в первом батче
     assert batches[0][0]["count"] == 40
@@ -286,7 +287,7 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     assert e["old"] == "Линь Фан" and e["new"] == "Лин Фань"
     assert not (tmp_path / "ner_patches.json").exists()
     params = doc["params"]
-    assert params["бюджет батча"] == 196608
+    assert params["бюджет батча"] == 65536
     assert params["поля"] == "term,type,translation"
     # отчёт ner_report.md удалён — файла быть не должно
     assert not (tmp_path / "ner_report.md").exists()
@@ -326,7 +327,8 @@ def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
     doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     doc["entries"][0]["status"] = "отклонить"
-    ensure_tmp(tmp_path); (tmp_path / "tmp" / "ner_review.json").write_text(
+    ensure_tmp(tmp_path)
+    (tmp_path / "tmp" / "ner_review.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
 
     # этап 2: по типам; LLM повторяет старую правку + даёт новую
@@ -360,7 +362,8 @@ def test_ner_check_apply_dry_run_and_real(tmp_path, monkeypatch):
          "old": "Огненный шар", "new": "не должно", "reason": "r",
          "status": "отклонить", "applied": False},  # отклонено человеком
     ]}
-    ensure_tmp(tmp_path); (tmp_path / "tmp" / "ner_review.json").write_text(
+    ensure_tmp(tmp_path)
+    (tmp_path / "tmp" / "ner_review.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     # dry-run: файлы не меняются
     rc = NC.main(["--apply", "--dry-run", "--input", "ner.json"])
@@ -399,7 +402,8 @@ def test_ner_check_apply_no_bak(tmp_path, monkeypatch):
          "old": "Линь Фан", "new": "Лин Фань", "reason": "r",
          "status": "принять", "applied": False},
     ]}
-    ensure_tmp(tmp_path); (tmp_path / "tmp" / "ner_review.json").write_text(
+    ensure_tmp(tmp_path)
+    (tmp_path / "tmp" / "ner_review.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     rc = NC.main(["--apply", "--no-bak", "--input", "ner.json"])
     assert rc == 0
@@ -412,7 +416,8 @@ def test_ner_check_apply_no_bak(tmp_path, monkeypatch):
          "old": "Секта Цинъюнь", "new": "Секта Цинъюнь (гл.)", "reason": "r",
          "status": "принять", "applied": False},
     ]}
-    ensure_tmp(tmp_path); (tmp_path / "tmp" / "ner_review.json").write_text(
+    ensure_tmp(tmp_path)
+    (tmp_path / "tmp" / "ner_review.json").write_text(
         json.dumps(doc2, ensure_ascii=False), encoding="utf-8")
     rc = NC.main(["--apply", "--input", "ner.json"])
     assert rc == 0
@@ -483,7 +488,7 @@ def test_ner_check_passes_all_rejected(tmp_path, monkeypatch):
     _write_ner(tmp_path)
     try:
         NC.main(["--input", "ner.json", "--passes", "all"])
-        assert False, "all должен быть отклонён"
+        raise AssertionError("all должен быть отклонён")
     except SystemExit:
         pass
 
