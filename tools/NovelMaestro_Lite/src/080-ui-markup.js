@@ -78,16 +78,48 @@
                                 <label for="local-model">🖥️ Локальная модель без API-ключа</label>
                             </div>
                             <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
-                            <div class="nm-input-group"><label>Уровень reasoning:</label>
-                                <input type="text" class="nm-input" id="reasoning-effort" list="nm-reasoning-list" placeholder="None">
-                                <datalist id="nm-reasoning-list">
-                                    <option value="None"></option><option value="minimal"></option><option value="low"></option>
-                                    <option value="medium"></option><option value="high"></option>
-                                </datalist>
-                                <small>Пусто или 'None' — параметр не передаётся.</small>
-                            </div>
                             <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
                             <div class="nm-server-status" id="server-status"></div>
+                        </div>
+                        <div class="nm-section">
+                            <h3>🧠 Reasoning и thinking</h3>
+                            <div class="nm-input-group"><label>Режим мышления:</label>
+                                <select class="nm-select" id="thinking-mode">
+                                    <option value="default">🌐 Как у модели — ничего не отправлять</option>
+                                    <option value="on">💭 Включить рассуждения</option>
+                                    <option value="off">🚫 Выключить рассуждения</option>
+                                </select>
+                                <small>У провайдеров нет общего поля thinking: выбранное действие отправляется профилем ниже. «Как у модели» — ни одного reasoning-ключа в запросе, сервер решает сам.</small>
+                            </div>
+                            <div class="nm-input-group"><label>Профиль API (как передавать):</label>
+                                <select class="nm-select" id="reasoning-profile">
+                                    <option value="openai">OpenAI-совместимый — reasoning_effort</option>
+                                    <option value="anthropic">Anthropic-style — thinking.type</option>
+                                    <option value="qwen">Qwen3 / vLLM / llama.cpp — chat_template_kwargs</option>
+                                    <option value="dashscope">DashScope / SiliconFlow — enable_thinking</option>
+                                    <option value="ollama">Ollama — think</option>
+                                    <option value="openrouter">OpenRouter — reasoning.enabled</option>
+                                    <option value="all">Все профили сразу — «универсальный»</option>
+                                </select>
+                                <small>Профиль отправляет только свои ключи: незнакомый ключ часть серверов считает ошибкой запроса, поэтому «все сразу» — отдельный осознанный режим. Текст, который реально уходит, показывает «🔌 Проверить сервер».</small>
+                            </div>
+                            <div class="nm-input-group"><label>Уровень рассуждений (пусто = не отправлять):</label>
+                                <select class="nm-select" id="reasoning-effort">
+                                    <option value="">не отправлять</option><option value="minimal">minimal</option>
+                                    <option value="low">low</option><option value="medium">medium</option>
+                                    <option value="high">high</option><option value="xhigh">xhigh</option>
+                                    <option value="max">max</option>
+                                </select>
+                                <small>Отправляется выбранным профилем как есть. Старое значение «None» = «не отправлять».</small>
+                            </div>
+                            <div class="nm-input-group"><label>Бюджет размышлений (токены, 0 = не отправлять):</label>
+                                <input type="number" class="nm-input" id="thinking-budget" min="0" step="128">
+                                <small>ТОКЕНЫ: thinking.budget_tokens / thinking_budget / reasoning.max_tokens — куда он попадает, зависит от профиля.</small>
+                            </div>
+                            <div class="nm-input-group"><label>Свои поля запроса (JSON):</label>
+                                <textarea class="nm-textarea" id="extra-body-json" placeholder='{"chat_template_kwargs": {"enable_thinking": false}}'></textarea>
+                                <small>Универсальный способ: этот JSON-объект добавляется в тело каждого запроса к модели поверх reasoning-полей (при одном ключе он главнее). Битый JSON игнорируется — запрос идёт без своих полей.</small>
+                            </div>
                         </div>
                         <div class="nm-section">
                             <h3>📝 Перевод</h3>
@@ -233,6 +265,7 @@
                         <div class="nm-rp-row">
                             <span id="reader-progress-title">🔄 Перевод...</span>
                             <button id="reader-cancel">Отменить</button>
+                            <button id="reader-progress-close" title="Скрыть панель прогресса" style="display:none;">Скрыть</button>
                         </div>
                         <div class="nm-progress-bar"><div class="nm-progress-fill" id="reader-progress-fill"></div></div>
                         <div id="reader-progress-status">Подготовка...</div>

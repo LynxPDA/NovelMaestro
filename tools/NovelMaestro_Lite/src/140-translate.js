@@ -59,8 +59,15 @@
                 fill.classList.remove('retry');
                 progressStatus(`Чанк ${i + 1}/${chunks.length} • абзацев в источнике: ${totalParas}`
                     + (resumed ? ` • продолжаю (${resumed}/${chunks.length} уже готово)` : ''));
-                let chunkTranslation = '';
+                let chunkTranslation = '', thoughtShown = false;
                 const res = await callLLM([{ role: 'user', content: chunkUserPrompt(chunks[i]) }], 0.7, true, {
+                    // thinking-модель: пока приходят только размышления, прогресс
+                    // обязан говорить «думает», а не молчать на «Чанк N/M»
+                    onReasoning: () => {
+                        if (chunkTranslation || thoughtShown) return;
+                        thoughtShown = true;
+                        progressStatus(`Чанк ${i + 1}/${chunks.length} • 💭 модель размышляет…`);
+                    },
                     onDelta: (content) => {
                         chunkTranslation += content;
                         const all = joinParts(parts.map((p, j) => (j === i ? chunkTranslation : p)));
@@ -70,6 +77,7 @@
                     },
                     onRetry: (info) => {
                         chunkTranslation = '';
+                        thoughtShown = false;
                         renderTranslationInto(element, joinParts(parts));
                         setProgress(joinParts(parts));
                         fill.classList.add('retry');

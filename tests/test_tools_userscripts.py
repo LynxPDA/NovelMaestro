@@ -7,6 +7,8 @@
 (иначе «второй источник истины» разъедется), порядок частей обязан
 оставаться порядком секций, версия обязана браться из одного места.
 node --check по артефактам — только если node есть в PATH.
+Поведение чистых кусков логики Lite (тело LLM-запроса, состояние панели прогресса)
+покрывается node --test по tests/tools/*.test.mjs — тоже только при наличии node.
 Запуск: python3 -m pytest tests/test_tools_userscripts.py -q"""
 import importlib.util
 import re
@@ -289,6 +291,20 @@ def test_check_detects_stale_and_accepts_fresh(tmp_path, script, artifact):
     fresh = run_builder_in(tmp_path, "--script", script, "--check")
     assert fresh.returncode == 0, f"свежий артефакт помечен устаревшим: {fresh.stderr}"
     assert "правка части без пересборки" in Path(dest / artifact).read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node не установлен")
+def test_lite_logic_node_tests():
+    """node --test по tests/tools/*.test.mjs: чистая логика Lite без DOM и GM_*.
+
+    Части юзерскрипта — один IIFE, целиком в node они не исполняются, поэтому
+    тест вырезает подопытный блок из артефакта по маркерам и исполняет его как
+    чистую функцию на заглушках."""
+    res = subprocess.run([shutil.which("node"), "--test",
+                          str(ROOT / "tests" / "tools" / "*.test.mjs")],
+                         capture_output=True, text=True, cwd=str(ROOT))
+    assert res.returncode == 0, f"node --test упал (rc={res.returncode}):\n{res.stdout}\n{res.stderr}"
+    assert "# fail 0" in res.stdout, f"node --test: есть падающие проверки:\n{res.stdout}"
 
 
 def test_builder_requires_version_in_meta(tmp_path):

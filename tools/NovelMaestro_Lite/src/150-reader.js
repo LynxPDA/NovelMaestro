@@ -36,17 +36,20 @@
             systemDark.addListener(() => { if (config.readerTheme === 'auto') applyTheme(); });
         }
     } catch { /* браузер без media-слушателя — тема просто не обновится на лету */ }
+    // читалка без перевода: пустой экран обязан объяснять состояние прогона, а не
+    // выглядеть зависшим (именно так выглядела отмена для главы без единого чанка)
+    function showReaderNotice(text) {
+        const div = document.createElement('div');
+        div.className = 'nm-reader-loading';
+        div.textContent = text;
+        readerContent.replaceChildren(div);
+    }
     function openReaderShell(loadingText) {
         readerModeActive = true;
         readerMode.classList.add('active');
         buttonsBar.style.display = 'none';
         applyTheme();
-        if (loadingText) {
-            const div = document.createElement('div');
-            div.className = 'nm-reader-loading';
-            div.textContent = loadingText;
-            readerContent.replaceChildren(div);
-        }
+        if (loadingText) showReaderNotice(loadingText);
         updateNavButtons();
     }
     function closeReader() {

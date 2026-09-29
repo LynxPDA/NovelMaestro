@@ -3,7 +3,12 @@
         $('#api-host').value = config.apiHost;
         $('#api-key').value = config.apiKey;
         $('#model').value = config.model;
-        $('#reasoning-effort').value = config.reasoningEffort;
+        // уровень — select: старое «None» показывается как «не отправлять»
+        $('#reasoning-effort').value = normalizeEffort(config.reasoningEffort);
+        $('#thinking-mode').value = thinkingMode();
+        $('#reasoning-profile').value = REASONING_PROFILES[config.thinkingProfile] ? config.thinkingProfile : 'openai';
+        $('#thinking-budget').value = config.thinkingBudget;
+        $('#extra-body-json').value = config.extraBodyJson;
         $('#request-timeout').value = config.requestTimeout;
         $('#max-retries').value = config.maxRetries;
         $('#chunk-size').value = config.chunkSize;
@@ -30,6 +35,9 @@
         ['#api-key', 'apiKey', v => v.trim()],
         ['#model', 'model', v => v.trim()],
         ['#reasoning-effort', 'reasoningEffort', v => v],
+        ['#thinking-mode', 'thinkingMode', v => v],
+        ['#reasoning-profile', 'thinkingProfile', v => v],
+        ['#thinking-budget', 'thinkingBudget', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : 0; }],
         ['#request-timeout', 'requestTimeout', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 0 ? n : 10; }],
         ['#max-retries', 'maxRetries', v => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : 3; }],
         ['#chunk-size', 'chunkSize', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : DEFAULT_CONFIG.chunkSize; }],
@@ -71,6 +79,32 @@
         });
         $('#preemptive-translate').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
         $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'manager' : 'page'; scheduleSettingsSave(); });
+        // свои поля — JSON: битый стоит показать сразу, а не молча игнорировать
+        // (текст при этом сохраняется — пользователь не теряет ввод)
+        const extra = $('#extra-body-json');
+        const saveExtra = () => {
+            const raw = extra.value.trim();
+            extra.classList.remove('nm-input-bad');
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('нужен JSON-объект');
+                } catch (e) {
+                    // битый JSON показываем причиной, а не «сохранено»: висящий debounce иначе
+                    // затирает сообщение через 400 мс, а свои поля тем временем молча не отправляются
+                    clearTimeout(settingsSaveTimer);
+                    extra.classList.add('nm-input-bad');
+                    config.extraBodyJson = raw;
+                    GM_setValue('config', config);
+                    showStatus(`❌ «Свои поля запроса» не разобраны (${e.message}) — запрос идёт без них`, 'error', 'status-settings');
+                    return;
+                }
+            }
+            config.extraBodyJson = raw;
+            scheduleSettingsSave();
+        };
+        extra.addEventListener('input', saveExtra);
+        extra.addEventListener('change', saveExtra);
     }
     function resetSettings() {
         if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;

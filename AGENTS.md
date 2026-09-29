@@ -237,7 +237,8 @@ git add -A && git commit -m "…" && git push origin
 - `tests/test_web_pipeline.py` — web-оркестратор `web/pipeline.py` (Tracker, build_stage_cmd, grep_errors, process_chapter, main);
 - `tests/test_web_api.py` / `tests/test_web_jobs.py` / `tests/test_web_m7.py` / `tests/test_web_server.py` / `tests/test_web_sandbox.py` — web-слой (роуты, JobManager, SSE, env-редактор, NER-экспорт) на реальном HTTP-сервере без сети;
 - `tests/test_docs.py` — сверка доков (`core/README.md`, AGENTS.md §6) с кодом;
-- `tests/test_tools_userscripts.py` — юзерскрипты `tools/`: собранный `.user.js` побайтово равен закоммиченному, части нумерованы и держат обёртку, версия берётся из `meta.js`, канон метаданных и ссылки установки, `node --check` по артефактам;
+- `tests/test_tools_userscripts.py` — юзерскрипты `tools/`: собранный `.user.js` побайтово равен закоммиченному, части нумерованы и держат обёртку, версия берётся из `meta.js`, канон метаданных и ссылки установки, `node --check` по артефактам, плюс `node --test` по `tests/tools/*.test.mjs`;
+- `tests/tools/lite-reasoning.test.mjs` — node-тесты чистой логики Lite (части — один IIFE, поэтому подопытный блок вырезается из артефакта по маркерам и исполняется на заглушках): какие reasoning/thinking-ключи уходят в тело запроса, финальное состояние панели прогресса и жизнь флага отмены;
 - `tests/test_architecture.py` — регресс-гарды архитектуры (§3: запрет `input()` и UI-импортов в `cli/`, единый стрим, bootstrap, web-раскладка, run.py — лаунчер web, отсутствие backends/cli|tui).
 
 ## 11. Правила коммитов

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.42
+// @version      1.43
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.42';
+    const APP_VERSION = '1.43';
 
     // ===== КОНФИГУРАЦИЯ =====
     // Штатный промпт перевода (редактируемое поле Настроек). Плейсхолдеры те же,
@@ -129,7 +129,17 @@
         model: 'google/gemma-4-31b-it',
         sourceLang: 'Авто',
         targetLang: 'Русский',
-        reasoningEffort: 'None',
+        // Размышления модели. thinkingMode: 'default' — ни одного reasoning-ключа
+        // в запросе (решает сервер), 'on'/'off' — включить/выключить выбранным
+        // профилем; thinkingProfile — как именно передавать (у провайдеров общего
+        // поля нет); reasoningEffort — уровень ('' — не отправлять; старое 'None'
+        // читается как «не отправлять»); thinkingBudget — ТОКЕНЫ (0 — не отправлять);
+        // extraBodyJson — свои поля тела запроса, JSON (любой провайдер).
+        thinkingMode: 'default',
+        thinkingProfile: 'openai',
+        reasoningEffort: '',
+        thinkingBudget: 0,
+        extraBodyJson: '',
         chunkSize: 10000, // ТОКЕНЫ (оценка estimateTokens): имена сохранены, единица — токены
         requestTimeout: 60, // СЕКУНДЫ (0 = без таймаута): у стрима — пауза между токенами, у обычного запроса — ожидание всего ответа
         maxRetries: 3,
@@ -911,6 +921,8 @@
             .nm-progress-fill.retry { background: repeating-linear-gradient(45deg, #f59e0b 0 10px, #fbbf24 10px 20px); background-size: 28.3px 28.3px; animation: nm-retry-stripes .8s linear infinite; }
             @keyframes nm-retry-stripes { to { background-position: 28.3px 0; } }
             .nm-input:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
+            /* разбитый JSON в «своих полях запроса»: запрос уходит без них — поле мигает */
+            .nm-input-bad { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
             .nm-checkbox-group { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
             .nm-checkbox-group input { width: 18px; height: 18px; cursor: pointer; }
             .nm-checkbox-group label { margin: 0; cursor: pointer; }
@@ -1001,9 +1013,11 @@
             .nm-reader-progress.active { display: flex; }
             .nm-rp-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
             #reader-progress-title { font-weight: 600; }
-            #reader-cancel { border: 1px solid rgba(200,80,80,.6); color: #b3403a; background: transparent; border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+            #reader-cancel, #reader-progress-close { border: 1px solid rgba(200,80,80,.6); color: #b3403a; background: transparent; border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+            #reader-progress-close { border-color: rgba(128,128,128,.5); color: inherit; }
             #nm-reader-mode.nm-reader-dark #reader-cancel { color: #e08585; border-color: rgba(224,133,133,.5); }
             #reader-cancel:hover { background: rgba(200,80,80,.12); }
+            #reader-progress-close:hover { background: rgba(128,128,128,.15); }
             #reader-progress-status { opacity: .75; font-size: 12px; }
             .nm-reader-nav { display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; }
             .nm-reader-nav button { padding: 9px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; background: transparent; border: 1px solid; transition: background .15s; }
@@ -1150,16 +1164,48 @@
                                 <label for="local-model">🖥️ Локальная модель без API-ключа</label>
                             </div>
                             <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
-                            <div class="nm-input-group"><label>Уровень reasoning:</label>
-                                <input type="text" class="nm-input" id="reasoning-effort" list="nm-reasoning-list" placeholder="None">
-                                <datalist id="nm-reasoning-list">
-                                    <option value="None"></option><option value="minimal"></option><option value="low"></option>
-                                    <option value="medium"></option><option value="high"></option>
-                                </datalist>
-                                <small>Пусто или 'None' — параметр не передаётся.</small>
-                            </div>
                             <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
                             <div class="nm-server-status" id="server-status"></div>
+                        </div>
+                        <div class="nm-section">
+                            <h3>🧠 Reasoning и thinking</h3>
+                            <div class="nm-input-group"><label>Режим мышления:</label>
+                                <select class="nm-select" id="thinking-mode">
+                                    <option value="default">🌐 Как у модели — ничего не отправлять</option>
+                                    <option value="on">💭 Включить рассуждения</option>
+                                    <option value="off">🚫 Выключить рассуждения</option>
+                                </select>
+                                <small>У провайдеров нет общего поля thinking: выбранное действие отправляется профилем ниже. «Как у модели» — ни одного reasoning-ключа в запросе, сервер решает сам.</small>
+                            </div>
+                            <div class="nm-input-group"><label>Профиль API (как передавать):</label>
+                                <select class="nm-select" id="reasoning-profile">
+                                    <option value="openai">OpenAI-совместимый — reasoning_effort</option>
+                                    <option value="anthropic">Anthropic-style — thinking.type</option>
+                                    <option value="qwen">Qwen3 / vLLM / llama.cpp — chat_template_kwargs</option>
+                                    <option value="dashscope">DashScope / SiliconFlow — enable_thinking</option>
+                                    <option value="ollama">Ollama — think</option>
+                                    <option value="openrouter">OpenRouter — reasoning.enabled</option>
+                                    <option value="all">Все профили сразу — «универсальный»</option>
+                                </select>
+                                <small>Профиль отправляет только свои ключи: незнакомый ключ часть серверов считает ошибкой запроса, поэтому «все сразу» — отдельный осознанный режим. Текст, который реально уходит, показывает «🔌 Проверить сервер».</small>
+                            </div>
+                            <div class="nm-input-group"><label>Уровень рассуждений (пусто = не отправлять):</label>
+                                <select class="nm-select" id="reasoning-effort">
+                                    <option value="">не отправлять</option><option value="minimal">minimal</option>
+                                    <option value="low">low</option><option value="medium">medium</option>
+                                    <option value="high">high</option><option value="xhigh">xhigh</option>
+                                    <option value="max">max</option>
+                                </select>
+                                <small>Отправляется выбранным профилем как есть. Старое значение «None» = «не отправлять».</small>
+                            </div>
+                            <div class="nm-input-group"><label>Бюджет размышлений (токены, 0 = не отправлять):</label>
+                                <input type="number" class="nm-input" id="thinking-budget" min="0" step="128">
+                                <small>ТОКЕНЫ: thinking.budget_tokens / thinking_budget / reasoning.max_tokens — куда он попадает, зависит от профиля.</small>
+                            </div>
+                            <div class="nm-input-group"><label>Свои поля запроса (JSON):</label>
+                                <textarea class="nm-textarea" id="extra-body-json" placeholder='{"chat_template_kwargs": {"enable_thinking": false}}'></textarea>
+                                <small>Универсальный способ: этот JSON-объект добавляется в тело каждого запроса к модели поверх reasoning-полей (при одном ключе он главнее). Битый JSON игнорируется — запрос идёт без своих полей.</small>
+                            </div>
                         </div>
                         <div class="nm-section">
                             <h3>📝 Перевод</h3>
@@ -1305,6 +1351,7 @@
                         <div class="nm-rp-row">
                             <span id="reader-progress-title">🔄 Перевод...</span>
                             <button id="reader-cancel">Отменить</button>
+                            <button id="reader-progress-close" title="Скрыть панель прогресса" style="display:none;">Скрыть</button>
                         </div>
                         <div class="nm-progress-bar"><div class="nm-progress-fill" id="reader-progress-fill"></div></div>
                         <div id="reader-progress-status">Подготовка...</div>
@@ -1422,19 +1469,38 @@
         cancelRequested = true;
         if (activeReader) { try { activeReader.cancel(); } catch {} }
     });
+    $('#reader-progress-close').addEventListener('click', () => progressHide());
     $('#nm-extract-close').addEventListener('click', () => {
         if (!isTranslating) $('#nm-extract-popup').classList.remove('active');
     });
 
     // ===== ПРОГРЕСС =====
+    // Панель живёт в двух состояниях: работа (кнопка «Отменить») и итог (кнопка
+    // «Скрыть»). Отменённый или оборванный прогон обязан выглядеть итогом, который
+    // закрывается одним нажатием, а не вечным «идёт работа» с мёртвой кнопкой.
+    function progressState(done) {
+        $('#reader-progress').classList.toggle('nm-rp-done', done);
+        $('#reader-cancel').style.display = done ? 'none' : '';
+        $('#reader-progress-close').style.display = done ? '' : 'none';
+    }
     function progressShow(title) {
         if (!readerModeActive) openReaderShell(null);
         $('#reader-progress').classList.add('active');
+        progressState(false);
         $('#reader-progress-title').textContent = title;
         $('#reader-progress-status').textContent = 'Подготовка...';
         const f = $('#reader-progress-fill');
         f.style.width = '0%';
         f.classList.remove('retry');
+        updateNavButtons();
+    }
+    /** Финальное состояние панели: прогресс остаётся как есть, кнопка — «Скрыть». */
+    function progressFinish(title, status) {
+        if (!readerModeActive) openReaderShell(null);
+        $('#reader-progress').classList.add('active');
+        progressState(true);
+        $('#reader-progress-title').textContent = title;
+        $('#reader-progress-status').textContent = status;
         updateNavButtons();
     }
     function progressStatus(t) { $('#reader-progress-status').textContent = t; }
@@ -2153,7 +2219,7 @@
             reader = resp.body.getReader();
             activeReader = reader;
             const decoder = new TextDecoder();
-            let text = '', buffer = '', streamError = null, streamModel = '', sawDone = false;
+            let text = '', buffer = '', streamError = null, streamModel = '', sawDone = false, reasoningChars = 0;
             const handleLine = (line) => {
                 const trimmed = line.trim();
                 if (!trimmed.startsWith('data:')) return;
@@ -2162,11 +2228,12 @@
                 try {
                     const parsed = JSON.parse(payload);
                     if (parsed && parsed.error) {
-                        // ошибка в SSE-потоке (неверная модель/ключ) — фатальна, без ретраев
-                        const errMsg = parsed.error.message || JSON.stringify(parsed.error);
-                        streamError = new Error(errMsg);
-                        if (typeof parsed.error.code === 'number') streamError.status = parsed.error.code;
-                        streamError.isFatal = /invalid|api key|api_key|authentication|unauthorized|forbidden|model|not found|does not exist|unsupported/i.test(errMsg);
+                        // ошибка в SSE-потоке (неверная модель/ключ/парамет) — фатальна, без ретраев
+                        const info = streamErrorInfo(parsed.error);
+                        streamError = new Error(info.message);
+                        streamError.fromStream = true;
+                        if (info.status >= 400) { streamError.status = info.status; streamError.isFatal = true; }
+                        else streamError.isFatal = /invalid|api key|api_key|authentication|unauthorized|forbidden|model|not found|does not exist|unsupported/i.test(info.message);
                         return;
                     }
                     if (parsed && typeof parsed.model === 'string' && parsed.model) streamModel = parsed.model;
@@ -2175,13 +2242,22 @@
                     // поток без [DONE], но сказать, что закончил осознанно
                     if (choice && choice.finish_reason && choice.finish_reason !== 'null') sawDone = true;
                     const content = choice?.delta?.content || '';
+                    // thinking-модели пишут размышления отдельными полями (delta
+                    // .reasoning_content у DeepSeek/Qwen, .reasoning у OpenRouter): в
+                    // перевод они не попадают, но это живая работа сервера — без неё
+                    // сторож «нет токенов» убивал бы долгое размышление
+                    const thought = choice?.delta?.reasoning_content || choice?.delta?.reasoning || '';
+                    if (thought) {
+                        reasoningChars += thought.length;
+                        if (cb.onReasoning) cb.onReasoning(thought);
+                    }
                     if (content) { text += content; if (cb.onDelta) cb.onDelta(content); }
                 } catch {}
             };
             while (true) {
                 if (failed) break;
                 if (cancelRequested) { fail(new Error('Отменено пользователем')); break; }
-                const beforeLen = text.length;
+                const beforeLen = text.length + reasoningChars;
                 const readPromise = reader.read();
                 readPromise.catch(() => {});
                 const { done, value } = await Promise.race([readPromise, watchPromise]);
@@ -2193,7 +2269,7 @@
                     handleLine(line);
                     if (streamError) { streamError.trace = traceLog.join(' '); throw streamError; }
                 }
-                if (text.length > beforeLen) {
+                if (text.length + reasoningChars > beforeLen) {
                     arm();
                     // пингу проверки достаточно одного токена: закрываем соединение,
                     // не дожидаясь, пока сервер оборвёт свой SSE-поток
@@ -2203,9 +2279,10 @@
             if (!failed && !cancelRequested) { buffer += decoder.decode(); handleLine(buffer); }
             if (cancelRequested) { const e = new Error('Отменено пользователем'); e.trace = traceLog.join(' '); throw e; }
             if (failed) { const e = makeAbortError(true); e.trace = traceLog.join(' '); throw e; }
-            if (cb.stopOnFirstContent && text.trim()) {
+            // пинг проверки считается ответом и на размышлениях: сервер ответил
+            if (cb.stopOnFirstContent && (text.trim() || reasoningChars)) {
                 try { if (underlyingAbort) underlyingAbort(); } catch {}
-                return { text, model: streamModel, trace: traceLog.join(' ') };
+                return { text, reasoning: reasoningChars, model: streamModel, trace: traceLog.join(' ') };
             }
             if (!text.trim()) {
                 // сервер мог ответить на stream-запрос обычным JSON-телом: ошибкой —
@@ -2221,11 +2298,14 @@
                     try {
                         const parsed = JSON.parse(tail);
                         if (parsed && parsed.error) {
-                            const err = new Error(parsed.error.message || JSON.stringify(parsed.error));
-                            err.isFatal = /invalid|api key|api_key|authentication|unauthorized|forbidden|model|not found|does not exist|unsupported/i.test(err.message);
+                            const info = streamErrorInfo(parsed.error);
+                            const err = new Error(info.message);
+                            err.fromStream = true;
+                            if (info.status >= 400) { err.status = info.status; err.isFatal = true; }
+                            else err.isFatal = /invalid|api key|api_key|authentication|unauthorized|forbidden|model|not found|does not exist|unsupported/i.test(info.message);
                             throw err;
                         }
-                    } catch (e) { if (e && e.message && !/JSON/i.test(e.message)) throw e; }
+                    } catch (e) { if (e && e.fromStream) throw e; if (e && e.message && !/JSON/i.test(e.message)) throw e; }
                 }
                 // пустой completion (чаще всего — неверная модель) не считается результатом
                 const err = new Error('Пустой ответ модели. Проверьте модель, права и параметры запроса.');
@@ -2280,14 +2360,132 @@
         if (config.apiKey) h.Authorization = `Bearer ${config.apiKey}`;
         return h;
     }
-    function llmRequestOptions(messages, temperature, stream) {
+    /**
+     * Размышления (thinking/reasoning) у провайдеров не унифицированы: OpenAI
+     * знает только reasoning_effort, Anthropic-style серверы — thinking.type,
+     * Qwen3 под vLLM/SGLang/llama.cpp — chat_template_kwargs, DashScope и
+     * SiliconFlow — enable_thinking, Ollama — think, OpenRouter — reasoning.
+     * Профиль отправляет только СВОИ ключи: незнакомый ключ часть серверов
+     * считает ошибкой запроса, поэтому «выложить все сразу» — отдельный режим.
+     */
+    const REASONING_PROFILES = {
+        // OpenAI и совместимые: единый reasoning_effort. Без уровня «выключено»
+        // отправляется как none, «включено» без уровня — решение сервера
+        openai({ mode, effort }) {
+            if (effort) return { reasoning_effort: effort };
+            return mode === 'off' ? { reasoning_effort: 'none' } : {};
+        },
+        anthropic({ mode, budget }) {
+            if (mode === 'default') return {};
+            const thinking = { type: mode === 'on' ? 'enabled' : 'disabled' };
+            if (mode === 'on' && budget > 0) thinking.budget_tokens = budget;
+            return { thinking };
+        },
+        // Qwen3/DeepSeek под vLLM/SGLang/llama.cpp: ключ живёт в шаблоне чата
+        qwen({ mode }) {
+            if (mode === 'default') return {};
+            const on = mode === 'on';
+            return { chat_template_kwargs: { thinking: on, enable_thinking: on } };
+        },
+        dashscope({ mode, budget }) {
+            if (mode === 'default') return {};
+            const body = { enable_thinking: mode === 'on' };
+            if (mode === 'on' && budget > 0) body.thinking_budget = budget;
+            return body;
+        },
+        ollama({ mode }) {
+            return mode === 'default' ? {} : { think: mode === 'on' };
+        },
+        // OpenRouter: только ОДНО из effort/max_tokens — роутеры отвечают
+        // «Only one of "reasoning.effort" and "reasoning.max_tokens" can be specified»
+        openrouter({ mode, effort, budget }) {
+            if (mode === 'default') return {};
+            const reasoning = { enabled: mode === 'on' };
+            if (effort) reasoning.effort = effort;
+            else if (mode === 'on' && budget > 0) reasoning.max_tokens = budget;
+            return { reasoning };
+        },
+        // «все сразу» — для серверов, молча игнорирующих чужие ключи; строгие
+        // из них отвечают 400, поэтому режим выбирается осознанно
+        all(c) {
+            const body = {};
+            for (const [id, build] of Object.entries(REASONING_PROFILES)) {
+                if (id !== 'all') Object.assign(body, build(c));
+            }
+            return body;
+        }
+    };
+    /** Пусто и старое 'None' — параметр не отправляется (так он понимался всегда). */
+    function normalizeEffort(value) {
+        const s = String(value ?? '').trim();
+        return (!s || s.toLowerCase() === 'none') ? '' : s;
+    }
+    function thinkingMode() {
+        return ['on', 'off'].includes(String(config.thinkingMode)) ? String(config.thinkingMode) : 'default';
+    }
+    /** Что из reasoning/thinking реально уходит в тело запроса ({} — дефолт сервера). */
+    function reasoningFields() {
+        const mode = thinkingMode();
+        const effort = normalizeEffort(config.reasoningEffort);
+        if (mode === 'default' && !effort) return {};
+        const build = REASONING_PROFILES[config.thinkingProfile] || REASONING_PROFILES.openai;
+        return build({ mode, effort, budget: Number(config.thinkingBudget) || 0 });
+    }
+    /**
+     * Свои поля тела — способ передать то, чего не знает ни один профиль.
+     * Битый JSON запрос не ломает: поле помечено ошибкой в настройках.
+     */
+    function extraBodyFields() {
+        const raw = String(config.extraBodyJson || '').trim();
+        if (!raw) return {};
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+        } catch { /* не разобрано — запрос идёт без своих полей */ }
+        return {};
+    }
+    /** Строка о том, что реально уходит по reasoning: её печатает проверка сервера. */
+    function reasoningSummary() {
+        const fields = reasoningFields();
+        const keys = Object.keys(fields);
+        if (!keys.length) return '💭 как у модели';
+        return `💭 ${config.thinkingProfile}: ${keys.map(k => `${k}=${JSON.stringify(fields[k])}`).join(' ')}`;
+    }
+    /** extra — поля, добавляемые к телу поверх типовых (пинг проверки: max_tokens). */
+    function llmRequestOptions(messages, temperature, stream, extra = null) {
         const body = { model: config.model, messages, temperature, stream: !!stream };
-        const re = String(config.reasoningEffort ?? '').trim();
-        if (re !== '' && re.toLowerCase() !== 'none') body.reasoning_effort = re;
+        Object.assign(body, reasoningFields(), extraBodyFields(), extra || {});
         return {
             url: apiBase() + '/chat/completions',
             options: { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(body) }
         };
+    }
+    /**
+     * Ошибка, пришедшая в теле ответа. Роутеры умеют прятать её строкой с JSON
+     * внутри: {"error":"{\"error\":{\"message\":…},\"code\":400}"} — разворачивать
+     * надо циклом, иначе пользователь видит экранированный JSON, а потерянный код 400
+     * заставляет повторять заведомо плохой запрос maxRetries раз.
+     */
+    function streamErrorInfo(raw) {
+        let node = raw, message = '', status = 0;
+        for (let depth = 0; node != null && depth < 4; depth++) {
+            if (typeof node === 'string') {
+                const s = node.trim();
+                let inner = null;
+                if (s.startsWith('{')) { try { inner = JSON.parse(s).error ?? null; } catch { inner = null; } }
+                if (inner == null) { if (!message) message = s; break; }
+                node = inner;
+                continue;
+            }
+            if (typeof node === 'object') {
+                if (!message && typeof node.message === 'string' && node.message.trim()) message = node.message;
+                if (!status && typeof node.code === 'number') status = node.code;
+                node = node.error ?? null;
+                continue;
+            }
+            break;
+        }
+        return { message: message || (typeof raw === 'string' ? raw : JSON.stringify(raw)), status };
     }
     async function callLLM(messages, temperature, stream, cb = {}) {
         const { url, options } = llmRequestOptions(messages, temperature, stream);
@@ -2321,15 +2519,17 @@
         // закрывать соединение (на них не-стримовый пинг висел до таймаута), отвечают
         // сразу; соединение закрываем сами, не дожидаясь их вежливости.
         const t0 = Date.now();
-        const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, true);
-        const payload = JSON.parse(options.body);
-        payload.max_tokens = 1;
+        // max_tokens:1 расходится с включённым thinking: часть серверов требует
+        // max_tokens больше бюджета размышлений — тогда лимит просто не шлём
+        const extra = thinkingMode() === 'on' ? null : { max_tokens: 1 };
+        const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, true, extra);
         try {
-            const res = await fetchAttempt(url, { ...options, body: JSON.stringify(payload) }, true, timeout,
+            const res = await fetchAttempt(url, options, true, timeout,
                 { stopOnFirstContent: true, deadline: true });
             const got = String(res.text || '').trim();
             show('ok', `✅ Сервер доступен • ${target} • пинг ${Date.now() - t0}мс • модель ${res.model || config.model}`
-                + (got ? ` • ответ: ${got.slice(0, 24)}` : '') + ` • ${transport}`);
+                + (got ? ` • ответ: ${got.slice(0, 24)}` : (res.reasoning ? ` • 💭 только размышления (${res.reasoning} зн.)` : ''))
+                + ` • ${reasoningSummary()} • ${transport}`);
         } catch (e) {
             // Пинг не дошёл — отличаем «адрес недоступен» от «модель думает дольше
             // таймаута». Диагностический GET /models идёт со своим запасом: он тяжелый.
@@ -2553,8 +2753,15 @@
                 fill.classList.remove('retry');
                 progressStatus(`Чанк ${i + 1}/${chunks.length} • абзацев в источнике: ${totalParas}`
                     + (resumed ? ` • продолжаю (${resumed}/${chunks.length} уже готово)` : ''));
-                let chunkTranslation = '';
+                let chunkTranslation = '', thoughtShown = false;
                 const res = await callLLM([{ role: 'user', content: chunkUserPrompt(chunks[i]) }], 0.7, true, {
+                    // thinking-модель: пока приходят только размышления, прогресс
+                    // обязан говорить «думает», а не молчать на «Чанк N/M»
+                    onReasoning: () => {
+                        if (chunkTranslation || thoughtShown) return;
+                        thoughtShown = true;
+                        progressStatus(`Чанк ${i + 1}/${chunks.length} • 💭 модель размышляет…`);
+                    },
                     onDelta: (content) => {
                         chunkTranslation += content;
                         const all = joinParts(parts.map((p, j) => (j === i ? chunkTranslation : p)));
@@ -2564,6 +2771,7 @@
                     },
                     onRetry: (info) => {
                         chunkTranslation = '';
+                        thoughtShown = false;
                         renderTranslationInto(element, joinParts(parts));
                         setProgress(joinParts(parts));
                         fill.classList.add('retry');
@@ -2658,17 +2866,20 @@
             systemDark.addListener(() => { if (config.readerTheme === 'auto') applyTheme(); });
         }
     } catch { /* браузер без media-слушателя — тема просто не обновится на лету */ }
+    // читалка без перевода: пустой экран обязан объяснять состояние прогона, а не
+    // выглядеть зависшим (именно так выглядела отмена для главы без единого чанка)
+    function showReaderNotice(text) {
+        const div = document.createElement('div');
+        div.className = 'nm-reader-loading';
+        div.textContent = text;
+        readerContent.replaceChildren(div);
+    }
     function openReaderShell(loadingText) {
         readerModeActive = true;
         readerMode.classList.add('active');
         buttonsBar.style.display = 'none';
         applyTheme();
-        if (loadingText) {
-            const div = document.createElement('div');
-            div.className = 'nm-reader-loading';
-            div.textContent = loadingText;
-            readerContent.replaceChildren(div);
-        }
+        if (loadingText) showReaderNotice(loadingText);
         updateNavButtons();
     }
     function closeReader() {
@@ -2790,7 +3001,7 @@
         // readerState создаётся СРАЗУ по живой странице — кнопки навигации
         // доступны даже если перевод отменён или не удался
         setReaderState({ url, title: document.title, text: '', ...resolveNavFromLive() }, false);
-        let flowCompleted = false;
+        let flowCompleted = false, flowCanceled = false;
         // адрес «Открыть на сайте»: выученное оглавление, иначе эта глава
         // (последняя переведённая)
         current.book.openUrl = readerState.tocUrl || url;
@@ -2848,9 +3059,10 @@
                     }
                 }
                 if (cancelRequested) {
-                    progressShow('⏹ Отменено');
-                    progressStatus('Отменено пользователем');
-                    readerContent.innerHTML = '<div class="nm-reader-loading">⏹ Перевод отменён<br><small>Меню ⋮ → «🌐 Перевести» продолжит с сохранённого места</small></div>';
+                    // отмена до перевода: показывать нечего, кроме причины
+                    flowCanceled = true;
+                    showReaderNotice('⏹ Перевод остановлен • Меню ⋮ → «🌐 Перевести» продолжит с сохранённого места');
+                    progressFinish('⏹ Перевод остановлен', 'Отменено пользователем');
                     return;
                 }
                 progressShow(title);
@@ -2871,22 +3083,28 @@
                 if (translationResult.completed && full) {
                     cacheSet(url, { url, title: document.title, text: full, ...nav }, current.key);
                     flowCompleted = true;
-                } else if (full) {
-                    progressShow('⏳ Перевод не завершён');
-                    progressStatus(`${translationResult.error || 'обрыв связи'} • сохранено ${full.length} зн.`
-                        + ' • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
+                } else if (cancelRequested) {
+                    flowCanceled = true;
+                    if (!full) showReaderNotice('⏹ Перевод остановлен • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
+                    progressFinish('⏹ Перевод остановлен', `Отменено пользователем${full ? ` • сохранено ${full.length} зн.` : ''}`);
                 } else {
-                    progressShow('⏳ Перевод не завершён');
-                    progressStatus(`${translationResult.error || 'обрыв связи'} • ни один чанк не дошёл целиком`);
+                    if (!full) showReaderNotice('⏳ Перевод не завершён • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
+                    progressFinish('⏳ Перевод не завершён', `${translationResult.error || 'обрыв связи'}${full ? ` • сохранено ${full.length} зн.` : ' • ни один чанк не дошёл целиком'}`);
                 }
             }
             if (!cancelRequested && config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
         } finally {
             isTranslating = false;
+            // флаг отмены живёт ровно один прогон: пока он оставался взведённым,
+            // каждый следующий запрос (в т.ч. «Проверить сервер») мгновенно падал с
+            // «Отменено пользователем (0мс)», и лечилось это перезагрузкой страницы
+            cancelRequested = false;
+            activeReader = null;
             updateNavButtons();
-            // оборванный перевод НЕ прячет прогресс: панель с причиной остаётся
-            // перед глазами, а не превращается в «всё готово»
+            // готовая глава и явная отмена гасят панель; оборванный перевод остаётся
+            // перед глазами с кнопкой «Скрыть» — но уже не навсегда
             if (flowCompleted) setTimeout(progressHide, 2500);
+            else if (flowCanceled) setTimeout(progressHide, 3000);
         }
     }
     async function handleExtractTerms() {
@@ -2914,6 +3132,10 @@
             extractMiniStatus('❌ ' + error.message);
         } finally {
             isTranslating = false;
+            // тот же флаг: без сброса отменённое извлечение тихо валило бы каждый
+            // следующий запрос до перезагрузки страницы
+            cancelRequested = false;
+            activeReader = null;
             extractMiniHide(2600);
         }
     }
@@ -3212,7 +3434,12 @@
         $('#api-host').value = config.apiHost;
         $('#api-key').value = config.apiKey;
         $('#model').value = config.model;
-        $('#reasoning-effort').value = config.reasoningEffort;
+        // уровень — select: старое «None» показывается как «не отправлять»
+        $('#reasoning-effort').value = normalizeEffort(config.reasoningEffort);
+        $('#thinking-mode').value = thinkingMode();
+        $('#reasoning-profile').value = REASONING_PROFILES[config.thinkingProfile] ? config.thinkingProfile : 'openai';
+        $('#thinking-budget').value = config.thinkingBudget;
+        $('#extra-body-json').value = config.extraBodyJson;
         $('#request-timeout').value = config.requestTimeout;
         $('#max-retries').value = config.maxRetries;
         $('#chunk-size').value = config.chunkSize;
@@ -3239,6 +3466,9 @@
         ['#api-key', 'apiKey', v => v.trim()],
         ['#model', 'model', v => v.trim()],
         ['#reasoning-effort', 'reasoningEffort', v => v],
+        ['#thinking-mode', 'thinkingMode', v => v],
+        ['#reasoning-profile', 'thinkingProfile', v => v],
+        ['#thinking-budget', 'thinkingBudget', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : 0; }],
         ['#request-timeout', 'requestTimeout', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 0 ? n : 10; }],
         ['#max-retries', 'maxRetries', v => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : 3; }],
         ['#chunk-size', 'chunkSize', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : DEFAULT_CONFIG.chunkSize; }],
@@ -3280,6 +3510,32 @@
         });
         $('#preemptive-translate').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
         $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'manager' : 'page'; scheduleSettingsSave(); });
+        // свои поля — JSON: битый стоит показать сразу, а не молча игнорировать
+        // (текст при этом сохраняется — пользователь не теряет ввод)
+        const extra = $('#extra-body-json');
+        const saveExtra = () => {
+            const raw = extra.value.trim();
+            extra.classList.remove('nm-input-bad');
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('нужен JSON-объект');
+                } catch (e) {
+                    // битый JSON показываем причиной, а не «сохранено»: висящий debounce иначе
+                    // затирает сообщение через 400 мс, а свои поля тем временем молча не отправляются
+                    clearTimeout(settingsSaveTimer);
+                    extra.classList.add('nm-input-bad');
+                    config.extraBodyJson = raw;
+                    GM_setValue('config', config);
+                    showStatus(`❌ «Свои поля запроса» не разобраны (${e.message}) — запрос идёт без них`, 'error', 'status-settings');
+                    return;
+                }
+            }
+            config.extraBodyJson = raw;
+            scheduleSettingsSave();
+        };
+        extra.addEventListener('input', saveExtra);
+        extra.addEventListener('change', saveExtra);
     }
     function resetSettings() {
         if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;

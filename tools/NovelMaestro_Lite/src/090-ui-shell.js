@@ -74,19 +74,38 @@
         cancelRequested = true;
         if (activeReader) { try { activeReader.cancel(); } catch {} }
     });
+    $('#reader-progress-close').addEventListener('click', () => progressHide());
     $('#nm-extract-close').addEventListener('click', () => {
         if (!isTranslating) $('#nm-extract-popup').classList.remove('active');
     });
 
     // ===== ПРОГРЕСС =====
+    // Панель живёт в двух состояниях: работа (кнопка «Отменить») и итог (кнопка
+    // «Скрыть»). Отменённый или оборванный прогон обязан выглядеть итогом, который
+    // закрывается одним нажатием, а не вечным «идёт работа» с мёртвой кнопкой.
+    function progressState(done) {
+        $('#reader-progress').classList.toggle('nm-rp-done', done);
+        $('#reader-cancel').style.display = done ? 'none' : '';
+        $('#reader-progress-close').style.display = done ? '' : 'none';
+    }
     function progressShow(title) {
         if (!readerModeActive) openReaderShell(null);
         $('#reader-progress').classList.add('active');
+        progressState(false);
         $('#reader-progress-title').textContent = title;
         $('#reader-progress-status').textContent = 'Подготовка...';
         const f = $('#reader-progress-fill');
         f.style.width = '0%';
         f.classList.remove('retry');
+        updateNavButtons();
+    }
+    /** Финальное состояние панели: прогресс остаётся как есть, кнопка — «Скрыть». */
+    function progressFinish(title, status) {
+        if (!readerModeActive) openReaderShell(null);
+        $('#reader-progress').classList.add('active');
+        progressState(true);
+        $('#reader-progress-title').textContent = title;
+        $('#reader-progress-status').textContent = status;
         updateNavButtons();
     }
     function progressStatus(t) { $('#reader-progress-status').textContent = t; }

@@ -60,7 +60,17 @@
         model: 'google/gemma-4-31b-it',
         sourceLang: 'Авто',
         targetLang: 'Русский',
-        reasoningEffort: 'None',
+        // Размышления модели. thinkingMode: 'default' — ни одного reasoning-ключа
+        // в запросе (решает сервер), 'on'/'off' — включить/выключить выбранным
+        // профилем; thinkingProfile — как именно передавать (у провайдеров общего
+        // поля нет); reasoningEffort — уровень ('' — не отправлять; старое 'None'
+        // читается как «не отправлять»); thinkingBudget — ТОКЕНЫ (0 — не отправлять);
+        // extraBodyJson — свои поля тела запроса, JSON (любой провайдер).
+        thinkingMode: 'default',
+        thinkingProfile: 'openai',
+        reasoningEffort: '',
+        thinkingBudget: 0,
+        extraBodyJson: '',
         chunkSize: 10000, // ТОКЕНЫ (оценка estimateTokens): имена сохранены, единица — токены
         requestTimeout: 60, // СЕКУНДЫ (0 = без таймаута): у стрима — пауза между токенами, у обычного запроса — ожидание всего ответа
         maxRetries: 3,

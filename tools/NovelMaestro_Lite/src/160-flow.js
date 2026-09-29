@@ -32,7 +32,7 @@
         // readerState создаётся СРАЗУ по живой странице — кнопки навигации
         // доступны даже если перевод отменён или не удался
         setReaderState({ url, title: document.title, text: '', ...resolveNavFromLive() }, false);
-        let flowCompleted = false;
+        let flowCompleted = false, flowCanceled = false;
         // адрес «Открыть на сайте»: выученное оглавление, иначе эта глава
         // (последняя переведённая)
         current.book.openUrl = readerState.tocUrl || url;
@@ -90,9 +90,10 @@
                     }
                 }
                 if (cancelRequested) {
-                    progressShow('⏹ Отменено');
-                    progressStatus('Отменено пользователем');
-                    readerContent.innerHTML = '<div class="nm-reader-loading">⏹ Перевод отменён<br><small>Меню ⋮ → «🌐 Перевести» продолжит с сохранённого места</small></div>';
+                    // отмена до перевода: показывать нечего, кроме причины
+                    flowCanceled = true;
+                    showReaderNotice('⏹ Перевод остановлен • Меню ⋮ → «🌐 Перевести» продолжит с сохранённого места');
+                    progressFinish('⏹ Перевод остановлен', 'Отменено пользователем');
                     return;
                 }
                 progressShow(title);
@@ -113,22 +114,28 @@
                 if (translationResult.completed && full) {
                     cacheSet(url, { url, title: document.title, text: full, ...nav }, current.key);
                     flowCompleted = true;
-                } else if (full) {
-                    progressShow('⏳ Перевод не завершён');
-                    progressStatus(`${translationResult.error || 'обрыв связи'} • сохранено ${full.length} зн.`
-                        + ' • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
+                } else if (cancelRequested) {
+                    flowCanceled = true;
+                    if (!full) showReaderNotice('⏹ Перевод остановлен • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
+                    progressFinish('⏹ Перевод остановлен', `Отменено пользователем${full ? ` • сохранено ${full.length} зн.` : ''}`);
                 } else {
-                    progressShow('⏳ Перевод не завершён');
-                    progressStatus(`${translationResult.error || 'обрыв связи'} • ни один чанк не дошёл целиком`);
+                    if (!full) showReaderNotice('⏳ Перевод не завершён • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
+                    progressFinish('⏳ Перевод не завершён', `${translationResult.error || 'обрыв связи'}${full ? ` • сохранено ${full.length} зн.` : ' • ни один чанк не дошёл целиком'}`);
                 }
             }
             if (!cancelRequested && config.preemptiveTranslation && readerState && readerState.nextUrl) pretranslateNext(readerState.nextUrl);
         } finally {
             isTranslating = false;
+            // флаг отмены живёт ровно один прогон: пока он оставался взведённым,
+            // каждый следующий запрос (в т.ч. «Проверить сервер») мгновенно падал с
+            // «Отменено пользователем (0мс)», и лечилось это перезагрузкой страницы
+            cancelRequested = false;
+            activeReader = null;
             updateNavButtons();
-            // оборванный перевод НЕ прячет прогресс: панель с причиной остаётся
-            // перед глазами, а не превращается в «всё готово»
+            // готовая глава и явная отмена гасят панель; оборванный перевод остаётся
+            // перед глазами с кнопкой «Скрыть» — но уже не навсегда
             if (flowCompleted) setTimeout(progressHide, 2500);
+            else if (flowCanceled) setTimeout(progressHide, 3000);
         }
     }
     async function handleExtractTerms() {
@@ -156,6 +163,10 @@
             extractMiniStatus('❌ ' + error.message);
         } finally {
             isTranslating = false;
+            // тот же флаг: без сброса отменённое извлечение тихо валило бы каждый
+            // следующий запрос до перезагрузки страницы
+            cancelRequested = false;
+            activeReader = null;
             extractMiniHide(2600);
         }
     }

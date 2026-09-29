@@ -77,6 +77,8 @@
             .nm-progress-fill.retry { background: repeating-linear-gradient(45deg, #f59e0b 0 10px, #fbbf24 10px 20px); background-size: 28.3px 28.3px; animation: nm-retry-stripes .8s linear infinite; }
             @keyframes nm-retry-stripes { to { background-position: 28.3px 0; } }
             .nm-input:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
+            /* разбитый JSON в «своих полях запроса»: запрос уходит без них — поле мигает */
+            .nm-input-bad { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
             .nm-checkbox-group { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
             .nm-checkbox-group input { width: 18px; height: 18px; cursor: pointer; }
             .nm-checkbox-group label { margin: 0; cursor: pointer; }
@@ -167,9 +169,11 @@
             .nm-reader-progress.active { display: flex; }
             .nm-rp-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
             #reader-progress-title { font-weight: 600; }
-            #reader-cancel { border: 1px solid rgba(200,80,80,.6); color: #b3403a; background: transparent; border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+            #reader-cancel, #reader-progress-close { border: 1px solid rgba(200,80,80,.6); color: #b3403a; background: transparent; border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+            #reader-progress-close { border-color: rgba(128,128,128,.5); color: inherit; }
             #nm-reader-mode.nm-reader-dark #reader-cancel { color: #e08585; border-color: rgba(224,133,133,.5); }
             #reader-cancel:hover { background: rgba(200,80,80,.12); }
+            #reader-progress-close:hover { background: rgba(128,128,128,.15); }
             #reader-progress-status { opacity: .75; font-size: 12px; }
             .nm-reader-nav { display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; }
             .nm-reader-nav button { padding: 9px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; background: transparent; border: 1px solid; transition: background .15s; }
