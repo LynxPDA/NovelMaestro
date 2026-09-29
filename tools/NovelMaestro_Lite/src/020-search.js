@@ -84,13 +84,54 @@
         return termHitsText({ term: needle }, textNorm, ngrams(textNorm), threshold);
     }
     function paragraphsOf(text) { return text.split(/\n+/).map(s => s.trim()).filter(s => s.length > 0); }
+    // Язык-осведомлённая ОЦЕНКА числа токенов — зеркало core.common.estimate_tokens:
+    // веса «токенов на символ» по скриптам (кириллица/латиница ~0.30, CJK-идеографы
+    // и каны ~1.0, хангыль ~0.8, тай/лаос/кхмер/бирма ~0.6, индийские ~0.55,
+    // арабский ~0.5, иврит ~0.4, греческий ~0.35); неучтённые буквы и цифры — 0.5,
+    // знаки/символы/эмодзи — 0.35; подряд идущие пробелы — 1 токен; итог — вверх +10%.
+    const TOKEN_RANGES = [
+        [0x0041, 0x005A, 0.30], [0x0061, 0x007A, 0.30], [0x00C0, 0x024F, 0.30],
+        [0x1E00, 0x1EFF, 0.30], [0x0400, 0x052F, 0.30],
+        [0x0370, 0x03FF, 0.35], [0x1F00, 0x1FFF, 0.35],
+        [0x0590, 0x05FF, 0.40], [0xFB1D, 0xFB4F, 0.40],
+        [0x0600, 0x06FF, 0.50], [0x0750, 0x077F, 0.50], [0x0870, 0x08FF, 0.50],
+        [0xFB50, 0xFDFF, 0.50], [0xFE70, 0xFEFF, 0.50], [0x0900, 0x0DFF, 0.55],
+        [0x0E00, 0x0EFF, 0.60], [0x1000, 0x109F, 0.60], [0x1780, 0x17FF, 0.60],
+        [0x19E0, 0x19FF, 0.60], [0x1100, 0x11FF, 0.80], [0x3130, 0x318F, 0.80],
+        [0xA960, 0xA97F, 0.80], [0xAC00, 0xD7AF, 0.80], [0xD7B0, 0xD7FF, 0.80],
+        [0x3040, 0x30FF, 1.00], [0x31F0, 0x31FF, 1.00], [0x3400, 0x4DBF, 1.00],
+        [0x4E00, 0x9FFF, 1.00], [0xF900, 0xFAFF, 1.00], [0x20000, 0x2FA1F, 1.00],
+    ];
+    const TOKEN_RE = /^\s*$/;
+    const LETTER_NUM = /\p{L}|\p{N}/u;
+    function estimateTokens(text) {
+        const s = String(text ?? '');
+        if (!s) return 0;
+        let total = 0;
+        let inWs = false;
+        for (const ch of s) {
+            if (TOKEN_RE.test(ch)) { if (!inWs) { total += 1; inWs = true; } continue; }
+            inWs = false;
+            const cp = ch.codePointAt(0);
+            let w = null;
+            for (const [lo, hi, wgt] of TOKEN_RANGES) {
+                if (cp >= lo && cp <= hi) { w = wgt; break; }
+            }
+            if (w === null) w = LETTER_NUM.test(ch) ? 0.5 : 0.35;
+            total += w;
+        }
+        return Math.ceil(total * 1.1);
+    }
+    // chunkSize — ТОКЕНЫ (оценка estimateTokens); имена флагов сохранены, единица — токены
     function splitByNewlines(text, chunkSize) {
         const paras = paragraphsOf(text);
         const chunks = [];
         let cur = '';
+        let curTokens = 0;
         for (const p of paras) {
-            if (cur.length + p.length + 2 > chunkSize && cur) { chunks.push(cur); cur = p; }
-            else cur += (cur ? '\n\n' : '') + p;
+            const pt = estimateTokens(p);
+            if (cur && curTokens + pt + 1 > chunkSize) { chunks.push(cur); cur = p; curTokens = pt; }
+            else { cur += (cur ? '\n\n' : '') + p; curTokens = estimateTokens(cur); }
         }
         if (cur) chunks.push(cur);
         return chunks.length > 0 ? chunks : [text];

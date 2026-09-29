@@ -106,8 +106,8 @@
                                     <option value="Корейский">Корейский</option><option value="Китайский">Китайский</option>
                                 </select>
                             </div>
-                            <div class="nm-input-group"><label>Размер чанка (символов):</label>
-                                <input type="number" class="nm-input" id="chunk-size" min="1000" max="100000" step="1000">
+                            <div class="nm-input-group"><label>Размер чанка (токенов, оценка):</label>
+                                <input type="number" class="nm-input" id="chunk-size" min="100" max="30000" step="100">
                             </div>
                             <div class="nm-checkbox-group">
                                 <input type="checkbox" id="preemptive-translate">

@@ -61,7 +61,7 @@
         sourceLang: 'Авто',
         targetLang: 'Русский',
         reasoningEffort: 'None',
-        chunkSize: 30000,
+        chunkSize: 10000, // ТОКЕНЫ (оценка estimateTokens): имена сохранены, единица — токены
         requestTimeout: 60, // СЕКУНДЫ (0 = без таймаута): у стрима — пауза между токенами, у обычного запроса — ожидание всего ответа
         maxRetries: 3,
         localModel: false,
