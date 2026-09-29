@@ -83,10 +83,11 @@ from core.common import ...  # noqa: E402
 
 ## 5. Соглашение о единицах (критично)
 
-- **СИМВОЛЫ**: `--chunk_size`, `--context_budget`, все пороги длин, размеры чанков/пакетов, FTS5 chunk. (`min_len_ratio` — безразмерное отношение длин, считается в символах.)
-- **ТОКЕНЫ**: только `max_tokens` в payload LLM (серверный предохранитель, не расчёт) и `--near-distance` в wiki.py (природа FTS5 NEAR).
+- **ТОКЕНЫ** (язык-осведомлённая оценка `estimate_tokens`, ±20–30%): все размеры LLM-запросов — `--chunk_size` (translate_book/pipeline/ner/epub chunk), `--request_budget`, бюджеты пакетов ner_check (`--batch_size`, `--rag_budget`) и translate_check_llm (`--context_budget`), `--budget` translate_quality, FTS5 chunk wiki, `chunkSize` Lite. Имена параметров сохранены (решение пользователя), единица — токены; веса: кириллица/латиница ~0.30, CJK-идеографы и каны ~1.0, хангыль ~0.8, тай/лаос/кхмер/бирма ~0.6, индийские ~0.55, арабский ~0.5, иврит ~0.4, греческий ~0.35; неучтённые буквы/цифры — 0.5, знаки/символы/эмодзи — 0.35; подряд идущие пробелы — 1 токен; итог вверх +10%.
+- **ТОКЕНЫ** (предохранитель сервера): `max_tokens` в payload LLM (не расчёт) и `--near-distance` в wiki.py (природа FTS5 NEAR).
+- **СИМВОЛЫ**: длины вне запросов — `--title-limit`, `min_fix_length`, `max_changed_chars`, `context_max_len`, длины в логах/отчётах. `min_len_ratio` — безразмерное отношение длин именно в символах (в CJK→RU токены меняли бы смысл).
 - **БАЙТЫ**: только размеры файлов в отчётах translate_check.
-- **ГЛАВЫ**: чанкование в clean_and_compile.
+- **ГЛАВЫ**: чанкование в clean_and_compile (`--chunk-size` — сколько глав в части).
 
 Если меняешь размер/бюджет — проверь, что единица верная, и укажи её в help argparse («СИМВОЛЫ»/«ТОКЕНЫ»).
 
@@ -98,7 +99,8 @@ from core.common import ...  # noqa: E402
 | лог | `setup_logging` / `log_argv` (фактическая команда запуска в лог) |
 | модель | `determine_model` (только из аргумента/`.env`; авто через `GET /models` убрано — модель обязательна) |
 | промпты | `load_prompt` (файл целиком) / `get_tagged_prompt` (теги) |
-| чанкование | `split_text_smart` |
+| токены | `estimate_tokens` (язык-осведомлённая ОЦЕНКА числа токенов: таблица весов по скриптам + фолбэк; единица всех размеров запросов) / `split_at_tokens` (граница бюджета в тексте: (голова ≤ budget, хвост)) / `trim_to_tokens` (начало текста ≤ budget токенов) |
+| чанкование | `split_text_smart` (абзацы → предложения; `target_tokens` — ТОКЕНЫ, оценка `estimate_tokens`) / `build_fts_index` (FTS5-чанки тоже в ТОКЕНАХ, оценка) |
 | текст/CJK | `get_ngrams` / `is_cjk` / `is_cjk_string` / `find_exact_match` |
 | поиск терминов | `load_ner_data` + `find_relevant_ner` (+ `normalize_for_search`, `build_smart_regex`) |
 | контекст термина (context) | `extract_term_context` (предложение с термином из чанка; `max_len` — СИМВОЛЫ, 0 = выключено; границы предложений — знаки конца любых языков + закрывающие кавычки/скобки; `threshold`/`ngram_size` — нечёткий фолбэк по предложениям, зеркально `find_relevant_ner`) |
@@ -111,7 +113,7 @@ from core.common import ...  # noqa: E402
 | запись файла | `atomic_write` (tmp + fsync + os.replace) |
 | чтение | `read_text_safe` (utf-8 → cp1251 fallback) |
 | прогресс web | `web_progress_enabled` (флаг `WEB_PROGRESS=1`) / `emit_progress` (done, total, label → `@@PROGRESS@@` + JSON; только в web-режиме, no-op в CLI) |
-| предпросмотр запроса (web+CLI) | `preview_request_payload` (JSON {stage, label, model, messages, chars — СИМВОЛЫ, meta}) / `write_preview_request` (атомарная запись) / `preview_logger` (только stderr) |
+| предпросмотр запроса (web+CLI) | `preview_request_payload` (JSON {stage, label, model, messages, chars — СИМВОЛЫ, tokens — оценка, meta}) / `write_preview_request` (атомарная запись) / `preview_logger` (только stderr) |
 | главы | `parse_chapter_id` / `build_chapter_map` / `find_chapter_file` / `format_ranges` / `compile_chapter_text` (склейка `chapter.txt` из папок в память, `(text, info)`, `start/end`) / `compile_chapter_texts` (та же склейка → файл) / `read_chapter_titles` / `write_chapter_titles` (названия глав: первая непустая строка, чтение/замена) |
 | проекты | **ТОЛЬКО** `core/projects.py`: `DEFAULT_SECTIONS` (ACTIVE/HOLD/DONE, алиас `SECTIONS`) / `load_sections` / `save_sections` / `create_section` / `rename_section` (в существующий — перенос проектов) / `delete_section` (непустой — отказ) / `ensure_projects_root` / `valid_project_name` / `sanitize_project_name` / `list_projects` / `project_stats` / `project_progress_table` / `create_project` / `move_project` / `rename_project` / `copy_project` / `delete_project` / `list_template_sets` / `TEMPLATE_SKELETON` (`prompts`+`source`) / `_ensure_template_skeleton` (идемпотентный ремонт скелета) / `create_template_set` (каркас prompts/+source/) / `create_template_dir` (всегда ошибка — каталоги неизменяемы) / `copy_template_set` / `delete_template_set` / `templates_files` (пустые каталоги как `path/`) / `read_template_file` / `write_template_file` / `delete_template_file` (каталог → ошибка; `str \| None`) / `template_file_info` / `move_template_file` (только файлы; каталог → ошибка) / `fill_project_from_template` / `render_metadata` / `write_project_metadata` |
 

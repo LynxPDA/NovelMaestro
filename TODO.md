@@ -1227,9 +1227,16 @@
       ошибках; `tools/seed_demo.py` — демо-проект. Ограничение:
       системный Python PEP 668 (apt/node-playwright или venv —
       решить с пользователем).
-- [ ] **Переход LLM-расчётов размера в ТОКЕНЫ (сейчас — СИМВОЛЫ)** —
-      большая задача; юнит-стратегия и финальные дефолты — за
-      пользователем (открытые вопросы внизу).
+- [x] **Переход LLM-расчётов размера в ТОКЕНЫ (мигрировано)** —
+      решения пользователя: имена параметров сохранены (единица — токены),
+      конвейерный chunk остался 7000 (в токенах), NER chunk 10000→5500,
+      точный режим tiktoken не нужен. Итог: estimate_tokens/split_at_tokens/
+      trim_to_tokens в core; split_text_smart/build_ner_batches/build_fts_index
+      считают по оценке; мигрированы translate_book (chunk 800→300),
+      ner (5500), epub chunk, ner_check (batch 65536, rag_budget 22000),
+      translate_check_llm (25000), translate_quality (65000), wiki (350),
+      Lite (chunkSize 10000 + зеркало estimateTokens, v1.42); формы web,
+      templates/.env.example, AGENTS §5/§6 и core/README синхронизированы.
 
       Суть. Размеры запросов размечены символами, а серверы считают контекст
       токенами, и соотношение символов к токенам разное по языкам:
