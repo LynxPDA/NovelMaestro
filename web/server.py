@@ -26,6 +26,10 @@ from web.version import app_version
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_JSON_BODY = 16 * 1024 * 1024  # 16 МБ — лимит JSON-тел
+# Idle-таймаут соединения (секунды): keep-alive без лимита оставляет рабочий
+# поток на каждом забытом соединении браузера; закрытая вкладка не «отпускает»
+# его никогда. Браузер перезапрашивает молча.
+IDLE_TIMEOUT_SECONDS = 300
 
 # Версионирование ассетов SPA: index.html раздаётся всегда свежим
 # (no-store), но ссылки на js/css получают ?v=<sha256> — тогда сами
@@ -101,8 +105,17 @@ class Router:
 class Handler(BaseHTTPRequestHandler):
     server_version = f"NovelMaestro/{app_version()}"
     protocol_version = "HTTP/1.1"
+    # Idle-таймаут соединения: keep-alive без лимита оставляет поток на каждом
+    # брошенном соединении (закрытая вкладка, ушедший в фон телефон). Браузер
+    # перезалетит молча, а зависший поток не живёт в вечность.
+    timeout = IDLE_TIMEOUT_SECONDS
 
     # ── служебное ──────────────────────────────────────────────
+    def version_string(self) -> str:
+        # заголовок Server: только наш баннер — stdlib-реализация дописывает
+        # версию Python, а она никому не нужна (и лишний раз светит окружение)
+        return self.server_version
+
     def log_message(self, format: str, *args) -> None:
         log.info("%s %s", self.address_string(), format % args)
 
@@ -348,7 +361,10 @@ class WebServer(ThreadingHTTPServer):
     repo_root: Path | None = None
     projects_root: Path | None = None
     # JobManager присваивается main.py / тестами; импорт не нужен (аннотация)
-    job_manager: "object | None" = None
+    job_manager: object | None = None
+    # Поток-обработчик не должен переживать сервер: иначе Ctrl-C/Ctrl-C в
+    # контейнере ждёт даже брошенное keep-alive соединение
+    daemon_threads = True
 
 
 def make_server(host: str, port: int, auth_obj: Auth,

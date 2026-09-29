@@ -456,3 +456,63 @@ def test_w1_port_free_uses_requested():
         assert srv.server_address[1] == free_port
     finally:
         srv.server_close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Жёсткость сервера: HTTP/1.1 keep-alive, daemon-потоки, idle-таймаут
+# ══════════════════════════════════════════════════════════════════════
+def test_handler_has_idle_timeout():
+    """Без idle-таймаута брошенное keep-alive соединение держит рабочий поток
+    вечно: закрытая вкладка не «отпускает» его никогда."""
+    from web import server
+    assert server.IDLE_TIMEOUT_SECONDS > 0
+    assert server.Handler.timeout == server.IDLE_TIMEOUT_SECONDS
+
+
+def test_handler_is_http11():
+    """HTTP/1.1 обязателен: на 1.0 браузер держал бы отдельное соединение под
+    каждый запрос, а длинный SSE вырывал бы его из пула."""
+    from web import server
+    assert server.Handler.protocol_version == "HTTP/1.1"
+
+
+def test_server_threads_are_daemons():
+    """Поток-обработчик не должен переживать сервер."""
+    from web import server
+    assert server.WebServer.daemon_threads is True
+
+
+def test_keepalive_reuses_one_connection(srv_ctx):
+    """Два запроса по ОДНОМУ соединению: HTTP/1.1 keep-alive держит пул вкладок
+    (на 1.0 браузер открывал бы новое под каждый запрос и рвал бы SSE)."""
+    srv, port = srv_ctx(Auth("tok", no_auth=True))
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.request("GET", "/api/session")
+        first = conn.getresponse()
+        first.read()
+        assert first.status == 200
+        # тот же сокет, второе обращение без повторного TCP-рукопожатия
+        conn.request("GET", "/api/session")
+        second = conn.getresponse()
+        second.read()
+        assert second.status == 200
+        assert first.version == 11, "сервер ответил не по HTTP/1.1"
+        assert not first.will_close, "сервер закрыл соединение вместо keep-alive"
+    finally:
+        conn.close()
+
+
+def test_server_header_without_python_version(srv_ctx):
+    """Server — только наш баннер: stdlib-реализация дописывает версию Python,
+    в локальном инструменте она не нужна."""
+    from web.version import app_version
+    srv, port = srv_ctx(Auth("tok", no_auth=True))
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.request("GET", "/api/session")
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.getheader("Server") == f"NovelMaestro/{app_version()}"
+    finally:
+        conn.close()
