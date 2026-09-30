@@ -58,12 +58,12 @@ _bootstrap_core()
 from core.common import (  # noqa: E402
     atomic_write,
     build_chapter_map,
-    emit_progress,
     find_chapter_file,
     read_text_safe,
     trim_rule_left,
     trim_rule_right,
 )
+from core.stage import Progress  # noqa: E402
 
 # Допустимые типы файлов → значение want для find_chapter_file
 FILE_TYPES = ("polished", "redacted", "translated", "chapter")
@@ -298,12 +298,14 @@ def main(argv=None) -> int:
     global_stats = {}
     skipped = 0
 
-    for i, num in enumerate(selected, 1):
+    progress = Progress(len(selected), "Массовые замены", unit="глава", bar=True)
+    progress.start()
+    for num in selected:
         for dir_path in chapter_map[num]:
             filepath, warns = find_chapter_file(dir_path, num, want=want,
                                                 strict=True)
             for w in warns:
-                print(f"  ⚠ {w}")
+                progress.log(f"  ⚠ {w}")
             if filepath is None:
                 skipped += 1
                 continue
@@ -317,8 +319,9 @@ def main(argv=None) -> int:
                 details = ", ".join(f"{l}: {c}" for l, c in sorted(
                     stats.items(), key=lambda x: -x[1]))
                 prefix = "[DRY]" if args.dry_run else "[FIX]"
-                print(f"  {prefix} Глава {num}: {n_file} замен ({details})")
-        emit_progress(i, len(selected), "Массовые замены")
+                progress.log(f"  {prefix} Глава {num}: {n_file} замен ({details})")
+        progress.step()
+    progress.close()
 
     print()
     print("=" * 50)
