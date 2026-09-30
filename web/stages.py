@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from core.stage import REASONING_EFFORTS
+
 log = logging.getLogger("web.stages")
 
 # ── типы полей ─────────────────────────────────────────────────────────
@@ -339,8 +341,10 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
         argv += ["--ngram", str(form["ngram"])]
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
+    # имя поля историческое («reasoning»), флаг — канонический: его принимает
+    # add_llm_args, старые написания остались только для ручных команд
     if form.get("reasoning") not in (None, ""):
-        argv += ["--reasoning-effort", str(form["reasoning"])]
+        argv += ["--reasoning_effort", str(form["reasoning"])]
     if form.get("two_pass"):
         argv.append("--two-pass")
     if form.get("keep_fields"):
@@ -548,7 +552,7 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
     if form.get("thinking") not in (None, ""):
-        argv += ["--thinking", str(form["thinking"])]
+        argv += ["--reasoning_effort", str(form["thinking"])]
     argv += _llm_argv(form, ctx, "wiki")
     return argv
 
@@ -568,6 +572,40 @@ _LLM_FIELDS = [
     {"name": "api_key", "label": "API-ключ",
      "type": "password", "default": "", "group": "llm"},
 ]
+
+
+# ── усилие рассуждения: одно поле на все LLM-стадии ────────────────────
+# Значения перечисляет core.stage: его argparse принимает ровно этот список
+# (choices=REASONING_EFFORTS), поэтому в форме должен быть select с теми же
+# значениями, а не свободный текст — опечатка в поле стоила падающего
+# subprocess. Имена полей (reasoning_effort / reasoning / thinking) — старые
+# написания CLI-флага этой стадии: от них зависит ключ .env ({STAGE}_{FIELD}),
+# поэтому они НЕ унифицируются.
+REASONING_LABELS = {
+    "": "— (не отправлять, дефолт сервера)",
+    "none": "none — выключено",
+    "minimal": "minimal",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max",
+}
+
+
+def reasoning_field(name: str = "reasoning_effort") -> dict:
+    """Селект усилий рассуждения для спеки LLM-стадии."""
+    return {
+        "name": name,
+        "label": "Reasoning effort",
+        "type": "select",
+        "options": ["", *REASONING_EFFORTS],
+        "labels": REASONING_LABELS,
+        "group": "llm",
+        "default": "",
+        "help": "пусто — не передаётся; none — отключает; остальные уходят в "
+                "payload как есть (принимаются только эти значения)",
+    }
 
 
 # ── пресеты «Простого режима» в Запусках ───────────────────────────────
@@ -937,10 +975,7 @@ STAGE_SPECS: dict[str, dict] = {
                      "(сеть/стрим)"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            {"name": "reasoning_effort", "label": "Reasoning effort",
-             "type": "text", "group": "llm",
-             "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
-             "default": ""},
+            reasoning_field("reasoning_effort"),
         ],
         "preset": {
             "title": "Перевести книгу",
@@ -976,10 +1011,7 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "3"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            {"name": "reasoning", "label": "Reasoning effort",
-             "type": "text", "group": "llm",
-             "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
-             "default": ""},
+            reasoning_field("reasoning"),
             {"name": "two_pass", "label": "Двухпроходная схема",
              "type": "bool", "default": True},
             {"name": "keep_fields", "label": "Поля в голосование (через запятую)",
@@ -1082,10 +1114,7 @@ STAGE_SPECS: dict[str, dict] = {
             # (/api/ner/review/apply шлёт apply напрямую)
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            {"name": "reasoning_effort", "label": "Reasoning effort",
-             "type": "text", "group": "llm",
-             "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
-             "default": ""},
+            reasoning_field("reasoning_effort"),
             {"name": "max_tokens", "label": "Max tokens (серверный лимит), ТОКЕНЫ",
              "type": "number", "default": "65536", "group": "llm"},
             {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
@@ -1121,10 +1150,7 @@ STAGE_SPECS: dict[str, dict] = {
              "default": "translate_check_prompt.txt"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            {"name": "reasoning_effort", "label": "Reasoning effort",
-             "type": "text", "group": "llm",
-             "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
-             "default": ""},
+            reasoning_field("reasoning_effort"),
             {"name": "max_retries", "label": "Попытки на запрос", "type": "number", "default": "3",
              "group": "llm"},
             {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
@@ -1179,10 +1205,7 @@ STAGE_SPECS: dict[str, dict] = {
                       "диапазона), отсечённые указываются в отчёте"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            {"name": "reasoning_effort", "label": "Reasoning effort",
-             "type": "text", "group": "llm",
-             "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
-             "default": ""},
+            reasoning_field("reasoning_effort"),
             {"name": "max_retries", "label": "Повторы",
              "type": "number", "default": "3", "group": "llm"},
             {"name": "timeout", "label": "Таймаут, сек",
@@ -1269,10 +1292,7 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "co_occurrence_top", "label": "Связей на термин", "type": "number", "default": "5"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            {"name": "thinking", "label": "Reasoning effort",
-             "type": "text", "group": "llm",
-             "help": "пусто — не передаётся; none — отключает; low/medium/high/xhigh/max — как есть",
-             "default": ""},
+            reasoning_field("thinking"),
             {"name": "retries", "label": "Повторы", "type": "number", "default": "3",
              "group": "llm"},
             {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",

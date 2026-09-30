@@ -737,3 +737,46 @@ def test_llm_stages_preview_flag():
               "translate_quality", "wiki"}
     got = {k for k, v in STAGE_SPECS.items() if v.get("preview")}
     assert got == expect
+
+
+def test_reasoning_field_is_select_on_every_llm_stage():
+    """Reasoning effort — select во всех шести LLM-стадиях.
+
+    CLI-парсер принимает ровно choices=REASONING_EFFORTS, поэтому свободный
+    текст в форме означал бы упавший subprocess из-за опечатки в значении."""
+    from core.stage import REASONING_EFFORTS
+    names = ("reasoning_effort", "reasoning", "thinking")
+    expect = {"pipeline", "ner", "ner_check", "translate_check_llm",
+              "translate_quality", "wiki"}
+    got = {k for k, v in STAGE_SPECS.items()
+           if any(f["name"] in names for f in v.get("fields", []))}
+    assert got == expect
+    for key in expect:
+        fld = [f for f in STAGE_SPECS[key]["fields"] if f["name"] in names]
+        assert len(fld) == 1, f"{key}: поле efforts не одно"
+        assert fld[0]["type"] == "select", f"{key}: поле осталось текстовым"
+        assert fld[0]["options"] == ["", *REASONING_EFFORTS], key
+        assert fld[0]["group"] == "llm", key
+
+
+def test_reasoning_argv_uses_canonical_flag():
+    """В argv всех стадий — канонический --reasoning_effort.
+
+    Старые написания (--reasoning-effort, --thinking) остались только
+    алиасами CLI-парсера для ручных команд: web-слой их не плодит."""
+    base = {"host": "h", "model": "m", "api_key": "k", "action": "8",
+            "reasoning_effort": "high", "reasoning": "high", "thinking": "high"}
+    for key in ("pipeline", "ner", "wiki"):
+        argv = build_command(key, dict(base), {})
+        assert "--reasoning_effort" in argv, key
+        assert argv[argv.index("--reasoning_effort") + 1] == "high", key
+        assert "--reasoning-effort" not in argv, key
+        assert "--thinking" not in argv, key
+
+
+def test_reasoning_empty_sends_nothing():
+    """Пустой выбор — флаг не уезжает вовсе (дефолт сервера)."""
+    base = {"host": "h", "model": "m", "api_key": "k", "action": "8",
+            "reasoning_effort": "", "reasoning": "", "thinking": ""}
+    for key in ("pipeline", "ner", "wiki"):
+        assert "--reasoning_effort" not in build_command(key, dict(base), {})

@@ -43,7 +43,8 @@ DEFAULT_MAX_TOKENS = 65536
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh",
                      "max")
 
-#: Терпимые старые написания: dest → дополнительный флаг.
+#: Терпимые старые написания: dest → дополнительный флаг. Нужны только для
+#: ручных команд: web-слой и SPA выдают одно каноническое написание.
 LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
     "max_retries": ("--retries",),
     "reasoning_effort": ("--reasoning-effort", "--thinking"),

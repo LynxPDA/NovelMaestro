@@ -1839,7 +1839,8 @@ def test_build_wiki_flags():
     assert "--chunk-size" in argv and "1000" in argv
     assert "--co-occurrence-pairs" in argv
     assert "--rulate-mode" in argv
-    assert "--thinking" in argv and "medium" in argv
+    # флаг в argv канонический: --thinking остался алиасом CLI-парсера wiki
+    assert "--reasoning_effort" in argv and "medium" in argv
     assert "--types" in argv and "Person" in argv
     assert "--exclude-types" not in argv
 
