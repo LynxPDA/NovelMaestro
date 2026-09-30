@@ -427,7 +427,11 @@ def test_w1_port_fallback_when_busy():
             max_port_attempts=20,
         )
         try:
-            assert actual == busy + 1, f"ожидался {busy + 1}, получен {actual}"
+            # следующий СВОБОДНЫЙ порт: соседний мог достаться другому воркеру
+            # pytest-xdist, поэтому проверяем диапазон, а не соседний порт
+            assert actual != busy, "порт был занят — смещения не произошло"
+            assert busy < actual < busy + 20, \
+                f"смещение вне окна попыток: {actual} (занят {busy})"
             assert srv.server_address[1] == actual
         finally:
             srv.server_close()
