@@ -150,6 +150,16 @@
     return h("div", { class: o.wrapClass || "toolbar-menu" }, btn, box);
   }
 
+  /* Уведомление о завершении запуска просит разрешение на пользовательском
+   * действии (нажатии «Запустить»): браузеры запрос вне жеста режут. */
+  function askNotifyPermission() {
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission === "default") {
+      const p = Notification.requestPermission();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    }
+  }
+
   /* Doc-обёртки предпросмотра: тема и кегль живут там, где карточка настроек
    * (app.js), а панель их только зовёт. Регистрация — одна строка в app.js;
    * без неявный fолбэк: кадр получает текст как есть. */
@@ -305,5 +315,14 @@
     };
   }
 
-  return { h, iconEl, modal, menuButton, previewPane, listPager, docs };
+  return {
+    h,
+    iconEl,
+    modal,
+    menuButton,
+    previewPane,
+    listPager,
+    askNotifyPermission,
+    docs,
+  };
 });

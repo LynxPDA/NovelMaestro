@@ -1843,6 +1843,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return;
       }
       try {
+        UIC.askNotifyPermission(); // финал запуска — в уведомление (см. app.js)
         const r = await api("/jobs", {
           method: "POST",
           body: {
@@ -2442,6 +2443,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return;
       }
       try {
+        UIC.askNotifyPermission(); // финал запуска — в уведомление (см. app.js)
         const r = await api("/jobs", {
           method: "POST",
           body: {
