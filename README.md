@@ -164,6 +164,6 @@ MODEL=google/gemma-4-31b-it         # рекомендуемая модель (�
 | --- | --- | --- |
 | `httpx` / `python3-httpx` | HTTP-транспорт LLM: один клиент на процесс, пул соединений, раздельные connect/write/read таймауты | обязательный |
 | `python-dotenv` / `python3-dotenv` | разбор `.env`: `#` — комментарий, `${}` не раскрывается | обязательный |
-| `tqdm` / `python3-tqdm` | прогресс-бары | обязательный |
+| `tqdm` / `python3-tqdm` | прогресс-бары CLI | опциональный (без него прогресс — только строками лога) |
 | `pyahocorasick` / `python3-ahocorasick` | быстрый поиск терминов | опциональный (есть regex-fallback) |
 | `pytest` / `python3-pytest` | тесты | только для разработки |

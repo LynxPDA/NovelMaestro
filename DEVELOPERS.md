@@ -249,12 +249,14 @@ python3 tools/build_userscripts.py --list            # версии и числ�
 ## Тесты
 
 ```bash
-python3 -m pytest tests/ -q                        # все тесты
+./dev.sh test                                      # все тесты (pytest -n auto)
+./dev.sh test -n 0 tests/test_ner.py               # один файл в одном процессе
 python3 -m pytest tests/ -q --cov=core --cov=cli --cov=web  # покрытие
 ```
 
 - `tests/conftest.py` — общие хелперы (SilentLog, make_ru_chapter_file, feed, fake_env);
 - `tests/test_core_common.py` — `core/common.py` целиком (стрим SSE моками, .env, чанкование, NER-поиск, имена по полу, канон глав);
+- `tests/test_core_stage.py` — `core/stage.py` (флаги LLM, профиль сервера, прогресс);
 - `tests/test_projects_core.py` — `core/projects.py`;
 - по одному файлу на скрипт: translate_book, ner, ner_check, translate_check_llm, wiki, epub_to_chapters, translate_check — чистые функции + оркестраторы и `main()` с моками LLM;
 - `tests/test_cli_units.py` / `test_cli_e2e.py` — остальные `cli/` без сети (batch_replace, clean_and_compile и др.);

@@ -27,8 +27,9 @@
 core/     общий код: common.py (логика) + projects.py (менеджмент
           проектов) + transport.py (единственная точка выхода в сеть:
           единственный HTTP-клиент) + deps.py (реестр внешних зависимостей:
-          что установлено и чем прикрыто). НЕ скрипты. Интерактива
-          (ui/tui) больше нет.
+          что установлено и чем прикрыто) + stage.py (общий слой стадий:
+          флаги LLM, профиль сервера, контекст стадии, прогресс). НЕ скрипты.
+          Интерактива (ui/tui) больше нет.
 web/      web-интерфейс: server.py + api.py (роуты/хендлеры), stages.py
           (реестр стадий и сборка argv), jobs.py (JobManager + SSE),
           pipeline.py (web-оркестратор конвейера), static/ (SPA; локальные
@@ -126,6 +127,7 @@ from core.common import ...  # noqa: E402
 | предпросмотр запроса (web+CLI) | `preview_request_payload` (JSON {stage, label, model, messages, chars — СИМВОЛЫ, tokens — оценка, meta}) / `write_preview_request` (атомарная запись) / `preview_logger` (только stderr) |
 | главы | `parse_chapter_id` / `build_chapter_map` / `find_chapter_file` / `format_ranges` / `compile_chapter_text` (склейка `chapter.txt` из папок в память, `(text, info)`, `start/end`) / `compile_chapter_texts` (та же склейка → файл) / `read_chapter_titles` / `write_chapter_titles` (названия глав: первая непустая строка, чтение/замена) |
 | HTTP-транспорт (core/transport.py) | **ТОЛЬКО** `open_stream` (POST JSON → контекстный менеджер `ResponseStream`: `status_code`, `headers`, `iter_lines()` — байтовые строки SSE без `\n`; выход из контекста закрывает соединение; ошибка соединения прилетает уже на входе) / `client()` (общий `httpx.Client` с пулом) / `reset_client()` (тесты) / `BACKEND` (`"httpx"`) + нормализованные ошибки `TransportError`, `ConnectTimeout`, `ReadTimeout`, `BrokenStream` |
+| слой стадии (core/stage.py) | `add_llm_args` (общий блок флагов `--host/--model/--api_key/--env_file/--temperature/--reasoning_effort/--timeout/--max_retries` — имена есть контракт форм web и SPA, не переименовывать; `aliases=True` — старые написания) / `LlmProfile` + `resolve_profile` (сервер стадии: CLI > `os.environ` > `.env`; `/v1` дописывается; модель обязательна) / `LoggedStage` + `new_stage` (лог стадии и команда запуска) / `Stage` + `bind_profile` + `setup_stage` (контекст LLM-стадии и один вызов `stage.complete(prompt, данные)`) / `Progress` (счётчик глав/батчей: в CLI — бар tqdm, в web — `@@PROGRESS@@`, лог стадии не трогает) / `REASONING_EFFORTS` |
 | зависимости (core/deps.py) | `ROLES` (роли и их кандидаты: HTTP — только httpx, термины — pyahocorasick либо regex, tqdm, pytest) / `status` (строка на роль: активный бэкенд, `degraded` — работа на фолбэке) / `format_status` (одна строка в лог сервера) / `missing_hint` / `main` (`python3 -m core.deps`) |
 | проекты | **ТОЛЬКО** `core/projects.py`: `DEFAULT_SECTIONS` (ACTIVE/HOLD/DONE, алиас `SECTIONS`) / `load_sections` / `save_sections` / `create_section` / `rename_section` (в существующий — перенос проектов) / `delete_section` (непустой — отказ) / `ensure_projects_root` / `valid_project_name` / `sanitize_project_name` / `list_projects` / `project_stats` / `project_progress_table` / `create_project` / `move_project` / `rename_project` / `copy_project` / `delete_project` / `list_template_sets` / `TEMPLATE_SKELETON` (`prompts`+`source`) / `_ensure_template_skeleton` (идемпотентный ремонт скелета) / `create_template_set` (каркас prompts/+source/) / `create_template_dir` (всегда ошибка — каталоги неизменяемы) / `copy_template_set` / `delete_template_set` / `templates_files` (пустые каталоги как `path/`) / `read_template_file` / `write_template_file` / `delete_template_file` (каталог → ошибка; `str \| None`) / `template_file_info` / `move_template_file` (только файлы; каталог → ошибка) / `fill_project_from_template` / `render_metadata` / `write_project_metadata` |
 
@@ -211,7 +213,7 @@ Regexp-поля форм и CLI — чистые стандартные выра
 ## 9. Как вносить изменения
 
 0. **Релизы и VERSION** — релиз (тег `v*` + GitHub Release, см. packaging/README.md) делается ТОЛЬКО по явному запросу пользователя. CHANGELOG.md не ведётся — история между релизами восстанавливается по коммитам (`git log v<старый>..v<новый>`); заметки GitHub Release генерируются воркфлоу автоматически (`gh release create --generate-notes`). Версия — файл `VERSION` в корне репо (обновляется при релизе), читается `web/version.py`; приоритет: NOVELMAESTRO_VERSION → VERSION → фолбэк. TODO.md: перед задачей сверься с текущими статусами; завершил майлстоун — обнови статус в `TODO.md` в том же коммите. Планы в отдельные файлы не выноси (web_plan.md упразднён). **Отметки и коммиты — по мере выполнения, а не в самом конце**: сделал задачу (или её законченную часть) — сразу отметь чекбокс в `TODO.md`, закоммить и запушь. Не копи в конце сессии всё разом; незапушенный коммит — не завершённая работа.
-1. Общая логика → `core/common.py` (+ запись в `core/README.md` и при необходимости в таблицу §6 / `tests/test_docs.py`).
+1. Общая логика → `core/common.py` (LLM-профиль, флаги и прогресс стадии → `core/stage.py`), + запись в `core/README.md` и в таблицу §6 / `tests/test_docs.py`.
 2. Новый исполнитель → `cli/xxx.py` (CLI, argparse, bootstrap §4).
 3. Новая стадия в web → строка в `web/stages.py::STAGE_SPECS` (ключ-слаг, title, script, build-функция, fields) + форма в SPA.
 4. Новый роут API → `web/api.py` (+ строка в таблицу `web/README.md`).
@@ -221,7 +223,7 @@ Regexp-поля форм и CLI — чистые стандартные выра
    - прогони `python3 -m pytest tests/ -q` — все тесты должны быть зелёными. Коммит с падающими тестами запрещён;
    - если менял код `core/`, `cli/`, `web/`, `run.py` — проверь, что существующие тесты это покрывают; не покрывают — добавь/обнови тесты в том же коммите;
    - затем smoke-запуск затронутого скрипта с `--help` (и `--dry-run`, если поддерживается);
-   - **закоммить и запушь изменения на GitHub** (`git add -A` → `git commit` → `git push origin`). Незапушенный коммит — не завершённая работа. Тесты НЕ должны ходить в сеть: LLM только мокать (monkeypatch на `stream_chat_completion` / `requests.post`), данные — во временных папках pytest (`tmp_path`).
+   - **закоммить и запушь изменения на GitHub** (`git add -A` → `git commit` → `git push origin`). Незапушенный коммит — не завершённая работа. Тесты НЕ должны ходить в сеть: LLM только мокать (monkeypatch на `stream_chat_completion` / `core.transport.open_stream`), данные — во временных папках pytest (`tmp_path`).
 8. **Стандарт коммитов**: `<тип>(<область>): <описание на русском>`; типы — `feat`/`fix`/`refactor`/`docs`/`test`/`chore`; области — `core`/`cli`/`web`/`templates`/`tests`/`docs`/`repo`. Описание — инфинитив, до ~72 символов; одно логическое изменение — один коммит. Если в одном файле смешаны правки из разных задач (например, докстринг + фича), файл можно коммитить целиком в коммит основной задачи — не нужно вырезать хунки по-атомному. Первый коммит истории: `chore(repo): initial commit — NovelMaestro`.
 
 Стиль кода: русский в строках/логах/UI; компактные функции; docstring на каждую публичную функцию core; секции в core/common.py разделены комментариями `# ══…`.
@@ -245,6 +247,7 @@ git add -A && git commit -m "…" && git push origin
 - `tests/conftest.py` — общие хелперы (SilentLog, make_ru_chapter_file, feed, fake_env);
 - `tests/test_core_common.py` — `core/common.py` целиком (стрим SSE моками, .env, чанкование, NER-поиск, имена по полу, канон глав);
 - `tests/test_projects_core.py` — `core/projects.py` (создание/перенос/переименование, tmp_path);
+- `tests/test_core_stage.py` — `core/stage.py`: контракт имён флагов, порядок источников сервера (CLI > env > файл), `<СТАДИЯ>_*`, нормализация `/v1`, форма одного запроса стадии, предпросмотр, прогресс в обоих режимах;
 - `tests/test_core_transport.py` — `core/transport.py`: нарезка SSE на строки (терминатор отсечен, `[DONE]` и finish_reason видны), нормализация ошибок, живой раунд-трип через stdlib-сервер, ошибка соединения как ConnectTimeout;
 - `tests/test_run_flows.py` — `run.py` (bootstrap, лаунчер web);
 - по одному файлу на скрипт: `tests/test_translate_book.py`, `tests/test_ner.py`, `tests/test_ner_check.py`, `tests/test_translate_check_llm.py`, `tests/test_wiki.py`, `tests/test_epub_to_chapters.py`, `tests/test_translate_check.py` — чистые функции + оркестраторы (`run_two_pass`, `run_wiki_generation`) и `main()` с моками LLM;
