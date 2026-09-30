@@ -1454,8 +1454,7 @@ def test_stream_success(monkeypatch, variant):
     assert cap["json"]["stream"] is True
     assert cap["json"]["model"] == "m"
     assert cap["json"]["max_tokens"] == 65536
-    # reasoning_effort не задан: никаких reasoning-полей — дефолт сервера
-    # (структурированное reasoning:{...} не шлём: его не знают строгие серверы)
+    # рассуждения не заданы: никаких reasoning-полей — дефолт сервера
     assert "reasoning" not in cap["json"]
     assert "reasoning_effort" not in cap["json"]
     assert "Authorization" not in cap["headers"]            # api_key пуст
@@ -1465,30 +1464,29 @@ def test_stream_payload_options(monkeypatch):
     cap = {}
     _patch_post(monkeypatch, _sse(["ок"]), capture=cap)
     C.stream_chat_completion("http://h/v1", "m", [], api_key="СЕКРЕТ",
-                             reasoning_effort="low", temperature=0.2,
-                             max_tokens=1024)
+                             reasoning={"reasoning_effort": "low"},
+                             temperature=0.2, max_tokens=1024)
     assert cap["headers"]["Authorization"] == "Bearer СЕКРЕТ"
     assert cap["json"]["reasoning_effort"] == "low"
-    assert "reasoning" not in cap["json"]                   # effort важнее
     assert cap["json"]["temperature"] == 0.2
     assert cap["json"]["max_tokens"] == 1024
 
 
-def test_stream_reasoning_effort_none(monkeypatch):
-    """reasoning_effort="none" — единый OpenAI-совместимый способ
-    отключить рассуждения (OpenAI, llama.cpp, OpenRouter/Bothub
-    пробрасывают провайдеру)."""
+def test_stream_reasoning_keys_pass_through(monkeypatch):
+    """Ключи рассуждений уходят в payload как есть.
+
+    Способ передачи у провайдеров разный (openai — reasoning_effort,
+    anthropic — thinking, ollama — think), поэтому в стрим едет готовый dict
+    профиля; пустой dict — «не трогаем» (дефолт сервера)."""
     cap = {}
     _patch_post(monkeypatch, _sse(["ок"]), capture=cap)
     C.stream_chat_completion("http://h/v1", "m", [],
-                             reasoning_effort="none")
+                             reasoning={"reasoning_effort": "none"})
     assert cap["json"]["reasoning_effort"] == "none"
-    assert "reasoning" not in cap["json"]
 
-    # пустой effort = поле не шлём (дефолт сервера)
     cap2 = {}
     _patch_post(monkeypatch, _sse(["ок"]), capture=cap2)
-    C.stream_chat_completion("http://h/v1", "m", [], reasoning_effort=None)
+    C.stream_chat_completion("http://h/v1", "m", [], reasoning={})
     assert "reasoning_effort" not in cap2["json"]
     assert "reasoning" not in cap2["json"]
 
@@ -1812,3 +1810,94 @@ def test_find_fragment_owner_ambiguous_and_short(tmp_path):
     # короткий фрагмент
     ch, why = C.find_fragment_owner(cmap, "пусто.", want="polished")
     assert ch is None and why is not None and "короче" in why
+
+
+# ══════════════════════════════════════════════════════════════════════
+# REASONING / THINKING: реестр профилей провайдеров
+# ══════════════════════════════════════════════════════════════════════
+@pytest.mark.parametrize("profile,mode,effort,budget,expect", [
+    # openai: уровень и есть весь режим; «включено» без уровня — решение сервера
+    ("openai", "default", "", 0, {}),
+    ("openai", "on", "", 0, {}),
+    ("openai", "off", "", 0, {"reasoning_effort": "none"}),
+    ("openai", "on", "high", 0, {"reasoning_effort": "high"}),
+    # anthropic: budget_tokens только при включённых рассуждениях
+    ("anthropic", "default", "", 0, {}),
+    ("anthropic", "on", "", 2048,
+     {"thinking": {"type": "enabled", "budget_tokens": 2048}}),
+    ("anthropic", "on", "", 0, {"thinking": {"type": "enabled"}}),
+    ("anthropic", "off", "", 2048, {"thinking": {"type": "disabled"}}),
+    # qwen: ключ живёт в шаблоне чата
+    ("qwen", "on", "high", 0,
+     {"chat_template_kwargs": {"thinking": True, "enable_thinking": True}}),
+    ("qwen", "off", "", 0,
+     {"chat_template_kwargs": {"thinking": False, "enable_thinking": False}}),
+    ("dashscope", "on", "", 4096,
+     {"enable_thinking": True, "thinking_budget": 4096}),
+    ("ollama", "off", "", 0, {"think": False}),
+    # openrouter: только ОДНО из effort и max_tokens
+    ("openrouter", "on", "low", 2048,
+     {"reasoning": {"enabled": True, "effort": "low"}}),
+    ("openrouter", "on", "", 2048,
+     {"reasoning": {"enabled": True, "max_tokens": 2048}}),
+])
+def test_reasoning_fields_matrix(profile, mode, effort, budget, expect):
+    assert C.reasoning_fields(mode, profile, effort, budget) == expect
+
+
+def test_reasoning_fields_unknown_profile_is_openai():
+    assert C.reasoning_fields("off", "neizvestno", "", 0) == (
+        {"reasoning_effort": "none"})
+    assert C.reasoning_fields("default", "", "", 0) == {}
+
+
+def test_reasoning_fields_unknown_mode_is_default():
+    """Неизвестный режим — не трогать запрос, а не угадывать."""
+    assert C.reasoning_fields("galochka", "anthropic", "", 0) == {}
+
+
+def test_reasoning_fields_all_sends_every_key():
+    """«all» — отдельный осознанный режим: ключи всех профилей разом."""
+    assert set(C.reasoning_fields("on", "all", "high", 2048)) == {
+        "reasoning_effort", "thinking", "chat_template_kwargs",
+        "enable_thinking", "thinking_budget", "think", "reasoning"}
+
+
+def test_reasoning_settings_env_over_file(monkeypatch):
+    """Окружение перекрывает файл точечно, по ключу (AGENTS §7)."""
+    for k in C.REASONING_ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("REASONING_MODE", "on")
+    assert C.reasoning_settings({
+        "REASONING_MODE": "off", "THINKING_PROFILE": "qwen",
+        "REASONING_EFFORT": "low", "THINKING_BUDGET": "1024",
+    }) == {"mode": "on", "profile": "qwen", "effort": "low", "budget": 1024}
+
+
+def test_reasoning_settings_defaults_and_bad_budget(monkeypatch):
+    for k in C.REASONING_ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    assert C.reasoning_settings({}) == {"mode": "default", "profile": "openai",
+                                       "effort": "", "budget": 0}
+    assert C.reasoning_settings({"THINKING_BUDGET": "не число"})["budget"] == 0
+
+
+def test_extra_body_fields_json(monkeypatch):
+    """Свои поля тела (LLM_EXTRA_BODY_JSON) — JSON-объект, едет как есть.
+
+    Битый JSON и не-объект запрос не ломают: {} и предупреждение в лог —
+    стадия уходит с обычным запросом."""
+    import logging
+    log = logging.getLogger("test.extra.body")
+    log.addHandler(logging.NullHandler())
+    monkeypatch.delenv(C.EXTRA_BODY_ENV_KEY, raising=False)
+    assert C.extra_body_fields({}, log) == {}
+    assert C.extra_body_fields(
+        {"LLM_EXTRA_BODY_JSON": '{"top_k": 5, "seed": 1}'}, log) == {
+        "top_k": 5, "seed": 1}
+    assert C.extra_body_fields({"LLM_EXTRA_BODY_JSON": "{top_k: 5}"}, log) == {}
+    assert C.extra_body_fields({"LLM_EXTRA_BODY_JSON": "[1, 2]"}, log) == {}
+    # окружение деплоя перекрывает файл
+    monkeypatch.setenv(C.EXTRA_BODY_ENV_KEY, '{"a": 1}')
+    assert C.extra_body_fields({"LLM_EXTRA_BODY_JSON": '{"b": 2}'}, log) == {
+        "a": 1}

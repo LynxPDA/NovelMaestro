@@ -276,3 +276,72 @@ def test_setup_stage_custom_log_name(tmp_path, monkeypatch, env_file):
     args = parser_with().parse_args(["--env_file", env_file])
     st.setup_stage("ner", args, log_name="ner_extraction")
     assert (tmp_path / "logs" / "ner_extraction.log").is_file()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# REASONING / THINKING: один режим на весь конвейер
+# ══════════════════════════════════════════════════════════════════════
+def test_llm_args_include_reasoning_controls():
+    """Флаги способа передачи рассуждений — часть общего блока LLM."""
+    args = parser_with().parse_args(["--reasoning_mode", "on",
+                                     "--thinking_profile", "qwen",
+                                     "--thinking_budget", "2048"])
+    assert (args.reasoning_mode, args.thinking_profile,
+            args.thinking_budget) == ("on", "qwen", 2048)
+
+
+def test_reasoning_defaults_touch_nothing(env_file):
+    """Без настроек payload остаётся чистым: дефолт сервера не трогается."""
+    prof = resolve(env_file)
+    assert (prof.reasoning_mode, prof.thinking_profile) == ("default", "openai")
+    assert prof.thinking_budget == 0 and prof.reasoning_effort is None
+    assert st.reasoning_fields(prof.reasoning_mode, prof.thinking_profile,
+                               prof.reasoning_effort or "",
+                               prof.thinking_budget) == {}
+
+
+def test_reasoning_env_keys_are_common(tmp_path, monkeypatch):
+    """Ключи режима общие: стадийного REASONING_MODE у стадии нет."""
+    env = tmp_path / "fake.env"
+    env.write_text(
+        "HOST=http://h\nMODEL=m\n"
+        "REASONING_MODE=on\nTHINKING_PROFILE=anthropic\n"
+        "REASONING_EFFORT=medium\nTHINKING_BUDGET=4096\n"
+        "NER_CHECK_REASONING_MODE=off\n", encoding="utf-8")
+    for k in ("REASONING_MODE", "THINKING_PROFILE", "REASONING_EFFORT",
+              "THINKING_BUDGET"):
+        monkeypatch.delenv(k, raising=False)
+    prof = resolve(str(env), stage="ner_check")
+    assert (prof.reasoning_mode, prof.thinking_profile) == ("on", "anthropic")
+    assert (prof.reasoning_effort, prof.thinking_budget) == ("medium", 4096)
+
+
+def test_reasoning_cli_wins_over_env(env_file, monkeypatch):
+    """Канон §7: CLI > os.environ > .env — и по рассуждениям."""
+    monkeypatch.setenv("REASONING_MODE", "off")
+    monkeypatch.delenv("THINKING_PROFILE", raising=False)
+    prof = resolve(env_file, reasoning_mode="on", thinking_profile="ollama")
+    assert prof.reasoning_mode == "on" and prof.thinking_profile == "ollama"
+
+
+def test_profile_complete_sends_profile_keys(recorder):
+    """В тело уходит dict выбранного профиля: у qwen — chat_template_kwargs,
+    а не reasoning_effort: чужой ключ строгие серверы считают ошибкой."""
+    prof = st.LlmProfile(base_url="http://h:1/v1", model="m",
+                         reasoning_mode="on", thinking_profile="qwen",
+                         reasoning_effort="low", thinking_budget=2048)
+    prof.complete("п")
+    assert recorder[0]["reasoning"] == {
+        "chat_template_kwargs": {"thinking": True, "enable_thinking": True}}
+
+
+def test_profile_reasoning_extra_body_wins(recorder, monkeypatch):
+    """Свои поля тела уходят после ключей профиля и перекрывают их."""
+    monkeypatch.delenv("LLM_EXTRA_BODY_JSON", raising=False)
+    raw = '{"reasoning_effort": "max", "top_k": 5}'
+    prof = st.LlmProfile(base_url="http://h:1/v1", model="m",
+                         reasoning_mode="on", thinking_profile="openai",
+                         reasoning_effort="low",
+                         env_data={"LLM_EXTRA_BODY_JSON": raw})
+    prof.complete("п")
+    assert recorder[0]["reasoning"] == {"reasoning_effort": "max", "top_k": 5}

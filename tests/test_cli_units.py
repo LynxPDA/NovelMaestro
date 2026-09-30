@@ -222,7 +222,8 @@ def test_ner_llm_request_delegates(monkeypatch):
     assert seen["messages"] == [
         {"role": "system", "content": ""},
         {"role": "user", "content": "система\n\nзапрос"}]
-    assert seen["reasoning_effort"] is None  # пусто = дефолт сервера, не передаём
+    # рассуждения не заданы: пустой dict профиля — поле не передаём
+    assert seen["reasoning"] == {}
     assert seen["max_tokens"] == 65536
     assert seen["max_retries"] == 1  # бюджет ретраев — общий цикл llm_request
 

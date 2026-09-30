@@ -1687,7 +1687,7 @@ def _retry_wait(attempt: int, resp=None) -> float:
 def stream_chat_completion(
     base_url, model, messages, api_key="",
     max_retries=3, timeout=300, stream_timeout=900,
-    temperature=None, reasoning_effort=None,
+    temperature=None, reasoning=None,
     max_tokens=65536, min_len_ratio=0.0, reference_len=0,
     logger=None, label="",
 ):
@@ -1698,20 +1698,20 @@ def stream_chat_completion(
     длин остаётся СИМВОЛЬНЫМ специально: в токенах оно меняло бы смысл
     для CJK→RU). max_tokens — серверный предел (ТОКЕНЫ); размеры
     запросов — ТОКЕНЫ (оценка estimate_tokens).
-    reasoning_effort: None — поле не шлём (дефолт сервера); строка —
-    шлём как есть (в т.ч. "none" — отключение рассуждений)."""
+    reasoning: готовые ключи рассуждений (core.common.reasoning_fields) —
+    едут в payload как есть; None/{} — ничего не шлём (дефолт сервера).
+    Единый openai-ключ reasoning_effort — один из таких ключей, отдельного
+    параметра под него нет: у чужих профилей он невалиден."""
     url = f"{base_url}/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     payload = {"model": model, "messages": messages,
                "stream": True, "max_tokens": max_tokens}
-    if reasoning_effort:
-        # единый OpenAI-совместимый способ: значение (в т.ч. "none" —
-        # отключение рассуждений) понимают OpenAI API, llama.cpp,
-        # OpenRouter/Bothub пробрасывают провайдеру; None — ничего не
-        # шлём (дефолт сервера)
-        payload["reasoning_effort"] = reasoning_effort
+    if reasoning:
+        # значение "none" понимают OpenAI API и llama.cpp, OpenRouter/Bothub
+        # пробрасывают провайдеру
+        payload.update(reasoning)
     if temperature is not None:
         payload["temperature"] = temperature
 
@@ -2064,6 +2064,164 @@ def even_sample(items: list, n: int) -> list:
         return [items[0]]
     return [items[round(i * (len(items) - 1) / (n - 1))]
             for i in range(n)]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# REASONING / THINKING: один режим на весь конвейер
+# ══════════════════════════════════════════════════════════════════════
+#: Что делать с рассуждениями модели: default — не трогать запрос вовсе
+#: (дефолт сервера); on/off — включены/выключены средствами профиля.
+REASONING_MODES: tuple[str, ...] = ("default", "on", "off")
+
+#: Ключи .env режима — ОБЩИЕ, без стадийного префикса: рассуждения
+#: принадлежат модели, а не стадии, и плодить четыре поля на девять стадий
+#: означало бы расхождение режимов внутри одного запуска.
+REASONING_ENV_KEYS: tuple[str, ...] = ("REASONING_MODE", "THINKING_PROFILE",
+                                       "REASONING_EFFORT", "THINKING_BUDGET")
+
+
+def _rf_openai(mode: str, effort: str, budget: int) -> dict:
+    """OpenAI-совместимые API: единый reasoning_effort. Уровень «none» и есть
+    выключенные рассуждения; «включено» без уровня — решение сервера."""
+    if effort:
+        return {"reasoning_effort": effort}
+    return {"reasoning_effort": "none"} if mode == "off" else {}
+
+
+def _rf_anthropic(mode: str, effort: str, budget: int) -> dict:
+    if mode == "default":
+        return {}
+    thinking: dict = {
+        "type": "enabled" if mode == "on" else "disabled"}
+    if mode == "on" and budget > 0:
+        thinking["budget_tokens"] = budget
+    return {"thinking": thinking}
+
+
+def _rf_qwen(mode: str, effort: str, budget: int) -> dict:
+    """Qwen3/DeepSeek под vLLM/SGLang/llama.cpp: ключ живёт в шаблоне чата."""
+    if mode == "default":
+        return {}
+    on = mode == "on"
+    return {"chat_template_kwargs": {"thinking": on, "enable_thinking": on}}
+
+
+def _rf_dashscope(mode: str, effort: str, budget: int) -> dict:
+    if mode == "default":
+        return {}
+    body: dict = {"enable_thinking": mode == "on"}
+    if mode == "on" and budget > 0:
+        body["thinking_budget"] = budget
+    return body
+
+
+def _rf_ollama(mode: str, effort: str, budget: int) -> dict:
+    return {} if mode == "default" else {"think": mode == "on"}
+
+
+def _rf_openrouter(mode: str, effort: str, budget: int) -> dict:
+    """OpenRouter: только ОДНО из reasoning.effort и reasoning.max_tokens —
+    роутеры отвечают «Only one of ... can be specified»."""
+    if mode == "default":
+        return {}
+    reasoning: dict = {"enabled": mode == "on"}
+    if effort:
+        reasoning["effort"] = effort
+    elif mode == "on" and budget > 0:
+        reasoning["max_tokens"] = budget
+    return {"reasoning": reasoning}
+
+
+#: Базовые профили: id → (название для интерфейса, сборщик ключей). Каждый
+#: отправляет только СВОИ ключи: незнакомый ключ часть серверов считает ошибкой
+#: запроса, поэтому «выложить все сразу» — отдельный осознанный режим.
+_BASE_REASONING_PROFILES: dict = {
+    "openai": ("OpenAI-совместимый (reasoning_effort)", _rf_openai),
+    "anthropic": ("Anthropic (thinking.budget_tokens)", _rf_anthropic),
+    "qwen": ("Qwen3/DeepSeek (chat_template_kwargs)", _rf_qwen),
+    "dashscope": ("DashScope (enable_thinking)", _rf_dashscope),
+    "ollama": ("Ollama (think)", _rf_ollama),
+    "openrouter": ("OpenRouter (reasoning.effort)", _rf_openrouter),
+}
+
+
+def _rf_all(mode: str, effort: str, budget: int) -> dict:
+    """Для серверов, молча игнорирующих чужие ключи."""
+    body: dict = {}
+    for _pid, (_label, build) in _BASE_REASONING_PROFILES.items():
+        body.update(build(mode, effort, budget))
+    return body
+
+
+# «все сразу» ссылается на остальных — добавляется после их описания
+REASONING_PROFILES: dict = dict(_BASE_REASONING_PROFILES)
+REASONING_PROFILES["all"] = (
+    "Все ключи сразу (строгие серверы отвечают 400)", _rf_all)
+
+
+def reasoning_fields(mode: str = "default", profile: str = "openai",
+                     effort: str = "", budget: int = 0) -> dict:
+    """Ключи reasoning/thinking для тела запроса; {} — дефолт сервера.
+
+    Профиль выбирает СПОСОБ передачи (у провайдеров общего поля нет), mode —
+    включены/выключены, effort — уровень (у openai он и есть весь режим),
+    budget — ТОКЕНЫ мышления (там, где он задаётся числом).
+    """
+    build = REASONING_PROFILES.get(
+        profile, REASONING_PROFILES["openai"])[1]
+    return build(mode if mode in REASONING_MODES else "default",
+                 str(effort or "").strip(), int(budget or 0))
+
+
+#: «свои поля тела»: то, чего не знает ни один профиль (свой сервер). Ключ
+#: тоже общий — он относится к модели, как и остальные рассуждения.
+EXTRA_BODY_ENV_KEY = "LLM_EXTRA_BODY_JSON"
+
+
+def extra_body_fields(env_data: dict | None = None, logger=None) -> dict:
+    """Свои ключи payload из LLM_EXTRA_BODY_JSON (JSON-объект, один ключ).
+
+    Битый JSON запрос не ломает: предупреждение в лог и {} — стадия уйдёт
+    с обычным запросом. Едут ПОСЛЕ ключей профиля: свой сервер обычно
+    правит именно их.
+    """
+    raw = (os.environ.get(EXTRA_BODY_ENV_KEY)
+           or (env_data or {}).get(EXTRA_BODY_ENV_KEY) or "").strip()
+    if not raw:
+        return {}
+    log = logger or logging.getLogger("core.common")
+    try:
+        got = json.loads(raw)
+    except ValueError as exc:
+        log.warning("%s: битый JSON — поле проигнорировано (%s)",
+                    EXTRA_BODY_ENV_KEY, exc)
+        return {}
+    if not isinstance(got, dict):
+        log.warning("%s: ожидается JSON-объект, получен %s — игнорируем",
+                    EXTRA_BODY_ENV_KEY, type(got).__name__)
+        return {}
+    return got
+
+
+def reasoning_settings(env_data: dict | None = None) -> dict:
+    """Режим рассуждений запуска: os.environ > .env > дефолты.
+
+    Приоритет по ключам, а не по файлу целиком: окружение compose перекрывает
+    файл точечно (см. AGENTS §7, слои конфига).
+    """
+    env_data = env_data or {}
+    got = {k: (os.environ.get(k) or env_data.get(k) or "").strip()
+           for k in REASONING_ENV_KEYS}
+    try:
+        budget = int(float(got["THINKING_BUDGET"] or 0))
+    except ValueError:
+        budget = 0
+    return {
+        "mode": got["REASONING_MODE"] or "default",
+        "profile": got["THINKING_PROFILE"] or "openai",
+        "effort": got["REASONING_EFFORT"],
+        "budget": budget,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════

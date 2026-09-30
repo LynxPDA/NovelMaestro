@@ -25,11 +25,13 @@ import sys
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .common import (determine_model, emit_progress, find_env_file,
+from .common import (REASONING_MODES, REASONING_PROFILES, determine_model,
+                     emit_progress, extra_body_fields, find_env_file,
                      get_server_config, llm_messages, log_argv, parse_dotenv,
                      preview_logger, preview_request_payload, print_env_help,
-                     setup_logging, stream_chat_completion,
-                     web_progress_enabled, write_preview_request)
+                     reasoning_fields, reasoning_settings, setup_logging,
+                     stream_chat_completion, web_progress_enabled,
+                     write_preview_request)
 
 # Значения по умолчанию — исторические числа стадий: менять их «красоты» ради
 # нельзя, timeout завязан на скорость большой модели, max_tokens — на лимит
@@ -94,6 +96,20 @@ def add_llm_args(parser: argparse.ArgumentParser, *,
                        default=None, choices=list(REASONING_EFFORTS),
                        help="Усилия рассуждения модели (пусто = сервер; "
                             "none — отключить).")
+    # способ передачи рассуждений — ОБЩИЙ на весь конвейер (REASONING_MODE,
+    # THINKING_PROFILE, REASONING_EFFORT, THINKING_BUDGET в .env): флаги
+    # нужны, чтобы задать их разово в командной строке, а не на каждую стадию
+    group.add_argument("--reasoning_mode", default=None,
+                       choices=list(REASONING_MODES),
+                       help="Рассуждения модели: default — не трогать, "
+                            "on/off — включить/выключить (пусто = .env).")
+    group.add_argument("--thinking_profile", default=None,
+                       choices=list(REASONING_PROFILES),
+                       help="Как передавать рассуждения (у провайдеров общего "
+                            "поля нет; пусто = .env).")
+    group.add_argument("--thinking_budget", type=int, default=None,
+                       metavar="N",
+                       help="Бюджет рассуждений, ТОКЕНЫ (0 = не отправлять).")
     group.add_argument("--timeout", type=int, default=int(timeout),
                        metavar="SEC",
                        help=f"Таймаут запроса, сек (default: {int(timeout)}).")
@@ -134,6 +150,11 @@ class LlmProfile:
     max_retries: int = DEFAULT_MAX_RETRIES
     temperature: float | None = None
     reasoning_effort: str | None = None
+    # способ передачи рассуждений: профиль (как именно) + режим + бюджет.
+    # дефолты = «не трогать»: openai + default ничего в payload не добавляют
+    reasoning_mode: str = "default"
+    thinking_profile: str = "openai"
+    thinking_budget: int = 0
     max_tokens: int = DEFAULT_MAX_TOKENS
     logger: logging.Logger | None = None
     env_data: dict = field(default_factory=dict, compare=False, repr=False)
@@ -155,7 +176,13 @@ class LlmProfile:
             timeout=self.timeout,
             stream_timeout=self.stream_timeout,
             temperature=self.temperature,
-            reasoning_effort=self.reasoning_effort,
+            # рассуждения — одним dict: ключи профиля, затем свои поля тела
+            # (LLM_EXTRA_BODY_JSON перекрывает их — так и задумано)
+            reasoning={**reasoning_fields(self.reasoning_mode,
+                                          self.thinking_profile,
+                                          self.reasoning_effort or "",
+                                          self.thinking_budget),
+                       **extra_body_fields(self.env_data, self.logger)},
             max_tokens=self.max_tokens,
             min_len_ratio=min_len_ratio,
             reference_len=reference_len,
@@ -185,6 +212,7 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",
     """
     env_data = parse_dotenv(find_env_file(getattr(args, "env_file", None)))
     sc = get_server_config(env_data, stage)
+    rs = reasoning_settings(env_data)
     host = getattr(args, "host", None) or sc["host"]
     api_key = getattr(args, "api_key", None)
     if api_key is None:
@@ -210,7 +238,10 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",
             timeout if stream_timeout is None else stream_timeout))),
         max_retries=int(_pick(args, "max_retries", max_retries)),
         temperature=_pick(args, "temperature", None),
-        reasoning_effort=_pick(args, "reasoning_effort", None),
+        reasoning_effort=_pick(args, "reasoning_effort", rs["effort"] or None),
+        reasoning_mode=_pick(args, "reasoning_mode", rs["mode"]),
+        thinking_profile=_pick(args, "thinking_profile", rs["profile"]),
+        thinking_budget=int(_pick(args, "thinking_budget", rs["budget"])),
         max_tokens=int(_pick(args, "max_tokens", max_tokens)),
         logger=logger,
         env_data=env_data,
