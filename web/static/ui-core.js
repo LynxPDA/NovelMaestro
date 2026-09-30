@@ -22,7 +22,7 @@
    * оставляем сегмент как есть. */
   function decodeSegment(s) {
     var v = String(s === undefined || s === null ? "" : s);
-    if (v.indexOf("%") < 0) return v;
+    if (!v.includes("%")) return v;
     try {
       return decodeURIComponent(v);
     } catch (e) {
