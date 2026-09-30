@@ -14,11 +14,18 @@ const SRC = readFileSync(
   require.resolve("../../web/static/run-views.js"),
   "utf8",
 );
+/* общий DOM-слой: в vm он объявляет UIC (и h/iconEl) так же, как в
+   браузере — классическим скриптом, до view-файлов */
+const UIC_SRC = readFileSync(
+  new URL("../../web/static/ui-components.js", import.meta.url),
+  "utf8",
+);
 
 function load() {
   const sandbox = { window: {} };
   vm.createContext(sandbox);
-  vm.runInContext(SRC, sandbox);
+  vm.runInContext(UIC_SRC, sandbox); // globalThis.UIC, h, iconEl
+vm.runInContext(SRC, sandbox);
   const fn = sandbox.qualityEndByBudget;
   assert.equal(typeof fn, "function", "qualityEndByBudget не найден");
   return fn;

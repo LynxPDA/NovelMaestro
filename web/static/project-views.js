@@ -266,58 +266,18 @@ function viewProject(section, name, tab, job) {
       return apiUpload(`/upload?project=${section}/${name}`, form);
     }
     const entries = data.entries || [];
-    const FILES_PAGE_SIZE = 200;
-    const fPager = h("div", { class: "ner-pager" });
-    let fPage = 0;
     const drop = h("div", { class: "files-list" });
-    function renderFiles() {
-      const pages = Math.max(1, Math.ceil(entries.length / FILES_PAGE_SIZE));
-      fPage = Math.min(fPage, pages - 1);
-      drop.replaceChildren(
-        ...entries
-          .slice(fPage * FILES_PAGE_SIZE, (fPage + 1) * FILES_PAGE_SIZE)
-          .map((e) => fileRow(e)),
-      );
-      // одна страница — пагинация не нужна, достаточно счётчика
-      if (pages <= 1) {
-        fPager.replaceChildren(
-          h("span", { class: "ner-pager-info" }, `файлов: ${entries.length}`),
-        );
-        return;
-      }
-      fPager.replaceChildren(
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            disabled: fPage <= 0,
-            onclick: () => {
-              fPage--;
-              renderFiles();
-            },
-          },
-          "‹",
-        ),
-        h(
-          "span",
-          { class: "ner-pager-info" },
-          ` ${fPage + 1} / ${pages} · файлов: ${entries.length} `,
-        ),
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            disabled: fPage >= pages - 1,
-            onclick: () => {
-              fPage++;
-              renderFiles();
-            },
-          },
-          "›",
-        ),
-      );
-    }
-    renderFiles();
+    // одна страница — пагинация не нужна, достаточно счётчика
+    const fPager = UIC.listPager({
+      list: drop,
+      rows: (slice) => slice.map((e) => fileRow(e)),
+      infoOnlySinglePage: true,
+      info: (total, page, pages) =>
+        pages <= 1
+          ? `файлов: ${total}`
+          : ` ${page} / ${pages} · файлов: ${total} `,
+    });
+    fPager.items = entries;
     drop.addEventListener("dragover", (e) => {
       e.preventDefault();
       drop.classList.add("drop-over");
@@ -338,7 +298,7 @@ function viewProject(section, name, tab, job) {
         toast(ex.message, "err");
       }
     });
-    return h("div", { class: "files-wrap" }, toolbar, drop, fPager);
+    return h("div", { class: "files-wrap" }, toolbar, drop, fPager.el);
   }
 
   function fileRow(e) {
@@ -467,51 +427,8 @@ function viewProject(section, name, tab, job) {
 
     /* предпросмотр: markdown (marked) и html — оба в sandbox-iframe
        (без allow-scripts); те же стили/кегль/высота, что у «Заметок» */
-    const frame = h("iframe", {
-      class: "editor-preview-frame preview-adaptive",
-      sandbox: "allow-same-origin",
-      title: "предпросмотр",
-    });
-    let mode = "code"; // code | md | html
-    const prevBtn = h(
-      "button",
-      { class: "btn btn-sm btn-ghost", title: "Показать отрендеренный вид" },
-      "Рендер",
-    );
-    function renderPreview() {
-      if (mode === "code") return;
-      if (mode === "md") {
-        const html = window.marked
-          ? window.marked.parse(ed.getValue(), {
-              mangle: false,
-              headerIds: false,
-            })
-          : "<pre>marked не загружен</pre>";
-        frame.srcdoc = mdPreviewSrcdoc(html);
-      } else if (mode === "html") {
-        frame.srcdoc = wrapPreviewDoc(ed.getValue());
-      }
-    }
-    frame.addEventListener("load", () => fitPreviewFrame(frame));
-    function setMode(next) {
-      mode = next;
-      if (mode === "code") {
-        prevBtn.textContent = "Рендер";
-        editorHost.style.display = "";
-        frame.style.display = "none";
-      } else {
-        prevBtn.textContent = "Код";
-        editorHost.style.display = "none";
-        frame.style.display = "block";
-        renderPreview();
-      }
-    }
-    prevBtn.addEventListener("click", () => {
-      if (mode === "code") {
-        setMode(ext === "html" || ext === "htm" ? "html" : "md");
-      } else {
-        setMode("code");
-      }
+    const pane = UIC.previewPane(ed, {
+      renderMode: ext === "html" || ext === "htm" ? "html" : "md",
     });
 
     const saveBtn = h("button", { class: "btn btn-sm" }, "Сохранить");
@@ -553,21 +470,20 @@ function viewProject(section, name, tab, job) {
       h("span", { class: "spacer" }),
       h("span", { class: "field-help" }, "кегль"),
       previewFontSelect(() => {
-        if (mode !== "code") renderPreview();
+        if (pane.mode !== "code") pane.render();
       }),
       findBtn,
-      prevBtn,
+      pane.btn,
       saveBtn,
     );
-    const editorHost = h("div", { class: "editor-cm" }, ed.root);
     st._ed = ed;
     return h(
       "div",
       { class: "editor-wrap editor-has-preview" },
       toolbar,
       err,
-      editorHost,
-      frame,
+      pane.host,
+      pane.frame,
     );
   }
   /* ── Редактор глав  ─────────────────── */
@@ -4413,51 +4329,8 @@ function viewProject(section, name, tab, job) {
     const NOTES_PATH = "source/info.md";
     const err = h("div", { class: "form-error" });
     const ed = makeEditor("", "md");
-    const editorHost = h(
-      "div",
-      { class: "editor-cm editor-cm-small" },
-      ed.root,
-    );
-    const frame = h("iframe", {
-      class: "editor-preview-frame preview-adaptive",
-      sandbox: "allow-same-origin",
-      title: "предпросмотр",
-    });
+    const pane = UIC.previewPane(ed, { small: true });
     const status = h("div", { class: "review-status" });
-    let mode = "code";
-    const prevBtn = h(
-      "button",
-      { class: "btn btn-sm btn-ghost", title: "Показать отрендеренный вид" },
-      "Рендер",
-    );
-    function renderPreview() {
-      if (mode === "code") return;
-      const html = window.marked
-        ? window.marked.parse(ed.getValue(), {
-            mangle: false,
-            headerIds: false,
-          })
-        : "<pre>marked не загружен</pre>";
-      frame.srcdoc = mdPreviewSrcdoc(html);
-    }
-    frame.addEventListener("load", () => fitPreviewFrame(frame));
-    function setMode(next) {
-      mode = next;
-      if (mode === "code") {
-        prevBtn.textContent = "Рендер";
-        editorHost.style.display = "";
-        frame.style.display = "none";
-      } else {
-        prevBtn.textContent = "Код";
-        editorHost.style.display = "none";
-        frame.style.display = "block";
-        renderPreview();
-      }
-    }
-    prevBtn.addEventListener("click", () => {
-      if (mode === "code") setMode("md");
-      else setMode("code");
-    });
     const saveBtn = h(
       "button",
       { class: "btn btn-sm btn-primary" },
@@ -4497,7 +4370,7 @@ function viewProject(section, name, tab, job) {
     }
     await loadNotes();
     // по умолчанию — отрендеренный вид (правка — по кнопке «Код»)
-    setMode("md");
+    pane.setMode("md");
     return h(
       "div",
       { class: "page" },
@@ -4529,14 +4402,14 @@ function viewProject(section, name, tab, job) {
             h("span", { class: "spacer" }),
             h("span", { class: "field-help" }, "кегль"),
             previewFontSelect(() => {
-              if (mode !== "code") renderPreview();
+              if (pane.mode !== "code") pane.render();
             }),
-            prevBtn,
+            pane.btn,
             saveBtn,
           ),
           err,
-          editorHost,
-          frame,
+          pane.host,
+          pane.frame,
         ),
       ),
     );
