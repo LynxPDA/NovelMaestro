@@ -67,20 +67,15 @@
   }
 
   /* Каркас модалки: оверлей, .modal/.modal-wide, заголовок и тело. Закрыть
-   * можно кликом по фону и кнопками — и там, и там один close(result),
-   * который передаётся в build: общему коду не нужен глобальный указатель на
-   * текущий оверлей. done резолвится тем же результатом, поэтому диалог —
-   * `return UIC.modal({...}).done`, а `await` — ответ пользователя. */
+   * можно кликом по фону и кнопками — и там, и там один close(result). Он же
+   * возвращается на элементе (modal.close): вьюхе не нужен глобальный указатель
+   * на текущий оверлей, а обещание диалога резолвится onClose. */
   function modal(opts) {
     const o = opts || {};
     let backdrop = null;
-    let settle;
-    const done = new Promise((r) => {
-      settle = r;
-    });
     function close(result) {
       if (backdrop) backdrop.remove();
-      settle(result);
+      if (o.onClose) o.onClose(result);
       return result;
     }
     const kids = [];
@@ -97,12 +92,9 @@
       },
       h("div", { class: o.wide ? "modal modal-wide" : "modal" }, ...kids),
     );
+    backdrop.close = close;
     document.body.append(backdrop);
-    if (o.focus) {
-      o.focus.focus();
-      if (o.select) o.focus.select();
-    }
-    return { el: backdrop, close, done };
+    return backdrop;
   }
 
   /* Кнопка-меню тулбара: .toolbar-menu > кнопка + выпадающий список. Механика

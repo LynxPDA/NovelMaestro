@@ -181,52 +181,51 @@ test("h: дети flat, текст — текстовые узлы, null про�
 });
 
 /* ── каркас модалки ───────────────────────────────────────────────── */
-test("modal: заголовок, тело, вешается на body", async () => {
+test("modal: заголовок, тело, вешается на body", () => {
   const m = UIC.modal({
     title: "Новый столбец",
     build: () => [UIC.h("input", { class: "inp" }), UIC.h("div", { class: "x" })],
   });
-  assert.ok(m.el.isConnected);
-  assert.equal(m.el.className, "modal-backdrop");
-  const card = m.el.firstChild;
+  assert.ok(m.isConnected);
+  assert.equal(m.className, "modal-backdrop");
+  const card = m.firstChild;
   assert.equal(card.className, "modal");
   assert.equal(card.find("modal-title").textContent, "Новый столбец");
   assert.ok(card.find("inp"));
   m.close();
-  assert.equal(await m.done, undefined);
-  assert.equal(m.el.isConnected, false);
+  assert.equal(m.isConnected, false);
 });
 
 test("modal: wide-карточка и один ребёнок тела", () => {
   const m = UIC.modal({ wide: true, build: () => UIC.h("i", {}, "раз") });
-  assert.equal(m.el.firstChild.className, "modal modal-wide");
-  assert.equal(m.el.firstChild.textContent, "раз");
+  assert.equal(m.firstChild.className, "modal modal-wide");
+  assert.equal(m.firstChild.textContent, "раз");
 });
 
 test("modal: клик по фону закрывает, клик внутри карточки — нет", () => {
   const m = UIC.modal({ title: "T", build: () => UIC.h("i", {}, "x") });
-  m.el.firstChild.click(); // клик по карточке
-  assert.equal(m.el.isConnected, true);
-  m.el.click(); // клик по оверлею
-  assert.equal(m.el.isConnected, false);
+  m.firstChild.click(); // клик по карточке
+  assert.equal(m.isConnected, true);
+  m.click(); // клик по оверлею
+  assert.equal(m.isConnected, false);
 });
 
-test("modal: close(result) резолвит done результатом", async () => {
+test("modal: close(result) приходит в onClose результатом", () => {
+  let got = "нет";
   const m = UIC.modal({
     title: "T",
+    onClose: (r) => (got = r),
     build: (close) =>
       UIC.h("button", { class: "btn", onclick: () => close(true) }, "ОК"),
   });
-  const btn = m.el.find("btn");
-  btn.click();
-  assert.equal(await m.done, true);
+  m.find("btn").click();
+  assert.equal(got, true);
 });
 
-test("modal: focus и select на целевом элементе", () => {
-  const name = UIC.h("input", {});
-  UIC.modal({ title: "T", focus: name, select: true, build: () => name });
-  assert.equal(name.focused, true);
-  assert.equal(name.selected, true);
+test("modal: modal.close — тот же close, что у оверлея", () => {
+  const m = UIC.modal({ title: "T", build: () => UIC.h("i", {}, "x") });
+  m.close("ок");
+  assert.equal(m.isConnected, false);
 });
 
 /* ── панель «редактор + предпросмотр» ─────────────────────────────── */
