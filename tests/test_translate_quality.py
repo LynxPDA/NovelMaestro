@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "cli"))
 
 import translate_quality as TQ  # noqa: E402
+from core import stage as core_stage  # noqa: E402
 from conftest import SilentLog  # noqa: E402
 
 LOG = SilentLog()
@@ -154,9 +155,8 @@ def test_main_e2e_report(tmp_path, monkeypatch):
     """Полный прогон: отчёт с технической шапкой и оценкой LLM."""
     make_chapters(tmp_path, 3)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(TQ, "determine_model", lambda *a, **k: "модель-х")
-    monkeypatch.setattr(TQ, "llm_request",
-                        lambda *a, **k: "**9/10** — отличный перевод")
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
+                        lambda *a, **k: ("**9/10** — отличный перевод", None))
     monkeypatch.setattr(sys, "argv", [
         "translate_quality.py", "--type", "polished",
         "--start", "1", "--end", "3",
@@ -177,8 +177,8 @@ def test_main_budget_trims(tmp_path, monkeypatch):
     """Малый бюджет — в отчёте отсечённые главы."""
     make_chapters(tmp_path, 3)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(TQ, "determine_model", lambda *a, **k: "м")
-    monkeypatch.setattr(TQ, "llm_request", lambda *a, **k: "оценка")
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
+                        lambda *a, **k: ("оценка", None))
     monkeypatch.setattr(sys, "argv", [
         "translate_quality.py", "--type", "polished",
         "--start", "1", "--end", "3",
@@ -195,8 +195,8 @@ def test_main_empty_llm_returns_1(tmp_path, monkeypatch):
     """Пустой ответ LLM — код 1, отчёт не пишется."""
     make_chapters(tmp_path, 1)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(TQ, "determine_model", lambda *a, **k: "m")
-    monkeypatch.setattr(TQ, "llm_request", lambda *a, **k: None)
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
+                        lambda *a, **k: (None, "пусто"))
     monkeypatch.setattr(sys, "argv", [
         "translate_quality.py", "--start", "1", "--end", "1",
         "--host", "http://h", "--model", "m"])
@@ -221,8 +221,8 @@ def test_main_custom_output(tmp_path, monkeypatch):
         "<prompt_assessment>оцени</prompt_assessment>\n",
         encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(TQ, "determine_model", lambda *a, **k: "m")
-    monkeypatch.setattr(TQ, "llm_request", lambda *a, **k: "хорошо")
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
+                        lambda *a, **k: ("хорошо", None))
     monkeypatch.setattr(sys, "argv", [
         "translate_quality.py", "--start", "1", "--end", "1",
         "--prompt_file", "p.txt", "--output", "reports/my.md",

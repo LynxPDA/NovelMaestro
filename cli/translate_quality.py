@@ -43,26 +43,17 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
+from core.stage import (  # noqa: E402
+    Progress,
+    add_llm_args,
+    setup_stage,
+)
 from core.common import (  # noqa: E402
     build_chapter_map,
-    determine_model,
-    emit_progress,
     estimate_tokens,
     find_chapter_file,
-    find_env_file,
-    get_server_config,
     get_tagged_prompt,
-    llm_messages,
-    log_argv,
-    parse_dotenv,
-    preview_logger,
-    preview_request_payload,
-    print_env_help,
     read_text_safe,
-    setup_logging,
-    stream_chat_completion,
-    web_progress_enabled,
-    write_preview_request,
 )
 
 DEFAULT_OUTPUT = "tmp/translation_quality_assessment.md"  # web: фиксирован
@@ -197,26 +188,10 @@ def build_user_prompt(template: str, original_text: str,
 # ──────────────────────────────────────────────
 # ЗАПРОС К LLM
 # ──────────────────────────────────────────────
-def llm_request(user_content, base_url, model, api_key,
-                max_retries, timeout, temperature, reasoning_effort,
-                logger) -> str | None:
-    """Единый стрим core.common.stream_chat_completion
-    ([DONE]/finish_reason, loop-детект, cut, empty — одна гигиена).
-    max_tokens=32768 — серверный предохранитель, ТОКЕНЫ."""
-    text, _err = stream_chat_completion(
-        base_url, model,
-        llm_messages(user_content),
-        api_key=api_key,
-        max_retries=max_retries,
-        timeout=timeout,
-        stream_timeout=timeout,
-        temperature=temperature,
-        reasoning_effort=reasoning_effort,
-        max_tokens=32768,
-        logger=logger,
-        label="[quality]",
-    )
-    return text
+# Единственный вызов стадии — stage.complete(): профиль LLM (сервер, ключ,
+# модель, таймауты, ретраи) собран в setup_stage, messages строит
+# core.common.llm_messages, гигиена стрима одна на проект.
+MAX_TOKENS = 32768  # серверный предохранитель, ТОКЕНЫ
 
 
 # ──────────────────────────────────────────────
@@ -288,16 +263,8 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
   %(prog)s --prompt_file prompts/translate_quality_prompt.txt --budget 65000
 """,
     )
-    # Сервер
-    parser.add_argument("--host", default=None,
-                        help="URL API-сервера (пусто = HOST из .env).")
-    parser.add_argument("--model", default=None,
-                        help="Модель: --model или MODEL/TRANSLATE_QUALITY_MODEL "
-                             "в .env.")
-    parser.add_argument("--api_key", default=None,
-                        help="Bearer-ключ (пусто = API_KEY из .env).")
-    parser.add_argument("--env_file", default=None,
-                        help="Явный путь к .env.")
+    # Сервер/LLM — общий блок стадий (имена флагов контрактны с web/stages.py)
+    add_llm_args(parser, timeout=300, aliases=True)
     # Главы
     parser.add_argument("--chapters-dir", dest="chapters_dir",
                         default="./chapters",
@@ -328,48 +295,14 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                              f"если не влезает — пакет обрезается до "
                              f"целого количества глав (default: "
                              f"{DEFAULT_BUDGET}).")
-    # LLM
-    parser.add_argument("--timeout", type=int, default=300,
-                        help="Таймаут запроса, сек (default: 300).")
-    parser.add_argument("--max_retries", type=int, default=3,
-                        help="Повторы при ошибке LLM (default: 3).")
-    parser.add_argument("--temperature", type=float, default=None,
-                        help="Температура (иначе дефолт сервера).")
-    parser.add_argument("--reasoning_effort", default=None,
-                        choices=["none", "minimal", "low", "medium", "high",
-                                 "xhigh", "max"],
-                        help="Усилия рассуждения модели: none/minimal/low/"
-                             "medium/high/xhigh/max (пусто = сервер; "
-                             "none — отключить).")
     args = parser.parse_args()
 
-    try:
-        os.makedirs("logs", exist_ok=True)
-    except OSError as exc:
-        print(f"Не удалось создать папку logs/: {exc}")
-        return 1
-    logger, _ = setup_logging(
-        os.path.join("logs", "translate_quality.log"))
-    log_argv(logger)
-
-    # ── Сервер: CLI > HOST/API_KEY/MODEL из .env > help+exit ──
-    env_data = parse_dotenv(find_env_file(args.env_file))
-    sc = get_server_config(env_data, "translate_quality")
-    host = args.host or sc["host"]
-    api_key = args.api_key if args.api_key is not None else sc["api_key"]
-    model = args.model or sc["model"]
-    if not api_key:
-        api_key = os.environ.get("LLM_API_KEY", "")
-    if not host:
-        print_env_help()
-        sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")
-    base_url = host.rstrip("/")
-    if "/v1" not in base_url:
-        base_url += "/v1"
-    model_name = determine_model(model, logger)
-
-    logger.info(f"API: {base_url} | модель: {model_name} | "
-                f"бюджет: {args.budget} симв. | тип: {args.type}")
+    # ── Лог стадии + сервер: CLI > os.environ > .env > help+exit ──
+    stage, logger = setup_stage("translate_quality", args,
+                                max_tokens=MAX_TOKENS)
+    logger.info(f"API: {stage.profile.base_url} | модель: "
+                f"{stage.profile.model} | бюджет: {args.budget} токенов "
+                f"(оценка) | тип: {args.type}")
 
     # ── Главы ──
     ch_dir = os.path.abspath(args.chapters_dir)
@@ -423,41 +356,25 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
     packet_size = estimate_tokens(user_content)
 
     # ── Предпросмотр запроса (--preview-request): первый пакет оценки ──
-    if args.preview_request:
-        log = preview_logger("translate_quality")
-        log_argv(log)
-        payload = preview_request_payload(
-            "translate_quality",
-            f"Оценка · главы {nums[0]}–{nums[-1]}", model_name,
-            llm_messages(user_content),
-            meta={
-                "chapters": len(kept),
-                "first": nums[0],
-                "last": nums[-1],
-                "budget": args.budget,
-                "prompt_file": args.prompt_file or "",
-            })
-        write_preview_request(args.preview_request, payload)
-        log.info("✅ Предпросмотр запроса: %s (%d токенов user, оценка)",
-                 args.preview_request, packet_size)
+    if stage.preview(f"Оценка · главы {nums[0]}–{nums[-1]}", user_content,
+                    meta={"chapters": len(kept), "first": nums[0],
+                          "last": nums[-1], "budget": args.budget,
+                          "prompt_file": args.prompt_file or ""}):
         return 0
 
-    if web_progress_enabled():
-        emit_progress(0, 1, "Оценка перевода")
+    progress = Progress(1, "Оценка перевода")
+    progress.start()
     logger.info(f"Пакет: глав {nums[0]}–{nums[-1]} ({len(nums)}), "
                 f"размер {packet_size:,} токенов "
                 f"(оценка)".replace(",", " "))
 
-    # ── LLM ──
-    print(f"Запрос к LLM ({model_name}) по главам {nums[0]}–{nums[-1]}…")
-    assessment = llm_request(
-        user_content, base_url, model_name, api_key,
-        args.max_retries, args.timeout, args.temperature,
-        args.reasoning_effort, logger)
-    if web_progress_enabled():
-        emit_progress(1, 1, "Оценка перевода")
+    # ── LLM: единственный вызов стадии ──
+    print(f"Запрос к LLM ({stage.profile.model}) по главам "
+          f"{nums[0]}–{nums[-1]}…")
+    assessment, err = stage.complete(user_content, label="[quality]")
+    progress.step()
     if not assessment:
-        logger.error("❌ LLM вернул пустой ответ.")
+        logger.error(f"❌ LLM вернул пустой ответ. {err or ''}".rstrip())
         return 1
 
     # ── Отчёт ──
@@ -470,8 +387,8 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
         "file_type": args.type,
         "budget": args.budget,
         "packet_size": packet_size,
-        "model": model_name,
-        "host": base_url,
+        "model": stage.profile.model,
+        "host": stage.profile.base_url,
         "prompt_file": args.prompt_file or "",
     }
     write_report(args.output, meta, assessment, logger)
