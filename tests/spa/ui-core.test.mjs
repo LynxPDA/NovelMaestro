@@ -769,3 +769,29 @@ test("faviconHref: без запусков — глиф, с запусками �
   assert.ok(decodeURIComponent(UICore.faviconHref(3)).includes(">3<"));
   assert.ok(decodeURIComponent(UICore.faviconHref(42)).includes("9+"));
 });
+
+test("parseRoute: браузерный хэш раскодировывается", () => {
+  // браузер хранит location.hash закодированным: кириллическое имя книги
+  // обязано приходить в вид раскодированным, иначе оно уходит в API дважды
+  // закодированным и проект не находится (404)
+  assert.deepEqual(UICore.parseRoute("#/project/TMP/%D0%9A%D0%BD%D0%B8%D0%B3%D0%B0/files"), {
+    view: "project",
+    rest: ["TMP", "Книга", "files"],
+  });
+  assert.deepEqual(UICore.parseRoute("#/project/TMP/%D0%9A%D0%BD%D0%B8%D0%B3%D0%B0"), {
+    view: "project",
+    rest: ["TMP", "Книга"],
+  });
+  // латиника и пробелы
+  assert.deepEqual(UICore.parseRoute("#/project/ACTIVE/My%20Book/run"), {
+    view: "project",
+    rest: ["ACTIVE", "My Book", "run"],
+  });
+});
+
+test("parseRoute: битую %-последовательность не выдумываем", () => {
+  assert.deepEqual(UICore.parseRoute("#/project/TMP/%ZZ/files"), {
+    view: "project",
+    rest: ["TMP", "%ZZ", "files"],
+  });
+});

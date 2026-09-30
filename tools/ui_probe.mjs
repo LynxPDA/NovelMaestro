@@ -45,6 +45,9 @@ const PROJECT_TABS = [
 ];
 const SECTION = "TMP";
 const BOOK = "Probe";
+// раздел на кириллице: браузер хранит location.hash закодированным
+const CYR_SECTION = "Черновики";
+const CYR_BOOK = "LatinBook";
 
 function arg(name, def = null) {
   const i = process.argv.indexOf(`--${name}`);
@@ -99,8 +102,15 @@ function seedProjectsDir(dir) {
   fs.writeFileSync(path.join(book, "metadata.yaml"), "title: Проба\nauthor: Probe\n");
   fs.writeFileSync(
     path.join(dir, "hub_state.json"),
-    JSON.stringify({ sections: [SECTION], collapsed: [] }, null, 2),
+    JSON.stringify({ sections: [SECTION, CYR_SECTION], collapsed: [] }, null, 2),
   );
+  // отдельный раздел на кириллице: имена книг санитизируются в латиницу, а
+  // разделы — нет, и именно он попадает в hash закодированным
+  const cyr = path.join(dir, CYR_SECTION, CYR_BOOK);
+  const cyrCh = path.join(cyr, "chapters", "00000_1_Первая");
+  fs.mkdirSync(cyrCh, { recursive: true });
+  fs.writeFileSync(path.join(cyrCh, "chapter.txt"), "Глава первая.\n", "utf-8");
+  fs.writeFileSync(path.join(cyr, "ner.json"), "[]\n", "utf-8");
   // системный .env пробы (WEB_ENV_FILE указывает сюда же): дефолты LLM и
   // блок рассуждений — чтобы «Настройки» показывали существующий файл
   fs.writeFileSync(
@@ -411,6 +421,28 @@ async function main() {
       if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-reasoning.png") });
       log(`${problems.length === before ? "✅" : "❌"} reasoning-блок   ${f.labels.join(" · ")}`);
     }
+  }
+
+  /* кириллическое имя проекта: сегменты hash-маршрута браузер хранит
+   * закодированными — без декода имя книги доезжает до API дважды
+   * закодированным, проект не находится, а в заголовке — крокозябры */
+  {
+    const before = problems.length;
+    const href = `#/project/${encodeURIComponent(CYR_SECTION)}/${CYR_BOOK}/files`;
+    await page.goto(`${url}/${href}`, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForTimeout(1200);
+    const look = await page.evaluate(() => ({
+      title: ((document.querySelector(".page-title") || {}).textContent || "").trim(),
+      sub: ((document.querySelector(".page-sub") || {}).textContent || "").trim(),
+      files: document.querySelectorAll(".files-list .frow").length,
+    }));
+    if (look.title !== CYR_BOOK || !look.sub.includes(CYR_SECTION))
+      problems.push(`кириллица: заголовок «${look.title}» · ${look.sub}`);
+    if (look.files < 2)
+      problems.push(`кириллица: в списке файлов ${look.files} (ожидаем 2)`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-cyrillic.png") });
+    log(`${problems.length === before ? "✅" : "❌"} кириллица-имя   «${look.title}» (${look.sub}) · файлов ${look.files}`);
   }
 
   /* сценарии на модалках: вложенные оверлеи, promise-результат и обновление

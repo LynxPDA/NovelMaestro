@@ -16,6 +16,20 @@
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
+  /* Сегмент hash-маршрута: браузер хранит хэш закодированным, поэтому имя
+   * книги на кириллице доходило до заголовка и до API как «%D0%9A…» (API —
+   * дважды закодированным, 404). Битую %-последовательность не выдумываем —
+   * оставляем сегмент как есть. */
+  function decodeSegment(s) {
+    var v = String(s === undefined || s === null ? "" : s);
+    if (v.indexOf("%") < 0) return v;
+    try {
+      return decodeURIComponent(v);
+    } catch (e) {
+      return v;
+    }
+  }
+
   /* ── SVG-иконки (24×24, stroke=currentColor — красятся темой;
    * вместо эмодзи: одинаковый рендер на всех ОС, базовая линия,
    * кегль). Возвращает СТРОКУ — вставка через innerHTML (h() экранирует
@@ -330,12 +344,12 @@
     },
     nerFieldLabel: (key) => UICore.nerFieldLabels[key] || key,
 
-    /* ── роутер: "#/run/a/b" → {view, rest} ── */
+    /* ── роутер: "#/run/a/b" → {view, rest} (сегменты — раскодированные) ── */
     parseRoute: (hash) => {
       var h = String(hash || "")
         .replace(/^#\/?/, "")
         .replace(/^\//, "");
-      var parts = h.split("/");
+      var parts = h.split("/").map(decodeSegment);
       var view = parts.shift();
       return { view: view || "hub", rest: parts };
     },
