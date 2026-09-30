@@ -2159,6 +2159,14 @@ REASONING_PROFILES["all"] = (
     "Все ключи сразу (строгие серверы отвечают 400)", _rf_all)
 
 
+def _as_budget(value) -> int:
+    """Бюджет рассуждений: нечисловое значение — 0 (не отправляем), не падение."""
+    try:
+        return max(0, int(float(value or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def reasoning_fields(mode: str = "default", profile: str = "openai",
                      effort: str = "", budget: int = 0) -> dict:
     """Ключи reasoning/thinking для тела запроса; {} — дефолт сервера.
@@ -2170,7 +2178,7 @@ def reasoning_fields(mode: str = "default", profile: str = "openai",
     build = REASONING_PROFILES.get(
         profile, REASONING_PROFILES["openai"])[1]
     return build(mode if mode in REASONING_MODES else "default",
-                 str(effort or "").strip(), int(budget or 0))
+                 str(effort or "").strip(), _as_budget(budget))
 
 
 #: «свои поля тела»: то, чего не знает ни один профиль (свой сервер). Ключ
@@ -2212,15 +2220,11 @@ def reasoning_settings(env_data: dict | None = None) -> dict:
     env_data = env_data or {}
     got = {k: (os.environ.get(k) or env_data.get(k) or "").strip()
            for k in REASONING_ENV_KEYS}
-    try:
-        budget = int(float(got["THINKING_BUDGET"] or 0))
-    except ValueError:
-        budget = 0
     return {
         "mode": got["REASONING_MODE"] or "default",
         "profile": got["THINKING_PROFILE"] or "openai",
         "effort": got["REASONING_EFFORT"],
-        "budget": budget,
+        "budget": _as_budget(got["THINKING_BUDGET"]),
     }
 
 

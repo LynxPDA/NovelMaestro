@@ -1901,3 +1901,13 @@ def test_extra_body_fields_json(monkeypatch):
     monkeypatch.setenv(C.EXTRA_BODY_ENV_KEY, '{"a": 1}')
     assert C.extra_body_fields({"LLM_EXTRA_BODY_JSON": '{"b": 2}'}, log) == {
         "a": 1}
+
+
+def test_reasoning_fields_bad_budget_is_zero():
+    """Нечисловой бюджет — 0 (не отправляем), а не падение стадии."""
+    assert C.reasoning_fields("on", "anthropic", "", "много") == (
+        {"thinking": {"type": "enabled"}})
+    assert C.reasoning_fields("on", "dashscope", "", None) == (
+        {"enable_thinking": True})
+    assert C.reasoning_fields("on", "dashscope", "", "-5") == (
+        {"enable_thinking": True})
