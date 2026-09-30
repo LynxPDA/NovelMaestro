@@ -51,8 +51,9 @@ cmd_setup() {
 
 cmd_test() {
     activate
-    # без аргументов — весь каталог; с аргументами — только указанное
-    if [ $# -eq 0 ]; then set -- tests/; fi
+    # без аргументов — весь каталог параллельно (pytest-xdist); с аргументами — ровно то,
+    # что попросили (например: ./dev.sh test -n 0 tests/test_ner.py)
+    if [ $# -eq 0 ]; then set -- -n auto tests/; fi
     exec python3 -m pytest "$@" -q
 }
 
