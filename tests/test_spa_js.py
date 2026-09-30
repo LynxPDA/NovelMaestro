@@ -270,10 +270,11 @@ def test_dropdown_menus_are_fixed_positioned():
 
     # скрытие — общим классом .hidden (attribute-механизм [hidden] убран)
     assert ".menu-box[hidden]" not in css
-    assert 'class: "menu-box hidden"' in comp
-    # оба вида меню идут через общий переключатель, а не свои слушатели
-    assert "window.toggleMenu(btn, box)" in comp
-    assert "btn.addEventListener(\"click\", () => toggleMenu(btn, menu));" in app
+    assert 'class: (o.menuClass || "menu-box") + " hidden"' in comp
+    # оба вида меню собираются одним компонентом и общим переключателем,
+    # а не своими слушателями: app.js остался тонким делегатором
+    assert "onclick: () => window.toggleMenu(btn, box)" in comp
+    assert "return UIC.menuButton(items," in app
     assert "window.closeMenus()" in comp
     # геометрия — одна чистая функция; слежение за скроллом/ресайзом
     assert "UICore.menuPlacement(" in app

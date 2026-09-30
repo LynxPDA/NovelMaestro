@@ -100,36 +100,54 @@
   /* Кнопка-меню тулбара: .toolbar-menu > кнопка + выпадающий список. Механика
    * открытия/размещения — у app.js (openMenu/toggleMenu/closeMenus), сюда
    * только сборка узлов: пункт закрывает меню и зовёт своё действие. */
-  function menuButton(icon, title, items) {
-    const box = h("div", { class: "menu-box hidden", role: "menu" });
+  /* Кнопка с выпадающим меню — одна на все случаи: действия строки, меню
+   * пользователя, «＋» на панели глоссария. items: [{label, action|onclick,
+   * href, danger}]; opts: {icon — текст кнопки, iconName — имя SVG-иконки,
+   * title, aria, btnClass, wrapClass, menuClass, itemClass} — дефолты
+   * компактные, как в тулбарах. */
+  function menuButton(items, opts) {
+    const o = opts || {};
+    const box = h("div", {
+      class: (o.menuClass || "menu-box") + " hidden",
+      role: "menu",
+    });
     for (const it of items) {
-      box.append(
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost menu-item",
-            role: "menuitem",
-            onclick: () => {
-              window.closeMenus();
-              it.action();
+      const cls =
+        (o.itemClass || "btn btn-sm btn-ghost menu-item") +
+        (it.danger ? " user-menu-danger" : "");
+      if (it.href) {
+        box.append(h("a", { class: cls, href: it.href, role: "menuitem" }, it.label));
+      } else {
+        box.append(
+          h(
+            "button",
+            {
+              class: cls,
+              role: "menuitem",
+              onclick: () => {
+                window.closeMenus();
+                const run = it.action || it.onclick;
+                if (run) run();
+              },
             },
-          },
-          it.label,
-        ),
-      );
+            it.label,
+          ),
+        );
+      }
     }
     const btn = h(
       "button",
       {
-        class: "btn btn-sm btn-ghost",
-        title,
+        class: "btn btn-sm btn-ghost" + (o.btnClass ? " " + o.btnClass : ""),
+        title: o.title || o.aria || "",
+        "aria-label": o.aria || o.title || "",
         "aria-haspopup": "menu",
         "aria-expanded": "false",
         onclick: () => window.toggleMenu(btn, box),
       },
-      icon,
+      o.iconName ? iconEl(o.iconName) : String(o.icon == null ? "⋮" : o.icon),
     );
-    return h("div", { class: "toolbar-menu" }, btn, box);
+    return h("div", { class: o.wrapClass || "toolbar-menu" }, btn, box);
   }
 
   /* Doc-обёртки предпросмотра: тема и кегль живут там, где карточка настроек

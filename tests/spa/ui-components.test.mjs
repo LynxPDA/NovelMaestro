@@ -344,11 +344,20 @@ test("menuButton: пункт закрывает меню и зовёт дейс�
   let ran = 0;
   globalThis.closeMenus = () => closed++;
   globalThis.toggleMenu = () => {};
-  const el = UIC.menuButton("⋮", "Ещё", [{ label: "Удалить", action: () => ran++ }]);
+  const el = UIC.menuButton([{ label: "Удалить", action: () => ran++ }],
+    { icon: "⋮", title: "Ещё" });
   assert.equal(el.className, "toolbar-menu");
   el.find("menu-item").click();
   assert.equal(closed, 1);
   assert.equal(ran, 1);
+  // SVG-иконка вместо текста (меню пользователя) и aria-метка
+  const kb = UIC.menuButton([{ label: "Выйти", onclick: () => ran++ }],
+    { iconName: "kebab", aria: "Ещё", btnClass: "kebab-btn", wrapClass: "menu-wrap",
+      menuClass: "user-menu", itemClass: "user-menu-item" });
+  assert.equal(kb.className, "menu-wrap");
+  assert.equal(kb.find("kebab-btn").attrs["aria-label"], "Ещё");
+  kb.find("user-menu-item").click();
+  assert.equal(closed, 2);
 });
 
 test("listPager: hideSinglePage убирает панель совсем", () => {
