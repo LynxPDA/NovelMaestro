@@ -99,9 +99,7 @@ function seedProjectsDir(dir) {
     path.join(dir, "hub_state.json"),
     JSON.stringify({ sections: [SECTION], collapsed: [] }, null, 2),
   );
-  fs.mkdirSync(path.join(dir, "wiki"), { recursive: true });
-  fs.mkdirSync(path.join(dir, "logs", "chapters"), { recursive: true });
-  fs.mkdirSync(path.join(dir, "tmp"), { recursive: true });
+
 }
 
 /* Сервер поднимается тем же python3, что и всё остальное: probe гоняют из
@@ -280,6 +278,73 @@ async function main() {
         log(`${problems.length === before ? "✅" : "❌"} панель file-preview   ${a.editor ? "редактор" : "кадр"} → ${b2.editor ? "редактор" : "кадр"}`);
       }
     }
+  }
+
+  /* сценарии на модалках: вложенные оверлеи, promise-результат и обновление
+   * экрана за ними — на этом refactor ломался бы тише всего */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/hub`, { waitUntil: "load" });
+    await page.waitForTimeout(1200);
+    await page.locator('button:has-text("Управление разделами")').first().click();
+    await page.waitForTimeout(600);
+    // вложенная модалка «Новый раздел»
+    await page.locator('.modal-backdrop button:has-text("＋ Раздел")').last().click();
+    await page.waitForTimeout(500);
+    const nested = await page.evaluate(() => document.querySelectorAll(".modal-backdrop").length);
+    if (nested < 2) problems.push(`вложенных оверлеев ${nested}, ожидалось 2`);
+    await page.locator('.modal-backdrop:last-of-type input.input').last().fill("TMP2");
+    await page.locator('.modal-backdrop:last-of-type button:has-text("ОК")').last().click();
+    await page.waitForTimeout(900);
+    const rows = await page.evaluate(() =>
+      [...document.querySelectorAll(".hub-sections-modal .fname")].map((x) => x.textContent.trim()));
+    if (!rows.includes("TMP2")) problems.push(`раздел не создан, в списке: ${rows.join(",")}`);
+    // опасное действие: сначала неверное слово, потом верное
+    await page.locator('.hub-sections-modal .frow:has-text("TMP2") button:has-text("Удалить")').last().click();
+    await page.waitForTimeout(500);
+    const conf = page.locator(".modal-backdrop").last();
+    await conf.locator('input.input').fill("не то");
+    await conf.locator('button:has-text("Подтвердить")').click();
+    await page.waitForTimeout(400);
+    const wrong = await page.evaluate(() => {
+      const m = document.querySelectorAll(".modal-backdrop");
+      const top = m[m.length - 1];
+      return { n: m.length, err: top ? (top.querySelector(".form-error") || {}).textContent : "" };
+    });
+    if (wrong.n !== 2 || !/УДАЛИТЬ/.test(wrong.err || ""))
+      problems.push(`проверка слова не сработала: оверлеев ${wrong.n}, ошибка «${(wrong.err || "").trim()}»`);
+    await conf.locator('input.input').fill("УДАЛИТЬ");
+    await conf.locator('button:has-text("Подтвердить")').click();
+    await page.waitForTimeout(1000);
+    const rows2 = await page.evaluate(() =>
+      [...document.querySelectorAll(".hub-sections-modal .fname")].map((x) => x.textContent.trim()));
+    if (rows2.includes("TMP2")) problems.push("раздел не удалился");
+    // Escape закрывает верхнюю модалку
+    const beforeEsc = await page.evaluate(() => document.querySelectorAll(".modal-backdrop").length);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    const left = await page.evaluate(() => document.querySelectorAll(".modal-backdrop").length);
+    if (left !== beforeEsc - 1)
+      problems.push(`Escape: оверлеев было ${beforeEsc}, стало ${left}`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "flow-sections.png") });
+    log(`${problems.length === before ? "✅" : "❌"} сценарий sections    создана/удалена TMP2 · экранный список: ${rows.join(",")} → ${rows2.join(",")}`);
+  }
+
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/hub`, { waitUntil: "load" });
+    await page.waitForTimeout(1200);
+    await page.locator('button:has-text("Создать проект")').first().click();
+    await page.waitForTimeout(600);
+    await page.locator('.modal-backdrop input[placeholder="my_book"]').fill("Probe2");
+    await page.locator('.modal-backdrop button:has-text("Создать")').last().click();
+    await page.waitForTimeout(1500);
+    const card = await page.evaluate(() =>
+      [...document.querySelectorAll(".project-card")].some((x) => x.textContent.includes("Probe2")));
+    if (!card) problems.push("проект Probe2 не появился в хабе");
+    const closed = await page.evaluate(() => document.querySelectorAll(".modal-backdrop").length);
+    if (closed !== 0) problems.push(`модалка создания не закрылась (${closed} оверлеев)`);
+    log(`${problems.length === before ? "✅" : "❌"} сценарий project     Probe2 ${card ? "создан" : "НЕ создан"}, модалка закрыта`);
   }
 
   /* модалки: открываем и закрываем (Escape), проверяем что каркас живой */
