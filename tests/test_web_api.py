@@ -28,14 +28,15 @@ def srv_ctx(tmp_path):
     """Сервер с projects_root=tmp_path/projects и настоящим repo_root."""
     servers = []
 
-    def _make(projects_root: Path | None = None):
+    def _make(projects_root: Path | None = None, repo_root: Path | None = None):
         projects_root = projects_root or (tmp_path / "projects")
         # как web/main.py: bootstrap дефолтных разделов перед запуском
         from core import projects as P
         P.ensure_projects_root(projects_root)
         auth_obj = Auth("tok", no_auth=True)
         srv = make_server("127.0.0.1", 0, auth_obj,
-                          repo_root=REPO, projects_root=projects_root)
+                          repo_root=repo_root or REPO,
+                          projects_root=projects_root)
         web_api.register(srv.router, "127.0.0.1")
         t = threading.Thread(target=srv.serve_forever, daemon=True)
         t.start()
@@ -45,6 +46,23 @@ def srv_ctx(tmp_path):
     yield _make
     for srv in servers:
         srv.server_close()
+
+
+@pytest.fixture()
+def tpl_srv(srv_ctx, tmp_path):
+    """Сервер с копией templates/ во временном repo: CRUD наборов больше не
+    трогает репозиторий, а параллельные воркеры не делят один каталог."""
+    import shutil
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(REPO / "templates", repo / "templates")
+
+    def _make(projects_root: Path | None = None):
+        srv, port, _ = srv_ctx(projects_root, repo_root=repo)
+        # третьим — каталог шаблонов: тесты чистят именно его
+        return srv, port, repo / "templates"
+
+    yield _make
 
 
 def _request(port, method, path, body=None,
@@ -441,9 +459,9 @@ def test_stats_cache_persisted_on_disk(monkeypatch, srv_ctx):
 # ════════════════════════════════════════════════════════════════════
 # шаблоны (CRUD) и статус проекта
 
-def test_templates_crud(srv_ctx):
+def test_templates_crud(tpl_srv):
     """Создание/копирование/удаление набора через /api/templates."""
-    _, port, _ = srv_ctx()
+    _, port, tpl = tpl_srv()
     name = "TplProbe_01"
     try:
         res, payload = _request(port, "POST", "/api/templates",
@@ -516,13 +534,13 @@ def test_templates_crud(srv_ctx):
     finally:
         # зачистка на диске репозитория (наборы временные)
         from core import projects as P
-        P.delete_template_set(REPO / "templates", name)
-        P.delete_template_set(REPO / "templates", name + "_copy")
+        P.delete_template_set(tpl, name)
+        P.delete_template_set(tpl, name + "_copy")
 
 
-def test_templates_general_protected(srv_ctx):
+def test_templates_general_protected(tpl_srv):
     """General — только чтение: запись/удаление → 403."""
-    _, port, _ = srv_ctx()
+    _, port, tpl = tpl_srv()
     res, payload = _request(port, "PUT", "/api/templates/General/file",
                             {"path": "x.txt", "content": "x"})
     assert res.status == 403
@@ -539,9 +557,9 @@ def test_templates_general_protected(srv_ctx):
     assert res.status == 200
 
 
-def test_templates_upload_download_mkdir(srv_ctx):
+def test_templates_upload_download_mkdir(tpl_srv):
     """каталоги в шаблонах неизменяемы — mkdir/rename/delete 403."""
-    _, port, _ = srv_ctx()
+    _, port, tpl = tpl_srv()
     name = "TplUp_01"
     try:
         res, _ = _request(port, "POST", "/api/templates", {"name": name})
@@ -612,19 +630,19 @@ def test_templates_upload_download_mkdir(srv_ctx):
         assert res.status == 403
     finally:
         from core import projects as P
-        P.delete_template_set(REPO / "templates", name)
+        P.delete_template_set(tpl, name)
 
 
-def test_templates_skeleton_repaired_on_read(srv_ctx):
+def test_templates_skeleton_repaired_on_read(tpl_srv):
     """GET /api/templates чинит скелет «деградировавшего» набора."""
-    _, port, _ = srv_ctx()
+    _, port, tpl = tpl_srv()
     from core import projects as P
     name = "TplSk_01"
     try:
         res, _ = _request(port, "POST", "/api/templates", {"name": name})
         assert res.status == 200
         import shutil
-        set_dir = REPO / "templates" / name
+        set_dir = tpl / name
         shutil.rmtree(set_dir / "source")
         res, payload = _request(port, "GET", "/api/templates")
         assert res.status == 200
@@ -632,12 +650,12 @@ def test_templates_skeleton_repaired_on_read(srv_ctx):
         assert "source/" in t["files"] or "source" in t["files"]
         assert (set_dir / "source").is_dir()
     finally:
-        P.delete_template_set(REPO / "templates", name)
+        P.delete_template_set(tpl, name)
 
 
-def test_templates_file_404_and_escape(srv_ctx):
+def test_templates_file_404_and_escape(tpl_srv):
     """Нет файла / эскейп из набора → 404."""
-    _, port, _ = srv_ctx()
+    _, port, tpl = tpl_srv()
     res, payload = _request(port, "GET", "/api/templates/General/file"
                             "?path=../../etc/passwd")
     assert res.status == 404

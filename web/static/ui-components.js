@@ -203,8 +203,9 @@
   /* Пейджер списка: ‹ n/N · подпись ›. Данные (pg.items) и список (o.list)
    * остаются у вьюхи: компонент режет страницу, зовёт rows(slice, page) и
    * перерисовывает себя. Разные списки отличаются только подписью и тем, что
-   * делать на одной странице и на пустом списке — за это отвечают
-   * infoOnlySinglePage и hideOnEmpty. */
+   * делать на одной странице и на пустом списке: infoOnlySinglePage оставляет
+   * один счётчик, hideSinglePage убирает панель совсем, hideOnEmpty — молчит
+   * на пустом. */
   function listPager(opts) {
     const o = opts || {};
     const pageSize = Math.max(1, o.pageSize || 200);
@@ -221,7 +222,7 @@
           disabled,
           onclick: () => {
             st.page = Math.max(0, Math.min(st.page + delta, pages() - 1));
-            render();
+            if (o.onChange) o.onChange(); else render();
           },
         },
         label,
@@ -250,6 +251,8 @@
       }
       if (st.items.length === 0 && o.hideOnEmpty) {
         el.replaceChildren();
+      } else if (pages() <= 1 && o.hideSinglePage) {
+        el.replaceChildren();
       } else if (o.infoOnlySinglePage && pages() <= 1) {
         el.replaceChildren(info());
       } else {
@@ -273,8 +276,10 @@
       get items() {
         return st.items;
       },
+      /* данные — массив либо число: во втором случае компонент держит только
+         счётчик, а строки рисует вьюха (onChange по кнопке страницы) */
       set items(v) {
-        st.items = v || [];
+        st.items = Array.isArray(v) ? v : { length: Number(v) || 0 };
         if (st.page > pages() - 1) st.page = pages() - 1;
         render();
       },
