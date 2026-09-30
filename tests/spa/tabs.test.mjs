@@ -45,7 +45,21 @@ class El {
     this._listeners = {};
   }
   append(...kids) {
-    for (const k of kids.flat()) if (k != null) this.children.push(k);
+    for (const k of kids.flat()) {
+      if (k == null) continue;
+      k._parent = this;
+      this.children.push(k);
+    }
+  }
+  /* поиск по классу — как в DOM: нужен обработчику Space */
+  closest(sel) {
+    const want = sel.replace(/^\./, "");
+    let n = this;
+    while (n) {
+      if ((n.className || "").split(/\s+/).includes(want)) return n;
+      n = n._parent;
+    }
+    return null;
   }
   appendChild(k) { this.children.push(k); }
   replaceChildren(...kids) { this.children = []; this.append(...kids); }
@@ -54,7 +68,6 @@ class El {
   getAttribute(k) { return this._attrs[k] ?? null; }
   remove() {}
   removeChild() {}
-  closest() { return null; }
   querySelector() { return null; }
   querySelectorAll() { return []; }
   get classList() {
@@ -81,6 +94,7 @@ class El {
 /* ── мок-глобалы (в модуле: функции, созданные вне vm, замыкаются
    на внешний scope, поэтому document/Node/window кладём на globalThis) ── */
 globalThis.document = {
+  body: null, // ниже: body — обычный El, на него вешают оверлеи
   createElement: (t) => new El(t),
   createTextNode: (t) => {
     const n = new El("#text");
@@ -90,6 +104,7 @@ globalThis.document = {
   addEventListener() {},
   querySelectorAll: () => [],
 };
+globalThis.document.body = new El("body");
 globalThis.DOMParser = class {
   parseFromString() {
     return { documentElement: null };
@@ -124,13 +139,14 @@ function h(tag, attrs = {}, ...children) {
     else if (k.startsWith("on") && typeof v === "function") {
       node.addEventListener(k.slice(2), v);
     } else if (k === "value") node.value = v;
+
     else node.setAttribute(k, v);
   }
   for (const child of children.flat()) {
     if (child == null) continue;
-    node.append(
-      child instanceof Node ? child : document.createTextNode(String(child)),
-    );
+    const kid = child instanceof Node ? child : document.createTextNode(String(child));
+    kid._parent = node;
+    node.append(kid);
   }
   return node;
 }
@@ -346,4 +362,35 @@ test("сортировка файлов: переключатель направ
   assert.equal(btns.length, 1);
   await btns[0]._listeners["click"][0]();
   assert.equal(globalThis.localStorage.getItem("filesAsc"), "0");
+});
+
+/* ── быстрый просмотр по Space ───────────────────────────── */
+test("quick-look: Space на строке открывает модалку с sandbox-кадром", async () => {
+  globalThis.__files = [
+    { name: "README.md", dir: false, size: 12, mtime: 100 },
+  ];
+  globalThis.localStorage.setItem("filesSort", "name");
+  const page = viewProject("ACTIVE", "Книга", "files");
+  await new Promise((r) => setTimeout(r, 10));
+  const rows = [];
+  (function walk(n) {
+    for (const c of n.children || []) {
+      if ((c.className || "").split(/\s+/).includes("frow")) rows.push(c);
+      walk(c);
+    }
+  })(page);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].getAttribute("data-name"), "README.md");
+  assert.equal(globalThis.document.body.children.length, 0, "до Space модалок нет");
+  const drop = rows[0]._parent;
+  await drop._listeners["keydown"][0]({
+    key: " ",
+    target: rows[0],
+    preventDefault() {},
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  const open = globalThis.document.body.children
+    .map((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .filter(Boolean);
+  assert.equal(open.length, 1, "Space открыл ровно одну модалку");
 });

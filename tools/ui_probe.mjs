@@ -92,6 +92,8 @@ function seedProjectsDir(dir) {
     ),
     "utf-8",
   );
+  // файл в корне книги: файловый менеджер есть что показать (quick-look)
+  fs.writeFileSync(path.join(book, "notes.md"), "# Заметки\n\n- проба\n", "utf-8");
   fs.mkdirSync(path.join(book, "prompts"), { recursive: true });
   fs.writeFileSync(path.join(book, "prompts", "translate.txt"), "<translate>переведи</translate>\n", "utf-8");
   fs.writeFileSync(path.join(book, "metadata.yaml"), "title: Проба\nauthor: Probe\n");
@@ -277,6 +279,46 @@ async function main() {
         if (SHOT) await page.screenshot({ path: path.join(OUT, "panel-file-preview.png") });
         log(`${problems.length === before ? "✅" : "❌"} панель file-preview   ${a.editor ? "редактор" : "кадр"} → ${b2.editor ? "редактор" : "кадр"}`);
       }
+    }
+  }
+
+  /* быстрый просмотр: фокус на строке списка → Space → ровно один оверлей с
+   * sandbox-кадром; Escape его закрывает (иначе «залипший» оверлей на весь экран) */
+  {
+    const before2 = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/files`, { waitUntil: "load" });
+    // сменить вкладку можно и кликом, но надёжнее полная перезагрузка: иначе
+    // остаётся вид, открытый предыдущим сценарием
+    await page.reload({ waitUntil: "load" });
+    await page.waitForTimeout(900);
+    // каталоги Space не просматривается — берём первую строку файла
+    const row = page.locator('.files-list .frow:not([data-dir="1"])').first();
+    if (!(await row.count())) {
+      log("⚠️  quick-look: в списке нет файлов");
+    } else {
+      await row.focus();
+      await page.keyboard.press(" ");
+      await page.waitForTimeout(900);
+      // оверлей position:fixed — offsetParent у него всегда null, считаем напрямую
+      const look = await page.evaluate(() => {
+        const open = [...document.querySelectorAll(".modal-backdrop")];
+        const f = open.length === 1 ? open[0].querySelector("iframe.quick-frame") : null;
+        return {
+          n: open.length,
+          frame: !!f,
+          text: f ? (f.getAttribute("srcdoc") || "").trim().slice(0, 24) : "",
+        };
+      });
+      if (look.n !== 1 || !look.frame)
+        problems.push(`quick-look: оверлеев ${look.n}, кадр ${look.frame}`);
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(500);
+      const left = await page.evaluate(
+        () => document.querySelectorAll(".modal-backdrop").length,
+      );
+      if (left !== 0) problems.push(`quick-look: Escape оставил ${left} оверлей(а)`);
+      if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-quick-look.png") });
+      log(`${problems.length === before2 ? "✅" : "❌"} quick-look Space   кадр: ${look.text ? "есть" : "пусто"}`);
     }
   }
 

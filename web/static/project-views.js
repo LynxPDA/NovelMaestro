@@ -270,6 +270,15 @@ function viewProject(section, name, tab, job) {
     }
     const entries = sortFiles(data.entries || []);
     const drop = h("div", { class: "files-list" });
+    /* Space на строке — быстрый просмотр файла без редактора (Escape закрывает
+       так же, как любую модалку); каталоги не просматриваются. */
+    drop.addEventListener("keydown", (e) => {
+      if (e.key !== " ") return;
+      const row = e.target && e.target.closest ? e.target.closest(".frow") : null;
+      if (!row || row.getAttribute("data-dir")) return;
+      e.preventDefault();
+      quickLook(row.getAttribute("data-name") || "");
+    });
     // одна страница — пагинация не нужна, достаточно счётчика
     const fPager = UIC.listPager({
       list: drop,
@@ -463,7 +472,44 @@ function viewProject(section, name, tab, job) {
       { class: "fmeta" },
       e.dir ? "" : `${fmtSize(e.size)} · ${UICore.relTime(e.mtime)}`,
     );
-    return h("div", { class: "frow" }, nameNode, meta, actions);
+    return h("div", {
+      class: "frow",
+      tabindex: "0",
+      "data-name": full,
+      "data-dir": e.dir ? "1" : "",
+    }, nameNode, meta, actions);
+  }
+
+  async function quickLook(rel) {
+    const frame = h("iframe", {
+      class: "editor-preview-frame quick-frame",
+      sandbox: "allow-same-origin",
+      title: `Содержимое ${rel}`,
+    });
+    UIC.modal({
+      title: `Просмотр · ${rel}`,
+      wide: true,
+      build: () => [frame],
+    });
+    // тот же рендер, что у редактора: md через marked, html как есть
+    const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+    const plain = (t) => `<pre>${esc(t)}</pre>`;
+    try {
+      const d = await api(
+        `/file?project=${encodeURIComponent(`${section}/${name}`)}` +
+          `&path=${encodeURIComponent(rel)}`,
+      );
+      const raw = d.content || "";
+      frame.srcdoc = /\.html?$/i.test(rel)
+        ? UIC.docs.html(raw)
+        : UIC.docs.md(
+            window.marked
+              ? window.marked.parse(raw, { mangle: false, headerIds: false })
+              : plain(raw),
+          );
+    } catch (ex) {
+      frame.srcdoc = UIC.docs.md(plain(`Не удалось прочитать: ${ex.message}`));
+    }
   }
 
   async function editorView() {

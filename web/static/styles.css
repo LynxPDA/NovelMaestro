@@ -2672,3 +2672,12 @@ body[data-editor-theme="light"] .editor-area {
   padding: 5px 8px;
   font-size: 12px;
 }
+
+/* быстрый просмотр по Space: кадр на ширину модалки, без редактора рядом */
+.quick-frame {
+  width: 100%;
+  height: 60vh;
+  border: 0;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
