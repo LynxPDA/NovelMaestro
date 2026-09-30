@@ -15,9 +15,13 @@ from pathlib import Path
 
 import pytest
 
+from core.common import (EXTRA_BODY_ENV_KEY, REASONING_ENV_KEYS,
+                         REASONING_MODES, REASONING_PROFILES)
+from core.stage import REASONING_EFFORTS
 from web.jobs import CHAPTER_PREFIX, JobManager
-from web.stages import (STAGE_SPECS, build_command, script_path,
-                        spec_for)
+from web.api_stage import _stages_list
+from web.stages import (REASONING_FIELDS, STAGE_SPECS, build_command,
+                        reasoning_effective, script_path, spec_for)
 
 REPO = Path(__file__).resolve().parent.parent
 PIPELINE = REPO / "web" / "pipeline.py"
@@ -739,44 +743,75 @@ def test_llm_stages_preview_flag():
     assert got == expect
 
 
-def test_reasoning_field_is_select_on_every_llm_stage():
-    """Reasoning effort — select во всех шести LLM-стадиях.
+def test_stage_specs_have_no_per_stage_reasoning_fields():
+    """Рассуждений в полях стадий нет: режим ОДИН на весь конвейер.
 
-    CLI-парсер принимает ровно choices=REASONING_EFFORTS, поэтому свободный
-    текст в форме означал бы упавший subprocess из-за опечатки в значении."""
-    from core.stage import REASONING_EFFORTS
-    names = ("reasoning_effort", "reasoning", "thinking")
-    expect = {"pipeline", "ner", "ner_check", "translate_check_llm",
-              "translate_quality", "wiki"}
-    got = {k for k, v in STAGE_SPECS.items()
-           if any(f["name"] in names for f in v.get("fields", []))}
-    assert got == expect
-    for key in expect:
-        fld = [f for f in STAGE_SPECS[key]["fields"] if f["name"] in names]
-        assert len(fld) == 1, f"{key}: поле efforts не одно"
-        assert fld[0]["type"] == "select", f"{key}: поле осталось текстовым"
-        assert fld[0]["options"] == ["", *REASONING_EFFORTS], key
-        assert fld[0]["group"] == "llm", key
+    Шесть одинаковых полей по стадиям разъехались бы по значениям внутри
+    одного запуска (одна же модель), поэтому блок живёт на «Настройках».
+    """
+    names = {"reasoning_effort", "reasoning", "thinking", "reasoning_mode",
+             "thinking_profile", "thinking_budget"}
+    for key, spec in STAGE_SPECS.items():
+        got = {f["name"] for f in spec.get("fields", [])} & names
+        assert not got, f"{key}: {sorted(got)}"
 
 
-def test_reasoning_argv_uses_canonical_flag():
-    """В argv всех стадий — канонический --reasoning_effort.
-
-    Старые написания (--reasoning-effort, --thinking) остались только
-    алиасами CLI-парсера для ручных команд: web-слой их не плодит."""
-    base = {"host": "h", "model": "m", "api_key": "k", "action": "8",
-            "reasoning_effort": "high", "reasoning": "high", "thinking": "high"}
-    for key in ("pipeline", "ner", "wiki"):
-        argv = build_command(key, dict(base), {})
-        assert "--reasoning_effort" in argv, key
-        assert argv[argv.index("--reasoning_effort") + 1] == "high", key
-        assert "--reasoning-effort" not in argv, key
-        assert "--thinking" not in argv, key
+def test_build_commands_never_emit_reasoning_flags():
+    """Ни одна стадия не получает reasoning-флагов: их читает сама."""
+    for key in STAGE_SPECS:
+        form = {"host": "h", "model": "m", "api_key": "k", "action": "8",
+                "reasoning_effort": "high", "reasoning": "high",
+                "thinking": "high", "REASONING_MODE": "on"}
+        argv = build_command(key, form, {})
+        assert not [a for a in argv if "reason" in a or "thinking" in a], key
 
 
-def test_reasoning_empty_sends_nothing():
-    """Пустой выбор — флаг не уезжает вовсе (дефолт сервера)."""
-    base = {"host": "h", "model": "m", "api_key": "k", "action": "8",
-            "reasoning_effort": "", "reasoning": "", "thinking": ""}
-    for key in ("pipeline", "ner", "wiki"):
-        assert "--reasoning_effort" not in build_command(key, dict(base), {})
+def test_reasoning_spec_values_match_core():
+    """Глобальный блок: поля названы ключами .env, значения — из core.
+
+    Уровни перечисляет core.stage: его argparse принимает ровно этот список
+    (choices=REASONING_EFFORTS), поэтому в форме select этих же значений, а
+    не свободный текст — опечатка стоила бы упавшего subprocess.
+    """
+    by = {f["name"]: f for f in REASONING_FIELDS}
+    assert list(by) == [*REASONING_ENV_KEYS, EXTRA_BODY_ENV_KEY]
+    assert by["REASONING_MODE"]["options"] == list(REASONING_MODES)
+    assert by["REASONING_MODE"]["default"] == "default"
+    assert by["THINKING_PROFILE"]["options"] == list(REASONING_PROFILES)
+    assert by["REASONING_EFFORT"]["options"] == ["", *REASONING_EFFORTS]
+    assert by["REASONING_EFFORT"]["default"] == ""
+    assert by["THINKING_BUDGET"]["type"] == "number"
+    assert by[EXTRA_BODY_ENV_KEY]["type"] == "text"
+    # у каждого значения select есть подпись — SPA рисует её в <option>
+    for f in REASONING_FIELDS:
+        if f["type"] == "select":
+            assert set(f["labels"]) == set(f["options"]), f["name"]
+
+
+def test_reasoning_effective_layers(monkeypatch, tmp_path):
+    """Эффективный режим: os.environ > системный .env > дефолты (по ключам)."""
+    env = tmp_path / "sys.env"
+    env.write_text("REASONING_MODE=off\nTHINKING_PROFILE=qwen\n"
+                   "REASONING_EFFORT=low\nTHINKING_BUDGET=1024\n",
+                   encoding="utf-8")
+    for k in REASONING_ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.delenv(EXTRA_BODY_ENV_KEY, raising=False)
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
+    got = reasoning_effective()
+    assert {k: got[k] for k in REASONING_ENV_KEYS} == {
+        "REASONING_MODE": "off", "THINKING_PROFILE": "qwen",
+        "REASONING_EFFORT": "low", "THINKING_BUDGET": 1024}
+    assert got[EXTRA_BODY_ENV_KEY] == ""   # в файле пробы ключа нет
+    monkeypatch.setenv("REASONING_MODE", "on")
+    got = reasoning_effective()
+    assert got["REASONING_MODE"] == "on" and got["THINKING_PROFILE"] == "qwen"
+
+
+def test_stages_api_exposes_reasoning_block():
+    """GET /api/stages отдаёт поля и эффективные значения — SPA рисует блок
+    без своей копии реестра."""
+    resp = _stages_list({})
+    want = [*REASONING_ENV_KEYS, EXTRA_BODY_ENV_KEY]
+    assert [f["name"] for f in resp["reasoning"]["fields"]] == want
+    assert list(resp["reasoning"]["values"]) == want

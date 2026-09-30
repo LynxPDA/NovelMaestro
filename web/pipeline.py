@@ -318,7 +318,7 @@ def warn_missing_prompt_tag(prompt_file: str, stage: int, log,
 
 def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     host: str, api_key: str, model: str,
-                    timeout: int, temperature=None, reasoning_effort=None,
+                    timeout: int, temperature=None,
                     stream_timeout=None, max_retries=None,
                     threads: int = 1, prompt_file: str = "",
                     ner_min_count: int = 0,
@@ -348,8 +348,8 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
     # окружение subprocess (LLM_API_KEY), см. process_chapter.
     if temperature is not None:
         common += ["--temperature", str(temperature)]
-    if reasoning_effort:
-        common += ["--reasoning_effort", str(reasoning_effort)]
+    # рассуждения (mode/profile/effort/budget) сюда не прокидываются:
+    # они ОБЩИЕ на конвейер и каждая стадия читает их сама из .env
     # общий промпт-файл — только если задан (пусто = встроенный)
     if prompt_file:
         common += ["--prompt_file", prompt_file]
@@ -417,7 +417,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     stages: list[int], host: str, api_key: str, model: str,
                     timeout: int, log: logging.Logger,
                     tracker: Tracker,
-                    temperature=None, reasoning_effort=None,
+                    temperature=None,
                     stream_timeout=None, max_retries=None,
                     threads: int = 1,
                     prompts: dict[int, str] | None = None,
@@ -460,7 +460,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                 return True
             cmd = build_stage_cmd(stage, script, in_file, out_file,
                                   host, api_key, model, timeout,
-                                  temperature, reasoning_effort,
+                                  temperature,
                                   stream_timeout, max_retries,
                                   threads,
                                   prompt_file=(prompts or {}).get(stage) or "",
@@ -592,11 +592,9 @@ def main() -> None:
                          "PIPELINE_MAX_RETRIES из .env → 3)")
     ap.add_argument("--temperature", type=float, default=None,
                     help="Температура LLM (пусто = сервер)")
-    ap.add_argument("--reasoning_effort", default=None,
-                    choices=["none", "minimal", "low", "medium", "high",
-                             "xhigh", "max"],
-                    help="Усилия рассуждений: none/minimal/low/medium/"
-                         "high/xhigh/max (none — отключить)")
+    # рассуждения модели — НЕ параметр конвейера: режим один на весь запуск
+    # и задаётся общими ключами .env (REASONING_MODE / THINKING_PROFILE /
+    # REASONING_EFFORT / THINKING_BUDGET), которые читают стадии сами
     ap.add_argument("--host", default="", help="URL LLM-сервера (пусто = HOST из .env)")
     ap.add_argument("--api_key", default="", help="API-ключ (argv — только для тестов; в web идёт через LLM_API_KEY)")
     ap.add_argument("--model", default="",
@@ -800,7 +798,7 @@ def main() -> None:
         cmd = build_stage_cmd(
             stage, script, in_file, Path("tmp") / "preview_out.txt",
             host, api_key, model, args.timeout, args.temperature,
-            args.reasoning_effort, args.stream_timeout,
+            args.stream_timeout,
             args.max_retries, 1,
             prompt_file=prompts.get(stage) or "",
             ner_min_count=args.ner_min_count,
@@ -872,7 +870,7 @@ def main() -> None:
         futures = {
             pool.submit(process_chapter, cid, dirs, script, stages,
                         host, api_key, model, args.timeout, log, tracker,
-                        args.temperature, args.reasoning_effort,
+                        args.temperature,
                         args.stream_timeout, args.max_retries,
                         threads, prompts,
                         polish_in=action_spec.get("polish_input"),

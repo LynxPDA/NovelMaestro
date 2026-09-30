@@ -1801,7 +1801,6 @@ def test_build_translate_check_llm_flags():
             "two_pass": True, "context_budget": "75000",
             "review": "translate_check_llm_review.json", "dry_run": True,
             "apply": True, "auto_apply": True,
-            "reasoning_effort": "low",
             "threads": "4", "max_fixes_per_chapter": "0"}
     argv = build_command("translate_check_llm", form, {})
     assert argv[0] == "cli/translate_check_llm.py"
@@ -1811,17 +1810,9 @@ def test_build_translate_check_llm_flags():
     assert "--dry-run" not in argv
     assert "--apply" not in argv and "--auto-apply" not in argv
     assert "--no-bak" not in argv
-    assert "--reasoning_effort" in argv and "low" in argv
+    # рассуждения — не поле формы: режим один на весь конвейер (см. stages)
+    assert not [a for a in argv if "reason" in a]
     assert "--threads" in argv and "--max_fixes_per_chapter" in argv
-
-    # none в text-поле = --reasoning_effort none (флаг --no_reasoning убран)
-    form2 = dict(form, reasoning_effort="none")
-    argv2 = build_command("translate_check_llm", form2, {})
-    assert "--reasoning_effort" in argv2 and "none" in argv2
-    # произвольные значения (xhigh/max) передаются как есть
-    form3 = dict(form, reasoning_effort="xhigh")
-    argv3 = build_command("translate_check_llm", form3, {})
-    assert "--reasoning_effort" in argv3 and "xhigh" in argv3
 
 
 def test_build_wiki_flags():
@@ -1830,8 +1821,7 @@ def test_build_wiki_flags():
             "types": "Person",
             "context_chunks": "12", "near_distance": "64",
             "chunk_size": "1000", "co_occurrence_pairs": "Person:Person",
-            "co_occurrence_top": "5", "format": "rulate-md",
-            "thinking": "medium"}
+            "co_occurrence_top": "5", "format": "rulate-md"}
     argv = build_command("wiki", form, {})
     assert argv[0] == "cli/wiki.py"
     assert "compiled_book.txt" in argv
@@ -1839,8 +1829,8 @@ def test_build_wiki_flags():
     assert "--chunk-size" in argv and "1000" in argv
     assert "--co-occurrence-pairs" in argv
     assert "--rulate-mode" in argv
-    # флаг в argv канонический: --thinking остался алиасом CLI-парсера wiki
-    assert "--reasoning_effort" in argv and "medium" in argv
+    # рассуждения — не поле формы wiki: режим один на весь конвейер
+    assert not [a for a in argv if "reason" in a or "thinking" in a]
     assert "--types" in argv and "Person" in argv
     assert "--exclude-types" not in argv
 

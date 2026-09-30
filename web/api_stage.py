@@ -14,7 +14,8 @@ from pathlib import Path
 from web.jobs import JobManager
 from web.server import ApiError, Router
 from web.stages import (
-    STAGE_SPECS, build_command, ordered_stages, script_path, spec_for,
+    REASONING_FIELDS, STAGE_SPECS, build_command, ordered_stages,
+    reasoning_effective, script_path, spec_for,
 )
 from web.api_common import (
     log,
@@ -614,10 +615,18 @@ def _stage_options(ctx: dict) -> dict:
 
 
 def _stages_list(ctx: dict) -> dict:
-    """Список стадий (GET /api/stages): key/title/script."""
+    """Список стадий (GET /api/stages): key/title/script.
+
+    Плюс reasoning — ОДИН глобальный блок на весь конвейер (поля тех же
+    форм, что и поля стадий): спеки стадий его больше не содержат, иначе
+    шесть одинаковых полей разъехались бы по значениям в одном запуске.
+    Значения — общие ключи .env (эффективные: окружение > файл).
+    """
     return {"ok": True, "stages": [
         {"key": k, "title": v["title"], "script": v["script"]}
-        for k, v in ordered_stages()]}
+        for k, v in ordered_stages()],
+        "reasoning": {"fields": [dict(f) for f in REASONING_FIELDS],
+                      "values": reasoning_effective()}}
 
 
 # ════════════════════════════════════════════════════════════════════

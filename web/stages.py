@@ -18,8 +18,12 @@ stages.py — спеки стадий web-интерфейса (M4: не-LLM; M5
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
+from core.common import (EXTRA_BODY_ENV_KEY, REASONING_MODES,
+                         REASONING_PROFILES, parse_dotenv, reasoning_settings,
+                         system_env_file)
 from core.stage import REASONING_EFFORTS
 
 log = logging.getLogger("web.stages")
@@ -288,9 +292,6 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
         argv += ["--max_retries", str(form["max_retries"])]
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
-    re_effort = form.get("reasoning_effort")
-    if re_effort not in (None, ""):
-        argv += ["--reasoning_effort", str(re_effort)]
     # единый общий промпт-файл (теги <translate>/<redact>/<polish>);
     # пусто = авто (кандидат с тегами из prompts/)
     if form.get("prompt_file"):
@@ -341,10 +342,6 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
         argv += ["--ngram", str(form["ngram"])]
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
-    # имя поля историческое («reasoning»), флаг — канонический: его принимает
-    # add_llm_args, старые написания остались только для ручных команд
-    if form.get("reasoning") not in (None, ""):
-        argv += ["--reasoning_effort", str(form["reasoning"])]
     if form.get("two_pass"):
         argv.append("--two-pass")
     if form.get("keep_fields"):
@@ -402,9 +399,6 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
             argv.append("--no-bak")
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
-    re_effort = form.get("reasoning_effort")
-    if re_effort not in (None, ""):
-        argv += ["--reasoning_effort", str(re_effort)]
     if form.get("max_tokens") not in (None, ""):
         argv += ["--max_tokens", str(form["max_tokens"])]
     for name, flag in (("timeout", "--timeout"),
@@ -442,8 +436,6 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
         argv += ["--prompt_file", str(form["prompt_file"])]
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
-    if form.get("reasoning_effort") not in (None, ""):
-        argv += ["--reasoning_effort", str(form["reasoning_effort"])]
     for name, flag in (("max_retries", "--max_retries"),
                        ("timeout", "--timeout"),
                        ("retry_empty", "--retry_empty"),
@@ -481,9 +473,6 @@ def build_translate_quality(form: dict, ctx: dict) -> list[str]:
         argv += ["--budget", str(form["budget"])]
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
-    re_effort = form.get("reasoning_effort")
-    if re_effort not in (None, ""):
-        argv += ["--reasoning_effort", str(re_effort)]
     for name, flag in (("max_retries", "--max_retries"),
                        ("timeout", "--timeout")):
         if form.get(name) not in (None, ""):
@@ -551,8 +540,6 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
         argv += ["--co-occurrence-pairs", str(form["co_occurrence_pairs"])]
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
-    if form.get("thinking") not in (None, ""):
-        argv += ["--reasoning_effort", str(form["thinking"])]
     argv += _llm_argv(form, ctx, "wiki")
     return argv
 
@@ -574,13 +561,14 @@ _LLM_FIELDS = [
 ]
 
 
-# ── усилие рассуждения: одно поле на все LLM-стадии ────────────────────
-# Значения перечисляет core.stage: его argparse принимает ровно этот список
-# (choices=REASONING_EFFORTS), поэтому в форме должен быть select с теми же
-# значениями, а не свободный текст — опечатка в поле стоила падающего
-# subprocess. Имена полей (reasoning_effort / reasoning / thinking) — старые
-# написания CLI-флага этой стадии: от них зависит ключ .env ({STAGE}_{FIELD}),
-# поэтому они НЕ унифицируются.
+# ── рассуждения модели: ОДИН режим на весь конвейер ────────────────────
+# Модель в конвейере одна, а способ передать ей рассуждения у провайдеров
+# разный, поэтому режим задаётся ОДИН раз для всех стадий (системный .env,
+# вкладка «Настройки»): шесть одинаковых полей по стадиям разъехались бы по
+# значениям внутри одного запуска. Ключи .env — без стадийного префикса
+# (core.common.REASONING_ENV_KEYS); стадии читают их сами, web-слой их не
+# прокидывает. Уровни перечисляет core.stage: его argparse принимает ровно
+# этот список (choices=REASONING_EFFORTS) — в форме select тех же значений.
 REASONING_LABELS = {
     "": "— (не отправлять, дефолт сервера)",
     "none": "none — выключено",
@@ -592,19 +580,81 @@ REASONING_LABELS = {
     "max": "max",
 }
 
-
-def reasoning_field(name: str = "reasoning_effort") -> dict:
-    """Селект усилий рассуждения для спеки LLM-стадии."""
-    return {
-        "name": name,
-        "label": "Reasoning effort",
+#: поля глобального блока — в той же форме, что и поля стадий (name/label/
+#: type/options/labels/default/help): SPA рисует их тем же рендерером, а
+#: name совпадает с ключом .env, чтобы changes из формы уходил как есть
+REASONING_FIELDS: tuple[dict, ...] = (
+    {
+        "name": "REASONING_MODE",
+        "label": "Рассуждения",
+        "type": "select",
+        "options": list(REASONING_MODES),
+        "labels": {"default": "— (решение сервера)",
+                   "on": "включены", "off": "выключены"},
+        "default": "default",
+        "help": "у части серверов рассуждения включены по умолчанию; "
+                "«выключены» для openai-профиля = reasoning_effort=none",
+    },
+    {
+        "name": "THINKING_PROFILE",
+        "label": "Профиль API",
+        "type": "select",
+        "options": list(REASONING_PROFILES),
+        "labels": {k: v[0] for k, v in REASONING_PROFILES.items()},
+        "default": "openai",
+        "help": "как именно передавать рассуждения: каждый профиль отправляет "
+                "только свои ключи (незнакомый ключ строгий сервер считает "
+                "ошибкой запроса); «все ключи сразу» — только для серверов, "
+                "которые молча игнорируют чужие",
+    },
+    {
+        "name": "REASONING_EFFORT",
+        "label": "Уровень рассуждения",
         "type": "select",
         "options": ["", *REASONING_EFFORTS],
         "labels": REASONING_LABELS,
-        "group": "llm",
         "default": "",
-        "help": "пусто — не передаётся; none — отключает; остальные уходят в "
-                "payload как есть (принимаются только эти значения)",
+        "help": "пусто — не передаётся; понимают openai, openrouter и "
+                "«все ключи сразу»",
+    },
+    {
+        "name": "THINKING_BUDGET",
+        "label": "Бюджет рассуждения, ТОКЕНЫ",
+        "type": "number",
+        "default": 0,
+        "help": "0 — не отправлять; понимают anthropic (thinking.budget_tokens) "
+                "и dashscope (thinking_budget)",
+    },
+    {
+        "name": "LLM_EXTRA_BODY_JSON",
+        "label": "Свои поля тела (JSON)",
+        "type": "text",
+        "default": "",
+        "help": "JSON-объект ключей, которых не знает ни один профиль (свой "
+                "сервер); уходят в тело запроса после ключей профиля, то есть "
+                "перекрывают их; битый JSON запрос не ломает — поле "
+                "игнорируется с предупреждением в лог",
+    },
+)
+
+
+def reasoning_effective() -> dict:
+    """Эффективный режим рассуждений: os.environ > системный .env > дефолты.
+
+    Ключи — имена полей формы (они же ключи .env): SPA привязывает значение
+    к полю без своего маппинга коротких имён.
+    """
+    env_data = parse_dotenv(system_env_file())
+    got = reasoning_settings(env_data)
+    return {
+        "REASONING_MODE": got["mode"],
+        "THINKING_PROFILE": got["profile"],
+        "REASONING_EFFORT": got["effort"],
+        "THINKING_BUDGET": got["budget"],
+        # свои поля тела — СЫРЫМ текстом (это поле редактируют в форме);
+        # битый JSON не ломает запрос: стадии игнорируют его с warning
+        "LLM_EXTRA_BODY_JSON": (os.environ.get(EXTRA_BODY_ENV_KEY)
+                                or env_data.get(EXTRA_BODY_ENV_KEY) or ""),
     }
 
 
@@ -975,7 +1025,6 @@ STAGE_SPECS: dict[str, dict] = {
                      "(сеть/стрим)"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            reasoning_field("reasoning_effort"),
         ],
         "preset": {
             "title": "Перевести книгу",
@@ -1011,7 +1060,6 @@ STAGE_SPECS: dict[str, dict] = {
              "type": "number", "default": "3"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            reasoning_field("reasoning"),
             {"name": "two_pass", "label": "Двухпроходная схема",
              "type": "bool", "default": True},
             {"name": "keep_fields", "label": "Поля в голосование (через запятую)",
@@ -1114,7 +1162,6 @@ STAGE_SPECS: dict[str, dict] = {
             # (/api/ner/review/apply шлёт apply напрямую)
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            reasoning_field("reasoning_effort"),
             {"name": "max_tokens", "label": "Max tokens (серверный лимит), ТОКЕНЫ",
              "type": "number", "default": "65536", "group": "llm"},
             {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
@@ -1150,7 +1197,6 @@ STAGE_SPECS: dict[str, dict] = {
              "default": "translate_check_prompt.txt"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            reasoning_field("reasoning_effort"),
             {"name": "max_retries", "label": "Попытки на запрос", "type": "number", "default": "3",
              "group": "llm"},
             {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
@@ -1205,7 +1251,6 @@ STAGE_SPECS: dict[str, dict] = {
                       "диапазона), отсечённые указываются в отчёте"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            reasoning_field("reasoning_effort"),
             {"name": "max_retries", "label": "Повторы",
              "type": "number", "default": "3", "group": "llm"},
             {"name": "timeout", "label": "Таймаут, сек",
@@ -1292,7 +1337,6 @@ STAGE_SPECS: dict[str, dict] = {
             {"name": "co_occurrence_top", "label": "Связей на термин", "type": "number", "default": "5"},
             {"name": "temperature", "label": "Температура (пусто = сервер)",
              "type": "text", "default": "", "group": "llm"},
-            reasoning_field("thinking"),
             {"name": "retries", "label": "Повторы", "type": "number", "default": "3",
              "group": "llm"},
             {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
