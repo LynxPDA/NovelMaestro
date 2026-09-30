@@ -32,11 +32,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 if any(importlib.util.find_spec(m) is None for m in ("httpx", "dotenv")):
     sys.exit("❌ Требуется: pip install -r requirements.txt")
 
-try:
-    from tqdm import tqdm
-except ImportError:
-    sys.exit("❌ Требуется: pip install tqdm")
-
 # ── bootstrap: поиск core/common.py подъёмом от скрипта ──
 def _bootstrap_core() -> None:
     from pathlib import Path as _P
@@ -52,7 +47,7 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
-from core.stage import resolve_profile  # noqa: E402
+from core.stage import Progress, bind_profile, new_stage  # noqa: E402
 from core.common import (  # noqa: E402
     REVIEW_ACCEPT,
     REVIEW_REJECT,
@@ -60,30 +55,19 @@ from core.common import (  # noqa: E402
     apply_flex_fix,
     atomic_write,
     build_chapter_map,
-    determine_model,
-    emit_progress,
     estimate_tokens,
     find_fragment_owner,
     find_chapter_file as common_find_chapter_file,
-    find_env_file,
     fix_entry,
     flex_fragment_pattern,
     get_tagged_prompt,
-    llm_messages,
-    log_argv,
     merge_fix_entries,
-    parse_dotenv,
-    preview_logger,
-    preview_request_payload,
-    print_env_help,
     read_text_safe,
-    setup_logging,
-    stream_chat_completion,
-    web_progress_enabled,
-    write_preview_request,
 )
 
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "translate_check_prompt.txt")
+# Серверный предел ответа стадии, ТОКЕНЫ (не расчёт)
+MAX_TOKENS = 32768
 DEFAULT_REVIEW = "tmp/translate_check_llm_review.json"
 
 # ─────────────────────────────────────────────
@@ -474,29 +458,6 @@ def build_batches(chapters, budget, logger):
 # ЗАПРОС К LLM
 # ─────────────────────────────────────────────
 
-def query_llm_raw(user_msg, sys_prompt, base_url, model, api_key,
-                  max_retries, timeout, stream_timeout, temperature,
-                  reasoning_effort, logger, label=""):
-    """Делегирует в единый стрим-запрос core.common
-    (loop-детект, [DONE], cut, empty — одна реализация на проект).
-    max_tokens=32768 — исторический предел (ТОКЕНЫ, серверный
-    предохранитель)."""
-    text, _err = stream_chat_completion(
-        base_url, model,
-        llm_messages(sys_prompt, user_msg),
-        api_key=api_key,
-        max_retries=max_retries,
-        timeout=timeout,
-        stream_timeout=stream_timeout,
-        temperature=temperature,
-        reasoning_effort=reasoning_effort,
-        max_tokens=32768,
-        logger=logger,
-        label=label,
-    )
-    return text
-
-
 def parse_llm_json(text, logger):
     c = text.strip()
     c = re.sub(r'^```(?:json)?\s*', '', c)
@@ -663,17 +624,15 @@ def render_pass2_prompt(prompt_tpl: str, batch_text: str,
             f"\n\n=== НАЙДЕННЫЕ ОШИБКИ ===\n{errors_json}")
 
 
-def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
-                  retries, timeout, stream_timeout, temperature,
-                  reasoning_effort, logger, retry_empty=0):
+def process_batch(batch, p1, p2, two_pass, stage, retry_empty=0):
+    """Один батч: pass1 (с retry_empty) и, если нужно, pass2."""
+    logger = stage.logger
     text = compose_batch_text(batch)
 
     errors1 = []
     for att in range(1 + retry_empty):
-        raw = query_llm_raw(render_pass1_prompt(p1, text), "",
-                            base_url, model, api_key,
-                            retries, timeout, stream_timeout, temperature,
-                            reasoning_effort, logger, "[P1]")
+        raw, _err = stage.complete(render_pass1_prompt(p1, text),
+                                   label="[P1]")
         if raw is None:
             return None   # ошибка LLM → fail-fast на уровне прогона
         parsed = parse_llm_json(raw, logger)
@@ -690,9 +649,7 @@ def process_batch(batch, p1, p2, two_pass, base_url, model, api_key,
 
     ej = json.dumps(errors1, ensure_ascii=False, indent=2)
     user2 = render_pass2_prompt(p2, text, ej)
-    raw2 = query_llm_raw(user2, "", base_url, model, api_key,
-                         retries, timeout, stream_timeout, temperature,
-                         reasoning_effort, logger, "[P2]")
+    raw2, _err = stage.complete(user2, label="[P2]")
     if raw2 is None:
         logger.warning("[P2] Нет ответа, использую P1.")
         return errors1
@@ -1071,15 +1028,9 @@ def do_apply(args, logger) -> int:
     return 0
 
 
-def do_check(args, logger) -> int:
+def do_check(args, stage) -> int:
     """Поиск ошибок LLM → накопительный review-файл."""
-    # Сервер: CLI > os.environ > .env (общая реализация — core.stage)
-    try:
-        profile = resolve_profile(args, stage="translate_check_llm",
-                                  logger=logger)
-    except SystemExit as exc:
-        print(str(exc))
-        return 1
+    logger = stage.logger
 
     ch_dir = os.path.abspath(args.chapters_dir)
     logger.info(f"Директория глав: {ch_dir}")
@@ -1094,9 +1045,9 @@ def do_check(args, logger) -> int:
         f"reasoning={args.reasoning_effort or 'off'}")
 
     p1, p2 = load_prompts(args.prompt_file, logger)
-    base_url, api_key, model_name = (profile.base_url, profile.api_key,
-                                    profile.model)
-    logger.info(f"API: {base_url} | модель: {model_name}")
+    logger.info(f"Лог: {stage.log_path}")
+    logger.info(f"API: {stage.profile.base_url} | модель: "
+                f"{stage.profile.model}")
 
     chapters = collect_chapters(args.start, args.end, args.file_type,
                                 args.context_budget, chapter_map, logger)
@@ -1108,28 +1059,19 @@ def do_check(args, logger) -> int:
         return 1
 
     # ── Предпросмотр запроса (--preview-request): pass1 первого батча ──
-    if args.preview_request:
-        log = preview_logger("translate_check_llm")
-        log_argv(log)
-        user_text = render_pass1_prompt(p1, compose_batch_text(batches[0]))
-        payload = preview_request_payload(
-            "translate_check_llm", f"Pass1 · батч 1/{len(batches)}",
-            model_name,
-            llm_messages(user_text),
-            meta={
-                "batches": len(batches),
-                "context_budget": args.context_budget,
-                "two_pass": bool(args.two_pass),
-                "threads": args.threads,
-                "first_batch_chapters": sorted({c[0] for c in batches[0]}),
-                "prompt_file": args.prompt_file or "",
-            })
-        write_preview_request(args.preview_request, payload)
-        log.info("✅ Предпросмотр запроса: %s (%d симв. user)",
-                 args.preview_request, len(user_text))
+    if stage.preview(f"Pass1 · батч 1/{len(batches)}",
+                    render_pass1_prompt(p1, compose_batch_text(batches[0])),
+                    meta={"batches": len(batches),
+                          "context_budget": args.context_budget,
+                          "two_pass": bool(args.two_pass),
+                          "threads": args.threads,
+                          "first_batch_chapters": sorted(
+                              {c[0] for c in batches[0]}),
+                          "prompt_file": args.prompt_file or ""}):
         return 0
 
-    stage = f"Главы {args.start}–{args.end} ({args.file_type})"
+    # метка прогона в review-файле (не путать с контекстом стадии `stage`)
+    stage_label = f"Главы {args.start}–{args.end} ({args.file_type})"
     params = {"директория глав": args.chapters_dir,
               "тип файлов": args.file_type,
               "начало": args.start, "конец": args.end,
@@ -1146,7 +1088,7 @@ def do_check(args, logger) -> int:
     def merge_and_save(errs):
         """Ошибки батча → записи → накопительный файл (под замком)."""
         nonlocal entries, added_total
-        fresh = errors_to_entries(errs, stage, args.file_type,
+        fresh = errors_to_entries(errs, stage_label, args.file_type,
                                   chapter_map, logger)
         if not fresh:
             return
@@ -1167,11 +1109,8 @@ def do_check(args, logger) -> int:
             bc[c[0]] = bc.get(c[0], "") + ("\n" if c[0] in bc else "") + c[3]
         logger.info(f"Пакет {idx + 1}/{len(batches)}: гл. "
                     f"{nums[0]}–{nums[-1]}")
-        errs = process_batch(
-            batch, p1, p2, args.two_pass, base_url, model_name, api_key,
-            args.max_retries, args.timeout, args.stream_timeout,
-            args.temperature, args.reasoning_effort,
-            logger, retry_empty=args.retry_empty)
+        errs = process_batch(batch, p1, p2, args.two_pass, stage,
+                             retry_empty=args.retry_empty)
         if errs is None:
             with lock:
                 failed_cnt[0] += 1
@@ -1194,23 +1133,14 @@ def do_check(args, logger) -> int:
     # верхний предел потоков 16 (как в ner/wiki/translate)
     with ThreadPoolExecutor(max_workers=max(1, min(16, args.threads))) as ex:
         futs = {ex.submit(worker, i, b): i for i, b in enumerate(batches)}
-        pbar = tqdm(total=len(batches), unit="batch", desc="LLM",
-                    disable=web_progress_enabled())
-        # свой счётчик — pbar.n мёртв при disable=True
-        done = 0
-        # стартовое событие прогресса — бар виден сразу
-        emit_progress(done, len(batches), "Проверка перевода LLM")
-        if web_progress_enabled():
-            logger.info(f"📊 Прогресс: {done}/{len(batches)}")
-        for f in as_completed(futs):
-            try:
-                f.result()
-            except Exception as e:
-                logger.error(f"Поток: {e}")
-            done += 1
-            pbar.update(1)
-            emit_progress(done, len(batches), "Проверка перевода LLM")
-        pbar.close()
+        with Progress(len(batches), "Проверка перевода LLM", unit="батч",
+                      bar=True, logger=logger) as progress:
+            for f in as_completed(futs):
+                try:
+                    f.result()
+                except Exception as e:
+                    logger.error(f"Поток: {e}")
+                progress.step()
 
     logger.info(f"Батчей: {done_cnt[0]}/{len(batches)}")
     logger.info(f"Ошибок найдено: {len(all_errors)}")
@@ -1254,16 +1184,11 @@ def do_check(args, logger) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    try:
-        os.makedirs("logs", exist_ok=True)
-    except OSError as exc:
-        print(f"⚠ logs/ не создаётся: {exc}", file=sys.stderr)
-    logger, log_path = setup_logging(os.path.join("logs", "translate_check_llm"))
-    log_argv(logger)
-    logger.info(f"Лог: {log_path}")
+    # лог стадии — всегда; профиль LLM нужен только режиму проверки
+    stage = new_stage("translate_check_llm", args, log_fatal=False)
     if args.apply:
-        return do_apply(args, logger)
-    return do_check(args, logger)
+        return do_apply(args, stage.logger)
+    return do_check(args, bind_profile(stage, args, max_tokens=MAX_TOKENS))
 
 
 if __name__ == "__main__":

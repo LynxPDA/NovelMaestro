@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "cli"))
 
 import core.common as C  # noqa: E402
+import core.stage as core_stage  # noqa: E402
 import translate_check_llm as FE  # noqa: E402  (бывший fix_errors/redact_errors)
 from conftest import SilentLog, feed, fake_env  # noqa: E402
 
@@ -88,6 +89,37 @@ def test_apply_fix_to_text():
     assert ok3 is False
 
 
+@pytest.fixture()
+def seam(monkeypatch):
+    """Записыватель LLM-запросов стадии вместо сети.
+
+    .calls — что ушло в стрим; .answers — что вернуть (по одному на запрос).
+    """
+    class Recorder:
+        def __init__(self):
+            self.calls = []
+            self.answers = []
+
+        def fake(self, base_url, model, messages, **kw):
+            self.calls.append({"base_url": base_url, "model": model,
+                              "messages": messages, "kw": kw})
+            if self.answers:
+                return self.answers.pop(0), None
+            return "", None
+
+    rec = Recorder()
+    monkeypatch.setattr(core_stage, "stream_chat_completion", rec.fake)
+    return rec
+
+
+def make_stage(**profile_kw) -> core_stage.Stage:
+    """Контекст стадии для тестов: лог заглушен, профиль — какой попросили."""
+    prof = {"base_url": "http://h", "model": "m"}
+    prof.update(profile_kw)
+    return core_stage.Stage(name="translate_check_llm", logger=SilentLog(),
+                            profile=core_stage.LlmProfile(**prof))
+
+
 # ══════════════════════════════════════════════════════════════════════
 # cli/translate_check_llm.py: LLM-обвязка (промпты, запрос, батчи)
 # ══════════════════════════════════════════════════════════════════════
@@ -106,69 +138,63 @@ def test_load_prompts(tmp_path):
     assert (p1, p2) == (FE.PASS1_PROMPT, FE.PASS2_PROMPT)
 
 
-def test_query_llm_raw_delegates(monkeypatch):
-    seen = {}
-
-    def fake_stream(base_url, model, messages, **kw):
-        seen.update(messages=messages, kw=kw, n=len(messages))
-        return "ОТВЕТ", ""
-
-    monkeypatch.setattr(FE, "stream_chat_completion", fake_stream)
-    out = FE.query_llm_raw("ю", "с", "h", "m", "k", 2, 30, 60, None,
-                           None, SilentLog(), "[X]")
-    assert out == "ОТВЕТ"
-    assert seen["n"] == 2 and seen["kw"]["max_tokens"] == 32768
+def test_stage_complete_delegates(seam):
+    """Один вызов стадии: messages, сервер и предохранитель — из профиля."""
+    seam.answers.append("ОТВЕТ")
+    stage = make_stage(base_url="h", model="m", api_key="k", timeout=30,
+                       stream_timeout=60, max_retries=2,
+                       max_tokens=FE.MAX_TOKENS)
+    out, err = stage.complete("с", "ю", label="[X]")
+    assert (out, err) == ("ОТВЕТ", None)
+    call = seam.calls[-1]
+    assert len(call["messages"]) == 2
+    assert call["base_url"] == "h"
+    assert call["kw"]["max_tokens"] == FE.MAX_TOKENS
+    assert (call["kw"]["timeout"], call["kw"]["stream_timeout"]) == (30, 60)
+    assert call["kw"]["max_retries"] == 2 and call["model"] == "m"
     # унифицированный формат: промпт в user, system пустой
-    assert seen["messages"] == [
+    assert call["messages"] == [
         {"role": "system", "content": ""},
         {"role": "user", "content": "с\n\nю"}]
 
 
-def test_process_batch_one_pass(monkeypatch):
-    calls = []
-
-    def fake_q(user, sysp, *a, **k):
-        calls.append(user)
-        return '[{"chapter": 1, "fragment": "фрагмент длинный", "corrected": "правкa"}]'
-
-    monkeypatch.setattr(FE, "query_llm_raw", fake_q)
+def test_process_batch_one_pass(seam):
+    seam.answers.append('[{"chapter": 1, "fragment": "фрагмент длинный", "corrected": "правкa"}]')
     batch = [(1, "f", "d", "Глава 1\nфрагмент длинный"),
              (1, "f", "d", "продолжение главы")]
-    out = FE.process_batch(batch, "П1", "П2", False, "h", "m", "k",
-                           1, 10, 10, None, None, SilentLog())
+    out = FE.process_batch(batch, "П1", "П2", False, make_stage())
     assert out is not None
     assert len(out) == 1 and out[0]["chapter"] == 1
-    assert len(calls) == 1  # только P1
-    # правила pass1 — в system, текст батча — в user (через {batch_text})
-    assert "П1" in calls[0] and "Глава 1" in calls[0]
+    assert len(seam.calls) == 1  # только P1
+    # правила pass1 и текст батча — в одном user-сообщении ({batch_text})
+    content = seam.calls[0]["messages"][1]["content"]
+    assert "П1" in content and "Глава 1" in content
 
 
-def test_process_batch_two_pass(monkeypatch):
+def test_process_batch_two_pass(seam):
     p1_out = '[{"chapter": 1, "fragment": "ааааа", "corrected": "ббббб"}]'
     p2_out = ('[{"chapter": 1, "fragment": "ааааа", "corrected": "ббббб",'
               ' "status": "confirmed"},'
               ' {"chapter": 2, "fragment": "ввввв", "corrected": "ггггг",'
               ' "status": "rejected"}]')
-    answers = iter([p1_out, p2_out])
-    monkeypatch.setattr(FE, "query_llm_raw", lambda *a, **k: next(answers))
+    seam.answers.extend([p1_out, p2_out])
     batch = [(1, "f", "d", "Глава 1\nааааа")]
-    out = FE.process_batch(batch, "П1", "П2", True, "h", "m", "k",
-                           1, 10, 10, None, None, SilentLog())
+    out = FE.process_batch(batch, "П1", "П2", True, make_stage())
     assert out is not None
     assert len(out) == 1 and out[0]["status"] == "confirmed"
 
 
-def test_process_batch_failures(monkeypatch):
-    # P1 вернул None → ошибка LLM (None = fail-fast на уровне прогона)
-    monkeypatch.setattr(FE, "query_llm_raw", lambda *a, **k: None)
+def test_process_batch_failures(seam):
+    # P1 без ответа → ошибка LLM (None = fail-fast на уровне прогона)
+    seam.answers.append(None)
     batch = [(1, "f", "d", "текст")]
-    assert FE.process_batch(batch, "П1", "П2", True, "h", "m", "k",
-                            1, 10, 10, None, None, SilentLog()) is None
-    # P1 вернул не-JSON → retry_empty исчерпан → пусто
-    monkeypatch.setattr(FE, "query_llm_raw", lambda *a, **k: "мусор")
-    assert FE.process_batch(batch, "П1", "П2", False, "h", "m", "k",
-                            1, 10, 10, None, None, SilentLog(),
+    assert FE.process_batch(batch, "П1", "П2", True, make_stage()) is None
+    # P1 вернул не-JSON → retry_empty исчерпан → пусто (2 попытки)
+    seam.calls.clear()
+    seam.answers.append("мусор")
+    assert FE.process_batch(batch, "П1", "П2", False, make_stage(),
                             retry_empty=1) == []
+    assert len(seam.calls) == 2
 
 
 def test_atomic_write_and_find(tmp_path):
@@ -403,8 +429,8 @@ def _answer_one(monkeypatch, entries_json, calls=None):
         if calls is not None:
             calls.append(kw.get("label"))
         return entries_json, None
-    monkeypatch.setattr(C, "stream_chat_completion", fake)
-    monkeypatch.setattr(FE, "stream_chat_completion", fake)
+    # seam один: стадия зовёт стрим из core.stage, а не из своего модуля
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake)
 
 
 def test_main_check_writes_review_and_params(tmp_path, monkeypatch):

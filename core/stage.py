@@ -219,6 +219,7 @@ class LoggedStage:
     name: str
     logger: logging.Logger
     preview_path: str | None = None
+    log_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -229,6 +230,7 @@ class Stage:
     logger: logging.Logger
     profile: LlmProfile
     preview_path: str | None = None
+    log_path: str = ""
 
     def complete(self, prompt: str, data: str = "", *, label: str = "",
                  **kw: Any) -> tuple[str | None, str | None]:
@@ -263,6 +265,7 @@ def new_stage(name: str, args: argparse.Namespace, *,
     setup_logging). log_fatal=False — не создать logs/ предупреждением, а
     продолжать: у части стадий лог не критичен.
     """
+    log_path = ""
     try:
         os.makedirs(log_dir, exist_ok=True)
     except OSError as exc:
@@ -273,9 +276,10 @@ def new_stage(name: str, args: argparse.Namespace, *,
         logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger(name)
     else:
-        logger, _ = setup_logging(os.path.join(log_dir, log_name or name))
+        logger, log_path = setup_logging(os.path.join(log_dir,
+                                                     log_name or name))
     log_argv(logger)
-    return LoggedStage(name=name, logger=logger,
+    return LoggedStage(name=name, logger=logger, log_path=log_path,
                       preview_path=getattr(args, "preview_request", None))
 
 
@@ -287,7 +291,7 @@ def bind_profile(stage: LoggedStage, args: argparse.Namespace,
     должны требовать настроенного сервера.
     """
     return Stage(name=stage.name, logger=stage.logger,
-                 preview_path=stage.preview_path,
+                 preview_path=stage.preview_path, log_path=stage.log_path,
                  profile=resolve_profile(args, stage=stage.name,
                                          logger=stage.logger, **profile_kw))
 
@@ -305,6 +309,25 @@ def setup_stage(name: str, args: argparse.Namespace, *, log_dir: str = "logs",
 # ══════════════════════════════════════════════════════════════════════
 # ПРОГРЕСС
 # ══════════════════════════════════════════════════════════════════════
+def _tqdm() -> Any:
+    """tqdm или None: библиотека опциональна (роль в core/deps.py)."""
+    try:
+        import tqdm as _tqdm_module
+    except ImportError:
+        return None
+    return _tqdm_module
+
+
+def _make_bar(total: int, unit: str, label: str) -> Any:
+    """Бар CLI: в web-режиме и без tqdm его нет — счётчик живёт строками лога."""
+    if web_progress_enabled():
+        return None
+    module = _tqdm()
+    if module is None:
+        return None
+    return module.tqdm(total=total, unit=unit, desc=label)
+
+
 @dataclass
 class Progress:
     """Прогресс стадии: tqdm в CLI, @@PROGRESS@@ в web-режиме.
@@ -323,9 +346,7 @@ class Progress:
     _pbar: Any = None
 
     def __post_init__(self) -> None:
-        if self.bar and not web_progress_enabled():
-            from tqdm import tqdm
-            self._pbar = tqdm(total=self.total, unit=self.unit, desc=self.label)
+        self._pbar = _make_bar(self.total, self.unit, self.label)
 
     def __enter__(self) -> Progress:
         self.start()
@@ -356,8 +377,7 @@ class Progress:
     def log(self, message: str) -> None:
         """Строка прогресса: tqdm.write не рвёт бар, иначе — обычный вывод."""
         if self._pbar is not None:
-            from tqdm import tqdm
-            tqdm.write(message)
+            _tqdm().write(message)
         else:
             print(message)
 
