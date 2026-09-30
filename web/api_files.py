@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+api_files.py — файлы проекта (M3): список, чтение, запись, каталоги,
+переименование, удаление, загрузка и скачивание.
+"""
+from __future__ import annotations
+
+import logging
+import shutil
+import unicodedata
+from web.multipart import (
+    MultipartError, extract_files, extract_value, iter_parts,
+    parse_disposition,
+)
+from web.server import ApiError, Router
+from web.api_common import log, UPLOAD_DIRS, FILE_TEXT_LIMIT
+from web.api_common import (
+    _atomic_write_spool,
+    _close_multipart_fields,
+    _import_common,
+    _multipart_fields,
+    _project_ctx,
+    _resolve_project_path,
+)
+
+
+def _files_listing(ctx: dict) -> dict:
+    """Листинг папки проекта (GET /api/files?project=&path=)."""
+    pdir, section, name = _project_ctx(ctx)
+    rel = ctx["query"].get("path", "")
+    target = _resolve_project_path(ctx, pdir, rel)
+    if not target.is_dir():
+        raise ApiError(404, "Папка не найдена")
+    entries = []
+    for p in sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name)):
+        try:
+            st_p = p.stat()
+            size = st_p.st_size if p.is_file() else 0
+            mtime = int(st_p.st_mtime)
+        except OSError:
+            continue
+        entries.append({
+            "name": p.name,
+            "dir": p.is_dir(),
+            "size": size,
+            "mtime": mtime,
+        })
+    return {"ok": True, "path": rel, "entries": entries}
+
+
+def _is_binary_bytes(data: bytes) -> bool:
+    """NUL-снифф: бинарный файл не открываем как текст."""
+    return b"\x00" in data[:8192]
+
+
+def _file_read(ctx: dict) -> dict:
+    """Чтение файла текстом (GET /api/file?project=&path=).
+
+    JSON отдаётся pretty-print'ом; бинарные файлы — ошибка 400;
+    файлы больше FILE_TEXT_LIMIT — 413 (предложить скачивание).
+    Файла нет — пустой редактор (missing: true): сохранение создаст файл.
+    """
+    pdir, section, name = _project_ctx(ctx)
+    rel = ctx["query"].get("path", "")
+    target = _resolve_project_path(ctx, pdir, rel)
+    if not target.is_file():
+        if target.is_dir():
+            raise ApiError(400, "Это каталог — открыть как текст нельзя")
+        return {"ok": True, "path": rel, "content": "", "size": 0,
+                "missing": True}
+    size = target.stat().st_size
+    if size > FILE_TEXT_LIMIT:
+        raise ApiError(413, f"Файл {size} Б — слишком большой для редактора, "
+                            "скачайте его через кнопку скачивания")
+    raw = target.read_bytes()
+    if _is_binary_bytes(raw):
+        raise ApiError(400, "Бинарный файл — открыть как текст нельзя")
+    text = raw.decode("utf-8", errors="replace")
+    if target.suffix == ".json":
+        try:
+            import json as _json
+            text = _json.dumps(_json.loads(text), ensure_ascii=False, indent=2)
+        except (ValueError, TypeError):
+            log.debug("JSON-файл невалиден, отдаём как есть: %s", rel)
+    return {"ok": True, "path": rel, "content": text,
+            "size": target.stat().st_size}
+
+
+def _file_write(ctx: dict) -> dict:
+    """Запись файла (PUT /api/file {project, path, content})."""
+    common = _import_common(ctx)
+    pdir, section, name = _project_ctx(ctx)
+    rel = (ctx["body"].get("path") or "").strip()
+    content = ctx["body"].get("content")
+    if content is None:
+        raise ApiError(400, "Поле content обязательно")
+    target = _resolve_project_path(ctx, pdir, rel)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = unicodedata.normalize("NFC", str(content))
+    common.atomic_write(target, text)
+    return {"ok": True, "path": rel, "size": len(text.encode("utf-8"))}
+
+
+def _file_mkdir(ctx: dict) -> dict:
+    """Создать каталог (POST /api/mkdir?project=&path=).
+
+    «＋ Каталог» в «Файлы»; занято → 400, эскейп → 400.
+    """
+    pdir, _section, _name = _project_ctx(ctx)
+    rel = (ctx["query"].get("path") or ctx["body"].get("path") or "").strip()
+    if not rel:
+        raise ApiError(400, "path обязателен")
+    target = _resolve_project_path(ctx, pdir, rel)
+    if target.exists():
+        raise ApiError(400, f"Путь уже существует: {rel}")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ApiError(500, f"Не удалось создать каталог: {exc}")
+    return {"ok": True, "path": rel}
+
+
+def _file_rename(ctx: dict) -> dict:
+    """Переименовать файл ИЛИ каталог (POST /api/file/rename).
+
+    Body: {project, path, new_name} — new_name только имя внутри той же
+    папки (без слешей). Занято → 400, нет исходника → 404, эскейп → 400.
+    """
+    pdir, _section, _name = _project_ctx(ctx)
+    rel = (ctx["body"].get("path") or "").strip()
+    new_name = (ctx["body"].get("new_name") or "").strip()
+    if not rel or not new_name:
+        raise ApiError(400, "path и new_name обязательны")
+    if ("/" in new_name or "\\" in new_name or "\x00" in new_name
+            or new_name in (".", "..")):
+        raise ApiError(400, "new_name: только имя внутри той же папки")
+    src = _resolve_project_path(ctx, pdir, rel)
+    if not src.exists():
+        raise ApiError(404, f"Файл не найден: {rel}")
+    parent_rel = rel.rpartition("/")[0]
+    dst_rel = f"{parent_rel}/{new_name}" if parent_rel else new_name
+    dst = _resolve_project_path(ctx, pdir, dst_rel)
+    if dst.exists():
+        raise ApiError(400, f"Путь назначения уже существует: {dst_rel}")
+    try:
+        src.replace(dst)
+    except OSError as exc:
+        raise ApiError(500, f"Не удалось переименовать: {exc}")
+    return {"ok": True, "path": rel, "new_path": dst_rel}
+
+
+def _file_delete(ctx: dict) -> dict:
+    """Удаление файла (DELETE /api/file?project=&path=)."""
+    pdir, section, name = _project_ctx(ctx)
+    rel = ctx["query"].get("path", "")
+    target = _resolve_project_path(ctx, pdir, rel)
+    if not target.exists():
+        raise ApiError(404, "Файл не найден")
+    try:
+        if target.is_dir():
+            import shutil
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    except OSError as exc:
+        raise ApiError(500, f"Не удалось удалить: {exc}")
+    return {"ok": True, "path": rel}
+
+
+def _file_upload(ctx: dict) -> dict:
+    """Загрузка файлов (POST /api/upload, multipart).
+
+    Поля: dest=source|chapters|prompts|images|tmp|вложенная chapters/…
+    + files[] (несколько); пусто/отсутствует dest = корень проекта.
+    Имена — только basename; лимит max_upload_mb на файл и на тело;
+    файлы пишутся атомарно, при ошибке валидации не пишется ничего.
+    """
+    pdir, _section, _name = _project_ctx(ctx)
+    fields = _multipart_fields(ctx)
+    try:
+        dest = extract_value(fields, "dest")
+        # пусто = корень проекта (поля files с dir="" — ner_file, wiki
+        # file); вложенные папки глав — для загрузки внутрь chapter-папок
+        if dest and dest not in UPLOAD_DIRS \
+                and not dest.startswith("chapters/"):
+            raise ApiError(400, f"Папка назначения недопустима: {dest}")
+        uploads = []
+        for f in extract_files(fields):
+            fname = f.get("filename") or ""
+            if not fname or "\x00" in fname:
+                continue
+            if "/" in fname or "\\" in fname or fname in (".", ".."):
+                raise ApiError(400, f"Недопустимое имя файла: {fname}")
+            uploads.append((fname, f["data"]))
+        if not uploads:
+            raise ApiError(400, "Нет файлов в запросе")
+        dest_dir = _resolve_project_path(ctx, pdir, dest)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        saved = []
+        for fname, spool in uploads:
+            target = _resolve_project_path(ctx, dest_dir, fname)
+            _atomic_write_spool(target, spool)
+            saved.append(f"{dest}/{fname}" if dest else fname)
+        return {"ok": True, "saved": saved}
+    finally:
+        _close_multipart_fields(fields)
+
+
+def _file_download(ctx: dict) -> dict:
+    """Скачивание файла (GET /api/download?project=&path=&inline=1).
+
+    inline=1 — без Content-Disposition (для предпросмотра картинок в SPA).
+    """
+    pdir, section, name = _project_ctx(ctx)
+    rel = ctx["query"].get("path", "")
+    target = _resolve_project_path(ctx, pdir, rel)
+    if not target.is_file():
+        raise ApiError(404, "Файл не найден")
+    data = target.read_bytes()
+    handler = ctx["handler"]
+    if ctx["query"].get("inline"):
+        ctype = "image/jpeg" if target.suffix.lower() in (".jpg", ".jpeg") \
+            else "image/png" if target.suffix.lower() == ".png" \
+            else "application/octet-stream"
+        handler._send(200, ctype, data, cache="no-cache")
+        return {}
+    from urllib.parse import quote
+    handler._send(200, "application/octet-stream", data,
+                  [("Content-Disposition",
+                    f'attachment; filename="{quote(target.name)}"')])
+    return {}  # ответ уже отправлен
+
+
+def _register_files(router: Router) -> None:
+    router.add("GET", "/api/files", _files_listing)
+    router.add("GET", "/api/file", _file_read)
+    router.add("PUT", "/api/file", _file_write)
+    router.add("DELETE", "/api/file", _file_delete)
+    router.add("POST", "/api/mkdir", _file_mkdir)
+    router.add("POST", "/api/file/rename", _file_rename)
+    router.add("POST", "/api/upload", _file_upload)
+    router.add("GET", "/api/download", _file_download)

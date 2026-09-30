@@ -30,7 +30,14 @@ core/     общий код: common.py (логика) + projects.py (менед�
           что установлено и чем прикрыто) + stage.py (общий слой стадий:
           флаги LLM, профиль сервера, контекст стадии, прогресс). НЕ скрипты.
           Интерактива (ui/tui) больше нет.
-web/      web-интерфейс: server.py + api.py (роуты/хендлеры), stages.py
+web/      web-интерфейс: server.py + api.py (фасад: register() и порядок
+          роутов) + доменные модули хендлеров api_common.py (служебное, ctx,
+          кешы и константы, сессия), api_projects.py (пульт и проекты),
+          api_files.py (файлы), api_glossary.py (глоссарий и review),
+          api_env.py (.env, промпты, metadata), api_assets.py (обложка, логи,
+          отчёты), api_stage.py (запуски и стадии, предпросмотр) и
+          api_templates.py (шаблоны); общий mutable-контекст — в api_common,
+          фасад реэкспортирует те же объекты; stages.py
           (реестр стадий и сборка argv), jobs.py (JobManager + SSE),
           pipeline.py (web-оркестратор конвейера), static/ (SPA; локальные
           библиотеки — static/vendor/ + манифест vendor.lock.json).
@@ -216,7 +223,7 @@ Regexp-поля форм и CLI — чистые стандартные выра
 1. Общая логика → `core/common.py` (LLM-профиль, флаги и прогресс стадии → `core/stage.py`), + запись в `core/README.md` и в таблицу §6 / `tests/test_docs.py`.
 2. Новый исполнитель → `cli/xxx.py` (CLI, argparse, bootstrap §4).
 3. Новая стадия в web → строка в `web/stages.py::STAGE_SPECS` (ключ-слаг, title, script, build-функция, fields) + форма в SPA.
-4. Новый роут API → `web/api.py` (+ строка в таблицу `web/README.md`).
+4. Новый роут API → доменный `web/api_<домен>.py` (хендлер и `router.add` туда же; `web/api.py` — только фасад) + строка в таблицу `web/README.md`.
 5. Новая функция web-слоя → `web/*.py`, общая логика — только из `core/` (не копировать из скриптов).
 6. Тесты → `tests/` (см. §10). Для новых функций core — параметризованные тесты обязательны. Добавил функцию в таблицу §6 — обнови и тесты, и `tests/test_docs.py`.
 7. **Перед коммитом — обязательно:**

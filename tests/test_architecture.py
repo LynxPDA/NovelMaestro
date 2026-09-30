@@ -42,6 +42,33 @@ def test_web_layout():
     assert not (ROOT / "cli" / "Other_tools").exists()
 
 
+API_DOMAINS = ("common", "projects", "files", "glossary", "env", "assets",
+               "stage", "templates")
+
+
+def test_web_api_is_facade():
+    """api.py — фасад: хендлеры живут в доменных api_<домен>.py."""
+    api = (ROOT / "web" / "api.py").read_text(encoding="utf-8")
+    assert len(api.splitlines()) < 150, \
+        "api.py распух: хендлеры — в доменные модули, здесь только register()"
+    assert "def _session" not in api, "хендлер вернулся в фасад"
+    for d in API_DOMAINS:
+        assert (ROOT / "web" / f"api_{d}.py").is_file(), f"нет web/api_{d}.py"
+    assert "_register_hub(router)" in api and "_register_jobs(router)" in api
+
+
+def test_web_api_shared_state_defined_once():
+    """Общий mutable-контекст web-слоя определён ровно в api_common."""
+    for mod in API_DOMAINS:
+        if mod == "common":
+            continue
+        src = (ROOT / "web" / f"api_{mod}.py").read_text(encoding="utf-8")
+        for shared in ("_STATS_CACHE", "_STATS_LOCK", "_CACHE_LOADED",
+                       "_OPTIONS_CACHE", "_PREVIEW_STAGES", "log = logging"):
+            assert not re.search(rf"^{re.escape(shared)}", src, re.M), \
+                f"api_{mod}.py: переопределён общий контекст {shared}"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # cli/ = чистый CLI: никакого интерактива
 # ══════════════════════════════════════════════════════════════════════
