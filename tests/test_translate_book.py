@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "cli"))
 from conftest import SilentLog  # noqa: E402
 
 import translate_book as TB  # noqa: E402
+from core import stage as core_stage  # noqa: E402
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -158,7 +159,7 @@ def test_main_translate(tmp_path, monkeypatch):
     ], ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(TB, "stream_chat_completion",
                         lambda *a, **k: ("ПЕРЕВЕДЁННЫЙ ТЕКСТ", ""))
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["book.txt", "--host", "http://h", "--model", "m",
              "--threads", "1"])
     out = (tmp_path / "translated_book.txt").read_text(encoding="utf-8")
@@ -186,7 +187,7 @@ def test_main_prompt_missing_tag_falls_back_to_builtin(tmp_path, monkeypatch):
         seen["messages"] = messages
         return ("ПЕРЕВОД", "")
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "м")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "м")
     # redact: в файле только тег <translate> — тег redact отсутствует
     TB.main(["chunks.json", "--mode", "redact", "--prompt_file",
              "prompt.txt", "--host", "http://h", "--model", "m",
@@ -218,7 +219,7 @@ def test_main_resolves_server_from_env(tmp_path, monkeypatch):
         seen["model"] = model
         return ("ПЕРЕВОД", "")
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
-    monkeypatch.setattr(TB, "determine_model", lambda m, *a, **k: m)
+    monkeypatch.setattr(core_stage, "determine_model", lambda m, *a, **k: m)
     TB.main(["book.txt", "--threads", "1", "--env_file", str(env)])
     assert seen["base_url"] == "http://from-env:9989/v1"
     assert seen["model"] == "общая"
@@ -228,7 +229,7 @@ def test_main_redact_bad_json_returns_1(tmp_path, monkeypatch):
     """H4 (AUDIT): битый chunks.json в redact — код 1, а не 0."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "chunks.json").write_text("это не json{", encoding="utf-8")
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     rc = TB.main(["chunks.json", "--host", "http://h", "--threads", "1"])
     assert rc == 1
 
@@ -240,7 +241,7 @@ def test_main_redact(tmp_path, monkeypatch):
     ], ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(TB, "stream_chat_completion",
                         lambda *a, **k: ("ОТРЕДАКТИРОВАНО", ""))
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["chunks.json", "--host", "http://h", "--threads", "1"])
     out = (tmp_path / "edited_book.txt").read_text(encoding="utf-8")
     assert out == "ОТРЕДАКТИРОВАНО\n"
@@ -251,7 +252,7 @@ def test_main_fail_fallback_written(tmp_path, monkeypatch):
     (tmp_path / "book.txt").write_text("Текст для фейла.", encoding="utf-8")
     monkeypatch.setattr(TB, "stream_chat_completion",
                         lambda *a, **k: (None, "Ошибка соединения"))
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["book.txt", "--host", "http://h", "--threads", "1"])
     out = (tmp_path / "translated_book.txt").read_text(encoding="utf-8")
     assert "[FAIL: Ошибка соединения]" in out and "Текст для фейла." in out
@@ -259,7 +260,7 @@ def test_main_fail_fallback_written(tmp_path, monkeypatch):
 
 def test_main_missing_input(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["нет_такого.txt", "--host", "http://h", "--threads", "1"])
     assert not (tmp_path / "translated_book.txt").exists()
 
@@ -288,7 +289,7 @@ def test_main_polish_gender_placeholders(tmp_path, monkeypatch):
         return ("ОТПОЛИРОВАНО", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["redacted.txt", "--mode", "polish", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1"])
     out = (tmp_path / "polished_book.txt").read_text(encoding="utf-8")
@@ -326,7 +327,7 @@ def test_main_polish_min_count_filters_names(tmp_path, monkeypatch):
         return ("ОТПОЛИРОВАНО", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["redacted.txt", "--mode", "polish", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1"])
     content = captured["content"]
@@ -359,7 +360,7 @@ def test_main_translate_original_text_placeholder(tmp_path, monkeypatch):
         return ("ПЕРЕВОД", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1"])
     out = (tmp_path / "translated_book.txt").read_text(encoding="utf-8")
@@ -391,7 +392,7 @@ def test_main_translate_no_placeholder_warns_and_appends(tmp_path, monkeypatch):
         return ("ПЕРЕВОД", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1"])
     content = captured["content"]
@@ -534,7 +535,7 @@ def test_main_preview_request(tmp_path, monkeypatch):
     (tmp_path / "prompt.txt").write_text(
         "<translate>\nПереведи:\n{original_text}\n</translate>",
         encoding="utf-8")
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     calls = []
     monkeypatch.setattr(TB, "stream_chat_completion",
                         lambda *a, **k: calls.append(1) or ("", ""))
@@ -590,7 +591,7 @@ def test_main_extended_context_translate_lr(tmp_path, monkeypatch):
         return ("ПЕРЕВОД", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1",
              "--dict_file", "dict.json",
@@ -622,7 +623,7 @@ def test_main_extended_without_files_plain_prompt(tmp_path, monkeypatch):
         return ("ПЕРЕВОД", "")
 
     monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1"])
     assert "Обычный промпт" in captured["content"]
@@ -642,7 +643,7 @@ def test_main_preview_extended_blocks(tmp_path, monkeypatch):
         {"original_text": "苏星宇走进了大殿。",
          "translated_text": "Су Синюй вошёл в зал."},
     ], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(TB, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     pv = tmp_path / "preview.json"
     TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
              "--threads", "1", "--preview-request", str(pv),

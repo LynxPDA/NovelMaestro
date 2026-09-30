@@ -35,6 +35,7 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
+from core.stage import resolve_profile  # noqa: E402
 from core.common import (  # noqa: E402
     _int_count,
     build_chapter_map,
@@ -48,7 +49,6 @@ from core.common import (  # noqa: E402
     fts_search_all,
     fts_search_first,
     fts_search_ids_all,
-    get_server_config,
     get_tagged_prompt,
     llm_messages,
     log_argv as _cc_log_argv,
@@ -1398,19 +1398,10 @@ def main():
     )
 
     args = parser.parse_args()
-    # Сервер: CLI > HOST/API_KEY/MODEL из .env
-    env_data = parse_dotenv(find_env_file(args.env_file)) if args.env_file \
-        else parse_dotenv(find_env_file())
-    sc = get_server_config(env_data, "wiki")
-    args.host = args.host or sc["host"] or ""
-    args.api_key = args.api_key if args.api_key is not None else sc["api_key"]
-    args.model = args.model or sc["model"]
-    if not args.host:
-        print_env_help()
-        sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")
-    if not args.api_key:
-        # P1 (AUDIT #2): ключ может прийти из окружения (web-слой)
-        args.api_key = os.environ.get("LLM_API_KEY", "")
+    # Сервер: CLI > os.environ > .env (общая реализация — core.stage)
+    profile = resolve_profile(args, stage="wiki", require_model=False)
+    args.host, args.api_key, args.model = (
+        profile.base_url, profile.api_key, profile.model)
 
     # ── Валидация ──
     if args.context_chunks < 1 or args.top < 1 or args.min_count < 1:

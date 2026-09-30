@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "cli"))
 from conftest import SilentLog  # noqa: E402
 
 import wiki as WIKI  # noqa: E402
+from core import stage as core_stage  # noqa: E402
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -276,7 +277,7 @@ def test_main_full(tmp_path, monkeypatch):
         {"term": "林水", "translation": "Линь Шуй",
          "type": "Person (female)", "count": 7},
     ], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ ГЕРОЯ")
     monkeypatch.setattr(sys, "argv", [
         "wiki.py", "novel.txt", "--ner_file", "ner.json",
@@ -291,7 +292,7 @@ def test_main_full(tmp_path, monkeypatch):
 
 def test_main_missing_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(sys, "argv", [
         "wiki.py", "нет.txt", "--ner_file", "ner.json",
         "--host", "http://h", "--model", "m"])
@@ -320,7 +321,7 @@ def test_main_rulate(tmp_path, monkeypatch):
         {"term": "林水", "translation": "Линь Шуй",
          "type": "Person (female)", "count": 7},
     ], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
     monkeypatch.setattr(sys, "argv", [
         "wiki.py", "novel.txt", "--ner_file", "ner.json",
@@ -344,7 +345,7 @@ def test_main_compile_chapters(tmp_path, monkeypatch):
          "type": "Person (female)", "count": 3},
     ], ensure_ascii=False), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
     monkeypatch.setattr(sys, "argv", [
         "wiki.py", "--compile-chapters", "--type", "chapter",
@@ -363,7 +364,7 @@ def test_main_compile_chapters_missing(tmp_path, monkeypatch):
     (tmp_path / "chapters").mkdir()
     (tmp_path / "ner.json").write_text("[]", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(sys, "argv", [
         "wiki.py", "--compile-chapters", "--ner_file", "ner.json",
         "--host", "http://h", "--model", "m"])
@@ -374,7 +375,7 @@ def test_main_compile_chapters_missing(tmp_path, monkeypatch):
 def test_main_no_file_no_compile(tmp_path, monkeypatch):
     """wiki: ни file, ни --compile-chapters — ошибка."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(sys, "argv", [
         "wiki.py", "--ner_file", "ner.json", "--host", "http://h",
         "--model", "m"])
@@ -391,7 +392,7 @@ def test_main_rulate_html(tmp_path, monkeypatch):
         {"term": "林水", "translation": "Линь Шуй",
          "type": "Person (female)", "count": 7},
     ], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
     monkeypatch.setattr(sys, "argv", [
         "wiki.py", "novel.txt", "--ner_file", "ner.json",
@@ -420,7 +421,7 @@ def test_main_as_chapter(tmp_path, monkeypatch):
          "type": "Person (female)", "count": 3},
     ], ensure_ascii=False), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
     monkeypatch.setattr(sys, "argv", [
         "wiki.py", "--as-chapter", "--compile-chapters", "--type",
@@ -453,7 +454,7 @@ def test_main_as_chapter_save_type(tmp_path, monkeypatch):
          "type": "Person (female)", "count": 3},
     ], ensure_ascii=False), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
     monkeypatch.setattr(sys, "argv", [
         "wiki.py", "--as-chapter", "--save-type", "redacted",
@@ -475,7 +476,7 @@ def test_main_toc_off(tmp_path, monkeypatch):
         {"term": "林水", "translation": "Линь Шуй",
          "type": "Person (female)", "count": 7},
     ], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(WIKI, "determine_model", lambda *a, **k: "модель-х")
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
     monkeypatch.setattr(sys, "argv", [
         "wiki.py", "novel.txt", "--ner_file", "ner.json",

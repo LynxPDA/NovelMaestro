@@ -70,6 +70,7 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
+from core.stage import resolve_profile  # noqa: E402
 from core.common import (
     collect_gender_names,
     determine_model,
@@ -80,8 +81,6 @@ from core.common import (
     find_relevant_examples,
     find_relevant_ner,
     format_fewshot_block,
-    get_server_config,
-    get_stage_model,
     get_tagged_prompt,
     llm_messages,
     load_examples,
@@ -602,20 +601,15 @@ def main(argv=None):
 
     logger.info(f"🧭 Режим: {mode} | вход: {args.file} | выход: {out_path}")
 
-    # ── Сервер: CLI > HOST/API_KEY/MODEL из .env > help+exit ──
-    env_data = parse_dotenv(find_env_file(args.env_file))
-    sc = get_server_config(env_data)
-    host = args.host or sc["host"]
-    api_key = args.api_key if args.api_key is not None else sc["api_key"]
-    model = args.model or get_stage_model(env_data)
-    if not host:
-        print_env_help()
-        sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")
-    if not api_key:
-        api_key = os.environ.get("LLM_API_KEY", "")
-    base_url = host.rstrip("/")
-    if "/v1" not in base_url:
-        base_url += "/v1"
+    # ── Сервер: CLI > os.environ > .env (общая реализация — core.stage) ──
+    try:
+        profile = resolve_profile(args, logger=logger)
+    except SystemExit as exc:
+        # L3 (AUDIT): незаданные сервер/модель = код 1, а не traceback
+        print(str(exc))
+        return 1
+    base_url, api_key, model_name = (profile.base_url, profile.api_key,
+                                     profile.model)
 
     if not os.path.exists(args.file):
         logger.error("❌ Input file not found.")
@@ -693,11 +687,6 @@ def main(argv=None):
         src = args.prompt_file if args.prompt_file else "(не указан)"
         logger.info(f"ℹ️  Внешний промпт не найден ({src}). "
                     f"Используется ВСТРОЕННЫЙ ({len(active_prompt)} симв.).")
-
-    try:
-        model_name = determine_model(model, logger)
-    except SystemExit:
-        return 1  # L3 (AUDIT): неопределённая модель = код 1, а не 0
 
     # ── Входные элементы ──
     if mode == "redact":

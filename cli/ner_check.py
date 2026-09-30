@@ -73,6 +73,7 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
+from core.stage import resolve_profile  # noqa: E402
 from core.common import (  # noqa: E402
     REVIEW_ACCEPT,
     REVIEW_REJECT,
@@ -91,7 +92,6 @@ from core.common import (  # noqa: E402
     format_ner_record,
     fts_escape,
     fts_search_all,
-    get_server_config,
     get_tagged_prompt,
     glossary_body,
     llm_messages,
@@ -405,22 +405,10 @@ def save_review_file(path, input_path, created, entries, params=None,
 
 
 def resolve_server(args, logger):
-    """CLI > HOST/API_KEY/MODEL из .env > help+exit.
-    Возвращает (base_url, key, model, env_data)."""
-    env_data = parse_dotenv(find_env_file(args.env_file))
-    sc = get_server_config(env_data, "ner_check")
-    host = args.host or sc["host"]
-    api_key = args.api_key if args.api_key is not None else sc["api_key"]
-    model = args.model or sc["model"]
-    if not host:
-        print_env_help()
-        sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")
-    if not api_key:
-        api_key = os.environ.get("LLM_API_KEY", "")
-    base_url = host.rstrip("/")
-    if "/v1" not in base_url:
-        base_url += "/v1"
-    return base_url, (api_key or ""), model, env_data
+    """Сервер стадии: CLI > os.environ > .env (общая реализация — core.stage).
+    Возвращает (base_url, key, model)."""
+    profile = resolve_profile(args, stage="ner_check", logger=logger)
+    return profile.base_url, profile.api_key, profile.model
 
 
 def get_prompt(args, logger) -> str:
@@ -867,7 +855,7 @@ def patches_table(patches, offset=0) -> str:
 
 
 def do_check(args, logger) -> int:
-    base_url, api_key, model, _ = resolve_server(args, logger)
+    base_url, api_key, model = resolve_server(args, logger)
 
     if args.passes != "rag" and args.rag_terms.strip():
         logger.warning(

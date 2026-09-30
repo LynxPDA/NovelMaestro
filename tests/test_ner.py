@@ -16,6 +16,7 @@ from conftest import SilentLog  # noqa: E402
 from core import common as C  # noqa: E402
 
 import ner as NER  # noqa: E402
+from core import stage as core_stage  # noqa: E402
 
 
 @pytest.fixture()

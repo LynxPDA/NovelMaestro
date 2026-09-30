@@ -52,6 +52,7 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
+from core.stage import resolve_profile  # noqa: E402
 from core.common import (  # noqa: E402
     REVIEW_ACCEPT,
     REVIEW_REJECT,
@@ -67,7 +68,6 @@ from core.common import (  # noqa: E402
     find_env_file,
     fix_entry,
     flex_fragment_pattern,
-    get_server_config,
     get_tagged_prompt,
     llm_messages,
     log_argv,
@@ -1073,17 +1073,13 @@ def do_apply(args, logger) -> int:
 
 def do_check(args, logger) -> int:
     """Поиск ошибок LLM → накопительный review-файл."""
-    env_path = find_env_file(args.env_file)
-    env_data = parse_dotenv(env_path)
-    sc = get_server_config(env_data, "translate_check_llm")
-    host = args.host or sc["host"]
-    api_key = args.api_key if args.api_key is not None else sc["api_key"]
-    model = args.model or sc["model"]
-    if not api_key:
-        api_key = os.environ.get("LLM_API_KEY", "")
-    if not host:
-        print_env_help()
-        sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")
+    # Сервер: CLI > os.environ > .env (общая реализация — core.stage)
+    try:
+        profile = resolve_profile(args, stage="translate_check_llm",
+                                  logger=logger)
+    except SystemExit as exc:
+        print(str(exc))
+        return 1
 
     ch_dir = os.path.abspath(args.chapters_dir)
     logger.info(f"Директория глав: {ch_dir}")
@@ -1098,10 +1094,8 @@ def do_check(args, logger) -> int:
         f"reasoning={args.reasoning_effort or 'off'}")
 
     p1, p2 = load_prompts(args.prompt_file, logger)
-    base_url = host.rstrip("/")
-    if "/v1" not in base_url:
-        base_url += "/v1"
-    model_name = determine_model(model, logger)
+    base_url, api_key, model_name = (profile.base_url, profile.api_key,
+                                    profile.model)
     logger.info(f"API: {base_url} | модель: {model_name}")
 
     chapters = collect_chapters(args.start, args.end, args.file_type,
