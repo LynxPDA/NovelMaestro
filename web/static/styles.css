@@ -1488,6 +1488,9 @@ input[type="number"] {
   gap: 6px;
   padding: 8px 0;
 }
+.ner-pager:empty {
+  display: none; /* пустая панель не должна оставлять padding */
+}
 .ner-pager-info {
   color: var(--text-dim);
   font-size: 13px;

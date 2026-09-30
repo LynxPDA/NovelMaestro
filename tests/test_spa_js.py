@@ -256,7 +256,7 @@ def test_dropdown_menus_are_fixed_positioned():
     здесь запрещены."""
     css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
     app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
-    views = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    comp = (SPA_DIR / "ui-components.js").read_text(encoding="utf-8")
 
     def rule(name):
         i = css.index(name)
@@ -270,11 +270,11 @@ def test_dropdown_menus_are_fixed_positioned():
 
     # скрытие — общим классом .hidden (attribute-механизм [hidden] убран)
     assert ".menu-box[hidden]" not in css
-    assert 'class: "menu-box hidden"' in views
+    assert 'class: "menu-box hidden"' in comp
     # оба вида меню идут через общий переключатель, а не свои слушатели
-    assert "window.toggleMenu(btn, box)" in views
+    assert "window.toggleMenu(btn, box)" in comp
     assert "btn.addEventListener(\"click\", () => toggleMenu(btn, menu));" in app
-    assert "window.closeMenus()" in views
+    assert "window.closeMenus()" in comp
     # геометрия — одна чистая функция; слежение за скроллом/ресайзом
     assert "UICore.menuPlacement(" in app
     assert "if (!menu.isConnected)" in app, "перерисовка строки не оставляет висящее меню"

@@ -350,3 +350,35 @@ test("menuButton: пункт закрывает меню и зовёт дейс�
   assert.equal(closed, 1);
   assert.equal(ran, 1);
 });
+
+test("listPager: hideSinglePage убирает панель совсем", () => {
+  const list = UIC.h("div", {});
+  const pg = UIC.listPager({
+    pageSize: 2,
+    list,
+    hideSinglePage: true,
+    rows: (slice) => slice.map((x) => UIC.h("i", {}, x)),
+  });
+  pg.items = ["a", "b"];
+  assert.equal(pg.el.childNodes.length, 0);
+  pg.items = ["a", "b", "c"];
+  assert.equal(pg.el.childNodes.length, 3);
+  pg.page = 1; // присваивание не рисует: рисует render() (его зовёт сам pager)
+  pg.render();
+  assert.equal(pg.page, 1);
+  assert.equal(list.textContent, "c");
+});
+
+test("listPager: режим счётчика — items числом, страницу держит компонент", () => {
+  let painted = 0;
+  const pg = UIC.listPager({
+    pageSize: 3,
+    info: (total, page, pages) => ` ${page} / ${pages} `,
+    onChange: () => (painted += 1),
+  });
+  pg.items = 7; // не список, а количество: rows не нужны
+  assert.equal(pg.el.find("ner-pager-info").textContent, " 1 / 3 ");
+  pg.el.childNodes[2].click(); // «›»
+  assert.equal(pg.page, 1);
+  assert.equal(painted, 1); // перерисовку списка делает вьюха
+});

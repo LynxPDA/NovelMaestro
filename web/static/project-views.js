@@ -1486,9 +1486,29 @@ function viewProject(section, name, tab, job) {
     }
     const table = h("table", { class: "ner-table" });
     const tbody = h("tbody");
-    const pager = h("div", { class: "ner-pager" });
+    /* страница таблицы — общий пейджер: пустой список pager молчит */
+    const pg = UIC.listPager({
+      list: tbody,
+      hideOnEmpty: true,
+      info: (total, page, pages) => ` ${page} / ${pages} · всего ${total} `,
+      rows: (slice) => {
+        const rows = slice.map((it) =>
+          editing === it ? editRow(it) : viewRow(it),
+        );
+        // редактируемая запись гарантированно видна: если она не попала
+        // в slice (сортировка count ↓, поиск, фильтр типов) — докидываем
+        if (editing && !slice.includes(editing)) rows.push(editRow(editing));
+        if (!slice.length && !editing) {
+          rows.push(
+            h("tr", {}, h("td", {
+              colspan: String(visibleCols().length + 1),
+            }, "Нет записей")),
+          );
+        }
+        return rows;
+      },
+    });
     let editing = null; // редактируемая запись (объект из data.items)
-    let page = 0; // M6: текущая страница таблицы
     const colLabel = (key) => key; // заголовки — сырые ключи JSON (term, type, …)
     const visibleCols = () => (cols == null ? [...knownKeys] : cols);
     function colsLabel() {
@@ -1673,44 +1693,6 @@ function viewProject(section, name, tab, job) {
       }
     }
 
-    function renderPager(total) {
-      if (total === 0) {
-        pager.replaceChildren();
-        return;
-      }
-      const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-      pager.replaceChildren(
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            disabled: page <= 0,
-            onclick: () => {
-              page--;
-              renderRows();
-            },
-          },
-          "‹",
-        ),
-        h(
-          "span",
-          { class: "ner-pager-info" },
-          ` ${page + 1} / ${pages} · всего ${total} `,
-        ),
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            disabled: page >= pages - 1,
-            onclick: () => {
-              page++;
-              renderRows();
-            },
-          },
-          "›",
-        ),
-      );
-    }
 
     function renderRows() {
       table.replaceChildren(
@@ -1743,7 +1725,7 @@ function viewProject(section, name, tab, job) {
                       const next = UICore.nextNerSort(sortField, sortDir, c);
                       sortField = next.field;
                       sortDir = next.dir;
-                      page = 0;
+                      pg.page = 0;
                       renderRows();
                     },
                   },
@@ -1757,37 +1739,8 @@ function viewProject(section, name, tab, job) {
         ),
         tbody,
       );
-      tbody.replaceChildren();
-      const vis = visible(); // отфильтровано и отсортировано
-      const pages = Math.max(1, Math.ceil(vis.length / PAGE_SIZE));
-      if (page >= pages) page = pages - 1; // M6: страница не убегает
-      const slice = vis.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-      for (const it of slice) {
-        if (editing === it) {
-          tbody.append(editRow(it));
-        } else {
-          tbody.append(viewRow(it));
-        }
-      }
-      // редактируемая запись гарантированно видна: если она не попала
-      // в slice (сортировка count ↓, поиск, фильтр типов) — докидываем
-      if (editing && !slice.includes(editing)) {
-        tbody.append(editRow(editing));
-      }
-      if (!slice.length && !editing) {
-        tbody.append(
-          h(
-            "tr",
-            {},
-            h(
-              "td",
-              { colspan: String(visibleCols().length + 1) },
-              "Нет записей",
-            ),
-          ),
-        );
-      }
-      renderPager(vis.length);
+      // список режет страницу и рисует pager — компонент
+      pg.items = visible(); // отфильтровано и отсортировано
     }
 
     function viewRow(it) {
@@ -1922,7 +1875,7 @@ function viewProject(section, name, tab, job) {
       editing = it;
       const vis = visible();
       const idx = vis.indexOf(it);
-      if (idx >= 0) page = Math.floor(idx / PAGE_SIZE); // M6: на свою страницу
+      if (idx >= 0) pg.page = Math.floor(idx / PAGE_SIZE); // M6: на свою страницу
       renderRows();
     }
 
@@ -1982,14 +1935,14 @@ function viewProject(section, name, tab, job) {
           searchFields = next;
           saveSearchFields();
           refreshSearchFieldsBtn();
-          page = 0;
+          pg.page = 0;
           renderRows();
         },
         reset: () => {
           searchFields = null;
           saveSearchFields();
           refreshSearchFieldsBtn();
-          page = 0;
+          pg.page = 0;
           renderRows();
         },
       });
@@ -2017,14 +1970,14 @@ function viewProject(section, name, tab, job) {
           typeFilter = next;
           saveTypeFilter();
           refreshTypeBtn();
-          page = 0;
+          pg.page = 0;
           renderRows();
         },
         reset: () => {
           typeFilter = null;
           saveTypeFilter();
           refreshTypeBtn();
-          page = 0;
+          pg.page = 0;
           renderRows();
         },
       });
@@ -2282,42 +2235,9 @@ function viewProject(section, name, tab, job) {
       // пустой термин) не пройдёт фильтр и не будет видна
       search.value = "";
       typeFilter = null;
-      page = 0;
+      pg.page = 0;
       renderRows();
     };
-    /* Групповая кнопка: общее fixed-меню (window.toggleMenu из app.js) —
-       позиционируется от вьюпорта и разворачивается вверх у нижнего края. */
-    function menuButton(icon, title, items) {
-      const box = h("div", { class: "menu-box hidden", role: "menu" });
-      for (const it of items) {
-        box.append(
-          h(
-            "button",
-            {
-              class: "btn btn-sm btn-ghost menu-item",
-              role: "menuitem",
-              onclick: () => {
-                window.closeMenus();
-                it.action();
-              },
-            },
-            it.label,
-          ),
-        );
-      }
-      const btn = h(
-        "button",
-        {
-          class: "btn btn-sm btn-ghost",
-          title,
-          "aria-haspopup": "menu",
-          "aria-expanded": "false",
-          onclick: () => window.toggleMenu(btn, box),
-        },
-        icon,
-      );
-      return h("div", { class: "toolbar-menu" }, btn, box);
-    }
     /* Экспорт для анализа: настройки в модалке, файл скачивается */
     const exportBtn = h(
       "button",
@@ -2338,23 +2258,23 @@ function viewProject(section, name, tab, job) {
       typeBtn,
       colBtn,
       // «+»: новый столбец или новый термин (меню вместо двух кнопок)
-      menuButton("+", "Добавить столбец или термин", [
+      UIC.menuButton("+", "Добавить столбец или термин", [
         { label: "+ Столбец", action: () => addColBtn.click() },
         { label: "+ Термин", action: addTerm },
       ]),
       // «x»: удалить столбец или термины по фильтру
-      menuButton("x", "Удалить столбец или термины по фильтру", [
+      UIC.menuButton("x", "Удалить столбец или термины по фильтру", [
         { label: "x Столбец", action: () => delColBtn.click() },
         { label: "x По фильтру", action: () => delFilterBtn.click() },
       ]),
       exportBtn,
     );
     search.addEventListener("input", () => {
-      page = 0; // M6: фильтр — на первую страницу
+      pg.page = 0; // M6: фильтр — на первую страницу
       renderRows();
     });
     renderRows();
-    return h("div", { class: "files-wrap" }, toolbar, table, pager);
+    return h("div", { class: "files-wrap" }, toolbar, table, pg.el);
   }
   /* ── Проверка (review ner / translate_check_llm) ── */
   async function reviewView() {
@@ -2424,7 +2344,23 @@ function viewProject(section, name, tab, job) {
       let parsed = null; // {doc, entries, isArray} | null (нет файла)
       let ed = null;
       const RV_PAGE = 100; // правок на страницу списка
-      let page = 0; // текущая страница списка правок
+      const RV_LIST = h("div", { class: "rv-list" });
+      /* страница списка правок — общий пейджер (на одной странице молчит);
+         индекс записи глобальный (page * RV_PAGE + i): кнопки правят запись
+         по позиции в parsed.entries, ner-группировка — по предыдущей */
+      const RV_PAGER = UIC.listPager({
+        pageSize: RV_PAGE,
+        list: RV_LIST,
+        hideSinglePage: true,
+        info: (total, page, pages) => ` ${page} / ${pages} · всего ${total} `,
+        rows: (slice, page) =>
+          slice.map((e, i) => {
+            const prev = parsed.entries[page * RV_PAGE + i - 1];
+            const cont =
+              kind === "ner" && prev != null && prev["term"] === e["term"];
+            return entryRow(e, page * RV_PAGE + i, { cont });
+          }),
+      });
       async function load() {
         const d = await api(path + "?" + q);
         status.textContent = d.exists
@@ -2768,13 +2704,6 @@ function viewProject(section, name, tab, job) {
           );
         } else if (parsed.entries.length) {
           const sum = UICore.reviewSummary(parsed.entries);
-          const total = parsed.entries.length;
-          const pages = Math.max(1, Math.ceil(total / RV_PAGE));
-          if (page >= pages) page = pages - 1;
-          const slice = parsed.entries.slice(
-            page * RV_PAGE,
-            (page + 1) * RV_PAGE,
-          );
           body.append(
             h(
               "div",
@@ -2835,59 +2764,10 @@ function viewProject(section, name, tab, job) {
                 "Очистить",
               ),
             ),
-            h(
-              "div",
-              { class: "rv-list" },
-              // индекс записи — глобальный (page * RV_PAGE + i):
-              // кнопки правят запись по позиции в parsed.entries;
-              // ner: правки одного термина группируются — заголовок
-              // (термин · поле) только у первой, у остальных — поле
-              slice.map((e, i) => {
-                const idx = page * RV_PAGE + i;
-                const prev = parsed.entries[idx - 1];
-                const cont =
-                  kind === "ner" &&
-                  prev != null &&
-                  prev["term"] === e["term"];
-                return entryRow(e, idx, { cont });
-              }),
-            ),
-            pages > 1
-              ? h(
-                  "div",
-                  { class: "ner-pager" },
-                  h(
-                    "button",
-                    {
-                      class: "btn btn-sm btn-ghost",
-                      disabled: page <= 0,
-                      onclick: () => {
-                        page--;
-                        renderList();
-                      },
-                    },
-                    "‹",
-                  ),
-                  h(
-                    "span",
-                    { class: "ner-pager-info" },
-                    ` ${page + 1} / ${pages} · всего ${total} `,
-                  ),
-                  h(
-                    "button",
-                    {
-                      class: "btn btn-sm btn-ghost",
-                      disabled: page >= pages - 1,
-                      onclick: () => {
-                        page++;
-                        renderList();
-                      },
-                    },
-                    "›",
-                  ),
-                )
-              : null,
+            RV_LIST,
+            RV_PAGER.el,
           );
+        RV_PAGER.items = parsed.entries;
         } else {
           body.append(
             h(
@@ -4118,8 +3998,71 @@ function viewProject(section, name, tab, job) {
     const pre = h("pre", { class: "log-view" });
     const meta = h("div", { class: "review-status" });
     const LOG_PAGE_SIZE = 20;
-    let lPage = 0;
-    const lPager = h("div", { class: "ner-pager" });
+    let lSelected = ""; // выбранный лог (подсвечивается в списке)
+    /* страница списка логов — общий пейджер */
+    const lPager = UIC.listPager({
+      pageSize: LOG_PAGE_SIZE,
+      list,
+      info: (n, page, pages) => ` ${page} / ${pages} · логов: ${logFiles} `,
+      rows: (slice) => {
+        if (!slice.length) return [h("div", { class: "empty" }, "Логов нет")];
+        const rows = [];
+        if (e.kind === "dir") {
+        const btn = h(
+        "button",
+        { class: "btn btn-sm btn-ghost prompt-item" },
+        );
+        btn.append(iconEl("folder", "fname-icon"), `${e.name}/`);
+        btn.addEventListener("click", () => {
+        st.logPath = cur ? `${cur}/${e.name}` : e.name;
+        render();
+        });
+        rows.push(btn);
+        } else {
+        const btn = h(
+        "button",
+        {
+        class:
+        "btn btn-sm btn-ghost prompt-item" +
+        (lSelected === e.name ? " prompt-item-active" : ""),
+        },
+        `${e.name} · ${fmtSize(e.size)}`,
+        );
+        btn.addEventListener("click", () => loadLog(e.name, false, cur));
+        const del = h(
+        "button",
+        { class: "btn btn-sm btn-ghost log-del-btn", title: "Удалить лог" },
+        "🗑",
+        );
+        del.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const full = cur ? `${cur}/${e.name}` : e.name;
+        confirmModal(
+        "Удалить лог",
+        `Файл ${full} будет удалён`,
+        "УДАЛИТЬ",
+        async () => {
+        try {
+        const sub = cur ? `&dir=${encodeURIComponent(cur)}` : "";
+        await api(`/logs/${encodeURIComponent(e.name)}?${q}${sub}`, {
+        method: "DELETE",
+        });
+        toast(`Лог удалён: ${full}`);
+        st.logPath = ""; // папка могла стать пустой — на корень
+        render();
+        } catch (ex) {
+        toast(ex.message, "err");
+        }
+        },
+        );
+        });
+        rows.push(h("div", { class: "prompt-item-row" }, btn, del));
+        }
+        return rows;
+      },
+    });
+    let logFiles = 0; // файлов без папок — их показывает подпись
+
     const follow = h(
       "button",
       {
@@ -4130,8 +4073,7 @@ function viewProject(section, name, tab, job) {
     );
     let timer = null;
 
-    function renderList(selected) {
-      list.replaceChildren();
+    function renderList() {
       const prefix = cur ? cur + "/" : "";
       const dirs = [
         ...new Set(
@@ -4151,103 +4093,11 @@ function viewProject(section, name, tab, job) {
           l.path.startsWith(prefix) &&
           !l.path.slice(prefix.length).includes("/"),
       );
-      const entries = [
+      logFiles = files.length;
+      lPager.items = [
         ...dirs.map((d) => ({ kind: "dir", name: d, mtime: 0, size: 0 })),
         ...files.map((f) => ({ kind: "file", ...f })),
       ];
-      const pages = Math.max(1, Math.ceil(entries.length / LOG_PAGE_SIZE));
-      lPage = Math.min(lPage, pages - 1);
-      const slice = entries.slice(
-        lPage * LOG_PAGE_SIZE,
-        (lPage + 1) * LOG_PAGE_SIZE,
-      );
-      for (const e of slice) {
-        if (e.kind === "dir") {
-          const btn = h(
-            "button",
-            { class: "btn btn-sm btn-ghost prompt-item" },
-          );
-          btn.append(iconEl("folder", "fname-icon"), `${e.name}/`);
-          btn.addEventListener("click", () => {
-            st.logPath = cur ? `${cur}/${e.name}` : e.name;
-            render();
-          });
-          list.append(btn);
-        } else {
-          const btn = h(
-            "button",
-            {
-              class:
-                "btn btn-sm btn-ghost prompt-item" +
-                (selected === e.name ? " prompt-item-active" : ""),
-            },
-            `${e.name} · ${fmtSize(e.size)}`,
-          );
-          btn.addEventListener("click", () => loadLog(e.name, false, cur));
-          const del = h(
-            "button",
-            { class: "btn btn-sm btn-ghost log-del-btn", title: "Удалить лог" },
-            "🗑",
-          );
-          del.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            const full = cur ? `${cur}/${e.name}` : e.name;
-            confirmModal(
-              "Удалить лог",
-              `Файл ${full} будет удалён`,
-              "УДАЛИТЬ",
-              async () => {
-                try {
-                  const sub = cur ? `&dir=${encodeURIComponent(cur)}` : "";
-                  await api(`/logs/${encodeURIComponent(e.name)}?${q}${sub}`, {
-                    method: "DELETE",
-                  });
-                  toast(`Лог удалён: ${full}`);
-                  st.logPath = ""; // папка могла стать пустой — на корень
-                  render();
-                } catch (ex) {
-                  toast(ex.message, "err");
-                }
-              },
-            );
-          });
-          list.append(h("div", { class: "prompt-item-row" }, btn, del));
-        }
-      }
-      if (!entries.length) {
-        list.append(h("div", { class: "empty" }, "Логов нет"));
-      }
-      lPager.replaceChildren(
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            disabled: lPage <= 0,
-            onclick: () => {
-              lPage--;
-              renderList(selected);
-            },
-          },
-          "‹",
-        ),
-        h(
-          "span",
-          { class: "ner-pager-info" },
-          ` ${lPage + 1} / ${pages} · логов: ${files.length} `,
-        ),
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            disabled: lPage >= pages - 1,
-            onclick: () => {
-              lPage++;
-              renderList(selected);
-            },
-          },
-          "›",
-        ),
-      );
     }
     async function loadLog(name, append, dir) {
       try {
@@ -4260,7 +4110,8 @@ function viewProject(section, name, tab, job) {
         pre.dataset.log = name;
         pre.dataset.dir = dir || "";
         meta.textContent = `${dir ? dir + "/" : ""}${name} · ${fmtSize(d.size)}`;
-        renderList(name);
+        lSelected = name;
+        renderList();
         pre.scrollTop = pre.scrollHeight;
       } catch (ex) {
         meta.textContent = ex.message;
@@ -4318,7 +4169,7 @@ function viewProject(section, name, tab, job) {
       follow,
       clearAll,
     );
-    return h("div", { class: "files-wrap" }, toolbar, list, lPager, pre);
+    return h("div", { class: "files-wrap" }, toolbar, list, lPager.el, pre);
   }
 
   /* ── Отчёты translate_check (W7) ────────────── */
@@ -4432,88 +4283,26 @@ function viewProject(section, name, tab, job) {
       );
     }
     let current = data.reports[0];
-    let page = 0; // M8: страница таблицы текущего отчёта
-    let rPage = 0; // страница списка отчётов (10/стр)
     const REPORT_PAGE_SIZE = 10;
     const list = h("div", { class: "prompt-list" });
-    const listPager = h("div", { class: "ner-pager" });
     const body = h("div", { class: "review-card" });
-    const pager = h("div", { class: "ner-pager" });
+    /* страницы — общий пейджер, режим управляемый: компонент держит
+       страницу, список и таблицу рисует вьюха (onChange) */
+    const listPager = UIC.listPager({
+      pageSize: REPORT_PAGE_SIZE,
+      info: (total, page, pages) => ` ${page} / ${pages} · отчётов: ${total} `,
+      onChange: () => renderList(),
+    });
+    const pager = UIC.listPager({
+      pageSize: PAGE_SIZE,
+      hideOnEmpty: true,
+      info: (total, page, pages) => ` ${page} / ${pages} · всего ${total} `,
+      onChange: () => renderReport(),
+    });
 
-    function renderPager(total) {
-      if (total === 0) {
-        pager.replaceChildren();
-        return;
-      }
-      const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-      pager.replaceChildren(
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            disabled: page <= 0,
-            onclick: () => {
-              page--;
-              renderReport();
-            },
-          },
-          "‹",
-        ),
-        h(
-          "span",
-          { class: "ner-pager-info" },
-          ` ${page + 1} / ${pages} · всего ${total} `,
-        ),
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            disabled: page >= pages - 1,
-            onclick: () => {
-              page++;
-              renderReport();
-            },
-          },
-          "›",
-        ),
-      );
-    }
-    function renderListPager(total) {
-      const pages = Math.max(1, Math.ceil(total / REPORT_PAGE_SIZE));
-      listPager.replaceChildren(
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            disabled: rPage <= 0,
-            onclick: () => {
-              rPage--;
-              renderList();
-            },
-          },
-          "‹",
-        ),
-        h(
-          "span",
-          { class: "ner-pager-info" },
-          ` ${rPage + 1} / ${pages} · отчётов: ${total} `,
-        ),
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            disabled: rPage >= pages - 1,
-            onclick: () => {
-              rPage++;
-              renderList();
-            },
-          },
-          "›",
-        ),
-      );
-    }
     function renderList() {
       list.replaceChildren();
+      const rPage = listPager.page;
       const slice = data.reports.slice(
         rPage * REPORT_PAGE_SIZE,
         (rPage + 1) * REPORT_PAGE_SIZE,
@@ -4530,14 +4319,13 @@ function viewProject(section, name, tab, job) {
         );
         btn.addEventListener("click", () => {
           current = r;
-          page = 0; // M8: другой отчёт — с первой страницы
+          pager.page = 0; // M8: другой отчёт — с первой страницы
           renderList();
           renderReport();
         });
         list.append(btn);
       }
-      listPager.replaceChildren();
-      renderListPager(data.reports.length);
+      listPager.items = data.reports.length;
     }
     function renderReport() {
       body.replaceChildren();
@@ -4549,7 +4337,7 @@ function viewProject(section, name, tab, job) {
             "Нет отчётов — запустите стадию translate_check "
             + "(вкладка «Запуски», стадия 4)"),
         );
-        pager.replaceChildren();
+        pager.items = 0;
         return;
       }
       body.append(
@@ -4653,11 +4441,11 @@ function viewProject(section, name, tab, job) {
               h("th", {}, "Ошибки"),
             ),
           ),
-          h("tbody", {}, rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)),
+          h("tbody", {}, rows.slice(pager.page * PAGE_SIZE, (pager.page + 1) * PAGE_SIZE)),
         ),
       );
-      body.append(pager);
-      renderPager(rows.length);
+      body.append(pager.el);
+      pager.items = rows.length;
     }
     // «Очистить» — удалить все отчёты check_*.txt из logs/ проекта
     const clearBtn = h(
@@ -4685,8 +4473,8 @@ function viewProject(section, name, tab, job) {
             }
             data.reports = [];
             current = null;
-            page = 0;
-            rPage = 0;
+            pager.page = 0;
+            listPager.page = 0;
             clearBtn.disabled = true;
             renderList();
             renderReport();
@@ -4713,7 +4501,7 @@ function viewProject(section, name, tab, job) {
           clearBtn,
         ),
         list,
-        listPager,
+        listPager.el,
       ),
       body,
     );
