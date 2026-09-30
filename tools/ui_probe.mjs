@@ -101,6 +101,23 @@ function seedProjectsDir(dir) {
     path.join(dir, "hub_state.json"),
     JSON.stringify({ sections: [SECTION], collapsed: [] }, null, 2),
   );
+  // системный .env пробы (WEB_ENV_FILE указывает сюда же): дефолты LLM и
+  // блок рассуждений — чтобы «Настройки» показывали существующий файл
+  fs.writeFileSync(
+    path.join(dir, ".env"),
+    [
+      "# системный .env пробы (временные данные probe)",
+      "HOST=http://127.0.0.1:9/v1",
+      "API_KEY=",
+      "MODEL=probe-model",
+      "REASONING_MODE=default",
+      "THINKING_PROFILE=openai",
+      "REASONING_EFFORT=",
+      "THINKING_BUDGET=0",
+      "LLM_EXTRA_BODY_JSON=",
+    ].join("\n") + "\n",
+    "utf-8",
+  );
 
 }
 
@@ -137,8 +154,9 @@ async function waitServer(url, ms = 25000) {
 async function main() {
   let own = null;
   let url = arg("url");
+  let seedDir = null;
   if (!url) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nm-probe-"));
+    const dir = (seedDir = fs.mkdtempSync(path.join(os.tmpdir(), "nm-probe-")));
     seedProjectsDir(dir);
     const port = PORT || (await freePort()); // тот же порт — в argv сервера
     url = `http://127.0.0.1:${port}`;
@@ -319,6 +337,79 @@ async function main() {
       if (left !== 0) problems.push(`quick-look: Escape оставил ${left} оверлей(а)`);
       if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-quick-look.png") });
       log(`${problems.length === before2 ? "✅" : "❌"} quick-look Space   кадр: ${look.text ? "есть" : "пусто"}`);
+    }
+  }
+
+  /* рассуждения модели: ОДИН глобальный блок на «Настройках» (в полях стадий
+   * его больше нет) + точечная запись общих ключей в системный .env */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/settings`, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForTimeout(1200);
+    const card = page.locator(".review-card[data-reasoning]");
+    if (!(await card.count())) {
+      problems.push("reasoning: на «Настройках» нет блока рассуждений");
+      log("❌ reasoning-блок    карточка не найдена");
+    } else {
+      const f = await card.evaluate((el) => ({
+        labels: [...el.querySelectorAll(".field-label")].map(
+          (x) => x.textContent.trim()),
+        names: [...el.querySelectorAll(".field .input")].map(
+          (c) => c.getAttribute("name")),
+        kinds: [...el.querySelectorAll(".field .input")].map(
+          (c) => c.tagName.toLowerCase()),
+        opts: [...el.querySelectorAll(".field select")].map(
+          (sel) => [...sel.options].map((o) => o.value).join(",")),
+        vals: [...el.querySelectorAll(".field .input")].map((c) => c.value),
+      }));
+      const want = ["REASONING_MODE", "THINKING_PROFILE", "REASONING_EFFORT",
+        "THINKING_BUDGET", "LLM_EXTRA_BODY_JSON"];
+      if (f.names.join(",") !== want.join(","))
+        problems.push(`reasoning: поля ${f.names.join(",")}`);
+      if (f.kinds.join(",") !== "select,select,select,input,input")
+        problems.push(`reasoning: контролы ${f.kinds.join(",")}`);
+      if (f.opts[0] !== "default,on,off")
+        problems.push(`reasoning: режимы «${f.opts[0]}»`);
+      if (!f.opts[1].startsWith("openai,anthropic,"))
+        problems.push(`reasoning: профили «${f.opts[1]}»`);
+      if (f.opts[2] !== ",none,minimal,low,medium,high,xhigh,max")
+        problems.push(`reasoning: уровни «${f.opts[2]}»`);
+      // предзаполнение — эффективные значения системного .env (сид пробы)
+      if (f.vals[0] !== "default" || f.vals[1] !== "openai" || f.vals[3] !== "0")
+        problems.push(`reasoning: предзаполнилось ${f.vals.join("|")}`);
+      await card.locator('select[name="REASONING_MODE"]').selectOption("on");
+      await card.locator('select[name="THINKING_PROFILE"]').selectOption("qwen");
+      await card.locator('select[name="REASONING_EFFORT"]').selectOption("xhigh");
+      await card.locator('input[name="THINKING_BUDGET"]').fill("2048");
+      await card.locator('input[name="LLM_EXTRA_BODY_JSON"]')
+        .fill('{"top_k": 5}');
+      await card.locator("button").click();
+      await page.waitForTimeout(900);
+      if (seedDir) {
+        const env = fs.readFileSync(path.join(seedDir, ".env"), "utf-8");
+        const lines = env.split("\n");
+        for (const line of ["REASONING_MODE=on", "THINKING_PROFILE=qwen",
+          "REASONING_EFFORT=xhigh", "THINKING_BUDGET=2048",
+          'LLM_EXTRA_BODY_JSON={"top_k": 5}'])
+          if (!lines.includes(line)) problems.push(`reasoning: в .env нет ${line}`);
+        for (const keep of ["HOST=", "MODEL="])
+          if (!env.includes(keep)) problems.push(`reasoning: .env потерял ${keep}`);
+      } else {
+        log("⚠️  reasoning: внешний сервер — файл .env не проверяем");
+      }
+      // формы стадий рассуждений больше не касаются
+      await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+        { waitUntil: "load" });
+      await page.reload({ waitUntil: "load" });
+      await page.waitForTimeout(1200);
+      const leaked = await page.evaluate(
+        () => /reasoning|thinking|extra_body/i.test(
+          document.getElementById("app").innerHTML),
+      );
+      if (leaked) problems.push("reasoning: поле стадии осталось в форме запуска");
+      if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-reasoning.png") });
+      log(`${problems.length === before ? "✅" : "❌"} reasoning-блок   ${f.labels.join(" · ")}`);
     }
   }
 
