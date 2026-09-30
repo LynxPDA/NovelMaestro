@@ -34,6 +34,8 @@ function viewProject(section, name, tab, job) {
     editor: null, // вкладка «Редактор» (глава/панели/подсветка)
     chaptersType: null, // тип файлов во вкладке «Главы» (localStorage-нет)
     runJob: null, // jobId из роута (лог конкретного запуска на «Запусках»)
+    filesSort: localStorage.getItem("filesSort") || "name", // name | mtime | size
+    filesAsc: localStorage.getItem("filesAsc") !== "0",
   };
   const page = h("div", { class: "page" });
 
@@ -217,6 +219,7 @@ function viewProject(section, name, tab, job) {
       { class: "files-toolbar" },
       crumbs,
       h("span", { class: "spacer" }),
+      sortControl(),
       h(
         "button",
         { class: "btn btn-sm", onclick: () => upInput.click() },
@@ -265,7 +268,7 @@ function viewProject(section, name, tab, job) {
       for (const f of files) form.append("files[]", f, f.name);
       return apiUpload(`/upload?project=${section}/${name}`, form);
     }
-    const entries = data.entries || [];
+    const entries = sortFiles(data.entries || []);
     const drop = h("div", { class: "files-list" });
     // одна страница — пагинация не нужна, достаточно счётчика
     const fPager = UIC.listPager({
@@ -299,6 +302,56 @@ function viewProject(section, name, tab, job) {
       }
     });
     return h("div", { class: "files-wrap" }, toolbar, drop, fPager.el);
+  }
+
+  /* Сортировка списка файлов: каталоги всегда первыми (обход вниз идёт по
+     ним), порядок — имя/дата/размер; предпочтение живёт в localStorage. */
+  function sortFiles(entries) {
+    const key = st.filesSort;
+    const sign = st.filesAsc ? 1 : -1;
+    const val = (e) =>
+      key === "mtime" ? e.mtime || 0 : key === "size" ? e.size || 0 : e.name;
+    return [...entries].sort((a, b) => {
+      if ((a.dir ? 1 : 0) !== (b.dir ? 1 : 0)) return a.dir ? -1 : 1;
+      return sign * (key === "name"
+        ? String(val(a)).localeCompare(String(val(b)), "ru",
+            { numeric: true, sensitivity: "base" })
+        : val(a) - val(b));
+    });
+  }
+
+  function sortControl() {
+    const sel = h(
+      "select",
+      {
+        class: "input input-sm sort-select",
+        title: "Сортировка списка файлов (каталоги всегда первыми)",
+        onchange: () => {
+          st.filesSort = sel.value;
+          localStorage.setItem("filesSort", sel.value);
+          render();
+        },
+      },
+      ...[["name", "по имени"], ["mtime", "по дате"], ["size", "по размеру"]].map(
+        ([k, label]) =>
+          h("option", { value: k, selected: k === st.filesSort }, label),
+      ),
+    );
+    const dir = h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost sort-dir",
+        title: st.filesAsc ? "По возрастанию" : "По убыванию",
+        "aria-label": st.filesAsc ? "По возрастанию" : "По убыванию",
+        onclick: () => {
+          st.filesAsc = !st.filesAsc;
+          localStorage.setItem("filesAsc", st.filesAsc ? "1" : "0");
+          render();
+        },
+      },
+      st.filesAsc ? "↑" : "↓",
+    );
+    return h("div", { class: "files-sort" }, sel, dir);
   }
 
   function fileRow(e) {
@@ -397,7 +450,14 @@ function viewProject(section, name, tab, job) {
           ),
       });
     }
-    actions.append(menuBtn(menuItems, `Действия с ${e.name}`));
+    actions.append(
+      UIC.menuButton(menuItems, {
+        iconName: "kebab",
+        aria: `Действия с ${e.name}`,
+        btnClass: "kebab-btn",
+        wrapClass: "menu-wrap",
+      }),
+    );
     const meta = h(
       "div",
       { class: "fmeta" },
@@ -2258,15 +2318,15 @@ function viewProject(section, name, tab, job) {
       typeBtn,
       colBtn,
       // «+»: новый столбец или новый термин (меню вместо двух кнопок)
-      UIC.menuButton("+", "Добавить столбец или термин", [
+      UIC.menuButton([
         { label: "+ Столбец", action: () => addColBtn.click() },
         { label: "+ Термин", action: addTerm },
-      ]),
+      ], { icon: "+", title: "Добавить столбец или термин" }),
       // «x»: удалить столбец или термины по фильтру
-      UIC.menuButton("x", "Удалить столбец или термины по фильтру", [
+      UIC.menuButton([
         { label: "x Столбец", action: () => delColBtn.click() },
         { label: "x По фильтру", action: () => delFilterBtn.click() },
-      ]),
+      ], { icon: "x", title: "Удалить столбец или термины по фильтру" }),
       exportBtn,
     );
     search.addEventListener("input", () => {

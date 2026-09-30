@@ -90,9 +90,16 @@ globalThis.document = {
   addEventListener() {},
   querySelectorAll: () => [],
 };
+globalThis.DOMParser = class {
+  parseFromString() {
+    return { documentElement: null };
+  }
+};
 globalThis.window = {
   marked: { parse: (s) => s },
   CM: {},
+  /* иконки: iconEl берёт каталог из window.UICore — как в браузере */
+  UICore,
   addEventListener() {},
 };
 globalThis.Node = El;
@@ -132,7 +139,7 @@ function h(tag, attrs = {}, ...children) {
 async function api(path, opts = {}) {
   const p = path.split("?")[0];
   if ((opts.method || "GET") !== "GET") return { ok: true };
-  if (p === "/files") return { entries: [] };
+  if (p === "/files") return { entries: globalThis.__files || [] };
   if (p === "/file") return { content: "", missing: true, exists: false, size: 0 };
   if (p === "/ner") return { items: [], too_large: false };
   if (p === "/check") return { reports: [] };
@@ -183,6 +190,7 @@ const sandbox = {
   window: globalThis.window,
   localStorage: globalThis.localStorage,
   Node: El,
+  DOMParser: globalThis.DOMParser,
   h,
   api,
   previewFontSelect: () => new El("select"),
@@ -278,4 +286,64 @@ test("reviewView: переключение под-вкладок (клик) и �
     }
   })(page2);
   assert.ok(tabs2[2].className.includes("subtab-active"));
+});
+
+/* ── сортировка в списке файлов ────────────────────────────────── */
+const FILES = [
+  { name: "b.txt", dir: false, size: 10, mtime: 100 },
+  { name: "A", dir: true, size: 0, mtime: 300 },
+  { name: "a10.txt", dir: false, size: 5, mtime: 200 },
+  { name: "a2.txt", dir: false, size: 7, mtime: 150 },
+];
+
+function filesRender(page) {
+  const names = [];
+  const text = (n) =>
+    (n.textContent || "") + (n.children || []).map(text).join("");
+  (function walk(n) {
+    for (const c of n.children || []) {
+      if ((c.className || "").split(/\s+/).includes("fname")) {
+        names.push(text(c).trim());
+      }
+      walk(c);
+    }
+  })(page);
+  return names;
+}
+
+test("сортировка файлов: каталоги первыми, имена — натурально", async () => {
+  globalThis.__files = FILES;
+  const page = viewProject("ACTIVE", "Книга", "files");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(filesRender(page),
+    ["A", "a2.txt", "a10.txt", "b.txt"]);
+});
+
+test("сортировка файлов: порядок и ключ помнятся (mtime, убыв.)", async () => {
+  globalThis.__files = FILES;
+  globalThis.localStorage.setItem("filesSort", "mtime");
+  globalThis.localStorage.setItem("filesAsc", "0");
+  const page = viewProject("ACTIVE", "Книга", "files");
+  await new Promise((r) => setTimeout(r, 10));
+  // каталог A (300) всё равно первым, файлы — по дате убыв.
+  assert.deepEqual(filesRender(page),
+    ["A", "a10.txt", "a2.txt", "b.txt"]);
+});
+
+test("сортировка файлов: переключатель направления перерисовывает список", async () => {
+  globalThis.__files = FILES;
+  globalThis.localStorage.setItem("filesSort", "name");
+  globalThis.localStorage.removeItem("filesAsc");
+  const page = viewProject("ACTIVE", "Книга", "files");
+  await new Promise((r) => setTimeout(r, 10));
+  const btns = [];
+  (function walk(n) {
+    for (const c of n.children || []) {
+      if ((c.className || "").split(/\s+/).includes("sort-dir")) btns.push(c);
+      walk(c);
+    }
+  })(page);
+  assert.equal(btns.length, 1);
+  await btns[0]._listeners["click"][0]();
+  assert.equal(globalThis.localStorage.getItem("filesAsc"), "0");
 });

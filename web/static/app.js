@@ -1720,43 +1720,17 @@ document.addEventListener(
 window.closeMenus = closeMenus;
 window.toggleMenu = toggleMenu;
 
-/* Кнопка «⋮» с выпадающим меню (действия строки, меню пользователя).
-   items: [{label, danger, onclick, href, aria}] — href-пункты — ссылки. */
+/* Кнопка «⋮» с выпадающим меню (действия строки, меню пользователя) —
+   тонкая обёртка над общим UIC.menuButton: SVG-иконка и aria-метка. */
 function menuBtn(items, ariaLabel = "Дополнительные действия") {
-  const btn = h("button", {
-    class: "btn btn-sm btn-ghost kebab-btn",
-    "aria-label": ariaLabel,
-    "aria-haspopup": "menu",
-    "aria-expanded": "false",
+  return UIC.menuButton(items, {
+    iconName: "kebab",
+    aria: ariaLabel,
+    btnClass: "kebab-btn",
+    wrapClass: "menu-wrap",
+    menuClass: "user-menu",
+    itemClass: "user-menu-item",
   });
-  btn.append(iconEl("kebab"));
-  const menu = h("div", { class: "user-menu hidden", role: "menu" });
-  for (const it of items) {
-    const cls =
-      "user-menu-item" + (it.danger ? " user-menu-danger" : "");
-    if (it.href) {
-      menu.append(
-        h("a", { class: cls, href: it.href, role: "menuitem" }, it.label),
-      );
-    } else {
-      menu.append(
-        h(
-          "button",
-          {
-            class: cls,
-            role: "menuitem",
-            onclick: () => {
-              closeMenus();
-              if (it.onclick) it.onclick();
-            },
-          },
-          it.label,
-        ),
-      );
-    }
-  }
-  btn.addEventListener("click", () => toggleMenu(btn, menu));
-  return h("div", { class: "menu-wrap" }, btn, menu);
 }
 
 /* ── каркас страницы: шапка с глобальной навигацией (сайдбара нет —
