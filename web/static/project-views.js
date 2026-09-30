@@ -1713,16 +1713,9 @@ function viewProject(section, name, tab, job) {
         });
         return h("label", { class: "ner-col-row" }, cb, " " + opts.labelOf(k));
       });
-      const modal = h(
-        "div",
-        {
-          class: "modal-backdrop",
-          onclick: (e) => e.target === modal && close(),
-        },
-        h(
-          "div",
-          { class: "modal" },
-          h("div", { class: "modal-title" }, opts.title),
+      const modal = UIC.modal({
+        title: opts.title,
+        build: () => [
           h("div", { class: "modal-text" }, opts.text),
           h("label", { class: "ner-col-row" }, allCb, " " + opts.allLabel),
           ...rows,
@@ -1742,12 +1735,11 @@ function viewProject(section, name, tab, job) {
             ),
             h("button", { class: "btn btn-primary", onclick: close }, "Готово"),
           ),
-        ),
-      );
-      document.body.append(modal);
+        ],
+      });
       function close() {
-        modal.remove();
-      }
+        modal.close();
+    }
     }
     async function saveNer() {
       try {
@@ -2134,13 +2126,9 @@ function viewProject(section, name, tab, job) {
         placeholder: "имя столбца (ключ JSON)",
       });
       const err2 = h("div", { class: "form-error" });
-      const modal = h(
-        "div",
-        { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-        h(
-          "div",
-          { class: "modal" },
-          h("div", { class: "modal-title" }, "Новый столбец"),
+      const modal = UIC.modal({
+        title: "Новый столбец",
+        build: () => [
           inp,
           err2,
           h(
@@ -2176,11 +2164,11 @@ function viewProject(section, name, tab, job) {
               "Добавить",
             ),
           ),
-        ),
-      );
+        ],
+      });
       function close() {
-        modal.remove();
-      }
+        modal.close();
+    }
       document.body.append(modal);
       inp.focus();
     });
@@ -2202,13 +2190,9 @@ function viewProject(section, name, tab, job) {
         ...keys.map((k) => h("option", { value: k }, k)),
       );
       const err2 = h("div", { class: "form-error" });
-      const modal = h(
-        "div",
-        { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-        h(
-          "div",
-          { class: "modal" },
-          h("div", { class: "modal-title" }, "Удалить столбец"),
+      const modal = UIC.modal({
+        title: "Удалить столбец",
+        build: () => [
           h(
             "div",
             { class: "modal-text" },
@@ -2253,11 +2237,11 @@ function viewProject(section, name, tab, job) {
               "Удалить",
             ),
           ),
-        ),
-      );
+        ],
+      });
       function close() {
-        modal.remove();
-      }
+        modal.close();
+    }
       document.body.append(modal);
     });
     /* «✕ По фильтру»: удалить термины по условию (count > N) или все найденные */
@@ -2321,13 +2305,9 @@ function viewProject(section, name, tab, job) {
         el.addEventListener("input", refreshCount),
       );
       refreshCount();
-      const modal = h(
-        "div",
-        { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-        h(
-          "div",
-          { class: "modal" },
-          h("div", { class: "modal-title" }, "Удалить термины по фильтру"),
+      const modal = UIC.modal({
+        title: "Удалить термины по фильтру",
+        build: () => [
           h(
             "div",
             { class: "modal-text" },
@@ -2370,11 +2350,11 @@ function viewProject(section, name, tab, job) {
               "Удалить",
             ),
           ),
-        ),
-      );
+        ],
+      });
       function close() {
-        modal.remove();
-      }
+        modal.close();
+    }
       document.body.append(modal);
     });
 
@@ -2660,16 +2640,9 @@ function viewProject(section, name, tab, job) {
           value: e["reason"] || "",
         });
         const err2 = h("div", { class: "form-error" });
-        const modal = h(
-          "div",
-          {
-            class: "modal-backdrop",
-            onclick: (ev) => ev.target === modal && close(),
-          },
-          h(
-            "div",
-            { class: "modal" },
-            h("div", { class: "modal-title" }, `Правка ${i + 1}`),
+        const modal = UIC.modal({
+          title: `Правка ${i + 1}`,
+          build: () => [
             h("label", { class: "rv-label" }, "Было"),
             oldIn,
             h(
@@ -2720,11 +2693,11 @@ function viewProject(section, name, tab, job) {
                 "Сохранить",
               ),
             ),
-          ),
-        );
+          ],
+        });
         function close() {
-          modal.remove();
-        }
+          modal.close();
+      }
         document.body.append(modal);
         newIn.focus();
       }
@@ -3894,16 +3867,9 @@ function viewProject(section, name, tab, job) {
   function templateFileModal(rel, onLoad) {
     const err = h("div", { class: "form-error" });
     const sel = h("select", { class: "input" });
-    const modal = h(
-      "div",
-      {
-        class: "modal-backdrop",
-        onclick: (e) => e.target === modal && close(),
-      },
-      h(
-        "div",
-        { class: "modal" },
-        h("div", { class: "modal-title" }, `Загрузить ${rel} из шаблона`),
+    const modal = UIC.modal({
+      title: `Загрузить ${rel} из шаблона`,
+      build: () => [
         sel,
         err,
         h(
@@ -3935,9 +3901,8 @@ function viewProject(section, name, tab, job) {
             "Загрузить",
           ),
         ),
-      ),
-    );
-    document.body.append(modal);
+      ],
+    });
     api("/templates")
       .then((d) => {
         const withFile = (d.templates || []).filter((t) =>
@@ -3957,8 +3922,8 @@ function viewProject(section, name, tab, job) {
         err.textContent = ex.message;
       });
     function close() {
-      modal.remove();
-    }
+      modal.close();
+  }
   }
 
   /* ── Промпты ───────────────────────────────────── */
@@ -4063,16 +4028,9 @@ function viewProject(section, name, tab, job) {
         placeholder: "имя_промпта.txt",
       });
       const cerr = h("div", { class: "form-error" });
-      const modal = h(
-        "div",
-        {
-          class: "modal-backdrop",
-          onclick: (e) => e.target === modal && modal.remove(),
-        },
-        h(
-          "div",
-          { class: "modal" },
-          h("div", { class: "modal-title" }, "Новый промпт"),
+      const modal = UIC.modal({
+        title: "Новый промпт",
+        build: () => [
           nameInput,
           cerr,
           h(
@@ -4109,9 +4067,8 @@ function viewProject(section, name, tab, job) {
               "Создать",
             ),
           ),
-        ),
-      );
-      document.body.append(modal);
+        ],
+      });
       nameInput.focus();
     });
     const tplBtn = h("button", { class: "btn btn-sm btn-ghost" }, "Из шаблона");
@@ -4159,16 +4116,9 @@ function viewProject(section, name, tab, job) {
     }
     sel.addEventListener("change", syncName);
     fname.addEventListener("input", () => (fname.dataset.touched = "1"));
-    const modal = h(
-      "div",
-      {
-        class: "modal-backdrop",
-        onclick: (e) => e.target === modal && close(),
-      },
-      h(
-        "div",
-        { class: "modal" },
-        h("div", { class: "modal-title" }, "Создать промпт из шаблона"),
+    const modal = UIC.modal({
+      title: "Создать промпт из шаблона",
+      build: () => [
         templates.length
           ? h("div", { class: "form-row" }, sel, fname)
           : h("div", { class: "modal-text" }, "Шаблоны не найдены"),
@@ -4205,14 +4155,14 @@ function viewProject(section, name, tab, job) {
             "Создать",
           ),
         ),
-      ),
-    );
+      ],
+    });
     syncName();
     document.body.append(modal);
     sel.focus();
     function close() {
-      modal.remove();
-    }
+      modal.close();
+  }
   }
 
   /* ── Логи (M8) ─────────────────────────────────── */
@@ -5056,13 +5006,9 @@ function exportModal(byType, project) {
     URL.revokeObjectURL(url);
   }
   const cancelBtn = h("button", { class: "btn btn-ghost" }, "Отмена");
-  const modal = h(
-    "div",
-    { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-    h(
-      "div",
-      { class: "modal" },
-      h("div", { class: "modal-title" }, "Экспорт глоссария для анализа"),
+  const modal = UIC.modal({
+    title: "Экспорт глоссария для анализа",
+    build: () => [
       h("div", { class: "modal-text" }, "Формат файла:"),
       ...fmtPairs.map(([r, label]) =>
         h("label", { class: "ner-col-row" }, r, ` ${label}`),
@@ -5083,12 +5029,12 @@ function exportModal(byType, project) {
       extra,
       err,
       h("div", { class: "modal-actions" }, cancelBtn, goBtn),
-    ),
-  );
+    ],
+  });
   renderExtra();
   document.body.append(modal);
   function close() {
-    modal.remove();
-  }
+    modal.close();
+}
   cancelBtn.addEventListener("click", close);
 }

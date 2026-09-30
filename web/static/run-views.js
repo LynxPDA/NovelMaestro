@@ -1307,23 +1307,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   async function previewRequestModal(key, spec, mode) {
     const err = h("div", { class: "form-error" });
     const host = h("div", { class: "preview-req-body" });
-    const modal = h(
-      "div",
-      { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-      h(
-        "div", { class: "modal modal-wide" },
-        h("div", { class: "modal-title" }, "Предпросмотр запроса"),
-        err,
-        host,
-        h(
-          "div", { class: "modal-actions" },
-          h("button", { class: "btn btn-ghost", onclick: close }, "Закрыть"),
-        ),
-      ),
-    );
+    const modal = UIC.modal({
+      wide: true,
+      build: () => [
+      ],
+    });
     function close() {
-      modal.remove();
-    }
+      modal.close();
+  }
     document.body.append(modal);
     host.append(h("div", { class: "preview-req-head" }, "Формирование запроса…"));
     try {
@@ -1381,53 +1372,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const title = opts.title || relPath;
     const err = h("div", { class: "form-error" });
     const host = h("div", { class: "editor-modal-body" });
-    const modal = h(
-      "div",
-      { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-      h(
-        "div", { class: "modal modal-wide" },
-        h("div", { class: "modal-title" }, title),
-        host,
-        err,
-        h(
-          "div", { class: "modal-actions" },
-          h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
-          h(
-            "button",
-            {
-              class: "btn btn-primary",
-              onclick: async () => {
-                err.textContent = "";
-                if (!ed) {
-                  err.textContent = "Редактор ещё не загружен";
-                  return;
-                }
-                try {
-                  if (isPromptFile) {
-                    await api(`/prompts/${encodeURIComponent(relPath)}`, {
-                      method: "PUT",
-                      body: { project: `${section}/${name}`,
-                              content: ed.getValue() },
-                    });
-                  } else {
-                    await api("/file", {
-                      method: "PUT",
-                      body: { project: `${section}/${name}`,
-                              path: relPath, content: ed.getValue() },
-                    });
-                  }
-                  toast(`Сохранено: ${relPath}`);
-                  close();
-                } catch (ex) {
-                  err.textContent = ex.message;
-                }
-              },
-            },
-            "Сохранить",
-          ),
-        ),
-      ),
-    );
+    const modal = UIC.modal({
+      wide: true,
+      build: () => [
+      ],
+    });
     let ed = null;
     (async () => {
       try {
@@ -1446,8 +1395,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     })();
     function close() {
-      modal.remove();
-    }
+      modal.close();
+  }
     document.body.append(modal);
   }
 
@@ -1550,67 +1499,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         renderTypeChips();
       }
     });
-    const modal = h(
-      "div",
-      { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-      h(
-        "div", { class: "modal" },
-        h("div", { class: "modal-title" }, "Добавить спорные термины"),
-        h("div", { class: "modal-text" }, "Поле голосов:"),
-        fieldSel,
-        h("div", { class: "modal-text" }, "Типы:"),
-        h("div", { class: "ner-chips-bar" }, selAll, selNone,
-          h("span", { class: "spacer" }), typesInfo),
-        typesBox,
-        h("div", { class: "modal-text" }, "Коэффициент:"),
-        ratioInp,
-        h("div", { class: "modal-text" }, "Порог count:"),
-        countInp,
-        help,
-        err,
-        h(
-          "div", { class: "modal-actions" },
-          h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
-          h(
-            "button",
-            {
-              class: "btn btn-primary",
-              onclick: async () => {
-                const ratio = Number(ratioInp.value);
-                if (!Number.isFinite(ratio) || ratio <= 0) {
-                  err.textContent = "Коэффициент — число больше 0";
-                  return;
-                }
-                const threshold = Math.max(0, Number(countInp.value) || 0);
-                const terms = new Set();
-                for (const it of items) {
-                  if (selTypes != null && !selTypes.includes(it.type)) {
-                    continue;
-                  }
-                  if (isDisputed(it, ratio, threshold)) terms.add(it.term);
-                }
-                const cur = String(
-                  st.values[key]["rag_terms"] ?? "").trim();
-                const lines = cur ? cur.split(/\s*\n+/) : [];
-                for (const t of terms) {
-                  if (t && !lines.includes(t)) lines.push(t);
-                }
-                st.values[key]["rag_terms"] = lines.join("\n");
-                st.touched[key].add("rag_terms");
-                const ta = textareaWrap && textareaWrap.querySelector(
-                  "textarea");
-                if (ta) ta.value = lines.join("\n");
-                close();
-              },
-            },
-            "Добавить",
-          ),
-        ),
-      ),
-    );
+    const modal = UIC.modal({
+      build: () => [
+      ],
+    });
     function close() {
-      modal.remove();
-    }
+      modal.close();
+  }
     // поля голосов и типы — из данных ner.json (асинхронно); данные
     // кешируем в items для живого пересчёта счётчиков
     api(`/ner?project=${section}/${name}`).then((d) => {

@@ -24,8 +24,19 @@ def _node(*args: str) -> subprocess.CompletedProcess:
                           text=True, cwd=REPO)
 
 
+def test_index_loads_ui_layer():
+    """Порядок скриптов в index.html: ui-core → ui-components → вьюхи → app.js.
+    Вьюхи зовут h/iconEl глобально — их объявляет ui-components, он обязан
+    загрузиться раньше."""
+    html = (SPA_DIR / "index.html").read_text(encoding="utf-8")
+    order = [n for n in ("ui-core.js", "ui-components.js", "project-views.js",
+                         "run-views.js", "app.js") if f"/{n}" in html]
+    assert order == ["ui-core.js", "ui-components.js", "project-views.js",
+                     "run-views.js", "app.js"], order
+
+
 def test_ui_core_node_tests():
-    """node --test по tests/spa/*.test.mjs — чистые функции SPA."""
+    """node --test по tests/spa/*.test.mjs — чистые функции и DOM-слой SPA."""
     r = _node("--test", SPA_TESTS)
     assert r.returncode == 0, (
         f"node --test упал (rc={r.returncode}):\n{r.stdout}\n{r.stderr}")
@@ -57,8 +68,8 @@ def test_run_views_stream_ctrl_let():
 
 def test_app_h_null_attrs_safe():
     """Регрессия «can't convert null to object» в модалке предпросмотра
-    (h("div", null, …)): h() терпит attrs = null."""
-    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    (h("div", null, …)): h() терпит attrs = null (h живёт в ui-components)."""
+    src = (SPA_DIR / "ui-components.js").read_text(encoding="utf-8")
     assert "Object.entries(attrs || {})" in src
 
 

@@ -5,30 +5,6 @@
 
 const state = { auth: false, host: "", tokenSet: false };
 
-/* ── утилиты ─────────────────────────────────────────────── */
-function h(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  // attrs = null валиден (вызовы вида h("div", null, …)) — не падаем
-  for (const [k, v] of Object.entries(attrs || {})) {
-    if (v == null || v === false) continue; // false — атрибут не ставим
-    if (k === "class") node.className = v;
-    else if (k === "text") node.textContent = v;
-    else if (k.startsWith("on") && typeof v === "function") {
-      node.addEventListener(k.slice(2), v);
-    } else if (k === "value") {
-      // textarea: setAttribute("value") НЕ заполняет содержимое —
-      // значение только через свойство (баг глоссария, )
-      node.value = v;
-    } else node.setAttribute(k, v);
-  }
-  for (const child of children.flat()) {
-    if (child == null) continue;
-    node.append(
-      child instanceof Node ? child : document.createTextNode(String(child)),
-    );
-  }
-  return node;
-}
 
 /* Предпросмотр markdown/html (Заметки и «Правка» файлов).
    Кегль — localStorage previewFontSize (не .env: UI-предпочтение).
@@ -258,6 +234,14 @@ function previewFontSelect(onChange) {
   return sel;
 }
 
+/* Панель «редактор + предпросмотр» живёт в ui-components.js и зовёт эти же
+   обёртки: тема и кегль известны здесь, поэтому регистрируем их один раз тут. */
+Object.assign(UIC.docs, {
+  md: mdPreviewSrcdoc,
+  html: wrapPreviewDoc,
+  fit: fitPreviewFrame,
+});
+
 async function api(path, opts = {}) {
   const headers = { "X-Requested-With": "fetch" };
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
@@ -328,13 +312,10 @@ function confirmModal(title, text, confirmWord, onConfirm) {
   // Промис: true — подтверждено (onConfirm выполнен), false — отмена.
   // Старые вызовы тоже валидны — возврат промиса можно игнорировать.
   return new Promise((resolve) => {
-    const modal = h(
-      "div",
-      { class: "modal-backdrop", onclick: (e) => e.target === modal && close(false) },
-      h(
-        "div",
-        { class: "modal" },
-        h("div", { class: "modal-title" }, title),
+    const modal = UIC.modal({
+      title,
+      onClose: resolve,
+      build: () => [
         h("div", { class: "modal-text" }, text),
         word,
         err,
@@ -363,14 +344,12 @@ function confirmModal(title, text, confirmWord, onConfirm) {
             "Подтвердить",
           ),
         ),
-      ),
-    );
-    document.body.append(modal);
+      ],
+    });
     word.focus();
     function close(result) {
-      modal.remove();
-      resolve(result);
-    }
+      modal.close(result);
+  }
   });
 }
 
@@ -487,16 +466,11 @@ function createProjectModal() {
   const err = h("div", { class: "form-error" });
 
   return new Promise((resolve) => {
-    const modal = h(
-      "div",
-      {
-        class: "modal-backdrop",
-        onclick: (e) => e.target === modal && close(),
-      },
-      h(
-        "div",
-        { class: "modal modal-wide" },
-        h("div", { class: "modal-title" }, "Создать проект"),
+    const modal = UIC.modal({
+      title: "Создать проект",
+      wide: true,
+      onClose: resolve,
+      build: () => [
         h("label", { class: "field" }, "Раздел", sectionSel),
         h("label", { class: "field" }, "Имя (английское)", name),
         h(
@@ -609,9 +583,8 @@ function createProjectModal() {
             "Создать",
           ),
         ),
-      ),
-    );
-    document.body.append(modal);
+      ],
+    });
     // разделы и шаблоны — из свежего hub на момент открытия модалки:
     // hubCache мог быть сброшен операциями «Управления разделами» (null),
     // тогда select'ы оставались пустыми — раздел/шаблон выбрать нельзя
@@ -637,9 +610,8 @@ function createProjectModal() {
         name.focus();
       });
     function close(result = false) {
-      modal.remove();
-      resolve(result);
-    }
+      modal.close(result);
+  }
   });
 }
 
@@ -657,19 +629,12 @@ function manageProjectModal(section, name) {
       })
       .catch(() => {});
     function close(result = false) {
-      modal.remove();
-      resolve(result);
-    }
-    const modal = h(
-      "div",
-      {
-        class: "modal-backdrop",
-        onclick: (e) => e.target === modal && close(),
-      },
-      h(
-        "div",
-        { class: "modal" },
-        h("div", { class: "modal-title" }, `Управление · ${section}/${name}`),
+      modal.close(result);
+  }
+    const modal = UIC.modal({
+      title: `Управление · ${section}/${name}`,
+      onClose: resolve,
+      build: () => [
         info,
         err,
         h(
@@ -772,9 +737,8 @@ function manageProjectModal(section, name) {
             h("button", { class: "btn btn-ghost", onclick: () => close() }, "Закрыть"),
           ),
         ),
-      ),
-    );
-    document.body.append(modal);
+      ],
+    });
     for (const s of hubCache.sections.filter((x) => x.name !== section)) {
       dstSel.append(h("option", { value: s.name }, s.name));
     }
@@ -1702,20 +1666,6 @@ function viewUnknown(route) {
 /* SVG-иконка как DOM-узел (строку UICore.icon нельзя дать h() —
    экранирует). Разбор XML-парсером (не innerHTML): строка —
    доверенная константа из ui-core, скрипты в xml-режиме не исполняются. */
-function iconEl(name, cls) {
-  const span = h("span", {
-    class: "icon-wrap" + (cls ? " " + cls : ""),
-  });
-  const doc = new DOMParser().parseFromString(
-    UICore.icon(name),
-    "image/svg+xml",
-  );
-  const svg = doc.documentElement;
-  if (svg && svg.nodeName === "svg" && !svg.querySelector("parsererror")) {
-    span.append(document.importNode(svg, true));
-  }
-  return span;
-}
 
 /* ── выпадающие меню (kebab «⋮» и групповые кнопки тулбара) ────────
    Меню позиционируется position:fixed ОТ ВЬЮПОРТА, а не absolute от
@@ -2075,13 +2025,9 @@ function nameModal(title, placeholder, onOk, initial = "") {
     },
     "ОК",
   );
-  const modal = h(
-    "div",
-    { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-    h(
-      "div",
-      { class: "modal" },
-      h("div", { class: "modal-title" }, title),
+  const modal = UIC.modal({
+    title,
+    build: () => [
       name,
       err,
       h(
@@ -2090,27 +2036,22 @@ function nameModal(title, placeholder, onOk, initial = "") {
         h("button", { class: "btn btn-ghost", onclick: close }, "Отмена"),
         okBtn,
       ),
-    ),
-  );
-  document.body.append(modal);
+    ],
+  });
   name.focus();
   if (initial) name.select();
   function close() {
-    modal.remove();
-  }
+    modal.close();
+}
 }
 
 /* ── управление разделами  ────────────────────────── */
 function sectionsModal() {
   const err = h("div", { class: "form-error" });
   const list = h("div", { class: "hub-sections-modal" });
-  const modal = h(
-    "div",
-    { class: "modal-backdrop", onclick: (e) => e.target === modal && close() },
-    h(
-      "div",
-      { class: "modal" },
-      h("div", { class: "modal-title" }, "Управление разделами"),
+  const modal = UIC.modal({
+    title: "Управление разделами",
+    build: () => [
       h(
         "div",
         { class: "modal-text" },
@@ -2138,9 +2079,8 @@ function sectionsModal() {
           "＋ Раздел",
         ),
       ),
-    ),
-  );
-  document.body.append(modal);
+    ],
+  });
 
   function renderRow(s) {
     const actions = h("div", { class: "factions" });
@@ -2217,8 +2157,8 @@ function sectionsModal() {
 
   refresh();
   function close() {
-    modal.remove();
-  }
+    modal.close();
+}
 }
 
 async function viewTemplates() {

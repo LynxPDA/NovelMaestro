@@ -67,6 +67,26 @@ cmd_deps() {
     exec python3 -m core.deps
 }
 
+# UI-пробег SPA headless-браузером: venv активируется здесь, чтобы node-проб
+# поднял сервер тем же python3, что и всё остальное (данные — временные).
+cmd_probe() {
+    activate
+    command -v node >/dev/null 2>&1 || { log "нужен node (playwright-core)"; exit 3; }
+    if [ ! -d "$HOME/.cache/ms-playwright" ]; then
+        log "нет браузеров Playwright: npx playwright-core install chromium"
+        exit 3
+    fi
+    exec node "$REPO/tools/ui_probe.mjs" "$@"
+}
+
+# юнит-тесты чистых функций SPA (ui-core) и синтаксис всех view-файлов
+cmd_spa() {
+    command -v node >/dev/null 2>&1 || { log "нужен node"; exit 3; }
+    for f in "$REPO"/web/static/*.js; do node --check "$f" || exit 1; done
+    log "node --check: ОК"
+    exec node --test tests/spa/ 2>&1 | tail -5
+}
+
 cmd_shell() {
     activate
     log "venv активен: $VIRTUAL_ENV (exit — выйти)"
@@ -90,6 +110,8 @@ dev.sh — разработка NovelMaestro в venv (Linux/macOS/WSL)
   ./dev.sh deps         активный стек зависимостей (что фолбэк, что основа)
   ./dev.sh test [args]  pytest (например: ./dev.sh test tests/test_ner.py)
   ./dev.sh run [args]   web-сервер (args пробрасываются в run.py)
+  ./dev.sh probe [args] обход SPA headless-браузером (свой сервер, временные данные)
+  ./dev.sh spa          node --check по static/*.js + node --test tests/spa/
   ./dev.sh shell        bash с активированным venv
   ./dev.sh clean        удалить .venv
 
@@ -105,6 +127,8 @@ case "$command" in
     deps) shift || true; cmd_deps "$@" ;;
     test) shift || true; cmd_test "$@" ;;
     run) shift || true; cmd_run "$@" ;;
+    probe) shift || true; cmd_probe "$@" ;;
+    spa) shift || true; cmd_spa "$@" ;;
     shell) shift || true; cmd_shell "$@" ;;
     clean) shift || true; cmd_clean "$@" ;;
     help|-h|--help) usage ;;
