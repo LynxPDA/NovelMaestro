@@ -2633,3 +2633,31 @@ body[data-editor-theme="light"] .editor-area {
 .md-body a {
   color: var(--accent);
 }
+
+/* ── hit-target (WCAG 2.5.8) ────────────────────────────────────────────
+   На тач-экранах компактные контролы вырастают до 32px: плотность десктопа
+   при этом не меняется — интерфейсом пользуются и с телефона, где 24px кнопки
+   это «промахнулся — удалил главу». */
+@media (pointer: coarse) {
+  .btn,
+  .btn-sm,
+  .btn-xs {
+    min-height: 32px;
+    min-width: 32px;
+  }
+  .nav-item,
+  .prompt-item,
+  .frow {
+    min-height: 40px;
+  }
+  .input,
+  select.input,
+  textarea.input {
+    min-height: 38px;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 20px;
+    height: 20px;
+  }
+}
