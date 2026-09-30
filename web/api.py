@@ -1507,10 +1507,10 @@ def _env_put(ctx: dict) -> dict:
         # M4 (AUDIT): ключ — строго [A-Za-z0-9_] (нет '=', пробелов, '\n')
         if not _ENV_KEY_RE.match(k):
             raise ApiError(400, f"Некорректный ключ: {key!r}")
-        value = "" if value is None else str(value)
         # M4 (AUDIT): перевод строки в значении — инъекция новых ключей
-        if "\n" in value or "\r" in value:
+        if "\n" in str(value or "") or "\r" in str(value or ""):
             raise ApiError(400, f"Значение ключа {k!r} не может содержать перевод строки")
+        value = _sanitize_env_value(value)  # один санитайзер на всех (§7)
         replaced = False
         for i, line in enumerate(lines):
             if line.split("=", 1)[0].strip() == k:
@@ -2161,9 +2161,14 @@ _ENV_KEY_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def _sanitize_env_value(value) -> str:
-    """Значение .env: строка без переводов строк (M4)."""
+    """Значение .env: одна строка (M4); `#` внутри значения прячется в кавычки —
+    вне них парсер (python-dotenv) считает его комментарием (AGENTS §7)."""
     s = "" if value is None else str(value).strip()
-    return s.replace("\n", " ").replace("\r", " ")
+    s = s.replace("\n", " ").replace("\r", " ")
+    quoted = len(s) >= 2 and s[0] == s[-1] and s[0] in "'\""
+    if "#" in s and not quoted:
+        s = '"' + s.replace('"', '\\"') + '"'
+    return s
 
 
 # LLM-подключение (host/model/api_key) — системная настройка: в

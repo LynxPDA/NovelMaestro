@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from core import common as core_common
 from web import api as web_api
 from web.auth import Auth
 from web.server import make_server
@@ -392,6 +393,20 @@ def test_env_put_add_key(srv, tmp_path):
     assert r["ok"]
     text = (pdir / ".env").read_text(encoding="utf-8")
     assert "NEW=v" in text
+
+
+def test_env_put_value_with_hash_is_quoted(srv, tmp_path):
+    """AGENTS §7: `#` вне кавычек начинает комментарий, поэтому значение с
+    решёткой пишется в кавычках и читается обратно целиком."""
+    srv, port, root = srv()
+    pdir = _mk_project(root)
+    (pdir / ".env").write_text("", encoding="utf-8")
+    r = _request(port, "PUT", "/api/env",
+                 {"project": "ACTIVE/demo", "changes": {"A": "a # b"}})
+    assert r["ok"]
+    text = (pdir / ".env").read_text(encoding="utf-8")
+    assert 'A="a # b"' in text, text
+    assert core_common.parse_dotenv(str(pdir / ".env"))["A"] == "a # b"
 
 
 def test_env_put_seed_from_system(srv, tmp_path):

@@ -35,6 +35,18 @@ ROLES: tuple[dict, ...] = (
         ),
     },
     {
+        "role": ".env-конфигурация",
+        "where": "core/common.py (parse_dotenv)",
+        # парсер один и он стандартный: свой диалект синтаксиса поддерживать
+        # невыгодно (интерполяция `${VAR}` выключена, см. AGENTS §7)
+        "required": True,
+        "candidates": (
+            {"pip": "python-dotenv", "module": "dotenv",
+             "label": "python-dotenv",
+             "note": "`#` — комментарий, `${` — обычный символ"},
+        ),
+    },
+    {
         "role": "поиск терминов по главам",
         "where": "core/common.py (load_ner_data)",
         "required": False,

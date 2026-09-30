@@ -57,7 +57,7 @@ pip install -r requirements.txt && python3 run.py
 Допустимая альтернатива без venv — системный Python (Debian/Ubuntu):
 
 ```bash
-sudo apt install python3-httpx python3-tqdm python3-ahocorasick python3-pytest
+sudo apt install python3-httpx python3-dotenv python3-tqdm python3-ahocorasick python3-pytest
 ```
 
 После запуска откроется браузер с интерфейсом.
@@ -133,6 +133,8 @@ MODEL=google/gemma-4-31b-it         # рекомендуемая модель (�
 
 Можно задать отдельный сервер для конкретной стадии: `<СТАДИЯ>_HOST`, `<СТАДИЯ>_API_KEY`, `<СТАДИЯ>_MODEL` (например `NER_MODEL`, `WIKI_HOST`). Без `.env` программа не падает — предложит ввести параметры вручную.
 
+> ℹ️ Синтаксис `.env` обычный: `#` после значения — комментарий (значение с решёткой пишется в кавычках), `export ` не обязателен, `${VAR}` внутри значения не раскрывается.
+>
 > 🔒 Файлы `.env` содержат ключи и не коммитятся в git.
 
 ## Интерфейс
@@ -161,6 +163,7 @@ MODEL=google/gemma-4-31b-it         # рекомендуемая модель (�
 | Пакет (pip / apt) | Назначение | Обязательность |
 | --- | --- | --- |
 | `httpx` / `python3-httpx` | HTTP-транспорт LLM: один клиент на процесс, пул соединений, раздельные connect/write/read таймауты | обязательный |
+| `python-dotenv` / `python3-dotenv` | разбор `.env`: `#` — комментарий, `${}` не раскрывается | обязательный |
 | `tqdm` / `python3-tqdm` | прогресс-бары | обязательный |
 | `pyahocorasick` / `python3-ahocorasick` | быстрый поиск терминов | опциональный (есть regex-fallback) |
 | `pytest` / `python3-pytest` | тесты | только для разработки |

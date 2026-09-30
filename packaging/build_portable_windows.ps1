@@ -75,10 +75,11 @@ if ($LASTEXITCODE -ne 0) { throw "pip не установился (код $LASTE
 # ── 4. Зависимости ──────────────────────────────────────────────────
 # Список совпадает с requirements.txt и повторён здесь осознанно:
 # pyahocorasick ставится отдельным шагом, его отсутствие не ошибка сборки.
-# httpx — единственный HTTP-транспорт LLM (пул переиспользуемых соединений).
-Write-Host "Устанавливаю httpx, tqdm…"
-& $pyExe -m pip install --no-warn-script-location --disable-pip-version-check httpx tqdm
-if ($LASTEXITCODE -ne 0) { throw "Не удалось установить httpx/tqdm" }
+# httpx — единственный HTTP-транспорт LLM (пул переиспользуемых соединений),
+# python-dotenv — разбор .env.
+Write-Host "Устанавливаю httpx, python-dotenv, tqdm…"
+& $pyExe -m pip install --no-warn-script-location --disable-pip-version-check httpx python-dotenv tqdm
+if ($LASTEXITCODE -ne 0) { throw "Не удалось установить httpx/python-dotenv/tqdm" }
 Write-Host "Устанавливаю pyahocorasick (опционально)…"
 & $pyExe -m pip install --no-warn-script-location --disable-pip-version-check pyahocorasick
 if ($LASTEXITCODE -ne 0) {

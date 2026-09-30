@@ -57,34 +57,26 @@ from collections import defaultdict
 # форма остаётся разрешимой для анализаторов, у которых core/ — корень поиска
 from . import transport
 from .transport import (BrokenStream, ConnectTimeout, ReadTimeout, open_stream)
+from dotenv import dotenv_values
 
 # ══════════════════════════════════════════════════════════════════════
 # .ENV / КОНФИГ (stdlib, без внешних зависимостей)
 # ══════════════════════════════════════════════════════════════════════
 def parse_dotenv(path) -> dict:
-    """Парсит KEY=VALUE. Комментарии/пустые строки игнор, 'export ' терпим,
-    парные кавычки снимаются. Файла нет → {} (не падает)."""
-    result: dict = {}
+    """Читает .env (python-dotenv): KEY=VALUE, «export » терпим, парные кавычки
+    снимаются, а `#` вне кавычек начинает комментарий (значение в кавычках —
+    исключение: «a # b»). `${VAR}` НЕ раскрывается: второй источник значения
+    нам не нужен, порядок один — CLI > os.environ > файл > дефолт.
+
+    Файла нет или он не читается → {} (запуск не падает: конфиг может прийти
+    из окружения)."""
     if not path or not os.path.isfile(path):
-        return result
+        return {}
     try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("export "):
-                    line = line[len("export "):]
-                if "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key, value = key.strip(), value.strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-                    value = value[1:-1]
-                result[key] = value
-    except OSError:
-        pass
-    return result
+        values = dotenv_values(path, encoding="utf-8", interpolate=False)
+    except Exception:  # noqa: BLE001 — битый конфиг не роняет запуск
+        return {}
+    return {str(k): str(v) for k, v in values.items() if k and v is not None}
 
 
 def find_env_file(explicit=None, start_dir=None):

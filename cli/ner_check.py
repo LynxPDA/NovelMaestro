@@ -53,10 +53,10 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-# Транспорт LLM один на всех — core/transport.py (httpx). Проверка без импорта:
-# сама библиотека скрипту не нужна, она нужна транспорту.
-if importlib.util.find_spec("httpx") is None:
-    sys.exit("❌ Требуется HTTP-транспорт: pip install -r requirements.txt")
+# Внешние модули core.* — HTTP-транспорт (httpx) и парсер .env (dotenv). Проверка
+# без импорта: сами библиотеки скрипту не нужны, они нужны core.common.
+if any(importlib.util.find_spec(m) is None for m in ("httpx", "dotenv")):
+    sys.exit("❌ Требуется: pip install -r requirements.txt")
 
 # ── bootstrap: поиск core/common.py подъёмом от скрипта ──
 def _bootstrap_core() -> None:

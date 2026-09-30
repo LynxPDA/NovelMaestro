@@ -315,6 +315,22 @@ def test_parse_dotenv_full(tmp_path):
     assert C.parse_dotenv(None) == {}
 
 
+def test_parse_dotenv_comment_and_dollar(tmp_path):
+    """Синтаксис .env (AGENTS §7): `#` вне кавычек — комментарий, в кавычках —
+    обычный символ; `${VAR}` не раскрывается (интерполяции сознательно нет)."""
+    p = tmp_path / ".env"
+    p.write_text(
+        "INLINE=значение # комментарий\n"
+        'HASH_QUOTED="a # b"\n'
+        "DOLLAR=a${OTHER}c\n"
+        "OTHER=x\n",
+        encoding="utf-8")
+    data = C.parse_dotenv(str(p))
+    assert data["INLINE"] == "значение"
+    assert data["HASH_QUOTED"] == "a # b"
+    assert data["DOLLAR"] == "a${OTHER}c"
+
+
 def test_find_env_file_upward(tmp_path):
     """Из глубины projects/ находится системный корневой .env."""
     (tmp_path / "projects").mkdir()
