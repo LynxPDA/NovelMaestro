@@ -15,6 +15,12 @@ const SRC = readFileSync(
   new URL("../../web/static/project-views.js", import.meta.url),
   "utf8",
 );
+/* общий DOM-слой: в vm он объявляет UIC (и h/iconEl) так же, как в
+   браузере — классическим скриптом, до view-файлов */
+const UIC_SRC = readFileSync(
+  new URL("../../web/static/ui-components.js", import.meta.url),
+  "utf8",
+);
 /* run-views.js — код вкладки «Запуски» (window.viewRun зовётся из
    project-views при st.view === "run") */
 const RUN_SRC = readFileSync(
@@ -192,6 +198,7 @@ const sandbox = {
   UICore,
 };
 vm.createContext(sandbox);
+vm.runInContext(UIC_SRC, sandbox); // globalThis.UIC, h, iconEl
 vm.runInContext(RUN_SRC, sandbox); // window.viewRun — вкладка «Запуски»
 vm.runInContext(SRC, sandbox);
 const viewProject = sandbox.viewProject;

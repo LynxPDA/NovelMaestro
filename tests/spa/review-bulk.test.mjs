@@ -13,6 +13,12 @@ const SRC = readFileSync(
   new URL("../../web/static/project-views.js", import.meta.url),
   "utf8",
 );
+/* общий DOM-слой: в vm он объявляет UIC (и h/iconEl) так же, как в
+   браузере — классическим скриптом, до view-файлов */
+const UIC_SRC = readFileSync(
+  new URL("../../web/static/ui-components.js", import.meta.url),
+  "utf8",
+);
 
 class El {
   constructor(tag) {
@@ -165,6 +171,7 @@ const sandbox = {
   UICore,
 };
 vm.createContext(sandbox);
+vm.runInContext(UIC_SRC, sandbox); // globalThis.UIC, h, iconEl
 vm.runInContext(SRC, sandbox);
 const viewProject = sandbox.viewProject;
 
