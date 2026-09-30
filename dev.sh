@@ -51,7 +51,9 @@ cmd_setup() {
 
 cmd_test() {
     activate
-    exec python3 -m pytest tests/ -q "$@"
+    # без аргументов — весь каталог; с аргументами — только указанное
+    if [ $# -eq 0 ]; then set -- tests/; fi
+    exec python3 -m pytest "$@" -q
 }
 
 cmd_run() {

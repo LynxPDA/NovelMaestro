@@ -7,7 +7,7 @@
 # или автоматически при пуше тега v* — тогда файлы докладываются к релизу
 # этого тега и сбрасывается кэш CDN.
 #
-# p.s. requests ставится только ради core.common: из него сборщик берёт
+# p.s. httpx ставится только ради core.common: из него сборщик берёт
 # atomic_write и log_argv (свой атомарный запись-хелпер не изводим).
 
 name: Userscripts build
@@ -37,8 +37,8 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Зависимости (один кандидат транспорта — для core.common)
-        run: python3 -m pip install --quiet requests
+      - name: Зависимости (HTTP-клиент — для импорта core.common)
+        run: python3 -m pip install --quiet httpx
 
       - name: Артефакты обязаны совпадать со сборкой
         run: python3 tools/build_userscripts.py --check --node-check

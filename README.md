@@ -57,7 +57,7 @@ pip install -r requirements.txt && python3 run.py
 Допустимая альтернатива без venv — системный Python (Debian/Ubuntu):
 
 ```bash
-sudo apt install python3-requests python3-tqdm python3-ahocorasick python3-pytest
+sudo apt install python3-httpx python3-tqdm python3-ahocorasick python3-pytest
 ```
 
 После запуска откроется браузер с интерфейсом.
@@ -160,8 +160,7 @@ MODEL=google/gemma-4-31b-it         # рекомендуемая модель (�
 
 | Пакет (pip / apt) | Назначение | Обязательность |
 | --- | --- | --- |
-| `httpx` / — | HTTP-транспорт LLM (пул соединений, раздельные connect/read таймауты) | рекомендуемый (без него — requests) |
-| `requests` / `python3-requests` | HTTP-запросы к LLM | обязательный (фолбэк транспорта) |
+| `httpx` / `python3-httpx` | HTTP-транспорт LLM: один клиент на процесс, пул соединений, раздельные connect/write/read таймауты | обязательный |
 | `tqdm` / `python3-tqdm` | прогресс-бары | обязательный |
 | `pyahocorasick` / `python3-ahocorasick` | быстрый поиск терминов | опциональный (есть regex-fallback) |
 | `pytest` / `python3-pytest` | тесты | только для разработки |

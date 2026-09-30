@@ -26,14 +26,12 @@ ROLES: tuple[dict, ...] = (
     {
         "role": "HTTP-транспорт LLM",
         "where": "core/transport.py",
-        # без транспорта ходить в LLM нечем:requests обязателен, httpx —
-        # рекомендуемый основной (пул соединений, раздельные таймауты)
+        # без транспорта ходить в LLM нечем: единственный кандидат обязателен
+        # (фолбэк-клиент был бы вторым адаптером и вторым набором тестов)
         "required": True,
         "candidates": (
             {"pip": "httpx", "module": "httpx", "label": "httpx",
              "note": "пул соединений, раздельные connect/write/read"},
-            {"pip": "requests", "module": "requests", "label": "requests",
-             "note": "фолбэк: есть почти во всех дистрибутивах"},
         ),
     },
     {

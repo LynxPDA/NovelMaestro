@@ -27,10 +27,10 @@ from datetime import datetime
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Транспорт LLM один на всех — core/transport.py: httpx (основной) или
-# requests (фолбэк). Проверка без импорта: сама библиотека скрипту не нужна.
-if not any(importlib.util.find_spec(m) for m in ("httpx", "requests")):
-    sys.exit("❌ Требуется: pip install httpx requests")
+# Транспорт LLM один на всех — core/transport.py (httpx). Проверка без импорта:
+# сама библиотека скрипту не нужна, она нужна транспорту.
+if importlib.util.find_spec("httpx") is None:
+    sys.exit("❌ Требуется HTTP-транспорт: pip install -r requirements.txt")
 
 try:
     from tqdm import tqdm

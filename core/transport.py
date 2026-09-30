@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-transport.py — единая HTTP-доставка LLM-запросов (одна точка выхода в сеть).
+transport.py — единственная точка выхода в сеть: httpx.
 
-Внешних библиотек в проекте сознательно мало; эта — единственная, которая
-ходит в сеть. Все стадии зовут `core.common.stream_chat_completion`, а она —
-этот модуль. Здесь решается только «кем ходить»:
+HTTP в проекте ходит отсюда и больше ниоткуда: стадии зовут
+`core.common.stream_chat_completion`, а она — `open_stream()` этого модуля.
+Библиотека одна, второй «запасной клиент» не нужен: он держал бы второй адаптер,
+второй путь ошибок и второй набор тестов ради поведения, которое вызывающий всё
+равно не видит.
 
-* ``httpx`` — основной транспорт: один клиент на процесс, переиспользование
-  соединений (пул) на сотни запросов конвейера, раздельные connect/write/read
-  таймауты;
-* ``requests`` — фолбэк: ставится почти везде, API почти идентичен.
+Что даёт httpx и ради чего он здесь единственный:
 
-Контракт для вызывающего ОДИН (см. `open_stream`), поэтому гигиена стрима
-([DONE]/finish_reason/loop/cut/empty/min_len_ratio) и политика ретраев живут
-в `core.common` и от бэкенда не зависят. Исключения бэкендов нормализуются к
-классам `TransportError` — выше по стеку про httpx/requests не вспоминают.
+* один клиент на процесс = переиспользование соединений — конвейер бьёт сотнями
+  запросов в один хост, раньше на каждый уходил handshake;
+* раздельные connect/write/read таймауты вместо одного числа «на всё»;
 
-Своего SSE-парсера и своего пула соединений в скриптах быть не может
-(архитектура-страж: `requests.post(` в `cli/` запрещён).
+Контракт вызывающего: `ResponseStream` (`status_code`, `headers`,
+`iter_lines()` — байтовые строки SSE без терминатора). Гигиена стрима
+([DONE]/finish_reason/loop/cut/empty/min_len_ratio) и политика ретраев живут в
+`core.common` и от транспорта не зависят. Прямой `import httpx` вне этого модуля
+запрещён (страж `tests/test_architecture.py`).
 """
 from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
-from importlib.util import find_spec
 from typing import Any
 
-# Таймауты по умолчанию — те же числа, что у stream_chat_completion:
-# connect — сколько ждать установку соединения, read — паузу между байтами
-# уже открытого стрима (генерация длинного перевода молчит минутами).
+import httpx
+
+BACKEND = "httpx"
+
+# Таймауты по умолчанию — те же числа, что у stream_chat_completion: connect —
+# сколько ждать установку соединения, read — паузу между байтами уже открытого
+# стрима (генерация длинного перевода молчит минутами).
 DEFAULT_CONNECT_TIMEOUT = 300.0
 DEFAULT_READ_TIMEOUT = 900.0
 # Величина пула переиспользуемых соединений: конвейер держит один хост,
@@ -37,214 +41,130 @@ DEFAULT_READ_TIMEOUT = 900.0
 POOL_MAX_CONNECTIONS = 32
 
 __all__ = [
-    "TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStream",
-    "ResponseStream", "open_stream", "backend", "installed_backends",
-    "reset_client",
+    "BACKEND", "DEFAULT_CONNECT_TIMEOUT", "DEFAULT_READ_TIMEOUT",
+    "POOL_MAX_CONNECTIONS", "TransportError", "ConnectTimeout", "ReadTimeout",
+    "BrokenStream", "ResponseStream", "client", "open_stream", "reset_client",
 ]
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Нормализованные ошибки (вызывающий не различает библиотеки)
+# Нормализованные ошибки (про библиотеку выше по стеку не помнят)
 # ══════════════════════════════════════════════════════════════════════
 class TransportError(Exception):
     """Ошибка HTTP-доставки; общий предок остальных."""
 
 
 class ConnectTimeout(TransportError):
-    """Соединение не установлено за connect_timeout (сервер лежит)."""
+    """Соединение не установлено: таймаут connect, отказ, недоступен хост."""
 
 
 class ReadTimeout(TransportError):
-    """Соединение есть, но ответ не читается за read_timeout."""
+    """Соединение есть, но ответ не читается за read_timeout (и нет соединения
+    в пуле — это тоже «ждём сервер»)."""
 
 
 class BrokenStream(TransportError):
-    """Обрыв тела ответа (chunked/SSE оборвался до конца)."""
+    """Обрыв тела ответа (chunked/SSE оборвался до конца, битый gzip/декодер)."""
+
+
+def _normalize(exc: Exception) -> TransportError:
+    """Исключение httpx → наш класс. Порядок важен: ConnectTimeout — потомок
+    и ConnectError, и TimeoutException, поэтому проверяется первым."""
+    if isinstance(exc, (httpx.ConnectTimeout, httpx.ConnectError)):
+        return ConnectTimeout(str(exc))
+    if isinstance(exc, httpx.TimeoutException):
+        return ReadTimeout(str(exc))
+    if isinstance(exc, (httpx.RemoteProtocolError, httpx.ReadError)):
+        return BrokenStream(str(exc))
+    return TransportError(str(exc))
 
 
 # ══════════════════════════════════════════════════════════════════════
 # Контракт ответа
 # ══════════════════════════════════════════════════════════════════════
 class ResponseStream:
-    """Стрим-ответ: `status_code`, `headers`, `iter_lines()` — байтовые
-    строки по одной SSE-строке (без `\\n`). Контекстный менеджер закрывает
-    соединение при выходе — в том числе при `break` в середине стрима."""
+    """Стрим-ответ: `status_code`, `headers`, `iter_lines()` — байтовые строки
+    по одной SSE-строке (без `\\n`). Контекстный менеджер закрывает соединение
+    при выходе — в том числе при `break` в середине стрима."""
 
     status_code: int = 0
     headers: Any = None
 
+    def __init__(self, cm: Any) -> None:
+        self._cm = cm
+
     def __enter__(self) -> ResponseStream:
+        # запрос уходит здесь: «сервер лежит» прилетает именно на входе
+        try:
+            self._resp = self._cm.__enter__()
+        except Exception as exc:  # noqa: BLE001 — нормализуем, не поглощаем
+            raise _normalize(exc) from exc
+        self.status_code = self._resp.status_code
+        self.headers = self._resp.headers
         return self
 
     def __exit__(self, exc_type: object = None, exc_value: object = None,
                  traceback: object = None) -> bool:
-        return False
-
-    def _chunks(self) -> Iterator[bytes]:
-        raise NotImplementedError
+        try:
+            return bool(self._cm.__exit__(exc_type, exc_value, traceback))
+        except Exception as exc:  # noqa: BLE001 — закрытие тоже наш случай
+            raise _normalize(exc) from exc
 
     def iter_lines(self) -> Iterator[bytes]:
-        """Байтовые строки тела по `\\n` (\\r отрезается); пустые строки
-        отдаются как есть — их пропускает читатель."""
+        """Тело по строкам: `\\n` — граница, `\\r` отрезается, пустые строки
+        отдаются как есть (пустая строка SSE = событие закончилось)."""
         buf = b""
-        for chunk in self._chunks():
-            if not chunk:
-                continue
-            buf += chunk
-            while True:
-                head, sep, rest = buf.partition(b"\n")
-                if not sep:
-                    break
-                yield head.rstrip(b"\r")
-                buf = rest
+        try:
+            for chunk in self._resp.iter_bytes():  # декодированное тело
+                if not chunk:
+                    continue
+                buf += chunk
+                while True:
+                    head, sep, rest = buf.partition(b"\n")
+                    if not sep:
+                        break
+                    yield head.rstrip(b"\r")
+                    buf = rest
+        except Exception as exc:  # noqa: BLE001 — нормализуем, не поглощаем
+            raise _normalize(exc) from exc
         if buf:
             # хвост без завершающего \n (стрим оборвался или кончился)
             yield buf.rstrip(b"\r")
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Бэкенды
-# ══════════════════════════════════════════════════════════════════════
-class _HttpxStream(ResponseStream):
-    """Обёртка над `client.stream(...)` (контекстный менеджер httpx)."""
-
-    def __init__(self, cm: Any, httpx_mod: Any) -> None:
-        self._cm = cm
-        self._m = httpx_mod
-
-    def __enter__(self) -> ResponseStream:
-        self._resp = self._cm.__enter__()
-        self.status_code = self._resp.status_code
-        self.headers = self._resp.headers
-        return self
-
-    def __exit__(self, exc_type: object = None, exc_value: object = None,
-                 traceback: object = None) -> bool:
-        return bool(self._cm.__exit__(exc_type, exc_value, traceback))
-
-    def _chunks(self) -> Iterator[bytes]:
-        m = self._m
-        try:
-            # iter_bytes — декодированное тело (gzip/deflate уже разобраны)
-            yield from self._resp.iter_bytes()
-        except m.ConnectTimeout as exc:
-            raise ConnectTimeout(str(exc)) from exc
-        except m.ReadTimeout as exc:
-            raise ReadTimeout(str(exc)) from exc
-        except m.TimeoutException as exc:
-            raise ReadTimeout(str(exc)) from exc
-        except (m.RemoteProtocolError, m.ReadError) as exc:
-            raise BrokenStream(str(exc)) from exc
-        except m.HTTPError as exc:
-            raise TransportError(str(exc)) from exc
-
-
-class _RequestsStream(ResponseStream):
-    """Обёртка над `Response` requests (он сам контекстный менеджер)."""
-
-    def __init__(self, resp: Any, requests_mod: Any) -> None:
-        self._resp = resp
-        self._m = requests_mod
-
-    def __enter__(self) -> ResponseStream:
-        self._resp.__enter__()
-        self.status_code = self._resp.status_code
-        self.headers = self._resp.headers
-        return self
-
-    def __exit__(self, exc_type: object = None, exc_value: object = None,
-                 traceback: object = None) -> bool:
-        return bool(self._resp.__exit__(exc_type, exc_value, traceback))
-
-    def _chunks(self) -> Iterator[bytes]:
-        m = self._m
-        try:
-            yield from self._resp.iter_content(chunk_size=65536)
-        except m.exceptions.ReadTimeout as exc:
-            raise ReadTimeout(str(exc)) from exc
-        except m.exceptions.Timeout as exc:
-            # ConnectTimeout — подкласс Timeout: «соединения нет» тоже сюда
-            raise ConnectTimeout(str(exc)) from exc
-        except m.exceptions.ChunkedEncodingError as exc:
-            raise BrokenStream(str(exc)) from exc
-        except m.exceptions.RequestException as exc:
-            raise TransportError(str(exc)) from exc
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Выбор и инициализация бэкенда (лениво, один клиент на процесс)
+# Общий клиент (лениво, один на процесс)
 # ══════════════════════════════════════════════════════════════════════
 _lock = threading.Lock()
-_state: dict[str, Any] = {"backend": None, "module": None, "client": None}
+_client: Any = None
 
 
-def installed_backends() -> list[str]:
-    """Какие HTTP-библиотеки вообще установлены (в порядке предпочтения)."""
-    return [n for n in ("httpx", "requests") if find_spec(n) is not None]
-
-
-def backend() -> str:
-    """Имя активного бэкенда: `httpx`, если он установлен, иначе `requests`."""
+def client() -> Any:
+    """Общий `httpx.Client`: пул соединений создаётся при первом запросе."""
+    global _client
     with _lock:
-        if _state["backend"] is None:
-            _state["backend"] = _detect()
-    return _state["backend"]
-
-
-def _detect() -> str:
-    """Пробует httpx, затем requests; ничего нет — ошибка один раз, loudly.
-    Кандидаты перебираются тем же `find_spec`, что и `installed_backends`
-    (один источник истины «что установлено»), импорт — только победителю."""
-    for name in ("httpx", "requests"):
-        if find_spec(name) is None:
-            continue
-        try:
-            _state["module"] = __import__(name)
-        except ImportError:
-            continue
-        return name
-    raise TransportError(
-        "Нет HTTP-библиотеки: pip install httpx requests (или хотя бы requests)")
-
-
-def _client() -> Any:
-    """Общий клиент процесса (пул соединений). Создаётся при первом запросе."""
-    with _lock:
-        if _state["client"] is None:
-            name, module = _state["backend"], _state["module"]
-            if name == "httpx":
-                _state["client"] = module.Client(
-                    timeout=module.Timeout(DEFAULT_READ_TIMEOUT,
-                                          connect=DEFAULT_CONNECT_TIMEOUT,
-                                          write=DEFAULT_READ_TIMEOUT,
-                                          pool=DEFAULT_CONNECT_TIMEOUT),
-                    limits=module.Limits(
-                        max_connections=POOL_MAX_CONNECTIONS,
-                        max_keepalive_connections=POOL_MAX_CONNECTIONS),
-                )
-            else:
-                adapter = module.adapters.HTTPAdapter(
-                    pool_connections=POOL_MAX_CONNECTIONS,
-                    pool_maxsize=POOL_MAX_CONNECTIONS,
-                    # ретраи — политика core.common (H3: только 408/425/429/5xx);
-                    # молчаливые транспортные повторы только портят статистику
-                    max_retries=0,
-                )
-                session = module.Session()
-                session.mount("http://", adapter)
-                session.mount("https://", adapter)
-                _state["client"] = session
-        return _state["client"]
+        if _client is None:
+            _client = httpx.Client(
+                timeout=httpx.Timeout(
+                    DEFAULT_READ_TIMEOUT,
+                    connect=DEFAULT_CONNECT_TIMEOUT,
+                    write=DEFAULT_READ_TIMEOUT,
+                    pool=DEFAULT_CONNECT_TIMEOUT),
+                limits=httpx.Limits(
+                    max_connections=POOL_MAX_CONNECTIONS,
+                    max_keepalive_connections=POOL_MAX_CONNECTIONS),
+            )
+        return _client
 
 
 def reset_client() -> None:
     """Сбросить общий клиент (тесты; в рантайме не нужен)."""
+    global _client
     with _lock:
-        client = _state["client"]
-        _state["client"] = None
-    if client is not None:
+        stale, _client = _client, None
+    if stale is not None:
         try:
-            client.close()
+            stale.close()
         except Exception:  # noqa: BLE001 — сброс не должен падать
             pass
 
@@ -256,27 +176,20 @@ def open_stream(url: str, *, headers: dict | None = None, payload: Any = None,
     `ResponseStream` (`status_code`, `headers`, `iter_lines()`).
 
     Таймауты передаются на запрос: у стадий они свои (`--timeout` /
-    `--stream_timeout`), клиент создаётся с дефолтами и переиспользуется.
+    `--stream_timeout`); клиент переиспользуется.
     """
-    name, module = backend(), _state["module"]
-    client = _client()
-    if name == "httpx":
-        timeout = module.Timeout(read_timeout, connect=connect_timeout,
-                                 write=read_timeout, pool=connect_timeout)
-        return _HttpxStream(
-            client.stream("POST", url, headers=headers or {}, json=payload,
-                         timeout=timeout),
-            module)
-    return _RequestsStream(
-        client.post(url, headers=headers or {}, json=payload, stream=True,
-                    timeout=(connect_timeout, read_timeout)),
-        module)
+    timeout = httpx.Timeout(read_timeout, connect=connect_timeout,
+                            write=read_timeout, pool=connect_timeout)
+    return ResponseStream(
+        client().stream("POST", url, headers=headers or {}, json=payload,
+                        timeout=timeout))
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Отладка: какая HTTP-библиотека активна и что вообще установлено."""
-    print(f"HTTP-транспорт LLM: {backend()} "
-          f"(установлено: {', '.join(installed_backends())})")
+    """Отладка: какой транспорт активен и с какими настройками пула."""
+    print(f"HTTP-транспорт LLM: {BACKEND} "
+          f"(пул {POOL_MAX_CONNECTIONS}, connect {DEFAULT_CONNECT_TIMEOUT}s, "
+          f"read {DEFAULT_READ_TIMEOUT}s)")
     return 0
 
 

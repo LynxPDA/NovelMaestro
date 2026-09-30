@@ -3,7 +3,7 @@
 """
 core/common.py — единый общий модуль проекта NovelMaestro.
 Замена core/utils.py. Зависимости: stdlib + одна HTTP-библиотека (транспорт —
-core/transport.py: httpx, фолбэк requests) + опционально pyahocorasick.
+core/transport.py: единственный HTTP-клиент httpx) + опционально pyahocorasick.
 Токенизатор НЕ нужен: счёт токенов — оценка estimate_tokens (stdlib).
 Активный стек зависимостей печатает `python3 -m core.deps`.
 

@@ -63,8 +63,8 @@ PROJECTS_API = ["SECTIONS", "DEFAULT_SECTIONS", "load_sections",
                 "delete_project", "copy_project"]
 # Зеркало API core/transport.py (единственная точка выхода в сеть)
 TRANSPORT_API = ["TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStream",
-                 "ResponseStream", "open_stream", "backend", "installed_backends",
-                 "reset_client"]
+                 "ResponseStream", "open_stream", "client", "reset_client",
+                 "BACKEND"]
 # Зеркало API core/deps.py (реестр внешних зависимостей)
 DEPS_API = ["ROLES", "status", "format_status", "missing_hint"]
 
@@ -137,11 +137,21 @@ def test_no_legacy_launcher_names():
             f"{doc}: устаревшее имя redact_errors (теперь translate_check_llm)"
 
 
+def _pip_names(path):
+    """Пакеты pip-списка: строки без комментариев и без `-r ...`."""
+    lines = (path.read_text(encoding="utf-8").splitlines())
+    return [line.split("#")[0].strip()
+            for line in lines
+            if line.strip() and not line.lstrip().startswith("#")
+            and not line.strip().startswith("-r")]
+
+
 def test_requirements_cover_declared_roles():
     """pip-списки и реестр ролей не разъезжаются: каждый кандидат роли
     объявлен в requirements*.txt (тесты — только в dev-списке)."""
     runtime = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     dev = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+    runtime_pkgs = [n.lower() for n in _pip_names(ROOT / "requirements.txt")]
     assert "-r requirements.txt" in dev, "requirements-dev.txt не включает рантайм"
     names = {c["pip"] for role in D.ROLES for c in role["candidates"] if c["pip"]}
     for pip in sorted(names):
@@ -150,5 +160,7 @@ def test_requirements_cover_declared_roles():
         assert in_runtime or in_dev, f"{pip}: роль в core/deps.py есть, в списках нет"
         if pip == "pytest":
             assert not in_runtime, "pytest не должен попадать в рантайм/образ"
-    for pip in ("httpx", "requests", "tqdm", "pyahocorasick", "pytest"):
+    for pip in ("httpx", "tqdm", "pyahocorasick", "pytest"):
         assert pip in names, f"{pip}: есть в requirements, но не в реестре ролей"
+    assert "requests" not in runtime_pkgs, \
+        f"requests вытеснен, а в рантайме остался: {runtime_pkgs}"

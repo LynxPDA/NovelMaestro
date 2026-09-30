@@ -1,374 +1,200 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Тесты core/transport.py — единой HTTP-доставки LLM-запросов.
+Тесты core/transport.py — единственной HTTP-доставки LLM-запросов.
 
-Группы:
-- выбор бэкенда (httpx предпочтён, requests — фолбэк, ничего нет — ошибка);
-- контракт ответа: нарезка тела на SSE-строки и закрытие при выходе;
-- нормализация исключений обоих бэкендов (подставные модули держат настоящие
-  связи классов: ConnectTimeout — подкласс Timeout и т.п.);
-- проброс payload/заголовков/таймаутов и живой SSE-прогон против локального
-  сервера из stdlib (сети наружу тесты не трогают).
+Транспорт один (httpx), поэтому и моков почти нет: форма запроса и нарезка тела
+проверяются на записывателе вызовов stream(), нормализация ошибок — на настоящих
+классах исключений httpx (связи классов важнее содержимого: ConnectTimeout —
+одновременно ConnectError и TimeoutException), а весь путь целиком — живым
+SSE-прогоном против локального сервера из stdlib. Сети наружу тесты не трогают.
+
+Группы: контракт iter_lines, закрытие соединения, соответствие ошибок, форма
+запроса и таймаутов, общий клиент пула, живой раунд-трип, недоступный сервер.
 """
 from __future__ import annotations
 
-import importlib
 import json
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
-from core import transport as T
+ROOT = Path(__file__).resolve().parent.parent
+for _p in (ROOT, ROOT / "cli"):
+    _s = str(_p)
+    if _s not in sys.path:
+        sys.path.insert(0, _s)
+
+import httpx  # noqa: E402
+
+from core import transport as T  # noqa: E402
 
 
-def _live_backend(name: str):
-    """Настоящий бэкенд поверх живого сервера (клиент создастся заново)."""
+@pytest.fixture(autouse=True)
+def fresh_client():
+    """Общий клиент не протекает между тестами."""
     T.reset_client()
-    try:
-        module = importlib.import_module(name)
-    except ImportError:
-        pytest.skip(f"{name} не установлен")
-    T._state.update(backend=name, module=module, client=None)
-
-# ══════════════════════════════════════════════════════════════════════
-# Подставные бэкенды
-# ══════════════════════════════════════════════════════════════════════
-def _fake_httpx():
-    """Иерархия исключений httpx (сжатая, но со связями оригинала)."""
-    class HTTPError(Exception):
-        pass
-
-    class TransportError(HTTPError):
-        pass
-
-    class TimeoutException(TransportError):
-        pass
-
-    class ConnectTimeout(TimeoutException):
-        pass
-
-    class ReadTimeout(TimeoutException):
-        pass
-
-    class ProtocolError(TransportError):
-        pass
-
-    class RemoteProtocolError(ProtocolError):
-        pass
-
-    class ReadError(TransportError):
-        pass
-
-    class Timeout:
-        """httpx.Timeout: первый позиционный аргумент — read."""
-
-        def __init__(self, read, connect=None, write=None, pool=None):
-            self.read, self.connect = read, connect
-
-    class Limits:
-        def __init__(self, max_connections=None, max_keepalive_connections=None):
-            self.max_connections = max_connections
-
-    class Client:
-        def __init__(self, timeout=None, limits=None):
-            self.timeout, self.limits = timeout, limits
-
-    return SimpleNamespace(
-        HTTPError=HTTPError, TransportError=TransportError,
-        TimeoutException=TimeoutException, ConnectTimeout=ConnectTimeout,
-        ReadTimeout=ReadTimeout, ProtocolError=ProtocolError,
-        RemoteProtocolError=RemoteProtocolError, ReadError=ReadError,
-        Timeout=Timeout, Limits=Limits, Client=Client,
-    )
+    yield
+    T.reset_client()
 
 
-def _fake_requests():
-    """Иерархия исключений requests: ConnectTimeout — подкласс Timeout."""
-    class RequestException(Exception):
-        pass
-
-    class Timeout(RequestException):
-        pass
-
-    class ConnectTimeout(Timeout):
-        pass
-
-    class ReadTimeout(Timeout):
-        pass
-
-    class ChunkedEncodingError(RequestException):
-        pass
-
-    return SimpleNamespace(exceptions=SimpleNamespace(
-        RequestException=RequestException, Timeout=Timeout,
-        ConnectTimeout=ConnectTimeout, ReadTimeout=ReadTimeout,
-        ChunkedEncodingError=ChunkedEncodingError,
-    ))
-
-
-class _Body:
-    """Ответ бэкенда: отдаёт chunks (или бросает exc), помнит о закрытии."""
+class _Stream:
+    """Заглушка httpx-стрима: контекстный менеджер с iter_bytes()."""
 
     def __init__(self, chunks=(), exc=None, status=200, headers=None):
-        self._chunks = list(chunks)
+        self._chunks = tuple(chunks)
         self._exc = exc
         self.status_code = status
-        self.headers = dict(headers or {})
+        self.headers = headers if headers is not None else {"X-Trace": "1"}
         self.closed = False
 
     def __enter__(self):
         return self
 
-    def __exit__(self, *_a):
+    def __exit__(self, *exc):
         self.closed = True
         return False
 
+    def close(self):
+        self.closed = True
+
     def iter_bytes(self):
-        yield from self._chunks
         if self._exc is not None:
             raise self._exc
-
-    def iter_content(self, chunk_size=None):
-        del chunk_size
         yield from self._chunks
-        if self._exc is not None:
-            raise self._exc
 
 
-class _StreamCM:
-    """Контекстный менеджер client.stream(...) у httpx: при выходе ответ
-    закрывается — на этом же флаге проверяется and break в середине стрима."""
+class _Recorder:
+    """Пишет аргументы stream(): так видно форму вызова транспорта."""
 
-    def __init__(self, body):
-        self._body = body
+    def __init__(self):
+        self.calls = []
 
-    def __enter__(self):
-        return self._body
-
-    def __exit__(self, *_a):
-        self._body.closed = True
-        return False
+    def stream(self, method, url, **kw):
+        self.calls.append({"method": method, "url": url, **kw})
+        return _Stream(chunks=[b"data: [DONE]\n"])
 
 
-class _FakeSession:
-    """requests.Session: пишет аргументы post() и отдаёт _Body."""
-
-    def __init__(self, body):
-        self.calls: dict = {}
-        self._body = body
-
-    def post(self, url, headers=None, json=None, stream=None, timeout=None):
-        self.calls.update(url=url, headers=headers, json=json, stream=stream,
-                          timeout=timeout)
-        return self._body
-
-    def close(self):
-        pass
-
-
-class _FakeHttpxClient:
-    """httpx.Client: пишет аргументы stream() и отдаёт _Body."""
-
-    def __init__(self, body):
-        self.calls: dict = {}
-        self._body = body
-
-    def stream(self, method, url, headers=None, json=None, timeout=None):
-        self.calls.update(method=method, url=url, headers=headers, json=json,
-                          timeout=timeout)
-        return _StreamCM(self._body)
-
-    def close(self):
-        pass
-
-
-@pytest.fixture()
-def fresh_client():
-    """Общий клиент процесса не протекает между тестами."""
-    yield
-    T.reset_client()
-
-
-def _use_requests(body, monkeypatch, fresh_client):  # noqa: ARG001
-    """Активный бэкенд — requests с подставной сессией."""
-    T.reset_client()
-    T._state.update(backend="requests", module=_fake_requests(),
-                    client=_FakeSession(body))
-
-
-def _use_httpx(body, monkeypatch, fresh_client):  # noqa: ARG001
-    """Активный бэкенд — httpx с подставным клиентом."""
-    T.reset_client()
-    T._state.update(backend="httpx", module=_fake_httpx(),
-                    client=_FakeHttpxClient(body))
+def _stream(chunks=(), exc=None, status=200, headers=None):
+    """Ответ транспорта поверх подставного стрима."""
+    return T.ResponseStream(_Stream(chunks, exc, status, headers))
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Выбор бэкенда
-# ══════════════════════════════════════════════════════════════════════
-@pytest.mark.parametrize("present,want", [
-    ({"httpx"}, "httpx"),
-    ({"requests"}, "requests"),
-    ({"httpx", "requests"}, "httpx"),
-])
-def test_backend_choice(present, want, monkeypatch, fresh_client):
-    """«Что установлено» определяет один проб — find_spec; импорт — победителю.
-    В окружении теста библиотека может отсутствовать — подставляем заглушку."""
-    monkeypatch.setattr(T, "find_spec",
-                        lambda name: object() if name in present else None)
-    for name in present:
-        monkeypatch.setitem(sys.modules, name, SimpleNamespace(name=name))
-    T._state.update(backend=None, module=None, client=None)
-    assert T.backend() == want
-    assert set(T.installed_backends()) == present
-    assert T._state["module"].name == want
-
-
-def test_backend_without_any_library(monkeypatch, fresh_client):
-    monkeypatch.setattr(T, "find_spec", lambda name: None)
-    T._state.update(backend=None, module=None, client=None)
-    with pytest.raises(T.TransportError) as exc:
-        T.backend()
-    assert "pip install" in str(exc.value)
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Нарезка тела на строки (общий контракт)
+# Контракт ответа: строки SSE
 # ══════════════════════════════════════════════════════════════════════
 @pytest.mark.parametrize("chunks,want", [
-    ([b""], []),
-    ([b"a"], [b"a"]),
-    ([b"a\n"], [b"a"]),
-    ([b"a\nb"], [b"a", b"b"]),
-    ([b"a\r\nb\r\n"], [b"a", b"b"]),
-    ([b"a\n", b"b\n"], [b"a", b"b"]),
-    ([b"ab", b"cd"], [b"abcd"]),              # чанки строку НЕ режут: она одна
-    ([b"ab", b"cd\n"], [b"abcd"]),
-    ([b"a\nb\n"], [b"a", b"b"]),             # один чанк — несколько строк
-    ([b"data: 1\n\n", b"data: [DONE]\n"],
-     [b"data: 1", b"", b"data: [DONE]"]),      # пустая строка-разделитель
-])
-def test_iter_lines_splits_body(chunks, want, monkeypatch, fresh_client):
-    _use_requests(_Body(chunks), monkeypatch, fresh_client)
-    with T.open_stream("http://x/y") as resp:
+    ((b"data: 1\ndata: 2\n",), [b"data: 1", b"data: 2"]),
+    # строка разорвана между чанками — склеивается, а не режется пополам
+    ((b"da", b"ta: 1\nda", b"ta: 2\n"), [b"data: 1", b"data: 2"]),
+    ((b"a\r\nb\r\n",), [b"a", b"b"]),
+    # хвост без \n (обрыв/конец стрима) обязано видеть читатель
+    ((b"a\nb",), [b"a", b"b"]),
+    # пустые строки — границы событий, их пропускает читатель
+    ((b"\n\n",), [b"", b""]),
+    ((), []),
+    ((b"", b"data: x\n"), [b"data: x"]),
+], ids=["plain", "split-chunk", "crlf", "tail-no-newline", "empty-lines",
+        "no-body", "empty-chunk"])
+def test_iter_lines_splits_body(chunks, want):
+    with _stream(chunks) as resp:
         assert list(resp.iter_lines()) == want
 
 
-def test_response_closed_on_exit(monkeypatch, fresh_client):
-    body = _Body([b"data: 1\n"])
-    _use_requests(body, monkeypatch, fresh_client)
-    with T.open_stream("http://x/y") as resp:
+def test_status_and_headers_pass_through():
+    with _stream(status=429, headers={"Retry-After": "7"}) as resp:
+        assert resp.status_code == 429
+        assert resp.headers.get("Retry-After") == "7"
+
+
+def test_response_closed_on_exit():
+    inner = _Stream(chunks=[b"data: [DONE]\n"])
+    with T.ResponseStream(inner) as resp:
         list(resp.iter_lines())
-    assert body.closed is True
+    assert inner.closed is True
 
 
-def test_response_closed_on_early_break(monkeypatch, fresh_client):
-    """break в середине стрима (loop/cut) обязан закрыть соединение."""
-    body = _Body([b"data: 1\n", b"data: 2\n"])
-    _use_requests(body, monkeypatch, fresh_client)
-    with T.open_stream("http://x/y") as resp:
-        for _ in resp.iter_lines():
+def test_response_closed_on_early_break():
+    """break в середине стрима тоже обязан закрыть соединение."""
+    inner = _Stream(chunks=[b"a\nb\nc\n"])
+    stream = T.ResponseStream(inner)
+    with stream:
+        for _ in stream.iter_lines():
             break
-    assert body.closed is True
+    assert inner.closed is True
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Нормализация исключений
+# Нормализация ошибок: вызывающий не знает про httpx
 # ══════════════════════════════════════════════════════════════════════
-@pytest.mark.parametrize("exc_name,want", [
-    ("ConnectTimeout", T.ConnectTimeout),
-    ("ReadTimeout", T.ReadTimeout),
-    ("TimeoutException", T.ReadTimeout),
-    ("RemoteProtocolError", T.BrokenStream),
-    ("ReadError", T.BrokenStream),
-    ("HTTPError", T.TransportError),
-])
-def test_httpx_exceptions_are_normalized(exc_name, want, monkeypatch,
-                                         fresh_client):
-    m = _fake_httpx()
-    body = _Body([b"data: 1\n"], exc=getattr(m, exc_name)("сбой"))
-    with pytest.raises(T.TransportError) as exc:
-        with T._HttpxStream(_StreamCM(body), m) as resp:
+@pytest.mark.parametrize("exc,want", [
+    (httpx.ConnectTimeout("connect"), T.ConnectTimeout),
+    (httpx.ConnectError("connection refused"), T.ConnectTimeout),
+    (httpx.ReadTimeout("read"), T.ReadTimeout),
+    (httpx.PoolTimeout("pool"), T.ReadTimeout),
+    (httpx.RemoteProtocolError("peer closed"), T.BrokenStream),
+    (httpx.ReadError("read error"), T.BrokenStream),
+    (httpx.UnsupportedProtocol("weird"), T.TransportError),
+], ids=["connect-timeout", "connect-error", "read-timeout", "pool-timeout",
+        "remote-protocol", "read-error", "other"])
+def test_exceptions_are_normalized(exc, want):
+    with pytest.raises(want) as got:
+        with _stream(exc=exc) as resp:
             list(resp.iter_lines())
-    assert type(exc.value) is want
-    assert body.closed is True          # httpx-контекст закрыт на выходе
+    # сообщение исходной ошибки сохраняется
+    assert str(exc) in str(got.value)
 
 
-@pytest.mark.parametrize("exc_name,want", [
-    ("ConnectTimeout", T.ConnectTimeout),
-    ("ReadTimeout", T.ReadTimeout),
-    ("Timeout", T.ConnectTimeout),   # голый Timeout — тоже «коннект», как раньше
-    ("ChunkedEncodingError", T.BrokenStream),
-    ("RequestException", T.TransportError),
-])
-def test_requests_exceptions_are_normalized(exc_name, want, monkeypatch,
-                                           fresh_client):
-    m = _fake_requests()
-    body = _Body([b"data: 1\n"], exc=getattr(m.exceptions, exc_name)("сбой"))
-    with pytest.raises(T.TransportError) as exc:
-        with T._RequestsStream(body, m) as resp:
-            list(resp.iter_lines())
-    assert type(exc.value) is want
-    assert body.closed is True
+def test_all_errors_share_one_base():
+    for cls in (T.ConnectTimeout, T.ReadTimeout, T.BrokenStream):
+        assert issubclass(cls, T.TransportError)
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Что уходит в запрос (payload, заголовки, таймауты)
+# Форма запроса и таймауты
 # ══════════════════════════════════════════════════════════════════════
-def test_requests_backend_request_shape(monkeypatch, fresh_client):
-    body = _Body([b"data: [DONE]\n"], status=200, headers={"X-A": "1"})
-    session = _FakeSession(body)
-    T.reset_client()
-    T._state.update(backend="requests", module=_fake_requests(), client=session)
-    with T.open_stream("http://x/y", headers={"Authorization": "Bearer k"},
+def test_open_stream_request_shape(monkeypatch):
+    rec = _Recorder()
+    monkeypatch.setattr(T, "_client", rec)
+    with T.open_stream("http://127.0.0.1:1/v1/chat/completions",
+                       headers={"Authorization": "Bearer k"},
                        payload={"model": "m", "stream": True},
-                       connect_timeout=11, read_timeout=22) as resp:
+                       connect_timeout=7, read_timeout=9) as resp:
         assert resp.status_code == 200
-        assert resp.headers["X-A"] == "1"
         assert list(resp.iter_lines()) == [b"data: [DONE]"]
-    assert session.calls["stream"] is True
-    assert session.calls["timeout"] == (11, 22)
-    assert session.calls["json"] == {"model": "m", "stream": True}
-    assert session.calls["headers"] == {"Authorization": "Bearer k"}
+    call = rec.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/v1/chat/completions")
+    assert call["json"] == {"model": "m", "stream": True}
+    assert call["headers"] == {"Authorization": "Bearer k"}
+    timeout = call["timeout"]
+    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == \
+        (7, 9, 9, 7)
 
 
-def test_httpx_backend_request_shape(monkeypatch, fresh_client):
-    body = _Body([b"data: [DONE]\n"], status=201)
-    client = _FakeHttpxClient(body)
+def test_default_timeouts_match_stage_defaults():
+    """Числа по умолчанию — те же, что у параметров stream_chat_completion."""
+    timeout = T.client().timeout
+    assert timeout.connect == T.DEFAULT_CONNECT_TIMEOUT == 300.0
+    assert timeout.read == T.DEFAULT_READ_TIMEOUT == 900.0
+    assert timeout.write == T.DEFAULT_READ_TIMEOUT
+    assert timeout.pool == T.DEFAULT_CONNECT_TIMEOUT
+
+
+def test_client_is_shared():
+    first = T.client()
+    assert T.client() is first
+
+
+def test_reset_client_closes_and_forgets():
+    inner = _Stream()
+    T._client = inner  # noqa: SLF001 — подмена общего клиента в тесте
     T.reset_client()
-    T._state.update(backend="httpx", module=_fake_httpx(), client=client)
-    with T.open_stream("http://x/y", payload={"p": 1}, connect_timeout=11,
-                       read_timeout=22) as resp:
-        assert resp.status_code == 201
-        assert list(resp.iter_lines()) == [b"data: [DONE]"]
-    assert client.calls["method"] == "POST"
-    assert client.calls["json"] == {"p": 1}
-    assert (client.calls["timeout"].read, client.calls["timeout"].connect) == (22, 11)
-
-
-def test_default_timeouts_match_stage_defaults(fresh_client):
-    """Дефолты транспорта = дефолты stream_chat_completion (300/900)."""
-    assert T.DEFAULT_CONNECT_TIMEOUT == 300.0
-    assert T.DEFAULT_READ_TIMEOUT == 900.0
-
-
-def test_reset_client_closes(monkeypatch, fresh_client):
-    class Closable:
-        closed = False
-
-        def close(self):
-            Closable.closed = True
-
-    obj = Closable()
-    T.reset_client()
-    T._state.update(backend="requests", module=_fake_requests(), client=obj)
-    T.reset_client()
-    assert obj.closed is True
-    assert T._state["client"] is None
+    assert inner.closed is True
+    assert T._client is None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -405,7 +231,7 @@ class _SSEHandler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture()
-def sse_server(srv_port):  # noqa: F811 — фикстура conftest (свободный порт)
+def sse_server(srv_port):
     """ThreadingHTTPServer с SSE-ответом; возвращает (url, настройки)."""
     SERVER.update(status=200, lines=[b"data: [DONE]\n"], extra={}, received={})
     srv = ThreadingHTTPServer(("127.0.0.1", srv_port), _SSEHandler)
@@ -429,12 +255,10 @@ def _sse_line(content: str, finish: str | None = None) -> bytes:
                                   ensure_ascii=False)).encode("utf-8")
 
 
-@pytest.mark.parametrize("name", ["requests", "httpx"])
-def test_live_sse_roundtrip(name, sse_server, monkeypatch, fresh_client):
+def test_live_sse_roundtrip(sse_server):
     """Живой SSE: payload/заголовки доходят, строки режутся по \\n."""
     url, cfg = sse_server
     cfg["lines"] = [_sse_line("при"), b"", _sse_line("вет", "stop")]
-    _live_backend(name)
     lines: list[bytes] = []
     with T.open_stream(url, headers={"Authorization": "Bearer key"},
                        payload={"model": "m", "stream": True},
@@ -449,15 +273,26 @@ def test_live_sse_roundtrip(name, sse_server, monkeypatch, fresh_client):
                                           _sse_line("вет", "stop")]
 
 
-@pytest.mark.parametrize("name", ["requests", "httpx"])
-def test_live_error_status_and_retry_after(name, sse_server, monkeypatch,
-                                           fresh_client):
+def test_live_error_status_and_retry_after(sse_server):
     """Нечётные коды не проглатываются: статус и Retry-After видны выше."""
     url, cfg = sse_server
     cfg["status"], cfg["extra"] = 429, {"Retry-After": "7"}
-    _live_backend(name)
-    status, retry_after = 0, None
+    seen: dict = {"status": 0, "retry_after": None}
     with T.open_stream(url, payload={}) as resp:
-        status, retry_after = resp.status_code, resp.headers.get("Retry-After")
-    assert status == 429
-    assert retry_after == "7"
+        seen["status"] = resp.status_code
+        seen["retry_after"] = resp.headers.get("Retry-After")
+    assert seen["status"] == 429
+    assert seen["retry_after"] == "7"
+
+
+def test_live_connection_refused_is_connect_timeout(srv_port):
+    """Сервер лежит — наружу уходит ConnectTimeout, а не httpx-исключение."""
+    with pytest.raises(T.ConnectTimeout):
+        with T.open_stream(f"http://127.0.0.1:{srv_port}/v1/chat/completions",
+                           payload={}, connect_timeout=1, read_timeout=1):
+            pass
+
+
+def test_backend_is_reported_as_httpx():
+    assert T.BACKEND == "httpx"
+    assert T.main([]) == 0

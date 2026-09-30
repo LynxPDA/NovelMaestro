@@ -68,25 +68,26 @@ def test_core_common_has_the_single_stream():
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
-def test_script_uses_core_stream_not_requests_post(script):
-    """Никто в cli/ не ходит в LLM напрямую (requests.post/iter_lines)."""
+def test_script_uses_core_stream_not_raw_http(script):
+    """Никто в cli/ не ходит в LLM напрямую: только stream_chat_completion."""
     src = script.read_text(encoding="utf-8")
-    assert not re.search(r"requests\.post\s*\(", src), \
-        f"{script.name}: прямой requests.post запрещён — только stream_chat_completion"
+    assert not re.search(r"(?:requests|httpx|aiohttp)\.(?:post|get|stream)\s*\(", src), \
+        f"{script.name}: прямой HTTP-запрос запрещён — только stream_chat_completion"
     assert "iter_lines" not in src, \
         f"{script.name}: свой SSE-обработчик запрещён"
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Внешние библиотеки: HTTP-клиент импортирует ТОЛЬКО core/transport.py
+# Внешние библиотеки: HTTP-клиент один (httpx) и импортирует его ТОЛЬКО транспорт
 # ══════════════════════════════════════════════════════════════════════
-HTTP_IMPORT_RE = re.compile(r"^\s*(?:import|from)\s+(?:requests|httpx)\b", re.M)
+HTTP_IMPORT_RE = re.compile(
+    r"^\s*(?:import|from)\s+(?:httpx|requests|aiohttp|urllib3)\b", re.M)
 ENTRYPOINTS = [CORE, ROOT / "run.py", *SCRIPTS, *WEB]
 
 
 @pytest.mark.parametrize("entry", ENTRYPOINTS, ids=lambda p: p.name)
 def test_only_transport_imports_http_library(entry):
-    """Точка выхода в сеть одна: httpx/requests видит только транспорт."""
+    """Точка выхода в сеть одна: HTTP-клиент видит только core/transport.py."""
     if entry.name == "transport.py":
         pytest.skip("транспорт — единственное место HTTP-библиотек")
     src = entry.read_text(encoding="utf-8")
@@ -94,6 +95,19 @@ def test_only_transport_imports_http_library(entry):
     assert found is None, (
         f"{entry.name}: HTTP-библиотека импортируется напрямую — "
         f"только core/transport.py ({found.group(0).strip()})")
+
+
+def test_http_client_is_single():
+    """Запасного HTTP-клиента нет: это второй адаптер, второй путь ошибок и
+    второй набор тестов ради поведения, которое вызывающий не видит."""
+    body = "\n".join(line for line in
+                      (ROOT / "requirements.txt").read_text(
+                          encoding="utf-8").splitlines()
+                      if not line.lstrip().startswith("#"))
+    names = re.findall(r"^\s*([A-Za-z0-9_.-]+)\s*(?:==|>=|>|$)", body, re.M)
+    assert [n.lower() for n in names].count("httpx") == 1, f"транспорт: {names}"
+    for extra in ("requests", "aiohttp", "urllib3"):
+        assert extra not in [n.lower() for n in names], f"{extra} вернулся в pip-список"
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
