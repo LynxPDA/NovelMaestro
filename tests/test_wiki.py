@@ -18,6 +18,13 @@ import wiki as WIKI  # noqa: E402
 from core import stage as core_stage  # noqa: E402
 
 
+def _stage():
+    """Контекст стадии для моков: профиль с короткими таймаутами."""
+    profile = core_stage.LlmProfile(base_url="h", model="m", timeout=10,
+                                   stream_timeout=10, max_retries=1)
+    return core_stage.Stage(name="wiki", logger=SilentLog(), profile=profile)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # форматирование / генерация статьи / сборка
 # ══════════════════════════════════════════════════════════════════════
@@ -35,10 +42,10 @@ def test_format_term_for_prompt():
 def test_generate_article(monkeypatch):
     seen = {}
 
-    def fake_llm(system_prompt, user_content, logger=None, **kw):
+    def fake_llm(stage, system_prompt, user_content):
         seen["sys"] = system_prompt
         seen["user"] = user_content
-        seen["kw"] = kw
+        seen["stage"] = stage
         return "ГОТОВАЯ СТАТЬЯ"
 
     monkeypatch.setattr(WIKI, "llm_request", fake_llm)
@@ -48,9 +55,7 @@ def test_generate_article(monkeypatch):
         item, ["фрагмент один", "фрагмент два"],
         [("Чэнь Ян", "Person", 5)], "Person",
         "Статья о {translation}. {relations_label}.",
-        {"base_url": "h", "model": "m", "api_key": "", "max_retries": 1,
-         "timeout": 10, "temperature": None, "thinking": None},
-        SilentLog())
+        _stage(), SilentLog())
     assert out == "ГОТОВАЯ СТАТЬЯ"
     assert "Статья о Линь Шуй" in seen["sys"]
     assert "Чэнь Ян" in seen["user"] and "[Фрагмент 1]" in seen["user"]
@@ -203,9 +208,7 @@ def test_run_generation(tmp_path, monkeypatch):
         ner, db, exclude_types=set(), top_n=10, min_count=2,
         context_chunks=8, near_distance=64,
         system_prompt="Статья о {translation}.",
-        llm_args={"base_url": "h", "model": "m", "api_key": "",
-                  "max_retries": 1, "timeout": 10, "temperature": None,
-                  "thinking": None},
+        stage=_stage(),
         max_workers=1, output_path=out, co_pairs=[], co_top=5, rulate=False,
         logger=SilentLog(),
     )
@@ -222,9 +225,7 @@ def test_run_generation_cache_hit(tmp_path, monkeypatch):
     out = str(tmp_path / "wiki.md")
     WIKI.run_wiki_generation(
         ner, db, set(), 10, 2, 8, 64, "Статья о {translation}.",
-        {"base_url": "h", "model": "m", "api_key": "", "max_retries": 1,
-         "timeout": 10, "temperature": None, "thinking": None},
-        1, out, [], 5, False, SilentLog(),
+        _stage(), 1, out, [], 5, False, SilentLog(),
     )
     assert "СВЕЖАЯ СТАТЬЯ" in Path(out).read_text(encoding="utf-8")
     assert "СВЕЖАЯ СТАТЬЯ" in Path(out).read_text(encoding="utf-8")
@@ -239,9 +240,7 @@ def test_run_generation_empty(tmp_path, monkeypatch):
     out = str(tmp_path / "wiki.md")
     WIKI.run_wiki_generation(
         ner, db, set(), 10, 2, 8, 64, "Статья о {translation}.",
-        {"base_url": "h", "model": "m", "api_key": "", "max_retries": 1,
-         "timeout": 10, "temperature": None, "thinking": None},
-        1, out, [], 5, False, SilentLog(),
+        _stage(), 1, out, [], 5, False, SilentLog(),
     )
     assert not Path(out).exists()
 
@@ -255,9 +254,7 @@ def test_run_generation_llm_fail(tmp_path, monkeypatch):
     out = str(tmp_path / "wiki.md")
     WIKI.run_wiki_generation(
         ner, db, set(), 10, 2, 8, 64, "Статья о {translation}.",
-        {"base_url": "h", "model": "m", "api_key": "", "max_retries": 1,
-         "timeout": 10, "temperature": None, "thinking": None},
-        1, out, [], 5, False, SilentLog(),
+        _stage(), 1, out, [], 5, False, SilentLog(),
     )
     assert not Path(out).exists()
 

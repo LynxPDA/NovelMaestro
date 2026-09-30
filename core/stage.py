@@ -44,11 +44,11 @@ REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh",
                      "max")
 
 #: Терпимые старые написания: dest → дополнительный флаг.
-LEGACY_ALIASES: dict[str, str] = {
-    "max_retries": "--retries",
-    "reasoning_effort": "--reasoning-effort",
-    "env_file": "--env-file",
-    "api_key": "--api-key",
+LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
+    "max_retries": ("--retries",),
+    "reasoning_effort": ("--reasoning-effort", "--thinking"),
+    "env_file": ("--env-file",),
+    "api_key": ("--api-key",),
 }
 
 
@@ -73,7 +73,7 @@ def add_llm_args(parser: argparse.ArgumentParser, *,
 
     def flags(dest: str, canonical: str) -> tuple[str, ...]:
         if aliases and dest in LEGACY_ALIASES:
-            return (canonical, LEGACY_ALIASES[dest])
+            return (canonical, *LEGACY_ALIASES[dest])
         return (canonical,)
 
     group.add_argument(*flags("host", "--host"), default=None, metavar="URL",

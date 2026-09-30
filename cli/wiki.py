@@ -18,7 +18,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from tqdm import tqdm
 
 # ── bootstrap: поиск core/common.py подъёмом от скрипта ──
 def _bootstrap_core() -> None:
@@ -35,14 +34,17 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
-from core.stage import resolve_profile  # noqa: E402
+from core.stage import (  # noqa: E402
+    Progress,
+    Stage,
+    add_llm_args,
+    resolve_profile,
+)
 from core.common import (  # noqa: E402
     _int_count,
     build_chapter_map,
     build_fts_index,
     compile_chapter_text,
-    determine_model,
-    emit_progress,
     even_sample,
     find_env_file,
     fts_escape,
@@ -50,16 +52,10 @@ from core.common import (  # noqa: E402
     fts_search_first,
     fts_search_ids_all,
     get_tagged_prompt,
-    llm_messages,
     log_argv as _cc_log_argv,
     parse_dotenv,
-    preview_logger,
-    preview_request_payload,
     print_env_help,
     setup_logging as _cc_setup_logging,
-    stream_chat_completion,
-    web_progress_enabled,
-    write_preview_request,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -526,36 +522,12 @@ def compute_co_occurrence(
 # LLM ЗАПРОС
 # ══════════════════════════════════════════════════════════════════════
 
-def llm_request(
-    system_prompt: str,
-    user_content: str,
-    base_url: str,
-    model: str,
-    api_key: str,
-    max_retries: int,
-    timeout: int,
-    temperature: float | None,
-    thinking: str | None,
-    logger,
-) -> str | None:
-    """Делегирует в единый стрим core.common.stream_chat_completion
-    ([DONE]/finish_reason, loop-детект, cut, empty — одна гигиена на проект).
-    max_tokens=65536 — исторический предел wiki (ТОКЕНЫ, серверный
-    предохранитель). thinking: пусто = не передаём (дефолт сервера),
-    задано — шлём как есть (none = явное отключение)."""
-    text, _err = stream_chat_completion(
-        base_url, model,
-        llm_messages(system_prompt, data=user_content),
-        api_key=api_key,
-        max_retries=max_retries,
-        timeout=timeout,
-        stream_timeout=timeout,
-        temperature=temperature,
-        reasoning_effort=thinking,
-        max_tokens=65536,
-        logger=logger,
-        label="[wiki]",
-    )
+def llm_request(stage: Stage, system_prompt: str,
+                user_content: str) -> str | None:
+    """Единый стрим стадии (гигиена — в core.stage): одна пара сообщений на
+    всех. max_tokens=65536 — исторический предел wiki (ТОКЕНЫ, серверный
+    предохранитель); reasoning_effort (--thinking) пусто = дефолт сервера."""
+    text, _err = stage.complete(system_prompt, user_content, label="[wiki]")
     return text
 
 
@@ -694,7 +666,7 @@ def generate_article(
     co_occur: list[tuple[str, str, int]],
     base_type: str,
     system_prompt: str,
-    llm_args: dict,
+    stage: Stage,
     logger,
     type_names_ru: dict | None = None,
     relations_labels: dict | None = None,
@@ -706,7 +678,7 @@ def generate_article(
         relations_labels=relations_labels,
         skip_relations=skip_relations,
     )
-    return llm_request(sys_prompt, user_content, logger=logger, **llm_args)
+    return llm_request(stage, sys_prompt, user_content)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -846,7 +818,7 @@ def run_wiki_generation(
     context_chunks: int,
     near_distance: int,
     system_prompt: str,
-    llm_args: dict,
+    stage: Stage,
     max_workers: int,
     output_path: str,
     co_pairs: list[tuple[str, str]],
@@ -935,14 +907,13 @@ def run_wiki_generation(
          "🔍 Извлечение контекста (поиск по translation)...")
     fragments_map: dict[str, list[str]] = {}
     # стартовое событие прогресса — бар виден сразу
-    emit_progress(0, len(filtered), "Извлечение контекста")
-    if web_progress_enabled():
-        _log(logger, logging.INFO, f"📊 Прогресс: 0/{len(filtered)}")
-    for i, item in enumerate(tqdm(filtered, desc="Context extraction",
-                                  disable=web_progress_enabled())):
+    progress = Progress(len(filtered), "Извлечение контекста", unit="запись",
+                        bar=True, logger=logger)
+    progress.start()
+    for item in filtered:
         trans = _get_translation(item)
         if not trans:
-            emit_progress(i + 1, len(filtered), "Извлечение контекста")
+            progress.step()
             continue
         base_type = _get_base_type(item.get("type"))
         frags = extract_context(
@@ -952,7 +923,7 @@ def run_wiki_generation(
             markers=markers, default_markers=default_markers,
         )
         fragments_map[trans] = frags
-        emit_progress(i + 1, len(filtered), "Извлечение контекста")
+        progress.step()
 
     found = sum(1 for v in fragments_map.values() if v)
     _log(logger, logging.INFO,
@@ -966,7 +937,6 @@ def run_wiki_generation(
 
     # ── Предпросмотр запроса (--preview-request): первая статья ──
     if preview_request:
-        log = preview_logger("wiki")
         item0 = filtered[0]
         trans0 = _get_translation(item0)
         sys0, user0 = build_article_prompts(
@@ -977,11 +947,7 @@ def run_wiki_generation(
             relations_labels=relations_labels,
             skip_relations=skip_relations,
         )
-        payload = preview_request_payload(
-            "wiki", f"Статья «{trans0}» (1/{len(filtered)})",
-            llm_args.get("model", ""),
-            llm_messages(sys0, user0),
-            meta={
+        meta = {
                 "terms": above_min,
                 "selected": len(filtered),
                 "min_count": min_count,
@@ -989,11 +955,9 @@ def run_wiki_generation(
                 "context_chunks": context_chunks,
                 "near_distance": near_distance,
                 "fragments": len(fragments_map.get(trans0, [])),
-            })
-        write_preview_request(preview_request, payload)
-        _log(log, logging.INFO,
-             f"✅ Предпросмотр запроса: {preview_request} "
-             f"({len(user0)} симв. user)")
+        }
+        stage.preview(f"Статья «{trans0}» (1/{len(filtered)})", sys0, user0,
+                      meta=meta)
         return
 
     # ── Задачи: все термины → индивидуальные статьи ──
@@ -1013,7 +977,7 @@ def run_wiki_generation(
         co = co_occurrence.get(trans, [])
         result = generate_article(
             item, frags, co, base_type,
-            system_prompt, llm_args, logger,
+            system_prompt, stage, logger,
             type_names_ru=type_names_ru,
             relations_labels=relations_labels,
             skip_relations=skip_relations,
@@ -1021,13 +985,10 @@ def run_wiki_generation(
         return base_type, trans, result, count
 
     # ── Потоки ──
-    pbar = tqdm(total=total_tasks, desc="Wiki generation",
-                disable=web_progress_enabled())
-    completed = 0
     # стартовое событие прогресса — бар виден сразу
-    emit_progress(0, total_tasks, "Генерация статей")
-    if web_progress_enabled():
-        _log(logger, logging.INFO, f"📊 Прогресс: 0/{total_tasks}")
+    progress = Progress(total_tasks, "Генерация статей", unit="статья",
+                        bar=True, logger=logger)
+    progress.start()
     results: dict[str, list[tuple[str, str, int]]] = {}
     results_lock = threading.Lock()
 
@@ -1045,18 +1006,16 @@ def run_wiki_generation(
                     with results_lock:
                         results.setdefault(base_type, []).append(
                             (title, content, count))
-                    tqdm.write(f"✅ {title}")
+                    progress.log(f"✅ {title}")
                 else:
                     _log(logger, logging.WARNING,
                          f"⚠️ Пусто: {ref}")
             except Exception as e:
                 _log(logger, logging.ERROR, f"💥 {ref}: {e}")
 
-            completed += 1
-            pbar.update(1)
-            emit_progress(completed, total_tasks, "Генерация статей")
+            progress.step()
 
-    pbar.close()
+    progress.close()
 
     # ── Сборка ──
     if as_chapter:
@@ -1282,66 +1241,9 @@ def main():
         help="Сколько связей выводить для каждого термина (по умолчанию: 5).",
     )
 
-    # ── LLM-сервер ──
-    g_llm = parser.add_argument_group("LLM-сервер")
-    g_llm.add_argument(
-        "--host",
-        default=None,
-        metavar="URL",
-        help="Базовый URL LLM-сервера (пусто = HOST из .env).",
-    )
-    g_llm.add_argument(
-        "--api_key",
-        default=None,
-        metavar="KEY",
-        help="API-ключ (пусто = API_KEY из .env).",
-    )
-    g_llm.add_argument(
-        "--model",
-        default=None,
-        metavar="NAME",
-        help="Модель: --model или MODEL/WIKI_MODEL в .env (обязательна).",
-    )
-    g_llm.add_argument(
-        "--env_file", default=None, help="Явный путь к .env.",
-    )
-    g_llm.add_argument(
-        "--retries",
-        type=int,
-        default=10,
-        metavar="N",
-        help="Число повторных попыток при ошибке LLM (по умолчанию: 10).",
-    )
-    g_llm.add_argument(
-        "--timeout",
-        type=int,
-        default=600,
-        metavar="SEC",
-        help="Таймаут одного запроса в секундах (по умолчанию: 600).",
-    )
-    g_llm.add_argument(
-        "--temperature",
-        type=float,
-        default=None,
-        metavar="FLOAT",
-        help=(
-            "Температура генерации (0.0–2.0). "
-            "По умолчанию не задаётся (сервер решает сам)."
-        ),
-    )
-    g_llm.add_argument(
-        "--thinking",
-        type=str,
-        default=None,
-        choices=["none", "minimal", "low", "medium", "high",
-                 "xhigh", "max"],
-        metavar="LEVEL",
-        help=(
-            "Режим (усилие) размышления модели (reasoning effort). "
-            "Варианты: none/minimal/low/medium/high/xhigh/max. "
-            "По умолчанию не задаётся (сервер использует свой дефолт)."
-        ),
-    )
+    # ── LLM-сервер: общий блок флагов (core.stage),aliases — старые имена ──
+    add_llm_args(parser, timeout=600, max_retries=10,
+                 max_tokens=65536, aliases=True)
 
     # ── Производительность ──
     g_perf = parser.add_argument_group("Производительность")
@@ -1399,9 +1301,8 @@ def main():
 
     args = parser.parse_args()
     # Сервер: CLI > os.environ > .env (общая реализация — core.stage)
-    profile = resolve_profile(args, stage="wiki", require_model=False)
-    args.host, args.api_key, args.model = (
-        profile.base_url, profile.api_key, profile.model)
+    profile = resolve_profile(args, stage="wiki", max_tokens=65536,
+                              require_model=False)
 
     # ── Валидация ──
     if args.context_chunks < 1 or args.top < 1 or args.min_count < 1:
@@ -1436,15 +1337,8 @@ def main():
         _log(logger, logging.ERROR, f"❌ NER файл не найден: {args.ner_file}")
         return
 
-    # ── Модель ──
-    base_url = args.host.rstrip("/")
-    if not base_url.endswith("/v1"):
-        base_url += "/v1"
-    try:
-        model_name = determine_model(args.model, logger)
-    except SystemExit:
-        _log(logger, logging.ERROR, "❌ Модель не определена.")
-        return
+    # ── Контекст стадии: сервер/модель уже разрешены resolve_profile ──
+    stage = Stage(name="wiki", logger=logger, profile=profile)
 
     # ── Промпт и настройки из тегов ──
     system_prompt = SYSTEM_WIKI_ARTICLE
@@ -1542,17 +1436,6 @@ def main():
     if args.co_occurrence_pairs:
         co_pairs = _parse_co_occurrence_pairs(args.co_occurrence_pairs)
 
-    # ── LLM аргументы ──
-    llm_args = {
-        "base_url": base_url,
-        "model": model_name,
-        "api_key": args.api_key,
-        "max_retries": args.retries,
-        "timeout": args.timeout,
-        "temperature": args.temperature,
-        "thinking": args.thinking,
-    }
-
     rulate = args.rulate_mode or args.rulate_html
     rulate_html = args.rulate_html
     if rulate_html and os.path.splitext(args.output)[1].lower() == ".md":
@@ -1578,11 +1461,11 @@ def main():
              f"{args.save_type}.txt)")
 
     _log(logger, logging.INFO,
-         f"🚀 Wiki | Модель: {model_name} | Top: {args.top} | "
+         f"🚀 Wiki | Модель: {profile.model} | Top: {args.top} | "
          f"Exclude: {exclude_types or 'нет'} | "
          f"Co-occur: {args.co_occurrence_pairs or 'выкл'} | "
          f"NEAR: {args.near_distance} | "
-         f"Thinking: {args.thinking or 'сервер'} | "
+         f"Reasoning: {profile.reasoning_effort or 'сервер'} | "
          f"Rulate: {'html' if rulate_html else ('md' if rulate else 'off')} | "
          f"TOC: {'on' if args.toc else 'off'}/links: "
          f"{'on' if args.toc_links else 'off'} | "
@@ -1597,7 +1480,7 @@ def main():
         context_chunks=args.context_chunks,
         near_distance=args.near_distance,
         system_prompt=system_prompt,
-        llm_args=llm_args,
+        stage=stage,
         max_workers=max(1, min(16, args.threads)),
         preview_request=args.preview_request,
         output_path=args.output,

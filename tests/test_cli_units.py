@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "cli"))
 from conftest import SilentLog  # noqa: E402
 
+from core import stage as core_stage  # noqa: E402
 import ner as NER            # noqa: E402
 import wiki as WIKI          # noqa: E402
 import translate_check_llm as RE  # noqa: E402  (бывший fix_errors)
@@ -390,9 +391,12 @@ def test_wiki_llm_request_delegates(monkeypatch):
         seen["messages"] = messages
         return "СТАТЬЯ", ""
 
-    monkeypatch.setattr(WIKI, "stream_chat_completion", fake_stream)
-    out = WIKI.llm_request("с", "ю", "http://h", "m", "k", 1, 60,
-                           None, None, SilentLog())
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
+    stage = core_stage.Stage(
+        name="wiki", logger=SilentLog(),
+        profile=core_stage.LlmProfile(base_url="http://h", model="m",
+                                      timeout=600, max_retries=1))
+    out = WIKI.llm_request(stage, "с", "ю")
     assert out == "СТАТЬЯ"
     assert seen["messages"] == [
         {"role": "system", "content": ""},
