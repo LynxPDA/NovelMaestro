@@ -39,9 +39,14 @@ web/      web-интерфейс: server.py + api.py (фасад: register() и 
           api_templates.py (шаблоны); общий mutable-контекст — в api_common,
           фасад реэкспортирует те же объекты; stages.py
           (реестр стадий и сборка argv), jobs.py (JobManager + SSE),
-          pipeline.py (web-оркестратор конвейера), static/ (SPA; локальные
-          библиотеки — static/vendor/ + манифест vendor.lock.json).
-          Контракт API — web/README.md.
+          pipeline.py (web-оркестратор конвейера), static/ (SPA: app.js —
+          состояние, роутер, настройки и общие action; project-views.js —
+          вкладки проекта; run-views.js — запуски и очередь; ui-core.js —
+          чистые функции ($, api, fmtBytes, taskState…); ui-components.js —
+          общий DOM-слой: фабрика h, iconEl и каркасы modal, menuButton,
+          previewPane, listPager — new-логика в view-файлах повторяет только
+          данные и разметку; локальные библиотеки — static/vendor/ + манифест
+          vendor.lock.json). Контракт API — web/README.md.
 cli/  исполнители — чистый CLI (argparse), без интерактивных меню.
           batch_replace.py — массовые замены (правила «паттерн -> замена»
           из формы/аргументов --replace; файл replacements.txt выпилен);
@@ -230,6 +235,7 @@ Regexp-поля форм и CLI — чистые стандартные выра
    - прогони `python3 -m pytest tests/ -q` — все тесты должны быть зелёными. Коммит с падающими тестами запрещён;
    - если менял код `core/`, `cli/`, `web/`, `run.py` — проверь, что существующие тесты это покрывают; не покрывают — добавь/обнови тесты в том же коммите;
    - затем smoke-запуск затронутого скрипта с `--help` (и `--dry-run`, если поддерживается);
+   - если менял SPA (`web/static/*.js`) — `./dev.sh spa` (`node --check` по всем файлам + `node --test` по `tests/spa/`) и `./dev.sh probe` (headless-обход всех экранов, панелей и модалок на временных данных);
    - **закоммить и запушь изменения на GitHub** (`git add -A` → `git commit` → `git push origin`). Незапушенный коммит — не завершённая работа. Тесты НЕ должны ходить в сеть: LLM только мокать (monkeypatch на `stream_chat_completion` / `core.transport.open_stream`), данные — во временных папках pytest (`tmp_path`).
 8. **Стандарт коммитов**: `<тип>(<область>): <описание на русском>`; типы — `feat`/`fix`/`refactor`/`docs`/`test`/`chore`; области — `core`/`cli`/`web`/`templates`/`tests`/`docs`/`repo`. Описание — инфинитив, до ~72 символов; одно логическое изменение — один коммит. Если в одном файле смешаны правки из разных задач (например, докстринг + фича), файл можно коммитить целиком в коммит основной задачи — не нужно вырезать хунки по-атомному. Первый коммит истории: `chore(repo): initial commit — NovelMaestro`.
 
