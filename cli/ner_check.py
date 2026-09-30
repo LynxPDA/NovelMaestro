@@ -73,7 +73,12 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
-from core.stage import resolve_profile  # noqa: E402
+from core.stage import (  # noqa: E402
+    Progress,
+    add_llm_args,
+    bind_profile,
+    new_stage,
+)
 from core.common import (  # noqa: E402
     REVIEW_ACCEPT,
     REVIEW_REJECT,
@@ -84,37 +89,27 @@ from core.common import (  # noqa: E402
     build_ner_batches,
     compile_chapter_text,
     diff_ner_records,
-    emit_progress,
     estimate_tokens,
     even_sample,
     filter_ner_items,
-    find_env_file,
     format_ner_record,
     fts_escape,
     fts_search_all,
     get_tagged_prompt,
     glossary_body,
-    llm_messages,
     load_prompt,
-    log_argv,
     merge_review_entries,
     ner_item_lookup,
-    parse_dotenv,
     parse_rag_suggestions,
     parse_review_doc,
-    preview_logger,
-    preview_request_payload,
-    print_env_help,
     review_entry,
-    setup_logging,
-    stream_chat_completion,
     trim_to_tokens,
-    web_progress_enabled,
-    write_preview_request,
 )
 
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "ner_check_prompt.txt")
 DEFAULT_REVIEW = "tmp/ner_review.json"
+# Серверный предел ответа стадии, ТОКЕНЫ (не расчёт)
+MAX_TOKENS = 65536
 
 
 def _bak_path(input_path: str) -> str:
@@ -333,23 +328,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-bak", action="store_true",
                    help="Не создавать бэкап <файл>.bak при применении "
                         "(по умолчанию создаётся).")
-    # сервер: CLI > HOST/API_KEY/MODEL из .env > help+exit
-    p.add_argument("--host", default=None, help="URL API-сервера (пусто = HOST из .env).")
-    p.add_argument("--api_key", default=None, help="Bearer-ключ (пусто = API_KEY из .env).")
-    p.add_argument("--model", default=None,
-                   help="Модель: --model или MODEL/NER_CHECK_MODEL в .env (обязательна).")
-    p.add_argument("--env_file", default=None, help="Явный путь к .env.")
-    p.add_argument("--temperature", type=float, default=None,
-                   help="Температура LLM (пусто = сервер).")
-    p.add_argument("--reasoning_effort", default=None,
-                   choices=["none", "minimal", "low", "medium", "high",
-                            "xhigh", "max"],
-                   help="Усилия рассуждений: none/minimal/low/medium/"
-                        "high/xhigh/max (пусто = сервер; none — отключить).")
-    p.add_argument("--max_tokens", type=int, default=65536,
-                   help="Серверный предел ответа, ТОКЕНЫ (не расчёт).")
-    p.add_argument("--timeout", type=int, default=300)
-    p.add_argument("--max_retries", type=int, default=3)
+    # сервер: CLI > os.environ > .env (общий блок флагов — core.stage)
+    add_llm_args(p, timeout=300, max_tokens=MAX_TOKENS,
+                 aliases=True)
     return p
 
 
@@ -402,13 +383,6 @@ def save_review_file(path, input_path, created, entries, params=None,
     if saved_params:
         doc["params"] = saved_params
     atomic_write(path, json.dumps(doc, ensure_ascii=False, indent=2))
-
-
-def resolve_server(args, logger):
-    """Сервер стадии: CLI > os.environ > .env (общая реализация — core.stage).
-    Возвращает (base_url, key, model)."""
-    profile = resolve_profile(args, stage="ner_check", logger=logger)
-    return profile.base_url, profile.api_key, profile.model
 
 
 def get_prompt(args, logger) -> str:
@@ -502,28 +476,19 @@ def _batch_user_msg(title, batch, prompt_tpl, fields):
     return render_prompt(tpl, body, fields)
 
 
-def run_batch(task, prompt_tpl, args, base_url, api_key, model, logger):
+def run_batch(task, prompt_tpl, args, stage):
     """Один батч проверки (запускается в потоке). Возвращает
     (title, records|None) — исправленные записи от LLM; None при
     ошибке LLM/парсинга. Diff с ner.json — в do_check (нужен
     полный items_by_term)."""
+    logger = stage.logger
     title, batch = task
     fields = [f.strip() for f in args.fields.split(",") if f.strip()
               if f.strip() != "term"]
     user_msg = _batch_user_msg(title, batch, prompt_tpl, fields)
     logger.info(f"  батч: {len(batch)} записей, "
                 f"{estimate_tokens(user_msg)} токенов запроса (оценка)")
-    text, err = stream_chat_completion(
-        base_url, model,
-        llm_messages(user_msg),
-        api_key=api_key,
-        max_retries=args.max_retries,
-        timeout=args.timeout, stream_timeout=args.timeout,
-        temperature=args.temperature,
-        reasoning_effort=args.reasoning_effort,
-        max_tokens=args.max_tokens,
-        reference_len=0, logger=logger,
-        label=f"ner_check {title}")
+    text, err = stage.complete(user_msg, label=f"ner_check {title}")
     if err:
         logger.error(f"  ❌ LLM: {err}")
         return title, None
@@ -651,24 +616,14 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
         for r in records) + "\n]"
 
 
-def _rag_query(term, user_msg, args, base_url, api_key, model, logger,
-               items_by_term, fields):
+def _rag_query(term, user_msg, args, stage, items_by_term, fields):
     """Один термин — один LLM-запрос (блок собран заранее, FTS5-БД
     не трогаем из воркера). Возвращает (entries, ok)."""
+    logger = stage.logger
     logger.info(f"  {term}: запрос "
                 f"{estimate_tokens(user_msg)} токенов (оценка) "
                 f"(бюджет на термин {args.rag_budget})")
-    text_out, err = stream_chat_completion(
-        base_url, model,
-        llm_messages(user_msg),
-        api_key=api_key,
-        max_retries=args.max_retries,
-        timeout=args.timeout, stream_timeout=args.timeout,
-        temperature=args.temperature,
-        reasoning_effort=args.reasoning_effort,
-        max_tokens=args.max_tokens,
-        reference_len=0, logger=logger,
-        label=f"ner_check rag {term}")
+    text_out, err = stage.complete(user_msg, label=f"ner_check rag {term}")
     if err:
         logger.error(f"  ❌ {term}: LLM: {err}")
         return [], False
@@ -697,10 +652,11 @@ def _rag_query(term, user_msg, args, base_url, api_key, model, logger,
     return entries, True
 
 
-def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
+def run_rag(args, stage, prompt_tpl) -> int:
     """RAG-режим: каждый термин — ОТДЕЛЬНЫЙ LLM-запрос, параллельно
     (--threads); бюджет на термин: промпт + фрагменты ≤ rag_budget.
     Возвращает код возврата (0 — ок)."""
+    logger = stage.logger
     terms = [t.strip() for t in args.rag_terms.split("\n")
              if t.strip()]
     if not terms:
@@ -764,31 +720,23 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
 
     total = len(tasks)
     # ── Предпросмотр запроса (--preview-request): RAG первого термина ──
-    if getattr(args, "preview_request", None):
-        log = preview_logger("ner_check")
-        log_argv(log)
-        term, user_msg = tasks[0]
-        payload = preview_request_payload(
-            "ner_check", f"RAG · термин «{term}» (1/{len(tasks)})",
-            model, llm_messages(user_msg),
-            meta={
-                "mode": "rag",
-                "terms": len(terms),
-                "rag_budget": args.rag_budget,
-                "threads": args.threads,
-                "fields": args.fields,
-                "fts5_note": "сборка FTS5-индекса по книге (может "
-                             "занять до пары минут на большой книге)",
-            })
-        write_preview_request(args.preview_request, payload)
-        log.info("✅ Предпросмотр запроса: %s (%d симв. user)",
-                 args.preview_request, len(user_msg))
+    term0, msg0 = tasks[0]
+    if stage.preview(f"RAG · термин «{term0}» (1/{total})", msg0,
+                    meta={"mode": "rag",
+                          "terms": len(terms),
+                          "rag_budget": args.rag_budget,
+                          "threads": args.threads,
+                          "fields": args.fields,
+                          "fts5_note": "сборка FTS5-индекса по книге "
+                                       "(может занять до пары минут на "
+                                       "большой книге)"}):
         return 0
-    done = 0
     lock = threading.Lock()
     entries: list[dict] = []
     failures = 0
-    emit_progress(0, total, "Точечная проверка (RAG)")
+    progress = Progress(total, "Точечная проверка (RAG)", unit="термин",
+                        logger=logger)
+    progress.start()
 
     # накопительный review-файл: --save-interval N — сохранять каждые
     # N терминов (0 = только в конце, как раньше)
@@ -812,16 +760,15 @@ def run_rag(args, logger, base_url, api_key, model, prompt_tpl) -> int:
             logger.info(f"🧩 Правки: {args.review} (всего: {len(merged)})")
 
     def worker(term, user_msg):
-        nonlocal done, failures
-        res, ok = _rag_query(term, user_msg, args, base_url, api_key,
-                             model, logger, items_by_term, fields)
+        nonlocal failures
+        res, ok = _rag_query(term, user_msg, args, stage,
+                             items_by_term, fields)
         with lock:
             entries.extend(res)
             if not ok:
                 failures += 1
-            done += 1
-            emit_progress(done, total, "Точечная проверка (RAG)")
-            if save_interval and done % save_interval == 0:
+            progress.step()
+            if save_interval and progress.done % save_interval == 0:
                 flush_review()
 
     workers = max(1, min(args.threads or 1, total))
@@ -854,8 +801,9 @@ def patches_table(patches, offset=0) -> str:
     return "\n".join(lines)
 
 
-def do_check(args, logger) -> int:
-    base_url, api_key, model = resolve_server(args, logger)
+def do_check(args, stage) -> int:
+    """Проверка глоссария: батчи → diff с ner.json → накопительный review."""
+    logger = stage.logger
 
     if args.passes != "rag" and args.rag_terms.strip():
         logger.warning(
@@ -864,7 +812,7 @@ def do_check(args, logger) -> int:
     if args.passes == "rag":
         prompt_tpl = load_rag_prompt(args.rag_prompt_file or args.prompt_file,
                                      logger)
-        return run_rag(args, logger, base_url, api_key, model, prompt_tpl)
+        return run_rag(args, stage, prompt_tpl)
 
     data = load_ner_json(args.input, logger)
     type_filter = ([t.strip() for t in args.types.split(",") if t.strip()]
@@ -960,27 +908,16 @@ def do_check(args, logger) -> int:
         return 0
 
     # ── Предпросмотр запроса (--preview-request): первый батч прохода ──
-    if getattr(args, "preview_request", None):
-        log = preview_logger("ner_check")
-        log_argv(log)
-        title, batch = stage_tasks[0]
-        fields = [f.strip() for f in args.fields.split(",")
-                  if f.strip() and f.strip() != "term"]
-        user_msg = _batch_user_msg(title, batch, prompt_tpl, fields)
-        payload = preview_request_payload(
-            "ner_check", f"{title} · батч 1/{len(stage_tasks)}", model,
-            llm_messages(user_msg),
-            meta={
-                "mode": args.passes,
-                "batches": len(stage_tasks),
-                "batch_records": len(batch),
-                "batch_size": args.batch_size,
-                "fields": args.fields,
-                "threads": args.threads,
-            })
-        write_preview_request(args.preview_request, payload)
-        log.info("✅ Предпросмотр запроса: %s (%d симв. user)",
-                 args.preview_request, len(user_msg))
+    title0, batch0 = stage_tasks[0]
+    if stage.preview(f"{title0} · батч 1/{len(stage_tasks)}",
+                    _batch_user_msg(title0, batch0, prompt_tpl,
+                                    check_fields),
+                    meta={"mode": args.passes,
+                          "batches": len(stage_tasks),
+                          "batch_records": len(batch0),
+                          "batch_size": args.batch_size,
+                          "fields": args.fields,
+                          "threads": args.threads}):
         return 0
 
     # ── параллельное выполнение: threads потоков на ВСЕ батчи
@@ -990,23 +927,19 @@ def do_check(args, logger) -> int:
     except (TypeError, ValueError):
         workers = 1
     logger.info(f"🔀 Потоков: {workers} (батчей всего: {len(stage_tasks)})")
-    total = len(stage_tasks)
-    emit_progress(0, total, "Проверка глоссария")
-    if web_progress_enabled():
-        logger.info(f"📊 Прогресс: 0/{total}")
     results = {}  # title -> list[records] (исправленные записи от LLM)
     failures = {}  # title -> число упавших батчей
-    done = 0
 
     def _run_batch(task):
-        return run_batch(task, prompt_tpl, args,
-                         base_url, api_key, model, logger)
+        return run_batch(task, prompt_tpl, args, stage)
 
+    progress = Progress(len(stage_tasks), "Проверка глоссария", unit="батч",
+                        logger=logger)
+    progress.start()
     if workers <= 1:
         for task in stage_tasks:
             title, found = _run_batch(task)
-            done += 1
-            emit_progress(done, total, "Проверка глоссария")
+            progress.step()
             if found is None:
                 failures[title] = failures.get(title, 0) + 1
             else:
@@ -1016,14 +949,12 @@ def do_check(args, logger) -> int:
             futs = {ex.submit(_run_batch, t): t for t in stage_tasks}
             for fut in as_completed(futs):
                 title, found = fut.result()
-                done += 1
-                emit_progress(done, total, "Проверка глоссария")
+                progress.step()
                 if found is None:
                     failures[title] = failures.get(title, 0) + 1
                 else:
                     results.setdefault(title, []).extend(found)
-    if web_progress_enabled():
-        logger.info(f"📊 Прогресс: {done}/{total}")
+    logger.info(f"📊 Прогресс: {progress.done}/{progress.total}")
 
     # ── сборка в порядке проходов (детерминированный порядок записи) ──
     seen_titles = []
@@ -1113,16 +1044,11 @@ def do_apply(args, logger) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    try:
-        os.makedirs("logs", exist_ok=True)
-    except OSError as exc:
-        print(f"Не удалось создать logs/: {exc}")
-        return 1
-    logger, _ = setup_logging(os.path.join("logs", "ner_check"))
-    log_argv(logger)
+    # лог стадии — всегда; профиль LLM нужен только режиму проверки
+    stage = new_stage("ner_check", args)
     if args.apply:
-        return do_apply(args, logger)
-    return do_check(args, logger)
+        return do_apply(args, stage.logger)
+    return do_check(args, bind_profile(stage, args, max_tokens=MAX_TOKENS))
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from core.common import (  # noqa: E402
     parse_review_doc, review_entry,
 )
 import ner_check as NC  # noqa: E402
+import core.stage as core_stage  # noqa: E402
 from conftest import SilentLog, ensure_tmp  # noqa: E402
 
 ITEMS = [
@@ -248,7 +249,7 @@ def _mock_stream(monkeypatch, response, calls):
     def fake(base_url, model, messages, **kw):
         calls.append(messages)  # полный список сообщений (system + user)
         return response, None
-    monkeypatch.setattr(NC, "stream_chat_completion", fake)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake)
 
 
 def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
@@ -317,7 +318,7 @@ def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
             return resp_skill, None
         # проход Person (male): повтор старой правки
         return resp_whole, None
-    monkeypatch.setattr(NC, "stream_chat_completion", fake)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake)
 
     # этап 1: весь список
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
@@ -471,7 +472,7 @@ def test_ner_check_auto_apply_whole_only(tmp_path, monkeypatch):
         return ('[{"term": "林凡", "translation": "Лин Фань", '
                 '"reason": "p"}]'), None
 
-    monkeypatch.setattr(NC, "stream_chat_completion", fake)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake)
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
                    "--model", "m", "--auto-apply"])
     assert rc == 0
@@ -496,7 +497,7 @@ def test_ner_check_passes_all_rejected(tmp_path, monkeypatch):
 def test_ner_check_auto_apply_fail_fast(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
-    monkeypatch.setattr(NC, "stream_chat_completion",
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
                         lambda *a, **kw: (None, "timeout"))
     with pytest.raises(SystemExit):
         NC.main(["--input", "ner.json", "--passes", "whole",
@@ -514,7 +515,7 @@ def test_ner_check_llm_error_does_not_crash(tmp_path, monkeypatch):
     def fake(base_url, model, messages, **kw):
         return None, "timeout"
 
-    monkeypatch.setattr(NC, "stream_chat_completion", fake)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake)
     rc = NC.main(["--input", "ner.json", "--passes", "whole",
                   "--host", "http://x", "--model", "m"])
     assert rc == 0
@@ -561,14 +562,14 @@ def test_ner_check_threads_parallel_types(tmp_path, monkeypatch):
 
 
 def test_ner_check_threads_overall_progress(tmp_path, monkeypatch):
-    """Общий прогресс по ВСЕМ батчам (не текущий чанк):
-    emit_progress доходит до total = число батчей всех типов."""
+    """Общий прогресс по ВСЕМ батчам (не текущий чанк): счётчик доходит
+    до total = число батчей всех типов (эмитит core.stage.Progress)."""
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
     calls = []
     _mock_stream(monkeypatch, "[]", calls)
     events = []
-    monkeypatch.setattr(NC, "emit_progress",
+    monkeypatch.setattr(core_stage, "emit_progress",
                         lambda done, total, label="":
                         events.append((done, total)))
     rc = NC.main(["--input", "ner.json", "--passes", "types",
@@ -850,7 +851,7 @@ def test_ner_check_rag_save_interval(tmp_path, monkeypatch):
             gate.wait(10)  # держим второй запрос — проверяем файл
         return responses[i - 1], None
 
-    monkeypatch.setattr(NC, "stream_chat_completion", fake)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake)
     rc = [1]
 
     def run():
