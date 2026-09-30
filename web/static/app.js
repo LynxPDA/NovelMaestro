@@ -1007,6 +1007,104 @@ async function viewSettings() {
     ),
   );
 
+  /* ── рассуждения модели: ОДИН режим на весь конвейер ──
+     спеки стадий этих полей не содержат (иначе шесть одинаковых полей
+     разъехались бы по значениям в одном запуске): стадии читают общие
+     ключи системного .env сами, поэтому режим правится здесь один раз.
+     Поля приходят с сервера (GET /api/stages) — своей копии реестра у
+     SPA нет; name контрола = ключ .env ── */
+  const reErr = h("div", { class: "form-error" });
+  const reRow = h("div", { class: "files-toolbar look-toolbar" });
+  const reCtl = {};
+  let reSpec = [];
+  try {
+    const st = await api(`/stages`);
+    reSpec = (st.reasoning && st.reasoning.fields) || [];
+    const reVals = (st.reasoning && st.reasoning.values) || {};
+    for (const f of reSpec) {
+      const ctl = f.type === "select"
+        ? h("select", { class: "input input-inline", name: f.name })
+        : h("input", {
+            class: "input input-inline",
+            name: f.name,
+            // тип — из спеки: number для бюджета, text для своих полей тела
+            type: f.type === "number" ? "number" : "text",
+            ...(f.type === "number" ? { min: "0", step: "1" } : {}),
+          });
+      if (f.type === "select") {
+        for (const opt of f.options || []) {
+          ctl.appendChild(
+            h("option", { value: opt },
+              (f.labels && f.labels[opt]) || opt || "— (пусто)"),
+          );
+        }
+      }
+      const cur = reVals[f.name];
+      ctl.value = String(cur === undefined || cur === null
+        ? (f.default === undefined ? "" : f.default)
+        : cur);
+      // гайдлайн §7: у select — тултип, у number — inline-подсказка
+      const wrap = h(
+        "label",
+        { class: "field" },
+        h("div", { class: "field-label" }, f.label),
+        ctl,
+      );
+      if (f.type === "select") {
+        attachTooltip(ctl, f.help || "");
+      } else if (f.help) {
+        wrap.appendChild(h("div", { class: "field-help" }, f.help));
+      }
+      reCtl[f.name] = ctl;
+      reRow.appendChild(wrap);
+    }
+  } catch (ex) {
+    reErr.textContent = ex.message;
+  }
+  const reSave = h("button", { class: "btn btn-sm" }, "Сохранить");
+  reSave.addEventListener("click", async () => {
+    reErr.textContent = "";
+    const changes = {};
+    for (const f of reSpec) {
+      changes[f.name] = String(reCtl[f.name].value || "").trim();
+    }
+    try {
+      await api("/env", { method: "PUT", body: { scope: "global", changes } });
+      toast("Режим рассуждений сохранён");
+      await loadEnv();
+    } catch (ex) {
+      reErr.textContent = ex.message;
+    }
+  });
+  const reasoningCard = h(
+    "div",
+    { class: "review-card", "data-reasoning": "1" },
+    h("div", { class: "review-card-title" }, "Рассуждения модели"),
+    h(
+      "div",
+      { class: "review-card-body" },
+      h(
+        "div",
+        { class: "files-toolbar" },
+        h("span", { class: "review-status" },
+          "режим один на весь конвейер"),
+        h("span", { class: "spacer" }),
+        reSave,
+      ),
+      reRow,
+      h(
+        "div",
+        { class: "field-help" },
+        "REASONING_MODE / THINKING_PROFILE / REASONING_EFFORT / " +
+          "THINKING_BUDGET — без стадийного префикса: модель в конвейере " +
+          "одна, поэтому режим задается один раз здесь; сохранение пишет " +
+          "ключи в системный .env (пустой уровень и нулевой бюджет — не " +
+          "отправлять)",
+      ),
+      reErr,
+    ),
+  );
+
   /* ── внешний вид: тема интерфейса, тема/кегль редакторов —
      UI-предпочтения в localStorage браузера (не .env) ── */
   const uiSel = h(
@@ -1134,6 +1232,7 @@ async function viewSettings() {
         ),
       ),
     ),
+    reasoningCard,
     envCard,
   );
 }
