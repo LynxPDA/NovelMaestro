@@ -101,9 +101,12 @@ def add_llm_args(parser: argparse.ArgumentParser, *,
                            default=int(stream_timeout), metavar="SEC",
                            help="Таймаут чтения стрима, сек "
                                 f"(default: {int(stream_timeout)}).")
+    # max_retries=None — дефолт у стадии в пресете режима, не у слоя
     group.add_argument(*flags("max_retries", "--max_retries"), type=int,
-                       default=int(max_retries), metavar="N",
-                       help=f"Повторы при ошибке LLM (default: {max_retries}).")
+                       default=(None if max_retries is None
+                                else int(max_retries)),
+                       metavar="N",
+                       help="Повторы при ошибке LLM (пусто — дефолт стадии).")
     if max_tokens is not None:
         group.add_argument(*flags("max_tokens", "--max_tokens"), type=int,
                            default=int(max_tokens), metavar="N",
@@ -167,6 +170,9 @@ def _pick(args: argparse.Namespace, name: str, default: Any) -> Any:
 
 
 def resolve_profile(args: argparse.Namespace, *, stage: str = "",
+                    timeout: int = DEFAULT_TIMEOUT,
+                    stream_timeout: int | None = None,
+                    max_retries: int = DEFAULT_MAX_RETRIES,
                     max_tokens: int = DEFAULT_MAX_TOKENS,
                     require_model: bool = True,
                     logger: logging.Logger | None = None) -> LlmProfile:
@@ -197,10 +203,11 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",
         base_url=base_url,
         model=model or "",
         api_key=api_key or "",
-        timeout=int(_pick(args, "timeout", DEFAULT_TIMEOUT)),
-        stream_timeout=int(_pick(args, "stream_timeout",
-                                _pick(args, "timeout", DEFAULT_TIMEOUT))),
-        max_retries=int(_pick(args, "max_retries", DEFAULT_MAX_RETRIES)),
+        timeout=int(_pick(args, "timeout", timeout)),
+        stream_timeout=int(_pick(args, "stream_timeout", _pick(
+            args, "timeout",
+            timeout if stream_timeout is None else stream_timeout))),
+        max_retries=int(_pick(args, "max_retries", max_retries)),
         temperature=_pick(args, "temperature", None),
         reasoning_effort=_pick(args, "reasoning_effort", None),
         max_tokens=int(_pick(args, "max_tokens", max_tokens)),
@@ -309,23 +316,23 @@ def setup_stage(name: str, args: argparse.Namespace, *, log_dir: str = "logs",
 # ══════════════════════════════════════════════════════════════════════
 # ПРОГРЕСС
 # ══════════════════════════════════════════════════════════════════════
-def _tqdm() -> Any:
-    """tqdm или None: библиотека опциональна (роль в core/deps.py)."""
+def _bar_class() -> Any:
+    """Класс tqdm или None: библиотека опциональна (роль в core/deps.py)."""
     try:
-        import tqdm as _tqdm_module
+        from tqdm import tqdm as cls
     except ImportError:
         return None
-    return _tqdm_module
+    return cls
 
 
 def _make_bar(total: int, unit: str, label: str) -> Any:
     """Бар CLI: в web-режиме и без tqdm его нет — счётчик живёт строками лога."""
     if web_progress_enabled():
         return None
-    module = _tqdm()
-    if module is None:
+    cls = _bar_class()
+    if cls is None:
         return None
-    return module.tqdm(total=total, unit=unit, desc=label)
+    return cls(total=total, unit=unit, desc=label)
 
 
 @dataclass
@@ -342,6 +349,7 @@ class Progress:
     unit: str = "шт."
     bar: bool = False
     logger: logging.Logger | None = None
+    log_every: int = 1
     done: int = 0
     _pbar: Any = None
 
@@ -370,14 +378,16 @@ class Progress:
         self._log_state()
 
     def _log_state(self) -> None:
-        """Web-режим дублирует счётчик в лог стадии (одна строка на всех)."""
-        if self.logger is not None and web_progress_enabled():
+        """Web-режим дублирует счётчик в лог стадии: log_every — как часто
+        (длинные прогоны не плодят по строке лога на чанк)."""
+        if (self.logger is not None and web_progress_enabled()
+                and self.done % max(1, self.log_every) == 0):
             self.logger.info(f"📊 Прогресс: {self.done}/{self.total}")
 
     def log(self, message: str) -> None:
         """Строка прогресса: tqdm.write не рвёт бар, иначе — обычный вывод."""
         if self._pbar is not None:
-            _tqdm().write(message)
+            _bar_class().write(message)
         else:
             print(message)
 

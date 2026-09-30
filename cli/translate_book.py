@@ -53,8 +53,6 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from tqdm import tqdm
-
 # ── bootstrap: поиск core/common.py подъёмом от скрипта ──
 def _bootstrap_core() -> None:
     from pathlib import Path as _P
@@ -70,33 +68,25 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
-from core.stage import resolve_profile  # noqa: E402
+from core.stage import (  # noqa: E402
+    Progress,
+    add_llm_args,
+    bind_profile,
+    new_stage,
+)
 from core.common import (
     collect_gender_names,
-    determine_model,
-    emit_progress,
     estimate_tokens,
-    find_env_file,
     find_relevant_dict,
     find_relevant_examples,
     find_relevant_ner,
     format_fewshot_block,
     get_tagged_prompt,
-    llm_messages,
     load_examples,
     load_ner_data,
     load_prompt,
     load_rules_block,
-    log_argv,
-    parse_dotenv,
-    preview_logger,
-    preview_request_payload,
-    print_env_help,
-    setup_logging,
     split_text_smart,
-    stream_chat_completion,
-    web_progress_enabled,
-    write_preview_request,
 
 )
 
@@ -396,19 +386,9 @@ def process_item(internal_id, original_text, draft_text, ctx):
     reference = (draft_text or "" if ctx["mode"] == "redact"
                  else original_text)
 
-    text, err = stream_chat_completion(
-        ctx["base_url"], ctx["model"],
-        llm_messages(user_content),
-        api_key=ctx["api_key"],
-        max_retries=ctx["max_retries"],
-        timeout=ctx["timeout"],
-        stream_timeout=ctx["stream_timeout"],
-        temperature=ctx["temperature"],
-        reasoning_effort=ctx["reasoning_effort"],
-        min_len_ratio=ctx["min_len_ratio"],
-        reference_len=len(reference),
-        logger=ctx["logger"],
-        label=f"[{ctx['mode']} chunk {internal_id}]",
+    text, err = ctx["stage"].complete(
+        user_content, label=f"[{ctx['mode']} chunk {internal_id}]",
+        min_len_ratio=ctx["min_len_ratio"], reference_len=len(reference),
     )
     if text is not None:
         return internal_id, text, (f"Chunk {internal_id} OK | NER: {ner_count}"
@@ -527,12 +507,10 @@ def build_parser():
                         "или файл целиком = промпт режима; расширенный "
                         "перевод — тег <translate_lr> приоритетнее "
                         "<translate>).")
-    # Сервер
-    p.add_argument("--host", default=None, help="URL API-сервера.")
-    p.add_argument("--api_key", default=None, help="Bearer-ключ.")
-    p.add_argument("--model", default=None,
-                   help="Модель: --model или MODEL в .env (обязательна).")
-    p.add_argument("--env_file", default=None, help="Явный путь к .env.")
+    # Сервер и гигиена запроса: общий блок флагов (core.stage), дефолты —
+    # из пресета режима (main передаёт их в bind_profile)
+    add_llm_args(p, timeout=900, stream_timeout=900, max_retries=None,
+                 aliases=True)
     # Чанкование (токены, оценка)
     p.add_argument("--chunk_size", type=int, default=300,
                    help="Целевой размер чанка, ТОКЕНЫ — оценка "
@@ -541,18 +519,7 @@ def build_parser():
                    help="Коэффициент жёсткого лимита чанка.")
     # Генерация
     p.add_argument("--threads", type=int, default=1, help="Потоки (1..N).")
-    p.add_argument("--temperature", type=float, default=None,
-                   help="Температура (иначе — дефолт сервера).")
-    p.add_argument("--reasoning_effort", type=str, default=None,
-                   help="Усилия рассуждения: none/minimal/low/medium/"
-                        "high/xhigh/max (none — отключить).")
     # Надёжность
-    p.add_argument("--timeout", type=int, default=900,
-                   help="Таймаут соединения, сек.")
-    p.add_argument("--stream_timeout", type=int, default=900,
-                   help="Таймаут стрима (сек без токенов).")
-    p.add_argument("--max_retries", type=int, default=None,
-                   help="Попытки на чанк. Дефолты: 3 (все режимы).")
     p.add_argument("--min_len_ratio", type=float, default=None,
                    help="Мин. отношение длины результата к входу "
                         "(СИМВОЛЫ). По умолчанию отключено (0.0) — "
@@ -578,7 +545,6 @@ def main(argv=None):
                          else "translate")
     preset = MODE_PRESETS[mode]
     _write_mode = mode
-    _web_mode = web_progress_enabled()
     _mode_label = MODE_LABELS.get(mode, mode)
 
     out_path = args.out or {
@@ -596,20 +562,20 @@ def main(argv=None):
         print(f"Не удалось создать {_log_dir}: {exc}")
         return 1
     _log_name = re.sub(r"[\\/]+", "_", _rel)
-    logger, _ = setup_logging(os.path.join(_log_dir, _log_name))
-    log_argv(logger)
+    stage = new_stage("pipeline", args, log_dir=_log_dir, log_name=_log_name)
+    logger = stage.logger
 
     logger.info(f"🧭 Режим: {mode} | вход: {args.file} | выход: {out_path}")
 
-    # ── Сервер: CLI > os.environ > .env (общая реализация — core.stage) ──
+    # ── Сервер: CLI > os.environ > .env (общая реализация — core.stage);
+    #    дефолты таймаутов/попыток — из пресета режима ──
     try:
-        profile = resolve_profile(args, logger=logger)
+        stage = bind_profile(stage, args, timeout=900, stream_timeout=900,
+                            max_retries=preset["max_retries"])
     except SystemExit as exc:
         # L3 (AUDIT): незаданные сервер/модель = код 1, а не traceback
         print(str(exc))
         return 1
-    base_url, api_key, model_name = (profile.base_url, profile.api_key,
-                                     profile.model)
 
     if not os.path.exists(args.file):
         logger.error("❌ Input file not found.")
@@ -712,8 +678,7 @@ def main(argv=None):
     # ── Предпросмотр запроса (--preview-request): эмуляция ПЕРВОГО
     # LLM-запроса без сети; до создания trace/выходного файла ──
     if args.preview_request:
-        log = preview_logger("translate_book")
-        log_argv(log)
+        log = stage.logger  # сборка блока пишет предупреждения в лог стадии
         i0, orig0, draft0 = items[0]
         nb, nb_count = find_relevant_ner(
             orig0, ner_data, args.ner_threshold, args.ner_ngram,
@@ -748,11 +713,7 @@ def main(argv=None):
             "\n".join(mal) if mal else "(нет)",
             dict_block=db0, rules_block=rb0, fewshot_block=fs0,
             logger=log)
-        payload = preview_request_payload(
-            "pipeline",
-            f"{MODE_LABELS.get(mode, mode)} · чанк 1/{len(items)}",
-            model_name, llm_messages(user_content),
-            meta={
+        meta = {
                 "mode": mode,
                 "chunks": len(items),
                 "chunk_size": args.chunk_size,
@@ -766,10 +727,9 @@ def main(argv=None):
                 "request_budget": args.request_budget,
                 "prompt_file": args.prompt_file or "",
                 "prompt_source": "внешний" if custom else "встроенный",
-            })
-        write_preview_request(args.preview_request, payload)
-        log.info("✅ Предпросмотр запроса: %s (%d симв. user; чанков: %d)",
-                 args.preview_request, len(user_content), len(items))
+        }
+        stage.preview(f"{MODE_LABELS.get(mode, mode)} · чанк 1/{len(items)}",
+                      user_content, meta=meta)
         return 0
 
     # ── Trace ──
@@ -791,13 +751,7 @@ def main(argv=None):
         "include_aliases": not args.no_aliases,
         "ner_min_count": args.ner_min_count,
         "names_min_count": args.names_min_count,
-        "prompt": active_prompt, "base_url": base_url, "model": model_name,
-        "api_key": api_key,
-        "max_retries": (args.max_retries if args.max_retries is not None
-                        else preset["max_retries"]),
-        "timeout": args.timeout, "stream_timeout": args.stream_timeout,
-        "temperature": args.temperature,
-        "reasoning_effort": args.reasoning_effort,
+        "prompt": active_prompt, "stage": stage,
         "min_len_ratio": (args.min_len_ratio
                           if args.min_len_ratio is not None
                           else preset["min_len_ratio"]),
@@ -819,21 +773,18 @@ def main(argv=None):
                 ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {ex.submit(process_item, i, orig, draft, ctx): i
                     for i, orig, draft in items}
-            pbar = tqdm(total=len(items), unit="chunk", disable=_web_mode)
-            # свой счётчик — pbar.n мёртв при disable=True
-            done = 0
-            # стартовое событие прогресса — бар и «📊» видны
-            # сразу, до первого завершённого чанка (медленный LLM)
-            emit_progress(done, len(items), _mode_label)
-            if _web_mode:
-                logger.info(f"📊 Прогресс: {done}/{len(items)}")
+            # бар и «📊» видны сразу, до первого завершённого чанка
+            # (медленный LLM); в лог — каждые 10 чанков
+            progress = Progress(len(items), _mode_label, unit="чанк",
+                                bar=True, logger=logger, log_every=10)
+            progress.start()
             for fut in as_completed(futs):
                 i = futs[fut]
                 try:
                     res_idx, text, info = fut.result()
                     if "FAIL" in info:
                         logger.warning(info)
-                        tqdm.write(f"⚠️ {info}")
+                        progress.log(f"⚠️ {info}")
                     else:
                         logger.info(info)
                     save_result_ordered(fh, res_idx, text, items[i][1])
@@ -846,13 +797,7 @@ def main(argv=None):
                         fb = f"\n[FAIL: {e}]\n{items[i][1]}\n[FAIL: {e}]\n"
                     save_result_ordered(fh, i, fb, items[i][1])
                 finally:
-                    pbar.update(1)
-                    done += 1
-                    emit_progress(done, len(items), _mode_label)
-                    # «📊» в текстовый лог каждые 10 чанков
-                    if _web_mode and done % 10 == 0:
-                        logger.info(f"📊 Прогресс: {done}/{len(items)}")
-            pbar.close()
+                    progress.step()
     except OSError as exc:
         logger.error("❌ Не удалось открыть выход: %s", exc)
         return 1

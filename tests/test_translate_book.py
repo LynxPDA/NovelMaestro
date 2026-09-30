@@ -83,26 +83,29 @@ def test_ordered_writer_chaos():
 # process_item / парсер / пресеты
 # ══════════════════════════════════════════════════════════════════════
 def _ctx(mode):
+    """Контекст process_item: данные режима + контекст стадии с профилем."""
+    profile = core_stage.LlmProfile(base_url="http://h", model="m",
+                                   timeout=10, stream_timeout=10,
+                                   max_retries=1)
+    stage = core_stage.Stage(name="pipeline", logger=SilentLog(),
+                             profile=profile)
     return {
         "mode": mode, "ner_data": [], "ner_threshold": 0.7, "ner_ngram": 3,
         "ner_fields": "term,translation,type", "automaton": None,
         "include_aliases": False, "prompt": "{ner_block}|{original_text}|{translated_text}",
-        "base_url": "http://h", "model": "m", "api_key": "",
-        "max_retries": 1, "timeout": 10, "stream_timeout": 10,
-        "temperature": None, "reasoning_effort": None,
-        "min_len_ratio": 0.0, "logger": SilentLog(),
+        "stage": stage, "min_len_ratio": 0.0, "logger": SilentLog(),
     }
 
 
 def test_process_item_translate_ok(monkeypatch):
-    monkeypatch.setattr(TB, "stream_chat_completion",
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
                         lambda *a, **k: ("ПЕРЕВОД", ""))
     idx, text, msg = TB.process_item(0, "оригинал", None, _ctx("translate"))
     assert idx == 0 and text == "ПЕРЕВОД" and "OK" in msg
 
 
 def test_process_item_redact_fallback(monkeypatch):
-    monkeypatch.setattr(TB, "stream_chat_completion",
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
                         lambda *a, **k: (None, "Loop detected"))
     idx, text, msg = TB.process_item(3, "оригинал", "черновик", _ctx("redact"))
     assert idx == 3 and "ОШИБКА РЕДАКТУРЫ" in text and "черновик" in text
@@ -157,7 +160,7 @@ def test_main_translate(tmp_path, monkeypatch):
     (tmp_path / "ner.json").write_text(json.dumps([
         {"term": "测试", "translation": "Тест", "type": "Person", "count": 3},
     ], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(TB, "stream_chat_completion",
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
                         lambda *a, **k: ("ПЕРЕВЕДЁННЫЙ ТЕКСТ", ""))
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["book.txt", "--host", "http://h", "--model", "m",
@@ -186,7 +189,7 @@ def test_main_prompt_missing_tag_falls_back_to_builtin(tmp_path, monkeypatch):
     def fake_stream(base_url, model, messages, *a, **k):
         seen["messages"] = messages
         return ("ПЕРЕВОД", "")
-    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "м")
     # redact: в файле только тег <translate> — тег redact отсутствует
     TB.main(["chunks.json", "--mode", "redact", "--prompt_file",
@@ -218,7 +221,7 @@ def test_main_resolves_server_from_env(tmp_path, monkeypatch):
         seen["base_url"] = base_url
         seen["model"] = model
         return ("ПЕРЕВОД", "")
-    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(core_stage, "determine_model", lambda m, *a, **k: m)
     TB.main(["book.txt", "--threads", "1", "--env_file", str(env)])
     assert seen["base_url"] == "http://from-env:9989/v1"
@@ -239,7 +242,7 @@ def test_main_redact(tmp_path, monkeypatch):
     (tmp_path / "chunks.json").write_text(json.dumps([
         {"original_text": "оригинал", "translated_text": "черновик"},
     ], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(TB, "stream_chat_completion",
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
                         lambda *a, **k: ("ОТРЕДАКТИРОВАНО", ""))
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["chunks.json", "--host", "http://h", "--threads", "1"])
@@ -250,7 +253,7 @@ def test_main_redact(tmp_path, monkeypatch):
 def test_main_fail_fallback_written(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "book.txt").write_text("Текст для фейла.", encoding="utf-8")
-    monkeypatch.setattr(TB, "stream_chat_completion",
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
                         lambda *a, **k: (None, "Ошибка соединения"))
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["book.txt", "--host", "http://h", "--threads", "1"])
@@ -288,7 +291,7 @@ def test_main_polish_gender_placeholders(tmp_path, monkeypatch):
         captured["content"] = messages[-1]["content"]
         return ("ОТПОЛИРОВАНО", "")
 
-    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["redacted.txt", "--mode", "polish", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1"])
@@ -326,7 +329,7 @@ def test_main_polish_min_count_filters_names(tmp_path, monkeypatch):
         captured["content"] = messages[-1]["content"]
         return ("ОТПОЛИРОВАНО", "")
 
-    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["redacted.txt", "--mode", "polish", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1"])
@@ -359,7 +362,7 @@ def test_main_translate_original_text_placeholder(tmp_path, monkeypatch):
         captured["content"] = messages[-1]["content"]
         return ("ПЕРЕВОД", "")
 
-    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1"])
@@ -391,7 +394,7 @@ def test_main_translate_no_placeholder_warns_and_appends(tmp_path, monkeypatch):
         captured["content"] = messages[-1]["content"]
         return ("ПЕРЕВОД", "")
 
-    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1"])
@@ -501,7 +504,7 @@ def test_process_item_extended_blocks(monkeypatch):
                       "F:{fewshot_block} O:{original_text}")
     captured = {}
     monkeypatch.setattr(
-        TB, "stream_chat_completion",
+        core_stage, "stream_chat_completion",
         lambda *a, **k: (captured.update(content=a[2][-1]["content"]) or
                          ("ПЕРЕВОД", "")))
     idx, text, info = TB.process_item(0, "苏星宇走进了大殿。", None, ctx)
@@ -519,7 +522,7 @@ def test_process_item_request_budget_exceeded(monkeypatch):
     ctx["request_budget"] = 5  # ТОКЕНЫ (оценка): запрос заведомо больше
     ctx["prompt"] = "ПРОМПТ ДЛИННЕЕ БЮДЖЕТА {original_text}"
     called = []
-    monkeypatch.setattr(TB, "stream_chat_completion",
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
                         lambda *a, **k: called.append(1) or ("x", ""))
     idx, text, info = TB.process_item(0, "текст", None, ctx)
     assert called == []  # LLM не вызван
@@ -537,7 +540,7 @@ def test_main_preview_request(tmp_path, monkeypatch):
         encoding="utf-8")
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     calls = []
-    monkeypatch.setattr(TB, "stream_chat_completion",
+    monkeypatch.setattr(core_stage, "stream_chat_completion",
                         lambda *a, **k: calls.append(1) or ("", ""))
 
     def fail_open(*a, **k):  # выходной файл не должен открываться
@@ -590,7 +593,7 @@ def test_main_extended_context_translate_lr(tmp_path, monkeypatch):
         captured["content"] = messages[-1]["content"]
         return ("ПЕРЕВОД", "")
 
-    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1",
@@ -622,7 +625,7 @@ def test_main_extended_without_files_plain_prompt(tmp_path, monkeypatch):
         captured["content"] = messages[-1]["content"]
         return ("ПЕРЕВОД", "")
 
-    monkeypatch.setattr(TB, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
              "--prompt_file", "prompt.txt", "--threads", "1"])
