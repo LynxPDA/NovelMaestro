@@ -53,18 +53,31 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ── bootstrap: поиск core/common.py подъёмом от скрипта ──
+# ── bootstrap: корень репо + обязательные зависимости ──
 def _bootstrap_core() -> None:
+    """Скрипт запускается из любого cwd: корень репо ищется подъёмом от себя.
+
+    Там же проверяются обязательные зависимости: httpx — транспорт
+    core.transport, dotenv — парсер .env; сам скрипт их не зовёт, но
+    core.common без них не импортируется (офлайн-установка — wheels из
+    vendor/, см. packaging/README.md).
+    """
+    from importlib.util import find_spec
     from pathlib import Path as _P
     p = _P(os.path.dirname(os.path.abspath(__file__)))
     for _ in range(6):
         if (p / "core" / "common.py").is_file():
             if str(p) not in sys.path:
                 sys.path.insert(0, str(p))
-            return
+            break
         if p.parent == p:
             break
         p = p.parent
+    missing = [m for m in ("httpx", "dotenv") if find_spec(m) is None]
+    if missing:
+        print("❌ Требуется: " + ", ".join(missing)
+              + " — python3 -m pip install -r requirements.txt")
+        sys.exit(1)
 
 _bootstrap_core()
 
