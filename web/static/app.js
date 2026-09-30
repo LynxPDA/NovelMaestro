@@ -1813,6 +1813,32 @@ function layout(content) {
    после каждого рендера: pill «⟳ Метка N/M» — клик ведёт на вкладку
    «Запуски» проекта. Активный запуск виден с любого экрана. */
 let runPollTimer = null;
+let runSeen = []; // id активных запусков прошлого опроса — по ним ловим финал
+
+/* Фавикон-счётчик: с любой вкладки видно, что что-то считается. */
+function setRunBadge(count) {
+  const link = document.querySelector('link[rel="icon"]');
+  if (link) link.href = UICore.faviconHref(count);
+}
+
+/* Уведомление браузера — только про финал и только когда вкладка скрыта
+   (иначе пользователь видитpill и лог). Разрешение спрашиваем на запуске. */
+function notifyFinished(ids) {
+  if (!ids.length || !("Notification" in window)) return;
+  if (!document.hidden || Notification.permission !== "granted") return;
+  for (const id of ids) {
+    api(`/jobs/${id}`)
+      .then((d) => {
+        const j = d.job || {};
+        const bad = j.status === "error" || j.status === "failed";
+        new Notification(`NovelMaestro: ${bad ? "ошибка запуска" : "готово"}`, {
+          body: j.title || j.project || String(id),
+          tag: `job-${id}`,
+        });
+      })
+      .catch(() => {});
+  }
+}
 
 function updateRunPill() {
   const slot = document.getElementById("app-run-slot");
@@ -1820,6 +1846,11 @@ function updateRunPill() {
   api("/jobs/active")
     .then((d) => {
       const jobs = (d.jobs || []).filter((j) => j.status === "running");
+      const now = jobs.map((j) => String(j.id));
+      const finished = runSeen.filter((id) => !now.includes(id));
+      runSeen = now;
+      setRunBadge(jobs.length);
+      notifyFinished(finished);
       slot.replaceChildren();
       if (!jobs.length) return;
       const j = jobs[0];

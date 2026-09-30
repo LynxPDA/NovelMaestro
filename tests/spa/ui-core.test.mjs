@@ -761,3 +761,11 @@ test("menuPlacement: дефолтные gap/edge применяются без �
   const p = UICore.menuPlacement(btn, { width: 100, height: 50 }, { width: 1000, height: 1000 });
   assert.deepEqual(p, { top: 106, left: 100 });
 });
+
+test("faviconHref: без запусков — глиф, с запусками — счётчик", () => {
+  const plain = decodeURIComponent(UICore.faviconHref(0));
+  assert.ok(plain.startsWith("data:image/svg+xml,"), "это data URI");
+  assert.ok(plain.includes("⇄"), "покое — глиф");
+  assert.ok(decodeURIComponent(UICore.faviconHref(3)).includes(">3<"));
+  assert.ok(decodeURIComponent(UICore.faviconHref(42)).includes("9+"));
+});

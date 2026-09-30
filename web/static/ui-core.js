@@ -283,6 +283,28 @@
     );
   }
   /* абсолютное время для tooltip (тот же формат, что был в списках) */
+  /* ── фавикон-индикатор ────────────────────────────────────────────
+     Иконка — inline-SVG data URI (внешний файл не нужен): пока запуски
+     идут, вместо глифа показываем их число — вкладка одна, а задач много. */
+  function faviconHref(count) {
+    var n = Number(count) || 0;
+    var mark = n > 0 ? String(n > 9 ? "9+" : n) : "⇄";
+    var size = n > 0 ? 10 : 9;
+    return (
+      "data:image/svg+xml," +
+      encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
+          '<rect width="16" height="16" rx="3" fill="#2ea043"/>' +
+          '<text x="8" y="12" font-size="' +
+          size +
+          '" text-anchor="middle" fill="#0d1117" ' +
+          'font-family="monospace">' +
+          mark +
+          "</text></svg>",
+      )
+    );
+  }
+
   function relTimeAbs(seconds) {
     var t = Number(seconds);
     if (!Number.isFinite(t) || t <= 0) return "";
@@ -794,6 +816,7 @@
     /* относительное время + абсолютное для tooltip */
     relTime: relTime,
     relTimeAbs: relTimeAbs,
+    faviconHref: faviconHref,
 
     nerCellText: nerCellText,
     nextNerSort: nextNerSort,
