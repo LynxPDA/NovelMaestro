@@ -1014,7 +1014,10 @@ async function viewSettings() {
      Поля приходят с сервера (GET /api/stages) — своей копии реестра у
      SPA нет; name контрола = ключ .env ── */
   const reErr = h("div", { class: "form-error" });
-  const reRow = h("div", { class: "files-toolbar look-toolbar" });
+  // два ряда, а не flex-wrap: селекты (подсказка — тултип) и поля с inline-
+  // подсказкой разной высоты, иначе ряды разъезжаются по базовой линии
+  const reRows = { select: h("div", { class: "files-toolbar look-toolbar" }) };
+  reRows.other = h("div", { class: "files-toolbar look-toolbar" });
   const reCtl = {};
   let reSpec = [];
   try {
@@ -1022,15 +1025,18 @@ async function viewSettings() {
     reSpec = (st.reasoning && st.reasoning.fields) || [];
     const reVals = (st.reasoning && st.reasoning.values) || {};
     for (const f of reSpec) {
-      const ctl = f.type === "select"
-        ? h("select", { class: "input input-inline", name: f.name })
-        : h("input", {
-            class: "input input-inline",
-            name: f.name,
-            // тип — из спеки: number для бюджета, text для своих полей тела
-            type: f.type === "number" ? "number" : "text",
-            ...(f.type === "number" ? { min: "0", step: "1" } : {}),
-          });
+      // тип контрола — из спеки: number для бюджета, text для json-полей
+      const attrs = { class: "input input-inline", name: f.name };
+      if (f.type === "number") {
+        attrs.type = "number";
+        attrs.min = "0";
+        attrs.step = "1";
+      } else {
+        attrs.type = "text";
+        // json-поле длинное — иначе контрол сжимается до содержимого
+        attrs.style = "min-width:340px";
+      }
+      const ctl = h(f.type === "select" ? "select" : "input", attrs);
       if (f.type === "select") {
         for (const opt of f.options || []) {
           ctl.appendChild(
@@ -1056,7 +1062,7 @@ async function viewSettings() {
         wrap.appendChild(h("div", { class: "field-help" }, f.help));
       }
       reCtl[f.name] = ctl;
-      reRow.appendChild(wrap);
+      reRows[f.type === "select" ? "select" : "other"].appendChild(wrap);
     }
   } catch (ex) {
     reErr.textContent = ex.message;
@@ -1091,7 +1097,8 @@ async function viewSettings() {
         h("span", { class: "spacer" }),
         reSave,
       ),
-      reRow,
+      reRows.select,
+      reRows.other,
       h(
         "div",
         { class: "field-help" },
