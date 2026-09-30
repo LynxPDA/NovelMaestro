@@ -63,13 +63,17 @@ jobs:
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
+        env:
+          # контекст github — из env, а не прямо в shell: имя тега не должно
+          # разворачиваться в командную строку
+          RELEASE: ${{ github.ref_name }}
         run: |
-          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
-            gh release upload "${{ github.ref_name }}" dist/*.user.js --clobber
+          if gh release view "$RELEASE" >/dev/null 2>&1; then
+            gh release upload "$RELEASE" dist/*.user.js --clobber
           else
             # релиз ещё не создан (windows.yml может идти параллельно) —
             # доложить позже кнопкой «Run workflow» этого воркфлоу
-            echo "::warning::релиз ${{ github.ref_name }} ещё не существует — юзерскрипты не прикреплены"
+            echo "::warning::релиз $RELEASE ещё не существует — юзерскрипты не прикреплены"
           fi
 
       - name: Сбросить кэш CDN (только по тегу)

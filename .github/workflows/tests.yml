@@ -1,0 +1,63 @@
+# Тесты: полный прогон на пуше и PR.
+
+name: Tests
+
+on:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Один прогон на ветку: предыдущий снимается, если прилетел новый пуш.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: "pytest (py${{ matrix.python }}, ${{ matrix.profile }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+        # all — весь стек (с pyahocorasick); min — только обязательный
+        # рантайм: regex-фолбэк поиска терминов проверяется постоянно,
+        # а не «на машине у разработчика».
+        profile: ["all", "min"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Зависимости
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 -m pip install --upgrade pip
+          if [ "$PROFILE" = "all" ]; then
+            python3 -m pip install -r requirements-dev.txt
+          else
+            python3 -m pip install -r requirements.txt pytest pytest-xdist
+          fi
+
+      - name: Стек зависимостей
+        run: python3 -m core.deps
+
+      # Тесты герметичны (tmp_path, сервера на порту 0), поэтому -n auto
+      # даёт wall-clock в единицы секунд: ожидаем 20-40 c на раннере.
+      - name: Тесты
+        run: python3 -m pytest tests/ -q -n auto --maxfail=10
+
+      # Сборка юзерскриптов трогает core.common (atomic_write), поэтому
+      # проверяется вместе с тестами, а не только в userscripts.yml.
+      - name: Артефакты юзерскриптов совпадают со сборкой
+        run: python3 tools/build_userscripts.py --check
