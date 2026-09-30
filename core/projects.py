@@ -17,6 +17,8 @@ import threading
 import unicodedata
 from pathlib import Path
 
+from .common import atomic_write
+
 # Дефолтные разделы пульта (бутстрап новой установки; дальше список —
 # в projects/.sections.json, порядок важен — это порядок отображения)
 DEFAULT_SECTIONS = ["ACTIVE", "HOLD", "DONE"]
@@ -135,11 +137,10 @@ def save_sections(projects_root: Path, sections: list) -> bool:
     root = Path(projects_root)
     try:
         root.mkdir(parents=True, exist_ok=True)
-        f = _sections_file(root)
-        tmp = f.with_suffix(".tmp")
-        tmp.write_text(json.dumps(list(sections), ensure_ascii=False, indent=2),
-                       encoding="utf-8")
-        tmp.replace(f)
+        # общий atomic_write: fsync перед replace (пережили выключение) и
+        # уникальный tmp — фиксированное .tmp два запроса затёрли бы друг друга
+        atomic_write(_sections_file(root),
+                     json.dumps(list(sections), ensure_ascii=False, indent=2))
     except OSError:
         return False
     return True
@@ -367,7 +368,7 @@ def write_project_metadata(pdir: Path, template_dir: Path,
     text = render_metadata(src.read_text(encoding="utf-8"),
                            title=title, author=author, genres=genres)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(text, encoding="utf-8")
+    atomic_write(dst, text)
     return True
 
 
@@ -539,7 +540,10 @@ def write_template_file(templates_dir: Path, name: str, rel: str,
         return "Недопустимый путь"
     if not p.parent.is_dir():
         return "Каталог не существует"
-    p.write_text(content or "", encoding="utf-8")
+    try:
+        atomic_write(p, content or "")
+    except OSError as exc:
+        return f"Не удалось записать: {exc}"
     return None
 
 

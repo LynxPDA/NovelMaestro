@@ -2245,7 +2245,7 @@ def _persist_run_params(ctx: dict, pdir: Path, stage: str,
                 # в системном projects/.env (fallback в _llm_argv)
                 text = src.read_text(encoding="utf-8", errors="replace")
                 text = _strip_secret_keys(text)
-                env_path.write_text(text, encoding="utf-8")
+                _import_common(ctx).atomic_write(env_path, text)
         except OSError as exc:
             log.debug("Не удалось скопировать .env в проект: %s", exc)
     _env_apply_keys(env_path, updates, removes)
