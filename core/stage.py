@@ -22,7 +22,7 @@ import argparse
 import logging
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .common import (determine_model, emit_progress, find_env_file,
@@ -245,6 +245,11 @@ class Stage:
         return self.profile.complete(prompt, data,
                                      label=label or f"[{self.name}]", **kw)
 
+    def quiet(self) -> "Stage":
+        """Копия без логирования: стадия со своим циклом ретраев логирует
+        сама — по строке на запрос, а не на каждую попытку."""
+        return replace(self, profile=replace(self.profile, logger=None))
+
     def preview(self, label: str, prompt: str, data: str = "",
                 meta: dict | None = None) -> bool:
         """Режим --preview-request: записать первый запрос и не идти в сеть.
@@ -375,6 +380,10 @@ class Progress:
         if self._pbar is not None:
             self._pbar.update(n)
         emit_progress(self.done, self.total, self.label)
+        self._log_state()
+
+    def log_state(self) -> None:
+        """Счётчик в лог стадии после внешних событий (снапшот ner.json)."""
         self._log_state()
 
     def _log_state(self) -> None:

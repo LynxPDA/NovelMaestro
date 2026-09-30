@@ -17,6 +17,7 @@ from core import common as C  # noqa: E402
 
 import ner as NER  # noqa: E402
 from core import stage as core_stage  # noqa: E402
+from core import stage as core_stage  # noqa: E402
 
 
 @pytest.fixture()
@@ -36,6 +37,13 @@ def ner_reset():
     NER.global_ner_data = old_data
 
 
+def _stage():
+    """Контекст стадии для моков: профиль с короткими таймаутами."""
+    profile = core_stage.LlmProfile(base_url="h", model="m", timeout=10,
+                                   stream_timeout=10, max_retries=1)
+    return core_stage.Stage(name="ner", logger=SilentLog(), profile=profile)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # конвейерные функции
 # ══════════════════════════════════════════════════════════════════════
@@ -43,38 +51,37 @@ def test_process_chunk_pass1(monkeypatch):
     ok = '[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян"}]'
     monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (ok, None))
     idx, ners, err = NER.process_chunk_pass1(
-        7, "текст", "h", "m", "k", 1, 10, None, "промпт", SilentLog())
+        7, "текст", _stage(), "промпт")
     assert (idx, err) == (7, None) and ners[0]["term"] == "陈阳"
     # LLM не ответил (транспортная ошибка после всех попыток)
     monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (None, "HTTP 500"))
     idx, ners, err = NER.process_chunk_pass1(
-        7, "текст", "h", "m", "k", 3, 10, None, "промпт", SilentLog())
+        7, "текст", _stage(), "промпт")
     assert ners == [] and err == "HTTP 500"
     # некорректный формат
     monkeypatch.setattr(NER, "llm_request",
                         lambda *a, **k: ("не json", "Invalid NER format"))
     idx, ners, err = NER.process_chunk_pass1(
-        7, "текст", "h", "m", "k", 1, 10, None, "промпт", SilentLog())
+        7, "текст", _stage(), "промпт")
     assert ners == [] and err == "Invalid NER format"
 
 
 def test_process_chunk_pass2(monkeypatch):
     # пустой pass1 → сразу пусто без LLM
     idx, ners, err = NER.process_chunk_pass2(
-        1, "текст", [], "h", "m", "k", 1, 10, None, "шаблон {chunk_text} {ner_json}",
-        SilentLog())
+        1, "текст", [], _stage(), "шаблон {chunk_text} {ner_json}")
     assert (idx, ners, err) == (1, [], None)
     ok = '[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян", "status": "confirmed"}]'
     monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (ok, None))
     idx, ners, err = NER.process_chunk_pass2(
-        1, "текст", [{"term": "陈阳"}], "h", "m", "k", 1, 10, None,
-        "шаблон {chunk_text} {ner_json}", SilentLog())
+        1, "текст", [{"term": "陈阳"}], _stage(),
+        "шаблон {chunk_text} {ner_json}")
     assert err is None and ners[0]["status"] == "confirmed"
     monkeypatch.setattr(NER, "llm_request",
                         lambda *a, **k: (None, "Pass2 fail after 2 retries"))
     idx, ners, err = NER.process_chunk_pass2(
-        1, "текст", [{"term": "陈阳"}], "h", "m", "k", 2, 10, None,
-        "шаблон {chunk_text} {ner_json}", SilentLog())
+        1, "текст", [{"term": "陈阳"}], _stage(),
+        "шаблон {chunk_text} {ner_json}")
     assert err is not None and "Pass2 fail" in err
 
 
@@ -212,19 +219,17 @@ def test_run_two_pass_fresh(tmp_path, monkeypatch, ner_globals):
     p2_answer = ('[{"term": "陈阳", "type": "Person (male)", '
                  '"translation": "Чэнь Ян", "status": "confirmed"}]')
 
-    def fake_llm(system_prompt, user_content, *a, **k):
+    def fake_llm(stage, system_prompt, user_content, *a, **k):
         answer = p1_answer if system_prompt == "ПРОМПТ1" else p2_answer
         return answer, None
 
     monkeypatch.setattr(NER, "llm_request", fake_llm)
     out = str(tmp_path / "ner.json")
     NER.run_two_pass(
-        all_chunks=["текст чанка один", "текст чанка два"],
-        base_url="http://h", model_name="m", api_key="",
-        max_retries=1, timeout=10, temperature=None,
+        all_chunks=["текст чанка один", "текст чанка два"], stage=_stage(),
         pass1_prompt="ПРОМПТ1", pass2_prompt="ПРОМПТ2 {chunk_text} {ner_json}",
         max_workers=2, ner_file=out, threshold=0.95, ngram_size=3,
-        save_interval=1, logger=SilentLog(),
+        save_interval=1,
     )
     data = json.loads(Path(out).read_text(encoding="utf-8"))
     assert len(data) == 1 and data[0]["term"] == "陈阳"
@@ -239,7 +244,7 @@ def test_run_two_pass_no_resume_from_cache(tmp_path, monkeypatch, ner_globals):
     всех чанков — файлы pass1/pass2-кэшей не читаются никогда."""
     calls = []
 
-    def fake_llm(system_prompt, user_content, *a, **k):
+    def fake_llm(stage, system_prompt, user_content, *a, **k):
         calls.append(system_prompt)
         return ('[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян"}]',
                 None)
@@ -247,11 +252,10 @@ def test_run_two_pass_no_resume_from_cache(tmp_path, monkeypatch, ner_globals):
     monkeypatch.setattr(NER, "llm_request", fake_llm)
     out = str(tmp_path / "ner.json")
     NER.run_two_pass(
-        all_chunks=["текст"], base_url="h", model_name="m", api_key="",
-        max_retries=1, timeout=10, temperature=None,
+        all_chunks=["текст"], stage=_stage(),
         pass1_prompt="П1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=1, ner_file=out, threshold=0.95, ngram_size=3,
-        save_interval=5, logger=SilentLog(),
+        save_interval=5,
     )
     assert len(calls) == 2  # pass1 + pass2 для единственного чанка
     data = json.loads(Path(out).read_text(encoding="utf-8"))
@@ -260,18 +264,16 @@ def test_run_two_pass_no_resume_from_cache(tmp_path, monkeypatch, ner_globals):
 
 def test_run_two_pass_counts_failures(tmp_path, monkeypatch, ner_globals):
     """H4 (AUDIT): run_two_pass возвращает число упавших чанков."""
-    def fake_llm(system_prompt, user_content, *a, **k):
+    def fake_llm(stage, system_prompt, user_content, *a, **k):
         return None, "HTTP 500"  # LLM не отвечает → чанк упал
 
     monkeypatch.setattr(NER, "llm_request", fake_llm)
     out = str(tmp_path / "ner.json")
     failed = NER.run_two_pass(
-        all_chunks=["чанк один", "чанк два", "чанк три"],
-        base_url="http://h", model_name="m", api_key="",
-        max_retries=1, timeout=10, temperature=None,
+        all_chunks=["чанк один", "чанк два", "чанк три"], stage=_stage(),
         pass1_prompt="ПРОМПТ1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=2, ner_file=out, threshold=0.95, ngram_size=3,
-        save_interval=1, logger=SilentLog(),
+        save_interval=1,
     )
     assert failed == 3  # все чанки упали
     data = json.loads(Path(out).read_text(encoding="utf-8"))
@@ -281,16 +283,15 @@ def test_run_two_pass_counts_failures(tmp_path, monkeypatch, ner_globals):
 def test_run_two_pass_all_ok_returns_zero(tmp_path, monkeypatch, ner_globals):
     """H4: успешный прогон → 0 упавших."""
     p1_answer = '[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян"}]'
-    def fake_llm(system_prompt, user_content, *a, **k):
+    def fake_llm(stage, system_prompt, user_content, *a, **k):
         return p1_answer, None
 
     monkeypatch.setattr(NER, "llm_request", fake_llm)
     failed = NER.run_two_pass(
-        all_chunks=["текст"], base_url="h", model_name="m", api_key="",
-        max_retries=1, timeout=10, temperature=None,
+        all_chunks=["текст"], stage=_stage(),
         pass1_prompt="ПРОМПТ1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=1, ner_file=str(tmp_path / "ner.json"),
-        threshold=0.95, ngram_size=3, save_interval=5, logger=SilentLog(),
+        threshold=0.95, ngram_size=3, save_interval=5,
     )
     assert failed == 0
 
@@ -300,7 +301,7 @@ def test_run_two_pass_pass2_fallback(tmp_path, monkeypatch, ner_globals):
     p1_answer = '[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян"}]'
     calls = []
 
-    def fake_llm(user_content, *a, **k):
+    def fake_llm(stage, system_prompt, user_content, *a, **k):
         calls.append(user_content)
         if "EXTRACTED NER" not in user_content:  # pass1, не pass2
             return p1_answer, None
@@ -309,11 +310,10 @@ def test_run_two_pass_pass2_fallback(tmp_path, monkeypatch, ner_globals):
     monkeypatch.setattr(NER, "llm_request", fake_llm)
     out = str(tmp_path / "ner.json")
     NER.run_two_pass(
-        all_chunks=["текст"], base_url="h", model_name="m", api_key="",
-        max_retries=1, timeout=10, temperature=None,
+        all_chunks=["текст"], stage=_stage(),
         pass1_prompt="ПРОМПТ1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=1, ner_file=out, threshold=0.95, ngram_size=3,
-        save_interval=5, logger=SilentLog(),
+        save_interval=5,
     )
     data = json.loads(Path(out).read_text(encoding="utf-8"))
     assert len(data) == 1 and data[0]["term"] == "陈阳"
@@ -328,7 +328,7 @@ P2_ANSWER = ('[{"term": "陈阳", "type": "Person (male)", '
              '"status": "confirmed"}]')
 
 
-def _fake_llm(user_content, *a, **k):
+def _fake_llm(stage, system_prompt, user_content, *a, **k):
     # pass2 получает данные с маркером «EXTRACTED NER»
     if "EXTRACTED NER" in user_content:
         return P2_ANSWER, None

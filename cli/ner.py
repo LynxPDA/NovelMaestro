@@ -29,7 +29,6 @@ import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from tqdm import tqdm
 
 # ── bootstrap: корень репо + обязательные зависимости ──
 def _bootstrap_core() -> None:
@@ -59,29 +58,26 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
-from core.stage import resolve_profile  # noqa: E402
+from core.stage import (  # noqa: E402
+    Progress,
+    Stage,
+    add_llm_args,
+    resolve_profile,
+)
 from core.common import (  # noqa: E402
     _retry_wait,
     atomic_write,
     compile_chapter_text,
-    determine_model,
-    emit_progress,
     extract_term_context,
     find_env_file,
     get_ngrams,
     get_tagged_prompt,
     is_cjk_string,
-    llm_messages,
     log_argv,
     parse_dotenv,
-    preview_logger,
-    preview_request_payload,
     print_env_help,
     setup_logging,
     split_text_smart,
-    stream_chat_completion,
-    web_progress_enabled,
-    write_preview_request,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -568,47 +564,25 @@ def load_two_pass_prompts(filepath: str, logger) -> tuple[str, str | None]:
 # ══════════════════════════════════════════════════════════════════════
 
 
-def llm_request(
-    system_prompt: str,
-    user_content: str,
-    base_url: str,
-    model: str,
-    api_key: str,
-    max_retries: int,
-    timeout: int,
-    temperature: float | None,
-    logger,
-    reasoning_effort: str | None = None,
-    validator=None,
-) -> tuple[str | None, str | None]:
+def llm_request(stage: Stage, system_prompt: str, user_content: str,
+                *, validator=None) -> tuple[str | None, str | None]:
     """Запрос к LLM с ОБЩИМ бюджетом ретраев на транспорт и формат.
 
-    max_retries — суммарное число попыток на вызов: транспортная
-    ошибка (сеть/стрим/пустой ответ) и ошибка формата (validator
-    вернул текст ошибки) считаются одинаково — один общий цикл,
-    квадратичного расхода бюджета нет. Транспорт делегирован в
-    единый stream_chat_completion ([DONE]/finish_reason, loop-детект,
-    cut, empty — одна гигиена на проект), по одной попытке на
-    итерацию. max_tokens=65536 — исторический предел NER (ТОКЕНЫ,
-    серверный предохранитель). reasoning_effort: пусто = не передаём
-    (дефолт сервера), задано — шлём как есть (none = отключение).
+    Профиль стадии несёт сервер, модель, таймауты и max_tokens=65536
+    (исторический предел NER — ТОКЕНЫ, серверный предохранитель).
+    attempts — суммарное число попыток на вызов: транспортная ошибка
+    (сеть/стрим/пустой ответ) и ошибка формата (validator вернул текст
+    ошибки) считаются одинаково — один общий цикл, квадратичного расхода
+    бюджета нет. На итерацию — одна попытка транспорта (max_retries=1),
+    счётчик живёт здесь; итог логируем ниже, а не «1 попыток» на цикл.
     Возвращает (text | None, error | None)."""
+    logger = stage.logger
     last_err = "Unknown"
-    attempts = max(1, max_retries)
+    attempts = max(1, stage.profile.max_retries)
     for attempt in range(attempts):
-        text, err = stream_chat_completion(
-            base_url, model,
-            llm_messages(system_prompt, user_content),
-            api_key=api_key,
-            max_retries=1,  # бюджет попыток — в общем цикле здесь
-            timeout=timeout,
-            stream_timeout=timeout,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
-            max_tokens=65536,
-            logger=None,  # итог логируем ниже (не «1 попыток» на итерацию)
-            label="[NER]",
-        )
+        # одна попытка транспорта на итерацию: бюджет попыток — здесь
+        text, err = stage.quiet().complete(system_prompt, user_content,
+                                           label="[NER]", max_retries=1)
         if err:
             last_err = err
         elif validator is not None:
@@ -644,16 +618,10 @@ def _pass1_user_content(prompt: str, text: str) -> str:
 def process_chunk_pass1(
     index: int,
     text: str,
-    base_url: str,
-    model: str,
-    api_key: str,
-    max_retries: int,
-    timeout: int,
-    temperature: float | None,
+    stage: Stage,
     system_prompt: str,
-    logger,
-    reasoning_effort: str | None = None,
 ) -> tuple[int, list[dict], str | None]:
+    logger = stage.logger
     ners: list[dict] | None = None
 
     def _validate(raw: str) -> str | None:
@@ -661,14 +629,10 @@ def process_chunk_pass1(
         ners = parse_ner_response(raw)
         return None if ners is not None else "Invalid NER format"
 
-    raw, err = llm_request(
-        _pass1_user_content(system_prompt, text), "", base_url, model,
-        api_key, max_retries, timeout, temperature, logger,
-        reasoning_effort=reasoning_effort,
-        validator=_validate,
-    )
+    raw, err = llm_request(stage, _pass1_user_content(system_prompt, text), "",
+                           validator=_validate)
     if raw is None:
-        return index, [], err or f"Fail after {max(1, max_retries)} retries"
+        return index, [], err or f"Fail after {stage.profile.max_retries} retries"
     if ners is None:
         # валидатор не отработал (мок llm_request) — разбираем здесь
         ners = parse_ner_response(raw)
@@ -681,16 +645,10 @@ def process_chunk_pass2(
     index: int,
     text: str,
     pass1_ners: list[dict],
-    base_url: str,
-    model: str,
-    api_key: str,
-    max_retries: int,
-    timeout: int,
-    temperature: float | None,
+    stage: Stage,
     review_prompt_template: str,
-    logger,
-    reasoning_effort: str | None = None,
 ) -> tuple[int, list[dict], str | None]:
+    logger = stage.logger
     if not pass1_ners:
         return index, [], None
 
@@ -705,14 +663,10 @@ def process_chunk_pass2(
         ners = parse_ner_response(raw)
         return None if ners is not None else "Pass2: invalid format"
 
-    raw, err = llm_request(
-        user_content, "", base_url, model,
-        api_key, max_retries, timeout, temperature, logger,
-        reasoning_effort=reasoning_effort,
-        validator=_validate,
-    )
+    raw, err = llm_request(stage, user_content, "", validator=_validate)
     if raw is None:
-        return index, [], err or f"Pass2 fail after {max(1, max_retries)} retries"
+        return index, [], err or (f"Pass2 fail after "
+                               f"{stage.profile.max_retries} retries")
     if ners is None:
         # валидатор не отработал (мок llm_request) — разбираем здесь
         ners = parse_ner_response(raw)
@@ -769,12 +723,7 @@ def fill_term_context(ners: list[dict], chunk_text: str, max_len: int,
 
 def run_two_pass(
     all_chunks: list[str],
-    base_url: str,
-    model_name: str,
-    api_key: str,
-    max_retries: int,
-    timeout: int,
-    temperature: float | None,
+    stage: Stage,
     pass1_prompt: str,
     pass2_prompt: str,
     max_workers: int,
@@ -782,8 +731,6 @@ def run_two_pass(
     threshold: float,
     ngram_size: int,
     save_interval: int,
-    logger,
-    reasoning_effort: str | None = None,
     context_max_len: int = 300,
 ) -> int:
     """Двухпроходный конвейер NER. Возвращает число УПАВШИХ чанков
@@ -792,6 +739,7 @@ def run_two_pass(
     Каждый запуск обрабатывает ВСЕ чанки с первого — возобновление
     с места остановки убрано. Каждые save_interval чанков пишется
     снапшот ner.json (защита от падения, не кэш)."""
+    logger = stage.logger
     total = len(all_chunks)
 
     # результаты pass2 по чанкам — для снапшотов и финализации
@@ -802,30 +750,18 @@ def run_two_pass(
     _log(logger, logging.INFO,
          f"🔄 Конвейер: {total} чанков в работе | потоков: {max_workers}")
 
-    pbar = tqdm(
-        total=total * 2,
-        unit="step",
-        desc="Two-pass pipeline",
-        disable=web_progress_enabled(),
-    )
-    pbar_lock = threading.Lock()
-    # tqdm при disable=True НЕ двигает pbar.n — считаем сами
-    # (иначе web-прогрессбар залипает на 0/N)
-    steps_done = 0
-    # стартовое событие прогресса — бар виден сразу,
-    # до первого завершённого шага (медленный LLM)
-    emit_progress(steps_done, total * 2, "NER (pass1+pass2)")
-    if web_progress_enabled():
-        _log(logger, logging.INFO,
-             f"📊 Прогресс: {steps_done}/{total * 2}")
+    # счётчик — свой (у tqdm при disable=True pbar.n не двигается, и
+    # web-прогрессбар залипал бы на 0/N); бар и «📊» видны сразу, до первого
+    # завершённого шага (медленный LLM)
+    progress = Progress(total * 2, "NER (pass1+pass2)", unit="шаг",
+                        bar=True, logger=logger)
+    progress_lock = threading.Lock()
+    progress.start()
 
     def _step(n: int = 1) -> None:
-        """n шагов прогресса (под pbar_lock — потокобезопасно)."""
-        nonlocal steps_done
-        with pbar_lock:
-            steps_done += n
-            pbar.update(n)
-            emit_progress(steps_done, total * 2, "NER (pass1+pass2)")
+        """n шагов прогресса (под progress_lock — потокобезопасно)."""
+        with progress_lock:
+            progress.step(n)
 
     completed_since_save = 0
 
@@ -837,19 +773,16 @@ def run_two_pass(
 
             # ── PASS 1 ──
             _, p1_ners, err = process_chunk_pass1(
-                idx, text, base_url, model_name, api_key,
-                max_retries, timeout, temperature, pass1_prompt, logger,
-                reasoning_effort=reasoning_effort,
-            )
+                idx, text, stage, pass1_prompt)
             if err:
                 _log(logger, logging.ERROR,
                      f"⚠️  Pass1 chunk {idx}/{total}: {err}")
-                tqdm.write(f"⚠️  Pass1 {idx}: {err}")
+                progress.log(f"⚠️  Pass1 {idx}: {err}")
                 p1_ners = []
             else:
                 _log(logger, logging.INFO,
                      f"✅ Pass1 chunk {idx}/{total}: {len(p1_ners)} entities")
-                tqdm.write(f"✅ Pass1 {idx}: {len(p1_ners)} ent.")
+                progress.log(f"✅ Pass1 {idx}: {len(p1_ners)} ent.")
             _step()
             local_steps += 1
 
@@ -862,19 +795,16 @@ def run_two_pass(
                 return idx, [], err  # H4: сбой pass1 ≠ fallback
 
             _, p2_ners, err2 = process_chunk_pass2(
-                idx, text, p1_ners, base_url, model_name, api_key,
-                max_retries, timeout, temperature, pass2_prompt, logger,
-                reasoning_effort=reasoning_effort,
-            )
+                idx, text, p1_ners, stage, pass2_prompt)
             if err2:
                 _log(logger, logging.WARNING,
                      f"⚠️  Pass2 chunk {idx}/{total}: {err2} — fallback to pass1")
-                tqdm.write(f"⚠️  Pass2 {idx}: {err2} (fallback)")
+                progress.log(f"⚠️  Pass2 {idx}: {err2} (fallback)")
                 p2_ners = p1_ners
             else:
                 _log(logger, logging.INFO,
                      f"✅ Pass2 chunk {idx}/{total}: {len(p2_ners)} entities")
-                tqdm.write(f"✅ Pass2 {idx}: {len(p2_ners)} ent.")
+                progress.log(f"✅ Pass2 {idx}: {len(p2_ners)} ent.")
 
             # context — из чанка (не от LLM): 1–2 предложения вокруг
             # термина; неточно — нечёткий поиск (пороги дедупликации)
@@ -891,7 +821,7 @@ def run_two_pass(
         except Exception as e:
             _log(logger, logging.ERROR,
                  f"💥 Chunk {idx}: необработанная ошибка: {e}")
-            tqdm.write(f"💥 Chunk {idx}: {e}")
+            progress.log(f"💥 Chunk {idx}: {e}")
             with done_lock:
                 completed.setdefault(idx, [])
             remaining = 2 - local_steps
@@ -922,12 +852,10 @@ def run_two_pass(
                 )
                 _log(logger, logging.INFO,
                      f"💾 Снапшот ner.json ({len(completed)}/{total} готово)")
-                if web_progress_enabled():
-                    _log(logger, logging.INFO,
-                         f"📊 Прогресс: {steps_done}/{total * 2}")
+                progress.log_state()
                 completed_since_save = 0
 
-    pbar.close()
+    progress.close()
 
     # ── Финализация: голосование → дедупликация → словарь ──
     _log(logger, logging.INFO,
@@ -1389,46 +1317,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--threads", type=int, default=4,
         help="Число параллельных потоков (по умолчанию: 4, макс: 16).",
     )
-    parser.add_argument(
-        "--host", default=None,
-        help="URL API-сервера (пусто = HOST из .env).",
-    )
-    parser.add_argument(
-        "--api_key", default=None,
-        help="API-ключ (пусто = API_KEY из .env).",
-    )
-    parser.add_argument(
-        "--model", default=None,
-        help="Модель: --model или MODEL/NER_MODEL в .env (обязательна).",
-    )
-    parser.add_argument(
-        "--env_file", default=None, help="Явный путь к .env.",
-    )
+    # Сервер LLM — общий блок флагов (core.stage); исторические имена
+    # (--retries, --reasoning-effort) принимаются как псевдонимы.
+    # max_tokens=65536 — исторический предел NER (ТОКЕНЫ, серверный
+    # предохранитель)
+    add_llm_args(parser, timeout=900, max_retries=3, max_tokens=65536,
+                 aliases=True)
     parser.add_argument(
         "--chunk_size", type=int, default=5500,
         help="Размер чанка, ТОКЕНЫ — оценка estimate_tokens "
              "(по умолчанию: 5500).",
-    )
-    parser.add_argument(
-        "--retries", type=int, default=3,
-        help="Общее число попыток LLM на чанк: сеть/стрим и невалидный "
-             "формат ответа (по умолчанию: 3).",
-    )
-    parser.add_argument(
-        "--timeout", type=int, default=900,
-        help="Таймаут запроса в секундах (по умолчанию: 900).",
-    )
-    parser.add_argument(
-        "--temperature", type=float, default=None,
-        help="Температура LLM. Если не указана — значение сервера.",
-    )
-    parser.add_argument(
-        "--reasoning-effort", type=str, default=None,
-        help=(
-            "Уровень усилий размышления модели (reasoning effort): "
-            "none/minimal/low/medium/high/xhigh/max (none — отключить). "
-            "По умолчанию не отправляется (дефолт сервера)."
-        ),
     )
     parser.add_argument(
         "--threshold", type=float, default=0.75,
@@ -1588,14 +1486,8 @@ def main():
         _log(logger, logging.INFO,
              "📝 context: извлечение выключено (--context_max_len 0)")
 
-    base_url = args.host.rstrip("/")
-    if not base_url.endswith("/v1"):
-        base_url += "/v1"
-
-    try:
-        model_name = determine_model(args.model, logger)
-    except SystemExit:
-        return 1  # H4 (AUDIT): модель не определена — код 1
+    # Контекст стадии: сервер/модель уже разрешены resolve_profile
+    stage = Stage(name="ner", logger=logger, profile=profile)
 
     pass1_prompt = SYSTEM_PROMPT_PASS1
     pass2_prompt = SYSTEM_PROMPT_PASS2
@@ -1641,12 +1533,10 @@ def main():
 
     # ── Предпросмотр запроса (--preview-request): pass1 первого чанка ──
     if args.preview_request:
-        log = preview_logger("ner")
-        log_argv(log)
-        _log(log, logging.INFO, f"🧭 Чанков: {len(all_chunks)}")
-        payload = preview_request_payload(
-            "ner", f"Pass1 · чанк 1/{len(all_chunks)}", model_name,
-            llm_messages(_pass1_user_content(pass1_prompt, all_chunks[0])),
+        _log(stage.logger, logging.INFO, f"🧭 Чанков: {len(all_chunks)}")
+        stage.preview(
+            f"Pass1 · чанк 1/{len(all_chunks)}",
+            _pass1_user_content(pass1_prompt, all_chunks[0]),
             meta={
                 "chunks": len(all_chunks),
                 "chunk_size": args.chunk_size,
@@ -1656,9 +1546,6 @@ def main():
                 "input": ("сборка глав" if in_memory_text is not None
                           else str(args.file)),
             })
-        write_preview_request(args.preview_request, payload)
-        _log(log, logging.INFO,
-             f"✅ Предпросмотр запроса: {args.preview_request}")
         return 0
 
     # ════════════════════════════════════════════════════════════════
@@ -1668,18 +1555,13 @@ def main():
 
     if args.two_pass:
         _log(logger, logging.INFO,
-             f"🚀 TWO-PASS PIPELINE | Модель: {model_name} | "
+             f"🚀 TWO-PASS PIPELINE | Модель: {profile.model} | "
              f"Чанков: {len(all_chunks)} | Потоков: {max_workers} | "
              f"Save interval: {save_interval}")
 
         failed_chunks = run_two_pass(
             all_chunks=all_chunks,
-            base_url=base_url,
-            model_name=model_name,
-            api_key=args.api_key,
-            max_retries=args.retries,
-            timeout=args.timeout,
-            temperature=args.temperature,
+            stage=stage,
             pass1_prompt=pass1_prompt,
             pass2_prompt=pass2_prompt,
             max_workers=max_workers,
@@ -1687,8 +1569,6 @@ def main():
             threshold=args.threshold,
             ngram_size=args.ngram,
             save_interval=save_interval,
-            logger=logger,
-            reasoning_effort=args.reasoning_effort,
             context_max_len=args.context_max_len,
         )
 
@@ -1697,7 +1577,7 @@ def main():
     # ════════════════════════════════════════════════════════════════
     else:
         _log(logger, logging.INFO,
-             f"🚀 Модель: {model_name} | Чанков: {len(all_chunks)} "
+             f"🚀 Модель: {profile.model} | Чанков: {len(all_chunks)} "
              f"| Потоков: {max_workers} | Save interval: {save_interval}")
         _log(logger, logging.INFO, "━━━ ИЗВЛЕЧЕНИЕ (однопроходное) ━━━")
 
@@ -1706,30 +1586,21 @@ def main():
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 pool.submit(
-                    process_chunk_pass1, idx, chunk, base_url, model_name,
-                    args.api_key, args.retries, args.timeout,
-                    args.temperature, pass1_prompt, logger,
-                    args.reasoning_effort,
+                    process_chunk_pass1, idx, chunk, stage, pass1_prompt,
                 ): idx
                 for idx, chunk in enumerate(all_chunks)
             }
-            pbar = tqdm(total=len(all_chunks), unit="chunk", desc="Extract",
-                        disable=web_progress_enabled())
-            # свой счётчик — pbar.n мёртв при disable=True
-            done = 0
-            # стартовое событие прогресса — бар и «📊» видны
-            # сразу, до первого завершённого чанка (медленный LLM)
-            emit_progress(done, len(all_chunks), "Извлечение терминов")
-            if web_progress_enabled():
-                _log(logger, logging.INFO,
-                     f"📊 Прогресс: {done}/{len(all_chunks)}")
+            progress = Progress(len(all_chunks), "Извлечение терминов",
+                                unit="чанк", bar=True, logger=logger)
+            # бар и «📊» видны сразу, до первого завершённого чанка
+            progress.start()
 
             for fut in as_completed(futures):
                 idx, ners, err = fut.result()
                 if err:
                     failed_chunks += 1  # H4 (AUDIT): счётчик упавших
                     _log(logger, logging.ERROR, f"⚠️ Chunk {idx}: {err}")
-                    tqdm.write(f"⚠️  Chunk {idx}: {err}")
+                    progress.log(f"⚠️  Chunk {idx}: {err}")
                 elif ners:
                     fill_term_context(ners, all_chunks[idx],
                                       args.context_max_len,
@@ -1740,15 +1611,12 @@ def main():
                     )
                     _log(logger, logging.INFO,
                          f"✅ Chunk {idx}: +{a} new | +{u} hits")
-                    tqdm.write(f"Chunk {idx}: +{a} new | +{u} hits")
+                    progress.log(f"Chunk {idx}: +{a} new | +{u} hits")
                 else:
                     _log(logger, logging.INFO, f"✅ Chunk {idx}: 0 entities")
 
                 chunks_since_save += 1
-                pbar.update(1)
-                done += 1
-                emit_progress(done, len(all_chunks),
-                              "Извлечение терминов")
+                progress.step()
 
                 if chunks_since_save >= save_interval:
                     with ner_lock:
@@ -1757,12 +1625,10 @@ def main():
                     _log(logger, logging.INFO,
                          f"💾 Промежуточное сохранение "
                          f"({len(global_ner_data)} терминов)")
-                    if web_progress_enabled():
-                        _log(logger, logging.INFO,
-                             f"📊 Прогресс: {done}/{len(all_chunks)}")
+                    progress.log_state()
                     chunks_since_save = 0
 
-            pbar.close()
+            progress.close()
 
         with ner_lock:
             merge_alias_groups(global_ner_data, logger)

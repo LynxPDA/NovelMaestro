@@ -197,6 +197,16 @@ def test_ner_load_two_pass_prompts(tmp_path):
     assert p1 == "ПЕРВЫЙ" and p2 is None
 
 
+def _ner_stage(**kw):
+    """Контекст стадии NER для моков: профиль с короткими таймаутами."""
+    fields = dict(base_url="http://h", model="модель", api_key="ключ",
+                  timeout=300, stream_timeout=300, max_retries=3,
+                  max_tokens=65536, logger=SilentLog())
+    fields.update(kw)
+    return core_stage.Stage(name="ner", logger=SilentLog(),
+                            profile=core_stage.LlmProfile(**fields))
+
+
 def test_ner_llm_request_delegates(monkeypatch):
     """llm_request обязан идти через единый stream_chat_completion;
     messages — унифицированные: промпт в user, system пустой."""
@@ -206,9 +216,8 @@ def test_ner_llm_request_delegates(monkeypatch):
         seen.update(base_url=base_url, model=model, messages=messages, **kw)
         return "ОТВЕТ", ""
 
-    monkeypatch.setattr(NER, "stream_chat_completion", fake_stream)
-    text, err = NER.llm_request("система", "запрос", "http://h", "модель",
-                                "ключ", 3, 300, 0.1, SilentLog())
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
+    text, err = NER.llm_request(_ner_stage(temperature=0.1), "система", "запрос")
     assert (text, err) == ("ОТВЕТ", None)
     assert seen["messages"] == [
         {"role": "system", "content": ""},
@@ -227,12 +236,11 @@ def test_ner_llm_request_format_retries(monkeypatch):
     def fake_stream(base_url, model, messages, **kw):
         return next(answers), ""
 
-    monkeypatch.setattr(NER, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(NER.time, "sleep", lambda s: None)
     monkeypatch.setattr(NER, "_retry_wait", lambda attempt: 0)
     text, err = NER.llm_request(
-        "система", "запрос", "http://h", "модель", "ключ",
-        3, 300, None, SilentLog(),
+        _ner_stage(), "система", "запрос",
         validator=lambda r: None if r.startswith("[") else "Invalid NER format",
     )
     assert err is None
@@ -244,12 +252,11 @@ def test_ner_llm_request_format_exhausted(monkeypatch):
     def fake_stream(base_url, model, messages, **kw):
         return "не json", ""
 
-    monkeypatch.setattr(NER, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(NER.time, "sleep", lambda s: None)
     monkeypatch.setattr(NER, "_retry_wait", lambda attempt: 0)
     text, err = NER.llm_request(
-        "система", "запрос", "http://h", "модель", "ключ",
-        2, 300, None, SilentLog(),
+        _ner_stage(max_retries=2), "система", "запрос",
         validator=lambda r: "Invalid NER format",
     )
     assert text is None and err == "Invalid NER format"
