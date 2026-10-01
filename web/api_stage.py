@@ -82,7 +82,7 @@ def _jobs_start(ctx: dict) -> dict:
     script = script_path(action, repo)
     if script is None or not script.is_file():
         raise ApiError(500, f"Скрипт не найден: {spec['script']}")
-    ctx["project_dir"] = pdir  # для LLM-профилей (find_env_file)
+    ctx["project_dir"] = pdir  # для LLM-профилей (слой книги)
     # валидация number-полей с min/max из spec: недопустимое значение
     # → 400 ДО запуска (скрипт бы упал с кодом 2 и «failed» без причины)
     for f in spec.get("fields") or []:
@@ -149,41 +149,18 @@ def _job_payload(job) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════
-# R9: настройки запусков в .env проекта
+# R9: настройки запусков — собственный .env книги хранит ТОЛЬКО отличия
 # ════════════════════════════════════════════════════════════════════
-def _env_apply_keys(env_path: Path, updates: dict,
-                    removes: set[str] | None = None) -> None:
-    """Обновляет KEY=VALUE в .env, сохраняя комментарии/порядок строк.
-
-    Существующие ключи заменяются на месте, новые добавляются в конец;
-    ключи из removes удаляются (строка убирается целиком); запись —
-    атомарная (atomic_write). M4 (AUDIT): значения санитизируются
-    (strip + перевод строки → пробел) — нет инъекции новых ключей."""
-    lines: list[str] = []
-    if env_path.is_file():
-        try:
-            lines = env_path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            lines = []
-    keys = set(updates)
-    drop = set(removes or ())
-    out: list[str] = []
-    used: set[str] = set()
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            name = stripped.split("=", 1)[0].strip()
-            if name in drop:
-                continue
-            if name in keys:
-                out.append(f"{name}={_sanitize_env_value(updates[name])}")
-                used.add(name)
-                continue
-        out.append(line)
-    for name in keys - used:
-        out.append(f"{name}={_sanitize_env_value(updates[name])}")
-    c = _import_common({})
-    c.atomic_write(str(env_path), "\n".join(out) + "\n")
+# Собственный .env книги — машиночитаемый diff: его пересобирает web-слой,
+# в интерфейсе он не редактируется (общий конфиг — вкладка «Настройки»).
+# Полная копия общего конфига больше не создаётся: с ней книга жила бы своей
+# копией, и правка общего .env до неё не доезжала бы.
+_ENV_PROJECT_HEADER = (
+    "# NovelMaestro — локальные отличия книги от общего .env",
+    "# Файл собирает web-слой: здесь только поля запусков, изменённые для",
+    "# этой книги. Правят их в «Запусках» (форма стадии → «Сбросить»),",
+    "# общий конфиг — на вкладке «Настройки».",
+)
 
 
 def _sanitize_env_value(value) -> str:
@@ -197,119 +174,122 @@ def _sanitize_env_value(value) -> str:
     return s
 
 
-# LLM-подключение (host/model/api_key) — системная настройка: в
-# pdir/.env пишутся только отличия от глобального эффективного значения
-# (_persist_run_params), иначе глобальная смена сервера не доезжала
-# бы до проектов с уже созданным pdir/.env
+def _norm_env_value(field: dict, value) -> str:
+    """Значение поля (из формы или из .env) — в одной форме сравнения:
+    bool → «1»/«0», textarea → переносы как литерал «\\n», прочее — strip."""
+    s = "" if value is None else str(value).strip()
+    if field.get("type") == "bool":
+        low = s.lower()
+        if low in ("1", "true", "yes", "on"):
+            return "1"
+        if low in ("0", "false", "no", "off"):
+            return "0"
+        return ""
+    if field.get("type") == "textarea":
+        return s.replace("\n", "\\n")
+    return s
+
+
+def _global_env(ctx: dict) -> dict:
+    """База сравнения «локальное это отличие или нет»: системный .env,
+    поверх — окружение процесса (канон §7: окружение > файл). Ключи самой
+    книги в базу не входят: они и есть проверяемое."""
+    base = dict(_import_common(ctx).parse_dotenv(_sys_env_path(ctx)))
+    base.update({k: v.strip() for k, v in os.environ.items() if v.strip()})
+    return base
+
+
+def _project_env(pdir: Path, base: dict) -> dict:
+    """Отличия книги из её .env, очищенные от мусора старых копий: пустое
+    значение, ключ WEB_* (его читает только системный файл) и строка,
+    совпадающая с общим конфигом, — отличием не считаются."""
+    c = _import_common({})
+    path = pdir / ".env"
+    raw = c.parse_dotenv(str(path) if path.is_file() else None)
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        v = str(value).strip()
+        if not v or key.startswith("WEB_"):
+            continue
+        if v == _sanitize_env_value(base.get(key, "")):
+            continue
+        out[key] = v
+    return out
+
+
+def _write_project_env(pdir: Path, diffs: dict) -> list[str]:
+    """Пересобирает .env книги: шапка + отличия по ключам. Нечего хранить —
+    файла нет (книга целиком наследует общий конфиг)."""
+    env_path = pdir / ".env"
+    keys = sorted(diffs)
+    if not keys:
+        if env_path.is_file():
+            try:
+                env_path.unlink()
+            except OSError as exc:
+                log.debug("Пустой .env книги не удалён: %s", exc)
+        return []
+    lines = list(_ENV_PROJECT_HEADER) + [
+        f"{k}={_sanitize_env_value(diffs[k])}" for k in keys]
+    _import_common({}).atomic_write(str(env_path), "\n".join(lines) + "\n")
+    return keys
 
 
 def _persist_run_params(ctx: dict, pdir: Path, stage: str,
-                        params: dict) -> None:
-    """Сохраняет настройки запуска стадии в .env проекта (R9).
+                        params: dict) -> list[str]:
+    """Сохраняет настройки запуска стадии (R9) как отличия книги.
 
-    Если pdir/.env нет — копия системного корневого .env (или шаблона),
-    затем обновляются ключи по env_keys_for. LLM-подключение
-    (host/model/api_key) — по отклонениям: значение совпадает с
-    глобальным эффективным (os.environ > системный .env) — локальный
-    оверрайд удаляется (или не пишется), отличается — пишется
-    <СТАДИЯ>_KEY. Поле не пришло (простой режим) — .env не трогается.
-    api_key пишется в .env (локальный однопользовательский проект —
-    удобство важнее сокрытия). Пустые значения НЕ пишутся; системный
-    .env не трогается."""
+    Пришло поле формы — сравниваем с общим эффективным значением: совпало —
+    локального оверрайда нет (ключ уходит из файла книги), отличается —
+    пишется <СТАДИЯ>_KEY. Поле не пришло (простой режим) — его ключ
+    остаётся как был; отличия других стадий не трогаем.
+
+    Пустое поле снимает оверрайд, кроме api_key: пустой ключ трактуем как
+    «не меняли» (парольное поле может приехать пустым, а ключ — секрет).
+    Возвращает ключи, оставшиеся в файле книги.
+    """
     from web.stages import env_keys_for
-    # noenv-поля (типы/поля чипсов, секреты) в .env не пишем
-    spec = spec_for(stage)
-    noenv = {f["name"] for f in (spec or {}).get("fields", [])
-             if f.get("noenv")}
-    # многстрочные regexp (textarea) в .env — одной строкой, переносы
-    # как литерал «\\n» (одно значение .env — одна строка)
-    textareas = {f["name"] for f in (spec or {}).get("fields", [])
-                 if f.get("type") == "textarea"}
-    updates: dict[str, str] = {}
-    removes: set[str] = set()
-    # глобальный эффективный LLM-конфиг стадии — база сравнения
-    base_cfg: dict = {}
-    if any(f in params for f in _LLM_CONN_FIELDS):
-        c = _import_common(ctx)
-        base_cfg = c.get_server_config(
-            c.parse_dotenv(c.find_env_file()), stage)
+    common = _import_common(ctx)
+    spec = spec_for(stage) or {}
+    fields = {f["name"]: f for f in spec.get("fields", [])}
+    base = _global_env(ctx)
+    diffs = _project_env(pdir, base)
+    # LLM-подключение — общий конфиг стадии: сравниваем с эффективными
+    # HOST/API_KEY/MODEL (стадийный ключ → общий), а не с одним <STAGE>_HOST
+    base_cfg = (common.get_server_config(base, stage)
+                if any(f in params for f in _LLM_CONN_FIELDS) else {})
     profile = str(params.get("profile") or "")
-    for field, value in params.items():
-        if field in noenv or value is None or value == "":
-            continue
-        keys = env_keys_for(stage, field, profile)
+    for name, field in fields.items():
+        if field.get("noenv"):
+            continue  # типы/поля чипсов в .env не пишем
+        keys = env_keys_for(stage, name, profile)
         if not keys:
             continue
-        if field in _LLM_CONN_FIELDS:
-            v = str(value).strip()
-            if v == (base_cfg.get(field) or "").strip():
-                # совпадает с глобальным — оверрайд не нужен
-                removes.add(keys[0])
-            else:
-                updates[keys[0]] = v
+        key = keys[0]
+        if name not in params:
+            continue  # поле не приходило: что было, то и осталось
+        new = _norm_env_value(field, params[name])
+        if not new and name == "api_key":
             continue
-        if isinstance(value, bool):
-            updates[keys[0]] = "1" if value else "0"
+        glob = ((base_cfg.get(name) or "").strip()
+                if name in _LLM_CONN_FIELDS
+                else _norm_env_value(field, base.get(key, "")))
+        if new and new != glob:
+            diffs[key] = new
         else:
-            v = str(value).strip()
-            if field in textareas:
-                v = v.replace("\n", "\\n")
-            updates[keys[0]] = v
-    if not updates and not removes:
-        return
-    env_path = pdir / ".env"
-    if not env_path.is_file():
-        if not updates:
-            return  # удалять нечего — файла нет (создавать ради удаления глупо)
-        src = _sys_env_path(ctx)
-        if not src.is_file():
-            src = _repo_root(ctx) / "templates" / ".env.example"
-        try:
-            if src.is_file():
-                # M1 (AUDIT): копия БЕЗ секретов — ключи остаются только
-                # в системном projects/.env (fallback в _llm_argv)
-                text = src.read_text(encoding="utf-8", errors="replace")
-                text = _strip_secret_keys(text)
-                _import_common(ctx).atomic_write(env_path, text)
-        except OSError as exc:
-            log.debug("Не удалось скопировать .env в проект: %s", exc)
-    _env_apply_keys(env_path, updates, removes)
+            diffs.pop(key, None)
+    return _write_project_env(pdir, diffs)
 
 
-def _strip_secret_keys(text: str) -> str:
-    """Убирает значения секретных ключей (*_API_KEY, API_KEY) из текста
-    .env (M1): строки остаются с пустым значением + комментарий.
-    единый ключ API_KEY тоже секретный (не *_API_KEY).
-    Системные WEB_* (настройки web-сервера и интерфейса) в проект НЕ
-    копируются вовсе — в проектном .env они бесполезны (читает их только
-    системный корневой .env)."""
-    marker = "# (секрет не копируется в проект — M1, AUDIT)"
-    out = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        # синтетический маркер прошлой чистки — не дублируем
-        # (рядом со следующим секретным ключом добавится заново)
-        if stripped == marker:
-            continue
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            name = stripped.split("=", 1)[0].strip()
-            if name == "API_KEY" or name.upper().endswith("_API_KEY"):
-                out.append(f"{name}=")
-                out.append(marker)
-                continue
-            if name.startswith("WEB_"):
-                # системная настройка web — не место в .env проекта
-                continue
-        out.append(line)
-    return "\n".join(out) + ("\n" if out else "")
-
-
-def _env_ctx(ctx: dict, scope: str) -> tuple[Path, str]:
-    """(путь к .env, источник) для scope global/project."""
-    if scope == "global":
-        return _sys_env_path(ctx), "shared"
-    pdir, _s, _n = _project_ctx(ctx)
-    return pdir / ".env", "project"
+def _reset_stage_env(ctx: dict, pdir: Path, stage: str) -> list[str]:
+    """Снимает локальные отличия книги по одной стадии (кнопка «Сбросить»):
+    её ключи <СТАДИЯ>_* уходят из файла, поля снова наследуют общий .env.
+    Заодно чистится старая копия общего конфига; пустой файл — удалить."""
+    base = _global_env(ctx)
+    prefix = f"{(stage or '').upper()}_"
+    diffs = {k: v for k, v in _project_env(pdir, base).items()
+             if not k.upper().startswith(prefix)}
+    return _write_project_env(pdir, diffs)
 
 
 def _jobs_list(ctx: dict) -> dict:
@@ -430,9 +410,11 @@ def _stage_spec(ctx: dict) -> dict:
     """Спека стадии (GET /api/stages/{key}/spec).
 
     R9: при project=sec/name поля предзаполняются по слоям конфига —
-    системный корневой .env → собственный pdir/.env (по ключам) →
-    os.environ (канон §7: окружение > файл). Секреты (api_key) —
-    только из pdir/.env; приоритет .env-слоёв > дефолт спеки."""
+    общий .env, поверх собственный файл книги (в нём только её отличия),
+    поверх обоих — os.environ (канон §7: окружение > файл). Секреты
+    (api_key) — только из файла книги; приоритет .env-слоёв > дефолт спеки.
+    Плюс spec.overridden: {поле: {key, local, global}} — чем книга
+    отличается от общего конфига (пометка поля и кнопка «Сбросить»)."""
     spec = spec_for(ctx["params"]["key"])
     if spec is None:
         raise ApiError(404, "Стадия не найдена")
@@ -455,24 +437,42 @@ def _stage_spec(ctx: dict) -> dict:
             # проектов) → собственный pdir/.env (локальные переопределения,
             # по ключам) → os.environ по ключам-кандидатам полей. Так
             # HOST/API_KEY/MODEL из docker-compose environment доходят
-            # до формы даже при сидированном pdir/.env.
-            sys_env = c.parse_dotenv(c.system_env_file())
-            proj_path = pdir / ".env"
-            proj_env = c.parse_dotenv(
-                str(proj_path) if proj_path.is_file() else None)
+            # до формы и при книге со своим файлом.
             stage_key = ctx["params"]["key"]
+            # слои: общий .env (+ окружение) → отличия книги
+            base = _global_env(ctx)
+            proj_env = _project_env(pdir, base)
+            cfg_base = c.get_server_config(base, stage_key)
             cand: set[str] = set()
             for field in spec.get("fields", []):
                 if not field.get("noenv"):
                     cand.update(env_keys_for(stage_key, field["name"]))
             env = c.env_overlay(
-                {**sys_env, **proj_env},
+                {**base, **proj_env},
                 [k for k in cand
                  if k != "API_KEY" and not k.endswith("_API_KEY")])
+            overridden: dict[str, dict] = {}
             for field in spec.get("fields", []):
                 if field.get("noenv"):
                     continue  # epub: многострочные regexp — только localStorage
                 keys = env_keys_for(stage_key, field["name"])
+                # любое ключевое имя поля в файле книги — локальное отличие
+                # (стадийное <STAGE>_KEY или общее HOST/MODEL/API_KEY)
+                own_key = next((k for k in keys if k in proj_env), None)
+                if own_key:
+                    name_key = field["name"]
+                    glob_v = ((cfg_base.get(name_key) or "")
+                              if name_key in _LLM_CONN_FIELDS
+                              else str(base.get(own_key, "")))
+                    loc_v = str(proj_env[own_key])
+                    if field.get("type") == "password":
+                        # значения секретов в SPA не нужны — только сам
+                        # факт локального отличия
+                        loc_v = "••••" if loc_v else ""
+                        glob_v = "••••" if glob_v else ""
+                    overridden[name_key] = {"key": own_key,
+                                            "local": loc_v,
+                                            "global": glob_v}
                 # секреты (api_key) в префилл отдаются ТОЛЬКО из
                 # собственного файла проекта: ни os.environ, ни
                 # системный .env в спеку не попадают (при --auth
@@ -508,11 +508,30 @@ def _stage_spec(ctx: dict) -> dict:
                         else:
                             field["default"] = val
                         break
+            spec["overridden"] = overridden
         except ApiError:
             raise
         except Exception as exc:  # noqa: BLE001 — .env необязателен
             log.debug("Предзаполнение формы из .env: %s", exc)
     return {"ok": True, "spec": spec}
+
+
+def _stage_reset(ctx: dict) -> dict:
+    """Снять локальные отличия книги по стадии (POST /api/stages/{key}/reset).
+
+    Ключи <СТАДИЯ>_* уходят из собственного .env книги (пустой файл —
+    удалить), поля снова наследуют общий конфиг. Ответ — свежая спека с
+    предзаполнением из общего .env, чтобы форма перерисовалась сразу.
+    """
+    pdir, section, name = _project_ctx(ctx)
+    key = ctx["params"]["key"]
+    if spec_for(key) is None:
+        raise ApiError(404, "Стадия не найдена")
+    kept = _reset_stage_env(ctx, pdir, key)
+    ctx["query"] = {**ctx["query"], "project": f"{section}/{name}"}
+    resp = _stage_spec(ctx)
+    resp["reset"] = {"stage": key, "kept": kept}
+    return resp
 
 
 # U8: кэш опций стадий — сигнатура mtime папок, влияющих на опции
@@ -902,6 +921,8 @@ def _register_jobs(router: Router) -> None:
     router.add("GET", "/api/jobs/{id}/stream", _jobs_stream)
     router.add("GET", "/api/stages/{key}/spec", _stage_spec)
     router.add("GET", "/api/stages/{key}/options", _stage_options)
+    # снять локальные отличия книги по стадии (кнопка «Сбросить» в форме)
+    router.add("POST", "/api/stages/{key}/reset", _stage_reset)
     # epub: предпросмотр разбивки (папки/размеры/удаление/текст)
     router.add("POST", "/api/stages/epub/preview", _epub_preview_post)
     router.add("GET", "/api/stages/epub/preview", _epub_preview_get)

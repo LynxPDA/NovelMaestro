@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-api_env.py — конфигурация: системный и проектный .env и их ключи,
+api_env.py — конфигурация: общий (системный) .env и его ключи,
 промпты и metadata.yaml проекта.
+
+Собственный .env книги в web не показывается и руками не правится: его
+пересобирает web-слой из форм «Запусков» (api_stage._persist_run_params),
+а читается он только как слой конфига. Здесь — один редактор, общий файл.
 """
 from __future__ import annotations
 
@@ -24,31 +28,15 @@ from web.api_common import (
     _resolve_project_path,
     _sys_env_path,
 )
-from web.api_stage import (
-    _persist_run_params,
-    _sanitize_env_value,
-    _strip_secret_keys,
-)
+from web.api_stage import _sanitize_env_value
 
 
-def _env_path(ctx: dict, scope: str) -> Path:
-    """Файл .env для web-редактирования.
-
-    scope=project → ТОЛЬКО pdir/.env (собственный файл проекта; если его
-    нет — хендлеры отвечают exists=False); scope=global → системный .env
-    (WEB_ENV_FILE в Docker — projects/.env в томе; иначе корневой .env
-    репо), правится на вкладке «Настройки».
-    """
-    if scope == "global":
-        return _sys_env_path(ctx)
-    return _project_ctx(ctx)[0] / ".env"
-
-
-def _env_scope_info(ctx: dict, scope: str, path: Path) -> dict:
-    """Пометка: чей файл фактически открыт (проект/общий)."""
-    if scope == "project":
-        return {"source": "project"}
-    return {"source": "shared"}
+def _env_path(ctx: dict) -> Path:
+    """Файл .env для web-редактирования — общий (системный): WEB_ENV_FILE
+    в Docker (projects/.env в томе), иначе корневой .env репо.
+    Редактируется на вкладке «Настройки»; правки доходят до всех книг,
+    поля которых они локально не меняли."""
+    return _sys_env_path(ctx)
 
 
 def _mask_env(text: str) -> str:
@@ -82,18 +70,17 @@ def _is_env_config_key(key: str) -> bool:
 
 
 def _env_get(ctx: dict) -> dict:
-    """.env (GET /api/env?project=&scope=project|global).
+    """Общий .env (GET /api/env).
 
     W6: без аутентификации (доверенная LAN) значения ВИДИМЫ — отдаём
     целиком (content). При --auth — только ключи и маска ••••.
-    Плюс пометка source: чей файл фактически открыт (project/shared/repo).
-    scope=global — прозрачность слоёв: sources (ключ файла перекрыт
-    os.environ — правка на «Настройках» не применится) и env_extra
-    (ключи окружения, которых нет в файле: WEB_* из compose и т.п.).
+    Прозрачность слоёв: sources (ключ файла перекрыт os.environ — правка
+    на «Настройках» не применится) и env_extra (ключи окружения, которых
+    нет в файле: WEB_* из compose и т.п.).
     """
-    scope = ctx["query"].get("scope", "project")
-    p = _env_path(ctx, scope)
-    info = _env_scope_info(ctx, scope, p)
+    scope = "global"
+    p = _env_path(ctx)
+    info = {"source": "shared"}
     if not p.is_file():
         return {"ok": True, "scope": scope, "exists": False,
                 "masked": "", "keys": [], "visible": _env_no_auth(ctx),
@@ -131,16 +118,16 @@ def _env_get(ctx: dict) -> dict:
 
 
 def _env_put(ctx: dict) -> dict:
-    """Запись .env (PUT /api/env {scope, content | changes}).
+    """Запись общего .env (PUT /api/env {content | changes}).
 
     content — ПОЛНАЯ замена файла (создание с нуля / дублирование из
-    общего или шаблона); changes: {KEY: value} — точечная замена
+    шаблона); changes: {KEY: value} — точечная замена
     (пустое значение — удалить строку ^KEY=, комментарии не трогаем).
     Значения в ответ не возвращаются."""
     common = _import_common(ctx)
     body = ctx["body"]
-    scope = body.get("scope", "project")
-    p = _env_path(ctx, scope)
+    scope = "global"
+    p = _env_path(ctx)
     if "content" in body:
         if not isinstance(body["content"], str):
             raise ApiError(400, "Поле content: строка")
@@ -155,18 +142,6 @@ def _env_put(ctx: dict) -> dict:
     text = ""
     if p.is_file():
         text = p.read_text(encoding="utf-8", errors="replace")
-    elif scope == "project":
-        # M9: точечная запись в ещё не созданный .env проекта — сид из
-        # системного корневого .env (без секретов), как в
-        # _persist_run_params: голый .env затенял бы системный
-        # (HOST/API_KEY/MODEL) и ломал конфиг LLM проекта
-        try:
-            src = _sys_env_path(ctx)
-            if src.is_file():
-                text = _strip_secret_keys(
-                    src.read_text(encoding="utf-8", errors="replace"))
-        except OSError as exc:
-            log.debug("Не удалось сидировать .env проекта: %s", exc)
     lines = text.splitlines()
     for key, value in (changes or {}).items():
         k = str(key).strip()
@@ -196,19 +171,6 @@ def _env_put(ctx: dict) -> dict:
             for line in lines
             if "=" in line and not line.lstrip().startswith("#")]
     return {"ok": True, "scope": scope, "keys": keys}
-
-
-def _env_delete(ctx: dict) -> dict:
-    """Удалить собственный .env проекта (DELETE /api/env?project=&scope=project).
-
-    После удаления проект снова использует общий корневой .env —
-    канон find_env_file (fallback) остаётся для конвейера.
-    """
-    pdir, _section, _name = _project_ctx(ctx)
-    p = pdir / ".env"
-    if p.is_file():
-        p.unlink()
-    return {"ok": True, "scope": "project", "deleted": True}
 
 
 def _prompts_list(ctx: dict) -> dict:

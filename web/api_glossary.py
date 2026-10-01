@@ -21,7 +21,6 @@ from web.api_assets import (
 )
 from web.api_common import _import_common, _project_ctx
 from web.api_env import (
-    _env_delete,
     _env_get,
     _env_put,
     _metadata_get,
@@ -233,9 +232,10 @@ def _register_m7(router: Router) -> None:
     router.add("POST", "/api/translate_check_llm/review/apply", _tcl_review_apply)
     router.add("GET", "/api/notes", _notes_get)
     router.add("PUT", "/api/notes", _notes_put)
+    # общий .env — один редактор на вкладке «Настройки»; собственный файл
+    # книги через API не отдаётся (его пересобирают формы «Запусков»)
     router.add("GET", "/api/env", _env_get)
     router.add("PUT", "/api/env", _env_put)
-    router.add("DELETE", "/api/env", _env_delete)
     router.add("GET", "/api/prompts", _prompts_list)
     router.add("GET", "/api/prompts/{name}", _prompts_get)
     router.add("PUT", "/api/prompts/{name}", _prompts_put)

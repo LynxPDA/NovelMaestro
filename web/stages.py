@@ -75,14 +75,12 @@ def _range_argv(name: str, form: dict, start_key: str = "start",
 def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
     """--host/--model/--api_key для LLM-стадий (без профилей).
 
-    Приоритет: явные значения формы > HOST/API_KEY/MODEL из .env
-    (find_env_file от папки проекта + get_server_config(env, stage)).
+    Приоритет: явные значения формы > общий .env > собственный .env книги
+    (load_env: сначала общий файл, поверх — только отличия книги).
     Пустой результат — скрипт сам найдёт .env или попросит ввод.
 
     C1 (AUDIT): ключ из .env подставляется ТОЛЬКО если host не переопределён
     формой (или совпадает с env-HOST) — иначе ключ уйдёт на чужой сервер.
-    M1 (AUDIT): ключа нет в проектном .env (он копируется без секретов) →
-    fallback на системный корневой .env.
     """
     argv = []
     form_host = (form.get("host") or "").strip()
@@ -93,15 +91,10 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
     pdir = ctx.get("project_dir") if isinstance(ctx, dict) else None
     if pdir is not None:
         try:
-            from core.common import parse_dotenv, system_env_file
-            # слои: системный .env (WEB_ENV_FILE в Docker) → собственный
-            # pdir/.env (по ключам: пустые значения проектного файла не
-            # затеняют глобальный конфиг)
-            proj_path = Path(pdir) / ".env"
-            sys_env = parse_dotenv(system_env_file())
-            proj_env = parse_dotenv(
-                str(proj_path) if proj_path.is_file() else None)
-            env_data = {**sys_env, **proj_env}
+            from core.common import load_env
+            # слои: общий .env (WEB_ENV_FILE в Docker) → собственный
+            # pdir/.env книги, где лежат ТОЛЬКО отличия книги
+            env_data = load_env(start_dir=str(pdir))
         except Exception as exc:
             log.debug(".env не загружен: %s", exc)
             env_data = {}
@@ -113,12 +106,6 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
         # C1: ключ из .env — только для env-HOST'а
         if not api_key and (not form_host or host == sc["host"]):
             api_key = sc["api_key"]
-            if not api_key:
-                # M1: проектный .env без секретов → системный корневой .env
-                from core.common import (find_env_file as _find_env,
-                                         parse_dotenv as _parse_env)
-                sys_env = _parse_env(_find_env())
-                api_key = get_server_config(sys_env, stage)["api_key"]
         if not model:
             model = sc["model"]
     except Exception as exc:

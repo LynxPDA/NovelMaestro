@@ -45,7 +45,6 @@ from web.api_assets import (  # noqa: F401  фасад
 from web.api_stage import (  # noqa: F401  фасад
     _jobs_get,
     _persist_run_params,
-    _strip_secret_keys,
 )
 from web.server import Router
 

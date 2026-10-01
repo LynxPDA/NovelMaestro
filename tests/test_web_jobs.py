@@ -1288,9 +1288,8 @@ def test_stage_spec_env_prefill_bool_on(jobs_srv, tmp_path):
 
 def test_stage_spec_env_prefill_global_fallback(jobs_srv, tmp_path,
                                                  monkeypatch):
-    """Без pdir/.env форма предзаполняется из системного корневого .env
-    (канон find_env_file: подъём от папки проекта к корню репо) —
-    глобальный конфиг не теряется для свежих проектов."""
+    """Без файла книги форма предзаполняется из общего .env: глобальный
+    конфиг не теряется для свежих книг (книга хранит только отличия)."""
     port, req, _jm = jobs_srv
     _make_project(port, req)
     global_env = tmp_path / ".env"
@@ -1298,20 +1297,7 @@ def test_stage_spec_env_prefill_global_fallback(jobs_srv, tmp_path,
         "MODEL=global-model\n"
         "PIPELINE_JOBS=2\n",
         encoding="utf-8")
-    import core.common as common
-
-    def fake_find(explicit=None, start_dir=None):
-        # от папки проекта поднимаемся к tmp_path/.env (глобальный)
-        if start_dir:
-            d = Path(start_dir)
-            for _ in range(6):
-                cand = d / ".env"
-                if cand.is_file():
-                    return str(cand)
-                d = d.parent
-        return str(global_env)
-
-    monkeypatch.setattr(common, "find_env_file", fake_find)
+    monkeypatch.setenv("WEB_ENV_FILE", str(global_env))
     res, payload = req(
         "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
     assert res.status == 200
@@ -1341,41 +1327,42 @@ def test_stage_spec_env_prefill_env_var_wins(jobs_srv, tmp_path,
 
 def test_stage_spec_env_prefill_project_over_global(jobs_srv, tmp_path,
                                                     monkeypatch):
-    """Слои префилла: системный .env → pdir/.env ПО КЛЮЧАМ (проект
-    перекрывает только свои ключи; отсутствующие в проектном файле
-    подхватываются из глобального)."""
+    """Слои префилла: общий .env → файл книги ПО КЛЮЧАМ (книга перекрывает
+    только свои ключи; отсутствующие подхватываются из общего), и спека
+    несёт overridden: чем книга отличается от общего."""
     port, req, _jm = jobs_srv
     _make_project(port, req)
     global_env = tmp_path / ".env"
     global_env.write_text(
         "MODEL=global-model\nPIPELINE_JOBS=2\n", encoding="utf-8")
-    import core.common as common
-    monkeypatch.setattr(common, "find_env_file",
-                        lambda *a, **k: str(global_env))
+    monkeypatch.setenv("WEB_ENV_FILE", str(global_env))
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
     (pdir / ".env").write_text("MODEL=project-model\n", encoding="utf-8")
     res, payload = req(
         "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
     assert res.status == 200
     fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    # проектный MODEL перекрывает глобальный по ключу
+    # книжный MODEL перекрывает общий по ключу
     assert fields["model"]["default"] == "project-model"
-    # PIPELINE_JOBS отсутствует в проектном файле — из глобального
+    # PIPELINE_JOBS в файле книги нет — из общего
     assert fields["jobs"]["default"] == "2"
+    # пометка «локально изменено» — только у реально изменённого поля;
+    # ключ — тот, которым книга его задала (здесь общее MODEL)
+    assert payload["spec"]["overridden"] == {
+        "model": {"key": "MODEL", "local": "project-model",
+                  "global": "global-model"}}
 
 
 def test_stage_spec_api_key_not_from_global(jobs_srv, tmp_path,
                                             monkeypatch):
-    """Секреты в префилл из глобального слоя не отдаются: API_KEY
-    системного .env не попадает в спеку (при --auth маскировка
-    /api/env его не прикрывает). Только собственный файл проекта."""
+    """Секреты в префилл из общего слоя не отдаются: API_KEY общего .env
+    не попадает в спеку (при --auth маскировка /api/env его не прикрывает).
+    Только собственный файл книги."""
     port, req, _jm = jobs_srv
     _make_project(port, req)
     global_env = tmp_path / ".env"
     global_env.write_text("API_KEY=super-secret\n", encoding="utf-8")
-    import core.common as common
-    monkeypatch.setattr(common, "find_env_file",
-                        lambda *a, **k: str(global_env))
+    monkeypatch.setenv("WEB_ENV_FILE", str(global_env))
     res, payload = req(
         "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
     assert res.status == 200
@@ -1385,13 +1372,12 @@ def test_stage_spec_api_key_not_from_global(jobs_srv, tmp_path,
 
 def test_stage_spec_api_key_from_project_env(jobs_srv, tmp_path,
                                              monkeypatch):
-    """Собственный pdir/.env может задавать ключ стадии — он
+    """Собственный файл книги может задавать ключ стадии — он
     предзаполняется в форму (локальный однопользовательский проект)."""
     port, req, _jm = jobs_srv
     _make_project(port, req)
-    import core.common as common
-    monkeypatch.setattr(common, "find_env_file",
-                        lambda *a, **k: None)
+    monkeypatch.setenv("WEB_ENV_FILE",
+                       str(tmp_path / "общего-файла-нет.env"))
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
     (pdir / ".env").write_text("PIPELINE_API_KEY=proj-key\n",
                                encoding="utf-8")
@@ -1403,13 +1389,13 @@ def test_stage_spec_api_key_from_project_env(jobs_srv, tmp_path,
 
 
 def test_persist_run_params_llm_deviation(tmp_path, monkeypatch):
-    """LLM-подключение (host/model) пишется в pdir/.env только при
-    отличии от глобального эффективного значения; совпадающее с
-    глобальным значение СНИМАЕТ оверрайд — глобальная смена сервера
-    доезжает до проекта. Прочие поля пишутся как раньше."""
+    """LLM-подключение (host/model) пишется в файл книги только при отличии
+    от общего эффективного значения; совпадающее — СНИМАЕТ оверрайд, и
+    глобальная смена сервера доезжает до книги. Файл книги — чистый diff:
+    шапка + только отличия, отсортированные по ключам."""
     from web.api import _persist_run_params
-    monkeypatch.setattr("core.common.find_env_file",
-                        lambda *a, **k: None)
+    monkeypatch.setenv("WEB_ENV_FILE",
+                       str(tmp_path / "общего-файла-нет.env"))
     monkeypatch.setenv("HOST", "http://global:9999")
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
     pdir.mkdir(parents=True)
@@ -1417,26 +1403,26 @@ def test_persist_run_params_llm_deviation(tmp_path, monkeypatch):
         "PIPELINE_HOST=http://old:1\nNER_CHUNK_SIZE=5\n",
         encoding="utf-8")
     ctx = {"repo_root": tmp_path}
-    _persist_run_params(ctx, pdir, "pipeline", {
-        "host": "http://global:9999",   # == глобальному → оверрайд снять
+    kept = _persist_run_params(ctx, pdir, "pipeline", {
+        "host": "http://global:9999",   # == общему → оверрайд снять
         "model": "custom-model",         # отличается → пишется
     })
-    env = {}
-    for line in (pdir / ".env").read_text(encoding="utf-8").splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            k, _, v = line.partition("=")
-            env[k.strip()] = v.strip()
+    env = _env_map(pdir / ".env")
     assert "PIPELINE_HOST" not in env
     assert env["PIPELINE_MODEL"] == "custom-model"
-    assert env["NER_CHUNK_SIZE"] == "5"
+    assert env["NER_CHUNK_SIZE"] == "5"      # отличия других стадий целы
+    assert kept == ["NER_CHUNK_SIZE", "PIPELINE_MODEL"]
+    text = (pdir / ".env").read_text(encoding="utf-8")
+    assert "локальные отличия книги" in text
+    assert "HOST=http://global:9999" not in text  # общее не копируется
 
 
 def test_persist_run_params_llm_absent_untouched(tmp_path, monkeypatch):
     """Поле LLM-подключения не пришло в params (простой режим) —
-    существующий оверрайд в pdir/.env не трогается."""
+    существующее отличие книги не трогается."""
     from web.api import _persist_run_params
-    monkeypatch.setattr("core.common.find_env_file",
-                        lambda *a, **k: None)
+    monkeypatch.setenv("WEB_ENV_FILE",
+                       str(tmp_path / "общего-файла-нет.env"))
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
     pdir.mkdir(parents=True)
     (pdir / ".env").write_text("PIPELINE_HOST=http://old:1\n",
@@ -1449,11 +1435,11 @@ def test_persist_run_params_llm_absent_untouched(tmp_path, monkeypatch):
 
 
 def test_persist_run_params_llm_equal_no_file(tmp_path, monkeypatch):
-    """Совпадение с глобальным при отсутствии pdir/.env — файл
-    зря не создаётся (удалять нечего)."""
+    """Совпадение с общим при отсутствии файла книги — файл зря не
+    создаётся: копия общего конфига больше не пишется."""
     from web.api import _persist_run_params
-    monkeypatch.setattr("core.common.find_env_file",
-                        lambda *a, **k: None)
+    monkeypatch.setenv("WEB_ENV_FILE",
+                       str(tmp_path / "общего-файла-нет.env"))
     monkeypatch.setenv("HOST", "http://global:9999")
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
     pdir.mkdir(parents=True)
@@ -1461,6 +1447,74 @@ def test_persist_run_params_llm_equal_no_file(tmp_path, monkeypatch):
     _persist_run_params(ctx, pdir, "pipeline",
                         {"host": "http://global:9999"})
     assert not (pdir / ".env").exists()
+
+
+def test_persist_run_params_legacy_copy_collapses(tmp_path, monkeypatch):
+    """Старая pdir/.env — копия общего конфига — схлопывается в diff:
+    ключи, совпадающие с общим, пустые значения и WEB_* из файла книги
+    уходят; остаётся только реальное отличие книги."""
+    from web.api import _persist_run_params
+    shared = tmp_path / ".env"
+    shared.write_text("HOST=http://shared\nMODEL=m\nWEB_PORT=8756\n",
+                      encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(shared))
+    for k in ("HOST", "MODEL", "API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    pdir.mkdir(parents=True)
+    (pdir / ".env").write_text(
+        "# копия системного .env\n"
+        "HOST=http://shared\n"
+        "MODEL=m\n"
+        "PIPELINE_JOBS=7\n"
+        "WEB_PORT=8756\n"
+        "NER_MODEL=\n",
+        encoding="utf-8")
+    ctx = {"repo_root": tmp_path}
+    kept = _persist_run_params(ctx, pdir, "pipeline", {})
+    assert _env_map(pdir / ".env") == {"PIPELINE_JOBS": "7"}
+    assert kept == ["PIPELINE_JOBS"]
+
+
+def test_stage_reset_clears_stage_overrides(jobs_srv, tmp_path, monkeypatch):
+    """POST /api/stages/{key}/reset: ключи стадии уходят из файла книги,
+    чужие отличия остаются, поле предзаполняется общим .env; когда от
+    стадии осталась пустота — файл книги удаляется вместе с чистым diff."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    shared = tmp_path / ".env"
+    shared.write_text("MODEL=общая-модель\n", encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(shared))
+    monkeypatch.delenv("MODEL", raising=False)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / ".env").write_text(
+        "PIPELINE_MODEL=книжная\nNER_CHUNK_SIZE=5\n", encoding="utf-8")
+    res, payload = req("POST", "/api/stages/pipeline/reset",
+                       {"project": "ACTIVE/test_book"})
+    assert res.status == 200
+    assert payload["reset"] == {"stage": "pipeline", "kept": ["NER_CHUNK_SIZE"]}
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    # форма снова предзаполнена общим конфигом, пометок оверрайда нет
+    assert fields["model"]["default"] == "общая-модель"
+    assert payload["spec"]["overridden"] == {}
+    assert "PIPELINE_MODEL" not in (pdir / ".env").read_text(encoding="utf-8")
+    # снимаем и последнее отличие — файл книги больше не нужен
+    res, payload = req("POST", "/api/stages/ner/reset",
+                       {"project": "ACTIVE/test_book"})
+    assert res.status == 200
+    assert payload["reset"]["kept"] == []
+    assert not (pdir / ".env").exists()
+
+
+def test_stage_reset_unknown_stage(jobs_srv, tmp_path):
+    """reset по незнакомой стадии — 404; без project — 400."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    res, _payload = req("POST", "/api/stages/no_such_stage/reset",
+                        {"project": "ACTIVE/test_book"})
+    assert res.status == 404
+    res, payload = req("POST", "/api/stages/pipeline/reset", {})
+    assert res.status == 400 and "project" in payload["error"]
 
 
 def test_env_global_respects_web_env_file(jobs_srv, tmp_path, monkeypatch):
@@ -1521,21 +1575,23 @@ def test_is_env_config_key():
         assert not _is_env_config_key(k), k
 
 
-def test_persist_run_params_seed_from_web_env_file(tmp_path, monkeypatch):
-    """Сид pdir/.env берётся из WEB_ENV_FILE (системный конфиг в Docker):
-    проект наследует пользовательский системный конфиг, а не заводской."""
+def test_persist_run_params_creates_diff_file(tmp_path, monkeypatch):
+    """Файл книги создаётся ТОЛЬКО с реальным отличием: общий конфиг
+    (WEB_ENV_FILE — системный .env Docker) в него не копируется; поля,
+    которых в файле нет, читаются из общего слоя."""
     from web.api import _persist_run_params
     env_file = tmp_path / "deploy.env"
     env_file.write_text("HOST=http://sys-env:1\nMODEL=mm\n",
                         encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(env_file))
+    for k in ("HOST", "MODEL", "API_KEY"):
+        monkeypatch.delenv(k, raising=False)
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
     pdir.mkdir(parents=True)
     ctx = {"repo_root": tmp_path}
-    _persist_run_params(ctx, pdir, "ner", {"chunk_size": "123"})
-    text = (pdir / ".env").read_text(encoding="utf-8")
-    assert "HOST=http://sys-env:1" in text
-    assert "NER_CHUNK_SIZE=123" in text
+    kept = _persist_run_params(ctx, pdir, "ner", {"chunk_size": "123"})
+    assert _env_map(pdir / ".env") == {"NER_CHUNK_SIZE": "123"}
+    assert kept == ["NER_CHUNK_SIZE"]
 
 
 def test_stage_spec_prefill_from_web_env_file(jobs_srv, tmp_path,
@@ -1900,9 +1956,7 @@ def test_llm_profile_from_env(tmp_path, monkeypatch):
         "MODEL=local-model\n"
         "NER_MODEL=ner-model\n",
         encoding="utf-8")
-    import core.common as common
-    monkeypatch.setattr(common, "find_env_file",
-                        lambda explicit=None, start_dir=None: str(env))
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
     form = {"file": "compiled_book.txt"}
     ctx: dict = {"project_dir": str(tmp_path)}
     argv = build_command("ner", form, ctx)
@@ -1928,9 +1982,7 @@ def test_llm_stage_keys_from_env(tmp_path, monkeypatch):
         "NER_API_KEY=нер-ключ\n"
         "NER_MODEL=нер-модель\n",
         encoding="utf-8")
-    import core.common as common
-    monkeypatch.setattr(common, "find_env_file",
-                        lambda explicit=None, start_dir=None: str(env))
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
     ctx: dict = {"project_dir": str(tmp_path)}
     argv = build_command("ner", {"file": "book.txt"}, ctx)
     joined = " ".join(argv)
@@ -1951,9 +2003,7 @@ def test_llm_cli_overrides_env(tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("HOST=http://old:9989\nAPI_KEY=old\n"
                     "MODEL=old-model\n", encoding="utf-8")
-    import core.common as common
-    monkeypatch.setattr(common, "find_env_file",
-                        lambda explicit=None, start_dir=None: str(env))
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
     form = {"host": "http://new:9989",
             "model": "new-model", "api_key": "new-key"}
     ctx: dict = {"project_dir": str(tmp_path)}
@@ -1968,8 +2018,8 @@ def test_llm_cli_overrides_env(tmp_path, monkeypatch):
 
 def test_llm_no_profile_no_env(tmp_path, monkeypatch):
     """Без профиля и .env — LLM-флаги не добавляются (скрипт сам найдёт)."""
-    import core.common as common
-    monkeypatch.setattr(common, "find_env_file", lambda **kw: None)
+    monkeypatch.setenv("WEB_ENV_FILE",
+                       str(tmp_path / "общего-файла-нет.env"))
     argv = build_command("ner_check", {"input": "ner.json"}, {})
     assert "--host" not in argv and "--api_key" not in argv
     assert "--model" not in argv
@@ -2052,6 +2102,16 @@ def jobs_srv(tmp_path, fake_script):
 
     yield srv.server_address[1], _req, jm
     srv.server_close()
+
+
+def _env_map(path):
+    """.env книги как {ключ: значение} (комментарии и шапку пропускаем)."""
+    out = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            k, _, v = line.partition("=")
+            out[k.strip()] = v.strip()
+    return out
 
 
 def _make_project(port, req, name="test_book"):

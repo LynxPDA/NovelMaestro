@@ -1553,28 +1553,6 @@ def test_project_delete_stats_cache_scoped(monkeypatch, srv_ctx):
     api._CACHE_LOADED.clear()
 
 
-def test_strip_secret_keys_keeps_web_out_of_project():
-    """Копия системного .env в проект: API_KEY затирается, WEB_*
-    (системные настройки web) не попадают в pdir/.env вовсе."""
-    from web.api import _strip_secret_keys
-    text = (
-        "# комментарий\n"
-        "HOST=http://h\n"
-        "API_KEY=secret\n"
-        "MODEL=m\n"
-        "WEB_HOST=0.0.0.0\n"
-        "WEB_AUTH=1\n"
-        "NER_MODEL=ner\n"
-    )
-    out = _strip_secret_keys(text)
-    assert "HOST=http://h" in out
-    assert "API_KEY=" in out and "secret" not in out
-    assert "WEB_HOST" not in out and "WEB_AUTH" not in out
-    assert "NER_MODEL=ner" in out
-    # повторно — идемпотентно
-    assert _strip_secret_keys(out) == out
-
-
 # ════════════════════════════════════════════════════════════════════
 # epub: предпросмотр разбивки (preview API)
 # ════════════════════════════════════════════════════════════════════
