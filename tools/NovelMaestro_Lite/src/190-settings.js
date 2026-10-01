@@ -31,57 +31,89 @@
     }
     const asText = raw => ({ value: raw });
 
-    // [селектор, ключ конфига, читатель значения, (показатель для поля)]
+    // Поля настроек: [селектор, ключ конфига, читатель значения, (показатель для поля)].
+    // Порядок = порядок панелей вторичных вкладок: Основные → Читалка → Перевод →
+    // Продвинутое. Вкладка поля не хранится в таблице намеренно: она берётся из
+    // разметки (closest('.nm-subtab-content')), иначе разъедется с ней.
     const SETTING_FIELDS = [
+        // 🌐 Основные
+        ['#source-lang', 'sourceLang', asText],
+        ['#target-lang', 'targetLang', asText],
         ['#api-host', 'apiHost', raw => ({ value: raw.trim() })],
         ['#api-key', 'apiKey', raw => ({ value: raw.trim() })],
         ['#model', 'model', raw => ({ value: raw.trim() })],
-        ['#source-lang', 'sourceLang', asText],
-        ['#target-lang', 'targetLang', asText],
-        ['#request-timeout', 'requestTimeout', raw => parseNumSetting(raw, { name: 'Таймаут', def: DEFAULT_CONFIG.requestTimeout, min: 0 })],
-        ['#max-retries', 'maxRetries', raw => parseNumSetting(raw, { name: 'Ретраи', def: DEFAULT_CONFIG.maxRetries, min: 0, max: 10 })],
-        ['#chunk-size', 'chunkSize', raw => parseNumSetting(raw, { name: 'Размер чанка', def: DEFAULT_CONFIG.chunkSize, min: 100, max: 30000 })],
-        ['#fuzzy-threshold', 'fuzzySearchThreshold', raw => parseNumSetting(raw, { name: 'Порог нечёткого поиска', def: DEFAULT_CONFIG.fuzzySearchThreshold, min: 0, max: 1, int: false })],
+        // 📖 Читалка
         ['#reader-theme', 'readerTheme', asText],
         ['#reader-font-family', 'readerFontFamily', asText],
         ['#reader-font-size', 'readerFontSize', raw => parseNumSetting(raw, { name: 'Размер шрифта', def: DEFAULT_CONFIG.readerFontSize, min: 12, max: 32 })],
         ['#reader-line-height', 'readerLineHeight', raw => parseNumSetting(raw, { name: 'Межстрочный интервал', def: DEFAULT_CONFIG.readerLineHeight, min: 1, max: 3, int: false })],
         ['#reader-paragraph-spacing', 'readerParagraphSpacing', raw => parseNumSetting(raw, { name: 'Отступ между абзацами', def: DEFAULT_CONFIG.readerParagraphSpacing, min: 0.2, max: 4, int: false })],
         ['#reader-content-width', 'readerContentWidth', raw => parseNumSetting(raw, { name: 'Ширина колонки', def: DEFAULT_CONFIG.readerContentWidth, min: 30, max: 100 })],
+        // 🔄 Перевод
+        ['#chunk-size', 'chunkSize', raw => parseNumSetting(raw, { name: 'Размер чанка', def: DEFAULT_CONFIG.chunkSize, min: 100, max: 30000 })],
+        ['#fuzzy-threshold', 'fuzzySearchThreshold', raw => parseNumSetting(raw, { name: 'Порог нечёткого поиска', def: DEFAULT_CONFIG.fuzzySearchThreshold, min: 0, max: 1, int: false })],
+        ['#translation-prompt', 'translationPrompt', asText],
+        ['#extraction-prompt', 'extractionPrompt', asText],
+        // ⚙️ Продвинутое
+        ['#request-timeout', 'requestTimeout', raw => parseNumSetting(raw, { name: 'Таймаут', def: DEFAULT_CONFIG.requestTimeout, min: 0 })],
+        ['#max-retries', 'maxRetries', raw => parseNumSetting(raw, { name: 'Ретраи', def: DEFAULT_CONFIG.maxRetries, min: 0, max: 10 })],
         ['#thinking-mode', 'thinkingMode', asText],
         ['#reasoning-profile', 'thinkingProfile', asText],
         ['#reasoning-effort', 'reasoningEffort', asText, normalizeEffort],
-        ['#thinking-budget', 'thinkingBudget', raw => parseNumSetting(raw, { name: 'Бюджет размышлений', def: DEFAULT_CONFIG.thinkingBudget, min: 0 })],
-        ['#translation-prompt', 'translationPrompt', asText],
-        ['#extraction-prompt', 'extractionPrompt', asText]
+        ['#thinking-budget', 'thinkingBudget', raw => parseNumSetting(raw, { name: 'Бюджет размышлений', def: DEFAULT_CONFIG.thinkingBudget, min: 0 })]
+    ];
+    // Чекбоксы: [селектор, ключ, (значение конфига → состояние), (состояние → значение),
+    // (действие после смены)]. gmTransport — не «вкл/выкл», а выбор канала, поэтому у
+    // него свои читатель и писатель. «только текущая страница» живёт на вкладке
+    // «Глоссарий» — в фильтр-строке, а не во вторичных вкладках настроек.
+    const SETTING_CHECKS = [
+        ['#local-model', 'localModel', null, null, el => { $('#api-key').disabled = el.checked; }],
+        ['#gm-transport', 'gmTransport', v => (v === 'auto' ? 'page' : v) === 'manager', on => (on ? 'manager' : 'page')],
+        ['#preemptive-translate', 'preemptiveTranslation'],
+        ['#auto-ner', 'autoNER'],
+        ['#glossary-current-only', 'glossaryCurrentPageOnly', null, null, () => { glossaryPage = 0; updateGlossaryUI(); }]
     ];
     // Поля с непринятым вводом: селектор → причина. Пока карта не пуста, подвал
-    // настроек показывает ошибку, а не «✅ сохранено».
+    // настроек показывает ошибку, а не «сохранено».
     const settingsProblems = new Map();
+    let settingsStatusTimer = null;
+
+    // вторичная вкладка, в панели которой лежит поле ('' — вне настроек)
+    const settingsSubTabOf = el => {
+        const panel = el.closest('.nm-subtab-content');
+        return panel ? panel.id.replace('stab-', '') : '';
+    };
 
     function loadSettings() {
         for (const [sel, key, , show] of SETTING_FIELDS) {
             const el = $(sel);
             el.value = show ? show(config[key]) : config[key];
         }
-        $('#auto-ner').checked = !!config.autoNER;
-        $('#glossary-current-only').checked = !!config.glossaryCurrentPageOnly;
-        $('#local-model').checked = !!config.localModel;
-        $('#api-key').disabled = !!config.localModel;
-        $('#preemptive-translate').checked = !!config.preemptiveTranslation;
-        $('#gm-transport').checked = (config.gmTransport === 'auto' ? 'page' : config.gmTransport) === 'manager';
+        for (const [sel, key, read, , after] of SETTING_CHECKS) {
+            const el = $(sel);
+            el.checked = read ? read(config[key]) : config[key];
+            // служебный after — только для полей самих настроек (фильтр глоссария
+            // со своей вкладкой не обязан сбрасывать страницу списка при каждом открытии)
+            if (after && settingsSubTabOf(el)) after(el);
+        }
         setSettingsSubTab(config.settingsSubTab);
         // подсветка переживает закрытие модалки — вместе с ней обязан жить и ответ
         // «почему поле красное»
         if (settingsProblems.size) settingsStatus(); else hideStatus('status-settings');
     }
-    function settingsStatus() {
+    /**
+     * Индикатор подвала: ошибка висит, пока поле не починят, а «сохранено» —
+     * вспышка на 3 с: постоянная плашка на пустом месте только мешает.
+     */
+    function settingsStatus(msg) {
+        clearTimeout(settingsStatusTimer);
         const all = [...settingsProblems.values()];
-        if (!all.length) {
-            showStatus('✅ Настройки сохранены автоматически', 'success', 'status-settings');
+        if (all.length) {
+            showStatus(`❌ ${all[0]}${all.length > 1 ? ` (и ещё ${all.length - 1})` : ''}`, 'error', 'status-settings');
             return;
         }
-        showStatus(`❌ ${all[0]}${all.length > 1 ? ` (и ещё ${all.length - 1})` : ''}`, 'error', 'status-settings');
+        showStatus(msg || '✅ Настройки сохранены автоматически', 'success', 'status-settings');
+        settingsStatusTimer = setTimeout(() => hideStatus('status-settings'), 3000);
     }
     function paintSetting(sel, el, problem) {
         if (problem) settingsProblems.set(sel, problem);
@@ -108,26 +140,20 @@
                 config[key] = res.value;
                 scheduleSettingsSave();
             };
-            el.addEventListener('input', save);
-            el.addEventListener('change', save);
             // в number-поле буквы не дают ни значения, ни input-события (браузер их
             // просто глотает) — поле проверяется ещё и на выход из него
+            el.addEventListener('input', save);
+            el.addEventListener('change', save);
             el.addEventListener('blur', save);
         }
-        // чекбоксы: значение читается из checked, зона клика — вся карточка (label)
-        const check = (sel, key, after) => $(sel).addEventListener('change', function () {
-            config[key] = this.checked;
-            if (after) after(this);
-            scheduleSettingsSave();
-        });
-        check('#auto-ner', 'autoNER');
-        check('#preemptive-translate', 'preemptiveTranslation');
-        check('#glossary-current-only', 'glossaryCurrentPageOnly', () => { glossaryPage = 0; updateGlossaryUI(); });
-        check('#local-model', 'localModel', el => { $('#api-key').disabled = el.checked; });
-        $('#gm-transport').addEventListener('change', function () {
-            config.gmTransport = this.checked ? 'manager' : 'page';
-            scheduleSettingsSave();
-        });
+        for (const [sel, key, , write, after] of SETTING_CHECKS) {
+            const el = $(sel);
+            el.addEventListener('change', () => {
+                config[key] = write ? write(el.checked) : el.checked;
+                if (after) after(el);
+                scheduleSettingsSave();
+            });
+        }
         // свои поля — JSON: битый стоит показать сразу, а не молча игнорировать
         // (текст при этом сохраняется — пользователь не теряет ввод)
         const extra = $('#extra-body-json');
@@ -149,15 +175,31 @@
         extra.addEventListener('input', saveExtra);
         extra.addEventListener('change', saveExtra);
     }
+    /**
+     * Сброс касается только открытой вторичной вкладки: сбитый кегль в «Читалке»
+     * не обязан стирать пользовательские промпты и reasoning-настройки.
+     */
     function resetSettings() {
-        if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;
-        config = { ...DEFAULT_CONFIG };
+        const tab = config.settingsSubTab;
+        const title = ($(`.nm-subtab[data-stab="${tab}"]`) || { textContent: tab }).textContent.trim();
+        if (!confirm(`Сбросить настройки вкладки «${title}» к значениям по умолчанию?\nОстальные вкладки останутся как есть.`)) return;
+        for (const [sel, key, , show] of SETTING_FIELDS) {
+            const el = $(sel);
+            if (settingsSubTabOf(el) !== tab) continue;
+            config[key] = DEFAULT_CONFIG[key];
+            el.value = show ? show(DEFAULT_CONFIG[key]) : DEFAULT_CONFIG[key];
+            paintSetting(sel, el, '');
+        }
+        for (const [sel, key, read, , after] of SETTING_CHECKS) {
+            const el = $(sel);
+            if (settingsSubTabOf(el) !== tab) continue;
+            config[key] = DEFAULT_CONFIG[key];
+            el.checked = read ? read(DEFAULT_CONFIG[key]) : DEFAULT_CONFIG[key];
+            if (after) after(el);
+        }
         GM_setValue('config', config);
-        settingsProblems.clear();
-        $$('.nm-input-bad').forEach(el => { el.classList.remove('nm-input-bad'); el.setAttribute('aria-invalid', 'false'); });
-        loadSettings();
         applyTheme();
-        showStatus('Настройки сброшены!', 'success', 'status-settings');
+        settingsStatus(`✅ Вкладка «${title}» сброшена к значениям по умолчанию`);
     }
     function saveNewBook() {
         const url = $('#book-modal-url').value.trim();

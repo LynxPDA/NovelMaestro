@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.44
+// @version      1.45
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.44';
+    const APP_VERSION = '1.45';
 
     // ===== КОНФИГУРАЦИЯ =====
     // Штатный промпт перевода (редактируемое поле Настроек). Плейсхолдеры те же,
@@ -876,7 +876,7 @@
             /* подвал настроек: сброс и индикатор сохранения — всегда под рукой */
             .nm-settings-footer { position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px; margin: 0 -16px; padding: 10px 16px; background: #fbfbfc; border-top: 1px solid #e5e7eb; }
             .nm-settings-footer .nm-status { flex: 1 1 auto; margin: 0; padding: 7px 10px; }
-            .nm-settings-footer .nm-btn { flex: 0 0 auto; margin: 0; }
+            .nm-settings-footer .nm-btn { flex: 0 0 auto; margin: 0 0 0 auto; }
             .nm-tabs { display: flex; border-bottom: 2px solid #e5e7eb; margin-bottom: 20px; }
             .nm-tab { padding: 10px 20px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
             .nm-tab.active { border-bottom-color: #2563eb; color: #2563eb; font-weight: 600; }
@@ -942,13 +942,12 @@
             /* битый ввод (не число, вне диапазона, неразобранный JSON): запрос уходит
                с подменённым значением — поле обязано быть подсвечено */
             .nm-input-bad { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
-            /* чекбоксы карточкой: зона клика — вся строка, а не сам квадратик */
-            .nm-check-card { position: relative; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; margin-bottom: 12px; }
-            .nm-check-card > label { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 36px 10px 12px; cursor: pointer; color: #1f2937; }
-            .nm-check-card input[type=checkbox] { flex: 0 0 auto; width: 18px; height: 18px; cursor: pointer; }
-            /* подсказка (?): длинные описания спрятаны, а не размазаны по форме */
-            .nm-hint { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 1px solid #9ca3af; border-radius: 50%; background: #f3f4f6; color: #4b5563; font-size: 11px; font-weight: 700; line-height: 1; vertical-align: 1px; cursor: help; }
-            .nm-hint:hover, .nm-hint:focus { background: #2563eb; border-color: #2563eb; color: white; outline: none; }
+            /* чекбоксы — той же строкой, что и остальные поля: зона клика — весь текст,
+               но без отдельного подсвеченного блока вокруг */
+            .nm-check-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer; color: #374151; }
+            .nm-check-row input[type=checkbox] { flex: 0 0 auto; width: 16px; height: 16px; cursor: pointer; }
+            /* у пункта с объяснением только что подсказка: курсор подсказывает, что она есть */
+            .nm-input-group[data-tip] > label { cursor: help; }
             /* один плавающий тултип на весь шелл: вложенный в модалку обрезался бы overflow */
             #nm-tip { display: none; position: fixed; z-index: 2147483647; max-width: min(360px, calc(100vw - 24px)); padding: 8px 10px; border-radius: 8px; background: #111827; color: #f9fafb; font-size: 12.5px; line-height: 1.45; box-shadow: 0 8px 24px rgba(0,0,0,.35); pointer-events: none; white-space: pre-line; }
             #nm-tip.active { display: block; }
@@ -981,10 +980,7 @@
             #nm-root.nm-ui-dark .nm-tab.active { color: #7fb0ff; border-bottom-color: #7fb0ff; }
             #nm-root.nm-ui-dark .nm-subtab { background: #2a2f39; color: #c6c9d0; border-color: #3a3f4a; }
             #nm-root.nm-ui-dark .nm-subtab.active { background: #2563eb; border-color: #2563eb; color: #e2e2dc; }
-            #nm-root.nm-ui-dark .nm-check-card { background: #1c2c4a; border-color: #2f4368; }
-            #nm-root.nm-ui-dark .nm-check-card > label { color: #e2e2dc; }
-            #nm-root.nm-ui-dark .nm-hint { background: #2a2f39; border-color: #4b5563; color: #c6c9d0; }
-            #nm-root.nm-ui-dark .nm-hint:hover, #nm-root.nm-ui-dark .nm-hint:focus { background: #2563eb; border-color: #2563eb; color: #e2e2dc; }
+            #nm-root.nm-ui-dark .nm-check-row { color: #c6c9d0; }
             #nm-root.nm-ui-dark #nm-tip { background: #0d0f13; color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-input-group label { color: #c6c9d0; }
             #nm-root.nm-ui-dark .nm-input, #nm-root.nm-ui-dark .nm-textarea, #nm-root.nm-ui-dark .nm-select { background: #2a2f39; color: #e2e2dc; border-color: #3a3f4a; }
@@ -1093,7 +1089,7 @@
                 .nm-tabs { overflow-x: auto; flex-wrap: nowrap; }
                 .nm-tab { flex-shrink: 0; white-space: nowrap; padding: 10px 14px; }
                 .nm-subtab { min-height: 36px; padding: 8px 14px; }
-                .nm-hint { width: 20px; height: 20px; font-size: 12px; }
+                .nm-check-row input[type=checkbox] { width: 18px; height: 18px; }
                 .nm-input, .nm-textarea, .nm-select, .nm-glossary-table input, .nm-glossary-table select, .nm-add-form input, .nm-add-form select, .nm-filter-row input { font-size: 16px; }
                 .nm-add-form { grid-template-columns: 1fr; }
                 #glossary-list { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -1202,18 +1198,9 @@ const host = document.createElement('div');
                             <button type="button" class="nm-subtab" data-stab="translate">🔄 Перевод</button>
                             <button type="button" class="nm-subtab" data-stab="advanced">⚙️ Продвинутое</button>
                         </div>
+                        <!-- подсказка пункта настроек живёт на самой строке (data-tip):
+                             наводишь на пункт — появляется объяснение, отдельных иконок нет -->
                         <div class="nm-subtab-content active" id="stab-main">
-                            <div class="nm-section">
-                                <h3>🤖 API</h3>
-                                <div class="nm-input-group"><label>API Host:</label><input type="text" class="nm-input" id="api-host"></div>
-                                <div class="nm-input-group"><label>API Key:<button type="button" class="nm-hint" data-tip="Пустой API Key разрешён при включённом чекбоксе «Локальная модель без API-ключа».">?</button></label><input type="password" class="nm-input" id="api-key"></div>
-                                <div class="nm-check-card">
-                                    <label for="local-model"><input type="checkbox" id="local-model"><span>🖥️ Локальная модель без API-ключа</span></label>
-                                </div>
-                                <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
-                                <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
-                                <div class="nm-server-status" id="server-status"></div>
-                            </div>
                             <div class="nm-section">
                                 <h3>🗣 Языки</h3>
                                 <div class="nm-input-group"><label>Исходный язык:</label>
@@ -1233,17 +1220,13 @@ const host = document.createElement('div');
                                 </div>
                             </div>
                             <div class="nm-section">
-                                <h3>🌐 Сеть</h3>
-                                <div class="nm-input-group"><label>Таймаут (с):<button type="button" class="nm-hint" data-tip="СЕК. 0 = без таймаута. При стриминге это пауза между токенами: ни одного символа за это время — запрос считается зависшим и повторяется. У запроса без стрима (например, «Проверить сервер») это ожидание всего ответа: локальная модель на телефоне легко думает дольше 10 секунд. По умолчанию 60.">?</button></label>
-                                    <input type="number" class="nm-input" id="request-timeout" min="0" step="1">
-                                </div>
-                                <div class="nm-input-group"><label>Количество ретраев при ошибке:<button type="button" class="nm-hint" data-tip="Повторные попытки при сетевых ошибках, таймаутах и зависании стриминга (не при HTTP 4xx/5xx).">?</button></label>
-                                    <input type="number" class="nm-input" id="max-retries" min="0" max="10">
-                                </div>
-                                <div class="nm-check-card">
-                                    <label for="gm-transport"><input type="checkbox" id="gm-transport"><span>Весь трафик только каналом менеджера (GM_xmlhttpRequest)</span></label>
-                                    <button type="button" class="nm-hint" data-tip="Галочка — старые порядки (всё через менеджер). По умолчанию снята: запросы идут fetch'ом из страницы, канал менеджера подключается сам при CORS-ошибке.">?</button>
-                                </div>
+                                <h3>🤖 API</h3>
+                                <div class="nm-input-group"><label>API Host:</label><input type="text" class="nm-input" id="api-host"></div>
+                                <div class="nm-input-group"><label>API Key:</label><input type="password" class="nm-input" id="api-key"></div>
+                                <label class="nm-input-group nm-check-row" data-tip="Пустой API Key разрешён: с этим чекбоксом заголовок Authorization не отправляется вовсе."><input type="checkbox" id="local-model"><span>🖥️ Локальная модель без API-ключа</span></label>
+                                <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
+                                <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
+                                <div class="nm-server-status" id="server-status"></div>
                             </div>
                         </div>
                         <div class="nm-subtab-content" id="stab-reader">
@@ -1274,68 +1257,25 @@ const host = document.createElement('div');
                                 <div class="nm-input-group"><label>Отступ между абзацами (em):</label>
                                     <input type="number" class="nm-input" id="reader-paragraph-spacing" min="0.2" max="4" step="0.1">
                                 </div>
-                                <div class="nm-input-group"><label>Ширина колонки (% экрана):<button type="button" class="nm-hint" data-tip="ПРОЦЕНТЫ ширины экрана (не пиксели): колонка остаётся пропорциональной и на телефоне, и на мониторе.">?</button></label>
+                                <div class="nm-input-group" data-tip="ПРОЦЕНТЫ ширины экрана (не пиксели): колонка остаётся пропорциональной и на телефоне, и на мониторе."><label>Ширина колонки:</label>
                                     <input type="number" class="nm-input" id="reader-content-width" min="30" max="100" step="5">
                                 </div>
                             </div>
                         </div>
                         <div class="nm-subtab-content" id="stab-translate">
                             <div class="nm-section">
-                                <h3>🔄 Перевод</h3>
-                                <div class="nm-input-group"><label>Размер чанка (токенов, оценка):<button type="button" class="nm-hint" data-tip="ТОКЕНЫ — языко-осведомлённая оценка (±20-30%), как в конвейере NovelMaestro: сколько текста уходит в один запрос. Больше — меньше запросов, но выше риск обрыва ответа.">?</button></label>
+                                <h3>🔄 Текст</h3>
+                                <div class="nm-input-group" data-tip="ТОКЕНЫ — языко-осведомлённая оценка (±20-30%), как в конвейере NovelMaestro: сколько текста уходит в один запрос. Больше — меньше запросов, но выше риск обрыва ответа."><label>Размер чанка:</label>
                                     <input type="number" class="nm-input" id="chunk-size" min="100" max="30000" step="100">
                                 </div>
-                                <div class="nm-check-card">
-                                    <label for="preemptive-translate"><input type="checkbox" id="preemptive-translate"><span>🚀 Автоперевод следующей главы в фоне</span></label>
-                                    <button type="button" class="nm-hint" data-tip="Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT (кнопка в читалке).">?</button>
-                                </div>
+                                <label class="nm-input-group nm-check-row" data-tip="Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT (кнопка в читалке)."><input type="checkbox" id="preemptive-translate"><span>🚀 Автоперевод следующей главы в фоне</span></label>
                             </div>
                             <div class="nm-section">
                                 <h3>✨ Глоссарий</h3>
-                                <div class="nm-input-group"><label>Порог нечеткого поиска (0.0 - 1.0):<button type="button" class="nm-hint" data-tip="Насколько размытым может быть совпадение термина с текстом главы. Меньше — в промпт перевода попадёт больше терминов, больше — только точные.">?</button></label>
+                                <div class="nm-input-group" data-tip="Безразмерное отношение 0.0–1.0: насколько размытым может быть совпадение термина с текстом главы. Меньше — в промпт перевода попадёт больше терминов, больше — только точные."><label>Порог нечёткого поиска:</label>
                                     <input type="number" class="nm-input" id="fuzzy-threshold" min="0" max="1" step="0.05">
                                 </div>
-                                <div class="nm-check-card">
-                                    <label for="auto-ner"><input type="checkbox" id="auto-ner"><span>✨ Автоизвлечение терминов (один раз на страницу)</span></label>
-                                    <button type="button" class="nm-hint" data-tip="Перед переводом главы Lite сначала извлекает с страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же).">?</button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="nm-subtab-content" id="stab-advanced">
-                            <div class="nm-section">
-                                <h3>🧠 Reasoning и thinking</h3>
-                                <div class="nm-input-group"><label>Режим мышления:<button type="button" class="nm-hint" data-tip="У провайдеров нет общего поля thinking: выбранное действие отправляется профилем ниже. «Как у модели» — ни одного reasoning-ключа в запросе, сервер решает сам.">?</button></label>
-                                    <select class="nm-select" id="thinking-mode">
-                                        <option value="default">🌐 Как у модели — ничего не отправлять</option>
-                                        <option value="on">💭 Включить рассуждения</option>
-                                        <option value="off">🚫 Выключить рассуждения</option>
-                                    </select>
-                                </div>
-                                <div class="nm-input-group"><label>Профиль API:<button type="button" class="nm-hint" data-tip="Как именно передавать рассуждения. Профиль отправляет только свои ключи: незнакомый ключ часть серверов считает ошибкой запроса, поэтому «все сразу» — отдельный осознанный режим. Текст, который реально уходит, показывает «🔌 Проверить сервер».">?</button></label>
-                                    <select class="nm-select" id="reasoning-profile">
-                                        <option value="openai">OpenAI-совместимый — reasoning_effort</option>
-                                        <option value="anthropic">Anthropic-style — thinking.type</option>
-                                        <option value="qwen">Qwen3 / vLLM / llama.cpp — chat_template_kwargs</option>
-                                        <option value="dashscope">DashScope / SiliconFlow — enable_thinking</option>
-                                        <option value="ollama">Ollama — think</option>
-                                        <option value="openrouter">OpenRouter — reasoning.enabled</option>
-                                        <option value="all">Все профили сразу — «универсальный»</option>
-                                    </select>
-                                </div>
-                                <div class="nm-input-group"><label>Уровень рассуждений:<button type="button" class="nm-hint" data-tip="Отправляется выбранным профилем как есть. Пусто = не отправлять; старое значение «None» читается так же.">?</button></label>
-                                    <select class="nm-select" id="reasoning-effort">
-                                        <option value="">не отправлять</option><option value="minimal">minimal</option>
-                                        <option value="low">low</option><option value="medium">medium</option>
-                                        <option value="high">high</option><option value="xhigh">xhigh</option>
-                                        <option value="max">max</option>
-                                    </select>
-                                </div>
-                                <div class="nm-input-group"><label>Бюджет размышлений:<button type="button" class="nm-hint" data-tip="ТОКЕНЫ: thinking.budget_tokens / thinking_budget / reasoning.max_tokens — куда он попадает, зависит от профиля. 0 = не отправлять.">?</button></label>
-                                    <input type="number" class="nm-input" id="thinking-budget" min="0" step="128">
-                                </div>
-                                <div class="nm-input-group"><label>Свои поля запроса (JSON):<button type="button" class="nm-hint" data-tip="Универсальный способ: этот JSON-объект добавляется в тело каждого запроса к модели поверх reasoning-полей (при одном ключе он главнее). Битый JSON игнорируется — запрос идёт без своих полей, поле подсвечивается красным.">?</button></label>
-                                    <textarea class="nm-textarea" id="extra-body-json" placeholder='{"chat_template_kwargs": {"enable_thinking": false}}'></textarea>
-                                </div>
+                                <label class="nm-input-group nm-check-row" data-tip="Перед переводом главы Lite сначала извлекает с страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же)."><input type="checkbox" id="auto-ner"><span>✨ Автоизвлечение терминов (один раз на страницу)</span></label>
                             </div>
                             <div class="nm-section">
                                 <h3>💬 Промпты</h3>
@@ -1347,9 +1287,56 @@ const host = document.createElement('div');
                                 </div>
                             </div>
                         </div>
+                        <div class="nm-subtab-content" id="stab-advanced">
+                            <div class="nm-section">
+                                <h3>🌐 Сеть</h3>
+                                <div class="nm-input-group" data-tip="СЕК. 0 = без таймаута. При стриминге это пауза между токенами: ни одного символа за это время — запрос считается зависшим и повторяется. У запроса без стрима (например, «Проверить сервер») это ожидание всего ответа: локальная модель на телефоне легко думает дольше 10 секунд. По умолчанию 60."><label>Таймаут:</label>
+                                    <input type="number" class="nm-input" id="request-timeout" min="0" step="1">
+                                </div>
+                                <div class="nm-input-group"><label>Количество ретраев при ошибке:</label>
+                                    <input type="number" class="nm-input" id="max-retries" min="0" max="10">
+                                </div>
+                                <label class="nm-input-group nm-check-row" data-tip="Галочка — старые порядки (всё через менеджер). По умолчанию снята: запросы идут fetch'ом из страницы, канал менеджера подключается сам при CORS-ошибке."><input type="checkbox" id="gm-transport"><span>Весь трафик только каналом менеджера (GM_xmlhttpRequest)</span></label>
+                            </div>
+                            <div class="nm-section">
+                                <h3>🧠 Reasoning и thinking</h3>
+                                <div class="nm-input-group" data-tip="У провайдеров нет общего поля thinking: выбранное действие отправляет профиль ниже. «Как у модели» — ни одного reasoning-ключа в запросе, сервер решает сам."><label>Режим мышления:</label>
+                                    <select class="nm-select" id="thinking-mode">
+                                        <option value="default">🌐 Как у модели — ничего не отправлять</option>
+                                        <option value="on">💭 Включить рассуждения</option>
+                                        <option value="off">🚫 Выключить рассуждения</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group" data-tip="Как именно передавать рассуждения. Профиль отправляет только свои ключи: незнакомый ключ часть серверов считает ошибкой запроса, поэтому «все сразу» — отдельный осознанный режим. Текст, который реально уходит, показывает «🔌 Проверить сервер»."><label>Профиль API:</label>
+                                    <select class="nm-select" id="reasoning-profile">
+                                        <option value="openai">OpenAI-совместимый — reasoning_effort</option>
+                                        <option value="anthropic">Anthropic-style — thinking.type</option>
+                                        <option value="qwen">Qwen3 / vLLM / llama.cpp — chat_template_kwargs</option>
+                                        <option value="dashscope">DashScope / SiliconFlow — enable_thinking</option>
+                                        <option value="ollama">Ollama — think</option>
+                                        <option value="openrouter">OpenRouter — reasoning.enabled</option>
+                                        <option value="all">Все профили сразу — «универсальный»</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group" data-tip="Отправляется выбранным профилем как есть. Пусто = не отправлять; старое значение «None» читается так же."><label>Уровень рассуждений:</label>
+                                    <select class="nm-select" id="reasoning-effort">
+                                        <option value="">не отправлять</option><option value="minimal">minimal</option>
+                                        <option value="low">low</option><option value="medium">medium</option>
+                                        <option value="high">high</option><option value="xhigh">xhigh</option>
+                                        <option value="max">max</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group" data-tip="ТОКЕНЫ: thinking.budget_tokens / thinking_budget / reasoning.max_tokens — куда он попадает, зависит от профиля. 0 = не отправлять."><label>Бюджет размышлений:</label>
+                                    <input type="number" class="nm-input" id="thinking-budget" min="0" step="128">
+                                </div>
+                                <div class="nm-input-group" data-tip="Универсальный способ: этот JSON-объект добавляется в тело каждого запроса к модели поверх reasoning-полей (при одном ключе он главнее). Битый JSON игнорируется — запрос идёт без своих полей, поле подсвечивается красным."><label>Свои поля запроса (JSON):</label>
+                                    <textarea class="nm-textarea" id="extra-body-json" placeholder='{"chat_template_kwargs": {"enable_thinking": false}}'></textarea>
+                                </div>
+                            </div>
+                        </div>
                         <div class="nm-settings-footer">
                             <div class="nm-status" id="status-settings"></div>
-                            <button class="nm-btn nm-btn-secondary nm-btn-sm" id="btn-reset-settings">Сбросить настройки</button>
+                            <button class="nm-btn nm-btn-secondary nm-btn-sm" id="btn-reset-settings" data-tip="Сбросиваются значения по умолчанию только открытой вкладки — остальные остаются как есть.">Сбросить настройки вкладки</button>
                         </div>
                     </div>
                     </div>
@@ -1493,9 +1480,11 @@ const host = document.createElement('div');
         rootEl.appendChild(popup);
     })();
 
-    // ===== ПОДСКАЗКИ (?) =====
-    // Один плавающий тултип на весь шелл: вложенный в модалку tooltip обрезался бы
-    // overflow скроллящегося тела, поэтому fixed и ручной расчёт позиции.
+    // ===== ПОДСКАЗКИ =====
+    // Объяснение принадлежит самому пункту настроек (строка с data-tip), а не отдельной
+    // иконке: наводишь на пункт — появляется текст. Один плавающий тултип на весь шелл:
+    // вложенный в модалку tooltip обрезался бы overflow скроллящегося тела, поэтому
+    // fixed и ручной расчёт позиции.
     (function initTooltips() {
         const tip = document.createElement('div');
         tip.id = 'nm-tip';
@@ -1503,34 +1492,32 @@ const host = document.createElement('div');
         rootEl.appendChild(tip);
         const touchUI = matchMedia('(hover: none)');
         let owner = null;
-        // иконка лежит в shadow DOM — цель события может быть внутренним текстом
-        const hintOf = (e) => {
+        // событие могло прийти на вложенный label/input — цель строка с data-tip
+        const ownerOf = (e) => {
             const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
-            return path.find(n => n && n.classList && n.classList.contains('nm-hint')) || null;
+            return path.find(n => n && n.dataset && n.dataset.tip) || null;
         };
         const show = (el) => {
-            const text = el.getAttribute('data-tip');
-            if (!text) return;
-            tip.textContent = text;
+            tip.textContent = el.dataset.tip;
             tip.classList.add('active');
             owner = el;
             const r = el.getBoundingClientRect();
             const w = tip.offsetWidth, h = tip.offsetHeight;
             const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8));
-            // под иконкой, а не влезла — над ней (нижняя кромка экрана не режет текст)
+            // под строкой, а не влезла — над ней (нижняя кромка экрана не режет текст)
             const top = r.bottom + 8 + h > innerHeight - 8 ? Math.max(8, r.top - h - 8) : r.bottom + 8;
             tip.style.left = `${left}px`;
             tip.style.top = `${top}px`;
         };
         const hide = () => { owner = null; tip.classList.remove('active'); };
-        shadow.addEventListener('pointerover', (e) => { if (e.pointerType !== 'touch') { const h = hintOf(e); if (h) show(h); } });
-        shadow.addEventListener('pointerout', (e) => { if (e.pointerType !== 'touch' && owner === hintOf(e)) hide(); });
-        shadow.addEventListener('focusin', (e) => { const h = hintOf(e); if (h) show(h); });
+        shadow.addEventListener('pointerover', (e) => { if (e.pointerType !== 'touch') { const t = ownerOf(e); if (t) show(t); } });
+        shadow.addEventListener('pointerout', (e) => { if (e.pointerType !== 'touch' && owner === ownerOf(e)) hide(); });
+        shadow.addEventListener('focusin', (e) => { const t = ownerOf(e); if (t) show(t); });
         shadow.addEventListener('focusout', hide);
-        // на тач-устройстве фокус на button не всегда приходит — тап сам переключает
+        // на тач-устройстве фокус на поле не всегда приходит — тап по строке переключает
         shadow.addEventListener('click', (e) => {
-            const h = hintOf(e);
-            if (h) { if (touchUI.matches) (owner === h ? hide : show)(h); return; }
+            const t = ownerOf(e);
+            if (t) { if (touchUI.matches) (owner === t ? hide : show)(t); return; }
             hide();
         });
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
@@ -3556,57 +3543,89 @@ const host = document.createElement('div');
     }
     const asText = raw => ({ value: raw });
 
-    // [селектор, ключ конфига, читатель значения, (показатель для поля)]
+    // Поля настроек: [селектор, ключ конфига, читатель значения, (показатель для поля)].
+    // Порядок = порядок панелей вторичных вкладок: Основные → Читалка → Перевод →
+    // Продвинутое. Вкладка поля не хранится в таблице намеренно: она берётся из
+    // разметки (closest('.nm-subtab-content')), иначе разъедется с ней.
     const SETTING_FIELDS = [
+        // 🌐 Основные
+        ['#source-lang', 'sourceLang', asText],
+        ['#target-lang', 'targetLang', asText],
         ['#api-host', 'apiHost', raw => ({ value: raw.trim() })],
         ['#api-key', 'apiKey', raw => ({ value: raw.trim() })],
         ['#model', 'model', raw => ({ value: raw.trim() })],
-        ['#source-lang', 'sourceLang', asText],
-        ['#target-lang', 'targetLang', asText],
-        ['#request-timeout', 'requestTimeout', raw => parseNumSetting(raw, { name: 'Таймаут', def: DEFAULT_CONFIG.requestTimeout, min: 0 })],
-        ['#max-retries', 'maxRetries', raw => parseNumSetting(raw, { name: 'Ретраи', def: DEFAULT_CONFIG.maxRetries, min: 0, max: 10 })],
-        ['#chunk-size', 'chunkSize', raw => parseNumSetting(raw, { name: 'Размер чанка', def: DEFAULT_CONFIG.chunkSize, min: 100, max: 30000 })],
-        ['#fuzzy-threshold', 'fuzzySearchThreshold', raw => parseNumSetting(raw, { name: 'Порог нечёткого поиска', def: DEFAULT_CONFIG.fuzzySearchThreshold, min: 0, max: 1, int: false })],
+        // 📖 Читалка
         ['#reader-theme', 'readerTheme', asText],
         ['#reader-font-family', 'readerFontFamily', asText],
         ['#reader-font-size', 'readerFontSize', raw => parseNumSetting(raw, { name: 'Размер шрифта', def: DEFAULT_CONFIG.readerFontSize, min: 12, max: 32 })],
         ['#reader-line-height', 'readerLineHeight', raw => parseNumSetting(raw, { name: 'Межстрочный интервал', def: DEFAULT_CONFIG.readerLineHeight, min: 1, max: 3, int: false })],
         ['#reader-paragraph-spacing', 'readerParagraphSpacing', raw => parseNumSetting(raw, { name: 'Отступ между абзацами', def: DEFAULT_CONFIG.readerParagraphSpacing, min: 0.2, max: 4, int: false })],
         ['#reader-content-width', 'readerContentWidth', raw => parseNumSetting(raw, { name: 'Ширина колонки', def: DEFAULT_CONFIG.readerContentWidth, min: 30, max: 100 })],
+        // 🔄 Перевод
+        ['#chunk-size', 'chunkSize', raw => parseNumSetting(raw, { name: 'Размер чанка', def: DEFAULT_CONFIG.chunkSize, min: 100, max: 30000 })],
+        ['#fuzzy-threshold', 'fuzzySearchThreshold', raw => parseNumSetting(raw, { name: 'Порог нечёткого поиска', def: DEFAULT_CONFIG.fuzzySearchThreshold, min: 0, max: 1, int: false })],
+        ['#translation-prompt', 'translationPrompt', asText],
+        ['#extraction-prompt', 'extractionPrompt', asText],
+        // ⚙️ Продвинутое
+        ['#request-timeout', 'requestTimeout', raw => parseNumSetting(raw, { name: 'Таймаут', def: DEFAULT_CONFIG.requestTimeout, min: 0 })],
+        ['#max-retries', 'maxRetries', raw => parseNumSetting(raw, { name: 'Ретраи', def: DEFAULT_CONFIG.maxRetries, min: 0, max: 10 })],
         ['#thinking-mode', 'thinkingMode', asText],
         ['#reasoning-profile', 'thinkingProfile', asText],
         ['#reasoning-effort', 'reasoningEffort', asText, normalizeEffort],
-        ['#thinking-budget', 'thinkingBudget', raw => parseNumSetting(raw, { name: 'Бюджет размышлений', def: DEFAULT_CONFIG.thinkingBudget, min: 0 })],
-        ['#translation-prompt', 'translationPrompt', asText],
-        ['#extraction-prompt', 'extractionPrompt', asText]
+        ['#thinking-budget', 'thinkingBudget', raw => parseNumSetting(raw, { name: 'Бюджет размышлений', def: DEFAULT_CONFIG.thinkingBudget, min: 0 })]
+    ];
+    // Чекбоксы: [селектор, ключ, (значение конфига → состояние), (состояние → значение),
+    // (действие после смены)]. gmTransport — не «вкл/выкл», а выбор канала, поэтому у
+    // него свои читатель и писатель. «только текущая страница» живёт на вкладке
+    // «Глоссарий» — в фильтр-строке, а не во вторичных вкладках настроек.
+    const SETTING_CHECKS = [
+        ['#local-model', 'localModel', null, null, el => { $('#api-key').disabled = el.checked; }],
+        ['#gm-transport', 'gmTransport', v => (v === 'auto' ? 'page' : v) === 'manager', on => (on ? 'manager' : 'page')],
+        ['#preemptive-translate', 'preemptiveTranslation'],
+        ['#auto-ner', 'autoNER'],
+        ['#glossary-current-only', 'glossaryCurrentPageOnly', null, null, () => { glossaryPage = 0; updateGlossaryUI(); }]
     ];
     // Поля с непринятым вводом: селектор → причина. Пока карта не пуста, подвал
-    // настроек показывает ошибку, а не «✅ сохранено».
+    // настроек показывает ошибку, а не «сохранено».
     const settingsProblems = new Map();
+    let settingsStatusTimer = null;
+
+    // вторичная вкладка, в панели которой лежит поле ('' — вне настроек)
+    const settingsSubTabOf = el => {
+        const panel = el.closest('.nm-subtab-content');
+        return panel ? panel.id.replace('stab-', '') : '';
+    };
 
     function loadSettings() {
         for (const [sel, key, , show] of SETTING_FIELDS) {
             const el = $(sel);
             el.value = show ? show(config[key]) : config[key];
         }
-        $('#auto-ner').checked = !!config.autoNER;
-        $('#glossary-current-only').checked = !!config.glossaryCurrentPageOnly;
-        $('#local-model').checked = !!config.localModel;
-        $('#api-key').disabled = !!config.localModel;
-        $('#preemptive-translate').checked = !!config.preemptiveTranslation;
-        $('#gm-transport').checked = (config.gmTransport === 'auto' ? 'page' : config.gmTransport) === 'manager';
+        for (const [sel, key, read, , after] of SETTING_CHECKS) {
+            const el = $(sel);
+            el.checked = read ? read(config[key]) : config[key];
+            // служебный after — только для полей самих настроек (фильтр глоссария
+            // со своей вкладкой не обязан сбрасывать страницу списка при каждом открытии)
+            if (after && settingsSubTabOf(el)) after(el);
+        }
         setSettingsSubTab(config.settingsSubTab);
         // подсветка переживает закрытие модалки — вместе с ней обязан жить и ответ
         // «почему поле красное»
         if (settingsProblems.size) settingsStatus(); else hideStatus('status-settings');
     }
-    function settingsStatus() {
+    /**
+     * Индикатор подвала: ошибка висит, пока поле не починят, а «сохранено» —
+     * вспышка на 3 с: постоянная плашка на пустом месте только мешает.
+     */
+    function settingsStatus(msg) {
+        clearTimeout(settingsStatusTimer);
         const all = [...settingsProblems.values()];
-        if (!all.length) {
-            showStatus('✅ Настройки сохранены автоматически', 'success', 'status-settings');
+        if (all.length) {
+            showStatus(`❌ ${all[0]}${all.length > 1 ? ` (и ещё ${all.length - 1})` : ''}`, 'error', 'status-settings');
             return;
         }
-        showStatus(`❌ ${all[0]}${all.length > 1 ? ` (и ещё ${all.length - 1})` : ''}`, 'error', 'status-settings');
+        showStatus(msg || '✅ Настройки сохранены автоматически', 'success', 'status-settings');
+        settingsStatusTimer = setTimeout(() => hideStatus('status-settings'), 3000);
     }
     function paintSetting(sel, el, problem) {
         if (problem) settingsProblems.set(sel, problem);
@@ -3633,26 +3652,20 @@ const host = document.createElement('div');
                 config[key] = res.value;
                 scheduleSettingsSave();
             };
-            el.addEventListener('input', save);
-            el.addEventListener('change', save);
             // в number-поле буквы не дают ни значения, ни input-события (браузер их
             // просто глотает) — поле проверяется ещё и на выход из него
+            el.addEventListener('input', save);
+            el.addEventListener('change', save);
             el.addEventListener('blur', save);
         }
-        // чекбоксы: значение читается из checked, зона клика — вся карточка (label)
-        const check = (sel, key, after) => $(sel).addEventListener('change', function () {
-            config[key] = this.checked;
-            if (after) after(this);
-            scheduleSettingsSave();
-        });
-        check('#auto-ner', 'autoNER');
-        check('#preemptive-translate', 'preemptiveTranslation');
-        check('#glossary-current-only', 'glossaryCurrentPageOnly', () => { glossaryPage = 0; updateGlossaryUI(); });
-        check('#local-model', 'localModel', el => { $('#api-key').disabled = el.checked; });
-        $('#gm-transport').addEventListener('change', function () {
-            config.gmTransport = this.checked ? 'manager' : 'page';
-            scheduleSettingsSave();
-        });
+        for (const [sel, key, , write, after] of SETTING_CHECKS) {
+            const el = $(sel);
+            el.addEventListener('change', () => {
+                config[key] = write ? write(el.checked) : el.checked;
+                if (after) after(el);
+                scheduleSettingsSave();
+            });
+        }
         // свои поля — JSON: битый стоит показать сразу, а не молча игнорировать
         // (текст при этом сохраняется — пользователь не теряет ввод)
         const extra = $('#extra-body-json');
@@ -3674,15 +3687,31 @@ const host = document.createElement('div');
         extra.addEventListener('input', saveExtra);
         extra.addEventListener('change', saveExtra);
     }
+    /**
+     * Сброс касается только открытой вторичной вкладки: сбитый кегль в «Читалке»
+     * не обязан стирать пользовательские промпты и reasoning-настройки.
+     */
     function resetSettings() {
-        if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;
-        config = { ...DEFAULT_CONFIG };
+        const tab = config.settingsSubTab;
+        const title = ($(`.nm-subtab[data-stab="${tab}"]`) || { textContent: tab }).textContent.trim();
+        if (!confirm(`Сбросить настройки вкладки «${title}» к значениям по умолчанию?\nОстальные вкладки останутся как есть.`)) return;
+        for (const [sel, key, , show] of SETTING_FIELDS) {
+            const el = $(sel);
+            if (settingsSubTabOf(el) !== tab) continue;
+            config[key] = DEFAULT_CONFIG[key];
+            el.value = show ? show(DEFAULT_CONFIG[key]) : DEFAULT_CONFIG[key];
+            paintSetting(sel, el, '');
+        }
+        for (const [sel, key, read, , after] of SETTING_CHECKS) {
+            const el = $(sel);
+            if (settingsSubTabOf(el) !== tab) continue;
+            config[key] = DEFAULT_CONFIG[key];
+            el.checked = read ? read(DEFAULT_CONFIG[key]) : DEFAULT_CONFIG[key];
+            if (after) after(el);
+        }
         GM_setValue('config', config);
-        settingsProblems.clear();
-        $$('.nm-input-bad').forEach(el => { el.classList.remove('nm-input-bad'); el.setAttribute('aria-invalid', 'false'); });
-        loadSettings();
         applyTheme();
-        showStatus('Настройки сброшены!', 'success', 'status-settings');
+        settingsStatus(`✅ Вкладка «${title}» сброшена к значениям по умолчанию`);
     }
     function saveNewBook() {
         const url = $('#book-modal-url').value.trim();

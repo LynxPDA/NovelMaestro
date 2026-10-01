@@ -48,9 +48,11 @@
         rootEl.appendChild(popup);
     })();
 
-    // ===== ПОДСКАЗКИ (?) =====
-    // Один плавающий тултип на весь шелл: вложенный в модалку tooltip обрезался бы
-    // overflow скроллящегося тела, поэтому fixed и ручной расчёт позиции.
+    // ===== ПОДСКАЗКИ =====
+    // Объяснение принадлежит самому пункту настроек (строка с data-tip), а не отдельной
+    // иконке: наводишь на пункт — появляется текст. Один плавающий тултип на весь шелл:
+    // вложенный в модалку tooltip обрезался бы overflow скроллящегося тела, поэтому
+    // fixed и ручной расчёт позиции.
     (function initTooltips() {
         const tip = document.createElement('div');
         tip.id = 'nm-tip';
@@ -58,34 +60,32 @@
         rootEl.appendChild(tip);
         const touchUI = matchMedia('(hover: none)');
         let owner = null;
-        // иконка лежит в shadow DOM — цель события может быть внутренним текстом
-        const hintOf = (e) => {
+        // событие могло прийти на вложенный label/input — цель строка с data-tip
+        const ownerOf = (e) => {
             const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
-            return path.find(n => n && n.classList && n.classList.contains('nm-hint')) || null;
+            return path.find(n => n && n.dataset && n.dataset.tip) || null;
         };
         const show = (el) => {
-            const text = el.getAttribute('data-tip');
-            if (!text) return;
-            tip.textContent = text;
+            tip.textContent = el.dataset.tip;
             tip.classList.add('active');
             owner = el;
             const r = el.getBoundingClientRect();
             const w = tip.offsetWidth, h = tip.offsetHeight;
             const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8));
-            // под иконкой, а не влезла — над ней (нижняя кромка экрана не режет текст)
+            // под строкой, а не влезла — над ней (нижняя кромка экрана не режет текст)
             const top = r.bottom + 8 + h > innerHeight - 8 ? Math.max(8, r.top - h - 8) : r.bottom + 8;
             tip.style.left = `${left}px`;
             tip.style.top = `${top}px`;
         };
         const hide = () => { owner = null; tip.classList.remove('active'); };
-        shadow.addEventListener('pointerover', (e) => { if (e.pointerType !== 'touch') { const h = hintOf(e); if (h) show(h); } });
-        shadow.addEventListener('pointerout', (e) => { if (e.pointerType !== 'touch' && owner === hintOf(e)) hide(); });
-        shadow.addEventListener('focusin', (e) => { const h = hintOf(e); if (h) show(h); });
+        shadow.addEventListener('pointerover', (e) => { if (e.pointerType !== 'touch') { const t = ownerOf(e); if (t) show(t); } });
+        shadow.addEventListener('pointerout', (e) => { if (e.pointerType !== 'touch' && owner === ownerOf(e)) hide(); });
+        shadow.addEventListener('focusin', (e) => { const t = ownerOf(e); if (t) show(t); });
         shadow.addEventListener('focusout', hide);
-        // на тач-устройстве фокус на button не всегда приходит — тап сам переключает
+        // на тач-устройстве фокус на поле не всегда приходит — тап по строке переключает
         shadow.addEventListener('click', (e) => {
-            const h = hintOf(e);
-            if (h) { if (touchUI.matches) (owner === h ? hide : show)(h); return; }
+            const t = ownerOf(e);
+            if (t) { if (touchUI.matches) (owner === t ? hide : show)(t); return; }
             hide();
         });
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });

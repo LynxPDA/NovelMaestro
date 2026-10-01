@@ -30,7 +30,7 @@
             /* подвал настроек: сброс и индикатор сохранения — всегда под рукой */
             .nm-settings-footer { position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px; margin: 0 -16px; padding: 10px 16px; background: #fbfbfc; border-top: 1px solid #e5e7eb; }
             .nm-settings-footer .nm-status { flex: 1 1 auto; margin: 0; padding: 7px 10px; }
-            .nm-settings-footer .nm-btn { flex: 0 0 auto; margin: 0; }
+            .nm-settings-footer .nm-btn { flex: 0 0 auto; margin: 0 0 0 auto; }
             .nm-tabs { display: flex; border-bottom: 2px solid #e5e7eb; margin-bottom: 20px; }
             .nm-tab { padding: 10px 20px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
             .nm-tab.active { border-bottom-color: #2563eb; color: #2563eb; font-weight: 600; }
@@ -96,13 +96,12 @@
             /* битый ввод (не число, вне диапазона, неразобранный JSON): запрос уходит
                с подменённым значением — поле обязано быть подсвечено */
             .nm-input-bad { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
-            /* чекбоксы карточкой: зона клика — вся строка, а не сам квадратик */
-            .nm-check-card { position: relative; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; margin-bottom: 12px; }
-            .nm-check-card > label { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 36px 10px 12px; cursor: pointer; color: #1f2937; }
-            .nm-check-card input[type=checkbox] { flex: 0 0 auto; width: 18px; height: 18px; cursor: pointer; }
-            /* подсказка (?): длинные описания спрятаны, а не размазаны по форме */
-            .nm-hint { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 1px solid #9ca3af; border-radius: 50%; background: #f3f4f6; color: #4b5563; font-size: 11px; font-weight: 700; line-height: 1; vertical-align: 1px; cursor: help; }
-            .nm-hint:hover, .nm-hint:focus { background: #2563eb; border-color: #2563eb; color: white; outline: none; }
+            /* чекбоксы — той же строкой, что и остальные поля: зона клика — весь текст,
+               но без отдельного подсвеченного блока вокруг */
+            .nm-check-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer; color: #374151; }
+            .nm-check-row input[type=checkbox] { flex: 0 0 auto; width: 16px; height: 16px; cursor: pointer; }
+            /* у пункта с объяснением только что подсказка: курсор подсказывает, что она есть */
+            .nm-input-group[data-tip] > label { cursor: help; }
             /* один плавающий тултип на весь шелл: вложенный в модалку обрезался бы overflow */
             #nm-tip { display: none; position: fixed; z-index: 2147483647; max-width: min(360px, calc(100vw - 24px)); padding: 8px 10px; border-radius: 8px; background: #111827; color: #f9fafb; font-size: 12.5px; line-height: 1.45; box-shadow: 0 8px 24px rgba(0,0,0,.35); pointer-events: none; white-space: pre-line; }
             #nm-tip.active { display: block; }
@@ -135,10 +134,7 @@
             #nm-root.nm-ui-dark .nm-tab.active { color: #7fb0ff; border-bottom-color: #7fb0ff; }
             #nm-root.nm-ui-dark .nm-subtab { background: #2a2f39; color: #c6c9d0; border-color: #3a3f4a; }
             #nm-root.nm-ui-dark .nm-subtab.active { background: #2563eb; border-color: #2563eb; color: #e2e2dc; }
-            #nm-root.nm-ui-dark .nm-check-card { background: #1c2c4a; border-color: #2f4368; }
-            #nm-root.nm-ui-dark .nm-check-card > label { color: #e2e2dc; }
-            #nm-root.nm-ui-dark .nm-hint { background: #2a2f39; border-color: #4b5563; color: #c6c9d0; }
-            #nm-root.nm-ui-dark .nm-hint:hover, #nm-root.nm-ui-dark .nm-hint:focus { background: #2563eb; border-color: #2563eb; color: #e2e2dc; }
+            #nm-root.nm-ui-dark .nm-check-row { color: #c6c9d0; }
             #nm-root.nm-ui-dark #nm-tip { background: #0d0f13; color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-input-group label { color: #c6c9d0; }
             #nm-root.nm-ui-dark .nm-input, #nm-root.nm-ui-dark .nm-textarea, #nm-root.nm-ui-dark .nm-select { background: #2a2f39; color: #e2e2dc; border-color: #3a3f4a; }
@@ -247,7 +243,7 @@
                 .nm-tabs { overflow-x: auto; flex-wrap: nowrap; }
                 .nm-tab { flex-shrink: 0; white-space: nowrap; padding: 10px 14px; }
                 .nm-subtab { min-height: 36px; padding: 8px 14px; }
-                .nm-hint { width: 20px; height: 20px; font-size: 12px; }
+                .nm-check-row input[type=checkbox] { width: 18px; height: 18px; }
                 .nm-input, .nm-textarea, .nm-select, .nm-glossary-table input, .nm-glossary-table select, .nm-add-form input, .nm-add-form select, .nm-filter-row input { font-size: 16px; }
                 .nm-add-form { grid-template-columns: 1fr; }
                 #glossary-list { overflow-x: auto; -webkit-overflow-scrolling: touch; }

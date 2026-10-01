@@ -75,18 +75,9 @@ const host = document.createElement('div');
                             <button type="button" class="nm-subtab" data-stab="translate">🔄 Перевод</button>
                             <button type="button" class="nm-subtab" data-stab="advanced">⚙️ Продвинутое</button>
                         </div>
+                        <!-- подсказка пункта настроек живёт на самой строке (data-tip):
+                             наводишь на пункт — появляется объяснение, отдельных иконок нет -->
                         <div class="nm-subtab-content active" id="stab-main">
-                            <div class="nm-section">
-                                <h3>🤖 API</h3>
-                                <div class="nm-input-group"><label>API Host:</label><input type="text" class="nm-input" id="api-host"></div>
-                                <div class="nm-input-group"><label>API Key:<button type="button" class="nm-hint" data-tip="Пустой API Key разрешён при включённом чекбоксе «Локальная модель без API-ключа».">?</button></label><input type="password" class="nm-input" id="api-key"></div>
-                                <div class="nm-check-card">
-                                    <label for="local-model"><input type="checkbox" id="local-model"><span>🖥️ Локальная модель без API-ключа</span></label>
-                                </div>
-                                <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
-                                <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
-                                <div class="nm-server-status" id="server-status"></div>
-                            </div>
                             <div class="nm-section">
                                 <h3>🗣 Языки</h3>
                                 <div class="nm-input-group"><label>Исходный язык:</label>
@@ -106,17 +97,13 @@ const host = document.createElement('div');
                                 </div>
                             </div>
                             <div class="nm-section">
-                                <h3>🌐 Сеть</h3>
-                                <div class="nm-input-group"><label>Таймаут (с):<button type="button" class="nm-hint" data-tip="СЕК. 0 = без таймаута. При стриминге это пауза между токенами: ни одного символа за это время — запрос считается зависшим и повторяется. У запроса без стрима (например, «Проверить сервер») это ожидание всего ответа: локальная модель на телефоне легко думает дольше 10 секунд. По умолчанию 60.">?</button></label>
-                                    <input type="number" class="nm-input" id="request-timeout" min="0" step="1">
-                                </div>
-                                <div class="nm-input-group"><label>Количество ретраев при ошибке:<button type="button" class="nm-hint" data-tip="Повторные попытки при сетевых ошибках, таймаутах и зависании стриминга (не при HTTP 4xx/5xx).">?</button></label>
-                                    <input type="number" class="nm-input" id="max-retries" min="0" max="10">
-                                </div>
-                                <div class="nm-check-card">
-                                    <label for="gm-transport"><input type="checkbox" id="gm-transport"><span>Весь трафик только каналом менеджера (GM_xmlhttpRequest)</span></label>
-                                    <button type="button" class="nm-hint" data-tip="Галочка — старые порядки (всё через менеджер). По умолчанию снята: запросы идут fetch'ом из страницы, канал менеджера подключается сам при CORS-ошибке.">?</button>
-                                </div>
+                                <h3>🤖 API</h3>
+                                <div class="nm-input-group"><label>API Host:</label><input type="text" class="nm-input" id="api-host"></div>
+                                <div class="nm-input-group"><label>API Key:</label><input type="password" class="nm-input" id="api-key"></div>
+                                <label class="nm-input-group nm-check-row" data-tip="Пустой API Key разрешён: с этим чекбоксом заголовок Authorization не отправляется вовсе."><input type="checkbox" id="local-model"><span>🖥️ Локальная модель без API-ключа</span></label>
+                                <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
+                                <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
+                                <div class="nm-server-status" id="server-status"></div>
                             </div>
                         </div>
                         <div class="nm-subtab-content" id="stab-reader">
@@ -147,68 +134,25 @@ const host = document.createElement('div');
                                 <div class="nm-input-group"><label>Отступ между абзацами (em):</label>
                                     <input type="number" class="nm-input" id="reader-paragraph-spacing" min="0.2" max="4" step="0.1">
                                 </div>
-                                <div class="nm-input-group"><label>Ширина колонки (% экрана):<button type="button" class="nm-hint" data-tip="ПРОЦЕНТЫ ширины экрана (не пиксели): колонка остаётся пропорциональной и на телефоне, и на мониторе.">?</button></label>
+                                <div class="nm-input-group" data-tip="ПРОЦЕНТЫ ширины экрана (не пиксели): колонка остаётся пропорциональной и на телефоне, и на мониторе."><label>Ширина колонки:</label>
                                     <input type="number" class="nm-input" id="reader-content-width" min="30" max="100" step="5">
                                 </div>
                             </div>
                         </div>
                         <div class="nm-subtab-content" id="stab-translate">
                             <div class="nm-section">
-                                <h3>🔄 Перевод</h3>
-                                <div class="nm-input-group"><label>Размер чанка (токенов, оценка):<button type="button" class="nm-hint" data-tip="ТОКЕНЫ — языко-осведомлённая оценка (±20-30%), как в конвейере NovelMaestro: сколько текста уходит в один запрос. Больше — меньше запросов, но выше риск обрыва ответа.">?</button></label>
+                                <h3>🔄 Текст</h3>
+                                <div class="nm-input-group" data-tip="ТОКЕНЫ — языко-осведомлённая оценка (±20-30%), как в конвейере NovelMaestro: сколько текста уходит в один запрос. Больше — меньше запросов, но выше риск обрыва ответа."><label>Размер чанка:</label>
                                     <input type="number" class="nm-input" id="chunk-size" min="100" max="30000" step="100">
                                 </div>
-                                <div class="nm-check-card">
-                                    <label for="preemptive-translate"><input type="checkbox" id="preemptive-translate"><span>🚀 Автоперевод следующей главы в фоне</span></label>
-                                    <button type="button" class="nm-hint" data-tip="Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT (кнопка в читалке).">?</button>
-                                </div>
+                                <label class="nm-input-group nm-check-row" data-tip="Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT (кнопка в читалке)."><input type="checkbox" id="preemptive-translate"><span>🚀 Автоперевод следующей главы в фоне</span></label>
                             </div>
                             <div class="nm-section">
                                 <h3>✨ Глоссарий</h3>
-                                <div class="nm-input-group"><label>Порог нечеткого поиска (0.0 - 1.0):<button type="button" class="nm-hint" data-tip="Насколько размытым может быть совпадение термина с текстом главы. Меньше — в промпт перевода попадёт больше терминов, больше — только точные.">?</button></label>
+                                <div class="nm-input-group" data-tip="Безразмерное отношение 0.0–1.0: насколько размытым может быть совпадение термина с текстом главы. Меньше — в промпт перевода попадёт больше терминов, больше — только точные."><label>Порог нечёткого поиска:</label>
                                     <input type="number" class="nm-input" id="fuzzy-threshold" min="0" max="1" step="0.05">
                                 </div>
-                                <div class="nm-check-card">
-                                    <label for="auto-ner"><input type="checkbox" id="auto-ner"><span>✨ Автоизвлечение терминов (один раз на страницу)</span></label>
-                                    <button type="button" class="nm-hint" data-tip="Перед переводом главы Lite сначала извлекает с страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же).">?</button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="nm-subtab-content" id="stab-advanced">
-                            <div class="nm-section">
-                                <h3>🧠 Reasoning и thinking</h3>
-                                <div class="nm-input-group"><label>Режим мышления:<button type="button" class="nm-hint" data-tip="У провайдеров нет общего поля thinking: выбранное действие отправляется профилем ниже. «Как у модели» — ни одного reasoning-ключа в запросе, сервер решает сам.">?</button></label>
-                                    <select class="nm-select" id="thinking-mode">
-                                        <option value="default">🌐 Как у модели — ничего не отправлять</option>
-                                        <option value="on">💭 Включить рассуждения</option>
-                                        <option value="off">🚫 Выключить рассуждения</option>
-                                    </select>
-                                </div>
-                                <div class="nm-input-group"><label>Профиль API:<button type="button" class="nm-hint" data-tip="Как именно передавать рассуждения. Профиль отправляет только свои ключи: незнакомый ключ часть серверов считает ошибкой запроса, поэтому «все сразу» — отдельный осознанный режим. Текст, который реально уходит, показывает «🔌 Проверить сервер».">?</button></label>
-                                    <select class="nm-select" id="reasoning-profile">
-                                        <option value="openai">OpenAI-совместимый — reasoning_effort</option>
-                                        <option value="anthropic">Anthropic-style — thinking.type</option>
-                                        <option value="qwen">Qwen3 / vLLM / llama.cpp — chat_template_kwargs</option>
-                                        <option value="dashscope">DashScope / SiliconFlow — enable_thinking</option>
-                                        <option value="ollama">Ollama — think</option>
-                                        <option value="openrouter">OpenRouter — reasoning.enabled</option>
-                                        <option value="all">Все профили сразу — «универсальный»</option>
-                                    </select>
-                                </div>
-                                <div class="nm-input-group"><label>Уровень рассуждений:<button type="button" class="nm-hint" data-tip="Отправляется выбранным профилем как есть. Пусто = не отправлять; старое значение «None» читается так же.">?</button></label>
-                                    <select class="nm-select" id="reasoning-effort">
-                                        <option value="">не отправлять</option><option value="minimal">minimal</option>
-                                        <option value="low">low</option><option value="medium">medium</option>
-                                        <option value="high">high</option><option value="xhigh">xhigh</option>
-                                        <option value="max">max</option>
-                                    </select>
-                                </div>
-                                <div class="nm-input-group"><label>Бюджет размышлений:<button type="button" class="nm-hint" data-tip="ТОКЕНЫ: thinking.budget_tokens / thinking_budget / reasoning.max_tokens — куда он попадает, зависит от профиля. 0 = не отправлять.">?</button></label>
-                                    <input type="number" class="nm-input" id="thinking-budget" min="0" step="128">
-                                </div>
-                                <div class="nm-input-group"><label>Свои поля запроса (JSON):<button type="button" class="nm-hint" data-tip="Универсальный способ: этот JSON-объект добавляется в тело каждого запроса к модели поверх reasoning-полей (при одном ключе он главнее). Битый JSON игнорируется — запрос идёт без своих полей, поле подсвечивается красным.">?</button></label>
-                                    <textarea class="nm-textarea" id="extra-body-json" placeholder='{"chat_template_kwargs": {"enable_thinking": false}}'></textarea>
-                                </div>
+                                <label class="nm-input-group nm-check-row" data-tip="Перед переводом главы Lite сначала извлекает с страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же)."><input type="checkbox" id="auto-ner"><span>✨ Автоизвлечение терминов (один раз на страницу)</span></label>
                             </div>
                             <div class="nm-section">
                                 <h3>💬 Промпты</h3>
@@ -220,9 +164,56 @@ const host = document.createElement('div');
                                 </div>
                             </div>
                         </div>
+                        <div class="nm-subtab-content" id="stab-advanced">
+                            <div class="nm-section">
+                                <h3>🌐 Сеть</h3>
+                                <div class="nm-input-group" data-tip="СЕК. 0 = без таймаута. При стриминге это пауза между токенами: ни одного символа за это время — запрос считается зависшим и повторяется. У запроса без стрима (например, «Проверить сервер») это ожидание всего ответа: локальная модель на телефоне легко думает дольше 10 секунд. По умолчанию 60."><label>Таймаут:</label>
+                                    <input type="number" class="nm-input" id="request-timeout" min="0" step="1">
+                                </div>
+                                <div class="nm-input-group"><label>Количество ретраев при ошибке:</label>
+                                    <input type="number" class="nm-input" id="max-retries" min="0" max="10">
+                                </div>
+                                <label class="nm-input-group nm-check-row" data-tip="Галочка — старые порядки (всё через менеджер). По умолчанию снята: запросы идут fetch'ом из страницы, канал менеджера подключается сам при CORS-ошибке."><input type="checkbox" id="gm-transport"><span>Весь трафик только каналом менеджера (GM_xmlhttpRequest)</span></label>
+                            </div>
+                            <div class="nm-section">
+                                <h3>🧠 Reasoning и thinking</h3>
+                                <div class="nm-input-group" data-tip="У провайдеров нет общего поля thinking: выбранное действие отправляет профиль ниже. «Как у модели» — ни одного reasoning-ключа в запросе, сервер решает сам."><label>Режим мышления:</label>
+                                    <select class="nm-select" id="thinking-mode">
+                                        <option value="default">🌐 Как у модели — ничего не отправлять</option>
+                                        <option value="on">💭 Включить рассуждения</option>
+                                        <option value="off">🚫 Выключить рассуждения</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group" data-tip="Как именно передавать рассуждения. Профиль отправляет только свои ключи: незнакомый ключ часть серверов считает ошибкой запроса, поэтому «все сразу» — отдельный осознанный режим. Текст, который реально уходит, показывает «🔌 Проверить сервер»."><label>Профиль API:</label>
+                                    <select class="nm-select" id="reasoning-profile">
+                                        <option value="openai">OpenAI-совместимый — reasoning_effort</option>
+                                        <option value="anthropic">Anthropic-style — thinking.type</option>
+                                        <option value="qwen">Qwen3 / vLLM / llama.cpp — chat_template_kwargs</option>
+                                        <option value="dashscope">DashScope / SiliconFlow — enable_thinking</option>
+                                        <option value="ollama">Ollama — think</option>
+                                        <option value="openrouter">OpenRouter — reasoning.enabled</option>
+                                        <option value="all">Все профили сразу — «универсальный»</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group" data-tip="Отправляется выбранным профилем как есть. Пусто = не отправлять; старое значение «None» читается так же."><label>Уровень рассуждений:</label>
+                                    <select class="nm-select" id="reasoning-effort">
+                                        <option value="">не отправлять</option><option value="minimal">minimal</option>
+                                        <option value="low">low</option><option value="medium">medium</option>
+                                        <option value="high">high</option><option value="xhigh">xhigh</option>
+                                        <option value="max">max</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group" data-tip="ТОКЕНЫ: thinking.budget_tokens / thinking_budget / reasoning.max_tokens — куда он попадает, зависит от профиля. 0 = не отправлять."><label>Бюджет размышлений:</label>
+                                    <input type="number" class="nm-input" id="thinking-budget" min="0" step="128">
+                                </div>
+                                <div class="nm-input-group" data-tip="Универсальный способ: этот JSON-объект добавляется в тело каждого запроса к модели поверх reasoning-полей (при одном ключе он главнее). Битый JSON игнорируется — запрос идёт без своих полей, поле подсвечивается красным."><label>Свои поля запроса (JSON):</label>
+                                    <textarea class="nm-textarea" id="extra-body-json" placeholder='{"chat_template_kwargs": {"enable_thinking": false}}'></textarea>
+                                </div>
+                            </div>
+                        </div>
                         <div class="nm-settings-footer">
                             <div class="nm-status" id="status-settings"></div>
-                            <button class="nm-btn nm-btn-secondary nm-btn-sm" id="btn-reset-settings">Сбросить настройки</button>
+                            <button class="nm-btn nm-btn-secondary nm-btn-sm" id="btn-reset-settings" data-tip="Сбросиваются значения по умолчанию только открытой вкладки — остальные остаются как есть.">Сбросить настройки вкладки</button>
                         </div>
                     </div>
                     </div>

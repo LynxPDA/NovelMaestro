@@ -1,8 +1,8 @@
-// NovelMaestro Lite: валидация числовых полей настроек — что уходит в конфиг и
-// что показывается пользователю. Части юзерскрипта — один IIFE, целиком в node
-// они не исполняются (нужны DOM и GM_*), поэтому подопытная функция вырезается
-// из артефакта по маркерам и исполняется как чистая функция. Запуск:
-//   node --test tests/tools/*.test.mjs
+// NovelMaestro Lite: настройки — валидация числовых полей (что уходит в конфиг и что
+// показывается человеку) и структура самой вкладки (вторичные вкладки, подсказки, сброс).
+// Части юзерскрипта — один IIFE, целиком в node они не исполняются (нужны DOM и GM_*),
+// поэтому подопытная функция вырезается из артефакта по маркерам и исполняется как
+// чистая функция. Запуск: node --test tests/tools/*.test.mjs
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,13 +26,17 @@ return parseNumSetting;`)();
 const fields = raw.slice(raw.indexOf('const SETTING_FIELDS = ['), raw.indexOf('];', raw.indexOf('const SETTING_FIELDS = [')));
 const SPEC_RE = /\['#([\w-]+)', '([\w-]+)', raw => parseNumSetting\(raw, \{ name: '([^']+)', def: DEFAULT_CONFIG\.([\w-]+), min: (-?[\d.]+)(?:, max: (-?[\d.]+))?(, int: false)?/g;
 const specs = [...fields.matchAll(SPEC_RE)].map((m) => ({ id: m[1], key: m[2], name: m[3], defKey: m[4], min: Number(m[5]), max: m[6] === undefined ? undefined : Number(m[6]), int: m[7] === undefined }));
-assert.equal(specs.filter((s) => !s.int).map((s) => s.id).join(), 'fuzzy-threshold,reader-line-height,reader-paragraph-spacing', 'дробные поля изменились');
+const byId = (id) => specs.find((s) => s.id === id);
 const defaults = raw.slice(raw.indexOf('const DEFAULT_CONFIG = {'), raw.indexOf('};', raw.indexOf('const DEFAULT_CONFIG = {')));
 const defaultValue = (key) => Number(new RegExp(`\n\\s+${key}: ([\\d.]+)`).exec(defaults)[1]);
 
 test('числовые поля настроек описаны парсерами (никто не забыт)', () => {
-  const ids = specs.map((s) => s.id);
-  assert.deepEqual(ids, ['request-timeout', 'max-retries', 'chunk-size', 'fuzzy-threshold', 'reader-font-size', 'reader-line-height', 'reader-paragraph-spacing', 'reader-content-width', 'thinking-budget'], `список изменился: ${ids.join()}`);
+  assert.deepEqual(
+    specs.map((s) => s.id).sort(),
+    ['chunk-size', 'fuzzy-threshold', 'max-retries', 'reader-content-width', 'reader-font-size', 'reader-line-height', 'reader-paragraph-spacing', 'request-timeout', 'thinking-budget'].sort(),
+    'набор числовых полей изменился'
+  );
+  assert.deepEqual(specs.filter((s) => !s.int).map((s) => s.id).sort(), ['fuzzy-threshold', 'reader-line-height', 'reader-paragraph-spacing'], 'дробные поля изменились');
   for (const s of specs) {
     // дефолт поля берётся из своего ключа конфига, а не из посторонней цифры
     assert.equal(s.defKey, s.key, `#${s.id}: дефолт спеки ссылается на ${s.defKey}`);
@@ -54,7 +58,7 @@ test('границы в разметке полей совпадают со сп
 });
 
 test('пусто и буквы — значение по умолчанию, проблема с именем поля', () => {
-  const chunk = specs.find((s) => s.id === 'chunk-size');
+  const chunk = byId('chunk-size');
   for (const raw2 of ['', '   ', 'abc', '—']) {
     const res = parseNumSetting(raw2, { ...chunk, def: defaultValue(chunk.key) });
     assert.equal(res.value, defaultValue(chunk.key), `${JSON.stringify(raw2)} должно давать дефолт`);
@@ -67,64 +71,29 @@ test('пусто и буквы — значение по умолчанию, п�
 test('корректный ввод принимается без единой жалобы', () => {
   const cases = [['10000', 'chunk-size'], ['100', 'chunk-size'], ['30000', 'chunk-size'], ['0', 'request-timeout'], ['0.05', 'fuzzy-threshold'], ['1', 'reader-line-height'], ['3', 'reader-line-height'], ['0.2', 'reader-paragraph-spacing'], ['30', 'reader-content-width'], ['  4000 ', 'chunk-size']];
   for (const [value, id] of cases) {
-    const spec = specs.find((s) => s.id === id);
-    const res = parseNumSetting(value, spec);
+    const res = parseNumSetting(value, byId(id));
     assert.equal(res.problem, undefined, `${id}: #${id}=${value} не должно ругаться — ${res.problem}`);
     assert.equal(res.value, Number(value), `${id}: значение потерялось`);
   }
 });
 
 test('целочисленные поля округляются вниз, дробные сохраняют дробь', () => {
-  assert.equal(parseNumSetting('1000.9', specs.find((s) => s.id === 'chunk-size')).value, 1000);
-  assert.equal(parseNumSetting('0.75', specs.find((s) => s.id === 'fuzzy-threshold')).value, 0.75);
-  assert.equal(parseNumSetting('1.65', specs.find((s) => s.id === 'reader-line-height')).value, 1.65);
+  assert.equal(parseNumSetting('1000.9', byId('chunk-size')).value, 1000);
+  assert.equal(parseNumSetting('0.75', byId('fuzzy-threshold')).value, 0.75);
+  assert.equal(parseNumSetting('1.65', byId('reader-line-height')).value, 1.65);
 });
 
 test('выход за диапазон: применяется граница, поле подсвечивается причиной', () => {
-  const chunk = specs.find((s) => s.id === 'chunk-size');
+  const chunk = byId('chunk-size');
   assert.deepEqual((() => { const r = parseNumSetting('5', chunk); return [r.value, /вне диапазона/.test(r.problem) && r.problem.includes(chunk.name)]; })(), [100, true]);
   assert.deepEqual((() => { const r = parseNumSetting('999999', chunk); return [r.value, /вне диапазона/.test(r.problem)]; })(), [30000, true]);
-  const fuzzy = specs.find((s) => s.id === 'fuzzy-threshold');
-  assert.equal(parseNumSetting('7', fuzzy).value, 1);
-  assert.equal(parseNumSetting('-1', fuzzy).value, 0);
+  assert.equal(parseNumSetting('7', byId('fuzzy-threshold')).value, 1);
+  assert.equal(parseNumSetting('-1', byId('fuzzy-threshold')).value, 0);
   // у таймаута верхней границы нет: любое положительное — норма
-  assert.equal(parseNumSetting('3600', specs.find((s) => s.id === 'request-timeout')).value, 3600);
+  assert.equal(parseNumSetting('3600', byId('request-timeout')).value, 3600);
   // -5 → нижняя граница 0 (таймаут и ретраи не бывают отрицательными)
-  assert.equal(parseNumSetting('-5', specs.find((s) => s.id === 'request-timeout')).value, 0);
-  assert.equal(parseNumSetting('-5', specs.find((s) => s.id === 'max-retries')).value, 0);
-});
-
-test('единицы и смысл параметров объясняются в подсказках (?)', () => {
-  // длинные описания переехали в иконки — их обязан содержать артефакт
-  for (const tip of [
-    // бюджет размышлений — токены, 0 = не отправлять
-    /ТОКЕНЫ: thinking\.budget_tokens[\s\S]*0 = не отправлять/,
-    // профиль описывает, что реально уходит, а «все сразу» — отдельный режим
-    /Профиль отправляет только свои ключи/,
-    // транспорт по умолчанию живёт на стороне страницы
-    /запросы идут fetch'ом из страницы/,
-    // ширина колонки — проценты, а не пиксели
-    /ПРОЦЕНТЫ ширины экрана/,
-    // таймаут — секунды и пауза между токенами
-    /СЕК\. 0 = без таймаута/,
-  ]) {
-    assert.match(raw, tip, `подсказка потерялась: ${tip}`);
-  }
-  // а подписи полей остались короткими
-  for (const label of ['>Уровень рассуждений:<', '>Профиль API:<', '>Бюджет размышлений:<']) {
-    assert.ok(raw.includes(label), `подпись поля изменилась: ${label}`);
-  }
-  assert.ok(!/\(пусто = не отправлять\)|Профиль API \(как передавать\)|Бюджет размышлений \(токены/.test(raw), 'длинные подписи вернулись в label');
-});
-
-test('подсказки показывает один плавающий тултип, а не inline-простыни', () => {
-  assert.match(raw, /tip\.id = 'nm-tip'/, 'тултип больше не общий');
-  assert.match(raw, /#nm-tip \{ display: none; position: fixed/, 'тултип обязан быть fixed: в модалке его резал бы overflow');
-  assert.match(raw, /#nm-tip\.active \{ display: block; \}/, 'без .active тултип остаётся невидимым');
-  assert.match(raw, /const touchUI = matchMedia\('\(hover: none\)'\)/, 'тач-режим подсказок потерялся');
-  assert.ok(!raw.includes('<small>'), 'inline-подсказки <small> вернулись в разметку');
-  assert.match(raw, /function setSettingsSubTab\(name\)/, 'переключатель вторичных вкладок потерян');
-  assert.match(raw, /position: sticky; bottom: 0/, 'подвал настроек больше не приклеен');
+  assert.equal(parseNumSetting('-5', byId('request-timeout')).value, 0);
+  assert.equal(parseNumSetting('-5', byId('max-retries')).value, 0);
 });
 
 test('вторичные вкладки и их панели идут в одном порядке', () => {
@@ -132,25 +101,87 @@ test('вторичные вкладки и их панели идут в одн�
   const panels = [...raw.matchAll(/class="nm-subtab-content ?\w*" id="stab-(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(tabs, ['main', 'reader', 'translate', 'advanced'], `порядок вкладок: ${tabs.join()}`);
   assert.deepEqual(panels, tabs, `порядок панелей разошёлся с вкладками: ${panels.join()}`);
-  // что живёт где — по плану пользователя
-  const where = (id) => panels.indexOf(id);
-  for (const field of ['api-host', 'api-key', 'model', 'local-model', 'source-lang', 'target-lang', 'request-timeout', 'max-retries', 'gm-transport']) {
-    assert.equal(where('main'), 0, '«Основные» обязаны быть первой вкладкой');
-    assert.ok(raw.indexOf(`id="${field}"`) > raw.indexOf('id="stab-main"') && raw.indexOf(`id="${field}"`) < raw.indexOf('id="stab-reader"'), `${field} уехал с вкладки «Основные»`);
+});
+
+test('блоки настроек живут на своих вкладках (порядок — план пользователя)', () => {
+  const panelOf = (id) => {
+    const at = raw.indexOf(`id="${id}"`);
+    assert.ok(at > 0, `в разметке нет #${id}`);
+    for (const p of ['main', 'reader', 'translate', 'advanced']) {
+      const from = raw.indexOf(`id="stab-${p}"`);
+      const to = p === 'advanced' ? raw.indexOf('<div class="nm-settings-footer">') : raw.indexOf(`id="stab-${['main', 'reader', 'translate', 'advanced'][['main', 'reader', 'translate', 'advanced'].indexOf(p) + 1]}"`);
+      if (at > from && at < to) return p;
+    }
+    return '';
+  };
+  // 🌐 Основные: сначала Языки, потом API; Сети здесь больше нет
+  assert.ok(raw.indexOf('<h3>🗣 Языки</h3>') < raw.indexOf('<h3>🤖 API</h3>'), 'Языки и API поменялись местами обратно');
+  for (const id of ['source-lang', 'target-lang', 'api-host', 'api-key', 'model', 'local-model', 'btn-check-server']) {
+    assert.equal(panelOf(id), 'main', `${id} уехал с вкладки «Основные»`);
   }
-  for (const field of ['reader-theme', 'reader-font-family', 'reader-content-width']) {
-    assert.ok(raw.indexOf(`id="${field}"`) < raw.indexOf('id="stab-translate"'), `${field} уехал с вкладки «Читалка»`);
+  // 📖 Читалка
+  for (const id of ['reader-theme', 'reader-font-family', 'reader-font-size', 'reader-line-height', 'reader-paragraph-spacing', 'reader-content-width']) {
+    assert.equal(panelOf(id), 'reader', `${id} уехал с вкладки «Читалка»`);
   }
-  for (const field of ['chunk-size', 'preemptive-translate', 'fuzzy-threshold', 'auto-ner']) {
-    assert.ok(raw.indexOf(`id="${field}"`) > raw.indexOf('id="stab-translate"') && raw.indexOf(`id="${field}"`) < raw.indexOf('id="stab-advanced"'), `${field} уехал с вкладки «Перевод»`);
-  }
-  for (const field of ['thinking-mode', 'reasoning-profile', 'reasoning-effort', 'thinking-budget', 'extra-body-json', 'translation-prompt', 'extraction-prompt']) {
-    assert.ok(raw.indexOf(`id="${field}"`) > raw.indexOf('id="stab-advanced"'), `${field} уехал с вкладки «Продвинутое»`);
+  // 🔄 Перевод: Текст → Глоссарий → Промпты
+  assert.equal(panelOf('chunk-size'), 'translate', 'чанк уехал с вкладки «Перевод»');
+  assert.equal(panelOf('preemptive-translate'), 'translate', 'опережающий перевод уехал с вкладки «Перевод»');
+  assert.equal(panelOf('fuzzy-threshold'), 'translate', 'глоссарий уехал с вкладки «Перевод»');
+  assert.equal(panelOf('translation-prompt'), 'translate', 'промпты уехали с вкладки «Перевод»');
+  assert.ok(raw.indexOf('<h3>🔄 Текст</h3>') < raw.indexOf('<h3>✨ Глоссарий</h3>'), 'порядок блоков «Текст/Глоссарий» изменился');
+  assert.ok(raw.indexOf('<h3>✨ Глоссарий</h3>') < raw.indexOf('<h3>💬 Промпты</h3>'), 'порядок блоков «Глоссарий/Промпты» изменился');
+  // сам блок на вкладке «Перевод» называется «Текст» — иначе тавтология
+  assert.ok(!raw.includes('<h3>🔄 Перевод</h3>'), 'блок «Перевод» внутри вкладки «Перевод» вернулся');
+  // ⚙️ Продвинутое: Сеть переехала сюда, reasoning рядом, промптов больше нет
+  for (const id of ['request-timeout', 'max-retries', 'gm-transport', 'thinking-mode', 'reasoning-profile', 'reasoning-effort', 'thinking-budget', 'extra-body-json']) {
+    assert.equal(panelOf(id), 'advanced', `${id} уехал с вкладки «Продвинутое»`);
   }
 });
 
-test('чекбоксы настроек — карточками: зона клика — вся строка', () => {
-  const cards = [...raw.matchAll(/<div class="nm-check-card">\s*<label for="([\w-]+)"><input type="checkbox" id="\1"/g)].map((m) => m[1]);
-  assert.deepEqual(cards, ['local-model', 'gm-transport', 'preemptive-translate', 'auto-ner'], `набор карточек изменился: ${cards.join()}`);
-  assert.match(raw, /\.nm-check-card > label \{ display: flex/, 'label карточки не растянут на всю строку');
+test('чекбоксы настроек — обычной строкой: кликается вся строка, фона нет', () => {
+  const rows = [...raw.matchAll(/<label class="nm-input-group nm-check-row"[^>]*><input type="checkbox" id="([\w-]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(rows, ['local-model', 'preemptive-translate', 'auto-ner', 'gm-transport'], `набор чекбоксов изменился: ${rows.join()}`);
+  assert.match(raw, /\.nm-check-row \{ display: flex/, 'label чекбокса не растянут на всю строку');
+  assert.ok(!raw.includes('nm-check-card'), 'карточки-блоки вокруг чекбоксов вернулись');
+});
+
+test('подсказка принадлежит самому пункту, а не иконке со знаком вопроса', () => {
+  assert.ok(!raw.includes('nm-hint'), 'иконки (?) вернулись в шелл');
+  // вешалка ищет строку с data-tip по пути события (событие могло прийти на label/input)
+  assert.match(raw, /path\.find\(n => n && n\.dataset && n\.dataset\.tip\)/, 'подсказки больше не ищутся по строке настроек');
+  // единицы и смысл параметров обязаны остаться в объяснениях
+  for (const tip of [
+    /ТОКЕНЫ: thinking\.budget_tokens[\s\S]*0 = не отправлять/,
+    /Профиль отправляет только свои ключи/,
+    /запросы идут fetch'ом из страницы/,
+    /ПРОЦЕНТЫ ширины экрана/,
+    /СЕК\. 0 = без таймаута/,
+    /Безразмерное отношение 0\.0–1\.0/,
+    /Пустой API Key разрешён/,
+  ]) {
+    assert.match(raw, tip, `объяснение потерялось: ${tip}`);
+  }
+  // а подписи полей остались короткими
+  for (const label of ['>Уровень рассуждений:<', '>Профиль API:<', '>Бюджет размышлений:<', '>Размер чанка:<', '>Ширина колонки:<', '>Таймаут:<']) {
+    assert.ok(raw.includes(label), `подпись поля изменилась: ${label}`);
+  }
+  assert.ok(!/\(пусто = не отправлять\)|Профиль API \(как передавать\)|Бюджет размышлений \(токены|\(токенов, оценка\)/.test(raw), 'длинные подписи вернулись в label');
+});
+
+test('подвал настроек: индикатор — вспышка на 3 с, сброс — только своей вкладки', () => {
+  // общий плавающий тултип вне скроллящегося тела модалки
+  assert.match(raw, /tip\.id = 'nm-tip'/, 'тултип больше не общий');
+  assert.match(raw, /#nm-tip \{ display: none; position: fixed/, 'тултип обязан быть fixed: в модалке его резал бы overflow');
+  assert.match(raw, /#nm-tip\.active \{ display: block; \}/, 'без .active тултип остаётся невидимым');
+  assert.match(raw, /const touchUI = matchMedia\('\(hover: none\)'\)/, 'тач-режим подсказок потерялся');
+  assert.ok(!raw.includes('<small>'), 'inline-подсказки <small> вернулись в разметку');
+  // шапка и подвал неподвижны, скроллится тело
+  assert.match(raw, /function setSettingsSubTab\(name\)/, 'переключатель вторичных вкладок потерян');
+  assert.match(raw, /position: sticky; bottom: 0/, 'подвал настроек больше не приклеен');
+  // «сохранено» живёт 3 с и гаснет; ошибка — пока поле не починят
+  assert.match(raw, /settingsStatusTimer = setTimeout\(\(\) => hideStatus\('status-settings'\), 3000\)/, 'индикатор сохранения снова висит постоянно');
+  // сброс — по открытой вкладке, а не по всему конфигу
+  assert.match(raw, /Сбросить настройки вкладки/, 'кнопка не говорит, что сбрасывает');
+  assert.match(raw, /settingsSubTabOf\(el\) !== tab/, 'сброс снова задевает чужие вкладки');
+  assert.ok(!/config = \{ \.\.\.DEFAULT_CONFIG \}/.test(raw), 'тотальный сброс конфига вернулся');
 });
