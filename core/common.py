@@ -20,7 +20,8 @@ core/transport.py: единственный HTTP-клиент httpx) + опци�
 
 СОДЕРЖИМОЕ (для заимствований):
   токены       estimate_tokens (таблица весов по скриптам + фолбэк)
-  конфиг/.env   parse_dotenv, find_env_file,
+  конфиг/.env   parse_dotenv, system_env_file, project_env_file,
+                env_files, load_env (слои: общий файл, поверх — diff книги),
                 get_server_config, get_stage_model, print_env_help
   логирование   setup_logging
   модель        determine_model
@@ -79,31 +80,73 @@ def parse_dotenv(path) -> dict:
     return {str(k): str(v) for k, v in values.items() if k and v is not None}
 
 
-def find_env_file(explicit=None, start_dir=None):
-    """Ищет .env БЕЗ хардкода абсолютных путей: явный путь → вверх от
-    start_dir/каталога common/cwd — единственный кандидат <dir>/.env.
-    При подъёме из папки проекта первым находится собственный pdir/.env
-    книги, из корня репо — системный корневой .env (канон web-first).
-    Не найден → None (скрипт обязан работать дальше с ручным вводом)."""
+# Корень репо: пакет core лежит в корне, значит его родитель — корень репо.
+# Никакого подъёма «от папки проекта»: общий файл и файл книги — РАЗНЫЕ слои.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def system_env_file() -> str | None:
+    """Системный (общий) .env — дефолты для ВСЕХ проектов.
+
+    WEB_ENV_FILE (в образе Docker — projects/.env внутри постоянного тома:
+    правки вкладки «Настройки» переживают обновление образа) → корневой .env
+    репо → .env в cwd. Путь возвращается даже если файла ещё нет (это цель
+    создания в редакторе «Настроек»).
+    """
+    override = os.environ.get("WEB_ENV_FILE", "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    root = os.path.join(_REPO_ROOT, ".env")
+    if os.path.isfile(root):
+        return root
+    cwd = os.path.join(os.getcwd(), ".env")
+    return cwd if os.path.isfile(cwd) else None
+
+
+def project_env_file(start_dir=None) -> str | None:
+    """Собственный .env книги — ТОЛЬКО локальные отличия от общего файла.
+
+    Ищется в папке проекта (start_dir, а без него — cwd: стадии запускаются
+    с cwd книги) и ТОЛЬКО в ней: выше по дереву лежит общий файл, он
+    отдельный слой (раньше подъём вверх находил pdir/.env раньше общего —
+    и книга жила копией общего конфига, а не своими полями).
+    """
+    cand = os.path.join(os.path.abspath(start_dir or os.getcwd()), ".env")
+    return cand if os.path.isfile(cand) else None
+
+
+def env_files(explicit=None, start_dir=None) -> list:
+    """Цепочка файлов .env по порядку приоритета: СНАЧАЛА общий, поверх него
+    собственный файл книги (пустые значения не затеняют общий).
+
+    Явный --env_file заменяет цепочку одним файлом — ручной запуск читает
+    ровно то, что ему показали.
+    """
     if explicit and os.path.isfile(explicit):
-        return os.path.abspath(explicit)
-    bases, seen = [], set()
-    for b in (start_dir, os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
-        ab = os.path.abspath(b) if b else None
-        if ab and ab not in seen:
-            seen.add(ab)
-            bases.append(ab)
-    for base in bases:
-        d = base
-        for _ in range(6):  # подъём вверх по дереву
-            cand = os.path.join(d, ".env")
-            if os.path.isfile(cand):
-                return os.path.abspath(cand)
-            parent = os.path.dirname(d)
-            if parent == d:
-                break
-            d = parent
-    return None
+        return [os.path.abspath(explicit)]
+    out, seen = [], set()
+    for path in (system_env_file(), project_env_file(start_dir)):
+        if path:
+            ab = os.path.abspath(path)
+            if ab not in seen:
+                seen.add(ab)
+                out.append(ab)
+    return out
+
+
+def load_env(explicit=None, start_dir=None) -> dict:
+    """Слои .env одним вызовом: общий файл, поверх — проектный (diff книги).
+
+    Именно так читают конфиг скрипты стадий: книга хранит только изменённые
+    поля, остальное подтягивается из общего файла — он и правится на «Настройках».
+    """
+    data: dict[str, str] = {}
+    for i, path in enumerate(env_files(explicit=explicit, start_dir=start_dir)):
+        layer = parse_dotenv(path)
+        if i:  # проектный слой: пустое значение — не переопределение
+            layer = {k: v for k, v in layer.items() if str(v) != ""}
+        data.update(layer)
+    return data
 
 
 def env_overlay(env_data: dict, keys) -> dict:
@@ -118,19 +161,6 @@ def env_overlay(env_data: dict, keys) -> dict:
         if raw is not None and raw.strip():
             out[k] = raw.strip()
     return out
-
-
-def system_env_file() -> str | None:
-    """Системный (общий) .env — дефолты для ВСЕХ проектов: WEB_ENV_FILE
-    (в образе Docker — /app/projects/.env внутри постоянного тома: правки
-    вкладки «Настройки» переживают обновление образа) → find_env_file().
-    WEB_ENV_FILE возвращается даже если файла ещё нет (цель создания).
-    Скрипты с cwd в проекте могут не вызывать: подъём find_env_file и так
-    находит projects/.env раньше заводского /app/.env."""
-    override = os.environ.get("WEB_ENV_FILE", "").strip()
-    if override:
-        return override
-    return find_env_file()
 
 
 def get_server_config(env_data: dict, stage: str = "") -> dict:

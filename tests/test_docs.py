@@ -25,7 +25,8 @@ AGENTS_MD = ROOT / "AGENTS.md"
 
 # Зеркало таблицы «Что использовать из core/common.py» (AGENTS.md §6)
 CORE_API = [
-    "parse_dotenv", "find_env_file", "system_env_file", "env_overlay",
+    "parse_dotenv", "system_env_file", "project_env_file", "env_files",
+    "load_env", "env_overlay",
     "get_server_config", "get_stage_model", "print_env_help",
     "setup_logging", "log_argv", "determine_model",
     "load_prompt", "get_tagged_prompt",

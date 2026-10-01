@@ -137,6 +137,13 @@ def test_main_projects_dir_switches_global(fake_repo, monkeypatch):
     assert not (fake_repo / "projects" / "ACTIVE").exists()
 
 
+@pytest.fixture(autouse=True)
+def _launcher_reads_repo_env(monkeypatch):
+    """Лаунчер намеренно читает .env РЯДОМ СОБОЙ: общий WEB_ENV_FILE из
+    фикстуры conftest здесь только мешает."""
+    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
+
+
 def test_main_projects_dir_from_env(fake_repo, monkeypatch):
     """WEB_PROJECTS_DIR в системном .env — без CLI-флага."""
     custom = fake_repo / "env_novels"

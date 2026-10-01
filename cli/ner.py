@@ -69,13 +69,10 @@ from core.common import (  # noqa: E402
     atomic_write,
     compile_chapter_text,
     extract_term_context,
-    find_env_file,
     get_ngrams,
     get_tagged_prompt,
     is_cjk_string,
     log_argv,
-    parse_dotenv,
-    print_env_help,
     setup_logging,
     split_text_smart,
 )
@@ -621,7 +618,6 @@ def process_chunk_pass1(
     stage: Stage,
     system_prompt: str,
 ) -> tuple[int, list[dict], str | None]:
-    logger = stage.logger
     ners: list[dict] | None = None
 
     def _validate(raw: str) -> str | None:
@@ -648,7 +644,6 @@ def process_chunk_pass2(
     stage: Stage,
     review_prompt_template: str,
 ) -> tuple[int, list[dict], str | None]:
-    logger = stage.logger
     if not pass1_ners:
         return index, [], None
 

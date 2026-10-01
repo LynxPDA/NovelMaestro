@@ -72,9 +72,23 @@ def srv_port() -> int:
         return s.getsockname()[1]
 
 
+@pytest.fixture(autouse=True)
+def isolated_env_layers(tmp_path, monkeypatch):
+    """Тесты не видят .env машины разработчика: общий конфиг — отдельный
+    временный файл, ключи LLM из окружения сняты. Иначе локальный .env
+    меняет эффективные значения стадий прямо в прогоне."""
+    shared = tmp_path / "shared.env"
+    # HOST обязателен: без него стадия считает, что конфига нет, и падает
+    # sys.exit — тест должен падать на assert, а не на окружении машины
+    shared.write_text("HOST=http://127.0.0.1:9\n", encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(shared))
+    for key in ("HOST", "API_KEY", "MODEL", "LLM_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+
 def fake_env(tmp_path) -> str:
     """Минимальный .env (local-сервер) во временной папке; путь — строкой.
-    Изолирует find_env_file от реального корневого .env."""
+    Изолирует чтение .env от реального корневого .env."""
     env = tmp_path / "fake.env"
     env.write_text("HOST=http://testhost:9989\n"
                    "API_KEY=testkey\n"

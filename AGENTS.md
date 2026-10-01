@@ -118,7 +118,7 @@ from core.common import ...  # noqa: E402
 
 | Задача | Функция |
 | --- | --- |
-| .env | `parse_dotenv` (читает python-dotenv: `#` — комментарий, интерполяции `${}` нет) / `find_env_file` (системный корневой .env, вверх от старта) / `system_env_file` (системный .env: WEB_ENV_FILE → find_env_file) / `env_overlay` (ключи файла, перекрытые непустым `os.environ`) / `get_server_config` (единый `HOST/API_KEY/MODEL`; стадия непуста — `<СТАДИЯ>_HOST/API_KEY/MODEL` → общие, профили local/remote убраны) / `get_stage_model` (`<СТАДИЯ>_MODEL` → общая `MODEL`) / `print_env_help` (справка по `.env` для CLI) |
+| .env | `parse_dotenv` (читает python-dotenv: `#` — комментарий, интерполяции `${}` нет) / `system_env_file` (общий .env: `WEB_ENV_FILE` → корневой `.env` репо → `cwd/.env`; путь возвращается и когда файла нет — это цель создания в «Настройках») / `project_env_file` (файл книги: **только** `start_dir/.env`, без подъёма вверх — иначе за книгу принимал её же дефолты) / `env_files` (цепочка слоёв: общий → файл книги) / `load_env` (эффективный конфиг: общий файл, поверх — файл книги, поверх — непустой `os.environ`; пустое значение в файле книги ключ не затеняет) / `env_overlay` (перекрытие непустыми значениями окружения) / `get_server_config` (единый `HOST/API_KEY/MODEL`; стадия непуста — `<СТАДИЯ>_HOST/API_KEY/MODEL` → общие, профили local/remote убраны) / `get_stage_model` (`<СТАДИЯ>_MODEL` → общая `MODEL`) / `print_env_help` (справка по `.env` для CLI) |
 | лог | `setup_logging` / `log_argv` (фактическая команда запуска в лог) |
 | модель | `determine_model` (только из аргумента/`.env`; авто через `GET /models` убрано — модель обязательна) |
 | промпты | `load_prompt` (файл целиком) / `get_tagged_prompt` (теги) |

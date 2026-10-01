@@ -59,15 +59,12 @@ from core.common import (  # noqa: E402
     build_fts_index,
     compile_chapter_text,
     even_sample,
-    find_env_file,
     fts_escape,
     fts_search_all,
     fts_search_first,
     fts_search_ids_all,
     get_tagged_prompt,
     log_argv as _cc_log_argv,
-    parse_dotenv,
-    print_env_help,
     setup_logging as _cc_setup_logging,
 )
 

@@ -30,18 +30,21 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from core import projects as prj          # noqa: E402
-from core.common import find_env_file, parse_dotenv  # noqa: E402
+from core.common import parse_dotenv  # noqa: E402
 
 PROJECTS = REPO / "projects"
 
 
 def _env_cfg() -> dict:
-    """Конфиг из системного корневого .env репозитория (stdlib, os.environ
-    приоритетнее): find_env_file от корня REPO — детерминированно, без
-    зависимости от cwd, с которого запущен лаунчер."""
+    """Конфиг из системного .env: WEB_ENV_FILE → корневой .env репо
+    (stdlib, os.environ приоритетнее). Лаунчер берёт файл РЯДОМ СОБОЙ, а не
+    из cwd: запускать его могут из любой папки, а конфиг один на все книги."""
     cfg: dict = {}
     try:
-        cfg.update(parse_dotenv(find_env_file(start_dir=str(REPO))))
+        override = os.environ.get("WEB_ENV_FILE", "").strip()
+        path = (os.path.abspath(os.path.expanduser(override))
+                if override else str(REPO / ".env"))
+        cfg.update(parse_dotenv(path))
     except Exception:  # noqa: BLE001 — .env необязателен
         pass
     cfg.update({k: v for k, v in os.environ.items() if v})

@@ -350,49 +350,98 @@ def test_parse_dotenv_comment_and_dollar(tmp_path):
     assert data["DOLLAR"] == "a${OTHER}c"
 
 
-def test_find_env_file_upward(tmp_path):
-    """Из глубины projects/ находится системный корневой .env."""
-    (tmp_path / "projects").mkdir()
-    (tmp_path / ".env").write_text("A=1", encoding="utf-8")
-    deep = tmp_path / "projects" / "ACTIVE" / "book"
-    deep.mkdir(parents=True)
-    found = C.find_env_file(start_dir=str(deep))
-    assert found == str(tmp_path / ".env")  # системный корневой
-
-
-def test_find_env_file_project_env_wins(tmp_path):
-    """Из папки книги собственный .env проекта — приоритетнее системного."""
-    book = tmp_path / "projects" / "ACTIVE" / "book"
-    book.mkdir(parents=True)
-    (book / ".env").write_text("P=1", encoding="utf-8")
-    (tmp_path / ".env").write_text("S=1", encoding="utf-8")
-    found = C.find_env_file(start_dir=str(book))
-    assert found == str(book / ".env")
-
-
-def test_find_env_file_explicit(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # изоляция от реального projects/.env
-    p = tmp_path / ".env"
-    p.write_text("A=1", encoding="utf-8")
-    assert C.find_env_file(explicit=str(p)) == os.path.abspath(str(p))
-    # поиск от start_dir находит созданный .env
-    assert C.find_env_file(start_dir=str(tmp_path)) == os.path.abspath(str(p))
-    # явный несуществующий путь игнорируется, поиск идёт по базам
-    assert C.find_env_file(explicit=str(tmp_path / "нет.env"),
-                           start_dir=str(tmp_path)) == os.path.abspath(str(p))
-
-
-def test_find_env_file_returns_none(tmp_path, monkeypatch):
+def test_system_env_file(monkeypatch, tmp_path):
+    """system_env_file: WEB_ENV_FILE перекрывает всё (и возвращается даже
+    без файла — это цель создания в редакторе «Настроек»); без переменной —
+    корневой .env репо, а не .env книги: общий конфиг и файл книги — РАЗНЫЕ
+    слои, подъём вверх от папки проекта больше не нужен."""
+    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
+    monkeypatch.setattr(C, "_REPO_ROOT", str(tmp_path / "repo"))
     monkeypatch.chdir(tmp_path)
-    real_isfile = os.path.isfile
+    assert C.system_env_file() is None  # ни общего, ни cwd-файла
+    root = tmp_path / "repo"
+    root.mkdir(parents=True)
+    (root / ".env").write_text("HOST=x", encoding="utf-8")
+    assert C.system_env_file() == str(root / ".env")
+    # cwd с .env — только когда общего файла нет
+    (tmp_path / ".env").write_text("A=1", encoding="utf-8")
+    assert C.system_env_file() == str(root / ".env")
+    (root / ".env").unlink()
+    assert C.system_env_file() == str(tmp_path / ".env")
+    # WEB_ENV_FILE (Docker: projects/.env в томе) — даже если файла нет
+    monkeypatch.setenv("WEB_ENV_FILE", str(tmp_path / "vol" / ".env"))
+    assert C.system_env_file() == str(tmp_path / "vol" / ".env")
 
-    def fake_isfile(path):
-        if str(path).endswith(".env"):
-            return False
-        return real_isfile(path)
 
-    monkeypatch.setattr(C.os.path, "isfile", fake_isfile)
-    assert C.find_env_file(start_dir=str(tmp_path)) is None
+def test_project_env_file_only_in_project_dir(tmp_path, monkeypatch):
+    """Собственный .env книги ищется ТОЛЬКО в её папке: раньше подъём вверх
+    находил общий файл и книга жила его копией."""
+    book = tmp_path / "projects" / "ACTIVE" / "book"
+    deep = book / "chapters"
+    deep.mkdir(parents=True)
+    (book / ".env").write_text("P=1", encoding="utf-8")
+    assert C.project_env_file(start_dir=str(book)) == str(book / ".env")
+    assert C.project_env_file(start_dir=str(deep)) is None
+    monkeypatch.chdir(book)
+    assert C.project_env_file() == str(book / ".env")
+    monkeypatch.chdir(deep)
+    assert C.project_env_file() is None
+
+
+def test_env_files_chain(tmp_path, monkeypatch):
+    """Цепочка файлов: сначала общий, поверх — файл книги; один и тот же
+    файл дважды не попадает; явный --env_file заменяет цепочку целиком."""
+    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setattr(C, "_REPO_ROOT", str(root))
+    monkeypatch.chdir(root)
+    shared = root / ".env"
+    shared.write_text("HOST=http://shared\n", encoding="utf-8")
+    book = root / "projects" / "ACTIVE" / "book"
+    book.mkdir(parents=True)
+    # книги без своего файла — один слой (и без дублей cwd==repo)
+    assert C.env_files(start_dir=str(book)) == [str(shared)]
+    (book / ".env").write_text("MODEL=m\n", encoding="utf-8")
+    assert C.env_files(start_dir=str(book)) == [str(shared), str(book / ".env")]
+    one = tmp_path / "manual.env"
+    one.write_text("A=1", encoding="utf-8")
+    assert C.env_files(explicit=str(one), start_dir=str(book)) == [str(one)]
+    # явный путь, которого нет, игнорируется — слои остаются
+    assert C.env_files(explicit=str(tmp_path / "нет.env"),
+                       start_dir=str(book)) == [str(shared), str(book / ".env")]
+
+
+def test_load_env_layers(tmp_path, monkeypatch):
+    """load_env: общий файл даёт дефолты, файл книги — только отличия;
+    пустое значение в файле книги ключ не затеняет; правка общего
+    конфига доходит до книг, которые поле не трогали."""
+    for k in ("HOST", "API_KEY", "MODEL", "PIPELINE_JOBS"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setattr(C, "_REPO_ROOT", str(root))
+    monkeypatch.chdir(root)
+    (root / ".env").write_text(
+        "HOST=http://shared\nMODEL=общая\nPIPELINE_JOBS=4\n",
+        encoding="utf-8")
+    book = root / "projects" / "ACTIVE" / "book"
+    book.mkdir(parents=True)
+    (book / ".env").write_text("MODEL=книжная\nPIPELINE_JOBS=\n",
+                               encoding="utf-8")
+    env = C.load_env(start_dir=str(book))
+    assert env["HOST"] == "http://shared"    # общее доходит само
+    assert env["MODEL"] == "книжная"          # локальное отличие
+    assert env["PIPELINE_JOBS"] == "4"        # пустое — не оверрайд
+    # правка общего конфига видна книге, которая поле не меняла
+    (root / ".env").write_text("HOST=http://new\nMODEL=общая\n",
+                               encoding="utf-8")
+    env = C.load_env(start_dir=str(book))
+    assert env["HOST"] == "http://new" and env["MODEL"] == "книжная"
+    # без файла книги — чистый общий конфиг
+    (book / ".env").unlink()
+    assert C.load_env(start_dir=str(book))["MODEL"] == "общая"
 
 
 def test_get_server_config(monkeypatch):
@@ -448,19 +497,6 @@ def test_env_overlay(monkeypatch):
     assert C.env_overlay(env, ["HOST"])["HOST"] == "http://file"
     assert env["HOST"] == "http://file"
 
-
-def test_system_env_file(monkeypatch, tmp_path):
-    """system_env_file: WEB_ENV_FILE перекрывает поиск (и возвращается,
-    даже если файла ещё нет — цель создания); без переменной —
-    find_env_file."""
-    monkeypatch.setenv("WEB_ENV_FILE", str(tmp_path / ".env"))
-    assert C.system_env_file() == str(tmp_path / ".env")  # файла нет — ок
-    (tmp_path / ".env").write_text("HOST=x", encoding="utf-8")
-    assert C.system_env_file() == str(tmp_path / ".env")
-    monkeypatch.delenv("WEB_ENV_FILE")
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".env").write_text("A=1", encoding="utf-8")
-    assert C.system_env_file() == C.find_env_file()
 
 
 def test_get_stage_model_environment_wins(monkeypatch):

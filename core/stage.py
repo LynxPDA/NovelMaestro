@@ -26,8 +26,8 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .common import (REASONING_MODES, REASONING_PROFILES, determine_model,
-                     emit_progress, extra_body_fields, find_env_file,
-                     get_server_config, llm_messages, log_argv, parse_dotenv,
+                     emit_progress, extra_body_fields, get_server_config,
+                     llm_messages, load_env, log_argv,
                      preview_logger, preview_request_payload, print_env_help,
                      reasoning_fields, reasoning_settings, setup_logging,
                      stream_chat_completion, web_progress_enabled,
@@ -211,7 +211,7 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",
     (<СТАДИЯ>_HOST → HOST); пусто — только общие ключи. max_tokens — константа
     стадии; если у неё есть свой --max_tokens, берётся он.
     """
-    env_data = parse_dotenv(find_env_file(getattr(args, "env_file", None)))
+    env_data = load_env(getattr(args, "env_file", None))
     sc = get_server_config(env_data, stage)
     rs = reasoning_settings(env_data)
     host = getattr(args, "host", None) or sc["host"]
