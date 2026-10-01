@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.46
+// @version      1.47
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.46';
+    const APP_VERSION = '1.47';
 
     // ===== КОНФИГУРАЦИЯ =====
     // Штатный промпт перевода (редактируемое поле Настроек). Плейсхолдеры те же,
@@ -1271,14 +1271,14 @@ const host = document.createElement('div');
                                 <div class="nm-input-group" data-tip="ТОКЕНЫ — языко-осведомлённая оценка (±20-30%), как в конвейере NovelMaestro: сколько текста уходит в один запрос. Больше — меньше запросов, но выше риск обрыва ответа."><label>Размер чанка:</label>
                                     <input type="number" class="nm-input" id="chunk-size" min="100" max="30000" step="100">
                                 </div>
-                                <label class="nm-input-group nm-check-row" data-tip="Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT (кнопка в читалке)."><input type="checkbox" id="preemptive-translate"><span>🚀 Автоперевод следующей главы в фоне</span></label>
+                                <label class="nm-input-group nm-check-row" data-tip="Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT (кнопка в читалке)."><input type="checkbox" id="preemptive-translate"><span>Автоперевод следующей главы в фоне</span></label>
                             </div>
                             <div class="nm-section">
                                 <h3>✨ Глоссарий</h3>
                                 <div class="nm-input-group" data-tip="Безразмерное отношение 0.0–1.0: насколько размытым может быть совпадение термина с текстом главы. Меньше — в промпт перевода попадёт больше терминов, больше — только точные."><label>Порог нечёткого поиска:</label>
                                     <input type="number" class="nm-input" id="fuzzy-threshold" min="0" max="1" step="0.05">
                                 </div>
-                                <label class="nm-input-group nm-check-row" data-tip="Перед переводом главы Lite сначала извлекает с страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же)."><input type="checkbox" id="auto-ner"><span>✨ Автоизвлечение терминов (один раз на страницу)</span></label>
+                                <label class="nm-input-group nm-check-row" data-tip="Перед переводом главы Lite сначала извлекает с страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же)."><input type="checkbox" id="auto-ner"><span>Автоизвлечение терминов (один раз на страницу)</span></label>
                             </div>
                             <div class="nm-section">
                                 <h3>💬 Промпты</h3>

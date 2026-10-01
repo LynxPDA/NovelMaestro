@@ -144,6 +144,9 @@ test('чекбоксы настроек — обычной строкой: кл�
   const rows = [...raw.matchAll(/<label class="nm-input-group nm-check-row"[^>]*><input type="checkbox" id="([\w-]+)"/g)].map((m) => m[1]);
   assert.deepEqual(rows, ['local-model', 'preemptive-translate', 'auto-ner', 'gm-transport'], `набор чекбоксов изменился: ${rows.join()}`);
   assert.match(raw, /\.nm-check-row \{ display: flex/, 'label чекбокса не растянут на всю строку');
+  // подписи чекбоксов «Перевода» — без смайликов: это пункты формы, а не кнопки
+  assert.match(raw, /id="preemptive-translate"><span>Автоперевод/, 'у чекбокса автоперевода снова смайлик в подписи');
+  assert.match(raw, /id="auto-ner"><span>Автоизвлечение/, 'у чекбокса автоизвлечения снова смайлик в подписи');
   assert.ok(!raw.includes('nm-check-card'), 'карточки-блоки вокруг чекбоксов вернулись');
 });
 
