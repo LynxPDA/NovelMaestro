@@ -228,6 +228,22 @@ test("modal: modal.close — тот же close, что у оверлея", () =>
   assert.equal(m.isConnected, false);
 });
 
+/* Escape вешается на document: в браузере — сам модуль, здесь — тест
+   (фиктивный document слушателей не имеет); оверлеи стопятся, и нижний
+   закрыт быть не должен — на этом вложенные модалки ломались тише всего */
+test("modal: Escape закрывает верхнюю модалку, нижняя живёт", () => {
+  const low = UIC.modal({ title: "Разделы", build: () => UIC.h("i", {}, "низ") });
+  const top = UIC.modal({ title: "Новый раздел", build: () => UIC.h("i", {}, "верх") });
+  assert.ok(low.isConnected && top.isConnected);
+  UIC.onKeydown({ key: "Escape" });
+  assert.equal(top.isConnected, false);
+  assert.equal(low.isConnected, true);
+  UIC.onKeydown({ key: "Enter" });
+  assert.equal(low.isConnected, true);
+  UIC.onKeydown({ key: "Escape" });
+  assert.equal(low.isConnected, false);
+});
+
 /* ── панель «редактор + предпросмотр» ─────────────────────────────── */
 /* doc-обёртки в браузере регистрирует app.js; здесь — заметный фолбэк, чтобы
    видеть, что панель отдаёт им ровно содержимое редактора */

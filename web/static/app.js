@@ -312,10 +312,10 @@ function confirmModal(title, text, confirmWord, onConfirm) {
   // Промис: true — подтверждено (onConfirm выполнен), false — отмена.
   // Старые вызовы тоже валидны — возврат промиса можно игнорировать.
   return new Promise((resolve) => {
-    const modal = UIC.modal({
+    UIC.modal({
       title,
       onClose: resolve,
-      build: () => [
+      build: (close) => [
         h("div", { class: "modal-text" }, text),
         word,
         err,
@@ -347,9 +347,6 @@ function confirmModal(title, text, confirmWord, onConfirm) {
       ],
     });
     word.focus();
-    function close(result) {
-      modal.close(result);
-  }
   });
 }
 
@@ -466,11 +463,11 @@ function createProjectModal() {
   const err = h("div", { class: "form-error" });
 
   return new Promise((resolve) => {
-    const modal = UIC.modal({
+    UIC.modal({
       title: "Создать проект",
       wide: true,
       onClose: resolve,
-      build: () => [
+      build: (close) => [
         h("label", { class: "field" }, "Раздел", sectionSel),
         h("label", { class: "field" }, "Имя (английское)", name),
         h(
@@ -609,9 +606,6 @@ function createProjectModal() {
           "Не удалось загрузить разделы и шаблоны: " + ex.message;
         name.focus();
       });
-    function close(result = false) {
-      modal.close(result);
-  }
   });
 }
 
@@ -628,13 +622,10 @@ function manageProjectModal(section, name) {
         info.textContent = r.stats;
       })
       .catch(() => {});
-    function close(result = false) {
-      modal.close(result);
-  }
-    const modal = UIC.modal({
+    UIC.modal({
       title: `Управление · ${section}/${name}`,
       onClose: resolve,
-      build: () => [
+      build: (close) => [
         info,
         err,
         h(
@@ -2149,7 +2140,7 @@ function nameModal(title, placeholder, onOk, initial = "") {
   );
   const modal = UIC.modal({
     title,
-    build: () => [
+    build: (close) => [
       name,
       err,
       h(
@@ -2162,18 +2153,20 @@ function nameModal(title, placeholder, onOk, initial = "") {
   });
   name.focus();
   if (initial) name.select();
-  function close() {
-    modal.close();
-}
+  // okBtn собран до модалки (он же общий для «ОК») — close ему отдаём
+  // поднятым объявлением: hoisted function виден из его обработчика
+  function close(result) {
+    return modal.close(result);
+  }
 }
 
 /* ── управление разделами  ────────────────────────── */
 function sectionsModal() {
   const err = h("div", { class: "form-error" });
   const list = h("div", { class: "hub-sections-modal" });
-  const modal = UIC.modal({
+  UIC.modal({
     title: "Управление разделами",
-    build: () => [
+    build: (close) => [
       h(
         "div",
         { class: "modal-text" },
@@ -2278,9 +2271,6 @@ function sectionsModal() {
   }
 
   refresh();
-  function close() {
-    modal.close();
-}
 }
 
 async function viewTemplates() {

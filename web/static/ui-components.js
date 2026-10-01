@@ -67,14 +67,32 @@
   }
 
   /* Каркас модалки: оверлей, .modal/.modal-wide, заголовок и тело. Закрыть
-   * можно кликом по фону и кнопками — и там, и там один close(result). Он же
+   * можно кликом по фону, кнопками и Escape — везде один close(result); он же
    * возвращается на элементе (modal.close): вьюхе не нужен глобальный указатель
    * на текущий оверлей, а обещание диалога резолвится onClose. */
+  const openModals = [];
+
+  /* Escape закрывает ВЕРХНЮЮ модалку: оверлеи стопятся («＋ Раздел» поверх
+   * «Управления разделами»), нижняя должна остаться открытой. */
+  function onKeydown(e) {
+    if (e.key !== "Escape" || !openModals.length) return;
+    if (e.stopPropagation) e.stopPropagation();
+    if (e.preventDefault) e.preventDefault();
+    openModals[openModals.length - 1].close();
+  }
+  // typeof-гейт, а не try: модуль исполняется и в vm-контексте node-тестов,
+  // где document без слушателей (там обработчик вешает сам тест)
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("keydown", onKeydown, true);
+  }
   function modal(opts) {
     const o = opts || {};
     let backdrop = null;
     function close(result) {
-      if (backdrop) backdrop.remove();
+      if (!backdrop) return result;
+      backdrop.remove();
+      const i = openModals.indexOf(backdrop);
+      if (i >= 0) openModals.splice(i, 1);
       if (o.onClose) o.onClose(result);
       return result;
     }
@@ -93,6 +111,7 @@
       h("div", { class: o.wide ? "modal modal-wide" : "modal" }, ...kids),
     );
     backdrop.close = close;
+    openModals.push(backdrop);
     document.body.append(backdrop);
     return backdrop;
   }
@@ -319,6 +338,7 @@
     h,
     iconEl,
     modal,
+    onKeydown,
     menuButton,
     previewPane,
     listPager,
