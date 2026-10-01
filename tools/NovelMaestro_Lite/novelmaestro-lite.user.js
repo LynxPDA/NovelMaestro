@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.45
+// @version      1.46
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.45';
+    const APP_VERSION = '1.46';
 
     // ===== КОНФИГУРАЦИЯ =====
     // Штатный промпт перевода (редактируемое поле Настроек). Плейсхолдеры те же,
@@ -1202,6 +1202,16 @@ const host = document.createElement('div');
                              наводишь на пункт — появляется объяснение, отдельных иконок нет -->
                         <div class="nm-subtab-content active" id="stab-main">
                             <div class="nm-section">
+                                <h3>🖥️ Интерфейс</h3>
+                                <div class="nm-input-group" data-tip="Тема одна на всё: она красит и интерфейс, и читалку. В читалке она же переключается кнопкой «🌓 Тема» по кольцу «как в системе → тёмная → светлая»."><label>Тема:</label>
+                                    <select class="nm-select" id="reader-theme">
+                                        <option value="auto">🌗 Как в системе</option>
+                                        <option value="light">☀️ Светлая</option>
+                                        <option value="dark">🌙 Тёмная</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="nm-section">
                                 <h3>🗣 Языки</h3>
                                 <div class="nm-input-group"><label>Исходный язык:</label>
                                     <select class="nm-select" id="source-lang">
@@ -1232,13 +1242,6 @@ const host = document.createElement('div');
                         <div class="nm-subtab-content" id="stab-reader">
                             <div class="nm-section">
                                 <h3>📖 Читалка</h3>
-                                <div class="nm-input-group"><label>Тема:</label>
-                                    <select class="nm-select" id="reader-theme">
-                                        <option value="auto">🌗 Как в системе</option>
-                                        <option value="light">☀️ Светлая</option>
-                                        <option value="dark">🌙 Тёмная</option>
-                                    </select>
-                                </div>
                                 <div class="nm-input-group"><label>Шрифт:</label>
                                     <select class="nm-select" id="reader-font-family">
                                         <option value="Georgia, serif">Georgia (serif)</option>
@@ -3520,6 +3523,13 @@ const host = document.createElement('div');
         $$('.nm-subtab').forEach(t => t.classList.toggle('active', t.dataset.stab === tab));
         $$('.nm-subtab-content').forEach(c => c.classList.toggle('active', c.id === 'stab-' + tab));
     }
+    /**
+     * Открытая вкладка запоминается молча: это не правка настройки, и кричать про
+     * неё «✅ Настройки сохранены» — значит врать пользователю.
+     */
+    function persistSettingsSubTab() {
+        GM_setValue('config', config);
+    }
 
     /**
      * Числовое поле настроек. Молча подменить битый ввод дефолтом нельзя:
@@ -3548,14 +3558,14 @@ const host = document.createElement('div');
     // Продвинутое. Вкладка поля не хранится в таблице намеренно: она берётся из
     // разметки (closest('.nm-subtab-content')), иначе разъедется с ней.
     const SETTING_FIELDS = [
-        // 🌐 Основные
+        // 🌐 Основные: Интерфейс (тема одна на интерфейс и читалку), Языки, API
+        ['#reader-theme', 'readerTheme', asText],
         ['#source-lang', 'sourceLang', asText],
         ['#target-lang', 'targetLang', asText],
         ['#api-host', 'apiHost', raw => ({ value: raw.trim() })],
         ['#api-key', 'apiKey', raw => ({ value: raw.trim() })],
         ['#model', 'model', raw => ({ value: raw.trim() })],
         // 📖 Читалка
-        ['#reader-theme', 'readerTheme', asText],
         ['#reader-font-family', 'readerFontFamily', asText],
         ['#reader-font-size', 'readerFontSize', raw => parseNumSetting(raw, { name: 'Размер шрифта', def: DEFAULT_CONFIG.readerFontSize, min: 12, max: 32 })],
         ['#reader-line-height', 'readerLineHeight', raw => parseNumSetting(raw, { name: 'Межстрочный интервал', def: DEFAULT_CONFIG.readerLineHeight, min: 1, max: 3, int: false })],
@@ -3795,10 +3805,11 @@ const host = document.createElement('div');
             $('#tab-' + this.dataset.tab).classList.add('active');
         });
     });
-    // вторичные вкладки настроек: переключаются молча, выбранная запоминается
+    // вторичные вкладки настроек: переключение — не правка настройки, поэтому
+    // запоминание открытой вкладки проходит молча, без индикатора «сохранено»
     $$('.nm-subtab').forEach(tab => tab.addEventListener('click', () => {
         setSettingsSubTab(tab.dataset.stab);
-        scheduleSettingsSave();
+        persistSettingsSubTab();
     }));
     $('#book-select').addEventListener('change', function() { managedBookKey = this.value || null; renderBookManageArea(); });
     $('#glossary-filter').addEventListener('input', function() { glossaryFilter = this.value; glossaryPage = 0; updateGlossaryUI(); });

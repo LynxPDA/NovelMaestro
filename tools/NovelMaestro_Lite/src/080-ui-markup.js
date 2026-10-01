@@ -79,6 +79,16 @@ const host = document.createElement('div');
                              наводишь на пункт — появляется объяснение, отдельных иконок нет -->
                         <div class="nm-subtab-content active" id="stab-main">
                             <div class="nm-section">
+                                <h3>🖥️ Интерфейс</h3>
+                                <div class="nm-input-group" data-tip="Тема одна на всё: она красит и интерфейс, и читалку. В читалке она же переключается кнопкой «🌓 Тема» по кольцу «как в системе → тёмная → светлая»."><label>Тема:</label>
+                                    <select class="nm-select" id="reader-theme">
+                                        <option value="auto">🌗 Как в системе</option>
+                                        <option value="light">☀️ Светлая</option>
+                                        <option value="dark">🌙 Тёмная</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="nm-section">
                                 <h3>🗣 Языки</h3>
                                 <div class="nm-input-group"><label>Исходный язык:</label>
                                     <select class="nm-select" id="source-lang">
@@ -109,13 +119,6 @@ const host = document.createElement('div');
                         <div class="nm-subtab-content" id="stab-reader">
                             <div class="nm-section">
                                 <h3>📖 Читалка</h3>
-                                <div class="nm-input-group"><label>Тема:</label>
-                                    <select class="nm-select" id="reader-theme">
-                                        <option value="auto">🌗 Как в системе</option>
-                                        <option value="light">☀️ Светлая</option>
-                                        <option value="dark">🌙 Тёмная</option>
-                                    </select>
-                                </div>
                                 <div class="nm-input-group"><label>Шрифт:</label>
                                     <select class="nm-select" id="reader-font-family">
                                         <option value="Georgia, serif">Georgia (serif)</option>

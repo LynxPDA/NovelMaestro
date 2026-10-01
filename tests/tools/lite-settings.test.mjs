@@ -114,13 +114,15 @@ test('блоки настроек живут на своих вкладках (�
     }
     return '';
   };
-  // 🌐 Основные: сначала Языки, потом API; Сети здесь больше нет
-  assert.ok(raw.indexOf('<h3>🗣 Языки</h3>') < raw.indexOf('<h3>🤖 API</h3>'), 'Языки и API поменялись местами обратно');
-  for (const id of ['source-lang', 'target-lang', 'api-host', 'api-key', 'model', 'local-model', 'btn-check-server']) {
+  // 🌐 Основные: Интерфейс (тема общая — она живёт здесь), Языки, API; Сети здесь больше нет
+  for (const [a, b] of [['🖥️ Интерфейс', '🗣 Языки'], ['🗣 Языки', '🤖 API']]) {
+    assert.ok(raw.indexOf(`<h3>${a}</h3>`) < raw.indexOf(`<h3>${b}</h3>`), `порядок блоков на «Основных»: ${a} должен идти раньше ${b}`);
+  }
+  for (const id of ['reader-theme', 'source-lang', 'target-lang', 'api-host', 'api-key', 'model', 'local-model', 'btn-check-server']) {
     assert.equal(panelOf(id), 'main', `${id} уехал с вкладки «Основные»`);
   }
-  // 📖 Читалка
-  for (const id of ['reader-theme', 'reader-font-family', 'reader-font-size', 'reader-line-height', 'reader-paragraph-spacing', 'reader-content-width']) {
+  // 📖 Читалка: только текст читалки, тема уехала в «Основные»
+  for (const id of ['reader-font-family', 'reader-font-size', 'reader-line-height', 'reader-paragraph-spacing', 'reader-content-width']) {
     assert.equal(panelOf(id), 'reader', `${id} уехал с вкладки «Читалка»`);
   }
   // 🔄 Перевод: Текст → Глоссарий → Промпты
@@ -180,6 +182,10 @@ test('подвал настроек: индикатор — вспышка на 
   assert.match(raw, /position: sticky; bottom: 0/, 'подвал настроек больше не приклеен');
   // «сохранено» живёт 3 с и гаснет; ошибка — пока поле не починят
   assert.match(raw, /settingsStatusTimer = setTimeout\(\(\) => hideStatus\('status-settings'\), 3000\)/, 'индикатор сохранения снова висит постоянно');
+  // переключение подвкладки — не правка настройки: оно сохраняется молча
+  assert.match(raw, /function persistSettingsSubTab\(\) \{\n\s+GM_setValue\('config', config\);\n\s+\}/, 'переключение вкладки снова сохраняется через индикатор');
+  assert.match(raw, /setSettingsSubTab\(tab\.dataset\.stab\);\n\s+persistSettingsSubTab\(\);/, 'обработчик вкладок должен сохранять молча');
+  assert.ok(!/setSettingsSubTab\(tab\.dataset\.stab\);\n\s+scheduleSettingsSave\(\);/.test(raw), 'переключение подвкладки снова рисует «сохранено»');
   // сброс — по открытой вкладке, а не по всему конфигу
   assert.match(raw, /Сбросить настройки вкладки/, 'кнопка не говорит, что сбрасывает');
   assert.match(raw, /settingsSubTabOf\(el\) !== tab/, 'сброс снова задевает чужие вкладки');

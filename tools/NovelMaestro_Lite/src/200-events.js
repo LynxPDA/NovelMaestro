@@ -60,10 +60,11 @@
             $('#tab-' + this.dataset.tab).classList.add('active');
         });
     });
-    // вторичные вкладки настроек: переключаются молча, выбранная запоминается
+    // вторичные вкладки настроек: переключение — не правка настройки, поэтому
+    // запоминание открытой вкладки проходит молча, без индикатора «сохранено»
     $$('.nm-subtab').forEach(tab => tab.addEventListener('click', () => {
         setSettingsSubTab(tab.dataset.stab);
-        scheduleSettingsSave();
+        persistSettingsSubTab();
     }));
     $('#book-select').addEventListener('change', function() { managedBookKey = this.value || null; renderBookManageArea(); });
     $('#glossary-filter').addEventListener('input', function() { glossaryFilter = this.value; glossaryPage = 0; updateGlossaryUI(); });
