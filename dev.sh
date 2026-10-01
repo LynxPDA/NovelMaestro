@@ -15,7 +15,7 @@
 # Windows (PowerShell), вместо этого скрипта:
 #   py -m venv .venv ; . .venv\Scripts\Activate.ps1
 #   python -m pip install -r requirements-dev.txt
-#   python run.py            # или: python -m pytest tests/ -q
+#   python run.py            # или: python -m pytest tests/ -q -n auto
 #
 # .venv уже в .gitignore (venv/, env/, .venv/) — добавлять нечего.
 
@@ -108,9 +108,11 @@ dev.sh — разработка NovelMaestro в venv (Linux/macOS/WSL)
 
   ./dev.sh setup        создать .venv и поставить зависимости
   ./dev.sh deps         активный стек зависимостей (что фолбэк, что основа)
-  ./dev.sh test [args]  pytest (например: ./dev.sh test tests/test_ner.py)
+  ./dev.sh test [args]  pytest -n auto tests/ (параллельно, pytest-xdist); с аргументами —
+                        ровно они (например: ./dev.sh test -n 0 tests/test_ner.py)
   ./dev.sh run [args]   web-сервер (args пробрасываются в run.py)
-  ./dev.sh probe [args] обход SPA headless-браузером (свой сервер, временные данные)
+  ./dev.sh probe [args] обход SPA headless-браузером (свой сервер, временные данные);
+                        --shot — скриншоты в logs/ui_probe/ (правка UI без прогона не закрыта)
   ./dev.sh spa          node --check по static/*.js + node --test tests/spa/
   ./dev.sh shell        bash с активированным venv
   ./dev.sh clean        удалить .venv

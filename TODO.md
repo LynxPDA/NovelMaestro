@@ -55,4 +55,4 @@
 
 ## Карта тестов
 
-`python3 -m pytest tests/ -q` — или `./dev.sh test` (он добавляет `-n auto`). Новый модуль core — новый файл тестов; зеркало API §6 AGENTS.md живёт в `tests/test_docs.py` (`CORE_API`/`PROJECTS_API`/`TRANSPORT_API`/`DEPS_API`): добавил функцию в общий слой — добавь её в зеркало и в таблицу §6. Тесты не ходят в сеть: LLM мокать на `stream_chat_completion`, транспорт — на `core.transport.open_stream`; данные — в `tmp_path`, тестовые сервера — на порту 0.
+`./dev.sh test` — это `python3 -m pytest tests/ -q -n auto` (pytest-xdist; раннер один — pytest, параллельность даёт плагин). Правка UI закрывается прогоном `./dev.sh probe --shot` (скриншоты экранов и модалок в `logs/ui_probe/`, в git не попадают). Новый модуль core — новый файл тестов; зеркало API §6 AGENTS.md живёт в `tests/test_docs.py` (`CORE_API`/`PROJECTS_API`/`TRANSPORT_API`/`DEPS_API`): добавил функцию в общий слой — добавь её в зеркало и в таблицу §6. Тесты не ходят в сеть: LLM мокать на `stream_chat_completion`, транспорт — на `core.transport.open_stream`; данные — в `tmp_path`, тестовые сервера — на порту 0.

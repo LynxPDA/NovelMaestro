@@ -57,7 +57,7 @@ pip install -r requirements.txt && python3 run.py
 Допустимая альтернатива без venv — системный Python (Debian/Ubuntu):
 
 ```bash
-sudo apt install python3-httpx python3-dotenv python3-tqdm python3-ahocorasick python3-pytest
+sudo apt install python3-httpx python3-dotenv python3-tqdm python3-ahocorasick python3-pytest python3-pytest-xdist
 ```
 
 После запуска откроется браузер с интерфейсом.
@@ -166,4 +166,5 @@ MODEL=google/gemma-4-31b-it         # рекомендуемая модель (�
 | `python-dotenv` / `python3-dotenv` | разбор `.env`: `#` — комментарий, `${}` не раскрывается | обязательный |
 | `tqdm` / `python3-tqdm` | прогресс-бары CLI | опциональный (без него прогресс — только строками лога) |
 | `pyahocorasick` / `python3-ahocorasick` | быстрый поиск терминов | опциональный (есть regex-fallback) |
-| `pytest` / `python3-pytest` | тесты | только для разработки |
+| `pytest` / `python3-pytest` | тесты: раннер один — pytest | только для разработки |
+| `pytest-xdist` / `python3-pytest-xdist` | параллельный прогон (`-n auto`, он же дефолт `./dev.sh test`) | только для разработки |
