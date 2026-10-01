@@ -61,7 +61,7 @@ LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
 def add_llm_args(parser: argparse.ArgumentParser, *,
                  timeout: int = DEFAULT_TIMEOUT,
                  stream_timeout: int | None = None,
-                 max_retries: int = DEFAULT_MAX_RETRIES,
+                 max_retries: int | None = DEFAULT_MAX_RETRIES,
                  max_tokens: int | None = None,
                  aliases: bool = False) -> argparse._ArgumentGroup:
     """Добавляет общий блок LLM-параметров стадии.
@@ -70,6 +70,7 @@ def add_llm_args(parser: argparse.ArgumentParser, *,
     как раньше); иначе появляется отдельный --stream_timeout.
     max_tokens не None — стадия отдаёт серверный предел ответа настраивать
     (значение по умолчанию — её собственный); иначе это константа скрипта.
+    max_retries=None — дефолт у стадии в пресете режима, не у слоя.
     aliases=True — старые написания (--retries, --api-key, …) тоже принимаются.
     """
     group = parser.add_argument_group("сервер LLM")
@@ -200,7 +201,7 @@ def _pick(args: argparse.Namespace, name: str, default: Any) -> Any:
 def resolve_profile(args: argparse.Namespace, *, stage: str = "",
                     timeout: int = DEFAULT_TIMEOUT,
                     stream_timeout: int | None = None,
-                    max_retries: int = DEFAULT_MAX_RETRIES,
+                    max_retries: int | None = DEFAULT_MAX_RETRIES,
                     max_tokens: int = DEFAULT_MAX_TOKENS,
                     require_model: bool = True,
                     logger: logging.Logger | None = None) -> LlmProfile:
