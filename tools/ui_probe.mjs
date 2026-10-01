@@ -445,6 +445,65 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} кириллица-имя   «${look.title}» (${look.sub}) · файлов ${look.files}`);
   }
 
+  /* тема интерфейса — переключатель в шапке: доступен с любого экрана,
+   * предпочтение живёт в localStorage, редактор перекрашивается на месте
+   * (несохранённый текст не теряется), а карточка «Внешний вид» тему не дублирует */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/editor`, {
+      waitUntil: "load",
+    });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".ed-grid .cm-content", { timeout: 15000 });
+    await page.waitForTimeout(1200);
+    await page.locator(".ed-grid .cm-content").first().click();
+    await page.keyboard.type("ТЕМА");
+    const seen = [];
+    for (let i = 0; i < 2; i++) {
+      seen.push(
+        await page.evaluate(() => {
+          const b = document.querySelector(".theme-switch");
+          return [
+            document.documentElement.dataset.uiTheme || "",
+            document.body.dataset.editorTheme || "",
+            b ? b.getAttribute("aria-label") : "",
+            b && b.querySelector("svg") ? "иконка" : "без иконки",
+          ].join("/");
+        }),
+      );
+      await page.click(".theme-switch");
+      await page.waitForTimeout(500);
+    }
+    const kept = await page.evaluate(() =>
+      (document.querySelector(".ed-grid .cm-content") || {}).textContent || "",
+    );
+    const stored = await page.evaluate(() => {
+      try {
+        return { ...JSON.parse(localStorage.getItem("uiLookV1") || "{}") };
+      } catch {
+        return {};
+      }
+    });
+    const dup = await page.evaluate(() =>
+      /Тема интерфейса/.test(
+        [...document.querySelectorAll(".field-label")].map((x) =>
+          x.textContent,
+        ).join(" | "),
+      ),
+    );
+    if (seen[0] !== "dark/dark/Тема интерфейса: тёмная/иконка")
+      problems.push(`переключатель темы: ${seen[0]}`);
+    if (seen[1] !== "light/light/Тема интерфейса: светлая/иконка")
+      problems.push(`переключатель темы: ${seen[1]}`);
+    if (!kept.includes("ТЕМА"))
+      problems.push("смена темы выбросила несохранённый текст редактора");
+    if (stored.ui !== "dark" || stored.editor !== "auto" || !("fontSize" in stored))
+      problems.push(`uiLookV1 после двух переключений: ${JSON.stringify(stored)}`);
+    if (dup) problems.push("карточка «Внешний вид» дублирует тему интерфейса");
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "settings.png") });
+    log(`${problems.length === before ? "✅" : "❌"} тема в шапке     ${seen.join(" → ")} · текст${kept.includes("ТЕМА") ? " цел" : " потерян"}`);
+  }
+
   /* сценарии на модалках: вложенные оверлеи, promise-результат и обновление
    * экрана за ними — на этом refactor ломался бы тише всего */
   {

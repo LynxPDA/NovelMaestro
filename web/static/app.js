@@ -1114,13 +1114,6 @@ async function viewSettings() {
 
   /* ── внешний вид: тема интерфейса, тема/кегль редакторов —
      UI-предпочтения в localStorage браузера (не .env) ── */
-  const uiSel = h(
-    "select",
-    { class: "input input-inline" },
-    h("option", { value: "dark" }, "Тёмная"),
-    h("option", { value: "light" }, "Светлая"),
-  );
-  uiSel.value = EDITOR_SETTINGS.ui;
   const edSel = h(
     "select",
     { class: "input input-inline" },
@@ -1139,7 +1132,6 @@ async function viewSettings() {
   const lookBtn = h("button", { class: "btn btn-sm" }, "Применить");
   lookBtn.addEventListener("click", () => {
     const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
-    EDITOR_SETTINGS.ui = uiSel.value === "light" ? "light" : "dark";
     EDITOR_SETTINGS.editor =
       edSel.value === "dark" || edSel.value === "light"
         ? edSel.value
@@ -1170,12 +1162,6 @@ async function viewSettings() {
         h(
           "label",
           { class: "field" },
-          h("div", { class: "field-label" }, "Тема интерфейса"),
-          uiSel,
-        ),
-        h(
-          "label",
-          { class: "field" },
           h("div", { class: "field-label" }, "Тема редакторов"),
           edSel,
         ),
@@ -1191,8 +1177,9 @@ async function viewSettings() {
       h(
         "div",
         { class: "field-help" },
-        "хранится в браузере (localStorage), не в .env — переживает " +
-          "обновление и пересоздание контейнера",
+        "хранится в браузере (localStorage), не в .env — переживает обновление " +
+          "и пересоздание контейнера; тема интерфейса — переключатель 🌙/☀ в " +
+          "шапке, он рядом с редакторами и не требует заходить в «Настройки»",
       ),
     ),
   );
@@ -1234,7 +1221,7 @@ async function viewSettings() {
           h(
             "div",
             { class: "field-help" },
-            "хранится в браузере (localStorage), не в .env — как тема и авто-обновление",
+            "хранится в браузере (localStorage), не в .env — как тема интерфейса",
           ),
         ),
       ),
@@ -1652,16 +1639,31 @@ function cmLang(ext) {
 }
 
 /* Единая фабрика редактора: { root, getValue, setValue, setLang } */
+/* Живые редакторы текущего view: [{view, hlComp}]. Реестр собирается заново на
+   каждый render(): тема перекрашивает подсветку на месте, пересоздавать
+   редактор нельзя — в нём несохранённый текст. */
+const LIVE_EDITORS = [];
+
+/* подсветка по теме редактора: свой HighlightStyle (не-fallback — выигрывает у
+   светлого дефолта basicSetup) */
+function highlightExt() {
+  const sh = window.CM && window.CM.syntaxHighlighting;
+  const hl = EDITOR_HIGHLIGHT && EDITOR_HIGHLIGHT[effectiveEditorTheme()];
+  return sh && hl ? sh(hl) : [];
+}
+
 function makeEditor(initial, langExt, onUpdate) {
   if (CM_READY) {
     const { EditorView, Compartment, basicSetup, search } = window.CM;
     const langComp = new Compartment();
     const roComp = new Compartment();
+    const hlComp = new Compartment();
     const ext = [
       basicSetup,
       search({ top: true }),
       langComp.of(cmLang(langExt) || []),
       roComp.of([]),
+      hlComp.of(highlightExt()),
       EditorView.lineWrapping, // длинные строки переносятся (R8-1)
       EditorView.theme({
         "&": {
@@ -1673,16 +1675,12 @@ function makeEditor(initial, langExt, onUpdate) {
       // колбэк обновлений CM (doc / viewport / selection)
       ...(onUpdate ? [EditorView.updateListener.of((u) => onUpdate(u))] : []),
     ];
-    // синтаксическая подсветка по теме редактора: свой HighlightStyle
-    // (не-fallback — выигрывает у светлого дефолта basicSetup)
-    const sh = window.CM.syntaxHighlighting;
-    const hl = EDITOR_HIGHLIGHT && EDITOR_HIGHLIGHT[effectiveEditorTheme()];
-    if (sh && hl) ext.push(sh(hl));
     const view = new EditorView({
       doc: initial,
       extensions: ext,
       parent: null,
     });
+    LIVE_EDITORS.push({ view, hlComp });
     return {
       root: view.dom,
       isCM: true,
@@ -1850,6 +1848,52 @@ const NAV_ITEMS = [
   ["help", "Справка", "help"],
 ];
 
+/* Тема интерфейса — переключатель в шапке: она нужна с любого экрана, а не
+   через «Настройки → Применить». Редакторы перекрашиваются на месте (полный
+   render() перечитал бы файлы и выбросил несохранённый текст), поэтому здесь
+   только CSS-переменные темы + reconfigure подсветки. Кадры предпросмотра,
+   уже открытые на экране, перекрасятся при следующем открытии: их srcdoc
+   собран в старом цвете. */
+function setUiTheme(ui) {
+  const next = ui === "light" ? "light" : "dark";
+  if (EDITOR_SETTINGS.ui === next) return false;
+  EDITOR_SETTINGS.ui = next;
+  try {
+    localStorage.setItem(UI_LOOK_KEY, JSON.stringify(EDITOR_SETTINGS));
+  } catch {
+    /* localStorage недоступен — не критично */
+  }
+  applyEditorSettings();
+  const ext = highlightExt();
+  for (const e of LIVE_EDITORS) {
+    if (!e.view.dom.isConnected) continue; // view уже выбросили
+    e.view.dispatch({ effects: e.hlComp.reconfigure(ext) });
+  }
+  return true;
+}
+
+function themeSwitch() {
+  const btn = h("button", {
+    class: "btn btn-sm btn-ghost theme-switch",
+    type: "button",
+  });
+  const paint = () => {
+    const dark = EDITOR_SETTINGS.ui !== "light";
+    btn.replaceChildren(iconEl(dark ? "moon" : "sun"));
+    const text = "Тема интерфейса: " + (dark ? "тёмная" : "светлая");
+    btn.setAttribute("aria-label", text);
+    btn.setAttribute("title", text + " — переключить");
+  };
+  btn.addEventListener("click", () => {
+    const next = UICore.toggleUiTheme(EDITOR_SETTINGS.ui);
+    if (!setUiTheme(next)) return;
+    paint();
+    toast("Тема интерфейса: " + (next === "light" ? "светлая" : "тёмная"));
+  });
+  paint();
+  return btn;
+}
+
 function layout(content) {
   const route = parseRoute();
   // проект — часть раздела «Проекты»: подсветить соответствующий пункт
@@ -1896,6 +1940,7 @@ function layout(content) {
   const topRight = h(
     "div",
     { class: "topbar-right" },
+    themeSwitch(),
     // место индикатора активного запуска (заполняет app-run-slot)
     h("div", { class: "run-slot", id: "app-run-slot" }),
     userMenu,
@@ -2023,6 +2068,8 @@ function render() {
     oldPage.dispatchEvent(new CustomEvent("pi-navigate", { bubbles: true }));
   }
   root.replaceChildren();
+  // реестр живых редакторов собирается заново вместе с новым view
+  LIVE_EDITORS.length = 0;
   // уход со страницы: кадры скрытых под-вкладок с отложенным подгоном
   // выбрасываются вместе со старым DOM — снимаем наблюдение (утечка IO)
   document.querySelectorAll("iframe[data-fit-pending]").forEach((f) => {

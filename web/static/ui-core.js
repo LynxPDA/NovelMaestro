@@ -85,6 +85,9 @@
       '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="M9 13h6"/>',
     refresh:
       '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    sun:
+      '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
   };
   function icon(name, cls) {
     var body = ICON_PATHS[name] || '<rect width="14" height="14" x="5" y="5" rx="1"/>';
@@ -208,6 +211,12 @@
       ? JSON.stringify(v)
       : String(v == null ? "" : v);
   }
+  /* Тема интерфейса: переключатель в шапке — тёмная ↔ светлая. Всё, что не
+   * «light», считается тёмной: это тема по умолчанию. */
+  function toggleUiTheme(ui) {
+    return ui === "light" ? "dark" : "light";
+  }
+
   /* первый клик по столбцу — убывание, повторный — возрастание */
   function nextNerSort(field, dir, clicked) {
     if (clicked && clicked === field) {
@@ -343,6 +352,9 @@
       count: "Частота",
     },
     nerFieldLabel: (key) => UICore.nerFieldLabels[key] || key,
+
+    /* ── тема интерфейса ── */
+    toggleUiTheme,
 
     /* ── роутер: "#/run/a/b" → {view, rest} (сегменты — раскодированные) ── */
     parseRoute: (hash) => {

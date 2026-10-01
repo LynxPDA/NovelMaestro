@@ -795,3 +795,11 @@ test("parseRoute: битую %-последовательность не выд�
     rest: ["TMP", "%ZZ", "files"],
   });
 });
+
+test("toggleUiTheme: тёмная ↔ светлая", () => {
+  assert.equal(UICore.toggleUiTheme("dark"), "light");
+  assert.equal(UICore.toggleUiTheme("light"), "dark");
+  // всё, что не «light», — тёмная (тема по умолчанию)
+  assert.equal(UICore.toggleUiTheme(""), "light");
+  assert.equal(UICore.toggleUiTheme(undefined), "light");
+});

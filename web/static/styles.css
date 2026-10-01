@@ -158,6 +158,15 @@ body {
   position: relative;
 }
 
+/* Переключатель темы в шапке: только иконка (луна/солнце) — подписи в шапке
+   нет, места мало; на тач-экранах растёт общим правилом .btn-sm. */
+.theme-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 9px;
+}
+
 /* ── индикатор активного запуска в шапке (GET /api/jobs/active) ── */
 .run-slot {
   display: flex;
