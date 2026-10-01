@@ -826,6 +826,15 @@
       return next;
     },
 
+    /* Действие ner-правки: «удаление» термина или «патч» поля. Файлы без ключа
+     * action — патчи (старые файлы); LLM вправе прислать действие по-английски. */
+    nerAction: (e) => {
+      var a = String((e && e["action"]) || "").trim().toLowerCase();
+      if (a === "delete" || a === "remove" || a === "удалить")
+        return "удаление";
+      return a === "удаление" ? "удаление" : "патч";
+    },
+
     /* сводка по записям: всего / принято / отклонено / применено */
     reviewSummary: (entries) => {
       var sum = { total: 0, accepted: 0, rejected: 0, applied: 0 };

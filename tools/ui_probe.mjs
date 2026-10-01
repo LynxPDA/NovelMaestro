@@ -95,6 +95,32 @@ function seedProjectsDir(dir) {
     ),
     "utf-8",
   );
+  // review-файл глоссария: оба действия правки — патч поля и удаление термина
+  fs.mkdirSync(path.join(book, "tmp"), { recursive: true });
+  fs.writeFileSync(
+    path.join(book, "tmp", "ner_review.json"),
+    JSON.stringify(
+      {
+        created: "2025-01-01 00:00",
+        updated: "2025-01-02 00:00",
+        input: "ner.json",
+        entries: [
+          { stage: "Весь глоссарий", action: "патч", term: "мир",
+            field: "translation", old: "мир", new: "свет",
+            reason: "по контексту", status: "принять", applied: false },
+          { stage: "Весь глоссарий", action: "патч", term: "глава",
+            field: "type", old: "other", new: "other (female)",
+            reason: "род", status: "отклонить", applied: false },
+          { stage: "RAG", action: "удаление", term: "мир", field: "",
+            old: "type=other (female); translation=мир", new: "",
+            reason: "обычное слово, не термин лора", status: "принять",
+            applied: false },
+        ],
+      },
+      null, 2,
+    ) + "\n",
+    "utf-8",
+  );
   // файл в корне книги: файловый менеджер есть что показать (quick-look)
   fs.writeFileSync(path.join(book, "notes.md"), "# Заметки\n\n- проба\n", "utf-8");
   fs.mkdirSync(path.join(book, "prompts"), { recursive: true });
@@ -502,6 +528,59 @@ async function main() {
     if (dup) problems.push("карточка «Внешний вид» дублирует тему интерфейса");
     if (SHOT) await page.screenshot({ path: path.join(OUT, "settings.png") });
     log(`${problems.length === before ? "✅" : "❌"} тема в шапке     ${seen.join(" → ")} · текст${kept.includes("ТЕМА") ? " цел" : " потерян"}`);
+  }
+
+  /* правка-удаление в обзоре глоссария: своё действие в заголовке, своё
+   * значение в diff (не пустой «Стало») и своя модалка без поля «Стало» */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/review`, {
+      waitUntil: "load",
+    });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".rv-row", { timeout: 15000 });
+    await page.waitForTimeout(900);
+    const rows = await page.evaluate(() =>
+      [...document.querySelectorAll(".rv-row")].map((r) => ({
+        title: (r.querySelector(".rv-row-title") || {}).textContent?.trim() || "",
+        del: r.classList.contains("rv-row-del"),
+        diff: (r.querySelector(".rv-diff") || {}).textContent?.trim() || "",
+      })),
+    );
+    if (rows.length !== 3) problems.push(`review: строк ${rows.length} (ожидаем 3)`);
+    const dels = rows.filter((x) => x.del);
+    if (dels.length !== 1) problems.push(`review: строк удаления ${dels.length} (ожидаем 1)`);
+    for (const d of dels) {
+      if (!/удаление термина/.test(d.title))
+        problems.push(`review: заголовок удаления «${d.title}»`);
+      if (!d.diff.includes("термин удалится из глоссария"))
+        problems.push(`review: diff удаления «${d.diff}»`);
+    }
+    if (rows.filter((x) => !x.del).some((x) => /удаление/.test(x.title)))
+      problems.push("review: метка удаления уехала на правку поля");
+    await page
+      .locator('.rv-row-del button:has-text("Откорректировать")')
+      .first()
+      .click();
+    await page.waitForTimeout(600);
+    const m = await page.evaluate(() => {
+      const box = document.querySelector(".modal-backdrop .modal");
+      if (!box) return { title: "", labels: [] };
+      return {
+        title: (box.querySelector(".modal-title") || {}).textContent?.trim() || "",
+        labels: [...box.querySelectorAll(".rv-label")].map((x) =>
+          x.textContent.trim(),
+        ),
+      };
+    });
+    if (!/^Удаление термина/.test(m.title))
+      problems.push(`review: модалка озаглавлена «${m.title}»`);
+    if (!m.labels.includes("Что уходит") || m.labels.includes("Стало"))
+      problems.push(`review: поля модалки удаления: ${m.labels.join(", ")}`);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-review-delete.png") });
+    log(`${problems.length === before ? "✅" : "❌"} удаление термина  ${rows.length} строк · «${(dels[0] || {}).title || ""}» · модалка «${m.title}»`);
   }
 
   /* сценарии на модалках: вложенные оверлеи, promise-результат и обновление

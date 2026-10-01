@@ -2516,8 +2516,16 @@ function viewProject(section, name, tab, job) {
         st.review[kind].mode = next;
         renderCard();
       }
+      /* ner-правки бывают двух действий: патч поля и удаление термина целиком
+         (LLM помечает термин лишним) — у удаления поля не сверяются */
+      function isDel(e) {
+        return kind === "ner" && UICore.nerAction(e) === "удаление";
+      }
       function entryHead(e) {
-        if (kind === "ner") return `${e["term"] || "?"} · ${e["field"] || "?"}`;
+        if (kind === "ner") {
+          return `${e["term"] || "?"} · ` +
+            (isDel(e) ? "удаление термина" : e["field"] || "?");
+        }
         const ch = e["chapter"];
         return (
           `Гл.${ch == null ? "?" : ch}` + (e["type"] ? ` · ${e["type"]}` : "")
@@ -2583,6 +2591,7 @@ function viewProject(section, name, tab, job) {
         );
       }
       function correctModal(i, e) {
+        const del = isDel(e);
         const oldIn = h(
           "textarea",
           { class: "input rv-ta rv-old-ro", rows: 2, readonly: true },
@@ -2599,17 +2608,20 @@ function viewProject(section, name, tab, job) {
         });
         const err2 = h("div", { class: "form-error" });
         const modal = UIC.modal({
-          title: `Правка ${i + 1}`,
+          title: del
+            ? `Удаление термина · правка ${i + 1}`
+            : `Правка ${i + 1}`,
           build: () => [
-            h("label", { class: "rv-label" }, "Было"),
+            h("label", { class: "rv-label" }, del ? "Что уходит" : "Было"),
             oldIn,
             h(
               "div",
               { class: "field-help" },
-              "не редактируется — по этому тексту правка ищется в главе",
+              del
+                ? "текущие значения полей термина; принять — удалить запись из ner.json"
+                : "не редактируется — по этому тексту правка ищется в главе",
             ),
-            h("label", { class: "rv-label" }, "Стало"),
-            newIn,
+            ...(del ? [] : [h("label", { class: "rv-label" }, "Стало"), newIn]),
             h("label", { class: "rv-label" }, "Причина"),
             reasonIn,
             err2,
@@ -2626,11 +2638,18 @@ function viewProject(section, name, tab, job) {
                     const doc2 = UICore.updateReviewEntry(
                       parsed.doc,
                       i,
-                      {
-                        old: oldIn.value.trim(),
-                        new: newIn.value.trim(),
-                        reason: reasonIn.value.trim(),
-                      },
+                      del
+                        ? {
+                            action: "удаление",
+                            field: "",
+                            old: oldIn.value.trim(),
+                            reason: reasonIn.value.trim(),
+                          }
+                        : {
+                            old: oldIn.value.trim(),
+                            new: newIn.value.trim(),
+                            reason: reasonIn.value.trim(),
+                          },
                       parsed.isArray,
                     );
                     if (!doc2) {
@@ -2657,7 +2676,7 @@ function viewProject(section, name, tab, job) {
           modal.close();
       }
         document.body.append(modal);
-        newIn.focus();
+        (del ? reasonIn : newIn).focus();
       }
       function entryRow(e, i, opts) {
         const cont = opts && opts["cont"]; // продолжение группы термина
@@ -2718,7 +2737,8 @@ function viewProject(section, name, tab, job) {
             class:
               "rv-row" +
               (rejected ? " rv-row-reject" : "") +
-              (cont ? " rv-row-cont" : ""),
+              (cont ? " rv-row-cont" : "") +
+              (isDel(e) ? " rv-row-del" : ""),
           },
           h(
             "div",
@@ -2726,7 +2746,11 @@ function viewProject(section, name, tab, job) {
             h(
               "span",
               { class: "rv-row-title" },
-              cont && kind === "ner" ? e["field"] || "?" : entryHead(e),
+              cont && kind === "ner"
+                ? isDel(e)
+                  ? "удаление термина"
+                  : e["field"] || "?"
+                : entryHead(e),
             ),
             badge,
           ),
@@ -2735,7 +2759,9 @@ function viewProject(section, name, tab, job) {
             { class: "rv-diff" },
             h("span", { class: "rv-old" }, e["old"] || ""),
             " → ",
-            h("span", { class: "rv-new" }, e["new"] || ""),
+            isDel(e)
+              ? h("span", { class: "rv-del" }, "термин удалится из глоссария")
+              : h("span", { class: "rv-new" }, e["new"] || ""),
           ),
           e["reason"] ? h("div", { class: "rv-reason" }, e["reason"]) : null,
           h("div", { class: "rv-meta" }, entryMeta(e)),

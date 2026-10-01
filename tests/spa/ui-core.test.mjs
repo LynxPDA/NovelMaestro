@@ -803,3 +803,16 @@ test("toggleUiTheme: тёмная ↔ светлая", () => {
   assert.equal(UICore.toggleUiTheme(""), "light");
   assert.equal(UICore.toggleUiTheme(undefined), "light");
 });
+
+test("nerAction: действие ner-правки — патч поля или удаление термина", () => {
+  // старые файлы и правки поля ключа action не имеют
+  assert.equal(UICore.nerAction({ term: "A", field: "type" }), "патч");
+  assert.equal(UICore.nerAction({}), "патч");
+  assert.equal(UICore.nerAction(null), "патч");
+  assert.equal(UICore.nerAction({ action: "чушь" }), "патч");
+  // удаление: русский канон и английские написания ответа LLM
+  assert.equal(UICore.nerAction({ action: "удаление" }), "удаление");
+  assert.equal(UICore.nerAction({ action: " Удалить " }), "удаление");
+  assert.equal(UICore.nerAction({ action: "delete" }), "удаление");
+  assert.equal(UICore.nerAction({ action: "REMOVE" }), "удаление");
+});
