@@ -816,3 +816,15 @@ test("nerAction: действие ner-правки — патч поля или 
   assert.equal(UICore.nerAction({ action: "delete" }), "удаление");
   assert.equal(UICore.nerAction({ action: "REMOVE" }), "удаление");
 });
+
+test("markWhitespace: пробелы видимы, структура строк сохранена", () => {
+  assert.equal(UICore.markWhitespace("a  b"), "a··b");
+  // таб — текстовая метка: ⇥ часть шрифтов рисует стрелкой
+  assert.equal(UICore.markWhitespace("\ttab"), "\\ttab");
+  // перевод строки остаётся переводом — метка пишется перед ним
+  assert.equal(UICore.markWhitespace("a\n\nb"), "a⏎\n⏎\nb");
+  assert.equal(UICore.markWhitespace("a\r\nb"), "a␍⏎\nb");
+  assert.equal(UICore.markWhitespace(""), "");
+  assert.equal(UICore.markWhitespace(null), "");
+  assert.equal(UICore.markWhitespace(7), "7");
+});

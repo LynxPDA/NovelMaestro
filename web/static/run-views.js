@@ -2669,36 +2669,60 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       box.replaceChildren();
       const r = st.brPreview;
       if (!r) return;
-      const stats = (r.stats || []).filter((s) => s.count > 0);
-      if (stats.length) {
-        const head = ["Замен по правилам: "];
-        stats.forEach((s, i) => {
-          if (i) head.push(" · ");
-          head.push(h("code", { class: "br-rule" }, s.label));
-          head.push(` ${s.count}`);
-        });
-        box.append(h("div", { class: "br-stats" }, head));
-      }
-      if (r.warnings && r.warnings.length) {
-        box.append(
-          h("div", { class: "field-help" }, "⚠ " + r.warnings.join(" · ")),
+      const nodes = [];
+      nodes.push(
+        h("div", { class: "br-stats" },
+          `глава ${r.num} · ${r.dir} · ${r.type}.txt — `
+          + (r.changed ? "текст изменится" : "текст НЕ изменится")),
+      );
+      // Какие правила доехали до скрипта и что они делают. Пробелы видимы:
+      // без меток «^ + -> » (заменить одним пробелом) неотличим от удаления,
+      // а удалённый перенос строки — от пустоты.
+      const rules = r.rules || [];
+      if (rules.length) {
+        nodes.push(
+          h("div", { class: "field-help" },
+            "Правила (пробел — ·, таб — \\t, перевод строки — ⏎):"),
         );
-      }
-      const pre = h("pre", { class: "br-text" });
-      for (const [kind, text] of r.segments || []) {
-        if (kind === "keep") {
-          pre.append(document.createTextNode(text));
-        } else {
-          pre.append(
-            h(
-              "span",
-              { class: kind === "del" ? "br-del" : "br-ins" },
-              text,
-            ),
+        for (const x of rules) {
+          nodes.push(
+            h("div", { class: "br-rule" }, [
+              h("code", {
+                text: `${x.pattern} → ${x.replacement || "∅ (удаление)"}`,
+              }),
+              h("span", { class: "br-count", text: x.count ? `×${x.count}` : "не задели текст" }),
+            ]),
           );
         }
       }
-      box.append(pre);
+      if (r.warnings && r.warnings.length) {
+        nodes.push(
+          h("div", { class: "field-help" }, "⚠ " + r.warnings.join(" · ")),
+        );
+      }
+      // длинный keep между изменениями режем середину: важен контекст вокруг
+      // del/ins, а не весь текст главы
+      const segs = r.segments || [];
+      const EDGE = 12;
+      let shown = segs;
+      if (segs.length > EDGE * 2) {
+        const head = segs.slice(0, EDGE);
+        const tail = segs.slice(segs.length - EDGE);
+        const len = (arr) => arr.reduce((n, [, t]) => n + String(t).length, 0);
+        const mid = len(segs) - len(head) - len(tail);
+        shown = head
+          .concat([["mid", ` … ещё ${mid} символов без изменений … `]])
+          .concat(tail);
+      }
+      const pre = h("pre", { class: "br-text" });
+      for (const [kind, text] of shown) {
+        const t = UICore.markWhitespace(text);
+        if (kind === "keep") pre.append(document.createTextNode(t));
+        else if (kind === "mid") pre.append(h("span", { class: "br-mid", text: t }));
+        else pre.append(h("span", { class: kind === "del" ? "br-del" : "br-ins" }, t));
+      }
+      nodes.push(pre);
+      box.append(...nodes);
     }
 
     chSel.addEventListener("change", () => {

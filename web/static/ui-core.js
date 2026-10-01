@@ -217,6 +217,31 @@
     return ui === "light" ? "dark" : "light";
   }
 
+  /* ── пробелы видимы (отчёт и предпросмотр массовых замен) ──
+     Зеркало core.common.mark_whitespace: удалённый отступ или перенос строки
+     иначе неотличимы от пустоты, а замена из одного пробела (правило
+     «^ + -> ») выглядит как «ничего не изменилось». Перевод строки остаётся
+     переводом — метка «⏎» пишется перед ним, структура строк сохраняется. */
+  var WS_MARKS = { " ": "·", "\t": "\\t", "\r": "␍", "\n": "⏎\n" };
+  function markWhitespace(text) {
+    if (text == null) return "";
+    return String(text).replace(/[ \t\r\n]/g, function (c) {
+      return WS_MARKS[c];
+    });
+  }
+
+  /* ── действие ner-правки: патч поля или удаление термина ──
+     Ключа `action` в файлах старого формата нет — это правки полей. Английские
+     написания ответа LLM (delete/remove) — то же действие. */
+  function nerAction(entry) {
+    var a = String((entry && entry.action) || "")
+      .trim()
+      .toLowerCase();
+    if (a === "удаление" || a === "удалить" || a === "remove"
+        || a === "remove_term" || a === "delete") return "удаление";
+    return "патч";
+  }
+
   /* первый клик по столбцу — убывание, повторный — возрастание */
   function nextNerSort(field, dir, clicked) {
     if (clicked && clicked === field) {
@@ -355,6 +380,10 @@
 
     /* ── тема интерфейса ── */
     toggleUiTheme,
+
+    /* ── пробелы видимы + действие ner-правки ── */
+    markWhitespace,
+    nerAction,
 
     /* ── роутер: "#/run/a/b" → {view, rest} (сегменты — раскодированные) ── */
     parseRoute: (hash) => {

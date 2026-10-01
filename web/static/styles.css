@@ -2473,7 +2473,22 @@ body[data-editor-theme="light"] .editor-area {
   margin-bottom: 6px;
 }
 .br-rule {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   font-size: 12px;
+  margin-top: 2px;
+}
+.br-rule code {
+  font-size: 12px;
+  word-break: break-all;
+}
+.br-count {
+  color: var(--muted, #9aa4ae);
+}
+.br-mid {
+  color: var(--muted, #9aa4ae);
+  font-style: italic;
 }
 .br-text {
   margin-top: 4px;

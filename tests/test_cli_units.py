@@ -903,6 +903,61 @@ def test_br_parse_replace_lines_ws():
     assert rules[2].pattern == "^ +"
 
 
+def test_br_parse_replace_lines_whitespace_rules():
+    """Пробельные правила значимы целиком: « +$» — хвостовые пробелы строк,
+    а не битый «+$»; строка из одних пробелов — пустой паттерн (пропуск)."""
+    rules, warnings = BR.parse_replace_lines(["  -> x", " +$ ->", " + -> "])
+    assert [r.pattern for r in rules] == [" +$", " +"]
+    assert [r.replacement for r in rules] == ["", " "]
+    assert len(warnings) == 1 and "пустая левая часть" in warnings[0]
+    # битый regexp — тоже предупреждение, а не падение прогона
+    rules2, warnings2 = BR.parse_replace_lines(["( -> x"])
+    assert rules2 == [] and len(warnings2) == 1
+    assert "битое правило" in warnings2[0]
+
+
+def test_br_apply_rules_segments_noop_not_counted():
+    """Совпадение, равное своей замене, — не замена: ни подсветки, ни счётчика."""
+    r = BR.Rule("Хунг", "Хунг")
+    segs, stats = BR.apply_rules_segments("Хунг и Хунг", [r])
+    assert stats == {}
+    assert {k for k, _ in segs} == {"keep"}
+    out, stats2 = BR.apply_rules("Хунг и Хунг", [r])
+    assert out == "Хунг и Хунг" and stats2 == {}
+
+
+@pytest.mark.parametrize(
+    "text,lines,expect",
+    [
+        ("   Раз два   \n\n\n   Три\n", [r"^ + -> ", r"\n{2,} -> \n"],
+         " Раз два   \n Три\n"),
+        ("a  b\nc", [r"\s+ -> "], "a b c"),
+        ("текст\tтаб", [r"\t+ -> "], "текст таб"),
+        ("  начало\nконец  ", [r"^ + ->", r" +$ ->"], "начало\nконец"),
+    ],
+)
+def test_br_segments_match_plain_subn(text, lines, expect):
+    """Предпросмотр (segments) даёт ровно тот же текст, что обычный
+    re.subn той же цепочки правил."""
+    import unicodedata
+    rules, warnings = BR.parse_replace_lines(lines)
+    assert warnings == []
+    ref = unicodedata.normalize("NFC", text)
+    for r in rules:
+        ref = r.compile().subn(r.replacement, ref)[0]
+    segs, _stats = BR.apply_rules_segments(text, rules)
+    assert "".join(t for k, t in segs if k != "del") == ref == expect
+
+
+def test_br_format_rules_marks_whitespace():
+    """Отчёт печатает правила с видимыми пробелами (·, ⏎, ⇥) и «(удаление)»."""
+    rules, _ = BR.parse_replace_lines([r"^ + -> ", r"\n{2,} -> \n", "Хунг ->"])
+    block = BR.format_rules(rules)
+    assert "^·+ -> ·" in block          # невидимый пробел правила — видим
+    assert "\\n{2,} -> \\n" in block  # escape regexp («\n» — 2 символа) не трогает
+    assert "Хунг -> (удаление)" in block
+
+
 def test_br_multiline_anchors():
     """MULTILINE: «^»/«$» матчат СТРОКИ — отступы в начале строки
     и дубликаты заголовков глав."""

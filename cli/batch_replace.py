@@ -25,7 +25,6 @@ import re
 import sys
 import unicodedata
 from dataclasses import dataclass
-from typing import List, Tuple
 
 # ── bootstrap: корень репо + обязательные зависимости ──
 def _bootstrap_core() -> None:
@@ -59,6 +58,7 @@ from core.common import (  # noqa: E402
     atomic_write,
     build_chapter_map,
     find_chapter_file,
+    mark_whitespace,
     read_text_safe,
     trim_rule_left,
     trim_rule_right,
@@ -91,10 +91,6 @@ class Rule:
         """
         return re.compile(self.pattern, re.UNICODE | re.MULTILINE)
 
-    def sub(self, compiled, content: str) -> Tuple[str, int]:
-        """Применяет замену (стандартный subn — с обратными ссылками)."""
-        return compiled.subn(self.replacement, content)
-
 
 def _nfc(s: str) -> str:
     return unicodedata.normalize("NFC", s)
@@ -103,18 +99,23 @@ def _nfc(s: str) -> str:
 # ══════════════════════════════════════════════════════════════════════
 # ПАРСИНГ ФАЙЛА ПРАВИЛ
 # ══════════════════════════════════════════════════════════════════════
-def parse_replace_lines(lines) -> tuple[List[Rule], List[str]]:
+def parse_replace_lines(lines) -> tuple[list[Rule], list[str]]:
     """Парсит пары «паттерн -> замена» из строк (--replace).
 
     Каждая строка — одно regexp-правило; пустая правая часть — удаление.
-    Значимые пробелы сохраняются: «^  ->» (отступ строки), «\\s+ -> »
-    (сжатие пробелов). Паттерн — чистый стандартный regexp: регистр и
-    прочие режимы — inline-флагами ((?i)…); комментариев и кастомных
-    флагов нет, «#» — литерал в паттерне. Возвращает (rules, warnings):
-    битая строка → предупреждение + пропуск.
+    У стрелки срезается только её собственный пробельный хвост, пробелы
+    паттерна значимы и перед ним, и внутри: « +$» — хвостовые пробелы строк,
+    «  +» — два пробела, «\\s+ -> » — сжать пробелы в один. Строка из одних
+    пробелов — пустой паттерн. Паттерн — чистый стандартный regexp: регистр и
+    прочие режимы — inline-флагами ((?i)…); комментариев и кастомных флагов
+    нет, «#» — литерал в паттерне.
+
+    Битая строка (нет «->», пустой паттерн, не компилируется паттерн или
+    шаблон замены) → предупреждение + пропуск: остальные правила применяются,
+    прогон не падает. Возвращает (rules, warnings).
     """
-    rules: List[Rule] = []
-    warnings: List[str] = []
+    rules: list[Rule] = []
+    warnings: list[str] = []
     for i, raw in enumerate(lines, 1):
         line = raw.rstrip("\r\n")
         if not line.strip():
@@ -126,26 +127,76 @@ def parse_replace_lines(lines) -> tuple[List[Rule], List[str]]:
         left = trim_rule_left(left)
         right = trim_rule_right(right)
         if not left:
-            warnings.append(f"строка {i}: пустая левая часть — пропущена")
+            warnings.append(f"строка {i}: пустая левая часть — пропущена "
+                            "(строка из одних пробелов — не паттерн)")
+            continue
+        try:
+            rx = re.compile(left, re.UNICODE | re.MULTILINE)
+            rx.subn(right, "")   # шаблон замены — тем же компилятором
+        except re.error as exc:
+            warnings.append(
+                f"строка {i}: битое правило «{mark_whitespace(line)}» — "
+                f"{exc.msg} — пропущена")
             continue
         rules.append(Rule(pattern=left, replacement=right,
                           section="--replace"))
     return rules, warnings
 
 
+def format_rules(rules: list[Rule]) -> str:
+    """Правила для отчёта: по строке на правило, пробелы видимы (·, ⏎, ⇥).
+
+    Без меток правило «^ + -> » читается как «заменено пустотой», а замена из
+    одного пробела — как «ничего».
+    """
+    return "\n".join(
+        f"  {mark_whitespace(r.pattern)} -> {mark_whitespace(r.replacement) or '(удаление)'}"
+        for r in rules)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # ПРИМЕНЕНИЕ ПРАВИЛ К ФАЙЛУ
 # ══════════════════════════════════════════════════════════════════════
-def apply_rules(content: str, rules: List[Rule]):
+def apply_rules(content: str, rules: list[Rule]):
     """Применяет все правила к тексту.
 
-    Возвращает (new_content, stats: {label: count}). Текст NFC-нормализуется.
+    Возвращает (new_content, stats: {label: count}), где count — число
+    совпадений, которые ДЕЙСТВИТЕЛЬНО изменили текст. Текст NFC-нормализуется.
     """
     segments, stats = apply_rules_segments(content, rules)
     return "".join(t for k, t in segments if k != "del"), stats
 
 
-def apply_rules_segments(content: str, rules: List[Rule]):
+def _cut_segments(segs, starts, a: int, b: int, edge: bool = False):
+    """Кусок текущего текста [a, b) в виде сегментов; встретившиеся внутри
+    «del» сохраняются (a <= pos < b; edge — включать pos == b для последнего
+    куска).
+    """
+    out = []
+    for i, (kind, t) in enumerate(segs):
+        s = starts[i]
+        if not t:
+            continue
+        if kind == "del":
+            if a <= s < b or (edge and s == b):
+                out.append((kind, t))
+            continue
+        e = s + len(t)
+        if e <= a or s >= b:
+            continue
+        out.append((kind, t[max(s, a) - s:min(e, b) - s]))
+    return out
+
+
+def _flush_deleted(segs, starts, a: int, b: int):
+    """Старые «del» ВНУТРИ совпадения [a, b): хронологически они появились
+    раньше и визуально должны идти до нового «del».
+    """
+    return [(kind, t) for i, (kind, t) in enumerate(segs)
+            if kind == "del" and a <= starts[i] < b]
+
+
+def apply_rules_segments(content: str, rules: list[Rule]):
     """Применяет правила и возвращает (segments, stats) — разметка изменений.
 
     segments — список пар (kind, text) в порядке итогового текста:
@@ -154,6 +205,8 @@ def apply_rules_segments(content: str, rules: List[Rule]):
     (склейка без него даёт результат apply_rules), но сохраняет позицию
     в потоке — для подсветки удалённого. Правила применяются
     последовательно, следующие замены видят только итоговый текст.
+    Совпадение, совпадающее со своей заменой (нулевое совпадение «^ +» на
+    строке без отступа), сегментов не создаёт и в stats не попадает.
     Stats: {label: count}, как в apply_rules; текст NFC-нормализуется.
     """
     content = _nfc(content)
@@ -171,59 +224,36 @@ def apply_rules_segments(content: str, rules: List[Rule]):
             if k != "del":
                 pos += len(t)
 
-        def cut(a: int, b: int, edge: bool = False):
-            """Кусок текущего текста [a, b) в виде сегментов;
-            встретившиеся внутри «del» сохраняются (a <= pos < b;
-            edge — включать pos == b для последнего куска)."""
-            out = []
-            for i, (kind, t) in enumerate(segs):
-                s = starts[i]
-                if not t:
-                    continue
-                if kind == "del":
-                    if a <= s < b or (edge and s == b):
-                        out.append((kind, t))
-                    continue
-                e = s + len(t)
-                if e <= a or s >= b:
-                    continue
-                cs = max(s, a)
-                ce = min(e, b)
-                out.append((kind, t[cs - s:ce - s]))
-            return out
-
-        def flush_del(a: int, b: int):
-            """Старые «del» ВНУТРИ совпадения [a, b) — хронологически они
-            появились раньше и визуально должны идти до нового «del»."""
-            out = []
-            for i, (kind, t) in enumerate(segs):
-                if kind == "del" and a <= starts[i] < b:
-                    out.append((kind, t))
-            return out
-
         matches = list(rx.finditer(cur))
         if not matches:
             continue
         new_segs = []
+        changed = 0
         last = 0
         for m in matches:
             a, b = m.span()
-            new_segs.extend(cut(last, a))
-            new_segs.extend(flush_del(a, b))
+            rep = m.expand(rule.replacement)
+            if cur[a:b] == rep:
+                # замена совпала с текстом — не замена: без del/ins и счётчика
+                new_segs.extend(_cut_segments(segs, starts, last, b))
+                last = b
+                continue
+            new_segs.extend(_cut_segments(segs, starts, last, a))
+            new_segs.extend(_flush_deleted(segs, starts, a, b))
             if a != b:
                 new_segs.append(("del", cur[a:b]))
-            rep = m.expand(rule.replacement)
             if rep:
                 new_segs.append(("ins", rep))
+            changed += 1
             last = b
-        new_segs.extend(cut(last, len(cur), edge=True))
+        new_segs.extend(_cut_segments(segs, starts, last, len(cur), edge=True))
         segs = new_segs
-        if len(matches):
-            stats[rule.label] = stats.get(rule.label, 0) + len(matches)
+        if changed:
+            stats[rule.label] = stats.get(rule.label, 0) + changed
     return segs, stats
 
 
-def process_file(filepath, rules: List[Rule], dry_run: bool = False):
+def process_file(filepath, rules: list[Rule], dry_run: bool = False):
     """Применяет правила к одному файлу. Возвращает stats или None (без изменений)."""
     content = read_text_safe(filepath)
     new_content, stats = apply_rules(content, rules)
@@ -257,7 +287,13 @@ def main(argv=None) -> int:
                     help="Regexp-замена (можно несколько); PAT -> пусто — "
                          "удаление. Паттерн — чистый стандартный regexp "
                          "(Python re, MULTILINE); регистр — inline-флагом "
-                         "(?i); комментариев и кастомных флагов нет.")
+                         "(?i); комментариев и кастомных флагов нет. У стрелки "
+                         "срезается только её пробельный хвост: пробелы "
+                         "паттерна значимы и перед ним, и внутри (« +$ ->» — "
+                         "хвостовые пробелы строк, «\\s+ -> » — сжать их в "
+                         "один). Осторожно со звёздочкой: она матчит и пустую "
+                         "позицию, «^ * -> » вставит пробел в начало КАЖДОЙ "
+                         "строки.")
     ap.add_argument("--dry-run", "--dry_run", dest="dry_run",
                     action="store_true",
                     help="Показать замены, не изменяя файлы.")
@@ -291,6 +327,8 @@ def main(argv=None) -> int:
     want = args.file_type
     print(f"Правил: {len(rules)} | тип: {want} | главы: "
           f"{len(selected)} ({start}–{end})" + (" | DRY-RUN" if args.dry_run else ""))
+    print("Правила (пробел — ·, таб — \\t, перевод строки — ⏎):")
+    print(format_rules(rules))
     print()
 
     total_files_changed = 0

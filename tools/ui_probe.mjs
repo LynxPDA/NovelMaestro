@@ -78,7 +78,9 @@ function seedProjectsDir(dir) {
       ["chapter.txt", "Первая глава.\n\nОн сказал: «Привет, мир».\n"],
       ["translated.txt", "Первая глава (перевод).\n"],
       ["redacted.txt", "Первая глава (редактура).\n"],
-      ["polished.txt", "Первая глава (полировка).\n"],
+      // полировка — с отступами и лишними переносами: на ней видно,
+      // как предпросмотр массовых замен показывает пробельные правила
+      ["polished.txt", "   Первая   глава.\n\n\n   Вторая строка.\n"],
     ]) {
       fs.writeFileSync(path.join(p, f), body, "utf-8");
     }
@@ -581,6 +583,61 @@ async function main() {
     await page.waitForTimeout(400);
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-review-delete.png") });
     log(`${problems.length === before ? "✅" : "❌"} удаление термина  ${rows.length} строк · «${(dels[0] || {}).title || ""}» · модалка «${m.title}»`);
+  }
+
+  /* предпросмотр массовых замен: пробельные правила должны быть ВИДНЫ —
+   * без меток «^ + ->» неотличим от удаления, а удалённый перенос строки —
+   * от пустоты; пробелы паттерна значимы целиком; битая строка —
+   * предупреждение, а не падение предпросмотра */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`, {
+      waitUntil: "load",
+    });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".stage-card", { timeout: 15000 });
+    await page.locator('.stage-card:has-text("Массовые замены")').first().click();
+    await page.waitForSelector(".br-panel .br-box", { timeout: 15000 });
+    await page.waitForTimeout(900);
+    await page
+      .locator(".run-form textarea.epub-textarea")
+      .first()
+      .fill("^ + ->\n\\n{3,} -> \\n\n +$ ->\n( -> x");
+    await page.locator('.br-panel button:has-text("Предпросмотр")').first().click();
+    await page.waitForTimeout(1500);
+    const look = await page.evaluate(() => {
+      const box = document.querySelector(".br-panel .br-box");
+      const qs = (sel) => [...(box?.querySelectorAll(sel) || [])];
+      return {
+        stats: box?.querySelector(".br-stats")?.textContent || "",
+        warn: qs(".field-help").map((e) => e.textContent).join(" | "),
+        rules: qs(".br-rule").map((e) => e.textContent.replace(/\s+/g, " ")),
+        dels: qs(".br-del").map((e) => e.textContent),
+        text: box?.querySelector(".br-text")?.textContent || "",
+      };
+    });
+    const all = look.rules.join(" || ");
+    if (!/текст изменится/.test(look.stats)) {
+      problems.push(`br-preview: нет заголовка главы: «${look.stats}»`);
+    }
+    if (!all.includes("^·+ → ∅")) {
+      problems.push(`br-preview: правило отступа без меток: ${all}`);
+    }
+    // « +$» — целый паттерн, а не битый «+$»; счётчика у него нет (текст не задет)
+    if (!all.includes("·+$ → ∅ (удаление)") || !all.includes("не задели текст")) {
+      problems.push(`br-preview: пробельное правило искажено: ${all}`);
+    }
+    if (!look.dels.some((t) => t.includes("···"))) {
+      problems.push(`br-preview: удалённые пробелы не видимы: ${JSON.stringify(look.dels)}`);
+    }
+    if (!look.text.includes("⏎")) {
+      problems.push("br-preview: в диффе нет меток переносов строк");
+    }
+    if (!/битое правило/.test(look.warn) || !/unterminated subpattern/.test(look.warn)) {
+      problems.push(`br-preview: битая строка не описана: «${look.warn}»`);
+    }
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-batch-replace.png") });
+    log(`${problems.length === before ? "✅" : "❌"} br-preview     ${look.stats} · ${look.rules.length} правил`);
   }
 
   /* сценарии на модалках: вложенные оверлеи, promise-результат и обновление

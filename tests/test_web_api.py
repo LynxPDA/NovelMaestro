@@ -1765,12 +1765,45 @@ def test_batch_replace_preview_flow(srv_ctx):
     assert ["ins", "Глава №5"] in payload["segments"]
     assert ["del", "Идём"] in payload["segments"]
     assert ["ins", "Идем"] in payload["segments"]
+    # метки правил отдаются с видимыми пробелами: «·» вместо пробела-паддинга
     labels = {s["label"]: s["count"] for s in payload["stats"]}
-    assert labels == {"--replace/Глава (\\d+)": 1, "--replace/Идём": 1}
+    assert labels == {"--replace/Глава·(\\d+)": 1, "--replace/Идём": 1}
     assert payload["warnings"] == []
     # файл главы НЕ изменён — это предпросмотр
     assert "Глава 5 начинается" in (d / "polished.txt").read_text(
         encoding="utf-8")
+
+
+def test_batch_replace_preview_whitespace_rules(srv_ctx):
+    """Пробельные правила: значимы целиком (не превращаются в битый «+$»),
+    ответ отдаётся с видимыми пробелами, не-замена в счётчики не попадает."""
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    d = _br_chapter(pdir)
+    (d / "polished.txt").write_text("   Раз   два\n\n\n   Три\n",
+                                    encoding="utf-8")
+    res, payload = _request(port, "POST",
+                            "/api/stages/batch_replace/preview", {
+        "project": "ACTIVE/test_book",
+        "type": "polished",
+        "chapter": 1,
+        "replacements": "^ + ->\n\\n{3,} -> \\n\n +$ ->",
+    })
+    assert res.status == 200, payload
+    assert payload["warnings"] == []
+    joined = "".join(t for k, t in payload["segments"] if k != "del")
+    assert joined == "Раз   два\nТри\n"
+    assert payload["changed"] is True
+    # правила отдаются размеченными: невидимый пробел паттерна — «·»;
+    # «\n» — escape regexp (два символа), разметка его не трогает
+    assert payload["rules"] == [
+        {"pattern": "^·+", "replacement": "", "count": 2},
+        {"pattern": "\\n{3,}", "replacement": "\\n", "count": 1},
+        # правило, которое текст не задело, — с нулём и без сегментов
+        {"pattern": "·+$", "replacement": "", "count": 0},
+    ]
+    assert {s["label"]: s["count"] for s in payload["stats"]} == {
+        "--replace/^·+": 2, "--replace/\\n{3,}": 1}
 
 
 def test_batch_replace_preview_deletion_and_errors(srv_ctx):

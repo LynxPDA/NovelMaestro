@@ -783,8 +783,12 @@ def _batch_replace_preview(ctx: dict) -> dict:
     применяются тем же путём, что реальный запуск
     (cli.batch_replace.parse_replace_lines + apply_rules_segments) —
     файлы не изменяются. Пустые правила — текст главы без изменений.
-    Возвращает segments (keep/del/ins) итогового текста и счётчики
-    замен по правилам.
+
+    Возвращает segments (keep/del/ins) итогового текста, эффективные правила
+    и счётчики замен. Паттерны, замены и метки правил отдаются через
+    `mark_whitespace`: пробелы в них невидимы, и без меток «^ + -> » (один
+    пробел вместо удаления отступа) выглядит как «ничего не изменилось».
+    Битые строки правил не роняют предпросмотр — они приходят в `warnings`.
     """
     pdir, _sec, _name = _project_ctx(ctx)
     br = _import_batch_replace()
@@ -824,7 +828,10 @@ def _batch_replace_preview(ctx: dict) -> dict:
     return {"ok": True, "num": num, "dir": Path(dirs[0]).name,
             "type": ftype,
             "changed": bool(stats),
-            "stats": [{"label": label, "count": cnt}
+            "rules": [{"pattern": common.mark_whitespace(r.pattern),
+                       "replacement": common.mark_whitespace(r.replacement),
+                       "count": stats.get(r.label, 0)} for r in rules],
+            "stats": [{"label": common.mark_whitespace(label), "count": cnt}
                       for label, cnt in sorted(stats.items(),
                                                key=lambda x: -x[1])],
             "warnings": warnings,

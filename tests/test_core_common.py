@@ -250,14 +250,33 @@ def test_extract_term_context_fuzzy_cjk_exact_only():
                                   threshold=0.75) == "李晓明走进大殿。"
 
 
+@pytest.mark.parametrize(
+    "raw,expect",
+    [
+        ("a  b", "a··b"),
+        ("\tтаб", "\\tтаб"),   # таб — текстовая метка: ⇥ рендерится стрелкой
+        ("a\n\nb", "a⏎\n⏎\nb"),      # перенос остаётся переносом, метка перед ним
+        ("a\r\nb", "a␍⏎\nb"),
+        ("", ""),
+        (None, ""),
+        (7, "7"),
+        ("·⏎", "·⏎"),                    # уже размеченное не меняется
+    ],
+)
+def test_mark_whitespace(raw, expect):
+    r"""Пробелы видимы (·, 	, ␍, ⏎) — предпросмотр и отчёт замен."""
+    assert C.mark_whitespace(raw) == expect
+
+
 def test_trim_rule_left():
-    """Правила замен: паддинг у «->» убирается, значимые пробелы
-    у якорей («^  », «  $») сохраняются."""
+    """Правила замен: у «->» срезается только её пробельный хвост;
+    пробелы паттерна значимы и внутри, и перед ним."""
     assert C.trim_rule_left("Хунг ") == "Хунг"
-    assert C.trim_rule_left(" Хунг") == "Хунг"
+    assert C.trim_rule_left(" Хунг") == " Хунг"   # ведущий пробел — часть паттерна
+    assert C.trim_rule_left(" +$") == " +$"        # хвостовые пробелы строк
     assert C.trim_rule_left("^  ") == "^  "          # отступ строки
     assert C.trim_rule_left("  $ ") == "  $"          # хвостовые пробелы
-    assert C.trim_rule_left("^ ") == "^"              # 1 пробел — паддинг
+    assert C.trim_rule_left("^ ") == "^"              # хвост у стрелки — паддинг
     assert C.trim_rule_left("^ +") == "^ +"            # обычный regex
     assert C.trim_rule_left("") == ""
     assert C.trim_rule_left("   ") == ""
