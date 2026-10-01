@@ -1095,6 +1095,22 @@ NER_PATCH_FIELDS = ("type", "translation", "pinyin", "reading",
 REVIEW_ACCEPT = "принять"
 REVIEW_REJECT = "отклонить"
 REVIEW_STATUSES = (REVIEW_ACCEPT, REVIEW_REJECT)
+# Действие правки: патч поля или удаление термина из глоссария. Ключ «action»
+# в review-файле опционален: старые файлы (и legacy-массив) — это патчи.
+REVIEW_PATCH = "патч"
+REVIEW_DELETE = "удаление"
+REVIEW_ACTIONS = (REVIEW_PATCH, REVIEW_DELETE)
+# LLM вправе прислать действие по-английски — нормализуем к русскому канону
+_ACTION_ALIASES = {"delete": REVIEW_DELETE, "remove": REVIEW_DELETE,
+                   "удалить": REVIEW_DELETE, "patch": REVIEW_PATCH}
+
+
+def ner_action(entry) -> str:
+    """Действие записи правки: «удаление» или «патч». Пусто или незнакомо-патч:
+    legacy-файлы ключа action не содержат."""
+    raw = str((entry or {}).get("action", "")).strip().lower()
+    return _ACTION_ALIASES.get(raw,
+                               raw if raw in REVIEW_ACTIONS else REVIEW_PATCH)
 
 
 def ner_item_lookup(items_by_term, term):
@@ -1248,6 +1264,10 @@ def parse_rag_suggestions(text, logger=None, fields=None):
             continue
         item = {"term": term,
                 "reason": str(p.get("reason", "")).strip()}
+        action = ner_action(p)
+        if action != REVIEW_PATCH:
+            # «удаление» — поле править нечего, только термин целиком
+            item["action"] = action
         for field in allowed:
             v = str(p.get(field, "")).strip()
             if v:
@@ -1256,14 +1276,35 @@ def parse_rag_suggestions(text, logger=None, fields=None):
     return out
 
 
+def ner_item_summary(item, fields=None) -> str:
+    """Что сейчас в записи глоссария (для правки-удаления): непустые поля
+    через «; » в канонической ориентации. fields — какие поля показывать
+    (None — все NER_PATCH_FIELDS); term не включается — он отдельным полем."""
+    parts = []
+    for field in (fields or NER_PATCH_FIELDS):
+        field = str(field).strip().lower()
+        if not field or field == "term":
+            continue
+        value = (item or {}).get(field)
+        if value is None or str(value).strip() == "":
+            continue
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        parts.append(f"{field}="
+                     + unicodedata.normalize("NFC", str(value).strip()))
+    return "; ".join(parts)
+
+
 def diff_ner_records(records, items_by_term, fields, logger=None):
-    """Сверка исправленных записей LLM с ner.json → патчи (сырые
-    {term, field, old, new, reason}). records — [{term, <поля>, reason}];
-    items_by_term — term → запись ner.json; fields — проверяемые поля
-    (term — идентификатор, НЕ правится; поле вне NER_PATCH_FIELDS
-    пропускается). Для каждого поля, отличающегося от текущего
-    значения (NFC), создаётся патч; term в патче — канонический из
-    ner.json. Запись без совпадения — warning с близкими терминами."""
+    """Сверка исправленных записей LLM с ner.json → правки (сырые
+    {term, action, field, old, new, reason}). records — [{term, <поля>,
+    action?, reason}]; items_by_term — term → запись ner.json; fields —
+    проверяемые поля (term — идентификатор, НЕ правится; поле вне
+    NER_PATCH_FIELDS пропускается). Для каждого поля, отличающегося от
+    текущего значения (NFC), создаётся патч; term в правке — канонический из
+    ner.json. Запись с action=«удаление» — правка-удаление: поля не
+    сверяются, old — текущие значения, new пусто. Запись без совпадения —
+    warning с близкими терминами."""
     entries = []
     for rec in records or []:
         term = unicodedata.normalize(
@@ -1278,6 +1319,12 @@ def diff_ner_records(records, items_by_term, fields, logger=None):
             if logger:
                 logger.warning(f"  ⚠ Термин {term!r} не найден в "
                                f"ner.json — пропущен.{hint}")
+            continue
+        if ner_action(rec) == REVIEW_DELETE:
+            entries.append({"term": item["term"], "action": REVIEW_DELETE,
+                            "field": "", "old": ner_item_summary(item, fields),
+                            "new": "",
+                            "reason": str(rec.get("reason", "")).strip()})
             continue
         for field in fields or ():
             field = str(field).strip().lower()
@@ -1304,22 +1351,29 @@ def diff_ner_records(records, items_by_term, fields, logger=None):
 def review_entry(raw, stage=""):
     """Нормализация одной правки в запись review-файла.
     Понимает и legacy-патч {term,field,old,new,reason}, и полную запись
-    со статусами. NFC для term/old/new; field проверяется по
-    NER_PATCH_FIELDS. Возвращает dict-запись или None, если запись
-    некорректна (нет term/поле вне списка)."""
+    со статусами, и удаление термина (action=«удаление»: поля у такой записи
+    не проверяются и не правятся — термин уходит из глоссария целиком).
+    NFC для term/old/new; field патча проверяется по NER_PATCH_FIELDS.
+    Возвращает dict-запись или None, если запись некорректна
+    (нет term/поле вне списка)."""
     if not isinstance(raw, dict):
         return None
     term = unicodedata.normalize("NFC", str(raw.get("term", "")).strip())
+    if not term:
+        return None
+    action = ner_action(raw)
     field = str(raw.get("field", "")).strip().lower()
-    if not term or field not in NER_PATCH_FIELDS:
+    if action == REVIEW_PATCH and field not in NER_PATCH_FIELDS:
         return None
     status = str(raw.get("status", REVIEW_ACCEPT)).strip().lower()
     if status not in REVIEW_STATUSES:
         status = REVIEW_ACCEPT
     return {
         "stage": str(raw.get("stage") or stage),
+        "action": action,
         "term": term,
-        "field": field,
+        # у удаления поля нет: термин уходит из глоссария целиком
+        "field": "" if action == REVIEW_DELETE else field,
         "old": unicodedata.normalize("NFC", str(raw.get("old", ""))),
         "new": unicodedata.normalize("NFC", str(raw.get("new", ""))),
         "reason": str(raw.get("reason") or "").strip(),
@@ -1345,11 +1399,12 @@ def parse_review_doc(doc, logger=None):
 
 def merge_review_entries(existing, new, logger=None):
     """Накопление правок: к существующим записям добавляются новые,
-    дедупликация по (term, field, old, new). Статусы/флаги существующих
+    дедупликация по (term, action, field, old, new). Статусы/флаги существующих
     записей НЕ трогаются — решения человека не затираются повторным
     прогоном. Возвращает (merged, added)."""
     def key(e):
-        return (e["term"], e["field"], e["old"], e["new"])
+        return (e.get("term", ""), ner_action(e), e.get("field", ""),
+                e.get("old", ""), e.get("new", ""))
     seen = {key(e) for e in existing}
     merged, added = list(existing), 0
     for e in new:
@@ -1368,9 +1423,10 @@ def apply_ner_patches(items, patches, logger=None):
     """Применение правок к записям нер.json (in-place).
     Запись применяется, если статус == «принять» (или отсутствует —
     legacy-патчи), флаг «применено» не стоит, термин существует
-    (точное совпадение, NFC) и поле записи совпадает с old (NFC).
-    Правка ложится на ПЕРВУЮ запись термина с совпавшим old — это
-    корректно и для дублей термина с разными значениями поля.
+    (точное совпадение, NFC). Дальше по действию: патч — поле записи
+    совпадает с old (NFC) и правка ложится на ПЕРВУЮ запись термина с
+    совпавшим old (корректно и для дублей термина с разными значениями
+    поля); удаление — из глоссария вычёркиваются ВСЕ записи этого термина.
     Успешные записи помечаются in-place: применено=True +
     «дата применения»; неприменимые получают note с причиной
     (термин не найден / значение поля не совпадает — глоссарий
@@ -1382,16 +1438,29 @@ def apply_ner_patches(items, patches, logger=None):
         if term:
             index.setdefault(term, []).append(item)
     applied, skipped = [], 0
+    doomed: set[int] = set()  # id() записей, помеченных на удаление
     for p in patches:
         status = str(p.get("status", REVIEW_ACCEPT)).strip().lower()
         if status == REVIEW_REJECT or p.get("applied"):
             skipped += 1
             continue
         term = unicodedata.normalize("NFC", str(p.get("term", "")))
-        cands = index.get(term)
+        cands = [it for it in index.get(term) or () if id(it) not in doomed]
         if not cands:
             p["note"] = "термин не найден в ner.json"
             skipped += 1
+            continue
+        stage = p.get("stage") or ""
+        prefix = f"[{stage}] " if stage else ""
+        if ner_action(p) == REVIEW_DELETE:
+            for it in cands:
+                doomed.add(id(it))
+            p["applied"] = True
+            p["applied_at"] = time.strftime("%Y-%m-%d %H:%M")
+            applied.append(p)
+            if logger:
+                logger.info(f"  🗑 {prefix}{term}: записей удалено "
+                            f"{len(cands)}")
             continue
         old = unicodedata.normalize("NFC", str(p.get("old", "")))
         new = unicodedata.normalize("NFC", str(p.get("new", "")))
@@ -1401,7 +1470,7 @@ def apply_ner_patches(items, patches, logger=None):
         target = None
         for item in cands:
             # list/dict-поля (aliases) сравниваются как JSON-строка
-            cur = item.get(p["field"])
+            cur = item.get(p.get("field"))
             if isinstance(cur, (dict, list)):
                 cur = json.dumps(cur, ensure_ascii=False)
             current = unicodedata.normalize(
@@ -1415,7 +1484,7 @@ def apply_ner_patches(items, patches, logger=None):
             skipped += 1
             continue
         new_val = p["new"]
-        cur_val = target.get(p["field"])
+        cur_val = target.get(p.get("field"))
         if isinstance(cur_val, (dict, list)):
             # значение LLM — JSON-строка; не парсится — пропускаем
             try:
@@ -1428,10 +1497,13 @@ def apply_ner_patches(items, patches, logger=None):
         p["applied_at"] = time.strftime("%Y-%m-%d %H:%M")
         applied.append(p)
         if logger:
-            stage = p.get("stage") or ""
-            prefix = f"[{stage}] " if stage else ""
             logger.info(f"  ✔ {prefix}{p['term']} [{p['field']}]: "
                         f"{p['old']!r} → {p['new']!r}")
+    if doomed:
+        # дедуп по identity: равные dict-ы разных терминов не заденет
+        kept = [it for it in items if id(it) not in doomed]
+        del items[:]
+        items.extend(kept)
     return applied, skipped
 
 

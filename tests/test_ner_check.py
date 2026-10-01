@@ -16,9 +16,11 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "cli"))
 
 from core.common import (  # noqa: E402
-    apply_ner_patches, build_ner_batches, filter_ner_items,
-    format_ner_record, glossary_body, merge_review_entries,
-    parse_review_doc, review_entry,
+    REVIEW_ACCEPT, REVIEW_DELETE, REVIEW_PATCH, REVIEW_REJECT,
+    apply_ner_patches, build_ner_batches, diff_ner_records,
+    filter_ner_items, format_ner_record, glossary_body,
+    merge_review_entries, ner_action, ner_item_summary,
+    parse_rag_suggestions, parse_review_doc, review_entry,
 )
 import ner_check as NC  # noqa: E402
 import core.stage as core_stage  # noqa: E402
@@ -238,6 +240,134 @@ def test_apply_ner_patches_statuses_and_duplicates():
 
 
 # ──────────────────────────────────────────────────────────────────────
+# действие правки: патч поля или удаление термина из глоссария
+# ──────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("raw,want", [
+    ({}, REVIEW_PATCH),
+    ({"action": ""}, REVIEW_PATCH),
+    ({"action": "патч"}, REVIEW_PATCH),
+    ({"action": "чушь собачья"}, REVIEW_PATCH),      # незнакомо → патч
+    ({"action": "удаление"}, REVIEW_DELETE),
+    ({"action": " Удаление "}, REVIEW_DELETE),
+    ({"action": "delete"}, REVIEW_DELETE),            # LLM по-английски
+    ({"action": "REMOVE"}, REVIEW_DELETE),
+    ({"action": "удалить"}, REVIEW_DELETE),
+    (None, REVIEW_PATCH),
+])
+def test_ner_action(raw, want):
+    assert ner_action(raw) == want
+
+
+def test_ner_item_summary():
+    it = {"term": "林凡", "type": "Person (male)", "translation": "Линь Фан",
+          "count": 5, "notes": "", "aliases": ["Линь", "Фан"]}
+    assert ner_item_summary(it) == (
+        'type=Person (male); translation=Линь Фан; aliases=["Линь", "Фан"]')
+    # count — не правое поле, term — отдельное поле записи
+    assert ner_item_summary(it, ("term", "type", "translation")) == (
+        "type=Person (male); translation=Линь Фан")
+    assert ner_item_summary({"term": "A"}) == ""
+    assert ner_item_summary(None) == ""
+
+
+def test_review_entry_action():
+    # удаление: поля не проверяются и в запись не попадают
+    e = review_entry({"term": " A ", "action": "delete",
+                      "reason": "не термин"}, stage="RAG")
+    assert e == {"stage": "RAG", "action": REVIEW_DELETE, "term": "A",
+                 "field": "", "old": "", "new": "",
+                 "reason": "не термин", "status": REVIEW_ACCEPT,
+                 "applied": False}
+    # то же действие руками с «неправильным» полем — поле всё равно пустое
+    e2 = review_entry({"term": "A", "action": "удаление", "field": "count"})
+    assert e2 is not None and e2["field"] == ""
+    # патч остаётся патчем (каноническое действие в файле)
+    e3 = review_entry({"term": "A", "field": "type", "old": "x", "new": "y"})
+    assert e3 is not None and e3["action"] == REVIEW_PATCH
+
+
+def test_parse_rag_suggestions_keeps_action():
+    text = ('[{"term": "A", "action": "удаление", "reason": "мусор"},'
+            '{"term": "B", "translation": "б"}]')
+    out = parse_rag_suggestions(text, SilentLog(),
+                               fields=("term", "type", "translation"))
+    assert out is not None and len(out) == 2
+    assert ner_action(out[0]) == REVIEW_DELETE and out[0]["reason"] == "мусор"
+    assert "field" not in out[0]                 # полей у удаления нет
+    assert ner_action(out[1]) == REVIEW_PATCH and out[1]["translation"] == "б"
+
+
+def test_diff_ner_records_delete():
+    by_term = {it["term"]: it for it in ITEMS}
+    fields = ("term", "type", "translation")
+    recs = [
+        # удаление: поля не сверяются, old — что сейчас в записи
+        {"term": "火球术", "action": "delete", "reason": "не навык"},
+        # обычный патч
+        {"term": "林凡", "type": "Person", "reason": ""},
+        # термина нет в глоссарии — пропуск с подсказкой
+        {"term": "火球", "action": "удаление", "reason": ""},
+    ]
+    out = diff_ner_records(recs, by_term, fields, SilentLog())
+    assert out is not None and len(out) == 2
+    d, p = out[0], out[1]
+    assert ner_action(d) == REVIEW_DELETE
+    assert d["term"] == "火球术" and d["field"] == "" and d["new"] == ""
+    assert d["old"] == "type=Skill; translation=Огненный шар"
+    assert ner_action(p) == REVIEW_PATCH and p["field"] == "type"
+
+
+def test_merge_review_entries_distinguishes_action():
+    del_e = review_entry({"term": "A", "action": "удаление"}, stage="RAG")
+    patch_e = review_entry({"term": "A", "field": "translation",
+                            "old": "", "new": ""}, stage="RAG")
+    # дубль удаления не добавляется, а патч того же термина — добавляется
+    merged, added = merge_review_entries([del_e], [del_e, patch_e])
+    assert added == 1 and len(merged) == 2
+    assert merged[0]["action"] == REVIEW_DELETE
+    # статусы/флаги существующей записи не перезаписаны действием
+    assert merged[0]["status"] == REVIEW_ACCEPT
+
+
+def test_apply_ner_patches_delete():
+    items = [dict(ITEMS[0]), dict(ITEMS[1]), dict(ITEMS[2])]
+    entries = [
+        {"stage": "RAG", "action": REVIEW_DELETE, "term": "火球术",
+         "field": "", "old": "type=Skill", "new": "",
+         "reason": "не навык", "status": REVIEW_ACCEPT, "applied": False},
+        {"stage": "RAG", "action": REVIEW_DELETE, "term": "青云宗",
+         "field": "", "old": "", "new": "", "reason": "",
+         "status": REVIEW_REJECT, "applied": False},     # человек отказал
+        {"stage": "RAG", "action": REVIEW_DELETE, "term": "Неттакого",
+         "field": "", "old": "", "new": "", "reason": "",
+         "status": REVIEW_ACCEPT, "applied": False},     # термин не найден
+    ]
+    applied, skipped = apply_ner_patches(items, entries)
+    assert len(applied) == 1 and skipped == 2
+    assert [it["term"] for it in items] == ["林凡", "青云宗"]
+    assert applied[0]["applied"] is True and "applied_at" in applied[0]
+    assert "термин не найден" in entries[2]["note"]
+    # повторное применение уже применённого удаления — skip
+    again, skipped2 = apply_ner_patches(items, entries)
+    assert again == [] and skipped2 == 3
+
+
+def test_apply_ner_patches_delete_duplicates():
+    """Удаление термина вычёркивает ВСЕ его записи, но не соседей-двойники."""
+    items = [
+        {"term": "玄", "type": "Skill", "translation": "мрак"},
+        {"term": "其它", "type": "Item", "translation": "прочее"},
+        {"term": "玄", "type": "Skill", "translation": "тайна"},
+    ]
+    entries = [{"stage": "e", "action": REVIEW_DELETE, "term": "玄",
+                "field": "", "old": "", "new": "", "reason": "",
+                "status": REVIEW_ACCEPT, "applied": False}]
+    applied, skipped = apply_ner_patches(items, entries)
+    assert len(applied) == 1 and skipped == 0
+    assert [it["term"] for it in items] == ["其它"]
+
+
+# ──────────────────────────────────────────────────────────────────────
 # e2e скрипта (LLM мок)
 # ──────────────────────────────────────────────────────────────────────
 def _write_ner(tmp_path):
@@ -439,6 +569,40 @@ def test_ner_check_apply_legacy_patches_array(tmp_path, monkeypatch):
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
     assert not (tmp_path / "ner_changes.md").exists()
+
+
+def test_ner_check_delete_end_to_end(tmp_path, monkeypatch):
+    """LLM помечает термин лишним → review-запись «удаление» → --apply
+    вычёркивает его из ner.json (с бэкапом); dry-run ничего не пишет."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    resp = ('[{"term": "林凡", "translation": "Линь Фань", "reason": "pinyin"},'
+            '{"term": "火球术", "action": "удаление", "reason": "не навык"}]')
+    calls = []
+    _mock_stream(monkeypatch, resp, calls)
+    assert NC.main(["--input", "ner.json", "--passes", "whole",
+                    "--model", "m"]) == 0
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
+                     .read_text(encoding="utf-8"))
+    assert [e["action"] for e in doc["entries"]] == ["патч", "удаление"]
+    de = doc["entries"][1]
+    assert de["field"] == "" and de["new"] == ""
+    assert de["old"] == "type=Skill; translation=Огненный шар"
+    assert de["reason"] == "не навык"
+    # dry-run: только лог, файлы целые
+    assert NC.main(["--input", "ner.json", "--apply", "--dry-run",
+                    "--model", "m"]) == 0
+    assert len(json.loads((tmp_path / "ner.json")
+                          .read_text(encoding="utf-8"))) == 3
+    # применение: термин уходит, решение человека сохранено в review
+    assert NC.main(["--input", "ner.json", "--apply", "--model", "m"]) == 0
+    data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
+    assert [it["term"] for it in data] == ["林凡", "青云宗"]
+    assert data[0]["translation"] == "Линь Фань"
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
+                     .read_text(encoding="utf-8"))
+    assert [e["applied"] for e in doc["entries"]] == [True, True]
+    assert (tmp_path / "tmp" / "ner.json.bak").exists()
 
 
 def test_ner_check_auto_apply_whole(tmp_path, monkeypatch):
