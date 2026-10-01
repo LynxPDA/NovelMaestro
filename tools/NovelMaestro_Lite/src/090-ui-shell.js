@@ -47,6 +47,50 @@
         `;
         rootEl.appendChild(popup);
     })();
+
+    // ===== ПОДСКАЗКИ (?) =====
+    // Один плавающий тултип на весь шелл: вложенный в модалку tooltip обрезался бы
+    // overflow скроллящегося тела, поэтому fixed и ручной расчёт позиции.
+    (function initTooltips() {
+        const tip = document.createElement('div');
+        tip.id = 'nm-tip';
+        tip.setAttribute('role', 'tooltip');
+        rootEl.appendChild(tip);
+        const touchUI = matchMedia('(hover: none)');
+        let owner = null;
+        // иконка лежит в shadow DOM — цель события может быть внутренним текстом
+        const hintOf = (e) => {
+            const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
+            return path.find(n => n && n.classList && n.classList.contains('nm-hint')) || null;
+        };
+        const show = (el) => {
+            const text = el.getAttribute('data-tip');
+            if (!text) return;
+            tip.textContent = text;
+            tip.classList.add('active');
+            owner = el;
+            const r = el.getBoundingClientRect();
+            const w = tip.offsetWidth, h = tip.offsetHeight;
+            const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8));
+            // под иконкой, а не влезла — над ней (нижняя кромка экрана не режет текст)
+            const top = r.bottom + 8 + h > innerHeight - 8 ? Math.max(8, r.top - h - 8) : r.bottom + 8;
+            tip.style.left = `${left}px`;
+            tip.style.top = `${top}px`;
+        };
+        const hide = () => { owner = null; tip.classList.remove('active'); };
+        shadow.addEventListener('pointerover', (e) => { if (e.pointerType !== 'touch') { const h = hintOf(e); if (h) show(h); } });
+        shadow.addEventListener('pointerout', (e) => { if (e.pointerType !== 'touch' && owner === hintOf(e)) hide(); });
+        shadow.addEventListener('focusin', (e) => { const h = hintOf(e); if (h) show(h); });
+        shadow.addEventListener('focusout', hide);
+        // на тач-устройстве фокус на button не всегда приходит — тап сам переключает
+        shadow.addEventListener('click', (e) => {
+            const h = hintOf(e);
+            if (h) { if (touchUI.matches) (owner === h ? hide : show)(h); return; }
+            hide();
+        });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
+    })();
+
     function extractMiniShow() {
         $('#nm-extract-popup').classList.add('active');
         const f = $('#nm-extract-fill');

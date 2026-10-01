@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.43
+// @version      1.44
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.43';
+    const APP_VERSION = '1.44';
 
     // ===== КОНФИГУРАЦИЯ =====
     // Штатный промпт перевода (редактируемое поле Настроек). Плейсхолдеры те же,
@@ -149,6 +149,8 @@
         extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины. Перевод терминов должен быть на {targetLang}.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang}. Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
         fuzzySearchThreshold: 0.7,
         autoNER: true,
+        // UI-предпочтение: какая вторичная вкладка настроек открыта
+        settingsSubTab: 'main',
         glossaryCurrentPageOnly: false,
         preemptiveTranslation: true, // автоперевод следующей главы в фоне
         // 'auto' — следовать системной теме; 'dark'/'light' — ручной выбор кнопкой в читалке
@@ -864,14 +866,30 @@
             .nm-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 2147483647; }
             .nm-modal.active { display: flex; align-items: center; justify-content: center; }
             .nm-modal-content { background: white; border-radius: 12px; max-width: 900px; width: 95%; max-height: 90vh; overflow-y: auto; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.3); color: #111827; }
+            /* главный шелл: шапка с ✕ и подвал настроек неподвижны, скроллится только тело */
+            #nm-modal .nm-modal-content { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+            #nm-modal .nm-modal-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #e5e7eb; }
+            #nm-modal .nm-modal-header h2 { margin: 0; font-size: 17px; }
+            #nm-modal .nm-tabs { flex: 0 0 auto; margin: 0; padding: 0 16px; }
+            #nm-modal .nm-modal-body { flex: 1 1 auto; overflow-y: auto; padding: 16px 16px 0; }
+            .nm-version { font-size: 12px; font-weight: 400; color: #9ca3af; margin-left: 6px; }
+            /* подвал настроек: сброс и индикатор сохранения — всегда под рукой */
+            .nm-settings-footer { position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px; margin: 0 -16px; padding: 10px 16px; background: #fbfbfc; border-top: 1px solid #e5e7eb; }
+            .nm-settings-footer .nm-status { flex: 1 1 auto; margin: 0; padding: 7px 10px; }
+            .nm-settings-footer .nm-btn { flex: 0 0 auto; margin: 0; }
             .nm-tabs { display: flex; border-bottom: 2px solid #e5e7eb; margin-bottom: 20px; }
             .nm-tab { padding: 10px 20px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
             .nm-tab.active { border-bottom-color: #2563eb; color: #2563eb; font-weight: 600; }
             .nm-tab-content { display: none; }
             .nm-tab-content.active { display: block; }
+            /* вторичные вкладки настроек: «что нужно всем» и «что нужно энтузиастам» */
+            .nm-subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+            .nm-subtab { padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 999px; background: white; color: #374151; font-size: 13px; cursor: pointer; }
+            .nm-subtab.active { background: #2563eb; border-color: #2563eb; color: white; font-weight: 600; }
+            .nm-subtab-content { display: none; }
+            .nm-subtab-content.active { display: block; }
             .nm-input-group { margin-bottom: 16px; }
             .nm-input-group label { display: block; margin-bottom: 6px; font-weight: 500; color: #374151; }
-            .nm-input-group small { display: block; margin-top: 4px; color: #6b7280; font-size: 12px; }
             .nm-input, .nm-textarea, .nm-select { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; background: white; color: #111827; }
             .nm-textarea { min-height: 110px; resize: vertical; font-family: Consolas, Monaco, monospace; line-height: 1.4; }
             .nm-btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; margin-right: 8px; margin-top: 8px; }
@@ -921,11 +939,19 @@
             .nm-progress-fill.retry { background: repeating-linear-gradient(45deg, #f59e0b 0 10px, #fbbf24 10px 20px); background-size: 28.3px 28.3px; animation: nm-retry-stripes .8s linear infinite; }
             @keyframes nm-retry-stripes { to { background-position: 28.3px 0; } }
             .nm-input:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
-            /* разбитый JSON в «своих полях запроса»: запрос уходит без них — поле мигает */
+            /* битый ввод (не число, вне диапазона, неразобранный JSON): запрос уходит
+               с подменённым значением — поле обязано быть подсвечено */
             .nm-input-bad { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
-            .nm-checkbox-group { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-            .nm-checkbox-group input { width: 18px; height: 18px; cursor: pointer; }
-            .nm-checkbox-group label { margin: 0; cursor: pointer; }
+            /* чекбоксы карточкой: зона клика — вся строка, а не сам квадратик */
+            .nm-check-card { position: relative; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; margin-bottom: 12px; }
+            .nm-check-card > label { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 36px 10px 12px; cursor: pointer; color: #1f2937; }
+            .nm-check-card input[type=checkbox] { flex: 0 0 auto; width: 18px; height: 18px; cursor: pointer; }
+            /* подсказка (?): длинные описания спрятаны, а не размазаны по форме */
+            .nm-hint { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 1px solid #9ca3af; border-radius: 50%; background: #f3f4f6; color: #4b5563; font-size: 11px; font-weight: 700; line-height: 1; vertical-align: 1px; cursor: help; }
+            .nm-hint:hover, .nm-hint:focus { background: #2563eb; border-color: #2563eb; color: white; outline: none; }
+            /* один плавающий тултип на весь шелл: вложенный в модалку обрезался бы overflow */
+            #nm-tip { display: none; position: fixed; z-index: 2147483647; max-width: min(360px, calc(100vw - 24px)); padding: 8px 10px; border-radius: 8px; background: #111827; color: #f9fafb; font-size: 12.5px; line-height: 1.45; box-shadow: 0 8px 24px rgba(0,0,0,.35); pointer-events: none; white-space: pre-line; }
+            #nm-tip.active { display: block; }
             .nm-section { background: #f9fafb; padding: 16px; border-radius: 8px; margin-bottom: 16px; }
             .nm-section h3 { margin: 0 0 12px 0; font-size: 16px; color: #1f2937; }
             .nm-toolbar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -948,11 +974,19 @@
             #nm-root.nm-ui-dark .nm-dropdown-item { color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-dropdown-item:hover { background: #2a2f39; }
             #nm-root.nm-ui-dark .nm-modal-content { background: #1f232b; }
+            #nm-root.nm-ui-dark .nm-modal-header, #nm-root.nm-ui-dark .nm-settings-footer { border-color: #3a3f4a; }
+            #nm-root.nm-ui-dark .nm-settings-footer { background: #1f232b; }
             #nm-root.nm-ui-dark .nm-tabs { border-color: #3a3f4a; }
             #nm-root.nm-ui-dark .nm-tab { color: #b9bdc6; }
             #nm-root.nm-ui-dark .nm-tab.active { color: #7fb0ff; border-bottom-color: #7fb0ff; }
+            #nm-root.nm-ui-dark .nm-subtab { background: #2a2f39; color: #c6c9d0; border-color: #3a3f4a; }
+            #nm-root.nm-ui-dark .nm-subtab.active { background: #2563eb; border-color: #2563eb; color: #e2e2dc; }
+            #nm-root.nm-ui-dark .nm-check-card { background: #1c2c4a; border-color: #2f4368; }
+            #nm-root.nm-ui-dark .nm-check-card > label { color: #e2e2dc; }
+            #nm-root.nm-ui-dark .nm-hint { background: #2a2f39; border-color: #4b5563; color: #c6c9d0; }
+            #nm-root.nm-ui-dark .nm-hint:hover, #nm-root.nm-ui-dark .nm-hint:focus { background: #2563eb; border-color: #2563eb; color: #e2e2dc; }
+            #nm-root.nm-ui-dark #nm-tip { background: #0d0f13; color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-input-group label { color: #c6c9d0; }
-            #nm-root.nm-ui-dark .nm-input-group small { color: #8b909a; }
             #nm-root.nm-ui-dark .nm-input, #nm-root.nm-ui-dark .nm-textarea, #nm-root.nm-ui-dark .nm-select { background: #2a2f39; color: #e2e2dc; border-color: #3a3f4a; }
             #nm-root.nm-ui-dark .nm-input:disabled { background: #23272e; color: #7d828c; }
             #nm-root.nm-ui-dark .nm-section { background: #262b34; }
@@ -1051,8 +1085,15 @@
                 .nm-dropdown-item { white-space: normal; padding: 12px 14px; }
                 .nm-modal.active { align-items: stretch; justify-content: stretch; }
                 .nm-modal-content { width: 100%; max-width: 100%; height: 100%; max-height: 100%; border-radius: 0; padding: 14px; padding: calc(14px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom)); }
+                #nm-modal .nm-modal-content { padding: 0; }
+                #nm-modal .nm-modal-header { padding: calc(10px + env(safe-area-inset-top)) 12px 10px; }
+                #nm-modal .nm-tabs { padding: 0 12px; }
+                #nm-modal .nm-modal-body { padding: 12px 12px 0; }
+                .nm-settings-footer { margin: 0 -12px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
                 .nm-tabs { overflow-x: auto; flex-wrap: nowrap; }
                 .nm-tab { flex-shrink: 0; white-space: nowrap; padding: 10px 14px; }
+                .nm-subtab { min-height: 36px; padding: 8px 14px; }
+                .nm-hint { width: 20px; height: 20px; font-size: 12px; }
                 .nm-input, .nm-textarea, .nm-select, .nm-glossary-table input, .nm-glossary-table select, .nm-add-form input, .nm-add-form select, .nm-filter-row input { font-size: 16px; }
                 .nm-add-form { grid-template-columns: 1fr; }
                 #glossary-list { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -1084,8 +1125,7 @@
         `;
         document.head.appendChild(st);
     })();
-
-    const host = document.createElement('div');
+const host = document.createElement('div');
     host.id = 'nm-lite-host';
     document.documentElement.appendChild(host);
     const shadow = host.attachShadow({ mode: 'open' });
@@ -1107,13 +1147,16 @@
 
             <div class="nm-modal" id="nm-modal">
                 <div class="nm-modal-content">
-                    <button class="nm-close" id="nm-close">&times;</button>
-                    <h2 style="margin-top:0;">NovelMaestro Lite <span style="font-size:12px;color:#9ca3af;font-weight:400;">v${APP_VERSION}</span></h2>
+                    <div class="nm-modal-header">
+                        <h2>NovelMaestro Lite <span class="nm-version">v${APP_VERSION}</span></h2>
+                        <button class="nm-close" id="nm-close" title="Закрыть">&times;</button>
+                    </div>
                     <div class="nm-tabs">
                         <div class="nm-tab active" data-tab="book">📚 Книга</div>
                         <div class="nm-tab" data-tab="glossary">✨ Глоссарий <span class="nm-glossary-count" id="glossary-count">0</span></div>
                         <div class="nm-tab" data-tab="settings">⚙️ Настройки</div>
                     </div>
+                    <div class="nm-modal-body">
                     <div class="nm-tab-content active" id="tab-book">
                         <div class="nm-section">
                             <h3>Управление книгами</h3>
@@ -1153,155 +1196,162 @@
                         </div>
                     </div>
                     <div class="nm-tab-content" id="tab-settings">
-                        <div class="nm-section">
-                            <h3>🤖 API</h3>
-                            <div class="nm-input-group"><label>API Host:</label><input type="text" class="nm-input" id="api-host"></div>
-                            <div class="nm-input-group"><label>API Key:</label><input type="password" class="nm-input" id="api-key">
-                                <small>Пустой API Key разрешён при включённом чекбоксе ниже.</small>
-                            </div>
-                            <div class="nm-checkbox-group">
-                                <input type="checkbox" id="local-model">
-                                <label for="local-model">🖥️ Локальная модель без API-ключа</label>
-                            </div>
-                            <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
-                            <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
-                            <div class="nm-server-status" id="server-status"></div>
+                        <div class="nm-subtabs">
+                            <button type="button" class="nm-subtab active" data-stab="main">🌐 Основные</button>
+                            <button type="button" class="nm-subtab" data-stab="reader">📖 Читалка</button>
+                            <button type="button" class="nm-subtab" data-stab="translate">🔄 Перевод</button>
+                            <button type="button" class="nm-subtab" data-stab="advanced">⚙️ Продвинутое</button>
                         </div>
-                        <div class="nm-section">
-                            <h3>🧠 Reasoning и thinking</h3>
-                            <div class="nm-input-group"><label>Режим мышления:</label>
-                                <select class="nm-select" id="thinking-mode">
-                                    <option value="default">🌐 Как у модели — ничего не отправлять</option>
-                                    <option value="on">💭 Включить рассуждения</option>
-                                    <option value="off">🚫 Выключить рассуждения</option>
-                                </select>
-                                <small>У провайдеров нет общего поля thinking: выбранное действие отправляется профилем ниже. «Как у модели» — ни одного reasoning-ключа в запросе, сервер решает сам.</small>
+                        <div class="nm-subtab-content active" id="stab-main">
+                            <div class="nm-section">
+                                <h3>🤖 API</h3>
+                                <div class="nm-input-group"><label>API Host:</label><input type="text" class="nm-input" id="api-host"></div>
+                                <div class="nm-input-group"><label>API Key:<button type="button" class="nm-hint" data-tip="Пустой API Key разрешён при включённом чекбоксе «Локальная модель без API-ключа».">?</button></label><input type="password" class="nm-input" id="api-key"></div>
+                                <div class="nm-check-card">
+                                    <label for="local-model"><input type="checkbox" id="local-model"><span>🖥️ Локальная модель без API-ключа</span></label>
+                                </div>
+                                <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
+                                <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
+                                <div class="nm-server-status" id="server-status"></div>
                             </div>
-                            <div class="nm-input-group"><label>Профиль API (как передавать):</label>
-                                <select class="nm-select" id="reasoning-profile">
-                                    <option value="openai">OpenAI-совместимый — reasoning_effort</option>
-                                    <option value="anthropic">Anthropic-style — thinking.type</option>
-                                    <option value="qwen">Qwen3 / vLLM / llama.cpp — chat_template_kwargs</option>
-                                    <option value="dashscope">DashScope / SiliconFlow — enable_thinking</option>
-                                    <option value="ollama">Ollama — think</option>
-                                    <option value="openrouter">OpenRouter — reasoning.enabled</option>
-                                    <option value="all">Все профили сразу — «универсальный»</option>
-                                </select>
-                                <small>Профиль отправляет только свои ключи: незнакомый ключ часть серверов считает ошибкой запроса, поэтому «все сразу» — отдельный осознанный режим. Текст, который реально уходит, показывает «🔌 Проверить сервер».</small>
+                            <div class="nm-section">
+                                <h3>🗣 Языки</h3>
+                                <div class="nm-input-group"><label>Исходный язык:</label>
+                                    <select class="nm-select" id="source-lang">
+                                        <option value="Авто">Авто</option><option value="Китайский">Китайский</option>
+                                        <option value="Английский">Английский</option><option value="Японский">Японский</option>
+                                        <option value="Корейский">Корейский</option><option value="Русский">Русский</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group"><label>Целевой язык:</label>
+                                    <select class="nm-select" id="target-lang">
+                                        <option value="Русский">Русский</option><option value="Английский">Английский</option>
+                                        <option value="Испанский">Испанский</option><option value="Французский">Французский</option>
+                                        <option value="Немецкий">Немецкий</option><option value="Японский">Японский</option>
+                                        <option value="Корейский">Корейский</option><option value="Китайский">Китайский</option>
+                                    </select>
+                                </div>
                             </div>
-                            <div class="nm-input-group"><label>Уровень рассуждений (пусто = не отправлять):</label>
-                                <select class="nm-select" id="reasoning-effort">
-                                    <option value="">не отправлять</option><option value="minimal">minimal</option>
-                                    <option value="low">low</option><option value="medium">medium</option>
-                                    <option value="high">high</option><option value="xhigh">xhigh</option>
-                                    <option value="max">max</option>
-                                </select>
-                                <small>Отправляется выбранным профилем как есть. Старое значение «None» = «не отправлять».</small>
-                            </div>
-                            <div class="nm-input-group"><label>Бюджет размышлений (токены, 0 = не отправлять):</label>
-                                <input type="number" class="nm-input" id="thinking-budget" min="0" step="128">
-                                <small>ТОКЕНЫ: thinking.budget_tokens / thinking_budget / reasoning.max_tokens — куда он попадает, зависит от профиля.</small>
-                            </div>
-                            <div class="nm-input-group"><label>Свои поля запроса (JSON):</label>
-                                <textarea class="nm-textarea" id="extra-body-json" placeholder='{"chat_template_kwargs": {"enable_thinking": false}}'></textarea>
-                                <small>Универсальный способ: этот JSON-объект добавляется в тело каждого запроса к модели поверх reasoning-полей (при одном ключе он главнее). Битый JSON игнорируется — запрос идёт без своих полей.</small>
+                            <div class="nm-section">
+                                <h3>🌐 Сеть</h3>
+                                <div class="nm-input-group"><label>Таймаут (с):<button type="button" class="nm-hint" data-tip="СЕК. 0 = без таймаута. При стриминге это пауза между токенами: ни одного символа за это время — запрос считается зависшим и повторяется. У запроса без стрима (например, «Проверить сервер») это ожидание всего ответа: локальная модель на телефоне легко думает дольше 10 секунд. По умолчанию 60.">?</button></label>
+                                    <input type="number" class="nm-input" id="request-timeout" min="0" step="1">
+                                </div>
+                                <div class="nm-input-group"><label>Количество ретраев при ошибке:<button type="button" class="nm-hint" data-tip="Повторные попытки при сетевых ошибках, таймаутах и зависании стриминга (не при HTTP 4xx/5xx).">?</button></label>
+                                    <input type="number" class="nm-input" id="max-retries" min="0" max="10">
+                                </div>
+                                <div class="nm-check-card">
+                                    <label for="gm-transport"><input type="checkbox" id="gm-transport"><span>Весь трафик только каналом менеджера (GM_xmlhttpRequest)</span></label>
+                                    <button type="button" class="nm-hint" data-tip="Галочка — старые порядки (всё через менеджер). По умолчанию снята: запросы идут fetch'ом из страницы, канал менеджера подключается сам при CORS-ошибке.">?</button>
+                                </div>
                             </div>
                         </div>
-                        <div class="nm-section">
-                            <h3>📝 Перевод</h3>
-                            <div class="nm-input-group"><label>Исходный язык:</label>
-                                <select class="nm-select" id="source-lang">
-                                    <option value="Авто">Авто</option><option value="Китайский">Китайский</option>
-                                    <option value="Английский">Английский</option><option value="Японский">Японский</option>
-                                    <option value="Корейский">Корейский</option><option value="Русский">Русский</option>
-                                </select>
-                            </div>
-                            <div class="nm-input-group"><label>Целевой язык:</label>
-                                <select class="nm-select" id="target-lang">
-                                    <option value="Русский">Русский</option><option value="Английский">Английский</option>
-                                    <option value="Испанский">Испанский</option><option value="Французский">Французский</option>
-                                    <option value="Немецкий">Немецкий</option><option value="Японский">Японский</option>
-                                    <option value="Корейский">Корейский</option><option value="Китайский">Китайский</option>
-                                </select>
-                            </div>
-                            <div class="nm-input-group"><label>Размер чанка (токенов, оценка):</label>
-                                <input type="number" class="nm-input" id="chunk-size" min="100" max="30000" step="100">
-                            </div>
-                            <div class="nm-checkbox-group">
-                                <input type="checkbox" id="preemptive-translate">
-                                <label for="preemptive-translate">🚀 Автоперевод следующей главы в фоне</label>
-                            </div>
-                            <small>Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT (кнопка в читалке).</small>
-                        </div>
-                        <div class="nm-section">
-                            <h3>🌐 Сеть</h3>
-                            <div class="nm-input-group"><label>Таймаут (с):</label>
-                                <input type="number" class="nm-input" id="request-timeout" min="0" step="1">
-                                <small>СЕК. 0 = без таймаута. При стриминге это пауза между токенами: ни одного символа за это время — запрос считается зависшим и повторяется. У запроса без стрима (например, «Проверить сервер») это ожидание всего ответа: локальная модель на телефоне легко думает дольше 10 секунд. По умолчанию 60.</small>
-                            </div>
-                            <div class="nm-input-group"><label>Количество ретраев при ошибке:</label>
-                                <input type="number" class="nm-input" id="max-retries" min="0" max="10">
-                                <small>Повторные попытки при сетевых ошибках, таймаутах и зависании стриминга (не при HTTP 4xx/5xx).</small>
-                            </div>
-                            <div class="nm-checkbox-group">
-                                <input type="checkbox" id="gm-transport">
-                                <label for="gm-transport">Весь трафик только каналом менеджера (GM_xmlhttpRequest)</label>
-                                <small>Галочка — старые порядки (всё через менеджер). По умолчанию снята: запросы идут из страницы, канал менеджера подключается сам при CORS-ошибке.</small>
+                        <div class="nm-subtab-content" id="stab-reader">
+                            <div class="nm-section">
+                                <h3>📖 Читалка</h3>
+                                <div class="nm-input-group"><label>Тема:</label>
+                                    <select class="nm-select" id="reader-theme">
+                                        <option value="auto">🌗 Как в системе</option>
+                                        <option value="light">☀️ Светлая</option>
+                                        <option value="dark">🌙 Тёмная</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group"><label>Шрифт:</label>
+                                    <select class="nm-select" id="reader-font-family">
+                                        <option value="Georgia, serif">Georgia (serif)</option>
+                                        <option value="Arial, sans-serif">Arial (sans-serif)</option>
+                                        <option value="'Times New Roman', serif">Times New Roman</option>
+                                        <option value="Verdana, sans-serif">Verdana</option>
+                                        <option value="'Segoe UI', sans-serif">Segoe UI</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group"><label>Размер шрифта (px):</label>
+                                    <input type="number" class="nm-input" id="reader-font-size" min="12" max="32" step="1">
+                                </div>
+                                <div class="nm-input-group"><label>Межстрочный интервал:</label>
+                                    <input type="number" class="nm-input" id="reader-line-height" min="1" max="3" step="0.1">
+                                </div>
+                                <div class="nm-input-group"><label>Отступ между абзацами (em):</label>
+                                    <input type="number" class="nm-input" id="reader-paragraph-spacing" min="0.2" max="4" step="0.1">
+                                </div>
+                                <div class="nm-input-group"><label>Ширина колонки (% экрана):<button type="button" class="nm-hint" data-tip="ПРОЦЕНТЫ ширины экрана (не пиксели): колонка остаётся пропорциональной и на телефоне, и на мониторе.">?</button></label>
+                                    <input type="number" class="nm-input" id="reader-content-width" min="30" max="100" step="5">
+                                </div>
                             </div>
                         </div>
-                        <div class="nm-section">
-                            <h3>🔍 Глоссарий</h3>
-                            <div class="nm-input-group"><label>Порог нечеткого поиска (0.0 - 1.0):</label>
-                                <input type="number" class="nm-input" id="fuzzy-threshold" min="0" max="1" step="0.05">
+                        <div class="nm-subtab-content" id="stab-translate">
+                            <div class="nm-section">
+                                <h3>🔄 Перевод</h3>
+                                <div class="nm-input-group"><label>Размер чанка (токенов, оценка):<button type="button" class="nm-hint" data-tip="ТОКЕНЫ — языко-осведомлённая оценка (±20-30%), как в конвейере NovelMaestro: сколько текста уходит в один запрос. Больше — меньше запросов, но выше риск обрыва ответа.">?</button></label>
+                                    <input type="number" class="nm-input" id="chunk-size" min="100" max="30000" step="100">
+                                </div>
+                                <div class="nm-check-card">
+                                    <label for="preemptive-translate"><input type="checkbox" id="preemptive-translate"><span>🚀 Автоперевод следующей главы в фоне</span></label>
+                                    <button type="button" class="nm-hint" data-tip="Переведённые главы (текущая и следующая) кэшируются в памяти браузера этого сайта — из них работают мгновенное открытие с кэшированной главы и экспорт TXT (кнопка в читалке).">?</button>
+                                </div>
                             </div>
-                            <div class="nm-checkbox-group">
-                                <input type="checkbox" id="auto-ner">
-                                <label for="auto-ner">Автоизвлечение терминов (один раз на страницу)</label>
-                            </div>
-                        </div>
-                        <div class="nm-section">
-                            <h3>📖 Читалка</h3>
-                            <div class="nm-input-group"><label>Тема:</label>
-                                <select class="nm-select" id="reader-theme">
-                                    <option value="auto">🌗 Как в системе</option>
-                                    <option value="light">☀️ Светлая</option>
-                                    <option value="dark">🌙 Тёмная</option>
-                                </select>
-                            </div>
-                            <div class="nm-input-group"><label>Шрифт:</label>
-                                <select class="nm-select" id="reader-font-family">
-                                    <option value="Georgia, serif">Georgia (serif)</option>
-                                    <option value="Arial, sans-serif">Arial (sans-serif)</option>
-                                    <option value="'Times New Roman', serif">Times New Roman</option>
-                                    <option value="Verdana, sans-serif">Verdana</option>
-                                    <option value="'Segoe UI', sans-serif">Segoe UI</option>
-                                </select>
-                            </div>
-                            <div class="nm-input-group"><label>Размер шрифта (px):</label>
-                                <input type="number" class="nm-input" id="reader-font-size" min="12" max="32" step="1">
-                            </div>
-                            <div class="nm-input-group"><label>Межстрочный интервал:</label>
-                                <input type="number" class="nm-input" id="reader-line-height" min="1" max="3" step="0.1">
-                            </div>
-                            <div class="nm-input-group"><label>Отступ между абзацами (em):</label>
-                                <input type="number" class="nm-input" id="reader-paragraph-spacing" min="0.2" max="4" step="0.1">
-                            </div>
-                            <div class="nm-input-group"><label>Ширина колонки (% экрана):</label>
-                                <input type="number" class="nm-input" id="reader-content-width" min="30" max="100" step="5">
+                            <div class="nm-section">
+                                <h3>✨ Глоссарий</h3>
+                                <div class="nm-input-group"><label>Порог нечеткого поиска (0.0 - 1.0):<button type="button" class="nm-hint" data-tip="Насколько размытым может быть совпадение термина с текстом главы. Меньше — в промпт перевода попадёт больше терминов, больше — только точные.">?</button></label>
+                                    <input type="number" class="nm-input" id="fuzzy-threshold" min="0" max="1" step="0.05">
+                                </div>
+                                <div class="nm-check-card">
+                                    <label for="auto-ner"><input type="checkbox" id="auto-ner"><span>✨ Автоизвлечение терминов (один раз на страницу)</span></label>
+                                    <button type="button" class="nm-hint" data-tip="Перед переводом главы Lite сначала извлекает с страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же).">?</button>
+                                </div>
                             </div>
                         </div>
-                        <div class="nm-section">
-                            <h3>💬 Промпты</h3>
-                            <div class="nm-input-group"><label>Промпт перевода ({sourceLang}, {targetLang}, {glossary}, {text}):</label>
-                                <textarea class="nm-textarea" id="translation-prompt"></textarea>
+                        <div class="nm-subtab-content" id="stab-advanced">
+                            <div class="nm-section">
+                                <h3>🧠 Reasoning и thinking</h3>
+                                <div class="nm-input-group"><label>Режим мышления:<button type="button" class="nm-hint" data-tip="У провайдеров нет общего поля thinking: выбранное действие отправляется профилем ниже. «Как у модели» — ни одного reasoning-ключа в запросе, сервер решает сам.">?</button></label>
+                                    <select class="nm-select" id="thinking-mode">
+                                        <option value="default">🌐 Как у модели — ничего не отправлять</option>
+                                        <option value="on">💭 Включить рассуждения</option>
+                                        <option value="off">🚫 Выключить рассуждения</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group"><label>Профиль API:<button type="button" class="nm-hint" data-tip="Как именно передавать рассуждения. Профиль отправляет только свои ключи: незнакомый ключ часть серверов считает ошибкой запроса, поэтому «все сразу» — отдельный осознанный режим. Текст, который реально уходит, показывает «🔌 Проверить сервер».">?</button></label>
+                                    <select class="nm-select" id="reasoning-profile">
+                                        <option value="openai">OpenAI-совместимый — reasoning_effort</option>
+                                        <option value="anthropic">Anthropic-style — thinking.type</option>
+                                        <option value="qwen">Qwen3 / vLLM / llama.cpp — chat_template_kwargs</option>
+                                        <option value="dashscope">DashScope / SiliconFlow — enable_thinking</option>
+                                        <option value="ollama">Ollama — think</option>
+                                        <option value="openrouter">OpenRouter — reasoning.enabled</option>
+                                        <option value="all">Все профили сразу — «универсальный»</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group"><label>Уровень рассуждений:<button type="button" class="nm-hint" data-tip="Отправляется выбранным профилем как есть. Пусто = не отправлять; старое значение «None» читается так же.">?</button></label>
+                                    <select class="nm-select" id="reasoning-effort">
+                                        <option value="">не отправлять</option><option value="minimal">minimal</option>
+                                        <option value="low">low</option><option value="medium">medium</option>
+                                        <option value="high">high</option><option value="xhigh">xhigh</option>
+                                        <option value="max">max</option>
+                                    </select>
+                                </div>
+                                <div class="nm-input-group"><label>Бюджет размышлений:<button type="button" class="nm-hint" data-tip="ТОКЕНЫ: thinking.budget_tokens / thinking_budget / reasoning.max_tokens — куда он попадает, зависит от профиля. 0 = не отправлять.">?</button></label>
+                                    <input type="number" class="nm-input" id="thinking-budget" min="0" step="128">
+                                </div>
+                                <div class="nm-input-group"><label>Свои поля запроса (JSON):<button type="button" class="nm-hint" data-tip="Универсальный способ: этот JSON-объект добавляется в тело каждого запроса к модели поверх reasoning-полей (при одном ключе он главнее). Битый JSON игнорируется — запрос идёт без своих полей, поле подсвечивается красным.">?</button></label>
+                                    <textarea class="nm-textarea" id="extra-body-json" placeholder='{"chat_template_kwargs": {"enable_thinking": false}}'></textarea>
+                                </div>
                             </div>
-                            <div class="nm-input-group"><label>Промпт извлечения терминов ({targetLang}, {text}):</label>
-                                <textarea class="nm-textarea" id="extraction-prompt"></textarea>
+                            <div class="nm-section">
+                                <h3>💬 Промпты</h3>
+                                <div class="nm-input-group"><label>Промпт перевода ({sourceLang}, {targetLang}, {glossary}, {text}):</label>
+                                    <textarea class="nm-textarea" id="translation-prompt"></textarea>
+                                </div>
+                                <div class="nm-input-group"><label>Промпт извлечения терминов ({targetLang}, {text}):</label>
+                                    <textarea class="nm-textarea" id="extraction-prompt"></textarea>
+                                </div>
                             </div>
                         </div>
-                        <div class="nm-help" style="margin-bottom:8px;">ℹ️ Настройки сохраняются автоматически при каждом изменении.</div>
-                        <button class="nm-btn nm-btn-secondary" id="btn-reset-settings">Сбросить настройки</button>
-                        <div class="nm-status" id="status-settings"></div>
+                        <div class="nm-settings-footer">
+                            <div class="nm-status" id="status-settings"></div>
+                            <button class="nm-btn nm-btn-secondary nm-btn-sm" id="btn-reset-settings">Сбросить настройки</button>
+                        </div>
+                    </div>
                     </div>
                 </div>
             </div>
@@ -1442,6 +1492,50 @@
         `;
         rootEl.appendChild(popup);
     })();
+
+    // ===== ПОДСКАЗКИ (?) =====
+    // Один плавающий тултип на весь шелл: вложенный в модалку tooltip обрезался бы
+    // overflow скроллящегося тела, поэтому fixed и ручной расчёт позиции.
+    (function initTooltips() {
+        const tip = document.createElement('div');
+        tip.id = 'nm-tip';
+        tip.setAttribute('role', 'tooltip');
+        rootEl.appendChild(tip);
+        const touchUI = matchMedia('(hover: none)');
+        let owner = null;
+        // иконка лежит в shadow DOM — цель события может быть внутренним текстом
+        const hintOf = (e) => {
+            const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
+            return path.find(n => n && n.classList && n.classList.contains('nm-hint')) || null;
+        };
+        const show = (el) => {
+            const text = el.getAttribute('data-tip');
+            if (!text) return;
+            tip.textContent = text;
+            tip.classList.add('active');
+            owner = el;
+            const r = el.getBoundingClientRect();
+            const w = tip.offsetWidth, h = tip.offsetHeight;
+            const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8));
+            // под иконкой, а не влезла — над ней (нижняя кромка экрана не режет текст)
+            const top = r.bottom + 8 + h > innerHeight - 8 ? Math.max(8, r.top - h - 8) : r.bottom + 8;
+            tip.style.left = `${left}px`;
+            tip.style.top = `${top}px`;
+        };
+        const hide = () => { owner = null; tip.classList.remove('active'); };
+        shadow.addEventListener('pointerover', (e) => { if (e.pointerType !== 'touch') { const h = hintOf(e); if (h) show(h); } });
+        shadow.addEventListener('pointerout', (e) => { if (e.pointerType !== 'touch' && owner === hintOf(e)) hide(); });
+        shadow.addEventListener('focusin', (e) => { const h = hintOf(e); if (h) show(h); });
+        shadow.addEventListener('focusout', hide);
+        // на тач-устройстве фокус на button не всегда приходит — тап сам переключает
+        shadow.addEventListener('click', (e) => {
+            const h = hintOf(e);
+            if (h) { if (touchUI.matches) (owner === h ? hide : show)(h); return; }
+            hide();
+        });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
+    })();
+
     function extractMiniShow() {
         $('#nm-extract-popup').classList.add('active');
         const f = $('#nm-extract-fill');
@@ -3429,108 +3523,151 @@
         showStatus('Глоссарий очищен', 'success', 'status-glossary');
     }
 
-    // ===== НАСТРОЙКИ =====
+// ===== НАСТРОЙКИ =====
+    // Вторичные вкладки: «то, что нужно всем» и «то, что нужно энтузиастам».
+    // Открытая вкладка — клиентское предпочтение, но хранилище Lite одно
+    // (GM-хранилище расширения), поэтому оно лежит рядом с остальным конфигом.
+    function setSettingsSubTab(name) {
+        const tab = $('#stab-' + name) ? name : 'main';
+        config.settingsSubTab = tab;
+        $$('.nm-subtab').forEach(t => t.classList.toggle('active', t.dataset.stab === tab));
+        $$('.nm-subtab-content').forEach(c => c.classList.toggle('active', c.id === 'stab-' + tab));
+    }
+
+    /**
+     * Числовое поле настроек. Молча подменить битый ввод дефолтом нельзя:
+     * пользователь должен видеть, что его ввод не принят. problem — причина
+     * (поле подсвечивается), value — то, что реально уходит в конфиг.
+     */
+    function parseNumSetting(raw, { name, def, min, max, int = true }) {
+        const text = String(raw ?? '').trim();
+        const n = Number(text);
+        if (text === '' || !Number.isFinite(n)) {
+            return { value: def, problem: `${name}: ${text ? `«${text}»` : 'пусто'} — нужны цифры, применилось ${def}` };
+        }
+        const v = int ? Math.trunc(n) : n;
+        const lo = min !== undefined && v < min;
+        const hi = max !== undefined && v > max;
+        if (lo || hi) {
+            const fixed = lo ? min : max;
+            return { value: fixed, problem: `${name}: ${n} вне диапазона ${min}–${max}, применилось ${fixed}` };
+        }
+        return { value: v };
+    }
+    const asText = raw => ({ value: raw });
+
+    // [селектор, ключ конфига, читатель значения, (показатель для поля)]
+    const SETTING_FIELDS = [
+        ['#api-host', 'apiHost', raw => ({ value: raw.trim() })],
+        ['#api-key', 'apiKey', raw => ({ value: raw.trim() })],
+        ['#model', 'model', raw => ({ value: raw.trim() })],
+        ['#source-lang', 'sourceLang', asText],
+        ['#target-lang', 'targetLang', asText],
+        ['#request-timeout', 'requestTimeout', raw => parseNumSetting(raw, { name: 'Таймаут', def: DEFAULT_CONFIG.requestTimeout, min: 0 })],
+        ['#max-retries', 'maxRetries', raw => parseNumSetting(raw, { name: 'Ретраи', def: DEFAULT_CONFIG.maxRetries, min: 0, max: 10 })],
+        ['#chunk-size', 'chunkSize', raw => parseNumSetting(raw, { name: 'Размер чанка', def: DEFAULT_CONFIG.chunkSize, min: 100, max: 30000 })],
+        ['#fuzzy-threshold', 'fuzzySearchThreshold', raw => parseNumSetting(raw, { name: 'Порог нечёткого поиска', def: DEFAULT_CONFIG.fuzzySearchThreshold, min: 0, max: 1, int: false })],
+        ['#reader-theme', 'readerTheme', asText],
+        ['#reader-font-family', 'readerFontFamily', asText],
+        ['#reader-font-size', 'readerFontSize', raw => parseNumSetting(raw, { name: 'Размер шрифта', def: DEFAULT_CONFIG.readerFontSize, min: 12, max: 32 })],
+        ['#reader-line-height', 'readerLineHeight', raw => parseNumSetting(raw, { name: 'Межстрочный интервал', def: DEFAULT_CONFIG.readerLineHeight, min: 1, max: 3, int: false })],
+        ['#reader-paragraph-spacing', 'readerParagraphSpacing', raw => parseNumSetting(raw, { name: 'Отступ между абзацами', def: DEFAULT_CONFIG.readerParagraphSpacing, min: 0.2, max: 4, int: false })],
+        ['#reader-content-width', 'readerContentWidth', raw => parseNumSetting(raw, { name: 'Ширина колонки', def: DEFAULT_CONFIG.readerContentWidth, min: 30, max: 100 })],
+        ['#thinking-mode', 'thinkingMode', asText],
+        ['#reasoning-profile', 'thinkingProfile', asText],
+        ['#reasoning-effort', 'reasoningEffort', asText, normalizeEffort],
+        ['#thinking-budget', 'thinkingBudget', raw => parseNumSetting(raw, { name: 'Бюджет размышлений', def: DEFAULT_CONFIG.thinkingBudget, min: 0 })],
+        ['#translation-prompt', 'translationPrompt', asText],
+        ['#extraction-prompt', 'extractionPrompt', asText]
+    ];
+    // Поля с непринятым вводом: селектор → причина. Пока карта не пуста, подвал
+    // настроек показывает ошибку, а не «✅ сохранено».
+    const settingsProblems = new Map();
+
     function loadSettings() {
-        $('#api-host').value = config.apiHost;
-        $('#api-key').value = config.apiKey;
-        $('#model').value = config.model;
-        // уровень — select: старое «None» показывается как «не отправлять»
-        $('#reasoning-effort').value = normalizeEffort(config.reasoningEffort);
-        $('#thinking-mode').value = thinkingMode();
-        $('#reasoning-profile').value = REASONING_PROFILES[config.thinkingProfile] ? config.thinkingProfile : 'openai';
-        $('#thinking-budget').value = config.thinkingBudget;
-        $('#extra-body-json').value = config.extraBodyJson;
-        $('#request-timeout').value = config.requestTimeout;
-        $('#max-retries').value = config.maxRetries;
-        $('#chunk-size').value = config.chunkSize;
-        $('#source-lang').value = config.sourceLang;
-        $('#target-lang').value = config.targetLang;
-        $('#fuzzy-threshold').value = config.fuzzySearchThreshold;
+        for (const [sel, key, , show] of SETTING_FIELDS) {
+            const el = $(sel);
+            el.value = show ? show(config[key]) : config[key];
+        }
         $('#auto-ner').checked = !!config.autoNER;
         $('#glossary-current-only').checked = !!config.glossaryCurrentPageOnly;
         $('#local-model').checked = !!config.localModel;
         $('#api-key').disabled = !!config.localModel;
         $('#preemptive-translate').checked = !!config.preemptiveTranslation;
         $('#gm-transport').checked = (config.gmTransport === 'auto' ? 'page' : config.gmTransport) === 'manager';
-        $('#reader-theme').value = config.readerTheme;
-        $('#reader-font-family').value = config.readerFontFamily;
-        $('#reader-font-size').value = config.readerFontSize;
-        $('#reader-line-height').value = config.readerLineHeight;
-        $('#reader-paragraph-spacing').value = config.readerParagraphSpacing;
-        $('#reader-content-width').value = config.readerContentWidth;
-        $('#translation-prompt').value = config.translationPrompt;
-        $('#extraction-prompt').value = config.extractionPrompt;
+        setSettingsSubTab(config.settingsSubTab);
+        // подсветка переживает закрытие модалки — вместе с ней обязан жить и ответ
+        // «почему поле красное»
+        if (settingsProblems.size) settingsStatus(); else hideStatus('status-settings');
     }
-    const SETTING_FIELDS = [
-        ['#api-host', 'apiHost', v => v.trim()],
-        ['#api-key', 'apiKey', v => v.trim()],
-        ['#model', 'model', v => v.trim()],
-        ['#reasoning-effort', 'reasoningEffort', v => v],
-        ['#thinking-mode', 'thinkingMode', v => v],
-        ['#reasoning-profile', 'thinkingProfile', v => v],
-        ['#thinking-budget', 'thinkingBudget', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : 0; }],
-        ['#request-timeout', 'requestTimeout', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 0 ? n : 10; }],
-        ['#max-retries', 'maxRetries', v => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : 3; }],
-        ['#chunk-size', 'chunkSize', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : DEFAULT_CONFIG.chunkSize; }],
-        ['#source-lang', 'sourceLang', v => v],
-        ['#target-lang', 'targetLang', v => v],
-        ['#fuzzy-threshold', 'fuzzySearchThreshold', v => { const f = parseFloat(v); return Number.isFinite(f) ? f : DEFAULT_CONFIG.fuzzySearchThreshold; }],
-        ['#reader-theme', 'readerTheme', v => v],
-        ['#reader-font-family', 'readerFontFamily', v => v],
-        ['#reader-font-size', 'readerFontSize', v => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : DEFAULT_CONFIG.readerFontSize; }],
-        ['#reader-line-height', 'readerLineHeight', v => { const f = parseFloat(v); return Number.isFinite(f) ? f : DEFAULT_CONFIG.readerLineHeight; }],
-        ['#reader-paragraph-spacing', 'readerParagraphSpacing', v => { const f = parseFloat(v); return Number.isFinite(f) ? f : DEFAULT_CONFIG.readerParagraphSpacing; }],
-        ['#reader-content-width', 'readerContentWidth', v => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(100, Math.max(30, n)) : DEFAULT_CONFIG.readerContentWidth; }],
-        ['#translation-prompt', 'translationPrompt', v => v],
-        ['#extraction-prompt', 'extractionPrompt', v => v]
-    ];
-    let settingsSaveTimer = null;
+    function settingsStatus() {
+        const all = [...settingsProblems.values()];
+        if (!all.length) {
+            showStatus('✅ Настройки сохранены автоматически', 'success', 'status-settings');
+            return;
+        }
+        showStatus(`❌ ${all[0]}${all.length > 1 ? ` (и ещё ${all.length - 1})` : ''}`, 'error', 'status-settings');
+    }
+    function paintSetting(sel, el, problem) {
+        if (problem) settingsProblems.set(sel, problem);
+        else settingsProblems.delete(sel);
+        el.classList.toggle('nm-input-bad', !!problem);
+        el.setAttribute('aria-invalid', problem ? 'true' : 'false');
+    }
     function persistSettings() {
         GM_setValue('config', config);
-        showStatus('✅ Настройки сохранены автоматически', 'success', 'status-settings');
+        settingsStatus();
         applyTheme();
     }
+    let settingsSaveTimer = null;
     function scheduleSettingsSave() {
         clearTimeout(settingsSaveTimer);
         settingsSaveTimer = setTimeout(persistSettings, 400);
     }
     function bindSettingsAutoSave() {
-        for (const [sel, key, parse] of SETTING_FIELDS) {
+        for (const [sel, key, read] of SETTING_FIELDS) {
             const el = $(sel);
-            const save = () => { config[key] = parse(el.value); scheduleSettingsSave(); };
+            const save = () => {
+                const res = read(el.value);
+                paintSetting(sel, el, res.problem);
+                config[key] = res.value;
+                scheduleSettingsSave();
+            };
             el.addEventListener('input', save);
             el.addEventListener('change', save);
+            // в number-поле буквы не дают ни значения, ни input-события (браузер их
+            // просто глотает) — поле проверяется ещё и на выход из него
+            el.addEventListener('blur', save);
         }
-        $('#auto-ner').addEventListener('change', function() { config.autoNER = this.checked; scheduleSettingsSave(); });
-        $('#glossary-current-only').addEventListener('change', function() { config.glossaryCurrentPageOnly = this.checked; glossaryPage = 0; scheduleSettingsSave(); updateGlossaryUI(); });
-        $('#local-model').addEventListener('change', function() {
-            config.localModel = this.checked;
-            $('#api-key').disabled = this.checked;
+        // чекбоксы: значение читается из checked, зона клика — вся карточка (label)
+        const check = (sel, key, after) => $(sel).addEventListener('change', function () {
+            config[key] = this.checked;
+            if (after) after(this);
             scheduleSettingsSave();
         });
-        $('#preemptive-translate').addEventListener('change', function() { config.preemptiveTranslation = this.checked; scheduleSettingsSave(); });
-        $('#gm-transport').addEventListener('change', function() { config.gmTransport = this.checked ? 'manager' : 'page'; scheduleSettingsSave(); });
+        check('#auto-ner', 'autoNER');
+        check('#preemptive-translate', 'preemptiveTranslation');
+        check('#glossary-current-only', 'glossaryCurrentPageOnly', () => { glossaryPage = 0; updateGlossaryUI(); });
+        check('#local-model', 'localModel', el => { $('#api-key').disabled = el.checked; });
+        $('#gm-transport').addEventListener('change', function () {
+            config.gmTransport = this.checked ? 'manager' : 'page';
+            scheduleSettingsSave();
+        });
         // свои поля — JSON: битый стоит показать сразу, а не молча игнорировать
         // (текст при этом сохраняется — пользователь не теряет ввод)
         const extra = $('#extra-body-json');
         const saveExtra = () => {
             const raw = extra.value.trim();
-            extra.classList.remove('nm-input-bad');
+            let problem = '';
             if (raw) {
                 try {
                     const parsed = JSON.parse(raw);
                     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('нужен JSON-объект');
                 } catch (e) {
-                    // битый JSON показываем причиной, а не «сохранено»: висящий debounce иначе
-                    // затирает сообщение через 400 мс, а свои поля тем временем молча не отправляются
-                    clearTimeout(settingsSaveTimer);
-                    extra.classList.add('nm-input-bad');
-                    config.extraBodyJson = raw;
-                    GM_setValue('config', config);
-                    showStatus(`❌ «Свои поля запроса» не разобраны (${e.message}) — запрос идёт без них`, 'error', 'status-settings');
-                    return;
+                    problem = `«Свои поля запроса» не разобраны (${e.message}) — запрос идёт без них`;
                 }
             }
+            paintSetting('#extra-body-json', extra, problem);
             config.extraBodyJson = raw;
             scheduleSettingsSave();
         };
@@ -3541,6 +3678,8 @@
         if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;
         config = { ...DEFAULT_CONFIG };
         GM_setValue('config', config);
+        settingsProblems.clear();
+        $$('.nm-input-bad').forEach(el => { el.classList.remove('nm-input-bad'); el.setAttribute('aria-invalid', 'false'); });
         loadSettings();
         applyTheme();
         showStatus('Настройки сброшены!', 'success', 'status-settings');
@@ -3565,8 +3704,6 @@
         refreshBookTab();
         updateGlossaryUI();
     }
-
-
     // ===== СОБЫТИЯ =====
     $('#btn-translate').addEventListener('click', handleTranslate);
     menuBtn.addEventListener('click', (e) => { e.stopPropagation(); dropdownMenu.classList.toggle('active'); });
@@ -3629,6 +3766,11 @@
             $('#tab-' + this.dataset.tab).classList.add('active');
         });
     });
+    // вторичные вкладки настроек: переключаются молча, выбранная запоминается
+    $$('.nm-subtab').forEach(tab => tab.addEventListener('click', () => {
+        setSettingsSubTab(tab.dataset.stab);
+        scheduleSettingsSave();
+    }));
     $('#book-select').addEventListener('change', function() { managedBookKey = this.value || null; renderBookManageArea(); });
     $('#glossary-filter').addEventListener('input', function() { glossaryFilter = this.value; glossaryPage = 0; updateGlossaryUI(); });
     $('#btn-extract-terms').addEventListener('click', handleExtractTerms);

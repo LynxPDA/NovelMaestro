@@ -20,14 +20,30 @@
             .nm-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 2147483647; }
             .nm-modal.active { display: flex; align-items: center; justify-content: center; }
             .nm-modal-content { background: white; border-radius: 12px; max-width: 900px; width: 95%; max-height: 90vh; overflow-y: auto; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.3); color: #111827; }
+            /* главный шелл: шапка с ✕ и подвал настроек неподвижны, скроллится только тело */
+            #nm-modal .nm-modal-content { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+            #nm-modal .nm-modal-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #e5e7eb; }
+            #nm-modal .nm-modal-header h2 { margin: 0; font-size: 17px; }
+            #nm-modal .nm-tabs { flex: 0 0 auto; margin: 0; padding: 0 16px; }
+            #nm-modal .nm-modal-body { flex: 1 1 auto; overflow-y: auto; padding: 16px 16px 0; }
+            .nm-version { font-size: 12px; font-weight: 400; color: #9ca3af; margin-left: 6px; }
+            /* подвал настроек: сброс и индикатор сохранения — всегда под рукой */
+            .nm-settings-footer { position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px; margin: 0 -16px; padding: 10px 16px; background: #fbfbfc; border-top: 1px solid #e5e7eb; }
+            .nm-settings-footer .nm-status { flex: 1 1 auto; margin: 0; padding: 7px 10px; }
+            .nm-settings-footer .nm-btn { flex: 0 0 auto; margin: 0; }
             .nm-tabs { display: flex; border-bottom: 2px solid #e5e7eb; margin-bottom: 20px; }
             .nm-tab { padding: 10px 20px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
             .nm-tab.active { border-bottom-color: #2563eb; color: #2563eb; font-weight: 600; }
             .nm-tab-content { display: none; }
             .nm-tab-content.active { display: block; }
+            /* вторичные вкладки настроек: «что нужно всем» и «что нужно энтузиастам» */
+            .nm-subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+            .nm-subtab { padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 999px; background: white; color: #374151; font-size: 13px; cursor: pointer; }
+            .nm-subtab.active { background: #2563eb; border-color: #2563eb; color: white; font-weight: 600; }
+            .nm-subtab-content { display: none; }
+            .nm-subtab-content.active { display: block; }
             .nm-input-group { margin-bottom: 16px; }
             .nm-input-group label { display: block; margin-bottom: 6px; font-weight: 500; color: #374151; }
-            .nm-input-group small { display: block; margin-top: 4px; color: #6b7280; font-size: 12px; }
             .nm-input, .nm-textarea, .nm-select { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; background: white; color: #111827; }
             .nm-textarea { min-height: 110px; resize: vertical; font-family: Consolas, Monaco, monospace; line-height: 1.4; }
             .nm-btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; margin-right: 8px; margin-top: 8px; }
@@ -77,11 +93,19 @@
             .nm-progress-fill.retry { background: repeating-linear-gradient(45deg, #f59e0b 0 10px, #fbbf24 10px 20px); background-size: 28.3px 28.3px; animation: nm-retry-stripes .8s linear infinite; }
             @keyframes nm-retry-stripes { to { background-position: 28.3px 0; } }
             .nm-input:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
-            /* разбитый JSON в «своих полях запроса»: запрос уходит без них — поле мигает */
+            /* битый ввод (не число, вне диапазона, неразобранный JSON): запрос уходит
+               с подменённым значением — поле обязано быть подсвечено */
             .nm-input-bad { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
-            .nm-checkbox-group { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-            .nm-checkbox-group input { width: 18px; height: 18px; cursor: pointer; }
-            .nm-checkbox-group label { margin: 0; cursor: pointer; }
+            /* чекбоксы карточкой: зона клика — вся строка, а не сам квадратик */
+            .nm-check-card { position: relative; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; margin-bottom: 12px; }
+            .nm-check-card > label { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 36px 10px 12px; cursor: pointer; color: #1f2937; }
+            .nm-check-card input[type=checkbox] { flex: 0 0 auto; width: 18px; height: 18px; cursor: pointer; }
+            /* подсказка (?): длинные описания спрятаны, а не размазаны по форме */
+            .nm-hint { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 1px solid #9ca3af; border-radius: 50%; background: #f3f4f6; color: #4b5563; font-size: 11px; font-weight: 700; line-height: 1; vertical-align: 1px; cursor: help; }
+            .nm-hint:hover, .nm-hint:focus { background: #2563eb; border-color: #2563eb; color: white; outline: none; }
+            /* один плавающий тултип на весь шелл: вложенный в модалку обрезался бы overflow */
+            #nm-tip { display: none; position: fixed; z-index: 2147483647; max-width: min(360px, calc(100vw - 24px)); padding: 8px 10px; border-radius: 8px; background: #111827; color: #f9fafb; font-size: 12.5px; line-height: 1.45; box-shadow: 0 8px 24px rgba(0,0,0,.35); pointer-events: none; white-space: pre-line; }
+            #nm-tip.active { display: block; }
             .nm-section { background: #f9fafb; padding: 16px; border-radius: 8px; margin-bottom: 16px; }
             .nm-section h3 { margin: 0 0 12px 0; font-size: 16px; color: #1f2937; }
             .nm-toolbar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -104,11 +128,19 @@
             #nm-root.nm-ui-dark .nm-dropdown-item { color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-dropdown-item:hover { background: #2a2f39; }
             #nm-root.nm-ui-dark .nm-modal-content { background: #1f232b; }
+            #nm-root.nm-ui-dark .nm-modal-header, #nm-root.nm-ui-dark .nm-settings-footer { border-color: #3a3f4a; }
+            #nm-root.nm-ui-dark .nm-settings-footer { background: #1f232b; }
             #nm-root.nm-ui-dark .nm-tabs { border-color: #3a3f4a; }
             #nm-root.nm-ui-dark .nm-tab { color: #b9bdc6; }
             #nm-root.nm-ui-dark .nm-tab.active { color: #7fb0ff; border-bottom-color: #7fb0ff; }
+            #nm-root.nm-ui-dark .nm-subtab { background: #2a2f39; color: #c6c9d0; border-color: #3a3f4a; }
+            #nm-root.nm-ui-dark .nm-subtab.active { background: #2563eb; border-color: #2563eb; color: #e2e2dc; }
+            #nm-root.nm-ui-dark .nm-check-card { background: #1c2c4a; border-color: #2f4368; }
+            #nm-root.nm-ui-dark .nm-check-card > label { color: #e2e2dc; }
+            #nm-root.nm-ui-dark .nm-hint { background: #2a2f39; border-color: #4b5563; color: #c6c9d0; }
+            #nm-root.nm-ui-dark .nm-hint:hover, #nm-root.nm-ui-dark .nm-hint:focus { background: #2563eb; border-color: #2563eb; color: #e2e2dc; }
+            #nm-root.nm-ui-dark #nm-tip { background: #0d0f13; color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-input-group label { color: #c6c9d0; }
-            #nm-root.nm-ui-dark .nm-input-group small { color: #8b909a; }
             #nm-root.nm-ui-dark .nm-input, #nm-root.nm-ui-dark .nm-textarea, #nm-root.nm-ui-dark .nm-select { background: #2a2f39; color: #e2e2dc; border-color: #3a3f4a; }
             #nm-root.nm-ui-dark .nm-input:disabled { background: #23272e; color: #7d828c; }
             #nm-root.nm-ui-dark .nm-section { background: #262b34; }
@@ -207,8 +239,15 @@
                 .nm-dropdown-item { white-space: normal; padding: 12px 14px; }
                 .nm-modal.active { align-items: stretch; justify-content: stretch; }
                 .nm-modal-content { width: 100%; max-width: 100%; height: 100%; max-height: 100%; border-radius: 0; padding: 14px; padding: calc(14px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom)); }
+                #nm-modal .nm-modal-content { padding: 0; }
+                #nm-modal .nm-modal-header { padding: calc(10px + env(safe-area-inset-top)) 12px 10px; }
+                #nm-modal .nm-tabs { padding: 0 12px; }
+                #nm-modal .nm-modal-body { padding: 12px 12px 0; }
+                .nm-settings-footer { margin: 0 -12px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
                 .nm-tabs { overflow-x: auto; flex-wrap: nowrap; }
                 .nm-tab { flex-shrink: 0; white-space: nowrap; padding: 10px 14px; }
+                .nm-subtab { min-height: 36px; padding: 8px 14px; }
+                .nm-hint { width: 20px; height: 20px; font-size: 12px; }
                 .nm-input, .nm-textarea, .nm-select, .nm-glossary-table input, .nm-glossary-table select, .nm-add-form input, .nm-add-form select, .nm-filter-row input { font-size: 16px; }
                 .nm-add-form { grid-template-columns: 1fr; }
                 #glossary-list { overflow-x: auto; -webkit-overflow-scrolling: touch; }

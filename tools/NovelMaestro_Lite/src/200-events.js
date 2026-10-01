@@ -60,6 +60,11 @@
             $('#tab-' + this.dataset.tab).classList.add('active');
         });
     });
+    // вторичные вкладки настроек: переключаются молча, выбранная запоминается
+    $$('.nm-subtab').forEach(tab => tab.addEventListener('click', () => {
+        setSettingsSubTab(tab.dataset.stab);
+        scheduleSettingsSave();
+    }));
     $('#book-select').addEventListener('change', function() { managedBookKey = this.value || null; renderBookManageArea(); });
     $('#glossary-filter').addEventListener('input', function() { glossaryFilter = this.value; glossaryPage = 0; updateGlossaryUI(); });
     $('#btn-extract-terms').addEventListener('click', handleExtractTerms);

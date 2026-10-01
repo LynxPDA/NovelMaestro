@@ -80,6 +80,8 @@
         extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины. Перевод терминов должен быть на {targetLang}.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang}. Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
         fuzzySearchThreshold: 0.7,
         autoNER: true,
+        // UI-предпочтение: какая вторичная вкладка настроек открыта
+        settingsSubTab: 'main',
         glossaryCurrentPageOnly: false,
         preemptiveTranslation: true, // автоперевод следующей главы в фоне
         // 'auto' — следовать системной теме; 'dark'/'light' — ручной выбор кнопкой в читалке
