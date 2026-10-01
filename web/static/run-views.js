@@ -49,6 +49,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     brPreview: null, // batch_replace: предпросмотр {segments, stats, …}
     brChapter: null, // batch_replace: выбранная глава предпросмотра
     brSig: "", // batch_replace: сигнатура формы последнего предпросмотра
+    overridden: {}, // стадия → {поле: {key, local, global}} — отличия книги
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
@@ -359,6 +360,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     try {
       const r = await api(`/stages/${key}/spec?project=${section}/${name}`);
       spec = r.spec;
+      // чем книга отличается от общего конфига (пометка поля + «Сбросить»):
+      // собственный .env книги в интерфейсе не редактируется — его
+      // пересобирает сервер из этой формы
+      st.overridden[key] = spec.overridden || {};
     } catch (ex) {
       return h("div", { class: "run-empty" }, ex.message);
     }
@@ -660,6 +665,62 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return p;
   }
 
+  // ── локальные отличия книги от общего .env ─────────────────────────
+  // Собственный .env книги интерфейс НЕ показывает и не редактирует:
+  // его пересобирает сервер из этой формы. Поле с отличием помечено,
+  // снятие — одной кнопкой на стадию.
+  function localFieldBadge(key, name) {
+    const ov = (st.overridden[key] || {})[name];
+    if (!ov) return null;
+    const secret = ov.local === "••••" || ov.global === "••••";
+    const tip = secret
+      ? `локальное отличие книги (${ov.key}) · значения скрыты`
+      : `локальное отличие книги (${ov.key})\n`
+        + `локально: ${ov.local || "∅ (пусто)"}\n`
+        + `общий конфиг: ${ov.global || "∅ (пусто)"}`;
+    return h("span", { class: "field-local", title: tip }, "локально");
+  }
+
+  // «Сбросить локальные (N)»: ключи стадии уходят из .env книги, поля
+  // снова наследуют общий конфиг; форма перечитывается со свежей спекой
+  function resetLocalsBtn(key) {
+    const n = Object.keys(st.overridden[key] || {}).length;
+    if (!n) return null;
+    const btn = h(
+      "button",
+      {
+        class: "btn btn-ghost btn-sm field-local-reset",
+        title:
+          "Убрать локальные отличия книги по этой стадии — поля "
+          + "снова возьмут значения общего .env",
+      },
+      `Сбросить локальные (${n})`,
+    );
+    btn.addEventListener("click", () =>
+      confirmModal(
+        "Сбросить локальные отличия",
+        `${key}: ${n} ключ(ов) этой книги вернётся к значениям общего `
+          + ".env; отличия других стадий не трогаем.",
+        "СБРОСИТЬ",
+        async () => {
+          try {
+            const r = await api(
+              `/stages/${key}/reset?project=${section}/${name}`,
+              { method: "POST" },
+            );
+            st.overridden[key] = (r.spec || {}).overridden || {};
+            delete st.values[key]; // значения формы — заново из общего
+            delete st.touched[key];
+            toast(`Сброшено локальных ключей: ${n}`);
+            await render();
+          } catch (ex) {
+            toast(ex.message, "err");
+          }
+        },
+      ));
+    return btn;
+  }
+
   // общий построитель поля: label + input, привязанный к st.values[key]
   // (оба режима). Возвращает label-обёртку; сам input — в wrap._input
   // (у files — row, select внутри row._sel).
@@ -668,6 +729,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const vals = st.values[key];
     const touched = st.touched[key];
     const label = h("div", { class: "field-label" }, f.label);
+    const localTag = localFieldBadge(key, f.name);
+    if (localTag) label.append(localTag);
     let input;
     if (f.type === "bool") {
       input = h("input", { type: "checkbox", class: "checkbox" });
@@ -1307,15 +1370,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   async function previewRequestModal(key, spec, mode) {
     const err = h("div", { class: "form-error" });
     const host = h("div", { class: "preview-req-body" });
-    const modal = UIC.modal({
+    UIC.modal({
+      title: "Предпросмотр запроса",
       wide: true,
-      build: () => [
-      ],
+      build: (close) => [err, host, h(
+        "div", { class: "modal-actions" },
+        h("button", { class: "btn btn-ghost", onclick: () => close() },
+          "Закрыть"),
+      )],
     });
-    function close() {
-      modal.close();
-  }
-    document.body.append(modal);
     host.append(h("div", { class: "preview-req-head" }, "Формирование запроса…"));
     try {
       const d = await api(`/stages/${key}/preview-request`, {
@@ -1372,12 +1435,45 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const title = opts.title || relPath;
     const err = h("div", { class: "form-error" });
     const host = h("div", { class: "editor-modal-body" });
-    const modal = UIC.modal({
-      wide: true,
-      build: () => [
-      ],
-    });
     let ed = null;
+    UIC.modal({
+      title,
+      wide: true,
+      build: (close) => [host, err, h(
+        "div", { class: "modal-actions" },
+        h("button", { class: "btn btn-ghost", onclick: () => close() },
+          "Отмена"),
+        h("button", {
+          class: "btn btn-primary",
+          onclick: async () => {
+            err.textContent = "";
+            if (!ed) {
+              err.textContent = "Редактор ещё не загружен";
+              return;
+            }
+            try {
+              if (isPromptFile) {
+                await api(`/prompts/${encodeURIComponent(relPath)}`, {
+                  method: "PUT",
+                  body: { project: `${section}/${name}`,
+                          content: ed.getValue() },
+                });
+              } else {
+                await api("/file", {
+                  method: "PUT",
+                  body: { project: `${section}/${name}`, path: relPath,
+                          content: ed.getValue() },
+                });
+              }
+              toast(`Сохранено: ${relPath}`);
+              close();
+            } catch (ex) {
+              err.textContent = ex.message;
+            }
+          },
+        }, "Сохранить"),
+      )],
+    });
     (async () => {
       try {
         const d = isPromptFile
@@ -1394,10 +1490,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         err.textContent = ex.message;
       }
     })();
-    function close() {
-      modal.close();
-  }
-    document.body.append(modal);
   }
 
   // «Добавить спорные» (RAG): модалка с настройками (поле голосов,
@@ -1499,13 +1591,55 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         renderTypeChips();
       }
     });
-    const modal = UIC.modal({
-      build: () => [
+    UIC.modal({
+      title: "Добавить спорные термины",
+      build: (close) => [
+        h("div", { class: "modal-text" }, "Поле голосов:"),
+        fieldSel,
+        h("div", { class: "modal-text" }, "Типы:"),
+        h("div", { class: "ner-chips-bar" }, selAll, selNone,
+          h("span", { class: "spacer" }), typesInfo),
+        typesBox,
+        h("div", { class: "modal-text" }, "Коэффициент:"),
+        ratioInp,
+        h("div", { class: "modal-text" }, "Порог count:"),
+        countInp,
+        help,
+        err,
+        h("div", { class: "modal-actions" },
+          h("button", { class: "btn btn-ghost", onclick: () => close() },
+            "Отмена"),
+          h("button", {
+            class: "btn btn-primary",
+            onclick: () => {
+              const ratio = Number(ratioInp.value);
+              if (!Number.isFinite(ratio) || ratio <= 0) {
+                err.textContent = "Коэффициент — число больше 0";
+                return;
+              }
+              const threshold = Math.max(0, Number(countInp.value) || 0);
+              const terms = new Set();
+              for (const it of items) {
+                if (selTypes != null && !selTypes.includes(it.type)) {
+                  continue;
+                }
+                if (isDisputed(it, ratio, threshold)) terms.add(it.term);
+              }
+              const cur = String(st.values[key]["rag_terms"] ?? "").trim();
+              const lines = cur ? cur.split(/\s*\n+/) : [];
+              for (const t of terms) {
+                if (t && !lines.includes(t)) lines.push(t);
+              }
+              st.values[key]["rag_terms"] = lines.join("\n");
+              st.touched[key].add("rag_terms");
+              const ta = textareaWrap && textareaWrap.querySelector("textarea");
+              if (ta) ta.value = lines.join("\n");
+              close();
+            },
+          }, "Добавить"),
+        ),
       ],
     });
-    function close() {
-      modal.close();
-  }
     // поля голосов и типы — из данных ner.json (асинхронно); данные
     // кешируем в items для живого пересчёта счётчиков
     api(`/ner?project=${section}/${name}`).then((d) => {
@@ -1532,7 +1666,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     ratioInp.addEventListener("input", renderTypeChips);
     countInp.addEventListener("input", renderTypeChips);
     fieldSel.addEventListener("change", renderTypeChips);
-    document.body.append(modal);
   }
 
   // ── диапазон глав: ЕДИНАЯ строка «Главы: [start] – [end]» ────────────
@@ -1869,7 +2002,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (ragApply) ragApply();
     // translate_quality: end считает бюджет — простой режим (auto)
     attachQualityRange(key, byName, "auto");
-    return h("div", { class: "run-form" }, body, err, runBtn);
+    const resetBtn = resetLocalsBtn(key);
+    return h("div", { class: "run-form" }, body, err,
+             ...(resetBtn ? [resetBtn] : []), runBtn);
   }
 
   // экспертная форма: все поля спеки (до простого режима).
@@ -2481,8 +2616,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // (batch_replace: реакции на смену типа/диапазона/правил)
     st.curWraps = fieldWraps;
 
+    const resetBtn = resetLocalsBtn(key);
     return h("div", { class: "run-form" }, formNodes, err,
-             ...(previewBtn ? [previewBtn] : []), runBtn);
+             ...(previewBtn ? [previewBtn] : []),
+             ...(resetBtn ? [resetBtn] : []), runBtn);
   }
 
   // ── epub: панель предпросмотра разбивки ──────────────────────────────

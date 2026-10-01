@@ -123,6 +123,16 @@ function seedProjectsDir(dir) {
     ) + "\n",
     "utf-8",
   );
+  // собственный .env книги — ТОЛЬКО отличия (по одному ключу стадии):
+  // «локально» в форме «Запусков» и сброс отличий проверяются на нём
+  fs.writeFileSync(
+    path.join(book, ".env"),
+    [
+      "# NovelMaestro — локальные отличия книги от общего .env",
+      "NER_CHUNK_SIZE=1234",
+    ].join("\n") + "\n",
+    "utf-8",
+  );
   // файл в корне книги: файловый менеджер есть что показать (quick-look)
   fs.writeFileSync(path.join(book, "notes.md"), "# Заметки\n\n- проба\n", "utf-8");
   fs.mkdirSync(path.join(book, "prompts"), { recursive: true });
@@ -148,6 +158,7 @@ function seedProjectsDir(dir) {
       "HOST=http://127.0.0.1:9/v1",
       "API_KEY=",
       "MODEL=probe-model",
+      "NER_CHUNK_SIZE=8000",
       "REASONING_MODE=default",
       "THINKING_PROFILE=openai",
       "REASONING_EFFORT=",
@@ -449,6 +460,95 @@ async function main() {
       if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-reasoning.png") });
       log(`${problems.length === before ? "✅" : "❌"} reasoning-блок   ${f.labels.join(" · ")}`);
     }
+  }
+
+  /* слои конфига «Запусков»: книга хранит ТОЛЬКО свои отличия — изменённое
+   * поле помечается «локально» (тултип: локальное и общее значение), одна
+   * кнопка снимает отличия стадии, файл книги без отличий удаляется, а
+   * вкладка «Конфиг» книжный .env не показывает вовсе */
+  {
+    const before = problems.length;
+    const bookEnv = path.join(seedDir, SECTION, BOOK, ".env");
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".stage-card", { timeout: 15000 });
+    await page.locator('.stage-card:has-text("Создание глоссария")').first()
+      .click();
+    await page.waitForTimeout(900);
+    await page.locator('.mode-btn:has-text("Экспертный")').first().click();
+    await page.waitForTimeout(900);
+    const readForm = () =>
+      page.evaluate(() => ({
+        rows: [...document.querySelectorAll(".run-form .field")].map((el) => ({
+          label: (el.querySelector(".field-label") || {}).textContent?.trim() || "",
+          value: ((el.querySelector("input,select,textarea") || {}).value) || "",
+          local: !!el.querySelector(".field-local"),
+          tip: (el.querySelector(".field-local") || {}).title || "",
+        })),
+        reset: (document.querySelector(".field-local-reset") || {}).textContent?.trim() || "",
+      }));
+    let form = await readForm();
+    const chunk = form.rows.find((r) => /Размер чанка/.test(r.label));
+    if (!seedDir) {
+      log("⚠️  слои конфига: внешний сервер — файл книги не проверяем");
+    } else {
+      if (!chunk) {
+        problems.push("слои: поля стадии не отрисованы");
+      } else {
+        if (chunk.value !== "1234")
+          problems.push(`слои: поле предзаполнено «${chunk.value}», ждали 1234`);
+        if (!chunk.local)
+          problems.push("слои: отличие книги не помечено «локально»");
+        if (!(chunk.tip.includes("1234") && chunk.tip.includes("8000")))
+          problems.push(`слои: тултип метки «${chunk.tip}»`);
+      }
+      if (form.reset !== "Сбросить локальные (1)")
+        problems.push(`слои: кнопка сброса «${form.reset}»`);
+    }
+    // модалка подтверждения → ключ книги уходит → поле снова общее
+    if (form.reset) {
+      await page.locator(".field-local-reset").first().click();
+      await page.waitForTimeout(600);
+      const word = page.locator(".modal-backdrop input.input");
+      if (!(await word.count())) {
+        problems.push("слои: модалка сброса не открылась");
+      } else {
+        const mtitle = await page.evaluate(() =>
+          (document.querySelector(".modal-backdrop .modal-title") || {})
+            .textContent?.trim() || "");
+        await word.first().fill("СБРОСИТЬ");
+        await page.locator('.modal-backdrop button:has-text("Подтвердить")')
+          .first().click();
+        await page.waitForTimeout(1500);
+        form = await readForm();
+        const after = form.rows.find((r) => /Размер чанка/.test(r.label));
+        if (!after || after.value !== "8000")
+          problems.push(`слои: после сброса поле «${(after || {}).value}»`);
+        if (after && after.local)
+          problems.push("слои: после сброса метка «локально» осталась");
+        if (form.reset)
+          problems.push(`слои: после сброса кнопка «${form.reset}»`);
+        if (!/^Сбросить локальные/.test(mtitle))
+          problems.push(`слои: модалка озаглавлена «${mtitle}»`);
+        if (seedDir && fs.existsSync(bookEnv))
+          problems.push("слои: файл книги остался без отличий");
+      }
+    }
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-config-layers.png") });
+    // вкладка «Конфиг»: книжный .env не показывается и не правится
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/config`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForTimeout(1200);
+    const cfg = await page.evaluate(
+      () => document.getElementById("app").innerHTML);
+    if (/Файл \.env|Сохранить \.env/.test(cfg))
+      problems.push("слои: «Конфиг» по-прежнему редактирует .env книги");
+    if (!/Обложка/.test(cfg))
+      problems.push("слои: в «Конфиге» не осталось карточек");
+    log(`${problems.length === before ? "✅" : "❌"} слои конфига     ${(chunk || {}).label || ""} · ${(form.rows.find((r) => /Размер чанка/.test(r.label)) || {}).value || "?"} · «Конфиг» без .env-редактора`);
   }
 
   /* кириллическое имя проекта: сегменты hash-маршрута браузер хранит

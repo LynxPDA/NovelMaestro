@@ -1755,9 +1755,9 @@ function viewProject(section, name, tab, job) {
         });
         return h("label", { class: "ner-col-row" }, cb, " " + opts.labelOf(k));
       });
-      const modal = UIC.modal({
+      UIC.modal({
         title: opts.title,
-        build: () => [
+        build: (close) => [
           h("div", { class: "modal-text" }, opts.text),
           h("label", { class: "ner-col-row" }, allCb, " " + opts.allLabel),
           ...rows,
@@ -1779,9 +1779,6 @@ function viewProject(section, name, tab, job) {
           ),
         ],
       });
-      function close() {
-        modal.close();
-    }
     }
     async function saveNer() {
       try {
@@ -2101,9 +2098,9 @@ function viewProject(section, name, tab, job) {
         placeholder: "имя столбца (ключ JSON)",
       });
       const err2 = h("div", { class: "form-error" });
-      const modal = UIC.modal({
+      UIC.modal({
         title: "Новый столбец",
-        build: () => [
+        build: (close) => [
           inp,
           err2,
           h(
@@ -2141,10 +2138,6 @@ function viewProject(section, name, tab, job) {
           ),
         ],
       });
-      function close() {
-        modal.close();
-    }
-      document.body.append(modal);
       inp.focus();
     });
     /* «✕ Столбец»: удалить поле из всех терминов (кроме term) */
@@ -2165,9 +2158,9 @@ function viewProject(section, name, tab, job) {
         ...keys.map((k) => h("option", { value: k }, k)),
       );
       const err2 = h("div", { class: "form-error" });
-      const modal = UIC.modal({
+      UIC.modal({
         title: "Удалить столбец",
-        build: () => [
+        build: (close) => [
           h(
             "div",
             { class: "modal-text" },
@@ -2214,10 +2207,6 @@ function viewProject(section, name, tab, job) {
           ),
         ],
       });
-      function close() {
-        modal.close();
-    }
-      document.body.append(modal);
     });
     /* «✕ По фильтру»: удалить термины по условию (count > N) или все найденные */
     const delFilterBtn = h(
@@ -2280,9 +2269,9 @@ function viewProject(section, name, tab, job) {
         el.addEventListener("input", refreshCount),
       );
       refreshCount();
-      const modal = UIC.modal({
+      UIC.modal({
         title: "Удалить термины по фильтру",
-        build: () => [
+        build: (close) => [
           h(
             "div",
             { class: "modal-text" },
@@ -2327,10 +2316,6 @@ function viewProject(section, name, tab, job) {
           ),
         ],
       });
-      function close() {
-        modal.close();
-    }
-      document.body.append(modal);
     });
 
     const addTerm = () => {
@@ -2607,11 +2592,11 @@ function viewProject(section, name, tab, job) {
           value: e["reason"] || "",
         });
         const err2 = h("div", { class: "form-error" });
-        const modal = UIC.modal({
+        UIC.modal({
           title: del
             ? `Удаление термина · правка ${i + 1}`
             : `Правка ${i + 1}`,
-          build: () => [
+          build: (close) => [
             h("label", { class: "rv-label" }, del ? "Что уходит" : "Было"),
             oldIn,
             h(
@@ -2672,10 +2657,6 @@ function viewProject(section, name, tab, job) {
             ),
           ],
         });
-        function close() {
-          modal.close();
-      }
-        document.body.append(modal);
         (del ? reasonIn : newIn).focus();
       }
       function entryRow(e, i, opts) {
@@ -3390,151 +3371,10 @@ function viewProject(section, name, tab, job) {
     const err = h("div", { class: "form-error" });
     const q = new URLSearchParams({ project: `${section}/${name}` });
 
-    /* — .env: только собственный .env проекта (системный — на главной,
-         вкладка «Настройки») — */
-    const envCard = h("div", { class: "review-card" });
-    const envEd = makeEditor("", "txt");
-    const envMeta = h("div", { class: "review-status" });
-    const envToolbar = h("div", { class: "files-toolbar" });
-    const envBody = h(
-      "div",
-      { class: "review-card-body" },
-      envToolbar,
-      h("div", { class: "editor-cm editor-cm-small" }, envEd.root),
-      envMeta,
-      err,
-    );
-    envCard.append(
-      h("div", { class: "review-card-title" }, "Файл .env"),
-      envBody,
-    );
-    let hasOwn = false;
-    let envVisible = false;
-    /* Редактор — только собственный .env проекта; системный (общий)
-       правится на главной («Настройки»), его содержимое можно
-       скопировать кнопкой «Дублировать из общего». */
-    async function loadEnv() {
-      err.textContent = "";
-      try {
-        const d = await api(`/env?${q}&scope=project`);
-        hasOwn = !!d.exists;
-        envVisible = !!d.visible;
-        envEd.setValue(hasOwn ? d.content || d.masked || "" : "");
-        envEd.setReadOnly(false);
-        renderEnvToolbar();
-      } catch (ex) {
-        err.textContent = ex.message;
-      }
-    }
-    function envChangesFromEditor() {
-      const changes = {};
-      for (const line of envEd.getValue().split("\n")) {
-        if (!line || line.startsWith("#")) continue;
-        const eq = line.indexOf("=");
-        if (eq < 0) continue;
-        const key = line.slice(0, eq).trim();
-        const val = line.slice(eq + 1).trim();
-        if (key && val && val !== "••••") changes[key] = val;
-      }
-      return changes;
-    }
-    const dupSharedBtn = h(
-      "button",
-      { class: "btn btn-sm btn-ghost" },
-      "Дублировать из общего",
-    );
-    dupSharedBtn.addEventListener("click", async () => {
-      try {
-        const d = await api(`/env?scope=global`);
-        envEd.setValue(d.content || d.masked || "");
-        envMeta.textContent = "Содержимое .env — сохраните, чтобы создать свой";
-      } catch (ex) {
-        err.textContent = ex.message;
-      }
-    });
-    const dupTplBtn = h(
-      "button",
-      { class: "btn btn-sm btn-ghost" },
-      "Дублировать из шаблона",
-    );
-    dupTplBtn.addEventListener("click", async () => {
-      try {
-        const d = await api(`/env/template`);
-        envEd.setValue(d.content || "");
-        envMeta.textContent = d.name
-          ? `Шаблон ${d.name} — сохраните, чтобы создать свой`
-          : "Шаблон templates/.env.example не найден";
-      } catch (ex) {
-        err.textContent = ex.message;
-      }
-    });
-    const envSave = h("button", { class: "btn btn-sm" }, "Сохранить .env");
-    envSave.addEventListener("click", async () => {
-      err.textContent = "";
-      try {
-        if (envVisible) {
-          await api("/env", {
-            method: "PUT",
-            body: {
-              project: `${section}/${name}`,
-              scope: "project",
-              content: envEd.getValue(),
-            },
-          });
-        } else {
-          await api("/env", {
-            method: "PUT",
-            body: {
-              project: `${section}/${name}`,
-              scope: "project",
-              changes: envChangesFromEditor(),
-            },
-          });
-        }
-        toast(".env проекта сохранён");
-        await loadEnv();
-      } catch (ex) {
-        err.textContent = ex.message;
-      }
-    });
-    const envDel = h(
-      "button",
-      { class: "btn btn-sm btn-danger-ghost" },
-      "Удалить .env",
-    );
-    envDel.addEventListener("click", () =>
-      confirmModal(
-        "Удалить .env проекта",
-        "Проект вернётся к системному .env (projects/.env)",
-        "УДАЛИТЬ",
-        async () => {
-          try {
-            await api(`/env?${q}&scope=project`, { method: "DELETE" });
-            toast(".env проекта удалён");
-            await loadEnv();
-          } catch (ex) {
-            err.textContent = ex.message;
-          }
-        },
-      ),
-    );
-    function renderEnvToolbar() {
-      envToolbar.replaceChildren();
-      envToolbar.append(h("span", { class: "spacer" }));
-      if (hasOwn) {
-        envMeta.textContent =
-          "собственный .env (перекрывает системный для этой книги)"
-            + (envVisible ? "" : " · значения скрыты (--auth)");
-        envToolbar.append(envSave, envDel);
-      } else {
-        envMeta.textContent =
-          "своего .env нет — проект работает от системного (правится на "
-            + "главной, вкладка «Настройки»); создайте свой: дублируйте "
-            + "из общего или шаблона, либо напишите с нуля";
-        envToolbar.append(dupSharedBtn, dupTplBtn, envSave);
-      }
-    }
-    await loadEnv();
+    /* — Собственный .env книги в этом интерфейсе НЕ редактируется: его
+         пересобирает web-слой из форм «Запусков» (там же пометка
+         «локально» и «Сбросить»). Общий конфиг — вкладка «Настройки»
+         главной; файл книги остаётся обычным файлом во «Файлах». — */
 
     /* — Обложка — */
     const coverCard = h("div", { class: "review-card" });
@@ -3781,7 +3621,6 @@ function viewProject(section, name, tab, job) {
     /* — source-файлы с выбором из имеющихся в source/ — */
 
     wrap.append(
-      envCard,
       coverCard,
       sourceFilesCard("Метаданные epub/fb2", ".yaml", "metadata.yaml"),
       sourceFilesCard("Файл страницы поддержки", ".txt", "donate.txt"),
@@ -3795,9 +3634,9 @@ function viewProject(section, name, tab, job) {
   function templateFileModal(rel, onLoad) {
     const err = h("div", { class: "form-error" });
     const sel = h("select", { class: "input" });
-    const modal = UIC.modal({
+    UIC.modal({
       title: `Загрузить ${rel} из шаблона`,
-      build: () => [
+      build: (close) => [
         sel,
         err,
         h(
@@ -3849,9 +3688,6 @@ function viewProject(section, name, tab, job) {
       .catch((ex) => {
         err.textContent = ex.message;
       });
-    function close() {
-      modal.close();
-  }
   }
 
   /* ── Промпты ───────────────────────────────────── */
@@ -3956,9 +3792,9 @@ function viewProject(section, name, tab, job) {
         placeholder: "имя_промпта.txt",
       });
       const cerr = h("div", { class: "form-error" });
-      const modal = UIC.modal({
+      UIC.modal({
         title: "Новый промпт",
-        build: () => [
+        build: (close) => [
           nameInput,
           cerr,
           h(
@@ -3966,7 +3802,7 @@ function viewProject(section, name, tab, job) {
             { class: "modal-actions" },
             h(
               "button",
-              { class: "btn btn-ghost", onclick: () => modal.remove() },
+              { class: "btn btn-ghost", onclick: () => close() },
               "Отмена",
             ),
             h(
@@ -3984,7 +3820,7 @@ function viewProject(section, name, tab, job) {
                       method: "PUT",
                       body: { project: `${section}/${name}`, content: "" },
                     });
-                    modal.remove();
+                    close();
                     toast(`Создан: ${fname}`);
                     render();
                   } catch (ex) {
@@ -4044,9 +3880,9 @@ function viewProject(section, name, tab, job) {
     }
     sel.addEventListener("change", syncName);
     fname.addEventListener("input", () => (fname.dataset.touched = "1"));
-    const modal = UIC.modal({
+    UIC.modal({
       title: "Создать промпт из шаблона",
-      build: () => [
+      build: (close) => [
         templates.length
           ? h("div", { class: "form-row" }, sel, fname)
           : h("div", { class: "modal-text" }, "Шаблоны не найдены"),
@@ -4086,11 +3922,7 @@ function viewProject(section, name, tab, job) {
       ],
     });
     syncName();
-    document.body.append(modal);
     sel.focus();
-    function close() {
-      modal.close();
-  }
   }
 
   /* ── Логи (M8) ─────────────────────────────────── */
@@ -4825,9 +4657,9 @@ function exportModal(byType, project) {
     ],
   });
   renderExtra();
-  document.body.append(modal);
-  function close() {
-    modal.close();
-}
+  // cancelBtn/goBtn собраны до модалки — close отдаём поднятым объявлением
+  function close(result) {
+    return modal.close(result);
+  }
   cancelBtn.addEventListener("click", close);
 }

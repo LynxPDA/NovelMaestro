@@ -23,7 +23,7 @@
   --bg-soft: #2a2a2a;
 }
 
-/* Светлая тема интерфейса: WEB_UI_THEME=light (системный .env) */
+/* Светлая тема интерфейса: переключатель в шапке, значение — localStorage */
 :root[data-ui-theme="light"] {
   --bg: #ffffff;
   --surface: #f6f8fa;
@@ -866,6 +866,23 @@ input[type="number"] {
 .field-row .input {
   flex: 1;
   min-width: 0;
+}
+/* поле формы «Запусков» с локальным отличием книги от общего .env:
+   метка не мешает чтению — маленький маркер с тултипом значений */
+.field-local {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--accent);
+  cursor: help;
+}
+.field-local-reset {
+  align-self: flex-start;
 }
 
 .manage-grid {
@@ -2101,7 +2118,7 @@ input[type="number"] {
   background: rgba(210, 153, 34, 0.55);
 }
 
-/* Светлая тема редактора: WEB_EDITOR_THEME=light (или auto при светлом
+/* Светлая тема редактора: предпочтение из localStorage (auto — при светлом
  * интерфейсе) — переменные перекрывают тёмные цвета выше. */
 body[data-editor-theme="light"] .editor-cm .cm-editor {
   background: #ffffff;
