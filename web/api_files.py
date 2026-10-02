@@ -7,14 +7,16 @@ api_files.py — файлы проекта (M3): список, чтение, з�
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import unicodedata
+from pathlib import Path
 from web.multipart import (
     MultipartError, extract_files, extract_value, iter_parts,
     parse_disposition,
 )
 from web.server import ApiError, Router
-from web.api_common import log, UPLOAD_DIRS, FILE_TEXT_LIMIT
+from web.api_common import log, UPLOAD_DIRS, FILE_TEXT_LIMIT, DIR_TREE_LIMIT
 from web.api_common import (
     _atomic_write_spool,
     _close_multipart_fields,
@@ -25,8 +27,29 @@ from web.api_common import (
 )
 
 
+def _dir_tree(root: Path, cap: int = DIR_TREE_LIMIT) -> list[str]:
+    """Все каталоги проекта относительно корня — для диалога переноса.
+
+    Обход без перехода по симлинкам; срез на cap, чтобы диалог не разрастался
+    на тысячу папок.
+    """
+    out: list[str] = []
+    for dirpath, _dirnames, _files in os.walk(root, followlinks=False):
+        rel = os.path.relpath(dirpath, root)
+        if rel == os.curdir:
+            continue
+        out.append(rel.replace(os.sep, "/"))
+        if len(out) >= cap:
+            break
+    return sorted(out)
+
+
 def _files_listing(ctx: dict) -> dict:
-    """Листинг папки проекта (GET /api/files?project=&path=)."""
+    """Листинг папки проекта (GET /api/files?project=&path=).
+
+    `dirs` — плоское дерево всех каталогов проекта (относительно корня):
+    по нему SPA строит выбор папки назначения при переносе выделенного.
+    """
     pdir, section, name = _project_ctx(ctx)
     rel = ctx["query"].get("path", "")
     target = _resolve_project_path(ctx, pdir, rel)
@@ -46,7 +69,8 @@ def _files_listing(ctx: dict) -> dict:
             "size": size,
             "mtime": mtime,
         })
-    return {"ok": True, "path": rel, "entries": entries}
+    return {"ok": True, "path": rel, "entries": entries,
+            "dirs": _dir_tree(pdir)}
 
 
 def _is_binary_bytes(data: bytes) -> bool:
@@ -151,7 +175,11 @@ def _file_rename(ctx: dict) -> dict:
 
 
 def _file_delete(ctx: dict) -> dict:
-    """Удаление файла (DELETE /api/file?project=&path=)."""
+    """Удаление файла ИЛИ каталога (DELETE /api/file?project=&path=).
+
+    Каталог удаляется рекурсивно — поэтому удаление в SPA живёт в панели
+    выделения (с подтверждением), а не на каждой строке списка.
+    """
     pdir, section, name = _project_ctx(ctx)
     rel = ctx["query"].get("path", "")
     target = _resolve_project_path(ctx, pdir, rel)
@@ -159,13 +187,56 @@ def _file_delete(ctx: dict) -> dict:
         raise ApiError(404, "Файл не найден")
     try:
         if target.is_dir():
-            import shutil
             shutil.rmtree(target)
         else:
             target.unlink()
     except OSError as exc:
         raise ApiError(500, f"Не удалось удалить: {exc}")
     return {"ok": True, "path": rel}
+
+
+def _file_move(ctx: dict) -> dict:
+    """Перенести выделенное в другую папку (POST /api/file/move).
+
+    Body: {project, paths: [путь внутри проекта, …], dest: папка ("" — корень)}
+    — один вызов на всю выделку. Найдено/занято/внутри себя — объект уходит
+    в skipped, остальное переносится; каталог внутрь собственного подкаталога
+    не переносится. Выход за проект — 400 (снимает _resolve_project_path).
+    """
+    pdir, _section, _name = _project_ctx(ctx)
+    paths = ctx["body"].get("paths") or ctx["body"].get("path") or []
+    if isinstance(paths, str):
+        paths = [paths]
+    dest_rel = str(ctx["body"].get("dest") or "").strip().strip("/")
+    if not paths:
+        raise ApiError(400, "Поле paths обязательно")
+    dest = _resolve_project_path(ctx, pdir, dest_rel)
+    if not dest.is_dir():
+        raise ApiError(404, f"Каталог назначения не найден: {dest_rel or '/'}")
+    moved: list[dict] = []
+    skipped: list[dict] = []
+    for rel in (str(p).strip() for p in paths):
+        if not rel:
+            continue
+        src = _resolve_project_path(ctx, pdir, rel)
+        if not src.exists():
+            skipped.append({"path": rel, "reason": "не найдено"})
+            continue
+        if src.is_dir() and str(dest).startswith(f"{str(src)}{os.sep}"):
+            skipped.append({"path": rel, "reason": "нельзя внутрь себя"})
+            continue
+        dst_rel = f"{dest_rel}/{src.name}" if dest_rel else src.name
+        dst = _resolve_project_path(ctx, pdir, dst_rel)
+        if dst.exists():
+            skipped.append({"path": rel, "reason": "занято"})
+            continue
+        try:
+            src.replace(dst)
+        except OSError as exc:
+            skipped.append({"path": rel, "reason": str(exc)})
+            continue
+        moved.append({"path": rel, "new_path": dst_rel})
+    return {"ok": True, "moved": moved, "skipped": skipped}
 
 
 def _file_upload(ctx: dict) -> dict:
@@ -239,5 +310,6 @@ def _register_files(router: Router) -> None:
     router.add("DELETE", "/api/file", _file_delete)
     router.add("POST", "/api/mkdir", _file_mkdir)
     router.add("POST", "/api/file/rename", _file_rename)
+    router.add("POST", "/api/file/move", _file_move)
     router.add("POST", "/api/upload", _file_upload)
     router.add("GET", "/api/download", _file_download)

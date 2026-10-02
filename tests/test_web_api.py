@@ -977,6 +977,22 @@ def test_files_listing_root(srv_ctx):
     assert src["dir"] is True
 
 
+def test_files_listing_dir_tree(srv_ctx):
+    """dirs — плоское дерево всех каталогов: по нему SPA выбирает папку
+    назначения при переносе выделенного."""
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    (pdir / "tmp" / "extra").mkdir(parents=True, exist_ok=True)
+    (pdir / "prompts" / "old").mkdir(exist_ok=True)
+    res, payload = _request(port, "GET",
+                            "/api/files?project=ACTIVE/test_book&path=tmp")
+    assert res.status == 200, payload
+    # дерево отдаётся целиком (не только текущая папка), отсортированным
+    assert payload["dirs"] == sorted(payload["dirs"])
+    assert "tmp/extra" in payload["dirs"]      # вложенный — тоже виден
+    assert {"source", "prompts", "tmp"} <= set(payload["dirs"])
+
+
 def test_files_listing_subdir(srv_ctx):
     _, port, projects_root = srv_ctx()
     _file_project(port, projects_root)
@@ -1235,6 +1251,123 @@ def test_file_rename_slash_rejected(srv_ctx):
                              "new_name": "sub/x.txt"})
     assert res.status == 400
     assert "только имя" in payload["error"]
+
+
+# move (перенос выделенного: один вызов на всю выделку)
+
+def test_file_move_files_and_dirs(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    (pdir / "tmp" / "extra").mkdir(parents=True, exist_ok=True)
+    (pdir / "tmp" / "box").mkdir(exist_ok=True)
+    (pdir / "tmp" / "box" / "deep.txt").write_text("глубоко", encoding="utf-8")
+    res, payload = _request(port, "POST", "/api/file/move",
+                            {"project": "ACTIVE/test_book",
+                             "paths": ["source/hello.txt", "source/meta.json",
+                                       "tmp/box"],
+                             "dest": "tmp/extra"})
+    assert res.status == 200, payload
+    assert payload["skipped"] == []
+    assert [m["new_path"] for m in payload["moved"]] == [
+        "tmp/extra/hello.txt", "tmp/extra/meta.json", "tmp/extra/box"]
+    assert (pdir / "tmp" / "extra" / "hello.txt").is_file()
+    assert (pdir / "tmp" / "extra" / "box" / "deep.txt").is_file()
+    assert not (pdir / "source" / "hello.txt").exists()
+    assert not (pdir / "tmp" / "box").exists()
+
+
+def test_file_move_into_project_root(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/file/move",
+                            {"project": "ACTIVE/test_book",
+                             "paths": ["source/hello.txt"], "dest": ""})
+    assert res.status == 200, payload
+    assert payload["moved"] == [
+        {"path": "source/hello.txt", "new_path": "hello.txt"}]
+    assert (pdir / "hello.txt").is_file()
+
+
+def test_file_move_single_path(srv_ctx):
+    """Одиночный объект — тот же маршрут, path вместо paths."""
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/file/move",
+                            {"project": "ACTIVE/test_book",
+                             "path": "source/meta.json", "dest": "tmp"})
+    assert res.status == 200, payload
+    assert payload["moved"] == [
+        {"path": "source/meta.json", "new_path": "tmp/meta.json"}]
+
+
+def test_file_move_collision_is_skipped(srv_ctx):
+    """Занятое имя — этот объект в skipped, остальное переносится."""
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    (pdir / "tmp" / "hello.txt").write_text("старый", encoding="utf-8")
+    res, payload = _request(port, "POST", "/api/file/move",
+                            {"project": "ACTIVE/test_book",
+                             "paths": ["source/hello.txt", "source/meta.json"],
+                             "dest": "tmp"})
+    assert res.status == 200, payload
+    assert payload["moved"] == [
+        {"path": "source/meta.json", "new_path": "tmp/meta.json"}]
+    assert payload["skipped"] == [{"path": "source/hello.txt",
+                                   "reason": "занято"}]
+    assert (pdir / "tmp" / "hello.txt").read_text(encoding="utf-8") == "старый"
+
+
+def test_file_move_missing_source_is_skipped(srv_ctx):
+    _, port, _ = srv_ctx()
+    _file_project(port, _)
+    res, payload = _request(port, "POST", "/api/file/move",
+                            {"project": "ACTIVE/test_book",
+                             "paths": ["nope.txt"], "dest": "tmp"})
+    assert res.status == 200, payload
+    assert payload["moved"] == []
+    assert payload["skipped"] == [{"path": "nope.txt", "reason": "не найдено"}]
+
+
+def test_file_move_dir_into_own_subdir_skipped(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    (pdir / "tmp" / "extra").mkdir(parents=True, exist_ok=True)
+    res, payload = _request(port, "POST", "/api/file/move",
+                            {"project": "ACTIVE/test_book",
+                             "paths": ["tmp"], "dest": "tmp/extra"})
+    assert res.status == 200, payload
+    assert payload["moved"] == []
+    assert payload["skipped"] == [{"path": "tmp",
+                                   "reason": "нельзя внутрь себя"}]
+    assert (pdir / "tmp").is_dir()
+
+
+def test_file_move_dest_404(srv_ctx):
+    _, port, _ = srv_ctx()
+    _file_project(port, _)
+    res, payload = _request(port, "POST", "/api/file/move",
+                            {"project": "ACTIVE/test_book",
+                             "paths": ["notes.md"], "dest": "nope"})
+    assert res.status == 404
+    assert "назначения" in payload["error"]
+
+
+def test_file_move_requires_paths(srv_ctx):
+    _, port, _ = srv_ctx()
+    _file_project(port, _)
+    res, payload = _request(port, "POST", "/api/file/move",
+                            {"project": "ACTIVE/test_book", "dest": "tmp"})
+    assert res.status == 400
+    assert "paths" in payload["error"]
+
+
+def test_file_move_escape_rejected(srv_ctx):
+    _, port, _ = srv_ctx()
+    _file_project(port, _)
+    res, payload = _request(port, "POST", "/api/file/move",
+                            {"project": "ACTIVE/test_book",
+                             "paths": ["notes.md"], "dest": "../../etc"})
+    assert res.status == 400
 
 
 # upload
