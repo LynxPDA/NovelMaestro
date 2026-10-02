@@ -693,15 +693,26 @@ def profiles_read() -> list:
 
 
 def profiles_write(profiles: list) -> str:
-    """Записать профили атомарной заменой: порядок списка = порядок в UI."""
+    """Записать профили атомарной заменой: порядок списка = порядок в UI.
+
+    Последний удалённый профиль убирает файл совсем: пустой файл — не
+    состояние, а мусор (тот же закон, что у общего .env)."""
     from .common import atomic_write
+    path = profiles_file()
+    if not profiles:
+        if Path(path).is_file():
+            try:
+                Path(path).unlink()
+            except OSError as exc:
+                log.debug("пустой файл профилей не удалён: %s", exc)
+        return path
     body = {"profiles": [{"id": p["id"], "name": p.get("name") or p["id"],
                           "values": p.get("values") or {},
                           "created": p.get("created") or "",
                           "updated": p.get("updated") or ""}
                         for p in profiles]}
-    atomic_write(profiles_file(), json.dumps(body, ensure_ascii=False, indent=2) + "\n")
-    return profiles_file()
+    atomic_write(path, json.dumps(body, ensure_ascii=False, indent=2) + "\n")
+    return path
 
 
 def profiles() -> list:

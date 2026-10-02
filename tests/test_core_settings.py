@@ -344,6 +344,17 @@ def test_profile_file_format(global_env):
     assert data["profiles"][1]["values"] == {"MODEL": "b"}
 
 
+def test_profiles_file_dies_with_last_profile(global_env):
+    """Последний удалённый профиль убирает файл: пустой llm_profiles.json —
+    не состояние, а мусор (тот же закон, что у пустого общего .env)."""
+    prof = S.profile_create("Один")
+    assert global_env.parent.joinpath(S.PROFILES_NAME).is_file()
+    assert S.profile_delete(prof["id"]) is True
+    assert not global_env.parent.joinpath(S.PROFILES_NAME).exists()
+    assert S.profile_delete(prof["id"]) is False
+    assert [p["id"] for p in S.profiles()] == [S.PROFILE_DEFAULT]
+
+
 def test_profiles_payload_values(global_env):
     """Payload профилей: у General — эффективные значения конфига, у прочих —
     только их переопределения; секрет отдаётся маской."""
