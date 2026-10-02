@@ -1,0 +1,465 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+settings.py — единый реестр настроек NovelMaestro.
+
+Одно место истины: здесь и значение по умолчанию каждой настройки, и то, как
+она называется и ведёт себя в интерфейсе. раньше одно значение жило в четырёх
+местах (константы core/stage.py, константы и argparse cli/*, литеральные
+"default" в web/stages.py, третий экземпляр комментариями в
+templates/.env.example) и глобальные ключи вида CHUNK_SIZE/TIMEOUT не читал
+вовсе никто — стадийный префикс <STAGE>_<FIELD> был единственной формой записи.
+
+Структура: субвкладка (Group) → блок (Block) → настройка (Setting).
+Ключ настройки — её имя в .env: у стадийных настроек это <STAGE>_<FIELD>,
+у общих (LLM, рассуждения, WEB_*) — имя само по себе.
+
+Слои после реформы их два: реестр (зашито) → общий .env (то, что пользователь
+выставил сам). Файл .env в папке книги — рабочее состояние браузера (localStorage),
+а не слой конфига; стадийные переопределения сервера/модели/ключа убраны:
+модель в конвейере одна.
+"""
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+
+from .common import env_overlay, parse_dotenv, system_env_file
+
+log = logging.getLogger("nm")
+
+NL = chr(10)  # настоящий перевод строки (значение в форме)
+NL_LIT = chr(92) + "n"  # литерал «\n» — так многострочное живёт в .env
+
+# ════════════════════════════════════════════════════════════════════
+# модель реестра
+# ════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class Setting:
+    """Одна настройка: ключ .env, метка, тип, дефолт и подсказка."""
+
+    key: str
+    label: str = ""
+    type: str = "text"          # text|number|bool|select|textarea|files|password|hidden
+    default: object = ""
+    options: tuple = ()
+    labels: dict = field(default_factory=dict)
+    min: object = None
+    max: object = None
+    step: object = None
+    dir: str = ""
+    ext: tuple = ()
+    help: str = ""
+    noenv: bool = False         # состояние UI (чипсы) — в .env не пишется
+    secret: bool = False        # парольное поле: значение не отдаётся в SPA
+    stage: str = ""             # владелец-стадия ('' — общая настройка)
+
+    @property
+    def name(self) -> str:
+        """Имя поля формы: ключ без стадийного префикса, в нижнем регистре."""
+        prefix = f"{self.stage.upper()}_" if self.stage else ""
+        return (self.key[len(prefix):] if self.key.startswith(prefix)
+                else self.key).lower()
+
+    def form_field(self) -> dict:
+        """Поле формы в том же формате, что понимают SPA и spec стадий."""
+        out = {"name": self.name, "type": self.type}
+        if self.label:
+            out["label"] = self.label
+        out["default"] = self.default
+        for k in ("options", "labels", "min", "max", "step", "dir", "ext",
+                  "help", "noenv"):
+            v = getattr(self, k)
+            if v not in (None, "", [], {}, ()):
+                out[k] = v
+        if self.secret:
+            out["secret"] = True
+        return out
+
+
+@dataclass(frozen=True)
+class Block:
+    """Блок настроек — карточка на странице."""
+
+    id: str
+    title: str
+    settings: tuple
+
+
+@dataclass(frozen=True)
+class Group:
+    """Субвкладка страницы настроек."""
+
+    id: str
+    title: str
+    blocks: tuple
+
+
+def _s(key: str, label: str = "", type: str = "text",  # noqa: A002,A006
+       default: object = "", **kw: object) -> Setting:
+    """Сокращённый конструктор настройки (реестр читается как таблица)."""
+    return Setting(key, label, type, default, **kw)
+
+
+def _block(bid: str, title: str, *settings: Setting) -> Block:
+    return Block(bid, title, tuple(settings))
+
+
+def _group(gid: str, title: str, *blocks: Block) -> Group:
+    return Group(gid, title, tuple(blocks))
+
+
+# ════════════════════════════════════════════════════════════════════
+# реестр
+# ════════════════════════════════════════════════════════════════════
+
+GROUPS: tuple = (
+    # ── LLM: одна настройка на весь конвейер ─────────────────────────
+    _group("llm", "Модель и сервер",
+        _block("llm_conn", "Подключение",
+            _s("HOST", "Сервер LLM", "text", "", help="адрес API-сервера; /v1 дописывается, если его нет"),
+            _s("API_KEY", "API-ключ", "password", "", secret=True, help="локальный сервер может работать без ключа"),
+            _s("MODEL", "Модель", "text", "", help="одна модель на весь конвейер: отдельных моделей у стадий больше нет"),
+        ),
+        _block("llm_net", "Сеть и повторы",
+            _s("TIMEOUT", "Таймаут запроса, СЕК", "number", "300", min=0),
+            _s("STREAM_TIMEOUT", "Таймаут стрима, СЕК", "number", "900", min=0, help="пауза между строками SSE"),
+            _s("MAX_RETRIES", "Повторы при ошибке LLM", "number", "3", min=0, help="ретраи только по 408/425/429/5xx"),
+            _s("MAX_TOKENS", "Предел ответа, ТОКЕНЫ", "number", "65536", min=1, help="max_tokens в payload (не расчёт)"),
+            _s("RETRY_EMPTY", "Доп. повторы при пустом ответе", "number", "0", min=0),
+        ),
+        _block("llm_run", "Температура и параллельность",
+            _s("TEMPERATURE", "Температура (пусто = сервер)", "text", ""),
+            _s("THREADS", "Потоков (1–16)", "number", "4", min=1, max=16, help="одна величина на весь конвейер"),
+            _s("MIN_LEN_RATIO", "Мин. отношение длин, СИМВОЛЫ", "text", "0", help="0 — контроль соотношения длин выключен"),
+        ),
+        _block("llm_reasoning", "Рассуждения модели",
+            _s("REASONING_MODE", "Рассуждения", "select", "default", options=("default", "on", "off"), labels={'default': "— (решение сервера)", 'on': "включены", 'off': "выключены"},
+                help="у части серверов рассуждения включены по умолчанию; «выключены» для openai-профиля = reasoning_effort=none",),
+            _s("THINKING_PROFILE", "Профиль API", "select", "openai", options=("openai", "anthropic", "qwen", "dashscope", "ollama", "openrouter", "all"),
+                labels={'openai': "OpenAI-совместимый (reasoning_effort)", 'anthropic': "Anthropic (thinking.budget_tokens)", 'qwen': "Qwen3/DeepSeek (chat_template_kwargs)", 'dashscope': "DashScope (enable_thinking)", 'ollama': "Ollama (think)", 'openrouter': "OpenRouter (reasoning.effort)", 'all': "Все ключи сразу (строгие серверы отвечают 400)"},
+                help="как именно передавать рассуждения: каждый профиль отправляет только свои ключи (незнакомый ключ строгий сервер считает ошибкой запроса); «все ключи сразу» — только для серверов, которые молча игнорируют чужие",
+               ),
+            _s("REASONING_EFFORT", "Уровень рассуждения", "select", "", options=("", "none", "minimal", "low", "medium", "high", "xhigh", "max"),
+                labels={'': "— (не отправлять, дефолт сервера)", 'none': "none — выключено", 'minimal': "minimal", 'low': "low", 'medium': "medium", 'high': "high", 'xhigh': "xhigh", 'max': "max"},
+                help="пусто — не передаётся; понимают openai, openrouter и «все ключи сразу»",),
+            _s("THINKING_BUDGET", "Бюджет рассуждения, ТОКЕНЫ", "number", 0, help="0 — не отправлять; понимают anthropic (thinking.budget_tokens) и dashscope (thinking_budget)",),
+            _s("LLM_EXTRA_BODY_JSON", "Свои поля тела (JSON)", "text", "",
+                help="JSON-объект ключей, которых не знает ни один профиль (свой сервер); уходят в тело запроса после ключей профиля, то есть перекрывают их; битый JSON запрос не ломает — поле игнорируется с предупреждением в лог",
+               ),
+        ),
+    ),
+
+    _group("transfer", "Перевод",
+        _block("pipeline", "Перевод (translate → redact → polish)",
+            _s("PIPELINE_FEWSHOT_K", "Макс. примеров на чанк", "number", "3", min=0, max=20, help="сколько релевантных пар влезает в few-shot", stage="pipeline"),
+            _s("PIPELINE_FEWSHOT_THRESHOLD", "Порог схожести примеров (0–1)", "number", "0.3", min=0, max=1, step="0.05",
+                help="доля n-грамм (3-граммы нормализованного текста) стороны примера, найденных в чанке: 1 — все n-граммы примера есть в чанке; примеры ниже порога отбрасываются — лучше без примеров, чем с шумными",
+                stage="pipeline"),
+            _s("PIPELINE_REQUEST_BUDGET", "Бюджет запроса, ТОКЕНЫ", "number", "24000", min=0,
+                help="общий бюджет user-запроса (чанк + все блоки), оценка токенов; 0 = выключено; превышение — ошибка чанка", stage="pipeline"),
+            _s("PIPELINE_CHUNK_SIZE", "Размер чанка, ТОКЕНЫ", "number", "7000", min=1,
+                help="чанкование текста для перевода и полировки (оценка токенов) — действует в ЛЮБОМ выбранном типе работы; редактура идёт главой целиком", stage="pipeline"),
+            _s("PIPELINE_NER_MIN_COUNT", "Мин. count для глоссария ({ner_block})", "number", "0", help="термины с count ниже порога НЕ попадают в {ner_block}; 0 — фильтр выключен (все найденные)",
+                stage="pipeline"),
+            _s("PIPELINE_NER_FIELDS", "", "hidden", "term,type,translation,aliases", noenv=True, stage="pipeline"),
+            _s("PIPELINE_NAMES_MIN_COUNT", "Мин. count для имён ({female_names}/{male_names})", "number", "10", help="имена с count ниже порога НЕ попадают в справочник полов; 0 — фильтр выключен",
+                stage="pipeline"),
+        ),
+    ),
+    _group("glossary", "Глоссарий",
+        _block("ner", "Глоссарий (NER)",
+            _s("NER_CHUNK_SIZE", "Размер чанка, ТОКЕНЫ", "number", "5500", stage="ner"),
+            _s("NER_THRESHOLD", "Порог дедупликации (0–1)", "number", "0.75", stage="ner"),
+            _s("NER_NGRAM", "N-граммы для латиницы", "number", "3", stage="ner"),
+            _s("NER_TWO_PASS", "Двухпроходная схема", "bool", True, stage="ner"),
+            _s("NER_KEEP_FIELDS", "Поля в голосование (через запятую)", "text", "",
+                help="Пусто = голосуют translation/type/pinyin; notes, context, translated_context не голосуют. Пример: notes,context", stage="ner"),
+            _s("NER_CONTEXT_MAX_LEN", "Максимальная длина \"context\"", "number", "300", help="СИМВОЛЫ: context извлекается из чанка — предложение с термином, не от LLM; 0 — выключено", stage="ner"),
+            _s("NER_SAVE_INTERVAL", "Интервал сохранения ner.json", "number", "10",
+                help="каждые N чанков — промежуточный снапшот глоссария. Возобновление с места остановки убрано: каждый запуск идёт с первого чанка", stage="ner"),
+        ),
+        _block("ner_check", "Проверка глоссария",
+            _s("NER_CHECK_RAG_BUDGET", "RAG: бюджет на термин, ТОКЕНЫ", "number", "22000",
+                help="На ОДИН термин: промпт + фрагменты ≤ бюджету (оценка токенов); каждый термин — отдельный LLM-запрос (параллельно, «Потоков (1–16)»); фрагменты — равномерно по книге (FTS5, чанки 350 токенов), влезают в остаток бюджета после промпта",
+                stage="ner_check"),
+            _s("NER_CHECK_PASSES", "Режимы", "select", "whole", options=("whole", "types", "rag"),
+                labels={'whole': "Выбранные типы (одновременно)", 'types': "Выбранные типы (по отдельности)", 'rag': "Точечно по списку (RAG)"},
+                help="одновременно — весь список выбранных типов разом (батчи по бюджету); по отдельности — каждый тип отдельно; rag — точечная проверка списка терминов по FTS5-фрагментам книги",
+                stage="ner_check"),
+            _s("NER_CHECK_BATCH_SIZE", "Бюджет пакета, ТОКЕНЫ", "number", "65536", stage="ner_check"),
+            _s("NER_CHECK_COUNT_THRESHOLD", "Порог count", "number", "0", stage="ner_check"),
+            _s("NER_CHECK_RAG_TERMS", "RAG: список терминов", "textarea", "", help="Каждый термин с новой строки; тип/перевод подтягиваются из ner.json; нужен режим «rag»", stage="ner_check"),
+            _s("NER_CHECK_RAG_SOURCE_TYPE", "RAG: тип исходного файла", "select", "chapter", options=("chapter", "translated", "redacted", "polished"),
+                help="Из какого файла главы собирается текст книги для FTS5-поиска (сборка в память, файл не пишется)", stage="ner_check"),
+            _s("NER_CHECK_SAVE_INTERVAL", "Сохранять каждые N терминов", "number", "0", help="RAG: review-файл сохраняется каждые N терминов (0 = только в конце)", stage="ner_check"),
+            _s("NER_CHECK_TYPES", "", "hidden", "", noenv=True, stage="ner_check"),
+            _s("NER_CHECK_FIELDS", "", "hidden", "", noenv=True, stage="ner_check"),
+        ),
+    ),
+    _group("checks", "Проверки",
+        _block("translate_check", "Проверка перевода",
+            _s("TRANSLATE_CHECK_CHECK_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated"),
+                help="polished → сравнивается с redacted (соседняя стадия) и chapter (оригинал); redacted → с translated и chapter; translated → только с chapter", stage="translate_check"),
+            _s("TRANSLATE_CHECK_EXCLUDE_WORDS", "Слова-исключения (через запятую)", "text", "",
+                help="Пусто = ничего не исключается; если задано TRANSLATE_CHECK_EXCLUDE_WORDS в .env — поле заполняется оттуда", stage="translate_check"),
+            _s("TRANSLATE_CHECK_NEIGHBOR", "Выбранная Стадия/Предыдущая Стадия (по занимаемому месту)", "text", "",
+                help="Ожидаемый ratio с предыдущей стадией и допуск: «1.0±0.05» (напр. polished/redacted); пусто = встроенный дефолт; дефолт в .env — TRANSLATE_CHECK_NEIGHBOR", stage="translate_check"),
+            _s("TRANSLATE_CHECK_ORIGINAL", "Выбранная Стадия/Оригинал (по занимаемому месту)", "text", "",
+                help="Ожидаемый ratio с оригиналом и допуск: «2.1±0.5» (напр. polished/chapter); пусто = встроенный дефолт; дефолт в .env — TRANSLATE_CHECK_ORIGINAL", stage="translate_check"),
+            _s("TRANSLATE_CHECK_REGEXP_CHECKS", "Regexp-проверки (по одной на строку)", "textarea",
+                "(?<=\\n)\\s*Глава\\s+(\\d+|\\[Номер\\])\n[\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\U00020000-\\U0002ebef【】「」『』]+\n[a-zA-Z]+\n\\A(?!\\s*Глава\\s+(\\d+|\\[Номер\\])).+",
+                help="Каждая строка — чистый стандартный regexp (Python re, MULTILINE): всё найденное — ошибка, проверяются ВСЕ строки включая заголовок главы; ^/$ — начало/конец СТРОКИ; регистр — inline-флагом (?i); комментариев и кастомных флагов нет («#» — литерал). Предзаполнен полный набор: лишние заголовки «Глава N» (lookbehind (?<=\\n) пропускает заголовок в первой строке файла), иероглифы CJK (все блоки + кавычки 【】「」『』), латиница, «первая строка не заголовок» (negative lookahead \\A(?!…)); «пропуск первого вхождения» своего правила — «(?<=\\n)паттерн». Пусто = без проверок; TRANSLATE_CHECK_REGEXP_CHECKS в .env — переносы строк как «\n»",
+                stage="translate_check"),
+            _s("TRANSLATE_CHECK_MIN_FILE_SIZE", "Минимальный размер файла (БАЙТЫ)", "number", "3072", help="Файл меньше этого размера — ошибка «слишком мал»; пусто = встроенный дефолт 3072 Б",
+                stage="translate_check"),
+            _s("TRANSLATE_CHECK_SEQUENCE_CHECK", "Проверять последовательность глав", "bool", True,
+                help="Первое число в первой непустой строке должно быть ровно на 1 больше предыдущей главы (N+1); выключено — проверка пропускается", stage="translate_check"),
+        ),
+        _block("translate_check_llm", "Проверка перевода LLM",
+            _s("TRANSLATE_CHECK_LLM_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated"), stage="translate_check_llm"),
+            _s("TRANSLATE_CHECK_LLM_TWO_PASS", "Второй проход верификации", "bool", False, stage="translate_check_llm"),
+            _s("TRANSLATE_CHECK_LLM_CONTEXT_BUDGET", "Бюджет контекста на пакет, ТОКЕНЫ", "number", "25000", stage="translate_check_llm"),
+            _s("TRANSLATE_CHECK_LLM_MAX_FIXES_PER_CHAPTER", "Лимит правок на главу (0 = нет)", "number", "0", stage="translate_check_llm"),
+            _s("TRANSLATE_CHECK_LLM_MIN_FIX_LENGTH", "Мин. длина правки, СИМВОЛЫ", "number", "0", stage="translate_check_llm"),
+            _s("TRANSLATE_CHECK_LLM_MAX_CHANGED_CHARS", "Макс. изменённых символов, СИМВОЛЫ", "number", "0", stage="translate_check_llm"),
+        ),
+        _block("translate_quality", "Оценка качества",
+            _s("TRANSLATE_QUALITY_TYPE", "Тип файлов глав", "select", "polished", options=("chapter", "translated", "redacted", "polished"),
+                help="какой файл главы сравнивается с оригиналом: подставляется в {translated_text} промпта, chapter.txt — в {original_text}", stage="translate_quality"),
+            _s("TRANSLATE_QUALITY_BUDGET", "Бюджет запроса, СИМВОЛЫ", "number", "200000",
+                help="главы (содержимое, промпт НЕ входит); если не влезает — пакет обрезается до целого количества глав (первые диапазона), отсечённые указываются в отчёте", stage="translate_quality"),
+        ),
+    ),
+    _group("book", "Книга и файлы",
+        _block("epub", "EPUB → главы",
+            _s("EPUB_MODE", "Режим разбивки", "select", "toc", options=("toc", "regex", "chunk"), labels={'toc': "По TOC (epub)", 'regex': "Ручной (regexp)", 'chunk': "По чанкам"},
+                help="toc — только epub, по структуре (TOC/spine/h1-h2); regex/chunk — epub ИЛИ txt (epub перегоняется в текст); zip не принимается", stage="epub"),
+            _s("EPUB_SPLIT_PATTERNS", "Паттерны разбивки (regexp, по одному на строку)", "textarea", "",
+                help="ТОЛЬКО режим regexp. Строка считается маркером, если НАЧИНАЕТСЯ с любого паттерна; вся строка становится заголовком главы; чистый стандартный regexp — без комментариев и флагов; пример: «Глава \\d+»; EPUB_SPLIT_PATTERNS в .env — переносы строк как «\\n»",
+                stage="epub"),
+            _s("EPUB_CHUNK_SIZE", "Размер чанка, ТОКЕНЫ", "number", "7000", help="ТОЛЬКО режим «по чанкам»; оценка токенов", stage="epub"),
+            _s("EPUB_CHUNK_MASK", "Маска названия глав", "text", "Chapter {num}",
+                help="названия чанков в режиме «по чанкам»; при включённом «Переопределить названия» — названия ВСЕХ глав; {num} — номер; пример: «Часть {num}» → 00000_1_Часть_1…", stage="epub"),
+            _s("EPUB_RENAME_CHAPTERS", "Переопределить названия глав маской", "bool", False,
+                help="все заголовки глав заменяются на «Маска названия глав» ({num} — номер). Удобно после разбивки по TOC/паттернам: «Chapter 1», «Chapter 2»…", stage="epub"),
+            _s("EPUB_TITLE_LIMIT", "Длина названия каталога, СИМВОЛЫ", "number", "50", help="имя папки обрезается; первая строка файла — полный заголовок", stage="epub"),
+            _s("EPUB_NUM_OFFSET", "Смещение нумерации (первый номер)", "number", "1", help="875 → первая папка 000_875_… (нули добивают ширину 6)", stage="epub"),
+            _s("EPUB_OUTPUT_TYPE", "Тип выходного файла", "select", "chapter", options=("chapter", "translated", "redacted", "polished"),
+                labels={'chapter': "chapter.txt", 'translated': "translated.txt", 'redacted': "redacted.txt", 'polished': "polished.txt"},
+                help="какой файл создаётся в папке главы (канон артефактов стадий)", stage="epub"),
+            _s("EPUB_CLEAN_OUTPUT", "Очистить папки глав перед записью", "bool", False,
+                help="Удалить старые каталоги глав (00000_1_…, 00000_2_…) в chapters/ перед записью. Рекомендуется при повторном разборе — иначе старые главы останутся рядом с новыми и могут попасть в конвейер",
+                stage="epub"),
+        ),
+        _block("compile", "Сборка глав",
+            _s("COMPILE_MODE", "Режим", "select", "txt", options=("txt", "txt-plain", "epub", "fb2"), labels={'txt': "TXT (Rulate)", 'txt-plain': "TXT", 'epub': "EPUB", 'fb2': "FB2"},
+                help="TXT (Rulate) — заголовки «# [Название :|: N]» для загрузки на rulate; TXT — обычный txt без rulate-форматирования", stage="compile"),
+            _s("COMPILE_SOURCE_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated", "chapter"), stage="compile"),
+            _s("COMPILE_CHUNK_SIZE", "Глав в части", "number", "", help="указано (>0) — диапазон разбивается на части по столько глав (файл на каждую часть), для любого режима; пусто/0 = без разбивки",
+                stage="compile"),
+        ),
+        _block("wiki", "Вики книги",
+            _s("WIKI_SOURCE", "Источник текста", "select", "chapters", options=("txt", "chapters"), labels={'txt': "Готовый txt", 'chapters': "Собрать из глав"},
+                help="txt — готовый скомпилированный файл; «собрать из глав» — склейка chapters/* в память (как в Создании глоссария)", stage="wiki"),
+            _s("WIKI_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "chapter", "translated", "redacted"), help="при источнике «Собрать из глав»", stage="wiki"),
+            _s("WIKI_OUTPUT", "Выходной файл", "text", "wiki.md", stage="wiki"),
+            _s("WIKI_AS_CHAPTER", "Сохранить как главу", "bool", False, help="вместо файла — дополнительная последняя глава chapters/00000_{N+1}_Wiki_Новеллы/, название «Wiki Новеллы» простым текстом",
+                stage="wiki"),
+            _s("WIKI_SAVE_TYPE", "Тип файла вики-главы", "select", "polished", options=("translated", "redacted", "polished"),
+                help="для «Сохранить как главу вики»; polished — как компиляция по умолчанию; chapter.txt не пишется", stage="wiki"),
+            _s("WIKI_FORMAT", "Формат", "select", "md", options=("md", "rulate-md", "rulate-html"), labels={'md': "Обычный Markdown", 'rulate-md': "Rulate (Markdown)", 'rulate-html': "Rulate (HTML)"},
+                help="rulate-html: заголовки — <span style=font-size>, списки <ul>, разделители <hr />", stage="wiki"),
+            _s("WIKI_TOC", "Оглавление", "bool", True, help="обычный режим; Rulate — всегда без оглавления", stage="wiki"),
+            _s("WIKI_TOC_LINKS", "Якоря-ссылки в оглавлении", "bool", True, help="обычный режим; ссылки [термин](#якорь) на статью", stage="wiki"),
+            _s("WIKI_TOP", "Макс. терминов", "number", "80", stage="wiki"),
+            _s("WIKI_MIN_COUNT", "Мин. частота термина", "number", "2", stage="wiki"),
+            _s("WIKI_TYPES", "", "hidden", "", noenv=True, stage="wiki"),
+            _s("WIKI_CONTEXT_CHUNKS", "Фрагментов контекста на термин", "number", "12", stage="wiki"),
+            _s("WIKI_NEAR_DISTANCE", "NEAR-дистанция, ТОКЕНЫ", "number", "64", stage="wiki"),
+            _s("WIKI_CHUNK_SIZE", "Размер чанка FTS5, СИМВОЛЫ", "number", "1000", stage="wiki"),
+            _s("WIKI_CO_OCCURRENCE_PAIRS", "Пары типов для связей", "text", "Person:Person,Person:Organisation,Person:Artifact", stage="wiki"),
+            _s("WIKI_CO_OCCURRENCE_TOP", "Связей на термин", "number", "5", stage="wiki"),
+        ),
+        _block("batch_replace", "Массовые замены",
+            _s("BATCH_REPLACE_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated", "chapter"), stage="batch_replace"),
+        ),
+    ),
+
+    # ── web-сервер ───────────────────────────────────────────────────
+    _group("server", "Веб-сервер",
+        _block("server_net", "Сеть",
+            _s("WEB_HOST", "Адрес прослушивания", "text", "127.0.0.1", help="0.0.0.0 — вся локальная сеть, тогда включайте аутентификацию"),
+            _s("WEB_PORT", "Порт", "number", "8756"),
+            _s("WEB_AUTH", "Требовать токен", "bool", False),
+            _s("WEB_TOKEN", "Токен", "password", "", secret=True, help="пусто — файл .web_secret"),
+        ),
+        _block("server_run", "Данные и задачи",
+            _s("WEB_MAX_UPLOAD_MB", "Лимит загрузки, МБ", "number", "512", min=1),
+            _s("WEB_JOBS_LIMIT", "Максимум параллельных задач", "number", "2", min=1),
+            _s("WEB_PROJECTS_DIR", "Папка проектов", "text", "", help="пусто — <репо>/projects"),
+        ),
+    ),
+)
+
+# Плоские индексы: порядок реестра — единственный порядок показа.
+SETTINGS: tuple = tuple(s for g in GROUPS for b in g.blocks for s in b.settings)
+BY_KEY: dict = {s.key: s for s in SETTINGS}
+BY_BLOCK: dict = {b.id: b.settings for g in GROUPS for b in g.blocks}
+STAGES: tuple = tuple(dict.fromkeys(s.stage for s in SETTINGS if s.stage))
+#: блоки общего LLM-конфига: он один на весь конвейер, стадийных ключей нет
+LLM_BLOCKS: tuple = ("llm_conn", "llm_net", "llm_run", "llm_reasoning")
+
+
+def groups() -> tuple:
+    """Субвкладки со блоками — в том порядке, в котором их рисовать."""
+    return GROUPS
+
+
+def settings_of(stage: str = "") -> tuple:
+    """Настройки стадии (пусто — общие: LLM, рассуждения, web)."""
+    return tuple(s for s in SETTINGS if s.stage == stage)
+
+
+def form_fields(stage: str) -> list:
+    """Поля формы стадии: metadata и дефолты берутся из реестра."""
+    return [s.form_field() for s in settings_of(stage)]
+
+
+def defaults(stage: str = "") -> dict:
+    """Значения по умолчанию: имя поля → дефолт."""
+    return {s.name: s.default for s in settings_of(stage)}
+
+
+def env_key(stage: str, name: str) -> str:
+    """Ключ .env поля стадии: всегда с префиксом <STAGE>_<FIELD>."""
+    s = next((x for x in SETTINGS
+              if x.stage == stage and x.name == str(name).lower()), None)
+    return s.key if s else ""
+
+
+def env_file() -> str | None:
+    """Путь общего .env (WEB_ENV_FILE → корень репо → cwd)."""
+    return system_env_file()
+
+
+def sanitize(setting: Setting, value) -> str:
+    """Значение одной строкой .env: strip; у textarea переносы — литералом.
+
+    Решётку вне кавычек парсер считает комментарием, поэтому значение с «#»
+    оборачивается в кавычки — иначе из формы вырос бы новый ключ.
+    """
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    s = "" if value is None else str(value).strip()
+    if setting.type == "textarea":
+        s = s.replace(NL, NL_LIT)
+    s = s.replace(NL, " ").replace(chr(13), " ")
+    quoted = len(s) >= 2 and s[0] == s[-1] and s[0] in "'\""
+    if "#" in s and not quoted:
+        s = '"' + s.replace('"', '\"') + '"'
+    return s
+
+
+def file_values() -> dict:
+    """Что выставлено в общем .env."""
+    path = env_file()
+    return parse_dotenv(path) if path else {}
+
+
+def layered_values() -> dict:
+    """Эффективный конфиг: значения общего файла, поверх — окружение процесса."""
+    return env_overlay(file_values(), [s.key for s in SETTINGS])
+
+
+def effective(key: str) -> object:
+    """Эффективное значение настройки: реестр → общий .env → окружение."""
+    s = BY_KEY.get(key)
+    raw = layered_values().get(key, "")
+    if str(raw).strip() == "":
+        return s.default if s else ""
+    if s and s.type == "bool":
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+    if s and s.type == "textarea":
+        return str(raw).replace(NL_LIT, NL).rstrip(NL)
+    return str(raw).strip()
+
+
+def values_of_stage(stage: str) -> dict:
+    """Эффективные значения стадии: имя поля → значение."""
+    return {s.name: effective(s.key) for s in settings_of(stage)}
+
+
+def llm_values() -> dict:
+    """LLM-конфиг конвейера (host/model/api_key/таймауты/потоки/рассуждения)."""
+    out = {}
+    for b in LLM_BLOCKS:
+        for s in BY_BLOCK[b]:
+            out[s.name] = effective(s.key)
+    return out
+
+
+def write_values(values: dict) -> list:
+    """Перезаписать общий .env значениями реестра (ключ → значение).
+
+    Ключи — именно ключи .env (`NER_CHUNK_SIZE`), а не имена полей: `chunk_size`
+    живёт в четырёх стадиях и по имени его не отличить. Файл машиночитаемый:
+    шапка и только выставленные ключи в порядке реестра. Пустое значение снимает
+    ключ, без ключей файл удаляется: «наследует встроенный дефолт» не должно
+    быть строкой в файле.
+    """
+    path = env_file()
+    if not path:
+        raise RuntimeError("путь общего .env не определён (WEB_ENV_FILE)")
+    from .common import atomic_write
+    lines = ["# NovelMaestro — общие настройки.",
+             "# Значения по умолчанию зашиты в реестр core/settings.py;",
+             "# здесь — только то, что изменено. Файл перезаписывается со",
+             "# страницы «Настройки»; файл книги больше не слой не создаёт."]
+    stored = []
+    for s in SETTINGS:
+        if s.noenv:
+            continue
+        v = sanitize(s, values.get(s.key, ""))
+        if v:
+            lines.append(f"{s.key}={sanitize(s, v)}")
+            stored.append(s.key)
+    if stored:
+        atomic_write(str(path), "\n".join(lines) + "\n")
+    elif Path(path).is_file():
+        try:
+            Path(path).unlink()
+        except OSError as exc:
+            log.debug("пустой общий .env не удалён: %s", exc)
+    return stored
+
+
+def groups_payload() -> list:
+    """Реестр для SPA: субвкладки → блоки → поля с текущими значениями."""
+    got = layered_values()
+    out = []
+    for g in GROUPS:
+        blocks = []
+        for b in g.blocks:
+            fields = []
+            for s in b.settings:
+                f = s.form_field()
+                raw = str(got.get(s.key, "")).strip()
+                if s.noenv:
+                    f["value"] = s.default
+                elif s.secret:
+                    f["value"] = "••••" if raw else ""
+                elif s.type == "textarea":
+                    f["value"] = raw.replace("\n", "\n").rstrip("\n")
+                elif s.type == "bool":
+                    f["value"] = raw.strip().lower() in ("1", "true", "yes", "on")
+                else:
+                    f["value"] = raw
+                fields.append(f)
+            blocks.append({"id": b.id, "title": b.title, "fields": fields})
+        out.append({"id": g.id, "title": g.title, "blocks": blocks})
+    return out

@@ -24,8 +24,9 @@
 ## 3. Архитектура (три слоя)
 
 ```text
-core/     общий код: common.py (логика) + projects.py (менеджмент
-          проектов) + transport.py (единственная точка выхода в сеть:
+core/     общий код: common.py (логика) + settings.py (реестр настроек:
+          один источник дефолтов, меток и подсказок) + projects.py
+          (менеджмент проектов) + transport.py (единственная точка выхода в сеть:
           единственный HTTP-клиент) + deps.py (реестр внешних зависимостей:
           что установлено и чем прикрыто) + stage.py (общий слой стадий:
           флаги LLM, профиль сервера, контекст стадии, прогресс). НЕ скрипты.
@@ -142,6 +143,8 @@ from core.common import ...  # noqa: E402
 | HTTP-транспорт (core/transport.py) | **ТОЛЬКО** `open_stream` (POST JSON → контекстный менеджер `ResponseStream`: `status_code`, `headers`, `iter_lines()` — байтовые строки SSE без `\n`; выход из контекста закрывает соединение; ошибка соединения прилетает уже на входе) / `client()` (общий `httpx.Client` с пулом) / `reset_client()` (тесты) / `BACKEND` (`"httpx"`) + нормализованные ошибки `TransportError`, `ConnectTimeout`, `ReadTimeout`, `BrokenStream` |
 | слой стадии (core/stage.py) | `add_llm_args` (общий блок флагов `--host/--model/--api_key/--env_file/--temperature/--reasoning_effort/--timeout/--max_retries` — имена есть контракт форм web и SPA, не переименовывать; `aliases=True` — старые написания) / `LlmProfile` + `resolve_profile` (сервер стадии: CLI > `os.environ` > `.env`; `/v1` дописывается; модель обязательна) / `LoggedStage` + `new_stage` (лог стадии и команда запуска) / `Stage` + `bind_profile` + `setup_stage` (контекст LLM-стадии и один вызов `stage.complete(prompt, данные)`) / `Progress` (счётчик глав/батчей: в CLI — бар tqdm, в web — `@@PROGRESS@@`, лог стадии не трогает) / `REASONING_EFFORTS` |
 | зависимости (core/deps.py) | `ROLES` (роли и их кандидаты: HTTP — только httpx, термины — pyahocorasick либо regex, tqdm, pytest + pytest-xdist) / `status` (строка на роль: активный бэкенд, `degraded` — работа на фолбэке) / `format_status` (одна строка в лог сервера) / `missing_hint` / `main` (`python3 -m core.deps`) |
+| настройки (ОДНО МЕСТО ИСТИНЫ) | **ТОЛЬКО** `core/settings.py`: реестр `Setting`/`Block`/`Group` → `GROUPS` (6 субвкладок: `llm`, `transfer`, `glossary`, `checks`, `book`, `server`) / `SETTINGS` / `BY_KEY` / `BY_BLOCK` / `STAGES` — ключ настройки = её имя в .env (у стадийных — `<STAGE>_<FIELD>`, у общих — без префикса); `groups()` / `settings_of(stage)` / `form_fields(stage)` / `defaults(stage)` — metadata и дефолты берутся отсюда, в `web/stages.py` и `cli/*` их копировать нельзя; `env_key(stage,name)`; чтение двух слоёв: `env_file()` / `file_values()` (общий .env) → `layered_values()` (поверх — `os.environ`) → `effective(key)`, `values_of_stage(stage)`, `llm_values()` (LLM-конфиг конвейера: стадийных `PIPELINE_HOST`/`NER_MODEL` больше нет); запись: `sanitize(setting,value)` ( textarea-переносы → литерал «\n», `#` → кавычки), `write_values(ключ→значение)` (пустое снимает ключ, без ключей файл удаляется), `groups_payload()` (значения для SPA; секреты — «••••») |
+
 | проекты | **ТОЛЬКО** `core/projects.py`: `DEFAULT_SECTIONS` (ACTIVE/HOLD/DONE, алиас `SECTIONS`) / `load_sections` / `save_sections` / `create_section` / `rename_section` (в существующий — перенос проектов) / `delete_section` (непустой — отказ) / `ensure_projects_root` / `valid_project_name` / `sanitize_project_name` / `list_projects` / `project_stats` / `project_progress_table` / `create_project` / `move_project` / `rename_project` / `copy_project` / `delete_project` / `list_template_sets` / `TEMPLATE_SKELETON` (`prompts`+`source`) / `_ensure_template_skeleton` (идемпотентный ремонт скелета) / `create_template_set` (каркас prompts/+source/) / `create_template_dir` (всегда ошибка — каталоги неизменяемы) / `copy_template_set` / `delete_template_set` / `templates_files` (пустые каталоги как `path/`) / `read_template_file` / `write_template_file` / `delete_template_file` (каталог → ошибка; `str \| None`) / `template_file_info` / `move_template_file` (только файлы; каталог → ошибка) / `fill_project_from_template` / `render_metadata` / `write_project_metadata` |
 
 Запрещено: свои парсеры .env, свои стрим-обработчики SSE, свои парсеры имён главных папок, прямой импорт `requests`/`httpx` вне `core/transport.py`. Добавил функцию в таблицу — обнови и `core/README.md`, и `tests/test_docs.py` (сверка доков с кодом).
@@ -269,6 +272,7 @@ git add -A && git commit -m "…" && git push origin
 - `tests/conftest.py` — общие хелперы (SilentLog, make_ru_chapter_file, feed, fake_env);
 - `tests/test_core_common.py` — `core/common.py` целиком (стрим SSE моками, .env, чанкование, NER-поиск, имена по полу, канон глав);
 - `tests/test_projects_core.py` — `core/projects.py` (создание/перенос/переименование, tmp_path);
+- `tests/test_core_settings.py` — `core/settings.py`: целостность реестра (ключи, типы, владельцы), совпадение метаданных и дефолтов со спеками стадий, чтение двух слоёв и запись общего .env;
 - `tests/test_core_stage.py` — `core/stage.py`: контракт имён флагов, порядок источников сервера (CLI > env > файл), `<СТАДИЯ>_*`, нормализация `/v1`, форма одного запроса стадии, предпросмотр, прогресс в обоих режимах;
 - `tests/test_core_transport.py` — `core/transport.py`: нарезка SSE на строки (терминатор отсечен, `[DONE]` и finish_reason видны), нормализация ошибок, живой раунд-трип через stdlib-сервер, ошибка соединения как ConnectTimeout;
 - `tests/test_run_flows.py` — `run.py` (bootstrap, лаунчер web);

@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 from core import common as C  # noqa: E402
 from core import deps as D  # noqa: E402
 from core import projects as PRJ  # noqa: E402
+from core import settings as SET  # noqa: E402
 from core import transport as T  # noqa: E402
 
 AGENTS_MD = ROOT / "AGENTS.md"
@@ -68,6 +69,12 @@ TRANSPORT_API = ["TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStrea
                  "BACKEND"]
 # Зеркало API core/deps.py (реестр внешних зависимостей)
 DEPS_API = ["ROLES", "status", "format_status", "missing_hint"]
+# Зеркало API core/settings.py (реестр настроек — одно место истины)
+SETTINGS_API = ["Setting", "Block", "Group", "GROUPS", "SETTINGS", "BY_KEY",
+                "BY_BLOCK", "STAGES", "groups", "settings_of", "form_fields",
+                "defaults", "env_key", "env_file", "sanitize", "file_values",
+                "layered_values", "effective", "values_of_stage", "llm_values",
+                "write_values", "groups_payload"]
 
 
 def _agents_text() -> str:
@@ -101,16 +108,16 @@ def test_core_api_mentioned_in_agents_md(name):
         f"{name} не упоминается в AGENTS.md — таблица §6 устарела"
 
 
-@pytest.mark.parametrize("name", TRANSPORT_API + DEPS_API)
+@pytest.mark.parametrize("name", TRANSPORT_API + DEPS_API + SETTINGS_API)
 def test_transport_deps_api_exists_in_code(name):
-    """API транспорта и реестра зависимостей существует в core (зеркало §6)."""
-    module = T if name in TRANSPORT_API else D
+    """API транспорта, зависимостей и реестра настроек существует в core."""
+    module = T if name in TRANSPORT_API else (D if name in DEPS_API else SET)
     assert hasattr(module, name), f"{module.__name__}.{name} исчезла"
 
 
-@pytest.mark.parametrize("name", TRANSPORT_API + DEPS_API)
+@pytest.mark.parametrize("name", TRANSPORT_API + DEPS_API + SETTINGS_API)
 def test_transport_deps_api_mentioned_in_agents_md(name):
-    """Строки §6 про транспорт и зависимости полные: имён там терять нельзя."""
+    """Строки §6 про транспорт, зависимости и настройки полные: имена не потеряны."""
     assert re.search(rf"\b{name}\b", _agents_text()), \
         f"{name} не упоминается в AGENTS.md — таблица §6 устарела"
 
