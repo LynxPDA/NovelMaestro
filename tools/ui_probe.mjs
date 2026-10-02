@@ -123,16 +123,6 @@ function seedProjectsDir(dir) {
     ) + "\n",
     "utf-8",
   );
-  // собственный .env книги — ТОЛЬКО отличия (по одному ключу стадии):
-  // «локально» в форме «Запусков» и сброс отличий проверяются на нём
-  fs.writeFileSync(
-    path.join(book, ".env"),
-    [
-      "# NovelMaestro — локальные отличия книги от общего .env",
-      "NER_CHUNK_SIZE=1234",
-    ].join("\n") + "\n",
-    "utf-8",
-  );
   // файл в корне книги: файловый менеджер есть что показать (quick-look)
   fs.writeFileSync(path.join(book, "notes.md"), "# Заметки\n\n- проба\n", "utf-8");
   fs.mkdirSync(path.join(book, "prompts"), { recursive: true });
@@ -149,14 +139,14 @@ function seedProjectsDir(dir) {
   fs.mkdirSync(cyrCh, { recursive: true });
   fs.writeFileSync(path.join(cyrCh, "chapter.txt"), "Глава первая.\n", "utf-8");
   fs.writeFileSync(path.join(cyr, "ner.json"), "[]\n", "utf-8");
-  // системный .env пробы (WEB_ENV_FILE указывает сюда же): дефолты LLM и
-  // блок рассуждений — чтобы «Настройки» показывали существующий файл
+  // общий .env пробы (WEB_ENV_FILE указывает сюда же): ОДИН файл на все
+  // книги — дефолты LLM, стадий и рассуждений
   fs.writeFileSync(
     path.join(dir, ".env"),
     [
-      "# системный .env пробы (временные данные probe)",
+      "# общий .env пробы (временные данные probe)",
       "HOST=http://127.0.0.1:9/v1",
-      "API_KEY=",
+      "API_KEY=probe-secret",
       "MODEL=probe-model",
       "NER_CHUNK_SIZE=8000",
       "REASONING_MODE=default",
@@ -389,86 +379,122 @@ async function main() {
     }
   }
 
-  /* рассуждения модели: ОДИН глобальный блок на «Настройках» (в полях стадий
-   * его больше нет) + точечная запись общих ключей в системный .env */
+  /* страница «Настройки»: ОДИН общий .env, блоки реестра карточками,
+   * секрет — маской, сохранение пишет общий файл; про рассуждения формы
+   * стадий ничего не знают */
   {
     const before = problems.length;
     await page.goto(`${url}/#/settings`, { waitUntil: "load" });
     await page.reload({ waitUntil: "load" });
-    await page.waitForTimeout(1200);
-    const card = page.locator(".review-card[data-reasoning]");
-    if (!(await card.count())) {
-      problems.push("reasoning: на «Настройках» нет блока рассуждений");
-      log("❌ reasoning-блок    карточка не найдена");
+    await page.waitForSelector(".settings-cards .review-card", { timeout: 15000 });
+    const head = await page.evaluate(() => ({
+      tabs: [...document.querySelectorAll(".tabs .tab")]
+        .map((t) => t.textContent.trim()),
+      active: (document.querySelector(".tabs .tab-active") || {})
+        .textContent?.trim() || "",
+      cards: [...document.querySelectorAll(".settings-cards .review-card-title")]
+        .map((x) => x.textContent.trim()),
+      status: (document.querySelector(".review-status") || {})
+        .textContent?.trim() || "",
+      html: document.getElementById("app").innerHTML,
+    }));
+    if (head.tabs.length !== 6)
+      problems.push(`настройки: субвкладок ${head.tabs.length} (${head.tabs.join("/")})`);
+    if (head.active !== head.tabs[0])
+      problems.push(`настройки: активна вкладка «${head.active}»`);
+    if (!head.cards.includes("Рассуждения модели"))
+      problems.push(`настройки: нет блока рассуждений (${head.cards.join("/")})`);
+    if (!/общий конфиг:/.test(head.status))
+      problems.push(`настройки: подзаголовок «${head.status}»`);
+    if (head.html.includes("probe-secret"))
+      problems.push("настройки: значение API-ключa уехало в SPA");
+    // значение секрета в DOM — только маска (value пароля innerHTML не
+    // сериализует, поэтому читаем inputValue контрола)
+    const masked = await page.locator(".settings-cards .field")
+      .filter({ hasText: "API-ключ" }).first()
+      .locator("input,select,textarea").first().inputValue();
+    if (masked !== "••••") problems.push(`настройки: секрет «${masked}»`);
+    // карточка рассуждений: поля, варианты и предзаполнение — из реестра
+    const card = page.locator(".settings-cards .review-card",
+      { hasText: "Рассуждения модели" }).first();
+    const f = await card.evaluate((el) => ({
+      names: [...el.querySelectorAll("input,select,textarea")]
+        .map((c) => c.getAttribute("name")),
+      kinds: [...el.querySelectorAll("input,select,textarea")]
+        .map((c) => c.tagName.toLowerCase()),
+      opts: [...el.querySelectorAll("select")].map(
+        (sel) => [...sel.options].map((o) => o.value).join(",")),
+      vals: [...el.querySelectorAll("input,select,textarea")]
+        .map((c) => c.value),
+    }));
+    // name контрола = КЛЮЧ .env (имена полей стадий не уникальны)
+    const want = ["REASONING_MODE", "THINKING_PROFILE", "REASONING_EFFORT",
+      "THINKING_BUDGET", "LLM_EXTRA_BODY_JSON"];
+    if (f.names.join(",") !== want.join(","))
+      problems.push(`reasoning: поля ${f.names.join(",")}`);
+    if (f.kinds.join(",") !== "select,select,select,input,input")
+      problems.push(`reasoning: контролы ${f.kinds.join(",")}`);
+    if (f.opts[0] !== "default,on,off")
+      problems.push(`reasoning: режимы «${f.opts[0]}»`);
+    if (!f.opts[1].startsWith("openai,anthropic,"))
+      problems.push(`reasoning: профили «${f.opts[1]}»`);
+    if (f.opts[2] !== ",none,minimal,low,medium,high,xhigh,max")
+      problems.push(`reasoning: уровни «${f.opts[2]}»`);
+    if (f.vals[0] !== "default" || f.vals[1] !== "openai" || f.vals[3] !== "0")
+      problems.push(`reasoning: предзаполнилось ${f.vals.join("|")}`);
+    await card.locator('select[name="REASONING_MODE"]').selectOption("on");
+    await card.locator('select[name="THINKING_PROFILE"]').selectOption("qwen");
+    await card.locator('select[name="REASONING_EFFORT"]').selectOption("xhigh");
+    await card.locator('input[name="THINKING_BUDGET"]').fill("2048");
+    await card.locator('input[name="LLM_EXTRA_BODY_JSON"]').fill('{"top_k": 5}');
+    // маска секрета — как значение: сервер такой ключ не трогает
+    await page.locator('.page-header-actions button:has-text("Сохранить")')
+      .first().click();
+    await page.waitForTimeout(900);
+    if (seedDir) {
+      const env = fs.readFileSync(path.join(seedDir, ".env"), "utf-8");
+      const lines = env.split("\n");
+      for (const line of ["REASONING_MODE=on", "THINKING_PROFILE=qwen",
+        "REASONING_EFFORT=xhigh", "THINKING_BUDGET=2048",
+        'LLM_EXTRA_BODY_JSON={"top_k": 5}'])
+        if (!lines.includes(line)) problems.push(`reasoning: в .env нет ${line}`);
+      for (const keep of ["HOST=http://127.0.0.1:9/v1", "MODEL=probe-model",
+        "API_KEY=probe-secret"])
+        if (!env.includes(keep)) problems.push(`reasoning: .env потерял ${keep}`);
+      if (env.includes("••••")) problems.push("reasoning: маска попала в .env");
     } else {
-      const f = await card.evaluate((el) => ({
-        labels: [...el.querySelectorAll(".field-label")].map(
-          (x) => x.textContent.trim()),
-        names: [...el.querySelectorAll(".field .input")].map(
-          (c) => c.getAttribute("name")),
-        kinds: [...el.querySelectorAll(".field .input")].map(
-          (c) => c.tagName.toLowerCase()),
-        opts: [...el.querySelectorAll(".field select")].map(
-          (sel) => [...sel.options].map((o) => o.value).join(",")),
-        vals: [...el.querySelectorAll(".field .input")].map((c) => c.value),
-      }));
-      const want = ["REASONING_MODE", "THINKING_PROFILE", "REASONING_EFFORT",
-        "THINKING_BUDGET", "LLM_EXTRA_BODY_JSON"];
-      if (f.names.join(",") !== want.join(","))
-        problems.push(`reasoning: поля ${f.names.join(",")}`);
-      if (f.kinds.join(",") !== "select,select,select,input,input")
-        problems.push(`reasoning: контролы ${f.kinds.join(",")}`);
-      if (f.opts[0] !== "default,on,off")
-        problems.push(`reasoning: режимы «${f.opts[0]}»`);
-      if (!f.opts[1].startsWith("openai,anthropic,"))
-        problems.push(`reasoning: профили «${f.opts[1]}»`);
-      if (f.opts[2] !== ",none,minimal,low,medium,high,xhigh,max")
-        problems.push(`reasoning: уровни «${f.opts[2]}»`);
-      // предзаполнение — эффективные значения системного .env (сид пробы)
-      if (f.vals[0] !== "default" || f.vals[1] !== "openai" || f.vals[3] !== "0")
-        problems.push(`reasoning: предзаполнилось ${f.vals.join("|")}`);
-      await card.locator('select[name="REASONING_MODE"]').selectOption("on");
-      await card.locator('select[name="THINKING_PROFILE"]').selectOption("qwen");
-      await card.locator('select[name="REASONING_EFFORT"]').selectOption("xhigh");
-      await card.locator('input[name="THINKING_BUDGET"]').fill("2048");
-      await card.locator('input[name="LLM_EXTRA_BODY_JSON"]')
-        .fill('{"top_k": 5}');
-      await card.locator("button").click();
-      await page.waitForTimeout(900);
-      if (seedDir) {
-        const env = fs.readFileSync(path.join(seedDir, ".env"), "utf-8");
-        const lines = env.split("\n");
-        for (const line of ["REASONING_MODE=on", "THINKING_PROFILE=qwen",
-          "REASONING_EFFORT=xhigh", "THINKING_BUDGET=2048",
-          'LLM_EXTRA_BODY_JSON={"top_k": 5}'])
-          if (!lines.includes(line)) problems.push(`reasoning: в .env нет ${line}`);
-        for (const keep of ["HOST=", "MODEL="])
-          if (!env.includes(keep)) problems.push(`reasoning: .env потерял ${keep}`);
-      } else {
-        log("⚠️  reasoning: внешний сервер — файл .env не проверяем");
-      }
-      // формы стадий рассуждений больше не касаются
-      await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
-        { waitUntil: "load" });
-      await page.reload({ waitUntil: "load" });
-      await page.waitForTimeout(1200);
-      const leaked = await page.evaluate(
-        () => /reasoning|thinking|extra_body/i.test(
-          document.getElementById("app").innerHTML),
-      );
-      if (leaked) problems.push("reasoning: поле стадии осталось в форме запуска");
-      if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-reasoning.png") });
-      log(`${problems.length === before ? "✅" : "❌"} reasoning-блок   ${f.labels.join(" · ")}`);
+      log("⚠️  reasoning: внешний сервер — файл .env не проверяем");
     }
+    // субвкладка «Веб-сервер» — свои блоки (состояние вкладок — localStorage)
+    await page.locator('.tabs .tab:has-text("Веб-сервер")').first().click();
+    await page.waitForTimeout(400);
+    const g2 = await page.evaluate(() =>
+      [...document.querySelectorAll(".settings-cards .review-card-title")]
+        .map((x) => x.textContent.trim()));
+    if (!(g2.includes("Сеть") && g2.includes("Данные и задачи")))
+      problems.push(`настройки: блоки веб-сервера (${g2.join("/")})`);
+    const savedTab = seedDir ? await page.evaluate(
+      () => localStorage.getItem("settingsTab") || "") : "";
+    if (seedDir && savedTab !== "server")
+      problems.push(`настройки: вкладка не запомнена (${savedTab})`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "settings.png") });
+    // формы стадий рассуждений больше не касаются
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForTimeout(1200);
+    const leaked = await page.evaluate(
+      () => /reasoning|thinking|extra_body/i.test(
+        document.getElementById("app").innerHTML));
+    if (leaked) problems.push("reasoning: поле стадии осталось в форме запуска");
+    log(`${problems.length === before ? "✅" : "❌"} настройки+reasoning  ${head.cards.length} блок(ов) · ${head.tabs.join("/")}`);
   }
 
-  /* слои конфига «Запусков»: книга хранит ТОЛЬКО свои отличия — изменённое
-   * поле помечается «локально» (тултип: локальное и общее значение), одна
-   * кнопка снимает отличия стадии, файл книги без отличий удаляется, а
-   * вкладка «Конфиг» книжный .env не показывает вовсе */
+  /* «Запуски»: ОДНА форма на стадию (переключателя режимов и пресетов нет),
+   * поля — из реестра со значениями общего конфига, LLM-полей нет,
+   * «Сбросить настройки» возвращает изменённое поле к значению конфига */
   {
     const before = problems.length;
-    const bookEnv = path.join(seedDir, SECTION, BOOK, ".env");
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
       { waitUntil: "load" });
     await page.reload({ waitUntil: "load" });
@@ -476,79 +502,83 @@ async function main() {
     await page.locator('.stage-card:has-text("Создание глоссария")').first()
       .click();
     await page.waitForTimeout(900);
-    await page.locator('.mode-btn:has-text("Экспертный")').first().click();
-    await page.waitForTimeout(900);
+    if (await page.locator(".run-mode, .mode-btn").count())
+      problems.push("запуски: переключатель «Простой/Экспертный» вернулся");
     const readForm = () =>
       page.evaluate(() => ({
         rows: [...document.querySelectorAll(".run-form .field")].map((el) => ({
           label: (el.querySelector(".field-label") || {}).textContent?.trim() || "",
           value: ((el.querySelector("input,select,textarea") || {}).value) || "",
           local: !!el.querySelector(".field-local"),
-          tip: (el.querySelector(".field-local") || {}).title || "",
         })),
-        reset: (document.querySelector(".field-local-reset") || {}).textContent?.trim() || "",
+        reset: (document.querySelector(".run-reset") || {}).textContent?.trim() || "",
+        tip: (document.querySelector(".run-reset") || {}).title || "",
       }));
     let form = await readForm();
+    if (form.rows.some((r) => /локально/.test(r.label)))
+      problems.push("запуски: пометка «локально» вернулась");
+    if (/Сервер LLM|API-ключ|^Модель$/im.test(
+      form.rows.map((r) => r.label).join("\n")))
+      problems.push("запуски: LLM-поля вернулись в форму стадии");
     const chunk = form.rows.find((r) => /Размер чанка/.test(r.label));
-    if (!seedDir) {
-      log("⚠️  слои конфига: внешний сервер — файл книги не проверяем");
-    } else {
-      if (!chunk) {
-        problems.push("слои: поля стадии не отрисованы");
-      } else {
-        if (chunk.value !== "1234")
-          problems.push(`слои: поле предзаполнено «${chunk.value}», ждали 1234`);
-        if (!chunk.local)
-          problems.push("слои: отличие книги не помечено «локально»");
-        if (!(chunk.tip.includes("1234") && chunk.tip.includes("8000")))
-          problems.push(`слои: тултип метки «${chunk.tip}»`);
-      }
-      if (form.reset !== "Сбросить локальные (1)")
-        problems.push(`слои: кнопка сброса «${form.reset}»`);
+    if (!chunk) problems.push(`запуски: форм нет или нет поля (${form.rows.length} строк)`);
+    if (!chunk) {
+      problems.push("запуски: поля стадии не отрисованы");
+    } else if (chunk.value !== "8000") {
+      problems.push(`запуски: «${chunk.label}» = «${chunk.value}», ждали 8000`);
     }
-    // модалка подтверждения → ключ книги уходит → поле снова общее
-    if (form.reset) {
-      await page.locator(".field-local-reset").first().click();
-      await page.waitForTimeout(600);
-      const word = page.locator(".modal-backdrop input.input");
-      if (!(await word.count())) {
-        problems.push("слои: модалка сброса не открылась");
-      } else {
-        const mtitle = await page.evaluate(() =>
-          (document.querySelector(".modal-backdrop .modal-title") || {})
-            .textContent?.trim() || "");
-        await word.first().fill("СБРОСИТЬ");
-        await page.locator('.modal-backdrop button:has-text("Подтвердить")')
-          .first().click();
-        await page.waitForTimeout(1500);
-        form = await readForm();
-        const after = form.rows.find((r) => /Размер чанка/.test(r.label));
-        if (!after || after.value !== "8000")
-          problems.push(`слои: после сброса поле «${(after || {}).value}»`);
-        if (after && after.local)
-          problems.push("слои: после сброса метка «локально» осталась");
-        if (form.reset)
-          problems.push(`слои: после сброса кнопка «${form.reset}»`);
-        if (!/^Сбросить локальные/.test(mtitle))
-          problems.push(`слои: модалка озаглавлена «${mtitle}»`);
-        if (seedDir && fs.existsSync(bookEnv))
-          problems.push("слои: файл книги остался без отличий");
-      }
+    if (form.reset)
+      problems.push(`запуски: кнопка сброса видна без правок («${form.reset}»)`)
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "run-form.png") });
+    // правим поле → «Сбросить настройки (1)» с тултипом «сейчас → конфиг»
+    await page.locator(".run-form .field")
+      .filter({ hasText: "Размер чанка" }).first()
+      .locator("input,select,textarea").first().fill("1234");
+    await page.waitForTimeout(1200);
+    form = await readForm();
+    const now = form.rows.find((r) => /Размер чанка/.test(r.label)) || {};
+    if (now.value !== "1234")
+      problems.push(`запуски: поле не изменилось (${now.value})`);
+    if (!/^Сбросить настройки \(1\)$/.test(form.reset))
+      problems.push(`запуски: кнопка «${form.reset}»`);
+    if (!(form.tip.includes("1234") && form.tip.includes("8000")))
+      problems.push(`запуски: тултип сброса «${form.tip}»`);
+    // модалка подтверждения → поле снова значение общего конфига
+    await page.locator(".run-reset").first().click();
+    await page.waitForTimeout(600);
+    const word = page.locator(".modal-backdrop input.input");
+    if (!(await word.count())) {
+      problems.push("запуски: модалка сброса не открылась");
+    } else {
+      const mtitle = await page.evaluate(() =>
+        (document.querySelector(".modal-backdrop .modal-title") || {})
+          .textContent?.trim() || "");
+      await word.first().fill("СБРОСИТЬ");
+      await page.locator('.modal-backdrop button:has-text("Подтвердить")')
+        .first().click();
+      await page.waitForTimeout(1500);
+      form = await readForm();
+      const after = form.rows.find((r) => /Размер чанка/.test(r.label)) || {};
+      if (after.value !== "8000")
+        problems.push(`запуски: после сброса «${after.value}», ждали 8000`);
+      if (form.reset)
+        problems.push(`запуски: после сброса кнопка «${form.reset}»`);
+      if (!/^Сбросить настройки/.test(mtitle))
+        problems.push(`запуски: модалка «${mtitle}»`);
     }
     if (SHOT)
-      await page.screenshot({ path: path.join(OUT, "scenario-config-layers.png") });
-    // вкладка «Конфиг»: книжный .env не показывается и не правится
+      await page.screenshot({ path: path.join(OUT, "scenario-run-form.png") });
+    // вкладка «Настройки» проекта — данные книги, .env-редактора нет
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/config`,
       { waitUntil: "load" });
     await page.reload({ waitUntil: "load" });
     await page.waitForTimeout(1200);
-    const cfg = await page.evaluate(
-      () => document.getElementById("app").innerHTML);
+    const cfg = await page.evaluate(() => document.getElementById("app").innerHTML);
     if (/Файл \.env|Сохранить \.env/.test(cfg))
-      problems.push("слои: «Конфиг» по-прежнему редактирует .env книги");
+      problems.push("настройки книги: вкладка по-прежнему редактирует .env");
     if (!/Обложка/.test(cfg))
-      problems.push("слои: в «Конфиге» не осталось карточек");
-    log(`${problems.length === before ? "✅" : "❌"} слои конфига     ${(chunk || {}).label || ""} · ${(form.rows.find((r) => /Размер чанка/.test(r.label)) || {}).value || "?"} · «Конфиг» без .env-редактора`);
+      problems.push("настройки книги: не осталось карточек");
+    log(`${problems.length === before ? "✅" : "❌"} запуски (одна форма)  ${(chunk || {}).label || ""}=${(chunk || {}).value || "?"}`);
   }
 
   /* кириллическое имя проекта: сегменты hash-маршрута браузер хранит

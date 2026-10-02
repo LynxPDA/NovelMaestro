@@ -329,6 +329,7 @@ def test_settings_get_masked(srv, tmp_path, monkeypatch):
     assert r["path"] == str(tmp_path / "repo" / ".env")
     f = _settings_fields(r)
     assert f["api_key"]["secret"] is True
+    assert f["api_key"]["key"] == "API_KEY"   # сохран — по ключу, не по имени
     assert f["api_key"]["value"] == "••••"
     assert f["host"]["value"] == "http://x:1"
     dumped = json.dumps(r, ensure_ascii=False)

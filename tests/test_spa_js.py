@@ -81,12 +81,14 @@ def test_run_views_chips_persistence():
     src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
     assert "function chipRestore(" in src
     assert "chipRestore(key, spec, vals)" in src
-    assert "function saveChips(" in src
     assert "localStorage.setItem(chipKey(key)" in src
     # ner_check: дефолт полей, материализованный curFields, — touched
-    # (в простом режиме уходит именно то, что показано чипсами)
     assert 'st.touched[key].add("fields");' in src
-    assert "function expertForm(key, spec)" in src
+    # форма стадии одна (Простой/Экспертный удалены), кнопка сброса
+    # пересчитывается делегатом, а не перестройкой формы
+    assert "function stageForm(key, spec)" in src
+    assert 'panel.addEventListener("input", () => syncResetBtn(key))' in src
+    assert "st.baseline[key] = Object.assign({}, vals)" in src
 
 
 def test_run_views_last_finished_log():
@@ -228,22 +230,22 @@ def test_glossary_dispute_removed():
 
 def test_run_views_preview_request():
     """Запуски: кнопка «Предпросмотр запроса» — только у LLM-стадий
-    (spec.preview) и только в Экспертном режиме; модалка — POST
-    /stages/{key}/preview-request, сводка символов + messages."""
+    (spec.preview); модалка — POST /stages/{key}/preview-request, сводка
+    символов + messages. Режим «Простой/Экспертный» удалён: форма одна,
+    модалка зовётся без mode."""
     src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
-    # кнопка: по флагу спеки, ghost, идёт в экспертную форму
+    # кнопка: по флагу спеки, ghost, в единой форме стадии
     assert "spec.preview" in src
     assert '"Предпросмотр запроса"' in src
-    assert 'previewRequestModal(key, spec, "expert")' in src
+    assert "previewRequestModal(key, spec)" in src
     # модалка: POST на preview-request и рендер payload
     assert "async function previewRequestModal(" in src
     assert "`/stages/${key}/preview-request`" in src
     assert "previewRequestView(" in src
     assert "d.chars" in src and "d.messages" in src
-    # previewRequestView не показывает секреты: моделей/меток достаточно;
-    # в простом режиме (simplePanel) кнопки нет — modal зовётся только
-    # с mode "expert"
-    assert '"expert"' in src
+    # «Простого режима» больше нет: ни переключателя, ни пресет-карточки
+    assert "runMode" not in src and "simplePanel" not in src
+    assert "localFieldBadge" not in src
 
 
 def test_dropdown_menus_are_fixed_positioned():

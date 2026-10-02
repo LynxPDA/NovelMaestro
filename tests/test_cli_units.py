@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Юнит-тесты чистых функций скриптов (без LLM и без сети)."""
 # pyright: reportMissingImports=false
+import importlib.util
 import json
 import os
 import re
@@ -25,6 +26,8 @@ import epub_to_chapters as E2C  # noqa: E402
 import clean_and_compile as CAC  # noqa: E402
 import translate_check as TC  # noqa: E402
 import batch_replace as BR    # noqa: E402
+import web.stages as web_stages  # noqa: E402
+from core import settings as core_settings  # noqa: E402
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -995,3 +998,56 @@ def test_br_main_replace_broken(tmp_path, capsys):
                   "--replace", "без разделителя"])
     assert rc == 1
     assert "нет разделителя" in capsys.readouterr().out
+
+# ════════════════════════════════════════════════════════════════════
+# паритет значений: где имя поля совпадает с именем флага, значение одно
+# ════════════════════════════════════════════════════════════════════
+# web-оркестратор конвейера — не CLI-скрипт с argparse: его поля проверяет
+# test_web_pipeline.py
+STAGE_SCRIPT = {stage: web_stages.script_path(stage, ROOT)
+                for stage in core_settings.STAGES if stage != "pipeline"}
+
+
+def _script_parser(path):
+    """argparse-парсер скрипта стадии (builder вынесен в build_parser())."""
+    spec = importlib.util.spec_from_file_location(
+        "nm_stage_" + path.stem.replace("-", "_"), str(path))
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    fn = getattr(mod, "build_parser", None) or getattr(mod, "make_parser", None)
+    assert fn is not None, f"{path.name}: нет builder'а парсера"
+    return fn()
+
+
+@pytest.mark.parametrize("stage", sorted(STAGE_SCRIPT))
+def test_cli_defaults_match_registry(stage):
+    """Один источник истины: где имя поля стадии совпадает с dest флага,
+    дефолт argparse обязан равняться значению реестра.
+
+    Файловые поля реестра хранят ИМЯ файла, скрипт — путь относительно
+    папки книги: префикс каталога добавляет apply_cli_defaults. Имена
+    составных полей исторически различаются (--replace у batch_replace
+    вместо textarea «replacements», --epub-cover вместо «cover»,
+    --replace-re вместо «split_patterns») — их проверяет
+    test_web_jobs.py на собранном argv."""
+    path = STAGE_SCRIPT[stage]
+    assert path.is_file(), f"нет скрипта стадии: {path}"
+    by_dest = {a.dest: a.default for a in _script_parser(path)._actions}
+    bad = []
+    for f in core_settings.form_fields(stage):
+        name = f["name"]
+        if name not in by_dest:
+            continue
+        want, got = f.get("default"), by_dest[name]
+        if f["type"] == "files" and str(want) and "/" not in str(want) and f.get("dir"):
+            want = f"{f['dir']}/{want}"
+        if isinstance(got, bool) or f["type"] == "bool":
+            if bool(want) != bool(got):
+                bad.append(f"{name}: реестр {want!r} ≠ скрипт {got!r}")
+            continue
+        norm = lambda v: "" if v is None else str(v)  # noqa: E731
+        if norm(want) != norm(got):
+            bad.append(f"{name}: реестр {want!r} ≠ скрипт {got!r}")
+    assert not bad, f"{stage}: " + "; ".join(bad)

@@ -177,7 +177,7 @@ async function api(path, opts = {}) {
   if (p.startsWith("/jobs/")) return { job: {} };
   if (p === "/stages") return { stages: [] };
   if (p.startsWith("/stages/")) {
-    return { spec: { fields: [], simple: [] }, options: {} };
+    return { spec: { fields: [] }, options: {} };
   }
   return { ok: true };
 }
