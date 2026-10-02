@@ -6,8 +6,8 @@
 - SilentLog — логгер-заглушка;
 - make_ru_chapter_file — русский текст нужного размера;
 - feed — эмуляция ввода через подмену input();
-- fake_env — минимальный .env во временной папке.
-"""
+- fake_env — минимальный .env во временной папке."""
+import os
 import socket
 import sys
 from pathlib import Path
@@ -75,15 +75,19 @@ def srv_port() -> int:
 @pytest.fixture(autouse=True)
 def isolated_env_layers(tmp_path, monkeypatch):
     """Тесты не видят .env машины разработчика: общий конфиг — отдельный
-    временный файл, ключи LLM из окружения сняты. Иначе локальный .env
-    меняет эффективные значения стадий прямо в прогоне."""
+    временный файл (своего .env у книги больше нет, он и есть единственный).
+    HOST/MODEL заданы намеренно: без них стадия считает, что конфига нет, и
+    падает sys.exit — тест должен падать на assert, а не на окружении машины.
+    Остальные ключи реестра снимаются из окружения: эффективное значение
+    должно быть либо из этого файла, либо дефолтом реестра."""
     shared = tmp_path / "shared.env"
-    # HOST обязателен: без него стадия считает, что конфига нет, и падает
-    # sys.exit — тест должен падать на assert, а не на окружении машины
-    shared.write_text("HOST=http://127.0.0.1:9\n", encoding="utf-8")
+    shared.write_text("HOST=http://127.0.0.1:9\nMODEL=testmodel\n",
+                      encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(shared))
-    for key in ("HOST", "API_KEY", "MODEL", "LLM_API_KEY"):
+    from core import settings as _S
+    for key in ("LLM_API_KEY", *{s.key for s in _S.SETTINGS}):
         monkeypatch.delenv(key, raising=False)
+    return shared
 
 
 def fake_env(tmp_path) -> str:
@@ -99,3 +103,16 @@ def fake_env(tmp_path) -> str:
 def ensure_tmp(tmp_path):
     """Каталог tmp/ проекта (рабочие файлы) для тестов."""
     (tmp_path / "tmp").mkdir(exist_ok=True)
+
+
+def pytest_xdist_auto_num_workers(config):
+    """Число воркеров для `-n auto`: из бюджета памяти, а не «сколько ядер».
+
+    Жёсткий потолок, чтобы параллельный прогон не съедал машину (например,
+    когда рядом живёт LLM-сервер): 5 ГБ по умолчанию, NOVELMAESTRO_TEST_BUDGET_MB
+    перекрывает. Замер набора — десятки МБ на воркер; 256 МБ/воркер — запас.
+    Явный `-n K` в командной строке этот хук не вызывает.
+    """
+    budget_mb = int(os.environ.get("NOVELMAESTRO_TEST_BUDGET_MB", "5120"))
+    per_worker_mb = 256
+    return max(1, min(budget_mb // per_worker_mb, os.cpu_count() or 2))

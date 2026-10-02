@@ -51,9 +51,22 @@ cmd_setup() {
 
 cmd_test() {
     activate
-    # без аргументов — весь каталог параллельно (pytest-xdist); с аргументами — ровно то,
-    # что попросили (например: ./dev.sh test -n 0 tests/test_ner.py)
-    if [ $# -eq 0 ]; then set -- -n auto tests/; fi
+    # Параллельный прогон — поведение по умолчанию: -n auto добавляется сам,
+    # если явно не попросили другое число процессов (например: -n 0 — отладка
+    # одного файла последовательно). Число воркеров для auto считает хук
+    # pytest_xdist_auto_num_workers (tests/conftest.py): бюджет памяти 5 ГБ.
+    # Если целей (путей) среди аргументов нет — гоним tests/ целиком.
+    local has_n=0 has_target=0 a next_is_nval=0
+    for a in "$@"; do
+        if [ "$next_is_nval" -eq 1 ]; then next_is_nval=0; continue; fi
+        case "$a" in
+            -n|-n[0-9]*|-n[0-9]*) has_n=1; [ "$a" = "-n" ] && next_is_nval=1 ;;
+            -*) ;;
+            *) has_target=1 ;;
+        esac
+    done
+    [ "$has_n" -eq 0 ] && set -- -n auto "$@"
+    [ "$has_target" -eq 0 ] && set -- "$@" tests/
     exec python3 -m pytest "$@" -q
 }
 
