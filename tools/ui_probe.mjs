@@ -487,7 +487,116 @@ async function main() {
       () => /reasoning|thinking|extra_body/i.test(
         document.getElementById("app").innerHTML));
     if (leaked) problems.push("reasoning: поле стадии осталось в форме запуска");
-    log(`${problems.length === before ? "✅" : "❌"} настройки+reasoning  ${head.cards.length} блок(ов) · ${head.tabs.join("/")}`);
+  }
+
+  /* профили LLM: General — значения общего конфига, свой профиль хранит только
+   * переопределения; карточка, чипсы, создание/переименование/удаление и
+   * сохранение значатся в llm_profiles.json рядом с общим .env */
+  {
+    const before = problems.length;
+    const PF = () => path.join(seedDir || "", "llm_profiles.json");
+    const chips = () => page.evaluate(() => [...document
+      .querySelectorAll(".settings-chips .settings-chip")]
+      .map((x) => x.textContent.trim()));
+    const status = () => page.evaluate(() => ((document
+      .querySelector(".review-status") || {}).textContent || "").trim());
+    /* значение поля «Сервер LLM» активной карточки (name = ключ .env) */
+    const fieldValue = (name) => page
+      .locator(`.settings-cards [name="${name}"]`).first().inputValue();
+    await page.goto(`${url}/#/settings`, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".tabs .tab", { timeout: 15000 });
+    /* предыдущий сценарий оставил вкладку «Веб-сервер»: профили — на LLM */
+    await page.locator('.tabs .tab:has-text("Модель и сервер")').first().click();
+    await page.waitForSelector(".settings-chip", { timeout: 15000 });
+    let list = await chips();
+    if (list.join("/") !== "General (общий конфиг)")
+      problems.push(`профили: чипсы (${list.join("/")})`);
+    if (!/общий конфиг:/.test(await status()))
+      problems.push(`профили: статус «${await status()}»`);
+    if (await fieldValue("HOST") !== "http://127.0.0.1:9/v1")
+      problems.push(`профили: General сервер «${await fieldValue("HOST")}»`);
+    /* создать: prompt браузера — Playwright его сам закрывает, нужен handler */
+    page.once("dialog", (d) => d.accept("Домашний"));
+    await page.locator('button:has-text("Создать профиль")').first().click();
+    await page.waitForTimeout(700);
+    list = await chips();
+    if (list.length !== 2 || !list[1].includes("Домашний"))
+      problems.push(`профили: после создания (${list.join("/")})`);
+    if (!(await page.locator(".settings-chip.settings-chip-active")
+      .first().textContent()).includes("Домашний"))
+      problems.push("профили: созданный профиль не стал активным");
+    if (seedDir) {
+      if (!fs.existsSync(PF())) {
+        problems.push("профили: llm_profiles.json не создан");
+      } else {
+        const data = JSON.parse(fs.readFileSync(PF(), "utf-8"));
+        const p0 = (data.profiles || [])[0] || {};
+        if (p0.name !== "Домашний" || p0.id !== "p1")
+          problems.push(`профили: файл ${JSON.stringify(p0)}`);
+        if (!("values" in p0) || !("created" in p0) || !("updated" in p0))
+          problems.push(`профили: ключи записи ${Object.keys(p0).join(",")}`);
+      }
+    }
+    /* редактируем профиль: карточки LLM показывают его значения, пустое поле
+     * значит «наследует General», статус говорит про профиль, а не про файл */
+    const st2 = await status();
+    if (!/профиль «Домашний»/.test(st2) || !/llm_profiles\.json/.test(st2))
+      problems.push(`профили: статус «${st2}»`);
+    if (await fieldValue("HOST") !== "" || await fieldValue("THREADS") !== "")
+      problems.push("профили: новый профиль копирует значения General");
+    if (await fieldValue("API_KEY") !== "")
+      problems.push("профили: секрет профиля показан без пустого значения");
+    await page.locator('.settings-cards [name="MODEL"]').first().fill("дом-модель");
+    await page.locator('.settings-cards [name="API_KEY"]').first().fill("дом-ключ");
+    await page.locator('.page-header-actions button:has-text("Сохранить")')
+      .first().click();
+    await page.waitForTimeout(900);
+    if (seedDir) {
+      const data = JSON.parse(fs.readFileSync(PF(), "utf-8"));
+      const v = (data.profiles || [])[0].values || {};
+      if (v.MODEL !== "дом-модель")
+        problems.push(`профили: значения профиля ${JSON.stringify(v)}`);
+      /* только два изменённых поля, в порядке реестра */
+      if (Object.keys(v).join(",") !== "API_KEY,MODEL")
+        problems.push(`профили: в файл уехало лишнее (${Object.keys(v).join(",")})`);
+      const env = fs.readFileSync(path.join(seedDir, ".env"), "utf-8");
+      if (!env.includes("HOST=http://127.0.0.1:9/v1")
+          || !env.includes("MODEL=probe-model")
+          || !env.includes("API_KEY=probe-secret"))
+        problems.push("профили: сохранение профиля тронуло общий .env");
+      if (env.includes("дом-модель") || env.includes("дом-ключ"))
+        problems.push("профили: значения профиля попали в общий .env");
+    } else {
+      log("⚠️  профили: внешний сервер — файл профилей не проверяем");
+    }
+    /* переименовать */
+    page.once("dialog", (d) => d.accept("Дачный"));
+    await page.locator('button:has-text("Переименовать")').first().click();
+    await page.waitForTimeout(600);
+    list = await chips();
+    if (!list[1] || !list[1].includes("Дачный"))
+      problems.push(`профили: переименование (${list.join("/")})`);
+    /* мусор: второй профиль создаём и тут же удаляем (confirm) */
+    page.once("dialog", (d) => d.accept("Временный"));
+    await page.locator('button:has-text("Создать профиль")').first().click();
+    await page.waitForTimeout(600);
+    if ((await chips()).length !== 3)
+      problems.push(`профили: второй профиль (${(await chips()).join("/")})`);
+    page.once("dialog", (d) => d.accept());
+    await page.locator('button:has-text("Удалить")').first().click();
+    await page.waitForTimeout(600);
+    list = await chips();
+    if (list.length !== 2 || !list[0].startsWith("General"))
+      problems.push(`профили: после удаления (${list.join("/")})`);
+    /* возврат на General: карточки снова показывают общий конфиг */
+    await page.locator(".settings-chip:has-text(\"General\")").first().click();
+    await page.waitForTimeout(500);
+    if (await fieldValue("MODEL") !== "probe-model")
+      problems.push(`профили: General показывает «${await fieldValue("MODEL")}»`);
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "settings-profiles.png") });
+    log(`${problems.length === before ? "✅" : "❌"} профили LLM  ${list.join("/")}`);
   }
 
   /* «Запуски»: ОДНА форма на стадию (переключателя режимов и пресетов нет),
@@ -499,6 +608,48 @@ async function main() {
       { waitUntil: "load" });
     await page.reload({ waitUntil: "load" });
     await page.waitForSelector(".stage-card", { timeout: 15000 });
+    /* профиль LLM проекта: одна панель на вкладку, выбор — localStorage */
+    const readProfile = () => page.evaluate(() => {
+      const el = document.querySelector(".run-profile");
+      if (!el) return null;
+      const sel = el.querySelector("select");
+      return {
+        title: ((el.querySelector(".run-profile-title") || {}).textContent || "").trim(),
+        opts: [...((sel || {}).options || [])].map((o) => o.textContent.trim()),
+        value: (sel || {}).value || "",
+        note: ((el.querySelector(".run-profile-note") || {}).textContent || "").trim(),
+        stored: localStorage.getItem("nmProfile:TMP/Probe") || "",
+      };
+    });
+    let pr = await readProfile();
+    if (!pr) {
+      problems.push("запуски: панели «LLM профиль» нет");
+    } else {
+      if (pr.title !== "LLM профиль")
+        problems.push(`запуски: заголовок панели «${pr.title}»`);
+      if (pr.opts.join("/") !== "General/Дачный")
+        problems.push(`запуски: профили в селекторе (${pr.opts.join("/")})`);
+      if (pr.value !== "general")
+        problems.push(`запуски: выбран «${pr.value}»`);
+      if (!/General — значения общего конфига/.test(pr.note)
+          || !/probe-model/.test(pr.note))
+        problems.push(`запуски: подпись профиля «${pr.note}»`);
+      if (pr.stored)
+        problems.push(`запуски: выбор появился сам собой (${pr.stored})`);
+      /* выбор профиля проекта остаётся в браузере и доезжает до запусков */
+      await page.locator(".run-profile select").first()
+        .selectOption({ index: 1 });
+      await page.waitForTimeout(400);
+      pr = await readProfile();
+      if (pr.value !== "p1" || pr.stored !== "p1")
+        problems.push(`запуски: выбор не запомнен (${pr.value}/${pr.stored})`);
+      if (!/Дачный — наследует General/.test(pr.note)
+          || !/дом-модель/.test(pr.note)
+          || !/http:\/\/127\.0\.0\.1:9\/v1/.test(pr.note))
+        problems.push(`запуски: подпись выбранного профиля «${pr.note}»`);
+      if (await page.locator(".run-profile").count() !== 1)
+        problems.push("запуски: панель профиля не одна");
+    }
     await page.locator('.stage-card:has-text("Создание глоссария")').first()
       .click();
     await page.waitForTimeout(900);

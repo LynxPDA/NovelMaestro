@@ -202,12 +202,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     sel.value = cur;
     const note = h("div", { class: "run-profile-note" });
     function syncNote() {
+      /* /api/stages отдаёт профили сводкой: host/model/reasoning_mode
+         уже разложены по именам полей стадии */
       const p = list.find((x) => x.id === st.profile) || list[0];
-      const v = p.values || {};
-      const parts = [v.HOST || "сервер не задан", v.MODEL || "модель не задана"];
-      if (String(v.REASONING_MODE || "") !== ""
-          && String(v.REASONING_MODE || "") !== "default") {
-        parts.push(`рассуждения: ${v.REASONING_MODE}`);
+      const parts = [p.host || "сервер не задан", p.model || "модель не задана"];
+      if (p.reasoning_mode && p.reasoning_mode !== "default") {
+        parts.push(`рассуждения: ${p.reasoning_mode}`);
       }
       note.textContent = p.builtin
         ? `${p.name} — значения общего конфига (${parts.join(", ")})`

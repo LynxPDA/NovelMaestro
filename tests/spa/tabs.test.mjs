@@ -223,9 +223,10 @@ const SETTINGS_PAYLOAD = {
   groups: [],
   profiles: [
     { id: "general", name: "General", builtin: true,
-      values: { HOST: "http://общий:9989", MODEL: "общая-модель" } },
+      host: "http://общий:9989", model: "общая-модель",
+      reasoning_mode: "default" },
     { id: "p1", name: "Домашний", builtin: false,
-      values: { HOST: "http://дом:9989", MODEL: "дом-модель" } },
+      host: "http://дом:9989", model: "дом-модель", reasoning_mode: "on" },
   ],
 };
 
@@ -483,6 +484,8 @@ test("запуски: выбор профиля живёт в localStorage пр�
   const note = findByClass(page, "run-profile-note")[0];
   assert.match(note.textContent, /Домашний — наследует General/);
   assert.match(note.textContent, /http:\/\/дом:9989/);
+  /* рассуждения профиля — тоже часть сводки */
+  assert.match(note.textContent, /рассуждения: on/);
   /* сохранённый выбор переживает перерисовку */
   const page2 = viewProject("ACTIVE", "Книга", "run");
   await tick();
