@@ -68,8 +68,22 @@ class El {
   getAttribute(k) { return this._attrs[k] ?? null; }
   remove() {}
   removeChild() {}
-  querySelector() { return null; }
-  querySelectorAll() { return []; }
+  /* запрос по классу/тегу по всему поддереву: обработчикам запусков
+     (".run-panel-head") нужен настоящий результат, а не null */
+  querySelectorAll(sel) {
+    const want = String(sel).replace(/^\./, "");
+    const out = [];
+    const walk = (n) => {
+      for (const c of n.children || []) {
+        if ((c.className || "").split(/\s+/).includes(want)
+            || c.tagName === want.toUpperCase()) out.push(c);
+        walk(c);
+      }
+    };
+    walk(this);
+    return out;
+  }
+  querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
   get classList() {
     const s = new Set(this.className.split(/\s+/).filter(Boolean));
     return {
@@ -124,6 +138,7 @@ globalThis.localStorage = (() => {
     getItem: (k) => (m.has(k) ? m.get(k) : null),
     setItem: (k, v) => m.set(String(k), String(v)),
     removeItem: (k) => m.delete(k),
+    clear: () => m.clear(),
   };
 })();
 globalThis.confirm = () => true;
@@ -165,8 +180,8 @@ async function api(path, opts = {}) {
   if (p.endsWith("/tree")) return { chapters: [], artifacts: {} };
   if (p.endsWith("/status")) return { status: { chapters: {}, counts: {} } };
   if (p.endsWith("/chapters/titles")) return { titles: {} };
-  if (p === "/env") return { vars: {}, files: [] };
-  if (p === "/env/template") return { content: "" };
+  /* роуты «Настроек»: текст файла API не отдаёт — только блоки реестра */
+  if (p === "/settings") return SETTINGS_PAYLOAD;
   if (p === "/stages/compile/options") return { modes: [] };
   if (p === "/cover") return { files: [] };
   if (p === "/templates") return { templates: [] };
@@ -175,7 +190,9 @@ async function api(path, opts = {}) {
   if (p === "/ner/export") return { ok: true, content: "" };
   if (p === "/jobs") return { jobs: [] };
   if (p.startsWith("/jobs/")) return { job: {} };
-  if (p === "/stages") return { stages: [] };
+  if (p === "/stages") {
+    return { stages: STAGES, profiles: SETTINGS_PAYLOAD.profiles };
+  }
   if (p.startsWith("/stages/")) {
     return { spec: { fields: [] }, options: {} };
   }
@@ -192,6 +209,25 @@ function makeEditor(initial) {
     setLang() {}, setReadOnly() {},
   };
 }
+
+/* стадии и профили LLM: селектор профиля в запусках рисует их отсюда */
+const STAGES = [
+  { key: "ner", title: "Глоссарий", script: "cli/ner.py" },
+];
+const SETTINGS_PAYLOAD = {
+  path: "/tmp/shared.env",
+  exists: true,
+  profile: "general",
+  profile_file: "/tmp/llm_profiles.json",
+  env_wins: [],
+  groups: [],
+  profiles: [
+    { id: "general", name: "General", builtin: true,
+      values: { HOST: "http://общий:9989", MODEL: "общая-модель" } },
+    { id: "p1", name: "Домашний", builtin: false,
+      values: { HOST: "http://дом:9989", MODEL: "дом-модель" } },
+  ],
+};
 
 const sandbox = {
   console,
@@ -393,4 +429,82 @@ test("quick-look: Space на строке открывает модалку с s
     .map((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
     .filter(Boolean);
   assert.equal(open.length, 1, "Space открыл ровно одну модалку");
+});
+
+/* ── профиль LLM проекта: один выбор на все стадии ─────────────────── */
+const tick = () => new Promise((r) => setTimeout(r, 10));
+
+function collectText(node, out = []) {
+  if (node && typeof node === "object") {
+    if (typeof node.textContent === "string" && node.textContent) {
+      out.push(node.textContent);
+    }
+    for (const c of node.children || []) collectText(c, out);
+  }
+  return out;
+}
+
+function findByClass(node, cls, out = []) {
+  if (node && typeof node === "object") {
+    if ((node.className || "").split(/\s+/).includes(cls)) out.push(node);
+    for (const c of node.children || []) findByClass(c, cls, out);
+  }
+  return out;
+}
+
+test("запуски: панель профиля LLM рисует профили и значения General", async () => {
+  const page = viewProject("ACTIVE", "Книга", "run");
+  await tick();
+  const bars = findByClass(page, "run-profile");
+  assert.equal(bars.length, 1, "панель профиля одна на вкладку");
+  const sel = findByClass(bars[0], "run-profile-select")[0];
+  assert.ok(sel, "селектор профиля");
+  /* текст <option> — текстовый узел-ребёнок, а не textContent родителя */
+  const optText = (o) => (o.children || [])
+    .map((c) => (typeof c === "string" ? c : c.textContent || "")).join("");
+  assert.deepEqual(sel.children.map(optText), ["General", "Домашний"]);
+  /* выбор браузера пуст → встроенный профиль */
+  assert.equal(sel.value, "general");
+  const note = findByClass(bars[0], "run-profile-note")[0];
+  assert.match(note.textContent, /General — значения общего конфига/);
+  assert.match(note.textContent, /http:\/\/общий:9989/);
+  assert.match(note.textContent, /общая-модель/);
+});
+
+test("запуски: выбор профиля живёт в localStorage проекта", async () => {
+  const page = viewProject("ACTIVE", "Книга", "run");
+  await tick();
+  const sel = findByClass(page, "run-profile-select")[0];
+  sel.value = "p1";
+  await sel._listeners.change[0]({ target: sel });
+  assert.equal(
+    globalThis.localStorage.getItem("nmProfile:ACTIVE/Книга"), "p1",
+  );
+  const note = findByClass(page, "run-profile-note")[0];
+  assert.match(note.textContent, /Домашний — наследует General/);
+  assert.match(note.textContent, /http:\/\/дом:9989/);
+  /* сохранённый выбор переживает перерисовку */
+  const page2 = viewProject("ACTIVE", "Книга", "run");
+  await tick();
+  assert.equal(findByClass(page2, "run-profile-select")[0].value, "p1");
+});
+
+test("запуски: без профилей панели нет (пустую карточку не рисуем)", async () => {
+  const saved = SETTINGS_PAYLOAD.profiles;
+  SETTINGS_PAYLOAD.profiles = [];
+  try {
+    const page = viewProject("ACTIVE", "Книга", "run");
+    await tick();
+    assert.equal(findByClass(page, "run-profile").length, 0);
+  } finally {
+    SETTINGS_PAYLOAD.profiles = saved;
+  }
+});
+
+test("запуски: profile не поле формы — в params запуски его нет", async () => {
+  /* профиль едет отдельным полем тела запуска; в params стадии он быть не
+     должен: стадия его не знает, а реестр подставляет значения сам */
+  const src = RUN_SRC;
+  assert.match(src, /profile: st\.profile \|\| ""/);
+  assert.doesNotMatch(src, /params\W*\n?\W*profile/);
 });

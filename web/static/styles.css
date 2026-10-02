@@ -1065,6 +1065,30 @@ input[type="number"] {
 .run-range-sep {
   color: var(--text-dim);
 }
+/* профиль LLM проекта: один выбор на все стадии (значение — в браузере) */
+.run-profile {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.run-profile-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.run-profile-select {
+  max-width: 260px;
+}
+.run-profile-note {
+  font-size: 11px;
+  color: var(--text-dim);
+}
 /* страница «Настройки»: блоки реестра карточками, поля — сеткой */
 .settings-cards {
   display: flex;
@@ -1084,6 +1108,29 @@ input[type="number"] {
   font-size: 11px;
   color: var(--text-dim);
   margin-top: 2px;
+}
+/* ── профили LLM: выбор профиля на странице «Настройки» ── */
+.settings-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.settings-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.settings-chip-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 /* ── ner_check: чипсы типов (карточки-пресеты убраны) ── */
 .ner-chips-bar {

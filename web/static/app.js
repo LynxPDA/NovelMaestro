@@ -904,12 +904,18 @@ async function viewSettings() {
     return h("div", { class: "page" }, h("div", { class: "form-error" }, ex.message));
   }
   const model = { groups: d.groups || [], path: d.path, exists: !!d.exists,
-                  envWins: d.env_wins || [] };
+                  envWins: d.env_wins || [], profiles: d.profiles || [],
+                  profile: d.profile || "general",
+                  profileFile: d.profile_file || "" };
   let active = "";
   try {
     active = localStorage.getItem("settingsTab") || "";
+    model.profile = localStorage.getItem("settingsProfile") || model.profile;
   } catch {
     /* нет localStorage — вкладка по умолчанию */
+  }
+  if (!model.profiles.some((p) => p.id === model.profile)) {
+    model.profile = "general";
   }
   if (!model.groups.some((g) => g.id === active)) {
     active = model.groups.length ? model.groups[0].id : "";
@@ -923,6 +929,11 @@ async function viewSettings() {
   const saveBtn = h("button", { class: "btn btn-sm btn-primary" }, "Сохранить");
 
   function statusText() {
+    const prof = model.profiles.find((p) => p.id === model.profile);
+    if (prof && !prof.builtin) {
+      return `профиль «${prof.name}» · значения только переопределения, `
+        + `остальное — General · файл: ${model.profileFile}`;
+    }
     if (!model.path) return "общий конфиг не найден — путь не настроен";
     if (!model.exists) return `общий конфиг ещё не создан: ${model.path}`;
     const parts = [`общий конфиг: ${model.path}`];
@@ -991,6 +1002,109 @@ async function viewSettings() {
     return wrap;
   }
 
+  // ── профили LLM: один набор серверных настроек на весь конвейер ──
+  // General — встроенный (его значения и есть общий .env); остальные живут в
+  // llm_profiles рядом с ним и хранят только переопределения.
+  function profileCard() {
+    const chips = h("div", { class: "settings-chips" });
+    for (const p of model.profiles) {
+      chips.appendChild(h("button", {
+        class: "settings-chip"
+          + (p.id === model.profile ? " settings-chip-active" : ""),
+        type: "button",
+        onclick: () => {
+          model.profile = p.id;
+          try {
+            localStorage.setItem("settingsProfile", p.id);
+          } catch {
+            /* нет localStorage — выбор живёт до перезагрузки */
+          }
+          renderTab();
+        },
+      }, p.builtin ? `${p.name} (общий конфиг)` : p.name));
+    }
+    const actions = h("div", { class: "settings-chips" });
+    const cur = model.profiles.find((p) => p.id === model.profile) || {};
+    actions.appendChild(h("button", {
+      class: "btn btn-sm", type: "button",
+      onclick: async () => {
+        const name = window.prompt("Имя нового профиля LLM", "");
+        if (!name) return;
+        try {
+          const r = await api("/settings/profiles", {
+            method: "POST",
+            body: { action: "create", name },
+          });
+          model.profiles = r.profiles || model.profiles;
+          model.profile = model.profiles[model.profiles.length - 1].id;
+          try {
+            localStorage.setItem("settingsProfile", model.profile);
+          } catch {
+            /* нет localStorage — не критично */
+          }
+          toast("Профиль создан");
+          renderTab();
+        } catch (ex) {
+          err.textContent = ex.message;
+        }
+      },
+    }, "+ Создать профиль"));
+    if (!cur.builtin && model.profiles.length > 1) {
+      actions.appendChild(h("button", {
+        class: "btn btn-sm", type: "button",
+        onclick: async () => {
+          const name = window.prompt("Новое имя профиля", cur.name || "");
+          if (!name || name === cur.name) return;
+          try {
+            const r = await api("/settings/profiles", {
+              method: "POST",
+              body: { action: "rename", id: cur.id, name },
+            });
+            model.profiles = r.profiles || model.profiles;
+            toast("Профиль переименован");
+            renderTab();
+          } catch (ex) {
+            err.textContent = ex.message;
+          }
+        },
+      }, "Переименовать"));
+      actions.appendChild(h("button", {
+        class: "btn btn-sm btn-danger", type: "button",
+        onclick: async () => {
+          if (!window.confirm(`Удалить профиль «${cur.name}»?`)) return;
+          try {
+            const r = await api("/settings/profiles", {
+              method: "POST",
+              body: { action: "delete", id: cur.id },
+            });
+            model.profiles = r.profiles || model.profiles;
+            model.profile = model.profiles[0].id;
+            toast("Профиль удалён");
+            renderTab();
+          } catch (ex) {
+            err.textContent = ex.message;
+          }
+        },
+      }, "Удалить"));
+    }
+    return h(
+      "div",
+      { class: "review-card review-card-profiles" },
+      h("div", { class: "review-card-title" }, "Профили LLM"),
+      h(
+        "div",
+        { class: "review-card-body" },
+        chips,
+        actions,
+        h("div", { class: "field-help" },
+          "Профиль — полный набор настроек работы с моделью: сервер, ключ, "
+          + "модель, потоки, таймауты, ретраи и рассуждения. Профиль "
+          + "выбирается в запусках проекта; пустое поле профиля наследует "
+          + "General, то есть общий конфиг."),
+      ),
+    );
+  }
+
   function renderTab() {
     const g = model.groups.find((x) => x.id === active) || model.groups[0];
     if (!g) return;
@@ -999,20 +1113,32 @@ async function viewSettings() {
     }
     for (const k of Object.keys(ctl)) delete ctl[k];
     active = g.id;
-    cards.replaceChildren(
-      ...(g.blocks || []).map((b) =>
+    try {
+      localStorage.setItem("settingsProfile", model.profile);
+    } catch {
+      /* нет localStorage — выбор живёт до перезагрузки */
+    }
+    const prof = model.profiles.find((p) => p.id === model.profile) || null;
+    const isLLM = g.id === "llm";
+    const out = [];
+    if (isLLM && model.profiles.length) out.push(profileCard());
+    for (const b of g.blocks || []) {
+      const fields = (b.fields || []).map((f) => {
+        if (!isLLM || !prof || prof.builtin || f.noenv) return f;
+        return { ...f, value: (prof.values || {})[f.key] || "" };
+      });
+      out.push(h(
+        "div",
+        { class: "review-card" },
+        h("div", { class: "review-card-title" }, b.title),
         h(
           "div",
-          { class: "review-card" },
-          h("div", { class: "review-card-title" }, b.title),
-          h(
-            "div",
-            { class: "review-card-body" },
-            h("div", { class: "settings-fields" },
-              ...(b.fields || []).map(fieldWrap)),
-          ),
-        )),
-    );
+          { class: "review-card-body" },
+          h("div", { class: "settings-fields" }, ...fields.map(fieldWrap)),
+        ),
+      ));
+    }
+    cards.replaceChildren(...out);
     status.textContent = statusText();
   }
 
@@ -1038,7 +1164,9 @@ async function viewSettings() {
       values[name] = c.type === "checkbox" ? c.checked : c.value;
     }
     try {
-      const r = await api("/settings", { method: "PUT", body: { values } });
+      const r = await api("/settings", {
+        method: "PUT", body: { profile: model.profile, values },
+      });
       model.path = r.path;
       model.exists = !!r.exists;
       model.envWins = r.env_wins || [];

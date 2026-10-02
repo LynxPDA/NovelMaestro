@@ -52,6 +52,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     brPreview: null, // batch_replace: предпросмотр {segments, stats, …}
     brChapter: null, // batch_replace: выбранная глава предпросмотра
     brSig: "", // batch_replace: сигнатура формы последнего предпросмотра
+    profiles: [], // профили LLM [{id,name,builtin,values}] — из /api/stages
+    profile: "", // выбранный профиль проекта (рабочее состояние браузера)
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
@@ -133,8 +135,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   async function runBody() {
-    // список стадий
+    // список стадий и профили LLM: профиль один на проект, а не на стадию
     const stages = await api("/stages").catch(() => ({ stages: [] }));
+    st.profiles = stages.profiles || [];
     const cards = stages.stages.map((s) =>
       h(
         "button",
@@ -149,6 +152,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const stageList = h(
       "div",
       { class: "run-col run-col-stages" },
+      profileBar(),
       h(
         "div",
         { class: "stage-grid" },
@@ -167,6 +171,68 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       await logColumn(),
     );
     return h("div", { class: "run-layout" }, stageList, right);
+  }
+
+  // ── профиль LLM проекта ──────────────────────────────────────────
+  // Один выбор на все стадии проекта: сервер, модель, потоки и рассуждения
+  // профиля подставляет сервер (core.settings.with_llm), в форме запусков
+  // этих полей нет. Выбор живёт в браузере проекта, а не на диске.
+  function profileKey() {
+    return `nmProfile:${section}/${name}`;
+  }
+
+  function profileBar() {
+    const list = st.profiles || [];
+    if (!list.length) return null;
+    let cur = "";
+    try {
+      cur = localStorage.getItem(profileKey()) || "";
+    } catch {
+      /* нет localStorage — выбор живёт до перезагрузки */
+    }
+    if (!list.some((p) => p.id === cur)) {
+      cur = list[0].id; // general
+    }
+    st.profile = cur;
+    const sel = h(
+      "select",
+      { class: "input input-inline run-profile-select" },
+      ...list.map((p) => h("option", { value: p.id }, p.name)),
+    );
+    sel.value = cur;
+    const note = h("div", { class: "run-profile-note" });
+    function syncNote() {
+      const p = list.find((x) => x.id === st.profile) || list[0];
+      const v = p.values || {};
+      const parts = [v.HOST || "сервер не задан", v.MODEL || "модель не задана"];
+      if (String(v.REASONING_MODE || "") !== ""
+          && String(v.REASONING_MODE || "") !== "default") {
+        parts.push(`рассуждения: ${v.REASONING_MODE}`);
+      }
+      note.textContent = p.builtin
+        ? `${p.name} — значения общего конфига (${parts.join(", ")})`
+        : `${p.name} — наследует General (${parts.join(", ")})`;
+    }
+    sel.addEventListener("change", () => {
+      st.profile = sel.value;
+      try {
+        localStorage.setItem(profileKey(), sel.value);
+      } catch {
+        /* нет localStorage — и нечего сохранять */
+      }
+      syncNote();
+    });
+    attachTooltip(sel, "Профиль LLM этого проекта: сервер, модель, потоки и "
+      + "рассуждения профиля подставляются в запуск сервером. Профили "
+      + "задаются на «Настройках»; пустое поле профиля наследует General.");
+    syncNote();
+    return h(
+      "div",
+      { class: "run-profile" },
+      h("div", { class: "run-profile-title" }, "LLM профиль"),
+      sel,
+      note,
+    );
   }
 
   // последний завершённый запуск стадии этого проекта (список /jobs
@@ -2295,6 +2361,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             action: key,
             project: `${section}/${name}`,
             params: buildParams(key, spec),
+            profile: st.profile || "",
           },
         });
         st.job = r.job;
