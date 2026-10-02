@@ -373,24 +373,12 @@ def test_system_env_file(monkeypatch, tmp_path):
     assert C.system_env_file() == str(tmp_path / "vol" / ".env")
 
 
-def test_project_env_file_only_in_project_dir(tmp_path, monkeypatch):
-    """Собственный .env книги ищется ТОЛЬКО в её папке: раньше подъём вверх
-    находил общий файл и книга жила его копией."""
-    book = tmp_path / "projects" / "ACTIVE" / "book"
-    deep = book / "chapters"
-    deep.mkdir(parents=True)
-    (book / ".env").write_text("P=1", encoding="utf-8")
-    assert C.project_env_file(start_dir=str(book)) == str(book / ".env")
-    assert C.project_env_file(start_dir=str(deep)) is None
-    monkeypatch.chdir(book)
-    assert C.project_env_file() == str(book / ".env")
-    monkeypatch.chdir(deep)
-    assert C.project_env_file() is None
+def test_env_files_single_file(tmp_path, monkeypatch):
+    """Файл конфига один: собственного .env у книги больше нет.
 
-
-def test_env_files_chain(tmp_path, monkeypatch):
-    """Цепочка файлов: сначала общий, поверх — файл книги; один и тот же
-    файл дважды не попадает; явный --env_file заменяет цепочку целиком."""
+    Раньше подъём вверх от папки книги находил её же копию общего файла, и
+    книга жила копией, а не общим конфигом.
+    """
     monkeypatch.delenv("WEB_ENV_FILE", raising=False)
     root = tmp_path / "repo"
     root.mkdir()
@@ -399,64 +387,38 @@ def test_env_files_chain(tmp_path, monkeypatch):
     shared = root / ".env"
     shared.write_text("HOST=http://shared\n", encoding="utf-8")
     book = root / "projects" / "ACTIVE" / "book"
-    book.mkdir(parents=True)
-    # книги без своего файла — один слой (и без дублей cwd==repo)
-    assert C.env_files(start_dir=str(book)) == [str(shared)]
-    (book / ".env").write_text("MODEL=m\n", encoding="utf-8")
-    assert C.env_files(start_dir=str(book)) == [str(shared), str(book / ".env")]
+    (book / "chapters").mkdir(parents=True)
+    assert C.env_files() == [str(shared)]
+    # файл в папке книги — больше не слой
+    (book / ".env").write_text("MODEL=книжная\n", encoding="utf-8")
+    assert C.env_files() == [str(shared)]
+    assert C.load_env() == {"HOST": "http://shared"}
+    # явный --env_file заменяет общий файл собой; несуществующий — слои те же
     one = tmp_path / "manual.env"
     one.write_text("A=1", encoding="utf-8")
-    assert C.env_files(explicit=str(one), start_dir=str(book)) == [str(one)]
-    # явный путь, которого нет, игнорируется — слои остаются
-    assert C.env_files(explicit=str(tmp_path / "нет.env"),
-                       start_dir=str(book)) == [str(shared), str(book / ".env")]
-
-
-def test_load_env_layers(tmp_path, monkeypatch):
-    """load_env: общий файл даёт дефолты, файл книги — только отличия;
-    пустое значение в файле книги ключ не затеняет; правка общего
-    конфига доходит до книг, которые поле не трогали."""
-    for k in ("HOST", "API_KEY", "MODEL", "PIPELINE_JOBS"):
-        monkeypatch.delenv(k, raising=False)
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    root = tmp_path / "repo"
-    root.mkdir()
-    monkeypatch.setattr(C, "_REPO_ROOT", str(root))
-    monkeypatch.chdir(root)
-    (root / ".env").write_text(
-        "HOST=http://shared\nMODEL=общая\nPIPELINE_JOBS=4\n",
-        encoding="utf-8")
-    book = root / "projects" / "ACTIVE" / "book"
-    book.mkdir(parents=True)
-    (book / ".env").write_text("MODEL=книжная\nPIPELINE_JOBS=\n",
-                               encoding="utf-8")
-    env = C.load_env(start_dir=str(book))
-    assert env["HOST"] == "http://shared"    # общее доходит само
-    assert env["MODEL"] == "книжная"          # локальное отличие
-    assert env["PIPELINE_JOBS"] == "4"        # пустое — не оверрайд
-    # правка общего конфига видна книге, которая поле не меняла
-    (root / ".env").write_text("HOST=http://new\nMODEL=общая\n",
-                               encoding="utf-8")
-    env = C.load_env(start_dir=str(book))
-    assert env["HOST"] == "http://new" and env["MODEL"] == "книжная"
-    # без файла книги — чистый общий конфиг
-    (book / ".env").unlink()
-    assert C.load_env(start_dir=str(book))["MODEL"] == "общая"
+    assert C.env_files(explicit=str(one)) == [str(one)]
+    assert C.env_files(explicit=str(tmp_path / "нет.env")) == [str(shared)]
 
 
 def test_get_server_config(monkeypatch):
+    """Сервер, ключ и модель — общие ключи; стадийные игнорируются."""
     for k in ("HOST", "API_KEY", "MODEL", "NER_HOST", "NER_MODEL"):
         monkeypatch.delenv(k, raising=False)
-    env = {"HOST": "http://h", "MODEL": "m"}
-    cfg = C.get_server_config(env)
-    assert cfg["host"] == "http://h" and cfg["model"] == "m" and cfg["api_key"] == ""
+    cfg = C.get_server_config({"HOST": "http://h", "MODEL": "m"})
+    assert cfg == {"host": "http://h", "api_key": "", "model": "m"}
     # legacy-ключи профилей игнорируются
     assert C.get_server_config({"LOCAL_HOST": "x"})["host"] == ""
+    # стадийные ключи — тоже: модель в конвейере одна
+    assert C.get_server_config({"HOST": "http://h", "NER_HOST": "http://ner",
+                                "NER_MODEL": "нер",
+                                "NER_API_KEY": "нер-ключ"}) == {
+        "host": "http://h", "api_key": "", "model": ""}
+    assert C.get_server_config({}) == {"host": "", "api_key": "", "model": ""}
 
 
 def test_get_server_config_environment_wins(monkeypatch):
     """Канон §7: os.environ приоритетнее .env (Docker env_file → окружение)."""
-    for k in ("HOST", "API_KEY", "MODEL", "NER_HOST", "NER_MODEL"):
+    for k in ("HOST", "API_KEY", "MODEL", "NER_HOST"):
         monkeypatch.delenv(k, raising=False)
     cfg = C.get_server_config({"HOST": "http://file", "API_KEY": "fk",
                                "MODEL": "fm"})
@@ -468,9 +430,9 @@ def test_get_server_config_environment_wins(monkeypatch):
     assert cfg["host"] == "http://env" and cfg["model"] == "env-m"
     # ключ файла для чужого хоста не подставляется при env-HOST'е
     assert cfg["api_key"] == "fk"
-    # стадийный ключ окружения переопределяет и общий env, и файл
+    # стадийный ключ окружения игнорируется: сервер один на весь запуск
     monkeypatch.setenv("NER_HOST", "http://ner")
-    assert C.get_server_config({"HOST": "http://file"}, "ner")["host"] == "http://ner"
+    assert C.get_server_config({"HOST": "http://file"})["host"] == "http://env"
     # пустые значения окружения = отсутствуют (файл остаётся)
     monkeypatch.setenv("HOST", "  ")
     assert C.get_server_config({"HOST": "http://file"})["host"] == "http://file"
@@ -492,21 +454,11 @@ def test_env_overlay(monkeypatch):
     monkeypatch.setenv("HOST", "   ")
     assert C.env_overlay(env, ["HOST"])["HOST"] == "http://file"
     # ключ из окружения вне списка не подмешивается; исходный dict
-    # не мутируется
+    # не мутируется (стадийные LLM-ключи в список не входят в принципе)
     monkeypatch.setenv("NER_HOST", "http://ner")
     assert C.env_overlay(env, ["HOST"])["HOST"] == "http://file"
     assert env["HOST"] == "http://file"
 
-
-
-def test_get_stage_model_environment_wins(monkeypatch):
-    for k in ("MODEL", "NER_MODEL"):
-        monkeypatch.delenv(k, raising=False)
-    assert C.get_stage_model({"MODEL": "общая"}, "ner") == "общая"
-    monkeypatch.setenv("MODEL", "env-общая")
-    assert C.get_stage_model({"MODEL": "общая"}, "ner") == "env-общая"
-    monkeypatch.setenv("NER_MODEL", "env-стадийная")
-    assert C.get_stage_model({"MODEL": "общая"}, "ner") == "env-стадийная"
 
 
 def test_get_server_config_remote(monkeypatch):
@@ -516,56 +468,6 @@ def test_get_server_config_remote(monkeypatch):
     cfg = C.get_server_config(env)
     assert cfg == {"host": "https://r", "api_key": "k", "model": "m"}
     assert C.get_server_config({}) == {"host": "", "api_key": "", "model": ""}
-
-
-def test_get_stage_model_stage_wins():
-    # схема «один скрипт — одна модель»: NER_MODEL → общая MODEL
-    env = {"MODEL": "общая", "NER_MODEL": "стадийная"}
-    assert C.get_stage_model(env, "ner") == "стадийная"
-
-
-def test_get_stage_model_fallback_to_shared():
-    env = {"MODEL": "общая"}
-    assert C.get_stage_model(env, "ner") == "общая"
-
-
-def test_get_stage_model_empty():
-    assert C.get_stage_model({}, "ner") == ""
-
-def test_get_stage_model_case():
-    env = {"MODEL": "r", "wiki_model": "w", "WIKI_MODEL": "W"}
-    assert C.get_stage_model(env, "wiki") == "W"
-    assert C.get_stage_model(env, "translate_check_llm") == "r"
-
-
-def test_get_stage_model_no_stage_is_shared():
-    env = {"MODEL": "общая", "NER_MODEL": "нер"}
-    assert C.get_stage_model(env, "") == "общая"
-
-
-def test_get_server_config_stage_wins():
-    """Стадия непуста: <СТАДИЯ>_HOST/API_KEY/MODEL → общие ключи."""
-    env = {"HOST": "http://общий", "API_KEY": "общий-ключ",
-           "MODEL": "общая", "NER_HOST": "http://нер",
-           "NER_API_KEY": "нер-ключ", "NER_MODEL": "нер-модель"}
-    cfg = C.get_server_config(env, "ner")
-    assert cfg == {"host": "http://нер", "api_key": "нер-ключ",
-                   "model": "нер-модель"}
-
-
-def test_get_server_config_stage_fallback():
-    """Стадийных ключей нет — общие HOST/API_KEY/MODEL."""
-    env = {"HOST": "http://общий", "API_KEY": "ключ", "MODEL": "модель"}
-    cfg = C.get_server_config(env, "wiki")
-    assert cfg == {"host": "http://общий", "api_key": "ключ",
-                   "model": "модель"}
-
-
-def test_get_server_config_stage_empty_is_shared():
-    """Пустая стадия — только общие ключи."""
-    env = {"HOST": "http://общий", "NER_HOST": "http://нер"}
-    assert C.get_server_config(env)["host"] == "http://общий"
-    assert C.get_server_config(env, "")["host"] == "http://общий"
 
 
 def test_print_env_help(capsys):

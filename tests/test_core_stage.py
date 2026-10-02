@@ -42,10 +42,10 @@ def parser_with(**kw) -> argparse.ArgumentParser:
 
 @pytest.fixture()
 def env_file(tmp_path) -> str:
-    """Системный .env: общие ключи + стадийный HOST."""
+    """Общий .env: сервер, ключ и модель конвейера."""
     p = tmp_path / "fake.env"
     p.write_text("HOST=http://common:1/v1\nAPI_KEY=common-key\n"
-                 "MODEL=common-model\nNER_CHECK_HOST=http://stage:2\n",
+                 "MODEL=common-model\n",
                  encoding="utf-8")
     return str(p)
 
@@ -65,7 +65,10 @@ def test_add_llm_args_canonical_names():
     opts = {o for a in p._actions for o in a.option_strings}  # noqa: SLF001
     for flag in CANONICAL:
         assert flag in opts, f"контрактный флаг {flag} пропал из блока"
-    assert "--stream_timeout" not in opts, "без запроса — без второго таймаута"
+    # LLM-конфиг один на конвейер: у всех стадий одинаковый блок флагов,
+    # включая --stream_timeout и --max_tokens (значения — из общего конфига)
+    for flag in ("--stream_timeout", "--max_tokens"):
+        assert flag in opts, f"общий флаг {flag} пропал из блока"
     # единицы в help (AGENTS §5): таймаут обязан быть подписан секундами
     assert "сек" in " ".join(a.help or "" for a in p._actions)  # noqa: SLF001
 
@@ -86,9 +89,12 @@ def test_aliases_off_by_default():
         parser_with().parse_args(["--retries", "5"])
 
 
-def test_stream_timeout_flag_only_when_stage_has_it():
-    got = vars(parser_with(stream_timeout=900, timeout=300).parse_args([]))
-    assert got["timeout"] == 300 and got["stream_timeout"] == 900
+def test_llm_flags_default_to_none():
+    """Своих LLM-дефолтов у стадии нет: None = «взять из общего конфига»."""
+    got = vars(parser_with().parse_args([]))
+    for dest in ("timeout", "stream_timeout", "max_retries", "max_tokens",
+                 "temperature"):
+        assert got[dest] is None, f"{dest} должен быть None (не свой дефолт)"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -101,9 +107,17 @@ def test_env_file_is_default_source(tmp_path, env_file):
     assert prof.model == "common-model"
 
 
-def test_stage_key_wins_over_common(tmp_path, env_file):
-    """<СТАДИЯ>_HOST приоритетнее общего HOST («одна стадия — свой сервер»)."""
-    assert resolve(env_file, stage="ner_check").base_url == "http://stage:2/v1"
+def test_stage_prefixed_llm_keys_are_ignored(tmp_path, env_file, monkeypatch):
+    """<СТАДИЯ>_HOST/MODEL/API_KEY больше не слой: сервер один на конвейер.
+
+    Ключ в файле остаётся (его мог оставить старый .env книги) — но на
+    разрешение конфигурации он не влияет.
+    """
+    monkeypatch.setenv("NER_CHECK_HOST", "http://stage:2")
+    monkeypatch.setenv("NER_CHECK_MODEL", "stage-model")
+    prof = resolve(env_file, stage="ner_check")
+    assert prof.base_url == "http://common:1/v1"
+    assert prof.model == "common-model"
 
 
 def test_cli_wins_over_everything(tmp_path, env_file, monkeypatch):
@@ -308,6 +322,7 @@ def test_reasoning_env_keys_are_common(tmp_path, monkeypatch):
         "REASONING_MODE=on\nTHINKING_PROFILE=anthropic\n"
         "REASONING_EFFORT=medium\nTHINKING_BUDGET=4096\n"
         "NER_CHECK_REASONING_MODE=off\n", encoding="utf-8")
+    # стадийный ключ игнорируется: режим рассуждений один на весь запуск
     for k in ("REASONING_MODE", "THINKING_PROFILE", "REASONING_EFFORT",
               "THINKING_BUDGET"):
         monkeypatch.delenv(k, raising=False)

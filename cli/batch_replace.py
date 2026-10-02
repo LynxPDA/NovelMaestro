@@ -63,6 +63,7 @@ from core.common import (  # noqa: E402
     trim_rule_left,
     trim_rule_right,
 )
+from core import settings as core_settings  # noqa: E402
 from core.stage import Progress  # noqa: E402
 
 # Допустимые типы файлов → значение want для find_chapter_file
@@ -267,7 +268,8 @@ def process_file(filepath, rules: list[Rule], dry_run: bool = False):
 # ══════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Парсер batch_replace: дефолты полей — из реестра (core/settings.py)."""
     ap = argparse.ArgumentParser(
         description="Массовые замены по regexp-правилам (polished/redacted/translated/chapter).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -297,6 +299,12 @@ def main(argv=None) -> int:
     ap.add_argument("--dry-run", "--dry_run", dest="dry_run",
                     action="store_true",
                     help="Показать замены, не изменяя файлы.")
+    core_settings.apply_cli_defaults(ap, "batch_replace")
+    return ap
+
+
+def main(argv=None) -> int:
+    ap = build_parser()
     args = ap.parse_args(argv)
     # R9: фактическая команда запуска
     import shlex as _shlex

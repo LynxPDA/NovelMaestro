@@ -87,6 +87,7 @@ from core.stage import (  # noqa: E402
     bind_profile,
     new_stage,
 )
+from core import settings as core_settings  # noqa: E402
 from core.common import (
     collect_gender_names,
     estimate_tokens,
@@ -248,14 +249,13 @@ Person (male) -> он пошел, он сказал.
 # ══════════════════════════════════════════════════════════════════════
 # ПРЕСЕТЫ РЕЖИМОВ (исторические дефолты старых скриптов)
 # ══════════════════════════════════════════════════════════════════════
+# Поведение режима: cap потоков и trace по умолчанию. Таймауты, повторы,
+# max_tokens и min_len_ratio сюда не попадают — они общие на весь конвейер
+# (реестр core/settings.py), раньше у каждой стадии был свой набор чисел.
 MODE_PRESETS = {
-    #            min_len_ratio  max_retries  threads_cap  trace_default
-    # min_len_ratio отключён (0.0): контроль соотношения длин — стадия
-    # «Проверка перевода» (translate_check); тут только защита от
-    # пустого ответа (в stream_chat_completion всегда)
-    "translate": {"min_len_ratio": 0.0, "max_retries": 3, "threads_cap": 16, "trace_default": True},
-    "redact": {"min_len_ratio": 0.0, "max_retries": 3, "threads_cap": 64, "trace_default": False},
-    "polish": {"min_len_ratio": 0.0, "max_retries": 3, "threads_cap": 16, "trace_default": False},
+    "translate": {"threads_cap": 16, "trace_default": True},
+    "redact": {"threads_cap": 64, "trace_default": False},
+    "polish": {"threads_cap": 16, "trace_default": False},
 }
 
 # человекочитаемые фазы для web-прогресса (emit_progress)
@@ -520,10 +520,9 @@ def build_parser():
                         "или файл целиком = промпт режима; расширенный "
                         "перевод — тег <translate_lr> приоритетнее "
                         "<translate>).")
-    # Сервер и гигиена запроса: общий блок флагов (core.stage), дефолты —
-    # из пресета режима (main передаёт их в bind_profile)
-    add_llm_args(p, timeout=900, stream_timeout=900, max_retries=None,
-                 aliases=True)
+    # Сервер и гигиена запроса: общий блок флагов (core.stage); таймауты и
+    # повторы — общий конфиг, у режима своих значений больше нет
+    add_llm_args(p, aliases=True)
     # Чанкование (токены, оценка)
     p.add_argument("--chunk_size", type=int, default=300,
                    help="Целевой размер чанка, ТОКЕНЫ — оценка "
@@ -541,6 +540,7 @@ def build_parser():
     # Trace
     p.add_argument("--trace", action=argparse.BooleanOptionalAction, default=None,
                    help="Писать *_trace.json (default: только в translate).")
+    core_settings.apply_cli_defaults(p, "pipeline")
     return p
 
 
@@ -580,11 +580,9 @@ def main(argv=None):
 
     logger.info(f"🧭 Режим: {mode} | вход: {args.file} | выход: {out_path}")
 
-    # ── Сервер: CLI > os.environ > .env (общая реализация — core.stage);
-    #    дефолты таймаутов/попыток — из пресета режима ──
+    # ── Сервер: CLI > os.environ > общий .env (общая реализация — core.stage) ──
     try:
-        stage = bind_profile(stage, args, timeout=900, stream_timeout=900,
-                            max_retries=preset["max_retries"])
+        stage = bind_profile(stage, args)
     except SystemExit as exc:
         # L3 (AUDIT): незаданные сервер/модель = код 1, а не traceback
         print(str(exc))
@@ -765,9 +763,10 @@ def main(argv=None):
         "ner_min_count": args.ner_min_count,
         "names_min_count": args.names_min_count,
         "prompt": active_prompt, "stage": stage,
+        # соотношение длин — общий настройка MIN_LEN_RATIO (в профиле)
         "min_len_ratio": (args.min_len_ratio
                           if args.min_len_ratio is not None
-                          else preset["min_len_ratio"]),
+                          else stage.profile.min_len_ratio),
         # расширенный контекст
         "dict_data": dict_data, "dict_automaton": dict_automaton,
         "examples": examples, "fewshot_k": args.fewshot_k,

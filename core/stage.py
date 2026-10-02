@@ -25,6 +25,7 @@ import sys
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from . import settings as cfg
 from .common import (REASONING_MODES, REASONING_PROFILES, determine_model,
                      emit_progress, extra_body_fields, get_server_config,
                      llm_messages, load_env, log_argv,
@@ -33,13 +34,17 @@ from .common import (REASONING_MODES, REASONING_PROFILES, determine_model,
                      stream_chat_completion, web_progress_enabled,
                      write_preview_request)
 
-# Значения по умолчанию — исторические числа стадий: менять их «красоты» ради
-# нельзя, timeout завязан на скорость большой модели, max_tokens — на лимит
-# ответа сервера.
-DEFAULT_TIMEOUT = 300
-DEFAULT_STREAM_TIMEOUT = 900
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_MAX_TOKENS = 65536
+# Значения по умолчанию — из реестра настроек (core/settings.py): одно и то же
+# число в двух местах расходится неизбежно, поэтому источник один. Меняя
+# дефолт, меняй его в реестре (он же отдаёт его странице «Настройки»).
+DEFAULT_TIMEOUT = int(cfg.BY_KEY["TIMEOUT"].default)
+DEFAULT_STREAM_TIMEOUT = int(cfg.BY_KEY["STREAM_TIMEOUT"].default)
+DEFAULT_MAX_RETRIES = int(cfg.BY_KEY["MAX_RETRIES"].default)
+DEFAULT_MAX_TOKENS = int(cfg.BY_KEY["MAX_TOKENS"].default)
+#: потоков на весь конвейер (была: 1 у ner_check, 4 у остальных)
+DEFAULT_THREADS = int(cfg.BY_KEY["THREADS"].default)
+#: контроль соотношения длин; выключен (0) по решению пользователя
+DEFAULT_MIN_LEN_RATIO = float(cfg.BY_KEY["MIN_LEN_RATIO"].default)
 
 #: Усилия рассуждения, которые понимает API (пусто = не отправлять).
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh",
@@ -59,18 +64,13 @@ LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
 # ПАРАМЕТРЫ
 # ══════════════════════════════════════════════════════════════════════
 def add_llm_args(parser: argparse.ArgumentParser, *,
-                 timeout: int = DEFAULT_TIMEOUT,
-                 stream_timeout: int | None = None,
-                 max_retries: int | None = DEFAULT_MAX_RETRIES,
-                 max_tokens: int | None = None,
                  aliases: bool = False) -> argparse._ArgumentGroup:
     """Добавляет общий блок LLM-параметров стадии.
 
-    stream_timeout=None — стадия не различает connect и read (один --timeout,
-    как раньше); иначе появляется отдельный --stream_timeout.
-    max_tokens не None — стадия отдаёт серверный предел ответа настраивать
-    (значение по умолчанию — её собственный); иначе это константа скрипта.
-    max_retries=None — дефолт у стадии в пресете режима, не у слоя.
+    У всех флагов default=None — «значения нет»: сервер, модель, таймауты,
+    повторы, max_tokens и рассуждения берются из общего конфига (реестр →
+    общий .env → os.environ). Собственных LLM-дефолтов у стадии больше нет:
+    шесть пар «свой сервер + своя модель» на один запуск разъезжались.
     aliases=True — старые написания (--retries, --api-key, …) тоже принимаются.
     """
     group = parser.add_argument_group("сервер LLM")
@@ -111,24 +111,24 @@ def add_llm_args(parser: argparse.ArgumentParser, *,
     group.add_argument("--thinking_budget", type=int, default=None,
                        metavar="N",
                        help="Бюджет рассуждений, ТОКЕНЫ (0 = не отправлять).")
-    group.add_argument("--timeout", type=int, default=int(timeout),
+    group.add_argument("--timeout", type=int, default=None,
+                       help=f"Таймаут запроса, сек (пусто = общий TIMEOUT, "
+                            f"встроенный {int(DEFAULT_TIMEOUT)}).")
+    group.add_argument("--stream_timeout", type=int, default=None,
                        metavar="SEC",
-                       help=f"Таймаут запроса, сек (default: {int(timeout)}).")
-    if stream_timeout is not None:
-        group.add_argument("--stream_timeout", type=int,
-                           default=int(stream_timeout), metavar="SEC",
-                           help="Таймаут чтения стрима, сек "
-                                f"(default: {int(stream_timeout)}).")
-    # max_retries=None — дефолт у стадии в пресете режима, не у слоя
+                       help="Таймаут чтения стрима, сек (пусто = общий "
+                            f"STREAM_TIMEOUT, встроенный "
+                            f"{int(DEFAULT_STREAM_TIMEOUT)}).")
     group.add_argument(*flags("max_retries", "--max_retries"), type=int,
-                       default=(None if max_retries is None
-                                else int(max_retries)),
-                       metavar="N",
-                       help="Повторы при ошибке LLM (пусто — дефолт стадии).")
-    if max_tokens is not None:
-        group.add_argument(*flags("max_tokens", "--max_tokens"), type=int,
-                           default=int(max_tokens), metavar="N",
-                           help="Серверный предел ответа, ТОКЕНЫ (не расчёт).")
+                       default=None, metavar="N",
+                       help="Повторы при ошибке LLM (пусто = общий "
+                            f"MAX_RETRIES, встроенный "
+                            f"{int(DEFAULT_MAX_RETRIES)}).")
+    group.add_argument(*flags("max_tokens", "--max_tokens"), type=int,
+                       default=None, metavar="N",
+                       help="Серверный предел ответа, ТОКЕНЫ (пусто = общий "
+                            f"MAX_TOKENS, встроенный "
+                            f"{int(DEFAULT_MAX_TOKENS)}).")
     return group
 
 
@@ -149,6 +149,8 @@ class LlmProfile:
     timeout: int = DEFAULT_TIMEOUT
     stream_timeout: int = DEFAULT_STREAM_TIMEOUT
     max_retries: int = DEFAULT_MAX_RETRIES
+    # контроль соотношения длин (СИМВОЛЫ): одна настройка на конвейер
+    min_len_ratio: float = DEFAULT_MIN_LEN_RATIO
     temperature: float | None = None
     reasoning_effort: str | None = None
     # способ передачи рассуждений: профиль (как именно) + режим + бюджет.
@@ -162,12 +164,13 @@ class LlmProfile:
 
     def complete(self, prompt: str, data: str = "", *, label: str = "",
                  max_retries: int | None = None,
-                 min_len_ratio: float = 0.0,
+                 min_len_ratio: float | None = None,
                  reference_len: int = 0) -> tuple[str | None, str | None]:
         """Единый стрим-запрос стадии: гигиена — в core.common.
 
         messages собирает llm_messages: промпт + данные (пустой system,
-        разметка <system> внутри промпта). Возвращает (text | None, err).
+        разметка <system> внутри промпта). min_len_ratio не передан — общий
+        настройка MIN_LEN_RATIO из профиля. Возвращает (text | None, err).
         """
         return stream_chat_completion(
             self.base_url, self.model,
@@ -185,7 +188,8 @@ class LlmProfile:
                                           self.thinking_budget),
                        **extra_body_fields(self.env_data, self.logger)},
             max_tokens=self.max_tokens,
-            min_len_ratio=min_len_ratio,
+            min_len_ratio=(self.min_len_ratio if min_len_ratio is None
+                           else min_len_ratio),
             reference_len=reference_len,
             logger=self.logger,
             label=label,
@@ -198,21 +202,20 @@ def _pick(args: argparse.Namespace, name: str, default: Any) -> Any:
     return default if value is None else value
 
 
-def resolve_profile(args: argparse.Namespace, *, stage: str = "",
-                    timeout: int = DEFAULT_TIMEOUT,
-                    stream_timeout: int | None = None,
-                    max_retries: int | None = DEFAULT_MAX_RETRIES,
-                    max_tokens: int = DEFAULT_MAX_TOKENS,
+def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG001
                     require_model: bool = True,
                     logger: logging.Logger | None = None) -> LlmProfile:
-    """Сервер стадии: CLI > os.environ > .env > выход с подсказкой.
+    """Профиль LLM стадии: CLI > os.environ > общий .env > дефолт реестра.
 
-    stage непуст — схема «одна стадия — свой набор сервер+ключ+модель»
-    (<СТАДИЯ>_HOST → HOST); пусто — только общие ключи. max_tokens — константа
-    стадии; если у неё есть свой --max_tokens, берётся он.
+    Ключей <СТАДИЯ>_HOST/MODEL/API_KEY больше нет: сервер, ключ и модель у
+    конвейера одни на все стадии (arg `stage` оставлен — его передают все
+    скрипты, на разрешение конфигурации он больше не влияет). Собственных
+    дефолтов таймаутов/ретраев/max_tokens у стадии тоже нет: они приходят из
+    эффективного конфига, иначе шесть стадий жили бы шестью наборами чисел.
     """
     env_data = load_env(getattr(args, "env_file", None))
-    sc = get_server_config(env_data, stage)
+    llm = cfg.llm_values()
+    sc = get_server_config(env_data)
     rs = reasoning_settings(env_data)
     host = getattr(args, "host", None) or sc["host"]
     api_key = getattr(args, "api_key", None)
@@ -229,21 +232,22 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",
         base_url += "/v1"
     if require_model:
         model = determine_model(model, logger)
+    timeout = _pick(args, "timeout", llm["timeout"])
     return LlmProfile(
         base_url=base_url,
         model=model or "",
         api_key=api_key or "",
-        timeout=int(_pick(args, "timeout", timeout)),
-        stream_timeout=int(_pick(args, "stream_timeout", _pick(
-            args, "timeout",
-            timeout if stream_timeout is None else stream_timeout))),
-        max_retries=int(_pick(args, "max_retries", max_retries)),
+        timeout=int(timeout),
+        stream_timeout=int(_pick(args, "stream_timeout", timeout)),
+        max_retries=int(_pick(args, "max_retries", llm["max_retries"])),
+        min_len_ratio=float(_pick(args, "min_len_ratio",
+                                  llm["min_len_ratio"] or 0.0)),
         temperature=_pick(args, "temperature", None),
         reasoning_effort=_pick(args, "reasoning_effort", rs["effort"] or None),
         reasoning_mode=_pick(args, "reasoning_mode", rs["mode"]),
         thinking_profile=_pick(args, "thinking_profile", rs["profile"]),
         thinking_budget=int(_pick(args, "thinking_budget", rs["budget"])),
-        max_tokens=int(_pick(args, "max_tokens", max_tokens)),
+        max_tokens=int(_pick(args, "max_tokens", llm["max_tokens"])),
         logger=logger,
         env_data=env_data,
     )

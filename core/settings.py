@@ -54,7 +54,10 @@ class Setting:
     dir: str = ""
     ext: tuple = ()
     rows: object = None
-    hidden: bool = False        # поле есть в форме, но скрыто (резерв)
+    #: автоподхват файла из пула (compile: обложка/метаданные/донат, промпты)
+    autofile: object = None
+    editable: bool = False      # files-поле правится прямо из формы запуска
+    hidden: bool = False        # настройки нет в форме стадии (только «Настройки»)
     help: str = ""
     noenv: bool = False         # состояние UI (чипсы) — в .env не пишется
     run: bool = False           # параметр запуска (главы, входные файлы)
@@ -75,7 +78,7 @@ class Setting:
             out["label"] = self.label
         out["default"] = self.default
         for k in ("options", "labels", "min", "max", "step", "dir", "ext",
-                  "help", "noenv"):
+                  "rows", "autofile", "editable", "help", "noenv"):
             v = getattr(self, k)
             if v not in (None, "", [], {}, ()):
                 out[k] = v
@@ -142,18 +145,16 @@ GROUPS: tuple = (
         ),
         _block("llm_reasoning", "Рассуждения модели",
             _s("REASONING_MODE", "Рассуждения", "select", "default", options=("default", "on", "off"), labels={'default': "— (решение сервера)", 'on': "включены", 'off': "выключены"},
-                help="у части серверов рассуждения включены по умолчанию; «выключены» для openai-профиля = reasoning_effort=none",),
+                help="у части серверов рассуждения включены по умолчанию; «выключены» для openai-профиля = reasoning_effort=none"),
             _s("THINKING_PROFILE", "Профиль API", "select", "openai", options=("openai", "anthropic", "qwen", "dashscope", "ollama", "openrouter", "all"),
                 labels={'openai': "OpenAI-совместимый (reasoning_effort)", 'anthropic': "Anthropic (thinking.budget_tokens)", 'qwen': "Qwen3/DeepSeek (chat_template_kwargs)", 'dashscope': "DashScope (enable_thinking)", 'ollama': "Ollama (think)", 'openrouter': "OpenRouter (reasoning.effort)", 'all': "Все ключи сразу (строгие серверы отвечают 400)"},
-                help="как именно передавать рассуждения: каждый профиль отправляет только свои ключи (незнакомый ключ строгий сервер считает ошибкой запроса); «все ключи сразу» — только для серверов, которые молча игнорируют чужие",
-               ),
+                help="как именно передавать рассуждения: каждый профиль отправляет только свои ключи (незнакомый ключ строгий сервер считает ошибкой запроса); «все ключи сразу» — только для серверов, которые молча игнорируют чужие"),
             _s("REASONING_EFFORT", "Уровень рассуждения", "select", "", options=("", "none", "minimal", "low", "medium", "high", "xhigh", "max"),
                 labels={'': "— (не отправлять, дефолт сервера)", 'none': "none — выключено", 'minimal': "minimal", 'low': "low", 'medium': "medium", 'high': "high", 'xhigh': "xhigh", 'max': "max"},
-                help="пусто — не передаётся; понимают openai, openrouter и «все ключи сразу»",),
-            _s("THINKING_BUDGET", "Бюджет рассуждения, ТОКЕНЫ", "number", 0, help="0 — не отправлять; понимают anthropic (thinking.budget_tokens) и dashscope (thinking_budget)",),
+                help="пусто — не передаётся; понимают openai, openrouter и «все ключи сразу»"),
+            _s("THINKING_BUDGET", "Бюджет рассуждения, ТОКЕНЫ", "number", 0, help="0 — не отправлять; понимают anthropic (thinking.budget_tokens) и dashscope (thinking_budget)"),
             _s("LLM_EXTRA_BODY_JSON", "Свои поля тела (JSON)", "text", "",
-                help="JSON-объект ключей, которых не знает ни один профиль (свой сервер); уходят в тело запроса после ключей профиля, то есть перекрывают их; битый JSON запрос не ломает — поле игнорируется с предупреждением в лог",
-               ),        ),
+                help="JSON-объект ключей, которых не знает ни один профиль (свой сервер); уходят в тело запроса после ключей профиля, то есть перекрывают их; битый JSON запрос не ломает — поле игнорируется с предупреждением в лог"),        ),
     ),
 
     # ── Перевод ──
@@ -182,6 +183,10 @@ GROUPS: tuple = (
             _s("PIPELINE_CHUNK_SIZE", "Размер чанка, ТОКЕНЫ", "number", "7000", min=1,
                 help="чанкование текста для перевода и полировки (оценка токенов) — действует в ЛЮБОМ выбранном типе работы; редактура идёт главой целиком; пусто = PIPELINE_CHUNK_SIZE из .env → 7000",
                 stage="pipeline"),
+            _s("PIPELINE_NER_THRESHOLD", "Порог схожести терминов (0–1)", "number", "0.75", hidden=True,
+                help="нечёткий поиск терминов по n-граммам: доля перекрытия; точные вхождения ищутся всегда", stage="pipeline"),
+            _s("PIPELINE_NER_NGRAM", "Размер n-грамм поиска терминов", "number", "3", hidden=True,
+                help="окно сравнения (символы)", stage="pipeline"),
             _s("PIPELINE_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="pipeline", run=True),
             _s("PIPELINE_END", "Конечная глава", "number", "", stage="pipeline", run=True),
             _s("PIPELINE_NER_MIN_COUNT", "Мин. count для глоссария ({ner_block})", "number", "0", help="термины с count ниже порога НЕ попадают в {ner_block}; 0 — фильтр выключен (все найденные)",
@@ -208,7 +213,7 @@ GROUPS: tuple = (
                 help="каждые N чанков — промежуточный снапшот глоссария. Возобновление с места остановки убрано: каждый запуск идёт с первого чанка", stage="ner"),
         ),
         _block("ner_check", "Проверка глоссария",
-            _s("NER_CHECK_PROMPT_FILE", "Промпт-файл", "files", "ner_check_prompt.txt", dir="prompts", ext=(".txt",),
+            _s("NER_CHECK_PROMPT_FILE", "Промпт-файл", "files", "ner_check_prompt.txt", dir="prompts", ext=(".txt",), autofile="prompts/ner_check_prompt.txt",
                 help="Теги: <prompt_ner_check> — проверка выбранных типов, <prompt_rag> — точечная RAG-проверка; комментарии вне тегов — через #; автоподхват ner_check_prompt.txt", stage="ner_check",
                 run=True),
             _s("NER_CHECK_RAG_BUDGET", "RAG: бюджет на термин, ТОКЕНЫ", "number", "22000",
@@ -221,7 +226,7 @@ GROUPS: tuple = (
             _s("NER_CHECK_BATCH_SIZE", "Бюджет пакета, ТОКЕНЫ", "number", "65536", stage="ner_check"),
             _s("NER_CHECK_COUNT_THRESHOLD", "Порог count", "number", "0", stage="ner_check"),
             _s("NER_CHECK_RAG_TERMS", "RAG: список терминов", "textarea", "", help="Каждый термин с новой строки; тип/перевод подтягиваются из ner.json; нужен режим «rag»", stage="ner_check"),
-            _s("NER_CHECK_RAG_SOURCE_TYPE", "RAG: тип исходного файла", "select", "chapter", options=("chapter", "translated", "redacted", "polished"),
+            _s("NER_CHECK_RAG_SOURCE_TYPE", "RAG: тип исходного файла", "select", "", options=("", "chapter", "translated", "redacted", "polished"),
                 help="Из какого файла главы собирается текст книги для FTS5-поиска (сборка в память, файл не пишется)", stage="ner_check"),
             _s("NER_CHECK_SAVE_INTERVAL", "Сохранять каждые N терминов", "number", "0", help="RAG: review-файл сохраняется каждые N терминов (0 = только в конце)", stage="ner_check"),
             _s("NER_CHECK_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="ner_check", run=True),
@@ -268,7 +273,7 @@ GROUPS: tuple = (
             _s("TRANSLATE_QUALITY_END", "Конечная глава", "number", "", stage="translate_quality", run=True),
             _s("TRANSLATE_QUALITY_TYPE", "Тип файлов глав", "select", "polished", options=("chapter", "translated", "redacted", "polished"),
                 help="какой файл главы сравнивается с оригиналом: подставляется в {translated_text} промпта, chapter.txt — в {original_text}", stage="translate_quality"),
-            _s("TRANSLATE_QUALITY_PROMPT_FILE", "Промпт-файл", "files", "translate_quality_prompt.txt", dir="prompts", ext=(".txt",),
+            _s("TRANSLATE_QUALITY_PROMPT_FILE", "Промпт-файл", "files", "translate_quality_prompt.txt", dir="prompts", ext=(".txt",), autofile="prompts/translate_quality_prompt.txt",
                 help="тег <prompt_assessment> (между тегами — комменты); плейсхолдеры {original_text} и {translated_text}; автоподхват translate_quality_prompt.txt", stage="translate_quality",
                 run=True),
             _s("TRANSLATE_QUALITY_BUDGET", "Бюджет запроса, СИМВОЛЫ", "number", "200000",
@@ -306,13 +311,13 @@ GROUPS: tuple = (
             _s("COMPILE_SOURCE_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated", "chapter"), stage="compile"),
             _s("COMPILE_CHUNK_SIZE", "Глав в части", "number", "", help="указано (>0) — диапазон разбивается на части по столько глав (файл на каждую часть), для любого режима; пусто/0 = без разбивки",
                 stage="compile"),
-            _s("COMPILE_COVER", "Обложка", "files", "", dir="source", ext=(".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"),
+            _s("COMPILE_COVER", "Обложка", "files", "", dir="source", ext=(".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"), autofile=("source/cover.jpg", "source/cover.jpeg", "source/cover.png", "source/cover.webp"),
                 help="единая обложка для EPUB и FB2; пусто = без обложки; по умолчанию автоподхват cover.jpg/jpeg/png/webp из source/; варианты обложек загружаются через «Файлы»", stage="compile",
                 run=True),
-            _s("COMPILE_EPUB_META", "Метаданные (YAML)", "files", "", dir="source", ext=(".yaml", ".yml"),
+            _s("COMPILE_EPUB_META", "Метаданные (YAML)", "files", "metadata.yaml", dir="source", ext=(".yaml", ".yml"), autofile=("source/metadata.yaml",), editable=True,
                 help="пусто = source/metadata.yaml; по умолчанию автоподхват metadata.yaml из source/; кнопка «Редактировать» — правка выбранного файла прямо в запуске; другой yaml/yml из source/ выбирается вручную (несколько наборов метаданных)",
                 stage="compile", run=True),
-            _s("COMPILE_DONATE_FILE", "Файл страницы поддержки", "files", "", dir="source", ext=(".txt",),
+            _s("COMPILE_DONATE_FILE", "Файл страницы поддержки", "files", "", dir="source", ext=(".txt",), autofile=("source/donate.txt",), editable=True,
                 help="страница поддержки для EPUB/FB2; пусто = без страницы; по умолчанию автоподхват donate.txt из source/; кнопка «Редактировать» — правка выбранного файла прямо в запуске; новый файл загружается через «Файлы» (source/) или «Загрузить» при пустом выборе",
                 stage="compile", run=True),
         ),
@@ -372,9 +377,31 @@ GROUPS: tuple = (
 SETTINGS: tuple = tuple(s for g in GROUPS for b in g.blocks for s in b.settings)
 BY_KEY: dict = {s.key: s for s in SETTINGS}
 BY_BLOCK: dict = {b.id: b.settings for g in GROUPS for b in g.blocks}
+BLOCK_TITLES: dict = {b.id: b.title for g in GROUPS for b in g.blocks}
 STAGES: tuple = tuple(dict.fromkeys(s.stage for s in SETTINGS if s.stage))
 #: блоки общего LLM-конфига: он один на весь конвейер, стадийных ключей нет
 LLM_BLOCKS: tuple = ("llm_conn", "llm_net", "llm_run", "llm_reasoning")
+#: имена LLM-полей, которые раньше были в формах стадий
+LLM_FORM_NAMES = frozenset({"host", "model", "api_key", "temperature", "timeout",
+                            "stream_timeout", "max_retries", "retries",
+                            "max_tokens", "threads", "jobs", "retry_empty"})
+#: старые имена полей стадии → общая настройка
+LLM_ALIAS = {"jobs": "threads", "retries": "max_retries"}
+#: что из LLM-конфига уходит в argv стадии (исторические имена полей,
+#: которые понимает их CLI)
+STAGE_LLM_FIELDS: dict = {
+    "epub": (),
+    "translate_check": (),
+    "compile": (),
+    "pipeline": ("host", "model", "api_key", "jobs", "threads", "timeout", "max_retries", "temperature",),
+    "ner": ("host", "model", "api_key", "threads", "temperature", "retries", "timeout",),
+    "ner_check": ("host", "model", "api_key", "threads", "temperature", "max_tokens", "timeout", "max_retries",),
+    "translate_check_llm": ("host", "model", "api_key", "temperature", "max_retries", "timeout", "retry_empty", "threads",),
+    "translate_quality": ("host", "model", "api_key", "temperature", "max_retries", "timeout",),
+    "wiki": ("host", "model", "api_key", "temperature", "retries", "timeout", "threads",),
+    "batch_replace": (),
+}
+
 
 
 def groups() -> tuple:
@@ -393,13 +420,79 @@ def settings_of(stage: str = "") -> tuple:
 
 
 def form_fields(stage: str) -> list:
-    """Поля формы стадии: metadata и дефолты берутся из реестра целиком."""
-    return [s.form_field() for s in stage_fields(stage)]
+    """Поля формы стадии: metadata и дефолты — из реестра, в порядке реестра.
+
+    hidden-настройки (NER_THRESHOLD/NER_NGRAM конвейера) в форму не идут: их
+    правят на «Настройках», стадия берёт значение из эффективного конфига.
+    """
+    return [s.form_field() for s in stage_fields(stage) if not s.hidden]
+
+
+def _coerce(setting: Setting, value):
+    """Значение по типу настройки: number → int/float, bool → bool,
+    textarea → текст (литеральный «\\n» разворачивается обратно)."""
+    raw = value if isinstance(value, str) else str(value)
+    if setting.type == "number" and raw.strip() != "":
+        try:
+            return float(raw) if "." in raw else int(raw)
+        except ValueError:
+            return value
+    if setting.type == "bool":
+        if isinstance(value, bool):
+            return value
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    if setting.type == "textarea":
+        return raw.replace(NL_LIT, NL).rstrip(NL)
+    return raw.strip()
 
 
 def defaults(stage: str = "") -> dict:
-    """Значения по умолчанию: имя поля → дефолт."""
-    return {s.name: s.default for s in settings_of(stage)}
+    """Значения по умолчанию: имя поля → дефолт (числа — числами).
+
+    Из реестра читают и формы запусков, и argparse скриптов: «number» с
+    «7000» строкой заставил бы CLI сравнивать «1 <= "4"».
+    """
+    return {s.name: _coerce(s, s.default) for s in settings_of(stage)}
+
+
+def llm_settings() -> tuple:
+    """Общие LLM-настройки конвейера (подключение, сеть, рассуждения)."""
+    return tuple(s for b in LLM_BLOCKS for s in BY_BLOCK[b])
+
+
+def stage_values(stage: str) -> dict:
+    """Эффективные значения стадии: реестр → общий .env → os.environ.
+
+    Так читают конфиг скрипты-исполнители и конвейер: никакого своего
+    чтения <СТАДИЯ>_* и своих словарей дефолтов.
+    """
+    return {s.name: _coerce(s, effective(s.key)) for s in stage_fields(stage)}
+
+
+def llm_values() -> dict:
+    """LLM-настройки конвейера (эффективные): подключение, сеть и рассуждения."""
+    return {s.name: _coerce(s, effective(s.key)) for s in llm_settings()}
+
+
+def apply_cli_defaults(parser, stage: str):
+    """Дефолты argparse стадии — из реестра (один источник с формой web).
+
+    Файловые поля реестра хранят ИМЯ файла (его показывает select SPA), а
+    скрипты работают путём относительно папки проекта — префикс добавляется
+    здесь же, из metadata поля. Возвращает parser, чтобы вешать вызов на
+    построение.
+    """
+    for s in stage_fields(stage):
+        v = s.default
+        # пустой дефолт реестра = «не задано»: не затираем собственную
+        # семантику unset у скрипта (None/0), иначе argparse с type=int
+        # пытается привести строковый "" к числу и падает на parse_args
+        if v == "":
+            continue
+        if s.type == "files" and s.dir and "/" not in str(v):
+            v = f"{s.dir}/{v}"
+        parser.set_defaults(**{s.name: v})
+    return parser
 
 
 def env_key(stage: str, name: str) -> str:
@@ -444,30 +537,16 @@ def layered_values() -> dict:
 
 
 def effective(key: str) -> object:
-    """Эффективное значение настройки: реестр → общий .env → окружение."""
+    """Эффективное значение настройки: реестр → общий .env → os.environ.
+
+    Пустое значение в файле — не переопределение: настройка остаётся на
+    встроенном дефолте (пустая строка в конфиге книги больше ничего не значит).
+    """
     s = BY_KEY.get(key)
+    if s is None:
+        return str(layered_values().get(key, "")).strip()
     raw = layered_values().get(key, "")
-    if str(raw).strip() == "":
-        return s.default if s else ""
-    if s and s.type == "bool":
-        return str(raw).strip().lower() in ("1", "true", "yes", "on")
-    if s and s.type == "textarea":
-        return str(raw).replace(NL_LIT, NL).rstrip(NL)
-    return str(raw).strip()
-
-
-def values_of_stage(stage: str) -> dict:
-    """Эффективные значения стадии: имя поля → значение."""
-    return {s.name: effective(s.key) for s in settings_of(stage)}
-
-
-def llm_values() -> dict:
-    """LLM-конфиг конвейера (host/model/api_key/таймауты/потоки/рассуждения)."""
-    out = {}
-    for b in LLM_BLOCKS:
-        for s in BY_BLOCK[b]:
-            out[s.name] = effective(s.key)
-    return out
+    return _coerce(s, raw if str(raw).strip() else s.default)
 
 
 def write_values(values: dict) -> list:
@@ -486,7 +565,7 @@ def write_values(values: dict) -> list:
     lines = ["# NovelMaestro — общие настройки.",
              "# Значения по умолчанию зашиты в реестр core/settings.py;",
              "# здесь — только то, что изменено. Файл перезаписывается со",
-             "# страницы «Настройки»; файл книги больше не слой не создаёт."]
+             "# страницы «Настройки»; отдельного файла книги больше нет."]
     stored = []
     for s in SETTINGS:
         if s.noenv or s.run:
@@ -505,28 +584,58 @@ def write_values(values: dict) -> list:
     return stored
 
 
+def llm_form(stage: str) -> dict:
+    """LLM-значения в именах полей стадии (jobs ← THREADS, retries ← MAX_RETRIES).
+
+    Сборка argv стадии не изменилась: она читает те же имена полей, просто
+    теперь значения приходят из общего конфига, а не из формы.
+    """
+    vals = llm_values()
+    return {n: vals.get(LLM_ALIAS.get(n, n), "")
+            for n in STAGE_LLM_FIELDS.get(stage, ())}
+
+
+def with_llm(stage: str, form: dict) -> dict:
+    """Форма запуска поверх глобального LLM-конфига.
+
+    LLM-полей в форме запусков больше нет, но что бы в ней ни лежало (старый
+    кэш браузера, старый .env книги), сервер/модель/ключ/потоки перезаписываются
+    общим конфигом: «свой сервер у стадии» больше не существует.
+    """
+    out = dict(form or {})
+    out.update(llm_form(stage))
+    return out
+
+
+def display_value(setting: Setting) -> object:
+    """Значение настройки для интерфейса: эффективное; секреты — «••••»."""
+    if setting.secret:
+        return "••••" if str(layered_values().get(setting.key, "")).strip() else ""
+    return effective(setting.key)
+
+
+def block_payload(block_id: str) -> dict:
+    """Одна карточка реестра для SPA: {id, title, fields, values}.
+
+    Поля — в формате форм стадий (name/label/type/…), значения — эффективные,
+    в тех же именах. Парольное поле отдаётся как «••••»: значение секрета в SPA
+    не ездит, нужен только признак «задано».
+    """
+    fields, values = [], {}
+    for s in BY_BLOCK[block_id]:
+        val = display_value(s)
+        fields.append(dict(s.form_field(), value=val))
+        values[s.name] = val
+    return {"id": block_id, "title": BLOCK_TITLES[block_id],
+            "fields": fields, "values": values}
+
+
 def groups_payload() -> list:
     """Реестр для SPA: субвкладки → блоки → поля с текущими значениями."""
-    got = layered_values()
-    out = []
-    for g in GROUPS:
-        blocks = []
-        for b in g.blocks:
-            fields = []
-            for s in b.settings:
-                f = s.form_field()
-                raw = str(got.get(s.key, "")).strip()
-                if s.noenv:
-                    f["value"] = s.default
-                elif s.secret:
-                    f["value"] = "••••" if raw else ""
-                elif s.type == "textarea":
-                    f["value"] = raw.replace("\n", "\n").rstrip("\n")
-                elif s.type == "bool":
-                    f["value"] = raw.strip().lower() in ("1", "true", "yes", "on")
-                else:
-                    f["value"] = raw
-                fields.append(f)
-            blocks.append({"id": b.id, "title": b.title, "fields": fields})
-        out.append({"id": g.id, "title": g.title, "blocks": blocks})
-    return out
+    return [{"id": g.id, "title": g.title,
+             "blocks": [{"id": b.id, "title": b.title,
+                         "fields": [dict(s.form_field(),
+                                         value=display_value(s))
+                                    for s in b.settings]}
+                        for b in g.blocks]}
+            for g in GROUPS]

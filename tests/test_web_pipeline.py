@@ -20,8 +20,12 @@ from core.common import (EXTRA_BODY_ENV_KEY, REASONING_ENV_KEYS,
 from core.stage import REASONING_EFFORTS
 from web.jobs import CHAPTER_PREFIX, JobManager
 from web.api_stage import _stages_list
-from web.stages import (REASONING_FIELDS, STAGE_SPECS, build_command,
-                        reasoning_effective, script_path, spec_for)
+from core import settings as core_settings
+from web.stages import (STAGE_SPECS, build_command, script_path,
+                        spec_for)
+
+# исторические имена LLM-полей: их больше нет ни в одной спеке стадии
+LLM_FIELDS = set(__import__("core.settings", fromlist=["x"]).LLM_ALIAS)
 
 REPO = Path(__file__).resolve().parent.parent
 PIPELINE = REPO / "web" / "pipeline.py"
@@ -87,13 +91,15 @@ _PIPELINE_ARGS = ["--host", "http://127.0.0.1:9989", "--model", "m"]
 
 
 def test_pipeline_stage_in_specs():
+    """Спека конвейера: только его собственные поля, LLM-полей и пресетов нет."""
     spec = spec_for("pipeline")
     assert spec is not None
     assert spec["script"] == "web/pipeline.py"
     names = [f["name"] for f in spec["fields"]]
     assert "action" in names and "start" in names and "end" in names
-    assert "jobs" in names and "host" in names and "api_key" in names
-    assert "profile" not in names  # профили убраны
+    # сервер, модель, ключ, потоки, таймауты — общие (реестр), в форме их нет
+    assert not set(names) & core_settings.LLM_FORM_NAMES
+    assert "preset" not in spec and "simple" not in spec
     # единый общий промпт-файл; режим промптов и отдельные файлы
     # на стадию убраны
     assert "prompt_file" in names
@@ -112,13 +118,12 @@ def test_pipeline_script_path():
 def test_pipeline_action_options():
     """Тип работы: 9 вариантов с подписями исходников/циклов;
     дефолт — полный цикл (8); 9 — расширенный контекст."""
-    from web.stages import _LLM_FIELDS
     spec = spec_for("pipeline")
     assert spec is not None
     action = next(f for f in spec["fields"] if f["name"] == "action")
     assert action["type"] == "select"
-    assert action["options"] == ["1", "2", "3", "4", "5", "6", "7",
-                                  "8", "9"]
+    assert list(action["options"]) == ["1", "2", "3", "4", "5", "6", "7",
+                                       "8", "9"]
     assert action["default"] == "8"
     labels = action["labels"]
     assert labels["1"] == "Перевод"
@@ -130,33 +135,38 @@ def test_pipeline_action_options():
     assert labels["7"] == "Сокращенный цикл: Редактура -> Полировка"
     assert labels["8"] == "Полный цикл: Перевод -> Редактура -> Полировка"
     assert labels["9"] == "Перевод с расширенным контекстом"
-    # единая модель конвейера: PIPELINE_MODEL → MODEL
-    model = next(f for f in spec["fields"] if f["name"] == "model")
-    assert model in _LLM_FIELDS
-    from web.stages import env_keys_for
-    assert env_keys_for("pipeline", "model") == ["PIPELINE_MODEL", "MODEL"]
-    assert env_keys_for("pipeline", "host") == ["PIPELINE_HOST", "HOST"]
-    assert env_keys_for("pipeline", "api_key") == \
-        ["PIPELINE_API_KEY", "API_KEY"]
+    # сервер/модель/ключ стадии не задаются: в argv они приходят из общего
+    # конфига, а стадийный префикс остаётся только у своих параметров стадии
+    assert core_settings.env_key("pipeline", "model") == ""
+    assert core_settings.env_key("pipeline", "chunk_size") == "PIPELINE_CHUNK_SIZE"
 
 
 def test_build_pipeline_argv():
-    form = {"action": "translate_check", "start": "1", "end": "5", "jobs": "4",
-            "timeout": "300", "max_retries": "7", "host": "http://127.0.0.1:9989",
-            "model": "m", "api_key": "k"}
+    """argv конвейера: свои поля — из формы, LLM — из общего конфига.
+
+    Значения LLM в форме игнорируются: «свой сервер/модель/потоки у стадии»
+    больше не существует, поэтому форма с max_retries=7 всё равно получит
+    общий MAX_RETRIES.
+    """
+    llm = core_settings.llm_values()
+    form = {"action": "4", "start": "1", "end": "5", "jobs": "9",
+            "timeout": "300", "max_retries": "7",
+            "host": "http://127.0.0.1:9989", "model": "м-из-формы",
+            "api_key": "k"}
     ctx: dict = {}
     argv = build_command("pipeline", form, ctx)
     assert argv[0] == "web/pipeline.py"
     assert "--action" in argv and "4" in argv
     assert "--start" in argv and "--end" in argv
-    assert "--jobs" in argv and "4" in argv
-    assert "--host" in argv and "--model" in argv
-    # повторы из экспертной формы — отдельным флагом в argv
-    assert "--max_retries" in argv
-    assert argv[argv.index("--max_retries") + 1] == "7"
+    assert "--jobs" in argv and str(llm["threads"]) in argv
+    assert "9" not in argv                     # потоки формы игнорируются
+    assert argv[argv.index("--host") + 1] == str(llm["host"])
+    assert argv[argv.index("--model") + 1] == str(llm["model"])
+    assert "http://127.0.0.1:9989" not in argv
+    assert "м-из-формы" not in argv
+    assert argv[argv.index("--max_retries") + 1] == str(llm["max_retries"])
     # P1 (AUDIT #2): ключ не в argv, а в ctx для env JobManager
     assert "--api_key" not in argv
-    assert ctx.get("_llm_api_key") == "k"
 
 
 def test_build_pipeline_prompt_argv():
@@ -736,82 +746,75 @@ def test_pipeline_preview_request(tmp_path):
 
 def test_llm_stages_preview_flag():
     """Спека: флаг preview — ровно у шести LLM-стадий (кнопка
-    «Предпросмотр запроса» в SPA, экспертный режим)."""
+    «Предпросмотр запроса» в SPA)."""
     expect = {"pipeline", "ner", "ner_check", "translate_check_llm",
               "translate_quality", "wiki"}
     got = {k for k, v in STAGE_SPECS.items() if v.get("preview")}
     assert got == expect
 
 
-def test_stage_specs_have_no_per_stage_reasoning_fields():
-    """Рассуждений в полях стадий нет: режим ОДИН на весь конвейер.
-
-    Шесть одинаковых полей по стадиям разъехались бы по значениям внутри
-    одного запуска (одна же модель), поэтому блок живёт на «Настройках».
-    """
-    names = {"reasoning_effort", "reasoning", "thinking", "reasoning_mode",
-             "thinking_profile", "thinking_budget"}
+def test_stage_specs_have_no_per_stage_llm_fields():
+    """Спеки стадий не описывают LLM-полей: они общие (реестр)."""
     for key, spec in STAGE_SPECS.items():
-        got = {f["name"] for f in spec.get("fields", [])} & names
-        assert not got, f"{key}: {sorted(got)}"
+        names = [f["name"] for f in (spec.get("fields") or [])]
+        assert not set(names) & LLM_FIELDS, (key, names)
+        assert "preset" not in spec and "simple" not in spec, key
 
 
 def test_build_commands_never_emit_reasoning_flags():
-    """Ни одна стадия не получает reasoning-флагов: их читает сама."""
+    """Ни одна команда стадии не передаёт флаги рассуждений (общий блок)."""
     for key in STAGE_SPECS:
-        form = {"host": "h", "model": "m", "api_key": "k", "action": "8",
-                "reasoning_effort": "high", "reasoning": "high",
-                "thinking": "high", "REASONING_MODE": "on"}
-        argv = build_command(key, form, {})
+        argv = build_command(key, {}, {})
         assert not [a for a in argv if "reason" in a or "thinking" in a], key
 
 
-def test_reasoning_spec_values_match_core():
-    """Глобальный блок: поля названы ключами .env, значения — из core.
+def test_reasoning_registry_fields_match_core():
+    """Глобальный блок: настройки названы ключами .env, значения — из core.
 
     Уровни перечисляет core.stage: его argparse принимает ровно этот список
-    (choices=REASONING_EFFORTS), поэтому в форме select этих же значений, а
-    не свободный текст — опечатка стоила бы упавшего subprocess.
+    (choices=REASONING_EFFORTS), поэтому в select те же значения, а не
+    свободный текст — опечатка стоила бы упавшего subprocess.
     """
-    by = {f["name"]: f for f in REASONING_FIELDS}
-    assert list(by) == [*REASONING_ENV_KEYS, EXTRA_BODY_ENV_KEY]
-    assert by["REASONING_MODE"]["options"] == list(REASONING_MODES)
-    assert by["REASONING_MODE"]["default"] == "default"
-    assert by["THINKING_PROFILE"]["options"] == list(REASONING_PROFILES)
-    assert by["REASONING_EFFORT"]["options"] == ["", *REASONING_EFFORTS]
-    assert by["REASONING_EFFORT"]["default"] == ""
-    assert by["THINKING_BUDGET"]["type"] == "number"
-    assert by[EXTRA_BODY_ENV_KEY]["type"] == "text"
-    # у каждого значения select есть подпись — SPA рисует её в <option>
-    for f in REASONING_FIELDS:
+    by = {s.name: s.form_field() for s in core_settings.llm_settings()
+          if s.key in (*REASONING_ENV_KEYS, EXTRA_BODY_ENV_KEY)}
+    want = [k.lower() for k in (*REASONING_ENV_KEYS, EXTRA_BODY_ENV_KEY)]
+    assert list(by) == want
+    assert list(by["reasoning_mode"]["options"]) == list(REASONING_MODES)
+    assert by["reasoning_mode"]["default"] == "default"
+    assert list(by["thinking_profile"]["options"]) == list(REASONING_PROFILES)
+    assert list(by["reasoning_effort"]["options"]) == ["", *REASONING_EFFORTS]
+    assert by["reasoning_effort"]["default"] == ""
+    assert by["thinking_budget"]["type"] == "number"
+    assert by["llm_extra_body_json"]["type"] == "text"
+    # у каждого select есть подпись — SPA рисует её в <option>
+    for f in by.values():
         if f["type"] == "select":
-            assert set(f["labels"]) == set(f["options"]), f["name"]
+            assert set(f["labels"]) == set(f["options"])
 
 
 def test_reasoning_effective_layers(monkeypatch, tmp_path):
-    """Эффективный режим: os.environ > системный .env > дефолты (по ключам)."""
+    """Эффективный режим: os.environ > общий .env > дефолты реестра."""
     env = tmp_path / "sys.env"
     env.write_text("REASONING_MODE=off\nTHINKING_PROFILE=qwen\n"
                    "REASONING_EFFORT=low\nTHINKING_BUDGET=1024\n",
                    encoding="utf-8")
-    for k in REASONING_ENV_KEYS:
+    for k in (*REASONING_ENV_KEYS, EXTRA_BODY_ENV_KEY):
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.delenv(EXTRA_BODY_ENV_KEY, raising=False)
     monkeypatch.setenv("WEB_ENV_FILE", str(env))
-    got = reasoning_effective()
-    assert {k: got[k] for k in REASONING_ENV_KEYS} == {
+    keys = (*REASONING_ENV_KEYS, EXTRA_BODY_ENV_KEY)
+    assert {k: core_settings.effective(k) for k in keys} == {
         "REASONING_MODE": "off", "THINKING_PROFILE": "qwen",
-        "REASONING_EFFORT": "low", "THINKING_BUDGET": 1024}
-    assert got[EXTRA_BODY_ENV_KEY] == ""   # в файле пробы ключа нет
+        "REASONING_EFFORT": "low", "THINKING_BUDGET": 1024,
+        EXTRA_BODY_ENV_KEY: ""}
     monkeypatch.setenv("REASONING_MODE", "on")
-    got = reasoning_effective()
-    assert got["REASONING_MODE"] == "on" and got["THINKING_PROFILE"] == "qwen"
+    assert core_settings.effective("REASONING_MODE") == "on"
+    assert core_settings.effective("THINKING_PROFILE") == "qwen"
 
 
 def test_stages_api_exposes_reasoning_block():
-    """GET /api/stages отдаёт поля и эффективные значения — SPA рисует блок
-    без своей копии реестра."""
+    """GET /api/stages отдаёт один блок рассуждений — SPA не дублирует реестр."""
     resp = _stages_list({})
-    want = [*REASONING_ENV_KEYS, EXTRA_BODY_ENV_KEY]
+    want = [k.lower() for k in (*REASONING_ENV_KEYS, EXTRA_BODY_ENV_KEY)]
+    assert resp["reasoning"]["id"] == "llm_reasoning"
     assert [f["name"] for f in resp["reasoning"]["fields"]] == want
     assert list(resp["reasoning"]["values"]) == want

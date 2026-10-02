@@ -294,216 +294,182 @@ def test_review_apply_passes_no_bak(srv, tmp_path):
 
 
 # ════════════════════════════════════════════════════════════════════
-# env
-
-
-def test_env_get_masked(srv, tmp_path, monkeypatch):
-    """Значения НЕ утекают: GET /api/env отдаёт ключи и маску ••••.
-    Редактор .env в web один — общий (системный) файл."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
+# настройки: страница «Настройки» (реестр) и один общий .env
+# ════════════════════════════════════════════════════════════════════
+def _settings_srv(srv, tmp_path, monkeypatch, text=None):
+    """Сервер с общим .env в tmp/repo/.env: WEB_ENV_FILE указывает на него,
+    поэтому конфиг машины и реальный корневой .env не мешаются."""
     (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / ".env").write_text(
-        "# комментарий\nAPI_KEY=supersecret\nHOST=http://x:1\n",
-        encoding="utf-8")
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    r = _request(port, "GET", "/api/env")
-    assert r["ok"] and r["exists"] is True
-    assert r["source"] == "shared"
-    assert r["keys"] == ["API_KEY", "HOST"]
-    assert "supersecret" not in r["masked"]
-    assert "http://x:1" not in r["masked"]
-    assert "API_KEY=••••" in r["masked"]
-    assert "HOST=••••" in r["masked"]
-    assert "# комментарий" in r["masked"]
+    env = tmp_path / "repo" / ".env"
+    env.write_text(text or "", encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
+    return srv(projects_root=tmp_path / "prj", repo_root=tmp_path / "repo")
 
 
-def test_notes_get_put_roundtrip(srv, tmp_path):
-    """GET/PUT /api/notes — projects/notes.md."""
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
-    r = _request(port, "GET", "/api/notes")
-    assert r["ok"] and not r["exists"] and r["content"] == ""
-    r = _request(port, "PUT", "/api/notes",
-                 {"content": "## Заголовок\n\nТекст заметки.\n"})
-    assert r["ok"] and r["exists"]
-    r = _request(port, "GET", "/api/notes")
-    assert r["ok"] and r["exists"]
-    assert "## Заголовок" in r["content"]
-    # файл лежит рядом с projects/.env
-    assert (tmp_path / "prj" / "notes.md").is_file()
+def _settings_fields(payload):
+    """{имя поля: поле} из payload /api/settings."""
+    return {f["name"]: f
+            for g in payload["groups"] for b in g["blocks"]
+            for f in b["fields"]}
 
 
-def test_notes_put_rejects_non_string(srv, tmp_path):
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
-    r = _request(port, "PUT", "/api/notes", {"content": 123})
-    assert "__error__" in r and r["__error__"] == 400
+def _env_text(tmp_path):
+    env = tmp_path / "repo" / ".env"
+    return env.read_text(encoding="utf-8") if env.is_file() else ""
 
 
-def test_env_get_global(srv, tmp_path, monkeypatch):
-    """scope=global — системный корневой .env репо."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / ".env").write_text("GLOBAL=1\n", encoding="utf-8")
-    r = _request(port, "GET", "/api/env?scope=global")
-    assert r["ok"] and r["exists"] and r["keys"] == ["GLOBAL"]
-    assert r["source"] == "shared"
-    assert "1" not in r["masked"]
-
-
-def test_settings_get_removed(srv, tmp_path):
-    """GET /api/settings удалён: внешний вид — localStorage браузера,
-    не .env (12-factor). Роут больше не существует."""
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
+def test_settings_get_masked(srv, tmp_path, monkeypatch):
+    """GET /api/settings — блоки реестра со значениями; секрет отдаётся
+    маской «••••», содержимое файла в SPA не ездит."""
+    _srv, port, root = _settings_srv(
+        srv, tmp_path, monkeypatch,
+        "API_KEY=supersecret\nHOST=http://x:1\n")
     r = _request(port, "GET", "/api/settings")
-    assert r.get("ok") is not True  # 404/ошибка — эндпоинта нет
+    assert r["ok"] and r["exists"] is True
+    assert r["path"] == str(tmp_path / "repo" / ".env")
+    f = _settings_fields(r)
+    assert f["api_key"]["secret"] is True
+    assert f["api_key"]["value"] == "••••"
+    assert f["host"]["value"] == "http://x:1"
+    dumped = json.dumps(r, ensure_ascii=False)
+    assert "supersecret" not in dumped and "content" not in r
 
 
-def test_env_put_replace(srv, tmp_path, monkeypatch):
-    """Точечная правка общего .env: ключ заменён на месте, комментарий
-    и порядок строк целы."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / ".env").write_text(
-        "# comment\nAPI_KEY=old\nHOST=keep\n", encoding="utf-8")
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    r = _request(port, "PUT", "/api/env", {"changes": {"API_KEY": "new"}})
-    assert r["ok"] and r["keys"] == ["API_KEY", "HOST"]
-    text = (tmp_path / "repo" / ".env").read_text(encoding="utf-8")
-    assert "API_KEY=new" in text
-    assert "HOST=keep" in text
-    assert "# comment" in text
+def test_settings_get_env_wins(srv, tmp_path, monkeypatch):
+    """Переменная окружения процесса перекрывает общий файл — интерфейс про
+    это знает (env_wins), иначе правка в форме «не применяется»."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch,
+                                     "HOST=http://from-file:1\n")
+    monkeypatch.setenv("HOST", "http://from-env:1")
+    r = _request(port, "GET", "/api/settings")
+    assert r["env_wins"] == ["HOST"]
+    assert _settings_fields(r)["host"]["value"] == "http://from-env:1"
 
 
-def test_env_put_delete_key(srv, tmp_path, monkeypatch):
-    """Пустое значение changes убирает строку KEY= целиком."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / ".env").write_text("A=1\nB=2\n",
-                                           encoding="utf-8")
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    r = _request(port, "PUT", "/api/env", {"changes": {"A": ""}})
-    assert r["ok"] and r["keys"] == ["B"]
-    text = (tmp_path / "repo" / ".env").read_text(encoding="utf-8")
-    assert "A=" not in text and "B=2" in text
+def test_settings_hidden_only_here(srv, tmp_path, monkeypatch):
+    """Скрытые настройки конвейера видны только на «Настройках»: в форму
+    запусков они не попадают (стадия берёт значение из конфига)."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch)
+    assert {"ner_threshold", "ner_ngram"} <= set(
+        _settings_fields(_request(port, "GET", "/api/settings")))
+    spec = _request(port, "GET", "/api/stages/pipeline/spec")
+    assert not {"ner_threshold", "ner_ngram"} & {
+        f["name"] for f in spec["spec"]["fields"]}
 
 
-def test_env_put_add_key(srv, tmp_path, monkeypatch):
-    """Нового ключа в общем .env не было — добавляется в конец."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / ".env").write_text("A=1\n", encoding="utf-8")
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    r = _request(port, "PUT", "/api/env", {"changes": {"NEW": "v"}})
+def test_settings_put_writes_registry_file(srv, tmp_path, monkeypatch):
+    """PUT /api/settings — машиночитаемый файл: шапка реестра и ключи в
+    порядке реестра; прежние ключи целы (PAGE PUT не теряет их)."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch,
+                                     "HOST=http://keep:1\n")
+    r = _request(port, "PUT", "/api/settings",
+                 {"values": {"THREADS": "8", "NER_CHUNK_SIZE": "12345"}})
+    assert r["ok"], r
+    assert set(r["keys"]) == {"HOST", "THREADS", "NER_CHUNK_SIZE"}
+    text = _env_text(tmp_path)
+    assert text.startswith("# NovelMaestro — общие настройки.")
+    assert "HOST=http://keep:1" in text
+    assert "THREADS=8" in text and "NER_CHUNK_SIZE=12345" in text
+    assert text.index("HOST=") < text.index("THREADS=") < text.index(
+        "NER_CHUNK_SIZE=")
+
+
+def test_settings_put_empty_removes_key_then_file(srv, tmp_path, monkeypatch):
+    """Пустое значение снимает ключ, последний ключ removes файл: «наследует
+    встроенный дефолт» не должно оставаться строкой в конфиге."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch,
+                                     "HOST=http://x:1\n")
+    r = _request(port, "PUT", "/api/settings", {"values": {"HOST": ""}})
+    assert r["ok"] and r["keys"] == [] and r["exists"] is False
+    assert not (tmp_path / "repo" / ".env").exists()
+
+
+def test_settings_put_unknown_key_rejected(srv, tmp_path, monkeypatch):
+    """Ключи — только имена реестра: чужое отклоняется, а не дописывается
+    в файл (иначе «одно место истины» распадается)."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch, "A=1\n")
+    for bad in ("GLOBAL", "A B", "A.KEY", "АБВ", "A\nB"):
+        r = _request(port, "PUT", "/api/settings", {"values": {bad: "x"}})
+        assert r.get("__error__") == 400, bad
+    assert _env_text(tmp_path) == "A=1\n"
+
+
+def test_settings_put_run_params_not_persisted(srv, tmp_path, monkeypatch):
+    """Параметры запуска (run=True) в общий .env не пишутся: изменённые для
+    одной книги поля — рабочее состояние браузера, не конфиг."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch)
+    r = _request(port, "PUT", "/api/settings",
+                 {"values": {"NER_PROMPT_FILE": "my.txt", "MODEL": "m"}})
+    assert r["ok"] and r["keys"] == ["MODEL"]
+    assert "NER_PROMPT_FILE" not in _env_text(tmp_path)
+
+
+def test_settings_put_secret_mask_skipped(srv, tmp_path, monkeypatch):
+    """«••••» прилетело вместо значения — ключ не трогаем (иначе маска
+    стёрла бы настоящий ключ)."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch,
+                                     "API_KEY=настоящий\n")
+    r = _request(port, "PUT", "/api/settings",
+                 {"values": {"API_KEY": "••••", "MODEL": "m"}})
     assert r["ok"]
-    text = (tmp_path / "repo" / ".env").read_text(encoding="utf-8")
-    assert "NEW=v" in text
+    text = _env_text(tmp_path)
+    assert "API_KEY=настоящий" in text and "••••" not in text
 
 
-def test_env_put_value_with_hash_is_quoted(srv, tmp_path, monkeypatch):
-    """AGENTS §7: `#` вне кавычек начинает комментарий, поэтому значение
-    с решёткой пишется в кавычках и читается обратно целиком."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / ".env").write_text("", encoding="utf-8")
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    r = _request(port, "PUT", "/api/env", {"changes": {"A": "a # b"}})
+def test_settings_put_hash_value_quoted(srv, tmp_path, monkeypatch):
+    """AGENTS §7: «#» вне кавычек начинает комментарий, поэтому значение с
+    решёткой пишется в кавычках и читается целиком."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch)
+    r = _request(port, "PUT", "/api/settings", {"values": {"MODEL": "a # b"}})
     assert r["ok"]
-    text = (tmp_path / "repo" / ".env").read_text(encoding="utf-8")
-    assert 'A="a # b"' in text, text
-    assert core_common.parse_dotenv(str(tmp_path / "repo" / ".env"))["A"] \
-        == "a # b"
+    text = _env_text(tmp_path)
+    assert 'MODEL="a # b"' in text, text
+    assert core_common.parse_dotenv(str(tmp_path / "repo" / ".env"))[
+        "MODEL"] == "a # b"
 
 
-def test_env_get_values_non_secret(srv, tmp_path, monkeypatch):
-    """M9: GET /api/env отдаёт values несекретных ключей (для селектов
-    в «Настройках»); секреты — только маской."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / ".env").write_text(
-        "COMPILE_EPUB_COVER=source/cover2.png\nAPI_KEY=secret\n",
+def test_settings_put_textarea_newlines_are_literal(srv, tmp_path, monkeypatch):
+    """Переносы textarea-поля — литералом «\\n»: один ключ = одна строка,
+    обратно разворачиваются в настоящие переносы."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch)
+    r = _request(port, "PUT", "/api/settings",
+                 {"values": {"TRANSLATE_CHECK_REGEXP_CHECKS": "a -> b\nc -> d"}})
+    assert r["ok"]
+    raw = core_common.parse_dotenv(str(tmp_path / "repo" / ".env"))
+    assert raw["TRANSLATE_CHECK_REGEXP_CHECKS"] == "a -> b\\nc -> d"
+    f = _settings_fields(_request(port, "GET", "/api/settings"))
+    assert f["regexp_checks"]["value"] == "a -> b\nc -> d"
+
+
+def test_settings_book_env_is_not_a_layer(srv, tmp_path, monkeypatch):
+    """Собственного .env у книги больше нет: GET/PUT — только общий файл,
+    значение книги не перекрыивает общий конфиг."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch,
+                                     "HOST=http://shared:1\n")
+    pdir = _mk_project(root)
+    (pdir / ".env").write_text("HOST=http://book\nNER_CHUNK_SIZE=999\n",
+                               encoding="utf-8")
+    r = _request(port, "GET", "/api/settings")
+    assert _settings_fields(r)["host"]["value"] == "http://shared:1"
+    spec = _request(port, "GET", f"/api/stages/ner/spec?{_q('ACTIVE/demo')}")
+    f = {x["name"]: x.get("default") for x in spec["spec"]["fields"]}
+    assert f["chunk_size"] != "999"
+    # PUT с project= пишет в общий файл; файл книги остаётся обычным файлом
+    r = _request(port, "PUT", "/api/settings",
+                 {"project": "ACTIVE/demo", "values": {"MODEL": "m"}})
+    assert r["ok"] and "HOST=http://book" in (pdir / ".env").read_text(
         encoding="utf-8")
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    r = _request(port, "GET", "/api/env")
-    assert r["values"]["COMPILE_EPUB_COVER"] == "source/cover2.png"
-    assert "API_KEY" not in r["values"]
 
 
-def test_env_project_scope_gone(srv, tmp_path, monkeypatch):
-    """project= в запросе /api/env больше не выбирает файл книги: GET и
-    PUT работают только с общим .env, а собственный diff-файл книги в
-    web не показывается вовсе (его пересобирают формы «Запусков»)."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / ".env").write_text("SHARED=1\n",
-                                           encoding="utf-8")
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    pdir = _mk_project(root)
-    (pdir / ".env").write_text("OWN=секрет-книги\n", encoding="utf-8")
-    r = _request(port, "GET", f"/api/env?{_q('ACTIVE/demo')}")
-    assert r["ok"] and r["source"] == "shared"
-    assert r["keys"] == ["SHARED"]
-    assert "секрет-книги" not in (r.get("content") or "")
-    # PUT с project= пишет в общий файл, а не в файл книги
-    r = _request(port, "PUT", "/api/env",
-                 {"project": "ACTIVE/demo", "changes": {"NEW": "v"}})
-    assert r["ok"] and r["keys"] == ["SHARED", "NEW"]
-    assert "NEW" not in (pdir / ".env").read_text(encoding="utf-8")
-
-
-def test_env_put_bad_key(srv, tmp_path):
-    srv, port, root = srv()
-    _mk_project(root)
-    r = _request(port, "PUT", "/api/env",
-                 {"changes": {"A=B": "x"}})
-    assert "__error__" in r and r["__error__"] == 400
-
-
-def test_env_put_bad_key_chars(srv, tmp_path, monkeypatch):
-    """M4 (AUDIT): ключи — строго [A-Za-z0-9_]: пробел/точка/кириллица → 400."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    srv, port, root = srv()
-    _mk_project(root)
-    for bad in ("A B", "A.KEY", "АБВ", "A\nB"):
-        r = _request(port, "PUT", "/api/env", {"changes": {bad: "x"}})
-        assert "__error__" in r and r["__error__"] == 400, bad
-
-
-def test_env_put_value_newline_rejected(srv, tmp_path, monkeypatch):
-    """M4 (AUDIT): перевод строки в значении — инъекция ключей → 400."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    srv, port, root = srv()
-    pdir = _mk_project(root)
-    r = _request(port, "PUT", "/api/env",
-                 {"project": "ACTIVE/demo",
-                  "changes": {"A": "x\nLOCAL_API_KEY=evil"}})
-    assert "__error__" in r and r["__error__"] == 400
-    # файл не тронут
-    assert not (pdir / ".env").exists() or "evil" not in \
-        (pdir / ".env").read_text(encoding="utf-8")
+def test_env_editor_routes_gone(srv, tmp_path, monkeypatch):
+    """Редактор текста .env удалён целиком: GET/PUT/DELETE /api/env и
+    /api/env/template больше не существуют — только /api/settings."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch)
+    for method, path in (("GET", "/api/env"), ("PUT", "/api/env"),
+                         ("DELETE", "/api/env"),
+                         ("GET", "/api/env/template")):
+        r = _request(port, method, path, {"content": "A=1\n"})
+        assert r.get("__error__") in (404, 405), (method, path, r)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -735,91 +701,41 @@ def test_prompts_templates_in_list_and_create(srv, tmp_path):
 # W6: env по канону + видимые значения; обложка
 # ════════════════════════════════════════════════════════════════════
 
-def test_env_files_list_keeps_book_env(srv, tmp_path, monkeypatch):
-    """Собственный .env книги остаётся обычным файлом в «Файлах» (его
-    видно и можно отредактировать руками), но интерфейс настроек его
-    не трогает: настройки книги — формы «Запусков»."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
+def test_files_list_shows_book_env(srv, tmp_path, monkeypatch):
+    """Свой .env книги остаётся обычным файлом в «Файлах» (его видно и можно
+    править руками) — интерфейсом «Настроек» он не читается."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch)
     pdir = _mk_project(root)
     (pdir / ".env").write_text("PIPELINE_JOBS=7\n", encoding="utf-8")
     r = _request(port, "GET", f"/api/files?{_q('ACTIVE/demo')}")
     assert r["ok"]
-    names = {e["name"] for e in r["entries"]}
-    assert ".env" in names
+    assert ".env" in {e["name"] for e in r["entries"]}
 
 
-def test_env_global_is_repo_root_env(srv, tmp_path, monkeypatch):
-    """scope=global — корневой .env репо, projects/.env не читается."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    _mk_project(root)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo" / ".env").write_text("ROOT=1\n", encoding="utf-8")
+def test_settings_path_is_repo_root_env(srv, tmp_path, monkeypatch):
+    """Общий конфиг — корневой .env репо: projects/.env им не считается."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch, "HOST=1\n")
     (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "prj" / ".env").write_text("K=v\n", encoding="utf-8")
-    r = _request(port, "GET", "/api/env?scope=global")
-    assert r["ok"] and r["exists"] and r["source"] == "shared"
-    assert r["keys"] == ["ROOT"]
-    assert "K" not in r["keys"]
+    (tmp_path / "prj" / ".env").write_text("HOST=2\n", encoding="utf-8")
+    r = _request(port, "GET", "/api/settings")
+    assert r["path"] == str(tmp_path / "repo" / ".env")
+    assert _settings_fields(r)["host"]["value"] == "1"
 
 
-def test_env_put_content_mode_creates(srv, tmp_path, monkeypatch):
-    """content — полная замена общего .env: повторный PUT целиком
-    перезаписывает файл, а не дописывает его."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    r = _request(port, "PUT", "/api/env", {"content": "A=1\nB=2\n"})
-    assert r["ok"] and r["keys"] == ["A", "B"]
+def test_settings_put_creates_file_from_scratch(srv, tmp_path, monkeypatch):
+    """Общего файла ещё нет — PUT создаёт его целиком из значений реестра;
+    повторный PUT перезаписывает, а не дописывает."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch)
+    r = _request(port, "PUT", "/api/settings",
+                 {"values": {"HOST": "http://h:1", "MODEL": "m"}})
+    assert r["ok"] and r["exists"] is True
     env = tmp_path / "repo" / ".env"
-    assert env.read_text(encoding="utf-8") == "A=1\nB=2\n"
-    r2 = _request(port, "PUT", "/api/env", {"content": "C=3\n"})
-    assert r2["ok"] and r2["keys"] == ["C"]
-    assert env.read_text(encoding="utf-8") == "C=3\n"
-
-
-def test_env_put_global_content(srv, tmp_path, monkeypatch):
-    """Корневой .env пишется через content (Настройки)."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    (tmp_path / "prj").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "repo").mkdir(parents=True, exist_ok=True)
-    r = _request(port, "PUT", "/api/env",
-                 body={"scope": "global", "content": "HOST=x\n"})
-    assert r["ok"] and r["keys"] == ["HOST"]
-    assert (tmp_path / "repo" / ".env").read_text(encoding="utf-8") == "HOST=x\n"
-
-
-def test_env_delete_route_removed(srv, tmp_path, monkeypatch):
-    """DELETE /api/env удалён: собственный .env книги больше не «удаляют»
-    — его пересобирает web-слой, а без отличий он исчезает сам."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    r = _request(port, "DELETE", "/api/env")
-    assert r.get("ok") is not True  # 404/405 — эндпоинта нет
-
-
-def test_env_template_endpoint_removed(srv, tmp_path, monkeypatch):
-    """GET /api/env/template удалён вместе с редактором системного .env
-    (окно .env убрано из «Настроек»; шаблон — в templates/.env.example)."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
-    _srv, port, root = srv(projects_root=tmp_path / "prj",
-                           repo_root=tmp_path / "repo")
-    r = _request(port, "GET", "/api/env/template")
-    assert r.get("ok") is not True  # 404/ошибка — эндпоинта нет
+    text = env.read_text(encoding="utf-8")
+    assert "HOST=http://h:1" in text and "MODEL=m" in text
+    r2 = _request(port, "PUT", "/api/settings", {"values": {"HOST": "http://h:2"}})
+    assert r2["ok"] and set(r2["keys"]) == {"HOST", "MODEL"}
+    text2 = env.read_text(encoding="utf-8")
+    assert "HOST=http://h:2" in text2 and "MODEL=m" in text2
 
 
 def test_prompts_delete(srv, tmp_path):
@@ -896,10 +812,13 @@ def test_download_inline_image(srv, tmp_path):
     assert body.startswith(b"\xff\xd8")
 
 
-def test_env_hidden_when_auth_enabled(tmp_path, monkeypatch):
-    """W6: при --auth значения по-прежнему скрыты (маска, без content)."""
-    # общий конфиг — файл репозитория, а не WEB_ENV_FILE машины
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
+def test_settings_hidden_when_auth_enabled(tmp_path, monkeypatch):
+    """W6: при --auth настройки доступны только с сессией, а API-ключ
+    по-прежнему скрыт: значения и текст файла наружу не уходят."""
+    env = tmp_path / "repo" / ".env"
+    env.parent.mkdir(parents=True, exist_ok=True)
+    env.write_text("HOST=http://x:1\nAPI_KEY=xyz\n", encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
     import threading
     auth_obj = Auth("tok", no_auth=False)
     srv = make_server("127.0.0.1", 0, auth_obj,
@@ -909,11 +828,16 @@ def test_env_hidden_when_auth_enabled(tmp_path, monkeypatch):
     t.start()
     try:
         import http.client
-        import urllib.parse
         port = srv.server_address[1]
-        pdir = tmp_path / "prj" / "ACTIVE" / "demo"
-        pdir.mkdir(parents=True)
-        (pdir / ".env").write_text("SECRET=xyz\n", encoding="utf-8")
+        # без сессии — настройки недоступны вовсе
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("GET", "/api/settings",
+                     headers={"X-Requested-With": "fetch"})
+        resp = conn.getresponse()
+        body = json.loads(resp.read().decode())
+        conn.close()
+        assert resp.status == 401, body
+        assert "http://x:1" not in json.dumps(body, ensure_ascii=False)
         # вход по токену → сессионная cookie
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
         conn.request("POST", "/api/login", json.dumps({"token": "tok"}),
@@ -925,17 +849,20 @@ def test_env_hidden_when_auth_enabled(tmp_path, monkeypatch):
         conn.close()
         assert resp.status == 200, f"вход не удался: {resp.status}"
         sid = cookie.split("web_session=", 1)[1].split(";", 1)[0]
+        # с сессией — значения есть, но ключ — только маской
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-        conn.request("GET", f"/api/env?{urllib.parse.urlencode({'project': 'ACTIVE/demo'})}",
+        conn.request("GET", "/api/settings",
                      headers={"Cookie": f"web_session={sid}",
                               "X-Requested-With": "fetch"})
         resp = conn.getresponse()
         r = json.loads(resp.read().decode())
         conn.close()
         assert r.get("ok"), f"ответ: {r}"
-        assert r["visible"] is False
         assert "content" not in r
-        assert "xyz" not in r["masked"]
+        assert "xyz" not in json.dumps(r, ensure_ascii=False)
+        f = _settings_fields(r)
+        assert f["api_key"]["value"] == "\u2022\u2022\u2022\u2022"
+        assert f["host"]["value"] == "http://x:1"
     finally:
         srv.server_close()
 
@@ -1011,24 +938,25 @@ def test_check_reports_endpoint(srv, tmp_path):
 # R9: настройки запусков (.env)
 
 
-def test_stage_spec_env_defaults(srv, tmp_path, monkeypatch):
-    """R9-A: ?project= предзаполняет поля формы из собственного .env книги.
-    Общий слой указываем в несуществующий файл — тест герметичен к .env
-    машины разработчика."""
-    monkeypatch.setenv("WEB_ENV_FILE", str(tmp_path / "общего-файла-нет.env"))
+def test_stage_spec_prefill_from_shared_env(srv, tmp_path, monkeypatch):
+    """R9-A: форма стадии предзаполняется общим конфигом (реестр → общий
+    .env → os.environ). Стадийных <СТАДИЯ>_HOST/MODEL и слоя pdir/.env
+    больше нет: LLM-полей в форме запусков тоже нет."""
+    shared = tmp_path / "shared.env"
+    shared.write_text(
+        "HOST=http://192.168.1.8:9989\nMODEL=gpt-test\n"
+        "NER_CHUNK_SIZE=12345\nNER_MODEL=ner-gpt\n", encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(shared))
     srv, port, root = srv()
-    pdir = _mk_project(root)
-    (pdir / ".env").write_text(
-        "NER_CHUNK_SIZE=12345\nMODEL=gpt-test\nNER_MODEL=ner-gpt\n"
-        "NER_THRESHOLD=0.9\n", encoding="utf-8")
+    _mk_project(root)
     r = _request(port, "GET", f"/api/stages/ner/spec?{_q('ACTIVE/demo')}")
     assert "__error__" not in r
     fields = {f["name"]: f.get("default", "") for f in r["spec"]["fields"]}
-    assert fields.get("chunk_size") == "12345"
-    assert fields.get("threshold") == "0.9"
-    # стадийная NER_MODEL приоритетнее общей MODEL
-    assert fields.get("model") == "ner-gpt"
-    assert fields.get("host") == ""  # HOST не задан — пусто
+    assert str(fields.get("chunk_size")) == "12345"
+    # сервер/модель/ключ/потоки — общие: в форме стадии их больше нет
+    assert not {"host", "model", "api_key", "threads"} & set(fields)
+    # NER_MODEL мёртв: модель одна на весь конвейер
+    assert "ner-gpt" not in json.dumps(r, ensure_ascii=False)
 
 
 def test_stage_spec_env_no_project(srv, tmp_path):
@@ -1062,29 +990,30 @@ def test_job_start_does_not_copy_shared_env(srv, tmp_path):
     assert not (pdir / ".env").exists()
 
 
-def test_job_start_persists_run_params(srv, tmp_path):
-    """R9-B: запуск пишет в файл книги ТОЛЬКО отличия по полям формы
-    стадии (включая api_key LLM-стадии); общий HOST в файл не
-    копируется, служебный preset — не настройка стадии."""
+def test_job_start_uses_shared_llm_config(srv, tmp_path, monkeypatch):
+    """R9-B: запуск получает LLM-конфиг из общего файла — сервер и модель
+    уходят в argv, ключ — в окружение процесса; файл книги не создаётся
+    вовсе (изменённые поля запусков живут в браузере)."""
+    env = tmp_path / "repo" / ".env"
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
     srv, port, root = srv(repo_root=tmp_path / "repo")
     pdir = _mk_project(root)
     (tmp_path / "repo" / "cli").mkdir(parents=True, exist_ok=True)
     (tmp_path / "repo" / "cli" / "ner.py").write_text(
         "import sys\nsys.exit(0)\n", encoding="utf-8")
-    (tmp_path / "repo" / ".env").write_text(
-        "HOST=http://sys\nNER_CHUNK_SIZE=8000\n", encoding="utf-8")
+    env.write_text(
+        "HOST=http://sys\nAPI_KEY=СЕКРЕТ-ОБЩИЙ\nMODEL=m\n"
+        "NER_CHUNK_SIZE=8000\n", encoding="utf-8")
     from web.jobs import JobManager
     srv.job_manager = JobManager(tmp_path / "web", repo_root=REPO)
     r = _request(port, "POST", "/api/jobs",
                  {"action": "ner", "project": "ACTIVE/demo",
-                  "params": {"preset": "default", "chunk_size": "1200",
-                             "api_key": "secret"}})
+                  "params": {"chunk_size": "1200"}})
     assert "__error__" not in r and r.get("ok"), r
-    env_file = pdir / ".env"
-    assert env_file.is_file(), "файл отличий книги не создан"
-    text = env_file.read_text(encoding="utf-8")
-    assert "NER_CHUNK_SIZE=1200" in text          # изменённое поле
-    assert "NER_API_KEY=secret" in text           # ключ книги
-    assert "PRESET" not in text                   # служебное не пишем
-    assert "HOST=" not in text                   # общее не копируется
-    assert "локальные отличия книги" in text
+    assert not (pdir / ".env").exists(), "файл отличий книги больше не пишется"
+    job = srv.job_manager.get(r["job"]["id"])
+    joined = " ".join(job.argv)
+    assert "--chunk_size 1200" in joined      # значение из формы запусков
+    assert "--host http://sys" in joined      # сервер — общий, не из формы
+    assert "--model m" in joined and "--api_key" not in joined
+    assert "СЕКРЕТ-ОБЩИЙ" not in joined      # ключ в argv не едет

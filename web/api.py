@@ -5,8 +5,8 @@ api.py — REST-хендлеры web-бэкэнда: фасад над доме�
 
 Хендлеры живут по доменам: api_common (служебное, ctx, кешы и константы,
 сессия и вход), api_projects (пульт и проекты, M2), api_files (файлы, M3),
-api_glossary (глоссарий и review, M7), api_env (конфигурация: .env, промпты,
-metadata), api_assets (обложка W6, логи M8, отчёты W7), api_stage (запуски и
+api_glossary (глоссарий и review, M7), api_env (настройки из реестра,
+промпты, metadata), api_assets (обложка W6, логи M8, отчёты W7), api_stage (запуски и
 стадии, M4) и api_templates (шаблоны). Имена роутов и таблицы web/README.md
 не меняются.
 
@@ -36,15 +36,11 @@ from web.api_projects import (  # noqa: F401  фасад
     _ensure_stats_cache,
     _dashboard,
 )
-from web.api_env import (  # noqa: F401  фасад
-    _is_env_config_key,
-)
 from web.api_assets import (  # noqa: F401  фасад
     _parse_check_report,
 )
 from web.api_stage import (  # noqa: F401  фасад
     _jobs_get,
-    _persist_run_params,
 )
 from web.server import Router
 
@@ -57,6 +53,7 @@ def register(router: Router, host: str) -> None:
     api_projects._register_hub(router)
     api_files._register_files(router)
     api_glossary._register_m7(router)
+    api_env._register_settings(router)
     api_assets._register_logs(router)
     api_assets._register_check(router)
     api_templates._register_templates(router)

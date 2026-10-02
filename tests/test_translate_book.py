@@ -139,16 +139,13 @@ def test_parser_legacy():
     assert r.mode == "redact" and r.no_aliases and r.trace is None
 
 
-def test_mode_presets():
+def test_mode_presets_are_behavior_only():
+    """Пресеты режима — только поведение; LLM-числа ушли в общий реестр."""
     assert TB.MODE_PRESETS["translate"]["trace_default"] is True
     assert TB.MODE_PRESETS["polish"]["trace_default"] is False
-    # min_len_ratio отключён во всех режимах (0.0): контроль длин —
-    # стадия «Проверка перевода»; пустой ответ ловит стрим всегда
+    assert TB.MODE_PRESETS["redact"]["threads_cap"] == 64
     for mode in ("translate", "redact", "polish"):
-        assert TB.MODE_PRESETS[mode]["min_len_ratio"] == 0.0
-    assert TB.MODE_PRESETS["polish"]["max_retries"] == 3
-    assert TB.MODE_PRESETS["translate"]["max_retries"] == 3
-    assert TB.MODE_PRESETS["redact"]["max_retries"] == 3
+        assert set(TB.MODE_PRESETS[mode]) == {"threads_cap", "trace_default"}
 
 
 # ══════════════════════════════════════════════════════════════════════

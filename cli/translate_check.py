@@ -52,6 +52,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core.common import build_chapter_map, find_chapter_file  # noqa: E402
+from core import settings as core_settings  # noqa: E402
 
 
 def parse_regexp_rule(line: str):
@@ -279,7 +280,8 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
 # ──────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Парсер translate_check: дефолты полей — из реестра (core/settings.py)."""
     parser = argparse.ArgumentParser(
         description="Скрипт проверки перевода глав.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -360,6 +362,12 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
                         default=False,
                         help="Отключить проверку сквозной "
                              "последовательности глав")
+    core_settings.apply_cli_defaults(parser, "translate_check")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
     strict = not args.lenient
     chapters_dir: str = args.chapters_dir

@@ -1,63 +1,32 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-stages.py — спеки стадий web-интерфейса (M4: не-LLM; M5: LLM).
+stages.py — спеки стадий web-интерфейса: метаданные полей в core/settings.py.
 
-Каждая стадия: spec (поля формы) + build_command(form, ctx) → argv.
+Каждая стадия: spec (title/script/build + fields) + build_command(form, ctx) →
+argv. Поля формы (и их дефолты, метки, подсказки) берутся из реестра настроек
+в порядке реестра — здесь остаётся только сборка argv.
 - cwd = папка проекта; python = sys.executable; скрипт = REPO/cli/xxx.py.
-- Единицы в лейблах — как в help скриптов (СИМВОЛЫ/ТОКЕНЫ/ГЛАВЫ).
-- preset: карточка «Простой режим» — title/desc + overrides; параметры
-  простого режима считаются preset_params() (дефолты полей формы +
-  overrides).
-- simple: имена полей, ДОПОЛНИТЕЛЬНО показываемых в простом режиме
-  (карточка пресета + диапазон глав + эти поля); остальные поля —
-  экспертные и в простом режиме берут дефолты пресета.
-- стадий без simple (translate_check/batch_replace/compile) простого
-  режима нет — только экспертный (переключатель не показывается).
+- Единицы в метках — как в help скриптов (СИМВОЛЫ/ТОКЕНЫ/ГЛАВЫ).
+- LLM-настройки (сервер, модель, ключ, температура, таймауты, повторы,
+  потоки) из формы запусков убраны: они общие на весь конвейер и живут на
+  странице «Настройки». build_command подставляет их значения в имена полей
+  стадии (jobs ← THREADS, retries ← MAX_RETRIES), поэтому сборка argv ниже
+  не изменилась.
+- режимы «Простой/Экспертный» и пресеты убраны: у всех стадий одна форма.
 """
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
-from core.common import (EXTRA_BODY_ENV_KEY, REASONING_MODES,
-                         REASONING_PROFILES, parse_dotenv, reasoning_settings,
-                         system_env_file)
-from core.stage import REASONING_EFFORTS
+from core import settings as core_settings
 
 log = logging.getLogger("web.stages")
 
 # ── типы полей ─────────────────────────────────────────────────────────
 # text / number / bool / select / files (select из папки проекта) /
 # range (start-end) / password
-
-# ── R9: настройки запусков в .env ───────────────────────────────────────
-# Поля формы стадии сохраняются в .env проекта при каждом запуске и
-# предзаполняются из него. Схема ключей: {STAGE}_{FIELD} (верхним
-# регистром); LLM-поля — отдельно: host → {STAGE}_HOST → HOST,
-# api_key → {STAGE}_API_KEY → API_KEY, model → {STAGE}_MODEL → MODEL
-# (скрипты читают через get_server_config(env, stage)).
-
-def env_keys_for(stage: str, field: str, profile: str = "") -> list[str]:
-    """Кандидаты env-ключей для поля формы стадии (R9).
-
-    Схема «один скрипт — один набор сервер+ключ+модель»: host →
-    <STAGE>_HOST → HOST, api_key → <STAGE>_API_KEY → API_KEY, model →
-    <STAGE>_MODEL → MODEL. Персист берёт первый ключ (стадийный);
-    предзаполнение — первый найденный. profile убран.
-    """
-    s = (stage or "").upper()
-    f = (field or "").upper()
-    if f == "PROFILE":
-        return []
-    if f == "API_KEY":
-        return [f"{s}_API_KEY", "API_KEY"]
-    if f == "MODEL":
-        return [f"{s}_MODEL", "MODEL"]
-    if f == "HOST":
-        return [f"{s}_HOST", "HOST"]
-    return [f"{s}_{f}"]
 
 
 def _range_argv(name: str, form: dict, start_key: str = "start",
@@ -73,50 +42,24 @@ def _range_argv(name: str, form: dict, start_key: str = "start",
 
 
 def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
-    """--host/--model/--api_key для LLM-стадий (без профилей).
+    """LLM-параметры в argv: они приходят только из общего конфига.
 
-    Приоритет: явные значения формы > общий .env > собственный .env книги
-    (load_env: сначала общий файл, поверх — только отличия книги).
+    Форма запуска LLM-полей не содержит — build_command подставляет в неё
+    глобальные значения (core.settings.with_llm), поэтому «свой сервер у
+    стадии» больше не существует и сравнивать не с чем.
     Пустой результат — скрипт сам найдёт .env или попросит ввод.
-
-    C1 (AUDIT): ключ из .env подставляется ТОЛЬКО если host не переопределён
-    формой (или совпадает с env-HOST) — иначе ключ уйдёт на чужой сервер.
     """
     argv = []
-    form_host = (form.get("host") or "").strip()
-    host = form_host
-    model = (form.get("model") or "").strip()
-    api_key = (form.get("api_key") or "").strip()
-    env_data: dict = {}
-    pdir = ctx.get("project_dir") if isinstance(ctx, dict) else None
-    if pdir is not None:
-        try:
-            from core.common import load_env
-            # слои: общий .env (WEB_ENV_FILE в Docker) → собственный
-            # pdir/.env книги, где лежат ТОЛЬКО отличия книги
-            env_data = load_env(start_dir=str(pdir))
-        except Exception as exc:
-            log.debug(".env не загружен: %s", exc)
-            env_data = {}
-    try:
-        from core.common import get_server_config
-        sc = get_server_config(env_data, stage)
-        if not host:
-            host = sc["host"]
-        # C1: ключ из .env — только для env-HOST'а
-        if not api_key and (not form_host or host == sc["host"]):
-            api_key = sc["api_key"]
-        if not model:
-            model = sc["model"]
-    except Exception as exc:
-        log.debug("Сервер из .env не применён: %s", exc)
-    if host:
-        argv += ["--host", host]
-    # P1 (AUDIT #2): ключ не попадает в argv (виден в ps) — он
-    # уходит в окружение subprocess через ctx["_llm_api_key"]
-    # (JobManager.start env), а скрипты читают LLM_API_KEY.
+    host = str(form.get("host") or "").strip()
+    model = str(form.get("model") or "").strip()
+    api_key = str(form.get("api_key") or "").strip()
+    # P1 (AUDIT #2): ключ не попадает в argv (виден в ps) — он уходит
+    # в окружение subprocess через ctx["_llm_api_key"] (JobManager.start),
+    # скрипты читают LLM_API_KEY.
     if api_key and isinstance(ctx, dict):
         ctx["_llm_api_key"] = api_key
+    if host:
+        argv += ["--host", host]
     if model:
         argv += ["--model", model]
     return argv
@@ -531,118 +474,11 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
     return argv
 
 
-# ── Общие поля сервера для LLM-стадий (вставляются в начало формы) ──
-# значения подтягиваются из .env и вписываются в поля —
-# подсказки «Пусто = …» не нужны (help отсутствует).
-# group: "llm" — декларативная пометка для SPA: в Экспертном режиме эти
-# поля (плюс помеченные в спеках стадий: temperature/reasoning/timeout/
-# retries/threads и т.п.) группируются в конец формы блоком
-# «Настройки LLM» (только отображение; видимость подрежимов не меняется).
-_LLM_FIELDS = [
-    {"name": "host", "label": "Сервер LLM",
-     "type": "text", "default": "", "group": "llm"},
-    {"name": "model", "label": "Модель",
-     "type": "text", "default": "", "group": "llm"},
-    {"name": "api_key", "label": "API-ключ",
-     "type": "password", "default": "", "group": "llm"},
-]
 
 
-# ── рассуждения модели: ОДИН режим на весь конвейер ────────────────────
-# Модель в конвейере одна, а способ передать ей рассуждения у провайдеров
-# разный, поэтому режим задаётся ОДИН раз для всех стадий (системный .env,
-# вкладка «Настройки»): шесть одинаковых полей по стадиям разъехались бы по
-# значениям внутри одного запуска. Ключи .env — без стадийного префикса
-# (core.common.REASONING_ENV_KEYS); стадии читают их сами, web-слой их не
-# прокидывает. Уровни перечисляет core.stage: его argparse принимает ровно
-# этот список (choices=REASONING_EFFORTS) — в форме select тех же значений.
-REASONING_LABELS = {
-    "": "— (не отправлять, дефолт сервера)",
-    "none": "none — выключено",
-    "minimal": "minimal",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "xhigh",
-    "max": "max",
-}
-
-#: поля глобального блока — в той же форме, что и поля стадий (name/label/
-#: type/options/labels/default/help): SPA рисует их тем же рендерером, а
-#: name совпадает с ключом .env, чтобы changes из формы уходил как есть
-REASONING_FIELDS: tuple[dict, ...] = (
-    {
-        "name": "REASONING_MODE",
-        "label": "Рассуждения",
-        "type": "select",
-        "options": list(REASONING_MODES),
-        "labels": {"default": "— (решение сервера)",
-                   "on": "включены", "off": "выключены"},
-        "default": "default",
-        "help": "у части серверов рассуждения включены по умолчанию; "
-                "«выключены» для openai-профиля = reasoning_effort=none",
-    },
-    {
-        "name": "THINKING_PROFILE",
-        "label": "Профиль API",
-        "type": "select",
-        "options": list(REASONING_PROFILES),
-        "labels": {k: v[0] for k, v in REASONING_PROFILES.items()},
-        "default": "openai",
-        "help": "как именно передавать рассуждения: каждый профиль отправляет "
-                "только свои ключи (незнакомый ключ строгий сервер считает "
-                "ошибкой запроса); «все ключи сразу» — только для серверов, "
-                "которые молча игнорируют чужие",
-    },
-    {
-        "name": "REASONING_EFFORT",
-        "label": "Уровень рассуждения",
-        "type": "select",
-        "options": ["", *REASONING_EFFORTS],
-        "labels": REASONING_LABELS,
-        "default": "",
-        "help": "пусто — не передаётся; понимают openai, openrouter и "
-                "«все ключи сразу»",
-    },
-    {
-        "name": "THINKING_BUDGET",
-        "label": "Бюджет рассуждения, ТОКЕНЫ",
-        "type": "number",
-        "default": 0,
-        "help": "0 — не отправлять; понимают anthropic (thinking.budget_tokens) "
-                "и dashscope (thinking_budget)",
-    },
-    {
-        "name": "LLM_EXTRA_BODY_JSON",
-        "label": "Свои поля тела (JSON)",
-        "type": "text",
-        "default": "",
-        "help": "JSON-объект ключей, которых не знает ни один профиль (свой "
-                "сервер); уходят в тело запроса после ключей профиля, то есть "
-                "перекрывают их; битый JSON запрос не ломает — поле "
-                "игнорируется с предупреждением в лог",
-    },
-)
 
 
-def reasoning_effective() -> dict:
-    """Эффективный режим рассуждений: os.environ > системный .env > дефолты.
 
-    Ключи — имена полей формы (они же ключи .env): SPA привязывает значение
-    к полю без своего маппинга коротких имён.
-    """
-    env_data = parse_dotenv(system_env_file())
-    got = reasoning_settings(env_data)
-    return {
-        "REASONING_MODE": got["mode"],
-        "THINKING_PROFILE": got["profile"],
-        "REASONING_EFFORT": got["effort"],
-        "THINKING_BUDGET": got["budget"],
-        # свои поля тела — СЫРЫМ текстом (это поле редактируют в форме);
-        # битый JSON не ломает запрос: стадии игнорируют его с warning
-        "LLM_EXTRA_BODY_JSON": (os.environ.get(EXTRA_BODY_ENV_KEY)
-                                or env_data.get(EXTRA_BODY_ENV_KEY) or ""),
-    }
 
 
 # ── пресеты «Простого режима» в Запусках ───────────────────────────────
@@ -652,32 +488,6 @@ def reasoning_effective() -> dict:
 # overrides; LLM-поля (host/model/api_key) имеют пустые дефолты и в
 # params не попадают — скрипты сами берут сервер из .env.
 
-def preset_params(spec: dict) -> dict:
-    """Параметры простого режима запуска (пресет) для спеки стадии.
-
-    params = непустые дефолты полей формы + overrides пресета — ровно
-    то, что форма отправила бы с дефолтными значениями: булёвы входят
-    всегда (false = выключено), пустые строки пропускаются, files с
-    dir префиксуются папкой (R5-G). API вкладывает результат в
-    spec.preset.params — SPA читает его без дублирования логики.
-    """
-    params: dict = {}
-    for f in spec.get("fields", []):
-        name = f["name"]
-        default = f.get("default")
-        if f["type"] == "bool":
-            params[name] = bool(default)
-        elif default is None or str(default) == "":
-            continue
-        elif f["type"] == "files":
-            v = str(default)
-            if f.get("dir") and "/" not in v:
-                v = f"{f['dir']}/{v}"
-            params[name] = v
-        else:
-            params[name] = str(default)
-    params.update(spec.get("preset", {}).get("overrides") or {})
-    return params
 
 
 STAGE_SPECS: dict[str, dict] = {
@@ -686,689 +496,67 @@ STAGE_SPECS: dict[str, dict] = {
         "script": "epub_to_chapters.py",
         "build": build_epub_to_chapters,
         "autosave": True,  # настройки формы — сразу в localStorage
-        "fields": [
-            {"name": "input",
-             "label": "Исходник",
-             "type": "files", "dir": "source",
-             "ext": [".epub", ".txt"], "default": ""},
-            {"name": "mode", "label": "Режим разбивки",
-             "type": "select",
-             "options": ["toc", "regex", "chunk"],
-             "labels": {"toc": "По TOC (epub)",
-                        "regex": "Ручной (regexp)",
-                        "chunk": "По чанкам"},
-             "default": "toc",
-             "help": "toc — только epub, по структуре (TOC/spine/h1-h2); "
-                      "regex/chunk — epub ИЛИ txt (epub перегоняется "
-                      "в текст); zip не принимается"},
-            {"name": "split_patterns",
-             "label": "Паттерны разбивки (regexp, по одному на строку)",
-             "type": "textarea", "rows": 4, "default": "",
-             "help": "ТОЛЬКО режим regexp. Строка считается маркером, "
-                      "если НАЧИНАЕТСЯ с любого паттерна; вся строка "
-                      "становится заголовком главы; чистый стандартный "
-                      "regexp — без комментариев и флагов; "
-                      "пример: «Глава \\d+»; "
-                      "EPUB_SPLIT_PATTERNS в .env — переносы строк "
-                      "как «\\n»"},
-            {"name": "chunk_size", "label": "Размер чанка, ТОКЕНЫ",
-             "type": "number", "default": "7000",
-             "help": "ТОЛЬКО режим «по чанкам»; оценка токенов"},
-            {"name": "chunk_mask",
-             "label": "Маска названия глав",
-             "type": "text", "default": "Chapter {num}",
-             "help": "названия чанков в режиме «по чанкам»; при включённом "
-                      "«Переопределить названия» — названия ВСЕХ глав; "
-                      "{num} — номер; пример: «Часть {num}» → 00000_1_Часть_1…"},
-            {"name": "rename_chapters",
-             "label": "Переопределить названия глав маской",
-             "type": "bool", "default": False,
-             "help": "все заголовки глав заменяются на «Маска названия "
-                      "глав» ({num} — номер). Удобно после разбивки по "
-                      "TOC/паттернам: «Chapter 1», «Chapter 2»…"},
-            {"name": "title_limit",
-             "label": "Длина названия каталога, СИМВОЛЫ",
-             "type": "number", "default": "50",
-             "help": "имя папки обрезается; первая строка файла — "
-                      "полный заголовок"},
-            {"name": "num_offset",
-             "label": "Смещение нумерации (первый номер)",
-             "type": "number", "default": "1",
-             "help": "875 → первая папка 000_875_… (нули добивают "
-                      "ширину 6)"},
-            {"name": "output_type", "label": "Тип выходного файла",
-             "type": "select",
-             "options": ["chapter", "translated", "redacted", "polished"],
-             "labels": {"chapter": "chapter.txt",
-                        "translated": "translated.txt",
-                        "redacted": "redacted.txt",
-                        "polished": "polished.txt"},
-             "default": "chapter",
-             "help": "какой файл создаётся в папке главы (канон "
-                      "артефактов стадий)"},
-            {"name": "clean_output",
-             "label": "Очистить папки глав перед записью",
-             "type": "bool", "default": False,
-             "help": "Удалить старые каталоги глав (00000_1_…, 00000_2_…) "
-                      "в chapters/ перед записью. Рекомендуется при "
-                      "повторном разборе — иначе старые главы останутся "
-                      "рядом с новыми и могут попасть в конвейер"},
-        ],
-        "preset": {
-            "title": "Разобрать исходник",
-            "desc": "Автоматическая разбивка epub по TOC; txt не "
-                    "принимается; исходник выбирается вручную",
-            "overrides": {"mode": "toc"},
-        },
-        "simple": ["input"],
+        "fields": core_settings.form_fields("epub"),
     },
     "translate_check": {
         "title": "Проверка перевода",
         "script": "translate_check.py",
         "build": build_translate_check,
-        "fields": [
-            {"name": "check_type", "label": "Тип файлов глав",
-             "type": "select",
-             "options": ["polished", "redacted", "translated"],
-             "default": "polished",
-             "help": "polished → сравнивается с redacted (соседняя "
-                      "стадия) и chapter (оригинал); redacted → с "
-                      "translated и chapter; translated → только с chapter"},
-            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
-             "type": "number", "default": ""},
-            {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "exclude_words",
-             "label": "Слова-исключения (через запятую)",
-             "type": "text", "default": "",
-             "help": "Пусто = ничего не исключается; если задано "
-                      "TRANSLATE_CHECK_EXCLUDE_WORDS в .env — поле "
-                      "заполняется оттуда"},
-            {"name": "neighbor",
-             "label": "Выбранная Стадия/Предыдущая Стадия (по занимаемому месту)",
-             "type": "text", "default": "",
-             "help": "Ожидаемый ratio с предыдущей стадией и допуск: "
-                      "«1.0±0.05» (напр. polished/redacted); пусто = "
-                      "встроенный дефолт; дефолт в .env — "
-                      "TRANSLATE_CHECK_NEIGHBOR"},
-            {"name": "original",
-             "label": "Выбранная Стадия/Оригинал (по занимаемому месту)",
-             "type": "text", "default": "",
-             "help": "Ожидаемый ratio с оригиналом и допуск: "
-                      "«2.1±0.5» (напр. polished/chapter); пусто = "
-                      "встроенный дефолт; дефолт в .env — "
-                      "TRANSLATE_CHECK_ORIGINAL"},
-            {"name": "regexp_checks",
-             "label": "Regexp-проверки (по одной на строку)",
-             "type": "textarea", "rows": 4,
-             "default": ("(?<=\\n)\\s*Глава\\s+(\\d+|\\[Номер\\])\n"
-                         "[\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff"
-                         "\\U00020000-\\U0002ebef【】「」『』]+\n"
-                         "[a-zA-Z]+\n"
-                         "\\A(?!\\s*Глава\\s+(\\d+|\\[Номер\\])).+"),
-             "help": "Каждая строка — чистый стандартный regexp "
-                      "(Python re, MULTILINE): всё найденное — ошибка, "
-                      "проверяются ВСЕ строки включая заголовок главы; "
-                      "^/$ — начало/конец СТРОКИ; регистр — "
-                      "inline-флагом (?i); комментариев и кастомных "
-                      "флагов нет («#» — литерал). "
-                      "Предзаполнен полный набор: лишние заголовки "
-                      "«Глава N» (lookbehind (?<=\\n) пропускает "
-                      "заголовок в первой строке файла), иероглифы CJK "
-                      "(все блоки + кавычки 【】「」『』), латиница, "
-                      "«первая строка не заголовок» (negative lookahead "
-                      "\\A(?!…)); «пропуск первого вхождения» своего "
-                      "правила — «(?<=\\n)паттерн». "
-                      "Пусто = без проверок; "
-                      "TRANSLATE_CHECK_REGEXP_CHECKS в .env — переносы "
-                      "строк как «\n»"},
-            {"name": "min_file_size",
-             "label": "Минимальный размер файла (БАЙТЫ)",
-             "type": "number", "default": "3072",
-             "help": "Файл меньше этого размера — ошибка «слишком мал»; "
-                      "пусто = встроенный дефолт 3072 Б"},
-            {"name": "sequence_check",
-             "label": "Проверять последовательность глав",
-             "type": "bool", "default": True,
-             "help": "Первое число в первой непустой строке должно быть "
-                      "ровно на 1 больше предыдущей главы (N+1); "
-                      "выключено — проверка пропускается"},
-        ],
-        "preset": {
-            "title": "Проверить перевод",
-            "desc": "Проверка объёмов по цепочке и текста глав "
-                     "(дефолтные regexp-проверки); тип файлов выбирается",
-            "overrides": {"check_type": "polished"},
-        },
-        "simple": ["check_type", "start", "end"],
+        "fields": core_settings.form_fields("translate_check"),
     },
     "compile": {
         "title": "Компиляция TXT/EPUB/FB2",
         "script": "clean_and_compile.py",
         "build": build_clean_and_compile,
-        "fields": [
-            {"name": "mode", "label": "Режим",
-             "type": "select",
-             "options": ["txt", "txt-plain", "epub", "fb2"],
-             "labels": {"txt": "TXT (Rulate)", "txt-plain": "TXT",
-                        "epub": "EPUB", "fb2": "FB2"},
-             "default": "txt",
-             "help": "TXT (Rulate) — заголовки «# [Название :|: N]» для "
-                      "загрузки на rulate; TXT — обычный txt без "
-                      "rulate-форматирования"},
-            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
-             "type": "number", "default": ""},
-            {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "source_type", "label": "Тип файлов глав",
-             "type": "select", "options": ["polished", "redacted", "translated", "chapter"],
-             "default": "polished"},
-            {"name": "chunk_size", "label": "Глав в части",
-             "type": "number", "default": "",
-             "help": "указано (>0) — диапазон разбивается на части по "
-                      "столько глав (файл на каждую часть), для любого "
-                      "режима; пусто/0 = без разбивки"},
-            {"name": "cover", "label": "Обложка",
-             "type": "files", "dir": "source",
-             "ext": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"],
-             "default": "",
-             "autofile": ["source/cover.jpg", "source/cover.jpeg",
-                          "source/cover.png", "source/cover.webp"],
-             "help": "единая обложка для EPUB и FB2; пусто = без обложки; "
-                      "по умолчанию автоподхват cover.jpg/jpeg/png/webp "
-                      "из source/; варианты обложек загружаются через "
-                      "«Файлы»"},
-            {"name": "epub_meta", "label": "Метаданные (YAML)",
-             "type": "files", "dir": "source",
-             "ext": [".yaml", ".yml"],
-             "default": "",
-             "autofile": ["source/metadata.yaml"],
-             "editable": True,
-             "help": "пусто = source/metadata.yaml; по умолчанию "
-                      "автоподхват metadata.yaml из source/; кнопка "
-                      "«Редактировать» — правка выбранного файла прямо "
-                      "в запуске; другой yaml/yml из source/ выбирается "
-                      "вручную (несколько наборов метаданных)"},
-            {"name": "donate_file", "label": "Файл страницы поддержки",
-             "type": "files", "dir": "source", "ext": [".txt"],
-             "default": "",
-             "autofile": ["source/donate.txt"],
-             "editable": True,
-             "help": "страница поддержки для EPUB/FB2; пусто = без "
-                      "страницы; по умолчанию автоподхват donate.txt из "
-                      "source/; кнопка «Редактировать» — правка "
-                      "выбранного файла прямо в запуске; новый файл "
-                      "загружается через «Файлы» (source/) или «Загрузить» "
-                      "при пустом выборе"},
-        ],
-        # только экспертный режим (без простого/пресета)
+        "fields": core_settings.form_fields("compile"),
     },
     "pipeline": {
         "title": "Перевод (LLM)",
-        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
+        "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "web/pipeline.py",
         "build": build_pipeline,
-        "fields": _LLM_FIELDS + [
-            {"name": "action", "label": "Тип работы",
-             "type": "select",
-             "options": ["1", "2", "3", "4", "5", "6", "7", "8",
-                          "9"],
-             "default": "8",
-             "labels": {
-                 "1": "Перевод",
-                 "2": "Редактура (исходник - Перевод)",
-                 "3": "Полировка (исходник - Редактура)",
-                 "4": "Полировка (исходник - Перевод)",
-                 "5": "Сокращенный цикл: Перевод -> Редактура",
-                 "6": "Сокращенный цикл: Перевод -> Полировка",
-                 "7": "Сокращенный цикл: Редактура -> Полировка",
-                 "8": "Полный цикл: Перевод -> Редактура -> Полировка",
-                 "9": "Перевод с расширенным контекстом"},
-             "help": "1=перевод, 2=редактура (исходник - перевод), "
-                      "3=полировка (исходник - редактура), "
-                      "4=полировка (исходник - перевод), "
-                      "5=перевод→редактура, 6=перевод→полировка, "
-                      "7=редактура→полировка, 8=полный цикл, "
-                      "9=перевод с расширенным контекстом (словарь/правила/"
-                      "примеры из source/; настройка файлов — в "
-                      "экспертном режиме)"},
-            {"name": "dict_file", "label": "Словарь перевода (dict.json)",
-             "type": "files", "dir": "source", "ext": [".json"],
-             "default": "",
-             "help": "формат как ner.json: term/translation/type?/aliases?/"
-                      "notes?; найденные в чанке записи (и в примерах) "
-                      "попадают в {dict_block}; направление определяется "
-                      "автоматически — где больше совпадений"},
-            {"name": "rules_file", "label": "Правила языка (rules.txt/md)",
-             "type": "files", "dir": "source", "ext": [".txt", ".md"],
-             "default": "",
-             "help": "краткий справочник по языку; целиком в "
-                      "{rules_block} (общий потолок — бюджет запроса)"},
-            {"name": "examples_file",
-             "label": "Пары оригинал→перевод (examples.json)",
-             "type": "files", "dir": "source", "ext": [".json"],
-             "default": "",
-             "help": "массив {original_text, translated_text} (алиасы "
-                      "source/target); релевантные пары — few-shot "
-                      "{fewshot_block}; направление — автодетект"},
-            {"name": "fewshot_k", "label": "Макс. примеров на чанк",
-             "type": "number", "default": "3", "min": 0, "max": 20,
-             "help": "сколько релевантных пар влезает в few-shot"},
-            {"name": "fewshot_threshold",
-             "label": "Порог схожести примеров (0–1)",
-             "type": "number", "default": "0.3", "min": 0, "max": 1,
-             "step": "0.05",
-             "help": "доля n-грамм (3-граммы нормализованного текста) "
-                      "стороны примера, найденных в чанке: 1 — все "
-                      "n-граммы примера есть в чанке; примеры ниже "
-                      "порога отбрасываются — лучше без примеров, чем "
-                      "с шумными"},
-            {"name": "request_budget", "label": "Бюджет запроса, ТОКЕНЫ",
-             "type": "number", "default": "24000", "min": 0,
-             "help": "общий бюджет user-запроса (чанк + все блоки), оценка "
-                      "токенов; 0 = выключено; превышение — ошибка чанка"},
-            {"name": "prompt_file",
-             "label": "Общий промпт-файл (теги translate/redact/polish)",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "",
-             "help": "один файл с тегами <translate>/<redact>/<polish>; "
-                      "пусто = авто (первый кандидат с тегами из prompts/); "
-                      "недостающий тег стадии — предупреждение + встроенный "
-                      "промпт"},
-            {"name": "chunk_size", "label": "Размер чанка, ТОКЕНЫ",
-             "type": "number", "default": "7000", "min": 1,
-             "help": "чанкование текста для перевода и полировки (оценка "
-                      "токенов) — "
-                      "действует в ЛЮБОМ выбранном типе работы; "
-                      "редактура идёт главой целиком; пусто = "
-                      "PIPELINE_CHUNK_SIZE из .env → 7000"},
-            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
-             "type": "number", "default": ""},
-            {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "jobs", "label": "Потоков (1–16)",
-             "type": "number", "default": "4", "min": 1, "max": 16,
-             "group": "llm",
-             "help": "СУММАРНО одновременных LLM-запросов: распределяются "
-                     "на параллельные главы и чанки внутри главы "
-                     "(глав много — потоки идут на главы, мало — "
-                     "свободные уходят внутрь главы)"},
-            {"name": "threads", "type": "hidden", "default": "",
-             "noenv": True},
-            {"name": "ner_min_count", "label": "Мин. count для глоссария "
-             "({ner_block})",
-             "type": "number", "default": "0",
-             "help": "термины с count ниже порога НЕ попадают в {ner_block}; "
-                      "0 — фильтр выключен (все найденные)"},
-            {"name": "ner_fields", "type": "hidden",
-             "default": "term,type,translation,aliases", "noenv": True},
-            {"name": "names_min_count", "label": "Мин. count для имён "
-             "({female_names}/{male_names})",
-             "type": "number", "default": "10",
-             "help": "имена с count ниже порога НЕ попадают в справочник "
-                      "полов; 0 — фильтр выключен"},
-            {"name": "timeout", "label": "Таймаут, сек",
-             "type": "number", "default": "300", "group": "llm"},
-            {"name": "max_retries", "label": "Повторы",
-             "type": "number", "default": "3", "group": "llm",
-             "help": "попытки виртуального потока на один LLM-запрос "
-                     "(сеть/стрим)"},
-            {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": "", "group": "llm"},
-        ],
-        "preset": {
-            "title": "Перевести книгу",
-            "desc": "Полный цикл: перевод → редактура → полировка "
-                    "всех глав, промпты из prompts/",
-        },
-        "simple": ["action", "prompt_file"],
+        "fields": core_settings.form_fields("pipeline"),
     },
     "ner": {
         "title": "Создание глоссария (LLM)",
-        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
+        "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "ner.py",
         "build": build_ner,
-        "fields": _LLM_FIELDS + [
-            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
-             "type": "number", "default": "",
-             "help": "сборка глав chapters/*/chapter.txt в память; "
-                      "пусто = с первой"},
-            {"name": "end", "label": "Конечная глава (ГЛАВЫ)",
-             "type": "number", "default": "",
-             "help": "сборка глав в память; пусто = до последней"},
-            {"name": "prompt_file", "label": "Промпт-файл (теги pass1/pass2)",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "ner_prompt.txt"},
-            {"name": "threads", "label": "Потоков (1–16)",
-             "type": "number", "default": "4", "min": 1, "max": 16,
-             "group": "llm"},
-            {"name": "chunk_size", "label": "Размер чанка, ТОКЕНЫ",
-             "type": "number", "default": "5500"},
-            {"name": "threshold", "label": "Порог дедупликации (0–1)",
-             "type": "number", "default": "0.75"},
-            {"name": "ngram", "label": "N-граммы для латиницы",
-             "type": "number", "default": "3"},
-            {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": "", "group": "llm"},
-            {"name": "two_pass", "label": "Двухпроходная схема",
-             "type": "bool", "default": True},
-            {"name": "keep_fields", "label": "Поля в голосование (через запятую)",
-             "type": "text", "default": "",
-             "help": "Пусто = голосуют translation/type/pinyin; notes, context, translated_context не голосуют. Пример: notes,context"},
-            {"name": "context_max_len", "label": "Максимальная длина \"context\"",
-             "type": "number", "default": "300",
-             "help": "СИМВОЛЫ: context извлекается из чанка — предложение с "
-                      "термином, не от LLM; 0 — выключено"},
-            {"name": "save_interval", "label": "Интервал сохранения ner.json",
-             "type": "number", "default": "10",
-             "help": "каждые N чанков — промежуточный снапшот глоссария. "
-                      "Возобновление с места остановки убрано: каждый "
-                      "запуск идёт с первого чанка"},
-            {"name": "retries", "label": "Повторные попытки",
-             "type": "number", "default": "3", "group": "llm",
-             "help": "общее число попыток LLM на чанк: сеть/стрим и "
-                      "невалидный формат ответа считаются одинаково"},
-            {"name": "timeout", "label": "Таймаут, сек",
-             "type": "number", "default": "300", "group": "llm"},
-        ],
-        "preset": {
-            "title": "Создать глоссарий",
-            "desc": "Извлечение терминов в ner.json: сборка глав "
-                    "в память (все главы); есть ner.json — дообучение",
-        },
-        "simple": ["prompt_file", "two_pass"],
+        "fields": core_settings.form_fields("ner"),
     },
     "ner_check": {
         "title": "Проверка глоссария (LLM)",
-        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
+        "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "ner_check.py",
         "build": build_ner_check,
-        "fields": _LLM_FIELDS + [
-            {"name": "prompt_file", "label": "Промпт-файл",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "ner_check_prompt.txt",
-             "autofile": "prompts/ner_check_prompt.txt",
-             "help": "Теги: <prompt_ner_check> — проверка выбранных "
-                      "типов, <prompt_rag> — точечная RAG-проверка; "
-                      "комментарии вне тегов — через #; автоподхват "
-                      "ner_check_prompt.txt"},
-            {"name": "rag_budget", "label": "RAG: бюджет на термин, ТОКЕНЫ",
-             "type": "number", "default": "22000",
-             "help": "На ОДИН термин: промпт + фрагменты ≤ бюджету (оценка "
-                      "токенов); каждый "
-                      "термин — отдельный LLM-запрос (параллельно, "
-                      "«Потоков (1–16)»); фрагменты — равномерно по "
-                      "книге (FTS5, чанки 350 токенов), влезают в остаток "
-                      "бюджета после промпта"},
-            {"name": "passes", "label": "Режимы",
-             "labels": {"whole": "Выбранные типы (одновременно)",
-                         "types": "Выбранные типы (по отдельности)",
-                         "rag": "Точечно по списку (RAG)"},
-             "type": "select", "options": ["whole", "types", "rag"],
-             "default": "whole",
-             "help": "одновременно — весь список выбранных типов разом "
-                      "(батчи по бюджету); по отдельности — каждый тип "
-                      "отдельно; rag — точечная проверка списка терминов "
-                      "по FTS5-фрагментам книги"},
-            {"name": "batch_size", "label": "Бюджет пакета, ТОКЕНЫ",
-             "type": "number", "default": "65536"},
-            {"name": "threads", "label": "Потоков (1–16)",
-             "type": "number", "default": "1", "min": 1, "max": 16,
-             "group": "llm",
-             "help": "батчи, типы и RAG-термины выполняются параллельно "
-                      "(вместо последовательного прохода)"},
-            {"name": "count_threshold", "label": "Порог count",
-             "type": "number", "default": "0"},
-            # RAG-режим: список терминов, сборка глав в память,
-            # бюджет, сохранение, промпт-файл (поля видны только в rag)
-            {"name": "rag_terms", "label": "RAG: список терминов",
-             "type": "textarea", "default": "",
-             "help": "Каждый термин с новой строки; тип/перевод "
-                      "подтягиваются из ner.json; нужен режим «rag»"},
-            {"name": "rag_source_type", "label": "RAG: тип исходного файла",
-             "type": "select",
-             "options": ["chapter", "translated", "redacted", "polished"],
-             "default": "chapter",
-             "help": "Из какого файла главы собирается текст книги "
-                      "для FTS5-поиска (сборка в память, файл не пишется)"},
-            {"name": "save_interval", "label": "Сохранять каждые N терминов",
-             "type": "number", "default": "0",
-             "help": "RAG: review-файл сохраняется каждые N терминов "
-                      "(0 = только в конце)"},
-            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
-             "type": "number", "default": ""},
-            {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-
-            # types/fields — скрытые: значения пишет виджет чипсов
-            # (типы и поля из ner.json), buildParams собирает их в params;
-            # noenv — .env не предзаполняет чипсы (дефолт: все типы и
-            # term+type+translation+notes+context, если есть в данных)
-            {"name": "types", "type": "hidden", "default": "",
-             "noenv": True},
-            {"name": "fields", "type": "hidden", "default": "",
-             "noenv": True},
-            # --apply/--auto-apply/--no-bak убраны из Запусков:
-            # применяется только в «Проверках» проекта
-            # (/api/ner/review/apply шлёт apply напрямую)
-            {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": "", "group": "llm"},
-            {"name": "max_tokens", "label": "Max tokens (серверный лимит), ТОКЕНЫ",
-             "type": "number", "default": "65536", "group": "llm"},
-            {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
-             "group": "llm"},
-            {"name": "max_retries", "label": "Повторы", "type": "number", "default": "3",
-             "group": "llm"},
-        ],
-        "preset": {
-            "title": "Проверить глоссарий",
-            "desc": "LLM-проверка ner.json по выбранным типам, "
-                    "правки не применяются",
-        },
-        "simple": ["prompt_file", "passes"],
+        "fields": core_settings.form_fields("ner_check"),
     },
     "translate_check_llm": {
         "title": "Проверка перевода (LLM)",
-        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
+        "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "translate_check_llm.py",
         "build": build_translate_check_llm,
-        "fields": _LLM_FIELDS + [
-            {"name": "type", "label": "Тип файлов глав",
-             "type": "select", "options": ["polished", "redacted", "translated"],
-             "default": "polished"},
-            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
-             "type": "number", "default": ""},
-            {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-            {"name": "two_pass", "label": "Второй проход верификации",
-             "type": "bool", "default": False},
-            {"name": "context_budget", "label": "Бюджет контекста на пакет, ТОКЕНЫ",
-             "type": "number", "default": "25000"},
-            {"name": "prompt_file", "label": "Промпт-файл (теги pass1/pass2)",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "translate_check_prompt.txt"},
-            {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": "", "group": "llm"},
-            {"name": "max_retries", "label": "Попытки на запрос", "type": "number", "default": "3",
-             "group": "llm"},
-            {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
-             "group": "llm",
-             "help": "единый таймаут: соединение и стрим"},
-            {"name": "retry_empty", "label": "Доп. повторы при пустом ответе",
-             "type": "number", "default": "0", "group": "llm"},
-            {"name": "threads", "label": "Параллельные пакеты (1–16)", "type": "number", "default": "4", "min": 1, "max": 16,
-             "group": "llm"},
-            {"name": "max_fixes_per_chapter", "label": "Лимит правок на главу (0 = нет)",
-             "type": "number", "default": "0"},
-            {"name": "min_fix_length", "label": "Мин. длина правки, СИМВОЛЫ",
-             "type": "number", "default": "0"},
-            {"name": "max_changed_chars", "label": "Макс. изменённых символов, СИМВОЛЫ",
-             "type": "number", "default": "0"},
-        ],
-        "preset": {
-            "title": "Проверить перевод (LLM)",
-            "desc": "LLM-проверка polished всех глав, один проход, "
-                    "дефолтные настройки",
-        },
-        "simple": ["type", "two_pass", "prompt_file"],
+        "fields": core_settings.form_fields("translate_check_llm"),
     },
     "translate_quality": {
         "title": "Оценка перевода (LLM)",
-        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
+        "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "translate_quality.py",
         "build": build_translate_quality,
-        "fields": _LLM_FIELDS + [
-            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
-             "type": "number", "default": ""},
-            {"name": "end", "label": "Конечная глава",
-             "type": "number", "default": ""},
-            {"name": "type", "label": "Тип файлов глав",
-             "type": "select",
-             "options": ["chapter", "translated", "redacted", "polished"],
-             "default": "polished",
-             "help": "какой файл главы сравнивается с оригиналом: "
-                      "подставляется в {translated_text} промпта, "
-                      "chapter.txt — в {original_text}"},
-            {"name": "prompt_file", "label": "Промпт-файл",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "translate_quality_prompt.txt",
-             "autofile": "prompts/translate_quality_prompt.txt",
-             "help": "тег <prompt_assessment> (между тегами — комменты); "
-                      "плейсхолдеры {original_text} и {translated_text}; "
-                      "автоподхват translate_quality_prompt.txt"},
-            {"name": "budget", "label": "Бюджет запроса, СИМВОЛЫ",
-             "type": "number", "default": "200000",
-             "help": "главы (содержимое, промпт НЕ входит); если не влезает — пакет "
-                      "обрезается до целого количества глав (первые "
-                      "диапазона), отсечённые указываются в отчёте"},
-            {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": "", "group": "llm"},
-            {"name": "max_retries", "label": "Повторы",
-             "type": "number", "default": "3", "group": "llm"},
-            {"name": "timeout", "label": "Таймаут, сек",
-             "type": "number", "default": "300", "group": "llm"},
-        ],
-        "preset": {
-            "title": "Оценить перевод",
-            "desc": "Один LLM-запрос по главам диапазона: оригинал "
-                     "vs перевод (polished), дефолтный промпт и бюджет",
-            "overrides": {"type": "polished"},
-        },
-        "simple": ["start", "end", "type", "prompt_file", "budget"],
+        "fields": core_settings.form_fields("translate_quality"),
     },
     "wiki": {
         "title": "Создание Wiki (LLM)",
-        "preview": True,   # кнопка «Предпросмотр запроса» (эксперт)
+        "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "wiki.py",
         "build": build_wiki,
-        "fields": _LLM_FIELDS + [
-            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
-             "type": "number", "default": "",
-             "help": "при источнике «Собрать из глав»; пусто = с первой"},
-            {"name": "end", "label": "Конечная глава (ГЛАВЫ)",
-             "type": "number", "default": "",
-             "help": "при источнике «Собрать из глав»; пусто = до последней"},
-            {"name": "source", "label": "Источник текста",
-             "type": "select",
-             "options": ["txt", "chapters"],
-             "labels": {"txt": "Готовый txt", "chapters": "Собрать из глав"},
-             "default": "chapters",
-             "help": "txt — готовый скомпилированный файл; «собрать из глав» — "
-                      "склейка chapters/* в память (как в Создании глоссария)"},
-            {"name": "file", "label": "Входной txt новеллы (перевод)",
-             "type": "files", "dir": "", "ext": [".txt"], "default": "",
-             "help": "нужен при источнике «Готовый txt»"},
-            {"name": "type", "label": "Тип файлов глав",
-             "type": "select", "options": ["polished", "chapter", "translated", "redacted"],
-             "default": "polished",
-             "help": "при источнике «Собрать из глав»"},
-            {"name": "output", "label": "Выходной файл", "type": "text", "default": "wiki.md"},
-            {"name": "as_chapter", "label": "Сохранить как главу",
-             "type": "bool", "default": False,
-             "help": "вместо файла — дополнительная последняя глава "
-                      "chapters/00000_{N+1}_Wiki_Новеллы/, название "
-                      "«Wiki Новеллы» простым текстом"},
-            {"name": "save_type", "label": "Тип файла вики-главы",
-             "type": "select",
-             "options": ["translated", "redacted", "polished"],
-             "default": "polished",
-             "help": "для «Сохранить как главу вики»; polished — как "
-                      "компиляция по умолчанию; chapter.txt не пишется"},
-            {"name": "format", "label": "Формат",
-             "type": "select",
-             "options": ["md", "rulate-md", "rulate-html"],
-             "labels": {"md": "Обычный Markdown",
-                        "rulate-md": "Rulate (Markdown)",
-                        "rulate-html": "Rulate (HTML)"},
-             "default": "md",
-             "help": "rulate-html: заголовки — <span style=font-size>, "
-                      "списки <ul>, разделители <hr />"},
-            {"name": "toc", "label": "Оглавление",
-             "type": "bool", "default": True,
-             "help": "обычный режим; Rulate — всегда без оглавления"},
-            {"name": "toc_links", "label": "Якоря-ссылки в оглавлении",
-             "type": "bool", "default": True,
-             "help": "обычный режим; ссылки [термин](#якорь) на статью"},
-            {"name": "prompt_file", "label": "Промпт (тег <prompt_wiki_article>)",
-             "type": "files", "dir": "prompts", "ext": [".txt"],
-             "default": "wiki_prompt.txt"},
-            {"name": "top", "label": "Макс. терминов", "type": "number", "default": "80"},
-            {"name": "min_count", "label": "Мин. частота термина", "type": "number", "default": "2"},
-            # типы — скрытые: значение пишет виджет чипсов (как в
-            # ner_check); пусто = все типы (по умолчанию выбраны все)
-            {"name": "types", "type": "hidden", "default": "",
-             "noenv": True},
-            {"name": "context_chunks", "label": "Фрагментов контекста на термин",
-             "type": "number", "default": "12"},
-            {"name": "near_distance", "label": "NEAR-дистанция, ТОКЕНЫ",
-             "type": "number", "default": "64"},
-            {"name": "chunk_size", "label": "Размер чанка FTS5, СИМВОЛЫ",
-             "type": "number", "default": "1000"},
-            {"name": "co_occurrence_pairs", "label": "Пары типов для связей",
-             "type": "text", "default": "Person:Person,Person:Organisation,Person:Artifact"},
-            {"name": "co_occurrence_top", "label": "Связей на термин", "type": "number", "default": "5"},
-            {"name": "temperature", "label": "Температура (пусто = сервер)",
-             "type": "text", "default": "", "group": "llm"},
-            {"name": "retries", "label": "Повторы", "type": "number", "default": "3",
-             "group": "llm"},
-            {"name": "timeout", "label": "Таймаут, сек", "type": "number", "default": "300",
-             "group": "llm"},
-            {"name": "threads", "label": "Потоков (1–16)", "type": "number", "default": "4", "min": 1, "max": 16,
-             "group": "llm"},
-        ],
-        "preset": {
-            "title": "Создать вики",
-            "desc": "Генерация wiki.md: ner.json + перевод, "
-                    "дефолтные настройки",
-        },
-        "simple": ["source", "file", "type", "prompt_file", "top",
-                    "min_count", "format", "as_chapter", "save_type"],
+        "fields": core_settings.form_fields("wiki"),
     },
     "batch_replace": {
         "title": "Массовые замены",
         "script": "batch_replace.py",
         "build": build_batch_replace,
-        "fields": [
-            {"name": "replacements",
-             "label": "Regexp-замены (по одной на строку)",
-             "type": "textarea", "rows": 5, "default": "",
-             "help": "Формат: паттерн -> замена (чистый стандартный "
-                      "regexp, Python re, MULTILINE: «^»/«$» — начало/конец "
-                      "СТРОКИ). Пустая правая часть — УДАЛЕНИЕ: "
-                      "«<div>.*?</div> ->». Пробелы в паттерне значимы; "
-                      "регистр и прочие режимы — стандартными "
-                      "inline-флагами ((?i)…); комментариев и кастомных "
-                      "флагов нет («#» — литерал в паттерне). "
-                      "Примеры: «Глава \\d+ -> Глава №\\g<0>», "
-                      "«(?i)бессмертный -> Бессмертный», "
-                      "«\\s+ -> » (сжать пробелы), «^  ->» (отступ "
-                      "строки), «^(第\\d+章.*)\\n(?=\\1$) ->» "
-                      "(строка-дубликат заголовка главы). "
-                      "BATCH_REPLACE_REPLACEMENTS в .env — переносы "
-                      "строк как «\\n»"},
-            {"name": "type", "label": "Тип файлов глав",
-             "type": "select", "options": ["polished", "redacted", "translated", "chapter"],
-             "default": "polished"},
-            {"name": "start", "label": "Начальная глава (ГЛАВЫ)",
-             "type": "number", "default": ""},
-            {"name": "end", "label": "Конечная глава", "type": "number", "default": ""},
-        ],
-        # только экспертный режим (без простого/пресета)
+        "fields": core_settings.form_fields("batch_replace"),
     },
 }
 
@@ -1403,7 +591,7 @@ def build_command(key: str, form: dict, ctx: dict) -> list[str]:
     spec = STAGE_SPECS.get(key)
     if spec is None:
         raise ValueError(f"Нет спеки стадии: {key}")
-    return spec["build"](form, ctx)
+    return spec["build"](core_settings.with_llm(key, form), ctx)
 
 
 def script_path(key: str, repo_root: Path) -> Path | None:

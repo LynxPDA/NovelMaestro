@@ -126,6 +126,12 @@ def test_stage_names_are_the_registry_owners():
 # реестр vs спеки стадий: один источник, а не второй
 # ════════════════════════════════════════════════════════════════════
 
+# Настройки, которые живут только в реестре: в форме стадии их нет, они
+# правятся на странице «Настройки» (у конвейера это порог и n-граммы поиска
+# терминов — раньше их можно было задать только руками в .env).
+REGISTRY_ONLY = {"pipeline": (9, ["ner_threshold", "ner_ngram"])}
+
+
 @pytest.mark.parametrize("stage", sorted(S.STAGES))
 def test_registry_matches_stage_specs(stage):
     """Поля стадии в реестре равны тому, что описано в спеке."""
@@ -134,7 +140,9 @@ def test_registry_matches_stage_specs(stage):
     spec = STAGE_SPECS[stage]
     spec_names = [f["name"] for f in (spec.get("fields") or [])
                   if f["name"] not in LLM_FIELDS]
-    assert [s.name for s in S.stage_fields(stage)] == spec_names, \
+    at, extra = REGISTRY_ONLY.get(stage, (len(spec_names), []))
+    expected = spec_names[:at] + extra + spec_names[at:]
+    assert [s.name for s in S.stage_fields(stage)] == expected, \
         f"{stage}: порядок полей формы разошёлся с реестром"
     reg = {s.name: s for s in S.stage_fields(stage)}
     checked = 0
@@ -157,8 +165,9 @@ def test_registry_matches_stage_specs(stage):
         assert norm(f.get("type"), f.get("default")) == \
             norm(got.type, got.default), \
             f"{stage}.{name}: дефолт спеки {f.get('default')!r} ≠ реестр"
-    assert checked == len(reg), (
-        f"{stage}: в реестре {len(reg)} полей, в спеке сверено {checked}")
+    assert checked + len(extra) == len(reg), (
+        f"{stage}: в реестре {len(reg)} полей, в спеке сверено {checked} "
+        f"(+{len(extra)} реестровых)")
 
 
 def test_run_params_marked_and_never_written(global_env):
@@ -190,7 +199,7 @@ def test_form_field_shape():
 def test_effective_falls_back_to_registry(monkeypatch, tmp_path):
     monkeypatch.setenv("WEB_ENV_FILE", str(tmp_path / "missing.env"))
     monkeypatch.delenv("NER_CHUNK_SIZE", raising=False)
-    assert S.effective("NER_CHUNK_SIZE") == "5500"
+    assert S.effective("NER_CHUNK_SIZE") == 5500
     assert S.file_values() == {}
 
 
@@ -199,8 +208,8 @@ def test_effective_file_over_registry(monkeypatch, tmp_path):
     env.write_text("NER_CHUNK_SIZE=1500\n", encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(env))
     monkeypatch.delenv("NER_CHUNK_SIZE", raising=False)
-    assert S.effective("NER_CHUNK_SIZE") == "1500"
-    assert S.values_of_stage("ner")["chunk_size"] == "1500"
+    assert S.effective("NER_CHUNK_SIZE") == 1500
+    assert S.stage_values("ner")["chunk_size"] == 1500
 
 
 def test_effective_env_over_file(monkeypatch, tmp_path):
@@ -208,7 +217,7 @@ def test_effective_env_over_file(monkeypatch, tmp_path):
     env.write_text("NER_CHUNK_SIZE=1500\n", encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(env))
     monkeypatch.setenv("NER_CHUNK_SIZE", "2000")
-    assert S.effective("NER_CHUNK_SIZE") == "2000"
+    assert S.effective("NER_CHUNK_SIZE") == 2000
 
 
 def test_empty_file_value_does_not_shadow(monkeypatch, tmp_path):
@@ -217,7 +226,7 @@ def test_empty_file_value_does_not_shadow(monkeypatch, tmp_path):
     env.write_text("NER_CHUNK_SIZE=\n", encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(env))
     monkeypatch.delenv("NER_CHUNK_SIZE", raising=False)
-    assert S.effective("NER_CHUNK_SIZE") == "5500"
+    assert S.effective("NER_CHUNK_SIZE") == 5500
 
 
 @pytest.mark.parametrize("raw,want", [("1", True), ("true", True), ("ON", True),

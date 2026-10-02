@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-api_env.py — конфигурация: общий (системный) .env и его ключи,
-промпты и metadata.yaml проекта.
+api_env.py — конфигурация: страница «Настройки», промпты и metadata проекта.
 
-Собственный .env книги в web не показывается и руками не правится: его
-пересобирает web-слой из форм «Запусков» (api_stage._persist_run_params),
-а читается он только как слой конфига. Здесь — один редактор, общий файл.
+Значения настроек живут в одном общем .env, но API отдаёт и принимает их
+БЛОКАМИ РЕЕСТРА (core/settings.py), а не текстом файла: метки, типы, варианты
+и дефолты описаны там же, и чужой ключ в файл не попадает. Собственный .env
+книги из модели убран: поля запусков, изменённые для одной книги, — рабочее
+состояние браузера (localStorage), а не второй конфигурационный файл.
 """
 from __future__ import annotations
 
@@ -15,162 +16,73 @@ import os
 import unicodedata
 from pathlib import Path
 from web.server import ApiError
+from core import settings as core_settings
+from web.server import Router
 from web.api_common import (
     log,
-    _ENV_KEY_PREFIXES,
-    _ENV_KEY_SUFFIXES,
-    _ENV_KEY_RE,
-)
-from web.api_common import (
     _import_common,
     _project_ctx,
     _repo_root,
     _resolve_project_path,
-    _sys_env_path,
 )
-from web.api_stage import _sanitize_env_value
 
 
-def _env_path(ctx: dict) -> Path:
-    """Файл .env для web-редактирования — общий (системный): WEB_ENV_FILE
-    в Docker (projects/.env в томе), иначе корневой .env репо.
-    Редактируется на вкладке «Настройки»; правки доходят до всех книг,
-    поля которых они локально не меняли."""
-    return _sys_env_path(ctx)
+def _settings_get(ctx: dict) -> dict:
+    """Страница «Настройки» (GET /api/settings): реестр блоками и значения.
 
-
-def _mask_env(text: str) -> str:
-    """Маскирование значений: KEY=value → KEY=•••• (комментарии целы)."""
-    out = []
-    for line in text.splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            key = line.split("=", 1)[0].rstrip()
-            out.append(f"{key}=••••")
-        else:
-            out.append(line)
-    return "\n".join(out)
-
-
-def _env_no_auth(ctx: dict) -> bool:
-    """Режим без аутентификации (W1): значения .env можно показывать."""
-    auth_obj = ctx.get("auth")
-    return bool(auth_obj is not None and getattr(auth_obj, "no_auth", False))
-
-
-def _is_env_config_key(key: str) -> bool:
-    """Похожа ли переменная окружения на ключ конфига NovelMaestro
-    (для env_extra в GET /api/env: только имена наших ключей, без
-    шелл-шума сессии — NVM_BIN, LS_COLORS, PI_* агента и т.п.)."""
-    if key.startswith("PI_"):
-        return False
-    if key in ("HOST", "API_KEY", "MODEL", "TZ"):
-        return True
-    return key.startswith(_ENV_KEY_PREFIXES) \
-        or key.endswith(_ENV_KEY_SUFFIXES)
-
-
-def _env_get(ctx: dict) -> dict:
-    """Общий .env (GET /api/env).
-
-    W6: без аутентификации (доверенная LAN) значения ВИДИМЫ — отдаём
-    целиком (content). При --auth — только ключи и маска ••••.
-    Прозрачность слоёв: sources (ключ файла перекрыт os.environ — правка
-    на «Настройках» не применится) и env_extra (ключи окружения, которых
-    нет в файле: WEB_* из compose и т.п.).
+    Ответ — subvкладки → блоки → поля (метки, типы, варианты, подсказки) с
+    эффективными значениями. env_wins — ключи, которые заданы переменными
+    окружения процесса: они перекрывают файл (канон §7), и правка в
+    интерфейсе их не применит, пока не убрано окружение.
     """
-    scope = "global"
-    p = _env_path(ctx)
-    info = {"source": "shared"}
-    if not p.is_file():
-        return {"ok": True, "scope": scope, "exists": False,
-                "masked": "", "keys": [], "visible": _env_no_auth(ctx),
-                "values": {}, "sources": {}, "env_extra": [], **info}
-    text = p.read_text(encoding="utf-8", errors="replace")
-    keys = [line.split("=", 1)[0].strip()
-            for line in text.splitlines()
-            if "=" in line and not line.lstrip().startswith("#")]
-    resp = {"ok": True, "scope": scope, "exists": True,
-            "masked": _mask_env(text), "keys": keys,
-            "visible": _env_no_auth(ctx), **info}
-    if _env_no_auth(ctx):
-        resp["content"] = text
-    # Прозрачность слоёв (канон «окружение > файл»): какие ключи файла
-    # перекрыты os.environ (правка в файле не применится) и какие ключи
-    # есть в окружении, но не в файле (значения не отдаём — только имена)
-    resp["sources"] = {k: "env" if os.environ.get(k, "").strip()
-                       else "file" for k in keys}
-    resp["env_extra"] = sorted(
-        k for k in os.environ
-        if k not in keys and os.environ.get(k, "").strip()
-        and _is_env_config_key(k))
-    # M9: значения НЕсекретных ключей (COMPILE_EPUB_COVER и т.п.) — для
-    # предзаполнения селектов в «Настройках»; секреты (API_KEY/TOKEN/…)
-    # не отдаются даже без аутентификации (маскировка их и так прячет)
-    resp["values"] = {}
-    for line in text.splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            key = line.split("=", 1)[0].strip()
-            up = key.upper()
-            if not any(s in up for s in
-                       ("API_KEY", "TOKEN", "PASSWORD", "SECRET")):
-                resp["values"][key] = line.split("=", 1)[1].strip()
-    return resp
+    path = core_settings.env_file()
+    return {"ok": True,
+            "path": str(path) if path else "",
+            "exists": bool(path) and Path(path).is_file(),
+            "groups": core_settings.groups_payload(),
+            "env_wins": [s.key for s in core_settings.SETTINGS
+                         if os.environ.get(s.key, "").strip()]}
 
 
-def _env_put(ctx: dict) -> dict:
-    """Запись общего .env (PUT /api/env {content | changes}).
+def _settings_put(ctx: dict) -> dict:
+    """Сохранить настройки (PUT /api/settings {values: {КЛЮЧ: значение}}).
 
-    content — ПОЛНАЯ замена файла (создание с нуля / дублирование из
-    шаблона); changes: {KEY: value} — точечная замена
-    (пустое значение — удалить строку ^KEY=, комментарии не трогаем).
-    Значения в ответ не возвращаются."""
-    common = _import_common(ctx)
-    body = ctx["body"]
-    scope = "global"
-    p = _env_path(ctx)
-    if "content" in body:
-        if not isinstance(body["content"], str):
-            raise ApiError(400, "Поле content: строка")
-        common.atomic_write(p, unicodedata.normalize("NFC", body["content"]))
-        keys = [line.split("=", 1)[0].strip()
-                for line in body["content"].splitlines()
-                if "=" in line and not line.lstrip().startswith("#")]
-        return {"ok": True, "scope": scope, "keys": keys}
-    changes = body.get("changes")
-    if not isinstance(changes, dict):
-        raise ApiError(400, "Поле changes: {KEY: value}")
-    text = ""
-    if p.is_file():
-        text = p.read_text(encoding="utf-8", errors="replace")
-    lines = text.splitlines()
-    for key, value in (changes or {}).items():
+    Ключи — только имена реестра: чужой ключ отклоняется, а не дописывается в
+    файл, иначе «одно место истины» распалось бы снова. Значения сливаются с
+    тем, что уже лежит в файле (PAGE PUT не должен терять незапрошенные
+    ключи); пустое значение снимает ключ, без ключей файл удаляется.
+    """
+    values = ctx["body"].get("values")
+    if not isinstance(values, dict):
+        raise ApiError(400, "Поле values: {КЛЮЧ: значение}")
+    clean: dict = {}
+    for key, value in values.items():
         k = str(key).strip()
-        # M4 (AUDIT): ключ — строго [A-Za-z0-9_] (нет '=', пробелов, '\n')
-        if not _ENV_KEY_RE.match(k):
-            raise ApiError(400, f"Некорректный ключ: {key!r}")
-        # M4 (AUDIT): перевод строки в значении — инъекция новых ключей
-        if "\n" in str(value or "") or "\r" in str(value or ""):
-            raise ApiError(400, f"Значение ключа {k!r} не может содержать перевод строки")
-        value = _sanitize_env_value(value)  # один санитайзер на всех (§7)
-        replaced = False
-        for i, line in enumerate(lines):
-            if line.split("=", 1)[0].strip() == k:
-                if value:
-                    lines[i] = f"{k}={value}"
-                else:
-                    del lines[i]
-                replaced = True
-                break
-        if not replaced and value:
-            lines.append(f"{k}={value}")
-    out = "\n".join(lines)
-    if out and not out.endswith("\n"):
-        out += "\n"
-    common.atomic_write(p, out)
-    keys = [line.split("=", 1)[0].strip()
-            for line in lines
-            if "=" in line and not line.lstrip().startswith("#")]
-    return {"ok": True, "scope": scope, "keys": keys}
+        setting = core_settings.BY_KEY.get(k)
+        if setting is None:
+            raise ApiError(400, f"Неизвестный ключ настройки: {k!r}")
+        if setting.secret and str(value or "").strip() == "••••":
+            continue  # приехала маска вместо значения — ключ не трогаем
+        clean[k] = value
+    merged = dict(core_settings.file_values())
+    merged.update(clean)
+    try:
+        stored = core_settings.write_values(merged)
+    except RuntimeError as exc:
+        raise ApiError(500, str(exc))
+    path = core_settings.env_file()
+    return {"ok": True, "keys": stored,
+            "path": str(path) if path else "",
+            "exists": bool(path) and Path(path).is_file(),
+            "env_wins": [s.key for s in core_settings.SETTINGS
+                         if os.environ.get(s.key, "").strip()],
+            "groups": core_settings.groups_payload()}
+
+
+def _register_settings(router: Router) -> None:
+    """Роуты страницы «Настройки» (реестр, а не текст файла)."""
+    router.add("GET", "/api/settings", _settings_get)
+    router.add("PUT", "/api/settings", _settings_put)
 
 
 def _prompts_list(ctx: dict) -> dict:

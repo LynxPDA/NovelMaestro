@@ -53,6 +53,7 @@ from core.stage import (  # noqa: E402
     add_llm_args,
     resolve_profile,
 )
+from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
     _int_count,
     build_chapter_map,
@@ -1079,7 +1080,8 @@ def run_wiki_generation(
 # MAIN
 # ══════════════════════════════════════════════════════════════════════
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Парсер wiki: дефолты полей — из реестра (core/settings.py)."""
     parser = argparse.ArgumentParser(
         description=(
             "Wiki Generator для веб-новелл (RAG + FTS5).\n"
@@ -1252,8 +1254,8 @@ def main():
     )
 
     # ── LLM-сервер: общий блок флагов (core.stage),aliases — старые имена ──
-    add_llm_args(parser, timeout=600, max_retries=10,
-                 max_tokens=65536, aliases=True)
+    # сервер, таймауты, повторы и max_tokens — общий конфиг (core.stage)
+    add_llm_args(parser, aliases=True)
 
     # ── Производительность ──
     g_perf = parser.add_argument_group("Производительность")
@@ -1309,10 +1311,15 @@ def main():
         help="Якоря-ссылки в оглавлении (--no-toc-links — плоский список).",
     )
 
+    core_settings.apply_cli_defaults(parser, "wiki")
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
     # Сервер: CLI > os.environ > .env (общая реализация — core.stage)
-    profile = resolve_profile(args, stage="wiki", max_tokens=65536,
-                              require_model=False)
+    profile = resolve_profile(args, stage="wiki", require_model=False)
 
     # ── Валидация ──
     if args.context_chunks < 1 or args.top < 1 or args.min_count < 1:

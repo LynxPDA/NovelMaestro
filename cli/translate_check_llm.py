@@ -71,10 +71,11 @@ from core.common import (  # noqa: E402
     merge_fix_entries,
     read_text_safe,
 )
+from core import settings as core_settings  # noqa: E402
 
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "translate_check_prompt.txt")
 # Серверный предел ответа стадии, ТОКЕНЫ (не расчёт)
-MAX_TOKENS = 32768
+# предельный размер ответа сервера — общий настройка MAX_TOKENS
 DEFAULT_REVIEW = "tmp/translate_check_llm_review.json"
 
 # ─────────────────────────────────────────────
@@ -1195,7 +1196,7 @@ def main(argv=None) -> int:
     stage = new_stage("translate_check_llm", args, log_fatal=False)
     if args.apply:
         return do_apply(args, stage.logger)
-    return do_check(args, bind_profile(stage, args, max_tokens=MAX_TOKENS))
+    return do_check(args, bind_profile(stage, args))
 
 
 if __name__ == "__main__":

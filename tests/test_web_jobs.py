@@ -7,6 +7,7 @@
 без сети, всё в tmp_path.
 """
 import json
+import os
 import time
 import types
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import cast
 
 import pytest
 
+from core import settings as core_settings
 from web.jobs import Job, JobManager, RING_SIZE
 from web.stages import (
     STAGE_ORDER, STAGE_SPECS, build_command, ordered_stages, script_path,
@@ -972,71 +974,34 @@ def test_build_unknown_stage():
 
 
 # ════════════════════════════════════════════════════════════════════
-# пресеты «Простого режима» (карточка запуска вместо формы)
+# реестр настроек: у стадий одна форма, поля и дефолты — из реестра
 
 
-def test_presets_all_stages():
-    """У стадий с простым режимом — пресет {title, desc} + непустой
-    список simple; params = непустые дефолты полей + overrides;
-    LLM-полей нет (скрипты берут сервер из .env). Стадии без simple
-    (batch_replace/compile) — только экспертные; translate_check —
-    с пресетом «Проверить перевод» (тип файлов в карточке)."""
-    from web.stages import preset_params
-    expert_only = ("batch_replace", "compile")
-    for key in STAGE_ORDER:
-        spec = STAGE_SPECS[key]
+# ════════════════════════════════════════════════════════════════════
+# реестр настроек: у стадий ОДНА форма, поля и дефолты — из реестра
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_specs_are_registry_fields():
+    """Спеки стадий — только title/script/build + поля реестра.
+
+    Пресетов и «простого режима» больше нет: у всех стадий одна форма,
+    состав полей диктует core/settings.py (LLM-полей там тоже нет).
+    """
+    for key, spec in STAGE_SPECS.items():
+        assert "preset" not in spec and "simple" not in spec, key
+        assert [f["name"] for f in spec["fields"]] == \
+            [f["name"] for f in core_settings.form_fields(key)], key
         names = {f["name"] for f in spec["fields"]}
-        if key in expert_only:
-            assert spec.get("preset") is None, key
-            assert not spec.get("simple"), key
-            continue
-        preset = spec.get("preset")
-        assert preset is not None, key
-        assert preset.get("title"), key
-        assert preset.get("desc"), key
-        simple = spec.get("simple") or []
-        assert simple, key  # есть простой режим — есть и поля к карточке
-        assert set(simple) <= names, key
-        params = preset_params(spec)
-        assert set(params) <= names, key
-        assert not {"host", "model", "api_key"} & set(params), key
-        # эталон: непустые дефолты полей + overrides пресета
-        expected = {}
-        for f in spec["fields"]:
-            d = f.get("default")
-            if f["type"] == "bool":
-                expected[f["name"]] = bool(d)
-            elif d is None or str(d) == "":
-                continue
-            elif f["type"] == "files":
-                v = str(d)
-                if f.get("dir") and "/" not in v:
-                    v = f"{f['dir']}/{v}"
-                expected[f["name"]] = v
-            else:
-                expected[f["name"]] = str(d)
-        expected.update(spec.get("preset", {}).get("overrides") or {})
-        assert params == expected, key
-    # translate_check: пресет есть, simple — тип/диапазон
-    tc = STAGE_SPECS["translate_check"]
-    assert tc.get("preset") is not None
-    assert tc.get("simple") == ["check_type", "start", "end"]
+        assert not names & core_settings.LLM_FORM_NAMES, key
 
 
-def test_simple_fields_per_stage():
-    """Состав простого режима по стадиям (согласовано с ТЗ): какие
-    поля показываются в простом режиме к карточке пресета."""
-    expected = {
-        "epub": ["input"],
-        "ner": ["prompt_file", "two_pass"],
-        "ner_check": ["prompt_file", "passes"],
-        "pipeline": ["action", "prompt_file"],
-        "translate_check_llm": ["type", "two_pass", "prompt_file"],
-        "wiki": ["source", "file", "type", "prompt_file", "top",
-                 "min_count", "format", "as_chapter", "save_type"],
-    }
-    for key, names in expected.items():
-        assert STAGE_SPECS[key]["simple"] == names, key
+def test_stage_argv_buildable_from_registry_defaults():
+    """Форма из одних реестровых дефолтов собирается без ошибок."""
+    for key in STAGE_ORDER:
+        argv = build_command(key, core_settings.defaults(key), {})
+        assert argv and argv[0].endswith(".py"), key
+
 
 
 def test_ner_check_no_report_no_apply():
@@ -1048,6 +1013,8 @@ def test_ner_check_no_report_no_apply():
     assert "auto_apply" not in {f["name"] for f in spec["fields"]}
     argv = build_command("ner_check", {"apply": True}, {})
     assert "--apply" not in argv
+
+
 
 
 def test_compile_autofile_defaults():
@@ -1078,7 +1045,8 @@ def test_compile_cover_meta_fields():
         f = by_name.get(name)
         assert f is not None, name
         assert f["type"] == "files" and f["dir"] == "source", name
-        assert f["default"] == "", name
+        # default — только basename: селект наполнен именами файлов книги
+        assert "/" not in str(f["default"]), name
         assert set(f["ext"]) & set(exts), name
     assert "epub_cover" not in by_name and "fb2_cover" not in by_name
     assert "no_donate" not in by_name and "no_fb2_cover" not in by_name
@@ -1120,87 +1088,64 @@ def test_pipeline_no_separate_prompts():
     assert "--translate_prompt" not in argv
 
 
-def test_preset_spot_checks():
-    """Точечные проверки: что реально уедет в params при нажатии
-    «Запустить» в простом режиме."""
-    from web.stages import preset_params
-    # ner: вход — всегда сборка глав в память; глоссарий — ner.json
-    params = preset_params(STAGE_SPECS["ner"])
-    assert "mode" not in params and "file" not in params
-    assert "ner_file" not in params
-    assert params["context_max_len"] == "300"  # дефолт поля context
-    # pipeline: полный цикл, дефолты, без диапазона
-    params = preset_params(STAGE_SPECS["pipeline"])
-    assert params["action"] == "8"
-    assert params["jobs"] == "4"
-    assert "start" not in params and "end" not in params
-    assert "ner_file" not in params
-    # epub: простой режим — только TOC-разбивка, исходник обязателен
-    # (автоподхвата нет); пресет фиксирует режим toc
-    params = preset_params(STAGE_SPECS["epub"])
-    assert params["mode"] == "toc"
-    assert params["title_limit"] == "50"
-    assert "input" not in params
-    # wiki: без выбора глоссария (ner.json — дефолт CLI)
-    params = preset_params(STAGE_SPECS["wiki"])
-    assert "ner_file" not in params
-    assert params["top"] == "80"
-
-
-def test_preset_llm_stage_argv_buildable():
-    """params простого режима LLM-стадий проходят build_command без
-    ошибок (нет обязательных полей, которые бы уронили сборку)."""
-    from web.stages import preset_params
-    for key in ("ner", "ner_check", "translate_check_llm", "wiki"):
-        params = preset_params(STAGE_SPECS[key])
-        argv = build_command(key, params, {})
-        assert argv[0].endswith(".py"), key
-
-
-# ════════════════════════════════════════════════════════════════════
-# U2: дефолты формы == дефолты argparse скриптов (единый источник)
+def _norm(v):
+    """Пустое значение и у формы, и у argparse — '' (None = «не задано»)."""
+    return "" if v is None else v
 
 
 def test_form_defaults_match_script_argparse():
-    """Известные расхождения дефолтов (B6) выравнены: форма → скрипт.
-    Таблица: (стадия, поле) → (build_parser, argparse-dest). При
-    расхождении — скрипт выравнивается под форму (web — основной UI)."""
-    from cli.ner import build_parser as ner_parser
-    from cli.ner_check import build_parser as ner_check_parser
-    from cli.translate_check_llm import build_parser as tcl_parser
+    """Один дефолт на форму и на argparse: и там, и там — реестр.
 
-    table = [
-        ("ner", "threads", ner_parser, "threads"),
-        ("ner_check", "timeout", ner_check_parser, "timeout"),
-        ("translate_check_llm", "max_retries", tcl_parser, "max_retries"),
-    ]
-    # ner_check.fields — скрытое поле чипсов: дефолт пустой, набор полей
-    # считают чипсы из реальных ключей ner.json (term + type/translation/
-    # notes/context, если есть) — со скриптовым дефолтом не сверяется
-    for stage, field, build, dest in table:
-        form_default = STAGE_SPECS[stage]["fields"]
-        f = next(x for x in form_default if x["name"] == field)
-        assert str(f["default"]) == str(build().get_default(dest)), \
-            f"{stage}.{field}: форма {f['default']} ≠ скрипт " \
-            f"{build().get_default(dest)}"
+    Сверяются только поля, у которых у скрипта есть свой флаг; чипсы (noenv)
+    и скрытые настройки в форму не идут.
+    """
+    import importlib
+    mods = {
+        "ner": "cli.ner", "ner_check": "cli.ner_check",
+        "translate_check_llm": "cli.translate_check_llm",
+        "translate_quality": "cli.translate_quality", "wiki": "cli.wiki",
+        "epub": "cli.epub_to_chapters", "compile": "cli.clean_and_compile",
+        "translate_check": "cli.translate_check",
+        "batch_replace": "cli.batch_replace",
+    }
+    checked = 0
+    for stage, mod_name in mods.items():
+        mod = importlib.import_module(mod_name)
+        build = getattr(mod, "build_parser", None) or getattr(
+            mod, "build_argparser", None)
+        assert build is not None, f"{stage}: у скрипта нет build_parser"
+        parser = build()
+        dests = {a.dest for a in parser._actions}
+        for f in core_settings.form_fields(stage):
+            if f.get("noenv") or f["name"] not in dests:
+                continue
+            got = parser.get_default(f["name"])
+            want, have = _norm(f["default"]), _norm(got)
+            if f["type"] == "files":
+                # реестр: «prompts/x.txt»; select: «x.txt» — смысл один
+                want, have = os.path.basename(str(want)), os.path.basename(str(have))
+            if f["type"] == "bool":
+                truthy = (True, "1", 1, "true", "on", "yes")
+                want, have = f["default"] in truthy, got in truthy
+            assert str(want) == str(have), (
+                f"{stage}.{f['name']}: форма {f['default']!r} ≠ скрипт {got!r}")
+            checked += 1
+    assert checked > 40, f"сверено всего {checked} полей — таблица пустая?"
 
-
-# ════════════════════════════════════════════════════════════════════
-# M5: LLM-стадии (2/n/5/7) — build_command + профиль .env
 
 
 def test_m5_stages_in_specs():
+    """LLM-стадии: скрипты на месте, полей подключения в форме нет."""
     for key in ("ner", "ner_check", "translate_check_llm", "wiki"):
         spec = spec_for(key)
         assert spec is not None, key
         assert spec["script"] in ("ner.py", "ner_check.py",
                                    "translate_check_llm.py", "wiki.py")
-        # LLM-поля обязательны (profile убран)
-        names = [f["name"] for f in spec["fields"]]
+        names = {f["name"] for f in spec["fields"]}
         assert "profile" not in names
-        assert "host" in names and "model" in names and "api_key" in names
-        api_f = next(f for f in spec["fields"] if f["name"] == "api_key")
-        assert api_f["type"] == "password"
+        assert not names & core_settings.LLM_FORM_NAMES, \
+            f"{key}: LLM-поля вернулись в форму: {sorted(names)}"
+
 
 
 def test_build_ner_defaults_and_flags():
@@ -1237,434 +1182,82 @@ def test_ner_spec_no_keep_all():
     assert "--keep-all-fields" not in argv2
 
 
-def test_stage_spec_env_prefill(jobs_srv, tmp_path):
-    """C/D: предзаполнение spec из .env — bool "0" → False, files → basename."""
+def test_stage_spec_prefill_from_global_env(jobs_srv, tmp_path, monkeypatch):
+    """Формы предзаполняются значениями общего .env: своего файла книги нет.
+
+    bool «1» → True; files — только basename и только если файл есть;
+    textarea — раскодированный литерал «\\n»; пометок «изменено» нет.
+    """
     port, req, _jm = jobs_srv
     _make_project(port, req)
     pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / "prompts").mkdir(parents=True, exist_ok=True)
     (pdir / "prompts" / "ner_prompt.txt").write_text("промпт",
-                                                       encoding="utf-8")
-    (pdir / ".env").write_text(
-        "NER_PROMPT_FILE=prompts/ner_prompt.txt\n",
-        encoding="utf-8")
-    res, payload = req("GET", "/api/stages/ner/spec?project=ACTIVE/test_book")
-    assert res.status == 200
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    # C: полный путь из .env → basename, селект находит option
-    assert fields["prompt_file"]["default"] == "ner_prompt.txt"
-
-
-def test_stage_spec_env_prefill_skips_missing_file(jobs_srv, tmp_path):
-    """files из .env предзаполняется ТОЛЬКО если файл реально существует:
-    удалённый промпт не остаётся «подхваченным» после перезагрузки."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    (pdir / ".env").write_text(
-        "PIPELINE_PROMPT_FILE=prompts/pipeline_prompt.txt\n",
-        encoding="utf-8")
-    res, payload = req("GET",
-                       "/api/stages/pipeline/spec?project=ACTIVE/test_book")
-    assert res.status == 200
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    # файла нет в prompts/ → дефолт остаётся пустым (не подхватываем)
-    assert fields["prompt_file"]["default"] == ""
-    # отдельные файлы на стадию убраны из спеки
-    assert "translate_prompt" not in fields
-    assert "redact_prompt" not in fields
-
-
-def test_stage_spec_env_prefill_bool_on(jobs_srv, tmp_path):
-    """D: =1 → default True (bool) — на bool-поле формы NER (two_pass)."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    (pdir / ".env").write_text("NER_TWO_PASS=1\n", encoding="utf-8")
-    res, payload = req("GET", "/api/stages/ner/spec?project=ACTIVE/test_book")
-    assert res.status == 200
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    assert fields["two_pass"]["default"] is True
-
-
-def test_stage_spec_env_prefill_global_fallback(jobs_srv, tmp_path,
-                                                 monkeypatch):
-    """Без файла книги форма предзаполняется из общего .env: глобальный
-    конфиг не теряется для свежих книг (книга хранит только отличия)."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    global_env = tmp_path / ".env"
-    global_env.write_text(
-        "MODEL=global-model\n"
-        "PIPELINE_JOBS=2\n",
-        encoding="utf-8")
-    monkeypatch.setenv("WEB_ENV_FILE", str(global_env))
-    res, payload = req(
-        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
-    assert res.status == 200
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    # глобальные MODEL → общая модель, PIPELINE_JOBS → дефолт формы
-    assert fields["model"]["default"] == "global-model"
-    assert fields["jobs"]["default"] == "2"
-
-
-def test_stage_spec_env_prefill_env_var_wins(jobs_srv, tmp_path,
-                                             monkeypatch):
-    """os.environ > .env (канон §7): HOST из окружения (docker compose
-    environment) перекрывает и pdir/.env, и системный .env — иначе
-    форма шлёт --host из файла и переменная деплоя игнорируется."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    (pdir / ".env").write_text("HOST=http://from-file:1234\n",
-                               encoding="utf-8")
-    monkeypatch.setenv("HOST", "http://from-env:9999")
-    res, payload = req(
-        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
-    assert res.status == 200
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    assert fields["host"]["default"] == "http://from-env:9999"
-
-
-def test_stage_spec_env_prefill_project_over_global(jobs_srv, tmp_path,
-                                                    monkeypatch):
-    """Слои префилла: общий .env → файл книги ПО КЛЮЧАМ (книга перекрывает
-    только свои ключи; отсутствующие подхватываются из общего), и спека
-    несёт overridden: чем книга отличается от общего."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    global_env = tmp_path / ".env"
-    global_env.write_text(
-        "MODEL=global-model\nPIPELINE_JOBS=2\n", encoding="utf-8")
-    monkeypatch.setenv("WEB_ENV_FILE", str(global_env))
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    (pdir / ".env").write_text("MODEL=project-model\n", encoding="utf-8")
-    res, payload = req(
-        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
-    assert res.status == 200
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    # книжный MODEL перекрывает общий по ключу
-    assert fields["model"]["default"] == "project-model"
-    # PIPELINE_JOBS в файле книги нет — из общего
-    assert fields["jobs"]["default"] == "2"
-    # пометка «локально изменено» — только у реально изменённого поля;
-    # ключ — тот, которым книга его задала (здесь общее MODEL)
-    assert payload["spec"]["overridden"] == {
-        "model": {"key": "MODEL", "local": "project-model",
-                  "global": "global-model"}}
-
-
-def test_stage_spec_api_key_not_from_global(jobs_srv, tmp_path,
-                                            monkeypatch):
-    """Секреты в префилл из общего слоя не отдаются: API_KEY общего .env
-    не попадает в спеку (при --auth маскировка /api/env его не прикрывает).
-    Только собственный файл книги."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    global_env = tmp_path / ".env"
-    global_env.write_text("API_KEY=super-secret\n", encoding="utf-8")
-    monkeypatch.setenv("WEB_ENV_FILE", str(global_env))
-    res, payload = req(
-        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
-    assert res.status == 200
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    assert fields["api_key"]["default"] == ""
-
-
-def test_stage_spec_api_key_from_project_env(jobs_srv, tmp_path,
-                                             monkeypatch):
-    """Собственный файл книги может задавать ключ стадии — он
-    предзаполняется в форму (локальный однопользовательский проект)."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    monkeypatch.setenv("WEB_ENV_FILE",
-                       str(tmp_path / "общего-файла-нет.env"))
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    (pdir / ".env").write_text("PIPELINE_API_KEY=proj-key\n",
-                               encoding="utf-8")
-    res, payload = req(
-        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
-    assert res.status == 200
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    assert fields["api_key"]["default"] == "proj-key"
-
-
-def test_persist_run_params_llm_deviation(tmp_path, monkeypatch):
-    """LLM-подключение (host/model) пишется в файл книги только при отличии
-    от общего эффективного значения; совпадающее — СНИМАЕТ оверрайд, и
-    глобальная смена сервера доезжает до книги. Файл книги — чистый diff:
-    шапка + только отличия, отсортированные по ключам."""
-    from web.api import _persist_run_params
-    monkeypatch.setenv("WEB_ENV_FILE",
-                       str(tmp_path / "общего-файла-нет.env"))
-    monkeypatch.setenv("HOST", "http://global:9999")
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    pdir.mkdir(parents=True)
-    (pdir / ".env").write_text(
-        "PIPELINE_HOST=http://old:1\nNER_CHUNK_SIZE=5\n",
-        encoding="utf-8")
-    ctx = {"repo_root": tmp_path}
-    kept = _persist_run_params(ctx, pdir, "pipeline", {
-        "host": "http://global:9999",   # == общему → оверрайд снять
-        "model": "custom-model",         # отличается → пишется
-    })
-    env = _env_map(pdir / ".env")
-    assert "PIPELINE_HOST" not in env
-    assert env["PIPELINE_MODEL"] == "custom-model"
-    assert env["NER_CHUNK_SIZE"] == "5"      # отличия других стадий целы
-    assert kept == ["NER_CHUNK_SIZE", "PIPELINE_MODEL"]
-    text = (pdir / ".env").read_text(encoding="utf-8")
-    assert "локальные отличия книги" in text
-    assert "HOST=http://global:9999" not in text  # общее не копируется
-
-
-def test_persist_run_params_llm_absent_untouched(tmp_path, monkeypatch):
-    """Поле LLM-подключения не пришло в params (простой режим) —
-    существующее отличие книги не трогается."""
-    from web.api import _persist_run_params
-    monkeypatch.setenv("WEB_ENV_FILE",
-                       str(tmp_path / "общего-файла-нет.env"))
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    pdir.mkdir(parents=True)
-    (pdir / ".env").write_text("PIPELINE_HOST=http://old:1\n",
-                               encoding="utf-8")
-    ctx = {"repo_root": tmp_path}
-    _persist_run_params(ctx, pdir, "pipeline", {"model": "m2"})
-    text = (pdir / ".env").read_text(encoding="utf-8")
-    assert "PIPELINE_HOST=http://old:1" in text
-    assert "PIPELINE_MODEL=m2" in text
-
-
-def test_persist_run_params_llm_equal_no_file(tmp_path, monkeypatch):
-    """Совпадение с общим при отсутствии файла книги — файл зря не
-    создаётся: копия общего конфига больше не пишется."""
-    from web.api import _persist_run_params
-    monkeypatch.setenv("WEB_ENV_FILE",
-                       str(tmp_path / "общего-файла-нет.env"))
-    monkeypatch.setenv("HOST", "http://global:9999")
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    pdir.mkdir(parents=True)
-    ctx = {"repo_root": tmp_path}
-    _persist_run_params(ctx, pdir, "pipeline",
-                        {"host": "http://global:9999"})
-    assert not (pdir / ".env").exists()
-
-
-def test_persist_run_params_legacy_copy_collapses(tmp_path, monkeypatch):
-    """Старая pdir/.env — копия общего конфига — схлопывается в diff:
-    ключи, совпадающие с общим, пустые значения и WEB_* из файла книги
-    уходят; остаётся только реальное отличие книги."""
-    from web.api import _persist_run_params
-    shared = tmp_path / ".env"
-    shared.write_text("HOST=http://shared\nMODEL=m\nWEB_PORT=8756\n",
-                      encoding="utf-8")
-    monkeypatch.setenv("WEB_ENV_FILE", str(shared))
-    for k in ("HOST", "MODEL", "API_KEY"):
-        monkeypatch.delenv(k, raising=False)
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    pdir.mkdir(parents=True)
-    (pdir / ".env").write_text(
-        "# копия системного .env\n"
-        "HOST=http://shared\n"
-        "MODEL=m\n"
-        "PIPELINE_JOBS=7\n"
-        "WEB_PORT=8756\n"
-        "NER_MODEL=\n",
-        encoding="utf-8")
-    ctx = {"repo_root": tmp_path}
-    kept = _persist_run_params(ctx, pdir, "pipeline", {})
-    assert _env_map(pdir / ".env") == {"PIPELINE_JOBS": "7"}
-    assert kept == ["PIPELINE_JOBS"]
-
-
-def test_stage_reset_clears_stage_overrides(jobs_srv, tmp_path, monkeypatch):
-    """POST /api/stages/{key}/reset: ключи стадии уходят из файла книги,
-    чужие отличия остаются, поле предзаполняется общим .env; когда от
-    стадии осталась пустота — файл книги удаляется вместе с чистым diff."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    shared = tmp_path / ".env"
-    shared.write_text("MODEL=общая-модель\n", encoding="utf-8")
-    monkeypatch.setenv("WEB_ENV_FILE", str(shared))
-    monkeypatch.delenv("MODEL", raising=False)
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    (pdir / ".env").write_text(
-        "PIPELINE_MODEL=книжная\nNER_CHUNK_SIZE=5\n", encoding="utf-8")
-    res, payload = req("POST", "/api/stages/pipeline/reset",
-                       {"project": "ACTIVE/test_book"})
-    assert res.status == 200
-    assert payload["reset"] == {"stage": "pipeline", "kept": ["NER_CHUNK_SIZE"]}
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    # форма снова предзаполнена общим конфигом, пометок оверрайда нет
-    assert fields["model"]["default"] == "общая-модель"
-    assert payload["spec"]["overridden"] == {}
-    assert "PIPELINE_MODEL" not in (pdir / ".env").read_text(encoding="utf-8")
-    # снимаем и последнее отличие — файл книги больше не нужен
-    res, payload = req("POST", "/api/stages/ner/reset",
-                       {"project": "ACTIVE/test_book"})
-    assert res.status == 200
-    assert payload["reset"]["kept"] == []
-    assert not (pdir / ".env").exists()
-
-
-def test_stage_reset_unknown_stage(jobs_srv, tmp_path):
-    """reset по незнакомой стадии — 404; без project — 400."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    res, _payload = req("POST", "/api/stages/no_such_stage/reset",
-                        {"project": "ACTIVE/test_book"})
-    assert res.status == 404
-    res, payload = req("POST", "/api/stages/pipeline/reset", {})
-    assert res.status == 400 and "project" in payload["error"]
-
-
-def test_env_global_respects_web_env_file(jobs_srv, tmp_path, monkeypatch):
-    """WEB_ENV_FILE (Docker: projects/.env в томе) — системный .env для
-    /api/env scope=global: GET читает его, PUT пишет в него — правки
-    вкладки «Настройки» переживают обновление образа."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    env_file = tmp_path / "deploy.env"
-    monkeypatch.setenv("WEB_ENV_FILE", str(env_file))
-    res, payload = req("GET", "/api/env?scope=global")
-    assert res.status == 200 and payload["exists"] is False
-    res, payload = req("PUT", "/api/env",
-                       {"scope": "global", "changes": {"MARK": "v1"}})
-    assert res.status == 200
-    text = env_file.read_text(encoding="utf-8")
-    assert "MARK=v1" in text
-    res, payload = req("GET", "/api/env?scope=global")
-    assert res.status == 200 and payload["exists"]
-    assert payload["keys"] == ["MARK"]
-
-
-def test_env_global_sources_and_env_extra(jobs_srv, tmp_path, monkeypatch):
-    """Прозрачность слоёв (scope=global): sources помечает ключи файла,
-    перекрытые os.environ (правка не применится); env_extra — ключи
-    окружения вне файла (имена, без значений)."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    env_file = tmp_path / "deploy.env"
-    env_file.write_text("HOST=http://file:1\nMODEL=m\n", encoding="utf-8")
-    monkeypatch.setenv("WEB_ENV_FILE", str(env_file))
-    monkeypatch.setenv("HOST", "http://env:2")     # перекрывает файл
-    monkeypatch.setenv("WEB_JOBS_LIMIT", "3")      # вне файла
-    monkeypatch.setenv("lowercase_var", "x")       # не ENV_STYLE — мимо
-    monkeypatch.setenv("NVM_BIN", "/x")            # шелл-шум — мимо
-    res, payload = req("GET", "/api/env?scope=global")
-    assert res.status == 200
-    assert payload["sources"] == {"HOST": "env", "MODEL": "file"}
-    assert "WEB_JOBS_LIMIT" in payload["env_extra"]
-    assert "HOST" not in payload["env_extra"] and "MODEL" not \
-        in payload["env_extra"]
-    assert "lowercase_var" not in payload["env_extra"]
-    assert "NVM_BIN" not in payload["env_extra"]
-
-
-def test_is_env_config_key():
-    """Фильтр env_extra: наши ключи — да, шелл-шум сессии — нет."""
-    from web.api import _is_env_config_key
-    for k in ("HOST", "API_KEY", "MODEL", "TZ", "WEB_PORT",
-              "PIPELINE_JOBS", "TRANSLATE_CHECK_NEIGHBOR",
-              "NER_CHUNK_SIZE", "NER_CHECK_SAVE_INTERVAL",
-              "WIKI_MODEL", "BATCH_REPLACE_REPLACEMENTS",
-              "EPUB_SPLIT_PATTERNS", "COMPILE_COVER",
-              "NER_CHECK_HOST", "TRANSLATE_CHECK_LLM_MODEL"):
-        assert _is_env_config_key(k), k
-    for k in ("PATH", "NVM_BIN", "LS_COLORS", "SSH_CLIENT", "AI_AGENT",
-              "lowercase_var", "LANG"):
-        assert not _is_env_config_key(k), k
-
-
-def test_persist_run_params_creates_diff_file(tmp_path, monkeypatch):
-    """Файл книги создаётся ТОЛЬКО с реальным отличием: общий конфиг
-    (WEB_ENV_FILE — системный .env Docker) в него не копируется; поля,
-    которых в файле нет, читаются из общего слоя."""
-    from web.api import _persist_run_params
-    env_file = tmp_path / "deploy.env"
-    env_file.write_text("HOST=http://sys-env:1\nMODEL=mm\n",
-                        encoding="utf-8")
-    monkeypatch.setenv("WEB_ENV_FILE", str(env_file))
-    for k in ("HOST", "MODEL", "API_KEY"):
-        monkeypatch.delenv(k, raising=False)
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    pdir.mkdir(parents=True)
-    ctx = {"repo_root": tmp_path}
-    kept = _persist_run_params(ctx, pdir, "ner", {"chunk_size": "123"})
-    assert _env_map(pdir / ".env") == {"NER_CHUNK_SIZE": "123"}
-    assert kept == ["NER_CHUNK_SIZE"]
-
-
-def test_stage_spec_prefill_from_web_env_file(jobs_srv, tmp_path,
-                                              monkeypatch):
-    """Префилл: глобальный слой = WEB_ENV_FILE (системный .env Docker)."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    env_file = tmp_path / "deploy.env"
-    env_file.write_text("HOST=http://deploy:9\n", encoding="utf-8")
-    monkeypatch.setenv("WEB_ENV_FILE", str(env_file))
-    res, payload = req(
-        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
-    assert res.status == 200
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    assert fields["host"]["default"] == "http://deploy:9"
-
-
-def test_stage_spec_env_prefill_textarea(jobs_srv, tmp_path):
-    """Многстрочные regexp в .env — одной строкой с литералом «\\n»:
-    префилл раскодирует в реальные переносы (textarea)."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    (pdir / ".env").write_text(
-        "TRANSLATE_CHECK_REGEXP_CHECKS=[一-鿿]+\\n[a-zA-Z]+\\n",
-        encoding="utf-8")
-    res, payload = req(
-        "GET",
-        "/api/stages/translate_check/spec?project=ACTIVE/test_book")
-    assert res.status == 200
-    fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    assert fields["regexp_checks"]["default"] == "[一-鿿]+\n[a-zA-Z]+"
-
-
-def test_stage_spec_env_prefill_translate_check_struct(jobs_srv, tmp_path):
-    """Структурные настройки translate_check предзаполняются из
-    .env: мин. размер (число), последовательность (булево — строкой
-    "0"). header_regexp удалён целиком (web и CLI) — env-ключ
-    игнорируется."""
-    port, req, _jm = jobs_srv
-    _make_project(port, req)
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    (pdir / ".env").write_text(
+                                                     encoding="utf-8")
+    NL = chr(92) + "n"
+    shared = tmp_path / "shared.env"
+    shared.write_text(
+        "NER_PROMPT_FILE=prompts/ner_prompt.txt\n"
+        "NER_TWO_PASS=1\n"
+        f"TRANSLATE_CHECK_REGEXP_CHECKS=[一-鿿]+{NL}[a-zA-Z]+{NL}\n"
         "TRANSLATE_CHECK_MIN_FILE_SIZE=5000\n"
-        "TRANSLATE_CHECK_HEADER_REGEXP=^Раздел\\s+\\d+\n"
         "TRANSLATE_CHECK_SEQUENCE_CHECK=0\n",
         encoding="utf-8")
-    res, payload = req(
-        "GET",
-        "/api/stages/translate_check/spec?project=ACTIVE/test_book")
+    monkeypatch.setenv("WEB_ENV_FILE", str(shared))
+    res, payload = req("GET", "/api/stages/ner/spec?project=ACTIVE/test_book")
     assert res.status == 200
     fields = {f["name"]: f for f in payload["spec"]["fields"]}
-    assert fields["min_file_size"]["default"] == "5000"
-    assert "header_regexp" not in fields
+    # C: полный путь из конфига → basename, селект находит option
+    assert fields["prompt_file"]["default"] == "ner_prompt.txt"
+    # D: =1 → True на bool-поле
+    assert fields["two_pass"]["default"] is True
+    # «мёртвый» files-выбор не предзаполняется: файла в prompts/ нет
+    res, payload = req("GET",
+                       "/api/stages/pipeline/spec?project=ACTIVE/test_book")
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    assert fields["prompt_file"]["default"] == ""
+    # многострочный regexp: литерал «\n» → реальные переносы
+    res, payload = req("GET",
+                       "/api/stages/translate_check/spec"
+                       "?project=ACTIVE/test_book")
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    assert fields["regexp_checks"]["default"] == "[一-鿿]+\n[a-zA-Z]+"
+    assert fields["min_file_size"]["default"] == 5000
     assert fields["sequence_check"]["default"] is False
+    # header_regexp удалён из модели целиком
+    assert "header_regexp" not in fields
+    # пометок «локально изменено» в ответе больше нет
+    assert "overridden" not in payload["spec"]
 
 
-def test_persist_run_params_textarea_encode(tmp_path):
-    """Запись textarea в .env: переносы кодируются литералом «\\n»
-    (одно значение .env — одна строка)."""
-    from web.api import _persist_run_params
-    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
-    pdir.mkdir(parents=True)
-    ctx = {"repo_root": tmp_path}
-    _persist_run_params(ctx, pdir, "batch_replace", {
-        "replacements": "Глава \\d+ -> №\\g<0>\n\\s+ -> ",
-    })
-    env = pdir / ".env"
-    assert env.is_file()
-    text = env.read_text(encoding="utf-8")
-    assert "BATCH_REPLACE_REPLACEMENTS=Глава \\d+ -> №\\g<0>\\n\\s+ ->" \
-        in text
-    assert "\n\\s+ ->" not in text  # реальных переносов нет
+def test_stage_spec_prefill_env_var_wins(jobs_srv, tmp_path, monkeypatch):
+    """os.environ > общий .env (канон §7): переменная деплоя важнее файла."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    shared = tmp_path / "shared.env"
+    shared.write_text("PIPELINE_CHUNK_SIZE=7000\n", encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(shared))
+    monkeypatch.setenv("PIPELINE_CHUNK_SIZE", "9000")
+    res, payload = req(
+        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    fields = {f["name"]: f for f in payload["spec"]["fields"]}
+    assert fields["chunk_size"]["default"] == 9000
+
+
+def test_stage_spec_has_no_llm_fields(jobs_srv, tmp_path, monkeypatch):
+    """Спека стадии не отдаёт LLM-полей: сервер, модель и ключ — общие."""
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    monkeypatch.setenv("WEB_ENV_FILE",
+                       str(tmp_path / "общего-файла-нет.env"))
+    res, payload = req(
+        "GET", "/api/stages/pipeline/spec?project=ACTIVE/test_book")
+    assert res.status == 200
+    names = {f["name"] for f in payload["spec"]["fields"]}
+    assert not names & {"host", "model", "api_key", "jobs", "threads",
+                        "timeout", "max_retries", "temperature"}
+
 
 
 def test_build_ner_always_compile_chapters():
@@ -1735,7 +1328,7 @@ def test_ner_check_passes_modes():
     f = next(x for x in STAGE_SPECS["ner_check"]["fields"]
              if x["name"] == "passes")
     assert f["label"] == "Режимы"
-    assert f["options"] == ["whole", "types", "rag"]
+    assert list(f["options"]) == ["whole", "types", "rag"]
     assert "all" not in f["options"]
     assert f["default"] == "whole"
     # дефолтный запуск без passes → --passes whole
@@ -1948,31 +1541,29 @@ def test_build_wiki_toc_off():
 
 
 def test_llm_profile_from_env(tmp_path, monkeypatch):
-    """единый сервер из .env → host/model/api_key подставляются."""
+    """Единый сервер из общего .env → host/model в argv, ключ — в ctx."""
     env = tmp_path / ".env"
     env.write_text(
         "HOST=http://192.168.1.8:9989\n"
         "API_KEY=secret-key\n"
-        "MODEL=local-model\n"
-        "NER_MODEL=ner-model\n",
+        "MODEL=local-model\n",
         encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(env))
-    form = {"file": "compiled_book.txt"}
-    ctx: dict = {"project_dir": str(tmp_path)}
-    argv = build_command("ner", form, ctx)
+    for k in ("HOST", "API_KEY", "MODEL", "THREADS"):
+        monkeypatch.delenv(k, raising=False)
+    ctx: dict = {}
+    argv = build_command("ner", {"file": "compiled_book.txt"}, ctx)
     joined = " ".join(argv)
-    assert "--host" in joined and "http://192.168.1.8:9989" in joined
+    assert "http://192.168.1.8:9989" in joined
     # P1 (AUDIT #2): ключ НЕ в argv — он уходит в ctx["_llm_api_key"]
     assert "--api_key" not in joined and "secret-key" not in joined
     assert ctx.get("_llm_api_key") == "secret-key"
-    # стадийная модель приоритетнее общей
-    assert "--model" in joined and "ner-model" in joined
-    # модель стадии NER приоритетнее общей
-    assert "--model" in joined and "ner-model" in joined
+    assert "--model" in joined and "local-model" in joined
 
 
-def test_llm_stage_keys_from_env(tmp_path, monkeypatch):
-    """Стадийные NER_HOST/NER_API_KEY приоритетнее общих HOST/API_KEY."""
+def test_llm_stage_keys_are_ignored(tmp_path, monkeypatch):
+    """Стадийные NER_HOST/NER_MODEL/NER_API_KEY игнорируются: сервер,
+    ключ и модель конвейера — одни на все стадии."""
     env = tmp_path / ".env"
     env.write_text(
         "HOST=http://общий:9989\n"
@@ -1983,37 +1574,34 @@ def test_llm_stage_keys_from_env(tmp_path, monkeypatch):
         "NER_MODEL=нер-модель\n",
         encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(env))
-    ctx: dict = {"project_dir": str(tmp_path)}
-    argv = build_command("ner", {"file": "book.txt"}, ctx)
-    joined = " ".join(argv)
-    assert "http://нер:9989" in joined and "http://общий:9989" not in joined
-    assert "нер-модель" in joined
-    assert ctx.get("_llm_api_key") == "нер-ключ"
-
-    # другой стадии (wiki) стадийные ключи не мешают — общие
-    ctx2: dict = {"project_dir": str(tmp_path)}
-    argv2 = build_command("wiki", {"file": "book.txt"}, ctx2)
-    joined2 = " ".join(argv2)
-    assert "http://общий:9989" in joined2
-    assert ctx2.get("_llm_api_key") == "общий-ключ"
+    for k in ("HOST", "API_KEY", "MODEL", "THREADS"):
+        monkeypatch.delenv(k, raising=False)
+    ctx: dict = {}
+    joined = " ".join(build_command("ner", {"file": "book.txt"}, ctx))
+    assert "http://общий:9989" in joined
+    assert "http://нер:9989" not in joined and "нер-модель" not in joined
+    assert ctx.get("_llm_api_key") == "общий-ключ"
 
 
-def test_llm_cli_overrides_env(tmp_path, monkeypatch):
-    """Явные host/model/api_key в форме приоритетнее .env ."""
+def test_llm_form_fields_are_ignored(tmp_path, monkeypatch):
+    """Что бы ни пришло в форме под историческими именами полей — в argv
+    уходит общий конфиг: «свой сервер у стадии» больше не существует."""
     env = tmp_path / ".env"
     env.write_text("HOST=http://old:9989\nAPI_KEY=old\n"
                     "MODEL=old-model\n", encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(env))
+    for k in ("HOST", "API_KEY", "MODEL", "THREADS"):
+        monkeypatch.delenv(k, raising=False)
     form = {"host": "http://new:9989",
             "model": "new-model", "api_key": "new-key"}
-    ctx: dict = {"project_dir": str(tmp_path)}
+    ctx: dict = {}
     argv = build_command("ner", form, ctx)
     joined = " ".join(argv)
-    assert "http://new:9989" in joined and "http://old:9989" not in joined
-    assert "new-model" in joined and "old-model" not in joined
-    # ключ — в ctx, а не в argv
+    assert "http://old:9989" in joined and "http://new:9989" not in joined
+    assert "old-model" in joined and "new-model" not in joined
     assert "--api_key" not in joined and "new-key" not in joined
-    assert ctx.get("_llm_api_key") == "new-key"
+    assert ctx.get("_llm_api_key") == "old"
+
 
 
 def test_llm_no_profile_no_env(tmp_path, monkeypatch):
@@ -2257,31 +1845,34 @@ def test_jobs_start_and_status(jobs_srv, fake_script):
 
 
 def test_jobs_start_validates_numeric_bounds(jobs_srv):
-    """Числовые поля с min/max из spec: недопустимое значение → 400
-    ДО запуска (скрипт бы упал с кодом 2 и «failed» без причины)."""
+    """Числовые поля стадии с min/max из реестра: недопустимое значение → 400
+    ДО запуска (скрипт бы упал с кодом 2 и «failed» без причины).
+
+    Потоки/таймауты — общие настройки: форма запусков их не шлёт, а stale
+    значения из кэша браузера перекрываются общим конфигом.
+    """
     port, req, jm = jobs_srv
     _make_project(port, req)
-    # jobs > 16 — отказ с понятной ошибкой
     res, payload = req("POST", "/api/jobs",
                        {"action": "pipeline",
                         "project": "ACTIVE/test_book",
-                        "params": {"jobs": "30"}})
+                        "params": {"fewshot_k": "30"}})
     assert res.status == 400, payload
-    assert "максимум 16" in payload.get("error", "")
-    # jobs < 1 — отказ
+    assert "максимум 20" in payload.get("error", "")
     res, payload = req("POST", "/api/jobs",
                        {"action": "pipeline",
                         "project": "ACTIVE/test_book",
-                        "params": {"jobs": "0"}})
+                        "params": {"chunk_size": "0"}})
     assert res.status == 400, payload
     assert "минимум 1" in payload.get("error", "")
-    # допустимые значения проходят (400 дальше не случится: стадия
-    # pipeline требует файлы; валидна только граница)
+    # допустимое значение границу проходит (стадия падает уже на файлах)
     res, payload = req("POST", "/api/jobs",
                        {"action": "pipeline",
                         "project": "ACTIVE/test_book",
-                        "params": {"jobs": "2"}})
+                        "params": {"fewshot_k": "2"}})
     assert res.status != 400 or "максимум" not in payload.get("error", "")
+    assert res.status != 400 or "минимум" not in payload.get("error", "")
+
 
 
 def test_jobs_history_trimmed(jobs_srv):

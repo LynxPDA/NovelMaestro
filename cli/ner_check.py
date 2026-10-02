@@ -87,6 +87,7 @@ from core.stage import (  # noqa: E402
     bind_profile,
     new_stage,
 )
+from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
     REVIEW_ACCEPT,
     REVIEW_DELETE,
@@ -119,7 +120,7 @@ from core.common import (  # noqa: E402
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "ner_check_prompt.txt")
 DEFAULT_REVIEW = "tmp/ner_review.json"
 # Серверный предел ответа стадии, ТОКЕНЫ (не расчёт)
-MAX_TOKENS = 65536
+# предельный размер ответа сервера — общий настройка MAX_TOKENS
 
 
 def _bak_path(input_path: str) -> str:
@@ -352,10 +353,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-bak", action="store_true",
                    help="Не создавать бэкап <файл>.bak при применении "
                         "(по умолчанию создаётся).")
-    # сервер: CLI > os.environ > .env (общий блок флагов — core.stage)
-    add_llm_args(p, timeout=300, max_tokens=MAX_TOKENS,
-                 aliases=True)
-    return p
+    # сервер: CLI > os.environ > общий .env (общий блок флагов — core.stage);
+    # собственных таймаутов и max_tokens у стадии больше нет
+    add_llm_args(p, aliases=True)
+    return core_settings.apply_cli_defaults(p, "ner_check")
 
 
 def load_ner_json(path: str, logger):
@@ -687,7 +688,11 @@ def run_rag(args, stage, prompt_tpl) -> int:
         logger.error("❌ RAG: пустой список терминов (--rag_terms).")
         return 1
     # книга для FTS5: сборка глав в память (--rag_source_type) или
-    # legacy txt-файл (--rag_novel)
+    # legacy txt-файл (--rag_novel). Пустой тип = авто: что нашлось на диске
+    # (главы → главы, иначе legacy-файл).
+    if not args.rag_source_type and not args.rag_novel:
+        if os.path.isdir(args.chapters_dir):
+            args.rag_source_type = "chapter"
     if args.rag_source_type:
         text, info = compile_chapter_text(
             args.chapters_dir, want=args.rag_source_type,
@@ -1082,7 +1087,7 @@ def main(argv=None) -> int:
     stage = new_stage("ner_check", args)
     if args.apply:
         return do_apply(args, stage.logger)
-    return do_check(args, bind_profile(stage, args, max_tokens=MAX_TOKENS))
+    return do_check(args, bind_profile(stage, args))
 
 
 if __name__ == "__main__":

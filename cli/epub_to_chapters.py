@@ -61,6 +61,7 @@ from core.common import (  # noqa: E402
     trim_rule_left,
     trim_rule_right,
 )
+from core import settings as core_settings  # noqa: E402
 
 # ======================== HTML → TEXT ==================================
 SKIP_TAGS  = {"script", "style", "head", "title", "svg", "rt", "rp"}
@@ -811,6 +812,7 @@ def build_parser():
     g.add_argument("--report", type=Path,
                    default=Path("./logs/epub_to_txt_clean_report.txt"),
                    metavar="FILE", help="Лог удалённых фрагментов")
+    core_settings.apply_cli_defaults(p, "epub")
     return p
 
 

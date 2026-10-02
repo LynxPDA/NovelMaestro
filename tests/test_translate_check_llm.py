@@ -142,14 +142,13 @@ def test_stage_complete_delegates(seam):
     """Один вызов стадии: messages, сервер и предохранитель — из профиля."""
     seam.answers.append("ОТВЕТ")
     stage = make_stage(base_url="h", model="m", api_key="k", timeout=30,
-                       stream_timeout=60, max_retries=2,
-                       max_tokens=FE.MAX_TOKENS)
+                       stream_timeout=60, max_retries=2, max_tokens=1234)
     out, err = stage.complete("с", "ю", label="[X]")
     assert (out, err) == ("ОТВЕТ", None)
     call = seam.calls[-1]
     assert len(call["messages"]) == 2
     assert call["base_url"] == "h"
-    assert call["kw"]["max_tokens"] == FE.MAX_TOKENS
+    assert call["kw"]["max_tokens"] == 1234
     assert (call["kw"]["timeout"], call["kw"]["stream_timeout"]) == (30, 60)
     assert call["kw"]["max_retries"] == 2 and call["model"] == "m"
     # унифицированный формат: промпт в user, system пустой

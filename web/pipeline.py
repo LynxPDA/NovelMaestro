@@ -41,8 +41,9 @@ def _bootstrap_core() -> None:
 
 
 _bootstrap_core()
+from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
-    PROGRESS_PREFIX, build_chapter_map, env_overlay, format_ranges,
+    PROGRESS_PREFIX, build_chapter_map, format_ranges,
     get_server_config, load_env,
 )
 
@@ -76,18 +77,12 @@ _ACTION_SPECS: dict[int, dict] = {
     9: {"stages": [1],
         "name": "Перевод с расширенным контекстом", "extended": True},
 }
-# Дефолты конвейера. Переопределяются из .env: PIPELINE_TIMEOUT,
-# PIPELINE_STREAM_TIMEOUT, PIPELINE_MAX_RETRIES, PIPELINE_CHUNK_SIZE,
-# PIPELINE_NER_THRESHOLD, PIPELINE_NER_NGRAM, PIPELINE_JOBS (R5-H).
-_DEFAULTS = {
-    "timeout": 300,        # сек на один LLM-запрос внутри стадии
-    "stream_timeout": 300,  # сек простоя стрима
-    "max_retries": 3,
-    "chunk_size": 7000,    # ТОКЕНЫ (оценка estimate_tokens)
-    "ner_threshold": 0.75,
-    "ner_ngram": 3,
-    "jobs": 4,
-}
+# Дефолты конвейера — из реестра настроек core/settings.py: стадийные поля
+# (PIPELINE_*) плюс общие LLM-ключи (HOST/MODEL/THREADS/TIMEOUT/...). Порядок
+# слоёв один на весь проект: реестр → общий .env → os.environ. Своего словаря
+# дефолтов и своего чтения .env здесь больше нет.
+_DEFAULTS = core_settings.stage_values("pipeline")
+_DEFAULTS.update(core_settings.llm_values())
 # M7 (AUDIT): возвращено как было — текст перевода НЕ попадает в stdout
 # скриптов (только прогресс/ошибки), лишняя настройка PIPELINE_ERROR_WORDS
 # отменена по решению пользователя; жёсткий список ловит реальные сбои.
@@ -330,8 +325,8 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     fewshot_k: int = 3, fewshot_threshold: float = 0.3,
                     request_budget: int = 0,
                     chunk_size: int | None = None) -> list[str]:
-    # единая модель конвейера (PIPELINE_MODEL → MODEL) — без
-    # отдельных моделей под translate/redact/polish
+    # модель, сервер и ключ конвейера — одни на все стадии (translate,
+    # redact, polish), стадийных ключей больше нет
     common = [
         "--host", host,
         "--model", model,
@@ -588,8 +583,8 @@ def main() -> None:
     ap.add_argument("--stream_timeout", type=int, default=None,
                     help="Таймаут простоя стрима, сек")
     ap.add_argument("--max_retries", type=int, default=None,
-                    help="Повторы LLM-запроса (по умолчанию "
-                         "PIPELINE_MAX_RETRIES из .env → 3)")
+                    help="Повторы LLM-запроса (по умолчанию общий "
+                         "MAX_RETRIES из .env → 3)")
     ap.add_argument("--temperature", type=float, default=None,
                     help="Температура LLM (пусто = сервер)")
     # рассуждения модели — НЕ параметр конвейера: режим один на весь запуск
@@ -598,7 +593,7 @@ def main() -> None:
     ap.add_argument("--host", default="", help="URL LLM-сервера (пусто = HOST из .env)")
     ap.add_argument("--api_key", default="", help="API-ключ (argv — только для тестов; в web идёт через LLM_API_KEY)")
     ap.add_argument("--model", default="",
-                    help="Модель (пусто = PIPELINE_MODEL из .env → MODEL)")
+                    help="Модель (пусто = общая MODEL из .env)")
     ap.add_argument("--env_file", default=None, help="Путь к .env")
     ap.add_argument("--script", default=None,
                     help="Путь к translate_book.py (обычно не нужен)")
@@ -641,23 +636,12 @@ def main() -> None:
     args = ap.parse_args()
 
     log = logging.getLogger("web.pipeline")
-    # PIPELINE_* из .env переопределяют дефолты (R5-H); os.environ
-    # приоритетнее файла (канон §7: окружение > файл). Слои файлов:
-    # общий .env, поверх — собственный diff книги.
+    # Дефолты слоя уже посчитаны реестром (стадийные PIPELINE_* + общие
+    # LLM-ключи; os.environ приоритетнее файла, канон §7). Файл читается один
+    # раз и на модели: свой .env у книги больше нет, локальные значения
+    # запусков живут в браузере.
     env_data = load_env(args.env_file)
-    env_data = env_overlay(
-        env_data, [f"PIPELINE_{k.upper()}" for k in _DEFAULTS])
-    for key, default in list(_DEFAULTS.items()):
-        raw = env_data.get(f"PIPELINE_{key.upper()}")
-        if raw is None:
-            continue
-        try:
-            _DEFAULTS[key] = (float(raw) if key == "ner_threshold"
-                              else int(raw))
-        except ValueError as exc:
-            log.warning("PIPELINE_%s=%r не число (%s); дефолт: %r",
-                        key.upper(), raw, exc, default)
-    args.jobs = args.jobs or _DEFAULTS["jobs"]
+    args.jobs = args.jobs or _DEFAULTS["threads"]
     args.timeout = args.timeout or _DEFAULTS["timeout"]
     args.stream_timeout = args.stream_timeout or _DEFAULTS["stream_timeout"]
     args.max_retries = (args.max_retries
@@ -687,8 +671,8 @@ def main() -> None:
         log.error("translate_book.py не найден: %s", script)
         sys.exit(1)
 
-    # сервер: явные CLI > PIPELINE_HOST/API_KEY/MODEL из .env > LLM_API_KEY
-    sc = get_server_config(env_data, "pipeline")
+    # сервер: явные CLI > HOST/API_KEY/MODEL общего .env > os.environ
+    sc = get_server_config(env_data)
     host = args.host or sc["host"]
     api_key = args.api_key or sc["api_key"]
     if not api_key:

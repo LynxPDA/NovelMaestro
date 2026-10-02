@@ -26,9 +26,9 @@ AGENTS_MD = ROOT / "AGENTS.md"
 
 # Зеркало таблицы «Что использовать из core/common.py» (AGENTS.md §6)
 CORE_API = [
-    "parse_dotenv", "system_env_file", "project_env_file", "env_files",
+    "parse_dotenv", "system_env_file", "env_files",
     "load_env", "env_overlay",
-    "get_server_config", "get_stage_model", "print_env_help",
+    "get_server_config", "print_env_help",
     "setup_logging", "log_argv", "determine_model",
     "load_prompt", "get_tagged_prompt",
     "estimate_tokens", "split_at_tokens", "trim_to_tokens",
@@ -71,10 +71,13 @@ TRANSPORT_API = ["TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStrea
 DEPS_API = ["ROLES", "status", "format_status", "missing_hint"]
 # Зеркало API core/settings.py (реестр настроек — одно место истины)
 SETTINGS_API = ["Setting", "Block", "Group", "GROUPS", "SETTINGS", "BY_KEY",
-                "BY_BLOCK", "STAGES", "groups", "settings_of", "form_fields",
-                "defaults", "env_key", "env_file", "sanitize", "file_values",
-                "layered_values", "effective", "values_of_stage", "llm_values",
-                "write_values", "groups_payload"]
+                "BY_BLOCK", "STAGES", "LLM_BLOCKS", "LLM_ALIAS",
+                "STAGE_LLM_FIELDS", "groups", "stage_fields", "settings_of",
+                "form_fields", "defaults", "stage_values", "llm_settings",
+                "llm_values", "llm_form", "with_llm", "env_key", "env_file",
+                "sanitize", "file_values", "layered_values", "effective",
+                "display_value", "block_payload", "write_values",
+                "groups_payload"]
 
 
 def _agents_text() -> str:

@@ -177,8 +177,9 @@ def test_ner_check_rag_ui_present():
     assert "addDisputedTermsModal" in rv
     assert "Добавить спорные" in rv
     assert "classList.toggle(\"hidden\", !isRag)" in rv
-    # RAG-промпт — тег <prompt_rag> в общем промпт-файле стадии
-    st = (REPO / "web" / "stages.py").read_text(encoding="utf-8")
+    # RAG-промпт — тег <prompt_rag> в общем промпт-файле стадии; метаданные
+    # поля (промпт-файл) — в реестре настроек, не в stages.py
+    st = (REPO / "core" / "settings.py").read_text(encoding="utf-8")
     assert "ner_check_prompt.txt" in st
     cli = (REPO / "cli" / "ner_check.py").read_text(encoding="utf-8")
     assert "load_rag_prompt(args.rag_prompt_file or args.prompt_file" in cli

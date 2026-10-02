@@ -64,6 +64,7 @@ from core.stage import (  # noqa: E402
     add_llm_args,
     resolve_profile,
 )
+from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
     _retry_wait,
     atomic_write,
@@ -1314,10 +1315,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # Сервер LLM — общий блок флагов (core.stage); исторические имена
     # (--retries, --reasoning-effort) принимаются как псевдонимы.
-    # max_tokens=65536 — исторический предел NER (ТОКЕНЫ, серверный
-    # предохранитель)
-    add_llm_args(parser, timeout=900, max_retries=3, max_tokens=65536,
-                 aliases=True)
+    # сервер, таймауты, повторы и max_tokens — общий конфиг (core.stage)
+    add_llm_args(parser, aliases=True)
     parser.add_argument(
         "--chunk_size", type=int, default=5500,
         help="Размер чанка, ТОКЕНЫ — оценка estimate_tokens "
@@ -1394,6 +1393,7 @@ def build_parser() -> argparse.ArgumentParser:
             "(--compile_chapters). Пусто = сборка в память, файл не пишется."
         ),
     )
+    core_settings.apply_cli_defaults(parser, "ner")
     return parser
 
 

@@ -61,6 +61,7 @@ from core.common import (  # noqa: E402
     build_chapter_map as common_build_chapter_map,
     find_chapter_file as common_find_chapter_file,
 )
+from core import settings as core_settings  # noqa: E402
 
 # ==========================================
 # ОСНОВНЫЕ НАСТРОЙКИ
@@ -924,6 +925,7 @@ def build_parser():
     p.add_argument("--donate-file", default="",
                    help="Файл страницы поддержки (по умолчанию: автопоиск "
                         "./source/donate.txt → ./prompts/donate.txt → встроенный текст)")
+    core_settings.apply_cli_defaults(p, "compile")
     return p
 
 

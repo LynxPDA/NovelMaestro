@@ -81,18 +81,19 @@ def parse_dotenv(path) -> dict:
 
 
 # Корень репо: пакет core лежит в корне, значит его родитель — корень репо.
-# Никакого подъёма «от папки проекта»: общий файл и файл книги — РАЗНЫЕ слои.
+# Файл конфига один: подъёма «от папки проекта» нет — у книги своего .env больше
+# нет, локальные значения запусков живут в браузере (localStorage).
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def system_env_file() -> str | None:
-    """Системный (общий) .env — дефолты для ВСЕХ проектов.
+    """Общий .env — ЕДИНСТВЕННЫЙ файл конфигурации (дефолты для всех книг).
 
     WEB_ENV_FILE (в образе Docker — projects/.env внутри постоянного тома:
     правки вкладки «Настройки» переживают обновление образа) → корневой .env
     репо → .env в cwd. Путь возвращается даже если файла ещё нет (это цель
-    создания в редакторе «Настроек»).
-    """
+    создания со страницы «Настройки»). Собственного .env у книги больше нет:
+    изменённые для одной книги поля — рабочее состояние браузера."""
     override = os.environ.get("WEB_ENV_FILE", "").strip()
     if override:
         return os.path.abspath(os.path.expanduser(override))
@@ -103,49 +104,27 @@ def system_env_file() -> str | None:
     return cwd if os.path.isfile(cwd) else None
 
 
-def project_env_file(start_dir=None) -> str | None:
-    """Собственный .env книги — ТОЛЬКО локальные отличия от общего файла.
+def env_files(explicit=None) -> list:
+    """Файл(ы) конфига: один общий; явный --env_file заменяет его собой.
 
-    Ищется в папке проекта (start_dir, а без него — cwd: стадии запускаются
-    с cwd книги) и ТОЛЬКО в ней: выше по дереву лежит общий файл, он
-    отдельный слой (раньше подъём вверх находил pdir/.env раньше общего —
-    и книга жила копией общего конфига, а не своими полями).
-    """
-    cand = os.path.join(os.path.abspath(start_dir or os.getcwd()), ".env")
-    return cand if os.path.isfile(cand) else None
-
-
-def env_files(explicit=None, start_dir=None) -> list:
-    """Цепочка файлов .env по порядку приоритета: СНАЧАЛА общий, поверх него
-    собственный файл книги (пустые значения не затеняют общий).
-
-    Явный --env_file заменяет цепочку одним файлом — ручной запуск читает
-    ровно то, что ему показали.
+    Отдельного файла книги в модели больше нет: подъём вверх от папки проекта
+    находил её же копию общего конфига, и книга жила ей вместо общего файла.
     """
     if explicit and os.path.isfile(explicit):
         return [os.path.abspath(explicit)]
-    out, seen = [], set()
-    for path in (system_env_file(), project_env_file(start_dir)):
-        if path:
-            ab = os.path.abspath(path)
-            if ab not in seen:
-                seen.add(ab)
-                out.append(ab)
-    return out
+    path = system_env_file()
+    return [os.path.abspath(path)] if path else []
 
 
-def load_env(explicit=None, start_dir=None) -> dict:
-    """Слои .env одним вызовом: общий файл, поверх — проектный (diff книги).
+def load_env(explicit=None) -> dict:
+    """Значения общего .env одним вызовом (локальные значения книги — в
+    браузере, не на диске): то, что пользователь выставил сам.
 
-    Именно так читают конфиг скрипты стадий: книга хранит только изменённые
-    поля, остальное подтягивается из общего файла — он и правится на «Настройках».
-    """
+    Остальные значения каждой настройки — дефолты реестра core/settings.py;
+    эффективную пару «реестр → файл → окружение» считает сам реестр."""
     data: dict[str, str] = {}
-    for i, path in enumerate(env_files(explicit=explicit, start_dir=start_dir)):
-        layer = parse_dotenv(path)
-        if i:  # проектный слой: пустое значение — не переопределение
-            layer = {k: v for k, v in layer.items() if str(v) != ""}
-        data.update(layer)
+    for path in env_files(explicit=explicit):
+        data.update(parse_dotenv(path))
     return data
 
 
@@ -163,19 +142,15 @@ def env_overlay(env_data: dict, keys) -> dict:
     return out
 
 
-def get_server_config(env_data: dict, stage: str = "") -> dict:
-    """Сервер → {host, api_key, model}.
+def get_server_config(env_data: dict) -> dict:
+    """LLM-подключение конвейера → {host, api_key, model}.
 
-    stage непуст — схема «один скрипт — один набор сервер+ключ+модель»:
-    <СТАДИЯ>_HOST/<СТАДИЯ>_API_KEY/<СТАДИЯ>_MODEL переопределяют общие
-    HOST/API_KEY/MODEL (модель — через get_stage_model). Пустая стадия —
-    только общие ключи (профили local/remote убраны).
-
-    Приоритет (канон §7): os.environ > .env: в Docker конфиг приходит
-    переменными окружения (env_file в compose), файла .env в образе нет.
-    env_data — значения, распарсенные из файла .env.
+    Ключей <СТАДИЯ>_HOST/<СТАДИЯ>_MODEL/<СТАДИЯ>_API_KEY больше нет: модель в
+    конвейере одна, а шесть одинаковых пар сервер+ключ по стадиям разъезжались
+    бы в одном запуске. Приоритет (канон §7): os.environ > .env — в Docker
+    конфиг приходит переменными окружения, файла в образе нет.
+    env_data — значения, распарсенные из общего файла.
     """
-    s = (stage or "").upper()
 
     def val(name: str) -> str:
         """Значение ключа: os.environ > env_data (оба обрезаны)."""
@@ -184,34 +159,8 @@ def get_server_config(env_data: dict, stage: str = "") -> dict:
             return raw.strip()
         return env_data.get(name, "").strip()
 
-    host = val(f"{s}_HOST" if s else "HOST")
-    if not host:
-        host = val("HOST")
-    api_key = val(f"{s}_API_KEY" if s else "API_KEY")
-    if not api_key:
-        api_key = val("API_KEY")
-    return {
-        "host": host,
-        "api_key": api_key,
-        "model": get_stage_model(env_data, stage),
-    }
-
-
-def get_stage_model(env_data: dict, stage: str = "") -> str:
-    """Модель этапа: <STAGE>_MODEL → общая MODEL → ''.
-    stage пуст → сразу общая модель. os.environ приоритетнее файла."""
-
-    def val(name: str) -> str:
-        raw = os.environ.get(name)
-        if raw is not None and raw.strip():
-            return raw.strip()
-        return env_data.get(name, "").strip()
-
-    if stage:
-        stage_model = val((stage or "").upper() + "_MODEL")
-        if stage_model:
-            return stage_model
-    return val("MODEL")
+    return {"host": val("HOST"), "api_key": val("API_KEY"),
+            "model": val("MODEL")}
 
 
 def print_env_help() -> None:
@@ -222,15 +171,11 @@ def print_env_help() -> None:
     print("    HOST=https://routerai.ru/api/v1   # или локальный llama.cpp и т.п.")
     print("    API_KEY=")
     print("    MODEL=google/gemma-4-31b-it")
-    print("  Модели по скриптам (необязательно; не задана — общая MODEL):")
-    print("    NER_MODEL= | NER_CHECK_MODEL=")
-    print("    TRANSLATE_CHECK_LLM_MODEL= | WIKI_MODEL=")
-    print("    PIPELINE_MODEL=   # web-конвейер (единая модель)")
-    print("  Опциональные дефолты (CLI всегда приоритетнее):")
-    print("    CHUNK_SIZE=7000 | NER_CHUNK_SIZE=10000")
-    print("    NER_THRESHOLD=0.75 | MIN_LEN_RATIO_TRANSLATE=0.5")
-    print("    MIN_LEN_RATIO_REDACT=0.9 | TIMEOUT=300 | STREAM_TIMEOUT=900")
-    print("    MAX_RETRIES=3")
+    print("  Модель, сервер и ключ ОДИН на весь конвейер: стадийных")
+    print("  NER_MODEL/PIPELINE_HOST и подобных ключей больше нет.")
+    print("  Прочие настройки (стадийные <STAGE>_<ПОЛЕ>) и их дефолты —")
+    print("  в реестре core/settings.py и на странице «Настройки»:")
+    print("    NER_CHUNK_SIZE | WIKI_CHUNK_SIZE | THREADS | TIMEOUT | ...")
     print("─" * 60)
 
 

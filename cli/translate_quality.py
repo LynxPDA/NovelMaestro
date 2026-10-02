@@ -61,6 +61,7 @@ from core.stage import (  # noqa: E402
     add_llm_args,
     setup_stage,
 )
+from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
     build_chapter_map,
     estimate_tokens,
@@ -204,7 +205,7 @@ def build_user_prompt(template: str, original_text: str,
 # Единственный вызов стадии — stage.complete(): профиль LLM (сервер, ключ,
 # модель, таймауты, ретраи) собран в setup_stage, messages строит
 # core.common.llm_messages, гигиена стрима одна на проект.
-MAX_TOKENS = 32768  # серверный предохранитель, ТОКЕНЫ
+# предельный размер ответа сервера — общий настройка MAX_TOKENS
 
 
 # ──────────────────────────────────────────────
@@ -259,7 +260,8 @@ def write_report(output_path: str, meta: dict, assessment: str,
 # ──────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Парсер translate_quality: дефолты полей — из реестра (core/settings.py)."""
     parser = argparse.ArgumentParser(
         description="Оценка качества перевода (LLM) — один запрос по "
                     "пакету глав.",
@@ -277,7 +279,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
 """,
     )
     # Сервер/LLM — общий блок стадий (имена флагов контрактны с web/stages.py)
-    add_llm_args(parser, timeout=300, aliases=True)
+    add_llm_args(parser, aliases=True)
     # Главы
     parser.add_argument("--chapters-dir", dest="chapters_dir",
                         default="./chapters",
@@ -308,11 +310,16 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                              f"если не влезает — пакет обрезается до "
                              f"целого количества глав (default: "
                              f"{DEFAULT_BUDGET}).")
+    core_settings.apply_cli_defaults(parser, "translate_quality")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
 
     # ── Лог стадии + сервер: CLI > os.environ > .env > help+exit ──
-    stage, logger = setup_stage("translate_quality", args,
-                                max_tokens=MAX_TOKENS)
+    stage, logger = setup_stage("translate_quality", args)
     logger.info(f"API: {stage.profile.base_url} | модель: "
                 f"{stage.profile.model} | бюджет: {args.budget} токенов "
                 f"(оценка) | тип: {args.type}")
