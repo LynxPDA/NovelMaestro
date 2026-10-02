@@ -21,6 +21,9 @@ RUN_PARAMS = {
 }
 # старые имена LLM-полей стадий, которые свёрнуты в одну общую настройку
 ALIAS = {"retries": "max_retries", "jobs": "threads"}
+LLM_FIELDS = {"host", "model", "api_key", "temperature", "timeout",
+              "stream_timeout", "max_retries", "retries", "max_tokens",
+              "threads", "jobs", "retry_empty"}
 # общие LLM-настройки: стадийных ключей больше нет, имена унифицированы
 LLM_NAMES = {
     "host", "api_key", "model", "timeout", "stream_timeout", "max_retries",
@@ -125,18 +128,22 @@ def test_stage_names_are_the_registry_owners():
 
 @pytest.mark.parametrize("stage", sorted(S.STAGES))
 def test_registry_matches_stage_specs(stage):
-    """Бизнес-поля стадии в реестре равны тому, что описано в спеке."""
+    """Поля стадии в реестре равны тому, что описано в спеке."""
     from web.stages import STAGE_SPECS
 
     spec = STAGE_SPECS[stage]
-    reg = {s.name: s for s in S.settings_of(stage)}
+    spec_names = [f["name"] for f in (spec.get("fields") or [])
+                  if f["name"] not in LLM_FIELDS]
+    assert [s.name for s in S.stage_fields(stage)] == spec_names, \
+        f"{stage}: порядок полей формы разошёлся с реестром"
+    reg = {s.name: s for s in S.stage_fields(stage)}
     checked = 0
     for f in spec.get("fields") or []:
-        name = ALIAS.get(f["name"], f["name"])
-        if name in RUN_PARAMS or name in LLM_NAMES:
+        name = f["name"]
+        if name in LLM_FIELDS:
             continue
         got = reg.get(name)
-        assert got is not None, f"{stage}.{name}: настройки нет в реестре"
+        assert got is not None, f"{stage}.{name}: поля нет в реестре"
         checked += 1
         for k in ("label", "type", "min", "max", "step", "dir"):
             if k in f:
@@ -151,12 +158,19 @@ def test_registry_matches_stage_specs(stage):
             norm(got.type, got.default), \
             f"{stage}.{name}: дефолт спеки {f.get('default')!r} ≠ реестр"
     assert checked == len(reg), (
-        f"{stage}: в реестре {len(reg)} настроек, в спеке сверено {checked}")
+        f"{stage}: в реестре {len(reg)} полей, в спеке сверено {checked}")
 
 
-def test_run_params_stay_in_specs():
-    """Главы и входные файлы — параметры запуска: их в реестре нет."""
-    assert not any(s.name in RUN_PARAMS for s in S.SETTINGS)
+def test_run_params_marked_and_never_written(global_env):
+    """Главы и входные файлы — параметры запуска: metadata в реестре, но не конфиг."""
+    assert {s.name for s in S.SETTINGS if s.run} == RUN_PARAMS
+    assert not RUN_PARAMS & set(S.defaults())
+    assert {"start", "cover", "donate_file"} <= {s.name for s in
+                                                S.stage_fields("compile")}
+    S.write_values({"COMPILE_MODE": "epub", "COMPILE_START": "1"})
+    text = global_env.read_text(encoding="utf-8")
+    assert "COMPILE_MODE=epub" in text
+    assert "COMPILE_START" not in text, "параметр запуска — не настройка"
 
 
 def test_form_field_shape():
