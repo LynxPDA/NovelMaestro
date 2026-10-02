@@ -85,6 +85,8 @@ def isolated_env_layers(tmp_path, monkeypatch):
                       encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(shared))
     from core import settings as _S
+    # профиль не выбран: тесты видят General, а не то, что выбрал браузер
+    monkeypatch.delenv(_S.PROFILE_ENV, raising=False)
     for key in ("LLM_API_KEY", *{s.key for s in _S.SETTINGS}):
         monkeypatch.delenv(key, raising=False)
     return shared

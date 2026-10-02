@@ -354,11 +354,14 @@ def test_system_env_file(monkeypatch, tmp_path):
     """system_env_file: WEB_ENV_FILE перекрывает всё (и возвращается даже
     без файла — это цель создания в редакторе «Настроек»); без переменной —
     корневой .env репо, а не .env книги: общий конфиг и файл книги — РАЗНЫЕ
-    слои, подъём вверх от папки проекта больше не нужен."""
+    слои, подъём вверх от папки проекта больше не нужен. Пути нет всегда:
+    «файла ещё нет» — не «конфиг не настроен».
+    """
     monkeypatch.delenv("WEB_ENV_FILE", raising=False)
     monkeypatch.setattr(C, "_REPO_ROOT", str(tmp_path / "repo"))
     monkeypatch.chdir(tmp_path)
-    assert C.system_env_file() is None  # ни общего, ни cwd-файла
+    # ни общего, ни cwd-файла — путь всё равно общий: это цель создания
+    assert C.system_env_file() == str(tmp_path / "repo" / ".env")
     root = tmp_path / "repo"
     root.mkdir(parents=True)
     (root / ".env").write_text("HOST=x", encoding="utf-8")

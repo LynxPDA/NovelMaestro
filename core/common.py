@@ -98,10 +98,9 @@ def system_env_file() -> str | None:
     if override:
         return os.path.abspath(os.path.expanduser(override))
     root = os.path.join(_REPO_ROOT, ".env")
-    if os.path.isfile(root):
+    if os.path.isfile(root) or not os.path.isfile(os.path.join(os.getcwd(), ".env")):
         return root
-    cwd = os.path.join(os.getcwd(), ".env")
-    return cwd if os.path.isfile(cwd) else None
+    return os.path.join(os.getcwd(), ".env")
 
 
 def env_files(explicit=None) -> list:

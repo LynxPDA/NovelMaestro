@@ -305,4 +305,54 @@ def test_groups_payload_masks_secrets(monkeypatch, global_env):
                for b in g["blocks"] for f in b["fields"]}
     assert payload["api_key"]["value"] == "••••"
     assert "secret-token" not in repr(payload)
-    assert payload["model"]["value"] == ""
+    # модель не задана в файле → встроенный дефолт реестра, а не пустая строка
+    assert payload["model"]["value"] == S.BY_KEY["MODEL"].default
+
+
+# ════════════════════════════════════════════════════════════════════
+# профили LLM: файл рядом с общим .env, значения — только переопределения
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_profiles_file_sits_next_to_env(global_env):
+    """Файл профилей — сосед общего .env: один каталог, один постоянный том."""
+    assert S.profiles_file() == str(global_env.parent / S.PROFILES_NAME)
+    assert not S.profiles_file().endswith(".env")
+
+
+def test_profiles_general_first_and_builtin(global_env):
+    """General — всегда первый и встроенный: его значения и есть общий .env."""
+    profs = S.profiles()
+    assert profs[0]["id"] == S.PROFILE_DEFAULT
+    assert profs[0]["name"] == S.PROFILE_DEFAULT_TITLE and profs[0]["builtin"]
+    empty = S.profile_get("")
+    assert empty is not None and empty["builtin"] is True
+    assert S.profile_get("нет-такого") is None
+
+
+def test_profile_file_format(global_env):
+    """Файл профилей — JSON с англоязычными ключами (entries/values/created),
+    значения — ключи реестра; порядок списка = порядок в интерфейсе."""
+    S.profile_create("Первый", {"HOST": "http://a:1"})
+    S.profile_create("Второй", {"MODEL": "b"})
+    import json as _json
+    data = _json.loads(global_env.parent.joinpath(S.PROFILES_NAME)
+                       .read_text(encoding="utf-8"))
+    assert [p["id"] for p in data["profiles"]] == ["p1", "p2"]
+    assert set(data["profiles"][0]) == {"id", "name", "values", "created",
+                                        "updated"}
+    assert data["profiles"][1]["values"] == {"MODEL": "b"}
+
+
+def test_profiles_payload_values(global_env):
+    """Payload профилей: у General — эффективные значения конфига, у прочих —
+    только их переопределения; секрет отдаётся маской."""
+    S.write_values({"HOST": "http://общий:1", "API_KEY": "ключ-general"})
+    S.profile_create("Домашний", {"MODEL": "дом-модель", "API_KEY": "ключ-дом"})
+    got = {p["id"]: p for p in S.profiles_payload()}
+    assert set(got) == {S.PROFILE_DEFAULT, "p1"}
+    assert got[S.PROFILE_DEFAULT]["values"]["HOST"] == "http://общий:1"
+    assert got["p1"]["values"]["HOST"] == ""  # не задан → наследует General
+    assert got["p1"]["values"]["MODEL"] == "дом-модель"
+    assert got["p1"]["values"]["API_KEY"] == "••••"
+    assert "ключ-дом" not in repr(got) and "ключ-general" not in repr(got)

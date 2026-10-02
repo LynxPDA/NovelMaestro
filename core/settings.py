@@ -14,19 +14,23 @@ templates/.env.example) и глобальные ключи вида CHUNK_SIZE/T
 Ключ настройки — её имя в .env: у стадийных настроек это <STAGE>_<FIELD>,
 у общих (LLM, рассуждения, WEB_*) — имя само по себе.
 
-Слои после реформы их два: реестр (зашито) → общий .env (то, что пользователь
-выставил сам). Файл .env в папке книги — рабочее состояние браузера (localStorage),
-а не слой конфига; стадийные переопределения сервера/модели/ключа убраны:
-модель в конвейере одна.
+Слои конфига: реестр (зашито) → общий .env (то, что выставил пользователь) →
+выбранный профиль LLM → окружение процесса. Файл .env в папке книги — рабочее
+состояние браузера (localStorage), а не слой конфига; стадийные переопределения
+сервера/модели/ключа убраны: модель в конвейере одна, а несколько наборов
+серверных настроек — это профили (секция «профили LLM»).
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
+import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .common import env_overlay, parse_dotenv, system_env_file
+from .common import env_overlay, parse_dotenv, read_text_safe, system_env_file
 
 log = logging.getLogger("nm")
 
@@ -127,9 +131,11 @@ GROUPS: tuple = (
     # ── LLM: одна настройка на весь конвейер ─────────────────────────
     _group("llm", "Модель и сервер",
         _block("llm_conn", "Подключение",
-            _s("HOST", "Сервер LLM", "text", "", help="адрес API-сервера; /v1 дописывается, если его нет"),
+            _s("HOST", "Сервер LLM", "text", "https://routerai.ru/api/v1",
+                help="адрес API-сервера; /v1 дописывается, если его нет"),
             _s("API_KEY", "API-ключ", "password", "", secret=True, help="локальный сервер может работать без ключа"),
-            _s("MODEL", "Модель", "text", "", help="одна модель на весь конвейер: отдельных моделей у стадий больше нет"),
+            _s("MODEL", "Модель", "text", "google/gemma-4-31b-it",
+                help="одна модель на весь конвейер: отдельных моделей у стадий больше нет"),
         ),
         _block("llm_net", "Сеть и повторы",
             _s("TIMEOUT", "Таймаут запроса, СЕК", "number", "300", min=0),
@@ -404,6 +410,12 @@ STAGE_LLM_FIELDS: dict = {
 
 
 
+def _now_stamp() -> str:
+    """Метка времени профиля: ISO без микросекунд."""
+    from datetime import datetime
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def groups() -> tuple:
     """Субвкладки со блоками — в том порядке, в котором их рисовать."""
     return GROUPS
@@ -469,9 +481,14 @@ def stage_values(stage: str) -> dict:
     return {s.name: _coerce(s, effective(s.key)) for s in stage_fields(stage)}
 
 
-def llm_values() -> dict:
-    """LLM-настройки конвейера (эффективные): подключение, сеть и рассуждения."""
-    return {s.name: _coerce(s, effective(s.key)) for s in llm_settings()}
+def llm_values(profile: str = "") -> dict:
+    """LLM-настройки конвейера (эффективные): подключение, сеть и рассуждения.
+
+    Пустой профиль — General (значения общего .env), иначе значения профиля
+    лежат поверх общего файла."""
+    layered = layered_values(profile)
+    return {s.name: _coerce(s, layered.get(s.key) or s.default)
+            for s in llm_settings()}
 
 
 def apply_cli_defaults(parser, stage: str):
@@ -531,13 +548,24 @@ def file_values() -> dict:
     return parse_dotenv(path) if path else {}
 
 
-def layered_values() -> dict:
-    """Эффективный конфиг: значения общего файла, поверх — окружение процесса."""
-    return env_overlay(file_values(), [s.key for s in SETTINGS])
+def layered_values(profile: str = "") -> dict:
+    """Эффективный конфиг: общий .env → выбранный профиль LLM → окружение.
+
+    Профиль — выбор пользователя для конкретного запуска: web-слой отдаёт его
+    подпроцессу переменной NM_LLM_PROFILE. Пустой или general — только общий
+    файл. Окружение процесса остаётся последним рубежом деплоя."""
+    vals = file_values()
+    pid = (profile or os.environ.get(PROFILE_ENV, "")).strip()
+    if pid and pid != PROFILE_DEFAULT:
+        prof = profile_get(pid)
+        if prof:
+            vals.update({k: str(v) for k, v in (prof.get("values") or {}).items()
+                         if str(v).strip()})
+    return env_overlay(vals, [s.key for s in SETTINGS])
 
 
 def effective(key: str) -> object:
-    """Эффективное значение настройки: реестр → общий .env → os.environ.
+    """Эффективное значение настройки: реестр → общий .env → профиль → os.environ.
 
     Пустое значение в файле — не переопределение: настройка остаётся на
     встроенном дефолте (пустая строка в конфиге книги больше ничего не значит).
@@ -584,26 +612,255 @@ def write_values(values: dict) -> list:
     return stored
 
 
-def llm_form(stage: str) -> dict:
+# ════════════════════════════════════════════════════════════════════
+# профили LLM: именованные наборы настроек работы с моделью
+# ════════════════════════════════════════════════════════════════════
+#
+# Профиль — полный набор LLM-настроек (сервер, модель, ключ, потоки, таймауты,
+# ретраи, температура, рассуждения): у разных книг и разных серверов свой.
+# Leжат в ОДНОМ файле рядом с общим .env; в файле — только те ключи, которые
+# профиль переопределяет, остальное профиль наследует от General.
+#
+# General — встроенный профиль: его значения и есть обычный общий .env, поэтому
+# данных в двух местах нет и без выбранного профиля система ведёт себя ровно
+# как до профилей.
+# ════════════════════════════════════════════════════════════════════
+
+#: id встроенного профиля — его значения живут в общем .env
+PROFILE_DEFAULT = "general"
+#: название встроенного профиля (оно же — имя по умолчанию)
+PROFILE_DEFAULT_TITLE = "General"
+#: переменная окружения подпроцесса: какой профиль выбрал запуск
+PROFILE_ENV = "NM_LLM_PROFILE"
+#: файл профилей (рядом с общим .env)
+PROFILES_NAME = "llm_profiles.json"
+
+
+def profiles_file() -> str:
+    """Путь файла профилей: рядом с общим .env, нет конфига — корень репо."""
+    path = env_file()
+    if path:
+        return str(Path(path).parent / PROFILES_NAME)
+    # core/settings.py лежит в core/ — родитель и есть корень репозитория
+    return str(Path(__file__).resolve().parent.parent / PROFILES_NAME)
+
+
+def profile_slug(name: object, taken=()) -> str:
+    """Устойчивый id профиля: имя остаётся человеческим, ключ — ascii-safe.
+
+    Русское имя в slug не сворачивается, поэтому ему выдаётся p<номер>; id
+    пишется в файл один раз и больше не меняется — на него ссылается выбор
+    проекта и переменная окружения подпроцесса.
+    """
+    raw = unicodedata.normalize("NFKD", str(name or "").strip().lower())
+    slug = re.sub(r"[^a-z0-9]+", "_", raw.encode("ascii", "ignore").decode()).strip("_")
+    if not slug:
+        nums = [int(m.group(1)) for t in taken
+                if (m := re.fullmatch(r"p(\d+)", str(t)))]
+        slug = f"p{max(nums, default=0) + 1}"
+    return slug
+
+
+def profiles_read() -> list:
+    """Профили с диска (без General): [{id,name,values,created,updated}, ...]."""
+    path = profiles_file()
+    if not Path(path).is_file():
+        return []
+    try:
+        data = json.loads(read_text_safe(path) or "[]")
+    except (OSError, ValueError) as exc:
+        log.warning("файл профилей LLM не читается: %s (%s)", path, exc)
+        return []
+    if isinstance(data, dict):
+        data = data.get("profiles")
+    out, taken = [], []
+    for raw in data or []:
+        if not isinstance(raw, dict):
+            continue
+        pid = str(raw.get("id") or "").strip() or profile_slug(raw.get("name"), taken)
+        if pid == PROFILE_DEFAULT:
+            continue
+        taken.append(pid)
+        out.append({
+            "id": pid,
+            "name": str(raw.get("name") or pid).strip(),
+            "values": {str(k).strip().upper(): str(v)
+                       for k, v in (raw.get("values") or {}).items()},
+            "created": str(raw.get("created") or ""),
+            "updated": str(raw.get("updated") or ""),
+        })
+    return out
+
+
+def profiles_write(profiles: list) -> str:
+    """Записать профили атомарной заменой: порядок списка = порядок в UI."""
+    from .common import atomic_write
+    body = {"profiles": [{"id": p["id"], "name": p.get("name") or p["id"],
+                          "values": p.get("values") or {},
+                          "created": p.get("created") or "",
+                          "updated": p.get("updated") or ""}
+                        for p in profiles]}
+    atomic_write(profiles_file(), json.dumps(body, ensure_ascii=False, indent=2) + "\n")
+    return profiles_file()
+
+
+def profiles() -> list:
+    """Все профили: встроенный General первым, остальные — с диска."""
+    builtin = {"id": PROFILE_DEFAULT, "name": PROFILE_DEFAULT_TITLE,
+               "builtin": True, "values": {}}
+    return [builtin] + [dict(p, builtin=False) for p in profiles_read()]
+
+
+def profile_get(profile_id: str) -> dict | None:
+    """Профиль по id; пустой id и general — встроенный профиль."""
+    pid = str(profile_id or "").strip()
+    if not pid or pid == PROFILE_DEFAULT:
+        return {"id": PROFILE_DEFAULT, "name": PROFILE_DEFAULT_TITLE,
+                "builtin": True, "values": {}}
+    return next((p for p in profiles_read() if p["id"] == pid), None)
+
+
+def profile_values(profile_id: str) -> dict:
+    """Значения профиля как есть (ключ .env → значение, без масок)."""
+    return dict((profile_get(profile_id) or {}).get("values") or {})
+
+
+def profile_display(profile_id: str) -> dict:
+    """Значения профиля для интерфейса.
+
+    General — эффективные значения конфига (реестр → файл → окружение);
+    остальные — только их переопределения, пустое поле значит «наследует
+    General». Секрет всегда под маской, настоящий ключ в SPA не ездит."""
+    raw = profile_values(profile_id)
+    builtin = str(profile_id or "").strip() in ("", PROFILE_DEFAULT)
+    out = {}
+    for s in llm_settings():
+        val = str(raw.get(s.key, ""))
+        if builtin:
+            out[s.key] = display_value(s)
+        else:
+            out[s.key] = ("••••" if val.strip() else "") if s.secret else val
+    return out
+
+
+def profile_create(name: str, values: dict | None = None) -> dict:
+    """Создать профиль; пустой набор — наследует всё от General."""
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("имя профиля обязательно")
+    stored = profiles_read()
+    if any(p["name"].casefold() == name.casefold() for p in stored):
+        raise ValueError(f"профиль с именем «{name}» уже есть")
+    now = _now_stamp()
+    prof = {"id": profile_slug(name, [p["id"] for p in stored]), "name": name,
+            "values": _profile_clean(values), "created": now, "updated": now}
+    profiles_write(stored + [prof])
+    log.info("профиль LLM создан: %s (%s)", prof["name"], prof["id"])
+    return dict(prof, builtin=False)
+
+
+def profile_rename(profile_id: str, name: str) -> dict:
+    """Переименовать профиль (id остаётся: на него ссылается выбор проекта)."""
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("имя профиля обязательно")
+    if profile_id == PROFILE_DEFAULT:
+        raise ValueError("встроенный профиль General не переименовывается")
+    stored = profiles_read()
+    if any(p["name"].casefold() == name.casefold() and p["id"] != profile_id
+           for p in stored):
+        raise ValueError(f"профиль с именем «{name}» уже есть")
+    out = None
+    for p in stored:
+        if p["id"] == profile_id:
+            p["name"] = name
+            p["updated"] = _now_stamp()
+            out = p
+    if out is None:
+        raise ValueError(f"профиль не найден: {profile_id}")
+    profiles_write(stored)
+    return dict(out, builtin=False)
+
+
+def profile_delete(profile_id: str) -> bool:
+    """Удалить профиль; General удалить нельзя — это значения общего .env."""
+    if profile_id == PROFILE_DEFAULT:
+        raise ValueError("встроенный профиль General не удаляется")
+    stored = profiles_read()
+    left = [p for p in stored if p["id"] != profile_id]
+    if len(left) == len(stored):
+        return False
+    profiles_write(left)
+    return True
+
+
+def profile_save_values(profile_id: str, values: dict) -> dict:
+    """Сохранить значения профиля: только LLM-ключи, пустое снимает переопределение.
+
+    Профиль хранит только то, что в нём изменено: всё остальное он берёт из
+    General, поэтому смена общего сервера доходит до профилей сама.
+    """
+    if profile_id == PROFILE_DEFAULT:
+        write_values(values or {})
+        return {"id": PROFILE_DEFAULT, "name": PROFILE_DEFAULT_TITLE,
+                "builtin": True, "values": {}}
+    stored = profiles_read()
+    prof = next((p for p in stored if p["id"] == profile_id), None)
+    if prof is None:
+        raise ValueError(f"профиль не найден: {profile_id}")
+    prof["values"] = _profile_clean(values, prof.get("values") or {})
+    prof["updated"] = _now_stamp()
+    profiles_write(stored)
+    return dict(prof, builtin=False)
+
+
+def _profile_clean(values: dict | None, old: dict | None = None) -> dict:
+    """Только LLM-ключи реестра, непустые, в порядке реестра.
+
+    Маска «••••» — не значение: секрет остаётся тем, что уже сохранено
+    (пустое же значение переопределение снимает — профиль наследует General)."""
+    out = {}
+    old = old or {}
+    for s in llm_settings():
+        val = sanitize(s, (values or {}).get(s.key, ""))
+        if not val or val == "••••":
+            if s.secret and s.key in old:
+                out[s.key] = old[s.key]
+            continue
+        out[s.key] = val
+    return out
+
+
+def profiles_payload() -> list:
+    """Профили для SPA: [{id,name,builtin,values:{KEY:значение}}, ...].
+
+    General — встроенный (его значения и есть общий .env); у остальных
+    значений показываются только переопределения профиля, секреты — под маской."""
+    return [{"id": p["id"], "name": p["name"], "builtin": bool(p.get("builtin")),
+             "values": profile_display(p["id"])} for p in profiles()]
+
+
+def llm_form(stage: str, profile: str = "") -> dict:
     """LLM-значения в именах полей стадии (jobs ← THREADS, retries ← MAX_RETRIES).
 
     Сборка argv стадии не изменилась: она читает те же имена полей, просто
-    теперь значения приходят из общего конфига, а не из формы.
+    теперь значения приходят из общего конфига (или профиля), а не из формы.
     """
-    vals = llm_values()
+    vals = llm_values(profile)
     return {n: vals.get(LLM_ALIAS.get(n, n), "")
             for n in STAGE_LLM_FIELDS.get(stage, ())}
 
 
-def with_llm(stage: str, form: dict) -> dict:
+def with_llm(stage: str, form: dict, profile: str = "") -> dict:
     """Форма запуска поверх глобального LLM-конфига.
 
     LLM-полей в форме запусков больше нет, но что бы в ней ни лежало (старый
     кэш браузера, старый .env книги), сервер/модель/ключ/потоки перезаписываются
     общим конфигом: «свой сервер у стадии» больше не существует.
+    Профиль LLM — явным параметром либо полем формы `profile`.
     """
     out = dict(form or {})
-    out.update(llm_form(stage))
+    out.update(llm_form(stage, profile or (form or {}).get("profile") or ""))
     return out
 
 
