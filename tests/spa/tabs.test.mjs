@@ -169,8 +169,22 @@ function h(tag, attrs = {}, ...children) {
 /* ── мок-API: все роуты project-views возвращают пустые структуры ── */
 async function api(path, opts = {}) {
   const p = path.split("?")[0];
-  if ((opts.method || "GET") !== "GET") return { ok: true };
-  if (p === "/files") return { entries: globalThis.__files || [] };
+  if ((opts.method || "GET") !== "GET") {
+    // запись запроса: тестам важно, каким телом ушёл перенос/переименование
+    (globalThis.__calls || []).push({
+      method: opts.method,
+      path: p,
+      query: path.split("?")[1] || "",
+      body: opts.body || null,
+    });
+    return { ok: true, moved: [], skipped: [] };
+  }
+  if (p === "/files") {
+    return {
+      entries: globalThis.__files || [],
+      dirs: globalThis.__dirs || [],
+    };
+  }
   if (p === "/file") return { content: "", missing: true, exists: false, size: 0 };
   if (p === "/ner") return { items: [], too_large: false };
   if (p === "/check") return { reports: [] };
@@ -273,6 +287,20 @@ const sandbox = {
   toast() {},
   fmtSize: (n) => `${n} B`,
   crumb(text, fn) { return h("button", { onclick: fn }, text); },
+  /* модалка имени из app.js: поле (с текущим значением) + ОК — ровно то,
+     что нужно тестам «Файлов»; в vm app.js не грузится */
+  nameModal(title, placeholder, onOk, initial = "") {
+    const input = h("input", { class: "input", placeholder });
+    if (initial) input.value = initial;
+    const ok = h("button", {
+      class: "btn btn-primary",
+      onclick: async () => { await onOk(input.value.trim()); },
+    }, "ОК");
+    const box = h("div", { class: "modal" },
+      h("div", { class: "modal-title" }, title), input, ok);
+    globalThis.document.body.append(h("div", { class: "modal-backdrop" }, box));
+    return box;
+  },
   attachTooltip() {},
   mdPreviewSrcdoc: (html) => html,
   fitPreviewFrame() {},
@@ -429,6 +457,9 @@ test("quick-look: Space на строке открывает модалку с s
     { name: "README.md", dir: false, size: 12, mtime: 100 },
   ];
   globalThis.localStorage.setItem("filesSort", "name");
+  globalThis.localStorage.setItem("filesAsc", "1");
+  // модалки предыдущих тестов остаются в body — стартуем с чистого листа
+  globalThis.document.body.children.length = 0;
   const page = viewProject("ACTIVE", "Книга", "files");
   await new Promise((r) => setTimeout(r, 10));
   const rows = [];
@@ -454,7 +485,6 @@ test("quick-look: Space на строке открывает модалку с s
   assert.equal(open.length, 1, "Space открыл ровно одну модалку");
 });
 
-/* ── профиль LLM: у каждой LLM-стадии свой выбор ───────────────── */
 const tick = () => new Promise((r) => setTimeout(r, 10));
 
 function collectText(node, out = []) {
@@ -467,6 +497,187 @@ function collectText(node, out = []) {
   return out;
 }
 
+/* ── «Файлы»: выделка вместо построчных меню ──────────────────── */
+const FILES_F = [
+  { name: "chapters", dir: true, size: 0, mtime: 10 },
+  { name: "a.txt", dir: false, size: 5, mtime: 20 },
+  { name: "b.png", dir: false, size: 7, mtime: 30 },
+];
+
+async function filesPage(dirs = ["chapters", "tmp"]) {
+  globalThis.__files = FILES_F;
+  globalThis.__dirs = dirs;
+  globalThis.__calls = [];
+  globalThis.localStorage.setItem("filesSort", "name");
+  globalThis.localStorage.setItem("filesAsc", "1");
+  // модалки предыдущих тестов остаются в body — стартуем с чистого листа
+  globalThis.document.body.children.length = 0;
+  const page = viewProject("ACTIVE", "Книга", "files");
+  await tick();
+  return page;
+}
+const tips = (node) => findByClass(node, "icon-btn")
+  .map((b) => b.getAttribute("aria-label"));
+
+test("файлы: строка — чекбокс и кнопки одного объекта, меню «⋮» нет", async () => {
+  const page = await filesPage();
+  const rows = findByClass(page, "frow");
+  assert.equal(rows.length, 3);
+  assert.equal(findByClass(page, "kebab-btn").length, 0, "построчных меню не осталось");
+  assert.equal(findByClass(page, "menu-box").length, 0);
+  // каталог: чекбокс + одна кнопка; файл: чекбокс + править и переименовать
+  assert.equal(findByClass(rows[0], "fsel").length, 1);
+  assert.deepEqual(tips(rows[0]), ["Переименовать chapters"]);
+  assert.deepEqual(tips(rows[1]), ["Править a.txt", "Переименовать a.txt"]);
+});
+
+test("файлы: чекбокс строки включает панель выделения и прячет кнопки", async () => {
+  const page = await filesPage();
+  const tools = findByClass(page, "files-tools")[0];
+  const bar = findByClass(page, "files-sel")[0];
+  assert.equal(bar.classList.contains("hidden"), true, "без выделки панели нет");
+  assert.equal(tools.classList.contains("hidden"), false);
+  const cb = findByClass(findByClass(page, "frow")[1], "fsel")[0];
+  cb.checked = true;
+  await cb._listeners.change[0]();
+  assert.equal(tools.classList.contains("hidden"), true, "кнопки ушли на время выделки");
+  assert.equal(bar.classList.contains("hidden"), false);
+  assert.equal(collectText(findByClass(bar, "files-sel-count")[0]).join(""),
+    "выделено: 1");
+  assert.deepEqual(tips(bar), [
+    "Переименовать a.txt",
+    "Скачать выделенные файлы",
+    "Перенести в…",
+    "Удалить выделенное",
+    "Снять выделение",
+  ]);
+});
+
+test("файлы: выделка из одних каталогов — скачивания в панели нет", async () => {
+  const page = await filesPage();
+  const cb = findByClass(findByClass(page, "frow")[0], "fsel")[0];
+  cb.checked = true;
+  await cb._listeners.change[0]();
+  assert.deepEqual(tips(findByClass(page, "files-sel")[0]), [
+    "Переименовать chapters",
+    "Перенести в…",
+    "Удалить выделенное",
+    "Снять выделение",
+  ]);
+});
+
+test("файлы: «выделить всё» берёт папку, «Снять» — очищает", async () => {
+  const page = await filesPage();
+  const all = findByClass(page, "fsel")[0];
+  all.checked = true;
+  await all._listeners.change[0]();
+  await tick();
+  assert.equal(collectText(findByClass(page, "files-sel-count")[0]).join(""),
+    "выделено: 3");
+  // переименование — только при одном объекте
+  assert.equal(tips(findByClass(page, "files-sel")[0]).includes(
+    "Переименовать a.txt"), false);
+  const clear = findByClass(page, "files-sel")[0]
+    .querySelectorAll("button").slice(-1)[0];
+  await clear._listeners.click[0]();
+  assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
+  assert.equal(findByClass(page, "files-tools")[0].classList.contains("hidden"), false);
+});
+
+test("файлы: смена папки снимает выделение", async () => {
+  const page = await filesPage();
+  const cb = findByClass(findByClass(page, "frow")[1], "fsel")[0];
+  cb.checked = true;
+  await cb._listeners.change[0]();
+  const link = findByClass(findByClass(page, "frow")[0], "fname")[0];
+  await link._listeners.click[0]({ preventDefault() {} });
+  await tick();
+  assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
+});
+
+test("файлы: перенос выделенного — один POST со всеми путями и dest", async () => {
+  const page = await filesPage();
+  for (const i of [1, 2]) {
+    const cb = findByClass(findByClass(page, "frow")[i], "fsel")[0];
+    cb.checked = true;
+    await cb._listeners.change[0]();
+  }
+  const move = findByClass(page, "icon-btn")
+    .find((b) => (b.getAttribute("aria-label") || "").startsWith("Перенести"));
+  await move._listeners.click[0]();
+  await tick();
+
+  const backdrop = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(backdrop, "модалка переноса открылась");
+  const box = findTag(backdrop, "select")[0];
+  assert.deepEqual(box.children.map((o) => collectText(o).join("")),
+    ["Корень проекта", "chapters", "tmp"]);
+  box.value = "tmp";
+  const okBtn = findByClass(backdrop, "btn-primary")[0];
+  await okBtn._listeners.click[0]();
+  await tick();
+  const call = globalThis.__calls.find((c) => c.path === "/file/move");
+  assert.ok(call, "POST /api/file/move ушёл");
+  // тело создано в vm-контексте: сверяем через JSON — иначе deepEqual
+  // цепляется на разницу прототипов двух realms при одинаковом содержимом
+  assert.deepEqual(JSON.parse(JSON.stringify(call.body)), {
+    project: "ACTIVE/Книга",
+    paths: ["a.txt", "b.png"],
+    dest: "tmp",
+  });
+});
+
+test("файлы: диалог переноса не предлагает текущую папку", async () => {
+  // st живёт внутри одного вызова viewProject: переходим по папке на том же page
+  const page = await filesPage(["chapters", "chapters/00000_1_Глава 1", "tmp"]);
+  await findByClass(findByClass(page, "frow")[0], "fname")[0]
+    ._listeners.click[0]({ preventDefault() {} });
+  await tick();
+  const cb = findByClass(findByClass(page, "frow")[1], "fsel")[0];
+  cb.checked = true;
+  await cb._listeners.change[0]();
+  const mv = findByClass(page, "icon-btn")
+    .find((b) => (b.getAttribute("aria-label") || "").startsWith("Перенести"));
+  await mv._listeners.click[0]();
+  await tick();
+  const bd = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(bd, "модалка переноса открылась");
+  assert.deepEqual(findTag(bd, "select")[0].children
+    .map((o) => collectText(o).join("")),
+  ["Корень проекта", "chapters/00000_1_Глава 1", "tmp"]);
+});
+
+test("файлы: переименовать из панели — POST /file/rename, выделка снимается", async () => {
+  const page = await filesPage();
+  const cb = findByClass(findByClass(page, "frow")[0], "fsel")[0]; // каталог
+  cb.checked = true;
+  await cb._listeners.change[0]();
+  const btn = findByClass(page, "files-sel")[0].querySelectorAll("button")
+    .find((b) => (b.getAttribute("aria-label") || "").startsWith("Переименовать"));
+  await btn._listeners.click[0]();
+  const bd = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(bd, "модалка переименования открылась");
+  const input = findTag(bd, "input")[0];
+  assert.equal(input.value, "chapters", "имя подставлено в поле");
+  input.value = "glavy";
+  await findByClass(bd, "btn-primary")[0]._listeners.click[0]();
+  await tick();
+  const call = globalThis.__calls.find((c) => c.path === "/file/rename");
+  assert.ok(call, "POST /api/file/rename ушёл");
+  assert.deepEqual(JSON.parse(JSON.stringify(call.body)), {
+    project: "ACTIVE/Книга", path: "chapters", new_name: "glavy",
+  });
+  // после операции выделка снимается — панель не висит на новом списке
+  assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
+});
+
+/* ── профиль LLM: у каждой LLM-стадии свой выбор ───────────────── */
 /* форма стадии рисуется только когда стадия открыта — открываем клик */
 async function runStage(key) {
   const title = (STAGES.find((s) => s.key === key) || {}).title;

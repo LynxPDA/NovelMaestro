@@ -6,6 +6,25 @@ const _reviewWatchers = new Map();
    проверок (вкладка «Проверка»). Был глобалом app.js и пропал при
    рефакторинге (c60ac00) — без него вкладки падают с ReferenceError. */
 const PAGE_SIZE = 200;
+/* Кнопка-иконка: SVG без подписи, поэтому имя действия живёт в тултипе
+   и в aria-label (строки списка файлов узкие — текстовые кнопки в них
+   не умещаются). danger — окраска опасных действий. */
+function iconBtn(name, tip, onclick, danger) {
+  const b = h(
+    "button",
+    {
+      class:
+        "btn btn-sm btn-ghost icon-btn" + (danger ? " btn-danger-ghost" : ""),
+      title: tip,
+      "aria-label": tip,
+      onclick,
+    },
+    iconEl(name),
+  );
+  attachTooltip(b, tip);
+  return b;
+}
+
 /* вкладки проекта — реестр (кей и подпись): рендер вкладок и палитра
    Ctrl+K (app.js); ключ «files» — вкладка по умолчанию */
 const PROJECT_TABS = [
@@ -36,6 +55,8 @@ function viewProject(section, name, tab, job) {
     runJob: null, // jobId из роута (лог конкретного запуска на «Запусках»)
     filesSort: localStorage.getItem("filesSort") || "name", // name | mtime | size
     filesAsc: localStorage.getItem("filesAsc") !== "0",
+    filesSel: new Set(), // выделенные пути «Файлов» (состояние вкладки)
+    filesPage: 0, // страница списка файлов: выделение её не сбрасывает
   };
   const page = h("div", { class: "page" });
 
@@ -43,6 +64,9 @@ function viewProject(section, name, tab, job) {
     st.path = path || "";
     st.edit = null;
     st.search = null;
+    // выделение и страница — про конкретную папку: при переходе сбрасываем
+    st.filesSel.clear();
+    st.filesPage = 0;
     render();
   }
 
@@ -143,6 +167,13 @@ function viewProject(section, name, tab, job) {
     return `/api/download?${q}`;
   }
 
+  /* «Файлы»: список с ВЫДЕЛЕНИЕМ. Строка — чекбокс, имя, метаданные и кнопки
+     одного объекта: файл — править и переименовать, каталог — переименовать.
+     Скачивание, перенос и удаление применяются к выделке и живут в панели
+     выделения: пока что-то выделено, она заменяет кнопки тулбара. Выделение —
+     состояние вкладки (не localStorage): снимается при смене папки и после
+     операции; чекбокс строки перерисовывает только панель — список и его
+     страница от клика выделения не сбрасываются. */
   async function filesView() {
     const q = new URLSearchParams({ project: `${section}/${name}` });
     if (st.path) q.set("path", st.path);
@@ -152,11 +183,17 @@ function viewProject(section, name, tab, job) {
     } catch (ex) {
       return h("div", { class: "files-empty" }, ex.message);
     }
-    const parts = st.path ? st.path.split("/") : [];
+    const sel = st.filesSel;
+    const entries = sortFiles(data.entries || []);
+    // дерево каталогов проекта: по нему перенос выбирает папку назначения
+    const dirs = data.dirs || [];
+    const path = (e) => (st.path ? `${st.path}/${e.name}` : e.name);
+    const picked = () => entries.filter((e) => sel.has(path(e)));
+
     const crumbs = h("div", { class: "crumbs" });
     const walk = [];
     crumbs.append(crumb(`${section}/${name}`, () => setPath("")));
-    for (const p of parts) {
+    for (const p of st.path ? st.path.split("/") : []) {
       walk.push(p);
       const target = walk.join("/"); // snapshot: замыкание не мутирует
       crumbs.append(h("span", { class: "crumb-sep" }, " / "));
@@ -166,6 +203,17 @@ function viewProject(section, name, tab, job) {
       type: "file",
       multiple: true,
       class: "hidden",
+    });
+    /* чекбокс «выделить всё» — первой колонкой тулбара, над чекбоксами строк */
+    const allCb = h("input", {
+      type: "checkbox",
+      class: "fsel",
+      "aria-label": "Выделить всё в папке",
+    });
+    allCb.addEventListener("change", () => {
+      sel.clear();
+      if (allCb.checked) entries.forEach((e) => sel.add(path(e)));
+      render();
     });
     /* «＋ Файл» — создать пустой файл и открыть редактор;
        «＋ Каталог» — POST /api/mkdir */
@@ -214,12 +262,9 @@ function viewProject(section, name, tab, job) {
       },
       "＋ Каталог",
     );
-    const toolbar = h(
+    const tools = h(
       "div",
-      { class: "files-toolbar" },
-      crumbs,
-      h("span", { class: "spacer" }),
-      sortControl(),
+      { class: "files-tools" },
       h(
         "button",
         { class: "btn btn-sm", onclick: () => upInput.click() },
@@ -227,6 +272,17 @@ function viewProject(section, name, tab, job) {
       ),
       addFileBtn,
       addDirBtn,
+    );
+    const selBar = h("div", { class: "files-sel hidden" });
+    const toolbar = h(
+      "div",
+      { class: "files-toolbar" },
+      allCb,
+      crumbs,
+      h("span", { class: "spacer" }),
+      sortControl(),
+      tools,
+      selBar,
     );
     upInput.addEventListener("change", async () => {
       try {
@@ -268,7 +324,175 @@ function viewProject(section, name, tab, job) {
       for (const f of files) form.append("files[]", f, f.name);
       return apiUpload(`/upload?project=${section}/${name}`, form);
     }
-    const entries = sortFiles(data.entries || []);
+
+    function toggleSel(p, on) {
+      if (on) sel.add(p);
+      else sel.delete(p);
+      // строку подсвечиваем на месте: полная перерисовка списка из-за клика
+      // сбросила бы фокус строки (с неё же Space-просмотр)
+      for (const r of drop.querySelectorAll(".frow")) {
+        if (r.getAttribute("data-name") === p) r.classList.toggle("frow-sel", on);
+      }
+      paintSel();
+    }
+
+    /* Панель выделения — только то, что применимо к выделке: переименовать
+       имеет смысл при одном объекте, скачать — когда в выделке есть файлы. */
+    function paintSel() {
+      const n = sel.size;
+      tools.classList.toggle("hidden", n > 0);
+      selBar.classList.toggle("hidden", n === 0);
+      allCb.checked = entries.length > 0 && n === entries.length;
+      allCb.indeterminate = n > 0 && n < entries.length;
+      if (!n) return;
+      const one = n === 1 ? entries.find((e) => sel.has(path(e))) : null;
+      const hasFile = entries.some((e) => !e.dir && sel.has(path(e)));
+      selBar.replaceChildren(
+        h("span", { class: "files-sel-count" }, `выделено: ${n}`),
+        one
+          ? iconBtn("tag", `Переименовать ${one.name}`, () => renameOne(one))
+          : null,
+        hasFile
+          ? iconBtn("download", "Скачать выделенные файлы", downloadSel)
+          : null,
+        iconBtn("folderMove", "Перенести в…", moveModal),
+        iconBtn("trash", "Удалить выделенное", deleteSel, true),
+        iconBtn("close", "Снять выделение", () => {
+          sel.clear();
+          paintSel();
+        }),
+      );
+    }
+
+    function renameOne(e) {
+      nameModal(
+        `Переименовать ${e.dir ? "каталог" : "файл"} ${e.name}`,
+        "новое имя",
+        async (nm) => {
+          await api("/file/rename", {
+            method: "POST",
+            body: {
+              project: `${section}/${name}`,
+              path: path(e),
+              new_name: nm,
+            },
+          });
+          toast(`Переименовано: ${e.name} → ${nm}`);
+          sel.clear();
+          render();
+        },
+        e.name,
+      );
+    }
+
+    /* Браузер режет пакетную загрузку — ссылки кликаются по одной, с зазором;
+       каталоги скачиванию не поддаются (в выделке только они — глухо). */
+    function downloadSel() {
+      const files = picked().filter((e) => !e.dir);
+      if (!files.length) {
+        toast("В выделке только каталоги — скачивать нечего", "err");
+        return;
+      }
+      files.forEach((e, i) =>
+        setTimeout(() => {
+          const a = h("a", { href: downloadUrl(path(e)), download: e.name });
+          document.body.append(a);
+          a.click();
+          a.remove();
+        }, i * 250),
+      );
+      toast(`Скачивание: ${files.length} файл(ов)`);
+    }
+
+    /* Перенос — ОДИН вызов на всю выделку (POST /api/file/move); текущая папка
+       и сами выделенные каталоги из списка назначения исключены. */
+    function moveModal() {
+      const paths = picked().map(path);
+      const box = h(
+        "select",
+        { class: "input", "aria-label": "Каталог назначения" },
+        h("option", { value: "" }, "Корень проекта"),
+        ...dirs
+          .filter((d) => d !== st.path && !paths.includes(d))
+          .map((d) => h("option", { value: d }, d)),
+      );
+      const err = h("div", { class: "form-error" });
+      UIC.modal({
+        title: `Перенести ${paths.length} объект(ов)`,
+        build: (close) => [
+          h("div", { class: "modal-text" }, paths.join(", ")),
+          box,
+          err,
+          h(
+            "div",
+            { class: "modal-actions" },
+            h(
+              "button",
+              { class: "btn btn-ghost", onclick: () => close(false) },
+              "Отмена",
+            ),
+            h(
+              "button",
+              {
+                class: "btn btn-primary",
+                onclick: async () => {
+                  try {
+                    const r = await api("/file/move", {
+                      method: "POST",
+                      body: {
+                        project: `${section}/${name}`,
+                        paths,
+                        dest: box.value,
+                      },
+                    });
+                    toast(
+                      `Перенесено: ${r.moved.length}` +
+                        (r.skipped.length
+                          ? ` · пропущено: ${r.skipped
+                              .map((s) => `${s.path} (${s.reason})`)
+                              .join("; ")}`
+                          : ""),
+                    );
+                    sel.clear();
+                    close();
+                    render();
+                  } catch (ex) {
+                    err.textContent = ex.message;
+                  }
+                },
+              },
+              "ПЕРЕНЕСТИ",
+            ),
+          ),
+        ],
+      });
+    }
+
+    /* Опасная кнопка живёт здесь, а не на каждой строке списка; каталоги
+       уходят вместе с содержимым — confirmModal с словом «УДАЛИТЬ». */
+    async function deleteSel() {
+      const list = picked();
+      const hasDir = list.some((e) => e.dir);
+      const ok = await confirmModal(
+        `Удаление (${list.length})`,
+        list.map((e) => path(e)).join(", ") +
+          (hasDir ? " · каталоги — вместе с содержимым" : ""),
+        "УДАЛИТЬ",
+        async () => {
+          for (const e of list) {
+            const dq = new URLSearchParams({
+              project: `${section}/${name}`,
+              path: path(e),
+            });
+            await api(`/file?${dq}`, { method: "DELETE" });
+          }
+          toast(`Удалено: ${list.length}`);
+          sel.clear();
+        },
+      );
+      if (ok) render();
+    }
+
     const drop = h("div", { class: "files-list" });
     /* Space на строке — быстрый просмотр файла без редактора (Escape закрывает
        так же, как любую модалку); каталоги не просматриваются. */
@@ -282,14 +506,23 @@ function viewProject(section, name, tab, job) {
     // одна страница — пагинация не нужна, достаточно счётчика
     const fPager = UIC.listPager({
       list: drop,
-      rows: (slice) => slice.map((e) => fileRow(e)),
+      rows: (slice) =>
+        slice.map((e) => fileRow(e, { toggle: toggleSel, rename: renameOne })),
       infoOnlySinglePage: true,
       info: (total, page, pages) =>
         pages <= 1
           ? `файлов: ${total}`
           : ` ${page} / ${pages} · файлов: ${total} `,
+      // страница списка — состояние вкладки: выделение её не сбрасывает
+      onChange: () => {
+        st.filesPage = fPager.page;
+        fPager.render();
+      },
     });
     fPager.items = entries;
+    fPager.page = st.filesPage;
+    fPager.render();
+    paintSel();
     drop.addEventListener("dragover", (e) => {
       e.preventDefault();
       drop.classList.add("drop-over");
@@ -363,8 +596,17 @@ function viewProject(section, name, tab, job) {
     return h("div", { class: "files-sort" }, sel, dir);
   }
 
-  function fileRow(e) {
+  /* Строка списка: чекбокс выделения, имя, метаданные и кнопки одного объекта.
+     Деструктивных и групповых действий здесь нет — они в панели выделения. */
+  function fileRow(e, acts) {
     const full = st.path ? `${st.path}/${e.name}` : e.name;
+    const cb = h("input", {
+      type: "checkbox",
+      class: "fsel",
+      checked: st.filesSel.has(full),
+      "aria-label": `Выбрать ${e.name}`,
+    });
+    cb.addEventListener("change", () => acts.toggle(full, cb.checked));
     const nameNode = e.dir
       ? h(
           "a",
@@ -391,95 +633,25 @@ function viewProject(section, name, tab, job) {
           e.name,
         );
     const actions = h("div", { class: "factions" });
-    /* на виду — только безопасные действия, деструктивные/редкие — в «⋮» */
     if (!e.dir) {
       actions.append(
-        h(
-          "a",
-          {
-            class: "btn btn-sm btn-ghost",
-            href: downloadUrl(full),
-            download: e.name,
-            "aria-label": `Скачать ${e.name}`,
-          },
-          "Скачать",
-        ),
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            "aria-label": `Править ${e.name}`,
-            onclick: () => openEditor(full),
-          },
-          "Правка",
-        ),
+        iconBtn("pencil", `Править ${e.name}`, () => openEditor(full)),
       );
     }
-    const menuItems = [
-      {
-        label: "Переименовать…",
-        onclick: () =>
-          nameModal(
-            `Переименовать ${e.dir ? "каталог" : "файл"} ${e.name}`,
-            "новое имя",
-            async (nm) => {
-              await api("/file/rename", {
-                method: "POST",
-                body: {
-                  project: `${section}/${name}`,
-                  path: full,
-                  new_name: nm,
-                },
-              });
-              toast(`Переименовано: ${e.name} → ${nm}`);
-              render();
-            },
-            e.name,
-          ),
-      },
-    ];
-    if (!e.dir) {
-      menuItems.push({
-        label: "Удалить…",
-        danger: true,
-        onclick: () =>
-          confirmModal(
-            `Удаление ${e.dir ? "каталога" : "файла"}`,
-            full,
-            "УДАЛИТЬ",
-            async () => {
-              const dq = new URLSearchParams({
-                project: `${section}/${name}`,
-                path: full,
-              });
-              await api(`/file?${dq}`, { method: "DELETE" });
-              toast(`Удалено: ${full}`);
-              render();
-            },
-          ),
-      });
-    }
-    actions.append(
-      UIC.menuButton(menuItems, {
-        iconName: "kebab",
-        aria: `Действия с ${e.name}`,
-        btnClass: "kebab-btn",
-        wrapClass: "menu-wrap",
-      }),
-    );
+    actions.append(iconBtn("tag", `Переименовать ${e.name}`, () =>
+      acts.rename(e)));
     const meta = h(
       "div",
       { class: "fmeta" },
       e.dir ? "" : `${fmtSize(e.size)} · ${UICore.relTime(e.mtime)}`,
     );
     return h("div", {
-      class: "frow",
+      class: "frow" + (st.filesSel.has(full) ? " frow-sel" : ""),
       tabindex: "0",
       "data-name": full,
       "data-dir": e.dir ? "1" : "",
-    }, nameNode, meta, actions);
+    }, cb, nameNode, meta, actions);
   }
-
   async function quickLook(rel) {
     const frame = h("iframe", {
       class: "editor-preview-frame quick-frame",
@@ -3965,60 +4137,44 @@ function viewProject(section, name, tab, job) {
     const lPager = UIC.listPager({
       pageSize: LOG_PAGE_SIZE,
       list,
-      info: (n, page, pages) => ` ${page} / ${pages} · логов: ${logFiles} `,
+      info: (_n, page, pages) => ` ${page} / ${pages} · логов: ${logFiles} `,
       rows: (slice) => {
         if (!slice.length) return [h("div", { class: "empty" }, "Логов нет")];
         const rows = [];
-        if (e.kind === "dir") {
-        const btn = h(
-        "button",
-        { class: "btn btn-sm btn-ghost prompt-item" },
-        );
-        btn.append(iconEl("folder", "fname-icon"), `${e.name}/`);
-        btn.addEventListener("click", () => {
-        st.logPath = cur ? `${cur}/${e.name}` : e.name;
-        render();
-        });
-        rows.push(btn);
-        } else {
-        const btn = h(
-        "button",
-        {
-        class:
-        "btn btn-sm btn-ghost prompt-item" +
-        (lSelected === e.name ? " prompt-item-active" : ""),
-        },
-        `${e.name} · ${fmtSize(e.size)}`,
-        );
-        btn.addEventListener("click", () => loadLog(e.name, false, cur));
-        const del = h(
-        "button",
-        { class: "btn btn-sm btn-ghost log-del-btn", title: "Удалить лог" },
-        "🗑",
-        );
-        del.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        const full = cur ? `${cur}/${e.name}` : e.name;
-        confirmModal(
-        "Удалить лог",
-        `Файл ${full} будет удалён`,
-        "УДАЛИТЬ",
-        async () => {
-        try {
-        const sub = cur ? `&dir=${encodeURIComponent(cur)}` : "";
-        await api(`/logs/${encodeURIComponent(e.name)}?${q}${sub}`, {
-        method: "DELETE",
-        });
-        toast(`Лог удалён: ${full}`);
-        st.logPath = ""; // папка могла стать пустой — на корень
-        render();
-        } catch (ex) {
-        toast(ex.message, "err");
-        }
-        },
-        );
-        });
-        rows.push(h("div", { class: "prompt-item-row" }, btn, del));
+        for (const e of slice) {
+          if (e.kind === "dir") {
+            const btn = h("button", { class: "btn btn-sm btn-ghost prompt-item" });
+            btn.append(iconEl("folder", "fname-icon"), `${e.name}/`);
+            btn.addEventListener("click", () => {
+              st.logPath = cur ? `${cur}/${e.name}` : e.name;
+              render();
+            });
+            rows.push(btn);
+            continue;
+          }
+          const btn = h("button", {
+            class: "btn btn-sm btn-ghost prompt-item"
+              + (lSelected === e.name ? " prompt-item-active" : ""),
+          }, `${e.name} · ${fmtSize(e.size)}`);
+          btn.addEventListener("click", () => loadLog(e.name, false, cur));
+          const del = iconBtn("trash", "Удалить лог", (ev) => {
+            ev.stopPropagation();
+            const full = cur ? `${cur}/${e.name}` : e.name;
+            confirmModal("Удалить лог", `Файл ${full} будет удалён`, "УДАЛИТЬ", async () => {
+              try {
+                const sub = cur ? `&dir=${encodeURIComponent(cur)}` : "";
+                await api(`/logs/${encodeURIComponent(e.name)}?${q}${sub}`, {
+                  method: "DELETE",
+                });
+                toast(`Лог удалён: ${full}`);
+                st.logPath = ""; // папка могла стать пустой — на корень
+                render();
+              } catch (ex) {
+                toast(ex.message, "err");
+              }
+            });
+          });
+          rows.push(h("div", { class: "prompt-item-row" }, btn, del));
         }
         return rows;
       },

@@ -421,6 +421,39 @@ body {
 .files-toolbar .spacer {
   flex: 1;
 }
+/* чекбокс выделения: одна колонка в тулбаре («выделить всё») и в строках */
+.fsel {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex: none;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+/* кнопки тулбара («Загрузить», «＋ Файл», «＋ Каталог») скрыты, пока есть
+   выделка: в этот момент их место занимает панель действий выделения */
+.files-tools,
+.files-sel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.files-sel-count {
+  color: var(--muted);
+  font-size: 12px;
+}
+/* кнопка-иконка (iconBtn в project-views): подпись — в тултипе и aria-label.
+   Плоская: иконок в строке несколько, рамки превращают ряд в бусы.
+   Специфичность выше .btn-ghost/.btn-danger-ghost — иначе рамка вернётся */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 7px;
+}
+.btn.btn-ghost.icon-btn,
+.btn.btn-danger-ghost.icon-btn {
+  border-color: transparent;
+}
 /* выпадающее меню групповых кнопок «+» / «x» глоссария
    (скрытие — общим .hidden; позиционирует placeMenu, как user-menu) */
 .toolbar-menu {
@@ -497,6 +530,11 @@ body {
 }
 .frow:hover {
   background: var(--hover);
+}
+/* выделенная строка: чекбокс мелкий — без подложки не видно, что уже выбрано */
+.frow-sel,
+.frow-sel:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .fname {
   flex: 1;
@@ -919,9 +957,7 @@ input[type="number"] {
 .tooltip-show {
   opacity: 1;
 }
-[data-tip] {
-  /* без смены курсора: подсказка — только по наведению */
-}
+/* [data-tip] намеренно без cursor: help — подсказка только по наведению */
 
 /* ── запуски стадий (M4) ───────────────────────────────── */
 .run-layout {
@@ -1787,11 +1823,6 @@ input[type="number"] {
 .prompt-item-row .prompt-item {
   flex: 1;
 }
-.log-del-btn {
-  padding: 2px 8px;
-  font-size: 13px;
-}
-
 /* ── Дашборд (W3) ─────────────────────────────────────────── */
 .dash-card {
   min-width: 220px;
