@@ -137,6 +137,41 @@ def test_agents_md_paths_exist():
             f"AGENTS.md ссылается на несуществующий путь: {rel}"
 
 
+def _env_example_pairs():
+    """templates/.env.example → [(ключ, значение)] в порядке файла."""
+    out = []
+    for line in (ROOT / "templates" / ".env.example").read_text(
+            encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        out.append((k.strip(), v.strip()))
+    return out
+
+
+def test_env_example_mirrors_registry():
+    """templates/.env.example — зеркало реестра: те же ключи в том же порядке
+    и те же дефолты. Страж «никакие настройки не потерялись»: шаблон —
+    документация, а не четвёртый экземпляр конфига, и уезжать в сторону он
+    не имеет права.
+
+    bool-значения в файле — «1»/«0»; textarea-переносы — литералом «\\n»
+    (тот же sanitize, что и у страницы «Настройки»).
+    """
+    pairs = _env_example_pairs()
+    want = [s for s in SET.SETTINGS if not s.noenv and not s.run]
+    assert [k for k, _ in pairs] == [s.key for s in want], (
+        "templates/.env.example разошёлся с реестром по ключам или порядку")
+    bad = []
+    for s in want:
+        rendered = SET.sanitize(s, s.default)
+        got = dict(pairs)[s.key]
+        if got != rendered:
+            bad.append(f"{s.key}: шаблон {got!r} ≠ реестр {rendered!r}")
+    assert not bad, "; ".join(bad)
+
+
 def test_no_legacy_launcher_names():
     """start_ner/start_redact_errors и имя redact_errors переименованы —
     в доках их быть не должно."""
