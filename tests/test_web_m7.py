@@ -987,7 +987,7 @@ def test_job_start_does_not_copy_shared_env(srv, tmp_path):
     r = _request(port, "POST", "/api/jobs",
                  {"action": "translate_check", "project": "ACTIVE/demo",
                   "params": {"preset": "polished"}})
-    assert not ("__error__" in r) and r.get("ok")
+    assert "__error__" not in r and r.get("ok")
     assert not (pdir / ".env").exists()
 
 

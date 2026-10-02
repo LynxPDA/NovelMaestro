@@ -407,9 +407,10 @@ def test_apply_fix_entries_sequential_same_file(tmp_path):
     ch_dir, cmap = _mk_chapters(
         tmp_path, {1: "альфа и омега в одной строке текста."})
     fp = str(Path(ch_dir) / "00000_1_t" / "polished.txt")
-    mk = lambda o, n: {"stage": "s", "chapter": 1, "file": fp, "old": o,
-                       "new": n, "type": "", "reason": "",
-                       "status": C.REVIEW_ACCEPT, "applied": False}
+    def mk(o, n):
+        return {"stage": "s", "chapter": 1, "file": fp, "old": o,
+                "new": n, "type": "", "reason": "",
+                "status": C.REVIEW_ACCEPT, "applied": False}
     # вторая правка цепляется за результат первой
     entries = [mk("альфа", "бета"), mk("бета и омега", "бета и сигма")]
     applied, _ = FE.apply_fix_entries(entries, "polished", cmap,
