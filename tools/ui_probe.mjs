@@ -125,6 +125,11 @@ function seedProjectsDir(dir) {
   );
   // файл в корне книги: файловый менеджер есть что показать (quick-look)
   fs.writeFileSync(path.join(book, "notes.md"), "# Заметки\n\n- проба\n", "utf-8");
+  // логи книги: вкладка «Логи» показывает и папки, и файлы — и то, и другое
+  // рисуется одним пейджером
+  fs.mkdirSync(path.join(book, "logs", "chapters"), { recursive: true });
+  fs.writeFileSync(path.join(book, "logs", "ner.log"), "2025-01-01 00:00 ner: старт\n", "utf-8");
+  fs.writeFileSync(path.join(book, "logs", "chapters", "00000_1_Глава 1.log"), "глава: ок\n", "utf-8");
   fs.mkdirSync(path.join(book, "prompts"), { recursive: true });
   fs.writeFileSync(path.join(book, "prompts", "translate.txt"), "<translate>переведи</translate>\n", "utf-8");
   fs.writeFileSync(path.join(book, "metadata.yaml"), "title: Проба\nauthor: Probe\n");
@@ -379,6 +384,126 @@ async function main() {
     }
   }
 
+  /* «Файлы»: строка — чекбокс выделения и кнопки одного объекта (правка,
+   * переименовать); групповые действия (скачать/перенести/удалить) — в панели
+   * выделения, она заменяет кнопки тулбара; построчных меню «⋮» нет */
+  {
+    const before3 = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/files`, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".files-list .frow", { timeout: 15000 });
+    const read = () =>
+      page.evaluate(() => {
+        const tips = (root) => [...(root || document.createElement("div"))
+          .querySelectorAll(".icon-btn")]
+          .map((b) => b.getAttribute("aria-label") || "");
+        const rows = [...document.querySelectorAll(".files-list .frow")];
+        const hid = (sel) => {
+          const el = document.querySelector(sel);
+          return !!el && el.classList.contains("hidden");
+        };
+        return {
+          menus: document.querySelectorAll(".files-list .kebab-btn").length,
+          rows: rows.length,
+          cbs: rows.filter((r) => r.querySelector(".fsel")).length,
+          selRows: rows.filter((r) => r.classList.contains("frow-sel")).length,
+          rowTips: rows.map((r) => tips(r)),
+          all: !!document.querySelector(".files-toolbar .fsel"),
+          tools: !hid(".files-tools"),
+          bar: !hid(".files-sel"),
+          count: ((document.querySelector(".files-sel-count") || {})
+            .textContent || "").trim(),
+          barTips: tips(document.querySelector(".files-sel")),
+        };
+      });
+    const f0 = await read();
+    if (f0.menus) problems.push(`файлы: в списке ${f0.menus} меню «⋮»`);
+    if (!f0.all) problems.push("файлы: в тулбаре нет чекбокса «выделить всё»");
+    if (f0.cbs !== f0.rows) problems.push(`файлы: чекбоксов ${f0.cbs} из ${f0.rows}`);
+    if (!f0.tools || f0.bar) problems.push("файлы: без выделки видна панель выделения");
+    // в строке — только действия одного объекта; опасные и групповые — наверху
+    if (f0.rowTips.some((t) => t.some((x) => /Удалить|Скачать|Перенести/.test(x))))
+      problems.push(`файлы: в строке осталось групповое действие (${f0.rowTips[0]})`);
+    if (f0.rowTips.some((t) => !t.some((x) => x.startsWith("Переименовать "))))
+      problems.push("файлы: не у каждой строки есть «Переименовать»");
+    if (!f0.rowTips.some((t) => t.some((x) => x.startsWith("Править "))))
+      problems.push("файлы: кнопки «Править» у файлов нет");
+    // выделяем первый файл — панель появляется, кнопки тулбара уходят
+    const boxes = page.locator('.files-list .frow:not([data-dir="1"]) .fsel');
+    await boxes.first().check();
+    await page.waitForTimeout(500);
+    const f1 = await read();
+    if (f1.tools) problems.push("файлы: кнопки тулбара не скрылись при выделке");
+    if (!f1.bar) problems.push("файлы: панель выделения не появилась");
+    if (f1.count !== "выделено: 1") problems.push(`файлы: счётчик «${f1.count}»`);
+    // выделенная строка должна быть видна: подложка вместо одного чекбокса
+    if (f1.selRows !== 1) problems.push(`файлы: выделенных строк ${f1.selRows}`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-files-selected.png") });
+    const want = ["Скачать выделенные файлы", "Перенести в…", "Удалить выделенное",
+      "Снять выделение"];
+    if (want.some((w) => !f1.barTips.includes(w)))
+      problems.push(`файлы: действия панели (${f1.barTips.join(" | ")})`);
+    if (!f1.barTips.some((t) => t.startsWith("Переименовать ")))
+      problems.push("файлы: при одном объекте в панели нет «Переименовать»");
+    // перенос: один select по всему дереву каталогов проекта
+    await page.locator('.files-sel .icon-btn[aria-label^="Перенести"]').first().click();
+    await page.waitForTimeout(600);
+    const mv = await page.evaluate(() => {
+      const box = document.querySelector(".modal-backdrop select");
+      return {
+        open: document.querySelectorAll(".modal-backdrop").length,
+        opts: box ? [...box.options].map((o) => o.textContent.trim()) : [],
+      };
+    });
+    if (mv.open !== 1) problems.push(`файлы: модалка переноса открыта в ${mv.open}`);
+    if (mv.opts[0] !== "Корень проекта")
+      problems.push(`файлы: первое направление — «${mv.opts[0]}»`);
+    if (!mv.opts.includes("prompts"))
+      problems.push(`файлы: дерево каталогов короткое (${mv.opts.length})`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-files-move.png") });
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    // «Снять выделение» — панель уходит, кнопки тулбара возвращаются
+    await page.locator('.files-sel .icon-btn[aria-label="Снять выделение"]').first().click();
+    await page.waitForTimeout(400);
+    const f2 = await read();
+    if (f2.bar || !f2.tools)
+      problems.push("файлы: после «Снять» панель осталась/кнопки не вернулись");
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-files.png") });
+    log(`${problems.length === before3 ? "✅" : "❌"} файлы: выделка   строк ${f0.rows} · панель: ${f1.barTips.length} действий · перенос: ${mv.opts.length} папок`);
+  }
+
+  /* «Логи»: список папок и файлов рисует общий пейджер; клик по файлу
+   * показывает содержимое, «↑» поднимает на папку выше */
+  {
+    const before4 = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/logs`, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".prompt-list .prompt-item", { timeout: 15000 });
+    const l0 = await page.evaluate(() => ({
+      rows: document.querySelectorAll(".prompt-list .prompt-item").length,
+      dirs: [...document.querySelectorAll(".prompt-list .prompt-item")]
+        .map((x) => x.textContent.trim()).filter((t) => t.endsWith("/")).length,
+      info: ((document.querySelector(".ner-pager-info") || {})
+        .textContent || "").trim(),
+    }));
+    if (l0.rows < 2) problems.push(`логи: строк ${l0.rows} (ожидаем файл + папку)`);
+    if (l0.dirs !== 1) problems.push(`логи: папок в списке ${l0.dirs}`);
+    if (!/логова?:\s*1/.test(l0.info)) problems.push(`логи: подпись «${l0.info}»`);
+    await page.locator('.prompt-list .prompt-item:has-text("ner.log")').first().click();
+    await page.waitForTimeout(700);
+    const view = await page.evaluate(() => ((document.querySelector(".log-view") || {})
+      .textContent || "").trim());
+    if (!/ner: старт/.test(view)) problems.push(`логи: содержимое «${view.slice(0, 40)}»`);
+    // вложенная папка: заход и подъём наверх
+    await page.locator('.prompt-list .prompt-item:has-text("chapters/")').first().click();
+    await page.waitForTimeout(600);
+    const sub = await page.evaluate(() => document.querySelectorAll(".prompt-list .prompt-item").length);
+    if (sub !== 1) problems.push(`логи: в chapters/ строк ${sub}`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-logs.png") });
+    log(`${problems.length === before4 ? "✅" : "❌"} логи: список     ${l0.rows} строк · вложенно ${sub} · просмотр: ${view ? "есть" : "пусто"}`);
+  }
+
   /* страница «Настройки»: ОДИН общий .env, блоки реестра карточками,
    * секрет — маской, сохранение пишет общий файл; про рассуждения формы
    * стадий ничего не знают */
@@ -487,6 +612,7 @@ async function main() {
       () => /reasoning|thinking|extra_body/i.test(
         document.getElementById("app").innerHTML));
     if (leaked) problems.push("reasoning: поле стадии осталось в форме запуска");
+    log(`${problems.length === before ? "✅" : "❌"} настройки+reasoning ${head.cards.length} блоков · вкладка «${head.active}»`);
   }
 
   /* профили LLM: General — значения общего конфига, свой профиль хранит только
@@ -530,7 +656,12 @@ async function main() {
       if (!fs.existsSync(PF())) {
         problems.push("профили: llm_profiles.json не создан");
       } else {
-        const data = JSON.parse(fs.readFileSync(PF(), "utf-8"));
+        let data = {};
+        try {
+          data = JSON.parse(fs.readFileSync(PF(), "utf-8"));
+        } catch (ex) {
+          problems.push(`профили: файл не читается (${ex.message})`);
+        }
         const p0 = (data.profiles || [])[0] || {};
         if (p0.name !== "Домашний" || p0.id !== "p1")
           problems.push(`профили: файл ${JSON.stringify(p0)}`);
@@ -553,8 +684,13 @@ async function main() {
       .first().click();
     await page.waitForTimeout(900);
     if (seedDir) {
-      const data = JSON.parse(fs.readFileSync(PF(), "utf-8"));
-      const v = (data.profiles || [])[0].values || {};
+      let data = {};
+      try {
+        data = JSON.parse(fs.readFileSync(PF(), "utf-8"));
+      } catch (ex) {
+        problems.push(`профили: файл не читается (${ex.message})`);
+      }
+      const v = ((data.profiles || [])[0] || {}).values || {};
       if (v.MODEL !== "дом-модель")
         problems.push(`профили: значения профиля ${JSON.stringify(v)}`);
       /* только два изменённых поля, в порядке реестра */
