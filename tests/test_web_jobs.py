@@ -1605,12 +1605,19 @@ def test_llm_form_fields_are_ignored(tmp_path, monkeypatch):
 
 
 def test_llm_no_profile_no_env(tmp_path, monkeypatch):
-    """Без профиля и .env — LLM-флаги не добавляются (скрипт сам найдёт)."""
+    """Без общего .env argv получает дефолты реестра: они больше не пустые.
+
+    Профиль не выбран → General: сервер и модель — зашитые в реестр; ключ пуст,
+    поэтому ни в argv, ни в окружении его нет."""
+    monkeypatch.delenv("NM_LLM_PROFILE", raising=False)
     monkeypatch.setenv("WEB_ENV_FILE",
                        str(tmp_path / "общего-файла-нет.env"))
-    argv = build_command("ner_check", {"input": "ner.json"}, {})
-    assert "--host" not in argv and "--api_key" not in argv
-    assert "--model" not in argv
+    ctx: dict = {}
+    argv = build_command("ner_check", {"input": "ner.json"}, ctx)
+    joined = " ".join(argv)
+    assert f"--host {core_settings.BY_KEY['HOST'].default}" in joined
+    assert f"--model {core_settings.BY_KEY['MODEL'].default}" in joined
+    assert "--api_key" not in joined and ctx.get("_llm_api_key") is None
 
 
 def test_api_key_not_in_payload(tmp_path, fake_script):
@@ -1640,6 +1647,100 @@ def test_llm_api_key_via_env(tmp_path, fake_script):
     assert "env-secret" not in json.dumps(payload)
     data = (tmp_path / "job_logs" / "jobs.json").read_text(encoding="utf-8")
     assert "env-secret" not in data
+
+
+# ════════════════════════════════════════════════════════════════════
+# профили LLM: один набор серверных настроек на проект
+# ════════════════════════════════════════════════════════════════════
+
+
+def _profile_file():
+    """Файл профилей: рядом с общим .env (путь ставит autouse-фикстура)."""
+    return Path(core_settings.profiles_file())
+
+
+def test_profile_values_override_global(tmp_path, monkeypatch):
+    """Профиль переопределяет только то, что в нём задано; остальное —
+    значения общего .env (наследование, а не копия конфига)."""
+    env = tmp_path / "shared.env"
+    env.write_text("HOST=http://общий:9989\nMODEL=общая-модель\nTHREADS=4\n",
+                   encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
+    monkeypatch.delenv(core_settings.PROFILE_ENV, raising=False)
+    prof = core_settings.profile_create(
+        "Домашний", {"HOST": "http://дом:9989", "API_KEY": "дом-ключ"})
+    vals = core_settings.llm_values(prof["id"])
+    assert vals["host"] == "http://дом:9989"
+    assert vals["api_key"] == "дом-ключ"
+    assert vals["model"] == "общая-модель" and vals["threads"] == 4
+    # General — как был: общий конфиг, профилей не видно
+    assert core_settings.llm_values()["host"] == "http://общий:9989"
+
+
+def test_profile_env_var_layer(tmp_path, monkeypatch):
+    """NM_LLM_PROFILE выбирает профиль для процесса: скрипт читает реестр
+    сам, отдельного чтения профиля у него нет."""
+    env = tmp_path / "shared.env"
+    env.write_text("HOST=http://общий:9989\n", encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
+    prof = core_settings.profile_create("Облако", {"MODEL": "gemma/x"})
+    monkeypatch.setenv(core_settings.PROFILE_ENV, prof["id"])
+    assert core_settings.llm_values()["model"] == "gemma/x"
+    assert core_settings.effective("HOST") == "http://общий:9989"
+
+
+def test_profile_slug_and_names(tmp_path):
+    """Русское имя в slug не сворачивается → номерной id; латиница — свой
+    slug; дубль имени (без учёта регистра) — отказ."""
+    assert core_settings.profile_slug("OpenAI Cloud") == "openai_cloud"
+    first = core_settings.profile_create("Домашний")
+    assert first["id"] == "p1"
+    assert core_settings.profile_create("  облако ")["name"] == "облако"
+    with pytest.raises(ValueError):
+        core_settings.profile_create("ДОМАШНИЙ")
+
+
+def test_profile_general_immune(tmp_path):
+    """General — не данные: его нельзя переименовать и удалить, а его
+    значения — обычный общий .env."""
+    with pytest.raises(ValueError):
+        core_settings.profile_rename(core_settings.PROFILE_DEFAULT, "Главный")
+    with pytest.raises(ValueError):
+        core_settings.profile_delete(core_settings.PROFILE_DEFAULT)
+    assert core_settings.profile_save_values(
+        core_settings.PROFILE_DEFAULT, {"MODEL": "m"})["builtin"] is True
+    assert "MODEL=m" in Path(core_settings.env_file()).read_text(encoding="utf-8")
+    # General не живёт в файле профилей: там только настоящие профили
+    assert not _profile_file().exists()
+
+
+def test_profile_secret_mask_keeps_value(tmp_path):
+    """Маска «••••» прилетела вместо ключа — сохранённый ключ не стирается;
+    пустое значение переопределение снимает."""
+    prof = core_settings.profile_create("Ключи", {"API_KEY": "секрет",
+                                                 "MODEL": "m"})
+    saved = core_settings.profile_save_values(
+        prof["id"], {"API_KEY": "••••", "MODEL": ""})
+    assert saved["values"] == {"API_KEY": "секрет"}
+    assert core_settings.profile_display(prof["id"])["API_KEY"] == "••••"
+    assert "секрет" not in json.dumps(core_settings.profiles_payload())
+
+
+def test_build_command_uses_profile(tmp_path, monkeypatch):
+    """build_command с профилем: в argv — сервер/модель/потоки профиля,
+    а не общего конфига."""
+    env = tmp_path / "shared.env"
+    env.write_text("HOST=http://общий:9989\nMODEL=общая-модель\n",
+                   encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
+    monkeypatch.delenv(core_settings.PROFILE_ENV, raising=False)
+    prof = core_settings.profile_create("Домашний", {
+        "HOST": "http://дом:9989", "MODEL": "дом-модель", "THREADS": "9"})
+    joined = " ".join(build_command("ner", {"file": "book.txt"}, {},
+                                   prof["id"]))
+    assert f"--host http://дом:9989 --model дом-модель" in joined
+    assert "--threads 9" in joined
+    assert "общая-модель" not in joined
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1707,6 +1808,44 @@ def _make_project(port, req, name="test_book"):
                        {"section": "ACTIVE", "name": name})
     assert res.status == 200, payload
     return name
+
+
+def test_stages_payload_has_profiles(jobs_srv, tmp_path):
+    """Список стадий и спека отдают профили LLM: селектор запусков рисует
+    их отсюда, секрета в payload нет."""
+    port, req, jm = jobs_srv
+    core_settings.profile_create("Домашний", {"HOST": "http://дом:9989",
+                                             "API_KEY": "дом-ключ"})
+    res, payload = req("GET", "/api/stages")
+    assert res.status == 200, payload
+    ids = [p["id"] for p in payload["profiles"]]
+    assert ids == [core_settings.PROFILE_DEFAULT, "p1"]
+    assert payload["profiles"][1]["host"] == "http://дом:9989"
+    assert "дом-ключ" not in json.dumps(payload)
+    res, payload = req("GET", "/api/stages/ner/spec")
+    assert [p["id"] for p in payload["spec"]["profiles"]] == ids
+
+
+def test_jobs_start_passes_profile(jobs_srv, tmp_path, monkeypatch):
+    """Профиль проекта доезжает до стадии: argv собран из значений профиля."""
+    port, req, jm = jobs_srv
+    env = tmp_path / "shared.env"
+    env.write_text("HOST=http://общий:9989\nMODEL=общая-модель\n",
+                   encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
+    monkeypatch.delenv(core_settings.PROFILE_ENV, raising=False)
+    _make_project(port, req)
+    prof = core_settings.profile_create("Домашний", {
+        "HOST": "http://дом:9989", "MODEL": "дом-модель", "THREADS": "9"})
+    res, payload = req("POST", "/api/jobs",
+                       {"action": "pipeline",
+                        "project": "ACTIVE/test_book",
+                        "params": {}, "profile": prof["id"]})
+    assert res.status == 200, payload
+    # argv — не часть публичного payload запуска (в нём был бы ключ), берём Job
+    argv = " ".join(jm.get(payload["job"]["id"]).argv)
+    assert "--host http://дом:9989" in argv and "--model дом-модель" in argv
+    assert "--jobs 9" in argv and "общая-модель" not in argv
 
 
 def test_job_start_windows_flags(monkeypatch):

@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-api_env.py — конфигурация: страница «Настройки», промпты и metadata проекта.
+api_env.py — конфигурация: страница «Настройки», профили LLM, промпты и metadata.
 
 Значения настроек живут в одном общем .env, но API отдаёт и принимает их
 БЛОКАМИ РЕЕСТРА (core/settings.py), а не текстом файла: метки, типы, варианты
 и дефолты описаны там же, и чужой ключ в файл не попадает. Собственный .env
 книги из модели убран: поля запусков, изменённые для одной книги, — рабочее
 состояние браузера (localStorage), а не второй конфигурационный файл.
+
+LLM-настройки отдаются профиль за профилем: General — значения общего .env,
+остальные лежат рядом с ним в llm_profiles.json и переопределяют только то,
+что в них задано; профиль выбирается в запусках проекта.
 """
 from __future__ import annotations
 
@@ -27,32 +31,12 @@ from web.api_common import (
 )
 
 
-def _settings_get(ctx: dict) -> dict:
-    """Страница «Настройки» (GET /api/settings): реестр блоками и значения.
+def _clean_values(values) -> dict:
+    """Тело формы → {КЛЮЧ реестра: значение}; чужой ключ — 400, маска — пропуск.
 
-    Ответ — subvкладки → блоки → поля (метки, типы, варианты, подсказки) с
-    эффективными значениями. env_wins — ключи, которые заданы переменными
-    окружения процесса: они перекрывают файл (канон §7), и правка в
-    интерфейсе их не применит, пока не убрано окружение.
+    Ключи — только имена реестра: иначе «одно место истины» распалось бы
+    снова. Значение-маска секрета — не значение: ключ остаётся как был.
     """
-    path = core_settings.env_file()
-    return {"ok": True,
-            "path": str(path) if path else "",
-            "exists": bool(path) and Path(path).is_file(),
-            "groups": core_settings.groups_payload(),
-            "env_wins": [s.key for s in core_settings.SETTINGS
-                         if os.environ.get(s.key, "").strip()]}
-
-
-def _settings_put(ctx: dict) -> dict:
-    """Сохранить настройки (PUT /api/settings {values: {КЛЮЧ: значение}}).
-
-    Ключи — только имена реестра: чужой ключ отклоняется, а не дописывается в
-    файл, иначе «одно место истины» распалось бы снова. Значения сливаются с
-    тем, что уже лежит в файле (PAGE PUT не должен терять незапрошенные
-    ключи); пустое значение снимает ключ, без ключей файл удаляется.
-    """
-    values = ctx["body"].get("values")
     if not isinstance(values, dict):
         raise ApiError(400, "Поле values: {КЛЮЧ: значение}")
     clean: dict = {}
@@ -62,27 +46,95 @@ def _settings_put(ctx: dict) -> dict:
         if setting is None:
             raise ApiError(400, f"Неизвестный ключ настройки: {k!r}")
         if setting.secret and str(value or "").strip() == "••••":
-            continue  # приехала маска вместо значения — ключ не трогаем
+            continue
         clean[k] = value
-    merged = dict(core_settings.file_values())
-    merged.update(clean)
-    try:
-        stored = core_settings.write_values(merged)
-    except RuntimeError as exc:
-        raise ApiError(500, str(exc))
+    return clean
+
+
+def _settings_payload(profile: str = "") -> dict:
+    """Общий ответ страницы: путь конфига, env_wins, блоки, профили."""
     path = core_settings.env_file()
-    return {"ok": True, "keys": stored,
+    return {"ok": True,
             "path": str(path) if path else "",
             "exists": bool(path) and Path(path).is_file(),
+            "profile": profile or core_settings.PROFILE_DEFAULT,
+            "profile_file": core_settings.profiles_file(),
+            "groups": core_settings.groups_payload(),
+            "profiles": core_settings.profiles_payload(),
             "env_wins": [s.key for s in core_settings.SETTINGS
-                         if os.environ.get(s.key, "").strip()],
-            "groups": core_settings.groups_payload()}
+                         if os.environ.get(s.key, "").strip()]}
+
+
+def _settings_get(ctx: dict) -> dict:
+    """Страница «Настройки» (GET /api/settings): реестр блоками и значения.
+
+    Ответ — субвкладки → блоки → поля (метки, типы, варианты, подсказки) с
+    эффективными значениями General. env_wins — ключи, которые заданы
+    переменными окружения процесса: они перекрывают файл (канон §7), и правка
+    в интерфейсе их не применит, пока не убрано окружение.
+    """
+    return _settings_payload()
+
+
+def _settings_put(ctx: dict) -> dict:
+    """Сохранить настройки (PUT /api/settings {profile, values}).
+
+    Профиль пустой или general → общий .env; иначе — значения этого профиля
+    (в файле профилей живут только переопределения, остальное — General).
+    Ключи — только имена реестра; значения сливаются с уже сохранёнными (PUT
+    одной вкладки не должен терять другие ключи); пустое значение снимает ключ.
+    """
+    body = ctx["body"]
+    profile = str(body.get("profile") or "").strip()
+    clean = _clean_values(body.get("values"))
+    if profile in ("", core_settings.PROFILE_DEFAULT):
+        merged = dict(core_settings.file_values())
+        merged.update(clean)
+        try:
+            stored = core_settings.write_values(merged)
+        except RuntimeError as exc:
+            raise ApiError(500, str(exc))
+    else:
+        try:
+            prof = core_settings.profile_save_values(profile, clean)
+        except ValueError as exc:
+            raise ApiError(404, str(exc))
+        stored = list(prof.get("values") or {})
+    out = _settings_payload(profile)
+    out["keys"] = stored
+    return out
+
+
+def _settings_profiles(ctx: dict) -> dict:
+    """Профили LLM (POST /api/settings/profiles): create | rename | delete.
+
+    Тело: {action, name?, id?}. id встроенного General не переименовывается и
+    не удаляется: его значения — обычный общий .env.
+    """
+    body = ctx["body"]
+    action = str(body.get("action") or "").strip()
+    pid = str(body.get("id") or "").strip()
+    name = str(body.get("name") or "").strip()
+    try:
+        if action == "create":
+            core_settings.profile_create(name)
+        elif action == "rename":
+            core_settings.profile_rename(pid, name)
+        elif action == "delete":
+            if not core_settings.profile_delete(pid):
+                raise ApiError(404, f"Профиль не найден: {pid}")
+        else:
+            raise ApiError(400, "Поле action: create | rename | delete")
+    except ValueError as exc:
+        raise ApiError(400, str(exc))
+    return {"ok": True, "profiles": core_settings.profiles_payload()}
 
 
 def _register_settings(router: Router) -> None:
     """Роуты страницы «Настройки» (реестр, а не текст файла)."""
     router.add("GET", "/api/settings", _settings_get)
     router.add("PUT", "/api/settings", _settings_put)
+    router.add("POST", "/api/settings/profiles", _settings_profiles)
 
 
 def _prompts_list(ctx: dict) -> dict:

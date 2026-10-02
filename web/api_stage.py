@@ -64,6 +64,8 @@ def _jobs_start(ctx: dict) -> dict:
     action = (body.get("action") or "").strip()
     project = (body.get("project") or "").strip()
     params = body.get("params") or {}
+    # профиль LLM проекта — полем формы не является: один выбор на все стадии
+    profile = str(body.get("profile") or "").strip()
     if not action:
         raise ApiError(400, "Поле action обязательно")
     if "/" not in project:
@@ -107,7 +109,7 @@ def _jobs_start(ctx: dict) -> dict:
     # LLM-конфиг (сервер/модель/ключ/потоки) в argv подставляет реестр
     # (web.stages.build_command): в форме запусков этих полей больше нет,
     # а свои .env у книги больше нет — локальные значения живут в браузере
-    argv = build_command(action, params, ctx)
+    argv = build_command(action, params, ctx, profile)
     argv[0] = str(script)  # абсолютный путь к скрипту
     jm = _job_manager(ctx)
     # H2 (AUDIT): лимит параллельных задач --jobs-limit (мёртвая опция → живая)
@@ -130,11 +132,15 @@ def _jobs_start(ctx: dict) -> dict:
             f"Проект {project} уже обрабатывается задачей «{busy.title}» "
             f"({busy.id}) — дождитесь завершения или остановите её.",
         )
-    env = None
+    env = {}
+    if profile and profile != core_settings.PROFILE_DEFAULT:
+        # скрипт читает реестр сам: выбранный профиль доезжает до него
+        # переменной, иначе стадия жила бы значениями General
+        env[core_settings.PROFILE_ENV] = profile
     api_key = ctx.pop("_llm_api_key", None)
     if api_key:
         # P1 (AUDIT #2): ключ — только в окружении subprocess
-        env = {"LLM_API_KEY": str(api_key)}
+        env["LLM_API_KEY"] = str(api_key)
     job = jm.start(action, title, project, argv, pdir, env=env)
     return {"ok": True, "job": _job_payload(job)}
 
@@ -279,6 +285,7 @@ def _stage_spec(ctx: dict) -> dict:
     if spec is None:
         raise ApiError(404, "Стадия не найдена")
     spec = copy.deepcopy(spec)  # не мутируем глобальный кэш спекаций
+    spec["profiles"] = _profile_summary()
     pdir = None
     project = ctx["query"].get("project", "")
     if "/" in project:
@@ -410,8 +417,25 @@ def _stage_options(ctx: dict) -> dict:
     return out
 
 
+def _profile_summary() -> list:
+    """Профили LLM для селектора запусков: id, имя, эффективные сервер/модель.
+
+    Значения отдаются уже разложенными по именам полей стадии (host/model),
+    секрета здесь нет: api_key в интерфейс не ездит никогда.
+    """
+    out = []
+    for p in core_settings.profiles():
+        vals = core_settings.llm_values(p["id"])
+        out.append({"id": p["id"], "name": p["name"],
+                    "builtin": bool(p.get("builtin")),
+                    "host": str(vals.get("host") or ""),
+                    "model": str(vals.get("model") or ""),
+                    "reasoning_mode": str(vals.get("reasoning_mode") or "")})
+    return out
+
+
 def _stages_list(ctx: dict) -> dict:
-    """Список стадий (GET /api/stages): key/title/script.
+    """Список стадий (GET /api/stages): key/title/script + профили LLM.
 
     Плюс reasoning — ОДИН глобальный блок на весь конвейер (те же формы,
     что у полей стадий): спеки стадий его не содержат, иначе шесть
@@ -420,7 +444,8 @@ def _stages_list(ctx: dict) -> dict:
     return {"ok": True, "stages": [
         {"key": k, "title": v["title"], "script": v["script"]}
         for k, v in ordered_stages()],
-        "reasoning": core_settings.block_payload("llm_reasoning")}
+        "reasoning": core_settings.block_payload("llm_reasoning"),
+        "profiles": _profile_summary()}
 
 
 # ════════════════════════════════════════════════════════════════════

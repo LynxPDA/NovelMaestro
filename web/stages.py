@@ -586,12 +586,17 @@ def spec_for(key: str) -> dict | None:
     return out
 
 
-def build_command(key: str, form: dict, ctx: dict) -> list[str]:
-    """argv для стадии (относительные пути — cwd=проект)."""
+def build_command(key: str, form: dict, ctx: dict,
+                  profile: str = "") -> list[str]:
+    """argv для стадии (относительные пути — cwd=проект).
+
+    Профиль LLM — явным параметром либо полем формы `profile`: выбор
+    пользователя живёт в браузере проекта и приезжает вместе с формой.
+    """
     spec = STAGE_SPECS.get(key)
     if spec is None:
         raise ValueError(f"Нет спеки стадии: {key}")
-    return spec["build"](core_settings.with_llm(key, form), ctx)
+    return spec["build"](core_settings.with_llm(key, form, profile), ctx)
 
 
 def script_path(key: str, repo_root: Path) -> Path | None:
