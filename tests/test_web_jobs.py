@@ -1141,10 +1141,12 @@ def test_m5_stages_in_specs():
         assert spec is not None, key
         assert spec["script"] in ("ner.py", "ner_check.py",
                                    "translate_check_llm.py", "wiki.py")
-        names = {f["name"] for f in spec["fields"]}
-        assert "profile" not in names
-        assert not names & core_settings.LLM_FORM_NAMES, \
-            f"{key}: LLM-поля вернулись в форму: {sorted(names)}"
+        names = [f["name"] for f in spec["fields"]]
+        # профиль — ЕДИНСТВЕННОЕ LLM-поле в форме и оно первое: у стадии свой
+        # выбор, но не свой набор сервер/модель/потоков
+        assert names[0] == core_settings.PROFILE_FIELD, key
+        assert not set(names) & core_settings.LLM_FORM_NAMES, \
+            f"{key}: LLM-поля вернулись в форму: {sorted(set(names))}"
 
 
 
@@ -1727,7 +1729,7 @@ def test_profile_secret_mask_keeps_value(tmp_path):
 
 
 def test_build_command_uses_profile(tmp_path, monkeypatch):
-    """build_command с профилем: в argv — сервер/модель/потоки профиля,
+    """build_command: в argv — сервер/модель/потоки профиля из поля формы,
     а не общего конфига."""
     env = tmp_path / "shared.env"
     env.write_text("HOST=http://общий:9989\nMODEL=общая-модель\n",
@@ -1736,8 +1738,8 @@ def test_build_command_uses_profile(tmp_path, monkeypatch):
     monkeypatch.delenv(core_settings.PROFILE_ENV, raising=False)
     prof = core_settings.profile_create("Домашний", {
         "HOST": "http://дом:9989", "MODEL": "дом-модель", "THREADS": "9"})
-    joined = " ".join(build_command("ner", {"file": "book.txt"}, {},
-                                   prof["id"]))
+    joined = " ".join(build_command(
+        "ner", {"file": "book.txt", "profile": prof["id"]}, {}))
     assert f"--host http://дом:9989 --model дом-модель" in joined
     assert "--threads 9" in joined
     assert "общая-модель" not in joined
@@ -1811,8 +1813,8 @@ def _make_project(port, req, name="test_book"):
 
 
 def test_stages_payload_has_profiles(jobs_srv, tmp_path):
-    """Список стадий и спека отдают профили LLM: селектор запусков рисует
-    их отсюда, секрета в payload нет."""
+    """Список стадий и спека отдают профили LLM: подпись поля «Профиль LLM»
+    рисуется отсюда, секрета в payload нет."""
     port, req, jm = jobs_srv
     core_settings.profile_create("Домашний", {"HOST": "http://дом:9989",
                                              "API_KEY": "дом-ключ"})
@@ -1824,10 +1826,19 @@ def test_stages_payload_has_profiles(jobs_srv, tmp_path):
     assert "дом-ключ" not in json.dumps(payload)
     res, payload = req("GET", "/api/stages/ner/spec")
     assert [p["id"] for p in payload["spec"]["profiles"]] == ids
+    # свежий профиль дошёл до поля формы: options/labels пересчитаны
+    pf = payload["spec"]["fields"][0]
+    assert pf["name"] == core_settings.PROFILE_FIELD
+    assert list(pf["options"]) == ids
+    assert pf["labels"] == {"general": "General", "p1": "Домашний"}
+    # у стадии без модели поля профиля нет
+    res, payload = req("GET", "/api/stages/compile/spec")
+    assert core_settings.PROFILE_FIELD not in {
+        f["name"] for f in payload["spec"]["fields"]}
 
 
 def test_jobs_start_passes_profile(jobs_srv, tmp_path, monkeypatch):
-    """Профиль проекта доезжает до стадии: argv собран из значений профиля."""
+    """Профиль стадии доезжает до скрипта: argv собран из значений профиля."""
     port, req, jm = jobs_srv
     env = tmp_path / "shared.env"
     env.write_text("HOST=http://общий:9989\nMODEL=общая-модель\n",
@@ -1840,7 +1851,7 @@ def test_jobs_start_passes_profile(jobs_srv, tmp_path, monkeypatch):
     res, payload = req("POST", "/api/jobs",
                        {"action": "pipeline",
                         "project": "ACTIVE/test_book",
-                        "params": {}, "profile": prof["id"]})
+                        "params": {"profile": prof["id"]}})
     assert res.status == 200, payload
     # argv — не часть публичного payload запуска (в нём был бы ключ), берём Job
     argv = " ".join(jm.get(payload["job"]["id"]).argv)

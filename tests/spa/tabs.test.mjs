@@ -194,7 +194,9 @@ async function api(path, opts = {}) {
     return { stages: STAGES, profiles: SETTINGS_PAYLOAD.profiles };
   }
   if (p.startsWith("/stages/")) {
-    return { spec: { fields: [] }, options: {} };
+    const key = p.split("/")[2];
+    return { spec: { key, title: key, fields: SPEC_FIELDS[key] || [] },
+             options: {} };
   }
   return { ok: true };
 }
@@ -210,10 +212,30 @@ function makeEditor(initial) {
   };
 }
 
-/* стадии и профили LLM: селектор профиля в запусках рисует их отсюда */
+/* стадии и профили LLM: поле «Профиль LLM» рисует сводку отсюда */
 const STAGES = [
   { key: "ner", title: "Глоссарий", script: "cli/ner.py" },
+  { key: "pipeline", title: "Перевод", script: "web/pipeline.py" },
 ];
+/* профиль — ПЕРВОЕ ПОЛЕ формы каждой LLM-стадии (noenv: значение живёт в
+   браузере проекта+стадии, в .env и в argv оно не попадает) */
+const PROFILE_FIELD = {
+  name: "profile", label: "Профиль LLM", type: "select", default: "general",
+  options: ["general", "p1"], labels: { general: "General", p1: "Домашний" },
+  noenv: true, help: "Настройки модели для ЭТОЙ стадии",
+};
+const SPEC_FIELDS = {
+  ner: [
+    { ...PROFILE_FIELD },
+    { name: "chunk_size", label: "Размер чанка, ТОКЕНЫ", type: "number",
+      default: "8000" },
+  ],
+  pipeline: [
+    { ...PROFILE_FIELD },
+    { name: "action", label: "Тип работы", type: "select", default: "all",
+      options: ["all"], labels: { all: "полный цикл" } },
+  ],
+};
 const SETTINGS_PAYLOAD = {
   path: "/tmp/shared.env",
   exists: true,
@@ -432,7 +454,7 @@ test("quick-look: Space на строке открывает модалку с s
   assert.equal(open.length, 1, "Space открыл ровно одну модалку");
 });
 
-/* ── профиль LLM проекта: один выбор на все стадии ─────────────────── */
+/* ── профиль LLM: у каждой LLM-стадии свой выбор ───────────────── */
 const tick = () => new Promise((r) => setTimeout(r, 10));
 
 function collectText(node, out = []) {
@@ -445,6 +467,26 @@ function collectText(node, out = []) {
   return out;
 }
 
+/* форма стадии рисуется только когда стадия открыта — открываем клик */
+async function runStage(key) {
+  const title = (STAGES.find((s) => s.key === key) || {}).title;
+  const page = viewProject("ACTIVE", "Книга", "run");
+  await tick();
+  const card = findByClass(page, "stage-card")
+    .find((c) => collectText(c).includes(title));
+  await card._listeners.click[0]();
+  await tick();
+  return page;
+}
+
+function findTag(node, tag, out = []) {
+  if (node && typeof node === "object") {
+    if (node.tagName === String(tag).toUpperCase()) out.push(node);
+    for (const c of node.children || []) findTag(c, tag, out);
+  }
+  return out;
+}
+
 function findByClass(node, cls, out = []) {
   if (node && typeof node === "object") {
     if ((node.className || "").split(/\s+/).includes(cls)) out.push(node);
@@ -453,33 +495,33 @@ function findByClass(node, cls, out = []) {
   return out;
 }
 
-test("запуски: панель профиля LLM рисует профили и значения General", async () => {
-  const page = viewProject("ACTIVE", "Книга", "run");
-  await tick();
-  const bars = findByClass(page, "run-profile");
-  assert.equal(bars.length, 1, "панель профиля одна на вкладку");
-  const sel = findByClass(bars[0], "run-profile-select")[0];
+test("запуски: профиль LLM — первое поле формы стадии", async () => {
+  const page = await runStage("ner");
+  const fields = findByClass(page, "field-profile");
+  assert.equal(fields.length, 1, "поле профиля одно");
+  const sel = findTag(fields[0], "select")[0];
   assert.ok(sel, "селектор профиля");
+  /* _field — на label-обёртке поля (на нём держатся и подрежимы) */
+  assert.equal(fields[0]._field.name, "profile");
   /* текст <option> — текстовый узел-ребёнок, а не textContent родителя */
   const optText = (o) => (o.children || [])
     .map((c) => (typeof c === "string" ? c : c.textContent || "")).join("");
   assert.deepEqual(sel.children.map(optText), ["General", "Домашний"]);
   /* выбор браузера пуст → встроенный профиль */
   assert.equal(sel.value, "general");
-  const note = findByClass(bars[0], "run-profile-note")[0];
+  const note = findByClass(fields[0], "run-profile-note")[0];
   assert.match(note.textContent, /General — значения общего конфига/);
   assert.match(note.textContent, /http:\/\/общий:9989/);
   assert.match(note.textContent, /общая-модель/);
 });
 
-test("запуски: выбор профиля живёт в localStorage проекта", async () => {
-  const page = viewProject("ACTIVE", "Книга", "run");
-  await tick();
-  const sel = findByClass(page, "run-profile-select")[0];
+test("запуски: профиль стадии живёт в localStorage проекта и стадии", async () => {
+  const page = await runStage("ner");
+  const sel = findTag(findByClass(page, "field-profile")[0], "select")[0];
   sel.value = "p1";
   await sel._listeners.change[0]({ target: sel });
   assert.equal(
-    globalThis.localStorage.getItem("nmProfile:ACTIVE/Книга"), "p1",
+    globalThis.localStorage.getItem("nmProfile:ACTIVE/Книга/ner"), "p1",
   );
   const note = findByClass(page, "run-profile-note")[0];
   assert.match(note.textContent, /Домашний — наследует General/);
@@ -487,27 +529,40 @@ test("запуски: выбор профиля живёт в localStorage пр�
   /* рассуждения профиля — тоже часть сводки */
   assert.match(note.textContent, /рассуждения: on/);
   /* сохранённый выбор переживает перерисовку */
-  const page2 = viewProject("ACTIVE", "Книга", "run");
-  await tick();
-  assert.equal(findByClass(page2, "run-profile-select")[0].value, "p1");
+  const page2 = await runStage("ner");
+  assert.equal(
+    findTag(findByClass(page2, "field-profile")[0], "select")[0].value, "p1");
 });
 
-test("запуски: без профилей панели нет (пустую карточку не рисуем)", async () => {
-  const saved = SETTINGS_PAYLOAD.profiles;
-  SETTINGS_PAYLOAD.profiles = [];
-  try {
-    const page = viewProject("ACTIVE", "Книга", "run");
-    await tick();
-    assert.equal(findByClass(page, "run-profile").length, 0);
-  } finally {
-    SETTINGS_PAYLOAD.profiles = saved;
-  }
+test("запуски: у стадий одного проекта профиль свой", async () => {
+  const page = await runStage("ner");
+  const nerSel = findTag(findByClass(page, "field-profile")[0], "select")[0];
+  nerSel.value = "p1";
+  await nerSel._listeners.change[0]({ target: nerSel });
+  /* вторая стадия того же проекта — со своим выбором (General) */
+  const page2 = await runStage("pipeline");
+  const pipeSel = findTag(findByClass(page2, "field-profile")[0], "select")[0];
+  assert.equal(pipeSel.value, "general");
+  assert.equal(globalThis.localStorage.getItem("nmProfile:ACTIVE/Книга/pipeline"),
+    null);
+  /* и память ner при этом осталась своей */
+  assert.equal(globalThis.localStorage.getItem("nmProfile:ACTIVE/Книга/ner"), "p1");
 });
 
-test("запуски: profile не поле формы — в params запуски его нет", async () => {
-  /* профиль едет отдельным полем тела запуска; в params стадии он быть не
-     должен: стадия его не знает, а реестр подставляет значения сам */
-  const src = RUN_SRC;
-  assert.match(src, /profile: st\.profile \|\| ""/);
-  assert.doesNotMatch(src, /params\W*\n?\W*profile/);
+test("запуски: смена профиля — не «изменённая настройка» стадии", async () => {
+  /* память профиля живёт отдельно: кнопка сброса настроек на неё не влияет */
+  const page = await runStage("ner");
+  const sel = findTag(findByClass(page, "field-profile")[0], "select")[0];
+  sel.value = "p1";
+  await sel._listeners.change[0]({ target: sel });
+  const btn = findByClass(page, "run-reset")[0];
+  assert.ok(btn.className.split(/\s+/).includes("hidden"),
+    "сброшенные настройки не должны считать профиль изменённым полем");
+});
+
+test("запуски: профиль уезжает в params запуска вместе с полями формы", () => {
+  /* профиль — поле формы: отдельного поля тела запуска больше нет */
+  assert.doesNotMatch(RUN_SRC, /profile: st\.profile/);
+  assert.match(RUN_SRC, /params: buildParams\(key, spec\)/);
+  assert.match(RUN_SRC, /if \(f\.name === PROFILE_FIELD\) continue/);
 });

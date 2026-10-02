@@ -600,35 +600,53 @@ async function main() {
   }
 
   /* «Запуски»: ОДНА форма на стадию (переключателя режимов и пресетов нет),
-   * поля — из реестра со значениями общего конфига, LLM-полей нет,
-   * «Сбросить настройки» возвращает изменённое поле к значению конфига */
+   * поля — из реестра со значениями общего конфига; LLM-полей подключения
+   * нет, вместо них одно поле «Профиль LLM» — и он выбирается СВОЕЙ стадией */
   {
     const before = problems.length;
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
       { waitUntil: "load" });
     await page.reload({ waitUntil: "load" });
     await page.waitForSelector(".stage-card", { timeout: 15000 });
-    /* профиль LLM проекта: одна панель на вкладку, выбор — localStorage */
+    /* форма стадии рисуется только на открытой стадии */
+    const openStage = async (text) => {
+      await page.locator(`.stage-card:has-text("${text}")`).first().click();
+      await page.waitForTimeout(900);
+    };
     const readProfile = () => page.evaluate(() => {
-      const el = document.querySelector(".run-profile");
+      const el = document.querySelector(".run-form .field-profile");
       if (!el) return null;
       const sel = el.querySelector("select");
+      /* панель открытой стадии — первая в правой колонке: у колонок
+         «Активный запуск» такой же класс, берём свою */
+      const stage = ((document.querySelector(".run-col-form .run-panel-title")
+        || {}).textContent || "").trim().split(" ")[0];
+      /* поле профиля — первым среди полей формы (строка «Главы» полем
+         не считается и живёт перед ними) */
+      const fields = [...document.querySelectorAll(".run-form .field")];
       return {
-        title: ((el.querySelector(".run-profile-title") || {}).textContent || "").trim(),
+        idx: fields.indexOf(el),
+        label: ((el.querySelector(".field-label") || {}).textContent || "").trim(),
         opts: [...((sel || {}).options || [])].map((o) => o.textContent.trim()),
         value: (sel || {}).value || "",
         note: ((el.querySelector(".run-profile-note") || {}).textContent || "").trim(),
-        stored: localStorage.getItem("nmProfile:TMP/Probe") || "",
+        stage,
+        stored: localStorage.getItem(`nmProfile:${"TMP"}/${"Probe"}/${stage}`) || "",
       };
     });
+    await openStage("Создание глоссария");
     let pr = await readProfile();
     if (!pr) {
-      problems.push("запуски: панели «LLM профиль» нет");
+      problems.push("запуски: поля «Профиль LLM» в форме стадии нет");
     } else {
-      if (pr.title !== "LLM профиль")
-        problems.push(`запуски: заголовок панели «${pr.title}»`);
+      if (pr.idx !== 0)
+        problems.push(`запуски: профиль не первое поле формы (индекс ${pr.idx})`);
+      if (pr.stage !== "ner")
+        problems.push(`запуски: открыта стадия «${pr.stage}»`);
+      if (pr.label !== "Профиль LLM")
+        problems.push(`запуски: метка поля «${pr.label}»`);
       if (pr.opts.join("/") !== "General/Дачный")
-        problems.push(`запуски: профили в селекторе (${pr.opts.join("/")})`);
+        problems.push(`запуски: профили в поле (${pr.opts.join("/")})`);
       if (pr.value !== "general")
         problems.push(`запуски: выбран «${pr.value}»`);
       if (!/General — значения общего конфига/.test(pr.note)
@@ -636,23 +654,34 @@ async function main() {
         problems.push(`запуски: подпись профиля «${pr.note}»`);
       if (pr.stored)
         problems.push(`запуски: выбор появился сам собой (${pr.stored})`);
-      /* выбор профиля проекта остаётся в браузере и доезжает до запусков */
-      await page.locator(".run-profile select").first()
-        .selectOption({ index: 1 });
+      /* выбор профиля стадии остаётся в браузере и не считается
+         «изменённой настройкой» — сброс настроек до него не касается */
+      await page.locator(".run-form .field-profile select")
+        .first().selectOption({ index: 1 });
       await page.waitForTimeout(400);
       pr = await readProfile();
       if (pr.value !== "p1" || pr.stored !== "p1")
-        problems.push(`запуски: выбор не запомнен (${pr.value}/${pr.stored})`);
+        problems.push(`запуски: выбор не запомнен (${pr.value}/${pr.stored}) `
+          + `ключи: ${pr.keys}`);
       if (!/Дачный — наследует General/.test(pr.note)
           || !/дом-модель/.test(pr.note)
           || !/http:\/\/127\.0\.0\.1:9\/v1/.test(pr.note))
         problems.push(`запуски: подпись выбранного профиля «${pr.note}»`);
-      if (await page.locator(".run-profile").count() !== 1)
-        problems.push("запуски: панель профиля не одна");
+      if (pr.reset)
+        problems.push(`запуски: профиль попал в сброс («${pr.reset}»)`);
+      if (SHOT)
+        await page.screenshot({ path: path.join(OUT, "run-profile.png") });
     }
-    await page.locator('.stage-card:has-text("Создание глоссария")').first()
-      .click();
-    await page.waitForTimeout(900);
+    /* вторая LLM-стадия того же проекта — со своим выбором (General) */
+    await openStage("Перевод (LLM)");
+    const pr2 = await readProfile();
+    if (!pr2) {
+      problems.push("запуски: на конвейере поля «Профиль LLM» нет");
+    } else if (pr2.value !== "general" || pr2.stored) {
+      problems.push(`запуски: стадии наследуют чужой выбор `
+        + `(${pr2.value}/${pr2.stored})`);
+    }
+    await openStage("Создание глоссария");
     if (await page.locator(".run-mode, .mode-btn").count())
       problems.push("запуски: переключатель «Простой/Экспертный» вернулся");
     const readForm = () =>
@@ -680,7 +709,7 @@ async function main() {
     }
     if (form.reset)
       problems.push(`запуски: кнопка сброса видна без правок («${form.reset}»)`)
-    if (SHOT) await page.screenshot({ path: path.join(OUT, "run-form.png") });
+
     // правим поле → «Сбросить настройки (1)» с тултипом «сейчас → конфиг»
     await page.locator(".run-form .field")
       .filter({ hasText: "Размер чанка" }).first()

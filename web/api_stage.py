@@ -64,8 +64,8 @@ def _jobs_start(ctx: dict) -> dict:
     action = (body.get("action") or "").strip()
     project = (body.get("project") or "").strip()
     params = body.get("params") or {}
-    # профиль LLM проекта — полем формы не является: один выбор на все стадии
-    profile = str(body.get("profile") or "").strip()
+    # профиль LLM — поле формы стадии: у каждой стадии свой выбор
+    profile = str(params.get(core_settings.PROFILE_FIELD) or "").strip()
     if not action:
         raise ApiError(400, "Поле action обязательно")
     if "/" not in project:
@@ -109,7 +109,7 @@ def _jobs_start(ctx: dict) -> dict:
     # LLM-конфиг (сервер/модель/ключ/потоки) в argv подставляет реестр
     # (web.stages.build_command): в форме запусков этих полей больше нет,
     # а свои .env у книги больше нет — локальные значения живут в браузере
-    argv = build_command(action, params, ctx, profile)
+    argv = build_command(action, params, ctx)
     argv[0] = str(script)  # абсолютный путь к скрипту
     jm = _job_manager(ctx)
     # H2 (AUDIT): лимит параллельных задач --jobs-limit (мёртвая опция → живая)
@@ -134,7 +134,7 @@ def _jobs_start(ctx: dict) -> dict:
         )
     env = {}
     if profile and profile != core_settings.PROFILE_DEFAULT:
-        # скрипт читает реестр сам: выбранный профиль доезжает до него
+        # скрипт читает реестр сам: профиль этой стадии доезжает до него
         # переменной, иначе стадия жила бы значениями General
         env[core_settings.PROFILE_ENV] = profile
     api_key = ctx.pop("_llm_api_key", None)
@@ -279,6 +279,11 @@ def _stage_spec(ctx: dict) -> dict:
     него — переменные окружения, иначе дефолт реестра. Собственного .env у
     книги больше нет: локальные значения запусков — рабочее состояние
     браузера (localStorage), а не слой конфига.
+
+    У LLM-стадии первым идёт поле `profile` (тоже noenv: его значение — выбор
+    браузера, а не конфиг): оно и решает, чьи сервер/модель/потоки/рассуждения
+    подставит with_llm. Профиль выбирается стадией, поэтому перевод и
+    глоссарий одной книги могут идти на разные серверы.
     """
     key = ctx["params"]["key"]
     spec = spec_for(key)
@@ -286,6 +291,14 @@ def _stage_spec(ctx: dict) -> dict:
         raise ApiError(404, "Стадия не найдена")
     spec = copy.deepcopy(spec)  # не мутируем глобальный кэш спекаций
     spec["profiles"] = _profile_summary()
+    if core_settings.is_llm_stage(key):
+        # профиль — поле формы: его варианты и подписи перечитываются при
+        # каждом открытии формы (профиль могли создать вне интерфейса),
+        # кэш спекаций их не видит
+        pf = core_settings.profile_field()
+        name = core_settings.PROFILE_FIELD
+        spec["fields"] = [pf if f.get("name") == name else f
+                          for f in (spec.get("fields") or [])]
     pdir = None
     project = ctx["query"].get("project", "")
     if "/" in project:
@@ -418,7 +431,7 @@ def _stage_options(ctx: dict) -> dict:
 
 
 def _profile_summary() -> list:
-    """Профили LLM для селектора запусков: id, имя, эффективные сервер/модель.
+    """Профили LLM для поля «Профиль LLM»: id, имя, эффективные сервер/модель.
 
     Значения отдаются уже разложенными по именам полей стадии (host/model),
     секрета здесь нет: api_key в интерфейс не ездит никогда.
@@ -435,11 +448,13 @@ def _profile_summary() -> list:
 
 
 def _stages_list(ctx: dict) -> dict:
-    """Список стадий (GET /api/stages): key/title/script + профили LLM.
+    """Список стадий (GET /api/stages): key/title/script + сводка профилей LLM.
 
-    Плюс reasoning — ОДИН глобальный блок на весь конвейер (те же формы,
-    что у полей стадий): спеки стадий его не содержат, иначе шесть
-    одинаковых полей разъехались бы по значениям в одном запуске.
+    Профили отдаются сводкой — [{id,name,builtin,host,model,reasoning_mode}]:
+    SPA рисует по ним подпись выбранного профиля у поля «Профиль LLM». Значения
+    уже разложены по историческим именам полей стадии; api_key здесь нет
+    никогда. Плюс reasoning — глобальный блок рассуждений (General): спеки
+    стадий своих reasoning-полей не содержат.
     """
     return {"ok": True, "stages": [
         {"key": k, "title": v["title"], "script": v["script"]}
@@ -688,6 +703,11 @@ def _preview_request_post(ctx: dict) -> dict:
     argv += ["--preview-request", PREVIEW_REQUEST_FILE]
     proc_env = dict(os.environ)
     proc_env.setdefault("PYTHONIOENCODING", "utf-8")
+    # предпросмотр обязан показывать тот же запрос, что и запуск: профиль
+    # стадии доезжает скрипту той же переменной
+    prof = str(params.get(core_settings.PROFILE_FIELD) or "").strip()
+    if prof and prof != core_settings.PROFILE_DEFAULT:
+        proc_env[core_settings.PROFILE_ENV] = prof
     try:
         proc = subprocess.run(
             [_sys.executable, *argv], cwd=str(pdir),

@@ -9,10 +9,10 @@ argv. Поля формы (и их дефолты, метки, подсказк�
 - cwd = папка проекта; python = sys.executable; скрипт = REPO/cli/xxx.py.
 - Единицы в метках — как в help скриптов (СИМВОЛЫ/ТОКЕНЫ/ГЛАВЫ).
 - LLM-настройки (сервер, модель, ключ, температура, таймауты, повторы,
-  потоки) из формы запусков убраны: они общие на весь конвейер и живут на
-  странице «Настройки». build_command подставляет их значения в имена полей
-  стадии (jobs ← THREADS, retries ← MAX_RETRIES), поэтому сборка argv ниже
-  не изменилась.
+  потоки) в форме запусков одним полем «Профиль LLM»: стадия берёт их из
+  выбранного профиля (или общего конфига — это профиль General). build_command
+  подставляет значения профиля в имена полей стадии (jobs ← THREADS,
+  retries ← MAX_RETRIES), поэтому сборка argv ниже не изменилась.
 - режимы «Простой/Экспертный» и пресеты убраны: у всех стадий одна форма.
 """
 from __future__ import annotations
@@ -586,17 +586,16 @@ def spec_for(key: str) -> dict | None:
     return out
 
 
-def build_command(key: str, form: dict, ctx: dict,
-                  profile: str = "") -> list[str]:
+def build_command(key: str, form: dict, ctx: dict) -> list[str]:
     """argv для стадии (относительные пути — cwd=проект).
 
-    Профиль LLM — явным параметром либо полем формы `profile`: выбор
-    пользователя живёт в браузере проекта и приезжает вместе с формой.
+    Профиль LLM — поле формы `profile`: у каждой LLM-стадии свой выбор, он
+    живёт в браузере проекта и приезжает вместе с формой.
     """
     spec = STAGE_SPECS.get(key)
     if spec is None:
         raise ValueError(f"Нет спеки стадии: {key}")
-    return spec["build"](core_settings.with_llm(key, form, profile), ctx)
+    return spec["build"](core_settings.with_llm(key, form), ctx)
 
 
 def script_path(key: str, repo_root: Path) -> Path | None:

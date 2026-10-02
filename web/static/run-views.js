@@ -52,8 +52,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     brPreview: null, // batch_replace: предпросмотр {segments, stats, …}
     brChapter: null, // batch_replace: выбранная глава предпросмотра
     brSig: "", // batch_replace: сигнатура формы последнего предпросмотра
-    profiles: [], // профили LLM [{id,name,builtin,values}] — из /api/stages
-    profile: "", // выбранный профиль проекта (рабочее состояние браузера)
+    profiles: [], // профили LLM [{id,name,builtin,…}] — сводка из /api/stages
+    pnote: {}, // подпись выбранного профиля по стадиям (узел под селектом)
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
@@ -135,7 +135,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   async function runBody() {
-    // список стадий и профили LLM: профиль один на проект, а не на стадию
+    // список стадий + сводка профилей LLM (подпись поля «Профиль LLM»)
     const stages = await api("/stages").catch(() => ({ stages: [] }));
     st.profiles = stages.profiles || [];
     const cards = stages.stages.map((s) =>
@@ -152,7 +152,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const stageList = h(
       "div",
       { class: "run-col run-col-stages" },
-      profileBar(),
       h(
         "div",
         { class: "stage-grid" },
@@ -173,66 +172,63 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return h("div", { class: "run-layout" }, stageList, right);
   }
 
-  // ── профиль LLM проекта ──────────────────────────────────────────
-  // Один выбор на все стадии проекта: сервер, модель, потоки и рассуждения
-  // профиля подставляет сервер (core.settings.with_llm), в форме запусков
-  // этих полей нет. Выбор живёт в браузере проекта, а не на диске.
-  function profileKey() {
-    return `nmProfile:${section}/${name}`;
+  // ── профиль LLM стадии ─────────────────────────────────────────────
+  // Профиль — ПЕРВОЕ ПОЛЕ формы каждой LLM-стадии: у стадий одного проекта
+  // может быть разный выбор (перевод на облачной модели, глоссарий на
+  // домашней). Сервер подставляет значения профиля в поля стадии
+  // (core.settings.with_llm), своих LLM-полей в форме нет. Выбор живёт в
+  // браузере по проекту+стадии, на диске его нет.
+  const PROFILE_FIELD = "profile";
+  const PROFILE_GENERAL = "general";
+
+  function profileKey(key) {
+    return `nmProfile:${section}/${name}/${key}`;
   }
 
-  function profileBar() {
-    const list = st.profiles || [];
-    if (!list.length) return null;
-    let cur = "";
+  // память профиля стадии: сохранённый id, если он ещё есть в списке,
+  // иначе General (первый вариант) — удалённый профиль не должен оставаться
+  // «выбранным про запас»
+  function profileStored(key, options) {
+    let saved = "";
     try {
-      cur = localStorage.getItem(profileKey()) || "";
+      saved = localStorage.getItem(profileKey(key)) || "";
     } catch {
       /* нет localStorage — выбор живёт до перезагрузки */
     }
-    if (!list.some((p) => p.id === cur)) {
-      cur = list[0].id; // general
+    const list = options && options.length ? options : [PROFILE_GENERAL];
+    return list.includes(saved) ? saved : list[0];
+  }
+
+  function profileRemember(key, id) {
+    try {
+      localStorage.setItem(profileKey(key), id);
+    } catch {
+      /* нет localStorage — и нечего сохранять */
     }
-    st.profile = cur;
-    const sel = h(
-      "select",
-      { class: "input input-inline run-profile-select" },
-      ...list.map((p) => h("option", { value: p.id }, p.name)),
-    );
-    sel.value = cur;
-    const note = h("div", { class: "run-profile-note" });
-    function syncNote() {
-      /* /api/stages отдаёт профили сводкой: host/model/reasoning_mode
-         уже разложены по именам полей стадии */
-      const p = list.find((x) => x.id === st.profile) || list[0];
-      const parts = [p.host || "сервер не задан", p.model || "модель не задана"];
-      if (p.reasoning_mode && p.reasoning_mode !== "default") {
-        parts.push(`рассуждения: ${p.reasoning_mode}`);
-      }
-      note.textContent = p.builtin
-        ? `${p.name} — значения общего конфига (${parts.join(", ")})`
-        : `${p.name} — наследует General (${parts.join(", ")})`;
+  }
+
+  // узел подписи создаётся вместе с полем, обновляется — при выборе
+  function profileNote(key) {
+    const el = h("div", { class: "run-profile-note" });
+    st.pnote[key] = el;
+    return el;
+  }
+
+  function syncProfileNote(key) {
+    const el = st.pnote[key];
+    const list = st.profiles || [];
+    if (!el || !list.length) return;
+    /* /api/stages отдаёт профили сводкой: host/model/reasoning_mode уже
+       разложены по именам полей стадии */
+    const cur = String((st.values[key] || {})[PROFILE_FIELD] || list[0].id);
+    const p = list.find((x) => x.id === cur) || list[0];
+    const parts = [p.host || "сервер не задан", p.model || "модель не задана"];
+    if (p.reasoning_mode && p.reasoning_mode !== "default") {
+      parts.push(`рассуждения: ${p.reasoning_mode}`);
     }
-    sel.addEventListener("change", () => {
-      st.profile = sel.value;
-      try {
-        localStorage.setItem(profileKey(), sel.value);
-      } catch {
-        /* нет localStorage — и нечего сохранять */
-      }
-      syncNote();
-    });
-    attachTooltip(sel, "Профиль LLM этого проекта: сервер, модель, потоки и "
-      + "рассуждения профиля подставляются в запуск сервером. Профили "
-      + "задаются на «Настройках»; пустое поле профиля наследует General.");
-    syncNote();
-    return h(
-      "div",
-      { class: "run-profile" },
-      h("div", { class: "run-profile-title" }, "LLM профиль"),
-      sel,
-      note,
-    );
+    el.textContent = p.builtin
+      ? `${p.name} — значения общего конфига (${parts.join(", ")})`
+      : `${p.name} — наследует General (${parts.join(", ")})`;
   }
 
   // последний завершённый запуск стадии этого проекта (список /jobs
@@ -614,6 +610,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // без неё перезагрузка страницы молча сбрасывает выбор чипсов
     // на дефолт, и запуск уходит не с теми полями, что показаны
     chipRestore(key, spec, vals);
+    // профиль LLM — память по проекту+стадии (у стадий одного проекта выбор
+    // свой); снимок эталона снимается ПОСЛЕ него, чтобы память не выглядела
+    // «изменённым полем» и не уезжала под кнопку «Сбросить настройки»
+    const pf = (spec.fields || []).find((x) => x.name === PROFILE_FIELD);
+    if (pf) vals[PROFILE_FIELD] = profileStored(key, pf.options);
     // epub: автосохранённые настройки поверх дефолтов/.env
     if (spec.autosave) {
       const saved = epubLoad();
@@ -711,6 +712,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const base = st.baseline[key] || {};
     const diffs = [];
     for (const f of spec.fields || []) {
+      if (f.name === PROFILE_FIELD) continue; // память профиля — своя, по стадии
       const now = vals[f.name];
       const want = base[f.name];
       const same = f.type === "bool"
@@ -806,6 +808,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       input.addEventListener("change", () => {
         vals[f.name] = input.value;
         touched.add(f.name);
+        if (f.name === PROFILE_FIELD) {
+          profileRemember(key, input.value);
+          syncProfileNote(key);
+        }
       });
     } else if (f.type === "textarea") {
       // epub: многострочные regexp (по одному паттерну на строку)
@@ -939,6 +945,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       });
     }
     const wrap = h("label", { class: "field" }, label, input);
+    // профиль стадии: под селектом — подпись выбранного профиля (сервер,
+    // модель, рассуждения), чтобы выбор был виден без раскрытия списка
+    if (f.name === PROFILE_FIELD) {
+      wrap.classList.add("field-profile");
+      wrap.append(profileNote(key));
+      syncProfileNote(key);
+    }
     // M9: сложные контролы (select/textarea/files) — тултип при наведении;
     // inline-подсказка остаётся только у простых text/number
     if (f.help) {
@@ -2361,7 +2374,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             action: key,
             project: `${section}/${name}`,
             params: buildParams(key, spec),
-            profile: st.profile || "",
           },
         });
         st.job = r.job;

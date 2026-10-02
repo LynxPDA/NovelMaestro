@@ -21,6 +21,8 @@ RUN_PARAMS = {
 }
 # старые имена LLM-полей стадий, которые свёрнуты в одну общую настройку
 ALIAS = {"retries": "max_retries", "jobs": "threads"}
+# поле выбора профиля LLM — не настройка реестра: состояние браузера стадии
+PROFILE = "profile"
 LLM_FIELDS = {"host", "model", "api_key", "temperature", "timeout",
               "stream_timeout", "max_retries", "retries", "max_tokens",
               "threads", "jobs", "retry_empty"}
@@ -139,7 +141,7 @@ def test_registry_matches_stage_specs(stage):
 
     spec = STAGE_SPECS[stage]
     spec_names = [f["name"] for f in (spec.get("fields") or [])
-                  if f["name"] not in LLM_FIELDS]
+                  if f["name"] not in LLM_FIELDS and f["name"] != PROFILE]
     at, extra = REGISTRY_ONLY.get(stage, (len(spec_names), []))
     expected = spec_names[:at] + extra + spec_names[at:]
     assert [s.name for s in S.stage_fields(stage)] == expected, \
@@ -148,7 +150,7 @@ def test_registry_matches_stage_specs(stage):
     checked = 0
     for f in spec.get("fields") or []:
         name = f["name"]
-        if name in LLM_FIELDS:
+        if name in LLM_FIELDS or name == PROFILE:
             continue
         got = reg.get(name)
         assert got is not None, f"{stage}.{name}: поля нет в реестре"
@@ -168,6 +170,55 @@ def test_registry_matches_stage_specs(stage):
     assert checked + len(extra) == len(reg), (
         f"{stage}: в реестре {len(reg)} полей, в спеке сверено {checked} "
         f"(+{len(extra)} реестровых)")
+
+
+def test_profile_field_is_first_on_llm_stages():
+    """Профиль LLM — первое поле формы LLM-стадии (не настройка реестра)."""
+    for stage in sorted(S.STAGE_LLM_FIELDS):
+        if not S.STAGE_LLM_FIELDS[stage]:
+            continue
+        fields = S.form_fields(stage)
+        assert fields[0]["name"] == PROFILE, f"{stage}: профиль не первое поле"
+        f = fields[0]
+        assert f["type"] == "select" and f["noenv"] is True
+        assert f["default"] == S.PROFILE_DEFAULT, f"{stage}: профиль не General"
+        assert f["options"] and f["options"][0] == S.PROFILE_DEFAULT
+        assert set(f["labels"]) == set(f["options"]), f"{stage}: подписи профилей"
+        assert f["help"], f"{stage}: у поля профиля нет подсказки"
+
+
+def test_profile_field_absent_on_plain_stages():
+    """У стадий без модели поля профиля нет (эпуб/проверка/компиляция/замены)."""
+    for stage, fields in S.STAGE_LLM_FIELDS.items():
+        if fields:
+            continue
+        names = {f["name"] for f in S.form_fields(stage)}
+        assert PROFILE not in names, f"{stage}: поле профиля не LLM-стадии"
+
+
+def test_profile_field_tracks_profiles_file(global_env):
+    """Варианты и подписи поля — текущие профили: General + созданные."""
+    S.profile_create("Домашний", {"MODEL": "gemma/дом"})
+    S.profile_create("Облако", {"MODEL": "gemma/облако"})
+    f = S.form_fields("ner")[0]
+    assert f["options"] == ("general", "p1", "p2")
+    assert f["labels"] == {"general": "General", "p1": "Домашний",
+                           "p2": "Облако"}
+    # General — всегда первый: без выбора стадия идёт на общий конфиг
+    assert f["options"].index(S.PROFILE_DEFAULT) == 0
+
+
+def test_with_llm_takes_profile_from_form(global_env):
+    """with_llm разбирает профиль по полям стадии: свой сервер у стадии — это профиль."""
+    S.profile_create("Домашний", {
+        "HOST": "http://дом:9989", "MODEL": "дом-модель", "THREADS": "9"})
+    form = {"start": "1", "end": "5", "profile": "p1"}
+    out = S.with_llm("ner", form)
+    assert out["host"] == "http://дом:9989" and out["model"] == "дом-модель"
+    assert out["threads"] == 9 and out["start"] == "1"
+    # без поля — General (значения общего конфига)
+    plain = S.with_llm("ner", {"start": "1"})
+    assert plain["model"] == S.effective("MODEL")
 
 
 def test_run_params_marked_and_never_written(global_env):

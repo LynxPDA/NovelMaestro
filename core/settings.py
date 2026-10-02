@@ -436,8 +436,17 @@ def form_fields(stage: str) -> list:
 
     hidden-настройки (NER_THRESHOLD/NER_NGRAM конвейера) в форму не идут: их
     правят на «Настройках», стадия берёт значение из эффективного конфига.
+    У LLM-стадии первым идёт поле выбора профиля — тоже noenv-состояние.
     """
-    return [s.form_field() for s in stage_fields(stage) if not s.hidden]
+    out = [s.form_field() for s in stage_fields(stage) if not s.hidden]
+    if is_llm_stage(stage):
+        out.insert(0, profile_field())
+    return out
+
+
+def is_llm_stage(stage: str) -> bool:
+    """Стадия работает с моделью (значит, у неё есть выбор профиля LLM)."""
+    return bool(STAGE_LLM_FIELDS.get(stage))
 
 
 def _coerce(setting: Setting, value):
@@ -617,7 +626,8 @@ def write_values(values: dict) -> list:
 # ════════════════════════════════════════════════════════════════════
 #
 # Профиль — полный набор LLM-настроек (сервер, модель, ключ, потоки, таймауты,
-# ретраи, температура, рассуждения): у разных книг и разных серверов свой.
+# ретраи, температура, рассуждения). Выбирается КАЖДОЙ LLM-стадией своего
+# проекта: перевод может идти на облачной модели, глоссарий — на домашней.
 # Leжат в ОДНОМ файле рядом с общим .env; в файле — только те ключи, которые
 # профиль переопределяет, остальное профиль наследует от General.
 #
@@ -626,6 +636,8 @@ def write_values(values: dict) -> list:
 # как до профилей.
 # ════════════════════════════════════════════════════════════════════
 
+#: имя поля формы LLM-стадии: какой профиль её обслуживает
+PROFILE_FIELD = "profile"
 #: id встроенного профиля — его значения живут в общем .env
 PROFILE_DEFAULT = "general"
 #: название встроенного профиля (оно же — имя по умолчанию)
@@ -645,12 +657,35 @@ def profiles_file() -> str:
     return str(Path(__file__).resolve().parent.parent / PROFILES_NAME)
 
 
+def profile_field() -> dict:
+    """Поле выбора профиля LLM — первое поле формы каждой LLM-стадии.
+
+    Профиль выбирает стадия, а не проект: перевод и глоссарий одной книги могут
+    делать разные серверы. Значение — состояние браузера (noenv), оно не ездит
+    в .env и не попадает в argv: `with_llm` разбирает его по LLM-полям стадии,
+    а подпроцесс получает NM_LLM_PROFILE.
+    """
+    profs = profiles()
+    return {
+        "name": PROFILE_FIELD,
+        "label": "Профиль LLM",
+        "type": "select",
+        "default": PROFILE_DEFAULT,
+        "options": tuple(p["id"] for p in profs),
+        "labels": {p["id"]: p["name"] for p in profs},
+        "noenv": True,
+        "help": "Настройки модели для ЭТОЙ стадии: сервер, модель, потоки и "
+                "рассуждения выбранного профиля. Профили задаются на "
+                "«Настройках»; General — значения общего конфига.",
+    }
+
+
 def profile_slug(name: object, taken=()) -> str:
     """Устойчивый id профиля: имя остаётся человеческим, ключ — ascii-safe.
 
     Русское имя в slug не сворачивается, поэтому ему выдаётся p<номер>; id
     пишется в файл один раз и больше не меняется — на него ссылается выбор
-    проекта и переменная окружения подпроцесса.
+    стадии и переменная окружения подпроцесса.
     """
     raw = unicodedata.normalize("NFKD", str(name or "").strip().lower())
     slug = re.sub(r"[^a-z0-9]+", "_", raw.encode("ascii", "ignore").decode()).strip("_")
@@ -771,7 +806,7 @@ def profile_create(name: str, values: dict | None = None) -> dict:
 
 
 def profile_rename(profile_id: str, name: str) -> dict:
-    """Переименовать профиль (id остаётся: на него ссылается выбор проекта)."""
+    """Переименовать профиль (id остаётся: на него ссылается выбор стадии)."""
     name = str(name or "").strip()
     if not name:
         raise ValueError("имя профиля обязательно")
@@ -855,23 +890,23 @@ def llm_form(stage: str, profile: str = "") -> dict:
     """LLM-значения в именах полей стадии (jobs ← THREADS, retries ← MAX_RETRIES).
 
     Сборка argv стадии не изменилась: она читает те же имена полей, просто
-    теперь значения приходят из общего конфига (или профиля), а не из формы.
+    значения приходят из профиля (или общего конфига), а не из формы.
     """
     vals = llm_values(profile)
     return {n: vals.get(LLM_ALIAS.get(n, n), "")
             for n in STAGE_LLM_FIELDS.get(stage, ())}
 
 
-def with_llm(stage: str, form: dict, profile: str = "") -> dict:
-    """Форма запуска поверх глобального LLM-конфига.
+def with_llm(stage: str, form: dict) -> dict:
+    """Форма запуска поверх LLM-конфига выбранного профилем.
 
-    LLM-полей в форме запусков больше нет, но что бы в ней ни лежало (старый
-    кэш браузера, старый .env книги), сервер/модель/ключ/потоки перезаписываются
-    общим конфигом: «свой сервер у стадии» больше не существует.
-    Профиль LLM — явным параметром либо полем формы `profile`.
+    Своих LLM-полей в форме запусков нет, но что бы в ней ни лежало (старый
+    кэш браузера, старый .env книги), сервер/модель/ключ/потоки/рассуждения
+    перезаписываются значениями профиля: «свой сервер у стадии» — это выбор
+    профиля, а не набор полей. Профиль читается из поля формы `profile`.
     """
     out = dict(form or {})
-    out.update(llm_form(stage, profile or (form or {}).get("profile") or ""))
+    out.update(llm_form(stage, str(out.get(PROFILE_FIELD) or "")))
     return out
 
 
