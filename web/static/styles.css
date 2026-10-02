@@ -867,24 +867,6 @@ input[type="number"] {
   flex: 1;
   min-width: 0;
 }
-/* поле формы «Запусков» с локальным отличием книги от общего .env:
-   метка не мешает чтению — маленький маркер с тултипом значений */
-.field-local {
-  margin-left: 6px;
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  color: var(--accent);
-  cursor: help;
-}
-.field-local-reset {
-  align-self: flex-start;
-}
-
 .manage-grid {
   display: flex;
   flex-direction: column;
@@ -966,6 +948,15 @@ input[type="number"] {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.run-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* «Сбросить настройки» — в правом краю шапки панели запусков */
+.run-panel-head .run-reset {
+  margin-left: auto;
 }
 .run-panel-title {
   display: flex;
@@ -1061,70 +1052,33 @@ input[type="number"] {
   background: var(--border);
 }
 
-/* ── «Простой режим / Экспертный» в Запусках ── */
-.run-mode {
-  display: flex;
-  gap: 6px;
-  padding: 3px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) - 2px);
-}
-.mode-btn {
-  flex: 1;
-  padding: 6px 10px;
-  background: transparent;
-  border: none;
-  border-radius: calc(var(--radius) - 4px);
-  color: var(--text-dim);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.mode-btn:hover {
-  color: var(--text);
-}
-.mode-btn-active {
-  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
-  color: var(--text);
-  font-weight: 600;
-}
-.preset-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.preset-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text);
-}
-.preset-desc {
-  font-size: 13px;
-  color: var(--text-dim);
-  line-height: 1.45;
-}
-.preset-range-row {
+.run-range-row {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
   color: var(--text);
 }
-.preset-range {
+.run-range {
   width: 90px;
 }
-/* «Конечная глава» считается по бюджету (translate_quality) */
-.preset-range.range-auto {
-  opacity: 0.75;
-  cursor: default;
-}
-.preset-range-sep {
+.run-range-sep {
   color: var(--text-dim);
+}
+/* страница «Настройки»: блоки реестра карточками, поля — сеткой */
+.settings-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settings-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+}
+.settings-fields .field {
+  min-width: 220px;
+  flex: 0 1 320px;
 }
 .field-help {
   font-size: 11px;
@@ -1378,10 +1332,10 @@ input[type="number"] {
 .chapters-toolbar .chapters-range {
   width: 130px;
 }
-.chapters-toolbar .preset-range {
+.chapters-toolbar .run-range {
   width: 90px;
 }
-.chapters-toolbar .preset-range-sep {
+.chapters-toolbar .run-range-sep {
   color: var(--muted);
 }
 .chapters-toolbar .spacer {

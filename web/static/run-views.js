@@ -42,14 +42,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     progress: null, // последнее событие прогресса {label, done, total}
     lastLog: {}, // стадия → последний завершённый запуск (обещание данных)
     gen: 0, // поколение отрисовки — гасит гонки двух render()
-    values: {}, // значения формы по стадиям (данные; синхронизация режимов)
-    touched: {}, // изменённые пользователем поля по стадиям (Set имён)
+    values: {}, // значения формы по стадиям (рабочее состояние браузера)
+    // значения формы сразу после инициализации (с автоподхватом диапазона
+    // глав и prompt_file) — эталон, к которому возвращает «Сбросить настройки»
+    baseline: {},
+    touched: {}, // менявшиеся пользователем поля по стадиям (Set имён)
     preview: null, // epub: данные предпросмотра {entries, source, skips}
     previewDirty: true, // epub: настройки менялись после предпросмотра
     brPreview: null, // batch_replace: предпросмотр {segments, stats, …}
     brChapter: null, // batch_replace: выбранная глава предпросмотра
     brSig: "", // batch_replace: сигнатура формы последнего предпросмотра
-    overridden: {}, // стадия → {поле: {key, local, global}} — отличия книги
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
@@ -109,6 +111,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // значения формы — тоже по стадиям: переключение стадии = свежая
     // форма (внутри стадии значения общие для обоих режимов)
     st.values[key] = null;
+    st.baseline[key] = null;
     st.touched[key] = null;
     st.preview = null; // epub: свежий предпросмотр для новой стадии
     st.previewDirty = true;
@@ -360,10 +363,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     try {
       const r = await api(`/stages/${key}/spec?project=${section}/${name}`);
       spec = r.spec;
-      // чем книга отличается от общего конфига (пометка поля + «Сбросить»):
-      // собственный .env книги в интерфейсе не редактируется — его
-      // пересобирает сервер из этой формы
-      st.overridden[key] = spec.overridden || {};
     } catch (ex) {
       return h("div", { class: "run-empty" }, ex.message);
     }
@@ -378,8 +377,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     } catch {
       st.options = {};
     }
-    // синхронизация режимов: значения формы — общие (st.values),
-    // инициализация один раз на выбор стадии (дефолты + .env-префилл)
+    // значения формы — один раз на выбор стадии (значения реестра и
+    // общего конфига + автоподхваты)
     if (!st.values[key]) initFormValues(key, spec);
     // pipeline: автоподхват «Общего промпт-файла» при КАЖДОМ рендере —
     // файл мог появиться после первой инициализации формы (значения
@@ -420,25 +419,28 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
     }
-    // «Простой режим» — только для стадий с пресетом (spec.simple);
-    // translate_check/batch_replace/compile — только экспертные,
-    // переключатель не показываем
-    const hasSimple = (spec.simple || []).length > 0;
-    const mode = hasSimple ? UICore.runModeGet(key) : "expert";
-    st.mode = mode; // buildField: epub-фильтр расширений по режиму
-    const body =
-      hasSimple && mode === "simple"
-        ? simplePanel(key, spec)
-        : expertForm(key, spec);
+    // Одна форма на стадию: «Простой/Экспертный» и пресеты убраны, все
+    // поля идут из реестра настроек (spec.fields)
     const panel = h(
       "div",
       { class: "run-panel" },
-      h("div", { class: "run-panel-title" }, `${key} · ${spec.title}`),
-      hasSimple ? modeToggle(key, mode) : null,
-      body,
+      h(
+        "div",
+        { class: "run-panel-head" },
+        h("div", { class: "run-panel-title" }, `${key} · ${spec.title}`),
+        resetSettingsBtn(key, spec),
+      ),
+      stageForm(key, spec),
     );
-    // epub: панель предпросмотра разбивки — в обоих режимах
-    if (key === "epub") panel.append(epubPreviewPanel(key, spec, mode));
+    // смена поля не перерисовывает форму (иначе теряется фокус), поэтому
+    // кнопка «Сбросить настройки» пересчитывается делегатом: слушатель поля
+    // срабатывает раньше и уже записал значение в st.values
+    st.head = panel.querySelector(".run-panel-head");
+    st.curSpec = spec;
+    panel.addEventListener("input", () => syncResetBtn(key));
+    panel.addEventListener("change", () => syncResetBtn(key));
+    // epub: панель предпросмотра разбивки
+    if (key === "epub") panel.append(epubPreviewPanel(key, spec));
     // batch_replace: панель предпросмотра замен по главам
     if (key === "batch_replace") {
       const br = batchReplacePreviewPanel(key);
@@ -448,34 +450,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return panel;
   }
 
-  // сегмент-переключатель «Простой режим / Экспертный»
-  function modeToggle(key, mode) {
-    const btn = (m, label) =>
-      h(
-        "button",
-        {
-          class: "mode-btn" + (mode === m ? " mode-btn-active" : ""),
-          onclick: () => {
-            UICore.runModeSet(key, m);
-            if (key === "epub") st.previewDirty = true;
-            render();
-          },
-        },
-        label,
-      );
-    return h(
-      "div",
-      { class: "run-mode" },
-      btn("simple", "Простой режим"),
-      btn("expert", "Экспертный"),
-    );
-  }
-
-  // ── синхронизация режимов: единое хранилище значений формы ──────────
-  // st.values[stage] — значения полей (данные), st.touched[stage] —
-  // имена полей, которые пользователь менял. Оба режима читают/пишут
-  // один объект: переключение «Простой ↔ Экспертный» ничего не теряет,
-  // тонкие правки из эксперта применяются в простом и наоборот.
+  // ── единое хранилище значений формы ──────────────────────────────────
+  // st.values[stage] — значения полей (данные), st.touched[stage] — имена
+  // полей, которые пользователь менял. Значения запусков — рабочее
+  // состояние браузера: собственного .env у книги больше нет, а
+  // «Сбросить настройки» возвращает поля к значениям общего конфига.
 
   // ── epub: автосохранение настроек формы (localStorage, по проекту) ──
   // Настройки сохраняются сразу при вводе (без ожидания запуска) и
@@ -545,16 +524,21 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
         // autofile: автоподхват файла из пула (donate.txt и т.п.)
         if (f.autofile && vals[f.name] === "") {
-          const slash = f.autofile.indexOf("/");
-          const adir = slash >= 0 ? f.autofile.slice(0, slash) : "";
-          const abase = slash >= 0 ? f.autofile.slice(slash + 1) : f.autofile;
-          const apool =
-            adir === "source"
-              ? opts.source || []
-              : adir === "prompts"
-                ? opts.prompts || []
-                : opts.root || [];
-          if (apool.includes(abase)) vals[f.name] = f.autofile;
+          for (const cand of [].concat(f.autofile)) {
+            const slash = cand.indexOf("/");
+            const adir = slash >= 0 ? cand.slice(0, slash) : "";
+            const abase = slash >= 0 ? cand.slice(slash + 1) : cand;
+            const apool =
+              adir === "source"
+                ? opts.source || []
+                : adir === "prompts"
+                  ? opts.prompts || []
+                  : opts.root || [];
+            if (apool.includes(abase)) {
+              vals[f.name] = abase; // значение — имя файла, не путь
+              break;
+            }
+          }
         }
       }
     }
@@ -576,6 +560,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
     }
+    // эталон «значений конфига» снимается после автоподхвата: иначе
+    // автозаполненные главы и prompt_file вечно считались бы изменёнными
+    st.baseline[key] = Object.assign({}, vals);
   }
 
   // ── память выбора чипсов (hidden noenv: types/fields/ner_fields) ──
@@ -625,22 +612,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return v;
   }
 
-  // params запуска: экспертный = все непустые значения формы (vals
-  // уже включают дефолты + .env-префилл + автоподхваты диапазона/
-  // autofile); простой = пресет (дефолты) + поля, которые пользователь
-  // менял в ЛЮБОМ режиме (синхронизация режимов: правки из эксперта
-  // применяются в простом и наоборот).
-  function buildParams(key, spec, mode) {
+  // params запуска: все непустые значения формы (vals уже включают значения
+  // реестра/общего конфига + автоподхваты диапазона глав и autofile)
+  function buildParams(key, spec) {
     const vals = st.values[key] || {};
-    const touched = st.touched[key] || new Set();
     const p = {};
-    if (mode === "simple") {
-      Object.assign(p, (spec.preset || {}).params || {});
-    }
     for (const f of spec.fields || []) {
       const v = vals[f.name];
-      const use = mode === "expert" || touched.has(f.name);
-      if (!use) continue;
       if (f.type === "bool") p[f.name] = Boolean(v);
       else if (v !== "" && v != null) p[f.name] = finalFile(f, v);
     }
@@ -649,76 +627,77 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       // запуска, скрипт их пропускает и перенумеровывает
       p.skip = (st.preview && st.preview.skips) || [];
     }
-    // ner_check · RAG: в простом режиме поля RAG-режима попадают
-    // в параметры как в экспертном (когда выбран режим rag);
-    // fields — выбранные чипсами поля записи (идут в RAG-промпт)
-    if (key === "ner_check" && mode === "simple"
-        && String(p["passes"] ?? "") === "rag") {
-      for (const name of ["rag_terms", "rag_source_type",
-                          "rag_budget", "fields"]) {
-        const f = (spec.fields || []).find((x) => x.name === name);
-        if (!f) continue;
-        const v = vals[f.name];
-        if (v !== "" && v != null) p[f.name] = finalFile(f, v);
-      }
-    }
     return p;
   }
 
-  // ── локальные отличия книги от общего .env ─────────────────────────
-  // Собственный .env книги интерфейс НЕ показывает и не редактирует:
-  // его пересобирает сервер из этой формы. Поле с отличием помечено,
-  // снятие — одной кнопкой на стадию.
-  function localFieldBadge(key, name) {
-    const ov = (st.overridden[key] || {})[name];
-    if (!ov) return null;
-    const secret = ov.local === "••••" || ov.global === "••••";
-    const tip = secret
-      ? `локальное отличие книги (${ov.key}) · значения скрыты`
-      : `локальное отличие книги (${ov.key})\n`
-        + `локально: ${ov.local || "∅ (пусто)"}\n`
-        + `общий конфиг: ${ov.global || "∅ (пусто)"}`;
-    return h("span", { class: "field-local", title: tip }, "локально");
+  // ── «Сбросить настройки» ───────────────────────────────────────────
+  // Поля стадии возвращаются к значениям общего конфига: значения формы
+  // живут в браузере, на диске писать нечего. Тултип показывает каждое
+  // поле как «сейчас → значение конфига».
+  //
+  // Узёл КНОПКИ ПОСТОЯННЫЙ (прятется, когда отличий нет): пересоздавать
+  // его нельзя — blur предыдущего поля даёт change между mousedown и
+  // mouseup, старый узел отрывается от DOM и клик уходит в родителя.
+  function resetDiffs(key, spec) {
+    const vals = st.values[key] || {};
+    // эталон — значения формы сразу после инициализации (они уже включают
+    // автоподхват диапазона глав и prompt_file, а не пустые дефолты спеки)
+    const base = st.baseline[key] || {};
+    const diffs = [];
+    for (const f of spec.fields || []) {
+      const now = vals[f.name];
+      const want = base[f.name];
+      const same = f.type === "bool"
+        ? Boolean(now) === Boolean(want)
+        : String(now == null ? "" : now)
+          === String(want == null ? "" : want);
+      if (!same) {
+        diffs.push(`${f.label || f.name}: ${String(now ?? "") || "∅"} → `
+          + `${String(want == null ? "" : want) || "∅"}`);
+      }
+    }
+    return diffs;
   }
 
-  // «Сбросить локальные (N)»: ключи стадии уходят из .env книги, поля
-  // снова наследуют общий конфиг; форма перечитывается со свежей спекой
-  function resetLocalsBtn(key) {
-    const n = Object.keys(st.overridden[key] || {}).length;
-    if (!n) return null;
-    const btn = h(
-      "button",
-      {
-        class: "btn btn-ghost btn-sm field-local-reset",
-        title:
-          "Убрать локальные отличия книги по этой стадии — поля "
-          + "снова возьмут значения общего .env",
-      },
-      `Сбросить локальные (${n})`,
-    );
-    btn.addEventListener("click", () =>
+  function resetSettingsBtn(key, spec) {
+    const btn = h("button", { class: "btn btn-ghost btn-sm run-reset hidden" });
+    btn.addEventListener("click", () => {
+      const diffs = resetDiffs(key, spec);
+      if (!diffs.length) return;
       confirmModal(
-        "Сбросить локальные отличия",
-        `${key}: ${n} ключ(ов) этой книги вернётся к значениям общего `
-          + ".env; отличия других стадий не трогаем.",
+        "Сбросить настройки",
+        `${key}: ${diffs.length} поле(й) вернётся к значениям общего `
+          + "конфига:\n" + diffs.join("\n"),
         "СБРОСИТЬ",
-        async () => {
+        () => {
           try {
-            const r = await api(
-              `/stages/${key}/reset?project=${section}/${name}`,
-              { method: "POST" },
-            );
-            st.overridden[key] = (r.spec || {}).overridden || {};
-            delete st.values[key]; // значения формы — заново из общего
-            delete st.touched[key];
-            toast(`Сброшено локальных ключей: ${n}`);
-            await render();
-          } catch (ex) {
-            toast(ex.message, "err");
+            localStorage.removeItem(chipKey(key)); // память чипсов стадии
+          } catch {
+            /* нет localStorage — и нечего было чистить */
           }
+          delete st.values[key]; // значения формы — заново из реестра
+          delete st.touched[key];
+          initFormValues(key, spec);
+          if (key === "epub") epubSave(key);
+          toast("Поля стадии возвращены к значениям конфига");
+          render(); // поля — заново из реестра, кнопка прячется
         },
-      ));
+      );
+    });
     return btn;
+  }
+
+  // пересчёт кнопки без перестройки полей (в инпуте держим фокус)
+  function syncResetBtn(key) {
+    const btn = st.head && st.head.querySelector(".run-reset");
+    if (!btn) return;
+    const diffs = resetDiffs(key, st.curSpec);
+    btn.classList.toggle("hidden", diffs.length === 0);
+    btn.textContent = diffs.length ? `Сбросить настройки (${diffs.length})` : "";
+    btn.title = diffs.length
+      ? `Вернуть поля стадии к значениям общего конфига `
+        + `(${diffs.length}):\n${diffs.join("\n")}`
+      : "";
   }
 
   // общий построитель поля: label + input, привязанный к st.values[key]
@@ -729,8 +708,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const vals = st.values[key];
     const touched = st.touched[key];
     const label = h("div", { class: "field-label" }, f.label);
-    const localTag = localFieldBadge(key, f.name);
-    if (localTag) label.append(localTag);
     let input;
     if (f.type === "bool") {
       input = h("input", { type: "checkbox", class: "checkbox" });
@@ -749,7 +726,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       );
       if (f.help) attachTooltip(wrap, f.help);
       wrap._input = input;
-      wrap._field = f; // группировка экспертной формы (LLM-блок внизу)
+      wrap._field = f; // видимость подрежимов идёт по fieldWraps[name]
       if (key === "epub") wireEpubAutosave(wrap);
       return wrap;
     } else if (f.type === "select") {
@@ -786,11 +763,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             : st.options.root || [];
       let exts = (f.ext || []).map((e) => e.toLowerCase());
       // epub: расширения зависят от режима — toc: только epub;
-      // regex/chunk: epub + txt; простой режим всегда toc (пресет);
-      // zip не принимается ни в одном режиме
+      // regex/chunk: epub + txt; zip не принимается ни в одном режиме
       if (key === "epub" && f.name === "input") {
-        const m =
-          st.mode === "simple" ? "toc" : String(vals["mode"] || "toc");
+        const m = String(vals["mode"] || "toc");
         exts = m === "toc" ? [".epub"] : [".epub", ".txt"];
       }
       const items = pool.filter(
@@ -910,7 +885,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     }
     wrap._input = input;
-    wrap._field = f; // группировка экспертной формы (LLM-блок внизу)
+    wrap._field = f; // видимость подрежимов идёт по fieldWraps[name]
     if (key === "epub") wireEpubAutosave(wrap);
     return wrap;
   }
@@ -1363,11 +1338,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return { bar, box, loadFields };
   }
 
-  // «Предпросмотр запроса» (LLM-стадии, Экспертный режим): POST
+  // «Предпросмотр запроса» (LLM-стадии): POST
   // /stages/{key}/preview-request — синхронная эмуляция ПЕРВОГО
   // LLM-запроса стадии без сети; модалка показывает messages и
   // статистику символов из payload.
-  async function previewRequestModal(key, spec, mode) {
+  async function previewRequestModal(key, spec) {
     const err = h("div", { class: "form-error" });
     const host = h("div", { class: "preview-req-body" });
     UIC.modal({
@@ -1385,7 +1360,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         method: "POST",
         body: {
           project: `${section}/${name}`,
-          params: buildParams(key, spec, mode),
+          params: buildParams(key, spec),
         },
       });
       host.replaceChildren(previewRequestView(d));
@@ -1679,11 +1654,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (!hasRange) return null;
     const start = h("input", {
       type: "number",
-      class: "input preset-range",
+      class: "input run-range",
     });
     const end = h("input", {
       type: "number",
-      class: "input preset-range",
+      class: "input run-range",
     });
     start.value = String(st.values[key]["start"] ?? "");
     end.value = String(st.values[key]["end"] ?? "");
@@ -1697,10 +1672,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     });
     const rowEl = h(
       "div",
-      { class: "preset-range-row" },
-      h("span", { class: "preset-range-label" }, "Главы:"),
+      { class: "run-range-row" },
+      h("span", { class: "run-range-label" }, "Главы:"),
       start,
-      h("span", { class: "preset-range-sep" }, "–"),
+      h("span", { class: "run-range-sep" }, "–"),
       end,
     );
     // ссылки на инпуты — для внешних панелей (предпросмотр замен
@@ -1711,19 +1686,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return rowEl;
   }
 
-  // translate_quality: «Конечная глава» — бюджет. Простой режим
-  // (auto): end readonly, считается интерактивно из start + budget +
-  // тип + промпт (tree — размеры глав). Экспертный (manual): end
-  // редактируемый; введённая глава остаётся, если влезает в бюджет,
-  // иначе пересчитывается до последней влезающей.
-  function attachQualityRange(key, inputs, mode) {
+  // translate_quality: контроль бюджета по end: поле редактируемое,
+  // введённая глава остаётся, если влезает в бюджет, иначе пересчитывается
+  // до последней влезающей (tree — размеры глав).
+  function attachQualityRange(key, inputs) {
     if (key !== "translate_quality") return;
     const row = st.rangeRow;
     if (!row || !row._start || !row._end) return;
     const end = row._end;
-    const auto = mode !== "manual";
-    // инпуты: в экспертном режиме передаются обёртки .field (wrap),
-    // в простом — уже инпуты; у files-полей select спрятан в _sel
+    // инпуты — обёртки .field (wrap); у files-полей select спрятан в _sel
     const fieldInput = (x) => {
       if (!x) return null;
       const inp = x._input || x;
@@ -1751,16 +1722,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const recalc = async () => {
       const start = parseInt(row._start.value || "", 10) || 0;
       const last = await lastFit(start);
-      if (auto) {
-        end.value = last;
-        st.values[key]["end"] = last;
-        st.touched[key].add("end");
-        if (!start) end.title = "введите начальную главу";
-        else if (last) end.title = "рассчитано по бюджету";
-        else end.title =
-          "в бюджет не влезает ни одна глава — увеличьте бюджет";
-        return;
-      }
       const cur = parseInt(end.value || "", 10) || 0;
       if (cur && last && cur > last) {
         // ручная глава не влезает — пересчёт до последней влезающей
@@ -1774,243 +1735,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         end.title = "пусто = до последней главы (бюджет обрежет)";
       }
     };
-    if (auto) {
-      end.setAttribute("readonly", "");
-      end.classList.add("range-auto");
-    }
     row._start.addEventListener("input", recalc);
     if (budgetIn) budgetIn.addEventListener("input", recalc);
     if (typeSel) typeSel.addEventListener("change", recalc);
-    if (!auto) end.addEventListener("input", recalc);
+    end.addEventListener("input", recalc);
     recalc();
   }
 
-  // карточка пресета + простые поля (spec.simple) + диапазон глав:
-  // простой режим — «частично показанный экспертный», значения общие
-  function simplePanel(key, spec) {
-    const preset = spec.preset || {};
-    const err = h("div", { class: "form-error" });
-    const card = h(
-      "div",
-      { class: "preset-card" },
-      h("div", { class: "preset-title" }, preset.title || "Запуск"),
-      h("div", { class: "preset-desc" }, preset.desc || ""),
-    );
-    const wraps = [];
-    let ragApply = null; // ner_check RAG: видимость RAG-полей/диапазона
-    const byName = {};
-    for (const name of spec.simple || []) {
-      // start/end отдельными полями не рисуем: единая строка
-      // «Главы: [start] – [end]» (buildRangeRow) идёт первой
-      if (name === "start" || name === "end") continue;
-      const f = (spec.fields || []).find((x) => x.name === name);
-      if (!f) continue;
-      const wrap = buildField(key, f);
-      if (!wrap) continue; // hidden-поля (чипсы) в простом списке не нужны
-      wraps.push(wrap);
-      // files-поля: настоящий select спрятан в row._sel (row — обёртка
-      // с кнопкой «Загрузить»); без этого srcSel.value/fileSel.value
-      // всегда undefined и условная видимость полей не работает
-      byName[name] = (wrap._input && wrap._input._sel) || wrap._input;
-    }
-    // ner: входной файл или сборка глав
-    if (key === "ner" && byName["mode"]) {
-      const modeSel = byName["mode"];
-      const fileSel = byName["file"];
-      const applyNerSimple = () => {
-        const fw = fileSel && fileSel.closest
-          ? fileSel.closest(".field") : null;
-        if (fw) fw.classList.remove("hidden");
-      };
-      modeSel.addEventListener("change", applyNerSimple);
-      if (fileSel) fileSel.addEventListener("change", applyNerSimple);
-      applyNerSimple();
-    }
-    // pipeline: чипсы полей {ner_block} после промпт-файла
-    if (key === "pipeline" && byName["prompt_file"]) {
-      const nb = nerBlockChips(key);
-      const inp = byName["prompt_file"];
-      const pfWrap = inp && inp.closest ? inp.closest(".field") : null;
-      const idx = pfWrap ? wraps.indexOf(pfWrap) : -1;
-      if (idx >= 0) wraps.splice(idx + 1, 0, nb.bar, nb.box);
-      nb.loadFields();
-    }
-    // ner_check: чипсы типов из глоссария после select «Проходы»;
-    // RAG-поля — строятся всегда, видны только в режиме rag
-    if (key === "ner_check" && byName["passes"]) {
-      const sel = byName["passes"];
-      const wrap = sel.closest ? sel.closest(".field") : null;
-      const w = nerCheckWidgets(key);
-      if (wrap) {
-        const idx = wraps.indexOf(wrap);
-        if (idx >= 0) {
-          wraps.splice(idx + 1, 0, w.chipsBar, w.chipsBox, w.fieldsBar,
-                       w.fieldsBox, w.guide);
-        }
-      }
-      w.loadTypes();
-      // счётчики типов/терминов — динамически по «Порог count»
-      // (унификация с wiki)
-      const recalcCounts = () => w.updateCounts({
-        threshold: byName["count_threshold"]
-          ? byName["count_threshold"].value : "",
-      });
-      const thInp = byName["count_threshold"];
-      if (thInp) thInp.addEventListener("input", recalcCounts);
-      recalcCounts();
-      const ragWraps = [];
-      // в RAG прячем только чипсы ТИПОВ: поля записи (fieldsBar) и
-      // степпер остаются — выбранные поля уходят в RAG-промпт
-      const ragHidden = [w.chipsBar, w.chipsBox];
-      for (const name of ["rag_terms", "rag_source_type",
-                          "rag_budget"]) {
-        const f = (spec.fields || []).find((x) => x.name === name);
-        if (!f) continue;
-        const rw = buildField(key, f);
-        if (!rw) continue;
-        if (name === "rag_terms") {
-          // кнопка «Добавить спорные» — под списком терминов
-          const addBtn = h(
-            "button",
-            { class: "btn btn-xs btn-ghost", type: "button" },
-            "Добавить спорные",
-          );
-          addBtn.addEventListener("click", () =>
-            addDisputedTermsModal(key, rw));
-          const row = h("div", { class: "ner-add-disputed" }, addBtn);
-          rw.append(row);
-        }
-        ragWraps.push(rw);
-        wraps.push(rw);
-      }
-      ragApply = () => {
-        const isRag = sel.value === "rag";
-        for (const rw of ragWraps) {
-          rw.classList.toggle("hidden", !isRag);
-        }
-        for (const el of ragHidden) {
-          el.classList.toggle("hidden", isRag);
-        }
-        const rr = st.rangeRow;
-        if (rr) rr.classList.toggle("hidden", !isRag);
-      };
-      sel.addEventListener("change", ragApply);
-    }
-
-    // wiki: чипсы типов из глоссария (базовые типы, как в CLI;
-    // пусто = все); счётчик терминов — динамически по top/min_count
-    if (key === "wiki") {
-      const w = nerCheckWidgets(key);
-      wraps.push(w.chipsBar, w.chipsBox);
-      w.loadTypes();
-      const recalc = () => w.updateCounts({
-        top: byName["top"] ? byName["top"].value : "",
-        minCount: byName["min_count"] ? byName["min_count"].value : "",
-      });
-      for (const nm of ["top", "min_count"]) {
-        const inp = byName[nm];
-        if (inp) inp.addEventListener("input", recalc);
-      }
-      recalc();
-    }
-    // wiki: «Собрать из глав» — прячем входной txt (показываем тип);
-    // «Сохранить как главу» — прячем формат, показываем тип файла
-    if (key === "wiki" && byName["source"]) {
-      const srcSel = byName["source"];
-      const asChSel = byName["as_chapter"];
-      const fmtSel = byName["format"];
-      const stSel = byName["save_type"];
-      const applyWikiSimple = () => {
-        const chapters = srcSel.value === "chapters";
-        const fw = byName["file"];
-        const wrap = fw && fw.closest ? fw.closest(".field") : null;
-        if (wrap) wrap.classList.toggle("hidden", chapters);
-        const tw = byName["type"];
-        const twrap = tw && tw.closest ? tw.closest(".field") : null;
-        if (twrap) twrap.classList.toggle("hidden", !chapters);
-        const asCh = !!(asChSel && asChSel.checked);
-        const fwrap = fmtSel && fmtSel.closest
-          ? fmtSel.closest(".field") : null;
-        if (fwrap) fwrap.classList.toggle("hidden", asCh);
-        const swrap = stSel && stSel.closest
-          ? stSel.closest(".field") : null;
-        if (swrap) swrap.classList.toggle("hidden", !asCh);
-      };
-      srcSel.addEventListener("change", applyWikiSimple);
-      if (asChSel) asChSel.addEventListener("change", applyWikiSimple);
-      applyWikiSimple();
-    }
-    // диапазон глав — единая строка «Главы: [start] – [end]»
-    const rangeRow = buildRangeRow(key, spec);
-    if (rangeRow) {
-      // ner: диапазон нужен только когда входной файл НЕ выбран
-      // (сборка глав в память)
-      if (key === "ner" && byName["mode"]) {
-        const modeSel = byName["mode"];
-        const fileSel = byName["file"];
-        const applyNerRange = () => {
-          const noFile = !(fileSel && fileSel.value);
-          rangeRow.classList.toggle("hidden", !noFile);
-        };
-        modeSel.addEventListener("change", applyNerRange);
-        if (fileSel) fileSel.addEventListener("change", applyNerRange);
-        applyNerRange();
-      }
-      // wiki: диапазон — только когда «Собрать из глав»
-      if (key === "wiki" && byName["source"]) {
-        const srcSel = byName["source"];
-        const applyWikiRange = () => {
-          rangeRow.classList.toggle("hidden", srcSel.value !== "chapters");
-        };
-        srcSel.addEventListener("change", applyWikiRange);
-        applyWikiRange();
-      }
-    }
-    const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
-    runBtn.addEventListener("click", async () => {
-      err.textContent = "";
-      const verr = epubValidateInput(key, "simple")
-        || numericFieldError(key, spec);
-      if (verr) {
-        err.textContent = verr;
-        return;
-      }
-      try {
-        UIC.askNotifyPermission(); // финал запуска — в уведомление (см. app.js)
-        const r = await api("/jobs", {
-          method: "POST",
-          body: {
-            action: key,
-            project: `${section}/${name}`,
-            params: buildParams(key, spec, "simple"),
-          },
-        });
-        st.job = r.job;
-        st.log = [];
-        st.events = [];
-        st.progress = r.job.progress || null;
-        await render(); // дождаться DOM лога, иначе attachStream не найдёт его
-        attachStream(r.job.id);
-      } catch (ex) {
-        err.textContent = ex.message;
-      }
-    });
-    // диапазон глав — ПЕРВЫМ в списке (сразу под карточкой пресета)
-    const body = [card, ...wraps];
-    if (rangeRow) body.splice(1, 0, rangeRow);
-    // ner_check RAG: после постройки rangeRow — первая раскладка
-    if (ragApply) ragApply();
-    // translate_quality: end считает бюджет — простой режим (auto)
-    attachQualityRange(key, byName, "auto");
-    const resetBtn = resetLocalsBtn(key);
-    return h("div", { class: "run-form" }, body, err,
-             ...(resetBtn ? [resetBtn] : []), runBtn);
-  }
-
-  // экспертная форма: все поля спеки (до простого режима).
-  // НЕ async — formPanel вставляет результат как DOM-узел; async
-  // вернул бы Promise (баг «[object Promise]» при переключении).
-  function expertForm(key, spec) {
+  // форма стадии: все поля спеки. НЕ async — formPanel вставляет результат
+  // как DOM-узел; async вернул бы Promise (баг «[object Promise]»).
+  function stageForm(key, spec) {
     const err = h("div", { class: "form-error" });
     const fieldNodes = [];
     const fieldWraps = {}; // name → label-обёртка (промпты pipeline, )
@@ -2026,8 +1760,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // диапазон глав — ПЕРВЫМ в списке полей (все стадии с start/end)
     const rangeRow = buildRangeRow(key, spec);
     if (rangeRow) fieldNodes.unshift(rangeRow);
-    // translate_quality: ручной end с проверкой бюджета — экспертный
-    attachQualityRange(key, fieldWraps, "manual");
+    // translate_quality: ручной end с проверкой бюджета
+    attachQualityRange(key, fieldWraps);
 
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны;
@@ -2541,38 +2275,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       updateCompilePreview();
     }
 
-    // B4: смена host очищает предзаполненный api_key — иначе старый
-    // ключ уедет на чужой сервер (C1 защищает только env-fallback)
-    const hostEl = fieldWraps["host"] && fieldWraps["host"]._input;
-    const keyEl = fieldWraps["api_key"] && fieldWraps["api_key"]._input;
-    if (hostEl && keyEl) {
-      hostEl.addEventListener("change", () => {
-        keyEl.value = "";
-        st.values[key]["api_key"] = "";
-        st.touched[key].add("api_key");
-      });
-    }
-
-    // LLM-поля (group: "llm" в спеке) — единым блоком в конце формы:
-    // только порядок узлов, видимость подрежимов не задета (все toggle
-    // идут по fieldWraps[name], а вставленные чипсы/справки остаются
-    // возле своих якорей в основной группе)
-    const mainNodes = [];
-    const llmNodes = [];
-    for (const n of fieldNodes) {
-      (n._field && n._field.group === "llm" ? llmNodes : mainNodes).push(n);
-    }
-    const formNodes = llmNodes.length
-      ? [...mainNodes,
-         h("div", { class: "run-form-group" }, "Настройки LLM"),
-         ...llmNodes]
-      : fieldNodes;
+    // LLM-конфиг (сервер/модель/ключ/потоки) в форме запусков НЕ рисуется:
+    // он один на весь конвейер и правится на странице «Настройки»
+    const formNodes = fieldNodes;
 
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
-      const verr = epubValidateInput(key, "expert")
-        || numericFieldError(key, spec);
+      const verr = epubValidateInput(key) || numericFieldError(key, spec);
       if (verr) {
         err.textContent = verr;
         return;
@@ -2584,7 +2294,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           body: {
             action: key,
             project: `${section}/${name}`,
-            params: buildParams(key, spec, "expert"),
+            params: buildParams(key, spec),
           },
         });
         st.job = r.job;
@@ -2598,8 +2308,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     });
 
-    // «Предпросмотр запроса» — только LLM-стадии (spec.preview),
-    // только в Экспертном режиме
+    // «Предпросмотр запроса» — только LLM-стадии (spec.preview)
     const previewBtn = spec.preview
       ? h("button", { class: "btn btn-ghost",
                       title: "Эмулировать ПЕРВЫЙ LLM-запрос стадии "
@@ -2609,17 +2318,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       : null;
     if (previewBtn) {
       previewBtn.addEventListener("click", () =>
-        previewRequestModal(key, spec, "expert"));
+        previewRequestModal(key, spec));
     }
 
     // обёртки полей текущей формы — для панели предпросмотра замен
     // (batch_replace: реакции на смену типа/диапазона/правил)
     st.curWraps = fieldWraps;
 
-    const resetBtn = resetLocalsBtn(key);
     return h("div", { class: "run-form" }, formNodes, err,
-             ...(previewBtn ? [previewBtn] : []),
-             ...(resetBtn ? [resetBtn] : []), runBtn);
+             ...(previewBtn ? [previewBtn] : []), runBtn);
   }
 
   // ── epub: панель предпросмотра разбивки ──────────────────────────────
@@ -2628,18 +2335,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // предпросмотра (строка остаётся с отжатым чекбоксом для наглядности;
   // перенумерация — при реальном запуске со skip); текст главы —
   // GET .../preview/text?num=.
-  function epubPreviewPanel(key, spec, mode) {
+  function epubPreviewPanel(key, spec) {
     const err = h("div", { class: "form-error" });
     const btn = h("button", { class: "btn btn-primary" }, "Предпросмотр");
     btn.addEventListener("click", async () => {
       err.textContent = "";
-      const verr = epubValidateInput(key, mode);
+      const verr = epubValidateInput(key);
       if (verr) {
         err.textContent = verr;
         return;
       }
       try {
-        await epubRunPreview(key, spec, mode);
+        await epubRunPreview(key, spec);
         render();
       } catch (ex) {
         err.textContent = ex.message;
@@ -2948,13 +2655,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return "";
   }
 
-  function epubValidateInput(key, mode) {
+  function epubValidateInput(key) {
     if (key !== "epub") return "";
     const vals = st.values[key] || {};
     const v = String(vals["input"] || "");
     if (!v) return "Выберите исходник";
-    const m =
-      mode === "simple" ? "toc" : String(vals["mode"] || "toc");
+    const m = String(vals["mode"] || "toc");
     const ext = v.toLowerCase().split(".").pop();
     const ok =
       m === "toc"
@@ -2968,12 +2674,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // запуск предпросмотра: синхронно гоняет CLI с --preview-json
-  async function epubRunPreview(key, spec, mode) {
+  async function epubRunPreview(key, spec) {
     const r = await api("/stages/epub/preview", {
       method: "POST",
       body: {
         project: `${section}/${name}`,
-        params: buildParams(key, spec, mode),
+        params: buildParams(key, spec),
         skip: (st.preview && st.preview.skips) || [],
       },
     });

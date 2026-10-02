@@ -888,31 +888,6 @@
     filterNerItems: filterNerItems,
     sortNerItems: sortNerItems,
 
-    /* ── режим «Простой/Экспертный» в Запусках (localStorage) ── */
-    /* выбор запоминается по стадии: runMode = JSON {stage: mode};
-       стадия без записи = глобальный дефолт "simple" (новички). */
-    runModeGet: (stage) => {
-      try {
-        var m = JSON.parse(localStorage.getItem("runMode") || "{}");
-        if (m && typeof m === "object" && m[stage] === "expert") {
-          return "expert";
-        }
-      } catch (err) { /* нет localStorage/кривой JSON — простой режим */
-        void err;
-      }
-      return "simple";
-    },
-    runModeSet: (stage, mode) => {
-      var m = {};
-      try {
-        m = JSON.parse(localStorage.getItem("runMode") || "{}");
-      } catch (err) { /* перезаписываем */ void err; }
-      if (!m || typeof m !== "object") m = {};
-      m[stage] = mode === "expert" ? "expert" : "simple";
-      try {
-        localStorage.setItem("runMode", JSON.stringify(m));
-      } catch (err) { /* приватный режим/переполнение — молча */ void err; }
-    },
   };
 
   return UICore;

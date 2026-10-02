@@ -891,217 +891,165 @@ async function viewNotes() {
   );
 }
 
-/* ── Настройки: системный .env (WEB_ENV_FILE: Docker — projects/.env
-   в постоянном томе; иначе корневой .env репо) + внешний вид ── */
+/* ── Настройки: ОДИН общий .env, поля и метки — из реестра настроек
+   (core/settings.py). Страница собрана карточками-блоками, сгруппированные
+   в субвкладки; своего знания о настройках у SPA нет — метки, типы,
+   варианты и подсказки приходят с сервера. Собственного .env у книги нет:
+   изменённые для одной книги поля запусков живут в браузере. ── */
 async function viewSettings() {
-  /* ── системный .env: дефолты для всех проектов (вкладка проекта
-     «Конфиг» показывает его read-only; правится здесь) ── */
-  const envErr = h("div", { class: "form-error" });
-  const envEd = makeEditor("", "txt");
-  const envMeta = h("div", { class: "review-status" });
-  const envHost = h("div", { class: "editor-cm editor-cm-small" }, envEd.root);
-  const envSave = h("button", { class: "btn btn-sm" }, "Сохранить");
-  let envVisible = false;
-  const envWarn = h("div", { class: "form-error env-layer-warn hidden" });
-  async function loadEnv() {
-    envErr.textContent = "";
-    try {
-      const d = await api(`/env?scope=global`);
-      envVisible = !!d.visible;
-      envEd.setValue(d.content || d.masked || "");
-      envEd.setReadOnly(!envVisible);
-      envMeta.textContent = d.exists
-        ? envVisible
-          ? "Системный .env (дефолты всех проектов; в Docker — projects/.env в томе)"
-          : "Системный .env · значения скрыты (--auth)"
-        : "Системный .env не существует — сохраните, чтобы создать";
-      // прозрачность слоёв: перекрытые окружением ключи + окружение
-      // compose имеет приоритет над файлом — правка не применится
-      const over = Object.keys(d.sources || {})
-        .filter((k) => d.sources[k] === "env");
-      const extra = d.env_extra || [];
-      const parts = [];
-      if (over.length) {
-        parts.push(
-          "Перекрыты окружением (правка здесь не применится): "
-            + over.join(", "));
-      }
-      if (extra.length) {
-        parts.push(
-          "Заданы в окружении, но не в файле: " + extra.join(", "));
-      }
-      if (parts.length) {
-        envWarn.textContent = parts.join(" · ");
-        envWarn.classList.remove("hidden");
-      } else {
-        envWarn.classList.add("hidden");
-      }
-    } catch (ex) {
-      envErr.textContent = ex.message;
-    }
-  }
-  envSave.addEventListener("click", async () => {
-    envErr.textContent = "";
-    try {
-      if (envVisible) {
-        await api("/env", {
-          method: "PUT",
-          body: { scope: "global", content: envEd.getValue() },
-        });
-      } else {
-        const changes = {};
-        for (const line of envEd.getValue().split("\n")) {
-          if (!line || line.startsWith("#")) continue;
-          const eq = line.indexOf("=");
-          if (eq < 0) continue;
-          const key = line.slice(0, eq).trim();
-          const val = line.slice(eq + 1).trim();
-          if (key && val && val !== "••••") changes[key] = val;
-        }
-        await api("/env", {
-          method: "PUT",
-          body: { scope: "global", changes },
-        });
-      }
-      toast("Системный .env сохранён");
-      await loadEnv();
-    } catch (ex) {
-      envErr.textContent = ex.message;
-    }
-  });
-  await loadEnv();
-  const envCard = h(
-    "div",
-    { class: "review-card" },
-    h("div", { class: "review-card-title" }, "Системный .env"),
-    h(
-      "div",
-      { class: "review-card-body" },
-      h(
-        "div",
-        { class: "files-toolbar" },
-        envMeta,
-        h("span", { class: "spacer" }),
-        envSave,
-      ),
-      envHost,
-      envWarn,
-      h(
-        "div",
-        { class: "field-help" },
-        "дефолты для всех проектов; проектный .env (вкладка «Конфиг») " +
-          "перекрывает по ключам; в Docker файл живёт в томе projects — " +
-          "правки переживают обновление образа; WEB_* из environment " +
-          "compose применяются после рестарта сервера",
-      ),
-      envErr,
-    ),
-  );
-
-  /* ── рассуждения модели: ОДИН режим на весь конвейер ──
-     спеки стадий этих полей не содержат (иначе шесть одинаковых полей
-     разъехались бы по значениям в одном запуске): стадии читают общие
-     ключи системного .env сами, поэтому режим правится здесь один раз.
-     Поля приходят с сервера (GET /api/stages) — своей копии реестра у
-     SPA нет; name контрола = ключ .env ── */
-  const reErr = h("div", { class: "form-error" });
-  // два ряда, а не flex-wrap: селекты (подсказка — тултип) и поля с inline-
-  // подсказкой разной высоты, иначе ряды разъезжаются по базовой линии
-  const reRows = { select: h("div", { class: "files-toolbar look-toolbar" }) };
-  reRows.other = h("div", { class: "files-toolbar look-toolbar" });
-  const reCtl = {};
-  let reSpec = [];
+  let d;
   try {
-    const st = await api(`/stages`);
-    reSpec = (st.reasoning && st.reasoning.fields) || [];
-    const reVals = (st.reasoning && st.reasoning.values) || {};
-    for (const f of reSpec) {
-      // тип контрола — из спеки: number для бюджета, text для json-полей
-      const attrs = { class: "input input-inline", name: f.name };
+    d = await api("/settings");
+  } catch (ex) {
+    return h("div", { class: "page" }, h("div", { class: "form-error" }, ex.message));
+  }
+  const model = { groups: d.groups || [], path: d.path, exists: !!d.exists,
+                  envWins: d.env_wins || [] };
+  let active = "";
+  try {
+    active = localStorage.getItem("settingsTab") || "";
+  } catch {
+    /* нет localStorage — вкладка по умолчанию */
+  }
+  if (!model.groups.some((g) => g.id === active)) {
+    active = model.groups.length ? model.groups[0].id : "";
+  }
+
+  const ctl = {}; // ключ .env поля → контрол активной вкладки
+  const tabs = h("div", { class: "tabs" });
+  const cards = h("div", { class: "settings-cards" });
+  const err = h("div", { class: "form-error" });
+  const status = h("div", { class: "review-status" });
+  const saveBtn = h("button", { class: "btn btn-sm btn-primary" }, "Сохранить");
+
+  function statusText() {
+    if (!model.path) return "общий конфиг не найден — путь не настроен";
+    if (!model.exists) return `общий конфиг ещё не создан: ${model.path}`;
+    const parts = [`общий конфиг: ${model.path}`];
+    if (model.envWins.length) {
+      parts.push(`переменные окружения процесса перекрывают: `
+        + model.envWins.join(", "));
+    }
+    return parts.join(" · ");
+  }
+
+  // контрол поля: тип, варианты и подсказка — из реестра (SPA их не знает)
+  function fieldWrap(f) {
+    const val = f.value === undefined || f.value === null ? "" : f.value;
+    if (f.type === "hidden") return null; // чипсы — состояние UI запусков
+    // name контрола = ключ .env: имена полей стадий не уникальны
+    const id = f.key || f.name;
+    if (f.type === "bool") {
+      const cb = h("input", { type: "checkbox", class: "checkbox" });
+      cb.checked = Boolean(val);
+      if (f.help) attachTooltip(cb, f.help);
+      ctl[id] = cb;
+      return h("label", { class: "field field-check" }, cb, h("span", {}, f.label));
+    }
+    let input;
+    if (f.type === "select") {
+      input = h("select", { class: "input input-inline", name: id });
+      for (const opt of f.options || []) {
+        input.appendChild(h("option", { value: opt },
+          (f.labels && f.labels[opt]) || opt || "— (пусто)"));
+      }
+      input.value = String(val);
+    } else if (f.type === "textarea") {
+      input = h("textarea", {
+        class: "input", name: id, rows: String(f.rows || 4),
+      });
+      input.value = String(val);
+    } else {
+      const attrs = { class: "input input-inline", name: id };
       if (f.type === "number") {
         attrs.type = "number";
-        attrs.min = "0";
-        attrs.step = "1";
+        attrs.step = String(f.step || 1);
+        if (f.min !== undefined && f.min !== null) attrs.min = String(f.min);
+        if (f.max !== undefined && f.max !== null) attrs.max = String(f.max);
+      } else if (f.type === "password") {
+        attrs.type = "password";
+        attrs.autocomplete = "off";
       } else {
         attrs.type = "text";
-        // json-поле длинное — иначе контрол сжимается до содержимого
-        attrs.style = "min-width:340px";
       }
-      const ctl = h(f.type === "select" ? "select" : "input", attrs);
-      if (f.type === "select") {
-        for (const opt of f.options || []) {
-          ctl.appendChild(
-            h("option", { value: opt },
-              (f.labels && f.labels[opt]) || opt || "— (пусто)"),
-          );
-        }
-      }
-      const cur = reVals[f.name];
-      ctl.value = String(cur === undefined || cur === null
-        ? (f.default === undefined ? "" : f.default)
-        : cur);
-      // гайдлайн §7: у select — тултип, у number — inline-подсказка
-      const wrap = h(
-        "label",
-        { class: "field" },
-        h("div", { class: "field-label" }, f.label),
-        ctl,
-      );
-      if (f.type === "select") {
-        attachTooltip(ctl, f.help || "");
-      } else if (f.help) {
-        wrap.appendChild(h("div", { class: "field-help" }, f.help));
-      }
-      reCtl[f.name] = ctl;
-      reRows[f.type === "select" ? "select" : "other"].appendChild(wrap);
+      input = h("input", attrs);
+      input.value = String(val);
     }
-  } catch (ex) {
-    reErr.textContent = ex.message;
+    const wrap = h(
+      "label",
+      { class: "field" },
+      h("div", { class: "field-label" }, f.label),
+      input,
+    );
+    // гайдлайн §7: у select/textarea/password — тултип, у text/number — inline
+    if (f.type === "select" || f.type === "textarea" || f.type === "password") {
+      attachTooltip(input, f.help || "");
+    } else if (f.help) {
+      wrap.appendChild(h("div", { class: "field-help" }, f.help));
+    }
+    ctl[id] = input;
+    return wrap;
   }
-  const reSave = h("button", { class: "btn btn-sm" }, "Сохранить");
-  reSave.addEventListener("click", async () => {
-    reErr.textContent = "";
-    const changes = {};
-    for (const f of reSpec) {
-      changes[f.name] = String(reCtl[f.name].value || "").trim();
+
+  function renderTab() {
+    const g = model.groups.find((x) => x.id === active) || model.groups[0];
+    if (!g) return;
+    for (const node of tabs.children) {
+      node.classList.toggle("tab-active", node.getAttribute("data-id") === g.id);
+    }
+    for (const k of Object.keys(ctl)) delete ctl[k];
+    active = g.id;
+    cards.replaceChildren(
+      ...(g.blocks || []).map((b) =>
+        h(
+          "div",
+          { class: "review-card" },
+          h("div", { class: "review-card-title" }, b.title),
+          h(
+            "div",
+            { class: "review-card-body" },
+            h("div", { class: "settings-fields" },
+              ...(b.fields || []).map(fieldWrap)),
+          ),
+        )),
+    );
+    status.textContent = statusText();
+  }
+
+  for (const g of model.groups) {
+    tabs.appendChild(h("button", {
+      class: "tab", "data-id": g.id, type: "button",
+      onclick: () => {
+        active = g.id;
+        try {
+          localStorage.setItem("settingsTab", g.id);
+        } catch {
+          /* нет localStorage — выбор живёт до перезагрузки */
+        }
+        renderTab();
+      },
+    }, g.title));
+  }
+
+  saveBtn.addEventListener("click", async () => {
+    err.textContent = "";
+    const values = {};
+    for (const [name, c] of Object.entries(ctl)) {
+      values[name] = c.type === "checkbox" ? c.checked : c.value;
     }
     try {
-      await api("/env", { method: "PUT", body: { scope: "global", changes } });
-      toast("Режим рассуждений сохранён");
-      await loadEnv();
+      const r = await api("/settings", { method: "PUT", body: { values } });
+      model.path = r.path;
+      model.exists = !!r.exists;
+      model.envWins = r.env_wins || [];
+      model.groups = r.groups || model.groups;
+      renderTab();
+      toast("Настройки сохранены");
     } catch (ex) {
-      reErr.textContent = ex.message;
+      err.textContent = ex.message;
     }
   });
-  const reasoningCard = h(
-    "div",
-    { class: "review-card", "data-reasoning": "1" },
-    h("div", { class: "review-card-title" }, "Рассуждения модели"),
-    h(
-      "div",
-      { class: "review-card-body" },
-      h(
-        "div",
-        { class: "files-toolbar" },
-        h("span", { class: "review-status" },
-          "режим один на весь конвейер"),
-        h("span", { class: "spacer" }),
-        reSave,
-      ),
-      reRows.select,
-      reRows.other,
-      h(
-        "div",
-        { class: "field-help" },
-        "REASONING_MODE / THINKING_PROFILE / REASONING_EFFORT / " +
-          "THINKING_BUDGET — без стадийного префикса: модель в конвейере " +
-          "одна, поэтому режим задается один раз здесь; сохранение пишет " +
-          "ключи в системный .env (пустой уровень и нулевой бюджет — не " +
-          "отправлять)",
-      ),
-      reErr,
-    ),
-  );
+  renderTab();
 
   /* ── внешний вид: тема интерфейса, тема/кегль редакторов —
      UI-предпочтения в localStorage браузера (не .env) ── */
@@ -1124,15 +1072,10 @@ async function viewSettings() {
   lookBtn.addEventListener("click", () => {
     const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
     EDITOR_SETTINGS.editor =
-      edSel.value === "dark" || edSel.value === "light"
-        ? edSel.value
-        : "auto";
+      edSel.value === "dark" || edSel.value === "light" ? edSel.value : "auto";
     EDITOR_SETTINGS.fontSize = n;
     try {
-      localStorage.setItem(
-        UI_LOOK_KEY,
-        JSON.stringify(EDITOR_SETTINGS),
-      );
+      localStorage.setItem(UI_LOOK_KEY, JSON.stringify(EDITOR_SETTINGS));
     } catch {
       /* localStorage недоступен — не критично */
     }
@@ -1174,6 +1117,30 @@ async function viewSettings() {
       ),
     ),
   );
+  const previewFontCard = h(
+    "div",
+    { class: "review-card" },
+    h("div", { class: "review-card-title" }, "Интерфейс"),
+    h(
+      "div",
+      { class: "review-card-body" },
+      h(
+        "label",
+        { class: "field" },
+        h(
+          "div",
+          { class: "field-label" },
+          "Кегль предпросмотра (markdown/html)",
+        ),
+        previewFontSelect(),
+        h(
+          "div",
+          { class: "field-help" },
+          "хранится в браузере (localStorage), не в .env — как тема интерфейса",
+        ),
+      ),
+    ),
+  );
   return h(
     "div",
     { class: "page" },
@@ -1187,38 +1154,17 @@ async function viewSettings() {
         h(
           "div",
           { class: "page-sub" },
-          "внешний вид — в браузере (localStorage); сервер и LLM-конфиг — " +
-            "системный .env / переменные окружения",
+          "один общий .env: значения реестра, правка блоками здесь; " +
+            "изменённые для одной книги поля запусков — состояние браузера",
         ),
       ),
+      h("div", { class: "page-header-actions" }, status, saveBtn),
     ),
+    tabs,
+    cards,
+    err,
     lookCard,
-    h(
-      "div",
-      { class: "review-card" },
-      h("div", { class: "review-card-title" }, "Интерфейс"),
-      h(
-        "div",
-        { class: "review-card-body" },
-        h(
-          "label",
-          { class: "field" },
-          h(
-            "div",
-            { class: "field-label" },
-            "Кегль предпросмотра (markdown/html)",
-          ),
-          previewFontSelect(),
-          h(
-            "div",
-            { class: "field-help" },
-            "хранится в браузере (localStorage), не в .env — как тема интерфейса",
-          ),
-        ),
-      ),
-    ),
-    reasoningCard,
-    envCard,
+    previewFontCard,
   );
 }
 

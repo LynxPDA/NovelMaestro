@@ -16,7 +16,7 @@ const PROJECT_TABS = [
   ["review", "Проверки"],
   ["chapters", "Главы"],
   ["status", "Статус"],
-  ["config", "Конфиг"],
+  ["config", "Настройки"],
   ["prompts", "Промпты"],
   ["logs", "Логи"],
   ["notes", "Заметки"],
@@ -3066,8 +3066,7 @@ function viewProject(section, name, tab, job) {
     return wrap;
   }
 
-  /* ── Конфиг: env + metadata ────────────────────── */
-  /* ── Конфиг: env + metadata + обложка (W6) ─────── */
+  /* ── Настройки проекта: metadata + обложка ────────────────────────── */
   // «Главы» — названия глав: тип файлов (chapters/translated/redacted/
   // polished), слева номер каталога, справа редактируемая первая строка;
   // одна кнопка «Сохранить» — все изменения разом в соответствующие файлы
@@ -3090,8 +3089,8 @@ function viewProject(section, name, tab, job) {
     const status = h("span", { class: "review-status" });
     const rows = h("div", { class: "chapters-rows" });
     // диапазон глав — ДВА поля (начало/конец), как в «Запусках»
-    const startIn = h("input", { type: "number", class: "input preset-range" });
-    const endIn = h("input", { type: "number", class: "input preset-range" });
+    const startIn = h("input", { type: "number", class: "input run-range" });
+    const endIn = h("input", { type: "number", class: "input run-range" });
     attachTooltip(startIn, "Начальная глава; пусто = с первой");
     attachTooltip(endIn, "Конечная глава; пусто = до последней");
     let inputs = {}; // id → {input, orig}
@@ -3250,7 +3249,7 @@ function viewProject(section, name, tab, job) {
       typeSel,
       h("span", { class: "field-label" }, "Главы:"),
       startIn,
-      h("span", { class: "preset-range-sep" }, "–"),
+      h("span", { class: "run-range-sep" }, "–"),
       endIn,
       h("span", { class: "spacer" }),
       status,
@@ -3371,10 +3370,9 @@ function viewProject(section, name, tab, job) {
     const err = h("div", { class: "form-error" });
     const q = new URLSearchParams({ project: `${section}/${name}` });
 
-    /* — Собственный .env книги в этом интерфейсе НЕ редактируется: его
-         пересобирает web-слой из форм «Запусков» (там же пометка
-         «локально» и «Сбросить»). Общий конфиг — вкладка «Настройки»
-         главной; файл книги остаётся обычным файлом во «Файлах». — */
+    /* — Настройки книги в этом интерфейсе не редактируются: конфиг один
+         (страница «Настройки»), а его значения стадии читают сами. Файл
+         .env книги остаётся обычным файлом во «Файлах». — */
 
     /* — Обложка — */
     const coverCard = h("div", { class: "review-card" });

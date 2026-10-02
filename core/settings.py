@@ -232,7 +232,7 @@ GROUPS: tuple = (
             _s("NER_CHECK_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="ner_check", run=True),
             _s("NER_CHECK_END", "Конечная глава", "number", "", stage="ner_check", run=True),
             _s("NER_CHECK_TYPES", "", "hidden", "", noenv=True, stage="ner_check"),
-            _s("NER_CHECK_FIELDS", "", "hidden", "", noenv=True, stage="ner_check"),
+            _s("NER_CHECK_FIELDS", "", "hidden", "term,type,translation", noenv=True, stage="ner_check"),
         ),
     ),
     # ── Проверки ──
@@ -624,7 +624,9 @@ def block_payload(block_id: str) -> dict:
     fields, values = [], {}
     for s in BY_BLOCK[block_id]:
         val = display_value(s)
-        fields.append(dict(s.form_field(), value=val))
+        # key — ключ .env: имена полей стадий не уникальны (chunk_size у
+        # четырёх стадий), сохранять страница должна по ключу
+        fields.append(dict(s.form_field(), value=val, key=s.key))
         values[s.name] = val
     return {"id": block_id, "title": BLOCK_TITLES[block_id],
             "fields": fields, "values": values}
@@ -634,8 +636,8 @@ def groups_payload() -> list:
     """Реестр для SPA: субвкладки → блоки → поля с текущими значениями."""
     return [{"id": g.id, "title": g.title,
              "blocks": [{"id": b.id, "title": b.title,
-                         "fields": [dict(s.form_field(),
-                                         value=display_value(s))
+                         "fields": [dict(s.form_field(), value=display_value(s),
+                                         key=s.key)
                                     for s in b.settings]}
                         for b in g.blocks]}
             for g in GROUPS]
