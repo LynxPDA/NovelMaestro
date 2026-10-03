@@ -19,7 +19,6 @@ stdlib-only.
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import subprocess
 import sys
@@ -30,25 +29,15 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from core import projects as prj          # noqa: E402
-from core.common import parse_dotenv  # noqa: E402
+from core import settings as core_settings  # noqa: E402
 
 PROJECTS = REPO / "projects"
 
 
-def _env_cfg() -> dict:
-    """Конфиг из системного .env: WEB_ENV_FILE → корневой .env репо
-    (stdlib, os.environ приоритетнее). Лаунчер берёт файл РЯДОМ СОБОЙ, а не
-    из cwd: запускать его могут из любой папки, а конфиг один на все книги."""
-    cfg: dict = {}
-    try:
-        override = os.environ.get("WEB_ENV_FILE", "").strip()
-        path = (os.path.abspath(os.path.expanduser(override))
-                if override else str(REPO / ".env"))
-        cfg.update(parse_dotenv(path))
-    except Exception:  # noqa: BLE001 — .env необязателен
-        pass
-    cfg.update({k: v for k, v in os.environ.items() if v})
-    return cfg
+def _cfg() -> dict:
+    """Конфиг запуска: реестр → общий .env → os.environ (читает реестр, а не
+    cwd: лаунчер могут запустить из любой папки, а конфиг один на все книги)."""
+    return core_settings.web_values()
 
 
 def _force_utf8_io() -> None:
@@ -126,9 +115,9 @@ def main() -> None:
                     help="Не открывать браузер автоматически")
     args = ap.parse_args()
 
-    # своя папка: CLI-флаг > системный .env (WEB_PROJECTS_DIR) > дефолт
+    # своя папка: CLI-флаг > переменные окружения > общий .env > дефолт
     global PROJECTS
-    projects_dir = args.projects_dir or _env_cfg().get("WEB_PROJECTS_DIR")
+    projects_dir = args.projects_dir or _cfg()["web_projects_dir"]
     if projects_dir:
         PROJECTS = Path(projects_dir).expanduser().resolve()
     bootstrap_projects()

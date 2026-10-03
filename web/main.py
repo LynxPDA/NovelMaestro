@@ -11,7 +11,9 @@ main.py — CLI-точка входа web-бэкэнда.
 --token > WEB_TOKEN > projects/.web_secret). Если порт занят — сервер
 автоматически берёт следующий свободный (port+1 … port+100).
 Конфигурация окружением: WEB_HOST, WEB_PORT, WEB_AUTH, WEB_TOKEN,
-WEB_MAX_UPLOAD_MB, WEB_JOBS_LIMIT, WEB_PROJECTS_DIR.
+WEB_MAX_UPLOAD_MB, WEB_JOBS_LIMIT, WEB_PROJECTS_DIR (дефолты — реестр
+core/settings.py). Приоритет: флаг командной строки > переменные окружения
+процесса > общий .env > дефолт реестра.
 """
 from __future__ import annotations
 
@@ -46,6 +48,7 @@ def _bootstrap_core() -> None:
 
 
 _bootstrap_core()
+from core import settings as core_settings  # noqa: E402
 from core.deps import format_status as deps_status  # noqa: E402
 from core.projects import ensure_projects_root  # noqa: E402
 
@@ -58,67 +61,54 @@ log = logging.getLogger("web")
 JOB_MANAGER = JobManager(Path(__file__).resolve().parent)
 
 
-def _env_cfg() -> dict:
-    """Конфиг из системного .env (WEB_ENV_FILE в Docker), os.environ
-    приоритетнее."""
-    cfg: dict = {}
-    try:
-        from core.common import parse_dotenv, system_env_file
-        cfg.update(parse_dotenv(system_env_file()))
-    except Exception as exc:  # noqa: BLE001 — .env необязателен
-        log.debug("Системный .env не читается: %s", exc)
-    cfg.update({k: v for k, v in os.environ.items() if v})
-    return cfg
+def _cfg() -> dict:
+    """Конфиг запуска сервера: реестр → общий .env → os.environ.
+
+    Дефолты WEB_* живут только в реестре (`core/settings.py`): лаунчер своего
+    списка не держит. Флаг командной строки перекрывает всё — именно он в
+    Docker выставляет `--host 0.0.0.0`, и правка в браузере его не перешибёт."""
+    return core_settings.web_values()
 
 
-def _env_int(cfg: dict, name: str, default: int) -> int:
-    """Число из конфига (.env/окружение) с фолбэком на default."""
+def _int(cfg: dict, name: str) -> int:
+    """Число из конфига; мусор в конфиге — warning и дефолт реестра."""
     raw = cfg.get(name)
-    if not raw:
-        return default
     try:
         return int(raw)
-    except ValueError:
-        log.warning("%s=%r не число, берём %d", name, raw, default)
-        return default
-
-
-def _env_bool(cfg: dict, name: str, default: bool) -> bool:
-    """Булево из конфига (1/true/yes) с фолбэком."""
-    raw = str(cfg.get(name, "")).strip().lower()
-    if not raw:
-        return default
-    return raw in ("1", "true", "yes", "on")
+    except (TypeError, ValueError):
+        default = core_settings.BY_KEY[name.upper()].default
+        log.warning("%s=%r не число, берём дефолт реестра %r", name, raw, default)
+        return int(default)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    cfg = _env_cfg()
+    cfg = _cfg()
     p = argparse.ArgumentParser(
         prog="web/main.py",
         description="Web-интерфейс NovelMaestro (сервер + SPA).",
+        epilog="Приоритет значений: флаг командной строки > переменные окружения "
+               "процесса > общий .env > встроенный дефолт реестра.",
     )
-    p.add_argument("--host", default=cfg.get("WEB_HOST", "127.0.0.1"),
+    p.add_argument("--host", default=cfg["web_host"],
                    help="Адрес прослушивания (по умолчанию 127.0.0.1 — только этот компьютер; "
                         "0.0.0.0 — вся локальная сеть, тогда включите --auth)")
-    p.add_argument("--port", type=int, default=_env_int(cfg, "WEB_PORT", 8756),
+    p.add_argument("--port", type=int, default=_int(cfg, "web_port"),
                    help="Порт (по умолчанию 8756)")
-    p.add_argument("--auth", action="store_true",
-                   default=_env_bool(cfg, "WEB_AUTH", False),
+    p.add_argument("--auth", action="store_true", default=bool(cfg["web_auth"]),
                    help="Включить аутентификацию по токену (по умолчанию выключена)")
     p.add_argument("--no-auth", action="store_true",
                    help="Устарело: аутентификация и так выключена по умолчанию")
-    p.add_argument("--token", default=cfg.get("WEB_TOKEN", ""),
+    p.add_argument("--token", default=cfg["web_token"],
                    help="Токен доступа (при --auth; по умолчанию — .web_secret в projects/)")
     p.add_argument("--open", action="store_true",
                    help="Открыть браузер после старта")
     p.add_argument("--max-upload-mb", type=int,
-                   default=_env_int(cfg, "WEB_MAX_UPLOAD_MB", 512),
+                   default=_int(cfg, "web_max_upload_mb"),
                    help="Лимит загрузки файлов, МБ (по умолчанию 512)")
     p.add_argument("--jobs-limit", type=int,
-                   default=_env_int(cfg, "WEB_JOBS_LIMIT", 2),
+                   default=_int(cfg, "web_jobs_limit"),
                    help="Максимум параллельных задач (по умолчанию 2)")
-    p.add_argument("--projects-dir",
-                   default=cfg.get("WEB_PROJECTS_DIR", ""),
+    p.add_argument("--projects-dir", default=cfg["web_projects_dir"],
                    help="Папка проектов (по умолчанию <репо>/projects; "
                         "WEB_PROJECTS_DIR)")
     return p.parse_args(argv)

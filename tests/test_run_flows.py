@@ -138,10 +138,11 @@ def test_main_projects_dir_switches_global(fake_repo, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _launcher_reads_repo_env(monkeypatch):
-    """Лаунчер намеренно читает .env РЯДОМ СОБОЙ: общий WEB_ENV_FILE из
-    фикстуры conftest здесь только мешает."""
-    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
+def _launcher_reads_repo_env(fake_repo, monkeypatch):
+    """Общий конфиг лаунчера — .env временного репо: и лаунчер, и сервер читают
+    его через реестр (core/settings.py), поэтому тестам нужен явный
+    WEB_ENV_FILE, иначе подключился бы конфиг настоящего checkout."""
+    monkeypatch.setenv("WEB_ENV_FILE", str(fake_repo / ".env"))
 
 
 def test_main_projects_dir_from_env(fake_repo, monkeypatch):
