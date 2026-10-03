@@ -42,6 +42,12 @@ def srv(tmp_path):
 
     yield _make
     for srv in servers:
+        # server_close() гасит только слушающий сокет: accept-цикл
+        # остаётся крутить select без единого fd — пустой цикл на ядро,
+        # и на наборе таких собирались сотни. Флаг остановки ставим
+        # фоново: sync shutdown() ждёт выхода цикла до poll_interval
+        # (0.5 с) на каждый сервер, а тесту ждать нечего
+        threading.Thread(target=srv.shutdown, daemon=True).start()
         srv.server_close()
 
 
@@ -865,6 +871,7 @@ def test_settings_hidden_when_auth_enabled(tmp_path, monkeypatch):
         assert f["api_key"]["value"] == "\u2022\u2022\u2022\u2022"
         assert f["host"]["value"] == "http://x:1"
     finally:
+        threading.Thread(target=srv.shutdown, daemon=True).start()
         srv.server_close()
 
 
