@@ -100,10 +100,10 @@ from core.common import ...  # noqa: E402
 
 ## 5. Единицы параметров (критично)
 
-- **ТОКЕНЫ** — все размеры LLM-запросов: `--chunk_size` (translate_book, pipeline, ner, epub), `--request_budget`, бюджеты пакетов ner_check (`--batch_size`, `--rag_budget`) и translate_check_llm (`--context_budget`), `--budget` translate_quality, чанки FTS5 wiki и `chunkSize` Lite. Это язык-осведомлённая **оценка** `estimate_tokens` (±20–30%, таблица весов — в её описании в `core/README.md`). Имена параметров сохранены (решение пользователя), единица — токены.
+- **ТОКЕНЫ** — все размеры LLM-запросов: `--chunk_size` (translate_book, pipeline, ner, epub), `--request_budget`, бюджеты пакетов ner_check (`--batch_size`, `--rag_budget`) и translate_check_llm (`--context_budget`), `--budget` translate_quality (он же ограничивает чанк оценки, сводку свёртки и каждый промежуточный уровень её дерева), чанки FTS5 wiki и `chunkSize` Lite. Это язык-осведомлённая **оценка** `estimate_tokens` (±20–30%, таблица весов — в её описании в `core/README.md`). Имена параметров сохранены (решение пользователя), единица — токены.
 - **ТОКЕНЫ** — и `max_tokens` в payload LLM: это предохранитель сервера, а не расчёт.
 - **СИМВОЛЫ** — длины вне запросов: `--title-limit`, `min_fix_length`, `max_changed_chars`, `context_max_len`, длины в логах и отчётах. `min_len_ratio` — безразмерное отношение длин именно в символах (в CJK→RU токены изменили бы смысл).
-- **БАЙТЫ** — только размеры файлов в отчётах translate_check. **ГЛАВЫ** — `--chunk-size` в clean_and_compile (сколько глав в части).
+- **БАЙТЫ** — только размеры файлов в отчётах translate_check. **ГЛАВЫ** — `--chunk-size` в clean_and_compile (сколько глав в части) и `--chunk_size`/`--overlap` оценки качества (сколько целых глав в чанке и как они перекрываются).
 - Меняешь размер или бюджет — проверь единицу и подпиши её в help argparse («СИМВОЛЫ»/«ТОКЕНЫ»): метка настройки в реестре и справка флага обязаны совпадать с тем, что реально считает код.
 
 ## 6. Что использовать из core/ (не изобретай заново)
@@ -167,7 +167,7 @@ Regexp-поля форм и CLI — чистые стандартные выра
 ### Промпты
 
 - Содержимое `<system>…</system>` уходит в системное сообщение, остальное (и `<user>…</user>`) — в user; без разметки весь промпт в user. Правила и описательные константы — в `<system>`, задание и данные — в `<user>`; данные вставляются только через плейсхолдеры, а дописывать их в конец промпта кодом можно лишь для старых внешних промптов без плейсхолдера (с предупреждением). В промптах — только реально обрабатываемые теги; данные размечаются текстовыми маркерами («=== ГЛОССАРИЙ ===»), фиктивной xml-разметки нет.
-- Внешние промпты лежат в `prompts/` проекта; теги: `<translate>`, `<translate_lr>`, `<redact>`, `<polish>`, `<pass1>`, `<pass2>`, `<prompt_pass1>`, `<prompt_pass2>`, `<prompt_ner_check>`, `<prompt_rag>`, `<prompt_assessment>`, `<prompt_wiki_article>` + JSON-теги wiki (`<wiki_markers>`, `<wiki_default_markers>`, `<wiki_type_names_ru>`, `<wiki_relations_labels>`, `<wiki_skip_relations>`, `<wiki_type_order>`). Файл без тегов = промпт этапа целиком (допустимый режим «отдельный файл на этап»).
+- Внешние промпты лежат в `prompts/` проекта; теги: `<translate>`, `<translate_lr>`, `<redact>`, `<polish>`, `<pass1>`, `<pass2>`, `<prompt_pass1>`, `<prompt_pass2>`, `<prompt_ner_check>`, `<prompt_rag>`, `<prompt_assessment>`, `<prompt_assessment_summary>`, `<prompt_wiki_article>` + JSON-теги wiki (`<wiki_markers>`, `<wiki_default_markers>`, `<wiki_type_names_ru>`, `<wiki_relations_labels>`, `<wiki_skip_relations>`, `<wiki_type_order>`). Файл без тегов = промпт этапа целиком (допустимый режим «отдельный файл на этап»).
 - Встроенные промпты в скриптах (`DEFAULT_*`, `PASS1_PROMPT`) — только запасной вариант; меняя встроенный, синхронизируй смысл с внешним шаблоном.
 - Плейсхолдеры: `{ner_block}`, `{original_text}`, `{translated_text}`, `{female_names}`, `{male_names}`, `{dict_block}`, `{rules_block}`, `{fewshot_block}`, `{chunk_text}`, `{ner_json}`, `{glossary}`, `{fields}`, `{rag_block}`, `{batch_text}`, `{errors_json}`; форматирующие `{translation}` и `{relations_label}` — в системном шаблоне wiki.
 
