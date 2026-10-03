@@ -269,34 +269,41 @@ Regexp-поля форм и CLI — чистые стандартные выра
 ./dev.sh test -n 0 tests/test_ner.py              # один файл последовательно — только для отладки
 ./dev.sh spa                                      # SPA: node --check по всем файлам + node --test tests/spa/
 ./dev.sh probe --shot                             # UI: headless-обход экранов + скриншоты в logs/ui_probe/
-python3 -m pytest tests/ -q --cov=core --cov=cli --cov=web  # покрытие (нужен pytest-cov)
+./dev.sh cov                                      # покрытие (coverage; движки стадий — тем же прогоном)
 python3 run.py                                    # web-интерфейс (сервер + браузер)
 python3 web/main.py --help                        # флаги сервера
-python3 cli/translate_book.py --help          # единый LLM-скрипт
-python3 cli/translate_check_llm.py --help   # проверка перевода LLM
+python3 cli/translate_book.py --help              # единый LLM-скрипт
+python3 cli/translate_check_llm.py --help         # проверка перевода LLM
+python3 -m core.deps                              # активный стек зависимостей
 ls projects/ACTIVE/*/chapters | head              # данные реального проекта
 # публикация изменений (обязательно):
 git add -A && git commit -m "…" && git push origin
 ```
 
-Карта тестов `tests/` (принцип: один модуль — один файл тестов):
+Карта тестов `tests/` (принцип: один модуль — один файл тестов; всё без сети: LLM мокается, данные — в `tmp_path`):
 
-- `tests/conftest.py` — общие хелперы (SilentLog, make_ru_chapter_file, feed, fake_env);
+- `tests/conftest.py` — общие хелперы (`SilentLog`, `make_ru_chapter_file`, `feed`, `fake_env`, `isolated_env_layers`, `ensure_tmp`, `srv_port`) и ОДИН HTTP-транспорт тестов (`http_send`, `http_request`, `json_payload`); число воркеров xdist считает хук (бюджет памяти 5 ГБ);
 - `tests/test_core_common.py` — `core/common.py` целиком (стрим SSE моками, .env, чанкование, NER-поиск, имена по полу, канон глав);
-- `tests/test_projects_core.py` — `core/projects.py` (создание/перенос/переименование, tmp_path);
-- `tests/test_core_settings.py` — `core/settings.py`: целостность реестра (ключи, типы, владельцы), совпадение метаданных и дефолтов со спеками стадий, чтение слоёв, запись общего .env и профили LLM (файл рядом с .env, General, формат записей, маски, slug и дубли имён);
-- `tests/test_core_stage.py` — `core/stage.py`: контракт имён флагов, порядок источников сервера (CLI > env > файл), `<СТАДИЯ>_*`, нормализация `/v1`, форма одного запроса стадии, предпросмотр, прогресс в обоих режимах;
-- `tests/test_core_transport.py` — `core/transport.py`: нарезка SSE на строки (терминатор отсечен, `[DONE]` и finish_reason видны), нормализация ошибок, живой раунд-трип через stdlib-сервер, ошибка соединения как ConnectTimeout;
-- `tests/test_run_flows.py` — `run.py` (bootstrap, лаунчер web);
-- по одному файлу на скрипт: `tests/test_translate_book.py`, `tests/test_ner.py`, `tests/test_ner_check.py`, `tests/test_translate_check_llm.py`, `tests/test_wiki.py`, `tests/test_epub_to_chapters.py`, `tests/test_translate_check.py` — чистые функции + оркестраторы (`run_two_pass`, `run_wiki_generation`) и `main()` с моками LLM;
-- `tests/test_cli_units.py` / `tests/test_cli_e2e.py` — чистые функции и прогоны `main()` остальных `cli/` без сети (batch_replace, clean_and_compile, translate_check и др.);
-- `tests/test_web_pipeline.py` — web-оркестратор `web/pipeline.py` (Tracker, build_stage_cmd, grep_errors, process_chapter, main);
-- `tests/test_web_api.py` / `tests/test_web_jobs.py` / `tests/test_web_m7.py` / `tests/test_web_server.py` / `tests/test_web_sandbox.py` — web-слой (роуты, JobManager, SSE, env-редактор, NER-экспорт) на реальном HTTP-сервере без сети;
-- `tests/test_docs.py` — сверка доков (`core/README.md`, AGENTS.md §6) с кодом;
+- `tests/test_core_deps.py` — `core/deps.py`: роли и их кандидаты (одна роль — один кандидат), stdlib-фолбэки опциональных ролей, «работает на фолбэке» ≠ «работать нечем», обязательные роли первыми в подсказке; `find_spec` подменяется, поэтому все ветки достижимы на любой машине;
+- `tests/test_projects_core.py` — `core/projects.py` (разделы, переносы, статистика, шаблоны);
+- `tests/test_core_settings.py` — `core/settings.py`: целостность реестра (ключи, метки, типы, владельцы), совпадение метаданных и дефолтов со спеками стадий, слои чтения, запись общего .env и профили LLM;
+- `tests/test_core_stage.py` — `core/stage.py`: контракт имён флагов (с `web/stages.py` и SPA), порядок источников сервера (CLI > env > файл), нормализация `/v1`, один запрос стадии, предпросмотр, прогресс в CLI и web;
+- `tests/test_core_transport.py` — `core/transport.py`: нарезка SSE на строки (терминатор отсечен, `[DONE]` и finish_reason видны), нормализация ошибок, живой раунд-трип через stdlib-сервер, ошибка соединения как `ConnectTimeout`;
+- `tests/test_run_flows.py` — `run.py` (bootstrap, лаунчер web, проброс `.env` в `web/main.py`);
+- по одному файлу на скрипт: `tests/test_translate_book.py`, `tests/test_ner.py`, `tests/test_ner_check.py`, `tests/test_translate_check_llm.py`, `tests/test_translate_quality.py`, `tests/test_wiki.py`, `tests/test_epub_to_chapters.py`, `tests/test_translate_check.py` — чистые функции, оркестраторы (`run_two_pass`, `run_wiki_generation`) и `main()` с моками LLM;
+- `tests/test_cli_units.py` / `tests/test_cli_e2e.py` — чистые функции и прогоны `main()` остальных `cli/` на синтетических данных;
+- `tests/test_web_pipeline.py` — web-оркестратор `web/pipeline.py`: спека стадии, e2e на фейковом движке (события `@@CHAPTER@@`, fail-fast, общий лог), `Tracker`, `build_stage_cmd`, `grep_errors`, `process_chapter`, `main`;
+- `tests/test_web_api.py` — пульт и проекты (CRUD, `hub_state`), файлы, глоссарий и review, настройки и профили, шаблоны;
+- `tests/test_web_jobs.py` — `web/jobs.py` и jobs/stages API: JobManager, буфер, очередь, SSE, stop и сироты, `build_command`;
+- `tests/test_web_m7.py` — промпты, обложка, логи и отчёты translate_check;
+- `tests/test_web_server.py` — сервер: сессия, вход, статика, CSRF, 404/405, no-auth;
+- `tests/test_web_sandbox.py` — `web/sandbox.py`: запрет абсолютных путей и `..`, симлинк-побег, NUL, `resolve_repo_path`;
+- `tests/test_web_state.py` — `web/state.py`: `hub_state` (roundtrip, мусор, не-словарь, ошибка записи);
+- `tests/test_spa_js.py` + `tests/spa/` — SPA без DOM: `ui-core` и `ui-components` (чистые функции и каркасы), вкладки проекта, массовый review, quality по бюджету, help; синтаксис всех `static/*.js` — `node --check`;
+- `tests/test_docs.py` — сверка доков (`core/README.md`, `web/README.md`, AGENTS.md §6) с кодом;
 - `tests/test_tools_vendor.py` — `tools/vendor_assets.py`: файлы вендора == манифест (sha256/размер), ни одной ссылки на CDN в SPA, удалённые библиотеки не возвращаются;
-- `tests/test_tools_userscripts.py` — юзерскрипты `tools/`: собранный `.user.js` побайтово равен закоммиченному, части нумерованы и держат обёртку, версия берётся из `meta.js`, канон метаданных и ссылки установки, `node --check` по артефактам, плюс `node --test` по `tests/tools/*.test.mjs`;
-- `tests/tools/lite-*.test.mjs` — node-тесты чистой логики Lite (части — один IIFE, поэтому подопытный блок вырезается из артефакта по баннерам частей и исполняется на заглушках): какие reasoning/thinking-ключи уходят в тело запроса, финальное состояние панели прогресса и жизнь флага отмены, валидация числовых полей настроек и контракт NER (что уходит в промпт извлечения, кто считает `count`, что делается с существующим термином из ответа модели, resume и отмена);
-- `tests/test_architecture.py` — регресс-гарды архитектуры (§3: запрет `input()` и UI-импортов в `cli/`, единый стрим, bootstrap, web-раскладка, run.py — лаунчер web, отсутствие backends/cli|tui).
+- `tests/test_tools_userscripts.py` + `tests/tools/lite-*.test.mjs` — юзерскрипты `tools/`: собранный `.user.js` побайтово равен закоммиченному, части нумерованы и держат обёртку, версия из `meta.js`, плюс node-тесты Lite (какие reasoning/thinking-ключи уходят в тело запроса, финальное состояние панели прогресса, валидация числовых полей, контракт NER);
+- `tests/test_architecture.py` — регресс-гарды архитектуры (§3–§4: запрет `input()` и UI-импортов в `cli/`, единый стрим, bootstrap, web-раскладка, run.py — лаунчер web, отсутствие backends/cli|tui).
 
 ## 11. Правила коммитов
 
