@@ -49,13 +49,10 @@ cmd_setup() {
     python3 -m core.deps
 }
 
-cmd_test() {
-    activate
-    # Параллельный прогон — поведение по умолчанию: -n auto добавляется сам,
-    # если явно не попросили другое число процессов (например: -n 0 — отладка
-    # одного файла последовательно). Число воркеров для auto считает хук
-    # pytest_xdist_auto_num_workers (tests/conftest.py): бюджет памяти 5 ГБ.
-    # Если целей (путей) среди аргументов нет — гоним tests/ целиком.
+# Аргументы pytest: -n auto по умолчанию (число воркеров считает хук
+# pytest_xdist_auto_num_workers в tests/conftest.py — бюджет памяти 5 ГБ); если
+# среди аргументов нет ни -n, ни целей — гоним tests/ целиком.
+normalize_test_args() {
     local has_n=0 has_target=0 a next_is_nval=0
     for a in "$@"; do
         if [ "$next_is_nval" -eq 1 ]; then next_is_nval=0; continue; fi
@@ -67,7 +64,61 @@ cmd_test() {
     done
     [ "$has_n" -eq 0 ] && set -- -n auto "$@"
     [ "$has_target" -eq 0 ] && set -- "$@" tests/
-    exec python3 -m pytest "$@" -q
+    TEST_ARGS=("$@")
+}
+
+cmd_test() {
+    activate
+    normalize_test_args "$@"
+    exec python3 -m pytest "${TEST_ARGS[@]}" -q
+}
+
+# Покрытие: тот же прогон, но вместе с дочерними процессами. Движки стадий
+# живут отдельными процессами: без sitecustomize их строки в отчёт не попадали
+# вовсе. Конфиг замера генерируется здесь же и держит АБСОЛЮТНЫЕ пути: source из
+# конфига в репо резолвится от cwd процесса, а у движка стадии cwd — папка книги,
+# поэтому его данные выходили пустыми (web/pipeline.py давал 32% вместо 61%).
+cmd_cov() {
+    activate
+    if ! python3 -c "import coverage" >/dev/null 2>&1; then
+        log "нужен coverage: ./dev.sh setup"
+        exit 3
+    fi
+    normalize_test_args "$@"
+    local site status=0
+    site="$(mktemp -d "${TMPDIR:-/tmp}/nm-cov-site.XXXXXX")"
+    printf '%s\n' \
+        '# Автозапуск сбора покрытия в дочерних процессах (dev.sh cmd_cov).' \
+        'try:' \
+        '    import coverage' \
+        'except ImportError:' \
+        '    pass' \
+        'else:' \
+        '    coverage.process_startup()' > "$site/sitecustomize.py"
+    cat > "$site/coveragerc" <<EOF
+[run]
+branch = True
+parallel = True
+source =
+    $REPO/core
+    $REPO/cli
+    $REPO/web
+    $REPO/run.py
+EOF
+    local -a rc=("--rcfile=$site/coveragerc" "--data-file=$REPO/.coverage")
+    rm -f "$REPO/.coverage" "$REPO"/.coverage.*
+    export COVERAGE_PROCESS_START="$site/coveragerc"
+    # COVERAGE_FILE тоже абсолютный: иначе дочерний процесс пишет свой файл
+    # данных в свой cwd (папку книги) и он до combine не доходит.
+    export COVERAGE_FILE="$REPO/.coverage"
+    export PYTHONPATH="$site${PYTHONPATH:+:$PYTHONPATH}"
+    log "собираю покрытие: pytest ${TEST_ARGS[*]}"
+    python3 -m coverage run --parallel-mode "${rc[@]}" -m pytest "${TEST_ARGS[@]}" -q || status=$?
+    python3 -m coverage combine "${rc[@]}" >/dev/null
+    python3 -m coverage report "${rc[@]}" | tail -n 22
+    rm -rf "$site"
+    log "по строкам: python3 -m coverage report --data-file=$REPO/.coverage --show-missing"
+    exit "$status"
 }
 
 cmd_run() {
@@ -123,6 +174,8 @@ dev.sh — разработка NovelMaestro в venv (Linux/macOS/WSL)
   ./dev.sh deps         активный стек зависимостей (что фолбэк, что основа)
   ./dev.sh test [args]  pytest -n auto tests/ (параллельно, pytest-xdist); с аргументами —
                         ровно они (например: ./dev.sh test -n 0 tests/test_ner.py)
+  ./dev.sh cov [args]   то же, но под coverage: отчёт покрытия вместе с движками
+                        стадий (подпроцессы); аргументы — как у test
   ./dev.sh run [args]   web-сервер (args пробрасываются в run.py)
   ./dev.sh probe [args] обход SPA headless-браузером (свой сервер, временные данные);
                         --shot — скриншоты в logs/ui_probe/ (правка UI без прогона не закрыта)
@@ -141,6 +194,7 @@ case "$command" in
     setup) shift || true; cmd_setup "$@" ;;
     deps) shift || true; cmd_deps "$@" ;;
     test) shift || true; cmd_test "$@" ;;
+    cov) shift || true; cmd_cov "$@" ;;
     run) shift || true; cmd_run "$@" ;;
     probe) shift || true; cmd_probe "$@" ;;
     spa) shift || true; cmd_spa "$@" ;;

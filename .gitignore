@@ -6,6 +6,7 @@ __pycache__/
 # Кэш тестов (вижу у вас папку)
 .pytest_cache/
 .coverage
+.coverage.*
 
 # Локальные инструменты и IDE (не часть репо)
 pyrightconfig.json
