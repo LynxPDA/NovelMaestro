@@ -504,9 +504,10 @@ async function main() {
     log(`${problems.length === before4 ? "✅" : "❌"} логи: список     ${l0.rows} строк · вложенно ${sub} · просмотр: ${view ? "есть" : "пусто"}`);
   }
 
-  /* страница «Настройки»: ОДИН общий .env, блоки реестра карточками,
-   * секрет — маской, сохранение пишет общий файл; про рассуждения формы
-   * стадий ничего не знают */
+  /* страница «Настройки»: блоки реестра карточками, секрет — маской,
+   * сохранение пишет общий конфиг; настройки самого веб-сервера — последние
+   * блоки первой субвкладки (отдельной вкладки про .env больше нет), а
+   * внешний вид — своя субвкладка с localStorage-предпочтениями */
   {
     const before = problems.length;
     await page.goto(`${url}/#/settings`, { waitUntil: "load" });
@@ -523,14 +524,18 @@ async function main() {
         .textContent?.trim() || "",
       html: document.getElementById("app").innerHTML,
     }));
-    if (head.tabs.length !== 6)
-      problems.push(`настройки: субвкладок ${head.tabs.length} (${head.tabs.join("/")})`);
+    const wantTabs = ["Модель и сервер", "Перевод", "Глоссарий", "Проверки",
+      "Книга и файлы", "Внешний вид"];
+    if (head.tabs.join(",") !== wantTabs.join(","))
+      problems.push(`настройки: субвкладки (${head.tabs.join("/")})`);
     if (head.active !== head.tabs[0])
       problems.push(`настройки: активна вкладка «${head.active}»`);
-    if (!head.cards.includes("Рассуждения модели"))
-      problems.push(`настройки: нет блока рассуждений (${head.cards.join("/")})`);
-    if (!/общий конфиг:/.test(head.status))
-      problems.push(`настройки: подзаголовок «${head.status}»`);
+    for (const t of ["Профили LLM", "Рассуждения модели",
+      "Веб-сервер: сеть и доступ", "Веб-сервер: данные и задачи"])
+      if (!head.cards.includes(t)) problems.push(`настройки: нет карточки «${t}»`);
+    // путь общего конфига экрану не нужен: статус пустой на General
+    if (head.status) problems.push(`настройки: статус General «${head.status}»`);
+    if (/\.env/.test(head.html)) problems.push("настройки: .env в разметке экрана");
     if (head.html.includes("probe-secret"))
       problems.push("настройки: значение API-ключa уехало в SPA");
     // значение секрета в DOM — только маска (value пароля innerHTML не
@@ -539,6 +544,7 @@ async function main() {
       .filter({ hasText: "API-ключ" }).first()
       .locator("input,select,textarea").first().inputValue();
     if (masked !== "••••") problems.push(`настройки: секрет «${masked}»`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "settings.png") });
     // карточка рассуждений: поля, варианты и предзаполнение — из реестра
     const card = page.locator(".settings-cards .review-card",
       { hasText: "Рассуждения модели" }).first();
@@ -590,19 +596,26 @@ async function main() {
     } else {
       log("⚠️  reasoning: внешний сервер — файл .env не проверяем");
     }
-    // субвкладка «Веб-сервер» — свои блоки (состояние вкладок — localStorage)
-    await page.locator('.tabs .tab:has-text("Веб-сервер")').first().click();
+    /* субвкладка «Внешний вид»: только localStorage-карточки, ни одного поля
+     * реестра и кнопки «Сохранить» — сохранять там нечего */
+    await page.locator('.tabs .tab:has-text("Внешний вид")').first().click();
     await page.waitForTimeout(400);
-    const g2 = await page.evaluate(() =>
-      [...document.querySelectorAll(".settings-cards .review-card-title")]
-        .map((x) => x.textContent.trim()));
-    if (!(g2.includes("Сеть") && g2.includes("Данные и задачи")))
-      problems.push(`настройки: блоки веб-сервера (${g2.join("/")})`);
+    const g2 = await page.evaluate(() => ({
+      cards: [...document.querySelectorAll(".settings-cards .review-card-title")]
+        .map((x) => x.textContent.trim()),
+      fields: document.querySelectorAll(".settings-cards [name]").length,
+      save: !!(document.querySelector(".page-header-actions .btn-primary") || {})
+        .classList?.contains("hidden"),
+    }));
+    if (g2.cards.join(",") !== "Внешний вид,Интерфейс")
+      problems.push(`настройки: карточки «${g2.cards.join(" | ")}»`);
+    if (g2.fields) problems.push(`настройки: полей реестра на вкладке ${g2.fields}`);
+    if (!g2.save) problems.push("настройки: «Сохранить» видна на «Внешнем виде»");
     const savedTab = seedDir ? await page.evaluate(
       () => localStorage.getItem("settingsTab") || "") : "";
-    if (seedDir && savedTab !== "server")
+    if (seedDir && savedTab !== "ui")
       problems.push(`настройки: вкладка не запомнена (${savedTab})`);
-    if (SHOT) await page.screenshot({ path: path.join(OUT, "settings.png") });
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "settings-ui.png") });
     // формы стадий рассуждений больше не касаются
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
       { waitUntil: "load" });
@@ -632,14 +645,13 @@ async function main() {
     await page.goto(`${url}/#/settings`, { waitUntil: "load" });
     await page.reload({ waitUntil: "load" });
     await page.waitForSelector(".tabs .tab", { timeout: 15000 });
-    /* предыдущий сценарий оставил вкладку «Веб-сервер»: профили — на LLM */
+    /* предыдущий сценарий оставил «Внешний вид»: профили — на первой вкладке */
     await page.locator('.tabs .tab:has-text("Модель и сервер")').first().click();
     await page.waitForSelector(".settings-chip", { timeout: 15000 });
     let list = await chips();
     if (list.join("/") !== "General (общий конфиг)")
       problems.push(`профили: чипсы (${list.join("/")})`);
-    if (!/общий конфиг:/.test(await status()))
-      problems.push(`профили: статус «${await status()}»`);
+    if (await status()) problems.push(`профили: статус General «${await status()}»`);
     if (await fieldValue("HOST") !== "http://127.0.0.1:9/v1")
       problems.push(`профили: General сервер «${await fieldValue("HOST")}»`);
     /* создать: prompt браузера — Playwright его сам закрывает, нужен handler */
@@ -670,10 +682,13 @@ async function main() {
       }
     }
     /* редактируем профиль: карточки LLM показывают его значения, пустое поле
-     * значит «наследует General», статус говорит про профиль, а не про файл */
+     * значит «наследует General»; карточки веб-сервера — общие, профиль их
+     * не перекрывает (он хранит только LLM-ключи) */
     const st2 = await status();
-    if (!/профиль «Домашний»/.test(st2) || !/llm_profiles\.json/.test(st2))
+    if (!/профиль «Домашний»/.test(st2) || /llm_profiles\.json/.test(st2))
       problems.push(`профили: статус «${st2}»`);
+    if (await fieldValue("WEB_PORT") !== "8756")
+      problems.push(`профили: профиль перекрыл веб-сервер «${await fieldValue("WEB_PORT")}»`);
     if (await fieldValue("HOST") !== "" || await fieldValue("THREADS") !== "")
       problems.push("профили: новый профиль копирует значения General");
     if (await fieldValue("API_KEY") !== "")
@@ -974,7 +989,7 @@ async function main() {
     if (stored.ui !== "dark" || stored.editor !== "auto" || !("fontSize" in stored))
       problems.push(`uiLookV1 после двух переключений: ${JSON.stringify(stored)}`);
     if (dup) problems.push("карточка «Внешний вид» дублирует тему интерфейса");
-    if (SHOT) await page.screenshot({ path: path.join(OUT, "settings.png") });
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-theme.png") });
     log(`${problems.length === before ? "✅" : "❌"} тема в шапке     ${seen.join(" → ")} · текст${kept.includes("ТЕМА") ? " цел" : " потерян"}`);
   }
 
