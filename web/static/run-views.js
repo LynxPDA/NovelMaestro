@@ -1418,9 +1418,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // «Предпросмотр запроса» (LLM-стадии): POST
-  // /stages/{key}/preview-request — синхронная эмуляция ПЕРВОГО
-  // LLM-запроса стадии без сети; модалка показывает messages и
-  // статистику символов из payload.
+  // /stages/{key}/preview-request — синхронная эмуляция LLM-запросов стадии
+  // без сети; модалка показывает messages и статистику символов из payload.
+  // У стадии «Оценка перевода» чанков запросов два (чанк и свёртка) — они
+  // приезжают в payload.requests, каждый со своими messages и статистикой.
   async function previewRequestModal(key, spec) {
     const err = h("div", { class: "form-error" });
     const host = h("div", { class: "preview-req-body" });
@@ -1449,17 +1450,22 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
   }
 
-  // содержимое модалки предпросмотра: сводка (label/модель/символы),
-  // meta и сообщения с полными текстами
+  // содержимое модалки предпросмотра: сводка (модель, plan), затем каждый
+  // запрос своей строкой статистики и сообщениями с полными текстами
   function previewRequestView(d) {
-    const chars = d.chars || {};
     const nodes = [];
+    const reqs = (Array.isArray(d.requests) && d.requests.length)
+      ? d.requests
+      : [{
+        label: d.label || d.stage || "",
+        messages: d.messages || [],
+        chars: d.chars || {},
+        tokens: d.tokens || {},
+      }];
     nodes.push(h(
       "div", { class: "preview-req-head" },
-      `${d.label || d.stage || ""} · модель: ${d.model || "?"}`
-      + ` · символов: user ${chars.user ?? "?"}`
-      + (chars.system ? `, system ${chars.system}` : "")
-      + (chars.total == null ? "" : ` (всего ${chars.total})`),
+      `${d.stage || ""} · модель: ${d.model || "?"}`
+      + ` · запросов: ${reqs.length}`,
     ));
     const meta = d.meta && Object.keys(d.meta).length
       ? Object.entries(d.meta).map(([k, v]) => `${k}: ${v}`).join(" · ")
@@ -1467,11 +1473,29 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (meta) {
       nodes.push(h("div", { class: "preview-req-head" }, meta));
     }
-    for (const m of d.messages || []) {
+    for (const r of reqs) {
+      const chars = r.chars || {};
+      const tokens = r.tokens || {};
+      // своя строка статистики + что именно пошло в запрос (главы чанка,
+      // размер, число сводок свёртки)
+      const rmeta = r.meta && Object.keys(r.meta).length
+        ? Object.entries(r.meta).map(([k, v]) => `${k}: ${v}`).join(" · ")
+        : "";
       nodes.push(h(
         "div", { class: "preview-req-msg" },
-        h("div", { class: "preview-req-role" }, m.role || "?"),
-        h("pre", { class: "preview-req-text" }, String(m.content ?? "")),
+        h(
+          "div", { class: "preview-req-role" },
+          `${r.label || ""} · символов: user ${chars.user ?? "?"}`
+          + (chars.system ? `, system ${chars.system}` : "")
+          + (chars.total == null ? "" : ` (всего ${chars.total})`)
+          + (tokens.total == null ? "" : ` · токенов ~${tokens.total}`)
+          + (rmeta ? ` · ${rmeta}` : ""),
+        ),
+        ...(r.messages || []).map((m) => h(
+          "div", null,
+          h("div", { class: "preview-req-role" }, m.role || "?"),
+          h("pre", { class: "preview-req-text" }, String(m.content ?? "")),
+        )),
       ));
     }
     return h("div", null, nodes);
@@ -1767,7 +1791,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
 
   // translate_quality: контроль бюджета по end: поле редактируемое,
   // введённая глава остаётся, если влезает в бюджет, иначе пересчитывается
-  // до последней влезающей (tree — размеры глав).
+  // до последней влезающей (tree — размеры глав). В режиме чанков контроля нет:
+  // там диапазон — это вся книга, а бюджет режет чанки, а не конец диапазона.
   function attachQualityRange(key, inputs) {
     if (key !== "translate_quality") return;
     const row = st.rangeRow;
@@ -1781,6 +1806,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     };
     const budgetIn = fieldInput(inputs.budget);
     const typeSel = fieldInput(inputs.type);
+    const modeSel = fieldInput(inputs.mode);
     let tree = null;
     // последняя глава, помещающаяся в бюджет от start
     const lastFit = async (start) => {
@@ -1799,6 +1825,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       return qualityEndByBudget(tree, start, budget, type);
     };
     const recalc = async () => {
+      if (modeSel && modeSel.value === "chunks") {
+        end.title = "пусто = до последней главы (книга уходит в чанки целиком)";
+        return;
+      }
       const start = parseInt(row._start.value || "", 10) || 0;
       const last = await lastFit(start);
       const cur = parseInt(end.value || "", 10) || 0;
@@ -1817,6 +1847,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     row._start.addEventListener("input", recalc);
     if (budgetIn) budgetIn.addEventListener("input", recalc);
     if (typeSel) typeSel.addEventListener("change", recalc);
+    if (modeSel) modeSel.addEventListener("change", recalc);
     end.addEventListener("input", recalc);
     recalc();
   }

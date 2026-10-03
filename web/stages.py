@@ -53,9 +53,8 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
     host = str(form.get("host") or "").strip()
     model = str(form.get("model") or "").strip()
     api_key = str(form.get("api_key") or "").strip()
-    # (AUDIT #2): ключ не попадает в argv (виден в ps) — он уходит
-    # в окружение subprocess через ctx["_llm_api_key"] (JobManager.start),
-    # скрипты читают LLM_API_KEY.
+    # ключ не попадает в argv (виден в ps) — он уходит в окружение процесса
+    # через ctx["_llm_api_key"] (JobManager.start), скрипты читают LLM_API_KEY.
     if api_key and isinstance(ctx, dict):
         ctx["_llm_api_key"] = api_key
     if host:
@@ -386,11 +385,13 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
 def build_translate_quality(form: dict, ctx: dict) -> list[str]:
     """Стадия «Оценка перевода (LLM)» — translate_quality.py.
 
-    Один LLM-запрос по пакету глав диапазона (тип файлов глав →
-    {translated_text}, chapter.txt → {original_text}); бюджет —
-    ТОКЕНЫ — оценка estimate_tokens (главы; промпт НЕ входит), пакет
-    обрезается до целого количества
-    глав. Выход — md-отчёт tmp/translation_quality_assessment.md (фиксирован).
+    Два режима: range — один LLM-запрос по пакету глав диапазона; chunks — чанки
+    по N целых глав (глава крупнее бюджета режется по абзацам), каждый чанк —
+    отдельный запрос, их отчёты сворачиваются LLM в заключение. Тип файлов глав →
+    {translated_text}, chapter.txt → {original_text}; бюджет — ТОКЕНЫ — оценка
+    estimate_tokens (главы; промпт НЕ входит) — он же режет чанки и сводки
+    свёртки. Выход — md-отчёт tmp/translation_quality_assessment.md
+    (фиксирован), артефакты чанков — tmp/quality/.
     """
     argv = ["cli/translate_quality.py"]
     argv += _range_argv("translate_quality", form)
@@ -401,6 +402,11 @@ def build_translate_quality(form: dict, ctx: dict) -> list[str]:
     # выходной файл фиксирован: tmp/translation_quality_assessment.md
     if form.get("budget") not in (None, ""):
         argv += ["--budget", str(form["budget"])]
+    for name, flag in (("mode", "--mode"), ("chunk_size", "--chunk_size"),
+                       ("chunks", "--chunks"), ("sample", "--sample"),
+                       ("overlap", "--overlap"), ("threads", "--threads")):
+        if form.get(name) not in (None, ""):
+            argv += [flag, str(form[name])]
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
     for name, flag in (("max_retries", "--max_retries"),

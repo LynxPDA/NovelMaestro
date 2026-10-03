@@ -912,6 +912,114 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} запуски (одна форма)  ${(chunk || {}).label || ""}=${(chunk || {}).value || "?"}`);
   }
 
+  /* «Оценка перевода»: единая форма стадии — режим оценки и чанковые поля;
+   * в режиме чанков строка «Главы» перестаёт обрезаться по бюджету (диапазон
+   * там — вся книга), а предпросмотр показывает план и ОБА запроса прогона:
+   * оценку чанка и свёртку отчётов */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".stage-card", { timeout: 15000 });
+    await page.locator('.stage-card:has-text("Оценка перевода")').first().click();
+    await page.waitForTimeout(900);
+    const qread = () => page.evaluate(() => ({
+      rows: [...document.querySelectorAll(".run-form .field")].map((el) => {
+        const c = el.querySelector("input,select,textarea") || {};
+        return {
+          label: (el.querySelector(".field-label") || {}).textContent?.trim() || "",
+          value: c.value || "",
+          opts: [...(c.options || [])].map((o) => o.textContent.trim()),
+        };
+      }),
+      end: ((document.querySelectorAll(".run-range")[1] || {}).title) || "",
+    }));
+    const row = (st, text) => st.rows.find((r) => r.label.includes(text)) || {};
+    let q = await qread();
+    for (const t of ["Тип файлов глав", "Промпт-файл", "Режим оценки",
+      "Глав в чанке", "Чанков оценить", "Отбор чанков", "Перекрытие чанков",
+      "Бюджет запроса"])
+      if (!row(q, t).label) problems.push(`оценка: в форме нет «${t}»`);
+    const mode = row(q, "Режим оценки");
+    if (mode.opts.join("/") !== "Диапазон одним запросом/Чанками всей книги")
+      problems.push(`оценка: режим «${mode.opts.join("/")}»`);
+    if (!/бюджет обрежет|в бюджет влезает/.test(q.end))
+      problems.push(`оценка: подсказка end «${q.end}»`);
+    /* режим чанков: бюджет режет чанки, а не конец диапазона */
+    await page.locator(".run-form .field").filter({ hasText: "Режим оценки" })
+      .first().locator("select").first().selectOption("chunks");
+    await page.waitForTimeout(700);
+    q = await qread();
+    if (!/чанки целиком/.test(q.end))
+      problems.push(`оценка: end в чанках «${q.end}»`);
+    const vals = ["Глав в чанке", "Чанков оценить", "Перекрытие чанков",
+      "Бюджет запроса"].map((t) => row(q, t).value || "?").join("|");
+    if (vals !== "1|0|0|200000") problems.push(`оценка: значения ${vals}`);
+    if (row(q, "Отбор чанков").opts.join("/")
+        !== "Равномерно по книге/Первые по порядку")
+      problems.push(`оценка: отбор «${row(q, "Отбор чанков").opts.join("/")}»`);
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-quality-chunks.png") });
+    /* предпросмотр запроса: синхронно, без сети — план + чанк + свёртка */
+    await page.locator('button:has-text("Предпросмотр запроса")').first().click();
+    let pv = { head: [], labels: [], texts: [] };
+    try {
+      await page.waitForSelector(".preview-req-msg", { timeout: 60000 });
+      pv = await page.evaluate(() => ({
+        head: [...document.querySelectorAll(".preview-req-head")]
+          .map((e) => e.textContent.trim()),
+        labels: [...document.querySelectorAll(".preview-req-msg > .preview-req-role")]
+          .map((e) => e.textContent.trim()),
+        texts: [...document.querySelectorAll(".preview-req-text")]
+          .map((e) => e.textContent),
+      }));
+    } catch {
+      problems.push("оценка: модалка предпросмотра не открылась");
+    }
+    if (pv.head.length === 2) {
+      if (!/запросов: 2/.test(pv.head[0]) || !pv.head[0].includes("probe-model"))
+        problems.push(`оценка: шапка «${pv.head[0]}»`);
+      for (const bit of ["чанков: 2", "оценивается: 2", "отбор: все",
+        "глав в чанке: 1", "перекрытие: 0", "потоки: 4", "разрезано глав: 0",
+        "не влезли даже частью: нет", "артефакты: tmp/quality"])
+        if (!pv.head[1].includes(bit)) problems.push(`оценка: план «${bit}»`);
+    } else {
+      problems.push(`оценка: строк шапки ${pv.head.length}`);
+    }
+    if (pv.labels.length !== 2 || !pv.labels[0].includes("Оценка · чанк 1/2")
+        || !pv.labels[1].includes("Свёртка отчётов → заключение"))
+      problems.push(`оценка: запросы ${pv.labels.join(" || ")}`);
+    // статистика и состав каждого запроса: символы, токены, свои meta
+    if (!/главы: 1 · размер: \d+ токенов/.test(pv.labels[0] || ""))
+      problems.push(`оценка: запрос чанка описан как «${pv.labels[0]}»`);
+    if (!/сводок: 2 · уровней: 1/.test(pv.labels[1] || ""))
+      problems.push(`оценка: запрос свёртки описан как «${pv.labels[1]}»`);
+    for (const l of pv.labels)
+      if (!/символов: user \d+, system \d+ \(всего \d+\)/.test(l)
+          || !/токенов ~\d+/.test(l)) problems.push(`оценка: статистика «${l}»`);
+    // у каждого запроса свои system и user: 4 <pre>, порядок — system, user
+    const all = pv.texts.join("\n");
+    if (!all.includes("## ОРИГИНАЛ") || !all.includes("## ПЕРЕВОД"))
+      problems.push("оценка: запрос чанка без разметки оригинала и перевода");
+    if (!all.includes("Он сказал") || !all.includes("Вторая строка"))
+      problems.push("оценка: в запросе чанка нет текстов глав");
+    if (!all.includes("<<<QUALITY>>>"))
+      problems.push("оценка: запрос чанка без хвоста QUALITY");
+    if (all.includes("{original_text}") || all.includes("{translated_text}")
+        || all.includes("{batch_text}"))
+      problems.push("оценка: плейсхолдер промпта дошёл до запроса");
+    if (!all.includes("### глава 1") || !all.includes("общий балл: 8.5")
+        || !all.includes("точность 9") || !all.includes("### глава 2")
+        || !all.includes("(здесь сводка чанка)"))
+      problems.push("оценка: в запросе свёртки нет сводок чанков");
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-quality-preview.png") });
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    log(`${problems.length === before ? "✅" : "❌"} оценка чанками  ${(pv.head || [])[1] || "?"}`);
+  }
+
   /* кириллическое имя проекта: сегменты hash-маршрута браузер хранит
    * закодированными — без декода имя книги доезжает до API дважды
    * закодированным, проект не находится, а в заголовке — крокозябры */
