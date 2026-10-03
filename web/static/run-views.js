@@ -107,7 +107,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
 
   function setStage(key) {
     st.stage = key;
-    // B5: кэш опций (файлы/главы) — только для текущей стадии:
+    // Кэш опций (файлы/главы) — только для текущей стадии:
     // после запуска ner появился ner.json, wiki должна его увидеть
     st.options = null;
     // значения формы — тоже по стадиям: переключение стадии = свежая
@@ -671,7 +671,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
   }
 
-  // файл → путь внутри проекта (R5-G): голое имя + dir → "dir/имя"
+  // файл → путь внутри проекта: голое имя + dir → "dir/имя"
   function finalFile(f, v) {
     if (f.type === "files" && f.dir && v && !String(v).includes("/")) {
       return `${f.dir}/${v}`;
@@ -785,7 +785,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         touched.add(f.name);
       });
       // чекбокс СЛЕВА от текста (не снизу): строка checkbox + label;
-      // подсказка — тултип при наведении (M9), чтобы не ломала строку
+      // подсказка — тултип при наведении, чтобы не ломала строку
       const wrap = h(
         "label",
         { class: "field field-check" },
@@ -903,7 +903,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       upInput.addEventListener("change", async () => {
         if (!upInput.files || !upInput.files.length) return;
         const form = new FormData();
-        // B3: dir="" (поля корня проекта — wiki file и т.п.) —
+        // dir="" (поля корня проекта — wiki file и т.п.) —
         // загружаем в корень проекта, иначе файл не появится в селекте
         form.append("dest", dir || "");
         for (const f2 of upInput.files) {
@@ -952,7 +952,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       wrap.append(profileNote(key));
       syncProfileNote(key);
     }
-    // M9: сложные контролы (select/textarea/files) — тултип при наведении;
+    // Сложные контролы (select/textarea/files) — тултип при наведении;
     // inline-подсказка остаётся только у простых text/number
     if (f.help) {
       const complex = f.type === "select" || f.type === "textarea"
@@ -3166,7 +3166,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       } catch {
         /* статус уже есть */
       }
-      // B5: после завершения запуска могли появиться новые файлы
+      // После завершения запуска могли появиться новые файлы
       // (ner.json, wiki.md) — форма перечитает опции при рендере
       st.options = null;
       render();

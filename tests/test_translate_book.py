@@ -226,7 +226,7 @@ def test_main_resolves_server_from_env(tmp_path, monkeypatch):
 
 
 def test_main_redact_bad_json_returns_1(tmp_path, monkeypatch):
-    """H4 (AUDIT): битый chunks.json в redact — код 1, а не 0."""
+    """Битый chunks.json в redact — код 1, а не 0."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "chunks.json").write_text("это не json{", encoding="utf-8")
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")

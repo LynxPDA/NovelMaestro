@@ -182,7 +182,7 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
                   sequence_check=True):
     """Возвращает (список_ошибок, обновлённый_prev_inner_chapter).
     В список попадают ТОЛЬКО ошибки и предупреждения поиска.
-    exclusions — слова-исключения (R9), по умолчанию load_exclusions().
+    exclusions — слова-исключения, по умолчанию load_exclusions().
     regexp_checks — список compiled regexp по тексту главы: всё
       найденное — ошибка (чистый стандартный regexp, без флагов и
       комментариев; «пропуск первого вхождения» — стандартно, см.
@@ -371,7 +371,7 @@ def main() -> None:
     args = parser.parse_args()
     strict = not args.lenient
     chapters_dir: str = args.chapters_dir
-    # R9: исключения — CLI > .env > встроенный дефолт
+    # Исключения — CLI > .env > встроенный дефолт
     exclusions = load_exclusions()
     if args.exclude_words:
         exclusions = [w.strip().lower()
@@ -431,7 +431,7 @@ def main() -> None:
         sys.exit(1)
     report_path = f"./logs/check_{check_type}_{start_cap}-{end_cap}.txt"
     comp_desc = "; ".join(f"{rt} ({r}±{t})" for rt, r, t in comparisons)
-    # R9: фактическая команда запуска — в отчёт
+    # Фактическая команда запуска — в отчёт
     _write_report(report_path, (
         f"=== Отчёт о проверке перевода ({check_type}) ===\n"
         f"Запуск        : {shlex.join(sys.argv)}\n"
@@ -450,7 +450,7 @@ def main() -> None:
     ), "w")
 
     print("--------------------------------------")
-    # R9: фактическая команда запуска
+    # Фактическая команда запуска
     print(f"Запуск: {shlex.join(sys.argv)}")
     print(f"Запуск проверки ({check_type})…")
     print(f"Сравнения: {comp_desc}")

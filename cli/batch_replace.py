@@ -306,7 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     ap = build_parser()
     args = ap.parse_args(argv)
-    # R9: фактическая команда запуска
+    # Фактическая команда запуска
     import shlex as _shlex
     import sys as _sys
     print(f"Запуск: {_shlex.join(_sys.argv)}")

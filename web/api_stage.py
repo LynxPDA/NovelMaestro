@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-api_stage.py — запуски и стадии (M4): JobManager, запуск стадии, список
+api_stage.py — запуски и стадии: JobManager, запуск стадии, список
 и поток событий, спецификация и опции стадий, предпросмотр запроса, эмуляции
 epub_to_chapters и batch_replace.
 """
@@ -36,7 +36,7 @@ from web.api_common import (
 
 
 # ════════════════════════════════════════════════════════════════════
-# Запуски и стадии (M4)
+# Запуски и стадии
 # ════════════════════════════════════════════════════════════════════
 def _job_manager(ctx: dict) -> JobManager:
     """Общий JobManager (singleton на сервер, ленивое создание).
@@ -112,7 +112,7 @@ def _jobs_start(ctx: dict) -> dict:
     argv = build_command(action, params, ctx)
     argv[0] = str(script)  # абсолютный путь к скрипту
     jm = _job_manager(ctx)
-    # H2 (AUDIT): лимит параллельных задач --jobs-limit (мёртвая опция → живая)
+    # Лимит параллельных задач --jobs-limit (мёртвая опция → живая)
     handler = ctx.get("handler")
     srv = handler.server if handler is not None else None
     limit = getattr(srv, "jobs_limit", 2) if srv is not None else 2
@@ -123,7 +123,7 @@ def _jobs_start(ctx: dict) -> dict:
             f"Лимит параллельных задач: {limit} (активно: {running}). "
             f"Дождитесь завершения или остановите запуск.",
         )
-    # M10 (AUDIT): per-project лок — две стадии на один проект
+    # (AUDIT): per-project лок — две стадии на один проект
     # параллельно перезаписали бы одни и те же артефакты
     busy = jm.running_on(project)
     if busy is not None:
@@ -139,7 +139,7 @@ def _jobs_start(ctx: dict) -> dict:
         env[core_settings.PROFILE_ENV] = profile
     api_key = ctx.pop("_llm_api_key", None)
     if api_key:
-        # P1 (AUDIT #2): ключ — только в окружении subprocess
+        # (AUDIT #2): ключ — только в окружении subprocess
         env["LLM_API_KEY"] = str(api_key)
     job = jm.start(action, title, project, argv, pdir, env=env)
     return {"ok": True, "job": _job_payload(job)}
@@ -387,7 +387,7 @@ def _stage_options(ctx: dict) -> dict:
             ch_map = common.build_chapter_map(chapters_dir)
             nums = sorted(ch_map)
             if nums:
-                # ids — реальные главы (B10): таблица конвейера рисует
+                # ids — реальные главы: таблица конвейера рисует
                 # строки по списку, а не по диапазону min..max
                 out["options"]["chapters"] = {
                     "min": nums[0], "max": nums[-1], "ids": nums}

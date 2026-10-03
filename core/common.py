@@ -193,7 +193,7 @@ _SECRET_FLAG_RE = re.compile(
 
 def _mask_secret_argv(cmd: list[str]) -> list[str]:
     """Маскирует значения после флагов с key/token/secret/password/auth
-    в названии (включая форму --flag=value). M2 (AUDIT): ключи не в лог."""
+    в названии (включая форму --flag=value); ключи не в лог."""
     masked: list[str] = []
     i = 0
     while i < len(cmd):
@@ -213,9 +213,9 @@ def _mask_secret_argv(cmd: list[str]) -> list[str]:
 
 
 def log_argv(logger, argv=None, prefix="Запуск"):
-    """Пишет фактическую команду запуска в лог (R9):
+    """Пишет фактическую команду запуска в лог:
     logger.info(f'{prefix}: {shlex.join(argv)}'); argv=None → sys.argv.
-    Значения секретных флагов (--*api_key* и т.п.) маскируются (M2)."""
+    Значения секретных флагов (--*api_key* и т.п.) маскируются."""
     import shlex
     cmd = argv if argv is not None else sys.argv
     logger.info("%s: %s", prefix, shlex.join(_mask_secret_argv(list(cmd))))
@@ -1724,7 +1724,7 @@ _LOOP_RES = (
 )
 
 
-# H3 (AUDIT): ретраим ТОЛЬКО перегрузки/нестабильность сервера;
+# Ретраим ТОЛЬКО перегрузки/нестабильность сервера;
 # 4xx-ошибки (400/401/403/404 и т.п.) — сразу наружу.
 _RETRYABLE_STATUS = frozenset({408, 425, 429}) | frozenset(range(500, 600))
 _RETRY_WAIT_MAX = 60.0   # Retry-After кап, сек
@@ -1783,7 +1783,7 @@ def stream_chat_completion(
                              read_timeout=stream_timeout) as resp:
                 if resp.status_code != 200:
                     last_err = f"HTTP {resp.status_code}"
-                    # H3 (AUDIT): ретраим ТОЛЬКО 408/425/429/5xx;
+                    # Ретраим ТОЛЬКО 408/425/429/5xx;
                     # 400/401/403/404 — сразу наружу (ключ/запрос битые)
                     if resp.status_code not in _RETRYABLE_STATUS:
                         break
@@ -1888,7 +1888,7 @@ def _mojibake_ratio(text: str, limit: int = 4000) -> float:
 
 
 def read_text_safe(path) -> str:
-    """utf-8 → cp1251 → gb18030 fallback (B7, AUDIT).
+    """utf-8 → cp1251 → gb18030 fallback.
     Порядок критичен: cp1251 раньше gb18030 (проект русскоязычный), но
     cp1251 «успешно» декодирует почти любые байты — после него эвристика
     мусора: GBK-китайский в cp1251 даёт Latin-1-мусор → переходим к gb18030."""

@@ -263,7 +263,7 @@ def test_run_two_pass_no_resume_from_cache(tmp_path, monkeypatch, ner_globals):
 
 
 def test_run_two_pass_counts_failures(tmp_path, monkeypatch, ner_globals):
-    """H4 (AUDIT): run_two_pass возвращает число упавших чанков."""
+    """Run_two_pass возвращает число упавших чанков."""
     def fake_llm(stage, system_prompt, user_content, *a, **k):
         return None, "HTTP 500"  # LLM не отвечает → чанк упал
 
@@ -281,7 +281,7 @@ def test_run_two_pass_counts_failures(tmp_path, monkeypatch, ner_globals):
 
 
 def test_run_two_pass_all_ok_returns_zero(tmp_path, monkeypatch, ner_globals):
-    """H4: успешный прогон → 0 упавших."""
+    """Успешный прогон → 0 упавших."""
     p1_answer = '[{"term": "陈阳", "type": "Person", "translation": "Чэнь Ян"}]'
     def fake_llm(stage, system_prompt, user_content, *a, **k):
         return p1_answer, None

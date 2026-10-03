@@ -1794,7 +1794,7 @@ function viewProject(section, name, tab, job) {
       if (cols.length === 1) return colLabel(cols[0]);
       return `Столбцы (${cols.length})`;
     }
-    /* R8-5: значения-объекты/массивы (напр. _votes_pinyin) показываем
+    /* Значения-объекты/массивы (напр. _votes_pinyin) показываем
        компактным JSON, а не «[object Object]» */
     const cellText = UICore.nerCellText;
     const isStruct = (v) => v != null && typeof v === "object";
@@ -2068,7 +2068,7 @@ function viewProject(section, name, tab, job) {
         "tr",
         { class: "ner-row ner-editing" },
         ...visibleCols().map((c) => {
-          /* R8-5: значение-объект редактируется как JSON-текст; при
+          /* Значение-объект редактируется как JSON-текст; при
              коммите парсим — невалидный JSON не сохраняется */
           const struct = isStruct(it[c]);
           const inp = struct
@@ -4035,7 +4035,7 @@ function viewProject(section, name, tab, job) {
     return h("div", { class: "files-wrap" }, toolbar, err, list, editorHost);
   }
 
-  /* Модалка выбора шаблона (W4): наборы templates + имя файла →
+  /* Модалка выбора шаблона: наборы templates + имя файла →
      колбэк (шаблон, имя). Работает и на пустом prompts/. */
   function templateModal(templates, onApply) {
     const q = new URLSearchParams({ project: `${section}/${name}` });
@@ -4095,7 +4095,7 @@ function viewProject(section, name, tab, job) {
     sel.focus();
   }
 
-  /* ── Логи (M8) ─────────────────────────────────── */
+  /* ── Логи ─────────────────────────────────── */
   async function logsView() {
     /* структура папок как «Проекты-Файлы» (crumbs + подпапки),
        отображаются только *.log */
@@ -4290,7 +4290,7 @@ function viewProject(section, name, tab, job) {
     return h("div", { class: "files-wrap" }, toolbar, list, lPager.el, pre);
   }
 
-  /* ── Отчёты translate_check (W7) ────────────── */
+  /* ── Отчёты translate_check ────────────── */
   async function notesView() {
     /* «Заметки» проекта — markdown-файл source/info.md (копируется из
        шаблона General при создании проекта); редактор как у «Заметок»
@@ -4384,7 +4384,7 @@ function viewProject(section, name, tab, job) {
     );
   }
 
-  /* ── Отчёты translate_check (W7) — секция 2 «Проверки» ── */
+  /* ── Отчёты translate_check — секция 2 «Проверки» ── */
   async function renderCheckReports(section, name) {
     const q = new URLSearchParams({ project: `${section}/${name}` });
     let data;

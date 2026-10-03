@@ -164,7 +164,7 @@ def test_ner_export_text(srv, tmp_path):
     lines = [json.loads(l) for l in r["content"].strip().splitlines()]
     assert {rec["term"] for rec in lines} == {"陈阳", "林水", "青云宗"}
     assert lines[0]["translation"] == "Чэнь Ян"
-    # R6-C: aliases/голоса не экспортируются (опции убраны)
+    # Aliases/голоса не экспортируются (опции убраны)
     assert "aliases" not in r["content"]
 
 
@@ -187,7 +187,7 @@ def test_ner_export_filters(srv, tmp_path):
     r = _request(port, "GET", f"/api/ner/export?{q}")
     assert r["total"] == 1
     assert json.loads(r["content"])[0]["term"] == "陈阳"
-    # R6-C: exclude_words/range больше не принимаются — игнорируются
+    # Exclude_words/range больше не принимаются — игнорируются
     q = _q("ACTIVE/demo", format="json", count_threshold="0",
            exclude_words="палладия", range="1-1")
     r = _request(port, "GET", f"/api/ner/export?{q}")
@@ -200,7 +200,7 @@ def test_ner_export_bad_format(srv, tmp_path):
     q = _q("ACTIVE/demo", format="xyz")
     r = _request(port, "GET", f"/api/ner/export?{q}")
     assert "__error__" in r and r["__error__"] == 400
-    # R6-C: range больше не валидируется — просто игнорируется
+    # Range больше не валидируется — просто игнорируется
     q = _q("ACTIVE/demo", format="json", range="абв")
     r = _request(port, "GET", f"/api/ner/export?{q}")
     assert r["ok"] and r["total"] == 3
@@ -558,7 +558,7 @@ def test_prompts_template_missing(srv, tmp_path):
 
 
 # ════════════════════════════════════════════════════════════════════
-# Логи (M8)
+# Логи
 
 
 def test_logs_list(srv, tmp_path):
@@ -680,7 +680,7 @@ def test_logs_escape_sandbox(srv, tmp_path):
 
 
 def test_prompts_templates_in_list_and_create(srv, tmp_path):
-    """W4: в списке промптов есть шаблоны; промпт создаётся из шаблона."""
+    """В списке промптов есть шаблоны; промпт создаётся из шаблона."""
     _srv, port, root = srv(projects_root=tmp_path / "prj")
     proj = tmp_path / "prj" / "ACTIVE" / "demo"
     (proj / "prompts").mkdir(parents=True)
@@ -702,7 +702,7 @@ def test_prompts_templates_in_list_and_create(srv, tmp_path):
 
 
 # ════════════════════════════════════════════════════════════════════
-# W6: env по канону + видимые значения; обложка
+# env по канону + видимые значения; обложка
 # ════════════════════════════════════════════════════════════════════
 
 def test_files_list_shows_book_env(srv, tmp_path, monkeypatch):
@@ -760,7 +760,7 @@ def test_prompts_delete(srv, tmp_path):
 
 
 def test_cover_roundtrip(srv, tmp_path):
-    """W6: обложка — загрузка (base64), статус, удаление."""
+    """Обложка — загрузка (base64), статус, удаление."""
     import base64
     _srv, port, root = srv(projects_root=tmp_path / "prj",
                            repo_root=tmp_path / "repo")
@@ -779,7 +779,7 @@ def test_cover_roundtrip(srv, tmp_path):
 
 
 def test_cover_rejects_bad_ext(srv, tmp_path):
-    """W6: обложка только jpg/png/jpeg (webp убран — не читается
+    """Обложка только jpg/png/jpeg (webp убран — не читается
     в EPUB/FB2)."""
     import base64
     _srv, port, root = srv(projects_root=tmp_path / "prj",
@@ -794,7 +794,7 @@ def test_cover_rejects_bad_ext(srv, tmp_path):
 
 
 def test_download_inline_image(srv, tmp_path):
-    """W6: download?inline=1 отдаёт картинку без attachment."""
+    """Download?inline=1 отдаёт картинку без attachment."""
     import http.client
     import urllib.parse
     _srv, port, root = srv(projects_root=tmp_path / "prj",
@@ -817,7 +817,7 @@ def test_download_inline_image(srv, tmp_path):
 
 
 def test_settings_hidden_when_auth_enabled(tmp_path, monkeypatch):
-    """W6: при --auth настройки доступны только с сессией, а API-ключ
+    """При --auth настройки доступны только с сессией, а API-ключ
     по-прежнему скрыт: значения и текст файла наружу не уходят."""
     env = tmp_path / "repo" / ".env"
     env.parent.mkdir(parents=True, exist_ok=True)
@@ -873,7 +873,7 @@ def test_settings_hidden_when_auth_enabled(tmp_path, monkeypatch):
 
 
 # ════════════════════════════════════════════════════════════════════
-# W7: отчёты translate_check
+# Отчёты translate_check
 # ════════════════════════════════════════════════════════════════════
 
 CHECK_FIXTURE = """=== Отчёт о проверке перевода (polished) ===
@@ -903,7 +903,7 @@ CHECK_FIXTURE = """=== Отчёт о проверке перевода (polished
 
 
 def test_parse_check_report_fixture():
-    """W7: парсер отчёта — метаданные, entries, FATAL, ./-обрезка."""
+    """Парсер отчёта — метаданные, entries, FATAL, ./-обрезка."""
     from web.api import _parse_check_report
     d = _parse_check_report(CHECK_FIXTURE)
     assert d["type"] == "polished"
@@ -923,7 +923,7 @@ def test_parse_check_report_fixture():
 
 
 def test_check_reports_endpoint(srv, tmp_path):
-    """W7: GET /api/check — список и разбор отчётов проекта."""
+    """GET /api/check — список и разбор отчётов проекта."""
     _srv, port, root = srv(projects_root=tmp_path / "prj",
                            repo_root=tmp_path / "repo")
     pdir = _mk_project(root)
@@ -940,11 +940,11 @@ def test_check_reports_endpoint(srv, tmp_path):
 
 
 # ════════════════════════════════════════════════════════════════════
-# R9: настройки запусков (.env)
+# Настройки запусков (.env)
 
 
 def test_stage_spec_prefill_from_shared_env(srv, tmp_path, monkeypatch):
-    """R9-A: форма стадии предзаполняется общим конфигом (реестр → общий
+    """Форма стадии предзаполняется общим конфигом (реестр → общий
     .env → os.environ). Стадийных <СТАДИЯ>_HOST/MODEL и слоя pdir/.env
     больше нет: LLM-полей в форме запусков тоже нет."""
     shared = tmp_path / "shared.env"
@@ -965,7 +965,7 @@ def test_stage_spec_prefill_from_shared_env(srv, tmp_path, monkeypatch):
 
 
 def test_stage_spec_env_no_project(srv, tmp_path):
-    """R9-A: без project спека не трогает .env (дефолты из спекуляции)."""
+    """Без project спека не трогает .env (дефолты из спекуляции)."""
     srv, port, root = srv()
     _mk_project(root)
     r = _request(port, "GET", "/api/stages/ner/spec")
@@ -996,7 +996,7 @@ def test_job_start_does_not_copy_shared_env(srv, tmp_path):
 
 
 def test_job_start_uses_shared_llm_config(srv, tmp_path, monkeypatch):
-    """R9-B: запуск получает LLM-конфиг из общего файла — сервер и модель
+    """Запуск получает LLM-конфиг из общего файла — сервер и модель
     уходят в argv, ключ — в окружение процесса; файл книги не создаётся
     вовсе (изменённые поля запусков живут в браузере)."""
     env = tmp_path / "repo" / ".env"

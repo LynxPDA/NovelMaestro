@@ -332,7 +332,7 @@ def parse_yaml_meta(path):
     try:
         text = safe_read(path)
     except (OSError, ValueError):
-        # B12: только ошибки чтения/кодировки — программные баги не маскируем
+        # Только ошибки чтения/кодировки — программные баги не маскируем
         return meta
     lines = text.split('\n')
     # Убираем front-matter делимитеры ---
@@ -552,7 +552,7 @@ def build_epub_native(chapters_data, meta, cover_path, output_path):
         print(f"[УСПЕХ] EPUB сгенерирован (нативно): {output_path}")
         return True
     except (OSError, ValueError, TypeError) as e:
-        # B12: файловые/данные-ошибки — отчёт и fallback; баги кода падают явно
+        # Файловые/данные-ошибки — отчёт и fallback; баги кода падают явно
         print(f"[ОШИБКА] Генерация EPUB: {e}")
         return False
 
@@ -638,7 +638,7 @@ def build_fb2_native(chapters_data, meta, cover_path, output_path):
         print(f"[УСПЕХ] FB2 сгенерирован (нативно): {output_path}")
         return True
     except (OSError, ValueError, TypeError) as e:
-        # B12: файловые/данные-ошибки — отчёт и fallback; баги кода падают явно
+        # Файловые/данные-ошибки — отчёт и fallback; баги кода падают явно
         print(f"[ОШИБКА] Генерация FB2: {e}")
         return False
 
@@ -798,7 +798,7 @@ def compile_book(mode):
             # Единый алгоритм нормализации разделителей: строка из 3+
             # разделителей (точки/звёздочки/многоточия, разделённые пробелами)
             # → универсальный сепаратор. Китайские скобки 【】 НЕ заменяем
-            # (косметика, не критичная очистка — M9).
+            # (косметика, не критичная очистка).
             content = re.sub(
                 r"^[ \t]*(?:[.*…][ \t]*){3,}$", sep_string,
                 content, flags=re.MULTILINE)
@@ -931,7 +931,7 @@ def build_parser():
 
 def main():
     args = build_parser().parse_args()
-    # R9: фактическая команда запуска
+    # Фактическая команда запуска
     import shlex as _shlex
     import sys as _sys
     print(f"Запуск: {_shlex.join(_sys.argv)}")

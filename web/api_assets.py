@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-api_assets.py — обложка проекта (W6), логи стадии (M8) и отчёты
-translate_check (W7).
+api_assets.py — обложка проекта, логи стадии и отчёты
+translate_check.
 """
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def _cover_put(ctx: dict) -> dict:
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else "jpg"
     if ext not in ("jpg", "jpeg", "png"):
         raise ApiError(400, "Допустимы cover.jpg / .png / .jpeg")
-    # L6 (AUDIT): сигнатура — файл должен быть реальным изображением
+    # Сигнатура — файл должен быть реальным изображением
     if not _cover_magic_ok(raw, ext):
         raise ApiError(400, f"Файл не похож на изображение .{ext}")
     src = pdir / "source"
@@ -122,7 +122,7 @@ def _cover_delete(ctx: dict) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════
-# Логи (M8)
+# Логи
 # ════════════════════════════════════════════════════════════════════
 
 

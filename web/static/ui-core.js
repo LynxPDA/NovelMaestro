@@ -171,7 +171,7 @@
   }
   function isCjkString(s) {
     if (!s) return false;
-    // B9: итерация по code points (for...of), а не UTF-16 code units —
+    // Итерация по code points (for...of), а не UTF-16 code units —
     // суррогатные пары (доп. плоскости, U+20000+) не считаются как 2
     var n = 0;
     var len = 0;

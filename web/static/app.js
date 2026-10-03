@@ -1,7 +1,7 @@
 /* app.js — SPA web-интерфейса NovelMaestro (ES-module, vanilla JS, без сборки)
- * M1: каркас, роутер, вход по токену.
- * M2: hub — разделы, карточки проектов, мастер создания, управление.
- * M3: файлы — браузер, редактор, загрузка, скачивание. */
+ * Каркас, роутер, вход по токену.
+ * Hub — разделы, карточки проектов, мастер создания, управление.
+ * Файлы — браузер, редактор, загрузка, скачивание. */
 
 const state = { auth: false, host: "", tokenSet: false };
 
@@ -262,14 +262,14 @@ async function api(path, opts = {}) {
   return data;
 }
 
-/* Тосты — обычный DOM (B8: Alpine и toast-host на нём убраны). */
+/* Тосты — обычный DOM (Alpine и toast-host на нём убраны). */
 function toast(msg, kind = "ok") {
   const t = h("div", { class: `toast toast-${kind}` }, msg);
   document.body.append(t);
   setTimeout(() => t.remove(), 3500);
 }
 
-/* ── тултипы (M9): единая всплывающая подсказка ────────────────
+/* ── тултипы: единая всплывающая подсказка ────────────────
  * attachTooltip(el, text) — показ по наведению/фокусу, скрытие по
  * уходу; позиция над элементом (прижата к краю окна, у верхнего
  * края — под элементом). Один общий элемент на страницу. */
@@ -389,7 +389,7 @@ function viewLogin() {
   return h("div", { class: "login-wrap" }, form);
 }
 
-/* ── данные hub (M2) ──────────────────────────────────────── */
+/* ── данные hub ──────────────────────────────────────── */
 let hubCache = null;
 
 async function loadHub(force = false) {
@@ -1300,7 +1300,7 @@ async function viewSettings() {
   );
 }
 
-/* ── Дашборд (W3) ─────────────────────────────────────────── */
+/* ── Дашборд ─────────────────────────────────────────── */
 async function viewDashboard() {
   let d;
   try {
@@ -1633,7 +1633,7 @@ async function viewHub() {
   );
 }
 
-/* ── файловый менеджер (M3) ─────────────────────────────── */
+/* ── файловый менеджер ─────────────────────────────── */
 
 function fmtSize(n) {
   if (n >= 1048576) return (n / 1048576).toFixed(1) + " МБ";
@@ -1674,7 +1674,7 @@ async function apiUpload(path, form) {
   return data;
 }
 
-/* ── Редактор файлов: CodeMirror c fallback на textarea (W8) ── */
+/* ── Редактор файлов: CodeMirror c fallback на textarea ── */
 
 const CM_READY =
   typeof window !== "undefined" && window.CM && window.CM.EditorView;
@@ -1733,7 +1733,7 @@ function makeEditor(initial, langExt, onUpdate) {
       langComp.of(cmLang(langExt) || []),
       roComp.of([]),
       hlComp.of(highlightExt()),
-      EditorView.lineWrapping, // длинные строки переносятся (R8-1)
+      EditorView.lineWrapping, // длинные строки переносятся
       EditorView.theme({
         "&": {
           height: "100%",
@@ -3089,7 +3089,7 @@ async function boot() {
       if (state.auth) commandPalette();
     }
   });
-  // Esc закрывает верхнюю модалку (W9)
+  // Esc закрывает верхнюю модалку
   window.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     const modals = document.querySelectorAll(".modal-backdrop");

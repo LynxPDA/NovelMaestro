@@ -83,7 +83,7 @@ _ACTION_SPECS: dict[int, dict] = {
 # дефолтов и своего чтения .env здесь больше нет.
 _DEFAULTS = core_settings.stage_values("pipeline")
 _DEFAULTS.update(core_settings.llm_values())
-# M7 (AUDIT): возвращено как было — текст перевода НЕ попадает в stdout
+# (AUDIT): возвращено как было — текст перевода НЕ попадает в stdout
 # скриптов (только прогресс/ошибки), лишняя настройка PIPELINE_ERROR_WORDS
 # отменена по решению пользователя; жёсткий список ловит реальные сбои.
 _ERROR_RE = re.compile(
@@ -91,7 +91,7 @@ _ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 # Префикс логгера "2026-01-01 12:00:00 - WARNING - …": имя уровня
-# матчит _ERROR_RE, но это не ошибка стадии (P0, AUDIT #1).
+# матчит _ERROR_RE, но это не ошибка стадии.
 _LOGGER_PREFIX_RE = re.compile(
     r"^.*? - (?:DEBUG|INFO|WARNING|ERROR|CRITICAL) - ",
     re.IGNORECASE,
@@ -339,7 +339,7 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
         # глоссарий — всегда канонический ner.json (выбор файла убран)
         "--ner_file", "ner.json",
     ]
-    # P1 (AUDIT #2): ключ не попадает в argv — передаётся через
+    # (AUDIT #2): ключ не попадает в argv — передаётся через
     # окружение subprocess (LLM_API_KEY), см. process_chapter.
     if temperature is not None:
         common += ["--temperature", str(temperature)]
@@ -659,7 +659,7 @@ def main() -> None:
                                           "%(message)s",
                                           datefmt="%Y-%m-%d %H:%M:%S"))
         log.addHandler(sh)
-    # R9: фактическая команда запуска
+    # Фактическая команда запуска
     import shlex as _shlex
     log.info("Запуск: %s", _shlex.join(sys.argv))
 

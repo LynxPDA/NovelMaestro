@@ -1636,7 +1636,7 @@ def main():
     _log(logger, logging.INFO,
          f"🏁 Готово. Терминов: {len(global_ner_data)}. Файл: {args.ner_file}")
 
-    # H4 (AUDIT): все чанки упали → код 1 (частичный успех — 0 + warning)
+    # Все чанки упали → код 1 (частичный успех — 0 + warning)
     if failed_chunks and failed_chunks == len(all_chunks):
         return 1
     return 0

@@ -584,7 +584,7 @@ def main(argv=None):
     try:
         stage = bind_profile(stage, args)
     except SystemExit as exc:
-        # L3 (AUDIT): незаданные сервер/модель = код 1, а не traceback
+        # Незаданные сервер/модель = код 1, а не traceback
         print(str(exc))
         return 1
 

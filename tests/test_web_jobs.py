@@ -40,7 +40,7 @@ FAKE_FAIL = "import sys\nprint('boom', flush=True)\nsys.exit(3)\n"
 FAKE_HANG = "import time\nprint('start', flush=True)\ntime.sleep(60)\n"
 
 # Родитель порождает потомка; потомок пишет pid и спит. Если stop убьёт
-# только родителя — потомок-сирота останется жить (баг W2).
+# только родителя — потомок-сирота останется жить.
 FAKE_PARENT_CHILD = (
     "import subprocess, sys, time\n"
     "kid = subprocess.Popen([sys.executable, '-c', \n"
@@ -271,7 +271,7 @@ def test_stop_terminates(tmp_path, fake_script):
 
 
 def test_stop_kills_child_process_group(tmp_path, fake_script):
-    """W2: stop убивает ГРУППУ — дочерний процесс не остаётся сиротой."""
+    """Stop убивает ГРУППУ — дочерний процесс не остаётся сиротой."""
     import os
     jm = JobManager(tmp_path, python="python3")
     job = jm.start("test", "Родитель с потомком", "ACTIVE/x",
@@ -528,7 +528,7 @@ def test_jobs_active_http(jobs_srv, fake_script):
 
 
 def test_reconcile_dead_pid(tmp_path, fake_script):
-    """R15: «running»-запуск с мёртвым pid при загрузке → failed
+    """«running»-запуск с мёртвым pid при загрузке → failed
     (процесс не пережил рестарт сервера)."""
     import os
     jm = JobManager(tmp_path, python="python3")
@@ -554,7 +554,7 @@ def test_reconcile_dead_pid(tmp_path, fake_script):
 
 
 def test_reconcile_alive_pid(tmp_path, fake_script):
-    """R15: «running»-запуск с живым pid остаётся running и управляемым
+    """«running»-запуск с живым pid остаётся running и управляемым
     (stop по pid)."""
     import subprocess
     import time as _time
@@ -602,7 +602,7 @@ def test_reconcile_alive_pid(tmp_path, fake_script):
 
 
 def test_orphan_watcher_marks_dead(tmp_path, fake_script, monkeypatch):
-    """B1: сирота (running без proc, pid умер после рестарта) —
+    """Сирота (running без proc, pid умер после рестарта) —
     фоновый наблюдатель помечает failed, не дожидаясь перезагрузки."""
     import web.jobs as jobs_mod
     monkeypatch.setattr(jobs_mod, "ORPHAN_POLL", 0.05)
@@ -626,7 +626,7 @@ def test_orphan_watcher_marks_dead(tmp_path, fake_script, monkeypatch):
 
 
 def test_orphan_watcher_ignores_live(tmp_path, fake_script, monkeypatch):
-    """B1: сирота с ЖИВЫМ pid остаётся running (наблюдатель не трогает)."""
+    """Сирота с ЖИВЫМ pid остаётся running (наблюдатель не трогает)."""
     import subprocess
     import web.jobs as jobs_mod
     monkeypatch.setattr(jobs_mod, "ORPHAN_POLL", 0.05)
@@ -650,7 +650,7 @@ def test_orphan_watcher_ignores_live(tmp_path, fake_script, monkeypatch):
 
 
 def test_remove_stops_orphan(tmp_path, fake_script):
-    """B2: remove() сироты останавливает живой процесс (proc=None,
+    """Remove() сироты останавливает живой процесс (proc=None,
     pid жив) — раньше SIGTERM не уходил и процесс работал дальше."""
     import subprocess
     import time as _time
@@ -678,7 +678,7 @@ def test_remove_stops_orphan(tmp_path, fake_script):
 
 
 def test_shutdown_stops_running(tmp_path, fake_script):
-    """R15: shutdown() останавливает все активные запуски (завершение
+    """Shutdown() останавливает все активные запуски (завершение
     сервера — никаких процессов-сирот)."""
     jm = JobManager(tmp_path, python="python3")
     job1 = jm.start("test", "Тест 1", "ACTIVE/x",
@@ -697,7 +697,7 @@ def test_shutdown_stops_running(tmp_path, fake_script):
 
 
 def test_pid_in_payload(tmp_path, fake_script):
-    """R15: pid процесса доступен в payload (для UI-управления),
+    """Pid процесса доступен в payload (для UI-управления),
     argv — нет (секреты)."""
     jm = JobManager(tmp_path, python="python3")
     job = jm.start("test", "Тест", "ACTIVE/x",
@@ -725,7 +725,7 @@ def test_all_m4_stages_present():
 
 
 def test_stage_order_and_titles():
-    """R6-D: порядок стадий = STAGE_ORDER; названия без имён .py;
+    """Порядок стадий = STAGE_ORDER; названия без имён .py;
     LLM-пометки в названиях LLM-стадий."""
     assert set(STAGE_ORDER) == set(STAGE_SPECS)
     keys = [k for k, _ in ordered_stages()]
@@ -830,7 +830,7 @@ def test_build_translate_check():
     # неизвестный тип — передаётся как есть
     argv3 = build_command("translate_check", {"check_type": "9"}, {})
     assert "--check-type" in argv3 and "9" in argv3
-    # R9: слова-исключения → --exclude-words
+    # Слова-исключения → --exclude-words
     argv4 = build_command("translate_check",
                           {"check_type": "polished",
                            "exclude_words": "VIP,NPC"}, {})
@@ -1867,7 +1867,7 @@ def test_jobs_start_passes_profile(jobs_srv, tmp_path, monkeypatch):
 
 
 def test_job_start_windows_flags(monkeypatch):
-    """B6 (AUDIT): на Windows — CREATE_NEW_PROCESS_GROUP вместо
+    """На Windows — CREATE_NEW_PROCESS_GROUP вместо
     start_new_session (иначе ValueError)."""
     import web.jobs as J
     monkeypatch.setattr(J.os, "name", "nt")
@@ -2033,7 +2033,7 @@ def test_jobs_start_validates_numeric_bounds(jobs_srv):
 
 
 def test_jobs_history_trimmed(jobs_srv):
-    """R5-F + история ограничена MAX_HISTORY (20); сайдкары
+    """История ограничена MAX_HISTORY (20); сайдкары
     удаляются."""
     _, req, jm = jobs_srv
     for i in range(25):
@@ -2129,9 +2129,9 @@ def test_jobs_stop_api_windows(monkeypatch, jobs_srv, fake_script):
 
 
 def test_jobs_limit_enforced(jobs_srv, monkeypatch):
-    """H2 (AUDIT): --jobs-limit (2) — третий одновременный запуск → 429."""
+    """--jobs-limit (2) — третий одновременный запуск → 429."""
     port, req, jm = jobs_srv
-    # три РАЗНЫХ проекта — чтобы не спотыкаться о per-project лок (M10)
+    # три РАЗНЫХ проекта — чтобы не спотыкаться о per-project лок
     for name in ("p1", "p2", "p3"):
         _make_project(port, req, name=name)
 
@@ -2157,7 +2157,7 @@ def test_jobs_limit_enforced(jobs_srv, monkeypatch):
 
 
 def test_jobs_project_lock_conflict(jobs_srv, monkeypatch):
-    """M10 (AUDIT): вторая стадия на тот же проект → 409."""
+    """Вторая стадия на тот же проект → 409."""
     port, req, jm = jobs_srv
     _make_project(port, req)
 
@@ -2240,7 +2240,7 @@ def test_dashboard_running_from_full_list(tmp_path, fake_script):
 
 
 def test_dashboard_http_with_job_manager(jobs_srv, fake_script):
-    """R15: /api/dashboard через HTTP видит активные запуски —
+    """/api/dashboard через HTTP видит активные запуски —
     job_manager привязан к серверу (srv.job_manager), а не ctx."""
     port, req, jm = jobs_srv
     job = jm.start("test", "Тест", "ACTIVE/x",
@@ -2261,7 +2261,7 @@ def test_dashboard_http_with_job_manager(jobs_srv, fake_script):
 
 
 def test_stages_list_order(jobs_srv):
-    """R6-D: /api/stages отдаёт стадии в порядке STAGE_ORDER."""
+    """/api/stages отдаёт стадии в порядке STAGE_ORDER."""
     port, req, _jm = jobs_srv
     res, payload = req("GET", "/api/stages")
     assert res.status == 200
@@ -2287,13 +2287,13 @@ def test_stage_options_api(jobs_srv, tmp_path):
     src = pdir / "source"
     src.mkdir(exist_ok=True)
     (src / "book.epub").write_bytes(b"x")
-    # M9: в source-пуле ВСЕ файлы — обложки и yaml тоже видны селектам
+    # В source-пуле ВСЕ файлы — обложки и yaml тоже видны селектам
     (src / "cover2.png").write_bytes(b"png")
     (src / "metadata2.yaml").write_text("title: Книга\n", encoding="utf-8")
     res, payload = req("GET",
                        "/api/stages/epub/options?project=ACTIVE/test_book")
     assert res.status == 200
-    # B10: ids — реальные главы (пропусков в нумерации нет в списке)
+    # Ids — реальные главы (пропусков в нумерации нет в списке)
     assert payload["options"]["chapters"] == {"min": 1, "max": 3,
                                                "ids": [1, 3]}
     assert "book.epub" in payload["options"]["source"]

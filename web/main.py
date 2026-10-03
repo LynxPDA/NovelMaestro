@@ -142,7 +142,7 @@ def _setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=[
-            # B11: ротация web.log по размеру (>5 МБ → .1/.2), иначе
+            # Ротация web.log по размеру (>5 МБ → .1/.2), иначе
             # файл растёт бесконечно
             logging.handlers.RotatingFileHandler(
                 logs_dir / "web.log", maxBytes=5 * 1024 * 1024,

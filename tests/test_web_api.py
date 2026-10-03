@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Тесты web-API (M2): разделы, проекты (CRUD через core.projects),
+"""Тесты web-API: разделы, проекты (CRUD через core.projects),
 hub_state, ACTIONS из run.py, дерево глав, шаблоны.
 
 Сервер на порту 0 с projects_root в tmp_path и настоящим repo_root —
@@ -360,7 +360,7 @@ def test_project_stats(srv_ctx):
 
 
 def test_project_stats_cached(monkeypatch, srv_ctx):
-    """R5-K follow-up: stats проекта кешируются по сигнатуре — повторный
+    """Follow-up: stats проекта кешируются по сигнатуре — повторный
     запрос не пересчитывает project_stats (полный обход chapters/)."""
     import web.api as api
     from core import projects as P
@@ -893,7 +893,7 @@ def test_auth_required_for_projects_api(srv_ctx):
 
 
 # ════════════════════════════════════════════════════════════════════
-# M3: файлы — листинг, чтение/запись, удаление, upload, download
+# Файлы — листинг, чтение/запись, удаление, upload, download
 
 
 def _multipart_request(port, path, fields: list[tuple[str, str]],
@@ -1055,7 +1055,7 @@ def test_file_read_binary_rejected(srv_ctx):
 
 
 def test_file_read_too_large_413(srv_ctx):
-    """W2: файл больше FILE_TEXT_LIMIT не читается в редактор (413)."""
+    """Файл больше FILE_TEXT_LIMIT не читается в редактор (413)."""
     from web.api import FILE_TEXT_LIMIT
     _, port, projects_root = srv_ctx()
     proj = _file_project(port, projects_root)
@@ -1371,7 +1371,7 @@ def test_upload_into_chapters_ok(srv_ctx):
 
 
 def test_upload_to_project_root(srv_ctx):
-    """B3: dest="" (поля files с dir="" — ner_file, wiki file)
+    """Dest="" (поля files с dir="" — ner_file, wiki file)
     загружает файл в корень проекта — он виден в селекте полей."""
     _, port, projects_root = srv_ctx()
     _file_project(port, projects_root)
@@ -1584,7 +1584,7 @@ def test_project_not_found_404(srv_ctx):
 
 
 def test_dashboard_summary(srv_ctx, tmp_path):
-    """W3: /api/dashboard — разделы, статистика, недавние jobs."""
+    """/api/dashboard — разделы, статистика, недавние jobs."""
     _, port, projects_root = srv_ctx()
     proj = projects_root / "ACTIVE" / "demo"
     (proj / "chapters" / "000001_test").mkdir(parents=True)

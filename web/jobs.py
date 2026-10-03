@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-jobs.py — менеджер запусков стадий (M4).
+jobs.py — менеджер запусков стадий.
 
 - запуск скрипта subprocess'ом с cwd=папка проекта;
 - кольцевой буфер строк (RING_SIZE=5000);
@@ -44,7 +44,7 @@ STOP_GRACE = 5.0  # секунд между terminate и kill
 # обработки HTTP-запроса (stop() зовётся из хендлера)
 TASKKILL_TIMEOUT = 10.0
 SSE_PING = 15.0  # секунд между ping в стриме
-# B1: период опроса «сирот» — running-запусков без reader'а (после
+# Период опроса «сирот» — running-запусков без reader'а (после
 # рестарта сервера); смерть pid → статус failed + persist. Наблюдатель с этим
 # интервалом живёт только пока сироты есть (см. JobManager._start_watch)
 ORPHAN_POLL = 5.0
@@ -57,7 +57,7 @@ from core.common import PROGRESS_PREFIX  # noqa: E402
 
 
 def _popen_kwargs() -> dict:
-    """B6 (AUDIT): параметры Popen для группы процессов.
+    """(AUDIT): параметры Popen для группы процессов.
     POSIX — start_new_session (killpg убьёт потомков); Windows —
     CREATE_NEW_PROCESS_GROUP (start_new_session там не поддержан)."""
     if os.name == "nt":
@@ -218,7 +218,7 @@ class JobManager:
         self._start_watch()
 
     def _start_watch(self) -> None:
-        """B1: фоновый наблюдатель сирот (daemon — не держит процесс).
+        """Фоновый наблюдатель сирот (daemon — не держит процесс).
 
         Один на менеджер и только когда смотреть действительно есть чего:
         running-запуск без reader-потока. Поднимать поток на каждый
@@ -301,7 +301,7 @@ class JobManager:
         }
 
     def _trim_locked(self) -> None:
-        """R5-F (лок уже взят): не более MAX_HISTORY запусков."""
+        """(лок уже взят): не более MAX_HISTORY запусков."""
         if len(self._jobs) <= self.MAX_HISTORY:
             return
         ordered = sorted(self._jobs.values(),
@@ -311,7 +311,7 @@ class JobManager:
             self._drop_sidecar(stale.id)
 
     def _trim_history(self) -> None:
-        """R5-F: оставить не более MAX_HISTORY последних запусков."""
+        """Оставить не более MAX_HISTORY последних запусков."""
         with self._lock:
             self._trim_locked()
 
@@ -434,7 +434,7 @@ class JobManager:
         return True
 
     def _orphan_watch(self) -> None:
-        """B1: сироты после рестарта сервера зависают навсегда —
+        """Сироты после рестарта сервера зависают навсегда —
         reader-поток умер вместе со старым сервером, статус никогда не
         обновится. Наблюдатель опрашивает running-запуски без proc
         (сироты) по pid: процесс умер → done/failed + persist.
@@ -477,7 +477,7 @@ class JobManager:
 
     # ── CRUD ─────────────────────────────────────────────────
     def running_on(self, project: str) -> Job | None:
-        """M10 (AUDIT): активная задача на этот проект — гонка записи."""
+        """(AUDIT): активная задача на этот проект — гонка записи."""
         with self._lock:
             for j in self._jobs.values():
                 if j.status == "running" and j.project == project:
@@ -523,14 +523,14 @@ class JobManager:
                 cwd=str(cwd),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                # B5 (AUDIT): text=True + bufsize=1 — построчный буфер
+                # (AUDIT): text=True + bufsize=1 — построчный буфер
                 # без RuntimeWarning (бинарный режим bufsize=1 не поддержан)
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
                 env=proc_env,
-                # B6 (AUDIT): группа процессов — платформозависимо
+                # (AUDIT): группа процессов — платформозависимо
                 **_popen_kwargs(),
             )
         except OSError as exc:
@@ -683,7 +683,7 @@ class JobManager:
             job = self._jobs.pop(job_id, None)
         if job is None:
             return False
-        # B2: remove останавливает и сирот (proc=None, но pid жив) —
+        # Remove останавливает и сирот (proc=None, но pid жив) —
         # остановка уходит и без живого Popen, иначе удаление из
         # истории оставляло процесс работать
         if job.status == "running" and (job.proc is not None

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-api_glossary.py — глоссарий и его проверки (M7): ner.json, экспорт,
+api_glossary.py — глоссарий и его проверки: ner.json, экспорт,
 review-файлы ner_check и translate_check_llm и их применение.
 """
 from __future__ import annotations
@@ -247,5 +247,5 @@ def _register_m7(router: Router) -> None:
 # ════════════════════════════════════════════════════════════════════
 # Регистрация роутов
 # ════════════════════════════════════════════════════════════════════
-# Отчёты translate_check (W7)
+# Отчёты translate_check
 # ════════════════════════════════════════════════════════════════════

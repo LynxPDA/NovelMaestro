@@ -567,7 +567,7 @@ def test_read_text_safe_cp1251(tmp_path):
 
 
 def test_read_text_safe_gb18030(tmp_path):
-    """B7 (AUDIT): китайские GBK/GB18030-исходники не теряются."""
+    """Китайские GBK/GB18030-исходники не теряются."""
     p = tmp_path / "zh.txt"
     p.write_bytes("第一章 测试".encode("gb18030"))
     assert C.read_text_safe(str(p)) == "第一章 测试"
@@ -1499,7 +1499,7 @@ def test_stream_http_error(monkeypatch):
 
 
 def test_stream_http_401_no_retry(monkeypatch):
-    """H3 (AUDIT): 401/403/404 — НЕ ретраим (битый ключ/запрос)."""
+    """401/403/404 — НЕ ретраим (битый ключ/запрос)."""
     calls = {"n": 0}
 
     def fake_open_stream(url, **kw):
@@ -1512,7 +1512,7 @@ def test_stream_http_401_no_retry(monkeypatch):
 
 
 def test_stream_http_429_retries_with_retry_after(monkeypatch):
-    """H3: 429 ретраится; Retry-After уважается (sleep замокан)."""
+    """429 ретраится; Retry-After уважается (sleep замокан)."""
     calls = {"n": 0}
 
     def fake_open_stream(url, **kw):
@@ -1527,7 +1527,7 @@ def test_stream_http_429_retries_with_retry_after(monkeypatch):
 
 
 def test_stream_http_500_retries_then_fails(monkeypatch):
-    """H3: 5xx ретраится до исчерпания попыток."""
+    """5xx ретраится до исчерпания попыток."""
     calls = {"n": 0}
 
     def fake_open_stream(url, **kw):
@@ -1637,7 +1637,7 @@ def test_setup_logging(tmp_path):
 
 
 def test_log_argv(tmp_path):
-    """R9-D: фактическая команда запуска пишется в лог (shlex.join)."""
+    """Фактическая команда запуска пишется в лог (shlex.join)."""
     out = tmp_path / "запуск.txt"
     logger, log_name = C.setup_logging(str(out), logger_name="тест.argv")
     C.log_argv(logger, argv=["python3", "cli/ner.py", "--chunk_size 1"
@@ -1649,7 +1649,7 @@ def test_log_argv(tmp_path):
 
 
 def test_log_argv_masks_secrets(tmp_path):
-    """M2 (AUDIT): значения --api_key/--token в лог НЕ попадают;
+    """Значения --api_key/--token в лог НЕ попадают;
     --max_tokens — лимит ответа, не секрет: в лог попадает как есть"""
     out = tmp_path / "секрет.txt"
     logger, log_name = C.setup_logging(str(out), logger_name="тест.секрет")

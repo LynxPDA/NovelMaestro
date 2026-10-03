@@ -1369,7 +1369,7 @@ def main():
     }
     if args.prompt_file:
         if not os.path.exists(args.prompt_file):
-            # R5-I: внешний промпт не найден — минимальный fallback
+            # Внешний промпт не найден — минимальный fallback
             _log(logger, logging.WARNING,
                  f"⚠️ Промпт-файл не найден: {args.prompt_file} "
                  f"— встроенный промпт.")

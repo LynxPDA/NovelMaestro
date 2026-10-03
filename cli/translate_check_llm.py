@@ -663,7 +663,7 @@ def process_batch(batch, p1, p2, two_pass, stage, retry_empty=0):
         return errors1
     e2 = parse_llm_json(raw2, logger)
     if e2 is None:
-        logger.warning("[P2] JSON не распарсен, P1.")
+        logger.warning("[P2] JSON не распарсен, беру P1.")
         return errors1
     verified = [e for e in e2 if e.get("status") in ("confirmed", "new")]
     n_new = sum(1 for e in e2 if e.get("status") == "new")

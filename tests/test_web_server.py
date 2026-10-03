@@ -157,10 +157,10 @@ def test_no_auth_mode(srv_ctx):
 
 
 # ════════════════════════════════════════════════════════════════════
-# M3 (AUDIT): TTL сессий и rate-limit входа
+# TTL сессий и rate-limit входа
 # ════════════════════════════════════════════════════════════════════
 def test_session_ttl_expires(monkeypatch):
-    """M3: сессия протухает после SESSION_TTL; скользящий TTL продлевает."""
+    """Сессия протухает после SESSION_TTL; скользящий TTL продлевает."""
     from web import auth as auth_mod
     import time
     auth_obj = Auth("token")
@@ -178,7 +178,7 @@ def test_session_ttl_expires(monkeypatch):
 
 
 def test_login_rate_limit_blocks(srv_ctx):
-    """M3: >LOGIN_MAX_FAILS неудачных входов за минуту → 429."""
+    """>LOGIN_MAX_FAILS неудачных входов за минуту → 429."""
     from web import auth as auth_mod
     auth_obj = Auth("sekret")
     _, port = srv_ctx(auth_obj)
@@ -193,7 +193,7 @@ def test_login_rate_limit_blocks(srv_ctx):
 
 
 def test_login_rate_limit_resets_after_window(srv_ctx, monkeypatch):
-    """M3: после окна лимит сбрасывается — вход снова возможен."""
+    """После окна лимит сбрасывается — вход снова возможен."""
     from web import auth as auth_mod
     import time
     auth_obj = Auth("sekret")
@@ -334,7 +334,7 @@ def test_static_unknown_404(srv_ctx):
 
 
 # ════════════════════════════════════════════════════════════════════
-# W1: дефолты main.py — локальная сеть без аутентификации
+# Дефолты main.py — локальная сеть без аутентификации
 # ════════════════════════════════════════════════════════════════════
 
 def test_w1_defaults_localhost_no_auth():

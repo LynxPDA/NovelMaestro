@@ -53,7 +53,7 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
     host = str(form.get("host") or "").strip()
     model = str(form.get("model") or "").strip()
     api_key = str(form.get("api_key") or "").strip()
-    # P1 (AUDIT #2): ключ не попадает в argv (виден в ps) — он уходит
+    # (AUDIT #2): ключ не попадает в argv (виден в ps) — он уходит
     # в окружение subprocess через ctx["_llm_api_key"] (JobManager.start),
     # скрипты читают LLM_API_KEY.
     if api_key and isinstance(ctx, dict):

@@ -819,7 +819,7 @@ def build_parser():
 # ============================= MAIN ====================================
 def main():
     args = build_parser().parse_args()
-    # R9: фактическая команда запуска
+    # Фактическая команда запуска
     import shlex as _shlex
     print(f"Запуск: {_shlex.join(sys.argv)}")
 

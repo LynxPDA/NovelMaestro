@@ -16,7 +16,7 @@ import time
 
 COOKIE_NAME = "web_session"
 
-# M3 (AUDIT): сессии живут не вечно, вход ограничен по частоте
+# (AUDIT): сессии живут не вечно, вход ограничен по частоте
 SESSION_TTL = 14 * 24 * 3600   # скользящий TTL сессии, сек (14 дней)
 LOGIN_WINDOW = 60.0            # окно rate-limit, сек
 LOGIN_MAX_FAILS = 10           # неудачных входов за окно → блок
@@ -28,8 +28,8 @@ class Auth:
     def __init__(self, token: str | None = None, no_auth: bool = False) -> None:
         self.token = token or ""
         self.no_auth = no_auth
-        self._sessions: dict[str, float] = {}  # sid → last_seen (M3)
-        self._fails: list[float] = []          # метки неудачных входов (M3)
+        self._sessions: dict[str, float] = {}  # sid → last_seen
+        self._fails: list[float] = []          # метки неудачных входов
         self._lock = threading.Lock()
 
     # ── токен ────────────────────────────────────────────────
@@ -72,7 +72,7 @@ class Auth:
         with self._lock:
             self._sessions.pop(sid, None)
 
-    # ── rate-limit входа (M3) ─────────────────────────────────
+    # ── rate-limit входа ─────────────────────────────────
     def login_failure(self) -> bool:
         """Отметить неудачный вход; True — лимит превышен (429)."""
         now = time.time()
