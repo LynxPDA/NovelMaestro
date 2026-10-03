@@ -49,15 +49,39 @@ def norm(field_type, value) -> str:
 # ════════════════════════════════════════════════════════════════════
 
 def test_groups_shape():
-    """Субвкладки и блоки: непустые, id уникальны, стадия владельец есть."""
+    """Субвкладки и блоки: непустые, id уникальны, стадия владельец есть.
+
+    Отдельной субвкладки «Веб-сервер» нет: настройки своего сервера — те же
+    настройки машины, что и модель, и живут последними блоками первой
+    субвкладки.
+    """
     assert [g.id for g in S.groups()] == [
-        "llm", "transfer", "glossary", "checks", "book", "server"]
+        "llm", "transfer", "glossary", "checks", "book"]
     ids = [b.id for g in S.groups() for b in g.blocks]
     assert len(ids) == len(set(ids)), "id блоков повторяются"
+    assert [b.id for b in S.groups()[0].blocks][-2:] == ["server_net", "server_run"]
     for g in S.groups():
         assert g.title and g.blocks
         for b in g.blocks:
             assert b.title and b.settings
+
+
+def test_payload_marks_llm_blocks():
+    """Профиль LLM перекрывает поля только LLM-блоков, а не весь экран: у
+    блока стоит флаг, по нему SPA и подставляет значения профиля."""
+    payload = S.groups_payload()
+    llm = {b["id"]: b.get("llm") for g in payload for b in g["blocks"]}
+    assert set(b for b in llm if llm[b]) == set(S.LLM_BLOCKS)
+    assert llm["server_net"] is False and llm["server_run"] is False
+
+
+def test_web_values_layers():
+    """web_values(): реестр → общий .env → окружение (тот же порядок, что и у
+    остальных настроек); ключи — имена полей, числа и булевы — типизированы."""
+    vals = S.web_values()
+    assert list(vals) == [s.name for s in S.web_settings()]
+    assert vals["web_host"] == "127.0.0.1" and vals["web_port"] == 8756
+    assert vals["web_auth"] is False and vals["web_projects_dir"] == ""
 
 
 def test_keys_unique():

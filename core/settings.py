@@ -161,6 +161,18 @@ GROUPS: tuple = (
             _s("THINKING_BUDGET", "Бюджет рассуждения, ТОКЕНЫ", "number", 0, help="0 — не отправлять; понимают anthropic (thinking.budget_tokens) и dashscope (thinking_budget)"),
             _s("LLM_EXTRA_BODY_JSON", "Свои поля тела (JSON)", "text", "",
                 help="JSON-объект ключей, которых не знает ни один профиль (свой сервер); уходят в тело запроса после ключей профиля, то есть перекрывают их; битый JSON запрос не ломает — поле игнорируется с предупреждением в лог"),        ),
+        # ── сам веб-сервер: свои блоки едут последними этой субвкладки ──
+        _block("server_net", "Веб-сервер: сеть и доступ",
+            _s("WEB_HOST", "Адрес прослушивания", "text", "127.0.0.1", help="применяется после перезапуска сервера; 0.0.0.0 — вся локальная сеть, тогда включайте аутентификацию; в Docker адрес задаёт образ (CLI-флаг --host выше любого файла)"),
+            _s("WEB_PORT", "Порт", "number", "8756", help="применяется после перезапуска; в Docker наружу пробрасывается порт из compose, этот отвечает за адрес внутри контейнера"),
+            _s("WEB_AUTH", "Требовать токен", "bool", False, help="применяется после перезапуска"),
+            _s("WEB_TOKEN", "Токен", "password", "", secret=True, help="пусто — файл .web_secret (генерируется один раз и живёт в папке проектов)"),
+        ),
+        _block("server_run", "Веб-сервер: данные и задачи",
+            _s("WEB_MAX_UPLOAD_MB", "Лимит загрузки, МБ", "number", "512", min=1, help="на файл и на всё тело запроса"),
+            _s("WEB_JOBS_LIMIT", "Максимум параллельных задач", "number", "2", min=1, help="сколько стадий может идти одновременно"),
+            _s("WEB_PROJECTS_DIR", "Папка проектов", "text", "", help="пусто — <репо>/projects; в Docker это том /app/projects, менять негде и незачем"),
+        ),
     ),
 
     # ── Перевод ──
@@ -361,21 +373,7 @@ GROUPS: tuple = (
             _s("BATCH_REPLACE_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="batch_replace", run=True),
             _s("BATCH_REPLACE_END", "Конечная глава", "number", "", stage="batch_replace", run=True),
         ),
-    ),
 
-    # ── web-сервер ───────────────────────────────────────────────────
-    _group("server", "Веб-сервер",
-        _block("server_net", "Сеть",
-            _s("WEB_HOST", "Адрес прослушивания", "text", "127.0.0.1", help="0.0.0.0 — вся локальная сеть, тогда включайте аутентификацию"),
-            _s("WEB_PORT", "Порт", "number", "8756"),
-            _s("WEB_AUTH", "Требовать токен", "bool", False),
-            _s("WEB_TOKEN", "Токен", "password", "", secret=True, help="пусто — файл .web_secret"),
-        ),
-        _block("server_run", "Данные и задачи",
-            _s("WEB_MAX_UPLOAD_MB", "Лимит загрузки, МБ", "number", "512", min=1),
-            _s("WEB_JOBS_LIMIT", "Максимум параллельных задач", "number", "2", min=1),
-            _s("WEB_PROJECTS_DIR", "Папка проектов", "text", "", help="пусто — <репо>/projects"),
-        ),
     ),
 )
 
@@ -387,6 +385,9 @@ BLOCK_TITLES: dict = {b.id: b.title for g in GROUPS for b in g.blocks}
 STAGES: tuple = tuple(dict.fromkeys(s.stage for s in SETTINGS if s.stage))
 #: блоки общего LLM-конфига: он один на весь конвейер, стадийных ключей нет
 LLM_BLOCKS: tuple = ("llm_conn", "llm_net", "llm_run", "llm_reasoning")
+#: блоки настроек самого веб-сервера: их читает web/main.py, профили LLM их
+#: не касают (профиль хранит только LLM-ключи)
+SERVER_BLOCKS: tuple = ("server_net", "server_run")
 #: имена LLM-полей, которые раньше были в формах стадий
 LLM_FORM_NAMES = frozenset({"host", "model", "api_key", "temperature", "timeout",
                             "stream_timeout", "max_retries", "retries",
@@ -498,6 +499,20 @@ def llm_values(profile: str = "") -> dict:
     layered = layered_values(profile)
     return {s.name: _coerce(s, layered.get(s.key) or s.default)
             for s in llm_settings()}
+
+
+def web_settings() -> tuple:
+    """Настройки самого веб-сервера (блоки server_*)."""
+    return tuple(s for b in SERVER_BLOCKS for s in BY_BLOCK[b])
+
+
+def web_values() -> dict:
+    """Эффективный конфиг запуска сервера: реестр → общий .env → os.environ.
+
+    Единственный источник дефолтов WEB_*: лаунчер не держит свой второй
+    список. Флаг командной строки перекрывает всё — именно он в Docker
+    выставляет --host 0.0.0.0, и никакая правка в браузере его не перешибёт."""
+    return {s.name: _coerce(s, effective(s.key)) for s in web_settings()}
 
 
 def apply_cli_defaults(parser, stage: str):
@@ -939,6 +954,10 @@ def groups_payload() -> list:
     """Реестр для SPA: субвкладки → блоки → поля с текущими значениями."""
     return [{"id": g.id, "title": g.title,
              "blocks": [{"id": b.id, "title": b.title,
+                         # профиль LLM подставляется только в свои блоки:
+                         # веб-сервер живёт в этой же субвкладке, но к LLM
+                         # отношения не имеет
+                         "llm": b.id in LLM_BLOCKS,
                          "fields": [dict(s.form_field(), value=display_value(s),
                                          key=s.key)
                                     for s in b.settings]}
