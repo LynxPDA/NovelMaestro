@@ -201,7 +201,7 @@ class Job:
 class JobManager:
     """История запусков: словарь id → Job + персистентность."""
 
-    MAX_HISTORY = 20  # R5-F + дашборд «Последние запуски» — до 20
+    MAX_HISTORY = 20  # Дашборд «Последние запуски» — до 20
 
     def __init__(self, web_dir: Path, python: str | None = None,
                  repo_root: Path | None = None) -> None:

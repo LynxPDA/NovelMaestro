@@ -409,7 +409,7 @@ async function loadHub(force = false) {
   );
   for (const [name, projects] of lists) bySection[name] = projects;
   /* stats для карточек берём из кешируемого /dashboard одним запросом,
-     а не дергаем /stats на каждый проект (R5-K follow-up). Список
+     а не дергаем /stats на каждый проект. Список
      рендерится сразу, статистика догружается в фоне — удаление
      проекта не ждёт пересчёта stats всех проектов. */
   const cache = {

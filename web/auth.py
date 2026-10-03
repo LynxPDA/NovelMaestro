@@ -80,7 +80,7 @@ class Auth:
             self._fails = [t for t in self._fails
                            if now - t <= LOGIN_WINDOW]
             self._fails.append(now)
-            return len(self._fails) >= LOGIN_MAX_FAILS  # M3: предел достигнут
+            return len(self._fails) >= LOGIN_MAX_FAILS  # Предел достигнут
 
     def login_blocked(self) -> bool:
         """Слишком много неудачных входов за окно? (429 до проверки)."""
@@ -88,7 +88,7 @@ class Auth:
         with self._lock:
             self._fails = [t for t in self._fails
                            if now - t <= LOGIN_WINDOW]
-            return len(self._fails) >= LOGIN_MAX_FAILS  # M3: предел достигнут
+            return len(self._fails) >= LOGIN_MAX_FAILS  # Предел достигнут
 
 
 def csrf_ok(handler) -> bool:

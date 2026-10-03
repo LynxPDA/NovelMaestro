@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Тесты M4: JobManager (Popen, буфер, stop, персистентность),
+"""Тесты web/jobs.py: JobManager (Popen, буфер, stop, персистентность),
 спеки стадий (build_command) и jobs/stages API через HTTP.
 
 Фейковый скрипт — маленький python-код, печатающий строки с паузами;

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Тесты M6: web-оркестратор конвейера (web/pipeline.py).
+"""Тесты web-оркестратора конвейера (web/pipeline.py).
 
 - build_pipeline (спека 3) в stages.py;
 - pipeline.py e2e: фейковый translate_book.py, фейковые главы, события

@@ -765,7 +765,7 @@ def test_cover_roundtrip(srv, tmp_path):
     _srv, port, root = srv(projects_root=tmp_path / "prj",
                            repo_root=tmp_path / "repo")
     pdir = _mk_project(root)
-    png = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-image-data").decode()  # L6: реальная PNG-магия
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-image-data").decode()  # реальная PNG-магия
     r = _request(port, "PUT", "/api/cover",
                  body={"project": "ACTIVE/demo", "name": "pic.png",
                        "content_base64": png})

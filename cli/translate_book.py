@@ -590,7 +590,7 @@ def main(argv=None):
 
     if not os.path.exists(args.file):
         logger.error("❌ Input file not found.")
-        return 1  # L3 (AUDIT): отсутствующий вход = код 1, а не 0
+        return 1  # Отсутствующий вход = код 1, а не 0
 
     # ── NER ──
     ner_data, automaton = load_ner_data(args.ner_file, args.ner_ngram, logger)
@@ -672,7 +672,7 @@ def main(argv=None):
                 json_chunks = json.load(f)
         except Exception as e:
             logger.error(f"❌ Error reading JSON: {e}")
-            return 1  # H4 (AUDIT): битый JSON — код 1, а не 0
+            return 1  # Битый JSON — код 1, а не 0
         logger.info(f"✅ Loaded {len(json_chunks)} chunks.")
         items = [(i, c.get("original_text", ""), c.get("translated_text", ""))
                  for i, c in enumerate(json_chunks)]
@@ -827,4 +827,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())  # H4 (AUDIT): код возврата main() без подмены на 0
+    sys.exit(main())  # Код возврата main() без подмены на 0

@@ -261,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
         """Валидация Content-Length multipart-тела (без чтения байт).
 
         Отрицательный — 400 (#read(-1) зависал бы), больше max_upload_mb
-        — 413 (#H5 AUDIT: лимит — max_upload_mb (--max-upload-mb), а не
+        — 413 (лимит — max_upload_mb (--max-upload-mb), а не
         MAX_JSON_BODY (16 МБ); иначе загрузка 16–512 МБ давала 413).
         Тело затем читает хендлер потоково (upload).
         """

@@ -741,7 +741,7 @@ def run_two_pass(
     # результаты pass2 по чанкам — для снапшотов и финализации
     completed: dict[int, list[dict]] = {}
     done_lock = threading.Lock()
-    failed = 0  # H4 (AUDIT): счётчик упавших чанков
+    failed = 0  # Счётчик упавших чанков
 
     _log(logger, logging.INFO,
          f"🔄 Конвейер: {total} чанков в работе | потоков: {max_workers}")
@@ -788,7 +788,7 @@ def run_two_pass(
                     completed[idx] = []
                 _step()
                 local_steps += 1
-                return idx, [], err  # H4: сбой pass1 ≠ fallback
+                return idx, [], err  # Сбой pass1 ≠ fallback
 
             _, p2_ners, err2 = process_chunk_pass2(
                 idx, text, p1_ners, stage, pass2_prompt)
@@ -835,7 +835,7 @@ def run_two_pass(
         for fut in as_completed(futures):
             idx, _, err = fut.result()
             if err:
-                failed += 1  # H4: чанк не извлечён
+                failed += 1  # Чанк не извлечён
 
             completed_since_save += 1
 
@@ -1461,7 +1461,7 @@ def main():
 
     if not os.path.exists(args.file) and in_memory_text is None:
         _log(logger, logging.ERROR, f"❌ Файл не найден: {args.file}")
-        return 1  # H4 (AUDIT): нет входного файла — код 1
+        return 1  # Нет входного файла — код 1
 
     # Логируем конфигурацию голосования
     voted = ["translation", "type", "reading (произношение)"]
@@ -1546,7 +1546,7 @@ def main():
     # ════════════════════════════════════════════════════════════════
     # РЕЖИМ: TWO-PASS (конвейерный)
     # ════════════════════════════════════════════════════════════════
-    failed_chunks = 0  # H4 (AUDIT): fail-fast, если не извлечён НИ ОДИН чанк
+    failed_chunks = 0  # Fail-fast, если не извлечён НИ ОДИН чанк
 
     if args.two_pass:
         _log(logger, logging.INFO,
@@ -1593,7 +1593,7 @@ def main():
             for fut in as_completed(futures):
                 idx, ners, err = fut.result()
                 if err:
-                    failed_chunks += 1  # H4 (AUDIT): счётчик упавших
+                    failed_chunks += 1  # Счётчик упавших
                     _log(logger, logging.ERROR, f"⚠️ Chunk {idx}: {err}")
                     progress.log(f"⚠️  Chunk {idx}: {err}")
                 elif ners:
@@ -1643,4 +1643,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())  # H4 (AUDIT): код возврата main() наружу
+    sys.exit(main())  # Код возврата main() наружу

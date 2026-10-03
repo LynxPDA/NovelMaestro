@@ -6,7 +6,7 @@ api.py — REST-хендлеры web-бэкэнда: фасад над доме�
 Хендлеры живут по доменам: api_common (служебное, ctx, кешы и константы,
 сессия и вход), api_projects (пульт и проекты), api_files (файлы),
 api_glossary (глоссарий и review), api_env (настройки из реестра,
-промпты, metadata), api_assets (обложка W6, логи M8, отчёты W7), api_stage (запуски и
+промпты, metadata), api_assets (обложка, логи и отчёты), api_stage (запуски и
 стадии) и api_templates (шаблоны). Имена роутов и таблицы web/README.md
 не меняются.
 

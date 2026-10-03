@@ -2150,7 +2150,7 @@ function viewProject(section, name, tab, job) {
       editing = it;
       const vis = visible();
       const idx = vis.indexOf(it);
-      if (idx >= 0) pg.page = Math.floor(idx / PAGE_SIZE); // M6: на свою страницу
+      if (idx >= 0) pg.page = Math.floor(idx / PAGE_SIZE); // На свою страницу
       renderRows();
     }
 
@@ -2533,7 +2533,7 @@ function viewProject(section, name, tab, job) {
       exportBtn,
     );
     search.addEventListener("input", () => {
-      pg.page = 0; // M6: фильтр — на первую страницу
+      pg.page = 0; // Фильтр — на первую страницу
       renderRows();
     });
     renderRows();
@@ -4437,7 +4437,7 @@ function viewProject(section, name, tab, job) {
         );
         btn.addEventListener("click", () => {
           current = r;
-          pager.page = 0; // M8: другой отчёт — с первой страницы
+          pager.page = 0; // Другой отчёт — с первой страницы
           renderList();
           renderReport();
         });

@@ -108,7 +108,7 @@ def _stats_cache_path(root: Path) -> Path:
 
 
 def _stats_cache_key(root: Path, sec: str, name: str) -> str:
-    """Ключ кеша с пространством имён корня projects/ (L5, AUDIT):
+    """Ключ кеша с пространством имён корня projects/:
     два сервера на разных корнях не смешивают записи."""
     return f"{root}::{sec}/{name}"
 

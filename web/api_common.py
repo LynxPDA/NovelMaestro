@@ -95,7 +95,7 @@ _PREVIEW_STAGES = {"pipeline", "ner", "ner_check", "translate_check_llm",
 # Служебные
 # ════════════════════════════════════════════════════════════════════
 def _projects_root(ctx: dict) -> Path:
-    """Корень projects/ (обязателен для хендлеров M2+)."""
+    """Корень projects/ — общий для всех доменных хендлеров."""
     root = ctx.get("projects_root")
     if root is None:
         raise ApiError(500, "Корень projects/ не настроен")

@@ -1521,4 +1521,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())  # H4 (AUDIT): код возврата main() наружу
+    sys.exit(main())  # Код возврата main() наружу

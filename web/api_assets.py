@@ -100,7 +100,7 @@ def _cover_put(ctx: dict) -> dict:
 
 
 def _cover_magic_ok(raw: bytes, ext: str) -> bool:
-    """Сигнатура изображения по первым байтам (L6, AUDIT)."""
+    """Сигнатура изображения по первым байтам."""
     if ext in ("jpg", "jpeg"):
         return raw[:3] == b"\xff\xd8\xff"
     if ext == "png":
