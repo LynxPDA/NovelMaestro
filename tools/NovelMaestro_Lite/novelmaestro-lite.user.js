@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.47
+// @version      1.48
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.47';
+    const APP_VERSION = '1.48';
 
     // ===== КОНФИГУРАЦИЯ =====
     // Штатный промпт перевода (редактируемое поле Настроек). Плейсхолдеры те же,
@@ -123,6 +123,41 @@
         'Текст:',
         '{text}',
     ].join('\n');
+    // Штатный промпт извлечения терминов (редактируемое поле Настроек). Плейсхолдеры:
+    // {targetLang} {existingGlossary} {text}. {existingGlossary} — JSON-массив записей
+    // глоссария, которые нашлись в этом же чанке: модель обязана их НЕ возвращать
+    // (ответ короче), а частоты по ним считает код, а не ответ модели.
+    const EXTRACTION_PROMPT = [
+        'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины. Перевод терминов должен быть на {targetLang}.',
+        '',
+        'СУЩЕСТВУЮЩИЕ ТЕРМИНЫ (уже есть в глоссарии и встречаются в этом чанке):',
+        '{existingGlossary}',
+        '',
+        'ИНСТРУКЦИЯ ПО СУЩЕСТВУЮЩИМ ТЕРМИНАМ:',
+        '- НЕ ВОЗВРАЩАЙ термины из этого списка в своём ответе.',
+        '- Возвращай ТОЛЬКО новые термины, которых ещё нет в списке существующих.',
+        '',
+        'НОВЫЕ ТЕРМИНЫ:',
+        'Верни в JSON все новые термины, которых ещё нет в списке существующих.',
+        '',
+        'Формат JSON:',
+        '{',
+        '  "term": "оригинальный термин",',
+        '  "translation": "перевод на {targetLang}. Только 1 вариант перевода!",',
+        '  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"',
+        '}',
+        '',
+        'type - тип записи. Для живых существ указывай пол в скобках:',
+        '- Person (male) / Person (female) — персонаж мужского/женского пола',
+        '- Person (unknown) — пол неизвестен',
+        '- Creature (male) / Creature (female) — существо',
+        'Для не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.',
+        '',
+        'Верни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.',
+        '',
+        'Текст:',
+        '{text}',
+    ].join('\n');
     const DEFAULT_CONFIG = {
         apiHost: 'https://routerai.ru/api/v1',
         apiKey: '',
@@ -146,7 +181,7 @@
         localModel: false,
         gmTransport: 'page',
         translationPrompt: TRANSLATION_PROMPT,
-        extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины. Перевод терминов должен быть на {targetLang}.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang}. Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
+        extractionPrompt: EXTRACTION_PROMPT,
         fuzzySearchThreshold: 0.7,
         autoNER: true,
         // UI-предпочтение: какая вторичная вкладка настроек открыта
@@ -591,8 +626,9 @@
             dl.appendChild(opt);
         }
     }
-    function findRelevantTerms(text) {
-        const glossary = getGlossaryForTranslation();
+    // какой глоссарий брать: по умолчанию текущая книга; NER передаёт свой локальный
+    // объект копии явно, чтобы не зависеть от того, что сейчас открыто
+    function findRelevantTerms(text, glossary = getGlossaryForTranslation()) {
         const textNorm = normalize(text);
         if (!textNorm) return [];
         // n-граммы текста считаются один раз на чанк, а не на термин
@@ -612,6 +648,38 @@
     function formatGlossaryForPrompt(terms) {
         if (terms.length === 0) return '(глоссарий пуст)';
         return terms.map(t => `- "${t.term}" → "${t.translation}" [${t.type || 'Term'}]`).join('\n');
+    }
+    /**
+     * Глоссарий чанка для промпта извлечения: JSON-массив записей как есть, а не
+     * текст «term → translation» — модель видит те же поля, что живут в глоссарии.
+     * Служебный `id` модели не нужен: он всё равно ни на что не влияет, а место
+     * в промпте занимает.
+     */
+    function formatGlossaryForExtraction(terms) {
+        if (!terms.length) return '(существующих терминов в этом чанке не найдено)';
+        return JSON.stringify(terms.map(t => {
+            const rec = { term: t.term, translation: t.translation, type: t.type || 'Term', count: t.count || 0 };
+            if (Array.isArray(t.aliases) && t.aliases.length) rec.aliases = t.aliases;
+            return rec;
+        }));
+    }
+    /**
+     * «термин уже в глоссарии»: сначала точное совпадение нормализованных строк,
+     * иначе нечёткое (тот же порог, что и в поиске по чанку); возвращает id записи
+     * или ''. Точное проверяется отдельным проходом, а не вместе с нечётким: иначе
+     * короткий термин мог бы «перетянуть» запись на себя раньше её владельца.
+     */
+    function findGlossaryEntry(glossary, term, threshold = config.fuzzySearchThreshold) {
+        const key = normalize(term);
+        if (!key) return '';
+        const entries = Object.entries(glossary || {});
+        for (const [id, ex] of entries) {
+            if (ex && normalize(ex.term) === key) return id;
+        }
+        for (const [id, ex] of entries) {
+            if (ex && termMatchesText(ex.term, term, threshold)) return id;
+        }
+        return '';
     }
 
     // ===== СИГНАТУРЫ ЭЛЕМЕНТОВ =====
@@ -1285,7 +1353,7 @@ const host = document.createElement('div');
                                 <div class="nm-input-group"><label>Промпт перевода ({sourceLang}, {targetLang}, {glossary}, {text}):</label>
                                     <textarea class="nm-textarea" id="translation-prompt"></textarea>
                                 </div>
-                                <div class="nm-input-group"><label>Промпт извлечения терминов ({targetLang}, {text}):</label>
+                                <div class="nm-input-group"><label>Промпт извлечения терминов ({targetLang}, {existingGlossary}, {text}):</label>
                                     <textarea class="nm-textarea" id="extraction-prompt"></textarea>
                                 </div>
                             </div>
@@ -2664,7 +2732,8 @@ const host = document.createElement('div');
         return null;
     }
     // минимально необходимые поля — term и translation; type приводится, aliases
-    // сохраняются, если пришли (совместимость с ner.json конвейера)
+    // сохраняются, если пришли (совместимость с ner.json конвейера); count = 1:
+    // новый термин встретился в этом чанке один раз, частоту дальше считает код
     function normalizeNerItem(raw) {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
         const term = String(raw.term ?? '').trim();
@@ -2676,10 +2745,17 @@ const host = document.createElement('div');
         return item;
     }
     // один чанк → записи: сетевые повторы и таймауты уже внутри callLLM, здесь
-    // повтор для случая «ответ пришёл, но не годится»: не JSON и пустой completion
-    async function requestNerChunk(chunkText, onChunk) {
+    // повтор для случая «ответ пришёл, но не годится»: не JSON и пустой completion.
+    // relevantTerms — записи глоссария, которые нашлись в этом чанке: их же считает
+    // частотами extractTermsFromText, поэтому проход по чанку один. Свой промпт без
+    // {existingGlossary} — штатный случай: подстановки не происходит, список просто
+    // не уходит в модель
+    async function requestNerChunk(chunkText, onChunk, relevantTerms = findRelevantTerms(chunkText)) {
         const userPrompt = config.extractionPrompt
             .replaceAll('{targetLang}', config.targetLang)
+            .replaceAll('{existingGlossary}', formatGlossaryForExtraction(relevantTerms))
+            // текст чанка подставляется последним: своё «{existingGlossary}» внутри
+            // главы не должно раскрыться второй раз
             .replaceAll('{text}', chunkText);
         let lastErr = null;
         for (let attempt = 1; attempt <= NER_PARSE_ATTEMPTS; attempt++) {
@@ -2713,12 +2789,12 @@ const host = document.createElement('div');
         throw lastErr || new Error('NER: модель не ответила');
     }
     async function extractTermsFromText(text, targetKey, onProgress) {
-        if (!books[targetKey]) return { added: 0, incremented: 0, canceled: false, skipped: 0, badItems: 0, resumed: 0, skippedReason: '' };
+        if (!books[targetKey]) return { added: 0, incremented: 0, llmViolations: 0, canceled: false, skipped: 0, badItems: 0, resumed: 0, skippedReason: '' };
         const chunks = splitByNewlines(text, config.chunkSize);
         const glossary = { ...bookGlossary(targetKey) };
         const hash = textHash(text);
         const expectedTotal = Math.max(1, text.length * NER_RESPONSE_RATIO);
-        let streamed = 0, added = 0, incremented = 0, skipped = 0, badItems = 0, canceled = false, skippedReason = '';
+        let streamed = 0, added = 0, incremented = 0, llmViolations = 0, skipped = 0, badItems = 0, canceled = false, skippedReason = '';
         // прерванный прогон продолжается с того же чанка (та же страница, тот же
         // исходный текст, то же чанкование)
         const stored = jobOf(targetKey);
@@ -2738,23 +2814,29 @@ const host = document.createElement('div');
                 onRetry: (info) => { streamed = charsBefore; emitProgress(i, info); }
             };
             try {
-                const { items, bad } = await requestNerChunk(chunks[i], onChunk);
+                // какие термины глоссария реально есть в чанке; сам глоссарий до
+                // этого места не менялся, поэтому список не зависит от ответа модели
+                const chunkTerms = findRelevantTerms(chunks[i], glossary);
+                const { items, bad } = await requestNerChunk(chunks[i], onChunk, chunkTerms);
                 badItems += bad;
+                // count считает код, а не модель: та могла термина в тексте не
+                // заметить или прислать его несколько раз
+                for (const t of chunkTerms) {
+                    if (!glossary[t.id]) continue;
+                    glossary[t.id].count = (glossary[t.id].count || 0) + 1;
+                    incremented++;
+                }
                 for (const item of items) {
-                    let existingId = null;
-                    for (const [id, ex] of Object.entries(glossary)) {
-                        if (normalize(ex.term) === normalize(item.term)) { existingId = id; break; }
+                    const existingId = findGlossaryEntry(glossary, item.term);
+                    if (existingId) {
+                        // нарушение контракта промпта: запись не трогается вообще —
+                        // ни полей, ни count (частоты уже посчитаны выше)
+                        llmViolations++;
+                        console.warn(`[NovelMaestro] LLM violation: вернула существующий термин "${item.term}"`);
+                        continue;
                     }
-                    if (!existingId) {
-                        for (const [id, ex] of Object.entries(glossary)) {
-                            if (termMatchesText(ex.term, item.term, config.fuzzySearchThreshold)) { existingId = id; break; }
-                        }
-                    }
-                    if (existingId) { glossary[existingId].count = (glossary[existingId].count || 0) + 1; incremented++; }
-                    else {
-                        glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = normalizeTerm(item);
-                        added++;
-                    }
+                    glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = normalizeTerm(item);
+                    added++;
                 }
             } catch (error) {
                 if (cancelRequested) { canceled = true; emitProgress(i); break; }
@@ -2774,8 +2856,11 @@ const host = document.createElement('div');
         siteGlossaries[targetKey] = glossary;
         dbPut('g/' + targetKey, glossary);
         if (!skipped && !canceled) jobClearNer(targetKey);
-        return { added, incremented, canceled, skipped, badItems, resumed: startChunk, skippedReason };
+        return { added, incremented, llmViolations, canceled, skipped, badItems, resumed: startChunk, skippedReason };
     }
+    // хвост статуса прогона: модель вернула то, что просила не возвращать; на
+    // глоссарий это не повлияло (частоты считает код), но промпт стоит проверить
+    const nerViolationNote = res => (res.llmViolations ? ` • нарушений контракта: ${res.llmViolations}` : '');
     // ===== ПЕРЕВОД =====
     // промпт чанка: глоссарий подбирается под сам чанк, плейсхолдеры меняются
     // replaceAll — в промптах плейсхолдер может встречаться несколько раз
@@ -3122,7 +3207,7 @@ const host = document.createElement('div');
                             const nerResult = await extractTermsFromText(text, current.key, updateExtractionProgress);
                             progressFill().style.width = '100%';
                             if (nerResult.canceled) {
-                                progressStatus(`⏹ NER остановлен: +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`);
+                                progressStatus(`⏹ NER остановлен: +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}${nerViolationNote(nerResult)}`);
                                 await new Promise(r => setTimeout(r, 500));
                             } else {
                                 // часть чанков могла остаться без валидного JSON —
@@ -3131,7 +3216,8 @@ const host = document.createElement('div');
                                 if (!nerResult.skipped) markNerDone(current.key);
                                 progressStatus(`✨ +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`
                                     + (nerResult.resumed ? ` • продолжен с чанка ${nerResult.resumed + 1}` : '')
-                                    + (nerResult.skipped ? ` • ⚠️ чанков без валидного ответа: ${nerResult.skipped} (${nerResult.skippedReason})` : ''));
+                                    + (nerResult.skipped ? ` • ⚠️ чанков без валидного ответа: ${nerResult.skipped} (${nerResult.skippedReason})` : '')
+                                    + nerViolationNote(nerResult));
                                 await new Promise(r => setTimeout(r, 800));
                             }
                         } catch (error) {
@@ -3209,7 +3295,8 @@ const host = document.createElement('div');
             extractMiniStatus((result.canceled ? '⏹ Остановлено: ' : '✨ ')
                 + `+${result.added} новых, обновлено частот: ${result.incremented}`
                 + (result.resumed ? ` • продолжен с чанка ${result.resumed + 1}` : '')
-                + (result.skipped ? ` • ⚠️ без валидного ответа: ${result.skipped} (${result.skippedReason})` : ''));
+                + (result.skipped ? ` • ⚠️ без валидного ответа: ${result.skipped} (${result.skippedReason})` : '')
+                + nerViolationNote(result));
             updateGlossaryUI();
             refreshBookTab();
         } catch (error) {
@@ -3441,11 +3528,11 @@ const host = document.createElement('div');
         const translation = $('#new-translation').value.trim();
         if (!term || !translation) { showStatus('Заполните термин и перевод', 'error', 'status-glossary'); return; }
         const glossary = getGlossaryForView();
-        for (const ex of Object.values(glossary)) {
-            if (normalize(ex.term) === normalize(term) || termMatchesText(ex.term, term, config.fuzzySearchThreshold)) {
-                showStatus(`Похожий термин уже есть: "${ex.term}"`, 'error', 'status-glossary');
-                return;
-            }
+        // правило «такая запись уже есть» одно на весь скрипт (040-glossary)
+        const dup = findGlossaryEntry(glossary, term);
+        if (dup) {
+            showStatus(`Похожий термин уже есть: "${glossary[dup].term}"`, 'error', 'status-glossary');
+            return;
         }
         glossary[`${normalize(term)}_${Date.now()}`] = { term, translation, type: $('#new-type').value.trim() || 'Term', count: 1 };
         saveGlossary(glossary);
@@ -3471,10 +3558,7 @@ const host = document.createElement('div');
                     for (const raw of srcList) {
                         const t = normalizeTerm({ ...raw });
                         if (!t || !t.term || !t.translation) continue;
-                        let existingId = null;
-                        for (const [exId, ex] of Object.entries(glossary)) {
-                            if (normalize(ex.term) === normalize(t.term) || termMatchesText(ex.term, t.term, config.fuzzySearchThreshold)) { existingId = exId; break; }
-                        }
+                        const existingId = findGlossaryEntry(glossary, t.term);
                         const importedCount = parseInt(t.count, 10);
                         const cnt = Number.isFinite(importedCount) && importedCount > 0 ? importedCount : 1;
                         if (existingId) { glossary[existingId].count = (glossary[existingId].count || 0) + cnt; incremented++; }

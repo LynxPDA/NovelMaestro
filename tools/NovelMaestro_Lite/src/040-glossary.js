@@ -59,8 +59,9 @@
             dl.appendChild(opt);
         }
     }
-    function findRelevantTerms(text) {
-        const glossary = getGlossaryForTranslation();
+    // какой глоссарий брать: по умолчанию текущая книга; NER передаёт свой локальный
+    // объект копии явно, чтобы не зависеть от того, что сейчас открыто
+    function findRelevantTerms(text, glossary = getGlossaryForTranslation()) {
         const textNorm = normalize(text);
         if (!textNorm) return [];
         // n-граммы текста считаются один раз на чанк, а не на термин
@@ -80,5 +81,37 @@
     function formatGlossaryForPrompt(terms) {
         if (terms.length === 0) return '(глоссарий пуст)';
         return terms.map(t => `- "${t.term}" → "${t.translation}" [${t.type || 'Term'}]`).join('\n');
+    }
+    /**
+     * Глоссарий чанка для промпта извлечения: JSON-массив записей как есть, а не
+     * текст «term → translation» — модель видит те же поля, что живут в глоссарии.
+     * Служебный `id` модели не нужен: он всё равно ни на что не влияет, а место
+     * в промпте занимает.
+     */
+    function formatGlossaryForExtraction(terms) {
+        if (!terms.length) return '(существующих терминов в этом чанке не найдено)';
+        return JSON.stringify(terms.map(t => {
+            const rec = { term: t.term, translation: t.translation, type: t.type || 'Term', count: t.count || 0 };
+            if (Array.isArray(t.aliases) && t.aliases.length) rec.aliases = t.aliases;
+            return rec;
+        }));
+    }
+    /**
+     * «термин уже в глоссарии»: сначала точное совпадение нормализованных строк,
+     * иначе нечёткое (тот же порог, что и в поиске по чанку); возвращает id записи
+     * или ''. Точное проверяется отдельным проходом, а не вместе с нечётким: иначе
+     * короткий термин мог бы «перетянуть» запись на себя раньше её владельца.
+     */
+    function findGlossaryEntry(glossary, term, threshold = config.fuzzySearchThreshold) {
+        const key = normalize(term);
+        if (!key) return '';
+        const entries = Object.entries(glossary || {});
+        for (const [id, ex] of entries) {
+            if (ex && normalize(ex.term) === key) return id;
+        }
+        for (const [id, ex] of entries) {
+            if (ex && termMatchesText(ex.term, term, threshold)) return id;
+        }
+        return '';
     }
 

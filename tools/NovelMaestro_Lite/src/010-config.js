@@ -54,6 +54,41 @@
         'Текст:',
         '{text}',
     ].join('\n');
+    // Штатный промпт извлечения терминов (редактируемое поле Настроек). Плейсхолдеры:
+    // {targetLang} {existingGlossary} {text}. {existingGlossary} — JSON-массив записей
+    // глоссария, которые нашлись в этом же чанке: модель обязана их НЕ возвращать
+    // (ответ короче), а частоты по ним считает код, а не ответ модели.
+    const EXTRACTION_PROMPT = [
+        'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины. Перевод терминов должен быть на {targetLang}.',
+        '',
+        'СУЩЕСТВУЮЩИЕ ТЕРМИНЫ (уже есть в глоссарии и встречаются в этом чанке):',
+        '{existingGlossary}',
+        '',
+        'ИНСТРУКЦИЯ ПО СУЩЕСТВУЮЩИМ ТЕРМИНАМ:',
+        '- НЕ ВОЗВРАЩАЙ термины из этого списка в своём ответе.',
+        '- Возвращай ТОЛЬКО новые термины, которых ещё нет в списке существующих.',
+        '',
+        'НОВЫЕ ТЕРМИНЫ:',
+        'Верни в JSON все новые термины, которых ещё нет в списке существующих.',
+        '',
+        'Формат JSON:',
+        '{',
+        '  "term": "оригинальный термин",',
+        '  "translation": "перевод на {targetLang}. Только 1 вариант перевода!",',
+        '  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"',
+        '}',
+        '',
+        'type - тип записи. Для живых существ указывай пол в скобках:',
+        '- Person (male) / Person (female) — персонаж мужского/женского пола',
+        '- Person (unknown) — пол неизвестен',
+        '- Creature (male) / Creature (female) — существо',
+        'Для не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.',
+        '',
+        'Верни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.',
+        '',
+        'Текст:',
+        '{text}',
+    ].join('\n');
     const DEFAULT_CONFIG = {
         apiHost: 'https://routerai.ru/api/v1',
         apiKey: '',
@@ -77,7 +112,7 @@
         localModel: false,
         gmTransport: 'page',
         translationPrompt: TRANSLATION_PROMPT,
-        extractionPrompt: 'Извлеки из текста имена персонажей, места, артефакты, организации и важные термины. Перевод терминов должен быть на {targetLang}.\n\nВерни JSON в формате:\n{\n  "term": "оригинальный термин",\n  "translation": "перевод на {targetLang}. Только 1 вариант перевода!",\n  "type": "Тип записи (Пример: Person (male), Creature (female), Location, Artifact, Organization, Term)"\n}\n\ntype - тип записи. Для живых существ (персонажи, существа) указывай пол в скобках:\n- Person (male) / Person (female) — персонаж мужского/женского пола\n- Person (unknown) — пол неизвестен\n- Creature (male) / Creature (female) — существо\nДля не-персонажей пол не указывай: Location, Artifact, Organization, Term и т.п.\n\nВерни ТОЛЬКО валидный JSON массив объектов. Без дополнительного текста.\n\nТекст:\n{text}',
+        extractionPrompt: EXTRACTION_PROMPT,
         fuzzySearchThreshold: 0.7,
         autoNER: true,
         // UI-предпочтение: какая вторичная вкладка настроек открыта

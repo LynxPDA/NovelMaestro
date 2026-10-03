@@ -162,7 +162,7 @@ const host = document.createElement('div');
                                 <div class="nm-input-group"><label>Промпт перевода ({sourceLang}, {targetLang}, {glossary}, {text}):</label>
                                     <textarea class="nm-textarea" id="translation-prompt"></textarea>
                                 </div>
-                                <div class="nm-input-group"><label>Промпт извлечения терминов ({targetLang}, {text}):</label>
+                                <div class="nm-input-group"><label>Промпт извлечения терминов ({targetLang}, {existingGlossary}, {text}):</label>
                                     <textarea class="nm-textarea" id="extraction-prompt"></textarea>
                                 </div>
                             </div>

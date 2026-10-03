@@ -69,7 +69,7 @@
                             const nerResult = await extractTermsFromText(text, current.key, updateExtractionProgress);
                             progressFill().style.width = '100%';
                             if (nerResult.canceled) {
-                                progressStatus(`⏹ NER остановлен: +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`);
+                                progressStatus(`⏹ NER остановлен: +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}${nerViolationNote(nerResult)}`);
                                 await new Promise(r => setTimeout(r, 500));
                             } else {
                                 // часть чанков могла остаться без валидного JSON —
@@ -78,7 +78,8 @@
                                 if (!nerResult.skipped) markNerDone(current.key);
                                 progressStatus(`✨ +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}`
                                     + (nerResult.resumed ? ` • продолжен с чанка ${nerResult.resumed + 1}` : '')
-                                    + (nerResult.skipped ? ` • ⚠️ чанков без валидного ответа: ${nerResult.skipped} (${nerResult.skippedReason})` : ''));
+                                    + (nerResult.skipped ? ` • ⚠️ чанков без валидного ответа: ${nerResult.skipped} (${nerResult.skippedReason})` : '')
+                                    + nerViolationNote(nerResult));
                                 await new Promise(r => setTimeout(r, 800));
                             }
                         } catch (error) {
@@ -156,7 +157,8 @@
             extractMiniStatus((result.canceled ? '⏹ Остановлено: ' : '✨ ')
                 + `+${result.added} новых, обновлено частот: ${result.incremented}`
                 + (result.resumed ? ` • продолжен с чанка ${result.resumed + 1}` : '')
-                + (result.skipped ? ` • ⚠️ без валидного ответа: ${result.skipped} (${result.skippedReason})` : ''));
+                + (result.skipped ? ` • ⚠️ без валидного ответа: ${result.skipped} (${result.skippedReason})` : '')
+                + nerViolationNote(result));
             updateGlossaryUI();
             refreshBookTab();
         } catch (error) {

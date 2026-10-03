@@ -51,11 +51,11 @@
         const translation = $('#new-translation').value.trim();
         if (!term || !translation) { showStatus('Заполните термин и перевод', 'error', 'status-glossary'); return; }
         const glossary = getGlossaryForView();
-        for (const ex of Object.values(glossary)) {
-            if (normalize(ex.term) === normalize(term) || termMatchesText(ex.term, term, config.fuzzySearchThreshold)) {
-                showStatus(`Похожий термин уже есть: "${ex.term}"`, 'error', 'status-glossary');
-                return;
-            }
+        // правило «такая запись уже есть» одно на весь скрипт (040-glossary)
+        const dup = findGlossaryEntry(glossary, term);
+        if (dup) {
+            showStatus(`Похожий термин уже есть: "${glossary[dup].term}"`, 'error', 'status-glossary');
+            return;
         }
         glossary[`${normalize(term)}_${Date.now()}`] = { term, translation, type: $('#new-type').value.trim() || 'Term', count: 1 };
         saveGlossary(glossary);
@@ -81,10 +81,7 @@
                     for (const raw of srcList) {
                         const t = normalizeTerm({ ...raw });
                         if (!t || !t.term || !t.translation) continue;
-                        let existingId = null;
-                        for (const [exId, ex] of Object.entries(glossary)) {
-                            if (normalize(ex.term) === normalize(t.term) || termMatchesText(ex.term, t.term, config.fuzzySearchThreshold)) { existingId = exId; break; }
-                        }
+                        const existingId = findGlossaryEntry(glossary, t.term);
                         const importedCount = parseInt(t.count, 10);
                         const cnt = Number.isFinite(importedCount) && importedCount > 0 ? importedCount : 1;
                         if (existingId) { glossary[existingId].count = (glossary[existingId].count || 0) + cnt; incremented++; }

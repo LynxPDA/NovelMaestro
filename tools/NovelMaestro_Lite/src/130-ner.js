@@ -28,7 +28,8 @@
         return null;
     }
     // минимально необходимые поля — term и translation; type приводится, aliases
-    // сохраняются, если пришли (совместимость с ner.json конвейера)
+    // сохраняются, если пришли (совместимость с ner.json конвейера); count = 1:
+    // новый термин встретился в этом чанке один раз, частоту дальше считает код
     function normalizeNerItem(raw) {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
         const term = String(raw.term ?? '').trim();
@@ -40,10 +41,17 @@
         return item;
     }
     // один чанк → записи: сетевые повторы и таймауты уже внутри callLLM, здесь
-    // повтор для случая «ответ пришёл, но не годится»: не JSON и пустой completion
-    async function requestNerChunk(chunkText, onChunk) {
+    // повтор для случая «ответ пришёл, но не годится»: не JSON и пустой completion.
+    // relevantTerms — записи глоссария, которые нашлись в этом чанке: их же считает
+    // частотами extractTermsFromText, поэтому проход по чанку один. Свой промпт без
+    // {existingGlossary} — штатный случай: подстановки не происходит, список просто
+    // не уходит в модель
+    async function requestNerChunk(chunkText, onChunk, relevantTerms = findRelevantTerms(chunkText)) {
         const userPrompt = config.extractionPrompt
             .replaceAll('{targetLang}', config.targetLang)
+            .replaceAll('{existingGlossary}', formatGlossaryForExtraction(relevantTerms))
+            // текст чанка подставляется последним: своё «{existingGlossary}» внутри
+            // главы не должно раскрыться второй раз
             .replaceAll('{text}', chunkText);
         let lastErr = null;
         for (let attempt = 1; attempt <= NER_PARSE_ATTEMPTS; attempt++) {
@@ -77,12 +85,12 @@
         throw lastErr || new Error('NER: модель не ответила');
     }
     async function extractTermsFromText(text, targetKey, onProgress) {
-        if (!books[targetKey]) return { added: 0, incremented: 0, canceled: false, skipped: 0, badItems: 0, resumed: 0, skippedReason: '' };
+        if (!books[targetKey]) return { added: 0, incremented: 0, llmViolations: 0, canceled: false, skipped: 0, badItems: 0, resumed: 0, skippedReason: '' };
         const chunks = splitByNewlines(text, config.chunkSize);
         const glossary = { ...bookGlossary(targetKey) };
         const hash = textHash(text);
         const expectedTotal = Math.max(1, text.length * NER_RESPONSE_RATIO);
-        let streamed = 0, added = 0, incremented = 0, skipped = 0, badItems = 0, canceled = false, skippedReason = '';
+        let streamed = 0, added = 0, incremented = 0, llmViolations = 0, skipped = 0, badItems = 0, canceled = false, skippedReason = '';
         // прерванный прогон продолжается с того же чанка (та же страница, тот же
         // исходный текст, то же чанкование)
         const stored = jobOf(targetKey);
@@ -102,23 +110,29 @@
                 onRetry: (info) => { streamed = charsBefore; emitProgress(i, info); }
             };
             try {
-                const { items, bad } = await requestNerChunk(chunks[i], onChunk);
+                // какие термины глоссария реально есть в чанке; сам глоссарий до
+                // этого места не менялся, поэтому список не зависит от ответа модели
+                const chunkTerms = findRelevantTerms(chunks[i], glossary);
+                const { items, bad } = await requestNerChunk(chunks[i], onChunk, chunkTerms);
                 badItems += bad;
+                // count считает код, а не модель: та могла термина в тексте не
+                // заметить или прислать его несколько раз
+                for (const t of chunkTerms) {
+                    if (!glossary[t.id]) continue;
+                    glossary[t.id].count = (glossary[t.id].count || 0) + 1;
+                    incremented++;
+                }
                 for (const item of items) {
-                    let existingId = null;
-                    for (const [id, ex] of Object.entries(glossary)) {
-                        if (normalize(ex.term) === normalize(item.term)) { existingId = id; break; }
+                    const existingId = findGlossaryEntry(glossary, item.term);
+                    if (existingId) {
+                        // нарушение контракта промпта: запись не трогается вообще —
+                        // ни полей, ни count (частоты уже посчитаны выше)
+                        llmViolations++;
+                        console.warn(`[NovelMaestro] LLM violation: вернула существующий термин "${item.term}"`);
+                        continue;
                     }
-                    if (!existingId) {
-                        for (const [id, ex] of Object.entries(glossary)) {
-                            if (termMatchesText(ex.term, item.term, config.fuzzySearchThreshold)) { existingId = id; break; }
-                        }
-                    }
-                    if (existingId) { glossary[existingId].count = (glossary[existingId].count || 0) + 1; incremented++; }
-                    else {
-                        glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = normalizeTerm(item);
-                        added++;
-                    }
+                    glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = normalizeTerm(item);
+                    added++;
                 }
             } catch (error) {
                 if (cancelRequested) { canceled = true; emitProgress(i); break; }
@@ -138,5 +152,8 @@
         siteGlossaries[targetKey] = glossary;
         dbPut('g/' + targetKey, glossary);
         if (!skipped && !canceled) jobClearNer(targetKey);
-        return { added, incremented, canceled, skipped, badItems, resumed: startChunk, skippedReason };
+        return { added, incremented, llmViolations, canceled, skipped, badItems, resumed: startChunk, skippedReason };
     }
+    // хвост статуса прогона: модель вернула то, что просила не возвращать; на
+    // глоссарий это не повлияло (частоты считает код), но промпт стоит проверить
+    const nerViolationNote = res => (res.llmViolations ? ` • нарушений контракта: ${res.llmViolations}` : '');
