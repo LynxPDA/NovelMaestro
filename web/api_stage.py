@@ -123,7 +123,7 @@ def _jobs_start(ctx: dict) -> dict:
             f"Лимит параллельных задач: {limit} (активно: {running}). "
             f"Дождитесь завершения или остановите запуск.",
         )
-    # (AUDIT): per-project лок — две стадии на один проект
+    # лок на проект: две стадии на один проект
     # параллельно перезаписали бы одни и те же артефакты
     busy = jm.running_on(project)
     if busy is not None:
@@ -139,7 +139,7 @@ def _jobs_start(ctx: dict) -> dict:
         env[core_settings.PROFILE_ENV] = profile
     api_key = ctx.pop("_llm_api_key", None)
     if api_key:
-        # (AUDIT #2): ключ — только в окружении subprocess
+        # ключ — только в окружении процесса
         env["LLM_API_KEY"] = str(api_key)
     job = jm.start(action, title, project, argv, pdir, env=env)
     return {"ok": True, "job": _job_payload(job)}

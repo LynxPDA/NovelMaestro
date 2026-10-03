@@ -1579,7 +1579,7 @@ def test_llm_profile_from_env(tmp_path, monkeypatch):
     argv = build_command("ner", {"file": "compiled_book.txt"}, ctx)
     joined = " ".join(argv)
     assert "http://192.168.1.8:9989" in joined
-    # P1 (AUDIT #2): ключ НЕ в argv — он уходит в ctx["_llm_api_key"]
+    # ключ НЕ в argv — он уходит в ctx["_llm_api_key"]
     assert "--api_key" not in joined and "secret-key" not in joined
     assert ctx.get("_llm_api_key") == "secret-key"
     assert "--model" in joined and "local-model" in joined
@@ -1660,7 +1660,7 @@ def test_api_key_not_in_payload(tmp_path, fake_script):
 
 
 def test_llm_api_key_via_env(tmp_path, fake_script):
-    """P1 (AUDIT #2): LLM_API_KEY идёт через env, а не argv."""
+    """LLM_API_KEY идёт через окружение процесса, а не через argv."""
     jm = JobManager(tmp_path, python="python3")
     job = jm.start("translate_check_llm", "Проверка", "ACTIVE/x",
                    [str(fake_script / "ok.py")],

@@ -57,7 +57,7 @@ from core.common import PROGRESS_PREFIX  # noqa: E402
 
 
 def _popen_kwargs() -> dict:
-    """(AUDIT): параметры Popen для группы процессов.
+    """Параметры Popen для группы процессов.
     POSIX — start_new_session (killpg убьёт потомков); Windows —
     CREATE_NEW_PROCESS_GROUP (start_new_session там не поддержан)."""
     if os.name == "nt":
@@ -477,7 +477,7 @@ class JobManager:
 
     # ── CRUD ─────────────────────────────────────────────────
     def running_on(self, project: str) -> Job | None:
-        """(AUDIT): активная задача на этот проект — гонка записи."""
+        """Активная задача на этот проект — гонка записи."""
         with self._lock:
             for j in self._jobs.values():
                 if j.status == "running" and j.project == project:
@@ -523,14 +523,14 @@ class JobManager:
                 cwd=str(cwd),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                # (AUDIT): text=True + bufsize=1 — построчный буфер
+                # text=True + bufsize=1 — построчный буфер
                 # без RuntimeWarning (бинарный режим bufsize=1 не поддержан)
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
                 env=proc_env,
-                # (AUDIT): группа процессов — платформозависимо
+                # группа процессов — платформозависимо
                 **_popen_kwargs(),
             )
         except OSError as exc:

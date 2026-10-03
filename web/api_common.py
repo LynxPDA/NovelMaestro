@@ -291,7 +291,7 @@ def _session(ctx: dict) -> dict:
 
 
 def _login(ctx: dict) -> dict:
-    # (AUDIT): rate-limit — много неудачных входов за минуту → 429
+    # много неудачных входов за минуту → 429
     if ctx["auth"].login_blocked():
         raise ApiError(429, "Слишком много попыток входа. Подождите минуту.")
     token = (ctx["body"].get("token") or "").strip()

@@ -165,7 +165,7 @@ def test_build_pipeline_argv():
     assert "http://127.0.0.1:9989" not in argv
     assert "м-из-формы" not in argv
     assert argv[argv.index("--max_retries") + 1] == str(llm["max_retries"])
-    # P1 (AUDIT #2): ключ не в argv, а в ctx для env JobManager
+    # ключ не в argv, а в ctx для env JobManager
     assert "--api_key" not in argv
 
 
@@ -488,7 +488,7 @@ def test_build_stage_cmd_max_retries(tmp_path):
 
 
 def test_grep_errors_ignores_logger_level_names():
-    """P0 (AUDIT #1): имя уровня логгера (- WARNING -) не валит главу."""
+    """Имя уровня логгера (- WARNING -) не валит главу."""
     from web import pipeline as PL
     ok_text = (
         "2026-01-01 12:00:00 - WARNING - Глава переведена\n"
@@ -635,7 +635,7 @@ def test_pipeline_common_log_file(tmp_path):
 
 def test_pipeline_fail_fast(tmp_path):
     """Ошибка стадии: returncode != 0 → ERROR-событие, exit != 0.
-    C2 (AUDIT): провал всех глав — exit 1 (раньше тавтология давала 0)."""
+    Провал всех глав — exit 1 (раньше тавтология давала 0)."""
     proj, fake = _make_project(tmp_path)
     fake.write_text(FAKE_TRANSLATE_FAIL, encoding="utf-8")
     cmd = [sys.executable, str(PIPELINE), "--action", "1",

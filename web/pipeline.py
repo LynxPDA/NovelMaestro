@@ -83,7 +83,7 @@ _ACTION_SPECS: dict[int, dict] = {
 # дефолтов и своего чтения .env здесь больше нет.
 _DEFAULTS = core_settings.stage_values("pipeline")
 _DEFAULTS.update(core_settings.llm_values())
-# (AUDIT): возвращено как было — текст перевода НЕ попадает в stdout
+# поведение оставлено как было: текст перевода НЕ попадает в stdout
 # скриптов (только прогресс/ошибки), лишняя настройка PIPELINE_ERROR_WORDS
 # отменена по решению пользователя; жёсткий список ловит реальные сбои.
 _ERROR_RE = re.compile(
@@ -339,8 +339,8 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
         # глоссарий — всегда канонический ner.json (выбор файла убран)
         "--ner_file", "ner.json",
     ]
-    # (AUDIT #2): ключ не попадает в argv — передаётся через
-    # окружение subprocess (LLM_API_KEY), см. process_chapter.
+    # ключ не попадает в argv — он уходит в окружение процесса
+    # (LLM_API_KEY), см. process_chapter
     if temperature is not None:
         common += ["--temperature", str(temperature)]
     # рассуждения (mode/profile/effort/budget) сюда не прокидываются:
@@ -884,7 +884,7 @@ def main() -> None:
     log.info("")
     for line in tracker.report():
         log.info("%s", line)
-    # C2 (AUDIT): провал ВСЕХ глав ≠ «успех» — exit 1, а не 0
+    # провал ВСЕХ глав ≠ «успех»: exit 1, а не 0
     sys.exit(0 if results and all(results.values()) else 1)
 
 
