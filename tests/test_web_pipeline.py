@@ -454,7 +454,7 @@ def test_build_stage_cmd_single_model(tmp_path):
 
 
 def test_build_stage_cmd_chunk_size(tmp_path):
-    """размер чанка (СИМВОЛЫ) из формы — в стадии 1/3 (перевод,
+    """размер чанка (ТОКЕНЫ) из формы — в стадии 1/3 (перевод,
     полировка); редактура (2) идёт главой целиком — без --chunk_size;
     пусто — дефолт _DEFAULTS (PIPELINE_CHUNK_SIZE из .env)."""
     from web.pipeline import build_stage_cmd, _DEFAULTS
