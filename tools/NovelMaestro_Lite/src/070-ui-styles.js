@@ -273,5 +273,7 @@
             .nm-training-picked { outline: 3px solid #059669 !important; outline-offset: 2px; }
             body.nm-training-on { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
         `;
-        document.head.appendChild(st);
+        // head в некоторых средах раннего исполнения ещё не создан — фолбэк на
+        // documentElement: без стиля не останется, но и падать до разметки UI нельзя
+        (document.head || document.documentElement).appendChild(st);
     })();

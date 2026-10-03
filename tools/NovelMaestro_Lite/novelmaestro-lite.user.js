@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.48
+// @version      1.49
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.48';
+    const APP_VERSION = '1.49';
 
     // ===== КОНФИГУРАЦИЯ =====
     // Штатный промпт перевода (редактируемое поле Настроек). Плейсхолдеры те же,
@@ -487,7 +487,7 @@
                 if (k.startsWith('g/')) siteGlossaries[k.slice(2)] = v || {};
                 else if (k.startsWith('n/')) siteNerDone[k.slice(2)] = v || {};
                 else if (k.startsWith('c/')) siteChapterCache[k.slice(2)] = v || [];
-                else if (k.startsWith('j/')) siteJobs[k.slice(2)] = v || {};
+                else if (k.startsWith('j/')) siteJobs[k.slice(2)] = migrateJobs(v || {});
             }
         } catch (e) { console.warn('[NovelMaestro] IndexedDB:', e && e.message); }
     }
@@ -532,37 +532,55 @@
         for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
         return h.toString(16);
     }
-    let siteJobs = {};
-    // запись живёт, пока относится к той же странице книги
-    function jobOf(bookKey, url = pageCacheKey()) {
-        const job = siteJobs[bookKey];
-        return (job && job.url === url) ? job : null;
+    let siteJobs = {};   // bookKey → { [pageUrl]: задание страницы }
+    // старый формат — одна запись на книгу с полем url: переносится под свой url;
+    // новый — словарь по страницам: задание перевода одной главы не перекрывается
+    // заданием NER или перевода другой
+    function migrateJobs(v) {
+        if (v && typeof v === 'object' && typeof v.url === 'string') return { [v.url]: v };
+        return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
     }
-    // поля дополняют друг друга: NER пишет nerDone/nerTotal, перевод — parts/total;
-    // пустые поля не затираются (jobPut вызывается с одного места за раз)
+    function jobOf(bookKey, url = pageCacheKey()) {
+        const job = (siteJobs[bookKey] || {})[url];
+        return job || null;
+    }
     function jobPut(bookKey, job) {
-        if (!bookKey) return;
-        const prev = siteJobs[bookKey];
-        const next = (prev && prev.url === job.url) ? { ...prev, ...job } : job;
+        if (!bookKey || !job || !job.url) return;
+        if (!siteJobs[bookKey]) siteJobs[bookKey] = {};
+        // поля дополняют друг друга: NER пишет nerDone/nerTotal/nerMissed,
+        // перевод — parts/total; внутри одной страницы мержится, чужую не трогает
+        const prev = siteJobs[bookKey][job.url];
+        const next = prev ? { ...prev, ...job } : job;
         if (!next.parts) delete next.parts;
         if (!next.nerDone) delete next.nerDone;
-        siteJobs[bookKey] = next;
-        dbPut('j/' + bookKey, next);
+        if (!next.nerMissed) delete next.nerMissed;
+        siteJobs[bookKey][job.url] = next;
+        dbPut('j/' + bookKey, siteJobs[bookKey]);
     }
     function jobClear(bookKey) {
         if (!bookKey) return;
         delete siteJobs[bookKey];
         dbDelete('j/' + bookKey);
     }
-    // NER закончил все чанки: снимаем его часть записи; если в этой же записи
-    // лежит незаконченный перевод — она остаётся
+    // задание одной страницы снято: запись удаляется, чужие страницы книги остаются
+    function jobClearPage(bookKey, url = pageCacheKey()) {
+        const jobs = siteJobs[bookKey];
+        if (!jobs || !jobs[url]) return;
+        delete jobs[url];
+        if (Object.keys(jobs).length) dbPut('j/' + bookKey, jobs);
+        else jobClear(bookKey);
+    }
+    // NER закончил все чанки: снимаем его поля записи СВОЕЙ страницы; незаконченный
+    // перевод (этой же или другой) остаётся лежать
     function jobClearNer(bookKey) {
-        const job = siteJobs[bookKey];
+        const jobs = siteJobs[bookKey];
+        const job = jobs && jobs[pageCacheKey()];
         if (!job) return;
         delete job.nerDone;
         delete job.nerTotal;
-        if ((job.parts || []).some(p => p)) dbPut('j/' + bookKey, job);
-        else jobClear(bookKey);
+        delete job.nerMissed;
+        if ((job.parts || []).some(p => p)) dbPut('j/' + bookKey, jobs);
+        else jobClearPage(bookKey);
     }
 
     // ===== ГЛОССАРИИ =====
@@ -666,18 +684,22 @@
     /**
      * «термин уже в глоссарии»: сначала точное совпадение нормализованных строк,
      * иначе нечёткое (тот же порог, что и в поиске по чанку); возвращает id записи
-     * или ''. Точное проверяется отдельным проходом, а не вместе с нечётким: иначе
-     * короткий термин мог бы «перетянуть» запись на себя раньше её владельца.
+     * или ''. Совпадение ищется и по aliases: модель может вернуть вариант из
+     * алиасов существующей записи — без этого создаётся запись-дубль, и дальше
+     * обе растут в частотах. Точное проверяется отдельным проходом, а не вместе
+     * с нечётким: иначе короткий термин мог бы «перетянуть» запись на себя раньше
+     * её владельца.
      */
     function findGlossaryEntry(glossary, term, threshold = config.fuzzySearchThreshold) {
         const key = normalize(term);
         if (!key) return '';
         const entries = Object.entries(glossary || {});
+        const variantsOf = ex => [ex && ex.term, ...((ex && ex.aliases) || [])];
         for (const [id, ex] of entries) {
-            if (ex && normalize(ex.term) === key) return id;
+            for (const v of variantsOf(ex)) if (v && normalize(v) === key) return id;
         }
         for (const [id, ex] of entries) {
-            if (ex && termMatchesText(ex.term, term, threshold)) return id;
+            for (const v of variantsOf(ex)) if (v && termMatchesText(v, term, threshold)) return id;
         }
         return '';
     }
@@ -808,13 +830,25 @@
             element.querySelectorAll(sel).forEach(el => {
                 if (el.dataset.nmHidden) return;
                 el.dataset.nmHidden = '1';
+                // запоминаем, что вернуть: пред-существующий inline display нельзя
+                // просто удалить — скрытый сайтом элемент стал бы видимым, и текст
+                // страницы при повторном извлечении менялся бы (ломая resume NER)
+                el.dataset.nmPrevDisplay = el.style.getPropertyValue('display');
                 el.style.setProperty('display', 'none', 'important');
                 hidden.push(el);
             });
         }
         let raw = '';
         try { raw = element.innerText || ''; }
-        finally { hidden.forEach(el => { el.style.removeProperty('display'); delete el.dataset.nmHidden; }); }
+        finally {
+            hidden.forEach(el => {
+                const prev = el.dataset.nmPrevDisplay;
+                if (prev) el.style.setProperty('display', prev);
+                else el.style.removeProperty('display');
+                delete el.dataset.nmPrevDisplay;
+                delete el.dataset.nmHidden;
+            });
+        }
         return paragraphsOf(raw.replace(/\u00a0/g, ' ')).join('\n\n');
     }
     function extractTextFromDoc(doc, sig) {
@@ -1187,7 +1221,9 @@
             .nm-training-picked { outline: 3px solid #059669 !important; outline-offset: 2px; }
             body.nm-training-on { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
         `;
-        document.head.appendChild(st);
+        // head в некоторых средах раннего исполнения ещё не создан — фолбэк на
+        // documentElement: без стиля не останется, но и падать до разметки UI нельзя
+        (document.head || document.documentElement).appendChild(st);
     })();
 const host = document.createElement('div');
     host.id = 'nm-lite-host';
@@ -1615,7 +1651,7 @@ const host = document.createElement('div');
         fill.style.width = st.pct + '%';
         extractMiniStatus(st.retry
             ? `⏱ ${st.retry.message} — повтор ${st.retry.nextAttempt}/${st.retry.attemptsTotal}`
-            : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.chunk}/${st.resumed + 1})` : ''} • ~${st.pct}%`);
+            : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.resumed + 1}/${st.total})` : ''} • ~${st.pct}%`);
     }
     $('#nm-extract-cancel').addEventListener('click', () => {
         cancelRequested = true;
@@ -2703,6 +2739,10 @@ const host = document.createElement('div');
         }
     }
     // ===== NER =====
+    // реентрант-гвард извлечения: два параллельных прогона делят объекты записей
+    // глоссария и удваивают частоты; авто-NER из кэш-ветки перевода держит флаг не всё
+    // время перевода, поэтому guard нужен здесь, а не только в isTranslating
+    let nerRunning = false;
     const NER_RESPONSE_RATIO = 2;
     // модель обязана вернуть JSON-массив объектов; ответ приходит и в ```json
     // fences, и одним объектом, и в обёртке {"terms": [...]} — всё это разбирается.
@@ -2751,12 +2791,14 @@ const host = document.createElement('div');
     // {existingGlossary} — штатный случай: подстановки не происходит, список просто
     // не уходит в модель
     async function requestNerChunk(chunkText, onChunk, relevantTerms = findRelevantTerms(chunkText)) {
+        // замена функцией: спец-паттерны замены ($&, $', $`) в тексте главы не
+        // должны раскрываться как подстановки
         const userPrompt = config.extractionPrompt
             .replaceAll('{targetLang}', config.targetLang)
             .replaceAll('{existingGlossary}', formatGlossaryForExtraction(relevantTerms))
             // текст чанка подставляется последним: своё «{existingGlossary}» внутри
             // главы не должно раскрыться второй раз
-            .replaceAll('{text}', chunkText);
+            .replaceAll('{text}', () => chunkText);
         let lastErr = null;
         for (let attempt = 1; attempt <= NER_PARSE_ATTEMPTS; attempt++) {
             let res = null;
@@ -2764,7 +2806,10 @@ const host = document.createElement('div');
                 res = await callLLM([{ role: 'user', content: userPrompt }], 0.3, true, onChunk);
             } catch (error) {
                 // isFatal — настоящий HTTP-ответ (401, нет модели): повторять его
-                // бессмысленно; пустой completion — как раз случай «переспросить»
+                // бессмысленно; «Пустой ответ» — единственное исключение: сервер так
+                // отвечает и на перегрузе, где повтор помогает. Второй стек ретраев
+                // (fetchWithRetry поверх NER_PARSE_ATTEMPTS) не завёлся: 12 запросов
+                // на чанк — не политика, а перемножение
                 if (error.isFatal && !/Пустой ответ/.test(error.message || '')) throw error;
                 lastErr = error;
             }
@@ -2790,24 +2835,38 @@ const host = document.createElement('div');
     }
     async function extractTermsFromText(text, targetKey, onProgress) {
         if (!books[targetKey]) return { added: 0, incremented: 0, llmViolations: 0, canceled: false, skipped: 0, badItems: 0, resumed: 0, skippedReason: '' };
+        // реентрант-гвард: авто-NER из кэш-ветки перевода идёт в фоне и не держит
+        // isTranslating, а записи глоссария у параллельных прогонов общие — без
+        // гварда одно вхождение термина наращивало count дважды
+        if (nerRunning) return { busy: true, added: 0, incremented: 0, llmViolations: 0, canceled: false, skipped: 0, badItems: 0, resumed: 0, skippedReason: '' };
+        nerRunning = true;
+        try {
+            return await extractTermsRun(text, targetKey, onProgress);
+        } finally { nerRunning = false; }
+    }
+    async function extractTermsRun(text, targetKey, onProgress) {
         const chunks = splitByNewlines(text, config.chunkSize);
         const glossary = { ...bookGlossary(targetKey) };
         const hash = textHash(text);
         const expectedTotal = Math.max(1, text.length * NER_RESPONSE_RATIO);
         let streamed = 0, added = 0, incremented = 0, llmViolations = 0, skipped = 0, badItems = 0, canceled = false, skippedReason = '';
         // прерванный прогон продолжается с того же чанка (та же страница, тот же
-        // исходный текст, то же чанкование)
+        // исходный текст, то же чанкование); пропущенные чанки прошлого прогона
+        // (без валидного ответа) переобрабатываются — отметка nerDone через них
+        // не переехала
         const stored = jobOf(targetKey);
         let startChunk = 0;
+        const missSet = new Set();
         if (stored && stored.hash === hash && stored.nerTotal === chunks.length && stored.nerDone > 0) {
             startChunk = Math.min(stored.nerDone, chunks.length);
+            if (Array.isArray(stored.nerMissed)) for (const m of stored.nerMissed) if (Number.isInteger(m) && m >= 0 && m < chunks.length) missSet.add(m);
         }
         const emitProgress = (i, retry) => {
             if (onProgress) onProgress({ chunk: i + 1, total: chunks.length, resumed: startChunk, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null });
         };
         for (let i = 0; i < chunks.length; i++) {
             if (cancelRequested) { canceled = true; break; }
-            if (i < startChunk) { emitProgress(i); continue; }
+            if (i < startChunk && !missSet.has(i)) { emitProgress(i); continue; }
             const charsBefore = streamed;
             const onChunk = {
                 onDelta: (piece) => { streamed += piece.length; emitProgress(i); },
@@ -2820,7 +2879,10 @@ const host = document.createElement('div');
                 const { items, bad } = await requestNerChunk(chunks[i], onChunk, chunkTerms);
                 badItems += bad;
                 // count считает код, а не модель: та могла термина в тексте не
-                // заметить или прислать его несколько раз
+                // заметить или прислать его несколько раз. Правило то же, что в
+                // поиске (findRelevantTerms): нечёткость здесь обрабатывает и
+                // морфологию русских форм («в Секту Небесного Облака»), поэтому
+                // частоты считаются по ней же — точное вхождение недосчитало бы
                 for (const t of chunkTerms) {
                     if (!glossary[t.id]) continue;
                     glossary[t.id].count = (glossary[t.id].count || 0) + 1;
@@ -2840,9 +2902,11 @@ const host = document.createElement('div');
                 }
             } catch (error) {
                 if (cancelRequested) { canceled = true; emitProgress(i); break; }
-                // битый формат одного чанка не роняет весь прогон, но чанк остаётся
-                // необработанным — поэтому отметка «NER сделан» не ставится
+                // битый формат одного чанка не роняет весь прогон: чанк остаётся
+                // необработанным — отметка nerDone через него не переехает, и при
+                // следующем запуске он переобработается
                 skipped++;
+                missSet.add(i);
                 skippedReason = error.message || 'нет данных';
                 emitProgress(i);
                 continue;
@@ -2851,7 +2915,7 @@ const host = document.createElement('div');
             // страницы сделанное не теряется
             siteGlossaries[targetKey] = glossary;
             dbPut('g/' + targetKey, glossary);
-            jobPut(targetKey, { url: pageCacheKey(), hash, nerDone: i + 1, nerTotal: chunks.length });
+            jobPut(targetKey, { url: pageCacheKey(), hash, nerDone: i + 1, nerTotal: chunks.length, nerMissed: [...missSet].filter(m => m < i + 1) });
         }
         siteGlossaries[targetKey] = glossary;
         dbPut('g/' + targetKey, glossary);
@@ -2861,16 +2925,21 @@ const host = document.createElement('div');
     // хвост статуса прогона: модель вернула то, что просила не возвращать; на
     // глоссарий это не повлияло (частоты считает код), но промпт стоит проверить
     const nerViolationNote = res => (res.llmViolations ? ` • нарушений контракта: ${res.llmViolations}` : '');
+    // битые записи ответа (не объекты/без term) отсечены до глоссария; в статусе —
+    // чтобы качество ответа модели было видно, а не только итоговые +N
+    const nerBadItemsNote = res => (res.badItems ? ` • битых записей: ${res.badItems}` : '');
     // ===== ПЕРЕВОД =====
     // промпт чанка: глоссарий подбирается под сам чанк, плейсхолдеры меняются
-    // replaceAll — в промптах плейсхолдер может встречаться несколько раз
+    // replaceAll — в промптах плейсхолдер может встречаться несколько раз;
+    // замена функцией: спец-паттерны замены ($&, $', $`) в тексте главы не
+    // должны раскрыться как подстановки
     function chunkUserPrompt(chunkText) {
         const glossaryText = formatGlossaryForPrompt(findRelevantTerms(chunkText));
         return config.translationPrompt
             .replaceAll('{sourceLang}', config.sourceLang)
             .replaceAll('{targetLang}', config.targetLang)
             .replaceAll('{glossary}', glossaryText)
-            .replaceAll('{text}', chunkText);
+            .replaceAll('{text}', () => chunkText);
     }
     // часть главы по чанкам: '' — чанк не переведён. Прерванная работа сохраняется
     // целиком, повторный запуск продолжает с первого незакрытого чанка
@@ -2995,7 +3064,7 @@ const host = document.createElement('div');
         fill.style.width = st.pct + '%';
         progressStatus(st.retry
             ? `⏱ ${st.retry.message} — повтор ${st.retry.nextAttempt}/${st.retry.attemptsTotal}`
-            : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.chunk}/${st.resumed + 1})` : ''} • ~${st.pct}%`);
+            : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.resumed + 1}/${st.total})` : ''} • ~${st.pct}%`);
     }
     // ===== ЧИТАЛКА =====
     // Тема «как в системе» должна реагировать на смену системной сразу, без перезагрузки
@@ -3189,7 +3258,7 @@ const host = document.createElement('div');
                     const liveText = extractMainText(findContentElement());
                     if (liveText.trim()) {
                         extractTermsFromText(liveText, current.key, null).then(res => {
-                            if (res && !res.canceled) markNerDone(current.key);
+                            if (res && !res.canceled && !res.skipped && !res.busy) markNerDone(current.key);
                         }).catch(() => {});
                     }
                 }
@@ -3205,8 +3274,11 @@ const host = document.createElement('div');
                     } else {
                         try {
                             const nerResult = await extractTermsFromText(text, current.key, updateExtractionProgress);
-                            progressFill().style.width = '100%';
-                            if (nerResult.canceled) {
+                            if (nerResult.busy) {
+                                progressStatus('✨ Извлечение уже идёт в другом прогоне');
+                                await new Promise(r => setTimeout(r, 500));
+                            } else if (nerResult.canceled) {
+                                progressFill().style.width = '100%';
                                 progressStatus(`⏹ NER остановлен: +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}${nerViolationNote(nerResult)}`);
                                 await new Promise(r => setTimeout(r, 500));
                             } else {
@@ -3286,21 +3358,28 @@ const host = document.createElement('div');
         const element = findContentElement();
         const text = extractMainText(element);
         if (!text.trim()) { alert('Текст не найден'); return; }
+        if (isNerDoneForPage(current.key)) {
+            // повтор по обработанной странице перекрутил бы все частоты: каждый чанк
+            // заново, каждый существующий термин +1; осознанный повтор — через
+            // очистку NER-кэша на вкладке книги
+            alert('Термины для этой страницы уже извлекались. Повторное извлечение перекрутит частоты — при необходимости очистите NER-кэш книги на вкладке книги.');
+            return;
+        }
         isTranslating = true;
         cancelRequested = false;
         extractMiniShow();
         try {
             const result = await extractTermsFromText(text, current.key, updateExtractionProgressMini);
-            if (!result.canceled && !result.skipped) markNerDone(current.key);
+            if (!result.canceled && !result.skipped && !result.busy) markNerDone(current.key);
             extractMiniStatus((result.canceled ? '⏹ Остановлено: ' : '✨ ')
                 + `+${result.added} новых, обновлено частот: ${result.incremented}`
                 + (result.resumed ? ` • продолжен с чанка ${result.resumed + 1}` : '')
                 + (result.skipped ? ` • ⚠️ без валидного ответа: ${result.skipped} (${result.skippedReason})` : '')
-                + nerViolationNote(result));
+                + nerViolationNote(result) + nerBadItemsNote(result));
             updateGlossaryUI();
             refreshBookTab();
         } catch (error) {
-            extractMiniStatus('❌ ' + error.message);
+            if (!cancelRequested) extractMiniStatus('❌ ' + error.message);
         } finally {
             isTranslating = false;
             // тот же флаг: без сброса отменённое извлечение тихо валило бы каждый

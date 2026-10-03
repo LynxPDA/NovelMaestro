@@ -124,13 +124,25 @@
             element.querySelectorAll(sel).forEach(el => {
                 if (el.dataset.nmHidden) return;
                 el.dataset.nmHidden = '1';
+                // запоминаем, что вернуть: пред-существующий inline display нельзя
+                // просто удалить — скрытый сайтом элемент стал бы видимым, и текст
+                // страницы при повторном извлечении менялся бы (ломая resume NER)
+                el.dataset.nmPrevDisplay = el.style.getPropertyValue('display');
                 el.style.setProperty('display', 'none', 'important');
                 hidden.push(el);
             });
         }
         let raw = '';
         try { raw = element.innerText || ''; }
-        finally { hidden.forEach(el => { el.style.removeProperty('display'); delete el.dataset.nmHidden; }); }
+        finally {
+            hidden.forEach(el => {
+                const prev = el.dataset.nmPrevDisplay;
+                if (prev) el.style.setProperty('display', prev);
+                else el.style.removeProperty('display');
+                delete el.dataset.nmPrevDisplay;
+                delete el.dataset.nmHidden;
+            });
+        }
         return paragraphsOf(raw.replace(/\u00a0/g, ' ')).join('\n\n');
     }
     function extractTextFromDoc(doc, sig) {

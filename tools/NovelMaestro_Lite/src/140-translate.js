@@ -1,13 +1,15 @@
     // ===== ПЕРЕВОД =====
     // промпт чанка: глоссарий подбирается под сам чанк, плейсхолдеры меняются
-    // replaceAll — в промптах плейсхолдер может встречаться несколько раз
+    // replaceAll — в промптах плейсхолдер может встречаться несколько раз;
+    // замена функцией: спец-паттерны замены ($&, $', $`) в тексте главы не
+    // должны раскрыться как подстановки
     function chunkUserPrompt(chunkText) {
         const glossaryText = formatGlossaryForPrompt(findRelevantTerms(chunkText));
         return config.translationPrompt
             .replaceAll('{sourceLang}', config.sourceLang)
             .replaceAll('{targetLang}', config.targetLang)
             .replaceAll('{glossary}', glossaryText)
-            .replaceAll('{text}', chunkText);
+            .replaceAll('{text}', () => chunkText);
     }
     // часть главы по чанкам: '' — чанк не переведён. Прерванная работа сохраняется
     // целиком, повторный запуск продолжает с первого незакрытого чанка
@@ -132,5 +134,5 @@
         fill.style.width = st.pct + '%';
         progressStatus(st.retry
             ? `⏱ ${st.retry.message} — повтор ${st.retry.nextAttempt}/${st.retry.attemptsTotal}`
-            : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.chunk}/${st.resumed + 1})` : ''} • ~${st.pct}%`);
+            : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.resumed + 1}/${st.total})` : ''} • ~${st.pct}%`);
     }

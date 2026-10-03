@@ -51,7 +51,7 @@
                     const liveText = extractMainText(findContentElement());
                     if (liveText.trim()) {
                         extractTermsFromText(liveText, current.key, null).then(res => {
-                            if (res && !res.canceled) markNerDone(current.key);
+                            if (res && !res.canceled && !res.skipped && !res.busy) markNerDone(current.key);
                         }).catch(() => {});
                     }
                 }
@@ -67,8 +67,11 @@
                     } else {
                         try {
                             const nerResult = await extractTermsFromText(text, current.key, updateExtractionProgress);
-                            progressFill().style.width = '100%';
-                            if (nerResult.canceled) {
+                            if (nerResult.busy) {
+                                progressStatus('✨ Извлечение уже идёт в другом прогоне');
+                                await new Promise(r => setTimeout(r, 500));
+                            } else if (nerResult.canceled) {
+                                progressFill().style.width = '100%';
                                 progressStatus(`⏹ NER остановлен: +${nerResult.added} новых, обновлено частот: ${nerResult.incremented}${nerViolationNote(nerResult)}`);
                                 await new Promise(r => setTimeout(r, 500));
                             } else {
@@ -148,21 +151,28 @@
         const element = findContentElement();
         const text = extractMainText(element);
         if (!text.trim()) { alert('Текст не найден'); return; }
+        if (isNerDoneForPage(current.key)) {
+            // повтор по обработанной странице перекрутил бы все частоты: каждый чанк
+            // заново, каждый существующий термин +1; осознанный повтор — через
+            // очистку NER-кэша на вкладке книги
+            alert('Термины для этой страницы уже извлекались. Повторное извлечение перекрутит частоты — при необходимости очистите NER-кэш книги на вкладке книги.');
+            return;
+        }
         isTranslating = true;
         cancelRequested = false;
         extractMiniShow();
         try {
             const result = await extractTermsFromText(text, current.key, updateExtractionProgressMini);
-            if (!result.canceled && !result.skipped) markNerDone(current.key);
+            if (!result.canceled && !result.skipped && !result.busy) markNerDone(current.key);
             extractMiniStatus((result.canceled ? '⏹ Остановлено: ' : '✨ ')
                 + `+${result.added} новых, обновлено частот: ${result.incremented}`
                 + (result.resumed ? ` • продолжен с чанка ${result.resumed + 1}` : '')
                 + (result.skipped ? ` • ⚠️ без валидного ответа: ${result.skipped} (${result.skippedReason})` : '')
-                + nerViolationNote(result));
+                + nerViolationNote(result) + nerBadItemsNote(result));
             updateGlossaryUI();
             refreshBookTab();
         } catch (error) {
-            extractMiniStatus('❌ ' + error.message);
+            if (!cancelRequested) extractMiniStatus('❌ ' + error.message);
         } finally {
             isTranslating = false;
             // тот же флаг: без сброса отменённое извлечение тихо валило бы каждый

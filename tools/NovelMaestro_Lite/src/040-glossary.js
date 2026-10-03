@@ -99,18 +99,22 @@
     /**
      * «термин уже в глоссарии»: сначала точное совпадение нормализованных строк,
      * иначе нечёткое (тот же порог, что и в поиске по чанку); возвращает id записи
-     * или ''. Точное проверяется отдельным проходом, а не вместе с нечётким: иначе
-     * короткий термин мог бы «перетянуть» запись на себя раньше её владельца.
+     * или ''. Совпадение ищется и по aliases: модель может вернуть вариант из
+     * алиасов существующей записи — без этого создаётся запись-дубль, и дальше
+     * обе растут в частотах. Точное проверяется отдельным проходом, а не вместе
+     * с нечётким: иначе короткий термин мог бы «перетянуть» запись на себя раньше
+     * её владельца.
      */
     function findGlossaryEntry(glossary, term, threshold = config.fuzzySearchThreshold) {
         const key = normalize(term);
         if (!key) return '';
         const entries = Object.entries(glossary || {});
+        const variantsOf = ex => [ex && ex.term, ...((ex && ex.aliases) || [])];
         for (const [id, ex] of entries) {
-            if (ex && normalize(ex.term) === key) return id;
+            for (const v of variantsOf(ex)) if (v && normalize(v) === key) return id;
         }
         for (const [id, ex] of entries) {
-            if (ex && termMatchesText(ex.term, term, threshold)) return id;
+            for (const v of variantsOf(ex)) if (v && termMatchesText(v, term, threshold)) return id;
         }
         return '';
     }

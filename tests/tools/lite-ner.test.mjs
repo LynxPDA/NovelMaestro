@@ -41,7 +41,7 @@ return {
     config, books, siteGlossaries, siteJobs,
     extractTermsFromText, requestNerChunk, findRelevantTerms, findGlossaryEntry,
     formatGlossaryForExtraction, nerViolationNote, splitByNewlines, textHash,
-    useBook: (key) => { currentBookKey = key; },
+    jobOf, migrateJobs, useBook: (key) => { currentBookKey = key; },
 };`);
 
 /**
@@ -50,16 +50,16 @@ return {
  * node нет: openDb ловит ReferenceError и отдаёт null, поэтому dbPut и jobPut остаются
  * пусттышками — памятью среды остаются siteGlossaries и siteJobs книги.
  */
-function harness({ answers = [], config = {}, glossary = {}, job = null, cancel = false } = {}) {
+function harness({ answers = [], config = {}, glossary = {}, job = null, jobs = null, cancel = false, callLLM: customLLM } = {}) {
   const prompts = [];
   let calls = 0;
-  const callLLM = async (messages, temperature, stream, cb = {}) => {
+  const callLLM = customLLM || (async (messages, temperature, stream, cb = {}) => {
     prompts.push(messages[0].content);
     if (cb.onRetry) cb.onRetry({ message: 'нет ответа', nextAttempt: calls + 1, attemptsTotal: 3 });
     const answer = answers[Math.min(calls, answers.length - 1)];
     calls += 1;
     return typeof answer === 'string' ? { text: answer } : answer;
-  };
+  });
   const scope = make(
     (key, def) => (key === 'config' ? config : (key === 'books' ? { [BOOK]: { name: 'Тест-книга' } } : def)),
     { href: CH },
@@ -68,7 +68,8 @@ function harness({ answers = [], config = {}, glossary = {}, job = null, cancel 
   );
   scope.useBook(BOOK);
   scope.siteGlossaries[BOOK] = glossary;
-  if (job) scope.siteJobs[BOOK] = { url: CH, ...job };
+  if (job) scope.siteJobs[BOOK] = { [CH]: { ...job } };
+  if (jobs) scope.siteJobs[BOOK] = jobs;
   return { scope, prompts, calls: () => calls, g: () => scope.siteGlossaries[BOOK] };
 }
 
@@ -211,13 +212,90 @@ test('resume: уже обработанные чанки не считаются
   });
   // чанкование по одному абзацу, первый уже обработан прежним прогоном
   assert.equal(h.scope.splitByNewlines(text, 1).length, 3);
-  h.scope.siteJobs[BOOK] = { url: CH, hash: h.scope.textHash(text), nerDone: 1, nerTotal: 3 };
+  h.scope.siteJobs[BOOK] = { [CH]: { hash: h.scope.textHash(text), nerDone: 1, nerTotal: 3 } };
   const res = await run(h, text);
   assert.deepEqual([res.added, res.incremented, res.llmViolations, res.resumed], [0, 1, 0, 1]);
   assert.equal(h.prompts.length, 2, 'чанк из прошлого прогона ушёл в модель повторно');
   assert.equal(h.g().k1.count, 5, 'частота из пройденного чанка выросла дважды');
   assert.equal(h.g().k2.count, 3);
   assert.ok(h.prompts[0].includes('Heavenly Cloud Sect') && !h.prompts[0].includes('Wang Lin'), 'в промпт уехал нерелевантный термин');
+});
+
+// ── частоты считает код (findRelevantTerms): нечёткость — это обработка склонений ──
+
+test('частота по коду работает через морфологию: нечёткий хит считается', async () => {
+  const h = harness({
+    answers: ['[]'],
+    glossary: { k1: { term: 'Секта Небесного Облака', translation: 'Heavenly Cloud Sect', type: 'Organisation', count: 3 } },
+  });
+  // «в Секту Небесного Облака» — склонение: точного вхождения нет, но это законный хит
+  const res = await run(h, 'Он шёл в Секту Небесного Облака.');
+  assert.equal(res.incremented, 1);
+  assert.equal(h.g().k1.count, 4);
+});
+
+test('алиас считается частотой наравне с термином', async () => {
+  const h = harness({
+    answers: ['[]'],
+    glossary: { k1: { term: 'Ван Линь', translation: 'Wang Lin', type: 'Person (male)', count: 5, aliases: ['Вань Линь'] } },
+  });
+  const res = await run(h, 'Вань Линь молчал.');
+  assert.equal(res.incremented, 1);
+  assert.equal(h.g().k1.count, 6);
+});
+
+test('модель вернула вариант-алиас существующей записи: дубля нет, это нарушение', async () => {
+  const h = harness({
+    answers: [json([item('Вань Линь', 'Wang Lin')])],
+    glossary: { k1: { term: 'Ван Линь', translation: 'Wang Lin', type: 'Person (male)', count: 5, aliases: ['Вань Линь'] } },
+  });
+  const res = await run(h, 'Вань Линь молчал.');
+  assert.deepEqual([res.added, res.llmViolations], [0, 1], 'алиас существующей записи создал дубль');
+  assert.equal(Object.keys(h.g()).length, 1);
+  assert.equal(h.g().k1.count, 6, 'частота посчитана кодом ровно один раз');
+});
+
+// ── реентрант-гвард ─────────────────────────────────────────────────────
+
+test('второй параллельный прогон не стартует: count растёт ровно на один', async () => {
+  let arrivals = 0;
+  let gate = () => {};
+  const h = harness({
+    // первый прогон висит в запросе, пока второй не дойдёт до гварда — но второй
+    // гардом отклоняется ДО запроса, поэтому первый рано или поздно отпускаем
+    callLLM: async (messages) => {
+      arrivals += 1;
+      h.prompts.push(messages[0].content);
+      if (arrivals === 1) setTimeout(gate, 25);
+      return { text: '[]' };
+    },
+    glossary: { k1: { term: 'Ван Линь', translation: 'Wang Lin', type: 'Person (male)', count: 5 } },
+  });
+  const gatePromise = new Promise((r) => { gate = r; });
+  const [a, b] = await Promise.all([run(h, 'Ван Линь молчал.'), run(h, 'Ван Линь молчал.'), gatePromise]);
+  assert.equal((a.busy || false) !== (b.busy || false), true, 'ровно один прогон должен быть отклонён гвардом');
+  assert.deepEqual([a.incremented + b.incremented], [1]);
+  assert.equal(h.prompts.length, 1, 'отклонённый прогон не ходил в модель');
+  assert.equal(h.g().k1.count, 6, 'два параллельных прогона удвоили частоту');
+});
+
+test('после отклонённого прогона гвард отпущен: следующий запрос уходит', async () => {
+  let arrivals = 0;
+  let gate = () => {};
+  const h = harness({
+    callLLM: async (messages) => {
+      arrivals += 1;
+      h.prompts.push(messages[0].content);
+      if (arrivals === 1) setTimeout(gate, 25);
+      return { text: '[]' };
+    },
+    glossary: { k1: { term: 'Ван Линь', translation: 'Wang Lin', type: 'Person (male)', count: 5 } },
+  });
+  const gatePromise = new Promise((r) => { gate = r; });
+  await Promise.all([run(h, 'Ван Линь молчал.'), run(h, 'Ван Линь молчал.'), gatePromise]);
+  const res = await run(h, 'Ван Линь снова молчал.');
+  assert.equal(res.busy, undefined);
+  assert.equal(h.g().k1.count, 7);
 });
 
 test('битый ответ чанка — чанк не обработан: ни новых терминов, ни частот', async () => {
@@ -252,6 +330,81 @@ test('чанк без валидного ответа не продвигает 
   assert.equal(h.scope.siteJobs[BOOK], undefined, 'прерванный прогон помечен завершённым');
 });
 
+// ── пропущенные чанки переживают прогон и переобрабатываются ───────────────────
+
+test('не-JSON в середине: nerDone не переезжает через пропущенный чанк', async () => {
+  const text = 'Ван Линь вошёл в зал.\n\nСекта Небесного Облака молчала.\n\nМеч Божественного Ветра сверкнул.\n\nПустая башня стояла в стороне.';
+  const h = harness({
+    config: { chunkSize: 1 },
+    // «Секта» стойко отвечает прозой, остальные чанки — валидным JSON
+    callLLM: async (m) => {
+      h.prompts.push(m[0].content);
+      return m[0].content.includes('Секта Небесного Облака')
+        ? { text: 'модель выдала прозу вместо JSON' }
+        : { text: '[]' };
+    },
+  });
+  const res = await run(h, text);
+  assert.equal(res.skipped, 1);
+  const job = h.scope.siteJobs[BOOK][CH];
+  assert.equal(job.nerDone, 4, 'последний успешный чанк записан');
+  assert.deepEqual(job.nerMissed, [1], 'пропущенный чанк запомнен, а не перепрыгнут');
+});
+
+test('следующий прогон дообрабатывает пропущенные чанки и снимает отметку', async () => {
+  const text = 'Ван Линь вошёл в зал.\n\nСекта Небесного Облака молчала.\n\nМеч Божественного Ветра сверкнул.\n\nПустая башня стояла в стороне.';
+  let answerJson = false;
+  const h = harness({
+    config: { chunkSize: 1 },
+    callLLM: async (m) => {
+      h.prompts.push(m[0].content);
+      // «Секта» в первом прогоне отвечает прозой, во втором — валидным JSON
+      if (m[0].content.includes('Секта Небесного Облака') && !answerJson) return { text: 'не JSON' };
+      return { text: json([item('Секта Небесного Облака', 'Heavenly Cloud Sect', 'Organisation')]) };
+    },
+  });
+  const first = await run(h, text);
+  assert.equal(first.skipped, 1);
+  answerJson = true;
+  const second = await run(h, text);
+  assert.equal(second.resumed, 4, 'готовые чанки не тронуты');
+  assert.equal(second.skipped, 0);
+  const secta = Object.values(h.g()).find((t) => t && t.term === 'Секта Небесного Облака');
+  assert.ok(secta, 'термин из пропущенного чанка извлечён при повторе');
+  assert.equal(h.scope.siteJobs[BOOK], undefined, 'после дообработки отметка NER снята');
+  assert.ok(!h.prompts.slice(4).some((p) => p.includes('Ван Линь вошёл')), 'готовые чанки повторно не запрашивались');
+});
+
+// ── job-записи по страницам: NER не перекрывает перевод другой главы ────────────
+
+test('NER пишется в запись своей страницы и не трогает чужую', async () => {
+  const h = harness({
+    answers: ['[]'],
+    glossary: { k1: { term: 'Ван Линь', translation: 'Wang Lin', type: 'Person (male)', count: 5 } },
+    jobs: { [`${BOOK}/chapter/0`]: { parts: ['кусок перевода', ''], total: 2 } },
+  });
+  await run(h, 'Ван Линь молчал.');
+  const jobs = h.scope.siteJobs[BOOK];
+  assert.deepEqual(jobs[`${BOOK}/chapter/0`].parts, ['кусок перевода', ''], 'фоновый перевод другой страницы потерян');
+  assert.ok(!jobs[CH], 'завершённое задание NER своей страницы снято');
+});
+
+test('легаси-запись одной на книгу переносится под свой url, новая форма читается', () => {
+  const { scope } = harness();
+  // старый формат: одна запись с полем url
+  const legacy = scope.migrateJobs({ url: CH, parts: ['а'], nerDone: 2 });
+  assert.deepEqual(legacy[CH], { url: CH, parts: ['а'], nerDone: 2 });
+  // уже новый формат проходит насквозь; мусор — пустой словарь
+  const fresh = { [CH]: { parts: ['б'] } };
+  assert.deepEqual(scope.migrateJobs(fresh), fresh);
+  assert.deepEqual(scope.migrateJobs(null), {});
+  assert.deepEqual(scope.migrateJobs('мусор'), {});
+  // jobOf нового формата ищет по url страницы
+  scope.siteJobs[BOOK] = fresh;
+  assert.deepEqual(scope.jobOf(BOOK, CH), { parts: ['б'] });
+  assert.equal(scope.jobOf(BOOK, `${BOOK}/chapter/9`), null);
+});
+
 test('статусы прогона говорят о нарушениях только когда они были', () => {
   const { scope } = harness();
   assert.equal(scope.nerViolationNote({ llmViolations: 0 }), '');
@@ -265,6 +418,7 @@ test('стражи: промпт, метка поля и лог нарушени
   assert.ok(raw.includes('LLM violation: вернула существующий термин'), 'нарушение контракта не логируется');
   assert.match(raw, /async function requestNerChunk\(chunkText, onChunk, relevantTerms = findRelevantTerms\(chunkText\)\)/, 'requestNerChunk больше не сам считывает релевантные термины');
   assert.match(raw, /const chunkTerms = findRelevantTerms\(chunks\[i\], glossary\);/, 'частоты больше не считаются по копии глоссария книги');
-  // правило «такая запись уже есть» живёт в одном месте (040-glossary), а не инлайн-копиями
-  assert.equal((raw.match(/termMatchesText\(ex\.term/g) || []).length, 1, 'правило дедупликации снова продублировали');
+  // правило «такая запись уже есть» живёт в одном месте (040-glossary), а не инлайн-копиями:
+  // одно определение нечёткой проверки; алиасы она охватывает, вызовы — легитимное переиспользование
+  assert.equal((raw.match(/function termMatchesText\(/g) || []).length, 1, 'правило дедупликации снова продублировали');
 });

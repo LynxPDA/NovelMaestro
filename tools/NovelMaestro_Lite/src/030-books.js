@@ -112,7 +112,7 @@
                 if (k.startsWith('g/')) siteGlossaries[k.slice(2)] = v || {};
                 else if (k.startsWith('n/')) siteNerDone[k.slice(2)] = v || {};
                 else if (k.startsWith('c/')) siteChapterCache[k.slice(2)] = v || [];
-                else if (k.startsWith('j/')) siteJobs[k.slice(2)] = v || {};
+                else if (k.startsWith('j/')) siteJobs[k.slice(2)] = migrateJobs(v || {});
             }
         } catch (e) { console.warn('[NovelMaestro] IndexedDB:', e && e.message); }
     }
@@ -157,36 +157,54 @@
         for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
         return h.toString(16);
     }
-    let siteJobs = {};
-    // запись живёт, пока относится к той же странице книги
-    function jobOf(bookKey, url = pageCacheKey()) {
-        const job = siteJobs[bookKey];
-        return (job && job.url === url) ? job : null;
+    let siteJobs = {};   // bookKey → { [pageUrl]: задание страницы }
+    // старый формат — одна запись на книгу с полем url: переносится под свой url;
+    // новый — словарь по страницам: задание перевода одной главы не перекрывается
+    // заданием NER или перевода другой
+    function migrateJobs(v) {
+        if (v && typeof v === 'object' && typeof v.url === 'string') return { [v.url]: v };
+        return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
     }
-    // поля дополняют друг друга: NER пишет nerDone/nerTotal, перевод — parts/total;
-    // пустые поля не затираются (jobPut вызывается с одного места за раз)
+    function jobOf(bookKey, url = pageCacheKey()) {
+        const job = (siteJobs[bookKey] || {})[url];
+        return job || null;
+    }
     function jobPut(bookKey, job) {
-        if (!bookKey) return;
-        const prev = siteJobs[bookKey];
-        const next = (prev && prev.url === job.url) ? { ...prev, ...job } : job;
+        if (!bookKey || !job || !job.url) return;
+        if (!siteJobs[bookKey]) siteJobs[bookKey] = {};
+        // поля дополняют друг друга: NER пишет nerDone/nerTotal/nerMissed,
+        // перевод — parts/total; внутри одной страницы мержится, чужую не трогает
+        const prev = siteJobs[bookKey][job.url];
+        const next = prev ? { ...prev, ...job } : job;
         if (!next.parts) delete next.parts;
         if (!next.nerDone) delete next.nerDone;
-        siteJobs[bookKey] = next;
-        dbPut('j/' + bookKey, next);
+        if (!next.nerMissed) delete next.nerMissed;
+        siteJobs[bookKey][job.url] = next;
+        dbPut('j/' + bookKey, siteJobs[bookKey]);
     }
     function jobClear(bookKey) {
         if (!bookKey) return;
         delete siteJobs[bookKey];
         dbDelete('j/' + bookKey);
     }
-    // NER закончил все чанки: снимаем его часть записи; если в этой же записи
-    // лежит незаконченный перевод — она остаётся
+    // задание одной страницы снято: запись удаляется, чужие страницы книги остаются
+    function jobClearPage(bookKey, url = pageCacheKey()) {
+        const jobs = siteJobs[bookKey];
+        if (!jobs || !jobs[url]) return;
+        delete jobs[url];
+        if (Object.keys(jobs).length) dbPut('j/' + bookKey, jobs);
+        else jobClear(bookKey);
+    }
+    // NER закончил все чанки: снимаем его поля записи СВОЕЙ страницы; незаконченный
+    // перевод (этой же или другой) остаётся лежать
     function jobClearNer(bookKey) {
-        const job = siteJobs[bookKey];
+        const jobs = siteJobs[bookKey];
+        const job = jobs && jobs[pageCacheKey()];
         if (!job) return;
         delete job.nerDone;
         delete job.nerTotal;
-        if ((job.parts || []).some(p => p)) dbPut('j/' + bookKey, job);
-        else jobClear(bookKey);
+        delete job.nerMissed;
+        if ((job.parts || []).some(p => p)) dbPut('j/' + bookKey, jobs);
+        else jobClearPage(bookKey);
     }
 

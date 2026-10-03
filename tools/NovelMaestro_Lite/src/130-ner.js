@@ -1,4 +1,8 @@
     // ===== NER =====
+    // реентрант-гвард извлечения: два параллельных прогона делят объекты записей
+    // глоссария и удваивают частоты; авто-NER из кэш-ветки перевода держит флаг не всё
+    // время перевода, поэтому guard нужен здесь, а не только в isTranslating
+    let nerRunning = false;
     const NER_RESPONSE_RATIO = 2;
     // модель обязана вернуть JSON-массив объектов; ответ приходит и в ```json
     // fences, и одним объектом, и в обёртке {"terms": [...]} — всё это разбирается.
@@ -47,12 +51,14 @@
     // {existingGlossary} — штатный случай: подстановки не происходит, список просто
     // не уходит в модель
     async function requestNerChunk(chunkText, onChunk, relevantTerms = findRelevantTerms(chunkText)) {
+        // замена функцией: спец-паттерны замены ($&, $', $`) в тексте главы не
+        // должны раскрываться как подстановки
         const userPrompt = config.extractionPrompt
             .replaceAll('{targetLang}', config.targetLang)
             .replaceAll('{existingGlossary}', formatGlossaryForExtraction(relevantTerms))
             // текст чанка подставляется последним: своё «{existingGlossary}» внутри
             // главы не должно раскрыться второй раз
-            .replaceAll('{text}', chunkText);
+            .replaceAll('{text}', () => chunkText);
         let lastErr = null;
         for (let attempt = 1; attempt <= NER_PARSE_ATTEMPTS; attempt++) {
             let res = null;
@@ -60,7 +66,10 @@
                 res = await callLLM([{ role: 'user', content: userPrompt }], 0.3, true, onChunk);
             } catch (error) {
                 // isFatal — настоящий HTTP-ответ (401, нет модели): повторять его
-                // бессмысленно; пустой completion — как раз случай «переспросить»
+                // бессмысленно; «Пустой ответ» — единственное исключение: сервер так
+                // отвечает и на перегрузе, где повтор помогает. Второй стек ретраев
+                // (fetchWithRetry поверх NER_PARSE_ATTEMPTS) не завёлся: 12 запросов
+                // на чанк — не политика, а перемножение
                 if (error.isFatal && !/Пустой ответ/.test(error.message || '')) throw error;
                 lastErr = error;
             }
@@ -86,24 +95,38 @@
     }
     async function extractTermsFromText(text, targetKey, onProgress) {
         if (!books[targetKey]) return { added: 0, incremented: 0, llmViolations: 0, canceled: false, skipped: 0, badItems: 0, resumed: 0, skippedReason: '' };
+        // реентрант-гвард: авто-NER из кэш-ветки перевода идёт в фоне и не держит
+        // isTranslating, а записи глоссария у параллельных прогонов общие — без
+        // гварда одно вхождение термина наращивало count дважды
+        if (nerRunning) return { busy: true, added: 0, incremented: 0, llmViolations: 0, canceled: false, skipped: 0, badItems: 0, resumed: 0, skippedReason: '' };
+        nerRunning = true;
+        try {
+            return await extractTermsRun(text, targetKey, onProgress);
+        } finally { nerRunning = false; }
+    }
+    async function extractTermsRun(text, targetKey, onProgress) {
         const chunks = splitByNewlines(text, config.chunkSize);
         const glossary = { ...bookGlossary(targetKey) };
         const hash = textHash(text);
         const expectedTotal = Math.max(1, text.length * NER_RESPONSE_RATIO);
         let streamed = 0, added = 0, incremented = 0, llmViolations = 0, skipped = 0, badItems = 0, canceled = false, skippedReason = '';
         // прерванный прогон продолжается с того же чанка (та же страница, тот же
-        // исходный текст, то же чанкование)
+        // исходный текст, то же чанкование); пропущенные чанки прошлого прогона
+        // (без валидного ответа) переобрабатываются — отметка nerDone через них
+        // не переехала
         const stored = jobOf(targetKey);
         let startChunk = 0;
+        const missSet = new Set();
         if (stored && stored.hash === hash && stored.nerTotal === chunks.length && stored.nerDone > 0) {
             startChunk = Math.min(stored.nerDone, chunks.length);
+            if (Array.isArray(stored.nerMissed)) for (const m of stored.nerMissed) if (Number.isInteger(m) && m >= 0 && m < chunks.length) missSet.add(m);
         }
         const emitProgress = (i, retry) => {
             if (onProgress) onProgress({ chunk: i + 1, total: chunks.length, resumed: startChunk, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null });
         };
         for (let i = 0; i < chunks.length; i++) {
             if (cancelRequested) { canceled = true; break; }
-            if (i < startChunk) { emitProgress(i); continue; }
+            if (i < startChunk && !missSet.has(i)) { emitProgress(i); continue; }
             const charsBefore = streamed;
             const onChunk = {
                 onDelta: (piece) => { streamed += piece.length; emitProgress(i); },
@@ -116,7 +139,10 @@
                 const { items, bad } = await requestNerChunk(chunks[i], onChunk, chunkTerms);
                 badItems += bad;
                 // count считает код, а не модель: та могла термина в тексте не
-                // заметить или прислать его несколько раз
+                // заметить или прислать его несколько раз. Правило то же, что в
+                // поиске (findRelevantTerms): нечёткость здесь обрабатывает и
+                // морфологию русских форм («в Секту Небесного Облака»), поэтому
+                // частоты считаются по ней же — точное вхождение недосчитало бы
                 for (const t of chunkTerms) {
                     if (!glossary[t.id]) continue;
                     glossary[t.id].count = (glossary[t.id].count || 0) + 1;
@@ -136,9 +162,11 @@
                 }
             } catch (error) {
                 if (cancelRequested) { canceled = true; emitProgress(i); break; }
-                // битый формат одного чанка не роняет весь прогон, но чанк остаётся
-                // необработанным — поэтому отметка «NER сделан» не ставится
+                // битый формат одного чанка не роняет весь прогон: чанк остаётся
+                // необработанным — отметка nerDone через него не переехает, и при
+                // следующем запуске он переобработается
                 skipped++;
+                missSet.add(i);
                 skippedReason = error.message || 'нет данных';
                 emitProgress(i);
                 continue;
@@ -147,7 +175,7 @@
             // страницы сделанное не теряется
             siteGlossaries[targetKey] = glossary;
             dbPut('g/' + targetKey, glossary);
-            jobPut(targetKey, { url: pageCacheKey(), hash, nerDone: i + 1, nerTotal: chunks.length });
+            jobPut(targetKey, { url: pageCacheKey(), hash, nerDone: i + 1, nerTotal: chunks.length, nerMissed: [...missSet].filter(m => m < i + 1) });
         }
         siteGlossaries[targetKey] = glossary;
         dbPut('g/' + targetKey, glossary);
@@ -157,3 +185,6 @@
     // хвост статуса прогона: модель вернула то, что просила не возвращать; на
     // глоссарий это не повлияло (частоты считает код), но промпт стоит проверить
     const nerViolationNote = res => (res.llmViolations ? ` • нарушений контракта: ${res.llmViolations}` : '');
+    // битые записи ответа (не объекты/без term) отсечены до глоссария; в статусе —
+    // чтобы качество ответа модели было видно, а не только итоговые +N
+    const nerBadItemsNote = res => (res.badItems ? ` • битых записей: ${res.badItems}` : '');
