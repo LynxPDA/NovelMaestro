@@ -7,7 +7,7 @@ const state = { auth: false, host: "", tokenSet: false };
 
 
 /* Предпросмотр markdown/html (Заметки и «Правка» файлов).
-   Кегль — localStorage previewFontSize (не .env: UI-предпочтение).
+   Кегль — localStorage previewFontSize (UI-предпочтение, не конфиг).
    srcdoc-iframe не наследует тему страницы — стили задаём явно. */
 const PREVIEW_FONT_KEY = "previewFontSizeV2"; // старый ключ
 // previewFontSize (дефолт 7) игнорируем — новый дефолт 12px должен
@@ -20,7 +20,7 @@ function getPreviewFontSize() {
   return UICore.clampFont(n, PREVIEW_FONT_OPTIONS, PREVIEW_FONT_DEFAULT);
 }
 
-/* ── Внешний вид: UI-предпочтения в localStorage браузера (не .env —
+/* ── Внешний вид: UI-предпочтения в localStorage браузера (не конфиг —
    12-factor: клиентские настройки живут на клиенте). ── */
 const UI_LOOK_KEY = "uiLookV1";
 const EDITOR_SETTINGS = { ui: "dark", editor: "auto", fontSize: 13 };
@@ -891,10 +891,12 @@ async function viewNotes() {
   );
 }
 
-/* ── Настройки: ОДИН общий .env, поля и метки — из реестра настроек
-   (core/settings.py). Страница собрана карточками-блоками, сгруппированные
-   в субвкладки; своего знания о настройках у SPA нет — метки, типы,
-   варианты и подсказки приходят с сервера. Собственного .env у книги нет:
+/* ── Настройки: страница собрана карточками-блоками реестра
+   (core/settings.py), сгруппированными в субвкладки; своего знания о
+   настройках у SPA нет — метки, типы, варианты, значения и подсказки приходят
+   с сервера. Субвкладок пять: настройки самого веб-сервера — последние блоки
+   первой, отдельного экрана «про конфиг» нет. Шестая, «Внешний вид», локальная:
+   UI-предпочтения браузера в реестре не живут. Собственного .env у книги нет:
    изменённые для одной книги поля запусков живут в браузере. ── */
 async function viewSettings() {
   let d;
@@ -903,10 +905,15 @@ async function viewSettings() {
   } catch (ex) {
     return h("div", { class: "page" }, h("div", { class: "form-error" }, ex.message));
   }
-  const model = { groups: d.groups || [], path: d.path, exists: !!d.exists,
-                  envWins: d.env_wins || [], profiles: d.profiles || [],
-                  profile: d.profile || "general",
-                  profileFile: d.profile_file || "" };
+  // локальная субвкладка: preferences браузера, а не настройки конфига (её в
+  // ответе API нет, поэтому каждое перечитывание реестра дописывает её снова)
+  const uiGroup = { id: "ui", title: "Внешний вид", blocks: [] };
+  const model = {
+    groups: [...(d.groups || []), uiGroup],
+    envWins: d.env_wins || [],
+    profiles: d.profiles || [],
+    profile: d.profile || "general",
+  };
   let active = "";
   try {
     active = localStorage.getItem("settingsTab") || "";
@@ -921,34 +928,33 @@ async function viewSettings() {
     active = model.groups.length ? model.groups[0].id : "";
   }
 
-  const ctl = {}; // ключ .env поля → контрол активной вкладки
+  const ctl = {}; // ключ реестра поля → контрол активной вкладки
   const tabs = h("div", { class: "tabs" });
   const cards = h("div", { class: "settings-cards" });
   const err = h("div", { class: "form-error" });
   const status = h("div", { class: "review-status" });
   const saveBtn = h("button", { class: "btn btn-sm btn-primary" }, "Сохранить");
 
+  /* подпись под кнопкой — только про то, что меняет смысл правки: выбранный
+     профиль и ключи, которые окружение держит поверх страницы. Путь общего
+     конфига экрану не нужен: это реализация, а не настройка */
   function statusText() {
+    if (active === "ui") return "";
     const prof = model.profiles.find((p) => p.id === model.profile);
     if (prof && !prof.builtin) {
-      return `профиль «${prof.name}» · значения только переопределения, `
-        + `остальное — General · файл: ${model.profileFile}`;
+      return `профиль «${prof.name}»: пустые поля наследуют General`;
     }
-    if (!model.path) return "общий конфиг не найден — путь не настроен";
-    if (!model.exists) return `общий конфиг ещё не создан: ${model.path}`;
-    const parts = [`общий конфиг: ${model.path}`];
     if (model.envWins.length) {
-      parts.push(`переменные окружения процесса перекрывают: `
-        + model.envWins.join(", "));
+      return "окружение процесса перекрывает: " + model.envWins.join(", ");
     }
-    return parts.join(" · ");
+    return "";
   }
 
   // контрол поля: тип, варианты и подсказка — из реестра (SPA их не знает)
   function fieldWrap(f) {
     const val = f.value === undefined || f.value === null ? "" : f.value;
     if (f.type === "hidden") return null; // чипсы — состояние UI запусков
-    // name контрола = ключ .env: имена полей стадий не уникальны
+    // name контрола = ключ реестра: имена полей стадий не уникальны
     const id = f.key || f.name;
     if (f.type === "bool") {
       const cb = h("input", { type: "checkbox", class: "checkbox" });
@@ -1105,80 +1111,6 @@ async function viewSettings() {
     );
   }
 
-  function renderTab() {
-    const g = model.groups.find((x) => x.id === active) || model.groups[0];
-    if (!g) return;
-    for (const node of tabs.children) {
-      node.classList.toggle("tab-active", node.getAttribute("data-id") === g.id);
-    }
-    for (const k of Object.keys(ctl)) delete ctl[k];
-    active = g.id;
-    try {
-      localStorage.setItem("settingsProfile", model.profile);
-    } catch {
-      /* нет localStorage — выбор живёт до перезагрузки */
-    }
-    const prof = model.profiles.find((p) => p.id === model.profile) || null;
-    const isLLM = g.id === "llm";
-    const out = [];
-    if (isLLM && model.profiles.length) out.push(profileCard());
-    for (const b of g.blocks || []) {
-      const fields = (b.fields || []).map((f) => {
-        if (!isLLM || !prof || prof.builtin || f.noenv) return f;
-        return { ...f, value: (prof.values || {})[f.key] || "" };
-      });
-      out.push(h(
-        "div",
-        { class: "review-card" },
-        h("div", { class: "review-card-title" }, b.title),
-        h(
-          "div",
-          { class: "review-card-body" },
-          h("div", { class: "settings-fields" }, ...fields.map(fieldWrap)),
-        ),
-      ));
-    }
-    cards.replaceChildren(...out);
-    status.textContent = statusText();
-  }
-
-  for (const g of model.groups) {
-    tabs.appendChild(h("button", {
-      class: "tab", "data-id": g.id, type: "button",
-      onclick: () => {
-        active = g.id;
-        try {
-          localStorage.setItem("settingsTab", g.id);
-        } catch {
-          /* нет localStorage — выбор живёт до перезагрузки */
-        }
-        renderTab();
-      },
-    }, g.title));
-  }
-
-  saveBtn.addEventListener("click", async () => {
-    err.textContent = "";
-    const values = {};
-    for (const [name, c] of Object.entries(ctl)) {
-      values[name] = c.type === "checkbox" ? c.checked : c.value;
-    }
-    try {
-      const r = await api("/settings", {
-        method: "PUT", body: { profile: model.profile, values },
-      });
-      model.path = r.path;
-      model.exists = !!r.exists;
-      model.envWins = r.env_wins || [];
-      model.groups = r.groups || model.groups;
-      renderTab();
-      toast("Настройки сохранены");
-    } catch (ex) {
-      err.textContent = ex.message;
-    }
-  });
-  renderTab();
-
   /* ── внешний вид: тема интерфейса, тема/кегль редакторов —
      UI-предпочтения в localStorage браузера (не .env) ── */
   const edSel = h(
@@ -1239,7 +1171,7 @@ async function viewSettings() {
       h(
         "div",
         { class: "field-help" },
-        "хранится в браузере (localStorage), не в .env — переживает обновление " +
+        "хранится в браузере (localStorage) — переживает обновление образа" +
           "и пересоздание контейнера; тема интерфейса — переключатель 🌙/☀ в " +
           "шапке, он рядом с редакторами и не требует заходить в «Настройки»",
       ),
@@ -1264,35 +1196,107 @@ async function viewSettings() {
         h(
           "div",
           { class: "field-help" },
-          "хранится в браузере (localStorage), не в .env — как тема интерфейса",
+          "хранится в браузере (localStorage) — как тема интерфейса",
         ),
       ),
     ),
   );
+
+  function renderTab() {
+    const g = model.groups.find((x) => x.id === active) || model.groups[0];
+    if (!g) return;
+    for (const node of tabs.children) {
+      node.classList.toggle("tab-active", node.getAttribute("data-id") === g.id);
+    }
+    for (const k of Object.keys(ctl)) delete ctl[k];
+    active = g.id;
+    try {
+      localStorage.setItem("settingsProfile", model.profile);
+    } catch {
+      /* нет localStorage — выбор живёт до перезагрузки */
+    }
+    const prof = model.profiles.find((p) => p.id === model.profile) || null;
+    if (g.id === "ui") {
+      // localStorage-предпочтения: ни общего конфига, ни «Сохранить» здесь нет
+      cards.replaceChildren(lookCard, previewFontCard);
+      status.classList.toggle("hidden", true);
+      saveBtn.classList.toggle("hidden", true);
+      return;
+    }
+    saveBtn.classList.toggle("hidden", false);
+    const out = [];
+    if (model.profiles.length && g.blocks.some((b) => b.llm)) out.push(profileCard());
+    for (const b of g.blocks || []) {
+      const useProf = b.llm && prof && !prof.builtin;
+      const fields = (b.fields || []).map((f) => {
+        if (!useProf || f.noenv) return f;
+        return { ...f, value: (prof.values || {})[f.key] || "" };
+      });
+      out.push(h(
+        "div",
+        { class: "review-card" },
+        h("div", { class: "review-card-title" }, b.title),
+        h(
+          "div",
+          { class: "review-card-body" },
+          h("div", { class: "settings-fields" }, ...fields.map(fieldWrap)),
+        ),
+      ));
+    }
+    cards.replaceChildren(...out);
+    status.textContent = statusText();
+  }
+
+  for (const g of model.groups) {
+    tabs.appendChild(h("button", {
+      class: "tab", "data-id": g.id, type: "button",
+      onclick: () => {
+        active = g.id;
+        try {
+          localStorage.setItem("settingsTab", g.id);
+        } catch {
+          /* нет localStorage — выбор живёт до перезагрузки */
+        }
+        renderTab();
+      },
+    }, g.title));
+  }
+
+  saveBtn.addEventListener("click", async () => {
+    err.textContent = "";
+    const values = {};
+    for (const [name, c] of Object.entries(ctl)) {
+      values[name] = c.type === "checkbox" ? c.checked : c.value;
+    }
+    try {
+      const r = await api("/settings", {
+        method: "PUT", body: { profile: model.profile, values },
+      });
+      model.envWins = r.env_wins || [];
+      // ответ API несёт только реестр: без локальной вкладки открытая
+      // «Внешний вид» исчезла бы и прыгнула на первую
+      model.groups = [...(r.groups || []), uiGroup];
+      renderTab();
+      toast("Настройки сохранены");
+    } catch (ex) {
+      err.textContent = ex.message;
+    }
+  });
+  renderTab();
+
   return h(
     "div",
     { class: "page" },
     h(
       "div",
       { class: "page-header" },
-      h(
-        "div",
-        { class: "page-header-main" },
-        h("h1", { class: "page-title" }, "Настройки"),
-        h(
-          "div",
-          { class: "page-sub" },
-          "один общий .env: значения реестра, правка блоками здесь; " +
-            "изменённые для одной книги поля запусков — состояние браузера",
-        ),
-      ),
+      h("div", { class: "page-header-main" },
+        h("h1", { class: "page-title" }, "Настройки")),
       h("div", { class: "page-header-actions" }, status, saveBtn),
     ),
     tabs,
     cards,
     err,
-    lookCard,
-    previewFontCard,
   );
 }
 
