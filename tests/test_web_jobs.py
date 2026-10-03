@@ -24,12 +24,15 @@ from web.stages import (
 
 REPO = Path(__file__).resolve().parent.parent
 
-# ── фейковый скрипт: печатает 10 строк по 0.1 c, код 0 ─────────────────
+# ── фейковый скрипт: 10 строк с минимальной паузой, код 0 ──────────────
+# Пауза есть, но копеечная: запуск должен быть заметно «живым» для тестов
+# подписки и остановки, а весь набор ждёт его десятки раз — при 0.05 с это
+# полсекунды на каждый завершённый запуск.
 FAKE_SCRIPT = (
     "import sys, time\n"
     "for i in range(10):\n"
     "    print(f'line-{i}', flush=True)\n"
-    "    time.sleep(0.05)\n"
+    "    time.sleep(0.005)\n"
     "sys.exit(0)\n"
 )
 FAKE_FAIL = "import sys\nprint('boom', flush=True)\nsys.exit(3)\n"
@@ -46,15 +49,19 @@ FAKE_PARENT_CHILD = (
     "    time.sleep(1)\n"
 )
 
-# строки лога вперемешку с событиями прогресса @@PROGRESS@@
+# строки лога вперемешку с событиями прогресса @@PROGRESS@@: три события
+# подряд. Живой запуск нужен только тесту про running_jobs — он передаёт путь
+# маркера, и процесс ждёт ровно пока тест не скажет «хватит».
 FAKE_PROGRESS = (
-    "import sys, time\n"
+    "import os, sys, time\n"
     "for i in range(3):\n"
     "    print(f'line-{i}', flush=True)\n"
     "    print('@@PROGRESS@@' + '{\"type\": \"progress\", '"
     "          '\"label\": \"Перевод\", \"done\": %d, \"total\": 3}' "
     "          % (i + 1), flush=True)\n"
-    "    time.sleep(0.05)\n"
+    "if len(sys.argv) > 1:\n"
+    "    while not os.path.exists(sys.argv[1]):\n"
+    "        time.sleep(0.01)\n"
     "sys.exit(0)\n"
 )
 # Кривой JSON под префиксом — должен уйти в буфер строкой, без падения
@@ -114,8 +121,19 @@ def _wait_status(jm, job_id, *statuses, timeout=15.0):
         assert job is not None
         if job.status in statuses:
             return job
-        time.sleep(0.05)
+        time.sleep(0.01)
     raise AssertionError(f"Статус не наступил: {jm.get(job_id).status}")
+
+
+def _wait_line(job, needle: str, timeout: float = 10.0) -> bool:
+    """Ждёт строку лога (а не фиксированный sleep): процесс либо вывел её,
+    либо нет — проверять имеет смысл именно это."""
+    end = time.time() + timeout
+    while time.time() < end:
+        if any(needle in line for line in job.lines):
+            return True
+        time.sleep(0.01)
+    return False
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -236,9 +254,8 @@ def test_stop_terminates(tmp_path, fake_script):
     jm = JobManager(tmp_path, python="python3")
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "hang.py")], tmp_path)
-    _wait_status(jm, job.id, "running")
     # ждём первую строку — процесс точно жив
-    time.sleep(0.3)
+    assert _wait_line(job, "start"), "запуск не вывел ни одной строки"
     jm.stop(job.id)
     job = _wait_status(jm, job.id, "stopped", "done", "failed")
     assert job.status in ("stopped", "done", "failed")
@@ -449,21 +466,23 @@ def test_dashboard_progress(tmp_path, fake_script):
     from web.api import _dashboard
 
     jm = JobManager(tmp_path, python="python3")
+    marker = tmp_path / "progress-stop"
     job = jm.start("translate", "Перевод", "ACTIVE/x",
-                   [str(fake_script / "progress.py")], tmp_path)
+                   [str(fake_script / "progress.py"), str(marker)], tmp_path)
     ctx = {"job_manager": jm, "projects_root": tmp_path}
     # пока запуск жив — running_jobs (payload) несёт progress
     running = []
-    for _ in range(100):
+    for _ in range(200):
         d = _dashboard(ctx)
         running = [j for j in d.get("running_jobs", [])
                    if j["id"] == job.id]
         if running and running[0].get("progress"):
             break
-        time.sleep(0.05)
+        time.sleep(0.01)
     assert running, "активный запуск должен быть в running_jobs"
     assert running[0].get("progress"), "running_jobs без progress"
     assert running[0]["progress"]["done"] >= 1
+    marker.write_text("", encoding="utf-8")  # запуск больше не нужен
     _wait_status(jm, job.id, "done")
     # после завершения — recent_jobs (_serialize) тоже с progress
     d2 = _dashboard(ctx)
@@ -595,6 +614,7 @@ def test_orphan_watcher_marks_dead(tmp_path, fake_script, monkeypatch):
     job.pid = 999999999
     job.proc = None
     job.finished = None
+    jm._start_watch()  # сирота изображён постфактум — включаем наблюдатель
     job = _wait_status(jm, job.id, "failed")
     assert job.exit_code == 1
     assert job.finished is not None
@@ -618,6 +638,7 @@ def test_orphan_watcher_ignores_live(tmp_path, fake_script, monkeypatch):
         _wait_status(jm, job.id, "running")
         job.proc = None
         job.pid = sleeper.pid
+        jm._start_watch()  # сирота изображён постфактум — включаем наблюдатель
         time.sleep(0.3)  # несколько циклов наблюдателя
         cur = jm.get(job.id)
         assert cur is not None and cur.status == "running"
@@ -1792,6 +1813,9 @@ def jobs_srv(tmp_path, fake_script):
         return res, payload
 
     yield srv.server_address[1], _req, jm
+    # флагом остановки делимся фоново: sync shutdown() спит до
+    # poll_interval, а без него accept-цикл крутится вхолостую
+    threading.Thread(target=srv.shutdown, daemon=True).start()
     srv.server_close()
 
 

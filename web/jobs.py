@@ -45,7 +45,8 @@ STOP_GRACE = 5.0  # секунд между terminate и kill
 TASKKILL_TIMEOUT = 10.0
 SSE_PING = 15.0  # секунд между ping в стриме
 # B1: период опроса «сирот» — running-запусков без reader'а (после
-# рестарта сервера); смерть pid → статус failed + persist
+# рестарта сервера); смерть pid → статус failed + persist. Наблюдатель с этим
+# интервалом живёт только пока сироты есть (см. JobManager._start_watch)
 ORPHAN_POLL = 5.0
 
 # Префиксы структурированных событий в stdout (JSON после него).
@@ -210,11 +211,28 @@ class JobManager:
             Path(__file__).resolve().parents[1]
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
+        self._watch_started = False
         self._load()
         self._cleanup_orphans()
         self._trim_history()
-        # B1: фоновый наблюдатель сирот (daemon — не держит процесс)
-        threading.Thread(target=self._orphan_watch, daemon=True).start()
+        self._start_watch()
+
+    def _start_watch(self) -> None:
+        """B1: фоновый наблюдатель сирот (daemon — не держит процесс).
+
+        Один на менеджер и только когда смотреть действительно есть чего:
+        running-запуск без reader-потока. Поднимать поток на каждый
+        экземпляр значило бы оставлять в тестовом прогоне сотни живых
+        наблюдателей."""
+        if self._watch_started:
+            return
+        orphans: list[Job] = [job for job in self._jobs.values()
+                              if job.status == "running" and job.proc is None]
+        if not orphans:
+            return
+        self._watch_started = True
+        threading.Thread(target=self._orphan_watch, name="jobs-orphan-watch",
+                         daemon=True).start()
 
     # ── персистентность ─────────────────────────────────────
     def _store_path(self) -> Path:
