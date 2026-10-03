@@ -981,8 +981,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // ── ner_check: чипсы типов из глоссария (вместо select/text) ──
-  // Общие для простого и экспертного режимов: чипсы грузят типы из
-  // глоссария (GET /api/ner); выбор проходов — обычный select «Проходы».
+  // Чипсы грузят типы из глоссария (GET /api/ner); выбор проходов —
+  // обычный select «Проходы».
   // Возвращает {chipsBar, chipsBox, guide, loadTypes}.
   function nerCheckWidgets(key) {
 
@@ -1723,8 +1723,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // ── диапазон глав: ЕДИНАЯ строка «Главы: [start] – [end]» ────────────
-  // для обоих режимов (простой/экспертный); значения пишутся в
-  // st.values[key].start/end как и раньше (buildParams их собирает).
+  // одна на все стадии; значения пишутся в st.values[key].start/end
+  // (buildParams собирает их как обычные поля).
   // Возвращает null, если стадия не принимает start/end.
   function buildRangeRow(key, spec) {
     const hasRange = (spec.fields || []).some(
@@ -2000,8 +2000,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       applyRagExpert();
     }
 
-    // epub (экспертный): справка по regexp (collapsible) + перестройка
-    // селекта исходника при смене режима (расширения зависят от режима)
+    // epub: справка по regexp (collapsible) + перестройка селекта
+    // исходника при смене режима (расширения зависят от режима)
     if (key === "epub") {
       const modeSel =
         fieldWraps["mode"] && fieldWraps["mode"]._input;

@@ -49,11 +49,12 @@ def test_js_syntax(name):
     assert r.returncode == 0, f"node --check {name}:\n{r.stderr}"
 
 
-def test_run_views_expert_form_not_async():
-    """Регрессия «[object Promise]»: expertForm рендерит DOM синхронно
+def test_run_views_stage_form_not_async():
+    """Регрессия «[object Promise]»: stageForm рендерит DOM синхронно
     (formPanel вставляет результат как узел) — async вернул бы Promise."""
     src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
-    assert "async function expertForm" not in src
+    assert "async function stageForm" not in src
+    assert "function stageForm(key, spec)" in src
 
 
 def test_run_views_stream_ctrl_let():
@@ -172,7 +173,7 @@ def test_ner_check_rag_ui_present():
     кнопка «Добавить спорные»; отдельный RAG-промпт-файл убран —
     RAG-промпт живёт в общем «Промпт-файле» (тег <prompt_rag>)."""
     rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
-    # RAG-поля строятся и прячутся по режиму (и простой, и экспертный)
+    # RAG-поля строятся и прячутся по режиму ner_check
     assert "rag_source_type" in rv
     assert "rag_budget" in rv
     assert "rag_prompt_file" not in rv  # дубль убран
@@ -231,8 +232,7 @@ def test_glossary_dispute_removed():
 def test_run_views_preview_request():
     """Запуски: кнопка «Предпросмотр запроса» — только у LLM-стадий
     (spec.preview); модалка — POST /stages/{key}/preview-request, сводка
-    символов + messages. Режим «Простой/Экспертный» удалён: форма одна,
-    модалка зовётся без mode."""
+    символов + messages. Форма стадии одна — модалка вызывается без режима."""
     src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
     # кнопка: по флагу спеки, ghost, в единой форме стадии
     assert "spec.preview" in src
@@ -243,7 +243,7 @@ def test_run_views_preview_request():
     assert "`/stages/${key}/preview-request`" in src
     assert "previewRequestView(" in src
     assert "d.chars" in src and "d.messages" in src
-    # «Простого режима» больше нет: ни переключателя, ни пресет-карточки
+    # режимов формы нет: ни переключателя, ни пресет-карточки
     assert "runMode" not in src and "simplePanel" not in src
     assert "localFieldBadge" not in src
 

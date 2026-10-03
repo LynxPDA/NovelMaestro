@@ -285,8 +285,8 @@ def test_build_stage_cmd_ner_fields(tmp_path):
 
 
 def test_build_pipeline_chunk_size_argv():
-    """размер чанка из экспертной формы — в argv оркестратора; пусто —
-    без флага (CLI-дефолт pipeline.py: PIPELINE_CHUNK_SIZE → 7000)."""
+    """размер чанка из формы — в argv оркестратора; пусто — без флага
+    (CLI-дефолт pipeline.py: PIPELINE_CHUNK_SIZE → 7000)."""
     ctx: dict = {}
     base = {"action": "8", "host": "http://h", "model": "m",
             "api_key": "k"}
@@ -311,14 +311,14 @@ def test_build_pipeline_ner_fields_argv():
 
 
 def test_pipeline_spec_chunk_size_field():
-    """поле chunk_size — в экспертной форме pipeline (не в simple),
-    единица — ТОКЕНЫ (оценка); проброс в argv покрыт отдельным тестом."""
+    """поле chunk_size формы pipeline: единица — ТОКЕНЫ (оценка);
+    проброс в argv покрыт отдельным тестом."""
     spec = spec_for("pipeline")
     assert spec is not None
     f = next(x for x in spec["fields"] if x["name"] == "chunk_size")
     assert "ТОКЕНЫ" in f["label"]
     assert f["default"] == "7000"
-    assert "chunk_size" not in spec.get("simple", [])
+    assert f["type"] == "number"
 
 
 def test_pipeline_extended_action_specs():

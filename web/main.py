@@ -72,10 +72,10 @@ def _cfg() -> dict:
 
 def _int(cfg: dict, name: str) -> int:
     """Число из конфига; мусор в конфиге — warning и дефолт реестра."""
-    raw = cfg.get(name)
+    raw = str(cfg.get(name, ""))
     try:
         return int(raw)
-    except (TypeError, ValueError):
+    except ValueError:
         default = core_settings.BY_KEY[name.upper()].default
         log.warning("%s=%r не число, берём дефолт реестра %r", name, raw, default)
         return int(default)
