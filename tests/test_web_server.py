@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Тесты web-сервера (M1): сессия, вход, статика, CSRF, 404/405, no-auth.
+"""Тесты web-сервера: сессия, вход, статика, CSRF, 404/405, no-auth.
 
-Сервер поднимается в фоновом потоке на свободном порту; запросы — http.client
-без внешних зависимостей и без сети.
+Сервер поднимается в фоновом потоке на свободном порту; запросы — общим
+HTTP-транспортом (conftest), а putrequest-блоки оставлены напрямую: там
+проверяются именно сырые запросы (нормализация пути, keep-alive, заголовки).
 """
 import http.client
-import json
 import threading
-from typing import Any
 
 import pytest
+
+from conftest import http_request as _request
 
 from web import api as web_api
 from web.auth import Auth
@@ -39,33 +40,6 @@ def srv_ctx():
         # (0.5 с) на каждый сервер, а тесту ждать нечего
         threading.Thread(target=srv.shutdown, daemon=True).start()
         srv.server_close()
-
-
-def _request(port, method, path, body=None, cookie=None,
-             xrw: str | None = "fetch") -> tuple[Any, dict]:
-    """Запрос к серверу; возвращает (response, payload)."""
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-    headers = {}
-    if cookie:
-        headers["Cookie"] = cookie
-    if xrw is not None:
-        headers["X-Requested-With"] = xrw
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    conn.request(method, path, data, headers)
-    res = conn.getresponse()
-    raw = res.read()
-    conn.close()
-    payload: dict = {}
-    try:
-        decoded = json.loads(raw.decode("utf-8"))
-        if isinstance(decoded, dict):
-            payload = decoded
-    except (ValueError, UnicodeDecodeError):
-        pass
-    return res, payload
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -274,7 +248,6 @@ def test_static_app_js(srv_ctx):
 
 def test_static_index_links_split_js(srv_ctx):
     """index.html подключает все три JS-файла разбитого app.js."""
-    import http.client
     _, port = srv_ctx(Auth("t"))
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     conn.request("GET", "/", headers={"X-Requested-With": "fetch"})
@@ -327,7 +300,6 @@ def test_static_prefix_sibling_rejected(srv_ctx, tmp_path, monkeypatch):
 
 def test_negative_content_length_rejected(srv_ctx):
     """Content-Length: -1 → 400, а не зависание read(-1) до EOF."""
-    import http.client
     # no-auth: 401 не должен маскировать проверку Content-Length
     _, port = srv_ctx(Auth(no_auth=True))
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)

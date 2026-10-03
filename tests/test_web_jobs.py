@@ -15,6 +15,7 @@ from typing import cast
 
 import pytest
 
+from conftest import http_request
 from core import settings as core_settings
 from web.jobs import Job, JobManager, RING_SIZE
 from web.stages import (
@@ -1790,27 +1791,9 @@ def jobs_srv(tmp_path, fake_script):
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
 
-    import http.client
     def _req(method, path, body=None):
-        conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1],
-                                          timeout=10)
-        headers = {"X-Requested-With": "fetch"}
-        data = None
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        conn.request(method, path, data, headers)
-        res = conn.getresponse()
-        raw = res.read()
-        conn.close()
-        payload = {}
-        try:
-            decoded = json.loads(raw.decode("utf-8"))
-            if isinstance(decoded, dict):
-                payload = decoded
-        except (ValueError, UnicodeDecodeError):
-            pass
-        return res, payload
+        """Запрос к тестовому серверу: общим транспортом (conftest)."""
+        return http_request(srv.server_address[1], method, path, body)
 
     yield srv.server_address[1], _req, jm
     # флагом остановки делимся фоново: sync shutdown() спит до
@@ -2385,7 +2368,9 @@ def test_pipeline_options_auto_prompt(jobs_srv, tmp_path):
 
 
 def test_stream_sse(jobs_srv, fake_script):
-    """SSE: буфер + живые строки + статус; конец — EOF без мусора."""
+    """SSE: буфер + живые строки + статус; конец — EOF без мусора.
+
+    Ответ читается посимвольно и напрямую: это стрим, а не JSON-запрос."""
     import http.client
     port, req, jm = jobs_srv
     job = jm.start("test", "Тест", "ACTIVE/x",

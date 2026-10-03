@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Тесты M7: NER-вьювер, review-флоу, env-редактор, metadata, промпты.
+"""Тесты доменных хендлеров: NER-вьювер, review-флоу, настройки, metadata,
+промпты, обложка, логи.
 
-Все хендлеры — через реальный HTTP-сервер (без сети, tmp_path).
-Секреты: env-тесты пишут фейковый .env во временную папку и проверяют,
-что значения НЕ возвращаются (только ключи и маска ••••).
+Все хендлеры — через реальный HTTP-сервер (без сети, tmp_path); транспорт —
+общий (conftest.http_request). Секреты: тесты настроек пишут фейковый .env во
+временную папку и проверяют, что значения НЕ возвращаются (маска ••••).
 """
 import json
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
 import pytest
 
+from conftest import http_request
 from core import common as core_common
 from web import api as web_api
 from web.auth import Auth
@@ -52,17 +52,14 @@ def srv(tmp_path):
 
 
 def _request(port, method, path, body=None):
-    data = json.dumps(body).encode() if body is not None else None
-    url = f"http://127.0.0.1:{port}{path}"
-    req = urllib.request.Request(url, data=data, method=method)
-    if data:
-        req.add_header("Content-Type", "application/json")
-    req.add_header("X-Requested-With", "fetch")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        return {"__error__": e.code, "__body__": e.read().decode()}
+    """Запрос к серверу — общим транспортом (conftest).
+
+    Здесь ответ нужен одним значением: JSON — словарём, HTTP-ошибка — тем же
+    словарём под маркерами __error__/__body__, которые и сверяют проверки."""
+    res, payload = http_request(port, method, path, body)
+    if res.status >= 400:
+        return {"__error__": res.status, "__body__": res.raw_text}
+    return payload
 
 
 def _mk_project(root, name="ACTIVE/demo"):

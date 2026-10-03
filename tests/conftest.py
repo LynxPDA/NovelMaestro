@@ -3,14 +3,20 @@
 """Общие фикстуры и пути для всего тестового набора.
 
 Хелперы, доступные всем тестам (импорт `from conftest import ...`):
-- SilentLog — логгер-заглушка;
+- SilentLog — логгер-заглушка для функций, требующих logger;
 - make_ru_chapter_file — русский текст нужного размера;
 - feed — эмуляция ввода через подмену input();
-- fake_env — минимальный .env во временной папке."""
+- fake_env — минимальный .env во временной папке;
+- http_send / http_request / json_payload — единый HTTP-транспорт
+  web-тестов: одно соединение на запрос, тело — байтами и текстом на ответе
+  (res.raw_bytes / res.raw_text), JSON-ответ — словарём."""
+import http.client
+import json
 import os
 import socket
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -100,6 +106,56 @@ def fake_env(tmp_path) -> str:
                    "API_KEY=testkey\n"
                    "MODEL=testmodel\n", encoding="utf-8")
     return str(env)
+
+
+def http_send(port: int, method: str, path: str,
+              body: bytes | None = None,
+              headers: dict | None = None) -> tuple[Any, bytes]:
+    """Низовой запрос к 127.0.0.1:port; возвращает (response, тело).
+
+    Единственный транспорт web-тестов: на нём построены http_request (JSON)
+    и multipart-хелпер файловых тестов. Текст и байты тела дублируются на
+    ответе (res.raw_text/res.raw_bytes): частью проверок нужен сам ответ.
+    """
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    conn.request(method, path, body, headers or {})
+    res = conn.getresponse()
+    raw = res.read()
+    conn.close()
+    res.raw_bytes = raw
+    try:
+        res.raw_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        res.raw_text = ""
+    return res, raw
+
+
+def json_payload(raw: bytes) -> dict:
+    """Тело ответа как JSON-объект; текст и битый JSON — пустой словарь."""
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def http_request(port: int, method: str, path: str, body: Any = None,
+                 cookie: str | None = None,
+                 xrw: str | None = "fetch") -> tuple[Any, dict]:
+    """JSON-запрос к серверу; возвращает (response, payload-словарь).
+
+    cookie — заголовок сессии, xrw=None — запрос без X-Requested-With."""
+    headers = {}
+    if cookie:
+        headers["Cookie"] = cookie
+    if xrw is not None:
+        headers["X-Requested-With"] = xrw
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    res, raw = http_send(port, method, path, data, headers)
+    return res, json_payload(raw)
 
 
 def ensure_tmp(tmp_path):

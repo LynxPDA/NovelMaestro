@@ -16,6 +16,8 @@ from typing import Any, Callable
 
 import pytest
 
+from conftest import (http_request as _request, http_send,
+                      json_payload)
 from web import api as web_api
 from web.auth import Auth
 from web.server import make_server
@@ -69,31 +71,6 @@ def tpl_srv(srv_ctx, tmp_path):
         return srv, port, repo / "templates"
 
     yield _make
-
-
-def _request(port, method, path, body=None,
-             xrw: str | None = "fetch") -> tuple[Any, dict]:
-    """Запрос к серверу; возвращает (response, payload)."""
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    headers = {}
-    if xrw is not None:
-        headers["X-Requested-With"] = xrw
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    conn.request(method, path, data, headers)
-    res = conn.getresponse()
-    raw = res.read()
-    conn.close()
-    payload: dict = {}
-    try:
-        decoded = json.loads(raw.decode("utf-8"))
-        if isinstance(decoded, dict):
-            payload = decoded
-    except (ValueError, UnicodeDecodeError):
-        pass
-    return res, payload
 
 
 def _create_project(port, projects_root, section="ACTIVE", name="test_book",
@@ -592,13 +569,10 @@ def test_templates_upload_download_mkdir(tpl_srv):
         t = next(x for x in payload["templates"] if x["name"] == name)
         assert "prompts/up.txt" in t["files"]
         # download — сырой ответ с attachment
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-        conn.request("GET", f"/api/templates/{name}/download?path="
-                            "prompts/up.txt",
-                     headers={"X-Requested-With": "fetch"})
-        res = conn.getresponse()
-        raw = res.read()
-        conn.close()
+        res, raw = http_send(
+            port, "GET",
+            f"/api/templates/{name}/download?path=prompts/up.txt",
+            headers={"X-Requested-With": "fetch"})
         assert res.status == 200
         assert raw == "содержимое".encode("utf-8")
         assert "attachment" in (res.getheader("Content-Disposition") or "")
@@ -925,7 +899,10 @@ def test_auth_required_for_projects_api(srv_ctx):
 def _multipart_request(port, path, fields: list[tuple[str, str]],
                        files: list[tuple[str, str, bytes]],
                        xrw: str | None = "fetch") -> tuple[Any, dict]:
-    """Сырой multipart-запрос (boundary='BOUND'), JSON-ответ."""
+    """Сырой multipart-запрос (boundary='BOUND'), JSON-ответ как словарь.
+
+    Тот же транспорт, что у http_request: тело собирается здесь, а ответ
+    разбирает общий json_payload."""
     boundary = "BOUND"
     body = b""
     for name, value in fields:
@@ -938,22 +915,11 @@ def _multipart_request(port, path, fields: list[tuple[str, str]],
                  f"filename=\"{fname}\"\r\n"
                  f"Content-Type: {ctype}\r\n\r\n").encode("utf-8") + data + b"\r\n"
     body += f"--{boundary}--\r\n".encode("utf-8")
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
     if xrw is not None:
         headers["X-Requested-With"] = xrw
-    conn.request("POST", path, body, headers)
-    res = conn.getresponse()
-    raw = res.read()
-    conn.close()
-    payload: dict = {}
-    try:
-        decoded = json.loads(raw.decode("utf-8"))
-        if isinstance(decoded, dict):
-            payload = decoded
-    except (ValueError, UnicodeDecodeError):
-        pass
-    return res, payload
+    res, raw = http_send(port, "POST", path, body, headers)
+    return res, json_payload(raw)
 
 
 def _file_project(port, projects_root) -> Path:
@@ -1569,13 +1535,10 @@ def test_multipart_fields_file_limit_spool(srv_ctx):
 def test_download_attachment(srv_ctx):
     _, port, projects_root = srv_ctx()
     _file_project(port, projects_root)
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    conn.request("GET", "/api/download?project=ACTIVE/test_book"
-                         "&path=source/hello.txt",
-                 headers={"X-Requested-With": "fetch"})
-    res = conn.getresponse()
-    raw = res.read()
-    conn.close()
+    res, raw = http_send(
+        port, "GET",
+        "/api/download?project=ACTIVE/test_book&path=source/hello.txt",
+        headers={"X-Requested-With": "fetch"})
     assert res.status == 200
     assert res.getheader("Content-Disposition", "").startswith(
         'attachment; filename="hello.txt"')
