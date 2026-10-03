@@ -10,8 +10,8 @@ api_glossary (глоссарий и review), api_env (настройки из р
 стадии) и api_templates (шаблоны). Имена роутов и таблицы web/README.md
 не меняются.
 
-Порядок регистрации роутов исторический и сохраняется: hub → files → m7 →
-logs → check → templates → jobs.
+Порядок регистрации роутов исторический и сохраняется: hub → files →
+glossary → settings → logs → check → templates → jobs.
 
 Реэкспорт ниже нужен не для красоты: тесты и web/main.py работают через
 `api.<имя>`, а общие состояния (кеши статистики и опций стадий, имена файлов
@@ -52,7 +52,7 @@ def register(router: Router, host: str) -> None:
     router.add("POST", "/api/logout", api_common._logout)
     api_projects._register_hub(router)
     api_files._register_files(router)
-    api_glossary._register_m7(router)
+    api_glossary._register_glossary(router)
     api_env._register_settings(router)
     api_assets._register_logs(router)
     api_assets._register_check(router)

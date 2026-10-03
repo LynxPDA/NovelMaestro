@@ -295,7 +295,7 @@ git add -A && git commit -m "…" && git push origin
 - `tests/test_web_pipeline.py` — web-оркестратор `web/pipeline.py`: спека стадии, e2e на фейковом движке (события `@@CHAPTER@@`, fail-fast, общий лог), `Tracker`, `build_stage_cmd`, `grep_errors`, `process_chapter`, `main`;
 - `tests/test_web_api.py` — пульт и проекты (CRUD, `hub_state`), файлы, глоссарий и review, настройки и профили, шаблоны;
 - `tests/test_web_jobs.py` — `web/jobs.py` и jobs/stages API: JobManager, буфер, очередь, SSE, stop и сироты, `build_command`;
-- `tests/test_web_m7.py` — промпты, обложка, логи и отчёты translate_check;
+- `tests/test_web_content.py` — промпты, обложка, логи и отчёты translate_check;
 - `tests/test_web_server.py` — сервер: сессия, вход, статика, CSRF, 404/405, no-auth;
 - `tests/test_web_sandbox.py` — `web/sandbox.py`: запрет абсолютных путей и `..`, симлинк-побег, NUL, `resolve_repo_path`;
 - `tests/test_web_state.py` — `web/state.py`: `hub_state` (roundtrip, мусор, не-словарь, ошибка записи);

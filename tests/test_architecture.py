@@ -54,7 +54,9 @@ def test_web_api_is_facade():
     assert "def _session" not in api, "хендлер вернулся в фасад"
     for d in API_DOMAINS:
         assert (ROOT / "web" / f"api_{d}.py").is_file(), f"нет web/api_{d}.py"
-    assert "_register_hub(router)" in api and "_register_jobs(router)" in api
+    assert ("_register_hub(router)" in api
+            and "_register_glossary(router)" in api
+            and "_register_jobs(router)" in api), "регистраторы роутов — по доменам"
 
 
 def test_web_api_shared_state_defined_once():

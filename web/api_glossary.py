@@ -218,7 +218,7 @@ def _tcl_review_apply(ctx: dict) -> dict:
     return _review_apply(ctx, "translate_check_llm")
 
 
-def _register_m7(router: Router) -> None:
+def _register_glossary(router: Router) -> None:
     router.add("GET", "/api/ner", _ner_get)
     router.add("GET", "/api/ner/export", _ner_export)
     router.add("PUT", "/api/ner", _ner_put)
