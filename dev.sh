@@ -78,6 +78,8 @@ cmd_test() {
 # вовсе. Конфиг замера генерируется здесь же и держит АБСОЛЮТНЫЕ пути: source из
 # конфига в репо резолвится от cwd процесса, а у движка стадии cwd — папка книги,
 # поэтому его данные выходили пустыми (web/pipeline.py давал 32% вместо 61%).
+# Данные замера — в служебной папке .tmp/ (вместе с кэшем pytest, см. pytest.ini):
+# корень репо остаётся чистым.
 cmd_cov() {
     activate
     if ! python3 -c "import coverage" >/dev/null 2>&1; then
@@ -85,7 +87,8 @@ cmd_cov() {
         exit 3
     fi
     normalize_test_args "$@"
-    local site status=0
+    local site status=0 cache="$REPO/.tmp"
+    mkdir -p "$cache"
     site="$(mktemp -d "${TMPDIR:-/tmp}/nm-cov-site.XXXXXX")"
     printf '%s\n' \
         '# Автозапуск сбора покрытия в дочерних процессах (dev.sh cmd_cov).' \
@@ -105,19 +108,19 @@ source =
     $REPO/web
     $REPO/run.py
 EOF
-    local -a rc=("--rcfile=$site/coveragerc" "--data-file=$REPO/.coverage")
-    rm -f "$REPO/.coverage" "$REPO"/.coverage.*
+    local -a rc=("--rcfile=$site/coveragerc" "--data-file=$cache/coverage")
+    rm -f "$cache/coverage" "$cache"/coverage.*
     export COVERAGE_PROCESS_START="$site/coveragerc"
     # COVERAGE_FILE тоже абсолютный: иначе дочерний процесс пишет свой файл
     # данных в свой cwd (папку книги) и он до combine не доходит.
-    export COVERAGE_FILE="$REPO/.coverage"
+    export COVERAGE_FILE="$cache/coverage"
     export PYTHONPATH="$site${PYTHONPATH:+:$PYTHONPATH}"
     log "собираю покрытие: pytest ${TEST_ARGS[*]}"
     python3 -m coverage run --parallel-mode "${rc[@]}" -m pytest "${TEST_ARGS[@]}" -q || status=$?
     python3 -m coverage combine "${rc[@]}" >/dev/null
     python3 -m coverage report "${rc[@]}" | tail -n 22
     rm -rf "$site"
-    log "по строкам: python3 -m coverage report --data-file=$REPO/.coverage --show-missing"
+    log "по строкам: python3 -m coverage report --data-file=$REPO/.tmp/coverage --show-missing"
     exit "$status"
 }
 
@@ -164,6 +167,11 @@ cmd_clean() {
     else
         log "venv не создан"
     fi
+    # служебная папка разработки: кэш pytest и данные покрытия (cmd_cov)
+    if [ -d "$REPO/.tmp" ]; then
+        rm -rf "$REPO/.tmp"
+        log "служебная папка удалена: $REPO/.tmp"
+    fi
 }
 
 usage() {
@@ -176,12 +184,13 @@ dev.sh — разработка NovelMaestro в venv (Linux/macOS/WSL)
                         ровно они (например: ./dev.sh test -n 0 tests/test_ner.py)
   ./dev.sh cov [args]   то же, но под coverage: отчёт покрытия вместе с движками
                         стадий (подпроцессы); аргументы — как у test
+                        (данные замера — в .tmp/coverage, кэш pytest — в .tmp/pytest)
   ./dev.sh run [args]   web-сервер (args пробрасываются в run.py)
   ./dev.sh probe [args] обход SPA headless-браузером (свой сервер, временные данные);
                         --shot — скриншоты в logs/ui_probe/ (правка UI без прогона не закрыта)
   ./dev.sh spa          node --check по static/*.js + node --test tests/spa/
   ./dev.sh shell        bash с активированным venv
-  ./dev.sh clean        удалить .venv
+  ./dev.sh clean        удалить .venv и служебную папку .tmp/ (кэш тестов, покрытие)
 
 Переменные окружения:
   NOVELMAESTRO_VENV     путь к venv (по умолчанию <репо>/.venv)

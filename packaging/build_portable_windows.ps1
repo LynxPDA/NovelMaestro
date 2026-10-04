@@ -88,9 +88,10 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "pyahocorasick OK"
 }
 
-# ── 5. Копируем репозиторий (без данных/тестов/мусора) ─────────────
+# ── 5. Копируем репозиторий (без данных, тестов и артефактов разработки:
+#         кэш pytest и данные покрытия лежат в .tmp/) ─────────────
 Write-Host "Копирую репозиторий…"
-robocopy $root $portable /E /XD .git .github projects tests servers Images backup __pycache__ .venv logs job_logs .pytest_cache dist /XF .env *.pyc *.log TODO.md /NFL /NDL /NJH /NJS /NP
+robocopy $root $portable /E /XD .git .github projects tests servers Images backup __pycache__ .venv logs job_logs .tmp .ruff_cache dist /XF .env pytest.ini *.pyc *.log TODO.md /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy: ошибка копирования (код $LASTEXITCODE)" }
 
 # ── 6. start.bat (только ASCII: cmd читает bat в кодовой странице

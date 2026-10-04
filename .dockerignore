@@ -1,22 +1,37 @@
-# В образ не попадают: данные, история запусков, тесты, git, окружения.
+# В образ не попадают: данные, история запусков, тесты и инструменты разработки,
+# git, окружения. Комментарий — только с новой строки: «#» в середине строки docker
+# считает частью правила.
+
+# git и CI
 .git
 .github
+
+# данные и история запусков
 projects/
 servers/
 Images/
 backup/
-tests/
 logs/
 web/job_logs/
+*.log
+
+# тесты и инструменты разработки
+tests/
+pytest.ini
 __pycache__/
 *.pyc
-.pytest_cache/
+# кэш pytest и данные покрытия (.tmp/pytest, .tmp/coverage)
+.tmp/
+.ruff_cache/
 .venv/
 venv/
 .env
-!templates/.env.example   # шаблон конфига нужен в образе (entrypoint)
-*.log
 node_modules/
 .pi-lens.json
 TODO.md
+
+# вывод локальных сборок
 dist/
+
+# шаблон конфига нужен в образе: entrypoint берёт его как заготовку
+!templates/.env.example

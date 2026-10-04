@@ -231,3 +231,29 @@ def test_web_main_serves(srv_port):
         except subprocess.TimeoutExpired:
             p.kill()
             p.wait(timeout=5)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Артефакты разработки: кэш тестов и покрытие живут в .tmp/, а не в корне
+# ══════════════════════════════════════════════════════════════════════
+def test_dev_cache_lives_in_one_folder():
+    """pytest-кэш и данные покрытия не сорят в корень: pytest.ini ведёт кэш в
+    .tmp/pytest, dev.sh cmd_cov — данные замера в тот же .tmp/; ignore-файлы
+    и сборка Windows ссылаются на одну папку, а на старые файлы корня."""
+    assert "cache_dir = .tmp/pytest" in (ROOT / "pytest.ini").read_text(
+        encoding="utf-8"), "кэш pytest обязан уезжать в .tmp/"
+    assert "$REPO/.coverage" not in (ROOT / "dev.sh").read_text(
+        encoding="utf-8"), "данные покрытия обязаны лежать в .tmp/"
+    for rel in (".gitignore", ".dockerignore"):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert ".tmp/" in text, f"{rel}: служебная папка .tmp/ не описана"
+        assert ".pytest_cache" not in text, f"{rel}: устаревший кэш в корне"
+        assert ".coverage" not in text, f"{rel}: устаревший файл покрытия в корне"
+    ps1 = (ROOT / "packaging" / "build_portable_windows.ps1").read_text(
+        encoding="utf-8")
+    assert ".pytest_cache" not in ps1, \
+        "портативная сборка: исключать надо .tmp/, а не .pytest_cache"
+    assert not (ROOT / ".pytest_cache").exists(), \
+        "в корне осталась папка кэша pytest"
+    assert not list(ROOT.glob(".coverage*")), \
+        "в корне остались файлы данных покрытия"

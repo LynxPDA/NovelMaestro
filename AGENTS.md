@@ -67,6 +67,7 @@ run.py    лаунчер: --host/--port/--auth/--token/--max-upload-mb/--jobs-li
           --projects-dir/--no-open.
 projects/ <раздел>/<книга>/ — данные проектов (НЕ в git).
 tests/    pytest; карта — в §10.
+.tmp/     артефакты разработки: кэш pytest и данные покрытия (НЕ в git).
 ```
 
 Правило слоёв:
@@ -237,7 +238,7 @@ Regexp-поля форм и CLI — чистые стандартные выра
 ./dev.sh test -n 0 tests/test_ner.py              # один файл последовательно — для отладки
 ./dev.sh spa                                      # SPA: node --check по всем файлам + node --test tests/spa/
 ./dev.sh probe --shot                             # UI: обход экранов + скриншоты в logs/ui_probe/
-./dev.sh cov                                      # покрытие (движки стадий считаются тем же прогоном)
+./dev.sh cov                                      # покрытие (движки стадий считаются тем же прогоном); кэш тестов и данные замера — в .tmp/
 python3 run.py                                    # web-интерфейс (сервер + браузер)
 python3 web/main.py --help                        # флаги сервера
 python3 cli/translate_book.py --help              # единый LLM-скрипт

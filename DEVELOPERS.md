@@ -34,6 +34,7 @@ templates/ шаблоны новых проектов: общие (.env.example 
 run.py    лаунчер: python3 run.py → web/main.py (+браузер).
 projects/ <раздел>/<книга>/ — данные проектов (НЕ в git).
 tests/    pytest P0–P2 (один модуль — один файл тестов).
+.tmp/     артефакты разработки: кэш pytest и данные покрытия (НЕ в git).
 ```
 
 Правила слоёв:
@@ -247,9 +248,11 @@ python3 tools/build_userscripts.py --list            # версии и числ�
 ./dev.sh test -n 0 tests/test_ner.py               # один файл в одном процессе (только для отладки)
 ./dev.sh spa                                       # SPA: node --check по static/*.js + node --test tests/spa/
 ./dev.sh probe --shot                              # UI: обход экранов headless-браузером + скриншоты
-python3 -m pytest tests/ -q --cov=core --cov=cli --cov=web  # покрытие
+./dev.sh cov                                       # покрытие (данные замера — в .tmp/coverage)
+./dev.sh clean                                     # удалить .venv и .tmp/ (кэш тестов, покрытие)
 ```
 
+- **Артефакты прогонов — в одной папке.** Кэш pytest (`.tmp/pytest`, см. `pytest.ini`) и данные покрытия (`.tmp/coverage`, их пишет `dev.sh cmd_cov`) лежат в `.tmp/` — в git она не попадает, корень репо остаётся чистым.
 - **Раннер один — pytest.** Скорость набора даёт параллельность (`-n auto`, pytest-xdist), а не второй инструмент: тестовые сервера берут свободный порт, данные — `tmp_path`, поэтому воркеры не мешают друг другу. «Быстрых/медленных» слоёв нет.
 - **Правка UI без прогона не закрыта.** `./dev.sh probe --shot` проходит все view, вкладки проекта и модалки, ловит `pageerror`/`console`/4xx-5xx и пишет скриншоты и `report.json` в `logs/ui_probe/` (в git не попадают) — сравнивать «до/после» иначе нечем. Playwright стоит глобально (`playwright-core`), своей npm-папки и сборки в репо нет.
 
