@@ -247,6 +247,43 @@
     return pane;
   }
 
+  /* Кнопка «Поиск» редактора. Панель поиска CodeMirror открывается только
+   * Ctrl+F — в узком тулбаре о ней легко забыть, поэтому у каждого редактора
+   * своя кнопка-иконка. Первое открытие панели фокус в себя не отдаёт (он
+   * остаётся в тексте), поэтому поле поиска фокусируем сами; повторный клик
+   * openSearchPanel делает сам. Без CodeMirror (textarea-fallback) возвращает
+   * null: своего движка поиска в урезанном режиме нет. */
+  function editorSearch(ed, opts) {
+    const o = opts || {};
+    if (!ed || !ed.isCM) return null;
+    const tip = o.tip || "Поиск в тексте (Ctrl+F)";
+    const btn = h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost icon-btn",
+        type: "button",
+        title: tip,
+        "aria-label": tip,
+        onclick: () => {
+          const CM = window.CM;
+          if (!CM || !CM.openSearchPanel || !ed.view) return;
+          CM.openSearchPanel(ed.view);
+          const field = ed.view.dom.querySelector(
+            '.cm-search [main-field="true"]'
+          );
+          if (field) {
+            field.focus();
+            field.select();
+          }
+        },
+      },
+      iconEl("search"),
+    );
+    // attachTooltip живёт в app.js; в node-тестах SPA его нет
+    if (typeof attachTooltip === "function") attachTooltip(btn, tip);
+    return btn;
+  }
+
   /* Пейджер списка: ‹ n/N · подпись ›. Данные (pg.items) и список (o.list)
    * остаются у вьюхи: компонент режет страницу, зовёт rows(slice, page) и
    * перерисовывает себя. Разные списки отличаются только подписью и тем, что
@@ -341,6 +378,7 @@
     onKeydown,
     menuButton,
     previewPane,
+    editorSearch,
     listPager,
     askNotifyPermission,
     docs,

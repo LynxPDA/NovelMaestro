@@ -1514,10 +1514,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const err = h("div", { class: "form-error" });
     const host = h("div", { class: "editor-modal-body" });
     let ed = null;
+    /* редактор модалки создаётся асинхронно: кнопка поиска встанет в этот же
+       ряд действий, когда редактор появится */
+    let actions = null;
     UIC.modal({
       title,
       wide: true,
-      build: (close) => [host, err, h(
+      build: (close) => [host, err, (actions = h(
         "div", { class: "modal-actions" },
         h("button", { class: "btn btn-ghost", onclick: () => close() },
           "Отмена"),
@@ -1550,7 +1553,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             }
           },
         }, "Сохранить"),
-      )],
+      ))],
     });
     (async () => {
       try {
@@ -1563,6 +1566,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
                 + `&path=${encodeURIComponent(relPath)}`,
             );
         ed = makeEditor(d.content || "", extOf(relPath));
+        const f = UIC.editorSearch(ed);
+        if (f) actions.insertBefore(f, actions.firstChild);
         host.append(h("div", { class: "editor-cm" }, ed.root));
       } catch (ex) {
         err.textContent = ex.message;

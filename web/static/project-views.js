@@ -727,15 +727,6 @@ function viewProject(section, name, tab, job) {
       }
     });
 
-    const findBtn = h("button", { class: "btn btn-sm btn-ghost" }, "Поиск");
-    findBtn.addEventListener("click", () => {
-      if (ed.isCM) {
-        window.CM.openSearchPanel(ed.view);
-      } else {
-        toast("Поиск доступен в редакторе CodeMirror (Ctrl+F)", "err");
-      }
-    });
-
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
@@ -750,7 +741,7 @@ function viewProject(section, name, tab, job) {
       previewFontSelect(() => {
         if (pane.mode !== "code") pane.render();
       }),
-      findBtn,
+      UIC.editorSearch(ed),
       pane.btn,
       saveBtn,
     );
@@ -909,6 +900,12 @@ function viewProject(section, name, tab, job) {
         state: paneState,
         editor: null,
         hl: null,
+        /* редактор у панели создаётся один раз — тогда же рядом с «Сохранить»
+           появляется и кнопка поиска (без CodeMirror кнопки нет) */
+        addSearch: (e) => {
+          const f = UIC.editorSearch(e);
+          if (f) bar.insertBefore(f, saveBtn);
+        },
       };
     }
     /* панели кешируются между рендерами вкладки: повторный рендер (смена
@@ -1014,6 +1011,7 @@ function viewProject(section, name, tab, job) {
             if (pInfo.hl) pInfo.hl.tip.style.display = "none";
             scheduleHighlight(pInfo);
           });
+          pInfo.addSearch(pInfo.editor);
           pInfo.host.replaceChildren(pInfo.editor.root);
         }
         /* replaceChildren снял тултип/кнопку (соседи editor.root) — вернуть */
@@ -3147,6 +3145,8 @@ function viewProject(section, name, tab, job) {
             parsed ? JSON.stringify(parsed.doc, null, 2) : "",
             "json",
           );
+          const f = UIC.editorSearch(ed);
+          if (f) actionsBar.insertBefore(f, saveBtn);
           edHost.replaceChildren(ed.root);
         }
         body.append(edHost, status, actionsBar, err);
@@ -3722,7 +3722,7 @@ function viewProject(section, name, tab, job) {
           ),
           status,
           h("div", { class: "editor-cm editor-cm-small" }, ed.root),
-          h("div", { class: "review-actions" }, tpl, save),
+          h("div", { class: "review-actions" }, UIC.editorSearch(ed), tpl, save),
         ),
       );
       let rel = `source/${defFile}`;
@@ -4027,7 +4027,7 @@ function viewProject(section, name, tab, job) {
       h("span", { class: "spacer" }),
       createBtn,
       tplBtn,
-      delBtn,
+      UIC.editorSearch(ed),
       saveBtn,
     );
     renderList();
@@ -4373,6 +4373,7 @@ function viewProject(section, name, tab, job) {
             previewFontSelect(() => {
               if (pane.mode !== "code") pane.render();
             }),
+            UIC.editorSearch(ed),
             pane.btn,
             saveBtn,
           ),

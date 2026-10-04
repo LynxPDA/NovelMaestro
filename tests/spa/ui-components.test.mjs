@@ -407,3 +407,34 @@ test("listPager: режим счётчика — items числом, стран�
   assert.equal(pg.page, 1);
   assert.equal(painted, 1); // перерисовку списка делает вьюха
 });
+
+/* ── кнопка поиска редактора (UIC.editorSearch) ───────────────────── */
+test("editorSearch: textarea-fallback — кнопки нет вовсе", () => {
+  assert.equal(UIC.editorSearch({ isCM: false }), null);
+  assert.equal(UIC.editorSearch(null), null);
+});
+
+test("editorSearch: кнопка-иконка с подсказкой в тултипе и aria-label", () => {
+  const b = UIC.editorSearch({ isCM: true, view: {} });
+  assert.ok(b.className.includes("icon-btn"));
+  assert.equal(b.attrs.title, "Поиск в тексте (Ctrl+F)");
+  assert.equal(b.attrs["aria-label"], "Поиск в тексте (Ctrl+F)");
+});
+
+test("editorSearch: клик открывает панель и забирает фокус в поле поиска", () => {
+  const opened = [];
+  const field = { focused: false, selected: false, focus() { this.focused = true; }, select() { this.selected = true; } };
+  const view = { dom: { querySelector: (sel) => (sel.includes("cm-search") ? field : null) } };
+  globalThis.CM = { openSearchPanel: (v) => opened.push(v) };
+  const b = UIC.editorSearch({ isCM: true, view });
+  b.click();
+  assert.deepEqual(opened, [view]);
+  assert.equal(field.focused, true); // первое открытие панели фокус не отдаёт
+  assert.equal(field.selected, true);
+});
+
+test("editorSearch: без window.CM клик молчит, редактор не ломается", () => {
+  delete globalThis.CM;
+  const b = UIC.editorSearch({ isCM: true, view: { dom: { querySelector: () => null } } });
+  b.click();
+});

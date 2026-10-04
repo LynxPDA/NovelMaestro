@@ -880,6 +880,7 @@ async function viewNotes() {
           previewFontSelect(() => {
             if (pane.mode !== "code") pane.render();
           }),
+          UIC.editorSearch(ed),
           pane.btn,
           saveBtn,
         ),
@@ -2778,15 +2779,6 @@ async function viewTemplates() {
       }
     });
 
-    const findBtn = h("button", { class: "btn btn-sm btn-ghost" }, "Поиск");
-    findBtn.addEventListener("click", () => {
-      if (ed.isCM) {
-        window.CM.openSearchPanel(ed.view);
-      } else {
-        toast("Поиск доступен в редакторе CodeMirror (Ctrl+F)", "err");
-      }
-    });
-
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
@@ -2806,7 +2798,7 @@ async function viewTemplates() {
       previewFontSelect(() => {
         if (pane.mode !== "code") pane.render();
       }),
-      findBtn,
+      UIC.editorSearch(ed),
       pane.btn,
       ...(readonly ? [] : [saveBtn]),
     );
