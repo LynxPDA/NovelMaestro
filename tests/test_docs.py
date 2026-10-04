@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 from core import common as C  # noqa: E402
 from core import deps as D  # noqa: E402
 from core import projects as PRJ  # noqa: E402
+from core import search as SRCH  # noqa: E402
 from core import settings as SET  # noqa: E402
 from core import transport as T  # noqa: E402
 
@@ -79,6 +80,10 @@ SETTINGS_API = ["Setting", "Block", "Group", "GROUPS", "SETTINGS", "BY_KEY",
                 "sanitize", "file_values", "layered_values", "effective",
                 "display_value", "block_payload", "write_values",
                 "groups_payload"]
+# Зеркало API core/search.py (поиск по текстам книги)
+SEARCH_API = ["SearchGroup", "SEARCH_GROUPS", "GROUP_IDS", "GROUP_LABELS",
+              "DEFAULT_SCOPES", "iter_project_files", "find_in_text",
+              "search_project"]
 
 
 def _agents_text() -> str:
@@ -112,16 +117,20 @@ def test_core_api_mentioned_in_agents_md(name):
         f"{name} не упоминается в AGENTS.md — таблица §6 устарела"
 
 
-@pytest.mark.parametrize("name", TRANSPORT_API + DEPS_API + SETTINGS_API)
+@pytest.mark.parametrize(
+    "name", TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API)
 def test_transport_deps_api_exists_in_code(name):
-    """API транспорта, зависимостей и реестра настроек существует в core."""
-    module = T if name in TRANSPORT_API else (D if name in DEPS_API else SET)
+    """API транспорта, зависимостей, реестра настроек и поиска существует."""
+    module = (T if name in TRANSPORT_API
+              else D if name in DEPS_API
+              else SET if name in SETTINGS_API else SRCH)
     assert hasattr(module, name), f"{module.__name__}.{name} исчезла"
 
 
-@pytest.mark.parametrize("name", TRANSPORT_API + DEPS_API + SETTINGS_API)
+@pytest.mark.parametrize(
+    "name", TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API)
 def test_transport_deps_api_mentioned_in_agents_md(name):
-    """Строки §6 про транспорт, зависимости и настройки полные: имена не потеряны."""
+    """Строки §6 полные: имена транспорта, зависимостей, настроек и поиска на месте."""
     assert re.search(rf"\b{name}\b", _agents_text()), \
         f"{name} не упоминается в AGENTS.md — таблица §6 устарела"
 

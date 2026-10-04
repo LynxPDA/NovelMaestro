@@ -37,6 +37,7 @@ const PROJECT_TABS = [
   "ner",
   "review",
   "chapters",
+  "search",
   "status",
   "config",
   "prompts",
@@ -382,6 +383,77 @@ async function main() {
       if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-quick-look.png") });
       log(`${problems.length === before2 ? "✅" : "❌"} quick-look Space   кадр: ${look.text ? "есть" : "пусто"}`);
     }
+  }
+
+  /* «Поиск»: группы приходят с сервера, один GET на запрос, совпадение
+   * подсвечено, клик по имени файла открывает его в редакторе */
+  {
+    const beforeS = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/search`,
+      { waitUntil: "load" });
+    await page.waitForSelector(".search-scope-chip", { timeout: 15000 });
+    const chips = await page.evaluate(() =>
+      [...document.querySelectorAll(".search-scope-chip")].map((l) => {
+        const b = l.querySelector("input");
+        return [l.textContent.trim(), !!(b && b.checked)];
+      }));
+    await page.fill(".search-q", "глава");
+    await page.click(".search-run");
+    await page.waitForTimeout(900);
+    const res = await page.evaluate(() => ({
+      status: ((document.querySelector(".review-status") || {})
+        .textContent || "").trim(),
+      files: [...document.querySelectorAll(".search-file-path")]
+        .map((b) => b.textContent.trim()),
+      marks: [...document.querySelectorAll(".search-hit-text mark")]
+        .map((m) => m.textContent),
+      lines: [...document.querySelectorAll(".search-hit-line")]
+        .map((x) => x.textContent.trim()),
+    }));
+    if (chips.length !== 9) problems.push(`поиск: групп ${chips.length}`);
+    const on = chips.filter(([, c]) => c).map(([t]) => t);
+    if (on.join(",") !== "Оригинал глав,Полировка,Глоссарий,Заметки книги")
+      problems.push(`поиск: отмечены «${on.join(", ")}»`);
+    if (!/^Совпадений: (\d+) · файлов: (\d+) · прочитано: (\d+)$/.test(res.status))
+      problems.push(`поиск: статус «${res.status}»`);
+    if (res.files[0] !== "chapters/00000_1_Глава 1/chapter.txt")
+      problems.push(`поиск: первый файл «${res.files[0]}»`);
+    if (!res.marks.length || res.marks.some((t) => t !== "глава"))
+      problems.push(`поиск: подсветка ${JSON.stringify(res.marks)}`);
+    if (res.lines[0] !== "1") problems.push(`поиск: строка ${res.lines[0]}`);
+    /* «Только главы» — все артефакты стадий (4 типа × 2 главы), глоссарий
+     * и заметки уходят из охвата */
+    await page.click('.search-chips button:has-text("Только главы")');
+    await page.click(".search-run");
+    await page.waitForTimeout(900);
+    const onlyChapters = await page.evaluate(() => ({
+      files: document.querySelectorAll(".search-file-path").length,
+      chips: [...document.querySelectorAll(".search-scope-chip")]
+        .filter((l) => l.querySelector("input").checked).length,
+    }));
+    if (onlyChapters.files !== 8 || onlyChapters.chips !== 4)
+      problems.push(`поиск: «Только главы» — ${onlyChapters.files} файлов, `
+        + `${onlyChapters.chips} чипсов`);
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-search.png") });
+    await page.click(".search-file-path");
+    await page.waitForTimeout(1200);
+    const opened = await page.evaluate(() => ({
+      editor: [...document.querySelectorAll(".editor-cm")]
+        .some((x) => x.offsetParent),
+      text: [...document.querySelectorAll(".editor-cm")]
+        .map((x) => x.textContent).join(" "),
+    }));
+    if (!opened.editor) problems.push("поиск: имя файла не открыло редактор");
+    if (!/глава/i.test(opened.text))
+      problems.push("поиск: в редакторе не тот файл");
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-search-file.png") });
+    log(`${problems.length === beforeS ? "✅" : "❌"} поиск  ${res.status}` +
+      ` · «Только главы» ${onlyChapters.files} файлов` +
+      ` / ${onlyChapters.chips} чипсов` +
+      (problems.length > beforeS
+        ? `\n     ${problems.slice(beforeS).join("\n     ")}` : ""));
   }
 
   /* «Файлы»: строка — чекбокс выделения и кнопки одного объекта (правка,

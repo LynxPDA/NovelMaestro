@@ -1203,6 +1203,110 @@ input[type="number"] {
 .ner-guide {
   margin: 4px 0 10px;
 }
+
+/* ── вкладка «Поиск»: где искать, строка запроса и фрагменты совпадений ── */
+.search-scope-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.search-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.search-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.search-chip:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.search-chip .checkbox {
+  width: 14px;
+  height: 14px;
+}
+.files-toolbar .search-q {
+  flex: 1 1 260px;
+  min-width: 200px;
+}
+.files-toolbar .search-ctx {
+  width: 74px;
+}
+.search-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.search-file {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.search-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.search-file-group {
+  font-size: 12px;
+  color: var(--muted);
+}
+.search-file-path {
+  max-width: 70ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.search-file-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+.search-file-hits {
+  padding: 4px 0;
+}
+.search-hit {
+  display: flex;
+  gap: 8px;
+  padding: 2px 10px;
+  font-size: 13px;
+}
+.search-hit-line {
+  flex: 0 0 auto;
+  min-width: 4ch;
+  text-align: right;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.search-hit-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.search-hit-text mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--accent-2);
+  color: var(--bg);
+}
 .ner-guide ol {
   margin: 0;
   padding-left: 18px;

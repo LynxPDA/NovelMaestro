@@ -63,7 +63,10 @@ class El {
   }
   appendChild(k) { this.children.push(k); }
   replaceChildren(...kids) { this.children = []; this.append(...kids); }
-  addEventListener(ev, fn) { (this._listeners[ev] ||= []).push(fn); }
+  addEventListener(ev, fn) {
+    if (!this._listeners[ev]) this._listeners[ev] = [];
+    this._listeners[ev].push(fn);
+  }
   setAttribute(k, v) { this._attrs[k] = String(v); }
   getAttribute(k) { return this._attrs[k] ?? null; }
   remove() {}
@@ -169,6 +172,10 @@ function h(tag, attrs = {}, ...children) {
 /* ── мок-API: все роуты project-views возвращают пустые структуры ── */
 async function api(path, opts = {}) {
   const p = path.split("?")[0];
+  if ((opts.method || "GET") === "GET" && globalThis.__gets) {
+    // GET-вызовы тоже под наблюдением: вкладка «Поиск» их только читает
+    globalThis.__gets.push({ path: p, query: path.split("?")[1] || "" });
+  }
   if ((opts.method || "GET") !== "GET") {
     // запись запроса: тестам важно, каким телом ушёл перенос/переименование
     (globalThis.__calls || []).push({
@@ -194,6 +201,9 @@ async function api(path, opts = {}) {
   if (p.endsWith("/tree")) return { chapters: [], artifacts: {} };
   if (p.endsWith("/status")) return { status: { chapters: {}, counts: {} } };
   if (p.endsWith("/chapters/titles")) return { titles: {} };
+  if (p === "/search") {
+    return globalThis.__search || { ...SEARCH_EMPTY, files: [], total: 0 };
+  }
   /* роуты «Настроек»: текст файла API не отдаёт — только блоки реестра */
   if (p === "/settings") return SETTINGS_PAYLOAD;
   if (p === "/stages/compile/options") return { modes: [] };
@@ -316,7 +326,7 @@ const viewProject = sandbox.viewProject;
 
 /* все вкладки страницы проекта: viewProject(section, name, tab) */
 const TABS = ["files", "run", "editor", "ner", "review", "chapters",
-              "status", "config", "prompts", "logs", "notes"];
+              "search", "status", "config", "prompts", "logs", "notes"];
 
 for (const tab of TABS) {
   test(`вкладка «${tab}» рендерится без ReferenceError`, async () => {
@@ -486,6 +496,28 @@ test("quick-look: Space на строке открывает модалку с s
 });
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
+
+/* ── «Поиск»: группы приходят с сервера, запрос — одним вызовом ── */
+const SEARCH_GROUPS = [
+  ["chapter", "Оригинал глав"],
+  ["translated", "Перевод (черновик)"],
+  ["redacted", "Правка перевода"],
+  ["polished", "Полировка"],
+  ["ner", "Глоссарий"],
+  ["notes", "Заметки книги"],
+  ["prompts", "Промпты"],
+  ["reports", "Отчёты проверок"],
+  ["logs", "Логи"],
+];
+const SEARCH_EMPTY = {
+  ok: true,
+  scopes: ["chapter", "polished", "ner", "notes"],
+  labels: Object.fromEntries(SEARCH_GROUPS),
+  groups: SEARCH_GROUPS,
+  scanned: 0,
+  skipped: 0,
+  truncated: false,
+};
 
 function collectText(node, out = []) {
   if (node && typeof node === "object") {
@@ -776,4 +808,81 @@ test("запуски: профиль уезжает в params запуска в�
   assert.doesNotMatch(RUN_SRC, /profile: st\.profile/);
   assert.match(RUN_SRC, /params: buildParams\(key, spec\)/);
   assert.match(RUN_SRC, /if \(f\.name === PROFILE_FIELD\) continue/);
+});
+
+/* ── «Поиск»: группы с сервера, один GET на поиск, переход в редактор ── */
+test("поиск: вкладка берёт группы с сервера и шлёт один GET /api/search", async () => {
+  globalThis.__search = { ...SEARCH_EMPTY, files: [], total: 0 };
+  globalThis.__gets = [];
+  const page = viewProject("ACTIVE", "Книга", "search");
+  await tick();
+  /* чипсы групп приходят из ответа сервера: реестр тут не дублируется */
+  assert.equal(findByClass(page, "search-scope-chip").length,
+    SEARCH_GROUPS.length, "чипсы групп — по одной на группу реестра");
+  const boxes = findByClass(page, "search-scope");
+  assert.equal(boxes.filter((b) => b.checked).length, SEARCH_EMPTY.scopes.length,
+    "отмечены группы из серверного значения по умолчанию");
+  const input = findByClass(page, "search-q")[0];
+  input.value = "мир";
+  const run = findByClass(page, "search-run")[0];
+  await run._listeners.click[0]();
+  await tick();
+  const call = globalThis.__gets.find((c) => c.path === "/search"
+    && new URLSearchParams(c.query).get("q"));
+  assert.ok(call, "поиск ушёл на GET /api/search");
+  const q = new URLSearchParams(call.query);
+  assert.equal(q.get("project"), "ACTIVE/Книга");
+  assert.equal(q.get("q"), "мир");
+  assert.equal(q.get("scope"), SEARCH_EMPTY.scopes.join(","));
+  assert.equal(q.get("context"), "60");
+  assert.notEqual(q.get("case"), "1", "регистр по умолчанию не учитывается");
+});
+
+test("поиск: запрос и группы помнятся, совпадение подсвечено", async () => {
+  globalThis.__search = {
+    ...SEARCH_EMPTY,
+    scopes: ["chapter", "polished"],
+    files: [{
+      group: "polished",
+      path: "chapters/00000_1_Глава 1/polished.txt",
+      name: "polished.txt",
+      chapter: 1,
+      count: 1,
+      hits: [{ line: 7, start: 6, end: 9, text: "тихий мир" }],
+    }],
+    total: 1, scanned: 3, skipped: 0, truncated: false,
+  };
+  globalThis.__gets = [];
+  const page = viewProject("ACTIVE", "Книга", "search");
+  await tick();
+  /* прошлый запрос вкладки — из localStorage того же проекта */
+  assert.equal(findByClass(page, "search-q")[0].value, "мир",
+    "последний запрос помнится на проект");
+  await findByClass(page, "search-run")[0]._listeners.click[0]();
+  await tick();
+  /* textContent в mock-е не выводится из детей — читаем поддерево целиком */
+  const marks = findByClass(page, "search-hit-text")
+    .flatMap((n) => findTag(n, "mark").map((m) => collectText(m).join("")));
+  assert.deepEqual(marks, ["мир"], "совпадение подсвечено");
+  const lines = findByClass(page, "search-hit-line")
+    .map((n) => collectText(n).join(""))
+  assert.deepEqual(lines, ["7"], "номер строки рядом с фрагментом");
+});
+
+test("поиск: имя файла в результате открывает его в редакторе", async () => {
+  const before = (globalThis.__gets || []).length;
+  const page = viewProject("ACTIVE", "Книга", "search");
+  await tick();
+  /* результат появляется только после запроса: он и в этот раз из мока */
+  await findByClass(page, "search-run")[0]._listeners.click[0]();
+  await tick();
+  const link = findByClass(page, "search-file-path")[0];
+  assert.ok(link, "строка результата с именем файла");
+  await link._listeners.click[0]();
+  await tick();
+  const gets = (globalThis.__gets || []).slice(before);
+  const file = gets.find((c) => c.path === "/file");
+  assert.ok(file, "клик по имени файла открыл редактор");
+  assert.equal(new URLSearchParams(file.query).get("path"),
+    "chapters/00000_1_Глава 1/polished.txt");
 });

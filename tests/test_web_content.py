@@ -1039,3 +1039,122 @@ def test_job_start_uses_shared_llm_config(srv, tmp_path, monkeypatch):
     assert "--host http://sys" in joined      # сервер — общий, не из формы
     assert "--model m" in joined and "--api_key" not in joined
     assert "СЕКРЕТ-ОБЩИЙ" not in joined      # ключ в argv не едет
+
+# ════════════════════════════════════════════════════════════════════
+# Поиск по тексту книги (GET /api/search)
+# ════════════════════════════════════════════════════════════════════
+
+def _mk_search_book(pdir):
+    """Книга: 2 главы (оригинал+полировка), глоссарий, промпт и лог."""
+    for i in (1, 2):
+        d = pdir / "chapters" / f"0000{i}_{i}_Глава {i}"
+        d.mkdir(parents=True)
+        (d / "chapter.txt").write_text(f"Глава {i}\nтихий мир\n",
+                                       encoding="utf-8")
+        (d / "polished.txt").write_text(f"Глава {i}\nМИР тихо\n",
+                                        encoding="utf-8")
+    (pdir / "ner.json").write_text('[{"term": "мир", "type": "other"}]',
+                                   encoding="utf-8")
+    (pdir / "prompts").mkdir()
+    (pdir / "prompts" / "translate.txt").write_text("переведи мир\n",
+                                                    encoding="utf-8")
+    (pdir / "logs").mkdir()
+    (pdir / "logs" / "run.log").write_text("мир в логе\n", encoding="utf-8")
+    return pdir
+
+
+def test_search_meta_without_query(srv, tmp_path):
+    """Пустой q — не ошибка: группы, подписи и дефолтный охват."""
+    srv, port, root = srv()
+    _mk_search_book(_mk_project(root))
+    r = _request(port, "GET", f"/api/search?{_q('ACTIVE/demo')}")
+    assert r["ok"] and r["files"] == [] and r["total"] == 0
+    ids = [g[0] for g in r["groups"]]
+    assert ids[:2] == ["chapter", "translated"] and "logs" in ids
+    assert r["scopes"] == ["chapter", "polished", "ner", "notes"]
+    assert r["labels"]["polished"] == "Полировка"
+
+
+def test_search_short_query(srv, tmp_path):
+    """Меньше двух символов — 400: поиск только шумел бы."""
+    srv, port, root = srv()
+    _mk_search_book(_mk_project(root))
+    r = _request(port, "GET", f"/api/search?{_q('ACTIVE/demo', q='м')}")
+    assert r["__error__"] == 400
+    assert "короче" in r["__body__"]
+
+
+def test_search_unknown_scope(srv, tmp_path):
+    srv, port, root = srv()
+    _mk_search_book(_mk_project(root))
+    r = _request(port, "GET",
+                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapters')}")
+    assert r["__error__"] == 400
+    assert "Неизвестная группа" in r["__body__"]
+
+
+def test_search_project_without_param(srv):
+    srv, port, _root = srv()
+    r = _request(port, "GET", "/api/search?" + _q("", q="мир"))
+    assert r["__error__"] == 400
+
+
+def test_search_default_scopes(srv, tmp_path):
+    """По умолчанию ищутся тексты глав и глоссарий: промпты и логи — нет."""
+    srv, port, root = srv()
+    _mk_search_book(_mk_project(root))
+    r = _request(port, "GET", f"/api/search?{_q('ACTIVE/demo', q='мир')}")
+    assert r["ok"]
+    assert {f["group"] for f in r["files"]} == {"chapter", "polished", "ner"}
+    assert r["scanned"] == 5
+    by_path = {f["path"]: f for f in r["files"]}
+    hit = by_path["chapters/00001_1_Глава 1/chapter.txt"]
+    assert hit["chapter"] == 1 and hit["name"] == "chapter.txt"
+    assert hit["hits"] == [{"line": 2, "start": 6, "end": 9,
+                            "text": "тихий мир"}]
+
+
+def test_search_scope_case_and_context(srv, tmp_path):
+    """scope — только выбранные группы; case=1 — регистр важен; context — ширина."""
+    srv, port, root = srv()
+    _mk_search_book(_mk_project(root))
+    r = _request(port, "GET",
+                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='logs,prompts')}")
+    assert {f["group"] for f in r["files"]} == {"prompts", "logs"}
+    # регистр: в полировке «МИР»
+    r = _request(port, "GET",
+                 f"/api/search?{_q('ACTIVE/demo', q='МИР', scope='polished',
+                                   case='1')}")
+    assert r["total"] == 2
+    r = _request(port, "GET",
+                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='polished',
+                                   case='1')}")
+    assert r["total"] == 0
+    r = _request(port, "GET",
+                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter',
+                                   context=2)}")
+    assert r["files"][0]["hits"][0]["text"] == "…й мир"
+
+
+def test_search_limits(srv, tmp_path):
+    """per_file и max_total — лимиты совпадений, truncated — про срез."""
+    srv, port, root = srv()
+    pdir = _mk_project(root)
+    d = pdir / "chapters" / "00000_1_Глава 1"
+    d.mkdir(parents=True)
+    (d / "chapter.txt").write_text("мир 1\nмир 2\nмир 3\n", encoding="utf-8")
+    r = _request(port, "GET",
+                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter',
+                                   per_file=2)}")
+    assert r["total"] == 2 and r["truncated"] is False
+    r = _request(port, "GET",
+                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter',
+                                   max_total=1)}")
+    assert r["total"] == 1 and r["truncated"] is True
+
+
+def test_search_missing_project(srv, tmp_path):
+    srv, port, root = srv()
+    root.mkdir(parents=True, exist_ok=True)
+    r = _request(port, "GET", "/api/search?" + _q("ACTIVE/nope", q="мир"))
+    assert r["__error__"] == 404

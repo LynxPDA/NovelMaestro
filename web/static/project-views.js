@@ -6,6 +6,9 @@ const _reviewWatchers = new Map();
    проверок (вкладка «Проверка»). Был глобалом app.js и пропал при
    рефакторинге (c60ac00) — без него вкладки падают с ReferenceError. */
 const PAGE_SIZE = 200;
+/* артефакты глав в каноническом порядке цепочки — кнопка «Только главы»
+   на вкладке «Поиск» (ключи группы совпадают с core/search.py) */
+const CHAPTER_SCOPES = ["chapter", "translated", "redacted", "polished"];
 /* Кнопка-иконка: SVG без подписи, поэтому имя действия живёт в тултипе
    и в aria-label (строки списка файлов узкие — текстовые кнопки в них
    не умещаются). danger — окраска опасных действий. */
@@ -34,6 +37,7 @@ const PROJECT_TABS = [
   ["ner", "Глоссарий"],
   ["review", "Проверки"],
   ["chapters", "Главы"],
+  ["search", "Поиск"],
   ["status", "Статус"],
   ["config", "Настройки"],
   ["prompts", "Промпты"],
@@ -132,6 +136,7 @@ function viewProject(section, name, tab, job) {
     else if (st.view === "ner") body = await nerView();
     else if (st.view === "review") body = await reviewView();
     else if (st.view === "chapters") body = await chaptersView();
+    else if (st.view === "search") body = await searchView();
     else if (st.view === "status") body = await statusView();
     else if (st.view === "config") body = await configView();
     else if (st.view === "prompts") body = await promptsView();
@@ -3518,6 +3523,219 @@ function viewProject(section, name, tab, job) {
         "«Удалить файлы» стирает файлы выбранного типа в диапазоне.",
     );
     return h("div", { class: "files-wrap" }, toolbar, hint, err, rows);
+  }
+
+  /* «Поиск» — обычный проход по текстам книги (core/search.py): список групп
+     приходит с сервера, совпадение — подстрока, вывод — фрагменты с
+     контекстом. Индексов и кешей нет: результат всегда соответствует файлу. */
+  async function searchView() {
+    const LS_KEY = `search:${section}/${name}`;
+    let prefs = {};
+    try {
+      prefs = JSON.parse(localStorage.getItem(LS_KEY) || "{}") || {};
+    } catch {
+      prefs = {};
+    }
+    function savePrefs(patch) {
+      Object.assign(prefs, patch);
+      try { localStorage.setItem(LS_KEY, JSON.stringify(prefs)); } catch {}
+    }
+
+    const err = h("div", { class: "form-error" });
+    const status = h("span", { class: "review-status" }, "Поиска не было");
+    const rows = h("div", { class: "search-rows" });
+    const chips = h("div", { class: "search-chips" });
+    const input = h("input", {
+      class: "input search-q",
+      placeholder: "Текст для поиска…",
+      value: String(prefs.q || ""),
+    });
+    attachTooltip(input, "Ищется подстрока; перенос строки ищется построчно");
+    const ctxIn = h("input", {
+      class: "input search-ctx",
+      type: "number",
+      min: "10",
+      max: "300",
+      step: "10",
+      value: String(prefs.context || 60),
+    });
+    attachTooltip(ctxIn, "Сколько символов брать до и после совпадения");
+    const caseBox = h("input", {
+      type: "checkbox",
+      class: "checkbox search-case",
+    });
+    caseBox.checked = prefs.ci === true;
+    attachTooltip(caseBox, "Учитывать регистр букв");
+    const runBtn = h("button", { class: "btn btn-primary search-run" }, "Найти");
+
+    // группы и дефолтный охват — с сервера, чтобы реестр не дублировался тут
+    let order = [];
+    let labels = {};
+    let defaults = [];
+    let scopes = Array.isArray(prefs.scopes) && prefs.scopes.length
+      ? prefs.scopes.slice() : null; // null — дефолт сервера
+
+    function currentScopes() {
+      return scopes || defaults.slice();
+    }
+
+    function pick(list) {
+      scopes = order.filter((k) => list.includes(k));
+      savePrefs({ scopes });
+      renderChips();
+    }
+
+    function renderChips() {
+      const on = currentScopes();
+      chips.replaceChildren(
+        ...order.map((id) => {
+          const box = h("input", {
+            type: "checkbox",
+            class: "checkbox search-scope",
+          });
+          box.checked = on.includes(id);
+          box.addEventListener("change", () => {
+            const cur = currentScopes().slice();
+            const at = cur.indexOf(id);
+            if (box.checked && at < 0) cur.push(id);
+            if (!box.checked && at >= 0) cur.splice(at, 1);
+            if (!cur.length) {
+              box.checked = true;
+              return;
+            }
+            pick(cur);
+          });
+          return h(
+            "label",
+            { class: "search-chip search-scope-chip" },
+            box,
+            labels[id] || id,
+          );
+        }),
+        h("button", {
+          class: "btn btn-sm btn-ghost",
+          onclick: () => pick(CHAPTER_SCOPES),
+        }, "Только главы"),
+        h("button", {
+          class: "btn btn-sm btn-ghost",
+          onclick: () => pick(order),
+        }, "Все группы"),
+      );
+    }
+
+    function hitNode(hit) {
+      const t = String((hit && hit.text) || "");
+      const s = Math.max(0, Math.min(t.length, Number(hit.start) || 0));
+      const e = Math.max(s, Math.min(t.length, Number(hit.end) || 0));
+      return h(
+        "div",
+        { class: "search-hit" },
+        h("span", { class: "search-hit-line" }, String(hit.line)),
+        h(
+          "span",
+          { class: "search-hit-text" },
+          t.slice(0, s),
+          h("mark", {}, t.slice(s, e)),
+          t.slice(e),
+        ),
+      );
+    }
+
+    function fileNode(f) {
+      const rel = String(f.path || "");
+      return h(
+        "div",
+        { class: "search-file" },
+        h(
+          "div",
+          { class: "search-file-head" },
+          h("span", { class: "search-file-group" }, labels[f.group] || f.group),
+          h("button", {
+            class: "btn btn-sm btn-ghost search-file-path",
+            title: "Открыть в редакторе",
+            "aria-label": `Открыть ${rel} в редакторе`,
+            onclick: () => openEditor(rel),
+          }, rel),
+          h("span", { class: "search-file-count" }, String(f.count)),
+        ),
+        h("div", { class: "search-file-hits" }, (f.hits || []).map(hitNode)),
+      );
+    }
+
+    async function run() {
+      const q = String(input.value || "").trim();
+      savePrefs({ q, context: String(ctxIn.value || ""), ci: caseBox.checked });
+      rows.replaceChildren();
+      if (q.length < 2) {
+        status.textContent = "Минимум 2 символа";
+        return;
+      }
+      status.textContent = "Поиск…";
+      const p = new URLSearchParams({ project: `${section}/${name}`, q });
+      p.set("scope", currentScopes().join(","));
+      if (ctxIn.value) p.set("context", String(ctxIn.value));
+      if (caseBox.checked) p.set("case", "1");
+      try {
+        const r = await api(`/search?${p}`);
+        const files = r.files || [];
+        status.textContent =
+          `Совпадений: ${r.total} · файлов: ${files.length}`
+          + ` · прочитано: ${r.scanned}`
+          + (r.truncated ? " · показаны не все" : "");
+        rows.replaceChildren(
+          ...(files.length
+            ? files.map(fileNode)
+            : [h("div", { class: "files-empty" }, "Совпадений нет")]),
+        );
+      } catch (ex) {
+        status.textContent = ex.message;
+      }
+    }
+
+    runBtn.addEventListener("click", run);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") run();
+    });
+    ctxIn.addEventListener("change", () => savePrefs({ context: String(ctxIn.value || "") }));
+    caseBox.addEventListener("change", () => savePrefs({ ci: caseBox.checked }));
+
+    try {
+      const r = await api(`/search?${new URLSearchParams({ project: `${section}/${name}` })}`);
+      order = (r.groups || []).map((g) => g[0]);
+      for (const [id, label] of r.groups || []) labels[id] = label;
+      defaults = (r.scopes || []).filter((s) => order.includes(s));
+    } catch (ex) {
+      err.textContent = ex.message;
+    }
+    renderChips();
+
+    const toolbar = h(
+      "div",
+      { class: "files-toolbar" },
+      input,
+      runBtn,
+      h("label", { class: "search-chip search-case-chip" }, caseBox, "регистр"),
+      h("span", { class: "field-label" }, "контекст"),
+      ctxIn,
+      h("span", { class: "spacer" }),
+      status,
+    );
+    const hint = h(
+      "div",
+      { class: "card-hint" },
+      "Поиск читает файлы книги целиком, без индексов: имя файла открывает его "
+        + "в редакторе."
+      + "\n«Только главы» — артефакты стадий, «Все группы» — промпты, отчёты и логи.",
+    );
+    return h(
+      "div",
+      { class: "files-wrap" },
+      toolbar,
+      h("div", { class: "search-scope-row" }, h("span", { class: "field-label" }, "Где искать:"), chips),
+      hint,
+      err,
+      rows,
+    );
   }
 
   // «Статус» — таблица готовности глав + сводка ner/wiki/compiled
