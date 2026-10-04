@@ -1088,6 +1088,15 @@ REVIEW_STATUSES = (REVIEW_ACCEPT, REVIEW_REJECT)
 REVIEW_PATCH = "патч"
 REVIEW_DELETE = "удаление"
 REVIEW_ACTIONS = (REVIEW_PATCH, REVIEW_DELETE)
+# Замок термина: служебное поле записи ner.json (префикс «_» — тот же, что у
+# _votes_). Выбор пал на него осознанно: format_ner_record отдаёт в промпты только
+# не-подчёркнутые ключи, _is_storable/_is_votable в cli/ner.py такие поля ни
+# голосуют, ни мержат, а TRANSIENT_FIELDS их не стирает — замок переживает
+# сохранение и не утекает к LLM. Значение храним только в «истина»: снятый замок
+# ключ удаляет, чтобы ner.json не пух от «_locked: false».
+NER_LOCK_FIELD = "_locked"
+# что в записях ner.json значит «замок стоит»
+NER_LOCK_TRUE = ("1", "true", "yes", "y", "да", "истина")
 # LLM вправе прислать действие по-английски — нормализуем к русскому канону
 _ACTION_ALIASES = {"delete": REVIEW_DELETE, "remove": REVIEW_DELETE,
                    "удалить": REVIEW_DELETE, "patch": REVIEW_PATCH}
@@ -1099,6 +1108,34 @@ def ner_action(entry) -> str:
     raw = str((entry or {}).get("action", "")).strip().lower()
     return _ACTION_ALIASES.get(raw,
                                raw if raw in REVIEW_ACTIONS else REVIEW_PATCH)
+
+
+def ner_is_locked(item) -> bool:
+    """Зафиксирована ли запись глоссария (замок на термине). Поле служебное
+    (NER_LOCK_FIELD); строки понимаем по-человечески («1», «да», «true»)."""
+    if not isinstance(item, dict):
+        return False
+    val = item.get(NER_LOCK_FIELD)
+    if isinstance(val, bool):
+        return val
+    return str(val if val is not None else "").strip().lower() in NER_LOCK_TRUE
+
+
+def ner_set_locked(item, locked=True):
+    """Поставить/снять замок записи (in-place). Снятый замок — ключ удаляется:
+    «_locked: false» в файле не нужно, а старые файлы его вообще не содержат."""
+    if not isinstance(item, dict):
+        return item
+    if locked:
+        item[NER_LOCK_FIELD] = True
+    else:
+        item.pop(NER_LOCK_FIELD, None)
+    return item
+
+
+def ner_locked_count(items) -> int:
+    """Сколько записей глоссария зафиксировано (для статусов и логов)."""
+    return sum(1 for it in (items or ()) if ner_is_locked(it))
 
 
 def ner_item_lookup(items_by_term, term):
@@ -1127,12 +1164,16 @@ def _int_count(value) -> int:
         return 0
 
 
-def filter_ner_items(items, count_threshold=0, types=None):
-    """Фильтр записей ner.json: порог count и список типов.
-    types — список типов или None (все)."""
+def filter_ner_items(items, count_threshold=0, types=None,
+                     skip_locked=False):
+    """Фильтр записей ner.json: порог count, список типов и замок.
+    types — список типов или None (все); skip_locked — убрать зафиксированные
+    записи (замок: их не отправляем на проверку LLM)."""
     types = [t.strip() for t in types if t.strip()] if types else []
     out = []
     for item in items:
+        if skip_locked and ner_is_locked(item):
+            continue
         if types and item.get("type", "") not in types:
             continue
         # порог 0 — фильтр выключен: записи БЕЗ count (опциональное
@@ -1411,10 +1452,12 @@ def apply_ner_patches(items, patches, logger=None):
     """Применение правок к записям нер.json (in-place).
     Запись применяется, если статус == «принять» (или отсутствует —
     legacy-патчи), флаг «применено» не стоит, термин существует
-    (точное совпадение, NFC). Дальше по действию: патч — поле записи
-    совпадает с old (NFC) и правка ложится на ПЕРВУЮ запись термина с
-    совпавшим old (корректно и для дублей термина с разными значениями
-    поля); удаление — из глоссария вычёркиваются ВСЕ записи этого термина.
+    (точное совпадение, NFC) и на нём не стоит замок. Дальше по действию:
+    патч — поле записи совпадает с old (NFC) и правка ложится на ПЕРВУЮ
+    незафиксированную запись термина с совпавшим old (корректно и для дублей
+    термина с разными значениями поля); удаление — из глоссария вычёркиваются
+    ВСЕ записи этого термина, но только если среди них нет зафиксированной
+    (замок на любой записи термина значит «термин не трогать»).
     Успешные записи помечаются in-place: применено=True +
     «дата применения»; неприменимые получают note с причиной
     (термин не найден / значение поля не совпадает — глоссарий
@@ -1440,6 +1483,14 @@ def apply_ner_patches(items, patches, logger=None):
             continue
         stage = p.get("stage") or ""
         prefix = f"[{stage}] " if stage else ""
+        if ner_is_locked(p) or all(ner_is_locked(it) for it in cands):
+            # замок: ни патч, ни удаление термина не проходят
+            p["note"] = "термин зафиксирован"
+            skipped += 1
+            continue
+        # запись-мишень — только из незафиксированных: дубль термина мог быть
+        # залочен частично, тогда правка идёт по остальным записям
+        cands = [it for it in cands if not ner_is_locked(it)]
         if ner_action(p) == REVIEW_DELETE:
             for it in cands:
                 doomed.add(id(it))

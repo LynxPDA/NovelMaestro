@@ -74,6 +74,7 @@ from core.common import (  # noqa: E402
     get_tagged_prompt,
     is_cjk_string,
     log_argv,
+    ner_is_locked,
     setup_logging,
     split_text_smart,
 )
@@ -986,7 +987,10 @@ def _merge_into(
     threshold: float,
     ngram_size: int,
 ) -> None:
-    """Влить final в target (in-place). Общая логика для finalize и snapshot."""
+    """Влить final в target (in-place). Общая логика для finalize и snapshot.
+
+    Зафиксированная (замок) запись-мишень: складываются только count и
+    _source_chunks, поля и голоса (_votes_*) остаются как есть."""
     for item in final:
         is_dup, existing = is_fuzzy_duplicate_in_list(
             item["term"], target, ngram_size, threshold
@@ -997,6 +1001,8 @@ def _merge_into(
             for s in item.get("_source_chunks", []):
                 if s not in existing.setdefault("_source_chunks", []):
                     existing["_source_chunks"].append(s)
+            if ner_is_locked(existing):
+                continue
             for field in list(item.keys()):
                 if field.startswith(META_PREFIX + "votes_"):
                     if field not in existing:
@@ -1063,7 +1069,10 @@ def update_global_ner(
             if is_dup:
                 assert existing is not None
                 existing["count"] = existing.get("count", 1) + 1
-                merge_fields(existing, ner)
+                # замок на записи: частота и список глав растут, поля и
+                # голоса (_votes_*) — нет
+                if not ner_is_locked(existing):
+                    merge_fields(existing, ner)
                 src = existing.setdefault("_source_chunks", [])
                 if chunk_index not in src:
                     src.append(chunk_index)
@@ -1134,6 +1143,8 @@ def merge_alias_groups(ner_data: list[dict], logger) -> int:
     запись пропускается (не участвует в группировке).
 
     - Основная запись = max(count). Её term сохраняется.
+    - Замок: зафиксированная запись группы становится основной и сохраняет
+      свои поля/голоса; группа целиком из зафиксированных не мержится.
     - Term'ы остальных записей -> aliases основной.
     - Голоса суммируются по всей группе -> победитель перезаписывается.
     - Вторичные записи удаляются из ner_data.
@@ -1166,8 +1177,19 @@ def merge_alias_groups(ner_data: list[dict], logger) -> int:
                  f"⚠️  Alias-группа > 4 записей ({len(indices)}): {terms}")
 
         # ── Основная запись ──
-        primary_idx = max(indices, key=lambda i: ner_data[i].get("count", 0))
+        # Замок: зафиксированная запись становится основной (её поля и голоса
+        # не перезаписываются — растут только count, aliases и главы).
+        # Замков в группе больше одного — схлопывать нельзя, группу пропускаем.
+        locked = [i for i in indices if ner_is_locked(ner_data[i])]
+        if len(locked) > 1:
+            _log(logger, logging.INFO,
+                 f"🔒 Alias-группа целиком зафиксирована ({len(locked)}): "
+                 f"{[ner_data[i].get('term', '?') for i in indices]} — пропуск")
+            continue
+        primary_idx = locked[0] if locked else max(
+            indices, key=lambda i: ner_data[i].get("count", 0))
         primary = ner_data[primary_idx]
+        primary_locked = bool(locked)
 
         # ── Сбор данных всей группы ──
         combined_votes: dict[str, dict[str, int]] = {}
@@ -1208,14 +1230,17 @@ def merge_alias_groups(ner_data: list[dict], logger) -> int:
         if all_aliases:
             primary["aliases"] = all_aliases
 
-        for field, votes in combined_votes.items():
-            primary[f"_votes_{field}"] = votes
-            primary[field] = _resolve_votes(votes)
+        if not primary_locked:
+            for field, votes in combined_votes.items():
+                primary[f"_votes_{field}"] = votes
+                primary[field] = _resolve_votes(votes)
 
         terms = [ner_data[i].get("term", "?") for i in indices]
         _log(logger, logging.INFO,
              f"🔗 Merge: {terms} -> «{primary['term']}» "
-             f"(aliases={all_aliases}, count={total_count})")
+             f"(aliases={all_aliases}, count={total_count})"
+             + (" · запись зафиксирована — поля не менялись"
+                if primary_locked else ""))
         merged += 1
 
     # ── Удаление вторичных записей (в обратном порядке индексов) ──

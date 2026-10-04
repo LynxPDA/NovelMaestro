@@ -1533,6 +1533,18 @@ input[type="number"] {
   white-space: nowrap;
   text-align: right;
 }
+/* Замок термина: зафиксированная запись помечена в таблице (снимается той же
+   кнопкой в действиях строки); правки и удаление такой строки нет */
+.ner-row-locked td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.ner-row-locked .icon-btn {
+  color: var(--accent);
+}
+/* замок термина в подсказке подсветки (редактор главы) */
+.hl-tip-locked {
+  color: var(--accent);
+}
 /* M6/M8: пагинация таблиц глоссария и отчётов */
 .ner-pager {
   display: flex;

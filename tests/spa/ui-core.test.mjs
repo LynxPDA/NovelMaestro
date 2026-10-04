@@ -787,3 +787,48 @@ test("markWhitespace: пробелы видимы, структура строк
   assert.equal(UICore.markWhitespace(null), "");
   assert.equal(UICore.markWhitespace(7), "7");
 });
+
+/* ── замок термина (_locked): состояние, а не столбец таблицы ───────── */
+test("nerIsLocked: только «истина», старые файлы без поля — разблокированы", () => {
+  assert.equal(UICore.nerIsLocked({ term: "A" }), false);
+  assert.equal(UICore.nerIsLocked({ _locked: false }), false);
+  assert.equal(UICore.nerIsLocked({ _locked: true }), true);
+  assert.equal(UICore.nerIsLocked({ _locked: "1" }), true);
+  assert.equal(UICore.nerIsLocked({ _locked: "да" }), true);
+  assert.equal(UICore.nerIsLocked({ _locked: "0" }), false);
+  assert.equal(UICore.nerIsLocked(null), false);
+});
+
+test("nerSetLocked: снятый замок убирает ключ, счётчик считает записи", () => {
+  const it = { term: "A" };
+  UICore.nerSetLocked(it, true);
+  assert.equal(it._locked, true);
+  UICore.nerSetLocked(it, false);
+  assert.equal("_locked" in it, false);
+  assert.equal(
+    UICore.nerLockedCount([{ _locked: true }, { term: "B" }, null]),
+    1,
+  );
+});
+
+test("filterNerItems: фильтр по замку и поиск не видит служебное поле", () => {
+  const items = [
+    { term: "林凡", type: "person", translation: "Лин Фань", _locked: true },
+    { term: "火", type: "skill", translation: "огонь" },
+  ];
+  assert.equal(UICore.filterNerItems(items, "", null, null).length, 2);
+  assert.equal(
+    UICore.filterNerItems(items, "", null, null, "locked").length,
+    1,
+  );
+  assert.equal(
+    UICore.filterNerItems(items, "", null, null, "locked")[0].term,
+    "林凡",
+  );
+  assert.equal(
+    UICore.filterNerItems(items, "", null, null, "unlocked")[0].term,
+    "火",
+  );
+  // поиск по всем полям не цепляет значение замка
+  assert.equal(UICore.filterNerItems(items, "true", null, "").length, 0);
+});

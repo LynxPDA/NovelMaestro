@@ -1733,7 +1733,9 @@ def test_profile_general_immune(tmp_path):
         core_settings.profile_delete(core_settings.PROFILE_DEFAULT)
     assert core_settings.profile_save_values(
         core_settings.PROFILE_DEFAULT, {"MODEL": "m"})["builtin"] is True
-    assert "MODEL=m" in Path(core_settings.env_file()).read_text(encoding="utf-8")
+    env_path = core_settings.env_file()
+    assert env_path is not None
+    assert "MODEL=m" in Path(env_path).read_text(encoding="utf-8")
     # General не живёт в файле профилей: там только настоящие профили
     assert not _profile_file().exists()
 
@@ -2395,3 +2397,12 @@ def test_stream_sse(jobs_srv, fake_script):
     assert '"status": "done"' in body
     # после стрима не должно быть второго HTTP-ответа
     assert b"HTTP/" not in data
+
+
+def test_build_ner_check_skip_locked():
+    """Замок: настройка формы «Не проверять зафиксированные» уходит в argv
+    флагом --skip_locked (значение не передаётся), снятая — флага нет."""
+    argv = build_command("ner_check", {"skip_locked": True}, {})
+    assert "--skip_locked" in argv
+    argv2 = build_command("ner_check", {"skip_locked": False}, {})
+    assert "--skip_locked" not in argv2 and "--no-skip_locked" not in argv2

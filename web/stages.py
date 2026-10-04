@@ -314,6 +314,10 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--threads", str(form["threads"])]
     if form.get("count_threshold") not in (None, ""):
         argv += ["-c", str(form["count_threshold"])]
+    # замок: зафиксированные записи с проверки снимаются целиком (флаг без
+    # значения); снятая настройка — проверяются как раньше
+    if form.get("skip_locked"):
+        argv.append("--skip_locked")
     if form.get("fields"):
         argv += ["--fields", str(form["fields"])]
     # --apply/--auto-apply/--no-bak убраны из Запусков; флаги применения

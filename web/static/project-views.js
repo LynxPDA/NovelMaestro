@@ -1193,6 +1193,11 @@ function viewProject(section, name, tab, job) {
       const notes = String(m.item.notes || "");
       tip.replaceChildren(
         h("div", { class: "hl-tip-term" }, term || "?"),
+        // замок — состояние термина: запись защищена от правок
+        UICore.nerIsLocked(m.item)
+          ? h("div", { class: "hl-tip-row hl-tip-locked" },
+              "зафиксирован (замок)")
+          : null,
         translation
           ? h("div", { class: "hl-tip-row" }, `Перевод: ${translation}`)
           : null,
@@ -1750,7 +1755,11 @@ function viewProject(section, name, tab, job) {
     }
     const knownKeys = new Set(DEFAULT_COLS);
     for (const it of data.items) {
-      for (const k of Object.keys(it)) if (k !== "__new") knownKeys.add(k);
+      // «_locked» — не столбец данных: замок термина — состояние, оно
+      // отмечается кнопкой в действиях строки
+      for (const k of Object.keys(it)) {
+        if (k !== "__new" && k !== "_locked") knownKeys.add(k);
+      }
     }
 
     const search = h("input", { class: "input", placeholder: "Поиск…" });
@@ -1766,7 +1775,14 @@ function viewProject(section, name, tab, job) {
     const pg = UIC.listPager({
       list: tbody,
       hideOnEmpty: true,
-      info: (total, page, pages) => ` ${page} / ${pages} · всего ${total} `,
+      info: (total, page, pages) => {
+        const locked = UICore.nerLockedCount(data.items);
+        return (
+          ` ${page} / ${pages} · всего ${total}` +
+          (locked ? ` · зафиксировано ${locked}` : "") +
+          " "
+        );
+      },
       rows: (slice) => {
         const rows = slice.map((it) =>
           editing === it ? editRow(it) : viewRow(it),
@@ -1803,6 +1819,13 @@ function viewProject(section, name, tab, job) {
 
     const LS_SEARCH_KEY = `nerSearch:${section}/${name}`;
     const LS_TYPES_KEY = `nerTypes:${section}/${name}`;
+    const LS_LOCK_KEY = `nerLock:${section}/${name}`;
+    let lockOnly = false; // показать только зафиксированные термины
+    try {
+      lockOnly = localStorage.getItem(LS_LOCK_KEY) === "1";
+    } catch {
+      /* localStorage недоступен (приватный режим) — не критично */
+    }
     let searchFields = null; // null = все поля, [] = ни одного
     let typeFilter = null; // null = все типы, [] = ни одного
     try {
@@ -1844,6 +1867,7 @@ function viewProject(section, name, tab, job) {
         search.value,
         searchFields,
         typeFilter,
+        lockOnly ? "locked" : null,
       );
       return UICore.sortNerItems(filtered, sortField, sortDir);
     }
@@ -1868,6 +1892,37 @@ function viewProject(section, name, tab, job) {
         /* localStorage недоступен (приватный режим) — не критично */
       }
     }
+    function saveLockOnly() {
+      try {
+        localStorage.setItem(LS_LOCK_KEY, lockOnly ? "1" : "0");
+      } catch {
+        /* localStorage недоступен (приватный режим) — не критично */
+      }
+    }
+    /* фильтр «только зафиксированные»: чекбокс в панели, состояние — в
+       localStorage рядом со столбцами и типами */
+    const lockCb = h("input", {
+      type: "checkbox",
+      "aria-label": "Показывать только зафиксированные термины",
+    });
+    lockCb.checked = lockOnly;
+    const lockBox = h(
+      "label",
+      {
+        class: "chk" + (lockOnly ? " chk-on" : ""),
+        title: "Показывать только зафиксированные термины",
+      },
+      lockCb,
+      " только зафиксированные",
+    );
+    lockCb.addEventListener("change", () => {
+      lockOnly = lockCb.checked;
+      lockBox.className = "chk" + (lockOnly ? " chk-on" : "");
+      saveLockOnly();
+      pg.page = 0;
+      renderRows();
+    });
+
     function searchFieldsLabel() {
       if (searchFields == null) return "Все поля";
       if (searchFields.length === 1) return colLabel(searchFields[0]);
@@ -2016,10 +2071,59 @@ function viewProject(section, name, tab, job) {
       pg.items = visible(); // отфильтровано и отсортировано
     }
 
+    /* Замок термина (служебное поле «_locked», NER_LOCK_FIELD): запись не
+       правится и не удаляется ни руками, ни прогоном проверки, а
+       apply_ner_patches пропускает по ней правки. Снятый замок ключ удаляет,
+       поэтому в ner.json он появляется только когда реально стоит. */
+    function toggleLock(it) {
+      const on = !UICore.nerIsLocked(it);
+      UICore.nerSetLocked(it, on);
+      renderRows();
+      saveNer();
+      toast(
+        on
+          ? `Термин «${it.term}» зафиксирован`
+          : `Замок снят: «${it.term}»`,
+      );
+    }
+
     function viewRow(it) {
+      const locked = UICore.nerIsLocked(it);
+      const acts = [];
+      if (!locked) {
+        // у зафиксированной записи правки и удаления нет вовсе
+        acts.push(iconBtn("pencil", "Редактировать", () => startEdit(it)));
+        acts.push(
+          iconBtn(
+            "trash",
+            "Удалить термин",
+            () =>
+              confirmModal(
+                "Удалить термин",
+                String(it.term || ""),
+                "УДАЛИТЬ",
+                async () => {
+                  data.items = data.items.filter((x) => x !== it);
+                  await saveNer();
+                  renderRows();
+                },
+              ),
+            true,
+          ),
+        );
+      }
+      acts.push(
+        iconBtn(
+          locked ? "lock" : "unlock",
+          locked
+            ? "Зафиксирован — снять замок"
+            : "Зафиксировать: не правится, не удаляется, не уходит на проверку",
+          () => toggleLock(it),
+        ),
+      );
       return h(
         "tr",
-        { class: "ner-row" },
+        { class: "ner-row" + (locked ? " ner-row-locked" : "") },
         ...visibleCols().map((c) =>
           h(
             "td",
@@ -2030,33 +2134,7 @@ function viewProject(section, name, tab, job) {
             cellText(it[c]),
           ),
         ),
-        h(
-          "td",
-          { class: "ner-actions" },
-          h(
-            "button",
-            { class: "btn btn-sm btn-ghost", onclick: () => startEdit(it) },
-            "✎",
-          ),
-          h(
-            "button",
-            {
-              class: "btn btn-sm btn-danger-ghost",
-              onclick: () =>
-                confirmModal(
-                  "Удалить термин",
-                  String(it.term || ""),
-                  "УДАЛИТЬ",
-                  async () => {
-                    data.items = data.items.filter((x) => x !== it);
-                    await saveNer();
-                    renderRows();
-                  },
-                ),
-            },
-            "✕",
-          ),
-        ),
+        h("td", { class: "ner-actions" }, ...acts),
       );
     }
 
@@ -2406,11 +2484,13 @@ function viewProject(section, name, tab, job) {
       const countEl = h("div", { class: "field-help" }, "");
       const err2 = h("div", { class: "form-error" });
       function victims() {
-        // условие применяется ко ВСЕМ терминам глоссария
+        // условие применяется ко ВСЕМ незафиксированным терминам: замок
+        // значит «не трогать», массовое удаление его не снимает
         const raw = valInp.value.trim();
         if (!raw) return [];
         const num = Number(raw);
         return data.items.filter((it) => {
+          if (UICore.nerIsLocked(it)) return false;
           const v = it[fieldSel.value];
           const s = String(v == null ? "" : v);
           // «=»/«≠» — СОДЕРЖИТ/НЕ СОДЕРЖИТ (по подстроке), а не
@@ -2445,7 +2525,8 @@ function viewProject(section, name, tab, job) {
           h(
             "div",
             { class: "modal-text" },
-            "Условие применяется ко всем терминам глоссария. ",
+            "Условие применяется ко всем незафиксированным терминам ",
+            "глоссария. ",
             "«=» — содержит, «≠» — не содержит (по подстроке, ",
             "не точное совпадение); «>»/«<» — больше/меньше.",
           ),
@@ -2516,6 +2597,7 @@ function viewProject(section, name, tab, job) {
       { class: "files-toolbar" },
       h("span", { class: "ner-search" }, search, searchFieldsBtn),
       h("span", { class: "spacer" }),
+      lockBox,
       typeBtn,
       colBtn,
       // «+»: новый столбец или новый термин (меню вместо двух кнопок)

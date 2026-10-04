@@ -16,10 +16,12 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "cli"))
 
 from core.common import (  # noqa: E402
+    NER_LOCK_FIELD as ner_const,
     REVIEW_ACCEPT, REVIEW_DELETE, REVIEW_PATCH, REVIEW_REJECT,
     apply_ner_patches, build_ner_batches, diff_ner_records,
     filter_ner_items, format_ner_record, glossary_body,
-    merge_review_entries, ner_action, ner_item_summary,
+    merge_review_entries, ner_action, ner_is_locked, ner_item_summary,
+    ner_locked_count, ner_set_locked,
     parse_rag_suggestions, parse_review_doc, review_entry,
 )
 import ner_check as NC  # noqa: E402
@@ -1124,3 +1126,163 @@ def test_ner_check_rag_terms_ignored_outside_rag(tmp_path, caplog,
     assert "игнорируется" in caplog.text
     # единственный запрос — типовой проход, RAG не запускался
     assert len(calls) == 1
+
+
+# ──────────────────────────────────────────────────────────────────────
+# замок термина (NER_LOCK_FIELD): защита записи от правок и удалений
+# ──────────────────────────────────────────────────────────────────────
+def test_ner_lock_field_is_service():
+    """_locked — служебное поле: не попадает ни в промпт, ни в тело записи."""
+    assert ner_const == "_locked"
+    it = {"term": "玄", "type": "Skill", "translation": "мрак", ner_const: True}
+    rec = format_ner_record(it)
+    assert ner_const not in rec and rec["translation"] == "мрак"
+    assert ner_const not in glossary_body([it])
+
+
+@pytest.mark.parametrize("value,expected", [
+    (True, True), (False, False), (None, False), ("1", True), ("0", False),
+    ("да", True), ("Да", True), ("истина", True), ("y", True), ("", False),
+    ("false", False),
+])
+def test_ner_is_locked_values(value, expected):
+    assert ner_is_locked({ner_const: value}) is expected
+    assert ner_is_locked(None) is False
+
+
+def test_ner_set_locked_removes_key_on_unlock():
+    it = {"term": "玄"}
+    ner_set_locked(it, True)
+    assert it[ner_const] is True
+    ner_set_locked(it, False)
+    assert ner_const not in it          # «_locked: false» в файле не хранится
+    assert ner_is_locked(it) is False
+    assert ner_locked_count([{ner_const: True}, {"term": "x"},
+                             {ner_const: False}]) == 1
+
+
+def test_filter_ner_items_skip_locked():
+    """Замок снимает запись с проверки; выключено — прежний список."""
+    items = [dict(i) for i in ITEMS]
+    items[0][ner_const] = True
+    assert [i["term"] for i in filter_ner_items(items, 4)] == \
+        ["林凡", "青云宗", "火球术"]
+    assert [i["term"] for i in
+            filter_ner_items(items, 4, skip_locked=True)] == \
+        ["青云宗", "火球术"]
+    # типы и порог считаются вместе с замком
+    assert [i["term"] for i in
+            filter_ner_items(items, 0, ["Person (male)"], True)] == []
+
+
+def test_apply_ner_patches_locked_skips_patch_and_delete():
+    """Замок блокирует и патч поля, и удаление термина; причина — в note."""
+    items = [
+        {"term": "玄", "type": "Skill", "translation": "мрак",
+         ner_const: True},
+        {"term": "其它", "type": "Item", "translation": "прочее"},
+    ]
+    entries = [e for e in (
+        review_entry({"term": "玄", "field": "translation", "old": "мрак",
+                      "new": "тайна"}, stage="RAG"),
+        review_entry({"term": "玄", "action": "удаление"}, stage="RAG"),
+        review_entry({"term": "其它", "field": "translation", "old": "прочее",
+                      "new": "иное"}, stage="RAG"),
+    ) if e]
+    applied, skipped = apply_ner_patches(items, entries)
+    assert len(applied) == 1 and skipped == 2
+    assert all(isinstance(e, dict) for e in entries)
+    assert items[0]["translation"] == "мрак"     # запись не тронута
+    assert len(items) == 2
+    assert entries[0]["note"] == "термин зафиксирован"
+    assert entries[1]["note"] == "термин зафиксирован"
+    assert not entries[0].get("applied")
+
+
+def test_apply_ner_patches_partial_lock_hits_unlocked_duplicate():
+    """Дубль термина: часть записей под замком — правка ложится на
+    незафиксированную запись с совпавшим old."""
+    items = [
+        {"term": "玄", "type": "Skill", "translation": "мрак",
+         ner_const: True},
+        {"term": "玄", "type": "Skill", "translation": "тайна"},
+    ]
+    entries = [e for e in (
+        review_entry({"term": "玄", "field": "translation",
+                     "old": "тайна", "new": "тьма"}),) if e]
+    applied, skipped = apply_ner_patches(items, entries)
+    assert len(applied) == 1 and skipped == 0
+    assert items[0]["translation"] == "мрак"      # зафиксированная — как была
+    assert items[1]["translation"] == "тьма"
+
+
+def test_ner_check_skip_locked_by_default(tmp_path, monkeypatch):
+    """Замок по умолчанию снимает запись с проверки: её нет в запросе LLM и
+    в правках; --no-skip_locked — прежнее поведение."""
+    monkeypatch.chdir(tmp_path)
+    items = [dict(i) for i in ITEMS]
+    items[0][ner_const] = True          # 林凡 зафиксирован
+    (tmp_path / "ner.json").write_text(
+        json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    calls = []
+
+    def fake(base_url, model, messages, **kw):
+        """LLM отвечает правками по тем записям, что реально в запросе."""
+        content = messages[-1]["content"]
+        calls.append(messages)
+        rows = [{"term": it["term"], "translation": it["translation"] + "!",
+                 "reason": "p"} for it in items if it["term"] in content]
+        return json.dumps(rows, ensure_ascii=False), None
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake)
+
+    assert NC.main(["--input", "ner.json", "--passes", "whole",
+                    "--model", "m"]) == 0
+    assert len(calls) == 1
+    prompt = calls[0][-1]["content"]
+    assert "林凡" not in prompt and "青云宗" in prompt
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
+                     .read_text(encoding="utf-8"))
+    assert [e["term"] for e in doc["entries"]] == ["青云宗", "火球术"]
+    assert doc["params"]["зафиксированные"] == "пропуск"
+    # правка зафиксированного термина не применяется даже прямо
+    applied, skipped = apply_ner_patches(items, [
+        review_entry({"term": "林凡", "field": "translation",
+                      "old": "Линь Фан", "new": "Лин Фань"})])
+    assert applied == [] and skipped == 1
+    assert items[0]["translation"] == "Линь Фан"
+    # --no-skip_locked — зафиксированный термин снова в запросе
+    assert NC.main(["--input", "ner.json", "--passes", "whole",
+                    "--no-skip_locked", "--model", "m"]) == 0
+    assert "林凡" in calls[1][-1]["content"]
+
+
+def test_ner_check_rag_skips_locked_terms(tmp_path, monkeypatch):
+    """RAG: зафиксированный термин из списка снимается; весь список под
+    замком — стадия не гоняет LLM впустую."""
+    monkeypatch.chdir(tmp_path)
+    items = [dict(i) for i in ITEMS]
+    for it in items:
+        it[ner_const] = True
+    (tmp_path / "ner.json").write_text(
+        json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    ch = tmp_path / "chapters" / "00000_1_Глава 1"
+    ch.mkdir(parents=True)
+    (ch / "chapter.txt").write_text("Глава 1\nтекст", encoding="utf-8")
+    calls = []
+    _mock_stream(monkeypatch, "[]", calls)
+    rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                  "--rag_terms", "林凡\n青云宗", "--rag_source_type", "chapter",
+                  "--chapters_dir", "chapters", "--model", "m"])
+    assert rc == 1 and calls == []          # все термины зафиксированы
+    items[1].pop(ner_const)                # 青云宗 разблокирован
+    (tmp_path / "ner.json").write_text(
+        json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    calls2 = []
+    _mock_stream(monkeypatch, "[]", calls2)
+    assert NC.main(["--input", "ner.json", "--passes", "rag",
+                    "--rag_terms", "林凡\n青云宗",
+                    "--rag_source_type", "chapter",
+                    "--chapters_dir", "chapters", "--model", "m"]) == 0
+    assert len(calls2) == 1
+    assert "青云宗" in calls2[0][-1]["content"]
+    assert "林凡" not in calls2[0][-1]["content"]

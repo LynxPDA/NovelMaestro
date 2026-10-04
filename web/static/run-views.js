@@ -1608,6 +1608,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     );
     // спорность одной записи по выбранному полю (или любому _votes_*)
     function isDisputed(it, ratio, threshold) {
+      // замок: зафиксированный термин не спорный — его поля не правятся,
+      // и в списке RAG-терминов ему делать нечего
+      if (UICore.nerIsLocked(it)) return false;
       if (threshold > 0 && !(Number(it.count) > threshold)) return false;
       const field = fieldSel.value;
       const keys = field

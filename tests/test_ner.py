@@ -17,7 +17,6 @@ from core import common as C  # noqa: E402
 
 import ner as NER  # noqa: E402
 from core import stage as core_stage  # noqa: E402
-from core import stage as core_stage  # noqa: E402
 
 
 @pytest.fixture()
@@ -491,3 +490,80 @@ def test_main_ignores_stale_progress(tmp_path, monkeypatch, ner_reset):
     NER.main()
     assert calls  # LLM вызывался — чанк обработан с нуля
     assert not (tmp_path / "ner_progress.json").exists()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# замок термина (ner.json «_locked»): дедупликация и слияние не трогают поля
+# ══════════════════════════════════════════════════════════════════════
+LOCK = "_locked"
+
+
+def test_update_global_ner_locked_keeps_fields(ner_globals):
+    """Замок: повторный термин увеличивает count и список глав, поля и
+    голоса (_votes_*) остаются как есть; новый термин — обычный путь."""
+    locked = {"term": "陈阳", "type": "Person (male)",
+              "translation": "Чэнь Ян", "count": 2, "_source_chunks": [1],
+              "_votes_type": {"Person (male)": 2}, LOCK: True}
+    NER.global_ner_data = [locked]
+    new = [{"term": "陈阳", "type": "Person (female)",
+            "translation": "Чэн Янг", "_source_chunks": [4]},
+           {"term": "新人", "type": "Person", "translation": "Новый"}]
+    added, updated = NER.update_global_ner(new, 4, 0.95, 3, SilentLog())
+    assert (added, updated) == (1, 1)
+    assert locked["count"] == 3
+    assert locked["_source_chunks"] == [1, 4]
+    assert locked["type"] == "Person (male)"
+    assert locked["translation"] == "Чэнь Ян"
+    assert locked["_votes_type"] == {"Person (male)": 2}
+
+
+def test_merge_into_locked_keeps_fields():
+    """Замок в finalize/snapshot: складываются только count и главы."""
+    target = [{"term": "陈阳", "type": "Person (male)", "count": 3,
+               "_ngrams": NER.get_ngrams("陈阳"), "_len": 2,
+               "_votes_type": {"Person (male)": 3}, LOCK: True}]
+    final = [{"term": "陈阳", "type": "Person (female)", "count": 2,
+              "_source_chunks": [7], "_ngrams": NER.get_ngrams("陈阳"),
+              "_len": 2, "_votes_type": {"Person (female)": 2},
+              "notes": "новое"}]
+    NER._merge_into(target, final, 0.95, 3)
+    assert len(target) == 1
+    assert target[0]["count"] == 5
+    assert target[0]["_source_chunks"] == [7]
+    # поля и голоса не перезаписаны
+    assert target[0]["type"] == "Person (male)"
+    assert target[0]["_votes_type"] == {"Person (male)": 3}
+    assert "notes" not in target[0]
+
+
+def test_merge_alias_groups_locked_primary():
+    """Один замок в группе — он и есть основная запись: term, поля и голоса
+    не меняются, вторичная запись уходит в aliases."""
+    data = [
+        {"term": "陈阳", "pinyin": "Chen Yang", "count": 3,
+         "type": "Person (female)", "_votes_type": {"Person (female)": 3}},
+        {"term": "陳陽", "pinyin": "chen yang", "count": 10,
+         "type": "Person (male)", "_votes_type": {"Person (male)": 10},
+         LOCK: True},
+    ]
+    n = NER.merge_alias_groups(data, SilentLog())
+    assert n == 1 and len(data) == 1
+    assert data[0]["term"] == "陳陽"          # зафиксированная запись главная
+    assert data[0]["type"] == "Person (male)"  # поля не перезаписаны
+    assert data[0]["_votes_type"] == {"Person (male)": 10}
+    assert data[0]["count"] == 13
+    assert "陈阳" in data[0].get("aliases", [])
+
+
+def test_merge_alias_groups_all_locked_skipped():
+    """Несколько замков в группе — схему выбирает человек: группа целая."""
+    data = [
+        {"term": "陈阳", "pinyin": "Chen Yang", "count": 3,
+         "type": "Person (male)", "_votes_type": {"Person (male)": 3},
+         LOCK: True},
+        {"term": "陳陽", "pinyin": "chen yang", "count": 10,
+         "type": "Person (female)",
+         "_votes_type": {"Person (female)": 10}, LOCK: True},
+    ]
+    assert NER.merge_alias_groups(data, SilentLog()) == 0
+    assert len(data) == 2

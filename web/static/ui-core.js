@@ -95,6 +95,11 @@
     moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
     sun:
       '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+    /* замок термина: закрытый — запись зафиксирована, открытый — обычная */
+    lock:
+      '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    unlock:
+      '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>',
   };
   function icon(name, cls) {
     var body = ICON_PATHS[name] || '<rect width="14" height="14" x="5" y="5" rx="1"/>';
@@ -265,7 +270,46 @@
     }
     return type === String(typeFilter);
   }
-  function filterNerItems(items, query, fields, typeFilter) {
+  /* ── замок термина (зеркало core/common.py: NER_LOCK_FIELD) ──
+     Служебное поле `_locked` записи ner.json: с ним запись не правится и не
+     удаляется (ни руками, ни прогоном проверки). Значение храним только в
+     «истина»: снятый замок ключ удаляет, поэтому старые файлы его вообще не
+     содержат и ведут себя как раньше. */
+  function nerIsLocked(item) {
+    if (!item || typeof item !== "object") return false;
+    var v = item._locked;
+    if (v === true || v === 1) return true;
+    var s = String(v == null ? "" : v)
+      .trim()
+      .toLowerCase();
+    return (
+      s === "1" || s === "true" || s === "yes" || s === "y" || s === "да" || s === "истина"
+    );
+  }
+  /* замок записи (in-place): снятый замок — ключ удаляется */
+  function nerSetLocked(item, locked) {
+    if (!item || typeof item !== "object") return item;
+    if (locked) item._locked = true;
+    else delete item._locked;
+    return item;
+  }
+  /* сколько записей зафиксировано (строка состояния вкладки «Глоссарий») */
+  function nerLockedCount(items) {
+    var n = 0;
+    for (var i = 0; i < (items || []).length; i++) {
+      if (nerIsLocked(items[i])) n++;
+    }
+    return n;
+  }
+  /* «замок» как фильтр таблицы: пусто — все, "locked" — только зафиксированные,
+     "unlocked" — только обычные */
+  function nerLockAllowed(item, lockFilter) {
+    if (!lockFilter) return true;
+    var locked = nerIsLocked(item);
+    if (lockFilter === "locked") return locked;
+    return lockFilter === "unlocked" ? !locked : true;
+  }
+  function filterNerItems(items, query, fields, typeFilter, lockFilter) {
     var list = items || [];
     var qq = String(query || "")
       .trim()
@@ -274,9 +318,16 @@
     return list.filter((it) => {
       var type = String(it.type || "");
       if (!nerTypeAllowed(type, typeFilter)) return false;
+      if (!nerLockAllowed(it, lockFilter)) return false;
       if (!qq) return true;
       if (keys && !keys.length) return false;
-      var searchKeys = keys || Object.keys(it).filter((k) => k !== "__new");
+      // «__new» и «_locked» — не поля данных: поиск по таблице не должен
+      // находить строку «true» в замке
+      var searchKeys =
+        keys ||
+        Object.keys(it).filter(function (k) {
+          return k !== "__new" && k !== "_locked";
+        });
       for (var i = 0; i < searchKeys.length; i++) {
         if (nerCellText(it[searchKeys[i]]).toLowerCase().includes(qq)) {
           return true;
@@ -882,6 +933,11 @@
     faviconHref: faviconHref,
 
     nerCellText: nerCellText,
+    /* замок термина (NER_LOCK_FIELD): состояние, а не столбец таблицы */
+    nerIsLocked: nerIsLocked,
+    nerSetLocked: nerSetLocked,
+    nerLockedCount: nerLockedCount,
+    nerLockAllowed: nerLockAllowed,
     nextNerSort: nextNerSort,
     isCjkString: isCjkString,
     filterNerItems: filterNerItems,

@@ -118,7 +118,7 @@ from core.common import ...  # noqa: E402
 - **текст и поиск терминов** — `get_ngrams`, `is_cjk`, `is_cjk_string`, `find_exact_match`, `normalize_for_search`, `build_smart_regex`, `load_ner_data`, `find_relevant_ner`, `extract_term_context`.
 - **расширенный контекст перевода** — `find_relevant_dict` (словарь в формате ner.json), `load_examples`, `find_relevant_examples`, `format_fewshot_block`, `load_rules_block`, `collect_gender_names`.
 - **замены «паттерн -> замена»** — `trim_rule_left`, `trim_rule_right`, `mark_whitespace`.
-- **глоссарий и его проверка** — `filter_ner_items`, `format_ner_record`, `glossary_body`, `build_ner_batches`, `parse_rag_suggestions`, `ner_item_lookup`, `ner_item_summary`, `ner_action`, `diff_ner_records`, `apply_ner_patches`, `review_entry`, `parse_review_doc`, `merge_review_entries`.
+- **глоссарий и его проверка** — `NER_LOCK_FIELD`, `ner_is_locked`, `ner_set_locked`, `ner_locked_count`, `filter_ner_items` (порядок: `skip_locked` снимает зафиксированные записи с проверки), `format_ner_record`, `glossary_body`, `build_ner_batches`, `parse_rag_suggestions`, `ner_item_lookup`, `ner_item_summary`, `ner_action`, `diff_ner_records`, `apply_ner_patches`, `review_entry`, `parse_review_doc`, `merge_review_entries`.
 - **правки перевода** — `fix_entry`, `merge_fix_entries`, `apply_fix_to_text`, `flex_fragment_pattern`, `apply_flex_fix`, `find_fragment_owner`.
 - **запрос к LLM** — **только** `stream_chat_completion` (весь стрим и политика повторов уже там) и `llm_messages` (сообщения строятся одной функцией).
 - **файлы, прогресс, предпросмотр** — `atomic_write`, `read_text_safe`, `web_progress_enabled`, `emit_progress`, `preview_request_payload`, `write_preview_request`, `preview_logger`.

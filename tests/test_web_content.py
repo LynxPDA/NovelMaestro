@@ -111,6 +111,23 @@ def test_ner_put_roundtrip(srv, tmp_path):
     assert got[0]["term"] == "A"
 
 
+def test_ner_put_keeps_lock(srv, tmp_path):
+    """Замок термина — служебное поле «_locked»: PUT сохраняет его как есть,
+    GET отдаёт обратно; у незафиксированной записи ключа нет."""
+    srv, port, root = srv()
+    pdir = _mk_project(root)
+    items = [{"term": "A", "type": "noun", "translation": "Б",
+              "_locked": True},
+             {"term": "B", "type": "noun", "translation": "В"}]
+    r = _request(port, "PUT", "/api/ner",
+                 {"project": "ACTIVE/demo", "items": items})
+    assert r["ok"] and r["total"] == 2
+    got = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert got[0]["_locked"] is True and "_locked" not in got[1]
+    got2 = _request(port, "GET", f"/api/ner?{_q('ACTIVE/demo')}")["items"]
+    assert got2[0]["_locked"] is True and "_locked" not in got2[1]
+
+
 def test_ner_put_rejects_non_list(srv, tmp_path):
     srv, port, root = srv()
     _mk_project(root)

@@ -110,7 +110,9 @@ from core.common import (  # noqa: E402
     load_prompt,
     merge_review_entries,
     ner_action,
+    ner_is_locked,
     ner_item_lookup,
+    ner_locked_count,
     parse_rag_suggestions,
     parse_review_doc,
     review_entry,
@@ -338,6 +340,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "выполняются одновременно (по умолчанию: 1).")
     p.add_argument("-c", "--count-threshold", type=int, default=0,
                    help="Порог count: записи с count > X (по умолчанию: 0).")
+    p.add_argument("--skip_locked", "--skip-locked",
+                   action=argparse.BooleanOptionalAction,
+                   help="не отправлять на проверку зафиксированные (с замком) "
+                        "записи: правки по ним всё равно не применяются "
+                        "(--no-skip_locked — проверять все).")
     p.add_argument("--fields", default="term,type,translation",
                    help="Поля записи, передаваемые LLM (через запятую). "
                         "term — всегда. По умолчанию: term,type,translation.")
@@ -725,6 +732,18 @@ def run_rag(args, stage, prompt_tpl) -> int:
     data = load_ner_json(args.input, logger)
     items_by_term = {unicodedata.normalize("NFC", i.get("term", "")): i
                      for i in data}
+    if args.skip_locked:
+        # термин под замком (любая из записей термина) — с проверки снимается
+        locked = {unicodedata.normalize("NFC", t) for t in terms
+                  if ner_is_locked(ner_item_lookup(items_by_term, t))}
+        if locked:
+            terms = [t for t in terms
+                     if unicodedata.normalize("NFC", t) not in locked]
+            logger.info(f"🔒 RAG: с проверки снято зафиксированных "
+                        f"терминов: {len(locked)}.")
+        if not terms:
+            logger.error("❌ RAG: все термины списка зафиксированы (замок).")
+            return 1
     if args.rag_source_type:
         logger.info(f"🔎 RAG: {len(terms)} терминов.")
     db = build_fts_index(text, 350)
@@ -852,7 +871,11 @@ def do_check(args, stage) -> int:
     data = load_ner_json(args.input, logger)
     type_filter = ([t.strip() for t in args.types.split(",") if t.strip()]
                    or None)
-    items = filter_ner_items(data, args.count_threshold, type_filter)
+    items = filter_ner_items(data, args.count_threshold, type_filter,
+                             skip_locked=args.skip_locked)
+    if args.skip_locked:
+        logger.info(f"🔒 Снято с проверки зафиксированных записей: "
+                    f"{ner_locked_count(data)}.")
     if not items:
         sys.exit("❌ Нет записей после фильтрации.")
     logger.info(f"📊 После фильтрации: {len(items)} записей.")
@@ -868,7 +891,9 @@ def do_check(args, stage) -> int:
               "порог count": args.count_threshold,
               "поля": args.fields,
               "промпт файл": args.prompt_file,
-              "типы": args.types}
+              "типы": args.types,
+              "зафиксированные": ("пропуск" if args.skip_locked
+                                else "проверка")}
     meta, entries = load_review_file(args.review, logger)
     created = (meta or {}).get("created") \
         or datetime.now().strftime("%Y-%m-%d %H:%M")

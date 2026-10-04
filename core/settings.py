@@ -29,6 +29,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from .common import env_overlay, parse_dotenv, read_text_safe, system_env_file
 
@@ -77,7 +78,8 @@ class Setting:
 
     def form_field(self) -> dict:
         """Поле формы в том же формате, что понимают SPA и spec стадий."""
-        out = {"name": self.name, "type": self.type}
+        # значения полей формы — любые JSON-значения (числа, bool, списки)
+        out: dict[str, object] = {"name": self.name, "type": self.type}
         if self.label:
             out["label"] = self.label
         out["default"] = self.default
@@ -110,7 +112,7 @@ class Group:
 
 
 def _s(key: str, label: str = "", type: str = "text",  # noqa: A002,A006
-       default: object = "", **kw: object) -> Setting:
+       default: object = "", **kw: Any) -> Setting:
     """Сокращённый конструктор настройки (реестр читается как таблица)."""
     return Setting(key, label, type, default, **kw)
 
@@ -243,6 +245,9 @@ GROUPS: tuple = (
                 stage="ner_check"),
             _s("NER_CHECK_BATCH_SIZE", "Бюджет пакета, ТОКЕНЫ", "number", "65536", stage="ner_check"),
             _s("NER_CHECK_COUNT_THRESHOLD", "Порог count", "number", "0", stage="ner_check"),
+            _s("NER_CHECK_SKIP_LOCKED", "Не проверять зафиксированные", "bool", True,
+                help="замок на термине: зафиксированная запись не уходит на проверку LLM и не правится патчами (см. вкладку «Глоссарий»); снято — зафиксированные проверяются как раньше, но правки по-прежнему применяются только к незафиксированным",
+                stage="ner_check"),
             _s("NER_CHECK_RAG_TERMS", "RAG: список терминов", "textarea", "", help="Каждый термин с новой строки; тип/перевод подтягиваются из ner.json; нужен режим «rag»", stage="ner_check"),
             _s("NER_CHECK_RAG_SOURCE_TYPE", "RAG: тип исходного файла", "select", "", options=("", "chapter", "translated", "redacted", "polished"),
                 help="Из какого файла главы собирается текст книги для FTS5-поиска (сборка в память, файл не пишется)", stage="ner_check"),
