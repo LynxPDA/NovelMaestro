@@ -4913,7 +4913,7 @@ function viewProject(section, name, tab, job) {
       }
     }
     await loadNotes();
-    // по умолчанию — отрендеренный вид (правка — по кнопке «Код»)
+    // по умолчанию — отрендеренный вид (правка — по кнопке «Редактор»)
     pane.setMode("md");
     return h(
       "div",

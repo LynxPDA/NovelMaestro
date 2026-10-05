@@ -263,7 +263,7 @@ test("previewPane: код по-прежнему виден, кадр спрят�
   assert.equal(pane.btn.textContent, "Рендер");
 });
 
-test("previewPane: «Рендер» → md (marked), обратно — код", () => {
+test("previewPane: «Рендер» → md (marked), обратно — редактор", () => {
   globalThis.marked = { parse: (s) => `<p>${s}</p>` };
   const pane = UIC.previewPane(fakeEditor("привет"), {});
   pane.btn.click();
@@ -271,7 +271,7 @@ test("previewPane: «Рендер» → md (marked), обратно — код",
   assert.equal(pane.host.style.display, "none");
   assert.equal(pane.frame.style.display, "block");
   assert.equal(pane.frame.srcdoc, "DOC(<p>привет</p>)");
-  assert.equal(pane.btn.textContent, "Код");
+  assert.equal(pane.btn.textContent, "Редактор");
   pane.btn.click();
   assert.equal(pane.mode, "code");
   assert.equal(pane.host.style.display, "");

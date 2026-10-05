@@ -256,7 +256,11 @@
       if (next === pane.mode) return;
       pane.mode = next;
       const code = pane.mode === "code";
-      pane.btn.textContent = code ? "Рендер" : "Код";
+      // название кнопки — то, что она показывает: «Рендер» или «Редактор»
+      pane.btn.textContent = code ? "Рендер" : "Редактор";
+      pane.btn.title = code
+        ? "Показать отрендеренный вид"
+        : "Показать редактор";
       pane.host.style.display = code ? "" : "none";
       pane.frame.style.display = code ? "none" : "block";
       if (!code) render();
