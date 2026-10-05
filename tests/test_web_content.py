@@ -1165,25 +1165,23 @@ def test_search_default_scopes(srv, tmp_path):
 
 
 def test_search_scope_case_and_context(srv, tmp_path):
-    """scope — только выбранные группы; case=1 — регистр важен; context — ширина."""
+    """scope — только выбранные группы; case=1 — регистр важен; context — ширина.
+
+    Запрос собирается функцией: f-строка с переносом строки внутри {} —
+    синтаксис Python 3.12+, на 3.11 файл не собирался вовсе."""
     srv, port, root = srv()
     _mk_search_book(_mk_project(root))
-    r = _request(port, "GET",
-                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='logs,prompts')}")
+
+    def get(**kw):
+        return _request(port, "GET", "/api/search?" + _q("ACTIVE/demo", **kw))
+
+    r = get(q="мир", scope="logs,prompts")
     assert {f["group"] for f in r["files"]} == {"prompts", "logs"}
     # регистр: в полировке «МИР»
-    r = _request(port, "GET",
-                 f"/api/search?{_q('ACTIVE/demo', q='МИР', scope='polished',
-                                   case='1')}")
-    assert r["total"] == 2
-    r = _request(port, "GET",
-                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='polished',
-                                   case='1')}")
-    assert r["total"] == 0
-    r = _request(port, "GET",
-                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter',
-                                   context=2)}")
-    assert r["files"][0]["hits"][0]["text"] == "…й мир"
+    assert get(q="МИР", scope="polished", case="1")["total"] == 2
+    assert get(q="мир", scope="polished", case="1")["total"] == 0
+    hits = get(q="мир", scope="chapter", context=2)["files"][0]["hits"]
+    assert hits[0]["text"] == "…й мир"
 
 
 def test_search_context_clamped(srv, tmp_path):
@@ -1193,17 +1191,14 @@ def test_search_context_clamped(srv, tmp_path):
     d = pdir / "chapters" / "00000_1_Глава 1"
     d.mkdir(parents=True)
     (d / "chapter.txt").write_text("мир 1\nмир 2\nмир 3\n", encoding="utf-8")
-    r = _request(port, "GET",
-                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter')}")
+    def get(**kw):
+        return _request(port, "GET", "/api/search?" + _q("ACTIVE/demo", **kw))
+
+    r = get(q="мир", scope="chapter")
     assert r["total"] == 3 and r["files"][0]["count"] == 3, "лимитов прогона нет"
-    r = _request(port, "GET",
-                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter',
-                                   context=10 ** 6)}")
-    assert r["files"][0]["hits"][0]["text"] == "мир 1"
-    r = _request(port, "GET",
-                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter',
-                                   context='много')}")
-    assert r["files"][0]["count"] == 3
+    assert get(q="мир", scope="chapter", context=10 ** 6)["files"][0]["hits"][0][
+        "text"] == "мир 1"
+    assert get(q="мир", scope="chapter", context="много")["files"][0]["count"] == 3
 
 
 def test_search_missing_project(srv, tmp_path):
