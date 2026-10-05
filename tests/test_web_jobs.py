@@ -15,7 +15,7 @@ from typing import cast
 
 import pytest
 
-from conftest import http_request
+from conftest import http_request, pid_alive
 from core import settings as core_settings
 from web.jobs import Job, JobManager, RING_SIZE
 from web.stages import (
@@ -292,9 +292,7 @@ def test_stop_kills_child_process_group(tmp_path, fake_script):
     end = time.time() + 5
     alive = True
     while time.time() < end:
-        try:
-            os.kill(child_pid, 0)  # сигнал 0 — проверка существования
-        except OSError:
+        if not pid_alive(child_pid):
             alive = False
             break
         time.sleep(0.1)

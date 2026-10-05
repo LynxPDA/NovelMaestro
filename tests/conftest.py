@@ -9,7 +9,8 @@
 - fake_env — минимальный .env во временной папке;
 - http_send / http_request / json_payload — единый HTTP-транспорт
   web-тестов: одно соединение на запрос, тело — байтами и текстом на ответе
-  (res.raw_bytes / res.raw_text), JSON-ответ — словарём."""
+  (res.raw_bytes / res.raw_text), JSON-ответ — словарём;
+- pid_alive — жив ли процесс на самом деле (зомби считается мёртвым)."""
 import http.client
 import json
 import os
@@ -161,6 +162,25 @@ def http_request(port: int, method: str, path: str, body: Any = None,
 def ensure_tmp(tmp_path):
     """Каталог tmp/ проекта (рабочие файлы) для тестов."""
     (tmp_path / "tmp").mkdir(exist_ok=True)
+
+
+def pid_alive(pid: int) -> bool:
+    """Жив ли процесс: зомби — мёртв.
+
+    `os.kill(pid, 0)` отвечает «да» и на зомби: убитый вместе с группой потомок
+    остаётся записью в /proc, пока его не подчистят. Обычная система делает это
+    сама; в контейнере PID 1 — обычный процесс, и «мёртвый» потомок выглядит
+    живым бесконечно."""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="ignore") as f:
+            # «pid (comm) state …»: в comm встречаются скобки — берём после последней
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return True   # нет /proc (macOS, Windows) — остаёмся на прежней проверке
 
 
 def pytest_xdist_auto_num_workers(config):

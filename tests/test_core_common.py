@@ -495,6 +495,8 @@ def test_load_prompt(tmp_path):
     assert C.load_prompt(str(empty)) is None
 
 
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="под root читается файл с любым режимом — OSError не получить")
 def test_load_prompt_oserror(tmp_path):
     p = tmp_path / "закрытый.txt"
     p.write_text("секрет", encoding="utf-8")
