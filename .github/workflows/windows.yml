@@ -78,6 +78,8 @@ jobs:
         if: github.event_name == 'push'
         # релиз мог уже существовать (пересборка того же тега): gh release create
         # на существующий падает, поэтому — обновить ассет
+        # shell обязателен: на windows-latest по умолчанию pwsh, а тут bash
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           # контекст github — из env, а не прямо в shell: имя тега не должно

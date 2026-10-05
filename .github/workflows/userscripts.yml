@@ -7,8 +7,9 @@
 # или автоматически при пуше тега v* — тогда файлы докладываются к релизу
 # этого тега и сбрасывается кэш CDN.
 #
-# p.s. httpx ставится только ради core.common: из него сборщик берёт
-# atomic_write и log_argv (свой атомарный запись-хелпер не изводим).
+# p.s. зависимости ставятся полными requirements.txt: сборщику нужен импорт
+# core.common (atomic_write и log_argv), а тот тянет транспорт и dotenv —
+# список ролей живёт в requirements.txt, а не в воркфлоу.
 
 name: Userscripts build
 
@@ -38,8 +39,8 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Зависимости (HTTP-клиент — для импорта core.common)
-        run: python3 -m pip install --quiet httpx
+      - name: Зависимости (сборщик импортирует core.common)
+        run: python3 -m pip install --quiet -r requirements.txt
 
       - name: Артефакты обязаны совпадать со сборкой
         run: python3 tools/build_userscripts.py --check --node-check
