@@ -39,16 +39,18 @@ class El {
     this.checked = false;
     this.disabled = false;
     this.hidden = false;
-    this.textContent = "";
+    this._text = "";
     this.dataset = {};
     this._attrs = {};
     this._listeners = {};
   }
+  /* как в DOM: не-узел (в т.ч. null) становится текстовым узлом — именно так
+     в интерфейс попадает «выделено: 2nullnull», и именно так это видно тестам */
   append(...kids) {
     for (const k of kids.flat()) {
-      if (k == null) continue;
-      k._parent = this;
-      this.children.push(k);
+      const kid = k instanceof El ? k : textNode(String(k));
+      kid._parent = this;
+      this.children.push(kid);
     }
   }
   /* поиск по классу — как в DOM: нужен обработчику Space */
@@ -61,16 +63,38 @@ class El {
     }
     return null;
   }
+  /* textContent в DOM заменяет детей: старая строка не должна оставаться
+     текстовым узлом рядом с новой (иначе статусы «сдвигаются» ) */
+  get textContent() { return this._text; }
+  set textContent(v) {
+    this._text = String(v);
+    this.children = this.children.filter((c) => c.tagName !== "#TEXT");
+  }
   appendChild(k) { this.children.push(k); }
   replaceChildren(...kids) { this.children = []; this.append(...kids); }
   addEventListener(ev, fn) {
     if (!this._listeners[ev]) this._listeners[ev] = [];
     this._listeners[ev].push(fn);
   }
-  setAttribute(k, v) { this._attrs[k] = String(v); }
+  /* событие «ушли с вкладки» (setView шлёт pi-navigate тело вкладки) */
+  dispatchEvent(ev) {
+    for (const fn of this._listeners[ev.type] || []) fn({ target: this, type: ev.type });
+    return true;
+  }
+  setAttribute(k, v) {
+    this._attrs[k] = String(v);
+    // чекбокс в DOM отмечен самим наличием атрибута, а h() его не ставит,
+    // когда значение false — свойство должно идти за атрибутом
+    if (k === "checked") this.checked = String(v) !== "false";
+  }
   getAttribute(k) { return this._attrs[k] ?? null; }
   remove() {}
   removeChild() {}
+  /* setView шлёт уходящей вкладке «pi-navigate» */
+  dispatchEvent(ev) {
+    for (const fn of this._listeners[ev.type] || []) fn({ type: ev.type, target: this });
+    return true;
+  }
   /* запрос по классу/тегу по всему поддереву: обработчикам запусков
      (".run-panel-head") нужен настоящий результат, а не null */
   querySelectorAll(sel) {
@@ -108,6 +132,13 @@ class El {
   click() {}
 }
 
+class TextNode extends El {}
+function textNode(t) {
+  const n = new TextNode("#text");
+  n.textContent = t;
+  return n;
+}
+
 /* ── мок-глобалы (в модуле: функции, созданные вне vm, замыкаются
    на внешний scope, поэтому document/Node/window кладём на globalThis) ── */
 globalThis.document = {
@@ -135,6 +166,18 @@ globalThis.window = {
   addEventListener() {},
 };
 globalThis.Node = El;
+globalThis.CustomEvent = class {
+  constructor(type, opts) {
+    this.type = type;
+    Object.assign(this, opts || {});
+  }
+};
+globalThis.CustomEvent = class {
+  constructor(type, opts) {
+    this.type = type;
+    Object.assign(this, opts || {});
+  }
+};
 globalThis.localStorage = (() => {
   const m = new Map();
   return {
@@ -184,6 +227,10 @@ async function api(path, opts = {}) {
       query: path.split("?")[1] || "",
       body: opts.body || null,
     });
+    /* предпросмотр запроса стадии: payload отдаёт тест */
+    if (p.endsWith("/preview-request")) {
+      return { ok: true, ...((globalThis.__preview) || { messages: [] }) };
+    }
     return { ok: true, moved: [], skipped: [] };
   }
   if (p === "/files") {
@@ -193,12 +240,14 @@ async function api(path, opts = {}) {
     };
   }
   if (p === "/file") return { content: "", missing: true, exists: false, size: 0 };
-  if (p === "/ner") return { items: [], too_large: false };
+  if (p === "/ner") return globalThis.__ner || { items: [], too_large: false };
   if (p === "/check") return { reports: [] };
   if (p === "/ner/review" || p === "/translate_check_llm/review") {
     return { exists: false, content: "", size: 0 };
   }
-  if (p.endsWith("/tree")) return { chapters: [], artifacts: {} };
+  if (p.endsWith("/tree")) {
+    return globalThis.__tree || { chapters: [], artifacts: {} };
+  }
   if (p.endsWith("/status")) return { status: { chapters: {}, counts: {} } };
   if (p.endsWith("/chapters/titles")) return { titles: {} };
   if (p === "/search") {
@@ -219,20 +268,23 @@ async function api(path, opts = {}) {
   }
   if (p.startsWith("/stages/")) {
     const key = p.split("/")[2];
-    return { spec: { key, title: key, fields: SPEC_FIELDS[key] || [] },
+    /* preview: true — стадия LLM, у неё есть «Предпросмотр запроса» */
+    return { spec: { key, title: key, preview: true,
+                     fields: SPEC_FIELDS[key] || [] },
              options: {} };
   }
   return { ok: true };
 }
 
-function makeEditor(initial) {
+function makeEditor(initial, lang) {
   const ta = new El("textarea");
   ta.value = initial;
+  ta.lang = lang || ""; // язык редактора — тестам проверять именно его
   return {
     root: ta, isCM: false,
     getValue: () => ta.value,
     setValue: (t) => { ta.value = t; },
-    setLang() {}, setReadOnly() {},
+    setLang(l) { ta.lang = l || ""; }, setReadOnly() {},
   };
 }
 
@@ -290,6 +342,7 @@ const sandbox = {
   localStorage: globalThis.localStorage,
   Node: El,
   DOMParser: globalThis.DOMParser,
+  CustomEvent: globalThis.CustomEvent,
   h,
   api,
   previewFontSelect: () => new El("select"),
@@ -312,10 +365,45 @@ const sandbox = {
     return box;
   },
   attachTooltip() {},
+  toggleMenu() {},
+  /* диалог подтверждения из app.js: dangerous-действие требует слова-пароля */
+  confirmModal(title, text, confirmWord, onConfirm) {
+    const word = h("input", { class: "input", placeholder: confirmWord });
+    const err = h("div", { class: "form-error" });
+    const box = h(
+      "div",
+      { class: "modal" },
+      h("div", { class: "modal-title" }, title),
+      h("div", { class: "modal-text" }, text),
+      word,
+      err,
+      h(
+        "div",
+        { class: "modal-actions" },
+        h("button", { class: "btn btn-ghost" }, "Отмена"),
+        h(
+          "button",
+          {
+            class: "btn btn-danger",
+            onclick: async () => {
+              if (word.value.trim().toUpperCase() !== confirmWord) {
+                err.textContent = `Введите слово ${confirmWord}`;
+                return;
+              }
+              await onConfirm();
+            },
+          },
+          confirmWord,
+        ),
+      ),
+    );
+    globalThis.document.body.append(h("div", { class: "modal-backdrop" }, box));
+    return box;
+  },
   mdPreviewSrcdoc: (html) => html,
   fitPreviewFrame() {},
   makeEditor,
-  extOf: () => "txt",
+  extOf: (n) => UICore.extOf(n),
   UICore,
 };
 vm.createContext(sandbox);
@@ -325,8 +413,8 @@ vm.runInContext(SRC, sandbox);
 const viewProject = sandbox.viewProject;
 
 /* все вкладки страницы проекта: viewProject(section, name, tab) */
-const TABS = ["files", "run", "editor", "ner", "review", "chapters",
-              "search", "status", "config", "prompts", "logs", "notes"];
+const TABS = ["files", "run", "editor", "ner", "review", "chapters", "search",
+              "status", "config", "prompts", "logs", "notes"];
 
 for (const tab of TABS) {
   test(`вкладка «${tab}» рендерится без ReferenceError`, async () => {
@@ -498,25 +586,25 @@ test("quick-look: Space на строке открывает модалку с s
 const tick = () => new Promise((r) => setTimeout(r, 10));
 
 /* ── «Поиск»: группы приходят с сервера, запрос — одним вызовом ── */
+const SEARCH_CLUSTERS = [
+  ["chapters", "Файлы глав"],
+  ["other", "Прочее"],
+];
+/* метки групп глав — те же слаги стадий, что и в остальном интерфейсе */
 const SEARCH_GROUPS = [
-  ["chapter", "Оригинал глав"],
-  ["translated", "Перевод (черновик)"],
-  ["redacted", "Правка перевода"],
-  ["polished", "Полировка"],
-  ["ner", "Глоссарий"],
-  ["notes", "Заметки книги"],
-  ["prompts", "Промпты"],
-  ["reports", "Отчёты проверок"],
-  ["logs", "Логи"],
+  ["chapter", "chapter", "chapters"],
+  ["translated", "translated", "chapters"],
+  ["redacted", "redacted", "chapters"],
+  ["polished", "polished", "chapters"],
+  ["notes", "Заметки книги", "other"],
 ];
 const SEARCH_EMPTY = {
   ok: true,
-  scopes: ["chapter", "polished", "ner", "notes"],
-  labels: Object.fromEntries(SEARCH_GROUPS),
+  scopes: ["chapter", "polished", "notes"],
+  clusters: SEARCH_CLUSTERS,
   groups: SEARCH_GROUPS,
   scanned: 0,
   skipped: 0,
-  truncated: false,
 };
 
 function collectText(node, out = []) {
@@ -809,39 +897,193 @@ test("запуски: профиль уезжает в params запуска в�
   assert.match(RUN_SRC, /params: buildParams\(key, spec\)/);
   assert.match(RUN_SRC, /if \(f\.name === PROFILE_FIELD\) continue/);
 });
-
-/* ── «Поиск»: группы с сервера, один GET на поиск, переход в редактор ── */
-test("поиск: вкладка берёт группы с сервера и шлёт один GET /api/search", async () => {
-  globalThis.__search = { ...SEARCH_EMPTY, files: [], total: 0 };
+/* ── «Поиск»: группы с сервера, один GET, постраничный вывод, редактор ── */
+test("поиск: вкладка, поиск и сводка результатов", async () => {
+  globalThis.__search = {
+    ...SEARCH_EMPTY,
+    scopes: ["chapter", "polished"],
+    files: [
+      {
+        group: "chapter",
+        path: "chapters/00000_1_Глава 1/chapter.txt",
+        name: "chapter.txt",
+        chapter: 1,
+        count: 1,
+        hits: [{ line: 2, start: 0, end: 3, text: "мир" }],
+      },
+      {
+        group: "polished",
+        path: "chapters/00000_1_Глава 1/polished.txt",
+        name: "polished.txt",
+        chapter: 1,
+        count: 2,
+        hits: [
+          { line: 7, start: 6, end: 9, text: "тихий мир" },
+          { line: 9, start: 0, end: 3, text: "мир!" },
+        ],
+      },
+    ],
+    total: 3,
+    scanned: 9,
+    skipped: 0,
+  };
   globalThis.__gets = [];
+  globalThis.localStorage.clear(); // настройки вкладки — с этого теста
   const page = viewProject("ACTIVE", "Книга", "search");
   await tick();
-  /* чипсы групп приходят из ответа сервера: реестр тут не дублируется */
-  assert.equal(findByClass(page, "search-scope-chip").length,
-    SEARCH_GROUPS.length, "чипсы групп — по одной на группу реестра");
+  /* кластеры и группы приходят из ответа сервера: реестр тут не дублируется */
+  assert.deepEqual(
+    findByClass(page, "search-cluster-label").map((n) => collectText(n).join("")),
+    ["Файлы глав:", "Прочее:"],
+  );
+  const chips = findByClass(page, "search-scope-chip");
+  assert.equal(chips.length, SEARCH_GROUPS.length, "чипсы — по одной на группу");
+  assert.deepEqual(
+    chips.map((n) => collectText(n).join("")).slice(0, 4),
+    ["chapter", "translated", "redacted", "polished"],
+    "метки групп глав — те же слаги стадий, что в остальном интерфейсе",
+  );
   const boxes = findByClass(page, "search-scope");
-  assert.equal(boxes.filter((b) => b.checked).length, SEARCH_EMPTY.scopes.length,
-    "отмечены группы из серверного значения по умолчанию");
+  assert.equal(
+    boxes.filter((b) => b.checked).length,
+    2,
+    "отмечены группы из серверного значения по умолчанию",
+  );
+  const ctx = findByClass(page, "search-ctx")[0];
+  assert.equal(ctx.getAttribute("max"), "300", "контекст не бывает больше 300");
+  assert.deepEqual(
+    collectText(findByClass(page, "search-ctx-label")[0]),
+    ["Контекст:"],
+    "подпись контекста — с двоеточием",
+  );
+  console.log("DBG bodies:", page.children.length, JSON.stringify(page.children.map((c) => c.className)));
+  const st1 = findByClass(page, "search-status");
+  assert.equal(st1.length, 1, "сводка — одна строка");
+  assert.deepEqual(collectText(st1[0]), ["Поиска не было"]);
+
   const input = findByClass(page, "search-q")[0];
   input.value = "мир";
-  const run = findByClass(page, "search-run")[0];
-  await run._listeners.click[0]();
+  await findByClass(page, "search-run")[0]._listeners.click[0]();
   await tick();
-  const call = globalThis.__gets.find((c) => c.path === "/search"
-    && new URLSearchParams(c.query).get("q"));
+  const call = globalThis.__gets.find(
+    (c) => c.path === "/search" && new URLSearchParams(c.query).get("q"),
+  );
   assert.ok(call, "поиск ушёл на GET /api/search");
   const q = new URLSearchParams(call.query);
   assert.equal(q.get("project"), "ACTIVE/Книга");
   assert.equal(q.get("q"), "мир");
-  assert.equal(q.get("scope"), SEARCH_EMPTY.scopes.join(","));
+  assert.equal(q.get("scope"), "chapter,polished");
   assert.equal(q.get("context"), "60");
   assert.notEqual(q.get("case"), "1", "регистр по умолчанию не учитывается");
+  {
+    const ss = findByClass(page, "search-status");
+    console.log("DBG2 count=", ss.length);
+    for (const n of ss) {
+      const chain = [];
+      let x = n;
+      while (x) { chain.push(x.tagName + "." + (x.className || "-")); x = x._parent; }
+      console.log("DBG2 node", JSON.stringify(n._text), "children", n.children.length,
+        JSON.stringify(n.children.map((c) => c.tagName + ":" + c._text)), "chain", chain.join(" < "));
+    }
+  }
+  assert.equal(
+    collectText(findByClass(page, "search-status")[0]).join(","),
+    "Совпадений: 3 · файлов: 2 · прочитано: 9",
+    "сводка — отдельной строкой, без «показаны не все»",
+  );
+  /* строки результатов — в своём блоке; на одной странице пейджер молчит */
+  const list = findByClass(page, "search-rows")[0];
+  assert.equal(findByClass(page, "ner-pager").length, 1);
+  assert.equal(findByClass(page, "ner-pager-info").length, 0,
+    "на одной странице пейджер не показывает ничего лишнего");
+  assert.deepEqual(
+    list.children.map((n) => collectText(findByClass(n, "search-file-path")[0]).join("")),
+    [
+      "chapters/00000_1_Глава 1/chapter.txt",
+      "chapters/00000_1_Глава 1/polished.txt",
+    ],
+  );
+  const marks = findByClass(page, "search-hit-text").flatMap((n) =>
+    findTag(n, "mark").map((m) => collectText(m).join("")),
+  );
+  assert.deepEqual(marks, ["мир", "мир", "мир"], "совпадения подсвечены");
+  assert.deepEqual(
+    findByClass(page, "search-hit-line").map((n) => collectText(n).join("")),
+    ["2", "7", "9"],
+    "номер строки рядом с фрагментом",
+  );
 });
 
-test("поиск: запрос и группы помнятся, совпадение подсвечено", async () => {
+test("поиск: на нескольких страницах пейджер считает файлы", async () => {
   globalThis.__search = {
     ...SEARCH_EMPTY,
-    scopes: ["chapter", "polished"],
+    files: Array.from({ length: 30 }, (_, i) => ({
+      group: "chapter",
+      path: `chapters/00000_${i + 1}_Глава/chapter.txt`,
+      name: "chapter.txt",
+      chapter: i + 1,
+      count: 1,
+      hits: [{ line: 1, start: 0, end: 3, text: "мир" }],
+    })),
+    total: 30, scanned: 30, skipped: 0,
+  };
+  globalThis.localStorage.clear(); // настройки вкладки — с этого теста
+  const page = viewProject("ACTIVE", "Книга", "search");
+  await tick();
+  const q = findByClass(page, "search-q")[0];
+  q.value = "мир";
+  await findByClass(page, "search-run")[0]._listeners.click[0]();
+  await tick();
+  assert.equal(findByClass(page, "search-rows")[0].children.length, 25,
+    "страница — 25 файлов");
+  const pager = findByClass(page, "ner-pager")[0];
+  const info = findByClass(page, "ner-pager-info")[0];
+  assert.deepEqual(collectText(info).join(","), " 1 / 2 · файлов с совпадениями 30 ");
+  const next = pager.querySelectorAll("button")[1];
+  await next._listeners.click[0]();
+  assert.equal(findByClass(page, "search-rows")[0].children.length, 5,
+    "вторая страница — остаток");
+});
+
+test("поиск: «Только главы» оставляет один кластер", async () => {
+  globalThis.__search = { ...SEARCH_EMPTY, files: [], total: 0 };
+  globalThis.localStorage.clear(); // настройки вкладки — с этого теста
+  const page = viewProject("ACTIVE", "Книга", "search");
+  await tick();
+  const only = findByClass(page, "search-chips")[0].children
+    .filter((b) => collectText(b).join("") === "Только главы")[0];
+  await only._listeners.click[0]();
+  assert.deepEqual(
+    findByClass(page, "search-cluster-label").map((n) => collectText(n).join("")),
+    ["Файлы глав:", "Прочее:"],
+    "кластеры не прячутся: чипсы — это выбор охвата",
+  );
+  assert.deepEqual(
+    findByClass(page, "search-scope-chip").map((n) => collectText(n).join("")),
+    ["chapter", "translated", "redacted", "polished", "Заметки книги"],
+  );
+  assert.deepEqual(
+    findByClass(page, "search-scope").map((b) => b.checked),
+    [true, true, true, true, false],
+    "отмечены только артефакты глав",
+  );
+  assert.deepEqual(
+    JSON.parse(globalThis.localStorage.getItem("search:ACTIVE/Книга")).scopes,
+    ["chapter", "translated", "redacted", "polished"],
+    "охват помнится на проект",
+  );
+});
+
+test("поиск: клик по файлу главы открывает вкладку «Редактор»", async () => {
+  globalThis.__tree = {
+    chapters: [{
+      number: 1,
+      dir: "00000_1_Глава 1",
+      artifacts: { "chapter.txt": 12, "polished.txt": 34 },
+    }],
+  };
+  globalThis.__search = {
+    ...SEARCH_EMPTY,
     files: [{
       group: "polished",
       path: "chapters/00000_1_Глава 1/polished.txt",
@@ -850,39 +1092,303 @@ test("поиск: запрос и группы помнятся, совпаде�
       count: 1,
       hits: [{ line: 7, start: 6, end: 9, text: "тихий мир" }],
     }],
-    total: 1, scanned: 3, skipped: 0, truncated: false,
+    total: 1, scanned: 3, skipped: 0,
   };
   globalThis.__gets = [];
+  globalThis.localStorage.clear(); // настройки вкладки — с этого теста
   const page = viewProject("ACTIVE", "Книга", "search");
   await tick();
-  /* прошлый запрос вкладки — из localStorage того же проекта */
-  assert.equal(findByClass(page, "search-q")[0].value, "мир",
-    "последний запрос помнится на проект");
   await findByClass(page, "search-run")[0]._listeners.click[0]();
   await tick();
-  /* textContent в mock-е не выводится из детей — читаем поддерево целиком */
-  const marks = findByClass(page, "search-hit-text")
-    .flatMap((n) => findTag(n, "mark").map((m) => collectText(m).join("")));
-  assert.deepEqual(marks, ["мир"], "совпадение подсвечено");
-  const lines = findByClass(page, "search-hit-line")
-    .map((n) => collectText(n).join(""))
-  assert.deepEqual(lines, ["7"], "номер строки рядом с фрагментом");
-});
-
-test("поиск: имя файла в результате открывает его в редакторе", async () => {
-  const before = (globalThis.__gets || []).length;
-  const page = viewProject("ACTIVE", "Книга", "search");
-  await tick();
-  /* результат появляется только после запроса: он и в этот раз из мока */
+  const input = findByClass(page, "search-q")[0];
+  input.value = "мир";
   await findByClass(page, "search-run")[0]._listeners.click[0]();
   await tick();
   const link = findByClass(page, "search-file-path")[0];
   assert.ok(link, "строка результата с именем файла");
   await link._listeners.click[0]();
   await tick();
-  const gets = (globalThis.__gets || []).slice(before);
-  const file = gets.find((c) => c.path === "/file");
-  assert.ok(file, "клик по имени файла открыл редактор");
-  assert.equal(new URLSearchParams(file.query).get("path"),
-    "chapters/00000_1_Глава 1/polished.txt");
+  const call = (globalThis.__gets || [])
+    .filter((c) => c.path === "/file")
+    .slice(-1)[0];
+  assert.ok(call, "клик по имени файла открыл редактор: "
+    + (globalThis.__gets || []).map((c) => c.path + "?" + c.query).join(" "));
+  assert.equal(new URLSearchParams(call.query).get("path"),
+    "chapters/00000_1_Глава 1/polished.txt",
+    "глава и артефакт взяты из пути результата");
+  const sel = findByClass(page, "ed-type")[0];
+  assert.equal(sel.value, "polished.txt", "панель открылась на файле результата");
+  assert.deepEqual(collectText(findByClass(page, "ed-meta")[0]).join(","),
+    "новый файл · polished.txt");
+  /* запрос в панель передаёт openEditor: панель открывается заполненной */
+  assert.match(SRC, /ed\.find = find \? \{ type: seg\[2\], q: String\(find\) \} : null/);
+  assert.match(SRC, /openFind\(pInfo\.editor, f\.q\)/);
+});
+
+test("поиск: кнопка в глоссарий ведёт на вкладку с тем же запросом", async () => {
+  globalThis.__ner = {
+    items: [{ term: "мир", type: "person" }, { term: "лес", type: "person" }],
+    by_type: { person: 2 },
+    too_large: false,
+  };
+  globalThis.__search = { ...SEARCH_EMPTY, files: [], total: 0 };
+  globalThis.localStorage.clear(); // настройки вкладки — с этого теста
+  const page = viewProject("ACTIVE", "Книга", "search");
+  await tick();
+  const input = findByClass(page, "search-q")[0];
+  input.value = "мир";
+  await findByClass(page, "search-run")[0]._listeners.click[0]();
+  await tick();
+  const btn = findByClass(page, "search-ner-btn")[0];
+  assert.deepEqual(collectText(btn), ["Искать в глоссарии"]);
+  await btn._listeners.click[0]();
+  await tick();
+  const box = findByClass(page, "ner-search")[0];
+  assert.ok(box, "открылась вкладка глоссария");
+  assert.equal(box.querySelectorAll("input")[0].value, "мир",
+    "глоссарий открылся с уже подставленным запросом");
+});
+/* ── «Глоссарий»: поиск по видимым столбцам, панель «⋮», выделение ── */
+const NER_SEED = [
+  { term: "мир", type: "person", translation: "мир", count: 5, note: "тихий" },
+  { term: "Лина", type: "place", translation: "Лина", count: 3 },
+  { term: "дракон", type: "thing", translation: "дракон", count: 1, _locked: true },
+];
+
+function nerPage(items, prefs) {
+  globalThis.localStorage.clear();
+  globalThis.__ner = {
+    items,
+    by_type: items.reduce((acc, it) => {
+      acc[it.type] = (acc[it.type] || 0) + 1;
+      return acc;
+    }, {}),
+    too_large: false,
+  };
+  globalThis.__calls = [];
+  for (const [k, v] of Object.entries(prefs || {})) {
+    globalThis.localStorage.setItem(k, JSON.stringify(v));
+  }
+  return viewProject("ACTIVE", "Книга", "ner");
+}
+const nerRows = (page) => findByClass(page, "ner-row");
+const nerHeads = (page) => findByClass(page, "ner-th-btn").map((n) => collectText(n).join(""));
+const nerSearch = (page) => findByClass(page, "ner-search")[0].querySelectorAll("input")[0];
+const nerFirstCol = (r) => collectText(r).join(" ").split(" ")[0];
+
+test("глоссарий: по умолчанию ищется по отображаемым столбцам", async () => {
+  const page = await nerPage(NER_SEED.map((it) => ({ ...it })));
+  await tick();
+  assert.deepEqual(nerHeads(page), ["term", "type", "translation"]);
+  const search = nerSearch(page);
+  /* «note» — скрытый столбец: в нём поиск не работает */
+  search.value = "тихий";
+  await search._listeners.input[0]();
+  assert.equal(nerRows(page).length, 0, "совпадения в скрытом столбце не ищутся");
+  search.value = "лина";
+  await search._listeners.input[0]();
+  assert.deepEqual(nerRows(page).map(nerFirstCol), ["Лина"]);
+});
+
+test("глоссарий: поля поиска помнятся и ищут по скрытым столбцам", async () => {
+  const page = await nerPage(NER_SEED.map((it) => ({ ...it })), {
+    "nerSearch:ACTIVE/Книга": ["term", "note"],
+  });
+  await tick();
+  assert.deepEqual(
+    collectText(findByClass(page, "ner-fields-btn")[0]).join(","),
+    "Поля поиска (2)",
+  );
+  const search = nerSearch(page);
+  search.value = "тихий";
+  await search._listeners.input[0]();
+  assert.deepEqual(nerRows(page).map(nerFirstCol), ["мир"],
+    "скрытый столбец из сохранённого набора снова участвует в поиске");
+});
+
+test("глоссарий: всё управление спрятано в одну кнопку «⋮»", async () => {
+  const page = await nerPage(NER_SEED.map((it) => ({ ...it })));
+  await tick();
+  const toolbar = findByClass(page, "files-toolbar")[0];
+  assert.deepEqual(
+    toolbar.children.map((n) => n.className),
+    ["ner-search", "spacer", "files-tools", "files-sel hidden"],
+    "в тулбаре остаются только поиск, экспорт и панель выделения",
+  );
+  assert.deepEqual(
+    findByClass(page, "files-tools")[0].children.map((n) => n.className),
+    ["toolbar-menu", "btn btn-sm btn-ghost"],
+    "из кнопок тулбара остаётся только экспорт",
+  );
+  const box = findByClass(page, "menu-box")[0];
+  assert.deepEqual(
+    box.children.map((c) => collectText(c).join("")),
+    [
+      " только зафиксированные",
+      "Столбцы (3)",
+      "Типы: все",
+      "Поля поиска: отображаемые",
+      "",
+      "Добавить столбец",
+      "Добавить термин",
+      "",
+      "Удалить столбец",
+      "Удалить по фильтру",
+    ],
+  );
+  assert.equal(
+    box.children.filter((c) => c.className.includes("menu-sep")).length,
+    2,
+    "показ, добавление и удаление разделены",
+  );
+  /* замок — чекбокс: его состояние видно внутри меню */
+  assert.equal(findByClass(page, "ner-lock")[0].querySelectorAll("input")[0].checked, false);
+});
+
+test("глоссарий: чекбоксы строк, групповой замок и «_locked» не столбец", async () => {
+  const items = NER_SEED.map((it) => ({ ...it }));
+  const page = await nerPage(items);
+  await tick();
+  assert.equal(nerRows(page).length, 3);
+  assert.deepEqual(nerHeads(page), ["term", "type", "translation"],
+    "замок не виден столбцом — он действие в строке");
+  const rows = nerRows(page);
+  for (const i of [0, 1]) {
+    const cb = findByClass(rows[i], "fsel")[0];
+    cb.checked = true;
+    await cb._listeners.change[0]();
+  }
+  const selBar = findByClass(page, "files-sel")[0];
+  assert.ok(!selBar.className.includes("hidden"), "панель выделения показалась");
+  assert.deepEqual(collectText(findByClass(selBar, "files-sel-count")[0]).join(","),
+    "выделено: 2");
+  assert.ok(findByClass(page, "files-tools")[0].className.includes("hidden"),
+    "панель заменяет кнопки тулбара");
+  assert.deepEqual(
+    selBar.querySelectorAll("button").map((b) => b.getAttribute("aria-label")),
+    [
+      "Зафиксировать выделенные",
+      "Снять замок с выделенных",
+      "Удалить выделенные",
+      "Снять выделение",
+    ],
+  );
+  const lockBtn = selBar.querySelectorAll("button")[0];
+  await lockBtn._listeners.click[0]({ currentTarget: lockBtn });
+  assert.deepEqual(
+    globalThis.__ner.items.map((it) => it._locked === true),
+    [true, true, true],
+    "замок поставился на выделенное, зафиксированный остался зафиксированным",
+  );
+  const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
+  assert.equal(saved.method, "PUT");
+  assert.equal(saved.body.items.filter((it) => it._locked === true).length, 3);
+  assert.equal(saved.body.items.filter((it) => it.__new != null).length, 0,
+    "служебный ключ __new в файл не пишется");
+});
+
+test("глоссарий: удаление выделенного обходит зафиксированные", async () => {
+  const items = NER_SEED.map((it) => ({ ...it }));
+  const page = await nerPage(items);
+  await tick();
+  for (const row of nerRows(page)) {
+    const cb = findByClass(row, "fsel")[0];
+    cb.checked = true;
+    await cb._listeners.change[0]();
+  }
+  const selBar = findByClass(page, "files-sel")[0];
+  assert.deepEqual(collectText(findByClass(selBar, "files-sel-count")[0]).join(","),
+    "выделено: 3");
+  const del = selBar.querySelectorAll("button")
+    .find((b) => (b.getAttribute("aria-label") || "").startsWith("Удалить"));
+  await del._listeners.click[0]({ currentTarget: del });
+  const bd = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(bd, "диалог удаления открылся");
+  const text = collectText(bd).join(" ");
+  assert.match(text, /Будет удалено записей: 2/, "зафиксированная не считается");
+  assert.match(text, /зафиксированных пропущено: 1/);
+  const word = findTag(bd, "input")[0];
+  assert.equal(word.getAttribute("placeholder"), "УДАЛИТЬ");
+  word.value = "УДАЛИТЬ";
+  await findByClass(bd, "btn-danger")[0]._listeners.click[0]();
+  await tick();
+  const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
+  assert.deepEqual(saved.body.items.map((it) => it.term), ["дракон"],
+    "зафиксированная запись выжила");
+  assert.deepEqual(nerRows(page).map(nerFirstCol), ["дракон"]);
+});
+
+/* ── редакторы промптов и предпросмотр запроса ─────────────────── */
+
+test("редакторы: у промпта язык промпта, у файла главы — текстовый", async () => {
+  globalThis.localStorage.clear();
+  const prompts = viewProject("ACTIVE", "Книга", "prompts");
+  await tick();
+  const ped = findTag(prompts, "textarea").filter((t) => "lang" in t);
+  assert.equal(ped.length, 1, "на вкладке один редактор промпта");
+  assert.equal(ped[0].lang, "prompt", "промт читается html-языком");
+
+  globalThis.__tree = {
+    chapters: [{
+      number: 1,
+      dir: "00000_1_Глава 1",
+      artifacts: { "polished.txt": 34 },
+    }],
+  };
+  const editor = viewProject("ACTIVE", "Книга", "editor");
+  await tick();
+  const eed = findTag(editor, "textarea").filter((t) => "lang" in t);
+  assert.ok(eed.length >= 1, "редактор главы создан");
+  assert.deepEqual([...new Set(eed.map((t) => t.lang))], ["txt"],
+    "файл главы остаётся обычным текстом");
+});
+
+test("предпросмотр запроса: токены рядом с символами, промпт размечен", async () => {
+  globalThis.localStorage.clear();
+  globalThis.__preview = {
+    stage: "Глоссарий",
+    label: "Pass1 · чанк 1/1",
+    model: "gemma/test",
+    messages: [
+      { role: "system", content: "<system>\nТы переводчик.\n</system>" },
+      { role: "user", content: "<pass1>\n{ner_block}\n{original_text}\n" },
+    ],
+    chars: { system: 25, user: 30, total: 55 },
+    tokens: { system: 7, user: 9, total: 16 },
+    meta: { главы: "1-3", размер: 1200 },
+  };
+  const page = await runStage("ner");
+  const btn = findTag(page, "button")
+    .find((b) => collectText(b).join("").includes("Предпросмотр запроса"));
+  assert.ok(btn, "кнопка «Предпросмотр запроса» у LLM-стадии");
+  await btn._listeners.click[0]();
+  await tick();
+  const body = globalThis.document.body;
+  const heads = findByClass(body, "preview-req-head")
+    .map((n) => collectText(n).join(""));
+  assert.ok(heads.some((t) => t.includes("модель: gemma/test")
+    && t.includes("запросов: 1")), heads.join(" || "));
+  assert.ok(heads.some((t) => t.includes("главы: 1-3")
+    && t.includes("размер: 1200")), "meta запроса не показана");
+  const roles = findByClass(body, "preview-req-role")
+    .map((n) => collectText(n).join(""));
+  assert.ok(
+    roles.some((t) => /символов: user 30, system 25 \(всего 55\)/.test(t)
+      && /токенов ~16/.test(t)),
+    `сводка запроса: ${roles.join(" || ")}`,
+  );
+  const pres = findByClass(body, "preview-req-text");
+  assert.equal(pres.length, 2, "по <pre> на сообщение");
+  // текст не теряется и не портится разметкой
+  assert.equal(collectText(pres[1]).join(""),
+    "<pass1>\n{ner_block}\n{original_text}\n");
+  const marks = [];
+  pres.forEach((pre) => findTag(pre, "span").forEach((sp) => marks
+    .push(`${sp.className}=${collectText(sp).join("")}`)));
+  assert.deepEqual(marks, [
+    "pv-tag=<system>", "pv-tag=</system>", "pv-tag=<pass1>",
+    "pv-var={ner_block}", "pv-var={original_text}",
+  ]);
 });

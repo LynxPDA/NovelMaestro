@@ -21,6 +21,10 @@
   --btn-hover: #252d38;
   --log-bg: #0d1117;
   --bg-soft: #2a2a2a;
+  /* подсветка промптов и предпросмотра запроса: тег / подстановка / ключ */
+  --code-tag: #ff7b72;
+  --code-var: #79c0ff;
+  --code-key: #ffa657;
 }
 
 /* Светлая тема интерфейса: переключатель в шапке, значение — localStorage */
@@ -40,6 +44,9 @@
   --btn-hover: #eaeef2;
   --log-bg: #f6f8fa;
   --bg-soft: #eaeef2;
+  --code-tag: #cf222e;
+  --code-var: #0550ae;
+  --code-key: #953800;
 }
 
 /* Светлая тема: белый текст на тёмно-зелёных кнопках (тёмная — как была) */
@@ -867,6 +874,20 @@ input[type="number"] {
   word-break: break-word;
   max-height: 40vh;
   overflow: auto;
+}
+
+/* разметка текста запроса: теги секций, подстановки и ключи JSON — теми же
+   оттенками, что и подсветка редактора (EDITOR_HIGHLIGHT в app.js) */
+.preview-req-text .pv-tag {
+  color: var(--code-tag);
+  font-weight: 600;
+}
+.preview-req-text .pv-var {
+  color: var(--code-var);
+  font-weight: 600;
+}
+.preview-req-text .pv-key {
+  color: var(--code-key);
 }
 
 /* редактор промпта в модалке запусков (высота фиксированная) */

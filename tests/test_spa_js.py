@@ -205,7 +205,8 @@ def test_prompt_edit_button():
         in rv
     assert "/prompts/${encodeURIComponent(relPath)}" in rv
     assert "/file?project=${section}/${name}" in rv  # чтение source-файлов
-    assert "makeEditor(d.content || \"\", extOf(relPath))" in rv
+    assert 'makeEditor(d.content || "", UICore.fileLang(relPath, isPromptFile))' \
+        in rv
     # редактор файла — модалка с сохранением
     assert "Сохранить" in rv and "editor-modal-body" in rv
     # спека: compile epub_meta/donate_file — editable, cover — нет
@@ -214,6 +215,37 @@ def test_prompt_edit_button():
     assert fields["epub_meta"].get("editable") is True
     assert fields["donate_file"].get("editable") is True
     assert not fields["cover"].get("editable")
+
+
+def test_prompt_markup_is_readable():
+    """Промпты читаются как промпты, а не как непонятный txt: редактор
+    файла промптов получает html-язык (теги <system>/<translate> видны
+    лицом), а предпросмотр запроса размечает теги, подстановки {плейсхолдеры}
+    и ключи JSON отдельными span-ами."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    core = (SPA_DIR / "ui-core.js").read_text(encoding="utf-8")
+    pv = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+
+    # язык — по назначению файла (prompts/), а не по расширению .txt
+    assert 'prompt: "html",' in app, "язык промптов — html"
+    assert "function fileLang(path, isPrompt)" in core
+    assert 'return /(^|\\/)prompts\\//.test(String(path || "")) ? "prompt"' in core
+    assert 'makeEditor("", "prompt")' in pv, "вкладка «Промпты» — язык промпта"
+    assert "UICore.fileLang(full)" in pv and "UICore.fileLang(full)" in app
+
+    # лицо подсветки: текст, скобки и имена тегов
+    for face in ("t.content, t.bracket, t.separator", "t.angleBracket",
+                 "t.tagName, t.attributeName", "t.attributeValue"):
+        assert face in app, f"в EDITOR_HIGHLIGHT нетfaces: {face}"
+
+    # предпросмотр запроса — span-ы вместо голого текста
+    assert "UICore.promptParts(m.content)" in rv
+    for cls in (".pv-tag", ".pv-var", ".pv-key"):
+        assert cls in css, f"в CSS нет класса {cls}"
+    for var in ("--code-tag", "--code-var", "--code-key"):
+        assert css.count(var) >= 2, f"{var}: тема и светлая тема"
 
 
 def test_glossary_dispute_removed():
@@ -246,6 +278,49 @@ def test_run_views_preview_request():
     # режимов формы нет: ни переключателя, ни пресет-карточки
     assert "runMode" not in src and "simplePanel" not in src
     assert "localFieldBadge" not in src
+
+
+def test_editor_search_is_a_button():
+    """Поиск по тексту редактора — отдельной кнопкой (лупой), а не только
+    Ctrl+F: общий слой открывает панель поиска CM и выделяет поле. Кнопка
+    стоит в шапке одиночного редактора и в шапке активной панели
+    многосоставной вкладки «Редактор»."""
+    comp = (SPA_DIR / "ui-components.js").read_text(encoding="utf-8")
+    assert "function editorSearch(ed, opts)" in comp
+    assert "if (!ed || !ed.isCM) return null;" in comp
+    assert "openSearchPanel" in comp
+    assert 'const tip = o.tip || "Поиск в тексте (Ctrl+F)";' in comp
+    assert '"aria-label": tip' in comp
+    # textarea (fallback) остаётся без кнопки: панели поиска там нет
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert app.count("UIC.editorSearch(ed)") == 2, "редактор и предпросмотр"
+    views = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    assert "UIC.editorSearch(ed)" in views and "UIC.editorSearch(e)" in views
+
+
+def test_glossary_controls_live_behind_one_button():
+    """Глоссарий: настройки вкладки собраны за одной кнопкой «⋮» (режим
+    «только зафиксированные», столбцы, типы, поля поиска, добавление столбца
+    и термина, удаление столбца и по фильтру) — в тулбаре остаются только поле
+    поиска и экспорт; строка таблицы — чекбокс выделения, правка и замок;
+    групповые замок и удаление — в панели выделения; служебный ключ «_locked»
+    столбцом не показывается."""
+    src = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    i = src.index("async function nerView()")
+    body = src[i:src.index("async function reviewView()", i)]
+    for name in ('iconName: "kebab"', 'btnClass: "ner-menu-btn"',
+                 "{ el: lockBox }", "{ el: colBtn }", "{ el: typeBtn }",
+                 "{ el: searchFieldsBtn }", "{ el: addColBtn }",
+                 '{ label: "Добавить термин", action: addTerm }',
+                 "{ el: delColBtn }", "{ el: delFilterBtn }",
+                 'class: "ner-search"', "bulkLock(true)", "bulkDelete",
+                 "ner-td-sel", "ner-row-locked", "bulkLock(false)",
+                 '.filter((x) => x != null)'):
+        assert name in body, f"в коде вкладки нет {name!r}"
+    # панель выделения заменяет кнопки тулбара, а не добавляется к ним
+    assert 'h("div", { class: "files-tools" }, menu, exportBtn)' in body
+    # замок — состояние записи, а не столбец данных
+    assert 'k !== "__new" && k !== "_locked"' in src
 
 
 def test_dropdown_menus_are_fixed_positioned():

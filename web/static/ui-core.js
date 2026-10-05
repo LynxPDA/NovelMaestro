@@ -86,9 +86,10 @@
     /* перенести выделенное: каталог со стрелкой внутрь */
     folderMove:
       '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v5"/><path d="m9.5 12.5 2.5 2.5 2.5-2.5"/>',
-    /* переименовать: бирка (строка файлов — иконки, подписи в тултипах) */
-    tag:
-      '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42Z"/><circle cx="7.5" cy="7.5" r="1.5" fill="currentColor"/>',
+    /* переименовать: текстовый курсор в поле — стандартное обозначение
+     * правки имени (строка файлов — иконки, подписи в тултипах) */
+    textCursor:
+      '<rect width="12" height="16" x="6" y="4" rx="2"/><path d="M9 9v6"/><path d="M15 9v6"/><path d="M12 12h.01"/>',
     close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
     refresh:
       '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
@@ -135,12 +136,65 @@
   function fileIcon(entry) {
     if (!entry) return "file";
     if (entry.dir) return "folder";
-    var ext = (
-      String(entry.name || "")
-        .split(".")
-        .pop() || ""
-    ).toLowerCase();
-    return F_ICONS[ext] || "file";
+    return F_ICONS[extOf(entry.name)] || "file";
+  }
+
+  /* ── предпросмотр файлов ──
+   * Расширение → режим предпросмотра: html показывается как есть, markdown —
+   * через marked, ВСЁ остальное (txt, log, json, yaml…) — обычным текстом.
+   * Markdown по одиночным переносам строки склеивает строки в абзац, поэтому
+   * собранная книга (compiled_1_5_txt-plain.txt) «кашей» становилась прямо на
+   * глазах; у обычного текста переносы сохраняются. */
+  function extOf(path) {
+    var base = String(path || "").split("/").pop() || "";
+    var dot = base.lastIndexOf(".");
+    return dot < 0 ? "" : base.slice(dot + 1).toLowerCase();
+  }
+  function previewMode(nameOrExt) {
+    var ext = String(nameOrExt || "").toLowerCase().replace(/^\./, "");
+    if (ext === "html" || ext === "htm") return "html";
+    if (ext === "md" || ext === "markdown") return "md";
+    return "text";
+  }
+  /* HTML-разрядщик текста в <pre> предпросмотра */
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c];
+    });
+  }
+
+  /* Язык редактора файла: у файлов промптов расширение .txt, а разметка своя
+   * (<system>, <translate>), и читается она html-языком — язык берётся по
+   * каталогу prompts/, а не по расширению. Остальное — по расширению. */
+  function fileLang(path, isPrompt) {
+    if (isPrompt) return "prompt";
+    return /(^|\/)prompts\//.test(String(path || "")) ? "prompt" : extOf(path);
+  }
+
+  /* ── разметка промпта в предпросмотре запроса ──
+   * Прогон отправляет промпт текстом, но в тексте промпта важны три вещи:
+   * теги-обёртки секций (<system>, <translate>), подстановки данных
+   * ({ner_block}) и ключи JSON. Текст режется на части [{text, cls}] — SPA
+   * рисует их <span>-ами, innerHTML не используется. */
+  var PROMPT_TOKEN_RE =
+    /<\/?[A-Za-z_][\w:-]*\s*\/?>|\{[a-z_][a-z0-9_]*\}|"[^"\n]{1,120}"(?=\s*:)/g;
+  function promptParts(text) {
+    var s = String(text == null ? "" : text);
+    var out = [];
+    var last = 0;
+    PROMPT_TOKEN_RE.lastIndex = 0;
+    var m;
+    while ((m = PROMPT_TOKEN_RE.exec(s)) !== null) {
+      if (m.index > last) out.push({ text: s.slice(last, m.index), cls: "" });
+      var c = m[0].charAt(0);
+      out.push({
+        text: m[0],
+        cls: c === "<" ? "pv-tag" : c === "{" ? "pv-var" : "pv-key",
+      });
+      last = m.index + m[0].length;
+    }
+    if (last < s.length) out.push({ text: s.slice(last), cls: "" });
+    return out;
   }
 
   /* ── порт логики поиска терминов из core.common / translate_book.py ──
@@ -895,6 +949,11 @@
     /* SVG-иконка по имени (строка <svg>; вставка через innerHTML) */
     icon: icon,
     iconNames: Object.keys(ICON_PATHS),
+    extOf: extOf,
+    previewMode: previewMode,
+    fileLang: fileLang,
+    escapeHtml: escapeHtml,
+    promptParts: promptParts,
 
     /* иммутабельное удаление записи: новый doc без индекса; «обновлён»
      * проставляется текущим временем. Вне диапазона/без «правки» — null. */

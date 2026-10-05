@@ -1494,7 +1494,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         ...(r.messages || []).map((m) => h(
           "div", null,
           h("div", { class: "preview-req-role" }, m.role || "?"),
-          h("pre", { class: "preview-req-text" }, String(m.content ?? "")),
+          // теги секций, подстановки и ключи JSON размечены (UICore.promptParts)
+          h(
+            "pre", { class: "preview-req-text" },
+            ...UICore.promptParts(m.content).map((pt) => (pt.cls
+              ? h("span", { class: pt.cls }, pt.text)
+              : pt.text)),
+          ),
         )),
       ));
     }
@@ -1565,7 +1571,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
               `/file?project=${section}/${name}`
                 + `&path=${encodeURIComponent(relPath)}`,
             );
-        ed = makeEditor(d.content || "", extOf(relPath));
+        ed = makeEditor(d.content || "", UICore.fileLang(relPath, isPromptFile));
         const f = UIC.editorSearch(ed);
         if (f) actions.insertBefore(f, actions.firstChild);
         host.append(h("div", { class: "editor-cm" }, ed.root));

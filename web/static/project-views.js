@@ -28,6 +28,24 @@ function iconBtn(name, tip, onclick, danger) {
   return b;
 }
 
+/* Открыть панель поиска CodeMirror с готовым запросом (из «Поиска» и из
+   карточек «Проверок»): панель живёт в самом редакторе, поэтому запрос
+   вписывается в её поле и коммитится событием «change» — ровно как если бы
+   его набрали руками. Кнопка-лупа тулбара открывает ту же панель пустой. */
+function openFind(ed, text) {
+  if (!ed || !ed.isCM || !text) return;
+  const CM = window.CM;
+  if (!CM || !CM.openSearchPanel) return;
+  CM.openSearchPanel(ed.view);
+  const field = ed.view.dom.querySelector(
+    '.cm-panel.cm-search [main-field="true"]',
+  );
+  if (!field) return;
+  field.value = String(text);
+  field.dispatchEvent(new Event("change", { bubbles: true }));
+  field.focus();
+}
+
 /* вкладки проекта — реестр (кей и подпись): рендер вкладок и палитра
    Ctrl+K (app.js); ключ «files» — вкладка по умолчанию */
 const PROJECT_TABS = [
@@ -60,6 +78,7 @@ function viewProject(section, name, tab, job) {
     filesSort: localStorage.getItem("filesSort") || "name", // name | mtime | size
     filesAsc: localStorage.getItem("filesAsc") !== "0",
     filesSel: new Set(), // выделенные пути «Файлов» (состояние вкладки)
+    nerSel: new Set(), // выделенные записи глоссария (объекты data.items)
     filesPage: 0, // страница списка файлов: выделение её не сбрасывает
   };
   const page = h("div", { class: "page" });
@@ -74,22 +93,64 @@ function viewProject(section, name, tab, job) {
     render();
   }
 
-  function openEditor(full) {
+  /* состояние вкладки «Редактор» — одно на проект: повторный рендер вкладки
+     не пересоздаёт CodeMirror и не теряет несохранённые правки */
+  function editorState() {
+    if (!st.editor) {
+      st.editor = {
+        chapter: null,
+        mode: "two", // one | two — по умолчанию две панели (оригинал+перевод)
+        left: { type: null, text: null, dirty: false },
+        right: { type: null, text: null, dirty: false },
+        hl: true, // подсветка терминов глоссария — по умолчанию включена
+        ngram: 3, // размер n-граммы нечёткого поиска (аналог --ner_ngram)
+        threshold: 0.75, // порог пересечения н-грамм (--ner_threshold)
+        ner: null, // кеш {items, matcher} глоссария
+        find: null, // {type, q}: открыть панель поиска с этим запросом
+        panes: null, // кеш панелей — повторный рендер не теряет правки
+        wrap: null, // DOM вкладки: пока открыт проект; F5 — сброс
+      };
+    }
+    return st.editor;
+  }
+
+  /* Открыть файл результата: артефакт главы — во вкладке «Редактор» на его
+     главе (глава, её файл и запрос в панели поиска), остальное — обычным
+     файловым редактором. find — строка поиска, которой предзаполнить панель. */
+  function openEditor(full, find) {
+    const seg = String(full || "").split("/");
+    if (seg.length === 3 && seg[0] === "chapters") {
+      const ed = editorState();
+      ed.wrap = null; // глава другая — вкладку собираем заново
+      ed.chapter = seg[1];
+      // имя файла результата и есть тип артефакта панели (канон — с .txt)
+      ed.left.type = seg[2];
+      ed.left.text = null;
+      ed.left.dirty = false;
+      ed.find = find ? { type: seg[2], q: String(find) } : null;
+      st.edit = null;
+      st.search = null;
+      st.view = "editor";
+      render();
+      return;
+    }
     st.edit = full;
-    st.search = null;
+    st.search = find ? String(find) : null;
     render();
   }
 
-  function setView(view) {
-    if (view === st.view) return;
-    // старому телу вкладки — сигнал ухода (run-views гасит SSE-стрим,
-    // скрытые таймеры и т.п.) до замены DOM; смена вкладки — локальный
-    // рендер (pi-navigate из app.js не диспатчится: view тот же)
+  /* Смена вкладки — локальный рендер (pi-navigate из app.js не диспатчится:
+     view тот же); старому телу — сигнал ухода (run-views гасит SSE-стрим,
+     скрытые таймеры). find — запрос, с которым вкладка открывается
+     (из «Поиска» — в «Глоссарий») */
+  function setView(view, find) {
+    if (view === st.view && (!find || st.search === find)) return;
     const body = page.querySelector(".project-body");
     if (body) body.dispatchEvent(new CustomEvent("pi-navigate"));
     st.view = view;
     st.edit = null;
-    st.search = null;
+    st.search = find ? String(find) : null;
+    st.nerSel.clear(); // выделение — про конкретную вкладку
     render();
   }
 
@@ -150,17 +211,11 @@ function viewProject(section, name, tab, job) {
       body.classList.add("project-body");
       page.append(body);
     }
-    if (st.edit && st.search && st._ed && st._ed.isCM) {
-      // открыть CM-поиск с фрагментом ошибки после монтирования редактора
+    // одиночный файл: после монтирования редактора открыть поиск с запросом
+    if (st.edit && st.search) {
       const q = st.search;
-      window.CM.openSearchPanel(st._ed.view);
-      const panel = st._ed.view.dom.querySelector(".cm-panel.cm-search");
-      const input = panel && panel.querySelector("input");
-      if (input) {
-        input.value = q;
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-        input.focus();
-      }
+      st.search = null;
+      openFind(st._ed, q);
     }
   }
 
@@ -352,20 +407,25 @@ function viewProject(section, name, tab, job) {
       if (!n) return;
       const one = n === 1 ? entries.find((e) => sel.has(path(e))) : null;
       const hasFile = entries.some((e) => !e.dir && sel.has(path(e)));
+      /* null в replaceChildren — не «пропустить», а вставить текст «null»:
+         панель выделения каталогов читалась бы «выделено: 2nullnull» */
       selBar.replaceChildren(
-        h("span", { class: "files-sel-count" }, `выделено: ${n}`),
-        one
-          ? iconBtn("tag", `Переименовать ${one.name}`, () => renameOne(one))
-          : null,
-        hasFile
-          ? iconBtn("download", "Скачать выделенные файлы", downloadSel)
-          : null,
-        iconBtn("folderMove", "Перенести в…", moveModal),
-        iconBtn("trash", "Удалить выделенное", deleteSel, true),
-        iconBtn("close", "Снять выделение", () => {
-          sel.clear();
-          paintSel();
-        }),
+        ...[
+          h("span", { class: "files-sel-count" }, `выделено: ${n}`),
+          one
+            ? iconBtn(
+              "textCursor", `Переименовать ${one.name}`, () => renameOne(one))
+            : null,
+          hasFile
+            ? iconBtn("download", "Скачать выделенные файлы", downloadSel)
+            : null,
+          iconBtn("folderMove", "Перенести в…", moveModal),
+          iconBtn("trash", "Удалить выделенное", deleteSel, true),
+          iconBtn("close", "Снять выделение", () => {
+            sel.clear();
+            paintSel();
+          }),
+        ].filter((x) => x != null),
       );
     }
 
@@ -643,7 +703,7 @@ function viewProject(section, name, tab, job) {
         iconBtn("pencil", `Править ${e.name}`, () => openEditor(full)),
       );
     }
-    actions.append(iconBtn("tag", `Переименовать ${e.name}`, () =>
+    actions.append(iconBtn("textCursor", `Переименовать ${e.name}`, () =>
       acts.rename(e)));
     const meta = h(
       "div",
@@ -668,24 +728,25 @@ function viewProject(section, name, tab, job) {
       wide: true,
       build: () => [frame],
     });
-    // тот же рендер, что у редактора: md через marked, html как есть
-    const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
-    const plain = (t) => `<pre>${esc(t)}</pre>`;
+    /* тот же рендер, что у редактора: режим — по расширению (html как есть,
+       md через marked, остальное — обычный текст: markdown склеивает строки) */
+    const mode = UICore.previewMode(rel);
+    const md = (t) =>
+      window.marked
+        ? window.marked.parse(t, { mangle: false, headerIds: false })
+        : `<pre>${UICore.escapeHtml(t)}</pre>`;
     try {
       const d = await api(
         `/file?project=${encodeURIComponent(`${section}/${name}`)}` +
           `&path=${encodeURIComponent(rel)}`,
       );
       const raw = d.content || "";
-      frame.srcdoc = /\.html?$/i.test(rel)
-        ? UIC.docs.html(raw)
-        : UIC.docs.md(
-            window.marked
-              ? window.marked.parse(raw, { mangle: false, headerIds: false })
-              : plain(raw),
-          );
+      frame.srcdoc =
+        mode === "html" ? UIC.docs.html(raw)
+          : mode === "md" ? UIC.docs.md(md(raw))
+            : UIC.docs.text(raw);
     } catch (ex) {
-      frame.srcdoc = UIC.docs.md(plain(`Не удалось прочитать: ${ex.message}`));
+      frame.srcdoc = UIC.docs.text(`Не удалось прочитать: ${ex.message}`);
     }
   }
 
@@ -702,17 +763,18 @@ function viewProject(section, name, tab, job) {
       return h("div", { class: "files-empty" }, ex.message);
     }
     const ext = extOf(full);
-    const ed = makeEditor(data.content, ext);
+    /* язык — по назначению файла: prompts/* читаются как промпт (html-язык
+       даёт <system>/<translate> быть тегами), остальное — по расширению */
+    const ed = makeEditor(data.content, UICore.fileLang(full));
     const err = h("div", { class: "form-error" });
 
-    /* подсветка — по расширению файла (makeEditor/setLang), без ручного
-       выбора представления; «Рендер» — только предпросмотр md/html */
+    /* подсветка и предпросмотр — по расширению файла (makeEditor/setLang),
+       без ручного выбора представления */
 
-    /* предпросмотр: markdown (marked) и html — оба в sandbox-iframe
-       (без allow-scripts); те же стили/кегль/высота, что у «Заметок» */
-    const pane = UIC.previewPane(ed, {
-      renderMode: ext === "html" || ext === "htm" ? "html" : "md",
-    });
+    /* предпросмотр: режим тоже берётся из расширения (html как есть, md через
+       marked, остальное — обычный текст с переносами); каркас один —
+       sandbox-iframe без allow-scripts, те же стили/кегль/высота, что у «Заметок» */
+    const pane = UIC.previewPane(ed, { renderMode: UICore.previewMode(ext) });
 
     const saveBtn = h("button", { class: "btn btn-sm" }, "Сохранить");
     saveBtn.addEventListener("click", async () => {
@@ -787,18 +849,7 @@ function viewProject(section, name, tab, job) {
   ];
 
   async function editorTabView() {
-    const ed = (st.editor = st.editor || {
-      chapter: null,
-      mode: "two", // one | two — по умолчанию две панели (оригинал+перевод)
-      left: { type: null, text: null, dirty: false },
-      right: { type: null, text: null, dirty: false },
-      hl: true, // подсветка терминов глоссария — по умолчанию включена
-      ngram: 3, // размер n-граммы нечёткого поиска (аналог --ner_ngram)
-      threshold: 0.75, // порог пересечения н-грамм (аналог --ner_threshold)
-      ner: null, // кеш {items, matcher} глоссария
-      panes: null, // кеш панелей — повторный рендер не теряет правки
-      wrap: null, // DOM вкладки: пока открыт проект; F5/другой проект — сброс
-    });
+    const ed = editorState();
     /* вкладка уже собрана: не пересоздаём (скролл, глава, правки, подсветка) */
     if (ed.wrap) return ed.wrap;
     const wrap = h("div", { class: "ed-wrap" });
@@ -987,6 +1038,7 @@ function viewProject(section, name, tab, job) {
         }
         if (pInfo.addUi) pInfo.host.append(pInfo.addUi.wrap);
         updateAddTerm(pInfo);
+        applyPaneFind(pInfo);
         return;
       }
       const path = `chapters/${ed.chapter}/${type}`;
@@ -1028,6 +1080,7 @@ function viewProject(section, name, tab, job) {
         pInfo.saveBtn.disabled = !pInfo.state.dirty;
         maybeHl(pInfo);
         updateAddTerm(pInfo);
+        applyPaneFind(pInfo);
       } catch (ex) {
         pInfo.state.text = null;
         pInfo.state.missing = false;
@@ -1058,6 +1111,15 @@ function viewProject(section, name, tab, job) {
       } catch (ex) {
         pInfo.perr.textContent = ex.message;
       }
+    }
+
+    /* «Поиск» прислал главу: панель того же типа открывается с запросом
+       (лупа в тулбаре панели открывает её пустой) */
+    function applyPaneFind(pInfo) {
+      const f = ed.find;
+      if (!f || f.type !== pInfo.state.type) return;
+      ed.find = null;
+      openFind(pInfo.editor, f.q);
     }
 
     /* ── подсветка терминов глоссария поверх редактора ── */
@@ -1767,7 +1829,11 @@ function viewProject(section, name, tab, job) {
       }
     }
 
-    const search = h("input", { class: "input", placeholder: "Поиск…" });
+    const search = h("input", {
+      class: "input ner-q",
+      placeholder: "Поиск…",
+      "aria-label": "Поиск по глоссарию",
+    });
     // из «→ Глоссарий» редактора — применяем один раз и сбрасываем,
     // чтобы ручные заходы на вкладку не наследовали чужой поиск
     if (st.search) {
@@ -1809,8 +1875,8 @@ function viewProject(section, name, tab, job) {
     const colLabel = (key) => key; // заголовки — сырые ключи JSON (term, type, …)
     const visibleCols = () => (cols == null ? [...knownKeys] : cols);
     function colsLabel() {
-      if (cols == null) return "Все столбцы";
-      if (cols.length === 1) return colLabel(cols[0]);
+      if (cols == null) return "Столбцы: все";
+      if (cols.length === 1) return `Столбцы: ${colLabel(cols[0])}`;
       return `Столбцы (${cols.length})`;
     }
     /* Значения-объекты/массивы (напр. _votes_pinyin) показываем
@@ -1831,7 +1897,8 @@ function viewProject(section, name, tab, job) {
     } catch {
       /* localStorage недоступен (приватный режим) — не критично */
     }
-    let searchFields = null; // null = все поля, [] = ни одного
+    // null = искать по отображаемым столбцам (дефолт), [] = ни одного
+    let searchFields = null;
     let typeFilter = null; // null = все типы, [] = ни одного
     try {
       const saved = JSON.parse(localStorage.getItem(LS_SEARCH_KEY) || "null");
@@ -1870,7 +1937,8 @@ function viewProject(section, name, tab, job) {
       const filtered = UICore.filterNerItems(
         data.items,
         search.value,
-        searchFields,
+        // дефолт поиска — то, что показано на экране, а не все ключи записи
+        searchFields == null ? visibleCols() : searchFields,
         typeFilter,
         lockOnly ? "locked" : null,
       );
@@ -1908,13 +1976,14 @@ function viewProject(section, name, tab, job) {
        localStorage рядом со столбцами и типами */
     const lockCb = h("input", {
       type: "checkbox",
+      class: "ner-lock-cb",
       "aria-label": "Показывать только зафиксированные термины",
     });
     lockCb.checked = lockOnly;
     const lockBox = h(
       "label",
       {
-        class: "chk" + (lockOnly ? " chk-on" : ""),
+        class: "chk ner-lock" + (lockOnly ? " chk-on" : ""),
         title: "Показывать только зафиксированные термины",
       },
       lockCb,
@@ -1922,19 +1991,22 @@ function viewProject(section, name, tab, job) {
     );
     lockCb.addEventListener("change", () => {
       lockOnly = lockCb.checked;
-      lockBox.className = "chk" + (lockOnly ? " chk-on" : "");
+      lockBox.className = "chk ner-lock" + (lockOnly ? " chk-on" : "");
       saveLockOnly();
       pg.page = 0;
       renderRows();
     });
 
     function searchFieldsLabel() {
-      if (searchFields == null) return "Все поля";
-      if (searchFields.length === 1) return colLabel(searchFields[0]);
-      return `Поля (${searchFields.length})`;
+      if (searchFields == null) return "Поля поиска: отображаемые";
+      if (searchFields.length >= knownKeys.size) return "Поля поиска: все";
+      if (searchFields.length === 1) {
+        return `Поля поиска: ${colLabel(searchFields[0])}`;
+      }
+      return `Поля поиска (${searchFields.length})`;
     }
     function typeFilterLabel() {
-      if (typeFilter == null) return "Все типы";
+      if (typeFilter == null) return "Типы: все";
       if (typeFilter.length === 1) {
         const t = typeFilter[0];
         const n = (data.by_type || {})[t];
@@ -1958,7 +2030,7 @@ function viewProject(section, name, tab, job) {
         const set = new Set(next == null ? allKeys : next);
         for (const { k, cb } of itemCbs) cb.checked = set.has(k);
       }
-      allCb.checked = current() == null;
+      allCb.checked = current() == null || current().length === allKeys.length;
       allCb.addEventListener("change", () => {
         apply(allCb.checked ? null : [allKeys[0]]);
       });
@@ -2027,6 +2099,99 @@ function viewProject(section, name, tab, job) {
     }
 
 
+    /* выделение записей — как в «Файлах»: чекбокс строки, групповые действия
+       (замок, удаление) в панели выделения, она заменяет кнопки тулбара.
+       Выделение — состояние вкладки, объектом держимся: порядок и сортировка
+       записей меняются, объект остаётся */
+    const nerSel = st.nerSel;
+    const allCb = h("input", {
+      type: "checkbox",
+      class: "fsel",
+      "aria-label": "Выделить все записи",
+    });
+    allCb.addEventListener("change", () => {
+      nerSel.clear();
+      if (allCb.checked) visible().forEach((it) => nerSel.add(it));
+      renderRows();
+      paintSel();
+    });
+    const selBar = h("div", { class: "files-sel hidden" });
+
+    function selectedItems() {
+      return data.items.filter((it) => nerSel.has(it));
+    }
+
+    function bulkLock(on) {
+      const items = selectedItems();
+      items.forEach((it) => UICore.nerSetLocked(it, on));
+      renderRows();
+      paintSel();
+      saveNer();
+      toast(
+        on
+          ? `Зафиксировано записей: ${items.length}`
+          : `Замок снят с записей: ${items.length}`,
+      );
+    }
+
+    /* зафиксированная запись не удаляется ничем — выделенные замки только
+       считаются пропущенными, они не снимаются молча */
+    function bulkDelete() {
+      const items = selectedItems();
+      const keep = items.filter((it) => UICore.nerIsLocked(it));
+      const victims = items.filter((it) => !UICore.nerIsLocked(it));
+      if (!victims.length) {
+        toast(
+          keep.length
+            ? "Все выделенные зафиксированы — снимите замок"
+            : "Нет выделенных записей",
+          "err",
+        );
+        return;
+      }
+      confirmModal(
+        "Удалить термины",
+        `Будет удалено записей: ${victims.length}` +
+          (keep.length ? ` · зафиксированных пропущено: ${keep.length}` : ""),
+        "УДАЛИТЬ",
+        async () => {
+          const dead = new Set(victims);
+          data.items = data.items.filter((it) => !dead.has(it));
+          nerSel.clear();
+          await saveNer();
+          renderRows();
+          paintSel();
+        },
+      );
+    }
+
+    function paintSel() {
+      const n = nerSel.size;
+      tools.classList.toggle("hidden", n > 0);
+      selBar.classList.toggle("hidden", n === 0);
+      const vis = visible();
+      let inView = 0;
+      vis.forEach((it) => {
+        if (nerSel.has(it)) inView += 1;
+      });
+      allCb.checked = vis.length > 0 && inView === vis.length;
+      allCb.indeterminate = inView > 0 && inView < vis.length;
+      if (!n) return;
+      selBar.replaceChildren(
+        ...[
+          h("span", { class: "files-sel-count" }, `выделено: ${n}`),
+          iconBtn("lock", "Зафиксировать выделенные", () => bulkLock(true)),
+          iconBtn("unlock", "Снять замок с выделенных", () => bulkLock(false)),
+          iconBtn("trash", "Удалить выделенные", bulkDelete, true),
+          iconBtn("close", "Снять выделение", () => {
+            nerSel.clear();
+            renderRows();
+            paintSel();
+          }),
+        ].filter((x) => x != null),
+      );
+    }
+
     function renderRows() {
       table.replaceChildren(
         h(
@@ -2035,6 +2200,7 @@ function viewProject(section, name, tab, job) {
           h(
             "tr",
             {},
+            h("th", { class: "ner-th-sel" }, allCb),
             ...visibleCols().map((c) => {
               const active = sortField === c;
               const mark = active ? (sortDir === "desc" ? " ↓" : " ↑") : "";
@@ -2067,7 +2233,7 @@ function viewProject(section, name, tab, job) {
                 ),
               );
             }),
-            h("th", {}, ""),
+            h("th", { class: "ner-th-actions" }, ""),
           ),
         ),
         tbody,
@@ -2090,6 +2256,23 @@ function viewProject(section, name, tab, job) {
           ? `Термин «${it.term}» зафиксирован`
           : `Замок снят: «${it.term}»`,
       );
+    }
+
+    /* чекбокс строки: выделение держится на самом объекте записи, строка
+       помечается тем же классом, что и в «Файлах» */
+    function selCell(it) {
+      const cb = h("input", {
+        type: "checkbox",
+        class: "fsel",
+        checked: nerSel.has(it),
+        "aria-label": `Выбрать ${String(it.term || "")}`,
+      });
+      cb.addEventListener("change", () => {
+        if (cb.checked) nerSel.add(it);
+        else nerSel.delete(it);
+        paintSel();
+      });
+      return h("td", { class: "ner-td-sel" }, cb);
     }
 
     function viewRow(it) {
@@ -2128,7 +2311,12 @@ function viewProject(section, name, tab, job) {
       );
       return h(
         "tr",
-        { class: "ner-row" + (locked ? " ner-row-locked" : "") },
+        {
+          class:
+            "ner-row" + (locked ? " ner-row-locked" : "")
+            + (nerSel.has(it) ? " frow-sel" : ""),
+        },
+        selCell(it),
         ...visibleCols().map((c) =>
           h(
             "td",
@@ -2148,6 +2336,7 @@ function viewProject(section, name, tab, job) {
       const tr = h(
         "tr",
         { class: "ner-row ner-editing" },
+        h("td", { class: "ner-td-sel" }),
         ...visibleCols().map((c) => {
           /* Значение-объект редактируется как JSON-текст; при
              коммите парсим — невалидный JSON не сохраняется */
@@ -2236,10 +2425,13 @@ function viewProject(section, name, tab, job) {
     }
 
     /* «Столбцы»: чекбоксы всех ключей записи (единая модалка «Все / набор»),
-       подпись как у полей/типов: «Все столбцы» / «Столбцы (N)» */
+       подпись как у полей и типов */
     const colBtn = h(
       "button",
-      { class: "btn btn-sm btn-ghost", title: "Какие столбцы показывать" },
+      {
+        class: "btn btn-sm btn-ghost ner-cols-btn",
+        title: "Какие столбцы показывать",
+      },
       colsLabel(),
     );
     function refreshColBtn() {
@@ -2270,10 +2462,14 @@ function viewProject(section, name, tab, job) {
 
 
 
-    /* поля поиска: как «+ Столбец», по умолчанию все ключи записи */
+    /* поля поиска: по умолчанию — текущие отображаемые столбцы; «Сбросить»
+       возвращает именно их, «Все» в модалке — все ключи записи */
     const searchFieldsBtn = h(
       "button",
-      { class: "btn btn-sm btn-ghost", title: "Где искать" },
+      {
+        class: "btn btn-sm btn-ghost ner-fields-btn",
+        title: "Где искать",
+      },
       searchFieldsLabel(),
     );
     function refreshSearchFieldsBtn() {
@@ -2286,9 +2482,9 @@ function viewProject(section, name, tab, job) {
         allLabel: "Все",
         keys: [...knownKeys],
         labelOf: colLabel,
-        get: () => searchFields,
+        get: () => (searchFields == null ? visibleCols() : searchFields),
         set: (next) => {
-          searchFields = next;
+          searchFields = next == null ? [...knownKeys] : next;
           saveSearchFields();
           refreshSearchFieldsBtn();
           pg.page = 0;
@@ -2305,7 +2501,10 @@ function viewProject(section, name, tab, job) {
     });
     const typeBtn = h(
       "button",
-      { class: "btn btn-sm btn-ghost", title: "Фильтр типов" },
+      {
+        class: "btn btn-sm btn-ghost ner-types-btn",
+        title: "Фильтр типов",
+      },
       typeFilterLabel(),
     );
     function refreshTypeBtn() {
@@ -2339,11 +2538,11 @@ function viewProject(section, name, tab, job) {
       });
     });
 
-    /* «+ Столбец»: добавить новое поле всем терминам глоссария */
+    /* «Добавить столбец»: новое поле всем терминам глоссария */
     const addColBtn = h(
       "button",
       { class: "btn btn-sm btn-ghost", title: "Добавить столбец ко всем терминам" },
-      "+ Столбец",
+      "Добавить столбец",
     );
     addColBtn.addEventListener("click", () => {
       const inp = h("input", {
@@ -2393,11 +2592,11 @@ function viewProject(section, name, tab, job) {
       });
       inp.focus();
     });
-    /* «✕ Столбец»: удалить поле из всех терминов (кроме term) */
+    /* «Удалить столбец»: поле из всех терминов (кроме term) */
     const delColBtn = h(
       "button",
       { class: "btn btn-sm btn-ghost", title: "Удалить столбец из всех терминов" },
-      "✕ Столбец",
+      "Удалить столбец",
     );
     delColBtn.addEventListener("click", () => {
       const keys = [...knownKeys].filter((k) => k !== "term");
@@ -2461,14 +2660,14 @@ function viewProject(section, name, tab, job) {
         ],
       });
     });
-    /* «✕ По фильтру»: удалить термины по условию (count > N) или все найденные */
+    /* «Удалить по фильтру»: термины по условию (count > N) или все найденные */
     const delFilterBtn = h(
       "button",
       {
         class: "btn btn-sm btn-ghost",
         title: "Удалить термины по условию или все найденные",
       },
-      "✕ По фильтру",
+      "Удалить по фильтру",
     );
     delFilterBtn.addEventListener("click", () => {
       const fieldSel = h(
@@ -2597,31 +2796,45 @@ function viewProject(section, name, tab, job) {
     exportBtn.addEventListener("click", () =>
       exportModal(data.by_type || {}, `${section}/${name}`),
     );
+    /* панель вкладки: поиск плюс ОДНА кнопка «⋮» со всеми настройками показа и
+       правки (по образцу «Файлов»); пока что-то выделено, панель выделения
+       заменяет эти кнопки */
+    const menu = UIC.menuButton(
+      [
+        { el: lockBox },
+        { el: colBtn },
+        { el: typeBtn },
+        { el: searchFieldsBtn },
+        { sep: true },
+        { el: addColBtn },
+        { label: "Добавить термин", action: addTerm },
+        { sep: true },
+        { el: delColBtn },
+        { el: delFilterBtn },
+      ],
+      {
+        iconName: "kebab",
+        btnClass: "ner-menu-btn",
+        title: "Показ и правка глоссария",
+        aria: "Дополнительные настройки глоссария",
+      },
+    );
+    const tools = h("div", { class: "files-tools" }, menu, exportBtn);
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
-      h("span", { class: "ner-search" }, search, searchFieldsBtn),
+      h("span", { class: "ner-search" }, search),
       h("span", { class: "spacer" }),
-      lockBox,
-      typeBtn,
-      colBtn,
-      // «+»: новый столбец или новый термин (меню вместо двух кнопок)
-      UIC.menuButton([
-        { label: "+ Столбец", action: () => addColBtn.click() },
-        { label: "+ Термин", action: addTerm },
-      ], { icon: "+", title: "Добавить столбец или термин" }),
-      // «x»: удалить столбец или термины по фильтру
-      UIC.menuButton([
-        { label: "x Столбец", action: () => delColBtn.click() },
-        { label: "x По фильтру", action: () => delFilterBtn.click() },
-      ], { icon: "x", title: "Удалить столбец или термины по фильтру" }),
-      exportBtn,
+      tools,
+      selBar,
     );
     search.addEventListener("input", () => {
       pg.page = 0; // Фильтр — на первую страницу
       renderRows();
+      paintSel();
     });
     renderRows();
+    paintSel();
     return h("div", { class: "files-wrap" }, toolbar, table, pg.el);
   }
   /* ── Проверка (review ner / translate_check_llm) ── */
@@ -3525,9 +3738,14 @@ function viewProject(section, name, tab, job) {
     return h("div", { class: "files-wrap" }, toolbar, hint, err, rows);
   }
 
-  /* «Поиск» — обычный проход по текстам книги (core/search.py): список групп
-     приходит с сервера, совпадение — подстрока, вывод — фрагменты с
-     контекстом. Индексов и кешей нет: результат всегда соответствует файлу. */
+  /* «Поиск» — обычный проход по текстам книги (core/search.py): список групп,
+     их кластеры и подписи приходят с сервера, совпадение — подстрока, вывод —
+     фрагменты с контекстом. Индексов и кешей нет, лимитов на число совпадений
+     тоже: показаны ВСЕ результаты, список листается постранично. Глоссарий
+     здесь не ищется — у него своя вкладка, туда уходим с запросом. */
+  const CTX_DEFAULT = 60;
+  const CTX_MAX = 300;
+
   async function searchView() {
     const LS_KEY = `search:${section}/${name}`;
     let prefs = {};
@@ -3538,11 +3756,19 @@ function viewProject(section, name, tab, job) {
     }
     function savePrefs(patch) {
       Object.assign(prefs, patch);
-      try { localStorage.setItem(LS_KEY, JSON.stringify(prefs)); } catch {}
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify(prefs));
+      } catch {
+        /* localStorage недоступен (приватный режим) — не критично */
+      }
     }
 
     const err = h("div", { class: "form-error" });
-    const status = h("span", { class: "review-status" }, "Поиска не было");
+    const status = h(
+      "span",
+      { class: "review-status search-status" },
+      "Поиска не было",
+    );
     const rows = h("div", { class: "search-rows" });
     const chips = h("div", { class: "search-chips" });
     const input = h("input", {
@@ -3554,12 +3780,16 @@ function viewProject(section, name, tab, job) {
     const ctxIn = h("input", {
       class: "input search-ctx",
       type: "number",
-      min: "10",
-      max: "300",
+      min: "0",
+      max: String(CTX_MAX),
       step: "10",
-      value: String(prefs.context || 60),
+      value: String(prefs.context || CTX_DEFAULT),
+      "aria-label": "Контекст: СИМВОЛОВ до и после совпадения",
     });
-    attachTooltip(ctxIn, "Сколько символов брать до и после совпадения");
+    attachTooltip(
+      ctxIn,
+      `Сколько символов брать до и после совпадения (не больше ${CTX_MAX})`,
+    );
     const caseBox = h("input", {
       type: "checkbox",
       class: "checkbox search-case",
@@ -3568,57 +3798,64 @@ function viewProject(section, name, tab, job) {
     attachTooltip(caseBox, "Учитывать регистр букв");
     const runBtn = h("button", { class: "btn btn-primary search-run" }, "Найти");
 
-    // группы и дефолтный охват — с сервера, чтобы реестр не дублировался тут
-    let order = [];
-    let labels = {};
+    // реестр групп, кластеров и дефолтный охват — с сервера: в браузере
+    // реестр не дублируется, SPA только рисует чипсы
+    let clusters = [];
+    let groups = [];
     let defaults = [];
     let scopes = Array.isArray(prefs.scopes) && prefs.scopes.length
       ? prefs.scopes.slice() : null; // null — дефолт сервера
 
-    function currentScopes() {
-      return scopes || defaults.slice();
-    }
+    const currentScopes = () => scopes || defaults.slice();
 
     function pick(list) {
-      scopes = order.filter((k) => list.includes(k));
+      scopes = groups.filter((g) => list.includes(g[0])).map((g) => g[0]);
       savePrefs({ scopes });
       renderChips();
     }
 
+    function scopeChip(g) {
+      const box = h("input", { type: "checkbox", class: "checkbox search-scope" });
+      box.checked = currentScopes().includes(g[0]);
+      box.addEventListener("change", () => {
+        const cur = currentScopes().slice();
+        const at = cur.indexOf(g[0]);
+        if (box.checked && at < 0) cur.push(g[0]);
+        if (!box.checked && at >= 0) cur.splice(at, 1);
+        if (!cur.length) {
+          box.checked = true; // хотя бы одна группа обязана остаться
+          return;
+        }
+        pick(cur);
+      });
+      return h("label", { class: "search-chip search-scope-chip" }, box, g[1]);
+    }
+
+    /* охват двумя блоками: файлы глав (имена — как в поле «Тип файлов глав»
+       форм стадий) и остальное */
     function renderChips() {
-      const on = currentScopes();
+      /* показываются ВСЕ кластеры и все их группы: чипсы — это выбор охвата,
+         снимать группу кнопкой «Только главы» не значит прятать её соседей */
+      const blocks = clusters
+        .filter((c) => groups.some((g) => g[2] === c[0]))
+        .map((c) =>
+          h(
+            "span",
+            { class: "search-cluster" },
+            h("span", { class: "search-cluster-label" }, `${c[1]}:`),
+            ...groups.filter((g) => g[2] === c[0]).map(scopeChip),
+          ));
       chips.replaceChildren(
-        ...order.map((id) => {
-          const box = h("input", {
-            type: "checkbox",
-            class: "checkbox search-scope",
-          });
-          box.checked = on.includes(id);
-          box.addEventListener("change", () => {
-            const cur = currentScopes().slice();
-            const at = cur.indexOf(id);
-            if (box.checked && at < 0) cur.push(id);
-            if (!box.checked && at >= 0) cur.splice(at, 1);
-            if (!cur.length) {
-              box.checked = true;
-              return;
-            }
-            pick(cur);
-          });
-          return h(
-            "label",
-            { class: "search-chip search-scope-chip" },
-            box,
-            labels[id] || id,
-          );
-        }),
+        ...blocks,
         h("button", {
           class: "btn btn-sm btn-ghost",
+          title: "Оставить только артефакты стадий глав",
           onclick: () => pick(CHAPTER_SCOPES),
         }, "Только главы"),
         h("button", {
           class: "btn btn-sm btn-ghost",
-          onclick: () => pick(order),
+          title: "Искать и в промптах, отчётах, логах",
+          onclick: () => pick(groups.map((g) => g[0])),
         }, "Все группы"),
       );
     }
@@ -3641,20 +3878,26 @@ function viewProject(section, name, tab, job) {
       );
     }
 
+    /* строка результата: группа, путь (клик открывает файл) и число совпадений;
+       артефакт главы открывается во вкладке «Редактор», запрос туда едет
+       предзаполненным — искать заново не придётся */
     function fileNode(f) {
       const rel = String(f.path || "");
+      const isChapter = /^chapters\/[^/]+\/[^/]+$/.test(rel);
       return h(
         "div",
         { class: "search-file" },
         h(
           "div",
           { class: "search-file-head" },
-          h("span", { class: "search-file-group" }, labels[f.group] || f.group),
+          h("span", { class: "search-file-group" }, f.group),
           h("button", {
             class: "btn btn-sm btn-ghost search-file-path",
-            title: "Открыть в редакторе",
+            title: isChapter
+              ? "Открыть главу в редакторе с этим запросом"
+              : "Открыть файл в редакторе с этим запросом",
             "aria-label": `Открыть ${rel} в редакторе`,
-            onclick: () => openEditor(rel),
+            onclick: () => openEditor(rel, String(input.value || "").trim()),
           }, rel),
           h("span", { class: "search-file-count" }, String(f.count)),
         ),
@@ -3662,10 +3905,30 @@ function viewProject(section, name, tab, job) {
       );
     }
 
+    /* все результаты остаются результатами: список режется страницами,
+       счётчик — в тулбаре */
+    const pager = UIC.listPager({
+      list: rows,
+      pageSize: 25,
+      label: "файлов с совпадениями",
+      hideSinglePage: true,
+      rows: (slice) =>
+        slice.length
+          ? slice.map(fileNode)
+          : [h("div", { class: "files-empty" }, "Совпадений нет")],
+    });
+
+    function readCtx() {
+      const v = parseInt(String(ctxIn.value).replace(",", "."), 10);
+      const safe = Number.isFinite(v) ? Math.max(0, Math.min(CTX_MAX, v)) : CTX_DEFAULT;
+      if (String(safe) !== ctxIn.value) ctxIn.value = String(safe);
+      return safe;
+    }
+
     async function run() {
       const q = String(input.value || "").trim();
-      savePrefs({ q, context: String(ctxIn.value || ""), ci: caseBox.checked });
-      rows.replaceChildren();
+      const ctx = readCtx();
+      savePrefs({ q, context: String(ctx), ci: caseBox.checked });
       if (q.length < 2) {
         status.textContent = "Минимум 2 символа";
         return;
@@ -3673,7 +3936,7 @@ function viewProject(section, name, tab, job) {
       status.textContent = "Поиск…";
       const p = new URLSearchParams({ project: `${section}/${name}`, q });
       p.set("scope", currentScopes().join(","));
-      if (ctxIn.value) p.set("context", String(ctxIn.value));
+      p.set("context", String(ctx));
       if (caseBox.checked) p.set("case", "1");
       try {
         const r = await api(`/search?${p}`);
@@ -3681,14 +3944,11 @@ function viewProject(section, name, tab, job) {
         status.textContent =
           `Совпадений: ${r.total} · файлов: ${files.length}`
           + ` · прочитано: ${r.scanned}`
-          + (r.truncated ? " · показаны не все" : "");
-        rows.replaceChildren(
-          ...(files.length
-            ? files.map(fileNode)
-            : [h("div", { class: "files-empty" }, "Совпадений нет")]),
-        );
+          + (r.skipped ? ` · не прочиталось: ${r.skipped}` : "");
+        pager.items = files;
       } catch (ex) {
         status.textContent = ex.message;
+        pager.items = [];
       }
     }
 
@@ -3696,14 +3956,18 @@ function viewProject(section, name, tab, job) {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") run();
     });
-    ctxIn.addEventListener("change", () => savePrefs({ context: String(ctxIn.value || "") }));
+    ctxIn.addEventListener("change", () =>
+      savePrefs({ context: String(readCtx()) }));
     caseBox.addEventListener("change", () => savePrefs({ ci: caseBox.checked }));
 
+    // реестр групп — один GET без запроса
     try {
-      const r = await api(`/search?${new URLSearchParams({ project: `${section}/${name}` })}`);
-      order = (r.groups || []).map((g) => g[0]);
-      for (const [id, label] of r.groups || []) labels[id] = label;
-      defaults = (r.scopes || []).filter((s) => order.includes(s));
+      const r = await api(
+        `/search?${new URLSearchParams({ project: `${section}/${name}` })}`,
+      );
+      groups = r.groups || [];
+      clusters = r.clusters || [];
+      defaults = (r.scopes || []).filter((s) => groups.some((g) => g[0] === s));
     } catch (ex) {
       err.textContent = ex.message;
     }
@@ -3715,7 +3979,7 @@ function viewProject(section, name, tab, job) {
       input,
       runBtn,
       h("label", { class: "search-chip search-case-chip" }, caseBox, "регистр"),
-      h("span", { class: "field-label" }, "контекст"),
+      h("span", { class: "field-label search-ctx-label" }, "Контекст:"),
       ctxIn,
       h("span", { class: "spacer" }),
       status,
@@ -3723,17 +3987,28 @@ function viewProject(section, name, tab, job) {
     const hint = h(
       "div",
       { class: "card-hint" },
-      "Поиск читает файлы книги целиком, без индексов: имя файла открывает его "
-        + "в редакторе."
-      + "\n«Только главы» — артефакты стадий, «Все группы» — промпты, отчёты и логи.",
+      "Поиск читает файлы книги целиком, без индексов и без лимитов: показаны "
+        + "все совпадения, список листается постранично.",
+      h(
+        "span",
+        null,
+        " Файл главы открывается во вкладке «Редактор» с уже подставленным "
+        + "запросом, остальные файлы — обычным редактором. ",
+        h("button", {
+          class: "btn btn-sm btn-ghost search-ner-btn",
+          title: "Перейти в «Глоссарий» и искать эту строку там",
+          onclick: () => setView("ner", String(input.value || "").trim()),
+        }, "Искать в глоссарии"),
+      ),
     );
     return h(
       "div",
       { class: "files-wrap" },
       toolbar,
-      h("div", { class: "search-scope-row" }, h("span", { class: "field-label" }, "Где искать:"), chips),
+      h("div", { class: "search-scope-row" }, chips),
       hint,
       err,
+      pager.el,
       rows,
     );
   }
@@ -4171,7 +4446,8 @@ function viewProject(section, name, tab, job) {
     }
     const list = h("div", { class: "prompt-list" });
     const err = h("div", { class: "form-error" });
-    const ed = makeEditor("", "txt");
+    /* все файлы вкладки — промпты: язык один на вкладке, он же «html» */
+    const ed = makeEditor("", "prompt");
     const nameLabel = h("div", { class: "prompt-name" });
     let current = null;
 
@@ -4208,7 +4484,6 @@ function viewProject(section, name, tab, job) {
         current = fname;
         nameLabel.textContent = fname;
         ed.setValue(d.content || "");
-        if (ed.isCM) ed.setLang(extOf(fname));
         renderList();
       } catch (ex) {
         err.textContent = ex.message;

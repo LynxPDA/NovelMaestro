@@ -832,3 +832,72 @@ test("filterNerItems: фильтр по замку и поиск не видит
   // поиск по всем полям не цепляет значение замка
   assert.equal(UICore.filterNerItems(items, "true", null, "").length, 0);
 });
+
+/* ── язык редактора файла (UICore.fileLang) ── */
+
+test("fileLang: промпты — по каталогу, остальное — по расширению", () => {
+  // расширение у промптов то же самое .txt: язык угадывается по пути
+  assert.equal(UICore.fileLang("prompts/ner_prompt.txt"), "prompt");
+  assert.equal(UICore.fileLang("General/prompts/pipeline_prompt.txt"), "prompt");
+  assert.equal(UICore.fileLang("ner_prompt.txt", true), "prompt");
+  assert.equal(UICore.fileLang("chapters/00001_1_Глава 1/polished.txt"), "txt");
+  assert.equal(UICore.fileLang("notes.md"), "md");
+  assert.equal(UICore.fileLang("tmp/report.json"), "json");
+  assert.equal(UICore.fileLang("meta.yaml"), "yaml");
+});
+
+/* ── разметка промпта в предпросмотре запроса (UICore.promptParts) ── */
+
+test("promptParts: теги секций, подстановки и ключи JSON", () => {
+  const parts = UICore.promptParts(
+    '<system>\nТы переводчик.\n</system>\n'
+    + '<user>\n=== ГЛОССАРИЙ ===\n{ner_block}\n{original_text}\n</user>\n'
+    + '{"term": "火", "count": 3}\n',
+  );
+  const marked = parts.filter((p) => p.cls);
+  assert.deepEqual(
+    marked.map((p) => [p.cls, p.text]),
+    [
+      ["pv-tag", "<system>"],
+      ["pv-tag", "</system>"],
+      ["pv-tag", "<user>"],
+      ["pv-var", "{ner_block}"],
+      ["pv-var", "{original_text}"],
+      ["pv-tag", "</user>"],
+      ["pv-key", '"term"'],
+      ["pv-key", '"count"'],
+    ],
+  );
+  // склейка частей — исходный текст без потерь
+  assert.equal(parts.map((p) => p.text).join(""), parts.join("").length
+    ? parts.map((p) => p.text).join("") : "");
+  assert.equal(
+    parts.map((p) => p.text).join(""),
+    '<system>\nТы переводчик.\n</system>\n<user>\n=== ГЛОССАРИЙ ===\n'
+    + '{ner_block}\n{original_text}\n</user>\n{"term": "火", "count": 3}\n',
+  );
+});
+
+test("promptParts: что не размечается", () => {
+  // одиночная «<» без имени, подстановка с заглавной буквы, значение JSON
+  for (const t of ["a < b", "<1>", "{Ner}", '":"', "{}", ""]) {
+    const parts = UICore.promptParts(t);
+    assert.ok(
+      parts.every((p) => !p.cls),
+      `лишняя разметка в «${t}»: ${JSON.stringify(parts)}`,
+    );
+    assert.equal(parts.length ? parts.map((p) => p.text).join("") : "", t);
+  }
+  // пустой ввод — пустой список, а не [{text:"",cls:""}]
+  assert.deepEqual(UICore.promptParts(""), []);
+  assert.deepEqual(UICore.promptParts(null), []);
+});
+
+test("promptParts: ключ JSON — то, что до двоеточия", () => {
+  const parts = UICore.promptParts('{"type": "other"}\nterm: count\n');
+  // значение («"other"») ключом не считается: после него нет двоеточия
+  assert.deepEqual(
+    parts.filter((p) => p.cls).map((p) => [p.cls, p.text]),
+    [["pv-key", '"type"']],
+  );
+});

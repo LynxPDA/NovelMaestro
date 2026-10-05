@@ -120,10 +120,12 @@
    * открытия/размещения — у app.js (openMenu/toggleMenu/closeMenus), сюда
    * только сборка узлов: пункт закрывает меню и зовёт своё действие. */
   /* Кнопка с выпадающим меню — одна на все случаи: действия строки, меню
-   * пользователя, «＋» на панели глоссария. items: [{label, action|onclick,
-   * href, danger}]; opts: {icon — текст кнопки, iconName — имя SVG-иконки,
-   * title, aria, btnClass, wrapClass, menuClass, itemClass} — дефолты
-   * компактные, как в тулбарах. */
+   * пользователя, панель настроек вкладки. items: [{label, action|onclick,
+   * href, danger}] — кнопка-пункт; {el} — готовый контрол своей вьюхи
+   * (чекбокс или кнопка со своим обработчиком: меню его только показывает,
+   * состояние живёт у вьюхи); {sep} — разделитель. opts: {icon — текст кнопки, iconName — имя
+   * SVG-иконки, title, aria, btnClass, wrapClass, menuClass, itemClass} —
+   * дефолты компактные, как в тулбарах. */
   function menuButton(items, opts) {
     const o = opts || {};
     const box = h("div", {
@@ -131,6 +133,15 @@
       role: "menu",
     });
     for (const it of items) {
+      if (it.sep) {
+        box.append(h("div", { class: "menu-sep" }));
+        continue;
+      }
+      // готовый контрол вьюхи: своё состояние он рисует сам
+      if (it.el) {
+        box.append(it.el);
+        continue;
+      }
       const cls =
         (o.itemClass || "btn btn-sm btn-ghost menu-item") +
         (it.danger ? " user-menu-danger" : "");
@@ -181,17 +192,25 @@
 
   /* Doc-обёртки предпросмотра: тема и кегль живут там, где карточка настроек
    * (app.js), а панель их только зовёт. Регистрация — одна строка в app.js;
-   * без неявный fолбэк: кадр получает текст как есть. */
+   * без неё запасной вариант: кадр получает содержимое как есть (текст — с
+   * переносами, markdown — разметкой как есть). */
   const docs = {
     md: (html) => html,
     html: (src) => src,
+    text: (src) =>
+      "<pre>" +
+      String(src == null ? "" : src).replace(/[&<>]/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]) +
+      "</pre>",
     fit: () => {},
   };
 
   /* Панель «редактор + предпросмотр»: хост CodeMirror и sandbox-iframe
    * (allow-same-origin — скрипты не выполняются) в одной карточке, режимы
-   * переключаются кнопкой: code — редактор, md — marked, html — как есть.
-   * renderMode — что показывать кнопкой (у .html-файлов это html). */
+   * переключаются кнопкой: code — редактор, md — marked, html — как есть,
+   * text — обычный текст с переносами. renderMode — что показывать кнопкой;
+   * его даёт UICore.previewMode(расширение): у markdown одиночные переносы
+   * схлопываются в абзац, поэтому текстовым файлам markdown не показывают. */
   function previewPane(ed, opts) {
     const o = opts || {};
     const pane = {
@@ -217,6 +236,10 @@
     };
     function render() {
       if (pane.mode === "code") return;
+      if (pane.mode === "text") {
+        pane.frame.srcdoc = docs.text(ed.getValue());
+        return;
+      }
       if (pane.mode === "md") {
         const html = window.marked
           ? window.marked.parse(ed.getValue(), {

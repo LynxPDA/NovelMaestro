@@ -53,6 +53,12 @@ const EDITOR_HIGHLIGHT = (() => {
   const base = (extra) => [
     { tag: t.meta, color: extra.meta },
     { tag: t.link, textDecoration: "underline" },
+    /* промпты читаются через html-язык (CM_LANG_BY_EXT.prompt): текст между
+       секциями — content, «<translate>» — тег, его скобки — angleBracket */
+    { tag: [t.content, t.bracket, t.separator], color: extra.text },
+    { tag: [t.angleBracket, t.documentMeta], color: extra.meta },
+    { tag: [t.tagName, t.attributeName], color: extra.type },
+    { tag: t.attributeValue, color: extra.string },
     { tag: t.heading, textDecoration: "underline", fontWeight: "bold" },
     { tag: t.emphasis, fontStyle: "italic" },
     { tag: t.strong, fontWeight: "bold" },
@@ -136,7 +142,11 @@ function previewCss() {
     "body{padding:10px}" +
     "h1,h2,h3,h4,h5,h6{font-size:16px;font-weight:600;margin:0.65em 0 0.3em}" +
     "p,li,td,th,blockquote,pre,code{font-size:16px}" +
-    `pre{background:${panel};padding:8px;border-radius:6px;overflow:auto}` +
+    /* обычный текст предпросмотра: переносы источника священны, поэтому
+       pre-wrap (у markdown одиночный перенос — мягкий, строки склеиваются) */
+    `pre{background:${panel};padding:8px;border-radius:6px;overflow:auto;` +
+    "white-space:pre-wrap;overflow-wrap:break-word;" +
+    "font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}" +
     "code{background:rgba(110,118,129,.2);padding:1px 4px;border-radius:3px}" +
     `table{border-collapse:collapse}th,td{border:1px solid ${border};padding:3px 6px}` +
     `a{color:${link}}`
@@ -170,6 +180,15 @@ function wrapPreviewDoc(inner) {
 
 function mdPreviewSrcdoc(html) {
   return wrapPreviewDoc(html);
+}
+
+/* обычный текст (txt/log/json/yaml…): тот же каркас документа, но содержимое
+   отдаётся как есть в <pre> — marked по одиночным переносам сворачивает
+   собранную книгу в один абзац */
+function txtPreviewSrcdoc(text) {
+  return wrapPreviewDoc(
+    '<pre class="preview-plain">' + UICore.escapeHtml(text) + "</pre>",
+  );
 }
 
 function fitPreviewFrame(frame) {
@@ -239,6 +258,7 @@ function previewFontSelect(onChange) {
 Object.assign(UIC.docs, {
   md: mdPreviewSrcdoc,
   html: wrapPreviewDoc,
+  text: txtPreviewSrcdoc,
   fit: fitPreviewFrame,
 });
 
@@ -1680,7 +1700,9 @@ async function apiUpload(path, form) {
 const CM_READY =
   typeof window !== "undefined" && window.CM && window.CM.EditorView;
 
-/* Расширение → язык CM; по умолчанию — простой текст */
+/* Расширение → язык CM; по умолчанию — простой текст. «prompt» — не расширение,
+   а имя: у файлов промптов оно .txt, а разметка своя (<system>, <translate>),
+   и читается она html-языком. */
 const CM_LANG_BY_EXT = {
   md: "markdown",
   markdown: "markdown",
@@ -1690,7 +1712,9 @@ const CM_LANG_BY_EXT = {
   yaml: "yaml",
   yml: "yaml",
   py: "python",
+  prompt: "html",
 };
+
 
 function extOf(path) {
   const base =
@@ -1701,6 +1725,8 @@ function extOf(path) {
   return dot < 0 ? "" : base.slice(dot + 1).toLowerCase();
 }
 
+/* Язык редактора файла даёт UICore.fileLang (prompts/* — промпт, остальное —
+   по расширению); здесь только таблица «язык → пакет» и сама подсветка. */
 function cmLang(ext) {
   const kind = CM_LANG_BY_EXT[ext] || "";
   const langs = window.CM && window.CM.langs;
@@ -2755,14 +2781,16 @@ async function viewTemplates() {
     }
     const ext = extOf(full);
     const readonly = st.set === "General"; // системный набор — просмотр
-    const ed = makeEditor(data.content || "", ext);
+    /* язык редактора — по назначению файла: промпты набора читаются как
+       промпты (html), а не как пустяковый txt */
+    const ed = makeEditor(data.content || "", UICore.fileLang(full));
     ed.setReadOnly(readonly);
     const err = h("div", { class: "form-error" });
 
-    /* превью md/html — общий каркас панели (sandbox-iframe); что показывает
-       кнопка, зависит от расширения: у .html-файлов — html */
+    /* превью — общий каркас панели (sandbox-iframe); режим берётся из
+       расширения: html как есть, md через marked, остальное — обычный текст */
     const pane = UIC.previewPane(ed, {
-      renderMode: ext === "html" || ext === "htm" ? "html" : "md",
+      renderMode: UICore.previewMode(ext),
     });
 
     const saveBtn = h("button", { class: "btn btn-sm" }, "Сохранить");
