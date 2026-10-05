@@ -163,10 +163,8 @@ git push origin v0.2.0
 Релиз перезаписывать не нужно: `windows.yml` и `userscripts.yml` видят существующий релиз и обновляют ассеты (`gh release upload --clobber`). Достаточно передвинуть тег:
 
 ```bash
-git push origin :refs/tags/v0.2.0     # удалить тег на remote
-# GitHub → Releases → v0.2.0 → Delete release (кнопка справа)
-git tag v0.2.0                        # заново на текущем HEAD
-git push origin v0.2.0                # оба воркфлоу пересоберутся, VERSION выставится из тега
+git tag -f v0.2.0                     # заново на текущем HEAD
+git push origin +refs/tags/v0.2.0     # воркфлоу пересоберутся и обновят ассеты
 ```
 
 ### Черновые прогоны без релиза
