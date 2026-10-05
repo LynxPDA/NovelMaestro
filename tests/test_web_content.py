@@ -1045,7 +1045,7 @@ def test_job_start_uses_shared_llm_config(srv, tmp_path, monkeypatch):
 # ════════════════════════════════════════════════════════════════════
 
 def _mk_search_book(pdir):
-    """Книга: 2 главы (оригинал+полировка), глоссарий, промпт и лог."""
+    """Книга: 2 главы (оригинал+полировка), заметки, промпт и лог."""
     for i in (1, 2):
         d = pdir / "chapters" / f"0000{i}_{i}_Глава {i}"
         d.mkdir(parents=True)
@@ -1053,8 +1053,7 @@ def _mk_search_book(pdir):
                                        encoding="utf-8")
         (d / "polished.txt").write_text(f"Глава {i}\nМИР тихо\n",
                                         encoding="utf-8")
-    (pdir / "ner.json").write_text('[{"term": "мир", "type": "other"}]',
-                                   encoding="utf-8")
+    (pdir / "notes.md").write_text("# Заметки\nмир\n", encoding="utf-8")
     (pdir / "prompts").mkdir()
     (pdir / "prompts" / "translate.txt").write_text("переведи мир\n",
                                                     encoding="utf-8")
@@ -1064,15 +1063,17 @@ def _mk_search_book(pdir):
 
 
 def test_search_meta_without_query(srv, tmp_path):
-    """Пустой q — не ошибка: группы, подписи и дефолтный охват."""
+    """Пустой q — не ошибка: реестр групп, кластеры и дефолтный охват."""
     srv, port, root = srv()
     _mk_search_book(_mk_project(root))
     r = _request(port, "GET", f"/api/search?{_q('ACTIVE/demo')}")
     assert r["ok"] and r["files"] == [] and r["total"] == 0
     ids = [g[0] for g in r["groups"]]
-    assert ids[:2] == ["chapter", "translated"] and "logs" in ids
-    assert r["scopes"] == ["chapter", "polished", "ner", "notes"]
-    assert r["labels"]["polished"] == "Полировка"
+    assert ids[:4] == ["chapter", "translated", "redacted", "polished"], \
+        "метки групп файлов глав — слаги стадий"
+    assert "logs" in ids and "ner" not in ids, "глоссарий ищется на своей вкладке"
+    assert [c[0] for c in r["clusters"]] == ["chapters", "other"]
+    assert r["scopes"] == ["chapter", "polished", "notes"]
 
 
 def test_search_short_query(srv, tmp_path):
@@ -1100,12 +1101,12 @@ def test_search_project_without_param(srv):
 
 
 def test_search_default_scopes(srv, tmp_path):
-    """По умолчанию ищутся тексты глав и глоссарий: промпты и логи — нет."""
+    """По умолчанию ищутся тексты глав и заметки: промпты и логи — нет."""
     srv, port, root = srv()
     _mk_search_book(_mk_project(root))
     r = _request(port, "GET", f"/api/search?{_q('ACTIVE/demo', q='мир')}")
     assert r["ok"]
-    assert {f["group"] for f in r["files"]} == {"chapter", "polished", "ner"}
+    assert {f["group"] for f in r["files"]} == {"chapter", "polished", "notes"}
     assert r["scanned"] == 5
     by_path = {f["path"]: f for f in r["files"]}
     hit = by_path["chapters/00001_1_Глава 1/chapter.txt"]
@@ -1136,21 +1137,24 @@ def test_search_scope_case_and_context(srv, tmp_path):
     assert r["files"][0]["hits"][0]["text"] == "…й мир"
 
 
-def test_search_limits(srv, tmp_path):
-    """per_file и max_total — лимиты совпадений, truncated — про срез."""
+def test_search_context_clamped(srv, tmp_path):
+    """Контекст больше потолка уменьшается до потолка, мусор — дефолт."""
     srv, port, root = srv()
     pdir = _mk_project(root)
     d = pdir / "chapters" / "00000_1_Глава 1"
     d.mkdir(parents=True)
     (d / "chapter.txt").write_text("мир 1\nмир 2\nмир 3\n", encoding="utf-8")
     r = _request(port, "GET",
-                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter',
-                                   per_file=2)}")
-    assert r["total"] == 2 and r["truncated"] is False
+                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter')}")
+    assert r["total"] == 3 and r["files"][0]["count"] == 3, "лимитов прогона нет"
     r = _request(port, "GET",
                  f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter',
-                                   max_total=1)}")
-    assert r["total"] == 1 and r["truncated"] is True
+                                   context=10 ** 6)}")
+    assert r["files"][0]["hits"][0]["text"] == "мир 1"
+    r = _request(port, "GET",
+                 f"/api/search?{_q('ACTIVE/demo', q='мир', scope='chapter',
+                                   context='много')}")
+    assert r["files"][0]["count"] == 3
 
 
 def test_search_missing_project(srv, tmp_path):

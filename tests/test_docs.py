@@ -82,8 +82,8 @@ SETTINGS_API = ["Setting", "Block", "Group", "GROUPS", "SETTINGS", "BY_KEY",
                 "groups_payload"]
 # Зеркало API core/search.py (поиск по текстам книги)
 SEARCH_API = ["SearchGroup", "SEARCH_GROUPS", "GROUP_IDS", "GROUP_LABELS",
-              "DEFAULT_SCOPES", "iter_project_files", "find_in_text",
-              "search_project"]
+              "CLUSTERS", "CLUSTER_LABELS", "DEFAULT_SCOPES", "MAX_CONTEXT",
+              "iter_project_files", "find_in_text", "search_project"]
 
 
 def _agents_text() -> str:

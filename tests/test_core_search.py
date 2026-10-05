@@ -93,10 +93,10 @@ def test_find_in_text_context_zero():
         {"line": 1, "start": 1, "end": 4, "text": "…мир"}]
 
 
-def test_find_in_text_limit_per_file():
-    """limit — сколько совпадений отдаёт один файл, дальше не считаем."""
-    hits = S.find_in_text("мир 1\nмир 2\nмир 3", "мир", limit=2)
-    assert [x["line"] for x in hits] == [1, 2]
+def test_find_in_text_returns_all():
+    """Совпадения не режутся: из одного файла — все, сколько есть."""
+    hits = S.find_in_text("мир 1\nмир 2\nмир 3", "мир")
+    assert [x["line"] for x in hits] == [1, 2, 3]
 
 
 def test_find_in_text_nfc():
@@ -195,31 +195,39 @@ def test_iter_missing_dirs_ok(tmp_path):
 
 def test_search_project_totals(tmp_path):
     """Файлы идут порядком реестра; total — сумма совпадений по всем."""
-    make_book(tmp_path, chapters=2, ner=True, notes=False)
+    make_book(tmp_path, chapters=2, ner=False, notes=False)
     r = S.search_project(tmp_path, "мир")
     assert r["query"] == "мир"
-    assert r["scanned"] == 5            # 2 главы × 2 артефакта + ner.json
+    assert r["scanned"] == 4            # 2 главы × (chapter + polished)
     assert r["skipped"] == 0
-    # в глоссарии термин встречается дважды (term и translation)
-    assert r["total"] == 6 and r["truncated"] is False
+    assert r["total"] == 4
     assert [f["path"] for f in r["files"]] == [
         "chapters/00001_1_Глава 1/chapter.txt",
         "chapters/00002_2_Глава 2/chapter.txt",
         "chapters/00001_1_Глава 1/polished.txt",
         "chapters/00002_2_Глава 2/polished.txt",
-        "ner.json",
     ]
     first = r["files"][0]
     assert first["group"] == "chapter" and first["chapter"] == 1
     assert first["name"] == "chapter.txt" and first["count"] == 1
 
 
-def test_search_project_chapter_number(tmp_path):
-    """Для файла главы отдаёт номер главы, для ner.json — None."""
+def test_search_project_glossary_not_scanned(tmp_path):
+    """Глоссарий ищется на своей вкладке: ner.json в обходе нет."""
     make_book(tmp_path, chapters=1, artifacts=("polished",), ner=True)
     r = S.search_project(tmp_path, "мир")
+    assert [f["name"] for f in r["files"]] == ["polished.txt"]
+    assert r["files"][0]["chapter"] == 1
+    assert "ner" not in S.GROUP_IDS
+
+
+def test_search_project_chapter_number(tmp_path):
+    """Для файла главы отдаёт номер главы, для заметок — None."""
+    make_book(tmp_path, chapters=1, artifacts=("polished",), ner=False,
+              notes=True)
+    r = S.search_project(tmp_path, "мир")
     got = {f["name"]: f["chapter"] for f in r["files"]}
-    assert got == {"polished.txt": 1, "ner.json": None}
+    assert got == {"polished.txt": 1, "notes.md": None}
 
 
 def test_search_project_scoped(tmp_path):
@@ -239,37 +247,42 @@ def test_search_project_case_flag(tmp_path):
     assert r["total"] == 1 and r["files"][0]["hits"][0]["line"] == 1
 
 
-def test_search_project_truncated(tmp_path):
-    """Лимит совпадений всего — отдельный флаг, а не молчаливая тишина."""
-    make_book(tmp_path, chapters=3, artifacts=("chapter",))
-    r = S.search_project(tmp_path, "мир", ("chapter",), max_total=2)
-    assert r["total"] == 2 and r["truncated"] is True
-    assert len(r["files"]) == 2
-
-
-def test_search_project_per_file_limit(tmp_path):
+def test_search_project_no_limits(tmp_path):
+    """Ни лимита на файл, ни лимита всего: показаны все совпадения."""
     ch = tmp_path / "chapters" / "00000_1_Глава 1"
     ch.mkdir(parents=True)
     (ch / "chapter.txt").write_text("мир\nмир\nмир\n", encoding="utf-8")
-    r = S.search_project(tmp_path, "мир", ("chapter",), max_per_file=2)
-    assert r["total"] == 2 and r["files"][0]["count"] == 2
+    r = S.search_project(tmp_path, "мир", ("chapter",))
+    assert r["total"] == 3 and r["files"][0]["count"] == 3
+    assert not any(k in r for k in ("truncated", "shown", "per_file"))
 
 
 @pytest.mark.parametrize("query", ["", "   ", None])
 def test_search_project_empty_query(tmp_path, query):
-    """Пустой запрос — пустой результат без чтения файлов."""
+    """Пустой запрос — только реестр групп, без чтения файлов."""
     make_book(tmp_path, chapters=1)
     r = S.search_project(tmp_path, query)
     assert r["total"] == 0 and r["files"] == []
-    assert r["scanned"] == 0 and r["truncated"] is False
+    assert r["scanned"] == 0 and r["skipped"] == 0
     assert r["scopes"] == list(S.DEFAULT_SCOPES)
-    assert set(r["labels"]) == set(S.DEFAULT_SCOPES)
+    # реестр для интерфейса: все группы (с кластером) и сами кластеры
+    assert [g[0] for g in r["groups"]] == list(S.GROUP_IDS)
+    assert [list(c) for c in r["clusters"]] == [list(c) for c in S.CLUSTERS]
 
 
 def test_registry_shape():
-    """Реестр групп: ключи уникальны, подписи непустые, дефолты — из реестра."""
+    """Реестр групп: ключи уникальны, метки глав — слаги стадий, дефолты — из реестра."""
     assert len(set(S.GROUP_IDS)) == len(S.GROUP_IDS)
     assert all(g.label and g.pattern for g in S.SEARCH_GROUPS)
     assert set(S.DEFAULT_SCOPES) <= set(S.GROUP_IDS)
     assert set(S.GROUP_LABELS) == set(S.GROUP_IDS)
     assert S.TEXT_EXT and all(e.startswith(".") for e in S.TEXT_EXT)
+    chapter_groups = [g for g in S.SEARCH_GROUPS if g.kind == "chapter"]
+    assert [g.id for g in chapter_groups] == ["chapter", "translated",
+                                              "redacted", "polished"]
+    assert [g.label for g in chapter_groups] == [g.id for g in chapter_groups], \
+        "метки файлов глав совпадают с полем «Тип файлов глав» форм стадий"
+    assert {g.cluster for g in chapter_groups} == {"chapters"}
+    # у каждой группы есть кластер, кластеры описаны и не пустуют
+    assert {g.cluster for g in S.SEARCH_GROUPS} == set(S.CLUSTER_LABELS)
+    assert len(S.CLUSTERS) == 2

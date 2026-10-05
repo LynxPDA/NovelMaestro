@@ -8,8 +8,12 @@ search.py — поиск по текстам проекта.
 разъезд с правками) при нулевом выигрыше. Поэтому поиск простой: белый список
 групп файлов, NFC, подстрока, фрагменты с контекстом.
 
-Группы (что именно искать) задаются реестром SEARCH_GROUPS — там же подписи
-для интерфейса. Индексов и кешей нет: результат всегда соответствует файлу.
+Ограничений на число совпадений нет сознательно: лимит означал бы «показаны не
+не все», а лишние совпадения — килобайты JSON, не тормоза. Группы (что искать)
+задает реестр SEARCH_GROUPS; группы сгруппированы по кластерам (CLUSTERS), а
+их подписи совпадают с полями «Тип файлов глав» форм стадий. Глоссарий здесь
+не ищется: у него своя вкладка со своим поиском. Индексов и кешей нет:
+результат всегда соответствует файлу.
 """
 from __future__ import annotations
 
@@ -22,42 +26,48 @@ from .common import parse_chapter_id, read_text_safe
 
 __all__ = [
     "SearchGroup", "SEARCH_GROUPS", "GROUP_IDS", "GROUP_LABELS",
-    "DEFAULT_SCOPES", "iter_project_files", "find_in_text", "search_project",
+    "CLUSTERS", "CLUSTER_LABELS", "DEFAULT_SCOPES", "MAX_CONTEXT",
+    "iter_project_files", "find_in_text", "search_project",
 ]
 
-# СИМВОЛЫ: столько знаков берём до и после совпадения
+# СИМВОЛЫ: сколько знаков берём до и после совпадения
 DEFAULT_CONTEXT = 60
-# совпадений на файл и всего за один прогон (остальное — «показаны не все»)
-DEFAULT_MAX_PER_FILE = 20
-DEFAULT_MAX_TOTAL = 500
-# файл больше этого размера (БАЙТЫ) считается не текстовым рабочим артефактом
+# верхняя граница контекста: больше — это уже «показать файл целиком»
+MAX_CONTEXT = 300
+# файл больше этого размера (БАЙТЫ) не считается рабочим текстовым артефактом
 DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024
 # текстовые расширения групповых обходов (каталоги)
 TEXT_EXT = (".txt", ".md", ".json", ".log")
 
+# кластеры групп: порядок обхода и подписи блоков в интерфейсе
+CLUSTERS: tuple = (("chapters", "Файлы глав"), ("other", "Прочее"))
+CLUSTER_LABELS: dict = dict(CLUSTERS)
+
 
 @dataclass(frozen=True)
 class SearchGroup:
-    """Одна группа поиска: подпись и что именно берём.
+    """Одна группа поиска: подпись, кластер и что именно берём.
 
     kind="chapter" — файл артефакта во каждой папке главы (pattern — имя
     файла); kind="file" — конкретные файлы проекта; kind="tree" — обход
-    каталога (pattern — сам каталог)."""
+    каталога (pattern — сам каталог). Подписи глав-артефактов совпадают с
+    полем «Тип файлов глав» (core/settings.py)."""
 
     id: str
     label: str
     kind: str
     pattern: tuple
+    cluster: str = "other"
 
 
 SEARCH_GROUPS: tuple = (
-    SearchGroup("chapter", "Оригинал глав", "chapter", ("chapter.txt",)),
-    SearchGroup("translated", "Перевод (черновик)", "chapter",
-                ("translated.txt",)),
-    SearchGroup("redacted", "Правка перевода", "chapter",
-                ("redacted.txt",)),
-    SearchGroup("polished", "Полировка", "chapter", ("polished.txt",)),
-    SearchGroup("ner", "Глоссарий", "file", ("ner.json",)),
+    SearchGroup("chapter", "chapter", "chapter", ("chapter.txt",), "chapters"),
+    SearchGroup("translated", "translated", "chapter", ("translated.txt",),
+                "chapters"),
+    SearchGroup("redacted", "redacted", "chapter", ("redacted.txt",),
+                "chapters"),
+    SearchGroup("polished", "polished", "chapter", ("polished.txt",),
+                "chapters"),
     SearchGroup("notes", "Заметки книги", "file",
                 ("notes.md", "source/info.md")),
     SearchGroup("prompts", "Промпты", "tree", ("prompts",)),
@@ -67,8 +77,8 @@ SEARCH_GROUPS: tuple = (
 
 GROUP_IDS: tuple = tuple(g.id for g in SEARCH_GROUPS)
 GROUP_LABELS: dict = {g.id: g.label for g in SEARCH_GROUPS}
-# что ищется, если пользователь ничего не выбрал: тексты книги + глоссарий
-DEFAULT_SCOPES: tuple = ("chapter", "polished", "ner", "notes")
+# что ищется, если пользователь ничего не выбрал: тексты глав + заметки
+DEFAULT_SCOPES: tuple = ("chapter", "polished", "notes")
 
 
 def iter_project_files(project_dir, scopes=None, *,
@@ -123,18 +133,18 @@ def _readable_text(path: Path, max_file_bytes: int) -> bool:
 
 
 def find_in_text(text, query, *, context: int = DEFAULT_CONTEXT,
-                 limit: int = 0, case_sensitive: bool = False):
-    """Совпадения подстроки в тексте: [{line, start, end, text}].
+                 case_sensitive: bool = False):
+    """Все совпадения подстроки в тексте: [{line, start, end, text}].
 
     line — номер строки с 1; text — строка, обрезанная до ±context символов
     (обрезок помечен «…»); start/end — границы совпадения внутри этого
-    фрагмента, то есть text[start:end] — само совпадение.
-    И иголка, и текст — NFC."""
+    фрагмента, то есть text[start:end] — само совпадение. Лимита нет: часть
+    совпадений означала бы «показаны не все». И иголка, и текст — NFC."""
     needle = unicodedata.normalize("NFC", str(query or ""))
     if not needle:
         return []
     try:
-        ctx = max(0, int(context))
+        ctx = min(MAX_CONTEXT, max(0, int(context)))
     except (TypeError, ValueError):
         ctx = DEFAULT_CONTEXT
     hay_needle = needle if case_sensitive else needle.casefold()
@@ -151,55 +161,44 @@ def find_in_text(text, query, *, context: int = DEFAULT_CONTEXT,
             hits.append({"line": lineno, "start": len(pre) + pos - a,
                          "end": len(pre) + pos - a + len(needle),
                          "text": frag})
-            if limit and len(hits) >= limit:
-                return hits
             pos = line.find(hay_needle, pos + len(needle))
     return hits
 
 
 def search_project(project_dir, query, scopes=None, *,
                    context: int = DEFAULT_CONTEXT,
-                   max_per_file: int = DEFAULT_MAX_PER_FILE,
-                   max_total: int = DEFAULT_MAX_TOTAL,
                    case_sensitive: bool = False) -> dict:
-    """Поиск по текстам книги.
+    """Поиск по текстам книги: все совпадения, без лимитов.
 
-    Возвращает {query, scopes, labels, files, total, scanned, skipped,
-    truncated}: files — [{group, path, name, chapter, count, hits}] только с
-    совпадениями, scanned — сколько файлов прочитано, skipped — сколько
-    не прочиталось, truncated — сработал ли лимит совпадений."""
+    Возвращает {query, scopes, groups, clusters, labels, files, total,
+    scanned, skipped}: files — [{group, path, name, chapter, count, hits}]
+    только с совпадениями (порядок — порядок реестра), scanned — сколько
+    файлов прочитано, skipped — сколько не прочиталось."""
     needle = unicodedata.normalize("NFC", str(query or "")).strip()
     wanted = tuple(scopes) if scopes else DEFAULT_SCOPES
-    out_files, total, scanned, skipped, truncated = [], 0, 0, 0, False
+    groups = [g for g in SEARCH_GROUPS if g.id in wanted]
+    # метаданные для интерфейса: весь реестр групп (с кластерами), сами
+    # кластеры и какие группы реально участвовали в прогоне
+    meta = {"groups": [[g.id, g.label, g.cluster] for g in SEARCH_GROUPS],
+            "clusters": list(CLUSTERS),
+            "scopes": [g.id for g in groups]}
     if not needle:
-        return {"query": "", "scopes": list(wanted),
-                "labels": {g.id: g.label for g in SEARCH_GROUPS
-                           if g.id in wanted},
-                "files": [], "total": 0, "scanned": 0, "skipped": 0,
-                "truncated": False}
+        return {"query": "", "files": [], "total": 0, "scanned": 0,
+                "skipped": 0, **meta}
+    out_files, total, scanned, skipped = [], 0, 0, 0
     for group_id, rel, path in iter_project_files(project_dir, wanted):
         text = read_text_safe(path)
         scanned += 1
         if not text:
             skipped += 1
             continue
-        # лимит файла режется общим лимитом: total не обязан перекосить
-        limit = max_per_file
-        if max_total:
-            limit = min(max_per_file, max_total - total)
         hits = find_in_text(text, needle, context=context,
-                            limit=limit, case_sensitive=case_sensitive)
+                            case_sensitive=case_sensitive)
         if not hits:
             continue
         out_files.append({"group": group_id, "path": rel, "name": path.name,
                           "chapter": parse_chapter_id(path.parent.name),
                           "count": len(hits), "hits": hits})
         total += len(hits)
-        if max_total and total >= max_total:
-            truncated = True
-            break
-    return {"query": needle, "scopes": list(wanted),
-            "labels": {g.id: g.label for g in SEARCH_GROUPS
-                       if g.id in wanted},
-            "files": out_files, "total": total, "scanned": scanned,
-            "skipped": skipped, "truncated": truncated}
+    return {"query": needle, "files": out_files, "total": total,
+            "scanned": scanned, "skipped": skipped, **meta}
