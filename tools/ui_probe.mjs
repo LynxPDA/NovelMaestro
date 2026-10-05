@@ -279,10 +279,13 @@ async function main() {
     );
   }
 
-  /* переключатели панелей: клик по «Рендер/Код» должен менять, что видно —
-   * хост редактора или sandbox-iframe (режим может стартовать с любой стороны) */
+  /* переключатели панелей: клик по «Рендер»/«Редактор» должен менять, что
+   * видно — хост редактора или sandbox-iframe (режим может стартовать с любой
+   * стороны: заметки открываются сразу в предпросмотре) */
+  const TOGGLE = 'button.btn-ghost[title="Показать редактор"],' +
+    ' button.btn-ghost[title="Показать отрендеренный вид"]';
   for (const [name, hash, sel] of [
-    ["notes-preview", `#/project/${SECTION}/${BOOK}/notes`, 'button[title="Показать отрендеренный вид"]'],
+    ["notes-preview", `#/project/${SECTION}/${BOOK}/notes`, TOGGLE],
 
   ]) {
     const before = problems.length;
@@ -935,15 +938,90 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} настройки+reasoning ${head.cards.length} блоков · вкладка «${head.active}»`);
   }
 
-  /* профили LLM: General — значения общего конфига, свой профиль хранит только
-   * переопределения; карточка, чипсы, создание/переименование/удаление и
-   * сохранение значатся в llm_profiles.json рядом с общим .env */
+  /* «Настройки»: карточка стадии называется ровно как её запуск (название
+   * стадии живёт в одном месте — core/settings.py::STAGE_TITLES); поля политики
+   * не голосующих полей — на своей карточке */
+  {
+    const before = problems.length;
+    const want = {
+      "Перевод": ["Перевод (LLM)"],
+      "Глоссарий": ["Создание глоссария (LLM)", "Проверка глоссария (LLM)"],
+      "Проверки": ["Проверка перевода", "Проверка перевода (LLM)",
+        "Оценка перевода (LLM)"],
+      "Книга и файлы": ["Разбор исходника на главы", "Компиляция TXT/EPUB/FB2",
+        "Создание Wiki (LLM)", "Массовые замены"],
+    };
+    const oldNames = ["Глоссарий (NER)", "EPUB → главы", "Сборка глав",
+      "Вики книги", "Оценка качества", "Проверка перевода LLM",
+      "Перевод (translate"];
+    await page.goto(`${url}/#/settings`, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".tabs .tab", { timeout: 15000 });
+    const slugs = { "Перевод": "transfer", "Глоссарий": "glossary",
+      "Проверки": "checks", "Книга и файлы": "book" };
+    const lines = [];
+    let fields = null;
+    for (const [tab, titles] of Object.entries(want)) {
+      await page.locator(`.tabs .tab:has-text("${tab}")`).first().click();
+      await page.waitForTimeout(400);
+      const cards = await page.evaluate(() => [...document
+        .querySelectorAll(".settings-cards .review-card-title")]
+        .map((x) => x.textContent.trim()));
+      for (const t of titles)
+        if (!cards.includes(t))
+          problems.push(`настройки «${tab}»: нет карточки «${t}» (${cards.join("/")})`);
+      for (const t of oldNames)
+        if (cards.some((c) => c.includes(t)))
+          problems.push(`настройки «${tab}»: старое название стадии`);
+      if (tab === "Глоссарий") {
+        fields = await page.evaluate(() => {
+          const card = [...document.querySelectorAll(".settings-cards .review-card")]
+            .find((c) => /Создание глоссария/.test(c.textContent));
+          if (!card) return null;
+          return [...card.querySelectorAll(".field")].map((f) => {
+            const label = (f.querySelector(".field-label") || {}).textContent || "";
+            const ctl = f.querySelector("input,select,textarea");
+            const kind = ctl ? ctl.tagName.toLowerCase() : "?";
+            const opts = kind === "select" ? ctl.options.length : 0;
+            const tip = (f.querySelector(".field-help") || {}).textContent || "";
+            return `${label.trim()}=${kind}${opts ? `(${opts})` : ""}` +
+              (ctl && ctl.value ? `:${ctl.value}` : "") +
+              (/СИМВОЛ|ТОКЕН/.test(label + tip) ? "·единица" : "");
+          });
+        });
+      }
+      lines.push(`«${tab}»: ${cards.length}`);
+      if (SHOT)
+        await page.screenshot({ path: path.join(OUT, `settings-${slugs[tab]}.png`) });
+    }
+    const mode = (fields || []).find((x) => /Не голосующие поля/.test(x));
+    if (!mode) problems.push("настройки: нет поля режима не голосующих полей");
+    else if (!/^select\(4\):last$/.test(mode.replace(/^[^=]*=/, "").replace(/·единица$/, "")))
+      problems.push(`настройки: поле режима выглядит так «${mode}»`);
+    const cap = (fields || []).find((x) => /Ограничение длины значения/.test(x));
+    if (!cap) problems.push("настройки: нет поля потолка длины");
+    else if (!/СИМВОЛ/.test(cap) || !/:0$/.test(cap.replace(/·единица$/, "")))
+      problems.push(`настройки: потолок длины выглядит так «${cap}»`);
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "settings-glossary-fields.png") });
+    log(`${problems.length === before ? "✅" : "❌"} настройки: стадии  ${lines.join(" · ")} | ${mode || "—"} | ${cap || "—"}`);
+  }
+
+  /* профили LLM: General — значения общего конфига, карточка с одним списком
+   * профилей, создание/переименование/удаление и сохранение значатся в
+   * llm_profiles.json рядом с общим .env */
   {
     const before = problems.length;
     const PF = () => path.join(seedDir || "", "llm_profiles.json");
+    /* список профилей и выбранный в нём пункт */
     const chips = () => page.evaluate(() => [...document
-      .querySelectorAll(".settings-chips .settings-chip")]
+      .querySelectorAll(".settings-profile-select option")]
       .map((x) => x.textContent.trim()));
+    const chosen = () => page.evaluate(() => {
+      const sel = document.querySelector(".settings-profile-select");
+      const opt = sel && sel.options[sel.selectedIndex];
+      return opt ? opt.textContent.trim() : "";
+    });
     const status = () => page.evaluate(() => ((document
       .querySelector(".review-status") || {}).textContent || "").trim());
     /* значение поля «Сервер LLM» активной карточки (name = ключ .env) */
@@ -954,10 +1032,10 @@ async function main() {
     await page.waitForSelector(".tabs .tab", { timeout: 15000 });
     /* предыдущий сценарий оставил «Внешний вид»: профили — на первой вкладке */
     await page.locator('.tabs .tab:has-text("Модель и сервер")').first().click();
-    await page.waitForSelector(".settings-chip", { timeout: 15000 });
+    await page.waitForSelector(".settings-profile-select", { timeout: 15000 });
     let list = await chips();
     if (list.join("/") !== "General (общий конфиг)")
-      problems.push(`профили: чипсы (${list.join("/")})`);
+      problems.push(`профили: список (${list.join("/")})`);
     if (await status()) problems.push(`профили: статус General «${await status()}»`);
     if (await fieldValue("HOST") !== "http://127.0.0.1:9/v1")
       problems.push(`профили: General сервер «${await fieldValue("HOST")}»`);
@@ -968,9 +1046,8 @@ async function main() {
     list = await chips();
     if (list.length !== 2 || !list[1].includes("Домашний"))
       problems.push(`профили: после создания (${list.join("/")})`);
-    if (!(await page.locator(".settings-chip.settings-chip-active")
-      .first().textContent()).includes("Домашний"))
-      problems.push("профили: созданный профиль не стал активным");
+    if (!(await chosen()).includes("Домашний"))
+      problems.push(`профили: созданный профиль не стал активным (${await chosen()})`);
     if (seedDir) {
       if (!fs.existsSync(PF())) {
         problems.push("профили: llm_profiles.json не создан");
@@ -988,18 +1065,20 @@ async function main() {
           problems.push(`профили: ключи записи ${Object.keys(p0).join(",")}`);
       }
     }
-    /* редактируем профиль: карточки LLM показывают его значения, пустое поле
-     * значит «наследует General»; карточки веб-сервера — общие, профиль их
-     * не перекрывает (он хранит только LLM-ключи) */
+    /* редактируем профиль: карточки LLM показывают его значения; новый профиль
+     * создан копией General, поэтому пустых полей LLM в форме нет (секрет —
+     * под маской); карточки веб-сервера — общие, профиль их не перекрывает */
     const st2 = await status();
     if (!/профиль «Домашний»/.test(st2) || /llm_profiles\.json/.test(st2))
       problems.push(`профили: статус «${st2}»`);
     if (await fieldValue("WEB_PORT") !== "8756")
       problems.push(`профили: профиль перекрыл веб-сервер «${await fieldValue("WEB_PORT")}»`);
-    if (await fieldValue("HOST") !== "" || await fieldValue("THREADS") !== "")
-      problems.push("профили: новый профиль копирует значения General");
-    if (await fieldValue("API_KEY") !== "")
-      problems.push("профили: секрет профиля показан без пустого значения");
+    if (await fieldValue("HOST") !== "http://127.0.0.1:9/v1")
+      problems.push(`профили: новый профиль не копирует сервер (${await fieldValue("HOST")})`);
+    if (await fieldValue("THREADS") === "")
+      problems.push("профили: новый профиль не копирует потоки");
+    if (await fieldValue("API_KEY") !== "••••")
+      problems.push(`профили: секрет профиля показан не маской (${await fieldValue("API_KEY")})`);
     await page.locator('.settings-cards [name="MODEL"]').first().fill("дом-модель");
     await page.locator('.settings-cards [name="API_KEY"]').first().fill("дом-ключ");
     await page.locator('.page-header-actions button:has-text("Сохранить")')
@@ -1013,11 +1092,11 @@ async function main() {
         problems.push(`профили: файл не читается (${ex.message})`);
       }
       const v = ((data.profiles || [])[0] || {}).values || {};
-      if (v.MODEL !== "дом-модель")
+      if (v.MODEL !== "дом-модель" || v.API_KEY !== "дом-ключ")
         problems.push(`профили: значения профиля ${JSON.stringify(v)}`);
-      /* только два изменённых поля, в порядке реестра */
-      if (Object.keys(v).join(",") !== "API_KEY,MODEL")
-        problems.push(`профили: в файл уехало лишнее (${Object.keys(v).join(",")})`);
+      /* профиль — копия General: сервер в файле остаётся тем же значением */
+      if (v.HOST !== "http://127.0.0.1:9/v1")
+        problems.push(`профили: профиль потерял сервер General (${v.HOST})`);
       const env = fs.readFileSync(path.join(seedDir, ".env"), "utf-8");
       if (!env.includes("HOST=http://127.0.0.1:9/v1")
           || !env.includes("MODEL=probe-model")
@@ -1048,7 +1127,7 @@ async function main() {
     if (list.length !== 2 || !list[0].startsWith("General"))
       problems.push(`профили: после удаления (${list.join("/")})`);
     /* возврат на General: карточки снова показывают общий конфиг */
-    await page.locator(".settings-chip:has-text(\"General\")").first().click();
+    await page.selectOption(".settings-profile-select", "general");
     await page.waitForTimeout(500);
     if (await fieldValue("MODEL") !== "probe-model")
       problems.push(`профили: General показывает «${await fieldValue("MODEL")}»`);
