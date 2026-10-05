@@ -148,18 +148,19 @@ git tag v0.2.0
 git push origin v0.2.0
 # → Actions: Docker image + Portable Windows build (по тегу)
 
-# 4. Дождаться двух зелёных галок (вкладка Actions)
-#    windows.yml сам создаст GitHub Release и прикрепит
-#    novelmaestro-portable-<версия>.zip (gh release create --generate-notes)
+# 4. Дождаться зелёных прогонов (вкладка Actions): Tests, Docker image,
+#    Portable Windows build и Userscripts build. Первый создаёт GitHub Release
+#    и кладёт в него novelmaestro-portable-<версия>.zip, второй — публикуемые
+#    .user.js юзерскриптов; если релиз уже есть, ассеты обновляются на месте.
 
 # 5. Проверить:
-#    - страница Releases → v0.2.0, ассет zip на месте;
+#    - страница Releases → v0.2.0: ассеты zip и оба .user.js на месте;
 #    - ghcr.io/LynxPDA/novelmaestro:0.2.0 (+ :latest).
 ```
 
 ### Пересобрать релиз с тем же тегом (например, забыли файл)
 
-Тег и релиз уже существуют — `gh release create` не перезапишет. Удалите и создайте заново:
+Релиз перезаписывать не нужно: `windows.yml` и `userscripts.yml` видят существующий релиз и обновляют ассеты (`gh release upload --clobber`). Достаточно передвинуть тег:
 
 ```bash
 git push origin :refs/tags/v0.2.0     # удалить тег на remote
