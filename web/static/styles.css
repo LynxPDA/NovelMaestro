@@ -1136,10 +1136,13 @@ input[type="number"] {
   color: var(--text-dim);
 }
 /* страница «Настройки»: блоки реестра карточками, поля — сеткой */
+/* карточки настроек не липнут к линии вкладок: без отступа верхняя рамка
+   первой карточки влезала в подчёркивание активной вкладки */
 .settings-cards {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  margin-top: 14px;
 }
 .settings-fields {
   display: flex;
@@ -1155,28 +1158,17 @@ input[type="number"] {
   color: var(--text-dim);
   margin-top: 2px;
 }
-/* ── профили LLM: выбор профиля на странице «Настройки» ── */
+/* ── профили LLM: выбор профиля и кнопки над ним ── */
 .settings-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 6px;
 }
-.settings-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: transparent;
-  font-size: 12px;
-  color: var(--text);
-  cursor: pointer;
-  user-select: none;
-}
-.settings-chip-active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+/* профиль выбирают одним списком (не чипсами): профилей больше трёх, и
+   строка чипсов выглядела второй панелью вкладок */
+.settings-profile-select {
+  min-width: 260px;
 }
 /* ── ner_check: чипсы типов (карточки-пресеты убраны) ── */
 .ner-chips-bar {

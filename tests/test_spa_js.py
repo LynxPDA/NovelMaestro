@@ -147,6 +147,33 @@ def test_create_project_modal_uploads():
     assert src.index("function manageProjectModal") > up
 
 
+def test_editor_pane_toggle_says_editor():
+    """Кнопка предпросмотра в редакторе: «Рендер» ↔ «Редактор».
+
+    Прежнее имя второго режима — «Код»: слово из мира разработчика, обычный
+    читатель книги читает «вернуть редактор»."""
+    src = (SPA_DIR / "ui-components.js").read_text(encoding="utf-8")
+    assert '"Рендер" : "Редактор"' in src
+    assert '"Код"' not in src
+
+
+def test_settings_profile_switch_is_select():
+    """Настройки · профили LLM: выбор — один <select>.
+
+    Профилей больше трёх, и строка чипсов выглядела второй панелью вкладок
+    прямо над карточками. Плюс регрессия «сохранено, но не видно»: после PUT
+    /settings SPA обязана перечитать значения профилей — поля нераскрытого
+    профиля рисуются именно из model.profiles."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert "settings-profile-select" in src
+    assert '"aria-label": "Профиль LLM"' in src
+    assert "model.profiles = r.profiles" in src
+    assert 'localStorage.setItem("settingsProfile"' in src
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+    block = css[css.index(".settings-cards {"):][:120]
+    assert "margin-top" in block, "карточки настроек липнут к строке вкладок"
+
+
 def test_help_view_renders_static_md():
     """Справка: viewHelp грузит web/static/help.md и рендерит через marked
     (без innerHTML — санитайзер + createContextualFragment)."""

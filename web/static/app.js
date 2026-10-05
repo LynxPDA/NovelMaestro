@@ -865,7 +865,7 @@ async function viewNotes() {
     }
   }
   await loadNotes();
-  // по умолчанию — отрендеренный вид (правка — по кнопке «Код»)
+  // по умолчанию — отрендеренный вид (правка — по кнопке «Редактор»)
   pane.setMode("md");
   return h(
     "div",
@@ -988,7 +988,7 @@ async function viewSettings() {
     if (f.type === "select") {
       input = h("select", { class: "input input-inline", name: id });
       for (const opt of f.options || []) {
-        input.appendChild(h("option", { value: opt },
+        input.append(h("option", { value: opt },
           (f.labels && f.labels[opt]) || opt || "— (пусто)"));
       }
       input.value = String(val);
@@ -1023,7 +1023,7 @@ async function viewSettings() {
     if (f.type === "select" || f.type === "textarea" || f.type === "password") {
       attachTooltip(input, f.help || "");
     } else if (f.help) {
-      wrap.appendChild(h("div", { class: "field-help" }, f.help));
+      wrap.append(h("div", { class: "field-help" }, f.help));
     }
     ctl[id] = input;
     return wrap;
@@ -1031,28 +1031,34 @@ async function viewSettings() {
 
   // ── профили LLM: один набор серверных настроек на весь конвейер ──
   // General — встроенный (его значения и есть общий .env); остальные живут в
-  // llm_profiles рядом с ним и хранят только переопределения.
+  // llm_profiles рядом с ним и хранят только переопределения. Выбор профиля —
+  // выпадающий список: профилей бывает больше трёх, и строка чипсов превращалась
+  // во вторую панель вкладок.
   function profileCard() {
-    const chips = h("div", { class: "settings-chips" });
+    const sel = h("select", {
+      class: "input input-inline settings-profile-select",
+      "aria-label": "Профиль LLM",
+    });
     for (const p of model.profiles) {
-      chips.appendChild(h("button", {
-        class: "settings-chip"
-          + (p.id === model.profile ? " settings-chip-active" : ""),
-        type: "button",
-        onclick: () => {
-          model.profile = p.id;
-          try {
-            localStorage.setItem("settingsProfile", p.id);
-          } catch {
-            /* нет localStorage — выбор живёт до перезагрузки */
-          }
-          renderTab();
-        },
-      }, p.builtin ? `${p.name} (общий конфиг)` : p.name));
+      sel.append(h("option", { value: p.id },
+        p.builtin ? `${p.name} (общий конфиг)` : p.name));
     }
+    sel.value = model.profile;
+    attachTooltip(sel, "настройки модели, которые читает стадия; «General" +
+      " (общий конфиг)» — значения общего .env");
+    const switchTo = (pid) => {
+      model.profile = pid;
+      try {
+        localStorage.setItem("settingsProfile", pid);
+      } catch {
+        /* нет localStorage — выбор живёт до перезагрузки */
+      }
+      renderTab();
+    };
+    sel.addEventListener("change", () => switchTo(sel.value));
     const actions = h("div", { class: "settings-chips" });
     const cur = model.profiles.find((p) => p.id === model.profile) || {};
-    actions.appendChild(h("button", {
+    actions.append(h("button", {
       class: "btn btn-sm", type: "button",
       onclick: async () => {
         const name = window.prompt("Имя нового профиля LLM", "");
@@ -1063,21 +1069,16 @@ async function viewSettings() {
             body: { action: "create", name },
           });
           model.profiles = r.profiles || model.profiles;
-          model.profile = model.profiles[model.profiles.length - 1].id;
-          try {
-            localStorage.setItem("settingsProfile", model.profile);
-          } catch {
-            /* нет localStorage — не критично */
-          }
+          // switchTo сам пишет localStorage и перерисовывает вкладку
+          switchTo(model.profiles[model.profiles.length - 1].id);
           toast("Профиль создан");
-          renderTab();
         } catch (ex) {
           err.textContent = ex.message;
         }
       },
     }, "+ Создать профиль"));
     if (!cur.builtin && model.profiles.length > 1) {
-      actions.appendChild(h("button", {
+      actions.append(h("button", {
         class: "btn btn-sm", type: "button",
         onclick: async () => {
           const name = window.prompt("Новое имя профиля", cur.name || "");
@@ -1095,7 +1096,7 @@ async function viewSettings() {
           }
         },
       }, "Переименовать"));
-      actions.appendChild(h("button", {
+      actions.append(h("button", {
         class: "btn btn-sm btn-danger", type: "button",
         onclick: async () => {
           if (!window.confirm(`Удалить профиль «${cur.name}»?`)) return;
@@ -1105,9 +1106,8 @@ async function viewSettings() {
               body: { action: "delete", id: cur.id },
             });
             model.profiles = r.profiles || model.profiles;
-            model.profile = model.profiles[0].id;
+            switchTo(model.profiles[0].id);
             toast("Профиль удалён");
-            renderTab();
           } catch (ex) {
             err.textContent = ex.message;
           }
@@ -1121,13 +1121,15 @@ async function viewSettings() {
       h(
         "div",
         { class: "review-card-body" },
-        chips,
+        h("div", { class: "settings-fields" },
+          h("label", { class: "field" },
+            h("div", { class: "field-label" }, "Профиль LLM"), sel)),
         actions,
         h("div", { class: "field-help" },
           "Профиль — полный набор настроек работы с моделью: сервер, ключ, "
           + "модель, потоки, таймауты, ретраи и рассуждения. Профиль "
-          + "выбирается в запусках проекта; пустое поле профиля наследует "
-          + "General, то есть общий конфиг."),
+          + "выбирается в запусках проекта. Новый профиль создаётся копиями "
+          + "значений General; пустое поле профиля наследует General."),
       ),
     );
   }
@@ -1269,7 +1271,7 @@ async function viewSettings() {
   }
 
   for (const g of model.groups) {
-    tabs.appendChild(h("button", {
+    tabs.append(h("button", {
       class: "tab", "data-id": g.id, type: "button",
       onclick: () => {
         active = g.id;
@@ -1294,6 +1296,9 @@ async function viewSettings() {
         method: "PUT", body: { profile: model.profile, values },
       });
       model.envWins = r.env_wins || [];
+      // профили перечитываем тоже: поля нераскрытого профиля рисуются из
+      // model.profiles, и без этого сохранённое значение исчезало бы из формы
+      model.profiles = r.profiles || model.profiles;
       // ответ API несёт только реестр: без локальной вкладки открытая
       // «Внешний вид» исчезла бы и прыгнула на первую
       model.groups = [...(r.groups || []), uiGroup];

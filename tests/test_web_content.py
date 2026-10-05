@@ -17,6 +17,7 @@ import pytest
 
 from conftest import http_request
 from core import common as core_common
+from core import settings as S
 from web import api as web_api
 from web.auth import Auth
 from web.server import make_server
@@ -491,6 +492,54 @@ def test_env_editor_routes_gone(srv, tmp_path, monkeypatch):
                          ("GET", "/api/env/template")):
         r = _request(port, method, path, {"content": "A=1\n"})
         assert r.get("__error__") in (404, 405), (method, path, r)
+
+
+def test_settings_profile_crud(srv, tmp_path, monkeypatch):
+    """Профили LLM: новый профиль — копия General, значения книги не слоя;
+    payload ответа содержит сами профили — на них SPA рисует форму, и без
+    них сохранённое исчезало бы с экрана."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch,
+                                     "HOST=http://general:1\nMODEL=gpt\n")
+    r = _request(port, "POST", "/api/settings/profiles",
+                 {"action": "create", "name": "Дом"})
+    assert r["ok"], r
+    prof = next(p for p in r["profiles"] if p["name"] == "Дом")
+    # создан не пустой формой: сервер и модель уже проставлены из General
+    assert prof["values"]["HOST"] == "http://general:1"
+    assert prof["values"]["MODEL"] == "gpt"
+    assert prof["values"]["API_KEY"] == ""      # в General пусто
+    # поле нераскрытого профиля берётся из payload, а не из общего .env
+    got = _request(port, "GET", "/api/settings?profile=" + prof["id"])
+    f = _settings_fields(got)
+    assert f["host"]["value"] == "http://general:1"
+    assert f["model"]["value"] == "gpt"
+    # переименование
+    r = _request(port, "POST", "/api/settings/profiles",
+                 {"action": "rename", "id": prof["id"], "name": "Облако"})
+    assert [p["name"] for p in r["profiles"]][1] == "Облако"
+    # удаление — профиль исчезает из payload
+    r = _request(port, "POST", "/api/settings/profiles",
+                 {"action": "delete", "id": prof["id"]})
+    assert r["ok"] and [p["id"] for p in r["profiles"]] == [S.PROFILE_DEFAULT]
+
+
+def test_settings_put_profile_keeps_values_in_payload(srv, tmp_path,
+                                                     monkeypatch):
+    """PUT /api/settings с profile= пишет профиль, а не общий .env, и отдаёт
+    свежие значения: SPA перезагружает форму именно из ответа."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch,
+                                     "HOST=http://general:1\n")
+    r = _request(port, "POST", "/api/settings/profiles",
+                 {"action": "create", "name": "Дом"})
+    pid = next(p["id"] for p in r["profiles"] if p["name"] == "Дом")
+    r = _request(port, "PUT", "/api/settings",
+                 {"profile": pid, "values": {"HOST": "http://дом:1"}})
+    assert r["ok"], r
+    saved = next(p for p in r["profiles"] if p["id"] == pid)
+    assert saved["values"]["HOST"] == "http://дом:1"
+    # общий .env не обязан содержать то, что сохранено в профиль
+    assert "http://дом:1" not in _env_text(tmp_path)
+    assert "HOST=http://general:1" in _env_text(tmp_path)
 
 
 # ════════════════════════════════════════════════════════════════════

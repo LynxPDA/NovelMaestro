@@ -141,6 +141,26 @@ def test_min_len_ratio_off_by_default():
     assert float(S.defaults()["min_len_ratio"]) == 0.0
 
 
+def test_block_titles_are_stage_titles():
+    """Карточка стадии на «Настройках» называется ровно как её запуск.
+
+    Название стадии живёт в ОДНОМ месте (core.settings.STAGE_TITLES): пока оно
+    было записано дважды, один прогон звался то «Глоссарий (NER)», то «Создание
+    глоссария (LLM)», и карточка не узнавалась в списке запусков. Блоки самого
+    веб-сервера — не стадии, у них свои названия."""
+    from web.stages import STAGE_SPECS
+
+    for b in (x for g in S.GROUPS for x in g.blocks):
+        if b.id in S.LLM_BLOCKS or b.id in S.SERVER_BLOCKS:
+            assert b.title and "(" not in b.id
+            continue
+        assert b.id in S.STAGE_TITLES, f"блок {b.id} не стадия и не LLM/server"
+        assert b.title == S.STAGE_TITLES[b.id], b.id
+        assert STAGE_SPECS[b.id]["title"] == b.title, (
+            f"{b.id}: карточка «{b.title}» ≠ запуск "
+            f"«{STAGE_SPECS[b.id]['title']}»")
+
+
 def test_stage_names_are_the_registry_owners():
     assert set(S.STAGES) == {
         "epub", "ner", "ner_check", "pipeline", "translate_check",
@@ -428,6 +448,25 @@ def test_profiles_file_dies_with_last_profile(global_env):
     assert not global_env.parent.joinpath(S.PROFILES_NAME).exists()
     assert S.profile_delete(prof["id"]) is False
     assert [p["id"] for p in S.profiles()] == [S.PROFILE_DEFAULT]
+
+
+def test_profile_create_inherits_general(global_env):
+    """Новый профиль создаётся значениями General, а не пустой формой:
+    «свой сервер» иначе пришлось бы заполнять с нуля. Пустые ключи не
+    копируются — они наследуют General и так."""
+    S.write_values({"HOST": "http://общий:1", "MODEL": "общая-модель",
+                    "MAX_RETRIES": "5"})
+    prof = S.profile_create("Облако")
+    assert prof["values"]["HOST"] == "http://общий:1"
+    assert prof["values"]["MODEL"] == "общая-модель"
+    assert prof["values"]["MAX_RETRIES"] == "5"
+    assert "API_KEY" not in prof["values"]        # в General пусто
+    # стадия с этим профилем видит те же значения
+    form = S.llm_form("ner", prof["id"])
+    assert form["host"] == "http://общий:1" and form["model"] == "общая-модель"
+    # явные значения никто не перетирает
+    other = S.profile_create("Дом", {"MODEL": "дом-модель"})
+    assert other["values"] == {"MODEL": "дом-модель"}
 
 
 def test_profiles_payload_values(global_env):
