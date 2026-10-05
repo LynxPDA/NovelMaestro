@@ -277,6 +277,11 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
         argv += ["--keep-fields", str(form["keep_fields"])]
     if form.get("context_max_len") not in (None, ""):
         argv += ["--context_max_len", str(form["context_max_len"])]
+    # не голосующие поля: режим выбора значения и его длина
+    if form.get("non_voted_mode") not in (None, ""):
+        argv += ["--non_voted_mode", str(form["non_voted_mode"])]
+    if form.get("non_voted_max_len") not in (None, ""):
+        argv += ["--non_voted_max_len", str(form["non_voted_max_len"])]
     argv += _llm_argv(form, ctx, "ner")
     return argv
 
@@ -502,68 +507,68 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
 
 STAGE_SPECS: dict[str, dict] = {
     "epub": {
-        "title": "Разбор исходника на главы",
+        "title": core_settings.STAGE_TITLES["epub"],
         "script": "epub_to_chapters.py",
         "build": build_epub_to_chapters,
         "autosave": True,  # настройки формы — сразу в localStorage
         "fields": core_settings.form_fields("epub"),
     },
     "translate_check": {
-        "title": "Проверка перевода",
+        "title": core_settings.STAGE_TITLES["translate_check"],
         "script": "translate_check.py",
         "build": build_translate_check,
         "fields": core_settings.form_fields("translate_check"),
     },
     "compile": {
-        "title": "Компиляция TXT/EPUB/FB2",
+        "title": core_settings.STAGE_TITLES["compile"],
         "script": "clean_and_compile.py",
         "build": build_clean_and_compile,
         "fields": core_settings.form_fields("compile"),
     },
     "pipeline": {
-        "title": "Перевод (LLM)",
+        "title": core_settings.STAGE_TITLES["pipeline"],
         "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "web/pipeline.py",
         "build": build_pipeline,
         "fields": core_settings.form_fields("pipeline"),
     },
     "ner": {
-        "title": "Создание глоссария (LLM)",
+        "title": core_settings.STAGE_TITLES["ner"],
         "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "ner.py",
         "build": build_ner,
         "fields": core_settings.form_fields("ner"),
     },
     "ner_check": {
-        "title": "Проверка глоссария (LLM)",
+        "title": core_settings.STAGE_TITLES["ner_check"],
         "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "ner_check.py",
         "build": build_ner_check,
         "fields": core_settings.form_fields("ner_check"),
     },
     "translate_check_llm": {
-        "title": "Проверка перевода (LLM)",
+        "title": core_settings.STAGE_TITLES["translate_check_llm"],
         "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "translate_check_llm.py",
         "build": build_translate_check_llm,
         "fields": core_settings.form_fields("translate_check_llm"),
     },
     "translate_quality": {
-        "title": "Оценка перевода (LLM)",
+        "title": core_settings.STAGE_TITLES["translate_quality"],
         "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "translate_quality.py",
         "build": build_translate_quality,
         "fields": core_settings.form_fields("translate_quality"),
     },
     "wiki": {
-        "title": "Создание Wiki (LLM)",
+        "title": core_settings.STAGE_TITLES["wiki"],
         "preview": True,   # кнопка «Предпросмотр запроса»
         "script": "wiki.py",
         "build": build_wiki,
         "fields": core_settings.form_fields("wiki"),
     },
     "batch_replace": {
-        "title": "Массовые замены",
+        "title": core_settings.STAGE_TITLES["batch_replace"],
         "script": "batch_replace.py",
         "build": build_batch_replace,
         "fields": core_settings.form_fields("batch_replace"),

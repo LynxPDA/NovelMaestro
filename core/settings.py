@@ -31,7 +31,14 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from .common import env_overlay, parse_dotenv, read_text_safe, system_env_file
+from .common import (
+    NER_NON_VOTED_LABELS,
+    NER_NON_VOTED_MODES,
+    env_overlay,
+    parse_dotenv,
+    read_text_safe,
+    system_env_file,
+)
 
 log = logging.getLogger("nm")
 
@@ -129,6 +136,23 @@ def _group(gid: str, title: str, *blocks: Block) -> Group:
 # реестр
 # ════════════════════════════════════════════════════════════════════
 
+#: Название стадии ОДНО на весь интерфейс: его же читает карточка «Настроек»
+#: этой стадии и запуск в «Запусках». Пока названия были записаны дважды
+#: (здесь — «Глоссарий (NER)», в спеках — «Создание глоссария (LLM)»), один и
+#: тот же прогон назывался по-разному и карточки не узнавались.
+STAGE_TITLES: dict = {
+    "epub": "Разбор исходника на главы",
+    "pipeline": "Перевод (LLM)",
+    "ner": "Создание глоссария (LLM)",
+    "ner_check": "Проверка глоссария (LLM)",
+    "translate_check": "Проверка перевода",
+    "translate_check_llm": "Проверка перевода (LLM)",
+    "translate_quality": "Оценка перевода (LLM)",
+    "batch_replace": "Массовые замены",
+    "compile": "Компиляция TXT/EPUB/FB2",
+    "wiki": "Создание Wiki (LLM)",
+}
+
 GROUPS: tuple = (
     # ── LLM: одна настройка на весь конвейер ─────────────────────────
     _group("llm", "Модель и сервер",
@@ -179,7 +203,7 @@ GROUPS: tuple = (
 
     # ── Перевод ──
     _group("transfer", "Перевод",
-        _block("pipeline", "Перевод (translate → redact → polish)",
+        _block("pipeline", STAGE_TITLES["pipeline"],
             _s("PIPELINE_ACTION", "Тип работы", "select", "8", options=("1", "2", "3", "4", "5", "6", "7", "8", "9"),
                 labels={'1': "Перевод", '2': "Редактура (исходник - Перевод)", '3': "Полировка (исходник - Редактура)", '4': "Полировка (исходник - Перевод)", '5': "Сокращенный цикл: Перевод -> Редактура", '6': "Сокращенный цикл: Перевод -> Полировка", '7': "Сокращенный цикл: Редактура -> Полировка", '8': "Полный цикл: Перевод -> Редактура -> Полировка", '9': "Перевод с расширенным контекстом"},
                 help="1=перевод, 2=редактура (исходник - перевод), 3=полировка (исходник - редактура), 4=полировка (исходник - перевод), 5=перевод→редактура, 6=перевод→полировка, 7=редактура→полировка, 8=полный цикл, 9=перевод с расширенным контекстом (словарь/правила/примеры — файлы из source/)",
@@ -218,7 +242,7 @@ GROUPS: tuple = (
     ),
     # ── Глоссарий ──
     _group("glossary", "Глоссарий",
-        _block("ner", "Глоссарий (NER)",
+        _block("ner", STAGE_TITLES["ner"],
             _s("NER_START", "Начальная глава (ГЛАВЫ)", "number", "", help="сборка глав chapters/*/chapter.txt в память; пусто = с первой", stage="ner", run=True),
             _s("NER_END", "Конечная глава (ГЛАВЫ)", "number", "", help="сборка глав в память; пусто = до последней", stage="ner", run=True),
             _s("NER_PROMPT_FILE", "Промпт-файл (теги pass1/pass2)", "files", "ner_prompt.txt", dir="prompts", ext=(".txt",), stage="ner", run=True),
@@ -229,10 +253,15 @@ GROUPS: tuple = (
             _s("NER_KEEP_FIELDS", "Поля в голосование (через запятую)", "text", "",
                 help="Пусто = голосуют translation/type/pinyin; notes, context, translated_context не голосуют. Пример: notes,context", stage="ner"),
             _s("NER_CONTEXT_MAX_LEN", "Максимальная длина \"context\"", "number", "300", help="СИМВОЛЫ: context извлекается из чанка — предложение с термином, не от LLM; 0 — выключено", stage="ner"),
+            _s("NER_NON_VOTED_MODE", "Не голосующие поля: какое значение брать", "select", "last", options=NER_NON_VOTED_MODES, labels=NER_NON_VOTED_LABELS,
+                help="notes, context и translated_context не голосуют: LLM присылает им разные значения из разных чанков, а выбрать надо одно. «последнее» — как исторически; «первое» — какое встретилось впервые; «самое длинное»/«самое короткое» — по длине значения", stage="ner"),
+            _s("NER_NON_VOTED_MAX_LEN", "Ограничение длины значения, СИМВОЛЫ", "number", "0",
+                help="только для режима «самое длинное»: победившее значение длиннее этого числа символов — обрезается по нему; 0 — без ограничения",
+                stage="ner"),
             _s("NER_SAVE_INTERVAL", "Интервал сохранения ner.json", "number", "10",
                 help="каждые N чанков — промежуточный снапшот глоссария. Возобновление с места остановки убрано: каждый запуск идёт с первого чанка", stage="ner"),
         ),
-        _block("ner_check", "Проверка глоссария",
+        _block("ner_check", STAGE_TITLES["ner_check"],
             _s("NER_CHECK_PROMPT_FILE", "Промпт-файл", "files", "ner_check_prompt.txt", dir="prompts", ext=(".txt",), autofile="prompts/ner_check_prompt.txt",
                 help="Теги: <prompt_ner_check> — проверка выбранных типов, <prompt_rag> — точечная RAG-проверка; комментарии вне тегов — через #; автоподхват ner_check_prompt.txt", stage="ner_check",
                 run=True),
@@ -260,7 +289,7 @@ GROUPS: tuple = (
     ),
     # ── Проверки ──
     _group("checks", "Проверки",
-        _block("translate_check", "Проверка перевода",
+        _block("translate_check", STAGE_TITLES["translate_check"],
             _s("TRANSLATE_CHECK_CHECK_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated"),
                 help="polished → сравнивается с redacted (соседняя стадия) и chapter (оригинал); redacted → с translated и chapter; translated → только с chapter", stage="translate_check"),
             _s("TRANSLATE_CHECK_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="translate_check", run=True),
@@ -280,7 +309,7 @@ GROUPS: tuple = (
             _s("TRANSLATE_CHECK_SEQUENCE_CHECK", "Проверять последовательность глав", "bool", True,
                 help="Первое число в первой непустой строке должно быть ровно на 1 больше предыдущей главы (N+1); выключено — проверка пропускается", stage="translate_check"),
         ),
-        _block("translate_check_llm", "Проверка перевода LLM",
+        _block("translate_check_llm", STAGE_TITLES["translate_check_llm"],
             _s("TRANSLATE_CHECK_LLM_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated"), stage="translate_check_llm"),
             _s("TRANSLATE_CHECK_LLM_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="translate_check_llm", run=True),
             _s("TRANSLATE_CHECK_LLM_END", "Конечная глава", "number", "", stage="translate_check_llm", run=True),
@@ -291,7 +320,7 @@ GROUPS: tuple = (
             _s("TRANSLATE_CHECK_LLM_MIN_FIX_LENGTH", "Мин. длина правки, СИМВОЛЫ", "number", "0", stage="translate_check_llm"),
             _s("TRANSLATE_CHECK_LLM_MAX_CHANGED_CHARS", "Макс. изменённых символов, СИМВОЛЫ", "number", "0", stage="translate_check_llm"),
         ),
-        _block("translate_quality", "Оценка качества",
+        _block("translate_quality", STAGE_TITLES["translate_quality"],
             _s("TRANSLATE_QUALITY_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="translate_quality", run=True),
             _s("TRANSLATE_QUALITY_END", "Конечная глава", "number", "", stage="translate_quality", run=True),
             _s("TRANSLATE_QUALITY_TYPE", "Тип файлов глав", "select", "polished", options=("chapter", "translated", "redacted", "polished"),
@@ -317,7 +346,7 @@ GROUPS: tuple = (
     ),
     # ── Книга и файлы ──
     _group("book", "Книга и файлы",
-        _block("epub", "EPUB → главы",
+        _block("epub", STAGE_TITLES["epub"],
             _s("EPUB_INPUT", "Исходник", "files", "", dir="source", ext=(".epub", ".txt"), stage="epub", run=True),
             _s("EPUB_MODE", "Режим разбивки", "select", "toc", options=("toc", "regex", "chunk"), labels={'toc': "По TOC (epub)", 'regex': "Ручной (regexp)", 'chunk': "По чанкам"},
                 help="toc — только epub, по структуре (TOC/spine/h1-h2); regex/chunk — epub ИЛИ txt (epub перегоняется в текст); zip не принимается", stage="epub"),
@@ -338,7 +367,7 @@ GROUPS: tuple = (
                 help="Удалить старые каталоги глав (00000_1_…, 00000_2_…) в chapters/ перед записью. Рекомендуется при повторном разборе — иначе старые главы останутся рядом с новыми и могут попасть в конвейер",
                 stage="epub"),
         ),
-        _block("compile", "Сборка глав",
+        _block("compile", STAGE_TITLES["compile"],
             _s("COMPILE_MODE", "Режим", "select", "txt", options=("txt", "txt-plain", "epub", "fb2"), labels={'txt': "TXT (Rulate)", 'txt-plain': "TXT", 'epub': "EPUB", 'fb2': "FB2"},
                 help="TXT (Rulate) — заголовки «# [Название :|: N]» для загрузки на rulate; TXT — обычный txt без rulate-форматирования", stage="compile"),
             _s("COMPILE_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="compile", run=True),
@@ -356,7 +385,7 @@ GROUPS: tuple = (
                 help="страница поддержки для EPUB/FB2; пусто = без страницы; по умолчанию автоподхват donate.txt из source/; кнопка «Редактировать» — правка выбранного файла прямо в запуске; новый файл загружается через «Файлы» (source/) или «Загрузить» при пустом выборе",
                 stage="compile", run=True),
         ),
-        _block("wiki", "Вики книги",
+        _block("wiki", STAGE_TITLES["wiki"],
             _s("WIKI_START", "Начальная глава (ГЛАВЫ)", "number", "", help="при источнике «Собрать из глав»; пусто = с первой", stage="wiki", run=True),
             _s("WIKI_END", "Конечная глава (ГЛАВЫ)", "number", "", help="при источнике «Собрать из глав»; пусто = до последней", stage="wiki", run=True),
             _s("WIKI_SOURCE", "Источник текста", "select", "chapters", options=("txt", "chapters"), labels={'txt': "Готовый txt", 'chapters': "Собрать из глав"},
@@ -382,7 +411,7 @@ GROUPS: tuple = (
             _s("WIKI_CO_OCCURRENCE_PAIRS", "Пары типов для связей", "text", "Person:Person,Person:Organisation,Person:Artifact", stage="wiki"),
             _s("WIKI_CO_OCCURRENCE_TOP", "Связей на термин", "number", "5", stage="wiki"),
         ),
-        _block("batch_replace", "Массовые замены",
+        _block("batch_replace", STAGE_TITLES["batch_replace"],
             _s("BATCH_REPLACE_REPLACEMENTS", "Regexp-замены (по одной на строку)", "textarea", "", rows=5,
                 help="Формат: паттерн -> замена (чистый стандартный regexp, Python re, MULTILINE: «^»/«$» — начало/конец СТРОКИ). Пустая правая часть — УДАЛЕНИЕ: «<div>.*?</div> ->». Пробелы в паттерне значимы; регистр и прочие режимы — стандартными inline-флагами ((?i)…); комментариев и кастомных флагов нет («#» — литерал в паттерне). Примеры: «Глава \\d+ -> Глава №\\g<0>», «(?i)бессмертный -> Бессмертный», «\\s+ -> » (сжать пробелы), «^  ->» (отступ строки), «^(第\\d+章.*)\\n(?=\\1$) ->» (строка-дубликат заголовка главы). BATCH_REPLACE_REPLACEMENTS в .env — переносы строк как «\\n»",
                 stage="batch_replace", run=True),
@@ -821,8 +850,21 @@ def profile_display(profile_id: str) -> dict:
     return out
 
 
+def profile_defaults() -> dict:
+    """Значения General для нового профиля:effective LLM-конфига без пустых.
+
+    Новый профиль создаётся копией общего конфига, а не пустой формой: пустой
+    набор означал бы, что «свой сервер» надо заполнять с нуля, и профиль
+    выглядел сломанным. Пустые ключи сюда не попадают — они и вправду
+    наследуют General."""
+    layered = layered_values()
+    return {s.key: sanitize(s, layered.get(s.key, ""))
+            for s in llm_settings()
+            if str(layered.get(s.key, "")).strip()}
+
+
 def profile_create(name: str, values: dict | None = None) -> dict:
-    """Создать профиль; пустой набор — наследует всё от General."""
+    """Создать профиль; пустой набор — значения General (profile_defaults)."""
     name = str(name or "").strip()
     if not name:
         raise ValueError("имя профиля обязательно")
@@ -831,7 +873,8 @@ def profile_create(name: str, values: dict | None = None) -> dict:
         raise ValueError(f"профиль с именем «{name}» уже есть")
     now = _now_stamp()
     prof = {"id": profile_slug(name, [p["id"] for p in stored]), "name": name,
-            "values": _profile_clean(values), "created": now, "updated": now}
+            "values": _profile_clean(values or profile_defaults()),
+            "created": now, "updated": now}
     profiles_write(stored + [prof])
     log.info("профиль LLM создан: %s (%s)", prof["name"], prof["id"])
     return dict(prof, builtin=False)

@@ -3,6 +3,7 @@
 """cli/ner.py — извлечение имён: конвейерные функции (pass1/pass2,
 merge, finalize), run_two_pass и main() целиком (мок LLM)."""
 # pyright: reportMissingImports=false
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -567,3 +568,83 @@ def test_merge_alias_groups_all_locked_skipped():
     ]
     assert NER.merge_alias_groups(data, SilentLog()) == 0
     assert len(data) == 2
+
+
+# ══════════════════════════════════════════════════════════════════════
+# НЕ ГОЛОСУЮЩИЕ ПОЛЯ: одно значение по политике (NER_NON_VOTED_MODE)
+# ══════════════════════════════════════════════════════════════════════
+
+@contextlib.contextmanager
+def _non_voted(mode, max_len=0):
+    """Политика не голосующих полей на время теста (глобалы ner.py)."""
+    old = (NER.NON_VOTED_MODE, NER.NON_VOTED_MAX_LEN)
+    NER.NON_VOTED_MODE, NER.NON_VOTED_MAX_LEN = mode, max_len
+    try:
+        yield
+    finally:
+        NER.NON_VOTED_MODE, NER.NON_VOTED_MAX_LEN = old
+
+
+@pytest.mark.parametrize(
+    "mode,want",
+    [("last", "длинное значение"), ("first", "короткое"),
+     ("longest", "длинное значение"), ("shortest", "короткое")],
+)
+def test_two_pass_single_field_policy(ner_globals, tmp_path, mode, want):
+    """notes не голосует: из двух чанков берётся ОДНО значение — по политике."""
+    out = str(tmp_path / "ner.json")
+    pass2 = {0: [{"term": "陈阳", "type": "Person", "notes": "короткое"}],
+             1: [{"term": "陈阳", "type": "Person", "notes": "длинное значение"}]}
+    with _non_voted(mode):
+        NER.finalize_two_pass(pass2, out, 0.95, 3, SilentLog())
+    data = json.loads(Path(out).read_text(encoding="utf-8"))
+    assert data[0]["notes"] == want
+    # голосований у поля нет и не было
+    assert "_votes_notes" not in data[0]
+
+
+def test_two_pass_single_field_cap(ner_globals, tmp_path):
+    """Потолок длины (СИМВОЛЫ) обрезает победителя «самого длинного»."""
+    out = str(tmp_path / "ner.json")
+    pass2 = {0: [{"term": "陈阳", "notes": "короткое"}],
+             1: [{"term": "陈阳", "notes": "длинное значение"}]}
+    with _non_voted("longest", 7):
+        NER.finalize_two_pass(pass2, out, 0.95, 3, SilentLog())
+    data = json.loads(Path(out).read_text(encoding="utf-8"))
+    assert data[0]["notes"] == "длинное"
+
+
+def test_merge_fields_single_field_policy(ner_globals):
+    """merge_fields (дообучение по чанкам) тот же режим, а не «последнее»."""
+    item = {"term": "陈阳", "notes": "первое"}
+    with _non_voted("first"):
+        NER.merge_fields(item, {"notes": "второе"})
+    assert item["notes"] == "первое"
+    with _non_voted("shortest"):
+        NER.merge_fields(item, {"notes": "длиииинное второе"})
+    assert item["notes"] == "первое"
+    # пустое значение поля ничего не меняет
+    with _non_voted("last"):
+        NER.merge_fields(item, {"notes": "   "})
+    assert item["notes"] == "первое"
+
+
+def test_merge_into_single_field_policy(ner_globals):
+    """Слияние нечётких дублей — тоже по политике, а не «кто последний»."""
+    target = [{"term": "陈阳", "count": 1, "notes": "короткое",
+               "_ngrams": NER.get_ngrams("陈阳"), "_len": 2}]
+    final = [{"term": "陈阳", "count": 1, "notes": "длинное значение",
+              "_source_chunks": [3], "_ngrams": NER.get_ngrams("陈阳"),
+              "_len": 2}]
+    with _non_voted("first"):
+        NER._merge_into(target, final, 0.95, 3)
+    assert target[0]["notes"] == "короткое"
+
+
+def test_log_shows_single_field_mode(ner_globals):
+    """Строка о политике в логе: режим и потолок видны оператору."""
+    with _non_voted("longest", 300):
+        note = NER._non_voted_note()
+    assert "самое длинное значение" in note and "300" in note
+    with _non_voted("last"):
+        assert "СИМВОЛОВ" not in NER._non_voted_note()

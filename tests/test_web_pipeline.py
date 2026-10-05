@@ -284,6 +284,22 @@ def test_build_stage_cmd_ner_fields(tmp_path):
         assert "--no-aliases" in cmd
 
 
+def test_build_ner_non_voted_argv():
+    """Не голосующие поля доезжают до ner.py: режим выбора значения и его
+    потолок длины. Пустая форма — флагов нет, скрипт сам берёт «последнее»."""
+    ctx: dict = {}
+    base = {"action": "2", "host": "http://h", "model": "m", "api_key": "k"}
+    argv = build_command("ner", dict(base, non_voted_mode="longest",
+                                    non_voted_max_len="300"), ctx)
+    assert argv[argv.index("--non_voted_mode") + 1] == "longest"
+    assert argv[argv.index("--non_voted_max_len") + 1] == "300"
+    # пусто — флага нет вовсе: дефолт остаётся у скрипта
+    argv2 = build_command("ner", dict(base, non_voted_mode="",
+                                     non_voted_max_len=""), ctx)
+    assert "--non_voted_mode" not in argv2
+    assert "--non_voted_max_len" not in argv2
+
+
 def test_build_pipeline_chunk_size_argv():
     """размер чанка из формы — в argv оркестратора; пусто — без флага
     (CLI-дефолт pipeline.py: PIPELINE_CHUNK_SIZE → 7000)."""

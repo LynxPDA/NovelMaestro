@@ -6,6 +6,7 @@ determine_model, логирование, файловые утилиты, дет
 import json
 import os
 import re
+import unicodedata
 import sys
 from pathlib import Path
 
@@ -1868,11 +1869,59 @@ def test_extra_body_fields_json(monkeypatch):
         "a": 1}
 
 
-def test_reasoning_fields_bad_budget_is_zero():
-    """Нечисловой бюджет — 0 (не отправляем), а не падение стадии."""
-    assert C.reasoning_fields("on", "anthropic", "", "много") == (
-        {"thinking": {"type": "enabled"}})
-    assert C.reasoning_fields("on", "dashscope", "", None) == (
-        {"enable_thinking": True})
-    assert C.reasoning_fields("on", "dashscope", "", "-5") == (
-        {"enable_thinking": True})
+@pytest.mark.parametrize("bad", ["много", None, "-5"])
+def test_reasoning_fields_bad_budget_is_zero(bad):
+    """Нечисловой бюджет — 0 (не отправляем), а не падение стадии.
+
+    Значения мусорные намеренно: budget объявлен object, приводит его
+    _as_budget — и не имеет права ронять стадию."""
+    fields = C.reasoning_fields("on", "anthropic", "", bad)
+    assert fields == {"thinking": {"type": "enabled"}}
+    fields = C.reasoning_fields("on", "dashscope", "", bad)
+    assert fields == {"enable_thinking": True}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ner_pick_non_voted: одно значение не голосующих полей (NER_NON_VOTED_MODE)
+# ══════════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize(
+    "mode,old,new,want",
+    [
+        ("last", "первое", "второе", "второе"),
+        ("first", "первое", "второе", "первое"),
+        ("longest", "короткое", "длинное значение", "длинное значение"),
+        ("shortest", "короткое", "длинное значение", "короткое"),
+        # пустое значение — не соперник: непустое побеждает в любом режиме
+        ("last", "", "значение", "значение"),
+        ("first", "значение", "", "значение"),
+        ("longest", None, "значение", "значение"),
+        ("shortest", "", None, ""),
+        # пробелы по краям не влияют на длину: значения сравниваются чищеными
+        ("shortest", "  а  ", "абв", "а"),
+    ],
+)
+def test_ner_pick_non_voted(mode, old, new, want):
+    """Режим выбора значения не голосующего поля (notes/context/...)."""
+    assert C.ner_pick_non_voted(old, new, mode) == want
+
+
+@pytest.mark.parametrize(
+    "mode,cap,want",
+    [
+        ("longest", 7, "длинное"),      # победитель обрезан по потолку
+        ("longest", 0, "длинное значение"),   # 0 — без ограничения
+        ("last", 7, "длинное значение"),      # прочие режимы не обрезают
+        ("longest", "abc", "длинное значение"),  # битый потолок — как 0
+    ],
+)
+def test_ner_pick_non_voted_max_len(mode, cap, want):
+    """NER_NON_VOTED_MAX_LEN (СИМВОЛЫ) обрезает только «самое длинное»."""
+    assert C.ner_pick_non_voted("короткое", "длинное значение", mode, cap) == want
+
+
+def test_ner_pick_non_voted_is_nfc():
+    """И старое, и новое значение проходят NFC (§7): «и» + ударение ≠ «и»."""
+    composed = unicodedata.normalize("NFC", "формат")
+    decomposed = unicodedata.normalize("NFD", "формат")
+    assert C.ner_pick_non_voted(composed, decomposed, "first") == composed

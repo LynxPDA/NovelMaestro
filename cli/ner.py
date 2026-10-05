@@ -75,6 +75,7 @@ from core.common import (  # noqa: E402
     is_cjk_string,
     log_argv,
     ner_is_locked,
+    ner_pick_non_voted,
     setup_logging,
     split_text_smart,
 )
@@ -159,10 +160,23 @@ DEFAULT_SAVE_INTERVAL = 10
 ner_lock = threading.Lock()
 global_ner_data: list[dict] = []
 EXTRA_VOTED_FIELDS: set[str] = set()
+#: что делать с не голосующими полями (NER_NON_VOTED_MODE) и их длина
+#: (NER_NON_VOTED_MAX_LEN, СИМВОЛЫ): читаются из реестра через argparse
+NON_VOTED_MODE = "last"
+NON_VOTED_MAX_LEN = 0
 
 # ══════════════════════════════════════════════════════════════════════
 # ЛОГИРОВАНИЕ В РЕАЛЬНОМ ВРЕМЕНИ
 # ══════════════════════════════════════════════════════════════════════
+
+
+def _non_voted_note() -> str:
+    """Человеческая строка о политике не голосующих полей в лог."""
+    from core.common import NER_NON_VOTED_LABELS
+    note = NER_NON_VOTED_LABELS.get(NON_VOTED_MODE, NON_VOTED_MODE)
+    if NON_VOTED_MODE == "longest" and NON_VOTED_MAX_LEN > 0:
+        note += f", обрезка до {NON_VOTED_MAX_LEN} СИМВОЛОВ"
+    return note
 
 
 def _flush_log(logger) -> None:
@@ -384,7 +398,8 @@ def merge_fields(item: dict, ner: dict) -> None:
         if _is_votable(field):
             add_vote(item, field, val)
         else:
-            item[field] = val
+            item[field] = ner_pick_non_voted(item.get(field), val,
+                                             NON_VOTED_MODE, NON_VOTED_MAX_LEN)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -890,7 +905,7 @@ def _compute_final_ner(
             if norm not in groups:
                 groups[norm] = {
                     "term": term, "count": 0,
-                    "source_chunks": [], "votes": {}, "last_write": {},
+                    "source_chunks": [], "votes": {}, "single": {},
                 }
             g = groups[norm]
             g["count"] += 1
@@ -909,7 +924,10 @@ def _compute_final_ner(
                         g["votes"][field] = {}
                     g["votes"][field][val] = g["votes"][field].get(val, 0) + 1
                 else:
-                    g["last_write"][field] = val
+                    # не голосует: одно значение по политике реестра
+                    g["single"][field] = ner_pick_non_voted(
+                        g["single"].get(field), val, NON_VOTED_MODE,
+                        NON_VOTED_MAX_LEN)
     candidates: list[dict] = []
     for _norm, g in groups.items():
         item = {
@@ -921,7 +939,7 @@ def _compute_final_ner(
         for field, votes in g["votes"].items():
             item[field] = _resolve_votes(votes)
             item[_votes_key(field)] = votes
-        for field, val in g["last_write"].items():
+        for field, val in g["single"].items():
             item[field] = val
         candidates.append(item)
     final: list[dict] = []
@@ -945,7 +963,9 @@ def _compute_final_ner(
                     if existing[field]:
                         existing[base_field] = _resolve_votes(existing[field])
                 elif _is_storable(field) and not _is_votable(field):
-                    existing[field] = cand[field]
+                    existing[field] = ner_pick_non_voted(
+                        existing.get(field), cand[field], NON_VOTED_MODE,
+                        NON_VOTED_MAX_LEN)
         else:
             final.append(cand)
     return final
@@ -1013,7 +1033,10 @@ def _merge_into(
                     if existing[field]:
                         existing[base_field] = _resolve_votes(existing[field])
                 elif _is_storable(field) and not _is_votable(field):
-                    existing[field] = item[field]
+                    # не голосует: одно значение по политике реестра
+                    existing[field] = ner_pick_non_voted(
+                        existing.get(field), item[field], NON_VOTED_MODE,
+                        NON_VOTED_MAX_LEN)
         else:
             target.append(item)
 
@@ -1382,6 +1405,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Все поля голосуют (включая notes, context, translated_context).",
     )
     parser.add_argument(
+        "--non_voted_mode", default="last",
+        choices=("last", "first", "longest", "shortest"),
+        help=(
+            "Какое значение берут поля, которые НЕ голосуют (notes, context, "
+            "translated_context): last — последнее (по умолчанию), first — "
+            "первое присвоенное, longest — самое длинное, shortest — самое "
+            "короткое."
+        ),
+    )
+    parser.add_argument(
+        "--non_voted_max_len", type=int, default=0,
+        help=(
+            "Ограничение длины значения не голосующего поля, СИМВОЛЫ "
+            "(только для --non_voted_mode longest; 0 — без ограничения, "
+            "по умолчанию)."
+        ),
+    )
+    parser.add_argument(
         "--context_max_len", type=int, default=300,
         help=("Максимальная длина поля context, СИМВОЛЫ (0 — выключено; "
               "context извлекается из чанка — предложение с термином, "
@@ -1423,7 +1464,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main():
-    global EXTRA_VOTED_FIELDS
+    global EXTRA_VOTED_FIELDS, NON_VOTED_MODE, NON_VOTED_MAX_LEN
 
     parser = build_parser()
     args = parser.parse_args()
@@ -1439,6 +1480,10 @@ def main():
         EXTRA_VOTED_FIELDS = {
             f.strip() for f in args.keep_fields.split(",") if f.strip()
         }
+
+    # ── Не голосующие поля: одно значение по политике реестра ──
+    NON_VOTED_MODE = str(args.non_voted_mode or "last")
+    NON_VOTED_MAX_LEN = int(args.non_voted_max_len or 0)
 
     # ── Сборка глав (chapter.txt → в память; --compile_out — сохранить) ──
     in_memory_text: str | None = None
@@ -1494,7 +1539,9 @@ def main():
     non_voted = sorted(DEFAULT_NON_VOTED_FIELDS - EXTRA_VOTED_FIELDS)
     _log(logger, logging.INFO, f"🗳️ Голосуют: {', '.join(voted)}")
     if non_voted:
-        _log(logger, logging.INFO, f"📝 Last-write-wins: {', '.join(non_voted)}")
+        _log(logger, logging.INFO,
+             f"📝 Не голосуют ({', '.join(non_voted)}): "
+             + _non_voted_note())
 
     load_initial_ner(args.ner_file, args.ngram, logger)
 

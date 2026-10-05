@@ -1138,6 +1138,51 @@ def ner_locked_count(items) -> int:
     return sum(1 for it in (items or ()) if ner_is_locked(it))
 
 
+# Не голосующие поля записи (notes, context, translated_context): LLM даёт их
+# значения из разных чанков, и выбрать надо одно. Голосование здесь не помогло
+# бы: значения почти всегда разные, счёт 1:1:1, победитель определялся бы
+# порядком обхода. Поэтому режим выбора — одна настройка реестра
+# (NER_NON_VOTED_MODE), а не случайность обхода.
+NER_NON_VOTED_MODES = ("last", "first", "longest", "shortest")
+NER_NON_VOTED_LABELS = {
+    "last": "последнее значение",
+    "first": "первое присвоенное значение",
+    "longest": "самое длинное значение",
+    "shortest": "самое короткое значение",
+}
+
+
+def ner_pick_non_voted(old, new, mode: str = "last", max_len: int = 0):
+    """Значение не голосующего поля после очередной пачки: (старое, новое) → одно.
+
+    Режимы (NER_NON_VOTED_MODE): «last» — последнее (историческое поведение),
+    «first» — первое непустое, «longest» — самое длинное, «shortest» — самое
+    короткое. Пустое значение не соперник: непустое всегда побеждает.
+    max_len (СИМВОЛЫ, 0 — нет) обрезает победителя в режиме «longest»: без
+    потолка в глоссарий попадал абзац на всю сцену.
+    """
+    def clean(v):
+        return "" if v is None else unicodedata.normalize("NFC", str(v)).strip()
+
+    cur, inc = clean(old), clean(new)
+    if not inc:
+        return cur
+    if not cur:
+        out = inc
+    elif mode == "first":
+        out = cur
+    elif mode in ("longest", "shortest"):
+        longer = len(inc) > len(cur)
+        out = inc if (longer if mode == "longest" else not longer) else cur
+    else:
+        out = inc
+    try:
+        cap = int(max_len)
+    except (TypeError, ValueError):
+        cap = 0
+    return out[:cap] if (cap > 0 and mode == "longest") else out
+
+
 def ner_item_lookup(items_by_term, term):
     """Запись ner.json по термину: точное совпадение (NFC), затем
     вариант без обёрток-скобок 【】「」『』() — LLM часто возвращает
@@ -2279,7 +2324,7 @@ def _as_budget(value) -> int:
 
 
 def reasoning_fields(mode: str = "default", profile: str = "openai",
-                     effort: str = "", budget: int = 0) -> dict:
+                     effort: str = "", budget: object = 0) -> dict:
     """Ключи reasoning/thinking для тела запроса; {} — дефолт сервера.
 
     Профиль выбирает СПОСОБ передачи (у провайдеров общего поля нет), mode —
