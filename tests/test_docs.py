@@ -41,6 +41,7 @@ CORE_API = [
     "load_rules_block", "find_relevant_dict",
     "normalize_for_search", "build_smart_regex", "extract_term_context",
     "ner_is_locked", "ner_set_locked", "ner_locked_count",
+    "ner_pick_non_voted",
     "filter_ner_items", "format_ner_record", "glossary_body",
     "build_ner_batches", "parse_rag_suggestions", "ner_item_lookup",
     "diff_ner_records", "apply_ner_patches",
@@ -73,13 +74,13 @@ TRANSPORT_API = ["TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStrea
 DEPS_API = ["ROLES", "status", "format_status", "missing_hint"]
 # Зеркало API core/settings.py (реестр настроек — одно место истины)
 SETTINGS_API = ["Setting", "Block", "Group", "GROUPS", "SETTINGS", "BY_KEY",
-                "BY_BLOCK", "STAGES", "LLM_BLOCKS", "LLM_ALIAS",
+                "BY_BLOCK", "STAGES", "STAGE_TITLES", "LLM_BLOCKS", "LLM_ALIAS",
                 "STAGE_LLM_FIELDS", "groups", "stage_fields", "settings_of",
                 "form_fields", "defaults", "stage_values", "llm_settings",
                 "llm_values", "llm_form", "with_llm", "env_key", "env_file",
                 "sanitize", "file_values", "layered_values", "effective",
                 "display_value", "block_payload", "write_values",
-                "groups_payload"]
+                "groups_payload", "profile_defaults"]
 # Зеркало API core/search.py (поиск по текстам книги)
 SEARCH_API = ["SearchGroup", "SEARCH_GROUPS", "GROUP_IDS", "GROUP_LABELS",
               "CLUSTERS", "CLUSTER_LABELS", "DEFAULT_SCOPES", "MAX_CONTEXT",
