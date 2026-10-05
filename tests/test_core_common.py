@@ -1676,7 +1676,7 @@ def test_log_argv_masks_secrets(tmp_path):
 # ══════════════════════════════════════════════════════════════════════
 
 def test_preview_request_payload_chars_and_meta():
-    """Сводка символов по ролям + total; meta — только если задана."""
+    """Сводка символов И токенов по ролям + total; meta — только если задана."""
     messages = [{"role": "system", "content": "сист"},
                 {"role": "user", "content": "юзер"}]
     p = C.preview_request_payload("ner", "Pass1 · чанк 1/3", "модель",
@@ -1684,11 +1684,16 @@ def test_preview_request_payload_chars_and_meta():
     assert p["stage"] == "ner" and p["model"] == "модель"
     assert p["label"] == "Pass1 · чанк 1/3"
     assert p["chars"] == {"system": 4, "user": 4, "total": 8}
+    # токены — та же статистика оценкой (estimate_tokens), единица — ТОКЕНЫ
+    assert set(p["tokens"]) == {"system", "user", "total"}
+    assert p["tokens"]["total"] == p["tokens"]["system"] + p["tokens"]["user"]
+    assert all(v >= 1 for v in p["tokens"].values())
     assert p["meta"] == {"chunks": 3}
     assert p["messages"] is messages
     # без meta ключа нет (не пустой словарь)
     p2 = C.preview_request_payload("wiki", "L", None, [])
     assert "meta" not in p2 and p2["model"] == "" and p2["chars"]["total"] == 0
+    assert p2["tokens"] == {"total": 0}
 
 
 def test_preview_request_write_roundtrip(tmp_path):
