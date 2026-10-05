@@ -26,7 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # креды не оставляем в workspace: сборка работает только со своими файлами
+          # креды не оставляем в workspace: сборка работает только
+          # со своими файлами
           persist-credentials: false
 
       - uses: actions/setup-python@v5
@@ -61,9 +62,10 @@ jobs:
 
       - name: Прикрепить к релизу (только по тегу)
         if: github.event_name == 'push'
+        # один env на шаг: два соседних ключа env — невалидный workflow, GitHub
+        # отказывался запускать всё воркфлоу
         env:
           GH_TOKEN: ${{ github.token }}
-        env:
           # контекст github — из env, а не прямо в shell: имя тега не должно
           # разворачиваться в командную строку
           RELEASE: ${{ github.ref_name }}
@@ -73,28 +75,31 @@ jobs:
           else
             # релиз ещё не создан (windows.yml может идти параллельно) —
             # доложить позже кнопкой «Run workflow» этого воркфлоу
-            echo "::warning::релиз $RELEASE ещё не существует — юзерскрипты не прикреплены"
+            echo "::warning::релиза $RELEASE ещё нет — юзерскрипты не прикреплены"
           fi
 
       - name: Сбросить кэш CDN (только по тегу)
         if: github.event_name == 'push'
         run: |
-          # Обновления ходят на raw (max-age=300), но CDN остаётся зеркалом установки,
-          # а кэш ветки там живёт неделю. Чистит его отдельный сервис
-          # purge.jsdelivr.net методом GET: старый способ — curl -X PURGE по URL файла —
-          # отвечает 400 и раньше проходил зелёным, ничего не сбрасывая.
+          # Обновления ходят на raw (max-age=300), но CDN остаётся зеркалом
+          # установки, а кэш ветки там живёт неделю. Чистит его отдельный сервис
+          # purge.jsdelivr.net методом GET: старый способ — curl -X PURGE по URL
+          # файла — отвечает 400 и раньше проходил зелёным, ничего не сбрасывая.
           for f in tools/*/*.user.js tools/*/*.meta.js; do
-            echo "PURGE ${f} → $(curl -s -m 30 "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}" | tr -d " \n" | head -c 110)"
+            url="https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}"
+            echo "PURGE ${f} → $(curl -s -m 30 "$url" | tr -d ' \n' | head -c 110)"
           done
 
       - name: Ссылки для установки
         run: |
-          echo "### Ссылки установки (raw — основной путь, ≤5 минут на обновление)"
+          echo "### Ссылки установки (raw — основной путь, до 5 минут)"
+          raw="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main"
           for f in tools/*/*.user.js; do
-            echo "- $(basename "$f"): https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/${f}"
+            echo "- $(basename "$f"): ${raw}/$(basename "$f")"
           done
           echo
           echo "### Зеркало (jsDelivr, MIME application/javascript)"
+          cdn="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main"
           for f in tools/*/*.user.js; do
-            echo "- $(basename "$f"): https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}"
+            echo "- $(basename "$f"): ${cdn}/$(basename "$f")"
           done

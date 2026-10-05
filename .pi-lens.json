@@ -1,6 +1,7 @@
 {
   "ignore": [
     "web/static/vendor/**",
+    ".github/**",
     "projects/**",
     "servers/**",
     "Images/**",
