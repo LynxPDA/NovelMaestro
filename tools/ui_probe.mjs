@@ -385,8 +385,9 @@ async function main() {
     }
   }
 
-  /* «Поиск»: группы приходят с сервера, один GET на запрос, совпадение
-   * подсвечено, клик по имени файла открывает его в редакторе */
+  /* «Поиск»: группы и кластеры приходят с сервера (реестр в браузере не
+   * дублируется), один GET на запрос, все результаты постранично, клик по
+   * имени файла главы открывает «Редактор» с уже подставленным запросом */
   {
     const beforeS = problems.length;
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/search`,
@@ -397,6 +398,9 @@ async function main() {
         const b = l.querySelector("input");
         return [l.textContent.trim(), !!(b && b.checked)];
       }));
+    const clusters = await page.evaluate(() =>
+      [...document.querySelectorAll(".search-cluster-label")]
+        .map((x) => x.textContent.trim()));
     await page.fill(".search-q", "глава");
     await page.click(".search-run");
     await page.waitForTimeout(900);
@@ -405,14 +409,21 @@ async function main() {
         .textContent || "").trim(),
       files: [...document.querySelectorAll(".search-file-path")]
         .map((b) => b.textContent.trim()),
+      pagerBtns: document.querySelectorAll(".ner-pager button").length,
       marks: [...document.querySelectorAll(".search-hit-text mark")]
         .map((m) => m.textContent),
       lines: [...document.querySelectorAll(".search-hit-line")]
         .map((x) => x.textContent.trim()),
     }));
-    if (chips.length !== 9) problems.push(`поиск: групп ${chips.length}`);
+    if (chips.length !== 8) problems.push(`поиск: групп ${chips.length}`);
+    // подписи файлов глав — те же слаги, что у стадий; глоссария в списке нет
+    if (chips.slice(0, 4).map(([t]) => t).join(",")
+        !== "chapter,translated,redacted,polished")
+      problems.push(`поиск: группы глав «${chips.map(([t]) => t).join(",")}»`);
+    if (clusters.join(",") !== "Файлы глав:,Прочее:")
+      problems.push(`поиск: кластеры «${clusters.join(",")}»`);
     const on = chips.filter(([, c]) => c).map(([t]) => t);
-    if (on.join(",") !== "Оригинал глав,Полировка,Глоссарий,Заметки книги")
+    if (on.join(",") !== "chapter,polished,Заметки книги")
       problems.push(`поиск: отмечены «${on.join(", ")}»`);
     if (!/^Совпадений: (\d+) · файлов: (\d+) · прочитано: (\d+)$/.test(res.status))
       problems.push(`поиск: статус «${res.status}»`);
@@ -421,8 +432,10 @@ async function main() {
     if (!res.marks.length || res.marks.some((t) => t !== "глава"))
       problems.push(`поиск: подсветка ${JSON.stringify(res.marks)}`);
     if (res.lines[0] !== "1") problems.push(`поиск: строка ${res.lines[0]}`);
-    /* «Только главы» — все артефакты стадий (4 типа × 2 главы), глоссарий
-     * и заметки уходят из охвата */
+    // результатов меньше страницы — у панели пейджера нет даже кнопок
+    if (res.pagerBtns) problems.push(`поиск: pager молчит, кнопок ${res.pagerBtns}`);
+    /* «Только главы» — все артефакты стадий (4 типа × 2 главы), заметки
+     * уходят из охвата, но чипсы остаются на месте: это панель выбора */
     await page.click('.search-chips button:has-text("Только главы")');
     await page.click(".search-run");
     await page.waitForTimeout(900);
@@ -430,30 +443,252 @@ async function main() {
       files: document.querySelectorAll(".search-file-path").length,
       chips: [...document.querySelectorAll(".search-scope-chip")]
         .filter((l) => l.querySelector("input").checked).length,
+      clusters: document.querySelectorAll(".search-cluster-label").length,
+      allChips: document.querySelectorAll(".search-scope-chip").length,
     }));
     if (onlyChapters.files !== 8 || onlyChapters.chips !== 4)
       problems.push(`поиск: «Только главы» — ${onlyChapters.files} файлов, `
         + `${onlyChapters.chips} чипсов`);
+    if (onlyChapters.clusters !== 2)
+      problems.push(`поиск: с «Только главами» кластеров ${onlyChapters.clusters}`);
     if (SHOT)
       await page.screenshot({ path: path.join(OUT, "scenario-search.png") });
     await page.click(".search-file-path");
     await page.waitForTimeout(1200);
     const opened = await page.evaluate(() => ({
-      editor: [...document.querySelectorAll(".editor-cm")]
+      tab: [...document.querySelectorAll(".tab-active")]
+        .map((x) => x.textContent.trim()).join(""),
+      editor: [...document.querySelectorAll(".ed-cm")]
         .some((x) => x.offsetParent),
-      text: [...document.querySelectorAll(".editor-cm")]
+      text: [...document.querySelectorAll(".ed-cm")]
         .map((x) => x.textContent).join(" "),
+      type: [...document.querySelectorAll(".ed-type")]
+        .map((x) => x.value).join("|"),
+      findOpen: !!document.querySelector(
+        '.cm-panel.cm-search [main-field="true"]'),
+      findValue: (document.querySelector(
+        '.cm-panel.cm-search [main-field="true"]') || {}).value || "",
     }));
-    if (!opened.editor) problems.push("поиск: имя файла не открыло редактор");
+    if (opened.tab !== "Редактор" || !opened.editor)
+      problems.push(`поиск: клик по имени не открыл редактор главы `
+        + `(вкладка «${opened.tab}», редактор ${opened.editor ? "есть" : "нет"})`);
+    if (!opened.type.startsWith("chapter.txt"))
+      problems.push(`поиск: открыт не оригинал главы — ${opened.type}`);
     if (!/глава/i.test(opened.text))
       problems.push("поиск: в редакторе не тот файл");
+    // запрос доезжает до панели поиска редактора: она открыта и заполнена
+    // запрос доезжает до панели поиска редактора: она открыта и заполнена
+    if (!opened.findOpen || !/глава/.test(opened.findValue || ""))
+      problems.push(`поиск: панель поиска редактора `
+        + `${opened.findOpen ? "пуста" : "не открыта"} (${opened.findValue})`);
+    /* «Искать в глоссарии» — та же строка уводит на вкладку «Глоссарий».
+     * Хэш после клика остался «.../search» (вкладку сменил state, не роут),
+     * поэтому сначала уводим SPA на хах: goto тем же URL — не навигация */
+    await page.evaluate(() => { location.hash = "#/hub"; });
+    await page.waitForTimeout(400);
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/search`,
+      { waitUntil: "load" });
+    await page.waitForSelector(".search-ner-btn", { timeout: 15000 });
+    await page.fill(".search-q", "мир");
+    await page.click(".search-ner-btn");
+    await page.waitForTimeout(1200);
+    /* смена вкладки локальная: хэш остаётся «.../search», поэтому смотрим на
+       активную вкладку и на поле поиска глоссария */
+    const toNer = await page.evaluate(() => ({
+      tab: [...document.querySelectorAll(".tab-active")]
+        .map((x) => x.textContent.trim()).join(""),
+      q: (document.querySelector(".ner-q") || {}).value || "",
+      rows: document.querySelectorAll(".ner-table tbody tr.ner-row").length,
+    }));
+    if (toNer.tab !== "Глоссарий" || !/мир/.test(toNer.q))
+      problems.push(`поиск: в глоссарий не перешло (вкладка «${toNer.tab}», `
+        + `поле «${toNer.q}»`);
     if (SHOT)
       await page.screenshot({ path: path.join(OUT, "scenario-search-file.png") });
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-search-ner.png") });
     log(`${problems.length === beforeS ? "✅" : "❌"} поиск  ${res.status}` +
       ` · «Только главы» ${onlyChapters.files} файлов` +
       ` / ${onlyChapters.chips} чипсов` +
       (problems.length > beforeS
         ? `\n     ${problems.slice(beforeS).join("\n     ")}` : ""));
+  }
+
+  /* «Глоссарий»: все настройки вкладки — за одной кнопкой «⋮»; строки — с
+   * чекбоксами, групповые замок и удаление — в панели выделения, она заменяет
+   * тулбар; замок — служебное поле «_locked», отдельным столбцом не показан */
+  {
+    const before = problems.length;
+    await page.evaluate(() => { location.hash = "#/hub"; });
+    await page.waitForTimeout(400);
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/ner`,
+      { waitUntil: "load" });
+    await page.waitForSelector(".ner-table tbody .ner-row", { timeout: 15000 });
+    const read = () => page.evaluate(() => {
+      const cls = (s) => ((document.querySelector(s) || {}).className) || "";
+      const hidden = (s) => cls(s).split(/\s+/).includes("hidden");
+      return {
+        tools: !hidden(".project-body .files-tools"),
+        sel: !hidden(".project-body .files-sel"),
+        selText: ((document.querySelector(".files-sel-count") || {})
+          .textContent || "").trim(),
+        rows: document.querySelectorAll(".ner-table tbody .ner-row").length,
+        boxes: document.querySelectorAll(".ner-td-sel .fsel").length,
+        locked: document.querySelectorAll(".ner-row-locked").length,
+        cols: [...document.querySelectorAll(".ner-table thead th")]
+          .map((x) => x.textContent.trim()),
+        acts: Math.min(...[...document.querySelectorAll(".ner-actions")]
+          .map((x) => x.querySelectorAll("button").length)),
+      };
+    });
+    const a = await read();
+    if (a.rows !== 2 || a.boxes !== 2)
+      problems.push(`глоссарий: строк ${a.rows}, чекбоксов ${a.boxes}`);
+    if (!a.tools || a.sel)
+      problems.push("глоссарий: без выделения виден тулбар, не панель");
+    if (a.cols.includes("_locked"))
+      problems.push("глоссарий: служебный ключ уехал в столбцы");
+    if (a.acts !== 3)
+      problems.push(`глоссарий: кнопок в строке ${a.acts} (правка, удаление, замок)`);
+    // панель «⋮»: 8 контролов и 2 разделителя — больше на вкладке ничего нет
+    await page.locator(".ner-menu-btn").first().click();
+    await page.waitForTimeout(300);
+    const menu = await page.evaluate(() => {
+      const box = document.querySelector(".project-body .toolbar-menu .menu-box");
+      if (!box) return { open: false, items: [], seps: 0 };
+      return {
+        open: !box.className.split(/\s+/).includes("hidden"),
+        items: [...box.querySelectorAll("button, label.chk")]
+          .map((x) => x.textContent.trim()),
+        seps: box.querySelectorAll(".menu-sep").length,
+      };
+    });
+    if (!menu.open) problems.push("глоссарий: меню «⋮» не открылось");
+    const want = ["только зафиксированные", "Столбцы", "Типы",
+      "Поля поиска", "Добавить столбец", "Добавить термин", "Удалить столбец",
+      "Удалить по фильтру"];
+    if (menu.items.length !== 8)
+      problems.push(`глоссарий: пунктов в меню ${menu.items.length} — `
+        + JSON.stringify(menu.items));
+    for (const w of want)
+      if (!menu.items.some((t) => t.includes(w)))
+        problems.push(`глоссарий: в меню нет пункта «${w}»`);
+    if (menu.seps !== 2)
+      problems.push(`глоссарий: разделителей в меню ${menu.seps}`);
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-ner-menu.png") });
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    /* выделение всех строк → панель выделения → групповой замок */
+    await page.locator(".ner-th-sel .fsel").click();
+    await page.waitForTimeout(500);
+    const sel = await read();
+    if (!sel.sel || sel.tools)
+      problems.push("глоссарий: панель выделения не заменила тулбар");
+    if (sel.selText !== "выделено: 2")
+      problems.push(`глоссарий: панель выделения «${sel.selText}»`);
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-ner-select.png") });
+    await page.locator('.files-sel button[aria-label^="Зафиксировать"]')
+      .first().click();
+    await page.waitForTimeout(700);
+    const locked = await read();
+    if (locked.locked !== 2)
+      problems.push(`глоссарий: зафиксировано строк ${locked.locked}`);
+    if (locked.acts !== 1)
+      problems.push(`глоссарий: у зафиксированной строки кнопок ${locked.acts}`);
+    // выделение после группового замка остаётся: им же и снимают замок
+    if (!locked.sel || locked.tools)
+      problems.push("глоссарий: после замка панель выделения пропала");
+    const onDisk = (() => {
+      try {
+        return fs.readFileSync(
+          path.join(seedDir || "", SECTION, BOOK, "ner.json"), "utf-8");
+      } catch {
+        return "";
+      }
+    })();
+    if (!/"_locked": true/.test(onDisk))
+      problems.push("глоссарий: замок не доехал в ner.json");
+    // снять замок той же панелью: служебный ключ исчезает из файла совсем
+    // (после замка выделение живёт — сначала снять его, потом выделить снова)
+    await page.locator('.files-sel button[aria-label="Снять выделение"]')
+      .first().click();
+    await page.waitForTimeout(400);
+    await page.locator(".ner-th-sel .fsel").click();
+    await page.waitForTimeout(500);
+    await page.locator('.files-sel button[aria-label^="Снять замок"]')
+      .first().click();
+    await page.waitForTimeout(700);
+    const after = await read();
+    const offDisk = (() => {
+      try {
+        return fs.readFileSync(
+          path.join(seedDir || "", SECTION, BOOK, "ner.json"), "utf-8");
+      } catch {
+        return "";
+      }
+    })();
+    if (after.locked !== 0)
+      problems.push(`глоссарий: замок остался на ${after.locked} строке(ах)`);
+    if (/_locked/.test(offDisk))
+      problems.push("глоссарий: снятый замок оставил ключ в ner.json");
+    log(`${problems.length === before ? "✅" : "❌"} глоссарий: меню+выделение `
+      + ` ${menu.items.length} пунктов · ${sel.selText} · замок ${locked.locked}`
+      + ` → снят ${after.locked}`
+      + (problems.length > before
+        ? `\n     ${problems.slice(before).join("\n     ")}` : ""));
+  }
+
+  /* «Промпты»: html-язык редактора — теги секций видно по подсветке; тот же
+   * промпт в предпросмотре запроса размечен span-ами (теги, подстановки) */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/prompts`,
+      { waitUntil: "load" });
+    await page.waitForSelector(".prompt-item", { timeout: 15000 });
+    await page.locator(".prompt-item").first().click();
+    await page.waitForTimeout(1500);
+    /* классы подсветки CM даёт автоименами («ͼr», «ͼs»…): сверяем не имя, а
+       самого факта — у промпта закрашенные диапазоны есть, у файла главы нет */
+    const marks = () => page.evaluate(() => {
+      const host = document.querySelector(".editor-cm");
+      const spans = host
+        ? [...host.querySelectorAll(".cm-line span[class]")] : [];
+      return {
+        text: host ? host.textContent.trim().slice(0, 40) : "",
+        spans: spans.length,
+        hl: spans.filter((x) => x.className.includes("\u037c")).length,
+      };
+    });
+    const ed = await marks();
+    if (!/<translate>/.test(ed.text))
+      problems.push(`промпты: в редакторе не тот файл «${ed.text}»`);
+    if (!ed.hl)
+      problems.push(`промпты: подсветка тегов не видна (span ${ed.spans})`);
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-prompts.png") });
+    await page.evaluate(() => { location.hash = "#/hub"; });
+    await page.waitForTimeout(400);
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/editor`,
+      { waitUntil: "load" });
+    await page.waitForTimeout(1500);
+    const plain = await page.evaluate(() => {
+      const hosts = [...document.querySelectorAll(".ed-cm")];
+      const spans = hosts.flatMap((x) => [...x.querySelectorAll("span[class]")]);
+      return {
+        hosts: hosts.length,
+        hl: spans.filter((x) => x.className.includes("\u037c")).length,
+      };
+    });
+    if (plain.hl)
+      problems.push(`редактор глав: текст файла подсветкой залит `
+        + `(span-ов ${plain.hl})`);
+    log(`${problems.length === before ? "✅" : "❌"} промпты: html-язык `
+      + ` «${ed.text}» · подсвечено ${ed.hl} из ${ed.spans} span, `
+      + `в редакторе глав ${plain.hl}`
+      + (problems.length > before
+        ? `\n     ${problems.slice(before).join("\n     ")}` : ""));
   }
 
   /* «Файлы»: строка — чекбокс выделения и кнопки одного объекта (правка,
@@ -1348,19 +1583,31 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} сценарий project     Probe2 ${card ? "создан" : "НЕ создан"}, модалка закрыта`);
   }
 
-  /* модалки: открываем и закрываем (Escape), проверяем что каркас живой */
+  /* модалки: открываем и закрываем (Escape), проверяем что каркас живой.
+   * У глоссария настройки живут в меню «⋮» — кнопка видна только с ним */
   const modals = [
-    ["sections", "#/hub", 'button:has-text("Управление разделами")'],
-    ["create", "#/hub", 'button:has-text("Создать проект")'],
-    ["ner-types", `#/project/${SECTION}/${BOOK}/ner`, 'button[title="Фильтр типов"]'],
-    ["ner-cols", `#/project/${SECTION}/${BOOK}/ner`, 'button[title="Какие столбцы показывать"]'],
+    ["sections", "#/hub", 'button:has-text("Управление разделами")', null],
+    ["create", "#/hub", 'button:has-text("Создать проект")', null],
+    ["ner-types", `#/project/${SECTION}/${BOOK}/ner`,
+      'button[title="Фильтр типов"]', ".ner-menu-btn"],
+    ["ner-cols", `#/project/${SECTION}/${BOOK}/ner`,
+      'button[title="Какие столбцы показывать"]', ".ner-menu-btn"],
 
-    ["export", `#/project/${SECTION}/${BOOK}/ner`, 'button:has-text("Экспорт для анализа")'],
+    ["export", `#/project/${SECTION}/${BOOK}/ner`,
+      'button:has-text("Экспорт для анализа")', null],
   ];
-  for (const [name, hash, sel] of modals) {
+  for (const [name, hash, sel, opener] of modals) {
     const before = problems.length;
     await page.goto(`${url}/${hash}`, { waitUntil: "load" });
     await page.waitForTimeout(500);
+    if (opener) {
+      if (!(await page.locator(opener).count())) {
+        problems.push(`модалка ${name}: кнопка меню ${opener} не найдена`);
+        continue;
+      }
+      await page.locator(opener).first().click();
+      await page.waitForTimeout(300);
+    }
     const btn = page.locator(sel).first();
     if (!(await btn.count())) {
       log(`⚠️  модалка ${name}: кнопка не найдена (${sel})`);
