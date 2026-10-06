@@ -994,8 +994,8 @@ async function main() {
       if (SHOT)
         await page.screenshot({ path: path.join(OUT, `settings-${slugs[tab]}.png`) });
     }
-    const mode = (fields || []).find((x) => /Не голосующие поля/.test(x));
-    if (!mode) problems.push("настройки: нет поля режима не голосующих полей");
+    const mode = (fields || []).find((x) => /Поле notes/.test(x));
+    if (!mode) problems.push("настройки: нет поля выбора значения для notes");
     else if (!/^select\(4\):last$/.test(mode.replace(/^[^=]*=/, "").replace(/·единица$/, "")))
       problems.push(`настройки: поле режима выглядит так «${mode}»`);
     const cap = (fields || []).find((x) => /Ограничение длины значения/.test(x));

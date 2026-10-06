@@ -148,7 +148,13 @@ Return the corrected JSON array in the SAME format. Output ONLY valid JSON.
 META_PREFIX = "_"
 
 NON_VOTABLE_FIELDS = {"term", "count", "aliases"}
+# Поля с одним значением: голосование к ним не применяется. Режим из реестра
+# (NER_NON_VOTED_MODE) действует только на MODED_NON_VOTED_FIELDS — на практике
+# на notes, если оно есть в записях глоссария. Остальные поля группы всегда
+# хранят первое присвоенное значение: context и translated_context пишет
+# fill_term_context из чанка, там первый вариант и есть канон.
 DEFAULT_NON_VOTED_FIELDS = {"notes", "context", "translated_context"}
+MODED_NON_VOTED_FIELDS = {"notes"}
 TRANSIENT_FIELDS = {"_ngrams", "_len", "_source_chunks"}
 
 DEFAULT_SAVE_INTERVAL = 10
@@ -170,12 +176,22 @@ NON_VOTED_MAX_LEN = 0
 # ══════════════════════════════════════════════════════════════════════
 
 
+def _non_voted_mode(field: str) -> str:
+    """Режим выбора значения не голосующего поля: настройка реестра — только
+    для MODED_NON_VOTED_FIELDS, остальные поля берут первое значение."""
+    return NON_VOTED_MODE if field in MODED_NON_VOTED_FIELDS else "first"
+
+
 def _non_voted_note() -> str:
     """Человеческая строка о политике не голосующих полей в лог."""
     from core.common import NER_NON_VOTED_LABELS
-    note = NER_NON_VOTED_LABELS.get(NON_VOTED_MODE, NON_VOTED_MODE)
+    note = f"notes — {NER_NON_VOTED_LABELS.get(NON_VOTED_MODE, NON_VOTED_MODE)}"
     if NON_VOTED_MODE == "longest" and NON_VOTED_MAX_LEN > 0:
-        note += f", обрезка до {NON_VOTED_MAX_LEN} СИМВОЛОВ"
+        note += f" (обрезка до {NON_VOTED_MAX_LEN} СИМВОЛОВ)"
+    rest = sorted(DEFAULT_NON_VOTED_FIELDS - MODED_NON_VOTED_FIELDS
+                  - EXTRA_VOTED_FIELDS)
+    if rest:
+        note += f"; {', '.join(rest)} — первое значение"
     return note
 
 
@@ -399,7 +415,8 @@ def merge_fields(item: dict, ner: dict) -> None:
             add_vote(item, field, val)
         else:
             item[field] = ner_pick_non_voted(item.get(field), val,
-                                             NON_VOTED_MODE, NON_VOTED_MAX_LEN)
+                                             _non_voted_mode(field),
+                                             NON_VOTED_MAX_LEN)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -924,9 +941,9 @@ def _compute_final_ner(
                         g["votes"][field] = {}
                     g["votes"][field][val] = g["votes"][field].get(val, 0) + 1
                 else:
-                    # не голосует: одно значение по политике реестра
+                    # не голосует: одно значение (у notes — режим реестра)
                     g["single"][field] = ner_pick_non_voted(
-                        g["single"].get(field), val, NON_VOTED_MODE,
+                        g["single"].get(field), val, _non_voted_mode(field),
                         NON_VOTED_MAX_LEN)
     candidates: list[dict] = []
     for _norm, g in groups.items():
@@ -964,8 +981,8 @@ def _compute_final_ner(
                         existing[base_field] = _resolve_votes(existing[field])
                 elif _is_storable(field) and not _is_votable(field):
                     existing[field] = ner_pick_non_voted(
-                        existing.get(field), cand[field], NON_VOTED_MODE,
-                        NON_VOTED_MAX_LEN)
+                        existing.get(field), cand[field],
+                        _non_voted_mode(field), NON_VOTED_MAX_LEN)
         else:
             final.append(cand)
     return final
@@ -1396,7 +1413,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep-fields", type=str, default="", metavar="FIELDS",
         help=(
             "Список полей через запятую, которые ВКЛЮЧАЮТСЯ в голосование. "
-            "По умолчанию notes, context, translated_context НЕ голосуют. "
+            "По умолчанию голосуют translation/type/pinyin, а notes, context и "
+            "translated_context не голосуют (у них одно значение). "
             "Пример: --keep-fields notes,context"
         ),
     )
@@ -1408,18 +1426,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--non_voted_mode", default="last",
         choices=("last", "first", "longest", "shortest"),
         help=(
-            "Какое значение берут поля, которые НЕ голосуют (notes, context, "
-            "translated_context): last — последнее (по умолчанию), first — "
-            "первое присвоенное, longest — самое длинное, shortest — самое "
-            "короткое."
+            "Какое значение берёт поле notes из значений, пришедших из разных "
+            "чанков: last — последнее (по умолчанию), first — первое "
+            "присвоенное, longest — самое длинное, shortest — самое короткое. "
+            "Остальные не голосующие поля (context, translated_context) всегда "
+            "хранят первое значение."
         ),
     )
     parser.add_argument(
         "--non_voted_max_len", type=int, default=0,
         help=(
-            "Ограничение длины значения не голосующего поля, СИМВОЛЫ "
-            "(только для --non_voted_mode longest; 0 — без ограничения, "
-            "по умолчанию)."
+            "Ограничение длины значения notes, СИМВОЛЫ (только для "
+            "--non_voted_mode longest; 0 — без ограничения, по умолчанию)."
         ),
     )
     parser.add_argument(

@@ -1904,7 +1904,7 @@ def test_reasoning_fields_bad_budget_is_zero(bad):
     ],
 )
 def test_ner_pick_non_voted(mode, old, new, want):
-    """Режим выбора значения не голосующего поля (notes/context/...)."""
+    """Режим выбора значения поля notes (реестр действует только на него)."""
     assert C.ner_pick_non_voted(old, new, mode) == want
 
 

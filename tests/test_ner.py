@@ -571,18 +571,23 @@ def test_merge_alias_groups_all_locked_skipped():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# НЕ ГОЛОСУЮЩИЕ ПОЛЯ: одно значение по политике (NER_NON_VOTED_MODE)
+# НЕ ГОЛОСУЮЩИЕ ПОЛЯ: одно значение; режим реестра — только для notes
 # ══════════════════════════════════════════════════════════════════════
 
 @contextlib.contextmanager
 def _non_voted(mode, max_len=0):
-    """Политика не голосующих полей на время теста (глобалы ner.py)."""
-    old = (NER.NON_VOTED_MODE, NER.NON_VOTED_MAX_LEN)
+    """Политика не голосующих полей на время теста (глобалы ner.py).
+
+    EXTRA_VOTED_FIELDS пинится пустым: main() из других тестов может оставить
+    после себя след, а здесь важен канон списка полей.
+    """
+    old = (NER.NON_VOTED_MODE, NER.NON_VOTED_MAX_LEN, NER.EXTRA_VOTED_FIELDS)
     NER.NON_VOTED_MODE, NER.NON_VOTED_MAX_LEN = mode, max_len
+    NER.EXTRA_VOTED_FIELDS = set()
     try:
         yield
     finally:
-        NER.NON_VOTED_MODE, NER.NON_VOTED_MAX_LEN = old
+        NER.NON_VOTED_MODE, NER.NON_VOTED_MAX_LEN, NER.EXTRA_VOTED_FIELDS = old
 
 
 @pytest.mark.parametrize(
@@ -641,10 +646,40 @@ def test_merge_into_single_field_policy(ner_globals):
     assert target[0]["notes"] == "короткое"
 
 
+@pytest.mark.parametrize(
+    "mode,want",
+    [("last", "один"), ("first", "два"), ("longest", "один"),
+     ("shortest", "два")],
+)
+def test_non_voted_mode_only_notes(ner_globals, mode, want):
+    """Режим реестра — только для notes: context всегда хранит первое значение."""
+    item = {"term": "陈阳", "notes": "два", "context": "два"}
+    with _non_voted(mode):
+        NER.merge_fields(item, {"notes": "один", "context": "один"})
+    assert item["notes"] == want
+    assert item["context"] == "два"
+    assert "_votes_context" not in item and "_votes_notes" not in item
+
+
+def test_non_voted_field_groups(ner_globals):
+    """Группы полей: notes под режимом, context вне голосования и вне режима."""
+    moded, default = NER.MODED_NON_VOTED_FIELDS, NER.DEFAULT_NON_VOTED_FIELDS
+    assert moded == {"notes"}
+    assert default - moded == {"context", "translated_context"}
+    with _non_voted("longest", 7):
+        assert NER._non_voted_mode("notes") == "longest"
+        assert NER._non_voted_mode("context") == "first"
+        assert NER._non_voted_mode("translated_context") == "first"
+    # в EXTRA_VOTED поле переходит в голосование — и режим его не касается
+    NER.EXTRA_VOTED_FIELDS = {"notes"}
+    assert NER._is_votable("notes") and not NER._is_votable("context")
+
+
 def test_log_shows_single_field_mode(ner_globals):
     """Строка о политике в логе: режим и потолок видны оператору."""
     with _non_voted("longest", 300):
         note = NER._non_voted_note()
-    assert "самое длинное значение" in note and "300" in note
+    assert "notes — самое длинное значение" in note and "300" in note
+    assert "context — первое значение" in note
     with _non_voted("last"):
         assert "СИМВОЛОВ" not in NER._non_voted_note()
