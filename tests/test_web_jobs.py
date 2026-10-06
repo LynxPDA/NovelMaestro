@@ -1739,14 +1739,15 @@ def test_profile_general_immune(tmp_path):
 
 
 def test_profile_secret_mask_keeps_value(tmp_path):
-    """Маска «••••» прилетела вместо ключа — сохранённый ключ не стирается;
-    пустое значение переопределение снимает."""
+    """Маска прилетела вместо ключа — сохранённый ключ не стирается (точки
+    служат признаком «не меняли»); пустое значение снимает переопределение."""
     prof = core_settings.profile_create("Ключи", {"API_KEY": "секрет",
                                                  "MODEL": "m"})
+    mask = core_settings.MASK_CHAR * len("секрет")
     saved = core_settings.profile_save_values(
-        prof["id"], {"API_KEY": "••••", "MODEL": ""})
+        prof["id"], {"API_KEY": mask, "MODEL": ""})
     assert saved["values"] == {"API_KEY": "секрет"}
-    assert core_settings.profile_display(prof["id"])["API_KEY"] == "••••"
+    assert core_settings.profile_display(prof["id"])["API_KEY"] == mask
     assert "секрет" not in json.dumps(core_settings.profiles_payload())
 
 

@@ -52,11 +52,12 @@ def norm(field_type, value) -> str:
 # ════════════════════════════════════════════════════════════════════
 
 def test_groups_shape():
-    """Субвкладки и блоки: непустые, id уникальны, стадия владельец есть.
+    """Субвкладки и блоки: непустые, id уникальны, стадия-владелец есть.
 
-    Отдельной субвкладки «Веб-сервер» нет: настройки своего сервера — те же
-    настройки машины, что и модель, и живут последними блоками первой
-    субвкладки.
+    Настройки самого веб-сервера остаются в реестре последними блоками первой
+    субвкладки — из них читает дефолты запуска сам сервер (web_values()), но на
+    страницу они больше не попадают: это конфигурация машины, а не книги, и
+    применяются только после перезапуска (см. test_server_blocks_hidden).
     """
     assert [g.id for g in S.groups()] == [
         "llm", "transfer", "glossary", "checks", "book"]
@@ -75,7 +76,29 @@ def test_payload_marks_llm_blocks():
     payload = S.groups_payload()
     llm = {b["id"]: b.get("llm") for g in payload for b in g["blocks"]}
     assert {b for b in llm if llm[b]} == set(S.LLM_BLOCKS)
-    assert llm["server_net"] is False and llm["server_run"] is False
+
+
+def test_server_blocks_hidden_from_page():
+    """Веб-сервер со страницы настроек убран полностью: у своей машины нет
+    места рядом с настройками книги (применяется только после перезапуска),
+    но в реестре и в .env ключи WEB_* остаются."""
+    payload = S.groups_payload()
+    assert not set(S.SERVER_BLOCKS) & {b["id"] for g in payload
+                                       for b in g["blocks"]}
+    assert [g["id"] for g in payload] == [g.id for g in S.GROUPS]
+    # ключи живы: лаунчер читает их из реестра, а не из своего второго списка
+    assert [s.key for s in S.web_settings()][:4] == [
+        "WEB_HOST", "WEB_PORT", "WEB_AUTH", "WEB_TOKEN"]
+
+
+def test_glossary_check_lives_with_checks():
+    """Проверка глоссария — стадия проверки, а не часть глоссария: блок живёт
+    на субвкладке «Проверки», сама субвкладка глоссария — только создание."""
+    by_group = {g.id: [b.id for b in g.blocks] for g in S.GROUPS}
+    assert by_group["glossary"] == ["ner"]
+    assert by_group["checks"][0] == "ner_check"
+    # порядок стадий той же субвкладки не поменялся
+    assert by_group["checks"][1] == "translate_check"
 
 
 def test_web_values_layers():
@@ -397,11 +420,14 @@ def test_write_skips_noenv_keeps_zero(global_env):
 
 
 def test_groups_payload_masks_secrets(monkeypatch, global_env):
+    """Секрет отдаётся маской по точке на символ значения: четыре точки на
+    20-символьный ключ выглядели как обрезанный ввод; само значение в SPA
+    по-прежнему не ездит."""
     global_env.write_text("API_KEY=secret-token\nWIKI_TOC=1\n", encoding="utf-8")
     monkeypatch.delenv("API_KEY", raising=False)
     payload = {f["name"]: f for g in S.groups_payload()
                for b in g["blocks"] for f in b["fields"]}
-    assert payload["api_key"]["value"] == "••••"
+    assert payload["api_key"]["value"] == S.MASK_CHAR * len("secret-token")
     assert "secret-token" not in repr(payload)
     # модель не задана в файле → встроенный дефолт реестра, а не пустая строка
     assert payload["model"]["value"] == S.BY_KEY["MODEL"].default
@@ -482,5 +508,6 @@ def test_profiles_payload_values(global_env):
     assert got[S.PROFILE_DEFAULT]["values"]["HOST"] == "http://общий:1"
     assert got["p1"]["values"]["HOST"] == ""  # не задан → наследует General
     assert got["p1"]["values"]["MODEL"] == "дом-модель"
-    assert got["p1"]["values"]["API_KEY"] == "••••"
+    assert got["p1"]["values"]["API_KEY"] == (
+        S.MASK_CHAR * len("ключ-дом"))
     assert "ключ-дом" not in repr(got) and "ключ-general" not in repr(got)

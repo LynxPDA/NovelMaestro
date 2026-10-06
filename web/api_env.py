@@ -35,7 +35,7 @@ def _clean_values(values) -> dict:
     """Тело формы → {КЛЮЧ реестра: значение}; чужой ключ — 400, маска — пропуск.
 
     Ключи — только имена реестра: иначе «одно место истины» распалось бы
-    снова. Значение-маска секрета — не значение: ключ остаётся как был.
+    снова. Значение-маска пароля — не значение: ключ остаётся как был.
     """
     if not isinstance(values, dict):
         raise ApiError(400, "Поле values: {КЛЮЧ: значение}")
@@ -45,7 +45,7 @@ def _clean_values(values) -> dict:
         setting = core_settings.BY_KEY.get(k)
         if setting is None:
             raise ApiError(400, f"Неизвестный ключ настройки: {k!r}")
-        if setting.secret and str(value or "").strip() == "••••":
+        if setting.secret and core_settings.is_mask(value):
             continue
         clean[k] = value
     return clean

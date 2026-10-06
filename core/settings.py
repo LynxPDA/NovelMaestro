@@ -44,6 +44,22 @@ log = logging.getLogger("nm")
 
 NL = chr(10)  # настоящий перевод строки (значение в форме)
 NL_LIT = chr(92) + "n"  # литерал «\n» — так многострочное живёт в .env
+#: маска пароля в интерфейсе: ТОЧКА НА КАЖДЫЙ СИМВОЛ значения. Раньше всегда
+#: было четыре точки: над 20-символьным ключом они выглядели как обрезанный
+#: ввод. Сами секреты в SPA по-прежнему не ездят — длина в точках ключ не
+#: выдаёт, а возврат маски отличает «не трогали» от «стёрли»
+MASK_CHAR = "•"
+
+
+def mask_secret(value) -> str:
+    """Маска пароля для интерфейса: по точке на символ значения; пустое — пусто."""
+    return MASK_CHAR * len(str(value if value is not None else "").strip())
+
+
+def is_mask(value) -> bool:
+    """Возврат маски — не значение: в поле пароля SPA отдаёт только точки."""
+    val = str(value if value is not None else "").strip()
+    return bool(val) and set(val) <= {MASK_CHAR}
 
 # ════════════════════════════════════════════════════════════════════
 # модель реестра
@@ -194,7 +210,7 @@ GROUPS: tuple = (
             _s("PROVIDER_ALLOW_FALLBACKS", "Запасные провайдеры", "bool", True, help="относится только к приоритету: выключено — если ни одного провайдера из списка у модели нет, запрос завершится ошибкой 404 вместо чужого провайдера; на белый и чёрный списки флаг не влияет"),
             _s("PROVIDER_COUNTRY", "Страна серверов провайдера", "text", "", help="двухбуквенный код (например ru): запрос обработают только провайдеры с серверами из этой страны; единственный фильтр, который соблюдается и в резервных попытках"),
         ),
-        # ── сам веб-сервер: свои блоки едут последними этой субвкладки ──
+        # ── сам веб-сервер: в реестре последние, в интерфейсе их не видно ──
         _block("server_net", "Веб-сервер: сеть и доступ",
             _s("WEB_HOST", "Адрес прослушивания", "text", "127.0.0.1", help="применяется после перезапуска сервера; 0.0.0.0 — вся локальная сеть, тогда включайте аутентификацию; в Docker адрес задаёт образ (CLI-флаг --host выше любого файла)"),
             _s("WEB_PORT", "Порт", "number", "8756", help="применяется после перезапуска; в Docker наружу пробрасывается порт из compose, этот отвечает за адрес внутри контейнера"),
@@ -260,14 +276,17 @@ GROUPS: tuple = (
             _s("NER_KEEP_FIELDS", "Поля в голосование (через запятую)", "text", "",
                 help="Пусто = голосуют translation/type/pinyin; notes, context и translated_context не голосуют: у них одно значение (см. режим ниже). Пример: notes,context", stage="ner"),
             _s("NER_CONTEXT_MAX_LEN", "Максимальная длина \"context\"", "number", "300", help="СИМВОЛЫ: context извлекается из чанка — предложение с термином, не от LLM; 0 — выключено", stage="ner"),
-            _s("NER_NON_VOTED_MODE", "Поле notes: какое значение брать", "select", "last", options=NER_NON_VOTED_MODES, labels=NER_NON_VOTED_LABELS,
-                help="настройка действует только на поле notes, если оно есть в записях глоссария: LLM присылает ему разные значения из разных чанков, а выбрать надо одно. «последнее» — как исторически; «первое» — какое встретилось впервые; «самое длинное»/«самое короткое» — по длине значения. context и translated_context всегда хранят первое значение", stage="ner"),
-            _s("NER_NON_VOTED_MAX_LEN", "Ограничение длины значения notes, СИМВОЛЫ", "number", "0",
-                help="только для режима «самое длинное» у поля notes: победившее значение длиннее этого числа символов — обрезается по нему; 0 — без ограничения",
+            _s("NER_NON_VOTED_MODE", "Не голосующие поля: какое значение брать", "select", "last", options=NER_NON_VOTED_MODES, labels=NER_NON_VOTED_LABELS,
+                help="действует на ВСЕ текстовые неголосующие поля записи (notes, context, translated_context): LLM присылает им разные значения из разных чанков, а выбрать надо одно. «последнее» — как исторически; «первое» — какое встретилось впервые; «самое длинное»/«самое короткое» — по длине значения. Любое из них можно перевести в голосование полем выше", stage="ner"),
+            _s("NER_NON_VOTED_MAX_LEN", "Ограничение длины значения, СИМВОЛЫ", "number", "0",
+                help="только для режима «самое длинное»: победившее значение длиннее этого числа символов — обрезается по нему; 0 — без ограничения",
                 stage="ner"),
             _s("NER_SAVE_INTERVAL", "Интервал сохранения ner.json", "number", "10",
                 help="каждые N чанков — промежуточный снапшот глоссария. Возобновление с места остановки убрано: каждый запуск идёт с первого чанка", stage="ner"),
         ),
+    ),
+    # ── Проверки ──
+    _group("checks", "Проверки",
         _block("ner_check", STAGE_TITLES["ner_check"],
             _s("NER_CHECK_PROMPT_FILE", "Промпт-файл", "files", "ner_check_prompt.txt", dir="prompts", ext=(".txt",), autofile="prompts/ner_check_prompt.txt",
                 help="Теги: <prompt_ner_check> — проверка выбранных типов, <prompt_rag> — точечная RAG-проверка; комментарии вне тегов — через #; автоподхват ner_check_prompt.txt", stage="ner_check",
@@ -293,9 +312,6 @@ GROUPS: tuple = (
             _s("NER_CHECK_TYPES", "", "hidden", "", noenv=True, stage="ner_check"),
             _s("NER_CHECK_FIELDS", "", "hidden", "term,type,translation", noenv=True, stage="ner_check"),
         ),
-    ),
-    # ── Проверки ──
-    _group("checks", "Проверки",
         _block("translate_check", STAGE_TITLES["translate_check"],
             _s("TRANSLATE_CHECK_CHECK_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated"),
                 help="polished → сравнивается с redacted (соседняя стадия) и chapter (оригинал); redacted → с translated и chapter; translated → только с chapter", stage="translate_check"),
@@ -854,7 +870,7 @@ def profile_display(profile_id: str) -> dict:
         if builtin:
             out[s.key] = display_value(s)
         else:
-            out[s.key] = ("••••" if val.strip() else "") if s.secret else val
+            out[s.key] = mask_secret(val) if s.secret else val
     return out
 
 
@@ -946,13 +962,13 @@ def profile_save_values(profile_id: str, values: dict) -> dict:
 def _profile_clean(values: dict | None, old: dict | None = None) -> dict:
     """Только LLM-ключи реестра, непустые, в порядке реестра.
 
-    Маска «••••» — не значение: секрет остаётся тем, что уже сохранено
+    Маска пароля — не значение: секрет остаётся тем, что уже сохранено
     (пустое же значение переопределение снимает — профиль наследует General)."""
     out = {}
     old = old or {}
     for s in llm_settings():
         val = sanitize(s, (values or {}).get(s.key, ""))
-        if not val or val == "••••":
+        if not val or is_mask(val):
             if s.secret and s.key in old:
                 out[s.key] = old[s.key]
             continue
@@ -994,9 +1010,10 @@ def with_llm(stage: str, form: dict) -> dict:
 
 
 def display_value(setting: Setting) -> object:
-    """Значение настройки для интерфейса: эффективное; секреты — «••••»."""
+    """Значение настройки для интерфейса: эффективное; пароли — маска, по точке
+    на символ значения (сам пароль в SPA не ездит)."""
     if setting.secret:
-        return "••••" if str(layered_values().get(setting.key, "")).strip() else ""
+        return mask_secret(layered_values().get(setting.key, ""))
     return effective(setting.key)
 
 
@@ -1004,7 +1021,7 @@ def block_payload(block_id: str) -> dict:
     """Одна карточка реестра для SPA: {id, title, fields, values}.
 
     Поля — в формате форм стадий (name/label/type/…), значения — эффективные,
-    в тех же именах. Парольное поле отдаётся как «••••»: значение секрета в SPA
+    в тех же именах. Парольное поле отдаётся маской (точка на символ): значение пароля в SPA
     не ездит, нужен только признак «задано».
     """
     fields, values = [], {}
@@ -1019,15 +1036,18 @@ def block_payload(block_id: str) -> dict:
 
 
 def groups_payload() -> list:
-    """Реестр для SPA: субвкладки → блоки → поля с текущими значениями."""
+    """Реестр для SPA: субвкладки → блоки → поля с текущими значениями.
+
+    Настройки самого веб-сервера (блоки server_*) странице не показываются: это
+    конфигурация машины, а не книги, и применяются они только после перезапуска.
+    В реестре они остаются — оттуда же читаются дефолты запуска (web_values()).
+    Профиль LLM подставляется только LLM-блокам: флаг «llm».
+    """
     return [{"id": g.id, "title": g.title,
              "blocks": [{"id": b.id, "title": b.title,
-                         # профиль LLM подставляется только в свои блоки:
-                         # веб-сервер живёт в этой же субвкладке, но к LLM
-                         # отношения не имеет
                          "llm": b.id in LLM_BLOCKS,
                          "fields": [dict(s.form_field(), value=display_value(s),
                                          key=s.key)
                                     for s in b.settings]}
-                        for b in g.blocks]}
+                        for b in g.blocks if b.id not in SERVER_BLOCKS]}
             for g in GROUPS]
