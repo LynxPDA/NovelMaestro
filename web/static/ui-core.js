@@ -272,10 +272,15 @@
   }
 
   /* ── таблица глоссария: ячейка / сортировка / поиск ── */
+  /* Значения-объекты/массивы (напр. _votes_pinyin) показываем парами
+     «ключ: значение» через запятую с пробелом: слитый JSON читается как одно
+     длинное слово и нереразрывно растягивает весь столбец. */
   function nerCellText(v) {
-    return v && typeof v === "object"
-      ? JSON.stringify(v)
-      : String(v == null ? "" : v);
+    if (v == null) return "";
+    if (Array.isArray(v)) return v.map(nerCellText).join(", ");
+    if (typeof v === "object")
+      return Object.keys(v).map((k) => `${k}: ${nerCellText(v[k])}`).join(", ");
+    return String(v);
   }
   /* Тема интерфейса: переключатель в шапке — тёмная ↔ светлая. Всё, что не
    * «light», считается тёмной: это тема по умолчанию. */

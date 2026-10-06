@@ -412,12 +412,19 @@ test("glossarySentence: дефолт maxLen 200, пустой текст", () =>
   assert.equal(UICore.glossarySentence("нет границ", 0, 3), "нет границ");
 });
 
-test("nerCellText: объекты как JSON, пустые как строка", () => {
+test("nerCellText: объекты — пары «ключ: значение», пустые как строка", () => {
   assert.equal(UICore.nerCellText(null), "");
   assert.equal(UICore.nerCellText(undefined), "");
   assert.equal(UICore.nerCellText("Лин"), "Лин");
   assert.equal(UICore.nerCellText(12), "12");
-  assert.equal(UICore.nerCellText({ a: 1 }), '{"a":1}');
+  assert.equal(UICore.nerCellText({ a: 1 }), "a: 1");
+  // после запятой обязателен пробел: иначе значение не переносится
+  assert.equal(
+    UICore.nerCellText({ translation: "мир", type: "other" }),
+    "translation: мир, type: other",
+  );
+  assert.equal(UICore.nerCellText(["а", "б"]), "а, б");
+  assert.equal(UICore.nerCellText({ a: { b: 2 } }), "a: b: 2");
 });
 
 test("nextNerSort: первый клик — убывание, повтор — возрастание", () => {

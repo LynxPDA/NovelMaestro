@@ -2321,7 +2321,12 @@ function viewProject(section, name, tab, job) {
           h(
             "td",
             {
-              class: c === "type" ? "ner-type" : "",
+              // служебные поля (_votes_*) приходят структурой: ширину задаём
+              // на самом td — max-width в табличной раскладке браузер
+              // игнорирует, и один термин растягивает таблицу на весь экран
+              class:
+                (c === "type" ? "ner-type " : "")
+                + (isStruct(it[c]) ? "ner-cell-struct" : ""),
               title: isStruct(it[c]) ? cellText(it[c]) : "",
             },
             cellText(it[c]),

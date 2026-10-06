@@ -480,8 +480,14 @@ body {
   gap: 2px;
   color: var(--text);
 }
-.toolbar-menu .menu-box .menu-item {
+/* Пункты меню — все по левому краю: control'ы вьюхи приходят в меню своими
+   классами, а у кнопки браузер ставит текст по центру — отсюда «то слева,
+   то по центру» в одном списке. Длинные подписи переносятся. */
+.toolbar-menu .menu-box > *,
+.user-menu > * {
   text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 /* активный фильтр («Спорные» включены) */
 .btn-active {
@@ -1610,6 +1616,13 @@ input[type="number"] {
 }
 .ner-table th.ner-th {
   white-space: nowrap;
+}
+/* служебные поля записи (_votes_*): значение — карта вариантов. Ширину ставим
+   на самом td шириной, а не max-width (последний в табличной раскладке не
+   работает), текст переносится по словам */
+.ner-table td.ner-cell-struct {
+  width: 220px;
+  overflow-wrap: anywhere;
 }
 .ner-table th.ner-th-active {
   color: var(--text);
