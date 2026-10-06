@@ -6,6 +6,10 @@ stages.py — спеки стадий web-интерфейса: метаданн
 Каждая стадия: spec (title/script/build + fields) + build_command(form, ctx) →
 argv. Поля формы (и их дефолты, метки, подсказки) берутся из реестра настроек
 в порядке реестра — здесь остаётся только сборка argv.
+- в argv едут только применимые поля: build_command пропускает форму через
+  core.settings.applicable_form (when/when_any/when_set у настроек), поэтому
+  режим стадии больше не размножается ветками в сборке — RAG-поля в whole,
+  расширенный контекст в действиях 1-8 и т.п. отсекаются реестром;
 - cwd = папка проекта; python = sys.executable; скрипт = REPO/cli/xxx.py.
 - Единицы в метках — как в help скриптов (СИМВОЛЫ/ТОКЕНЫ/ГЛАВЫ).
 - LLM-настройки (сервер, модель, ключ, температура, таймауты, повторы,
@@ -93,16 +97,12 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
         argv += ["--input", str(form["input"])]
     mode = str(form.get("mode") or "toc")
     argv += ["--mode", mode]
+    # «Замены и очистки» из формы epub убраны: замены после разбивки делает
+    # отдельная стадия batch_replace, --clean-re и --skip остаются CLI-флагами
+    # (своих настроек в реестре нет)
     for p in _epub_lines(form.get("split_patterns")):
         argv += ["--split-re", p]
-    # clean-re применяются к исходному тексту: пробелы по краям строки
-    # значимы (напр. « +$» — хвостовые пробелы), как в CLI
-    for p in _replace_lines(form.get("clean_patterns")):
-        argv += ["--clean-re", p]
-    # «Замены и очистки (replace)» из формы epub убраны — замены после
-    # разбивки делает отдельная стадия batch_replace (у неё же
-    # предпросмотр с подсветкой)
-    if mode == "chunk" and form.get("chunk_size") not in (None, ""):
+    if form.get("chunk_size") not in (None, ""):
         argv += ["--chunk-size", str(form["chunk_size"])]
     # маска нужна и в chunk-режиме, и при переопределении названий
     if (mode == "chunk" or form.get("rename_chapters")) and form.get(
@@ -114,8 +114,6 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
         argv += ["--title-limit", str(form["title_limit"])]
     if form.get("num_offset") not in (None, ""):
         argv += ["--num-offset", str(form["num_offset"])]
-    for s in form.get("skip") or []:
-        argv += ["--skip", str(s)]
     if form.get("output_type") not in (None, "", "chapter"):
         argv += ["--output-type", str(form["output_type"])]
     if form.get("clean_output"):
@@ -287,30 +285,42 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
 
 
 def build_ner_check(form: dict, ctx: dict) -> list[str]:
-    """Стадия n — проверка глоссария (ner_check.py)."""
+    """Стадия n — проверка глоссария (ner_check.py).
+
+    Режим (NER_CHECK_PASSES) разводит поля по-настоящему: RAG-поля и диапазон
+    глав приезжают в форме только в rag, поля пакетной проверки — только в
+    whole/types (core.settings.applicable_form).
+    """
     argv = ["cli/ner_check.py"]
+    # «Проверка» проекта применяет принятые правки (--apply): ner.json и
+    # ner_review.json — каноны (дефолты CLI), LLM в этом режиме не зовётся —
+    # команда собирается целиком из флагов применения, без остальных полей
+    if ctx.get("review_apply"):
+        for flag in ("apply", "auto_apply", "dry_run"):
+            if form.get(flag):
+                argv.append(f"--{flag.replace('_', '-')}")
+        if form.get("no_bak"):
+            argv.append("--no-bak")
+        return argv
     # вход и review — канонические ner.json / ner_review.json
     # (выбор файлов из web убран)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     if form.get("passes"):
         argv += ["--passes", str(form["passes"])]
-    # RAG-поля — ТОЛЬКО в режиме rag: форма помнит значения из прошлого
-    # RAG-запуска (touched/.env-префилл), в других режимах они мусор
-    if str(form.get("passes") or "") == "rag":
-        if form.get("rag_terms"):
-            argv += ["--rag_terms", str(form["rag_terms"])]
-        if form.get("rag_source_type"):
-            argv += ["--rag_source_type", str(form["rag_source_type"])]
-        argv += _range_argv("start", form)
-        if form.get("rag_budget") not in (None, ""):
-            argv += ["--rag_budget", str(form["rag_budget"])]
-        if form.get("save_interval") not in (None, ""):
-            argv += ["--save-interval", str(form["save_interval"])]
-    # иначе RAG-поля (память формы с прошлого RAG-запуска) молча
-    # отбрасываются — в argv им делать нечего
-    # RAG-промпт — это тот же «Промпт-файл» (внутри тег <prompt_rag>);
-    # отдельного --rag_prompt_file нет: CLI берёт --prompt_file
+    # RAG-режим: список терминов, тип исходного файла и диапазон глав книги,
+    # бюджет на один термин. RAG-промпт — тот же «Промпт-файл» (тег
+    # <prompt_rag>); отдельного --rag_prompt_file нет: CLI берёт --prompt_file
+    if form.get("rag_terms"):
+        argv += ["--rag_terms", str(form["rag_terms"])]
+    if form.get("rag_source_type"):
+        argv += ["--rag_source_type", str(form["rag_source_type"])]
+    argv += _range_argv("start", form)
+    if form.get("rag_budget") not in (None, ""):
+        argv += ["--rag_budget", str(form["rag_budget"])]
+    if form.get("save_interval") not in (None, ""):
+        argv += ["--save-interval", str(form["save_interval"])]
+    # пакетная проверка: типы, бюджет пакета, порог count
     if form.get("types"):
         argv += ["--types", str(form["types"])]
     if form.get("batch_size") not in (None, ""):
@@ -325,16 +335,6 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv.append("--skip_locked")
     if form.get("fields"):
         argv += ["--fields", str(form["fields"])]
-    # --apply/--auto-apply/--no-bak убраны из Запусков; флаги применения
-    # собираются только для пути «Проверки» проекта (ctx["review_apply"]
-    # → /api/ner/review/apply), иначе запуск без --apply превращается в
-    # полный LLM-прогон вместо применения правок
-    if ctx.get("review_apply"):
-        for flag in ("apply", "auto_apply", "dry_run"):
-            if form.get(flag):
-                argv.append(f"--{flag.replace('_', '-')}")
-        if form.get("no_bak"):
-            argv.append("--no-bak")
     if form.get("temperature") not in (None, ""):
         argv += ["--temperature", str(form["temperature"])]
     if form.get("max_tokens") not in (None, ""):
@@ -351,6 +351,17 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
     """Стадия translate_check_llm — проверка перевода через LLM
     (translate_check_llm.py)."""
     argv = ["cli/translate_check_llm.py"]
+    # «Проверка» проекта применяет принятые правки (--apply): LLM не зовётся,
+    # из полей формы нужны только тип файлов главы и флаги применения
+    if ctx.get("review_apply"):
+        if form.get("type"):
+            argv += ["--type", str(form["type"])]
+        for flag in ("apply", "auto_apply", "dry_run"):
+            if form.get(flag):
+                argv.append(f"--{flag.replace('_', '-')}")
+        if form.get("no_bak"):
+            argv.append("--no-bak")
+        return argv
     argv += _range_argv("translate_check_llm", form)
     # папка глав всегда ./chapters (дефолт скрипта, cwd = проект)
     if form.get("type"):
@@ -361,15 +372,6 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
         argv += ["--context_budget", str(form["context_budget"])]
     # review — канонический translate_check_llm_review.json
     # (выбор файла из web убран; его же читает «Правки»)
-    # флаги применения/предпросмотра/бэкапов собираются только для пути
-    # «Проверка» проекта (ctx["review_apply"]); из «Запусков» (форма без
-    # этих чекбоксов) они всегда выключены
-    if ctx.get("review_apply"):
-        for flag in ("apply", "auto_apply", "dry_run"):
-            if form.get(flag):
-                argv.append(f"--{flag.replace('_', '-')}")
-        if form.get("no_bak"):
-            argv.append("--no-bak")
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     if form.get("temperature") not in (None, ""):
@@ -610,7 +612,11 @@ def build_command(key: str, form: dict, ctx: dict) -> list[str]:
     spec = STAGE_SPECS.get(key)
     if spec is None:
         raise ValueError(f"Нет спеки стадии: {key}")
-    return spec["build"](core_settings.with_llm(key, form), ctx)
+    # поля режима из реестра (when/when_any/when_set): браузер помнит значения
+    # всех полей, но в argv стадии едут только касающиеся текущего режима
+    form = core_settings.applicable_form(
+        key, core_settings.with_llm(key, form))
+    return spec["build"](form, ctx)
 
 
 def script_path(key: str, repo_root: Path) -> Path | None:

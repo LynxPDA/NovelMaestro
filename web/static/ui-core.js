@@ -189,6 +189,51 @@
     langPrompt: "prompt", langLog: "text",
   };
 
+  /* ── видимость полей формы по режиму стадии ───────────────────────────
+   * Метаданные приходят из реестра (core/settings.py): when — И по всем
+   * условиям, when_any — достаточно одного, when_set — перечисленные поля
+   * режима непустые. Условие — пара [имя поля режима, значения]; булевы поля
+   * сравниваются как "1"/"0". Пустое (или отсутствующее) значение поля режима
+   * означает «режим не выбран»: его условия не режут поля. */
+  function modeValue(values, name) {
+    const v = values ? values[name] : undefined;
+    if (typeof v === "boolean") return v ? "1" : "0";
+    if (v === undefined || v === null) return null;
+    const s = String(v).trim();
+    return s === "" ? null : s;
+  }
+
+  function modeHit(conds, values) {
+    for (const cond of conds || []) {
+      const cur = modeValue(values, cond[0]);
+      if (cur === null) continue;
+      if ((cond[1] || []).some((v) => String(v) === cur)) return true;
+    }
+    return false;
+  }
+
+  /* Касается ли настройка текущего режима формы (единственный источник правды
+   * вместе с core.settings.applies: те же данные, та же логика). */
+  function fieldApplies(field, values) {
+    const known = (conds) => (conds || []).some(
+      (c) => modeValue(values, c[0]) !== null,
+    );
+    for (const conds of [field.when || [], field.when_any || []]) {
+      if (!conds.length || !known(conds)) continue;
+      if (field.when === conds) {
+        // И: каждая пара условий обязана выполниться
+        for (const one of conds) {
+          if (!modeHit([one], values)) return false;
+        }
+      } else if (!modeHit(conds, values)) {
+        return false;
+      }
+    }
+    return (field.when_set || []).every(
+      (name) => modeValue(values, name) !== null,
+    );
+  }
+
   /* Язык подсветки файла с выбором пользователя: промпты и логи — как указано
    * на «Внешнем виде», остальные файлы — по расширению. */
   function editorLang(path, isPrompt) {
@@ -987,6 +1032,8 @@
     previewMode: previewMode,
     fileLang: fileLang,
     editorLang: editorLang,
+    modeValue: modeValue,
+    fieldApplies: fieldApplies,
     EDITOR_LANGS: EDITOR_LANGS,
     EDITOR_SETTINGS: EDITOR_SETTINGS,
     escapeHtml: escapeHtml,

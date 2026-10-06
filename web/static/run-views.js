@@ -1913,6 +1913,58 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     recalc();
   }
 
+  /* ── видимость полей по режиму стадии ───────────────────────────────
+   * Единый проход по метаданным реестра (when/when_any/when_set у настроек
+   * core/settings.py): значения полей режима читаются из st.values — тот же
+   * источник, что у argv запусков, поэтому форма и команда не разъезжаются.
+   * Стадия только вешает свои виджеты (чипсы, предпросмотр) на поле-владелец
+   * через mirror(); ручных блоков «кто где виден» на стадию больше нет. */
+  function attachModeVisibility(key, spec, fieldWraps, rangeRow) {
+    const byName = {};
+    for (const f of spec.fields || []) byName[f.name] = f;
+    const meta = (spec.fields || []).filter((f) => (f.when && f.when.length)
+      || (f.when_any && f.when_any.length)
+      || (f.when_set && f.when_set.length));
+    const watched = new Set();
+    for (const f of meta) {
+      for (const c of [...(f.when || []), ...(f.when_any || [])]) {
+        watched.add(c[0]);
+      }
+    }
+    const extras = []; // [узел, имя поля]: узел повторяет видимость поля
+    const apply = () => {
+      const vals = st.values[key] || {};
+      for (const f of meta) {
+        const w = fieldWraps[f.name];
+        if (w) w.classList.toggle("hidden", !UICore.fieldApplies(f, vals));
+      }
+      // строка диапазона своя: она заменяет собой поля start/end
+      if (rangeRow) {
+        const show = ["start", "end"].some(
+          (n) => !byName[n] || UICore.fieldApplies(byName[n], vals));
+        rangeRow.classList.toggle("hidden", !show);
+      }
+      for (const [el, name] of extras) {
+        const f = byName[name];
+        el.classList.toggle("hidden", !!f && !UICore.fieldApplies(f, vals));
+      }
+    };
+    for (const name of watched) {
+      // собственный обработчик поля отрабатывает раньше: он пишет значение
+      // в st.values, отсюда видимость считается уже по новому состоянию
+      const inp = fieldWraps[name] && (fieldWraps[name]._input || fieldWraps[name]);
+      const sel = inp && inp._sel ? inp._sel : inp;
+      if (sel) sel.addEventListener("change", apply);
+    }
+    return {
+      apply,
+      mirror(el, name) {
+        if (el && byName[name]) extras.push([el, name]);
+        return el;
+      },
+    };
+  }
+
   // форма стадии: все поля спеки. НЕ async — formPanel вставляет результат
   // как DOM-узел; async вернул бы Promise (баг «[object Promise]»).
   function stageForm(key, spec) {
@@ -1933,36 +1985,22 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (rangeRow) fieldNodes.unshift(rangeRow);
     // translate_quality: ручной end с проверкой бюджета
     attachQualityRange(key, fieldWraps);
+    // видимость полей по режиму — один проход по метаданным реестра
+    const modeVis = attachModeVisibility(key, spec, fieldWraps, rangeRow);
 
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны;
-    // чипсы полей {ner_block} — после «Мин. count для глоссария»;
-    // расширенный контекст (действие 9) — поля словаря/правил/примеров
+    // чипсы полей {ner_block} — после «Мин. count для глоссария»
     if (key === "pipeline") {
       const nb = nerBlockChips(key);
       const nmWrap = fieldWraps["ner_min_count"];
       const idx = nmWrap ? fieldNodes.indexOf(nmWrap) : -1;
       if (idx >= 0) fieldNodes.splice(idx + 1, 0, nb.bar, nb.box);
       nb.loadFields();
-      // словарь/правила/примеры + бюджеты — только для действия 9;
-      // «Мин. count для имён» не участвует (имены — только в polish)
-      const actionSel = fieldWraps["action"] && fieldWraps["action"]._input;
-      const extNames = ["dict_file", "rules_file", "examples_file",
-                        "fewshot_k", "fewshot_threshold",
-                        "request_budget"];
-      function applyPipelineAction() {
-        const ext = actionSel && String(actionSel.value) === "9";
-        for (const name of extNames) {
-          const w = fieldWraps[name];
-          if (w) w.classList.toggle("hidden", !ext);
-        }
-        const nmw = fieldWraps["names_min_count"];
-        if (nmw) nmw.classList.toggle("hidden", ext);
-      }
-      if (actionSel) {
-        actionSel.addEventListener("change", applyPipelineAction);
-      }
-      applyPipelineAction();
+      // чипсы следуют за своим скрытым полем: в чистой полировке (действия
+      // 3 и 4) блок глоссария не используется
+      modeVis.mirror(nb.bar, "ner_fields");
+      modeVis.mirror(nb.box, "ner_fields");
     }
 
     // wiki — источник текста: «Готовый txt» ↔ «Собрать из глав»;
@@ -1989,42 +2027,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         if (inp) inp.addEventListener("input", recalcTerms);
       }
       recalcTerms();
-      const srcSel = fieldWraps["source"] && fieldWraps["source"]._input;
-      const fmtSel = fieldWraps["format"] && fieldWraps["format"]._input;
-      const asChSel =
-        fieldWraps["as_chapter"] && fieldWraps["as_chapter"]._input;
-      const tocFields = ["toc", "toc_links"];
-      const fileOnlyFields = ["output", "format", "toc", "toc_links"];
-      function applyWikiMode() {
-        const src = (srcSel && srcSel.value) || "txt";
-        const fmt = (fmtSel && fmtSel.value) || "md";
-        const asCh = !!(asChSel && asChSel.checked);
-        const fw = fieldWraps["file"];
-        if (fw) fw.classList.toggle("hidden", src === "chapters");
-        const tw = fieldWraps["type"];
-        if (tw) tw.classList.toggle("hidden", src !== "chapters");
-        // диапазон — только при «Собрать из глав»
-        if (rangeRow) {
-          rangeRow.classList.toggle("hidden", src !== "chapters");
-        }
-        const isMd = fmt === "md";
-        for (const name of tocFields) {
-          const w = fieldWraps[name];
-          if (w) w.classList.toggle("hidden", !isMd || asCh);
-        }
-        // вики-глава: формат/выходной файл не нужны; тип файла — только
-        // при включённой вики-главе
-        for (const name of fileOnlyFields) {
-          const w = fieldWraps[name];
-          if (w) w.classList.toggle("hidden", asCh);
-        }
-        const sw = fieldWraps["save_type"];
-        if (sw) sw.classList.toggle("hidden", !asCh);
-      }
-      if (srcSel) srcSel.addEventListener("change", applyWikiMode);
-      if (fmtSel) fmtSel.addEventListener("change", applyWikiMode);
-      if (asChSel) asChSel.addEventListener("change", applyWikiMode);
-      applyWikiMode();
+      // чипсы типов — за своим скрытым полем; поля режима (источник, формат,
+      // вики-глава, диапазон) прячет общий проход по when из реестра
+      modeVis.mirror(w.chipsBar, "types");
+      modeVis.mirror(w.chipsBox, "types");
     }
 
     // ner_check — чипсы типов из глоссария после select «Проходы»;
@@ -2041,8 +2047,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
       w.loadTypes();
-      const ragNames = ["rag_terms", "rag_source_type",
-                        "rag_budget", "save_interval"];
       // счётчики типов/терминов — динамически по «Порог count»
       // (унификация с wiki)
       const recalcCounts = () => w.updateCounts({
@@ -2065,31 +2069,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           addDisputedTermsModal(key, ragWrap));
         ragWrap.append(h("div", { class: "ner-add-disputed" }, addBtn));
       }
-      const sel = passesWrap && passesWrap._input;
-      // в RAG прячем только чипсы ТИПОВ: поля записи (fieldsBar) и
-      // степпер остаются — выбранные поля уходят в RAG-промпт
-      const ragHidden = [w.chipsBar, w.chipsBox];
-      // RAG не использует: бюджет пакета, порог count
-      // (RAG — отдельный запрос на термин; «Потоков» видно и в RAG:
-      // это параллельные запросы по терминам)
-      const ragNoUse = ["batch_size", "count_threshold"];
-      const applyRagExpert = () => {
-        const isRag = sel && sel.value === "rag";
-        for (const name of ragNames) {
-          const fw = fieldWraps[name];
-          if (fw) fw.classList.toggle("hidden", !isRag);
-        }
-        for (const name of ragNoUse) {
-          const fw = fieldWraps[name];
-          if (fw) fw.classList.toggle("hidden", isRag);
-        }
-        for (const el of ragHidden) {
-          el.classList.toggle("hidden", isRag);
-        }
-        if (rangeRow) rangeRow.classList.toggle("hidden", !isRag);
-      };
-      if (sel) sel.addEventListener("change", applyRagExpert);
-      applyRagExpert();
+      // в RAG прячутся только чипсы ТИПОВ: поля записи (fieldsBar) и
+      // степпер остаются — выбранные поля уходят в RAG-промпт. Чипсы
+      // следуют за скрытым полем types (в реестре оно whole/types)
+      modeVis.mirror(w.chipsBar, "types");
+      modeVis.mirror(w.chipsBox, "types");
     }
 
     // epub: справка по regexp (collapsible) + перестройка селекта
@@ -2116,26 +2100,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
               " — «Глава 3» или «Часть 5»"),
             h("li", {}, h("code", {}, "^\\d+\\.\\s*$"), " — «12.»"),
           ),
-          h("p", {}, "Замены и очистки (все режимы, применяются ДО разбивки) — ",
-            "по одной паре на строку: ",
-            h("code", {}, "паттерн -> замена"),
-            "; пустая правая часть — УДАЛЕНИЕ (заменяет «Очистки текста»):"),
-          h("ul", {},
-            h("li", {}, h("code", {}, "^本章完$ ->"), " — удалить строку «本章完»"),
-            h("li", {}, h("code", {}, "[0-9]+ ->"), " — удалить все цифры"),
-            h("li", {}, h("code", {}, "\\(未完待续\\) ->"),
-              " — убрать «(未完待续)»"),
-            h("li", {}, h("code", {}, "第(\\d+)章 -> Глава \\1"),
-              " — «第1章» → «Глава 1» (\\1 — группа)"),
-            h("li", {}, h("code", {}, "\\s+ -> "), " — сжать пробелы"),
-            h("li", {}, h("code", {}, "^  ->"),
-              " — убрать 2 пробела в начале строк"),
-            h("li", {}, h("code", {}, "^(第\\d+章.*)\\n(?=\\1$) ->"),
-              " — убрать строку-дубликат заголовка главы "
-              + "(в СЕРЕДИНЕ текста; в начале тела дубль "
-              + "убирается автоматически)"),
-            h("li", {}, h("code", {}, "(?:他|她) -> 他"), " — унифицировать"),
-          ),
+          h("p", {}, "Очистки и замены до разбивки здесь не нужны: их делает ",
+            "отдельная стадия «Массовые замены» после перевода; в CLI ",
+            h("code", {}, "--clean-re"), " и ", h("code", {}, "--replace-re"),
+            " остаются."),
           h("p", {}, "Шпаргалка по regexp:"),
           h("ul", {},
             h("li", {}, h("code", {}, "^"), " — начало строки, ",
@@ -2156,33 +2124,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       );
       fieldNodes.push(help);
       if (modeSel && inputWrap) {
-        // поля, видимые только в своём режиме: split_patterns — regexp,
-        // chunk_size — чанки; маска — чанки ИЛИ переопределение названий;
-        // переопределение — во всех режимах кроме чанков
-        const wrapSplit = fieldWraps["split_patterns"];
-        const wrapChunkSize = fieldWraps["chunk_size"];
-        const wrapChunkMask = fieldWraps["chunk_mask"];
-        const wrapRename = fieldWraps["rename_chapters"];
-        const renameCh = wrapRename && wrapRename._input;
-        const applyModeVisibility = () => {
-          const m = modeSel.value || "toc";
-          if (wrapSplit) wrapSplit.classList.toggle("hidden", m !== "regex");
-          if (wrapChunkSize) {
-            wrapChunkSize.classList.toggle("hidden", m !== "chunk");
-          }
-          if (wrapRename) {
-            wrapRename.classList.toggle("hidden", m === "chunk");
-          }
-          if (wrapChunkMask) {
-            wrapChunkMask.classList.toggle(
-              "hidden",
-              !(m === "chunk" || (renameCh && renameCh.checked)),
-            );
-          }
-        };
-        if (renameCh) {
-          renameCh.addEventListener("change", applyModeVisibility);
-        }
+        // шпаргалка нужна там, где есть паттерны разбиения; сами поля режима
+        // (паттерны, чанки, маска, переопределение) прячет общий проход
+        modeVis.mirror(help, "split_patterns");
         const rebuildInput = () => {
           const m = modeSel.value || "toc";
           const exts = m === "toc" ? [".epub"] : [".epub", ".txt"];
@@ -2207,7 +2151,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           }
         };
         const onMode = () => {
-          applyModeVisibility();
+          modeVis.apply();
           rebuildInput();
           st.previewDirty = true;
         };
@@ -2353,9 +2297,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
 
     // compile — предпросмотр обложки/metadata.yaml/страницы поддержки
-    // и скрытие неактуальных полей в txt-режимах
+    // (виден только в epub/fb2 — следует за полем «Обложка»)
     if (key === "compile") {
-      const modeSel = fieldWraps["mode"] && fieldWraps["mode"]._input;
       const coverSel =
         fieldWraps["cover"] && fieldWraps["cover"]._input
           && fieldWraps["cover"]._input._sel;
@@ -2428,18 +2371,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         ),
       );
       fieldNodes.push(preview);
-      function applyCompileMode() {
-        const m = (modeSel && modeSel.value) || "txt";
-        const book = m === "epub" || m === "fb2";
-        for (const name of ["cover", "epub_meta", "donate_file"]) {
-          const w = fieldWraps[name];
-          if (w) w.classList.toggle("hidden", !book);
-        }
-        // предпросмотр обложки и файлов — только для EPUB/FB2
-        preview.classList.toggle("hidden", !book);
-      }
-      if (modeSel) modeSel.addEventListener("change", applyCompileMode);
-      applyCompileMode();
+      // предпросмотр обложки и файлов — только для EPUB/FB2: следует за
+      // своим полем, сами поля прячет общий проход по when из реестра
+      modeVis.mirror(preview, "cover");
       for (const sel of [coverSel, metaSel, donateSel]) {
         if (sel) sel.addEventListener("change", updateCompilePreview);
       }
@@ -2495,6 +2429,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // обёртки полей текущей формы — для панели предпросмотра замен
     // (batch_replace: реакции на смену типа/диапазона/правил)
     st.curWraps = fieldWraps;
+    // видимость полей режима — после того как стадия навесила свои виджеты
+    modeVis.apply();
 
     return h("div", { class: "run-form" }, formNodes, err,
              ...(previewBtn ? [previewBtn] : []), runBtn);

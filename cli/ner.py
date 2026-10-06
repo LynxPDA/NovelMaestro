@@ -1418,18 +1418,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--non_voted_mode", default="last",
         choices=("last", "first", "longest", "shortest"),
         help=(
-            "Какое значение берёт поле notes из значений, пришедших из разных "
-            "чанков: last — последнее (по умолчанию), first — первое "
-            "присвоенное, longest — самое длинное, shortest — самое короткое. "
-            "Остальные не голосующие поля (context, translated_context) всегда "
-            "хранят первое значение."
+            "Какое значение берут не голосующие поля (notes, context, "
+            "translated_context) из значений, пришедших из разных чанков: "
+            "last — последнее (по умолчанию), first — первое присвоенное, "
+            "longest — самое длинное, shortest — самое короткое."
         ),
     )
     parser.add_argument(
         "--non_voted_max_len", type=int, default=0,
         help=(
-            "Ограничение длины значения notes, СИМВОЛЫ (только для "
-            "--non_voted_mode longest; 0 — без ограничения, по умолчанию)."
+            "Ограничение длины значения не голосующих полей, СИМВОЛЫ (только "
+            "для --non_voted_mode longest; 0 — без ограничения, по умолчанию)."
         ),
     )
     parser.add_argument(

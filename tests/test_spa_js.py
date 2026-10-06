@@ -218,27 +218,33 @@ def test_templates_general_readonly():
 
 
 def test_ner_check_rag_ui_present():
-    """Запуски ner_check · RAG: условная видимость RAG-полей,
-    кнопка «Добавить спорные»; отдельный RAG-промпт-файл убран —
-    RAG-промпт живёт в общем «Промпт-файле» (тег <prompt_rag>)."""
+    """Запуски ner_check · RAG: видимость полей режима — общий проход по
+    метаданным реестра (attachModeVisibility + UICore.fieldApplies), а не
+    ручной блок на стадию; кнопка «Добавить спорные» на месте;
+    отдельный RAG-промпт-файл убран — RAG-промпт живёт в общем
+    «Промпт-файле» (тег <prompt_rag>)."""
     rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
-    # RAG-поля строятся и прячутся по режиму ner_check
-    assert "rag_source_type" in rv
-    assert "rag_budget" in rv
+    # самих RAG-полей в SPA больше нет: они описаны в реестре, а видность
+    # считает общий проход по when
+    assert "attachModeVisibility" in rv and "UICore.fieldApplies" in rv
     assert "rag_prompt_file" not in rv  # дубль убран
     assert "addDisputedTermsModal" in rv
     assert "Добавить спорные" in rv
-    assert "classList.toggle(\"hidden\", !isRag)" in rv
     # RAG-промпт — тег <prompt_rag> в общем промпт-файле стадии; метаданные
     # поля (промпт-файл) — в реестре настроек, не в stages.py
     st = (REPO / "core" / "settings.py").read_text(encoding="utf-8")
     assert "ner_check_prompt.txt" in st
+    # RAG-поля объявлены в реестре и помечены режимом rag: их прячет не
+    # ручной блок в SPA, а when у самой настройки
+    for nm in ("RAG_TERMS", "RAG_SOURCE_TYPE", "RAG_BUDGET", "SAVE_INTERVAL"):
+        assert nm in st, nm
+    assert st.count('when=(("passes", ("rag",)),)') >= 5
     cli = (REPO / "cli" / "ner_check.py").read_text(encoding="utf-8")
     assert "load_rag_prompt(args.rag_prompt_file or args.prompt_file" in cli
     # автоподхват ner_check_prompt.txt остался в общем «Промпт-файле»
     assert "ner_check_prompt.txt" in st and "autofile" in st
-    # чипсы типов/полей скрываются в RAG-режиме (не влияют)
-    assert "ragHidden" in rv
+    # чипсы типов следуют за скрытым полем types (в RAG они не влияют)
+    assert 'mirror(w.chipsBar, "types")' in rv
 
 
 def test_prompt_edit_button():
@@ -429,3 +435,64 @@ def test_run_pill_switches_tab_without_hash():
     assert "activeProject = { key: `${section}/${name}`, setView };" in pv
     # чужой проект или другой экран — обычный переход ссылкой
     assert 'location.hash = `#/project/${key}/${view}`' in pv
+
+
+def test_field_applies_js_matches_python(tmp_path):
+    """Поля режима считает одно правило: JS `UICore.fieldApplies` обязан давать
+    ровно то же, что `core.settings.applies` — иначе форма врёт о команде."""
+    import json
+    import sys
+    sys.path.insert(0, str(REPO))
+    from core import settings as core_settings
+
+    cases = []   # (настройка, её поле формы, значения полей режима)
+    for stage in core_settings.STAGES:
+        settings = core_settings.stage_fields(stage)
+        by_name = {s.name: s for s in settings}
+        for s in settings:
+            if not (s.when or s.when_any or s.when_set):
+                continue
+            conds = list(s.when) + list(s.when_any)
+            vals = {}
+            for n in [c[0] for c in conds] + list(s.when_set):
+                g = by_name.get(n)
+                if g is None:
+                    continue
+                if g.type == "bool":
+                    vals[n] = (True, False)
+                elif g.options:
+                    vals[n] = tuple(g.options) + ("",)
+                else:
+                    vals[n] = ("значение", "")
+            base = {k: vs[0] for k, vs in vals.items()}
+            for n, vs in vals.items():     # каждое поле режима по очереди
+                for v in vs:
+                    cases.append((s, {**base, n: v}))
+            cases.append((s, base))
+            cases.append((s, {}))
+    data = tmp_path / "cases.json"
+    data.write_text(json.dumps([f.form_field() for f, _ in cases],
+                               ensure_ascii=False), encoding="utf-8")
+    forms = tmp_path / "forms.json"
+    forms.write_text(json.dumps([form for _, form in cases],
+                                ensure_ascii=False), encoding="utf-8")
+    script = tmp_path / "check.mjs"
+    script.write_text(
+        "import { createRequire } from 'node:module';\n"
+        "import { readFileSync } from 'node:fs';\n"
+        "const require = createRequire(process.cwd() + '/');\n"
+        "const UICore = require('./web/static/ui-core.js');\n"
+        "const read = (p) => JSON.parse(readFileSync(p, 'utf8'));\n"
+        "const fs = read(process.argv[2]), vs = read(process.argv[3]);\n"
+        "process.stdout.write(fs.map((f, i) => "
+        "(UICore.fieldApplies(f, vs[i]) ? '1' : '0')).join(''));\n",
+        encoding="utf-8")
+    r = _node(str(script), str(data), str(forms))
+    assert r.returncode == 0, f"node упал: {r.stderr}"
+    got = r.stdout.strip()
+    assert len(got) == len(cases), "число кейсов разошлось"
+    bad = [(s.stage, s.name, form)
+           for (s, form), res in zip(cases, got)
+           if res != ("1" if core_settings.applies(s, form) else "0")]
+    assert not bad, f"расхождения JS/Python: {bad[:5]}"
+    assert len(cases) > 100, f"мало кейсов: {len(cases)}"

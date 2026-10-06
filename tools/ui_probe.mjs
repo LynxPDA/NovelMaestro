@@ -1330,6 +1330,107 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} запуски (одна форма)  ${(chunk || {}).label || ""}=${(chunk || {}).value || "?"}`);
   }
 
+  /* Поля режима стадии: одно правило в реестре (when/when_any/when_set)
+   * решает, едет ли поле в argv и показывать ли его. Здесь — живой DOM:
+   * переключаем режим стадии и проверяем, что поля чужого режима скрыты,
+   * а своего — видны (строка «Главы» — тоже поле режима) */
+  {
+    const before = problems.length;
+    const CASES = [
+      { stage: "Перевод (LLM)", pick: ["Тип работы", "1"],
+        show: ["Размер чанка", "Мин. count для глоссария", "Главы:"],
+        hide: ["Словарь перевода", "Мин. count для имён"] },
+      // диапазон глав у конвейера не зависит от режима — он всегда виден
+      { stage: "Перевод (LLM)", pick: ["Тип работы", "3"],
+        show: ["Мин. count для имён", "Главы:"],
+        hide: ["Мин. count для глоссария", "Словарь перевода"] },
+      { stage: "Перевод (LLM)", pick: ["Тип работы", "9"],
+        show: ["Словарь перевода", "Макс. примеров на чанк",
+               "Мин. count для глоссария"],
+        hide: ["Мин. count для имён"] },
+      { stage: "Проверка глоссария", pick: ["Режимы", "whole"],
+        show: ["Бюджет пакета", "Порог count"],
+        hide: ["RAG: список терминов", "Главы:"] },
+      { stage: "Проверка глоссария", pick: ["Режимы", "rag"],
+        show: ["RAG: список терминов", "Главы:"],
+        hide: ["Бюджет пакета", "Порог count"] },
+      { stage: "Разбор исходника", pick: ["Режим разбивки", "toc"],
+        show: ["Переопределить названия"],
+        hide: ["Паттерны разбивки", "Размер чанка", "Маска названия"] },
+      { stage: "Разбор исходника", pick: ["Режим разбивки", "regex"],
+        show: ["Паттерны разбивки"],
+        hide: ["Размер чанка", "Маска названия"] },
+      { stage: "Разбор исходника", pick: ["Режим разбивки", "chunk"],
+        show: ["Размер чанка", "Маска названия", "Переопределить названия"],
+        hide: ["Паттерны разбивки"] },
+      { stage: "Компиляция", pick: ["Режим", "txt"],
+        show: [], hide: ["Обложка", "Метаданные", "страницы поддержки"] },
+      { stage: "Компиляция", pick: ["Режим", "epub"],
+        show: ["Обложка", "Метаданные", "страницы поддержки"] },
+      { stage: "Создание Wiki", pick: ["Источник текста", "txt"],
+        show: ["Входной txt новеллы"], hide: ["Тип файлов глав"] },
+      { stage: "Создание Wiki", pick: ["Источник текста", "chapters"],
+        show: ["Тип файлов глав"], hide: ["Входной txt новеллы"] },
+      { stage: "Создание Wiki", check: ["Сохранить как главу", true],
+        show: ["Тип файла вики-главы"],
+        hide: ["Формат", "Выходной файл", "Оглавление"] },
+    ];
+    const readFields = () =>
+      page.evaluate(() => {
+        const rows = [...document.querySelectorAll(".run-form .field")]
+          .map((el) => ({
+            label: ((el.querySelector(".field-label") || {}).textContent || "")
+              .replace(/\s+/g, " ").trim(),
+            hidden: el.classList.contains("hidden"),
+          }));
+        // строка «Главы: [start] – [end]» — не .field, но тоже поле режима
+        const range = document.querySelector(".run-form .run-range-row");
+        if (range) {
+          rows.push({ label: "Главы:",
+            hidden: range.classList.contains("hidden") });
+        }
+        return rows;
+      });
+    const seen = [];
+    for (const c of CASES) {
+      await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+        { waitUntil: "load" });
+      await page.reload({ waitUntil: "load" });
+      await page.waitForSelector(".stage-card", { timeout: 15000 });
+      await page.locator(`.stage-card:has-text("${c.stage}")`).first().click();
+      await page.waitForTimeout(900);
+      const ctl = page.locator(".run-form .field")
+        .filter({ hasText: (c.pick || c.check)[0] }).first();
+      if (c.pick) {
+        await ctl.locator("select").first().selectOption({ value: c.pick[1] });
+      } else if (c.check[1]) {
+        await ctl.locator('input[type="checkbox"]').first().check();
+      } else {
+        await ctl.locator('input[type="checkbox"]').first().uncheck();
+      }
+      await page.waitForTimeout(500);
+      const rows = await readFields();
+      const on = (needle) => rows.some((r) => !r.hidden
+        && r.label.includes(needle));
+      const any = (needle) => rows.some((r) => r.label.includes(needle));
+      const want = (c.show || []).concat(c.hide || []);
+      for (const n of want) {
+        if (!any(n)) problems.push(`${c.stage}: поля «${n}» в форме нет`);
+      }
+      for (const n of c.show || []) {
+        if (!on(n)) problems.push(`${c.stage}: «${n}» скрыт в этом режиме`);
+      }
+      for (const n of c.hide || []) {
+        if (on(n)) problems.push(`${c.stage}: «${n}» виден в этом режиме`);
+      }
+      seen.push(`${c.stage.split(" (")[0]}:${(c.pick || c.check)[1]}`);
+    }
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "scenario-mode-fields.png") });
+    }
+    log(`${problems.length === before ? "✅" : "❌"} поля режима  ${seen.length} режимов · ${problems.length === before ? "все совпали" : "расхождения"}`);
+  }
+
   /* «Оценка перевода»: единая форма стадии — режим оценки и чанковые поля;
    * в режиме чанков строка «Главы» перестаёт обрезаться по бюджету (диапазон
    * там — вся книга), а предпросмотр показывает план и ОБА запроса прогона:

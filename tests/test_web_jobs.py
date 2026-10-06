@@ -759,10 +759,9 @@ def test_build_epub_to_chapters_defaults():
 def test_build_epub_to_chapters_full():
     form = {"input": "source/book.epub", "mode": "regex",
             "split_patterns": ["Глава \\d+", "^第[0-9]+章"],
-            "clean_patterns": "^本章完",
             "chunk_size": "5000", "chunk_mask": "Часть {num}",
             "title_limit": "40", "num_offset": "875",
-            "skip": [2, 5], "output_type": "polished",
+            "output_type": "polished",
             "clean_output": True}
     argv = build_command("epub", form, {})
     assert "--input" in argv and "source/book.epub" in argv
@@ -770,14 +769,16 @@ def test_build_epub_to_chapters_full():
     # паттерны — по одному аргументу на строку
     assert argv.count("--split-re") == 2
     assert "Глава \\d+" in argv and "^第[0-9]+章" in argv
-    assert "--clean-re" in argv and "^本章完" in argv
-    # «Замены и очистки» из epub убраны — это стадия batch_replace
+    # «Замены и очистки» из epub убраны — это стадия batch_replace; своих
+    # настроек в реестре нет, так что --clean-re/--replace-re/--skip в web
+    # не появляются (в CLI они остаются)
+    assert "--clean-re" not in argv
     assert "--replace-re" not in argv
+    assert "--skip" not in argv
     # чанковые поля — только в chunk-режиме
     assert "--chunk-size" not in argv and "--chunk-mask" not in argv
     assert "--title-limit" in argv and "40" in argv
     assert "--num-offset" in argv and "875" in argv
-    assert "--skip" in argv and "2" in argv and "5" in argv
     assert "--output-type" in argv and "polished" in argv
     # chapter (дефолт) — флаг не добавляется
     argv4 = build_command("epub", {"mode": "toc"}, {})
@@ -799,13 +800,25 @@ def test_build_epub_to_chapters_full():
 
 
 def test_build_epub_to_chapters_clean_patterns_ws():
-    """clean_patterns идут дословно, как в CLI: пробелы по краям строки
-    значимы — « +$» (хвостовые пробелы) не превращается в «+$»."""
+    """Очистки (--clean-re) и пропуск номеров (--skip) в web недоступны:
+    их значения из формы (память браузера) в argv не попадают даже."""
     argv = build_command("epub",
                          {"mode": "regex",
                           "split_patterns": "第\\d+章",
-                          "clean_patterns": " +$ \n^本章完$"}, {})
-    assert " +$ " in argv and "^本章完$" in argv
+                          "clean_patterns": " +$ \n^本章完$",
+                          "skip": [2, 5]}, {})
+    assert " +$ " not in argv and "^本章完$" not in argv
+    assert "--skip" not in argv and "2" not in argv
+
+
+def test_build_epub_to_chapters_split_patterns_ws():
+    """Строки паттернов режутся по переводу строк и по краям (пустые строки
+    не дают пустого флага), внутренние пробелы сохраняются."""
+    argv = build_command("epub",
+                         {"mode": "regex",
+                          "split_patterns": " 第\\d+章 \n\n ^ 第 "}, {})
+    assert argv.count("--split-re") == 2
+    assert "第\\d+章" in argv and "^ 第" in argv
 
 
 def test_build_translate_check():
@@ -1106,6 +1119,32 @@ def test_pipeline_no_separate_prompts():
                          {})
     assert "--prompt_file" in argv
     assert "--translate_prompt" not in argv
+
+
+def test_pipeline_request_budget_all_actions():
+    """Бюджет запроса — общий потолок, а не часть расширенного контекста:
+    доезжает и до обычного перевода, и до редакатуре с полировкой."""
+    for action in ("1", "2", "3", "9"):
+        argv = build_command("pipeline",
+                             {"action": action, "request_budget": "24000"}, {})
+        assert "--request_budget" in argv, action
+        assert argv[argv.index("--request_budget") + 1] == "24000", action
+
+
+def test_build_command_keeps_only_mode_fields():
+    """Значения полей чужого режима браузер помнит, но в argv они не едут:
+    фильтр — core.settings.applicable_form, а не память формы."""
+    argv = build_command("pipeline",
+                         {"action": "3", "dict_file": "source/d.json",
+                          "fewshot_k": "3", "names_min_count": "10",
+                          "ner_fields": "term,translation"}, {})
+    assert "--dict_file" not in argv and "--fewshot_k" not in argv
+    assert "--ner_fields" not in argv
+    assert "--names_min_count" in argv
+    argv2 = build_command("pipeline",
+                          {"action": "9", "dict_file": "source/d.json",
+                           "names_min_count": "10"}, {})
+    assert "--dict_file" in argv2 and "--names_min_count" not in argv2
 
 
 def _norm(v):

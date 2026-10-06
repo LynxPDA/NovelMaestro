@@ -908,3 +908,46 @@ test("promptParts: ключ JSON — то, что до двоеточия", () =
     [["pv-key", '"type"']],
   );
 });
+
+// ── видимость полей по режиму стадии (те же данные, что у argv запусков) ──
+test("fieldApplies: when — значение поля режима из формы", () => {
+  const f = { name: "names_min_count", when: [["action", ["3", "4"]]] };
+  assert.equal(UICore.fieldApplies(f, { action: "3" }), true);
+  assert.equal(UICore.fieldApplies(f, { action: "1" }), false);
+  // режим не выбран (пусто или нет поля) — резать поля нечем
+  assert.equal(UICore.fieldApplies(f, {}), true);
+  assert.equal(UICore.fieldApplies(f, { action: "   " }), true);
+});
+
+test("fieldApplies: булево поле режима сравнивается как 1/0", () => {
+  const f = {
+    name: "chunk_mask",
+    when_any: [["mode", ["chunk"]], ["rename_chapters", ["1"]]],
+  };
+  assert.equal(
+    UICore.fieldApplies(f, { mode: "toc", rename_chapters: true }), true);
+  assert.equal(
+    UICore.fieldApplies(f, { mode: "toc", rename_chapters: false }), false);
+  assert.equal(
+    UICore.fieldApplies(f, { mode: "chunk", rename_chapters: false }), true);
+});
+
+test("fieldApplies: несколько условий when — И", () => {
+  const toc = { name: "toc", when: [["format", ["md"]], ["as_chapter", ["0"]]] };
+  assert.equal(UICore.fieldApplies(toc, { format: "md", as_chapter: false }), true);
+  assert.equal(
+    UICore.fieldApplies(toc, { format: "rulate-md", as_chapter: false }), false);
+  assert.equal(UICore.fieldApplies(toc, { format: "md", as_chapter: true }), false);
+});
+
+test("fieldApplies: when_set — перечисленные поля непустые", () => {
+  const co = { name: "co_occurrence_top", when_set: ["co_occurrence_pairs"] };
+  assert.equal(UICore.fieldApplies(co, { co_occurrence_pairs: "Person:Person" }), true);
+  assert.equal(UICore.fieldApplies(co, { co_occurrence_pairs: "   " }), false);
+});
+
+test("fieldApplies: пустые условия — касается всегда", () => {
+  assert.equal(UICore.fieldApplies({ name: "x" }, {}), true);
+  assert.equal(UICore.fieldApplies({ name: "x", when: [] }, { action: "1" }), true);
+  assert.equal(UICore.fieldApplies({ name: "x", when_set: [] }, {}), true);
+});

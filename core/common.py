@@ -1141,10 +1141,9 @@ def ner_locked_count(items) -> int:
 # Не голосующие поля записи (notes, context, translated_context): LLM даёт их
 # значения из разных чанков, и выбрать надо одно. Голосование здесь не помогло
 # бы: значения почти всегда разные, счёт 1:1:1, победитель определялся бы
-# порядком обхода. Режим выбора — одна настройка реестра (NER_NON_VOTED_MODE),
-# и действует она только на notes (MODED_NON_VOTED_FIELDS в cli/ner.py):
-# context и translated_context пишет из чанка fill_term_context, и там всегда
-# берут первое присвоенное значение.
+# порядком обхода. Режим выбора — одна настройка реестра (NER_NON_VOTED_MODE);
+# она действует на ВСЕ три поля: и на notes, и на context с translated_context,
+# которые пишет fill_term_context из чанка.
 NER_NON_VOTED_MODES = ("last", "first", "longest", "shortest")
 NER_NON_VOTED_LABELS = {
     "last": "последнее значение",
@@ -1157,8 +1156,8 @@ NER_NON_VOTED_LABELS = {
 def ner_pick_non_voted(old, new, mode: str = "last", max_len: int = 0):
     """Значение не голосующего поля после очередной пачки: (старое, новое) → одно.
 
-    Режим (NER_NON_VOTED_MODE) задаётся для поля notes; остальные не
-    голосующие поля вызываются с «first». Режимы: «last» — последнее,
+    Режим (NER_NON_VOTED_MODE) один для всех не голосующих полей стадии.
+    Режимы: «last» — последнее,
     «first» — первое непустое, «longest» — самое длинное, «shortest» — самое
     короткое. Пустое значение не соперник: непустое всегда побеждает.
     max_len (СИМВОЛЫ, 0 — нет) обрезает победителя в режиме «longest»: без

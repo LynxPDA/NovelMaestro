@@ -1930,13 +1930,16 @@ def test_batch_replace_preview_deletion_and_errors(srv_ctx):
     assert "polished" in payload4.get("error", "")
 
 
-def test_epub_preview_skip_propagates(srv_ctx):
-    """skip из предпросмотра попадает в build_command → --skip."""
+def test_epub_preview_no_cli_only_fields(srv_ctx):
+    """Полей, которых нет в реестре (skip, clean_patterns), build_command не
+    касается: их значения из памяти формы в argv не попадают."""
     from web.stages import build_command
     argv = build_command("epub", {"input": "source/book.epub",
-                                  "mode": "toc", "skip": [1, 3]}, {})
-    assert argv.count("--skip") == 2
-    assert argv[argv.index("--skip")] == "--skip"
+                                  "mode": "toc", "skip": [1, 3],
+                                  "clean_patterns": "^本章完"}, {})
+    assert "--skip" not in argv and "--clean-re" not in argv
+    assert argv[:3] == ["cli/epub_to_chapters.py", "--input",
+                        "source/book.epub"]
 
 
 # ══════════════════════════════════════════════════════════════════════

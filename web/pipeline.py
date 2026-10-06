@@ -349,18 +349,18 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
     if prompt_file:
         common += ["--prompt_file", prompt_file]
     # пороги count: ner_block и имена (дефолты: 0 — выключено, 10);
-    # поля {ner_block} — выбор из формы, все 3 стадии;
-    # aliases снят — авто-добавление алиасов выключено; имя флага —
-    # как в translate_book.py (--no-aliases, через дефис: иначе
-    # argparse стадии 1 ронял конвейер «unrecognized arguments»)
+    # поля {ner_block} — выбор из формы; aliases в блок попадают только когда
+    # они выбраны в чипсах формы (авто-добавление --no-aliases из web не
+    # передаётся никогда); имя флага — как в translate_book.py (--no-aliases,
+    # через дефис: иначе argparse стадии 1 ронял конвейер «unrecognized
+    # arguments»)
     common += ["--ner_min_count", str(ner_min_count),
                "--names_min_count", str(names_min_count),
                "--ner_fields", str(ner_fields)]
     if no_aliases:
         common += ["--no-aliases"]
     # расширенный контекст: флаги только когда задан хоть один файл
-    # (действие 9; файлы в source/ — пути относительно проекта);
-    # общий потолок запроса — --request_budget (ТОКЕНЫ, оценка)
+    # (действие 9; файлы в source/ — пути относительно проекта)
     ext_extra = []
     if dict_file or rules_file or examples_file:
         if dict_file:
@@ -371,8 +371,10 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
             ext_extra += ["--examples_file", str(examples_file)]
         ext_extra += ["--fewshot_k", str(fewshot_k),
                       "--fewshot_threshold", str(fewshot_threshold)]
-        if request_budget:
-            ext_extra += ["--request_budget", str(request_budget)]
+    # общий потолок запроса (ТОКЕНЫ, оценка) — НЕ часть расширенного
+    # контекста: он и обычному переводу, и редакатуре с полировкой
+    if request_budget:
+        ext_extra += ["--request_budget", str(request_budget)]
     # размер чанка перевода/полировки (ТОКЕНЫ): форма > дефолт
     # (_DEFAULTS["chunk_size"] ← PIPELINE_CHUNK_SIZE из .env);
     # редактура идёт главой целиком — стадии 2 чанк не нужен
@@ -440,6 +442,34 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
         done, total = tracker.overall()
         emit_progress(done, total, f"Глава {chapter_id} · {name}")
 
+    # построчное чтение вывода стадии: метка (`head`) и приёмник (`sink`)
+    # приходят аргументами — иначе функция, определённая внутри цикла по
+    # стадиям, замыкалась бы на переменные цикла
+    def _drain(stream, sink: list[str], head: str) -> None:
+        if stream is None:
+            return
+        for line in stream:
+            if line.startswith(PROGRESS_PREFIX):
+                try:
+                    ev = json.loads(line[len(PROGRESS_PREFIX):].strip())
+                    label = head
+                    if ev.get("label"):
+                        label += f" · {ev['label']}"
+                    # полоска — ОБЩИЙ прогресс конвейера (главы ×
+                    # стадии), а не чанки одной главы; детальный
+                    # label чанка сохраняется в тексте бара
+                    done, total = tracker.overall()
+                    print(PROGRESS_PREFIX + json.dumps(
+                        {"type": "progress",
+                         "done": done,
+                         "total": total,
+                         "label": label},
+                        ensure_ascii=False), flush=True)
+                except Exception:
+                    print(line, end="", flush=True)
+                continue
+            sink.append(line)
+
     for chapter_dir in dirs:
         for stage in stages:
             name = _STAGE_NAME[stage]
@@ -493,35 +523,12 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                 return False
             out_lines: list[str] = []
             err_lines: list[str] = []
+            head = f"Глава {chapter_id} · {name}"
 
-            def _drain(stream, sink: list[str]) -> None:
-                if stream is None:
-                    return
-                for line in stream:
-                    if line.startswith(PROGRESS_PREFIX):
-                        try:
-                            ev = json.loads(
-                                line[len(PROGRESS_PREFIX):].strip())
-                            label = f"Глава {chapter_id} · {name}"
-                            if ev.get("label"):
-                                label += f" · {ev['label']}"
-                            # полоска — ОБЩИЙ прогресс конвейера (главы ×
-                            # стадии), а не чанки одной главы; детальный
-                            # label чанка сохраняется в тексте бара
-                            done, total = tracker.overall()
-                            print(PROGRESS_PREFIX + json.dumps(
-                                {"type": "progress",
-                                 "done": done,
-                                 "total": total,
-                                 "label": label},
-                                ensure_ascii=False), flush=True)
-                        except Exception:
-                            print(line, end="", flush=True)
-                        continue
-                    sink.append(line)
-
-            tout = threading.Thread(target=_drain, args=(proc.stdout, out_lines))
-            terr = threading.Thread(target=_drain, args=(proc.stderr, err_lines))
+            tout = threading.Thread(
+                target=_drain, args=(proc.stdout, out_lines, head))
+            terr = threading.Thread(
+                target=_drain, args=(proc.stderr, err_lines, head))
             tout.start()
             terr.start()
             try:
