@@ -356,6 +356,39 @@ def test_main_compile_chapters(tmp_path, monkeypatch):
     assert not (tmp_path / "compiled_1_1_chapter.txt").exists()
 
 
+def test_main_preview_request(tmp_path, monkeypatch):
+    """wiki: --preview-request пишет первый запрос статьи и не идёт в сеть.
+
+    Regression: как и в ner.py, Stage собирался без preview_path — предпросмотр
+    молча завершался кодом 0 без файла.
+    """
+    d1 = tmp_path / "chapters" / "00000_1_x"
+    d1.mkdir(parents=True)
+    (d1 / "chapter.txt").write_text(
+        "Глава 1\n\nЛинь Шуй шла по дороге.\n", encoding="utf-8")
+    (tmp_path / "ner.json").write_text(json.dumps([
+        {"term": "林水", "translation": "Линь Шуй",
+         "type": "Person (female)", "count": 3},
+    ], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    monkeypatch.setattr(WIKI, "llm_request",
+                        lambda *a, **k: calls.append(1) or "СТАТЬЯ")
+    pv = tmp_path / "preview.json"
+    monkeypatch.setattr(sys, "argv", [
+        "wiki.py", "--compile-chapters", "--type", "chapter",
+        "--ner_file", "ner.json", "--output", "wiki.md",
+        "--host", "http://h", "--model", "модель-х", "--threads", "1",
+        "--preview-request", str(pv)])
+    WIKI.main()
+    data = json.loads(pv.read_text(encoding="utf-8"))
+    assert data["stage"] == "wiki" and data["model"] == "модель-х"
+    assert "Линь Шуй" in json.dumps(data["messages"], ensure_ascii=False)
+    # сеть не тронута, статья не писалась
+    assert not calls
+    assert not (tmp_path / "wiki.md").exists()
+
+
 def test_main_compile_chapters_missing(tmp_path, monkeypatch):
     """wiki: --compile-chapters без глав — ранний выход."""
     (tmp_path / "chapters").mkdir()

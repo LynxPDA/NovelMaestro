@@ -1355,7 +1355,10 @@ def main():
         return
 
     # ── Контекст стадии: сервер/модель уже разрешены resolve_profile ──
-    stage = Stage(name="wiki", logger=logger, profile=profile)
+    # preview_path обязателен: без него --preview-request молча выходил 0
+    # (тот же класс ошибок, что и в ner.py)
+    stage = Stage(name="wiki", logger=logger, profile=profile,
+                  preview_path=args.preview_request)
 
     # ── Промпт и настройки из тегов ──
     system_prompt = SYSTEM_WIKI_ARTICLE

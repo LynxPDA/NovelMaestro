@@ -13,6 +13,7 @@
 - pid_alive — жив ли процесс на самом деле (зомби считается мёртвым)."""
 import http.client
 import json
+import logging
 import os
 import socket
 import sys
@@ -28,25 +29,17 @@ for _p in (ROOT, ROOT / "cli"):
         sys.path.insert(0, _s)
 
 
-class SilentLog:
-    """Логгер-заглушка для функций, требующих logger."""
+class SilentLog(logging.Logger):
+    """Логгер-заглушка для функций, требующих logger.
 
-    handlers = ()  # для _flush_log(...) в скриптах
+    Наследует logging.Logger: утиная типизация не проходила проверку типов
+    (Stage(logger=...) объявлен как logging.Logger). Уровень выше CRITICAL и
+    propagate=False — вывод никуда не идёт, а _flush_log(...) в скриптах
+    видит штатный пустой список handlers."""
 
-    def debug(self, *a, **k):
-        pass
-
-    def info(self, *a, **k):
-        pass
-
-    def warning(self, *a, **k):
-        pass
-
-    def error(self, *a, **k):
-        pass
-
-    def log(self, *a, **k):
-        pass
+    def __init__(self, name: str = "silent") -> None:
+        super().__init__(name=name, level=logging.CRITICAL + 1)
+        self.propagate = False
 
 
 def make_ru_chapter_file(head: str, target_bytes: int, unit: str | None = None) -> str:
@@ -123,11 +116,13 @@ def http_send(port: int, method: str, path: str,
     res = conn.getresponse()
     raw = res.read()
     conn.close()
-    res.raw_bytes = raw
+    # служебные поля ответа: pyright не знает, что тестовый транспорт вправе
+    # повесить их на HTTPResponse (duck typing осознанный)
+    res.raw_bytes = raw  # pyright: ignore
     try:
-        res.raw_text = raw.decode("utf-8")
+        res.raw_text = raw.decode("utf-8")  # pyright: ignore
     except UnicodeDecodeError:
-        res.raw_text = ""
+        res.raw_text = ""  # pyright: ignore
     return res, raw
 
 

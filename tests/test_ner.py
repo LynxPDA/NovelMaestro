@@ -442,6 +442,33 @@ def test_main_compile_chapters_range(tmp_path, monkeypatch, ner_reset):
     assert data and data[0]["term"] == "陈阳"
 
 
+def test_main_preview_request(tmp_path, monkeypatch, ner_reset):
+    """--preview-request: JSON первого запроса без сети; ner.json НЕ пишется.
+
+    Regression: Stage собирался без preview_path, скрипт выходил с кодом 0,
+    а web отвечал «файл предпросмотра не создан или битый».
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "novel.txt").write_text("陈阳 шёл по дороге.\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(NER, "llm_request",
+                        lambda *a, **k: calls.append(1) or (P1_ANSWER, None))
+    pv = tmp_path / "preview.json"
+    monkeypatch.setattr(sys, "argv", [
+        "ner.py", "novel.txt", "--host", "http://h", "--model", "модель-х",
+        "--threads", "1", "--ner_file", "ner.json",
+        "--preview-request", str(pv)])
+    NER.main()
+    data = json.loads(pv.read_text(encoding="utf-8"))
+    assert data["stage"] == "ner" and data["model"] == "модель-х"
+    assert data["meta"]["chunks"] == 1
+    assert any("陈阳" in m["content"] for m in data["messages"])
+    assert data["chars"]["total"] > 0
+    # сеть не тронута, глоссарий не создан
+    assert not calls
+    assert not (tmp_path / "ner.json").exists()
+
+
 def test_main_no_args_error(monkeypatch, ner_reset):
     monkeypatch.setattr(sys, "argv", ["ner.py"])
     with pytest.raises(SystemExit):

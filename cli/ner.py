@@ -1571,8 +1571,11 @@ def main():
         _log(logger, logging.INFO,
              "📝 context: извлечение выключено (--context_max_len 0)")
 
-    # Контекст стадии: сервер/модель уже разрешены resolve_profile
-    stage = Stage(name="ner", logger=logger, profile=profile)
+    # Контекст стадии: сервер/модель уже разрешены resolve_profile.
+    # preview_path обязателен: без него --preview-request молча выходил 0,
+    # а web отвечал «файл предпросмотра не создан или битый».
+    stage = Stage(name="ner", logger=logger, profile=profile,
+                  preview_path=args.preview_request)
 
     pass1_prompt = SYSTEM_PROMPT_PASS1
     pass2_prompt = SYSTEM_PROMPT_PASS2
