@@ -257,3 +257,32 @@ def test_dev_cache_lives_in_one_folder():
         "в корне осталась папка кэша pytest"
     assert not list(ROOT.glob(".coverage*")), \
         "в корне остались файлы данных покрытия"
+
+
+def test_dev_server_stops_by_pid_file():
+    """Dev-сервер останавливается по PID-файлу, а не по имени скрипта.
+
+    Боевой контейнер поднимает ТОТ ЖЕ web/main.py (run.py запускает его
+    подпроцессом), и процесс контейнера виден из общего PID namespace хоста:
+    `pkill -f web/main.py` сигналит и боевому серверу, а `restart:
+    unless-stopped` поднимает его обратно — в логе это выглядит как «сам
+    перезапустился».
+    """
+    src = (ROOT / "dev.sh").read_text(encoding="utf-8")
+    assert 'DEV_PID_FILE="$REPO/.tmp/dev.pid"' in src, \
+        "pid-файл dev-сервера обязан лежать в .tmp/"
+    for verb in ("cmd_start", "cmd_stop", "cmd_status"):
+        assert (verb + "() {") in src, "dev.sh: нет команды " + verb
+        assert (verb + ' "$@"') in src, \
+            "dev.sh: команда " + verb + " не подключена к case"
+    # «наш» процесс — один хелпер: жив, вне контейнера и отвечает из этого репо;
+    # его зовут и stop, и start (иначе чужой PID из файла приняли бы за свой)
+    assert "dev_pid_is_mine()" in src
+    assert src.count("dev_pid_is_mine") >= 4, \
+        "хелпер обязаны звать и start, и stop, и status"
+    assert 'cat "$DEV_PID_FILE"' in src
+    assert "dev_is_container" in src, "не сверяется, что процесс не из контейнера"
+    assert "docker|containerd|kubepods" in src
+    assert 'state" != "Z"' in src, "zombie-процесс не считается живым"
+    assert "DEV_PROJECTS" in src, \
+        "dev-сервер обязан ходить по временной папке данных"

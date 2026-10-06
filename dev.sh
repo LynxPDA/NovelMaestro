@@ -129,6 +129,110 @@ cmd_run() {
     exec python3 "$REPO/run.py" "$@"
 }
 
+# ── dev-сервер в фоне: PID-файл вместо поиска по имени процесса ────────
+# Боевой контейнер поднимает ТОТ ЖЕ web/main.py (run.py запускает его
+# подпроцессом), и процесс контейнера виден из общего PID namespace хоста:
+# `pkill -f web/main.py` сигналит и боевому серверу, а `restart:
+# unless-stopped` поднимает его обратно — в логе это выглядит как «сам
+# перезапустился». Поэтому dev-сервер останавливается ТОЛЬКО по PID из
+# файла, и только если процесс не из контейнера (у контейнера в cgroup —
+# docker/containerd/kubepods).
+DEV_PID_FILE="$REPO/.tmp/dev.pid"
+DEV_LOG="$REPO/logs/dev_server.log"
+#: порт и песочница dev-сервера: боевой сервер на них не слушает и его
+#: данные не видит (книги для экспериментов — только во временной папке)
+DEV_PORT="${DEV_PORT:-8799}"
+DEV_PROJECTS="${DEV_PROJECTS:-/tmp/nm_dbg}"
+
+
+dev_pid_alive() {
+    local pid="${1:-}"
+    [ -n "$pid" ] || return 1
+    [ -d "/proc/$pid" ] || kill -0 "$pid" 2>/dev/null || return 1
+    # zombie (PID 1 контейнера детей не собирает) — процесс мёртв
+    local state
+    state="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)"
+    [ "$state" != "Z" ]
+}
+
+
+dev_is_container() {
+    grep -qE 'docker|containerd|kubepods|libpod' \
+        "/proc/${1:-}/cgroup" 2>/dev/null
+}
+
+# «Наш» процесс — это живый процесс ЭТОГО репозитория вне контейнера: у
+# dev-сервера cwd совпадает с репо, у контейнера — /app (и в cgroup docker)
+dev_pid_is_mine() {
+    local pid="${1:-}" cwd
+    dev_pid_alive "$pid" || return 1
+    dev_is_container "$pid" && return 1
+    cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null)"
+    [ -z "$cwd" ] || [ "$cwd" = "$REPO" ]
+}
+
+
+cmd_start() {
+    activate
+    mkdir -p "$REPO/.tmp" "$REPO/logs" "$DEV_PROJECTS" || exit 3
+    if [ -f "$DEV_PID_FILE" ]; then
+        local old
+        old="$(cat "$DEV_PID_FILE" 2>/dev/null)"
+        if dev_pid_is_mine "$old"; then
+            log "dev-сервер уже работает: PID $old (http://127.0.0.1:$DEV_PORT)"
+            return 0
+        fi
+        if dev_pid_alive "$old"; then
+            # чужой процесс в нашем pid-файле (например боёвой контейнер): его
+            # не останавливаем и не считаем своим, файл заменяем
+            log "в $DEV_PID_FILE записан чужой PID $old — не dev-сервер, заменяю"
+        fi
+        rm -f "$DEV_PID_FILE"
+    fi
+    # сервер запускается напрямую: PID-файл должен хранить именно его, а не
+    # родителя (run.py ждёт подпроцесс и умрёт вместе с ним)
+    WEB_ENV_FILE="${WEB_ENV_FILE:-$DEV_PROJECTS/.env}" \
+        setsid nohup python3 "$REPO/web/main.py" \
+        --projects-dir "$DEV_PROJECTS" --host 127.0.0.1 --port "$DEV_PORT" \
+        "$@" >"$DEV_LOG" 2>&1 < /dev/null &
+    echo $! > "$DEV_PID_FILE"
+    log "dev-сервер: PID $(cat "$DEV_PID_FILE"), http://127.0.0.1:$DEV_PORT"
+    log "данные: $DEV_PROJECTS · лог: $DEV_LOG"
+    log "остановка: ./dev.sh stop"
+}
+
+
+cmd_stop() {
+    if [ ! -f "$DEV_PID_FILE" ]; then
+        log "pid-файла нет: $DEV_PID_FILE"
+        log "dev-сервер запускали не отсюда — процесс ищем по PID вручную:"
+        log "  pgrep -af 'web/mai[n].py'   # и проверять /proc/<pid>/cgroup"
+        return 1
+    fi
+    local pid
+    pid="$(cat "$DEV_PID_FILE" 2>/dev/null)"
+    if ! dev_pid_alive "$pid"; then
+        rm -f "$DEV_PID_FILE"
+        log "dev-сервер уже остановлен (PID $pid)"
+        return 0
+    fi
+    if ! dev_pid_is_mine "$pid"; then
+        log "PID $pid из файла — не dev-сервер этого репозитория — не трогаю"
+        return 1
+    fi
+    kill "$pid" && rm -f "$DEV_PID_FILE"
+    log "dev-сервер остановлен: PID $pid"
+}
+
+
+cmd_status() {
+    if [ -f "$DEV_PID_FILE" ] && dev_pid_is_mine "$(cat "$DEV_PID_FILE" 2>/dev/null)"; then
+        log "dev-сервер работает: PID $(cat "$DEV_PID_FILE") · http://127.0.0.1:$DEV_PORT"
+    else
+        log "dev-сервер не запущен"
+    fi
+}
+
 cmd_deps() {
     activate
     exec python3 -m core.deps
@@ -186,6 +290,12 @@ dev.sh — разработка NovelMaestro в venv (Linux/macOS/WSL)
                         стадий (подпроцессы); аргументы — как у test
                         (данные замера — в .tmp/coverage, кэш pytest — в .tmp/pytest)
   ./dev.sh run [args]   web-сервер (args пробрасываются в run.py)
+  ./dev.sh start [args] dev-сервер в фоне: PID в .tmp/dev.pid, лог в logs/dev_server.log,
+                        данные — временная папка (/tmp/nm_dbg, DEV_PROJECTS), порт 8799 (DEV_PORT);
+                        останавливать его ТОЛЬКО ./dev.sh stop — pkill по имени скрипта
+                        сигналит и боевому контейнеру (тот же web/main.py)
+  ./dev.sh stop         остановить dev-сервер из .tmp/dev.pid (чужой PID и контейнер не трогает)
+  ./dev.sh status       запущен ли dev-сервер
   ./dev.sh probe [args] обход SPA headless-браузером (свой сервер, временные данные);
                         --shot — скриншоты в logs/ui_probe/ (правка UI без прогона не закрыта)
   ./dev.sh spa          node --check по static/*.js + node --test tests/spa/
@@ -205,6 +315,9 @@ case "$command" in
     test) shift || true; cmd_test "$@" ;;
     cov) shift || true; cmd_cov "$@" ;;
     run) shift || true; cmd_run "$@" ;;
+    start) shift || true; cmd_start "$@" ;;
+    stop) shift || true; cmd_stop "$@" ;;
+    status) shift || true; cmd_status "$@" ;;
     probe) shift || true; cmd_probe "$@" ;;
     spa) shift || true; cmd_spa "$@" ;;
     shell) shift || true; cmd_shell "$@" ;;

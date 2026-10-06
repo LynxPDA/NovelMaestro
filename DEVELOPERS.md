@@ -249,9 +249,13 @@ python3 tools/build_userscripts.py --list            # версии и числ�
 ./dev.sh spa                                       # SPA: node --check по static/*.js + node --test tests/spa/
 ./dev.sh probe --shot                              # UI: обход экранов headless-браузером + скриншоты
 ./dev.sh cov                                       # покрытие (данные замера — в .tmp/coverage)
+./dev.sh start                                     # dev-сервер в фоне: данные /tmp/nm-dev, порт 8799, PID в .tmp/dev.pid
+./dev.sh status                                    # запущен ли dev-сервер
+./dev.sh stop                                      # остановить dev-сервер из .tmp/dev.pid
 ./dev.sh clean                                     # удалить .venv и .tmp/ (кэш тестов, покрытие)
 ```
 
+- **Dev-сервер — только через `start`/`stop`.** Фоновый сервер пишется в `.tmp/dev.pid`, данные берёт из временной папки (`DEV_PROJECTS`, по умолчанию `/tmp/nm-dev`), порт — 8799 (`DEV_PORT`), лог — `logs/dev_server.log`. Охотиться по имени скрипта нельзя: боевой контейнер поднимает тот же `web/main.py`, его процесс виден из общего PID namespace хоста, а `restart: unless-stopped` вернёт его в строй — боевой перезапуск выглядит как «сам». `./dev.sh stop` сверяет `/proc/<pid>/cgroup` (у контейнера — `docker-…`) и `/proc/<pid>/cwd` (у dev — каталог репозитория) и чужой процесс не трогает.
 - **Артефакты прогонов — в одной папке.** Кэш pytest (`.tmp/pytest`, см. `pytest.ini`) и данные покрытия (`.tmp/coverage`, их пишет `dev.sh cmd_cov`) лежат в `.tmp/` — в git она не попадает, корень репо остаётся чистым.
 - **Раннер один — pytest.** Скорость набора даёт параллельность (`-n auto`, pytest-xdist), а не второй инструмент: тестовые сервера берут свободный порт, данные — `tmp_path`, поэтому воркеры не мешают друг другу. «Быстрых/медленных» слоёв нет.
 - **Правка UI без прогона не закрыта.** `./dev.sh probe --shot` проходит все view, вкладки проекта и модалки, ловит `pageerror`/`console`/4xx-5xx и пишет скриншоты и `report.json` в `logs/ui_probe/` (в git не попадают) — сравнивать «до/после» иначе нечем. Playwright стоит глобально (`playwright-core`), своей npm-папки и сборки в репо нет.
