@@ -598,7 +598,7 @@ def test_merge_alias_groups_all_locked_skipped():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# НЕ ГОЛОСУЮЩИЕ ПОЛЯ: одно значение; режим реестра — только для notes
+# НЕ ГОЛОСУЮЩИЕ ПОЛЯ: одно значение; режим реестра — на все текстовые поля
 # ══════════════════════════════════════════════════════════════════════
 
 @contextlib.contextmanager
@@ -678,35 +678,36 @@ def test_merge_into_single_field_policy(ner_globals):
     [("last", "один"), ("first", "два"), ("longest", "один"),
      ("shortest", "два")],
 )
-def test_non_voted_mode_only_notes(ner_globals, mode, want):
-    """Режим реестра — только для notes: context всегда хранит первое значение."""
-    item = {"term": "陈阳", "notes": "два", "context": "два"}
+def test_non_voted_mode_covers_all_text_fields(ner_globals, mode, want):
+    """Режим реестра — на все текстовые неголосующие поля, а не только notes."""
+    item = {"term": "陈阳", "notes": "два", "context": "два",
+            "translated_context": "два"}
     with _non_voted(mode):
-        NER.merge_fields(item, {"notes": "один", "context": "один"})
-    assert item["notes"] == want
-    assert item["context"] == "два"
-    assert "_votes_context" not in item and "_votes_notes" not in item
+        NER.merge_fields(item, {"notes": "один", "context": "один",
+                                "translated_context": "один"})
+    assert (item["notes"], item["context"], item["translated_context"]) == (
+        want, want, want)
+    assert not [k for k in item if k.startswith("_votes_")]
 
 
 def test_non_voted_field_groups(ner_globals):
-    """Группы полей: notes под режимом, context вне голосования и вне режима."""
-    moded, default = NER.MODED_NON_VOTED_FIELDS, NER.DEFAULT_NON_VOTED_FIELDS
-    assert moded == {"notes"}
-    assert default - moded == {"context", "translated_context"}
-    with _non_voted("longest", 7):
-        assert NER._non_voted_mode("notes") == "longest"
-        assert NER._non_voted_mode("context") == "first"
-        assert NER._non_voted_mode("translated_context") == "first"
+    """Группы полей: все три текстовых поля не голосуют, term/count/aliases
+    мержатся своими правилами; любое поле можно перевести в голосование."""
+    text_fields = {"notes", "context", "translated_context"}
+    assert text_fields == NER.DEFAULT_NON_VOTED_FIELDS
+    assert not any(NER._is_votable(f) for f in NER.DEFAULT_NON_VOTED_FIELDS)
+    assert not any(NER._is_storable(f) for f in NER.NON_VOTABLE_FIELDS)
     # в EXTRA_VOTED поле переходит в голосование — и режим его не касается
     NER.EXTRA_VOTED_FIELDS = {"notes"}
     assert NER._is_votable("notes") and not NER._is_votable("context")
 
 
 def test_log_shows_single_field_mode(ner_globals):
-    """Строка о политике в логе: режим и потолок видны оператору."""
+    """Строка о политике в логе: список полей, режим и потолок видны оператору."""
     with _non_voted("longest", 300):
         note = NER._non_voted_note()
-    assert "notes — самое длинное значение" in note and "300" in note
-    assert "context — первое значение" in note
+    assert ("context, notes, translated_context — "
+            "самое длинное значение") in note, note
+    assert "300" in note
     with _non_voted("last"):
         assert "СИМВОЛОВ" not in NER._non_voted_note()

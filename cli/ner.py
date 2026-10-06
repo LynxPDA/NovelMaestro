@@ -148,13 +148,12 @@ Return the corrected JSON array in the SAME format. Output ONLY valid JSON.
 META_PREFIX = "_"
 
 NON_VOTABLE_FIELDS = {"term", "count", "aliases"}
-# Поля с одним значением: голосование к ним не применяется. Режим из реестра
-# (NER_NON_VOTED_MODE) действует только на MODED_NON_VOTED_FIELDS — на практике
-# на notes, если оно есть в записях глоссария. Остальные поля группы всегда
-# хранят первое присвоенное значение: context и translated_context пишет
-# fill_term_context из чанка, там первый вариант и есть канон.
+# Текстовые поля с одним значением: голосование к ним не применяется — значения
+# из разных чанков почти всегда разные, счёт 1:1:1, победителя всё равно
+# определял бы порядок обхода. Режим из реестра (NER_NON_VOTED_MODE) действует на
+# ВСЕ они: и на notes, и на context с translated_context, которые пишет
+# fill_term_context из чанка. Поля голосуют только по желанию (NER_KEEP_FIELDS).
 DEFAULT_NON_VOTED_FIELDS = {"notes", "context", "translated_context"}
-MODED_NON_VOTED_FIELDS = {"notes"}
 TRANSIENT_FIELDS = {"_ngrams", "_len", "_source_chunks"}
 
 DEFAULT_SAVE_INTERVAL = 10
@@ -176,22 +175,15 @@ NON_VOTED_MAX_LEN = 0
 # ══════════════════════════════════════════════════════════════════════
 
 
-def _non_voted_mode(field: str) -> str:
-    """Режим выбора значения не голосующего поля: настройка реестра — только
-    для MODED_NON_VOTED_FIELDS, остальные поля берут первое значение."""
-    return NON_VOTED_MODE if field in MODED_NON_VOTED_FIELDS else "first"
-
-
 def _non_voted_note() -> str:
-    """Человеческая строка о политике не голосующих полей в лог."""
+    """Человеческая строка о политике не голосующих полей в лог: список полей
+    под режимом виден оператору, а не спрятан в коде."""
     from core.common import NER_NON_VOTED_LABELS
-    note = f"notes — {NER_NON_VOTED_LABELS.get(NON_VOTED_MODE, NON_VOTED_MODE)}"
+    fields = sorted(DEFAULT_NON_VOTED_FIELDS - EXTRA_VOTED_FIELDS)
+    note = (f"{', '.join(fields)} — "
+            f"{NER_NON_VOTED_LABELS.get(NON_VOTED_MODE, NON_VOTED_MODE)}")
     if NON_VOTED_MODE == "longest" and NON_VOTED_MAX_LEN > 0:
         note += f" (обрезка до {NON_VOTED_MAX_LEN} СИМВОЛОВ)"
-    rest = sorted(DEFAULT_NON_VOTED_FIELDS - MODED_NON_VOTED_FIELDS
-                  - EXTRA_VOTED_FIELDS)
-    if rest:
-        note += f"; {', '.join(rest)} — первое значение"
     return note
 
 
@@ -415,7 +407,7 @@ def merge_fields(item: dict, ner: dict) -> None:
             add_vote(item, field, val)
         else:
             item[field] = ner_pick_non_voted(item.get(field), val,
-                                             _non_voted_mode(field),
+                                             NON_VOTED_MODE,
                                              NON_VOTED_MAX_LEN)
 
 
@@ -941,9 +933,9 @@ def _compute_final_ner(
                         g["votes"][field] = {}
                     g["votes"][field][val] = g["votes"][field].get(val, 0) + 1
                 else:
-                    # не голосует: одно значение (у notes — режим реестра)
+                    # не голосует: одно значение по режиму реестра
                     g["single"][field] = ner_pick_non_voted(
-                        g["single"].get(field), val, _non_voted_mode(field),
+                        g["single"].get(field), val, NON_VOTED_MODE,
                         NON_VOTED_MAX_LEN)
     candidates: list[dict] = []
     for _norm, g in groups.items():
@@ -982,7 +974,7 @@ def _compute_final_ner(
                 elif _is_storable(field) and not _is_votable(field):
                     existing[field] = ner_pick_non_voted(
                         existing.get(field), cand[field],
-                        _non_voted_mode(field), NON_VOTED_MAX_LEN)
+                        NON_VOTED_MODE, NON_VOTED_MAX_LEN)
         else:
             final.append(cand)
     return final
