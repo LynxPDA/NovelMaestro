@@ -499,8 +499,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // срабатывает раньше и уже записал значение в st.values
     st.head = panel.querySelector(".run-panel-head");
     st.curSpec = spec;
-    panel.addEventListener("input", () => syncResetBtn(key));
-    panel.addEventListener("change", () => syncResetBtn(key));
+    panel.addEventListener("input", () => { syncResetBtn(key); runSave(key); });
+    panel.addEventListener("change", () => { syncResetBtn(key); runSave(key); });
     // epub: панель предпросмотра разбивки
     if (key === "epub") panel.append(epubPreviewPanel(key, spec));
     // batch_replace: панель предпросмотра замен по главам
@@ -517,6 +517,50 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // полей, которые пользователь менял. Значения запусков — рабочее
   // состояние браузера: собственного .env у книги больше нет, а
   // «Сбросить настройки» возвращает поля к значениям общего конфига.
+
+  // ── память изменённых полей формы (localStorage, по проекту+стадии) ──
+  // Значения запусков — рабочее состояние браузера: собственного .env у книги
+  // нет. Без памяти поля молча возвращались к значениям общего конфига после
+  // запуска или перезагрузки страницы; храним только изменённые поля,
+  // остальное приходит из реестра.
+  function runKey(key) {
+    return `runVals:${section}/${name}:${key}`;
+  }
+
+  function runSave(key) {
+    const t = st.touched[key];
+    if (!t) return;
+    try {
+      if (!t.size) {
+        localStorage.removeItem(runKey(key));
+        return;
+      }
+      const vals = st.values[key] || {};
+      const data = {};
+      for (const n of t) if (vals[n] !== undefined) data[n] = vals[n];
+      localStorage.setItem(runKey(key), JSON.stringify(data));
+    } catch {
+      /* нет localStorage (приватный режим) — не критично */
+    }
+  }
+
+  function runRestore(key, spec, vals) {
+    let saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem(runKey(key)) || "null");
+    } catch {
+      /* повреждённый JSON — значения реестра */
+      return;
+    }
+    if (!saved || typeof saved !== "object") return;
+    for (const f of spec.fields || []) {
+      if (f.name === PROFILE_FIELD) continue; // память профиля — своя, по стадии
+      if (saved[f.name] === undefined) continue;
+      vals[f.name] = f.type === "bool"
+        ? UICore.boolOn(saved[f.name]) : saved[f.name];
+      st.touched[key].add(f.name);
+    }
+  }
 
   // ── epub: автосохранение настроек формы (localStorage, по проекту) ──
   // Настройки сохраняются сразу при вводе (без ожидания запуска) и
@@ -606,6 +650,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
     st.values[key] = vals;
     st.touched[key] = new Set();
+    // память изменённых полей этой книги+стадии (поверх реестра и .env)
+    runRestore(key, spec, vals);
     // чипсы полей/типов (hidden noenv) — память по проекту+стадии:
     // без неё перезагрузка страницы молча сбрасывает выбор чипсов
     // на дефолт, и запуск уходит не с теми полями, что показаны
@@ -740,6 +786,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         () => {
           try {
             localStorage.removeItem(chipKey(key)); // память чипсов стадии
+            localStorage.removeItem(runKey(key)); // память полей стадии
           } catch {
             /* нет localStorage — и нечего было чистить */
           }

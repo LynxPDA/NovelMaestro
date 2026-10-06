@@ -86,10 +86,32 @@ def test_run_views_chips_persistence():
     # ner_check: дефолт полей, материализованный curFields, — touched
     assert 'st.touched[key].add("fields");' in src
     # форма стадии одна (Простой/Экспертный удалены), кнопка сброса
-    # пересчитывается делегатом, а не перестройкой формы
+    # пересчитывается делегатом, а не перестройкой формы; тем же делегатом
+    # изменённые поля уходят в память браузера
     assert "function stageForm(key, spec)" in src
-    assert 'panel.addEventListener("input", () => syncResetBtn(key))' in src
+    assert ('panel.addEventListener("input", () => '
+            "{ syncResetBtn(key); runSave(key); });") in src
+    assert ('panel.addEventListener("change", () => '
+            "{ syncResetBtn(key); runSave(key); });") in src
     assert "st.baseline[key] = Object.assign({}, vals)" in src
+
+
+def test_run_views_values_persistence():
+    """Изменённые поля формы запусков — рабочее состояние браузера: их нет ни в
+    .env книги, ни в argv, поэтому без памяти они молча возвращались к
+    значениям общего конфига после запуска или перезагрузки страницы."""
+    src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    assert "function runKey(key)" in src
+    assert 'return `runVals:${section}/${name}:${key}`' in src
+    assert "function runSave(key)" in src
+    assert "function runRestore(key, spec, vals)" in src
+    # чтение — в initFormValues до чипсов; запись — делегатом формы
+    assert "runRestore(key, spec, vals)" in src
+    assert "localStorage.setItem(runKey(key), JSON.stringify(data))" in src
+    # пустое изменение — ключ памяти удаляется, а не оставляется с мусором
+    assert "localStorage.removeItem(runKey(key))" in src
+    # профиль стадии — не «изменённое поле»: у него своя память по стадии
+    assert "if (f.name === PROFILE_FIELD) continue;" in src
 
 
 def test_run_views_last_finished_log():
