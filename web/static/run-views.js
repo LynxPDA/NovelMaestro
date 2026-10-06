@@ -1618,7 +1618,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
               `/file?project=${section}/${name}`
                 + `&path=${encodeURIComponent(relPath)}`,
             );
-        ed = makeEditor(d.content || "", UICore.fileLang(relPath, isPromptFile));
+        ed = makeEditor(d.content || "", UICore.editorLang(relPath, isPromptFile));
         const f = UIC.editorSearch(ed);
         if (f) actions.insertBefore(f, actions.firstChild);
         host.append(h("div", { class: "editor-cm" }, ed.root));

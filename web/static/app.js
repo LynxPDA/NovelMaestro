@@ -21,9 +21,11 @@ function getPreviewFontSize() {
 }
 
 /* ── Внешний вид: UI-предпочтения в localStorage браузера (не конфиг —
-   12-factor: клиентские настройки живут на клиенте). ── */
+   12-factor: клиентские настройки живут на клиенте). Сами значения и выбор
+   языка подсветки — в UICore (они чистые); здесь только хранилище. ── */
 const UI_LOOK_KEY = "uiLookV1";
-const EDITOR_SETTINGS = { ui: "dark", editor: "auto", fontSize: 13 };
+const EDITOR_SETTINGS = UICore.EDITOR_SETTINGS;
+const EDITOR_LANGS = UICore.EDITOR_LANGS;
 function loadUiLook() {
   try {
     const raw = localStorage.getItem(UI_LOOK_KEY);
@@ -35,6 +37,9 @@ function loadUiLook() {
     const n = parseInt(d.fontSize, 10);
     if (Number.isFinite(n))
       EDITOR_SETTINGS.fontSize = Math.max(8, Math.min(32, n));
+    for (const k of ["langPrompt", "langLog"]) {
+      if (EDITOR_LANGS.some((o) => o.v === d[k])) EDITOR_SETTINGS[k] = d[k];
+    }
   } catch {
     /* битый localStorage — дефолты */
   }
@@ -915,10 +920,11 @@ async function viewNotes() {
 /* ── Настройки: страница собрана карточками-блоками реестра
    (core/settings.py), сгруппированными в субвкладки; своего знания о
    настройках у SPA нет — метки, типы, варианты, значения и подсказки приходят
-   с сервера. Субвкладок пять: настройки самого веб-сервера — последние блоки
-   первой, отдельного экрана «про конфиг» нет. Шестая, «Внешний вид», локальная:
+   с сервера. Субвкладок пять — только настройки книги: блок веб-сервера из
+   payload вырезан на сервере. Шестая, «Внешний вид», локальная:
    UI-предпочтения браузера в реестре не живут. Собственного .env у книги нет:
-   изменённые для одной книги поля запусков живут в браузере. ── */
+   изменённые для одной книги поля запусков живут в браузере. Под кнопкой
+   «Сохранить» подписей нет: состояние профиля читается из самого селекта. ── */
 async function viewSettings() {
   let d;
   try {
@@ -931,7 +937,6 @@ async function viewSettings() {
   const uiGroup = { id: "ui", title: "Внешний вид", blocks: [] };
   const model = {
     groups: [...(d.groups || []), uiGroup],
-    envWins: d.env_wins || [],
     profiles: d.profiles || [],
     profile: d.profile || "general",
   };
@@ -953,23 +958,7 @@ async function viewSettings() {
   const tabs = h("div", { class: "tabs" });
   const cards = h("div", { class: "settings-cards" });
   const err = h("div", { class: "form-error" });
-  const status = h("div", { class: "review-status" });
   const saveBtn = h("button", { class: "btn btn-sm btn-primary" }, "Сохранить");
-
-  /* подпись под кнопкой — только про то, что меняет смысл правки: выбранный
-     профиль и ключи, которые окружение держит поверх страницы. Путь общего
-     конфига экрану не нужен: это реализация, а не настройка */
-  function statusText() {
-    if (active === "ui") return "";
-    const prof = model.profiles.find((p) => p.id === model.profile);
-    if (prof && !prof.builtin) {
-      return `профиль «${prof.name}»: пустые поля наследуют General`;
-    }
-    if (model.envWins.length) {
-      return "окружение процесса перекрывает: " + model.envWins.join(", ");
-    }
-    return "";
-  }
 
   // контрол поля: тип, варианты и подсказка — из реестра (SPA их не знает)
   function fieldWrap(f) {
@@ -1151,12 +1140,24 @@ async function viewSettings() {
     max: "32",
     value: String(EDITOR_SETTINGS.fontSize),
   });
+  /* язык подсветки — тот же выбор браузера: у промптов расширение .txt, у логов
+     его нет вовсе, так что язык для них выбирает человек, а не таблица */
+  function langSel(key) {
+    const sel = h("select", { class: "input input-inline" });
+    for (const o of EDITOR_LANGS) sel.append(h("option", { value: o.v }, o.label));
+    sel.value = EDITOR_SETTINGS[key];
+    return sel;
+  }
+  const promptSel = langSel("langPrompt");
+  const logSel = langSel("langLog");
   const lookBtn = h("button", { class: "btn btn-sm" }, "Применить");
   lookBtn.addEventListener("click", () => {
     const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
     EDITOR_SETTINGS.editor =
       edSel.value === "dark" || edSel.value === "light" ? edSel.value : "auto";
     EDITOR_SETTINGS.fontSize = n;
+    EDITOR_SETTINGS.langPrompt = promptSel.value;
+    EDITOR_SETTINGS.langLog = logSel.value;
     try {
       localStorage.setItem(UI_LOOK_KEY, JSON.stringify(EDITOR_SETTINGS));
     } catch {
@@ -1181,6 +1182,18 @@ async function viewSettings() {
           { class: "field" },
           h("div", { class: "field-label" }, "Тема редакторов"),
           edSel,
+        ),
+        h(
+          "label",
+          { class: "field" },
+          h("div", { class: "field-label" }, "Подсветка промптов"),
+          promptSel,
+        ),
+        h(
+          "label",
+          { class: "field" },
+          h("div", { class: "field-label" }, "Подсветка логов"),
+          logSel,
         ),
         h(
           "label",
@@ -1242,7 +1255,6 @@ async function viewSettings() {
     if (g.id === "ui") {
       // localStorage-предпочтения: ни общего конфига, ни «Сохранить» здесь нет
       cards.replaceChildren(lookCard, previewFontCard);
-      status.classList.toggle("hidden", true);
       saveBtn.classList.toggle("hidden", true);
       return;
     }
@@ -1267,7 +1279,6 @@ async function viewSettings() {
       ));
     }
     cards.replaceChildren(...out);
-    status.textContent = statusText();
   }
 
   for (const g of model.groups) {
@@ -1295,7 +1306,6 @@ async function viewSettings() {
       const r = await api("/settings", {
         method: "PUT", body: { profile: model.profile, values },
       });
-      model.envWins = r.env_wins || [];
       // профили перечитываем тоже: поля нераскрытого профиля рисуются из
       // model.profiles, и без этого сохранённое значение исчезало бы из формы
       model.profiles = r.profiles || model.profiles;
@@ -1318,7 +1328,7 @@ async function viewSettings() {
       { class: "page-header" },
       h("div", { class: "page-header-main" },
         h("h1", { class: "page-title" }, "Настройки")),
-      h("div", { class: "page-header-actions" }, status, saveBtn),
+      h("div", { class: "page-header-actions" }, saveBtn),
     ),
     tabs,
     cards,
@@ -1730,14 +1740,15 @@ function extOf(path) {
   return dot < 0 ? "" : base.slice(dot + 1).toLowerCase();
 }
 
-/* Язык редактора файла даёт UICore.fileLang (prompts/* — промпт, остальное —
-   по расширению); здесь только таблица «язык → пакет» и сама подсветка. */
+/* Язык редактора файла даёт UICore.editorLang (свой выбор + расширение); здесь
+   таблица «язык → пакет» и сама подсветка. */
 function cmLang(ext) {
   const kind = CM_LANG_BY_EXT[ext] || "";
   const langs = window.CM && window.CM.langs;
   if (!kind || !langs || !langs[kind]) return null;
   return langs[kind]();
 }
+
 
 /* Единая фабрика редактора: { root, getValue, setValue, setLang } */
 /* Живые редакторы текущего view: [{view, hlComp}]. Реестр собирается заново на
@@ -2788,7 +2799,7 @@ async function viewTemplates() {
     const readonly = st.set === "General"; // системный набор — просмотр
     /* язык редактора — по назначению файла: промпты набора читаются как
        промпты (html), а не как пустяковый txt */
-    const ed = makeEditor(data.content || "", UICore.fileLang(full));
+    const ed = makeEditor(data.content || "", UICore.editorLang(full));
     ed.setReadOnly(readonly);
     const err = h("div", { class: "form-error" });
 

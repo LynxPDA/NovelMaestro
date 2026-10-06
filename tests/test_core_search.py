@@ -212,13 +212,17 @@ def test_search_project_totals(tmp_path):
     assert first["name"] == "chapter.txt" and first["count"] == 1
 
 
-def test_search_project_glossary_not_scanned(tmp_path):
-    """Глоссарий ищется на своей вкладке: ner.json в обходе нет."""
+def test_search_project_glossary_is_plain_file(tmp_path):
+    """Глоссарий ищется как обычный текст: ner.json в обходе есть, но клик по
+    нему ведёт во вкладку «Глоссарий», а не в редактор."""
     make_book(tmp_path, chapters=1, artifacts=("polished",), ner=True)
     r = S.search_project(tmp_path, "мир")
-    assert [f["name"] for f in r["files"]] == ["polished.txt"]
+    assert [f["name"] for f in r["files"]] == ["polished.txt", "ner.json"]
     assert r["files"][0]["chapter"] == 1
-    assert "ner" not in S.GROUP_IDS
+    ner = [f for f in r["files"] if f["name"] == "ner.json"][0]
+    assert ner["group"] == "ner" and ner["chapter"] is None
+    opens = {g[0]: g[3] for g in r["groups"]}
+    assert opens["ner"] == "glossary" and opens["polished"] == "editor"
 
 
 def test_search_project_chapter_number(tmp_path):

@@ -11,8 +11,10 @@ search.py — поиск по текстам проекта.
 Ограничений на число совпадений нет сознательно: лимит означал бы «показаны не
 не все», а лишние совпадения — килобайты JSON, не тормоза. Группы (что искать)
 задает реестр SEARCH_GROUPS; группы сгруппированы по кластерам (CLUSTERS), а
-их подписи совпадают с полями «Тип файлов глав» форм стадий. Глоссарий здесь
-не ищется: у него своя вкладка со своим поиском. Индексов и кешей нет:
+их подписи совпадают с полями «Тип файлов глав» форм стадий. Глоссарий — тоже
+просто файл (ner.json той же книги): отдельного режима поиска для него нет, а
+у группы есть «open», куда SPA ведёт клик по файлу — в редактор или во вкладку
+«Глоссарий» с уже подставленным запросом. Индексов и кешей нет:
 результат всегда соответствует файлу.
 """
 from __future__ import annotations
@@ -48,16 +50,21 @@ CLUSTER_LABELS: dict = dict(CLUSTERS)
 class SearchGroup:
     """Одна группа поиска: подпись, кластер и что именно берём.
 
-    kind="chapter" — файл артефакта во каждой папке главы (pattern — имя
+    kind="chapter" — файл артефакта в каждой папке главы (pattern — имя
     файла); kind="file" — конкретные файлы проекта; kind="tree" — обход
     каталога (pattern — сам каталог). Подписи глав-артефактов совпадают с
-    полем «Тип файлов глав» (core/settings.py)."""
+    полем «Тип файлов глав» (core/settings.py).
+
+    open — куда клик по файлу ведёт SPA: «editor» (обычный редактор) или
+    «glossary» (вкладка «Глоссарий» с подставленным запросом). Это свойство
+    группы, а не файла: иначе SPA приходится знать реестр назубок."""
 
     id: str
     label: str
     kind: str
     pattern: tuple
     cluster: str = "other"
+    open: str = "editor"
 
 
 SEARCH_GROUPS: tuple = (
@@ -68,6 +75,10 @@ SEARCH_GROUPS: tuple = (
                 "chapters"),
     SearchGroup("polished", "polished", "chapter", ("polished.txt",),
                 "chapters"),
+    # глоссарий ищется как обычный текст: та же подстрока по строкам ner.json,
+    # а клик по файлу уводит во вкладку «Глоссарий» (open="glossary")
+    SearchGroup("ner", "ner.json", "file", ("ner.json",), "other",
+                "glossary"),
     SearchGroup("notes", "Заметки книги", "file",
                 ("notes.md", "source/info.md")),
     SearchGroup("prompts", "Промпты", "tree", ("prompts",)),
@@ -77,8 +88,9 @@ SEARCH_GROUPS: tuple = (
 
 GROUP_IDS: tuple = tuple(g.id for g in SEARCH_GROUPS)
 GROUP_LABELS: dict = {g.id: g.label for g in SEARCH_GROUPS}
-# что ищется, если пользователь ничего не выбрал: тексты глав + заметки
-DEFAULT_SCOPES: tuple = ("chapter", "polished", "notes")
+# что ищется, если пользователь ничего не выбрал: тексты глав, глоссарий,
+# заметки
+DEFAULT_SCOPES: tuple = ("chapter", "polished", "ner", "notes")
 
 
 def iter_project_files(project_dir, scopes=None, *,
@@ -179,7 +191,7 @@ def search_project(project_dir, query, scopes=None, *,
     groups = [g for g in SEARCH_GROUPS if g.id in wanted]
     # метаданные для интерфейса: весь реестр групп (с кластерами), сами
     # кластеры и какие группы реально участвовали в прогоне
-    meta = {"groups": [[g.id, g.label, g.cluster] for g in SEARCH_GROUPS],
+    meta = {"groups": [[g.id, g.label, g.cluster, g.open] for g in SEARCH_GROUPS],
             "clusters": list(CLUSTERS),
             "scopes": [g.id for g in groups]}
     if not needle:

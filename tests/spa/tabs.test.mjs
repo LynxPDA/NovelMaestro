@@ -590,17 +590,20 @@ const SEARCH_CLUSTERS = [
   ["chapters", "Файлы глав"],
   ["other", "Прочее"],
 ];
-/* метки групп глав — те же слаги стадий, что и в остальном интерфейсе */
+/* зеркало реестра core/search.py: [id, подпись, кластер, чем открывается клик].
+   метки групп глав — те же слаги стадий, что и в остальном интерфейсе;
+   глоссарий — обычный файл, но клик по нему ведёт не в редактор */
 const SEARCH_GROUPS = [
-  ["chapter", "chapter", "chapters"],
-  ["translated", "translated", "chapters"],
-  ["redacted", "redacted", "chapters"],
-  ["polished", "polished", "chapters"],
-  ["notes", "Заметки книги", "other"],
+  ["chapter", "chapter", "chapters", "editor"],
+  ["translated", "translated", "chapters", "editor"],
+  ["redacted", "redacted", "chapters", "editor"],
+  ["polished", "polished", "chapters", "editor"],
+  ["ner", "ner.json", "other", "glossary"],
+  ["notes", "Заметки книги", "other", "editor"],
 ];
 const SEARCH_EMPTY = {
   ok: true,
-  scopes: ["chapter", "polished", "notes"],
+  scopes: ["chapter", "polished", "ner", "notes"],
   clusters: SEARCH_CLUSTERS,
   groups: SEARCH_GROUPS,
   scanned: 0,
@@ -645,10 +648,11 @@ test("файлы: строка — чекбокс и кнопки одного �
   assert.equal(rows.length, 3);
   assert.equal(findByClass(page, "kebab-btn").length, 0, "построчных меню не осталось");
   assert.equal(findByClass(page, "menu-box").length, 0);
-  // каталог: чекбокс + одна кнопка; файл: чекбокс + править и переименовать
+  // каталог: чекбокс + одна кнопка; файл: чекбокс + править, скачать, переименовать
   assert.equal(findByClass(rows[0], "fsel").length, 1);
   assert.deepEqual(tips(rows[0]), ["Переименовать chapters"]);
-  assert.deepEqual(tips(rows[1]), ["Править a.txt", "Переименовать a.txt"]);
+  assert.deepEqual(tips(rows[1]),
+    ["Править a.txt", "Скачать a.txt", "Переименовать a.txt"]);
 });
 
 test("файлы: чекбокс строки включает панель выделения и прячет кнопки", async () => {
@@ -1060,12 +1064,13 @@ test("поиск: «Только главы» оставляет один кла
   );
   assert.deepEqual(
     findByClass(page, "search-scope-chip").map((n) => collectText(n).join("")),
-    ["chapter", "translated", "redacted", "polished", "Заметки книги"],
+    ["chapter", "translated", "redacted", "polished", "ner.json",
+      "Заметки книги"],
   );
   assert.deepEqual(
     findByClass(page, "search-scope").map((b) => b.checked),
-    [true, true, true, true, false],
-    "отмечены только артефакты глав",
+    [true, true, true, true, false, false],
+    "отмечены только артефакты глав: глоссарий и заметки — вне этого выбора",
   );
   assert.deepEqual(
     JSON.parse(globalThis.localStorage.getItem("search:ACTIVE/Книга")).scopes,
@@ -1125,29 +1130,47 @@ test("поиск: клик по файлу главы открывает вкл�
   assert.match(SRC, /openFind\(pInfo\.editor, f\.q\)/);
 });
 
-test("поиск: кнопка в глоссарий ведёт на вкладку с тем же запросом", async () => {
+test("поиск: ner.json — файл, клик по нему открывает «Глоссарий» со всеми столбцами", async () => {
   globalThis.__ner = {
-    items: [{ term: "мир", type: "person" }, { term: "лес", type: "person" }],
-    by_type: { person: 2 },
+    items: [{ term: "мир", type: "person", translation: "мир", count: 5,
+      note: "тихий" }],
+    by_type: { person: 1 },
     too_large: false,
   };
-  globalThis.__search = { ...SEARCH_EMPTY, files: [], total: 0 };
-  globalThis.localStorage.clear(); // настройки вкладки — с этого теста
+  globalThis.__search = {
+    ...SEARCH_EMPTY,
+    files: [{
+      group: "ner", path: "ner.json", name: "ner.json", chapter: null, count: 1,
+      hits: [{ line: 3, start: 0, end: 3, text: "мир" }],
+    }],
+    total: 1,
+    scanned: 4,
+    skipped: 0,
+  };
+  globalThis.localStorage.clear(); // настройки вкладок — с чистого листа
   const page = viewProject("ACTIVE", "Книга", "search");
   await tick();
+  // пояснений и отдельной кнопки поиска по глоссарию на вкладке нет
+  assert.equal(findByClass(page, "search-ner-btn").length, 0);
+  assert.equal(findByClass(page, "card-hint").length, 0);
   const input = findByClass(page, "search-q")[0];
   input.value = "мир";
   await findByClass(page, "search-run")[0]._listeners.click[0]();
   await tick();
-  const btn = findByClass(page, "search-ner-btn")[0];
-  assert.deepEqual(collectText(btn), ["Искать в глоссарии"]);
-  await btn._listeners.click[0]();
+  const path = findByClass(page, "search-file-path")[0];
+  assert.equal(collectText(path).join(""), "ner.json");
+  assert.ok(String(path.getAttribute("title")).includes("Глоссарий"),
+    "подсказка обещает глоссарий, а не редактор");
+  await path._listeners.click[0]();
   await tick();
-  const box = findByClass(page, "ner-search")[0];
-  assert.ok(box, "открылась вкладка глоссария");
-  assert.equal(box.querySelectorAll("input")[0].value, "мир",
-    "глоссарий открылся с уже подставленным запросом");
+  assert.ok(findByClass(page, "ner-search")[0], "открылась вкладка глоссария");
+  assert.equal(findByClass(page, "ner-search")[0].querySelectorAll("input")[0].value,
+    "мир", "глоссарий открылся с уже подставленным запросом");
+  // все столбцы: term/type/translation + count/note, а не три по умолчанию
+  assert.equal(findByClass(page, "ner-th").length, 5,
+    "из поиска таблица показывается все ключи записи");
 });
+
 /* ── «Глоссарий»: поиск по видимым столбцам, панель «⋮», выделение ── */
 const NER_SEED = [
   { term: "мир", type: "person", translation: "мир", count: 5, note: "тихий" },

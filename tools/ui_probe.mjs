@@ -389,8 +389,10 @@ async function main() {
   }
 
   /* «Поиск»: группы и кластеры приходят с сервера (реестр в браузере не
-   * дублируется), один GET на запрос, все результаты постранично, клик по
-   * имени файла главы открывает «Редактор» с уже подставленным запросом */
+   * дублируется), один GET на запрос, все результаты постранично. Никаких
+   * пояснений и отдельного режима глоссария на вкладке нет: ner.json — такой
+   * же файл обхода, но клик по нему открывает вкладку «Глоссарий», а не
+   * редактор */
   {
     const beforeS = problems.length;
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/search`,
@@ -404,6 +406,21 @@ async function main() {
     const clusters = await page.evaluate(() =>
       [...document.querySelectorAll(".search-cluster-label")]
         .map((x) => x.textContent.trim()));
+    const hints = await page.evaluate(() =>
+      [...document.querySelectorAll(".card-hint")]
+        .map((x) => x.textContent.trim()));
+    if (hints.length)
+      problems.push(`поиск: на вкладке осталось пояснение «${hints[0]}»`);
+    if (chips.length !== 9) problems.push(`поиск: групп ${chips.length}`);
+    // подписи файлов глав — те же слаги, что у стадий; глоссарий — ner.json
+    if (chips.slice(0, 4).map(([t]) => t).join(",")
+        !== "chapter,translated,redacted,polished")
+      problems.push(`поиск: группы глав «${chips.map(([t]) => t).join(",")}»`);
+    if (clusters.join(",") !== "Файлы глав:,Прочее:")
+      problems.push(`поиск: кластеры «${clusters.join(",")}»`);
+    const on = chips.filter(([, c]) => c).map(([t]) => t);
+    if (on.join(",") !== "chapter,polished,ner.json,Заметки книги")
+      problems.push(`поиск: отмечены «${on.join(", ")}»`);
     await page.fill(".search-q", "глава");
     await page.click(".search-run");
     await page.waitForTimeout(900);
@@ -412,22 +429,14 @@ async function main() {
         .textContent || "").trim(),
       files: [...document.querySelectorAll(".search-file-path")]
         .map((b) => b.textContent.trim()),
+      titles: [...document.querySelectorAll(".search-file-path")]
+        .map((b) => b.getAttribute("title") || ""),
       pagerBtns: document.querySelectorAll(".ner-pager button").length,
       marks: [...document.querySelectorAll(".search-hit-text mark")]
         .map((m) => m.textContent),
       lines: [...document.querySelectorAll(".search-hit-line")]
         .map((x) => x.textContent.trim()),
     }));
-    if (chips.length !== 8) problems.push(`поиск: групп ${chips.length}`);
-    // подписи файлов глав — те же слаги, что у стадий; глоссария в списке нет
-    if (chips.slice(0, 4).map(([t]) => t).join(",")
-        !== "chapter,translated,redacted,polished")
-      problems.push(`поиск: группы глав «${chips.map(([t]) => t).join(",")}»`);
-    if (clusters.join(",") !== "Файлы глав:,Прочее:")
-      problems.push(`поиск: кластеры «${clusters.join(",")}»`);
-    const on = chips.filter(([, c]) => c).map(([t]) => t);
-    if (on.join(",") !== "chapter,polished,Заметки книги")
-      problems.push(`поиск: отмечены «${on.join(", ")}»`);
     if (!/^Совпадений: (\d+) · файлов: (\d+) · прочитано: (\d+)$/.test(res.status))
       problems.push(`поиск: статус «${res.status}»`);
     if (res.files[0] !== "chapters/00000_1_Глава 1/chapter.txt")
@@ -437,8 +446,8 @@ async function main() {
     if (res.lines[0] !== "1") problems.push(`поиск: строка ${res.lines[0]}`);
     // результатов меньше страницы — у панели пейджера нет даже кнопок
     if (res.pagerBtns) problems.push(`поиск: pager молчит, кнопок ${res.pagerBtns}`);
-    /* «Только главы» — все артефакты стадий (4 типа × 2 главы), заметки
-     * уходят из охвата, но чипсы остаются на месте: это панель выбора */
+    /* «Только главы» — все артефакты стадий (4 типа × 2 главы); глоссарий и
+     * заметки уходят из охвата, но чипсы остаются: это панель выбора */
     await page.click('.search-chips button:has-text("Только главы")');
     await page.click(".search-run");
     await page.waitForTimeout(900);
@@ -447,7 +456,6 @@ async function main() {
       chips: [...document.querySelectorAll(".search-scope-chip")]
         .filter((l) => l.querySelector("input").checked).length,
       clusters: document.querySelectorAll(".search-cluster-label").length,
-      allChips: document.querySelectorAll(".search-scope-chip").length,
     }));
     if (onlyChapters.files !== 8 || onlyChapters.chips !== 4)
       problems.push(`поиск: «Только главы» — ${onlyChapters.files} файлов, `
@@ -480,34 +488,50 @@ async function main() {
     if (!/глава/i.test(opened.text))
       problems.push("поиск: в редакторе не тот файл");
     // запрос доезжает до панели поиска редактора: она открыта и заполнена
-    // запрос доезжает до панели поиска редактора: она открыта и заполнена
     if (!opened.findOpen || !/глава/.test(opened.findValue || ""))
       problems.push(`поиск: панель поиска редактора `
         + `${opened.findOpen ? "пуста" : "не открыта"} (${opened.findValue})`);
-    /* «Искать в глоссарии» — та же строка уводит на вкладку «Глоссарий».
-     * Хэш после клика остался «.../search» (вкладку сменил state, не роут),
-     * поэтому сначала уводим SPA на хах: goto тем же URL — не навигация */
+    /* тот же запрос по глоссарию: оставляем в охвате только ner.json — и
+     * смотрим, что клик ведёт на вкладку «Глоссарий» со всеми столбцами.
+     * Хэш после клика остаётся «.../search» (вкладку сменил state, не роут) */
     await page.evaluate(() => { location.hash = "#/hub"; });
     await page.waitForTimeout(400);
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/search`,
       { waitUntil: "load" });
-    await page.waitForSelector(".search-ner-btn", { timeout: 15000 });
-    await page.fill(".search-q", "мир");
-    await page.click(".search-ner-btn");
-    await page.waitForTimeout(1200);
-    /* смена вкладки локальная: хэш остаётся «.../search», поэтому смотрим на
-       активную вкладку и на поле поиска глоссария */
+    await page.waitForSelector(".search-scope-chip", { timeout: 15000 });
+    /* охват помнится на проект, поэтому снимаем главы не сразу: пока не
+     * включён глоссарий, снятие последнего чипса guard оставляет последним */
+    await page.click('.search-scope-chip:has-text("ner.json")');
+    for (const g of ["chapter", "translated", "redacted", "polished"])
+      await page.click(`.search-scope-chip:has-text("${g}")`);
+    await page.fill(".search-q", "глава");
+    await page.click(".search-run");
+    await page.waitForTimeout(900);
+    const nerRow = await page.evaluate(() => {
+      const b = document.querySelector(".search-file-path");
+      return b ? { name: b.textContent.trim(), title: b.getAttribute("title") || "" }
+               : null;
+    });
+    if (!nerRow || nerRow.name !== "ner.json")
+      problems.push(`поиск: в охвате только глоссарий — строка ${JSON.stringify(nerRow)}`);
+    else if (!/Глоссарий/.test(nerRow.title))
+      problems.push(`поиск: подсказка строки «${nerRow.title}»`);
+    else {
+      await page.click(".search-file-path");
+      await page.waitForTimeout(1200);
+    }
     const toNer = await page.evaluate(() => ({
       tab: [...document.querySelectorAll(".tab-active")]
         .map((x) => x.textContent.trim()).join(""),
       q: (document.querySelector(".ner-q") || {}).value || "",
-      rows: document.querySelectorAll(".ner-table tbody tr.ner-row").length,
+      cols: [...document.querySelectorAll(".ner-th")]
+        .map((x) => x.textContent.trim().replace(/\s*[\u2191\u2193]$/, "")),
     }));
-    if (toNer.tab !== "Глоссарий" || !/мир/.test(toNer.q))
+    if (toNer.tab !== "Глоссарий" || !/глава/.test(toNer.q))
       problems.push(`поиск: в глоссарий не перешло (вкладка «${toNer.tab}», `
         + `поле «${toNer.q}»`);
-    if (SHOT)
-      await page.screenshot({ path: path.join(OUT, "scenario-search-file.png") });
+    else if (toNer.cols.join(",") !== "term,type,translation,count")
+      problems.push(`поиск: в глоссарии столбцы «${toNer.cols.join(",")}»`);
     if (SHOT)
       await page.screenshot({ path: path.join(OUT, "scenario-search-ner.png") });
     log(`${problems.length === beforeS ? "✅" : "❌"} поиск  ${res.status}` +
@@ -732,12 +756,15 @@ async function main() {
     if (f0.cbs !== f0.rows) problems.push(`файлы: чекбоксов ${f0.cbs} из ${f0.rows}`);
     if (!f0.tools || f0.bar) problems.push("файлы: без выделки видна панель выделения");
     // в строке — только действия одного объекта; опасные и групповые — наверху
-    if (f0.rowTips.some((t) => t.some((x) => /Удалить|Скачать|Перенести/.test(x))))
+    if (f0.rowTips.some((t) => t.some((x) => /Удалить|Перенести/.test(x))))
       problems.push(`файлы: в строке осталось групповое действие (${f0.rowTips[0]})`);
     if (f0.rowTips.some((t) => !t.some((x) => x.startsWith("Переименовать "))))
       problems.push("файлы: не у каждой строки есть «Переименовать»");
     if (!f0.rowTips.some((t) => t.some((x) => x.startsWith("Править "))))
       problems.push("файлы: кнопки «Править» у файлов нет");
+    // скачать файл можно и без выделки — кнопка стоит между правкой и именем
+    if (!f0.rowTips.some((t) => t.some((x) => x.startsWith("Скачать "))))
+      problems.push("файлы: кнопки «Скачать» у файлов нет");
     // выделяем первый файл — панель появляется, кнопки тулбара уходят
     const boxes = page.locator('.files-list .frow:not([data-dir="1"]) .fsel');
     await boxes.first().check();
@@ -815,9 +842,9 @@ async function main() {
   }
 
   /* страница «Настройки»: блоки реестра карточками, секрет — маской,
-   * сохранение пишет общий конфиг; настройки самого веб-сервера — последние
-   * блоки первой субвкладки (отдельной вкладки про .env больше нет), а
-   * внешний вид — своя субвкладка с localStorage-предпочтениями */
+   * сохранение пишет общий конфиг; блоки самого веб-сервера в реестре остались,
+   * но на экране их нет; внешний вид — своя субвкладка с localStorage-
+   * предпочтениями, включая выбор языка подсветки */
   {
     const before = problems.length;
     await page.goto(`${url}/#/settings`, { waitUntil: "load" });
@@ -840,9 +867,14 @@ async function main() {
       problems.push(`настройки: субвкладки (${head.tabs.join("/")})`);
     if (head.active !== head.tabs[0])
       problems.push(`настройки: активна вкладка «${head.active}»`);
-    for (const t of ["Профили LLM", "Рассуждения модели",
-      "Веб-сервер: сеть и доступ", "Веб-сервер: данные и задачи"])
+    for (const t of ["Профили LLM", "Рассуждения модели"])
       if (!head.cards.includes(t)) problems.push(`настройки: нет карточки «${t}»`);
+    // веб-сервер — не книга: его блоки и поля в интерфейс не едут
+    for (const t of ["Веб-сервер: сеть и доступ", "Веб-сервер: данные и задачи"])
+      if (head.cards.includes(t))
+        problems.push(`настройки: карточка веб-сервера «${t}» на экране`);
+    if (await page.locator('.settings-cards [name="WEB_PORT"]').count())
+      problems.push("настройки: поля веб-сервера рисуются в форме");
     // путь общего конфига экрану не нужен: статус пустой на General
     if (head.status) problems.push(`настройки: статус General «${head.status}»`);
     if (/\.env/.test(head.html)) problems.push("настройки: .env в разметке экрана");
@@ -853,7 +885,8 @@ async function main() {
     const masked = await page.locator(".settings-cards .field")
       .filter({ hasText: "API-ключ" }).first()
       .locator("input,select,textarea").first().inputValue();
-    if (masked !== "••••") problems.push(`настройки: секрет «${masked}»`);
+    if (masked !== "•".repeat("probe-secret".length))
+      problems.push(`настройки: секрет «${masked}»`);
     if (SHOT) await page.screenshot({ path: path.join(OUT, "settings.png") });
     // карточка рассуждений: поля, варианты и предзаполнение — из реестра
     const card = page.locator(".settings-cards .review-card",
@@ -945,9 +978,9 @@ async function main() {
     const before = problems.length;
     const want = {
       "Перевод": ["Перевод (LLM)"],
-      "Глоссарий": ["Создание глоссария (LLM)", "Проверка глоссария (LLM)"],
-      "Проверки": ["Проверка перевода", "Проверка перевода (LLM)",
-        "Оценка перевода (LLM)"],
+      "Глоссарий": ["Создание глоссария (LLM)"],
+      "Проверки": ["Проверка глоссария (LLM)", "Проверка перевода",
+        "Проверка перевода (LLM)", "Оценка перевода (LLM)"],
       "Книга и файлы": ["Разбор исходника на главы", "Компиляция TXT/EPUB/FB2",
         "Создание Wiki (LLM)", "Массовые замены"],
     };
@@ -994,8 +1027,8 @@ async function main() {
       if (SHOT)
         await page.screenshot({ path: path.join(OUT, `settings-${slugs[tab]}.png`) });
     }
-    const mode = (fields || []).find((x) => /Поле notes/.test(x));
-    if (!mode) problems.push("настройки: нет поля выбора значения для notes");
+    const mode = (fields || []).find((x) => /Не голосующие поля/.test(x));
+    if (!mode) problems.push("настройки: нет поля выбора значения");
     else if (!/^select\(4\):last$/.test(mode.replace(/^[^=]*=/, "").replace(/·единица$/, "")))
       problems.push(`настройки: поле режима выглядит так «${mode}»`);
     const cap = (fields || []).find((x) => /Ограничение длины значения/.test(x));
@@ -1067,17 +1100,16 @@ async function main() {
     }
     /* редактируем профиль: карточки LLM показывают его значения; новый профиль
      * создан копией General, поэтому пустых полей LLM в форме нет (секрет —
-     * под маской); карточки веб-сервера — общие, профиль их не перекрывает */
-    const st2 = await status();
-    if (!/профиль «Домашний»/.test(st2) || /llm_profiles\.json/.test(st2))
-      problems.push(`профили: статус «${st2}»`);
-    if (await fieldValue("WEB_PORT") !== "8756")
-      problems.push(`профили: профиль перекрыл веб-сервер «${await fieldValue("WEB_PORT")}»`);
+     * под маской); карточки веб-сервера на экран не выводятся вовсе */
+    if (await status())
+      problems.push(`профили: статус страницы вернулся «${await status()}»`);
+    if (await page.locator('.settings-cards [name="WEB_PORT"]').count())
+      problems.push("профили: блок веб-сервера вернулся на страницу");
     if (await fieldValue("HOST") !== "http://127.0.0.1:9/v1")
       problems.push(`профили: новый профиль не копирует сервер (${await fieldValue("HOST")})`);
     if (await fieldValue("THREADS") === "")
       problems.push("профили: новый профиль не копирует потоки");
-    if (await fieldValue("API_KEY") !== "••••")
+    if (await fieldValue("API_KEY") !== "•".repeat("probe-secret".length))
       problems.push(`профили: секрет профиля показан не маской (${await fieldValue("API_KEY")})`);
     await page.locator('.settings-cards [name="MODEL"]').first().fill("дом-модель");
     await page.locator('.settings-cards [name="API_KEY"]').first().fill("дом-ключ");

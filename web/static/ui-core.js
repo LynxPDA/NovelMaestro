@@ -163,12 +163,41 @@
     });
   }
 
-  /* Язык редактора файла: у файлов промптов расширение .txt, а разметка своя
-   * (<system>, <translate>), и читается она html-языком — язык берётся по
+  /* Язык редактора файла по имени: у файлов промптов расширение .txt, а разметка
+   * своя (<system>, <translate>), и читается она html-языком — язык берётся по
    * каталогу prompts/, а не по расширению. Остальное — по расширению. */
   function fileLang(path, isPrompt) {
     if (isPrompt) return "prompt";
     return /(^|\/)prompts\//.test(String(path || "")) ? "prompt" : extOf(path);
+  }
+
+  /* ── внешний вид редакторов: значения и язык подсветки ──
+   * Языки — только те, что есть в вендорном бандле CM. Хранилище (localStorage)
+   * читает и пишет app.js: здесь сами значения и чистый выбор языка.
+   * Промптам и логам язык выбирает человек: у первых расширение .txt ничего не
+   * говорит о разметке, у вторых его вообще нет. */
+  var EDITOR_LANGS = [
+    { v: "prompt", label: "теги промпта" },
+    { v: "text", label: "простой текст" },
+    { v: "md", label: "markdown" },
+    { v: "json", label: "JSON" },
+    { v: "yaml", label: "YAML" },
+    { v: "py", label: "python" },
+  ];
+  var EDITOR_SETTINGS = {
+    ui: "dark", editor: "auto", fontSize: 13,
+    langPrompt: "prompt", langLog: "text",
+  };
+
+  /* Язык подсветки файла с выбором пользователя: промпты и логи — как указано
+   * на «Внешнем виде», остальные файлы — по расширению. */
+  function editorLang(path, isPrompt) {
+    if (isPrompt || /(^|\/)prompts\//.test(String(path || ""))) {
+      return EDITOR_SETTINGS.langPrompt;
+    }
+    return /\.log$/i.test(String(path || "").split("/").pop() || "")
+      ? EDITOR_SETTINGS.langLog
+      : extOf(path);
   }
 
   /* ── разметка промпта в предпросмотре запроса ──
@@ -957,6 +986,9 @@
     extOf: extOf,
     previewMode: previewMode,
     fileLang: fileLang,
+    editorLang: editorLang,
+    EDITOR_LANGS: EDITOR_LANGS,
+    EDITOR_SETTINGS: EDITOR_SETTINGS,
     escapeHtml: escapeHtml,
     promptParts: promptParts,
 

@@ -72,6 +72,7 @@ function viewProject(section, name, tab, job) {
     ner: null,
     review: {},
     search: null,
+    nerAll: null, // из «Поиска»: глоссарий открывается со всеми столбцами
     editor: null, // вкладка «Редактор» (глава/панели/подсветка)
     chaptersType: null, // тип файлов во вкладке «Главы» (localStorage-нет)
     runJob: null, // jobId из роута (лог конкретного запуска на «Запусках»)
@@ -142,14 +143,16 @@ function viewProject(section, name, tab, job) {
   /* Смена вкладки — локальный рендер (pi-navigate из app.js не диспатчится:
      view тот же); старому телу — сигнал ухода (run-views гасит SSE-стрим,
      скрытые таймеры). find — запрос, с которым вкладка открывается
-     (из «Поиска» — в «Глоссарий») */
-  function setView(view, find) {
-    if (view === st.view && (!find || st.search === find)) return;
+     (из «Поиска» — в «Глоссарий»); all — открыть глоссарий со ВСЕМИ
+     столбцами: искателю нужно значение поля, а не три колонки по умолчанию */
+  function setView(view, find, all) {
+    if (view === st.view && !all && (!find || st.search === find)) return;
     const body = page.querySelector(".project-body");
     if (body) body.dispatchEvent(new CustomEvent("pi-navigate"));
     st.view = view;
     st.edit = null;
     st.search = find ? String(find) : null;
+    st.nerAll = all ? 1 : null;
     st.nerSel.clear(); // выделение — про конкретную вкладку
     render();
   }
@@ -227,8 +230,17 @@ function viewProject(section, name, tab, job) {
     return `/api/download?${q}`;
   }
 
+  /* Скачивание одного файла: ссылка с download. Строка списка забирает файл
+     сама, панель выделения — каждый из выделенных с паузой. */
+  function downloadFile(full, name) {
+    const a = h("a", { href: downloadUrl(full), download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
+
   /* «Файлы»: список с ВЫДЕЛЕНИЕМ. Строка — чекбокс, имя, метаданные и кнопки
-     одного объекта: файл — править и переименовать, каталог — переименовать.
+     одного объекта: файл — править, скачать и переименовать, каталог — переименовать.
      Скачивание, перенос и удаление применяются к выделке и живут в панели
      выделения: пока что-то выделено, она заменяет кнопки тулбара. Выделение —
      состояние вкладки (не localStorage): снимается при смене папки и после
@@ -459,12 +471,7 @@ function viewProject(section, name, tab, job) {
         return;
       }
       files.forEach((e, i) =>
-        setTimeout(() => {
-          const a = h("a", { href: downloadUrl(path(e)), download: e.name });
-          document.body.append(a);
-          a.click();
-          a.remove();
-        }, i * 250),
+        setTimeout(() => downloadFile(path(e), e.name), i * 250),
       );
       toast(`Скачивание: ${files.length} файл(ов)`);
     }
@@ -699,8 +706,11 @@ function viewProject(section, name, tab, job) {
         );
     const actions = h("div", { class: "factions" });
     if (!e.dir) {
+      /* порядок один везде: правка → скачать → переименовать; скачивание —
+         действие самого файла, а не группы, поэтому в строке, а не в тулбаре */
       actions.append(
         iconBtn("pencil", `Править ${e.name}`, () => openEditor(full)),
+        iconBtn("download", `Скачать ${e.name}`, () => downloadFile(full, e.name)),
       );
     }
     actions.append(iconBtn("textCursor", `Переименовать ${e.name}`, () =>
@@ -765,7 +775,7 @@ function viewProject(section, name, tab, job) {
     const ext = extOf(full);
     /* язык — по назначению файла: prompts/* читаются как промпт (html-язык
        даёт <system>/<translate> быть тегами), остальное — по расширению */
-    const ed = makeEditor(data.content, UICore.fileLang(full));
+    const ed = makeEditor(data.content, UICore.editorLang(full));
     const err = h("div", { class: "form-error" });
 
     /* подсветка и предпросмотр — по расширению файла (makeEditor/setLang),
@@ -1931,6 +1941,16 @@ function viewProject(section, name, tab, job) {
       }
     } catch {
       typeFilter = null;
+    }
+
+    /* из «Поиска» вкладка открывается со всеми столбцами: поиск идёт по
+       отображаемым ключам, а отображается все ключи записи — то есть ищется
+       по-настоящему по всем полям. Выбор пользователя в localStorage не
+       перезаписываем: он вернётся при обычном заходе на вкладку */
+    if (st.nerAll) {
+      cols = null;
+      searchFields = null;
+      st.nerAll = null;
     }
 
     function visible() {
@@ -3808,6 +3828,8 @@ function viewProject(section, name, tab, job) {
     let clusters = [];
     let groups = [];
     let defaults = [];
+    // куда клик по файлу группы ведёт: editor | glossary (4-й элемент меты)
+    const groupOpen = {};
     let scopes = Array.isArray(prefs.scopes) && prefs.scopes.length
       ? prefs.scopes.slice() : null; // null — дефолт сервера
 
@@ -3883,11 +3905,15 @@ function viewProject(section, name, tab, job) {
       );
     }
 
-    /* строка результата: группа, путь (клик открывает файл) и число совпадений;
-       артефакт главы открывается во вкладке «Редактор», запрос туда едет
+    /* строка результата: группа, путь (клик открывает файл) и число совпадений.
+       Куда ведёт клик — свойство группы из меты: «editor» (глава во вкладке
+       «Редактор» или обычный редактор) и «glossary» (нер.json — тот же текст,
+       но смотреть его удобнее в таблице глоссария). Запрос в обоих случаях едет
        предзаполненным — искать заново не придётся */
     function fileNode(f) {
       const rel = String(f.path || "");
+      const q = String(input.value || "").trim();
+      const glossary = groupOpen[String(f.group || "")] === "glossary";
       const isChapter = /^chapters\/[^/]+\/[^/]+$/.test(rel);
       return h(
         "div",
@@ -3898,11 +3924,17 @@ function viewProject(section, name, tab, job) {
           h("span", { class: "search-file-group" }, f.group),
           h("button", {
             class: "btn btn-sm btn-ghost search-file-path",
-            title: isChapter
-              ? "Открыть главу в редакторе с этим запросом"
-              : "Открыть файл в редакторе с этим запросом",
-            "aria-label": `Открыть ${rel} в редакторе`,
-            onclick: () => openEditor(rel, String(input.value || "").trim()),
+            title: glossary
+              ? "Открыть «Глоссарий»: все поля, все столбцы"
+              : (isChapter
+                ? "Открыть главу в редакторе с этим запросом"
+                : "Открыть файл в редакторе с этим запросом"),
+            "aria-label": glossary
+              ? `Искать ${q} в глоссарии`
+              : `Открыть ${rel} в редакторе`,
+            onclick: () => (glossary
+              ? setView("ner", q, true)
+              : openEditor(rel, q)),
           }, rel),
           h("span", { class: "search-file-count" }, String(f.count)),
         ),
@@ -3973,6 +4005,7 @@ function viewProject(section, name, tab, job) {
       groups = r.groups || [];
       clusters = r.clusters || [];
       defaults = (r.scopes || []).filter((s) => groups.some((g) => g[0] === s));
+      for (const g of groups) groupOpen[g[0]] = g[3] || "editor";
     } catch (ex) {
       err.textContent = ex.message;
     }
@@ -3989,29 +4022,11 @@ function viewProject(section, name, tab, job) {
       h("span", { class: "spacer" }),
       status,
     );
-    const hint = h(
-      "div",
-      { class: "card-hint" },
-      "Поиск читает файлы книги целиком, без индексов и без лимитов: показаны "
-        + "все совпадения, список листается постранично.",
-      h(
-        "span",
-        null,
-        " Файл главы открывается во вкладке «Редактор» с уже подставленным "
-        + "запросом, остальные файлы — обычным редактором. ",
-        h("button", {
-          class: "btn btn-sm btn-ghost search-ner-btn",
-          title: "Перейти в «Глоссарий» и искать эту строку там",
-          onclick: () => setView("ner", String(input.value || "").trim()),
-        }, "Искать в глоссарии"),
-      ),
-    );
     return h(
       "div",
       { class: "files-wrap" },
       toolbar,
       h("div", { class: "search-scope-row" }, chips),
-      hint,
       err,
       pager.el,
       rows,
@@ -4451,8 +4466,8 @@ function viewProject(section, name, tab, job) {
     }
     const list = h("div", { class: "prompt-list" });
     const err = h("div", { class: "form-error" });
-    /* все файлы вкладки — промпты: язык один на вкладке, он же «html» */
-    const ed = makeEditor("", "prompt");
+    /* все файлы вкладки — промпты: язык один на вкладке (выбор с «Внешнего вида») */
+    const ed = makeEditor("", UICore.EDITOR_SETTINGS.langPrompt);
     const nameLabel = h("div", { class: "prompt-name" });
     let current = null;
 

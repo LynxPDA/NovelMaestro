@@ -23,6 +23,8 @@ from web.auth import Auth
 from web.server import make_server
 
 REPO = Path(__file__).resolve().parent.parent
+# точка маски секретов — та же константа реестра, что и в коде
+S_MASK = S.MASK_CHAR
 
 
 @pytest.fixture
@@ -341,7 +343,7 @@ def _env_text(tmp_path):
 
 def test_settings_get_masked(srv, tmp_path, monkeypatch):
     """GET /api/settings — блоки реестра со значениями; секрет отдаётся
-    маской «••••», содержимое файла в SPA не ездит."""
+    (точка на символ значения), содержимое файла в SPA не ездит."""
     _srv, port, root = _settings_srv(
         srv, tmp_path, monkeypatch,
         "API_KEY=supersecret\nHOST=http://x:1\n")
@@ -351,7 +353,7 @@ def test_settings_get_masked(srv, tmp_path, monkeypatch):
     f = _settings_fields(r)
     assert f["api_key"]["secret"] is True
     assert f["api_key"]["key"] == "API_KEY"   # сохран — по ключу, не по имени
-    assert f["api_key"]["value"] == "••••"
+    assert f["api_key"]["value"] == S_MASK * len("supersecret")
     assert f["host"]["value"] == "http://x:1"
     dumped = json.dumps(r, ensure_ascii=False)
     assert "supersecret" not in dumped and "content" not in r
@@ -931,7 +933,7 @@ def test_settings_hidden_when_auth_enabled(tmp_path, monkeypatch):
         assert "content" not in r
         assert "xyz" not in json.dumps(r, ensure_ascii=False)
         f = _settings_fields(r)
-        assert f["api_key"]["value"] == "\u2022\u2022\u2022\u2022"
+        assert f["api_key"]["value"] == S_MASK * len("xyz")
         assert f["host"]["value"] == "http://x:1"
     finally:
         threading.Thread(target=srv.shutdown, daemon=True).start()
@@ -1120,9 +1122,11 @@ def test_search_meta_without_query(srv, tmp_path):
     ids = [g[0] for g in r["groups"]]
     assert ids[:4] == ["chapter", "translated", "redacted", "polished"], \
         "метки групп файлов глав — слаги стадий"
-    assert "logs" in ids and "ner" not in ids, "глоссарий ищется на своей вкладке"
+    assert "logs" in ids and "ner" in ids, "глоссарий — обычный файл обхода"
     assert [c[0] for c in r["clusters"]] == ["chapters", "other"]
-    assert r["scopes"] == ["chapter", "polished", "notes"]
+    assert r["scopes"] == ["chapter", "polished", "ner", "notes"]
+    # 4-й элемент меты — чем клик по файлу группы открывает SPA
+    assert {g[0]: g[3] for g in r["groups"]}["ner"] == "glossary"
 
 
 def test_search_short_query(srv, tmp_path):

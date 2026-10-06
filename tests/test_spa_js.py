@@ -254,7 +254,7 @@ def test_prompt_edit_button():
         in rv
     assert "/prompts/${encodeURIComponent(relPath)}" in rv
     assert "/file?project=${section}/${name}" in rv  # чтение source-файлов
-    assert 'makeEditor(d.content || "", UICore.fileLang(relPath, isPromptFile))' \
+    assert 'makeEditor(d.content || "", UICore.editorLang(relPath, isPromptFile))' \
         in rv
     # редактор файла — модалка с сохранением
     assert "Сохранить" in rv and "editor-modal-body" in rv
@@ -277,12 +277,19 @@ def test_prompt_markup_is_readable():
     rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
     css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
 
-    # язык — по назначению файла (prompts/), а не по расширению .txt
-    assert 'prompt: "html",' in app, "язык промптов — html"
+    # язык редактора выбирается в UICore: prompts/ — настройка пользователя
+    # (по умолчанию html-теги), логи — своя, остальное — расширение файла
+    assert 'prompt: "html",' in app, "язык промптов по умолчанию — html"
     assert "function fileLang(path, isPrompt)" in core
-    assert 'return /(^|\\/)prompts\\//.test(String(path || "")) ? "prompt"' in core
-    assert 'makeEditor("", "prompt")' in pv, "вкладка «Промпты» — язык промпта"
-    assert "UICore.fileLang(full)" in pv and "UICore.fileLang(full)" in app
+    assert "function editorLang(path, isPrompt)" in core
+    assert 'return EDITOR_SETTINGS.langPrompt;' in core
+    assert 'return /\\.log$/i.test(String(path || "").split("/").pop() || "")' in core
+    assert 'makeEditor("", UICore.EDITOR_SETTINGS.langPrompt)' in pv, \
+        "вкладка «Промпты» — язык промпта из выбора пользователя"
+    assert "UICore.editorLang(full)" in pv and "UICore.editorLang(full)" in app
+    # выбор живёт в localStorage браузера, а не в .env
+    assert 'langPrompt: "prompt", langLog: "text",' in core
+    assert 'if (EDITOR_LANGS.some((o) => o.v === d[k])) EDITOR_SETTINGS[k] = d[k];' in app
 
     # лицо подсветки: текст, скобки и имена тегов
     for face in ("t.content, t.bracket, t.separator", "t.angleBracket",

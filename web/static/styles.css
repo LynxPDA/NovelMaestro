@@ -1237,6 +1237,19 @@ input[type="number"] {
   align-items: center;
   gap: 6px;
 }
+/* каждый кластер охвата — своей строкой: иначе подпись «Прочее:» слипается
+   с последним чипсом кластера глав и читается как его чипс */
+.search-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 100%;
+}
+.search-cluster-label {
+  color: var(--muted);
+  font-size: 12px;
+}
 .search-chip {
   display: inline-flex;
   align-items: center;
