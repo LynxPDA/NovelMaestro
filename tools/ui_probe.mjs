@@ -1431,6 +1431,54 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} поля режима  ${seen.length} режимов · ${problems.length === before ? "все совпали" : "расхождения"}`);
   }
 
+  /* Состояние вкладок книги: перезагрузка возвращает на ту же вкладку,
+   * «Редактор» — на ту же главу, «Логи» — в ту же папку и на тот же файл
+   * (localStorage браузера, один ключ на книгу) */
+  {
+    const before = problems.length;
+    const bare = `${url}/#/project/${SECTION}/${BOOK}`;
+    const activeTab = () => page.evaluate(() => ((document.querySelector(".tab-active") || {}).textContent || "").trim());
+    await page.goto(`${bare}/editor`, { waitUntil: "load" });
+    await page.waitForSelector(".ed-chapter", { timeout: 15000 });
+    const first = await page.evaluate(() => (document.querySelector(".ed-chapter") || {}).value || "");
+    const opts = await page.evaluate(() => [...document.querySelectorAll(".ed-chapter option")].map((o) => o.value));
+    if (opts.length < 2) problems.push("на полигоне меньше двух глав — память редактора не проверить");
+    const second = opts.find((v) => v !== first) || first;
+    await page.locator(".ed-chapter").selectOption({ value: second });
+    await page.waitForTimeout(700);
+    await page.goto(bare, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".ed-chapter", { timeout: 15000 });
+    const tab1 = await activeTab();
+    const back = await page.evaluate(() => (document.querySelector(".ed-chapter") || {}).value || "");
+    if (tab1 !== "Редактор") problems.push(`ссылка без вкладки открыла «${tab1}»`);
+    if (back !== second) problems.push(`редактор вернулся на главу «${back}»`);
+    /* логи: подпапка и открытый файл тоже помнятся. Помнящаяся папка могла
+     * открыть подпапку ещё на прошлом сценарии — начинаем с корня logs/ */
+    await page.goto(`${bare}/logs`, { waitUntil: "load" });
+    await page.waitForSelector(".crumbs .crumb", { timeout: 15000 });
+    await page.locator(".crumbs .crumb").first().click();
+    await page.waitForTimeout(700);
+    await page.locator('.prompt-item:has-text("chapters/")').first().click();
+    await page.waitForTimeout(700);
+    await page.locator('.prompt-item:has-text("00000_1_Глава 1.log")').first().click();
+    await page.waitForTimeout(700);
+    await page.goto(bare, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".log-view", { timeout: 15000 });
+    await page.waitForTimeout(900); // содержимое лога догружается отдельным запросом
+    const tab2 = await activeTab();
+    const crumbs = await page.evaluate(() => (document.querySelector(".crumbs") || {}).textContent || "");
+    const viewed = await page.evaluate(() => (document.querySelector(".log-view") || {}).textContent || "");
+    if (tab2 !== "Логи") problems.push(`ссылка без вкладки открыла «${tab2}»`);
+    if (!crumbs.includes("chapters")) problems.push(`логи вернулись из корня: «${crumbs.trim()}»`);
+    if (!viewed.includes("глава: ок")) problems.push("содержимое лога не вернулось");
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "scenario-tab-state.png") });
+    }
+    log(`${problems.length === before ? "✅" : "❌"} состояние вкладок  редактор ${first} → ${back} · логи: chapters/`);
+  }
+
   /* «Оценка перевода»: единая форма стадии — режим оценки и чанковые поля;
    * в режиме чанков строка «Главы» перестаёт обрезаться по бюджету (диапазон
    * там — вся книга), а предпросмотр показывает план и ОБА запроса прогона:

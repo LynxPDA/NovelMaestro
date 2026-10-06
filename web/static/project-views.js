@@ -85,24 +85,40 @@ function projectNavigate(project, view) {
 
 /* eslint-disable-next-line no-unused-vars -- глобал SPA, вызывается из app.js */
 function viewProject(section, name, tab, job) {
+  /* Последнее состояние вкладок книги живёт в браузере одним ключом
+     (nmTab:<раздел>/<книга>): «Редактор» помнит главу и обе панели, «Главы» —
+     тип файлов, «Логи» — папку и открытый файл, «Заметки» и «Промпты» —
+     открытый документ. Раньше это терялось при перезагрузке страницы.
+     Хранилище — предпочтение браузера, не конфиг книги (AGENTS §7) */
+  const pref = UICore.projectPrefs(localStorage, section, name);
   const st = {
     view: "files", // tab (третий сегмент роута) может открыть свою вкладку
-    path: "",
+    path: pref.get("files").path || "",
     edit: null,
     ner: null,
     review: {},
     search: null,
     nerAll: null, // из «Поиска»: глоссарий открывается со всеми столбцами
     editor: null, // вкладка «Редактор» (глава/панели/подсветка)
-    chaptersType: null, // тип файлов во вкладке «Главы» (localStorage-нет)
+    chaptersType: pref.get("chapters").type || "polished", // тип файлов «Глав»
+    logPath: pref.get("logs").path || "", // папка логов и открытый в ней файл
+    logFile: pref.get("logs").file || "",
     runJob: null, // jobId из роута (лог конкретного запуска на «Запусках»)
     filesSort: localStorage.getItem("filesSort") || "name", // name | mtime | size
     filesAsc: localStorage.getItem("filesAsc") !== "0",
     filesSel: new Set(), // выделенные пути «Файлов» (состояние вкладки)
     nerSel: new Set(), // выделенные записи глоссария (объекты data.items)
-    filesPage: 0, // страница списка файлов: выделение её не сбрасывает
+    filesPage: pref.get("files").page || 0, // страница: выделение её не сбрасывает
   };
   const page = h("div", { class: "page" });
+
+  /* папка логов — тоже состояние вкладки; открытый файл при переходе в другую
+     папку сбрасывается: он был файлом прошлой папки */
+  function setLogPath(path) {
+    st.logPath = path || "";
+    st.logFile = "";
+    pref.set("logs", { path: st.logPath, file: "" });
+  }
 
   function setPath(path) {
     st.path = path || "";
@@ -111,28 +127,55 @@ function viewProject(section, name, tab, job) {
     // выделение и страница — про конкретную папку: при переходе сбрасываем
     st.filesSel.clear();
     st.filesPage = 0;
+    pref.set("files", { path: st.path, page: 0 });
     render();
   }
 
   /* состояние вкладки «Редактор» — одно на проект: повторный рендер вкладки
-     не пересоздаёт CodeMirror и не теряет несохранённые правки */
+     не пересоздаёт CodeMirror и не теряет несохранённые правки. Открытое
+     раньше возвращается из localStorage: значащие поля проверяются по месту
+     (глава сверяется со списком, тип файла — с вариантами главы) */
   function editorState() {
     if (!st.editor) {
+      const p = pref.get("editor");
+      const ngram = parseInt(p.ngram, 10);
+      let threshold = parseFloat(String(p.threshold).replace(",", "."));
+      threshold = Number.isFinite(threshold)
+        ? Math.min(1, Math.max(0, threshold))
+        : 0.75;
       st.editor = {
-        chapter: null,
-        mode: "two", // one | two — по умолчанию две панели (оригинал+перевод)
-        left: { type: null, text: null, dirty: false },
-        right: { type: null, text: null, dirty: false },
-        hl: true, // подсветка терминов глоссария — по умолчанию включена
-        ngram: 3, // размер n-граммы нечёткого поиска (аналог --ner_ngram)
-        threshold: 0.75, // порог пересечения н-грамм (--ner_threshold)
+        chapter: p.chapter || null,
+        // one | two — по умолчанию две панели (оригинал+перевод)
+        mode: p.mode === "one" ? "one" : "two",
+        left: { type: p.left || null, text: null, dirty: false },
+        right: { type: p.right || null, text: null, dirty: false },
+        // подсветка терминов глоссария — по умолчанию включена
+        hl: p.hl !== false,
+        ngram: Number.isFinite(ngram) ? Math.min(6, Math.max(1, ngram)) : 3,
+        threshold, // размер n-граммы и порог — аналоги --ner_ngram/--ner_threshold
         ner: null, // кеш {items, matcher} глоссария
         find: null, // {type, q}: открыть панель поиска с этим запросом
         panes: null, // кеш панелей — повторный рендер не теряет правки
-        wrap: null, // DOM вкладки: пока открыт проект; F5 — сброс
+        wrap: null, // DOM вкладки: пока открыт проект; F5 — то же состояние
       };
     }
     return st.editor;
+  }
+
+  /* «Редактор» помнит главу, панели, режим и подсветку: пишем при каждой
+     смене — перезагрузка страницы возвращает пользователя в то же место */
+  function saveEditorPref() {
+    const ed = st.editor;
+    if (!ed) return;
+    pref.set("editor", {
+      chapter: ed.chapter,
+      mode: ed.mode,
+      hl: !!ed.hl,
+      ngram: ed.ngram,
+      threshold: ed.threshold,
+      left: ed.left.type,
+      right: ed.right.type,
+    });
   }
 
   /* Открыть файл результата: артефакт главы — во вкладке «Редактор» на его
@@ -144,6 +187,7 @@ function viewProject(section, name, tab, job) {
       const ed = editorState();
       ed.wrap = null; // глава другая — вкладку собираем заново
       ed.chapter = seg[1];
+      saveEditorPref();
       // имя файла результата и есть тип артефакта панели (канон — с .txt)
       ed.left.type = seg[2];
       ed.left.text = null;
@@ -185,9 +229,16 @@ function viewProject(section, name, tab, job) {
   if (tab && TABS.some((t) => t[0] === tab)) {
     st.view = tab;
     if (tab === "run") st.runJob = job || null;
+  } else {
+    /* ссылка ведёт на книгу целиком (без вкладки) — открываем последнюю */
+    const last = pref.get("page").view;
+    if (TABS.some((t) => t[0] === last)) st.view = last;
   }
 
   async function render() {
+    /* последняя вкладка книги запоминается и при открытии по ссылке: ссылка —
+       тоже способ оказаться на вкладке */
+    pref.set("page", { view: st.view });
     page.replaceChildren();
     const header = h(
       "div",
@@ -904,7 +955,8 @@ function viewProject(section, name, tab, job) {
       );
     }
     if (!chapters.some((c) => c.dir === ed.chapter)) {
-      ed.chapter = chapters[0].dir;
+      ed.chapter = chapters[0].dir; // глава могла удалиться — помним новую
+      saveEditorPref();
     }
     /* артефакты главы по маскам (канон приоритетен, затем легаси). Канон
        показывается даже если файла ещё нет — пустой редактор, сохранение
@@ -1003,6 +1055,7 @@ function viewProject(section, name, tab, job) {
         p.typeSel.addEventListener("change", () => {
           p.state.type = p.typeSel.value || null;
           p.state.text = null;
+          saveEditorPref();
           loadPane(p);
         });
         p.saveBtn.addEventListener("click", () => savePane(p));
@@ -1704,6 +1757,7 @@ function viewProject(section, name, tab, job) {
       const v = parseInt(ngramInput.value, 10);
       ed.ngram = Number.isFinite(v) ? Math.min(6, Math.max(1, v)) : 3;
       ngramInput.value = String(ed.ngram);
+      saveEditorPref();
       applyMatcher();
     });
     const thresholdInput = h("input", {
@@ -1727,12 +1781,14 @@ function viewProject(section, name, tab, job) {
       const v = readThreshold(raw);
       if (v == null || v === ed.threshold) return;
       ed.threshold = v;
+      saveEditorPref();
       applyMatcher();
     });
     thresholdInput.addEventListener("change", () => {
       const v = readThreshold(thresholdInput.value);
       ed.threshold = v == null ? 0.75 : v;
       thresholdInput.value = String(ed.threshold);
+      saveEditorPref();
       applyMatcher();
     });
     function renderModeLabel() {
@@ -1757,6 +1813,7 @@ function viewProject(section, name, tab, job) {
 
     chapterSel.addEventListener("change", () => {
       ed.chapter = chapterSel.value;
+      saveEditorPref();
       for (const p of panes) {
         p.state.type = null;
         p.state.text = null;
@@ -1783,11 +1840,13 @@ function viewProject(section, name, tab, job) {
     });
     modeBtn.addEventListener("click", () => {
       ed.mode = ed.mode === "two" ? "one" : "two";
+      saveEditorPref();
       renderModeLabel();
       rebuildGrid();
     });
     hlBtn.addEventListener("click", () => {
       ed.hl = !ed.hl;
+      saveEditorPref();
       renderHlLabel();
       if (ed.hl) {
         for (const p of panes) maybeHl(p);
@@ -1915,9 +1974,11 @@ function viewProject(section, name, tab, job) {
     const cellText = UICore.nerCellText;
     const isStruct = (v) => v != null && typeof v === "object";
 
-    /* сортировка кликом по заголовку; дефолт — count ↓ даже без столбца */
-    let sortField = "count";
-    let sortDir = "desc";
+    /* сортировка кликом по заголовку; дефолт — count ↓ даже без столбца.
+       Порядок — состояние вкладки: книга помнит, по чему её сортировали */
+    const nsort = pref.get("ner");
+    let sortField = nsort.sortField || "count";
+    let sortDir = nsort.sortDir || "desc";
 
     const LS_SEARCH_KEY = `nerSearch:${section}/${name}`;
     const LS_TYPES_KEY = `nerTypes:${section}/${name}`;
@@ -2265,6 +2326,7 @@ function viewProject(section, name, tab, job) {
                       const next = UICore.nextNerSort(sortField, sortDir, c);
                       sortField = next.field;
                       sortDir = next.dir;
+                      pref.set("ner", { sortField, sortDir });
                       pg.page = 0;
                       renderRows();
                     },
@@ -3518,14 +3580,14 @@ function viewProject(section, name, tab, job) {
       { key: "tcl", label: "Перевод (LLM)" },
       { key: "quality", label: "Оценка перевода (LLM)" },
     ];
-    let curTab = null;
-    try { curTab = localStorage.getItem("reviewTab"); } catch {}
+    /* вкладка проверки — своя на каждую книгу (была одной на весь интерфейс) */
+    let curTab = pref.get("review").tab || null;
     if (!REVIEW_TABS.some((t) => t.key === curTab)) curTab = "ner";
     const items = []; // {key, btn, pane}
     const bar = h("div", { class: "subtabs" });
     function setTab(key) {
       curTab = key;
-      try { localStorage.setItem("reviewTab", key); } catch {}
+      pref.set("review", { tab: key });
       for (const it of items) {
         it.btn.classList.toggle("subtab-active", it.key === key);
         it.pane.style.display = it.key === key ? "" : "none";
@@ -3623,6 +3685,7 @@ function viewProject(section, name, tab, job) {
 
     async function load() {
       st.chaptersType = typeSel.value;
+      pref.set("chapters", { type: st.chaptersType });
       saveBtn.disabled = true;
       delBtn.disabled = true;
       status.textContent = "Загрузка…";
@@ -4490,7 +4553,8 @@ function viewProject(section, name, tab, job) {
     /* все файлы вкладки — промпты: язык один на вкладке (выбор с «Внешнего вида») */
     const ed = makeEditor("", UICore.EDITOR_SETTINGS.langPrompt);
     const nameLabel = h("div", { class: "prompt-name" });
-    let current = null;
+    /* открытый промпт — состояние вкладки */
+    let current = pref.get("prompts").file || null;
 
     function renderList() {
       list.replaceChildren();
@@ -4523,6 +4587,7 @@ function viewProject(section, name, tab, job) {
       try {
         const d = await api(`/prompts/${encodeURIComponent(fname)}?${q}`);
         current = fname;
+        pref.set("prompts", { file: fname });
         nameLabel.textContent = fname;
         ed.setValue(d.content || "");
         renderList();
@@ -4562,6 +4627,7 @@ function viewProject(section, name, tab, job) {
             });
             toast(`Удалён: ${current}`);
             current = null;
+            pref.set("prompts", { file: "" });
             nameLabel.textContent = "";
             ed.setValue("");
             renderList();
@@ -4647,6 +4713,11 @@ function viewProject(section, name, tab, job) {
       saveBtn,
     );
     renderList();
+    /* файл мог быть удалён в другом месте — возвращаем только живой */
+    if (current && (data.prompts || []).some((p) => p.name === current)) {
+      nameLabel.textContent = current;
+      load(current);
+    }
     const editorHost = h("div", { class: "editor-cm" }, ed.root);
     return h("div", { class: "files-wrap" }, toolbar, err, list, editorHost);
   }
@@ -4727,7 +4798,7 @@ function viewProject(section, name, tab, job) {
     const crumbs = h("div", { class: "crumbs" });
     crumbs.append(
       crumb("logs", () => {
-        st.logPath = "";
+        setLogPath("");
         render();
       }),
     );
@@ -4739,7 +4810,7 @@ function viewProject(section, name, tab, job) {
       crumbs.append(h("span", { class: "crumb-sep" }, " / "));
       crumbs.append(
         crumb(p, () => {
-          st.logPath = target;
+          setLogPath(target);
           render();
         }),
       );
@@ -4748,7 +4819,7 @@ function viewProject(section, name, tab, job) {
     const pre = h("pre", { class: "log-view" });
     const meta = h("div", { class: "review-status" });
     const LOG_PAGE_SIZE = 20;
-    let lSelected = ""; // выбранный лог (подсвечивается в списке)
+    let lSelected = st.logFile || ""; // выбранный лог (подсвечивается в списке)
     /* страница списка логов — общий пейджер */
     const lPager = UIC.listPager({
       pageSize: LOG_PAGE_SIZE,
@@ -4762,7 +4833,7 @@ function viewProject(section, name, tab, job) {
             const btn = h("button", { class: "btn btn-sm btn-ghost prompt-item" });
             btn.append(iconEl("folder", "fname-icon"), `${e.name}/`);
             btn.addEventListener("click", () => {
-              st.logPath = cur ? `${cur}/${e.name}` : e.name;
+              setLogPath(cur ? `${cur}/${e.name}` : e.name);
               render();
             });
             rows.push(btn);
@@ -4783,7 +4854,7 @@ function viewProject(section, name, tab, job) {
                   method: "DELETE",
                 });
                 toast(`Лог удалён: ${full}`);
-                st.logPath = ""; // папка могла стать пустой — на корень
+                setLogPath(""); // папка могла стать пустой — на корень
                 render();
               } catch (ex) {
                 toast(ex.message, "err");
@@ -4845,6 +4916,8 @@ function viewProject(section, name, tab, job) {
         pre.dataset.dir = dir || "";
         meta.textContent = `${dir ? dir + "/" : ""}${name} · ${fmtSize(d.size)}`;
         lSelected = name;
+        st.logFile = name;
+        pref.set("logs", { file: name });
         renderList();
         pre.scrollTop = pre.scrollHeight;
       } catch (ex) {
@@ -4886,7 +4959,7 @@ function viewProject(section, name, tab, job) {
           try {
             await api(`/logs?${q}`, { method: "DELETE" });
             toast("Все логи удалены");
-            st.logPath = "";
+            setLogPath("");
             render();
           } catch (ex) {
             toast(ex.message, "err");
@@ -4903,6 +4976,13 @@ function viewProject(section, name, tab, job) {
       follow,
       clearAll,
     );
+    /* открытый лог — состояние вкладки, но возвращается он только из своей
+       папки: сверяем полный путь по списку (пейджер к этому моменту ещё пуст) */
+    function prefersFile(logs, dir, name) {
+      const prefix = dir ? `${dir}/` : "";
+      return logs.some((l) => l.path === `${prefix}${name}`);
+    }
+    if (lSelected && prefersFile(all, cur, lSelected)) loadLog(lSelected, false, cur);
     return h("div", { class: "files-wrap" }, toolbar, list, lPager.el, pre);
   }
 
@@ -5017,7 +5097,10 @@ function viewProject(section, name, tab, job) {
         "Нет отчётов — запустите стадию translate_check (вкладка «Запуски», стадия 4)",
       );
     }
-    let current = data.reports[0];
+    /* открытый отчёт — состояние вкладки: книга помнит, что читали */
+    const savedReport = pref.get("notes").name;
+    let current = data.reports.find((r) => r.name === savedReport)
+      || data.reports[0];
     const REPORT_PAGE_SIZE = 10;
     const list = h("div", { class: "prompt-list" });
     const body = h("div", { class: "review-card" });
@@ -5054,6 +5137,7 @@ function viewProject(section, name, tab, job) {
         );
         btn.addEventListener("click", () => {
           current = r;
+          pref.set("notes", { name: r.name });
           pager.page = 0; // Другой отчёт — с первой страницы
           renderList();
           renderReport();
@@ -5208,6 +5292,7 @@ function viewProject(section, name, tab, job) {
             }
             data.reports = [];
             current = null;
+            pref.set("notes", { name: "" });
             pager.page = 0;
             listPager.page = 0;
             clearBtn.disabled = true;

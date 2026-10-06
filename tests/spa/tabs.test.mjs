@@ -258,8 +258,8 @@ async function api(path, opts = {}) {
   if (p === "/stages/compile/options") return { modes: [] };
   if (p === "/cover") return { files: [] };
   if (p === "/templates") return { templates: [] };
-  if (p.startsWith("/prompts")) return { files: [], content: "" };
-  if (p.startsWith("/logs")) return { logs: [], content: "" };
+  if (p.startsWith("/prompts")) return globalThis.__prompts || { prompts: [], templates: [] };
+  if (p.startsWith("/logs")) return globalThis.__logs || { logs: [], content: "" };
   if (p === "/ner/export") return { ok: true, content: "" };
   if (p === "/jobs") return { jobs: [] };
   if (p.startsWith("/jobs/")) return { job: {} };
@@ -412,7 +412,16 @@ vm.createContext(sandbox);
 vm.runInContext(UIC_SRC, sandbox); // globalThis.UIC, h, iconEl
 vm.runInContext(RUN_SRC, sandbox); // window.viewRun — вкладка «Запуски»
 vm.runInContext(SRC, sandbox);
-const viewProject = sandbox.viewProject;
+const renderProject = sandbox.viewProject;
+/* Каждой проверке нужна книга с чистого листа: состояние вкладок предыдущей
+   не должно перетекать в следующую (сортировку файлов и профили стадий тесты
+   готовят сами — их не трогаем). reopenProject — повторное открытие БЕЗ
+   очистки: так и проверяется, что вкладка помнить начала */
+function viewProject(section, name, ...rest) {
+  globalThis.localStorage.removeItem(`nmTab:${section}/${name}`);
+  return renderProject(section, name, ...rest);
+}
+const reopenProject = renderProject;
 
 /* все вкладки страницы проекта: viewProject(section, name, tab) */
 const TABS = ["files", "run", "editor", "ner", "review", "chapters", "search",
@@ -498,9 +507,13 @@ test("reviewView: переключение под-вкладок (клик) и �
   assert.ok(!tabs[0].className.includes("subtab-active"));
   assert.equal(panes[2].style.display, "");
   assert.equal(panes[0].style.display, "none");
-  // выбор запомнен: повторное открытие вкладки — активна «tcl»
-  assert.equal(globalThis.localStorage.getItem("reviewTab"), "tcl");
-  const page2 = viewProject("ACTIVE", "Книга", "review");
+  /* выбор запомнен по книге (не был одним на интерфейс): повторное открытие —
+     активна «tcl» */
+  assert.deepEqual(
+    JSON.parse(globalThis.localStorage.getItem("nmTab:ACTIVE/Книга")),
+    { page: { view: "review" }, review: { tab: "tcl" } },
+  );
+  const page2 = reopenProject("ACTIVE", "Книга", "review");
   await new Promise((r) => setTimeout(r, 10));
   const tabs2 = [];
   (function walk(n) {
@@ -1437,4 +1450,124 @@ test("предпросмотр запроса: токены рядом с сим
     "pv-tag=<system>", "pv-tag=</system>", "pv-tag=<pass1>",
     "pv-var={ner_block}", "pv-var={original_text}",
   ]);
+});
+
+/* ── состояние вкладок проекта: один ключ на книгу ────────────────────────
+ * nmTab:<раздел>/<книга> хранит последнее состояние вкладок: открытую вкладку,
+ * главу и панели «Редактора», тип файлов «Глав», открытый промпт и лог.
+ * Ссылка с конкретной вкладкой старше памяти; другая книга не наследует. */
+
+const prefsOf = (section = "ACTIVE", name = "Книга") =>
+  JSON.parse(globalThis.localStorage.getItem(`nmTab:${section}/${name}`) || "{}");
+const allText = (n) => collectText(n).join("");
+
+const EDITOR_TREE = {
+  chapters: [
+    { dir: "00000_1_Глава 1", artifacts: { "chapter.txt": "1", "translated.txt": "1" } },
+    { dir: "00000_2_Глава 2", artifacts: { "chapter.txt": "2", "polished.txt": "2" } },
+  ],
+};
+
+test("состояние: книга открывается на последней вкладке", async () => {
+  viewProject("ACTIVE", "Книга", "logs");
+  await tick();
+  assert.deepEqual(prefsOf().page, { view: "logs" });
+  /* ссылка без вкладки — возвращает последнюю */
+  const again = reopenProject("ACTIVE", "Книга");
+  await tick();
+  assert.equal(collectText(again.querySelector(".tab-active")).join(""), "Логи");
+  /* ссылка с вкладкой — старше памяти */
+  const routed = reopenProject("ACTIVE", "Книга", "chapters");
+  await tick();
+  assert.equal(collectText(routed.querySelector(".tab-active")).join(""), "Главы");
+  /* другая книга памяти не наследует */
+  const other = viewProject("HOLD", "Другая");
+  await tick();
+  assert.equal(collectText(other.querySelector(".tab-active")).join(""), "Файлы");
+});
+
+test("состояние «Редактора»: глава, режим и подсветка возвращаются", async () => {
+  globalThis.__tree = EDITOR_TREE;
+  const page = viewProject("ACTIVE", "Книга", "editor");
+  await tick();
+  assert.equal(findByClass(page, "ed-chapter")[0].value, "00000_1_Глава 1");
+  assert.equal(findByClass(page, "ed-pane").length, 2, "по умолчанию две панели");
+  const chapter = findByClass(page, "ed-chapter")[0];
+  chapter.value = "00000_2_Глава 2";
+  await chapter._listeners.change[0]();
+  const btns = findByClass(page, "btn-ghost");
+  const modeBtn = btns.find((b) => allText(b).includes("файла"));
+  const hlBtn = btns.find((b) => allText(b).includes("Подсветка"));
+  await modeBtn._listeners.click[0]();
+  await hlBtn._listeners.click[0]();
+  await tick();
+  assert.deepEqual(prefsOf().editor, {
+    chapter: "00000_2_Глава 2", mode: "one", hl: false, ngram: 3, threshold: 0.75,
+    left: "chapter.txt", right: "polished.txt",
+  });
+  /* повторное открытие — та же глава и одна панель */
+  const again = reopenProject("ACTIVE", "Книга", "editor");
+  await tick();
+  assert.equal(findByClass(again, "ed-chapter")[0].value, "00000_2_Глава 2");
+  assert.equal(findByClass(again, "ed-pane").length, 1, "режим «один файл» помнится");
+  delete globalThis.__tree;
+});
+
+test("состояние «Глав»: тип файлов возвращается", async () => {
+  const page = viewProject("ACTIVE", "Книга", "chapters");
+  await tick();
+  const sel = findByClass(page, "chapters-type")[0];
+  assert.equal(sel.value, "polished", "дефолт — полировка");
+  sel.value = "translated";
+  await sel._listeners.change[0]();
+  await tick();
+  assert.deepEqual(prefsOf().chapters, { type: "translated" });
+  const again = reopenProject("ACTIVE", "Книга", "chapters");
+  await tick();
+  assert.equal(findByClass(again, "chapters-type")[0].value, "translated");
+});
+
+test("состояние «Промптов»: открытый файл возвращается", async () => {
+  globalThis.__prompts = {
+    prompts: [{ name: "pipeline_prompt.txt", size: 24 }], content: "<system>x</system>",
+  };
+  const page = viewProject("ACTIVE", "Книга", "prompts");
+  await tick();
+  // первый вход: память пуста — файл открываем кликом, он и запомнится
+  assert.equal(allText(findByClass(page, "prompt-name")[0]).trim(), "");
+  await findByClass(page, "prompt-item")[0]._listeners.click[0]();
+  await tick();
+  assert.deepEqual(prefsOf().prompts, { file: "pipeline_prompt.txt" });
+  /* повторное открытие — файл на редакторе сразу, без клика */
+  const again = reopenProject("ACTIVE", "Книга", "prompts");
+  await tick();
+  assert.equal(allText(findByClass(again, "prompt-name")[0]).trim(),
+    "pipeline_prompt.txt");
+  assert.equal(findByClass(again, "editor-cm").length, 1);
+  delete globalThis.__prompts;
+});
+
+test("состояние «Логов»: папка и открытый файл возвращаются", async () => {
+  globalThis.__logs = {
+    logs: [
+      { name: "ner.log", path: "ner.log", size: 7, mtime: 90 },
+      { name: "pipeline.log", path: "chapters/pipeline.log", size: 5, mtime: 100 },
+    ],
+    content: "хвост лога", size: 5,
+  };
+  const page = viewProject("ACTIVE", "Книга", "logs");
+  await tick();
+  const dir = findByClass(page, "prompt-item").find((b) => allText(b).includes("chapters/"));
+  await dir._listeners.click[0]();
+  await tick();
+  const page2 = findByClass(page, "prompt-item").find((b) => allText(b).includes("pipeline.log"));
+  await page2._listeners.click[0]();
+  await tick();
+  assert.deepEqual(prefsOf().logs, { path: "chapters", file: "pipeline.log" });
+  /* повторное открытие — та же папка и тот же лог */
+  const again = reopenProject("ACTIVE", "Книга", "logs");
+  await tick();
+  assert.ok(allText(again.querySelector(".crumbs")).includes("chapters"), "хлебные крошки");
+  assert.equal(findByClass(again, "log-view")[0].textContent, "хвост лога");
+  delete globalThis.__logs;
 });

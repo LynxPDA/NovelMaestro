@@ -951,3 +951,63 @@ test("fieldApplies: пустые условия — касается всегд�
   assert.equal(UICore.fieldApplies({ name: "x", when: [] }, { action: "1" }), true);
   assert.equal(UICore.fieldApplies({ name: "x", when_set: [] }, {}), true);
 });
+
+/* ── состояние вкладок проекта: один ключ на книгу ───────────────────── */
+function memStore(init) {
+  const m = new Map(Object.entries(init || {}));
+  return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(String(k), String(v)),
+    removeItem: (k) => m.delete(k),
+    _dump: () => Object.fromEntries(m),
+  };
+}
+
+test("projectPrefKey: ключ — один на проект", () => {
+  assert.equal(UICore.projectPrefKey("ACTIVE", "Книга"), "nmTab:ACTIVE/Книга");
+});
+
+test("projectPrefs: пустое хранилище — пустая вкладка, запись мержится", () => {
+  const store = memStore();
+  const p = UICore.projectPrefs(store, "ACTIVE", "Книга");
+  assert.deepEqual(p.get("editor"), {});
+  p.set("editor", { chapter: "00000_1_x" });
+  p.set("editor", { mode: "one" });
+  assert.deepEqual(p.get("editor"), { chapter: "00000_1_x", mode: "one" });
+  assert.deepEqual(JSON.parse(store._dump()["nmTab:ACTIVE/Книга"]), {
+    editor: { chapter: "00000_1_x", mode: "one" },
+  });
+});
+
+test("projectPrefs: соседняя вкладка и соседний проект не затираются", () => {
+  const store = memStore();
+  const a = UICore.projectPrefs(store, "ACTIVE", "Книга");
+  a.set("chapters", { type: "translated" });
+  a.set("page", { view: "chapters" });
+  const b = UICore.projectPrefs(store, "HOLD", "Другая");
+  b.set("page", { view: "logs" });
+  assert.deepEqual(a.get("page"), { view: "chapters" });
+  assert.deepEqual(a.get("chapters"), { type: "translated" });
+  assert.deepEqual(b.get("page"), { view: "logs" });
+  assert.deepEqual(b.get("chapters"), {});
+});
+
+test("projectPrefs: битый JSON и недоступное хранилище не мешают", () => {
+  const broken = UICore.projectPrefs(
+    memStore({ "nmTab:ACTIVE/Книга": "{это не json" }), "ACTIVE", "Книга",
+  );
+  assert.deepEqual(broken.get("editor"), {});
+  broken.set("editor", { mode: "two" });
+  assert.deepEqual(broken.get("editor"), { mode: "two" });
+  /* хранилище недоступно: чтение — пустое, запись не бросает и не теряется
+     совсем — состояние живёт в памяти до перезагрузки страницы */
+  let writes = 0;
+  const dead = UICore.projectPrefs({
+    getItem: () => { throw new Error("SecurityError"); },
+    setItem: () => { writes++; throw new Error("QuotaExceeded"); },
+  }, "ACTIVE", "Книга");
+  assert.deepEqual(dead.get("editor"), {});
+  dead.set("editor", { mode: "one" });
+  assert.deepEqual(dead.get("editor"), { mode: "one" });
+  assert.equal(writes, 1, "попытка записи была — и осталась единственной");
+});

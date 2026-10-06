@@ -551,6 +551,49 @@
     return new Date(t * 1000).toLocaleString("ru-RU");
   }
 
+  /* ── состояние вкладок проекта: ОДНО хранилище на книгу ─────────────────
+   * Что было открыто в последний раз (глава в «Редакторе», тип файлов в
+   * «Главах», выбранный лог, открытая заметка), живёт в браузере: иначе
+   * перезагрузка страницы бросает книгу на первую главу. Ключ один на
+   * проект — {вкладка: {поле: значение}}.
+   * Старых ключей это не касается (столбцы и фильтры глоссария, сортировка
+   * файлов живут своими): они работают, мигрировать их нечем. */
+  var PROJECT_PREF_KEY = "nmTab";
+
+  function projectPrefKey(section, name) {
+    return PROJECT_PREF_KEY + ":" + section + "/" + name;
+  }
+
+  /* Хранилище состояния книги: get(вкладка) — сохранённый объект вкладки
+   * (пустой, если вкладки ещё не открывали), set(вкладка, объект) —
+   * объединяет с сохранённым. Хранилище передаётся параметром — в тестах это
+   * заглушка; недоступное (приватный режим) читается пустым и молчит. */
+  function projectPrefs(store, section, name) {
+    var key = projectPrefKey(section, name);
+    var data = {};
+    try {
+      var p = store ? JSON.parse(store.getItem(key) || "null") : null;
+      if (p && typeof p === "object" && !Array.isArray(p)) data = p;
+    } catch (e) {
+      data = {}; // битый JSON — состояние начинается заново
+    }
+    return {
+      get: function (tab) {
+        var t = data[tab];
+        return t && typeof t === "object" && !Array.isArray(t) ? t : {};
+      },
+      set: function (tab, patch) {
+        var t = Object.assign({}, data[tab], patch);
+        data[tab] = t;
+        try {
+          if (store) store.setItem(key, JSON.stringify(data));
+        } catch (e) {
+          /* недоступно — состояние этого сохранения не получит */
+        }
+      },
+    };
+  }
+
   var UICore = {
     /* ── русские названия полей записи глоссария ──
        единый словарь: вкладка «Глоссарий» (колонки и модалки).
@@ -1074,6 +1117,9 @@
     relTime: relTime,
     relTimeAbs: relTimeAbs,
     faviconHref: faviconHref,
+    /* состояние вкладок открытой книги (один ключ на проект) */
+    projectPrefKey: projectPrefKey,
+    projectPrefs: projectPrefs,
 
     nerCellText: nerCellText,
     /* замок термина (NER_LOCK_FIELD): состояние, а не столбец таблицы */
