@@ -413,3 +413,19 @@ def test_dropdown_menus_are_fixed_positioned():
     # геометрия — одна чистая функция; слежение за скроллом/ресайзом
     assert "UICore.menuPlacement(" in app
     assert "if (!menu.isConnected)" in app, "перерисовка строки не оставляет висящее меню"
+
+
+def test_run_pill_switches_tab_without_hash():
+    """Регрессия «клик по индикатору запуска ничего не делает»: вкладки
+    проекта меняются состоянием, хэш остаётся тем, чем в проект вошли
+    («.../run»). Ссылка pill'а вела на тот же хэш — hashchange не случался.
+    Пилл зовёт projectNavigate: тот же проект — смена вкладки напрямую."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    pv = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    assert 'onclick: (ev) => {' in app and 'projectNavigate(j.project, "run")' in app
+    assert "function projectNavigate(project, view)" in pv
+    # «открыт» — по маршруту: у живого view хэш всегда ведёт тот же проект
+    assert 'if (live && r.view === "project"' in pv
+    assert "activeProject = { key: `${section}/${name}`, setView };" in pv
+    # чужой проект или другой экран — обычный переход ссылкой
+    assert 'location.hash = `#/project/${key}/${view}`' in pv

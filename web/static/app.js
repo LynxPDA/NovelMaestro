@@ -2127,6 +2127,13 @@ function updateRunPill() {
           class: "run-pill",
           href: `#/project/${j.project}/run`,
           title: `Активных запусков: ${jobs.length} — открыть лог`,
+          /* клик — через навигацию SPA: вкладки проекта меняются состоянием,
+             хэш остаётся тем, чем в проект вошли, и ссылка «на ту же вкладку»
+             не меняла бы ничего (клик проходил бы мимо) */
+          onclick: (ev) => {
+            ev.preventDefault();
+            projectNavigate(j.project, "run");
+          },
         },
         iconEl("activity"),
         h("span", { class: "run-pill-label" }, label + more),

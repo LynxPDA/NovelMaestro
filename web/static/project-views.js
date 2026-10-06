@@ -63,6 +63,26 @@ const PROJECT_TABS = [
   ["notes", "Заметки"],
 ];
 
+/* Живой view открытого проекта: {key, setView}. Вкладки проекта — локальное
+   состояние: хэш остаётся тем, чем в проект вошли («.../run»), поэтому ссылке
+   «на ту же вкладку» менять нечего и hashchange не случается */
+let activeProject = null;
+
+/* Навигация по вкладкам проекта из шапки (индикатор запусков): проект открыт —
+   переключаем вкладку напрямую, иначе ведём ссылкой. «Открыт» сверяем по
+   маршруту: у живого view хэш всегда ведёт тот же проект, а вкладка в нём —
+   какая угодно */
+function projectNavigate(project, view) {
+  const key = String(project || "");
+  const r = UICore.parseRoute(location.hash);
+  const live = activeProject;
+  if (live && r.view === "project" && r.rest.slice(0, 2).join("/") === key) {
+    live.setView(view);
+    return;
+  }
+  location.hash = `#/project/${key}/${view}`;
+}
+
 /* eslint-disable-next-line no-unused-vars -- глобал SPA, вызывается из app.js */
 function viewProject(section, name, tab, job) {
   const st = {
@@ -156,6 +176,7 @@ function viewProject(section, name, tab, job) {
     st.nerSel.clear(); // выделение — про конкретную вкладку
     render();
   }
+  activeProject = { key: `${section}/${name}`, setView };
 
   const TABS = PROJECT_TABS;
   // роут #/project/раздел/книга/<вкладка>[/<jobId>] — открыть конкретную

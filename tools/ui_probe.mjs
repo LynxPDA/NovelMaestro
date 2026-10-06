@@ -1438,6 +1438,55 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} оценка чанками  ${(pv.head || [])[1] || "?"}`);
   }
 
+  /* Индикатор запуска в шапке: вкладки проекта меняются состоянием, а хэш
+   * остаётся тем, чем в проект вошли («.../run»), — ссылка pill'а вела на тот
+   * же хэш, hashchange не случался и клик проходил мимо. Настоящий запуск не
+   * нужен: ответ /api/jobs/active подменяем заглушкой */
+  {
+    const before = problems.length;
+    await page.route("**/api/jobs/active", (r) =>
+      r.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          jobs: [{
+            id: "probe-job", status: "running", title: "Перевод (LLM)",
+            project: `${SECTION}/${BOOK}`, progress: { done: 2, total: 3 },
+          }],
+        }),
+      }),
+    );
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`, { waitUntil: "load" });
+    await page.waitForSelector(".tabs .tab-active", { timeout: 15000 });
+    // уходим на «Статус»: вкладка меняется состоянием, хэш остаётся «.../run»
+    await page.locator(".tabs button", { hasText: "Статус" }).first().click();
+    await page.waitForTimeout(600);
+    await page.evaluate(() => window.updateRunPill());
+    await page.waitForTimeout(700);
+    const read = () => page.evaluate(() => ({
+      tab: (document.querySelector(".tabs .tab-active") || {}).textContent || "",
+      hash: decodeURIComponent(location.hash),
+      pill: !!document.querySelector(".run-pill"),
+      count: (document.querySelector(".run-pill-count") || {}).textContent || "",
+    }));
+    const mid = await read();
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "run-pill.png") });
+    await page.locator(".run-pill").click();
+    await page.waitForTimeout(900);
+    const after = await read();
+    await page.unroute("**/api/jobs/active");
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "run-pill-after.png") });
+    if (!mid.pill) problems.push("run-pill: индикатор не отрисован");
+    if (mid.tab !== "Статус") problems.push(`run-pill: до клика вкладка «${mid.tab}»`);
+    if (!after.count.includes("2/3")) problems.push(`run-pill: счётчик «${after.count}»`);
+    if (after.tab !== "Запуски") {
+      problems.push(`run-pill: клик не переключил вкладку (активна «${after.tab}»)`);
+    }
+    if (!after.hash.endsWith("/run")) {
+      problems.push(`run-pill: хэш изменился — ${after.hash}`);
+    }
+    log(`${problems.length === before ? "✅" : "❌"} run-pill клик  ${mid.tab} → ${after.tab} · ${after.count}`);
+  }
+
   /* кириллическое имя проекта: сегменты hash-маршрута браузер хранит
    * закодированными — без декода имя книги доезжает до API дважды
    * закодированным, проект не находится, а в заголовке — крокозябры */

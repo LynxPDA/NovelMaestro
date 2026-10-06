@@ -330,6 +330,8 @@ const SETTINGS_PAYLOAD = {
 
 const sandbox = {
   console,
+  // маршрут читает projectNavigate (вкладки проекта меняются состоянием)
+  location: { hash: "" },
   URLSearchParams,
   FormData,
   setTimeout,
@@ -426,6 +428,27 @@ for (const tab of TABS) {
     assert.ok(page.children.length >= 1, `вкладка ${tab} без контента`);
   });
 }
+
+test("индикатор запусков: клик ведёт на «Запуски», даже когда хэш уже «.../run»", async () => {
+  /* вкладки проекта меняются состоянием и хэш остаётся тем, чем в проект
+     вошли: ссылка pill'а ведёт на тот же хэш, hashchange не случается */
+  sandbox.location.hash = "#/project/ACTIVE/Книга/run";
+  const page = viewProject("ACTIVE", "Книга", "status");
+  await new Promise((r) => setTimeout(r, 10));
+  const active = () => collectText(page.querySelector(".tab-active")).join("");
+  assert.equal(active(), "Статус", "проект открыт вкладкой «Статус»");
+  sandbox.projectNavigate("ACTIVE/Книга", "run");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(active(), "Запуски", "вкладка сменилась без смены хэша");
+  assert.equal(sandbox.location.hash, "#/project/ACTIVE/Книга/run",
+    "хэш менять не нужно: view тот же");
+});
+
+test("индикатор запусков: другой проект или экран — переход ссылкой", () => {
+  sandbox.location.hash = "#/hub";
+  sandbox.projectNavigate("HOLD/Другая", "run");
+  assert.equal(sandbox.location.hash, "#/project/HOLD/Другая/run");
+});
 
 test("reviewView: 4 под-вкладки проверок, активная по умолчанию — первая", async () => {
   const page = viewProject("ACTIVE", "Книга", "review");
