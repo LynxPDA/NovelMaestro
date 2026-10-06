@@ -127,11 +127,16 @@ class Setting:
 
 @dataclass(frozen=True)
 class Block:
-    """Блок настроек — карточка на странице."""
+    """Блок настроек — карточка на странице.
+
+    note — ОДНА короткая строка под заголовком: чем блок является, когда его
+    вообще трогать. Справочные данные в карточку не пишутся — для них справка.
+    """
 
     id: str
     title: str
     settings: tuple
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -149,8 +154,8 @@ def _s(key: str, label: str = "", type: str = "text",  # noqa: A002,A006
     return Setting(key, label, type, default, **kw)
 
 
-def _block(bid: str, title: str, *settings: Setting) -> Block:
-    return Block(bid, title, tuple(settings))
+def _block(bid: str, title: str, *settings: Setting, note: str = "") -> Block:
+    return Block(bid, title, tuple(settings), note)
 
 
 def _group(gid: str, title: str, *blocks: Block) -> Group:
@@ -213,11 +218,19 @@ GROUPS: tuple = (
             _s("LLM_EXTRA_BODY_JSON", "Свои поля тела (JSON)", "text", "",
                 help="JSON-объект ключей, которых не знает ни один профиль (свой сервер); уходят в тело запроса после ключей профиля, то есть перекрывают их; битый JSON запрос не ломает — поле игнорируется с предупреждением в лог"),        ),
         _block("llm_provider", "Выбор провайдера",
-            _s("PROVIDER_ORDER", "Приоритет провайдеров", "text", "", help="список идентификаторов провайдеров через запятую (tag из списка endpoint'ов модели, в нижнем регистре): запрос уйдёт первому из списка, кто обслуживает модель; пусто — ключ не отправляется вовсе"),
-            _s("PROVIDER_ONLY", "Только эти провайдеры", "text", "", help="белый список: провайдеры вне его не используются; если ни один из списка не обслуживает модель — ошибка 404, allow_fallbacks на это не влияет"),
-            _s("PROVIDER_IGNORE", "Исключить провайдеров", "text", "", help="чёрный список: эти провайдеры не используются; если исключены все провайдеры модели — ошибка 404"),
-            _s("PROVIDER_ALLOW_FALLBACKS", "Запасные провайдеры", "bool", True, help="относится только к приоритету: выключено — если ни одного провайдера из списка у модели нет, запрос завершится ошибкой 404 вместо чужого провайдера; на белый и чёрный списки флаг не влияет"),
-            _s("PROVIDER_COUNTRY", "Страна серверов провайдера", "text", "", help="двухбуквенный код (например ru): запрос обработают только провайдеры с серверами из этой страны; единственный фильтр, который соблюдается и в резервных попытках"),
+            _s("PROVIDER_ORDER", "Приоритет провайдеров", "text", "",
+               help="список идентификаторов: разделители — запятая, «;» или пробел; запрос уйдёт ПЕРВОМУ из списка, кто обслуживает модель; пусто — ключ не отправляется вовсе"),
+            _s("PROVIDER_ONLY", "Только эти провайдеры", "text", "",
+               help="белый список (записывается так же): провайдеры вне его не используются; если ни один из списка модель не обслуживает — ошибка 404"),
+            _s("PROVIDER_IGNORE", "Исключить провайдеров", "text", "",
+               help="чёрный список (записывается так же): эти провайдеры не используются; если исключены все провайдеры модели — ошибка 404"),
+            _s("PROVIDER_ALLOW_FALLBACKS", "Запасные провайдеры (allow_fallbacks)", "bool", True,
+               help="работает ТОЛЬКО с приоритетом: включено — если ни одного провайдера из приоритета у модели нет, запрос уйдёт другому допустимому; выключено — в этом случае ошибка 404 вместо чужого провайдера; на белый и чёрный списки не влияет"),
+            _s("PROVIDER_COUNTRY", "Страна серверов провайдера", "text", "",
+               help="две буквы кода страны (например ru): запрос обработают только провайдеры с серверами из неё; единственный фильтр, который действует и в резервных попытках"),
+            note="только для роутеров — RouterAI и OpenRouter: локальный сервер (llama.cpp, "
+                 "vLLM, Ollama) эти поля не читает; идентификатор провайдера — поле tag в списке "
+                 "endpoint'ов модели, регистр не важен; подробнее — справка (вкладка «Справка»)",
         ),
         # ── сам веб-сервер: в реестре последние, в интерфейсе их не видно ──
         _block("server_net", "Веб-сервер: сеть и доступ",
@@ -460,6 +473,8 @@ SETTINGS: tuple = tuple(s for g in GROUPS for b in g.blocks for s in b.settings)
 BY_KEY: dict = {s.key: s for s in SETTINGS}
 BY_BLOCK: dict = {b.id: b.settings for g in GROUPS for b in g.blocks}
 BLOCK_TITLES: dict = {b.id: b.title for g in GROUPS for b in g.blocks}
+#: пояснение блока — одна строка «что это и когда трогать» (карточка «Настроек»)
+BLOCK_NOTES: dict = {b.id: b.note for g in GROUPS for b in g.blocks if b.note}
 STAGES: tuple = tuple(dict.fromkeys(s.stage for s in SETTINGS if s.stage))
 #: блоки общего LLM-конфига: он один на весь конвейер, стадийных ключей нет
 LLM_BLOCKS: tuple = ("llm_conn", "llm_net", "llm_run", "llm_reasoning",
@@ -1080,11 +1095,11 @@ def display_value(setting: Setting) -> object:
 
 
 def block_payload(block_id: str) -> dict:
-    """Одна карточка реестра для SPA: {id, title, fields, values}.
+    """Одна карточка реестра для SPA: {id, title, note, fields, values}.
 
     Поля — в формате форм стадий (name/label/type/…), значения — эффективные,
-    в тех же именах. Парольное поле отдаётся маской (точка на символ): значение пароля в SPA
-    не ездит, нужен только признак «задано».
+    в тех же именах. Парольное поле отдаётся маской (точка на символ):
+    значение пароля в SPA не ездит, нужен только признак «задано».
     """
     fields, values = [], {}
     for s in BY_BLOCK[block_id]:
@@ -1094,6 +1109,7 @@ def block_payload(block_id: str) -> dict:
         fields.append(dict(s.form_field(), value=val, key=s.key))
         values[s.name] = val
     return {"id": block_id, "title": BLOCK_TITLES[block_id],
+            "note": BLOCK_NOTES.get(block_id, ""),
             "fields": fields, "values": values}
 
 
@@ -1106,7 +1122,7 @@ def groups_payload() -> list:
     Профиль LLM подставляется только LLM-блокам: флаг «llm».
     """
     return [{"id": g.id, "title": g.title,
-             "blocks": [{"id": b.id, "title": b.title,
+             "blocks": [{"id": b.id, "title": b.title, "note": b.note,
                          "llm": b.id in LLM_BLOCKS,
                          "fields": [dict(s.form_field(), value=display_value(s),
                                          key=s.key)

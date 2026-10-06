@@ -78,6 +78,36 @@ def test_payload_marks_llm_blocks():
     assert {b for b in llm if llm[b]} == set(S.LLM_BLOCKS)
 
 
+def test_provider_block_explains_itself():
+    """Карточка «Выбор провайдера» объясняет себя сама: кому она нужна, что
+    такое «запасные провайдеры» и чем разделять список — иначе это набор незнакомых
+    ключей роутера. Справочные данные при этом остаются в справке."""
+    blk = next(b for b in S.groups()[0].blocks if b.id == "llm_provider")
+    assert [s.key for s in blk.settings] == [
+        "PROVIDER_ORDER", "PROVIDER_ONLY", "PROVIDER_IGNORE",
+        "PROVIDER_ALLOW_FALLBACKS", "PROVIDER_COUNTRY",
+    ]
+    assert "RouterAI" in blk.note and "OpenRouter" in blk.note
+    assert "не читает" in blk.note  # локальный сервер их не касается
+    assert "Справка" in blk.note  # детали — там, карточка не справочник
+    labels = {s.key: s.label for s in blk.settings}
+    assert labels["PROVIDER_ALLOW_FALLBACKS"] == (
+        "Запасные провайдеры (allow_fallbacks)")
+    helps = {s.key: s.help for s in blk.settings}
+    assert "запятая" in helps["PROVIDER_ORDER"]  # чем разделять список
+    assert "пробел" in helps["PROVIDER_ORDER"]
+    assert "с приоритетом" in helps["PROVIDER_ALLOW_FALLBACKS"]
+    assert "резервных" in helps["PROVIDER_COUNTRY"]
+
+
+def test_payload_blocks_carry_note():
+    """Пояснение блока доезжает до SPA вместе с карточкой (иначе SPA его не
+    выведет), но только у блоков с пояснением: пустая строка не нужна."""
+    payload = {b["id"]: b for g in S.groups_payload() for b in g["blocks"]}
+    assert payload["llm_provider"]["note"].startswith("только для роутеров")
+    assert not payload["llm_conn"].get("note")
+
+
 def test_server_blocks_hidden_from_page():
     """Веб-сервер со страницы настроек убран полностью: у своей машины нет
     места рядом с настройками книги (применяется только после перезапуска),
