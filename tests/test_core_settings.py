@@ -511,3 +511,72 @@ def test_profiles_payload_values(global_env):
     assert got["p1"]["values"]["API_KEY"] == (
         S.MASK_CHAR * len("ключ-дом"))
     assert "ключ-дом" not in repr(got) and "ключ-general" not in repr(got)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Поля режима стадии: when / when_any / when_set
+# ══════════════════════════════════════════════════════════════════════
+
+def _by_name(stage: str) -> dict:
+    """Поля формы стадии по имени — то, по чему фильтруется форма запусков."""
+    return {s.name: s for s in S.stage_fields(stage)}
+
+
+def test_applies_when(global_env):
+    """when — условие по полю режима из самой формы; пустой режим не режет."""
+    f = _by_name("pipeline")["names_min_count"]
+    assert S.applies(f, {"action": "3"}) is True      # полировка
+    assert S.applies(f, {"action": "1"}) is False     # чистый перевод
+    assert S.applies(f, {}) is True                   # режим не выбран
+
+
+def test_applies_when_any(global_env):
+    """when_any — достаточно одного совпадения (маска epub: чанки ИЛИ маски)."""
+    f = _by_name("epub")["chunk_mask"]
+    assert S.applies(f, {"mode": "chunk", "rename_chapters": False})
+    assert S.applies(f, {"mode": "toc", "rename_chapters": True})
+    assert not S.applies(f, {"mode": "toc", "rename_chapters": False})
+
+
+def test_applies_when_all_conditions(global_env):
+    """Несколько условий when — И: оглавление wiki нужно только в md-файле."""
+    f = _by_name("wiki")["toc"]
+    assert S.applies(f, {"format": "md", "as_chapter": False})
+    assert not S.applies(f, {"format": "rulate-md", "as_chapter": False})
+    assert not S.applies(f, {"format": "md", "as_chapter": True})
+
+
+def test_applies_when_set(global_env):
+    """when_set — поле-условие непустое: связи wiki считаются только с парами."""
+    f = _by_name("wiki")["co_occurrence_top"]
+    assert S.applies(f, {"co_occurrence_pairs": "Person:Person"})
+    assert not S.applies(f, {"co_occurrence_pairs": "   "})
+
+
+def test_applicable_form_drops_other_modes_fields(global_env):
+    """Из формы стадии уходят поля чужого режима; LLM-конфиг и профиль — нет."""
+    got = S.applicable_form("ner_check", {
+        "passes": "whole", "types": "Person", "batch_size": "65536",
+        "rag_terms": "师父", "rag_budget": "1200", "start": "3", "end": "7",
+        "host": "http://x/v1", "threads": "4", "profile": "p1"})
+    assert got["types"] == "Person" and got["batch_size"] == "65536"
+    for name in ("rag_terms", "rag_budget", "start", "end"):
+        assert name not in got, name
+    assert got["host"] == "http://x/v1" and got["profile"] == "p1"
+    got = S.applicable_form("ner_check", {
+        "passes": "rag", "types": "Person", "rag_terms": "师父", "start": "3"})
+    assert "types" not in got and got["rag_terms"] == "师父"
+    assert got["start"] == "3"
+
+
+def test_applicable_form_without_mode(global_env):
+    """Режим не выбран — резать поля нечем, форма приходит как есть."""
+    form = {"types": "Person", "rag_terms": "师父", "start": "1"}
+    assert S.applicable_form("ner_check", form) == form
+
+
+def test_applicable_form_does_not_touch_original(global_env):
+    """Фильтр не правит форму вызывающего (значения помнит браузер)."""
+    form = {"passes": "whole", "rag_terms": "x"}
+    S.applicable_form("ner_check", form)
+    assert form["rag_terms"] == "x"

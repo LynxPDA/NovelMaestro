@@ -91,6 +91,14 @@ class Setting:
     run: bool = False           # параметр запуска (главы, входные файлы)
     secret: bool = False        # парольное поле: значение не отдаётся в SPA
     stage: str = ""             # владелец-стадия ('' — общая настройка)
+    # когда настройка вообще касается запуска. Условие — пара (имя поля режима,
+    # кортеж допустимых значений); булевы поля сравниваются как "1"/"0".
+    # when — И по всем условиям, when_any — достаточно одного, when_set —
+    # перечисленные поля непустые. Пустые — касается всегда; так же ведёт себя
+    # пустой (или отсутствующий) режим: резать поля нечем.
+    when: tuple = ()
+    when_any: tuple = ()
+    when_set: tuple = ()
 
     @property
     def name(self) -> str:
@@ -107,7 +115,8 @@ class Setting:
             out["label"] = self.label
         out["default"] = self.default
         for k in ("options", "labels", "min", "max", "step", "dir", "ext",
-                  "rows", "autofile", "editable", "help", "noenv"):
+                  "rows", "autofile", "editable", "help", "noenv",
+                  "when", "when_any", "when_set"):
             v = getattr(self, k)
             if v not in (None, "", [], {}, ()):
                 out[k] = v
@@ -233,15 +242,15 @@ GROUPS: tuple = (
                 stage="pipeline", run=True),
             _s("PIPELINE_DICT_FILE", "Словарь перевода (dict.json)", "files", "", dir="source", ext=(".json",),
                 help="формат как ner.json: term/translation/type?/aliases?/notes?; найденные в чанке записи (и в примерах) попадают в {dict_block}; направление определяется автоматически — где больше совпадений",
-                stage="pipeline", run=True),
+                stage="pipeline", run=True, when=(("action", ("9",)),)),
             _s("PIPELINE_RULES_FILE", "Правила языка (rules.txt/md)", "files", "", dir="source", ext=(".txt", ".md"),
-                help="краткий справочник по языку; целиком в {rules_block} (общий потолок — бюджет запроса)", stage="pipeline", run=True),
+                help="краткий справочник по языку; целиком в {rules_block} (общий потолок — бюджет запроса)", stage="pipeline", run=True, when=(("action", ("9",)),)),
             _s("PIPELINE_EXAMPLES_FILE", "Пары оригинал→перевод (examples.json)", "files", "", dir="source", ext=(".json",),
-                help="массив {original_text, translated_text} (алиасы source/target); релевантные пары — few-shot {fewshot_block}; направление — автодетект", stage="pipeline", run=True),
-            _s("PIPELINE_FEWSHOT_K", "Макс. примеров на чанк", "number", "3", min=0, max=20, help="сколько релевантных пар влезает в few-shot", stage="pipeline"),
+                help="массив {original_text, translated_text} (алиасы source/target); релевантные пары — few-shot {fewshot_block}; направление — автодетект", stage="pipeline", run=True, when=(("action", ("9",)),)),
+            _s("PIPELINE_FEWSHOT_K", "Макс. примеров на чанк", "number", "3", min=0, max=20, help="сколько релевантных пар влезает в few-shot", stage="pipeline", when=(("action", ("9",)),)),
             _s("PIPELINE_FEWSHOT_THRESHOLD", "Порог схожести примеров (0–1)", "number", "0.3", min=0, max=1, step="0.05",
                 help="доля n-грамм (3-граммы нормализованного текста) стороны примера, найденных в чанке: 1 — все n-граммы примера есть в чанке; примеры ниже порога отбрасываются — лучше без примеров, чем с шумными",
-                stage="pipeline"),
+                stage="pipeline", when=(("action", ("9",)),)),
             _s("PIPELINE_REQUEST_BUDGET", "Бюджет запроса, ТОКЕНЫ", "number", "24000", min=0,
                 help="общий бюджет user-запроса (чанк + все блоки), оценка токенов; 0 = выключено; превышение — ошибка чанка", stage="pipeline"),
             _s("PIPELINE_PROMPT_FILE", "Общий промпт-файл (теги translate/redact/polish)", "files", "", dir="prompts", ext=(".txt",),
@@ -249,7 +258,7 @@ GROUPS: tuple = (
                 stage="pipeline", run=True),
             _s("PIPELINE_CHUNK_SIZE", "Размер чанка, ТОКЕНЫ", "number", "7000", min=1,
                 help="чанкование текста для перевода и полировки (оценка токенов) — действует в ЛЮБОМ выбранном типе работы; редактура идёт главой целиком; пусто = PIPELINE_CHUNK_SIZE из .env → 7000",
-                stage="pipeline"),
+                stage="pipeline", when=(("action", ("1", "3", "4", "5", "6", "7", "8", "9")),)),
             _s("PIPELINE_NER_THRESHOLD", "Порог схожести терминов (0–1)", "number", "0.75", hidden=True,
                 help="нечёткий поиск терминов по n-граммам: доля перекрытия; точные вхождения ищутся всегда", stage="pipeline"),
             _s("PIPELINE_NER_NGRAM", "Размер n-грамм поиска терминов", "number", "3", hidden=True,
@@ -257,10 +266,10 @@ GROUPS: tuple = (
             _s("PIPELINE_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="pipeline", run=True),
             _s("PIPELINE_END", "Конечная глава", "number", "", stage="pipeline", run=True),
             _s("PIPELINE_NER_MIN_COUNT", "Мин. count для глоссария ({ner_block})", "number", "0", help="термины с count ниже порога НЕ попадают в {ner_block}; 0 — фильтр выключен (все найденные)",
-                stage="pipeline"),
-            _s("PIPELINE_NER_FIELDS", "", "hidden", "term,type,translation,aliases", noenv=True, stage="pipeline"),
+                stage="pipeline", when=(("action", ("1", "2", "5", "6", "7", "8", "9")),)),
+            _s("PIPELINE_NER_FIELDS", "", "hidden", "term,type,translation,aliases", noenv=True, stage="pipeline", when=(("action", ("1", "2", "5", "6", "7", "8", "9")),)),
             _s("PIPELINE_NAMES_MIN_COUNT", "Мин. count для имён ({female_names}/{male_names})", "number", "10", help="имена с count ниже порога НЕ попадают в справочник полов; 0 — фильтр выключен",
-                stage="pipeline"),
+                stage="pipeline", when=(("action", ("3", "4", "6", "7", "8")),)),
         ),
     ),
     # ── Глоссарий ──
@@ -293,23 +302,23 @@ GROUPS: tuple = (
                 run=True),
             _s("NER_CHECK_RAG_BUDGET", "RAG: бюджет на термин, ТОКЕНЫ", "number", "22000",
                 help="На ОДИН термин: промпт + фрагменты ≤ бюджету (оценка токенов); каждый термин — отдельный LLM-запрос (параллельно, «Потоков (1–16)»); фрагменты — равномерно по книге (FTS5, чанки 350 токенов), влезают в остаток бюджета после промпта",
-                stage="ner_check"),
+                stage="ner_check", when=(("passes", ("rag",)),)),
             _s("NER_CHECK_PASSES", "Режимы", "select", "whole", options=("whole", "types", "rag"),
                 labels={'whole': "Выбранные типы (одновременно)", 'types': "Выбранные типы (по отдельности)", 'rag': "Точечно по списку (RAG)"},
                 help="одновременно — весь список выбранных типов разом (батчи по бюджету); по отдельности — каждый тип отдельно; rag — точечная проверка списка терминов по FTS5-фрагментам книги",
                 stage="ner_check"),
-            _s("NER_CHECK_BATCH_SIZE", "Бюджет пакета, ТОКЕНЫ", "number", "65536", stage="ner_check"),
-            _s("NER_CHECK_COUNT_THRESHOLD", "Порог count", "number", "0", stage="ner_check"),
+            _s("NER_CHECK_BATCH_SIZE", "Бюджет пакета, ТОКЕНЫ", "number", "65536", stage="ner_check", when=(("passes", ("whole", "types")),)),
+            _s("NER_CHECK_COUNT_THRESHOLD", "Порог count", "number", "0", stage="ner_check", when=(("passes", ("whole", "types")),)),
             _s("NER_CHECK_SKIP_LOCKED", "Не проверять зафиксированные", "bool", True,
                 help="замок на термине: зафиксированная запись не уходит на проверку LLM и не правится патчами (см. вкладку «Глоссарий»); снято — зафиксированные проверяются как раньше, но правки по-прежнему применяются только к незафиксированным",
                 stage="ner_check"),
-            _s("NER_CHECK_RAG_TERMS", "RAG: список терминов", "textarea", "", help="Каждый термин с новой строки; тип/перевод подтягиваются из ner.json; нужен режим «rag»", stage="ner_check"),
+            _s("NER_CHECK_RAG_TERMS", "RAG: список терминов", "textarea", "", help="Каждый термин с новой строки; тип/перевод подтягиваются из ner.json; нужен режим «rag»", stage="ner_check", when=(("passes", ("rag",)),)),
             _s("NER_CHECK_RAG_SOURCE_TYPE", "RAG: тип исходного файла", "select", "", options=("", "chapter", "translated", "redacted", "polished"),
-                help="Из какого файла главы собирается текст книги для FTS5-поиска (сборка в память, файл не пишется)", stage="ner_check"),
-            _s("NER_CHECK_SAVE_INTERVAL", "Сохранять каждые N терминов", "number", "0", help="RAG: review-файл сохраняется каждые N терминов (0 = только в конце)", stage="ner_check"),
-            _s("NER_CHECK_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="ner_check", run=True),
-            _s("NER_CHECK_END", "Конечная глава", "number", "", stage="ner_check", run=True),
-            _s("NER_CHECK_TYPES", "", "hidden", "", noenv=True, stage="ner_check"),
+                help="Из какого файла главы собирается текст книги для FTS5-поиска (сборка в память, файл не пишется)", stage="ner_check", when=(("passes", ("rag",)),)),
+            _s("NER_CHECK_SAVE_INTERVAL", "Сохранять каждые N терминов", "number", "0", help="RAG: review-файл сохраняется каждые N терминов (0 = только в конце)", stage="ner_check", when=(("passes", ("rag",)),)),
+            _s("NER_CHECK_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="ner_check", run=True, when=(("passes", ("rag",)),)),
+            _s("NER_CHECK_END", "Конечная глава", "number", "", stage="ner_check", run=True, when=(("passes", ("rag",)),)),
+            _s("NER_CHECK_TYPES", "", "hidden", "", noenv=True, stage="ner_check", when=(("passes", ("whole", "types")),)),
             _s("NER_CHECK_FIELDS", "", "hidden", "term,type,translation", noenv=True, stage="ner_check"),
         ),
         _block("translate_check", STAGE_TITLES["translate_check"],
@@ -320,7 +329,7 @@ GROUPS: tuple = (
             _s("TRANSLATE_CHECK_EXCLUDE_WORDS", "Слова-исключения (через запятую)", "text", "",
                 help="Пусто = ничего не исключается; если задано TRANSLATE_CHECK_EXCLUDE_WORDS в .env — поле заполняется оттуда", stage="translate_check"),
             _s("TRANSLATE_CHECK_NEIGHBOR", "Выбранная Стадия/Предыдущая Стадия (по занимаемому месту)", "text", "",
-                help="Ожидаемый ratio с предыдущей стадией и допуск: «1.0±0.05» (напр. polished/redacted); пусто = встроенный дефолт; дефолт в .env — TRANSLATE_CHECK_NEIGHBOR", stage="translate_check"),
+                help="Ожидаемый ratio с предыдущей стадией и допуск: «1.0±0.05» (напр. polished/redacted); пусто = встроенный дефолт; дефолт в .env — TRANSLATE_CHECK_NEIGHBOR", stage="translate_check", when=(("check_type", ("polished", "redacted")),)),
             _s("TRANSLATE_CHECK_ORIGINAL", "Выбранная Стадия/Оригинал (по занимаемому месту)", "text", "",
                 help="Ожидаемый ratio с оригиналом и допуск: «2.1±0.5» (напр. polished/chapter); пусто = встроенный дефолт; дефолт в .env — TRANSLATE_CHECK_ORIGINAL", stage="translate_check"),
             _s("TRANSLATE_CHECK_REGEXP_CHECKS", "Regexp-проверки (по одной на строку)", "textarea",
@@ -355,14 +364,14 @@ GROUPS: tuple = (
                 labels={"range": "Диапазон одним запросом", "chunks": "Чанками всей книги"},
                 help="range — один запрос по пакету глав диапазона; chunks — книга режется на чанки по N целых глав, каждый оценивается отдельным запросом, их отчёты сворачиваются LLM в итоговое заключение", stage="translate_quality"),
             _s("TRANSLATE_QUALITY_CHUNK_SIZE", "Глав в чанке, ГЛАВЫ", "number", "1", min=1,
-                help="сколько ЦЕЛЫХ глав в одном чанке; глава крупнее бюджета режется по абзацам и становится несколькими чанками одной главы", stage="translate_quality"),
+                help="сколько ЦЕЛЫХ глав в одном чанке; глава крупнее бюджета режется по абзацам и становится несколькими чанками одной главы", stage="translate_quality", when=(("mode", ("chunks",)),)),
             _s("TRANSLATE_QUALITY_CHUNKS", "Чанков оценить (0 = все)", "number", "0", min=0,
-                help="сколько чанков идёт в оценку; 0 — вся книга", stage="translate_quality"),
+                help="сколько чанков идёт в оценку; 0 — вся книга", stage="translate_quality", when=(("mode", ("chunks",)),)),
             _s("TRANSLATE_QUALITY_SAMPLE", "Отбор чанков", "select", "uniform", options=("uniform", "first"),
                 labels={"uniform": "Равномерно по книге", "first": "Первые по порядку"},
-                help="как брать чанки, если их меньше, чем вся книга: равномерно по всей длине или первые по порядку", stage="translate_quality"),
+                help="как брать чанки, если их меньше, чем вся книга: равномерно по всей длине или первые по порядку", stage="translate_quality", when=(("mode", ("chunks",)),)),
             _s("TRANSLATE_QUALITY_OVERLAP", "Перекрытие чанков, ГЛАВЫ", "number", "0", min=0,
-                help="сколько соседних глав попадают в оба чанка (тоже целыми главами); 0 — без перекрытия", stage="translate_quality"),
+                help="сколько соседних глав попадают в оба чанка (тоже целыми главами); 0 — без перекрытия", stage="translate_quality", when=(("mode", ("chunks",)),)),
             _s("TRANSLATE_QUALITY_BUDGET", "Бюджет запроса, ТОКЕНЫ", "number", "200000",
                 help="главы (содержимое, промпт НЕ вычитается); в режиме range не влезает — пакет обрезается до целого количества глав (первые диапазона), в режиме chunks тот же бюджет режет чанки, сводки свёртки и промежуточные уровни дерева", stage="translate_quality"),
         ),
@@ -375,12 +384,12 @@ GROUPS: tuple = (
                 help="toc — только epub, по структуре (TOC/spine/h1-h2); regex/chunk — epub ИЛИ txt (epub перегоняется в текст); zip не принимается", stage="epub"),
             _s("EPUB_SPLIT_PATTERNS", "Паттерны разбивки (regexp, по одному на строку)", "textarea", "", rows=4,
                 help="ТОЛЬКО режим regexp. Строка считается маркером, если НАЧИНАЕТСЯ с любого паттерна; вся строка становится заголовком главы; чистый стандартный regexp — без комментариев и флагов; пример: «Глава \\d+»; EPUB_SPLIT_PATTERNS в .env — переносы строк как «\\n»",
-                stage="epub"),
-            _s("EPUB_CHUNK_SIZE", "Размер чанка, ТОКЕНЫ", "number", "7000", help="ТОЛЬКО режим «по чанкам»; оценка токенов", stage="epub"),
+                stage="epub", when=(("mode", ("regex",)),)),
+            _s("EPUB_CHUNK_SIZE", "Размер чанка, ТОКЕНЫ", "number", "7000", help="ТОЛЬКО режим «по чанкам»; оценка токенов", stage="epub", when=(("mode", ("chunk",)),)),
             _s("EPUB_CHUNK_MASK", "Маска названия глав", "text", "Chapter {num}",
-                help="названия чанков в режиме «по чанкам»; при включённом «Переопределить названия» — названия ВСЕХ глав; {num} — номер; пример: «Часть {num}» → 00000_1_Часть_1…", stage="epub"),
+                help="названия чанков в режиме «по чанкам»; при включённом «Переопределить названия» — названия ВСЕХ глав; {num} — номер; пример: «Часть {num}» → 00000_1_Часть_1…", stage="epub", when_any=(("mode", ("chunk",)), ("rename_chapters", ("1",)))),
             _s("EPUB_RENAME_CHAPTERS", "Переопределить названия глав маской", "bool", False,
-                help="все заголовки глав заменяются на «Маска названия глав» ({num} — номер). Удобно после разбивки по TOC/паттернам: «Chapter 1», «Chapter 2»…", stage="epub"),
+                help="все заголовки глав заменяются на «Маска названия глав» ({num} — номер). работает во всех режимах: «Chapter 1», «Chapter 2»…", stage="epub"),
             _s("EPUB_TITLE_LIMIT", "Длина названия каталога, СИМВОЛЫ", "number", "50", help="имя папки обрезается; первая строка файла — полный заголовок", stage="epub"),
             _s("EPUB_NUM_OFFSET", "Смещение нумерации (первый номер)", "number", "1", help="875 → первая папка 000_875_… (нули добивают ширину 6)", stage="epub"),
             _s("EPUB_OUTPUT_TYPE", "Тип выходного файла", "select", "chapter", options=("chapter", "translated", "redacted", "polished"),
@@ -400,30 +409,30 @@ GROUPS: tuple = (
                 stage="compile"),
             _s("COMPILE_COVER", "Обложка", "files", "", dir="source", ext=(".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"), autofile=("source/cover.jpg", "source/cover.jpeg", "source/cover.png", "source/cover.webp"),
                 help="единая обложка для EPUB и FB2; пусто = без обложки; по умолчанию автоподхват cover.jpg/jpeg/png/webp из source/; варианты обложек загружаются через «Файлы»", stage="compile",
-                run=True),
+                run=True, when=(("mode", ("epub", "fb2")),)),
             _s("COMPILE_EPUB_META", "Метаданные (YAML)", "files", "metadata.yaml", dir="source", ext=(".yaml", ".yml"), autofile=("source/metadata.yaml",), editable=True,
                 help="пусто = source/metadata.yaml; по умолчанию автоподхват metadata.yaml из source/; кнопка «Редактировать» — правка выбранного файла прямо в запуске; другой yaml/yml из source/ выбирается вручную (несколько наборов метаданных)",
-                stage="compile", run=True),
+                stage="compile", run=True, when=(("mode", ("epub", "fb2")),)),
             _s("COMPILE_DONATE_FILE", "Файл страницы поддержки", "files", "", dir="source", ext=(".txt",), autofile=("source/donate.txt",), editable=True,
                 help="страница поддержки для EPUB/FB2; пусто = без страницы; по умолчанию автоподхват donate.txt из source/; кнопка «Редактировать» — правка выбранного файла прямо в запуске; новый файл загружается через «Файлы» (source/) или «Загрузить» при пустом выборе",
-                stage="compile", run=True),
+                stage="compile", run=True, when=(("mode", ("epub", "fb2")),)),
         ),
         _block("wiki", STAGE_TITLES["wiki"],
-            _s("WIKI_START", "Начальная глава (ГЛАВЫ)", "number", "", help="при источнике «Собрать из глав»; пусто = с первой", stage="wiki", run=True),
-            _s("WIKI_END", "Конечная глава (ГЛАВЫ)", "number", "", help="при источнике «Собрать из глав»; пусто = до последней", stage="wiki", run=True),
+            _s("WIKI_START", "Начальная глава (ГЛАВЫ)", "number", "", help="при источнике «Собрать из глав»; пусто = с первой", stage="wiki", run=True, when=(("source", ("chapters",)),)),
+            _s("WIKI_END", "Конечная глава (ГЛАВЫ)", "number", "", help="при источнике «Собрать из глав»; пусто = до последней", stage="wiki", run=True, when=(("source", ("chapters",)),)),
             _s("WIKI_SOURCE", "Источник текста", "select", "chapters", options=("txt", "chapters"), labels={'txt': "Готовый txt", 'chapters': "Собрать из глав"},
                 help="txt — готовый скомпилированный файл; «собрать из глав» — склейка chapters/* в память (как в Создании глоссария)", stage="wiki"),
-            _s("WIKI_FILE", "Входной txt новеллы (перевод)", "files", "", ext=(".txt",), help="нужен при источнике «Готовый txt»", stage="wiki", run=True),
-            _s("WIKI_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "chapter", "translated", "redacted"), help="при источнике «Собрать из глав»", stage="wiki"),
-            _s("WIKI_OUTPUT", "Выходной файл", "text", "wiki.md", stage="wiki"),
+            _s("WIKI_FILE", "Входной txt новеллы (перевод)", "files", "", ext=(".txt",), help="нужен при источнике «Готовый txt»", stage="wiki", run=True, when=(("source", ("txt",)),)),
+            _s("WIKI_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "chapter", "translated", "redacted"), help="при источнике «Собрать из глав»", stage="wiki", when=(("source", ("chapters",)),)),
+            _s("WIKI_OUTPUT", "Выходной файл", "text", "wiki.md", stage="wiki", when=(("as_chapter", ("0",)),)),
             _s("WIKI_AS_CHAPTER", "Сохранить как главу", "bool", False, help="вместо файла — дополнительная последняя глава chapters/00000_{N+1}_Wiki_Новеллы/, название «Wiki Новеллы» простым текстом",
                 stage="wiki"),
             _s("WIKI_SAVE_TYPE", "Тип файла вики-главы", "select", "polished", options=("translated", "redacted", "polished"),
-                help="для «Сохранить как главу вики»; polished — как компиляция по умолчанию; chapter.txt не пишется", stage="wiki"),
+                help="для «Сохранить как главу вики»; polished — как компиляция по умолчанию; chapter.txt не пишется", stage="wiki", when=(("as_chapter", ("1",)),)),
             _s("WIKI_FORMAT", "Формат", "select", "md", options=("md", "rulate-md", "rulate-html"), labels={'md': "Обычный Markdown", 'rulate-md': "Rulate (Markdown)", 'rulate-html': "Rulate (HTML)"},
-                help="rulate-html: заголовки — <span style=font-size>, списки <ul>, разделители <hr />", stage="wiki"),
-            _s("WIKI_TOC", "Оглавление", "bool", True, help="обычный режим; Rulate — всегда без оглавления", stage="wiki"),
-            _s("WIKI_TOC_LINKS", "Якоря-ссылки в оглавлении", "bool", True, help="обычный режим; ссылки [термин](#якорь) на статью", stage="wiki"),
+                help="rulate-html: заголовки — <span style=font-size>, списки <ul>, разделители <hr />", stage="wiki", when=(("as_chapter", ("0",)),)),
+            _s("WIKI_TOC", "Оглавление", "bool", True, help="обычный режим; Rulate — всегда без оглавления", stage="wiki", when=(("format", ("md",)), ("as_chapter", ("0",)))),
+            _s("WIKI_TOC_LINKS", "Якоря-ссылки в оглавлении", "bool", True, help="обычный режим; ссылки [термин](#якорь) на статью", stage="wiki", when=(("format", ("md",)), ("as_chapter", ("0",)))),
             _s("WIKI_PROMPT_FILE", "Промпт (тег <prompt_wiki_article>)", "files", "wiki_prompt.txt", dir="prompts", ext=(".txt",), stage="wiki", run=True),
             _s("WIKI_TOP", "Макс. терминов", "number", "80", stage="wiki"),
             _s("WIKI_MIN_COUNT", "Мин. частота термина", "number", "2", stage="wiki"),
@@ -432,7 +441,7 @@ GROUPS: tuple = (
             _s("WIKI_NEAR_DISTANCE", "NEAR-дистанция, ТОКЕНЫ", "number", "64", stage="wiki"),
             _s("WIKI_CHUNK_SIZE", "Размер чанка FTS5, ТОКЕНЫ", "number", "1000", stage="wiki"),
             _s("WIKI_CO_OCCURRENCE_PAIRS", "Пары типов для связей", "text", "Person:Person,Person:Organisation,Person:Artifact", stage="wiki"),
-            _s("WIKI_CO_OCCURRENCE_TOP", "Связей на термин", "number", "5", stage="wiki"),
+            _s("WIKI_CO_OCCURRENCE_TOP", "Связей на термин", "number", "5", stage="wiki", when_set=("co_occurrence_pairs",)),
         ),
         _block("batch_replace", STAGE_TITLES["batch_replace"],
             _s("BATCH_REPLACE_REPLACEMENTS", "Regexp-замены (по одной на строку)", "textarea", "", rows=5,
@@ -500,6 +509,59 @@ def stage_fields(stage: str) -> tuple:
 def settings_of(stage: str = "") -> tuple:
     """Настройки (пусто — общие: LLM, рассуждения, web); без параметров запуска."""
     return tuple(s for s in SETTINGS if s.stage == stage and not s.run)
+
+
+def _form_value(form: dict, name: str) -> str | None:
+    """Значение поля режима из формы: bool → "1"/"0"; нет поля или пусто → None
+    (режим не выбран — его условия не проверяются, поля остаются как есть)."""
+    v = (form or {}).get(name)
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    v = "" if v is None else str(v).strip()
+    return v or None
+
+
+def applies(setting: Setting, form: dict) -> bool:
+    """Касается ли настройка текущего режима стадии.
+
+    Единственный источник правды и для argv запусков, и для формы: поле режима
+    (select/checkbox) берётся из самой формы, сравнение — строками. Пустые when
+    — касается всегда; так же ведёт себя пустой (или отсутствующий) режим:
+    режим не выбран — резать поля нечем.
+    """
+    def hit(conds) -> bool:
+        return any(_form_value(form, name) in tuple(str(v) for v in values)
+                   for name, values in conds)
+
+    def known(conds) -> bool:
+        return any(_form_value(form, name) is not None for name, _ in conds)
+
+    for conds, every in ((setting.when, True), (setting.when_any, False)):
+        if not known(conds):
+            continue
+        if every:
+            if not all(hit((c,)) for c in conds):
+                return False
+        elif not hit(conds):
+            return False
+    return all(_form_value(form, name) for name in setting.when_set)
+
+
+def applicable_form(stage: str, form: dict) -> dict:
+    """Форма запусков стадии без полей, которые её режим не касается.
+
+    Значения неприменимых полей не удаляются из браузера — форма помнит их
+    к следующему запуску в этом режиме; в argv они просто не попадают.
+    Нестадейные ключи (LLM-конфиг профиля, выбор профиля) проходят как есть.
+    """
+    by_name = {s.name: s for s in stage_fields(stage)}
+    out: dict[str, object] = {}
+    for name, value in (form or {}).items():
+        s = by_name.get(name)
+        if s is not None and not applies(s, form):
+            continue
+        out[name] = value
+    return out
 
 
 def form_fields(stage: str) -> list:
