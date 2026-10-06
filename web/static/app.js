@@ -971,7 +971,23 @@ async function viewSettings() {
       cb.checked = Boolean(val);
       if (f.help) attachTooltip(cb, f.help);
       ctl[id] = cb;
-      return h("label", { class: "field field-check" }, cb, h("span", {}, f.label));
+      /* чекбокс — такое же двухстрочное поле, как соседи: подпись сверху,
+         контрол под ней (строкой чекбокс висел по центру колонки и съезжал);
+         состояние подписано — одна галочка без слова ничего не сообщает */
+      const state = h(
+        "span",
+        { class: "field-check-state" },
+        cb.checked ? "включено" : "выключено",
+      );
+      cb.addEventListener("change", () => {
+        state.textContent = cb.checked ? "включено" : "выключено";
+      });
+      return h(
+        "label",
+        { class: "field" },
+        h("div", { class: "field-label" }, f.label),
+        h("span", { class: "field-row field-check" }, cb, state),
+      );
     }
     let input;
     if (f.type === "select") {
@@ -1238,6 +1254,46 @@ async function viewSettings() {
     ),
   );
 
+  // ── проверка LLM-сервера: короткий GET /models, генерации нет ──
+  // Кнопка живёт в карточке «Подключение»: проверять нужно то, что видно в
+  // форме (возможно, ещё не сохранённое), а не только то, что лежит на диске.
+  function checkRow() {
+    const state = h("span", { class: "settings-check-state" });
+    const btn = h("button", { class: "btn btn-sm", type: "button" },
+      "Проверить сервер");
+    attachTooltip(btn, "Один короткий запрос /models к серверу из формы: доступен " +
+      "ли, сколько моделей отдаёт и есть ли в списке модель из конфига");
+    btn.addEventListener("click", async () => {
+      const values = {};
+      for (const [name, c] of Object.entries(ctl)) {
+        values[name] = c.type === "checkbox" ? c.checked : c.value;
+      }
+      state.className = "settings-check-state";
+      state.textContent = "проверяю…";
+      btn.disabled = true;
+      try {
+        const r = await api("/settings/check", {
+          method: "POST", body: { profile: model.profile, values },
+        });
+        // недоступный сервер — нормальный ответ отчёта, а не ошибка запроса
+        const c = r.check || {};
+        const extra = c.has_model === true ? " · модель из конфига есть"
+          : c.has_model === false ? " · МОДЕЛИ ИЗ КОНФИГА В СПИСКЕ НЕТ" : "";
+        state.className = `settings-check-state ${
+          c.ok ? (c.has_model === false ? "is-warn" : "is-ok") : "is-bad"}`;
+        state.textContent = c.ok
+          ? `жив · ${c.ms} мс · моделей: ${c.models}${extra}`
+          : `не отвечает · ${c.ms} мс · ${c.error}`;
+      } catch (ex) {
+        state.className = "settings-check-state is-bad";
+        state.textContent = ex.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    return h("div", { class: "settings-check" }, btn, state);
+  }
+
   function renderTab() {
     const g = model.groups.find((x) => x.id === active) || model.groups[0];
     if (!g) return;
@@ -1267,15 +1323,16 @@ async function viewSettings() {
         if (!useProf || f.noenv) return f;
         return { ...f, value: (prof.values || {})[f.key] || "" };
       });
+      const body = [
+        ...(b.note ? [h("div", { class: "review-card-note" }, b.note)] : []),
+        h("div", { class: "settings-fields" }, ...fields.map(fieldWrap)),
+      ];
+      if (b.id === "llm_conn") body.push(checkRow());
       out.push(h(
         "div",
         { class: "review-card" },
         h("div", { class: "review-card-title" }, b.title),
-        h(
-          "div",
-          { class: "review-card-body" },
-          h("div", { class: "settings-fields" }, ...fields.map(fieldWrap)),
-        ),
+        h("div", { class: "review-card-body" }, ...body),
       ));
     }
     cards.replaceChildren(...out);

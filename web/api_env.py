@@ -51,6 +51,13 @@ def _clean_values(values) -> dict:
     return clean
 
 
+def _env_wins() -> set:
+    """Ключи, заданные переменными окружения процесса: они перекрывают файл
+    (канон §7), и правка в интерфейсе их не применит."""
+    return {s.key for s in core_settings.SETTINGS
+            if os.environ.get(s.key, "").strip()}
+
+
 def _settings_payload(profile: str = "") -> dict:
     """Общий ответ страницы: путь конфига, env_wins, блоки, профили."""
     path = core_settings.env_file()
@@ -61,8 +68,7 @@ def _settings_payload(profile: str = "") -> dict:
             "profile_file": core_settings.profiles_file(),
             "groups": core_settings.groups_payload(),
             "profiles": core_settings.profiles_payload(),
-            "env_wins": [s.key for s in core_settings.SETTINGS
-                         if os.environ.get(s.key, "").strip()]}
+            "env_wins": sorted(_env_wins())}
 
 
 def _settings_get(ctx: dict) -> dict:
@@ -130,10 +136,38 @@ def _settings_profiles(ctx: dict) -> dict:
     return {"ok": True, "profiles": core_settings.profiles_payload()}
 
 
+def _settings_check(ctx: dict) -> dict:
+    """Проверить LLM-сервер (POST /api/settings/check {profile, values}).
+
+    Проверяет ТО, чем сервер будет работать: значения формы (возможно, ещё не
+    сохранённые) поверх общего .env и выбранного профиля. Ключ из окружения
+    формой не перебивается, маска пароля сохранённый ключ не затирает. Сервер
+    спрашивается коротким GET /models — без генерации и без токенов.
+    """
+    body = ctx["body"]
+    profile = str(body.get("profile") or "").strip()
+    wins = _env_wins()
+    merged = core_settings.layered_values(profile)
+    for key, value in _clean_values(body.get("values")).items():
+        if key not in wins:
+            merged[key] = core_settings.sanitize(core_settings.BY_KEY[key], value)
+    host = str(merged.get("HOST") or "").strip()
+    if not host:
+        raise ApiError(400, "Сервер не задан: заполните «Сервер LLM»")
+    common = _import_common(ctx)
+    # отчёт — своим ключом: свой ok внутри ответа SPA значит «запрос не удался»,
+    # а недоступный сервер — не неудача запроса, а его результат
+    return {"ok": True,
+            "profile": profile or core_settings.PROFILE_DEFAULT,
+            "check": common.probe_server(host, str(merged.get("API_KEY") or ""),
+                                        model=str(merged.get("MODEL") or ""))}
+
+
 def _register_settings(router: Router) -> None:
     """Роуты страницы «Настройки» (реестр, а не текст файла)."""
     router.add("GET", "/api/settings", _settings_get)
     router.add("PUT", "/api/settings", _settings_put)
+    router.add("POST", "/api/settings/check", _settings_check)
     router.add("POST", "/api/settings/profiles", _settings_profiles)
 
 

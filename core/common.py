@@ -57,7 +57,8 @@ from collections import defaultdict
 # (bootstrap добавляет в sys.path корень репо, а не core/), а относительная
 # форма остаётся разрешимой для анализаторов, у которых core/ — корень поиска
 from . import transport
-from .transport import (BrokenStream, ConnectTimeout, ReadTimeout, open_stream)
+from .transport import (BrokenStream, ConnectTimeout, ReadTimeout, open_get,
+                       open_stream)
 from dotenv import dotenv_values
 
 # ══════════════════════════════════════════════════════════════════════
@@ -160,6 +161,85 @@ def get_server_config(env_data: dict) -> dict:
 
     return {"host": val("HOST"), "api_key": val("API_KEY"),
             "model": val("MODEL")}
+
+
+def server_base_url(host: str) -> str:
+    """Адрес API из `HOST`: концевой слэш отрезается, `/v1` дописывается.
+
+    Нормализация ОДНА на все выходы: стадии и проверка сервера должны ходить по
+    одному адресу, иначе «зелёная галочка» проверяет не то, чем работают.
+    """
+    base = str(host or "").strip().rstrip("/")
+    return base if "/v1" in base else f"{base}/v1"
+
+
+# Сколько ждать ответ на проверку сервера: список моделей маленький, вешаться на
+# таймаут рабочего запроса (минуты) интерфейсу незачем.
+PROBE_TIMEOUT = 15.0
+
+
+def probe_server(host, api_key="", *, model="", timeout=PROBE_TIMEOUT) -> dict:
+    """Проверить LLM-сервер: короткий `GET {host}/models` без генерации.
+
+    Возвращает отчёт {ok, url, status, models, has_model, ms, error}: жив ли
+    сервер, сколько моделей отдаёт и есть ли в списке модель из конфига
+    (сравнение без учёта регистра). Ошибки транспорта нормализованы, поэтому
+    текст человеческий и один на все точки входа. Ключ в отчёт НЕ попадает.
+    """
+    url = f"{server_base_url(host)}/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    started = time.perf_counter()
+    status, body = 0, b""
+    try:
+        with open_get(url, headers=headers, timeout=timeout) as resp:
+            status = resp.status_code
+            body = b"\n".join(resp.iter_lines())
+    except ConnectTimeout:
+        return {"ok": False, "url": url, "status": 0, "models": 0,
+                "has_model": None, "ms": _probe_ms(started),
+                "error": f"соединение не установлено за {timeout:g} с"}
+    except ReadTimeout:
+        return {"ok": False, "url": url, "status": 0, "models": 0,
+                "has_model": None, "ms": _probe_ms(started),
+                "error": f"соединение есть, но ответ не пришёл за {timeout:g} с"}
+    except BrokenStream as exc:
+        return {"ok": False, "url": url, "status": status, "models": 0,
+                "has_model": None, "ms": _probe_ms(started),
+                "error": f"соединение оборвалось при чтении: {exc}"}
+    except Exception as exc:  # noqa: BLE001 — отчёт не должен ронять страницу
+        return {"ok": False, "url": url, "status": status, "models": 0,
+                "has_model": None, "ms": _probe_ms(started), "error": str(exc)}
+    text = body.decode("utf-8", "replace").strip()
+    if status != 200:
+        # тело ответа роутера часто объясняет причину (неверный ключ, модель не
+        # найдена) — отдаём его целиком, но недлинно
+        reason = f"HTTP {status}" + (f": {text[:200]}" if text else "")
+        return {"ok": False, "url": url, "status": status, "models": 0,
+                "has_model": None, "ms": _probe_ms(started), "error": reason}
+    ids = _probe_model_ids(text)
+    want = str(model or "").strip().lower()
+    return {"ok": True, "url": url, "status": status, "models": len(ids),
+            "has_model": (None if not (want and ids)
+                          else want in {i.lower() for i in ids}),
+            "ms": _probe_ms(started), "error": ""}
+
+
+def _probe_model_ids(text: str) -> list:
+    """Список id моделей из ответа /models (OpenAI-совместимый формат)."""
+    try:
+        raw = json.loads(text or "{}")
+    except ValueError:
+        return []
+    items = raw.get("data") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        return []
+    return [str(it.get("id")) for it in items
+            if isinstance(it, dict) and it.get("id")]
+
+
+def _probe_ms(started: float) -> int:
+    """Сколько длилась проверка, миллисекунды."""
+    return round((time.perf_counter() - started) * 1000)
 
 
 def print_env_help() -> None:

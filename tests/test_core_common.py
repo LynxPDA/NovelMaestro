@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core import common as C  # noqa: E402
+from core import transport as T  # noqa: E402
 from conftest import SilentLog  # noqa: E402
 
 
@@ -1892,6 +1893,105 @@ def test_extra_body_fields_json(monkeypatch):
 # ══════════════════════════════════════════════════════════════════
 # ВЫБОР ПРОВАЙДЕРА: факультативный ключ `provider`
 # ══════════════════════════════════════════════════════════════════
+class _ProbeResp:
+    """Ответ транспорта для проверок: статус и всё тело целиком."""
+
+    def __init__(self, status, body):
+        self.status_code, self._body = status, body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def iter_lines(self):
+        return iter(self._body.split(b"\n"))
+
+
+def _probe_with(monkeypatch, *, status=200, body=b"", raise_with=None):
+    """Мок транспорта проверки: возвращает (увиденные аргументы, отчёт)."""
+    seen = {}
+
+    def fake_get(url, *, headers=None, timeout=None):
+        seen.update(url=url, headers=headers or {}, timeout=timeout)
+        if raise_with is not None:
+            raise raise_with
+        return _ProbeResp(status, body)
+
+    monkeypatch.setattr(C, "open_get", fake_get)
+    return seen
+
+
+@pytest.mark.parametrize("host,expect", [
+    ("http://x:9989", "http://x:9989/v1"),
+    ("http://x:9989/", "http://x:9989/v1"),
+    ("http://x:9989/v1", "http://x:9989/v1"),
+    ("https://routerai.ru/api/v1/", "https://routerai.ru/api/v1"),
+    ("", "/v1"),
+])
+def test_server_base_url(host, expect):
+    assert C.server_base_url(host) == expect
+
+
+def test_probe_server_ok(monkeypatch):
+    """Живой сервер: адрес берётся из HOST, ключ — Bearer, модель ищется без
+    учёта регистра, таймаут проверки короткий (не рабочий)."""
+    seen = _probe_with(monkeypatch, body=b'{"data":[{"id":"A/Model"},{"id":"x"}]}')
+    out = C.probe_server("http://127.0.0.1:9999", "k", model="a/model")
+    assert seen["url"] == "http://127.0.0.1:9999/v1/models"
+    assert seen["headers"] == {"Authorization": "Bearer k"}
+    assert seen["timeout"] == C.PROBE_TIMEOUT
+    assert out["ok"] and out["status"] == 200
+    assert out["models"] == 2 and out["has_model"] is True
+    assert out["error"] == "" and out["ms"] >= 0
+
+
+def test_probe_server_no_key_and_no_model(monkeypatch):
+    """Без ключа заголовок не шлётся вовсе; без модели в конфиге сравнивать
+    нечего — has_model остаётся None, а не False."""
+    seen = _probe_with(monkeypatch, body=b'{"data":[{"id":"a"}]}')
+    out = C.probe_server("http://x:1")
+    assert seen["headers"] == {}
+    assert out["ok"] and out["models"] == 1 and out["has_model"] is None
+
+
+def test_probe_server_model_missing(monkeypatch):
+    """Сервер жив, модели из конфига в списке нет — это отдельный вердикт."""
+    _probe_with(monkeypatch, body=b'{"data":[{"id":"a"},{"id":"b"}]}')
+    out = C.probe_server("http://x:1", model="c")
+    assert out["ok"] and out["has_model"] is False
+
+
+@pytest.mark.parametrize("body", [b"", b"not json", b'{"data": null}', b"[]"])
+def test_probe_server_body_not_parseable(monkeypatch, body):
+    """Неразобранное тело — не ошибка: сервер жив, моделей ноль."""
+    _probe_with(monkeypatch, body=body)
+    out = C.probe_server("http://x:1")
+    assert out["ok"] and out["models"] == 0 and out["has_model"] is None
+
+
+def test_probe_server_http_error(monkeypatch):
+    """Не 200 — ответ роутера часто объясняет причину, его и показываем."""
+    _probe_with(monkeypatch, status=401, body=b'{"error":"invalid key"}')
+    out = C.probe_server("http://x:1")
+    assert not out["ok"] and out["status"] == 401
+    assert out["error"].startswith("HTTP 401") and "invalid key" in out["error"]
+
+
+@pytest.mark.parametrize("exc,part", [
+    (C.ConnectTimeout("x"), "соединение не установлено"),
+    (C.ReadTimeout("x"), "ответ не пришёл"),
+    (C.BrokenStream("x"), "оборвалось"),
+    (T.TransportError("иная причина"), "иная причина"),
+])
+def test_probe_server_transport_errors(monkeypatch, exc, part):
+    """Ошибки транспорта — человеческий текст без имён библиотек."""
+    _probe_with(monkeypatch, raise_with=exc)
+    out = C.probe_server("http://x:1", timeout=5)
+    assert not out["ok"] and part in out["error"]
+
+
 def test_provider_list():
     """Список идентификаторов: разделители любые, регистр — нижний, пусто → []."""
     assert C.provider_list("") == []

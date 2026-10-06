@@ -8,6 +8,9 @@
   --border: #30363d;
   --text: #e6edf3;
   --muted: #8b949e;
+  /* подписи мельче и глуше muted (подписи полей, пустые списки); без токена
+     все эти правила молча наследовали цвет текста */
+  --text-dim: #6e7681;
   --accent: #2ea043;
   --accent-dim: #238636;
   --accent-2: #d29922;
@@ -35,6 +38,7 @@
   --border: #d0d7de;
   --text: #1f2328;
   --muted: #59636e;
+  --text-dim: #6e7781;
   --accent: #1a7f37;
   --accent-dim: #238636;
   --accent-2: #9a6700;
@@ -1735,6 +1739,39 @@ input[type="number"] {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+/* пояснение блока — ОДНА строка «что это и когда трогать»: справка живёт в
+   вкладке «Справка», карточка настроек не должна становиться справочником */
+.review-card-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+/* состояние чекбокса в карточке («запасные провайдеры» без слова ничего не
+   сообщает): подпись сверху, контрол и состояние — строкой под ней */
+.field-check-state {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+/* проверка LLM-сервера: кнопка и вердикт одной строкой под полями подключения */
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.settings-check-state {
+  font-size: 12px;
+  color: var(--muted);
+}
+.settings-check-state.is-ok {
+  color: var(--accent);
+}
+.settings-check-state.is-warn {
+  color: var(--accent-2);
+}
+.settings-check-state.is-bad {
+  color: var(--danger);
 }
 .review-actions {
   display: flex;

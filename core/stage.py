@@ -31,7 +31,7 @@ from .common import (REASONING_MODES, REASONING_PROFILES, determine_model,
                      llm_messages, load_env, log_argv,
                      preview_logger, preview_request_payload, print_env_help,
                      provider_settings, reasoning_fields, reasoning_settings,
-                     setup_logging,
+                     server_base_url, setup_logging,
                      stream_chat_completion, web_progress_enabled,
                      write_preview_request)
 
@@ -238,9 +238,8 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
     if not host:
         print_env_help()
         sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")
-    base_url = host.rstrip("/")
-    if "/v1" not in base_url:
-        base_url += "/v1"
+    # адрес нормализует общий слой: проверка сервера ходит по тому же адресу
+    base_url = server_base_url(host)
     if require_model:
         model = determine_model(model, logger)
     timeout = _pick(args, "timeout", llm["timeout"])

@@ -13,6 +13,7 @@
  * Выход 0 — чистый проход; 1 — найдены ошибки; список — в stdout и --out.
  */
 import { spawn } from "node:child_process";
+import http from "node:http";
 import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
@@ -887,7 +888,39 @@ async function main() {
       .locator("input,select,textarea").first().inputValue();
     if (masked !== "•".repeat("probe-secret".length))
       problems.push(`настройки: секрет «${masked}»`);
-    if (SHOT) await page.screenshot({ path: path.join(OUT, "settings.png") });
+    // «Выбор провайдера»: карточка объясняет себя сама, а чекбокс — такое же
+    // двухстрочное поле, как соседи (подпись сверху, контрол под ней)
+    const prov = await page
+      .locator(".settings-cards .review-card", { hasText: "Выбор провайдера" })
+      .first()
+      .evaluate((el) => {
+        const rows = [...el.querySelectorAll(".settings-fields > .field")];
+        const fb = rows.map((x) => ({
+          label: (x.querySelector(".field-label") || {}).textContent?.trim() || "",
+          row: !!x.querySelector(".field-row.field-check"),
+          state: (x.querySelector(".field-check-state") || {}).textContent?.trim() || "",
+        })).find((x) => x.label.includes("Запасные"));
+        return {
+          note: (el.querySelector(".review-card-note") || {}).textContent?.trim() || "",
+          fields: rows.length,
+          fb: fb || null,
+        };
+      });
+    if (!/RouterAI/.test(prov.note) || !/OpenRouter/.test(prov.note))
+      problems.push("настройки: карточка провайдеров не говорит, кому она нужен");
+    if (!/не читает/.test(prov.note))
+      problems.push("настройки: карточка провайдеров не говорит про локальный сервер");
+    if (!prov.fb) problems.push("настройки: чекбокс «Запасные провайдеры» — не поле с подписью сверху");
+    else if (!prov.fb.row || !["включено", "выключено"].includes(prov.fb.state))
+      problems.push(`настройки: чекбокс «${prov.fb.label}» → ${prov.fb.row ? "строка" : "не строка"}, состояние «${prov.fb.state}»`);
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "settings.png") });
+      // карточка провайдеров целиком: видно выравнивание чекбокса
+      await page
+        .locator(".settings-cards .review-card", { hasText: "Выбор провайдера" })
+        .first()
+        .screenshot({ path: path.join(OUT, "settings-provider.png") });
+    }
     // карточка рассуждений: поля, варианты и предзаполнение — из реестра
     const card = page.locator(".settings-cards .review-card",
       { hasText: "Рассуждения модели" }).first();
@@ -1038,6 +1071,67 @@ async function main() {
     if (SHOT)
       await page.screenshot({ path: path.join(OUT, "settings-glossary-fields.png") });
     log(`${problems.length === before ? "✅" : "❌"} настройки: стадии  ${lines.join(" · ")} | ${mode || "—"} | ${cap || "—"}`);
+  }
+
+  /* проверка LLM-сервера: карточка «Подключение» спрашивает /v1/models тем же
+   * путём, каким пойдёт работа; вердикт считается по значениям ФОРМЫ (в пробе
+   * окружение чистое, поэтому HOST из поля и есть проверяемый сервер) */
+  {
+    const before = problems.length;
+    let models = ["probe-model", "other/model"];
+    const llm = http.createServer((req, res) => {
+      if (!req.url.startsWith("/v1/models")) {
+        res.writeHead(404);
+        res.end("{}");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: models.map((id) => ({ id })) }));
+    });
+    await new Promise((r) => llm.listen(0, "127.0.0.1", r));
+    const llmPort = llm.address().port;
+    const hostSel = ".settings-cards [name=\"HOST\"]";
+    const btn = page.locator(".settings-check button").first();
+    const state = page.locator(".settings-check-state").first();
+    const verdict = async () =>
+      `${(await state.getAttribute("class")).replace(/.*\bis-/, "")} «${((await state.textContent()) || "").trim()}»`;
+    try {
+      await page.goto(`${url}/#/settings`, { waitUntil: "load" });
+      await page.reload({ waitUntil: "load" });
+      // вкладка помнится браузеру: без переключения здесь лежала бы «Книга»
+      await page.waitForSelector('.tabs .tab:has-text("Модель и сервер")', { timeout: 15000 });
+      await page.locator('.tabs .tab:has-text("Модель и сервер")').first().click();
+      await page.waitForSelector(hostSel, { timeout: 15000 });
+      const seen = [];
+      // 1) сервер жив, модель из конфига в списке
+      await page.locator(hostSel).first().fill(`http://127.0.0.1:${llmPort}/v1`);
+      if (!(await btn.textContent()).includes("Проверить"))
+        problems.push("проверка сервера: кнопки нет в карточке «Подключение»");
+      await btn.click();
+      await page.waitForSelector(".settings-check-state.is-ok", { timeout: 15000 });
+      seen.push(await verdict());
+      if (!/моделей: 2/.test(seen[0]) || !/модель из конфига есть/.test(seen[0]))
+        problems.push(`проверка сервера: вердикт «${seen[0]}»`);
+      // 2) сервер жив, модели из конфига нет — отдельный вердикт
+      models = ["other/model"];
+      await btn.click();
+      await page.waitForSelector(".settings-check-state.is-warn", { timeout: 15000 });
+      seen.push(await verdict());
+      if (!/МОДЕЛИ ИЗ КОНФИГА В СПИСКЕ НЕТ/.test(seen[1]))
+        problems.push(`проверка сервера: вердикт «${seen[1]}»`);
+      // 3) сервер недоступен — не таймаут, а внятный текст
+      await page.locator(hostSel).first().fill("http://127.0.0.1:9/v1");
+      await btn.click();
+      await page.waitForSelector(".settings-check-state.is-bad", { timeout: 25000 });
+      seen.push(await verdict());
+      if (!/не отвечает/.test(seen[2]) || !/соединение не установлено/.test(seen[2]))
+        problems.push(`проверка сервера: вердикт «${seen[2]}»`);
+      if (SHOT)
+        await page.screenshot({ path: path.join(OUT, "settings-check.png") });
+      log(`${problems.length === before ? "✅" : "❌"} проверка LLM-сервера  ${seen.join(" | ")}`);
+    } finally {
+      llm.close();
+    }
   }
 
   /* профили LLM: General — значения общего конфига, карточка с одним списком

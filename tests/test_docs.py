@@ -49,6 +49,7 @@ CORE_API = [
     "fix_entry", "merge_fix_entries", "apply_fix_to_text",
     "flex_fragment_pattern", "find_fragment_owner",
     "stream_chat_completion", "llm_messages",
+    "server_base_url", "probe_server",
     "atomic_write", "read_text_safe",
     "web_progress_enabled", "emit_progress",
     "parse_chapter_id", "build_chapter_map", "find_chapter_file",
@@ -68,8 +69,8 @@ PROJECTS_API = ["SECTIONS", "DEFAULT_SECTIONS", "load_sections",
                 "delete_project", "copy_project"]
 # Зеркало API core/transport.py (единственная точка выхода в сеть)
 TRANSPORT_API = ["TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStream",
-                 "ResponseStream", "open_stream", "client", "reset_client",
-                 "BACKEND"]
+                 "ResponseStream", "open_stream", "open_get", "client",
+                 "reset_client", "BACKEND"]
 # Зеркало API core/deps.py (реестр внешних зависимостей)
 DEPS_API = ["ROLES", "status", "format_status", "missing_hint"]
 # Зеркало API core/settings.py (реестр настроек — одно место истины)

@@ -370,6 +370,62 @@ def test_settings_get_env_wins(srv, tmp_path, monkeypatch):
     assert _settings_fields(r)["host"]["value"] == "http://from-env:1"
 
 
+def test_settings_check_uses_form(srv, tmp_path, monkeypatch):
+    """POST /api/settings/check проверяет ТО, что в форме, а не только то, что
+    на диске: HOST из формы, модель из формы, а ключ — сохранённый (форма несёт
+    маску, и она не должна стирать настоящий ключ)."""
+    _srv, port, _root = _settings_srv(
+        srv, tmp_path, monkeypatch,
+        "HOST=http://from-file:1\nAPI_KEY=k\nMODEL=m\n")
+    monkeypatch.delenv("HOST", raising=False)
+    seen = {}
+
+    def fake_probe(host, api_key="", *, model="", timeout=0):
+        seen.update(host=host, api_key=api_key, model=model)
+        return {"ok": True, "url": "http://from-form:1/v1/models", "status": 200,
+                "models": 2, "has_model": True, "ms": 7, "error": ""}
+
+    monkeypatch.setattr(core_common, "probe_server", fake_probe)
+    r = _request(port, "POST", "/api/settings/check", {
+        "profile": "", "values": {"HOST": "http://from-form:1",
+                                  "API_KEY": S_MASK * 10, "MODEL": "m"}})
+    assert r["ok"] and r["profile"] == "general"
+    # отчёт проверки живёт своим ключом: недоступный сервер — не ошибка запроса
+    assert (r["check"]["ok"], r["check"]["ms"], r["check"]["models"],
+            r["check"]["has_model"]) == (True, 7, 2, True)
+    assert seen == {"host": "http://from-form:1", "api_key": "k", "model": "m"}
+    # ключ в отчёт не ездит: ответ — только вердикт
+    assert "api_key" not in json.dumps(r)
+
+
+def test_settings_check_env_wins(srv, tmp_path, monkeypatch):
+    """Ключ, заданный окружением, форма не перебивает: проверка показывает
+    реальный сервер, а не тот, что нарисован в поле."""
+    _srv, port, _root = _settings_srv(srv, tmp_path, monkeypatch,
+                                      "HOST=http://from-file:1\n")
+    monkeypatch.setenv("HOST", "http://from-env:1")
+    seen = {}
+
+    def fake_probe(host, api_key="", *, model="", timeout=0):
+        seen["host"] = host
+        return {"ok": True, "url": "", "status": 200, "models": 0,
+                "has_model": None, "ms": 1, "error": ""}
+
+    monkeypatch.setattr(core_common, "probe_server", fake_probe)
+    r = _request(port, "POST", "/api/settings/check",
+                 {"values": {"HOST": "http://from-form:1"}})
+    assert r["ok"] and r["check"]["ok"] and seen["host"] == "http://from-env:1"
+
+
+def test_settings_check_requires_host(srv, tmp_path, monkeypatch):
+    """Без сервера проверять нечего: 400 внятным текстом, а не таймаут."""
+    _srv, port, _root = _settings_srv(srv, tmp_path, monkeypatch)
+    monkeypatch.delenv("HOST", raising=False)
+    r = _request(port, "POST", "/api/settings/check", {"values": {}})
+    assert r["__error__"] == 400
+    assert "Сервер не задан" in r["__body__"]
+
+
 def test_settings_hidden_only_here(srv, tmp_path, monkeypatch):
     """Скрытые настройки конвейера видны только на «Настройках»: в форму
     запусков они не попадают (стадия берёт значение из конфига)."""
@@ -1085,6 +1141,7 @@ def test_job_start_uses_shared_llm_config(srv, tmp_path, monkeypatch):
     assert "__error__" not in r and r.get("ok"), r
     assert not (pdir / ".env").exists(), "файл отличий книги больше не пишется"
     job = srv.job_manager.get(r["job"]["id"])
+    assert job is not None, "запуск не появился в журнале"
     joined = " ".join(job.argv)
     assert "--chunk_size 1200" in joined      # значение из формы запусков
     assert "--host http://sys" in joined      # сервер — общий, не из формы

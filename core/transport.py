@@ -43,7 +43,8 @@ POOL_MAX_CONNECTIONS = 32
 __all__ = [
     "BACKEND", "DEFAULT_CONNECT_TIMEOUT", "DEFAULT_READ_TIMEOUT",
     "POOL_MAX_CONNECTIONS", "TransportError", "ConnectTimeout", "ReadTimeout",
-    "BrokenStream", "ResponseStream", "client", "open_stream", "reset_client",
+    "BrokenStream", "ResponseStream", "client", "open_stream", "open_get",
+    "reset_client",
 ]
 
 
@@ -183,6 +184,20 @@ def open_stream(url: str, *, headers: dict | None = None, payload: Any = None,
     return ResponseStream(
         client().stream("POST", url, headers=headers or {}, json=payload,
                         timeout=timeout))
+
+
+def open_get(url: str, *, headers: dict | None = None,
+             timeout: float = 15.0) -> ResponseStream:
+    """GET с коротким таймаутом: проверка доступности сервера (`/v1/models`).
+
+    Отдача та же, что у рабочего запроса: общий клиент, те же нормализованные
+    ошибки. Проверка обязана ходить ровно тем же путём, которым пойдёт работа,
+    иначе «зелёная галочка» и падающий конвейер могут быть разные серверы.
+    Тело читается целиком — список моделей маленький, стрим тут не нужен.
+    """
+    tm = httpx.Timeout(timeout, connect=timeout, write=timeout, pool=timeout)
+    return ResponseStream(
+        client().stream("GET", url, headers=headers or {}, timeout=tm))
 
 
 def main(argv: list[str] | None = None) -> int:
