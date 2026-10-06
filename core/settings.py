@@ -177,16 +177,23 @@ GROUPS: tuple = (
         ),
         _block("llm_reasoning", "Рассуждения модели",
             _s("REASONING_MODE", "Рассуждения", "select", "default", options=("default", "on", "off"), labels={'default': "— (решение сервера)", 'on': "включены", 'off': "выключены"},
-                help="у части серверов рассуждения включены по умолчанию; «выключены» для openai-профиля = reasoning_effort=none"),
+                help="для openai-профиля рассуждения включаются только ключом: «включены» без уровня отправляет reasoning_effort=low (без ключа гибридные модели считают, что рассуждений нет); «выключены» = reasoning_effort=none"),
             _s("THINKING_PROFILE", "Профиль API", "select", "openai", options=("openai", "anthropic", "qwen", "dashscope", "ollama", "openrouter", "all"),
                 labels={'openai': "OpenAI-совместимый (reasoning_effort)", 'anthropic': "Anthropic (thinking.budget_tokens)", 'qwen': "Qwen3/DeepSeek (chat_template_kwargs)", 'dashscope': "DashScope (enable_thinking)", 'ollama': "Ollama (think)", 'openrouter': "OpenRouter (reasoning.effort)", 'all': "Все ключи сразу (строгие серверы отвечают 400)"},
                 help="как именно передавать рассуждения: каждый профиль отправляет только свои ключи (незнакомый ключ строгий сервер считает ошибкой запроса); «все ключи сразу» — только для серверов, которые молча игнорируют чужие"),
             _s("REASONING_EFFORT", "Уровень рассуждения", "select", "", options=("", "none", "minimal", "low", "medium", "high", "xhigh", "max"),
                 labels={'': "— (не отправлять, дефолт сервера)", 'none': "none — выключено", 'minimal': "minimal", 'low': "low", 'medium': "medium", 'high': "high", 'xhigh': "xhigh", 'max': "max"},
-                help="пусто — не передаётся; понимают openai, openrouter и «все ключи сразу»"),
+                help="пусто — не передаётся (кроме режима «включены» у openai-профиля); понимают openai, openrouter и «все ключи сразу»"),
             _s("THINKING_BUDGET", "Бюджет рассуждения, ТОКЕНЫ", "number", 0, help="0 — не отправлять; понимают anthropic (thinking.budget_tokens) и dashscope (thinking_budget)"),
             _s("LLM_EXTRA_BODY_JSON", "Свои поля тела (JSON)", "text", "",
                 help="JSON-объект ключей, которых не знает ни один профиль (свой сервер); уходят в тело запроса после ключей профиля, то есть перекрывают их; битый JSON запрос не ломает — поле игнорируется с предупреждением в лог"),        ),
+        _block("llm_provider", "Выбор провайдера",
+            _s("PROVIDER_ORDER", "Приоритет провайдеров", "text", "", help="список идентификаторов провайдеров через запятую (tag из списка endpoint'ов модели, в нижнем регистре): запрос уйдёт первому из списка, кто обслуживает модель; пусто — ключ не отправляется вовсе"),
+            _s("PROVIDER_ONLY", "Только эти провайдеры", "text", "", help="белый список: провайдеры вне его не используются; если ни один из списка не обслуживает модель — ошибка 404, allow_fallbacks на это не влияет"),
+            _s("PROVIDER_IGNORE", "Исключить провайдеров", "text", "", help="чёрный список: эти провайдеры не используются; если исключены все провайдеры модели — ошибка 404"),
+            _s("PROVIDER_ALLOW_FALLBACKS", "Запасные провайдеры", "bool", True, help="относится только к приоритету: выключено — если ни одного провайдера из списка у модели нет, запрос завершится ошибкой 404 вместо чужого провайдера; на белый и чёрный списки флаг не влияет"),
+            _s("PROVIDER_COUNTRY", "Страна серверов провайдера", "text", "", help="двухбуквенный код (например ru): запрос обработают только провайдеры с серверами из этой страны; единственный фильтр, который соблюдается и в резервных попытках"),
+        ),
         # ── сам веб-сервер: свои блоки едут последними этой субвкладки ──
         _block("server_net", "Веб-сервер: сеть и доступ",
             _s("WEB_HOST", "Адрес прослушивания", "text", "127.0.0.1", help="применяется после перезапуска сервера; 0.0.0.0 — вся локальная сеть, тогда включайте аутентификацию; в Docker адрес задаёт образ (CLI-флаг --host выше любого файла)"),
@@ -430,7 +437,8 @@ BY_BLOCK: dict = {b.id: b.settings for g in GROUPS for b in g.blocks}
 BLOCK_TITLES: dict = {b.id: b.title for g in GROUPS for b in g.blocks}
 STAGES: tuple = tuple(dict.fromkeys(s.stage for s in SETTINGS if s.stage))
 #: блоки общего LLM-конфига: он один на весь конвейер, стадийных ключей нет
-LLM_BLOCKS: tuple = ("llm_conn", "llm_net", "llm_run", "llm_reasoning")
+LLM_BLOCKS: tuple = ("llm_conn", "llm_net", "llm_run", "llm_reasoning",
+                     "llm_provider")
 #: блоки настроек самого веб-сервера: их читает web/main.py, профили LLM их
 #: не касают (профиль хранит только LLM-ключи)
 SERVER_BLOCKS: tuple = ("server_net", "server_run")

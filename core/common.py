@@ -1846,7 +1846,7 @@ def _retry_wait(attempt: int, resp=None) -> float:
 def stream_chat_completion(
     base_url, model, messages, api_key="",
     max_retries=3, timeout=300, stream_timeout=900,
-    temperature=None, reasoning=None,
+    temperature=None, reasoning=None, provider=None,
     max_tokens=65536, min_len_ratio=0.0, reference_len=0,
     logger=None, label="",
 ):
@@ -1860,7 +1860,9 @@ def stream_chat_completion(
     reasoning: готовые ключи рассуждений (core.common.reasoning_fields) —
     едут в payload как есть; None/{} — ничего не шлём (дефолт сервера).
     Единый openai-ключ reasoning_effort — один из таких ключей, отдельного
-    параметра под него нет: у чужих профилей он невалиден."""
+    параметра под него нет: у чужих профилей он невалиден.
+    provider: объект выбора провайдера (core.common.provider_settings) —
+    отдельным ключом тела; None/{} — роутер балансирует сам."""
     url = f"{base_url}/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -1871,6 +1873,8 @@ def stream_chat_completion(
         # значение "none" понимают OpenAI API и llama.cpp, OpenRouter/Bothub
         # пробрасывают провайдеру
         payload.update(reasoning)
+    if provider:
+        payload["provider"] = provider
     if temperature is not None:
         payload["temperature"] = temperature
 
@@ -2238,13 +2242,24 @@ REASONING_MODES: tuple[str, ...] = ("default", "on", "off")
 REASONING_ENV_KEYS: tuple[str, ...] = ("REASONING_MODE", "THINKING_PROFILE",
                                        "REASONING_EFFORT", "THINKING_BUDGET")
 
+#: Уровень рассуждения, который уходит при режиме «включены», а уровень не
+#: выбран: пустой ключ гибридные модели читают как «выключено».
+DEFAULT_REASONING_EFFORT = "low"
+
 
 def _rf_openai(mode: str, effort: str, budget: int) -> dict:
     """OpenAI-совместимые API: единый reasoning_effort. Уровень «none» и есть
-    выключенные рассуждения; «включено» без уровня — решение сервера."""
-    if effort:
-        return {"reasoning_effort": effort}
-    return {"reasoning_effort": "none"} if mode == "off" else {}
+    выключенные рассуждения.
+
+    «Включено» без уровня отправляет DEFAULT_REASONING_EFFORT: гибридные модели
+    без ключа считают рассуждения выключенными (на живом роутере ответ без
+    ключа — 3 токена ответа и 0 токенов мышления, с ключом — 100+), так что
+    «просто включить» — это всё-таки отправить уровень."""
+    if mode == "off":
+        return {"reasoning_effort": "none"}
+    if mode == "on":
+        return {"reasoning_effort": effort or DEFAULT_REASONING_EFFORT}
+    return {"reasoning_effort": effort} if effort else {}
 
 
 def _rf_anthropic(mode: str, effort: str, budget: int) -> dict:
@@ -2374,7 +2389,8 @@ def reasoning_settings(env_data: dict | None = None) -> dict:
     """Режим рассуждений запуска: os.environ > .env > дефолты.
 
     Приоритет по ключам, а не по файлу целиком: окружение compose перекрывает
-    файл точечно (см. AGENTS §7, слои конфига).
+    файл точечно (см. AGENTS §7, слои конфига). Значения выбранного профиля LLM
+    слой получает от core.stage: оно лежит в env_data поверх общего файла.
     """
     env_data = env_data or {}
     got = {k: (os.environ.get(k) or env_data.get(k) or "").strip()
@@ -2385,6 +2401,57 @@ def reasoning_settings(env_data: dict | None = None) -> dict:
         "effort": got["REASONING_EFFORT"],
         "budget": _as_budget(got["THINKING_BUDGET"]),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ВЫБОР ПРОВАЙДЕРА: факультативный ключ `provider` (роутеры OpenRouter-типа)
+# ══════════════════════════════════════════════════════════════════════
+
+#: Ключи выбора провайдера — ОБЩИЕ, без стадийного префикса: маршрут
+#: относится к модели, а не к стадии. Пустое поле ключ не отправляет вовсе:
+#: запрос идёт с балансировкой провайдера по умолчанию.
+PROVIDER_KEYS: tuple[str, ...] = ("PROVIDER_ORDER", "PROVIDER_ONLY",
+                                  "PROVIDER_IGNORE", "PROVIDER_ALLOW_FALLBACKS",
+                                  "PROVIDER_COUNTRY")
+
+#: списки провайдеров в значении настройки — идентификаторы (`tag` из списка
+#: endpoint'ов модели) через запятую, точку с запятой или пробел
+_PROVIDER_SPLIT_RE = re.compile(r"[,;\s]+")
+
+
+def provider_list(value) -> list:
+    """Список идентификаторов провайдеров из значения настройки: пусто → [].
+    Идентификаторы приводятся к нижнему регистру — так их ждёт роутер."""
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    return [x for x in _PROVIDER_SPLIT_RE.split(raw.lower()) if x]
+
+
+def provider_settings(env_data: dict | None = None) -> dict:
+    """Ключ `provider` для тела запроса: {} — маршрутизация провайдера.
+
+    Слои те же, что у рассуждений: os.environ > общий .env (с выбранным
+    профилем LLM). `allow_fallbacks` едет только вместе с `order` и только
+    выставленный в false: на only/ignore он не влияет, а true — и так дефолт.
+    @-синтаксис в MODEL (model@provider=...) с этим ключом несовместим: роутер
+    отвечает 400 на параметр, заданный сразу в двух местах.
+    """
+    got = {k: (os.environ.get(k) or (env_data or {}).get(k) or "").strip()
+           for k in PROVIDER_KEYS}
+    out: dict = {}
+    for key, name in (("PROVIDER_ORDER", "order"), ("PROVIDER_ONLY", "only"),
+                      ("PROVIDER_IGNORE", "ignore")):
+        items = provider_list(got[key])
+        if items:
+            out[name] = items
+    if got.get("PROVIDER_COUNTRY"):
+        out["country"] = got["PROVIDER_COUNTRY"].lower()
+    if "order" in out:
+        raw = got.get("PROVIDER_ALLOW_FALLBACKS", "").lower()
+        if raw and raw not in ("1", "true", "yes", "on"):
+            out["allow_fallbacks"] = False
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -32,6 +32,9 @@ LLM_NAMES = {
     "max_tokens", "retry_empty", "temperature", "threads", "min_len_ratio",
     "reasoning_mode", "thinking_profile", "reasoning_effort", "thinking_budget",
     "llm_extra_body_json",
+    # выбор провайдера — тоже общие LLM-ключи: маршрут относится к модели
+    "provider_order", "provider_only", "provider_ignore",
+    "provider_allow_fallbacks", "provider_country",
 }
 
 
@@ -71,7 +74,7 @@ def test_payload_marks_llm_blocks():
     блока стоит флаг, по нему SPA и подставляет значения профиля."""
     payload = S.groups_payload()
     llm = {b["id"]: b.get("llm") for g in payload for b in g["blocks"]}
-    assert set(b for b in llm if llm[b]) == set(S.LLM_BLOCKS)
+    assert {b for b in llm if llm[b]} == set(S.LLM_BLOCKS)
     assert llm["server_net"] is False and llm["server_run"] is False
 
 

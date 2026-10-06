@@ -25,6 +25,8 @@ for _p in (ROOT, ROOT / "cli"):
     if _s not in sys.path:
         sys.path.insert(0, _s)
 
+from core import common as C  # noqa: E402
+from core import settings as cfg  # noqa: E402
 from core import stage as st  # noqa: E402
 
 CANONICAL = ["--host", "--model", "--api_key", "--env_file", "--temperature",
@@ -337,6 +339,51 @@ def test_reasoning_cli_wins_over_env(env_file, monkeypatch):
     monkeypatch.delenv("THINKING_PROFILE", raising=False)
     prof = resolve(env_file, reasoning_mode="on", thinking_profile="ollama")
     assert prof.reasoning_mode == "on" and prof.thinking_profile == "ollama"
+
+
+def test_profile_layers_reasoning_and_provider(tmp_path, env_file, monkeypatch):
+    """Профиль LLM — слой между общим файлом и окружением.
+
+    Рассуждения и выбор провайдера в argv стадии не едут намеренно, поэтому
+    читаются из env_data: без слоя профиля переключение режима в интерфейсе
+    до запроса не доходило (в дележе этих полей формы нет)."""
+    Path(env_file).write_text(
+        "HOST=http://common:1/v1\nAPI_KEY=common-key\nMODEL=common-model\n"
+        "REASONING_MODE=off\nPROVIDER_ONLY=openai\n", encoding="utf-8")
+    (tmp_path / cfg.PROFILES_NAME).write_text(json.dumps({"profiles": [{
+        "id": "cloud", "name": "Облако", "values": {
+            "REASONING_MODE": "on", "REASONING_EFFORT": "high",
+            "PROVIDER_ORDER": "DeepInfra, Google",
+            "PROVIDER_ALLOW_FALLBACKS": "0"}}]}, ensure_ascii=False),
+        encoding="utf-8")
+    # General — значения общего конфига
+    plain = resolve(env_file)
+    assert (plain.reasoning_mode, plain.provider) == (
+        "off", {"only": ["openai"]})
+    monkeypatch.setenv(cfg.PROFILE_ENV, "cloud")
+    prof = resolve(env_file)
+    assert (prof.reasoning_mode, prof.reasoning_effort) == ("on", "high")
+    # профиль перекрывает только свои поля: only из General остаётся
+    assert prof.provider == {"order": ["deepinfra", "google"],
+                             "only": ["openai"], "allow_fallbacks": False}
+    # гибрид без ключа считает рассуждения выключенными: «включено» шлёт уровень
+    assert st.reasoning_fields(prof.reasoning_mode, prof.thinking_profile,
+                               prof.reasoning_effort or "",
+                               prof.thinking_budget) == {
+        "reasoning_effort": "high"}
+    assert st.reasoning_fields(plain.reasoning_mode, plain.thinking_profile,
+                               plain.reasoning_effort or "",
+                               plain.thinking_budget) == {
+        "reasoning_effort": "none"}
+
+
+def test_provider_keys_have_no_stage_prefix(env_file, monkeypatch):
+    """Ключи выбора провайдера общие: стадийного PROVIDER_ORDER у стадии нет."""
+    for k in C.PROVIDER_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("PROVIDER_ORDER", "yandex")
+    prof = resolve(env_file, stage="ner")
+    assert prof.provider == {"order": ["yandex"]}
 
 
 def test_profile_complete_sends_profile_keys(recorder):

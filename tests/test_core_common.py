@@ -1435,6 +1435,21 @@ def test_stream_payload_options(monkeypatch):
     assert cap["json"]["max_tokens"] == 1024
 
 
+def test_stream_provider_key_passes_through(monkeypatch):
+    """Выбор провайдера уходит отдельным ключом тела; пустой — не едет вовсе."""
+    cap = {}
+    _patch_post(monkeypatch, _sse(["ок"]), capture=cap)
+    C.stream_chat_completion("http://h/v1", "m", [],
+                             provider={"order": ["deepinfra"],
+                                       "allow_fallbacks": False})
+    assert cap["json"]["provider"] == {"order": ["deepinfra"],
+                                       "allow_fallbacks": False}
+    cap2 = {}
+    _patch_post(monkeypatch, _sse(["ок"]), capture=cap2)
+    C.stream_chat_completion("http://h/v1", "m", [], provider={})
+    assert "provider" not in cap2["json"]
+
+
 def test_stream_reasoning_keys_pass_through(monkeypatch):
     """Ключи рассуждений уходят в payload как есть.
 
@@ -1784,9 +1799,12 @@ def test_find_fragment_owner_ambiguous_and_short(tmp_path):
 # REASONING / THINKING: реестр профилей провайдеров
 # ══════════════════════════════════════════════════════════════════════
 @pytest.mark.parametrize("profile,mode,effort,budget,expect", [
-    # openai: уровень и есть весь режим; «включено» без уровня — решение сервера
+    # openai: уровень и есть весь режим; «включено» без уровня отправляет
+    # DEFAULT_REASONING_EFFORT — без ключа гибридные модели считают, что
+    # рассуждений нет (живой роутер: 3 токена ответа, reasoning_tokens=0)
     ("openai", "default", "", 0, {}),
-    ("openai", "on", "", 0, {}),
+    ("openai", "on", "", 0, {"reasoning_effort": "low"}),
+    ("openai", "default", "medium", 0, {"reasoning_effort": "medium"}),
     ("openai", "off", "", 0, {"reasoning_effort": "none"}),
     ("openai", "on", "high", 0, {"reasoning_effort": "high"}),
     # anthropic: budget_tokens только при включённых рассуждениях
@@ -1869,6 +1887,49 @@ def test_extra_body_fields_json(monkeypatch):
     monkeypatch.setenv(C.EXTRA_BODY_ENV_KEY, '{"a": 1}')
     assert C.extra_body_fields({"LLM_EXTRA_BODY_JSON": '{"b": 2}'}, log) == {
         "a": 1}
+
+
+# ══════════════════════════════════════════════════════════════════
+# ВЫБОР ПРОВАЙДЕРА: факультативный ключ `provider`
+# ══════════════════════════════════════════════════════════════════
+def test_provider_list():
+    """Список идентификаторов: разделители любые, регистр — нижний, пусто → []."""
+    assert C.provider_list("") == []
+    assert C.provider_list(None) == []
+    assert C.provider_list("  ") == []
+    assert C.provider_list("DeepInfra, Google ") == ["deepinfra", "google"]
+    assert C.provider_list("anthropic;azure openai") == [
+        "anthropic", "azure", "openai"]
+
+
+@pytest.mark.parametrize("env_data,expect", [
+    # пусто — ключ не отправляется вовсе: балансирует роутер
+    ({}, {}),
+    ({"PROVIDER_ORDER": "deepinfra"}, {"order": ["deepinfra"]}),
+    # allow_fallbacks без order бессмысленен, а true — и так дефолт
+    ({"PROVIDER_ALLOW_FALLBACKS": "0"}, {}),
+    ({"PROVIDER_ORDER": "deepinfra", "PROVIDER_ALLOW_FALLBACKS": "1"},
+     {"order": ["deepinfra"]}),
+    ({"PROVIDER_ORDER": "deepinfra", "PROVIDER_ALLOW_FALLBACKS": "0"},
+     {"order": ["deepinfra"], "allow_fallbacks": False}),
+    ({"PROVIDER_ONLY": "openai", "PROVIDER_IGNORE": "google",
+      "PROVIDER_COUNTRY": "RU"},
+     {"only": ["openai"], "ignore": ["google"], "country": "ru"}),
+])
+def test_provider_settings_matrix(monkeypatch, env_data, expect):
+    for k in C.PROVIDER_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    assert C.provider_settings(env_data) == expect
+
+
+def test_provider_settings_env_over_file(monkeypatch):
+    """Окружение перекрывает файл точечно — те же слои, что у рассуждений."""
+    for k in C.PROVIDER_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("PROVIDER_ONLY", "yandex")
+    assert C.provider_settings({"PROVIDER_ONLY": "openai",
+                                "PROVIDER_COUNTRY": "us"}) == {
+        "only": ["yandex"], "country": "us"}
 
 
 @pytest.mark.parametrize("bad", ["много", None, "-5"])

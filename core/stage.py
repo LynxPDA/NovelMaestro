@@ -30,7 +30,8 @@ from .common import (REASONING_MODES, REASONING_PROFILES, determine_model,
                      emit_progress, extra_body_fields, get_server_config,
                      llm_messages, load_env, log_argv,
                      preview_logger, preview_request_payload, print_env_help,
-                     reasoning_fields, reasoning_settings, setup_logging,
+                     provider_settings, reasoning_fields, reasoning_settings,
+                     setup_logging,
                      stream_chat_completion, web_progress_enabled,
                      write_preview_request)
 
@@ -158,6 +159,8 @@ class LlmProfile:
     reasoning_mode: str = "default"
     thinking_profile: str = "openai"
     thinking_budget: int = 0
+    # выбор провайдера (роутеры OpenRouter-типа): {} — балансирует сам роутер
+    provider: dict = field(default_factory=dict, compare=False)
     max_tokens: int = DEFAULT_MAX_TOKENS
     logger: logging.Logger | None = None
     env_data: dict = field(default_factory=dict, compare=False, repr=False)
@@ -187,6 +190,7 @@ class LlmProfile:
                                           self.reasoning_effort or "",
                                           self.thinking_budget),
                        **extra_body_fields(self.env_data, self.logger)},
+            provider=self.provider,
             max_tokens=self.max_tokens,
             min_len_ratio=(self.min_len_ratio if min_len_ratio is None
                            else min_len_ratio),
@@ -214,6 +218,13 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
     эффективного конфига, иначе шесть стадий жили бы шестью наборами чисел.
     """
     env_data = load_env(getattr(args, "env_file", None))
+    # профиль LLM — слой между общим файлом и окружением (AGENTS §7). Его
+    # значения подмешиваются сюда: рассуждения и «свои поля тела» читаются из
+    # env_data, и без профиля переключение режима в интерфейсе до запроса не
+    # доходило (в argv этих полей нет намеренно).
+    pid = os.environ.get(cfg.PROFILE_ENV, "").strip()
+    if pid and pid != cfg.PROFILE_DEFAULT:
+        env_data = {**env_data, **cfg.profile_values(pid)}
     llm = cfg.llm_values()
     sc = get_server_config(env_data)
     rs = reasoning_settings(env_data)
@@ -247,6 +258,8 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
         reasoning_mode=_pick(args, "reasoning_mode", rs["mode"]),
         thinking_profile=_pick(args, "thinking_profile", rs["profile"]),
         thinking_budget=int(_pick(args, "thinking_budget", rs["budget"])),
+        # маршрутизация провайдера — тоже послойный конфиг, флагов стадии нет
+        provider=provider_settings(env_data),
         max_tokens=int(_pick(args, "max_tokens", llm["max_tokens"])),
         logger=logger,
         env_data=env_data,
@@ -282,7 +295,7 @@ class Stage:
         return self.profile.complete(prompt, data,
                                      label=label or f"[{self.name}]", **kw)
 
-    def quiet(self) -> "Stage":
+    def quiet(self) -> Stage:
         """Копия без логирования: стадия со своим циклом ретраев логирует
         сама — по строке на запрос, а не на каждую попытку."""
         return replace(self, profile=replace(self.profile, logger=None))
