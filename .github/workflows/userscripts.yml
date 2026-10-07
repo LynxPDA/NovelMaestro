@@ -3,15 +3,17 @@
 # Публикуемый файл — один (менеджеры скриптов ставят один .user.js), поэтому
 # артефакты собираются из tools/<скрипт>/src/* и прикрепляются к релизу.
 #
-# Запуск: вкладка Actions → «Userscripts build» → «Run workflow» (кнопка),
-# или автоматически ПОСЛЕ публикации релиза.
+# Запуск: вкладка Actions → «Userscripts build» → «Run workflow» (кнопка; поле
+# «Тег релиза» — если нужно доложить ассеты к существующему релизу), или
+# автоматически при пуше тега v*.
 #
-# Почему не по тегу: релиз создаёт windows.yml, и он же передвигает тег на
-# коммит с VERSION. Оба воркфлоу на пуше тега шли параллельно, быстрый
-# userscripts успевал первым, релиза ещё не было — и `.user.js` молча не
-# доходили до релиза (v0.3.2 вышел ровно с одним zip). Событие
-# `release: published` наступает, когда релиз уже существует, так что ассеты
-# крепятся к нему всегда, а не «как повезёт».
+# Почему релиз ЖДУТ, а не реагируют на него: релиз создаёт windows.yml своим
+# прогоном на дефолтном GITHUB_TOKEN, а действия, сделанные этим токеном, новых
+# воркфлоу не запускают — то есть воркфлоу на `release: published` не запустился
+# бы никогда. Сборка под Windows идёт ~80 с, этот прогон — ~20 с, так что на пуше
+# тега юзерскрипты приходят первыми. Раньше это значило «релиза ещё нет» →
+# предупреждение → зелёный прогон без ассетов (v0.3.2 вышел ровно с одним zip).
+# Теперь прогон ждёт публикацию релиза и краснеет, если так и не дождался.
 #
 # p.s. зависимости ставятся полными requirements.txt: сборщику нужен импорт
 # core.common (atomic_write и log_argv), а тот тянет транспорт и dotenv —
@@ -26,8 +28,8 @@ on:
         description: "Тег релиза (пусто — только артефакт, без релиза)"
         required: false
         default: ""
-  release:
-    types: [published]        # релиз уже создан — ассеты доходят до него
+  push:
+    tags: ["v*"]              # автоматически по тегу v1.2.3
 
 permissions:
   contents: write
@@ -35,16 +37,17 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # сколько раз и с каким интервалом смотреть, появился ли релиз
+    # (окно заведомо длиннее сборки под Windows)
+    env:
+      RELEASE_WAIT_TRIES: "36"
+      RELEASE_WAIT_SLEEP: "10"
     steps:
       - uses: actions/checkout@v4
         with:
           # креды не оставляем в workspace: сборка работает только
           # со своими файлами
           persist-credentials: false
-          # по событию release `github.ref` — ветка по умолчанию, а нужен
-          # ровно тот код, из которого релиз (к этому коммиту тег уже
-          # передвинул windows.yml)
-          ref: ${{ github.event.release.tag_name || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -76,26 +79,36 @@ jobs:
           path: dist/*.user.js
           if-no-files-found: error
 
-      - name: Прикрепить к релизу
-        if: github.event_name == 'release' || inputs.release
+      - name: Прикрепить к релизу (только по тегу)
+        if: github.event_name == 'push' || inputs.release
         # один env на шаг: два соседних ключа env — невалидный workflow, GitHub
         # отказывался запускать всё воркфлоу
         env:
           GH_TOKEN: ${{ github.token }}
           # контекст github — из env, а не прямо в shell: имя тега не должно
           # разворачиваться в командную строку
-          RELEASE: ${{ github.event.release.tag_name || inputs.release }}
+          RELEASE: ${{ github.event.release.tag_name || inputs.release || github.ref_name }}
         run: |
-          # существующий релиз — не беда, ассеты обновляются на месте
+          # релиз создаёт windows.yml: ждём, а не ругаемся — сборка под Windows
+          # дольше этого прогона
+          for i in $(seq 1 "$RELEASE_WAIT_TRIES"); do
+            if gh release view "$RELEASE" >/dev/null 2>&1; then
+              echo "релиз $RELEASE есть (подождали $((i * RELEASE_WAIT_SLEEP)) с)"
+              break
+            fi
+            sleep "$RELEASE_WAIT_SLEEP"
+          done
+          # и только теперь строгая проверка: молча пройти нельзя — так ассеты
+          # и терялись
           gh release view "$RELEASE" >/dev/null 2>&1 || {
-            echo "::error::релиза $RELEASE нет — ассеты некуда класть"
+            echo "::error::релиза $RELEASE нет за отведённое время — ассеты некуда класть"
             exit 1
           }
           gh release upload "$RELEASE" dist/*.user.js --clobber
           echo "прикреплено к $RELEASE: $(ls dist/*.user.js | xargs -n1 basename | tr '\n' ' ')"
 
-      - name: Сбросить кэш CDN
-        if: github.event_name == 'release' || inputs.release
+      - name: Сбросить кэш CDN (только по тегу)
+        if: github.event_name == 'push' || inputs.release
         run: |
           # Обновления ходят на raw (max-age=300), но CDN остаётся зеркалом
           # установки, а кэш ветки там живёт неделю. Чистит его отдельный сервис
