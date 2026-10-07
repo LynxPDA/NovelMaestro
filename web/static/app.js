@@ -1170,23 +1170,6 @@ async function viewSettings() {
     "расширений им ничего не даёт");
   const logSel = langSel("langLog",
     "язык редактора логов: у логов расширения нет вовсе");
-  const lookBtn = h("button", { class: "btn btn-sm btn-primary" }, "Сохранить");
-  lookBtn.addEventListener("click", () => {
-    const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
-    EDITOR_SETTINGS.editor =
-      edSel.value === "dark" || edSel.value === "light" ? edSel.value : "auto";
-    EDITOR_SETTINGS.fontSize = n;
-    EDITOR_SETTINGS.langPrompt = promptSel.value;
-    EDITOR_SETTINGS.langLog = logSel.value;
-    try {
-      localStorage.setItem(UI_LOOK_KEY, JSON.stringify(EDITOR_SETTINGS));
-    } catch {
-      /* localStorage недоступен — не критично */
-    }
-    applyEditorSettings();
-    render();
-    toast("Внешний вид сохранён");
-  });
   const lookCard = h(
     "div",
     { class: "review-card" },
@@ -1221,8 +1204,6 @@ async function viewSettings() {
           h("div", { class: "field-label" }, "Кегль редакторов, px"),
           fontIn,
         ),
-        h("span", { class: "spacer" }),
-        lookBtn,
       ),
       h(
         "div",
@@ -1313,9 +1294,7 @@ async function viewSettings() {
     }
     const prof = model.profiles.find((p) => p.id === model.profile) || null;
     if (g.id === "ui") {
-      // localStorage-предпочтения: ни общего конфига, ни «Сохранить» здесь нет
       cards.replaceChildren(lookCard, previewFontCard);
-      saveBtn.classList.toggle("hidden", true);
       return;
     }
     saveBtn.classList.toggle("hidden", false);
@@ -1359,6 +1338,23 @@ async function viewSettings() {
 
   saveBtn.addEventListener("click", async () => {
     err.textContent = "";
+    if (active === "ui") {
+      const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
+      EDITOR_SETTINGS.editor =
+        edSel.value === "dark" || edSel.value === "light" ? edSel.value : "auto";
+      EDITOR_SETTINGS.fontSize = n;
+      EDITOR_SETTINGS.langPrompt = promptSel.value;
+      EDITOR_SETTINGS.langLog = logSel.value;
+      try {
+        localStorage.setItem(UI_LOOK_KEY, JSON.stringify(EDITOR_SETTINGS));
+      } catch {
+        /* localStorage недоступен — не критично */
+      }
+      applyEditorSettings();
+      render();
+      toast("Внешний вид сохранён");
+      return;
+    }
     const values = {};
     for (const [name, c] of Object.entries(ctl)) {
       values[name] = c.type === "checkbox" ? c.checked : c.value;
@@ -1711,7 +1707,7 @@ async function viewHub() {
       ),
       h(
         "button",
-        { class: "btn btn-sm btn-ghost", onclick: () => sectionsModal() },
+        { class: "btn btn-ghost", onclick: () => sectionsModal() },
         "⚙ Управление разделами",
       ),
     ),

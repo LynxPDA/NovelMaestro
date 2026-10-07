@@ -993,9 +993,8 @@ async function main() {
     } else {
       log("⚠️  reasoning: внешний сервер — файл .env не проверяем");
     }
-    /* субвкладка «Внешний вид»: только localStorage-карточки и своя кнопка
-     * «Сохранить» (пишет предпочтения браузера) — полей реестра нет, общая
-     * «Сохранить» в шапке скрыта */
+    /* субвкладка «Внешний вид»: localStorage-карточки, полей реестра нет;
+     * «Сохранить» — та же кнопка шапки, что и на остальных вкладках */
     await page.locator('.tabs .tab:has-text("Внешний вид")').first().click();
     await page.waitForTimeout(400);
     const g2 = await page.evaluate(() => ({
@@ -1010,8 +1009,9 @@ async function main() {
     if (g2.cards.join(",") !== "Внешний вид,Интерфейс")
       problems.push(`настройки: карточки «${g2.cards.join(" | ")}»`);
     if (g2.fields) problems.push(`настройки: полей реестра на вкладке ${g2.fields}`);
-    if (!g2.save) problems.push("настройки: «Сохранить» шапки видна на «Внешнем виде»");
-    if (!g2.look) problems.push("настройки: нет кнопки «Сохранить» на «Внешнем виде»");
+    if (g2.save) problems.push("настройки: «Сохранить» шапки скрыта на «Внешнем виде»");
+    if (g2.look)
+      problems.push("настройки: локальная кнопка «Сохранить» на «Внешнем виде»");
     const savedTab = seedDir ? await page.evaluate(
       () => localStorage.getItem("settingsTab") || "") : "";
     if (seedDir && savedTab !== "ui")
