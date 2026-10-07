@@ -11,8 +11,8 @@
       "homepage": "https://codemirror.net",
       "kind": "bundle",
       "url": "",
-      "sha256": "25930e30c03a5c37000b827d0f1bcfa9b82c510759d1a2ca769c6da1c8f45ce3",
-      "bytes": 668473
+      "sha256": "72fc8618c8d67fb3b99cb31e96520b0785af2dbbfc6145c3e4478eb8cc7a715a",
+      "bytes": 693167
     },
     {
       "file": "marked.min.js",

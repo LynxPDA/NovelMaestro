@@ -1381,13 +1381,15 @@ test("глоссарий: удаление выделенного обходит
 
 /* ── редакторы промптов и предпросмотр запроса ─────────────────── */
 
-test("редакторы: у промпта язык промпта, у файла главы — текстовый", async () => {
+test("редакторы: у промпта язык по выбору (plain text), не язык промптов", async () => {
   globalThis.localStorage.clear();
   const prompts = viewProject("ACTIVE", "Книга", "prompts");
   await tick();
   const ped = findTag(prompts, "textarea").filter((t) => "lang" in t);
   assert.equal(ped.length, 1, "на вкладке один редактор промпта");
-  assert.equal(ped[0].lang, "prompt", "промт читается html-языком");
+  // отдельного «языка промптов» больше нет: у промптов plain text, а их
+  // разметку (<translate>, {ner_block}) показывает предпросмотр запроса
+  assert.equal(ped[0].lang, "text", "промту назначен plain text");
 
   globalThis.__tree = {
     chapters: [{

@@ -668,17 +668,14 @@ async function main() {
         ? `\n     ${problems.slice(before).join("\n     ")}` : ""));
   }
 
-  /* «Промпты»: html-язык редактора — теги секций видно по подсветке; тот же
-   * промпт в предпросмотре запроса размечен span-ами (теги, подстановки) */
+  /* «Промпты»: язык редактора выбирает человек. По умолчанию промптам plain
+   * text: отдельного «языка промптов» больше нет (у этих файлов расширение
+   * .txt). Если же в «Внешнем виде» выбрать XML — теги секций снова видно по
+   * подсветке, так что список языков обязан работать end-to-end. */
   {
     const before = problems.length;
-    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/prompts`,
-      { waitUntil: "load" });
-    await page.waitForSelector(".prompt-item", { timeout: 15000 });
-    await page.locator(".prompt-item").first().click();
-    await page.waitForTimeout(1500);
     /* классы подсветки CM даёт автоименами («ͼr», «ͼs»…): сверяем не имя, а
-       самого факта — у промпта закрашенные диапазоны есть, у файла главы нет */
+       самого факта — закрашены диапазоны или нет */
     const marks = () => page.evaluate(() => {
       const host = document.querySelector(".editor-cm");
       const spans = host
@@ -689,19 +686,41 @@ async function main() {
         hl: spans.filter((x) => x.className.includes("\u037c")).length,
       };
     });
-    const ed = await marks();
-    if (!/<translate>/.test(ed.text))
-      problems.push(`промпты: в редакторе не тот файл «${ed.text}»`);
-    if (!ed.hl)
-      problems.push(`промпты: подсветка тегов не видна (span ${ed.spans})`);
+    const setLang = (v) => page.evaluate((val) => {
+      const d = JSON.parse(localStorage.getItem("uiLookV1") || "{}");
+      d.langPrompt = val;
+      localStorage.setItem("uiLookV1", JSON.stringify(d));
+    }, v);
+    const openPrompt = async () => {
+      await page.goto(`${url}/#/project/${SECTION}/${BOOK}/prompts`,
+        { waitUntil: "load" });
+      // смена хэша страницу не перезагружает: pref из localStorage до SPA дойдёт
+      // только полным reload
+      await page.reload({ waitUntil: "load" });
+      await page.waitForSelector(".prompt-item", { timeout: 15000 });
+      await page.locator(".prompt-item").first().click();
+      await page.waitForTimeout(1500);
+      return marks();
+    };
+    await setLang("text");
+    const plain = await openPrompt();
+    if (!/<translate>/.test(plain.text))
+      problems.push(`промпты: в редакторе не тот файл «${plain.text}»`);
+    if (plain.hl)
+      problems.push(`промпты: ждём plain text, а подсвечено ${plain.hl} span`);
+    await setLang("xml");
+    const xml = await openPrompt();
+    if (!xml.hl)
+      problems.push(`промпты: выбор XML не подсветил теги (span ${xml.spans})`);
     if (SHOT)
       await page.screenshot({ path: path.join(OUT, "scenario-prompts.png") });
+    await setLang("text");
     await page.evaluate(() => { location.hash = "#/hub"; });
     await page.waitForTimeout(400);
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/editor`,
       { waitUntil: "load" });
     await page.waitForTimeout(1500);
-    const plain = await page.evaluate(() => {
+    const chapter = await page.evaluate(() => {
       const hosts = [...document.querySelectorAll(".ed-cm")];
       const spans = hosts.flatMap((x) => [...x.querySelectorAll("span[class]")]);
       return {
@@ -709,12 +728,12 @@ async function main() {
         hl: spans.filter((x) => x.className.includes("\u037c")).length,
       };
     });
-    if (plain.hl)
+    if (chapter.hl)
       problems.push(`редактор глав: текст файла подсветкой залит `
-        + `(span-ов ${plain.hl})`);
-    log(`${problems.length === before ? "✅" : "❌"} промпты: html-язык `
-      + ` «${ed.text}» · подсвечено ${ed.hl} из ${ed.spans} span, `
-      + `в редакторе глав ${plain.hl}`
+        + `(span-ов ${chapter.hl})`);
+    log(`${problems.length === before ? "✅" : "❌"} промпты: plain text `
+      + ` «${plain.text}» · ${plain.hl} → XML ${xml.hl} из ${xml.spans} span, `
+      + `редактор глав ${chapter.hl}`
       + (problems.length > before
         ? `\n     ${problems.slice(before).join("\n     ")}` : ""));
   }

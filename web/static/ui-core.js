@@ -163,30 +163,29 @@
     });
   }
 
-  /* Язык редактора файла по имени: у файлов промптов расширение .txt, а разметка
-   * своя (<system>, <translate>), и читается она html-языком — язык берётся по
-   * каталогу prompts/, а не по расширению. Остальное — по расширению. */
-  function fileLang(path, isPrompt) {
-    if (isPrompt) return "prompt";
-    return /(^|\/)prompts\//.test(String(path || "")) ? "prompt" : extOf(path);
-  }
-
   /* ── внешний вид редакторов: значения и язык подсветки ──
    * Языки — только те, что есть в вендорном бандле CM. Хранилище (localStorage)
    * читает и пишет app.js: здесь сами значения и чистый выбор языка.
    * Промптам и логам язык выбирает человек: у первых расширение .txt ничего не
    * говорит о разметке, у вторых его вообще нет. */
+  /* Языки подсветки: значения — ИМЕНА языков бандла CodeMirror (или "text" —
+   * без режима), так что выбор пользователя и расширение файла приводятся к
+   * одному словарю. Отдельного «языка промптов» больше нет: у файлов промптов
+   * расширение .txt, а их разметка (<translate>, {ner_block}) — дело
+   * предпросмотра запроса, а не редактора. */
   var EDITOR_LANGS = [
-    { v: "prompt", label: "теги промпта" },
-    { v: "text", label: "простой текст" },
-    { v: "md", label: "markdown" },
+    { v: "text", label: "plain text" },
+    { v: "markdown", label: "markdown" },
+    { v: "html", label: "HTML" },
+    { v: "xml", label: "XML" },
     { v: "json", label: "JSON" },
     { v: "yaml", label: "YAML" },
-    { v: "py", label: "python" },
+    { v: "properties", label: "env / properties" },
+    { v: "python", label: "python" },
   ];
   var EDITOR_SETTINGS = {
     ui: "dark", editor: "auto", fontSize: 13,
-    langPrompt: "prompt", langLog: "text",
+    langPrompt: "text", langLog: "text",
   };
 
   /* ── видимость полей формы по режиму стадии ───────────────────────────
@@ -235,7 +234,8 @@
   }
 
   /* Язык подсветки файла с выбором пользователя: промпты и логи — как указано
-   * на «Внешнем виде», остальные файлы — по расширению. */
+   * на «Внешнем виде» (это уже ИМЯ языка), остальные файлы — по расширению
+   * (его в имя языка переводит таблица SPA). */
   function editorLang(path, isPrompt) {
     if (isPrompt || /(^|\/)prompts\//.test(String(path || ""))) {
       return EDITOR_SETTINGS.langPrompt;
@@ -1073,7 +1073,6 @@
     iconNames: Object.keys(ICON_PATHS),
     extOf: extOf,
     previewMode: previewMode,
-    fileLang: fileLang,
     editorLang: editorLang,
     modeValue: modeValue,
     fieldApplies: fieldApplies,

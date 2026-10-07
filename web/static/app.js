@@ -58,8 +58,8 @@ const EDITOR_HIGHLIGHT = (() => {
   const base = (extra) => [
     { tag: t.meta, color: extra.meta },
     { tag: t.link, textDecoration: "underline" },
-    /* промпты читаются через html-язык (CM_LANG_BY_EXT.prompt): текст между
-       секциями — content, «<translate>» — тег, его скобки — angleBracket */
+    /* html/xml-файлы: текст между тегами — content, сам тег — tagName, его
+       скобки — angleBracket */
     { tag: [t.content, t.bracket, t.separator], color: extra.text },
     { tag: [t.angleBracket, t.documentMeta], color: extra.meta },
     { tag: [t.tagName, t.attributeName], color: extra.type },
@@ -1158,14 +1158,18 @@ async function viewSettings() {
   });
   /* язык подсветки — тот же выбор браузера: у промптов расширение .txt, у логов
      его нет вовсе, так что язык для них выбирает человек, а не таблица */
-  function langSel(key) {
+  function langSel(key, hint) {
     const sel = h("select", { class: "input input-inline" });
     for (const o of EDITOR_LANGS) sel.append(h("option", { value: o.v }, o.label));
     sel.value = EDITOR_SETTINGS[key];
+    if (hint) attachTooltip(sel, hint);
     return sel;
   }
-  const promptSel = langSel("langPrompt");
-  const logSel = langSel("langLog");
+  const promptSel = langSel("langPrompt",
+    "язык редактора промптов: у этих файлов расширение .txt, таблица " +
+    "расширений им ничего не даёт");
+  const logSel = langSel("langLog",
+    "язык редактора логов: у логов расширения нет вовсе");
   const lookBtn = h("button", { class: "btn btn-sm" }, "Применить");
   lookBtn.addEventListener("click", () => {
     const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
@@ -1772,19 +1776,29 @@ async function apiUpload(path, form) {
 const CM_READY =
   typeof window !== "undefined" && window.CM && window.CM.EditorView;
 
-/* Расширение → язык CM; по умолчанию — простой текст. «prompt» — не расширение,
-   а имя: у файлов промптов оно .txt, а разметка своя (<system>, <translate>),
-   и читается она html-языком. */
+/* Расширение → язык CM; без совпадения — простой текст. Выбор с «Внешнего вида»
+   приходИТ уже именем языка, поэтому cmLang сначала пробует его. Языки
+   соответствуют тому, что лежит в книге: главы/промпты/логи — текст, данные —
+   JSON и YAML, wiki — markdown и HTML, сборки и служебка epub — XML (fb2, opf,
+   ncx, xhtml), старый .env книги — properties (тот же KEY=VALUE с «#»). */
 const CM_LANG_BY_EXT = {
   md: "markdown",
   markdown: "markdown",
   html: "html",
   htm: "html",
+  xhtml: "html",
   json: "json",
   yaml: "yaml",
   yml: "yaml",
   py: "python",
-  prompt: "html",
+  python: "python",
+  xml: "xml",
+  fb2: "xml",
+  opf: "xml",
+  ncx: "xml",
+  env: "properties",
+  properties: "properties",
+  ini: "properties",
 };
 
 
@@ -1797,12 +1811,14 @@ function extOf(path) {
   return dot < 0 ? "" : base.slice(dot + 1).toLowerCase();
 }
 
-/* Язык редактора файла даёт UICore.editorLang (свой выбор + расширение); здесь
-   таблица «язык → пакет» и сама подсветка. */
-function cmLang(ext) {
-  const kind = CM_LANG_BY_EXT[ext] || "";
+/* Язык редактора файла даёт UICore.editorLang (свой выбор или расширение);
+   здесь — приведение к имени языка бандла и сама подсветка. */
+function cmLang(nameOrExt) {
   const langs = window.CM && window.CM.langs;
-  if (!kind || !langs || !langs[kind]) return null;
+  if (!langs) return null;
+  // выбор с «Внешнего вида» — имя языка, остальное — расширение файла
+  const kind = langs[nameOrExt] ? nameOrExt : CM_LANG_BY_EXT[nameOrExt] || "";
+  if (!kind || !langs[kind]) return null;
   return langs[kind]();
 }
 

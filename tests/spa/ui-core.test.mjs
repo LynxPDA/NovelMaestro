@@ -840,17 +840,34 @@ test("filterNerItems: фильтр по замку и поиск не видит
   assert.equal(UICore.filterNerItems(items, "true", null, "").length, 0);
 });
 
-/* ── язык редактора файла (UICore.fileLang) ── */
+/* ── язык подсветки файла (UICore.editorLang) ── */
 
-test("fileLang: промпты — по каталогу, остальное — по расширению", () => {
-  // расширение у промптов то же самое .txt: язык угадывается по пути
-  assert.equal(UICore.fileLang("prompts/ner_prompt.txt"), "prompt");
-  assert.equal(UICore.fileLang("General/prompts/pipeline_prompt.txt"), "prompt");
-  assert.equal(UICore.fileLang("ner_prompt.txt", true), "prompt");
-  assert.equal(UICore.fileLang("chapters/00001_1_Глава 1/polished.txt"), "txt");
-  assert.equal(UICore.fileLang("notes.md"), "md");
-  assert.equal(UICore.fileLang("tmp/report.json"), "json");
-  assert.equal(UICore.fileLang("meta.yaml"), "yaml");
+test("editorLang: промпты и логи — по выбору, остальное — по расширению", () => {
+  // расширение у промптов то же самое .txt: язык для них выбирает человек
+  assert.equal(UICore.EDITOR_SETTINGS.langPrompt, "text", "дефолт промптов");
+  assert.equal(UICore.editorLang("prompts/ner_prompt.txt"), "text");
+  assert.equal(UICore.editorLang("ner_prompt.txt", true), "text");
+  assert.equal(UICore.editorLang("chapters/00000_1_Глава 1/polished.txt"), "txt");
+  assert.equal(UICore.editorLang("notes.md"), "md");
+  assert.equal(UICore.editorLang("tmp/report.json"), "json");
+  assert.equal(UICore.editorLang("meta.yaml"), "yaml");
+  // выбор пользователя — уже ИМЯ языка бандла, таблица расширений его минует
+  UICore.EDITOR_SETTINGS.langPrompt = "xml";
+  assert.equal(UICore.editorLang("prompts/ner_prompt.txt"), "xml",
+    "промту дали XML");
+  UICore.EDITOR_SETTINGS.langLog = "properties";
+  assert.equal(UICore.editorLang("logs/pipeline.log"), "properties",
+    "логам дали properties");
+  UICore.EDITOR_SETTINGS.langPrompt = "text";
+  UICore.EDITOR_SETTINGS.langLog = "text";
+});
+
+test("EDITOR_LANGS: значения — имена языков бандла, первый — plain text", () => {
+  const vals = UICore.EDITOR_LANGS.map((o) => o.v);
+  assert.deepEqual(vals, ["text", "markdown", "html", "xml", "json", "yaml",
+    "properties", "python"]);
+  assert.ok(!vals.includes("prompt"), "языка промптов в списке нет");
+  assert.equal(UICore.EDITOR_LANGS[0].label, "plain text");
 });
 
 /* ── разметка промпта в предпросмотре запроса (UICore.promptParts) ── */
