@@ -33,8 +33,10 @@ txt/md), --examples_file (пары оригинал→перевод для few-
 режимах; нет файла → «(нет)». Словарь ищется по тексту чанка И по
 source-сторонам выбранных примеров. Любой из трёх файлов переводит
 translate в расширенный режим: тег <translate_lr> (фолбэк <translate>
-→ встроенный расширенный промпт). --request_budget — общий бюджет
-user-запроса в ТОКЕНАХ (оценка; 0 = выключено); превышение — ошибка чанка.
+→ встроенный расширенный промпт). --request_budget — общий потолок
+user-запроса в ТОКЕНАХ (оценка; 0 = без ограничения): предохранитель
+ЛЮБОГО типа работы — перевод, редактура, полировка; превышение —
+ошибка чанка.
 
 Сервер: --host/--model/--api_key (CLI) > HOST/API_KEY/MODEL из .env
 (единая модель скрипта — без отдельных моделей под режимы).
@@ -387,13 +389,14 @@ def process_item(internal_id, original_text, draft_text, ctx):
         ner_block, female_block, male_block,
         dict_block=dict_block, rules_block=rules_block or "(нет)",
         fewshot_block=fewshot_block, logger=ctx["logger"])
-    # общий бюджет запроса (ТОКЕНЫ, оценка): превышение — ошибка чанка
+    # общий потолок запроса (ТОКЕНЫ, оценка): превышение — ошибка чанка;
+    # действует во всех режимах, 0 = без ограничения
     budget = ctx.get("request_budget", 0)
     n_tokens = estimate_tokens(user_content)
     if budget and n_tokens > budget:
         err = (f"Превышен бюджет запроса: {n_tokens} > {budget} "
-               f"токенов (оценка). Уменьшите --chunk_size или "
-               f"--request_budget.")
+               f"токенов (оценка). Уменьшите --chunk_size или снимите "
+               f"--request_budget (0).")
         fb = f"\n[FAIL: {err}]\n{original_text}\n[FAIL: {err}]\n"
         return internal_id, fb, f"Chunk {internal_id} FAIL: {err}"
     reference = (draft_text or "" if ctx["mode"] == "redact"
@@ -452,7 +455,8 @@ def build_parser():
   --rules_file     справочник языка (txt/md) → {rules_block}
   --examples_file  пары оригинал→перевод → few-shot {fewshot_block}
   Промпт: тег <translate_lr> приоритетнее <translate>.
-  --request_budget — общий бюджет запроса, ТОКЕНЫ — оценка (0 = выключено).
+  --request_budget — общий потолок user-запроса, ТОКЕНЫ — оценка;
+  действует во всех режимах, не только в расширенном (0 = без ограничения).
 
 Единицы:
   --chunk_size и --request_budget — ТОКЕНЫ (оценка estimate_tokens);
@@ -511,9 +515,10 @@ def build_parser():
                         "n-грамм стороны примера, найденных в чанке; "
                         "ниже порога пример не берётся.")
     p.add_argument("--request_budget", type=int, default=0,
-                   help="Общий бюджет user-запроса, ТОКЕНЫ — оценка "
-                        "estimate_tokens; 0 = выключено; "
-                        "превышение — ошибка чанка.")
+                   help="Общий потолок user-запроса (чанк + все блоки), "
+                        "ТОКЕНЫ — оценка estimate_tokens; 0 = без "
+                        "ограничения (по умолчанию); превышение — ошибка "
+                        "чанка; действует во всех режимах.")
     # Промпт
     p.add_argument("--prompt_file", default=None,
                    help="Внешний промпт (теги <translate>/<redact>/<polish> "

@@ -1123,12 +1123,17 @@ def test_pipeline_no_separate_prompts():
 
 def test_pipeline_request_budget_all_actions():
     """Бюджет запроса — общий потолок, а не часть расширенного контекста:
-    доезжает и до обычного перевода, и до редакатуре с полировкой."""
+    доезжает и до обычного перевода, и до редакатуре с полировкой;
+    0 = без ограничения — флага нет."""
     for action in ("1", "2", "3", "9"):
         argv = build_command("pipeline",
                              {"action": action, "request_budget": "24000"}, {})
         assert "--request_budget" in argv, action
         assert argv[argv.index("--request_budget") + 1] == "24000", action
+    # дефолт реестра — 0 (без ограничения): флага в argv нет
+    for action in ("1", "2", "3", "9"):
+        argv = build_command("pipeline", {"action": action}, {})
+        assert "--request_budget" not in argv, action
 
 
 def test_build_command_keeps_only_mode_fields():

@@ -629,8 +629,10 @@ def main() -> None:
     ap.add_argument("--fewshot_threshold", type=float, default=0.3,
                     help="Порог схожести примера с чанком (0–1).")
     ap.add_argument("--request_budget", type=int, default=0,
-                    help="Общий бюджет запроса, ТОКЕНЫ (оценка); "
-                         "0 = выключено.")
+                    help="Общий потолок user-запроса (чанк + все блоки), "
+                         "ТОКЕНЫ (оценка); 0 = без ограничения; "
+                         "превышение — ошибка чанка; действует во всех "
+                         "режимах: перевод, редактура, полировка.")
     ap.add_argument("--chunk_size", type=int, default=None,
                     help="Размер чанка перевода/полировки, ТОКЕНЫ (оценка) "
                          "(пусто = PIPELINE_CHUNK_SIZE из .env → дефолт); "
@@ -765,11 +767,15 @@ def main() -> None:
              args.chunk_size)
     if ext:
         log.info("КОНТЕКСТ   : словарь=%s правила=%s примеры=%s | "
-                 "fewshot_k=%d порог=%.2f | бюджет запроса ТОКЕНОВ: "
-                 "%d",
+                 "fewshot_k=%d порог=%.2f",
                  dict_file or "—", rules_file or "—",
                  examples_file or "—", args.fewshot_k,
-                 args.fewshot_threshold, args.request_budget)
+                 args.fewshot_threshold)
+    # потолок запроса — предохранитель любого типа работы, не только
+    # расширенного контекста
+    if args.request_budget:
+        log.info("БЮДЖЕТ     : %d ТОКЕНОВ на user-запрос (превышение — "
+                 "ошибка чанка)", args.request_budget)
     log.info("ВРЕМЯ      : %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     log.info("═" * 60)
 

@@ -337,6 +337,18 @@ def test_pipeline_spec_chunk_size_field():
     assert f["type"] == "number"
 
 
+def test_pipeline_spec_request_budget_field():
+    """Бюджет запроса — предохранитель любого типа работы: дефолт 0
+    (без ограничения), поле без привязки к действию 9."""
+    spec = spec_for("pipeline")
+    assert spec is not None
+    f = next(x for x in spec["fields"] if x["name"] == "request_budget")
+    assert f["default"] == "0"
+    assert "ТОКЕНЫ" in f["label"]
+    # не касаются только расширенного контекста: режима-условия нет
+    assert "when" not in f and "when_any" not in f and "when_set" not in f
+
+
 def test_pipeline_extended_action_specs():
     """Действие 9 — расширенный контекст (стадия 1)."""
     from web.pipeline import _ACTION_SPECS

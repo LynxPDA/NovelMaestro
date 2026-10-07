@@ -232,10 +232,12 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
     for name, flag in (("fewshot_k", "--fewshot_k"),
-                       ("fewshot_threshold", "--fewshot_threshold"),
-                       ("request_budget", "--request_budget")):
+                       ("fewshot_threshold", "--fewshot_threshold")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
+    # бюджет запроса (ТОКЕНЫ): 0 = без ограничения — флаг не передаётся
+    if str(form.get("request_budget") or "").strip() not in ("", "0"):
+        argv += ["--request_budget", str(form["request_budget"])]
     # размер чанка перевода/полировки (ТОКЕНЫ); редактура — глава целиком
     if form.get("chunk_size") not in (None, ""):
         argv += ["--chunk_size", str(form["chunk_size"])]
