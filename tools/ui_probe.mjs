@@ -687,7 +687,9 @@ async function main() {
       };
     });
     const setLang = (v) => page.evaluate((val) => {
-      const d = JSON.parse(localStorage.getItem("uiLookV1") || "{}");
+      let d = {};
+      try { d = JSON.parse(localStorage.getItem("uiLookV1") || "{}"); }
+      catch { /* битый JSON — начинаем с пустого */ }
       d.langPrompt = val;
       localStorage.setItem("uiLookV1", JSON.stringify(d));
     }, v);
@@ -991,8 +993,9 @@ async function main() {
     } else {
       log("⚠️  reasoning: внешний сервер — файл .env не проверяем");
     }
-    /* субвкладка «Внешний вид»: только localStorage-карточки, ни одного поля
-     * реестра и кнопки «Сохранить» — сохранять там нечего */
+    /* субвкладка «Внешний вид»: только localStorage-карточки и своя кнопка
+     * «Сохранить» (пишет предпочтения браузера) — полей реестра нет, общая
+     * «Сохранить» в шапке скрыта */
     await page.locator('.tabs .tab:has-text("Внешний вид")').first().click();
     await page.waitForTimeout(400);
     const g2 = await page.evaluate(() => ({
@@ -1001,11 +1004,14 @@ async function main() {
       fields: document.querySelectorAll(".settings-cards [name]").length,
       save: !!(document.querySelector(".page-header-actions .btn-primary") || {})
         .classList?.contains("hidden"),
+      look: [...document.querySelectorAll(".settings-cards .btn-primary")]
+        .some((b) => b.textContent.trim() === "Сохранить"),
     }));
     if (g2.cards.join(",") !== "Внешний вид,Интерфейс")
       problems.push(`настройки: карточки «${g2.cards.join(" | ")}»`);
     if (g2.fields) problems.push(`настройки: полей реестра на вкладке ${g2.fields}`);
-    if (!g2.save) problems.push("настройки: «Сохранить» видна на «Внешнем виде»");
+    if (!g2.save) problems.push("настройки: «Сохранить» шапки видна на «Внешнем виде»");
+    if (!g2.look) problems.push("настройки: нет кнопки «Сохранить» на «Внешнем виде»");
     const savedTab = seedDir ? await page.evaluate(
       () => localStorage.getItem("settingsTab") || "") : "";
     if (seedDir && savedTab !== "ui")

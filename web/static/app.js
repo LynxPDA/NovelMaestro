@@ -1170,7 +1170,7 @@ async function viewSettings() {
     "расширений им ничего не даёт");
   const logSel = langSel("langLog",
     "язык редактора логов: у логов расширения нет вовсе");
-  const lookBtn = h("button", { class: "btn btn-sm" }, "Применить");
+  const lookBtn = h("button", { class: "btn btn-sm btn-primary" }, "Сохранить");
   lookBtn.addEventListener("click", () => {
     const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
     EDITOR_SETTINGS.editor =
@@ -2034,7 +2034,7 @@ const NAV_ITEMS = [
 ];
 
 /* Тема интерфейса — переключатель в шапке: она нужна с любого экрана, а не
-   через «Настройки → Применить». Редакторы перекрашиваются на месте (полный
+   через настройки. Редакторы перекрашиваются на месте (полный
    render() перечитал бы файлы и выбросил несохранённый текст), поэтому здесь
    только CSS-переменные темы + reconfigure подсветки. Кадры предпросмотра,
    уже открытые на экране, перекрасятся при следующем открытии: их srcdoc
