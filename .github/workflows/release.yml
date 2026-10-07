@@ -1,0 +1,56 @@
+# Синхронизация VERSION с тегом релиза → коммит в main.
+#
+# Запуск: только автоматически при пуше тега v*. Не сборка — запись
+# состояния: тег v0.3.4 обязан указывать на коммит с VERSION = 0.3.4,
+# чтобы все сборщики (docker.yml, windows.yml) и web/version.py видели
+# одну и ту же цифру.
+#
+# Почему отдельный workflow: раньше VERSION обновлял windows.yml уже ПОСЛЕ
+# пуша тега, то есть сборка образа уходила из коммита со старым VERSION
+# (v0.3.4 вышел с цифрой 0.3.3 в интерфейсе). Здесь bump происходит до
+# передвижения тега, поэтому собирается уже правильный коммит.
+#
+# RELEASE_PAT нужен обязательно: действие, сделанное дефолтным GITHUB_TOKEN,
+# не запускает новые воркфлоу — tag -f в этом коммите не перезапустил бы
+# сборщики. Пат-токен имеетscope repo (contents: write достаточно).
+
+name: Release version
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # рефсы — и ветка main, и теги; ref тега нужен, чтобы
+          # передвинуть его на новый коммит ниже
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: VERSION = тег, коммит в main, тег на этот коммит
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          echo "Версия релиза: $ver"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$ver" != "$(cat VERSION)" ]; then
+            printf '%s\n' "$ver" > VERSION
+            git add VERSION
+            git commit -m "chore(repo): VERSION $ver (авто, релиз $GITHUB_REF_NAME)"
+          else
+            echo "VERSION уже $ver — коммит не нужен"
+          fi
+          # тег всегда передвигаем на итоговый HEAD (с bump или без) —
+          # сборщики из него получат коммит с правильным VERSION
+          git tag -f "$GITHUB_REF_NAME"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main "+refs/tags/${GITHUB_REF_NAME}"

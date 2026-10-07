@@ -25,6 +25,19 @@ jobs:
       - name: QEMU (эмуляция arm64 на amd64-раннере)
         uses: docker/setup-qemu-action@v3
 
+      # VERSION — единственный источник версии в образе (web/version.py), .git в
+      # контекст сборки не входит. По тегу сверяем: расхождение VERSION с тегом
+      # раньше давало образ «новой» версии со старой цифрой в интерфейсе.
+      - name: VERSION = тег
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          if [ "$ver" != "$(cat VERSION)" ]; then
+            echo "::error::VERSION ($(cat VERSION)) не совпадает с тегом $GITHUB_REF_NAME — обновите VERSION или передвиньте тег"
+            exit 1
+          fi
+
       - name: Настройка buildx
         uses: docker/setup-buildx-action@v3
 
