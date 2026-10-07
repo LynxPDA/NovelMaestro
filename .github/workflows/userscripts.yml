@@ -4,8 +4,14 @@
 # артефакты собираются из tools/<скрипт>/src/* и прикрепляются к релизу.
 #
 # Запуск: вкладка Actions → «Userscripts build» → «Run workflow» (кнопка),
-# или автоматически при пуше тега v* — тогда файлы докладываются к релизу
-# этого тега и сбрасывается кэш CDN.
+# или автоматически ПОСЛЕ публикации релиза.
+#
+# Почему не по тегу: релиз создаёт windows.yml, и он же передвигает тег на
+# коммит с VERSION. Оба воркфлоу на пуше тега шли параллельно, быстрый
+# userscripts успевал первым, релиза ещё не было — и `.user.js` молча не
+# доходили до релиза (v0.3.2 вышел ровно с одним zip). Событие
+# `release: published` наступает, когда релиз уже существует, так что ассеты
+# крепятся к нему всегда, а не «как повезёт».
 #
 # p.s. зависимости ставятся полными requirements.txt: сборщику нужен импорт
 # core.common (atomic_write и log_argv), а тот тянет транспорт и dotenv —
@@ -15,8 +21,13 @@ name: Userscripts build
 
 on:
   workflow_dispatch:          # ручная пересборка и выкладка по кнопке
-  push:
-    tags: ["v*"]              # автоматически по тегу v1.2.3
+    inputs:
+      release:
+        description: "Тег релиза (пусто — только артефакт, без релиза)"
+        required: false
+        default: ""
+  release:
+    types: [published]        # релиз уже создан — ассеты доходят до него
 
 permissions:
   contents: write
@@ -30,6 +41,10 @@ jobs:
           # креды не оставляем в workspace: сборка работает только
           # со своими файлами
           persist-credentials: false
+          # по событию release `github.ref` — ветка по умолчанию, а нужен
+          # ровно тот код, из которого релиз (к этому коммиту тег уже
+          # передвинул windows.yml)
+          ref: ${{ github.event.release.tag_name || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -61,26 +76,26 @@ jobs:
           path: dist/*.user.js
           if-no-files-found: error
 
-      - name: Прикрепить к релизу (только по тегу)
-        if: github.event_name == 'push'
+      - name: Прикрепить к релизу
+        if: github.event_name == 'release' || inputs.release
         # один env на шаг: два соседних ключа env — невалидный workflow, GitHub
         # отказывался запускать всё воркфлоу
         env:
           GH_TOKEN: ${{ github.token }}
           # контекст github — из env, а не прямо в shell: имя тега не должно
           # разворачиваться в командную строку
-          RELEASE: ${{ github.ref_name }}
+          RELEASE: ${{ github.event.release.tag_name || inputs.release }}
         run: |
-          if gh release view "$RELEASE" >/dev/null 2>&1; then
-            gh release upload "$RELEASE" dist/*.user.js --clobber
-          else
-            # релиз ещё не создан (windows.yml может идти параллельно) —
-            # доложить позже кнопкой «Run workflow» этого воркфлоу
-            echo "::warning::релиза $RELEASE ещё нет — юзерскрипты не прикреплены"
-          fi
+          # существующий релиз — не беда, ассеты обновляются на месте
+          gh release view "$RELEASE" >/dev/null 2>&1 || {
+            echo "::error::релиза $RELEASE нет — ассеты некуда класть"
+            exit 1
+          }
+          gh release upload "$RELEASE" dist/*.user.js --clobber
+          echo "прикреплено к $RELEASE: $(ls dist/*.user.js | xargs -n1 basename | tr '\n' ' ')"
 
-      - name: Сбросить кэш CDN (только по тегу)
-        if: github.event_name == 'push'
+      - name: Сбросить кэш CDN
+        if: github.event_name == 'release' || inputs.release
         run: |
           # Обновления ходят на raw (max-age=300), но CDN остаётся зеркалом
           # установки, а кэш ветки там живёт неделю. Чистит его отдельный сервис

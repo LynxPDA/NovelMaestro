@@ -132,7 +132,7 @@ novelmaestro-portable\
 
 ## Публикация релиза (пошагово)
 
-Релиз = тег `v*` на `main`. Пуш тега автоматически запускает оба воркфлоу (`docker.yml` → образ ghcr, `windows.yml` → zip + GitHub Release).
+Релиз = тег `v*` на `main`. Пуш тега запускает `docker.yml` (образ ghcr) и `windows.yml` (zip + GitHub Release). Воркфлоу юзерскриптов на тег НЕ реагирует: он стартует по событию `release: published`, то есть после того, как `windows.yml` релиз создал — иначе быстрый прогон успевал закончиться раньше релиза и `.user.js` молча не прикреплялись.
 
 ```bash
 # 1. Проверка перед релизом
@@ -149,23 +149,28 @@ git push origin v0.2.0
 # → Actions: Docker image + Portable Windows build (по тегу)
 
 # 4. Дождаться зелёных прогонов (вкладка Actions): Tests, Docker image,
-#    Portable Windows build и Userscripts build. Первый создаёт GitHub Release
-#    и кладёт в него novelmaestro-portable-<версия>.zip, второй — публикуемые
-#    .user.js юзерскриптов; если релиз уже есть, ассеты обновляются на месте.
+#    Portable Windows build, затем Userscripts build. Первый из сборщиков
+#    создаёт GitHub Release и кладёт в него novelmaestro-portable-<версия>.zip;
+#    публикация релиза запускает Userscripts build, и тот докладывает .user.js.
+#    Если релиз уже есть, ассеты обновляются на месте (--clobber).
 
 # 5. Проверить:
-#    - страница Releases → v0.2.0: ассеты zip и оба .user.js на месте;
+#    - страница Releases → v0.2.0: ассеты zip и ОБА .user.js на месте;
 #    - ghcr.io/LynxPDA/novelmaestro:0.2.0 (+ :latest).
 ```
 
 ### Пересобрать релиз с тем же тегом (например, забыли файл)
 
-Релиз перезаписывать не нужно: `windows.yml` и `userscripts.yml` видят существующий релиз и обновляют ассеты (`gh release upload --clobber`). Достаточно передвинуть тег:
+Релиз перезаписывать не нужно: сборщики видят существующий релиз и обновляют ассеты (`gh release upload --clobber`). Достаточно передвинуть тег — `docker.yml` и `windows.yml` пересоберутся:
 
 ```bash
 git tag -f v0.2.0                     # заново на текущем HEAD
-git push origin +refs/tags/v0.2.0     # воркфлоу пересоберутся и обновят ассеты
+git push origin +refs/tags/v0.2.0     # docker и windows пересоберутся, ассеты обновятся
 ```
+
+Юзерскрипты передвинутый тег не увидит (`release: published` на это не срабатывает) — для них два равноценных пути: Actions → «Userscripts build» → «Run workflow» и в поле «Тег релиза» вписать `v0.2.0`; либо на странице релиза «Unpublish release» и следом «Publish release» — публикация запустит воркфлоу сама.
+
+Удалать тег вместе с релизом нельзя: GitHub удаляет релиз вместе с тегом, и ассеты теряются — только `+refs/tags/…` или перепубликация.
 
 ### Черновые прогоны без релиза
 
@@ -181,8 +186,8 @@ Actions → нужный воркфлоу → «Run workflow» — собира�
    | --- | --- | --- |
    | `docker.yml` | кнопка «Run workflow» **или** пуш тега `v*` | образ `ghcr.io/<владелец>/<репо>:latest` (+ `:<версия>` по тегу), linux/amd64 + arm64 |
    | `windows.yml` | кнопка «Run workflow» (поля: версия Python, метка) **или** пуш тега `v*` | zip портативной сборки: артефакт Actions + (по тегу) GitHub Release |
-   | `userscripts.yml` | кнопка «Run workflow» **или** пуш тега `v*` | проверка `build_userscripts.py --check --node-check`, артефакт Actions с `.user.js`, (по тегу) ассеты релиза + чистка кэша jsDelivr |
+   | `userscripts.yml` | кнопка «Run workflow» (поле «Тег релиза») **или** публикация релиза (`release: published`) | проверка `build_userscripts.py --check --node-check`, артефакт Actions с `.user.js`, ассеты релиза + чистка кэша jsDelivr |
 
-   Собирать можно хоть каждый день по кнопке; релизы — вручную через тег (`git tag v1.2.3 && git push origin v1.2.3`) или из формы workflow_dispatch.
+   Собирать можно хоть каждый день по кнопке; релизы — через тег (`git tag v1.2.3 && git push origin v1.2.3`): релиз создаёт `windows.yml`, и только после этого к нему приходит `userscripts.yml`. Тег вместе с релизом не удалять — GitHub удалит релиз вместе с тегом.
 
 4. **Доки** — README.md и web/README.md уже описывают запуск; в публичном описании укажите `templates/.env.example` как образец конфига.
