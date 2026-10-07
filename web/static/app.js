@@ -2173,10 +2173,13 @@ function notifyFinished(ids) {
 }
 
 function updateRunPill() {
-  const slot = document.getElementById("app-run-slot");
-  if (!slot || !state.auth) return;
+  if (!state.auth) return;
   api("/jobs/active")
     .then((d) => {
+      /* слот ищем в момент прихода ответа, а не старта запроса: вызов из
+         render() уходит раньше, чем layout с шапкой попадёт в DOM */
+      const slot = document.getElementById("app-run-slot");
+      if (!slot) return;
       const jobs = (d.jobs || []).filter((j) => j.status === "running");
       const now = jobs.map((j) => String(j.id));
       const finished = runSeen.filter((id) => !now.includes(id));
@@ -2306,6 +2309,8 @@ function render() {
     if (gen !== renderGen) return; // устаревший рендер — мимо
     root.replaceChildren();
     root.append(layout(node));
+    // шапка в DOM — pill запусков можно рисовать не дожидаясь тика опроса
+    updateRunPill();
   });
 }
 
