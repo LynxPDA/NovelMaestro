@@ -650,6 +650,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
     st.values[key] = vals;
     st.touched[key] = new Set();
+    // эталон «значений конфига» снимается после автоподхвата из ОПЦИЙ
+    // КНИГИ (диапазон глав, prompt_file): иначе автозаполненные главы
+    // вечно считались бы изменёнными. До восстановления ЛИЧНОЙ памяти
+    // (localStorage): иначе «Сбросить настройки» возвращал бы не значения
+    // конфига, а то, что было при прошлом визите (baseline уже включил
+    // бы сохранённые значения) — именно поэтому сброс «до предыдущего».
+    st.baseline[key] = Object.assign({}, vals);
     // память изменённых полей этой книги+стадии (поверх реестра и .env)
     runRestore(key, spec, vals);
     // чипсы полей/типов (hidden noenv) — память по проекту+стадии:
@@ -673,9 +680,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       }
     }
-    // эталон «значений конфига» снимается после автоподхвата: иначе
-    // автозаполненные главы и prompt_file вечно считались бы изменёнными
-    st.baseline[key] = Object.assign({}, vals);
   }
 
   // ── память выбора чипсов (hidden noenv: types/fields/ner_fields) ──
@@ -787,6 +791,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           try {
             localStorage.removeItem(chipKey(key)); // память чипсов стадии
             localStorage.removeItem(runKey(key)); // память полей стадии
+            if (spec.autosave) {
+              // epub: автосохранение вернуло бы стёртые поля — память целиком
+              localStorage.removeItem(`${EPUB_SAVE_KEY}:${section}/${name}`);
+            }
           } catch {
             /* нет localStorage — и нечего было чистить */
           }
@@ -1834,6 +1842,19 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       st.values[key]["end"] = end.value;
       st.touched[key].add("end");
     });
+    /* пустое поле при уходе с него (change — blur/Enter, не каждый ввод —
+       иначе нельзя стереть и вписать с нуля) — вернуться к автоподхвату:
+       «от» → первая глава, «до» → последняя. Пустое и так значит «вся
+       книга», но в форме лучше видеть реальный диапазон. Опций нет —
+       пусто остаётся (сервер сам решает). */
+    const backfill = (input, name) => {
+      const d = ((st.options || {}).chapters || {})[name === "start" ? "min" : "max"];
+      if (d == null || String(input.value).trim() !== "") return;
+      input.value = String(d);
+      st.values[key][name] = String(d);
+    };
+    start.addEventListener("change", () => backfill(start, "start"));
+    end.addEventListener("change", () => backfill(end, "end"));
     const rowEl = h(
       "div",
       { class: "run-range-row" },

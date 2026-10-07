@@ -305,8 +305,6 @@ const SPEC_FIELDS = {
     { ...PROFILE_FIELD },
     { name: "chunk_size", label: "Размер чанка, ТОКЕНЫ", type: "number",
       default: "8000" },
-    { name: "start", label: "Начальная глава", type: "number", default: "" },
-    { name: "end", label: "Конечная глава", type: "number", default: "" },
   ],
   pipeline: [
     { ...PROFILE_FIELD },
@@ -945,18 +943,16 @@ test("запуски: сброс возвращает поле к значени
   assert.equal(inp.value, "8000", "старт — дефолт реестра");
   /* правка №1 уезжает в память (localStorage): событие диспатчим и на
      инпут, и на панель (делегат runSave) — в моке нет всплытия */
-  /* панель формы — с делегатом input/change: первой .run-panel в DOM
-     идёт карточка активного запуска, у неё слушателей нет */
-  const panel = findByClass(page, "run-panel")
-    .find((p) => p._listeners.input && p._listeners.input.length);
+  const panel = findByClass(page, "run-panel")[0];
   const type = (node, ev) => {
     node.dispatchEvent({ type: ev });
     panel.dispatchEvent({ target: node, type: ev });
   };
   inp.value = "1234";
   type(inp, "input");
+  console.log("DBG storage after input:", globalThis.localStorage.getItem("runVals:ACTIVE/Книга:ner"));
   assert.equal(
-    JSON.parse(globalThis.localStorage.getItem("runVals:ACTIVE/Книга:ner"))
+    JSON.parse(globalThis.localStorage.getItem("runVals:ACTIVE/Книга:ner") || "{}")
       .chunk_size, "1234");
   /* перерисовка (как после запуска): память вернула 1234, эталон —
      по-прежнему 8000, а не 1234 */

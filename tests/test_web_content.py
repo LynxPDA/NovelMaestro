@@ -84,7 +84,7 @@ def _q(project, **kw):
 
 def test_ner_get_empty(srv, tmp_path):
     srv, port, root = srv()
-    pdir = _mk_project(root)
+    _mk_project(root)
     r = _request(port, "GET", f"/api/ner?{_q('ACTIVE/demo')}")
     assert r["ok"] and r["exists"] is False and r["total"] == 0
 
@@ -252,7 +252,7 @@ def test_ner_review_put_get(srv, tmp_path):
 
 def test_tcl_review_roundtrip(srv, tmp_path):
     srv, port, root = srv()
-    pdir = _mk_project(root)
+    _mk_project(root)
     r = _request(port, "PUT", "/api/translate_check_llm/review",
                  {"project": "ACTIVE/demo", "content": "[]"})
     assert r["ok"]
@@ -473,6 +473,30 @@ def test_settings_put_unknown_key_rejected(srv, tmp_path, monkeypatch):
         assert r.get("__error__") == 400, bad
     assert _env_text(tmp_path) == "A=1\n"
 
+
+def test_settings_put_profile_routes_by_owner(srv, tmp_path, monkeypatch):
+    """Правка не-LLM вкладки при выбранном профиле доживает до общего .env:
+    профиль — набор только LLM-настроек, а не мусорка для вкладки целиком
+    (раньше profile_save_values молча выбрасывал ключи «Глоссария» —
+    значения на странице «сбрасывались»)."""
+    _srv, port, root = _settings_srv(
+        srv, tmp_path, monkeypatch, "HOST=http://s:1\nAPI_KEY=k\nMODEL=m\n")
+    p = _request(port, "POST", "/api/settings/profiles",
+                 {"action": "create", "name": "Облако"})
+    pid = (p["profiles"][-1])["id"]
+    # форма не-LLM вкладки + правка; профиль выбран (SPA шлёт его всегда)
+    fields = _settings_fields(_request(port, "GET", "/api/settings"))
+    values = {f["key"]: f["value"] for f in fields.values()
+              if f["key"].startswith("NER_")}
+    values["NER_CHUNK_SIZE"] = 9999
+    r = _request(port, "PUT", "/api/settings",
+                 {"profile": pid, "values": values})
+    assert r["ok"]
+    text = _env_text(tmp_path)
+    assert "NER_CHUNK_SIZE=9999" in text, text
+    # LLM-ключи из формы не-LLM вкладки в профиль не уехали
+    prof = next(x for x in r["profiles"] if x["id"] == pid)
+    assert prof["values"].get("NER_CHUNK_SIZE") is None
 
 def test_settings_put_run_params_not_persisted(srv, tmp_path, monkeypatch):
     """Параметры запуска (run=True) в общий .env не пишутся: изменённые для

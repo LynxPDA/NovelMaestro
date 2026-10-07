@@ -85,8 +85,11 @@ def _settings_get(ctx: dict) -> dict:
 def _settings_put(ctx: dict) -> dict:
     """Сохранить настройки (PUT /api/settings {profile, values}).
 
-    Профиль пустой или general → общий .env; иначе — значения этого профиля
-    (в файле профилей живут только переопределения, остальное — General).
+    Профиль пустой или general → всё в общий .env. Иначе — по владельцу
+    ключа: LLM-ключи в профиль (в файле профилей живут только
+    переопределения, остальное — General), остальные — в общий .env (профиль
+    — набор только LLM-настроек: правка «Глоссария» при выбранном профиле
+    обязана дожить до файла, а не молча выбрасываться).
     Ключи — только имена реестра; значения сливаются с уже сохранёнными (PUT
     одной вкладки не должен терять другие ключи); пустое значение снимает ключ.
     """
@@ -101,11 +104,21 @@ def _settings_put(ctx: dict) -> dict:
         except RuntimeError as exc:
             raise ApiError(500, str(exc))
     else:
+        llm_keys = {s.key for s in core_settings.llm_settings()}
+        llm_vals = {k: v for k, v in clean.items() if k in llm_keys}
+        rest_vals = {k: v for k, v in clean.items() if k not in llm_keys}
         try:
-            prof = core_settings.profile_save_values(profile, clean)
+            prof = core_settings.profile_save_values(profile, llm_vals)
         except ValueError as exc:
             raise ApiError(404, str(exc))
         stored = list(prof.get("values") or {})
+        if rest_vals:
+            merged = dict(core_settings.file_values())
+            merged.update(rest_vals)
+            try:
+                stored = sorted(set(stored) | set(core_settings.write_values(merged)))
+            except RuntimeError as exc:
+                raise ApiError(500, str(exc))
     out = _settings_payload(profile)
     out["keys"] = stored
     return out
