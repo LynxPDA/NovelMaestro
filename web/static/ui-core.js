@@ -702,7 +702,11 @@
         var first = samples[0];
         var span = now - first.t;
         var lastDone = samples[samples.length - 1].done;
-        if (span > 0 && lastDone > first.done) {
+        /* окно с одним приращением скорости не даёт: первая выборка
+           пишется в произвольной фазе шага (открытие страницы посреди
+           шага), и время до следующего события — не длительность шага,
+           а его остаток. Верим окну только с ≥2 приращениями. */
+        if (span > 0 && lastDone - first.done >= 2) {
           rate = (lastDone - first.done) / span;
         }
       }
