@@ -322,7 +322,7 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--rag_budget", str(form["rag_budget"])]
     if form.get("save_interval") not in (None, ""):
         argv += ["--save-interval", str(form["save_interval"])]
-    # пакетная проверка: типы, бюджет пакета, порог count
+    # пакетная проверка: типы, бюджет запроса, порог count
     if form.get("types"):
         argv += ["--types", str(form["types"])]
     if form.get("batch_size") not in (None, ""):
