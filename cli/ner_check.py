@@ -137,6 +137,9 @@ def _bak_path(input_path: str) -> str:
     base = os.path.basename(input_path)
     return os.path.join("tmp", base + ".bak")
 DEFAULT_BATCH_SIZE = 65536  # ТОКЕНОВ (оценка estimate_tokens)
+# Потолок параллельных запросов (батчи и RAG-термины): справка обещает
+# «1..16» — сотня одновременных запросов на сервер недопустима
+MAX_THREADS = 16
 
 # Префикс запроса типовых этапов (этап 2): глоссарий уже выверен целиком —
 # не перетирать уже унифицированные решения этапа 1.
@@ -564,7 +567,7 @@ def build_rag_record(term, items_by_term, fields=None) -> str:
     return json.dumps(rec, ensure_ascii=False)
 
 
-def build_rag_examples(term, items_by_term, db, budget) -> str:
+def build_rag_examples(term, items_by_term, db, budget, logger=None) -> str:
     """Фрагменты книги для {rag_block}: JSON-массив строк (только
     контекст, без записи термина). FTS5-поиск по term (исходный
     термин — для chapter-источника), при пустом результате — по
@@ -573,12 +576,12 @@ def build_rag_examples(term, items_by_term, db, budget) -> str:
     item = ner_item_lookup(items_by_term, term)
     translation = (item or {}).get("translation") or ""
     ev = fts_escape(item["term"] if item else term)
-    hits = fts_search_all(db, f'"{ev}"')
+    hits = fts_search_all(db, f'"{ev}"', logger)
     if not hits and translation:
         # перевод — fallback для переведённых источников
         # (translated/redacted/polished)
         ev = fts_escape(translation)
-        hits = fts_search_all(db, f'"{ev}"')
+        hits = fts_search_all(db, f'"{ev}"', logger)
     examples = []
     if hits:
         frags = even_sample(hits, max(1, budget // 500))
@@ -622,12 +625,12 @@ def build_rag_block(terms, items_by_term, db, budget, fields=None,
             rec["no_record"] = True
         # ищем канонический термин (вариант LLM со скобками → запись)
         ev = fts_escape(item["term"] if item else term)
-        hits = fts_search_all(db, f'"{ev}"')
+        hits = fts_search_all(db, f'"{ev}"', logger)
         if not hits and translation:
             # перевод — fallback для переведённых источников
             # (translated/redacted/polished)
             ev = fts_escape(translation)
-            hits = fts_search_all(db, f'"{ev}"')
+            hits = fts_search_all(db, f'"{ev}"', logger)
         examples = []
         if hits:
             frags = even_sample(hits, max(1, budget // 500))
@@ -686,7 +689,9 @@ def _rag_query(term, user_msg, args, stage, items_by_term, fields):
 
 def run_rag(args, stage, prompt_tpl) -> int:
     """RAG-режим: каждый термин — ОТДЕЛЬНЫЙ LLM-запрос, параллельно
-    (--threads); бюджет на термин: промпт + фрагменты ≤ rag_budget.
+    (--threads, потолок 16 — как в пакетных режимах); бюджет на
+    термин: промпт + фрагменты ≤ rag_budget. Термины без записи в
+    ner.json отсекаются до запросов (диф всё равно их отбросит).
     Возвращает код возврата (0 — ок)."""
     logger = stage.logger
     terms = [t.strip() for t in args.rag_terms.split("\n")
@@ -732,6 +737,19 @@ def run_rag(args, stage, prompt_tpl) -> int:
     data = load_ner_json(args.input, logger)
     items_by_term = {unicodedata.normalize("NFC", i.get("term", "")): i
                      for i in data}
+    # термин не из ner.json: diff_ner_records отбросил бы ответ с warning,
+    # но запрос и токены уже потрачены — отсекаем до сборки задач
+    unknown = [t for t in terms
+               if ner_item_lookup(items_by_term, t) is None]
+    if unknown:
+        terms = [t for t in terms
+                 if ner_item_lookup(items_by_term, t) is not None]
+        logger.warning(f"⚠ RAG: {len(unknown)} терминов списка отсутствуют "
+                       f"в ner.json — пропущены: "
+                       f"{', '.join(unknown[:10])}")
+        if not terms:
+            logger.error("❌ RAG: ни один термин списка не найден в ner.json.")
+            return 1
     if args.skip_locked:
         # термин под замком (любая из записей термина) — с проверки снимается
         locked = {unicodedata.normalize("NFC", t) for t in terms
@@ -750,8 +768,13 @@ def run_rag(args, stage, prompt_tpl) -> int:
     fields = [f.strip() for f in args.fields.split(",") if f.strip()]
     # бюджет на термин — ТОЛЬКО фрагменты (промпт не вычитается):
     # один термин = один запрос, фрагменты влезают в rag_budget
+    try:
+        threads = int(args.threads)
+    except (TypeError, ValueError):
+        threads = 1
+    workers = max(1, min(MAX_THREADS, threads))
     logger.info(f"🔎 RAG: {len(terms)} терминов × бюджет {args.rag_budget} "
-                f"(фрагменты на термин), потоков {args.threads}")
+                f"(фрагменты на термин), потоков {workers}")
 
     # FTS5-БД — только из главного потока (sqlite thread-bound):
     # блоки собираем заранее, воркеры только шлют LLM-запросы
@@ -762,7 +785,7 @@ def run_rag(args, stage, prompt_tpl) -> int:
         # (комбинированный блок в render_rag_prompt)
         record = build_rag_record(term, items_by_term, fields)
         examples = build_rag_examples(term, items_by_term, db,
-                                      args.rag_budget)
+                                      args.rag_budget, logger)
         tasks.append((term, render_rag_prompt(prompt_tpl, record,
                                               examples, fields)))
 
@@ -773,7 +796,7 @@ def run_rag(args, stage, prompt_tpl) -> int:
                     meta={"mode": "rag",
                           "terms": len(terms),
                           "rag_budget": args.rag_budget,
-                          "threads": args.threads,
+                          "threads": workers,
                           "fields": args.fields,
                           "fts5_note": "сборка FTS5-индекса по книге "
                                        "(может занять до пары минут на "
@@ -819,7 +842,7 @@ def run_rag(args, stage, prompt_tpl) -> int:
             if save_interval and progress.done % save_interval == 0:
                 flush_review()
 
-    workers = max(1, min(args.threads or 1, total))
+    workers = max(1, min(workers, total))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         for _ in ex.map(lambda t: worker(*t), tasks):
             pass
@@ -837,24 +860,6 @@ def run_rag(args, stage, prompt_tpl) -> int:
     return 0
 
 
-def patches_table(patches, offset=0) -> str:
-    """Таблица правок в лог: у удаления поле пустое, «Стало» — прочерк
-    (термин уходит из глоссария целиком)."""
-    lines = ["| # | Термин | Действие | Поле | Было | Стало | Причина |",
-             "|---|--------|----------|------|------|-------|---------|"]
-    for i, p in enumerate(patches, offset + 1):
-        old = str(p.get("old", "")).replace("|", "\\|")
-        reason = str(p.get("reason", "")).replace("|", "\\|")
-        if ner_action(p) == REVIEW_DELETE:
-            lines.append(f"| {i} | {p['term']} | 🗑 удаление | — "
-                         f"| {old} | — | {reason} |")
-            continue
-        new = str(p.get("new", "")).replace("|", "\\|")
-        lines.append(f"| {i} | {p['term']} | патч | {p.get('field', '')} "
-                     f"| {old} | {new} | {reason} |")
-    return "\n".join(lines)
-
-
 def do_check(args, stage) -> int:
     """Проверка глоссария: батчи → diff с ner.json → накопительный review."""
     logger = stage.logger
@@ -863,6 +868,10 @@ def do_check(args, stage) -> int:
         logger.warning(
             "⚠️ --rag_terms указан, но режим %s — список игнорируется "
             "(RAG-термины работают только с --passes rag)", args.passes)
+    if args.passes == "rag" and args.types.strip():
+        logger.warning(
+            "⚠️ --types указан, но режим rag — фильтр типов "
+            "игнорируется (RAG идёт по списку --rag_terms)")
     if args.passes == "rag":
         prompt_tpl = load_rag_prompt(args.rag_prompt_file or args.prompt_file,
                                      logger)
@@ -924,7 +933,7 @@ def do_check(args, stage) -> int:
             logger.info(f"DRY-RUN авто-применение: было бы "
                         f"{len(applied)}, пропущено {skipped}.")
             for p in applied:
-                logger.info(f"  · [{p.get('этап', '')}] {p['term']} "
+                logger.info(f"  · [{p.get('stage', '')}] {p['term']} "
                             f"[{p['field']}]: {p['old']!r} → {p['new']!r}")
             return
         applied, skipped = apply_ner_patches(data, entries, logger)
@@ -983,7 +992,7 @@ def do_check(args, stage) -> int:
     # ── параллельное выполнение: threads потоков на ВСЕ батчи
     #    (типы и чанки идут одновременно, не последовательно)
     try:
-        workers = max(1, min(16, int(args.threads)))
+        workers = max(1, min(MAX_THREADS, int(args.threads)))
     except (TypeError, ValueError):
         workers = 1
     logger.info(f"🔀 Потоков: {workers} (батчей всего: {len(stage_tasks)})")

@@ -154,11 +154,25 @@ def test_review_entry():
     assert e2 is not None
     assert e2["field"] == "type" and e2["status"] == "отклонить"
     assert e2["stage"] == "Тип: Skill"
-    # неизвестный статус → принять
+    # неизвестный статус → отклонить (безопасный дефолт: опечатка
+    # человека не превращает правку в применяемую), с предупреждением
+    class L:
+        def __init__(self):
+            self.warns = []
+
+        def warning(self, m):
+            self.warns.append(m)
+
+    lg = L()
     e3 = review_entry({"term": "A", "field": "notes", "old": "x",
-                       "new": "y", "status": "непонятно"})
+                       "new": "y", "status": "непонятно"}, logger=lg)
     assert e3 is not None
-    assert e3["status"] == "принять"
+    assert e3["status"] == "отклонить"
+    assert any("непонятно" in w for w in lg.warns)
+    # пустой статус (legacy-патчи) — по-прежнему принять, без warning
+    e4 = review_entry({"term": "A", "field": "notes", "old": "x",
+                       "new": "y"})
+    assert e4 is not None and e4["status"] == "принять"
 
 
 def test_parse_review_doc_and_merge():
@@ -323,6 +337,7 @@ def test_merge_review_entries_distinguishes_action():
     del_e = review_entry({"term": "A", "action": "удаление"}, stage="RAG")
     patch_e = review_entry({"term": "A", "field": "translation",
                             "old": "", "new": ""}, stage="RAG")
+    assert del_e is not None and patch_e is not None
     # дубль удаления не добавляется, а патч того же термина — добавляется
     merged, added = merge_review_entries([del_e], [del_e, patch_e])
     assert added == 1 and len(merged) == 2
@@ -1286,3 +1301,88 @@ def test_ner_check_rag_skips_locked_terms(tmp_path, monkeypatch):
     assert len(calls2) == 1
     assert "青云宗" in calls2[0][-1]["content"]
     assert "林凡" not in calls2[0][-1]["content"]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# исправленные баги: dry-run stage, RAG-фильтры и потолок потоков
+# ──────────────────────────────────────────────────────────────────────
+def test_ner_check_dry_run_prints_stage(tmp_path, monkeypatch, caplog):
+    """DRY-RUN авто-применения печатает этап правки (stage), а не
+    несуществующий ключ «этап»."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    resp = ('[{"term": "林凡", "translation": "Лин Фань", "reason": "p"}]')
+    _mock_stream(monkeypatch, resp, [])
+    assert NC.main(["--input", "ner.json", "--passes", "whole",
+                    "--model", "m"]) == 0
+    with caplog.at_level(logging.INFO):
+        assert NC.main(["--input", "ner.json", "--passes", "whole",
+                        "--model", "m", "--auto-apply", "--dry-run"]) == 0
+    assert "[Весь глоссарий]" in caplog.text
+
+
+def test_ner_check_rag_skips_unknown_terms(tmp_path, monkeypatch, caplog):
+    """RAG: термины, которых нет в ner.json, отсекаются ДО запроса
+    (диф всё равно их отбросил бы — запрос и токены не тратятся);
+    все термины неизвестны — rc=1 без LLM."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    (tmp_path / "novel.txt").write_text(
+        "Линь Фан вошёл в зал. " * 50, encoding="utf-8")
+    calls = []
+    _mock_stream(monkeypatch,
+                 '[{"term": "林凡", "translation": "Лин Фань", '
+                 '"reason": "p"}]', calls)
+    with caplog.at_level(logging.WARNING):
+        rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                      "--rag_terms", "林凡\nНесуществующийТермин\n",
+                      "--rag_novel", "novel.txt",
+                      "--host", "http://x", "--model", "m"])
+    assert rc == 0
+    assert len(calls) == 1  # неизвестный термин не ушёл в LLM
+    assert "отсутствуют в ner.json" in caplog.text
+    # все термины неизвестны — отказ до запросов
+    calls.clear()
+    rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                  "--rag_terms", "А\nБ\n", "--rag_novel", "novel.txt",
+                  "--host", "http://x", "--model", "m"])
+    assert rc == 1 and calls == []
+
+
+def test_ner_check_rag_threads_capped(tmp_path, monkeypatch, caplog):
+    """RAG: --threads 500 не уходит сотней запросов на сервер —
+    потолок MAX_THREADS (16)."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    (tmp_path / "novel.txt").write_text(
+        "Линь Фан вошёл в зал. " * 50, encoding="utf-8")
+    _mock_stream(monkeypatch, "[]", [])
+    with caplog.at_level(logging.INFO):
+        rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                      "--rag_terms", "林凡",
+                      "--rag_novel", "novel.txt", "--threads", "500",
+                      "--host", "http://x", "--model", "m"])
+    assert rc == 0
+    assert "потоков 16" in caplog.text
+
+
+def test_ner_check_types_ignored_in_rag(tmp_path, monkeypatch, caplog):
+    """--types в режиме rag — предупреждение и игнор (зеркально
+    --rag_terms вне rag)."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    (tmp_path / "novel.txt").write_text(
+        "Линь Фан вошёл в зал. " * 50, encoding="utf-8")
+    calls = []
+    _mock_stream(monkeypatch, "[]", calls)
+    with caplog.at_level(logging.WARNING):
+        rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                      "--rag_terms", "林凡", "--rag_novel", "novel.txt",
+                      "--types", "Person",
+                      "--host", "http://x", "--model", "m"])
+    assert rc == 0
+    assert "--types" in caplog.text and "игнорируется" in caplog.text

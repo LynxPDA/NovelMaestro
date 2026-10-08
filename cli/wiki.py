@@ -387,7 +387,7 @@ def extract_context(
                 seen.add(h)
 
     # 1. Первое появление (по порядку текста)
-    first = fts_search_first(db, f'"{ev}"')
+    first = fts_search_first(db, f'"{ev}"', logger)
     if first:
         _add([first])
 
@@ -399,14 +399,14 @@ def extract_context(
         else:
             q = f'NEAR("{ev}" "{em}", {near_distance})'
 
-        hits = fts_search_all(db, q)
+        hits = fts_search_all(db, q, logger)
         _add(even_sample(hits, 3))
         if len(candidates) >= top_k:
             break
 
     # 3. Дополняем равномерной выборкой из всех упоминаний
     if len(candidates) < top_k:
-        all_hits = fts_search_all(db, f'"{ev}"')
+        all_hits = fts_search_all(db, f'"{ev}"', logger)
         remaining = [h for h in all_hits if h not in seen]
         _add(even_sample(remaining, top_k - len(candidates)))
 
@@ -472,7 +472,7 @@ def compute_co_occurrence(
             trans = _get_translation(item)
             if not trans:
                 continue
-            ids = fts_search_ids_all(db, f'"{fts_escape(trans)}"')
+            ids = fts_search_ids_all(db, f'"{fts_escape(trans)}"', logger)
             if ids:
                 chunk_map[btype][trans] = ids
 

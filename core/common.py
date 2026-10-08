@@ -1425,7 +1425,15 @@ def parse_rag_suggestions(text, logger=None, fields=None):
             # «удаление» — поле править нечего, только термин целиком
             item["action"] = action
         for field in allowed:
-            v = str(p.get(field, "")).strip()
+            v = p.get(field)
+            if isinstance(v, (dict, list)):
+                # составные поля (aliases) — JSON-строкой: str() дал бы
+                # питоновский repr, который не проходит сверку old в diff
+                # и не разбирается apply_ner_patches
+                if v:
+                    item[field] = json.dumps(v, ensure_ascii=False)
+                continue
+            v = "" if v is None else str(v).strip()
             if v:
                 item[field] = unicodedata.normalize("NFC", v)
         out.append(item)
@@ -1487,8 +1495,12 @@ def diff_ner_records(records, items_by_term, fields, logger=None):
             if not field or field == "term" \
                     or field not in NER_PATCH_FIELDS:
                 continue
+            new_val = rec.get(field)
+            if isinstance(new_val, (dict, list)):
+                # зеркально parse_rag_suggestions: JSON-строка, а не repr
+                new_val = json.dumps(new_val, ensure_ascii=False)
             new = unicodedata.normalize(
-                "NFC", str(rec.get(field, "")).strip())
+                "NFC", str(new_val if new_val is not None else "").strip())
             if not new:
                 continue
             cur = item.get(field)
@@ -1504,12 +1516,15 @@ def diff_ner_records(records, items_by_term, fields, logger=None):
     return entries
 
 
-def review_entry(raw, stage=""):
+def review_entry(raw, stage="", logger=None):
     """Нормализация одной правки в запись review-файла.
     Понимает и legacy-патч {term,field,old,new,reason}, и полную запись
     со статусами, и удаление термина (action=«удаление»: поля у такой записи
     не проверяются и не правятся — термин уходит из глоссария целиком).
     NFC для term/old/new; field патча проверяется по NER_PATCH_FIELDS.
+    Статус: пустой (legacy-патчи) — «принять»; незнакомый непустой —
+    «отклонить» с предупреждением (опечатка человека в JSON-редакторе
+    не должна превращать правку в применяемую).
     Возвращает dict-запись или None, если запись некорректна
     (нет term/поле вне списка)."""
     if not isinstance(raw, dict):
@@ -1521,9 +1536,17 @@ def review_entry(raw, stage=""):
     field = str(raw.get("field", "")).strip().lower()
     if action == REVIEW_PATCH and field not in NER_PATCH_FIELDS:
         return None
-    status = str(raw.get("status", REVIEW_ACCEPT)).strip().lower()
-    if status not in REVIEW_STATUSES:
+    status_raw = raw.get("status")
+    status_raw = "" if status_raw is None else str(status_raw).strip().lower()
+    if not status_raw:
         status = REVIEW_ACCEPT
+    elif status_raw in REVIEW_STATUSES:
+        status = status_raw
+    else:
+        status = REVIEW_REJECT
+        if logger:
+            logger.warning(f"⚠ Review-запись {term!r}: незнакомый статус "
+                           f"{status_raw!r} — записана как «отклонить».")
     return {
         "stage": str(raw.get("stage") or stage),
         "action": action,
@@ -1550,7 +1573,7 @@ def parse_review_doc(doc, logger=None):
         if logger:
             logger.warning("⚠ Review-файл: не найден список правок.")
         return None
-    return [e for e in (review_entry(r) for r in rows) if e]
+    return [e for e in (review_entry(r, logger=logger) for r in rows) if e]
 
 
 def merge_review_entries(existing, new, logger=None):
@@ -2257,8 +2280,11 @@ def build_fts_index(text: str, chunk_size: int, logger=None) -> sqlite3.Connecti
     return db
 
 
-def fts_search_all(db: sqlite3.Connection, query: str) -> list[str]:
-    """Все совпавшие чанки в порядке текста (без BM25)."""
+def fts_search_all(db: sqlite3.Connection, query: str,
+                   logger=None) -> list[str]:
+    """Все совпавшие чанки в порядке текста (без BM25). Битый запрос —
+    пустой результат; logger передан — предупреждение (тихий пустой
+    результат неотличим от «совпадений нет»)."""
     try:
         rows = db.execute(
             "SELECT content FROM chunks WHERE chunks MATCH ? "
@@ -2266,12 +2292,16 @@ def fts_search_all(db: sqlite3.Connection, query: str) -> list[str]:
             (_cjk_space(query),),
         ).fetchall()
         return [r[0] for r in rows]
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as exc:
+        if logger:
+            logger.warning(f"⚠ FTS5-запрос не выполнен ({exc}): {query!r}")
         return []
 
 
-def fts_search_first(db: sqlite3.Connection, query: str) -> str | None:
-    """Первый чанк по порядку текста."""
+def fts_search_first(db: sqlite3.Connection, query: str,
+                     logger=None) -> str | None:
+    """Первый чанк по порядку текста (битый запрос — None, см.
+    fts_search_all)."""
     try:
         row = db.execute(
             "SELECT content FROM chunks WHERE chunks MATCH ? "
@@ -2279,19 +2309,25 @@ def fts_search_first(db: sqlite3.Connection, query: str) -> str | None:
             (_cjk_space(query),),
         ).fetchone()
         return row[0] if row else None
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as exc:
+        if logger:
+            logger.warning(f"⚠ FTS5-запрос не выполнен ({exc}): {query!r}")
         return None
 
 
-def fts_search_ids_all(db: sqlite3.Connection, query: str) -> set[str]:
-    """Все chunk_id, где встречается запрос (без BM25, без LIMIT)."""
+def fts_search_ids_all(db: sqlite3.Connection, query: str,
+                       logger=None) -> set[str]:
+    """Все chunk_id, где встречается запрос (без BM25, без LIMIT; битый
+    запрос — пустое множество, см. fts_search_all)."""
     try:
         rows = db.execute(
             "SELECT chunk_id FROM chunks WHERE chunks MATCH ?",
             (_cjk_space(query),),
         ).fetchall()
         return {r[0] for r in rows}
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as exc:
+        if logger:
+            logger.warning(f"⚠ FTS5-запрос не выполнен ({exc}): {query!r}")
         return set()
 
 

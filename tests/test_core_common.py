@@ -2088,3 +2088,69 @@ def test_ner_pick_non_voted_is_nfc():
     composed = unicodedata.normalize("NFC", "формат")
     decomposed = unicodedata.normalize("NFD", "формат")
     assert C.ner_pick_non_voted(composed, decomposed, "first") == composed
+
+
+# ──────────────────────────────────────────────────────────────────────
+# FTS5: битый запрос — пустой результат + предупреждение (тихая пустота
+# неотличима от «совпадений нет»)
+# ──��───────────────────────────────────────────────────────────────────
+class _WarnLog:
+    def __init__(self):
+        self.warns = []
+
+    def warning(self, m):
+        self.warns.append(m)
+
+
+def test_fts_broken_query_warns_with_logger():
+    db = C.build_fts_index("Линь Шуй вошла в зал.", 100)
+    lg = _WarnLog()
+    assert C.fts_search_all(db, '"незакрытая', lg) == []
+    assert C.fts_search_first(db, '"незакрытая', lg) is None
+    assert C.fts_search_ids_all(db, '"незакрытая', lg) == set()
+    assert len(lg.warns) == 3
+    assert all("FTS5-запрос не выполнен" in w for w in lg.warns)
+    # нормальный запрос — без предупреждений
+    assert C.fts_search_all(db, '"Линь Шуй"', lg)
+    assert len(lg.warns) == 3
+    # без logger — тихая совместимость (старые вызовы)
+    assert C.fts_search_all(db, '"незакрытая') == []
+    db.close()
+
+
+def test_parse_rag_suggestions_list_field_json():
+    """Составное поле (aliases) в ответе LLM — JSON-строкой, а не repr:
+    diff_ner_records сравнивает json.dumps записи с new, apply_ner_patches
+    разбирает new через json.loads."""
+    out = C.parse_rag_suggestions(
+        '[{"term": "林", "aliases": ["Куньлунь", "Гора"], "reason": "r"}]',
+        fields=("type", "translation", "aliases"))
+    assert out == [{"term": "林", "reason": "r",
+                    "aliases": '["Куньлунь", "Гора"]'}]
+    items = {"林": {"term": "林", "aliases": ["Куньлунь"]}}
+    patches = C.diff_ner_records(out, items, ["aliases"])
+    assert len(patches) == 1
+    assert patches[0]["old"] == '["Куньлунь"]'
+    assert patches[0]["new"] == '["Куньлунь", "Гора"]'
+    # round-trip: патч применяется и даёт список, а не строку
+    items2 = [{"term": "林", "aliases": ["Куньлунь"]}]
+    applied, _ = C.apply_ner_patches(
+        items2, [C.review_entry(p) for p in patches])
+    assert applied and items2[0]["aliases"] == ["Куньлунь", "Гора"]
+
+
+def test_review_entry_unknown_status_rejected():
+    """Незнакомый непустой статус — «отклонить» с предупреждением
+    (опечатка человека не превращает правку в применяемую); пустой
+    статус legacy-патчей — «принять»."""
+    lg = _WarnLog()
+    e = C.review_entry({"term": "A", "field": "notes", "old": "x",
+                        "new": "y", "status": "принято"}, logger=lg)
+    assert e is not None and e["status"] == C.REVIEW_REJECT
+    assert any("принято" in w for w in lg.warns)
+    e0 = C.review_entry({"term": "A", "field": "notes", "old": "x",
+                         "new": "y"})
+    assert e0 is not None and e0["status"] == C.REVIEW_ACCEPT
+    e5 = C.review_entry({"term": "A", "field": "notes", "old": "x",
+                         "new": "y", "status": " ПРИНЯТЬ "})
+    assert e5 is not None and e5["status"] == C.REVIEW_ACCEPT
