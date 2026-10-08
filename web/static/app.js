@@ -2673,6 +2673,40 @@ async function viewTemplates() {
     const downloadUrl = (full) =>
       `/api/templates/${encodeURIComponent(st.set)}/download?path=` +
       encodeURIComponent(full);
+    /* иконка-действие — как во вкладке «Файлы» (iconBtn project-views):
+       подпись живёт в тултипе и aria-label, строка остаётся узкой */
+    const rowIcon = (icon, tip, onclick, danger) => {
+      const b = h(
+        "button",
+        {
+          class:
+            "btn btn-sm btn-ghost icon-btn" +
+            (danger ? " btn-danger-ghost" : ""),
+          title: tip,
+          "aria-label": tip,
+          onclick,
+        },
+        iconEl(icon),
+      );
+      attachTooltip(b, tip);
+      return b;
+    };
+    const rowDownload = (full, name) => {
+      const tip = `Скачать ${name}`;
+      const a = h(
+        "a",
+        {
+          class: "btn btn-sm btn-ghost icon-btn",
+          href: downloadUrl(full),
+          download: name,
+          title: tip,
+          "aria-label": tip,
+        },
+        iconEl("download"),
+      );
+      attachTooltip(a, tip);
+      return a;
+    };
     const row = (e) => {
       const full = st.path ? `${st.path}/${e.name}` : e.name;
       const nameNode = e.dir
@@ -2693,94 +2727,51 @@ async function viewTemplates() {
       const actions = h("div", { class: "factions" });
       /* у каталогов шаблонов НИКАКИХ действий — только переход */
       if (!e.dir) {
-        /* General — только чтение: «Просмотр» вместо «Правка»,
-           Скачать тоже доступен */
+        /* порядок — как во вкладке «Файлы»: правка → скачать →
+           переименовать → удалить; General — только просмотр и скачать */
         if (writable) {
           actions.append(
-            h(
-              "a",
-              {
-                class: "btn btn-sm btn-ghost",
-                href: downloadUrl(full),
-                download: e.name,
-              },
-              "Скачать",
-            ),
-          );
-          actions.append(
-            h(
-              "button",
-              { class: "btn btn-sm btn-ghost", onclick: () => openEdit(full) },
-              "Правка",
-            ),
-          );
-          actions.append(
-            h(
-              "button",
-              {
-                class: "btn btn-sm btn-ghost",
-                onclick: () =>
-                  nameModal(
-                    `Переименовать файл ${e.name}`,
-                    "новое имя файла",
-                    async (nm) => {
-                      const dir = st.path ? st.path + "/" : "";
-                      await api(
-                        `/templates/${encodeURIComponent(st.set)}/rename`,
-                        {
-                          method: "POST",
-                          body: { src: full, dst: dir + nm },
-                        },
-                      );
-                      toast(`Переименовано: ${e.name} → ${nm}`);
-                      render();
+            rowIcon("pencil", `Править ${e.name}`, () => openEdit(full)),
+            rowDownload(full, e.name),
+            rowIcon("textCursor", `Переименовать ${e.name}`, () =>
+              nameModal(
+                `Переименовать файл ${e.name}`,
+                "новое имя файла",
+                async (nm) => {
+                  const dir = st.path ? st.path + "/" : "";
+                  await api(
+                    `/templates/${encodeURIComponent(st.set)}/rename`,
+                    {
+                      method: "POST",
+                      body: { src: full, dst: dir + nm },
                     },
-                    e.name,
-                  ),
-              },
-              "Переим.",
+                  );
+                  toast(`Переименовано: ${e.name} → ${nm}`);
+                  render();
+                },
+                e.name,
+              ),
             ),
-          );
-          actions.append(
-            h(
-              "button",
-              {
-                class: "btn btn-sm btn-danger-ghost",
-                onclick: () =>
-                  confirmModal("Удаление файла", full, "УДАЛИТЬ", async () => {
-                    const q = new URLSearchParams({ path: full });
-                    await api(
-                      `/templates/${encodeURIComponent(st.set)}/file?${q}`,
-                      { method: "DELETE" },
-                    );
-                    toast(`Удалено: ${full}`);
-                    render();
-                  }),
-              },
-              "Удалить",
+            rowIcon(
+              "trash",
+              `Удалить ${e.name}`,
+              () =>
+                confirmModal("Удаление файла", full, "УДАЛИТЬ", async () => {
+                  const q = new URLSearchParams({ path: full });
+                  await api(
+                    `/templates/${encodeURIComponent(st.set)}/file?${q}`,
+                    { method: "DELETE" },
+                  );
+                  toast(`Удалено: ${full}`);
+                  render();
+                }),
+              true,
             ),
           );
         } else {
           actions.append(
-            h(
-              "button",
-              {
-                class: "btn btn-sm btn-ghost",
-                onclick: () => openEdit(full),
-              },
-              "Просмотр",
-            ),
-          );
-          actions.append(
-            h(
-              "a",
-              {
-                class: "btn btn-sm btn-ghost",
-                href: downloadUrl(full),
-                download: e.name,
-              },
-              "Скачать",
-            ),
+            rowIcon("eye", `Просмотр ${e.name}`, () => openEdit(full)),
+            rowDownload(full, e.name),
           );
         }
       }

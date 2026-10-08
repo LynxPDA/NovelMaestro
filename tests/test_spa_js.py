@@ -208,11 +208,12 @@ def test_help_view_renders_static_md():
 
 def test_templates_general_readonly():
     """Шаблоны · General: файл открывается в просмотре (read-only),
-    кнопка «Сохранить» не рендерится, «Просмотр» вместо «Правка»."""
+    кнопка «Сохранить» не рендерится, действия — иконками, как во вкладке
+    «Файлы»: у General — глаз (просмотр) и скачивание."""
     src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
     assert "ed.setReadOnly(readonly)" in src
     assert "const readonly = st.set === \"General\"" in src
-    assert '"Просмотр"' in src
+    assert 'rowIcon("eye"' in src, "просмотр General — иконка глаза"
     assert "только чтение" in src
     assert "...(readonly ? [] : [saveBtn])" in src
 
