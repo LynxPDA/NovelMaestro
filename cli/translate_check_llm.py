@@ -925,7 +925,7 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
     ap.add_argument("--two_pass", action="store_true",
                     help="Второй проход верификации (pass2).")
     ap.add_argument("--context_budget", type=int, default=25000,
-                    help="Бюджет контекста на пакет, ТОКЕНЫ (оценка; "
+                    help="Бюджет запроса, ТОКЕНЫ (оценка; "
                          "default: 25000).")
     # Review-файл и применение
     ap.add_argument("--review", default=DEFAULT_REVIEW,

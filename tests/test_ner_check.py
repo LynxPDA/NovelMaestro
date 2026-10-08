@@ -435,7 +435,7 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     assert e["old"] == "Линь Фан" and e["new"] == "Лин Фань"
     assert not (tmp_path / "ner_patches.json").exists()
     params = doc["params"]
-    assert params["бюджет батча"] == 65536
+    assert params["бюджет запроса"] == 65536
     assert params["поля"] == "term,type,translation"
     # отчёт ner_report.md удалён — файла быть не должно
     assert not (tmp_path / "ner_report.md").exists()
@@ -498,7 +498,7 @@ def test_ner_check_apply_dry_run_and_real(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
     doc = {"created": "t", "input": "ner.json",
-           "params": {"бюджет батча": 12345},
+           "params": {"бюджет запроса": 12345},
            "entries": [
         {"stage": "Весь глоссарий", "term": "林凡", "field": "translation",
          "old": "Линь Фан", "new": "Лин Фань", "reason": "r",
@@ -535,7 +535,7 @@ def test_ner_check_apply_dry_run_and_real(tmp_path, monkeypatch):
     assert "applied_at" in doc2["entries"][0]
     assert doc2["entries"][1]["applied"] is False
     # параметры прошлого прогона пережили применение
-    assert doc2["params"] == {"бюджет батча": 12345}
+    assert doc2["params"] == {"бюджет запроса": 12345}
     # повторный apply: всё уже применено — нер.json не трогается
     rc = NC.main(["--apply", "--input", "ner.json"])
     assert rc == 0

@@ -336,7 +336,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Ограничить проходы по типам (через запятую). "
                         "Пусто = все типы ner.json.")
     p.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE,
-                   help="Бюджет батча, ТОКЕНЫ (оценка; по умолчанию: "
+                   help="Бюджет запроса, ТОКЕНЫ (оценка; по умолчанию: "
                         "65536).")
     p.add_argument("--threads", type=int, default=1,
                    help="Параллельных потоков (1..16): батчи и типы "
@@ -896,7 +896,7 @@ def do_check(args, stage) -> int:
 
     prompt_tpl = get_prompt(args, logger)
     params = {"input": args.input,
-              "бюджет батча": args.batch_size,
+              "бюджет запроса": args.batch_size,
               "порог count": args.count_threshold,
               "поля": args.fields,
               "промпт файл": args.prompt_file,
