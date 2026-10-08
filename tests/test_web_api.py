@@ -12,7 +12,7 @@ import threading
 import time
 from urllib.parse import quote
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
@@ -1224,6 +1224,74 @@ def test_file_rename_slash_rejected(srv_ctx):
     assert res.status == 400
     assert "только имя" in payload["error"]
 
+# copy
+
+def test_file_copy_file(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/file/copy",
+                            {"project": "ACTIVE/test_book",
+                             "path": "source/hello.txt"})
+    assert res.status == 200, payload
+    assert payload["new_path"] == "source/Копия - hello.txt"
+    pdir = projects_root / "ACTIVE" / "test_book"
+    assert (pdir / "source" / "Копия - hello.txt").read_text(
+        encoding="utf-8") == (pdir / "source" / "hello.txt").read_text(
+        encoding="utf-8")
+
+
+def test_file_copy_taken_suffix(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    src = pdir / "source" / "hello.txt"
+    (pdir / "source" / "Копия - hello.txt").write_text("1", encoding="utf-8")
+    (pdir / "source" / "Копия - hello.txt (2)").write_text(
+        "2", encoding="utf-8")
+    res, payload = _request(port, "POST", "/api/file/copy",
+                            {"project": "ACTIVE/test_book",
+                             "path": "source/hello.txt"})
+    assert res.status == 200, payload
+    assert payload["new_path"] == "source/Копия - hello.txt (3)"
+    assert src.is_file()  # исходник не тронут
+
+
+def test_file_copy_dir_recursive(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    (pdir / "tmp" / "box" / "sub").mkdir(parents=True)
+    (pdir / "tmp" / "box" / "a.txt").write_text("а", encoding="utf-8")
+    (pdir / "tmp" / "box" / "sub" / "b.txt").write_text(
+        "б", encoding="utf-8")
+    res, payload = _request(port, "POST", "/api/file/copy",
+                            {"project": "ACTIVE/test_book",
+                             "path": "tmp/box"})
+    assert res.status == 200, payload
+    assert payload["new_path"] == "tmp/Копия - box"
+    assert (pdir / "tmp" / "Копия - box" / "a.txt").is_file()
+    assert (pdir / "tmp" / "Копия - box" / "sub" / "b.txt").is_file()
+    assert (pdir / "tmp" / "box" / "a.txt").is_file()  # исходник на месте
+
+
+def test_file_copy_404_and_escape(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/file/copy",
+                            {"project": "ACTIVE/test_book",
+                             "path": "nope.txt"})
+    assert res.status == 404
+    res, payload = _request(port, "POST", "/api/file/copy",
+                            {"project": "ACTIVE/test_book",
+                             "path": "../evil"})
+    assert res.status == 400
+
+
+def test_file_copy_requires_path(srv_ctx):
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/file/copy",
+                            {"project": "ACTIVE/test_book"})
+    assert res.status == 400
+
 
 # move (перенос выделенного: один вызов на всю выделку)
 
@@ -1263,7 +1331,7 @@ def test_file_move_into_project_root(srv_ctx):
 def test_file_move_single_path(srv_ctx):
     """Одиночный объект — тот же маршрут, path вместо paths."""
     _, port, projects_root = srv_ctx()
-    pdir = _file_project(port, projects_root)
+    _file_project(port, projects_root)
     res, payload = _request(port, "POST", "/api/file/move",
                             {"project": "ACTIVE/test_book",
                              "path": "source/meta.json", "dest": "tmp"})

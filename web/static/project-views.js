@@ -312,12 +312,13 @@ function viewProject(section, name, tab, job) {
   }
 
   /* «Файлы»: список с ВЫДЕЛЕНИЕМ. Строка — чекбокс, имя, метаданные и кнопки
-     одного объекта: файл — править, скачать и переименовать, каталог — переименовать.
-     Скачивание, перенос и удаление применяются к выделке и живут в панели
-     выделения: пока что-то выделено, она заменяет кнопки тулбара. Выделение —
-     состояние вкладки (не localStorage): снимается при смене папки и после
-     операции; чекбокс строки перерисовывает только панель — список и его
-     страница от клика выделения не сбрасываются. */
+     одного объекта: файл — править, скачать, копировать и переименовать,
+     каталог — копировать и переименовать. Скачивание, перенос и удаление
+     применяются к выделке и живут в панели выделения: пока что-то выделено,
+     она заменяет кнопки тулбара. Выделение — состояние вкладки (не
+     localStorage): снимается при смене папки и после операции; чекбокс
+     строки перерисовывает только панель — список и его страница от клика
+     выделения не сбрасываются. */
   async function filesView() {
     const q = new URLSearchParams({ project: `${section}/${name}` });
     if (st.path) q.set("path", st.path);
@@ -500,6 +501,10 @@ function viewProject(section, name, tab, job) {
             ? iconBtn(
               "textCursor", `Переименовать ${one.name}`, () => renameOne(one))
             : null,
+          one
+            ? iconBtn(
+              "copy", `Копировать ${one.name}`, () => copyOne(one))
+            : null,
           hasFile
             ? iconBtn("download", "Скачать выделенные файлы", downloadSel)
             : null,
@@ -532,6 +537,18 @@ function viewProject(section, name, tab, job) {
         },
         e.name,
       );
+    }
+
+    /* Копия в ту же папку: имя подбирает сервер («Копия - имя», при занятости
+       — «(2)», «(3)», …); каталог — рекурсивно. */
+    async function copyOne(e) {
+      const r = await api("/file/copy", {
+        method: "POST",
+        body: { project: `${section}/${name}`, path: path(e) },
+      });
+      toast(`Скопировано: ${r.new_path}`);
+      sel.clear();
+      render();
     }
 
     /* Браузер режет пакетную загрузку — ссылки кликаются по одной, с зазором;
@@ -651,7 +668,7 @@ function viewProject(section, name, tab, job) {
     const fPager = UIC.listPager({
       list: drop,
       rows: (slice) =>
-        slice.map((e) => fileRow(e, { toggle: toggleSel, rename: renameOne })),
+        slice.map((e) => fileRow(e, { toggle: toggleSel, rename: renameOne, copy: copyOne })),
       infoOnlySinglePage: true,
       info: (total, page, pages) =>
         pages <= 1
@@ -778,15 +795,19 @@ function viewProject(section, name, tab, job) {
         );
     const actions = h("div", { class: "factions" });
     if (!e.dir) {
-      /* порядок один везде: правка → скачать → переименовать; скачивание —
-         действие самого файла, а не группы, поэтому в строке, а не в тулбаре */
+      /* порядок один везде: правка → скачать → копировать → переименовать;
+         скачивание — действие самого файла, а не группы, поэтому в строке,
+         а не в тулбаре */
       actions.append(
         iconBtn("pencil", `Править ${e.name}`, () => openEditor(full)),
         iconBtn("download", `Скачать ${e.name}`, () => downloadFile(full, e.name)),
       );
     }
-    actions.append(iconBtn("textCursor", `Переименовать ${e.name}`, () =>
-      acts.rename(e)));
+    actions.append(
+      iconBtn("copy", `Копировать ${e.name}`, () => acts.copy(e)),
+      iconBtn("textCursor", `Переименовать ${e.name}`, () =>
+        acts.rename(e)),
+    );
     const meta = h(
       "div",
       { class: "fmeta" },

@@ -686,11 +686,13 @@ test("файлы: строка — чекбокс и кнопки одного �
   assert.equal(rows.length, 3);
   assert.equal(findByClass(page, "kebab-btn").length, 0, "построчных меню не осталось");
   assert.equal(findByClass(page, "menu-box").length, 0);
-  // каталог: чекбокс + одна кнопка; файл: чекбокс + править, скачать, переименовать
+  // каталог: чекбокс + копировать, переименовать; файл: чекбокс + править,
+  // скачать, копировать, переименовать
   assert.equal(findByClass(rows[0], "fsel").length, 1);
-  assert.deepEqual(tips(rows[0]), ["Переименовать chapters"]);
+  assert.deepEqual(tips(rows[0]),
+    ["Копировать chapters", "Переименовать chapters"]);
   assert.deepEqual(tips(rows[1]),
-    ["Править a.txt", "Скачать a.txt", "Переименовать a.txt"]);
+    ["Править a.txt", "Скачать a.txt", "Копировать a.txt", "Переименовать a.txt"]);
 });
 
 test("файлы: чекбокс строки включает панель выделения и прячет кнопки", async () => {
@@ -708,6 +710,7 @@ test("файлы: чекбокс строки включает панель вы
     "выделено: 1");
   assert.deepEqual(tips(bar), [
     "Переименовать a.txt",
+    "Копировать a.txt",
     "Скачать выделенные файлы",
     "Перенести в…",
     "Удалить выделенное",
@@ -722,6 +725,7 @@ test("файлы: выделка из одних каталогов — скач
   await cb._listeners.change[0]();
   assert.deepEqual(tips(findByClass(page, "files-sel")[0]), [
     "Переименовать chapters",
+    "Копировать chapters",
     "Перенести в…",
     "Удалить выделенное",
     "Снять выделение",
@@ -836,6 +840,23 @@ test("файлы: переименовать из панели — POST /file/re
     project: "ACTIVE/Книга", path: "chapters", new_name: "glavy",
   });
   // после операции выделка снимается — панель не висит на новом списке
+  assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
+});
+
+test("файлы: копировать из панели — POST /file/copy, выделка снимается", async () => {
+  const page = await filesPage();
+  const cb = findByClass(findByClass(page, "frow")[1], "fsel")[0]; // файл a.txt
+  cb.checked = true;
+  await cb._listeners.change[0]();
+  const btn = findByClass(page, "files-sel")[0].querySelectorAll("button")
+    .find((b) => (b.getAttribute("aria-label") || "").startsWith("Копировать"));
+  await btn._listeners.click[0]();
+  await tick();
+  const call = globalThis.__calls.find((c) => c.path === "/file/copy");
+  assert.ok(call, "POST /api/file/copy ушёл");
+  assert.deepEqual(JSON.parse(JSON.stringify(call.body)), {
+    project: "ACTIVE/Книга", path: "a.txt",
+  });
   assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
 });
 

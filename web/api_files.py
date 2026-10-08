@@ -174,6 +174,42 @@ def _file_rename(ctx: dict) -> dict:
     return {"ok": True, "path": rel, "new_path": dst_rel}
 
 
+def _file_copy(ctx: dict) -> dict:
+    """Копировать файл ИЛИ каталог в ту же папку (POST /api/file/copy).
+
+    Body: {project, path}. Имя копии — «Копия - <имя>»; если занято —
+    «Копия - <имя> (2)», «(3)», … Каталог копируется рекурсивно.
+    Нет исходника → 404, эскейп → 400.
+    """
+    pdir, _section, _name = _project_ctx(ctx)
+    rel = (ctx["body"].get("path") or "").strip()
+    if not rel:
+        raise ApiError(400, "path обязателен")
+    src = _resolve_project_path(ctx, pdir, rel)
+    if not src.exists():
+        raise ApiError(404, f"Файл не найден: {rel}")
+    parent_rel = rel.rpartition("/")[0]
+    stem = f"{parent_rel}/" if parent_rel else ""
+    base = "Копия - " + src.name
+    dst = _resolve_project_path(ctx, pdir, stem + base)
+    if dst.exists():
+        for i in range(2, 1000):
+            candidate = f"{base} ({i})"
+            dst = _resolve_project_path(ctx, pdir, stem + candidate)
+            if not dst.exists():
+                break
+        else:
+            raise ApiError(400, "Не удалось подобрать имя копии")
+    try:
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+    except OSError as exc:
+        raise ApiError(500, f"Не удалось скопировать: {exc}")
+    dst_rel = stem + dst.name
+    return {"ok": True, "path": rel, "new_path": dst_rel}
+
 def _file_delete(ctx: dict) -> dict:
     """Удаление файла ИЛИ каталога (DELETE /api/file?project=&path=).
 
@@ -310,6 +346,7 @@ def _register_files(router: Router) -> None:
     router.add("DELETE", "/api/file", _file_delete)
     router.add("POST", "/api/mkdir", _file_mkdir)
     router.add("POST", "/api/file/rename", _file_rename)
+    router.add("POST", "/api/file/copy", _file_copy)
     router.add("POST", "/api/file/move", _file_move)
     router.add("POST", "/api/upload", _file_upload)
     router.add("GET", "/api/download", _file_download)
