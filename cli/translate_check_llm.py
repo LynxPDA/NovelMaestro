@@ -890,7 +890,7 @@ def build_parser():
   --apply           применить правки со статусом «принять» (без LLM);
   --apply --dry-run предпросмотр применения;
   --auto-apply      сразу применить всё найденное (без человека).
-Единицы: --context_budget — ТОКЕНЫ (оценка estimate_tokens); --min_fix_length,
+Единицы: --request_budget — ТОКЕНЫ (оценка estimate_tokens); --min_fix_length,
 --max_changed_chars — СИМВОЛЫ;
 max_tokens (32768) — серверный предохранитель, ТОКЕНЫ.
 Сервер: --host/--model/--api_key (CLI) > HOST/API_KEY/MODEL из .env
@@ -924,9 +924,9 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
     # Режим
     ap.add_argument("--two_pass", action="store_true",
                     help="Второй проход верификации (pass2).")
-    ap.add_argument("--context_budget", type=int, default=25000,
+    ap.add_argument("--request_budget", type=int, default=25000,
                     help="Бюджет запроса, ТОКЕНЫ (оценка; "
-                         "default: 25000).")
+                         "default: 25000; промпт — запас 200).")
     # Review-файл и применение
     ap.add_argument("--review", default=DEFAULT_REVIEW,
                     help=f"Накопительный файл правок (default: "
@@ -1048,7 +1048,7 @@ def do_check(args, stage) -> int:
 
     logger.info(
         f"Главы {args.start}–{args.end} | {args.file_type} | "
-        f"2pass={args.two_pass} | budget={args.context_budget} | "
+        f"2pass={args.two_pass} | budget={args.request_budget} | "
         f"threads={args.threads} | retry_empty={args.retry_empty} | "
         f"reasoning={args.reasoning_effort or 'off'}")
 
@@ -1058,11 +1058,11 @@ def do_check(args, stage) -> int:
                 f"{stage.profile.model}")
 
     chapters = collect_chapters(args.start, args.end, args.file_type,
-                                args.context_budget, chapter_map, logger)
+                                args.request_budget, chapter_map, logger)
     if not chapters:
         logger.error("❌ Главы не найдены.")
         return 1
-    batches = build_batches(chapters, args.context_budget, logger)
+    batches = build_batches(chapters, args.request_budget, logger)
     if not batches:
         return 1
 
@@ -1070,7 +1070,7 @@ def do_check(args, stage) -> int:
     if stage.preview(f"Pass1 · батч 1/{len(batches)}",
                     render_pass1_prompt(p1, compose_batch_text(batches[0])),
                     meta={"batches": len(batches),
-                          "context_budget": args.context_budget,
+                          "request_budget": args.request_budget,
                           "two_pass": bool(args.two_pass),
                           "threads": args.threads,
                           "first_batch_chapters": sorted(
@@ -1083,7 +1083,7 @@ def do_check(args, stage) -> int:
     params = {"директория глав": args.chapters_dir,
               "тип файлов": args.file_type,
               "начало": args.start, "конец": args.end,
-              "бюджет": args.context_budget, "потоки": args.threads,
+              "бюджет запроса": args.request_budget, "потоки": args.threads,
               "два прохода": bool(args.two_pass),
               "промпт файл": args.prompt_file}
     meta, existing = load_review_file(args.review, logger)

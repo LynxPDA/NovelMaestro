@@ -6,7 +6,7 @@ ner_check.py — LLM-проверка глоссария ner.json и приме�
 Режимы (--passes, по умолчанию whole):
   whole — выбранные типы ОДНОВРЕМЕННО: весь (отфильтрованный по
           --types) список одной посылкой; батчи только если глоссарий
-          больше бюджета --batch_size, записи по count по убыванию;
+          больше бюджета --request_budget, записи по count по убыванию;
   types — выбранные типы ПО ОЧЕРЕДИ: каждый type отдельно
           (консистентность внутри типа); батчи и типы идут
           ПАРАЛЛЕЛЬНО в рамках --threads (общий прогрессбар по
@@ -136,7 +136,7 @@ def _bak_path(input_path: str) -> str:
         raise OSError(f"Не удалось создать tmp/: {exc}") from exc
     base = os.path.basename(input_path)
     return os.path.join("tmp", base + ".bak")
-DEFAULT_BATCH_SIZE = 65536  # ТОКЕНОВ (оценка estimate_tokens)
+DEFAULT_REQUEST_BUDGET = 65536  # ТОКЕНОВ (оценка estimate_tokens)
 # Потолок параллельных запросов (батчи и RAG-термины): справка обещает
 # «1..16» — сотня одновременных запросов на сервер недопустима
 MAX_THREADS = 16
@@ -335,9 +335,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--types", default="",
                    help="Ограничить проходы по типам (через запятую). "
                         "Пусто = все типы ner.json.")
-    p.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE,
+    p.add_argument("--request_budget", type=int, default=DEFAULT_REQUEST_BUDGET,
                    help="Бюджет запроса, ТОКЕНЫ (оценка; по умолчанию: "
-                        "65536).")
+                        "65536; промпт не входит).")
     p.add_argument("--threads", type=int, default=1,
                    help="Параллельных потоков (1..16): батчи и типы "
                         "выполняются одновременно (по умолчанию: 1).")
@@ -489,7 +489,7 @@ def run_pass_tasks(title, items, prompt_tpl, args, logger):
     """Собирает задачи (title, batch) прохода: резка по бюджету.
     Возвращает список (title, batch) в порядке следования батчей."""
     fields = [f.strip() for f in args.fields.split(",") if f.strip()]
-    batches = build_ner_batches(items, args.batch_size, fields)
+    batches = build_ner_batches(items, args.request_budget, fields)
     logger.info(f"── {title}: {len(items)} записей, батчей: {len(batches)}")
     return [(title, batch) for batch in batches]
 
@@ -896,7 +896,7 @@ def do_check(args, stage) -> int:
 
     prompt_tpl = get_prompt(args, logger)
     params = {"input": args.input,
-              "бюджет запроса": args.batch_size,
+              "бюджет запроса": args.request_budget,
               "порог count": args.count_threshold,
               "поля": args.fields,
               "промпт файл": args.prompt_file,
@@ -984,7 +984,7 @@ def do_check(args, stage) -> int:
                     meta={"mode": args.passes,
                           "batches": len(stage_tasks),
                           "batch_records": len(batch0),
-                          "batch_size": args.batch_size,
+                          "request_budget": args.request_budget,
                           "fields": args.fields,
                           "threads": args.threads}):
         return 0

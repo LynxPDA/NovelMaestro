@@ -1513,14 +1513,14 @@ def test_build_translate_check_llm_no_bak():
 
 def test_build_translate_check_llm_flags():
     form = {"type": "polished", "start": "1", "end": "10",
-            "two_pass": True, "context_budget": "75000",
+            "two_pass": True, "request_budget": "75000",
             "review": "translate_check_llm_review.json", "dry_run": True,
             "apply": True, "auto_apply": True,
             "threads": "4", "max_fixes_per_chapter": "0"}
     argv = build_command("translate_check_llm", form, {})
     assert argv[0] == "cli/translate_check_llm.py"
     assert "--start" in argv and "--end" in argv
-    assert "--two_pass" in argv and "--context_budget" in argv
+    assert "--two_pass" in argv and "--request_budget" in argv
     # применение/предпросмотр/бэкапы — только через «Проверка» проекта
     assert "--dry-run" not in argv
     assert "--apply" not in argv and "--auto-apply" not in argv
@@ -1535,19 +1535,34 @@ def test_build_wiki_flags():
             "output": "wiki.md", "top": "80", "min_count": "2",
             "types": "Person",
             "context_chunks": "12", "near_distance": "64",
-            "chunk_size": "1000", "co_occurrence_pairs": "Person:Person",
+            "chunk_size": "1000", "request_budget": "16000",
+            "co_occurrence_pairs": "Person:Person",
             "co_occurrence_top": "5", "format": "rulate-md"}
     argv = build_command("wiki", form, {})
     assert argv[0] == "cli/wiki.py"
     assert "compiled_book.txt" in argv
     assert "--near-distance" in argv and "64" in argv
     assert "--chunk-size" in argv and "1000" in argv
+    assert "--request_budget" in argv and "16000" in argv
     assert "--co-occurrence-pairs" in argv
     assert "--rulate-mode" in argv
     # рассуждения — не поле формы wiki: режим один на весь конвейер
     assert not [a for a in argv if "reason" in a or "thinking" in a]
     assert "--types" in argv and "Person" in argv
     assert "--exclude-types" not in argv
+    # пустой бюджет — флага нет (0 = без ограничения)
+    argv2 = build_command("wiki", {"source": "txt", "file": "x.txt"}, {})
+    assert "--request_budget" not in argv2
+
+
+def test_wiki_request_budget_field_spec():
+    """Поле request_budget wiki: метка/дефолт как у остальных стадий."""
+    spec = spec_for("wiki")
+    assert spec is not None
+    f = next(x for x in spec["fields"] if x["name"] == "request_budget")
+    assert f["label"] == "Бюджет запроса, ТОКЕНЫ"
+    assert f["default"] == "0"
+    assert f["type"] == "number"
 
 
 def test_build_wiki_no_exclude_types_field():

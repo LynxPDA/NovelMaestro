@@ -441,6 +441,21 @@ def test_ner_check_main_report_and_review(tmp_path, monkeypatch):
     assert not (tmp_path / "ner_report.md").exists()
 
 
+def test_ner_check_request_budget_flag_in_params(tmp_path, monkeypatch):
+    """Переименованный флаг --request_budget доходит до params review-файла
+    (старое имя --batch_size больше не принимается)."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    _mock_stream(monkeypatch, "[]", [])
+    rc = NC.main(["--input", "ner.json", "--passes", "whole",
+                  "--request_budget", "12345",
+                  "--host", "http://x", "--model", "m"])
+    assert rc == 0
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
+                     .read_text(encoding="utf-8"))
+    assert doc["params"]["бюджет запроса"] == 12345
+
+
 def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
     """Этап 2 дописывает правки в тот же файл; решения человека живут."""
     monkeypatch.chdir(tmp_path)

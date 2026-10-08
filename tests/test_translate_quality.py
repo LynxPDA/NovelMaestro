@@ -432,7 +432,7 @@ def test_main_e2e_report(tmp_path, monkeypatch):
         "translate_quality.py", "--type", "polished",
         "--start", "1", "--end", "3",
         "--host", "http://h", "--model", "m",
-        "--budget", "200000"])
+        "--request_budget", "200000"])
     rc = TQ.main()
     assert rc == 0
     out = (tmp_path / "tmp" / "translation_quality_assessment.md")
@@ -454,7 +454,7 @@ def test_main_budget_trims(tmp_path, monkeypatch):
         "translate_quality.py", "--type", "polished",
         "--start", "1", "--end", "3",
         "--host", "http://h", "--model", "m",
-        "--budget", "60"])
+        "--request_budget", "60"])
     rc = TQ.main()
     assert rc == 0
     text = (tmp_path / "tmp" / "translation_quality_assessment.md").read_text(

@@ -7,7 +7,7 @@ translate_quality.py — оценка качества перевода (LLM).
 
 * range (по умолчанию) — ОДИН запрос по пакету глав диапазона: собираются
   {original_text} (chapter.txt) и {translated_text} (выбранный «Тип файлов
-  глав»). Если главы не влезают в --budget (ТОКЕНЫ, оценка) — пакет обрезается
+  глав»). Если главы не влезают в --request_budget (ТОКЕНЫ, оценка) — пакет обрезается
   до ЦЕЛОГО количества глав (первые N диапазона), отсечённые видны в отчёте.
 * chunks — книга режется на чанки по N ЦЕЛЫХ глав (--chunk_size, ГЛАВЫ),
   каждый чанк оценивается отдельным запросом (--threads потоков), затем
@@ -32,7 +32,7 @@ tmp/translation_quality_assessment.md (в web имя фиксировано; CLI
 
 Плейсхолдеры: {original_text}, {translated_text}, {batch_text} (свёртка).
 
-ЕДИНИЦЫ: --budget и размеры пакета — ТОКЕНЫ (оценка estimate_tokens);
+ЕДИНИЦЫ: --request_budget и размеры пакета — ТОКЕНЫ (оценка estimate_tokens);
 --chunk_size и --overlap — ГЛАВЫ; max_tokens — серверный предохранитель, ТОКЕНЫ.
 Форматы папок глав — единый канон core.common.parse_chapter_id.
 """
@@ -100,7 +100,7 @@ from core.common import (  # noqa: E402
 )
 
 DEFAULT_OUTPUT = "tmp/translation_quality_assessment.md"  # web: фиксирован
-DEFAULT_BUDGET = 65_000  # ТОКЕНОВ (оценка): главы (содержимое; промпт не входит)
+DEFAULT_REQUEST_BUDGET = 65_000  # ТОКЕНОВ (оценка): главы (содержимое; промпт не входит)
 DEFAULT_MODE = "range"
 DEFAULT_CHUNK_SIZE = 1     # ГЛАВЫ в чанке
 DEFAULT_CHUNKS = 0         # 0 — все чанки
@@ -992,10 +992,10 @@ def write_report(output_path: str, meta: dict, assessment: str,
 # ──────────────────────────────────────────────
 def run_range(args, stage, chapters, orig_by_num, prompt, logger) -> int:
     """Один запрос по пакету целых глав диапазона."""
-    kept, dropped = fit_budget(chapters, orig_by_num, prompt, args.budget)
+    kept, dropped = fit_budget(chapters, orig_by_num, prompt, args.request_budget)
     if not kept:
         logger.error(f"❌ Ни одна глава не влезает в бюджет "
-                     f"({args.budget} токенов, оценка).")
+                     f"({args.request_budget} токенов, оценка).")
         return 1
     if dropped:
         logger.warning(f"⚠️ Бюджет: отсечено {dropped} глав "
@@ -1011,7 +1011,7 @@ def run_range(args, stage, chapters, orig_by_num, prompt, logger) -> int:
     # ── Предпросмотр запроса (--preview-request): первый пакет оценки ──
     if stage.preview(f"Оценка · главы {nums[0]}–{nums[-1]}", user_content,
                     meta={"chapters": len(kept), "first": nums[0],
-                          "last": nums[-1], "budget": args.budget,
+                          "last": nums[-1], "budget": args.request_budget,
                           "prompt_file": args.prompt_file or ""}):
         return 0
 
@@ -1032,7 +1032,7 @@ def run_range(args, stage, chapters, orig_by_num, prompt, logger) -> int:
         "range_requested": (args.start, args.end),
         "range_included": (nums[0], nums[-1]),
         "chapters": len(nums), "dropped": dropped, "file_type": args.type,
-        "budget": args.budget, "packet_size": packet_size,
+        "budget": args.request_budget, "packet_size": packet_size,
         "model": stage.profile.model, "host": stage.profile.base_url,
         "prompt_file": args.prompt_file or "",
     }
@@ -1087,7 +1087,7 @@ def preview_chunks(stage, args, all_chunks, selected, note, oversize,
         "режим": "chunks", "чанков": len(all_chunks),
         "оценивается": len(selected), "отбор": note,
         "глав в чанке": args.chunk_size, "перекрытие": args.overlap,
-        "бюджет": f"{args.budget} токенов", "потоки": args.threads,
+        "бюджет запроса": f"{args.request_budget} токенов", "потоки": args.threads,
         "разрезано глав": sum(1 for c in all_chunks if c.get("part")),
         "не влезли даже частью": oversize or "нет",
         "артефакты": CHUNK_DIR,
@@ -1104,7 +1104,7 @@ def run_chunks(args, stage, chapters, orig_by_num, prompt, logger) -> int:
     """Чанки по целым главам → N запросов → LLM-свёртка → один отчёт."""
     all_chunks = build_chunks(chapters, args.chunk_size, args.overlap)
     all_chunks, split_ch, oversize = refit_oversize(
-        all_chunks, orig_by_num, args.budget, logger)
+        all_chunks, orig_by_num, args.request_budget, logger)
     selected, note = select_chunks(all_chunks, args.chunks, args.sample)
     if not selected:
         logger.error("❌ Пустой список чанков.")
@@ -1144,7 +1144,7 @@ def run_chunks(args, stage, chapters, orig_by_num, prompt, logger) -> int:
     else:
         logger.info(f"🧩 Оценка получена: {len(done)}/{len(results)}, "
                     f"сворачиваю")
-        body, red = reduce_reports(stage, results, args.budget, summary_prompt,
+        body, red = reduce_reports(stage, results, args.request_budget, summary_prompt,
                                    logger)
         conclusion, err = summarize(stage, body, summary_prompt, logger,
                                     label="[свёртка → заключение]")
@@ -1155,7 +1155,7 @@ def run_chunks(args, stage, chapters, orig_by_num, prompt, logger) -> int:
     meta = {
         "date": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M"),
         "range_included": (min(nums), max(nums)), "chapters": len(chapters),
-        "file_type": args.type, "budget": args.budget,
+        "file_type": args.type, "budget": args.request_budget,
         "chunk_size": args.chunk_size, "sample": note,
         "threads": args.threads,
         "split_chapters": split_ch,
@@ -1248,11 +1248,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default=DEFAULT_OUTPUT,
                         help=f"Выходной md-отчёт (default: "
                              f"{DEFAULT_OUTPUT}; в web — фиксирован).")
-    parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET,
+    parser.add_argument("--request_budget", type=int,
+                        default=DEFAULT_REQUEST_BUDGET,
                         help=f"Бюджет запроса, ТОКЕНЫ (оценка): главы (содержимое; промпт НЕ входит); "
                              f"если не влезает — пакет обрезается до "
                              f"целого количества глав (default: "
-                             f"{DEFAULT_BUDGET}).")
+                             f"{DEFAULT_REQUEST_BUDGET}).")
     core_settings.apply_cli_defaults(parser, "translate_quality")
     return parser
 
@@ -1265,7 +1266,7 @@ def main() -> int:
     stage, logger = setup_stage("translate_quality", args)
     logger.info(f"API: {stage.profile.base_url} | модель: "
                 f"{stage.profile.model} | режим: {args.mode} | бюджет: "
-                f"{args.budget} токенов (оценка) | тип: {args.type}")
+                f"{args.request_budget} токенов (оценка) | тип: {args.type}")
 
     # ── Главы ──
     ch_dir = os.path.abspath(args.chapters_dir)

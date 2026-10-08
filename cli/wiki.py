@@ -59,6 +59,7 @@ from core.common import (  # noqa: E402
     build_chapter_map,
     build_fts_index,
     compile_chapter_text,
+    estimate_tokens,
     even_sample,
     fts_escape,
     fts_search_all,
@@ -67,6 +68,7 @@ from core.common import (  # noqa: E402
     get_tagged_prompt,
     log_argv as _cc_log_argv,
     setup_logging as _cc_setup_logging,
+    trim_to_tokens,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -628,10 +630,13 @@ def build_article_prompts(
     type_names_ru: dict | None = None,
     relations_labels: dict | None = None,
     skip_relations: set | None = None,
+    request_budget: int = 0,
 ) -> tuple[str, str]:
     """(sys_prompt, user_content) статьи термина: данные термина,
     взаимосвязи, фрагменты текста; плейсхолдеры системного промпта.
-    Используется и в предпросмотре запроса."""
+    request_budget — потолок user-запроса, ТОКЕНЫ (оценка; промпт НЕ
+    входит): превышение — фрагменты обрезаются от хвоста; 0 = без
+    ограничения. Используется и в предпросмотре запроса."""
     translation = _get_translation(item)
     type_names_ru = type_names_ru or TYPE_NAMES_RU
     relations_labels = relations_labels or SECTION_RELATIONS_LABEL
@@ -651,8 +656,18 @@ def build_article_prompts(
 
     if fragments:
         user_parts.append("\n=== ФРАГМЕНТЫ ТЕКСТА ===")
+        used = 0
         for i, frag in enumerate(fragments, 1):
-            user_parts.append(f"\n[Фрагмент {i}]\n{frag[:1500]}")
+            part = frag[:1500]
+            if request_budget:
+                rest = request_budget - used
+                if rest <= 0:
+                    break
+                part = trim_to_tokens(part, rest)
+                if not part:
+                    break
+                used += estimate_tokens(part)
+            user_parts.append(f"\n[Фрагмент {i}]\n{part}")
 
     user_content = "\n".join(user_parts)
 
@@ -682,12 +697,14 @@ def generate_article(
     type_names_ru: dict | None = None,
     relations_labels: dict | None = None,
     skip_relations: set | None = None,
+    request_budget: int = 0,
 ) -> str | None:
     sys_prompt, user_content = build_article_prompts(
         item, fragments, co_occur, base_type, system_prompt,
         type_names_ru=type_names_ru,
         relations_labels=relations_labels,
         skip_relations=skip_relations,
+        request_budget=request_budget,
     )
     return llm_request(stage, sys_prompt, user_content)
 
@@ -847,6 +864,7 @@ def run_wiki_generation(
     skip_relations: set | None = None,
     type_order: list | None = None,
     preview_request: str | None = None,
+    request_budget: int = 0,
 ) -> None:
 
     # ── Статистика отбора ──
@@ -957,6 +975,7 @@ def run_wiki_generation(
             type_names_ru=type_names_ru,
             relations_labels=relations_labels,
             skip_relations=skip_relations,
+            request_budget=request_budget,
         )
         meta = {
                 "terms": above_min,
@@ -992,6 +1011,7 @@ def run_wiki_generation(
             type_names_ru=type_names_ru,
             relations_labels=relations_labels,
             skip_relations=skip_relations,
+            request_budget=request_budget,
         )
         return base_type, trans, result, count
 
@@ -1104,7 +1124,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python wiki.py --as-chapter --compile-chapters --type polished\n"
             "\n"
             "Единицы:\n"
-            "  --chunk-size — ТОКЕНЫ (оценка estimate_tokens);\n"
+            "  --chunk-size и --request_budget — ТОКЕНЫ (оценка estimate_tokens);\n"
             "  размеры текста в логах — СИМВОЛЫ;\n"
             "  --context-chunks / --top / --min-count — штуки/пороги count;\n"
             "  --near-distance — дистанция FTS5 NEAR, ТОКЕНЫ (природа FTS5);\n"
@@ -1220,10 +1240,20 @@ def build_parser() -> argparse.ArgumentParser:
     g_gen.add_argument(
         "--chunk-size",
         type=int,
-        default=350,
+        default=1000,
         metavar="N",
         help="Размер чанка для FTS5 индекса, ТОКЕНЫ (оценка; "
-             "по умолчанию: 350).",
+             "по умолчанию: 1000).",
+    )
+    g_gen.add_argument(
+        "--request_budget",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Бюджет запроса, ТОКЕНЫ (оценка): потолок user-запроса "
+             "статьи (данные термина + связи + фрагменты); промпт НЕ "
+             "входит; превышение — фрагменты обрезаются от хвоста; "
+             "0 = без ограничения (по умолчанию).",
     )
     # ── Co-occurrence ──
     parser.add_argument(
@@ -1517,6 +1547,7 @@ def main():
         relations_labels=wiki_cfg["relations_labels"],
         skip_relations=wiki_cfg["skip_relations"],
         type_order=wiki_cfg["type_order"],
+        request_budget=args.request_budget,
         logger=logger,
     )
 

@@ -325,8 +325,8 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
     # пакетная проверка: типы, бюджет запроса, порог count
     if form.get("types"):
         argv += ["--types", str(form["types"])]
-    if form.get("batch_size") not in (None, ""):
-        argv += ["--batch_size", str(form["batch_size"])]
+    if form.get("request_budget") not in (None, ""):
+        argv += ["--request_budget", str(form["request_budget"])]
     if form.get("threads") not in (None, ""):
         argv += ["--threads", str(form["threads"])]
     if form.get("count_threshold") not in (None, ""):
@@ -370,8 +370,8 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
         argv += ["--type", str(form["type"])]
     if form.get("two_pass"):
         argv.append("--two_pass")
-    if form.get("context_budget") not in (None, ""):
-        argv += ["--context_budget", str(form["context_budget"])]
+    if form.get("request_budget") not in (None, ""):
+        argv += ["--request_budget", str(form["request_budget"])]
     # review — канонический translate_check_llm_review.json
     # (выбор файла из web убран; его же читает «Правки»)
     if form.get("prompt_file"):
@@ -413,8 +413,8 @@ def build_translate_quality(form: dict, ctx: dict) -> list[str]:
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     # выходной файл фиксирован: tmp/translation_quality_assessment.md
-    if form.get("budget") not in (None, ""):
-        argv += ["--budget", str(form["budget"])]
+    if form.get("request_budget") not in (None, ""):
+        argv += ["--request_budget", str(form["request_budget"])]
     for name, flag in (("mode", "--mode"), ("chunk_size", "--chunk_size"),
                        ("chunks", "--chunks"), ("sample", "--sample"),
                        ("overlap", "--overlap"), ("threads", "--threads")):
@@ -476,6 +476,7 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
                        ("context_chunks", "--context-chunks"),
                        ("near_distance", "--near-distance"),
                        ("chunk_size", "--chunk-size"),
+                       ("request_budget", "--request_budget"),
                        ("co_occurrence_top", "--co-occurrence-top"),
                        ("retries", "--retries"), ("timeout", "--timeout"),
                        ("threads", "--threads")):

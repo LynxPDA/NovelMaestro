@@ -1886,7 +1886,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const inp = x._input || x;
       return (inp && inp._sel) || inp;
     };
-    const budgetIn = fieldInput(inputs.budget);
+    const budgetIn = fieldInput(inputs.request_budget);
     const typeSel = fieldInput(inputs.type);
     const modeSel = fieldInput(inputs.mode);
     let tree = null;

@@ -586,10 +586,10 @@ def test_applies_when_set(global_env):
 def test_applicable_form_drops_other_modes_fields(global_env):
     """Из формы стадии уходят поля чужого режима; LLM-конфиг и профиль — нет."""
     got = S.applicable_form("ner_check", {
-        "passes": "whole", "types": "Person", "batch_size": "65536",
+        "passes": "whole", "types": "Person", "request_budget": "65536",
         "rag_terms": "师父", "rag_budget": "1200", "start": "3", "end": "7",
         "host": "http://x/v1", "threads": "4", "profile": "p1"})
-    assert got["types"] == "Person" and got["batch_size"] == "65536"
+    assert got["types"] == "Person" and got["request_budget"] == "65536"
     for name in ("rag_terms", "rag_budget", "start", "end"):
         assert name not in got, name
     assert got["host"] == "http://x/v1" and got["profile"] == "p1"

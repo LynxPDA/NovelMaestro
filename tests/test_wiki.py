@@ -544,3 +544,30 @@ def test_build_article_prompts():
         item, [], [("Другой", "Location", 2)], "Location",
         "Система {translation} {relations_label}")
     assert rel_label.upper() in user2 and "Другой" in user2
+
+
+def test_build_article_prompts_request_budget():
+    """Бюджет запроса wiki: фрагменты обрезаются от хвоста (промпт НЕ
+    вычитается); 0 = без ограничения."""
+    item = {"term": "Мир", "type": "Location",
+            "translation": "Мир", "count": 3}
+    frags = ["А" * 100, "Б" * 100, "В" * 100]
+    # без бюджета — все три фрагмента целиком (в пределах 1500 симв.)
+    _s0, user0 = WIKI.build_article_prompts(
+        item, frags, [], "Location", "Система")
+    for ch in ("А", "Б", "В"):
+        assert ch * 100 in user0
+    # бюджет 50 токенов: кириллица ~0.33 токена/символ → первый
+    # фрагмент (34 ток.) влезает целиком, второй режется до остатка,
+    # третий не помещается вовсе
+    _s1, user1 = WIKI.build_article_prompts(
+        item, frags, [], "Location", "Система", request_budget=50)
+    assert "А" * 100 in user1
+    assert "Б" * 100 not in user1 and "Б" in user1   # второй обрезан
+    assert "В" not in user1
+    # бюджет 10 токенов: первый фрагмент обрезан до ~30 символов;
+    # данные термина на месте (промпт не входит в бюджет)
+    _s2, user2 = WIKI.build_article_prompts(
+        item, frags, [], "Location", "Система", request_budget=10)
+    assert "ДАННЫЕ ТЕРМИНА" in user2
+    assert "А" * 100 not in user2 and "Б" not in user2

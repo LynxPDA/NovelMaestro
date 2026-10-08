@@ -9,6 +9,7 @@ import json
 import sys
 import unicodedata
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -112,9 +113,9 @@ def seam(monkeypatch):
     return rec
 
 
-def make_stage(**profile_kw) -> core_stage.Stage:
+def make_stage(**profile_kw: Any) -> core_stage.Stage:
     """Контекст стадии для тестов: лог заглушен, профиль — какой попросили."""
-    prof = {"base_url": "http://h", "model": "m"}
+    prof: dict[str, Any] = {"base_url": "http://h", "model": "m"}
     prof.update(profile_kw)
     return core_stage.Stage(name="translate_check_llm", logger=SilentLog(),
                             profile=core_stage.LlmProfile(**prof))
@@ -452,6 +453,8 @@ def test_main_check_writes_review_and_params(tmp_path, monkeypatch):
     assert e["file"].endswith("polished.txt")
     params = doc["params"]
     assert params["тип файлов"] == "polished" and params["потоки"] == 4
+    # бюджет запроса — из реестра (25000), русское имя params как в ner_check
+    assert params["бюджет запроса"] == 25000
     # повторный прогон: дубль не добавляется
     rc = FE.main(["--host", "http://x", "--api_key", "k", "--model", "m",
                   "--chapters_dir", ch_dir, "--start", "1", "--end", "1",
