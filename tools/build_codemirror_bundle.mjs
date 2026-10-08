@@ -41,7 +41,7 @@ const UMD_NAME = "CMBundle"; // имя было в бандле раньше —
  *   xml       — fb2, opf, ncx, xhtml (служебка epub и сборка fb2)
  *   python    — был в списке раньше, оставлен как есть
  *   properties — .env книги во «Файлах»: тот же KEY=VALUE с комментариями «#»
- *   prompts  — язык разметки промптов NovelMaestro: строки-комментарии «#…»
+ *   prompt   — язык разметки промптов NovelMaestro: строки-комментарии «#…»
  *              вне тегов — серым (meta), теги секций <system>/<translate> —
  *              tagName, подстановки {ner_block} — переменные, текст внутри
  *              тегов размечается как markdown (встроенный в язык подсветчик).
@@ -71,7 +71,7 @@ const PACKAGES = {
 };
 
 /* Точка входа бандла. API — тот, что читает SPA: каркас редактора, поиск и
- * `langs` (имя → функция-расширение), включая язык промптов `prompts`. */
+ * `langs` (имя → функция-расширение), включая язык промптов `prompt`. */
 const ENTRY = `import { basicSetup } from "codemirror";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -94,8 +94,12 @@ import { tags } from "@lezer/highlight";
 
 /* язык промптов NovelMaestro: построчный разбор (StreamLanguage)
  *   «# …» в начале строки вне тегов — комментарий (tags.meta — серый);
- *   <тег> / </тег> полной строкой — тег секции (tags.tagName);
+ *   <тег> / </тег> полной строкой — тег секции (tags.tagName) — любые
+ *   имена, не только известные стадии; <<<МАРКЕР>>> — тоже тег;
+ *   строки JSON-блока внутри тега (от строки, начинающейся с { или [,
+ *   до баланса скобок) — tags.string, подстановки внутри не теряются;
  *   {имя_плейсхолдера} — подстановка (tags.atom), в любом месте;
+ *   строки JSON-блока внутри тега — tags.string (баланс скобок);
  *   внутри блока тега текст размечается по-маркдауновски: жирный
  *   двойными звёздочками (tags.strong), встроенный код в обратных
  *   кавычках (tags.escape).
@@ -109,11 +113,20 @@ const PROMPT_TOKEN_TABLE = {
   promptVar: tags.atom,
   promptStrong: tags.strong,
   promptMono: tags.escape,
+  promptJson: tags.string,
 };
 
 function promptToken(stream, state) {
   if (stream.sol()) {
     const trimmed = stream.string.trim();
+    if (/^<{3}[A-Z_]+>{3}$/.test(trimmed)) {
+      // маркер машины (<<<QUALITY>>>): тег, глубину блоков не меняет
+      state.md = state.depth > 0;
+      state.lineJson = false;
+      state.jsonDepth = 0;
+      stream.skipToEnd();
+      return "promptTag";
+    }
     if (/^<\\/?[A-Za-z_][\\w:-]*>$/.test(trimmed)) {
       if (trimmed.charAt(1) === "/") {
         state.md = state.depth > 0;
@@ -122,16 +135,37 @@ function promptToken(stream, state) {
         state.depth += 1;
         state.md = true;
       }
+      state.lineJson = false;
+      state.jsonDepth = 0;
       stream.skipToEnd();
       return "promptTag";
     }
     state.md = state.depth > 0;
+    state.lineJson = false;
+    if (state.md) {
+      if (!state.jsonDepth && /^[\\[{]/.test(trimmed)
+          && !/^\\{[a-z_][a-z0-9_]*\\}$/.test(trimmed)) {
+        // первая строка JSON-блока (однострочный — тоже: баланс 0)
+        state.lineJson = true;
+        state.jsonDepth = Math.max(0, netBrackets(trimmed));
+      } else if (state.jsonDepth) {
+        state.lineJson = true;
+        state.jsonDepth = Math.max(0, state.jsonDepth + netBrackets(trimmed));
+      }
+    }
     if (trimmed.startsWith("#")) {
+      // комментарий обрывает и недокрытый json-блок
+      state.jsonDepth = 0;
       stream.skipToEnd();
       return "promptComment";
     }
   }
   if (stream.match(/\\{[a-z_][a-z0-9_]*\\}/)) return "promptVar";
+  if (state.lineJson) {
+    // строка формата: весь остаток строки одной краской (string)
+    stream.skipToEnd();
+    return "promptJson";
+  }
   if (state.md) {
     if (stream.match(/\\*\\*[^*\\n]+\\*\\*/)) return "promptStrong";
     if (stream.match(/\`[^\`\\n]+\`/)) return "promptMono";
@@ -140,10 +174,21 @@ function promptToken(stream, state) {
   return null;
 }
 
+/* баланс скобок строки: открыто минус закрыто (без учёта строк JSON —
+ * для подсветки промптов достаточно) */
+function netBrackets(s) {
+  let n = 0;
+  for (const c of s) {
+    if (c === "{" || c === "[") n += 1;
+    else if (c === "}" || c === "]") n -= 1;
+  }
+  return n;
+}
+
 const promptMode = {
-  name: "prompts",
+  name: "prompt",
   token: promptToken,
-  startState: () => ({ depth: 0, md: false }),
+  startState: () => ({ depth: 0, md: false, jsonDepth: 0, lineJson: false }),
   tokenTable: PROMPT_TOKEN_TABLE,
 };
 
@@ -154,7 +199,7 @@ const langs = {
   html: htmlMixed,
   json,
   markdown,
-  prompts: () => StreamLanguage.define(promptMode),
+  prompt: () => StreamLanguage.define(promptMode),
   properties: () => StreamLanguage.define(properties),
   python,
   xml,
