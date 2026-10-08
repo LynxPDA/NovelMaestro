@@ -41,9 +41,15 @@ const UMD_NAME = "CMBundle"; // имя было в бандле раньше —
  *   xml       — fb2, opf, ncx, xhtml (служебка epub и сборка fb2)
  *   python    — был в списке раньше, оставлен как есть
  *   properties — .env книги во «Файлах»: тот же KEY=VALUE с комментариями «#»
+ *   prompts  — язык разметки промптов NovelMaestro: строки-комментарии «#…»
+ *              вне тегов — серым (meta), теги секций <system>/<translate> —
+ *              tagName, подстановки {ner_block} — переменные, текст внутри
+ *              тегов размечается как markdown (встроенный в язык подсветчик).
+ *              Раньше разметку промпта показывал только предпросмотр запроса;
+ *              редактору промптов «plain text» её не показывал вовсе.
  * Jinja (е и lang-jinja, и legacy jinja2) НЕ добавлен: промпты NovelMaestro —
  * не шаблоны Jinja (`{{ … }}`), а псевдо-XML с подстановками `{имя}`; режим
- * подсветил бы не то. Разметку промпта показывает предпросмотр запроса. */
+ * подсветил бы не то. */
 const PACKAGES = {
   codemirror: "6.0.2",
   "@codemirror/commands": "6.11.1",
@@ -65,9 +71,7 @@ const PACKAGES = {
 };
 
 /* Точка входа бандла. API — тот, что читает SPA: каркас редактора, поиск и
- * `langs` (имя → функция-расширение). Отдельного «prompt» здесь нет: у файлов
- * промптов расширение .txt, а их разметка (<translate>, {ner_block}) — дело
- * предпросмотра запроса, редактору языка промптов больше не назначается. */
+ * `langs` (имя → функция-расширение), включая язык промптов `prompts`. */
 const ENTRY = `import { basicSetup } from "codemirror";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -88,6 +92,61 @@ import { yaml } from "@codemirror/lang-yaml";
 import { properties } from "@codemirror/legacy-modes/mode/properties";
 import { tags } from "@lezer/highlight";
 
+/* язык промптов NovelMaestro: построчный разбор (StreamLanguage)
+ *   «# …» в начале строки вне тегов — комментарий (tags.meta — серый);
+ *   <тег> / </тег> полной строкой — тег секции (tags.tagName);
+ *   {имя_плейсхолдера} — подстановка (tags.atom), в любом месте;
+ *   внутри блока тега текст размечается по-маркдауновски: жирный
+ *   двойными звёздочками (tags.strong), встроенный код в обратных
+ *   кавычках (tags.escape).
+ * Тег пишется только полной строкой (конвенция промптов), поэтому «<» и «{»
+ * внутри текста правил подсветку не ломают. Глубина блоков ведётся в
+ * state.depth: открытие <тег> +1, закрытие </тег> −1, строки между — md.
+ * ВНИМАНИЕ: тело ниже — шаблонная строка, бэкслеши в regexp удвоены. */
+const PROMPT_TOKEN_TABLE = {
+  promptTag: tags.tagName,
+  promptComment: tags.meta,
+  promptVar: tags.atom,
+  promptStrong: tags.strong,
+  promptMono: tags.escape,
+};
+
+function promptToken(stream, state) {
+  if (stream.sol()) {
+    const trimmed = stream.string.trim();
+    if (/^<\\/?[A-Za-z_][\\w:-]*>$/.test(trimmed)) {
+      if (trimmed.charAt(1) === "/") {
+        state.md = state.depth > 0;
+        state.depth = Math.max(0, state.depth - 1);
+      } else {
+        state.depth += 1;
+        state.md = true;
+      }
+      stream.skipToEnd();
+      return "promptTag";
+    }
+    state.md = state.depth > 0;
+    if (trimmed.startsWith("#")) {
+      stream.skipToEnd();
+      return "promptComment";
+    }
+  }
+  if (stream.match(/\\{[a-z_][a-z0-9_]*\\}/)) return "promptVar";
+  if (state.md) {
+    if (stream.match(/\\*\\*[^*\\n]+\\*\\*/)) return "promptStrong";
+    if (stream.match(/\`[^\`\\n]+\`/)) return "promptMono";
+  }
+  stream.next();
+  return null;
+}
+
+const promptMode = {
+  name: "prompts",
+  token: promptToken,
+  startState: () => ({ depth: 0, md: false }),
+  tokenTable: PROMPT_TOKEN_TABLE,
+};
+
 /* вложенные языки html-файла (стили и скрипты внутри разметки) */
 const htmlMixed = () => langHtml({ javascript: javascript(), css: css() });
 
@@ -95,6 +154,7 @@ const langs = {
   html: htmlMixed,
   json,
   markdown,
+  prompts: () => StreamLanguage.define(promptMode),
   properties: () => StreamLanguage.define(properties),
   python,
   xml,
