@@ -534,13 +534,13 @@ def test_ner_check_apply_dry_run_and_real(tmp_path, monkeypatch):
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Линь Фан"
     assert not (tmp_path / "tmp" / "ner.json.bak").exists()
-    # реальное применение: бэкап + правка + лог с этапами
+    # реальное применение: правка + лог с этапами
     rc = NC.main(["--apply", "--input", "ner.json"])
     assert rc == 0
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
     assert data[2]["translation"] == "Огненный шар"   # отклонённое цело
-    assert (tmp_path / "tmp" / "ner.json.bak").exists()
+    assert not (tmp_path / "tmp" / "ner.json.bak").exists()  # бэкапов нет
     # отчёт ner_changes.md удалён (не нужен) — файл не создаётся
     assert not (tmp_path / "ner_changes.md").exists()
     # флаги «применено» сохранены в файл правок
@@ -557,7 +557,7 @@ def test_ner_check_apply_dry_run_and_real(tmp_path, monkeypatch):
 
 
 def test_ner_check_apply_no_bak(tmp_path, monkeypatch):
-    """--no-bak: ner.json обновляется, .bak не создаётся."""
+    """Флаг --no-bak удалён: ner.json обновляется, .bak не создаётся."""
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
     doc = {"created": "t", "input": "ner.json", "entries": [
@@ -568,23 +568,11 @@ def test_ner_check_apply_no_bak(tmp_path, monkeypatch):
     ensure_tmp(tmp_path)
     (tmp_path / "tmp" / "ner_review.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
-    rc = NC.main(["--apply", "--no-bak", "--input", "ner.json"])
+    rc = NC.main(["--apply", "--input", "ner.json"])
     assert rc == 0
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
     assert not (tmp_path / "tmp" / "ner.json.bak").exists()
-    # без --no-bak бэкап создаётся (по умолчанию): новая правка
-    doc2 = {"created": "t", "input": "ner.json", "entries": [
-        {"stage": "Весь глоссарий", "term": "青云宗", "field": "translation",
-         "old": "Секта Цинъюнь", "new": "Секта Цинъюнь (гл.)", "reason": "r",
-         "status": "принять", "applied": False},
-    ]}
-    ensure_tmp(tmp_path)
-    (tmp_path / "tmp" / "ner_review.json").write_text(
-        json.dumps(doc2, ensure_ascii=False), encoding="utf-8")
-    rc = NC.main(["--apply", "--input", "ner.json"])
-    assert rc == 0
-    assert (tmp_path / "tmp" / "ner.json.bak").exists()
 
 
 def test_ner_check_apply_legacy_patches_array(tmp_path, monkeypatch):
@@ -605,7 +593,7 @@ def test_ner_check_apply_legacy_patches_array(tmp_path, monkeypatch):
 
 def test_ner_check_delete_end_to_end(tmp_path, monkeypatch):
     """LLM помечает термин лишним → review-запись «удаление» → --apply
-    вычёркивает его из ner.json (с бэкапом); dry-run ничего не пишет."""
+    вычёркивает его из ner.json; dry-run ничего не пишет."""
     monkeypatch.chdir(tmp_path)
     _write_ner(tmp_path)
     resp = ('[{"term": "林凡", "translation": "Линь Фань", "reason": "pinyin"},'
@@ -634,7 +622,7 @@ def test_ner_check_delete_end_to_end(tmp_path, monkeypatch):
     doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     assert [e["applied"] for e in doc["entries"]] == [True, True]
-    assert (tmp_path / "tmp" / "ner.json.bak").exists()
+    assert not (tmp_path / "tmp" / "ner.json.bak").exists()
 
 
 def test_ner_check_auto_apply_whole(tmp_path, monkeypatch):
@@ -649,7 +637,7 @@ def test_ner_check_auto_apply_whole(tmp_path, monkeypatch):
     assert rc == 0
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
-    assert (tmp_path / "tmp" / "ner.json.bak").exists()
+    assert not (tmp_path / "tmp" / "ner.json.bak").exists()
     doc = json.loads((tmp_path / "tmp" / "ner_review.json")
                      .read_text(encoding="utf-8"))
     assert doc["entries"][0]["applied"] is True
@@ -676,7 +664,7 @@ def test_ner_check_auto_apply_whole_only(tmp_path, monkeypatch):
     assert len(calls) == 1
     data = json.loads((tmp_path / "ner.json").read_text(encoding="utf-8"))
     assert data[0]["translation"] == "Лин Фань"
-    assert (tmp_path / "tmp" / "ner.json.bak").exists()
+    assert not (tmp_path / "tmp" / "ner.json.bak").exists()
 
 
 def test_ner_check_passes_all_rejected(tmp_path, monkeypatch):

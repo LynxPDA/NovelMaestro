@@ -603,6 +603,13 @@ class JobManager:
                 job.status = "failed"
             job.notify(("status", job.status))
             self._persist()
+            # точка истории по событию завершения (исключения глотаются
+            # внутри: история не должна ломать отчёт о запуске)
+            try:
+                from web.history import on_job_finished
+                on_job_finished(job)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("История: %s", exc)
 
     def stop(self, job_id: str) -> Job | None:
         """Остановить запуск вместе с потомками: POSIX — SIGTERM группе

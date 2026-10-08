@@ -60,6 +60,17 @@ ROLES: tuple[dict, ...] = (
         ),
     },
     {
+        "role": "история проектов (контрольные точки)",
+        "where": "web/history.py",
+        # роль обязательна для вкладки «История»: точки на формате git,
+        # а бинарника git в Docker/portable нет — чистый dulwich один
+        "required": True,
+        "candidates": (
+            {"pip": "dulwich", "module": "dulwich",
+             "label": "Dulwich", "note": "git на чистом Python, без бинарника"},
+        ),
+    },
+    {
         "role": "прогресс-бары CLI",
         "where": "core/stage.py (Progress)",
         # счётчик прогресса общий; бар активен только в CLI: в web-режиме

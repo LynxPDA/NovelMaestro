@@ -1907,14 +1907,6 @@ input[type="number"] {
   border-color: var(--accent);
   color: var(--accent);
 }
-.rv-bak {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-dim);
-  cursor: pointer;
-}
 .rv-ta {
   font-family: var(--mono);
   font-size: 13px;
@@ -2941,4 +2933,136 @@ body[data-editor-theme="light"] .editor-area {
   border: 0;
   background: var(--surface-2);
   border-radius: var(--radius);
+}
+
+/* ── История: контрольные точки проекта (локальный git) ─────────────── */
+.history-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.history-list {
+  display: flex;
+  flex-direction: column;
+}
+/* строка точки: маркер-линия слева — визуальная «ось времени» */
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.history-row:first-child .history-marker {
+  background: var(--accent);
+}
+.history-marker {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border);
+  flex: none;
+}
+.history-main {
+  flex: 1;
+  min-width: 0;
+}
+.history-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.history-label {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-kind {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.history-kind-apply {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.history-kind-restore {
+  border-color: var(--warn, #b58900);
+  color: var(--warn, #b58900);
+}
+.history-time {
+  font-size: 12px;
+  color: var(--muted);
+}
+.history-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+/* бейджи статусов файлов в сравнении */
+.history-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.history-badge.history-add {
+  border-color: var(--ok, #2ea043);
+  color: var(--ok, #2ea043);
+}
+.history-badge.history-del {
+  border-color: var(--err, #c0392b);
+  color: var(--err, #c0392b);
+}
+.history-lines {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.history-diff-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.history-diff-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 55vh;
+  overflow: auto;
+}
+.history-diff-file summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 5px 6px;
+  border-radius: var(--radius);
+}
+.history-diff-file summary:hover {
+  background: var(--surface-2);
+}
+.history-diff-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-patch {
+  margin: 4px 0 0;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 40vh;
+  overflow: auto;
 }

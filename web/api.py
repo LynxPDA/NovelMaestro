@@ -52,6 +52,7 @@ def register(router: Router, host: str) -> None:
     router.add("POST", "/api/logout", api_common._logout)
     api_projects._register_hub(router)
     api_files._register_files(router)
+    api_files._register_history(router)
     api_glossary._register_glossary(router)
     api_env._register_settings(router)
     api_assets._register_logs(router)

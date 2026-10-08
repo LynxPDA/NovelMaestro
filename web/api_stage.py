@@ -141,6 +141,16 @@ def _jobs_start(ctx: dict) -> dict:
     if api_key:
         # ключ — только в окружении процесса
         env["LLM_API_KEY"] = str(api_key)
+    # точка истории ДО применения правок проверки (снимок до изменений;
+    # точка «после» создаётся по завершении запуска в web.history.on_job_finished)
+    if (ctx.get("review_apply") and params.get("apply")
+            and not params.get("dry_run")):
+        try:
+            from web import history as hs
+            if core_settings.effective("HISTORY_ON_APPLY"):
+                hs.create(pdir, "Перед применением правок", "apply")
+        except Exception as exc:  # noqa: BLE001  история не ломает запуск
+            log.warning("Точка истории не создана: %s", exc)
     job = jm.start(action, title, project, argv, pdir, env=env)
     return {"ok": True, "job": _job_payload(job)}
 

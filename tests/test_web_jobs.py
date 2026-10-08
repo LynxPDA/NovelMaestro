@@ -1378,15 +1378,13 @@ def test_build_ner_check_flags():
     assert "--fields" not in argv2
 
 
-def test_ner_check_no_apply_no_bak_fields():
+def test_ner_check_no_apply_fields():
     """auto_apply/no_bak убраны из формы Запусков (применение —
     только в «Проверках»); build больше не шлёт --auto-apply/--no-bak."""
     names = {f["name"] for f in STAGE_SPECS["ner_check"]["fields"]}
     assert "auto_apply" not in names and "no_bak" not in names
-    argv = build_command(
-        "ner_check", {"auto_apply": True, "no_bak": True}, {})
+    argv = build_command("ner_check", {"auto_apply": True}, {})
     assert "--auto-apply" not in argv
-    assert "--no-bak" not in argv
 
 
 def test_ner_check_passes_modes():
@@ -1486,29 +1484,23 @@ def test_build_ner_check_types_chips_value():
 
 
 def test_build_ner_check_review_apply_flags():
-    """Путь «Проверки» (ctx[review_apply]): apply/dry_run/no_bak
-    собираются в argv — иначе POST /api/ner/review/apply запускал
-    полный LLM-прогон вместо применения правок. Без маркера
-    (форма Запусков) флаги по-прежнему не собираются."""
+    """Путь «Проверки» (ctx[review_apply]): apply/dry_run собираются
+    в argv — иначе POST /api/ner/review/apply запускал полный LLM-прогон
+    вместо применения правок. Без маркера (форма Запусков) флаги
+    по-прежнему не собираются."""
     argv = build_command(
         "ner_check", {"apply": True, "dry_run": True},
         {"review_apply": True})
     assert "--apply" in argv and "--dry-run" in argv
-    argv2 = build_command(
-        "ner_check", {"apply": True, "no_bak": True},
-        {"review_apply": True})
-    assert "--apply" in argv2 and "--no-bak" in argv2
     # без маркера — флагов нет (форма Запусков их не содержит)
     argv3 = build_command("ner_check", {"apply": True}, {})
     assert "--apply" not in argv3 and "--dry-run" not in argv3
 
 
 def test_build_translate_check_llm_no_bak():
-    """Флаги применения/бэкапов из «Запусков» всегда выключены."""
+    """Флаг бэкапов удалён вместе с бэкапами: в argv не попадает."""
     argv = build_command("translate_check_llm", {"no_bak": True}, {})
     assert "--no-bak" not in argv
-    argv2 = build_command("translate_check_llm", {"no_bak": False}, {})
-    assert "--no-bak" not in argv2
 
 
 def test_build_translate_check_llm_flags():

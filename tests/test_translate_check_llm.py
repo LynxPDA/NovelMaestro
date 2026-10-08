@@ -281,24 +281,7 @@ def test_apply_fix_entries_statuses_backup_and_dry_run(tmp_path):
                                             SilentLog())
     assert (len(applied), skipped) == (1, 1)
     assert "правленый текст" in fp.read_text(encoding="utf-8")
-    assert (fp.parent / "polished.txt.bak").exists()
     assert entries[0]["applied"] and entries[0]["applied_at"]
-
-
-def test_apply_fix_entries_no_bak(tmp_path):
-    """no_bak=True: файл обновляется, .bak не создаётся."""
-    ch_dir, cmap = _mk_chapters(tmp_path, {1: "первый текст главы один."})
-    fp = Path(ch_dir) / "00000_1_t" / "polished.txt"
-    entries = [
-        {"stage": "s", "chapter": 1, "file": str(fp), "old": "первый текст",
-         "new": "правленый текст", "type": "typo", "reason": "",
-         "status": C.REVIEW_ACCEPT, "applied": False},
-    ]
-    applied, skipped = FE.apply_fix_entries(entries, "polished", cmap,
-                                            SilentLog(), no_bak=True)
-    assert (len(applied), skipped) == (1, 0)
-    assert "правленый текст" in fp.read_text(encoding="utf-8")
-    assert not (fp.parent / "polished.txt.bak").exists()
 
 
 def test_apply_fix_entries_stale_fragment_note(tmp_path):
@@ -358,7 +341,6 @@ def test_apply_fix_entries_reattach_unique(tmp_path):
     fp1 = Path(ch_dir) / "00000_1_t" / "polished.txt"
     fp2 = Path(ch_dir) / "00000_2_t" / "polished.txt"
     assert "йстрово" not in fp1.read_text(encoding="utf-8")
-    assert (fp1.parent / "polished.txt.bak").exists()
     assert not (fp2.parent / "polished.txt.bak").exists()
 
 
@@ -489,7 +471,7 @@ def test_main_apply_statuses_backup_and_log(tmp_path, monkeypatch):
     assert rc == 0
     text = Path(fp).read_text(encoding="utf-8")
     assert "правленый текст" in text and "главы один" in text  # reject жив
-    assert (Path(fp).parent / "polished.txt.bak").exists()
+    assert not (Path(fp).parent / "polished.txt.bak").exists()
     doc = json.loads(Path(review).read_text(encoding="utf-8"))
     assert doc["entries"][0]["applied"] is True
     assert doc["entries"][1]["applied"] is False
@@ -539,7 +521,7 @@ def test_main_auto_apply_and_fail_fast(tmp_path, monkeypatch):
     assert rc == 0
     fp = Path(ch_dir) / "00000_1_t" / "polished.txt"
     assert "правкой здесь" in fp.read_text(encoding="utf-8")
-    assert (fp.parent / "polished.txt.bak").exists()
+    assert not (fp.parent / "polished.txt.bak").exists()
     doc = json.loads(Path(review).read_text(encoding="utf-8"))
     assert doc["entries"][0]["applied"] is True
     # авто-режим + dry-run: файлы не меняются

@@ -24,8 +24,7 @@ term+action+field+old+new).
 
 Артефакты: ner_review.json (накопительный файл правок; отчёты
 ner_report.md и ner_changes.md удалены — не нужны). --apply
-применяет правки ИЗ ФАЙЛА (без LLM): бэкап ner.json.bak;
---dry-run — без записи.
+применяет правки ИЗ ФАЙЛА (без LLM); --dry-run — без записи.
 Legacy-формат (простой массив патчей, старый ner_patches.json)
 понимается автоматически.
 
@@ -46,7 +45,6 @@ import argparse
 import copy
 import json
 import os
-import shutil
 import sys
 import threading
 import unicodedata
@@ -125,17 +123,6 @@ DEFAULT_REVIEW = "tmp/ner_review.json"
 # предельный размер ответа сервера — общий настройка MAX_TOKENS
 
 
-def _bak_path(input_path: str) -> str:
-    """Бэкап глоссария — рабочий файл: ner.json.bak в tmp/ проекта
-    (рядом с review-файлом), имя исходника сохраняется. tmp/
-    создаётся при необходимости (применение может идти раньше
-    любой LLM-стадии)."""
-    try:
-        os.makedirs("tmp", exist_ok=True)
-    except OSError as exc:
-        raise OSError(f"Не удалось создать tmp/: {exc}") from exc
-    base = os.path.basename(input_path)
-    return os.path.join("tmp", base + ".bak")
 DEFAULT_REQUEST_BUDGET = 65536  # ТОКЕНОВ (оценка estimate_tokens)
 # Потолок параллельных запросов (батчи и RAG-термины): справка обещает
 # «1..16» — сотня одновременных запросов на сервер недопустима
@@ -360,9 +347,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="С --apply/--auto-apply: показать правки без "
                         "записи файлов.")
-    p.add_argument("--no-bak", action="store_true",
-                   help="Не создавать бэкап <файл>.bak при применении "
-                        "(по умолчанию создаётся).")
     # сервер: CLI > os.environ > общий .env (общий блок флагов — core.stage);
     # собственных таймаутов и max_tokens у стадии больше нет
     add_llm_args(p, aliases=True)
@@ -909,7 +893,6 @@ def do_check(args, stage) -> int:
     if entries is None:
         entries = []
     added_total = 0
-    backed_up = False
 
     def save_review():
         save_review_file(args.review, args.input, created, entries,
@@ -926,7 +909,7 @@ def do_check(args, stage) -> int:
 
     def auto_apply():
         """Авто-режим: применить принятые неприменённые правки сразу."""
-        nonlocal data, backed_up
+        nonlocal data
         if args.dry_run:
             d2, e2 = copy.deepcopy(data), copy.deepcopy(entries)
             applied, skipped = apply_ner_patches(d2, e2)
@@ -938,17 +921,11 @@ def do_check(args, stage) -> int:
             return
         applied, skipped = apply_ner_patches(data, entries, logger)
         if applied:
-            if not args.no_bak and not backed_up:
-                bak = _bak_path(args.input)
-                shutil.copy2(args.input, bak)
-                backed_up = True
-                logger.info(f"💾 Бэкап: {bak}")
             atomic_write(args.input,
                          json.dumps(data, ensure_ascii=False, indent=2))
         save_review()
         logger.info(f"Авто-применение: применено {len(applied)}, "
-                    f"пропущено {skipped}"
-                    + (" (без бэкапа)" if args.no_bak else "") + ".")
+                    f"пропущено {skipped}.")
 
     # ── сбор задач (батчей): whole — один проход, types — по типам
     stage_tasks = []  # [(title, batch)]
@@ -1100,17 +1077,12 @@ def do_apply(args, logger) -> int:
                 logger.info(f"  · {prefix}{p['term']} [{p['field']}]: "
                             f"{p['old']!r} → {p['new']!r}")
         return 0
-    if not args.no_bak:
-        bak = _bak_path(args.input)
-        shutil.copy2(args.input, bak)
-        logger.info(f"💾 Бэкап: {bak}")
     atomic_write(args.input, json.dumps(data, ensure_ascii=False, indent=2))
     save_review_file(args.review, args.input,
                      (meta or {}).get("created")
                      or datetime.now().strftime("%Y-%m-%d %H:%M"),
                      entries, meta=meta)
-    logger.info(f"✅ ner.json обновлён ({len(applied)} правок"
-                + (" без бэкапа" if args.no_bak else "") + "); "
+    logger.info(f"✅ ner.json обновлён ({len(applied)} правок); "
                 f"флаги «применено» сохранены в {args.review}")
     return 0
 

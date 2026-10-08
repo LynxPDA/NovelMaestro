@@ -301,8 +301,6 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         for flag in ("apply", "auto_apply", "dry_run"):
             if form.get(flag):
                 argv.append(f"--{flag.replace('_', '-')}")
-        if form.get("no_bak"):
-            argv.append("--no-bak")
         return argv
     # вход и review — канонические ner.json / ner_review.json
     # (выбор файлов из web убран)
@@ -361,8 +359,6 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
         for flag in ("apply", "auto_apply", "dry_run"):
             if form.get(flag):
                 argv.append(f"--{flag.replace('_', '-')}")
-        if form.get("no_bak"):
-            argv.append("--no-bak")
         return argv
     argv += _range_argv("translate_check_llm", form)
     # папка глав всегда ./chapters (дефолт скрипта, cwd = проект)

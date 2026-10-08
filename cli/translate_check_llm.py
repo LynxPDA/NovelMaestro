@@ -4,8 +4,7 @@ translate_check_llm.py — проверка перевода через LLM (б�
 поиск и исправление ошибок перевода в главах. Вместо генерации
 fix-скрипта пишется человекочитаемый накопительный файл правок
 translate_check_llm_review.json (как ner_review.json): человек правит
-статусы «принять»/«отклонить», затем --apply применяет только принятые
-(бэкап <файл>.bak).
+статусы «принять»/«отклонить», затем --apply применяет только принятые.
 
 Примеры:
   python3 translate_check_llm.py --start 1 --end 50  # поиск → review.json
@@ -18,7 +17,6 @@ import os
 import sys
 import re
 import json
-import shutil
 import argparse
 import threading
 import unicodedata
@@ -761,15 +759,14 @@ def resolve_entry_path(entry, file_type, chapter_map, logger=None):
 
 
 def apply_fix_entries(entries, file_type, chapter_map, logger,
-                      dry_run=False, no_bak=False):
+                      dry_run=False):
     """Применение принятых неприменённых правок к файлам глав.
     Две фазы: точная/типографическая (группировка по файлу, замены
     последовательные — apply_flex_fix), затем — для пропущенных —
     переаттестация: цитата ищется по ВСЕЙ книге (find_fragment_owner)
     и правка перепривязывается на главу только при РОВНО ОДНОМ
     совпадении на всю книгу (дрейф атрибуции LLM ±1; защита от
-    чужого текста). Бэкап <файл>.bak перед первой записью (кроме
-    no_bak=True). Помечает записи in-place: применено=True +
+    чужого текста). Помечает записи in-place: применено=True +
     «дата применения»; пропущенные получают note с причиной
     (из find_fragment_owner). Возвращает (applied, skipped)."""
     pending = [e for e in entries
@@ -812,8 +809,6 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
             logger.info(f"  ✔ Гл.{e['chapter']} [{e.get('type') or '?'}]: "
                         f"«{e['old'][:60]}» → «{e['new'][:60]}»")
         if changed and not dry_run:
-            if not no_bak:
-                shutil.copy2(fp, fp + ".bak")
             atomic_write(fp, cur)
     # Фаза 2: переаттестация пропущенных — только однозначные по всей книге
     for e, claimed in reattached:
@@ -853,8 +848,6 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
             skipped += 1
             continue
         if not dry_run:
-            if not no_bak:
-                shutil.copy2(fp2, fp2 + ".bak")
             atomic_write(fp2, nt)
         else:
             moved.append((e, claimed, e.get("file")))
@@ -938,9 +931,6 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                     help="Сразу применить найденное без человека.")
     ap.add_argument("--dry-run", dest="dry_run", action="store_true",
                     help="Предпросмотр: файлы не изменяются.")
-    ap.add_argument("--no-bak", dest="no_bak", action="store_true",
-                    help="Не создавать бэкапы <файл>.bak при применении "
-                        "(по умолчанию создаются).")
     # LLM
     ap.add_argument("--temperature", type=float, default=None,
                     help="Температура (иначе дефолт сервера).")
@@ -1011,14 +1001,12 @@ def do_apply(args, logger) -> int:
     if args.dry_run:
         applied, skipped = apply_fix_entries(entries, args.file_type,
                                              chapter_map, logger,
-                                             dry_run=True,
-                                             no_bak=args.no_bak)
+                                             dry_run=True)
         logger.info(f"DRY-RUN: было бы применено {len(applied)}, "
                     f"пропущено {skipped}. Файлы не изменены.")
         return 0
     applied, skipped = apply_fix_entries(entries, args.file_type,
-                                         chapter_map, logger,
-                                         no_bak=args.no_bak)
+                                         chapter_map, logger)
     logger.info(f"Итог: применено {len(applied)}, "
                 f"пропущено/отклонено {skipped}.")
     if not applied:
@@ -1029,10 +1017,8 @@ def do_apply(args, logger) -> int:
                      (meta or {}).get("created")
                      or datetime.now().strftime("%Y-%m-%d %H:%M"),
                      entries, meta=meta)
-    logger.info(f"✅ Главы обновлены ({len(applied)} правок"
-                + ("; без бэкапов" if args.no_bak
-                   else "; бэкапы <файл>.bak")
-                + f"); флаги «применено» сохранены в {args.review}")
+    logger.info(f"✅ Главы обновлены ({len(applied)} правок); "
+                f"флаги «применено» сохранены в {args.review}")
     return 0
 
 
@@ -1168,8 +1154,7 @@ def do_check(args, stage) -> int:
     if args.auto_apply and entries:
         applied, skipped = apply_fix_entries(entries, args.file_type,
                                              chapter_map, logger,
-                                             dry_run=args.dry_run,
-                                             no_bak=args.no_bak)
+                                             dry_run=args.dry_run)
         if args.dry_run:
             logger.info(f"DRY-RUN авто-применение: было бы "
                         f"{len(applied)}, пропущено {skipped}.")

@@ -59,8 +59,9 @@ def rows(installed):
 def test_roles_cover_the_documented_set():
     """Реестр держит ровно те роли, о которых говорит AGENTS §2."""
     assert ROLE_NAMES == ["HTTP-транспорт LLM", ".env-конфигурация",
-                         "поиск терминов по главам", "прогресс-бары CLI",
-                         "тесты"]
+                         "поиск терминов по главам",
+                         "история проектов (контрольные точки)",
+                         "прогресс-бары CLI", "тесты"]
 
 
 @pytest.mark.parametrize("role", ROLE_NAMES)
@@ -96,7 +97,8 @@ def test_required_roles_have_no_fallback():
     """Обязательные роли закрыты одним стандартным кандидатом без фолбэка."""
     required = [r for r in deps.ROLES if r["required"]]
     assert [r["role"] for r in required] == ["HTTP-транспорт LLM",
-                                            ".env-конфигурация"]
+                                            ".env-конфигурация",
+                                            "история проектов (контрольные точки)"]
     for row in required:
         assert len(row["candidates"]) == 1
         assert row["candidates"][0]["module"], "обязательная роль не фолбэк"
@@ -231,7 +233,7 @@ def test_missing_hint_empty_on_full_stack(rows):
 
 
 def test_missing_hint_lists_every_gap(installed):
-    installed("dotenv", "ahocorasick")
+    installed("dotenv", "ahocorasick", "dulwich")
     got = set(deps.missing_hint().split())
     assert got == {"httpx", "tqdm", "pytest", "pytest-xdist"}
 
@@ -278,7 +280,7 @@ def test_main_warns_about_required_role(capsys, installed):
 
 
 def test_main_reports_optional_packages(capsys, installed):
-    installed("httpx", "dotenv", "pytest", "xdist")
+    installed("httpx", "dotenv", "dulwich", "pytest", "xdist")
     assert deps.main([]) == 0
     out = capsys.readouterr().out
     assert "Опциональные библиотеки не установлены" in out

@@ -56,6 +56,7 @@ const PROJECT_TABS = [
   ["review", "Проверки"],
   ["chapters", "Главы"],
   ["search", "Поиск"],
+  ["history", "История"],
   ["status", "Статус"],
   ["config", "Настройки"],
   ["prompts", "Промпты"],
@@ -273,6 +274,7 @@ function viewProject(section, name, tab, job) {
     else if (st.view === "review") body = await reviewView();
     else if (st.view === "chapters") body = await chaptersView();
     else if (st.view === "search") body = await searchView();
+    else if (st.view === "history") body = await historyView();
     else if (st.view === "status") body = await statusView();
     else if (st.view === "config") body = await configView();
     else if (st.view === "prompts") body = await promptsView();
@@ -2983,16 +2985,6 @@ function viewProject(section, name, tab, job) {
         "Пробный прогон",
       );
       const applyBtn = h("button", { class: "btn btn-sm" }, "Применить");
-      const bakBox = h(
-        "label",
-        { class: "chk rv-bak" },
-        h("input", { type: "checkbox" }),
-        " не создавать .bak",
-      );
-      attachTooltip(
-        bakBox,
-        "Не создавать резервную копию файла перед применением правок",
-      );
       const body = h("div", { class: "review-card-body" });
       const stKey = `review:${kind}`;
       st.review[kind] = st.review[kind] || { mode: "list" };
@@ -3500,7 +3492,6 @@ function viewProject(section, name, tab, job) {
             body: {
               project: `${section}/${name}`,
               dry_run: dry,
-              no_bak: bakBox.querySelector("input").checked,
             },
           });
           toast(`${dry ? "Пробный прогон" : "Применение"}: запущено`);
@@ -3563,7 +3554,6 @@ function viewProject(section, name, tab, job) {
         { class: "review-actions" },
         dryBtn,
         applyBtn,
-        bakBox,
         h("span", { class: "spacer" }),
         saveBtn,
       );
@@ -4136,6 +4126,263 @@ function viewProject(section, name, tab, job) {
       pager.el,
       rows,
     );
+  }
+
+  /* ── История: контрольные точки проекта (локальный git) ─────────
+     Точки создаются вручную («＋ Контрольная точка»), перед применением
+     правок проверок и после успешных запусков (переключатели в
+     «Настройках» приложения). Восстановление к точке НЕ стирает
+     последующие: текущее состояние фиксируется точкой «Возврат к …»,
+     а файлы приводятся к выбранной точке. Дифф — таблицей файлов
+     (статус A/M/D и +/- строк), по клику — разворачивается текст
+     изменений. Источник данных — /api/history. */
+  async function historyView() {
+    const wrap = h("div", { class: "files-wrap history-wrap" });
+    const err = h("div", { class: "form-error" });
+    const list = h("div", { class: "history-list" });
+    const KIND_LABELS = {
+      manual: "вручную",
+      run: "запуск",
+      apply: "применение правок",
+      restore: "возврат",
+    };
+    let items = []; // [{sha,time,label,kind}]
+
+    function kindBadge(kind) {
+      return h(
+        "span",
+        { class: `history-kind history-kind-${kind}` },
+        KIND_LABELS[kind] || kind,
+      );
+    }
+
+    function whenText(c) {
+      const rel = UICore.relTime(c.time);
+      const abs = UICore.relTimeAbs(c.time);
+      return rel ? `${rel} · ${abs}` : abs;
+    }
+
+    /* модалка сравнения двух точек: слева таблица файлов, клик — дифф */
+    async function diffModal(cFrom, cTo) {
+      let data;
+      try {
+        data = await api(
+          `/history/diff?${new URLSearchParams({
+            project: `${section}/${name}`,
+            from: cFrom.sha,
+            to: cTo.sha,
+          })}`,
+        );
+      } catch (ex) {
+        err.textContent = ex.message;
+        return;
+      }
+      const STATUSES = { A: ["добавлен", "history-add"],
+                         M: ["изменён", "history-mod"],
+                         D: ["удалён", "history-del"] };
+      const rowsEl = h("div", { class: "history-diff-files" });
+      for (const f of data.files || []) {
+        const [stLabel, stClass] = STATUSES[f.status] || [f.status, ""];
+        const summary = h(
+          "summary",
+          {},
+          h("code", { class: "history-diff-path" }, f.path),
+          h("span", { class: `history-badge ${stClass}` }, stLabel),
+          h(
+            "span",
+            { class: "history-lines" },
+            f.status === "D"
+              ? `−${f.dels}`
+              : `+${f.adds}${f.dels ? ` −${f.dels}` : ""}`,
+          ),
+        );
+        const body = h(
+          "div",
+          { class: "history-diff-body" },
+          h("div", { class: "field-help" }, "Загрузка…"),
+        );
+        summary.addEventListener("click", async () => {
+          if (body.dataset.loaded || f.status === "D") return;
+          try {
+            const r = await api(
+              `/history/patch?${new URLSearchParams({
+                project: `${section}/${name}`,
+                from: cFrom.sha,
+                to: cTo.sha,
+                path: f.path,
+              })}`,
+            );
+            body.replaceChildren(
+              h("pre", { class: "history-patch" }, r.patch || ""),
+            );
+          } catch (ex) {
+            body.replaceChildren(h("div", { class: "form-error" }, ex.message));
+          }
+          body.dataset.loaded = "1";
+        });
+        rowsEl.append(h("details", { class: "history-diff-file" }, summary,
+          body));
+      }
+      if (!(data.files || []).length) {
+        rowsEl.append(h("div", { class: "card-hint" },
+          "Между этими точками изменений файлов нет"));
+      }
+      UIC.modal({
+        title: "Изменения между точками",
+        wide: true,
+        build: (close) => [
+          h("div", { class: "modal-text history-diff-head" },
+            h("div", {}, `С: ${cFrom.label} · ${whenText(cFrom)}`),
+            h("div", {}, `По: ${cTo.label} · ${whenText(cTo)}`)),
+          rowsEl,
+          h("div", { class: "modal-actions" },
+            h("button", { class: "btn btn-ghost", onclick: () => close() },
+              "Закрыть")),
+        ],
+      });
+    }
+
+    function restoreModal(c) {
+      UIC.modal({
+        title: "Возврат к контрольной точке",
+        build: (close) => {
+          const errM = h("div", { class: "form-error" });
+          return [
+            h("div", { class: "modal-text" },
+              `Файлы проекта будут приведены к состоянию точки ` +
+              `«${c.label}» (${whenText(c)}).`,
+              h("br"),
+              `Текущее состояние не пропадёт: перед возвратом оно ` +
+              `фиксируется точкой «Возврат к…» — последующие точки ` +
+              `останутся в истории.`),
+            errM,
+            h("div", { class: "modal-actions" },
+              h("button", { class: "btn btn-ghost",
+                onclick: () => close() }, "Отмена"),
+              h("button", { class: "btn btn-primary", onclick: async () => {
+                try {
+                  await api("/history/restore", { method: "POST",
+                    body: { project: `${section}/${name}`, sha: c.sha } });
+                  toast("Возврат выполнен — создана точка «Возврат к…»");
+                  close();
+                  await load();
+                } catch (ex) {
+                  errM.textContent = ex.message;
+                }
+              } }, "Вернуться")),
+          ];
+        },
+      });
+    }
+
+    function row(c, idx) {
+      /* строка точки: маркер-линия, метка+вид, время, действия */
+      const cmp = iconBtn("copy", "Сравнить с предыдущей точкой",
+        () => diffModal(items[idx + 1] || c, c));
+      const restoreBtn = iconBtn("refresh", "Вернуть файлы проекта к этой точке",
+        () => restoreModal(c));
+      return h(
+        "div",
+        { class: "history-row" },
+        h("div", { class: "history-marker" }),
+        h(
+          "div",
+          { class: "history-main" },
+          h("div", { class: "history-title" },
+            h("span", { class: "history-label" }, c.label),
+            kindBadge(c.kind)),
+          h("div", { class: "history-time" }, whenText(c)),
+        ),
+        h("div", { class: "history-actions" }, cmp, restoreBtn),
+      );
+    }
+
+    async function load() {
+      try {
+        const r = await api(
+          `/history?${new URLSearchParams({ project: `${section}/${name}` })}`,
+        );
+        items = r.checkpoints || [];
+      } catch (ex) {
+        list.replaceChildren(h("div", { class: "card-hint" }, ex.message));
+        return;
+      }
+      if (!items.length) {
+        list.replaceChildren(
+          h("div", { class: "card-hint" },
+            "Контрольных точек ещё нет. Создайте первую кнопкой «＋ Контрольная точка» " +
+            "или включите автоматические точки в «Настройках» приложения."));
+        return;
+      }
+      /* items — от свежей к старой; рисуем сверху вниз (свежая сверху) */
+      list.replaceChildren(...items.map((c, i) => row(c, i)));
+    }
+
+    const newBtn = h(
+      "button",
+      { class: "btn btn-sm btn-primary" },
+      "＋ Контрольная точка",
+    );
+    newBtn.addEventListener("click", () => {
+      UIC.modal({
+        title: "Новая контрольная точка",
+        build: (close) => {
+          const input = h("input", {
+            class: "input",
+            placeholder: "Например: «Глоссарий после проверки»",
+          });
+          const errM = h("div", { class: "form-error" });
+          const save = async () => {
+            const label = input.value.trim();
+            if (!label) {
+              errM.textContent = "Введите метку точки";
+              return;
+            }
+            try {
+              const r = await api("/history", { method: "POST",
+                body: { project: `${section}/${name}`, label } });
+              if (!r.created) {
+                toast("Изменений с прошлой точки нет — точка не создана");
+              } else {
+                toast("Контрольная точка создана");
+              }
+              close();
+              await load();
+            } catch (ex) {
+              errM.textContent = ex.message;
+            }
+          };
+          input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") save();
+          });
+          return [
+            h("div", { class: "modal-text" },
+              "Метка — что в этом состоянии проекта. Дата и время добавляются сами."),
+            input,
+            errM,
+            h("div", { class: "modal-actions" },
+              h("button", { class: "btn btn-ghost", onclick: () => close() },
+                "Отмена"),
+              h("button", { class: "btn btn-primary", onclick: save },
+                "Создать")),
+          ];
+        },
+      });
+    });
+
+    const toolbar = h(
+      "div",
+      { class: "toolbar" },
+      h("div", { class: "files-bulk" },
+        h("span", { class: "files-toolbar-label" },
+          "Контрольные точки — снимки состояния файлов проекта. " +
+          "Автоматические точки включаются в «Настройках» приложения."),
+        h("span", { class: "spacer" }),
+        newBtn),
+    );
+    wrap.append(toolbar, err, list);
+    await load();
+    return wrap;
   }
 
   // «Статус» — таблица готовности глав + сводка ner/wiki/compiled

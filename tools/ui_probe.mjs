@@ -38,6 +38,7 @@ const PROJECT_TABS = [
   "ner",
   "review",
   "chapters",
+  "history",
   "search",
   "status",
   "config",

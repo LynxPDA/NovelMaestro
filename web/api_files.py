@@ -339,6 +339,121 @@ def _file_download(ctx: dict) -> dict:
     return {}  # ответ уже отправлен
 
 
+# ══════════════════════════════════════════════════════════════════
+# ИСТОРИЯ ПРОЕКТА (контрольные точки на локальном git; web/history.py)
+# ══════════════════════════════════════════════════════════════════
+
+def _history_list(ctx: dict) -> dict:
+    """Список точек истории (GET /api/history?project=&limit=&offset=)."""
+    from web import history as hs
+    pdir, _section, _name = _project_ctx(ctx)
+    q = ctx["query"]
+    try:
+        limit = max(1, min(500, int(q.get("limit", "100"))))
+        offset = max(0, int(q.get("offset", "0")))
+    except ValueError:
+        raise ApiError(400, "limit/offset — числа")
+    try:
+        return hs.checkpoints(pdir, limit=limit, offset=offset)
+    except hs.HistoryError as exc:
+        # проекта нет — 404; истории ещё нет — просто пустой список:
+        # первая точка появится при первом создании
+        if not pdir.is_dir():
+            raise ApiError(404, str(exc))
+        return {"checkpoints": [], "total": 0}
+
+
+def _history_create(ctx: dict) -> dict:
+    """Создать точку (POST /api/history {project, label})."""
+    from web import history as hs
+    pdir, _section, _name = _project_ctx(ctx)
+    label = str(ctx["body"].get("label") or "").strip()
+    if not label:
+        raise ApiError(400, "Поле label обязательно")
+    try:
+        return hs.create(pdir, label)
+    except hs.HistoryError as exc:
+        raise ApiError(400, str(exc))
+
+
+def _history_diff(ctx: dict) -> dict:
+    """Изменения между точками (GET /api/history/diff?
+    project=&from=&to=): файлы со статусами A/M/D и +/- строк."""
+    from web import history as hs
+    pdir, _section, _name = _project_ctx(ctx)
+    sha_from = ctx["query"].get("from", "")
+    sha_to = ctx["query"].get("to", "")
+    if not sha_from or not sha_to:
+        raise ApiError(400, "Параметры from и to обязательны")
+    try:
+        return hs.diff(pdir, sha_from, sha_to)
+    except hs.HistoryError as exc:
+        raise ApiError(400, str(exc))
+
+
+def _history_patch(ctx: dict) -> dict:
+    """Дифф одного файла (GET /api/history/patch?
+    project=&from=&to=&path=): текст unified-diff для разворачивания."""
+    from web import history as hs
+    pdir, _section, _name = _project_ctx(ctx)
+    sha_from = ctx["query"].get("from", "")
+    sha_to = ctx["query"].get("to", "")
+    path = ctx["query"].get("path", "")
+    if not sha_from or not sha_to or not path:
+        raise ApiError(400, "Параметры from, to и path обязательны")
+    try:
+        return hs.patch(pdir, sha_from, sha_to, path)
+    except hs.HistoryError as exc:
+        raise ApiError(400, str(exc))
+
+
+def _history_restore(ctx: dict) -> dict:
+    """Вернуть файлы к точке (POST /api/history/restore {project, sha}).
+
+    Текущее состояние предварительно фиксируется точкой «Возврат к …»:
+    текущая версия не теряется и без повторного возврата вперёд.
+    """
+    from web import history as hs
+    pdir, _section, _name = _project_ctx(ctx)
+    sha = str(ctx["body"].get("sha") or "").strip()
+    if not sha:
+        raise ApiError(400, "Поле sha обязательно")
+    try:
+        return hs.restore(pdir, sha)
+    except hs.HistoryError as exc:
+        raise ApiError(400, str(exc))
+
+
+def _history_file(ctx: dict) -> dict:
+    """Файл в точке (GET /api/history/file?project=&sha=&path=).
+
+    Текст отдаётся как есть (Content-Type: text/plain) — для предпросмотра
+    старой версии без копирования в рабочие файлы.
+    """
+    from web import history as hs
+    pdir, _section, _name = _project_ctx(ctx)
+    sha = ctx["query"].get("sha", "")
+    path = ctx["query"].get("path", "")
+    if not sha or not path:
+        raise ApiError(400, "Параметры sha и path обязательны")
+    try:
+        data = hs.file_content(pdir, sha, path)
+    except hs.HistoryError as exc:
+        raise ApiError(404, str(exc))
+    ctx["handler"]._send(200, "text/plain; charset=utf-8", data,
+                         cache="no-cache")
+    return {}  # ответ уже отправлен
+
+
+def _register_history(router: Router) -> None:
+    router.add("GET", "/api/history", _history_list)
+    router.add("POST", "/api/history", _history_create)
+    router.add("GET", "/api/history/diff", _history_diff)
+    router.add("GET", "/api/history/patch", _history_patch)
+    router.add("POST", "/api/history/restore", _history_restore)
+    router.add("GET", "/api/history/file", _history_file)
+
+
 def _register_files(router: Router) -> None:
     router.add("GET", "/api/files", _files_listing)
     router.add("GET", "/api/file", _file_read)

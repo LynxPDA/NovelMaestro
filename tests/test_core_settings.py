@@ -210,6 +210,11 @@ def test_block_titles_are_stage_titles():
         if b.id in S.LLM_BLOCKS or b.id in S.SERVER_BLOCKS:
             assert b.title and "(" not in b.id
             continue
+        if b.id == "history":
+            # блок настроек истории: не стадия, а общий блок на субвкладке
+            # «Книга и файлы» (события автоточек)
+            assert b.title
+            continue
         assert b.id in S.STAGE_TITLES, f"блок {b.id} не стадия и не LLM/server"
         assert b.title == S.STAGE_TITLES[b.id], b.id
         assert STAGE_SPECS[b.id]["title"] == b.title, (

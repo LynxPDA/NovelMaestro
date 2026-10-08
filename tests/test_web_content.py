@@ -284,30 +284,30 @@ def test_review_apply_creates_job(srv, tmp_path):
     assert job is not None
 
 
-def test_review_apply_passes_no_bak(srv, tmp_path):
-    """no_bak в body → параметр задачи (--no-bak соберётся в argv).
-    ner-путь: argv обязан содержать --apply (применение правок, а не
-    полный LLM-прогон); флаги применения не пишутся в pdir/.env."""
+def test_review_apply_body_params(srv, tmp_path):
+    """dry_run в body → параметр задачи; ner-путь: argv обязан содержать
+    --apply (применение правок, а не полный LLM-прогон); флаги применения
+    не пишутся в pdir/.env."""
     srv, port, root = srv()
     pdir = _mk_project(root)
     from web.jobs import JobManager
     srv.job_manager = JobManager(tmp_path / "web", repo_root=REPO)
     r = _request(port, "POST", "/api/translate_check_llm/review/apply",
-                 {"project": "ACTIVE/demo", "no_bak": True})
+                 {"project": "ACTIVE/demo", "dry_run": True})
     assert r["ok"]
     job = srv.job_manager.get(r["job"]["id"])
-    assert job is not None and "--no-bak" in job.argv
+    assert job is not None and "--dry-run" in job.argv
     # ждём завершения первой задачи (per-project лок на запуск)
     for _ in range(50):
         j = srv.job_manager.get(job.id)
         if j is not None and j.status != "running":
             break
         time.sleep(0.05)
-    # без флага — бэкапы по умолчанию включены (флага нет)
+    # без флага — обычное применение (флага нет)
     r2 = _request(port, "POST", "/api/ner/review/apply",
                   {"project": "ACTIVE/demo"})
     job2 = srv.job_manager.get(r2["job"]["id"])
-    assert job2 is not None and "--no-bak" not in job2.argv
+    assert job2 is not None and "--dry-run" not in job2.argv
     # ner: применение, а не LLM-прогон (регрессия build_ner_check)
     assert "--apply" in job2.argv
     # путь «Проверки» не пишет настройки в pdir/.env (apply в .env — шум)

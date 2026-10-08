@@ -107,6 +107,10 @@
     /* просмотр без правки (файлы General-набора шаблонов) */
     eye:
       '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+    /* точка истории: круг с ветвью — история версий проекта */
+    history:
+      '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>'
+      + '<path d="M12 10.5V6"/><path d="M12 13.5 8.5 16"/>',
   };
   function icon(name, cls) {
     var body = ICON_PATHS[name] || '<rect width="14" height="14" x="5" y="5" rx="1"/>';
