@@ -275,7 +275,7 @@ def test_prompt_edit_button():
 
 def test_prompt_markup_is_readable():
     """Языки подсветки редакторов — ИМЕНА языков бандла CodeMirror: у промптов
-    — собственный язык разметки «prompts» (комментарии, теги секций,
+    — собственный язык разметки «prompt» (комментарии, теги секций,
     подстановки {плейсхолдеры}; собирается в бандле StreamLanguage-режимом),
     дефолт выбора «Внешнего вида». Разметку промпта показывает и предпросмотр
     запроса — теги, подстановки и ключи JSON отдельными span-ами."""
@@ -294,7 +294,7 @@ def test_prompt_markup_is_readable():
         "вкладка «Промпты» — язык промпта из выбора пользователя"
     assert "UICore.editorLang(full)" in pv and "UICore.editorLang(full)" in app
     # выбор живёт в localStorage браузера, а не в .env
-    assert 'langPrompt: "prompts", langLog: "text",' in core
+    assert 'langPrompt: "prompt", langLog: "text",' in core
     # таблица расширений ведёт к языкам бандла: сборки fb2/opf/ncx — XML,
     # старый .env книги — properties (KEY=VALUE с «#»)
     for pair in ('xml: "xml"', 'fb2: "xml"', 'env: "properties"',

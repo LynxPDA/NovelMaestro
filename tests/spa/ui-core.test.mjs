@@ -862,9 +862,9 @@ test("filterNerItems: фильтр по замку и поиск не видит
 test("editorLang: промпты и логи — по выбору, остальное — по расширению", () => {
   // расширение у промптов то же самое .txt: язык для них выбирает человек
   // (дефолт — собственный язык разметки промптов, собирается в бандле CM)
-  assert.equal(UICore.EDITOR_SETTINGS.langPrompt, "prompts", "дефолт промптов");
-  assert.equal(UICore.editorLang("prompts/ner_prompt.txt"), "prompts");
-  assert.equal(UICore.editorLang("ner_prompt.txt", true), "prompts");
+  assert.equal(UICore.EDITOR_SETTINGS.langPrompt, "prompt", "дефолт промптов");
+  assert.equal(UICore.editorLang("prompts/ner_prompt.txt"), "prompt");
+  assert.equal(UICore.editorLang("ner_prompt.txt", true), "prompt");
   assert.equal(UICore.editorLang("chapters/00000_1_Глава 1/polished.txt"), "txt");
   assert.equal(UICore.editorLang("notes.md"), "md");
   assert.equal(UICore.editorLang("tmp/report.json"), "json");
@@ -876,13 +876,13 @@ test("editorLang: промпты и логи — по выбору, осталь
   UICore.EDITOR_SETTINGS.langLog = "properties";
   assert.equal(UICore.editorLang("logs/pipeline.log"), "properties",
     "логам дали properties");
-  UICore.EDITOR_SETTINGS.langPrompt = "prompts";
+  UICore.EDITOR_SETTINGS.langPrompt = "prompt";
   UICore.EDITOR_SETTINGS.langLog = "text";
 });
 
 test("EDITOR_LANGS: значения — имена языков бандла, первый — plain text", () => {
   const vals = UICore.EDITOR_LANGS.map((o) => o.v);
-  assert.deepEqual(vals, ["text", "prompts", "markdown", "html", "xml", "json",
+  assert.deepEqual(vals, ["text", "prompt", "markdown", "html", "xml", "json",
     "yaml", "properties", "python"]);
   assert.equal(UICore.EDITOR_LANGS[0].label, "plain text");
 });
