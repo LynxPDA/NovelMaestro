@@ -274,10 +274,11 @@ def test_prompt_edit_button():
 
 
 def test_prompt_markup_is_readable():
-    """Языки подсветки редакторов — ИМЕНА языков бандла CodeMirror: отдельного
-    «языка промптов» больше нет (у файлов промптов расширение .txt, по умолчанию
-    им plain text), а разметку промпта показывает предпросмотр запроса — теги,
-    подстановки {плейсхолдеры} и ключи JSON отдельными span-ами."""
+    """Языки подсветки редакторов — ИМЕНА языков бандла CodeMirror: у промптов
+    — собственный язык разметки «prompts» (комментарии, теги секций,
+    подстановки {плейсхолдеры}; собирается в бандле StreamLanguage-режимом),
+    дефолт выбора «Внешнего вида». Разметку промпта показывает и предпросмотр
+    запроса — теги, подстановки и ключи JSON отдельными span-ами."""
     app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
     core = (SPA_DIR / "ui-core.js").read_text(encoding="utf-8")
     pv = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
@@ -285,16 +286,15 @@ def test_prompt_markup_is_readable():
     css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
 
     # язык редактора выбирается в UICore: prompts/ — настройка пользователя
-    # (по умолчанию plain text), логи — своя, остальное — расширение файла
+    # (дефолт — язык разметки промптов), логи — своя, остальное — расширение
     assert "function editorLang(path, isPrompt)" in core
-    assert 'return "prompt"' not in core, "псевдо-язык промптов вернулся"
     assert 'return EDITOR_SETTINGS.langPrompt;' in core
     assert 'return /\\.log$/i.test(String(path || "").split("/").pop() || "")' in core
     assert 'makeEditor("", UICore.EDITOR_SETTINGS.langPrompt)' in pv, \
         "вкладка «Промпты» — язык промпта из выбора пользователя"
     assert "UICore.editorLang(full)" in pv and "UICore.editorLang(full)" in app
     # выбор живёт в localStorage браузера, а не в .env
-    assert 'langPrompt: "text", langLog: "text",' in core
+    assert 'langPrompt: "prompts", langLog: "text",' in core
     # таблица расширений ведёт к языкам бандла: сборки fb2/opf/ncx — XML,
     # старый .env книги — properties (KEY=VALUE с «#»)
     for pair in ('xml: "xml"', 'fb2: "xml"', 'env: "properties"',
