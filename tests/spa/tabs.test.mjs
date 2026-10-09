@@ -239,6 +239,7 @@ async function api(path, opts = {}) {
       dirs: globalThis.__dirs || [],
     };
   }
+  if (p === "/history") return globalThis.__history || { checkpoints: [] };
   if (p === "/file") return { content: "", missing: true, exists: false, size: 0 };
   if (p === "/ner") return globalThis.__ner || { items: [], too_large: false };
   if (p === "/check") return { reports: [] };
@@ -858,6 +859,121 @@ test("файлы: копировать из панели — POST /file/copy, в
     project: "ACTIVE/Книга", path: "a.txt",
   });
   assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
+});
+
+/* ── «История»: выделение точек для сравнения между собой ────── */
+const HISTORY_SEED = [
+  { sha: "aaa", time: 30, label: "Точка 3", kind: "manual" },
+  { sha: "bbb", time: 20, label: "Правка глоссария", kind: "apply" },
+  { sha: "ccc", time: 10, label: "Первая точка", kind: "manual" },
+];
+
+async function historyPage() {
+  globalThis.__history = { checkpoints: HISTORY_SEED };
+  globalThis.__calls = [];
+  globalThis.__gets = [];
+  globalThis.document.body.children.length = 0;
+  const page = viewProject("ACTIVE", "Книга", "history");
+  await tick();
+  return page;
+}
+
+function historyCheckbox(page, i) {
+  return findByClass(findByClass(page, "history-row")[i], "fsel")[0];
+}
+
+function selTips(page) {
+  return findByClass(page, "files-sel")[0]
+    .querySelectorAll("button")
+    .map((b) => b.getAttribute("aria-label"));
+}
+
+test("история: строка — чекбокс, сравнение с предыдущей и возврат", async () => {
+  const page = await historyPage();
+  const rows = findByClass(page, "history-row");
+  assert.equal(rows.length, 3);
+  assert.deepEqual(tips(rows[1]),
+    ["Сравнить с предыдущей точкой", "Вернуть файлы проекта к этой точке"]);
+});
+
+test("история: две выбранные точки — кнопка «Сравнить выбранные точки»", async () => {
+  const page = await historyPage();
+  const bar = findByClass(page, "files-sel")[0];
+  assert.equal(bar.classList.contains("hidden"), true, "без выделки панели нет");
+  const cb1 = historyCheckbox(page, 1);
+  cb1.checked = true;
+  await cb1._listeners.change[0]();
+  await tick();
+  assert.equal(bar.classList.contains("hidden"), false);
+  assert.equal(collectText(findByClass(bar, "files-sel-count")[0]).join(""),
+    "выделено: 1");
+  // одна точка ещё не сравнивается сама с собой
+  assert.deepEqual(selTips(page), ["Снять выделение"]);
+  const cb2 = historyCheckbox(page, 2);
+  cb2.checked = true;
+  await cb2._listeners.change[0]();
+  await tick();
+  assert.deepEqual(selTips(page),
+    ["Сравнить выбранные точки", "Снять выделение"]);
+});
+
+test("история: третья точка не выбирается — сравнивается пара", async () => {
+  const page = await historyPage();
+  for (const i of [1, 2]) {
+    const cb = historyCheckbox(page, i);
+    cb.checked = true;
+    await cb._listeners.change[0]();
+  }
+  await tick();
+  const cb0 = historyCheckbox(page, 0);
+  cb0.checked = true;
+  await cb0._listeners.change[0]();
+  await tick();
+  // гасится самая старая из выбранных — в выделке остаются верхние две
+  assert.equal(
+    collectText(findByClass(page, "files-sel-count")[0]).join(""),
+    "выделено: 2");
+});
+
+test("история: «Сравнить выбранные точки» — дифф от старой к новой", async () => {
+  const page = await historyPage();
+  for (const i of [1, 2]) {
+    const cb = historyCheckbox(page, i);
+    cb.checked = true;
+    await cb._listeners.change[0]();
+  }
+  await tick();
+  const cmp = findByClass(page, "files-sel")[0]
+    .querySelectorAll("button")[0];
+  assert.equal(cmp.getAttribute("aria-label"), "Сравнить выбранные точки");
+  await cmp._listeners.click[0]();
+  await tick();
+  const call = globalThis.__gets.find((c) => c.path === "/history/diff");
+  assert.ok(call, "GET /api/history/diff ушёл");
+  // выделены bbb и ccc, ccc старее: from — старая, to — новая
+  assert.equal(call.query, "project=ACTIVE%2F%D0%9A%D0%BD%D0%B8%D0%B3%D0%B0&from=ccc&to=bbb");
+  const backdrop = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(backdrop, "модалка сравнения открылась");
+  const head = collectText(backdrop).join("");
+  assert.ok(head.includes("Первая точка") || head.includes("bbb"),
+    "в шапке — метки точек");
+});
+
+test("история: «Снять выделение» чистит чекбоксы и прячет панель", async () => {
+  const page = await historyPage();
+  const cb = historyCheckbox(page, 0);
+  cb.checked = true;
+  await cb._listeners.change[0]();
+  await tick();
+  const clear = findByClass(page, "files-sel")[0]
+    .querySelectorAll("button").slice(-1)[0];
+  await clear._listeners.click[0]();
+  await tick();
+  assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
+  const cbNow = historyCheckbox(page, 0);
+  assert.equal(cbNow.checked, false, "чекбокс строки сброшен");
 });
 
 /* ── профиль LLM: у каждой LLM-стадии свой выбор ───────────────── */

@@ -4295,6 +4295,33 @@ function viewProject(section, name, tab, job) {
       });
     }
 
+    /* выделение точек для сравнения (максимум две): чекбокс в строке —
+       как на «Файлах»; кнопка «Сравнить» в панели выделения сравнивает
+       выбранные между собой, а не только с предыдущей */
+    const picked = new Set(); // sha выбранных точек
+    const selBar = h("div", { class: "files-sel hidden" });
+
+    function paintSel() {
+      selBar.classList.toggle("hidden", picked.size === 0);
+      if (!picked.size) return;
+      const pair = [...picked];
+      selBar.replaceChildren(
+        h("span", { class: "files-sel-count" }, `выделено: ${picked.size}`),
+        /* сравнивать можно только пару: кнопка появляется на двух точках */
+        pair.length === 2
+          ? iconBtn("compare", "Сравнить выбранные точки", () => {
+            /* picked хранится от свежей к старой — diff идёт от старой */
+            const bySha = (s) => items.find((c) => c.sha === s);
+            diffModal(bySha(pair[1]), bySha(pair[0]));
+          })
+          : null,
+        iconBtn("close", "Снять выделение", () => {
+          picked.clear();
+          load();
+        }),
+      );
+    }
+
     function row(c, idx) {
       /* строка точки: маркер-линия, метка+вид, время, действия */
       const cmp = iconBtn("compare", "Сравнить с предыдущей точкой",
@@ -4312,9 +4339,32 @@ function viewProject(section, name, tab, job) {
         });
       const restoreBtn = iconBtn("refresh", "Вернуть файлы проекта к этой точке",
         () => restoreModal(c));
+      const cb = h("input", {
+        type: "checkbox",
+        class: "fsel",
+        checked: picked.has(c.sha),
+        "aria-label": `Выбрать точку «${c.label}» для сравнения`,
+      });
+      attachTooltip(cb, `Выбрать точку «${c.label}» для сравнения`);
+      cb.addEventListener("change", () => {
+        if (cb.checked) {
+          if (picked.size >= 2) {
+            /* третья точка не выбирается: сравнивать можно пару — гасим
+               самую старую из выбранных (как в Confluence: лимит выбора) */
+            const old = [...picked].pop();
+            picked.delete(old);
+          }
+          picked.add(c.sha);
+        } else {
+          picked.delete(c.sha);
+        }
+        paintSel();
+        load();
+      });
       return h(
         "div",
-        { class: "history-row" },
+        { class: "history-row" + (picked.has(c.sha) ? " frow-sel" : "") },
+        cb,
         h("div", { class: "history-marker" }),
         h(
           "div",
@@ -4346,6 +4396,7 @@ function viewProject(section, name, tab, job) {
       }
       /* items — от свежей к старой; рисуем сверху вниз (свежая сверху) */
       list.replaceChildren(...items.map((c, i) => row(c, i)));
+      paintSel();
     }
 
     const newBtn = h(
@@ -4407,6 +4458,7 @@ function viewProject(section, name, tab, job) {
       { class: "files-toolbar history-toolbar" },
       h("span", { class: "history-heading" }, "Контрольные точки"),
       h("span", { class: "spacer" }),
+      selBar,
       newBtn,
     );
     wrap.append(toolbar, err, list);
