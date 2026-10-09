@@ -76,9 +76,13 @@ class El {
     if (!this._listeners[ev]) this._listeners[ev] = [];
     this._listeners[ev].push(fn);
   }
-  /* событие «ушли с вкладки» (setView шлёт pi-navigate тело вкладки) */
+  /* событие «ушли с вкладки» (setView шлёт pi-navigate тело вкладки):
+   { ...ev } — слушателям видны все свойства (bubbles и т.п.); bubbling —
+   до document, там run-views гасит SSE-стрим */
   dispatchEvent(ev) {
-    for (const fn of this._listeners[ev.type] || []) fn({ target: this, type: ev.type });
+    const e = { ...ev, target: this };
+    for (const fn of this._listeners[ev.type] || []) fn(e);
+    if (ev.bubbles) for (const fn of globalThis.document._listeners[ev.type] || []) fn(e);
     return true;
   }
   setAttribute(k, v) {
@@ -90,11 +94,6 @@ class El {
   getAttribute(k) { return this._attrs[k] ?? null; }
   remove() {}
   removeChild() {}
-  /* setView шлёт уходящей вкладке «pi-navigate» */
-  dispatchEvent(ev) {
-    for (const fn of this._listeners[ev.type] || []) fn({ type: ev.type, target: this });
-    return true;
-  }
   /* запрос по классу/тегу по всему поддереву: обработчикам запусков
      (".run-panel-head") нужен настоящий результат, а не null */
   querySelectorAll(sel) {
@@ -149,7 +148,12 @@ globalThis.document = {
     n.textContent = String(t);
     return n;
   },
-  addEventListener() {},
+  /* document-слушатели — реальные: run-views гасит SSE-стрим
+     по pi-navigate с bubble (всплывшее событие вызывает их в dispatchEvent) */
+  _listeners: {},
+  addEventListener(ev, fn) {
+    (this._listeners[ev] = this._listeners[ev] || []).push(fn);
+  },
   querySelectorAll: () => [],
 };
 globalThis.document.body = new El("body");
@@ -460,6 +464,21 @@ test("индикатор запусков: другой проект или эк
   sandbox.location.hash = "#/hub";
   sandbox.projectNavigate("HOLD/Другая", "run");
   assert.equal(sandbox.location.hash, "#/project/HOLD/Другая/run");
+});
+
+test("смена вкладки гасит SSE-стрим: pi-navigate доходит до document (bubbles)", async () => {
+  /* регресс: событие без bubble не доходит до document-слушателя run-views —
+   стрим живёт, соединения копятся, новый лог остаётся «(лог пуст)» */
+  const page = viewProject("ACTIVE", "Книга", "run");
+  await new Promise((r) => setTimeout(r, 10)); // вкладка смонтировалась
+  const seen = [];
+  globalThis.document.addEventListener("pi-navigate", (ev) => seen.push(ev));
+  const other = page.querySelectorAll(".tab")
+    .find((t) => !String(t.className).includes("tab-active"));
+  await other._listeners.click[0]();
+  assert.equal(seen.length, 1, "ушедшая вкладка сообщила о pi-navigate");
+  assert.equal(seen[0].bubbles, true,
+    "событие всплывает до document — иначе слушатель run-views не погасит стрим");
 });
 
 test("reviewView: 4 под-вкладки проверок, активная по умолчанию — первая", async () => {

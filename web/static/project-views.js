@@ -213,7 +213,7 @@ function viewProject(section, name, tab, job) {
   function setView(view, find, all) {
     if (view === st.view && !all && (!find || st.search === find)) return;
     const body = page.querySelector(".project-body");
-    if (body) body.dispatchEvent(new CustomEvent("pi-navigate"));
+    if (body) body.dispatchEvent(new CustomEvent("pi-navigate", { bubbles: true }));
     st.view = view;
     st.edit = null;
     st.search = find ? String(find) : null;
