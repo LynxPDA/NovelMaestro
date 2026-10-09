@@ -313,7 +313,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rag_budget", type=int, default=22000,
                    help="RAG-режим: бюджет релевантного текста на термин, "
                         "ТОКЕНЫ (оценка; по умолчанию: 22000).")
-    p.add_argument("--save-interval", type=int, default=0,
+    p.add_argument("--rag_chunk_size", type=int, default=350,
+                   help="RAG-режим: размер чанка FTS5-индекса книги, "
+                        "ТОКЕНЫ (оценка; по умолчанию: 350).")
+    p.add_argument("--save-interval", type=int, default=1,
                    help="RAG-режим: сохранять review-файл каждые N "
                         "терминов (0 = только в конце)")
     p.add_argument("--rag_prompt_file", default=None,
@@ -748,7 +751,7 @@ def run_rag(args, stage, prompt_tpl) -> int:
             return 1
     if args.rag_source_type:
         logger.info(f"🔎 RAG: {len(terms)} терминов.")
-    db = build_fts_index(text, 350)
+    db = build_fts_index(text, args.rag_chunk_size)
     fields = [f.strip() for f in args.fields.split(",") if f.strip()]
     # бюджет на термин — ТОЛЬКО фрагменты (промпт не вычитается):
     # один термин = один запрос, фрагменты влезают в rag_budget
@@ -794,7 +797,8 @@ def run_rag(args, stage, prompt_tpl) -> int:
     progress.start()
 
     # накопительный review-файл: --save-interval N — сохранять каждые
-    # N терминов (0 = только в конце, как раньше)
+    # N терминов (0 = только в конце; дефолт 1 — после каждого термина:
+    # упавший прогон не теряет уже полученные правки)
     save_interval = max(0, args.save_interval or 0)
     meta, existing = load_review_file(args.review, logger)
     created = (meta or {}).get("created") \
@@ -979,6 +983,20 @@ def do_check(args, stage) -> int:
     def _run_batch(task):
         return run_batch(task, prompt_tpl, args, stage)
 
+    def ingest(title, found):
+        """Результат батча → накопление и промежуточное сохранение:
+        дифф и review-записи считаются сразу после батча, чтобы упавший
+        прогон оставлял правки уже полученных батчей (раньше всё
+        копилось до конца — падение теряло всё)."""
+        if found is None:
+            failures[title] = failures.get(title, 0) + 1
+            return
+        results.setdefault(title, []).extend(found)
+        patches = diff_ner_records(found, items_by_term, check_fields,
+                                   logger)
+        if patches:
+            collect(title, patches)
+
     progress = Progress(len(stage_tasks), "Проверка глоссария", unit="батч",
                         logger=logger)
     progress.start()
@@ -986,23 +1004,19 @@ def do_check(args, stage) -> int:
         for task in stage_tasks:
             title, found = _run_batch(task)
             progress.step()
-            if found is None:
-                failures[title] = failures.get(title, 0) + 1
-            else:
-                results.setdefault(title, []).extend(found)
+            ingest(title, found)
     else:
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {ex.submit(_run_batch, t): t for t in stage_tasks}
             for fut in as_completed(futs):
                 title, found = fut.result()
                 progress.step()
-                if found is None:
-                    failures[title] = failures.get(title, 0) + 1
-                else:
-                    results.setdefault(title, []).extend(found)
+                ingest(title, found)
     logger.info(f"📊 Прогресс: {progress.done}/{progress.total}")
 
-    # ── сборка в порядке проходов (детерминированный порядок записи) ──
+    # ── сборка в порядке проходов (детерминированный порядок): дифф
+    #    и сохранение уже сделаны по ходу (ingest) — здесь сводка и
+    #    авто-применение по этапам
     seen_titles = []
     for title, _ in stage_tasks:
         if title not in seen_titles:
@@ -1021,14 +1035,9 @@ def do_check(args, stage) -> int:
         if failed:
             logger.warning(f"⚠ Этап «{title}»: {failed}/{n_batches} "
                            f"батчей не завершились — пропущены.")
-        # diff с эталоном: LLM вернула исправленные записи — правки
-        # (old→new) считаем здесь, сверяя с ner.json
+        # diff с эталоном сделан в ingest (правки уже в review-файле)
         records = records or []
-        patches = diff_ner_records(records, items_by_term, check_fields,
-                                   logger)
-        logger.info(f"  ✔ «{title}»: записей от LLM {len(records)}, "
-                    f"правок: {len(patches)}")
-        collect(title, patches)
+        logger.info(f"  ✔ «{title}»: записей от LLM {len(records)}")
         if args.auto_apply:
             auto_apply()
 

@@ -948,6 +948,10 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                     help="Таймаут стрима, сек (default: 300).")
     ap.add_argument("--retry_empty", type=int, default=0,
                     help="Доп. повторы при пустом ответе (0=выкл).")
+    ap.add_argument("--save-interval", type=int, default=1,
+                    help="Сохранять review-файл каждые N батчей (0 = "
+                         "только в конце; по умолчанию 1 — после каждого "
+                         "батча: упавший прогон не теряет правки).")
     # Потоки
     ap.add_argument("--threads", type=int, default=4,
                     help="Параллельные пакеты (default: 4).")
@@ -1077,6 +1081,7 @@ def do_check(args, stage) -> int:
         or datetime.now().strftime("%Y-%m-%d %H:%M")
     entries = existing or []
     added_total = 0
+    save_interval = max(0, args.save_interval or 0)
     lock = threading.Lock()
 
     def merge_and_save(errs):
@@ -1123,6 +1128,12 @@ def do_check(args, stage) -> int:
                     f"ошибок: {len(errs)} | {dn}/{len(batches)}")
         if errs:
             merge_and_save(errs)
+        # промежуточное сохранение по интервалу (дефолт 1 — каждый батч):
+        # упавший прогон оставляет правки уже готовых батчей
+        if save_interval and done_cnt[0] % save_interval == 0:
+            with lock:
+                save_review_file(args.review, ch_dir, created, entries,
+                                 params=params)
 
     # верхний предел потоков 16 (как в ner/wiki/translate)
     with ThreadPoolExecutor(max_workers=max(1, min(16, args.threads))) as ex:

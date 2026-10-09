@@ -1309,6 +1309,64 @@ def test_ner_check_rag_skips_locked_terms(tmp_path, monkeypatch):
 # ──────────────────────────────────────────────────────────────────────
 # исправленные баги: dry-run stage, RAG-фильтры и потолок потоков
 # ──────────────────────────────────────────────────────────────────────
+def test_ner_check_rag_chunk_size_flag(tmp_path, monkeypatch, caplog):
+    """--rag_chunk_size доходит до FTS5-индекса (дефолт 350)."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    (tmp_path / "novel.txt").write_text(
+        "Линь Фан вошёл в зал. " * 50, encoding="utf-8")
+    built = []
+    real = NC.build_fts_index
+    def spy(text, size, logger=None):
+        built.append(size)
+        return real(text, size, logger)
+    monkeypatch.setattr(NC, "build_fts_index", spy)
+    _mock_stream(monkeypatch, "[]", [])
+    with caplog.at_level(logging.INFO):
+        rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                      "--rag_terms", "林凡", "--rag_novel", "novel.txt",
+                      "--host", "http://x", "--model", "m"])
+    assert rc == 0 and built == [350]
+    rc = NC.main(["--input", "ner.json", "--passes", "rag",
+                  "--rag_terms", "林凡", "--rag_novel", "novel.txt",
+                  "--rag_chunk_size", "120",
+                  "--host", "http://x", "--model", "m"])
+    assert rc == 0 and built == [350, 120]
+
+def test_ner_check_saves_review_after_each_batch(tmp_path, monkeypatch):
+    """Батчевый режим: review-файл пишется после КАЖДОГО батча — упавший
+    второй батч не теряет правки первого (раньше файл писался один раз
+    в самом конце)."""
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    ensure_tmp(tmp_path)
+    # маленький бюджет: 3 записи разъезжаются по 3 батчам
+    calls = []
+    state = {"n": 0}
+    def fake(base_url, model, messages, **kw):
+        calls.append(messages[-1]["content"])
+        state["n"] += 1
+        if state["n"] == 1:
+            return ('[{"term": "林凡", "translation": "Лин Фань", '
+                    '"reason": "p"}]'), None
+        if state["n"] == 2:
+            return None, "LLM упал"  # второй батч — ошибка
+        return ('[{"term": "火球术", "translation": "Шар огня", '
+                '"reason": "p2"}]'), None
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake)
+    rc = NC.main(["--input", "ner.json", "--passes", "whole",
+                  "--request_budget", "30",
+                  "--host", "http://x", "--model", "m"])
+    assert rc == 0
+    # промежуточные сохранения были: файл существует и содержит правку
+    # ПЕРВОГО батча, хотя прогон шёл с ошибкой во втором
+    doc = json.loads((tmp_path / "tmp" / "ner_review.json")
+                     .read_text(encoding="utf-8"))
+    terms = {e["term"] for e in doc["entries"]}
+    assert "林凡" in terms
+
+
 def test_ner_check_dry_run_prints_stage(tmp_path, monkeypatch, caplog):
     """DRY-RUN авто-применения печатает этап правки (stage), а не
     несуществующий ключ «этап»."""

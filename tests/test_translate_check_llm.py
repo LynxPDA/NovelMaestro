@@ -446,6 +446,38 @@ def test_main_check_writes_review_and_params(tmp_path, monkeypatch):
     assert len(doc2["entries"]) == 1 and doc2["params"] == params
 
 
+def test_main_check_save_interval(tmp_path, monkeypatch):
+    """--save-interval N: review-файл перезаписывается по ходу прогона —
+    упавший прогон не теряет правки уже готовых батчей (дефолт 1)."""
+    ch_dir, _ = _mk_chapters(tmp_path, {
+        1: "Текст с ошибкой здесь и далее идёт.",
+        2: "Другой текст с ошибкой тут тоже есть.",
+    })
+    monkeypatch.chdir(tmp_path)
+    review = str(tmp_path / "fix_review.json")
+    answers = [json.dumps([
+        {"chapter": 1, "fragment": "ошибкой здесь",
+         "corrected": "правкой здесь", "type": "typo", "reason": "тест"}]),
+        json.dumps([
+            {"chapter": 2, "fragment": "ошибкой тут",
+             "corrected": "правкой тут", "type": "typo", "reason": "тест"}])]
+    idx = [0]
+    def fake(*a, **kw):
+        i = idx[0]
+        idx[0] += 1
+        # второй батч падает — прогон завершится неполным
+        return (answers[i], None) if i == 0 else (None, "LLM упал")
+    monkeypatch.setattr(core_stage, "stream_chat_completion", fake)
+    rc = FE.main(["--host", "http://x", "--api_key", "k", "--model", "m",
+                  "--chapters_dir", ch_dir, "--start", "1", "--end", "2",
+                  "--request_budget", "50",
+                  "--review", review])
+    assert rc == 1  # прогон неполный
+    # но правка первого батча УЖЕ в файле (сохранение после батча)
+    doc = json.loads(Path(review).read_text(encoding="utf-8"))
+    assert len(doc["entries"]) == 1
+    assert doc["entries"][0]["chapter"] == 1
+
 def test_main_apply_statuses_backup_and_log(tmp_path, monkeypatch):
     ch_dir, _ = _mk_chapters(tmp_path, {1: "первый текст главы один."})
     monkeypatch.chdir(tmp_path)

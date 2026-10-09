@@ -1452,13 +1452,18 @@ def test_build_ner_check_rag_flags():
     # поле rag_prompt_file убрано из спеки ner_check
     names = {f["name"] for f in STAGE_SPECS["ner_check"]["fields"]}
     assert "rag_prompt_file" not in names
-    # дефолт бюджета RAG — 22000 ТОКЕНОВ (оценка); save_interval — 0 (только в конце)
+    # дефолт бюджета RAG — 22000 ТОКЕНОВ (оценка); save_interval — 1
+    # (каждый термин: упавший прогон не теряет правки)
     fb = next(f for f in STAGE_SPECS["ner_check"]["fields"]
               if f["name"] == "rag_budget")
     assert fb["default"] == "22000"
     fs = next(f for f in STAGE_SPECS["ner_check"]["fields"]
               if f["name"] == "save_interval")
-    assert fs["default"] == "0"
+    assert fs["default"] == "1"
+    # чанк FTS5-индекса — 350 ТОКЕНОВ (оценка), настройка рядом с бюджетом
+    fk = next(f for f in STAGE_SPECS["ner_check"]["fields"]
+              if f["name"] == "rag_chunk_size")
+    assert fk["default"] == "350"
     # пустые — флагов нет
     argv2 = build_command("ner_check", {"passes": "rag"}, {})
     assert "--rag_terms" not in argv2
