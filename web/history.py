@@ -198,6 +198,16 @@ def _commit_or_die(repo: Repo, sha: str) -> Commit:
         raise HistoryError(f"Точка не найдена: {sha}") from exc
 
 
+#: потолок построчной статистики в списке файлов (символы обеих сторон):
+#: дифф по книге в тысячи глав не должен гонять difflib по каждому файлу
+LINE_DELTA_MAX_CHARS = 200_000
+#: потолок текста диффа одного файла (СИМВОЛЫ) — окно разницы не должно
+#: захлёбываться мегабайтами текста
+PATCH_MAX_CHARS = 400_000
+#: потолок списка файлов в сравнении точек: тысячи <details> в окне
+#: вешают браузер; полный переченью файлов и так не читается
+DIFF_MAX_FILES = 200
+
 def checkpoints(project: Path, limit: int = 100, offset: int = 0) -> dict:
     """Список точек от свежей к старой (обход first-parent от HEAD).
 
@@ -232,26 +242,39 @@ def diff(project: Path, sha_from: str, sha_to: str) -> dict:
         for path in sorted(set(f_from) | set(f_to)):
             name = path.decode("utf-8", "replace")
             if path not in f_to:
-                adds, dels = 0, _line_delta(repo, f_from[path], b"")[1]
+                # удалён: числа строк ради списка файлов не нужны —
+                # содержимое покажет дифф файла
                 files.append({"path": name, "status": "D",
-                              "adds": adds, "dels": dels})
+                              "adds": None, "dels": None})
             elif path not in f_from:
-                adds, dels = _line_delta(repo, b"", f_to[path])
+                adds, dels = _line_delta(repo, b"", f_to[path], light=True)
                 files.append({"path": name, "status": "A",
                               "adds": adds, "dels": dels})
             elif f_from[path] != f_to[path]:
-                adds, dels = _line_delta(repo, f_from[path], f_to[path])
+                adds, dels = _line_delta(repo, f_from[path], f_to[path],
+                                         light=True)
                 files.append({"path": name, "status": "M",
                               "adds": adds, "dels": dels})
-        return {"files": files}
+        return {"files": files[:DIFF_MAX_FILES], "total_files": len(files)}
 
 
-def _line_delta(repo: Repo, sha_old: bytes, sha_new: bytes) -> tuple[int, int]:
-    """(+добавлено, −удалено) между блобами; строки — UTF-8 с заменой."""
-    old = _as_blob(repo[sha_old]).data.decode("utf-8", "replace").splitlines() \
-        if sha_old else []
-    new = _as_blob(repo[sha_new]).data.decode("utf-8", "replace").splitlines() \
-        if sha_new else []
+def _blob_lines(repo: Repo, sha: bytes) -> list[str]:
+    """Строки блоба (UTF-8 с заменой)."""
+    return _as_blob(repo[sha]).data.decode("utf-8", "replace").splitlines()
+
+def _line_delta(repo: Repo, sha_old: bytes, sha_new: bytes,
+                *, light: bool = False) -> tuple[int | None, int | None]:
+    """(+добавлено, −удалено) между блобами; строки — UTF-8 с заменой.
+
+    light — режим списка файлов: у больших файлов (суммарно больше
+    LINE_DELTA_MAX_CHARS символов) статистика не считается — difflib на
+    каждой главе большой книги превращал сравнение точек в десятки секунд.
+    """
+    old = _blob_lines(repo, sha_old) if sha_old else []
+    new = _blob_lines(repo, sha_new) if sha_new else []
+    if light and (sum(map(len, old)) + sum(map(len, new))
+                  > LINE_DELTA_MAX_CHARS):
+        return (None, None)
     matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
     adds = dels = 0
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
@@ -263,7 +286,11 @@ def _line_delta(repo: Repo, sha_old: bytes, sha_new: bytes) -> tuple[int, int]:
 
 
 def patch(project: Path, sha_from: str, sha_to: str, path: str) -> dict:
-    """Unified-дифф одного файла между точками (для разворачивания в UI)."""
+    """Unified-дифф одного файла между точками (для разворачивания в UI).
+
+    Дифф огромного файла обрезается (PATCH_MAX_CHARS): окно разницы
+    должно открываться мгновенно даже на книге в тысячи глав.
+    """
     with _lock:
         repo = _repo(project)
         c_from = _commit_or_die(repo, sha_from)
@@ -271,22 +298,24 @@ def patch(project: Path, sha_from: str, sha_to: str, path: str) -> dict:
         f_from = _flat_tree(repo, c_from.tree)
         f_to = _flat_tree(repo, c_to.tree)
         key = path.encode("utf-8")
-        old = _as_blob(repo[f_from[key]]).data.decode("utf-8", "replace") \
-            if key in f_from else ""
-        new = _as_blob(repo[f_to[key]]).data.decode("utf-8", "replace") \
-            if key in f_to else ""
+        old = _blob_lines(repo, f_from[key]) if key in f_from else []
+        new = _blob_lines(repo, f_to[key]) if key in f_to else []
         if old == new:
             raise HistoryError(f"В файле {path} между точками нет изменений")
         diff_lines = list(difflib.unified_diff(
-            old.splitlines(), new.splitlines(),
+            old, new,
             fromfile=f"a/{path}", tofile=f"b/{path}",
             lineterm="", n=2))
         adds = sum(1 for l in diff_lines
                    if l.startswith("+") and not l.startswith("+++"))
         dels = sum(1 for l in diff_lines
                    if l.startswith("-") and not l.startswith("---"))
+        text = "\n".join(diff_lines)
+        if len(text) > PATCH_MAX_CHARS:
+            text = text[:PATCH_MAX_CHARS]
+            text += "\n… — дифф обрезан: файл слишком большой"
         return {"path": path, "adds": adds, "dels": dels,
-                "patch": "\n".join(diff_lines)}
+                "patch": text}
 
 
 def file_content(project: Path, sha: str, path: str) -> bytes:

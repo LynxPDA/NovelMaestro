@@ -169,9 +169,10 @@ def test_diff_statuses(tmp_path):
     assert statuses["ner.json"] == "M"
     assert statuses["chapters/2/chapter.txt"] == "A"
     assert statuses["chapters/1/chapter.txt"] == "D"
-    # удалённый файл — только минусы
+    # удалённый файл — без чисел строк (лишний difflib в списке файлов):
+    # содержимое покажет дифф самого файла
     deleted = next(f for f in d["files"] if f["status"] == "D")
-    assert deleted["adds"] == 0 and deleted["dels"] == 1
+    assert deleted["adds"] is None and deleted["dels"] is None
 
 
 def test_diff_line_counts(tmp_path):
@@ -185,6 +186,52 @@ def test_diff_line_counts(tmp_path):
     f = d["files"][0]
     # «строка2 изменена» — плюс и минус, «добавлена» — ещё один плюс
     assert (f["adds"], f["dels"]) == (2, 1)
+
+def test_diff_big_file_stats_skipped(tmp_path):
+    """Файл больше LINE_DELTA_MAX_CHARS — None вместо чисел: difflib
+    по каждой главе большой книги превращал сравнение точек в десятки
+    секунд, а точные числа нужны только при разворачивании диффа."""
+    big = "строка\n" * (hs.LINE_DELTA_MAX_CHARS // 6)
+    _make_project(tmp_path, {"big.txt": big + "\nхвост\n"})
+    hs.create(tmp_path, "Начало")
+    (tmp_path / "big.txt").write_text(big + "\nхвост иной\n", encoding="utf-8")
+    hs.create(tmp_path, "Правка")
+    c_from, c_to = hs.checkpoints(tmp_path)["checkpoints"][::-1]
+    f = hs.diff(tmp_path, c_from["sha"], c_to["sha"])["files"][0]
+    assert f["adds"] is None and f["dels"] is None
+    # точные числа по-прежнему считает дифф самого файла
+    p = hs.patch(tmp_path, c_from["sha"], c_to["sha"], "big.txt")
+    assert (p["adds"], p["dels"]) == (1, 1)
+
+def test_patch_oversized_truncated(tmp_path, monkeypatch):
+    """Дифф огромного файла обрезается (PATCH_MAX_CHARS) — окно
+    разницы не должно захлёбываться мегабайтами текста."""
+    monkeypatch.setattr(hs, "PATCH_MAX_CHARS", 1000)
+    _make_project(tmp_path, {"big.txt": ""})
+    hs.create(tmp_path, "Начало")
+    (tmp_path / "big.txt").write_text("строка\n" * 2000, encoding="utf-8")
+    hs.create(tmp_path, "Правка")
+    c_from, c_to = hs.checkpoints(tmp_path)["checkpoints"][::-1]
+    p = hs.patch(tmp_path, c_from["sha"], c_to["sha"], "big.txt")
+    assert len(p["patch"]) < 1200 and "обрезан" in p["patch"]
+    # числа строк считались по ПОЛНОМУ диффу, до обрезки текста
+    assert (p["adds"], p["dels"]) == (2000, 0)
+
+def test_diff_files_capped(tmp_path, monkeypatch):
+    """Список файлов сравнения ограничен (DIFF_MAX_FILES): тысячи
+    раскрывающихся строк вешают окно."""
+    monkeypatch.setattr(hs, "DIFF_MAX_FILES", 5)
+    files = {f"chapters/{i}/chapter.txt": f"Глава {i}"
+             for i in range(20)}
+    _make_project(tmp_path, files)
+    hs.create(tmp_path, "Начало")
+    for i in range(20):
+        (tmp_path / f"chapters/{i}/chapter.txt").write_text(
+            f"Глава {i} — правка", encoding="utf-8")
+    hs.create(tmp_path, "Правка")
+    c_from, c_to = hs.checkpoints(tmp_path)["checkpoints"][::-1]
+    d = hs.diff(tmp_path, c_from["sha"], c_to["sha"])
+    assert len(d["files"]) == 5 and d["total_files"] == 20
 
 
 def test_diff_unknown_sha(tmp_path):

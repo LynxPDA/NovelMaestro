@@ -107,8 +107,8 @@ python3 web/main.py --host 0.0.0.0 --auth   # доступ с LAN + токен
 | GET/PUT/DELETE | `/api/cover` | обложка source/cover.* |
 | GET | `/api/history` (`?project=&limit=&offset=`) | список контрольных точек проекта (`web/history.py`, локальный git на dulwich): `checkpoints` (`sha`,`time`,`label`,`kind` — manual/run/apply/restore), `total`; у проекта без истории — пустой список, нет проекта — 404 |
 | POST | `/api/history` (`{project, label}`) | ручная контрольная точка; без изменений с прошлой точки — `created: false`, пустой label — 400 |
-| GET | `/api/history/diff` (`?project=&from=&to=`) | изменения между точками: файлы со статусами A/M/D и +/− строк; нет from/to — 400, нет точки — 400 |
-| GET | `/api/history/patch` (`?project=&from=&to=&path=`) | unified-diff одного файла (для разворачивания в UI); файла в паре точек нет — 400 |
+| GET | `/api/history/diff` (`?project=&from=&to=`) | изменения между точками: файлы со статусами A/M/D и +/− строк; большие файлы и удаления отдают `None` вместо чисел (порог `LINE_DELTA_MAX_CHARS` — difflib не гоняется по каждой главе большой книги), список ограничен `DIFF_MAX_FILES` (+ `total_files`); нет from/to — 400, нет точки — 400 |
+| GET | `/api/history/patch` (`?project=&from=&to=&path=`) | unified-diff одного файла (для разворачивания в UI); текст больше `PATCH_MAX_CHARS` обрезается с пометкой; файла в паре точек нет — 400 |
 | POST | `/api/history/restore` (`{project, sha}`) | вернуть файлы к точке: текущее состояние предварительно фиксируется точкой «Возврат к…» (kind=restore), промежуточные точки не пропадают |
 | GET | `/api/history/file` (`?project=&sha=&path=`) | файл в точке как text/plain — предпросмотр старой версии без копирования в рабочие файлы |
 | GET/PUT | `/api/{ner\|translate_check_llm}/review`, POST `.../apply` | review-флоу |

@@ -98,10 +98,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (mine.length) {
         attachToJob(mine[0].id);
       } else {
-        render();
+        await render();
       }
     } catch {
-      render(); // без активного запуска — просто пустая страница
+      await render(); // без активного запуска — просто пустая страница
     }
   }
 

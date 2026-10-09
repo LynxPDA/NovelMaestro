@@ -4180,6 +4180,13 @@ function viewProject(section, name, tab, job) {
       const STATUSES = { A: ["добавлен", "history-add"],
                          M: ["изменён", "history-mod"],
                          D: ["удалён", "history-del"] };
+      /* null в adds/dels — «много»: сервер не считает строки у больших
+         файлов и удалений (порог LINE_DELTA_MAX_CHARS) */
+      const countsText = (f) => {
+        if (f.status === "D") return "";
+        if (f.adds == null && f.dels == null) return "много";
+        return `+${f.adds ?? 0}${f.dels ? ` −${f.dels}` : ""}`;
+      };
       const rowsEl = h("div", { class: "history-diff-files" });
       for (const f of data.files || []) {
         const [stLabel, stClass] = STATUSES[f.status] || [f.status, ""];
@@ -4188,13 +4195,7 @@ function viewProject(section, name, tab, job) {
           {},
           h("code", { class: "history-diff-path" }, f.path),
           h("span", { class: `history-badge ${stClass}` }, stLabel),
-          h(
-            "span",
-            { class: "history-lines" },
-            f.status === "D"
-              ? `−${f.dels}`
-              : `+${f.adds}${f.dels ? ` −${f.dels}` : ""}`,
-          ),
+          h("span", { class: "history-lines" }, countsText(f)),
         );
         const body = h(
           "div",
@@ -4202,7 +4203,7 @@ function viewProject(section, name, tab, job) {
           h("div", { class: "field-help" }, "Загрузка…"),
         );
         summary.addEventListener("click", async () => {
-          if (body.dataset.loaded || f.status === "D") return;
+          if (body.dataset.loaded) return;
           try {
             const r = await api(
               `/history/patch?${new URLSearchParams({
@@ -4212,9 +4213,24 @@ function viewProject(section, name, tab, job) {
                 path: f.path,
               })}`,
             );
+            /* дифф — раскрашенный блок строк (спаны с классом строки):
+               рендер мгновенный, цвет строки несёт +/− */
+            const text = String(r.patch || "");
+            const line = (cls, s) =>
+              h("span", { class: cls },
+                h("span", { class: "history-diff-marker" }, s.charAt(0)),
+                s.slice(1) || " ");
+            const lines = text.split("\n").map((ln) => {
+              if (ln.startsWith("+") && !ln.startsWith("+++"))
+                return line("history-line-ins", ln);
+              if (ln.startsWith("-") && !ln.startsWith("---"))
+                return line("history-line-del", ln);
+              if (ln.startsWith("@@"))
+                return h("span", { class: "history-line-hunk" }, ln);
+              return h("span", { class: "history-line-ctx" }, ln || " ");
+            });
             body.replaceChildren(
-              h("pre", { class: "history-patch" }, r.patch || ""),
-            );
+              h("pre", { class: "history-patch" }, ...lines));
           } catch (ex) {
             body.replaceChildren(h("div", { class: "form-error" }, ex.message));
           }
@@ -4226,6 +4242,10 @@ function viewProject(section, name, tab, job) {
       if (!(data.files || []).length) {
         rowsEl.append(h("div", { class: "card-hint" },
           "Между этими точками изменений файлов нет"));
+      } else if ((data.total_files || 0) > data.files.length) {
+        rowsEl.append(h("div", { class: "card-hint" },
+          `Показаны первые ${data.files.length} из ${data.total_files} ` +
+          "изменённых файлов"));
       }
       UIC.modal({
         title: "Изменения между точками",
@@ -4277,8 +4297,19 @@ function viewProject(section, name, tab, job) {
 
     function row(c, idx) {
       /* строка точки: маркер-линия, метка+вид, время, действия */
-      const cmp = iconBtn("copy", "Сравнить с предыдущей точкой",
-        () => diffModal(items[idx + 1] || c, c));
+      const cmp = iconBtn("compare", "Сравнить с предыдущей точкой",
+        async () => {
+          /* вертушка на время сбора диффа: большая книга считается
+             заметно дольше малого проекта — окно не должно выглядеть
+             как зависшее */
+          if (cmp.classList.contains("busy")) return;
+          cmp.classList.add("busy");
+          try {
+            await diffModal(items[idx + 1] || c, c);
+          } finally {
+            cmp.classList.remove("busy");
+          }
+        });
       const restoreBtn = iconBtn("refresh", "Вернуть файлы проекта к этой точке",
         () => restoreModal(c));
       return h(

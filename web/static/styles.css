@@ -3129,3 +3129,40 @@ body[data-editor-theme="light"] .editor-area {
   max-height: 40vh;
   overflow: auto;
 }
+/* строки диффа: +зелёные/−красные, заголовки кусков — приглушённые;
+   спан-строка растягивается на ширину блока, фон виден полосой */
+.history-patch > span {
+  display: block;
+  min-height: 1.35em;
+}
+.history-diff-marker {
+  display: inline-block;
+  width: 1.2em;
+  font-weight: 600;
+  user-select: none;
+}
+.history-line-ins {
+  background: rgba(46, 160, 67, 0.16);
+  color: var(--text);
+}
+.history-line-del {
+  background: rgba(248, 81, 73, 0.16);
+  color: var(--text);
+}
+.history-line-hunk {
+  color: var(--accent);
+  opacity: 0.9;
+}
+.history-line-ctx {
+  color: var(--muted);
+}
+/* ожидание сравнения: иконка кнопки крутится (дифф большой книги
+   собирается заметно дольше малого) */
+.icon-btn.busy svg {
+  animation: nm-spin 0.9s linear infinite;
+}
+@keyframes nm-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

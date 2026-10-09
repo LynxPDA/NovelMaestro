@@ -38,13 +38,13 @@ const PROJECT_TABS = [
   "ner",
   "review",
   "chapters",
-  "history",
   "search",
   "status",
   "config",
   "prompts",
   "logs",
   "notes",
+  "history",
 ];
 const SECTION = "TMP";
 const BOOK = "Probe";

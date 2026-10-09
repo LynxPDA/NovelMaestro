@@ -427,7 +427,7 @@ const reopenProject = renderProject;
 
 /* все вкладки страницы проекта: viewProject(section, name, tab) */
 const TABS = ["files", "run", "editor", "ner", "review", "chapters", "search",
-              "status", "config", "prompts", "logs", "notes"];
+              "status", "config", "prompts", "logs", "notes", "history"];
 
 for (const tab of TABS) {
   test(`вкладка «${tab}» рендерится без ReferenceError`, async () => {
