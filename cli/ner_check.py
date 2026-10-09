@@ -313,12 +313,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rag_budget", type=int, default=22000,
                    help="RAG-режим: бюджет релевантного текста на термин, "
                         "ТОКЕНЫ (оценка; по умолчанию: 22000).")
-    p.add_argument("--rag_chunk_size", type=int, default=350,
-                   help="RAG-режим: размер чанка FTS5-индекса книги, "
-                        "ТОКЕНЫ (оценка; по умолчанию: 350).")
-    p.add_argument("--save-interval", type=int, default=1,
-                   help="RAG-режим: сохранять review-файл каждые N "
-                        "терминов (0 = только в конце)")
     p.add_argument("--rag_prompt_file", default=None,
                    help="RAG-режим: файл промпта с тегом <prompt_rag> "
                         "(по умолчанию: тот же --prompt_file).")
@@ -751,7 +745,9 @@ def run_rag(args, stage, prompt_tpl) -> int:
             return 1
     if args.rag_source_type:
         logger.info(f"🔎 RAG: {len(terms)} терминов.")
-    db = build_fts_index(text, args.rag_chunk_size)
+    # чанк FTS5-индекса — 350 ТОКЕНОВ (оценка): мельче — точнее
+    # привязка фрагмента, крупнее — шире контекст
+    db = build_fts_index(text, 350)
     fields = [f.strip() for f in args.fields.split(",") if f.strip()]
     # бюджет на термин — ТОЛЬКО фрагменты (промпт не вычитается):
     # один термин = один запрос, фрагменты влезают в rag_budget
@@ -796,10 +792,8 @@ def run_rag(args, stage, prompt_tpl) -> int:
                         logger=logger)
     progress.start()
 
-    # накопительный review-файл: --save-interval N — сохранять каждые
-    # N терминов (0 = только в конце; дефолт 1 — после каждого термина:
-    # упавший прогон не теряет уже полученные правки)
-    save_interval = max(0, args.save_interval or 0)
+    # накопительный review-файл пишется после КАЖДОГО ответа LLM —
+    # упавший прогон не теряет уже полученные правки
     meta, existing = load_review_file(args.review, logger)
     created = (meta or {}).get("created") \
         or datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -827,8 +821,7 @@ def run_rag(args, stage, prompt_tpl) -> int:
             if not ok:
                 failures += 1
             progress.step()
-            if save_interval and progress.done % save_interval == 0:
-                flush_review()
+            flush_review()
 
     workers = max(1, min(workers, total))
     with ThreadPoolExecutor(max_workers=workers) as ex:

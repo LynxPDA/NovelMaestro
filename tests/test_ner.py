@@ -229,7 +229,6 @@ def test_run_two_pass_fresh(tmp_path, monkeypatch, ner_globals):
         all_chunks=["текст чанка один", "текст чанка два"], stage=_stage(),
         pass1_prompt="ПРОМПТ1", pass2_prompt="ПРОМПТ2 {chunk_text} {ner_json}",
         max_workers=2, ner_file=out, threshold=0.95, ngram_size=3,
-        save_interval=1,
     )
     data = json.loads(Path(out).read_text(encoding="utf-8"))
     assert len(data) == 1 and data[0]["term"] == "陈阳"
@@ -255,7 +254,6 @@ def test_run_two_pass_no_resume_from_cache(tmp_path, monkeypatch, ner_globals):
         all_chunks=["текст"], stage=_stage(),
         pass1_prompt="П1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=1, ner_file=out, threshold=0.95, ngram_size=3,
-        save_interval=5,
     )
     assert len(calls) == 2  # pass1 + pass2 для единственного чанка
     data = json.loads(Path(out).read_text(encoding="utf-8"))
@@ -273,7 +271,6 @@ def test_run_two_pass_counts_failures(tmp_path, monkeypatch, ner_globals):
         all_chunks=["чанк один", "чанк два", "чанк три"], stage=_stage(),
         pass1_prompt="ПРОМПТ1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=2, ner_file=out, threshold=0.95, ngram_size=3,
-        save_interval=1,
     )
     assert failed == 3  # все чанки упали
     data = json.loads(Path(out).read_text(encoding="utf-8"))
@@ -291,7 +288,7 @@ def test_run_two_pass_all_ok_returns_zero(tmp_path, monkeypatch, ner_globals):
         all_chunks=["текст"], stage=_stage(),
         pass1_prompt="ПРОМПТ1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=1, ner_file=str(tmp_path / "ner.json"),
-        threshold=0.95, ngram_size=3, save_interval=5,
+        threshold=0.95, ngram_size=3,
     )
     assert failed == 0
 
@@ -313,7 +310,6 @@ def test_run_two_pass_pass2_fallback(tmp_path, monkeypatch, ner_globals):
         all_chunks=["текст"], stage=_stage(),
         pass1_prompt="ПРОМПТ1", pass2_prompt="П2 {chunk_text} {ner_json}",
         max_workers=1, ner_file=out, threshold=0.95, ngram_size=3,
-        save_interval=5,
     )
     data = json.loads(Path(out).read_text(encoding="utf-8"))
     assert len(data) == 1 and data[0]["term"] == "陈阳"

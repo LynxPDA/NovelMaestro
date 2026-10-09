@@ -156,8 +156,6 @@ NON_VOTABLE_FIELDS = {"term", "count", "aliases"}
 DEFAULT_NON_VOTED_FIELDS = {"notes", "context", "translated_context"}
 TRANSIENT_FIELDS = {"_ngrams", "_len", "_source_chunks"}
 
-DEFAULT_SAVE_INTERVAL = 10
-
 # ══════════════════════════════════════════════════════════════════════
 # ГЛОБАЛЬНОЕ СОСТОЯНИЕ
 # ══════════════════════════════════════════════════════════════════════
@@ -737,7 +735,8 @@ def fill_term_context(ners: list[dict], chunk_text: str, max_len: int,
 #  Thread 3: pass1(2) → pass2(2) → pass1(6) → pass2(6) → ...
 #  Thread 4: pass1(3) → pass2(3) → pass1(7) → pass2(7) → ...
 #
-#  Снапшот ner.json пишется каждые save_interval завершённых чанков.
+#  Снапшот ner.json пишется после КАЖДОГО завершённого чанка — упавший
+#  прогон не теряет термины уже готовых чанков.
 #  Возобновление с места остановки убрано — каждый запуск идёт с нуля.
 # ══════════════════════════════════════════════════════════════════════
 
@@ -751,15 +750,14 @@ def run_two_pass(
     ner_file: str,
     threshold: float,
     ngram_size: int,
-    save_interval: int,
     context_max_len: int = 300,
 ) -> int:
     """Двухпроходный конвейер NER. Возвращает число УПАВШИХ чанков
     (pass1-ошибка/необработанное исключение; pass2-fallback — не сбой).
 
     Каждый запуск обрабатывает ВСЕ чанки с первого — возобновление
-    с места остановки убрано. Каждые save_interval чанков пишется
-    снапшот ner.json (защита от падения, не кэш)."""
+    с места остановки убрано. После каждого чанка пишется снапшот
+    ner.json (защита от падения, не кэш)."""
     logger = stage.logger
     total = len(all_chunks)
 
@@ -783,8 +781,6 @@ def run_two_pass(
         """n шагов прогресса (под progress_lock — потокобезопасно)."""
         with progress_lock:
             progress.step(n)
-
-    completed_since_save = 0
 
     def _process_one_chunk(idx: int) -> tuple[int, list[dict], str | None]:
         """Один поток: pass1 → pass2 для чанка idx."""
@@ -862,19 +858,15 @@ def run_two_pass(
             if err:
                 failed += 1  # Чанк не извлечён
 
-            completed_since_save += 1
-
-            if completed_since_save >= save_interval:
-                with done_lock:
-                    snapshot = copy.deepcopy(completed)
-                save_ner_snapshot(
-                    snapshot, ner_file,
-                    threshold, ngram_size, logger,
-                )
-                _log(logger, logging.INFO,
-                     f"💾 Снапшот ner.json ({len(completed)}/{total} готово)")
-                progress.log_state()
-                completed_since_save = 0
+            with done_lock:
+                snapshot = copy.deepcopy(completed)
+            save_ner_snapshot(
+                snapshot, ner_file,
+                threshold, ngram_size, logger,
+            )
+            _log(logger, logging.INFO,
+                 f"💾 Снапшот ner.json ({len(completed)}/{total} готово)")
+            progress.log_state()
 
     progress.close()
 
@@ -1395,13 +1387,6 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--save-interval", type=int, default=DEFAULT_SAVE_INTERVAL,
-        help=(
-            "Интервал сохранения снапшота ner.json (каждые N чанков, "
-            f"по умолчанию: {DEFAULT_SAVE_INTERVAL})."
-        ),
-    )
-    parser.add_argument(
         "--keep-fields", type=str, default="", metavar="FIELDS",
         help=(
             "Список полей через запятую, которые ВКЛЮЧАЮТСЯ в голосование. "
@@ -1608,7 +1593,6 @@ def main():
         return 0
 
     max_workers = max(1, min(16, args.threads))
-    save_interval = max(1, args.save_interval)
 
     # ── Предпросмотр запроса (--preview-request): pass1 первого чанка ──
     if args.preview_request:
@@ -1635,8 +1619,7 @@ def main():
     if args.two_pass:
         _log(logger, logging.INFO,
              f"🚀 TWO-PASS PIPELINE | Модель: {profile.model} | "
-             f"Чанков: {len(all_chunks)} | Потоков: {max_workers} | "
-             f"Save interval: {save_interval}")
+             f"Чанков: {len(all_chunks)} | Потоков: {max_workers}")
 
         failed_chunks = run_two_pass(
             all_chunks=all_chunks,
@@ -1647,7 +1630,6 @@ def main():
             ner_file=args.ner_file,
             threshold=args.threshold,
             ngram_size=args.ngram,
-            save_interval=save_interval,
             context_max_len=args.context_max_len,
         )
 
@@ -1657,10 +1639,8 @@ def main():
     else:
         _log(logger, logging.INFO,
              f"🚀 Модель: {profile.model} | Чанков: {len(all_chunks)} "
-             f"| Потоков: {max_workers} | Save interval: {save_interval}")
+             f"| Потоков: {max_workers}")
         _log(logger, logging.INFO, "━━━ ИЗВЛЕЧЕНИЕ (однопроходное) ━━━")
-
-        chunks_since_save = 0
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
@@ -1694,18 +1674,17 @@ def main():
                 else:
                     _log(logger, logging.INFO, f"✅ Chunk {idx}: 0 entities")
 
-                chunks_since_save += 1
                 progress.step()
 
-                if chunks_since_save >= save_interval:
-                    with ner_lock:
-                        merge_alias_groups(global_ner_data, logger)
-                        _save_ner_data_unlocked(args.ner_file)
-                    _log(logger, logging.INFO,
-                         f"💾 Промежуточное сохранение "
-                         f"({len(global_ner_data)} терминов)")
-                    progress.log_state()
-                    chunks_since_save = 0
+                # после каждого чанка — снапшот: упавший прогон не теряет
+                # термины уже готовых чанков
+                with ner_lock:
+                    merge_alias_groups(global_ner_data, logger)
+                    _save_ner_data_unlocked(args.ner_file)
+                _log(logger, logging.INFO,
+                     f"💾 Промежуточное сохранение "
+                     f"({len(global_ner_data)} терминов)")
+                progress.log_state()
 
             progress.close()
 

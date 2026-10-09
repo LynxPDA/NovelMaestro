@@ -261,8 +261,7 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
     for name, flag in (("threads", "--threads"),
                        ("chunk_size", "--chunk_size"),
                        ("retries", "--retries"),
-                       ("timeout", "--timeout"),
-                       ("save_interval", "--save-interval")):
+                       ("timeout", "--timeout")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
     if form.get("threshold") not in (None, ""):
@@ -318,10 +317,6 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
     argv += _range_argv("start", form)
     if form.get("rag_budget") not in (None, ""):
         argv += ["--rag_budget", str(form["rag_budget"])]
-    if form.get("rag_chunk_size") not in (None, ""):
-        argv += ["--rag_chunk_size", str(form["rag_chunk_size"])]
-    if form.get("save_interval") not in (None, ""):
-        argv += ["--save-interval", str(form["save_interval"])]
     # пакетная проверка: типы, бюджет запроса, порог count
     if form.get("types"):
         argv += ["--types", str(form["types"])]
@@ -382,8 +377,7 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
                        ("threads", "--threads"),
                        ("max_fixes_per_chapter", "--max_fixes_per_chapter"),
                        ("min_fix_length", "--min_fix_length"),
-                       ("max_changed_chars", "--max_changed_chars"),
-                       ("save_interval", "--save-interval")):
+                       ("max_changed_chars", "--max_changed_chars")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
     # единый таймаут: стриму — то же значение (форма показывает

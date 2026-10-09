@@ -237,7 +237,7 @@ def test_ner_check_rag_ui_present():
     assert "ner_check_prompt.txt" in st
     # RAG-поля объявлены в реестре и помечены режимом rag: их прячет не
     # ручной блок в SPA, а when у самой настройки
-    for nm in ("RAG_TERMS", "RAG_SOURCE_TYPE", "RAG_BUDGET", "SAVE_INTERVAL"):
+    for nm in ("RAG_TERMS", "RAG_SOURCE_TYPE", "RAG_BUDGET"):
         assert nm in st, nm
     assert st.count('when=(("passes", ("rag",)),)') >= 5
     cli = (REPO / "cli" / "ner_check.py").read_text(encoding="utf-8")
