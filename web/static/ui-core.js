@@ -186,7 +186,7 @@
    * человек (или дефолт), а не таблица расширений. */
   var EDITOR_LANGS = [
     { v: "text", label: "plain text" },
-    { v: "prompt", label: "prompt (разметка промптов)" },
+    { v: "prompt", label: "prompt" },
     { v: "markdown", label: "markdown" },
     { v: "html", label: "HTML" },
     { v: "xml", label: "XML" },

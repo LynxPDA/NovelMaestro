@@ -69,8 +69,8 @@ PROJECTS_API = ["SECTIONS", "DEFAULT_SECTIONS", "load_sections",
                 "delete_project", "copy_project"]
 # Зеркало API core/transport.py (единственная точка выхода в сеть)
 TRANSPORT_API = ["TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStream",
-                 "ResponseStream", "open_stream", "open_get", "client",
-                 "reset_client", "BACKEND"]
+                 "ResponseStream", "open_stream", "open_get", "open_json_get",
+                 "client", "reset_client", "BACKEND"]
 # Зеркало API core/deps.py (реестр внешних зависимостей)
 DEPS_API = ["ROLES", "status", "format_status", "missing_hint"]
 # Зеркало API core/settings.py (реестр настроек — одно место истины)
