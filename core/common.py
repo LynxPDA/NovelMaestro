@@ -58,7 +58,7 @@ from collections import defaultdict
 # форма остаётся разрешимой для анализаторов, у которых core/ — корень поиска
 from . import transport
 from .transport import (BrokenStream, ConnectTimeout, ReadTimeout, open_get,
-                       open_stream)
+                       open_json_get, open_stream)
 from dotenv import dotenv_values
 
 # ══════════════════════════════════════════════════════════════════════
@@ -240,6 +240,62 @@ def _probe_model_ids(text: str) -> list:
 def _probe_ms(started: float) -> int:
     """Сколько длилась проверка, миллисекунды."""
     return round((time.perf_counter() - started) * 1000)
+
+# ══════════════════════════════════════════════════════════════════
+# ПРОВЕРКА ОБНОВЛЕНИЙ (GitHub Releases)
+# ══════════════════════════════════════════════════════════════════
+#: владелец/репозиторий на GitHub — источник релизов (тег v*, zip портативки)
+GITHUB_REPO = "LynxPDA/NovelMaestro"
+RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+#: обновление смотрят редко и молча: тяжёлые ответы не нужны
+UPDATE_CHECK_TIMEOUT = 10.0
+
+def latest_release() -> dict:
+    """Последний релиз GitHub: {tag, version, name, url, published, notes}.
+
+    Сетевые ошибки НЕ бросаются — отчёт {ok: False, error} (проверка не
+    должна ронять страницу и сессию). tag без ведущего «v»; notes —
+    начало описания релиза (для подсказки в интерфейсе).
+    """
+    try:
+        data = open_json_get(RELEASES_URL, timeout=UPDATE_CHECK_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001 — отчёт, не падение
+        return {"ok": False, "error": str(exc)}
+    tag = str(data.get("tag_name") or "").strip()
+    body = str(data.get("body") or "").strip()
+    return {
+        "ok": True,
+        "tag": tag,
+        "version": tag[1:] if tag.startswith("v") else tag,
+        "name": str(data.get("name") or "").strip(),
+        "url": str(data.get("html_url") or ""),
+        "published": str(data.get("published_at") or ""),
+        "notes": body[:400],
+    }
+
+def version_tuple(version: str) -> tuple:
+    """Версия в сравнимый кортеж чисел: «0.3.10» > «0.3.9», мусор — нули.
+
+    Простая схема сравнения без сторонних библиотек: достаточно для
+    семантики x.y.z, которую ведёт VERSION/теги релизов.
+    """
+    out = []
+    for part in str(version or "").strip().split("."):
+        digits = ""
+        for ch in part.strip():
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        out.append(int(digits) if digits else 0)
+    return tuple(out or [0])
+
+def update_available(current: str, release: dict | None) -> bool:
+    """Есть ли релиз новее текущей версии (сравнение version_tuple).
+    release без ok/version (не проверялся, сеть лежала) — обновления нет."""
+    if not release or not release.get("ok") or not release.get("version"):
+        return False
+    return version_tuple(release["version"]) > version_tuple(current)
 
 
 def print_env_help() -> None:

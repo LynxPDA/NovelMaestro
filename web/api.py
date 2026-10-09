@@ -50,6 +50,8 @@ def register(router: Router, host: str) -> None:
     router.add("GET", "/api/session", api_common._session)
     router.add("POST", "/api/login", api_common._login)
     router.add("POST", "/api/logout", api_common._logout)
+    router.add("POST", "/api/update/check", api_common._update_check)
+    router.add("GET", "/api/update/download", api_common._update_download)
     api_projects._register_hub(router)
     api_files._register_files(router)
     api_files._register_history(router)

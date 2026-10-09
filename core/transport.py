@@ -23,6 +23,7 @@ HTTP в проекте ходит отсюда и больше ниоткуда:
 """
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -44,7 +45,7 @@ __all__ = [
     "BACKEND", "DEFAULT_CONNECT_TIMEOUT", "DEFAULT_READ_TIMEOUT",
     "POOL_MAX_CONNECTIONS", "TransportError", "ConnectTimeout", "ReadTimeout",
     "BrokenStream", "ResponseStream", "client", "open_stream", "open_get",
-    "reset_client",
+    "open_json_get", "reset_client",
 ]
 
 
@@ -132,6 +133,14 @@ class ResponseStream:
             # хвост без завершающего \n (стрим оборвался или кончился)
             yield buf.rstrip(b"\r")
 
+    def iter_bytes(self) -> Iterator[bytes]:
+        """Сырые куски тела как пришли (бинарные скачивания, zip релиза):
+        переводы строк не трогает — в отличие от `iter_lines()` (SSE)."""
+        try:
+            yield from self._resp.iter_bytes()
+        except Exception as exc:  # noqa: BLE001 — нормализуем, не поглощаем
+            raise _normalize(exc) from exc
+
 
 # ══════════════════════════════════════════════════════════════════════
 # Общий клиент (лениво, один на процесс)
@@ -187,17 +196,44 @@ def open_stream(url: str, *, headers: dict | None = None, payload: Any = None,
 
 
 def open_get(url: str, *, headers: dict | None = None,
-             timeout: float = 15.0) -> ResponseStream:
+             timeout: float = 15.0,
+             follow_redirects: bool = False) -> ResponseStream:
     """GET с коротким таймаутом: проверка доступности сервера (`/v1/models`).
 
     Отдача та же, что у рабочего запроса: общий клиент, те же нормализованные
     ошибки. Проверка обязана ходить ровно тем же путём, которым пойдёт работа,
     иначе «зелёная галочка» и падающий конвейер могут быть разные серверы.
     Тело читается целиком — список моделей маленький, стрим тут не нужен.
+    follow_redirects — для скачиваний вне LLM (релизные zip): LLM-сервера
+    редиректов не дают, а GitHub на них живёт.
     """
     tm = httpx.Timeout(timeout, connect=timeout, write=timeout, pool=timeout)
     return ResponseStream(
-        client().stream("GET", url, headers=headers or {}, timeout=tm))
+        client().stream("GET", url, headers=headers or {}, timeout=tm,
+                        follow_redirects=follow_redirects))
+
+
+def open_json_get(url: str, *, timeout: float = 15.0) -> dict:
+    """GET JSON без ключей и стримов: GitHub API (проверка обновлений).
+
+    Отдаёт разобранный JSON; не-2xx — TransportError с кодом в тексте,
+    неразобранное тело — тоже. Клиент общий, ошибки те же нормализованные.
+    """
+    status, body = 0, b""
+    with open_get(url, timeout=timeout) as resp:
+        body = b"\n".join(resp.iter_lines())
+        status = resp.status_code
+    if status != 200:
+        raise TransportError(
+            f"HTTP {status}: "
+            + body[:120].decode("utf-8", "replace").strip())
+    try:
+        data = json.loads(body or b"{}")
+    except ValueError as exc:
+        raise TransportError(f"Ответ не JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise TransportError("Ответ не JSON-объект")
+    return data
 
 
 def main(argv: list[str] | None = None) -> int:

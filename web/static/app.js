@@ -3,7 +3,7 @@
  * Hub — разделы, карточки проектов, мастер создания, управление.
  * Файлы — браузер, редактор, загрузка, скачивание. */
 
-const state = { auth: false, host: "", tokenSet: false };
+const state = { auth: false, host: "", tokenSet: false, update: null };
 
 
 /* Предпросмотр markdown/html (Заметки и «Правка» файлов).
@@ -2075,6 +2075,126 @@ function themeSwitch() {
   return btn;
 }
 
+/* ── обновления: проверка релиза и обновление по кнопке ───
+
+   Способ обновления зависит от установки (update.kind с сервера):
+   • docker — образ из реестра: интерфейс показывает команду
+     «docker compose pull && docker compose up -d»;
+   • portable / git — zip релиза: скачивание кнопкой, дальше
+     перенос projects/ и .env в новую сборку (портативка) или
+     просто запуск скачанной версии.
+
+   Проверка — POST /api/update/check (один GET к GitHub Releases,
+   кеш в процессе сервера); сессия отдаёт сводку без сети. Пока
+   обновления не проверялись — тихо; после проверки и появления
+   нового релиза — точка-бейдж на меню «⋮». */
+const UPDATE_POLL_MS = 6 * 60 * 60 * 1000; // фоновая перепроверка раз в 6 ч
+let updatePollTimer = null;
+
+function updateBadgeShow(on) {
+  const btn = document.querySelector(".menu-wrap .kebab-btn");
+  if (btn) btn.classList.toggle("has-update", !!on);
+}
+
+async function checkUpdates(showToast) {
+  if (!state.auth) return;
+  try {
+    const r = await api("/update/check", { method: "POST" });
+    state.update = r.update || state.update;
+    const has = Boolean(state.update && state.update.available);
+    updateBadgeShow(has);
+    if (showToast) {
+      toast(has
+        ? `Доступна новая версия: v${state.update.release.version}`
+        : "Обновлений нет — у вас последняя версия");
+    }
+  } catch (ex) {
+    if (showToast) toast(`Обновление не проверить: ${ex.message}`, "err");
+  }
+}
+
+function ensureUpdatePolling() {
+  if (updatePollTimer) return;
+  updatePollTimer = setInterval(() => checkUpdates(false), UPDATE_POLL_MS);
+}
+
+/* Пункт меню «⋮»: строка состояния + кнопки проверки/обновления.
+   Вызывается при каждой сборке layout — рисует по state.update. */
+function updateMenuItem() {
+  const u = state.update || {};
+  const rel = u.release || {};
+  const kindTitle = {
+    docker: "Docker-образ",
+    portable: "Портативная сборка (Windows)",
+    git: "Запуск из репозитория",
+  }[u.kind] || u.kind || "";
+  const box = h("div", { class: "update-box" });
+  box.append(h("div", { class: "update-title" },
+    `Обновления · v${u.current || state.version || "?"}`));
+  if (u.checked) {
+    if (u.available) {
+      box.append(h("div", { class: "update-state update-new" },
+        `Доступна v${rel.version}${rel.name && rel.name !== rel.tag ? ` — ${rel.name}` : ""}`));
+      if (rel.notes) {
+        box.append(h("div", { class: "update-notes" }, rel.notes));
+      }
+      if (u.kind === "docker") {
+        box.append(h("div", { class: "update-how" },
+          "Docker обновляется образом: на хосте — ",
+          h("code", { class: "update-cmd" },
+            "docker compose pull && docker compose up -d")));
+      } else {
+        box.append(h("div", { class: "update-how" },
+          u.kind === "portable"
+            ? "Скачается zip новой сборки; папки projects/ и .env переносятся в неё как при установке."
+            : "Скачается zip сборки; данные в projects/ не трогаются."));
+        box.append(h("button", {
+          class: "btn btn-sm btn-primary update-btn",
+          onclick: async () => {
+            try {
+              // сначала через fetch (нет Content-Disposition в window.open)
+              const res = await fetch("/api/update/download",
+                { headers: { "X-Requested-With": "fetch" } });
+              if (!res.ok) {
+                const data = await res.json().catch(() => null);
+                throw new Error((data && data.error) || `Ошибка ${res.status}`);
+              }
+              const blob = await res.blob();
+              const a = h("a", {
+                href: URL.createObjectURL(blob),
+                download: `novelmaestro-portable-${rel.version}.zip`,
+              });
+              document.body.append(a);
+              a.click();
+              a.remove();
+              setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+              toast("Архив новой версии скачан");
+            } catch (ex) {
+              toast(ex.message, "err");
+            }
+          },
+        }, "Скачать обновление"));
+      }
+    } else {
+      box.append(h("div", { class: "update-state" },
+        "У вас последняя версия"));
+    }
+    box.append(h("button", {
+      class: "btn btn-sm btn-ghost update-btn",
+      onclick: () => checkUpdates(true),
+    }, `Проверить снова${rel.url ? "" : ""}`));
+  } else {
+    box.append(h("div", { class: "update-state" },
+      kindTitle ? `Установка: ${kindTitle}. Обновление не проверялось.`
+                : "Обновление не проверялось."));
+    box.append(h("button", {
+      class: "btn btn-sm btn-ghost update-btn",
+      onclick: () => checkUpdates(true),
+    }, "Проверить обновления"));
+  }
+  return box;
+}
+
 function layout(content) {
   const route = parseRoute();
   // проект — часть раздела «Проекты»: подсветить соответствующий пункт
@@ -2101,6 +2221,8 @@ function layout(content) {
     );
   const userMenu = menuBtn(
     [
+      { el: updateMenuItem() },
+      { sep: true },
       { label: "О программе", href: "#/help" },
       {
         label: "Выйти",
@@ -3213,12 +3335,17 @@ async function boot() {
     state.host = s.host || "";
     state.tokenSet = !!s.token_set;
     state.version = s.version || "";
+    state.update = s.update || null;
   } catch {
     state.auth = false;
   }
   applyEditorSettings();
   window.addEventListener("hashchange", render);
   render();
+  if (state.auth) {
+    ensureUpdatePolling();
+    if (state.update && state.update.available) updateBadgeShow(true);
+  }
 }
 
 boot();

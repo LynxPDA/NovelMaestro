@@ -410,7 +410,7 @@ GROUPS: tuple = (
             _s("EPUB_OUTPUT_TYPE", "Тип выходного файла", "select", "chapter", options=("chapter", "translated", "redacted", "polished"),
                 labels={'chapter': "chapter.txt", 'translated': "translated.txt", 'redacted': "redacted.txt", 'polished': "polished.txt"},
                 help="какой файл создаётся в папке главы (канон артефактов стадий)", stage="epub"),
-            _s("EPUB_CLEAN_OUTPUT", "Очистить папки глав перед записью", "bool", False,
+            _s("EPUB_CLEAN_OUTPUT", "Очистить папки глав перед записью", "bool", True,
                 help="Удалить старые каталоги глав (00000_1_…, 00000_2_…) в chapters/ перед записью. Рекомендуется при повторном разборе — иначе старые главы останутся рядом с новыми и могут попасть в конвейер",
                 stage="epub"),
         ),

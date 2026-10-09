@@ -56,12 +56,12 @@ const PROJECT_TABS = [
   ["review", "Проверки"],
   ["chapters", "Главы"],
   ["search", "Поиск"],
-  ["history", "История"],
   ["status", "Статус"],
   ["config", "Настройки"],
   ["prompts", "Промпты"],
   ["logs", "Логи"],
   ["notes", "Заметки"],
+  ["history", "История"],
 ];
 
 /* Живой view открытого проекта: {key, setView}. Вкладки проекта — локальное
@@ -4310,8 +4310,7 @@ function viewProject(section, name, tab, job) {
       if (!items.length) {
         list.replaceChildren(
           h("div", { class: "card-hint" },
-            "Контрольных точек ещё нет. Создайте первую кнопкой «＋ Контрольная точка» " +
-            "или включите автоматические точки в «Настройках» приложения."));
+            "Точек пока нет. Создайте первую кнопкой выше — снимок состояния файлов «ner.json» и глав; «tmp/» и «logs/» в точки не попадают. Автоматические точки (перед применением правок и после запусков) включаются в «Настройках» приложения."));
         return;
       }
       /* items — от свежей к старой; рисуем сверху вниз (свежая сверху) */
@@ -4370,15 +4369,14 @@ function viewProject(section, name, tab, job) {
       });
     });
 
+    /* тулбар: заголовок слева, кнопка справа; пояснение — одна строка help
+       под шапкой (не «простыня» над списком) */
     const toolbar = h(
       "div",
-      { class: "toolbar" },
-      h("div", { class: "files-bulk" },
-        h("span", { class: "files-toolbar-label" },
-          "Контрольные точки — снимки состояния файлов проекта. " +
-          "Автоматические точки включаются в «Настройках» приложения."),
-        h("span", { class: "spacer" }),
-        newBtn),
+      { class: "files-toolbar history-toolbar" },
+      h("span", { class: "history-heading" }, "Контрольные точки"),
+      h("span", { class: "spacer" }),
+      newBtn,
     );
     wrap.append(toolbar, err, list);
     await load();

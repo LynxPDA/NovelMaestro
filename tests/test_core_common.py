@@ -1991,6 +1991,52 @@ def test_probe_server_transport_errors(monkeypatch, exc, part):
     out = C.probe_server("http://x:1", timeout=5)
     assert not out["ok"] and part in out["error"]
 
+# ── проверка обновлений (GitHub Releases) ──────────────────────
+@pytest.mark.parametrize("cur,rel,want", [
+    ("0.3.9", "0.3.10", True),
+    ("0.3.10", "0.3.9", False),
+    ("0.3.6", "0.3.6", False),
+    ("0.3", "0.3.1", True),
+    ("", "0.1", True),
+    ("0.4.0", "", False),
+], ids=["older", "newer", "same", "short-current", "empty-current",
+        "no-release"])
+def test_version_tuple_compare(cur, rel, want):
+    """Сравнение версий без сторонних библиотек: по числам, x.y.z."""
+    assert (C.version_tuple(rel) > C.version_tuple(cur)) is want
+
+def test_version_tuple_garbage_is_zero():
+    """Мусор в части версии — ноль, не падение (v-префикс и суффиксы)."""
+    assert C.version_tuple("v0.4b2") == (0, 4)
+    assert C.version_tuple("") == (0,)
+
+def test_update_available_needs_ok_release():
+    """Без успешного релиза обновления нет — не падение (и None тоже)."""
+    assert not C.update_available("0.1", None)
+    assert not C.update_available("0.1", {"ok": False})
+
+def test_latest_release_ok(monkeypatch):
+    """Живой ответ GitHub: tag без v, notes обрезаны, url пробрасывается."""
+    def fake_get(url, *, timeout=None):
+        assert "releases/latest" in url
+        return {"tag_name": "v1.2.3", "name": "Релиз 1.2.3",
+                "html_url": "https://example.com/r",
+                "published_at": "2026-01-01T00:00:00Z",
+                "body": "x" * 1000}
+    monkeypatch.setattr(C, "open_json_get", fake_get)
+    out = C.latest_release()
+    assert out["ok"] and out["version"] == "1.2.3" and out["tag"] == "v1.2.3"
+    assert out["url"] == "https://example.com/r"
+    assert len(out["notes"]) == 400  # потолок подсказки в интерфейсе
+
+def test_latest_release_network_error(monkeypatch):
+    """Сеть лежит — отчёт {ok: False, error}, а не исключение."""
+    def fake_get(url, *, timeout=None):
+        raise C.ConnectTimeout("нет сети")
+    monkeypatch.setattr(C, "open_json_get", fake_get)
+    out = C.latest_release()
+    assert not out["ok"] and "нет сети" in out["error"]
+
 
 def test_provider_list():
     """Список идентификаторов: разделители любые, регистр — нижний, пусто → []."""

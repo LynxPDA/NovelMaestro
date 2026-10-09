@@ -70,12 +70,14 @@ class _Stream:
 class _Recorder:
     """Пишет аргументы stream(): так видно форму вызова транспорта."""
 
-    def __init__(self):
+    def __init__(self, reply=None):
         self.calls = []
+        self.reply = reply  # не-None — этим телом отвечает заглушка
 
     def stream(self, method, url, **kw):
         self.calls.append({"method": method, "url": url, **kw})
-        return _Stream(chunks=[b"data: [DONE]\n"])
+        return _Stream(chunks=self.reply if self.reply is not None
+                       else [b"data: [DONE]\n"])
 
 
 def _stream(chunks=(), exc=None, status=200, headers=None):
@@ -108,6 +110,19 @@ def test_status_and_headers_pass_through():
     with _stream(status=429, headers={"Retry-After": "7"}) as resp:
         assert resp.status_code == 429
         assert resp.headers.get("Retry-After") == "7"
+
+@pytest.mark.parametrize("chunks,want", [
+    ((b"PK\x03\x04\r\n\x00", b"PK\x01\x02\n\r"),
+     b"PK\x03\x04\r\n\x00PK\x01\x02\n\r"),
+    # переводы строк — данные, а не границы: iter_bytes их не трогает
+    ((b"a\nb\r\nc",), b"a\nb\r\nc"),
+    ((), b""),
+], ids=["zip-bytes", "newlines-kept", "empty"])
+def test_iter_bytes_keeps_raw_body(chunks, want):
+    """Сырое тело для бинарных скачиваний: zip-байты и \n/\r не трогаются
+    (iter_lines резал бы \r и склеивал строки — zip бился)."""
+    with _stream(chunks) as resp:
+        assert b"".join(resp.iter_bytes()) == want
 
 
 def test_response_closed_on_exit():
@@ -182,6 +197,45 @@ def test_default_timeouts_match_stage_defaults():
     assert timeout.read == T.DEFAULT_READ_TIMEOUT == 900.0
     assert timeout.write == T.DEFAULT_READ_TIMEOUT
     assert timeout.pool == T.DEFAULT_CONNECT_TIMEOUT
+
+def test_open_get_request_shape(monkeypatch):
+    """GET-проверка: форма вызова и follow_redirects — только по флагу
+    (LLM-серверу редиректы не нужны, GitHub без них не отдаёт ассет)."""
+    rec = _Recorder()
+    monkeypatch.setattr(T, "_client", rec)
+    with T.open_get("http://127.0.0.1:1/v1/models",
+                    headers={"Authorization": "Bearer k"},
+                    timeout=5) as resp:
+        assert list(resp.iter_lines()) == [b"data: [DONE]"]
+    call = rec.calls[0]
+    assert call["method"] == "GET" and call["url"].endswith("/v1/models")
+    assert call["follow_redirects"] is False
+    timeout = call["timeout"]
+    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) \
+        == (5, 5, 5, 5)
+    with T.open_get("http://127.0.0.1:1/x", follow_redirects=True):
+        pass
+    assert rec.calls[1]["follow_redirects"] is True
+
+def test_open_json_get_ok(monkeypatch):
+    """JSON GET: 200 + тело — разобранный словарь."""
+    rec = _Recorder(reply=[b'{"a": 1}'])
+    monkeypatch.setattr(T, "_client", rec)
+    assert T.open_json_get("http://127.0.0.1:1/api") == {"a": 1}
+    assert rec.calls[0]["method"] == "GET"
+
+@pytest.mark.parametrize("status,body,want", [
+    (404, b'{"message": "Not Found"}', "HTTP 404"),
+    (200, b"not json", "Ответ не JSON"),
+    (200, b'[1, 2]', "Ответ не JSON-объект"),
+], ids=["http-error", "not-json", "not-dict"])
+def test_open_json_get_errors(monkeypatch, status, body, want):
+    rec = _Recorder()
+    rec.stream = lambda method, url, **kw: _Stream(chunks=[body], status=status)
+    monkeypatch.setattr(T, "_client", rec)
+    with pytest.raises(T.TransportError) as exc:
+        T.open_json_get("http://127.0.0.1:1/api")
+    assert want in str(exc.value)
 
 
 def test_client_is_shared():
