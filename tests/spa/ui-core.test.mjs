@@ -65,10 +65,25 @@ test("etaDuration: секунды/минуты/часы", () => {
   assert.equal(UICore.etaDuration(undefined), "0 с");
 });
 
-test("etaClock: часы:минуты, две цифры", () => {
-  const clock = UICore.etaClock(new Date(2026, 0, 1, 9, 5).getTime());
+test("etaClock: часы:минуты, две цифры (сегодняшний день)", () => {
+  const t = new Date();
+  t.setHours(9, 5, 0, 0);
+  const clock = UICore.etaClock(t.getTime());
   assert.match(clock, /^\d{2}:\d{2}$/);
   assert.equal(clock.slice(0, 2), "09");
+});
+
+test("etaClock: сегодня — только время, другой день — с датой", () => {
+  const fmt = (d) => d.toLocaleTimeString("ru-RU", {
+    hour: "2-digit", minute: "2-digit",
+  });
+  const now = new Date();
+  assert.equal(UICore.etaClock(now.getTime()), fmt(now));
+  const yesterday = new Date(now.getTime() - 24 * 3600 * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  const iso = yesterday.getFullYear() + "-" + p(yesterday.getMonth() + 1)
+    + "-" + p(yesterday.getDate());
+  assert.equal(UICore.etaClock(yesterday.getTime()), iso + " " + fmt(yesterday));
 });
 
 test("etaRemaining: скорость по окну выборок", () => {

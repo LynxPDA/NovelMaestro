@@ -697,12 +697,22 @@
       return h + " ч" + (rest ? " " + rest + " мин" : "");
     },
 
-    /* Часы завершения («14:35») из мс-таймстампа. */
-    etaClock: (ms) =>
-      new Date(ms).toLocaleTimeString("ru-RU", {
+    /* Часы завершения («14:35»); день не сегодня — с датой
+       («2026-10-13 14:11»): многочасовые оценки без даты не читаются. */
+    etaClock: (ms) => {
+      var d = new Date(ms);
+      var time = d.toLocaleTimeString("ru-RU", {
         hour: "2-digit",
         minute: "2-digit",
-      }),
+      });
+      var now = new Date();
+      if (d.getFullYear() === now.getFullYear()
+          && d.getMonth() === now.getMonth()
+          && d.getDate() === now.getDate()) return time;
+      var p = (n) => String(n).padStart(2, "0");
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-"
+        + p(d.getDate()) + " " + time;
+    },
 
     /* Остаток в секундах: скорость — по окну выборок прогресса
        samples = [{t, done, total}] (t — сек, окно пишет вызывающий);
