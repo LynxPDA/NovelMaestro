@@ -1363,8 +1363,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
              updateCounts };
   }
 
-  // чипсы полей {ner_block} (конвейер): term — всегда; «aliases» снят —
-  // оркестратор передаст --no_aliases (авто-алиасы выключены).
+  // чипсы полей {ner_block} (конвейер): term — всегда; type и translation —
+  // стандарт глоссария, aliases — если есть в данных (все три всегда
+  // выбраны: алиасы в {ner_block} помогают LLM узнавать имена героя).
   // Список полей — как в ner_check: базовые всегда, остальные —
   // ключи из реальных данных ner.json проекта
   function nerBlockChips(key) {
@@ -1384,21 +1385,28 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const set = new Set(v.split(",").map((s) => s.trim())
         .filter((s) => s && s !== "term"));
       set.add("term"); // термин — всегда в блоке
+      // базовые поля не снимаются: без type/translation блок глоссария
+      // теряет смысл, без aliases модель не узнаёт героя под другим именем
+      set.add("type");
+      set.add("translation");
+      if (fieldNames.includes("aliases")) set.add("aliases");
       return set;
     }
     function render() {
       const cur = curFields();
       box.replaceChildren();
       for (const name of ["term", ...fieldNames]) {
-        const isTerm = name === "term";
+        const isTerm = name === "term" || name === "type"
+          || name === "translation"
+          || (name === "aliases" && fieldNames.includes("aliases"));
         const cb = h("input", { type: "checkbox", class: "checkbox" });
         cb.checked = isTerm || cur.has(name);
-        cb.disabled = isTerm; // неотключаемый
+        cb.disabled = isTerm; // неотключаемые
         if (!isTerm) {
           cb.addEventListener("change", () => {
             const set = new Set(curFields());
             if (cb.checked) set.add(name);
-            else set.delete(name); // минимум — «term» (неотключаемый)
+            else set.delete(name); // минимум — базовые (неотключаемые)
             st.values[key]["ner_fields"] = [...set].join(",");
             st.touched[key].add("ner_fields");
             saveChips(key, ["ner_fields"]);
@@ -1451,19 +1459,28 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             .filter((k) => !FIELD_ORDER.includes(k) && k !== "term")
             .sort(),
         ];
-        // устаревшие значения не остаются выбранными
+        // устаревшие значения не остаются выбранными; пустой сохранённый
+        // выбор — дефолт реестра: term + базовые (type/translation/aliases)
         const v = String(st.values[key]["ner_fields"] ?? "").trim();
+        const base = ["term", "type", "translation"]
+          .concat(present.has("aliases") ? ["aliases"] : []);
         if (v) {
           const ok = v.split(",").map((s) => s.trim())
             .filter((s) => s === "term" || fieldNames.includes(s));
-          st.values[key]["ner_fields"] = ok.join(",");
+          st.values[key]["ner_fields"] =
+            [...new Set([...ok, ...base])].join(",");
+        } else {
+          st.values[key]["ner_fields"] = base.join(",");
         }
         info.textContent =
-          "term — всегда; «aliases» снят — алиасы не добавляются "
-          + "автоматически";
+          "term — всегда; type, translation и aliases — всегда выбраны: "
+          + "алиасы помогают модели узнавать героя под другим именем";
         render();
       } catch (ex) {
+        // глоссария нет: type/translation/aliases — стандарт, оркестратор
+        // передаст их в --ner_fields, алиасы выключатся на его стороне
         fieldNames = ["type", "translation", "aliases"];
+        st.values[key]["ner_fields"] = ["term", ...fieldNames].join(",");
         info.textContent =
           `Глоссарий не загружен (${ex.message}) — базовые поля`;
         render();
