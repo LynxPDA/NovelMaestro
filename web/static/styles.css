@@ -1491,6 +1491,10 @@ input[type="number"] {
   align-items: center;
   gap: 8px;
   font-size: 12px;
+  min-width: 0;
+  /* длинная оценка завершения переносится под бар целиком,
+     а не вываливается за пределы панели */
+  flex-wrap: wrap;
 }
 .progress-wrap.hidden {
   display: none;
@@ -1522,12 +1526,22 @@ input[type="number"] {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  /* не сжимается (иначе оценка прячется в многоточие), а
+     переносится на свою строку; совсем узкая панель — обрезка */
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .progress-line {
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  /* сжимается в flex-строке тулбара (иначе длинная оценка
+     с датой выталкивает кнопку «Стоп» за панель) */
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
 }
