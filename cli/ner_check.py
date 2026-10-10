@@ -313,6 +313,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rag_budget", type=int, default=22000,
                    help="RAG-режим: бюджет релевантного текста на термин, "
                         "ТОКЕНЫ (оценка; по умолчанию: 22000).")
+    p.add_argument("--rag_chunk_size", type=int, default=350,
+                   help="RAG-режим: размер чанка FTS5-индекса книги, "
+                        "ТОКЕНЫ (оценка; по умолчанию: 350).")
     p.add_argument("--rag_prompt_file", default=None,
                    help="RAG-режим: файл промпта с тегом <prompt_rag> "
                         "(по умолчанию: тот же --prompt_file).")
@@ -745,9 +748,9 @@ def run_rag(args, stage, prompt_tpl) -> int:
             return 1
     if args.rag_source_type:
         logger.info(f"🔎 RAG: {len(terms)} терминов.")
-    # чанк FTS5-индекса — 350 ТОКЕНОВ (оценка): мельче — точнее
-    # привязка фрагмента, крупнее — шире контекст
-    db = build_fts_index(text, 350)
+    # чанк FTS5-индекса — ТОКЕНЫ (оценка): мельче — точнее привязка
+    # фрагмента, крупнее — шире контекст (--rag_chunk_size / .env)
+    db = build_fts_index(text, args.rag_chunk_size)
     fields = [f.strip() for f in args.fields.split(",") if f.strip()]
     # бюджет на термин — ТОЛЬКО фрагменты (промпт не вычитается):
     # один термин = один запрос, фрагменты влезают в rag_budget

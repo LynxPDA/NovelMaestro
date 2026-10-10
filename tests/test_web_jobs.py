@@ -1433,7 +1433,7 @@ def test_build_ner_check_rag_flags():
     нет — RAG-промпт берётся из общего «Промпт-файла» (тег <prompt_rag>)."""
     form = {"passes": "rag", "rag_terms": "林凡\n青云宗",
             "rag_source_type": "redacted", "start": "1", "end": "9",
-            "rag_budget": "4000"}
+            "rag_budget": "4000", "rag_chunk_size": "500"}
     argv = build_command("ner_check", form, {})
     assert "--passes" in argv and argv[argv.index("--passes") + 1] == "rag"
     assert "--rag_terms" in argv
@@ -1442,23 +1442,27 @@ def test_build_ner_check_rag_flags():
     assert argv[argv.index("--rag_source_type") + 1] == "redacted"
     assert "--start" in argv and "--end" in argv
     assert "--rag_budget" in argv and "4000" in argv
+    assert "--rag_chunk_size" in argv and "500" in argv
     assert "--rag_prompt_file" not in argv
     # поле rag_prompt_file убрано из спеки ner_check
     names = {f["name"] for f in STAGE_SPECS["ner_check"]["fields"]}
     assert "rag_prompt_file" not in names
-    # дефолт бюджета RAG — 22000 ТОКЕНОВ (оценка); интервала сохранения
-    # в спеке нет — файл пишется после каждого ответа LLM; чанк FTS5
-    # тоже не настройка (350 токенов внутри скрипта)
+    # дефолты RAG-полей — оценка в ТОКЕНАХ; интервала сохранения в спеке
+    # нет — файл пишется после каждого ответа LLM
     fb = next(f for f in STAGE_SPECS["ner_check"]["fields"]
               if f["name"] == "rag_budget")
     assert fb["default"] == "22000"
+    fc = next(f for f in STAGE_SPECS["ner_check"]["fields"]
+              if f["name"] == "rag_chunk_size")
+    assert fc["default"] == "350"
     names = {f["name"] for f in STAGE_SPECS["ner_check"]["fields"]}
-    assert "save_interval" not in names and "rag_chunk_size" not in names
+    assert "save_interval" not in names
     # пустые — флагов нет
     argv2 = build_command("ner_check", {"passes": "rag"}, {})
     assert "--rag_terms" not in argv2
     assert "--rag_source_type" not in argv2
     assert "--rag_budget" not in argv2
+    assert "--rag_chunk_size" not in argv2
     assert "--rag_prompt_file" not in argv2
 
 

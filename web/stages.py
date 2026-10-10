@@ -317,6 +317,8 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
     argv += _range_argv("start", form)
     if form.get("rag_budget") not in (None, ""):
         argv += ["--rag_budget", str(form["rag_budget"])]
+    if form.get("rag_chunk_size") not in (None, ""):
+        argv += ["--rag_chunk_size", str(form["rag_chunk_size"])]
     # пакетная проверка: типы, бюджет запроса, порог count
     if form.get("types"):
         argv += ["--types", str(form["types"])]
