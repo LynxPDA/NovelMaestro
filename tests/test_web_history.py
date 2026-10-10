@@ -218,8 +218,8 @@ def test_patch_oversized_truncated(tmp_path, monkeypatch):
     assert (p["adds"], p["dels"]) == (2000, 0)
 
 def test_diff_files_capped(tmp_path, monkeypatch):
-    """Список файлов сравнения ограничен (DIFF_MAX_FILES): тысячи
-    раскрывающихся строк вешают окно."""
+    """Список файлов сравнения отдаётся порциями (DIFF_MAX_FILES):
+    тысячи раскрывающихся строк вешают окно, клиент догружает."""
     monkeypatch.setattr(hs, "DIFF_MAX_FILES", 5)
     files = {f"chapters/{i}/chapter.txt": f"Глава {i}"
              for i in range(20)}
@@ -232,6 +232,13 @@ def test_diff_files_capped(tmp_path, monkeypatch):
     c_from, c_to = hs.checkpoints(tmp_path)["checkpoints"][::-1]
     d = hs.diff(tmp_path, c_from["sha"], c_to["sha"])
     assert len(d["files"]) == 5 and d["total_files"] == 20
+    # догрузка: вторая порция продолжает список, последняя короче
+    d2 = hs.diff(tmp_path, c_from["sha"], c_to["sha"], offset=5, limit=5)
+    assert len(d2["files"]) == 5
+    assert {f["path"] for f in d["files"]}.isdisjoint(
+        {f["path"] for f in d2["files"]})
+    d3 = hs.diff(tmp_path, c_from["sha"], c_to["sha"], offset=15)
+    assert len(d3["files"]) == 5
 
 
 def test_diff_unknown_sha(tmp_path):

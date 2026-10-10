@@ -386,7 +386,11 @@ def _history_diff(ctx: dict) -> dict:
     if not sha_from or not sha_to:
         raise ApiError(400, "Параметры from и to обязательны")
     try:
-        return hs.diff(pdir, sha_from, sha_to)
+        return hs.diff(pdir, sha_from, sha_to,
+                       offset=int(ctx["query"].get("offset", "0")),
+                       limit=int(ctx["query"].get("limit", "0")))
+    except ValueError as exc:
+        raise ApiError(400, "offset и limit должны быть числами") from exc
     except hs.HistoryError as exc:
         raise ApiError(400, str(exc))
 

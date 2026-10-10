@@ -227,10 +227,14 @@ def checkpoints(project: Path, limit: int = 100, offset: int = 0) -> dict:
                 "checkpoints": items[offset:offset + max(0, limit)]}
 
 
-def diff(project: Path, sha_from: str, sha_to: str) -> dict:
+def diff(project: Path, sha_from: str, sha_to: str, offset: int = 0,
+         limit: int | None = None) -> dict:
     """Изменения файлов между точками: [{path, status(A/M/D), adds, dels}].
 
     adds/dels — построчная разница блобов (difflib, без контекста).
+    Список отдаётся порциями (offset/limit, без limit — DIFF_MAX_FILES):
+    тысячи раскрывающихся строк вешают окно; клиент догружает кнопкой
+    «Показать ещё».
     """
     with _lock:
         repo = _repo(project)
@@ -255,7 +259,9 @@ def diff(project: Path, sha_from: str, sha_to: str) -> dict:
                                          light=True)
                 files.append({"path": name, "status": "M",
                               "adds": adds, "dels": dels})
-        return {"files": files[:DIFF_MAX_FILES], "total_files": len(files)}
+        portion = max(0, DIFF_MAX_FILES if limit is None else limit)
+        return {"files": files[offset:offset + portion],
+                "total_files": len(files)}
 
 
 def _blob_lines(repo: Repo, sha: bytes) -> list[str]:

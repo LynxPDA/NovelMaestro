@@ -4188,7 +4188,15 @@ function viewProject(section, name, tab, job) {
         return `+${f.adds ?? 0}${f.dels ? ` −${f.dels}` : ""}`;
       };
       const rowsEl = h("div", { class: "history-diff-files" });
-      for (const f of data.files || []) {
+      /* список файлов догружается порциями (DIFF_MAX_FILES): кнопка
+         «Показать ещё» подгружает следующие файлы тем же запросом */
+      const params = (offset) => new URLSearchParams({
+        project: `${section}/${name}`,
+        from: cFrom.sha,
+        to: cTo.sha,
+        offset: String(offset),
+      });
+      const fileRow = (f) => {
         const [stLabel, stClass] = STATUSES[f.status] || [f.status, ""];
         const summary = h(
           "summary",
@@ -4236,16 +4244,40 @@ function viewProject(section, name, tab, job) {
           }
           body.dataset.loaded = "1";
         });
-        rowsEl.append(h("details", { class: "history-diff-file" }, summary,
-          body));
-      }
-      if (!(data.files || []).length) {
+        return h("details", { class: "history-diff-file" }, summary, body);
+      };
+      let loaded = 0;
+      let moreBtn = null;
+      const addFiles = (files) => {
+        for (const f of files) rowsEl.append(fileRow(f));
+        loaded += (files || []).length;
+      };
+      addFiles(data.files || []);
+      if (!loaded) {
         rowsEl.append(h("div", { class: "card-hint" },
           "Между этими точками изменений файлов нет"));
-      } else if ((data.total_files || 0) > data.files.length) {
-        rowsEl.append(h("div", { class: "card-hint" },
-          `Показаны первые ${data.files.length} из ${data.total_files} ` +
-          "изменённых файлов"));
+      } else if ((data.total_files || 0) > loaded) {
+        const remain = () => (data.total_files || 0) - loaded;
+        moreBtn = h("button", { class: "btn btn-ghost" },
+          `Показать ещё (осталось ${remain()})`);
+        moreBtn.addEventListener("click", async () => {
+          moreBtn.disabled = true;
+          moreBtn.textContent = "Загрузка…";
+          try {
+            const r = await api(`/history/diff?${params(loaded)}`);
+            addFiles(r.files || []);
+            if ((r.total_files || 0) > loaded) {
+              moreBtn.disabled = false;
+              moreBtn.textContent = `Показать ещё (осталось ${remain()})`;
+            } else {
+              moreBtn.remove();
+            }
+          } catch (ex) {
+            moreBtn.disabled = false;
+            moreBtn.textContent = ex.message;
+          }
+        });
+        rowsEl.append(moreBtn);
       }
       UIC.modal({
         title: "Изменения между точками",
