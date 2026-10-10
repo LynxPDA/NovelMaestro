@@ -907,8 +907,7 @@ def _fuzzy_hit(term_norm, term_ngrams, text_norm, text_ngrams, threshold):
 
 
 def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
-                      automaton=None, include_aliases=True,
-                      min_count=0):
+                      automaton=None, min_count=0):
     """Поиск релевантных терминов: Aho-Corasick/regex → n-граммы (не-CJK).
     Возвращает (JSON-строка, count). ner_fields — 'f1,f2,...'.
     min_count — порог поля count (частота термина): термины с count <
@@ -949,7 +948,6 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
         return "[]", 0
 
     fields = [f.strip() for f in ner_fields.split(",") if f.strip()]
-    wants_aliases = "aliases" in fields
     entries, seen = [], set()
     for i in sorted(found):
         item = ner_data[i]
@@ -959,9 +957,6 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
         if min_count and _int_count(item.get("count")) < min_count:
             continue
         entry = {f: item[f] for f in fields if f in item}
-        if (include_aliases and not wants_aliases
-                and item.get("aliases") and "aliases" not in entry):
-            entry["aliases"] = item["aliases"]
         entries.append(entry)
     return json.dumps(entries, ensure_ascii=False, indent=2), len(entries)
 
@@ -1167,8 +1162,7 @@ def load_rules_block(filepath, logger=None):
 
 
 def find_relevant_dict(text, dict_data, threshold, ngram_size,
-                       ner_fields="term,translation", automaton=None,
-                       include_aliases=True):
+                       ner_fields="term,translation", automaton=None):
     """Поиск по словарю перевода с автодетектом направления.
 
     Направление перевода может быть любым, поэтому совпадения ищутся
@@ -1184,8 +1178,7 @@ def find_relevant_dict(text, dict_data, threshold, ngram_size,
         return "[]", 0
     term_res, term_count = find_relevant_ner(
         text, dict_data, threshold, ngram_size, ner_fields,
-        automaton=automaton, include_aliases=include_aliases,
-        min_count=0)
+        automaton=automaton, min_count=0)
     rev_data = []
     for item in dict_data:
         trans = str(item.get("translation") or "").strip()
@@ -1203,7 +1196,7 @@ def find_relevant_dict(text, dict_data, threshold, ngram_size,
         rev_data.append(rev)
     rev_res, rev_count = find_relevant_ner(
         text, rev_data, threshold, ngram_size, ner_fields,
-        automaton=None, include_aliases=False, min_count=0)
+        automaton=None, min_count=0)
     if rev_count > term_count:
         return rev_res, rev_count
     return term_res, term_count

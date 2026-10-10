@@ -978,20 +978,18 @@ def test_regex_fallback_prefix_overlap(tmp_path, monkeypatch):
     assert cnt2 == 2 and {e["term"] for e in json.loads(s2)} == {"系统", "系统管理员"}
 
 
-def test_find_relevant_ner_aliases_flag(tmp_path):
+def test_find_relevant_ner_aliases_field(tmp_path):
+    """aliases в выдаче — только когда поле выбрано в ner_fields:
+    единственный способ включить/выключить алиасы в блоке."""
     data, automaton = C.load_ner_data(_write_ner(tmp_path), 3, SilentLog())
-    # include_aliases=True → aliases добавляются, даже если не в полях
+    # поле не выбрано → алиасов нет
     s, _ = C.find_relevant_ner("陳陽 здесь", data, 0.7, 3, "term,translation",
-                               automaton=automaton, include_aliases=True)
-    assert "aliases" in json.loads(s)[0]
-    # include_aliases=False → не добавляются
-    s, _ = C.find_relevant_ner("陳陽 здесь", data, 0.7, 3, "term,translation",
-                               automaton=automaton, include_aliases=False)
+                               automaton=automaton)
     assert "aliases" not in json.loads(s)[0]
-    # поле aliases запрошено явно → есть всегда
+    # поле выбрано → есть
     s, _ = C.find_relevant_ner("陳陽 здесь", data, 0.7, 3,
                                "term,aliases,translation",
-                               automaton=automaton, include_aliases=False)
+                               automaton=automaton)
     assert json.loads(s)[0]["aliases"] == ["陳陽"]
 
 

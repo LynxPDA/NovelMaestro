@@ -319,7 +319,6 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     ner_min_count: int = 0,
                     names_min_count: int = 10,
                     ner_fields: str = "term,translation,type",
-                    no_aliases: bool = False,
                     dict_file: str = "", rules_file: str = "",
                     examples_file: str = "",
                     fewshot_k: int = 3, fewshot_threshold: float = 0.3,
@@ -349,16 +348,11 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
     if prompt_file:
         common += ["--prompt_file", prompt_file]
     # пороги count: ner_block и имена (дефолты: 0 — выключено, 10);
-    # поля {ner_block} — выбор из формы; aliases в блок попадают только когда
-    # они выбраны в чипсах формы (авто-добавление --no-aliases из web не
-    # передаётся никогда); имя флага — как в translate_book.py (--no-aliases,
-    # через дефис: иначе argparse стадии 1 ронял конвейер «unrecognized
-    # arguments»)
+    # поля {ner_block} — выбор из формы: aliases в блок попадают только
+    # когда поле выбрано в чипсах формы
     common += ["--ner_min_count", str(ner_min_count),
                "--names_min_count", str(names_min_count),
                "--ner_fields", str(ner_fields)]
-    if no_aliases:
-        common += ["--no-aliases"]
     # расширенный контекст: флаги только когда задан хоть один файл
     # (действие 9; файлы в source/ — пути относительно проекта)
     ext_extra = []
@@ -422,7 +416,6 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     ner_min_count: int = 0,
                     names_min_count: int = 10,
                     ner_fields: str = "term,translation,type",
-                    no_aliases: bool = False,
                     dict_file: str = "", rules_file: str = "",
                     examples_file: str = "",
                     fewshot_k: int = 3, fewshot_threshold: float = 0.3,
@@ -492,7 +485,6 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                                   ner_min_count=ner_min_count,
                                   names_min_count=names_min_count,
                                   ner_fields=ner_fields,
-                                  no_aliases=no_aliases,
                                   dict_file=dict_file,
                                   rules_file=rules_file,
                                   examples_file=examples_file,
@@ -615,7 +607,7 @@ def main() -> None:
                          "{male_names} (0 — выключено).")
     ap.add_argument("--ner_fields", default="term,translation,type",
                     help="Поля термина в {ner_block} через запятую "
-                         "(aliases снят — авто-алиасы выключены).")
+                         "(алиасы — при включении aliases).")
     # расширенный контекст (действия 9/10): словарь/правила/примеры
     ap.add_argument("--dict_file", default="",
                     help="Словарь (source/, формат ner.json) — {dict_block}.")
@@ -758,11 +750,10 @@ def main() -> None:
     log.info("ПРОМПТЫ    : %s", " | ".join(
         f"{_STAGE_NAME[s]}={('встроенный' if builtin.get(s) or not prompts[s] else prompts[s])}"
         for s in stages))
-    # поля {ner_block} — единый выбор для всех стадий конвейера
+    # поля {ner_block} — единый выбор для всех стадий конвейера;
+    # aliases в блок попадают только когда поле выбрано в --ner_fields
     nf_list = [f.strip() for f in args.ner_fields.split(",") if f.strip()]
-    no_aliases = "aliases" not in nf_list
-    log.info("NER-ПОЛЯ   : %s%s", ",".join(nf_list),
-             "" if not no_aliases else " (без алиасов)")
+    log.info("NER-ПОЛЯ   : %s", ",".join(nf_list))
     log.info("ЧАНК       : %d ТОКЕНОВ (оценка; перевод/полировка)",
              args.chunk_size)
     if ext:
@@ -801,7 +792,7 @@ def main() -> None:
             prompt_file=prompts.get(stage) or "",
             ner_min_count=args.ner_min_count,
             names_min_count=args.names_min_count,
-            ner_fields=args.ner_fields, no_aliases=no_aliases,
+            ner_fields=args.ner_fields,
             dict_file=dict_file, rules_file=rules_file,
             examples_file=examples_file,
             fewshot_k=args.fewshot_k,
@@ -875,7 +866,6 @@ def main() -> None:
                         ner_min_count=args.ner_min_count,
                         names_min_count=args.names_min_count,
                         ner_fields=args.ner_fields,
-                        no_aliases=no_aliases,
                         dict_file=dict_file, rules_file=rules_file,
                         examples_file=examples_file,
                         fewshot_k=args.fewshot_k,

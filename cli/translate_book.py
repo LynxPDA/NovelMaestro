@@ -349,7 +349,6 @@ def process_item(internal_id, original_text, draft_text, ctx):
         original_text, ctx["ner_data"], ctx["ner_threshold"],
         ctx["ner_ngram"], ctx["ner_fields"],
         automaton=ctx["automaton"],
-        include_aliases=ctx["include_aliases"],
         min_count=ctx.get("ner_min_count", 0),
     )
     # Имена по полу (по translation; основное назначение — polish).
@@ -486,8 +485,8 @@ def build_parser():
     p.add_argument("--ner_ngram", type=int, default=3,
                    help="Размер n-грамм поиска терминов (символы).")
     p.add_argument("--ner_fields", type=str, default="term,translation,type",
-                   help="Поля ner.json через запятую; aliases добавляются "
-                        "автоматически (отключить: --no-aliases).")
+                   help="Поля ner.json через запятую, которые попадают "
+                        "в NER-блок (алиасы — при включении aliases).")
     p.add_argument("--ner_min_count", type=int, default=0,
                    help="Минимальный count термина для {ner_block}: термины "
                         "с count ниже отфильтровываются (0 — выключено).")
@@ -495,8 +494,6 @@ def build_parser():
                    help="Минимальный count термина для {female_names}/"
                         "{male_names}: имена с count ниже отфильтровываются "
                         "(0 — выключено).")
-    p.add_argument("--no-aliases", action="store_true",
-                   help="Не добавлять aliases в NER-блок.")
     # Расширенный контекст (малоресурсные языки)
     p.add_argument("--dict_file", default="",
                    help="Словарь перевода (JSON, формат ner.json) — "
@@ -699,7 +696,6 @@ def main(argv=None):
         nb, nb_count = find_relevant_ner(
             orig0, ner_data, args.ner_threshold, args.ner_ngram,
             args.ner_fields, automaton=automaton,
-            include_aliases=not args.no_aliases,
             min_count=args.ner_min_count)
         if mode == "redact" and nb == "[]":
             nb = "(Нет специфических терминов)"
@@ -764,7 +760,6 @@ def main(argv=None):
         "mode": mode, "ner_data": ner_data, "automaton": automaton,
         "ner_threshold": args.ner_threshold, "ner_ngram": args.ner_ngram,
         "ner_fields": args.ner_fields,
-        "include_aliases": not args.no_aliases,
         "ner_min_count": args.ner_min_count,
         "names_min_count": args.names_min_count,
         "prompt": active_prompt, "stage": stage,

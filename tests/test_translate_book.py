@@ -92,7 +92,7 @@ def _ctx(mode):
     return {
         "mode": mode, "ner_data": [], "ner_threshold": 0.7, "ner_ngram": 3,
         "ner_fields": "term,translation,type", "automaton": None,
-        "include_aliases": False, "prompt": "{ner_block}|{original_text}|{translated_text}",
+        "prompt": "{ner_block}|{original_text}|{translated_text}",
         "stage": stage, "min_len_ratio": 0.0, "logger": SilentLog(),
     }
 
@@ -135,8 +135,8 @@ def test_parser_legacy():
         "--ner_threshold", "0.75", "--ner_ngram", "3"])          # вызов run_pipeline
     assert a.mode is None and a.chunk_size == 7000
     r = p.parse_args(["--mode", "redact", "t.json",
-                      "--min_len_ratio", "0.9", "--no-aliases"])  # старый redact
-    assert r.mode == "redact" and r.no_aliases and r.trace is None
+                      "--min_len_ratio", "0.9"])  # старый redact
+    assert r.mode == "redact" and r.trace is None
 
 
 def test_mode_presets_are_behavior_only():
