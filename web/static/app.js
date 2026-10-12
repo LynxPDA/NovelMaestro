@@ -1069,7 +1069,7 @@ async function viewSettings() {
         try {
           const r = await api("/settings/profiles", {
             method: "POST",
-            body: { action: "create", name },
+            body: { action: "create", name, base: model.profile },
           });
           model.profiles = r.profiles || model.profiles;
           // switchTo сам пишет localStorage и перерисовывает вкладку
@@ -1131,8 +1131,9 @@ async function viewSettings() {
         h("div", { class: "field-help" },
           "Профиль — полный набор настроек работы с моделью: сервер, ключ, "
           + "модель, потоки, таймауты, ретраи и рассуждения. Профиль "
-          + "выбирается в запусках проекта. Новый профиль создаётся копиями "
-          + "значений General; пустое поле профиля наследует General."),
+          + "выбирается в запусках проекта. Новый профиль создаётся копией "
+          + "выбранного сейчас (без выбора — General); пустое поле профиля "
+          + "наследует General."),
       ),
     );
   }

@@ -127,8 +127,10 @@ def _settings_put(ctx: dict) -> dict:
 def _settings_profiles(ctx: dict) -> dict:
     """Профили LLM (POST /api/settings/profiles): create | rename | delete.
 
-    Тело: {action, name?, id?}. id встроенного General не переименовывается и
-    не удаляется: его значения — обычный общий .env.
+    Тело: {action, name?, id?, base?}. id встроенного General не
+    переименовывается и не удаляется: его значения — обычный общий .env.
+    Новый профиль создаётся копией base (выбранный сейчас профиль), пустой
+    base — копией General.
     """
     body = ctx["body"]
     action = str(body.get("action") or "").strip()
@@ -136,7 +138,7 @@ def _settings_profiles(ctx: dict) -> dict:
     name = str(body.get("name") or "").strip()
     try:
         if action == "create":
-            core_settings.profile_create(name)
+            core_settings.profile_create(name, base_id=pid)
         elif action == "rename":
             core_settings.profile_rename(pid, name)
         elif action == "delete":

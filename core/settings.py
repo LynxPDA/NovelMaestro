@@ -961,21 +961,30 @@ def profile_display(profile_id: str) -> dict:
     return out
 
 
-def profile_defaults() -> dict:
-    """Значения General для нового профиля:effective LLM-конфига без пустых.
+def profile_defaults(base_id: str = "") -> dict:
+    """Значения-образец для нового профиля: effective набора base_id.
 
-    Новый профиль создаётся копией общего конфига, а не пустой формой: пустой
-    набор означал бы, что «свой сервер» надо заполнять с нуля, и профиль
-    выглядел сломанным. Пустые ключи сюда не попадают — они и вправду
-    наследуют General."""
-    layered = layered_values()
-    return {s.key: sanitize(s, layered.get(s.key, ""))
+    Новый профиль копирует выбранный профиль (по умолчанию General), а не
+    пустую форму: пустой набор означал бы, что «свой сервер» надо заполнять
+    с нуля, и профиль выглядел сломанным. У переопределений base_id берём
+    их эффективные значения (с донаследованными из General), у General —
+    только непустые ключи: пустые и вправду наследуют General."""
+    builtin = str(base_id or "").strip() in ("", PROFILE_DEFAULT)
+    raw = profile_values(base_id)
+    if builtin:
+        layered = layered_values()
+        return {s.key: sanitize(s, layered.get(s.key, ""))
+                for s in llm_settings()
+                if str(layered.get(s.key, "")).strip()}
+    general = profile_defaults()
+    return {s.key: str(raw.get(s.key, "") or general.get(s.key, ""))
             for s in llm_settings()
-            if str(layered.get(s.key, "")).strip()}
+            if str(raw.get(s.key, "") or general.get(s.key, "")).strip()}
 
 
-def profile_create(name: str, values: dict | None = None) -> dict:
-    """Создать профиль; пустой набор — значения General (profile_defaults)."""
+def profile_create(name: str, values: dict | None = None,
+                   base_id: str = "") -> dict:
+    """Создать профиль; пустой набор — effective значения base_id (General)."""
     name = str(name or "").strip()
     if not name:
         raise ValueError("имя профиля обязательно")
@@ -984,7 +993,7 @@ def profile_create(name: str, values: dict | None = None) -> dict:
         raise ValueError(f"профиль с именем «{name}» уже есть")
     now = _now_stamp()
     prof = {"id": profile_slug(name, [p["id"] for p in stored]), "name": name,
-            "values": _profile_clean(values or profile_defaults()),
+            "values": _profile_clean(values or profile_defaults(base_id)),
             "created": now, "updated": now}
     profiles_write(stored + [prof])
     log.info("профиль LLM создан: %s (%s)", prof["name"], prof["id"])

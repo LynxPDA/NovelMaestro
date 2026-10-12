@@ -515,9 +515,9 @@ def test_profiles_file_dies_with_last_profile(global_env):
 
 
 def test_profile_create_inherits_general(global_env):
-    """Новый профиль создаётся значениями General, а не пустой формой:
-    «свой сервер» иначе пришлось бы заполнять с нуля. Пустые ключи не
-    копируются — они наследуют General и так."""
+    """Новый профиль без base создаётся значениями General, а не пустой
+    формой: «свой сервер» иначе пришлось бы заполнять с нуля. Пустые ключи
+    не копируются — они наследуют General и так."""
     S.write_values({"HOST": "http://общий:1", "MODEL": "общая-модель",
                     "MAX_RETRIES": "5"})
     prof = S.profile_create("Облако")
@@ -531,6 +531,32 @@ def test_profile_create_inherits_general(global_env):
     # явные значения никто не перетирает
     other = S.profile_create("Дом", {"MODEL": "дом-модель"})
     assert other["values"] == {"MODEL": "дом-модель"}
+
+def test_profile_create_from_selected(global_env):
+    """Новый профиль копирует выбранный base: сначала его переопределения,
+    потом донаследованные от General. Секрет — настоящий ключ base, но в
+    payload он всё равно уходит маской (profile_display)."""
+    S.write_values({"HOST": "http://общий:1", "MODEL": "общая-модель",
+                    "TEMPERATURE": "0.3", "API_KEY": "ключ-general"})
+    base = S.profile_create("Домашний", {"HOST": "http://дом:1",
+                                         "API_KEY": "ключ-дом"})
+    assert S.profile_values(base["id"]).get("TEMPERATURE") is None
+    got = S.profile_create("Копия", base_id=base["id"])
+    vals = got["values"]
+    assert vals["HOST"] == "http://дом:1"
+    assert vals["API_KEY"] == "ключ-дом"
+    assert vals["TEMPERATURE"] == "0.3"        # донаследовано от General
+    assert vals["MODEL"] == "общая-модель"
+    disp = S.profile_display(got["id"])
+    assert disp["API_KEY"] == S.MASK_CHAR * len("ключ-дом")
+    assert "ключ-дом" not in repr(disp)
+    # пустой base трактуется как General (слои: реестр → файл → окружение)
+    S.write_values({"HOST": "http://другой:1"})
+    from_g = S.profile_create("Из-General", base_id="")
+    assert from_g["values"]["HOST"] == "http://другой:1"
+    # несуществующий base — тоже General, без падения
+    assert S.profile_create("Ещё", base_id="нет-такого")["values"]["HOST"] \
+        == "http://другой:1"
 
 
 def test_profiles_payload_values(global_env):
