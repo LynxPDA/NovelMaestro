@@ -82,7 +82,7 @@ def test_format_and_glossary_body_fields():
     assert "translation" not in rec
     assert "context" not in rec
     assert "count" not in rec
-    # aliases — только когда выбраны; голоса больше не выводятся;
+    # aliases — только когда выбраны; голоса не выводятся;
     # aliases остаются списком
     item = dict(ITEMS[1], aliases=["Цинъюнь"],
                 _votes_translation={"а": 2, "б": 1})
@@ -141,7 +141,7 @@ def test_review_entry():
     assert e["stage"] == "Весь глоссарий" and e["status"] == "принять"
     assert e["applied"] is False and e["reason"] == "r"
     # некорректные записи отсеиваются (count править нельзя;
-    # context/pinyin/reading — теперь правимые поля)
+    # context/pinyin/reading — правимые поля)
     assert review_entry({"term": "A", "field": "count",
                          "old": "", "new": ""}) is None
     assert review_entry({"term": "A", "field": "context",
@@ -169,7 +169,7 @@ def test_review_entry():
     assert e3 is not None
     assert e3["status"] == "отклонить"
     assert any("непонятно" in w for w in lg.warns)
-    # пустой статус (legacy-патчи) — по-прежнему принять, без warning
+    # пустой статус (legacy-патчи) — принять, без warning
     e4 = review_entry({"term": "A", "field": "notes", "old": "x",
                        "new": "y"})
     assert e4 is not None and e4["status"] == "принять"
@@ -805,7 +805,7 @@ def test_ner_check_rag_searches_by_term(tmp_path):
     items_by_term = {i["term"]: i for i in ITEMS}
     block = NC.build_rag_block(["林凡"], items_by_term, db, 2000,
                                logger=SilentLog())
-    assert "林凡走进了大厅" in block  # фрагмент по term (раньше пусто)
+    assert "林凡走进了大厅" in block  # фрагмент по term
     assert "(термин не найден в тексте)" not in block
     # термин без совпадений в тексте → fallback по переводу
     text2 = "Линь Фан вошёл в зал. " * 30
@@ -1307,7 +1307,7 @@ def test_ner_check_rag_skips_locked_terms(tmp_path, monkeypatch):
 
 
 # ──────────────────────────────────────────────────────────────────────
-# исправленные баги: dry-run stage, RAG-фильтры и потолок потоков
+#_regression_guard: сухой прогон, RAG-фильтры, потолок потоков
 # ──────────────────────────────────────────────────────────────────────
 def test_ner_check_saves_review_after_each_batch(tmp_path, monkeypatch):
     """Батчевый режим: review-файл пишется после КАЖДОГО батча — упавший

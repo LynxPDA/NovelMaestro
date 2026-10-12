@@ -311,7 +311,9 @@ def main(argv=None) -> int:
     import sys as _sys
     print(f"Запуск: {_shlex.join(_sys.argv)}")
 
-    # ── Правила: только из --replace (файл replacements.txt — deprecated) ──
+# ──────────────────────────────────────────────────────────────────
+# Правила: только из --replace (файл replacements.txt не читается)
+# ──────────────────────────────────────────────────────────────────
     rules, warnings = parse_replace_lines(args.replace)
     for w in warnings:
         print(f"⚠ {w}")

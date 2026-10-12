@@ -1213,7 +1213,8 @@ REVIEW_ACCEPT = "принять"
 REVIEW_REJECT = "отклонить"
 REVIEW_STATUSES = (REVIEW_ACCEPT, REVIEW_REJECT)
 # Действие правки: патч поля или удаление термина из глоссария. Ключ «action»
-# в review-файле опционален: старые файлы (и legacy-массив) — это патчи.
+# в review-файле опционален: файл без ключа «action» (и legacy-массив) —
+# это патчи
 REVIEW_PATCH = "патч"
 REVIEW_DELETE = "удаление"
 REVIEW_ACTIONS = (REVIEW_PATCH, REVIEW_DELETE)
@@ -2162,12 +2163,12 @@ def read_text_safe(path) -> str:
     except UnicodeDecodeError:
         pass
     if text is not None:
-        return text  # оба «успешны», но оба мусорные — историческое поведение
+        return text  # оба «успешны», но оба декодируют мусор — отдаем как есть
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             return f.read()
     except OSError:
-        raise  # файл не существует/не читается — как и раньше (OSError)
+        raise  # файл не существует/не читается — OSError наружу
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -207,7 +207,7 @@ def test_ner_export_filters(srv, tmp_path):
     r = _request(port, "GET", f"/api/ner/export?{q}")
     assert r["total"] == 1
     assert json.loads(r["content"])[0]["term"] == "陈阳"
-    # Exclude_words/range больше не принимаются — игнорируются
+    # Exclude_words/range не принимаются — игнорируются
     q = _q("ACTIVE/demo", format="json", count_threshold="0",
            exclude_words="палладия", range="1-1")
     r = _request(port, "GET", f"/api/ner/export?{q}")
@@ -220,7 +220,7 @@ def test_ner_export_bad_format(srv, tmp_path):
     q = _q("ACTIVE/demo", format="xyz")
     r = _request(port, "GET", f"/api/ner/export?{q}")
     assert "__error__" in r and r["__error__"] == 400
-    # Range больше не валидируется — просто игнорируется
+    # Range не валидируется — просто игнорируется
     q = _q("ACTIVE/demo", format="json", range="абв")
     r = _request(port, "GET", f"/api/ner/export?{q}")
     assert r["ok"] and r["total"] == 3
@@ -1106,7 +1106,7 @@ def test_stage_spec_prefill_from_shared_env(srv, tmp_path, monkeypatch):
     assert "__error__" not in r
     fields = {f["name"]: f.get("default", "") for f in r["spec"]["fields"]}
     assert str(fields.get("chunk_size")) == "12345"
-    # сервер/модель/ключ/потоки — общие: в форме стадии их больше нет
+    # сервер/модель/ключ/потоки — общие: в форме стадии их нет
     assert not {"host", "model", "api_key", "threads"} & set(fields)
     # NER_MODEL мёртв: модель одна на весь конвейер
     assert "ner-gpt" not in json.dumps(r, ensure_ascii=False)

@@ -492,13 +492,13 @@ LLM_BLOCKS: tuple = ("llm_conn", "llm_net", "llm_run", "llm_reasoning",
 #: блоки настроек самого веб-сервера: их читает web/main.py, профили LLM их
 #: не касают (профиль хранит только LLM-ключи)
 SERVER_BLOCKS: tuple = ("server_net", "server_run")
-#: имена LLM-полей, которые раньше были в формах стадий
+#: имена LLM-полей: в формах стадий их нет, они приходят из профиля
 LLM_FORM_NAMES = frozenset({"host", "model", "api_key", "temperature", "timeout",
                             "stream_timeout", "max_retries", "retries",
                             "max_tokens", "threads", "jobs", "retry_empty"})
 #: старые имена полей стадии → общая настройка
 LLM_ALIAS = {"jobs": "threads", "retries": "max_retries"}
-#: что из LLM-конфига уходит в argv стадии (исторические имена полей,
+#: что из LLM-конфига уходит в argv стадии (имена полей,
 #: которые понимает их CLI)
 STAGE_LLM_FIELDS: dict = {
     "epub": (),

@@ -401,8 +401,6 @@ def _projects_move(ctx: dict) -> dict:
     ok, res = prj.move_project(_projects_root(ctx), section, name, dst)
     if not ok:
         raise ApiError(400, str(res))
-    # старый ключ (root::раздел/имя) устарел; новый ещё не закеширован
-    _invalidate_stats_entry(_projects_root(ctx), section, name)
     # журнал следует за проектом: логи запусков остаются видны на новой
     # вкладке (иначе после переноса в другой раздел история «пропала»)
     _job_manager(ctx).update_project_path(
@@ -419,9 +417,9 @@ def _projects_rename(ctx: dict) -> dict:
     new_name = (body.get("new_name") or "").strip()
     ok, res = prj.rename_project(_projects_root(ctx), section, name, new_name)
     if not ok:
-        raise ApiError(400, str(res))
-    _invalidate_stats_entry(_projects_root(ctx), section, name)
-    # журнал следует за проектом (как при move)
+        _invalidate_stats_entry(_projects_root(ctx), section, name)
+    # журнал следует за проектом: логи запусков остаются видны на новой
+    # вкладке (иначе после переноса в другой раздел история «пропала»)
     _job_manager(ctx).update_project_path(
         f"{section}/{name}", f"{section}/{Path(res).name}", Path(res))
     return {"ok": True, "section": section, "name": Path(res).name}

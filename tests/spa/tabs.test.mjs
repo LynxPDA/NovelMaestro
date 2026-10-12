@@ -224,7 +224,7 @@ async function api(path, opts = {}) {
     globalThis.__gets.push({ path: p, query: path.split("?")[1] || "" });
   }
   if ((opts.method || "GET") !== "GET") {
-    // запись запроса: тестам важно, каким телом ушёл перенос/переименование
+    // тестам важно, каким телом ушёл перенос или переименование записи
     (globalThis.__calls || []).push({
       method: opts.method,
       path: p,

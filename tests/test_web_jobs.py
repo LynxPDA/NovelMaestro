@@ -355,16 +355,16 @@ def test_migrate_old_jobs_json(tmp_path, fake_script):
     loaded = jm.get("old-1")
     assert loaded is not None
     assert loaded.title == "Старый"
-    # файл переехал, старый удалён
+    # канал миграции: старый jobs.json в job_logs переносятся при старте
     assert (tmp_path / "job_logs" / "jobs.json").is_file()
     assert not old.exists()
-    # повторный старт — миграция не затирает свежий файл
+    # повторный старт: миграция не затирает свежий файл
     (tmp_path / "job_logs" / "jobs.json").write_text(
         "[]", encoding="utf-8")
     old.write_text("[{\"bad\": 1}]", encoding="utf-8")
     jm2 = JobManager(tmp_path, python="python3")
     assert jm2.get("old-1") is None  # история из свежего файла
-    assert (tmp_path / "jobs.json").is_file()  # старый не съеден
+    assert (tmp_path / "jobs.json").is_file()  # свежий файл не затёрт миграцией
 
 
 def test_subscribe_lines(tmp_path, fake_script):
@@ -866,7 +866,7 @@ def test_build_translate_check():
     for flag in ("--min-file-size", "--header-regexp",
                  "--no-sequence-check"):
         assert flag not in argv7
-    # --header-regexp удалён из CLI: build его больше не передаёт
+    # --header-regexp удалён из CLI: build его не передаёт
     argv9 = build_command("translate_check",
                           {"check_type": "polished",
                            "header_regexp": "^Раздел\\s+\\d+"}, {})
@@ -953,7 +953,7 @@ def test_build_clean_and_compile_cover_meta():
     assert "--no-cover" in argv2
     assert "--no-donate" in argv2
     # книжные режимы — те же флаги, что и у цельных epub/fb2;
-    # разбивка теперь через chunk_size (режимы *-chunks убраны)
+    # разбивка по частям — через chunk_size
     argv3 = build_command("compile", {"mode": "fb2",
                                       "cover": "source/cover.png"}, {})
     assert "--fb2-cover" in argv3
@@ -1227,7 +1227,7 @@ def test_build_ner_defaults_and_flags():
     # пустые значения не дают флагов
     assert "--reasoning-effort" not in argv
     assert "--temperature" not in argv
-    # постпроцессинг убран: strip-meta/min-count больше не строятся
+    # постпроцессинга нет: флаги strip-meta/min-count не строятся
     assert "--strip-meta" not in argv and "--min-count" not in argv
 
 
@@ -1346,7 +1346,7 @@ def test_build_ner_always_compile_chapters():
     assert "--ner_file" not in argv2
     assert argv2[1] == "--compile_chapters"
 
-    # постпроцессинг убран: флаги strip-meta/min-count не строятся
+    # постпроцессинга нет: флаги strip-meta/min-count не строятся
     argv3 = build_command("ner", {"strip_meta": True, "min_count": "2"}, {})
     assert "--strip-meta" not in argv3 and "--min-count" not in argv3
 

@@ -347,8 +347,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="С --apply/--auto-apply: показать правки без "
                         "записи файлов.")
-    # сервер: CLI > os.environ > общий .env (общий блок флагов — core.stage);
-    # собственных таймаутов и max_tokens у стадии больше нет
+    # сервер: CLI > os.environ > общий .env (общий блок флагов — core.stage)
     add_llm_args(p, aliases=True)
     return core_settings.apply_cli_defaults(p, "ner_check")
 

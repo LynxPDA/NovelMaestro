@@ -9,9 +9,7 @@ const state = { auth: false, host: "", tokenSet: false, update: null };
 /* Предпросмотр markdown/html (Заметки и «Правка» файлов).
    Кегль — localStorage previewFontSize (UI-предпочтение, не конфиг).
    srcdoc-iframe не наследует тему страницы — стили задаём явно. */
-const PREVIEW_FONT_KEY = "previewFontSizeV2"; // старый ключ
-// previewFontSize (дефолт 7) игнорируем — новый дефолт 12px должен
-// сработать у всех, а не только у тех, кто не менял кегль
+const PREVIEW_FONT_KEY = "previewFontSizeV2";
 const PREVIEW_FONT_DEFAULT = 12;
 const PREVIEW_FONT_OPTIONS = [5, 7, 10, 12, 14];
 
@@ -1776,7 +1774,7 @@ const CM_READY =
    приходИТ уже именем языка, поэтому cmLang сначала пробует его. Языки
    соответствуют тому, что лежит в книге: главы/промпты/логи — текст, данные —
    JSON и YAML, wiki — markdown и HTML, сборки и служебка epub — XML (fb2, opf,
-   ncx, xhtml), старый .env книги — properties (тот же KEY=VALUE с «#»). */
+   ncx, xhtml) и .env книги — properties (KEY=VALUE с «#»). */
 const CM_LANG_BY_EXT = {
   md: "markdown",
   markdown: "markdown",

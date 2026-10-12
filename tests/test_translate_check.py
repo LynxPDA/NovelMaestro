@@ -27,7 +27,7 @@ def test_compare_sizes():
 
 
 def test_load_exclusions_default(tmp_path):
-    # дефолт убран: пусто = ничего (раньше VIP,MVP,【,】,NPC)
+    # дефолт убран: пусто = ничего (никаких зашитых VIP, MVP, 【,】, NPC)
     assert TC.load_exclusions() == []
     assert not hasattr(TC, "DEFAULT_EXCLUSIONS")
     # пустой .env → тоже ничего

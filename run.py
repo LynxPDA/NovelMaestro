@@ -59,7 +59,8 @@ def bootstrap_projects() -> None:
         print(f"  ✔ Созданы разделы: {', '.join(created)}")
     env_dst = REPO / ".env"
     env_tpl = REPO / "templates" / ".env.example"
-    # миграция: системный .env переехал из projects/ в корень репо
+# миграция старых установок: .env в корне репо отсутствует только там,
+# где конфиг ещё лежит по-старому (projects/.env) — переносим один раз
     legacy = PROJECTS / ".env"
     if not env_dst.exists() and legacy.is_file():
         try:

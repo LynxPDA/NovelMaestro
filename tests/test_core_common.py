@@ -379,11 +379,8 @@ def test_system_env_file(monkeypatch, tmp_path):
 
 
 def test_env_files_single_file(tmp_path, monkeypatch):
-    """Файл конфига один: собственного .env у книги больше нет.
-
-    Раньше подъём вверх от папки книги находил её же копию общего файла, и
-    книга жила копией, а не общим конфигом.
-    """
+    """Файл конфига один: собственного .env у книги нет — подъём вверх
+    от папки книги не должен находить её же копию общего файла."""
     monkeypatch.delenv("WEB_ENV_FILE", raising=False)
     root = tmp_path / "repo"
     root.mkdir()
@@ -394,7 +391,7 @@ def test_env_files_single_file(tmp_path, monkeypatch):
     book = root / "projects" / "ACTIVE" / "book"
     (book / "chapters").mkdir(parents=True)
     assert C.env_files() == [str(shared)]
-    # файл в папке книги — больше не слой
+    # файл в папке книги — не слой
     (book / ".env").write_text("MODEL=книжная\n", encoding="utf-8")
     assert C.env_files() == [str(shared)]
     assert C.load_env() == {"HOST": "http://shared"}
@@ -413,7 +410,6 @@ def test_get_server_config(monkeypatch):
     assert cfg == {"host": "http://h", "api_key": "", "model": "m"}
     # legacy-ключи профилей игнорируются
     assert C.get_server_config({"LOCAL_HOST": "x"})["host"] == ""
-    # стадийные ключи — тоже: модель в конвейере одна
     assert C.get_server_config({"HOST": "http://h", "NER_HOST": "http://ner",
                                 "NER_MODEL": "нер",
                                 "NER_API_KEY": "нер-ключ"}) == {

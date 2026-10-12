@@ -26,7 +26,7 @@ PROFILE = "profile"
 LLM_FIELDS = {"host", "model", "api_key", "temperature", "timeout",
               "stream_timeout", "max_retries", "retries", "max_tokens",
               "threads", "jobs", "retry_empty"}
-# общие LLM-настройки: стадийных ключей больше нет, имена унифицированы
+# то, что осталось параметрами запуска (не настройки): сверяем полноту
 LLM_NAMES = {
     "host", "api_key", "model", "timeout", "stream_timeout", "max_retries",
     "max_tokens", "retry_empty", "temperature", "threads", "min_len_ratio",
@@ -235,7 +235,7 @@ def test_stage_names_are_the_registry_owners():
 
 # Настройки, которые живут только в реестре: в форме стадии их нет, они
 # правятся на странице «Настройки» (у конвейера это порог и n-граммы поиска
-# терминов — раньше их можно было задать только руками в .env).
+# терминов — руками в .env их не задают).
 REGISTRY_ONLY = {"pipeline": (9, ["ner_threshold", "ner_ngram"])}
 
 
