@@ -1897,7 +1897,10 @@ async function main() {
   }
 
   /* правка-удаление в обзоре глоссария: своё действие в заголовке, своё
-   * значение в diff (не пустой «Стало») и своя модалка без поля «Стало» */
+   * значение в diff (не пустой «Стало») и своя модалка без поля «Стало».
+   * Заодно — структура самой карточки: режим один (переключателя режимов и
+   * нижних кнопок нет), применение — кнопкой в сводке, файл правок открывается
+   * ссылкой строки состояния (она ведёт в «Файлы» с редактором файла) */
   {
     const before = problems.length;
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/review`, {
@@ -1946,7 +1949,42 @@ async function main() {
     await page.keyboard.press("Escape");
     await page.waitForTimeout(400);
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-review-delete.png") });
-    log(`${problems.length === before ? "✅" : "❌"} удаление термина  ${rows.length} строк · «${(dels[0] || {}).title || ""}» · модалка «${m.title}»`);
+    const card = await page.evaluate(() => {
+      const c = document.querySelector(".review-pane .review-card");
+      return {
+        seg: !!document.querySelector(".seg"),
+        bottom: [...(c?.querySelectorAll(".review-actions button") || [])]
+          .map((b) => b.textContent.trim()),
+        summary: [...(c?.querySelectorAll(".review-summary button") || [])]
+          .map((b) => [b.textContent.trim(), b.title]),
+        link: (c?.querySelector(".review-status a") || {})
+          .textContent?.trim() || "",
+      };
+    });
+    if (card.seg) problems.push("review: вернулся переключатель «Список/JSON»");
+    if (card.bottom.length)
+      problems.push(`review: внизу карточки кнопки: ${card.bottom.join(", ")}`);
+    const apply = card.summary.find(([t]) => t === "Применить");
+    if (!apply)
+      problems.push(`review: в сводке нет «Применить»: ${card.summary.map((x) => x[0]).join(", ")}`);
+    else if (!/все принятые/.test(apply[1]))
+      problems.push(`review: подсказка «Применить»: «${apply[1]}»`);
+    if (!card.link.startsWith("файл есть · "))
+      problems.push(`review: строка о файле правок не ссылка: «${card.link}»`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-review-list.png") });
+    // ссылка ведёт в «Файлы»: редактор открыт на файле правок, «Назад» — в tmp/
+    await page.locator(".review-pane .review-status a").first().click();
+    await page.waitForTimeout(900);
+    const opened = await page.evaluate(() => ({
+      tab: (document.querySelector(".tab-active") || {}).textContent?.trim() || "",
+      meta: (document.querySelector(".editor-meta") || {}).textContent?.trim() || "",
+    }));
+    if (opened.tab !== "Файлы")
+      problems.push(`review: ссылка открыла вкладку «${opened.tab}»`);
+    if (!opened.meta.includes("tmp/ner_review.json"))
+      problems.push(`review: редактор файла: «${opened.meta}»`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-review-file.png") });
+    log(`${problems.length === before ? "✅" : "❌"} правки глоссария  ${rows.length} строк · «${(dels[0] || {}).title || ""}» · модалка «${m.title}» | режим один · «${apply ? apply[0] : "?"}» · ссылка «${card.link}» → ${opened.tab}: ${opened.meta}`);
   }
 
   /* предпросмотр массовых замен: пробельные правила должны быть ВИДНЫ —

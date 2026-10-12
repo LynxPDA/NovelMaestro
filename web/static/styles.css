@@ -1885,29 +1885,7 @@ input[type="number"] {
   padding: 2px 8px;
   font-size: 12px;
 }
-.seg {
-  display: flex;
-  gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 2px;
-  background: var(--surface);
-}
-.seg-btn {
-  border: none;
-  background: transparent;
-  border-radius: 4px;
-  color: var(--muted);
-}
-.seg-btn:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-.seg-active {
-  background: var(--accent-dim);
-  color: var(--text);
-  font-weight: 600;
-}
+/* сводка и массовые кнопки над списком правок; файл правок — ссылкой снизу карточки */
 .review-summary {
   display: flex;
   gap: 6px;

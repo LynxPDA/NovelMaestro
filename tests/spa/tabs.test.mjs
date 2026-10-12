@@ -248,7 +248,7 @@ async function api(path, opts = {}) {
   if (p === "/ner") return globalThis.__ner || { items: [], too_large: false };
   if (p === "/check") return { reports: [] };
   if (p === "/ner/review" || p === "/translate_check_llm/review") {
-    return { exists: false, content: "", size: 0 };
+    return globalThis.__review || { exists: false, content: "", size: 0 };
   }
   if (p.endsWith("/tree")) {
     return globalThis.__tree || { chapters: [], artifacts: {} };
@@ -545,6 +545,68 @@ test("reviewView: переключение под-вкладок (клик) и �
     }
   })(page2);
   assert.ok(tabs2[2].className.includes("subtab-active"));
+});
+
+/* ── карточка LLM-правок: один режим, файл правок — ссылкой ─────────────
+ * У карточки один режим (список), а кнопок «Пробный прогон», «Применить» и
+ * «Сохранить файл» внизу больше нет: каждое действие над записью сохраняет
+ * файл само, применение запускается кнопкой «Применить» из сводки, а JSON
+ * целиком правится на «Файлах» — туда ведёт и строка о файле правок. */
+const REVIEW_DOC = {
+  created: "t", updated: "t", input: "ner.json",
+  entries: [
+    { term: "林凡", field: "type", old: "A", new: "B",
+      status: "принять", applied: false },
+  ],
+};
+
+/* вкладка «Проверки» с готовым файлом правок */
+function reviewCard() {
+  globalThis.__review = {
+    exists: true,
+    content: JSON.stringify(REVIEW_DOC, null, 2),
+    size: 47820,
+  };
+  return viewProject("ACTIVE", "Книга", "review");
+}
+
+test("Проверки: карточка правок — только список, без переключателя и нижних кнопок", async () => {
+  const page = reviewCard();
+  await tick();
+  const text = allText(page);
+  for (const gone of ["Список правок", "Редактор JSON", "Пробный прогон",
+                      "Сохранить файл", "Применить все принятые"]) {
+    assert.ok(!text.includes(gone), `в карточке больше нет «${gone}»`);
+  }
+  /* обе карточки (глоссарий и перевод) рисуют один и тот же мок-файл,
+     но смотреть нужно одну: ner — первая под-вкладка */
+  const ner = findByClass(page, "review-pane")[0];
+  assert.equal(findByClass(ner, "rv-row").length, 1, "список правок на месте");
+  const apply = findByClass(ner, "review-summary")[0]
+    .querySelectorAll("button")
+    .find((b) => collectText(b).join("") === "Применить");
+  assert.ok(apply, "в сводке есть кнопка «Применить»");
+  assert.match(apply.getAttribute("title") || "", /все принятые/,
+    "о том, что применяются все принятые, говорит подсказка");
+  globalThis.__review = null;
+});
+
+test("Проверки: строка о файле правок — ссылка на «Файлы» с его редактором", async () => {
+  const page = reviewCard();
+  await tick();
+  const ner = findByClass(page, "review-pane")[0];
+  const link = findByClass(ner, "review-status")[0].children[0];
+  assert.match(collectText(link).join(""), /^файл есть · 47820 B$/);
+  link._listeners.click[0]({ preventDefault() {} });
+  await tick();
+  assert.equal(collectText(page.querySelector(".tab-active")).join(""), "Файлы",
+    "клик ведёт на вкладку «Файлы»");
+  assert.equal(collectText(page.querySelector(".editor-meta")).join(""),
+    "tmp/ner_review.json · 0 B", "редактор открыт на файле правок");
+  assert.equal(prefsOf().page.view, "files", "вкладка запомнена");
+  assert.deepEqual(prefsOf().files, { path: "tmp", page: 0 },
+    "кнопка «Назад» в редакторе ведёт в tmp/");
+  globalThis.__review = null;
 });
 
 /* ── сортировка в списке файлов ────────────────────────────────── */

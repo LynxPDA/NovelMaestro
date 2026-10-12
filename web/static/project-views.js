@@ -1,5 +1,5 @@
 /* поллинг завершения применений проверок (вкладка «Проверка»):
-   ключ `${project}:${kind}` → {timer, jobId}; повторный запуск гасит
+   ключ `${project}:review:${kind}` → {timer, jobId}; повторный запуск гасит
    старый watcher того же ключа (не плодим интервалы). */
 const _reviewWatchers = new Map();
 /* Размер страницы таблиц глоссария (вкладка «Глоссарий») и отчётов
@@ -97,7 +97,6 @@ function viewProject(section, name, tab, job) {
     path: pref.get("files").path || "",
     edit: null,
     ner: null,
-    review: {},
     search: null,
     nerAll: null, // из «Поиска»: глоссарий открывается со всеми столбцами
     editor: null, // вкладка «Редактор» (глава/панели/подсветка)
@@ -2973,58 +2972,20 @@ function viewProject(section, name, tab, job) {
     const wrap = h("div", { class: "review-wrap" });
     const panel = h("div", { class: "review-panel" });
     const q = new URLSearchParams({ project: `${section}/${name}` });
-    // карточка LLM-проверки: глоссарий (1) и перевод (3)
-    function makeCard(title, path, applyPath, kind) {
+    /* карточка LLM-проверки: глоссарий (1) и перевод (3). Режим один — список
+       правок: каждое действие над записью сохраняет файл сразу, а JSON целиком
+       правится на вкладке «Файлы» (ссылка на файл — под списком) */
+    function makeCard(title, file, path, applyPath, kind) {
       // kind: "ner" | "tcl" — формат записей и переход к тексту правки
       const card = h("div", { class: "review-card" });
       const err = h("div", { class: "form-error" });
+      // строка под списком — ссылка на сам файл правок (ведёт в «Файлы»)
       const status = h("div", { class: "review-status" });
-      const dryBtn = h(
-        "button",
-        { class: "btn btn-sm btn-ghost" },
-        "Пробный прогон",
-      );
-      const applyBtn = h("button", { class: "btn btn-sm" }, "Применить");
       const body = h("div", { class: "review-card-body" });
-      const stKey = `review:${kind}`;
-      st.review[kind] = st.review[kind] || { mode: "list" };
-      const seg = h(
-        "div",
-        { class: "seg" },
-        h(
-          "button",
-          {
-            class:
-              "btn btn-sm seg-btn" +
-              (st.review[kind].mode === "list" ? " seg-active" : ""),
-            onclick: () => setMode("list"),
-          },
-          "Список правок",
-        ),
-        h(
-          "button",
-          {
-            class:
-              "btn btn-sm seg-btn" +
-              (st.review[kind].mode === "editor" ? " seg-active" : ""),
-            onclick: () => setMode("editor"),
-          },
-          "Редактор JSON",
-        ),
-      );
-      card.append(
-        h(
-          "div",
-          { class: "review-card-title" },
-          h("span", { text: title }),
-          h("span", { class: "spacer" }),
-          seg,
-        ),
-        body,
-      );
-      // ── состояние: распарсенный review-файл + редактор ──
+      const watchKey = `${section}/${name}:review:${kind}`;
+      card.append(h("div", { class: "review-card-title" }, title), body);
+      // ── состояние: распарсенный review-файл ──
       let parsed = null; // {doc, entries, isArray} | null (нет файла)
-      let ed = null;
       const RV_PAGE = 100; // правок на страницу списка
       const RV_LIST = h("div", { class: "rv-list" });
       /* страница списка правок — общий пейджер (на одной странице молчит);
@@ -3043,14 +3004,30 @@ function viewProject(section, name, tab, job) {
             return entryRow(e, page * RV_PAGE + i, { cont });
           }),
       });
+      /* клик по строке состояния — «Файлы» с открытым редактором файла
+         правок; папка — tmp/ (по ней же ведёт назад кнопка редактора),
+         состояние вкладки — как у setPath: своё выделение и своя страница */
+      function openReviewFile() {
+        st.view = "files";
+        st.path = "tmp";
+        st.edit = file;
+        st.search = null;
+        st.filesSel.clear();
+        st.filesPage = 0;
+        pref.set("files", { path: st.path, page: 0 });
+        render();
+      }
       async function load() {
         const d = await api(path + "?" + q);
-        status.textContent = d.exists
-          ? `файл есть · ${fmtSize(d.size)}`
-          : "файла ещё нет — создастся при применении";
+        status.replaceChildren(
+          d.exists
+            ? crumb(`файл есть · ${fmtSize(d.size)}`, openReviewFile)
+            : "файла ещё нет — создастся при применении",
+        );
         parsed = d.exists ? UICore.parseReviewContent(d.content) : null;
         return d;
       }
+      /* одно действие с правкой (статус, текст, удаление) = одна запись файла */
       async function save() {
         await api(path, {
           method: "PUT",
@@ -3078,19 +3055,7 @@ function viewProject(section, name, tab, job) {
         }
       }
       function refresh() {
-        load()
-          .then(() => {
-            if (ed)
-              ed.setValue(parsed ? JSON.stringify(parsed.doc, null, 2) : "");
-            renderCard();
-          })
-          .catch((ex) => (err.textContent = ex.message));
-      }
-      // ── режим «Список правок» ──
-      function setMode(next) {
-        if (next === st.review[kind].mode) return;
-        st.review[kind].mode = next;
-        renderCard();
+        load().then(renderList).catch((ex) => (err.textContent = ex.message));
       }
       /* ner-правки бывают двух действий: патч поля и удаление термина целиком
          (LLM помечает термин лишним) — у удаления поля не сверяются */
@@ -3403,7 +3368,7 @@ function viewProject(section, name, tab, job) {
             h(
               "div",
               { class: "files-empty" },
-              "Файл правок не прочитан (невалидный JSON) — переключитесь на «Редактор JSON» или запустите проверку",
+              "Файл правок не прочитан (невалидный JSON) — запустите проверку заново или поправьте файл по ссылке ниже",
             ),
           );
         } else if (parsed.entries.length) {
@@ -3452,10 +3417,10 @@ function viewProject(section, name, tab, job) {
                 {
                   class: "btn btn-xs",
                   title:
-                    "Применить все правки со статусом «принять» (как кнопка «Применить» внизу)",
-                  onclick: () => runApply(false),
+                    "Применить все принятые правки (запуск — фоновая задача)",
+                  onclick: () => runApply(),
                 },
-                "Применить все принятые",
+                "Применить",
               ),
               h(
                 "button",
@@ -3481,34 +3446,29 @@ function viewProject(section, name, tab, job) {
             ),
           );
         }
-        body.append(status, actionsBar, err);
+        body.append(status, err);
       }
       // ── применение: запуск + уведомление о результате ──
-      async function runApply(dry) {
+      async function runApply() {
         err.textContent = "";
         try {
           const r = await api(applyPath, {
             method: "POST",
-            body: {
-              project: `${section}/${name}`,
-              dry_run: dry,
-            },
+            body: { project: `${section}/${name}` },
           });
-          toast(`${dry ? "Пробный прогон" : "Применение"}: запущено`);
-          watchJob(r.job && r.job.id, dry);
+          toast("Применение: запущено");
+          watchJob(r.job && r.job.id);
         } catch (ex) {
           err.textContent = ex.message;
         }
       }
-      function watchJob(jobId, dry) {
-        const key = `${section}/${name}:${stKey}`;
-        const prev = _reviewWatchers.get(key);
+      function watchJob(jobId) {
+        const prev = _reviewWatchers.get(watchKey);
         if (prev) {
           clearInterval(prev.timer);
-          _reviewWatchers.delete(key);
+          _reviewWatchers.delete(watchKey);
         }
         if (!jobId) return;
-        const label = dry ? "Пробный прогон" : "Применение";
         const timer = setInterval(async () => {
           let job = null;
           try {
@@ -3519,68 +3479,16 @@ function viewProject(section, name, tab, job) {
           }
           if (!job || job.status === "running") return;
           clearInterval(timer);
-          _reviewWatchers.delete(key);
-          if (job.status === "done") toast(`✅ ${label} завершено`);
+          _reviewWatchers.delete(watchKey);
+          if (job.status === "done") toast("✅ Применение завершено");
           else if (job.status === "failed")
-            toast(`❌ ${label}: ошибка — смотрите лог запуска`, "err");
-          else if (job.status === "stopped") toast(`⏹ ${label} остановлено`);
+            toast("❌ Применение: ошибка — смотрите лог запуска", "err");
+          else if (job.status === "stopped") toast("⏹ Применение остановлено");
           refresh();
         }, 2000);
-        _reviewWatchers.set(key, { timer, jobId });
+        _reviewWatchers.set(watchKey, { timer, jobId });
       }
-      dryBtn.addEventListener("click", () => runApply(true));
-      applyBtn.addEventListener("click", () => runApply(false));
-      // ── режим «Редактор JSON» (прежний интерфейс) ──
-      const edHost = h("div", { class: "editor-cm editor-cm-small" });
-      const saveBtn = h(
-        "button",
-        { class: "btn btn-sm btn-ghost" },
-        "Сохранить файл",
-      );
-      saveBtn.addEventListener("click", async () => {
-        err.textContent = "";
-        try {
-          await api(path, {
-            method: "PUT",
-            body: { project: `${section}/${name}`, content: ed.getValue() },
-          });
-          toast("Сохранено");
-        } catch (ex) {
-          err.textContent = ex.message;
-        }
-      });
-      const actionsBar = h(
-        "div",
-        { class: "review-actions" },
-        dryBtn,
-        applyBtn,
-        h("span", { class: "spacer" }),
-        saveBtn,
-      );
-      function renderEditor() {
-        body.replaceChildren();
-        if (!ed) {
-          ed = makeEditor(
-            parsed ? JSON.stringify(parsed.doc, null, 2) : "",
-            "json",
-          );
-          const f = UIC.editorSearch(ed);
-          if (f) actionsBar.insertBefore(f, saveBtn);
-          edHost.replaceChildren(ed.root);
-        }
-        body.append(edHost, status, actionsBar, err);
-      }
-      function renderCard() {
-        if (st.review[kind].mode === "editor") renderEditor();
-        else renderList();
-      }
-      load()
-        .then(() => {
-          if (ed)
-            ed.setValue(parsed ? JSON.stringify(parsed.doc, null, 2) : "");
-          renderCard();
-        })
-        .catch((ex) => (err.textContent = ex.message));
+      load().then(renderList).catch((ex) => (err.textContent = ex.message));
       return card;
     }
     /* под-вкладки «Проверок»: каждая проверка — своя вкладка; выбор
@@ -3619,6 +3527,7 @@ function viewProject(section, name, tab, job) {
     paneOf("ner").append(
       makeCard(
         "Проверка глоссария (LLM) — ner_review.json",
+        "tmp/ner_review.json",
         "/ner/review",
         "/ner/review/apply",
         "ner",
@@ -3635,6 +3544,7 @@ function viewProject(section, name, tab, job) {
     paneOf("tcl").append(
       makeCard(
         "Проверка перевода (LLM) — translate_check_llm_review.json",
+        "tmp/translate_check_llm_review.json",
         "/translate_check_llm/review",
         "/translate_check_llm/review/apply",
         "tcl",
