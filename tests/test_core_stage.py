@@ -407,3 +407,127 @@ def test_profile_reasoning_extra_body_wins(recorder, monkeypatch):
                          env_data={"LLM_EXTRA_BODY_JSON": raw})
     prof.complete("п")
     assert recorder[0]["reasoning"] == {"reasoning_effort": "max", "top_k": 5}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Таймауты, повторы, потоки и отношение длин — один конфиг на конвейер
+# ══════════════════════════════════════════════════════════════════════
+def test_common_numbers_reach_profile(tmp_path, monkeypatch):
+    """Своих дефолтов у стадии нет: STREAM_TIMEOUT, RETRY_EMPTY, THREADS и
+    MIN_LEN_RATIO из общего .env доезжают до профиля стадии.
+
+    Раньше стадия молча везла своё число (у проверки перевода стрим равнялся
+    таймауту соединения, потоки отличались от скрипта к скрипту), поэтому
+    «изменённый параметр» в логе выглядел чужим.
+    """
+    for k in ("TIMEOUT", "STREAM_TIMEOUT", "MAX_RETRIES", "MAX_TOKENS",
+              "RETRY_EMPTY", "THREADS", "MIN_LEN_RATIO", "TEMPERATURE"):
+        monkeypatch.delenv(k, raising=False)
+    env = tmp_path / "nums.env"
+    env.write_text("HOST=http://h\nMODEL=m\nTIMEOUT=111\nSTREAM_TIMEOUT=999\n"
+                   "MAX_RETRIES=5\nMAX_TOKENS=4096\nRETRY_EMPTY=2\n"
+                   "THREADS=7\nMIN_LEN_RATIO=0.4\nTEMPERATURE=0.1\n",
+                   encoding="utf-8")
+    prof = resolve(str(env), stage="translate_check_llm")
+    assert (prof.timeout, prof.stream_timeout) == (111, 999)
+    assert (prof.max_retries, prof.max_tokens) == (5, 4096)
+    assert (prof.retry_empty, prof.threads) == (2, 7)
+    assert prof.min_len_ratio == pytest.approx(0.4)
+    assert prof.temperature == pytest.approx(0.1)
+
+
+def test_stream_timeout_zero_means_connection_timeout(tmp_path, monkeypatch):
+    """STREAM_TIMEOUT=0 — не «ждать ноль секунд», а то же число, что соединение."""
+    for k in ("TIMEOUT", "STREAM_TIMEOUT"):
+        monkeypatch.delenv(k, raising=False)
+    env = tmp_path / "t.env"
+    env.write_text("HOST=http://h\nMODEL=m\nTIMEOUT=45\nSTREAM_TIMEOUT=0\n",
+                   encoding="utf-8")
+    prof = resolve(str(env))
+    assert (prof.timeout, prof.stream_timeout) == (45, 45)
+
+
+def test_threads_clamp_to_1_16(env_file):
+    """Величина одна на весь конвейер, но поле то же 1–16."""
+    assert resolve(env_file, threads=99).threads == 16
+    assert resolve(env_file, threads=0).threads == 1
+
+
+@pytest.mark.parametrize("mode,profile,effort,budget,needle", [
+    ("on", "openai", "high", 0, "reasoning_effort=high"),
+    ("off", "openai", "", 0, "reasoning_effort=none"),
+    ("on", "anthropic", "", 4096, "budget_tokens"),
+    ("default", "openai", "", 0, "ключей в запросе нет"),
+], ids=["openai-on", "openai-off", "anthropic-budget", "server-default"])
+def test_describe_profile_prints_real_keys(mode, profile, effort, budget,
+                                           needle):
+    """Лог стадии печатает реальные ключи payload, а не пересказ флагов."""
+    prof = st.LlmProfile(base_url="http://h:1/v1", model="m",
+                         reasoning_mode=mode, thinking_profile=profile,
+                         reasoning_effort=effort or None,
+                         thinking_budget=budget)
+    assert needle in " | ".join(st.describe_profile(prof))
+
+
+def test_resolve_profile_logs_config(tmp_path, monkeypatch, caplog):
+    """Строки о конфиге пишет resolve_profile — стадия их не дублирует."""
+    for k in ("REASONING_MODE", "REASONING_EFFORT", "THINKING_PROFILE",
+              "THINKING_BUDGET"):
+        monkeypatch.delenv(k, raising=False)
+    env = tmp_path / "log.env"
+    env.write_text("HOST=http://h\nMODEL=m\nREASONING_MODE=on\n"
+                   "REASONING_EFFORT=high\n", encoding="utf-8")
+    log = logging.getLogger("test.log.profile")
+    log.setLevel(logging.INFO)
+    with caplog.at_level(logging.INFO, logger=log.name):
+        st.resolve_profile(parser_with().parse_args(["--env_file", str(env)]),
+                           logger=log)
+    text = " | ".join(r.getMessage() for r in caplog.records)
+    assert "Сервер: http://h/v1" in text
+    # главное: в логе реальный ключ payload, а не «reasoning=off» от пустого флага
+    assert "Рассуждения: включены" in text and "reasoning_effort=high" in text
+
+
+# ══════════════════════════════════════════════════════════════════════
+# complete_until: политика повторов одна и она не про исключения
+# ══════════════════════════════════════════════════════════════════════
+@pytest.fixture()
+def answers(monkeypatch):
+    """По списку ответов на вызов; None в списке — ошибка LLM."""
+    box: dict = {"calls": 0, "want": []}
+
+    def fake(base_url, model, messages, **kw):
+        box["calls"] += 1
+        return box["want"].pop(0)
+
+    monkeypatch.setattr(st, "stream_chat_completion", fake)
+    return box
+
+
+def _stage(answers, **prof_kw):
+    answers["calls"] = 0
+    prof = st.LlmProfile(base_url="http://h:1/v1", model="m", **prof_kw)
+    return st.Stage(name="translate_check_llm", logger=LOG, profile=prof)
+
+
+def test_complete_until_repeats_until_found(answers):
+    """Пустой результат — не ошибка, а повод спросить ещё раз (1 + RETRY_EMPTY)."""
+    answers["want"] = [("[]", None), ("[]", None), ('[{"t": 1}]', None)]
+    stage = _stage(answers, retry_empty=3)
+    text, err = st.complete_until(stage, "п", label="[p1]",
+                                  accept=lambda t: bool(json.loads(t)))
+    assert text == '[{"t": 1}]' and err is None and answers["calls"] == 3
+
+
+def test_complete_until_last_answer_wins(answers):
+    """Повторы кончились — последний ответ берётся как есть."""
+    answers["want"] = [("", None), ("", None)]
+    text, err = st.complete_until(_stage(answers, retry_empty=1), "п")
+    assert text == "" and err is None and answers["calls"] == 2
+
+
+def test_complete_until_error_returns_immediately(answers):
+    """Ошибка LLM — сразу наружу: её считает политика MAX_RETRIES."""
+    answers["want"] = [(None, "read timeout")]
+    text, err = st.complete_until(_stage(answers, retry_empty=5), "п")
+    assert (text, err) == (None, "read timeout") and answers["calls"] == 1

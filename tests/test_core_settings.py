@@ -277,6 +277,53 @@ def test_registry_matches_stage_specs(stage):
         f"(+{len(extra)} реестровых)")
 
 
+def test_llm_stage_fields_are_uniform():
+    """LLM-поля у стадий с моделью — ОДНИ на всех и в одном порядке.
+
+    Раньше на каждую стадию был свой список: у ner ехал «retries», у
+    конвейера — «jobs», --stream_timeout ни у кого не ехал и в сборке argv
+    приравнивался к таймауту соединения. Страж не даёт спискам снова
+    разъехаться: набор один, имена канонические (core.stage.add_llm_args).
+    """
+    sets = {stage: tuple(fields) for stage, fields in
+            S.STAGE_LLM_FIELDS.items() if fields}
+    assert len(set(sets.values())) == 1, (
+        f"LLM-поля стадий разошлись: "
+        + "; ".join(f"{s}={list(f)}" for s, f in sorted(sets.items())))
+    fields = next(iter(sets.values()))
+    # имена только канонические: старые «retries»/«jobs» в формах стадий больше
+    # не появляются (они живы только как псевдонимы флагов CLI)
+    assert not set(fields) & set(ALIAS), f"устаревшие имена в наборе: {fields}"
+    for name in ("stream_timeout", "max_tokens", "retry_empty", "threads"):
+        assert name in fields, f"общее поле {name} выпало из набора стадий"
+
+
+@pytest.mark.parametrize("stage", sorted(
+    s for s, f in S.STAGE_LLM_FIELDS.items() if f))
+def test_stage_argv_carries_full_llm_flag_set(stage, monkeypatch):
+    """Сборка argv отдаёт стадии ВЕСЬ общий набор LLM-флагов, а не его часть.
+
+    Каждый общий ключ — своим distinctive-значением: так видно, что он доехал
+    до argv своим флагом, а не совпал с чужим числом (историческая болячка:
+    --stream_timeout молча приравнивался к таймауту соединения).
+    """
+    import web.stages as W
+    want = {"TEMPERATURE": "0.5", "TIMEOUT": "301", "STREAM_TIMEOUT": "901",
+            "MAX_RETRIES": "5", "MAX_TOKENS": "4096", "RETRY_EMPTY": "2",
+            "THREADS": "3", "HOST": "http://общий:9989", "MODEL": "м-из-конфига"}
+    for k, v in want.items():
+        monkeypatch.setenv(k, v)
+    argv = W.build_command(stage, {"profile": S.PROFILE_DEFAULT}, {})
+    for name, flag in W._LLM_FLAGS:  # noqa: SLF001 — сверяем сам список
+        assert flag in argv, f"{stage}: общего флага {flag} в argv нет"
+        # в argv едет значение общего конфига как есть (адрес /v1 допишет
+        # resolve_profile уже в скрипте стадии)
+        assert argv[argv.index(flag) + 1] == want[name.upper()], \
+            f"{stage}: {flag} везёт не значение общего конфига"
+    # ключ — не флаг: он уходит в окружение процесса
+    assert "--api_key" not in argv
+
+
 def test_profile_field_is_first_on_llm_stages():
     """Профиль LLM — первое поле формы LLM-стадии (не настройка реестра)."""
     for stage in sorted(S.STAGE_LLM_FIELDS):

@@ -76,7 +76,8 @@ DEPS_API = ["ROLES", "status", "format_status", "missing_hint"]
 # Зеркало API core/settings.py (реестр настроек — одно место истины)
 SETTINGS_API = ["Setting", "Block", "Group", "GROUPS", "SETTINGS", "BY_KEY",
                 "BY_BLOCK", "STAGES", "STAGE_TITLES", "LLM_BLOCKS", "LLM_ALIAS",
-                "STAGE_LLM_FIELDS", "groups", "stage_fields", "settings_of",
+                "LLM_STAGE_FIELDS", "STAGE_LLM_FIELDS", "groups", "stage_fields",
+                "settings_of",
                 "form_fields", "defaults", "stage_values", "llm_settings",
                 "llm_values", "llm_form", "with_llm", "applies",
                 "applicable_form", "env_key", "env_file",

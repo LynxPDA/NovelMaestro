@@ -106,7 +106,7 @@ DEFAULT_CHUNK_SIZE = 1     # ГЛАВЫ в чанке
 DEFAULT_CHUNKS = 0         # 0 — все чанки
 DEFAULT_SAMPLE = "uniform"
 DEFAULT_OVERLAP = 0        # ГЛАВЫ
-DEFAULT_THREADS = 4
+# Потоки — общий THREADS (его разрешает core.stage): своего числа у стадии нет
 
 CHUNK_DIR = "tmp/quality"  # артефакты чанков: chunk-<NNN>.json, summary-l<k>-<i>.json
 CHUNK_FILE_RE = None       # заполняется после импорта re (см. ниже)
@@ -620,7 +620,8 @@ def assess_chunks(args, stage, chunks, orig_by_num: dict, prompt: str,
         }
         save_chunk_result(results[idx])
 
-    workers = max(1, min(int(args.threads), 16, len(chunks)))
+    # общий THREADS стадии; больше числа чанков потоков не нужно
+    workers = max(1, min(stage.profile.threads, len(chunks)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(worker, i, c): i for i, c in enumerate(chunks)}
         with Progress(len(chunks), "Оценка перевода", unit="чанк",
@@ -1087,7 +1088,8 @@ def preview_chunks(stage, args, all_chunks, selected, note, oversize,
         "режим": "chunks", "чанков": len(all_chunks),
         "оценивается": len(selected), "отбор": note,
         "глав в чанке": args.chunk_size, "перекрытие": args.overlap,
-        "бюджет запроса": f"{args.request_budget} токенов", "потоки": args.threads,
+        "бюджет запроса": f"{args.request_budget} токенов",
+        "потоки": stage.profile.threads,
         "разрезано глав": sum(1 for c in all_chunks if c.get("part")),
         "не влезли даже частью": oversize or "нет",
         "артефакты": CHUNK_DIR,
@@ -1110,7 +1112,7 @@ def run_chunks(args, stage, chapters, orig_by_num, prompt, logger) -> int:
         logger.error("❌ Пустой список чанков.")
         return 1
     logger.info(f"Чанки: {len(all_chunks)}, оценивается {len(selected)} "
-                f"({note}), потоков {args.threads}")
+                f"({note}), потоков {stage.profile.threads}")
     # тот же файл, другой тег: <prompt_assessment_summary> свёртки
     summary_prompt = load_assessment_prompt(
         args.prompt_file, logger, tag="prompt_assessment_summary",
@@ -1157,7 +1159,7 @@ def run_chunks(args, stage, chapters, orig_by_num, prompt, logger) -> int:
         "range_included": (min(nums), max(nums)), "chapters": len(chapters),
         "file_type": args.type, "budget": args.request_budget,
         "chunk_size": args.chunk_size, "sample": note,
-        "threads": args.threads,
+        "threads": stage.profile.threads,
         "split_chapters": split_ch,
         "oversize": oversize,
         "model": stage.profile.model, "host": stage.profile.base_url,
@@ -1227,9 +1229,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overlap", type=int, default=DEFAULT_OVERLAP,
                         help="Перекрытие соседних чанков, ГЛАВЫ (целыми "
                              f"главами, default: {DEFAULT_OVERLAP}).")
-    parser.add_argument("--threads", type=int, default=DEFAULT_THREADS,
-                        help=f"Потоки оценки чанков (свёртка всегда "
-                             f"последовательно, default: {DEFAULT_THREADS}).")
     parser.add_argument("--summary-only", dest="summary_only",
                         action="store_true",
                         help="Не опрашивать модель по чанкам: взять "
@@ -1262,11 +1261,12 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    # ── Лог стадии + сервер: CLI > os.environ > .env > help+exit ──
+    # ── Лог стадии + профиль: CLI > os.environ > .env (сервер, модель,
+    # таймауты и рассуждения в лог пишет core.stage) ──
     stage, logger = setup_stage("translate_quality", args)
-    logger.info(f"API: {stage.profile.base_url} | модель: "
-                f"{stage.profile.model} | режим: {args.mode} | бюджет: "
-                f"{args.request_budget} токенов (оценка) | тип: {args.type}")
+    logger.info(f"Режим: {args.mode} | бюджет: "
+                f"{args.request_budget} токенов (оценка) | тип: {args.type} "
+                f"| потоков: {stage.profile.threads}")
 
     # ── Главы ──
     ch_dir = os.path.abspath(args.chapters_dir)

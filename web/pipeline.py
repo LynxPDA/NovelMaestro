@@ -44,8 +44,9 @@ _bootstrap_core()
 from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
     PROGRESS_PREFIX, build_chapter_map, format_ranges,
-    get_server_config, load_env,
 )
+# общий блок LLM-флагов: у конвейера тот же набор имён, что у стадий
+from core.stage import add_llm_args, resolve_profile  # noqa: E402
 
 # ═══ Константы (канон run_pipeline.py) ═══
 _STAGE_IO = {
@@ -331,7 +332,8 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
         "--model", model,
         "--threads", str(threads),
         "--timeout", str(timeout),
-        "--stream_timeout", str(stream_timeout or timeout),
+        # стрим — своё число (общий STREAM_TIMEOUT), а не таймаут соединения
+        "--stream_timeout", str(stream_timeout),
         "--max_retries", str(max_retries if max_retries is not None
                               else _DEFAULTS["max_retries"]),
         "--out", str(out_file),
@@ -574,26 +576,13 @@ def main() -> None:
                          "примеры из source/)")
     ap.add_argument("--start", type=int, default=None, help="Начальная глава")
     ap.add_argument("--end", type=int, default=None, help="Конечная глава")
-    ap.add_argument("--jobs", type=int, default=None,
-                    help="Потоков СУММАРНО (1–16): распределяются на "
-                         "параллельные главы и чанки внутри главы")
-    ap.add_argument("--timeout", type=int, default=None,
-                    help="Таймаут одного LLM-запроса, сек")
-    ap.add_argument("--stream_timeout", type=int, default=None,
-                    help="Таймаут простоя стрима, сек")
-    ap.add_argument("--max_retries", type=int, default=None,
-                    help="Повторы LLM-запроса (по умолчанию общий "
-                         "MAX_RETRIES из .env → 3)")
-    ap.add_argument("--temperature", type=float, default=None,
-                    help="Температура LLM (пусто = сервер)")
-    # рассуждения модели — НЕ параметр конвейера: режим один на весь запуск
-    # и задаётся общими ключами .env (REASONING_MODE / THINKING_PROFILE /
-    # REASONING_EFFORT / THINKING_BUDGET), которые читают стадии сами
-    ap.add_argument("--host", default="", help="URL LLM-сервера (пусто = HOST из .env)")
-    ap.add_argument("--api_key", default="", help="API-ключ (argv — только для тестов; в web идёт через LLM_API_KEY)")
-    ap.add_argument("--model", default="",
-                    help="Модель (пусто = общая MODEL из .env)")
-    ap.add_argument("--env_file", default=None, help="Путь к .env")
+    # Сервер LLM, таймауты, повторы, потоки и рассуждения — общий блок
+    # флагов (core.stage.add_llm_args): имена канонические, --jobs и --retries
+    # принимаются как старые написания. Потоки — СУММАРНО: распределение на
+    # параллельные главы и чанки внутри главы считает сам pipeline.py.
+    # Рассуждения — НЕ параметр конвейера: режим один на весь запуск, его
+    # читают стадии сами из общего конфига.
+    add_llm_args(ap, aliases=True)
     ap.add_argument("--script", default=None,
                     help="Путь к translate_book.py (обычно не нужен)")
     ap.add_argument("--prompt_file", default="",
@@ -638,20 +627,9 @@ def main() -> None:
 
     log = logging.getLogger("web.pipeline")
     # Дефолты слоя уже посчитаны реестром (стадийные PIPELINE_* + общие
-    # LLM-ключи; os.environ приоритетнее файла, канон §7). Файл читается один
-    # раз и на модели: свой .env у книги больше нет, локальные значения
-    # запусков живут в браузере.
-    env_data = load_env(args.env_file)
-    args.jobs = args.jobs or _DEFAULTS["threads"]
-    args.timeout = args.timeout or _DEFAULTS["timeout"]
-    args.stream_timeout = args.stream_timeout or _DEFAULTS["stream_timeout"]
-    args.max_retries = (args.max_retries
-                        if args.max_retries is not None
-                        else _DEFAULTS["max_retries"])
+    # LLM-ключи, канон §7): свой .env у книги больше нет, локальные значения
+    # запусков живут в браузере. LLM-часть конфига разрешает resolve_profile.
     args.chunk_size = args.chunk_size or _DEFAULTS["chunk_size"]
-
-    if not 1 <= args.jobs <= 16:
-        ap.error("--jobs должен быть 1–16")
 
     log.setLevel(logging.INFO)
     if not log.handlers:
@@ -672,18 +650,21 @@ def main() -> None:
         log.error("translate_book.py не найден: %s", script)
         sys.exit(1)
 
-    # сервер: явные CLI > HOST/API_KEY/MODEL общего .env > os.environ
-    sc = get_server_config(env_data)
-    host = args.host or sc["host"]
-    api_key = args.api_key or sc["api_key"]
-    if not api_key:
-        api_key = os.environ.get("LLM_API_KEY", "")
-    # единая модель конвейера: PIPELINE_MODEL → общая MODEL
-    model = args.model or sc["model"] or ""
-
-    if not host and not args.preview_request:
-        log.error("Host LLM-сервера не задан: укажите --host или создайте .env (HOST)")
-        sys.exit(1)
+    # Сервер, ключ, модель, таймауты, повторы и потоки конвейера разрешаются
+    # тем же общим слоем, что и у отдельной стадии (CLI > os.environ > общий
+    # .env > дефолт реестра), и печатаются тоже им: раньше конвейер собирал
+    # те же числа сам своим порядком. Предпросмотр запроса в сеть не идёт, поэтому
+    # пустой сервер ему не ошибка.
+    profile = resolve_profile(args, stage="pipeline",
+                              require_model=not args.preview_request,
+                              require_server=not args.preview_request,
+                              logger=None if args.preview_request else log)
+    host, api_key, model = profile.base_url, profile.api_key, profile.model
+    args.threads = profile.threads
+    args.timeout = profile.timeout
+    args.stream_timeout = profile.stream_timeout
+    args.max_retries = profile.max_retries
+    args.temperature = profile.temperature
 
     chapters_dir = Path("chapters")
     chapters = build_chapter_map(str(chapters_dir))
@@ -718,7 +699,7 @@ def main() -> None:
         logs_dir = Path("logs")
         logs_dir.mkdir(exist_ok=True)
         common_log = logs_dir / (
-            f"{common_label}_{start}-{end}_j{args.jobs}_"
+            f"{common_label}_{start}-{end}_j{args.threads}_"
             f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         )
         # прошлый FileHandler от предыдущего запуска (тесты гоняют
@@ -744,9 +725,9 @@ def main() -> None:
     log.info("═" * 60)
     log.info("ТИП РАБОТЫ : %s", action_label)
     log.info("ДИАПАЗОН   : Главы с %d по %d", start, end)
-    log.info("ПОТОКОВ    : %d суммарно (главы × чанки)", args.jobs)
-    log.info("МОДЕЛЬ     : %s", model or "из .env")
-    log.info("СЕРВЕР     : %s", host)
+    log.info("ПОТОКОВ    : %d суммарно (главы × чанки)", args.threads)
+    # сервер, таймауты, повторы и модель напечатаны общим слоем (строки
+    # resolve_profile перед этим блоком): здесь только то, что есть только тут
     log.info("ПРОМПТЫ    : %s", " | ".join(
         f"{_STAGE_NAME[s]}={('встроенный' if builtin.get(s) or not prompts[s] else prompts[s])}"
         for s in stages))
@@ -848,7 +829,7 @@ def main() -> None:
     # суммарные потоки: параллельные главы × чанки на главу ≤ jobs;
     # глав много — потоки идут на главы (чанки 1), мало — свободные
     # уходят внутрь главы (потоков на главу больше 1)
-    total = args.jobs
+    total = args.threads
     n_chapters = len(to_process)
     jobs = min(total, max(1, n_chapters))
     threads = max(1, total // jobs)

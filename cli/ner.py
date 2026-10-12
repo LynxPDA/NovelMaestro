@@ -62,7 +62,8 @@ from core.stage import (  # noqa: E402
     Progress,
     Stage,
     add_llm_args,
-    resolve_profile,
+    bind_profile,
+    new_stage,
 )
 from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
@@ -1358,11 +1359,7 @@ def build_parser() -> argparse.ArgumentParser:
             "и <prompt_pass2>...</prompt_pass2>. Если тегов нет — файл целиком = pass1."
         ),
     )
-    parser.add_argument(
-        "--threads", type=int, default=4,
-        help="Число параллельных потоков (по умолчанию: 4, макс: 16).",
-    )
-    # Сервер LLM — общий блок флагов (core.stage); исторические имена
+    # Сервер LLM, потоки — общий блок флагов (core.stage); исторические имена
     # (--retries, --reasoning-effort) принимаются как псевдонимы.
     # сервер, таймауты, повторы и max_tokens — общий конфиг (core.stage)
     add_llm_args(parser, aliases=True)
@@ -1462,10 +1459,11 @@ def main():
 
     parser = build_parser()
     args = parser.parse_args()
-    # Сервер: CLI > os.environ > .env (общая реализация — core.stage)
-    profile = resolve_profile(args, stage="ner", require_model=False)
-    args.host, args.api_key, args.model = (
-        profile.base_url, profile.api_key, profile.model)
+    # Лог стадии и команда запуска — общий слой (core.stage): он же пишет
+    # в лог сервер, модель, таймауты и рассуждения разрешённого профиля
+    stage = new_stage("ner", args, log_name="ner_extraction",
+                      log_fatal=False)
+    logger = stage.logger
 
     # ── Настройка голосования ──
     if args.keep_all_fields:
@@ -1482,10 +1480,6 @@ def main():
     # ── Сборка глав (chapter.txt → в память; --compile_out — сохранить) ──
     in_memory_text: str | None = None
     if args.compile_chapters:
-        try:
-            os.makedirs("logs", exist_ok=True)
-        except OSError as exc:
-            print(f"⚠ logs/ не создаётся: {exc}", file=sys.stderr)
         clog, _ = setup_logging(os.path.join("logs", "ner_compile.log"))
         text, info = compile_chapter_text(
             args.chapters_dir, want="chapter",
@@ -1513,14 +1507,12 @@ def main():
 
     # ── Основной режим ──
     file_dir = os.path.dirname(os.path.abspath(args.file)) or "."
-    try:
-        os.makedirs("logs", exist_ok=True)
-    except OSError as exc:
-        print(f"⚠ logs/ не создаётся: {exc}", file=sys.stderr)
-    log_path = os.path.join("logs", "ner_extraction.log")
-
-    logger, _ = setup_logging(log_path)
-    log_argv(logger)
+    # Сервер: CLI > os.environ > .env (общая реализация — core.stage);
+    # require_model=False: режим «только собрать главы» модели не требует
+    stage = bind_profile(stage, args, require_model=False)
+    logger = stage.logger
+    args.host, args.api_key, args.model = (
+        stage.profile.base_url, stage.profile.api_key, stage.profile.model)
     cleanup_stale_resume_files(file_dir, logger)
 
     if not os.path.exists(args.file) and in_memory_text is None:
@@ -1546,12 +1538,6 @@ def main():
     else:
         _log(logger, logging.INFO,
              "📝 context: извлечение выключено (--context_max_len 0)")
-
-    # Контекст стадии: сервер/модель уже разрешены resolve_profile.
-    # preview_path обязателен: без него --preview-request молча выходил 0,
-    # а web отвечал «файл предпросмотра не создан или битый».
-    stage = Stage(name="ner", logger=logger, profile=profile,
-                  preview_path=args.preview_request)
 
     pass1_prompt = SYSTEM_PROMPT_PASS1
     pass2_prompt = SYSTEM_PROMPT_PASS2
@@ -1592,7 +1578,8 @@ def main():
         _log(logger, logging.INFO, "✅ Нет чанков для обработки.")
         return 0
 
-    max_workers = max(1, min(16, args.threads))
+    # Потоки — общий THREADS из профиля (его же пишет в лог core.stage)
+    max_workers = stage.profile.threads
 
     # ── Предпросмотр запроса (--preview-request): pass1 первого чанка ──
     if args.preview_request:
@@ -1618,8 +1605,8 @@ def main():
 
     if args.two_pass:
         _log(logger, logging.INFO,
-             f"🚀 TWO-PASS PIPELINE | Модель: {profile.model} | "
-             f"Чанков: {len(all_chunks)} | Потоков: {max_workers}")
+             f"🚀 TWO-PASS PIPELINE | Чанков: {len(all_chunks)} "
+             f"| Потоков: {max_workers}")
 
         failed_chunks = run_two_pass(
             all_chunks=all_chunks,
@@ -1638,8 +1625,7 @@ def main():
     # ════════════════════════════════════════════════════════════════
     else:
         _log(logger, logging.INFO,
-             f"🚀 Модель: {profile.model} | Чанков: {len(all_chunks)} "
-             f"| Потоков: {max_workers}")
+             f"🚀 Чанков: {len(all_chunks)} | Потоков: {max_workers}")
         _log(logger, logging.INFO, "━━━ ИЗВЛЕЧЕНИЕ (однопроходное) ━━━")
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:

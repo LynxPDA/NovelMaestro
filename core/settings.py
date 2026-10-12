@@ -198,12 +198,12 @@ GROUPS: tuple = (
             _s("STREAM_TIMEOUT", "Таймаут стрима, СЕК", "number", "900", min=0, help="пауза между строками SSE"),
             _s("MAX_RETRIES", "Повторы при ошибке LLM", "number", "3", min=0, help="ретраи только по 408/425/429/5xx"),
             _s("MAX_TOKENS", "Предел ответа, ТОКЕНЫ", "number", "65536", min=1, help="max_tokens в payload (не расчёт)"),
-            _s("RETRY_EMPTY", "Доп. повторы при пустом ответе", "number", "0", min=0),
+            _s("RETRY_EMPTY", "Повторных запросов при отсутствии правок (0 = нет)", "number", "0", min=0, help="0 = нет; стадия повторяет запрос, пока модель не вернёт ни одной правки; последний ответ берётся как есть"),
         ),
         _block("llm_run", "Температура и параллельность",
             _s("TEMPERATURE", "Температура (пусто = сервер)", "text", ""),
             _s("THREADS", "Потоков (1–16)", "number", "4", min=1, max=16, help="одна величина на весь конвейер"),
-            _s("MIN_LEN_RATIO", "Мин. отношение длин, СИМВОЛЫ", "text", "0", help="0 — контроль соотношения длин выключен"),
+            _s("MIN_LEN_RATIO", "Мин. отношение длин (0 = нет)", "text", "0", help="безразмерное: длина перевода к длине оригинала; 0 — контроль соотношения длин выключен"),
         ),
         _block("llm_reasoning", "Рассуждения модели",
             _s("REASONING_MODE", "Рассуждения", "select", "default", options=("default", "on", "off"), labels={'default': "— (решение сервера)", 'on': "включены", 'off': "выключены"},
@@ -363,9 +363,9 @@ GROUPS: tuple = (
             _s("TRANSLATE_CHECK_LLM_REQUEST_BUDGET", "Бюджет запроса, ТОКЕНЫ", "number", "25000",
                 help="главы одного пакета (+ запас 200 токенов на промпт, оценка); глава крупнее бюджета — режется на чанки; пакет — один LLM-запрос", stage="translate_check_llm"),
             _s("TRANSLATE_CHECK_LLM_PROMPT_FILE", "Промпт-файл (теги pass1/pass2)", "files", "translate_check_prompt.txt", dir="prompts", ext=(".txt",), stage="translate_check_llm", run=True),
-            _s("TRANSLATE_CHECK_LLM_MAX_FIXES_PER_CHAPTER", "Лимит правок на главу (0 = нет)", "number", "0", stage="translate_check_llm"),
-            _s("TRANSLATE_CHECK_LLM_MIN_FIX_LENGTH", "Мин. длина правки, СИМВОЛЫ", "number", "0", stage="translate_check_llm"),
-            _s("TRANSLATE_CHECK_LLM_MAX_CHANGED_CHARS", "Макс. изменённых символов, СИМВОЛЫ", "number", "0", stage="translate_check_llm"),
+            _s("TRANSLATE_CHECK_LLM_MAX_FIXES_PER_CHAPTER", "Лимит правок на главу, ШТ (0 = нет)", "number", "0", stage="translate_check_llm", help="лишние правки отсекаются по порядку выдачи"),
+            _s("TRANSLATE_CHECK_LLM_MIN_FIX_LENGTH", "Мин. длина правки, СИМВОЛЫ (0 = нет)", "number", "0", stage="translate_check_llm", help="короче — правка отбрасывается"),
+            _s("TRANSLATE_CHECK_LLM_MAX_CHANGED_CHARS", "Макс. изменённых символов, СИМВОЛЫ (0 = нет)", "number", "0", stage="translate_check_llm", help="длиннее — правка отбрасывается"),
         ),
         _block("translate_quality", STAGE_TITLES["translate_quality"],
             _s("TRANSLATE_QUALITY_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="translate_quality", run=True),
@@ -492,24 +492,29 @@ LLM_BLOCKS: tuple = ("llm_conn", "llm_net", "llm_run", "llm_reasoning",
 #: блоки настроек самого веб-сервера: их читает web/main.py, профили LLM их
 #: не касают (профиль хранит только LLM-ключи)
 SERVER_BLOCKS: tuple = ("server_net", "server_run")
+#: LLM-поля конвейера: ОДНИ на все LLM-стадии, канонические имена флагов
+#: (core.stage.add_llm_args). раньше на каждую стадию был свой список: у ner
+#: ехал «retries», у конвейера — «jobs», stream_timeout не приезжал вовсе и
+#: перекрывался таймаутом соединения
+LLM_STAGE_FIELDS: tuple = ("host", "model", "api_key", "temperature", "timeout",
+                           "stream_timeout", "max_retries", "max_tokens",
+                           "retry_empty", "threads")
 #: имена LLM-полей: в формах стадий их нет, они приходят из профиля
-LLM_FORM_NAMES = frozenset({"host", "model", "api_key", "temperature", "timeout",
-                            "stream_timeout", "max_retries", "retries",
-                            "max_tokens", "threads", "jobs", "retry_empty"})
+LLM_FORM_NAMES = frozenset(LLM_STAGE_FIELDS) | {"retries", "jobs"}
 #: старые имена полей стадии → общая настройка
 LLM_ALIAS = {"jobs": "threads", "retries": "max_retries"}
-#: что из LLM-конфига уходит в argv стадии (имена полей,
-#: которые понимает их CLI)
+#: что из LLM-конфига уходит в argv стадии: у стадий с моделью — один и тот же
+#: набор (пустой список и есть признак «без модели»)
 STAGE_LLM_FIELDS: dict = {
     "epub": (),
     "translate_check": (),
     "compile": (),
-    "pipeline": ("host", "model", "api_key", "jobs", "threads", "timeout", "max_retries", "temperature",),
-    "ner": ("host", "model", "api_key", "threads", "temperature", "retries", "timeout",),
-    "ner_check": ("host", "model", "api_key", "threads", "temperature", "max_tokens", "timeout", "max_retries",),
-    "translate_check_llm": ("host", "model", "api_key", "temperature", "max_retries", "timeout", "retry_empty", "threads",),
-    "translate_quality": ("host", "model", "api_key", "temperature", "max_retries", "timeout", "threads",),
-    "wiki": ("host", "model", "api_key", "temperature", "retries", "timeout", "threads",),
+    "pipeline": LLM_STAGE_FIELDS,
+    "ner": LLM_STAGE_FIELDS,
+    "ner_check": LLM_STAGE_FIELDS,
+    "translate_check_llm": LLM_STAGE_FIELDS,
+    "translate_quality": LLM_STAGE_FIELDS,
+    "wiki": LLM_STAGE_FIELDS,
     "batch_replace": (),
 }
 
@@ -648,12 +653,13 @@ def stage_values(stage: str) -> dict:
     return {s.name: _coerce(s, effective(s.key)) for s in stage_fields(stage)}
 
 
-def llm_values(profile: str = "") -> dict:
+def llm_values(profile: str = "", env_path: str = "") -> dict:
     """LLM-настройки конвейера (эффективные): подключение, сеть и рассуждения.
 
     Пустой профиль — General (значения общего .env), иначе значения профиля
-    лежат поверх общего файла."""
-    layered = layered_values(profile)
+    лежат поверх общего файла. env_path — явный --env_file стадии: он тот же
+    слой конфига, а не половина."""
+    layered = layered_values(profile, env_path)
     return {s.name: _coerce(s, layered.get(s.key) or s.default)
             for s in llm_settings()}
 
@@ -723,19 +729,24 @@ def sanitize(setting: Setting, value) -> str:
     return s
 
 
-def file_values() -> dict:
-    """Что выставлено в общем .env."""
-    path = env_file()
+def file_values(env_path: str = "") -> dict:
+    """Что выставлено в общем .env.
+
+    env_path — явный --env_file: он подменяет общий файл, а не добавляет
+    второй слой. Иначе тот флаг менял бы только половину конфига: сервер и
+    рассуждения из него, а таймауты/потоки/отношение длин — из общего файла.
+    """
+    path = env_path or env_file()
     return parse_dotenv(path) if path else {}
 
 
-def layered_values(profile: str = "") -> dict:
+def layered_values(profile: str = "", env_path: str = "") -> dict:
     """Эффективный конфиг: общий .env → выбранный профиль LLM → окружение.
 
     Профиль — выбор пользователя для конкретного запуска: web-слой отдаёт его
     подпроцессу переменной NM_LLM_PROFILE. Пустой или general — только общий
     файл. Окружение процесса остаётся последним рубежом деплоя."""
-    vals = file_values()
+    vals = file_values(env_path)
     pid = (profile or os.environ.get(PROFILE_ENV, "")).strip()
     if pid and pid != PROFILE_DEFAULT:
         prof = profile_get(pid)

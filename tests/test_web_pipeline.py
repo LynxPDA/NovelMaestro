@@ -158,7 +158,8 @@ def test_build_pipeline_argv():
     assert argv[0] == "web/pipeline.py"
     assert "--action" in argv and "4" in argv
     assert "--start" in argv and "--end" in argv
-    assert "--jobs" in argv and str(llm["threads"]) in argv
+    # имя флага потока общее (--threads): --jobs остаётся только старым написанием
+    assert "--threads" in argv and str(llm["threads"]) in argv
     assert "9" not in argv                     # потоки формы игнорируются
     assert argv[argv.index("--host") + 1] == str(llm["host"])
     assert argv[argv.index("--model") + 1] == str(llm["model"])

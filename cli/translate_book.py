@@ -12,8 +12,8 @@ translate_book.py — ЕДИНЫЙ скрипт LLM-обработки текс�
 (обратная совместимость со старыми вызовами).
 
 ЕДИНИЦЫ: --chunk_size и --request_budget — ТОКЕНЫ (оценка
-estimate_tokens); --min_len_ratio-пороги и длины — СИМВОЛЫ
-(символьное отношение длин остаётся символьным специально);
+estimate_tokens); длины — СИМВОЛЫ; --min_len_ratio — безразмерное
+отношение (длины считаются в символах: в CJK→RU токены изменили бы смысл);
 max_tokens — серверный предохранитель (ТОКЕНЫ), не расчёт.
 
 Промпты: --prompt_file БЕЗ тегов = промпт текущего режима (файл целиком);
@@ -459,7 +459,8 @@ def build_parser():
 
 Единицы:
   --chunk_size и --request_budget — ТОКЕНЫ (оценка estimate_tokens);
-  длины и min_len_ratio — СИМВОЛЫ (символьное отношение длин);
+  длины — СИМВОЛЫ, min_len_ratio — безразмерное отношение (в CJK→RU
+  токены изменили бы его смысл);
   max_tokens — серверный предохранитель (ТОКЕНЫ), не внутренний расчёт.
 
 Сервер (приоритет): CLI --host/--model/--api_key > HOST/API_KEY/MODEL из .env
@@ -530,14 +531,14 @@ def build_parser():
                         "estimate_tokens (default: 300).")
     p.add_argument("--multiplier", type=float, default=1.1,
                    help="Коэффициент жёсткого лимита чанка.")
-    # Генерация
-    p.add_argument("--threads", type=int, default=1, help="Потоки (1..N).")
+    # Потоки — общий THREADS (флаг и ограничение у core.stage)
     # Надёжность
     p.add_argument("--min_len_ratio", type=float, default=None,
-                   help="Мин. отношение длины результата к входу "
-                        "(СИМВОЛЫ). По умолчанию отключено (0.0) — "
-                        "контроль размера делает «Проверка перевода». "
-                        "Защита от пустого ответа работает всегда.")
+                   help="Мин. отношение длин (0 = нет): безразмерное — длина "
+                        "результата к входу, длины считаются в символах. "
+                        "По умолчанию отключено — контроль размера делает "
+                        "«Проверка перевода». Защита от пустого ответа "
+                        "работает всегда.")
     # Trace
     p.add_argument("--trace", action=argparse.BooleanOptionalAction, default=None,
                    help="Писать *_trace.json (default: только в translate).")
@@ -774,10 +775,8 @@ def main(argv=None):
         "logger": logger,
     }
 
-    try:
-        workers = max(1, int(min(preset["threads_cap"], args.threads)))
-    except (TypeError, ValueError):
-        workers = 1
+    # общий THREADS стадии, режим ограничивает сверху (threads_cap)
+    workers = max(1, min(int(preset["threads_cap"]), stage.profile.threads))
     try:
         # открытие на запись сразу очищает старый выход
         with open(out_path, "w", encoding="utf-8") as fh, \

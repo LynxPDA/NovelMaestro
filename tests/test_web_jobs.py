@@ -1913,7 +1913,8 @@ def test_jobs_start_passes_profile(jobs_srv, tmp_path, monkeypatch):
     # argv — не часть публичного payload запуска (в нём был бы ключ), берём Job
     argv = " ".join(jm.get(payload["job"]["id"]).argv)
     assert "--host http://дом:9989" in argv and "--model дом-модель" in argv
-    assert "--jobs 9" in argv and "общая-модель" not in argv
+    # имя флага потока общее: --threads (--jobs — старое написание)
+    assert "--threads 9" in argv and "общая-модель" not in argv
 
 
 def test_job_start_windows_flags(monkeypatch):

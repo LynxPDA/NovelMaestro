@@ -83,6 +83,7 @@ from core.stage import (  # noqa: E402
     Progress,
     add_llm_args,
     bind_profile,
+    complete_until,
     new_stage,
 )
 from core import settings as core_settings  # noqa: E402
@@ -124,9 +125,9 @@ DEFAULT_REVIEW = "tmp/ner_review.json"
 
 
 DEFAULT_REQUEST_BUDGET = 65536  # ТОКЕНОВ (оценка estimate_tokens)
-# Потолок параллельных запросов (батчи и RAG-термины): справка обещает
-# «1..16» — сотня одновременных запросов на сервер недопустима
-MAX_THREADS = 16
+# Потоки — общий THREADS (core.stage.resolve_profile уже ограничил его 1..16):
+# сотня одновременных запросов на сервер недопустима, а собственное число у
+# стадии разъезжалось с общим конфигом
 
 # Префикс запроса типовых этапов (этап 2): глоссарий уже выверен целиком —
 # не перетирать уже унифицированные решения этапа 1.
@@ -325,9 +326,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--request_budget", type=int, default=DEFAULT_REQUEST_BUDGET,
                    help="Бюджет запроса, ТОКЕНЫ (оценка; по умолчанию: "
                         "65536; промпт не входит).")
-    p.add_argument("--threads", type=int, default=1,
-                   help="Параллельных потоков (1..16): батчи и типы "
-                        "выполняются одновременно (по умолчанию: 1).")
     p.add_argument("-c", "--count-threshold", type=int, default=0,
                    help="Порог count: записи с count > X (по умолчанию: 0).")
     p.add_argument("--skip_locked", "--skip-locked",
@@ -498,7 +496,11 @@ def run_batch(task, prompt_tpl, args, stage):
     """Один батч проверки (запускается в потоке). Возвращает
     (title, records|None) — исправленные записи от LLM; None при
     ошибке LLM/парсинга. Diff с ner.json — в do_check (нужен
-    полный items_by_term)."""
+    полный items_by_term).
+
+    Пустой ответ — не ошибка, а общий RETRY_EMPTY: тот же запрос
+    повторяется ещё раз N раз, пока правки не придут.
+    """
     logger = stage.logger
     title, batch = task
     fields = [f.strip() for f in args.fields.split(",") if f.strip()
@@ -506,7 +508,9 @@ def run_batch(task, prompt_tpl, args, stage):
     user_msg = _batch_user_msg(title, batch, prompt_tpl, fields)
     logger.info(f"  батч: {len(batch)} записей, "
                 f"{estimate_tokens(user_msg)} токенов запроса (оценка)")
-    text, err = stage.complete(user_msg, label=f"ner_check {title}")
+    text, err = complete_until(
+        stage, user_msg, label=f"ner_check {title}",
+        accept=lambda raw: bool(parse_rag_suggestions(raw, logger, fields)))
     if err:
         logger.error(f"  ❌ LLM: {err}")
         return title, None
@@ -641,7 +645,9 @@ def _rag_query(term, user_msg, args, stage, items_by_term, fields):
     logger.info(f"  {term}: запрос "
                 f"{estimate_tokens(user_msg)} токенов (оценка) "
                 f"(бюджет на термин {args.rag_budget})")
-    text_out, err = stage.complete(user_msg, label=f"ner_check rag {term}")
+    text_out, err = complete_until(
+        stage, user_msg, label=f"ner_check rag {term}",
+        accept=lambda raw: bool(parse_rag_suggestions(raw, logger, fields)))
     if err:
         logger.error(f"  ❌ {term}: LLM: {err}")
         return [], False
@@ -753,11 +759,7 @@ def run_rag(args, stage, prompt_tpl) -> int:
     fields = [f.strip() for f in args.fields.split(",") if f.strip()]
     # бюджет на термин — ТОЛЬКО фрагменты (промпт не вычитается):
     # один термин = один запрос, фрагменты влезают в rag_budget
-    try:
-        threads = int(args.threads)
-    except (TypeError, ValueError):
-        threads = 1
-    workers = max(1, min(MAX_THREADS, threads))
+    workers = stage.profile.threads
     logger.info(f"🔎 RAG: {len(terms)} терминов × бюджет {args.rag_budget} "
                 f"(фрагменты на термин), потоков {workers}")
 
@@ -962,15 +964,13 @@ def do_check(args, stage) -> int:
                           "batch_records": len(batch0),
                           "request_budget": args.request_budget,
                           "fields": args.fields,
-                          "threads": args.threads}):
+                          "threads": stage.profile.threads,
+                          "retry_empty": stage.profile.retry_empty}):
         return 0
 
     # ── параллельное выполнение: threads потоков на ВСЕ батчи
     #    (типы и чанки идут одновременно, не последовательно)
-    try:
-        workers = max(1, min(MAX_THREADS, int(args.threads)))
-    except (TypeError, ValueError):
-        workers = 1
+    workers = stage.profile.threads
     logger.info(f"🔀 Потоков: {workers} (батчей всего: {len(stage_tasks)})")
     results = {}  # title -> list[records] (исправленные записи от LLM)
     failures = {}  # title -> число упавших батчей

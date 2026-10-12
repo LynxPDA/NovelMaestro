@@ -52,7 +52,13 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
-from core.stage import Progress, bind_profile, new_stage  # noqa: E402
+from core.stage import (  # noqa: E402
+    Progress,
+    add_llm_args,
+    bind_profile,
+    complete_until,
+    new_stage,
+)
 from core.common import (  # noqa: E402
     REVIEW_ACCEPT,
     REVIEW_REJECT,
@@ -630,24 +636,20 @@ def render_pass2_prompt(prompt_tpl: str, batch_text: str,
             f"\n\n=== НАЙДЕННЫЕ ОШИБКИ ===\n{errors_json}")
 
 
-def process_batch(batch, p1, p2, two_pass, stage, retry_empty=0):
-    """Один батч: pass1 (с retry_empty) и, если нужно, pass2."""
+def process_batch(batch, p1, p2, two_pass, stage):
+    """Один батч: pass1 (с общими повторами при отсутствии правок) и, если
+    нужно, pass2. Повторы считает core.stage.complete_until по общему
+    RETRY_EMPTY — своего числа у стадии больше нет."""
     logger = stage.logger
     text = compose_batch_text(batch)
 
-    errors1 = []
-    for att in range(1 + retry_empty):
-        raw, _err = stage.complete(render_pass1_prompt(p1, text),
-                                   label="[P1]")
-        if raw is None:
-            return None   # ошибка LLM → fail-fast на уровне прогона
-        parsed = parse_llm_json(raw, logger)
-        if parsed:
-            errors1 = parsed
-            break
-        if att < retry_empty:
-            logger.info(f"[P1] LLM вернул пустой/нераспарсенный ответ — "
-                        f"повтор {att+2}/{1+retry_empty}")
+    raw1, _err = complete_until(
+        stage, render_pass1_prompt(p1, text), label="[P1]",
+        accept=lambda raw: bool(parse_llm_json(raw, logger)),
+        note="пустой/нераспарсенный ответ")
+    if raw1 is None:
+        return None   # ошибка LLM → fail-fast на уровне прогона
+    errors1 = parse_llm_json(raw1, logger) or []
     if not errors1:
         return []
     if not two_pass:
@@ -883,44 +885,45 @@ def build_parser():
   --apply           применить правки со статусом «принять» (без LLM);
   --apply --dry-run предпросмотр применения;
   --auto-apply      сразу применить всё найденное (без человека).
-Единицы: --request_budget — ТОКЕНЫ (оценка estimate_tokens); --min_fix_length,
---max_changed_chars — СИМВОЛЫ;
-max_tokens (32768) — серверный предохранитель, ТОКЕНЫ.
-Сервер: --host/--model/--api_key (CLI) > HOST/API_KEY/MODEL из .env
-(модель: TRANSLATE_CHECK_LLM_MODEL → MODEL).
+Единицы: --request_budget — ТОКЕНЫ (оценка estimate_tokens); --type,
+--min_fix_length, --max_changed_chars — СИМВОЛЫ; max_tokens — серверный
+предохранитель, ТОКЕНЫ.
+Сервер, модель, ключ, таймауты, повторы, потоки и рассуждения — ОДНИ на весь
+конвейер: флаг стадии пуст → значение из общего .env (или профиля LLM).
 Промпт-файл: теги <pass1>/<pass2>; без тегов — встроенные промпты.
 """,
     )
-    # Сервер
-    ap.add_argument("--preview-request", dest="preview_request",
-                   default=None,
-                   help="ПРЕДПРОСМОТР: pass1-запрос первого батча\n"
-                        "без сети → JSON-файл (messages +\n"
-                        "статистика символов и токенов).")
-    ap.add_argument("--host", default=None,
-                    help="URL API-сервера (пусто = HOST из .env).")
-    ap.add_argument("--model", default=None,
-                    help="Модель: --model или MODEL/TRANSLATE_CHECK_LLM_MODEL в .env.")
-    ap.add_argument("--api_key", default=None,
-                    help="Bearer-ключ (пусто = API_KEY из .env).")
-    ap.add_argument("--env_file", default=None, help="Явный путь к .env.")
-    # Главы
+    ap.add_argument("--preview-request", dest="preview_request", default=None,
+                    help="ПРЕДПРОСМОТР: pass1-запрос первого батча\n"
+                         "без сети → JSON-файл (messages +\n"
+                         "статистика символов и токенов).")
+    # Главы (имена полей — реестр настроек, core/settings.py)
     ap.add_argument("--start", type=int, default=None,
                     help="Начальная глава (иначе автодиапазон).")
     ap.add_argument("--end", type=int, default=None,
                     help="Конечная глава (иначе автодиапазон).")
     ap.add_argument("--chapters_dir", default="./chapters",
                     help="Папка глав (default: ./chapters).")
-    ap.add_argument("--type", dest="file_type", default="polished",
+    ap.add_argument("--type", default="polished",
                     choices=["polished", "redacted", "translated"],
-                    help="Тип проверяемых файлов (default: polished).")
-    # Режим
+                    help="Тип файлов проверяемых глав.")
     ap.add_argument("--two_pass", action="store_true",
                     help="Второй проход верификации (pass2).")
     ap.add_argument("--request_budget", type=int, default=25000,
-                    help="Бюджет запроса, ТОКЕНЫ (оценка; "
-                         "default: 25000; промпт — запас 200).")
-    # Review-файл и применение
+                    help="Бюджет запроса, ТОКЕНЫ (оценка; промпт — запас 200).")
+    ap.add_argument("--prompt_file", default=DEFAULT_PROMPT_FILE,
+                    help="Внешние промпты: теги <pass1>/<pass2>.")
+    # Ограничители правок: 0 — выключен (метрики разные: ШТ, СИМВОЛЫ, СИМВОЛЫ)
+    ap.add_argument("--max_fixes_per_chapter", type=int, default=0,
+                    help="Лимит правок на главу, ШТ (0 = нет); лишние правки "
+                         "отсекаются по порядку выдачи.")
+    ap.add_argument("--min_fix_length", type=int, default=0,
+                    help="Мин. длина правки, СИМВОЛЫ (0 = нет); короче — "
+                         "правка отбрасывается.")
+    ap.add_argument("--max_changed_chars", type=int, default=0,
+                    help="Макс. изменённых символов, СИМВОЛЫ (0 = нет); "
+                         "длиннее — правка отбрасывается.")
+    # Review-файл и применение (режимы, не настройки)
     ap.add_argument("--review", default=DEFAULT_REVIEW,
                     help=f"Накопительный файл правок (default: "
                          f"{DEFAULT_REVIEW}). Понимает и простой "
@@ -931,36 +934,10 @@ max_tokens (32768) — серверный предохранитель, ТОКЕ
                     help="Сразу применить найденное без человека.")
     ap.add_argument("--dry-run", dest="dry_run", action="store_true",
                     help="Предпросмотр: файлы не изменяются.")
-    # LLM
-    ap.add_argument("--temperature", type=float, default=None,
-                    help="Температура (иначе дефолт сервера).")
-    ap.add_argument("--reasoning_effort", default=None,
-                    choices=["none", "minimal", "low", "medium", "high",
-                             "xhigh", "max"],
-                    help="Усилия рассуждения модели: none/minimal/low/"
-                         "medium/high/xhigh/max (пусто = сервер; "
-                         "none — отключить).")
-    ap.add_argument("--max_retries", type=int, default=3,
-                    help="Попытки на запрос (default: 3).")
-    ap.add_argument("--timeout", type=int, default=120,
-                    help="Таймаут соединения, сек (default: 120).")
-    ap.add_argument("--stream_timeout", type=int, default=300,
-                    help="Таймаут стрима, сек (default: 300).")
-    ap.add_argument("--retry_empty", type=int, default=0,
-                    help="Доп. повторы при пустом ответе (0=выкл).")
-    # Потоки
-    ap.add_argument("--threads", type=int, default=4,
-                    help="Параллельные пакеты (default: 4).")
-    ap.add_argument("--prompt_file", default=DEFAULT_PROMPT_FILE,
-                    help="Внешние промпты: теги <pass1>/<pass2>.")
-    # Safety
-    ap.add_argument("--max_fixes_per_chapter", type=int, default=0,
-                    help="Лимит правок на главу (0=без лимита).")
-    ap.add_argument("--min_fix_length", type=int, default=0,
-                    help="Мин. длина corrected, СИМВОЛЫ (0=выкл).")
-    ap.add_argument("--max_changed_chars", type=int, default=0,
-                    help="Макс. изменённых символов в правке (0=выкл).")
-    return ap
+    # сервер, модель, ключ, таймауты, повторы, потоки и рассуждения —
+    # общий блок флагов (core.stage), своих дефолтов у стадии нет
+    add_llm_args(ap, aliases=True)
+    return core_settings.apply_cli_defaults(ap, "translate_check_llm")
 
 
 def build_chapter_map_safe(ch_dir, logger):
@@ -999,13 +976,13 @@ def do_apply(args, logger) -> int:
     ch_dir = os.path.abspath(args.chapters_dir)
     chapter_map = build_chapter_map_safe(ch_dir, logger)
     if args.dry_run:
-        applied, skipped = apply_fix_entries(entries, args.file_type,
+        applied, skipped = apply_fix_entries(entries, args.type,
                                              chapter_map, logger,
                                              dry_run=True)
         logger.info(f"DRY-RUN: было бы применено {len(applied)}, "
                     f"пропущено {skipped}. Файлы не изменены.")
         return 0
-    applied, skipped = apply_fix_entries(entries, args.file_type,
+    applied, skipped = apply_fix_entries(entries, args.type,
                                          chapter_map, logger)
     logger.info(f"Итог: применено {len(applied)}, "
                 f"пропущено/отклонено {skipped}.")
@@ -1032,18 +1009,18 @@ def do_check(args, stage) -> int:
     logger.info(f"Найдено глав: {len(chapter_map)}")
     resolve_range(args, chapter_map, logger)
 
+    # Сервер, модель и рассуждения в лог пишет core.stage (общая точка) — здесь
+    # только параметры самой проверки
     logger.info(
-        f"Главы {args.start}–{args.end} | {args.file_type} | "
+        f"Главы {args.start}–{args.end} | {args.type} | "
         f"2pass={args.two_pass} | budget={args.request_budget} | "
-        f"threads={args.threads} | retry_empty={args.retry_empty} | "
-        f"reasoning={args.reasoning_effort or 'off'}")
+        f"threads={stage.profile.threads} | "
+        f"retry_empty={stage.profile.retry_empty}")
 
     p1, p2 = load_prompts(args.prompt_file, logger)
     logger.info(f"Лог: {stage.log_path}")
-    logger.info(f"API: {stage.profile.base_url} | модель: "
-                f"{stage.profile.model}")
 
-    chapters = collect_chapters(args.start, args.end, args.file_type,
+    chapters = collect_chapters(args.start, args.end, args.type,
                                 args.request_budget, chapter_map, logger)
     if not chapters:
         logger.error("❌ Главы не найдены.")
@@ -1058,18 +1035,21 @@ def do_check(args, stage) -> int:
                     meta={"batches": len(batches),
                           "request_budget": args.request_budget,
                           "two_pass": bool(args.two_pass),
-                          "threads": args.threads,
+                          "threads": stage.profile.threads,
+                          "retry_empty": stage.profile.retry_empty,
                           "first_batch_chapters": sorted(
                               {c[0] for c in batches[0]}),
                           "prompt_file": args.prompt_file or ""}):
         return 0
 
     # метка прогона в review-файле (не путать с контекстом стадии `stage`)
-    stage_label = f"Главы {args.start}–{args.end} ({args.file_type})"
+    stage_label = f"Главы {args.start}–{args.end} ({args.type})"
     params = {"директория глав": args.chapters_dir,
-              "тип файлов": args.file_type,
+              "тип файлов": args.type,
               "начало": args.start, "конец": args.end,
-              "бюджет запроса": args.request_budget, "потоки": args.threads,
+              "бюджет запроса": args.request_budget,
+              "потоки": stage.profile.threads,
+              "повторов при отсутствии правок": stage.profile.retry_empty,
               "два прохода": bool(args.two_pass),
               "промпт файл": args.prompt_file}
     meta, existing = load_review_file(args.review, logger)
@@ -1082,7 +1062,7 @@ def do_check(args, stage) -> int:
     def merge_and_save(errs):
         """Ошибки батча → записи → накопительный файл (под замком)."""
         nonlocal entries, added_total
-        fresh = errors_to_entries(errs, stage_label, args.file_type,
+        fresh = errors_to_entries(errs, stage_label, args.type,
                                   chapter_map, logger)
         if not fresh:
             return
@@ -1103,8 +1083,7 @@ def do_check(args, stage) -> int:
             bc[c[0]] = bc.get(c[0], "") + ("\n" if c[0] in bc else "") + c[3]
         logger.info(f"Пакет {idx + 1}/{len(batches)}: гл. "
                     f"{nums[0]}–{nums[-1]}")
-        errs = process_batch(batch, p1, p2, args.two_pass, stage,
-                             retry_empty=args.retry_empty)
+        errs = process_batch(batch, p1, p2, args.two_pass, stage)
         if errs is None:
             with lock:
                 failed_cnt[0] += 1
@@ -1127,7 +1106,7 @@ def do_check(args, stage) -> int:
             merge_and_save(errs)
 
     # верхний предел потоков 16 (как в ner/wiki/translate)
-    with ThreadPoolExecutor(max_workers=max(1, min(16, args.threads))) as ex:
+    with ThreadPoolExecutor(max_workers=stage.profile.threads) as ex:
         futs = {ex.submit(worker, i, b): i for i, b in enumerate(batches)}
         with Progress(len(batches), "Проверка перевода LLM", unit="батч",
                       bar=True, logger=logger) as progress:
@@ -1154,7 +1133,7 @@ def do_check(args, stage) -> int:
         logger.info(f"Типы: {dict(tc)}")
 
     if args.auto_apply and entries:
-        applied, skipped = apply_fix_entries(entries, args.file_type,
+        applied, skipped = apply_fix_entries(entries, args.type,
                                              chapter_map, logger,
                                              dry_run=args.dry_run)
         if args.dry_run:

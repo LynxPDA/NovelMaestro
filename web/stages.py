@@ -45,26 +45,40 @@ def _range_argv(name: str, form: dict, start_key: str = "start",
     return out
 
 
+#: общий LLM-конфиг доезжает до стадии каноническими флагами общего блока
+#: (core.stage.add_llm_args): один список на все LLM-стадии
+_LLM_FLAGS: tuple = (("host", "--host"), ("model", "--model"),
+                     ("temperature", "--temperature"),
+                     ("timeout", "--timeout"),
+                     ("stream_timeout", "--stream_timeout"),
+                     ("max_retries", "--max_retries"),
+                     ("max_tokens", "--max_tokens"),
+                     ("retry_empty", "--retry_empty"),
+                     ("threads", "--threads"))
+
+
 def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
-    """LLM-параметры в argv: они приходят только из общего конфига.
+    """Общие LLM-параметры в argv: они приходят только из общего конфига.
 
     Форма запуска LLM-полей не содержит — build_command подставляет в неё
-    глобальные значения (core.settings.with_llm), поэтому «свой сервер у
-    стадии» больше не существует и сравнивать не с чем.
-    Пустой результат — скрипт сам найдёт .env или попросит ввод.
+    значения профиля (core.settings.with_llm), поэтому «свой сервер у стадии»
+    больше не существует и сравнивать не с чем. Пустое поле не едет: скрипт
+    сам найдёт .env или попросит ввод.
+
+    Набор флагов один на все стадии: раньше у каждой сборки был свой список
+    (где-то ехал «retries», где-то «jobs», стрим-таймаут молча приравнивался к
+    таймауту соединения) — и общий STREAM_TIMEOUT до стадий не доходил.
+    Ключ — не флаг (виден в ps): уходит в окружение процесса через
+    ctx["_llm_api_key"] (JobManager.start), скрипты читают LLM_API_KEY.
     """
-    argv = []
-    host = str(form.get("host") or "").strip()
-    model = str(form.get("model") or "").strip()
     api_key = str(form.get("api_key") or "").strip()
-    # ключ не попадает в argv (виден в ps) — он уходит в окружение процесса
-    # через ctx["_llm_api_key"] (JobManager.start), скрипты читают LLM_API_KEY.
     if api_key and isinstance(ctx, dict):
         ctx["_llm_api_key"] = api_key
-    if host:
-        argv += ["--host", host]
-    if model:
-        argv += ["--model", model]
+    argv = []
+    for name, flag in _LLM_FLAGS:
+        value = form.get(name)
+        if value not in (None, ""):
+            argv += [flag, str(value)]
     return argv
 
 
@@ -192,17 +206,16 @@ def build_batch_replace(form: dict, ctx: dict) -> list[str]:
 def build_pipeline(form: dict, ctx: dict) -> list[str]:
     """Стадия 3 — конвейер translate→redact→polish по главам.
 
-    argv: pipeline.py --action 1..4 --start --end --jobs + LLM.
+    argv: pipeline.py --action 1..4 --start --end + общий LLM-блок
+    (--threads из _llm_argv; --jobs остаётся его старым написанием).
     """
     argv = ["web/pipeline.py"]
     action = form.get("action")
     if action not in (None, ""):
         argv += ["--action", str(action)]
     argv += _range_argv("pipeline", form)
-    # потоки — СУММАРНО (jobs): распределение на главы/чанки делает
-    # сам pipeline.py; отдельного --threads больше нет
-    if form.get("jobs") not in (None, ""):
-        argv += ["--jobs", str(form["jobs"])]
+    # потоки — общие (--threads из _llm_argv): распределение на главы/чанки
+    # считает сам pipeline.py
     # пороги count: ner_block и имена (пусто/0 = фильтр выключен);
     # поля {ner_block} — чипсы формы (hidden ner_fields), общие для
     # всех стадий конвейера
@@ -213,12 +226,6 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
     nf = str(form.get("ner_fields") or "").strip()
     if nf:
         argv += ["--ner_fields", nf]
-    if form.get("timeout") not in (None, ""):
-        argv += ["--timeout", str(form["timeout"])]
-    if form.get("max_retries") not in (None, ""):
-        argv += ["--max_retries", str(form["max_retries"])]
-    if form.get("temperature") not in (None, ""):
-        argv += ["--temperature", str(form["temperature"])]
     # единый общий промпт-файл (теги <translate>/<redact>/<polish>);
     # пусто = авто (кандидат с тегами из prompts/)
     if form.get("prompt_file"):
@@ -258,18 +265,13 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
     argv += _range_argv("start", form)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
-    for name, flag in (("threads", "--threads"),
-                       ("chunk_size", "--chunk_size"),
-                       ("retries", "--retries"),
-                       ("timeout", "--timeout")):
+    for name, flag in (("chunk_size", "--chunk_size"),):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
     if form.get("threshold") not in (None, ""):
         argv += ["--threshold", str(form["threshold"])]
     if form.get("ngram") not in (None, ""):
         argv += ["--ngram", str(form["ngram"])]
-    if form.get("temperature") not in (None, ""):
-        argv += ["--temperature", str(form["temperature"])]
     if form.get("two_pass"):
         argv.append("--two-pass")
     if form.get("keep_fields"):
@@ -324,8 +326,6 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--types", str(form["types"])]
     if form.get("request_budget") not in (None, ""):
         argv += ["--request_budget", str(form["request_budget"])]
-    if form.get("threads") not in (None, ""):
-        argv += ["--threads", str(form["threads"])]
     if form.get("count_threshold") not in (None, ""):
         argv += ["-c", str(form["count_threshold"])]
     # замок: зафиксированные записи с проверки снимаются целиком (флаг без
@@ -334,14 +334,6 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv.append("--skip_locked")
     if form.get("fields"):
         argv += ["--fields", str(form["fields"])]
-    if form.get("temperature") not in (None, ""):
-        argv += ["--temperature", str(form["temperature"])]
-    if form.get("max_tokens") not in (None, ""):
-        argv += ["--max_tokens", str(form["max_tokens"])]
-    for name, flag in (("timeout", "--timeout"),
-                       ("max_retries", "--max_retries")):
-        if form.get(name) not in (None, ""):
-            argv += [flag, str(form[name])]
     argv += _llm_argv(form, ctx, "ner_check")
     return argv
 
@@ -371,21 +363,13 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
     # (выбор файла из web убран; его же читает «Правки»)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
-    if form.get("temperature") not in (None, ""):
-        argv += ["--temperature", str(form["temperature"])]
-    for name, flag in (("max_retries", "--max_retries"),
-                       ("timeout", "--timeout"),
-                       ("retry_empty", "--retry_empty"),
-                       ("threads", "--threads"),
-                       ("max_fixes_per_chapter", "--max_fixes_per_chapter"),
+    # ограничители правок (СИМВОЛЫ): 0 = выключен, но поле едет всегда —
+    # числовой дефолт реестра и есть выключенный ограничитель
+    for name, flag in (("max_fixes_per_chapter", "--max_fixes_per_chapter"),
                        ("min_fix_length", "--min_fix_length"),
                        ("max_changed_chars", "--max_changed_chars")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
-    # единый таймаут: стриму — то же значение (форма показывает
-    # одно поле «Таймаут, сек»)
-    if form.get("timeout") not in (None, ""):
-        argv += ["--stream_timeout", str(form["timeout"])]
     argv += _llm_argv(form, ctx, "translate_check_llm")
     return argv
 
@@ -412,13 +396,7 @@ def build_translate_quality(form: dict, ctx: dict) -> list[str]:
         argv += ["--request_budget", str(form["request_budget"])]
     for name, flag in (("mode", "--mode"), ("chunk_size", "--chunk_size"),
                        ("chunks", "--chunks"), ("sample", "--sample"),
-                       ("overlap", "--overlap"), ("threads", "--threads")):
-        if form.get(name) not in (None, ""):
-            argv += [flag, str(form[name])]
-    if form.get("temperature") not in (None, ""):
-        argv += ["--temperature", str(form["temperature"])]
-    for name, flag in (("max_retries", "--max_retries"),
-                       ("timeout", "--timeout")):
+                       ("overlap", "--overlap")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
     argv += _llm_argv(form, ctx, "translate_quality")
@@ -472,9 +450,7 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
                        ("near_distance", "--near-distance"),
                        ("chunk_size", "--chunk-size"),
                        ("request_budget", "--request_budget"),
-                       ("co_occurrence_top", "--co-occurrence-top"),
-                       ("retries", "--retries"), ("timeout", "--timeout"),
-                       ("threads", "--threads")):
+                       ("co_occurrence_top", "--co-occurrence-top")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
     # типы — чипсы (hidden): выбранные = белый список --types;
@@ -483,8 +459,6 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
         argv += ["--types", str(form["types"])]
     if form.get("co_occurrence_pairs"):
         argv += ["--co-occurrence-pairs", str(form["co_occurrence_pairs"])]
-    if form.get("temperature") not in (None, ""):
-        argv += ["--temperature", str(form["temperature"])]
     argv += _llm_argv(form, ctx, "wiki")
     return argv
 

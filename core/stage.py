@@ -26,9 +26,9 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import settings as cfg
-from .common import (REASONING_MODES, REASONING_PROFILES, determine_model,
-                     emit_progress, extra_body_fields, get_server_config,
-                     llm_messages, load_env, log_argv,
+from .common import (EXTRA_BODY_ENV_KEY, REASONING_MODES, REASONING_PROFILES,
+                     determine_model, emit_progress, extra_body_fields,
+                     get_server_config, llm_messages, log_argv,
                      preview_logger, preview_request_payload, print_env_help,
                      provider_settings, reasoning_fields, reasoning_settings,
                      server_base_url, setup_logging,
@@ -42,8 +42,12 @@ DEFAULT_TIMEOUT = int(cfg.BY_KEY["TIMEOUT"].default)
 DEFAULT_STREAM_TIMEOUT = int(cfg.BY_KEY["STREAM_TIMEOUT"].default)
 DEFAULT_MAX_RETRIES = int(cfg.BY_KEY["MAX_RETRIES"].default)
 DEFAULT_MAX_TOKENS = int(cfg.BY_KEY["MAX_TOKENS"].default)
+#: доп. повторы, когда правок не найдено (было: своё число у каждой стадии)
+DEFAULT_RETRY_EMPTY = int(cfg.BY_KEY["RETRY_EMPTY"].default)
 #: потоков на весь конвейер (была: 1 у ner_check, 4 у остальных)
 DEFAULT_THREADS = int(cfg.BY_KEY["THREADS"].default)
+#: верхняя граница потоков — то же число, что у поля формы (max)
+DEFAULT_MAX_THREADS = int(cfg.BY_KEY["THREADS"].max or 16)
 #: контроль соотношения длин; выключен (0) по решению пользователя
 DEFAULT_MIN_LEN_RATIO = float(cfg.BY_KEY["MIN_LEN_RATIO"].default)
 
@@ -51,10 +55,15 @@ DEFAULT_MIN_LEN_RATIO = float(cfg.BY_KEY["MIN_LEN_RATIO"].default)
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh",
                      "max")
 
+#: Режим рассуждений в логе — теми же словами, что поле формы «Настроек».
+_REASONING_LABELS = {"default": "решение сервера", "on": "включены",
+                     "off": "выключены"}
+
 #: Терпимые старые написания: dest → дополнительный флаг. Нужны только для
 #: ручных команд: web-слой и SPA выдают одно каноническое написание.
 LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
     "max_retries": ("--retries",),
+    "threads": ("--jobs",),
     "reasoning_effort": ("--reasoning-effort", "--thinking"),
     "env_file": ("--env-file",),
     "api_key": ("--api-key",),
@@ -93,7 +102,8 @@ def add_llm_args(parser: argparse.ArgumentParser, *,
                        metavar="PATH", help="Явный путь к .env.")
     group.add_argument("--temperature", type=float, default=None,
                        metavar="FLOAT",
-                       help="Температура (иначе — дефолт сервера).")
+                       help="Температура (пусто = общий TEMPERATURE, а без него "
+                            "— дефолт сервера).")
     group.add_argument(*flags("reasoning_effort", "--reasoning_effort"),
                        default=None, choices=list(REASONING_EFFORTS),
                        help="Усилия рассуждения модели (пусто = сервер; "
@@ -130,6 +140,17 @@ def add_llm_args(parser: argparse.ArgumentParser, *,
                        help="Серверный предел ответа, ТОКЕНЫ (пусто = общий "
                             f"MAX_TOKENS, встроенный "
                             f"{int(DEFAULT_MAX_TOKENS)}).")
+    group.add_argument(*flags("retry_empty", "--retry_empty"), type=int,
+                       default=None, metavar="N",
+                       help="Повторных запросов при отсутствии правок "
+                            f"(0 = нет; пусто = общий RETRY_EMPTY, встроенный "
+                            f"{int(DEFAULT_RETRY_EMPTY)}).")
+    group.add_argument(*flags("threads", "--threads"), type=int, default=None,
+                       metavar="N",
+                       help=f"Потоков (1–{DEFAULT_MAX_THREADS}): параллельные "
+                            f"запросы стадии (пусто = общий THREADS, встроенный "
+                            f"{int(DEFAULT_THREADS)}; у конвейера — суммарно "
+                            f"на главы и чанки).")
     return group
 
 
@@ -150,6 +171,11 @@ class LlmProfile:
     timeout: int = DEFAULT_TIMEOUT
     stream_timeout: int = DEFAULT_STREAM_TIMEOUT
     max_retries: int = DEFAULT_MAX_RETRIES
+    #: доп. повторы запроса, когда правок не найдено (0 = нет): одна настройка
+    #: на конвейер, читают её стадии-проверки (ner_check, translate_check_llm)
+    retry_empty: int = DEFAULT_RETRY_EMPTY
+    #: параллельных запросов стадии — тоже одна величина на конвейер
+    threads: int = DEFAULT_THREADS
     # контроль соотношения длин (СИМВОЛЫ): одна настройка на конвейер
     min_len_ratio: float = DEFAULT_MIN_LEN_RATIO
     temperature: float | None = None
@@ -206,8 +232,50 @@ def _pick(args: argparse.Namespace, name: str, default: Any) -> Any:
     return default if value is None else value
 
 
+def _as_float(value: Any) -> float | None:
+    """Числовое поле конфига (TEMPERATURE) → float; пусто или мусор → None."""
+    try:
+        return float(str(value).strip()) if str(value or "").strip() else None
+    except ValueError:
+        return None
+
+
+def describe_profile(profile: LlmProfile) -> list:
+    """Строки лога о разрешённом конфиге: одна общая точка на все стадии.
+
+    Пишет их resolve_profile, а не тело стадии: у стадии собственный флаг пуст,
+    когда значение пришло из профиля или общего .env, и напечатать
+    «reasoning=off» при включённых рассуждениях — её обычное дело. Рассуждения
+    и провайдер печатаются как реальные ключи payload: спорить с тем, что ушло
+    в запрос, легче, чем с пересказом режима.
+    """
+    p = profile
+    out = [f"Сервер: {p.base_url} | таймаут {p.timeout}с | стрим "
+           f"{p.stream_timeout}с | повторы {p.max_retries}"
+           f" | ответ ≤{p.max_tokens} ток."]
+    if p.temperature is not None:
+        out.append(f"Температура: {p.temperature}")
+    mode = _REASONING_LABELS.get(p.reasoning_mode, p.reasoning_mode)
+    fields = reasoning_fields(p.reasoning_mode, p.thinking_profile,
+                              p.reasoning_effort or "", p.thinking_budget)
+    if fields:
+        keys = " ".join(f"{k}={v}" for k, v in fields.items())
+        out.append(f"Рассуждения: {mode} (профиль {p.thinking_profile}) → {keys}")
+    else:
+        out.append(f"Рассуждения: {mode} (ключей в запросе нет, профиль "
+                   f"{p.thinking_profile})")
+    extra = extra_body_fields(p.env_data, p.logger)
+    if extra:
+        out.append(f"Свои поля тела {EXTRA_BODY_ENV_KEY}: "
+                   f"{', '.join(sorted(map(str, extra)))}")
+    if p.provider:
+        out.append("Провайдер: " + " ".join(
+            f"{k}={v}" for k, v in p.provider.items()))
+    return out
+
+
 def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG001
-                    require_model: bool = True,
+                    require_model: bool = True, require_server: bool = True,
                     logger: logging.Logger | None = None) -> LlmProfile:
     """Профиль LLM стадии: CLI > os.environ > общий .env > дефолт реестра.
 
@@ -216,16 +284,18 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
     скрипты, на разрешение конфигурации он больше не влияет). Собственных
     дефолтов таймаутов/ретраев/max_tokens у стадии тоже нет: они приходят из
     эффективного конфига, иначе шесть стадий жили бы шестью наборами чисел.
+
+    Пустой сервер — не ошибка только там, где в сеть идти не нужно
+    (require_server=False: режим предпросмотра запроса).
     """
-    env_data = load_env(getattr(args, "env_file", None))
-    # профиль LLM — слой между общим файлом и окружением (AGENTS §7). Его
-    # значения подмешиваются сюда: рассуждения и «свои поля тела» читаются из
-    # env_data, и без профиля переключение режима в интерфейсе до запроса не
-    # доходило (в argv этих полей нет намеренно).
+    # Один слой конфига на весь запуск: общий .env (или явный --env_file) →
+    # профиль LLM → окружение процесса (AGENTS §7). Из него же и рассуждения, и
+    # «свои поля тела»: их в argv намеренно нет, поэтому без профиля
+    # переключение режима в интерфейсе до запроса не доходило.
+    env_path = str(getattr(args, "env_file", None) or "")
     pid = os.environ.get(cfg.PROFILE_ENV, "").strip()
-    if pid and pid != cfg.PROFILE_DEFAULT:
-        env_data = {**env_data, **cfg.profile_values(pid)}
-    llm = cfg.llm_values()
+    env_data = cfg.layered_values(pid, env_path)
+    llm = cfg.llm_values(pid, env_path)
     sc = get_server_config(env_data)
     rs = reasoning_settings(env_data)
     host = getattr(args, "host", None) or sc["host"]
@@ -235,7 +305,7 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
     model = getattr(args, "model", None) or sc["model"]
     if not api_key:
         api_key = os.environ.get("LLM_API_KEY", "")
-    if not host:
+    if not host and require_server:
         print_env_help()
         sys.exit("❌ Не задан сервер: укажите --host или создайте .env (HOST).")
     # адрес нормализует общий слой: проверка сервера ходит по тому же адресу
@@ -243,16 +313,31 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
     if require_model:
         model = determine_model(model, logger)
     timeout = _pick(args, "timeout", llm["timeout"])
-    return LlmProfile(
+    # стрим — своя настройка STREAM_TIMEOUT, а не таймаут соединения: форма
+    # запусков показывает одно поле «Таймаут», общий конфиг различает два числа
+    stream_timeout = _pick(args, "stream_timeout",
+                           llm["stream_timeout"] or timeout)
+    # контроль соотношения длин — та же настройка конвейера (безразмерное
+    # отношение): пустое или битое значение = встроенный дефолт
+    mlr = _as_float(llm.get("min_len_ratio"))
+    min_len_ratio = float(_pick(args, "min_len_ratio",
+                                DEFAULT_MIN_LEN_RATIO if mlr is None else mlr))
+    profile = LlmProfile(
         base_url=base_url,
         model=model or "",
         api_key=api_key or "",
         timeout=int(timeout),
-        stream_timeout=int(_pick(args, "stream_timeout", timeout)),
+        stream_timeout=int(stream_timeout),
         max_retries=int(_pick(args, "max_retries", llm["max_retries"])),
-        min_len_ratio=float(_pick(args, "min_len_ratio",
-                                  llm["min_len_ratio"] or 0.0)),
-        temperature=_pick(args, "temperature", None),
+        retry_empty=int(_pick(args, "retry_empty", llm["retry_empty"] or 0)),
+        threads=max(1, min(DEFAULT_MAX_THREADS,
+                           int(_pick(args, "threads",
+                                     llm["threads"] or DEFAULT_THREADS)))),
+        temperature=_pick(args, "temperature",
+                          _as_float(llm.get("temperature"))),
+        # отношение длин — общий конфиг: флага стадии у него нет, и без этого
+        # поля профиль вёз бы встроенный дефолт вместо значения .env
+        min_len_ratio=min_len_ratio,
         reasoning_effort=_pick(args, "reasoning_effort", rs["effort"] or None),
         reasoning_mode=_pick(args, "reasoning_mode", rs["mode"]),
         thinking_profile=_pick(args, "thinking_profile", rs["profile"]),
@@ -263,6 +348,12 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
         logger=logger,
         env_data=env_data,
     )
+    if logger is not None:
+        # конфигурация запроса печатается здесь, а не в теле стадии: иначе
+        # стадия отчитывается своим пустым флагом вместо реального значения
+        for line in describe_profile(profile):
+            logger.info(line)
+    return profile
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -315,6 +406,34 @@ class Stage:
         log.info("✅ Предпросмотр запроса: %s (%d симв. user)",
                  self.preview_path, len(prompt) + len(data))
         return True
+
+
+def complete_until(stage: Stage, prompt: str, data: str = "", *,
+                   label: str = "", accept=None, attempts: int | None = None,
+                   note: str = "правок нет") -> tuple[str | None, str | None]:
+    """Запрос стадии с повторами, пока ответ не устроит `accept`.
+
+    Политика повторов на конвейер одна и она не про исключения: максимум
+    `1 + RETRY_EMPTY` запросов, пустой ответ — не ошибка, а повод спросить
+    ещё раз (RETRY_EMPTY один на все стадии, он же в логе запуска).
+    accept(text) → False — правок не найдено; attempts=None — общий RETRY_EMPTY.
+    Последний ответ возвращается как есть: «правок нет» — допустимый результат.
+    Ошибка LLM (text=None) — сразу (её считает stream_chat_completion).
+    """
+    check = accept or (lambda text: bool((text or "").strip()))
+    total = 1 + (int(stage.profile.retry_empty) if attempts is None
+                 else max(0, int(attempts)))
+    text = None
+    err = None
+    for att in range(total):
+        text, err = stage.complete(prompt, data, label=label)
+        if text is None:
+            return None, err
+        if check(text):
+            return text, None
+        if stage.logger is not None and att < total - 1:
+            stage.logger.info(f"{label}: {note} — повтор {att + 2}/{total}")
+    return text, None
 
 
 def new_stage(name: str, args: argparse.Namespace, *,

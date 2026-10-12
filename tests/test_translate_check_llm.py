@@ -189,11 +189,12 @@ def test_process_batch_failures(seam):
     seam.answers.append(None)
     batch = [(1, "f", "d", "текст")]
     assert FE.process_batch(batch, "П1", "П2", True, make_stage()) is None
-    # P1 вернул не-JSON → retry_empty исчерпан → пусто (2 попытки)
+    # P1 вернул не-JSON → общий RETRY_EMPTY исчерпан → пусто (2 попытки);
+    # число повторов принадлежит профилю, а не вызову стадии
     seam.calls.clear()
     seam.answers.append("мусор")
-    assert FE.process_batch(batch, "П1", "П2", False, make_stage(),
-                            retry_empty=1) == []
+    assert FE.process_batch(batch, "П1", "П2", False,
+                            make_stage(retry_empty=1)) == []
     assert len(seam.calls) == 2
 
 

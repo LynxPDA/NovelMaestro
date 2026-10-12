@@ -51,7 +51,8 @@ from core.stage import (  # noqa: E402
     Progress,
     Stage,
     add_llm_args,
-    resolve_profile,
+    bind_profile,
+    new_stage,
 )
 from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
@@ -66,20 +67,12 @@ from core.common import (  # noqa: E402
     fts_search_first,
     fts_search_ids_all,
     get_tagged_prompt,
-    log_argv as _cc_log_argv,
-    setup_logging as _cc_setup_logging,
     trim_to_tokens,
 )
 
 # ══════════════════════════════════════════════════════════════════════
 # ВСТРОЕННЫЕ УТИЛИТЫ (замена core.utils)
 # ══════════════════════════════════════════════════════════════════════
-
-def _setup_logging(log_path: str) -> logging.Logger:
-    """Делегирует в core.common.setup_logging (файл + консоль)."""
-    logger, _ = _cc_setup_logging(log_path)
-    return logger
-
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1288,14 +1281,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_llm_args(parser, aliases=True)
 
     # ── Производительность ──
-    g_perf = parser.add_argument_group("Производительность")
-    g_perf.add_argument(
-        "--threads",
-        type=int,
-        default=4,
-        metavar="N",
-        help="Число параллельных потоков генерации (1–16, по умолчанию: 4).",
-    )
+    # потоки — общий THREADS из конфига (флаг и ограничение у core.stage)
 
     # ── Режим вывода ──
     g_out = parser.add_argument_group("Режим вывода")
@@ -1348,8 +1334,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    # Сервер: CLI > os.environ > .env (общая реализация — core.stage)
-    profile = resolve_profile(args, stage="wiki", require_model=False)
 
     # ── Валидация ──
     if args.context_chunks < 1 or args.top < 1 or args.min_count < 1:
@@ -1357,16 +1341,15 @@ def main():
     if args.near_distance < 1:
         parser.error("Параметр --near-distance должен быть ≥ 1.")
 
-    # ── Логирование ──
-    try:
-        os.makedirs("logs", exist_ok=True)
-    except OSError as exc:
-        print(f"Не удалось создать logs: {exc}")
-        return 1
-    log_path = os.path.join("logs", "wiki_generation.log")
-
-    logger = _setup_logging(log_path)
-    _cc_log_argv(logger)
+    # ── Лог стадии, команда запуска и профиль: CLI > os.environ > .env ──
+    # (всё это делает core.stage; сервер, модель, потоки и рассуждения
+    # пишутся в лог оттуда же)
+    stage = bind_profile(
+        new_stage("wiki", args, log_name="wiki_generation"), args,
+        require_model=False)
+    logger = stage.logger
+    args.host, args.api_key, args.model = (
+        stage.profile.base_url, stage.profile.api_key, stage.profile.model)
 
     # ── Проверка файлов ──
     if args.compile_chapters:
@@ -1383,12 +1366,6 @@ def main():
     if not os.path.exists(args.ner_file):
         _log(logger, logging.ERROR, f"❌ NER файл не найден: {args.ner_file}")
         return
-
-    # ── Контекст стадии: сервер/модель уже разрешены resolve_profile ──
-    # preview_path обязателен: без него --preview-request молча выходил 0
-    # (тот же класс ошибок, что и в ner.py)
-    stage = Stage(name="wiki", logger=logger, profile=profile,
-                  preview_path=args.preview_request)
 
     # ── Промпт и настройки из тегов ──
     system_prompt = SYSTEM_WIKI_ARTICLE
@@ -1510,16 +1487,16 @@ def main():
              f"📁 Вики-глава: {ch_dir} (номер {next_num}, "
              f"{args.save_type}.txt)")
 
+    # Сервер, модель и рассуждения в лог пишет core.stage — здесь свои поля
     _log(logger, logging.INFO,
-         f"🚀 Wiki | Модель: {profile.model} | Top: {args.top} | "
+         f"🚀 Wiki | Top: {args.top} | "
          f"Exclude: {exclude_types or 'нет'} | "
          f"Co-occur: {args.co_occurrence_pairs or 'выкл'} | "
          f"NEAR: {args.near_distance} | "
-         f"Reasoning: {profile.reasoning_effort or 'сервер'} | "
          f"Rulate: {'html' if rulate_html else ('md' if rulate else 'off')} | "
          f"TOC: {'on' if args.toc else 'off'}/links: "
          f"{'on' if args.toc_links else 'off'} | "
-         f"Потоков: {args.threads}")
+         f"Потоков: {stage.profile.threads}")
 
     run_wiki_generation(
         ner_data=ner_data,
@@ -1531,7 +1508,7 @@ def main():
         near_distance=args.near_distance,
         system_prompt=system_prompt,
         stage=stage,
-        max_workers=max(1, min(16, args.threads)),
+        max_workers=stage.profile.threads,
         preview_request=args.preview_request,
         output_path=args.output,
         co_pairs=co_pairs,
