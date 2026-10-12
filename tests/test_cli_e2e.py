@@ -194,6 +194,33 @@ def test_tc_main_full_run(tmp_path, monkeypatch, capsys):
     assert "С ошибками     : 0" in text
 
 
+def test_tc_main_skips_broken_regexp_rule(tmp_path, monkeypatch, capsys):
+    """Битое правило не роняет проверку всего тома: значение многострочной
+    настройки могло разрезаться переводом строки внутри самого паттерна
+    («(?<=\n)…» распадается на «(?<=» и «)…»), остальные правила продолжают
+    работать, а стадия завершается успешно."""
+    chapters = tmp_path / "chapters"
+    chapters.mkdir()
+    _build_valid_chapter(chapters, 1)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [
+        "translate_check.py", "--chapters-dir", str(chapters),
+        "--check-type", "polished",
+        "--regexp-check", "(?<=", "--regexp-check", "[а-я]{400}"])
+    try:
+        TC.main()
+        code = 0
+    except SystemExit as e:
+        code = e.code or 0
+    out = capsys.readouterr().out
+    assert code == 0, "битое правило не должно ронять стадию"
+    assert "regexp-проверка №1 пропущена" in out, \
+        f"нет предупреждения о битом правиле: {out[:300]!r}"
+    text = (tmp_path / "logs" / "check_polished_1-1.txt").read_text(encoding="utf-8")
+    line = next(l for l in text.splitlines() if l.startswith("Regexp-проверки:"))
+    assert line == "Regexp-проверки: [а-я]{400}", line
+
+
 
 
 # ══════════════════════════════════════════════════════════════════════

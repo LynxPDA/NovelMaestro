@@ -676,3 +676,32 @@ def test_applicable_form_does_not_touch_original(global_env):
     form = {"passes": "whole", "rag_terms": "x"}
     S.applicable_form("ner_check", form)
     assert form["rag_terms"] == "x"
+
+
+# ════════════════════════════════════════════════════════════════════
+# round-trip многострочных значений через общий .env
+# ════════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize("key", [s.key for s in S.SETTINGS if s.type == "textarea"])
+def test_textarea_defaults_survive_env_roundtrip(global_env, key):
+    """Многострочная настройка живёт в .env одной строкой, где перенос —
+    литерал «\\n», а обратно перенос разворачивает `display_value`. Поэтому
+    внутри самого паттерна перевод строки пишется только как «\\x0a»:
+    литерал «\\n» в значении — граница строки, и правило разрезалось пополам
+    (со «(?<=\\n)» стадия умирала на «missing ), unterminated subpattern»)."""
+    default = str(S.BY_KEY[key].default)
+    S.write_values({key: default})
+    assert S.effective(key) == default
+
+
+def test_regexp_checks_default_has_no_literal_newline_inside_rule(global_env):
+    """Встроенные правила не содержат литерал «\\n»: иначе их число после
+    чтения конфига отличалось бы от числа правил в реестре."""
+    raw = str(S.BY_KEY["TRANSLATE_CHECK_REGEXP_CHECKS"].default)
+    lines = [l for l in raw.splitlines() if l.strip()]
+    assert len(lines) == 6
+    assert not any(S.NL_LIT in l for l in lines), \
+        f"внутри паттерна перевод строки пишется «\\x0a»: {lines}"
+    S.write_values({"TRANSLATE_CHECK_REGEXP_CHECKS": raw})
+    assert len([l for l in str(S.effective("TRANSLATE_CHECK_REGEXP_CHECKS")).splitlines()
+                if l.strip()]) == 6
