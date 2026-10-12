@@ -1234,6 +1234,14 @@ input[type="number"] {
   color: var(--text-dim);
   margin-top: 2px;
 }
+/* сброс полей одной вкладки: кнопка над карточками, потому что действие
+   относится к вкладке, а не ко всей странице (и прячется на «Внешнем виде») */
+.settings-tab-tools {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: -6px 0 -8px;
+}
 /* ── профили LLM: выбор профиля и кнопки над ним ── */
 .settings-chips {
   display: flex;

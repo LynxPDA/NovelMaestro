@@ -1030,6 +1030,84 @@ async function viewSettings() {
     }
   }
 
+  // ── сброс вкладки: её поля возвращаются к значениям по умолчанию ──────
+  // Дефолт приходит с сервера в f.default (form_field реестра) — своего знания
+  // о настройках у SPA нет. Запись идёт тем же PUT'ом, что и автосохранение:
+  // второго пути записи конфига быть не должно.
+  function groupDefaults(g) {
+    const out = {};
+    for (const b of g.blocks || []) {
+      for (const f of b.fields || []) {
+        if (f.type === "hidden" || f.noenv) continue; // чипсы и служебное
+        const d = f.default === undefined || f.default === null ? "" : f.default;
+        // textarea хранит переносы в реестре литералом «\n» (как и в .env)
+        out[f.key] = f.type === "textarea"
+          ? String(d).replace(/\\n/g, "\n")
+          : f.type === "bool" ? Boolean(d) : String(d);
+      }
+    }
+    return out;
+  }
+
+  async function resetGroup() {
+    const g = model.groups.find((x) => x.id === active);
+    if (!g || g.id === "ui") return;
+    const defaults = groupDefaults(g);
+    const keys = Object.keys(defaults);
+    if (!keys.length) return;
+    // не записанные ещё правки уходят первыми: сброс делает второй PUT
+    // и не должен их затереть (менять поле другой вкладки успевают за паузу)
+    clearTimeout(saveTimer);
+    if (Object.keys(pending).length) await savePending();
+    const secrets = (g.blocks || []).some((b) =>
+      (b.fields || []).some((f) => f.secret && f.type !== "hidden" && !f.noenv));
+    const ok = await confirmModal(
+      "Сбросить настройки",
+      `Вкладка «${g.title}»: ${keys.length} поле(й) вернётся к значениям по `+
+        `умолчанию из реестра`
+        + (model.profile === "general" ? "" : ` профиля «${model.profile}»`) + ".\n"
+        + "Другие вкладки останутся как есть"
+        + (secrets ? "; API-ключ очистится (в реестре его нет)" : "") + ".",
+      "СБРОСИТЬ",
+      async () => {},
+    );
+    if (!ok) return;
+    saving = true;
+    err.textContent = "";
+    showStatus();
+    try {
+      const r = await api("/settings", {
+        method: "PUT", body: { profile: model.profile, values: defaults },
+      });
+      model.profiles = r.profiles || model.profiles;
+      model.groups = [...(r.groups || []), uiGroup];
+      for (const k of keys) {
+        delete pending[k];
+        shown[k] = defaults[k];
+        if (envWins.has(k)) envBlocked.add(k);
+      }
+      // перерисовка здесь безопасна: фокус не в поле (он в модалке), а поля
+      // modes/подписей (напр. строка профиля) пересчитываются сами
+      renderTab();
+      toast(`Сброшено к значениям по умолчанию: ${g.title} (${keys.length})`);
+    } catch (ex) {
+      err.textContent = ex.message;
+    } finally {
+      saving = false;
+      showStatus();
+    }
+  }
+
+  function tabTools(g) {
+    const btn = h("button", {
+      class: "btn btn-sm btn-ghost", type: "button",
+      onclick: () => resetGroup(),
+    }, "Сбросить настройки");
+    attachTooltip(btn, `Поля вкладки «${g.title}» вернутся к значениям по `
+      + "умолчанию из реестра; значения других вкладок не изменятся");
+    return h("div", { class: "settings-tab-tools" }, btn);
+  }
+
   // контрол поля: тип, варианты и подсказка — из реестра (SPA их не знает)
   function fieldWrap(f) {
     const val = f.value === undefined || f.value === null ? "" : f.value;
@@ -1379,7 +1457,7 @@ async function viewSettings() {
       showStatus(); // локальная вкладка: предпочтения браузера, не конфиг
       return;
     }
-    const out = [];
+    const out = [tabTools(g)];
     if (model.profiles.length && g.blocks.some((b) => b.llm)) out.push(profileCard());
     for (const b of g.blocks || []) {
       const useProf = b.llm && prof && !prof.builtin;

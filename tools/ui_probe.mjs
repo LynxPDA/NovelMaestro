@@ -1101,6 +1101,65 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} настройки: стадии  ${lines.join(" · ")} | ${mode || "—"} | ${cap || "—"}`);
   }
 
+  /* сброс вкладки: на каждой вкладке конфига — своя кнопка над карточками
+   * (на «Внешнем виде» её нет: предпочтения браузера в реестре не живут);
+   * подтверждение — словом, после сброса поле = значение по умолчанию */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/settings`, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".tabs .tab", { timeout: 15000 });
+    const tabNames = await page.evaluate(() => [...document
+      .querySelectorAll(".tabs .tab")].map((x) => x.textContent.trim()));
+    for (const tab of tabNames) {
+      await page.locator(`.tabs .tab:has-text("${tab}")`).first().click();
+      await page.waitForTimeout(300);
+      const n = await page.locator(".settings-tab-tools button").count();
+      const want = tab === "Внешний вид" ? 0 : 1;
+      if (n !== want)
+        problems.push(`настройки «${tab}»: кнопок сброса ${n}, ждали ${want}`);
+    }
+    // «Перевод»: правим поле, ждём автосохранения, сбрасываем вкладку
+    await page.locator('.tabs .tab:has-text("Перевод")').first().click();
+    await page.waitForTimeout(300);
+    const sizeSel = '.settings-cards [name="PIPELINE_CHUNK_SIZE"]';
+    const def = await page.locator(sizeSel).first().inputValue();
+    await page.locator(sizeSel).first().click();
+    await page.locator(sizeSel).first().fill("4321");
+    await page.waitForTimeout(900);
+    await page.locator(".settings-tab-tools button").first().click();
+    await page.waitForTimeout(600);
+    const word = page.locator(".modal-backdrop input.input");
+    if (!(await word.count())) {
+      problems.push("настройки: модалка сброса вкладки не открылась");
+    } else {
+      const mtext = await page.evaluate(() =>
+        (document.querySelector(".modal-backdrop .modal-text") || {})
+          .textContent?.trim() || "");
+      if (!/Перевод/.test(mtext))
+        problems.push(`настройки: в подтверждении не названа вкладка «${mtext}»`);
+      if (SHOT) {
+        await page.locator(".modal-backdrop .modal").first()
+          .screenshot({ path: path.join(OUT, "settings-reset-modal.png") });
+      }
+      await word.first().fill("СБРОСИТЬ");
+      await page.locator('.modal-backdrop button:has-text("Подтвердить")')
+        .first().click();
+      await page.waitForTimeout(900);
+      const after = await page.locator(sizeSel).first().inputValue();
+      if (after !== def)
+        problems.push(`настройки: после сброса вкладки «${after}», ждали «${def}»`);
+      const bad = await page.evaluate(() =>
+        (document.querySelector(".page .form-error") || {})
+          .textContent?.trim() || "");
+      if (bad) problems.push(`настройки: сброс вкладки дал ошибку «${bad}»`);
+    }
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "settings-reset.png") });
+    }
+    log(`${problems.length === before ? "✅" : "❌"} настройки: сброс вкладки  ${tabNames.length} вкладок`);
+  }
+
   /* проверка LLM-сервера: карточка «Подключение» спрашивает /v1/models тем же
    * путём, каким пойдёт работа; вердикт считается по значениям ФОРМЫ (в пробе
    * окружение чистое, поэтому HOST из поля и есть проверяемый сервер) */

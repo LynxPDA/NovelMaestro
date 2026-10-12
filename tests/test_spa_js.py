@@ -209,7 +209,7 @@ def test_settings_page_autosaves():
     assert 'class: "settings-save-state hidden"' in view
     # ответ API перечитывает реестр, вкладку не пересобираем
     save = view[view.index("async function savePending()"):
-                view.index("// контрол поля")]
+                view.index("// ── сброс вкладки")]
     assert "model.groups = [...(r.groups || []), uiGroup];" in save
     assert "renderTab()" not in save, "запись пересобирает вкладку — фокус lost"
     # «Внешний вид» — localStorage по change контрола
@@ -217,6 +217,38 @@ def test_settings_page_autosaves():
     assert 'el.addEventListener(ev, saveLook);' in view
     css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".run-save-state" in css and ".settings-save-state" in css
+
+
+def test_settings_page_tab_reset():
+    """«Настройки»: на каждой вкладке конфига — кнопка «Сбросить настройки».
+
+    Возвращает поля вкладки к значениям по умолчанию из реестра (дефолт
+    приходит в `f.default`, своего знания о настройках у SPA нет) и не трогает
+    соседние вкладки. «Внешний вид» — предпочтения браузера, их нет в реестре,
+    поэтому там кнопки нет. Запись идёт тем же PUT'ом, что и автосохранение.
+    """
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    view = src[src.index("async function viewSettings()"):
+               src.index("/* ── Дашборд")]
+    assert "function groupDefaults(g)" in view
+    assert 'if (f.type === "hidden" || f.noenv) continue;' in view
+    # textarea хранит переносы в реестре литералом «\\n» — их разворачиваем
+    assert 'String(d).replace(/\\\\n/g, "\\n")' in view
+    assert 'f.type === "bool" ? Boolean(d) : String(d);' in view
+    reset = view[view.index("async function resetGroup()"):
+                 view.index("function tabTools(g)")]
+    assert 'if (!g || g.id === "ui") return;' in reset
+    # не записанные правки уходят первыми, иначе сброс их затрёт
+    assert "if (Object.keys(pending).length) await savePending();" in reset
+    assert 'method: "PUT", body: { profile: model.profile, values: defaults },' in reset
+    assert "renderTab();" in reset  # фокус в модалке — перерисовка безопасна
+    # кнопка живёт в теле вкладки, а не в шапке страницы
+    tools = view[view.index("function tabTools(g)"):view.index("// контрол поля")]
+    assert 'class: "settings-tab-tools"' in tools
+    assert '"Сбросить настройки"' in tools
+    assert "const out = [tabTools(g)];" in view
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".settings-tab-tools" in css
 
 
 def test_settings_profile_switch_is_select():
