@@ -559,6 +559,41 @@ def test_profile_create_from_selected(global_env):
         == "http://другой:1"
 
 
+def test_profile_save_one_field_keeps_others(global_env):
+    """Страница «Настройки» сохраняет поля по одному: ключа в запросе нет —
+    сохранённое переопределение остаётся (его не меняли), снимает его только
+    пустое значение. До автосохранения страница всегда присылала вкладку
+    целиком, и PUT одного поля молча стирал остальные."""
+    S.write_values({"HOST": "http://общий:1", "MODEL": "общая-модель",
+                    "MAX_RETRIES": "5", "API_KEY": "ключ-general"})
+    prof = S.profile_create("Домашний", {"HOST": "http://дом:1",
+                                         "MAX_RETRIES": "9",
+                                         "API_KEY": "ключ-дом"})
+    got = S.profile_save_values(prof["id"], {"MODEL": "дом-модель"})
+    vals = got["values"]
+    assert vals["MODEL"] == "дом-модель"
+    assert vals["HOST"] == "http://дом:1" and vals["MAX_RETRIES"] == "9", vals
+    # маска пароля — не правка: сохранённый ключ остаётся своим
+    assert vals["API_KEY"] == "ключ-дом"
+    # пустое значение переопределение снимает: поле снова наследует General
+    got = S.profile_save_values(prof["id"], {"MAX_RETRIES": ""})
+    assert "MAX_RETRIES" not in got["values"]
+    assert got["values"]["HOST"] == "http://дом:1"
+
+
+def test_profile_defaults_take_registry_defaults(global_env):
+    """Образец нового профиля — эффективные значения, а не только то, что
+    записано в общий .env: поле с дефолтом реестра тоже попадает в копию,
+    иначе форма нового профиля выглядела бы пустой."""
+    S.write_values({"HOST": "http://общий:1"})
+    prof = S.profile_create("Копия")
+    vals = prof["values"]
+    assert vals["HOST"] == "http://общий:1"
+    assert vals["THREADS"] == str(S.BY_KEY["THREADS"].default)
+    # действительно пустые поля в профиль не пишутся: они наследуют General
+    assert "TEMPERATURE" not in vals
+
+
 def test_profiles_payload_values(global_env):
     """Payload профилей: у General — эффективные значения конфига, у прочих —
     только их переопределения; секрет отдаётся маской."""

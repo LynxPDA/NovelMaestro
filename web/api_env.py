@@ -129,8 +129,8 @@ def _settings_profiles(ctx: dict) -> dict:
 
     Тело: {action, name?, id?, base?}. id встроенного General не
     переименовывается и не удаляется: его значения — обычный общий .env.
-    Новый профиль создаётся копией base (выбранный сейчас профиль), пустой
-    base — копией General.
+    Новый профиль создаётся копией base — профиля, выбранного сейчас (у create
+    своего id нет); пустой или неизвестный base — копия General.
     """
     body = ctx["body"]
     action = str(body.get("action") or "").strip()
@@ -138,7 +138,8 @@ def _settings_profiles(ctx: dict) -> dict:
     name = str(body.get("name") or "").strip()
     try:
         if action == "create":
-            core_settings.profile_create(name, base_id=pid)
+            core_settings.profile_create(
+                name, base_id=str(body.get("base") or "").strip())
         elif action == "rename":
             core_settings.profile_rename(pid, name)
         elif action == "delete":

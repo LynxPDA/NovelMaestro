@@ -966,16 +966,18 @@ def profile_defaults(base_id: str = "") -> dict:
 
     Новый профиль копирует выбранный профиль (по умолчанию General), а не
     пустую форму: пустой набор означал бы, что «свой сервер» надо заполнять
-    с нуля, и профиль выглядел сломанным. У переопределений base_id берём
-    их эффективные значения (с донаследованными из General), у General —
-    только непустые ключи: пустые и вправду наследуют General."""
+    с нуля, и профиль выглядел сломанным. Значение каждого поля — эффективное
+    (общий .env, затем окружение, затем дефолт реестра): страница сохраняет
+    поля по одному, и в файле больше нет записанного целиком набора.
+    Пустыми остаются только те поля, у которых пусто и в конфиге, и в реестре.
+    """
     builtin = str(base_id or "").strip() in ("", PROFILE_DEFAULT)
     raw = profile_values(base_id)
     if builtin:
         layered = layered_values()
-        return {s.key: sanitize(s, layered.get(s.key, ""))
+        return {s.key: sanitize(s, layered.get(s.key, "") or s.default)
                 for s in llm_settings()
-                if str(layered.get(s.key, "")).strip()}
+                if str(layered.get(s.key, "") or s.default).strip()}
     general = profile_defaults()
     return {s.key: str(raw.get(s.key, "") or general.get(s.key, ""))
             for s in llm_settings()
@@ -1058,12 +1060,19 @@ def profile_save_values(profile_id: str, values: dict) -> dict:
 def _profile_clean(values: dict | None, old: dict | None = None) -> dict:
     """Только LLM-ключи реестра, непустые, в порядке реестра.
 
-    Маска пароля — не значение: секрет остаётся тем, что уже сохранено
-    (пустое же значение переопределение снимает — профиль наследует General)."""
+    Страница сохраняет поля по одному, поэтому в запросе лежит только
+    изменённое: ключа в запросе нет — переопределение остаётся прежним.
+    Пустое значение переопределение снимает (профиль наследует General),
+    маска пароля — не значение: секрет остаётся сохранённым."""
     out = {}
     old = old or {}
+    got = values or {}
     for s in llm_settings():
-        val = sanitize(s, (values or {}).get(s.key, ""))
+        if s.key not in got:
+            if s.key in old:
+                out[s.key] = old[s.key]
+            continue
+        val = sanitize(s, got.get(s.key, ""))
         if not val or is_mask(val):
             if s.secret and s.key in old:
                 out[s.key] = old[s.key]
