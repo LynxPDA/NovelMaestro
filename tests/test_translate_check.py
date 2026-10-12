@@ -7,11 +7,14 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "cli"))
 
 import translate_check as TC  # noqa: E402
+from core import settings as SET  # noqa: E402
 
 
 def test_compare_sizes():
@@ -297,3 +300,81 @@ def test_check_chapter_sequence_no_number_in_first_line(tmp_path):
                                     False, 5, exclusions=[])
     assert not any("последовательность" in e for e in errors)
     assert prev == 5  # числа нет — prev не изменился
+
+# ════════════════════════════════════════════════════════════════════
+# Предзаполнение regexp-проверок из реестра: набор обязан ловить ЛЮБУЮ
+# не-кириллицу — галлюцинация модели это токен из другого языка внутри
+# русской фразы («Он walk домой и думал, чтобы ему sделать там.»), — и
+# молчать на нормальном русском тексте.
+
+
+def _default_rules() -> list:
+    """Правила из дефолта реестра — те же строки, что видит форма."""
+    raw = SET.BY_KEY["TRANSLATE_CHECK_REGEXP_CHECKS"].default
+    return [_rule(l) for l in raw.splitlines() if l.strip()]
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Он walk домой и думал, чтобы ему sделать там.", "walk"),
+    ("Он ｗａｌｋ домой", "ｗａｌｋ"),              # полноширинная латиница
+    ("Он ишёл домой и thinking об этом", "thinking"),
+    ("Канат 彼 home и пошёл", "彼"),                   # иероглиф CJK
+    ("Канат は home и пошёл", "は"),                   # хирагана
+    ("Канат カタカナ home", "カタカナ"),           # катакана
+    ("Канат 한국 home и пошёл", "한국"),           # хангыль
+    ("Канат και home и пошёл", "και"),                # греческий
+    ("Канат שלום home и пошёл", "שלום"),             # еврейский
+    ("Канат مرحبا home и пошёл", "مرحبا"),           # арабский
+    ("Канат গান home и пошёл", "গান"),           # бенгальский
+    ("Канат กาด home และ пошла", "กาด"),         # тайский
+    ("Канат გe home", "გe"),                # грузинский в слове латиницей
+    ("текст с кавычками 「」", "「"),
+])
+def test_default_regexp_checks_catch_foreign_letters(text, expected):
+    # «Глава 1» сверху — правило «первая строка не заголовок» ловит не её
+    hits = [m.group(0) for rx in _default_rules()
+            for m in rx.finditer("Глава 1\n" + text)]
+    found = "".join(hits)
+    # символы чужого слова обязаны быть в совпадениях: смешанное слово
+    # («sделать») ловится двумя правилами — кириллицу и латиницу
+    assert all(ch in found for ch in expected), \
+        f"{expected!r} не поймано: {hits}"
+
+
+@pytest.mark.parametrize("text", [
+    "Он шёл домой и думал, чтобы ему сделать там.",
+    "«Привет» — сказал он… №5; 12:30, 3,14; 100% — ок.",
+    "Украинские і, ї, є и белорусское ў — та же кириллица.",
+    "Служебные знаки: °±§¶·¤ — «…»",
+])
+def test_default_regexp_checks_silent_on_russian(text):
+    """Нормальный русский текст (любая кириллица, знаки препинания,
+    цифры) не должен давать ни одного совпадения."""
+    hits = [m.group(0) for rx in _default_rules()
+            for m in rx.finditer("Глава 1\n" + text)]
+    assert hits == [], f"ложные срабатывания: {hits}"
+
+
+def test_default_regexp_checks_cover_all_scripts():
+    """Набор не усох: заголовок, CJK/кана/хангыль, латиница, остальные
+    азбуки и «первая строка — заголовок». Отдельные строки — потому что
+    каждое правило подписано в отчёте своим паттерном."""
+    raw = SET.BY_KEY["TRANSLATE_CHECK_REGEXP_CHECKS"].default
+    lines = [l for l in raw.splitlines() if l.strip()]
+    assert len(lines) == len(_default_rules()) == 5
+    assert any("\\uac00" in l for l in lines), "потерян хангыль"
+    assert any("\\uff41" in l for l in lines), "потеряна полноширинная латиница"
+    assert any("\\u0370" in l for l in lines), "потеряны остальные азбуки"
+
+
+@pytest.mark.parametrize("key, ratio, tol", [
+    ("TRANSLATE_CHECK_NEIGHBOR", TC.RATIO_NEIGHBOR, TC.TOL_NEIGHBOR),
+    ("TRANSLATE_CHECK_ORIGINAL", TC.RATIO_ORIGINAL, TC.TOL_ORIGINAL),
+])
+def test_ratio_fields_prefilled_with_script_default(key, ratio, tol):
+    """Поля коэффициентов предзаполнены встроенным дефолтом скрипта:
+    пустое поле рисовало бы в форме не то, что посчитает стадия."""
+    value = SET.BY_KEY[key].default
+    assert value == f"{ratio}±{tol}"
+    assert TC.parse_ratio_tol(value, ratio, tol) == (ratio, tol)
+    assert TC.parse_ratio_tol("", ratio, tol) == (ratio, tol)
