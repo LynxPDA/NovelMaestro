@@ -47,6 +47,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // глав и prompt_file) — эталон, к которому возвращает «Сбросить настройки»
     baseline: {},
     touched: {}, // менявшиеся пользователем поля по стадиям (Set имён)
+    save: {}, // стадия → подпись автосохранения в шапке панели
     preview: null, // epub: данные предпросмотра {entries, source, skips}
     previewDirty: true, // epub: настройки менялись после предпросмотра
     brPreview: null, // batch_replace: предпросмотр {segments, stats, …}
@@ -490,17 +491,24 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         "div",
         { class: "run-panel-head" },
         h("div", { class: "run-panel-title" }, `${key} · ${spec.title}`),
-        resetSettingsBtn(key, spec),
+        h("div", { class: "run-panel-tools" },
+          runSaveState(key),
+          resetSettingsBtn(key, spec)),
       ),
       stageForm(key, spec),
     );
     // смена поля не перерисовывает форму (иначе теряется фокус), поэтому
-    // кнопка «Сбросить настройки» пересчитывается делегатом: слушатель поля
-    // срабатывает раньше и уже записал значение в st.values
+    // автосохранение и кнопка «Сбросить настройки» пересчитываются делегатом:
+    // слушатель поля срабатывает раньше и уже записал значение в st.values
     st.head = panel.querySelector(".run-panel-head");
     st.curSpec = spec;
-    panel.addEventListener("input", () => { syncResetBtn(key); runSave(key); });
-    panel.addEventListener("change", () => { syncResetBtn(key); runSave(key); });
+    const onEdit = () => {
+      scheduleRunSave(key);
+      st.previewDirty = true; // epub: панель разбивки помечает себя устаревшей
+    };
+    panel.addEventListener("input", onEdit);
+    panel.addEventListener("change", onEdit);
+    syncRunSave(key); // подпись сразу показывает то, что уже сохранено
     // epub: панель предпросмотра разбивки
     if (key === "epub") panel.append(epubPreviewPanel(key, spec));
     // batch_replace: панель предпросмотра замен по главам
@@ -512,36 +520,80 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return panel;
   }
 
-  // ── единое хранилище значений формы ──────────────────────────────────
-  // st.values[stage] — значения полей (данные), st.touched[stage] — имена
-  // полей, которые пользователь менял. Значения запусков — рабочее
-  // состояние браузера: собственного .env у книги больше нет, а
-  // «Сбросить настройки» возвращает поля к значениям общего конфига.
-
-  // ── память изменённых полей формы (localStorage, по проекту+стадии) ──
+  // ── автосохранение значений формы (localStorage, по проекту+стадии) ──
   // Значения запусков — рабочее состояние браузера: собственного .env у книги
-  // нет. Без памяти поля молча возвращались к значениям общего конфига после
-  // запуска или перезагрузки страницы; храним только изменённые поля,
-  // остальное приходит из реестра.
+  // нет, а в общем конфиге им делать нечего (диапазон глав одной книги не
+  // должен становиться настройкой всех книг). Кнопки «Сохранить» в форме нет:
+  // поле изменили — через паузу ввода значения уходят в память браузера, о чём
+  // говорит подпись в шапке панели. Храним только изменённые поля, остальное
+  // приходит из реестра; «Сбросить настройки» возвращает значения конфига.
+  const RUN_SAVE_DELAY = 500; // мС тишины после последнего изменения поля
+  const runTimers = {};       // стадия → таймер отложенной записи
+  const runPending = {};      // стадия → запись ещё не ушла в память
+  const runFailed = {};       // стадия → память браузера недоступна
+
   function runKey(key) {
     return `runVals:${section}/${name}:${key}`;
   }
 
   function runSave(key) {
     const t = st.touched[key];
-    if (!t) return;
+    if (!t) return true;
     try {
       if (!t.size) {
         localStorage.removeItem(runKey(key));
-        return;
+        return true;
       }
       const vals = st.values[key] || {};
       const data = {};
       for (const n of t) if (vals[n] !== undefined) data[n] = vals[n];
       localStorage.setItem(runKey(key), JSON.stringify(data));
+      return true;
     } catch {
-      /* нет localStorage (приватный режим) — не критично */
+      return false; // нет localStorage (приватный режим) — сохранять некуда
     }
+  }
+
+  // одна запись на пачку изменений: на каждое нажатие клавиши писать в память
+  // нельзя, поэтому отсчёт начинается заново на каждый сигнал. Кнопка
+  // «Сбросить настройки» пересчитывается здесь же: форма не пересобирается
+  function scheduleRunSave(key) {
+    runPending[key] = true;
+    syncRunSave(key);
+    syncResetBtn(key);
+    clearTimeout(runTimers[key]);
+    runTimers[key] = setTimeout(() => {
+      runFailed[key] = !runSave(key);
+      runPending[key] = false;
+      syncRunSave(key);
+    }, RUN_SAVE_DELAY);
+  }
+
+  // узел подписи ПОСТОЯННЫЙ (прячется классом hidden): пересоздавать его
+  // нельзя — blur предыдущего поля даёт change между mousedown и mouseup,
+  // старый узел отрывается от DOM и клик уходит в родителя
+  function runSaveState(key) {
+    if (!st.save[key]) {
+      st.save[key] = h("span", { class: "run-save-state hidden" });
+      attachTooltip(st.save[key],
+        "значения запусков — рабочее состояние браузера этой книги: своего .env "
+        + "у неё нет, а в общий конфиг они не пишутся");
+    }
+    return st.save[key];
+  }
+
+  function syncRunSave(key) {
+    const el = st.save[key];
+    if (!el) return;
+    // те же отличия, что считает кнопка сброса: правка «в ту же цифру»
+    // подписью не мешает (тouched остаётся основой для записи в память)
+    const n = st.curSpec ? resetDiffs(key, st.curSpec).length : 0;
+    el.textContent = !n ? "" : runPending[key]
+      ? `изменено ${n} · сохраняю…`
+      : runFailed[key]
+        ? "память браузера недоступна — значения живут до перезагрузки"
+        : `изменено ${n} · сохранено`;
+    el.classList.toggle("hidden", !n);
   }
 
   function runRestore(key, spec, vals) {
@@ -559,29 +611,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       vals[f.name] = f.type === "bool"
         ? UICore.boolOn(saved[f.name]) : saved[f.name];
       st.touched[key].add(f.name);
-    }
-  }
-
-  // ── epub: автосохранение настроек формы (localStorage, по проекту) ──
-  // Настройки сохраняются сразу при вводе (без ожидания запуска) и
-  // восстанавливаются поверх .env/дефолтов при входе на стадию.
-  const EPUB_SAVE_KEY = "epubRunVals";
-  function epubSave(key) {
-    try {
-      localStorage.setItem(
-        `${EPUB_SAVE_KEY}:${section}/${name}`,
-        JSON.stringify(st.values[key] || {}),
-      );
-    } catch {
-      /* нет localStorage (приватный режим) — не критично */
-    }
-  }
-  function epubLoad() {
-    try {
-      const raw = localStorage.getItem(`${EPUB_SAVE_KEY}:${section}/${name}`);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
     }
   }
 
@@ -659,6 +688,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     st.baseline[key] = Object.assign({}, vals);
     // память изменённых полей этой книги+стадии (поверх реестра и .env)
     runRestore(key, spec, vals);
+    runPending[key] = false;
     // чипсы полей/типов (hidden noenv) — память по проекту+стадии:
     // без неё перезагрузка страницы молча сбрасывает выбор чипсов
     // на дефолт, и запуск уходит не с теми полями, что показаны
@@ -668,18 +698,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // «изменённым полем» и не уезжала под кнопку «Сбросить настройки»
     const pf = (spec.fields || []).find((x) => x.name === PROFILE_FIELD);
     if (pf) vals[PROFILE_FIELD] = profileStored(key, pf.options);
-    // epub: автосохранённые настройки поверх дефолтов/.env
-    if (spec.autosave) {
-      const saved = epubLoad();
-      if (saved && typeof saved === "object") {
-        for (const f of spec.fields || []) {
-          if (saved[f.name] !== undefined) {
-            vals[f.name] = saved[f.name];
-            st.touched[key].add(f.name);
-          }
-        }
-      }
-    }
   }
 
   // ── память выбора чипсов (hidden noenv: types/fields/ner_fields) ──
@@ -791,17 +809,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           try {
             localStorage.removeItem(chipKey(key)); // память чипсов стадии
             localStorage.removeItem(runKey(key)); // память полей стадии
-            if (spec.autosave) {
-              // epub: автосохранение вернуло бы стёртые поля — память целиком
-              localStorage.removeItem(`${EPUB_SAVE_KEY}:${section}/${name}`);
-            }
           } catch {
             /* нет localStorage — и нечего было чистить */
           }
           delete st.values[key]; // значения формы — заново из реестра
           delete st.touched[key];
+          clearTimeout(runTimers[key]); // отложенное сохранение не вернёт стёртое
           initFormValues(key, spec);
-          if (key === "epub") epubSave(key);
+          syncRunSave(key);
           toast("Поля стадии возвращены к значениям конфига");
           render(); // поля — заново из реестра, кнопка прячется
         },
@@ -850,7 +865,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (f.help) attachTooltip(wrap, f.help);
       wrap._input = input;
       wrap._field = f; // видимость подрежимов идёт по fieldWraps[name]
-      if (key === "epub") wireEpubAutosave(wrap);
       return wrap;
     } else if (f.type === "select") {
       input = h("select", { class: "input" });
@@ -1020,19 +1034,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
     wrap._input = input;
     wrap._field = f; // видимость подрежимов идёт по fieldWraps[name]
-    if (key === "epub") wireEpubAutosave(wrap);
     return wrap;
-  }
-
-  // epub: автосохранение настроек при вводе + пометка «предпросмотр
-  // устарел». input/change всплывают от вложенного элемента к label.
-  function wireEpubAutosave(wrap) {
-    const onCh = () => {
-      epubSave(st.stage);
-      st.previewDirty = true;
-    };
-    wrap.addEventListener("input", onCh);
-    wrap.addEventListener("change", onCh);
   }
 
   // ── ner_check: чипсы типов из глоссария (вместо select/text) ──

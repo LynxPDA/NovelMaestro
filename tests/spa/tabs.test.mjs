@@ -1099,18 +1099,29 @@ test("запуски: сброс возвращает поле к значени
     .find((f) => f._field && f._field.name === "chunk_size");
   const inp = field._input;
   assert.equal(inp.value, "8000", "старт — дефолт реестра");
-  /* правка №1 уезжает в память (localStorage): событие диспатчим и на
-     инпут, и на панель (делегат runSave) — в моке нет всплытия */
-  /* панель формы — с делегатом input/change: первой .run-panel в DOM
-     идёт карточка активного запуска, у неё слушателей нет */
+  /* правка уезжает в память (localStorage) сама, без кнопки: событие диспатчим
+     и на инпут, и на панель (делегат автосохранения) — в моке нет всплытия;
+     первой .run-panel в DOM идёт карточка активного запуска, у неё
+     слушателей нет */
   const panel = findByClass(page, "run-panel")
     .find((p) => p._listeners.input && p._listeners.input.length);
   const type = (node, ev) => {
     node.dispatchEvent({ type: ev });
     panel.dispatchEvent({ target: node, type: ev });
   };
+  /* подпись в шапке панели говорит, что значение ещё не ушло (или уже ушло) */
+  const pill = findByClass(page, "run-save-state")[0];
+  assert.ok(pill.classList.contains("hidden"),
+    "пока поле не меняли, подписи автосохранения нет");
   inp.value = "1234";
   type(inp, "input");
+  assert.ok(!pill.classList.contains("hidden"), "изменённое поле подписано");
+  assert.match(pill.textContent, /сохраняю…/, "сразу после правки");
+  /* запись отложена на паузу ввода: на каждое нажатие клавиши писать нельзя */
+  assert.equal(globalThis.localStorage.getItem("runVals:ACTIVE/Книга:ner"), null,
+    "до паузы в памяти ничего не появляется");
+  await new Promise((r) => setTimeout(r, 600));
+  assert.match(pill.textContent, /сохранено/, "после записи");
   assert.equal(
     JSON.parse(globalThis.localStorage.getItem("runVals:ACTIVE/Книга:ner"))
       .chunk_size, "1234");
@@ -1138,6 +1149,35 @@ test("запуски: сброс возвращает поле к значени
   assert.equal(field3._input.value, "8000",
     "после сброса — дефолт конфига, а не 1234 прошлого визита");
   assert.equal(globalThis.localStorage.getItem("runVals:ACTIVE/Книга:ner"), null);
+  /* подпись пересобрана вместе с панелью: менять нечего — она спрятана */
+  assert.ok(findByClass(page2, "run-save-state")[0].classList.contains("hidden"),
+    "после сброса менять нечего — подпись прячется");
+  globalThis.localStorage.clear();
+});
+
+test("запуски: сохранение — одна отложенная запись, кнопки «Сохранить» в форме нет", async () => {
+  /* отдельного сохранения формы запусков нет: подпись в шапке панели и есть
+     весь ответ — значения книги уходят в память браузера сами */
+  globalThis.localStorage.clear();
+  const page = await runStage("ner");
+  assert.ok(!findByClass(page, "run-form")
+    .some((f) => collectText(f).includes("Сохранить")),
+    "в форме стадии не осталось кнопки сохранения");
+  const panel = findByClass(page, "run-panel")
+    .find((p) => p._listeners.input && p._listeners.input.length);
+  const pill = findByClass(page, "run-save-state")[0];
+  const inp = findByClass(page, "field")
+    .find((f) => f._field && f._field.name === "chunk_size")._input;
+  inp.value = "9000";
+  inp.dispatchEvent({ type: "input" });   // числовое поле пишет input
+  panel.dispatchEvent({ target: inp, type: "input" });
+  assert.equal(globalThis.localStorage.getItem("runVals:ACTIVE/Книга:ner"), null,
+    "сразу после правки запись ещё не идёт (пауза ввода)");
+  assert.match(pill.textContent, /сохраняю…/);
+  await new Promise((r) => setTimeout(r, 600));
+  assert.equal(
+    JSON.parse(globalThis.localStorage.getItem("runVals:ACTIVE/Книга:ner"))
+      .chunk_size, "9000");
   globalThis.localStorage.clear();
 });
 
@@ -1233,7 +1273,6 @@ test("поиск: вкладка, поиск и сводка результат�
     ["Контекст:"],
     "подпись контекста — с двоеточием",
   );
-  console.log("DBG bodies:", page.children.length, JSON.stringify(page.children.map((c) => c.className)));
   const st1 = findByClass(page, "search-status");
   assert.equal(st1.length, 1, "сводка — одна строка");
   assert.deepEqual(collectText(st1[0]), ["Поиска не было"]);
@@ -1252,17 +1291,6 @@ test("поиск: вкладка, поиск и сводка результат�
   assert.equal(q.get("scope"), "chapter,polished");
   assert.equal(q.get("context"), "60");
   assert.notEqual(q.get("case"), "1", "регистр по умолчанию не учитывается");
-  {
-    const ss = findByClass(page, "search-status");
-    console.log("DBG2 count=", ss.length);
-    for (const n of ss) {
-      const chain = [];
-      let x = n;
-      while (x) { chain.push(x.tagName + "." + (x.className || "-")); x = x._parent; }
-      console.log("DBG2 node", JSON.stringify(n._text), "children", n.children.length,
-        JSON.stringify(n.children.map((c) => c.tagName + ":" + c._text)), "chain", chain.join(" < "));
-    }
-  }
   assert.equal(
     collectText(findByClass(page, "search-status")[0]).join(","),
     "Совпадений: 3 · файлов: 2 · прочитано: 9",

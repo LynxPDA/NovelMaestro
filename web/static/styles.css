@@ -1080,9 +1080,16 @@ input[type="number"] {
   align-items: center;
   gap: 10px;
 }
-/* «Сбросить настройки» — в правом краю шапки панели запусков */
-.run-panel-head .run-reset {
+/* «Сбросить настройки» и подпись автосохранения — в правом краю шапки панели */
+.run-panel-tools {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.run-save-state {
+  font-size: 12px;
+  color: var(--text-dim);
 }
 .run-panel-title {
   display: flex;
@@ -1836,6 +1843,15 @@ input[type="number"] {
 .settings-check-state {
   font-size: 12px;
   color: var(--muted);
+}
+/* автосохранение «Настроек»: подпись в шапке вместо кнопки «Сохранить»;
+   молчит, пока сохранять нечего, поэтому состояний два: запись и предупреждение */
+.settings-save-state {
+  font-size: 12px;
+  color: var(--muted);
+}
+.settings-save-state.is-warn {
+  color: var(--accent-2);
 }
 .settings-check-state.is-ok {
   color: var(--accent);

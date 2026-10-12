@@ -89,10 +89,10 @@ def test_run_views_chips_persistence():
     # пересчитывается делегатом, а не перестройкой формы; тем же делегатом
     # изменённые поля уходят в память браузера
     assert "function stageForm(key, spec)" in src
-    assert ('panel.addEventListener("input", () => '
-            "{ syncResetBtn(key); runSave(key); });") in src
-    assert ('panel.addEventListener("change", () => '
-            "{ syncResetBtn(key); runSave(key); });") in src
+    assert "const onEdit = () => {" in src
+    assert "scheduleRunSave(key);" in src
+    assert 'panel.addEventListener("input", onEdit);' in src
+    assert 'panel.addEventListener("change", onEdit);' in src
     assert "st.baseline[key] = Object.assign({}, vals)" in src
 
 
@@ -112,6 +112,16 @@ def test_run_views_values_persistence():
     assert "localStorage.removeItem(runKey(key))" in src
     # профиль стадии — не «изменённое поле»: у него своя память по стадии
     assert "if (f.name === PROFILE_FIELD) continue;" in src
+    # запись отложена на паузу ввода и одна на пачку изменений: на каждое
+    # нажатие клавиши писать в память нельзя
+    assert "const RUN_SAVE_DELAY = 500;" in src
+    assert "clearTimeout(runTimers[key]);" in src
+    # отдельной кнопки сохранения в форме нет — состояние показывает подпись
+    # в шапке панели (узел постоянный: пересобирать его нельзя)
+    assert "function runSaveState(key)" in src
+    assert 'class: "run-save-state hidden"' in src
+    assert "syncRunSave(key); // подпись сразу показывает" in src
+    assert "const btn = st.head && st.head.querySelector" in src
 
 
 def test_run_views_last_finished_log():
@@ -177,6 +187,36 @@ def test_editor_pane_toggle_says_editor():
     src = (SPA_DIR / "ui-components.js").read_text(encoding="utf-8")
     assert '"Рендер" : "Редактор"' in src
     assert '"Код"' not in src
+
+
+def test_settings_page_autosaves():
+    """«Настройки» — страница автосохранения: кнопки «Сохранить» нет, одно
+    изменённое поле уходит PUT'ом через полсекунды тишины, идущая запись одна,
+    ответ перечитывает model.groups БЕЗ перерисовки вкладки (иначе из поля
+    выпадал бы фокус). «Внешний вид» пишет предпочтения прямо по change."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    view = src[src.index("async function viewSettings()"):
+               src.index("/* ── Дашборд")]
+    assert '"Сохранить"' not in view, "на странице осталась кнопка сохранения"
+    assert "const SAVE_DELAY = 500;" in view
+    assert "clearTimeout(saveTimer);" in view
+    assert "if (saving) { saveTimer = setTimeout(savePending, 1000); return; }" in view
+    # ключ строки — ключ .env (имена полей стадий не уникальны)
+    assert "const id = f.key || f.name;" in view
+    # состояние автосохранения — в шапке страницы; пока сохранять нечего,
+    # строка молчит (подтверждение — тост)
+    assert 'h("div", { class: "page-header-actions" }, status)' in view
+    assert 'class: "settings-save-state hidden"' in view
+    # ответ API перечитывает реестр, вкладку не пересобираем
+    save = view[view.index("async function savePending()"):
+                view.index("// контрол поля")]
+    assert "model.groups = [...(r.groups || []), uiGroup];" in save
+    assert "renderTab()" not in save, "запись пересобирает вкладку — фокус lost"
+    # «Внешний вид» — localStorage по change контрола
+    assert "function saveLook()" in view
+    assert 'el.addEventListener(ev, saveLook);' in view
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".run-save-state" in css and ".settings-save-state" in css
 
 
 def test_settings_profile_switch_is_select():

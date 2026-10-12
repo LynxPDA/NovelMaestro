@@ -921,8 +921,10 @@ async function viewNotes() {
    с сервера. Субвкладок пять — только настройки книги: блок веб-сервера из
    payload вырезан на сервере. Шестая, «Внешний вид», локальная:
    UI-предпочтения браузера в реестре не живут. Собственного .env у книги нет:
-   изменённые для одной книги поля запусков живут в браузере. Под кнопкой
-   «Сохранить» подписей нет: состояние профиля читается из самого селекта. ── */
+   изменённые для одной книги поля запусков живут в браузере. Кнопки
+   «Сохранить» на странице нет: каждое изменённое поле уходит на диск само,
+   а состояние автосохранения показывает подпись в шапке. Профиль тоже
+   читается из самого селекта. ── */
 async function viewSettings() {
   let d;
   try {
@@ -956,7 +958,77 @@ async function viewSettings() {
   const tabs = h("div", { class: "tabs" });
   const cards = h("div", { class: "settings-cards" });
   const err = h("div", { class: "form-error" });
-  const saveBtn = h("button", { class: "btn btn-sm btn-primary" }, "Сохранить");
+
+  // ── автосохранение: кнопки «Сохранить» на странице нет ──────────────
+  // Одно изменённое поле — одна запись: значения General уходят в общий .env,
+  // LLM-ключи выбранного профиля — в llm_profiles.json. Запись ставится на
+  // паузу ввода: дёргать конфиг на каждое нажатие клавиши нельзя, и идущая
+  // запись бывает одна. Строка в шапке молчит, пока сохранять нечего
+  // (подтверждение — тост); ответ API перечитывает model.groups/model.profiles,
+  // а НЕ перерисовывает вкладку — иначе из поля выпадал бы фокус.
+  const SAVE_DELAY = 500;  // мС тишины после последнего изменения поля
+  const status = h("span", { class: "settings-save-state hidden" });
+  const pending = {};      // ключ реестра → значение, ждущее записи
+  const shown = {};        // ключ реестра → последнее значение на экране
+  const labels = {};       // ключ реестра → подпись поля (для строки статуса)
+  const envWins = new Set(d.env_wins || []);
+  const envBlocked = new Set(); // ключи, перекрытые переменными окружения
+  let saveTimer = 0;
+  let saving = false;
+
+  function showStatus() {
+    // «Внешний вид» — локальная вкладка: конфиг здесь не сохраняется
+    const busy = saving || Object.keys(pending).length > 0;
+    const blocked = [...envBlocked].map((k) => labels[k] || k);
+    const text = active === "ui" ? ""
+      : busy ? "сохраняю…"
+      : blocked.length ? `перекрыто окружением: ${blocked.join(", ")}` : "";
+    status.textContent = text;
+    status.className = "settings-save-state"
+      + (!text ? " hidden" : busy ? "" : " is-warn");
+  }
+
+  // значение поля уехало в память → через паузу ввода один PUT
+  function fieldChanged(id, value) {
+    if (id in shown && shown[id] === value) return; // фокус или Tab без правки
+    shown[id] = value;
+    pending[id] = value;
+    if (envWins.has(id)) envBlocked.add(id);
+    showStatus();
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(savePending, SAVE_DELAY);
+  }
+
+  async function savePending() {
+    if (saving) { saveTimer = setTimeout(savePending, 1000); return; }
+    const names = Object.keys(pending);
+    if (!names.length) return;
+    const values = {};
+    for (const k of names) values[k] = pending[k];
+    saving = true;
+    err.textContent = "";
+    showStatus();
+    try {
+      const r = await api("/settings", {
+        method: "PUT", body: { profile: model.profile, values },
+      });
+      // профили перечитываем тоже: поля нераскрытого профиля рисуются из
+      // model.profiles, и без этого сохранённое значение исчезало бы из формы
+      model.profiles = r.profiles || model.profiles;
+      // ответ API несёт только реестр: без локальной вкладки открытая
+      // «Внешний вид» исчезла бы и прыгнула на первую
+      model.groups = [...(r.groups || []), uiGroup];
+      for (const k of names) delete pending[k];
+      toast(`Сохранено: ${names.map((k) => labels[k] || k).join(", ")}`);
+    } catch (ex) {
+      // значения остаются в pending: при следующем изменении уйдут повторно
+      Object.assign(pending, values);
+      err.textContent = ex.message;
+    } finally {
+      saving = false;
+      showStatus();
+    }
+  }
 
   // контрол поля: тип, варианты и подсказка — из реестра (SPA их не знает)
   function fieldWrap(f) {
@@ -964,6 +1036,10 @@ async function viewSettings() {
     if (f.type === "hidden") return null; // чипсы — состояние UI запусков
     // name контрола = ключ реестра: имена полей стадий не уникальны
     const id = f.key || f.name;
+    labels[id] = f.label || f.name;
+    if (!(id in shown)) {
+      shown[id] = f.type === "bool" ? Boolean(val) : String(val);
+    }
     if (f.type === "bool") {
       const cb = h("input", { type: "checkbox", class: "checkbox" });
       cb.checked = Boolean(val);
@@ -979,6 +1055,7 @@ async function viewSettings() {
       );
       cb.addEventListener("change", () => {
         state.textContent = cb.checked ? "включено" : "выключено";
+        fieldChanged(id, cb.checked);
       });
       return h(
         "label",
@@ -1029,6 +1106,11 @@ async function viewSettings() {
       wrap.append(h("div", { class: "field-help" }, f.help));
     }
     ctl[id] = input;
+    // автосохранение поля: input — текст/число при вводе, change — select и
+    // выход из поля; одинаковое значение (фокус, Tab) записи не начинает
+    const onField = () => fieldChanged(id, input.value);
+    input.addEventListener("input", onField);
+    input.addEventListener("change", onField);
     return wrap;
   }
 
@@ -1294,9 +1376,9 @@ async function viewSettings() {
     const prof = model.profiles.find((p) => p.id === model.profile) || null;
     if (g.id === "ui") {
       cards.replaceChildren(lookCard, previewFontCard);
+      showStatus(); // локальная вкладка: предпочтения браузера, не конфиг
       return;
     }
-    saveBtn.classList.toggle("hidden", false);
     const out = [];
     if (model.profiles.length && g.blocks.some((b) => b.llm)) out.push(profileCard());
     for (const b of g.blocks || []) {
@@ -1318,6 +1400,7 @@ async function viewSettings() {
       ));
     }
     cards.replaceChildren(...out);
+    showStatus(); // подпись показывает уже сохранённое
   }
 
   for (const g of model.groups) {
@@ -1335,45 +1418,31 @@ async function viewSettings() {
     }, g.title));
   }
 
-  saveBtn.addEventListener("click", async () => {
-    err.textContent = "";
-    if (active === "ui") {
-      const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
-      EDITOR_SETTINGS.editor =
-        edSel.value === "dark" || edSel.value === "light" ? edSel.value : "auto";
-      EDITOR_SETTINGS.fontSize = n;
-      EDITOR_SETTINGS.langPrompt = promptSel.value;
-      EDITOR_SETTINGS.langLog = logSel.value;
-      try {
-        localStorage.setItem(UI_LOOK_KEY, JSON.stringify(EDITOR_SETTINGS));
-      } catch {
-        /* localStorage недоступен — не критично */
-      }
-      applyEditorSettings();
-      render();
-      toast("Внешний вид сохранён");
-      return;
-    }
-    const values = {};
-    for (const [name, c] of Object.entries(ctl)) {
-      values[name] = c.type === "checkbox" ? c.checked : c.value;
-    }
+  // «Внешний вид» — та же участь: под кнопки не прячутся, предпочтения браузера
+  // пишутся сразу. Кегль читается при создании редактора, поэтому при его смене
+  // открытые вкладки перечитываются перерисовкой; тема живёт в атрибутах body.
+  function saveLook() {
+    const n = Math.max(8, Math.min(32, parseInt(fontIn.value, 10) || 13));
+    const resized = n !== EDITOR_SETTINGS.fontSize;
+    fontIn.value = String(n);
+    EDITOR_SETTINGS.editor =
+      edSel.value === "dark" || edSel.value === "light" ? edSel.value : "auto";
+    EDITOR_SETTINGS.fontSize = n;
+    EDITOR_SETTINGS.langPrompt = promptSel.value;
+    EDITOR_SETTINGS.langLog = logSel.value;
     try {
-      const r = await api("/settings", {
-        method: "PUT", body: { profile: model.profile, values },
-      });
-      // профили перечитываем тоже: поля нераскрытого профиля рисуются из
-      // model.profiles, и без этого сохранённое значение исчезало бы из формы
-      model.profiles = r.profiles || model.profiles;
-      // ответ API несёт только реестр: без локальной вкладки открытая
-      // «Внешний вид» исчезла бы и прыгнула на первую
-      model.groups = [...(r.groups || []), uiGroup];
-      renderTab();
-      toast("Настройки сохранены");
-    } catch (ex) {
-      err.textContent = ex.message;
+      localStorage.setItem(UI_LOOK_KEY, JSON.stringify(EDITOR_SETTINGS));
+    } catch {
+      /* localStorage недоступен — не критично */
     }
-  });
+    applyEditorSettings();
+    toast("Сохранено: внешний вид");
+    if (resized) render();
+  }
+  for (const [el, ev] of [[edSel, "change"], [promptSel, "change"],
+                         [logSel, "change"], [fontIn, "change"]]) {
+    el.addEventListener(ev, saveLook);
+  }
   renderTab();
 
   return h(
@@ -1384,7 +1453,7 @@ async function viewSettings() {
       { class: "page-header" },
       h("div", { class: "page-header-main" },
         h("h1", { class: "page-title" }, "Настройки")),
-      h("div", { class: "page-header-actions" }, saveBtn),
+      h("div", { class: "page-header-actions" }, status),
     ),
     tabs,
     cards,

@@ -510,7 +510,6 @@ STAGE_SPECS: dict[str, dict] = {
         "title": core_settings.STAGE_TITLES["epub"],
         "script": "epub_to_chapters.py",
         "build": build_epub_to_chapters,
-        "autosave": True,  # настройки формы — сразу в localStorage
         "fields": core_settings.form_fields("epub"),
     },
     "translate_check": {

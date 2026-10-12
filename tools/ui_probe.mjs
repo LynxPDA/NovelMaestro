@@ -880,8 +880,10 @@ async function main() {
         .textContent?.trim() || "",
       cards: [...document.querySelectorAll(".settings-cards .review-card-title")]
         .map((x) => x.textContent.trim()),
-      status: (document.querySelector(".review-status") || {})
+      // подпись автосохранения: на General сохранять нечего — она спрятана
+      status: (document.querySelector(".settings-save-state") || {})
         .textContent?.trim() || "",
+      btns: document.querySelectorAll(".page-header-actions button").length,
       html: document.getElementById("app").innerHTML,
     }));
     const wantTabs = ["Модель и сервер", "Перевод", "Глоссарий", "Проверки",
@@ -898,9 +900,10 @@ async function main() {
         problems.push(`настройки: карточка веб-сервера «${t}» на экране`);
     if (await page.locator('.settings-cards [name="WEB_PORT"]').count())
       problems.push("настройки: поля веб-сервера рисуются в форме");
-    // путь общего конфига экрану не нужен: статус пустой на General
+    // путь общего конфига экрану не нужен; на General сохранять нечего
     if (head.status) problems.push(`настройки: статус General «${head.status}»`);
-    if (/\.env/.test(head.html)) problems.push("настройки: .env в разметке экрана");
+    if (head.btns) problems.push(`настройки: в шапке кнопки (${head.btns})`);
+    if (/\.env\s*[=:/]/.test(head.html)) problems.push("настройки: путь .env на экране");
     if (head.html.includes("probe-secret"))
       problems.push("настройки: значение API-ключa уехало в SPA");
     // значение секрета в DOM — только маска (value пароля innerHTML не
@@ -977,9 +980,10 @@ async function main() {
     await card.locator('input[name="THINKING_BUDGET"]').fill("2048");
     await card.locator('input[name="LLM_EXTRA_BODY_JSON"]').fill('{"top_k": 5}');
     // маска секрета — как значение: сервер такой ключ не трогает
-    await page.locator('.page-header-actions button:has-text("Сохранить")')
-      .first().click();
-    await page.waitForTimeout(900);
+    // кнопки «Сохранить» нет: изменённые поля уходят PUT'ом сами
+    if (await page.locator(".page-header-actions button").count())
+      problems.push("настройки: в шапке осталась кнопка сохранения");
+    await page.waitForTimeout(1200);
     if (seedDir) {
       const env = fs.readFileSync(path.join(seedDir, ".env"), "utf-8");
       const lines = env.split("\n");
@@ -994,25 +998,23 @@ async function main() {
     } else {
       log("⚠️  reasoning: внешний сервер — файл .env не проверяем");
     }
-    /* субвкладка «Внешний вид»: localStorage-карточки, полей реестра нет;
-     * «Сохранить» — та же кнопка шапки, что и на остальных вкладках */
+    /* субвкладка «Внешний вид»: localStorage-карточки, полей реестра нет и
+     * кнопок сохранения нет вовсе — предпочтения пишутся по change контрола */
     await page.locator('.tabs .tab:has-text("Внешний вид")').first().click();
     await page.waitForTimeout(400);
     const g2 = await page.evaluate(() => ({
       cards: [...document.querySelectorAll(".settings-cards .review-card-title")]
         .map((x) => x.textContent.trim()),
       fields: document.querySelectorAll(".settings-cards [name]").length,
-      save: !!(document.querySelector(".page-header-actions .btn-primary") || {})
-        .classList?.contains("hidden"),
-      look: [...document.querySelectorAll(".settings-cards .btn-primary")]
-        .some((b) => b.textContent.trim() === "Сохранить"),
+      btns: document.querySelectorAll(".page-header-actions button, .settings-cards button").length,
+      state: (document.querySelector(".settings-save-state") || {}).className || "",
     }));
     if (g2.cards.join(",") !== "Внешний вид,Интерфейс")
       problems.push(`настройки: карточки «${g2.cards.join(" | ")}»`);
     if (g2.fields) problems.push(`настройки: полей реестра на вкладке ${g2.fields}`);
-    if (g2.save) problems.push("настройки: «Сохранить» шапки скрыта на «Внешнем виде»");
-    if (g2.look)
-      problems.push("настройки: локальная кнопка «Сохранить» на «Внешнем виде»");
+    if (g2.btns) problems.push(`настройки: на странице остались кнопки (${g2.btns})`);
+    if (!/hidden/.test(g2.state))
+      problems.push(`настройки: статус конфига виден на «Внешнем виде» (${g2.state})`);
     const savedTab = seedDir ? await page.evaluate(
       () => localStorage.getItem("settingsTab") || "") : "";
     if (seedDir && savedTab !== "ui")
@@ -1176,7 +1178,7 @@ async function main() {
       return opt ? opt.textContent.trim() : "";
     });
     const status = () => page.evaluate(() => ((document
-      .querySelector(".review-status") || {}).textContent || "").trim());
+      .querySelector(".settings-save-state") || {}).textContent || "").trim());
     /* значение поля «Сервер LLM» активной карточки (name = ключ .env) */
     const fieldValue = (name) => page
       .locator(`.settings-cards [name="${name}"]`).first().inputValue();
@@ -1233,9 +1235,7 @@ async function main() {
       problems.push(`профили: секрет профиля показан не маской (${await fieldValue("API_KEY")})`);
     await page.locator('.settings-cards [name="MODEL"]').first().fill("дом-модель");
     await page.locator('.settings-cards [name="API_KEY"]').first().fill("дом-ключ");
-    await page.locator('.page-header-actions button:has-text("Сохранить")')
-      .first().click();
-    await page.waitForTimeout(900);
+    await page.waitForTimeout(1200); // автосохранение: пауза ввода + PUT
     if (seedDir) {
       let data = {};
       try {
