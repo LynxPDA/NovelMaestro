@@ -48,6 +48,55 @@ const PROJECT_TABS = [
 ];
 const SECTION = "TMP";
 const BOOK = "Probe";
+
+/* Заглушка проверки обновлений: свои сводки вместо живого GitHub. Заметки
+ * релиза GitHub пишет markdown'ом и всегда дописывает строку «Full Changelog:
+ * <ссылка>» — оставляем её в mock'е как есть, рендер проверяется на настоящем
+ * виде ответа. */
+const MOCK_RELEASE = {
+  ok: true,
+  tag: "v9.9.0",
+  version: "9.9.0",
+  name: "NovelMaestro 9.9.0",
+  url: "https://github.com/LynxPDA/NovelMaestro/releases/tag/v9.9.0",
+  published: "2026-01-01T00:00:00Z",
+  // строку «Full Changelog: <ссылка>» вырезает core/update.py: сюда заметки
+  // приходят уже чищеными, а ссылка на сравнение едет отдельным полем
+  notes: "## Что нового\n\n- **жирный** пункт описания\n- второй пункт",
+  changes: "https://github.com/LynxPDA/NovelMaestro/compare/v0.4.0...v9.9.0",
+};
+const MOCK_KIND_LABELS = {
+  docker: "Установка в Docker",
+  portable: "Портативная сборка (Windows)",
+  git: "Запуск из репозитория",
+  tree: "Копия исходников",
+};
+const MOCK_MODE_LABELS = {
+  command: "образ обновляет хост",
+  git: "из репозитория (git)",
+  zip: "файлами из архива релиза",
+};
+const MOCK_HOST_COMMAND = "docker compose pull && docker compose up -d";
+
+/* сводка обновления, как её отдаёт web/api_common.py::_update_state */
+function mockUpdate(kind = "git", mode = null, job = null) {
+  const modeOf = mode || (kind === "docker" ? "command" : kind === "git" ? "git" : "zip");
+  return {
+    kind,
+    label: MOCK_KIND_LABELS[kind],
+    mode: modeOf,
+    mode_label: MOCK_MODE_LABELS[modeOf],
+    command: modeOf === "command" ? MOCK_HOST_COMMAND : "",
+    current: "0.4.0",
+    release: MOCK_RELEASE,
+    checked: 1,
+    available: true,
+    job: job || {
+      state: "idle", kind, mode: modeOf, from: "0.4.0", to: "", note: "",
+      error: "", log: [], started: 0, finished: 0,
+    },
+  };
+}
 // раздел на кириллице: браузер хранит location.hash закодированным
 const CYR_SECTION = "Черновики";
 const CYR_BOOK = "LatinBook";
@@ -1894,6 +1943,131 @@ async function main() {
     if (dup) problems.push("карточка «Внешний вид» дублирует тему интерфейса");
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-theme.png") });
     log(`${problems.length === before ? "✅" : "❌"} тема в шапке     ${seen.join(" → ")} · текст${kept.includes("ТЕМА") ? " цел" : " потерян"}`);
+  }
+
+  /* панель «Обновления» в меню «⋮»: заметки релиза — отрендеренный markdown
+   * (литеральных «**» в тексте быть не может), ссылки релиза и сравнения
+   * версий — настоящие ссылки, Docker видит только команду хоста (кнопок
+   * обновления у него нет), а долгое обновление показывает свой лог.
+   * Живой GitHub не трогаем: ответы /api/session подменяются заглушкой */
+  {
+    const before = problems.length;
+    let mock = mockUpdate("git");
+    /* сводку подменяем и в «ход обновления»: опрос статуса пришёл бы позже и
+     * заменил бы mock настоящими данными — панель мигала бы между двумя */
+    const inject = async (route) => {
+      const res = await route.fetch();
+      let body;
+      try {
+        body = JSON.parse(await res.text());
+      } catch {
+        return route.continue();
+      }
+      body.update = mock;
+      // response передавать нельзя: с ним Playwright отдаёт исходное тело
+      return route.fulfill({
+        status: res.status(),
+        headers: { "Cache-Control": "no-store" },
+        contentType: "application/json",
+        body: JSON.stringify(body),
+      });
+    };
+    await page.route("**/api/session", inject);
+    await page.route("**/api/update/status", inject);
+    const readBox = () =>
+      page.evaluate(() => {
+        const box = document.querySelector(".user-menu .update-box");
+        if (!box) return { none: true };
+        return {
+          title: (box.querySelector(".update-title") || {}).textContent?.trim() || "",
+          text: box.textContent.replace(/\s+/g, " ").trim(),
+          bold: box.querySelectorAll(".update-notes strong").length,
+          heads: box.querySelectorAll(".update-notes h2").length,
+          links: [...box.querySelectorAll(".update-link")].map(
+            (a) => `${a.textContent.trim()}→${a.getAttribute("href")}[${a.getAttribute("target")}]`,
+          ),
+          btns: [...box.querySelectorAll("button")].map((b) => b.textContent.trim()),
+          code: (box.querySelector(".update-cmd") || {}).textContent?.trim() || "",
+          logs: [...box.querySelectorAll(".update-log")].map((x) => x.textContent.trim()),
+          badge: !!document.querySelector(".kebab-btn.has-update"),
+        };
+      });
+    /* goto по другому хэшу документ не перезагружает, а сводку обновления SPA
+     * читает один раз при загрузке — отсюда reload */
+    const openBox = async (next) => {
+      mock = next;
+      await page.goto(`${url}/#/hub`, { waitUntil: "load" });
+      await page.reload({ waitUntil: "load" });
+      await page.waitForTimeout(1200);
+      await page.locator(".menu-wrap .kebab-btn").first().click();
+      await page.waitForTimeout(400);
+      return readBox();
+    };
+
+    const git = await openBox(mockUpdate("git"));
+    if (git.none) {
+      problems.push("панель «Обновления» в меню «⋮» не найдена");
+    } else {
+      if (!/Обновления · v0\.4\.0/.test(git.title))
+        problems.push(`заголовок панели «${git.title}»`);
+      if (!git.badge) problems.push("новая версия не помечена на кнопке «⋮»");
+      if (git.text.includes("**")) problems.push("заметки релиза остались текстом со «**»");
+      if (git.text.includes("Full Changelog"))
+        problems.push("строка Full Changelog осталась в заметках");
+      if (git.bold !== 1) problems.push(`markdown заметок: <strong> ${git.bold} (ожидаем 1)`);
+      if (git.heads !== 1) problems.push(`заголовок заметок: h2 ${git.heads} (ожидаем 1)`);
+      if (!git.text.includes("второй пункт")) problems.push("описание релиза потерялось");
+      const want = [
+        `Релиз v9.9.0→${MOCK_RELEASE.url}[_blank]`,
+        `Список изменений→${MOCK_RELEASE.changes}[_blank]`,
+      ].join(" | ");
+      if (git.links.join(" | ") !== want)
+        problems.push(`ссылки панели: ${git.links.join(" | ")}`);
+      if (!git.btns.some((b) => b.includes("Обновить до v9.9.0")))
+        problems.push("в панели нет кнопки обновления");
+      if (!git.btns.some((b) => b.includes("Скачать архив")))
+        problems.push("в панели нет кнопки скачивания архива");
+      if (!git.text.includes("перемотается на релиз"))
+        problems.push("в панели не описан способ обновления");
+    }
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-git.png") });
+    log(`${problems.length === before ? "✅" : "❌"} обновления: git      ${git.none ? "нет панели" : `${git.links.length} ссылки · кнопок ${git.btns.length}`}`);
+
+    const docker = await openBox(mockUpdate("docker"));
+    const dockerBefore = problems.length;
+    if (docker.none) problems.push("панель Docker не найдена");
+    else {
+      if (docker.code !== MOCK_HOST_COMMAND)
+        problems.push(`Docker: команда хоста «${docker.code}»`);
+      if (!/образ обновляет хост/i.test(docker.text))
+        problems.push("Docker: подпись способа установки потерялась");
+      if (docker.btns.length !== 1 || !/Проверить снова/.test(docker.btns[0]))
+        problems.push(`Docker: кнопки обновления предлагаются: ${docker.btns.join(", ")}`);
+      if (docker.text.includes("**")) problems.push("Docker: заметки не отрендерены");
+    }
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-docker.png") });
+    log(`${problems.length === dockerBefore ? "✅" : "❌"} обновления: docker ${docker.none ? "нет панели" : `кнопок ${docker.btns.length} · ${docker.code}`}`);
+
+    const run = await openBox(mockUpdate("git", "git", {
+      state: "running", kind: "git", mode: "git", from: "0.4.0", to: "", note: "",
+      error: "", log: ["Обновление 0.4.0 → v9.9.0: из репозитория (git)",
+              "Ветка master: перемотка на релиз v9.9.0 (только ff-only)"],
+      started: 0, finished: 0,
+    }));
+    const runBefore = problems.length;
+    if (run.none) problems.push("панель идущего обновления не найдена");
+    else {
+      if (!/Обновляется/.test(run.text)) problems.push("идущее обновление не подписано");
+      if (run.logs.length !== 2) problems.push(`строк лога обновления: ${run.logs.length}`);
+      if (run.btns.some((b) => /Обновить до|Скачать архив/.test(b)))
+        problems.push("во время обновления остались кнопки запуска");
+    }
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-running.png") });
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    log(`${problems.length === runBefore ? "✅" : "❌"} обновления: процесс ${run.none ? "нет панели" : `строк лога ${run.logs.length}`}`);
+    await page.unroute("**/api/session");
+    await page.unroute("**/api/update/status");
   }
 
   /* правка-удаление в обзоре глоссария: своё действие в заголовке, своё

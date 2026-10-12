@@ -61,9 +61,10 @@ ROLES: tuple[dict, ...] = (
     },
     {
         "role": "история проектов (контрольные точки)",
-        "where": "web/history.py",
-        # роль обязательна для вкладки «История»: точки на формате git,
-        # а бинарника git в Docker/portable нет — чистый dulwich один
+        "where": "web/history.py (и core/update.py в git-режиме)",
+        # роль обязательна для вкладки «История» и для обновления обычной
+        # установки: точки и перемотка ветки на формате git, а бинарника git
+        # в Docker/portable нет — чистый dulwich один
         "required": True,
         "candidates": (
             {"pip": "dulwich", "module": "dulwich",

@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 from core import common
-from core import transport
+from core import update as core_update
 from web.auth import COOKIE_NAME
 from web.multipart import (
     MultipartError, extract_files, extract_value, iter_parts,
@@ -38,10 +38,21 @@ from web.version import app_version
 
 log = logging.getLogger("web")
 
-# ── проверка обновлений: кеш последнего ответа GitHub (в процессе) ──
-# Сеть ходит только по кнопке «Проверить» (POST /api/update/check); сессия
-# и интерфейс читают кеш. checked — unix-время последней успешной проверки.
+# корень кода этой копии: он же корень репо, портативной сборки и /app в образе
+_CODE_ROOT = Path(__file__).resolve().parent.parent
+
+# ── обновления: кеш последнего ответа GitHub и состояние применения ──
+# Сеть ходит только по кнопкам панели «Обновления» («Проверить», «Скачать
+# архив»); сессия и интерфейс читают кеш. checked — unix-время последней
+# успешной проверки. Применение обновления долгое (скачивание архива,
+# перемотка ветки), поэтому оно живёт в отдельном потоке: state
+# idle|running|done|error, log — строки хода. Обе структуры читает и пишет
+# разные потоки сервера, поэтому — под общим замком.
 _UPDATE_CACHE: dict = {"release": None, "checked": 0.0}
+_UPDATE_JOB: dict = {"state": "idle", "kind": "", "mode": "", "from": "",
+                     "to": "", "note": "", "error": "", "log": [],
+                     "started": 0.0, "finished": 0.0}
+_UPDATE_LOCK = threading.Lock()
 # Кеш stats без TTL: вместо времени — сигнатура состояния (mtime папок
 # глав + ner/wiki + compiled). При каждом чтении считаем сигнатуру (это
 # scandir 1 уровня, а НЕ полный обход глав) и пересчитываем проект только
@@ -297,121 +308,139 @@ def _session(ctx: dict) -> dict:
 
 
 def _update_state() -> dict:
-    """Сводка обновления для SPA: способ обновления этой установки + кеш
+    """Сводка обновления для SPA: способ установки, кеш проверки, ход обновления.
 
-    последней проверки. Сеть НЕ ходит (сессию спрашивают часто): свежий
-    релиз подтягивает POST /api/update/check. Форма установки:
-    docker (образ из ghcr), portable (Windows-сборка из zip), git (репозиторий).
+    Сеть НЕ ходит (сессию спрашивают часто): свежий релиз подтягивает
+    POST /api/update/check. Способ установки определяет, что рисует
+    интерфейс: `mode` command — Docker, только команда хоста; git — обычная
+    установка, кнопка обновления через git; zip — портативная сборка и копия
+    исходников, кнопка обновления архивом релиза.
     """
-    kind = _install_kind()
+    kind = core_update.install_kind(_CODE_ROOT)
+    mode = core_update.update_mode(kind)
     cached = _UPDATE_CACHE["release"]
-    if cached and common.update_available(app_version(), cached):
-        note = "Доступна новая версия"
-    elif cached:
-        note = ""
-    else:
-        note = ""
+    with _UPDATE_LOCK:
+        job = dict(_UPDATE_JOB, log=list(_UPDATE_JOB["log"]))
     return {
         "kind": kind,
+        "label": core_update.KIND_LABELS.get(kind, kind),
+        "mode": mode,
+        "mode_label": core_update.MODE_LABELS.get(mode, ""),
+        "command": core_update.HOST_COMMAND if mode == core_update.MODE_COMMAND
+        else "",
         "current": app_version(),
         "release": cached,
         "checked": _UPDATE_CACHE["checked"],
-        "available": bool(cached) and common.update_available(
+        "available": bool(cached) and core_update.update_available(
             app_version(), cached),
-        "note": note,
+        "job": job,
     }
-
-
-def _install_kind() -> str:
-    """Как установлена эта копия: docker | portable | git (см. _kind_at)."""
-    return _kind_at(Path(__file__).resolve().parent.parent)
-
-
-def _kind_at(root: Path) -> str:
-    """Способ установки по маркерам в корне кода.
-
-    docker — маркер-файл .docker, который создаёт Dockerfile (/app/.docker);
-    portable — START.txt, который кладёт упаковщик портативной сборки;
-    иначе — запуск из git-репозитория.
-    """
-    if (root / ".docker").exists():
-        return "docker"
-    if (root / "START.txt").exists():
-        return "portable"
-    return "git"
 
 
 def _update_check(ctx: dict) -> dict:
     """Проверить обновление сейчас (POST /api/update/check).
 
     Один короткий запрос к GitHub Releases; результат кешируется в
-    процессe — сессия отдаёт его без сети. Недоступная сеть — не ошибка
+    процессе — сессия отдаёт его без сети. Недоступная сеть — не ошибка
     запроса: вердикт «сейчас не проверить» в ответе.
     """
-    release = common.latest_release()
-    if release.get("ok"):
+    release = core_update.latest_release()
+    if not release.get("ok"):
+        # сеть лежит — это вердикт, а не ошибка запроса: кеш не трогается
+        return {"ok": False, "error": release.get("error") or "Сеть недоступна"}
+    with _UPDATE_LOCK:
         _UPDATE_CACHE["release"] = release
         _UPDATE_CACHE["checked"] = time.time()
-        return {"ok": True, "update": _update_state()}
-    return {"ok": False, "error": release.get("error") or "Сеть недоступна"}
+    return {"ok": True, "update": _update_state()}
+
+
+def _update_apply(ctx: dict) -> dict:
+    """Начать обновление (POST /api/update/apply): оно идёт в отдельном потоке.
+
+    Скачивание архива и `git pull` долгие, поэтому ответ приходит сразу, а
+    ход читает GET /api/update/status. Запуск один: второй поток правил бы
+    те же файлы. Docker — отказ: контейнер не заменяет собственный образ.
+    """
+    kind = core_update.install_kind(_CODE_ROOT)
+    if core_update.update_mode(kind) == core_update.MODE_COMMAND:
+        raise ApiError(400, core_update.host_command_hint())
+    release = _UPDATE_CACHE["release"]
+    if not release or not release.get("tag"):
+        raise ApiError(400, "Обновление ещё не проверялось — нажмите «Проверить»")
+    if not core_update.update_available(app_version(), release):
+        raise ApiError(400, "Обновления нет: у вас последняя версия")
+    with _UPDATE_LOCK:
+        if _UPDATE_JOB["state"] == "running":
+            raise ApiError(409, "Обновление уже идёт — дождитесь его конца")
+        _UPDATE_JOB.update({
+            "state": "running", "kind": kind,
+            "mode": core_update.update_mode(kind), "from": app_version(),
+            "to": "", "note": "", "error": "", "log": [],
+            "started": time.time(), "finished": 0.0})
+    threading.Thread(target=_update_worker, args=(kind, release["tag"]),
+                     name="nm-update", daemon=True).start()
+    return {"ok": True, "update": _update_state()}
+
+
+def _update_status(ctx: dict) -> dict:
+    """Ход обновления (GET /api/update/status): состояние и лог потока."""
+    return {"ok": True, "update": _update_state()}
+
+
+def _update_finish(state: str, *, error: str = "", to: str = "",
+                   note: str = "") -> None:
+    """Итог потока обновления: done или error (SPA рисует по нему панель)."""
+    with _UPDATE_LOCK:
+        _UPDATE_JOB.update({"state": state, "error": error, "to": to,
+                            "note": note, "finished": time.time()})
+
+
+def _update_worker(kind: str, tag: str) -> None:
+    """Поток применения обновления: логичит шаги и пишет итог в _UPDATE_JOB.
+
+    Код на диске меняется целиком, а процесс до перезапуска работает старый —
+    поэтому итог обязан называть новую версию и говорить про перезапуск.
+    """
+    def _log(line: str) -> None:
+        with _UPDATE_LOCK:
+            _UPDATE_JOB["log"].append(line)
+    try:
+        res = core_update.apply_update(_CODE_ROOT, tag, kind=kind, log=_log)
+    except core_update.UpdateError as exc:
+        _update_finish("error", error=str(exc))
+        log.warning("обновление не применено: %s", exc)
+        return
+    except Exception as exc:  # noqa: BLE001 — обновление не роняет сервер
+        _update_finish("error", error=f"Обновление прервано: {exc}")
+        log.exception("обновление прервано")
+        return
+    _update_finish("done", to=res.get("to") or tag, note=res.get("note") or "")
+    log.info("обновление применено: %s → %s (перезапустите сервер)",
+             res.get("from") or "?", res.get("to") or tag)
 
 
 def _update_download(ctx: dict) -> dict:
-    """Страница обновления (GET /api/update/download): для портативной
+    """Архив релиза (GET /api/update/download): zip портативной сборки как
 
-    сборки и git-установки — свежий zip релиза как attachment; для Docker
-    обновление идёт через реестр образов (400 с объяснением).
+    attachment — «Скачать архив» в панели «Обновления»; Docker — 400 с
+    командой хоста (см. host_command_hint).
     """
-    kind = _install_kind()
-    if kind == "docker":
-        raise ApiError(
-            400,
-            "Установка в Docker обновляется образом: выполните на хосте "
-            "«docker compose pull && docker compose up -d»")
+    if core_update.update_mode(core_update.install_kind(_CODE_ROOT)) \
+            == core_update.MODE_COMMAND:
+        raise ApiError(400, core_update.host_command_hint())
     release = _UPDATE_CACHE["release"]
     if not release or not release.get("tag"):
         raise ApiError(400, "Обновление ещё не проверялось — нажмите «Проверить»")
     tag = release["tag"]
-    data = _download_release_asset(tag)
-    name = f"novelmaestro-portable-{tag[1:] if tag.startswith('v') else tag}.zip"
+    try:
+        data = core_update.download_asset(core_update.release_asset_url(tag))
+    except core_update.UpdateError as exc:
+        raise ApiError(404, str(exc)) from exc
+    name = f"{core_update.ASSET_PREFIX}{release['version']}.zip"
     ctx["handler"]._send(
         200, "application/zip", data,
         [("Content-Disposition", f'attachment; filename="{name}"')])
     return {}  # ответ уже отправлен
-
-
-def _download_release_asset(tag: str) -> bytes:
-    """Ассет портативной сборки релиза (zip) — GET по API релиза.
-
-    Имя ассета публикует воркфлоу windows.yml
-    (novelmaestro-portable-<версия>.zip); зеркало — прямая ссылка
-    «Downloads» страницы релиза. Без ключа: репозиторий публичный.
-    """
-    assets_url = f"https://api.github.com/repos/{common.GITHUB_REPO}/releases/tags/{tag}"
-    data = transport.open_json_get(
-        assets_url, timeout=common.UPDATE_CHECK_TIMEOUT)
-    for asset in data.get("assets") or []:
-        name = str(asset.get("name") or "")
-        if name.startswith("novelmaestro-portable-") and name.endswith(".zip"):
-            url = str(asset.get("browser_download_url") or "")
-            if not url:
-                break
-            return _download_bytes(url)
-    raise ApiError(404, f"В релизе {tag} нет архива портативной сборки")
-
-
-def _download_bytes(url: str) -> bytes:
-    """Бинарный GET (zip релиза): общий транспорт, follow — GitHub отдаёт
-    ассет редиректом на свой CDN; тело — `iter_bytes()` (сырое: переводы
-    строк zip не трогаются), таймаут щедрее проверки, но конечный."""
-    status, body = 0, b""
-    with transport.open_get(url, timeout=120.0,
-                            follow_redirects=True) as resp:
-        status = resp.status_code
-        body = b"".join(resp.iter_bytes())
-    if status != 200:
-        raise ApiError(502, f"GitHub отдал HTTP {status} на скачивание")
-    return body
 
 
 def _login(ctx: dict) -> dict:

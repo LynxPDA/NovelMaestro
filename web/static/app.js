@@ -2223,23 +2223,96 @@ function themeSwitch() {
 
 /* ── обновления: проверка релиза и обновление по кнопке ───
 
-   Способ обновления зависит от установки (update.kind с сервера):
-   • docker — образ из реестра: интерфейс показывает команду
-     «docker compose pull && docker compose up -d»;
-   • portable / git — zip релиза: скачивание кнопкой, дальше
-     перенос projects/ и .env в новую сборку (портативка) или
-     просто запуск скачанной версии.
+   Способ обновления зависит от установки (update.mode с сервера, core/update.py):
+   • command (Docker) — контейнер не заменяет собственный образ: интерфейс
+     показывает команду, её выполняет хост;
+   • git (обычная установка) — перемотка своей ветки через dulwich: данные книг,
+     шаблоны и .env в .gitignore, обновление их не видит;
+   • zip (портативная сборка и копия исходников) — файлы архива релиза
+     кладутся поверх текущих, ничего не удаляется, данные не тронуты.
 
-   Проверка — POST /api/update/check (один GET к GitHub Releases,
-   кеш в процессе сервера); сессия отдаёт сводку без сети. Пока
-   обновления не проверялись — тихо; после проверки и появления
-   нового релиза — точка-бейдж на меню «⋮». */
+   Заметки релиза приходят markdown'ом (GitHub сам пишет «**Full Changelog**:
+   …»), поэтому их рендерит marked: текст с «**» внутри панели выглядит
+   испорченным, а ссылку на сравнение версий нужно нажать. Ссылки на релиз и
+   на сравнение интерфейс показывает отдельными ссылками.
+
+   Проверка — POST /api/update/check (один GET к GitHub Releases, кеш в
+   процессе сервера); сессия отдаёт сводку без сети. Пока обновления не
+   проверялись — тихо; после проверки и появления нового релиза — точка-бейдж
+   на меню «⋮». Долгое обновление идёт в отдельном потоке сервера, его ход
+   читает GET /api/update/status. */
 const UPDATE_POLL_MS = 6 * 60 * 60 * 1000; // фоновая перепроверка раз в 6 ч
+const UPDATE_JOB_MS = 1500;                // ход обновления, пока он идёт
 let updatePollTimer = null;
+let updateJobTimer = null;
+/* чем перезапустить сервер после обновления (код на диске новый, процесс — нет) */
+const UPDATE_RESTART_HINT = {
+  portable: "Закройте окно сервера и запустите start.bat заново.",
+  git: "Остановите сервер и запустите его заново: python3 run.py",
+  tree: "Остановите сервер и запустите его заново: python3 run.py",
+};
 
 function updateBadgeShow(on) {
   const btn = document.querySelector(".menu-wrap .kebab-btn");
   if (btn) btn.classList.toggle("has-update", !!on);
+}
+
+/* Панель «⋮» собирается один раз за рендер, а ход обновления меняется между
+   рендерами: узел заменяется целиком, состояние живёт в state.update. */
+function refreshUpdateBox() {
+  const old = document.querySelector(".user-menu .update-box");
+  if (old) old.replaceWith(updateMenuItem());
+}
+
+function updateDate(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(d);
+}
+
+/* Одна ссылка панели (страница релиза, сравнение версий): наружу и без
+   window.opener — клик не должен уводить SPA из этой вкладки */
+function updateLink(href, label) {
+  return h("a", {
+    class: "update-link",
+    href,
+    target: "_blank",
+    rel: "noopener noreferrer",
+  }, label);
+}
+
+/* Заметки релиза — отрендеренный markdown, а не текст со звёздочками: тот же
+   marked и та же очистка, что у справки; голые ссылки marked красит сам. */
+function updateNotes(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  if (!window.marked) return h("div", { class: "update-notes" }, raw);
+  const html = window.marked.parse(raw, {
+    mangle: false,
+    headerIds: false,
+    breaks: true,
+  });
+  const frag = document.createRange().createContextualFragment(html);
+  _helpSanitize(frag);
+  // markdown-блоки (заголовки, списки) красит общий md-body — в панели компактно
+  const box = h("div", { class: "update-notes md-body" });
+  box.append(frag);
+  box.querySelectorAll("a[href]").forEach((a) => {
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+  });
+  return box;
+}
+
+function updateCheckBtn(label) {
+  return h("button", {
+    class: "btn btn-sm btn-ghost update-btn",
+    onclick: () => checkUpdates(true),
+  }, label);
 }
 
 async function checkUpdates(showToast) {
@@ -2247,13 +2320,14 @@ async function checkUpdates(showToast) {
   try {
     const r = await api("/update/check", { method: "POST" });
     state.update = r.update || state.update;
-    const has = Boolean(state.update && state.update.available);
-    updateBadgeShow(has);
+    updateBadgeShow(!!(state.update && state.update.available));
     if (showToast) {
-      toast(has
+      toast(state.update && state.update.available
         ? `Доступна новая версия: v${state.update.release.version}`
         : "Обновлений нет — у вас последняя версия");
     }
+    if (state.update && state.update.job && state.update.job.state === "running")
+      updateJobPoll();
   } catch (ex) {
     if (showToast) toast(`Обновление не проверить: ${ex.message}`, "err");
   }
@@ -2264,80 +2338,143 @@ function ensureUpdatePolling() {
   updatePollTimer = setInterval(() => checkUpdates(false), UPDATE_POLL_MS);
 }
 
-/* Пункт меню «⋮»: строка состояния + кнопки проверки/обновления.
+/* Ход обновления: поток сервера пишет лог, здесь он только показан. Опрос
+   живёт, пока состояние running, и гаснет на последнем ответе. */
+function updateJobPoll() {
+  if (updateJobTimer) return;
+  updateJobTimer = setInterval(async () => {
+    let job = { state: "error", error: "нет ответа" };
+    try {
+      const r = await api("/update/status");
+      state.update = r.update || state.update;
+      job = (state.update && state.update.job) || job;
+    } catch (ex) {
+      if (state.update) state.update.job = job;
+    }
+    refreshUpdateBox();
+    if (job.state === "running") return;
+    clearInterval(updateJobTimer);
+    updateJobTimer = null;
+    toast(job.state === "done"
+      ? `Программа обновлена до v${job.to || "?"} — перезапустите сервер`
+      : `Обновление не применено: ${job.error || "неизвестная причина"}`,
+      job.state === "done" ? "ok" : "err");
+  }, UPDATE_JOB_MS);
+}
+
+async function updateApply() {
+  try {
+    const r = await api("/update/apply", { method: "POST" });
+    state.update = r.update || state.update;
+    toast("Обновление началось");
+  } catch (ex) {
+    toast(ex.message, "err");
+  }
+  refreshUpdateBox();
+  updateJobPoll();
+}
+
+/* Архив релиза кнопкой: fetch (в window.open нет Content-Disposition),
+   имя файла — имя ассета релиза. */
+async function updateDownload(version) {
+  try {
+    const res = await fetch("/api/update/download",
+      { headers: { "X-Requested-With": "fetch" } });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error((data && data.error) || `Ошибка ${res.status}`);
+    }
+    const blob = await res.blob();
+    const a = h("a", {
+      href: URL.createObjectURL(blob),
+      download: `novelmaestro-portable-${version || "?"}.zip`,
+    });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    toast("Архив новой версии скачан");
+  } catch (ex) {
+    toast(ex.message, "err");
+  }
+}
+
+/* что делает обновление этой установки; для Docker здесь же команда хоста */
+function updateHowBox(u) {
+  if (u.mode === "command") {
+    const box = h("div", { class: "update-how" },
+      "Образ обновляет хост — контейнер сам себя не заменит. Команда на хосте:",
+      h("code", { class: "update-cmd" },
+        u.command || "docker compose pull && docker compose up -d"));
+    return box;
+  }
+  return h("div", { class: "update-how" }, u.mode === "git"
+    ? "Код перемотается на релиз из репозитория: книги, шаблоны и настройки не изменятся."
+    : "Файлы программы заменятся из архива релиза: папки projects, templates, "
+      + "логи и файл .env не изменятся.");
+}
+
+/* Пункт меню «⋮»: способ установки, результат проверки, кнопки.
    Вызывается при каждой сборке layout — рисует по state.update. */
 function updateMenuItem() {
   const u = state.update || {};
   const rel = u.release || {};
-  const kindTitle = {
-    docker: "Docker-образ",
-    portable: "Портативная сборка (Windows)",
-    git: "Запуск из репозитория",
-  }[u.kind] || u.kind || "";
+  const job = u.job || {};
   const box = h("div", { class: "update-box" });
   box.append(h("div", { class: "update-title" },
     `Обновления · v${u.current || state.version || "?"}`));
-  if (u.checked) {
-    if (u.available) {
-      box.append(h("div", { class: "update-state update-new" },
-        `Доступна v${rel.version}${rel.name && rel.name !== rel.tag ? ` — ${rel.name}` : ""}`));
-      if (rel.notes) {
-        box.append(h("div", { class: "update-notes" }, rel.notes));
-      }
-      if (u.kind === "docker") {
-        box.append(h("div", { class: "update-how" },
-          "Docker обновляется образом: на хосте — ",
-          h("code", { class: "update-cmd" },
-            "docker compose pull && docker compose up -d")));
-      } else {
-        box.append(h("div", { class: "update-how" },
-          u.kind === "portable"
-            ? "Скачается zip новой сборки; папки projects/ и .env переносятся в неё как при установке."
-            : "Скачается zip сборки; данные в projects/ не трогаются."));
-        box.append(h("button", {
-          class: "btn btn-sm btn-primary update-btn",
-          onclick: async () => {
-            try {
-              // сначала через fetch (нет Content-Disposition в window.open)
-              const res = await fetch("/api/update/download",
-                { headers: { "X-Requested-With": "fetch" } });
-              if (!res.ok) {
-                const data = await res.json().catch(() => null);
-                throw new Error((data && data.error) || `Ошибка ${res.status}`);
-              }
-              const blob = await res.blob();
-              const a = h("a", {
-                href: URL.createObjectURL(blob),
-                download: `novelmaestro-portable-${rel.version}.zip`,
-              });
-              document.body.append(a);
-              a.click();
-              a.remove();
-              setTimeout(() => URL.revokeObjectURL(a.href), 30000);
-              toast("Архив новой версии скачан");
-            } catch (ex) {
-              toast(ex.message, "err");
-            }
-          },
-        }, "Скачать обновление"));
-      }
-    } else {
-      box.append(h("div", { class: "update-state" },
-        "У вас последняя версия"));
-    }
-    box.append(h("button", {
-      class: "btn btn-sm btn-ghost update-btn",
-      onclick: () => checkUpdates(true),
-    }, `Проверить снова${rel.url ? "" : ""}`));
-  } else {
+  if (!u.checked) {
     box.append(h("div", { class: "update-state" },
-      kindTitle ? `Установка: ${kindTitle}. Обновление не проверялось.`
-                : "Обновление не проверялось."));
-    box.append(h("button", {
-      class: "btn btn-sm btn-ghost update-btn",
-      onclick: () => checkUpdates(true),
-    }, "Проверить обновления"));
+      u.label ? `${u.label}. Обновление не проверялось.`
+              : "Обновление не проверялось."));
+    box.append(updateCheckBtn("Проверить обновления"));
+    return box;
   }
+  if (job.state === "running") {
+    box.append(h("div", { class: "update-state update-new" },
+      `Обновляется: ${u.mode_label || ""}`));
+    (job.log || []).slice(-6).forEach((line) =>
+      box.append(h("div", { class: "update-log" }, line)));
+    return box;
+  }
+  if (job.state === "done") {
+    box.append(h("div", { class: "update-state update-new" },
+      `Программа обновлена до v${job.to || "?"}`));
+    box.append(h("div", { class: "update-how" },
+      UPDATE_RESTART_HINT[u.kind] || "Перезапустите сервер."));
+  } else if (job.state === "error") {
+    box.append(h("div", { class: "update-state update-new" },
+      "Обновление не применено"));
+  } else if (u.available) {
+    const date = updateDate(rel.published);
+    box.append(h("div", { class: "update-state update-new" },
+      `Доступна v${rel.version}${date ? ` от ${date}` : ""}`));
+    const notes = updateNotes(rel.notes);
+    if (notes) box.append(notes);
+    box.append(updateHowBox(u));
+    // Docker: кнопки обновления не предлагаются — образ меняет хост
+    if (u.mode !== "command") {
+      box.append(h("button", {
+        class: "btn btn-sm btn-primary update-btn",
+        onclick: () => updateApply(),
+      }, `Обновить до v${rel.version}`));
+      box.append(h("button", {
+        class: "btn btn-sm btn-ghost update-btn",
+        onclick: () => updateDownload(rel.version),
+      }, "Скачать архив"));
+    }
+  } else {
+    box.append(h("div", { class: "update-state" }, "У вас последняя версия"));
+  }
+  if (job.state === "error" && job.error)
+    box.append(h("div", { class: "update-log" }, job.error));
+  if (job.state === "done" && job.note)
+    box.append(h("div", { class: "update-log" }, job.note));
+  const links = [];
+  if (rel.url) links.push(updateLink(rel.url, `Релиз v${rel.version}`));
+  if (rel.changes) links.push(updateLink(rel.changes, "Список изменений"));
+  if (links.length) box.append(h("div", { class: "update-links" }, ...links));
+  box.append(updateCheckBtn("Проверить снова"));
   return box;
 }
 
@@ -2378,6 +2515,10 @@ function layout(content) {
     ],
     "Меню пользователя",
   );
+  // точка-бейдж новой версии ставится сразу при сборке кнопки: отдельный
+  // рендер (например, приход данных проекта) иначе стирал бы её
+  if (state.update && state.update.available)
+    userMenu.querySelector(".kebab-btn").classList.add("has-update");
   // версия сборки — из /api/session (едет с CHANGELOG.md при релизе);
   // жила в футере сайдбара — после его сноса переехала в меню «⋮»
   const ver = h(
@@ -3491,6 +3632,9 @@ async function boot() {
   if (state.auth) {
     ensureUpdatePolling();
     if (state.update && state.update.available) updateBadgeShow(true);
+    // обновление могло начаться в другой вкладке: его ход досчитываем отсюда
+    if (state.update && state.update.job && state.update.job.state === "running")
+      updateJobPoll();
   }
 }
 

@@ -357,18 +357,63 @@ body {
   color: var(--accent);
   font-weight: 600;
 }
+/* заметки релиза — отрендеренный markdown (тот же md-body, только компактнее) */
 .update-notes {
   font-size: 12px;
   color: var(--muted);
-  margin-bottom: 4px;
-  max-height: 90px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+  max-height: 140px;
   overflow: auto;
-  white-space: pre-wrap;
+}
+.update-notes > :first-child {
+  margin-top: 0;
+}
+.update-notes > :last-child {
+  margin-bottom: 0;
+}
+/* заголовок релиза в панели — строка, а не заголовок страницы; селектор
+   тяжелее, чем у общих .md-body h2 ниже, иначе справка перетянет панель на себя */
+.update-notes.md-body :is(h1, h2, h3, h4) {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 0.3em 0;
+  padding: 0;
+  border: none;
+}
+.update-notes.md-body :is(ul, ol) {
+  margin: 0.3em 0;
+  padding-left: 1.3em;
+}
+.update-notes.md-body img {
+  max-width: 100%;
 }
 .update-how {
   font-size: 12px;
   color: var(--muted);
   margin-bottom: 6px;
+}
+/* ход обновления: строки лога потока сервера */
+.update-log {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 2px;
+  white-space: pre-wrap;
+}
+/* ссылки релиза: страница релиза и сравнение версий */
+.update-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin-bottom: 6px;
+}
+.update-link {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .update-cmd {
   display: block;

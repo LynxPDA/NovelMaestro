@@ -4,7 +4,8 @@
 
 Страховка от рассинхрона: имена функций в таблице §6 AGENTS.md обязаны
 существовать в core/common.py, core/projects.py, core/transport.py,
-core/deps.py и упоминаться в самом файле; пути в backticks (cli/, web/,
+core/deps.py, core/settings.py, core/search.py, core/update.py и упоминаться в
+самом файле; пути в backticks (cli/, web/,
 tests/, *.md, run.py) — существовать. Добавил функцию в таблицу §6 —
 добавь её и сюда (CORE_API/PROJECTS_API/TRANSPORT_API/DEPS_API).
 Запуск: python3 -m pytest tests/ -q"""
@@ -22,6 +23,7 @@ from core import projects as PRJ  # noqa: E402
 from core import search as SRCH  # noqa: E402
 from core import settings as SET  # noqa: E402
 from core import transport as T  # noqa: E402
+from core import update as UPD  # noqa: E402
 
 AGENTS_MD = ROOT / "AGENTS.md"
 
@@ -84,6 +86,12 @@ SETTINGS_API = ["Setting", "Block", "Group", "GROUPS", "SETTINGS", "BY_KEY",
                 "sanitize", "file_values", "layered_values", "effective",
                 "display_value", "block_payload", "write_values",
                 "groups_payload", "profile_defaults"]
+# Зеркало API core/update.py (способ установки и обновление программы)
+UPDATE_API = ["UpdateError", "PROTECTED_PATHS", "PROTECTED_DIRS", "install_kind",
+              "update_mode", "installed_version", "version_tuple",
+              "update_available", "release_notes", "latest_release",
+              "release_asset_url", "download_asset", "is_protected",
+              "host_command_hint", "apply_update"]
 # Зеркало API core/search.py (поиск по текстам книги)
 SEARCH_API = ["SearchGroup", "SEARCH_GROUPS", "GROUP_IDS", "GROUP_LABELS",
               "CLUSTERS", "CLUSTER_LABELS", "DEFAULT_SCOPES", "MAX_CONTEXT",
@@ -122,19 +130,22 @@ def test_core_api_mentioned_in_agents_md(name):
 
 
 @pytest.mark.parametrize(
-    "name", TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API)
+    "name", TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API + UPDATE_API)
 def test_transport_deps_api_exists_in_code(name):
-    """API транспорта, зависимостей, реестра настроек и поиска существует."""
+    """API транспорта, зависимостей, реестра настроек, поиска и обновлений
+    существует."""
     module = (T if name in TRANSPORT_API
               else D if name in DEPS_API
-              else SET if name in SETTINGS_API else SRCH)
+              else SET if name in SETTINGS_API
+              else SRCH if name in SEARCH_API else UPD)
     assert hasattr(module, name), f"{module.__name__}.{name} исчезла"
 
 
 @pytest.mark.parametrize(
-    "name", TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API)
+    "name", TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API + UPDATE_API)
 def test_transport_deps_api_mentioned_in_agents_md(name):
-    """Строки §6 полные: имена транспорта, зависимостей, настроек и поиска на месте."""
+    """Строки §6 полные: имена транспорта, зависимостей, настроек, поиска и
+    обновлений на месте."""
     assert re.search(rf"\b{name}\b", _agents_text()), \
         f"{name} не упоминается в AGENTS.md — таблица §6 устарела"
 

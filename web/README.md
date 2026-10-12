@@ -86,8 +86,10 @@ python3 web/main.py --host 0.0.0.0 --auth   # доступ с LAN + токен
 
 | Метод | Путь | Назначение |
 | --- | --- | --- |
-| GET/POST | `/api/session`, `/api/login`, `/api/logout` | сессия, вход по токену; `session` несёт `version` — версия сборки (источник: `web/version.py` → `VERSION` в корне репо, обновляется при релизе) и `update` — сводка обновлений (kind/current/release/available; кеш в процессе, сеть не тратится) |
-| POST/GET | `/api/update/check`, `/api/update/download` | проверка GitHub Releases (вердикт в теле, сеть не ломает запрос) и скачивание portable-zip релиза (docker — 400 с командой compose pull) |
+| GET/POST | `/api/session`, `/api/login`, `/api/logout` | сессия, вход по токену; `session` несёт `version` — версия сборки (источник: `web/version.py` → `VERSION` в корне репо, обновляется при релизе) и `update` — сводку обновлений (`kind`/`label`, `mode`/`mode_label`, `command`, `current`, `release`, `checked`, `available`, `job`; кеш в процессе, сеть не тратится) |
+| POST/GET | `/api/update/check`, `/api/update/status` | проверка GitHub Releases (один короткий GET, вердикт в теле, сеть не ломает запрос; кеш держит процесс) и ход фонового обновления (состояние и лог потока) |
+| POST | `/api/update/apply` | начать обновление этой копии: docker — 400 с командой хоста, без проверки релиза и при последней версии — 400, идущее обновление — 409; иначе поток сервера применяет обновление (git — ff-only перемотка, portable/tree — файлы архива релиза поверх), ответ приходит сразу |
+| GET | `/api/update/download` | portable-zip релиза как attachment (второй, ручной путь; docker — 400 с командой compose pull) |
 | GET | `/api/dashboard`, `/api/state`, `/api/sections`, `/api/projects` | дашборд (`running_jobs` — все активные; `recent_jobs` — до 20), hub |
 | POST | `/api/projects` (создание) | + move/rename/copy/delete; move/rename переписывают project/cwd в журнале запусков — история следует за проектом |
 | GET | `/api/projects/{s}/{n}/tree`, `/api/stats` | главы+артефакты (размеры артефактов — СИМВОЛЫ, не байты; бюджет translate_quality считается в ТОКЕНАХ (оценка)), статистика (артефакты включают легаси `*_перевод/редактура/полировка`) |
