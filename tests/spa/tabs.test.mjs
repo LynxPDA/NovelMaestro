@@ -243,7 +243,21 @@ async function api(path, opts = {}) {
       dirs: globalThis.__dirs || [],
     };
   }
-  if (p === "/history") return globalThis.__history || { checkpoints: [] };
+  /* история точек: как на сервере — страница points + total всех точек;
+     mock уважает offset и размер страницы из __historyPage */
+  if (p === "/history") {
+    const all = globalThis.__history || [];
+    const q = new URLSearchParams(path.split("?")[1] || "");
+    const from = Number(q.get("offset") || 0);
+    const size = globalThis.__historyPage || all.length;
+    return { checkpoints: all.slice(from, from + size), total: all.length };
+  }
+  if (p === "/history/diff") {
+    return globalThis.__historyDiff || { files: [], total_files: 0 };
+  }
+  if (p === "/history/patch") {
+    return globalThis.__historyPatch || { patch: "", adds: 0, dels: 0 };
+  }
   if (p === "/file") return { content: "", missing: true, exists: false, size: 0 };
   if (p === "/ner") return globalThis.__ner || { items: [], too_large: false };
   if (p === "/check") return { reports: [] };
@@ -963,15 +977,34 @@ test("файлы: копировать из панели — POST /file/copy, в
   assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
 });
 
-/* ── «История»: выделение точек для сравнения между собой ────── */
+/* ── «История»: точки, страницы и сравнение выбранной пары ───── */
 const HISTORY_SEED = [
   { sha: "aaa", time: 30, label: "Точка 3", kind: "manual" },
   { sha: "bbb", time: 20, label: "Правка глоссария", kind: "apply" },
   { sha: "ccc", time: 10, label: "Первая точка", kind: "manual" },
 ];
+/* страница diff — как её отдаёт сервер: порция файлов + total_files всех;
+   у удалённого файла строки не считаются (None — «много») */
+const HISTORY_DIFF = {
+  files: [
+    { path: "ner.json", status: "M", adds: 2, dels: 1 },
+    { path: "chapters/00000_1_Глава 1/polished.txt", status: "A",
+      adds: null, dels: null },
+    { path: "chapters/00000_2_Глава 2/polished.txt", status: "D",
+      adds: null, dels: null },
+  ],
+  total_files: 4,
+};
+const HISTORY_PATCH = {
+  path: "ner.json", adds: 2, dels: 1,
+  patch: "--- a/ner.json\n+++ b/ner.json\n@@ -1,2 +1,3 @@\n-старый термин\n+новый термин",
+};
 
-async function historyPage() {
-  globalThis.__history = { checkpoints: HISTORY_SEED };
+async function historyPage(pageSize) {
+  globalThis.__history = HISTORY_SEED;
+  globalThis.__historyPage = pageSize || HISTORY_SEED.length;
+  globalThis.__historyDiff = HISTORY_DIFF;
+  globalThis.__historyPatch = HISTORY_PATCH;
   globalThis.__calls = [];
   globalThis.__gets = [];
   globalThis.document.body.children.length = 0;
@@ -990,78 +1023,153 @@ function selTips(page) {
     .map((b) => b.getAttribute("aria-label"));
 }
 
-test("история: строка — чекбокс, сравнение с предыдущей и возврат", async () => {
-  const page = await historyPage();
-  const rows = findByClass(page, "history-row");
-  assert.equal(rows.length, 3);
-  assert.deepEqual(tips(rows[1]),
-    ["Сравнить с предыдущей точкой", "Вернуть файлы проекта к этой точке"]);
-});
+/* открытая модалка сравнения (последняя из висящих на body) */
+function diffModal() {
+  return globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+}
 
-test("история: две выбранные точки — кнопка «Сравнить выбранные точки»", async () => {
-  const page = await historyPage();
-  const bar = findByClass(page, "files-sel")[0];
-  assert.equal(bar.classList.contains("hidden"), true, "без выделки панели нет");
-  const cb1 = historyCheckbox(page, 1);
-  cb1.checked = true;
-  await cb1._listeners.change[0]();
-  await tick();
-  assert.equal(bar.classList.contains("hidden"), false);
-  assert.equal(collectText(findByClass(bar, "files-sel-count")[0]).join(""),
-    "выделено: 1");
-  // одна точка ещё не сравнивается сама с собой
-  assert.deepEqual(selTips(page), ["Снять выделение"]);
-  const cb2 = historyCheckbox(page, 2);
-  cb2.checked = true;
-  await cb2._listeners.change[0]();
-  await tick();
-  assert.deepEqual(selTips(page),
-    ["Сравнить выбранные точки", "Снять выделение"]);
-});
+test("история: строка точки — чекбокс и «вернуть», своей кнопки сравнения нет",
+  async () => {
+    const page = await historyPage();
+    const rows = findByClass(page, "history-row");
+    assert.equal(rows.length, 3);
+    /* «сравнить с предыдущей» из строки убрано: у самой старой точки
+       предыдущей точки нет — сравнение живёт в панели выделения */
+    assert.deepEqual(tips(rows[1]), ["Вернуть файлы проекта к этой точке"]);
+  });
 
-test("история: третья точка не выбирается — сравнивается пара", async () => {
+test("история: список догружается страницами, счётчик — про все точки",
+  async () => {
+    const page = await historyPage(2);
+    assert.equal(findByClass(page, "history-row").length, 2, "первая страница");
+    const head = collectText(findByClass(page, "history-heading")[0]).join("");
+    assert.equal(head, "Контрольные точки · 3", "в шапке — все точки");
+    const pager = findByClass(page, "history-more")[0];
+    assert.equal(pager.classList.contains("hidden"), false, "есть ещё страницы");
+    assert.equal(collectText(pager).join(""), "Показать ещё (осталось 1)");
+    await pager._listeners.click[0]();
+    await tick();
+    assert.equal(findByClass(page, "history-row").length, 3, "вторая страница");
+    assert.equal(findByClass(page, "history-more")[0]
+      .classList.contains("hidden"), true, "последняя страница");
+  });
+
+test("история: одна точка не сравнивается, панель без текста «null»",
+  async () => {
+    const page = await historyPage();
+    const bar = findByClass(page, "files-sel")[0];
+    assert.equal(bar.classList.contains("hidden"), true, "без выделки панели нет");
+    const cb = historyCheckbox(page, 1);
+    cb.checked = true;
+    await cb._listeners.change[0]();
+    await tick();
+    assert.equal(bar.classList.contains("hidden"), false);
+    /* null в replaceChildren браузер превращает в текст «null» — панель
+       читалась бы «выделено: 1null» */
+    assert.equal(collectText(bar).join(""), "выделено: 1",
+      "в панели нет текста «null»");
+    assert.deepEqual(selTips(page), ["Снять выделение"]);
+  });
+
+test("история: третья точка снимает самую ранее выбранную", async () => {
   const page = await historyPage();
   for (const i of [1, 2]) {
     const cb = historyCheckbox(page, i);
     cb.checked = true;
     await cb._listeners.change[0]();
+    await tick();
   }
-  await tick();
   const cb0 = historyCheckbox(page, 0);
   cb0.checked = true;
   await cb0._listeners.change[0]();
   await tick();
-  // гасится самая старая из выбранных — в выделке остаются верхние две
-  assert.equal(
-    collectText(findByClass(page, "files-sel-count")[0]).join(""),
+  assert.equal(collectText(findByClass(page, "files-sel-count")[0]).join(""),
     "выделено: 2");
+  const on = findByClass(page, "history-row")
+    .map((r, i) => (historyCheckbox(page, i).checked ? i : -1))
+    .filter((i) => i >= 0);
+  /* выбор — это порядок кликов: снята bbb (выбиралась первой), остались
+     ccc (второй клик) и aaa (третий) */
+  assert.deepEqual(on, [0, 2], "в выделке последний клик и предыдущий");
 });
 
-test("история: «Сравнить выбранные точки» — дифф от старой к новой", async () => {
-  const page = await historyPage();
-  for (const i of [1, 2]) {
-    const cb = historyCheckbox(page, i);
-    cb.checked = true;
-    await cb._listeners.change[0]();
-  }
-  await tick();
-  const cmp = findByClass(page, "files-sel")[0]
-    .querySelectorAll("button")[0];
-  assert.equal(cmp.getAttribute("aria-label"), "Сравнить выбранные точки");
-  await cmp._listeners.click[0]();
-  await tick();
-  const call = globalThis.__gets.find((c) => c.path === "/history/diff");
-  assert.ok(call, "GET /api/history/diff ушёл");
-  // выделены bbb и ccc, ccc старее: from — старая, to — новая
-  assert.equal(call.query, "project=ACTIVE%2F%D0%9A%D0%BD%D0%B8%D0%B3%D0%B0&from=ccc&to=bbb");
-  const backdrop = globalThis.document.body.children
-    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
-    .slice(-1)[0];
-  assert.ok(backdrop, "модалка сравнения открылась");
-  const head = collectText(backdrop).join("");
-  assert.ok(head.includes("Первая точка") || head.includes("bbb"),
-    "в шапке — метки точек");
-});
+test("история: «Сравнить выбранные точки» — дифф от старой к новой",
+  async () => {
+    const page = await historyPage();
+    for (const i of [1, 2]) {
+      const cb = historyCheckbox(page, i);
+      cb.checked = true;
+      await cb._listeners.change[0]();
+      await tick();
+    }
+    const cmp = findByClass(page, "files-sel")[0]
+      .querySelectorAll("button")[0];
+    assert.equal(cmp.getAttribute("aria-label"), "Сравнить выбранные точки");
+    await cmp._listeners.click[0]();
+    await tick();
+    const call = globalThis.__gets.find((c) => c.path === "/history/diff");
+    assert.ok(call, "GET /api/history/diff ушёл");
+    /* выделены bbb и ccc, ccc старее: from — старая точка, to — новая;
+       SPA страницу не просит — сервер отдаёт свою (DIFF_MAX_FILES) */
+    assert.equal(call.query,
+      "project=ACTIVE%2F%D0%9A%D0%BD%D0%B8%D0%B3%D0%B0&from=ccc&to=bbb"
+      + "&offset=0");
+    const modal = diffModal();
+    assert.ok(modal, "модалка сравнения открылась");
+    const head = collectText(modal).join("");
+    assert.ok(head.includes("С: Первая точка") && head.includes("По: Правка"),
+      "в шапке — метки точек по порядку истории");
+    assert.ok(head.includes("изменённых файлов: 4"), "шапка — ещё и счётчик");
+    const rowsEl = findByClass(modal, "history-diff-files")[0];
+    assert.equal(findByClass(rowsEl, "history-diff-file").length, 3,
+      "список файлов сравнения не пуст");
+    const text = collectText(rowsEl).join(" ");
+    assert.ok(text.includes("ner.json") && text.includes("+2 −1"),
+      "изменённый файл — с числами строк");
+    /* у большого файла и у удаления строки не считаются: вместо чисел —
+       «много» у добавленного и пустая строка у удалённого */
+    assert.ok(text.includes("добавлен") && text.includes("много"),
+      "большой файл — «много» вместо чисел");
+    assert.ok(text.includes("удалён"), "удалённый файл подписан");
+  });
+
+test("история: «Показать ещё» догружает файлы под кнопку, дифф файла — один раз",
+  async () => {
+    const page = await historyPage();
+    for (const i of [0, 1]) {
+      const cb = historyCheckbox(page, i);
+      cb.checked = true;
+      await cb._listeners.change[0]();
+      await tick();
+    }
+    const cmp = findByClass(page, "files-sel")[0]
+      .querySelectorAll("button")[0];
+    await cmp._listeners.click[0]();
+    await tick();
+    const modal = diffModal();
+    const more = findByClass(modal, "history-more")[0];
+    assert.equal(collectText(more).join(""), "Показать ещё (осталось 1)");
+    await more._listeners.click[0]();
+    await tick();
+    const rows = findByClass(findByClass(modal, "history-diff-files")[0],
+      "history-diff-file");
+    assert.equal(rows.length, 6, "порция догружена под кнопку");
+    assert.equal(findByClass(modal, "history-more")[0]
+      .classList.contains("hidden"), true, "файлы кончились");
+    /* клик по строке файла — unified-diff; повторный клик не переспрашивает */
+    const summary = findTag(rows[0], "summary")[0];
+    await summary._listeners.click[0]();
+    await tick();
+    await summary._listeners.click[0]();
+    await tick();
+    const patches = globalThis.__gets.filter((c) => c.path === "/history/patch");
+    assert.equal(patches.length, 1, "дифф файла догружен один раз");
+    assert.ok(patches[0].query.includes("path=ner.json"), "дифф по пути файла");
+    const patch = findByClass(rows[0], "history-patch")[0];
+    assert.ok(findTag(patch, "span").length, "строки диффа раскрашены");
+  });
 
 test("история: «Снять выделение» чистит чекбоксы и прячет панель", async () => {
   const page = await historyPage();

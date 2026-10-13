@@ -4043,20 +4043,29 @@ function viewProject(section, name, tab, job) {
      правок проверок и после успешных запусков (переключатели в
      «Настройках» приложения). Восстановление к точке НЕ стирает
      последующие: текущее состояние фиксируется точкой «Возврат к …»,
-     а файлы приводятся к выбранной точке. Дифф — таблицей файлов
-     (статус A/M/D и +/- строк), по клику — разворачивается текст
-     изменений. Источник данных — /api/history. */
+     а файлы приводятся к выбранной точке. Сравнить можно любую пару
+     точек: чекбоксы в строках включают панель выделения, «Сравнить»
+     открывает таблицу файлов (статус A/M/D и +/- строк), клик по
+     строке разворачивает текст изменений. Источник данных —
+     /api/history. */
   async function historyView() {
     const wrap = h("div", { class: "files-wrap history-wrap" });
     const err = h("div", { class: "form-error" });
     const list = h("div", { class: "history-list" });
+    const EMPTY_HINT =
+      "Точек пока нет. Создайте первую кнопкой выше — снимок состояния " +
+      "файлов «ner.json» и глав; «tmp/» и «logs/» в точки не попадают. " +
+      "Автоматические точки (перед применением правок и после запусков) " +
+      "включаются в «Настройках» приложения.";
     const KIND_LABELS = {
       manual: "вручную",
       run: "запуск",
       apply: "применение правок",
       restore: "возврат",
     };
-    let items = []; // [{sha,time,label,kind}]
+    let items = []; // [{sha,time,label,kind}] — от свежей к старой
+    let total = 0; // точек всего: список отдаётся страницами
+    const picked = []; // sha выбранных точек — не больше двух
 
     function kindBadge(kind) {
       return h(
@@ -4072,16 +4081,26 @@ function viewProject(section, name, tab, job) {
       return rel ? `${rel} · ${abs}` : abs;
     }
 
-    /* модалка сравнения двух точек: слева таблица файлов, клик — дифф */
+    /* запрос истории точек: общее — проект и пара sha; у diff добавляется
+       offset страницы, у диффа файла — его путь */
+    function historyQuery(cFrom, cTo, extra) {
+      const q = new URLSearchParams({
+        project: `${section}/${name}`,
+        from: cFrom.sha,
+        to: cTo.sha,
+      });
+      for (const k of Object.keys(extra || {})) q.set(k, String(extra[k]));
+      return q;
+    }
+
+    /* модалка сравнения двух точек: таблица файлов, клик по строке —
+       текст изменений. Кнопка «Показать ещё» стоит ПОСЛЕ списка:
+       догруженные строки вставляются под неё, а не поверх неё */
     async function diffModal(cFrom, cTo) {
       let data;
       try {
         data = await api(
-          `/history/diff?${new URLSearchParams({
-            project: `${section}/${name}`,
-            from: cFrom.sha,
-            to: cTo.sha,
-          })}`,
+          `/history/diff?${historyQuery(cFrom, cTo, { offset: 0 })}`,
         );
       } catch (ex) {
         err.textContent = ex.message;
@@ -4098,14 +4117,12 @@ function viewProject(section, name, tab, job) {
         return `+${f.adds ?? 0}${f.dels ? ` −${f.dels}` : ""}`;
       };
       const rowsEl = h("div", { class: "history-diff-files" });
-      /* список файлов догружается порциями (DIFF_MAX_FILES): кнопка
-         «Показать ещё» подгружает следующие файлы тем же запросом */
-      const params = (offset) => new URLSearchParams({
-        project: `${section}/${name}`,
-        from: cFrom.sha,
-        to: cTo.sha,
-        offset: String(offset),
+      const errEl = h("div", { class: "form-error hidden" });
+      const moreBtn = h("button", {
+        class: "btn btn-sm btn-ghost history-more hidden",
       });
+      let loaded = 0;
+      let files = 0;
       const fileRow = (f) => {
         const [stLabel, stClass] = STATUSES[f.status] || [f.status, ""];
         const summary = h(
@@ -4124,21 +4141,15 @@ function viewProject(section, name, tab, job) {
           if (body.dataset.loaded) return;
           try {
             const r = await api(
-              `/history/patch?${new URLSearchParams({
-                project: `${section}/${name}`,
-                from: cFrom.sha,
-                to: cTo.sha,
-                path: f.path,
-              })}`,
+              `/history/patch?${historyQuery(cFrom, cTo, { path: f.path })}`,
             );
             /* дифф — раскрашенный блок строк (спаны с классом строки):
                рендер мгновенный, цвет строки несёт +/− */
-            const text = String(r.patch || "");
             const line = (cls, s) =>
               h("span", { class: cls },
                 h("span", { class: "history-diff-marker" }, s.charAt(0)),
                 s.slice(1) || " ");
-            const lines = text.split("\n").map((ln) => {
+            const lines = String(r.patch || "").split("\n").map((ln) => {
               if (ln.startsWith("+") && !ln.startsWith("+++"))
                 return line("history-line-ins", ln);
               if (ln.startsWith("-") && !ln.startsWith("---"))
@@ -4147,56 +4158,63 @@ function viewProject(section, name, tab, job) {
                 return h("span", { class: "history-line-hunk" }, ln);
               return h("span", { class: "history-line-ctx" }, ln || " ");
             });
-            body.replaceChildren(
-              h("pre", { class: "history-patch" }, ...lines));
+            body.replaceChildren(h("pre", { class: "history-patch" }, ...lines));
+            /* метка — только об успешной загрузке: неудачу клик по строке
+               обязан переспросить, а не оставить в окне текст ошибки */
+            body.dataset.loaded = "1";
           } catch (ex) {
             body.replaceChildren(h("div", { class: "form-error" }, ex.message));
           }
-          body.dataset.loaded = "1";
         });
         return h("details", { class: "history-diff-file" }, summary, body);
       };
-      let loaded = 0;
-      let moreBtn = null;
-      const addFiles = (files) => {
-        for (const f of files) rowsEl.append(fileRow(f));
-        loaded += (files || []).length;
+      const addFiles = (batch) => {
+        rowsEl.append(...(batch || []).map(fileRow));
+        loaded += (batch || []).length;
+      };
+      /* кнопка догрузки живёт только пока есть следующие файлы; пустой
+         список — одна подсказка, без кнопки */
+      const paintMore = () => {
+        moreBtn.disabled = false;
+        moreBtn.classList.toggle("hidden", !(loaded > 0 && files > loaded));
+        moreBtn.textContent = `Показать ещё (осталось ${files - loaded})`;
       };
       addFiles(data.files || []);
+      files = data.total_files || loaded;
       if (!loaded) {
         rowsEl.append(h("div", { class: "card-hint" },
           "Между этими точками изменений файлов нет"));
-      } else if ((data.total_files || 0) > loaded) {
-        const remain = () => (data.total_files || 0) - loaded;
-        moreBtn = h("button", { class: "btn btn-ghost" },
-          `Показать ещё (осталось ${remain()})`);
-        moreBtn.addEventListener("click", async () => {
-          moreBtn.disabled = true;
-          moreBtn.textContent = "Загрузка…";
-          try {
-            const r = await api(`/history/diff?${params(loaded)}`);
-            addFiles(r.files || []);
-            if ((r.total_files || 0) > loaded) {
-              moreBtn.disabled = false;
-              moreBtn.textContent = `Показать ещё (осталось ${remain()})`;
-            } else {
-              moreBtn.remove();
-            }
-          } catch (ex) {
-            moreBtn.disabled = false;
-            moreBtn.textContent = ex.message;
-          }
-        });
-        rowsEl.append(moreBtn);
       }
+      paintMore();
+      moreBtn.addEventListener("click", async () => {
+        moreBtn.disabled = true;
+        errEl.textContent = "";
+        errEl.classList.add("hidden");
+        try {
+          const r = await api(
+            `/history/diff?${historyQuery(cFrom, cTo, { offset: loaded })}`,
+          );
+          addFiles(r.files || []);
+          files = r.total_files || files;
+        } catch (ex) {
+          /* ошибка — отдельной строкой: кнопка не должна превращаться
+             в текст ошибки и терять свою подпись */
+          errEl.textContent = ex.message;
+          errEl.classList.remove("hidden");
+        }
+        paintMore();
+      });
       UIC.modal({
         title: "Изменения между точками",
         wide: true,
         build: (close) => [
           h("div", { class: "modal-text history-diff-head" },
             h("div", {}, `С: ${cFrom.label} · ${whenText(cFrom)}`),
-            h("div", {}, `По: ${cTo.label} · ${whenText(cTo)}`)),
+            h("div", {}, `По: ${cTo.label} · ${whenText(cTo)}`),
+            h("div", {}, `изменённых файлов: ${files}`)),
           rowsEl,
+          errEl,
+          moreBtn,
           h("div", { class: "modal-actions" },
             h("button", { class: "btn btn-ghost", onclick: () => close() },
               "Закрыть")),
@@ -4223,10 +4241,14 @@ function viewProject(section, name, tab, job) {
                 onclick: () => close() }, "Отмена"),
               h("button", { class: "btn btn-primary", onclick: async () => {
                 try {
-                  await api("/history/restore", { method: "POST",
+                  const r = await api("/history/restore", { method: "POST",
                     body: { project: `${section}/${name}`, sha: c.sha } });
-                  toast("Возврат выполнен — создана точка «Возврат к…»");
                   close();
+                  /* файлы уже равны точке — новой точки не было: врать
+                     про неё в тосте не за что */
+                  toast(r && r.created
+                    ? "Возврат выполнен — создана точка «Возврат к…»"
+                    : "Файлы уже соответствуют точке — новая точка не создана");
                   await load();
                 } catch (ex) {
                   errM.textContent = ex.message;
@@ -4237,75 +4259,99 @@ function viewProject(section, name, tab, job) {
       });
     }
 
-    /* выделение точек для сравнения (максимум две): чекбокс в строке —
-       как на «Файлах»; кнопка «Сравнить» в панели выделения сравнивает
-       выбранные между собой, а не только с предыдущей */
-    const picked = new Set(); // sha выбранных точек
+    /* выделение точек (максимум две): чекбокс в строке — как на «Файлах»;
+       «Сравнить» в панели выделения сравнивает выбранные между собой */
     const selBar = h("div", { class: "files-sel hidden" });
+    const pager = h("button", {
+      class: "btn btn-sm btn-ghost history-more hidden",
+    });
+    const heading = h("span", { class: "history-heading" },
+      "Контрольные точки");
+
+    /* выбранная пара в порядке истории: items лежит от свежей к старой,
+       значит старше та, у которой индекс больше — сравнение всегда идёт
+       «от старой к новой», иначе статусы файлов переворачивались бы */
+    function comparePair() {
+      if (picked.length !== 2) return null;
+      const at = (sha) => items.findIndex((c) => c.sha === sha);
+      const a = at(picked[0]);
+      const b = at(picked[1]);
+      if (a < 0 || b < 0) return null;
+      return a > b ? [items[a], items[b]] : [items[b], items[a]];
+    }
+
+    /* вертушка на время сбора диффа: большая книга считается заметно
+       дольше малого проекта — окно не должно выглядеть зависшим */
+    const compareBtn = iconBtn("compare", "Сравнить выбранные точки",
+      async () => {
+        if (compareBtn.classList.contains("busy")) return;
+        const pair = comparePair();
+        if (!pair) {
+          picked.length = 0;
+          paintRows();
+          paintSel();
+          toast("Выбранные точки больше не в списке — выделение снято", "err");
+          return;
+        }
+        compareBtn.classList.add("busy");
+        try {
+          await diffModal(pair[0], pair[1]);
+        } finally {
+          compareBtn.classList.remove("busy");
+        }
+      });
+    const clearBtn = iconBtn("close", "Снять выделение", () => {
+      picked.length = 0;
+      paintRows();
+      paintSel();
+    });
 
     function paintSel() {
-      selBar.classList.toggle("hidden", picked.size === 0);
-      if (!picked.size) return;
-      const pair = [...picked];
+      selBar.classList.toggle("hidden", picked.length === 0);
+      if (!picked.length) return;
+      /* null в replaceChildren браузер превращает в текст «null»: панель
+         выделения читалась бы «выделено: 1null» — лишние узлы режем */
       selBar.replaceChildren(
-        h("span", { class: "files-sel-count" }, `выделено: ${picked.size}`),
-        /* сравнивать можно только пару: кнопка появляется на двух точках */
-        pair.length === 2
-          ? iconBtn("compare", "Сравнить выбранные точки", () => {
-            /* picked хранится от свежей к старой — diff идёт от старой */
-            const bySha = (s) => items.find((c) => c.sha === s);
-            diffModal(bySha(pair[1]), bySha(pair[0]));
-          })
-          : null,
-        iconBtn("close", "Снять выделение", () => {
-          picked.clear();
-          load();
-        }),
+        ...[
+          h("span", { class: "files-sel-count" }, `выделено: ${picked.length}`),
+          comparePair() ? compareBtn : null,
+          clearBtn,
+        ].filter((x) => x != null),
       );
     }
 
-    function row(c, idx) {
-      /* строка точки: маркер-линия, метка+вид, время, действия */
-      const cmp = iconBtn("compare", "Сравнить с предыдущей точкой",
-        async () => {
-          /* вертушка на время сбора диффа: большая книга считается
-             заметно дольше малого проекта — окно не должно выглядеть
-             как зависшее */
-          if (cmp.classList.contains("busy")) return;
-          cmp.classList.add("busy");
-          try {
-            await diffModal(items[idx + 1] || c, c);
-          } finally {
-            cmp.classList.remove("busy");
-          }
-        });
-      const restoreBtn = iconBtn("refresh", "Вернуть файлы проекта к этой точке",
-        () => restoreModal(c));
+    /* строка точки: чекбокс выделения, маркер-линия, метка+вид, время и
+       «вернуть». Своей кнопки «сравнить» у строки нет: у самой старой
+       точки предыдущей точки нет вовсе, а «сравнить с предыдущей» —
+       только частный случай пары, которую выбирают чекбоксами */
+    function row(c) {
+      const on = picked.includes(c.sha);
+      const restoreBtn = iconBtn("refresh",
+        "Вернуть файлы проекта к этой точке", () => restoreModal(c));
       const cb = h("input", {
         type: "checkbox",
         class: "fsel",
-        checked: picked.has(c.sha),
+        checked: on,
         "aria-label": `Выбрать точку «${c.label}» для сравнения`,
       });
       attachTooltip(cb, `Выбрать точку «${c.label}» для сравнения`);
       cb.addEventListener("change", () => {
-        if (cb.checked) {
-          if (picked.size >= 2) {
-            /* третья точка не выбирается: сравнивать можно пару — гасим
-               самую старую из выбранных (как в Confluence: лимит выбора) */
-            const old = [...picked].pop();
-            picked.delete(old);
-          }
-          picked.add(c.sha);
-        } else {
-          picked.delete(c.sha);
+        const i = picked.indexOf(c.sha);
+        if (cb.checked && i < 0) {
+          /* третьей точки не будет: снимается самая ранее выбранная —
+             выбор это порядок кликов, а не возраст точек */
+          if (picked.length >= 2) picked.shift();
+          picked.push(c.sha);
+        } else if (!cb.checked && i >= 0) {
+          picked.splice(i, 1);
         }
+        /* перерисовка из кэша: чекбокс не должен за собой тянуть сеть */
+        paintRows();
         paintSel();
-        load();
       });
       return h(
         "div",
-        { class: "history-row" + (picked.has(c.sha) ? " frow-sel" : "") },
+        { class: "history-row" + (on ? " frow-sel" : "") },
         cb,
         h("div", { class: "history-marker" }),
         h(
@@ -4316,30 +4362,49 @@ function viewProject(section, name, tab, job) {
             kindBadge(c.kind)),
           h("div", { class: "history-time" }, whenText(c)),
         ),
-        h("div", { class: "history-actions" }, cmp, restoreBtn),
+        h("div", { class: "history-actions" }, restoreBtn),
       );
     }
 
-    async function load() {
-      try {
-        const r = await api(
-          `/history?${new URLSearchParams({ project: `${section}/${name}` })}`,
-        );
-        items = r.checkpoints || [];
-      } catch (ex) {
-        list.replaceChildren(h("div", { class: "card-hint" }, ex.message));
-        return;
-      }
+    /* список и шапка рисуются вместе: «Контрольные точки · N» — это ВСЕ
+       точки, а не та страница, что ниже */
+    function paintRows(message) {
       if (!items.length) {
-        list.replaceChildren(
-          h("div", { class: "card-hint" },
-            "Точек пока нет. Создайте первую кнопкой выше — снимок состояния файлов «ner.json» и глав; «tmp/» и «logs/» в точки не попадают. Автоматические точки (перед применением правок и после запусков) включаются в «Настройках» приложения."));
+        list.replaceChildren(h("div", { class: "card-hint" },
+          message || EMPTY_HINT));
+        pager.classList.add("hidden");
+        heading.textContent = "Контрольные точки";
         return;
       }
-      /* items — от свежей к старой; рисуем сверху вниз (свежая сверху) */
-      list.replaceChildren(...items.map((c, i) => row(c, i)));
+      list.replaceChildren(...items.map((c) => row(c)));
+      pager.classList.toggle("hidden", items.length >= total);
+      pager.disabled = false;
+      pager.textContent = `Показать ещё (осталось ${total - items.length})`;
+      heading.textContent = `Контрольные точки · ${total}`;
+    }
+
+    async function load(offset) {
+      err.textContent = "";
+      const q = new URLSearchParams({
+        project: `${section}/${name}`,
+        offset: String(offset || 0),
+      });
+      try {
+        const r = await api(`/history?${q}`);
+        const batch = r.checkpoints || [];
+        items = offset ? items.concat(batch) : batch;
+        total = r.total || items.length;
+        paintRows();
+      } catch (ex) {
+        /* первую страницу показываем текстом, ошибку догрузки — тостом:
+           список из-за неё не должен пустеть */
+        if (offset) toast(ex.message, "err");
+        else { items = []; total = 0; paintRows(ex.message); }
+      }
       paintSel();
     }
+
+    pager.addEventListener("click", () => load(items.length));
 
     const newBtn = h(
       "button",
@@ -4393,17 +4458,17 @@ function viewProject(section, name, tab, job) {
       });
     });
 
-    /* тулбар: заголовок слева, кнопка справа; пояснение — одна строка help
-       под шапкой (не «простыня» над списком) */
+    /* тулбар: заголовок со счётчиком слева, кнопка справа; пояснение —
+       одна строка help под шапкой (не «простыня» над списком) */
     const toolbar = h(
       "div",
       { class: "files-toolbar history-toolbar" },
-      h("span", { class: "history-heading" }, "Контрольные точки"),
+      heading,
       h("span", { class: "spacer" }),
       selBar,
       newBtn,
     );
-    wrap.append(toolbar, err, list);
+    wrap.append(toolbar, err, list, pager);
     await load();
     return wrap;
   }

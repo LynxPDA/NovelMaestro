@@ -3075,6 +3075,11 @@ body[data-editor-theme="light"] .editor-area {
   display: flex;
   flex-direction: column;
 }
+/* «Показать ещё» — одна кнопка под списком точек и под таблицей файлов:
+   контейнеры — flex-колонки, без этого кнопка растягивается на всю ширину */
+.history-more {
+  align-self: flex-start;
+}
 /* строка точки: маркер-линия слева — визуальная «ось времени» */
 .history-row {
   display: flex;
