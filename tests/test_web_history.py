@@ -21,6 +21,15 @@ def _make_project(tmp_path, files: dict):
     return tmp_path
 
 
+def _flat(project, sha: str) -> set[str]:
+    """Пути файлов точки плоско — чем и проверяем, что в точку попали
+    только книги, а не рабочие файлы."""
+    from dulwich.repo import Repo
+    repo = Repo(str(project))
+    flat = hs._flat_tree(repo, repo[bytes.fromhex(sha)].tree)
+    return {p.decode("utf-8", "replace") for p in flat}
+
+
 def _dump(project):
     out = {}
     for rel in ("ner.json", "chapters/1/chapter.txt"):
@@ -241,6 +250,35 @@ def test_diff_files_capped(tmp_path, monkeypatch):
     assert len(d3["files"]) == 5
 
 
+def test_diff_empty_limit_is_one_page(tmp_path):
+    """limit=0 (и None) — ОДНА СТРАНИЦА, а не пустой список: API передаёт
+    int из query и без параметра получал 0 — сравнение любой пары точек
+    возвращало пустой список («изменений файлов нет»)."""
+    _seed_three(tmp_path)
+    data = hs.checkpoints(tmp_path)
+    c_from, c_to = data["checkpoints"][1], data["checkpoints"][0]
+    # между «Правка глоссария» и «Правка главы» — одна новая глава
+    full = hs.diff(tmp_path, c_from["sha"], c_to["sha"])
+    assert len(full["files"]) == full["total_files"] == 1
+    assert len(hs.diff(tmp_path, c_from["sha"], c_to["sha"], limit=0)["files"]) == 1
+    assert hs.diff(tmp_path, c_from["sha"], c_to["sha"], limit=-5)["files"]
+    # offset за концом списка — пусто, total при этом прежний
+    tail = hs.diff(tmp_path, c_from["sha"], c_to["sha"], offset=99)
+    assert tail["files"] == [] and tail["total_files"] == 1
+
+
+def test_checkpoints_page_size(tmp_path):
+    """Список точек так же отдаётся страницами: без limit и с limit=0 —
+    страница, total — все точки."""
+    _seed_three(tmp_path)
+    data = hs.checkpoints(tmp_path, limit=0)
+    assert len(data["checkpoints"]) == 3 and data["total"] == 3
+    page = hs.checkpoints(tmp_path, limit=2)
+    assert [c["label"] for c in page["checkpoints"]] == \
+        ["Правка главы", "Правка глоссария"]
+    assert page["total"] == 3
+
+
 def test_diff_unknown_sha(tmp_path):
     hs.create(tmp_path, "Начало")
     with pytest.raises(hs.HistoryError):
@@ -248,7 +286,7 @@ def test_diff_unknown_sha(tmp_path):
                 ["checkpoints"][0]["sha"])
 
 
-def test_patch_and_file_content(tmp_path):
+def test_patch_between_points(tmp_path):
     _make_project(tmp_path, {"ner.json": "старый текст\n"})
     hs.create(tmp_path, "Начало")
     (tmp_path / "ner.json").write_text("новый текст\n", encoding="utf-8")
@@ -258,8 +296,6 @@ def test_patch_and_file_content(tmp_path):
     assert "-старый текст" in p["patch"]
     assert "+новый текст" in p["patch"]
     assert (p["adds"], p["dels"]) == (1, 1)
-    old = hs.file_content(tmp_path, c_from["sha"], "ner.json")
-    assert old == "старый текст\n".encode("utf-8")
     with pytest.raises(hs.HistoryError):
         hs.patch(tmp_path, c_from["sha"], c_to["sha"], "нет/такого.txt")
 
@@ -291,11 +327,9 @@ def test_excluded_dirs_not_tracked(tmp_path):
     top = hs.checkpoints(tmp_path)["checkpoints"][0]["sha"]
     d = hs.diff(tmp_path, top, top)
     assert d["files"] == []  # сравнение с самим собой пусто — ok
-    # но и в самой точке только chapter.txt
-    content = hs.file_content(tmp_path, top, "chapters/1/chapter.txt")
-    assert content == "Глава 1".encode("utf-8")
-    with pytest.raises(hs.HistoryError):
-        hs.file_content(tmp_path, top, "tmp/ner_review.json")
+    # но и в самой точке только chapter.txt: содержимое рабочего файла
+    # в историю не попадает (shared.env — общий конфиг тестов)
+    assert _flat(tmp_path, top) - {"shared.env"} == {"chapters/1/chapter.txt"}
 
 
 # ── сообщения точек ───────────────────────────────────────────────

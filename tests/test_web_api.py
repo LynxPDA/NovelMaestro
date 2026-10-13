@@ -1990,7 +1990,7 @@ def test_batch_replace_preview_deletion_and_errors(srv_ctx):
                                "replacements": "a -> b"})
     assert res3.status == 404
     # глава без файла нужного типа — 404
-    d2 = _br_chapter(pdir, num=2, folder="Глава_2")
+    _br_chapter(pdir, num=2, folder="Глава_2")
     res4, payload4 = _request(port, "POST", url,
                               {**base, "chapter": 2,
                                "replacements": "a -> b"})
@@ -2111,3 +2111,165 @@ def _projects_root_of(srv_ctx):
     """projects_root из фикстуры srv_ctx (3-й элемент кортежа)."""
     _, _, projects_root = srv_ctx()
     return projects_root
+
+
+# ════════════════════════════════════════════════════════════════════
+# история проекта: контрольные точки (web/history.py через API)
+# ════════════════════════════════════════════════════════════════════
+
+HISTORY_BOOK = "hist_book"
+
+
+def _hp(name: str = HISTORY_BOOK) -> str:
+    """query-параметр project: имена разделов и книг URL-безопасны."""
+    return "project=" + quote(f"ACTIVE/{name}", safe="/")
+
+
+def _history_project(port, projects_root, name: str = HISTORY_BOOK) -> Path:
+    """Проект с глоссарием и двумя главами — на нём и проверяются точки."""
+    pdir = projects_root / "ACTIVE" / name
+    for n in ("1_Глава 1", "2_Глава 2"):
+        ch = pdir / "chapters" / f"00000_{n}"
+        ch.mkdir(parents=True)
+        (ch / "chapter.txt").write_text(f"Глава {n[-1]}\n", encoding="utf-8")
+    (pdir / "ner.json").write_text("[]\n", encoding="utf-8")
+    return pdir
+
+
+def test_history_points_page_and_total(srv_ctx):
+    """Список точек отдаётся страницами: total — все точки, не страница."""
+    from web import history as hs
+    _, port, projects_root = srv_ctx()
+    pdir = _history_project(port, projects_root)
+    for i in range(3):
+        (pdir / "ner.json").write_text(f"[{i}]\n", encoding="utf-8")
+        hs.create(pdir, f"Точка {i}")
+    res, payload = _request(port, "GET", f"/api/history?{_hp()}")
+    assert res.status == 200, payload
+    assert payload["total"] == 3, "total — всё, что есть, а не страница"
+    assert [c["label"] for c in payload["checkpoints"]] == \
+        ["Точка 2", "Точка 1", "Точка 0"], "от свежей к старой"
+    assert all(len(c["sha"]) == 40 for c in payload["checkpoints"])
+    res, payload = _request(port, "GET",
+                            f"/api/history?{_hp()}&offset=2&limit=2")
+    assert [c["label"] for c in payload["checkpoints"]] == ["Точка 0"]
+    assert payload["total"] == 3
+    res, _ = _request(port, "GET", f"/api/history?{_hp()}&limit=x")
+    assert res.status == 400, "limit/offset — числа"
+
+
+def test_history_points_empty_and_missing(srv_ctx):
+    """У проекта без истории — пустой список; проекта нет — 404."""
+    _, port, projects_root = srv_ctx()
+    (projects_root / "ACTIVE" / "no_history").mkdir(parents=True)
+    res, payload = _request(port, "GET", f"/api/history?{_hp('no_history')}")
+    assert res.status == 200 and payload == {"checkpoints": [], "total": 0}
+    res, _ = _request(port, "GET", f"/api/history?{_hp('нет_такой')}")
+    assert res.status == 404
+
+
+def test_history_diff_without_limit_lists_files(srv_ctx):
+    """GET /api/history/diff без limit — ОДНА СТРАНИЦА файлов.
+
+    Регресс: API подставлял limit=0, страница выходила пустой, и вкладка
+    «История» писала «между этими точками изменений файлов нет» на любой
+    паре точек — сравнение не работало вовсе.
+    """
+    from web import history as hs
+    _, port, projects_root = srv_ctx()
+    pdir = _history_project(port, projects_root)
+    hs.create(pdir, "Начало")
+    (pdir / "chapters" / "00000_1_Глава 1" / "chapter.txt").write_text(
+        "Глава 1 — правка\n", encoding="utf-8")
+    (pdir / "notes.md").write_text("заметка\n", encoding="utf-8")
+    hs.create(pdir, "Правка главы")
+    cps = hs.checkpoints(pdir)["checkpoints"]
+    res, payload = _request(port, "GET",
+                            f"/api/history/diff?{_hp()}&from={cps[1]['sha']}&to={cps[0]['sha']}")
+    assert res.status == 200, payload
+    assert payload["total_files"] == 2, "изменены глава и заметка"
+    assert len(payload["files"]) == 2, "без limit отдаётся вся страница"
+    assert {f["path"] for f in payload["files"]} == \
+        {"chapters/00000_1_Глава 1/chapter.txt", "notes.md"}
+    assert {f["status"] for f in payload["files"]} == {"M", "A"}
+    # страница короче списка — вторая порция продолжает его
+    res, payload = _request(port, "GET",
+                            f"/api/history/diff?{_hp()}&from={cps[1]['sha']}&to={cps[0]['sha']}"
+                            "&offset=1&limit=1")
+    assert len(payload["files"]) == 1 and payload["total_files"] == 2
+    # нет пары точек — 400; точки нет — 400 человеческим текстом
+    res, _ = _request(port, "GET", f"/api/history/diff?{_hp()}")
+    assert res.status == 400
+    res, payload = _request(port, "GET",
+                            f"/api/history/diff?{_hp()}&from={'0' * 40}&to={cps[0]['sha']}")
+    assert res.status == 400 and "не найдена" in payload["error"]
+
+
+def test_history_patch_file(srv_ctx):
+    """GET /api/history/patch — unified-diff одного файла."""
+    from web import history as hs
+    _, port, projects_root = srv_ctx()
+    pdir = _history_project(port, projects_root)
+    hs.create(pdir, "Начало")
+    (pdir / "chapters" / "00000_1_Глава 1" / "chapter.txt").write_text(
+        "Глава 1 — правка\n", encoding="utf-8")
+    hs.create(pdir, "Правка")
+    cps = hs.checkpoints(pdir)["checkpoints"]
+    res, payload = _request(port, "GET",
+                            f"/api/history/patch?{_hp()}&from={cps[1]['sha']}&to={cps[0]['sha']}"
+                            "&path="
+                            + quote("chapters/00000_1_Глава 1/chapter.txt",
+                                    safe="/"))
+    assert res.status == 200, payload
+    assert "-Глава 1" in payload["patch"] and "+Глава 1 — правка" in payload["patch"]
+    assert (payload["adds"], payload["dels"]) == (1, 1)
+    # файла в паре точек нет — 400
+    res, _ = _request(port, "GET",
+                      f"/api/history/patch?{_hp()}&from={cps[1]['sha']}&to={cps[0]['sha']}&path=ner.json")
+    assert res.status == 400
+
+
+def test_history_create_and_restore(srv_ctx):
+    """Точка без изменений не создаётся; возврат фиксирует текущее состояние."""
+    _, port, projects_root = srv_ctx()
+    _history_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/history",
+                            {"project": f"ACTIVE/{HISTORY_BOOK}", "label": " "})
+    assert res.status == 400, "пустой label — 400"
+    res, payload = _request(port, "POST", "/api/history",
+                            {"project": f"ACTIVE/{HISTORY_BOOK}", "label": "Первая"})
+    assert res.status == 200 and payload["created"] is True
+    first = payload["sha"]
+    res, payload = _request(port, "POST", "/api/history",
+                            {"project": f"ACTIVE/{HISTORY_BOOK}", "label": "Пусто"})
+    assert payload["created"] is False, "без изменений точки нет"
+    (projects_root / "ACTIVE" / HISTORY_BOOK / "notes.md").write_text(
+        "заметка\n", encoding="utf-8")
+    res, payload = _request(port, "POST", "/api/history",
+                            {"project": f"ACTIVE/{HISTORY_BOOK}", "label": "С заметкой"})
+    assert payload["created"] is True
+    res, payload = _request(port, "POST", "/api/history/restore",
+                            {"project": f"ACTIVE/{HISTORY_BOOK}", "sha": first})
+    assert res.status == 200 and payload["created"] is True
+    pdir = projects_root / "ACTIVE" / HISTORY_BOOK
+    assert not (pdir / "notes.md").exists(), "файлы приведены к точке"
+    res, payload = _request(port, "GET", f"/api/history?{_hp()}")
+    top = payload["checkpoints"][0]
+    assert top["label"] == "Возврат к «Первая»" and top["kind"] == "restore"
+    assert payload["total"] == 3, "промежуточные точки остались"
+    # возврат к текущему состоянию — без новой точки
+    res, payload = _request(port, "POST", "/api/history/restore",
+                            {"project": f"ACTIVE/{HISTORY_BOOK}", "sha": top["sha"]})
+    assert res.status == 200 and payload["created"] is False
+    res, payload = _request(port, "POST", "/api/history/restore",
+                            {"project": f"ACTIVE/{HISTORY_BOOK}", "sha": ""})
+    assert res.status == 400
+
+
+def test_history_file_route_removed(srv_ctx):
+    """/api/history/file убран: SPA его не звал (api() читает только JSON),
+    а текст файла точки показывает дифф самого файла."""
+    _, port, projects_root = srv_ctx()
+    _history_project(port, projects_root)
+    res, _ = _request(port, "GET", f"/api/history/file?{_hp()}&sha=0&path=ner.json")
+    assert res.status == 404

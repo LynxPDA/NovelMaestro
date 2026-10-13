@@ -344,13 +344,17 @@ def _file_download(ctx: dict) -> dict:
 # ══════════════════════════════════════════════════════════════════
 
 def _history_list(ctx: dict) -> dict:
-    """Список точек истории (GET /api/history?project=&limit=&offset=)."""
+    """Список точек истории (GET /api/history?project=&limit=&offset=).
+
+    Так же, как у файлов сравнения: пустой или неположительный limit —
+    одна страница CHECKPOINT_PAGE, total всегда показывает все точки.
+    """
     from web import history as hs
     pdir, _section, _name = _project_ctx(ctx)
     q = ctx["query"]
     try:
-        limit = max(1, min(500, int(q.get("limit", "100"))))
         offset = max(0, int(q.get("offset", "0")))
+        limit = int(q.get("limit", "0"))
     except ValueError:
         raise ApiError(400, "limit/offset — числа")
     try:
@@ -378,7 +382,11 @@ def _history_create(ctx: dict) -> dict:
 
 def _history_diff(ctx: dict) -> dict:
     """Изменения между точками (GET /api/history/diff?
-    project=&from=&to=): файлы со статусами A/M/D и +/- строк."""
+    project=&from=&to=&offset=&limit=): файлы со статусами A/M/D и +/- строк.
+
+    SPA страницу не передаёт и обязан получить файлы, а не пустой список:
+    пустой или неположительный limit — одна страница DIFF_MAX_FILES.
+    """
     from web import history as hs
     pdir, _section, _name = _project_ctx(ctx)
     sha_from = ctx["query"].get("from", "")
@@ -386,11 +394,12 @@ def _history_diff(ctx: dict) -> dict:
     if not sha_from or not sha_to:
         raise ApiError(400, "Параметры from и to обязательны")
     try:
-        return hs.diff(pdir, sha_from, sha_to,
-                       offset=int(ctx["query"].get("offset", "0")),
-                       limit=int(ctx["query"].get("limit", "0")))
+        offset = max(0, int(ctx["query"].get("offset", "0")))
+        limit = int(ctx["query"].get("limit", "0"))
     except ValueError as exc:
         raise ApiError(400, "offset и limit должны быть числами") from exc
+    try:
+        return hs.diff(pdir, sha_from, sha_to, offset=offset, limit=limit)
     except hs.HistoryError as exc:
         raise ApiError(400, str(exc))
 
@@ -428,34 +437,12 @@ def _history_restore(ctx: dict) -> dict:
         raise ApiError(400, str(exc))
 
 
-def _history_file(ctx: dict) -> dict:
-    """Файл в точке (GET /api/history/file?project=&sha=&path=).
-
-    Текст отдаётся как есть (Content-Type: text/plain) — для предпросмотра
-    старой версии без копирования в рабочие файлы.
-    """
-    from web import history as hs
-    pdir, _section, _name = _project_ctx(ctx)
-    sha = ctx["query"].get("sha", "")
-    path = ctx["query"].get("path", "")
-    if not sha or not path:
-        raise ApiError(400, "Параметры sha и path обязательны")
-    try:
-        data = hs.file_content(pdir, sha, path)
-    except hs.HistoryError as exc:
-        raise ApiError(404, str(exc))
-    ctx["handler"]._send(200, "text/plain; charset=utf-8", data,
-                         cache="no-cache")
-    return {}  # ответ уже отправлен
-
-
 def _register_history(router: Router) -> None:
     router.add("GET", "/api/history", _history_list)
     router.add("POST", "/api/history", _history_create)
     router.add("GET", "/api/history/diff", _history_diff)
     router.add("GET", "/api/history/patch", _history_patch)
     router.add("POST", "/api/history/restore", _history_restore)
-    router.add("GET", "/api/history/file", _history_file)
 
 
 def _register_files(router: Router) -> None:

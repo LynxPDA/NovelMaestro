@@ -207,11 +207,25 @@ PATCH_MAX_CHARS = 400_000
 #: потолок списка файлов в сравнении точек: тысячи <details> в окне
 #: вешают браузер; полный переченью файлов и так не читается
 DIFF_MAX_FILES = 200
+#: страница списка точек (тот же принцип, что у файлов сравнения)
+CHECKPOINT_PAGE = 100
 
-def checkpoints(project: Path, limit: int = 100, offset: int = 0) -> dict:
+
+def _page(limit: int | None, page_size: int) -> int:
+    """Размер страницы: limit не задан или неположительный — одна страница.
+
+    Ноль здесь НЕ «ничего не отдавать»: SPA страницу не передаёт, и пустой
+    список читался бы как «между точками изменений нет».
+    """
+    return page_size if limit is None or limit <= 0 else limit
+
+
+def checkpoints(project: Path, limit: int | None = None,
+                offset: int = 0) -> dict:
     """Список точек от свежей к старой (обход first-parent от HEAD).
 
-    {total, checkpoints: [{sha, time, label, kind}]} — time в unix-секундах.
+    {total, checkpoints: [{sha, time, label, kind}]} — time в unix-секундах;
+    total — ВСЕ точки, страница — offset/limit (CHECKPOINT_PAGE).
     """
     with _lock:
         repo = _repo(project)
@@ -224,7 +238,8 @@ def checkpoints(project: Path, limit: int = 100, offset: int = 0) -> dict:
                           "label": label, "kind": kind})
             head = c.parents[0] if c.parents else None
         return {"total": len(items),
-                "checkpoints": items[offset:offset + max(0, limit)]}
+                "checkpoints":
+                    items[offset:offset + _page(limit, CHECKPOINT_PAGE)]}
 
 
 def diff(project: Path, sha_from: str, sha_to: str, offset: int = 0,
@@ -232,7 +247,7 @@ def diff(project: Path, sha_from: str, sha_to: str, offset: int = 0,
     """Изменения файлов между точками: [{path, status(A/M/D), adds, dels}].
 
     adds/dels — построчная разница блобов (difflib, без контекста).
-    Список отдаётся порциями (offset/limit, без limit — DIFF_MAX_FILES):
+    Список отдаётся порциями: offset + limit (без limit — DIFF_MAX_FILES):
     тысячи раскрывающихся строк вешают окно; клиент догружает кнопкой
     «Показать ещё».
     """
@@ -259,8 +274,7 @@ def diff(project: Path, sha_from: str, sha_to: str, offset: int = 0,
                                          light=True)
                 files.append({"path": name, "status": "M",
                               "adds": adds, "dels": dels})
-        portion = max(0, DIFF_MAX_FILES if limit is None else limit)
-        return {"files": files[offset:offset + portion],
+        return {"files": files[offset:offset + _page(limit, DIFF_MAX_FILES)],
                 "total_files": len(files)}
 
 
@@ -322,18 +336,6 @@ def patch(project: Path, sha_from: str, sha_to: str, path: str) -> dict:
             text += "\n… — дифф обрезан: файл слишком большой"
         return {"path": path, "adds": adds, "dels": dels,
                 "patch": text}
-
-
-def file_content(project: Path, sha: str, path: str) -> bytes:
-    """Содержимое файла в точке (для просмотра старой версии)."""
-    with _lock:
-        repo = _repo(project)
-        c = _commit_or_die(repo, sha)
-        flat = _flat_tree(repo, c.tree)
-        key = path.encode("utf-8")
-        if key not in flat:
-            raise HistoryError(f"В точке нет файла: {path}")
-        return _as_blob(repo[flat[key]]).data
 
 
 def restore(project: Path, sha: str) -> dict:
