@@ -922,6 +922,180 @@ async function main() {
     log(`${problems.length === before4 ? "✅" : "❌"} логи: список     ${l0.rows} строк · вложенно ${sub} · просмотр: ${view ? "есть" : "пусто"}`);
   }
 
+  /* «История»: список точек страницами, сравнение выбранной пары (всегда от
+   * старой к новой), догрузка файлов и раскрашенный дифф файла. Точки
+   * создаются тем же POST, что и кнопкой вкладки: между ними меняется один
+   * файл книги, поэтому сравнение ОБЯЗАНО показывать изменения */
+  {
+    const before5 = problems.length;
+    const project = `${SECTION}/${BOOK}`;
+    const call = async (method, p, body) => {
+      const res = await fetch(`${url}/api${p}`, {
+        method,
+        headers: {
+          "X-Requested-With": "fetch",
+          ...(body ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const text = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        /* не-JSON */
+      }
+      return { status: res.status, data };
+    };
+    for (let i = 1; i <= 3; i += 1) {
+      await call("PUT", "/file", {
+        project,
+        path: "notes.md",
+        content: `# Заметки пробы · вариант ${i}\n`,
+      });
+      const r = await call("POST", "/history", { project, label: `Точка ${i}` });
+      if (r.status !== 200 || !r.data || r.data.created !== true)
+        problems.push(`история: точка ${i} не создана (${r.status})`);
+    }
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/history`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".history-list .history-row", { timeout: 15000 });
+    const read = () => page.evaluate(() => {
+      const text = (sel) => ((document.querySelector(sel) || {})
+        .textContent || "").trim();
+      const tips = (root) => [...(root || document.createElement("div"))
+        .querySelectorAll(".icon-btn")].map((b) => b.getAttribute("aria-label") || "");
+      const shown = (sel) => {
+        const el = document.querySelector(sel);
+        return el && !el.classList.contains("hidden")
+          ? el.textContent.replace(/\s+/g, " ").trim() : "";
+      };
+      const rows = [...document.querySelectorAll(".history-list .history-row")];
+      return {
+        rows: rows.length,
+        rowTips: rows.map((r) => tips(r)),
+        selRows: rows.filter((r) => r.classList.contains("frow-sel")).length,
+        headings: [...document.querySelectorAll(".history-heading")]
+          .map((x) => x.textContent.trim()),
+        /* скрытая кнопка остаётся в DOM со своей подписью — читаем только
+           видимую (иначе «осталось 0» читалось бы как лишний пейджер) */
+        pager: shown(".history-wrap > .history-more"),
+        bar: !((document.querySelector(".files-sel") || { classList: { contains: () => true } })
+          .classList.contains("hidden")),
+        count: text(".files-sel-count"),
+        barTips: tips(document.querySelector(".files-sel")),
+      };
+    });
+    const h0 = await read();
+    if (h0.rows !== 3) problems.push(`история: строк ${h0.rows}, ждём 3`);
+    if (h0.headings[0] !== "Контрольные точки · 3")
+      problems.push(`история: шапка «${h0.headings[0]}»`);
+    if (h0.pager) problems.push(`история: все точки на одной странице, а пейджер «${h0.pager}»`);
+    if (h0.bar) problems.push("история: панель выделения видна без выделки");
+    /* своей кнопки «сравнить с предыдущей» у строки нет: у самой старой
+       точки предыдущей точки нет — сравнение живёт в панели выделения */
+    if (h0.rowTips.some((t) => t.some((x) => /Сравнить/.test(x))))
+      problems.push(`история: в строке осталось сравнение (${h0.rowTips[0]})`);
+    if (!h0.rowTips.every((t) => t.length === 1
+      && t[0] === "Вернуть файлы проекта к этой точке"))
+      problems.push(`история: кнопки строки (${h0.rowTips[0]})`);
+    // крайние точки: самая старая и самая свежая — сравнение обязано быть парой
+    const boxes = page.locator(".history-list .history-row .fsel");
+    await boxes.nth(0).check();
+    await page.waitForTimeout(400);
+    const h1 = await read();
+    if (!h1.bar) problems.push("история: панель выделения не появилась");
+    if (h1.count !== "выделено: 1")
+      problems.push(`история: счётчик выделки «${h1.count}»`);
+    if (h1.barTips.length !== 1 || h1.barTips[0] !== "Снять выделение")
+      problems.push(`история: на одной точке панель «${h1.barTips.join("|")}»`);
+    await boxes.nth(2).check();
+    await page.waitForTimeout(400);
+    const h2 = await read();
+    if (h2.count !== "выделено: 2") problems.push(`история: счётчик «${h2.count}»`);
+    if (!h2.barTips.includes("Сравнить выбранные точки"))
+      problems.push(`история: в панели нет сравнения (${h2.barTips.join("|")})`);
+    if (h2.selRows !== 2) problems.push(`история: выделенных строк ${h2.selRows}`);
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "scenario-history.png") });
+    }
+    await page.locator('.files-sel .icon-btn[aria-label="Сравнить выбранные точки"]')
+      .first().click();
+    await page.waitForTimeout(900);
+    const diff = await page.evaluate(() => {
+      /* скрытая кнопка остаётся в DOM со своей подписью — читаем только
+         видимую (иначе «осталось 0» читалось бы как лишний пейджер) */
+      const shown = (sel) => {
+        const el = document.querySelector(sel);
+        return el && !el.classList.contains("hidden")
+          ? el.textContent.replace(/\s+/g, " ").trim() : "";
+      };
+      const box = document.querySelector(".modal-backdrop");
+      const rows = [...(box || document.createElement("div"))
+        .querySelectorAll(".history-diff-file")];
+      return {
+        modals: document.querySelectorAll(".modal-backdrop").length,
+        head: [...(box || document.createElement("div"))
+          .querySelectorAll(".history-diff-head > div")]
+          .map((x) => x.textContent.trim()),
+        rows: rows.length,
+        first: rows.length
+          ? (rows[0].querySelector("summary") || {}).textContent?.replace(/\s+/g, " ").trim()
+          : "",
+        more: shown(".modal-backdrop .history-more"),
+        patch: "",
+      };
+    });
+    if (diff.modals !== 1) problems.push(`история: модалок сравнения ${diff.modals}`);
+    /* пустой список файлов был главным «не работает»: limit=0 на сервере
+       отдавал пустую страницу на любой паре точек */
+    if (diff.rows !== 1) problems.push(`история: файлов в сравнении ${diff.rows}`);
+    if (!/С: Точка 1/.test(diff.head[0] || "") || !/По: Точка 3/.test(diff.head[1] || ""))
+      problems.push(`история: порядок сравнения (${diff.head.join(" / ")})`);
+    if (!/изменённых файлов: 1/.test(diff.head[2] || ""))
+      problems.push(`история: счётчик файлов «${diff.head[2] || ""}»`);
+    if (!/notes\.md/.test(diff.first) || !/изменён/.test(diff.first))
+      problems.push(`история: строка файла «${diff.first}»`);
+    if (diff.more) problems.push(`история: кнопка догрузки файлов «${diff.more}»`);
+    // клик по строке файла — unified-diff; второй клик его не переспрашивает
+    await page.locator(".modal-backdrop .history-diff-file summary").first().click();
+    await page.waitForTimeout(700);
+    const patch = await page.evaluate(() => ({
+      text: ((document.querySelector(".history-patch") || {}).textContent || "")
+        .replace(/\s+/g, " ").trim(),
+      marks: document.querySelectorAll(".history-diff-marker").length,
+    }));
+    if (!/вариант 1/.test(patch.text) || !/вариант 3/.test(patch.text))
+      problems.push(`история: дифф файла «${patch.text.slice(0, 60)}»`);
+    if (patch.marks < 2) problems.push(`история: в диффе маркеров ${patch.marks}`);
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "scenario-history-diff.png") });
+    }
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    // возврат: своя модалка с объяснением; «Отмена» ничего не трогает
+    await page.locator('.history-row .icon-btn[aria-label^="Вернуть"]').first().click();
+    await page.waitForTimeout(500);
+    const restore = await page.evaluate(() => ({
+      modals: document.querySelectorAll(".modal-backdrop").length,
+      title: ((document.querySelector(".modal-backdrop .modal-title") || {})
+        .textContent || "").trim(),
+      btns: [...document.querySelectorAll(".modal-backdrop .modal-actions .btn")]
+        .map((b) => b.textContent.trim()),
+    }));
+    if (restore.modals !== 1 || restore.title !== "Возврат к контрольной точке")
+      problems.push(`история: модалка возврата «${restore.title}» (${restore.modals})`);
+    if (restore.btns.join(",") !== "Отмена,Вернуться")
+      problems.push(`история: кнопки возврата (${restore.btns.join("/")})`);
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "scenario-history-restore.png") });
+    }
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    log(`${problems.length === before5 ? "✅" : "❌"} история: точки    ${h0.rows} шт · сравнение: ${diff.rows} файл(ов) · дифф: ${patch.marks} строк · возврат: ${restore.btns.join("/")}`);
+  }
+
   /* страница «Настройки»: блоки реестра карточками, секрет — маской,
    * сохранение пишет общий конфиг; блоки самого веб-сервера в реестре остались,
    * но на экране их нет; внешний вид — своя субвкладка с localStorage-
