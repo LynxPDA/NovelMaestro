@@ -525,18 +525,22 @@ def test_restart_plan_per_install(kind, marker, auto, word, tmp_path):
     root.mkdir()
     if marker:
         (root / marker).touch()
-    plan = U.restart_plan(["/repo/web/main.py", "--port", "8756"], root=root)
+    entry = root / "main.py"
+    entry.write_text("", encoding="utf-8")
+    plan = U.restart_plan([str(entry), "--port", "8756"], root=root)
     assert plan["kind"] == kind and plan["auto"] is auto
     assert word in plan["note"]
     if auto:
-        assert plan["command"][1] == "/repo/web/main.py"
+        assert plan["command"][1] == str(entry)
         assert plan["command"][-1] == "8756"
 
 
 def test_restart_plan_flag_switches_auto_off(tmp_path):
     """--no-restart (dev-сервер): авто-перезапуск выключен, текст — про руки."""
     (tmp_path / ".git").mkdir()
-    plan = U.restart_plan(["/repo/web/main.py"], root=tmp_path, allowed=False)
+    entry = tmp_path / "main.py"
+    entry.write_text("", encoding="utf-8")
+    plan = U.restart_plan([str(entry)], root=tmp_path, allowed=False)
     assert plan["auto"] is False and plan["command"] == []
     assert "--no-restart" in plan["note"]
 
@@ -548,28 +552,32 @@ def test_schedule_restart_spawns_watcher_and_stops_process(tmp_path, monkeypatch
     таймер и команда сервера.
     """
     (tmp_path / ".git").mkdir()
+    entry = tmp_path / "run.py"
+    entry.write_text("", encoding="utf-8")
     seen = {}
     monkeypatch.setattr(U, "_spawn", lambda cmd, cwd: seen.update(
         cmd=cmd, cwd=Path(cwd)))
     monkeypatch.setattr(U, "_terminate", lambda pid: seen.update(term=pid))
-    plan = U.schedule_restart(["/repo/run.py", "--port", "8756"], root=tmp_path,
+    plan = U.schedule_restart([str(entry), "--port", "8756"], root=tmp_path,
                               pid=4242, wait=7.5)
     assert plan["auto"] is True
     assert seen["cwd"] == tmp_path and seen["term"] == os.getpid()
     cmd = seen["cmd"]
     assert cmd[0] == sys.executable and cmd[1] == "-c"
     assert cmd[2] == U._WATCHER_CODE
-    assert cmd[3:] == ["4242", "7.5", sys.executable, "/repo/run.py",
+    assert cmd[3:] == ["4242", "7.5", sys.executable, str(entry),
                        "--port", "8756"]
 
 
 def test_schedule_restart_manual_installation_does_nothing(tmp_path, monkeypatch):
     """Портативной сборке наблюдатель не нужен: перезапуск делает человек."""
     (tmp_path / "START.txt").touch()
+    entry = tmp_path / "run.py"
+    entry.write_text("", encoding="utf-8")
     calls = []
     monkeypatch.setattr(U, "_spawn", lambda *a: calls.append("spawn"))
     monkeypatch.setattr(U, "_terminate", lambda pid: calls.append("term"))
-    plan = U.schedule_restart(["/repo/run.py"], root=tmp_path)
+    plan = U.schedule_restart([str(entry)], root=tmp_path)
     assert plan["auto"] is False and calls == []
 
 

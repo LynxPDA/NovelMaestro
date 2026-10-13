@@ -8,6 +8,7 @@
 подменяется временной папкой — боевой репозиторий не трогается. Настоящий
 перезапуск подменяется заглушкой: живой процесс теста убивать не нужно.
 """
+import sys
 import threading
 import time
 from pathlib import Path
@@ -51,6 +52,15 @@ def update_state():
     api_common._UPDATE_CACHE.update({"release": None, "checked": 0.0})
     api_common._UPDATE_JOB.update(dict(_IDLE, log=[]))
     return api_common._UPDATE_CACHE
+
+
+@pytest.fixture(autouse=True)
+def server_argv(tmp_path, monkeypatch):
+    """argv сервера в тесте свой: у процесса pytest sys.argv[0] — сам pytest,
+    а у воркера xdist и вовсе «-c», и план перезапуска считался бы по нему."""
+    entry = tmp_path / "main.py"
+    entry.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(entry), "--port", "8756"])
 
 
 @pytest.fixture(autouse=True)
