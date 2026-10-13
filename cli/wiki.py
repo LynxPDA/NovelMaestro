@@ -1143,7 +1143,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--type", default="chapter",
         choices=["chapter", "translated", "redacted", "polished"],
         metavar="TYPE",
-        help="Тип файлов глав для --compile-chapters (по умолчанию: chapter).",
+        help="Тип файлов глав — ОДИН на вход и на выход: какой тип читается "
+             "при --compile-chapters и каким файлом пишется вики-глава при "
+             "--as-chapter (по умолчанию: chapter).",
     )
     g_input.add_argument(
         "--start", type=int, default=None, metavar="N",
@@ -1308,15 +1310,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Сохранить вики как дополнительную последнюю главу "
             "chapters/00000_{N+1}_Wiki_Новеллы/: название главы «Wiki "
             "Новеллы» простым текстом, статьи — в формате как у rulate "
-            "(заголовки глубже); файл — тип из --save-type (вместо "
-            "файла --output)."
+            "(заголовки глубже); файл — того же типа, что --type (вместо "
+            "файла --output); chapter.txt не пишется — с ним polished.txt."
         ),
-    )
-    g_out.add_argument(
-        "--save-type", default="polished",
-        choices=["translated", "redacted", "polished"], metavar="TYPE",
-        help="Тип файла вики-главы для --as-chapter "
-             "(translated/redacted/polished; по умолчанию: polished).",
     )
     g_out.add_argument(
         "--toc", action=argparse.BooleanOptionalAction, default=True,
@@ -1469,8 +1465,8 @@ def main():
         args.output = os.path.splitext(args.output)[0] + ".txt"
 
     # --as-chapter: вики-глава в chapters/ как последняя по номеру;
-    # файл — выбранного типа (translated/redacted/polished), chapter.txt
-    # не пишется
+    # файл — того же типа, что читаемые главы (--type); chapter.txt —
+    # исходный текст, он под вики-главу не пишется: с ним polished
     if args.as_chapter:
         ch_map = build_chapter_map("./chapters")
         next_num = (max(ch_map) + 1) if ch_map else 1
@@ -1482,10 +1478,11 @@ def main():
             _log(logger, logging.ERROR,
                  f"❌ Не удалось создать папку {ch_dir}: {exc}")
             return
-        args.output = os.path.join(ch_dir, f"{args.save_type}.txt")
+        save_type = args.type if args.type != "chapter" else "polished"
+        args.output = os.path.join(ch_dir, f"{save_type}.txt")
         _log(logger, logging.INFO,
              f"📁 Вики-глава: {ch_dir} (номер {next_num}, "
-             f"{args.save_type}.txt)")
+             f"{save_type}.txt)")
 
     # Сервер, модель и рассуждения в лог пишет core.stage — здесь свои поля
     _log(logger, logging.INFO,

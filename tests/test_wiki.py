@@ -471,14 +471,17 @@ def test_main_as_chapter(tmp_path, monkeypatch):
     assert (tmp_path / "chapters" / "00000_1_x").is_dir()
 
 
-def test_main_as_chapter_save_type(tmp_path, monkeypatch):
-    """wiki: --save-type redacted → пишется redacted.txt."""
+def test_main_as_chapter_same_type(tmp_path, monkeypatch):
+    """wiki: --type redacted → читаются redacted.txt, вики-глава пишется
+    тем же типом (один тип на вход и на выход, --save-type больше нет)."""
     chapters = tmp_path / "chapters"
     d1 = chapters / "00000_1_x"
     d1.mkdir(parents=True)
     (d1 / "chapter.txt").write_text(
         "Глава 1\n\nЛинь Шуй шла по дороге. Линь Шуй думала.\n",
         encoding="utf-8")
+    (d1 / "redacted.txt").write_text(
+        "Глава 1\n\nЛинь Шуй шла по дороге.\n", encoding="utf-8")
     (tmp_path / "ner.json").write_text(json.dumps([
         {"term": "林水", "translation": "Линь Шуй",
          "type": "Person (female)", "count": 3},
@@ -487,10 +490,9 @@ def test_main_as_chapter_save_type(tmp_path, monkeypatch):
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
     monkeypatch.setattr(WIKI, "llm_request", lambda *a, **k: "СТАТЬЯ")
     monkeypatch.setattr(sys, "argv", [
-        "wiki.py", "--as-chapter", "--save-type", "redacted",
-        "--compile-chapters", "--type", "chapter", "--ner_file",
-        "ner.json", "--host", "http://h", "--model", "m",
-        "--threads", "1"])
+        "wiki.py", "--as-chapter", "--compile-chapters", "--type",
+        "redacted", "--ner_file", "ner.json", "--host", "http://h",
+        "--model", "m", "--threads", "1"])
     WIKI.main()
     ch_dir = tmp_path / "chapters" / "00000_2_Wiki_Новеллы"
     assert (ch_dir / "redacted.txt").is_file()

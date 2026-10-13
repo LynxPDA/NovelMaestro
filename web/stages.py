@@ -407,7 +407,9 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
     """Стадия 7 — генерация вики (wiki.py).
 
     Источник текста: готовый txt (source/file) ИЛИ сборка глав в память
-    (source=chapters → --compile-chapters + --type/--start/--end).
+    (source=chapters → --compile-chapters + --start/--end). Тип файлов
+    глав один на вход и на вики-главу: --type едет всегда, когда поле
+    применим (CLI пишет файл вики-главы тем же типом).
     Формат: md / rulate-md / rulate-html; оглавление и якоря — только
     в обычном режиме (toc/toc_links).
     """
@@ -416,17 +418,15 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
     fmt = form.get("format") or "md"
     output = str(form.get("output") or "wiki.md")
     as_chapter = bool(form.get("as_chapter"))
+    if form.get("type"):
+        argv += ["--type", str(form["type"])]
     if src == "chapters":
         argv.append("--compile-chapters")
-        if form.get("type"):
-            argv += ["--type", str(form["type"])]
         argv += _range_argv("start", form)
     elif form.get("file"):
         argv.append(str(form["file"]))
     if as_chapter:
         argv.append("--as-chapter")
-        if form.get("save_type"):
-            argv += ["--save-type", str(form["save_type"])]
     else:
         if fmt == "rulate-md":
             argv.append("--rulate-mode")

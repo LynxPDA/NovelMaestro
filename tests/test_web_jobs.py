@@ -1588,19 +1588,23 @@ def test_build_wiki_rulate_html():
 
 
 def test_build_wiki_as_chapter():
-    """wiki: «Сохранить как главу вики» → --as-chapter + --save-type,
+    """wiki: «Сохранить как главу вики» → --as-chapter с одним типом --type,
     без --output и флагов формата."""
     argv = build_command(
-        "wiki", {"as_chapter": True, "save_type": "redacted",
-                  "format": "rulate-html", "output": "wiki.md"}, {})
+        "wiki", {"as_chapter": True, "source": "txt", "file": "novel.txt",
+                  "type": "redacted", "format": "rulate-html",
+                  "output": "wiki.md"}, {})
     assert "--as-chapter" in argv
-    assert "--save-type" in argv and "redacted" in argv
+    assert "--save-type" not in argv
+    assert "--type" in argv and "redacted" in argv, \
+        "вики-глава пишется тем же типом, что выбран"
     assert "--rulate-html" not in argv
     assert "--output" not in argv
-    argv2 = build_command("wiki", {"as_chapter": False, "format": "md",
-                                  "save_type": "translated"}, {})
+    # txt без вики-главы: глав никто не читает — тип не применяется
+    argv2 = build_command("wiki", {"as_chapter": False, "source": "txt",
+                                   "type": "translated", "format": "md"}, {})
     assert "--as-chapter" not in argv2
-    assert "--save-type" not in argv2
+    assert "--type" not in argv2
 
 
 def test_build_wiki_toc_off():

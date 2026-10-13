@@ -689,6 +689,15 @@ def test_applies_when_all_conditions(global_env):
     assert not S.applies(f, {"format": "md", "as_chapter": True})
 
 
+def test_applies_when_any_wiki_type(global_env):
+    """wiki: тип файлов один на вход и на вики-главу — поле нужно в обоих
+    режимах, где его о чём-то спрашивают, и пропадает в чистом txt-режиме."""
+    f = _by_name("wiki")["type"]
+    assert S.applies(f, {"source": "chapters", "as_chapter": False})
+    assert S.applies(f, {"source": "txt", "as_chapter": True})
+    assert not S.applies(f, {"source": "txt", "as_chapter": False})
+
+
 def test_applies_when_set(global_env):
     """when_set — поле-условие непустое: связи wiki считаются только с парами."""
     f = _by_name("wiki")["co_occurrence_top"]
