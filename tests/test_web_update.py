@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Обновления web-слоя (web/api_common.py): сводка в сессии, проверка релиза,
-обновление в отдельном потоке и скачивание архива релиза.
+"""Обновления web-слоя (web/api_common.py): сводка в сессии, проверка при запуске
+и по кнопке, обновление в отдельном потоке, перезапуск сервера и архив релиза.
 
-Сеть наружу не ходит: ответы GitHub подменяются на уровне core.transport,
-сам способ применения тестируется в tests/test_core_update.py. Корень кода
-этой копии подменяется временной папкой — боевой репозиторий не трогается.
+Сеть наружу не ходит: ответы GitHub подменяются на уровне core.transport, способ
+применения тестируется в tests/test_core_update.py. Корень кода этой копии
+подменяется временной папкой — боевой репозиторий не трогается. Настоящий
+перезапуск подменяется заглушкой: живой процесс теста убивать не нужно.
 """
 import threading
 import time
@@ -35,6 +36,35 @@ _RELEASE = {
 #: что отдаёт релиз на вопрос об ассетах (скачивание архива)
 _ASSETS = {"assets": [{"name": "novelmaestro-portable-9.9.0.zip",
                        "browser_download_url": "https://x/zip"}]}
+_IDLE = {"state": "idle", "kind": "", "mode": "", "from": "", "to": "",
+         "note": "", "error": "", "log": [], "started": 0.0, "finished": 0.0}
+
+
+@pytest.fixture(autouse=True)
+def update_state():
+    """Кеш проверки и состояние потока — состояние процесса.
+
+    В одном воркере xdist тесты идут друг за другом: чистим их до теста, иначе
+    предыдущая проверка или предыдущий поток обновления попадут в следующий
+    тест как собственное состояние сервера.
+    """
+    api_common._UPDATE_CACHE.update({"release": None, "checked": 0.0})
+    api_common._UPDATE_JOB.update(dict(_IDLE, log=[]))
+    return api_common._UPDATE_CACHE
+
+
+@pytest.fixture(autouse=True)
+def restarts(monkeypatch):
+    """Заглушка перезапуска: план считается по-настоящему, процесс не сворачивается."""
+    calls: list[dict] = []
+
+    def fake_schedule(argv=None, kind=None, root=None, allowed=True,
+                      pid=None, wait=None):
+        plan = core_update.restart_plan(kind=kind, root=root, allowed=allowed)
+        calls.append(plan)
+        return plan
+    monkeypatch.setattr(core_update, "schedule_restart", fake_schedule)
+    return calls
 
 
 @pytest.fixture()
@@ -51,17 +81,14 @@ def srv_ctx(code_root, monkeypatch):
     """Фабрика сервера (как в test_web_api): код этой копии — code_root.
 
     Способ установки задаётся маркером в code_root: «git» — каталог .git,
-    «portable» — START.txt, «docker» — файл .docker. Кеш и состояние потока
-    обновления — состояние процесса: чистим до и после.
+    «portable» — START.txt, «docker» — файл .docker. no_restart — тот же
+    флаг --no-restart, что передаёт dev-серверу скрипт dev.sh. Кеш и состояние
+    потока обновления — состояние процесса: чистим до и после.
     """
     monkeypatch.setattr(api_common, "_CODE_ROOT", code_root)
-    idle = {"state": "idle", "kind": "", "mode": "", "from": "", "to": "",
-            "note": "", "error": "", "log": [], "started": 0.0, "finished": 0.0}
-    api_common._UPDATE_CACHE.update({"release": None, "checked": 0.0})
-    api_common._UPDATE_JOB.update(dict(idle, log=[]))
     servers = []
 
-    def _make(kind: str = "git"):
+    def _make(kind: str = "git", no_restart: bool = True):
         from core import projects as P
         if kind == "docker":
             (code_root / ".docker").touch()
@@ -72,7 +99,8 @@ def srv_ctx(code_root, monkeypatch):
         projects_root = code_root / "projects"
         P.ensure_projects_root(projects_root)
         srv = make_server("127.0.0.1", 0, Auth("tok", no_auth=True),
-                          repo_root=REPO, projects_root=projects_root)
+                          repo_root=REPO, projects_root=projects_root,
+                          no_restart=no_restart)
         web_api.register(srv.router, "127.0.0.1")
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         servers.append(srv)
@@ -86,7 +114,7 @@ def srv_ctx(code_root, monkeypatch):
 
 @pytest.fixture()
 def port(srv_ctx):
-    """Сервер обычной установки (клон репозитория)."""
+    """Сервер обычной установки (клон репозитория), перезапуск — руками."""
     _, port = srv_ctx("git")
     return port
 
@@ -111,7 +139,7 @@ def _wait_job(port, timeout: float = 15.0) -> dict:
 # СВОДКА В СЕССИИ
 # ══════════════════════════════════════════════════════════════════
 def test_session_carries_update_state(port):
-    """Сессия несёт сводку обновления: версия, способ установки, кеш, поток."""
+    """Сессия несёт сводку обновления: версия, способ, кеш, поток, перезапуск."""
     res, payload = _session(port)
     upd = payload["update"]
     assert res.status == 200
@@ -123,25 +151,41 @@ def test_session_carries_update_state(port):
     assert upd["release"] is None and upd["available"] is False
     assert upd["checked"] == 0.0
     assert upd["job"]["state"] == "idle"
+    # dev-сервер (и этот тест) идут с --no-restart: перезапуск руками
+    assert upd["restart"]["auto"] is False
+    assert "--no-restart" in upd["restart"]["note"]
+
+
+def test_session_restart_auto_for_repo_install(srv_ctx):
+    """Запуск из репозитория без --no-restart: сервер перезапустит себя сам."""
+    _, port = srv_ctx("git", no_restart=False)
+    _, payload = _session(port)
+    restart = payload["update"]["restart"]
+    assert restart["auto"] is True
+    assert "перезапустится сам" in restart["note"]
 
 
 def test_session_docker_offers_command(srv_ctx):
-    """Docker: режим — команда хоста, она же уезжает в сводку."""
+    """Docker: режим — команда хоста, она же уезжает в сводку, авто-перезапуска нет."""
     _, port = srv_ctx("docker")
     _, payload = _session(port)
     upd = payload["update"]
     assert upd["kind"] == "docker" and upd["mode"] == "command"
     assert upd["command"] == core_update.HOST_COMMAND
     assert upd["mode_label"] == core_update.MODE_LABELS["command"]
+    assert upd["restart"]["auto"] is False
+    assert "хост" in upd["restart"]["note"]
 
 
-def test_session_portable_offers_zip(srv_ctx):
-    """Портативная сборка: тот же путь, что у архива, без команды хоста."""
+def test_session_portable_restarts_by_hand(srv_ctx):
+    """Портативная сборка: путь архива, но перезапуск — руками (окно заново)."""
     _, port = srv_ctx("portable")
     _, payload = _session(port)
     upd = payload["update"]
     assert upd["kind"] == "portable" and upd["mode"] == "zip"
     assert upd["command"] == ""
+    assert upd["restart"]["auto"] is False
+    assert "start.bat" in upd["restart"]["note"]
 
 
 def test_session_passes_markdown_as_is(port, monkeypatch):
@@ -156,7 +200,50 @@ def test_session_passes_markdown_as_is(port, monkeypatch):
 
 
 # ══════════════════════════════════════════════════════════════════
-# ПРОВЕРКА РЕЛИЗА
+# ПРОВЕРКА ПРИ ЗАПУСКЕ СЕРВЕРА
+# ══════════════════════════════════════════════════════════════════
+def test_start_update_check_fills_cache_in_background(code_root, update_state,
+                                                     monkeypatch):
+    """Проверка при запуске: свой поток, кеш тот же, сессия потом отвечает без сети."""
+    monkeypatch.setattr(api_common, "_CODE_ROOT", code_root)
+    monkeypatch.setattr(core_update, "latest_release", lambda: dict(_RELEASE))
+    api_common.start_update_check()
+    upd, deadline = {}, time.time() + 10
+    while time.time() < deadline:
+        upd = api_common._update_state()
+        if upd["checked"]:
+            break
+        time.sleep(0.02)
+    assert upd["checked"] > 0 and upd["available"] is True
+    assert upd["release"]["version"] == "9.9.0"
+
+
+def test_start_update_check_silent_on_network_error(code_root, update_state,
+                                                    monkeypatch):
+    """Сеть лежит — запуск это не ломает: кеш пустой, проверки просто не видно."""
+    monkeypatch.setattr(api_common, "_CODE_ROOT", code_root)
+
+    monkeypatch.setattr(core_update, "latest_release",
+                        lambda: {"ok": False,
+                                 "error": "нет сети: таймаут соединения"})
+    api_common.start_update_check()
+    time.sleep(0.3)
+    upd = api_common._update_state()
+    assert upd["checked"] == 0.0 and upd["release"] is None
+
+
+def test_session_never_goes_to_network(port, update_state, monkeypatch):
+    """Сессию спрашивают часто: она обязана отдавать кеш, а не ходит в GitHub."""
+    monkeypatch.setattr(core_update.transport, "open_json_get",
+                        lambda url, **kw: (_ for _ in ()).throw(
+                            AssertionError("сессия не должна ходить в сеть")))
+    api_common._UPDATE_CACHE.update({"release": dict(_RELEASE), "checked": 1.0})
+    res, payload = _session(port)
+    assert res.status == 200 and payload["update"]["available"] is True
+
+
+# ══════════════════════════════════════════════════════════════════
+# ПРОВЕРКА ПО КНОПКЕ
 # ══════════════════════════════════════════════════════════════════
 def test_update_check_available(port, monkeypatch):
     """POST /api/update/check: релиз новее текущего → available True."""
@@ -193,7 +280,7 @@ def test_update_check_network_down(port, monkeypatch):
 
 def test_update_cache_kept_after_check(port, monkeypatch):
     """Кеш в процессе: после одной проверки сессия отвечает без сети."""
-    calls = []
+    calls: list[str] = []
 
     def fake_get(url, **kw):
         calls.append(url)
@@ -202,10 +289,6 @@ def test_update_cache_kept_after_check(port, monkeypatch):
     monkeypatch.setattr(core_update.transport, "open_json_get", fake_get)
     _request(port, "POST", "/api/update/check")
     assert len(calls) == 1
-
-    def boom(url, **kw):
-        raise AssertionError("сессия не должна ходить в сеть")
-    monkeypatch.setattr(core_update.transport, "open_json_get", boom)
     _, payload = _session(port)
     assert payload["update"]["available"] is True
 
@@ -213,6 +296,21 @@ def test_update_cache_kept_after_check(port, monkeypatch):
 # ══════════════════════════════════════════════════════════════════
 # ОБНОВЛЕНИЕ ПО КНОПКЕ
 # ══════════════════════════════════════════════════════════════════
+def _git_apply(monkeypatch, note: str = ""):
+    """Поток обновления обычной установки: ветка перематывается без сети."""
+    monkeypatch.setattr(core_update, "latest_release", lambda: dict(_RELEASE))
+    seen: dict[str, object] = {}
+
+    def fake_apply(root, tag, kind=None, log=None):
+        seen["kind"], seen["tag"], seen["root"] = kind, tag, str(root)
+        if log:
+            log("Ветка master: перемотка на релиз v9.9.0 (только ff-only)")
+        return {"branch": "master", "kind": kind, "mode": "git",
+                "from": app_version(), "to": "9.9.0", "note": note}
+    monkeypatch.setattr(core_update, "apply_update", fake_apply)
+    return seen
+
+
 def test_update_apply_docker_rejected(srv_ctx, monkeypatch):
     """Docker: кнопка не предлагается, причина — команда хоста."""
     _, port = srv_ctx("docker")
@@ -240,18 +338,9 @@ def test_update_apply_up_to_date(port, monkeypatch):
     assert res.status == 400 and "последняя версия" in payload["error"]
 
 
-def test_update_apply_git_done(port, monkeypatch):
-    """git-установка: поток перематывает ветку, сводка отдаёт ход и итог."""
-    monkeypatch.setattr(core_update, "latest_release", lambda: dict(_RELEASE))
-    seen = {}
-
-    def fake_apply(root, tag, kind=None, log=None):
-        seen["kind"], seen["tag"], seen["root"] = kind, tag, str(root)
-        if log:
-            log("Ветка master: перемотка на релиз v9.9.0 (только ff-only)")
-        return {"branch": "master", "kind": kind, "mode": "git",
-                "from": app_version(), "to": "9.9.0", "note": ""}
-    monkeypatch.setattr(core_update, "apply_update", fake_apply)
+def test_update_apply_git_restarts_by_hand(port, monkeypatch, restarts):
+    """--no-restart: поток перематывает ветку, итог — done и просьба перезапустить."""
+    seen = _git_apply(monkeypatch)
     _request(port, "POST", "/api/update/check")
     res, payload = _request(port, "POST", "/api/update/apply")
     assert res.status == 200
@@ -261,9 +350,34 @@ def test_update_apply_git_done(port, monkeypatch):
     assert upd["job"]["state"] == "done" and upd["job"]["to"] == "9.9.0"
     assert any("перемотка" in ln for ln in upd["job"]["log"])
     assert upd["job"]["error"] == ""
+    assert "--no-restart" in upd["job"]["note"]
     # поток работает по корню кода этой копии, а не по боевому репозиторию
     assert seen["kind"] == "git" and seen["tag"] == "v9.9.0"
     assert seen["root"] == str(api_common._CODE_ROOT)
+    # перезапуск выключен флагом: наблюдатель не запускается вовсе
+    assert restarts == []
+
+
+def test_update_apply_git_restarts_itself(srv_ctx, monkeypatch, restarts):
+    """Без --no-restart: сервер сворачивается, наблюдатель поднимет его заново."""
+    _, port = srv_ctx("git", no_restart=False)
+    _git_apply(monkeypatch)
+    _request(port, "POST", "/api/update/check")
+    _request(port, "POST", "/api/update/apply")
+    upd = _wait_job(port)
+    assert upd["job"]["state"] == "restarting"
+    assert "перезапустится сам" in upd["job"]["note"]
+    assert len(restarts) == 1 and restarts[0]["auto"] is True
+
+
+def test_update_apply_reports_new_dependencies(port, monkeypatch):
+    """Сменились зависимости — итог обязан сказать про установку пакетов."""
+    _git_apply(monkeypatch, note="Изменились зависимости — обновите их: "
+                                 "python3 -m pip install -r requirements.txt")
+    _request(port, "POST", "/api/update/check")
+    _request(port, "POST", "/api/update/apply")
+    upd = _wait_job(port)
+    assert "requirements.txt" in upd["job"]["note"]
 
 
 def test_update_apply_reports_error(port, monkeypatch):
@@ -315,9 +429,9 @@ def test_update_download_requires_check(port):
     assert res.status == 400 and "Проверить" in payload["error"]
 
 
-def test_update_download_missing_asset(port, monkeypatch):
+def test_update_download_missing_asset(port, update_state, monkeypatch):
     """В релизе нет портативного zip — 404 с понятной причиной."""
-    api_common._UPDATE_CACHE.update({"release": dict(_RELEASE), "checked": 1.0})
+    update_state.update({"release": dict(_RELEASE), "checked": 1.0})
 
     def fake_json_get(url, **kw):
         return {"assets": [{"name": "другое.txt",
@@ -327,10 +441,10 @@ def test_update_download_missing_asset(port, monkeypatch):
     assert res.status == 404 and "нет архива" in payload["error"]
 
 
-def test_update_download_streams_zip(port, monkeypatch):
+def test_update_download_streams_zip(port, update_state, monkeypatch):
     """Успешный путь: zip релиза как attachment с именем версии."""
-    api_common._UPDATE_CACHE.update({"release": dict(_RELEASE), "checked": 1.0})
-    seen = []
+    update_state.update({"release": dict(_RELEASE), "checked": 1.0})
+    seen: list[str] = []
 
     def fake_json_get(url, **kw):
         assert "/releases/tags/v9.9.0" in url

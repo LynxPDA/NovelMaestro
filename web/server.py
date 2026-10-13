@@ -230,6 +230,7 @@ class Handler(BaseHTTPRequestHandler):
             "auth": auth_obj,
             "authenticated": authenticated,
             "host": srv.host,
+            "no_restart": bool(getattr(srv, "no_restart", False)),
             "repo_root": srv.repo_root,
             "projects_root": srv.projects_root,
             "raw_body": b"",
@@ -358,6 +359,9 @@ class WebServer(ThreadingHTTPServer):
     host: str = "127.0.0.1"
     max_upload_mb: int = 512
     jobs_limit: int = 2
+    # --no-restart: после обновления сервер не перезапускает себя сам
+    # (dev-сервер и автоматизация: PID-файл не должен потерять процесс)
+    no_restart: bool = False
     repo_root: Path | None = None
     projects_root: Path | None = None
     # JobManager присваивается main.py / тестами; импорт не нужен (аннотация)
@@ -370,11 +374,13 @@ class WebServer(ThreadingHTTPServer):
 def make_server(host: str, port: int, auth_obj: Auth,
                 router: Router | None = None,
                 repo_root: Path | None = None,
-                projects_root: Path | None = None) -> WebServer:
+                projects_root: Path | None = None,
+                no_restart: bool = False) -> WebServer:
     """Создаёт ThreadingHTTPServer с подключёнными auth и роутером."""
     srv = WebServer((host, port), Handler)
     srv.auth = auth_obj
     srv.host = host
+    srv.no_restart = no_restart
     srv.router = router if router is not None else Router()
     srv.repo_root = repo_root
     srv.projects_root = projects_root

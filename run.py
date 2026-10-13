@@ -10,6 +10,7 @@ run.py — запуск NovelMaestro (web-first).
   python3 run.py --host 127.0.0.1 --port 8756 --auth
   python3 run.py --no-open      # без автозапуска браузера
   python3 run.py --projects-dir /mnt/data/novels  # своя папка проектов
+  python3 run.py --no-restart      # после обновления сервер не перезапускается
 
 Менеджмент проектов (создание, перенос, переименование, дублирование,
 удаление) — в web-интерфейсе; общая логика — core/projects.py.
@@ -92,6 +93,12 @@ def run_web_backend(args: argparse.Namespace) -> None:
         cmd.append("--auth")
     if not args.no_open:
         cmd.append("--open")
+    # обратные флаги сервера: положительные варианты не нужны — без них сервер
+    # сам берёт значения из реестра (WEB_RESTART, WEB_UPDATE_CHECK)
+    if args.no_restart:
+        cmd.append("--no-restart")
+    if args.no_update_check:
+        cmd.append("--no-update-check")
     subprocess.run(cmd, cwd=str(REPO))
 
 
@@ -114,6 +121,11 @@ def main() -> None:
                          "WEB_PROJECTS_DIR)")
     ap.add_argument("--no-open", action="store_true",
                     help="Не открывать браузер автоматически")
+    ap.add_argument("--no-restart", action="store_true",
+                    help="После обновления не перезапускать сервер самому "
+                         "(его перезапускают руками)")
+    ap.add_argument("--no-update-check", action="store_true",
+                    help="Не проверять обновления при запуске")
     args = ap.parse_args()
 
     # своя папка: CLI-флаг > переменные окружения > общий .env > дефолт

@@ -23,6 +23,7 @@ from __future__ import annotations
 from web import (api_assets, api_common, api_env, api_files, api_glossary,
                  api_projects, api_search, api_stage, api_templates)
 from web.api_common import (  # noqa: F401  фасад
+    start_update_check,
     _CACHE_LOADED,
     _STATS_CACHE,
     _close_multipart_fields,

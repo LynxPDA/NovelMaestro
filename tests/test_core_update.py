@@ -6,10 +6,14 @@
 Сеть наружу не ходит: GitHub ответы мокируются на core.transport (один общий
 GET и для релиза, и для ассетов). git-установка — настоящий локальный
 репозиторий в tmp_path (dulwich, бинарник git не нужен), портативная — zip,
-собранный тут же.
+собранный тут же. Перезапуск проверяется заглушками _spawn/_terminate:
+настоящий наблюдатель поднимается отдельным процессом на Linux.
 """
 import io
+import os
+import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -194,7 +198,11 @@ def test_download_asset_reports_status(monkeypatch):
     ("core/common.py", False),
     ("web/static/app.js", False),
     ("projects/ACTIVE/book/chapters/chapter.txt", True),
-    ("templates/General/prompts/translate.txt", True),
+    ("templates/General/prompts/translate.txt", False),
+    ("templates/.env.example", False),
+    ("templates/Custom/prompts/translate.txt", True),
+    ("templates", True),
+    ("web/jobs.json", True),
     ("web/job_logs/12.log", True),
     ("logs/chapters/x.log", True),
     ("llm_profiles.json", True),
@@ -206,9 +214,10 @@ def test_download_asset_reports_status(monkeypatch):
     ("../../etc/passwd", True),
     ("C:/Windows/win.ini", True),
     ("", True),
-], ids=["code", "code-spa", "projects", "templates", "job_logs", "logs",
-        "profiles", "env", "interpreter", "venv", "pycache", "backslash",
-        "escape", "drive", "empty"])
+], ids=["code", "code-spa", "projects", "tpl-general", "tpl-env",
+        "tpl-custom", "tpl-dir", "job_queue", "job_logs", "logs", "profiles",
+        "env", "interpreter", "venv", "pycache", "backslash", "escape",
+        "drive", "empty"])
 def test_is_protected(rel, protected):
     """Данные и окружение сборки не перезаписываются; код — перезаписывается."""
     assert U.is_protected(rel) is protected
@@ -228,6 +237,10 @@ def _portable_zip(requirements: str = "httpx\n") -> bytes:
             ("core/common.py", "НОВЫЙ КОД\n"),
             ("web/static/app.js", "// новый SPA\n"),
             ("web/job_logs/12.log", "новая история запусков\n"),
+            ("web/jobs.json", "новая очередь\n"),
+            ("templates/General/prompts/translate.txt", "промпт релиза\n"),
+            ("templates/.env.example", "HOST=https://tpl\n"),
+            ("templates/Custom/prompts/translate.txt", "промпт из чужой сборки\n"),
             ("projects/ACTIVE/book/chapter.txt", "новая книга\n"),
             ("python/python.exe", "НОВЫЙ ИНТЕРПРЕТАТОР"),
             (".env", "HOST=https://new\n"),
@@ -250,6 +263,9 @@ def portable_root(tmp_path):
         ("core/local_note.py", "# файл пользователя\n"),
         ("web/static/app.js", "// старый SPA\n"),
         ("web/job_logs/12.log", "старая история запусков\n"),
+        ("web/jobs.json", "моя очередь\n"),
+        ("templates/Custom/prompts/translate.txt", "мой набор\n"),
+        ("templates/.env.example", "HOST=https://old-tpl\n"),
         ("python/python.exe", "СТАРЫЙ ИНТЕРПРЕТАТОР"),
         ("projects/ACTIVE/book/chapters/chapter.txt", "моя книга\n"),
         ("templates/General/prompts/translate.txt", "мой промпт\n"),
@@ -281,7 +297,7 @@ def fake_release(monkeypatch):
 
 
 def test_apply_zip_replaces_code_only(portable_root, fake_release):
-    """Архив кладёт код поверх: данные и интерпретатор целые, код новый."""
+    """Архив кладёт код и встроенные шаблоны поверх: данные целые, код новый."""
     res = U.apply_update(portable_root, "v9.9.0")
     assert res["mode"] == "zip" and res["kind"] == "portable"
     assert res["from"] == "0.4.0" and res["to"] == "9.9.0"
@@ -296,8 +312,12 @@ def test_apply_zip_replaces_code_only(portable_root, fake_release):
     # данные и окружение сборки не тронуты, удалений нет
     assert read("core/local_note.py") == "# файл пользователя\n"
     assert read("web/job_logs/12.log") == "старая история запусков\n"
+    assert read("web/jobs.json") == "моя очередь\n"
     assert read("projects/ACTIVE/book/chapters/chapter.txt") == "моя книга\n"
-    assert read("templates/General/prompts/translate.txt") == "мой промпт\n"
+    # встроенные шаблоны обновились, созданный пользователем набор — нет
+    assert read("templates/General/prompts/translate.txt") == "промпт релиза\n"
+    assert read("templates/.env.example") == "HOST=https://tpl\n"
+    assert read("templates/Custom/prompts/translate.txt") == "мой набор\n"
     assert read("python/python.exe") == "СТАРЫЙ ИНТЕРПРЕТАТОР"
     assert read(".env") == "HOST=https://old\n"
     assert read("llm_profiles.json") == "{}"
@@ -463,3 +483,132 @@ def test_apply_git_quiet_log(git_install):
     U.apply_update(dst, "v0.5.0", log=lines.append)
     assert all("delta" not in ln and "pack data" not in ln for ln in lines)
     assert all(len(ln) < 240 for ln in lines)
+
+
+# ══════════════════════════════════════════════════════════════════
+# ПЕРЕЗАПУСК ПОСЛЕ ОБНОВЛЕНИЯ
+# ══════════════════════════════════════════════════════════════════
+@pytest.mark.parametrize("kind,auto", [
+    ("git", True), ("tree", True), ("portable", False), ("docker", False),
+], ids=["git", "tree", "portable", "docker"])
+def test_restart_supported(kind, auto):
+    """Сам себя перезапускает только процесс, который можно поднять заново.
+
+    Портативная сборка живёт в окне с занятым python.exe, контейнер перезапускает
+    хост.
+    """
+    assert U.restart_supported(kind) is auto
+
+
+def test_restart_command_keeps_entry_and_flags():
+    """Перезапуск поднимает тот же входной скрипт теми же флагами сервера."""
+    cmd = U.restart_command(["run.py", "--host", "0.0.0.0", "--open", "--чужой-флаг"])
+    assert cmd[0] == sys.executable
+    assert cmd[1].endswith("/run.py") and Path(cmd[1]).is_absolute()
+    assert cmd[2:] == ["--host", "0.0.0.0", "--open"]
+
+
+def test_restart_command_without_entry():
+    """Без точки входа (sys.argv[0] пуст) перезапуска не бывает."""
+    assert U.restart_command(["", "--port", "8756"]) == []
+
+
+@pytest.mark.parametrize("kind,marker,auto,word", [
+    ("git", ".git", True, "перезапустится сам"),
+    ("tree", None, True, "перезапустится сам"),
+    ("portable", "START.txt", False, "start.bat"),
+    ("docker", ".docker", False, "docker compose pull"),
+], ids=["git", "tree", "portable", "docker"])
+def test_restart_plan_per_install(kind, marker, auto, word, tmp_path):
+    """План перезапуска: способ установки диктует авто и текст предупреждения."""
+    root = tmp_path / kind
+    root.mkdir()
+    if marker:
+        (root / marker).touch()
+    plan = U.restart_plan(["/repo/web/main.py", "--port", "8756"], root=root)
+    assert plan["kind"] == kind and plan["auto"] is auto
+    assert word in plan["note"]
+    if auto:
+        assert plan["command"][1] == "/repo/web/main.py"
+        assert plan["command"][-1] == "8756"
+
+
+def test_restart_plan_flag_switches_auto_off(tmp_path):
+    """--no-restart (dev-сервер): авто-перезапуск выключен, текст — про руки."""
+    (tmp_path / ".git").mkdir()
+    plan = U.restart_plan(["/repo/web/main.py"], root=tmp_path, allowed=False)
+    assert plan["auto"] is False and plan["command"] == []
+    assert "--no-restart" in plan["note"]
+
+
+def test_schedule_restart_spawns_watcher_and_stops_process(tmp_path, monkeypatch):
+    """Наблюдатель стартует до нашего выхода и ждёт именно выхода процесса.
+
+    Команда наблюдателя: этот же интерпретатор, код наблюдателя, PID, запасной
+    таймер и команда сервера.
+    """
+    (tmp_path / ".git").mkdir()
+    seen = {}
+    monkeypatch.setattr(U, "_spawn", lambda cmd, cwd: seen.update(
+        cmd=cmd, cwd=Path(cwd)))
+    monkeypatch.setattr(U, "_terminate", lambda pid: seen.update(term=pid))
+    plan = U.schedule_restart(["/repo/run.py", "--port", "8756"], root=tmp_path,
+                              pid=4242, wait=7.5)
+    assert plan["auto"] is True
+    assert seen["cwd"] == tmp_path and seen["term"] == os.getpid()
+    cmd = seen["cmd"]
+    assert cmd[0] == sys.executable and cmd[1] == "-c"
+    assert cmd[2] == U._WATCHER_CODE
+    assert cmd[3:] == ["4242", "7.5", sys.executable, "/repo/run.py",
+                       "--port", "8756"]
+
+
+def test_schedule_restart_manual_installation_does_nothing(tmp_path, monkeypatch):
+    """Портативной сборке наблюдатель не нужен: перезапуск делает человек."""
+    (tmp_path / "START.txt").touch()
+    calls = []
+    monkeypatch.setattr(U, "_spawn", lambda *a: calls.append("spawn"))
+    monkeypatch.setattr(U, "_terminate", lambda pid: calls.append("term"))
+    plan = U.schedule_restart(["/repo/run.py"], root=tmp_path)
+    assert plan["auto"] is False and calls == []
+
+
+@pytest.mark.skipif(not Path("/proc/self").is_dir(),
+                    reason="наблюдатель ждёт процесса через /proc")
+def test_watcher_starts_server_only_after_process_exits(tmp_path):
+    """Живой наблюдатель: пока сервер жив — ничего не поднимает, вышел — поднял."""
+    victim = subprocess.Popen([sys.executable, "-c",
+                               "import time; time.sleep(0.5)"])
+    marker = tmp_path / "server.up"
+    watcher = subprocess.Popen(
+        [sys.executable, "-c", U._WATCHER_CODE, str(victim.pid), "10",
+         sys.executable, "-c", f"open({str(marker)!r}, 'w').write('up')"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        assert not marker.exists(), "сервер ещё жив — наблюдатель должен ждать"
+        victim.wait(timeout=10)
+        watcher.wait(timeout=10)
+        for _ in range(60):
+            if marker.exists():
+                break
+            time.sleep(0.05)
+        assert marker.read_text(encoding="utf-8") == "up"
+    finally:
+        watcher.kill()
+        victim.kill()
+
+
+def test_watcher_without_proc_starts_immediately(tmp_path):
+    """Где /proc нет (Windows портативной сборки), наблюдатель не ждёт ничего.
+
+    Проверка переносимая: PID заведомо несуществующего процесса — это «уже вышел».
+    """
+    marker = tmp_path / "server.up"
+    code = (U._WATCHER_CODE.replace("/proc/", str(tmp_path) + "/proc/")
+            .replace("os.path.isdir", "os.path.exists"))
+    proc = subprocess.run([sys.executable, "-c", code, "999999", "0.5",
+                           sys.executable, "-c",
+                           f"open({str(marker)!r}, 'w').write('up')"],
+                          timeout=30, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert marker.exists()

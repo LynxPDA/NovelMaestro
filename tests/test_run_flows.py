@@ -79,13 +79,17 @@ def test_run_web_backend_default_cmd(fake_repo, monkeypatch):
     args = RUN.argparse.Namespace(host=None, port=None, auth=False,
                                   token=None, max_upload_mb=None,
                                   jobs_limit=None, projects_dir=None,
-                                  no_open=False)
+                                  no_open=False, no_restart=False,
+                                  no_update_check=False)
     RUN.run_web_backend(args)
     cmd = captured["cmd"]
     assert cmd[0] == sys.executable
     assert cmd[1] == str(RUN.REPO / "web" / "main.py")
     assert "--open" in cmd                      # браузер по умолчанию
     assert "--auth" not in cmd
+    # без своих флагов сервер сам берёт режимы из реестра (WEB_RESTART,
+    # WEB_UPDATE_CHECK): лаунчер их не выдумывает
+    assert "--no-restart" not in cmd and "--no-update-check" not in cmd
     assert captured["cwd"] == str(RUN.REPO)
 
 
@@ -99,7 +103,8 @@ def test_run_web_backend_passthrough(fake_repo, monkeypatch):
     args = RUN.argparse.Namespace(host="127.0.0.1", port=8899, auth=True,
                                   token="tok", max_upload_mb=100,
                                   jobs_limit=4,
-                                  projects_dir="D:/novels", no_open=True)
+                                  projects_dir="D:/novels", no_open=True,
+                                  no_restart=True, no_update_check=True)
     RUN.run_web_backend(args)
     cmd = captured["cmd"]
     assert "--host" in cmd and "127.0.0.1" in cmd
@@ -110,6 +115,7 @@ def test_run_web_backend_passthrough(fake_repo, monkeypatch):
     assert "--jobs-limit" in cmd and "4" in cmd
     assert "--projects-dir" in cmd and "D:/novels" in cmd
     assert "--open" not in cmd                  # --no-open
+    assert "--no-restart" in cmd and "--no-update-check" in cmd
 
 
 def test_main_launches_web(fake_repo, monkeypatch):

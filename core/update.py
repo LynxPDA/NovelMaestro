@@ -15,27 +15,40 @@ update.py — как эта копия NovelMaestro установлена и к
 
 Общего у них два: релизы живут на GitHub Releases (тег v*, VERSION = тег) и
 пользовательские данные не меняются никогда — список в PROTECTED_PATHS.
+Из шаблонов обновление трогает только встроенные: набор `General` и шаблон
+`.env.example` (они часть программы); наборы, созданные пользователем, — нет.
+
 После обновления сервер обязан перезапуститься: на диске код уже новый, а
-процесс до перезапуска продолжает работать старым.
+процесс до перезапуска продолжает работать старым. В git и tree-установке он
+делает это сам (`restart_plan`, `schedule_restart`): наблюдатель ждёт выхода
+процесса (порт освобождается не мгновенно) и поднимает сервер теми же аргументами.
+Портативная сборка и Docker перезапускаются руками — это написано в тексте
+панели.
 """
 from __future__ import annotations
 
 import io
 import os
 import re
+import signal
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
 from . import transport
+from .projects import TEMPLATE_PROTECTED
 
 __all__ = [
     "UpdateError", "GITHUB_REPO", "RELEASES_URL", "ASSET_PREFIX",
     "KIND_DOCKER", "KIND_PORTABLE", "KIND_GIT", "KIND_TREE", "KIND_LABELS",
     "MODE_COMMAND", "MODE_GIT", "MODE_ZIP", "MODE_LABELS", "HOST_COMMAND",
-    "PROTECTED_PATHS", "PROTECTED_DIRS", "install_kind", "update_mode",
-    "installed_version", "version_tuple", "update_available", "latest_release",
-    "release_notes", "release_asset_url", "download_asset", "is_protected",
-    "host_command_hint", "apply_update",
+    "PROTECTED_PATHS", "PROTECTED_DIRS", "RESTART_FLAGS", "RESTART_WAIT",
+    "install_kind", "update_mode", "installed_version", "version_tuple",
+    "update_available", "latest_release", "release_notes", "release_asset_url",
+    "download_asset", "is_protected", "host_command_hint", "apply_update",
+    "RESTART_NOTES", "restart_supported", "restart_command", "restart_plan",
+    "schedule_restart",
 ]
 
 #: владелец/репозиторий на GitHub — источник релизов (тег v*, zip портативки)
@@ -77,14 +90,62 @@ MODE_LABELS = {
 HOST_COMMAND = "docker compose pull && docker compose up -d"
 
 # ══════════════════════════════════════════════════════════════════
+# ПЕРЕЗАПУСК ПОСЛЕ ОБНОВЛЕНИЯ
+# ══════════════════════════════════════════════════════════════════
+#: флаги сервера со значением: в перезапуск переносятся вместе со следующим
+#: аргументом (свой cwd и точка входа наблюдателя уже заданы — он стартует из
+#: корня кода)
+RESTART_VALUE_FLAGS = ("--host", "--port", "--projects-dir", "--max-upload-mb",
+                       "--jobs-limit", "--token")
+#: флаги-переключатели: переносятся как есть; --no-restart важнее всех —
+#: потерять его значит вернуть авто-перезапуск тому, кто его выключил
+RESTART_SWITCH_FLAGS = ("--auth", "--no-auth", "--open", "--restart", "--no-restart",
+                        "--update-check", "--no-update-check")
+RESTART_FLAGS = RESTART_VALUE_FLAGS + RESTART_SWITCH_FLAGS
+#: сколько секунд наблюдатель ждёт выхода этого процесса; на системах без /proc
+#: (/proc/<pid> не существует) наблюдатель стартует сразу
+RESTART_WAIT = 10.0
+#: наблюдатель: ждёт, пока процесс сервера исчезнет из /proc, и поднимает его
+#: заново. Ждём именно выхода, а не фиксированную паузу: порт из TIME_WAIT
+#: возвращается не сразу, а два сервера на разных портах — это два интерфейса
+#: об одних книгах
+_WATCHER_CODE = (
+    "import os, subprocess, sys, time\n"
+    "me, wait, cmd = sys.argv[1], float(sys.argv[2]), sys.argv[3:]\n"
+    "end = time.monotonic() + wait\n"
+    "while os.path.isdir('/proc/' + me) and time.monotonic() < end:\n"
+    "    time.sleep(0.2)\n"
+    "subprocess.Popen(cmd, close_fds=True)\n"
+)
+#: что интерфейс говорит о перезапуске: ключ — (способ установки, авто)
+RESTART_NOTES = {
+    (KIND_GIT, True): ("После обновления сервер перезапустится сам, окно с "
+                       "консолью закрывать не нужно"),
+    (KIND_TREE, True): ("После обновления сервер перезапустится сам, окно с "
+                        "консолью закрывать не нужно"),
+    (KIND_GIT, False): ("Перезапуск выключен флагом --no-restart: остановите "
+                        "сервер и запустите его заново"),
+    (KIND_TREE, False): ("Перезапуск выключен флагом --no-restart: остановите "
+                         "сервер и запустите его заново"),
+    (KIND_PORTABLE, False): ("Перезапустите сборку сами: закройте окно сервера "
+                             "и запустите start.bat заново. Изнутри это "
+                             "невозможно, а до перезапуска работает старый код"),
+    (KIND_DOCKER, False): (f"Образ обновляет хост командой {HOST_COMMAND}, "
+                           "контейнер сам себя не заменит. Интерфейс эту команду "
+                           "не запускает"),
+}
+
+# ══════════════════════════════════════════════════════════════════
 # ДАННЫЕ ПОЛЬЗОВАТЕЛЯ: что не перезаписывается никогда
 # ══════════════════════════════════════════════════════════════════
-#: пути относительно корня кода (в портовом и tree-режиме)
+#: пути относительно корня кода (в zip-режиме обновления)
+#: `templates/` здесь нет: из шаблонов обновляются только встроенные — см.
+#: правило `is_protected` ниже
 PROTECTED_PATHS = (
     "projects",          # книги: разделы и данные
-    "templates",         # наборы шаблонов пользователя
     "logs",              # логи стадий
     "web/job_logs",      # история запусков
+    "web/jobs.json",     # очередь запусков этого сервера
     "llm_profiles.json",  # профили LLM
     ".env",              # общий конфиг
     ".docker",           # маркер образа
@@ -255,8 +316,11 @@ def download_asset(url: str) -> bytes:
 def is_protected(rel: str) -> bool:
     """True — файл относится к данным пользователя или к окружению сборки.
 
-    Подозрительные пути архива («..», диск) считаются защищёнными: их не
-    пишем ни при каком режиме.
+    Из `templates/` обновляются только встроенные части: набор
+    `TEMPLATE_PROTECTED` и шаблон `.env.example` — их поставляет релиз.
+    Остальные наборы (`templates/Custom/…`) создал пользователь, их обновление
+    не трогает. Подозрительные пути архива («..», диск) считаются защищёнными:
+    их не пишем ни при каком режиме.
     """
     parts = [p for p in str(rel).replace("\\", "/").split("/")
              if p not in ("", ".")]
@@ -267,7 +331,112 @@ def is_protected(rel: str) -> bool:
             return True
         if "/".join(parts[: i + 1]) in PROTECTED_PATHS:
             return True
+    if parts[0] == "templates":
+        return (len(parts) < 2
+                or parts[1] not in (TEMPLATE_PROTECTED, ".env.example"))
     return False
+
+
+def restart_supported(kind: str) -> bool:
+    """Может ли этот сервер перезапустить себя сам (git и tree-копия).
+
+    Портативная сборка живёт в окне с занятым python.exe: изнутри окно не
+    закрыть, а интерпретатор не заменить. Контейнер перезапускает хост.
+    """
+    return kind in (KIND_GIT, KIND_TREE)
+
+
+def restart_command(argv=None) -> list:
+    """Команда перезапуска сервера: тот же интерпретатор и точка входа, те же флаги.
+
+    sys.argv[0] (`run.py` или `web/main.py`) делается абсолютным: наблюдатель
+    стартует из корня кода и относительный путь мог бы не найти. Флаги
+    переносятся списком RESTART_FLAGS — служебные аргументы питона в команде
+    не нужны.
+    """
+    argv = [str(a) for a in (list(sys.argv) if argv is None else argv)]
+    if not argv or not argv[0]:
+        return []
+    entry = str(Path(argv[0]).resolve())
+    keep: list[str] = []
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        name = arg.split("=", 1)[0]
+        if name in RESTART_VALUE_FLAGS:
+            keep.append(arg)
+            # «--port 8756» — два аргумента, значение без флага не значит ничего
+            if "=" not in arg and i + 1 < len(argv):
+                keep.append(argv[i + 1])
+                i += 1
+        elif name in RESTART_SWITCH_FLAGS:
+            keep.append(arg)
+        i += 1
+    return [sys.executable, entry] + keep
+
+
+def restart_plan(argv=None, kind: str | None = None, root=None,
+                 allowed: bool = True) -> dict:
+    """Как этой установке перезапуститься: {kind, mode, auto, command, note}.
+
+    `allowed=False` — перезапуск из себя выключен флагом сервера (--no-restart):
+    интерфейс обязан показать, как перезапустить сервер руками.
+    """
+    kind = kind or install_kind(root)
+    mode = update_mode(kind)
+    command = restart_command(argv) if allowed else []
+    auto = bool(allowed) and restart_supported(kind) and bool(command)
+    return {
+        "kind": kind, "mode": mode, "auto": auto, "command": command,
+        "note": RESTART_NOTES.get((kind, auto), ""),
+    }
+
+
+def _spawn(cmd: list, cwd) -> None:
+    """Запустить наблюдателя: он переживёт выход сервера и поднимет его заново.
+
+    Сеанс и группа процессов НЕ меняются: сервер после перезапуска остаётся в
+    группе терминала, откуда его запускали, и Ctrl+C в нём продолжает работать.
+    Вывод наблюдателя и нового сервера в консоль не пишется — консоль к этому
+    времени уже свободна.
+    """
+    subprocess.Popen(cmd, cwd=str(cwd), stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     close_fds=True)  # noqa: S603
+
+
+def _terminate(pid: int) -> None:
+    """Свернуть этот процесс SIGTERM-ом.
+
+    Не os._exit: web/main.py ставит обработчик SIGTERM, который поднимает
+    SystemExit — так finally успевает остановить активные запуски, а не
+    оставить их сиротами в новой сессии.
+    """
+    os.kill(pid, signal.SIGTERM)
+
+
+def schedule_restart(argv=None, kind: str | None = None, root=None,
+                     allowed: bool = True, pid: int | None = None,
+                     wait: float = RESTART_WAIT) -> dict:
+    """Отложить перезапуск: наблюдатель дождётся выхода и поднимет сервер.
+
+    Наблюдатель переживает выход сервера, потому что запускается до нашего
+    завершения и только ждёт. Ждём именно исчезновения /proc/<pid>, а не таймер:
+    порт освобождается не мгновенно, а второй сервер на другом порту — это два
+    интерфейса об одних книгах. Свой SIGTERM, а не os._exit: обработчик сервера
+    должен успеть остановить активные запуски.
+
+    Возвращает план (`restart_plan`); при auto=False ничего не запускается.
+    """
+    root = Path(root) if root is not None else Path(__file__).resolve().parent.parent
+    plan = restart_plan(argv, kind, root, allowed)
+    if not plan["auto"]:
+        return plan
+    _spawn([sys.executable, "-c", _WATCHER_CODE,
+            str(pid if pid is not None else os.getpid()), str(wait),
+            *plan["command"]], root)
+    _terminate(os.getpid())
+    return plan
 
 
 def _emit(log, line: str) -> None:
@@ -386,8 +555,10 @@ def _apply_zip(root: Path, tag: str, log=None) -> dict:
     """Портативная сборка и копия исходников: файлы архива релиза поверх.
 
     Ничего не удаляется: файлы только перезаписываются, а данные из
-    PROTECTED_PATHS пропускаются. Встроенный интерпретатор портативной
-    сборки (python/) занят процессом и в список кода не входит вовсе.
+    PROTECTED_PATHS пропускаются. Из шаблонов проходят только встроенные
+    (`General/` и `.env.example`) — наборы, созданные пользователем, остаются
+    как есть. Встроенный интерпретатор портативной сборки (python/) занят
+    процессом и в список кода не входит вовсе.
     """
     link = release_asset_url(tag)
     _emit(log, f"Скачиваю архив релиза {tag}")

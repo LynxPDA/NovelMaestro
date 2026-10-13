@@ -394,6 +394,12 @@ body {
   color: var(--muted);
   margin-bottom: 6px;
 }
+/* перезапуск после обновления: отдельная строка, её пишет сервер
+   (git и копия исходников — сам, портативная сборка и Docker — руками) */
+.update-restart {
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+}
 /* ход обновления: строки лога потока сервера */
 .update-log {
   font-family: var(--mono);

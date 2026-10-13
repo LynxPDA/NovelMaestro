@@ -190,11 +190,14 @@ cmd_start() {
         rm -f "$DEV_PID_FILE"
     fi
     # сервер запускается напрямую: PID-файл должен хранить именно его, а не
-    # родителя (run.py ждёт подпроцесс и умрёт вместе с ним)
+    # родителя (run.py ждёт подпроцесс и умрёт вместе с ним).
+    # --no-restart: после обновления dev-сервер не перезапускает себя сам, иначе
+    # новый процесс останется без PID-файла и ./dev.sh stop его не найдёт.
+    # --no-update-check: тесты и dev-прогоны не ходят в сеть.
     WEB_ENV_FILE="${WEB_ENV_FILE:-$DEV_PROJECTS/.env}" \
         setsid nohup python3 "$REPO/web/main.py" \
         --projects-dir "$DEV_PROJECTS" --host 127.0.0.1 --port "$DEV_PORT" \
-        "$@" >"$DEV_LOG" 2>&1 < /dev/null &
+        --no-restart --no-update-check "$@" >"$DEV_LOG" 2>&1 < /dev/null &
     echo $! > "$DEV_PID_FILE"
     log "dev-сервер: PID $(cat "$DEV_PID_FILE"), http://127.0.0.1:$DEV_PORT"
     log "данные: $DEV_PROJECTS · лог: $DEV_LOG"

@@ -42,11 +42,12 @@ log = logging.getLogger("web")
 _CODE_ROOT = Path(__file__).resolve().parent.parent
 
 # ── обновления: кеш последнего ответа GitHub и состояние применения ──
-# Сеть ходит только по кнопкам панели «Обновления» («Проверить», «Скачать
-# архив»); сессия и интерфейс читают кеш. checked — unix-время последней
+# Проверка проходит при запуске сервера сама (start_update_check) и по кнопке
+# «Проверить»; «Скачать архив» тоже ходит в сеть. checked — unix-время последней
 # успешной проверки. Применение обновления долгое (скачивание архива,
 # перемотка ветки), поэтому оно живёт в отдельном потоке: state
-# idle|running|done|error, log — строки хода. Обе структуры читает и пишет
+# idle|running|restarting|done|error (restarting — код на диске новый, сервер
+# сейчас перезапустится), log — строки хода. Обе структуры читает и пишет
 # разные потоки сервера, поэтому — под общим замком.
 _UPDATE_CACHE: dict = {"release": None, "checked": 0.0}
 _UPDATE_JOB: dict = {"state": "idle", "kind": "", "mode": "", "from": "",
@@ -303,21 +304,24 @@ def _session(ctx: dict) -> dict:
         "token_set": ctx["auth"].token_set(),
         "host": ctx["host"],
         "version": app_version(),
-        "update": _update_state(),
+        "update": _update_state(ctx),
     }
 
 
-def _update_state() -> dict:
+def _update_state(ctx: dict | None = None) -> dict:
     """Сводка обновления для SPA: способ установки, кеш проверки, ход обновления.
 
-    Сеть НЕ ходит (сессию спрашивают часто): свежий релиз подтягивает
-    POST /api/update/check. Способ установки определяет, что рисует
-    интерфейс: `mode` command — Docker, только команда хоста; git — обычная
-    установка, кнопка обновления через git; zip — портативная сборка и копия
-    исходников, кнопка обновления архивом релиза.
+    Сеть НЕ ходит (сессию спрашивают часто): релиз кладёт в кеш проверка при
+    запуске сервера или POST /api/update/check. Способ установки определяет, что
+    рисует интерфейс: `mode` command — Docker, только команда хоста; git —
+    обычная установка, кнопка обновления через git; zip — портативная сборка и
+    копия исходников, кнопка обновления архивом релиза. `restart` — что делать
+    с сервером после обновления (auto — перезапустится сам).
     """
     kind = core_update.install_kind(_CODE_ROOT)
     mode = core_update.update_mode(kind)
+    allowed = not bool((ctx or {}).get("no_restart", False))
+    plan = core_update.restart_plan(kind=kind, root=_CODE_ROOT, allowed=allowed)
     cached = _UPDATE_CACHE["release"]
     with _UPDATE_LOCK:
         job = dict(_UPDATE_JOB, log=list(_UPDATE_JOB["log"]))
@@ -333,25 +337,58 @@ def _update_state() -> dict:
         "checked": _UPDATE_CACHE["checked"],
         "available": bool(cached) and core_update.update_available(
             app_version(), cached),
+        "restart": {"auto": plan["auto"], "note": plan["note"]},
         "job": job,
     }
 
 
-def _update_check(ctx: dict) -> dict:
-    """Проверить обновление сейчас (POST /api/update/check).
+def _refresh_release(ctx: dict | None = None) -> dict:
+    """Один короткий запрос к GitHub Releases в кеш процесса; {ok, error}.
 
-    Один короткий запрос к GitHub Releases; результат кешируется в
-    процессе — сессия отдаёт его без сети. Недоступная сеть — не ошибка
-    запроса: вердикт «сейчас не проверить» в ответе.
+    Недоступная сеть — не ошибка запроса: вердикт «сейчас не проверить».
+    Кеш при неудаче не трогается — старый ответ честнее «обновлений нет».
     """
     release = core_update.latest_release()
     if not release.get("ok"):
-        # сеть лежит — это вердикт, а не ошибка запроса: кеш не трогается
         return {"ok": False, "error": release.get("error") or "Сеть недоступна"}
     with _UPDATE_LOCK:
         _UPDATE_CACHE["release"] = release
         _UPDATE_CACHE["checked"] = time.time()
-    return {"ok": True, "update": _update_state()}
+    return {"ok": True, "update": _update_state(ctx)}
+
+
+def start_update_check() -> None:
+    """Проверить обновления при запуске сервера: в фоне и молча.
+
+    Запуск не должен ждать сеть: отдельный поток, одна короткая проверка, при
+    неудаче — только строка в логе. Дальше панель «Обновления» и точка-бейдж
+    работают с тем же кешем, а фоновая перепроверка SPA — только перекладывает
+    кеш сервера.
+    """
+    threading.Thread(target=_update_check_worker, name="nm-update-check",
+                     daemon=True).start()
+
+
+def _update_check_worker() -> None:
+    """Поток проверки при запуске: результат — в кеше, в лог — только вердикт."""
+    res = _refresh_release()
+    if not res.get("ok"):
+        log.info("обновления не проверены: %s", res.get("error") or "Сеть недоступна")
+        return
+    state = res["update"]
+    if state["available"]:
+        log.info("доступно обновление: %s → %s", state["current"],
+                 state["release"]["version"])
+    else:
+        log.info("обновлений нет: версия %s", state["current"])
+
+
+def _update_check(ctx: dict) -> dict:
+    """Проверить обновление сейчас (POST /api/update/check) и показать итог."""
+    res = _refresh_release(ctx)
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error") or "Сеть недоступна"}
+    return res
 
 
 def _update_apply(ctx: dict) -> dict:
@@ -360,6 +397,8 @@ def _update_apply(ctx: dict) -> dict:
     Скачивание архива и `git pull` долгие, поэтому ответ приходит сразу, а
     ход читает GET /api/update/status. Запуск один: второй поток правил бы
     те же файлы. Docker — отказ: контейнер не заменяет собственный образ.
+    --no-restart и портативная сборка — перезапуск руками; о нём говорит
+    подпись в панели (см. `restart` в сводке).
     """
     kind = core_update.install_kind(_CODE_ROOT)
     if core_update.update_mode(kind) == core_update.MODE_COMMAND:
@@ -370,36 +409,41 @@ def _update_apply(ctx: dict) -> dict:
     if not core_update.update_available(app_version(), release):
         raise ApiError(400, "Обновления нет: у вас последняя версия")
     with _UPDATE_LOCK:
-        if _UPDATE_JOB["state"] == "running":
+        if _UPDATE_JOB["state"] in ("running", "restarting"):
             raise ApiError(409, "Обновление уже идёт — дождитесь его конца")
         _UPDATE_JOB.update({
             "state": "running", "kind": kind,
             "mode": core_update.update_mode(kind), "from": app_version(),
             "to": "", "note": "", "error": "", "log": [],
             "started": time.time(), "finished": 0.0})
-    threading.Thread(target=_update_worker, args=(kind, release["tag"]),
-                     name="nm-update", daemon=True).start()
-    return {"ok": True, "update": _update_state()}
+    threading.Thread(
+        target=_update_worker,
+        args=(kind, release["tag"], not bool(ctx.get("no_restart", False))),
+        name="nm-update", daemon=True).start()
+    return {"ok": True, "update": _update_state(ctx)}
 
 
 def _update_status(ctx: dict) -> dict:
     """Ход обновления (GET /api/update/status): состояние и лог потока."""
-    return {"ok": True, "update": _update_state()}
+    return {"ok": True, "update": _update_state(ctx)}
 
 
 def _update_finish(state: str, *, error: str = "", to: str = "",
                    note: str = "") -> None:
-    """Итог потока обновления: done или error (SPA рисует по нему панель)."""
+    """Итог потока обновления: done, restarting или error (по нему панель)."""
     with _UPDATE_LOCK:
         _UPDATE_JOB.update({"state": state, "error": error, "to": to,
                             "note": note, "finished": time.time()})
 
 
-def _update_worker(kind: str, tag: str) -> None:
-    """Поток применения обновления: логичит шаги и пишет итог в _UPDATE_JOB.
+def _update_worker(kind: str, tag: str, allowed: bool = True) -> None:
+    """Поток применения обновления: логичит шаги, пишет итог и перезапускает сервер.
 
-    Код на диске меняется целиком, а процесс до перезапуска работает старый —
-    поэтому итог обязан называть новую версию и говорить про перезапуск.
+    Код на диске меняется целиком, а процесс до перезапуска работает старый, и
+    итог обязан назвать новую версию и сказать про перезапуск. Дальше слова не за
+    нас: `schedule_restart` поднимет наблюдателя и свернёт этот процесс (своим
+    SIGTERM-ом, чтобы запуски остановились штатно), поэтому порядок один: сначала
+    записать итог в _UPDATE_JOB, потом прощаться.
     """
     def _log(line: str) -> None:
         with _UPDATE_LOCK:
@@ -414,9 +458,15 @@ def _update_worker(kind: str, tag: str) -> None:
         _update_finish("error", error=f"Обновление прервано: {exc}")
         log.exception("обновление прервано")
         return
-    _update_finish("done", to=res.get("to") or tag, note=res.get("note") or "")
-    log.info("обновление применено: %s → %s (перезапустите сервер)",
-             res.get("from") or "?", res.get("to") or tag)
+    plan = core_update.restart_plan(kind=kind, root=_CODE_ROOT, allowed=allowed)
+    state = "restarting" if plan["auto"] else "done"
+    note = " ".join(p for p in (res.get("note") or "", plan["note"]) if p)
+    _update_finish(state, to=res.get("to") or tag, note=note)
+    log.info("обновление применено: %s → %s (%s)", res.get("from") or "?",
+             res.get("to") or tag, "перезапуск" if plan["auto"] else "нужен перезапуск")
+    if allowed:
+        core_update.schedule_restart(kind=kind, root=_CODE_ROOT,
+                                    allowed=allowed)
 
 
 def _update_download(ctx: dict) -> dict:

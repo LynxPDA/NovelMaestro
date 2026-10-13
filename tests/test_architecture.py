@@ -195,12 +195,17 @@ def test_web_main_help():
                         str(ROOT / "web" / "main.py"), "--help"],
                        capture_output=True, text=True, timeout=30)
     assert r.returncode == 0
-    for flag in ("--host", "--port", "--no-auth", "--token", "--jobs-limit"):
+    for flag in ("--host", "--port", "--no-auth", "--token", "--jobs-limit",
+                 "--no-restart", "--no-update-check"):
         assert flag in r.stdout, f"--help не упоминает {flag}"
 
 
 def test_web_main_serves(srv_port):
-    """main.py поднимает сервер: /api/session отвечает без токена (--no-auth)."""
+    """main.py поднимает сервер: /api/session отвечает без токена (--no-auth).
+
+    --no-update-check: тестовый сервер не ходит в сеть; --no-restart: он не
+    перезапускает себя сам (за процессом в этом тесте следят по PID).
+    """
     import json
     import subprocess
     import time
@@ -208,7 +213,8 @@ def test_web_main_serves(srv_port):
     p = subprocess.Popen(
         [sys.executable, str(ROOT / "web" / "main.py"),
          "--host", "127.0.0.1", "--port", str(srv_port),
-         "--no-auth", "--token", "smoke-test"],
+         "--no-auth", "--token", "smoke-test",
+         "--no-restart", "--no-update-check"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
         url = f"http://127.0.0.1:{srv_port}/api/session"

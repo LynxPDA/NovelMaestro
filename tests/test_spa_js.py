@@ -5,6 +5,7 @@ ui-core.js покрывается node --test (tests/spa/ui-core.test.mjs) —
 Если node отсутствует — тесты пропускаются (skip), как требует
 AGENTS.md §2 (опциональные зависимости с fallback).
 """
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -144,6 +145,32 @@ def test_run_views_last_finished_log():
     # кэш истории стадии инвалидируется при финальном статусе
     assert "delete st.lastLog[st.job.action]" in src
 
+
+
+def test_app_update_helpers_defined():
+    """Регрессия «панель обновления падает в ReferenceError»: каждый вызов
+    update*(...) в app.js обязан быть определён в app.js или run-views.js —
+    опечатка в имени помощника видна только когда панель реально отрисуется."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8") \
+        + (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    # имена помощников обновления начинаются с «upd»: имена собираются целиком,
+    # иначе опечатка «updBootBox» живёт до момента, когда панель отрисуется
+    called = set(re.findall(r"\b(upd[A-Za-z]*)\s*\(", src))
+    assert called, "в app.js нет ни одного помощника обновления"
+    for name in sorted(called):
+        assert re.search(rf"\bfunction {name}\s*\(", src), f"{name} вызывается, но не определена"
+
+
+def test_app_update_restart_text_from_server():
+    """Текст о перезапуске пишет сервер (core/update.py::RESTART_NOTES): способ
+    установки его и определяет. В SPA его быть не может — там только показ
+    u.restart.note, иначе текст расходится с реальным поведением установки."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    body = src[src.index("function updateRestartBox("):]
+    body = body[:body.index("\n}\n")]
+    assert "u.restart" in body, "помощник не читает u.restart"
+    for word in ("start.bat", "compose pull", "перезапустите", "перезапустится сам"):
+        assert word not in body, f"в SPA завёлся текст перезапуска «{word}»"
 
 def test_fit_preview_frame_defers_hidden():
     """Предпросмотр отчёта в скрытом контейнере (неактивная под-вкладка

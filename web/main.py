@@ -22,6 +22,7 @@ import logging
 import logging.handlers
 import os
 import secrets
+import signal
 import socket
 import sys
 import webbrowser
@@ -111,6 +112,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--projects-dir", default=cfg["web_projects_dir"],
                    help="Папка проектов (по умолчанию <репо>/projects; "
                         "WEB_PROJECTS_DIR)")
+    p.add_argument("--restart", action="store_true",
+                   default=bool(cfg["web_restart"]),
+                   help="Перезапустить сервер после обновления (по умолчанию включено; "
+                        "работает в запуске из репозитория и в копии исходников)")
+    p.add_argument("--no-restart", action="store_true",
+                   help="Не перезапускать сервер после обновления: его перезапускают руками "
+                        "(нужно dev-серверу и автоматизации, где за процессом следят по PID)")
+    p.add_argument("--update-check", action="store_true",
+                   default=bool(cfg["web_update_check"]),
+                   help="Проверить обновления при запуске (по умолчанию включено)")
+    p.add_argument("--no-update-check", action="store_true",
+                   help="Не проверять обновления при запуске (тесты и автоматизация)")
     return p.parse_args(argv)
 
 
@@ -170,9 +183,28 @@ def _lan_ip() -> str:
         return "127.0.0.1"
 
 
+def _stop_here(signum, frame) -> None:
+    """SIGTERM/SIGINT — штатный выход: SystemExit из обработчика запускает finally.
+
+    Без обработчика SIGTERM убивает процесс молча, и запуски остаются сиротами.
+    Это важно и перезапуску после обновления: наблюдателю не важно, как мы вышли,
+    но активные стадии обязаны свернуться вместе с сервером.
+    """
+    raise SystemExit(0)
+
+
+def _install_signal_handlers() -> None:
+    """SIGTERM — то же, что Ctrl+C (в обработчике можно только из главного потока)."""
+    try:
+        signal.signal(signal.SIGTERM, _stop_here)
+    except ValueError as exc:  # не главный поток (тесты поднимают сервер в потоке)
+        log.debug("SIGTERM-обработчик не поставлен: %s", exc)
+
+
 def _bind_server(host: str, port: int, auth_obj: auth.Auth,
                  router: server.Router, repo_root: Path,
                  projects_root: Path,
+                 no_restart: bool = False,
                  max_port_attempts: int = 100) -> tuple[server.WebServer, int]:
     """Создаёт сервер; если порт занят — берёт следующий свободный
     (port+1 … port+max_port_attempts). Возвращает (srv, фактический порт)."""
@@ -181,7 +213,8 @@ def _bind_server(host: str, port: int, auth_obj: auth.Auth,
         try:
             srv = server.make_server(host, candidate, auth_obj, router,
                                      repo_root=repo_root,
-                                     projects_root=projects_root)
+                                     projects_root=projects_root,
+                                     no_restart=no_restart)
         except OSError as exc:
             last_exc = exc
             continue
@@ -219,7 +252,12 @@ def _print_banner(url: str, lan_url: str | None, token: str,
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     use_auth = args.auth and not args.no_auth
+    # флаг выше файла: --no-restart/--no-update-check снимают и WEB_RESTART,
+    # и WEB_UPDATE_CHECK из реестра (одна схема, что у --auth/--no-auth)
+    no_restart = args.no_restart or not args.restart
+    update_check = args.update_check and not args.no_update_check
     _setup_logging()
+    _install_signal_handlers()
     # активный стек внешних библиотек: деградация видна сразу, а не после
     # «почему NER такой медленный» (реестр — core/deps.py)
     log.info("Стек зависимостей: %s", deps_status())
@@ -237,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     api.register(router, host=args.host)
     repo_root = _find_repo_root()
     srv, port = _bind_server(args.host, args.port, auth_obj, router,
-                             repo_root, projects_root)
+                             repo_root, projects_root, no_restart=no_restart)
     srv.max_upload_mb = args.max_upload_mb
     srv.jobs_limit = args.jobs_limit
     # JobManager живёт на сервере (для _job_manager(ctx)); процессы —
@@ -256,9 +294,12 @@ def main(argv: list[str] | None = None) -> int:
             webbrowser.open(open_url)
         except Exception:  # noqa: BLE001 — headless/SSH: тихо игнорируем
             log.debug("Не удалось открыть браузер", exc_info=True)
+    # проверка обновлений при запуске: свой поток, чтобы сервер не ждал сеть
+    if update_check:
+        api.start_update_check()
     try:
         srv.serve_forever()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         print("\nОстановлено.")
     finally:
         # остановить активные запуски (иначе процессы-сироты продолжат

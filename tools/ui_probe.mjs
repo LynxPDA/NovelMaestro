@@ -77,11 +77,19 @@ const MOCK_MODE_LABELS = {
   zip: "файлами из архива релиза",
 };
 const MOCK_HOST_COMMAND = "docker compose pull && docker compose up -d";
+/* тексты о перезапуске пишет сервер (core/update.py::RESTART_NOTES); здесь они
+ * копией, чтобы панель показывала то, что показывает в каждой установке */
+const MOCK_RESTART = {
+  git: { auto: true, note: "После обновления сервер перезапустится сам, окно с консолью закрывать не нужно" },
+  tree: { auto: true, note: "После обновления сервер перезапустится сам, окно с консолью закрывать не нужно" },
+  portable: { auto: false, note: "Перезапустите сборку сами: закройте окно сервера и запустите start.bat заново. Изнутри это невозможно, а до перезапуска работает старый код" },
+  docker: { auto: false, note: `Образ обновляет хост командой ${MOCK_HOST_COMMAND}, контейнер сам себя не заменит. Интерфейс эту команду не запускает` },
+};
 
 /* сводка обновления, как её отдаёт web/api_common.py::_update_state */
-function mockUpdate(kind = "git", mode = null, job = null) {
+function mockUpdate(kind = "git", mode = null, job = null, extra = {}) {
   const modeOf = mode || (kind === "docker" ? "command" : kind === "git" ? "git" : "zip");
-  return {
+  return Object.assign({
     kind,
     label: MOCK_KIND_LABELS[kind],
     mode: modeOf,
@@ -91,11 +99,12 @@ function mockUpdate(kind = "git", mode = null, job = null) {
     release: MOCK_RELEASE,
     checked: 1,
     available: true,
+    restart: MOCK_RESTART[kind],
     job: job || {
       state: "idle", kind, mode: modeOf, from: "0.4.0", to: "", note: "",
       error: "", log: [], started: 0, finished: 0,
     },
-  };
+  }, extra);
 }
 // раздел на кириллице: браузер хранит location.hash закодированным
 const CYR_SECTION = "Черновики";
@@ -1989,6 +1998,7 @@ async function main() {
           btns: [...box.querySelectorAll("button")].map((b) => b.textContent.trim()),
           code: (box.querySelector(".update-cmd") || {}).textContent?.trim() || "",
           logs: [...box.querySelectorAll(".update-log")].map((x) => x.textContent.trim()),
+          restart: [...box.querySelectorAll(".update-restart")].map((x) => x.textContent.trim()),
           badge: !!document.querySelector(".kebab-btn.has-update"),
         };
       });
@@ -2029,6 +2039,8 @@ async function main() {
         problems.push("в панели нет кнопки скачивания архива");
       if (!git.text.includes("перемотается на релиз"))
         problems.push("в панели не описан способ обновления");
+      if (git.restart.length !== 1 || !/перезапустится сам/.test(git.restart[0]))
+        problems.push(`строка о перезапуске: ${JSON.stringify(git.restart)}`);
     }
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-git.png") });
     log(`${problems.length === before ? "✅" : "❌"} обновления: git      ${git.none ? "нет панели" : `${git.links.length} ссылки · кнопок ${git.btns.length}`}`);
@@ -2044,6 +2056,8 @@ async function main() {
       if (docker.btns.length !== 1 || !/Проверить снова/.test(docker.btns[0]))
         problems.push(`Docker: кнопки обновления предлагаются: ${docker.btns.join(", ")}`);
       if (docker.text.includes("**")) problems.push("Docker: заметки не отрендерены");
+      if (docker.restart.length !== 1 || !/контейнер сам себя не заменит/.test(docker.restart[0]))
+        problems.push(`Docker: строка о перезапуске ${JSON.stringify(docker.restart)}`);
     }
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-docker.png") });
     log(`${problems.length === dockerBefore ? "✅" : "❌"} обновления: docker ${docker.none ? "нет панели" : `кнопок ${docker.btns.length} · ${docker.code}`}`);
@@ -2063,9 +2077,65 @@ async function main() {
         problems.push("во время обновления остались кнопки запуска");
     }
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-running.png") });
+    log(`${problems.length === runBefore ? "✅" : "❌"} обновления: процесс ${run.none ? "нет панели" : `строк лога ${run.logs.length}`}`);
+
+    /* код на диске новый, процесс сворачивается: панель обязана объяснять, что
+     * тишина в сети — часть плана, а не поломка */
+    const restarting = await openBox(mockUpdate("git", "git", {
+      state: "restarting", kind: "git", mode: "git", from: "0.4.0", to: "9.9.0",
+      note: "", error: "", log: ["Ветка master: перемотка на релиз v9.9.0 (только ff-only)"],
+      started: 0, finished: 0,
+    }));
+    const restartBefore = problems.length;
+    if (restarting.none) problems.push("панель перезапуска не найдена");
+    else {
+      if (!/сервер перезапускается/.test(restarting.text))
+        problems.push("перезапуск не подписан");
+      if (!/Страница обновится сама/.test(restarting.text))
+        problems.push("нет ожидания перезапуска");
+      if (restarting.logs.length !== 1)
+        problems.push(`строк лога перезапуска: ${restarting.logs.length}`);
+      if (restarting.btns.length)
+        problems.push(`в панели перезапуска остались кнопки: ${restarting.btns.join(", ")}`);
+      if (restarting.restart.length)
+        problems.push("при перезапуске строка о перезапуске дублируется");
+    }
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-restarting.png") });
+    log(`${problems.length === restartBefore ? "✅" : "❌"} обновления: перезапуск ${restarting.none ? "нет панели" : `строк лога ${restarting.logs.length}`}`);
+
+    /* последняя версия: панель обязана быть короткой — ни способа, ни перезапуска */
+    const fresh = await openBox(mockUpdate("git", "git", null,
+      { available: false, release: null }));
+    const freshBefore = problems.length;
+    if (fresh.none) problems.push("панель «последняя версия» не найдена");
+    else {
+      if (!/последняя версия/.test(fresh.text))
+        problems.push(`«последняя версия» не подписана: ${fresh.text.slice(0, 160)}`);
+      if (fresh.restart.length) problems.push("при последней версии показан перезапуск");
+      if (fresh.links.length) problems.push("при последней версии остались ссылки релиза");
+      if (fresh.btns.length !== 1)
+        problems.push(`при последней версии кнопок: ${fresh.btns.length}`);
+    }
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-fresh.png") });
+    log(`${problems.length === freshBefore ? "✅" : "❌"} обновления: без обновл. ${fresh.none ? "нет панели" : `кнопок ${fresh.btns.length}`}`);
+
+    /* портативная сборка: перезапуск делает человек — текст приходит с сервера */
+    const portable = await openBox(mockUpdate("portable"));
+    const portableBefore = problems.length;
+    if (portable.none) problems.push("панель портативной сборки не найдена");
+    else {
+      if (!/start\.bat/.test(portable.text))
+        problems.push("портативной сборке не сказано про start.bat");
+      if (!portable.btns.some((b) => b.includes("Обновить до v9.9.0")))
+        problems.push("портативной сборке нет кнопки обновления");
+      if (portable.restart.length !== 1)
+        problems.push(`портативная сборка: строка о перезапуске ${JSON.stringify(portable.restart)}`);
+    }
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-portable.png") });
+    log(`${problems.length === portableBefore ? "✅" : "❌"} обновления: portable ${portable.none ? "нет панели" : `кнопок ${portable.btns.length}`}`);
+
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
-    log(`${problems.length === runBefore ? "✅" : "❌"} обновления: процесс ${run.none ? "нет панели" : `строк лога ${run.logs.length}`}`);
     await page.unroute("**/api/session");
     await page.unroute("**/api/update/status");
   }

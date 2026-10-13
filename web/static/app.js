@@ -2236,31 +2236,47 @@ function themeSwitch() {
    испорченным, а ссылку на сравнение версий нужно нажать. Ссылки на релиз и
    на сравнение интерфейс показывает отдельными ссылками.
 
-   Проверка — POST /api/update/check (один GET к GitHub Releases, кеш в
-   процессе сервера); сессия отдаёт сводку без сети. Пока обновления не
-   проверялись — тихо; после проверки и появления нового релиза — точка-бейдж
-   на меню «⋮». Долгое обновление идёт в отдельном потоке сервера, его ход
-   читает GET /api/update/status. */
+   Проверка проходит при запуске сервера сама (свой поток, одна короткая GET-
+   проверка) и по кнопке «Проверить»; сессия отдаёт кеш без сети. Пока обновления
+   не проверялись — тихо; после проверки и появления нового релиза — точка-бейдж
+   на меню «⋮» и один тост. Долгое обновление идёт в отдельном потоке сервера,
+   его ход читает GET /api/update/status.
+
+   Перезапуск — часть обновления, а не отдельный ритуал: в запуске из репозитория
+   и в копии исходников сервер сворачивается и поднимается сам (состояние
+   `restarting`), страница ждёт его и перезагружается. Портативная сборка и Docker
+   перезапускаются руками — текст об этом приходит с сервера (update.restart). */
 const UPDATE_POLL_MS = 6 * 60 * 60 * 1000; // фоновая перепроверка раз в 6 ч
 const UPDATE_JOB_MS = 1500;                // ход обновления, пока он идёт
+const UPDATE_BOOT_MS = 4000;               // забрать проверку запуска сервера
+const UPDATE_BOOT_TRIES = 5;               // сколько раз её подождать
 let updatePollTimer = null;
 let updateJobTimer = null;
-/* чем перезапустить сервер после обновления (код на диске новый, процесс — нет) */
-const UPDATE_RESTART_HINT = {
-  portable: "Закройте окно сервера и запустите start.bat заново.",
-  git: "Остановите сервер и запустите его заново: python3 run.py",
-  tree: "Остановите сервер и запустите его заново: python3 run.py",
-};
+let updateBootTries = 0;
+/* перезапуск делает сервер сам (git, копия исходников) — по нему решается,
+   ждать ответа сервера или звать пользователя перезапустить руками */
+let updateRestartAuto = false;
 
+/* Панель «⋮» собирается один раз за рендер, а ход обновления меняется между
+   рендерами: узел заменяется целиком, состояние живёт в state.update. */
 function updateBadgeShow(on) {
   const btn = document.querySelector(".menu-wrap .kebab-btn");
   if (btn) btn.classList.toggle("has-update", !!on);
 }
 
-/* Панель «⋮» собирается один раз за рендер, а ход обновления меняется между
-   рендерами: узел заменяется целиком, состояние живёт в state.update. */
+/* строка о перезапуске: её пишет сервер (u.restart), здесь только показ */
+function updateRestartBox(u) {
+  const note = ((u.restart || {}).note || "").trim();
+  if (!note) return null;
+  return h("div", { class: "update-how update-restart" }, note);
+}
+
+function updateBootBox() {
+  return document.querySelector(".user-menu .update-box");
+}
+
 function refreshUpdateBox() {
-  const old = document.querySelector(".user-menu .update-box");
+  const old = updateBootBox();
   if (old) old.replaceWith(updateMenuItem());
 }
 
@@ -2283,6 +2299,31 @@ function updateLink(href, label) {
     target: "_blank",
     rel: "noopener noreferrer",
   }, label);
+}
+
+/* Проверка при запуске сервера идёт в фоне: забрать её результат молча, парой
+   попыток — пока сервер не ответил, просить его бессмысленно. */
+async function updateAdoptBootCheck() {
+  if (updateBootTries >= UPDATE_BOOT_TRIES) return;
+  updateBootTries += 1;
+  setTimeout(async () => {
+    if (!state.auth || (state.update && state.update.checked)) return;
+    let upd = null;
+    try {
+      const r = await api("/session");
+      upd = r.update || null;
+    } catch (ex) {
+      return;
+    }
+    if (!upd) return;
+    state.update = upd;
+    updateBadgeShow(!!upd.available);
+    if (upd.job && (upd.job.state === "running" || upd.job.state === "restarting"))
+      updateJobPoll();
+    else if (upd.available)
+      toast(`Доступна новая версия: v${(upd.release || {}).version || "?"}`);
+    else if (updateBootBox()) refreshUpdateBox();
+  }, UPDATE_BOOT_MS);
 }
 
 /* Заметки релиза — отрендеренный markdown, а не текст со звёздочками: тот же
@@ -2326,39 +2367,65 @@ async function checkUpdates(showToast) {
         ? `Доступна новая версия: v${state.update.release.version}`
         : "Обновлений нет — у вас последняя версия");
     }
-    if (state.update && state.update.job && state.update.job.state === "running")
-      updateJobPoll();
+    if (state.update && state.update.job
+        && (state.update.job.state === "running"
+            || state.update.job.state === "restarting")) updateJobPoll();
   } catch (ex) {
     if (showToast) toast(`Обновление не проверить: ${ex.message}`, "err");
   }
 }
 
+/* Опросы обновления: редкая фоновая перепроверка и ожидание проверки, которую
+   сервер делает при запуске в своём потоке (она обычно приходит позже первой
+   отрисовки). */
 function ensureUpdatePolling() {
   if (updatePollTimer) return;
   updatePollTimer = setInterval(() => checkUpdates(false), UPDATE_POLL_MS);
+  updateAdoptBootCheck();
 }
 
-/* Ход обновления: поток сервера пишет лог, здесь он только показан. Опрос
-   живёт, пока состояние running, и гаснет на последнем ответе. */
+/* Ход обновления: поток сервера пишет лог, здесь он только показан.
+
+   Авто-перезапуск выглядит как ошибка сети: процесс сворачивается и на запросы
+   не отвечает. Это часть плана, а не поломка — опрос живёт, пока сервер не
+   ответит, и тогда страница перезагружается сама: на диске код уже новый. */
 function updateJobPoll() {
   if (updateJobTimer) return;
   updateJobTimer = setInterval(async () => {
-    let job = { state: "error", error: "нет ответа" };
+    let r = null;
     try {
-      const r = await api("/update/status");
-      state.update = r.update || state.update;
-      job = (state.update && state.update.job) || job;
+      r = await api("/update/status");
     } catch (ex) {
-      if (state.update) state.update.job = job;
+      r = null;  // сервер прямо сейчас перезапускается
     }
-    refreshUpdateBox();
-    if (job.state === "running") return;
+    if (!r || !r.update) {
+      if (state.update && state.update.job) {
+        state.update = Object.assign({}, state.update, {
+          job: Object.assign({}, state.update.job, { state: "restarting" }),
+        });
+        refreshUpdateBox();
+      }
+      return;
+    }
+    state.update = r.update;
+    const job = state.update.job || {};
+    updateBadgeShow(!!state.update.available);
+    if (job.state === "running" || job.state === "restarting") {
+      refreshUpdateBox();
+      return;
+    }
     clearInterval(updateJobTimer);
     updateJobTimer = null;
-    toast(job.state === "done"
-      ? `Программа обновлена до v${job.to || "?"} — перезапустите сервер`
-      : `Обновление не применено: ${job.error || "неизвестная причина"}`,
-      job.state === "done" ? "ok" : "err");
+    if (job.state === "error") {
+      toast(`Обновление не применено: ${job.error || "неизвестная причина"}`, "err");
+    } else if (updateRestartAuto) {
+      toast(`Готово: версия v${state.update.current}, сервер перезапущен`);
+      setTimeout(() => location.reload(), 900);
+    } else {
+      toast(`Программа обновлена до v${job.to || "?"} — перезапустите сервер`);
+    }
+    updateRestartAuto = false;
+    refreshUpdateBox();
   }, UPDATE_JOB_MS);
 }
 
@@ -2366,7 +2433,11 @@ async function updateApply() {
   try {
     const r = await api("/update/apply", { method: "POST" });
     state.update = r.update || state.update;
-    toast("Обновление началось");
+    updateRestartAuto = !!(state.update && state.update.restart
+      && state.update.restart.auto);
+    toast(updateRestartAuto
+      ? "Обновление началось: сервер перезапустится сам"
+      : "Обновление началось: по окончании сервер перезапускают руками");
   } catch (ex) {
     toast(ex.message, "err");
   }
@@ -2403,18 +2474,17 @@ async function updateDownload(version) {
 function updateHowBox(u) {
   if (u.mode === "command") {
     const box = h("div", { class: "update-how" },
-      "Образ обновляет хост — контейнер сам себя не заменит. Команда на хосте:",
+      "Образ обновляет хост, контейнер сам себя не заменит. Команда на хосте:",
       h("code", { class: "update-cmd" },
         u.command || "docker compose pull && docker compose up -d"));
     return box;
   }
   return h("div", { class: "update-how" }, u.mode === "git"
-    ? "Код перемотается на релиз из репозитория: книги, шаблоны и настройки не изменятся."
-    : "Файлы программы заменятся из архива релиза: папки projects, templates, "
-      + "логи и файл .env не изменятся.");
+    ? "Код перемотается на релиз из репозитория: книги, настройки и свои наборы шаблонов останутся как есть."
+    : "Файлы программы заменятся из архива релиза: папки projects и logs, файл .env и свои наборы шаблонов не изменятся.");
 }
 
-/* Пункт меню «⋮»: способ установки, результат проверки, кнопки.
+/* Пункт меню «⋮»: способ установки, результат проверки, кнопки и перезапуск.
    Вызывается при каждой сборке layout — рисует по state.update. */
 function updateMenuItem() {
   const u = state.update || {};
@@ -2423,6 +2493,17 @@ function updateMenuItem() {
   const box = h("div", { class: "update-box" });
   box.append(h("div", { class: "update-title" },
     `Обновления · v${u.current || state.version || "?"}`));
+  if (job.state === "running" || job.state === "restarting") {
+    box.append(h("div", { class: "update-state update-new" },
+      job.state === "running" ? `Обновляется: ${u.mode_label || ""}`
+        : `Код обновлён до v${job.to || "?"} — сервер перезапускается…`));
+    (job.log || []).slice(-6).forEach((line) =>
+      box.append(h("div", { class: "update-log" }, line)));
+    if (job.state === "restarting")
+      box.append(h("div", { class: "update-how" },
+        "Страница обновится сама, как только сервер ответит."));
+    return box;
+  }
   if (!u.checked) {
     box.append(h("div", { class: "update-state" },
       u.label ? `${u.label}. Обновление не проверялось.`
@@ -2430,21 +2511,16 @@ function updateMenuItem() {
     box.append(updateCheckBtn("Проверить обновления"));
     return box;
   }
-  if (job.state === "running") {
+  /* пояснения идут ДО кнопок: способ обновления и перезапуска — это объяснение
+     того, что сделает кнопка, а не итог; у завершённого обновления свой итог */
+  const finished = job.state === "done" || job.state === "error";
+  const restart = updateRestartBox(u);
+  if (finished) {
     box.append(h("div", { class: "update-state update-new" },
-      `Обновляется: ${u.mode_label || ""}`));
-    (job.log || []).slice(-6).forEach((line) =>
-      box.append(h("div", { class: "update-log" }, line)));
-    return box;
-  }
-  if (job.state === "done") {
-    box.append(h("div", { class: "update-state update-new" },
-      `Программа обновлена до v${job.to || "?"}`));
-    box.append(h("div", { class: "update-how" },
-      UPDATE_RESTART_HINT[u.kind] || "Перезапустите сервер."));
-  } else if (job.state === "error") {
-    box.append(h("div", { class: "update-state update-new" },
-      "Обновление не применено"));
+      job.state === "done" ? `Программа обновлена до v${job.to || "?"}`
+                           : "Обновление не применено"));
+    if (job.note) box.append(h("div", { class: "update-log" }, job.note));
+    if (restart) box.append(restart);
   } else if (u.available) {
     const date = updateDate(rel.published);
     box.append(h("div", { class: "update-state update-new" },
@@ -2452,6 +2528,7 @@ function updateMenuItem() {
     const notes = updateNotes(rel.notes);
     if (notes) box.append(notes);
     box.append(updateHowBox(u));
+    if (restart) box.append(restart);
     // Docker: кнопки обновления не предлагаются — образ меняет хост
     if (u.mode !== "command") {
       box.append(h("button", {
@@ -2466,10 +2543,6 @@ function updateMenuItem() {
   } else {
     box.append(h("div", { class: "update-state" }, "У вас последняя версия"));
   }
-  if (job.state === "error" && job.error)
-    box.append(h("div", { class: "update-log" }, job.error));
-  if (job.state === "done" && job.note)
-    box.append(h("div", { class: "update-log" }, job.note));
   const links = [];
   if (rel.url) links.push(updateLink(rel.url, `Релиз v${rel.version}`));
   if (rel.changes) links.push(updateLink(rel.changes, "Список изменений"));
@@ -3632,9 +3705,11 @@ async function boot() {
   if (state.auth) {
     ensureUpdatePolling();
     if (state.update && state.update.available) updateBadgeShow(true);
-    // обновление могло начаться в другой вкладке: его ход досчитываем отсюда
-    if (state.update && state.update.job && state.update.job.state === "running")
-      updateJobPoll();
+    // обновление могло начаться в другой вкладке (или сервер как раз
+    // перезапускается): его ход досчитываем отсюда
+    if (state.update && state.update.job
+        && (state.update.job.state === "running"
+            || state.update.job.state === "restarting")) updateJobPoll();
   }
 }
 
