@@ -1358,16 +1358,27 @@ class _FakeResp:
         yield from self._lines
 
 
-def _sse(parts, finish=None, done=True, raw_extra=()):
-    """Собирает SSE-строки: data: {chunks} [+ data: [DONE]]."""
+def _sse(parts, finish: str | None = "stop", done=True, raw_extra=(),
+         space=" "):
+    """Собирает SSE-строки тела ответа: дельты [+ data: [DONE]].
+
+    finish — finish_reason последнего чанка (""/None — признака конца нет
+    вовсе): ответ засчитывается только по finish_reason, один [DONE] или
+    закрытое тело — уже обрыв. done — дописать data: [DONE]. space — «» для
+    серверов, которые пишут «data:{...}» без пробела. raw_extra — служебные
+    строки (комментарии, event:, id:) в начале тела.
+    """
+    prefix = ("data:" + space).encode()
     lines = list(raw_extra)
-    for p in parts:
-        ch = {"choices": [{"delta": {"content": p}}]}
-        if finish:
-            ch["choices"][0]["finish_reason"] = finish
-        lines.append(b"data: " + json.dumps(ch, ensure_ascii=False).encode("utf-8"))
+    last = len(parts) - 1
+    for i, p in enumerate(parts):
+        choice: dict = {"delta": {"content": p}}
+        if finish and i == last:
+            choice["finish_reason"] = finish
+        lines.append(prefix + json.dumps({"choices": [choice]},
+                                         ensure_ascii=False).encode("utf-8"))
     if done:
-        lines.append(b"data: [DONE]")
+        lines.append(prefix + b"[DONE]")
     return lines
 
 
@@ -1396,17 +1407,23 @@ def _no_sleep(monkeypatch):
 # ══════════════════════════════════════════════════════════════════════
 # stream_chat_completion
 # ══════════════════════════════════════════════════════════════════════
-@pytest.mark.parametrize("variant", ["done", "finish_stop"])
+@pytest.mark.parametrize("variant", ["done", "no_done", "no_space"])
 def test_stream_success(monkeypatch, variant):
+    """Успех — он же для разного кадра: stop + [DONE], один stop, «data:» без пробела."""
     if variant == "done":
         lines = _sse(["Привет, ", "мир!"])
+        want = "Привет, мир!"
+    elif variant == "no_done":
+        lines = _sse(["Готово"], done=False)
+        want = "Готово"
     else:
-        lines = _sse(["Готово"], finish="stop", done=False)
+        lines = _sse(["Привет, ", "мир!"], space="")
+        want = "Привет, мир!"
     cap = {}
     _patch_post(monkeypatch, lines, capture=cap)
     text, err = C.stream_chat_completion("http://h/v1", "m", [{"role": "user", "content": "x"}])
     assert err == "" and text is not None
-    assert ("Привет, мир!" if variant == "done" else "Готово") == text
+    assert want == text
     # payload и заголовки
     assert cap["url"] == "http://h/v1/chat/completions"
     assert cap["json"]["stream"] is True
@@ -1477,13 +1494,45 @@ def test_stream_loop_detected(monkeypatch):
 
 
 def test_stream_interrupted(monkeypatch):
-    _patch_post(monkeypatch, _sse(["кусок"], done=False))  # нет [DONE]/stop
+    """Тело закрылось, finish_reason не пришёл — это обрыв, а не ответ."""
+    _patch_post(monkeypatch, _sse(["кусок"], finish=None, done=False))
     text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
     assert text is None and err == "Stream interrupted"
 
 
-def test_stream_empty_response(monkeypatch):
+def test_stream_done_without_finish_reason(monkeypatch):
+    """Один [DONE] — не признак конца генерации.
+
+    Шлюз, у которого upstream оборвался, закрывает тело собственным [DONE];
+    раньше такой огрызок уходил в файл главы как полный перевод."""
     _patch_post(monkeypatch, [b"data: [DONE]"])
+    text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
+    assert text is None and err == "Ended without finish_reason"
+
+    _patch_post(monkeypatch, _sse(["начало"], finish=None))
+    text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
+    assert text is None and err == "Ended without finish_reason"
+
+
+@pytest.mark.parametrize("reason", ["stop", "end_turn", "stop_sequence",
+                                   "eos_token"])
+def test_stream_finish_done_reasons(monkeypatch, reason):
+    """finish_reason конца генерации понимаются по-разному, все — успех."""
+    _patch_post(monkeypatch, _sse(["весь текст"], finish=reason))
+    text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
+    assert err == "" and text == "весь текст"
+
+
+@pytest.mark.parametrize("reason", ["content_filter", "pause", "tail"])
+def test_stream_unknown_finish_reason(monkeypatch, reason):
+    """Неизвестный finish_reason — не «успех»: огрызок с таким концом опаснее ретрая."""
+    _patch_post(monkeypatch, _sse(["огрызок"], finish=reason))
+    text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
+    assert text is None and err == f"Stopped: {reason}"
+
+
+def test_stream_empty_response(monkeypatch):
+    _patch_post(monkeypatch, _sse([""]))
     text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
     assert text is None and err == "Empty response"
 
@@ -1552,16 +1601,117 @@ def test_stream_http_500_retries_then_fails(monkeypatch):
     assert text is None and err == "HTTP 503" and calls["n"] == 3
 
 
-def test_stream_garbage_lines_skipped(monkeypatch):
+def test_stream_service_lines_ignored(monkeypatch):
+    """Комментарии, служебные поля, пустые строки и usage-чанк — не данные и не ошибки."""
     lines = [
-        b"event: ping",                       # не data:
-        b"data: {broken json",                # не парсится
-        b"",                                   # пустая
-        b"data: " + json.dumps({"choices": []}).encode(),  # пустой choices
+        b": keep-alive",                      # комментарий сервера
+        b"event: ping",                        # служебное поле
+        b"id: 7", b"retry: 5000",             # служебные поля
+        b"",                                   # пустая строка
+        b"data: " + json.dumps({"choices": []}).encode(),  # usage-чанк
     ] + _sse(["нормально"])
     _patch_post(monkeypatch, lines)
     text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
     assert err == "" and text == "нормально"
+
+
+def test_stream_keepalive_data_frames(monkeypatch):
+    """Кадр data: из одних пробелов — keep-alive, а не битое событие и не текст."""
+    lines = ([b"data: ", b"", b"data:  \t", b""]
+             + _sse(["текст"], finish=None, done=False) + [b"", b"data:", b""]
+             + _sse(["!"], finish="stop") + [b""])
+    _patch_post(monkeypatch, lines)
+    text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
+    assert err == "" and text == "текст!"
+
+
+def test_stream_broken_event_is_interruption(monkeypatch):
+    """Неразобранное событие — обрыв: молча пропустить его = потерять кусок."""
+    _patch_post(monkeypatch, [b"data: {broken json", b"data: [DONE]"])
+    text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
+    assert text is None and err.startswith("Stream interrupted (битое SSE-событие")
+
+
+def test_stream_error_event_is_interruption(monkeypatch):
+    """Ошибка роутера внутри 200-го ответа — несданный кусок, а не пустой чанк."""
+    lines = _sse(["начало"], finish=None, done=False) + [
+        b"data: " + json.dumps({"error": {"message": "upstream timeout"}},
+                               ensure_ascii=False).encode(),
+        b"data: [DONE]"]
+    _patch_post(monkeypatch, lines)
+    text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
+    assert text is None and "error в потоке" in err and "upstream timeout" in err
+
+
+@pytest.mark.parametrize("shape,bodies,want", [
+    ("delta.content", [{"choices": [{"index": 0, "delta": {"content": "целиком"},
+                                     "finish_reason": "stop"}]}], "целиком"),
+    ("completions text", [{"choices": [{"index": 0, "text": "целиком",
+                                        "finish_reason": "stop"}]}], "целиком"),
+    ("блоки контента", [{"choices": [
+        {"index": 0, "delta": {"content": [{"type": "text", "text": "блок1 "},
+                                           {"type": "text", "text": "блок2"}]},
+         "finish_reason": "stop"},
+        {"index": 1, "delta": {"content": "чужая выборка"}}]}], "блок1 блок2"),
+    ("не нулевой index", [{"choices": [{"index": 1, "delta": {"content": "нужное"},
+                                       "finish_reason": "stop"}]}], "нужное"),
+    ("рассуждения мимо", [{"choices": [{"index": 0, "delta": {
+                             "reasoning_content": "думаю…"}}]},
+                         {"choices": [{"index": 0, "delta": {"content": "ответ"},
+                                       "finish_reason": "stop"}]}], "ответ"),
+])
+def test_stream_answer_shapes(monkeypatch, shape, bodies, want):
+    """Формы ответа, кроме канонической delta.content, читаются, а не теряются."""
+    _patch_post(monkeypatch, [b"data: " + json.dumps(b, ensure_ascii=False)
+                              .encode("utf-8") for b in bodies])
+    text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
+    assert err == "" and text == want
+
+
+def test_stream_multiline_event(monkeypatch):
+    """Одно событие, разложенное на несколько data:-строк, читается целиком."""
+    body = ('{"choices": [{"delta": {"content": \n"весь текст"}, '
+            '"finish_reason": "stop"}]}')
+    _patch_post(monkeypatch, [b"data: " + ln.encode("utf-8")
+                             for ln in body.split("\n")])
+    text, err = C.stream_chat_completion("h", "m", [], max_retries=1)
+    assert err == "" and text == "весь текст"
+
+
+@pytest.mark.parametrize("case,lines,want", [
+    ("пустые строки между событиями",
+     [b'data: {"a": 1}', b"", b"data: [DONE]", b""], ['{"a": 1}', "[DONE]"]),
+    ("сервер экономит пустую строку",
+     [b'data: {"a": 1}', b"data: [DONE]"], ['{"a": 1}', "[DONE]"]),
+    ("data: без пробела",
+     [b'data:{"a": 1}', b"data:[DONE]"], ['{"a": 1}', "[DONE]"]),
+    ("кадр \r\n",
+     [b'data: {"a": 1}\r', b"data: [DONE]\r"], ['{"a": 1}', "[DONE]"]),
+    ("data-строка с отступом",
+     [b'   data: {"a": 1}'], ['{"a": 1}']),
+    ("комментарии и служебные поля",
+     [b": keep-alive", b"event: message", b"id: 1", b"retry: 5000",
+      b'data: {"a": 1}'], ['{"a": 1}']),
+    ("текстовые строки вместо байтов",
+     ['data: {"a": 1}'], ['{"a": 1}']),
+    ("пустое тело", [], []),
+    ("одни пустые строки", [b"", b""], []),
+    # keep-alive-кадры: значение пусто или из одних пробелов — не данные
+    # (настоящий пробел дельты приходит внутри JSON, а не голым кадром)
+    ("пустое значение data", [b"data: ", b"data:", b"data:  \t"], []),
+    ("keep-alive между деловыми событиями",
+     [b'data: {"a": 1}', b"data: ", b"", b"data: [DONE]"],
+     ['{"a": 1}', "[DONE]"]),
+])
+def test_iter_sse_events_framing(case, lines, want):
+    """Кадры SSE: события отдаются целыми, комментарии и служебные поля — мимо."""
+    assert list(C.iter_sse_events(lines)) == want
+
+
+def test_iter_sse_events_joins_multiline_event():
+    """Несколько data:-строк одного события склеиваются переводом строки."""
+    lines = [b'data: {"a":', b'data:  1}', b""]
+    assert list(C.iter_sse_events(lines)) == ['{"a":\n 1}']
 
 
 def test_stream_timeouts_and_retry_success(monkeypatch):

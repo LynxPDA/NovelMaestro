@@ -50,7 +50,7 @@ CORE_API = [
     "review_entry", "parse_review_doc", "merge_review_entries",
     "fix_entry", "merge_fix_entries", "apply_fix_to_text",
     "flex_fragment_pattern", "find_fragment_owner",
-    "stream_chat_completion", "llm_messages",
+    "iter_sse_events", "stream_chat_completion", "llm_messages",
     "server_base_url", "probe_server",
     "atomic_write", "read_text_safe",
     "web_progress_enabled", "emit_progress",

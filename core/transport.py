@@ -16,10 +16,11 @@ HTTP в проекте ходит отсюда и больше ниоткуда:
 * раздельные connect/write/read таймауты вместо одного числа «на всё»;
 
 Контракт вызывающего: `ResponseStream` (`status_code`, `headers`,
-`iter_lines()` — байтовые строки SSE без терминатора). Гигиена стрима
-([DONE]/finish_reason/loop/cut/empty/min_len_ratio) и политика ретраев живут в
-`core.common` и от транспорта не зависят. Прямой `import httpx` вне этого модуля
-запрещён (страж `tests/test_architecture.py`).
+`iter_lines()` — байтовые строки SSE без терминатора; пустая строка = граница
+события, и она тоже отдаётся). Транспорт отдаёт СТРОКИ: собирать из них события
+(`core.common.iter_sse_events`), решать, завершилась ли генерация, и повторять
+запрос — дело `core.common`; от транспорта это не зависит. Прямой `import httpx`
+вне этого модуля запрещён (страж `tests/test_architecture.py`).
 """
 from __future__ import annotations
 
@@ -114,7 +115,8 @@ class ResponseStream:
 
     def iter_lines(self) -> Iterator[bytes]:
         """Тело по строкам: `\\n` — граница, `\\r` отрезается, пустые строки
-        отдаются как есть (пустая строка SSE = событие закончилось)."""
+        отдаются как есть (пустая строка SSE = событие закончилось; события из
+        строк собирает `core.common.iter_sse_events`)."""
         buf = b""
         try:
             for chunk in self._resp.iter_bytes():  # декодированное тело

@@ -29,7 +29,8 @@ core/transport.py: единственный HTTP-клиент httpx) + опци�
   текст         split_text_smart, get_ngrams, is_cjk, is_cjk_string,
                 normalize_for_search, build_smart_regex, find_exact_match
   NER           load_ner_data, find_relevant_ner
-  LLM           stream_chat_completion (транспорт — core/transport.py)
+  LLM           iter_sse_events (разбор потока по спецификации SSE),
+                stream_chat_completion (транспорт — core/transport.py)
   зависимости   core/deps.py: реестр внешних библиотек и фолбэков
   файловая ФС   atomic_write, read_text_safe
   главы         parse_chapter_id, build_chapter_map, find_chapter_file,
@@ -1911,6 +1912,128 @@ def llm_messages(prompt: str, data: str = "") -> list[dict]:
             {"role": "user", "content": content}]
 
 
+def _is_json(text: str) -> bool:
+    """Разбирается ли строка как JSON (проверка без создания объекта)."""
+    try:
+        json.loads(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _sse_flush(parts: list) -> list:
+    """Накопленные data-строки → payload'ы событий.
+
+    Пустое значение (или из одних пробелов) — keep-alive: настоящий пробел
+    дельты приходит внутри JSON, а не голым кадром, поэтому такие строки
+    отбрасываются до разбора — иначе они портили бы группу строк одного
+    события.
+
+    Нормальный случай — одна строка на событие. Если строк несколько, а
+    склеенный JSON неразбираем и каждая строка разбирается сама (или это
+    [DONE]), сервер разделял события не пустой строкой, а просто её не
+    печатал: строки отдаются отдельными событиями. Иначе одна неразобранная
+    склейка стала бы обрывом стрима.
+    """
+    parts = [p for p in parts if p.strip()]
+    if len(parts) <= 1:
+        return parts
+    joined = "\n".join(parts)
+    if _is_json(joined):
+        return [joined]
+    if all(_is_json(p) or p.strip() == "[DONE]" for p in parts):
+        return list(parts)
+    return [joined]   # неразобранное — решение за вызывающим (это обрыв)
+
+
+def iter_sse_events(lines):
+    """Строки тела ответа → payload'ы SSE-событий (по спецификации SSE).
+
+    lines — то, что отдаёт `ResponseStream.iter_lines()`: байтовые (или
+    текстовые) строки без терминатора. Отдаётся содержимое поля `data` одного
+    события; строки, оставшиеся к концу тела, отдаются и без пустой строки
+    в конце (серверы экономят последний кадр).
+
+    Кадр разбирается по спецификации, а не под один шаблон — из-за наивного
+    «data: » с обязательным пробелом и правила «одна строка = одно событие»
+    целые куски перевода пропадали молча:
+      * префикс пишется и как «data: », и как «data:» — один пробел после
+        двоеточия принадлежит кадру, а не значению;
+      * одно событие законно занимает несколько `data:`-строк (они склеиваются
+        переводом строки — так делают шлюзы);
+      * строка с «:» — комментарий сервера (keep-alive), «event:», «id:»,
+        «retry:» — служебные поля: это не данные и не ошибки.
+    Если склеенный payload не разбирается, а каждая data-строка разбирается
+    сама — сервер просто не печатал пустую строку между событиями: строки
+    отдаются отдельными событиями (см. _sse_flush). Неразобранное событие
+    отдаётся как есть: решать, обрыв это или шум, — вызывающему.
+    """
+    data: list = []
+    for raw in lines:
+        line = (raw.decode("utf-8", errors="ignore")
+                if isinstance(raw, (bytes, bytearray)) else str(raw))
+        line = line.rstrip("\r")
+        if not line.strip():
+            # пустая строка — событие закончилось
+            for payload in _sse_flush(data):
+                yield payload
+            data = []
+            continue
+        if line.lstrip().startswith(":"):
+            continue                      # комментарий сервера (keep-alive)
+        field, sep, value = line.partition(":")
+        if not sep:
+            value = ""                    # поле без значения — пустое значение
+        if field.strip() != "data":
+            continue                      # event/id/retry — не данные
+        data.append(value[1:] if value.startswith(" ") else value)
+    for payload in _sse_flush(data):   # хвост тела без терминатора
+        yield payload
+
+
+#: finish_reason, которые означают «генерация закончилась». Конец тела ответа
+#: (data: [DONE]) сам по себе ничего не доказывает: шлюз, у которого upstream
+#: оборвался, закрывает тело собственным [DONE] — и укороченный перевод
+#: считался успешным.
+_FINISH_DONE = frozenset({"stop", "end_turn", "stop_sequence", "eos_token"})
+#: упёрся в серверный предел ответа — отдельная причина: чинится не повтором
+#: того же чанка, а меньшим chunk_size / большим пределом ответа
+_FINISH_LENGTH = "length"
+
+
+def _chunk_delta(chunk: dict) -> tuple:
+    """Один чанк потока → (текст дельты, finish_reason) основной выборки.
+
+    Основная выборка — с минимальным index, а не нулевой элемент: серверы,
+    которые гонят n>1, кладут нужную выборку не в начало. Текст читается и в
+    chat-форме (delta.content), и в completions-форме (delta/text — строка),
+    и в блоках текста ([{"type": "text", "text": …}]). Рассуждения
+    (reasoning/reasoning_content) не читаются намеренно: в перевод они попадать
+    не должны.
+    """
+    choices = chunk.get("choices")
+    if isinstance(choices, dict):
+        choices = [choices]
+    if not isinstance(choices, list):
+        return "", ""
+    choices = [c for c in choices if isinstance(c, dict)]
+    if not choices:
+        return "", ""                     # usage-чанк, ping: данных нет
+    primary = min(choices, key=lambda c: c.get("index") or 0)
+    body = primary.get("delta")
+    if body is None:
+        body = primary.get("message")
+    if body is None:
+        body = primary.get("text")
+    if isinstance(body, dict):
+        body = body.get("content")
+    if isinstance(body, (list, tuple)):
+        body = "".join(str(b.get("text", "")) for b in body
+                       if isinstance(b, dict))
+    piece = body if isinstance(body, str) else ""
+    return piece, str(primary.get("finish_reason") or "")
+
+
 _LOOP_RES = (
     re.compile(r"(.{1,3})\1{50,}"),
     re.compile(r"(.{4,15})\1{15,}"),
@@ -1947,8 +2070,10 @@ def stream_chat_completion(
 ):
     """Стрим-запрос к OpenAI-совместимому API.
     Возвращает (text | None, error_str).
-    Гигиена: [DONE]/finish_reason, детект зацикливания, обрезка max_tokens,
-    пустой ответ, min_len_ratio к reference_len (символьное отношение
+    Гигиена: событие читается только завершённым (iter_sse_events), ответ
+    засчитан лишь при finish_reason из _FINISH_DONE — один [DONE] или закрытое
+    тело больше не «успех»; детект зацикливания, обрезка max_tokens, пустой
+    ответ, min_len_ratio к reference_len (символьное отношение
     длин остаётся СИМВОЛЬНЫМ специально: в токенах оно меняло бы смысл
     для CJK→RU). max_tokens — серверный предел (ТОКЕНЫ); размеры
     запросов — ТОКЕНЫ (оценка estimate_tokens).
@@ -1987,51 +2112,62 @@ def stream_chat_completion(
                         break
                     time.sleep(_retry_wait(attempt, resp))
                     continue
-                full, looped, ok, cut = "", False, False, False
-                for line in resp.iter_lines():
-                    if not line:
-                        continue
-                    ls = line.decode("utf-8", errors="ignore").strip()
-                    if not ls.startswith("data: "):
-                        continue
-                    ds = ls[6:]
-                    if ds == "[DONE]":
-                        ok = True
+                # done — пришло [DONE]; frs — последний finish_reason основной
+                # выборки; broken — почему потоку нельзя доверять (обрыв)
+                full, looped, done, frs, broken = "", False, False, "", ""
+                for ev in iter_sse_events(resp.iter_lines()):
+                    event = ev.strip()
+                    if event == "[DONE]":
+                        done = True
                         break
                     try:
-                        ch = json.loads(ds)
-                    except json.JSONDecodeError:
-                        continue
-                    choices = ch.get("choices", [{}])
-                    if not choices:
-                        continue
-                    fr = choices[0].get("finish_reason")
-                    if fr == "stop":
-                        ok = True
-                    elif fr == "length":
-                        cut = True
+                        chunk = json.loads(event)
+                    except ValueError as exc:
+                        # битое событие — обрыв, а не «мелкий шум»: молча
+                        # пропустить его значило бы потерять кусок перевода
+                        broken = f"битое SSE-событие: {exc}"
                         break
-                    piece = choices[0].get("delta", {}).get("content")
+                    if not isinstance(chunk, dict):
+                        broken = f"SSE-событие не объект: {event[:60]}"
+                        break
+                    if chunk.get("error"):
+                        # роутер вправе прислать ошибку внутри 200-го ответа:
+                        # это несданный кусок, а не пустой чанк
+                        broken = (f"error в потоке: "
+                                  f"{str(chunk['error'])[:120]}")
+                        break
+                    piece, reason = _chunk_delta(chunk)
+                    if reason:
+                        frs = reason
                     if piece:
                         full += piece
-                        if len(full) > 100:
-                            w = full[-1500:]
-                            if any(r.search(w) for r in _LOOP_RES):
-                                looped = True
-                                break
+                        if len(full) > 100 \
+                                and any(r.search(full[-1500:])
+                                        for r in _LOOP_RES):
+                            looped = True
+                            break
+                # порядок важен: сначала обрыв и обрезка, потом пустой ответ и
+                # соотношение длин; любой исход — повторная попытка того же чанка
                 if looped:
-                    last_err = "Loop detected"; time.sleep(_retry_wait(attempt)); continue
-                if cut:
-                    last_err = "Cut by max_tokens"; time.sleep(_retry_wait(attempt)); continue
-                if not ok:
-                    last_err = "Stream interrupted"; time.sleep(_retry_wait(attempt)); continue
-                if not full.strip():
-                    last_err = "Empty response"; time.sleep(_retry_wait(attempt)); continue
-                if min_len_ratio > 0 and reference_len > 0 \
-                        and len(full) < reference_len * min_len_ratio:
+                    last_err = "Loop detected"
+                elif broken:
+                    last_err = f"Stream interrupted ({broken})"
+                elif frs == _FINISH_LENGTH:
+                    last_err = "Cut by max_tokens"
+                elif not frs and done:
+                    last_err = "Ended without finish_reason"
+                elif not frs:
+                    last_err = "Stream interrupted"
+                elif frs not in _FINISH_DONE:
+                    last_err = f"Stopped: {frs}"
+                elif not full.strip():
+                    last_err = "Empty response"
+                elif (min_len_ratio > 0 and reference_len > 0
+                      and len(full) < reference_len * min_len_ratio):
                     last_err = "Length ratio check failed"
-                    time.sleep(_retry_wait(attempt)); continue
-                return full, ""
+                else:
+                    return full, ""
+                time.sleep(_retry_wait(attempt, resp))
         except ReadTimeout:
             last_err = f"Read timeout ({stream_timeout}s)"
         except ConnectTimeout:
