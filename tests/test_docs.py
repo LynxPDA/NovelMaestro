@@ -91,7 +91,9 @@ UPDATE_API = ["UpdateError", "PROTECTED_PATHS", "PROTECTED_DIRS", "install_kind"
               "update_mode", "installed_version", "version_tuple",
               "update_available", "release_notes", "latest_release",
               "release_asset_url", "download_asset", "is_protected",
-              "host_command_hint", "apply_update"]
+              "host_command_hint", "apply_update", "RESTART_NOTES",
+              "restart_supported", "restart_command", "restart_plan",
+              "schedule_restart"]
 # Зеркало API core/search.py (поиск по текстам книги)
 SEARCH_API = ["SearchGroup", "SEARCH_GROUPS", "GROUP_IDS", "GROUP_LABELS",
               "CLUSTERS", "CLUSTER_LABELS", "DEFAULT_SCOPES", "MAX_CONTEXT",
