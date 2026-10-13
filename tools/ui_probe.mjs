@@ -524,33 +524,56 @@ async function main() {
       problems.push(`поиск: с «Только главами» кластеров ${onlyChapters.clusters}`);
     if (SHOT)
       await page.screenshot({ path: path.join(OUT, "scenario-search.png") });
+    /* клик по имени файла — тот же однофайловый редактор, что в «Проверках»:
+     * он открывается поверх «Поиска», панель поиска сразу заполнена, «Назад»
+     * ведёт обратно к результатам, а не в вкладку «Редактор» */
     await page.click(".search-file-path");
     await page.waitForTimeout(1200);
     const opened = await page.evaluate(() => ({
       tab: [...document.querySelectorAll(".tab-active")]
         .map((x) => x.textContent.trim()).join(""),
-      editor: [...document.querySelectorAll(".ed-cm")]
-        .some((x) => x.offsetParent),
-      text: [...document.querySelectorAll(".ed-cm")]
+      meta: (document.querySelector(".editor-meta") || {}).textContent || "",
+      text: [...document.querySelectorAll(".editor-cm")]
         .map((x) => x.textContent).join(" "),
-      type: [...document.querySelectorAll(".ed-type")]
-        .map((x) => x.value).join("|"),
+      panes: document.querySelectorAll(".ed-type").length,
+      back: [...document.querySelectorAll(".editor-wrap .files-toolbar button")]
+        .map((b) => b.textContent.trim()),
       findOpen: !!document.querySelector(
         '.cm-panel.cm-search [main-field="true"]'),
       findValue: (document.querySelector(
         '.cm-panel.cm-search [main-field="true"]') || {}).value || "",
     }));
-    if (opened.tab !== "Редактор" || !opened.editor)
-      problems.push(`поиск: клик по имени не открыл редактор главы `
-        + `(вкладка «${opened.tab}», редактор ${opened.editor ? "есть" : "нет"})`);
-    if (!opened.type.startsWith("chapter.txt"))
-      problems.push(`поиск: открыт не оригинал главы — ${opened.type}`);
-    if (!/глава/i.test(opened.text))
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-search-editor.png") });
+    if (opened.tab !== "Поиск" || !opened.meta.trim())
+      problems.push(`поиск: клик по имени не открыл редактор `
+        + `(вкладка «${opened.tab}», файл «${opened.meta}»)`);
+    if (opened.meta.split(" · ")[0]
+        !== "chapters/00000_1_Глава 1/chapter.txt")
+      problems.push(`поиск: редактор открыт на «${opened.meta}»`);
+    else if (opened.panes)
+      problems.push(`поиск: открылись панели вкладки «Редактор» (${opened.panes})`);
+    else if (!/глава/i.test(opened.text))
       problems.push("поиск: в редакторе не тот файл");
     // запрос доезжает до панели поиска редактора: она открыта и заполнена
-    if (!opened.findOpen || !/глава/.test(opened.findValue || ""))
+    else if (!opened.findOpen || !/глава/.test(opened.findValue || ""))
       problems.push(`поиск: панель поиска редактора `
         + `${opened.findOpen ? "пуста" : "не открыта"} (${opened.findValue})`);
+    else if (opened.back[0] !== "← Назад")
+      problems.push(`поиск: в тулбаре редактора кнопка «${opened.back[0]}»`);
+    else {
+      await page.click(".editor-wrap .files-toolbar button");
+      await page.waitForTimeout(900);
+      const back = await page.evaluate(() => ({
+        tab: (document.querySelector(".tab-active") || {}).textContent || "",
+        files: document.querySelectorAll(".search-file-path").length,
+        q: (document.querySelector(".search-q") || {}).value || "",
+      }));
+      if (back.tab.trim() !== "Поиск" || !back.files
+          || !/глава/.test(back.q))
+        problems.push(`поиск: «← Назад» не вернул к результатам `
+          + `(вкладка «${back.tab}», файлов ${back.files}, запрос «${back.q}»)`);
+    }
     /* тот же запрос по глоссарию: оставляем в охвате только ner.json — и
      * смотрим, что клик ведёт на вкладку «Глоссарий» со всеми столбцами.
      * Хэш после клика остаётся «.../search» (вкладку сменил state, не роут) */
@@ -2427,18 +2450,35 @@ async function main() {
     if (!card.link.startsWith("файл есть · "))
       problems.push(`review: строка о файле правок не ссылка: «${card.link}»`);
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-review-list.png") });
-    // ссылка ведёт в «Файлы»: редактор открыт на файле правок, «Назад» — в tmp/
+    /* редактор открывается ПОВЕРХ самой вкладки (тот же однофайловый, что в
+     * «Поиске»): вкладка не меняется, «Назад» ведёт обратно к списку правок */
     await page.locator(".review-pane .review-status a").first().click();
     await page.waitForTimeout(900);
     const opened = await page.evaluate(() => ({
       tab: (document.querySelector(".tab-active") || {}).textContent?.trim() || "",
       meta: (document.querySelector(".editor-meta") || {}).textContent?.trim() || "",
+      back: [...(document.querySelectorAll(".editor-wrap .files-toolbar button") || [])]
+        .map((b) => b.textContent.trim()),
+      rows: document.querySelectorAll(".rv-row").length,
     }));
-    if (opened.tab !== "Файлы")
+    if (opened.tab !== "Проверки")
       problems.push(`review: ссылка открыла вкладку «${opened.tab}»`);
     if (!opened.meta.includes("tmp/ner_review.json"))
       problems.push(`review: редактор файла: «${opened.meta}»`);
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-review-file.png") });
+    if (opened.back[0] !== "← Назад")
+      problems.push(`review: в тулбаре редактора кнопка «${opened.back[0]}»`);
+    else {
+      await page.locator(".editor-wrap .files-toolbar button").first().click();
+      await page.waitForTimeout(900);
+      const back = await page.evaluate(() => ({
+        tab: (document.querySelector(".tab-active") || {}).textContent?.trim() || "",
+        rows: document.querySelectorAll(".rv-row").length,
+      }));
+      if (back.tab !== "Проверки" || !back.rows)
+        problems.push(`review: «← Назад» не вернул к списку правок `
+          + `(вкладка «${back.tab}», строк ${back.rows})`);
+    }
     log(`${problems.length === before ? "✅" : "❌"} правки глоссария  ${rows.length} строк · «${(dels[0] || {}).title || ""}» · модалка «${m.title}» | режим один · «${apply ? apply[0] : "?"}» · ссылка «${card.link}» → ${opened.tab}: ${opened.meta}`);
   }
 
