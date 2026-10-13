@@ -95,9 +95,10 @@ function viewProject(section, name, tab, job) {
   const st = {
     view: "files", // tab (третий сегмент роута) может открыть свою вкладку
     path: pref.get("files").path || "",
-    edit: null,
+    edit: null, // файл, открытый редактором поверх текущей вкладки
     ner: null,
-    search: null,
+    search: null, // запрос для панели поиска этого редактора
+    searchResult: null, // последние результаты «Поиска»: {files, info, page}
     nerAll: null, // из «Поиска»: глоссарий открывается со всеми столбцами
     editor: null, // вкладка «Редактор» (глава/панели/подсветка)
     chaptersType: pref.get("chapters").type || "polished", // тип файлов «Глав»
@@ -120,15 +121,29 @@ function viewProject(section, name, tab, job) {
     pref.set("logs", { path: st.logPath, file: "" });
   }
 
-  function setPath(path) {
-    st.path = path || "";
+  /* Закрыть редактор: он открыт ПОВЕРХ вкладки, поэтому назад — та же вкладка
+     (у «Файлов» выделение и страница остаются там, где были) */
+  function closeEditor() {
     st.edit = null;
     st.search = null;
+    render();
+  }
+
+  /* переход по папке «Файлов»: редактор закрывается тем же closeEditor */
+  function setPath(path) {
+    st.path = path || "";
     // выделение и страница — про конкретную папку: при переходе сбрасываем
     st.filesSel.clear();
     st.filesPage = 0;
     pref.set("files", { path: st.path, page: 0 });
-    render();
+    closeEditor();
+  }
+
+  /* уход с тела вкладки: старому экземпляру — сигнал (run-views гасит по нему
+     SSE-стрим, скрытые таймеры); слушатель висит на document и всплывает */
+  function leaveBody() {
+    const body = page.querySelector(".project-body");
+    if (body) body.dispatchEvent(new CustomEvent("pi-navigate", { bubbles: true }));
   }
 
   /* состояние вкладки «Редактор» — одно на проект: повторный рендер вкладки
@@ -154,7 +169,6 @@ function viewProject(section, name, tab, job) {
         ngram: Number.isFinite(ngram) ? Math.min(6, Math.max(1, ngram)) : 3,
         threshold, // размер n-граммы и порог — аналоги --ner_ngram/--ner_threshold
         ner: null, // кеш {items, matcher} глоссария
-        find: null, // {type, q}: открыть панель поиска с этим запросом
         panes: null, // кеш панелей — повторный рендер не теряет правки
         wrap: null, // DOM вкладки: пока открыт проект; F5 — то же состояние
       };
@@ -178,41 +192,26 @@ function viewProject(section, name, tab, job) {
     });
   }
 
-  /* Открыть файл результата: артефакт главы — во вкладке «Редактор» на его
-     главе (глава, её файл и запрос в панели поиска), остальное — обычным
-     файловым редактором. find — строка поиска, которой предзаполнить панель. */
+  /* Открыть файл однофайловым редактором ПОВЕРХ текущей вкладки — один способ
+     для «Файлов», «Проверок», «Поиска» и отчётов проверок: вкладка не
+     меняется, «← Назад» в редакторе ведёт обратно туда, где файл открыли.
+     find — строка поиска, которой предзаполнить панель редактора (она
+     откроется после монтирования, см. render). */
   function openEditor(full, find) {
-    const seg = String(full || "").split("/");
-    if (seg.length === 3 && seg[0] === "chapters") {
-      const ed = editorState();
-      ed.wrap = null; // глава другая — вкладку собираем заново
-      ed.chapter = seg[1];
-      saveEditorPref();
-      // имя файла результата и есть тип артефакта панели (канон — с .txt)
-      ed.left.type = seg[2];
-      ed.left.text = null;
-      ed.left.dirty = false;
-      ed.find = find ? { type: seg[2], q: String(find) } : null;
-      st.edit = null;
-      st.search = null;
-      st.view = "editor";
-      render();
-      return;
-    }
+    leaveBody();
     st.edit = full;
     st.search = find ? String(find) : null;
     render();
   }
 
   /* Смена вкладки — локальный рендер (pi-navigate из app.js не диспатчится:
-     view тот же); старому телу — сигнал ухода (run-views гасит SSE-стрим,
-     скрытые таймеры). find — запрос, с которым вкладка открывается
-     (из «Поиска» — в «Глоссарий»); all — открыть глоссарий со ВСЕМИ
-     столбцами: искателю нужно значение поля, а не три колонки по умолчанию */
+     view тот же); старому телу — сигнал ухода. find — запрос, с которым
+     вкладка открывается (из «Поиска» — в «Глоссарий»); all — открыть
+     глоссарий со ВСЕМИ столбцами: искателю нужно значение поля, а не три
+     колонки по умолчанию */
   function setView(view, find, all) {
     if (view === st.view && !all && (!find || st.search === find)) return;
-    const body = page.querySelector(".project-body");
-    if (body) body.dispatchEvent(new CustomEvent("pi-navigate", { bubbles: true }));
+    leaveBody();
     st.view = view;
     st.edit = null;
     st.search = find ? String(find) : null;
@@ -903,7 +902,8 @@ function viewProject(section, name, tab, job) {
       { class: "files-toolbar" },
       h(
         "button",
-        { class: "btn btn-sm btn-ghost", onclick: () => setPath(st.path) },
+        // редактор открыт поверх вкладки — назад ведёт ровно туда, откуда пришли
+        { class: "btn btn-sm btn-ghost", onclick: closeEditor },
         "← Назад",
       ),
       h("span", { class: "editor-meta" }, `${full} · ${fmtSize(data.size)}`),
@@ -1144,7 +1144,6 @@ function viewProject(section, name, tab, job) {
         }
         if (pInfo.addUi) pInfo.host.append(pInfo.addUi.wrap);
         updateAddTerm(pInfo);
-        applyPaneFind(pInfo);
         return;
       }
       const path = `chapters/${ed.chapter}/${type}`;
@@ -1186,7 +1185,6 @@ function viewProject(section, name, tab, job) {
         pInfo.saveBtn.disabled = !pInfo.state.dirty;
         maybeHl(pInfo);
         updateAddTerm(pInfo);
-        applyPaneFind(pInfo);
       } catch (ex) {
         pInfo.state.text = null;
         pInfo.state.missing = false;
@@ -1217,15 +1215,6 @@ function viewProject(section, name, tab, job) {
       } catch (ex) {
         pInfo.perr.textContent = ex.message;
       }
-    }
-
-    /* «Поиск» прислал главу: панель того же типа открывается с запросом
-       (лупа в тулбаре панели открывает её пустой) */
-    function applyPaneFind(pInfo) {
-      const f = ed.find;
-      if (!f || f.type !== pInfo.state.type) return;
-      ed.find = null;
-      openFind(pInfo.editor, f.q);
     }
 
     /* ── подсветка терминов глоссария поверх редактора ── */
@@ -1513,10 +1502,10 @@ function viewProject(section, name, tab, job) {
       }
     }
 
+    /* тот же путь, что у клика по результату в «Поиске»: вкладка меняется
+       одним setView, глоссарий открывается с запросом термина */
     function goGlossary(term) {
-      st.view = "ner";
-      st.search = term || "";
-      render();
+      setView("ner", term || "");
     }
 
     /* ── добавление термина из выделения в chapter.txt ── */
@@ -3004,19 +2993,10 @@ function viewProject(section, name, tab, job) {
             return entryRow(e, page * RV_PAGE + i, { cont });
           }),
       });
-      /* клик по строке состояния — «Файлы» с открытым редактором файла
-         правок; папка — tmp/ (по ней же ведёт назад кнопка редактора),
-         состояние вкладки — как у setPath: своё выделение и своя страница */
-      function openReviewFile() {
-        st.view = "files";
-        st.path = "tmp";
-        st.edit = file;
-        st.search = null;
-        st.filesSel.clear();
-        st.filesPage = 0;
-        pref.set("files", { path: st.path, page: 0 });
-        render();
-      }
+      /* клик по строке состояния — тот же однофайловый редактор, что в
+         «Поиске»: файл правок открывается поверх этой вкладки, «← Назад»
+         ведёт обратно к списку правок */
+      const openReviewFile = () => openEditor(file);
       async function load() {
         const d = await api(path + "?" + q);
         status.replaceChildren(
@@ -3079,12 +3059,11 @@ function viewProject(section, name, tab, job) {
         if (e["note"]) parts.push(e["note"]);
         return parts.join(" · ");
       }
+      /* куда ведёт запись: ner-правка — в «Глоссарий» с термином, правка
+         перевода — тем же редактором главы с текстом «было» */
       function gotoEntry(e) {
         if (kind === "ner") {
-          st.view = "ner";
-          st.edit = null;
-          st.search = e["term"] || "";
-          render();
+          setView("ner", e["term"] || "");
           return;
         }
         // tcl: файл главы из записи (абсолютный путь → chapters/…)
@@ -3092,9 +3071,7 @@ function viewProject(section, name, tab, job) {
           .replace(/\\/g, "/")
           .match(/\/chapters\/([^/]+\/.+)$/);
         if (m) {
-          st.edit = "chapters/" + m[1];
-          st.search = e["old"] || "";
-          render();
+          openEditor("chapters/" + m[1], e["old"] || "");
         } else {
           toast("В записи нет пути к файлу главы", "err");
         }
@@ -3911,15 +3888,15 @@ function viewProject(section, name, tab, job) {
     }
 
     /* строка результата: группа, путь (клик открывает файл) и число совпадений.
-       Куда ведёт клик — свойство группы из меты: «editor» (глава во вкладке
-       «Редактор» или обычный редактор) и «glossary» (нер.json — тот же текст,
-       но смотреть его удобнее в таблице глоссария). Запрос в обоих случаях едет
-       предзаполненным — искать заново не придётся */
+       Куда ведёт клик — свойство группы из меты: «editor» — однофайловый
+       редактор поверх этой же вкладки (тот же, что в «Проверках»: никуда
+       переходить не надо, «← Назад» ведёт к результатам) и «glossary»
+       (нер.json — тот же текст, но смотреть его удобнее в таблице глоссария).
+       Запрос в обоих случаях едет предзаполненным — искать заново не придётся */
     function fileNode(f) {
       const rel = String(f.path || "");
       const q = String(input.value || "").trim();
       const glossary = groupOpen[String(f.group || "")] === "glossary";
-      const isChapter = /^chapters\/[^/]+\/[^/]+$/.test(rel);
       return h(
         "div",
         { class: "search-file" },
@@ -3931,9 +3908,7 @@ function viewProject(section, name, tab, job) {
             class: "btn btn-sm btn-ghost search-file-path",
             title: glossary
               ? "Открыть «Глоссарий»: все поля, все столбцы"
-              : (isChapter
-                ? "Открыть главу в редакторе с этим запросом"
-                : "Открыть файл в редакторе с этим запросом"),
+              : "Открыть файл в редакторе с этим запросом",
             "aria-label": glossary
               ? `Искать ${q} в глоссарии`
               : `Открыть ${rel} в редакторе`,
@@ -3948,17 +3923,29 @@ function viewProject(section, name, tab, job) {
     }
 
     /* все результаты остаются результатами: список режется страницами,
-       счётчик — в тулбаре */
+       счётчик — в тулбаре; последняя выборка помнится на вкладке, чтобы
+       «← Назад» из редактора возвращал к списку, а не к пустой форме */
     const pager = UIC.listPager({
       list: rows,
       pageSize: 25,
       label: "файлов с совпадениями",
       hideSinglePage: true,
+      onChange: rememberResults,
       rows: (slice) =>
         slice.length
           ? slice.map(fileNode)
           : [h("div", { class: "files-empty" }, "Совпадений нет")],
     });
+
+    /* с onChange компонент сам не рисует страницу — список рисует вызвавший */
+    function rememberResults() {
+      st.searchResult = {
+        files: pager.items,
+        info: status.textContent,
+        page: pager.page,
+      };
+      pager.render();
+    }
 
     function readCtx() {
       const v = parseInt(String(ctxIn.value).replace(",", "."), 10);
@@ -3988,10 +3975,14 @@ function viewProject(section, name, tab, job) {
           + ` · прочитано: ${r.scanned}`
           + (r.skipped ? ` · не прочиталось: ${r.skipped}` : "");
         pager.items = files;
+        pager.page = 0; // новый запрос — первая страница
       } catch (ex) {
         status.textContent = ex.message;
         pager.items = [];
+        st.searchResult = null; // ошибка — возвращаться не к чему
+        return;
       }
+      rememberResults();
     }
 
     runBtn.addEventListener("click", run);
@@ -4015,6 +4006,15 @@ function viewProject(section, name, tab, job) {
       err.textContent = ex.message;
     }
     renderChips();
+
+    /* последняя выборка — после реестра групп: путь строки результата
+       открывается по свойству группы, а оно приходит этим же GET */
+    if (st.searchResult) {
+      status.textContent = st.searchResult.info || "";
+      pager.items = st.searchResult.files || [];
+      pager.page = Number(st.searchResult.page) || 0;
+      pager.render();
+    }
 
     const toolbar = h(
       "div",
@@ -5548,9 +5548,8 @@ function viewProject(section, name, tab, job) {
         try {
           const d = await api(`/file?${fq}`);
           if (d.missing) throw new Error("missing");
-          st.edit = rel;
-          st.search = searchFragment(msg);
-          render();
+          // тот же редактор, что в «Поиске»: вкладка остаётся своей, поиск — с ошибкой
+          openEditor(rel, searchFragment(msg));
         } catch {
           setPath(dir || "");
           setView("files");

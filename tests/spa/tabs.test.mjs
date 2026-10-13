@@ -626,7 +626,7 @@ test("Проверки: карточка правок — только спис�
   globalThis.__review = null;
 });
 
-test("Проверки: строка о файле правок — ссылка на «Файлы» с его редактором", async () => {
+test("Проверки: строка о файле правок открывает его редактором на этой же вкладке", async () => {
   const page = reviewCard();
   await tick();
   const ner = findByClass(page, "review-pane")[0];
@@ -634,13 +634,23 @@ test("Проверки: строка о файле правок — ссылка
   assert.match(collectText(link).join(""), /^файл есть · 47820 B$/);
   link._listeners.click[0]({ preventDefault() {} });
   await tick();
-  assert.equal(collectText(page.querySelector(".tab-active")).join(""), "Файлы",
-    "клик ведёт на вкладку «Файлы»");
+  /* редактор открывается ПОВЕРХ вкладки — того же однофайлового, что в
+     «Поиске»: никуда уходить не надо, «← Назад» ведёт к списку правок */
+  assert.equal(collectText(page.querySelector(".tab-active")).join(""), "Проверки",
+    "вкладка не меняется: редактор открыт поверх неё");
   assert.equal(collectText(page.querySelector(".editor-meta")).join(""),
     "tmp/ner_review.json · 0 B", "редактор открыт на файле правок");
-  assert.equal(prefsOf().page.view, "files", "вкладка запомнена");
-  assert.deepEqual(prefsOf().files, { path: "tmp", page: 0 },
-    "кнопка «Назад» в редакторе ведёт в tmp/");
+  assert.equal(prefsOf().page.view, "review", "вкладка запомнена");
+  assert.equal(findByClass(page, "review-pane").length, 0,
+    "пока открыт редактор, список правок не рисуется");
+  const back = findByClass(page, "files-toolbar")[0].querySelectorAll("button")[0];
+  assert.deepEqual(collectText(back).join(""), "← Назад");
+  back._listeners.click[0]();
+  await tick();
+  assert.equal(collectText(page.querySelector(".tab-active")).join(""), "Проверки",
+    "назад — та же вкладка");
+  assert.equal(findByClass(page, "rv-row").length, 2,
+    "«← Назад» вернул к списку правок: обе карточки рисуют один и тот же мок");
   globalThis.__review = null;
 });
 
@@ -1631,7 +1641,9 @@ test("поиск: «Только главы» оставляет один кла
   );
 });
 
-test("поиск: клик по файлу главы открывает вкладку «Редактор»", async () => {
+/* клик по результату — тот же однофайловый редактор, что в «Проверках»: он
+   открывается поверх «Поиска», а не уводит во вкладку «Редактор» */
+test("поиск: клик по файлу главы открывает его редактором на этой же вкладке", async () => {
   globalThis.__tree = {
     chapters: [{
       number: 1,
@@ -1663,6 +1675,9 @@ test("поиск: клик по файлу главы открывает вкл�
   await tick();
   const link = findByClass(page, "search-file-path")[0];
   assert.ok(link, "строка результата с именем файла");
+  assert.equal(String(link.getAttribute("title")),
+    "Открыть файл в редакторе с этим запросом",
+    "подсказка обещает редактор, а не вкладку «Редактор»");
   await link._listeners.click[0]();
   await tick();
   const call = (globalThis.__gets || [])
@@ -1673,13 +1688,30 @@ test("поиск: клик по файлу главы открывает вкл�
   assert.equal(new URLSearchParams(call.query).get("path"),
     "chapters/00000_1_Глава 1/polished.txt",
     "глава и артефакт взяты из пути результата");
-  const sel = findByClass(page, "ed-type")[0];
-  assert.equal(sel.value, "polished.txt", "панель открылась на файле результата");
-  assert.deepEqual(collectText(findByClass(page, "ed-meta")[0]).join(","),
-    "новый файл · polished.txt");
-  /* запрос в панель передаёт openEditor: панель открывается заполненной */
-  assert.match(SRC, /ed\.find = find \? \{ type: seg\[2\], q: String\(find\) \} : null/);
-  assert.match(SRC, /openFind\(pInfo\.editor, f\.q\)/);
+  assert.equal(collectText(page.querySelector(".tab-active")).join(""), "Поиск",
+    "вкладка не меняется: редактор открыт поверх «Поиска»");
+  assert.equal(collectText(page.querySelector(".editor-meta")).join(","),
+    "chapters/00000_1_Глава 1/polished.txt · 0 B",
+    "редактор — тот же однофайловый, что в «Проверках»");
+  assert.equal(findByClass(page, "ed-type").length, 0,
+    "вкладка «Редактор» с её панелями не открывается");
+  const back = findByClass(page, "files-toolbar")[0].querySelectorAll("button")[0];
+  assert.deepEqual(collectText(back).join(""), "← Назад");
+  back._listeners.click[0]();
+  await tick();
+  assert.equal(collectText(page.querySelector(".tab-active")).join(""), "Поиск",
+    "назад — та же вкладка");
+  assert.equal(findByClass(page, "search-q")[0].value, "мир",
+    "запрос помнится: искать заново не придётся");
+  assert.deepEqual(
+    findByClass(page, "search-file-path").map((n) => collectText(n).join("")),
+    ["chapters/00000_1_Глава 1/polished.txt"],
+    "«← Назад» возвращает к результатам последней выборки",
+  );
+  /* запрос в панель редактора передаёт openEditor: панель открывается заполненной */
+  assert.match(SRC, /if \(st\.edit && st\.search\) \{[\s\S]*openFind\(st\._ed, q\);/);
+  assert.doesNotMatch(SRC, /applyPaneFind/,
+    "предзаполнение поиска панелей «Редактора» больше не нужно");
 });
 
 test("поиск: ner.json — файл, клик по нему открывает «Глоссарий» со всеми столбцами", async () => {
