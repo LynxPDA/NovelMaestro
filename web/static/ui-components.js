@@ -69,16 +69,72 @@
   /* Каркас модалки: оверлей, .modal/.modal-wide, заголовок и тело. Закрыть
    * можно кликом по фону, кнопками и Escape — везде один close(result); он же
    * возвращается на элементе (modal.close): вьюхе не нужен глобальный указатель
-   * на текущий оверлей, а обещание диалога резолвится onClose. */
+   * на текущий оверлей, а обещание диалога резолвится onClose. Enter — тот же
+   * клик, что по кнопке действия (см. actionButton). */
   const openModals = [];
 
+  /* Классы узла списком: у SVG-элемента className — объект, он в обход не входит. */
+  function classes(node) {
+    const c = node && typeof node.className === "string" ? node.className : "";
+    return c.split(/\s+/).filter(Boolean);
+  }
+
+  /* Кнопка действия модалки — та, которую нажимает Enter. Соглашение одно на
+   * все вьюхи: в .modal-actions первым идёт «Отмена»/«Закрыть» (btn-ghost),
+   * последней — дело (btn-primary/btn-danger). Окну, где это не так, довольно
+   * поставить data-modal-default на свою кнопку; у модалки без панели кнопок
+   * (просмотр файла) действия нет вовсе. */
+  function actionButton(backdrop) {
+    let box = null;
+    (function walk(n) {
+      if (classes(n).includes("modal-actions")) {
+        box = n;
+        return;
+      }
+      for (const c of n.childNodes || []) walk(c);
+    })(backdrop);
+    let mark = null, act = null, last = null;
+    for (const b of (box && box.childNodes) || []) {
+      const cls = classes(b);
+      if (!cls.includes("btn")) continue;
+      if (b.getAttribute && b.getAttribute("data-modal-default") != null) mark = b;
+      if (cls.includes("btn-primary") || cls.includes("btn-danger")) act = b;
+      last = b;
+    }
+    return mark || act || last;
+  }
+
   /* Escape закрывает ВЕРХНЮЮ модалку: оверлеи стопятся («＋ Раздел» поверх
-   * «Управления разделами»), нижняя должна остаться открытой. */
+   * «Управления разделами»), нижняя должна остаться открытой. Enter — тот же
+   * клик, что по кнопке действия: поле диалога и так в фокусе, а опасные
+   * действия держит слово-пароль confirmModal. Многострочное поле и редактор
+   * остаются собой (Enter печатает перенос), как и кнопка/ссылка внутри окна:
+   * там работает штатная активация браузера, второй клик не нужен. */
   function onKeydown(e) {
-    if (e.key !== "Escape" || !openModals.length) return;
+    if (!openModals.length) return;
+    const top = openModals[openModals.length - 1];
+    if (e.key === "Escape") {
+      if (e.stopPropagation) e.stopPropagation();
+      if (e.preventDefault) e.preventDefault();
+      top.close();
+      return;
+    }
+    if (e.key !== "Enter" || e.isComposing) return;
+    const t = e.target;
+    const host = t && t.closest ? t.closest(".modal-backdrop") : null;
+    // фокус в другом оверлее (палитра, нижняя модалка) — верхняя не при чём
+    if (host && host !== top) return;
+    if (host) {
+      const tag = String(t.tagName || "").toUpperCase();
+      const plain = t.isContentEditable || tag === "TEXTAREA";
+      if (plain || tag === "BUTTON" || tag === "A") return;
+    }
+    const btn = actionButton(top);
+    // заблокированная кнопка (запись идёт) — Enter молчит, как и клик
+    if (!btn || btn.disabled) return;
     if (e.stopPropagation) e.stopPropagation();
     if (e.preventDefault) e.preventDefault();
-    openModals[openModals.length - 1].close();
+    btn.click();
   }
   // typeof-гейт, а не try: модуль исполняется и в vm-контексте node-тестов,
   // где document без слушателей (там обработчик вешает сам тест)
@@ -403,6 +459,7 @@
     iconEl,
     modal,
     onKeydown,
+    actionButton,
     menuButton,
     previewPane,
     editorSearch,

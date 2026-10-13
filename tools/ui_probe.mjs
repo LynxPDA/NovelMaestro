@@ -1298,8 +1298,7 @@ async function main() {
       .querySelector(".settings-save-state") || {}).textContent || "").trim());
     /* значение поля «Сервер LLM» активной карточки (name = ключ .env) */
     const fieldValue = (name) => page
-      .locator(`.settings-cards [name="${name}"]`).first().inputValue();
-    await page.goto(`${url}/#/settings`, { waitUntil: "load" });
+      .locator(`.settings-cards [name="${name}"]`).first().inputValue();    await page.goto(`${url}/#/settings`, { waitUntil: "load" });
     await page.reload({ waitUntil: "load" });
     await page.waitForSelector(".tabs .tab", { timeout: 15000 });
     /* предыдущий сценарий оставил «Внешний вид»: профили — на первой вкладке */
@@ -2300,8 +2299,12 @@ async function main() {
     const nested = await page.evaluate(() => document.querySelectorAll(".modal-backdrop").length);
     if (nested < 2) problems.push(`вложенных оверлеев ${nested}, ожидалось 2`);
     await page.locator('.modal-backdrop:last-of-type input.input').last().fill("TMP2");
-    await page.locator('.modal-backdrop:last-of-type button:has-text("ОК")').last().click();
+    // Enter нажимает ОК ВЕРХНЕЙ модалки: нижняя («Управление разделами») живёт
+    await page.keyboard.press("Enter");
     await page.waitForTimeout(900);
+    const afterEnter = await page.evaluate(() => document.querySelectorAll(".modal-backdrop").length);
+    if (afterEnter !== 1)
+      problems.push(`Enter: оверлеев ${afterEnter}, ожидался 1 (верхняя подтверждена, нижняя живёт)`);
     const rows = await page.evaluate(() =>
       [...document.querySelectorAll(".hub-sections-modal .fname")].map((x) => x.textContent.trim()));
     if (!rows.includes("TMP2")) problems.push(`раздел не создан, в списке: ${rows.join(",")}`);
@@ -2353,7 +2356,8 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} сценарий project     Probe2 ${card ? "создан" : "НЕ создан"}, модалка закрыта`);
   }
 
-  /* модалки: открываем и закрываем (Escape), проверяем что каркас живой.
+  /* модалки: открываем и закрываем (Escape), проверяем что каркас живой и что
+   * у окна одна кнопка действия — именно её нажимает Enter.
    * У глоссария настройки живут в меню «⋮» — кнопка видна только с ним */
   const modals = [
     ["sections", "#/hub", 'button:has-text("Управление разделами")', null],
@@ -2387,15 +2391,21 @@ async function main() {
     await page.waitForTimeout(400);
     const box = await page.evaluate(() => {
       const m = document.querySelector(".modal-backdrop .modal");
-      return m
-        ? {
-            wide: m.className.includes("modal-wide"),
-            title: (m.querySelector(".modal-title") || {}).textContent || "",
-            nodes: m.querySelectorAll("*").length,
-          }
-        : null;
+      if (!m) return null;
+      const acts = m.querySelector(".modal-actions");
+      const def = window.UIC.actionButton(m.parentElement);
+      return {
+        wide: m.className.includes("modal-wide"),
+        title: (m.querySelector(".modal-title") || {}).textContent || "",
+        nodes: m.querySelectorAll("*").length,
+        // кнопка Enter: одна на окно, подпись — то, что она делает
+        act: !acts ? "нет панели" : def ? (def.textContent || "").trim() : "",
+        buttons: acts ? acts.querySelectorAll(".btn").length : 0,
+      };
     });
     if (!box) problems.push(`оверлей ${name} не появился`);
+    else if (box.buttons < 1 || !box.act)
+      problems.push(`модалка ${name}: кнопка Enter не найдена (${box.buttons} кнопок)`);
     await page.keyboard.press("Escape");
     await page.waitForTimeout(150);
     const closed = await page.evaluate(
@@ -2405,7 +2415,7 @@ async function main() {
     if (SHOT) await page.screenshot({ path: path.join(OUT, `modal-${name}.png`) });
     log(
       box
-        ? `${problems.length === before ? "✅" : "❌"} модалка ${name.padEnd(16)} ${box.wide ? "wide" : "narrow"} · ${String(box.nodes).padStart(4)} узлов · «${box.title}»`
+        ? `${problems.length === before ? "✅" : "❌"} модалка ${name.padEnd(16)} ${box.wide ? "wide" : "narrow"} · ${String(box.nodes).padStart(4)} узлов · «${box.title}» · Enter: «${box.act}» из ${box.buttons}`
         : `❌ модалка ${name}: оверлей не появился`,
     );
   }

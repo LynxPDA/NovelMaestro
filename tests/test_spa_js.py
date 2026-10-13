@@ -295,6 +295,28 @@ def test_settings_profile_switch_is_select():
     assert "margin-top" in block, "карточки настроек липнут к строке вкладок"
 
 
+def test_modals_confirm_on_enter():
+    """Все модалки жмутся Enter: кнопка действия одна на все вьюхи.
+
+    Соглашение одно: в `.modal-actions` первым идёт «Отмена»/«Закрыть»
+    (btn-ghost), последней — дело (btn-primary/btn-danger); именно его и
+    нажимает Enter. Многострочное поле и редактор остаются собой (Enter
+    печатает перенос), как и кнопка/ссылка внутри окна: там работает штатная
+    активация браузера, второй клик не нужен. Окно без панели кнопок
+    (просмотр файла) действия не имеет, а «Управлению разделами» она помечена
+    вручную. Опасные действия от случайного Enter держит слово-пароль, а от
+    двойного — блокировка кнопки на время записи."""
+    uic = (SPA_DIR / "ui-components.js").read_text(encoding="utf-8")
+    assert "function actionButton(backdrop)" in uic
+    assert 'classes(n).includes("modal-actions")' in uic
+    assert 'if (e.key !== "Enter" || e.isComposing) return;' in uic
+    assert 'const plain = t.isContentEditable || tag === "TEXTAREA";' in uic
+    assert 'if (plain || tag === "BUTTON" || tag === "A") return;' in uic
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert '"data-modal-default": "1"' in src, "окно разделов без своей кнопки"
+    assert "if (go.disabled) return;" in src, "кнопка «Подтвердить» жмётся дважды"
+
+
 def test_help_view_renders_static_md():
     """Справка: viewHelp грузит web/static/help.md и рендерит через marked
     (без innerHTML — санитайзер + createContextualFragment)."""

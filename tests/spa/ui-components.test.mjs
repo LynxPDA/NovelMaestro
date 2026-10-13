@@ -38,6 +38,10 @@ class El {
     this.attrs[k] = String(v);
   }
 
+  getAttribute(k) {
+    return this.attrs[k] === undefined ? null : this.attrs[k];
+  }
+
   get srcdoc() {
     return this.attrs.srcdoc || "";
   }
@@ -66,6 +70,7 @@ class El {
   append(...ns) {
     for (const n of ns) {
       n.isConnected = true;
+      n.parentNode = this; // нужен closest: Enter-обработчик ищет оверлей
       this.childNodes.push(n);
     }
   }
@@ -82,6 +87,15 @@ class El {
   }
 
   querySelector() {
+    return null;
+  }
+
+  /* только класс-селектор (".modal-backdrop"): его и зовёт обработчик Enter */
+  closest(sel) {
+    const cls = String(sel).replace(/^\./, "");
+    for (let n = this; n; n = n.parentNode) {
+      if (n.className && n.className.split(/\s+/).includes(cls)) return n;
+    }
     return null;
   }
 
@@ -102,7 +116,8 @@ class El {
   }
 
   click() {
-    if (this.attrs.disabled === "true") return; // disabled не кликается
+    // disabled не кликается: и атрибутом, и свойством (как в браузере)
+    if (this.attrs.disabled === "true" || this.disabled === true) return;
     for (const fn of this.listeners.click || []) fn({ target: this });
   }
 
@@ -200,6 +215,7 @@ test("modal: wide-карточка и один ребёнок тела", () => {
   const m = UIC.modal({ wide: true, build: () => UIC.h("i", {}, "раз") });
   assert.equal(m.firstChild.className, "modal modal-wide");
   assert.equal(m.firstChild.textContent, "раз");
+  m.close(); // незакрытая модалка осталась бы в стеке openModals у следующих тестов
 });
 
 test("modal: клик по фону закрывает, клик внутри карточки — нет", () => {
@@ -230,7 +246,8 @@ test("modal: modal.close — тот же close, что у оверлея", () =>
 
 /* Escape вешается на document: в браузере — сам модуль, здесь — тест
    (фиктивный document слушателей не имеет); оверлеи стопятся, и нижний
-   закрыт быть не должен — на этом вложенные модалки ломались тише всего */
+   закрыт быть не должен — на этом вложенные модалки ломались тише всего.
+   Enter в этом же обработчике подтверждает действие — ниже отдельный блок. */
 test("modal: Escape закрывает верхнюю модалку, нижняя живёт", () => {
   const low = UIC.modal({ title: "Разделы", build: () => UIC.h("i", {}, "низ") });
   const top = UIC.modal({ title: "Новый раздел", build: () => UIC.h("i", {}, "верх") });
@@ -239,9 +256,117 @@ test("modal: Escape закрывает верхнюю модалку, нижня
   assert.equal(top.isConnected, false);
   assert.equal(low.isConnected, true);
   UIC.onKeydown({ key: "Enter" });
-  assert.equal(low.isConnected, true);
+  assert.equal(low.isConnected, true); // окну без панели кнопок Enter не за что нажать
   UIC.onKeydown({ key: "Escape" });
   assert.equal(low.isConnected, false);
+});
+
+/* ── Enter как подтверждение ─────────────────────────────────────────
+ * Кнопка действия в модалке одна (соглашение одно на все вьюхи: в
+ * .modal-actions первой идёт «Отмена», последней — дело), Enter нажимает
+ * именно её. Поле модалки в фокусе, так что мышь для подтверждения не нужна. */
+function actionModal(opts = {}) {
+  const hits = { cancel: 0, ok: 0 };
+  const m = UIC.modal({
+    title: opts.title || "Новый раздел",
+    build: (close) => [
+      opts.field || UIC.h("input", { class: "input" }),
+      UIC.h("div", { class: "modal-actions" },
+        UIC.h("button", {
+          class: "btn btn-ghost",
+          "data-modal-default": opts.markGhost ? "1" : null,
+          onclick: () => { hits.cancel++; close(false); },
+        }, "Отмена"),
+        UIC.h("button", {
+          class: "btn btn-primary",
+          onclick: () => { hits.ok++; close(true); },
+        }, "ОК")),
+    ],
+  });
+  return { m, hits };
+}
+
+test("modal: без открытой модалки Enter — штатное поведение страницы", () => {
+  let clicks = 0;
+  const page = UIC.h("button", { class: "btn", onclick: () => clicks++ }, "тулбар");
+  document.body.append(page);
+  UIC.onKeydown({ key: "Enter", target: page });
+  assert.equal(clicks, 0); // обработчик модалок молчит, браузер сам
+});
+
+test("modal: Enter в поле модалки — тот же клик, что по кнопке действия", () => {
+  const { m, hits } = actionModal();
+  UIC.onKeydown({ key: "Enter", target: m.find("input") });
+  assert.deepEqual(hits, { cancel: 0, ok: 1 }); // «Отмена» не поймана
+  assert.equal(m.isConnected, false);
+});
+
+test("modal: Enter с фокусом на кнопке за модалкой — действие верхней", () => {
+  const { m, hits } = actionModal();
+  UIC.onKeydown({ key: "Enter", target: document.body }); // фокус остался на открывшей кнопке
+  assert.deepEqual(hits, { cancel: 0, ok: 1 });
+  assert.equal(m.isConnected, false);
+});
+
+test("modal: Enter в многострочном поле печатает перенос, а не действие", () => {
+  const { m, hits } = actionModal({ field: UIC.h("textarea", { class: "input rv-ta" }) });
+  UIC.onKeydown({ key: "Enter", target: m.find("rv-ta") });
+  assert.deepEqual(hits, { cancel: 0, ok: 0 });
+  assert.equal(m.isConnected, true);
+  m.close();
+});
+
+test("modal: Enter в редакторе (contenteditable) — перенос, не действие", () => {
+  const cm = UIC.h("div", { class: "cm-content" });
+  cm.isContentEditable = true;
+  const { m, hits } = actionModal({ field: cm });
+  UIC.onKeydown({ key: "Enter", target: cm });
+  assert.deepEqual(hits, { cancel: 0, ok: 0 });
+  m.close();
+});
+
+test("modal: Enter на кнопке внутри модалки — штатный клик самой кнопки", () => {
+  const { m, hits } = actionModal();
+  UIC.onKeydown({ key: "Enter", target: m.find("btn-ghost") });
+  assert.deepEqual(hits, { cancel: 0, ok: 0 }); // второй клик не нужен
+  m.close();
+});
+
+test("modal: Enter в чужом оверлее (палитре) действия модалки не трогает", () => {
+  const { m, hits } = actionModal();
+  const palette = UIC.h("div", { class: "modal-backdrop palette-backdrop" },
+    UIC.h("input", { class: "input" }));
+  document.body.append(palette);
+  UIC.onKeydown({ key: "Enter", target: palette.firstChild });
+  assert.deepEqual(hits, { cancel: 0, ok: 0 });
+  palette.remove();
+  m.close();
+});
+
+test("modal: data-modal-default задаёт кнопку Enter", () => {
+  const { m, hits } = actionModal({ markGhost: true });
+  assert.equal(UIC.actionButton(m).className.includes("btn-ghost"), true);
+  UIC.onKeydown({ key: "Enter", target: m.find("input") });
+  assert.deepEqual(hits, { cancel: 1, ok: 0 });
+});
+
+test("modal: заблокированная кнопка действия по Enter молчит", () => {
+  const { m, hits } = actionModal();
+  m.find("btn-primary").disabled = true; // запись идёт
+  UIC.onKeydown({ key: "Enter", target: m.find("input") });
+  assert.deepEqual(hits, { cancel: 0, ok: 0 });
+  assert.equal(m.isConnected, true);
+  m.close();
+});
+
+test("modal: Enter подтверждает ВЕРХНЮЮ модалку, нижняя живёт", () => {
+  const low = actionModal({ title: "Управление разделами" });
+  const top = actionModal({ title: "Новый раздел" });
+  UIC.onKeydown({ key: "Enter", target: top.m.find("input") });
+  assert.deepEqual(top.hits, { cancel: 0, ok: 1 });
+  assert.deepEqual(low.hits, { cancel: 0, ok: 0 });
+  assert.equal(low.m.isConnected, true);
+  low.m.close();
 });
 
 /* ── панель «редактор + предпросмотр» ─────────────────────────────── */
@@ -398,7 +523,7 @@ test("listPager: режим счётчика — items числом, стран�
   let painted = 0;
   const pg = UIC.listPager({
     pageSize: 3,
-    info: (total, page, pages) => ` ${page} / ${pages} `,
+    info: (_total, page, pages) => ` ${page} / ${pages} `,
     onChange: () => (painted += 1),
   });
   pg.items = 7; // не список, а количество: rows не нужны

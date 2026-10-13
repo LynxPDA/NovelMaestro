@@ -335,10 +335,36 @@ function confirmModal(title, text, confirmWord, onConfirm) {
   // Промис: true — подтверждено (onConfirm выполнен), false — отмена.
   // Старые вызовы тоже валидны — возврат промиса можно игнорировать.
   return new Promise((resolve) => {
-    UIC.modal({
+    /* «Подтвердить» собирается до модалки: кнопка блокируется на время
+       onConfirm, а Enter (тот же клик) не зовёт идущее действие второй раз */
+    const go = h(
+      "button",
+      {
+        class: "btn btn-danger",
+        onclick: async () => {
+          if (go.disabled) return;
+          go.disabled = true;
+          if (word.value.trim().toUpperCase() !== confirmWord) {
+            err.textContent = `Введите слово ${confirmWord}`;
+            go.disabled = false;
+            return;
+          }
+          try {
+            await onConfirm();
+          } catch (ex) {
+            err.textContent = ex.message;
+            go.disabled = false;
+            return;
+          }
+          close(true);
+        },
+      },
+      "Подтвердить",
+    );
+    const modal = UIC.modal({
       title,
       onClose: resolve,
-      build: (close) => [
+      build: () => [
         h("div", { class: "modal-text" }, text),
         word,
         err,
@@ -346,30 +372,15 @@ function confirmModal(title, text, confirmWord, onConfirm) {
           "div",
           { class: "modal-actions" },
           h("button", { class: "btn btn-ghost", onclick: () => close(false) }, "Отмена"),
-          h(
-            "button",
-            {
-              class: "btn btn-danger",
-              onclick: async () => {
-                if (word.value.trim().toUpperCase() !== confirmWord) {
-                  err.textContent = `Введите слово ${confirmWord}`;
-                  return;
-                }
-                try {
-                  await onConfirm();
-                } catch (ex) {
-                  err.textContent = ex.message;
-                  return;
-                }
-                close(true);
-              },
-            },
-            "Подтвердить",
-          ),
+          go,
         ),
       ],
     });
     word.focus();
+    // go собран до модалки — close ему отдаём поднятым объявлением
+    function close(result) {
+      return modal.close(result);
+    }
   });
 }
 
@@ -2861,7 +2872,11 @@ function sectionsModal() {
       h(
         "div",
         { class: "modal-actions" },
-        h("button", { class: "btn btn-ghost", onclick: close }, "Закрыть"),
+        /* в этом окне нечего делать по Enter: оно закрывается, а не раскрывает
+           модалку создания — кнопка действия помечена вручную */
+        h("button", {
+          class: "btn btn-ghost", "data-modal-default": "1", onclick: close,
+        }, "Закрыть"),
         h(
           "button",
           {
