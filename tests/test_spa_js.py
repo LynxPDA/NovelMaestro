@@ -295,6 +295,24 @@ def test_settings_profile_switch_is_select():
     assert "margin-top" in block, "карточки настроек липнут к строке вкладок"
 
 
+def test_settings_profile_edit_is_system_modal():
+    """Настройки · профили LLM: имя и удаление — системные модалки.
+
+    Переименование профиля рисует тот же `nameModal`, что у файлов, каталогов
+    и разделов (поле с текущим именем + ОК), удаление — `confirmModal` со
+    словом «УДАЛИТЬ», как любое опасное действие SPA. Нативный
+    `window.prompt`/`window.confirm` — второй слой интерфейса: он не читает
+    состояние книги, не показывает ошибку ответа и не жмётся Enter'ом."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'nameModal("Новый профиль LLM", "имя профиля"' in src
+    assert "nameModal(`Переименовать профиль ${cur.name}`, \"новое имя\"" in src
+    assert 'confirmModal("Удалить профиль"' in src
+    for f in ("app.js", "project-views.js", "run-views.js", "ui-components.js"):
+        s = (SPA_DIR / f).read_text(encoding="utf-8")
+        assert "window.prompt(" not in s, f"{f}: нативный prompt вернулся"
+        assert "window.confirm(" not in s, f"{f}: нативный confirm вернулся"
+
+
 def test_modals_confirm_on_enter():
     """Все модалки жмутся Enter: кнопка действия одна на все вьюхи.
 

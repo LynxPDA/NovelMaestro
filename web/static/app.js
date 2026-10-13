@@ -1232,60 +1232,52 @@ async function viewSettings() {
     sel.addEventListener("change", () => switchTo(sel.value));
     const actions = h("div", { class: "settings-chips" });
     const cur = model.profiles.find((p) => p.id === model.profile) || {};
+    /* имена и удаление профиля — те же системные модалки, что у файлов,
+       каталогов и разделов: нативный prompt/confirm рисовал второй слой
+       интерфейса, а его ошибкой страницы не покажешь */
     actions.append(h("button", {
       class: "btn btn-sm", type: "button",
-      onclick: async () => {
-        const name = window.prompt("Имя нового профиля LLM", "");
-        if (!name) return;
-        try {
+      onclick: () =>
+        nameModal("Новый профиль LLM", "имя профиля", async (nm) => {
           const r = await api("/settings/profiles", {
             method: "POST",
-            body: { action: "create", name, base: model.profile },
+            body: { action: "create", name: nm, base: model.profile },
           });
           model.profiles = r.profiles || model.profiles;
           // switchTo сам пишет localStorage и перерисовывает вкладку
           switchTo(model.profiles[model.profiles.length - 1].id);
           toast("Профиль создан");
-        } catch (ex) {
-          err.textContent = ex.message;
-        }
-      },
+        }),
     }, "+ Создать профиль"));
     if (!cur.builtin && model.profiles.length > 1) {
       actions.append(h("button", {
         class: "btn btn-sm", type: "button",
-        onclick: async () => {
-          const name = window.prompt("Новое имя профиля", cur.name || "");
-          if (!name || name === cur.name) return;
-          try {
-            const r = await api("/settings/profiles", {
-              method: "POST",
-              body: { action: "rename", id: cur.id, name },
-            });
-            model.profiles = r.profiles || model.profiles;
-            toast("Профиль переименован");
-            renderTab();
-          } catch (ex) {
-            err.textContent = ex.message;
-          }
-        },
+        onclick: () =>
+          nameModal(`Переименовать профиль ${cur.name}`, "новое имя",
+            async (nm) => {
+              const r = await api("/settings/profiles", {
+                method: "POST",
+                body: { action: "rename", id: cur.id, name: nm },
+              });
+              model.profiles = r.profiles || model.profiles;
+              toast("Профиль переименован");
+              renderTab();
+            }, cur.name),
       }, "Переименовать"));
       actions.append(h("button", {
         class: "btn btn-sm btn-danger", type: "button",
-        onclick: async () => {
-          if (!window.confirm(`Удалить профиль «${cur.name}»?`)) return;
-          try {
-            const r = await api("/settings/profiles", {
-              method: "POST",
-              body: { action: "delete", id: cur.id },
-            });
-            model.profiles = r.profiles || model.profiles;
-            switchTo(model.profiles[0].id);
-            toast("Профиль удалён");
-          } catch (ex) {
-            err.textContent = ex.message;
-          }
-        },
+        onclick: () =>
+          confirmModal("Удалить профиль",
+            `Профиль «${cur.name}» будет удалён вместе со своими ` +
+            `переопределениями`, "УДАЛИТЬ", async () => {
+              const r = await api("/settings/profiles", {
+                method: "POST",
+                body: { action: "delete", id: cur.id },
+              });
+              model.profiles = r.profiles || model.profiles;
+              switchTo(model.profiles[0].id);
+              toast("Профиль удалён");
+            }),
       }, "Удалить"));
     }
     return h(

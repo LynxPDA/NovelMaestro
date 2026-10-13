@@ -1281,7 +1281,8 @@ async function main() {
 
   /* профили LLM: General — значения общего конфига, карточка с одним списком
    * профилей, создание/переименование/удаление и сохранение значатся в
-   * llm_profiles.json рядом с общим .env */
+   * llm_profiles.json рядом с общим .env; имя и удаление — те же системные
+   * модалки, что у файлов, и они жмутся Enter'ом: мышь в сценарии не нужна */
   {
     const before = problems.length;
     const PF = () => path.join(seedDir || "", "llm_profiles.json");
@@ -1298,7 +1299,31 @@ async function main() {
       .querySelector(".settings-save-state") || {}).textContent || "").trim());
     /* значение поля «Сервер LLM» активной карточки (name = ключ .env) */
     const fieldValue = (name) => page
-      .locator(`.settings-cards [name="${name}"]`).first().inputValue();    await page.goto(`${url}/#/settings`, { waitUntil: "load" });
+      .locator(`.settings-cards [name="${name}"]`).first().inputValue();
+    /* диалог имени (он же подтверждения): окно то же, что у файлов — поле
+       заполнено, Enter подтверждает, окно закрывается. Возвращает заголовок
+       окна и содержимое поля до ввода; stay — окно должно остаться (слово-пароль) */
+    const dialogModal = async (value, opts = {}) => {
+      const box = page.locator(".modal-backdrop .modal").last();
+      await box.waitFor({ state: "visible", timeout: 15000 });
+      const title = (await box.locator(".modal-title").first().textContent()).trim();
+      const field = box.locator("input.input").first();
+      const initial = await field.inputValue();
+      if (SHOT && opts.shot) {
+        await page.screenshot({ path: path.join(OUT, opts.shot) });
+      }
+      await field.fill(value);
+      await field.press("Enter");
+      if (opts.stay) {
+        await page.waitForTimeout(400);
+      } else {
+        await page.waitForSelector(".modal-backdrop",
+          { state: "detached", timeout: 15000 });
+        await page.waitForTimeout(300); // вкладка перерисована после PUT
+      }
+      return { title, initial };
+    };
+    await page.goto(`${url}/#/settings`, { waitUntil: "load" });
     await page.reload({ waitUntil: "load" });
     await page.waitForSelector(".tabs .tab", { timeout: 15000 });
     /* предыдущий сценарий оставил «Внешний вид»: профили — на первой вкладке */
@@ -1310,10 +1335,11 @@ async function main() {
     if (await status()) problems.push(`профили: статус General «${await status()}»`);
     if (await fieldValue("HOST") !== "http://127.0.0.1:9/v1")
       problems.push(`профили: General сервер «${await fieldValue("HOST")}»`);
-    /* создать: prompt браузера — Playwright его сам закрывает, нужен handler */
-    page.once("dialog", (d) => d.accept("Домашний"));
+    /* создать: окно имени то же, что у файлов, поле пустое */
     await page.locator('button:has-text("Создать профиль")').first().click();
-    await page.waitForTimeout(700);
+    const created = await dialogModal("Домашний");
+    if (created.title !== "Новый профиль LLM" || created.initial !== "")
+      problems.push(`профили: окно создания «${created.title}» поле «${created.initial}»`);
     list = await chips();
     if (list.length !== 2 || !list[1].includes("Домашний"))
       problems.push(`профили: после создания (${list.join("/")})`);
@@ -1375,22 +1401,33 @@ async function main() {
     } else {
       log("⚠️  профили: внешний сервер — файл профилей не проверяем");
     }
-    /* переименовать */
-    page.once("dialog", (d) => d.accept("Дачный"));
+    /* переименовать: та же система модалка, поле заполнено текущим именем */
     await page.locator('button:has-text("Переименовать")').first().click();
-    await page.waitForTimeout(600);
+    const renamed = await dialogModal("Дачный",
+      { shot: "settings-profile-rename.png" });
+    if (!renamed.title.startsWith("Переименовать профиль ")
+        || renamed.initial !== "Домашний")
+      problems.push(`профили: окно переименования «${renamed.title}» поле «${renamed.initial}»`);
     list = await chips();
     if (!list[1] || !list[1].includes("Дачный"))
       problems.push(`профили: переименование (${list.join("/")})`);
-    /* мусор: второй профиль создаём и тут же удаляем (confirm) */
-    page.once("dialog", (d) => d.accept("Временный"));
+    /* мусор: второй профиль создаём и тут же удаляем; опасное действие
+       Enter'ом не проходит: окно держит слово-пароль */
     await page.locator('button:has-text("Создать профиль")').first().click();
-    await page.waitForTimeout(600);
+    await dialogModal("Временный");
     if ((await chips()).length !== 3)
       problems.push(`профили: второй профиль (${(await chips()).join("/")})`);
-    page.once("dialog", (d) => d.accept());
     await page.locator('button:has-text("Удалить")').first().click();
-    await page.waitForTimeout(600);
+    const gate = await dialogModal("", { stay: true });
+    if (!gate.title.startsWith("Удалить профиль"))
+      problems.push(`профили: окно удаления «${gate.title}»`);
+    if (!(await page.locator(".modal-backdrop").count()))
+      problems.push("профили: Enter без слова-пароля закрыл окно");
+    const tip = (await page.locator(".modal-backdrop .form-error").first()
+      .textContent()).trim();
+    if (!/Введите слово УДАЛИТЬ/.test(tip))
+      problems.push(`профили: Enter без слова-пароля — «${tip}»`);
+    await dialogModal("УДАЛИТЬ");
     list = await chips();
     if (list.length !== 2 || !list[0].startsWith("General"))
       problems.push(`профили: после удаления (${list.join("/")})`);
