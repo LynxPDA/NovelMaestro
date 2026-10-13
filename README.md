@@ -72,7 +72,7 @@ docker compose up -d --build
 
 Данные живут в папках `projects/` и `templates/` (монтируются в контейнер). Подробности — порты, переменные, обновление — в [packaging/README.md](packaging/README.md).
 
-Параметры сервера: `python3 run.py --no-open` (без браузера), `--projects-dir <путь>` (своя папка проектов), а также `--host/--port/--auth/--token` — см. `python3 web/main.py --help`; подробности настройки сервера — [DEVELOPERS.md](DEVELOPERS.md).
+Параметры сервера: `python3 run.py --no-open` (без браузера), `--projects-dir <путь>` (своя папка проектов), а также `--host/--port/--auth/--token` и `--no-restart`/`--no-update-check` (после обновления сервер перезапускает себя сам, здесь это выключается) — см. `python3 web/main.py --help`; подробности настройки сервера — [DEVELOPERS.md](DEVELOPERS.md).
 
 ## Первые шаги
 
