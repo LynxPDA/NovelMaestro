@@ -297,6 +297,7 @@ function makeEditor(initial, lang) {
 const STAGES = [
   { key: "ner", title: "Глоссарий", script: "cli/ner.py" },
   { key: "pipeline", title: "Перевод", script: "web/pipeline.py" },
+  { key: "wiki", title: "Wiki", script: "cli/wiki.py" },
 ];
 /* профиль — ПЕРВОЕ ПОЛЕ формы каждой LLM-стадии (noenv: значение живёт в
    браузере проекта+стадии, в .env и в argv оно не попадает) */
@@ -317,6 +318,26 @@ const SPEC_FIELDS = {
     { ...PROFILE_FIELD },
     { name: "action", label: "Тип работы", type: "select", default: "all",
       options: ["all"], labels: { all: "полный цикл" } },
+  ],
+  /* wiki: тип файлов ОДИН на вход и на вики-главу (when_any), чипсы типов
+     скрытым полем types — счётчики считаются срезом top-N по count */
+  wiki: [
+    { ...PROFILE_FIELD },
+    { name: "source", label: "Источник текста", type: "select",
+      default: "chapters", options: ["txt", "chapters"],
+      labels: { txt: "Готовый txt", chapters: "Собрать из глав" } },
+    { name: "type", label: "Тип файлов", type: "select", default: "polished",
+      options: ["polished", "chapter", "translated", "redacted"],
+      when_any: [["source", ["chapters"]], ["as_chapter", ["1"]]] },
+    { name: "output", label: "Выходной файл", type: "text",
+      default: "wiki.md", when: [["as_chapter", ["0"]]] },
+    { name: "as_chapter", label: "Сохранить как главу", type: "bool",
+      default: false },
+    { name: "top", label: "Макс. терминов", type: "number", default: "80" },
+    { name: "min_count", label: "Мин. частота термина", type: "number",
+      default: "2" },
+    { name: "types", type: "hidden", default: "", noenv: true },
+    { name: "fields", type: "hidden", default: "", noenv: true },
   ],
 };
 const SETTINGS_PAYLOAD = {
@@ -1267,6 +1288,66 @@ test("запуски: пустой конец диапазона при уход
   await end._listeners.input[0]({ target: end });
   assert.equal(end.value, "", "при вводе автоподстановка не мешает");
   delete globalThis.__stageOptions;
+  globalThis.localStorage.clear();
+});
+
+/* ── wiki: чипсы типов из глоссария — счётчики считают то, что реально
+   уйдёт в запрос: порог частоты И срез «Макс. терминов» ── */
+const WIKI_NER = [
+  { term: "мир", translation: "мир", type: "Location (Body)", count: 7 },
+  { term: "клинок", translation: "Клинок", type: "Artifact", count: 5 },
+  { term: "секта", translation: "Секта", type: "Sect", count: 4 },
+  { term: "облако", translation: "Облако", type: "Base Term", count: 3 },
+  { term: "старейшина", translation: "Старейшина", type: "Person", count: 3 },
+  { term: "небо", translation: "Небо", type: "Other", count: 2 },
+  { term: "меч", translation: "Меч", type: "Artifact", count: 1 },
+  { term: "кумир", translation: "", type: "Person", count: 9 },
+];
+
+test("wiki: счётчики типов пересчитываются и по «Мин. частота», и по «Макс. терминов»", async () => {
+  globalThis.localStorage.clear();
+  globalThis.__ner = { items: WIKI_NER };
+  const page = await runStage("wiki");
+  await tick(); // чипсы рисуются после GET /ner
+  const box = findByClass(page, "ner-chips-box")[0];
+  const bar = findByClass(page, "ner-chips-bar")[0];
+  const chips = () => findByClass(box, "ner-chip")
+    .map((c) => collectText(c).join("").trim());
+  const setField = (name, value) => {
+    const inp = findByClass(page, "field")
+      .find((f) => f._field && f._field.name === name)._input;
+    inp.value = String(value);
+    inp.dispatchEvent({ type: "input" });
+  };
+  /* дефолты: порог ≥2, потолка не видно — записей меньше 80; у типа
+     «Other» оба термина проходят порог, у Person — только старейшина
+     (кумир без перевода, меч ниже порога) */
+  assert.deepEqual(chips(), [
+    "Artifact (1)", "Location (1)", "Organisation (1)", "Other (2)",
+    "Person (1)",
+  ], "чипсы: базовые типы (как в CLI) со счётчиками после порога");
+  assert.match(collectText(bar).join(""), /6 из 8 терминов попадут в запрос/);
+  /* «Макс. терминов» = 3: в запрос идут три самых частотных термина,
+     счётчики типов обязаны считать уже этот срез */
+  setField("top", 3);
+  await tick();
+  assert.deepEqual(chips(), [
+    "Artifact (1)", "Location (1)", "Organisation (1)", "Other (0)",
+    "Person (0)",
+  ], "топ-3 по count: у Other и Person терминов не осталось");
+  assert.match(collectText(bar).join(""),
+    /3 из 8 терминов попадут в запрос \(топ-3 по count, порог ≥2\)/);
+  /* потолок убран, порог поднят до 5: проходят только мир (7) и клинок (5) */
+  setField("top", 80);
+  setField("min_count", 5);
+  await tick();
+  assert.deepEqual(chips(), [
+    "Artifact (1)", "Location (1)", "Organisation (0)", "Other (0)",
+    "Person (0)",
+  ], "порог ≥5: у Organisation, Other и Person терминов нет");
+  assert.match(collectText(bar).join(""),
+    /2 из 8 терминов попадут в запрос \(топ-80 по count, порог ≥5\)/);
+  globalThis.__ner = null;
   globalThis.localStorage.clear();
 });
 

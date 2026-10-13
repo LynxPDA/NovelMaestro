@@ -1094,13 +1094,29 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
       return threshold <= 0 || cnt > threshold;
     }
-    // записи одного типа после порога — динамический счётчик чипса
-    function countFor(t) {
+    // записи, которые реально уйдут в запрос, — тот же порядок, что в
+    // скрипте: белый список типов → порог count → у wiki ещё срез top-N по
+    // count (у ner_check потолка нет). Считается один раз на пересчёт:
+    // отсюда и числа на чипсах, и строка-счётчик
+    function chosenItems() {
+      const sel = curTypes();
+      let pool = allItems.filter((it) => it && typeof it === "object");
+      if (sel) {
+        pool = pool.filter((it) =>
+          sel.includes(isWiki ? baseType(it.type) : String(it.type || "?")));
+      }
+      pool = pool.filter(passFilter);
+      if (!isWiki) return pool;
+      return pool
+        .slice()
+        .sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0))
+        .slice(0, top);
+    }
+    // счётчик чипса: сколько терминов этого типа реально уйдёт в запрос
+    function countFor(chosen, t) {
       let n = 0;
-      for (const it of allItems) {
-        if (!it || typeof it !== "object") continue;
-        if (chipType(it) !== t) continue;
-        if (passFilter(it)) n++;
+      for (const it of chosen) {
+        if (chipType(it) === t) n++;
       }
       return n;
     }
@@ -1113,6 +1129,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
     function renderChips() {
       const cur = curTypes();
+      const chosen = chosenItems();
       chipsBox.replaceChildren();
       for (const t of typeNames) {
         const cb = h("input", { type: "checkbox", class: "checkbox" });
@@ -1134,7 +1151,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           renderChips();
           updateInfo();
         });
-        const n = countFor(t);
+        const n = countFor(chosen, t);
         chipsBox.append(
           h(
             "label",
@@ -1145,26 +1162,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         );
       }
     }
-    // строка-счётчик над чипсами: сколько терминов уйдёт в запрос стадии
+    // строка-счётчик над чипсами: сколько терминов уйдёт в запрос стадии;
+    // у wiki числа на чипсах считаются уже срезом top-N, поэтому сюда же
+    // вынесены оба влияющих параметра
     function updateInfo() {
       if (!allItems.length) return; // «Глоссарий пуст…» не перезаписываем
-      const sel = curTypes();
-      const items = allItems.filter((it) => it && typeof it === "object");
-      let fit;
-      if (isWiki) {
-        let pool = items;
-        if (sel) pool = pool.filter((it) => sel.includes(baseType(it.type)));
-        pool = pool.filter(passFilter);
-        pool.sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0));
-        fit = Math.min(pool.length, top);
-      } else {
-        fit = items.filter((it) =>
-          (!sel || sel.includes(chipType(it)))
-          && passFilter(it)).length;
-      }
+      const total = allItems.filter(
+        (it) => it && typeof it === "object").length;
       chipsInfo.textContent =
-        `${typeNames.length} тип(ов) · ${fit} из ${items.length} `
+        `${typeNames.length} тип(ов) · ${chosenItems().length} из ${total} `
         + `терминов попадут в ${isWiki ? "запрос" : "проверку"}`
+        + (isWiki ? ` (топ-${top} по count, порог ≥${minCount})` : "")
         + ` · пусто = все типы`;
     }
     // настройки изменились (поле формы) — пересчитать чипсы и счётчик
