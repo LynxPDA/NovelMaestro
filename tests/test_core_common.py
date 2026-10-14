@@ -1537,23 +1537,6 @@ def test_stream_empty_response(monkeypatch):
     assert text is None and err == "Empty response"
 
 
-def test_stream_min_len_ratio(monkeypatch):
-    _patch_post(monkeypatch, _sse(["коротко"]))
-    text, err = C.stream_chat_completion("h", "m", [], max_retries=1,
-                                         min_len_ratio=0.5, reference_len=1000)
-    assert text is None and err == "Length ratio check failed"
-
-
-def test_stream_min_len_ratio_passes(monkeypatch):
-    # разнообразный текст, чтобы не сработал loop-детект
-    varied = "Слово1 отличается. " + "".join(f"фраза{i} " for i in range(120))
-    _patch_post(monkeypatch, _sse([varied]))
-    text, err = C.stream_chat_completion("h", "m", [], max_retries=1,
-                                         min_len_ratio=0.5,
-                                         reference_len=len(varied) + 10)
-    assert err == "" and text == varied
-
-
 def test_stream_http_error(monkeypatch):
     _patch_post(monkeypatch, [], status=500)
     text, err = C.stream_chat_completion("h", "m", [], max_retries=1)

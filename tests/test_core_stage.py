@@ -410,29 +410,28 @@ def test_profile_reasoning_extra_body_wins(recorder, monkeypatch):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Таймауты, повторы, потоки и отношение длин — один конфиг на конвейер
+# Таймауты, повторы и потоки — один конфиг на конвейер
 # ══════════════════════════════════════════════════════════════════════
 def test_common_numbers_reach_profile(tmp_path, monkeypatch):
-    """Своих дефолтов у стадии нет: STREAM_TIMEOUT, RETRY_EMPTY, THREADS и
-    MIN_LEN_RATIO из общего .env доезжают до профиля стадии.
+    """Своих дефолтов у стадии нет: STREAM_TIMEOUT, RETRY_EMPTY и THREADS
+    из общего .env доезжают до профиля стадии.
 
     Раньше стадия молча везла своё число (у проверки перевода стрим равнялся
     таймауту соединения, потоки отличались от скрипта к скрипту), поэтому
     «изменённый параметр» в логе выглядел чужим.
     """
     for k in ("TIMEOUT", "STREAM_TIMEOUT", "MAX_RETRIES", "MAX_TOKENS",
-              "RETRY_EMPTY", "THREADS", "MIN_LEN_RATIO", "TEMPERATURE"):
+              "RETRY_EMPTY", "THREADS", "TEMPERATURE"):
         monkeypatch.delenv(k, raising=False)
     env = tmp_path / "nums.env"
     env.write_text("HOST=http://h\nMODEL=m\nTIMEOUT=111\nSTREAM_TIMEOUT=999\n"
                    "MAX_RETRIES=5\nMAX_TOKENS=4096\nRETRY_EMPTY=2\n"
-                   "THREADS=7\nMIN_LEN_RATIO=0.4\nTEMPERATURE=0.1\n",
+                   "THREADS=7\nTEMPERATURE=0.1\n",
                    encoding="utf-8")
     prof = resolve(str(env), stage="translate_check_llm")
     assert (prof.timeout, prof.stream_timeout) == (111, 999)
     assert (prof.max_retries, prof.max_tokens) == (5, 4096)
     assert (prof.retry_empty, prof.threads) == (2, 7)
-    assert prof.min_len_ratio == pytest.approx(0.4)
     assert prof.temperature == pytest.approx(0.1)
 
 

@@ -12,9 +12,8 @@ translate_book.py — ЕДИНЫЙ скрипт LLM-обработки текс�
 (обратная совместимость со старыми вызовами).
 
 ЕДИНИЦЫ: --chunk_size и --request_budget — ТОКЕНЫ (оценка
-estimate_tokens); длины — СИМВОЛЫ; --min_len_ratio — безразмерное
-отношение (длины считаются в символах: в CJK→RU токены изменили бы смысл);
-max_tokens — серверный предохранитель (ТОКЕНЫ), не расчёт.
+estimate_tokens); длины — СИМВОЛЫ; max_tokens — серверный
+предохранитель (ТОКЕНЫ), не расчёт.
 
 Промпты: --prompt_file БЕЗ тегов = промпт текущего режима (файл целиком);
 с тегами <translate>/<redact>/<polish> — один файл на все режимы.
@@ -251,8 +250,8 @@ Person (male) -> он пошел, он сказал.
 # ══════════════════════════════════════════════════════════════════════
 # ПРЕСЕТЫ РЕЖИМОВ
 # ══════════════════════════════════════════════════════════════════════
-# Поведение режима: cap потоков и trace по умолчанию. Таймауты, повторы,
-# max_tokens и min_len_ratio сюда не попадают — они общие на весь конвейер
+# Поведение режима: cap потоков и trace по умолчанию. Таймауты, повторы
+# и max_tokens сюда не попадают — они общие на весь конвейер
 # (реестр core/settings.py).
 MODE_PRESETS = {
     "translate": {"threads_cap": 16, "trace_default": True},
@@ -398,12 +397,8 @@ def process_item(internal_id, original_text, draft_text, ctx):
                f"--request_budget (0).")
         fb = f"\n[FAIL: {err}]\n{original_text}\n[FAIL: {err}]\n"
         return internal_id, fb, f"Chunk {internal_id} FAIL: {err}"
-    reference = (draft_text or "" if ctx["mode"] == "redact"
-                 else original_text)
-
     text, err = ctx["stage"].complete(
         user_content, label=f"[{ctx['mode']} chunk {internal_id}]",
-        min_len_ratio=ctx["min_len_ratio"], reference_len=len(reference),
     )
     if text is not None:
         return internal_id, text, (f"Chunk {internal_id} OK | NER: {ner_count}"
@@ -459,8 +454,7 @@ def build_parser():
 
 Единицы:
   --chunk_size и --request_budget — ТОКЕНЫ (оценка estimate_tokens);
-  длины — СИМВОЛЫ, min_len_ratio — безразмерное отношение (в CJK→RU
-  токены изменили бы его смысл);
+  длины — СИМВОЛЫ;
   max_tokens — серверный предохранитель (ТОКЕНЫ), не внутренний расчёт.
 
 Сервер (приоритет): CLI --host/--model/--api_key > HOST/API_KEY/MODEL из .env
@@ -533,12 +527,6 @@ def build_parser():
                    help="Коэффициент жёсткого лимита чанка.")
     # Потоки — общий THREADS (флаг и ограничение у core.stage)
     # Надёжность
-    p.add_argument("--min_len_ratio", type=float, default=None,
-                   help="Мин. отношение длин (0 = нет): безразмерное — длина "
-                        "результата к входу, длины считаются в символах. "
-                        "По умолчанию отключено — контроль размера делает "
-                        "«Проверка перевода». Пустой ответ и стрим без "
-                        "признака конца генерации ловятся всегда.")
     # Trace
     p.add_argument("--trace", action=argparse.BooleanOptionalAction, default=None,
                    help="Писать *_trace.json (default: только в translate).")
@@ -763,10 +751,6 @@ def main(argv=None):
         "ner_min_count": args.ner_min_count,
         "names_min_count": args.names_min_count,
         "prompt": active_prompt, "stage": stage,
-        # соотношение длин — общий настройка MIN_LEN_RATIO (в профиле)
-        "min_len_ratio": (args.min_len_ratio
-                          if args.min_len_ratio is not None
-                          else stage.profile.min_len_ratio),
         # расширенный контекст
         "dict_data": dict_data, "dict_automaton": dict_automaton,
         "examples": examples, "fewshot_k": args.fewshot_k,

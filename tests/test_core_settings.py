@@ -29,8 +29,7 @@ LLM_FIELDS = {"host", "model", "api_key", "temperature", "timeout",
 # то, что осталось параметрами запуска (не настройки): сверяем полноту
 LLM_NAMES = {
     "host", "api_key", "model", "timeout", "stream_timeout", "max_retries",
-    "max_tokens", "retry_empty", "temperature", "threads", "min_len_ratio",
-    "tokenizer",
+    "max_tokens", "retry_empty", "temperature", "threads", "tokenizer",
     "reasoning_mode", "thinking_profile", "reasoning_effort", "thinking_budget",
     "llm_extra_body_json",
     # выбор провайдера — тоже общие LLM-ключи: маршрут относится к модели
@@ -191,11 +190,6 @@ def test_threads_single_value():
     """Потоки — одна величина на конвейер (была: 1 у ner_check, 4 у других)."""
     assert S.BY_KEY["THREADS"].default == "4"
     assert "threads" not in S.defaults("ner_check")
-
-
-def test_min_len_ratio_off_by_default():
-    assert S.BY_KEY["MIN_LEN_RATIO"].default == "0"
-    assert float(S.defaults()["min_len_ratio"]) == 0.0
 
 
 def test_tokenizer_setting():

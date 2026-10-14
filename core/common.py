@@ -12,8 +12,7 @@ core/transport.py: единственный HTTP-клиент httpx) + опци�
     context_budget, batch_size/rag_budget, budget (translate_quality),
     размер чанков FTS5 — везде оценка estimate_tokens (±20–30%,
     язык-осведомлённая).
-  • СИМВОЛЫ остаются: min_len_ratio (безразмерное отношение длин,
-    считается в символах), context_max_len (контекст термина), длины
+  • СИМВОЛЫ остаются: context_max_len (контекст термина), длины
     названий каталогов, min_fix_length, max_changed_chars.
   • max_tokens в payload — серверный предохранитель (ТОКЕНЫ);
     --near-distance в wiki.py — дистанция FTS5 NEAR (природа FTS5).
@@ -425,8 +424,7 @@ def estimate_tokens(text) -> int:
     безопаснее недоучёта); знаки препинания/символы/эмодзи — 0.35.
     Подряд идущие пробельные символы (любых языков, включая U+3000) —
     1 токен. Итог — округление вверх с запасом +10%; пустая строка — 0.
-    Единицы размеров запросов (chunk_size, бюджеты) — ТОКЕНЫ;
-    min_len_ratio остаётся символьным отношением длин."""
+    Единицы размеров запросов (chunk_size, бюджеты) — ТОКЕНЫ."""
     if not text:
         return 0
     total = 0.0
@@ -2065,7 +2063,7 @@ def stream_chat_completion(
     base_url, model, messages, api_key="",
     max_retries=3, timeout=300, stream_timeout=900,
     temperature=None, reasoning=None, provider=None,
-    max_tokens=65536, min_len_ratio=0.0, reference_len=0,
+    max_tokens=65536,
     logger=None, label="",
 ):
     """Стрим-запрос к OpenAI-совместимому API.
@@ -2073,9 +2071,7 @@ def stream_chat_completion(
     Гигиена: событие читается только завершённым (iter_sse_events), ответ
     засчитан лишь при finish_reason из _FINISH_DONE — один [DONE] или закрытое
     тело больше не «успех»; детект зацикливания, обрезка max_tokens, пустой
-    ответ, min_len_ratio к reference_len (символьное отношение
-    длин остаётся СИМВОЛЬНЫМ специально: в токенах оно меняло бы смысл
-    для CJK→RU). max_tokens — серверный предел (ТОКЕНЫ); размеры
+    ответ. max_tokens — серверный предел (ТОКЕНЫ); размеры
     запросов — ТОКЕНЫ (оценка estimate_tokens).
     reasoning: готовые ключи рассуждений (core.common.reasoning_fields) —
     едут в payload как есть; None/{} — ничего не шлём (дефолт сервера).
@@ -2162,9 +2158,7 @@ def stream_chat_completion(
                     last_err = f"Stopped: {frs}"
                 elif not full.strip():
                     last_err = "Empty response"
-                elif (min_len_ratio > 0 and reference_len > 0
-                      and len(full) < reference_len * min_len_ratio):
-                    last_err = "Length ratio check failed"
+
                 else:
                     return full, ""
                 time.sleep(_retry_wait(attempt, resp))

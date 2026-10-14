@@ -48,9 +48,6 @@ DEFAULT_RETRY_EMPTY = int(cfg.BY_KEY["RETRY_EMPTY"].default)
 DEFAULT_THREADS = int(cfg.BY_KEY["THREADS"].default)
 #: верхняя граница потоков — то же число, что у поля формы (max)
 DEFAULT_MAX_THREADS = int(cfg.BY_KEY["THREADS"].max or 16)
-#: контроль соотношения длин; выключен (0) по решению пользователя
-DEFAULT_MIN_LEN_RATIO = float(cfg.BY_KEY["MIN_LEN_RATIO"].default)
-
 #: Усилия рассуждения, которые понимает API (пусто = не отправлять).
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh",
                      "max")
@@ -176,8 +173,6 @@ class LlmProfile:
     retry_empty: int = DEFAULT_RETRY_EMPTY
     #: параллельных запросов стадии — тоже одна величина на конвейер
     threads: int = DEFAULT_THREADS
-    # контроль соотношения длин (СИМВОЛЫ): одна настройка на конвейер
-    min_len_ratio: float = DEFAULT_MIN_LEN_RATIO
     temperature: float | None = None
     reasoning_effort: str | None = None
     # способ передачи рассуждений: профиль (как именно) + режим + бюджет.
@@ -192,14 +187,11 @@ class LlmProfile:
     env_data: dict = field(default_factory=dict, compare=False, repr=False)
 
     def complete(self, prompt: str, data: str = "", *, label: str = "",
-                 max_retries: int | None = None,
-                 min_len_ratio: float | None = None,
-                 reference_len: int = 0) -> tuple[str | None, str | None]:
+                 max_retries: int | None = None) -> tuple[str | None, str | None]:
         """Единый стрим-запрос стадии: гигиена — в core.common.
 
         messages собирает llm_messages: промпт + данные (пустой system,
-        разметка <system> внутри промпта). min_len_ratio не передан — общий
-        настройка MIN_LEN_RATIO из профиля. Возвращает (text | None, err).
+        разметка <system> внутри промпта). Возвращает (text | None, err).
         """
         return stream_chat_completion(
             self.base_url, self.model,
@@ -218,9 +210,6 @@ class LlmProfile:
                        **extra_body_fields(self.env_data, self.logger)},
             provider=self.provider,
             max_tokens=self.max_tokens,
-            min_len_ratio=(self.min_len_ratio if min_len_ratio is None
-                           else min_len_ratio),
-            reference_len=reference_len,
             logger=self.logger,
             label=label,
         )
@@ -317,11 +306,6 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
     # запусков показывает одно поле «Таймаут», общий конфиг различает два числа
     stream_timeout = _pick(args, "stream_timeout",
                            llm["stream_timeout"] or timeout)
-    # контроль соотношения длин — та же настройка конвейера (безразмерное
-    # отношение): пустое или битое значение = встроенный дефолт
-    mlr = _as_float(llm.get("min_len_ratio"))
-    min_len_ratio = float(_pick(args, "min_len_ratio",
-                                DEFAULT_MIN_LEN_RATIO if mlr is None else mlr))
     profile = LlmProfile(
         base_url=base_url,
         model=model or "",
@@ -335,9 +319,6 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
                                      llm["threads"] or DEFAULT_THREADS)))),
         temperature=_pick(args, "temperature",
                           _as_float(llm.get("temperature"))),
-        # отношение длин — общий конфиг: флага стадии у него нет, и без этого
-        # поля профиль вёз бы встроенный дефолт вместо значения .env
-        min_len_ratio=min_len_ratio,
         reasoning_effort=_pick(args, "reasoning_effort", rs["effort"] or None),
         reasoning_mode=_pick(args, "reasoning_mode", rs["mode"]),
         thinking_profile=_pick(args, "thinking_profile", rs["profile"]),
