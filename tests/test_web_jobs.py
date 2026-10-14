@@ -878,13 +878,11 @@ def test_build_translate_check():
 
 
 def test_build_translate_check_custom_settings():
-    """Коэффициенты «ratio±tol» и regexp-проверки — проброс в argv."""
-    form = {"check_type": "polished",
-            "neighbor": "1.1±0.1", "original": "2.0±0.6",
+    """Чувствительность и regexp-проверки — проброс в argv."""
+    form = {"check_type": "polished", "sensitivity": 7,
             "regexp_checks": "[一-鿿]+ # иероглифы\n[a-zA-Z]+\n"}
     argv = build_command("translate_check", form, {})
-    assert "--neighbor" in argv and "1.1±0.1" in argv
-    assert "--original" in argv and "2.0±0.6" in argv
+    assert "--sensitivity" in argv and "7" in argv
     assert "--regexp-check" in argv
     assert argv.count("--regexp-check") == 2
     # строка уходит как есть (комментарий срезает сам CLI)

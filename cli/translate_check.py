@@ -2,14 +2,23 @@
 # -*- coding: utf-8 -*-
 """
 translate_check.py — проверка перевода по цепочке конвейера.
-(рефакторинг: единый парсер глав и поиск файла из core.common)
 
 Проверки:
-  • объёмы по цепочке (ratio-эвристики; размеры файлов — БАЙТЫ):
-      polished   vs redacted     1.0 ± 0.05  (--neighbor)
-      polished   vs chapter      2.1 ± 0.5   (--original)
-      redacted   vs translated   1.0 ± 0.05
-      translated vs chapter      2.1 ± 0.5
+  • объём глав (ТОКЕНЫ выбранного токенизатора — настройка TOKENIZER):
+    адаптивная статистика вместо магических констант. По ВСЕЙ книге
+    (не только по диапазону) собираются отношения объёмов каждой пары;
+    центр пары — медиана, разброс — MAD; глава помечается, если её
+    отношение вышло за медиану ± max(пол, K·MAD/медиана), K =
+    --sensitivity. Полы допуска — измеренный на реальных книгах нижний
+    предел разброса: соседние стадии 2% (сидят на 1.000), пара с
+    оригиналом 5%. K=0 — объёмные сравнения выключены (работают размер
+    файла, regexp и последовательность). Пары по типу файлов глав:
+      polished   vs redacted (соседняя) + chapter (оригинал)
+      redacted   vs translated (соседняя) + chapter (оригинал)
+      translated vs chapter (оригинал)
+    Малая база (n < 5): разброс выборки обманчиво узок, допуск —
+    расширенный пол (оригинал 15%, соседняя 2%); n < 2 — пара
+    пропускается (центру взяться неоткуда).
   • минимальный размер файла (--min-file-size, БАЙТЫ; дефолт 3072);
   • regexp-проверки текста главы (--regexp-check, multiline): чистый
       стандартный regexp (Python re), всё найденное — ошибка,
@@ -20,15 +29,14 @@ translate_check.py — проверка перевода по цепочке к�
       (в т.ч. полноширинная), остальные азбуки и чужие кириллические
       раскладки (і, ї, є, ґ, ў, ј, љ, …): в переводе не должно остаться
       ни одного слова и ни одной буквы другого языка; русская азбука
-      А-Я Ё не проверяется;
-      исключения — пусто: ничего;
+      А-Я Ё не проверяется; исключения — --exclude-words;
   • заголовок главы («Глава N» без учёта регистра) + сквозная
       последовательность: первое число первой непустой строки ровно
       на 1 больше предыдущего (N+1; отключается --no-sequence-check);
   • дубли папок / файлов (strict → FATAL, глава пропускается).
 
-ЕДИНИЦЫ: размеры файлов — байты; ratio — безразмерная эвристика
-(символьные расчёты живут в стадиях обработки, не здесь).
+ЕДИНИЦЫ: счёт объёма — ТОКЕНЫ (токенизатор настройки TOKENIZER: оценка
+estimate_tokens или файлы папки tokenizers/); размеры файлов — БАЙТЫ.
 Форматы папок глав — единый канон core.common.parse_chapter_id.
 """
 from __future__ import annotations
@@ -37,6 +45,7 @@ import argparse
 import os
 import re
 import shlex
+import statistics
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -55,8 +64,9 @@ def _bootstrap_core() -> None:
 
 _bootstrap_core()
 
-from core.common import build_chapter_map, find_chapter_file  # noqa: E402
 from core import settings as core_settings  # noqa: E402
+from core import tokenize  # noqa: E402
+from core.common import build_chapter_map, find_chapter_file  # noqa: E402
 
 
 def parse_regexp_rule(line: str):
@@ -74,23 +84,15 @@ def parse_regexp_rule(line: str):
 
 
 # ──────────────────────────────────────────────
-# НАСТРОЙКИ (настраиваемые коэффициенты)
+# НАСТРОЙКИ (полы допуска — измеренный нижний предел разброса реальных
+# книг: соседние стадии сидят на 1.000 с MAD 0.1–0.4%, пара с оригиналом
+# — MAD 2.6–3% при любом способе счёта)
 # ──────────────────────────────────────────────
 MIN_FILE_SIZE = 3072          # байты
-RATIO_NEIGHBOR = 1.0          # безразмерно
-
-# Паттерн заголовка главы (канон): первая непустая строка + поиск
-# лишних заголовков в тексте (первое совпадение — сам заголовок
-# главы, не ошибка; последующие — «Лишний заголовок главы»). Без
-# учёта регистра.
-TOL_NEIGHBOR = 0.05
-RATIO_ORIGINAL = 2.1          # байт ru / байт zh (эвристика)
-TOL_ORIGINAL = 0.5
-
-# ──────────────────────────────────────────────
-# ИСКЛЮЧЕНИЯ (пусто = ничего не исключается; переопределяется ключом
-# TRANSLATE_CHECK_EXCLUDE_WORDS в .env и флагом --exclude-words)
-# ──────────────────────────────────────────────
+FLOORS = {"neighbor": 0.02, "original": 0.05}
+#: малая база: MAD из 2–4 глав обманчиво узок — допуск расширенного пола
+SMALL_N = 5
+SMALL_FLOORS = {"neighbor": 0.02, "original": 0.15}
 
 
 def load_exclusions(env_path=None) -> list[str]:
@@ -117,65 +119,103 @@ def _write_report(report_path: str, text: str, mode: str = "a") -> None:
         print(f"Ошибка записи {report_path}: {exc}")
 
 # ──────────────────────────────────────────────
-# СРАВНЕНИЯ ПО ТИПУ ФАЙЛОВ ГЛАВ (коэффициенты — эвристики, подбираются
-# опытным путём; переопределяются флагами --neighbor/--original)
+# ПАРЫ СРАВНЕНИЯ И ИХ СТАТИСТИКА ПО ВСЕЙ КНИГЕ
 # ──────────────────────────────────────────────
-def parse_ratio_tol(value, def_ratio, def_tol) -> tuple[float, float]:
-    """Разбирает «ratio±tol» (например «1.0±0.05») или просто число.
-    None/пусто — встроенные дефолты (def_ratio, def_tol)."""
-    if value in (None, ""):
-        return def_ratio, def_tol
-    s = str(value).strip().replace(" ", "")
-    if "±" in s:
-        parts = s.split("±", 1)
-        try:
-            return float(parts[0]), float(parts[1])
-        except ValueError:
-            pass
-    try:
-        return float(s), def_tol
-    except ValueError:
-        sys.exit(f"Ошибка: «{value}» — ожидалось число или «ratio±tol»")
-
-
-def comparisons_for(check_type, neighbor=None, original=None):
-    """Сравнения для типа файлов глав: polished → redacted+chapter,
-    redacted → translated+chapter, translated → только chapter.
-    neighbor/original — «ratio±tol»; None = встроенные дефолты."""
-    rn, tn = parse_ratio_tol(neighbor, RATIO_NEIGHBOR, TOL_NEIGHBOR)
-    ro, to = parse_ratio_tol(original, RATIO_ORIGINAL, TOL_ORIGINAL)
+def comparisons_for(check_type: str) -> list[tuple[str, str]]:
+    """Сравнения типа файлов глав: (эталон, вид пары); вид задаёт пол
+    допуска: neighbor — соседняя стадия, original — оригинал (chapter)."""
     return {
-        "polished": [
-            ("redacted", rn, tn),
-            ("chapter", ro, to),
-        ],
-        "redacted": [
-            ("translated", rn, tn),
-            ("chapter", ro, to),
-        ],
-        "translated": [
-            ("chapter", ro, to),
-        ],
+        "polished": [("redacted", "neighbor"), ("chapter", "original")],
+        "redacted": [("translated", "neighbor"), ("chapter", "original")],
+        "translated": [("chapter", "original")],
     }[check_type]
 
-# ──────────────────────────────────────────────
-# СРАВНЕНИЕ РАЗМЕРОВ
-# ──────────────────────────────────────────────
-def compare_sizes(check_label, ref_label, check_size, ref_size,
-                  expected_ratio, tolerance):
-    """Возвращает строку-ошибку или None, если всё в порядке."""
-    if ref_size == 0:
-        return (f"  [{check_label} vs {ref_label}]  "
-                f"эталон пуст (0 Б), сравнение невозможно.")
-    ratio = round(check_size / ref_size, 2)
-    lo = expected_ratio - tolerance
-    hi = expected_ratio + tolerance
+
+def scan_files(chapter_map, check_type, comparisons, strict) -> dict:
+    """Один проход по ВСЕЙ книге: {номер: {тип: путь}} без дублей папок.
+
+    Дубли пропускаются — проход 2 их тоже пропустит; файл ищется единым
+    поиском core.common; FATAL-сообщения поиска файл не открывают.
+    """
+    files: dict = {}
+    wants = (check_type, *(rt for rt, _ in comparisons))
+    for num, dirs in sorted(chapter_map.items()):
+        if len(dirs) > 1:
+            continue
+        row = {}
+        for want in wants:
+            p, msgs = find_chapter_file(dirs[0], num, want=want,
+                                        strict=strict, strict_types=True)
+            if p and not any(m.startswith("[FATAL]") for m in msgs):
+                row[want] = str(p)
+        if row:
+            files[num] = row
+    return files
+
+
+def collect_stats(files, check_type, comparisons, counts,
+                  sensitivity: float) -> dict:
+    """Статистика каждой пары по отношениям объёмов ВСЕЙ книги.
+
+    База пары — главы, где есть оба файла и оба непусты (промежуточные
+    стадии могли делаться не везде — у каждой пары своя база). Центр —
+    медиана, разброс — MAD; допуск = max(пол, K·MAD/медиана); при
+    n < SMALL_N разброс выборки не доверяем — допуск расширенного пола.
+    Медиана устойчива, пока битых глав в базе меньше половины, — это
+    честный предел метода.
+    """
+    ratios: dict[str, list] = {rt: [] for rt, _ in comparisons}
+    for num, row in files.items():
+        cn = counts.get(row.get(check_type, ""), 0)
+        if not cn:
+            continue
+        for rt, _kind in comparisons:
+            rn = counts.get(row.get(rt, ""), 0)
+            if rn:
+                ratios[rt].append(cn / rn)
+    stats = {}
+    for rt, kind in comparisons:
+        xs = ratios[rt]
+        n = len(xs)
+        if n < 2:
+            stats[rt] = {"kind": kind, "n": n, "median": 0.0, "mad": 0.0,
+                         "tol": 0.0, "k": sensitivity, "small": n < SMALL_N}
+            continue
+        med = statistics.median(xs)
+        mad = statistics.median(abs(x - med) for x in xs)
+        floor = FLOORS[kind] if n >= SMALL_N else SMALL_FLOORS[kind]
+        stats[rt] = {"kind": kind, "n": n, "median": med, "mad": mad,
+                     "tol": max(floor, sensitivity * mad / med),
+                     "k": sensitivity, "small": n < SMALL_N}
+    return stats
+
+
+def stats_line(check_type: str, ref_type: str, st: dict) -> str:
+    """Строка отчёта о статистике одной пары."""
+    if st["n"] < 2:
+        return (f"  {check_type} vs {ref_type}: статистики нет "
+                f"(полных глав {st['n']}) — сравнение пропускается")
+    line = (f"  {check_type} vs {ref_type}: глав {st['n']}, "
+            f"медиана {st['median']:.3f}, MAD {st['mad'] * 100:.1f}%, "
+            f"допуск ±{st['tol'] * 100:.1f}%")
+    if st["small"]:
+        return line + " (мало глав — разброс выборки не учитывается)"
+    return line + f" (K={st['k']:g})"
+
+
+def volume_error(check_label, ref_label, check_n, ref_n, st) -> str | None:
+    """Отношение объёмов главы вне допуска пары → строка-ошибка."""
+    if not ref_n or not check_n:
+        return None  # пустой файл ловит минимальный размер
+    ratio = check_n / ref_n
+    lo = st["median"] - st["tol"]
+    hi = st["median"] + st["tol"]
     if lo <= ratio <= hi:
         return None
-    return (f"  [{check_label} vs {ref_label}]  "
-            f"ratio {ratio}  →  ОШИБКА "
-            f"(ожидалось {expected_ratio} ± {tolerance}). "
-            f"Проверяемый {check_size} Б, эталон {ref_size} Б.")
+    return (f"  [{check_label} vs {ref_label}]  отношение объёма "
+            f"{ratio:.2f} → ОШИБКА (медиана книги {st['median']:.2f} "
+            f"± {st['tol']:.2f}; {check_label} {check_n} т., "
+            f"{ref_label} {ref_n} т.)")
 
 # ──────────────────────────────────────────────
 # ПРОВЕРКА ОДНОЙ ГЛАВЫ
@@ -183,7 +223,7 @@ def compare_sizes(check_label, ref_label, check_size, ref_size,
 def check_chapter(chapter_num, dir_path, check_type, comparisons,
                   strict, prev_inner_chapter, exclusions=None,
                   regexp_checks=None, min_file_size=None,
-                  sequence_check=True):
+                  sequence_check=True, counts=None, stats=None):
     """Возвращает (список_ошибок, обновлённый_prev_inner_chapter).
     В список попадают ТОЛЬКО ошибки и предупреждения поиска.
     exclusions — слова-исключения, по умолчанию load_exclusions().
@@ -194,11 +234,15 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
     min_file_size — минимальный размер файла (БАЙТЫ; None = дефолт).
     sequence_check — сквозная последовательность: первое число в
       первой непустой строке должно быть ровно на 1 больше
-      предыдущего (N+1)."""
+      предыдущего (N+1).
+    counts — токены файлов (scan_files + tokenize.count_files);
+    stats — статистика пар (collect_stats): None — объёмные сравнения
+      выключены (--sensitivity 0)."""
     errors: list[str] = []
     if exclusions is None:
         exclusions = load_exclusions()
     min_size = MIN_FILE_SIZE if min_file_size is None else min_file_size
+    counts = counts or {}
 
     # ---- целевой файл (единый поиск из core.common) ----
     file_path, msgs = find_chapter_file(
@@ -219,8 +263,11 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
         errors.append(f"  - Размер файла слишком мал: {size_file} Б "
                       f"(минимум {min_size} Б).")
 
-    # ---- цикл сравнений ----
-    for ref_type, expected_ratio, tol in comparisons:
+    # ---- цикл сравнений (допуск пары — из статистики всей книги) ----
+    for ref_type, _kind in comparisons:
+        st = (stats or {}).get(ref_type) or {}
+        if st.get("n", 0) < 2:
+            continue  # базы нет — отмечено в шапке отчёта
         ref_path, ref_msgs = find_chapter_file(
             dir_path, chapter_num, want=ref_type, strict=strict,
             strict_types=True)
@@ -233,9 +280,9 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
             errors.append(f"  [{check_type} vs {ref_type}]  "
                           f"эталон '{ref_type}' не найден, сравнение пропущено.")
             continue
-        size_ref = os.path.getsize(ref_path)
-        err = compare_sizes(check_type, ref_type, size_file, size_ref,
-                            expected_ratio, tol)
+        err = volume_error(check_type, ref_type,
+                           counts.get(str(file_path), 0),
+                           counts.get(str(ref_path), 0), st)
         if err:
             errors.append(err)
 
@@ -248,7 +295,6 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
         errors.append(f"  - Ошибка чтения файла: {e}")
         return errors, prev_inner_chapter
 
-    # ---- regexp-проверки текста: ВСЕ строки, включая заголовок ----
     # ---- regexp-проверки текста: ВСЕ строки, включая заголовок ----
     #      правила пользователя — чистый стандартный regexp; пусто =
     #      без проверок (весь набор — в предзаполнении web-формы)
@@ -290,24 +336,29 @@ def build_parser() -> argparse.ArgumentParser:
         description="Скрипт проверки перевода глав.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
-Единицы: размеры файлов — байты; ratio — безразмерная эвристика.
-Сравнения по типу файлов глав:
-  POLISHED   vs redacted (1.0±0.05) + chapter (2.1±0.5)
-  REDACTED   vs translated (1.0±0.05) + chapter (2.1±0.5)
-  TRANSLATED vs chapter (2.1±0.5)
-Коэффициенты: --neighbor/--original в формате «ratio±tol».
+Единицы: счёт объёма — ТОКЕНЫ (токенизатор настройки TOKENIZER);
+размеры файлов — байты.
+Сравнения по типу файлов глав (--check-type):
+  POLISHED   vs redacted (соседняя) + chapter (оригинал)
+  REDACTED   vs translated (соседняя) + chapter (оригинал)
+  TRANSLATED vs chapter (оригинал)
+Объём: по ВСЕЙ книге собираются отношения объёмов каждой пары; глава
+помечается, если её отношение вышло за медиану ± max(пол, K·MAD/медиана).
+Полы: соседние стадии 2%%, оригинал 5%%; при базе меньше 5 глав разброс
+выборки не учитывается (оригинал 15%%, соседняя 2%%). --sensitivity 0 —
+объёмные сравнения выключены.
 Regexp-проверки текста (--regexp-check, по одной на строку): всё
 найденное — ошибка, проверяются ВСЕ строки, включая заголовок главы;
-^/$ — начало/конец СТРОКИ (multiline); комментарий в конце строки —
-чистый стандартный regexp (Python re): регистр — inline-флагом
-(?i); комментариев и кастомных флагов нет («#» — литерал в
-паттерне). Пусто = без проверок; рекомендуемый набор — в
-предзаполнении web-формы. Проверка «первая строка = заголовок
-главы» выражается как \\A(?!\\s*Глава\\s+(\\d+|\\[Номер\\])) —
-отрицательный lookahead (совпадение нулевой длины); прямая
-семантика «первая строка НЕ заголовок → ошибка» встроенной нет. Сквозная
-последовательность — первое число первой непустой строки ровно на 1
-больше предыдущего (N+1), отключается --no-sequence-check.
+^/$ — начало/конец СТРОКИ (multiline); чистый стандартный regexp
+(Python re): регистр — inline-флагом (?i); комментариев и кастомных
+флагов нет («#» — литерал в паттерне). Пусто = без проверок;
+рекомендуемый набор — в предзаполнении web-формы. Проверка «первая
+строка = заголовок главы» выражается как
+\\A(?!\\s*Глава\\s+(\\d+|\\[Номер\\])) — отрицательный lookahead
+(совпадение нулевой длины); прямой семантики «первая строка НЕ
+заголовок → ошибка» встроенной нет. Сквозная последовательность —
+первое число первой непустой строки ровно на 1 больше предыдущего
+(N+1), отключается --no-sequence-check.
 Минимальный размер файла — --min-file-size (БАЙТЫ).
 Примеры:
   %(prog)s                                  strict, polished, весь диапазон
@@ -338,19 +389,15 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
                              "regexp-проверок, равные этим словам, в отчёт "
                              "не попадают (пусто = ничего; иначе "
                              "TRANSLATE_CHECK_EXCLUDE_WORDS из .env)")
-    # ── настраиваемые коэффициенты (эвристики: подбираются опытным
-    #    путём под конкретную книгу; дефолты — встроенные)
-    parser.add_argument("--neighbor", default=None,
-                        help="Ожидаемое отношение к файлу предыдущей "
-                             "стадии: «ratio±tol», напр. "
-                             f"«{RATIO_NEIGHBOR}±{TOL_NEIGHBOR}» "
-                             "(polished → redacted, redacted → translated; "
-                             "пусто = встроенный дефолт)")
-    parser.add_argument("--original", default=None,
-                        help="Ожидаемое отношение к оригинальной главе "
-                             "(chapter): «ratio±tol», напр. "
-                             f"«{RATIO_ORIGINAL}±{TOL_ORIGINAL}» "
-                             "(пусто = встроенный дефолт)")
+    # ── чувствительность объёмной проверки: единственный параметр человека;
+    #    центр и допуск пары считает статистика книги
+    parser.add_argument("--sensitivity", type=float, default=None, metavar="K",
+                        help="K — во сколько раз итоговый допуск больше "
+                             "медианного отклонения книги (MAD): статистика "
+                             "собирается по ВСЕЙ книге, помечаются только "
+                             "главы диапазона; 0 — объёмные сравнения "
+                             "выключены (размер файла, regexp и "
+                             "последовательность работают)")
     # ── regexp-проверки текста главы (экспертные)
     parser.add_argument("--regexp-check", action="append", default=[],
                         metavar="RE",
@@ -387,6 +434,12 @@ def main() -> None:
     print("    Скрипт проверки перевода")
     print("======================================")
 
+    sensitivity = float(args.sensitivity)
+    if sensitivity < 0:
+        sys.exit("Ошибка: --sensitivity — число ≥ 0 (0 = объёмные "
+                 "сравнения выключены).")
+    volume_on = sensitivity > 0
+
     # ── карта глав: единый канон из core.common ──
     chapter_map = build_chapter_map(chapters_dir)
     if not chapter_map:
@@ -410,7 +463,7 @@ def main() -> None:
     auto_max = max(chapter_map)
 
     check_type = args.check_type
-    comparisons = comparisons_for(check_type, args.neighbor, args.original)
+    comparisons = comparisons_for(check_type)
     regexp_checks = []
     for n, line in enumerate(args.regexp_check, 1):
         try:
@@ -426,6 +479,19 @@ def main() -> None:
     min_file_size = (args.min_file_size if args.min_file_size is not None
                      else MIN_FILE_SIZE)
     sequence_check = not args.no_sequence_check
+
+    # ── счёт объёма: токенизатор — общий слой (реестр → .env → окружение) ──
+    tid, _fallback = tokenize.resolve(str(core_settings.effective("TOKENIZER") or ""))
+    unit = "токены (оценка)" if tid == tokenize.ESTIMATE_ID else f"токены ({tid})"
+
+    # ── проход 1: статистика пар по ВСЕЙ книге (диапазон не важен) ──
+    files = scan_files(chapter_map, check_type, comparisons, strict) \
+        if volume_on else {}
+    counts = tokenize.count_files(
+        sorted({p for row in files.values() for p in row.values()}), tid) \
+        if volume_on else {}
+    stats = collect_stats(files, check_type, comparisons, counts,
+                          sensitivity) if volume_on else {}
 
     print("--------------------------------------")
     print(f"Найден диапазон глав: {auto_min} – {auto_max} "
@@ -443,30 +509,39 @@ def main() -> None:
         print(f"Ошибка: не удалось создать ./logs: {exc}")
         sys.exit(1)
     report_path = f"./logs/check_{check_type}_{start_cap}-{end_cap}.txt"
-    comp_desc = "; ".join(f"{rt} ({r}±{t})" for rt, r, t in comparisons)
     # Фактическая команда запуска — в отчёт
-    _write_report(report_path, (
+    header = (
         f"=== Отчёт о проверке перевода ({check_type}) ===\n"
         f"Запуск        : {shlex.join(sys.argv)}\n"
         f"Диапазон глав : {start_cap} – {end_cap}\n"
         f"Папка глав    : {os.path.abspath(chapters_dir)}\n"
-        f"Сравнения     : {comp_desc}\n"
+        f"Счёт объёма   : {unit}; чувствительность K={sensitivity:g}"
+        f"{'' if volume_on else ' (объёмные сравнения выключены)'}\n"
         f"Regexp-проверки: {'; '.join(rx.pattern for rx in regexp_checks)}\n"
         f"Мин. размер   : {min_file_size} Б\n"
         f"Последоват.   : {'вкл' if sequence_check else 'выкл'}\n"
         f"Режим         : {'strict' if strict else 'lenient'}\n"
         f"Исключения    : {', '.join(exclusions)}\n"
-        "Единицы       : размеры в байтах; ratio — безразмерная эвристика\n"
         f"Дата          : {datetime.now().strftime('%c')}\n"
         f"Всего папок   : {len(chapter_map)}\n"
         "---------------------------------\n"
-    ), "w")
+    )
+    if volume_on:
+        header += (f"Статистика (по всей книге, {len(files)} папок без дублей):\n"
+                   + "\n".join(stats_line(check_type, rt, stats[rt])
+                              for rt, _k in comparisons) + "\n"
+                   "---------------------------------\n")
+    _write_report(report_path, header, "w")
 
     print("--------------------------------------")
     # Фактическая команда запуска
     print(f"Запуск: {shlex.join(sys.argv)}")
     print(f"Запуск проверки ({check_type})…")
-    print(f"Сравнения: {comp_desc}")
+    print(f"Счёт объёма: {unit}; K={sensitivity:g}")
+    if volume_on:
+        print("Статистика (по всей книге):")
+        for rt, _k in comparisons:
+            print(stats_line(check_type, rt, stats[rt]))
     print(f"Исключения: {', '.join(exclusions)}\n")
 
     prev_inner_chapter: int | None = None
@@ -500,6 +575,8 @@ def main() -> None:
             regexp_checks=regexp_checks or None,
             min_file_size=min_file_size,
             sequence_check=sequence_check,
+            counts=counts if volume_on else None,
+            stats=stats if volume_on else None,
         )
 
         # ---- консоль: всегда показываем прогресс ----

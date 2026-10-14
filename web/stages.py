@@ -144,10 +144,8 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
     argv += _range_argv("start", form)
     if form.get("exclude_words"):
         argv += ["--exclude-words", str(form["exclude_words"])]
-    for name, flag in (("neighbor", "--neighbor"),
-                       ("original", "--original")):
-        if form.get(name) not in (None, ""):
-            argv += [flag, str(form[name])]
+    if form.get("sensitivity") not in (None, ""):
+        argv += ["--sensitivity", str(form["sensitivity"])]
     for line in _epub_lines(form.get("regexp_checks")):
         argv += ["--regexp-check", line]
     if form.get("min_file_size") not in (None, ""):
