@@ -30,6 +30,7 @@ LLM_FIELDS = {"host", "model", "api_key", "temperature", "timeout",
 LLM_NAMES = {
     "host", "api_key", "model", "timeout", "stream_timeout", "max_retries",
     "max_tokens", "retry_empty", "temperature", "threads", "min_len_ratio",
+    "tokenizer",
     "reasoning_mode", "thinking_profile", "reasoning_effort", "thinking_budget",
     "llm_extra_body_json",
     # выбор провайдера — тоже общие LLM-ключи: маршрут относится к модели
@@ -195,6 +196,14 @@ def test_threads_single_value():
 def test_min_len_ratio_off_by_default():
     assert S.BY_KEY["MIN_LEN_RATIO"].default == "0"
     assert float(S.defaults()["min_len_ratio"]) == 0.0
+
+
+def test_tokenizer_setting():
+    """Токенизатор — общая настройка с динамическими опциями; выбор из
+    списка попадает в effective (проверка объёма читает его же)."""
+    s = S.BY_KEY["TOKENIZER"]
+    assert s.type == "select" and s.dynamic and s.default == "gemma-4-31b"
+    assert "estimate" in s.options
 
 
 def test_block_titles_are_stage_titles():

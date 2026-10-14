@@ -71,7 +71,7 @@ docker run -d -p 8756:8756 \
 | общий .env | `/app/projects/.env` (в томе) | WEB_ENV_FILE: правки страницы «Настройки» переживают обновление образа |
 | токен | `projects/.web_secret` | генерируется при `WEB_AUTH=1`, сохраняется в volume |
 
-Переменные окружения — те же, что локально: `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`, `WEB_MAX_UPLOAD_MB`, `WEB_JOBS_LIMIT`, `WEB_PROJECTS_DIR` (не нужен при монтировании в дефолтный путь). Только WEB_* — деплой-слой; LLM-конфиг (HOST/API_KEY/MODEL, *_MODEL) — только в системном .env (вкладка «Настройки»).
+Переменные окружения — те же, что локально: `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`, `WEB_MAX_UPLOAD_MB`, `WEB_JOBS_LIMIT`, `WEB_PROJECTS_DIR` (не нужен при монтировании в дефолтный путь). Только WEB_* — деплой-слой; LLM-конфиг (HOST/API_KEY/MODEL, *_MODEL) — только в системном .env (вкладка «Настройки»). Свои токенизаторы для «Проверки перевода» (настройка `TOKENIZER`): папка `tokenizers/` уже в образе со встроенным Gemma 4 31b; свой файл формата HF добавляется bind-mount одной папки (`./tokenizers:/app/tokenizers`) поверх встроенной.
 
 **Конфиг в Docker**: environment в compose — ТОЛЬКО деплой-обвязка (`WEB_*`: запуск контейнера); LLM-конфиг и дефолты стадий в compose не задают — их единое место общий `.env` в постоянном томе;
 
