@@ -35,7 +35,7 @@ CORE_API = [
     "setup_logging", "log_argv", "determine_model",
     "load_prompt", "get_tagged_prompt",
     "estimate_tokens", "split_at_tokens", "trim_to_tokens",
-    "split_text_smart",
+    "count_file_tokens", "split_text_smart",
     "get_ngrams", "is_cjk", "is_cjk_string", "find_exact_match",
     "trim_rule_left", "trim_rule_right",
     "load_ner_data", "find_relevant_ner", "collect_gender_names",

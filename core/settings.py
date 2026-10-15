@@ -89,9 +89,6 @@ class Setting:
     help: str = ""
     noenv: bool = False         # состояние UI (чипсы) — в .env не пишется
     run: bool = False           # параметр запуска (главы, входные файлы)
-    # опции select динамические: реестр хранит встроенные, остальное подмешивает
-    # api_env из core.tokenize.available() (токенизаторы)
-    dynamic: bool = False
     secret: bool = False        # парольное поле: значение не отдаётся в SPA
     stage: str = ""             # владелец-стадия ('' — общая настройка)
     # когда настройка вообще касается запуска. Условие — пара (имя поля режима,
@@ -119,7 +116,7 @@ class Setting:
         out["default"] = self.default
         for k in ("options", "labels", "min", "max", "step", "dir", "ext",
                   "rows", "autofile", "editable", "help", "noenv",
-                  "dynamic", "when", "when_any", "when_set"):
+                  "when", "when_any", "when_set"):
             v = getattr(self, k)
             if v not in (None, "", [], {}, ()):
                 out[k] = v
@@ -206,12 +203,6 @@ GROUPS: tuple = (
         _block("llm_run", "Температура и параллельность",
             _s("TEMPERATURE", "Температура (пусто = сервер)", "text", ""),
             _s("THREADS", "Потоков (1–16)", "number", "4", min=1, max=16, help="одна величина на весь конвейер"),
-            _s("TOKENIZER", "Токенизатор проверки (счёт объёма)", "select", "gemma-4-31b",
-               options=("estimate", "gemma-4-31b"),
-               labels={"estimate": "Оценка (встроенная)",
-                       "gemma-4-31b": "Gemma 4 31b (встроенный)"},
-               help="чем считать объём в «Проверке перевода»: встроенная оценка всегда доступна, реальный токенизатор точнее (медиана книги компенсирует смещение); свои токенизаторы — файлы формата HF tokenizers в папку tokenizers/ (список подхватывается сам)",
-               dynamic=True),
         ),
         _block("llm_reasoning", "Рассуждения модели",
             _s("REASONING_MODE", "Рассуждения", "select", "default", options=("default", "on", "off"), labels={'default': "— (решение сервера)", 'on': "включены", 'off': "выключены"},

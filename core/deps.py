@@ -85,17 +85,6 @@ ROLES: tuple[dict, ...] = (
         ),
     },
     {
-        "role": "счёт токенов (проверка объёма)",
-        "where": "core/tokenize.py",
-        "required": False,
-        "candidates": (
-            {"pip": "tokenizers", "module": "tokenizers",
-             "label": "HF tokenizers", "note": "реальный счёт по tokenizer.json"},
-            {"pip": "", "module": "", "label": "estimate",
-             "note": "фолбэк: оценка estimate_tokens, точность та же для проверки"},
-        ),
-    },
-    {
         "role": "тесты",
         "where": "tests/",
         "required": False,

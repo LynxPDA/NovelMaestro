@@ -21,7 +21,6 @@ import unicodedata
 from pathlib import Path
 from web.server import ApiError
 from core import settings as core_settings
-from core import tokenize as core_tokenize
 from web.server import Router
 from web.api_common import (
     log,
@@ -67,47 +66,9 @@ def _settings_payload(profile: str = "") -> dict:
             "exists": bool(path) and Path(path).is_file(),
             "profile": profile or core_settings.PROFILE_DEFAULT,
             "profile_file": core_settings.profiles_file(),
-            "groups": _dynamic_groups(),
+            "groups": core_settings.groups_payload(),
             "profiles": core_settings.profiles_payload(),
             "env_wins": sorted(_env_wins())}
-
-
-def _dynamic_groups() -> list:
-    """Реестр для SPA с динамическими select-опциями.
-
-    Настройка с dynamic=True (токенизатор) получает опции из
-    core.tokenize.available(): estimate + файлы папки tokenizers/;
-    недоступный файл остаётся в списке с пометкой (ok=False) — его выбор
-    работает на оценке с предупреждением, а не молча исчезает.
-    """
-    av = {a["id"]: a for a in core_tokenize.available()}
-    groups = core_settings.groups_payload()
-    for group in groups:
-        for block in group["blocks"]:
-            for f in block["fields"]:
-                if not f.get("dynamic"):
-                    continue
-                s = core_settings.BY_KEY.get(f.get("key", ""))
-                if s is None:
-                    continue
-                opts = list(av)
-                for tid in s.options:
-                    if tid not in opts:
-                        opts.append(tid)
-                f["options"] = tuple(opts)
-                labels = {tid: av[tid]["title"] for tid in opts
-                          if tid in av and av[tid]["title"] != tid}
-                # недоступный пункт остаётся в списке с пометкой: его выбор
-                # работает на оценке с предупреждением, а не молча исчезает
-                for tid in opts:
-                    if tid in av and not av[tid]["ok"]:
-                        labels[tid] = f"{tid} (недоступен)"
-                f["labels"] = labels
-                f["tokenizer_ok"] = {tid: av[tid]["ok"] for tid in opts
-                                     if tid in av}
-                f["tokenizer_error"] = {tid: av[tid]["error"] for tid in opts
-                                        if tid in av and av[tid]["error"]}
-    return groups
 
 
 def _settings_get(ctx: dict) -> dict:

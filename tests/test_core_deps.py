@@ -61,8 +61,7 @@ def test_roles_cover_the_documented_set():
     assert ROLE_NAMES == ["HTTP-транспорт LLM", ".env-конфигурация",
                          "поиск терминов по главам",
                          "история проектов (контрольные точки)",
-                         "прогресс-бары CLI", "счёт токенов (проверка объёма)",
-                         "тесты"]
+                         "прогресс-бары CLI", "тесты"]
 
 
 @pytest.mark.parametrize("role", ROLE_NAMES)
@@ -234,7 +233,7 @@ def test_missing_hint_empty_on_full_stack(rows):
 
 
 def test_missing_hint_lists_every_gap(installed):
-    installed("dotenv", "ahocorasick", "dulwich", "tokenizers")
+    installed("dotenv", "ahocorasick", "dulwich")
     got = set(deps.missing_hint().split())
     assert got == {"httpx", "tqdm", "pytest", "pytest-xdist"}
 

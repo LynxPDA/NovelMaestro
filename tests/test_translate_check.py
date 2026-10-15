@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "cli"))
 
 import translate_check as TC  # noqa: E402
 from core import settings as SET  # noqa: E402
-from core import tokenize as TK  # noqa: E402
+from core.common import count_file_tokens  # noqa: E402
 
 
 def _write_chapter(d, num, files: dict[str, str]) -> str:
@@ -222,8 +222,8 @@ def _synth_book(tmp_path, n: int, pol: int = 60, ch: int = 100):
                                          "redacted": _body(pol),
                                          "chapter": _body(ch)})
         files[i] = _row(d, ("polished", "redacted", "chapter"))
-    counts = TK.count_files(sorted({p for row in files.values()
-                                    for p in row.values()}), "estimate")
+    counts = count_file_tokens(sorted({p for row in files.values()
+                                       for p in row.values()}))
     return files, counts
 
 
@@ -237,8 +237,8 @@ def test_check_chapter_volume_caught(tmp_path):
                                            "redacted": _body(60),
                                            "chapter": _body(100)})
     files[21] = _row(broken, ("polished", "redacted", "chapter"))
-    counts.update(TK.count_files(
-        [f"{broken}/polished.txt", f"{broken}/redacted.txt"], "estimate"))
+    counts.update(count_file_tokens(
+        [f"{broken}/polished.txt", f"{broken}/redacted.txt"]))
     errors, _ = TC.check_chapter(21, broken, "polished", comps, False, None,
                                  exclusions=[], counts=counts, stats=stats)
     assert any("отношение объёма" in e for e in errors)

@@ -4,7 +4,7 @@
 translate_check.py — проверка перевода по цепочке конвейера.
 
 Проверки:
-  • объём глав (ТОКЕНЫ выбранного токенизатора — настройка TOKENIZER):
+  • объём глав (ТОКЕНЫ — оценка estimate_tokens):
     адаптивная статистика вместо магических констант. По ВСЕЙ книге
     (не только по диапазону) собираются отношения объёмов каждой пары;
     центр пары — медиана, разброс — MAD; глава помечается, если её
@@ -35,8 +35,8 @@ translate_check.py — проверка перевода по цепочке к�
       на 1 больше предыдущего (N+1; отключается --no-sequence-check);
   • дубли папок / файлов (strict → FATAL, глава пропускается).
 
-ЕДИНИЦЫ: счёт объёма — ТОКЕНЫ (токенизатор настройки TOKENIZER: оценка
-estimate_tokens или файлы папки tokenizers/); размеры файлов — БАЙТЫ.
+ЕДИНИЦЫ: счёт объёма — ТОКЕНЫ (встроенная оценка estimate_tokens);
+размеры файлов — БАЙТЫ.
 Форматы папок глав — единый канон core.common.parse_chapter_id.
 """
 from __future__ import annotations
@@ -65,8 +65,11 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core import settings as core_settings  # noqa: E402
-from core import tokenize  # noqa: E402
-from core.common import build_chapter_map, find_chapter_file  # noqa: E402
+from core.common import (  # noqa: E402
+    build_chapter_map,
+    count_file_tokens,
+    find_chapter_file,
+)
 
 
 def parse_regexp_rule(line: str):
@@ -235,7 +238,7 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
     sequence_check — сквозная последовательность: первое число в
       первой непустой строке должно быть ровно на 1 больше
       предыдущего (N+1).
-    counts — токены файлов (scan_files + tokenize.count_files);
+    counts — токены файлов (scan_files + core.common.count_file_tokens);
     stats — статистика пар (collect_stats): None — объёмные сравнения
       выключены (--sensitivity 0)."""
     errors: list[str] = []
@@ -336,7 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Скрипт проверки перевода глав.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
-Единицы: счёт объёма — ТОКЕНЫ (токенизатор настройки TOKENIZER);
+Единицы: счёт объёма — ТОКЕНЫ (встроенная оценка estimate_tokens);
 размеры файлов — байты.
 Сравнения по типу файлов глав (--check-type):
   POLISHED   vs redacted (соседняя) + chapter (оригинал)
@@ -480,15 +483,14 @@ def main() -> None:
                      else MIN_FILE_SIZE)
     sequence_check = not args.no_sequence_check
 
-    # ── счёт объёма: токенизатор — общий слой (реестр → .env → окружение) ──
-    tid, _fallback = tokenize.resolve(str(core_settings.effective("TOKENIZER") or ""))
-    unit = "токены (оценка)" if tid == tokenize.ESTIMATE_ID else f"токены ({tid})"
+    # ── счёт объёма: один счётчик на весь конвейер — встроенная оценка ──
+    unit = "токены (оценка)"
 
     # ── проход 1: статистика пар по ВСЕЙ книге (диапазон не важен) ──
     files = scan_files(chapter_map, check_type, comparisons, strict) \
         if volume_on else {}
-    counts = tokenize.count_files(
-        sorted({p for row in files.values() for p in row.values()}), tid) \
+    counts = count_file_tokens(
+        sorted({p for row in files.values() for p in row.values()})) \
         if volume_on else {}
     stats = collect_stats(files, check_type, comparisons, counts,
                           sensitivity) if volume_on else {}
