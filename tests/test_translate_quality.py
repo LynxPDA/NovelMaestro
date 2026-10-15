@@ -61,7 +61,7 @@ def test_fit_budget_all_fits():
 
 def test_fit_budget_trims_to_whole_chapters():
     """Не влезает — первые N целых глав (оригинал+перевод), порядок
-    сохраняется. Единица — ТОКЕНЫ (оценка): глава ~40 (33+7)."""
+    сохраняется. Единица — ТОКЕНЫ (оценка): глава ~50 (41+9)."""
     ch = [(1, "а" * 100), (2, "б" * 100), (3, "в" * 100)]
     orig = {1: "А" * 20, 2: "Б" * 20, 3: "В" * 20}
     kept, dropped = TQ.fit_budget(ch, orig, "промпт", budget=50)
@@ -70,10 +70,10 @@ def test_fit_budget_trims_to_whole_chapters():
 
 
 def test_fit_budget_counts_original_and_translation():
-    """Размер главы = перевод + оригинал (ТОКЕНЫ, оценка ~40), влезают 2."""
+    """Размер главы = перевод + оригинал (ТОКЕНЫ, оценка ~50), влезают 2."""
     ch = [(1, "а" * 100), (2, "б" * 100), (3, "в" * 100)]
     orig = {1: "А" * 20, 2: "Б" * 20, 3: "В" * 20}
-    kept, dropped = TQ.fit_budget(ch, orig, "промпт", budget=90)
+    kept, dropped = TQ.fit_budget(ch, orig, "промпт", budget=100)
     assert [n for n, _ in kept] == [1, 2]
     assert dropped == 1
 
@@ -445,7 +445,8 @@ def test_main_e2e_report(tmp_path, monkeypatch):
 
 
 def test_main_budget_trims(tmp_path, monkeypatch):
-    """Малый бюджет — в отчёте отсечённые главы."""
+    """Малый бюджет (одна глава ~17 токенов оценки) — в отчёте отсечённые
+    главы."""
     make_chapters(tmp_path, 3)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(core_stage, "stream_chat_completion",
@@ -454,7 +455,7 @@ def test_main_budget_trims(tmp_path, monkeypatch):
         "translate_quality.py", "--type", "polished",
         "--start", "1", "--end", "3",
         "--host", "http://h", "--model", "m",
-        "--request_budget", "60"])
+        "--request_budget", "40"])
     rc = TQ.main()
     assert rc == 0
     text = (tmp_path / "tmp" / "translation_quality_assessment.md").read_text(
