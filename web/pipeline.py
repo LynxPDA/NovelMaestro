@@ -55,6 +55,10 @@ _STAGE_IO = {
     3: ("redacted.txt", "polished.txt"),
 }
 _STAGE_NAME = {1: "translate", 2: "redact", 3: "polish"}
+#: человекочитаемые фазы для web-прогресса (те же имена, что у MODE_LABELS
+#: translate_book): бар читает человек, а «Глава 2 · redact · Редактура» —
+#: два названия одной фазы подряд
+_STAGE_LABEL = {1: "Перевод", 2: "Редактура", 3: "Полировка"}
 # Типы работ: стадии конвейера + откуда полировка берёт исходник.
 # polish_input: "translated.txt" — полировка прямо из перевода (без редактуры);
 # не задан — дефолт _STAGE_IO[3] = redacted.txt.
@@ -435,7 +439,8 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
         emit({"type": "chapter", "id": chapter_id, "stage": stage,
               "status": status})
         done, total = tracker.overall()
-        emit_progress(done, total, f"Глава {chapter_id} · {name}")
+        emit_progress(done, total,
+                      f"Глава {chapter_id} · {_STAGE_LABEL[stage]}")
 
     # построчное чтение вывода стадии: метка (`head`) и приёмник (`sink`)
     # приходят аргументами — иначе функция, определённая внутри цикла по
@@ -448,7 +453,9 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                 try:
                     ev = json.loads(line[len(PROGRESS_PREFIX):].strip())
                     label = head
-                    if ev.get("label"):
+                    # фаза в head уже русская и та же самая: подпись чанка
+                    # («Перевод») ничего не добавляет, дубль в бар не едет
+                    if ev.get("label") and ev["label"] not in label:
                         label += f" · {ev['label']}"
                     # полоска — ОБЩИЙ прогресс конвейера (главы ×
                     # стадии), а не чанки одной главы; детальный
@@ -517,7 +524,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                 return False
             out_lines: list[str] = []
             err_lines: list[str] = []
-            head = f"Глава {chapter_id} · {name}"
+            head = f"Глава {chapter_id} · {_STAGE_LABEL[stage]}"
 
             tout = threading.Thread(
                 target=_drain, args=(proc.stdout, out_lines, head))
