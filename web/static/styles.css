@@ -96,7 +96,11 @@ body {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 20px;
+  /* узкое окно: навигация и индикатор запуска в одну строку не влезают
+     даже с иконками вместо подписей — группа справа уходит на свою
+     строку, вместо того чтобы уезжать за край экрана */
+  flex-wrap: wrap;
+  gap: 4px 20px;
   min-height: 52px;
   padding: 0 20px;
   background: var(--surface);
@@ -153,6 +157,13 @@ body {
   }
   .nav-item {
     padding: 8px 10px;
+  }
+}
+/* индикатор запуска не должен выталкивать шапку за экран: он тянется
+   под свою ширину, а название запуска ужимается многоточием */
+@media (max-width: 640px) {
+  .run-pill {
+    max-width: calc(100vw - 150px);
   }
 }
 
@@ -1103,13 +1114,21 @@ input[type="number"] {
 /* ── запуски стадий (M4) ───────────────────────────────── */
 .run-layout {
   display: grid;
-  /* 370px → 305px (−17%) — компактнее; кнопка «Стоп» не
-     вылезает благодаря flex-wrap в .job-row  */
+  /* 305px левой колонки хватает на карточку активного запуска: там
+     каждая надпись своей строкой */
   grid-template-columns: 305px 1fr;
   gap: 16px;
   align-items: start;
   /* вкладка «Запуски» — отступ от панели вкладок проекта */
   margin-top: 14px;
+}
+/* узкое окно: 305px + 1fr превращали панель лога в колонку на 20 px
+   (прогрессбар и лог сжимались в вертикальную полоску) — ниже 760 px
+   колонки становятся друг под друга */
+@media (max-width: 760px) {
+  .run-layout {
+    grid-template-columns: 1fr;
+  }
 }
 .run-col {
   display: flex;
@@ -1145,12 +1164,18 @@ input[type="number"] {
 .run-panel-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+/* шапка панели лога: badge и «Стоп» — в правом краю (обычная .spacer
+   здесь не работала: класс был описан только для тулбаров других вкладок) */
+.run-panel-title .spacer {
+  flex: 1 1 auto;
 }
 .run-empty {
   background: var(--surface-2);
@@ -1480,33 +1505,11 @@ input[type="number"] {
   height: 18px;
   accent-color: var(--accent);
 }
-.job-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.job-row {
-  display: flex;
-  align-items: center;
-  /* перенос строк — на узких окнах кнопки никогда не
-     вылезают за виджет (мини-бар уходит на вторую строку) */
-  flex-wrap: wrap;
-  row-gap: 6px;
-  gap: 8px;
-  padding: 6px 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 12px;
-}
-.job-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* название запуска в шапке панели лога: единственное место, где его длинное
+   значение приходится урезать (остальные надписи запусков переносятся) */
 .log-job-title {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1551,30 +1554,36 @@ input[type="number"] {
   word-break: break-word;
 }
 
-/* ── прогрессбар запусков  ──────────────────────── */
-.progress-wrap {
+/* ── строка прогресса запуска (UIC.progressRow) ─────────────────
+   Один каркас на панель лога «Запусков», карточку активного запуска и
+   строки Дашборда: трек тянется до подписей, а подписи (счётчик, фаза,
+   оценка конца) ПЕРЕНОСЯТСЯ — на узкой колонке остаток и время конца
+   терялись за краем под многоточие.  */
+.progress-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  align-content: flex-start;
+  gap: 4px 10px;
   font-size: 12px;
   min-width: 0;
-  /* длинная оценка завершения переносится под бар целиком,
-     а не вываливается за пределы панели */
   flex-wrap: wrap;
 }
-.progress-wrap.hidden {
+.progress-info {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  /* подпись вправе уйти своей строкой — но никогда не обрезаться */
+  min-width: 0;
+}
+/* пустая часть не должна добавлять свой gap */
+.progress-info > span:empty {
   display: none;
 }
-.progress-label {
-  color: var(--text);
-  font-weight: 600;
-  white-space: nowrap;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .progress-track {
-  flex: 1;
+  /* базовые 140px: на узкой панели бар уходит на свою строку целиком,
+     а не сжимается в сломанную палочку */
+  flex: 1 1 140px;
   min-width: 60px;
   height: 6px;
   border-radius: 3px;
@@ -1588,39 +1597,70 @@ input[type="number"] {
   background: var(--accent);
   transition: width 0.3s ease;
 }
-.progress-text {
-  color: var(--muted);
+.progress-count {
+  color: var(--text);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  /* не сжимается (иначе оценка прячется в многоточие), а
-     переносится на свою строку; совсем узкая панель — обрезка */
-  flex-shrink: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
-.progress-line {
+.progress-step {
   color: var(--muted);
-  font-size: 12px;
+}
+.progress-eta {
+  color: var(--text-dim);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  /* сжимается в flex-строке тулбара (иначе длинная оценка
-     с датой выталкивает кнопку «Стоп» за панель) */
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
-.progress-wrap.mini {
-  gap: 6px;
-  margin-top: 6px;
-}
-.progress-wrap.mini .progress-track {
-  height: 4px;
-  min-width: 40px;
-}
-.progress-wrap.mini .progress-text {
+.progress-mini {
   font-size: 11px;
+}
+.progress-mini .progress-track {
+  height: 4px;
+  flex-basis: 80px;
+  border-radius: 2px;
+}
+.progress-mini .progress-fill {
+  border-radius: 2px;
+}
+
+/* карточка активного запуска («Запуски», Дашборд): шапка и строка
+   прогресса — разные строки, поэтому название запуска не ужмается до
+   «Перевод (L…»: badge + имя + кнопки всегда влезают, а счётчик,
+   фаза и оценка конца остаются под ними */
+.active-run {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  min-width: 0;
+}
+.active-run-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.active-run-title,
+.dash-run .dash-run-title {
+  font-weight: 600;
+  color: var(--text);
+  /* имя тянется, а не выталкивает кнопки: min-width:0 даёт
+     flex-элементу сжиматься до содержимого */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.active-run-meta {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.active-run-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 
 /* ── живая таблица глав (конвейер, стадия 3) ── */
@@ -2143,13 +2183,20 @@ input[type="number"] {
   width: 100%;
 }
 
-.dash-jobs .ner-table {
-  width: 100%;
+/* история запусков: таблица едет в своём прокручиваемом контейнере —
+   на узком окне колонки не сминаются в столбик, а «Дата» не уползает
+   за край карточки */
+.dash-jobs .dash-table {
+  overflow-x: auto;
 }
 
-/* таблица «Последние запуски»: строки — обычные table-row,
-   не наследовать flex от .job-row (список истории) */
-.dash-jobs .ner-table .job-row,
+.dash-jobs .ner-table {
+  width: 100%;
+  /* меньше пяти колонок не читаются: лучше прокрутка */
+  min-width: 620px;
+}
+
+/* таблица «Последние запуски»: строки — обычные table-row */
 .dash-jobs .ner-table tr {
   display: table-row;
 }
@@ -2210,15 +2257,10 @@ input[type="number"] {
   cursor: default;
 }
 
-.dash-run .dash-run-title {
-  font-weight: 600;
-  color: var(--text);
-}
-
+/* книга и лог — своими подписями в шапке строки (gap уже учтён) */
 .dash-run .job-time {
   font-size: 12px;
   color: var(--muted);
-  margin-left: 6px;
 }
 
 .dash-log {

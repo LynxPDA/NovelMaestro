@@ -86,8 +86,10 @@ class El {
     (this.listeners[type] ||= []).push(fn);
   }
 
-  querySelector() {
-    return null;
+  /* только класс-селектор (".progress-fill"): его зовёт paint() строки
+     прогресса; в браузере тот же вызов ищет по дереву */
+  querySelector(sel) {
+    return this.find(String(sel).replace(/^\./, ""));
   }
 
   /* только класс-селектор (".modal-backdrop"): его и зовёт обработчик Enter */
@@ -193,6 +195,72 @@ test("h: дети flat, текст — текстовые узлы, null про�
   const n = UIC.h("div", {}, ["a", null, UIC.h("b", {}, "c")]);
   assert.equal(n.childNodes.length, 2); // null пропущен
   assert.equal(n.textContent, "ac");
+});
+
+/* ── строка прогресса запуска ─────────────────────────────────────
+   Один каркас на панель лога «Запусков», карточку активного запуска,
+   строки Дашборда и pill шапки: трек тянется до подписей, подписи
+   переносятся. */
+test("progressRow: каркас — трек и три подписи, mini — свой класс", () => {
+  const bar = UIC.progressRow();
+  assert.equal(bar.el.className, "progress-row");
+  assert.equal(bar.el.childNodes.length, 2); // трек + подписи
+  assert.equal(bar.el.find("progress-track").tagName, "DIV");
+  assert.equal(bar.el.find("progress-fill").attrs.style, "width:0%");
+  assert.deepEqual(
+    bar.el.find("progress-info").childNodes.map((n) => n.className),
+    ["progress-count", "progress-step", "progress-eta"],
+  );
+  // подсказка у оценки — та же, что во всех остальных местах
+  assert.match(bar.el.find("progress-eta").attrs.title, /^Оценка времени/);
+  // мини-вид (карточка активного запуска) — тоньше и со своим классом
+  assert.equal(
+    UIC.progressRow({ mini: true }).el.className,
+    "progress-row progress-mini",
+  );
+});
+
+test("progressRow: paint — счётчик, фаза и оценка конца по своим местам", () => {
+  const bar = UIC.progressRow();
+  bar.paint({
+    label: "Перевод",
+    count: "12/36 · 33%",
+    eta: "осталось ≈ 12 мин · завершение 22:41",
+    pct: 33,
+  });
+  assert.equal(bar.el.find("progress-count").textContent, "12/36 · 33%");
+  assert.equal(bar.el.find("progress-step").textContent, "Перевод");
+  assert.equal(
+    bar.el.find("progress-eta").textContent,
+    "осталось ≈ 12 мин · завершение 22:41",
+  );
+  assert.equal(bar.el.find("progress-fill").attrs.style, "width:33%");
+  // пустые части остаются пустыми span (CSS прячет их через :empty) —
+  // «0/0 · 0%» нигде не мелькает, класс ожидания не липнет
+  bar.paint({ label: "", count: "", eta: "", pct: 0 });
+  assert.equal(bar.el.find("progress-info").textContent, "");
+  assert.equal(bar.el.find("progress-fill").attrs.style, "width:0%");
+  assert.equal(bar.el.className, "progress-row");
+});
+
+test("progressRow: ожидание — строка видна, но пустых разделителей нет", () => {
+  // paint возвращает саму строку: в st.logBar/st.miniBar живёт компонент,
+  // SSE зовёт paint() без перерисовки вкладки
+  const bar = UIC.progressRow({ mini: true });
+  const parts = {
+    label: "",
+    count: "ожидание первого результата…",
+    eta: "",
+    pct: 0,
+    waiting: true,
+  };
+  assert.equal(bar.paint(parts), bar.el);
+  assert.equal(bar.el.className, "progress-row progress-mini progress-waiting");
+  assert.equal(
+    bar.el.find("progress-info").textContent,
+    "ожидание первого результата…",
+  );
+  assert.equal(bar.el.find("progress-fill").attrs.style, "width:0%");
 });
 
 /* ── каркас модалки ───────────────────────────────────────────────── */

@@ -331,85 +331,64 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       panel.append(h("div", { class: "empty" }, "Нет активного запуска"));
       return panel;
     }
-    const bar = miniBar(j.progress, j.status, j);
+    /* Карточка активного запуска: шапка (badge, название, переход/стоп),
+       строка «старт …» и строка прогресса под ней. Кнопки — иконки:
+       текстовые «Показать» и «Стоп» съедали название запуска, оно уходило
+       в многоточие — в колонке 305 px badge, название и две подписанные
+       кнопки в одну строку не влезают никогда. */
+    const bar = UIC.progressRow({ mini: true });
+    st.miniBar = bar;
+    bar.paint(UICore.progressParts(j, j.progress));
     const row = h(
       "div",
-      { class: "job-row" },
-      h("span", { class: "badge badge-" + j.status }, j.status),
-      h("span", { class: "job-title" }, j.title || j.action || "запуск"),
-      h(
-        "span",
-        { class: "job-time" },
-        new Date(j.created * 1000).toLocaleString("ru-RU"),
-      ),
-      h(
-        "a",
-        {
-          class: "btn btn-sm btn-primary",
-          // id в URL (не голая вкладка): повторный клик по той же
-          // странице перечитает запуск и обновит висящий статус
-          href: `#/project/${section}/${name}/run/${j.id}`,
-        },
-        "Показать",
-      ),
-      h(
-        "button",
-        {
-          class: "btn btn-sm btn-danger",
-          onclick: async () => {
-            try {
-              await api(`/jobs/${j.id}/stop`, { method: "POST" });
-              toast("Остановка...");
-            } catch (ex) {
-              toast(ex.message, "err");
-            }
-          },
-        },
-        "Стоп",
-      ),
-    );
-    if (bar) row.append(bar);
-    panel.append(row);
-    return panel;
-  }
-
-  // текст мини-бара активного запуска (общий для отрисовки и SSE)
-  function miniProgressText(p, job) {
-    if (!p) return "ожидание…";
-    const total = p.total ? p.total : 0;
-    return (p.label || "") + (total > 0 ? ` ${p.done}/${p.total}` : "")
-      + etaShort(job, p);
-  }
-
-  function miniBar(p, status, job) {
-    // у running-задачи без событий прогресса бар всё равно
-    // виден («ожидание…») — раньше возвращался null и виджет молчал
-    if (!p && status !== "running") return null;
-    const total = p && p.total ? p.total : 0;
-    const done = p ? p.done : 0;
-    const pct = UICore.progressPct(done, total);
-    return h(
-      "div",
-      { class: "progress-wrap mini" },
+      { class: "active-run" },
       h(
         "div",
-        { class: "progress-track" },
-        h("div", { class: "progress-fill", style: "width:" + pct + "%" }),
+        { class: "active-run-head" },
+        h("span", { class: "badge badge-" + j.status }, j.status),
+        h("span", { class: "active-run-title" }, j.title || j.action || "запуск"),
+        h(
+          "span",
+          { class: "active-run-actions" },
+          h(
+            "a",
+            {
+              class: "btn btn-sm btn-ghost icon-btn",
+              // id в URL (не голая вкладка): повторный клик по той же
+              // странице перечитает запуск и обновит висящий статус
+              href: `#/project/${section}/${name}/run/${j.id}`,
+              title: "Показать лог запуска",
+              "aria-label": "Показать лог запуска",
+            },
+            iconEl("eye"),
+          ),
+          iconBtn(
+            "stop",
+            "Остановить запуск вместе с потомками",
+            async () => {
+              try {
+                await api(`/jobs/${j.id}/stop`, { method: "POST" });
+                toast("Остановка...");
+              } catch (ex) {
+                toast(ex.message, "err");
+              }
+            },
+            true,
+          ),
+        ),
       ),
-      h("span", { class: "progress-text" }, miniProgressText(p, job)),
+      /* время старта — своей строкой: в шапке оно не мешало бы названию,
+         а здесь его всё равно нечем заменить (абсолютное время, как в
+         списке логов) */
+      h(
+        "div",
+        { class: "active-run-meta" },
+        "старт " + UICore.relTimeAbs(j.created),
+      ),
+      bar.el,
     );
-  }
-
-  // живое обновление мини-бара из SSE (fill + текст)
-  function paintMini(bar, job) {
-    const p = st.progress;
-    const total = p && p.total ? p.total : 0;
-    const done = p ? p.done : 0;
-    const pct = UICore.progressPct(done, total);
-    const fill = bar.querySelector(".progress-fill");
-    if (fill) fill.style.width = pct + "%";
-    const text = bar.querySelector(".progress-text");
-    if (text) text.textContent = miniProgressText(p, job);
+    panel.append(row);
+    return panel;
   }
 
   function emptyRun() {
@@ -2933,6 +2912,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return btn;
   }
 
+  /* Панель лога: шапка (метка, название запуска, badge, «Стоп») и строка
+     прогресса под ней. Прогресс — ОДНИМ узлом (UIC.progressRow): раньше
+     счётчик дублировался в шапке и в баре, и оба обрезались многоточием
+     на узкой колонке. У завершённого запуска без событий прогресса строки
+     нет — показывать нечего. */
   function logPanel(view) {
     const job = view.job;
     const pre = h("pre", { class: "log-area", text: "" });
@@ -2940,11 +2924,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       ? view.lines.join("\n")
       : "(лог пуст)";
     pre.scrollTop = pre.scrollHeight;
-    const status = h(
-      "span",
-      { class: "badge log-status badge-" + job.status },
-      job.status,
-    );
     const toolbar = h(
       "div",
       { class: "run-panel-title" },
@@ -2955,13 +2934,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         job.title || job.action || "запуск",
       ),
       h("span", { class: "spacer" }),
-      status,
+      h(
+        "span",
+        { class: "badge badge-" + job.status },
+        job.status,
+      ),
     );
     if (job.status === "running") {
-      toolbar.append(
-        h("span", { class: "progress-line", text: progressLineText(view) }),
-        stopBtn(job),
-      );
+      toolbar.append(stopBtn(job));
     } else {
       toolbar.append(
         h(
@@ -2972,23 +2952,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         ),
       );
     }
-    // прогрессбар из структурированных событий @@PROGRESS@@
-    // (label + трек + done/total + %); без событий — скрыт.
-    // Класс log-progress — уникальный селектор для SSE: обычный
-    // .progress-wrap первым в DOM находит мини-бар «Активный запуск»
-    const bar = h(
-      "div",
-      { class: "progress-wrap log-progress" },
-      h("span", { class: "progress-label", text: "" }),
-      h(
-        "div",
-        { class: "progress-track" },
-        h("div", { class: "progress-fill", style: "width:0%" }),
-      ),
-      h("span", { class: "progress-text", text: "" }),
-    );
-    paintBar(bar, view);
-    const panel = h("div", { class: "run-panel" }, toolbar, bar, pre);
+    const nodes = [toolbar];
+    if (view.progress || job.status === "running") {
+      const bar = UIC.progressRow();
+      st.logBar = bar;
+      bar.paint(UICore.progressParts(job, view.progress));
+      nodes.push(bar.el);
+    } else {
+      st.logBar = null;
+    }
+    nodes.push(pre);
+    const panel = h("div", { class: "run-panel" }, ...nodes);
     if (job.action === "pipeline") {
       // интерактивная визуализация лога: таблица глав с состоянием
       // стадий ПОД логом (только главы заданного диапазона формы;
@@ -3006,105 +2980,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return panel;
   }
 
-  /* текстовая строка прогресса («Перевод 12/636») для тулбара лога */
-  function progressLineText(view) {
-    return UICore.progressText(
-      view.progress,
-      view.job && view.job.status === "running",
-    );
-  }
-
-  /* ── ETA завершения запуска: окно выборок @@PROGRESS@@ ──
-     Выборки пишутся с шагом ≥5 c, окно 15 точек (≈ минута) — скорость
-     из окна устойчивее к разным размерам глав, чем пара соседних
-     событий. Изменение total (новый диапазон) сбрасывает окно,
-     финальный статус — чистит. Пока выборок мало — фолбэк от старта
-     запуска (job.created): консервативно переоценивает остаток. */
-  const ETA_STEP = 5; // сек между выборками
-  const ETA_WINDOW = 15; // точек в скользящем окне
-  const ETA_MAX_JOBS = 50; // страховка от роста Map
-  const etaSamples = new Map(); // job.id → [{t, done, total}]
-
-  function recordSample(job, p, done) {
-    const total = Number(p.total) || 0;
-    let s = etaSamples.get(job.id);
-    if (!s || !s.length || s[s.length - 1].total !== total) {
-      if (!etaSamples.has(job.id) && etaSamples.size >= ETA_MAX_JOBS) {
-        etaSamples.delete(etaSamples.keys().next().value);
-      }
-      s = [];
-      etaSamples.set(job.id, s);
-    }
-    const now = Date.now() / 1000;
-    const last = s[s.length - 1];
-    if (!last || now - last.t >= ETA_STEP) {
-      s.push({ t: now, done, total });
-      if (s.length > ETA_WINDOW) s.shift();
-    }
-    return s;
-  }
-
-  /* {remaining, finishAt} | null — данные для текстов оценки */
-  function etaOf(job, p) {
-    if (!job || !job.id || !p || !p.total) return null;
-    const done = Number(p.done) || 0;
-    const remaining = UICore.etaRemaining(
-      recordSample(job, p, done),
-      done,
-      Number(p.total) || 0,
-      Date.now() / 1000,
-      job.created,
-    );
-    if (remaining == null) return null;
-    return { remaining, finishAt: Date.now() + remaining * 1000 };
-  }
-
-  /* « · осталось ≈ 12 мин · до 14:35» — для текста бара с процентами */
-  function etaSuffix(job, p) {
-    const e = etaOf(job, p);
-    if (!e) return "";
-    return " · осталось ≈ " + UICore.etaDuration(e.remaining)
-      + " · до " + UICore.etaClock(e.finishAt);
-  }
-
-  /* « · ≈ 12 мин» — короткая форма для мини-бара */
-  function etaShort(job, p) {
-    const e = etaOf(job, p);
-    return e ? " · ≈ " + UICore.etaDuration(e.remaining) : "";
-  }
-
-  // отрисовка прогрессбара в переданный узел (лог-панель и SSE).
-  // Все querySelector'ы загардены: чужой узел (например мини-бар без
-  // .progress-label) не должен уронить SSE-стрим
-  function paintBar(bar, view) {
-    const p = view.progress;
-    const running = view.job && view.job.status === "running";
-    // пока задача работает, бар ВСЕГДА виден — даже до первого
-    // события прогресса («ожидание первого результата…»)
-    if (!p && !running) {
-      bar.classList.add("hidden");
-      return;
-    }
-    bar.classList.remove("hidden");
-    const total = p && p.total ? p.total : 0;
-    const done = p ? p.done : 0;
-    const pct = UICore.progressPct(done, total);
-    const label = bar.querySelector(".progress-label");
-    if (label) label.textContent = (p && p.label) || (running ? "Запуск" : "");
-    const fill = bar.querySelector(".progress-fill");
-    if (fill) fill.style.width = pct + "%";
-    const text = bar.querySelector(".progress-text");
-    if (text) {
-      text.title = "Оценка времени — по текущей скорости выполнения; "
-        + "зависит от размера глав и скорости LLM-сервера";
-      text.textContent = p
-        ? total > 0
-          ? `${p.done}/${total} · ${pct}%` + etaSuffix(view.job, p)
-          : `${p.done} …`
-        : running
-          ? "ожидание первого результата…"
-          : "";
-    }
+  /* живое обновление строк прогресса из SSE: панель лога текущей стадии и
+     карточка активного запуска (она видна на любой вкладке). Пока задача
+     работает, обе строки видны ВСЕГДА — даже до первого события прогресса
+     («ожидание первого результата…») */
+  function paintProgress() {
+    const parts = UICore.progressParts(st.job, st.progress);
+    if (st.logBar) st.logBar.paint(parts);
+    if (st.miniBar) st.miniBar.paint(parts);
   }
 
   // свёртка событий конвейера: {"id:stage" → status} (дедуп в onPayload
@@ -3292,23 +3175,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     } else if (payload.type === "progress" && payload.event) {
       st.progress = payload.event;
-      // лог-бар — только на живой панели текущей стадии; мини-бар
-      // «Активный запуск» показывается на любой вкладке — всегда
-      if (live) {
-        const bar = page.querySelector(".log-progress");
-        if (bar) {
-          paintBar(bar, { job: st.job, progress: st.progress });
-        }
-        const pl = page.querySelector(".progress-line");
-        if (pl) {
-          pl.textContent = progressLineText({
-            job: st.job,
-            progress: st.progress,
-          });
-        }
-      }
-      const mini = page.querySelector(".progress-wrap.mini");
-      if (mini) paintMini(mini, st.job);
+      // строка прогресса оживает и в панели лога живой стадии, и в
+      // карточке активного запуска (она видна на любой вкладке)
+      if ((live && st.logBar) || st.miniBar) paintProgress();
     } else if (payload.type === "event" && payload.event) {
       const ev = payload.event;
       // таблица глав — только pipeline-события (числовой stage);
@@ -3342,7 +3211,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     } else if (payload.type === "status") {
       st.job.status = payload.status;
-      etaSamples.delete(st.job.id); // окно ETA больше не нужно
+      UICore.etaForget(st.job.id); // окно ETA больше не нужно
       // кэш последнего запуска этой стадии устарел — при возврате
       // на вкладку данные перечитаются из /jobs/{id}
       delete st.lastLog[st.job.action];

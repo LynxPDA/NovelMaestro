@@ -110,6 +110,9 @@
     /* просмотр без правки (файлы General-набора шаблонов) */
     eye:
       '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+    /* остановка запуска: квадрат — общепринятый знак stop (треугольника
+     * «паузы» здесь нет: остановка убивает дерево процессов, а не ставит на паузу) */
+    stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
     /* точка истории: круг с ветвью — история версий проекта */
     history:
       '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>'
@@ -509,6 +512,164 @@
     return list;
   }
 
+  /* ── прогресс запусков: счётчик, ETA и части строки ──────────────
+   * Бар живёт в четырёх местах (панель лога, карточка активного запуска,
+   * Дашборд, pill шапки): части строки считаются здесь, узлы собирает
+   * UIC.progressRow — иначе на каждом экране прогресс выглядел по-своему. */
+
+  /* Проценты с зажимом 0..100. */
+  function progressPct(done, total) {
+    var t = Number(total) || 0;
+    return t > 0
+      ? Math.min(100, Math.round((100 * (Number(done) || 0)) / t))
+      : 0;
+  }
+
+  /* Длительность по-русски: «45 с», «12 мин», «1 ч 5 мин». */
+  function etaDuration(sec) {
+    var s = Math.max(0, Math.round(Number(sec) || 0));
+    if (s < 60) return s + " с";
+    var m = Math.round(s / 60);
+    if (m < 60) return m + " мин";
+    var h = Math.floor(m / 60);
+    var rest = m % 60;
+    return h + " ч" + (rest ? " " + rest + " мин" : "");
+  }
+
+  /* Часы завершения: сегодня — «14:35», не сегодня — с датой в том же
+   * формате, что списки («13.10.2026, 14:11»): многочасовые оценки без
+   * даты не читаются. */
+  function etaClock(ms) {
+    var d = new Date(ms);
+    var p = (n) => String(n).padStart(2, "0");
+    var time = p(d.getHours()) + ":" + p(d.getMinutes());
+    var now = new Date();
+    if (d.getFullYear() === now.getFullYear()
+        && d.getMonth() === now.getMonth()
+        && d.getDate() === now.getDate()) return time;
+    return p(d.getDate()) + "." + p(d.getMonth() + 1) + "." + d.getFullYear()
+      + ", " + time;
+  }
+
+  /* Остаток в секундах: скорость — по окну выборок прогресса
+   * samples = [{t, done, total}] (t — сек, окно пишет etaSample); окно
+   * пустое/короткое или стоит на месте — фолбэк от старта запуска
+   * (created, сек). Оценить нечего — null. */
+  function etaRemaining(samples, done, total, now, created) {
+    done = Number(done) || 0;
+    total = Number(total) || 0;
+    if (total <= 0 || done <= 0 || done >= total) return null;
+    var rate = 0;
+    if (samples && samples.length) {
+      var first = samples[0];
+      var span = now - first.t;
+      var lastDone = samples[samples.length - 1].done;
+      /* окно с одним приращением скорости не даёт: первая выборка
+         пишется в произвольной фазе шага (открытие страницы посреди
+         шага), и время до следующего события — не длительность шага,
+         а его остаток. Верим окну только с ≥2 приращениями. */
+      if (span > 0 && lastDone - first.done >= 2) {
+        rate = (lastDone - first.done) / span;
+      }
+    }
+    if (rate <= 0 && created) {
+      rate = done / Math.max(1, now - created);
+    }
+    if (rate <= 0) return null;
+    return (total - done) / rate;
+  }
+
+  /* Части строки прогресса для UIC.progressRow: {label, count, eta, pct,
+   * waiting}: count — счётчик «12/36 · 33%» (у стадии без total — «5 …»),
+   * label — человекочитаемая фаза («Глава 2 · Перевод»), eta — «осталось ≈
+   * 12 мин · завершение 14:35», pct — ширина трека. Пустая часть — пустая
+   * строка: узел остаётся на месте, но CSS прячет :empty, и разделители не
+   * разъезжаются. ETA пишется только у running-запуска: у завершённого
+   * остатка не бывает, а висящая оценка после остановки читалась бы как
+   * обещание. */
+  function progressParts(job, p) {
+    var running = !!(job && job.status === "running");
+    var out = { label: "", count: "", eta: "", pct: 0, waiting: false };
+    if (!p) {
+      if (running) {
+        out.waiting = true;
+        out.count = "ожидание первого результата…";
+      }
+      return out;
+    }
+    var done = Number(p.done) || 0;
+    var total = Number(p.total) || 0;
+    out.label = String(p.label || "");
+    out.pct = progressPct(done, total);
+    out.count = total > 0
+      ? done + "/" + total + " · " + out.pct + "%"
+      : done + " …";
+    if (running && total > 0) out.eta = etaText(job, p);
+    return out;
+  }
+
+  /* ── ETA завершения запуска ─────────────────────────────────────────
+   * Скорость считается по скользящему окну выборок @@PROGRESS@@: шаг ≥5 с,
+   * 15 точек (≈ минута) — окно устойчивее к разным размерам глав, чем пара
+   * соседних событий. Пока выборок мало — фолбэк от старта запуска
+   * (job.created): он консервативно переоценивает остаток. Окно ОДНО на все
+   * точки вывода (лог «Запусков», карточка активного запуска, Дашборд,
+   * pill шапки): выборки одного запуска не должны расходиться по экранам. */
+  var ETA_STEP = 5; // сек между выборками
+  var ETA_WINDOW = 15; // точек в скользящем окне
+  var ETA_MAX_JOBS = 50; // страховка от роста Map
+  var etaSamples = new Map(); // job.id → [{t, done, total}]
+
+  /* Одна выборка на шаг: первая пишется в произвольной фазе шага (страницу
+   * открыли посреди главы), поэтому время до следующего события — ещё не
+   * длительность шага. Смена total (новый диапазон глав) окно сбрасывает. */
+  function etaSample(job, done, total) {
+    var s = etaSamples.get(job.id);
+    if (!s || !s.length || s[s.length - 1].total !== total) {
+      if (!etaSamples.has(job.id) && etaSamples.size >= ETA_MAX_JOBS) {
+        etaSamples.delete(etaSamples.keys().next().value);
+      }
+      s = [];
+      etaSamples.set(job.id, s);
+    }
+    var now = Date.now() / 1000;
+    var last = s[s.length - 1];
+    if (!last || now - last.t >= ETA_STEP) {
+      s.push({ t: now, done: done, total: total });
+      if (s.length > ETA_WINDOW) s.shift();
+    }
+    return s;
+  }
+
+  /* {remaining, finishAt} | null — данные для текста оценки. */
+  function etaOf(job, p) {
+    if (!job || !job.id || !p || !p.total) return null;
+    var done = Number(p.done) || 0;
+    var total = Number(p.total) || 0;
+    var remaining = etaRemaining(
+      etaSample(job, done, total),
+      done,
+      total,
+      Date.now() / 1000,
+      job.created,
+    );
+    if (remaining == null) return null;
+    return { remaining: remaining, finishAt: Date.now() + remaining * 1000 };
+  }
+
+  /* «осталось ≈ 12 мин · завершение 14:35» — пусто, если считать нечего. */
+  function etaText(job, p) {
+    var e = etaOf(job, p);
+    if (!e) return "";
+    return "осталось ≈ " + etaDuration(e.remaining)
+      + " · завершение " + etaClock(e.finishAt);
+  }
+
+  /* финал запуска: окно выборок больше не нужно */
+  function etaForget(id) {
+    etaSamples.delete(id);
+  }
+
   /* ── относительное время («3 ч назад») по unix-секундам ──
    * < 60 с — «только что»; < 60 мин — «N мин назад»; < 24 ч — «N ч назад»;
    * < 7 дн — «N дн назад»; дальше — дата ДД.ММ.ГГГГ. Абсолютное время —
@@ -666,81 +827,18 @@
       return { top: Math.round(top), left: Math.round(left) };
     },
 
-    /* ── прогресс: проценты с зажимом 0..100 ── */
-    progressPct: (done, total) => {
-      var t = total ? total : 0;
-      return t > 0
-        ? Math.min(100, Math.round((100 * (done ? done : 0)) / t))
-        : 0;
-    },
-
-    /* ── текстовая строка прогресса (тулбар лога) ── */
-    progressText: (p, running) => {
-      if (!p) return running ? "ожидание первого результата…" : "";
-      var total = p.total || 0;
-      var label = p.label || "";
-      return total > 0
-        ? label + " " + p.done + "/" + total
-        : label + " " + p.done + " …";
-    },
-
-    /* ── ETA завершения запуска (по скорости событий прогресса) ── */
-
-    /* Длительность по-русски: «45 с», «12 мин», «1 ч 5 мин». */
-    etaDuration: (sec) => {
-      var s = Math.max(0, Math.round(Number(sec) || 0));
-      if (s < 60) return s + " с";
-      var m = Math.round(s / 60);
-      if (m < 60) return m + " мин";
-      var h = Math.floor(m / 60);
-      var rest = m % 60;
-      return h + " ч" + (rest ? " " + rest + " мин" : "");
-    },
-
-    /* Часы завершения («14:35»); день не сегодня — с датой
-       («2026-10-13 14:11»): многочасовые оценки без даты не читаются. */
-    etaClock: (ms) => {
-      var d = new Date(ms);
-      var time = d.toLocaleTimeString("ru-RU", {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-      var now = new Date();
-      if (d.getFullYear() === now.getFullYear()
-          && d.getMonth() === now.getMonth()
-          && d.getDate() === now.getDate()) return time;
-      var p = (n) => String(n).padStart(2, "0");
-      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-"
-        + p(d.getDate()) + " " + time;
-    },
-
-    /* Остаток в секундах: скорость — по окну выборок прогресса
-       samples = [{t, done, total}] (t — сек, окно пишет вызывающий);
-       окно пустое/короткое или стоит на месте — фолбэк от старта
-       запуска (created, сек). Оценить нечего — null. */
-    etaRemaining: (samples, done, total, now, created) => {
-      done = Number(done) || 0;
-      total = Number(total) || 0;
-      if (total <= 0 || done <= 0 || done >= total) return null;
-      var rate = 0;
-      if (samples && samples.length) {
-        var first = samples[0];
-        var span = now - first.t;
-        var lastDone = samples[samples.length - 1].done;
-        /* окно с одним приращением скорости не даёт: первая выборка
-           пишется в произвольной фазе шага (открытие страницы посреди
-           шага), и время до следующего события — не длительность шага,
-           а его остаток. Верим окну только с ≥2 приращениями. */
-        if (span > 0 && lastDone - first.done >= 2) {
-          rate = (lastDone - first.done) / span;
-        }
-      }
-      if (rate <= 0 && created) {
-        rate = done / Math.max(1, now - created);
-      }
-      if (rate <= 0) return null;
-      return (total - done) / rate;
-    },
+    /* ── прогресс запусков: счётчик, ETA, части строки ── */
+    progressPct: progressPct,
+    progressParts: progressParts,
+    /* ETA одного запуска: {remaining, finishAt} | null (и пишет выборку) */
+    etaOf: etaOf,
+    /* текст оценки одной строкой ("" — считать нечего) */
+    etaText: etaText,
+    /* окно выборок завершённого запуска больше не нужно */
+    etaForget: etaForget,
+    etaDuration: etaDuration,
+    etaClock: etaClock,
+    etaRemaining: etaRemaining,
 
     /* ── C/D: bool из .env-строк ("0"/"1"/"true"/…) ── */
     boolOn: (v) => {

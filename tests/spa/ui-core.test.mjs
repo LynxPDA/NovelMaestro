@@ -33,66 +33,83 @@ test("progressPct: зажим и границы", () => {
   assert.equal(UICore.progressPct(3, 0), 0);
 });
 
-test("progressText: без событий у running-задачи", () => {
-  assert.equal(
-    UICore.progressText(null, true),
-    "ожидание первого результата…",
+test("progressParts: части строки прогресса", () => {
+  // running без событий — строка прогресса всё равно видна: запуск
+  // не должен выглядеть мёртвым до первого @@PROGRESS@@
+  assert.deepEqual(
+    UICore.progressParts({ id: "p1", status: "running", created: null }, null),
+    {
+      label: "",
+      count: "ожидание первого результата…",
+      eta: "",
+      pct: 0,
+      waiting: true,
+    },
   );
-  assert.equal(UICore.progressText(null, false), "");
-});
 
-test("progressText: done/total и label", () => {
-  assert.equal(
-    UICore.progressText({ done: 12, total: 636, label: "перевод" }, true),
-    "перевод 12/636",
-  );
-  assert.equal(
-    UICore.progressText({ done: 5, total: 0, label: "wiki" }, true),
-    "wiki 5 …",
-  );
-});
-
-test("etaDuration: секунды/минуты/часы", () => {
-  assert.equal(UICore.etaDuration(45), "45 с");
-  assert.equal(UICore.etaDuration(59.4), "59 с");
-  assert.equal(UICore.etaDuration(60), "1 мин");
-  assert.equal(UICore.etaDuration(725), "12 мин");
-  assert.equal(UICore.etaDuration(3600), "1 ч");
-  assert.equal(UICore.etaDuration(3900), "1 ч 5 мин");
-  // мусор и отрицательные — «0 с»
-  assert.equal(UICore.etaDuration(-5), "0 с");
-  assert.equal(UICore.etaDuration(NaN), "0 с");
-  assert.equal(UICore.etaDuration(undefined), "0 с");
-});
-
-test("etaClock: часы:минуты, две цифры (сегодняшний день)", () => {
-  const t = new Date();
-  t.setHours(9, 5, 0, 0);
-  const clock = UICore.etaClock(t.getTime());
-  assert.match(clock, /^\d{2}:\d{2}$/);
-  assert.equal(clock.slice(0, 2), "09");
-});
-
-test("etaClock: сегодня — только время, другой день — с датой", () => {
-  const fmt = (d) => d.toLocaleTimeString("ru-RU", {
-    hour: "2-digit", minute: "2-digit",
+  // нет ни запуска, ни событий (не нашли) — пусто: «0/0 · 0%» нигде
+  // мелькать не должно
+  assert.deepEqual(UICore.progressParts(null, null), {
+    label: "",
+    count: "",
+    eta: "",
+    pct: 0,
+    waiting: false,
   });
-  const now = new Date();
-  assert.equal(UICore.etaClock(now.getTime()), fmt(now));
-  const yesterday = new Date(now.getTime() - 24 * 3600 * 1000);
-  const p = (n) => String(n).padStart(2, "0");
-  const iso = yesterday.getFullYear() + "-" + p(yesterday.getMonth() + 1)
-    + "-" + p(yesterday.getDate());
-  assert.equal(UICore.etaClock(yesterday.getTime()), iso + " " + fmt(yesterday));
+
+  // завершённый: счётчик с долей есть, оценки конца нет — у
+  // завершённого остатка не бывает, а висящая оценка после остановки
+  // читалась бы как обещание
+  assert.deepEqual(
+    UICore.progressParts(
+      { id: "p3", status: "done", created: 1000 },
+      { done: 36, total: 36, label: "Перевод" },
+    ),
+    { label: "Перевод", count: "36/36 · 100%", eta: "", pct: 100, waiting: false },
+  );
+
+  // стадия без знаменателя — «5 …» вместо доли
+  const noTotal = UICore.progressParts(
+    { id: "p4", status: "done", created: 1000 },
+    { done: 5, total: 0, label: "wiki" },
+  );
+  assert.equal(noTotal.count, "5 …");
+  assert.equal(noTotal.label, "wiki");
+  assert.equal(noTotal.eta, "");
 });
 
-test("etaRemaining: скорость по окну выборок", () => {
-  // 10 единиц за 100 c → 0.1/с; осталось 80 → 800 c
-  const win = [
-    { t: 1000, done: 10, total: 100 },
-    { t: 1100, done: 20, total: 100 },
-  ];
-  assert.equal(UICore.etaRemaining(win, 20, 100, 1100, 900), 800);
+test("etaOf и etaText: оценка конца — только у работающего запуска", () => {
+  const now = Date.now() / 1000;
+  const job = { id: "eta-1", status: "running", created: now - 300 };
+  const p = { done: 20, total: 100 };
+  // окно короткое (одна выборка) — фолбэк от старта запуска: 20 шагов за
+  // ~300 с, остаток 80 шагов → ~1200 с
+  assert.ok(Math.abs(UICore.etaOf(job, p).remaining - 1200) < 20);
+  // строка оценки: остаток и часы конца (формат часов зависит от пояса и
+  // от того, что за окном уже завтра, поэтому его не сверяем)
+  assert.match(UICore.etaText(job, p), /^осталось ≈ 20 мин · завершение /);
+  // в строку прогресса оценка попадает только у running: у завершённого
+  // остатка не бывает
+  assert.match(
+    UICore.progressParts(
+      { id: "eta-1", status: "running", created: now - 300 },
+      p,
+    ).eta,
+    /^осталось ≈ 20 мин · завершение /,
+  );
+  assert.equal(
+    UICore.progressParts({ id: "eta-1", status: "done", created: now - 300 }, p)
+      .eta,
+    "",
+  );
+  // финал запуска — окно выборок снимается: следующая оценка считается
+  // заново («запуск создан только что» → остаток ~4 с, а не 20 мин)
+  UICore.etaForget("eta-1");
+  const fresh = UICore.etaOf(
+    { id: "eta-1", status: "running", created: Date.now() / 1000 },
+    p,
+  );
+  assert.ok(Math.abs(fresh.remaining - 4) < 1, String(fresh.remaining));
 });
 
 test("etaRemaining: фолбэк от старта запуска", () => {

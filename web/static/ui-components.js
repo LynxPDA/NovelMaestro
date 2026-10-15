@@ -261,6 +261,51 @@
     fit: () => {},
   };
 
+  /* Строка прогресса запуска: трек + подписи. Один каркас на панель лога
+   * «Запусков», карточку активного запуска и строки Дашборда (индикатор
+   * шапки компактный и собирается сам, но части берёт те же —
+   * UICore.progressParts). Трек тянется до подписей, а подписи (счётчик,
+   * фаза, оценка конца) ПЕРЕНОСЯТСЯ строками, а не обрезаются
+   * многоточием: на узкой колонке «Запусков» остаток и время конца
+   * терялись за краем; не влезает трек — он уходит своей строкой.
+   * Мини-вид (mini) — тонкий трек и кегль меньше. Возвращает {el, paint}:
+   * узлы подписей постоянные, paint только меняет ширину заполнения и
+   * текст (пересоздавать их нельзя — под ногами у SSE). */
+  function progressRow(opts) {
+    const o = opts || {};
+    const fill = h("div", { class: "progress-fill", style: "width:0%" });
+    const count = h("span", { class: "progress-count" });
+    const step = h("span", { class: "progress-step" });
+    const eta = h("span", {
+      class: "progress-eta",
+      title: "Оценка времени — по текущей скорости выполнения; она зависит "
+        + "от размера глав и скорости LLM-сервера",
+    });
+    const el = h(
+      "div",
+      { class: "progress-row" + (o.mini ? " progress-mini" : "") },
+      h("div", { class: "progress-track" }, fill),
+      h("div", { class: "progress-info" }, count, step, eta),
+    );
+    return {
+      el,
+      paint(p) {
+        const v = p || {};
+        /* ширина — атрибутом style: тот же канал, что и при создании
+           (в тестах узел-заглушка хранит inline-стиль атрибутом) */
+        fill.setAttribute("style", "width:" + (Number(v.pct) || 0) + "%");
+        count.textContent = v.count || "";
+        step.textContent = v.label || "";
+        eta.textContent = v.eta || "";
+        /* состояние «ждаём первое событие» — отдельным классом: строка
+           видна, но пустых разделителей в ней нет */
+        const base = "progress-row" + (o.mini ? " progress-mini" : "");
+        el.className = base + (v.waiting ? " progress-waiting" : "");
+        return el;
+      },
+    };
+  }
+
   /* Панель «редактор + предпросмотр»: хост CodeMirror и sandbox-iframe
    * (allow-same-origin — скрипты не выполняются) в одной карточке, режимы
    * переключаются кнопкой: code — редактор, md — marked, html — как есть,
@@ -463,6 +508,7 @@
     menuButton,
     previewPane,
     editorSearch,
+    progressRow,
     listPager,
     askNotifyPermission,
     docs,

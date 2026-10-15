@@ -1569,32 +1569,19 @@ async function viewDashboard() {
       ),
     ),
   );
-  /* текущие активные запуски: статус + строки лога (разворачиваются) */
+  /* Текущие активные запуски: строка та же, что карточка «Запусков»,
+     только шире — шапка (статус, название, книга, лог) и строка прогресса
+     под ней. Прогресс рисуется общим компонентом UIC.progressRow: счётчик,
+     фаза и оценка конца («осталось ≈ … · завершение 22:41») переносятся
+     строками вместо обрезки, на узком экране строка уйдёт под шапку. */
   const running = d.running_jobs || [];
-  // мини-бар прогресса : label + трек + done/total.
-  // у running-задачи без событий прогресса бар виден
-  // («ожидание…») — раньше возвращался null и запуск выглядел мёртвым
-  function miniBar(p, status) {
-    if (!p && status !== "running") return null;
-    const total = p && p.total ? p.total : 0;
-    const done = p ? p.done : 0;
-    const pct = total > 0 ? Math.min(100, Math.round((100 * done) / total)) : 0;
-    return h(
-      "div",
-      { class: "progress-wrap mini" },
-      h(
-        "div",
-        { class: "progress-track" },
-        h("div", { class: "progress-fill", style: "width:" + pct + "%" }),
-      ),
-      h(
-        "span",
-        { class: "progress-text" },
-        p
-          ? (p.label || "") + (total > 0 ? ` ${p.done}/${p.total}` : "")
-          : "ожидание…",
-      ),
-    );
+  /* у running-запуска без событий прогресса строка видна
+     («ожидание первого результата…») — раньше возвращался null и
+     запуск выглядел мёртвым */
+  function progressBar(job, p) {
+    if (!p && job.status !== "running") return null;
+    return UIC.progressRow({ mini: true })
+      .paint(UICore.progressParts(job, p));
   }
   const runRows = running.map((j) => {
     const logLines = j.lines || [];
@@ -1602,9 +1589,11 @@ async function viewDashboard() {
       class: "dash-log hidden",
       text: logLines.join("\n") || "(лог пуст)",
     });
-    const row = h(
+    /* шапка строки: статус, название, книга, лог — и действия в правом
+       краю; строка прогресса идёт под ней отдельной строкой */
+    const head = h(
       "div",
-      { class: "job-row dash-run" },
+      { class: "active-run-head" },
       h("span", { class: "badge badge-" + j.status }, j.status),
       h(
         "a",
@@ -1623,39 +1612,38 @@ async function viewDashboard() {
         `строк: ${logLines.length} · ${UICore.relTime(j.created) || "создан " + new Date((j.created || 0) * 1000).toLocaleTimeString()}`,
       ),
       h(
-        "button",
-        {
-          class: "btn btn-sm btn-ghost",
-          onclick: () => logPre.classList.toggle("hidden"),
-        },
-        "Лог",
-      ),
-      h(
-        "a",
-        {
-          class: "btn btn-sm btn-primary",
-          href: `#/project/${j.project}/run`,
-        },
-        "Открыть",
-      ),
-      h(
-        "button",
-        {
-          class: "btn btn-sm btn-danger",
-          onclick: async () => {
-            try {
-              await api(`/jobs/${j.id}/stop`, { method: "POST" });
-              toast("Остановка...");
-              render();
-            } catch (ex) {
-              toast(ex.message, "err");
-            }
+        "span",
+        { class: "active-run-actions" },
+        h(
+          "button",
+          { class: "btn btn-sm btn-ghost", onclick: () => logPre.classList.toggle("hidden") },
+          "Лог",
+        ),
+        h(
+          "a",
+          { class: "btn btn-sm btn-primary", href: `#/project/${j.project}/run` },
+          "Открыть",
+        ),
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-danger",
+            onclick: async () => {
+              try {
+                await api(`/jobs/${j.id}/stop`, { method: "POST" });
+                toast("Остановка...");
+                render();
+              } catch (ex) {
+                toast(ex.message, "err");
+              }
+            },
           },
-        },
-        "Стоп",
+          "Стоп",
+        ),
       ),
     );
-    const mb = miniBar(j.progress, j.status);
+    const mb = progressBar(j, j.progress);
+    const row = h("div", { class: "active-run dash-run" }, head);
     if (mb) row.append(mb);
     row.append(logPre);
     return row;
@@ -1691,7 +1679,7 @@ async function viewDashboard() {
       h("td", {}, j.title || j.action),
       h("td", { class: "ner-type" }, j.project),
       h("td", {}, h("span", { class: "badge badge-" + j.status }, j.status)),
-      h("td", {}, miniBar(j.progress, j.status) || "—"),
+      h("td", {}, progressBar(j, j.progress) || "—"),
       h(
         "td",
         { title: UICore.relTimeAbs(j.created) },
@@ -1731,22 +1719,29 @@ async function viewDashboard() {
     ),
     recentRows.length
       ? h(
-          "table",
-          { class: "ner-table" },
+          /* узкое окно: таблица шире карточки — лучше честная
+             горизонтальная прокрутка, чем колонка «Прогресс» в шесть
+             строк и уползшая за край «Дата» */
+          "div",
+          { class: "dash-table" },
           h(
-            "thead",
-            {},
+            "table",
+            { class: "ner-table" },
             h(
-              "tr",
+              "thead",
               {},
-              h("th", {}, "Задача"),
-              h("th", {}, "Проект"),
-              h("th", {}, "Статус"),
-              h("th", {}, "Прогресс"),
-              h("th", {}, "Дата"),
+              h(
+                "tr",
+                {},
+                h("th", {}, "Задача"),
+                h("th", {}, "Проект"),
+                h("th", {}, "Статус"),
+                h("th", {}, "Прогресс"),
+                h("th", {}, "Дата"),
+              ),
             ),
+            h("tbody", {}, recentRows),
           ),
-          h("tbody", {}, recentRows),
         )
       : h("div", { class: "card-hint" }, "Запусков ещё не было"),
   );
@@ -2674,8 +2669,10 @@ function updateRunPill() {
       slot.replaceChildren();
       if (!jobs.length) return;
       const j = jobs[0];
-      const p = j.progress;
-      const pct = p ? UICore.progressPct(p.done, p.total) : 0;
+      /* части считаются тем же progressParts, что и панелям «Запусков»: в
+         шапке pill компактный (название, счётчик, трек), поэтому остаток и
+         время конца уходят в тултип — на 220 px строки они не влезают */
+      const parts = UICore.progressParts(j, j.progress);
       const label = j.title || j.action || "запуск";
       const more = jobs.length > 1 ? ` · ещё ${jobs.length - 1}` : "";
       const pill = h(
@@ -2683,7 +2680,8 @@ function updateRunPill() {
         {
           class: "run-pill",
           href: `#/project/${j.project}/run`,
-          title: `Активных запусков: ${jobs.length} — открыть лог`,
+          title: `Активных запусков: ${jobs.length} — открыть лог`
+            + (parts.eta ? ` · ${parts.eta}` : ""),
           /* клик — через навигацию SPA: вкладки проекта меняются состоянием,
              хэш остаётся тем, чем в проект вошли, и ссылка «на ту же вкладку»
              не меняла бы ничего (клик проходил бы мимо) */
@@ -2694,15 +2692,15 @@ function updateRunPill() {
         },
         iconEl("activity"),
         h("span", { class: "run-pill-label" }, label + more),
-        p && p.total
-          ? h("span", { class: "run-pill-count" }, `${p.done}/${p.total}`)
+        parts.count
+          ? h("span", { class: "run-pill-count" }, parts.count)
           : null,
         h(
           "span",
           { class: "run-pill-track" },
           h("span", {
             class: "run-pill-fill",
-            style: `width:${pct}%`,
+            style: `width:${parts.pct}%`,
           }),
         ),
       );
