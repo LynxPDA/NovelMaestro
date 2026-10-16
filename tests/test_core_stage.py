@@ -530,3 +530,50 @@ def test_complete_until_error_returns_immediately(answers):
     answers["want"] = [(None, "read timeout")]
     text, err = st.complete_until(_stage(answers, retry_empty=5), "п")
     assert (text, err) == (None, "read timeout") and answers["calls"] == 1
+
+
+# ══════════════════════════════════════════════════════════════════════
+# проверка промпт-файла (--check-prompt): вердикт вместо запроса
+# ══════════════════════════════════════════════════════════════════════
+
+_PC_CONTRACT = (
+    ("prompt_pass1", "первый проход", ("chunk_text",)),
+    ("prompt_pass2", "второй проход", ("chunk_text", "ner_json")),
+)
+
+
+def test_add_check_prompt_arg_default_none():
+    """Флаг есть у стадий с промптом; по умолчанию его нет (обычный запуск)."""
+    ap = argparse.ArgumentParser()
+    st.add_check_prompt_arg(ap)
+    assert ap.parse_args([]).check_prompt is None
+    assert ap.parse_args(["--check-prompt", "tmp/pc.json"]).check_prompt \
+        == "tmp/pc.json"
+
+
+def test_check_prompt_writes_result_and_skips_llm(tmp_path, monkeypatch,
+                                                  capsys):
+    """--check-prompt: вердикт в файл, профиль не разрешается, логов стадии
+    нет, предупреждения — только stderr предпросмотра."""
+    def _boom(*a, **kw):
+        raise AssertionError("профиль LLM в режиме проверки не нужен")
+
+    monkeypatch.setattr(st, "resolve_profile", _boom)
+    pf = tmp_path / "prompts" / "ner_prompt.txt"
+    pf.parent.mkdir(parents=True)
+    pf.write_text("<prompt_pass1>\n{chunk_text}\n</prompt_pass1>\n",
+                  encoding="utf-8")
+    out = tmp_path / "tmp" / "prompt_check.json"
+    args = argparse.Namespace(check_prompt=str(out), prompt_file=str(pf))
+    assert st.check_prompt(args, "ner", _PC_CONTRACT) is True
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["state"] == "file" and data["tags"] == ["prompt_pass1"]
+    assert any("<prompt_pass2>" in x for x in data["problems"])
+    assert not (tmp_path / "logs").exists()  # логов запусков нет
+    assert "prompt_pass2" in capsys.readouterr().err
+
+
+def test_check_prompt_without_flag_is_noop():
+    """Флага нет — обычный запуск: ничего не пишется, main() продолжает работу."""
+    args = argparse.Namespace(check_prompt=None, prompt_file="prompts/x.txt")
+    assert st.check_prompt(args, "ner", _PC_CONTRACT) is False

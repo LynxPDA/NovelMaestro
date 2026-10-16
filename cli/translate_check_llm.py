@@ -54,8 +54,10 @@ _bootstrap_core()
 
 from core.stage import (  # noqa: E402
     Progress,
+    add_check_prompt_arg,
     add_llm_args,
     bind_profile,
+    check_prompt,
     complete_until,
     new_stage,
 )
@@ -80,6 +82,10 @@ from core import settings as core_settings  # noqa: E402
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "translate_check_prompt.txt")
 #: тег промпта стадии: промпт один, берётся только из него
 PROMPT_TAG = "prompt_translate_check"
+#: что читает стадия из промпт-файла: (тег, где читается, переменные тега)
+PROMPT_CONTRACT: tuple = (
+    (PROMPT_TAG, "один проход поиска ошибок", ("batch_text",)),
+)
 # Серверный предел ответа стадии, ТОКЕНЫ (не расчёт)
 # предельный размер ответа сервера — общий настройка MAX_TOKENS
 DEFAULT_REVIEW = "tmp/translate_check_llm_review.json"
@@ -796,6 +802,8 @@ def build_parser():
     # сервер, модель, ключ, таймауты, повторы, потоки и рассуждения —
     # общий блок флагов (core.stage), своих дефолтов у стадии нет
     add_llm_args(ap, aliases=True)
+    # проверка промпт-файла (--check-prompt) — общий слой core.stage
+    add_check_prompt_arg(ap)
     return core_settings.apply_cli_defaults(ap, "translate_check_llm")
 
 
@@ -1015,6 +1023,9 @@ def do_check(args, stage) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети
+    if check_prompt(args, "translate_check_llm", PROMPT_CONTRACT):
+        return 0
     # лог стадии — всегда; профиль LLM нужен только режиму проверки
     stage = new_stage("translate_check_llm", args, log_fatal=False)
     if args.apply:

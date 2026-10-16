@@ -837,3 +837,46 @@ def test_br_main_broken_rule(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", _br_argv(rule="нет разделителя"))
     assert BR.main() == 1
     assert "нет разделителя" in capsys.readouterr().out
+
+
+# ══════════════════════════════════════════════════════════════════════
+# --check-prompt: скрипт стадии сверяет промпт-файл без LLM и без логов
+# ══════════════════════════════════════════════════════════════════════
+
+_PC_SCRIPTS = [
+    ("ner", "cli/ner.py", []),
+    ("ner_check", "cli/ner_check.py", []),
+    ("pipeline", "web/pipeline.py", ["--action", "8"]),  # весь цикл
+    ("translate_check_llm", "cli/translate_check_llm.py", []),
+    ("translate_quality", "cli/translate_quality.py", []),
+    ("wiki", "cli/wiki.py", []),
+]
+
+
+@pytest.mark.parametrize("key,script,extra", _PC_SCRIPTS)
+def test_check_prompt_cli_mode(tmp_path, key, script, extra):
+    """Режим --check-prompt: вердикт о файле написан, код 0 — и больше ничего:
+    ни логов запусков, ни артефактов стадии, ни обращения к LLM (конфиг пуст,
+    окружение чистое). Файл без тегов стадии — честное замечание."""
+    book = tmp_path / "book"
+    (book / "prompts").mkdir(parents=True)
+    (book / "prompts" / "p.txt").write_text("<prompt_x>текст</prompt_x>",
+                                            encoding="utf-8")
+    out = book / "tmp" / "prompt_check.json"
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / script), *extra,
+         "--check-prompt", "tmp/prompt_check.json",
+         "--prompt_file", "prompts/p.txt"],
+        cwd=str(book), capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=180,
+        env={"PATH": os.defpath, "HOME": str(tmp_path),
+             "PYTHONIOENCODING": "utf-8", "WEB_ENV_FILE": str(tmp_path / "e.env")})
+    assert proc.returncode == 0, proc.stderr[-400:]
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["stage"] == key and data["file"] == "prompts/p.txt"
+    assert data["state"] == "file" and data["tags"] == []
+    assert data["problems"] == [
+        "в файле prompts/p.txt нет ни одного тега стадии — "
+        f"«{key}» работает со встроенным промптом"]
+    assert not (book / "logs").exists(), "проверка не создаёт логов запусков"
+    assert sorted(x.name for x in (book / "tmp").iterdir()) == ["prompt_check.json"]

@@ -22,6 +22,7 @@ from core import deps as D  # noqa: E402
 from core import projects as PRJ  # noqa: E402
 from core import search as SRCH  # noqa: E402
 from core import settings as SET  # noqa: E402
+from core import stage as ST_  # noqa: E402
 from core import transport as T  # noqa: E402
 from core import update as UPD  # noqa: E402
 
@@ -57,7 +58,15 @@ CORE_API = [
     "parse_chapter_id", "build_chapter_map", "find_chapter_file",
     "format_ranges", "compile_chapter_texts",
     "read_chapter_titles", "write_chapter_titles",
+    # предпросмотр запроса и проверка промпт-файла (web + CLI)
+    "preview_request_payload", "write_preview_request", "preview_logger",
+    "prompt_check_result", "write_prompt_check",
 ]
+# Зеркало API core/stage.py (слой стадии: флаги LLM, профиль, контекст, прогресс)
+STAGE_API = ["add_llm_args", "LlmProfile", "resolve_profile", "describe_profile",
+             "add_check_prompt_arg", "check_prompt", "complete_until",
+             "LoggedStage", "new_stage", "bind_profile", "setup_stage",
+             "Progress", "REASONING_EFFORTS"]
 # Зеркало API core/projects.py (web-интерфейс берёт его отсюда)
 PROJECTS_API = ["SECTIONS", "DEFAULT_SECTIONS", "load_sections",
                 "save_sections", "create_section", "rename_section",
@@ -80,6 +89,9 @@ SETTINGS_API = ["Setting", "Block", "Group", "GROUPS", "SETTINGS", "BY_KEY",
                 "BY_BLOCK", "STAGES", "STAGE_TITLES", "LLM_BLOCKS", "LLM_ALIAS",
                 "LLM_STAGE_FIELDS", "STAGE_LLM_FIELDS", "groups", "stage_fields",
                 "settings_of",
+                # диапазон глав — параметр запуска вне реестра настроек
+                "RANGE_FIELDS", "RANGE_STAGES", "range_settings", "range_fields",
+                "range_applies", "apply_cli_defaults",
                 "form_fields", "defaults", "stage_values", "llm_settings",
                 "llm_values", "llm_form", "with_llm", "applies",
                 "applicable_form", "env_key", "env_file",
@@ -132,19 +144,24 @@ def test_core_api_mentioned_in_agents_md(name):
 
 
 @pytest.mark.parametrize(
-    "name", TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API + UPDATE_API)
+    "name",
+    TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API + UPDATE_API
+    + STAGE_API)
 def test_transport_deps_api_exists_in_code(name):
-    """API транспорта, зависимостей, реестра настроек, поиска и обновлений
-    существует."""
+    """API транспорта, зависимостей, реестра настроек, поиска, слоя стадии и
+    обновлений существует."""
     module = (T if name in TRANSPORT_API
               else D if name in DEPS_API
               else SET if name in SETTINGS_API
-              else SRCH if name in SEARCH_API else UPD)
+              else SRCH if name in SEARCH_API
+              else ST_ if name in STAGE_API else UPD)
     assert hasattr(module, name), f"{module.__name__}.{name} исчезла"
 
 
 @pytest.mark.parametrize(
-    "name", TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API + UPDATE_API)
+    "name",
+    TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API + UPDATE_API
+    + STAGE_API)
 def test_transport_deps_api_mentioned_in_agents_md(name):
     """Строки §6 полные: имена транспорта, зависимостей, настроек, поиска и
     обновлений на месте."""

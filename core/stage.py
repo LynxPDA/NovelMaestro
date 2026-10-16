@@ -26,14 +26,15 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import settings as cfg
-from .common import (EXTRA_BODY_ENV_KEY, REASONING_MODES, REASONING_PROFILES,
-                     determine_model, emit_progress, extra_body_fields,
-                     get_server_config, llm_messages, log_argv,
-                     preview_logger, preview_request_payload, print_env_help,
-                     provider_settings, reasoning_fields, reasoning_settings,
-                     server_base_url, setup_logging,
-                     stream_chat_completion, web_progress_enabled,
-                     write_preview_request)
+from .common import (EXTRA_BODY_ENV_KEY, REASONING_MODES,
+                     REASONING_PROFILES, determine_model, emit_progress,
+                     extra_body_fields, get_server_config, llm_messages,
+                     log_argv, preview_logger, preview_request_payload,
+                     print_env_help, prompt_check_result, provider_settings,
+                     reasoning_fields, reasoning_settings, server_base_url,
+                     setup_logging, stream_chat_completion,
+                     web_progress_enabled, write_preview_request,
+                     write_prompt_check)
 
 # Значения по умолчанию — из реестра настроек (core/settings.py): одно и то же
 # число в двух местах расходится неизбежно, поэтому источник один. Меняя
@@ -465,6 +466,44 @@ def setup_stage(name: str, args: argparse.Namespace, *, log_dir: str = "logs",
                                    log_name=log_name, log_fatal=log_fatal),
                         args, **profile_kw)
     return stage, stage.logger
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ПРОВЕРКА ПРОМПТ-ФАЙЛА: --check-prompt
+# ══════════════════════════════════════════════════════════════════════
+def add_check_prompt_arg(ap: argparse.ArgumentParser) -> None:
+    """Флаг --check-prompt у стадии с внешним промптом.
+
+    Путь артефакта относительный: web передаёт tmp/prompt_check.json, а cwd
+    процесса — папка книги."""
+    ap.add_argument("--check-prompt", dest="check_prompt", default=None,
+                    metavar="PATH",
+                    help="ПРОВЕРКА промпт-файла: сверить теги и переменные "
+                         "стадии без запросов к LLM → JSON в PATH.")
+
+
+def check_prompt(args: argparse.Namespace, name: str, contract,
+                 json_tags=(), *, file_attr: str = "prompt_file") -> bool:
+    """Режим --check-prompt: вердикт о промпт-файле стадии, до LLM не доходит.
+
+    contract — записи (тег, где читается, (переменные,)), json_tags — служебные
+    JSON-теги; проверка ставится первым делом main(), до чтения глав: логи
+    запусков и артефакты стадии не создаются, пишется только сам вердикт.
+    True — режим выполнен, main() возвращает 0."""
+    path = getattr(args, "check_prompt", None)
+    if not path:
+        return False
+    res = prompt_check_result(name, str(getattr(args, file_attr, "") or ""),
+                              contract, json_tags)
+    write_prompt_check(path, res)
+    log = preview_logger(name)
+    if res["problems"]:
+        for line in res["problems"]:
+            log.warning("⚠️ промпт: %s", line)
+    for line in res["notes"]:
+        log.info("ℹ %s", line)
+    log.info("✅ Проверка промпта: %s (%d замечаний)", path, len(res["problems"]))
+    return True
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -81,8 +81,10 @@ _bootstrap_core()
 
 from core.stage import (  # noqa: E402
     Progress,
+    add_check_prompt_arg,
     add_llm_args,
     bind_profile,
+    check_prompt,
     complete_until,
     new_stage,
 )
@@ -347,6 +349,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "записи файлов.")
     # сервер: CLI > os.environ > общий .env (общий блок флагов — core.stage)
     add_llm_args(p, aliases=True)
+    # проверка промпт-файла (--check-prompt) — общий слой core.stage
+    add_check_prompt_arg(p)
     return core_settings.apply_cli_defaults(p, "ner_check")
 
 
@@ -399,6 +403,16 @@ def save_review_file(path, input_path, created, entries, params=None,
     if saved_params:
         doc["params"] = saved_params
     atomic_write(path, json.dumps(doc, ensure_ascii=False, indent=2))
+
+
+#: что читает стадия из промпт-файла: (тег, где читается, переменные тега);
+#: проверяются ВСЕ режимы — отчёт обязан быть честным про любой из них
+PROMPT_CONTRACT: tuple = (
+    ("prompt_ner_check", "режимы «Выбранные типы» (вместе и по отдельности)",
+     ("glossary", "fields")),
+    ("prompt_rag", "режим «Точечно по списку (RAG)»",
+     ("ner_block", "rag_block", "fields")),
+)
 
 
 def get_prompt(args, logger) -> str:
@@ -1097,6 +1111,9 @@ def do_apply(args, logger) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети
+    if check_prompt(args, "ner_check", PROMPT_CONTRACT):
+        return 0
     # лог стадии — всегда; профиль LLM нужен только режиму проверки
     stage = new_stage("ner_check", args)
     if args.apply:

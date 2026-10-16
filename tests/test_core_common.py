@@ -2285,3 +2285,108 @@ def test_review_entry_unknown_status_rejected():
     e5 = C.review_entry({"term": "A", "field": "notes", "old": "x",
                          "new": "y", "status": " ПРИНЯТЬ "})
     assert e5 is not None and e5["status"] == C.REVIEW_ACCEPT
+
+
+# ══════════════════════════════════════════════════════════════════════
+# проверка промпт-файла стадии (prompt_check_result / write_prompt_check)
+# ══════════════════════════════════════════════════════════════════════
+
+_PC_CONTRACT = (
+    ("prompt_pass1", "первый проход (извлечение глоссария)", ("chunk_text",)),
+    ("prompt_pass2", "второй проход", ("chunk_text", "ner_json")),
+)
+
+
+def test_prompt_check_none_without_file():
+    """Пустой выбор — не проблема: стадия честно на встроенном промпте."""
+    res = C.prompt_check_result("ner", "", _PC_CONTRACT)
+    assert res["state"] == "none" and res["problems"] == []
+    assert "встроенным" in res["notes"][0]
+
+
+def test_prompt_check_missing_file_is_problem():
+    res = C.prompt_check_result("ner", "prompts/nope.txt", _PC_CONTRACT)
+    assert res["state"] == "missing" and res["tags"] == []
+    assert res["problems"] == ["файл промпта не найден: prompts/nope.txt"]
+
+
+def test_prompt_check_empty_file_is_problem(tmp_path):
+    f = tmp_path / "p.txt"
+    f.write_text("   \n\n", encoding="utf-8")
+    res = C.prompt_check_result("ner", str(f), _PC_CONTRACT)
+    assert res["state"] == "empty" and len(res["problems"]) == 1
+    assert res["mtime"] is not None
+
+
+def test_prompt_check_untagged_file(tmp_path):
+    """Файл без тегов — проблема, а не «промпт целиком» (режим убран)."""
+    f = tmp_path / "p.txt"
+    f.write_text("Просто текст промпта без разметки", encoding="utf-8")
+    res = C.prompt_check_result("wiki", str(f), _PC_CONTRACT)
+    assert res["state"] == "file" and res["tags"] == []
+    assert len(res["problems"]) == 1 and "нет ни одного тега" in res["problems"][0]
+
+
+def test_prompt_check_reports_all_stage_modes(tmp_path):
+    """Проверяются ВСЕ теги стадии: формы выбирают один режим, а честный
+    отчёт обязан показать и остальные (тега нет, переменной нет)."""
+    f = tmp_path / "p.txt"
+    f.write_text("<prompt_pass1>\n{chunk_text}\n</prompt_pass1>\n",
+                 encoding="utf-8")
+    res = C.prompt_check_result("ner", str(f), _PC_CONTRACT)
+    assert res["tags"] == ["prompt_pass1"]
+    assert any("<prompt_pass2>" in p for p in res["problems"])
+    assert res["notes"] == []
+
+    f.write_text("<prompt_pass1>\n{chunk_text}\n</prompt_pass1>\n"
+                 "<prompt_pass2>\n{chunk_text}\n{ner_json}\n</prompt_pass2>\n",
+                 encoding="utf-8")
+    res = C.prompt_check_result("ner", str(f), _PC_CONTRACT)
+    assert res["problems"] == [] and res["tags"] == ["prompt_pass1",
+                                                    "prompt_pass2"]
+
+
+def test_prompt_check_missing_variable_names_it(tmp_path):
+    f = tmp_path / "p.txt"
+    f.write_text("<prompt_pass1>\n{chunk_text}\n</prompt_pass1>\n"
+                 "<prompt_pass2>\n{chunk_text}\n</prompt_pass2>\n",
+                 encoding="utf-8")
+    res = C.prompt_check_result("ner", str(f), (
+        ("prompt_pass1", "первый проход", ("chunk_text",)),
+        ("prompt_pass2", "второй проход", ("chunk_text", "ner_json")),
+    ))
+    assert res["problems"] == ["в <prompt_pass2> (второй проход) нет "
+                               "переменной {ner_json}"]
+
+
+def test_prompt_check_json_tags_notes_and_breakage(tmp_path):
+    """wiki: служебного JSON-тега может не быть (это note), но битый JSON —
+    уже проблема."""
+    contract = (("prompt_wiki_article", "статья вики",
+                 ("translation", "relations_label")),)
+    jt = ("wiki_markers", "wiki_type_order")
+    f = tmp_path / "w.txt"
+    f.write_text("<prompt_wiki_article>\n{translation} {relations_label}"
+                 "\n</prompt_wiki_article>\n"
+                 "<wiki_markers>\n{битый\n</wiki_markers>\n",
+                 encoding="utf-8")
+    res = C.prompt_check_result("wiki", str(f), contract, jt)
+    assert res["problems"] and "битый JSON" in res["problems"][0]
+    assert res["notes"] == ["служебного тега <wiki_type_order> нет — "
+                            "значение встроенное"]
+
+    f.write_text("<prompt_wiki_article>\n{translation} {relations_label}"
+                 "\n</prompt_wiki_article>\n"
+                 "<wiki_markers>\n[\"#\", \"#\"]\n</wiki_markers>\n"
+                 "<wiki_type_order>\n[]\n</wiki_type_order>\n",
+                 encoding="utf-8")
+    res = C.prompt_check_result("wiki", str(f), contract, jt)
+    assert res["problems"] == [] and res["notes"] == []
+    assert set(res["tags"]) == {"prompt_wiki_article", "wiki_markers",
+                                "wiki_type_order"}
+
+
+def test_write_prompt_check_writes_readable_json(tmp_path):
+    out = tmp_path / "tmp" / "prompt_check.json"
+    C.write_prompt_check(str(out), {"stage": "ner", "problems": ["нет тега"]})
+    assert json.loads(out.read_text(encoding="utf-8"))["problems"] == ["нет тега"]

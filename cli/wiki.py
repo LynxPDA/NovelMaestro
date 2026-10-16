@@ -50,8 +50,10 @@ _bootstrap_core()
 from core.stage import (  # noqa: E402
     Progress,
     Stage,
+    add_check_prompt_arg,
     add_llm_args,
     bind_profile,
+    check_prompt,
     new_stage,
 )
 from core import settings as core_settings  # noqa: E402
@@ -540,6 +542,16 @@ def llm_request(stage: Stage, system_prompt: str,
 # ══════════════════════════════════════════════════════════════════════
 # ЗАГРУЗКА ПРОМПТОВ
 # ══════════════════════════════════════════════════════════════════════
+
+#: что читает стадия из промпт-файла: (тег, где читается, переменные тега)
+PROMPT_CONTRACT: tuple = (
+    ("prompt_wiki_article", "статья вики", ("translation", "relations_label")),
+)
+#: служебные теги wiki: значение — JSON (битый JSON молча берёт встроенное)
+PROMPT_JSON_TAGS: tuple = ("wiki_markers", "wiki_default_markers",
+                           "wiki_type_names_ru", "wiki_relations_labels",
+                           "wiki_skip_relations", "wiki_type_order")
+
 
 def _load_json_tag(content: str, tag: str, logger, default):
     """Достаёт JSON-значение из тега <tag>...</tag>; битый JSON —
@@ -1325,6 +1337,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Якоря-ссылки в оглавлении (--no-toc-links — плоский список).",
     )
 
+    # проверка промпт-файла (--check-prompt) — общий слой core.stage
+    add_check_prompt_arg(parser)
     core_settings.apply_cli_defaults(parser, "wiki")
     return parser
 
@@ -1332,6 +1346,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     parser = build_parser()
     args = parser.parse_args()
+
+    # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети
+    if check_prompt(args, "wiki", PROMPT_CONTRACT, PROMPT_JSON_TAGS):
+        return 0
 
     # ── Валидация ──
     if args.context_chunks < 1 or args.top < 1 or args.min_count < 1:

@@ -61,8 +61,10 @@ _bootstrap_core()
 from core.stage import (  # noqa: E402
     Progress,
     Stage,
+    add_check_prompt_arg,
     add_llm_args,
     bind_profile,
+    check_prompt,
     new_stage,
 )
 from core import settings as core_settings  # noqa: E402
@@ -537,6 +539,15 @@ def cleanup_stale_resume_files(file_dir: str, logger) -> None:
 # ══════════════════════════════════════════════════════════════════════
 # ЗАГРУЗКА ПРОМПТОВ
 # ══════════════════════════════════════════════════════════════════════
+
+
+#: что читает стадия из промпт-файла: (тег, где читается, переменные тега);
+#: проверяются ВСЕ режимы — отчёт обязан быть честным про любой из них
+PROMPT_CONTRACT: tuple = (
+    ("prompt_pass1", "первый проход (извлечение глоссария)", ("chunk_text",)),
+    ("prompt_pass2", "второй проход («Двухпроходная схема»)",
+     ("chunk_text", "ner_json")),
+)
 
 
 def load_two_pass_prompts(filepath: str, logger) -> tuple[str, str | None]:
@@ -1452,6 +1463,8 @@ def build_parser() -> argparse.ArgumentParser:
             "(--compile_chapters). Пусто = сборка в память, файл не пишется."
         ),
     )
+    # проверка промпт-файла (--check-prompt) — общий слой core.stage
+    add_check_prompt_arg(parser)
     core_settings.apply_cli_defaults(parser, "ner")
     return parser
 
@@ -1461,6 +1474,9 @@ def main():
 
     parser = build_parser()
     args = parser.parse_args()
+    # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети
+    if check_prompt(args, "ner", PROMPT_CONTRACT):
+        return 0
     # Лог стадии и команда запуска — общий слой (core.stage): он же пишет
     # в лог сервер, модель, таймауты и рассуждения разрешённого профиля
     stage = new_stage("ner", args, log_name="ner_extraction",

@@ -79,7 +79,9 @@ _bootstrap_core()
 
 from core.stage import (  # noqa: E402
     Progress,
+    add_check_prompt_arg,
     add_llm_args,
+    check_prompt,
     setup_stage,
 )
 from core import settings as core_settings  # noqa: E402
@@ -190,6 +192,16 @@ DEFAULT_SUMMARY_PROMPT = """\
 4. Рекомендации по улучшению (конкретные, по приоритету).
 </user>
 """
+
+
+#: что читает стадия из промпт-файла: (тег, где читается, переменные тега);
+#: проверяются ВСЕ режимы — отчёт обязан быть честным про любой из них
+PROMPT_CONTRACT: tuple = (
+    ("prompt_assessment", "оценка (оба режима)",
+     ("original_text", "translated_text")),
+    ("prompt_assessment_summary", "свёртка отчётов чанков (режим «Чанками»)",
+     ("batch_text",)),
+)
 
 
 def load_assessment_prompt(filepath, logger, tag: str = "prompt_assessment",
@@ -1260,6 +1272,8 @@ def build_parser() -> argparse.ArgumentParser:
                              f"если не влезает — пакет обрезается до "
                              f"целого количества глав (default: "
                              f"{DEFAULT_REQUEST_BUDGET}).")
+    # проверка промпт-файла (--check-prompt) — общий слой core.stage
+    add_check_prompt_arg(parser)
     core_settings.apply_cli_defaults(parser, "translate_quality")
     return parser
 
@@ -1267,6 +1281,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети
+    if check_prompt(args, "translate_quality", PROMPT_CONTRACT):
+        return 0
 
     # ── Лог стадии + профиль: CLI > os.environ > .env (сервер, модель,
     # таймауты и рассуждения в лог пишет core.stage) ──

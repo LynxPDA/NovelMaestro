@@ -46,7 +46,8 @@ from core.common import (  # noqa: E402
     PROGRESS_PREFIX, build_chapter_map, format_ranges,
 )
 # общий блок LLM-флагов: у конвейера тот же набор имён, что у стадий
-from core.stage import add_llm_args, resolve_profile  # noqa: E402
+from core.stage import (add_check_prompt_arg, add_llm_args,  # noqa: E402
+                     check_prompt, resolve_profile)
 
 # ═══ Константы (канон run_pipeline.py) ═══
 _STAGE_IO = {
@@ -275,6 +276,19 @@ def resolve_prompt_paths(combined: str = "") -> dict[int, str]:
 
 # тег стадии в общем промпт-файле
 _STAGE_TAG = {1: "translate", 2: "redact", 3: "polish"}
+#: что читает конвейер из общего промпт-файла: (тег, где читается,
+#: переменные тега); проверяются ВСЕ стадии — отчёт обязан быть честным
+#: про любой тип работы, а не только про выбранный в форме
+PROMPT_CONTRACT: tuple = (
+    ("translate", "тип работы «Перевод»", ("original_text", "ner_block")),
+    ("translate_lr", "тип работы «Перевод с расширенным контекстом»",
+     ("original_text", "ner_block", "dict_block", "rules_block",
+      "fewshot_block")),
+    ("redact", "тип работы «Редактура»",
+     ("original_text", "translated_text", "ner_block")),
+    ("polish", "тип работы «Полировка»",
+     ("original_text", "female_names", "male_names")),
+)
 
 
 def warn_missing_prompt_tag(prompt_file: str, stage: int, log,
@@ -580,6 +594,8 @@ def main() -> None:
     # Рассуждения — НЕ параметр конвейера: режим один на весь запуск, его
     # читают стадии сами из общего конфига.
     add_llm_args(ap, aliases=True)
+    # проверка промпт-файла (--check-prompt) — общий слой core.stage
+    add_check_prompt_arg(ap)
     ap.add_argument("--script", default=None,
                     help="Путь к translate_book.py (обычно не нужен)")
     ap.add_argument("--prompt_file", default="",
@@ -621,6 +637,10 @@ def main() -> None:
                         "(стадия 1 цикла, первая глава, чанк 1, "
                         "1 поток) без сети → JSON-файл.")
     args = ap.parse_args()
+
+    # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети
+    if check_prompt(args, "pipeline", PROMPT_CONTRACT):
+        return
 
     log = logging.getLogger("web.pipeline")
     # Дефолты слоя уже посчитаны реестром (стадийные PIPELINE_* + общие

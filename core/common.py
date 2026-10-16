@@ -2344,6 +2344,78 @@ def write_preview_request(path, payload) -> None:
     atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+# ══════════════════════════════════════════════════════════════════════
+# ПРОВЕРКА ПРОМПТ-ФАЙЛА (--check-prompt): отчёт без сети
+# ══════════════════════════════════════════════════════════════════════
+#: артефакт --check-prompt: относительный путь (cwd = папка проекта)
+PROMPT_CHECK_FILE = os.path.join("tmp", "prompt_check.json")
+
+
+def prompt_check_result(name: str, prompt_file: str, contract,
+                        json_tags=()) -> dict:
+    """Сверка промпт-файла стадии с её контрактом (--check-prompt).
+
+    contract — записи (тег, где читается, (имена переменных, ...));
+    json_tags — служебные теги с JSON-значением (wiki). Проверяются ВСЕ теги
+    стадии, а не только режим из формы: отчёт обязан быть честным про все
+    режимы. Промпт стадии читается только из своего тега, поэтому файл без
+    тегов — проблема, а не «промпт целиком». Возвращает
+    {stage, file, state (none|missing|empty|file), tags, problems, notes,
+    mtime}; в сеть не ходит, читает только сам файл."""
+    res: dict = {"stage": name, "file": prompt_file or "", "state": "file",
+                 "tags": [], "problems": [], "notes": [], "mtime": None}
+    if not prompt_file:
+        res["state"] = "none"
+        res["notes"] = [f"внешний промпт не выбран — «{name}» "
+                        f"работает со встроенным промптом"]
+        return res
+    if not os.path.isfile(prompt_file):
+        res["state"] = "missing"
+        res["problems"] = [f"файл промпта не найден: {prompt_file}"]
+        return res
+    try:
+        res["mtime"] = os.path.getmtime(prompt_file)
+    except OSError:
+        pass
+    text = read_text_safe(prompt_file)
+    if not text.strip():
+        res["state"] = "empty"
+        res["problems"] = [f"файл промпта пуст: {prompt_file}"]
+        return res
+    tags = [item[0] for item in contract] + list(json_tags)
+    res["tags"] = [tag for tag in tags if get_tagged_prompt(text, tag)]
+    if not any(get_tagged_prompt(text, tag) for tag in tags):
+        res["problems"] = [f"в файле {prompt_file} нет ни одного тега стадии — "
+                           f"«{name}» работает со встроенным промптом"]
+        return res
+    for tag, where, vars_ in contract:
+        body = get_tagged_prompt(text, tag)
+        if not body:
+            res["problems"].append(f"нет тега <{tag}> ({where}) — этот режим "
+                                   f"берёт встроенный промпт")
+            continue
+        for var in vars_:
+            if "{" + var + "}" not in body:
+                res["problems"].append(f"в <{tag}> ({where}) нет переменной "
+                                       f"{{{var}}}")
+    for tag in json_tags:
+        body = get_tagged_prompt(text, tag)
+        if not body:
+            res["notes"].append(f"служебного тега <{tag}> нет — значение "
+                                f"встроенное")
+            continue
+        try:
+            json.loads(body)
+        except ValueError as exc:
+            res["problems"].append(f"в <{tag}> битый JSON: {exc}")
+    return res
+
+
+def write_prompt_check(path, payload) -> None:
+    """Атомарная запись JSON-вердикта --check-prompt (tmp + os.replace)."""
+    atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 def preview_logger(name: str = "preview") -> logging.Logger:
     """Логгер предпросмотра: ТОЛЬКО stderr.
 
