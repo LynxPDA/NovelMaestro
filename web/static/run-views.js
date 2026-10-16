@@ -442,8 +442,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         v.prompt_file = auto;
       }
     }
-    // files-поля с autofile (compile: обложка/метаданные/донат):
-    // добор кандидата при КАЖДОМ рендере — файл мог появиться после
+    // files-поля с autofile (epub: исходник; compile: обложка/метаданные/
+    // донат): добор кандидата при КАЖДОМ рендере — файл мог появиться после
     // первой инициализации формы (загрузка через «Файлы»); осознанный
     // выбор пользователя (касание поля, вкл. «—») не перекрывается
     if (st.values[key]) {
@@ -452,17 +452,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       for (const f of spec.fields || []) {
         if (f.type !== "files" || !f.autofile || vals[f.name]) continue;
         if (touched.has(f.name)) continue;
-        const pool = (f.dir || "") === "source"
-          ? st.options.source || []
-          : (f.dir || "") === "prompts"
-            ? st.options.prompts || []
-            : st.options.root || [];
-        const cands = Array.isArray(f.autofile)
-          ? f.autofile : [f.autofile];
-        for (const c of cands) {
-          const base = UICore.fileBase(c);
-          if (pool.includes(base)) { vals[f.name] = base; break; }
-        }
+        const auto = UICore.autofileValue(f, st.options);
+        if (auto) vals[f.name] = auto; // значение — имя файла, не путь
       }
     }
     // Одна форма на стадию: «Простой/Экспертный» и пресеты убраны, все
@@ -625,6 +616,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         // промпт не остаётся «подхваченным» из .env-памяти и не ломает
         // автоподхват конвейера (pipeline_prompt.txt)
         vals[f.name] = UICore.pickPoolFile(def, items);
+        // autofile: автоподхват файла из пула (epub: первый *.epub из source/,
+        // donate.txt и т.п.); не перекрываем память из .env — только пустой выбор
+        if (vals[f.name] === "") {
+          const auto = UICore.autofileValue(f, opts);
+          if (items.includes(auto)) vals[f.name] = auto;
+        }
         // pipeline: «Общий промпт-файл» — автоподхват кандидата auto-режима
         // (первый файл с тегами из опций сервера); не перекрываем реальную
         // память из .env — только если выбор пуст
@@ -640,24 +637,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           const ch = opts.chapters || {};
           const d = f.name === "start" ? ch.min : ch.max;
           if (d != null) vals[f.name] = String(d);
-        }
-        // autofile: автоподхват файла из пула (donate.txt и т.п.)
-        if (f.autofile && vals[f.name] === "") {
-          for (const cand of [].concat(f.autofile)) {
-            const slash = cand.indexOf("/");
-            const adir = slash >= 0 ? cand.slice(0, slash) : "";
-            const abase = slash >= 0 ? cand.slice(slash + 1) : cand;
-            const apool =
-              adir === "source"
-                ? opts.source || []
-                : adir === "prompts"
-                  ? opts.prompts || []
-                  : opts.root || [];
-            if (apool.includes(abase)) {
-              vals[f.name] = abase; // значение — имя файла, не путь
-              break;
-            }
-          }
         }
       }
     }
@@ -2204,10 +2183,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             h("code", {}, "паттерн -> замена"),
             "; значимые пробелы — ", h("code", {}, "^  "), " и ",
             h("code", {}, "  $"), "; пустая правая часть — удаление."),
-          h("p", {}, "Очистки и замены до разбивки здесь не нужны: их делает ",
-            "отдельная стадия «Массовые замены» после перевода; в CLI ",
-            h("code", {}, "--clean-re"), " и ", h("code", {}, "--replace-re"),
-            " остаются."),
+          h("p", {}, "Предварительная очистка текста — отдельный чекбокс ",
+            "формы: пустые строки внутри глав убираются (каждый абзац своей ",
+            "строкой), пустая строка остаётся только после первой строки ",
+            "файла; пробелы и табуляция в начале строк убираются всегда."),
+          h("p", {}, "Остальные очистки и замены до разбивки здесь не нужны: ",
+            "их делает отдельная стадия «Массовые замены» после перевода; ",
+            "в CLI ", h("code", {}, "--clean-re"), " и ",
+            h("code", {}, "--replace-re"), " остаются."),
           h("p", {}, "Шпаргалка по regexp:"),
           h("ul", {},
             h("li", {}, h("code", {}, "^"), " — начало строки, ",
@@ -2238,14 +2221,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           const sel = inputWrap._input && inputWrap._input._sel;
           if (!sel) return;
           const cur = sel.value;
-          const opts = [...sel.options];
+          // список строится заново по ВСЕМУ пулу source/: фильтр прошлого
+          // режима уже выбросил из селекта txt-исходники, возвращать их
+          // из отфильтрованного списка нечем
+          const pool = st.options.source || [];
           sel.replaceChildren();
           sel.append(h("option", { value: "" }, "—"));
-          for (const o of opts) {
-            if (o.value === "") continue;
-            const ok = exts.some((e) =>
-              o.value.toLowerCase().endsWith(e));
-            if (ok) sel.append(h("option", { value: o.value }, o.value));
+          for (const n of pool) {
+            if (exts.some((e) => n.toLowerCase().endsWith(e))) {
+              sel.append(h("option", { value: n }, n));
+            }
           }
           if (cur && !exts.some((e) => cur.toLowerCase().endsWith(e))) {
             sel.value = "";

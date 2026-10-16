@@ -914,7 +914,7 @@ def test_build_epub_to_chapters_full():
             "split_patterns": ["Глава \\d+", "^第[0-9]+章"],
             "chunk_size": "5000", "chunk_mask": "Часть {num}",
             "title_limit": "40", "num_offset": "875",
-            "output_type": "polished",
+            "output_type": "polished", "clean_text": True,
             "clean_output": True}
     argv = build_command("epub", form, {})
     assert "--input" in argv and "source/book.epub" in argv
@@ -924,7 +924,8 @@ def test_build_epub_to_chapters_full():
     assert "Глава \\d+" in argv and "^第[0-9]+章" in argv
     # «Замены и очистки» из epub убраны — это стадия batch_replace; своих
     # настроек в реестре нет, так что --clean-re/--replace-re/--skip в web
-    # не появляются (в CLI они остаются)
+    # не появляются (в CLI они остаются); из очисток в форме только
+    # чекбокс --clean-text
     assert "--clean-re" not in argv
     assert "--replace-re" not in argv
     assert "--skip" not in argv
@@ -933,6 +934,7 @@ def test_build_epub_to_chapters_full():
     assert "--title-limit" in argv and "40" in argv
     assert "--num-offset" in argv and "875" in argv
     assert "--output-type" in argv and "polished" in argv
+    assert "--clean-text" in argv
     # chapter (дефолт) — флаг не добавляется
     argv4 = build_command("epub", {"mode": "toc"}, {})
     assert "--output-type" not in argv4
@@ -950,6 +952,30 @@ def test_build_epub_to_chapters_full():
                            "split_patterns": "Глава \\d+\n^第[0-9]+章"},
                           {})
     assert argv3.count("--split-re") == 2
+
+
+def test_build_epub_to_chapters_clean_text():
+    """Чекбокс предварительной очистки текста едет в argv явным флагом в
+    обе стороны; поля нет в форме — стадия на дефолте реестра (выключено)."""
+    assert "clean_text" in {f["name"] for f in STAGE_SPECS["epub"]["fields"]}
+    argv_on = build_command("epub", {"mode": "toc", "clean_text": True}, {})
+    assert "--clean-text" in argv_on
+    assert "--no-clean-text" not in argv_on
+    argv_off = build_command("epub", {"mode": "toc", "clean_text": False}, {})
+    assert "--no-clean-text" in argv_off
+    assert "--clean-text" not in argv_off
+    assert "--clean-text" not in build_command("epub", {"mode": "toc"}, {})
+
+
+def test_epub_input_field_autofile():
+    """epub: «Исходник» — files из source/; epub из source/ подставляется
+    сам маской «source/*.epub», поле остаётся выбором пользователя."""
+    f = {x["name"]: x for x in STAGE_SPECS["epub"]["fields"]}["input"]
+    assert f["type"] == "files" and f["dir"] == "source"
+    assert list(f["ext"]) == [".epub", ".txt"]
+    assert list(f["autofile"]) == ["source/*.epub"]
+    # значение — имя файла, а не путь
+    assert f["default"] == ""
 
 
 def test_build_epub_to_chapters_clean_patterns_ws():

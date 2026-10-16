@@ -197,6 +197,38 @@ test("pickPoolFile: только реально существующие фай�
   assert.equal(UICore.pickPoolFile("", pool), "");
 });
 
+test("autofileValue: имя файла, маска и пустой пул", () => {
+  const opts = {
+    source: ["book.epub", "cover.jpg", "notes.txt"],
+    prompts: ["ner_check_prompt.txt"],
+    root: ["ner.json"],
+  };
+  // конкретное имя: файл есть в пуле → подхват именем (не путём)
+  assert.equal(
+    UICore.autofileValue({ autofile: "source/donate.txt" }, opts), "");
+  assert.equal(
+    UICore.autofileValue({ autofile: "source/cover.jpg" }, opts),
+    "cover.jpg");
+  // поле с dir="" ищется в пуле корня проекта
+  assert.equal(UICore.autofileValue({ autofile: "ner.json" }, opts),
+    "ner.json");
+  // маска «source/*.epub»: первый файл пула с этим расширением
+  assert.equal(
+    UICore.autofileValue({ autofile: ["source/*.epub"] }, opts), "book.epub");
+  // несколько кандидатов: выигрывает первый нашедшийся
+  assert.equal(
+    UICore.autofileValue(
+      { autofile: ["source/*.mobi", "source/*.txt"] }, opts), "notes.txt");
+  // пул той же папки, но файл другого расширения — не подхват
+  assert.equal(
+    UICore.autofileValue({ autofile: ["prompts/*.epub"] }, opts), "");
+  // autofile нет / пустой пул — ничего не подхватываем
+  assert.equal(UICore.autofileValue({ name: "x" }, opts), "");
+  assert.equal(UICore.autofileValue({ autofile: ["source/*.epub"] }, {}), "");
+  assert.equal(UICore.autofileValue({ autofile: ["source/*.epub"] },
+    { source: [] }), "");
+});
+
 test("clampFont: из опций, иначе дефолт", () => {
   assert.equal(UICore.clampFont(12, [5, 7, 10, 12, 14], 12), 12);
   assert.equal(UICore.clampFont("12", [5, 7, 10, 12, 14], 12), 12);

@@ -201,6 +201,11 @@ function seedProjectsDir(dir) {
     "utf-8",
   );
   fs.writeFileSync(path.join(book, "metadata.yaml"), "title: Проба\nauthor: Probe\n");
+  // исходники книги: на них видно автоподхват «Исходника» (первый epub) и
+  // фильтр его списка режимом разбивки (toc принимает только epub)
+  fs.mkdirSync(path.join(book, "source"), { recursive: true });
+  fs.writeFileSync(path.join(book, "source", "book.epub"), "");
+  fs.writeFileSync(path.join(book, "source", "notes.txt"), "Глава 1\nтекст\n");
   fs.writeFileSync(
     path.join(dir, "hub_state.json"),
     JSON.stringify({ sections: [SECTION, CYR_SECTION], collapsed: [] }, null, 2),
@@ -1945,6 +1950,67 @@ async function main() {
       await page.screenshot({ path: path.join(OUT, "scenario-mode-fields.png") });
     }
     log(`${problems.length === before ? "✅" : "❌"} поля режима  ${seen.length} режимов · ${problems.length === before ? "все совпали" : "расхождения"}`);
+  }
+
+  /* «Разбор исходника»: epub из source/ подставляется сам; список селекта
+   * строится по ВСЕМУ пулу source/ и фильтруется режимом (txt обязан
+   * ВЕРНУТЬСЯ после смены режима); чекбокс предварительной очистки текста —
+   * в форме. Локальные значения запусков живут в браузере книги, поэтому
+   * режим сценарий выставляет сам, а не надеется на дефолт. */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".stage-card", { timeout: 15000 });
+    await page.locator('.stage-card:has-text("Разбор исходника")').first().click();
+    await page.waitForTimeout(900);
+    const readInput = () => page.evaluate(() => {
+      const label = (el) => ((el.querySelector(".field-label") || {})
+        .textContent || "").replace(/\s+/g, " ").trim();
+      const rows = [...document.querySelectorAll(".run-form .field")];
+      const input = rows.find((el) => label(el).includes("Исходник"));
+      const clean = rows.find((el) => label(el).includes("Предварительная"));
+      const sel = input && input.querySelector("select");
+      const cb = clean && clean.querySelector('input[type="checkbox"]');
+      return {
+        value: (sel || {}).value || "",
+        opts: [...(((sel || {}).options) || [])].map((o) => o.value),
+        clean: !!clean,
+        cleanOn: !!(cb && cb.checked),
+      };
+    });
+    const setMode = async (m) => {
+      await page.locator(".run-form .field")
+        .filter({ hasText: "Режим разбивки" }).first()
+        .locator("select").first().selectOption({ value: m });
+      await page.waitForTimeout(500);
+      return readInput();
+    };
+    const toc = await setMode("toc");
+    if (toc.value !== "book.epub") {
+      problems.push(`epub: исходник не подхвачен: «${toc.value}» `
+        + `из ${JSON.stringify(toc.opts)}`);
+    }
+    if (toc.opts.includes("notes.txt")) {
+      problems.push(`epub: в toc-режиме txt-исходник в списке `
+        + `${JSON.stringify(toc.opts)}`);
+    }
+    if (!toc.clean) problems.push("epub: чекбокса предварительной очистки нет");
+    const re = await setMode("regex");
+    if (!re.opts.includes("notes.txt")) {
+      problems.push(`epub: в regex-режиме txt пропал из списка `
+        + `${JSON.stringify(re.opts)}`);
+    }
+    if (re.value !== toc.value) {
+      problems.push(`epub: выбор исходника потерян: «${re.value}»`);
+    }
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "scenario-epub-input.png") });
+    }
+    log(`${problems.length === before ? "✅" : "❌"} разбор исходника  подхват «${toc.value}» `
+      + `· toc: ${toc.opts.length} позиций · regex: ${re.opts.length} позиций `
+      + `· очистка текста ${toc.clean ? (toc.cleanOn ? "вкл" : "выкл") : "нет"}`);
   }
 
   /* «Проверка глоссария»: поля записи, уходящие LLM. term, type и

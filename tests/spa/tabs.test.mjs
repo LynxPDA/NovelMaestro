@@ -162,6 +162,11 @@ class El {
       contains: (c) => s.has(c),
     };
   }
+  /* options — HTMLOptionsCollection: пересборка селекта исходника (epub)
+     перечитывает опции именно так (`[...sel.options]`) */
+  get options() {
+    return this.children.filter((c) => c.tagName === "OPTION");
+  }
   get firstChild() { return this.children[0] ?? null; }
   get lastChild() { return this.children[this.children.length - 1] ?? null; }
   get childNodes() { return this.children; }
@@ -360,6 +365,8 @@ const STAGES = [
     script: "cli/ner_check.py" },
   { key: "pipeline", title: "Перевод", script: "web/pipeline.py" },
   { key: "wiki", title: "Wiki", script: "cli/wiki.py" },
+  { key: "epub", title: "Разбор исходника на главы",
+    script: "cli/epub_to_chapters.py" },
 ];
 /* профиль — ПЕРВОЕ ПОЛЕ формы каждой LLM-стадии (noenv: значение живёт в
    браузере проекта+стадии, в .env и в argv оно не попадает) */
@@ -400,6 +407,23 @@ const SPEC_FIELDS = {
     { name: "types", type: "hidden", default: "", noenv: true,
       when: [["passes", ["whole", "types"]]] },
     { name: "fields", type: "hidden", default: "", noenv: true },
+  ],
+  /* epub: стадия без LLM и без диапазона глав — поля только из реестра;
+     «Исходник» — files из source/ с автоподхватом маской «source/*.epub» */
+  epub: [
+    { name: "input", label: "Исходник", type: "files", dir: "source",
+      ext: [".epub", ".txt"], default: "", autofile: ["source/*.epub"],
+      help: "epub или txt из source/" },
+    { name: "mode", label: "Режим разбивки", type: "select", default: "toc",
+      options: ["toc", "regex", "chunk"],
+      labels: { toc: "По TOC (epub)", regex: "Ручной (regexp)",
+                chunk: "По чанкам" } },
+    { name: "split_patterns", label: "Паттерны разбивки", type: "textarea",
+      default: "", rows: 4, when: [["mode", ["regex"]]] },
+    { name: "clean_text", label: "Предварительная очистка текста глав",
+      type: "bool", default: false },
+    { name: "clean_output", label: "Очистить папки глав перед записью",
+      type: "bool", default: true },
   ],
   /* wiki: тип файлов ОДИН на вход и на вики-главу (when_any), чипсы типов
      скрытым полем types — счётчики считаются срезом top-N по count */
@@ -1317,6 +1341,41 @@ function findByClass(node, cls, out = []) {
   }
   return out;
 }
+
+test("запуски epub: исходник автоподхватывается epub из source/", async () => {
+  globalThis.__stageOptions = {
+    source: ["book.epub", "cover.jpg", "notes.txt", "вторая.epub"],
+  };
+  const page = await runStage("epub");
+  const field = (name) => findByClass(page, "field")
+    .find((w) => w._field && w._field.name === name);
+  const sel = field("input")._input._sel;
+  /* автоподхват: первый epub пула, а не txt и не обложка */
+  assert.equal(sel.value, "book.epub");
+  /* режим toc принимает только epub — txt в список не попадает */
+  assert.deepEqual(sel.children.map((o) => o.value),
+    ["", "book.epub", "вторая.epub"]);
+  /* чекбоксы стадии: дефолты реестра (очистка текста выключена) */
+  assert.equal(field("clean_text")._input.checked, false);
+  assert.equal(field("clean_output")._input.checked, true);
+  /* паттерны разбивки — поле режима regexp: в toc-режиме оно скрыто
+     классом (узел живёт в DOM), значения неприменимых полей остаются */
+  const sp = field("split_patterns");
+  assert.ok(sp, "узел поля режима в DOM");
+  assert.equal(sp.classList.contains("hidden"), true, "в toc-режиме скрыто");
+  /* смена режима на chunk: txt возвращается в список, выбор не теряется */
+  const modeSel = field("mode")._input;
+  modeSel.value = "chunk";
+  /* ВСЕ слушатели смены режима: первым стоит хранитель значения,
+     вторым — epub-пересборка селекта исходника */
+  modeSel.dispatchEvent({ type: "change" });
+  await tick();
+  const sel2 = field("input")._input._sel;
+  assert.deepEqual(sel2.children.map((o) => o.value),
+    ["", "book.epub", "notes.txt", "вторая.epub"]);
+  assert.equal(sel2.value, "book.epub", "подхват сохранён");
+  delete globalThis.__stageOptions;
+});
 
 test("запуски: профиль LLM — первое поле формы стадии", async () => {
   const page = await runStage("ner");

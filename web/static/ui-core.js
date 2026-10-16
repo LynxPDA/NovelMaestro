@@ -874,6 +874,32 @@
       return "";
     },
 
+    /* ── автоподхват файла поля из пула опций (autofile реестра) ──
+     * Кандидат — «dir/имя файла» или маска «source/*.epub»: «*» — любой
+     * текст имени, берётся ПЕРВЫЙ файл пула с этим расширением (пул от
+     * сервера отсортирован, выбор детерминирован). Возвращает ИМЯ файла
+     * (не путь) или "": в пуле такого файла нет — подхватывать нечего. */
+    autofileValue: (f, options) => {
+      var cands = f && f.autofile ? [].concat(f.autofile) : [];
+      var opts = options || {};
+      for (var i = 0; i < cands.length; i++) {
+        var parts = String(cands[i]).replace(/\\/g, "/").split("/");
+        var base = parts.pop();
+        // кандидат без своего «dir/» ищется в пуле папки самого поля
+        var dir = parts.length ? parts.join("/") : (f.dir || "");
+        var pool = dir === "source" ? opts.source || []
+          : dir === "prompts" ? opts.prompts || [] : opts.root || [];
+        if (!base.includes("*")) {
+          if (pool.includes(base)) return base;
+          continue;
+        }
+        var ext = base.split("*").pop().toLowerCase();
+        var hit = pool.find((n) => String(n).toLowerCase().endsWith(ext));
+        if (hit) return hit;
+      }
+      return "";
+    },
+
     /* ── валидация кегля рендера: значение из опций, иначе дефолт ── */
     clampFont: (n, options, def) => {
       var v = parseInt(n, 10);
