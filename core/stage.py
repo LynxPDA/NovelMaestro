@@ -502,7 +502,7 @@ def check_prompt(args: argparse.Namespace, name: str, contract,
             log.warning("⚠️ промпт: %s", line)
     for line in res["notes"]:
         log.info("ℹ %s", line)
-    log.info("✅ Проверка промпта: %s (%d замечаний)", path, len(res["problems"]))
+    log.info("✅ Проверка промпта: %s (замечаний: %d)", path, len(res["problems"]))
     return True
 
 
