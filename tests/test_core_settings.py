@@ -15,10 +15,15 @@ from core import settings as S
 
 # то, что осталось параметрами запуска (не настройки): сверяем полноту
 RUN_PARAMS = {
-    "start", "end", "input", "file", "action", "replacements", "dict_file",
+    "input", "file", "action", "replacements", "dict_file",
     "rules_file", "examples_file", "cover", "epub_meta", "donate_file",
     "prompt_file",
 }
+#: диапазон глав — параметр запуска вне реестра: своих стадийных ключей нет
+RANGE_NAMES = ("start", "end")
+RANGE_STAGES = {"pipeline", "ner", "ner_check", "translate_check",
+                "translate_check_llm", "translate_quality", "compile", "wiki",
+                "batch_replace"}
 # старые имена LLM-полей стадий, которые свёрнуты в одну общую настройку
 ALIAS = {"retries": "max_retries", "jobs": "threads"}
 # поле выбора профиля LLM — не настройка реестра: состояние браузера стадии
@@ -384,6 +389,25 @@ def test_with_llm_takes_profile_from_form(global_env):
     # без поля — General (значения общего конфига)
     plain = S.with_llm("ner", {"start": "1"})
     assert plain["model"] == S.effective("MODEL")
+
+
+def test_chapter_range_lives_outside_registry(global_env):
+    """Диапазон глав — общий параметр запуска стадии, а не настройка книги."""
+    assert set(S.RANGE_STAGES) == RANGE_STAGES
+    for stage in sorted(RANGE_STAGES):
+        fields = [f for f in S.form_fields(stage) if f["name"] in RANGE_NAMES]
+        assert [f["name"] for f in fields] == list(RANGE_NAMES), stage
+        assert all(f["noenv"] and f["default"] == "" for f in fields), stage
+    assert not S.range_fields("epub"), "разметка epub диапазона не принимает"
+    # своих ключей в реестре нет — в общий .env диапазон не пишется вовсе
+    assert not [s.key for s in S.SETTINGS if s.name in RANGE_NAMES]
+    assert S.write_values({"COMPILE_START": "1", "WIKI_END": "9"}) == []
+    # условие режима — у самих полей: ner_check — только RAG, wiki — только главы
+    assert S.range_applies("compile", {})
+    assert S.range_applies("ner_check", {"passes": "rag"})
+    assert not S.range_applies("ner_check", {"passes": "whole"})
+    assert S.range_applies("wiki", {"source": "chapters"})
+    assert not S.range_applies("wiki", {"source": "file"})
 
 
 def test_run_params_marked_and_never_written(global_env):

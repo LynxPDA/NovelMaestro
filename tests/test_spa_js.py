@@ -378,7 +378,9 @@ def test_ner_check_rag_ui_present():
     # ручной блок в SPA, а when у самой настройки
     for nm in ("RAG_TERMS", "RAG_SOURCE_TYPE", "RAG_BUDGET"):
         assert nm in st, nm
-    assert st.count('when=(("passes", ("rag",)),)') >= 5
+    assert st.count('when=(("passes", ("rag",)),)') >= 4
+    # диапазон глав в RAG-режиме скрыт тем же when: он описан у общих полей
+    assert 'RANGE_STAGES' in st and '"ner_check": (("passes", ("rag",)),)' in st
     cli = (REPO / "cli" / "ner_check.py").read_text(encoding="utf-8")
     assert "load_rag_prompt(args.rag_prompt_file or args.prompt_file" in cli
     # автоподхват ner_check_prompt.txt остался в общем «Промпт-файле»

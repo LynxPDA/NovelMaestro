@@ -31,17 +31,22 @@ log = logging.getLogger("web.stages")
 # ── типы полей ─────────────────────────────────────────────────────────
 # text / number / bool / select / files (select из папки проекта) /
 # range (start-end) / password
+# диапазон глав (start/end) — вне реестра настроек: его даёт форма запуска
 
 
-def _range_argv(name: str, form: dict, start_key: str = "start",
-                end_key: str = "end") -> list[str]:
+def _range_argv(form: dict) -> list[str]:
+    """Диапазон глав в argv стадии.
+
+    Диапазон — параметр запуска книги вне реестра: значения приходят из формы
+    запуска (браузер предзаполняет их первой и последней главой книги), пусто
+    означает «вся книга» и в argv не попадает. build_command пропускает форму
+    через applicable_form, поэтому поля уже отфильтрованы по режиму стадии.
+    """
     out = []
-    start = form.get(start_key)
-    end = form.get(end_key)
-    if start not in (None, ""):
-        out += [f"--{start_key}", str(start)]
-    if end not in (None, ""):
-        out += [f"--{end_key}", str(end)]
+    for key in ("start", "end"):
+        v = form.get(key)
+        if v not in (None, ""):
+            out += [f"--{key}", str(v)]
     return out
 
 
@@ -141,7 +146,7 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
     argv = ["cli/translate_check.py"]
     check_type = str(form.get("check_type") or "polished")
     argv += ["--check-type", check_type]
-    argv += _range_argv("start", form)
+    argv += _range_argv(form)
     if form.get("exclude_words"):
         argv += ["--exclude-words", str(form["exclude_words"])]
     if form.get("sensitivity") not in (None, ""):
@@ -158,7 +163,7 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
 def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
     mode = str(form.get("mode", "txt"))
     argv = ["cli/clean_and_compile.py", "--mode", mode]
-    argv += _range_argv("start", form)
+    argv += _range_argv(form)
     if form.get("source_type"):
         argv += ["--source-type", str(form["source_type"])]
     # разбивка на части по «Глав в части» (>0) — для любого режима;
@@ -194,7 +199,7 @@ def build_batch_replace(form: dict, ctx: dict) -> list[str]:
         argv += ["--replace", line]
     if form.get("type"):
         argv += ["--type", str(form["type"])]
-    argv += _range_argv("start", form)
+    argv += _range_argv(form)
     # --dry-run на этапе формы не нужен: предпросмотр изменений —
     # панель «Предпросмотр замен» по выбранной главе (SPA →
     # POST /api/stages/batch_replace/preview)
@@ -211,7 +216,7 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
     action = form.get("action")
     if action not in (None, ""):
         argv += ["--action", str(action)]
-    argv += _range_argv("pipeline", form)
+    argv += _range_argv(form)
     # потоки — общие (--threads из _llm_argv): распределение на главы/чанки
     # считает сам pipeline.py
     # пороги count: ner_block и имена (пусто/0 = фильтр выключен);
@@ -260,7 +265,7 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
     обоих случаев.
     """
     argv = ["cli/ner.py", "--compile_chapters"]
-    argv += _range_argv("start", form)
+    argv += _range_argv(form)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
     for name, flag in (("chunk_size", "--chunk_size"),):
@@ -314,7 +319,7 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--rag_terms", str(form["rag_terms"])]
     if form.get("rag_source_type"):
         argv += ["--rag_source_type", str(form["rag_source_type"])]
-    argv += _range_argv("start", form)
+    argv += _range_argv(form)
     if form.get("rag_budget") not in (None, ""):
         argv += ["--rag_budget", str(form["rag_budget"])]
     if form.get("rag_chunk_size") not in (None, ""):
@@ -349,7 +354,7 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
             if form.get(flag):
                 argv.append(f"--{flag.replace('_', '-')}")
         return argv
-    argv += _range_argv("translate_check_llm", form)
+    argv += _range_argv(form)
     # папка глав всегда ./chapters (дефолт скрипта, cwd = проект)
     if form.get("type"):
         argv += ["--type", str(form["type"])]
@@ -382,7 +387,7 @@ def build_translate_quality(form: dict, ctx: dict) -> list[str]:
     (фиксирован), артефакты чанков — tmp/quality/.
     """
     argv = ["cli/translate_quality.py"]
-    argv += _range_argv("translate_quality", form)
+    argv += _range_argv(form)
     if form.get("type"):
         argv += ["--type", str(form["type"])]
     if form.get("prompt_file"):
@@ -418,7 +423,7 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
         argv += ["--type", str(form["type"])]
     if src == "chapters":
         argv.append("--compile-chapters")
-        argv += _range_argv("start", form)
+        argv += _range_argv(form)
     elif form.get("file"):
         argv.append(str(form["file"]))
     if as_chapter:

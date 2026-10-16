@@ -277,8 +277,6 @@ GROUPS: tuple = (
                 help="нечёткий поиск терминов по n-граммам: доля перекрытия; точные вхождения ищутся всегда", stage="pipeline"),
             _s("PIPELINE_NER_NGRAM", "Размер n-грамм поиска терминов", "number", "3", hidden=True,
                 help="окно сравнения (символы)", stage="pipeline"),
-            _s("PIPELINE_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="pipeline", run=True),
-            _s("PIPELINE_END", "Конечная глава", "number", "", stage="pipeline", run=True),
             _s("PIPELINE_NER_MIN_COUNT", "Мин. count для глоссария ({ner_block})", "number", "0", help="термины с count ниже порога НЕ попадают в {ner_block}; 0 — фильтр выключен (все найденные)",
                 stage="pipeline", when=(("action", ("1", "2", "5", "6", "7", "8", "9")),)),
             _s("PIPELINE_NER_FIELDS", "", "hidden", "term,type,translation,aliases", noenv=True, stage="pipeline", when=(("action", ("1", "2", "5", "6", "7", "8", "9")),)),
@@ -289,8 +287,6 @@ GROUPS: tuple = (
     # ── Глоссарий ──
     _group("glossary", "Глоссарий",
         _block("ner", STAGE_TITLES["ner"],
-            _s("NER_START", "Начальная глава (ГЛАВЫ)", "number", "", help="сборка глав chapters/*/chapter.txt в память; пусто = с первой", stage="ner", run=True),
-            _s("NER_END", "Конечная глава (ГЛАВЫ)", "number", "", help="сборка глав в память; пусто = до последней", stage="ner", run=True),
             _s("NER_PROMPT_FILE", "Промпт-файл (теги pass1/pass2)", "files", "ner_prompt.txt", dir="prompts", ext=(".txt",), stage="ner", run=True),
             _s("NER_CHUNK_SIZE", "Размер чанка, ТОКЕНЫ", "number", "5500", stage="ner"),
             _s("NER_THRESHOLD", "Порог дедупликации (0–1)", "number", "0.75", stage="ner"),
@@ -331,16 +327,12 @@ GROUPS: tuple = (
             _s("NER_CHECK_RAG_TERMS", "RAG: список терминов", "textarea", "", help="Каждый термин с новой строки; тип/перевод подтягиваются из ner.json; нужен режим «rag»", stage="ner_check", when=(("passes", ("rag",)),)),
             _s("NER_CHECK_RAG_SOURCE_TYPE", "RAG: тип исходного файла", "select", "", options=("", "chapter", "translated", "redacted", "polished"),
                 help="Из какого файла главы собирается текст книги для FTS5-поиска (сборка в память, файл не пишется)", stage="ner_check", when=(("passes", ("rag",)),)),
-            _s("NER_CHECK_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="ner_check", run=True, when=(("passes", ("rag",)),)),
-            _s("NER_CHECK_END", "Конечная глава", "number", "", stage="ner_check", run=True, when=(("passes", ("rag",)),)),
             _s("NER_CHECK_TYPES", "", "hidden", "", noenv=True, stage="ner_check", when=(("passes", ("whole", "types")),)),
             _s("NER_CHECK_FIELDS", "", "hidden", "term,type,translation", noenv=True, stage="ner_check"),
         ),
         _block("translate_check", STAGE_TITLES["translate_check"],
             _s("TRANSLATE_CHECK_CHECK_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated"),
                 help="polished → сравнивается с redacted (соседняя стадия) и chapter (оригинал); redacted → с translated и chapter; translated → только с chapter", stage="translate_check"),
-            _s("TRANSLATE_CHECK_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="translate_check", run=True),
-            _s("TRANSLATE_CHECK_END", "Конечная глава", "number", "", stage="translate_check", run=True),
             _s("TRANSLATE_CHECK_EXCLUDE_WORDS", "Слова-исключения (через запятую)", "text", "",
                 help="Совпадения regexp-проверок, совпадающие с этими словами целиком, в отчёт не попадают (например «Linux», если латиница в тексте допустима); пусто = ничего не исключается", stage="translate_check"),
             _s("TRANSLATE_CHECK_SENSITIVITY", "Чувствительность проверки объёма (0 = нет)", "number", "5", min=0,
@@ -356,8 +348,6 @@ GROUPS: tuple = (
         ),
         _block("translate_check_llm", STAGE_TITLES["translate_check_llm"],
             _s("TRANSLATE_CHECK_LLM_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated"), stage="translate_check_llm"),
-            _s("TRANSLATE_CHECK_LLM_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="translate_check_llm", run=True),
-            _s("TRANSLATE_CHECK_LLM_END", "Конечная глава", "number", "", stage="translate_check_llm", run=True),
             _s("TRANSLATE_CHECK_LLM_REQUEST_BUDGET", "Бюджет запроса, ТОКЕНЫ", "number", "25000",
                 help="главы одного пакета (+ запас 200 токенов на промпт, оценка); глава крупнее бюджета — режется на чанки; пакет — один LLM-запрос", stage="translate_check_llm"),
             _s("TRANSLATE_CHECK_LLM_PROMPT_FILE", "Промпт-файл (тег prompt_translate_check)", "files", "translate_check_prompt.txt", dir="prompts", ext=(".txt",), stage="translate_check_llm", run=True),
@@ -366,8 +356,6 @@ GROUPS: tuple = (
             _s("TRANSLATE_CHECK_LLM_MAX_CHANGED_CHARS", "Макс. изменённых символов, СИМВОЛЫ (0 = нет)", "number", "0", stage="translate_check_llm", help="длиннее — правка отбрасывается"),
         ),
         _block("translate_quality", STAGE_TITLES["translate_quality"],
-            _s("TRANSLATE_QUALITY_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="translate_quality", run=True),
-            _s("TRANSLATE_QUALITY_END", "Конечная глава", "number", "", stage="translate_quality", run=True),
             _s("TRANSLATE_QUALITY_TYPE", "Тип файлов глав", "select", "polished", options=("chapter", "translated", "redacted", "polished"),
                 help="какой файл главы сравнивается с оригиналом: подставляется в {translated_text} промпта, chapter.txt — в {original_text}", stage="translate_quality"),
             _s("TRANSLATE_QUALITY_PROMPT_FILE", "Промпт-файл", "files", "translate_quality_prompt.txt", dir="prompts", ext=(".txt",), autofile="prompts/translate_quality_prompt.txt",
@@ -415,8 +403,6 @@ GROUPS: tuple = (
         _block("compile", STAGE_TITLES["compile"],
             _s("COMPILE_MODE", "Режим", "select", "txt", options=("txt", "txt-plain", "epub", "fb2"), labels={'txt': "TXT (Rulate)", 'txt-plain': "TXT", 'epub': "EPUB", 'fb2': "FB2"},
                 help="TXT (Rulate) — заголовки «# [Название :|: N]» для загрузки на rulate; TXT — обычный txt без rulate-форматирования", stage="compile"),
-            _s("COMPILE_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="compile", run=True),
-            _s("COMPILE_END", "Конечная глава", "number", "", stage="compile", run=True),
             _s("COMPILE_SOURCE_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated", "chapter"), stage="compile"),
             _s("COMPILE_CHUNK_SIZE", "Глав в части", "number", "", help="указано (>0) — диапазон разбивается на части по столько глав (файл на каждую часть), для любого режима; пусто/0 = без разбивки",
                 stage="compile"),
@@ -431,8 +417,6 @@ GROUPS: tuple = (
                 stage="compile", run=True, when=(("mode", ("epub", "fb2")),)),
         ),
         _block("wiki", STAGE_TITLES["wiki"],
-            _s("WIKI_START", "Начальная глава (ГЛАВЫ)", "number", "", help="при источнике «Собрать из глав»; пусто = с первой", stage="wiki", run=True, when=(("source", ("chapters",)),)),
-            _s("WIKI_END", "Конечная глава (ГЛАВЫ)", "number", "", help="при источнике «Собрать из глав»; пусто = до последней", stage="wiki", run=True, when=(("source", ("chapters",)),)),
             _s("WIKI_SOURCE", "Источник текста", "select", "chapters", options=("txt", "chapters"), labels={'txt': "Готовый txt", 'chapters': "Собрать из глав"},
                 help="txt — готовый скомпилированный файл; «собрать из глав» — склейка chapters/* в память (как в Создании глоссария)", stage="wiki"),
             _s("WIKI_FILE", "Входной txt новеллы (перевод)", "files", "", ext=(".txt",), help="нужен при источнике «Готовый txt»", stage="wiki", run=True, when=(("source", ("txt",)),)),
@@ -462,8 +446,6 @@ GROUPS: tuple = (
                 help="Формат: паттерн -> замена (чистый стандартный regexp, Python re, MULTILINE: «^»/«$» — начало/конец СТРОКИ). Пустая правая часть — УДАЛЕНИЕ: «<div>.*?</div> ->». Пробелы в паттерне значимы; регистр и прочие режимы — стандартными inline-флагами ((?i)…); комментариев и кастомных флагов нет («#» — литерал в паттерне). Примеры: «Глава \\d+ -> Глава №\\g<0>», «(?i)бессмертный -> Бессмертный», «\\s+ -> » (сжать пробелы), «^  ->» (отступ строки), «^(第\\d+章.*)\\x0a(?=\\1$) ->» (строка-дубликат заголовка главы). BATCH_REPLACE_REPLACEMENTS в .env — в .env одной строкой, переносы строк как «\\n»; перенос внутри паттерна пишется «\\x0a», иначе правило разрезается пополам",
                 stage="batch_replace", run=True),
             _s("BATCH_REPLACE_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated", "chapter"), stage="batch_replace"),
-            _s("BATCH_REPLACE_START", "Начальная глава (ГЛАВЫ)", "number", "", stage="batch_replace", run=True),
-            _s("BATCH_REPLACE_END", "Конечная глава", "number", "", stage="batch_replace", run=True),
         ),
         _block("history", "История (контрольные точки)",
             _s("HISTORY_ON_APPLY", "Точка при применении правок", "bool", True,
@@ -474,6 +456,35 @@ GROUPS: tuple = (
 
     ),
 )
+
+# ════════════════════════════════════════════════════════════════════
+# диапазон глав: параметр запуска книги, а не настройка общего .env
+# ════════════════════════════════════════════════════════════════════
+# Диапазон у каждой книги свой и определяется при запуске: форма запусков
+# показывает одну строку «Главы: [start] – [end]» и предзаполняет её первой
+# и последней главой книги, а изменённое значение хранит браузер. Своих
+# ключей <STAGE>_START / <STAGE>_END у стадий нет намеренно: у книги своего
+# .env нет, а один общий диапазон на все книги не бывал верным.
+#: общие поля диапазона: (ключ, метка, подсказка)
+RANGE_FIELDS: tuple = (
+    ("START", "Начальная глава (ГЛАВЫ)",
+     "пусто = с первой главы книги; значение хранит браузер"),
+    ("END", "Конечная глава (ГЛАВЫ)",
+     "пусто = до последней главы книги; значение хранит браузер"),
+)
+#: стадии, которым нужен диапазон, и условие, когда он их касается: пара
+#: (поле режима, значения) — та же форма, что у Setting.when; пусто — всегда
+RANGE_STAGES: dict = {
+    "pipeline": (),
+    "ner": (),
+    "ner_check": (("passes", ("rag",)),),
+    "translate_check": (),
+    "translate_check_llm": (),
+    "translate_quality": (),
+    "compile": (),
+    "wiki": (("source", ("chapters",)),),
+    "batch_replace": (),
+}
 
 # Плоские индексы: порядок реестра — единственный порядок показа.
 SETTINGS: tuple = tuple(s for g in GROUPS for b in g.blocks for s in b.settings)
@@ -528,9 +539,36 @@ def groups() -> tuple:
     return GROUPS
 
 
+def range_settings(stage: str) -> tuple:
+    """Поля диапазона глав стадии (пусто — стадия диапазона не принимает).
+
+    Диапазон один на все стадии, поэтому поля не реестровые: метаданные
+    общие, условие режима общее, в .env они не пишутся (noenv). Значения
+    полям даёт форма запусков — браузер предзаполняет их первой и последней
+    главой книги."""
+    if stage not in RANGE_STAGES:
+        return ()
+    return tuple(Setting(key, label, "number", "", noenv=True, run=True,
+                         help=hint, when=RANGE_STAGES[stage], stage=stage)
+                 for key, label, hint in RANGE_FIELDS)
+
+
+def range_fields(stage: str) -> list:
+    """Поля диапазона глав для спеки стадии (dict-форма payload'а)."""
+    return [s.form_field() for s in range_settings(stage)]
+
+
+def range_applies(stage: str, form: dict) -> bool:
+    """Касается ли диапазон глав текущего режима стадии (то же условие, что у поля)."""
+    return all(applies(s, form) for s in range_settings(stage))
+
+
 def stage_fields(stage: str) -> tuple:
-    """Все поля формы стадии в порядке реестра (настройки + параметры запуска)."""
-    return tuple(s for s in SETTINGS if s.stage == stage)
+    """Все поля формы стадии: настройки реестра в его порядке, затем диапазон глав.
+
+    В форме запусков диапазон рисуется первой строкой («Главы: [start] –
+    [end]»), поэтому его порядок в payload'а не важен."""
+    return tuple(s for s in SETTINGS if s.stage == stage) + range_settings(stage)
 
 
 def settings_of(stage: str = "") -> tuple:

@@ -1083,13 +1083,18 @@ def test_compile_cover_meta_fields():
     assert "no_donate" not in by_name and "no_fb2_cover" not in by_name
 
 
-def test_wiki_range_fields_first():
-    """wiki: диапазон глав (start/end) — ПЕРЕД «Источник текста»."""
+def test_wiki_range_fields_last():
+    """wiki: диапазон глав — общие поля диапазона в конце спеки, с условием режима.
+
+    Порядок в payload'а роли не играет: в форме запусков диапазон рисуется
+    первой строкой («Главы: [start] – [end]») независимо от позиции в спеке."""
     spec = STAGE_SPECS["wiki"]
     names = [f["name"] for f in spec["fields"]]
-    assert names.index("start") < names.index("source")
-    assert names.index("end") < names.index("source")
+    assert names[-2:] == ["start", "end"]
     assert names.index("source") < names.index("file")
+    by_name = {f["name"]: f for f in spec["fields"]}
+    for name in ("start", "end"):
+        assert by_name[name]["when"] == (("source", ("chapters",)),), name
 
 
 def test_build_ner_context_max_len():
