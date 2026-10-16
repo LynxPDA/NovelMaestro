@@ -87,6 +87,21 @@ def _llm_argv(form: dict, ctx: dict, stage: str = "") -> list[str]:
     return argv
 
 
+def _bool_argv(form: dict, name: str, on: str, off: str) -> list[str]:
+    """Bool-поле формы запусков в argv: явный флаг в обе стороны.
+
+    Дефолт bool-настройки реестра нередко «включена», а
+    core.settings.apply_cli_defaults переносит его в дефолт argparse, поэтому
+    отсутствие флага в argv не отличить от снятого чекбокса: снятая
+    «Двухпроходная схема» уезжала в запуск двухпроходной. Поле едет всегда —
+    либо on, либо off (у скрипта на оба полюса одна опция
+    argparse.BooleanOptionalAction). Поля нет в форме — стадия на дефолте.
+    """
+    if name not in form:
+        return []
+    return [on if core_settings.is_on(form[name]) else off]
+
+
 def _epub_lines(value) -> list[str]:
     """Строки textarea-поля epub (по одному паттерну на строку)."""
     if not value:
@@ -124,19 +139,19 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
     if form.get("chunk_size") not in (None, ""):
         argv += ["--chunk-size", str(form["chunk_size"])]
     # маска нужна и в chunk-режиме, и при переопределении названий
-    if (mode == "chunk" or form.get("rename_chapters")) and form.get(
-            "chunk_mask"):
+    if (mode == "chunk" or core_settings.is_on(form.get("rename_chapters"))) \
+            and form.get("chunk_mask"):
         argv += ["--chunk-mask", str(form["chunk_mask"])]
-    if form.get("rename_chapters"):
-        argv.append("--rename-chapters")
+    argv += _bool_argv(form, "rename_chapters", "--rename-chapters",
+                       "--no-rename-chapters")
     if form.get("title_limit") not in (None, ""):
         argv += ["--title-limit", str(form["title_limit"])]
     if form.get("num_offset") not in (None, ""):
         argv += ["--num-offset", str(form["num_offset"])]
     if form.get("output_type") not in (None, "", "chapter"):
         argv += ["--output-type", str(form["output_type"])]
-    if form.get("clean_output"):
-        argv += ["--clean-output"]
+    argv += _bool_argv(form, "clean_output", "--clean-output",
+                       "--no-clean-output")
     return argv
 
 
@@ -155,8 +170,8 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--regexp-check", line]
     if form.get("min_file_size") not in (None, ""):
         argv += ["--min-file-size", str(form["min_file_size"])]
-    if form.get("sequence_check", True) in (False, "0", 0):
-        argv.append("--no-sequence-check")
+    argv += _bool_argv(form, "sequence_check", "--sequence-check",
+                       "--no-sequence-check")
     return argv
 
 
@@ -275,8 +290,9 @@ def build_ner(form: dict, ctx: dict) -> list[str]:
         argv += ["--threshold", str(form["threshold"])]
     if form.get("ngram") not in (None, ""):
         argv += ["--ngram", str(form["ngram"])]
-    if form.get("two_pass"):
-        argv.append("--two-pass")
+    # двухпроходная схема едет в argv всегда: включена явно или снята
+    # (--no-two-pass), иначе дефолт реестра «включена» не отличить от галки
+    argv += _bool_argv(form, "two_pass", "--two-pass", "--no-two-pass")
     if form.get("keep_fields"):
         argv += ["--keep-fields", str(form["keep_fields"])]
     if form.get("context_max_len") not in (None, ""):
@@ -333,8 +349,8 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
         argv += ["-c", str(form["count_threshold"])]
     # замок: зафиксированные записи с проверки снимаются целиком (флаг без
     # значения); снятая настройка — проверяются как раньше
-    if form.get("skip_locked"):
-        argv.append("--skip_locked")
+    argv += _bool_argv(form, "skip_locked", "--skip_locked",
+                       "--no-skip_locked")
     if form.get("fields"):
         argv += ["--fields", str(form["fields"])]
     argv += _llm_argv(form, ctx, "ner_check")
@@ -418,7 +434,9 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
     src = form.get("source") or "chapters"
     fmt = form.get("format") or "md"
     output = str(form.get("output") or "wiki.md")
-    as_chapter = bool(form.get("as_chapter"))
+    # «Сохранить как главу» — явный флаг в обе стороны (см. _bool_argv)
+    argv += _bool_argv(form, "as_chapter", "--as-chapter", "--no-as-chapter")
+    as_chapter = core_settings.is_on(form.get("as_chapter", False))
     if form.get("type"):
         argv += ["--type", str(form["type"])]
     if src == "chapters":
@@ -426,21 +444,17 @@ def build_wiki(form: dict, ctx: dict) -> list[str]:
         argv += _range_argv(form)
     elif form.get("file"):
         argv.append(str(form["file"]))
-    if as_chapter:
-        argv.append("--as-chapter")
-    else:
+    if not as_chapter:
+        # обычный режим: формат вывода, оглавление и якоря (у вики-главы их нет)
         if fmt == "rulate-md":
             argv.append("--rulate-mode")
         elif fmt == "rulate-html":
             argv.append("--rulate-html")
             if output == "wiki.md":
                 output = "wiki.txt"
-        toc_on = form.get("toc", True)
-        links_on = form.get("toc_links", True)
-        if toc_on in (False, "0", 0):
-            argv.append("--no-toc")
-        if links_on in (False, "0", 0):
-            argv.append("--no-toc-links")
+        argv += _bool_argv(form, "toc", "--toc", "--no-toc")
+        argv += _bool_argv(form, "toc_links", "--toc-links",
+                           "--no-toc-links")
         if output:
             argv += ["--output", output]
     # ner_file не передаётся: глоссарий — всегда ner.json (дефолт CLI)

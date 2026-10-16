@@ -860,7 +860,7 @@ def test_build_translate_check():
     assert "--min-file-size" in argv6
     assert argv6[argv6.index("--min-file-size") + 1] == "5000"
     assert "--no-sequence-check" in argv6
-    # дефолты: пустые/включённые — флагов нет
+    # полей, которых в форме нет, в argv вообще не появляется
     argv7 = build_command("translate_check",
                           {"check_type": "polished"}, {})
     for flag in ("--min-file-size", "--header-regexp",
@@ -874,6 +874,7 @@ def test_build_translate_check():
     argv8 = build_command("translate_check",
                           {"check_type": "polished",
                            "sequence_check": True}, {})
+    assert "--sequence-check" in argv8
     assert "--no-sequence-check" not in argv8
 
 
@@ -2459,8 +2460,67 @@ def test_stream_sse(jobs_srv, fake_script):
 
 def test_build_ner_check_skip_locked():
     """Замок: настройка формы «Не проверять зафиксированные» уходит в argv
-    флагом --skip_locked (значение не передаётся), снятая — флага нет."""
+    флагом --skip_locked, снятая — противоположным --no-skip_locked."""
     argv = build_command("ner_check", {"skip_locked": True}, {})
-    assert "--skip_locked" in argv
+    assert "--skip_locked" in argv and "--no-skip_locked" not in argv
     argv2 = build_command("ner_check", {"skip_locked": False}, {})
-    assert "--skip_locked" not in argv2 and "--no-skip_locked" not in argv2
+    assert "--no-skip_locked" in argv2 and "--skip_locked" not in argv2
+
+
+# bool-поля форм: (стадия, поле, флаг «включено», флаг «выключено»,
+# остальные поля формы, нужные чтобы поле было применимо)
+_BOOL_FIELDS = [
+    ("ner", "two_pass", "--two-pass", "--no-two-pass", {}),
+    ("ner_check", "skip_locked", "--skip_locked", "--no-skip_locked", {}),
+    ("epub", "clean_output", "--clean-output", "--no-clean-output",
+     {"input": "book.epub"}),
+    ("epub", "rename_chapters", "--rename-chapters", "--no-rename-chapters",
+     {"input": "book.epub"}),
+    ("translate_check", "sequence_check", "--sequence-check",
+     "--no-sequence-check", {}),
+    ("wiki", "as_chapter", "--as-chapter", "--no-as-chapter", {}),
+    ("wiki", "toc", "--toc", "--no-toc",
+     {"as_chapter": False, "format": "md"}),
+    ("wiki", "toc_links", "--toc-links", "--no-toc-links",
+     {"as_chapter": False, "format": "md"}),
+]
+
+
+@pytest.mark.parametrize("stage,name,on,off,base", _BOOL_FIELDS)
+def test_build_command_bool_flags_both_ways(stage, name, on, off, base):
+    """Снятый чекбокс уезжает в argv явным --no-...: у bool-настроек реестра
+    дефолт «включена», и без флага скрипт взял бы включённый режим."""
+    on_form = dict(base, **{name: True})
+    argv = build_command(stage, on_form, {})
+    assert on in argv and off not in argv, argv
+    off_form = dict(base, **{name: False})
+    argv2 = build_command(stage, off_form, {})
+    assert off in argv2 and on not in argv2, argv2
+    # строки .env («1»/«0») значат то же, что настоящие bool
+    argv3 = build_command(stage, dict(base, **{name: "0"}), {})
+    assert off in argv3 and on not in argv3, argv3
+    # поля нет в форме — стадия остаётся на дефолте реестра, флага нет
+    argv4 = build_command(stage, base, {})
+    assert on not in argv4 and off not in argv4, argv4
+
+
+@pytest.mark.parametrize("stage,name,on,off,base", _BOOL_FIELDS)
+def test_cli_bool_flags_accept_both_polarities(stage, name, on, off, base):
+    """Оба полюса bool-поля принимает и CLI: у флага одна опция
+    argparse.BooleanOptionalAction, историческое написание сохраняет силу."""
+    import importlib
+    scripts = {"ner": "cli.ner", "ner_check": "cli.ner_check",
+               "epub": "cli.epub_to_chapters", "wiki": "cli.wiki",
+               "translate_check": "cli.translate_check"}
+    parser = importlib.import_module(scripts[stage]).build_parser()
+    # дефолт скрипта — то же значение реестра, что и у поля формы: без
+    # флага стадия остаётся именно на нём
+    default = core_settings.defaults(stage)[name]
+    assert core_settings.is_on(parser.get_default(name)) == default, \
+        f"{stage}.{name}: дефолт argparse не из реестра"
+    # команда этой же формы доходит до скрипта настоящим bool
+    argv_on = build_command(stage, dict(base, **{name: True}), {})[1:]
+    argv_off = build_command(stage, dict(base, **{name: False}), {})[1:]
+    assert getattr(parser.parse_args(argv_on), name) is True, f"{stage}: {on}"
+    assert getattr(parser.parse_args(argv_off), name) is False, \
+        f"{stage}: {off}"
