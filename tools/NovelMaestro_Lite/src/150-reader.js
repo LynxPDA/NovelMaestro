@@ -90,8 +90,9 @@
     // экран выглядит зависшим. Призрак — сам оригинал главы бледным текстом; он гаснет
     // по первому токену перевода (или когда призрак показать нечем). Он read-only:
     // ни в глоссарий, ни в книги не пишет и частот не трогает.
-    const GHOST_MARK_LIMIT = 200;   // mark на весь прогон: больше — это уже не подсветка
+    const GHOST_MARK_LIMIT = 400;   // одновременно горящих вспышек: больше — уже не подсветка
     const GHOST_TERM_LIMIT = 20;    // вхождений одного термина в абзаце
+    const GHOST_FLASH_MS = 1400;    // длительность вспышки: обязана совпадать с nm-hit-flash
     const GHOST_FADE_MS = 350;
     let ghostParas = [];
     let ghostRanges = [];   // диапазоны чанков: [startPara, endPara]
@@ -100,16 +101,19 @@
     let ghostFadeTimer = null;
     let ghostFrame = 0;
     let ghostPending = null;        // Set абзацев, ждущих перерисовки в кадре rAF
-    let ghostMarkCount = 0;
     let ghostChunkSeen = -1;        // чанк, к которому уже вели автодогон: он один раз на чанк
     const ghostMarks = new Map();   // абзац → интервалы вспышек (отсортированы, без вложений)
-    const ghostRendered = new Map(); // абзац → интервалы, уже получившие вспышку
+    const ghostRendered = new Map(); // абзац → Map(интервал → когда вспыхнул)
+    const ghostNormCache = new Map(); // текст абзаца → нормализованная карта: записей бывают сотни
 
     /**
      * Нормализованный текст и карта обратно в оригинал: строится ОДИН раз на абзац,
-     * а не на каждый вариант термина — за прогон вариантов бывают сотни.
+     * а не на каждый вариант термина — за прогон вариантов бывают сотни. Готовые
+     * карты держатся в кэше: каждая запись модели ищется по всем абзацам чанка.
      */
     function normalizedMap(text) {
+        const cached = ghostNormCache.get(text);
+        if (cached) return cached;
         const chars = [];
         const back = [];
         let i = 0;
@@ -119,7 +123,9 @@
             for (const c of piece) { chars.push(c); back.push([i, at]); }
             i = at;
         }
-        return { norm: chars.join(''), back };
+        const map = { norm: chars.join(''), back };
+        ghostNormCache.set(text, map);
+        return map;
     }
     /** Интервалы вхождений термина и его алиасов; вложения схлопываются. */
     function termRanges(text, variants) {
@@ -158,29 +164,43 @@
         ghostChunkSeen = -1;
         ghostMarks.clear();
         ghostRendered.clear();
+        ghostNormCache.clear();
         ghostPending = null;
-        ghostMarkCount = 0;
         readerContent.classList.remove('nm-ghost', 'nm-ghost-fade');
         // содержимое трогаем только если оно призрака: перевод в читалке — не его работа
         if (had) readerContent.replaceChildren();
     }
     /**
+     * Кадр вспышки при перерисовке абзаца: `null` — гореть нечему (вспышка отгорела),
+     * иначе — задержка анимации. Отрицательная продолжает вспышку с того же места:
+     * без неё перерисовка обрывала бы горящую анимацию, и вспышка гасла бы рывком
+     * при каждой следующей записи в том же абзаце.
+     */
+    function ghostFlashDelay(startedAt, now) {
+        if (startedAt === undefined) return 0;
+        const elapsed = now - startedAt;
+        return elapsed >= GHOST_FLASH_MS ? null : -elapsed;
+    }
+    /**
      * Накопленные вспышки рисуются одним кадром: записей за секунду бывает много.
-     * Отгоревшие интервалы возвращаются обычным текстом: вспышка гаснет в прозрачность,
+     * Отгоревшие интервалы возвращаются обычным текстом — вспышка гаснет в прозрачность,
      * и оставлять её элементом значило бы заново проигрывать анимацию соседям по абзацу.
      */
     function ghostParagraphNode(text, spans, rendered) {
         const frag = document.createDocumentFragment();
+        const now = Date.now();
         let pos = 0;
         for (const [a, b] of spans || []) {
             if (a < pos) continue;
             if (a > pos) frag.append(text.slice(pos, a));
-            if (rendered && rendered.has(`${a}-${b}`)) {   // вспышка отгорела — просто текст
+            const delay = ghostFlashDelay(rendered && rendered.get(`${a}-${b}`), now);
+            if (delay === null) {   // вспышка отгорела — просто текст
                 frag.append(text.slice(a, b));
             } else {
                 const mark = document.createElement('mark');
                 mark.className = 'nm-hit-new';
                 mark.textContent = text.slice(a, b);
+                if (delay) mark.style.animationDelay = `${delay}ms`;
                 frag.append(mark);
             }
             pos = b;
@@ -194,8 +214,12 @@
         if (!p) return;
         const spans = ghostMarks.get(idx) || [];
         p.replaceChildren(ghostParagraphNode(ghostParas[idx] || '', spans, ghostRendered.get(idx)));
-        const seen = ghostRendered.get(idx) || new Set();
-        for (const [a, b] of spans) seen.add(`${a}-${b}`);
+        const seen = ghostRendered.get(idx) || new Map();
+        const now = Date.now();
+        for (const [a, b] of spans) {
+            const key = `${a}-${b}`;
+            if (!seen.has(key)) seen.set(key, now);
+        }
         ghostRendered.set(idx, seen);
     }
     /** Автодогон к началу чанка — один раз на чанк, и только пока читатель не тронул скролл. */
@@ -245,15 +269,11 @@
     /** Прогресс NER: смена чанка, вспышки терминов по мере работы модели. */
     function ghostProgress(st) {
         if (!ghostActive) return;
-        // чанк начал обрабатываться: подводим читателя к его началу и вспыхиваем
-        // термины глоссария — «вот что здесь уже известно»
-        if (Number.isInteger(st.chunkStart)) {
-            ghostScrollToChunk(st.chunkStart);
-            const range = ghostRanges[st.chunkStart];
-            const known = [];
-            for (const t of (st.matched || [])) known.push(t.term, ...(t.aliases || []));
-            if (range && known.length) ghostQueueMarks(range, known);
-        }
+        // чанк начал обрабатываться: призрак ведёт читателя к его началу. Термины
+        // глоссария здесь НЕ показываются: вспыхивает ровно то, что модель называет
+        // в потоке — справочник и так известен, а пачка на старте чанка съедала
+        // лимит на весь прогон, и записи модели оставались без подсветки
+        if (Number.isInteger(st.chunkStart)) ghostScrollToChunk(st.chunkStart);
         // запись, дописанная моделью в потоке: вспышка ровно ей и сразу — ждать
         // остальные термины ответа незачем, для этого и разбирается поток
         if (st.item && Number.isInteger(st.itemChunk)) {
@@ -263,28 +283,44 @@
         ghostFlush();
     }
     /**
-     * Вспышки копятся до кадра rAF (чанков за секунду бывает несколько), повторное
-     * вхождение уже вспыхнувшего интервала — это тихо: Set держит сами интервалы.
+     * Сколько подсветок горит прямо сейчас. Считаем по времени: вспышка гаснет сама,
+     * и лимит меряет живую подстветку, а не число вспышек за весь прогон — иначе
+     * длинный поток новых терминов упирался бы в потолок и молчал до конца главы.
+     */
+    function ghostActiveMarks() {
+        const now = Date.now();
+        let count = 0;
+        for (const seen of ghostRendered.values()) {
+            for (const at of seen.values()) if (now - at < GHOST_FLASH_MS) count++;
+        }
+        return count;
+    }
+    /**
+     * Вспышки копятся до кадра rAF (записей за секунду бывает много), повторное
+     * вхождение уже вспыхнувшего интервала — это тихо: карта держит сами интервалы.
      */
     function ghostQueueMarks(range, variants) {
+        let room = GHOST_MARK_LIMIT - ghostActiveMarks();
         for (let i = Math.max(0, range[0]); i <= range[1] && i < ghostParas.length; i++) {
             const found = termRanges(ghostParas[i], variants);
             if (!found.length) continue;
             const current = ghostMarks.get(i) || [];
             let changed = false;
             for (const span of found) {
-                if (ghostMarkCount >= GHOST_MARK_LIMIT) break;
+                if (room <= 0) break;
                 const key = `${span[0]}-${span[1]}`;
                 if (current.some(r => `${r[0]}-${r[1]}` === key)) continue;
                 current.push(span);
-                ghostMarkCount++;
+                room--;
                 changed = true;
             }
-            if (!changed) continue;
-            current.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
-            ghostMarks.set(i, current);
-            if (!ghostPending) ghostPending = new Set();
-            ghostPending.add(i);
+            if (changed) {
+                current.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+                ghostMarks.set(i, current);
+                if (!ghostPending) ghostPending = new Set();
+                ghostPending.add(i);
+            }
+            if (room <= 0) break;
         }
     }
     function ghostHide(fade) {

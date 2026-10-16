@@ -234,10 +234,11 @@ def test_lite_ghost_never_outlives_the_work():
         "closeReader не зачищает призрак"
     assert "readerContent.classList.remove('nm-ghost', 'nm-ghost-fade')" in text, \
         "классы призрака остаются на контенте читалки"
-    # вспышки идут по живому потоку: чанк объявляется до ответа (термины глоссария
-    # и автодогон), записи модели вспыхивают по закрытию объекта в потоке
-    assert "if (Number.isInteger(st.chunkStart))" in text and "ghostScrollToChunk(st.chunkStart)" in text, \
-        "вспышки терминов глоссария больше не показываются до ответа модели"
+    # вспышки идут по живому потоку: чанк объявляется до ответа (только автодогон),
+    # записи модели вспыхивают по закрытию объекта в потоке — и только они
+    assert "if (Number.isInteger(st.chunkStart)) ghostScrollToChunk(st.chunkStart)" in text, \
+        "смена чанка больше не ведёт читателя к его началу"
+    assert "matched" not in text, "пачка известных терминов на старте чанка вернулась"
     assert "mark.className = 'nm-hit-new'" in text, "запись модели не вспыхивает по мере закрытия в потоке"
     assert "if (st.item && Number.isInteger(st.itemChunk))" in text, \
         "запись модели не вспыхивает по мере закрытия в потоке"
@@ -297,7 +298,9 @@ def test_ghost_goes_before_ner_and_by_first_token_after_it():
 def test_ghost_is_read_only_and_leaves_no_traces():
     """Призрак ничего не пишет в глоссарий, книги и задания — только показывает текст."""
     ghost = body("ghostShow(", "ghostAbort")
-    for forbidden in ("bookGlossary", "dbPut", "jobPut", "GM_setValue", "cacheSet", "count"):
+    # именно запись в состояние, а не локальные переменные: слово «count» живёт и в
+    # счётчике горящих вспышек, который никуда не сохраняется
+    for forbidden in ("Glossary", "dbPut(", "jobPut(", "GM_setValue(", "cacheSet("):
         assert forbidden not in ghost, f"призрак пишет в состояние прогона через {forbidden}"
 
 

@@ -220,14 +220,11 @@
             if (!onProgress) return;
             onProgress({ chunk: i + 1, total: chunks.length, resumed: startChunk, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null, ...(extra || {}) });
         };
-        // что известно про чанк ДО ответа модели: его абзацы — текущая зона работы,
-        // термины глоссария, которые в них уже встречались (лишние поля панель прогресса
-        // игнорирует) — этим призрак читалки ведёт читателя к началу чанка
-        // и вспыхивает известные термины
-        const chunkStart = (i, terms) => emitProgress(i, null, {
-            chunkStart: i,
-            matched: terms.map(t => ({ term: t.term, aliases: t.aliases || [] }))
-        });
+        // чанк начал обрабатываться: призрак ведёт читателя к его началу. Известные
+        // термины глоссария здесь НЕ показываются: вспыхивает ровно то, что модель
+        // называет в потоке. Пачка вспышек на старте чанка съедала лимит на весь
+        // прогон — записи модели оставались без подсветки
+        const chunkStart = (i) => emitProgress(i, null, { chunkStart: i });
         for (let i = 0; i < chunks.length; i++) {
             if (cancelRequested) { canceled = true; break; }
             if (i < startChunk && !missSet.has(i)) { emitProgress(i); continue; }
@@ -240,7 +237,7 @@
                 // какие термины глоссария реально есть в чанке; сам глоссарий до
                 // этого места не менялся, поэтому список не зависит от ответа модели
                 const chunkTerms = findRelevantTerms(chunks[i], glossary);
-                chunkStart(i, chunkTerms);
+                chunkStart(i);
                 const { items, bad } = await requestNerChunk(chunks[i], onChunk, chunkTerms, (item) => {
                     // контракт промпта: существующие термины модель не возвращает —
                     // такая запись в потоке не вспыхивает и вообще не показывается

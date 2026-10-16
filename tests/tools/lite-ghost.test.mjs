@@ -71,6 +71,34 @@ test('термин вне текста интервалов не даёт', () =
   assert.deepEqual(api.termRanges('', ['Ван Линь']), []);
 });
 
+// ── вспышки по потоку ──────────────────────────────────────────────────────────
+
+test('известные термины глоссария вспышек на старте чанка не дают', () => {
+  // вспыхивает ровно то, что модель называет в потоке: пачка известных терминов
+  // выедала лимит на весь прогон, и записи модели оставались без подсветки
+  assert.ok(!/matched/.test(GHOST), 'в призраке осталась пачка известных терминов');
+  const progress = GHOST.slice(GHOST.indexOf('function ghostProgress'), GHOST.indexOf('function ghostHide'));
+  assert.ok(!/ghostQueueMarks/.test(progress.slice(0, progress.indexOf('st.item'))),
+    'старт чанка снова ставит вспышки помимо записей потока');
+});
+
+test('перерисовка абзаца продолжает горящую вспышку, а не начинает её заново', () => {
+  // вспышка длится GHOST_FLASH_MS; при следующей записи в том же абзаце уже
+  // отрисованный интервал получает отрицательную задержку, а отгоревший — null
+  const api2 = new Function('readerContent', 'readerMode', 'config', 'progressStatus',
+    `${SEARCH}\n${GHOST}\nreturn { ghostFlashDelay, GHOST_FLASH_MS };`)(
+    { classList: { add() {}, remove() {} }, replaceChildren() {}, querySelectorAll: () => [] },
+    { addEventListener() {}, removeEventListener() {} },
+    { ghostPreview: true, chunkSize: 10000 },
+    () => {},
+  );
+  const { ghostFlashDelay, GHOST_FLASH_MS } = api2;
+  assert.equal(ghostFlashDelay(undefined, 1000), 0, 'новая вспышка обязана начаться сразу');
+  assert.equal(ghostFlashDelay(900, 1000), -100, 'горящая вспышка не продолжается с места остановки');
+  assert.equal(ghostFlashDelay(1000 - GHOST_FLASH_MS, 1000), null, 'отгоревшая вспышка не признана отгоревшей');
+  assert.ok(GHOST_FLASH_MS === 1400, 'длительность вспышки разошлась с nm-hit-flash в CSS');
+});
+
 // ── диапазоны чанков ───────────────────────────────────────────────────────────
 
 test('чанкование с диапазонами совпадает с обычным чанкованием', () => {
