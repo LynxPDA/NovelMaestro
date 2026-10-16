@@ -135,11 +135,11 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`, `
 | Редактура (redact) | `prompts/pipeline_prompt.txt` | `<redact>` |
 | Полировка (polish) | `prompts/pipeline_prompt.txt` | `<polish>` |
 | NER-извлечение | `prompts/ner_prompt.txt` | `<prompt_pass1>`, `<prompt_pass2>` |
-| Проверка глоссария | `prompts/ner_check_prompt.txt` | — (файл целиком) |
+| Проверка глоссария | `prompts/ner_check_prompt.txt` | `<prompt_ner_check>`, `<prompt_rag>` |
 | Проверка перевода (LLM) | `prompts/translate_check_prompt.txt` | `<prompt_translate_check>` |
 | Wiki-статьи | `prompts/wiki_prompt.txt` | `<prompt_wiki_article>` |
 
-Файл БЕЗ тегов = промпт этапа целиком (допустимый режим «отдельный файл на этап»). Встроенные промпты в скриптах (DEFAULT_*) — только fallback. В конвейере — единый «Общий промпт-файл» с тегами `<translate>/<redact>/<polish>` (`pipeline_prompt.txt` → `prompts.txt` → `translate_book_prompt.txt` при пустом поле формы).
+Промпт стадии читается только из своего тега: файл без него — не «промпт этапа целиком» (режим убран), стадия остаётся на встроенном промпте. Встроенные промпты в скриптах (DEFAULT_*) — только fallback. В конвейере — единый «Общий промпт-файл» с тегами `<translate>/<redact>/<polish>` (`pipeline_prompt.txt` → `prompts.txt` → `translate_book_prompt.txt` при пустом поле формы).
 
 Плейсхолдеры: `{ner_block}`; `{original_text}` — входной текст (translate/polish: тег обязателен, нет — предупреждение в лог, текст дописывается после промпта; redact: внутри `<source_text>`); `{translated_text}` (redact); `{female_names}`, `{male_names}` (polish: имена из ner.json по полю `translation`, пол по наличию `(female)`/`(male)` в `type`).
 

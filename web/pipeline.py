@@ -279,12 +279,12 @@ _STAGE_TAG = {1: "translate", 2: "redact", 3: "polish"}
 
 def warn_missing_prompt_tag(prompt_file: str, stage: int, log,
                             extended: bool = False) -> bool:
-    """Предупреждение, если общий промпт-файл не содержит тега стадии.
+    """Предупреждение, если промпт-файл не содержит тега стадии.
 
-    Файл без тегов — легальный режим «промпт целиком», не ругаемся.
-    Если теги есть, но нужного нет — стадия уйдёт на встроенный промпт.
-    Расширенный перевод (extended): стадия 1 принимает <translate_lr>
-    с фолбэком на <translate> — предупреждение только когда нет обоих.
+    Промпт стадии читается только из своего тега: файл без него — не «промпт
+    целиком», стадия уходит на встроенный промпт (иначе в запрос одной стадии
+    попадала бы задача другой). Расширенный перевод (extended): стадия 1
+    принимает <translate_lr> с фолбэком на <translate>.
     Возвращает True, если тег отсутствует (стадия на встроенном).
     """
     if not prompt_file:
@@ -295,24 +295,14 @@ def warn_missing_prompt_tag(prompt_file: str, stage: int, log,
     except OSError:
         return False
     from core.common import get_tagged_prompt
-    if extended and stage == 1:
-        if (get_tagged_prompt(text, "translate_lr")
-                or get_tagged_prompt(text, "translate")):
-            return False
-        if not any(get_tagged_prompt(text, t) for t in _PROMPT_TAGS):
-            return False
-        log.warning("В промпт-файле %s нет тега <translate_lr>/<translate> "
-                    "— стадия «%s» использует ВСТРОЕННЫЙ промпт",
-                    prompt_file, _STAGE_NAME[stage])
-        return True
-    tag = _STAGE_TAG[stage]
-    if get_tagged_prompt(text, tag):
+    tags = (("translate_lr", "translate") if (extended and stage == 1)
+            else (_STAGE_TAG[stage],))
+    if any(get_tagged_prompt(text, t) for t in tags):
         return False
-    if not any(get_tagged_prompt(text, t) for t in _PROMPT_TAGS):
-        return False
-    log.warning("В промпт-файле %s нет тега <%s> — стадия «%s» "
+    log.warning("В промпт-файле %s нет тега %s — стадия «%s» "
                 "использует ВСТРОЕННЫЙ промпт",
-                prompt_file, tag, _STAGE_NAME[stage])
+                prompt_file, "/".join(f"<{t}>" for t in tags),
+                _STAGE_NAME[stage])
     return True
 
 

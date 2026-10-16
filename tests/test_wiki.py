@@ -182,11 +182,12 @@ def test_load_wiki_prompts_tags(tmp_path):
     assert d["relations_labels"] is None
     assert d["type_order"] is None
 
-    # битый JSON в теге — None без падения
+    # битый JSON в теге — None без падения; файл без тега статьи — не «промпт
+    # целиком»: article отсутствует, вызывающий берёт встроенный промпт
     p.write_text("<wiki_markers>{битый}</wiki_markers>", encoding="utf-8")
     d = WIKI.load_wiki_prompts(str(p), SilentLog())
     assert d["markers"] is None
-    assert d["article"] == "<wiki_markers>{битый}</wiki_markers>"
+    assert "article" not in d
 
 
 # ══════════════════════════════════════════════════════════════════════

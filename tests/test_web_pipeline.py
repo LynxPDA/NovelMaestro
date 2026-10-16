@@ -217,8 +217,9 @@ def test_resolve_prompt_paths(tmp_path, monkeypatch):
 
 
 def test_warn_missing_prompt_tag(tmp_path, monkeypatch):
-    """предупреждение, если в общем промпт-файле нет тега стадии;
-    файл без тегов и пустой путь — без предупреждения."""
+    """предупреждение, если в промпт-файле нет тега стадии; файл без тегов —
+    тот же случай (промпт стадии читается только из своего тега); пустой путь —
+    встроенный промпт без предупреждения."""
     from web.pipeline import warn_missing_prompt_tag
     import logging
     monkeypatch.chdir(tmp_path)
@@ -232,18 +233,17 @@ def test_warn_missing_prompt_tag(tmp_path, monkeypatch):
     class L:
         def warning(self, *a): msgs.append(a)
     # есть тег translate, нет redact
-    warn_missing_prompt_tag(pf, 1, L())
-    assert not msgs
-    warn_missing_prompt_tag(pf, 2, L())
-    assert msgs and msgs[0][2] == "redact"
-    # файл без тегов — легальный режим, без предупреждения
+    assert not warn_missing_prompt_tag(pf, 1, L()) and not msgs
+    assert warn_missing_prompt_tag(pf, 2, L())
+    assert msgs[0][2] == "<redact>" and msgs[0][3] == "redact"
+    # файл без тегов — не «промпт целиком»: стадия на встроенном, сигнал есть
+    msgs.clear()
     (pr / "p.txt").write_text("просто текст", encoding="utf-8")
-    msgs2 = []
-    warn_missing_prompt_tag(pf, 2, L())
-    assert not msgs2
-    # пустой путь — пропуск
-    warn_missing_prompt_tag("", 2, L())
-    assert not msgs2
+    assert warn_missing_prompt_tag(pf, 2, L())
+    assert msgs and msgs[0][2] == "<redact>"
+    # пустой путь — стадия на встроенном без предупреждения
+    msgs.clear()
+    assert warn_missing_prompt_tag("", 2, L()) and not msgs
 
 
 def test_build_stage_cmd_prompt_override(tmp_path):
@@ -450,7 +450,7 @@ def test_warn_missing_prompt_tag_extended(tmp_path, monkeypatch):
     (pr / "p.txt").write_text(
         "<polish>\nП\n</polish>\n", encoding="utf-8")
     assert warn_missing_prompt_tag(pf, 1, L(), extended=True)
-    assert msgs and "translate_lr" in msgs[0][0]
+    assert msgs and msgs[0][2] == "<translate_lr>/<translate>"
     # не-расширенный режим — как раньше (тег translate)
     msgs.clear()
     assert warn_missing_prompt_tag(pf, 1, L(), extended=False)

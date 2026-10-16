@@ -557,7 +557,7 @@ def _load_json_tag(content: str, tag: str, logger, default):
 
 def load_wiki_prompts(filepath: str, logger) -> dict[str, object]:
     """Читает wiki-промпт-файл. Возвращает dict с ключами:
-    article — тег <prompt_wiki_article> (или файл целиком без тегов);
+    article — тег <prompt_wiki_article> (тега нет — None, встроенный промпт);
     markers — <wiki_markers> {тип: [маркеры]} (JSON);
     default_markers — <wiki_default_markers> [маркеры] (JSON);
     type_names_ru — <wiki_type_names_ru> {тип: название} (JSON);
@@ -573,12 +573,14 @@ def load_wiki_prompts(filepath: str, logger) -> dict[str, object]:
         return {}
 
     result: dict[str, object] = {}
+    # промпт статьи — только из своего тега: файл без тегов не «промпт целиком»
     m = get_tagged_prompt(content, "prompt_wiki_article")
     if m:
         result["article"] = m
-
-    if not result:
-        result["article"] = content.strip()
+    else:
+        _log(logger, logging.WARNING,
+             f"⚠️ В {filepath} нет тега <prompt_wiki_article> — промпт статьи "
+             f"ВСТРОЕННЫЙ.")
 
     result["markers"] = _load_json_tag(content, "wiki_markers",
                                         logger, None)

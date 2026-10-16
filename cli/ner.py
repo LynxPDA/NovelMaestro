@@ -540,6 +540,8 @@ def cleanup_stale_resume_files(file_dir: str, logger) -> None:
 
 
 def load_two_pass_prompts(filepath: str, logger) -> tuple[str, str | None]:
+    """Промпты глоссария берутся только из своих тегов <prompt_pass1>/
+    <prompt_pass2>; файла нет или тега нет — встроенный промпт прохода."""
     try:
         with open(filepath, encoding="utf-8") as f:
             content = f.read()
@@ -565,10 +567,10 @@ def load_two_pass_prompts(filepath: str, logger) -> tuple[str, str | None]:
         pass1 = SYSTEM_PROMPT_PASS1
         pass2 = p2
     else:
-        _log(logger, logging.INFO,
-             "📝 Теги не найдены — файл целиком используется как pass1.")
-        pass1 = content.strip()
-        pass2 = None
+        _log(logger, logging.WARNING,
+             "⚠️ В промпт-файле нет тегов <prompt_pass1>/<prompt_pass2> — "
+             "проходы берутся ВСТРОЕННЫМИ: файл без тегов — не «промпт целиком».")
+        pass1, pass2 = SYSTEM_PROMPT_PASS1, None
 
     if not pass1:
         _log(logger, logging.WARNING,

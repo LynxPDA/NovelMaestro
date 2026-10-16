@@ -40,10 +40,10 @@ def test_load_assessment_prompt_tagged(tmp_path):
 
 
 def test_load_assessment_prompt_untagged_fallback(tmp_path):
-    """Файл без тегов — целиком; None — встроенный дефолт."""
+    """Файл без тега стадии — встроенный дефолт (не «промпт целиком»); None — он же."""
     p = tmp_path / "p.txt"
     p.write_text("просто промпт\n", encoding="utf-8")
-    assert TQ.load_assessment_prompt(str(p), LOG) == "просто промпт"
+    assert TQ.load_assessment_prompt(str(p), LOG) == TQ.DEFAULT_PROMPT
     assert TQ.load_assessment_prompt(str(tmp_path / "нет.txt"), LOG) \
         == TQ.DEFAULT_PROMPT
 

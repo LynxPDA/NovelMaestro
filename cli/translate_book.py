@@ -634,21 +634,13 @@ def main(argv=None):
             logger.info(f"📝 Промпт: тег <{tag_used}> из {args.prompt_file} "
                         f"({len(active_prompt)} симв.)")
         else:
-            # файл с ТЕГАМИ, но без тега текущей стадии — предупреждение
-            # и встроенный промпт вместо «файла целиком» (теги бы не
-            # попали в промпт стадии)
-            has_any_tag = any(
-                get_tagged_prompt(custom, t) for t in
-                ("translate_lr", "translate", "redact", "polish")
-            )
-            if has_any_tag:
-                logger.warning(
-                    f"⚠️ В промпт-файле {args.prompt_file} нет тега "
-                    f"<{tag_used}> — используется ВСТРОЕННЫЙ промпт")
-                active_prompt = _builtin_prompt(mode, extended)
-            else:
-                logger.info(f"📝 Промпт (файл целиком, без тегов): "
-                            f"{args.prompt_file} ({len(active_prompt)} симв.)")
+            # промпт стадии берётся только из своего тега: файл без него —
+            # не «промпт целиком», иначе в запрос одной стадии попала бы
+            # задача другой
+            logger.warning(
+                f"⚠️ В промпт-файле {args.prompt_file} нет тега "
+                f"<{tag_used}> — используется ВСТРОЕННЫЙ промпт")
+            active_prompt = _builtin_prompt(mode, extended)
     else:
         active_prompt = _builtin_prompt(mode, extended)
         src = args.prompt_file if args.prompt_file else "(не указан)"

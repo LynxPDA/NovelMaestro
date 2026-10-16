@@ -1067,7 +1067,7 @@ def test_get_prompt_tag_and_comments(tmp_path, monkeypatch):
     """Тег <prompt_ner_check> извлекается из файла; комментарии вне
     тега (# …) в промпт НЕ попадают; упоминание ДРУГОГО тега в
     комментарии не захватывается (тег — только в начале строки);
-    без тега — файл целиком."""
+    без тега — встроенный промпт, а не файл целиком."""
     monkeypatch.chdir(tmp_path)
     pf = tmp_path / "ner_check_prompt.txt"
     pf.write_text(
@@ -1093,11 +1093,11 @@ def test_get_prompt_tag_and_comments(tmp_path, monkeypatch):
     args.prompt_file = str(pf)
     p = NC.get_prompt(args, _logger())
     assert p == "ТЕЛО."
-    # без тега — файл целиком (обратная совместимость)
+    # файл без тега стадии — не «промпт целиком»: встроенный промпт
     pf.write_text("Целиком промпт.\n", encoding="utf-8")
     args.prompt_file = str(pf)
     p2 = NC.get_prompt(args, _logger())
-    assert p2 == "Целиком промпт."
+    assert p2 == NC.DEFAULT_NER_CHECK_PROMPT
     # нет файла — встроенный fallback
     args.prompt_file = "нет.txt"
     p3 = NC.get_prompt(args, _logger())

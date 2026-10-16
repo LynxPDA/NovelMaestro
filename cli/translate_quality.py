@@ -195,14 +195,21 @@ DEFAULT_SUMMARY_PROMPT = """\
 def load_assessment_prompt(filepath, logger, tag: str = "prompt_assessment",
                            default: str = DEFAULT_PROMPT) -> str:
     """Промпт оценки: тег `tag` из файла (между тегами можно писать
-    комментарии); файл без тегов — целиком; None/пусто — встроенный дефолт."""
+    комментарии). Файл без тегов — не «промпт целиком»: промпт берётся только
+    из своего тега, иначе — встроенный дефолт."""
     if filepath and os.path.isfile(filepath):
         content = read_text_safe(filepath)
+        if not content.strip():
+            if logger:
+                logger.info(f"Промпт {tag}: файл пуст — встроенный дефолт")
+            return default
         tagged = get_tagged_prompt(content, tag)
         if tagged:
             return tagged
-        if content.strip():
-            return content.strip()
+        if logger:
+            logger.info(f"Промпт {tag}: в файле {filepath} нет тега <{tag}> — "
+                        f"встроенный дефолт")
+        return default
     if logger:
         logger.info(f"Промпт {tag}: встроенный дефолт "
                     "(файл не задан или пуст)")

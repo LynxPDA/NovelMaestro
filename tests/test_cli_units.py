@@ -183,10 +183,10 @@ def test_ner_load_two_pass_prompts(tmp_path):
                  "<prompt_pass2>\nВТОРОЙ\n</prompt_pass2>", encoding="utf-8")
     p1, p2 = NER.load_two_pass_prompts(str(p), SilentLog())
     assert p1 == "ПЕРВЫЙ" and p2 == "ВТОРОЙ"
-    # legacy: файл без тегов = pass1 целиком
+    # файл без тегов — не «промпт целиком»: проходы берутся встроенными
     p.write_text("просто промпт", encoding="utf-8")
     p1, p2 = NER.load_two_pass_prompts(str(p), SilentLog())
-    assert p1 == "просто промпт" and p2 is None
+    assert p1 == NER.SYSTEM_PROMPT_PASS1 and p2 is None
     # нет файла → встроенный pass1
     p1, p2 = NER.load_two_pass_prompts(str(tmp_path / "нет.txt"), SilentLog())
     assert p1 == NER.SYSTEM_PROMPT_PASS1 and p2 is None
@@ -383,8 +383,9 @@ def test_wiki_load_prompts(tmp_path):
     for key in ("markers", "default_markers", "type_names_ru",
                 "relations_labels", "skip_relations", "type_order"):
         assert cfg[key] is None, key
+    # файл без тегов — не «промпт целиком»: промпт статьи не отдаётся
     p.write_text("просто текст", encoding="utf-8")
-    assert WIKI.load_wiki_prompts(str(p), SilentLog())["article"] == "просто текст"
+    assert "article" not in WIKI.load_wiki_prompts(str(p), SilentLog())
     assert WIKI.load_wiki_prompts(str(tmp_path / "нет"), SilentLog()) == {}
 
 

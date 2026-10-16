@@ -402,9 +402,11 @@ def save_review_file(path, input_path, created, entries, params=None,
 
 
 def get_prompt(args, logger) -> str:
-    """Промпт проверки выбранных типов: тег <prompt_ner_check> из
-    файла; нет тега — файл целиком (обратная совместимость); нет
-    файла — встроенный DEFAULT_NER_CHECK_PROMPT."""
+    """Промпт проверки выбранных типов: тег <prompt_ner_check> из файла;
+    файла нет или тега нет — встроенный DEFAULT_NER_CHECK_PROMPT.
+
+    Файл без тегов — не «промпт целиком»: промпт стадии читается только из
+    своего тега, иначе в запрос попала бы чужая задача."""
     text = load_prompt(args.prompt_file, logger)
     if not text:
         logger.info("ℹ Внешний промпт не найден — встроенный fallback.")
@@ -412,7 +414,9 @@ def get_prompt(args, logger) -> str:
     m = get_tagged_prompt(text, "prompt_ner_check")
     if m:
         return m
-    return text
+    logger.warning("ℹ В промпт-файле %s нет тега <prompt_ner_check> — "
+                   "встроенный fallback.", args.prompt_file)
+    return DEFAULT_NER_CHECK_PROMPT
 
 
 def render_prompt(prompt_tpl: str, body: str, fields=None) -> str:
