@@ -131,7 +131,7 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`, `
 
 | Стадия | Файл (по умолчанию) | Теги (в режиме общего файла) |
 | --- | --- | --- |
-| Перевод | `prompts/pipeline_prompt.txt` | `<translate>` |
+| Перевод | `prompts/pipeline_prompt.txt` | `<translate>`, `<translate_lr>` |
 | Редактура (redact) | `prompts/pipeline_prompt.txt` | `<redact>` |
 | Полировка (polish) | `prompts/pipeline_prompt.txt` | `<polish>` |
 | NER-извлечение | `prompts/ner_prompt.txt` | `<prompt_pass1>`, `<prompt_pass2>` |
@@ -139,9 +139,13 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`, `
 | Проверка перевода (LLM) | `prompts/translate_check_prompt.txt` | `<prompt_translate_check>` |
 | Wiki-статьи | `prompts/wiki_prompt.txt` | `<prompt_wiki_article>` |
 
-Промпт стадии читается только из своего тега: файл без него — не «промпт этапа целиком» (режим убран), стадия остаётся на встроенном промпте. Встроенные промпты в скриптах (DEFAULT_*) — только fallback. В конвейере — единый «Общий промпт-файл» с тегами `<translate>/<redact>/<polish>` (`pipeline_prompt.txt` → `prompts.txt` → `translate_book_prompt.txt` при пустом поле формы).
+Промпт стадии читается только из своего тега: файл без него — не «промпт этапа целиком» (режим убран), стадия остаётся на встроенном промпте. Встроенные промпты в скриптах (DEFAULT_*) — только fallback. В конвейере — единый «Общий промпт-файл» с тегами `<translate>/<translate_lr>/<redact>/<polish>` (`pipeline_prompt.txt` → `prompts.txt` → `translate_book_prompt.txt` при пустом поле формы).
 
-Плейсхолдеры: `{ner_block}`; `{original_text}` — входной текст (translate/polish: тег обязателен, нет — предупреждение в лог, текст дописывается после промпта; redact: внутри `<source_text>`); `{translated_text}` (redact); `{female_names}`, `{male_names}` (polish: имена из ner.json по полю `translation`, пол по наличию `(female)`/`(male)` в `type`).
+Плейсхолдеры: `{ner_block}`; `{original_text}` — входной текст (translate/polish: плейсхолдер в тексте тега обязателен, нет — предупреждение в лог, текст дописывается после промпта; redact: внутри `<source_text>`); `{translated_text}` (redact); `{female_names}`, `{male_names}` (polish: имена из ner.json по полю `translation`, пол по наличию `(female)`/`(male)` в `type`).
+
+Метку поля `files` в форме стадии рисует реестр — она обязана называть то, что стадия читает (теги и переменные): `PIPELINE_PROMPT_FILE` — «теги translate/translate_lr/redact/polish», `NER_PROMPT_FILE` — «теги prompt_pass1/prompt_pass2» и т.п.
+
+**Проверка промпт-файла (`--check-prompt`).** Каждый скрипт LLM-стадии (и `web/pipeline.py`) умеет сверять выбранный промпт-файл со своим контрактом без единого запроса к модели: `PROMPT_CONTRACT` скрипта — это записи `(тег, где читается, (имена переменных, ...))`, у wiki добавляется `PROMPT_JSON_TAGS` (служебные теги с JSON). Проверка ставится первым делом `main()`, до `setup_stage` и чтения глав: логи запусков и артефакты стадии не создаются, пишется только вердикт `tmp/prompt_check.json` (`{stage, file, state, tags, problems, notes, mtime}`). Проверяются ВСЕ теги стадии: форма выбирает один режим, пользователь обязан увидеть и остальные. Web (`POST /api/stages/{key}/prompt-check`) запускает скрипт, читает и удаляет вердикт и держит его в кеше по `(книга, стадия, файл, mtime)`; SPA показывает жёлтый треугольник у кнопки «Редактировать» с перечнем замечаний (пустой выбор промпта замечанием не считается).
 
 Нюансы ответов LLM:
 
