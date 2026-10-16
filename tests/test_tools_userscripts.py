@@ -234,13 +234,21 @@ def test_lite_ghost_never_outlives_the_work():
         "closeReader не зачищает призрак"
     assert "readerContent.classList.remove('nm-ghost', 'nm-ghost-fade')" in text, \
         "классы призрака остаются на контенте читалки"
-    # вспышки идут по живому потоку: чанк объявляется до ответа (chunkStart — фон и
-    # термины глоссария), записи модели вспыхивают по закрытию объекта в потоке
-    assert "if (Number.isInteger(st.chunkStart))" in text and "ghostShowChunk(st.chunkStart)" in text, \
-        "фон чанка и вспышки глоссария больше не показываются до ответа модели"
+    # вспышки идут по живому потоку: чанк объявляется до ответа (термины глоссария
+    # и автодогон), записи модели вспыхивают по закрытию объекта в потоке
+    assert "if (Number.isInteger(st.chunkStart))" in text and "ghostScrollToChunk(st.chunkStart)" in text, \
+        "вспышки терминов глоссария больше не показываются до ответа модели"
+    assert "mark.className = 'nm-hit-new'" in text, "запись модели не вспыхивает по мере закрытия в потоке"
     assert "if (st.item && Number.isInteger(st.itemChunk))" in text, \
         "запись модели не вспыхивает по мере закрытия в потоке"
     assert "if (state.depth > 0)" in text or "NER_JSON_TAIL" in text, "разбор потока потерял защиту недописанного объекта"
+    # призрак — только цвет текста: подложек у него нет ни у абзаца, ни у вспышки
+    assert 'nm-ghost-chunk' not in text, "абзацы чанка снова красятся фоном"
+    assert '.nm-ghost mark.nm-hit-new { background: transparent;' in text, \
+        "вспышка термина оставляет подсветку на тексте"
+    assert 'nm-hit-flash { from { background: rgba(245,158,11,.85); } to { background: transparent; } }' in text, \
+        "вспышка термина гаснет не в прозрачность"
+    assert 'GHOST_HIT_SETTLED' not in text, "отгоревшая вспышка снова застывает цветной подложкой"
 
 
 

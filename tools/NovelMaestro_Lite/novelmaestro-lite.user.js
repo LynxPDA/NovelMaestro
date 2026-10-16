@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.52
+// @version      1.53
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.52';
+    const APP_VERSION = '1.53';
 
     // ===== КОНФИГУРАЦИЯ =====
     // Штатный промпт перевода (редактируемое поле Настроек). Плейсхолдеры те же,
@@ -385,8 +385,9 @@
     /**
      * Как splitByNewlines, но с картой абзацев: ranges[i] — [startPara, endPara]
      * включительно, из которых собран чанк. Призраку читалки важно, где именно в
-     * тексте лежит текущий чанк (фон зоны и вспышки терминов), а чанкование обязано
-     * остаться ТЕМ ЖЕ: разойдётся с переводом — прогресс и подсветка поедут.
+     * тексте лежит текущий чанк — к его началу ведёт автодогон, а вспышки терминов
+     * ищутся в абзацах этого чанка. Чанкование обязано остаться ТЕМ ЖЕ: разойдётся
+     * с переводом — прогресс и подсветка поедут.
      */
     function splitByNewlinesRanged(text, chunkSize) {
         const paras = paragraphsOf(text);
@@ -1186,18 +1187,17 @@
             .nm-reader-content { margin: 0 auto; padding: 70px 20px 150px; max-width: var(--nm-content-width, 66%); }
             .nm-reader-content p { text-align: justify; }
             /* Призрак оригинала: тот же текст, что и в переводе, но бледнее — видно,
-               что работа идёт. Цвета — реальными классами темы читалки. */
+               что работа идёт. Цвета — реальными классами темы читалки; никаких
+               подложек у текста нет: и фон чанка, и застывшая подсветка термина
+               читаются как «что-то выделено» и мешают читать. */
             #nm-reader-mode.nm-reader-light .nm-ghost p { color: #b3aca0; }
             #nm-reader-mode.nm-reader-dark .nm-ghost p { color: #5a5e68; }
             .nm-ghost { transition: opacity .35s ease; }
             .nm-ghost-fade { opacity: 0; }
-            /* текущий чанк извлечения: фон в зоне работы, а не подсветка текста */
-            .nm-ghost p.nm-ghost-chunk { background: rgba(37,99,235,.10); border-radius: 4px; }
-            #nm-reader-mode.nm-reader-dark .nm-ghost p.nm-ghost-chunk { background: rgba(127,176,255,.12); }
-            /* вспышка термина: затухает сама, режим правки не требует */
-            .nm-ghost mark.nm-hit-new { background: rgba(245,158,11,.45); color: inherit; border-radius: 3px; animation: nm-hit-flash 1.4s ease-out 1 forwards; }
-            #nm-reader-mode.nm-reader-dark .nm-ghost mark.nm-hit-new { background: rgba(245,158,11,.35); }
-            @keyframes nm-hit-flash { from { background: rgba(245,158,11,.85); } to { background: rgba(245,158,11,.35); } }
+            /* вспышка термина: загорается и гаснет сама, на тексте ничего не остаётся —
+               сама по себе подсветка прозрачна, цвет даёт только анимация */
+            .nm-ghost mark.nm-hit-new { background: transparent; color: inherit; border-radius: 3px; animation: nm-hit-flash 1.4s ease-out 1; }
+            @keyframes nm-hit-flash { from { background: rgba(245,158,11,.85); } to { background: transparent; } }
             .nm-reader-loading { text-align: center; padding: 60px 0; font-size: 16px; opacity: .7; }
             .nm-reader-bottombar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; display: flex; flex-direction: column; gap: 8px; align-items: center; padding: 10px 14px 12px; backdrop-filter: blur(6px); }
             #nm-reader-mode.nm-reader-light .nm-reader-bottombar { background: rgba(250,247,240,.92); border-top: 1px solid #e5ded2; }
@@ -3084,7 +3084,8 @@ const host = document.createElement('div');
         };
         // что известно про чанк ДО ответа модели: его абзацы — текущая зона работы,
         // термины глоссария, которые в них уже встречались (лишние поля панель прогресса
-        // игнорирует) — этим призрак читалки показывает фон и вспышки глоссария
+        // игнорирует) — этим призрак читалки ведёт читателя к началу чанка
+        // и вспыхивает известные термины
         const chunkStart = (i, terms) => emitProgress(i, null, {
             chunkStart: i,
             matched: terms.map(t => ({ term: t.term, aliases: t.aliases || [] }))
@@ -3303,8 +3304,8 @@ const host = document.createElement('div');
         progressStatus(st.retry
             ? `⏱ ${st.retry.message} — повтор ${st.retry.nextAttempt}/${st.retry.attemptsTotal}`
             : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.resumed + 1}/${st.total})` : ''} • ~${st.pct}%`);
-        // призраку достаётся тот же прогресс: фон текущего чанка и вспышки терминов
-        // его диапазона — лишние поля панель прогресса молча игнорирует
+        // призраку достаётся тот же прогресс: автодогон по смене чанка и вспышки
+        // терминов его диапазона — лишние поля панель прогресса молча игнорирует
         ghostProgress(st);
     }
     // ===== ЧИТАЛКА =====
@@ -3401,7 +3402,6 @@ const host = document.createElement('div');
     // ни в глоссарий, ни в книги не пишет и частот не трогает.
     const GHOST_MARK_LIMIT = 200;   // mark на весь прогон: больше — это уже не подсветка
     const GHOST_TERM_LIMIT = 20;    // вхождений одного термина в абзаце
-    const GHOST_HIT_SETTLED = 'rgba(245,158,11,.35)';   // конечный цвет вспышки (см. nm-hit-flash)
     const GHOST_FADE_MS = 350;
     let ghostParas = [];
     let ghostRanges = [];   // диапазоны чанков: [startPara, endPara]
@@ -3411,7 +3411,7 @@ const host = document.createElement('div');
     let ghostFrame = 0;
     let ghostPending = null;        // Set абзацев, ждущих перерисовки в кадре rAF
     let ghostMarkCount = 0;
-    let ghostChunkShown = -1;       // чанк, чей фон уже стоит: фон и автодогон — на смене, не на каждой вспышке
+    let ghostChunkSeen = -1;        // чанк, к которому уже вели автодогон: он один раз на чанк
     const ghostMarks = new Map();   // абзац → интервалы вспышек (отсортированы, без вложений)
     const ghostRendered = new Map(); // абзац → интервалы, уже получившие вспышку
 
@@ -3465,7 +3465,7 @@ const host = document.createElement('div');
         ghostActive = false;
         ghostParas = [];
         ghostRanges = [];
-        ghostChunkShown = -1;
+        ghostChunkSeen = -1;
         ghostMarks.clear();
         ghostRendered.clear();
         ghostPending = null;
@@ -3475,9 +3475,9 @@ const host = document.createElement('div');
         if (had) readerContent.replaceChildren();
     }
     /**
-     * Накопленные вспышки рисуются одним кадром: новых терминов за секунду бывает много.
-     * Интервалы, горевшие раньше, помечаются в конечный цвет без анимации — иначе каждая
-     * новая вспышка в том же абзаце перезапускала бы анимацию у соседей, и текст мигал бы.
+     * Накопленные вспышки рисуются одним кадром: записей за секунду бывает много.
+     * Отгоревшие интервалы возвращаются обычным текстом: вспышка гаснет в прозрачность,
+     * и оставлять её элементом значило бы заново проигрывать анимацию соседям по абзацу.
      */
     function ghostParagraphNode(text, spans, rendered) {
         const frag = document.createDocumentFragment();
@@ -3485,14 +3485,14 @@ const host = document.createElement('div');
         for (const [a, b] of spans || []) {
             if (a < pos) continue;
             if (a > pos) frag.append(text.slice(pos, a));
-            const mark = document.createElement('mark');
-            mark.className = 'nm-hit-new';
-            mark.textContent = text.slice(a, b);
-            if (rendered && rendered.has(`${a}-${b}`)) {
-                mark.style.animation = 'none';
-                mark.style.background = GHOST_HIT_SETTLED;
+            if (rendered && rendered.has(`${a}-${b}`)) {   // вспышка отгорела — просто текст
+                frag.append(text.slice(a, b));
+            } else {
+                const mark = document.createElement('mark');
+                mark.className = 'nm-hit-new';
+                mark.textContent = text.slice(a, b);
+                frag.append(mark);
             }
-            frag.append(mark);
             pos = b;
         }
         if (pos < text.length) frag.append(text.slice(pos));
@@ -3508,14 +3508,12 @@ const host = document.createElement('div');
         for (const [a, b] of spans) seen.add(`${a}-${b}`);
         ghostRendered.set(idx, seen);
     }
-    /** Фон на абзацах чанка и автодогон к его началу — один раз на чанк. */
-    function ghostShowChunk(index) {
-        if (index === ghostChunkShown) return;
+    /** Автодогон к началу чанка — один раз на чанк, и только пока читатель не тронул скролл. */
+    function ghostScrollToChunk(index) {
+        if (index === ghostChunkSeen) return;
+        ghostChunkSeen = index;
+        const [a] = ghostRanges[index] || [index, index];
         const ps = ghostParagraphs();
-        ps.forEach(p => p.classList.remove('nm-ghost-chunk'));
-        const [a, b] = ghostRanges[index] || [index, index];
-        for (let i = a; i <= b && i < ps.length; i++) ps[i].classList.add('nm-ghost-chunk');
-        ghostChunkShown = index;
         if (ghostAutoScroll && ps[a]) ps[a].scrollIntoView({ block: 'start', behavior: 'smooth' });
     }
     const ghostStopAutoScroll = () => { ghostAutoScroll = false; };
@@ -3530,7 +3528,7 @@ const host = document.createElement('div');
         const { chunks, ranges } = splitByNewlinesRanged(text, config.chunkSize);
         ghostParas = paragraphsOf(text);
         ghostRanges = ranges;
-        ghostChunkShown = -1;
+        ghostChunkSeen = -1;
         ghostAutoScroll = true;
         readerContent.classList.add('nm-ghost');
         readerContent.replaceChildren(...ghostParas.map(p => {
@@ -3554,13 +3552,13 @@ const host = document.createElement('div');
             for (const idx of byPara) renderGhostParagraph(idx);
         });
     }
-    /** Прогресс NER: фон чанка, вспышки терминов по мере работы модели. */
+    /** Прогресс NER: смена чанка, вспышки терминов по мере работы модели. */
     function ghostProgress(st) {
         if (!ghostActive) return;
-        // чанк начал обрабатываться: фон его абзацев и вспышка терминов глоссария —
-        // «вот что здесь уже известно»; приходит один раз на чанк (новый — новый фон)
+        // чанк начал обрабатываться: подводим читателя к его началу и вспыхиваем
+        // термины глоссария — «вот что здесь уже известно»
         if (Number.isInteger(st.chunkStart)) {
-            ghostShowChunk(st.chunkStart);
+            ghostScrollToChunk(st.chunkStart);
             const range = ghostRanges[st.chunkStart];
             const known = [];
             for (const t of (st.matched || [])) known.push(t.term, ...(t.aliases || []));

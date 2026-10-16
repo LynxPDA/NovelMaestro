@@ -199,18 +199,17 @@
             .nm-reader-content { margin: 0 auto; padding: 70px 20px 150px; max-width: var(--nm-content-width, 66%); }
             .nm-reader-content p { text-align: justify; }
             /* Призрак оригинала: тот же текст, что и в переводе, но бледнее — видно,
-               что работа идёт. Цвета — реальными классами темы читалки. */
+               что работа идёт. Цвета — реальными классами темы читалки; никаких
+               подложек у текста нет: и фон чанка, и застывшая подсветка термина
+               читаются как «что-то выделено» и мешают читать. */
             #nm-reader-mode.nm-reader-light .nm-ghost p { color: #b3aca0; }
             #nm-reader-mode.nm-reader-dark .nm-ghost p { color: #5a5e68; }
             .nm-ghost { transition: opacity .35s ease; }
             .nm-ghost-fade { opacity: 0; }
-            /* текущий чанк извлечения: фон в зоне работы, а не подсветка текста */
-            .nm-ghost p.nm-ghost-chunk { background: rgba(37,99,235,.10); border-radius: 4px; }
-            #nm-reader-mode.nm-reader-dark .nm-ghost p.nm-ghost-chunk { background: rgba(127,176,255,.12); }
-            /* вспышка термина: затухает сама, режим правки не требует */
-            .nm-ghost mark.nm-hit-new { background: rgba(245,158,11,.45); color: inherit; border-radius: 3px; animation: nm-hit-flash 1.4s ease-out 1 forwards; }
-            #nm-reader-mode.nm-reader-dark .nm-ghost mark.nm-hit-new { background: rgba(245,158,11,.35); }
-            @keyframes nm-hit-flash { from { background: rgba(245,158,11,.85); } to { background: rgba(245,158,11,.35); } }
+            /* вспышка термина: загорается и гаснет сама, на тексте ничего не остаётся —
+               сама по себе подсветка прозрачна, цвет даёт только анимация */
+            .nm-ghost mark.nm-hit-new { background: transparent; color: inherit; border-radius: 3px; animation: nm-hit-flash 1.4s ease-out 1; }
+            @keyframes nm-hit-flash { from { background: rgba(245,158,11,.85); } to { background: transparent; } }
             .nm-reader-loading { text-align: center; padding: 60px 0; font-size: 16px; opacity: .7; }
             .nm-reader-bottombar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; display: flex; flex-direction: column; gap: 8px; align-items: center; padding: 10px 14px 12px; backdrop-filter: blur(6px); }
             #nm-reader-mode.nm-reader-light .nm-reader-bottombar { background: rgba(250,247,240,.92); border-top: 1px solid #e5ded2; }
