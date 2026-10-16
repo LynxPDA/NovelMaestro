@@ -1319,7 +1319,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     g_out.add_argument(
-        "--as-chapter", action="store_true",
+        "--as-chapter", action=argparse.BooleanOptionalAction,
         help=(
             "Сохранить вики как дополнительную последнюю главу "
             "chapters/00000_{N+1}_Wiki_Новеллы/: название главы «Wiki "

@@ -798,12 +798,14 @@ def build_parser():
                    metavar="TYPE",
                    help="Выходной файл: chapter/translated/redacted/polished "
                         "(default: chapter.txt)")
-    g.add_argument("--clean-output", action="store_true",
-                   help="Удалить старые папки глав перед записью")
-    g.add_argument("--rename-chapters", action="store_true",
+    g.add_argument("--clean-output", action=argparse.BooleanOptionalAction,
+                   help="Удалить старые папки глав перед записью "
+                        "(--no-clean-output — не удалять)")
+    g.add_argument("--rename-chapters", action=argparse.BooleanOptionalAction,
                    help="Переопределить названия ВСЕХ глав на --chunk-mask "
                         "(номер после перенумерации); работает во всех "
-                        "режимах (toc/regex/chunk)")
+                        "режимах (toc/regex/chunk); --no-rename-chapters — "
+                        "маска только у chunk-режима")
     g.add_argument("--preview-json", type=Path, default=None, metavar="FILE",
                    help="Вместо записи — JSON предпросмотра "
                         "{source, num_offset, title_limit, entries}")

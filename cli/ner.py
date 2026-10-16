@@ -1390,10 +1390,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Размер n-грамм для латиницы (по умолчанию: 3). CJK использует биграммы.",
     )
     parser.add_argument(
-        "--two-pass", action="store_true",
+        "--two-pass", action=argparse.BooleanOptionalAction,
         help=(
             "Двухпроходная конвейерная схема: каждый поток выполняет "
-            "pass1 → pass2 для чанка, затем берёт следующий. Без барьеров."
+            "pass1 → pass2 для чанка, затем берёт следующий. Без барьеров "
+            "(--no-two-pass — один проход)."
         ),
     )
     parser.add_argument(

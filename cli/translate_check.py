@@ -414,10 +414,11 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
     parser.add_argument("--min-file-size", type=int, default=None,
                         help=f"Минимальный размер файла (БАЙТЫ; по "
                              f"умолчанию {MIN_FILE_SIZE})")
-    parser.add_argument("--no-sequence-check", action="store_true",
-                        default=False,
-                        help="Отключить проверку сквозной "
-                             "последовательности глав")
+    # имя флага — имя поля реестра: дефолт реестра в него и попадает
+    parser.add_argument("--sequence-check",
+                        action=argparse.BooleanOptionalAction, default=True,
+                        help="Проверять сквозную последовательность глав "
+                             "(--no-sequence-check — отключить)")
     core_settings.apply_cli_defaults(parser, "translate_check")
     return parser
 
@@ -481,7 +482,7 @@ def main() -> None:
             regexp_checks.append(rx)
     min_file_size = (args.min_file_size if args.min_file_size is not None
                      else MIN_FILE_SIZE)
-    sequence_check = not args.no_sequence_check
+    sequence_check = args.sequence_check
 
     # ── счёт объёма: один счётчик на весь конвейер — встроенная оценка ──
     unit = "токены (оценка)"
