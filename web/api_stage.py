@@ -22,7 +22,11 @@ from web.api_common import (
     _OPTIONS_CACHE,
     EPUB_PREVIEW_FILE,
     PREVIEW_REQUEST_FILE,
+    PROMPT_CHECK_FILE,
+    PROMPT_CHECK_TIMEOUT,
     _PREVIEW_STAGES,
+    _PROMPT_CHECK_CACHE,
+    _PROMPT_CHECK_STAGES,
 )
 from web.api_common import (
     _import_batch_replace,
@@ -739,6 +743,96 @@ def _preview_request_post(ctx: dict) -> dict:
     return {"ok": True, **data}
 
 
+# ════════════════════════════════════════════════════════════════════
+# LLM-стадии: проверка промпт-файла (--check-prompt)
+# ════════════════════════════════════════════════════════════════════
+def _prompt_file_rel(key: str, params: dict) -> str:
+    """Выбранный промпт-файл путием внутри книги. Форма присылает готовый
+    путь («prompts/имя»); голое имя приходит при ручном вызове API — ему
+    возвращаем папку поля, тот же путь, что даёт apply_cli_defaults
+    обычному запуску."""
+    name = str(params.get("prompt_file") or "").strip()
+    if not name or "/" in name:
+        return name
+    fld = next((s for s in core_settings.stage_fields(key)
+                if s.name == "prompt_file"), None)
+    return f"{fld.dir}/{name}" if fld is not None and fld.dir else name
+
+
+def _prompt_check_post(ctx: dict) -> dict:
+    """Проверка промпт-файла стадии
+    (POST /api/stages/{key}/prompt-check).
+
+    Тело: {project, params}. Синхронный запуск скрипта стадии с
+    --check-prompt tmp/prompt_check.json (без сети, cwd=проект): какие теги и
+    переменные читает стадия — знает её скрипт, здесь проверка только
+    запускается. Проверяются ВСЕ режимы стадии: форма выбирает один, а
+    пользователь обязан видеть, что не так в остальных. Логи запусков и
+    артефакты стадии не создаются, файл вердикта читается и удаляется.
+    Ответ кэшируется по (книга, стадия, файл, mtime): промпт меняют редко.
+    Не удалось (таймаут, чужой код возврата, битый вердикт) — пустой результат:
+    форма не ломается, иконка просто не появляется."""
+    import subprocess
+    import sys as _sys
+    key = ctx["params"]["key"]
+    if key not in _PROMPT_CHECK_STAGES:
+        raise ApiError(404, f"Стадия {key!r} не проверяет промпт-файл")
+    pdir, _sec, _name = _project_ctx(ctx)
+    repo = Path(_repo_root(ctx))
+    script = script_path(key, repo)
+    if script is None or not script.is_file():
+        raise ApiError(500, "Скрипт стадии не найден")
+    params = (ctx["body"] or {}).get("params") or {}
+    prompt_file = _prompt_file_rel(key, params)
+    try:
+        mtime = (pdir / prompt_file).stat().st_mtime if prompt_file else -1.0
+    except OSError:
+        mtime = -1.0
+    ck = f"{pdir}|{key}|{prompt_file}"
+    cached = _PROMPT_CHECK_CACHE.get(ck)
+    if cached is not None and cached[0] == mtime:
+        return {"ok": True, "result": cached[1]}
+    argv = build_command(key, params, ctx)
+    argv[0] = str(script)
+    argv += ["--check-prompt", PROMPT_CHECK_FILE]
+    proc_env = dict(os.environ)
+    proc_env.setdefault("PYTHONIOENCODING", "utf-8")
+    try:
+        proc = subprocess.run(
+            [_sys.executable, *argv], cwd=str(pdir),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=PROMPT_CHECK_TIMEOUT, env=proc_env)
+    except subprocess.TimeoutExpired:
+        log.info("prompt-check: %s/%s не уложилась в %d c", key, pdir.name,
+                 PROMPT_CHECK_TIMEOUT)
+        return {"ok": True, "result": None,
+                "error": f"проверка не уложилась в {PROMPT_CHECK_TIMEOUT} c"}
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        log.info("prompt-check: %s/%s — код %d: %s", key, pdir.name,
+                 proc.returncode, err[:300])
+        return {"ok": True, "result": None,
+                "error": f"проверка завершилась с кодом {proc.returncode}: "
+                         f"{err[:200]}"}
+    path = pdir / PROMPT_CHECK_FILE
+    import json as _json
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {"ok": True, "result": None,
+                "error": f"вердикт не читается: {exc}"}
+    finally:
+        # вердикт — служебный файл проверки, в списке файлов книги он не нужен
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    if not isinstance(data, dict) or "problems" not in data:
+        return {"ok": True, "result": None, "error": "битый вердикт"}
+    _PROMPT_CHECK_CACHE[ck] = (mtime, data)
+    return {"ok": True, "result": data}
+
+
 def _register_jobs(router: Router) -> None:
     router.add("GET", "/api/stages", _stages_list)
     router.add("POST", "/api/jobs", _jobs_start)
@@ -763,3 +857,5 @@ def _register_jobs(router: Router) -> None:
     # LLM-стадии: предпросмотр первого запроса
     router.add("POST", "/api/stages/{key}/preview-request",
                _preview_request_post)
+    # LLM-стадии: проверка промпт-файла (иконка предупреждения в форме)
+    router.add("POST", "/api/stages/{key}/prompt-check", _prompt_check_post)

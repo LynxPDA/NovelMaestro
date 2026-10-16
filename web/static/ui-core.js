@@ -117,6 +117,12 @@
     history:
       '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>'
       + '<path d="M12 10.5V6"/><path d="M12 13.5 8.5 16"/>',
+    /* проверка промпт-файла: треугольник с «!» — предупреждение о самом файле,
+     * не действие (тултип перечисляет замечания скрипта стадии) */
+    'alert-triangle':
+      '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20.11a2 2 0 '
+      + '0 0 1.76 1.89h12.48A2 2 0 0 0 20 20.11a2 2 0 0 0 1.73-2.11"/>'
+      + '<path d="M12 9v4"/><path d="M12 17h.01"/>',
   };
   function icon(name, cls) {
     var body = ICON_PATHS[name] || '<rect width="14" height="14" x="5" y="5" rx="1"/>';

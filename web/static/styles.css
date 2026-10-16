@@ -1274,6 +1274,17 @@ input[type="number"] {
 .run-range-sep {
   color: var(--text-dim);
 }
+/* проверка промпт-файла: иконка рядом с кнопкой «Редактировать»; узел пуст,
+   пока у скрипта стадии нет замечаний к выбранному файлу */
+.run-prompt-warn {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.run-prompt-warn .run-prompt-warn-icon {
+  color: var(--accent-2);
+  cursor: help;
+}
 /* профиль LLM стадии: первое поле формы (значение — в браузере проекта) */
 .field-profile {
   border-bottom: 1px dashed var(--border);

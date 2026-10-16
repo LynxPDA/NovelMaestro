@@ -32,6 +32,10 @@ from web.api_common import (  # noqa: F401  фасад
     _OPTIONS_CACHE,
     EPUB_PREVIEW_FILE,
     PREVIEW_REQUEST_FILE,
+    PROMPT_CHECK_FILE,
+    PROMPT_CHECK_TIMEOUT,
+    _PROMPT_CHECK_CACHE,
+    _PROMPT_CHECK_STAGES,
 )
 from web.api_projects import (  # noqa: F401  фасад
     _ensure_stats_cache,

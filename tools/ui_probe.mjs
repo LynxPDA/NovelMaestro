@@ -193,6 +193,13 @@ function seedProjectsDir(dir) {
   fs.writeFileSync(path.join(book, "logs", "chapters", "00000_1_Глава 1.log"), "глава: ок\n", "utf-8");
   fs.mkdirSync(path.join(book, "prompts"), { recursive: true });
   fs.writeFileSync(path.join(book, "prompts", "translate.txt"), "<translate>переведи</translate>\n", "utf-8");
+  // промпт глоссария назло неполный: только первый проход — проверка
+  // --check-prompt обязана показать отсутствующий тег второго режима
+  fs.writeFileSync(
+    path.join(book, "prompts", "ner_prompt.txt"),
+    "<prompt_pass1>\n{chunk_text}\n</prompt_pass1>\n",
+    "utf-8",
+  );
   fs.writeFileSync(path.join(book, "metadata.yaml"), "title: Проба\nauthor: Probe\n");
   fs.writeFileSync(
     path.join(dir, "hub_state.json"),
@@ -782,7 +789,8 @@ async function main() {
       // только полным reload
       await page.reload({ waitUntil: "load" });
       await page.waitForSelector(".prompt-item", { timeout: 15000 });
-      await page.locator(".prompt-item").first().click();
+      // не «первый», а нужный: в книге лежат и промпты других стадий
+      await page.locator('.prompt-item:has-text("translate.txt")').first().click();
       await page.waitForTimeout(1500);
       return marks();
     };
@@ -1787,6 +1795,43 @@ async function main() {
     }
     if (SHOT)
       await page.screenshot({ path: path.join(OUT, "scenario-run-form.png") });
+
+    /* ── проверка промпт-файла: скрипт стадии (--check-prompt) отвечает
+       прямо из формы; SPA показывает жёлтый треугольник у «Редактировать».
+       Промпт теста намеренно с одним тегом — замечание одно ── */
+    {
+      const before = problems.length;
+      await openStage("Создание глоссария");
+      await page.waitForTimeout(1500);
+      const warn = page.locator(".run-prompt-warn-icon").first();
+      if (!(await warn.count())) {
+        problems.push("проверка промпта: иконка не появилась");
+      } else {
+        const tip = (await warn.getAttribute("aria-label")) || "";
+        if (!/замечаний: 1/.test(tip))
+          problems.push(`проверка промпта: тултип «${tip}»`);
+        if (!tip.includes("<prompt_pass2>"))
+          problems.push(`проверка промпта: тултип не про второй режим (${tip})`);
+        if (!tip.includes("встроен"))
+          problems.push(`проверка промпта: тултип не говорит про встроенный (${tip})`);
+        const pf = (await page.locator(".run-form .field")
+          .filter({ hasText: "Промпт-файл" }).first()
+          .locator("select").first().inputValue()) || "";
+        if (pf !== "ner_prompt.txt")
+          problems.push(`проверка промпта: выбран «${pf}»`);
+        /* вердикт — служебный файл: в книге он не остаётся */
+        if (seedDir && fs.existsSync(path.join(seedDir, SECTION, BOOK, "tmp",
+                                              "prompt_check.json")))
+          problems.push("проверка промпта: вердикт остался в tmp/ книги");
+        if (SHOT)
+          await page.screenshot({
+            path: path.join(OUT, "scenario-prompt-check.png"),
+          });
+      }
+      log(`${problems.length === before ? "✅" : "❌"} проверка промпта  `
+        + `--check-prompt → иконка у поля файла`);
+    }
+
     // вкладка «Настройки» проекта — данные книги, .env-редактора нет
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/config`,
       { waitUntil: "load" });

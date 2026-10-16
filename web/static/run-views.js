@@ -55,6 +55,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     brSig: "", // batch_replace: сигнатура формы последнего предпросмотра
     profiles: [], // профили LLM [{id,name,builtin,…}] — сводка из /api/stages
     pnote: {}, // подпись выбранного профиля по стадиям (узел под селектом)
+    promptWarn: {}, // стадия → узел иконки проверки промпта (пуст, пока чист)
+    promptReq: {}, // стадия → счётчик проверок: ответ старой проверки не нужен
   };
   const page = h("div", { class: "page" });
   let streamCtrl = null; // AbortController текущего SSE-стрима
@@ -488,6 +490,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     panel.addEventListener("input", onEdit);
     panel.addEventListener("change", onEdit);
     syncRunSave(key); // подпись сразу показывает то, что уже сохранено
+    promptCheck(key); // проверка промпта при открытии формы стадии
     // epub: панель предпросмотра разбивки
     if (key === "epub") panel.append(epubPreviewPanel(key, spec));
     // batch_replace: панель предпросмотра замен по главам
@@ -947,7 +950,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           upInput.click();
         }
       });
-      sel.addEventListener("change", refreshPromptBtn);
+      sel.addEventListener("change", () => {
+        refreshPromptBtn();
+        if (isEditable && dir === "prompts") promptCheck(key);
+      });
       upInput.addEventListener("change", async () => {
         if (!upInput.files || !upInput.files.length) return;
         const form = new FormData();
@@ -971,6 +977,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       });
       row.append(upBtn, upInput);
       refreshPromptBtn();
+      if (isEditable && dir === "prompts") {
+        // проверка промпт-файла: у узла нет содержимого, пока замечаний нет
+        st.promptWarn[key] = h("span", { class: "run-prompt-warn" });
+        row.append(st.promptWarn[key]);
+      }
       row._sel = input; // значение — select внутри row
       input = row;
     } else {
@@ -1571,6 +1582,50 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return h("div", null, nodes);
   }
 
+  /* ── проверка промпт-файла (--check-prompt) ───────────────────────────
+   * Какие теги и переменные читает стадия, знает её скрипт: сервер запускает
+   * его на этой книге с --check-prompt (без сети, без логов запусков и без
+   * артефактов стадии) и возвращает вердикт. Иконка у кнопки «Редактировать»
+   * — только настоящие проблемы: нет тега режима, нет переменной в тексте,
+   * битый JSON. «внешний промпт не выбран» проблемой не считается: стадия
+   * честно работает со встроенным промптом. Проверка фоновая и молчаливая:
+   * не удалось — иконка просто не появляется. */
+  function paintPromptWarn(key, problems, title) {
+    const slot = st.promptWarn[key];
+    if (!slot) return;
+    // replaceChildren, а не textContent = "": узел держит иконку элементом
+    slot.replaceChildren();
+    const list = (problems || []).filter(Boolean);
+    if (!list.length) return;
+    // текст тултипа читается один раз при навешивании — узел создаём заново
+    const tip = `Проверка промпта «${title || key}», замечаний: ${list.length}`
+      + "\n" + list.join("\n");
+    const el = iconEl("alert-triangle", "run-prompt-warn-icon");
+    el.tabIndex = 0;
+    el.setAttribute("aria-label", tip);
+    attachTooltip(el, tip);
+    slot.append(el);
+  }
+
+  // проверка запускается при открытии формы стадии, смене выбранного файла и
+  // сохранении в редакторе; сервер держит вердикт по (книга, стадия, mtime).
+  // параметры — те же, что у обычного запуска: buildParams (finalFile),
+  // иначе скрипт получит голое имя вместо «prompts/имя» и не найдёт файл
+  function promptCheck(key) {
+    const spec = st.curSpec;
+    if (!key || !st.promptWarn[key] || !spec) return;
+    const mine = (st.promptReq[key] || 0) + 1;
+    st.promptReq[key] = mine;
+    api(`/stages/${key}/prompt-check`, {
+      method: "POST",
+      body: { project: `${section}/${name}`, params: buildParams(key, spec) },
+    }).then((d) => {
+      if (st.promptReq[key] !== mine) return; // ответ устарел
+      paintPromptWarn(key, (d && d.result && d.result.problems) || [],
+        spec.title);
+    }).catch(() => { /* фоновая проверка не ломает форму */ });
+  }
+
   // «Редактировать» файл из запуска (editFileModal ниже): промпт —
   // чтение/правка/сохранение через GET/PUT /api/prompts/{name}; файлы
   // source/ (метаданные YAML, страница поддержки) — через /api/file.
@@ -1617,6 +1672,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
                 });
               }
               toast(`Сохранено: ${relPath}`);
+              // mtime файла изменился — вердикт перечитывается
+              if (isPromptFile) promptCheck(st.stage); // st.stage — ключ стадии
               close();
             } catch (ex) {
               err.textContent = ex.message;

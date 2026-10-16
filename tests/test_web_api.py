@@ -2107,6 +2107,120 @@ def test_epub_preview_utf8_env(srv_ctx, monkeypatch):
     assert captured.get("encoding") == "utf-8"
 
 
+# ════════════════════════════════════════════════════════════════════
+# LLM-стадии: проверка промпт-файла (--check-prompt)
+# ════════════════════════════════════════════════════════════════════
+
+def _pc_book(port, projects_root) -> Path:
+    """Книга с промпт-файлом стадии (его mtime — сигнал сброса кеша)."""
+    pdir = _file_project(port, projects_root)
+    (pdir / "prompts").mkdir(exist_ok=True)
+    (pdir / "prompts" / "ner_prompt.txt").write_text(
+        "<prompt_pass1>\n{chunk_text}\n</prompt_pass1>\n", encoding="utf-8")
+    return pdir
+
+
+def test_prompt_check_route_runs_stage_script(srv_ctx, monkeypatch):
+    """POST /api/stages/{key}/prompt-check: скрипт стадии с --check-prompt
+    (cwd — папка книги), вердикт клиенту, служебный файл удалён;
+    стадия без промпта — 404."""
+    import subprocess as sp
+
+    _, port, projects_root = srv_ctx()
+    pdir = _pc_book(port, projects_root)
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append((argv, kw))
+        assert "--check-prompt" in argv
+        assert argv[argv.index("--check-prompt") + 1] == \
+            web_api.PROMPT_CHECK_FILE
+        out = Path(kw["cwd"]) / web_api.PROMPT_CHECK_FILE
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({
+            "stage": "ner", "file": "prompts/ner_prompt.txt", "state": "file",
+            "tags": ["prompt_pass1"],
+            "problems": ["нет тега <prompt_pass2> — режим на встроенном"],
+            "notes": [], "mtime": 1.0,
+        }, ensure_ascii=False), encoding="utf-8")
+        return sp.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    res, payload = _request(
+        port, "POST", "/api/stages/ner/prompt-check",
+        {"project": "ACTIVE/test_book",
+         "params": {"prompt_file": "ner_prompt.txt"}})
+    assert res.status == 200, payload
+    assert payload["ok"] is True
+    assert payload["result"]["tags"] == ["prompt_pass1"]
+    assert payload["result"]["problems"][0].startswith("нет тега")
+    argv, kw = calls[0]
+    assert argv[1].endswith("cli/ner.py")
+    assert Path(kw["cwd"]) == pdir
+    # вердикт — служебный файл: в списке файлов книги его быть не должно
+    assert not (pdir / web_api.PROMPT_CHECK_FILE).exists()
+
+    _request(port, "POST", "/api/stages/epub/prompt-check",
+             {"project": "ACTIVE/test_book", "params": {}})
+    res2, payload2 = _request(
+        port, "POST", "/api/stages/epub/prompt-check",
+        {"project": "ACTIVE/test_book", "params": {}})
+    assert res2.status == 404, payload2
+
+
+def test_prompt_check_cache_resets_on_file_mtime(srv_ctx, monkeypatch):
+    """Вердикт кэшируется по (книга, стадия, файл, mtime): повтор формы
+    не запускает скрипт, правка промпта — запускает."""
+    import subprocess as sp
+
+    _, port, projects_root = srv_ctx()
+    pdir = _pc_book(port, projects_root)
+    n = {"calls": 0}
+
+    def fake_run(argv, **kw):
+        n["calls"] += 1
+        out = Path(kw["cwd"]) / web_api.PROMPT_CHECK_FILE
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"stage": "ner", "state": "file",
+                                   "tags": [], "problems": ["x"], "notes": [],
+                                   "mtime": 1.0}), encoding="utf-8")
+        return sp.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    body = {"project": "ACTIVE/test_book",
+            "params": {"prompt_file": "ner_prompt.txt"}}
+    for _ in range(2):
+        res, payload = _request(port, "POST", "/api/stages/ner/prompt-check",
+                                body)
+        assert res.status == 200 and payload["result"]["problems"] == ["x"]
+    assert n["calls"] == 1, "повтор формы обязан читаться из кеша"
+
+    import os as _os
+    pf = pdir / "prompts" / "ner_prompt.txt"
+    _os.utime(pf, (100.0, 100.0))
+    _request(port, "POST", "/api/stages/ner/prompt-check", body)
+    assert n["calls"] == 2, "mtime файла изменился — проверка заново"
+
+
+def test_prompt_check_silent_on_failure(srv_ctx, monkeypatch):
+    """Фоновая проверка не ломает форму: ошибка скрипта — пустой результат."""
+    import subprocess as sp
+
+    _, port, projects_root = srv_ctx()
+    _pc_book(port, projects_root)
+
+    def fake_run(argv, **kw):
+        return sp.CompletedProcess(argv, 2, stdout="", stderr="ERROR: бум")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    res, payload = _request(
+        port, "POST", "/api/stages/wiki/prompt-check",
+        {"project": "ACTIVE/test_book", "params": {}})
+    assert res.status == 200, payload
+    assert payload["ok"] is True and payload["result"] is None
+    assert "бум" in payload["error"]
+
+
 def _projects_root_of(srv_ctx):
     """projects_root из фикстуры srv_ctx (3-й элемент кортежа)."""
     _, _, projects_root = srv_ctx()

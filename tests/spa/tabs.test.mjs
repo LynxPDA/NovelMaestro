@@ -235,6 +235,10 @@ async function api(path, opts = {}) {
     if (p.endsWith("/preview-request")) {
       return { ok: true, ...((globalThis.__preview) || { messages: [] }) };
     }
+    /* проверка промпт-файла: вердикт скрипта стадии отдаёт тест */
+    if (p.endsWith("/prompt-check")) {
+      return { ok: true, result: globalThis.__promptCheck || null };
+    }
     return { ok: true, moved: [], skipped: [] };
   }
   if (p === "/files") {
@@ -288,7 +292,10 @@ async function api(path, opts = {}) {
   if (p.startsWith("/stages/")) {
     const key = p.split("/")[2];
     /* preview: true — стадия LLM, у неё есть «Предпросмотр запроса» */
-    return { spec: { key, title: key, preview: true,
+    /* спека без key — как у сервера (spec_for отдаёт title/script/fields),
+       название стадии то же, что в /stages: по нему и ищется карточка */
+    const meta = STAGES.find((s) => s.key === key) || {};
+    return { spec: { title: meta.title || key, preview: true,
                      fields: SPEC_FIELDS[key] || [] },
              options: globalThis.__stageOptions || {} };
   }
@@ -323,6 +330,9 @@ const PROFILE_FIELD = {
 const SPEC_FIELDS = {
   ner: [
     { ...PROFILE_FIELD },
+    { name: "prompt_file", label: "Файл промпта", type: "files",
+      dir: "prompts", ext: [".txt"], default: "", autofile: "ner_prompt.txt",
+      help: "Файл промпта глоссария" },
     { name: "chunk_size", label: "Размер чанка, ТОКЕНЫ", type: "number",
       default: "8000" },
     { name: "start", label: "Начальная глава", type: "number", default: "" },
@@ -1406,6 +1416,62 @@ test("запуски: пустой конец диапазона при уход
   await end._listeners.input[0]({ target: end });
   assert.equal(end.value, "", "при вводе автоподстановка не мешает");
   delete globalThis.__stageOptions;
+  globalThis.localStorage.clear();
+});
+
+/* ── проверка промпт-файла: иконка у поля файла промпта ────────────────
+ * вердикт отдаёт скрипт стадии (--check-prompt): SPA показывает его только
+ * при настоящих замечаниях и перечитывает на смене выбранного файла */
+test("запуски: проверка промпта — иконка только при замечаниях", async () => {
+  globalThis.localStorage.clear();
+  globalThis.__calls = [];
+  globalThis.__stageOptions = { prompts: ["ner_prompt.txt", "ner_alt.txt"] };
+  globalThis.__promptCheck = {
+    stage: "ner", file: "prompts/ner_prompt.txt", state: "file",
+    tags: ["prompt_pass1"],
+    problems: ["в <prompt_pass2> нет переменной {ner_json}"],
+    notes: ["внешний промпт не выбран"],
+  };
+  const page = await runStage("ner");
+  await tick();
+  const wrap = findByClass(page, "field")
+    .find((f) => f._field && f._field.name === "prompt_file");
+  assert.ok(wrap, "поле файла промпта в форме есть");
+  const slot = findByClass(wrap, "run-prompt-warn")[0];
+  assert.ok(slot, "у поля промпта есть узел проверки");
+  const icon = findByClass(slot, "run-prompt-warn-icon")[0];
+  assert.ok(icon, "при замечаниях иконка видна");
+  assert.match(icon.getAttribute("aria-label"), /нет переменной \{ner_json\}/);
+  assert.match(icon.getAttribute("aria-label"),
+    /^Проверка промпта «Глоссарий», замечаний: 1/, "тултип называет стадию");
+  /* проверка уходит с полями формы: файл выбран автоподхватом */
+  const call = globalThis.__calls
+    .filter((c) => c.path === "/stages/ner/prompt-check").pop();
+  assert.ok(call, "проверка ушла на сервер при открытии формы");
+  assert.equal(call.body.project, "ACTIVE/Книга");
+  assert.equal(call.body.params.prompt_file, "prompts/ner_prompt.txt",
+    "файл уезжает скрипту путём внутри книги, а не голым именем");
+  /* вердикт чист — иконка уходит (пустой выбор промпта замечанием не считается) */
+  const sel = findTag(wrap, "select")[0];
+  globalThis.__promptCheck = {
+    stage: "ner", file: "prompts/ner_alt.txt", state: "file",
+    tags: ["prompt_pass1", "prompt_pass2"], problems: [], notes: [],
+  };
+  sel.value = "ner_alt.txt";
+  /* у селекта два слушателя change (значение и проверка) — оба идут по порядку */
+  for (const fn of sel._listeners.change) {
+    await fn({ target: sel });
+  }
+  await tick();
+  assert.equal(findByClass(slot, "run-prompt-warn-icon").length, 0,
+    "чистый промпт — иконки нет");
+  const call2 = globalThis.__calls
+    .filter((c) => c.path === "/stages/ner/prompt-check").pop();
+  assert.equal(call2.body.params.prompt_file, "prompts/ner_alt.txt",
+    "смена файла — новая проверка");
+  delete globalThis.__stageOptions;
+  delete globalThis.__promptCheck;
+  globalThis.__calls = [];
   globalThis.localStorage.clear();
 });
 
