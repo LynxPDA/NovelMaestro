@@ -260,6 +260,48 @@ def test_progress_web_mode_emits_events(monkeypatch, capsys):
     assert "термин принят" in out
 
 
+@pytest.mark.parametrize(
+    "log_every,log_every_seconds,steps,wanted",
+    [
+        # счётчик пишется каждые 5 шагов: 0, 5, 10 — и ни строкой больше
+        (5, 60.0, 10, ["0/10", "5/10", "10/10"]),
+        # частые шаги целиком в буфере кольцевого журнала запусков — это
+        # тысячи строк на прогон: при log_every=1 их ровно 11
+        (1, 60.0, 10, [f"{i}/10" for i in range(11)]),
+        # редкий счётчик (каждые 100 шагов) часовый интервал не режет: он
+        # не даёт писать его чаще, когда шагов много, а здесь их 4
+        (100, 3600.0, 4, ["0/10", "4/10"]),
+        # шаг каждые 0.02 с: за 4 шага часовой интервал даёт одну строку —
+        # 0/10, финальный счётчик добавляет close()
+        (1, 3600.0, 4, ["0/10", "1/10", "2/10", "3/10", "4/10"]),
+    ],
+    ids=["каждые_5_шагов", "каждый_шаг", "редкий_счётчик", "интервал_не_чаще"],
+)
+def test_progress_counter_line_is_throttled(monkeypatch, capsys, log_every,
+                                            log_every_seconds, steps, wanted):
+    """Строка счётчика в логе стадии — раз в log_every шагов (или раз в
+    log_every_seconds), а не на каждый шаг: на книге в 1300 глав прежний
+    режим давал тысячи одинаковых строк в кольцевом буфере запусков."""
+    monkeypatch.setenv("WEB_PROGRESS", "1")
+    logger = logging.getLogger("nm.test.progress")
+    lines: list[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            lines.append(record.getMessage())
+
+    handler = _Collect(level=logging.INFO)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    with st.Progress(10, "Глоссарий", logger=logger, log_every=log_every,
+                     log_every_seconds=log_every_seconds) as prog:
+        for _ in range(steps):
+            prog.step()
+    logger.removeHandler(handler)
+    assert [ln.split(": ", 1)[1] for ln in lines] == wanted
+    assert all(ln.startswith("📊 Прогресс: ") for ln in lines)
+
+
 def test_progress_cli_mode_uses_bar(monkeypatch, capsys):
     monkeypatch.delenv("WEB_PROGRESS", raising=False)
     with st.Progress(2, "Перевод", unit="глава", bar=True) as p:

@@ -46,7 +46,7 @@ API: константы `PROFILE_DEFAULT` (`general`) / `PROFILE_DEFAULT_TITLE` 
 
 `describe_profile(profile)` — строки лога о разрешённом конфиге: пишет их `resolve_profile`, а не тело стадии (иначе стадия отчитывается своим пустым флагом). Рассуждения и провайдер печатаются как реальные ключи payload, а не пересказом режима. `complete_until(stage, prompt, data, accept=, attempts=, note=)` — одна политика повторов на конвейер: `1 + RETRY_EMPTY` запросов, пустой результат — не ошибка, а повод спросить ещё раз, последний ответ берётся как есть, ошибка LLM возвращается сразу (её считает `MAX_RETRIES`).
 
-`LoggedStage` + `new_stage` (лог стадии и `log_argv`) / `Stage` + `bind_profile` + `setup_stage` (LLM-режим отдельно от лога: `--apply` и `--compile-chapters` не требуют настроенного сервера; `stage.complete(prompt, данные)` — один вызов стрима, `stage.preview()` — режим предпросмотра) / `Progress` (в CLI — бар tqdm с обязательным `unit=`, в web — только `@@PROGRESS@@`; лог стадии не трогает) / `REASONING_EFFORTS`.
+`LoggedStage` + `new_stage` (лог стадии и `log_argv`) / `Stage` + `bind_profile` + `setup_stage` (LLM-режим отдельно от лога: `--apply` и `--compile-chapters` не требуют настроенного сервера; `stage.complete(prompt, данные)` — один вызов стрима, `stage.preview()` — режим предпросмотра) / `Progress` (в CLI — бар tqdm с обязательным `unit=`, в web — только `@@PROGRESS@@`; строка счётчика в лог стадии — редкой строкой: каждые `LOG_EVERY` шагов или не чаще раза в `LOG_EVERY_SECONDS` секунд, финальную строку пишет `close()` — прежний счётчик на каждый шаг заливал кольцевой буфер запусков тысячами одинаковых строк) / `REASONING_EFFORTS`.
 
 # core/transport.py — единственная точка выхода в сеть (единственный HTTP-клиент)
 

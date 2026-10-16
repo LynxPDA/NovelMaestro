@@ -22,6 +22,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -528,6 +529,17 @@ def _make_bar(total: int, unit: str, label: str) -> Any:
     return cls(total=total, unit=unit, desc=label)
 
 
+# Как часто счётчик стадии дублируется строкой в лог стадии (web-режим):
+# счётчик на экране уже рисует полоса прогресса, а каждая строка лога — это
+# ещё одно SSE-событие и ещё одна перерисовка панели. Прежний режим «строка на
+# каждый шаг» на книге в 1300 глав заливал кольцевой буфер запусков тысячами
+# одинаковых «📊 Прогресс».
+LOG_EVERY = 50
+# …и не чаще одной строки в LOG_EVERY_SECONDS секунд: редкие шаги (чанк на
+# минуте) не должны оставлять лог без счётчика полчаса.
+LOG_EVERY_SECONDS = 60.0
+
+
 @dataclass
 class Progress:
     """Прогресс стадии: tqdm в CLI, @@PROGRESS@@ в web-режиме.
@@ -542,9 +554,12 @@ class Progress:
     unit: str = "шт."
     bar: bool = False
     logger: logging.Logger | None = None
-    log_every: int = 1
+    log_every: int = LOG_EVERY
+    log_every_seconds: float = LOG_EVERY_SECONDS
     done: int = 0
     _pbar: Any = None
+    _logged: int = -1
+    _logged_at: float = 0.0
 
     def __post_init__(self) -> None:
         self._pbar = _make_bar(self.total, self.unit, self.label)
@@ -574,12 +589,19 @@ class Progress:
         """Счётчик в лог стадии после внешних событий (снапшот ner.json)."""
         self._log_state()
 
-    def _log_state(self) -> None:
-        """Web-режим дублирует счётчик в лог стадии: log_every — как часто
-        (длинные прогоны не плодят по строке лога на чанк)."""
-        if (self.logger is not None and web_progress_enabled()
-                and self.done % max(1, self.log_every) == 0):
-            self.logger.info(f"📊 Прогресс: {self.done}/{self.total}")
+    def _log_state(self, force: bool = False) -> None:
+        """Счётчик в логе — редкой строкой: каждые log_every шагов или не чаще
+        раза в log_every_seconds (в CLI счётчик ведёт бар, здесь — no-op)."""
+        if self.logger is None or not web_progress_enabled():
+            return
+        now = time.monotonic()
+        if (not force and self._logged >= 0
+                and self.done - self._logged < max(1, self.log_every)
+                and now - self._logged_at < self.log_every_seconds):
+            return
+        self._logged = self.done
+        self._logged_at = now
+        self.logger.info(f"📊 Прогресс: {self.done}/{self.total}")
 
     def log(self, message: str) -> None:
         """Строка прогресса: tqdm.write не рвёт бар, иначе — обычный вывод."""
@@ -589,6 +611,10 @@ class Progress:
             print(message)
 
     def close(self) -> None:
+        """Снять бар и оставить в логе финальный счётчик (иначе хвост файла
+        обрывался бы на счёте минутной давности)."""
         if self._pbar is not None:
             self._pbar.close()
             self._pbar = None
+        if self.logger is not None and self._logged != self.done:
+            self._log_state(force=True)
