@@ -1,0 +1,122 @@
+// NovelMaestro Lite: призрак оригинала в читалке — интервалы терминов по нормализованной
+// карте, чанкование с диапазонами абзацев и совпадение модели при проверке сервера.
+// Части юзерскрипта — один IIFE, целиком в node они не исполняются (нужны DOM и GM_*),
+// поэтому подопытные блоки вырезаются из артефакта по маркерам и исполняются как чистый
+// код на заглушках. Запуск: node --test tests/tools/*.test.mjs
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import test from 'node:test';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const raw = fs.readFileSync(path.join(REPO, 'tools/NovelMaestro_Lite/novelmaestro-lite.user.js'), 'utf8');
+
+// кусок артефакта от одного маркера до другого
+const slice = (from, to, why) => {
+  const a = raw.indexOf(from);
+  const b = raw.indexOf(to, a);
+  assert.ok(a > 0 && b > a, `в артефакте не найден блок: ${why}`);
+  return raw.slice(a, b).replace(/^ {4}/gm, '');
+};
+
+// поиск терминов и чанкование: интервалы строятся по той же нормализации, что и хит
+const SEARCH = slice('const SEARCH_DROP_RE', '// ===== КНИГИ', 'поиск терминов');
+// призрак: нормализованная карта и интервалы термина — чистые функции (DOM внутри
+// остальных, но они в тестах не вызываются)
+const GHOST = slice('const GHOST_MARK_LIMIT', '// новую вкладку открываем', 'призрак оригинала');
+
+const api = new Function('readerContent', 'readerMode', 'config', 'progressStatus', 'progressShow',
+  `${SEARCH}\n${GHOST}\nreturn { termRanges, normalizedMap, splitByNewlines, splitByNewlinesRanged, paragraphsOf, estimateTokens };`)(
+  { classList: { add() {}, remove() {} }, replaceChildren() {}, querySelectorAll: () => [] },
+  { addEventListener() {}, removeEventListener() {} },
+  { ghostPreview: true, chunkSize: 10000 },
+  () => {},
+  () => {},
+);
+
+// ── интервалы терминов ─────────────────────────────────────────────────────────
+
+test('нормализованная карта возвращает индекс в оригинале', () => {
+  const { norm, back } = api.normalizedMap('Ван,  Линь!');
+  assert.equal(norm, 'ванлинь', 'нормализация разошлась с поиском терминов');
+  // пробел и запятая вычеркнуты — «Ван» всё равно занимает первые три буквы оригинала
+  assert.deepEqual(back[0], [0, 1]);
+  assert.deepEqual(back[2], [2, 3]);
+  assert.deepEqual(back[3], [6, 7], 'после вычеркнутой пунктуации карта потеряла сдвиг');
+});
+
+test('термин находится через пунктуацию и регистр, интервал — в оригинале', () => {
+  const text = 'Ван, Линь — сказал он.';
+  // интервалы полуоткрытые [начало, конец) — годятся для text.slice как есть
+  const [span] = api.termRanges(text, ['ван линь']);
+  assert.deepEqual(span, [0, 9]);
+  assert.equal(text.slice(span[0], span[1]), 'Ван, Линь');
+});
+
+test('алиасы и вложенные вхождения схлопываются в один интервал', () => {
+  const text = 'Секта Небесного Облака молчала.';
+  const ranges = api.termRanges(text, ['Секта Небесного Облака', 'Облака']);
+  assert.equal(ranges.length, 1, `вложенный интервал не схлопнулся: ${JSON.stringify(ranges)}`);
+  assert.equal(text.slice(ranges[0][0], ranges[0][1]), 'Секта Небесного Облака');
+});
+
+test('вхождения одного термина ограничены двадцатью на абзац', () => {
+  const text = Array.from({ length: 40 }, () => 'Ван Линь').join(', ');
+  assert.equal(api.termRanges(text, ['Ван Линь']).length, 20);
+});
+
+test('термин вне текста интервалов не даёт', () => {
+  assert.deepEqual(api.termRanges('Он просто шёл по дороге.', ['Ван Линь']), []);
+  assert.deepEqual(api.termRanges('', ['Ван Линь']), []);
+});
+
+// ── диапазоны чанков ───────────────────────────────────────────────────────────
+
+test('чанкование с диапазонами совпадает с обычным чанкованием', () => {
+  const text = Array.from({ length: 12 }, (_, i) => `Абзац номер ${i} с текстом про ${'字'.repeat(30)}`).join('\n\n');
+  for (const size of [30, 120, 400, 10000]) {
+    const plain = api.splitByNewlines(text, size);
+    const { chunks, ranges } = api.splitByNewlinesRanged(text, size);
+    assert.deepEqual(chunks, plain, `чанкование разошлось при chunkSize=${size}`);
+    // диапазоны покрывают все абзацы по порядку и не пересекаются
+    const paras = api.paragraphsOf(text);
+    assert.ok(ranges.length === chunks.length, 'диапазонов должно быть столько же, сколько чанков');
+    assert.equal(ranges[0][0], 0);
+    assert.equal(ranges[ranges.length - 1][1], paras.length - 1);
+    for (let i = 1; i < ranges.length; i++) assert.equal(ranges[i][0], ranges[i - 1][1] + 1);
+    // абзацы диапазона собраны в свой чанк — без пропусков и чужих
+    for (let i = 0; i < chunks.length; i++) {
+      const [a, b] = ranges[i];
+      assert.deepEqual(chunks[i].split('\n\n'), paras.slice(a, b + 1), `чанк ${i} не совпал со своим диапазоном`);
+    }
+  }
+});
+
+test('один абзац больше чанка — единственный чанк, диапазон один', () => {
+  const { chunks, ranges } = api.splitByNewlinesRanged('字'.repeat(5000), 100);
+  assert.equal(chunks.length, 1);
+  assert.deepEqual(ranges, [[0, 0]]);
+});
+
+// ── совпадение модели при проверке сервера ─────────────────────────────────────
+
+const CHECK = new Function(`${slice('const CHECK_TIMEOUT_MIN', 'async function checkServer', 'вердикт по /models')}
+return { modelMatch, similarModels };`)();
+
+test('модель находится точно (без регистра) и двусторонним includes', () => {
+  const ids = ['google/gemma-4-31b-it', 'qwen/qwen3-235b-a22b-2507'];
+  assert.equal(CHECK.modelMatch(ids, 'GOOGLE/Gemma-4-31B-IT'), 'google/gemma-4-31b-it');
+  assert.equal(CHECK.modelMatch(ids, 'gemma-4-31b'), 'google/gemma-4-31b-it');
+  assert.equal(CHECK.modelMatch(ids, 'qwen/qwen3-235b-a22b-2507-instruct'), 'qwen/qwen3-235b-a22b-2507');
+  assert.equal(CHECK.modelMatch(ids, 'нет-такой'), '');
+  assert.equal(CHECK.modelMatch([], 'gemma'), '');
+});
+
+test('подсказка по похожим id: не длиннее пяти и по общей подстроке', () => {
+  const ids = ['google/gemma-4-31b-it', 'google/gemma-3-27b-it', 'openai/gpt-5', 'x/y'];
+  const similar = CHECK.similarModels(ids, 'google/gemma-4-31b');
+  assert.deepEqual(similar, ['google/gemma-4-31b-it', 'google/gemma-3-27b-it']);
+  assert.ok(CHECK.similarModels(Array.from({ length: 20 }, (_, i) => `model-gemma-${i}`), 'gemma').length <= 5);
+  assert.deepEqual(CHECK.similarModels(ids, 'юпитер'), []);
+});

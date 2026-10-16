@@ -105,7 +105,8 @@
         } finally { nerRunning = false; }
     }
     async function extractTermsRun(text, targetKey, onProgress) {
-        const chunks = splitByNewlines(text, config.chunkSize);
+        // диапазоны абзацев чанков — их подсвечивает призрак читалки; чанкование то же
+        const { chunks, ranges } = splitByNewlinesRanged(text, config.chunkSize);
         const glossary = { ...bookGlossary(targetKey) };
         const hash = textHash(text);
         const expectedTotal = Math.max(1, text.length * NER_RESPONSE_RATIO);
@@ -121,9 +122,21 @@
             startChunk = Math.min(stored.nerDone, chunks.length);
             if (Array.isArray(stored.nerMissed)) for (const m of stored.nerMissed) if (Number.isInteger(m) && m >= 0 && m < chunks.length) missSet.add(m);
         }
-        const emitProgress = (i, retry) => {
-            if (onProgress) onProgress({ chunk: i + 1, total: chunks.length, resumed: startChunk, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null });
+        // найденные в чанке термины глоссария — считаются до ответа модели и один раз
+        const chunkTermsOf = [];
+        const emitProgress = (i, retry, extra) => {
+            if (!onProgress) return;
+            onProgress({ chunk: i + 1, total: chunks.length, resumed: startChunk, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null, ...(extra || {}) });
         };
+        // успех чанка: прогрессу достаётся то, чем можно подсветить текст в призраке
+        // (диапазон абзацев, найденные термины, новые записи) — лишние поля панель
+        // прогресса игнорирует
+        const chunkDone = (i, fresh) => emitProgress(i, null, {
+            chunkDone: i,
+            range: ranges[i],
+            matched: chunkTermsOf[i].map(t => ({ term: t.term, aliases: t.aliases || [] })),
+            fresh: fresh.map(it => ({ term: it.term, aliases: it.aliases || [] }))
+        });
         for (let i = 0; i < chunks.length; i++) {
             if (cancelRequested) { canceled = true; break; }
             if (i < startChunk && !missSet.has(i)) { emitProgress(i); continue; }
@@ -136,6 +149,7 @@
                 // какие термины глоссария реально есть в чанке; сам глоссарий до
                 // этого места не менялся, поэтому список не зависит от ответа модели
                 const chunkTerms = findRelevantTerms(chunks[i], glossary);
+                chunkTermsOf[i] = chunkTerms;
                 const { items, bad } = await requestNerChunk(chunks[i], onChunk, chunkTerms);
                 badItems += bad;
                 // count считает код, а не модель: та могла термина в тексте не
@@ -148,6 +162,7 @@
                     glossary[t.id].count = (glossary[t.id].count || 0) + 1;
                     incremented++;
                 }
+                const fresh = [];
                 for (const item of items) {
                     const existingId = findGlossaryEntry(glossary, item.term);
                     if (existingId) {
@@ -158,8 +173,10 @@
                         continue;
                     }
                     glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = normalizeTerm(item);
+                    fresh.push(item);
                     added++;
                 }
+                chunkDone(i, fresh);
             } catch (error) {
                 if (cancelRequested) { canceled = true; emitProgress(i); break; }
                 // битый формат одного чанка не роняет весь прогон: чанк остаётся

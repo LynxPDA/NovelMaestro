@@ -115,6 +115,9 @@
         extractionPrompt: EXTRACTION_PROMPT,
         fuzzySearchThreshold: 0.7,
         autoNER: true,
+        // читалка показывает захваченный оригинал, пока идёт извлечение терминов
+        // и пока не пришёл первый токен перевода: работа идёт, экран не пустой
+        ghostPreview: true,
         // UI-предпочтение: какая вторичная вкладка настроек открыта
         settingsSubTab: 'main',
         glossaryCurrentPageOnly: false,

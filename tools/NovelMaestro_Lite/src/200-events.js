@@ -10,8 +10,9 @@
     $('#btn-extract-menu').addEventListener('click', handleExtractTerms);
     $('#btn-train-menu').addEventListener('click', () => { pendingTranslateAfterTraining = false; startElementTraining(); });
     $('#nm-close').addEventListener('click', closeModal);
-    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
-    bookModal.addEventListener('click', e => { if (e.target === bookModal) bookModal.classList.remove('active'); });
+    // модалки закрываем только явно (#nm-close и кнопки модалки книги): клик по
+    // подложке ловил случайные клики и отпускание выделения текста, выдернутое за
+    // пределы окна
     $('#reader-close').addEventListener('click', closeReader);
     $('#reader-menu').addEventListener('click', (e) => { e.stopPropagation(); $('#reader-menu-panel').classList.toggle('active'); });
     $('#reader-export').addEventListener('click', () => exportChapterToTxt());

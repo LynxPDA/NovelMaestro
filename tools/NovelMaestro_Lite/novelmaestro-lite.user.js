@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NovelMaestro Lite
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      1.50
+// @version      1.51
 // @description  Универсальный переводчик новелл с глоссарием по книгам, стримингом и режимом читалки
 // @author       NovelMaestro
 // @license      MIT
@@ -67,7 +67,7 @@
     // 080-ui-markup.js
     if (document.getElementById('nm-lite-host')) return;
 
-    const APP_VERSION = '1.50';
+    const APP_VERSION = '1.51';
 
     // ===== КОНФИГУРАЦИЯ =====
     // Штатный промпт перевода (редактируемое поле Настроек). Плейсхолдеры те же,
@@ -184,6 +184,9 @@
         extractionPrompt: EXTRACTION_PROMPT,
         fuzzySearchThreshold: 0.7,
         autoNER: true,
+        // читалка показывает захваченный оригинал, пока идёт извлечение терминов
+        // и пока не пришёл первый токен перевода: работа идёт, экран не пустой
+        ghostPreview: true,
         // UI-предпочтение: какая вторичная вкладка настроек открыта
         settingsSubTab: 'main',
         glossaryCurrentPageOnly: false,
@@ -378,6 +381,36 @@
         }
         if (cur) chunks.push(cur);
         return chunks.length > 0 ? chunks : [text];
+    }
+    /**
+     * Как splitByNewlines, но с картой абзацев: ranges[i] — [startPara, endPara]
+     * включительно, из которых собран чанк. Призраку читалки важно, где именно в
+     * тексте лежит текущий чанк (фон зоны и вспышки терминов), а чанкование обязано
+     * остаться ТЕМ ЖЕ: разойдётся с переводом — прогресс и подсветка поедут.
+     */
+    function splitByNewlinesRanged(text, chunkSize) {
+        const paras = paragraphsOf(text);
+        const chunks = [];
+        const ranges = [];
+        let cur = '';
+        let curTokens = 0;
+        let start = 0;
+        for (let i = 0; i < paras.length; i++) {
+            const pt = estimateTokens(paras[i]);
+            if (cur && curTokens + pt + 1 > chunkSize) {
+                chunks.push(cur);
+                ranges.push([start, i - 1]);
+                cur = paras[i];
+                curTokens = pt;
+                start = i;
+            } else {
+                cur += (cur ? '\n\n' : '') + paras[i];
+                curTokens = estimateTokens(cur);
+            }
+        }
+        if (cur) { chunks.push(cur); ranges.push([start, paras.length - 1]); }
+        if (chunks.length === 0) return { chunks: [text], ranges: [[0, Math.max(0, paras.length - 1)]] };
+        return { chunks, ranges };
     }
     // ===== КНИГИ =====
     function pageCacheKey() { return location.href.split('#')[0]; }
@@ -1047,6 +1080,15 @@
             .nm-progress-fill.retry { background: repeating-linear-gradient(45deg, #f59e0b 0 10px, #fbbf24 10px 20px); background-size: 28.3px 28.3px; animation: nm-retry-stripes .8s linear infinite; }
             @keyframes nm-retry-stripes { to { background-position: 28.3px 0; } }
             .nm-input:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
+            /* Ключ API маскируется своим слоем, а не type=password: браузер считает
+               поле с паролем сохранённым логином и предлагает сохранить ключ на сайтах
+               с формой входа. Фолбэк без поддержки свойства — обычный password
+               (см. initApiKeyMask). */
+            .nm-key-row { display: flex; gap: 8px; }
+            .nm-key-row .nm-input { flex: 1; }
+            .nm-key-row .nm-btn { margin: 0; }
+            .nm-masked { -webkit-text-security: disc; }
+            .nm-masked.nm-reveal { -webkit-text-security: none; }
             /* битый ввод (не число, вне диапазона, неразобранный JSON): запрос уходит
                с подменённым значением — поле обязано быть подсвечено */
             .nm-input-bad { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
@@ -1143,6 +1185,19 @@
             .nm-current-only { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; white-space: nowrap; cursor: pointer; }
             .nm-reader-content { margin: 0 auto; padding: 70px 20px 150px; max-width: var(--nm-content-width, 66%); }
             .nm-reader-content p { text-align: justify; }
+            /* Призрак оригинала: тот же текст, что и в переводе, но бледнее — видно,
+               что работа идёт. Цвета — реальными классами темы читалки. */
+            #nm-reader-mode.nm-reader-light .nm-ghost p { color: #b3aca0; }
+            #nm-reader-mode.nm-reader-dark .nm-ghost p { color: #5a5e68; }
+            .nm-ghost { transition: opacity .35s ease; }
+            .nm-ghost-fade { opacity: 0; }
+            /* текущий чанк извлечения: фон в зоне работы, а не подсветка текста */
+            .nm-ghost p.nm-ghost-chunk { background: rgba(37,99,235,.10); border-radius: 4px; }
+            #nm-reader-mode.nm-reader-dark .nm-ghost p.nm-ghost-chunk { background: rgba(127,176,255,.12); }
+            /* вспышка термина: затухает сама, режим правки не требует */
+            .nm-ghost mark.nm-hit-new { background: rgba(245,158,11,.45); color: inherit; border-radius: 3px; animation: nm-hit-flash 1.4s ease-out 1 forwards; }
+            #nm-reader-mode.nm-reader-dark .nm-ghost mark.nm-hit-new { background: rgba(245,158,11,.35); }
+            @keyframes nm-hit-flash { from { background: rgba(245,158,11,.85); } to { background: rgba(245,158,11,.35); } }
             .nm-reader-loading { text-align: center; padding: 60px 0; font-size: 16px; opacity: .7; }
             .nm-reader-bottombar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; display: flex; flex-direction: column; gap: 8px; align-items: center; padding: 10px 14px 12px; backdrop-filter: blur(6px); }
             #nm-reader-mode.nm-reader-light .nm-reader-bottombar { background: rgba(250,247,240,.92); border-top: 1px solid #e5ded2; }
@@ -1342,7 +1397,16 @@ const host = document.createElement('div');
                             <div class="nm-section">
                                 <h3>🤖 API</h3>
                                 <div class="nm-input-group"><label>API Host:</label><input type="text" class="nm-input" id="api-host"></div>
-                                <div class="nm-input-group"><label>API Key:</label><input type="password" class="nm-input" id="api-key"></div>
+                                <div class="nm-input-group"><label>API Key:</label>
+                                    <div class="nm-key-row">
+                                        <!-- не type=password: браузер считает такое поле сохранённым паролем и предлагает сохранить ключ API на сайтах с логином -->
+                                        <input type="text" class="nm-input nm-masked" id="api-key"
+                                               autocomplete="off" name="nm-lite-api-key" spellcheck="false"
+                                               autocapitalize="off" autocorrect="off"
+                                               data-lpignore="true" data-1p-ignore="true">
+                                        <button type="button" class="nm-btn nm-btn-sm nm-btn-secondary" id="btn-key-eye" title="Показать/скрыть ключ">👁</button>
+                                    </div>
+                                </div>
                                 <label class="nm-input-group nm-check-row" data-tip="Пустой API Key разрешён: с этим чекбоксом заголовок Authorization не отправляется вовсе."><input type="checkbox" id="local-model"><span>🖥️ Локальная модель без API-ключа</span></label>
                                 <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
                                 <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
@@ -1388,7 +1452,8 @@ const host = document.createElement('div');
                                 <div class="nm-input-group" data-tip="Безразмерное отношение 0.0–1.0: насколько размытым может быть совпадение термина с текстом главы. Меньше — в промпт перевода попадёт больше терминов, больше — только точные."><label>Порог нечёткого поиска:</label>
                                     <input type="number" class="nm-input" id="fuzzy-threshold" min="0" max="1" step="0.05">
                                 </div>
-                                <label class="nm-input-group nm-check-row" data-tip="Перед переводом главы Lite сначала извлекает с страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же)."><input type="checkbox" id="auto-ner"><span>Автоизвлечение терминов (один раз на страницу)</span></label>
+                                <label class="nm-input-group nm-check-row" data-tip="По умолчанию включён: перед переводом Lite сначала извлекает со страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же)."><input type="checkbox" id="auto-ner"><span>Автоизвлечение терминов (один раз на страницу)</span></label>
+                                <label class="nm-input-group nm-check-row" data-tip="Пока идёт извлечение терминов и не пришёл первый токен перевода, в читалке виден сам оригинал главы бледным текстом — экран не выглядит зависшим."><input type="checkbox" id="ghost-preview"><span>👻 Показывать захваченный оригинал до перевода</span></label>
                             </div>
                             <div class="nm-section">
                                 <h3>💬 Промпты</h3>
@@ -2413,7 +2478,7 @@ const host = document.createElement('div');
             reader = resp.body.getReader();
             activeReader = reader;
             const decoder = new TextDecoder();
-            let text = '', buffer = '', streamError = null, streamModel = '', sawDone = false, reasoningChars = 0;
+            let text = '', buffer = '', streamError = null, streamModel = '', sawDone = false, reasoningChars = 0, firstDeltaSent = false;
             const handleLine = (line) => {
                 const trimmed = line.trim();
                 if (!trimmed.startsWith('data:')) return;
@@ -2445,6 +2510,9 @@ const host = document.createElement('div');
                         reasoningChars += thought.length;
                         if (cb.onReasoning) cb.onReasoning(thought);
                     }
+                    // первый полезный токен — единожды: призрак оригинала обязан погаснуть
+                    // ровно тогда, когда на экране появилось что показать
+                    if ((content || thought) && !firstDeltaSent) { firstDeltaSent = true; if (cb.onFirstDelta) cb.onFirstDelta(); }
                     if (content) { text += content; if (cb.onDelta) cb.onDelta(content); }
                 } catch {}
             };
@@ -2686,62 +2754,110 @@ const host = document.createElement('div');
         return await fetchWithRetry(url, options, !!stream, cb);
     }
     // GET /models у провайдера весит сотни килобайт (у routerai.ru — 528 моделей,
-    // ~876КБ), поэтому он получает собственный запас времени и в проверке участвует
-    // только как диагноз. Пользовательский requestTimeout остаётся как есть: он
-    // относится к настоящим запросам перевода.
+    // ~876КБ), поэтому он получает собственный запас времени. Пользовательский
+    // requestTimeout остаётся как есть: он относится к настоящим запросам перевода.
     const CHECK_TIMEOUT_MIN = 60;
+    const MODEL_HINT_LIMIT = 5;
+    /** Совпадение модели: точное (без регистра) или двусторонний includes. */
+    function modelMatch(ids, want) {
+        const w = String(want || '').trim().toLowerCase();
+        if (!w) return '';
+        for (const id of ids) if (id.toLowerCase() === w) return id;
+        for (const id of ids) { const l = id.toLowerCase(); if (l.includes(w) || w.includes(l)) return id; }
+        return '';
+    }
+    /** Похожие id для подсказки: по самой длинной общей подстроке с нужным именем. */
+    function similarModels(ids, want, limit = MODEL_HINT_LIMIT) {
+        const w = String(want || '').trim().toLowerCase();
+        if (!w) return [];
+        const score = (id) => {
+            const l = id.toLowerCase();
+            for (let n = Math.min(l.length, w.length); n >= 3; n--) {
+                for (let i = 0; i + n <= l.length; i++) if (w.includes(l.slice(i, i + n))) return n;
+            }
+            return 0;
+        };
+        return ids.map(id => [id, score(id)]).filter(([, s]) => s > 0)
+            .sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id]) => id);
+    }
+    /**
+     * Проверка сервера — вердикт по GET /models, а не по запросу генерации: он
+     * отвечает на главный вопрос (есть ли нужная модель) и ничего не стоит модели.
+     * Пинг чата запускается только когда /models не поддерживается (404/405/ошибка)
+     * — тогда он говорит, жив ли канал вообще. Пустой пинг сам по себе ❌ не даёт:
+     * сервер, ответивший пустым стримом, — это доступный сервер.
+     */
     async function checkServer() {
         const statusEl = $('#server-status');
+        const btn = $('#btn-check-server');
         const gmMode = config.gmTransport === 'auto' ? 'page' : config.gmTransport;
         const transport = typeof GM_xmlhttpRequest === 'undefined' ? 'fetch'
             : (gmMode === 'page' ? 'fetch из страницы'
                 : (gmStreamMode === 'text' ? 'менеджер · XHR (тело целиком)' : 'менеджер · поток'));
         const base = apiBase();
-        if (!base) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Host'; return; }
-        if (!config.apiKey && !config.localModel) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Key (или включите «Локальная модель без API-ключа»)'; return; }
-        if (!config.model) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указана модель'; return; }
-        const target = requestTarget(base);
         const timeout = config.requestTimeout > 0 ? config.requestTimeout : 0;
         const diagTimeout = Math.max(timeout, CHECK_TIMEOUT_MIN);
         const show = (cls, text) => {
             statusEl.className = `nm-server-status show ${cls}`;
             statusEl.textContent = text;
         };
-        show('loading', `🔌 Проверяю ${target}… (${transport}, таймаут ${timeout || '∞'}с)`);
-        // Первым идёт короткий пинг чата — это ровно тот запрос, которым Lite переводит.
-        // Стримом и с выходом по первому токену: серверы, отвечающие SSE и не спешащие
-        // закрывать соединение (на них не-стримовый пинг висел до таймаута), отвечают
-        // сразу; соединение закрываем сами, не дожидаясь их вежливости.
-        const t0 = Date.now();
-        // max_tokens:1 расходится с включённым thinking: часть серверов требует
-        // max_tokens больше бюджета размышлений — тогда лимит просто не шлём
-        const extra = thinkingMode() === 'on' ? null : { max_tokens: 1 };
-        const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, true, extra);
+        // проверка идёт секундами — кнопка на это время блокируется от повторного нажатия
+        if (btn) btn.disabled = true;
         try {
-            const res = await fetchAttempt(url, options, true, timeout,
-                { stopOnFirstContent: true, deadline: true });
-            const got = String(res.text || '').trim();
-            show('ok', `✅ Сервер доступен • ${target} • пинг ${Date.now() - t0}мс • модель ${res.model || config.model}`
-                + (got ? ` • ответ: ${got.slice(0, 24)}` : (res.reasoning ? ` • 💭 только размышления (${res.reasoning} зн.)` : ''))
-                + ` • ${reasoningSummary()} • ${transport}`);
-        } catch (e) {
-            // Пинг не дошёл — отличаем «адрес недоступен» от «модель думает дольше
-            // таймаута». Диагностический GET /models идёт со своим запасом: он тяжелый.
-            const main = describeError(e, target, Date.now() - t0, url);
-            show('loading', `⏳ ${main} • проверяю /models как диагноз…`);
-            const t1 = Date.now();
-            let note;
+            if (!base) { show('err', '❌ Не указан API Host'); return; }
+            if (!config.apiKey && !config.localModel) { show('err', '❌ Не указан API Key (или включите «Локальная модель без API-ключа»)'); return; }
+            if (!config.model) { show('err', '❌ Не указана модель'); return; }
+            const target = requestTarget(base);
+            const modelsUrl = base + '/models';
+            show('loading', `🔌 Проверяю ${target}… (${transport}, таймаут ${timeout || '∞'}с)`);
+            const t0 = Date.now();
+            let ids = null, modelsErr = null;
             try {
-                const resp = await fetchAttempt(base + '/models', { method: 'GET', headers: apiHeaders(false) }, false, diagTimeout, {});
+                const resp = await fetchAttempt(modelsUrl, { method: 'GET', headers: apiHeaders(false) }, false, diagTimeout, {});
                 const data = await resp.json().catch(() => null);
                 const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
-                note = `/models отвечает за ${Date.now() - t1}мс (${list.length} моделей, `
-                    + (list.some(m => m && m.id === config.model) ? `модель «${config.model}» есть` : `модели «${config.model}» в списке НЕТ`)
-                    + ') — значит канал есть, смотрите время ответа модели';
-            } catch (e2) {
-                note = `/models тоже молчит: ${describeError(e2, target, Date.now() - t1, base)}`;
+                ids = list.map(m => (m && typeof m.id === 'string' ? m.id : '')).filter(Boolean);
+            } catch (e) { modelsErr = e; }
+            if (ids) {
+                const found = modelMatch(ids, config.model);
+                if (found) {
+                    show('ok', `✅ Сервер доступен • ${target} • /models за ${Date.now() - t0}мс • модель «${found}» среди ${ids.length}`
+                        + ` • ${transport} • ${reasoningSummary()}`);
+                    return;
+                }
+                const similar = similarModels(ids, config.model);
+                show('err', `❌ ${target}: сервер отвечает, модели «${config.model}» среди ${ids.length} нет`
+                    + (similar.length ? ` • похожие: ${similar.join(', ')}` : ' • похожих не нашлось') + ` • ${transport}`);
+                return;
             }
-            show('err', `❌ ${main} • ${note} • ${transport}`);
+            // /models не поддерживается — канал чата проверяем пингом (тем самым
+            // запросом, которым Lite переводит: стрим и выход по первому токену)
+            show('loading', `⏳ /models не ответил — проверяю канал чата…`);
+            // max_tokens:1 расходится с включённым thinking: часть серверов требует
+            // max_tokens больше бюджета размышлений — тогда лимит просто не шлём
+            const extra = thinkingMode() === 'on' ? null : { max_tokens: 1 };
+            const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, true, extra);
+            const t1 = Date.now();
+            try {
+                const res = await fetchAttempt(url, options, true, timeout, { stopOnFirstContent: true, deadline: true });
+                const got = String(res.text || '').trim();
+                const alive = got ? `ответ: ${got.slice(0, 24)}` : (res.reasoning ? `💭 только размышления (${res.reasoning} зн.)` : 'пустой ответ модели');
+                show('loading', `⚠️ ${target}: /models не поддерживается — модель проверить нельзя; канал чата отвечает (${alive}, ${Date.now() - t1}мс)`
+                    + ` • ${transport} • ${reasoningSummary()}`);
+            } catch (e) {
+                const modelsNote = `/models: ${describeError(modelsErr, target, Date.now() - t0, modelsUrl)}`;
+                // сервер, ответивший HTTP-кодом или пустым стримом, — доступный сервер:
+                // 401/400/«пустой ответ» — это его ответ, а не недоступность адреса
+                const replied = e && (e.status || /Пустой ответ/.test(e.message || ''));
+                if (replied) {
+                    show('loading', `⚠️ ${target}: /models не поддерживается, а канал чата отвечает отказом (${describeError(e, target, Date.now() - t1, url)})`
+                        + ` • модель проверить нельзя • ${transport} • ${reasoningSummary()}`);
+                    return;
+                }
+                show('err', `❌ ${describeError(e, target, Date.now() - t1, url)} • ${modelsNote} • ${transport}`);
+            }
+        } finally {
+            if (btn) btn.disabled = false;
         }
     }
     // ===== NER =====
@@ -2851,7 +2967,8 @@ const host = document.createElement('div');
         } finally { nerRunning = false; }
     }
     async function extractTermsRun(text, targetKey, onProgress) {
-        const chunks = splitByNewlines(text, config.chunkSize);
+        // диапазоны абзацев чанков — их подсвечивает призрак читалки; чанкование то же
+        const { chunks, ranges } = splitByNewlinesRanged(text, config.chunkSize);
         const glossary = { ...bookGlossary(targetKey) };
         const hash = textHash(text);
         const expectedTotal = Math.max(1, text.length * NER_RESPONSE_RATIO);
@@ -2867,9 +2984,21 @@ const host = document.createElement('div');
             startChunk = Math.min(stored.nerDone, chunks.length);
             if (Array.isArray(stored.nerMissed)) for (const m of stored.nerMissed) if (Number.isInteger(m) && m >= 0 && m < chunks.length) missSet.add(m);
         }
-        const emitProgress = (i, retry) => {
-            if (onProgress) onProgress({ chunk: i + 1, total: chunks.length, resumed: startChunk, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null });
+        // найденные в чанке термины глоссария — считаются до ответа модели и один раз
+        const chunkTermsOf = [];
+        const emitProgress = (i, retry, extra) => {
+            if (!onProgress) return;
+            onProgress({ chunk: i + 1, total: chunks.length, resumed: startChunk, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null, ...(extra || {}) });
         };
+        // успех чанка: прогрессу достаётся то, чем можно подсветить текст в призраке
+        // (диапазон абзацев, найденные термины, новые записи) — лишние поля панель
+        // прогресса игнорирует
+        const chunkDone = (i, fresh) => emitProgress(i, null, {
+            chunkDone: i,
+            range: ranges[i],
+            matched: chunkTermsOf[i].map(t => ({ term: t.term, aliases: t.aliases || [] })),
+            fresh: fresh.map(it => ({ term: it.term, aliases: it.aliases || [] }))
+        });
         for (let i = 0; i < chunks.length; i++) {
             if (cancelRequested) { canceled = true; break; }
             if (i < startChunk && !missSet.has(i)) { emitProgress(i); continue; }
@@ -2882,6 +3011,7 @@ const host = document.createElement('div');
                 // какие термины глоссария реально есть в чанке; сам глоссарий до
                 // этого места не менялся, поэтому список не зависит от ответа модели
                 const chunkTerms = findRelevantTerms(chunks[i], glossary);
+                chunkTermsOf[i] = chunkTerms;
                 const { items, bad } = await requestNerChunk(chunks[i], onChunk, chunkTerms);
                 badItems += bad;
                 // count считает код, а не модель: та могла термина в тексте не
@@ -2894,6 +3024,7 @@ const host = document.createElement('div');
                     glossary[t.id].count = (glossary[t.id].count || 0) + 1;
                     incremented++;
                 }
+                const fresh = [];
                 for (const item of items) {
                     const existingId = findGlossaryEntry(glossary, item.term);
                     if (existingId) {
@@ -2904,8 +3035,10 @@ const host = document.createElement('div');
                         continue;
                     }
                     glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = normalizeTerm(item);
+                    fresh.push(item);
                     added++;
                 }
+                chunkDone(i, fresh);
             } catch (error) {
                 if (cancelRequested) { canceled = true; emitProgress(i); break; }
                 // битый формат одного чанка не роняет весь прогон: чанк остаётся
@@ -2971,6 +3104,10 @@ const host = document.createElement('div');
         }
     }
     async function translateWithStreaming(element, originalText, job = {}) {
+        // страховка от чужого призрака (отмена на этапе NER, повторный запуск):
+        // призрак, поставленный самим прогоном, живёт до первого токена — его
+        // гасит onFirstDelta, и трогать его здесь рано
+        if (!job.onFirstDelta) ghostHide(false);
         const chunks = splitByNewlines(originalText, config.chunkSize);
         const totalParas = paragraphsOf(originalText).length;
         if (totalParas === 0) { progressStatus('Текст не найден'); return { text: '', completed: false, resumed: 0 }; }
@@ -2999,6 +3136,7 @@ const host = document.createElement('div');
                     + (resumed ? ` • продолжаю (${resumed}/${chunks.length} уже готово)` : ''));
                 let chunkTranslation = '', thoughtShown = false;
                 const res = await callLLM([{ role: 'user', content: chunkUserPrompt(chunks[i]) }], 0.7, true, {
+                    onFirstDelta: job.onFirstDelta,
                     // thinking-модель: пока приходят только размышления, прогресс
                     // обязан говорить «думает», а не молчать на «Чанк N/M»
                     onReasoning: () => {
@@ -3071,6 +3209,9 @@ const host = document.createElement('div');
         progressStatus(st.retry
             ? `⏱ ${st.retry.message} — повтор ${st.retry.nextAttempt}/${st.retry.attemptsTotal}`
             : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.resumed + 1}/${st.total})` : ''} • ~${st.pct}%`);
+        // призраку достаётся тот же прогресс: фон текущего чанка и вспышки терминов
+        // его диапазона — лишние поля панель прогресса молча игнорирует
+        ghostProgress(st);
     }
     // ===== ЧИТАЛКА =====
     // Тема «как в системе» должна реагировать на смену системной сразу, без перезагрузки
@@ -3131,6 +3272,9 @@ const host = document.createElement('div');
         readerMode.classList.remove('active');
         buttonsBar.style.display = '';
         readerState = null;
+        // классов nm-ghost* на контенте читалки оставаться не должно: у следующей
+        // главы призрак уже чужой (свежий текст и свои абзацы)
+        ghostHide(false);
         $('#reader-retranslate').style.display = '';
         progressHide();
     }
@@ -3148,11 +3292,208 @@ const host = document.createElement('div');
         readerState = data;
         $('#reader-title').textContent = data.title || '';
         if (rerender) {
+            // показ готового перевода отменяет призрак: он жил только вместо пустого экрана
+            ghostHide(false);
             renderTranslationInto(readerContent, data.text);
             readerMode.scrollTop = 0;
         }
         updateNavButtons();
     }
+
+    // ===== ПРИЗРАК ОРИГИНАЛА =====
+    // Пока идёт извлечение терминов, читалка уже открыта, а показывать нечего: пустой
+    // экран выглядит зависшим. Призрак — сам оригинал главы бледным текстом; он гаснет
+    // по первому токену перевода (или когда призрак показать нечем). Он read-only:
+    // ни в глоссарий, ни в книги не пишет и частот не трогает.
+    const GHOST_MARK_LIMIT = 200;   // mark на весь прогон: больше — это уже не подсветка
+    const GHOST_TERM_LIMIT = 20;    // вхождений одного термина в абзаце
+    const GHOST_FADE_MS = 350;
+    let ghostParas = [];
+    let ghostRanges = [];   // диапазоны чанков: [startPara, endPara]
+    let ghostActive = false;
+    let ghostAutoScroll = true;
+    let ghostFadeTimer = null;
+    let ghostFrame = 0;
+    let ghostPending = null;        // Set абзацев, ждущих перерисовки в кадре rAF
+    let ghostMarkCount = 0;
+    const ghostMarks = new Map();   // абзац → интервалы вспышек (отсортированы, без вложений)
+
+    /**
+     * Нормализованный текст и карта обратно в оригинал: строится ОДИН раз на абзац,
+     * а не на каждый вариант термина — за прогон вариантов бывают сотни.
+     */
+    function normalizedMap(text) {
+        const chars = [];
+        const back = [];
+        let i = 0;
+        for (const ch of String(text)) {
+            const piece = ch.normalize('NFC').toLowerCase().replace(SEARCH_DROP_RE, '');
+            const at = i + ch.length;
+            for (const c of piece) { chars.push(c); back.push([i, at]); }
+            i = at;
+        }
+        return { norm: chars.join(''), back };
+    }
+    /** Интервалы вхождений термина и его алиасов; вложения схлопываются. */
+    function termRanges(text, variants) {
+        const { norm, back } = normalizedMap(text);
+        if (!norm || !variants.length) return [];
+        const spans = [];
+        for (const v of variants) {
+            const needle = normalize(v);
+            if (!needle) continue;
+            let from = 0, hits = 0;
+            for (;;) {
+                const at = norm.indexOf(needle, from);
+                if (at < 0) break;
+                spans.push([back[at][0], back[at + needle.length - 1][1]]);
+                if (++hits >= GHOST_TERM_LIMIT) break;
+                from = at + needle.length;
+            }
+        }
+        spans.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+        const out = [];
+        for (const s of spans) {
+            const last = out[out.length - 1];
+            if (last && s[0] <= last[1]) { if (s[1] > last[1]) last[1] = s[1]; continue; }
+            out.push(s);
+        }
+        return out;
+    }
+    function ghostLiving() {
+        return ghostActive || ghostParas.length > 0 || !!ghostFadeTimer;
+    }
+    function clearGhost() {
+        const had = ghostActive || ghostParas.length > 0;
+        ghostActive = false;
+        ghostParas = [];
+        ghostRanges = [];
+        ghostMarks.clear();
+        ghostPending = null;
+        ghostMarkCount = 0;
+        readerContent.classList.remove('nm-ghost', 'nm-ghost-fade');
+        // содержимое трогаем только если оно призрака: перевод в читалке — не его работа
+        if (had) readerContent.replaceChildren();
+    }
+    /** Абзац с вспышками: детерминированная пересборка из текста и интервалов. */
+    function ghostParagraphNode(text, ranges) {
+        const frag = document.createDocumentFragment();
+        let pos = 0;
+        for (const [a, b] of ranges || []) {
+            if (a < pos) continue;
+            if (a > pos) frag.append(text.slice(pos, a));
+            const mark = document.createElement('mark');
+            mark.className = 'nm-hit-new';
+            mark.textContent = text.slice(a, b);
+            frag.append(mark);
+            pos = b;
+        }
+        if (pos < text.length) frag.append(text.slice(pos));
+        return frag;
+    }
+    const ghostParagraphs = () => readerContent.querySelectorAll('p');
+    function renderGhostParagraph(idx) {
+        const p = ghostParagraphs()[idx];
+        if (p) p.replaceChildren(ghostParagraphNode(ghostParas[idx] || '', ghostMarks.get(idx)));
+    }
+    /** Фон на абзацах текущего чанка и автодогон к его началу. */
+    function highlightGhostChunk(index) {
+        const ps = ghostParagraphs();
+        ps.forEach(p => p.classList.remove('nm-ghost-chunk'));
+        const [a, b] = ghostRanges[index] || [index, index];
+        for (let i = a; i <= b && i < ps.length; i++) ps[i].classList.add('nm-ghost-chunk');
+        if (ghostAutoScroll && ps[a]) ps[a].scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+    const ghostStopAutoScroll = () => { ghostAutoScroll = false; };
+    /**
+     * Призрак оригинала: читалка открыта, но перевода ещё нет — вместо пустого экрана
+     * виден сам захваченный текст бледным. Показывать его решает вызывающий: призрак
+     * включается только на время работы и уходит по первому токену перевода.
+     */
+    function ghostShow(text) {
+        ghostAbort();
+        if (!config.ghostPreview) return;
+        const { chunks, ranges } = splitByNewlinesRanged(text, config.chunkSize);
+        ghostParas = paragraphsOf(text);
+        ghostRanges = ranges;
+        ghostAutoScroll = true;
+        readerContent.classList.add('nm-ghost');
+        readerContent.replaceChildren(...ghostParas.map(p => {
+            const el = document.createElement('p');
+            el.textContent = p;
+            return el;
+        }));
+        ghostActive = true;
+        // ручной скролл выключает автодогон: полез дальше по тексту — призрак не тянет назад
+        for (const ev of ['wheel', 'touchmove']) readerMode.addEventListener(ev, ghostStopAutoScroll, { passive: true });
+        progressStatus(`📄 Захвачено: ${String(text).length} симв. • чанков: ${chunks.length}`);
+    }
+    /** Прогресс NER: сначала фон текущего чанка, затем вспышки терминов его диапазона. */
+    function ghostProgress(st) {
+        if (!ghostActive) return;
+        // chunkDone — индекс чанка с нуля, приходит только на успешном чанке:
+        // проверка на число, а не на истинность (нулевой чанк — не «пустой»)
+        if (Number.isInteger(st.chunkDone)) {
+            highlightGhostChunk(st.chunkDone);
+            const variants = [];
+            for (const t of (st.matched || [])) variants.push(t.term, ...(t.aliases || []));
+            for (const t of (st.fresh || [])) variants.push(t.term, ...(t.aliases || []));
+            if (variants.length && st.range) ghostQueueMarks(st.range, variants);
+        }
+        if (ghostPending && !ghostFrame) {
+            ghostFrame = requestAnimationFrame(() => {
+                ghostFrame = 0;
+                const byPara = ghostPending;
+                ghostPending = null;
+                if (!ghostActive || !byPara) return;
+                for (const idx of byPara) renderGhostParagraph(idx);
+            });
+        }
+    }
+    /**
+     * Вспышки копятся до кадра rAF (чанков за секунду бывает несколько), повторное
+     * вхождение уже вспыхнувшего интервала — это тихо: Set держит сами интервалы.
+     */
+    function ghostQueueMarks(range, variants) {
+        for (let i = Math.max(0, range[0]); i <= range[1] && i < ghostParas.length; i++) {
+            const found = termRanges(ghostParas[i], variants);
+            if (!found.length) continue;
+            const current = ghostMarks.get(i) || [];
+            let changed = false;
+            for (const span of found) {
+                if (ghostMarkCount >= GHOST_MARK_LIMIT) break;
+                const key = `${span[0]}-${span[1]}`;
+                if (current.some(r => `${r[0]}-${r[1]}` === key)) continue;
+                current.push(span);
+                ghostMarkCount++;
+                changed = true;
+            }
+            if (!changed) continue;
+            current.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+            ghostMarks.set(i, current);
+            if (!ghostPending) ghostPending = new Set();
+            ghostPending.add(i);
+        }
+    }
+    function ghostHide(fade) {
+        ghostAbort();
+        for (const ev of ['wheel', 'touchmove']) readerMode.removeEventListener(ev, ghostStopAutoScroll);
+        if (!ghostLiving()) { clearGhost(); return; }
+        if (!fade) { clearGhost(); return; }
+        readerContent.classList.add('nm-ghost-fade');
+        ghostFadeTimer = setTimeout(() => {
+            ghostFadeTimer = null;
+            clearGhost();
+        }, GHOST_FADE_MS);
+    }
+    /** Снять незавершённую работу призрака, не трогая его самого (страховка перед новым прогоном). */
+    function ghostAbort() {
+        if (ghostFrame) { cancelAnimationFrame(ghostFrame); ghostFrame = 0; }
+        ghostPending = null;
+        if (ghostFadeTimer) { clearTimeout(ghostFadeTimer); ghostFadeTimer = null; }
+        readerContent.classList.remove('nm-ghost-fade');
+    }
+
     // новую вкладку открываем временным якорем с rel=noopener, а не window.open:
     // переход по главам остаётся той же ссылкой того же сайта, без навигации текущей страницы
     function openExternalTab(href) {
@@ -3234,6 +3575,9 @@ const host = document.createElement('div');
             return;
         }
         const url = pageCacheKey();
+        // глава уже переведена — читалке незачем открываться пустой: призрак в этом
+        // прогоне не поднимается вовсе, а саму читалку поднимет готовая ветка ниже
+        const cachedNow = ignoreCache ? null : cacheGet(url);
         isTranslating = true;
         cancelRequested = false;
         // «перевести заново» значит начать с чистого листа — фоновое задание сбрасывается
@@ -3252,7 +3596,7 @@ const host = document.createElement('div');
         GM_setValue('books', books);
         progressShow(title);
         try {
-            const cached = ignoreCache ? null : cacheGet(url);
+            const cached = cachedNow;
             if (cached && cached.text) {
                 setReaderState({ url, ...cached }, true);
                 progressShow('📖 Глава из кэша');
@@ -3272,6 +3616,12 @@ const host = document.createElement('div');
                 const element = findContentElement();
                 const text = extractMainText(element);
                 if (!text.trim()) { alert('Текст не найден на странице'); closeReader(); return; }
+                // призрак идёт первым: читалка уже открыта пустой, а извлечение и
+                // перевод занимают секунды. NER этой страницы ещё не делали — призрак
+                // нужен только на его время и гаснет здесь же; иначе его гасит
+                // первый токен перевода (см. onFirstDelta)
+                const nerFresh = config.autoNER && !isNerDoneForPage(current.key);
+                if (config.ghostPreview && !cachedNow) ghostShow(text);
                 if (config.autoNER) {
                     progressShow('🔍 Извлечение терминов');
                     if (isNerDoneForPage(current.key)) {
@@ -3309,12 +3659,20 @@ const host = document.createElement('div');
                 if (cancelRequested) {
                     // отмена до перевода: показывать нечего, кроме причины
                     flowCanceled = true;
+                    ghostHide(false);
                     showReaderNotice('⏹ Перевод остановлен • Меню ⋮ → «🌐 Перевести» продолжит с сохранённого места');
                     progressFinish('⏹ Перевод остановлен', 'Отменено пользователем');
                     return;
                 }
+                // NER отработал — призрак больше не нужен: дальше панель идёт по чанкам
+                if (nerFresh) ghostHide();
                 progressShow(title);
-                const translationResult = await translateWithStreaming(readerContent, text, { bookKey: current.key });
+                const translationResult = await translateWithStreaming(readerContent, text, {
+                    bookKey: current.key,
+                    // NER не запускался (выключен/уже сделан) — призрак живёт до первого
+                    // токена перевода, а не до этой строки
+                    onFirstDelta: () => ghostHide()
+                });
                 const full = translationResult.text || '';
                 // навигация обновляется по живой странице независимо от успеха перевода
                 const nav = resolveNavFromLive();
@@ -3333,9 +3691,11 @@ const host = document.createElement('div');
                     flowCompleted = true;
                 } else if (cancelRequested) {
                     flowCanceled = true;
+                    ghostHide(false);
                     if (!full) showReaderNotice('⏹ Перевод остановлен • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
                     progressFinish('⏹ Перевод остановлен', `Отменено пользователем${full ? ` • сохранено ${full.length} зн.` : ''}`);
                 } else {
+                    ghostHide(false);
                     if (!full) showReaderNotice('⏳ Перевод не завершён • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
                     progressFinish('⏳ Перевод не завершён', `${translationResult.error || 'обрыв связи'}${full ? ` • сохранено ${full.length} зн.` : ' • ни один чанк не дошёл целиком'}`);
                 }
@@ -3762,6 +4122,7 @@ const host = document.createElement('div');
         ['#gm-transport', 'gmTransport', v => (v === 'auto' ? 'page' : v) === 'manager', on => (on ? 'manager' : 'page')],
         ['#preemptive-translate', 'preemptiveTranslation'],
         ['#auto-ner', 'autoNER'],
+        ['#ghost-preview', 'ghostPreview'],
         ['#glossary-current-only', 'glossaryCurrentPageOnly', null, null, () => { glossaryPage = 0; updateGlossaryUI(); }]
     ];
     // Поля с непринятым вводом: селектор → причина. Пока карта не пуста, подвал
@@ -3867,6 +4228,27 @@ const host = document.createElement('div');
         extra.addEventListener('change', saveExtra);
     }
     /**
+     * Ключ API — поле БЕЗ password-семантики: маскирует его -webkit-text-security,
+     * а не type=password. Браузер считает поле с паролем сохранённым логином и на
+     * сайтах с формой входа предлагает сохранить ключ (след в менеджере паролей);
+     * заодно менеджеры паролей получают явный запрет на весь шелл.
+     */
+    function initApiKeyMask() {
+        const keyInput = $('#api-key');
+        if (!keyInput) return;
+        // фолбэк для браузера без -webkit-text-security: ключ важнее косметики —
+        // возвращаем маску пароля, но помечаем поле новым паролем, а не логином
+        if (!CSS.supports || !CSS.supports('-webkit-text-security', 'disc')) {
+            keyInput.type = 'password';
+            keyInput.autocomplete = 'new-password';
+        }
+        $('#btn-key-eye').addEventListener('click', () => keyInput.classList.toggle('nm-reveal'));
+        // у остальных полей автосписка нет — он закрывает им автозаполнение адресом/телефоном
+        shadow.querySelectorAll('input, textarea, select').forEach(el => {
+            if (!el.getAttribute('autocomplete')) el.autocomplete = 'off';
+        });
+    }
+    /**
      * Сброс касается только открытой вторичной вкладки: сбитый кегль в «Читалке»
      * не обязан стирать пользовательские промпты и reasoning-настройки.
      */
@@ -3924,8 +4306,9 @@ const host = document.createElement('div');
     $('#btn-extract-menu').addEventListener('click', handleExtractTerms);
     $('#btn-train-menu').addEventListener('click', () => { pendingTranslateAfterTraining = false; startElementTraining(); });
     $('#nm-close').addEventListener('click', closeModal);
-    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
-    bookModal.addEventListener('click', e => { if (e.target === bookModal) bookModal.classList.remove('active'); });
+    // модалки закрываем только явно (#nm-close и кнопки модалки книги): клик по
+    // подложке ловил случайные клики и отпускание выделения текста, выдернутое за
+    // пределы окна
     $('#reader-close').addEventListener('click', closeReader);
     $('#reader-menu').addEventListener('click', (e) => { e.stopPropagation(); $('#reader-menu-panel').classList.toggle('active'); });
     $('#reader-export').addEventListener('click', () => exportChapterToTxt());
@@ -3996,6 +4379,7 @@ const host = document.createElement('div');
 // ===== ИНИЦИАЛИЗАЦИЯ =====
     currentBookKey = findBookByUrl();
     bindSettingsAutoSave();
+    initApiKeyMask();
     applyTheme();
     // данные сайта грузим из IndexedDB асинхронно; автозапуск перевода при переходе
     // с другой главы дожидается, чтобы не потерять кэш и отметки NER

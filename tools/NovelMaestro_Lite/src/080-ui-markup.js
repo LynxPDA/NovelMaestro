@@ -109,7 +109,16 @@ const host = document.createElement('div');
                             <div class="nm-section">
                                 <h3>🤖 API</h3>
                                 <div class="nm-input-group"><label>API Host:</label><input type="text" class="nm-input" id="api-host"></div>
-                                <div class="nm-input-group"><label>API Key:</label><input type="password" class="nm-input" id="api-key"></div>
+                                <div class="nm-input-group"><label>API Key:</label>
+                                    <div class="nm-key-row">
+                                        <!-- не type=password: браузер считает такое поле сохранённым паролем и предлагает сохранить ключ API на сайтах с логином -->
+                                        <input type="text" class="nm-input nm-masked" id="api-key"
+                                               autocomplete="off" name="nm-lite-api-key" spellcheck="false"
+                                               autocapitalize="off" autocorrect="off"
+                                               data-lpignore="true" data-1p-ignore="true">
+                                        <button type="button" class="nm-btn nm-btn-sm nm-btn-secondary" id="btn-key-eye" title="Показать/скрыть ключ">👁</button>
+                                    </div>
+                                </div>
                                 <label class="nm-input-group nm-check-row" data-tip="Пустой API Key разрешён: с этим чекбоксом заголовок Authorization не отправляется вовсе."><input type="checkbox" id="local-model"><span>🖥️ Локальная модель без API-ключа</span></label>
                                 <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
                                 <button class="nm-btn nm-btn-sm nm-btn-primary" id="btn-check-server">🔌 Проверить сервер</button>
@@ -155,7 +164,8 @@ const host = document.createElement('div');
                                 <div class="nm-input-group" data-tip="Безразмерное отношение 0.0–1.0: насколько размытым может быть совпадение термина с текстом главы. Меньше — в промпт перевода попадёт больше терминов, больше — только точные."><label>Порог нечёткого поиска:</label>
                                     <input type="number" class="nm-input" id="fuzzy-threshold" min="0" max="1" step="0.05">
                                 </div>
-                                <label class="nm-input-group nm-check-row" data-tip="Перед переводом главы Lite сначала извлекает с страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же)."><input type="checkbox" id="auto-ner"><span>Автоизвлечение терминов (один раз на страницу)</span></label>
+                                <label class="nm-input-group nm-check-row" data-tip="По умолчанию включён: перед переводом Lite сначала извлекает со страницы термины — один раз на страницу (повторно — только кнопкой «✨ Извлечь термины со страницы»; правятся термины там же)."><input type="checkbox" id="auto-ner"><span>Автоизвлечение терминов (один раз на страницу)</span></label>
+                                <label class="nm-input-group nm-check-row" data-tip="Пока идёт извлечение терминов и не пришёл первый токен перевода, в читалке виден сам оригинал главы бледным текстом — экран не выглядит зависшим."><input type="checkbox" id="ghost-preview"><span>👻 Показывать захваченный оригинал до перевода</span></label>
                             </div>
                             <div class="nm-section">
                                 <h3>💬 Промпты</h3>

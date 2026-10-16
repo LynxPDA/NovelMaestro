@@ -35,6 +35,10 @@
         }
     }
     async function translateWithStreaming(element, originalText, job = {}) {
+        // страховка от чужого призрака (отмена на этапе NER, повторный запуск):
+        // призрак, поставленный самим прогоном, живёт до первого токена — его
+        // гасит onFirstDelta, и трогать его здесь рано
+        if (!job.onFirstDelta) ghostHide(false);
         const chunks = splitByNewlines(originalText, config.chunkSize);
         const totalParas = paragraphsOf(originalText).length;
         if (totalParas === 0) { progressStatus('Текст не найден'); return { text: '', completed: false, resumed: 0 }; }
@@ -63,6 +67,7 @@
                     + (resumed ? ` • продолжаю (${resumed}/${chunks.length} уже готово)` : ''));
                 let chunkTranslation = '', thoughtShown = false;
                 const res = await callLLM([{ role: 'user', content: chunkUserPrompt(chunks[i]) }], 0.7, true, {
+                    onFirstDelta: job.onFirstDelta,
                     // thinking-модель: пока приходят только размышления, прогресс
                     // обязан говорить «думает», а не молчать на «Чанк N/M»
                     onReasoning: () => {
@@ -135,4 +140,7 @@
         progressStatus(st.retry
             ? `⏱ ${st.retry.message} — повтор ${st.retry.nextAttempt}/${st.retry.attemptsTotal}`
             : `🔍 Термины: чанк ${st.chunk}/${st.total}${st.resumed ? ` (продолжаю с ${st.resumed + 1}/${st.total})` : ''} • ~${st.pct}%`);
+        // призраку достаётся тот же прогресс: фон текущего чанка и вспышки терминов
+        // его диапазона — лишние поля панель прогресса молча игнорирует
+        ghostProgress(st);
     }

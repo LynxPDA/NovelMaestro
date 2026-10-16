@@ -1,6 +1,7 @@
 // ===== ИНИЦИАЛИЗАЦИЯ =====
     currentBookKey = findBookByUrl();
     bindSettingsAutoSave();
+    initApiKeyMask();
     applyTheme();
     // данные сайта грузим из IndexedDB асинхронно; автозапуск перевода при переходе
     // с другой главы дожидается, чтобы не потерять кэш и отметки NER

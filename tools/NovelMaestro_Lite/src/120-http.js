@@ -250,7 +250,7 @@
             reader = resp.body.getReader();
             activeReader = reader;
             const decoder = new TextDecoder();
-            let text = '', buffer = '', streamError = null, streamModel = '', sawDone = false, reasoningChars = 0;
+            let text = '', buffer = '', streamError = null, streamModel = '', sawDone = false, reasoningChars = 0, firstDeltaSent = false;
             const handleLine = (line) => {
                 const trimmed = line.trim();
                 if (!trimmed.startsWith('data:')) return;
@@ -282,6 +282,9 @@
                         reasoningChars += thought.length;
                         if (cb.onReasoning) cb.onReasoning(thought);
                     }
+                    // первый полезный токен — единожды: призрак оригинала обязан погаснуть
+                    // ровно тогда, когда на экране появилось что показать
+                    if ((content || thought) && !firstDeltaSent) { firstDeltaSent = true; if (cb.onFirstDelta) cb.onFirstDelta(); }
                     if (content) { text += content; if (cb.onDelta) cb.onDelta(content); }
                 } catch {}
             };
@@ -523,61 +526,109 @@
         return await fetchWithRetry(url, options, !!stream, cb);
     }
     // GET /models у провайдера весит сотни килобайт (у routerai.ru — 528 моделей,
-    // ~876КБ), поэтому он получает собственный запас времени и в проверке участвует
-    // только как диагноз. Пользовательский requestTimeout остаётся как есть: он
-    // относится к настоящим запросам перевода.
+    // ~876КБ), поэтому он получает собственный запас времени. Пользовательский
+    // requestTimeout остаётся как есть: он относится к настоящим запросам перевода.
     const CHECK_TIMEOUT_MIN = 60;
+    const MODEL_HINT_LIMIT = 5;
+    /** Совпадение модели: точное (без регистра) или двусторонний includes. */
+    function modelMatch(ids, want) {
+        const w = String(want || '').trim().toLowerCase();
+        if (!w) return '';
+        for (const id of ids) if (id.toLowerCase() === w) return id;
+        for (const id of ids) { const l = id.toLowerCase(); if (l.includes(w) || w.includes(l)) return id; }
+        return '';
+    }
+    /** Похожие id для подсказки: по самой длинной общей подстроке с нужным именем. */
+    function similarModels(ids, want, limit = MODEL_HINT_LIMIT) {
+        const w = String(want || '').trim().toLowerCase();
+        if (!w) return [];
+        const score = (id) => {
+            const l = id.toLowerCase();
+            for (let n = Math.min(l.length, w.length); n >= 3; n--) {
+                for (let i = 0; i + n <= l.length; i++) if (w.includes(l.slice(i, i + n))) return n;
+            }
+            return 0;
+        };
+        return ids.map(id => [id, score(id)]).filter(([, s]) => s > 0)
+            .sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id]) => id);
+    }
+    /**
+     * Проверка сервера — вердикт по GET /models, а не по запросу генерации: он
+     * отвечает на главный вопрос (есть ли нужная модель) и ничего не стоит модели.
+     * Пинг чата запускается только когда /models не поддерживается (404/405/ошибка)
+     * — тогда он говорит, жив ли канал вообще. Пустой пинг сам по себе ❌ не даёт:
+     * сервер, ответивший пустым стримом, — это доступный сервер.
+     */
     async function checkServer() {
         const statusEl = $('#server-status');
+        const btn = $('#btn-check-server');
         const gmMode = config.gmTransport === 'auto' ? 'page' : config.gmTransport;
         const transport = typeof GM_xmlhttpRequest === 'undefined' ? 'fetch'
             : (gmMode === 'page' ? 'fetch из страницы'
                 : (gmStreamMode === 'text' ? 'менеджер · XHR (тело целиком)' : 'менеджер · поток'));
         const base = apiBase();
-        if (!base) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Host'; return; }
-        if (!config.apiKey && !config.localModel) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указан API Key (или включите «Локальная модель без API-ключа»)'; return; }
-        if (!config.model) { statusEl.className = 'nm-server-status show err'; statusEl.textContent = '❌ Не указана модель'; return; }
-        const target = requestTarget(base);
         const timeout = config.requestTimeout > 0 ? config.requestTimeout : 0;
         const diagTimeout = Math.max(timeout, CHECK_TIMEOUT_MIN);
         const show = (cls, text) => {
             statusEl.className = `nm-server-status show ${cls}`;
             statusEl.textContent = text;
         };
-        show('loading', `🔌 Проверяю ${target}… (${transport}, таймаут ${timeout || '∞'}с)`);
-        // Первым идёт короткий пинг чата — это ровно тот запрос, которым Lite переводит.
-        // Стримом и с выходом по первому токену: серверы, отвечающие SSE и не спешащие
-        // закрывать соединение (на них не-стримовый пинг висел до таймаута), отвечают
-        // сразу; соединение закрываем сами, не дожидаясь их вежливости.
-        const t0 = Date.now();
-        // max_tokens:1 расходится с включённым thinking: часть серверов требует
-        // max_tokens больше бюджета размышлений — тогда лимит просто не шлём
-        const extra = thinkingMode() === 'on' ? null : { max_tokens: 1 };
-        const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, true, extra);
+        // проверка идёт секундами — кнопка на это время блокируется от повторного нажатия
+        if (btn) btn.disabled = true;
         try {
-            const res = await fetchAttempt(url, options, true, timeout,
-                { stopOnFirstContent: true, deadline: true });
-            const got = String(res.text || '').trim();
-            show('ok', `✅ Сервер доступен • ${target} • пинг ${Date.now() - t0}мс • модель ${res.model || config.model}`
-                + (got ? ` • ответ: ${got.slice(0, 24)}` : (res.reasoning ? ` • 💭 только размышления (${res.reasoning} зн.)` : ''))
-                + ` • ${reasoningSummary()} • ${transport}`);
-        } catch (e) {
-            // Пинг не дошёл — отличаем «адрес недоступен» от «модель думает дольше
-            // таймаута». Диагностический GET /models идёт со своим запасом: он тяжелый.
-            const main = describeError(e, target, Date.now() - t0, url);
-            show('loading', `⏳ ${main} • проверяю /models как диагноз…`);
-            const t1 = Date.now();
-            let note;
+            if (!base) { show('err', '❌ Не указан API Host'); return; }
+            if (!config.apiKey && !config.localModel) { show('err', '❌ Не указан API Key (или включите «Локальная модель без API-ключа»)'); return; }
+            if (!config.model) { show('err', '❌ Не указана модель'); return; }
+            const target = requestTarget(base);
+            const modelsUrl = base + '/models';
+            show('loading', `🔌 Проверяю ${target}… (${transport}, таймаут ${timeout || '∞'}с)`);
+            const t0 = Date.now();
+            let ids = null, modelsErr = null;
             try {
-                const resp = await fetchAttempt(base + '/models', { method: 'GET', headers: apiHeaders(false) }, false, diagTimeout, {});
+                const resp = await fetchAttempt(modelsUrl, { method: 'GET', headers: apiHeaders(false) }, false, diagTimeout, {});
                 const data = await resp.json().catch(() => null);
                 const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
-                note = `/models отвечает за ${Date.now() - t1}мс (${list.length} моделей, `
-                    + (list.some(m => m && m.id === config.model) ? `модель «${config.model}» есть` : `модели «${config.model}» в списке НЕТ`)
-                    + ') — значит канал есть, смотрите время ответа модели';
-            } catch (e2) {
-                note = `/models тоже молчит: ${describeError(e2, target, Date.now() - t1, base)}`;
+                ids = list.map(m => (m && typeof m.id === 'string' ? m.id : '')).filter(Boolean);
+            } catch (e) { modelsErr = e; }
+            if (ids) {
+                const found = modelMatch(ids, config.model);
+                if (found) {
+                    show('ok', `✅ Сервер доступен • ${target} • /models за ${Date.now() - t0}мс • модель «${found}» среди ${ids.length}`
+                        + ` • ${transport} • ${reasoningSummary()}`);
+                    return;
+                }
+                const similar = similarModels(ids, config.model);
+                show('err', `❌ ${target}: сервер отвечает, модели «${config.model}» среди ${ids.length} нет`
+                    + (similar.length ? ` • похожие: ${similar.join(', ')}` : ' • похожих не нашлось') + ` • ${transport}`);
+                return;
             }
-            show('err', `❌ ${main} • ${note} • ${transport}`);
+            // /models не поддерживается — канал чата проверяем пингом (тем самым
+            // запросом, которым Lite переводит: стрим и выход по первому токену)
+            show('loading', `⏳ /models не ответил — проверяю канал чата…`);
+            // max_tokens:1 расходится с включённым thinking: часть серверов требует
+            // max_tokens больше бюджета размышлений — тогда лимит просто не шлём
+            const extra = thinkingMode() === 'on' ? null : { max_tokens: 1 };
+            const { url, options } = llmRequestOptions([{ role: 'user', content: 'ping' }], 0, true, extra);
+            const t1 = Date.now();
+            try {
+                const res = await fetchAttempt(url, options, true, timeout, { stopOnFirstContent: true, deadline: true });
+                const got = String(res.text || '').trim();
+                const alive = got ? `ответ: ${got.slice(0, 24)}` : (res.reasoning ? `💭 только размышления (${res.reasoning} зн.)` : 'пустой ответ модели');
+                show('loading', `⚠️ ${target}: /models не поддерживается — модель проверить нельзя; канал чата отвечает (${alive}, ${Date.now() - t1}мс)`
+                    + ` • ${transport} • ${reasoningSummary()}`);
+            } catch (e) {
+                const modelsNote = `/models: ${describeError(modelsErr, target, Date.now() - t0, modelsUrl)}`;
+                // сервер, ответивший HTTP-кодом или пустым стримом, — доступный сервер:
+                // 401/400/«пустой ответ» — это его ответ, а не недоступность адреса
+                const replied = e && (e.status || /Пустой ответ/.test(e.message || ''));
+                if (replied) {
+                    show('loading', `⚠️ ${target}: /models не поддерживается, а канал чата отвечает отказом (${describeError(e, target, Date.now() - t1, url)})`
+                        + ` • модель проверить нельзя • ${transport} • ${reasoningSummary()}`);
+                    return;
+                }
+                show('err', `❌ ${describeError(e, target, Date.now() - t1, url)} • ${modelsNote} • ${transport}`);
+            }
+        } finally {
+            if (btn) btn.disabled = false;
         }
     }

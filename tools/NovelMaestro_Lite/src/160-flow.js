@@ -21,6 +21,9 @@
             return;
         }
         const url = pageCacheKey();
+        // глава уже переведена — читалке незачем открываться пустой: призрак в этом
+        // прогоне не поднимается вовсе, а саму читалку поднимет готовая ветка ниже
+        const cachedNow = ignoreCache ? null : cacheGet(url);
         isTranslating = true;
         cancelRequested = false;
         // «перевести заново» значит начать с чистого листа — фоновое задание сбрасывается
@@ -39,7 +42,7 @@
         GM_setValue('books', books);
         progressShow(title);
         try {
-            const cached = ignoreCache ? null : cacheGet(url);
+            const cached = cachedNow;
             if (cached && cached.text) {
                 setReaderState({ url, ...cached }, true);
                 progressShow('📖 Глава из кэша');
@@ -59,6 +62,12 @@
                 const element = findContentElement();
                 const text = extractMainText(element);
                 if (!text.trim()) { alert('Текст не найден на странице'); closeReader(); return; }
+                // призрак идёт первым: читалка уже открыта пустой, а извлечение и
+                // перевод занимают секунды. NER этой страницы ещё не делали — призрак
+                // нужен только на его время и гаснет здесь же; иначе его гасит
+                // первый токен перевода (см. onFirstDelta)
+                const nerFresh = config.autoNER && !isNerDoneForPage(current.key);
+                if (config.ghostPreview && !cachedNow) ghostShow(text);
                 if (config.autoNER) {
                     progressShow('🔍 Извлечение терминов');
                     if (isNerDoneForPage(current.key)) {
@@ -96,12 +105,20 @@
                 if (cancelRequested) {
                     // отмена до перевода: показывать нечего, кроме причины
                     flowCanceled = true;
+                    ghostHide(false);
                     showReaderNotice('⏹ Перевод остановлен • Меню ⋮ → «🌐 Перевести» продолжит с сохранённого места');
                     progressFinish('⏹ Перевод остановлен', 'Отменено пользователем');
                     return;
                 }
+                // NER отработал — призрак больше не нужен: дальше панель идёт по чанкам
+                if (nerFresh) ghostHide();
                 progressShow(title);
-                const translationResult = await translateWithStreaming(readerContent, text, { bookKey: current.key });
+                const translationResult = await translateWithStreaming(readerContent, text, {
+                    bookKey: current.key,
+                    // NER не запускался (выключен/уже сделан) — призрак живёт до первого
+                    // токена перевода, а не до этой строки
+                    onFirstDelta: () => ghostHide()
+                });
                 const full = translationResult.text || '';
                 // навигация обновляется по живой странице независимо от успеха перевода
                 const nav = resolveNavFromLive();
@@ -120,9 +137,11 @@
                     flowCompleted = true;
                 } else if (cancelRequested) {
                     flowCanceled = true;
+                    ghostHide(false);
                     if (!full) showReaderNotice('⏹ Перевод остановлен • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
                     progressFinish('⏹ Перевод остановлен', `Отменено пользователем${full ? ` • сохранено ${full.length} зн.` : ''}`);
                 } else {
+                    ghostHide(false);
                     if (!full) showReaderNotice('⏳ Перевод не завершён • ⋮ → «🌐 Перевести» продолжит с сохранённого места');
                     progressFinish('⏳ Перевод не завершён', `${translationResult.error || 'обрыв связи'}${full ? ` • сохранено ${full.length} зн.` : ' • ни один чанк не дошёл целиком'}`);
                 }

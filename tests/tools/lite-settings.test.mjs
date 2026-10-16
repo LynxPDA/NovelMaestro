@@ -142,12 +142,27 @@ test('блоки настроек живут на своих вкладках (�
 
 test('чекбоксы настроек — обычной строкой: кликается вся строка, фона нет', () => {
   const rows = [...raw.matchAll(/<label class="nm-input-group nm-check-row"[^>]*><input type="checkbox" id="([\w-]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(rows, ['local-model', 'preemptive-translate', 'auto-ner', 'gm-transport'], `набор чекбоксов изменился: ${rows.join()}`);
+  assert.deepEqual(rows, ['local-model', 'preemptive-translate', 'auto-ner', 'ghost-preview', 'gm-transport'], `набор чекбоксов изменился: ${rows.join()}`);
   assert.match(raw, /\.nm-check-row \{ display: flex/, 'label чекбокса не растянут на всю строку');
   // подписи чекбоксов «Перевода» — без смайликов: это пункты формы, а не кнопки
   assert.match(raw, /id="preemptive-translate"><span>Автоперевод/, 'у чекбокса автоперевода снова смайлик в подписи');
   assert.match(raw, /id="auto-ner"><span>Автоизвлечение/, 'у чекбокса автоизвлечения снова смайлик в подписи');
   assert.ok(!raw.includes('nm-check-card'), 'карточки-блоки вокруг чекбоксов вернулись');
+});
+
+test('поле ключа — не парольное: маска слоем, а не type=password', () => {
+  // браузер считает поле с паролем сохранённым логином и на сайтах с формой входа
+  // предлагает сохранить ключ API; маскирует его -webkit-text-security
+  assert.ok(!/<input[^>]*type="password"/.test(raw), 'парольное поле вернулось в разметку');
+  assert.match(raw, /<input type="text" class="nm-input nm-masked" id="api-key"/, 'поле ключа потеряло класс маски');
+  assert.match(raw, /\.nm-masked \{ -webkit-text-security: disc; \}/, 'маска ключа пропала из стилей');
+  assert.match(raw, /\.nm-masked\.nm-reveal \{ -webkit-text-security: none; \}/, 'кнопка «глаз» ничем не раскрывает ключ');
+  assert.match(raw, /id="btn-key-eye"/, 'кнопка «показать ключ» пропала');
+  assert.match(raw, /\.nm-key-row \{ display: flex; gap: 8px; \}/, 'ключ и «глаз» больше не в одной строке');
+  // фолбэк без поддержки свойства и запрет автосписка на весь шелл
+  assert.match(raw, /if \(!CSS\.supports \|\| !CSS\.supports\('-webkit-text-security', 'disc'\)\) \{/, 'фолбэк для браузера без -webkit-text-security потерян');
+  assert.match(raw, /keyInput\.type = 'password';\s+keyInput\.autocomplete = 'new-password';/, 'фолбэк подставляет логин вместо пароля');
+  assert.match(raw, /if \(!el\.getAttribute\('autocomplete'\)\) el\.autocomplete = 'off';/, 'автосписок не отключён остальным полям');
 });
 
 test('подсказка принадлежит самому пункту, а не иконке со знаком вопроса', () => {

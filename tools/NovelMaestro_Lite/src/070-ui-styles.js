@@ -93,6 +93,15 @@
             .nm-progress-fill.retry { background: repeating-linear-gradient(45deg, #f59e0b 0 10px, #fbbf24 10px 20px); background-size: 28.3px 28.3px; animation: nm-retry-stripes .8s linear infinite; }
             @keyframes nm-retry-stripes { to { background-position: 28.3px 0; } }
             .nm-input:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
+            /* Ключ API маскируется своим слоем, а не type=password: браузер считает
+               поле с паролем сохранённым логином и предлагает сохранить ключ на сайтах
+               с формой входа. Фолбэк без поддержки свойства — обычный password
+               (см. initApiKeyMask). */
+            .nm-key-row { display: flex; gap: 8px; }
+            .nm-key-row .nm-input { flex: 1; }
+            .nm-key-row .nm-btn { margin: 0; }
+            .nm-masked { -webkit-text-security: disc; }
+            .nm-masked.nm-reveal { -webkit-text-security: none; }
             /* битый ввод (не число, вне диапазона, неразобранный JSON): запрос уходит
                с подменённым значением — поле обязано быть подсвечено */
             .nm-input-bad { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
@@ -189,6 +198,19 @@
             .nm-current-only { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; white-space: nowrap; cursor: pointer; }
             .nm-reader-content { margin: 0 auto; padding: 70px 20px 150px; max-width: var(--nm-content-width, 66%); }
             .nm-reader-content p { text-align: justify; }
+            /* Призрак оригинала: тот же текст, что и в переводе, но бледнее — видно,
+               что работа идёт. Цвета — реальными классами темы читалки. */
+            #nm-reader-mode.nm-reader-light .nm-ghost p { color: #b3aca0; }
+            #nm-reader-mode.nm-reader-dark .nm-ghost p { color: #5a5e68; }
+            .nm-ghost { transition: opacity .35s ease; }
+            .nm-ghost-fade { opacity: 0; }
+            /* текущий чанк извлечения: фон в зоне работы, а не подсветка текста */
+            .nm-ghost p.nm-ghost-chunk { background: rgba(37,99,235,.10); border-radius: 4px; }
+            #nm-reader-mode.nm-reader-dark .nm-ghost p.nm-ghost-chunk { background: rgba(127,176,255,.12); }
+            /* вспышка термина: затухает сама, режим правки не требует */
+            .nm-ghost mark.nm-hit-new { background: rgba(245,158,11,.45); color: inherit; border-radius: 3px; animation: nm-hit-flash 1.4s ease-out 1 forwards; }
+            #nm-reader-mode.nm-reader-dark .nm-ghost mark.nm-hit-new { background: rgba(245,158,11,.35); }
+            @keyframes nm-hit-flash { from { background: rgba(245,158,11,.85); } to { background: rgba(245,158,11,.35); } }
             .nm-reader-loading { text-align: center; padding: 60px 0; font-size: 16px; opacity: .7; }
             .nm-reader-bottombar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; display: flex; flex-direction: column; gap: 8px; align-items: center; padding: 10px 14px 12px; backdrop-filter: blur(6px); }
             #nm-reader-mode.nm-reader-light .nm-reader-bottombar { background: rgba(250,247,240,.92); border-top: 1px solid #e5ded2; }

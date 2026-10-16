@@ -142,3 +142,33 @@
         if (cur) chunks.push(cur);
         return chunks.length > 0 ? chunks : [text];
     }
+    /**
+     * Как splitByNewlines, но с картой абзацев: ranges[i] — [startPara, endPara]
+     * включительно, из которых собран чанк. Призраку читалки важно, где именно в
+     * тексте лежит текущий чанк (фон зоны и вспышки терминов), а чанкование обязано
+     * остаться ТЕМ ЖЕ: разойдётся с переводом — прогресс и подсветка поедут.
+     */
+    function splitByNewlinesRanged(text, chunkSize) {
+        const paras = paragraphsOf(text);
+        const chunks = [];
+        const ranges = [];
+        let cur = '';
+        let curTokens = 0;
+        let start = 0;
+        for (let i = 0; i < paras.length; i++) {
+            const pt = estimateTokens(paras[i]);
+            if (cur && curTokens + pt + 1 > chunkSize) {
+                chunks.push(cur);
+                ranges.push([start, i - 1]);
+                cur = paras[i];
+                curTokens = pt;
+                start = i;
+            } else {
+                cur += (cur ? '\n\n' : '') + paras[i];
+                curTokens = estimateTokens(cur);
+            }
+        }
+        if (cur) { chunks.push(cur); ranges.push([start, paras.length - 1]); }
+        if (chunks.length === 0) return { chunks: [text], ranges: [[0, Math.max(0, paras.length - 1)]] };
+        return { chunks, ranges };
+    }

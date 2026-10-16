@@ -78,6 +78,7 @@
         ['#gm-transport', 'gmTransport', v => (v === 'auto' ? 'page' : v) === 'manager', on => (on ? 'manager' : 'page')],
         ['#preemptive-translate', 'preemptiveTranslation'],
         ['#auto-ner', 'autoNER'],
+        ['#ghost-preview', 'ghostPreview'],
         ['#glossary-current-only', 'glossaryCurrentPageOnly', null, null, () => { glossaryPage = 0; updateGlossaryUI(); }]
     ];
     // Поля с непринятым вводом: селектор → причина. Пока карта не пуста, подвал
@@ -181,6 +182,27 @@
         };
         extra.addEventListener('input', saveExtra);
         extra.addEventListener('change', saveExtra);
+    }
+    /**
+     * Ключ API — поле БЕЗ password-семантики: маскирует его -webkit-text-security,
+     * а не type=password. Браузер считает поле с паролем сохранённым логином и на
+     * сайтах с формой входа предлагает сохранить ключ (след в менеджере паролей);
+     * заодно менеджеры паролей получают явный запрет на весь шелл.
+     */
+    function initApiKeyMask() {
+        const keyInput = $('#api-key');
+        if (!keyInput) return;
+        // фолбэк для браузера без -webkit-text-security: ключ важнее косметики —
+        // возвращаем маску пароля, но помечаем поле новым паролем, а не логином
+        if (!CSS.supports || !CSS.supports('-webkit-text-security', 'disc')) {
+            keyInput.type = 'password';
+            keyInput.autocomplete = 'new-password';
+        }
+        $('#btn-key-eye').addEventListener('click', () => keyInput.classList.toggle('nm-reveal'));
+        // у остальных полей автосписка нет — он закрывает им автозаполнение адресом/телефоном
+        shadow.querySelectorAll('input, textarea, select').forEach(el => {
+            if (!el.getAttribute('autocomplete')) el.autocomplete = 'off';
+        });
     }
     /**
      * Сброс касается только открытой вторичной вкладки: сбитый кегль в «Читалке»

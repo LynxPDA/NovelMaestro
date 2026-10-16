@@ -176,6 +176,129 @@ def test_lite_reader_ui_invariants():
     assert "sawDone" in text and "без [DONE]" in text, "исчез контроль завершения ответа"
 
 
+def test_lite_modals_close_only_explicitly():
+    """Модалки закрываются только явно: клик по подложке ловил случайные клики и
+    отпускание выделения текста, выдернутое за пределы окна."""
+    text = (TOOLS / "NovelMaestro_Lite" / "novelmaestro-lite.user.js").read_text(encoding="utf-8")
+    assert not re.search(r"(modal|bookModal)\.addEventListener\('click'", text), \
+        "вернулся слушатель клика по подложке модалки"
+    assert "$('#nm-close').addEventListener('click', closeModal)" in text, "#nm-close не закрывает модалку"
+    assert "#btn-cancel-new-book" in text, "модалку книги нечем закрыть явно"
+    # дропдаун меню и панель читалки закрываются кликом мимо — это не модалки
+    assert "dropdownMenu.classList.remove('active')" in text, "дропдаун ⋮ перестал закрываться"
+    assert "panel.classList.remove('active')" in text, "панель меню читалки перестала закрываться"
+
+
+def test_lite_api_key_is_masked_by_style():
+    """Поле ключа — обычный text с маской слоем: браузер считает password-поле
+    сохранённым логином и предлагает сохранить ключ на сайтах с формой входа."""
+    text = (TOOLS / "NovelMaestro_Lite" / "novelmaestro-lite.user.js").read_text(encoding="utf-8")
+    assert '<input type="text" class="nm-input nm-masked" id="api-key"' in text, "поле ключа не text с маской"
+    assert not re.search(r'<input[^>]*id="api-key"[^>]*type="password"', text), "парольное поле вернулось"
+    assert "-webkit-text-security: disc" in text and ".nm-masked.nm-reveal" in text, "маска ключа или кнопка «глаз» пропали"
+    assert "if (!CSS.supports || !CSS.supports('-webkit-text-security', 'disc'))" in text, \
+        "фолбэк для браузера без свойства потерян"
+    assert "keyInput.type = 'password'" in text and "keyInput.autocomplete = 'new-password'" in text, \
+        "фолбэк подставляет сохранённый логин вместо нового пароля"
+    assert "if (!el.getAttribute('autocomplete')) el.autocomplete = 'off'" in text, \
+        "автосписок не отключён остальным полям"
+
+
+def test_lite_server_check_verdict_is_about_the_model():
+    """Вердикт проверки сервера — по GET /models (есть ли нужная модель), пинг чата —
+    только фолбэк; на время проверки кнопка заблокирована."""
+    text = (TOOLS / "NovelMaestro_Lite" / "novelmaestro-lite.user.js").read_text(encoding="utf-8")
+    assert "const modelsUrl = base + '/models'" in text, "/models больше не первый запрос проверки"
+    assert "modelMatch(ids, config.model)" in text, "вердикт не сверяет модель"
+    assert "similarModels(ids, config.model)" in text, "нет подсказки по похожим id"
+    assert "// /models не поддерживается — канал чата проверяем пингом" in text, "пинг потерял статус фолбэка"
+    assert "show('loading', `⚠️ ${target}: /models не поддерживается" in text, \
+        "/models без поддержки перестал давать ⚠️"
+    assert "if (btn) btn.disabled = true;" in text and "if (btn) btn.disabled = false;" in text, \
+        "кнопка проверки не блокируется на время запроса"
+
+
+def test_lite_ghost_never_outlives_the_work():
+    """Призрак живёт только вместо пустого экрана: не поднимается на готовой главе из
+    кэша, гаснет по NER, по первому токену перевода и на закрытии читалки."""
+    text = (TOOLS / "NovelMaestro_Lite" / "novelmaestro-lite.user.js").read_text(encoding="utf-8")
+    assert "if (config.ghostPreview && !cachedNow) ghostShow(text)" in text, \
+        "призрак поднимается и на главе, которая уже лежит в кэше"
+    assert "const nerFresh = config.autoNER && !isNerDoneForPage(current.key)" in text, \
+        "жизнь призрака не связана с тем, идёт ли извлечение терминов"
+    assert "if (nerFresh) ghostHide()" in text, "призрак не гаснет по извлечению терминов"
+    assert "onFirstDelta: () => ghostHide()" in text, "призраку не передан хук первого токена"
+    assert "if (!job.onFirstDelta) ghostHide(false)" in text, \
+        "страховка перевода гасит призрак, поставленный этим же прогоном"
+    assert "ghostHide(false);" in text.split("function closeReader()")[1].split("function updateNavButtons")[0], \
+        "closeReader не зачищает призрак"
+    assert "readerContent.classList.remove('nm-ghost', 'nm-ghost-fade')" in text, \
+        "классы призрака остаются на контенте читалки"
+    # пульс вспышек: chunkDone — индекс с нуля, проверка на число, а не на истинность
+    assert "if (Number.isInteger(st.chunkDone))" in text and "highlightGhostChunk(st.chunkDone)" in text, \
+        "вспышки первого чанка пропускаются (или фон уезжает на чанк назад)"
+
+
+
+# ── призрак оригинала: тайминг в основном прогоне читалки ─────────────────────
+# runTranslationFlow в node не исполняется (DOM), но порядок вызовов в его теле и
+# есть контракт: где призрак включается, где гаснет и что уходит в перевод
+LITE_ARTIFACT = (TOOLS / "NovelMaestro_Lite" / "novelmaestro-lite.user.js").read_text(encoding="utf-8")
+
+
+def body(name: str, nxt: str) -> str:
+    """Тело функции артефакта от заголовка до следующей именованной функции."""
+    text = LITE_ARTIFACT
+    start = text.index(f"async function {name}") if f"async function {name}" in text else text.index(f"function {name}")
+    end = text.index(f"function {nxt}", start)
+    return text[start:end]
+
+
+def test_ghost_shows_only_on_the_live_page_branch():
+    """Кэш-ветка призрака не показывает: там уже есть готовый перевод."""
+    flow = body("runTranslationFlow(", "handleExtractTerms")
+    cache_branch = flow.index("if (cached && cached.text) {")
+    live_branch = flow.index("} else {", cache_branch)
+    ghost_show = flow.index("ghostShow(text)")
+    assert cache_branch < live_branch < ghost_show, "призрак включается вне живой ветки главы"
+
+
+def test_ghost_goes_before_ner_and_by_first_token_after_it():
+    """NER выполняется — призрак гаснет по нему; NER пропущен — до первого токена."""
+    flow = body("runTranslationFlow(", "handleExtractTerms")
+    ghost_show = flow.index("ghostShow(text)")
+    ner = flow.index("if (config.autoNER) {", ghost_show)
+    assert ghost_show < ner, "призрак показывается не до извлечения терминов"
+    assert "const nerFresh = config.autoNER && !isNerDoneForPage(current.key);" in flow, \
+        "условие жизни призрака не связано с извлечением терминов"
+    hide = flow.index("if (nerFresh) ghostHide();")
+    assert ner < hide, "призрак не гаснет после извлечения терминов"
+    title_show = flow.index("progressShow(title);", hide)
+    assert hide < title_show, "призрак гаснет после запуска перевода, а не перед ним"
+    assert "onFirstDelta: () => ghostHide()" in flow, "призраку не передан хук первого токена"
+    assert "bookKey: current.key" in flow, "задание перевода потеряло книгу"
+    for notice in ("⏹ Перевод остановлен • Меню ⋮", "⏹ Перевод остановлен • ⋮", "⏳ Перевод не завершён • ⋮"):
+        at = flow.index(notice)
+        assert flow.rindex("ghostHide(false);", 0, at) > 0, f"перед «{notice}» призрак не убран"
+
+
+def test_ghost_is_read_only_and_leaves_no_traces():
+    """Призрак ничего не пишет в глоссарий, книги и задания — только показывает текст."""
+    ghost = body("ghostShow(", "ghostAbort")
+    for forbidden in ("bookGlossary", "dbPut", "jobPut", "GM_setValue", "cacheSet", "count"):
+        assert forbidden not in ghost, f"призрак пишет в состояние прогона через {forbidden}"
+
+
+def test_reader_leaves_no_ghost_leftovers():
+    """closeReader и повторный перевод убирают призрак: классов nm-ghost* не остаётся."""
+    close = body("closeReader(", "updateNavButtons")
+    assert "ghostHide(false);" in close, "closeReader не зачищает призрак"
+    translate = body("translateWithStreaming(", "translateTextBackground")
+    assert "ghostHide(false);" in translate, "перевод не начинается с зачистки чужого призрака"
+    assert "readerContent.classList.remove('nm-ghost', 'nm-ghost-fade')" in LITE_ARTIFACT, \
+        "классы призрака остаются на контенте читалки"
+
+
 @pytest.mark.parametrize("script,artifact", sorted(SCRIPTS.items()))
 def test_update_urls_point_at_the_repo_path(script, artifact):
     """@downloadURL/@updateURL дописаны сборщиком и ведут на raw по пути файла."""
