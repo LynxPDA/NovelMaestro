@@ -133,7 +133,8 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
     argv += ["--mode", mode]
     # «Замены и очистки» из формы epub убраны: замены после разбивки делает
     # отдельная стадия batch_replace, --clean-re и --skip остаются CLI-флагами
-    # (своих настроек в реестре нет)
+    # (своих настроек в реестре нет); из очисток в форме остаётся только
+    # чекбокс предварительной очистки текста (--clean-text)
     for p in _epub_lines(form.get("split_patterns")):
         argv += ["--split-re", p]
     if form.get("chunk_size") not in (None, ""):
@@ -150,6 +151,7 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
         argv += ["--num-offset", str(form["num_offset"])]
     if form.get("output_type") not in (None, "", "chapter"):
         argv += ["--output-type", str(form["output_type"])]
+    argv += _bool_argv(form, "clean_text", "--clean-text", "--no-clean-text")
     argv += _bool_argv(form, "clean_output", "--clean-output",
                        "--no-clean-output")
     return argv

@@ -100,7 +100,9 @@ class Setting:
     dir: str = ""
     ext: tuple = ()
     rows: object = None
-    #: автоподхват файла из пула (compile: обложка/метаданные/донат, промпты)
+    #: автоподхват файла из пула (compile: обложка/метаданные/донат, промпты,
+    #: epub: «source/*.epub» — маска, «*» — любой текст имени, берётся первый
+    #: файл пула с этим расширением)
     autofile: object = None
     editable: bool = False      # files-поле правится прямо из формы запуска
     hidden: bool = False        # настройки нет в форме стадии (только «Настройки»)
@@ -401,7 +403,8 @@ GROUPS: tuple = (
     # ── Книга и файлы ──
     _group("book", "Книга и файлы",
         _block("epub", STAGE_TITLES["epub"],
-            _s("EPUB_INPUT", "Исходник", "files", "", dir="source", ext=(".epub", ".txt"), stage="epub", run=True),
+            _s("EPUB_INPUT", "Исходник", "files", "", dir="source", ext=(".epub", ".txt"), autofile=("source/*.epub",),
+                help="epub или txt из source/ (список фильтруется режимом разбивки: toc принимает только epub); если в source/ лежит epub, он подставляется сам; свои файлы — через вкладку «Файлы»", stage="epub", run=True),
             _s("EPUB_MODE", "Режим разбивки", "select", "toc", options=("toc", "regex", "chunk"), labels={'toc': "По TOC (epub)", 'regex': "Ручной (regexp)", 'chunk': "По чанкам"},
                 help="toc — только epub, по структуре (TOC/spine/h1-h2); regex/chunk — epub ИЛИ txt (epub перегоняется в текст); zip не принимается", stage="epub"),
             _s("EPUB_SPLIT_PATTERNS", "Паттерны разбивки (regexp, по одному на строку)", "textarea", "", rows=4,
@@ -417,6 +420,9 @@ GROUPS: tuple = (
             _s("EPUB_OUTPUT_TYPE", "Тип выходного файла", "select", "chapter", options=("chapter", "translated", "redacted", "polished"),
                 labels={'chapter': "chapter.txt", 'translated': "translated.txt", 'redacted': "redacted.txt", 'polished': "polished.txt"},
                 help="какой файл создаётся в папке главы (канон артефактов стадий)", stage="epub"),
+            _s("EPUB_CLEAN_TEXT", "Предварительная очистка текста глав", "bool", False,
+                help="перед разбивкой пустые строки внутри глав убираются — каждый абзац своей строкой; пустая строка остаётся только после первой строки файла (между заголовком и телом главы). Пробелы и табуляция в начале строк убираются всегда и без галки; без галки пустые строки между абзацами остаются как в исходнике",
+                stage="epub"),
             _s("EPUB_CLEAN_OUTPUT", "Очистить папки глав перед записью", "bool", True,
                 help="Удалить старые каталоги глав (00000_1_…, 00000_2_…) в chapters/ перед записью. Рекомендуется при повторном разборе — иначе старые главы останутся рядом с новыми и могут попасть в конвейер",
                 stage="epub"),

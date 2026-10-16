@@ -99,6 +99,45 @@ def test_split_input_regex_cleanups(tmp_path):
     assert "本章完" not in entries[0]["body"]
 
 
+# ── предварительная очистка текста (--clean-text) ─────────────────────
+def test_apply_cleanups_collapse():
+    """Без флага пустые строки остаются (3+ → 2); с флагом — одна строка
+    на абзац; отступы строк убираются всегда и так, и так."""
+    raw = "первый\n\n   второй\n\n\n\tтретий"
+    plain, _ = E2C.apply_cleanups(raw, [])
+    assert plain == "первый\n\nвторой\n\nтретий"
+    collapsed, _ = E2C.apply_cleanups(raw, [], collapse=True)
+    assert collapsed == "первый\nвторой\nтретий"
+
+
+def test_split_input_regex_clean_text(tmp_path):
+    """regex: внутри главы пустые строки убираются — каждый абзац своей
+    строкой; пустая строка остаётся только между заголовком и телом."""
+    txt = tmp_path / "book.txt"
+    _write_txt(txt, "Глава 1\n\n   первый\n\nвторой\nГлава 2\n\n  третий\n")
+    split_res = [E2C._safe_compile("Глава \\d+", "split-re")]
+    off, _, _ = E2C.split_input(txt, "regex", split_res, [])
+    on, _, _ = E2C.split_input(txt, "regex", split_res, [], clean_text=True)
+    assert [e["heading"] for e in off] == [e["heading"] for e in on]
+    # без галки пустые строки между абзацами живут
+    assert off[0]["body"] == "первый\n\nвторой"
+    assert on[0]["body"] == "первый\nвторой"
+    # пустая строка между заголовком и телом — та, что пишет write_section
+    assert on[1]["body"] == "третий"
+
+
+def test_split_input_toc_clean_text(tmp_path):
+    """toc: многоабзацная секция без галки сохраняет пустые строки,
+    с галкой — один абзац на строку."""
+    epub = tmp_path / "multi.epub"
+    _make_epub_paragraphs(epub)
+    off, _, _ = E2C.split_input(epub, "toc", [], [])
+    on, _, _ = E2C.split_input(epub, "toc", [], [], clean_text=True)
+    assert "\n\n" in off[0]["body"]
+    assert "\n\n" not in on[0]["body"]
+    assert on[0]["body"].splitlines()[:2] == ["абзац один", "абзац два"]
+
+
 def test_split_input_regex_no_match(tmp_path, capsys):
     txt = tmp_path / "book.txt"
     _write_txt(txt, "просто текст без маркеров\n")
@@ -177,6 +216,27 @@ def _make_epub_n(path: Path, n=4, with_toc=True):
                 f"OEBPS/c{i}.xhtml",
                 f"<html><head><title>Глава {i}</title></head>"
                 f"<body><h1>Глава {i}</h1><p>текст {i}</p></body></html>")
+
+
+def _make_epub_paragraphs(path: Path, n=2):
+    """n файлов, в каждом заголовок-h1 и несколько абзацев (между ними —
+    пустые строки: block-теги дают «\n\n»)."""
+    container = ('<?xml version="1.0"?><container><rootfiles><rootfile '
+                 'full-path="OEBPS/content.opf"/></rootfiles></container>')
+    items = "".join(f'<item id="c{i}" href="c{i}.xhtml"/>'
+                    for i in range(1, n + 1))
+    spine = "".join(f'<itemref idref="c{i}"/>' for i in range(1, n + 1))
+    opf = (f'<?xml version="1.0"?><package><manifest>{items}</manifest>'
+           f'<spine>{spine}</spine></package>')
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("META-INF/container.xml", container)
+        zf.writestr("OEBPS/content.opf", opf)
+        for i in range(1, n + 1):
+            zf.writestr(
+                f"OEBPS/c{i}.xhtml",
+                f"<html><head><title>Глава {i}</title></head><body>"
+                f"<h1>Глава {i}</h1><p>абзац один</p><p>   абзац два</p>"
+                f"<p>абзац три</p></body></html>")
 
 
 def test_spine_order(tmp_path):
@@ -631,6 +691,38 @@ def test_main_toc_clean_output(tmp_path, monkeypatch):
     E2C.main()
     assert not (out / "00000_1_Старая").exists()
     assert (out / "00000_1_Глава_1" / "chapter.txt").is_file()
+
+
+def test_main_clean_text_flag(tmp_path, monkeypatch):
+    """--clean-text доезжает до глав: пустая строка только после первой
+    строки файла; --no-clean-text оставляет абзацы пустыми строками."""
+    src = tmp_path / "book.txt"
+    src.write_text("Глава 1\n\n  первый\n\nвторой\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    base = ["epub_to_chapters.py", "--input", str(src), "--mode", "regex",
+            "--split-re", "Глава \\d+", "--output"]
+    for flag, want in (("--clean-text", "Глава 1\n\nпервый\nвторой\n"),
+                       ("--no-clean-text", "Глава 1\n\nпервый\n\nвторой\n")):
+        out = tmp_path / ("out" + flag.strip("-"))
+        monkeypatch.setattr(sys, "argv", base + [str(out), flag])
+        E2C.main()
+        got = (out / "00000_1_Глава_1" / "chapter.txt").read_text(
+            encoding="utf-8")
+        assert got == want, f"{flag}: {got!r}"
+
+
+def test_main_clean_text_default_off(tmp_path, monkeypatch):
+    """Без флага стадия пишет главы как раньше (дефолт реестра — выключено)."""
+    src = tmp_path / "book.txt"
+    src.write_text("Глава 1\n\nпервый\n\nвторой\n", encoding="utf-8")
+    out = tmp_path / "out-default"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [
+        "epub_to_chapters.py", "--input", str(src), "--mode", "regex",
+        "--split-re", "Глава \\d+", "--output", str(out)])
+    E2C.main()
+    got = (out / "00000_1_Глава_1" / "chapter.txt").read_text(encoding="utf-8")
+    assert got == "Глава 1\n\nпервый\n\nвторой\n"
 
 
 def test_main_requires_input(tmp_path, monkeypatch, capsys):

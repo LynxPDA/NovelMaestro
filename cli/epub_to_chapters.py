@@ -11,6 +11,12 @@
   chunk  разбивка по чанкам --chunk-size (ТОКЕНЫ, оценка), названия — по
          маске --chunk-mask (обязателен {num}).
 
+Предварительная очистка текста (--clean-text, по умолчанию выключена): пустые
+строки внутри главы убираются совсем — каждый абзац своей строкой; пустая строка
+остаётся только после первой строки файла — её пишет write_section между
+заголовком и телом главы. Пробелы и табуляция в начале строк убираются всегда,
+и без флага.
+
 Каталоги глав: <нули>_<номер>_<заголовок> — канон core.common.parse_chapter_id;
 нули добивают ширину 6: 00000_1, 0000_12, 000_177, 0_12345.
 Первая строка chapter.txt — заголовок главы; имя каталога — безопасная
@@ -112,6 +118,8 @@ WS_RE    = re.compile(r"\s+")
 TAG_RE   = re.compile(r"<[^>]+>")
 CTRL_RE  = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 MULTI_NL_RE    = re.compile(r"\n{3,}")
+# --clean-text: пустые строки главы убираются совсем (каждый абзац — своя строка)
+BLANK_NL_RE    = re.compile(r"\n{2,}")
 LEADING_WS_RE  = re.compile(r"^[ \t]+", re.M)
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
 H1_RE    = re.compile(r"<h1[^>]*>(.*?)</h1>",       re.S | re.I)
@@ -257,14 +265,24 @@ def _parse_replace_re(lines) -> list[tuple[re.Pattern, str]]:
     return out
 
 
-def apply_cleanups(text: str, clean_res) -> tuple[str, list[str]]:
-    """Удаляет все совпадения каждого паттерна; сжимает пустые строки."""
+def apply_cleanups(text: str, clean_res,
+                   collapse: bool = False) -> tuple[str, list[str]]:
+    """Удаляет все совпадения каждого паттерна; сжимает пустые строки.
+
+    collapse (--clean-text): пустые строки убираются совсем — каждый абзац
+    своей строкой. Пустая строка остаётся только после первой строки файла:
+    её пишет write_section между заголовком и телом главы. Без флага пустые
+    строки между абзацами остаются как в исходнике (3+ перевода строки —
+    как и всегда — сводятся к двум).
+    """
     removed: list[str] = []
     for rx in clean_res:
         for m in rx.finditer(text):
             removed.append(m.group(0))
         text = rx.sub("", text)
     text = MULTI_NL_RE.sub("\n\n", text)
+    if collapse:
+        text = BLANK_NL_RE.sub("\n", text)
     text = LEADING_WS_RE.sub("", text)
     return text.strip(), removed
 
@@ -600,7 +618,8 @@ def split_input(input_file: Path, mode: str,
                 chunk_size: int = 7000, chunk_mask: str = "Chapter {num}",
                 title_limit: int = 50, num_offset: int = 1,
                 skips: set[int] | None = None,
-                rename_chapters: bool = False) -> tuple[list[dict], int, list[str]]:
+                rename_chapters: bool = False,
+                clean_text: bool = False) -> tuple[list[dict], int, list[str]]:
     """Разбивает исходник на главы → (entries, s_before, removed).
 
     entry = {seq (исходный порядок, с 1), num (номер с учётом offset/skip),
@@ -615,6 +634,10 @@ def split_input(input_file: Path, mode: str,
     rename_chapters — заголовки ВСЕХ глав заменяются на chunk_mask
     (с номером после перенумерации); удобно после разбивки по
     TOC/паттернам: «Chapter 1», «Chapter 2»…
+
+    clean_text (--clean-text) — предварительная очистка: пустые строки
+    внутри глав убираются (каждый абзац своей строкой), пустая строка
+    остаётся только после первой строки файла.
     """
     skips = skips or set()
     suffix = input_file.suffix.lower()
@@ -632,7 +655,7 @@ def split_input(input_file: Path, mode: str,
         for h, b in raw_sections:
             h = unicodedata.normalize("NFC", h)
             b = unicodedata.normalize("NFC", b)
-            body, rem = apply_cleanups(b, clean_res)
+            body, rem = apply_cleanups(b, clean_res, collapse=clean_text)
             removed.extend(rem)
             # regexp-замены — как и в остальных режимах, ДО разбивки:
             # нормализуют маркеры глав в заголовке и текст секции
@@ -648,7 +671,8 @@ def split_input(input_file: Path, mode: str,
                 else archive_to_text(input_file))
         text = unicodedata.normalize("NFC", text)
         s_before = len(text)
-        text, removed = apply_cleanups(text, clean_res)
+        text, removed = apply_cleanups(text, clean_res,
+                                      collapse=clean_text)
         # regexp-замены — до разбивки (нормализация маркеров глав)
         for pat, repl in replace_res:
             text = pat.sub(repl, text)
@@ -762,6 +786,12 @@ def build_parser():
                    default=[], metavar="RE",
                    help="Паттерн маркера главы (regex; строка начинается "
                         "с паттерна — заголовок); можно повторять")
+    g.add_argument("--clean-text", action=argparse.BooleanOptionalAction,
+                   help="предварительная очистка: пустые строки внутри глав "
+                        "убираются (каждый абзац своей строкой); пустая "
+                        "строка остаётся только после первой строки файла "
+                        "(между заголовком и телом); пробелы/табуляция в "
+                        "начале строк убираются всегда и без флага")
     g.add_argument("--clean-re", dest="clean_re", action="append",
                    default=[], metavar="RE",
                    help="Очистка текста: все совпадения удаляются; "
@@ -860,7 +890,9 @@ def main():
              if mode == "chunk" else "")
           + (f" · переопределение названий «{args.chunk_mask}»"
              if args.rename_chapters else ""))
-    print(f"  Каталог: <нули>_<номер>_<заголовок>, лимит {title_limit} симв.")
+    print(f"  Каталог: <нули>_<номер>_<заголовок>, лимит {title_limit} симв."
+          + (" · очистка текста: пустые строки убраны"
+             if args.clean_text else ""))
     print(f"  Номера:  с {num_offset}"
           + (f" · пропуск: {sorted(skips)}" if skips else ""))
 
@@ -868,7 +900,7 @@ def main():
         input_file, mode, split_res, clean_res, replace_res,
         chunk_size=args.chunk_size, chunk_mask=args.chunk_mask,
         title_limit=title_limit, num_offset=num_offset, skips=skips,
-        rename_chapters=args.rename_chapters)
+        rename_chapters=args.rename_chapters, clean_text=args.clean_text)
 
     if args.preview_json:
         preview = Path(args.preview_json).resolve()
