@@ -456,6 +456,26 @@ def test_ner_check_request_budget_flag_in_params(tmp_path, monkeypatch):
     assert doc["params"]["бюджет запроса"] == 12345
 
 
+def test_ner_check_fields_keep_base_fields(tmp_path, monkeypatch):
+    """--fields: term, type и translation не снимаются — CLI дописывает их
+    сам (в форме запусков эти чекбоксы неотключаемы); порядок
+    факультативных полей сохраняется, дубли и пустые имена снимаются."""
+    assert NC.normalize_fields("notes,context") \
+        == "term,type,translation,notes,context"
+    assert NC.normalize_fields("term, notes ,,notes") \
+        == "term,type,translation,notes"
+    assert NC.normalize_fields("") == "term,type,translation"
+    monkeypatch.chdir(tmp_path)
+    _write_ner(tmp_path)
+    _mock_stream(monkeypatch, "[]", [])
+    rc = NC.main(["--input", "ner.json", "--passes", "whole",
+                  "--fields", "notes", "--host", "http://x", "--model", "m"])
+    assert rc == 0
+    doc2 = json.loads((tmp_path / "tmp" / "ner_review.json")
+                      .read_text(encoding="utf-8"))
+    assert doc2["params"]["поля"] == "term,type,translation,notes"
+
+
 def test_ner_check_two_stage_accumulation(tmp_path, monkeypatch):
     """Этап 2 дописывает правки в тот же файл; решения человека живут."""
     monkeypatch.chdir(tmp_path)

@@ -265,6 +265,20 @@ DEFAULT_NER_CHECK_PROMPT = """\
 """
 
 
+#: поля записи, которые уходят LLM ВСЕГДА: без term проверять нечего,
+#: без type и translation проверка теряет смысл. В форме запусков эти
+#: чекбоксы неотключаемые, в CLI их дописывает normalize_fields
+BASE_FIELDS: tuple = ("term", "type", "translation")
+
+
+def normalize_fields(value) -> str:
+    """Список полей --fields одной строкой: базовые поля всегда первыми и
+    всегда в списке, порядок остальных сохраняется, дубли и пустые имена
+    снимаются."""
+    names = [f.strip() for f in str(value or "").split(",") if f.strip()]
+    return ",".join(dict.fromkeys([*BASE_FIELDS, *names]))
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="LLM-проверка глоссария ner.json + применение правок")
@@ -337,7 +351,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "(--no-skip_locked — проверять все).")
     p.add_argument("--fields", default="term,type,translation",
                    help="Поля записи, передаваемые LLM (через запятую). "
-                        "term — всегда. По умолчанию: term,type,translation.")
+                        "term, type и translation — всегда (дописываются "
+                        "сами). По умолчанию: term,type,translation.")
     p.add_argument("--apply", action="store_true",
                    help="Применить правки из --review к ner.json (без LLM).")
     p.add_argument("--auto-apply", action="store_true",
@@ -1111,6 +1126,9 @@ def do_apply(args, logger) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    # базовые поля не снимаются: в форме их чекбоксы неотключаемы, здесь
+    # их дописывает normalize_fields — заодно и порядок становится канонным
+    args.fields = normalize_fields(args.fields)
     # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети
     if check_prompt(args, "ner_check", PROMPT_CONTRACT):
         return 0

@@ -1947,6 +1947,47 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} поля режима  ${seen.length} режимов · ${problems.length === before ? "все совпали" : "расхождения"}`);
   }
 
+  /* «Проверка глоссария»: поля записи, уходящие LLM. term, type и
+   * translation — всегда (чекбоксы неотключаемые, как в {ner_block}
+   * конвейера); остальные — ключи реального ner.json пробы */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".stage-card", { timeout: 15000 });
+    await page.locator('.stage-card:has-text("Проверка глоссария")').first().click();
+    await page.waitForTimeout(900); // чипсы рисуются после GET /api/ner
+    const f = await page.evaluate(() => {
+      // первый .ner-chips-box — чипсы типов, второй — чипсы полей записи
+      const boxes = [...document.querySelectorAll(".run-form .ner-chips-box")];
+      const bar = document.querySelectorAll(".run-form .ner-chips-bar")[1];
+      const chips = [...(boxes[1] || { querySelectorAll: () => [] })
+        .querySelectorAll(".ner-chip")]
+        .map((c) => ({
+          text: (c.textContent || "").replace(/\s+/g, " ").trim(),
+          off: !!(c.querySelector("input[type=checkbox]") || {}).disabled,
+        }));
+      return { chips, info: (bar ? bar.textContent : "").replace(/\s+/g, " ").trim() };
+    });
+    const want = ["term (всегда)", "type (всегда)", "translation (всегда)",
+      "count"];
+    const got = f.chips.map((c) => c.text);
+    if (got.join("|") !== want.join("|"))
+      problems.push(`поля ner_check: чипсы «${got.join(", ")}»`);
+    if (f.chips.slice(0, 3).some((c) => !c.off))
+      problems.push("поля ner_check: term/type/translation можно снять");
+    if (f.chips.length > 3 && f.chips[3].off)
+      problems.push(`поле «${want[3]}» оказалось неотключаемым`);
+    if (!/term, type, translation — всегда; по умолчанию: notes, context/
+      .test(f.info)) problems.push(`поля ner_check: подпись «${f.info}»`);
+    if (SHOT) {
+      await page.locator(".run-form").first().screenshot(
+        { path: path.join(OUT, "scenario-ner-check-fields.png") });
+    }
+    log(`${problems.length === before ? "✅" : "❌"} поля ner_check  ${got.join(" · ")}`);
+  }
+
   /* Состояние вкладок книги: перезагрузка возвращает на ту же вкладку,
    * «Редактор» — на ту же главу, «Логи» — в ту же папку и на тот же файл
    * (localStorage браузера, один ключ на книгу) */

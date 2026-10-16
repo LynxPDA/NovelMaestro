@@ -1208,44 +1208,51 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // ── поля записи, передаваемые LLM ──
     // чипсы — ключи полей из реальных данных ner.json: известные в
     // привычном порядке, ЛЮБОЙ новый ключ добавляется в конец сам;
-    // «term» — всегда в запросе (чекбокс неотключаемый)
+    // term, type и translation — всегда в запросе (чекбоксы
+    // неотключаемые, как в {ner_block} конвейера): без типа и перевода
+    // проверять нечего
     const FIELD_ORDER = ["type", "translation", "pinyin", "reading",
       "context", "translated_context", "notes", "aliases"];
+    const BASE_FIELDS = ["term", "type", "translation"];
+    // факультативные поля, включённые по умолчанию (если они есть в данных)
+    const DEFAULT_FIELDS = ["notes", "context"];
     const fieldsBar = h("div", { class: "ner-chips-bar" });
     const fieldsInfo = h("div", { class: "field-help" });
     const fieldsBox = h("div", { class: "ner-chips-box" });
     let fieldNames = [];
+    // дефолт: базовые поля + те факультативные, что есть в ner.json
+    function defaultFields() {
+      return [...BASE_FIELDS,
+        ...DEFAULT_FIELDS.filter((n) => fieldNames.includes(n))];
+    }
     function curFields() {
       let v = String(st.values[key]["fields"] ?? "").trim();
       if (!v) {
-        // дефолт: term + type/translation/notes/context — те, что есть
-        // в реальных данных ner.json (fieldNames уже загружен);
         // касание обязательно — в простом режиме уходит именно он
-        const base = ["type", "translation", "notes", "context"].filter(
-          (n) => fieldNames.includes(n),
-        );
-        v = ["term", ...base].join(",");
+        v = defaultFields().join(",");
         st.values[key]["fields"] = v;
         st.touched[key].add("fields");
       }
-      const set = new Set(v.split(",").map((s) => s.trim())
-        .filter((s) => s && s !== "term"));
-      set.add("term"); // термин — всегда в запросе
+      // базовые поля дописываются всегда: снять их нельзя
+      const set = new Set(BASE_FIELDS);
+      for (const f of v.split(",")) {
+        if (f.trim()) set.add(f.trim());
+      }
       return set;
     }
     function renderFields() {
       const cur = curFields();
       fieldsBox.replaceChildren();
       for (const name of ["term", ...fieldNames]) {
-        const isTerm = name === "term";
+        const isBase = BASE_FIELDS.includes(name); // неотключаемые
         const cb = h("input", { type: "checkbox", class: "checkbox" });
-        cb.checked = isTerm || cur.has(name);
-        cb.disabled = isTerm; // неотключаемый
-        if (!isTerm) {
+        cb.checked = isBase || cur.has(name);
+        cb.disabled = isBase;
+        if (!isBase) {
           cb.addEventListener("change", () => {
             const set = new Set(curFields());
             if (cb.checked) set.add(name);
-            else set.delete(name); // минимум — «Термин» (неотключаемый)
+            else set.delete(name); // минимум — базовые (неотключаемые)
             st.values[key]["fields"] = [...set].join(",");
             st.touched[key].add("fields");
             saveChips(key, ["types", "fields"]);
@@ -1255,9 +1262,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         fieldsBox.append(
           h(
             "label",
-            { class: "ner-chip" + (isTerm ? " ner-chip-term" : "") },
+            { class: "ner-chip" + (isBase ? " ner-chip-term" : "") },
             cb,
-            ` ${name}` + (isTerm ? " (всегда)" : ""),
+            ` ${name}` + (isBase ? " (всегда)" : ""),
           ),
         );
       }
@@ -1345,16 +1352,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             .sort(),
         ];
         // сохранённый/устаревший выбор не переживает поля, которых
-        // больше нет в ner.json (зеркально ner_block ниже)
+        // больше нет в ner.json (зеркально ner_block ниже); снятое
+        // факультативное поле возвращается только базовым набором
         const v = String(st.values[key]["fields"] ?? "").trim();
         if (v) {
           const ok = v.split(",").map((s) => s.trim())
             .filter((s) => s === "term" || fieldNames.includes(s));
-          st.values[key]["fields"] = ok.join(",");
+          st.values[key]["fields"] = [...new Set([...BASE_FIELDS, ...ok])]
+            .join(",");
           saveChips(key, ["types", "fields"]);
         }
         fieldsInfo.textContent =
-          "term — всегда; по умолчанию: type, translation, notes, "
+          "term, type, translation — всегда; по умолчанию: notes, "
           + "context (если есть в данных)";
         renderFields();
       } catch (ex) {

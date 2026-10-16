@@ -356,6 +356,8 @@ function makeEditor(initial, lang) {
 /* стадии и профили LLM: поле «Профиль LLM» рисует сводку отсюда */
 const STAGES = [
   { key: "ner", title: "Глоссарий", script: "cli/ner.py" },
+  { key: "ner_check", title: "Проверка глоссария (LLM)",
+    script: "cli/ner_check.py" },
   { key: "pipeline", title: "Перевод", script: "web/pipeline.py" },
   { key: "wiki", title: "Wiki", script: "cli/wiki.py" },
 ];
@@ -381,6 +383,23 @@ const SPEC_FIELDS = {
     { ...PROFILE_FIELD },
     { name: "action", label: "Тип работы", type: "select", default: "all",
       options: ["all"], labels: { all: "полный цикл" } },
+  ],
+  /* ner_check: режимы одним select, типы и поля записи — скрытые поля
+     чипсов (noenv: значение живёт в браузере проекта+стадии) */
+  ner_check: [
+    { ...PROFILE_FIELD },
+    { name: "passes", label: "Режимы", type: "select", default: "whole",
+      options: ["whole", "types", "rag"],
+      labels: {
+        whole: "Выбранные типы (одновременно)",
+        types: "Выбранные типы (по отдельности)",
+        rag: "Точечно по списку (RAG)",
+      } },
+    { name: "count_threshold", label: "Порог count", type: "number",
+      default: "0", when: [["passes", ["whole", "types"]]] },
+    { name: "types", type: "hidden", default: "", noenv: true,
+      when: [["passes", ["whole", "types"]]] },
+    { name: "fields", type: "hidden", default: "", noenv: true },
   ],
   /* wiki: тип файлов ОДИН на вход и на вики-главу (when_any), чипсы типов
      скрытым полем types — счётчики считаются срезом top-N по count */
@@ -1595,6 +1614,58 @@ test("wiki: счётчики типов пересчитываются и по �
   ], "порог ≥5: у Organisation, Other и Person терминов нет");
   assert.match(collectText(bar).join(""),
     /2 из 8 терминов попадут в запрос \(топ-80 по count, порог ≥5\)/);
+  globalThis.__ner = null;
+  globalThis.localStorage.clear();
+});
+
+/* ── ner_check: чипсы полей записи — базовые поля неотключаемы ── */
+const NER_CHECK_ITEMS = [
+  { term: "林凡", translation: "Линь Фан", type: "Person (male)", count: 9 },
+  { term: "青云宗", translation: "Секта Цинъюнь", type: "Location",
+    context: "青云宗位于山中", notes: "палладия", count: 4 },
+];
+
+test("ner_check: term, type и translation в запросе всегда, notes и context — по умолчанию", async () => {
+  globalThis.localStorage.clear();
+  globalThis.__ner = {
+    items: NER_CHECK_ITEMS,
+    by_type: { "Person (male)": 1, Location: 1 },
+  };
+  const page = await runStage("ner_check");
+  await tick(); // чипсы рисуются после GET /ner
+  /* первый .ner-chips-box — чипсы типов, второй — чипсы полей записи */
+  const box = findByClass(page, "ner-chips-box")[1];
+  const bar = findByClass(page, "ner-chips-bar")[1];
+  const chips = () => findByClass(box, "ner-chip")
+    .map((c) => collectText(c).join("").replace(/\s+/g, " ").trim());
+  const boxes = () => findTag(box, "input");
+  assert.deepEqual(chips(), [
+    "term (всегда)", "type (всегда)", "translation (всегда)",
+    "context", "notes", "count",
+  ], "поля: базовые первыми и с подписью, остальные — ключи из ner.json");
+  assert.deepEqual(boxes().map((i) => i.disabled),
+    [true, true, true, false, false, false],
+    "термин, тип и перевод снять нельзя: чекбоксы неотключаемые");
+  assert.deepEqual(boxes().map((i) => i.checked),
+    [true, true, true, true, true, false],
+    "по умолчанию: базовые поля + notes и context (они есть в данных), count — нет");
+  assert.match(collectText(bar).join("").replace(/\s+/g, " "),
+    /term, type, translation — всегда; по умолчанию: notes, context \(если есть в данных\)/);
+  /* снятие факультативного поля сохраняется браузеру, базовые остаются */
+  const notes = boxes()[4];
+  notes.checked = false;
+  notes.dispatchEvent({ type: "change" });
+  await tick();
+  assert.deepEqual(
+    JSON.parse(globalThis.localStorage.getItem("chips:ACTIVE/Книга:ner_check")),
+    { fields: "term,type,translation,context" },
+    "в память стадии ушли базовые поля плюс context: notes снят");
+  assert.deepEqual(chips(), [
+    "term (всегда)", "type (всегда)", "translation (всегда)",
+    "context", "notes", "count",
+  ], "состояние перерисовано без потери чипсов");
+  assert.equal(boxes()[1]._listeners.change, undefined,
+    "у неотключаемого чекбокса обработчика смены нет: его не снять");
   globalThis.__ner = null;
   globalThis.localStorage.clear();
 });
