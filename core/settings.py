@@ -61,6 +61,24 @@ def is_mask(value) -> bool:
     val = str(value if value is not None else "").strip()
     return bool(val) and set(val) <= {MASK_CHAR}
 
+
+#: что читается как «включено» у bool-значения в .env и в форме запусков
+BOOL_ON = ("1", "true", "yes", "on")
+
+
+def is_on(value) -> bool:
+    """Булево значение из любого слоя: bool, число или строка .env/формы.
+
+    Один способ на весь проект: у чекбокса нет «пустого» значения, поэтому
+    «0», «false» и пустая строка — выключено, а не «как в реестре».
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value if value is not None else "").strip().lower() in BOOL_ON
+
+
 # ════════════════════════════════════════════════════════════════════
 # модель реестра
 # ════════════════════════════════════════════════════════════════════
@@ -94,7 +112,8 @@ class Setting:
     # когда настройка вообще касается запуска. Условие — пара (имя поля режима,
     # кортеж допустимых значений); булевы поля сравниваются как "1"/"0".
     # when — И по всем условиям, when_any — достаточно одного, when_set —
-    # перечисленные поля непустые. Пустые — касается всегда; так же ведёт себя
+    # перечисленные поля непустые (у bool-поля это само значение: снятая галка
+    # — «поля не задано»). Пустые — касается всегда; так же ведёт себя
     # пустой (или отсутствующий) режим: резать поля нечем.
     when: tuple = ()
     when_any: tuple = ()
@@ -589,6 +608,15 @@ def _form_value(form: dict, name: str) -> str | None:
     return v or None
 
 
+def _form_set(form: dict, name: str) -> bool:
+    """Заполнено ли поле режима (when_set): у bool-поля — само значение
+    (снятый чекбокс — «не задано»), у остальных — непустая строка."""
+    v = (form or {}).get(name)
+    if isinstance(v, bool):
+        return is_on(v)
+    return bool(str(v if v is not None else "").strip())
+
+
 def applies(setting: Setting, form: dict) -> bool:
     """Касается ли настройка текущего режима стадии.
 
@@ -612,7 +640,7 @@ def applies(setting: Setting, form: dict) -> bool:
                 return False
         elif not hit(conds):
             return False
-    return all(_form_value(form, name) for name in setting.when_set)
+    return all(_form_set(form, name) for name in setting.when_set)
 
 
 def applicable_form(stage: str, form: dict) -> dict:
@@ -621,14 +649,17 @@ def applicable_form(stage: str, form: dict) -> dict:
     Значения неприменимых полей не удаляются из браузера — форма помнит их
     к следующему запуску в этом режиме; в argv они просто не попадают.
     Нестадейные ключи (LLM-конфиг профиля, выбор профиля) проходят как есть.
+    bool-поля приводятся к настоящему bool: сборке argv важно отличать снятый
+    чекбокс от отсутствующего поля.
     """
     by_name = {s.name: s for s in stage_fields(stage)}
     out: dict[str, object] = {}
     for name, value in (form or {}).items():
         s = by_name.get(name)
-        if s is not None and not applies(s, form):
-            continue
-        out[name] = value
+        if s is None:
+            out[name] = value             # нестадейный ключ — как есть
+        elif applies(s, form):
+            out[name] = is_on(value) if s.type == "bool" else value
     return out
 
 
@@ -660,9 +691,7 @@ def _coerce(setting: Setting, value):
         except ValueError:
             return value
     if setting.type == "bool":
-        if isinstance(value, bool):
-            return value
-        return raw.strip().lower() in ("1", "true", "yes", "on")
+        return is_on(value)
     if setting.type == "textarea":
         return raw.replace(NL_LIT, NL).rstrip(NL)
     return raw.strip()

@@ -95,7 +95,7 @@ SETTINGS_API = ["Setting", "Block", "Group", "GROUPS", "SETTINGS", "BY_KEY",
                 "form_fields", "defaults", "stage_values", "llm_settings",
                 "llm_values", "llm_form", "with_llm", "applies",
                 "applicable_form", "env_key", "env_file",
-                "sanitize", "file_values", "layered_values", "effective",
+                "is_on", "sanitize", "file_values", "layered_values", "effective",
                 "display_value", "block_payload", "write_values",
                 "groups_payload", "profile_defaults"]
 # Зеркало API core/update.py (способ установки и обновление программы)

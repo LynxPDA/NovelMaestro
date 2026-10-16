@@ -742,6 +742,34 @@ def test_applies_when_set(global_env):
     assert not S.applies(f, {"co_occurrence_pairs": "   "})
 
 
+def test_applies_when_set_bool_field(global_env):
+    """when_set у bool-поля — само значение: у чекбокса пустого значения нет,
+    поэтому снятая галка читается как «поля не задано», а не как строка «0»."""
+    f = _by_name("wiki")["co_occurrence_top"]
+    assert S.applies(f, {"co_occurrence_pairs": True})
+    assert not S.applies(f, {"co_occurrence_pairs": False})
+
+
+@pytest.mark.parametrize("value,expected", [
+    (True, True), (False, False), (1, True), (0, False),
+    ("1", True), ("0", False), (" true ", True), ("TRUE", True),
+    ("yes", True), ("on", True), ("no", False), ("false", False),
+    ("", False), (None, False), ("   ", False),
+])
+def test_is_on_single_bool_coercion(value, expected):
+    """Булево значение из любого слоя приводится одной функцией реестра."""
+    assert S.is_on(value) is expected
+
+
+def test_applicable_form_gives_bools(global_env):
+    """bool-поля формы запусков реестр отдаёт настоящими bool: «0» из браузера
+    или общего .env — выключено, а не «не задано»."""
+    got = S.applicable_form("ner", {"two_pass": "0", "chunk_size": "5500"})
+    assert got["two_pass"] is False and got["chunk_size"] == "5500"
+    got = S.applicable_form("ner", {"two_pass": "1"})
+    assert got["two_pass"] is True
+
+
 def test_applicable_form_drops_other_modes_fields(global_env):
     """Из формы стадии уходят поля чужого режима; LLM-конфиг и профиль — нет."""
     got = S.applicable_form("ner_check", {
