@@ -4,7 +4,10 @@
 jobs.py — менеджер запусков стадий.
 
 - запуск скрипта subprocess'ом с cwd=папка проекта;
-- кольцевой буфер строк (RING_SIZE=5000);
+- кольцевой буфер строк (RING_SIZE=5000), в браузер от него идёт хвост
+  TAIL_LIMIT=500 — панель показывает ~30 строк;
+- события глав конвейера — ОДНО на пару (глава, стадия): новое значение
+  заменяет прежнее, буфер равен размеру таблицы глав, а не истории проходов;
 - SSE-подписчики: очередь событий на job (line/status);
 - stop: остановка запуска ВМЕСТЕ с потомками — POSIX: сигнал группе
   процессов (start_new_session + killpg), SIGTERM → 5 с → SIGKILL;
@@ -37,6 +40,11 @@ log = logging.getLogger("web")
 
 # Кольцевой буфер строк лога на задачу
 RING_SIZE = 5000
+# Хвост лога, который уходит в браузер (payload и снимок SSE). Он обязан быть
+# маленьким: каждая строка снимка — часть одного большого кадра, а панель
+# лога — окно в ~30 строк. Весь RING_SIZE во вкладке «Запуски» означал
+# перечитывание и новую вёрстку двухкилострочного окна на каждое событие.
+TAIL_LIMIT = 500
 # Сайдкары хвоста лога/событий (web/job_logs/{id}.log + {id}.events.json)
 JOB_LOGS_DIRNAME = "job_logs"
 STOP_GRACE = 5.0  # секунд между terminate и kill
@@ -137,7 +145,8 @@ class Job:
         self.finished: float | None = None
         self.pid: int | None = pid  # pid процесса (для reconcile/stop по pid)
         self.lines: list[str] = []  # кольцевой буфер
-        self.events: list[dict] = []  # события глав (конвейер)
+        self.events: list[dict] = []  # события глав: одно на (id, stage)
+        self._ev_at: dict[str, int] = {}  # «id:stage» → позиция в events
         self.progress: dict | None = None  # последнее событие прогресса
         self.proc: subprocess.Popen | None = None
         self._subs: list[queue.Queue] = []
@@ -150,6 +159,21 @@ class Job:
             if len(self.lines) > RING_SIZE:
                 del self.lines[: len(self.lines) - RING_SIZE]
 
+    def add_event(self, ev: dict) -> None:
+        """Событие главы — одно на пару (глава, стадия): новое заменяет
+        прежнее. Конвейер на 1300 глав присылает их тысячи (каждый проход
+        перепроверяет главы заново), а снимок, сайдкар и таблица глав обязаны
+        оставаться одного размера — иначе стрим и история запусков уезжают
+        в сотни килобайт на подписку."""
+        key = f"{ev.get('id')}:{ev.get('stage')}"
+        with self._lock:
+            at = self._ev_at.get(key)
+            if at is None:
+                self._ev_at[key] = len(self.events)
+                self.events.append(ev)
+            else:
+                self.events[at] = ev
+
     def tail(self, n: int = 200) -> list[str]:
         with self._lock:
             return list(self.lines[-n:])
@@ -158,8 +182,8 @@ class Job:
         """Метаданные + хвост буфера + события (для API).
 
         argv НЕ включается: в argv могут быть секреты (--api_key).
-        Лог — весь кольцевой буфер: завершённый запуск показывается
-        на вкладке стадии после рестарта страницы без SSE."""
+        Лог — хвост TAIL_LIMIT: его хватает на прокрутку панели, а полный
+        хвост прогона остаётся в сайдкаре job_logs/{id}.log и в логе стадии."""
         return {
             "id": self.id,
             "action": self.action,
@@ -171,7 +195,7 @@ class Job:
             "finished": self.finished,
             "pid": self.pid,
             "cwd": self.cwd,
-            "lines": self.tail(RING_SIZE),
+            "lines": self.tail(TAIL_LIMIT),
             "events": list(self.events),
             "progress": self.progress,
         }
@@ -274,6 +298,10 @@ class JobManager:
                 ev = json.loads(ep.read_text(encoding="utf-8"))
                 if isinstance(ev, list):
                     job.events = ev
+                    # индекс «id:stage» → позицию дописывает add_event —
+                    # после чтения сайдкара его нужно восстановить
+                    job._ev_at = {f"{e.get('id')}:{e.get('stage')}": i
+                                  for i, e in enumerate(ev)}
             except ValueError as exc:
                 log.debug("События %s не читаются: %s", ep, exc)
 
@@ -318,7 +346,8 @@ class JobManager:
     def _persist(self) -> None:
         """Метаданные + сайдкары; весь цикл — под локом, чтобы reader-
         поток завершённого задания не писал сайдкар задания, которое
-        параллельный trim уже выбросил из истории."""
+        параллельный trim уже выбросил из истории: вернувшийся файл
+        осиротел бы до следующей перезагрузки сервера."""
         with self._lock:
             self._trim_locked()
             jobs = list(self._jobs.values())
@@ -588,7 +617,7 @@ class JobManager:
                         job.append(line)
                         job.notify(("line", line))
                         continue
-                    job.events.append(ev)
+                    job.add_event(ev)
                     job.notify(("event", ev))
                     continue
                 job.append(line)

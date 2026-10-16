@@ -8,10 +8,13 @@ epub_to_chapters и batch_replace.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import os
+import queue
+import time
 from pathlib import Path
-from web.jobs import JobManager
+from web.jobs import JobManager, SSE_PING, TAIL_LIMIT
 from web.server import ApiError, Router
 from core import settings as core_settings
 from web.stages import (
@@ -219,9 +222,36 @@ def _jobs_clear(ctx: dict) -> dict:
     return {"ok": True, "cleared": jm.clear_finished()}
 
 
+def _sse_frame(obj: dict) -> bytes:
+    """Один кадр SSE: «data: <json>» и пустая строка (пробел после «:» — часть
+    кадра)."""
+    return ("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8")
+
+
+def _sse_batch(events: list[tuple]) -> bytes:
+    """Очередь событий стрима → кадры одним байтовым блоком: сокет не дёргается
+    на каждое событие (тип, данные) → свой кадр."""
+    buf = []
+    for ev_type, payload in events:
+        if ev_type == "line":
+            obj = {"type": "line", "text": payload}
+        elif ev_type == "event":
+            obj = {"type": "event", "event": payload}
+        elif ev_type == "progress":
+            obj = {"type": "progress", "event": payload}
+        else:
+            obj = {"type": "status", "status": payload}
+        buf.append(_sse_frame(obj))
+    return b"".join(buf)
+
+
 def _jobs_stream(ctx: dict) -> dict:
-    """SSE-стрим лога (GET /api/jobs/{id}/stream)."""
-    import json as _json
+    """SSE-стрим лога (GET /api/jobs/{id}/stream).
+
+    Снимок буфера уходит ОДНИМ кадром `snapshot` (строки, события глав,
+    последний прогресс), живые события — пачками на очередь: тысячи отдельных
+    кадров с отдельным flush гнали сокет и браузер через тысячи перерисовок
+    панели лога, и вкладка «Запуски» на большой книге висла десятками секунд."""
     jm = _job_manager(ctx)
     job = jm.get(ctx["params"]["id"])
     if job is None:
@@ -239,47 +269,36 @@ def _jobs_stream(ctx: dict) -> dict:
     handler.close_connection = True
     q = job.subscribe()
     try:
-        # сразу — весь текущий буфер + события (для живой таблицы)
-        for line in job.tail(5000):
-            ev = _json.dumps({"type": "line", "text": line}, ensure_ascii=False)
-            handler.wfile.write(f"data: {ev}\n\n".encode("utf-8"))
-        for ev_item in list(job.events):
-            ev = _json.dumps({"type": "event", "event": ev_item},
-                             ensure_ascii=False)
-            handler.wfile.write(f"data: {ev}\n\n".encode("utf-8"))
-        # текущий прогресс — живое прикрепление сразу видит бар
-        if job.progress:
-            ev = _json.dumps({"type": "progress", "event": job.progress},
-                             ensure_ascii=False)
-            handler.wfile.write(f"data: {ev}\n\n".encode("utf-8"))
+        # снимок: весь текущий хвост буфера, события глав (для живой таблицы)
+        # и текущий прогресс — одним кадром и одной записью в сокет
+        handler.wfile.write(_sse_frame({
+            "type": "snapshot", "lines": job.tail(TAIL_LIMIT),
+            "events": list(job.events), "progress": job.progress}))
         # уже завершился до подписки — статус сразу и закрываем
         if job.status != "running":
-            ev = _json.dumps({"type": "status", "status": job.status},
-                             ensure_ascii=False)
-            handler.wfile.write(f"data: {ev}\n\n".encode("utf-8"))
+            handler.wfile.write(_sse_frame({"type": "status",
+                                            "status": job.status}))
             handler.wfile.flush()
             return {}
         handler.wfile.flush()
         while True:
+            # всё, что накопилось в очереди, уходит одной записью; таймаут
+            # — служебный кадр, чтобы соединение не остыл
             try:
-                ev_type, payload = q.get(timeout=15.0)
-            except Exception:
-                handler.wfile.write(b": ping\n\n")
-                handler.wfile.flush()
-                continue
-            if ev_type == "line":
-                ev = _json.dumps({"type": "line", "text": payload}, ensure_ascii=False)
-            elif ev_type == "event":
-                ev = _json.dumps({"type": "event", "event": payload},
-                                 ensure_ascii=False)
-            elif ev_type == "progress":
-                ev = _json.dumps({"type": "progress", "event": payload},
-                                 ensure_ascii=False)
+                events = [q.get(timeout=SSE_PING)]
+            except queue.Empty:
+                events = []
+            while True:
+                try:
+                    events.append(q.get_nowait())
+                except queue.Empty:
+                    break
+            if events:
+                handler.wfile.write(_sse_batch(events))
             else:
-                ev = _json.dumps({"type": "status", "status": payload}, ensure_ascii=False)
-            handler.wfile.write(f"data: {ev}\n\n".encode("utf-8"))
+                handler.wfile.write(b": ping\n\n")
             handler.wfile.flush()
-            if ev_type == "status":
+            if any(ev_type == "status" for ev_type, _ in events):
                 break
     finally:
         job.unsubscribe(q)

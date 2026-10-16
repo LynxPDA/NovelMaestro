@@ -8,6 +8,7 @@
 """
 import json
 import os
+import threading
 import time
 import types
 from pathlib import Path
@@ -15,9 +16,9 @@ from typing import cast
 
 import pytest
 
-from conftest import http_request, pid_alive
+from conftest import http_request, http_send, pid_alive
 from core import settings as core_settings
-from web.jobs import Job, JobManager, RING_SIZE
+from web.jobs import Job, JobManager, RING_SIZE, TAIL_LIMIT
 from web.stages import (
     STAGE_ORDER, STAGE_SPECS, build_command, ordered_stages, script_path,
     spec_for,
@@ -65,6 +66,34 @@ FAKE_PROGRESS = (
     "        time.sleep(0.01)\n"
     "sys.exit(0)\n"
 )
+# Живой стрим: одна строка сразу (она попадает в снимок), дальше процесс ждёт
+# маркера и только потом выдаёт строки и прогресс — они обязаны прийти кадрами
+# line/progress, а не остаться только в снимке.
+FAKE_LIVE = (
+    "import os, sys, time\n"
+    "print('ready', flush=True)\n"
+    "while not os.path.exists(sys.argv[1]):\n"
+    "    time.sleep(0.01)\n"
+    "for i in range(5):\n"
+    "    print(f'live-{i}', flush=True)\n"
+    "    print('@@PROGRESS@@' + '{\"type\": \"progress\", '\n"
+    "          '\"label\": \"Перевод\", \"done\": %d, \"total\": 5}'\n"
+    "          % (i + 1), flush=True)\n"
+    "    time.sleep(0.02)\n"
+    "sys.exit(0)\n"
+)
+# События конвейера: 5 глав × 3 стадии, каждая пара (глава, стадия) приходит
+# трижды подряд — буфер обязан свернуть их в 15 записей, а не копить 45.
+FAKE_CHAPTERS = (
+    "import sys\n"
+    "for ch in range(1, 6):\n"
+    "    for stage in (1, 2, 3):\n"
+    "        for st in ('OK', 'OK', 'SKIP'):\n"
+    "            print('@@CHAPTER@@' + '{\"type\": \"chapter\", '\n"
+    "                  '\"id\": %d, \"stage\": %d, \"status\": \"%s\"}'\n"
+    "                  % (ch, stage, st), flush=True)\n"
+    "sys.exit(0)\n"
+)
 # Кривой JSON под префиксом — должен уйти в буфер строкой, без падения
 FAKE_BAD_PROGRESS = (
     "import sys\n"
@@ -110,6 +139,8 @@ def fake_script(tmp_path):
     (d / "hang.py").write_text(FAKE_HANG, encoding="utf-8")
     (d / "parent.py").write_text(FAKE_PARENT_CHILD, encoding="utf-8")
     (d / "progress.py").write_text(FAKE_PROGRESS, encoding="utf-8")
+    (d / "live.py").write_text(FAKE_LIVE, encoding="utf-8")
+    (d / "chapters.py").write_text(FAKE_CHAPTERS, encoding="utf-8")
     (d / "bad_progress.py").write_text(FAKE_BAD_PROGRESS, encoding="utf-8")
     return d
 
@@ -246,9 +277,131 @@ def test_ring_buffer_cap(tmp_path, fake_script):
         job.append(f"x-{i}")
     assert len(job.lines) == RING_SIZE
     assert job.lines[-1] == f"x-{RING_SIZE + 99}"
-    # payload отдаёт хвост лога = весь буфер: завершённый запуск
-    # показывается на вкладке стадии без SSE (после перезагрузки)
-    assert len(job.payload()["lines"]) == RING_SIZE
+    # payload отдаёт хвост TAIL_LIMIT: панель лога показывает ~30 строк, а
+    # весь буфер в браузере означал бы тысячи перерисовок окна на снимок
+    payload = job.payload()
+    assert len(payload["lines"]) == TAIL_LIMIT
+    assert payload["lines"][0] == f"x-{RING_SIZE + 100 - TAIL_LIMIT}"
+    assert payload["lines"][-1] == f"x-{RING_SIZE + 99}"
+    # полный хвост прогона остаётся в сайдкаре: вкладка «Логи» и рестарт
+    # сервера должны видеть больше, чем панель
+    jm._persist()
+    sidecar = jm._log_path(job.id)
+    assert len(sidecar.read_text(encoding="utf-8").splitlines()) == RING_SIZE
+
+
+def test_sse_frame_and_batch_shapes():
+    """Кадры стрима: у каждого события свой кадр, а вся пачка пишется одним
+    блоком — сокет не дёргается на каждую строку."""
+    from web.api_stage import _sse_batch, _sse_frame
+
+    assert _sse_frame({"type": "status", "status": "done"}) \
+        == b'data: {"type": "status", "status": "done"}\n\n'
+    block = _sse_batch([
+        ("line", "два"),
+        ("event", {"type": "chapter", "id": 1, "stage": 1, "status": "OK"}),
+        ("progress", {"type": "progress", "done": 1, "total": 3}),
+        ("status", "done"),
+    ])
+    assert block.count(b"data: ") == 4 and block.endswith(b"\n\n")
+    frames = [json.loads(part[len("data: "):])
+              for part in block.decode("utf-8").split("\n\n") if part]
+    assert [f["type"] for f in frames] == ["line", "event", "progress", "status"]
+    assert frames[1]["event"]["id"] == 1 and frames[2]["event"]["total"] == 3
+
+
+def _sse_frames(text: str) -> list[dict]:
+    """Тело SSE-стрима → кадры: «data: <json>», пустые строки и ping мимо."""
+    return [json.loads(line[len("data: "):])
+            for line in text.splitlines() if line.startswith("data: ")]
+
+
+def test_events_fold_by_chapter_and_stage(tmp_path, fake_script):
+    """События глав сворачиваются в таблицу: ОДНО на пару (глава, стадия).
+
+    Конвейер гонит их по штукe на каждую главу и стадию (а при повторных
+    проходах — заново на все главы): буфер, сайдкар и снимок стрима обязаны
+    быть размером с таблицу глав, а не с историей всех проходов."""
+    jm = JobManager(tmp_path, python="python3")
+    job = jm.start("pipeline", "Конвейер", "ACTIVE/x",
+                   [str(fake_script / "chapters.py")], tmp_path)
+    job = _wait_status(jm, job.id, "done")
+    assert len(job.events) == 15, "5 глав × 3 стадии — 15 клеток, не 45 событий"
+    assert {e["status"] for e in job.events} == {"SKIP"}, "последний статус победы"
+    assert len(job.payload()["events"]) == 15
+    sidecar = jm._events_path(job.id)
+    assert len(json.loads(sidecar.read_text(encoding="utf-8"))) == 15
+    # после рестарта сервера события читаются из сайдкара: индекс пар нужно
+    # восстановить, иначе дубли снова начнут копиться
+    restored = Job("pipeline", "Конвейер", "ACTIVE/x", [], tmp_path)
+    restored.id = job.id  # сайдкар ищется по id запуска
+    jm._read_sidecar(restored)
+    assert len(restored.events) == 15
+    restored.add_event({"type": "chapter", "id": 1, "stage": 1, "status": "OK"})
+    assert len(restored.events) == 15, "известная пара заменяется, а не растёт"
+    assert restored.events[0]["status"] == "OK"
+
+
+def test_stream_snapshot_is_one_frame(jobs_srv):
+    """SSE-стрим: снимок буфера уходит ОДНИМ кадром, а не по кадру на строку.
+
+    Прежняя схема гнала по отдельному кадру (и по записи в сокет) на каждую
+    строку хвоста и на каждое событие главы: прогон на 1300 глав — тысячи
+    кадров, и браузер перечитывал и заново верстал окно лога на каждый."""
+    port, _req, jm = jobs_srv
+    job = Job("pipeline", "Конвейер", "ACTIVE/x", [], Path("."))
+    job.status = "done"
+    job.lines = [f"line-{i}" for i in range(TAIL_LIMIT + 300)]
+    job.events = [{"type": "chapter", "id": 1, "stage": 1, "status": "OK"}]
+    job.progress = {"type": "progress", "label": "Перевод",
+                    "done": 3, "total": 3}
+    jm._jobs[job.id] = job
+    res, _raw = http_send(port, "GET", f"/api/jobs/{job.id}/stream")
+    assert res.status == 200
+    frames = _sse_frames(res.raw_text)
+    assert [f["type"] for f in frames] == ["snapshot", "status"], \
+        "снимок + финальный статус: по кадру на строку лога быть не должно"
+    snap = frames[0]
+    assert len(snap["lines"]) == TAIL_LIMIT
+    # в снимок идёт хвост буфера: младшая строка — последняя
+    assert snap["lines"][0] == f"line-{300}"
+    assert snap["lines"][-1] == f"line-{TAIL_LIMIT + 300 - 1}"
+    assert snap["events"] == job.events
+    assert snap["progress"]["done"] == 3
+    assert frames[1]["status"] == "done"
+    # кадр-снимок — один: «data:» в начале строки и пустая строка между кадрами
+    assert res.raw_text.startswith("data: ") and res.raw_text.endswith("\n\n")
+
+
+def test_stream_live_events_after_subscribe(jobs_srv, fake_script, tmp_path):
+    """Живой стрим: первым приходит снимок (хвост на момент подписки), затем
+    строки и прогресс, идущие ПОСЛЕ подписки, и финальный статус."""
+    port, _req, jm = jobs_srv
+    marker = tmp_path / "go"
+    job = jm.start("translate", "Перевод", "ACTIVE/x",
+                   [str(fake_script / "live.py"), str(marker)], Path("."))
+    assert _wait_line(job, "ready"), "запуск не вывел ни одной строки"
+    holder: dict = {}
+
+    def _read() -> None:
+        res, _ = http_send(port, "GET", f"/api/jobs/{job.id}/stream")
+        holder["text"] = res.raw_text
+
+    t = threading.Thread(target=_read, daemon=True)
+    t.start()
+    time.sleep(0.3)  # подписка состоялась: дальше идут только живые события
+    marker.touch()
+    _wait_status(jm, job.id, "done")
+    t.join(timeout=15)
+    frames = _sse_frames(holder.get("text", ""))
+    assert frames and frames[0]["type"] == "snapshot", "снимок должен прийти первым"
+    assert frames[0]["lines"] == ["ready"], "в снимке — хвост на момент подписки"
+    kinds = [f["type"] for f in frames[1:]]
+    assert kinds[-1] == "status" and frames[-1]["status"] == "done"
+    assert kinds.count("line") == 5 and kinds.count("progress") == 5, \
+        "живые строки и прогресс до клиента не дошли"
+    assert frames[1]["text"] == "live-0"
+    assert frames[-2]["event"]["done"] == 5
 
 
 def test_stop_terminates(tmp_path, fake_script):

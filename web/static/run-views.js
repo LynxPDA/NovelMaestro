@@ -37,7 +37,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     stage: null, // выбранная стадия: {key, title, script, spec}
     options: null, // динамические опции {chapters, source, prompts, root}
     job: null, // текущий запуск
-    log: [], // строки лога текущего запуска (ТОЛЬКО из SSE-стрима)
+    log: [], // строки лога текущего запуска (ТОЛЬКО из SSE-стрима, не больше LOG_LIMIT)
+    chShown: {}, // что показано в клетках таблицы глав: поток правит только смены
     events: [], // события глав конвейера (стадия 3)
     progress: null, // последнее событие прогресса {label, done, total}
     lastLog: {}, // стадия → последний завершённый запуск (обещание данных)
@@ -274,6 +275,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // колонка лога: текущий запуск стадии (любой статус) или последний
   // завершённый запуск этой стадии; иначе — заглушка
   async function logColumn() {
+    logNode = null; // панель живой стадии ниже вернёт себе узел; чужой — нет
     if (st.stage) {
       if (st.job && st.job.action === st.stage) {
         return logPanel({
@@ -2969,6 +2971,39 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return btn;
   }
 
+  /* ── панель лога: окно текста, которое перерисовывается кадром ──────
+     Живой лог — ОДНО текстовое окно: SSE дописывает строки в st.log, окно
+     перерисовывается ОДИН раз на кадр анимации. Прежняя схема перечитывала и
+     заново верстала весь хвост на КАЖДУЮ строку, а сервер присылал их
+     отдельными кадрами: прогон на 1300 глав вываливал тысячи перерисовок
+     подряд — вкладка «Запуски» висела десятками секунд и с ней весь
+     интерфейс. Прокрутка вниз — только если панель и так упиралась в конец:
+     листавшего лог нельзя выбрасывать в конец. */
+  const LOG_LIMIT = 500; // строк лога в панели — столько же, сколько отдаёт сервер
+  /* отметки состояний глав — одни на панель лога и на таблицу под ней */
+  const STATUS_SYM = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
+  let logNode = null; // <pre> панели лога живой стадии
+  let logFrame = false; // кадр перерисовки уже заказан
+
+  function paintLog() {
+    if (!logNode) return;
+    const stick = logNode.scrollHeight - logNode.clientHeight
+      - logNode.scrollTop <= 24;
+    logNode.textContent = st.log.length ? st.log.join("\n") : "(лог пуст)";
+    if (stick) logNode.scrollTop = logNode.scrollHeight;
+  }
+
+  function scheduleLog() {
+    if (logFrame) return; // пачка событий из SSE — одна перерисовка на кадр
+    // флаг снимаем ВНУТРИ колбэка: присваивание результата requestAnimationFrame
+    // случилось бы раньше самого колбэка и заказ больше не сбрасывался бы
+    logFrame = true;
+    requestAnimationFrame(() => {
+      logFrame = false;
+      paintLog();
+    });
+  }
+
   /* Панель лога: шапка (метка, название запуска, badge, «Стоп») и строка
      прогресса под ней. Прогресс — ОДНИМ узлом (UIC.progressRow): раньше
      счётчик дублировался в шапке и в баре, и оба обрезались многоточием
@@ -2977,10 +3012,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   function logPanel(view) {
     const job = view.job;
     const pre = h("pre", { class: "log-area", text: "" });
-    pre.textContent = view.lines.length
-      ? view.lines.join("\n")
-      : "(лог пуст)";
-    pre.scrollTop = pre.scrollHeight;
+    if (view.live) {
+      // лента живой панели живёт в st.log — её дописывает SSE (paintLog)
+      logNode = pre;
+      paintLog();
+    } else {
+      pre.textContent = view.lines.length ? view.lines.join("\n") : "(лог пуст)";
+      pre.scrollTop = pre.scrollHeight;
+    }
     const toolbar = h(
       "div",
       { class: "run-panel-title" },
@@ -3082,8 +3121,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   function chapterTable(events) {
     const cols = [1, 2, 3];
     const stageSym = { 1: "пер", 2: "ред", 3: "пол" };
-    const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
     const byKey = chapterByKey(events || []);
+    // что реально показано в клетках: живой поток правит только смены статуса
+    st.chShown = byKey;
     const cells = [];
     const range = chapterRange();
     for (const id of range) {
@@ -3097,7 +3137,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           h(
             "td",
             { class: cls, title: `${stageSym[stage]}: ${s || "—"}` },
-            s ? statusSym[s] || s : "·",
+            s ? STATUS_SYM[s] || s : "·",
           ),
         );
       }
@@ -3126,11 +3166,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // стрим лога после старта. единственный источник лога —
-  // SSE (стартовый бурст сервера уже содержит хвост), payload lines не
+  // SSE (стартовый снимок сервера уже содержит хвост), payload lines не
   // дублируем; AbortController гасит старый стрим при уходе со страницы.
-  // U6: обрыв сети/таймаут — reconnect с backoff (1 c, 2 c, 4 c, …),
+  // обрыв сети/таймаут — reconnect с backoff (1 c, 2 c, 4 c, …),
   // не больше MAX_ATTEMPTS; при переподключении сервер шлёт весь хвост
-  // заново — очищаем st.log, чтобы снапшот не продублировал строки.
+  // заново — снапшот заменяет st.log целиком, поэтому строк не дублируется.
   const MAX_STREAM_ATTEMPTS = 5;
   async function attachStream(jobId) {
     if (streamCtrl) streamCtrl.abort(); // один стрим на экземпляр
@@ -3148,7 +3188,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             if (running) toast(`SSE-стрим оборван: ${ex.message}`, "err");
             break;
           }
-          st.log = []; // снапшот reconnect'а придёт целиком — без дублей
           await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
         }
       }
@@ -3205,31 +3244,39 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           // а панель не закроется — status так и не придёт)
           try {
             onPayload(payload);
-          } catch (ex) {
-            console.warn("SSE: событие пропущено:", ex && ex.message);
+          } catch {
+            /* кривое событие пропущено: статус придёт следующим кадром */
           }
         }
       }
     }
   }
 
-  // разбор одного SSE-payload: лог, события глав, прогресс, статус.
-  // DOM обновляется только когда панель лога принадлежит текущему
-  // запуску (st.job.action === st.stage): при открытой чужой стадии
+  // разбор одного SSE-payload: снимок буфера, строка лога, событие главы,
+  // прогресс, статус. DOM обновляется только когда панель лога принадлежит
+  // текущему запуску (st.job.action === st.stage): при открытой чужой стадии
   // строки активного запуска не утекут в панель последнего
   // завершённого; состояние (st.log/st.progress) копится
   function onPayload(payload) {
     const live = !!(st.stage && st.job && st.job.action === st.stage);
+    if (payload.type === "snapshot") {
+      // снимок — весь хвост разом (переподключение тоже присылает его
+      // целиком, поэтому строки не дублируются)
+      st.log = (payload.lines || []).slice(-LOG_LIMIT);
+      if (Array.isArray(payload.events)) st.events = payload.events.slice();
+      if (payload.progress) st.progress = payload.progress;
+      if (live) {
+        paintLog();
+        if (st.logBar || st.miniBar) paintProgress();
+      }
+      return;
+    }
     if (payload.type === "line") {
       st.log.push(payload.text);
-      if (st.log.length > 2000) st.log.splice(0, st.log.length - 2000);
-      if (live) {
-        const pre = page.querySelector(".log-area");
-        if (pre) {
-          pre.textContent = st.log.join("\n");
-          pre.scrollTop = pre.scrollHeight;
-        }
+      if (st.log.length > LOG_LIMIT) {
+        st.log.splice(0, st.log.length - LOG_LIMIT);
       }
+      if (live) scheduleLog();
     } else if (payload.type === "progress" && payload.event) {
       st.progress = payload.event;
       // строка прогресса оживает и в панели лога живой стадии, и в
@@ -3246,23 +3293,22 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         );
         if (prev >= 0) st.events[prev] = ev;
         else st.events.push(ev);
-        if (live) {
+        if (live && st.chShown[ev.id + ":" + ev.stage] !== ev.status) {
           // интерактивная визуализация: клетка таблицы под логом
           // обновляется сразу (строка ищется по data-id — реальная
           // глава, а не позиция: нумерация может быть разреженной).
           // Главы вне диапазона формы в таблице нет — событие
-          // копится в st.events и появится при перерисовке
+          // копится в st.events и появится при перерисовке.
+          // Конвейер на 1300 глав — это тысячи событий, а поиск строки
+          // есть обход всей таблицы, поэтому правится только смена статуса
           const t = page.querySelector(".ch-table");
-          if (t) {
-            const cell = t.querySelector(
-              `.ch-row[data-id="${ev.id}"] .ch-cell:nth-child(${ev.stage + 1})`,
-            );
-            if (cell) {
-              const statusSym = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
-              cell.textContent = statusSym[ev.status] || ev.status;
-              cell.className = "ch-cell ch-"
-                + String(ev.status).toLowerCase();
-            }
+          const cell = t && t.querySelector(
+            `.ch-row[data-id="${ev.id}"] .ch-cell:nth-child(${ev.stage + 1})`,
+          );
+          if (cell) {
+            st.chShown[ev.id + ":" + ev.stage] = ev.status;
+            cell.textContent = STATUS_SYM[ev.status] || ev.status;
+            cell.className = "ch-cell ch-" + String(ev.status).toLowerCase();
           }
         }
       }

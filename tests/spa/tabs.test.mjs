@@ -29,6 +29,26 @@ const RUN_SRC = readFileSync(
 );
 
 /* ── минимальный DOM ─────────────────────────────────────────────── */
+/* один простой селектор («.ch-cell:nth-child(2)», «tr», [data-id="1"]):
+   составной разбивается по пробелам, каждая часть проверяется отдельно */
+function matchPart(node, part) {
+  for (const bit of part.match(/\[[^\]]+\]|:[a-z-]+\([^)]*\)|[.\w-]+/gi) || []) {
+    if (bit.startsWith("[")) {
+      const m = /^\[([^=\]]+)="?([^"\]]*)"?\]$/.exec(bit);
+      if (!m || String(node.getAttribute(m[1])) !== m[2]) return false;
+    } else if (bit.startsWith(":")) {
+      const m = /^:nth-child\((\d+)\)$/.exec(bit);
+      const kids = node._parent ? node._parent.children : [];
+      if (m && kids.indexOf(node) + 1 !== Number(m[1])) return false;
+    } else if (bit.startsWith(".")) {
+      if (!(node.className || "").split(/\s+/).includes(bit.slice(1))) {
+        return false;
+      }
+    } else if (node.tagName !== bit.toUpperCase()) return false;
+  }
+  return true;
+}
+
 class El {
   constructor(tag) {
     this.tagName = String(tag).toUpperCase();
@@ -39,6 +59,11 @@ class El {
     this.checked = false;
     this.disabled = false;
     this.hidden = false;
+    /* геометрия прокрутки: панель лога решает «дописывать с прокруткой или
+       нет» по scrollTop/scrollHeight, тестам нужен предсказуемый ответ */
+    this.scrollTop = 0;
+    this.scrollHeight = 1000;
+    this.clientHeight = 300;
     this._text = "";
     this.dataset = {};
     this._attrs = {};
@@ -68,9 +93,15 @@ class El {
   get textContent() { return this._text; }
   set textContent(v) {
     this._text = String(v);
+    /* сколько раз узлу ПЕРЕПИСЫВАЛИ текст: тестам живой панели и таблицы
+       важно не только «что показано», но и «сколько узлов тронул поток» */
+    this._writes = (this._writes || 0) + 1;
     this.children = this.children.filter((c) => c.tagName !== "#TEXT");
   }
-  appendChild(k) { this.children.push(k); }
+  appendChild(k) {
+    k._parent = this;
+    this.children.push(k);
+  }
   replaceChildren(...kids) { this.children = []; this.append(...kids); }
   addEventListener(ev, fn) {
     if (!this._listeners[ev]) this._listeners[ev] = [];
@@ -94,15 +125,22 @@ class El {
   getAttribute(k) { return this._attrs[k] ?? null; }
   remove() {}
   removeChild() {}
-  /* запрос по классу/тегу по всему поддереву: обработчикам запусков
-     (".run-panel-head") нужен настоящий результат, а не null */
+  /* запрос по всему поддереву: обработчикам запусков нужен настоящий
+     результат, а не null. Живая таблица глав ищет клетку составным
+     селектором («.ch-row[data-id="1"] .ch-cell:nth-child(2)»), поэтому
+     поддержаны и атрибут, и позиция среди соседей */
   querySelectorAll(sel) {
-    const want = String(sel).replace(/^\./, "");
+    const parts = String(sel).trim().split(/\s+/);
     const out = [];
     const walk = (n) => {
       for (const c of n.children || []) {
-        if ((c.className || "").split(/\s+/).includes(want)
-            || c.tagName === want.toUpperCase()) out.push(c);
+        if (matchPart(c, parts[parts.length - 1])
+            && parts.slice(0, -1).every((p) => {
+              for (let a = c._parent; a; a = a._parent) {
+                if (matchPart(a, p)) return true;
+              }
+              return false;
+            })) out.push(c);
         walk(c);
       }
     };
@@ -285,7 +323,8 @@ async function api(path, opts = {}) {
   if (p.startsWith("/logs")) return globalThis.__logs || { logs: [], content: "" };
   if (p === "/ner/export") return { ok: true, content: "" };
   if (p === "/jobs") return { jobs: [] };
-  if (p.startsWith("/jobs/")) return { job: {} };
+  /* текущий запуск вкладки «Запуски»: тест готовит globalThis.__job */
+  if (p.startsWith("/jobs/")) return globalThis.__job || { job: {} };
   if (p === "/stages") {
     return { stages: STAGES, profiles: SETTINGS_PAYLOAD.profiles };
   }
@@ -389,6 +428,31 @@ const sandbox = {
   setTimeout,
   clearTimeout,
   requestAnimationFrame: (fn) => { fn(); return 1; },
+  /* SSE-стрим: каждый кадр — своей записью сокета (так честнее: панель
+     живой стадии обязана пережить и порционный вывод), с паузой между
+     записями, чтобы тест успел поставить шпионы на узлы первого рендера */
+  TextDecoder,
+  TextEncoder,
+  AbortController,
+  fetch: async () => {
+    const frames = (globalThis.__sse || [])
+      .map((o) => `data: ${JSON.stringify(o)}\n\n`);
+    let i = 0;
+    return {
+      ok: true, status: 200,
+      body: {
+        getReader: () => ({
+          async read() {
+            if (i >= frames.length) return { done: true };
+            await new Promise((r) => setTimeout(r, 15));
+            const value = new TextEncoder().encode(frames[i++]);
+            return { done: false, value };
+          },
+          cancel() {},
+        }),
+      },
+    };
+  },
   /* vm-код (project-views) резолвит document/window/localStorage/Node
      в СВОЁМ контексте — кладём те же моки и в sandbox */
   document: globalThis.document,
@@ -1108,7 +1172,7 @@ test("история: третья точка снимает самую ране
   assert.equal(collectText(findByClass(page, "files-sel-count")[0]).join(""),
     "выделено: 2");
   const on = findByClass(page, "history-row")
-    .map((r, i) => (historyCheckbox(page, i).checked ? i : -1))
+    .map((_row, i) => (historyCheckbox(page, i).checked ? i : -1))
     .filter((i) => i >= 0);
   /* выбор — это порядок кликов: снята bbb (выбиралась первой), остались
      ccc (второй клик) и aaa (третий) */
@@ -2186,4 +2250,97 @@ test("состояние «Логов»: папка и открытый файл
   assert.ok(allText(again.querySelector(".crumbs")).includes("chapters"), "хлебные крошки");
   assert.equal(findByClass(again, "log-view")[0].textContent, "хвост лога");
   delete globalThis.__logs;
+});
+
+/* ── «Запуски»: живой лог и таблица глав из SSE ────────────────────
+   Вкладка монтируется БЕЗ строк: весь хвост и все события приходят
+   стримом (снимок одним кадром, живые события — пачками). _writes на
+   узлах показывают, что реально перерисовал поток. */
+const RUN_JOB = "aabbccddeeff";
+/* мок даёт scrollHeight=1000, clientHeight=300: у конца — scrollTop=700 */
+const AT_END = 700;
+
+/* открыть «Запуски» с живым запуском и дождаться первого рендера вкладки */
+async function runView(job, frames, options) {
+  globalThis.__job = { job };
+  globalThis.__sse = frames;
+  globalThis.__stageOptions = options || {};
+  const page = viewProject("ACTIVE", "Книга", "run", RUN_JOB);
+  for (let i = 0; i < 20 && !page.querySelector(".log-area"); i++) await tick();
+  assert.ok(page.querySelector(".log-area"), "панель лога отрисована");
+  return page;
+}
+
+/* кадры стрима расходятся по 15 мс на запись, плюс финальный рендер */
+async function settled() {
+  await new Promise((r) => setTimeout(r, 700));
+  delete globalThis.__job;
+  delete globalThis.__sse;
+  delete globalThis.__stageOptions;
+}
+
+test("живой лог: снимок — одно окно, в панели не больше LOG_LIMIT строк", async () => {
+  /* регресс: панель отдавала весь кольцевой буфер (5000 строк) и на каждое
+     событие перечитывала и заново верстала всё окно целиком */
+  const lines = Array.from({ length: 503 }, (_, i) => `л${i}`);
+  const page = await runView(
+    { id: RUN_JOB, action: "ner", project: "ACTIVE/Книга", status: "running",
+      lines: [], events: [], progress: null },
+    [{ type: "snapshot", lines, events: [], progress: null },
+     { type: "status", status: "done" }],
+  );
+  const pre = page.querySelector(".log-area");
+  await settled();
+  const shown = pre.textContent.split("\n");
+  assert.equal(shown.length, 500, "в панели — последние 500 строк, не весь буфер");
+  assert.equal(shown[0], "л3");
+  assert.equal(shown[shown.length - 1], "л502", "строки не задом наперёд");
+});
+
+test("живой лог: вниз прокручивается только панель и так у конца", async () => {
+  const job = { id: RUN_JOB, action: "ner", project: "ACTIVE/Книга",
+    status: "running", lines: [], events: [], progress: null };
+  const frames = [
+    { type: "snapshot", lines: ["a"], events: [], progress: null },
+    { type: "line", text: "b" },
+    { type: "line", text: "c" },
+    { type: "status", status: "done" },
+  ];
+  const pinned = await runView(job, frames);
+  const atEnd = pinned.querySelector(".log-area");
+  atEnd.scrollTop = AT_END;
+  await settled();
+  assert.equal(atEnd.textContent, "a\nb\nc");
+  assert.equal(atEnd.scrollTop, 1000, "панель у конца — прокрутка дописывается");
+
+  const scrolled = await runView(job, frames);
+  const mid = scrolled.querySelector(".log-area");
+  mid.scrollTop = 0; // человек отлистал лог вверх
+  await settled();
+  assert.equal(mid.scrollTop, 0, "листавшего лог не выбрасывает в конец");
+  assert.equal(mid.textContent, "a\nb\nc");
+});
+
+test("таблица глав: клетка перерисовывается только на смене статуса", async () => {
+  /* регресс: конвейер на 1300 глав — это ~3900 событий, и каждое искало
+     свою строку обходом всей таблицы и перезаписывало клетку заново */
+  const job = { id: RUN_JOB, action: "pipeline", project: "ACTIVE/Книга",
+    status: "running", lines: ["работа"], events: [], progress: null };
+  const ev = (id, stage, status) => ({ type: "event", event: { id, stage, status } });
+  const page = await runView(job, [
+    { type: "snapshot", lines: ["работа"], events: [], progress: null },
+    ev(1, 1, "OK"), ev(1, 1, "OK"), ev(1, 1, "OK"),
+    ev(1, 1, "ERROR"), ev(2, 3, "SKIP"),
+    { type: "status", status: "done" },
+  ], { chapters: { ids: [1, 2, 3] } });
+  const cells = findByClass(page, "ch-cell");
+  assert.equal(cells.length, 9, "три главы по три стадии");
+  await settled();
+  assert.equal(cells.reduce((n, c) => n + (c._writes || 0), 0), 3,
+    "пять событий — три записи в DOM: повторы статуса клетки не касаются");
+  const row = (id) => findByClass(page, "ch-row")
+    .find((r) => r.getAttribute("data-id") === id);
+  assert.equal(allText(row("1").querySelectorAll(".ch-cell")[0]), "✗");
+  assert.equal(allText(row("2").querySelectorAll(".ch-cell")[2]), "⊘");
+  assert.equal(allText(row("3").querySelectorAll(".ch-cell")[0]), "·");
 });
