@@ -92,6 +92,7 @@
     // ни в глоссарий, ни в книги не пишет и частот не трогает.
     const GHOST_MARK_LIMIT = 200;   // mark на весь прогон: больше — это уже не подсветка
     const GHOST_TERM_LIMIT = 20;    // вхождений одного термина в абзаце
+    const GHOST_HIT_SETTLED = 'rgba(245,158,11,.35)';   // конечный цвет вспышки (см. nm-hit-flash)
     const GHOST_FADE_MS = 350;
     let ghostParas = [];
     let ghostRanges = [];   // диапазоны чанков: [startPara, endPara]
@@ -101,7 +102,9 @@
     let ghostFrame = 0;
     let ghostPending = null;        // Set абзацев, ждущих перерисовки в кадре rAF
     let ghostMarkCount = 0;
+    let ghostChunkShown = -1;       // чанк, чей фон уже стоит: фон и автодогон — на смене, не на каждой вспышке
     const ghostMarks = new Map();   // абзац → интервалы вспышек (отсортированы, без вложений)
+    const ghostRendered = new Map(); // абзац → интервалы, уже получившие вспышку
 
     /**
      * Нормализованный текст и карта обратно в оригинал: строится ОДИН раз на абзац,
@@ -153,23 +156,33 @@
         ghostActive = false;
         ghostParas = [];
         ghostRanges = [];
+        ghostChunkShown = -1;
         ghostMarks.clear();
+        ghostRendered.clear();
         ghostPending = null;
         ghostMarkCount = 0;
         readerContent.classList.remove('nm-ghost', 'nm-ghost-fade');
         // содержимое трогаем только если оно призрака: перевод в читалке — не его работа
         if (had) readerContent.replaceChildren();
     }
-    /** Абзац с вспышками: детерминированная пересборка из текста и интервалов. */
-    function ghostParagraphNode(text, ranges) {
+    /**
+     * Накопленные вспышки рисуются одним кадром: новых терминов за секунду бывает много.
+     * Интервалы, горевшие раньше, помечаются в конечный цвет без анимации — иначе каждая
+     * новая вспышка в том же абзаце перезапускала бы анимацию у соседей, и текст мигал бы.
+     */
+    function ghostParagraphNode(text, spans, rendered) {
         const frag = document.createDocumentFragment();
         let pos = 0;
-        for (const [a, b] of ranges || []) {
+        for (const [a, b] of spans || []) {
             if (a < pos) continue;
             if (a > pos) frag.append(text.slice(pos, a));
             const mark = document.createElement('mark');
             mark.className = 'nm-hit-new';
             mark.textContent = text.slice(a, b);
+            if (rendered && rendered.has(`${a}-${b}`)) {
+                mark.style.animation = 'none';
+                mark.style.background = GHOST_HIT_SETTLED;
+            }
             frag.append(mark);
             pos = b;
         }
@@ -179,14 +192,21 @@
     const ghostParagraphs = () => readerContent.querySelectorAll('p');
     function renderGhostParagraph(idx) {
         const p = ghostParagraphs()[idx];
-        if (p) p.replaceChildren(ghostParagraphNode(ghostParas[idx] || '', ghostMarks.get(idx)));
+        if (!p) return;
+        const spans = ghostMarks.get(idx) || [];
+        p.replaceChildren(ghostParagraphNode(ghostParas[idx] || '', spans, ghostRendered.get(idx)));
+        const seen = ghostRendered.get(idx) || new Set();
+        for (const [a, b] of spans) seen.add(`${a}-${b}`);
+        ghostRendered.set(idx, seen);
     }
-    /** Фон на абзацах текущего чанка и автодогон к его началу. */
-    function highlightGhostChunk(index) {
+    /** Фон на абзацах чанка и автодогон к его началу — один раз на чанк. */
+    function ghostShowChunk(index) {
+        if (index === ghostChunkShown) return;
         const ps = ghostParagraphs();
         ps.forEach(p => p.classList.remove('nm-ghost-chunk'));
         const [a, b] = ghostRanges[index] || [index, index];
         for (let i = a; i <= b && i < ps.length; i++) ps[i].classList.add('nm-ghost-chunk');
+        ghostChunkShown = index;
         if (ghostAutoScroll && ps[a]) ps[a].scrollIntoView({ block: 'start', behavior: 'smooth' });
     }
     const ghostStopAutoScroll = () => { ghostAutoScroll = false; };
@@ -201,6 +221,7 @@
         const { chunks, ranges } = splitByNewlinesRanged(text, config.chunkSize);
         ghostParas = paragraphsOf(text);
         ghostRanges = ranges;
+        ghostChunkShown = -1;
         ghostAutoScroll = true;
         readerContent.classList.add('nm-ghost');
         readerContent.replaceChildren(...ghostParas.map(p => {
@@ -213,27 +234,36 @@
         for (const ev of ['wheel', 'touchmove']) readerMode.addEventListener(ev, ghostStopAutoScroll, { passive: true });
         progressStatus(`📄 Захвачено: ${String(text).length} симв. • чанков: ${chunks.length}`);
     }
-    /** Прогресс NER: сначала фон текущего чанка, затем вспышки терминов его диапазона. */
+    /** Накопленные вспышки рисуются одним кадром: чанков и записей за секунду бывает много. */
+    function ghostFlush() {
+        if (!ghostPending || ghostFrame) return;
+        ghostFrame = requestAnimationFrame(() => {
+            ghostFrame = 0;
+            const byPara = ghostPending;
+            ghostPending = null;
+            if (!ghostActive || !byPara) return;
+            for (const idx of byPara) renderGhostParagraph(idx);
+        });
+    }
+    /** Прогресс NER: фон чанка, вспышки терминов по мере работы модели. */
     function ghostProgress(st) {
         if (!ghostActive) return;
-        // chunkDone — индекс чанка с нуля, приходит только на успешном чанке:
-        // проверка на число, а не на истинность (нулевой чанк — не «пустой»)
-        if (Number.isInteger(st.chunkDone)) {
-            highlightGhostChunk(st.chunkDone);
-            const variants = [];
-            for (const t of (st.matched || [])) variants.push(t.term, ...(t.aliases || []));
-            for (const t of (st.fresh || [])) variants.push(t.term, ...(t.aliases || []));
-            if (variants.length && st.range) ghostQueueMarks(st.range, variants);
+        // чанк начал обрабатываться: фон его абзацев и вспышка терминов глоссария —
+        // «вот что здесь уже известно»; приходит один раз на чанк (новый — новый фон)
+        if (Number.isInteger(st.chunkStart)) {
+            ghostShowChunk(st.chunkStart);
+            const range = ghostRanges[st.chunkStart];
+            const known = [];
+            for (const t of (st.matched || [])) known.push(t.term, ...(t.aliases || []));
+            if (range && known.length) ghostQueueMarks(range, known);
         }
-        if (ghostPending && !ghostFrame) {
-            ghostFrame = requestAnimationFrame(() => {
-                ghostFrame = 0;
-                const byPara = ghostPending;
-                ghostPending = null;
-                if (!ghostActive || !byPara) return;
-                for (const idx of byPara) renderGhostParagraph(idx);
-            });
+        // запись, дописанная моделью в потоке: вспышка ровно ей и сразу — ждать
+        // остальные термины ответа незачем, для этого и разбирается поток
+        if (st.item && Number.isInteger(st.itemChunk)) {
+            const range = ghostRanges[st.itemChunk];
+            if (range) ghostQueueMarks(range, [st.item.term, ...(st.item.aliases || [])]);
         }
+        ghostFlush();
     }
     /**
      * Вспышки копятся до кадра rAF (чанков за секунду бывает несколько), повторное

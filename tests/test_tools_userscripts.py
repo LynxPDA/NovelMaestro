@@ -234,9 +234,13 @@ def test_lite_ghost_never_outlives_the_work():
         "closeReader не зачищает призрак"
     assert "readerContent.classList.remove('nm-ghost', 'nm-ghost-fade')" in text, \
         "классы призрака остаются на контенте читалки"
-    # пульс вспышек: chunkDone — индекс с нуля, проверка на число, а не на истинность
-    assert "if (Number.isInteger(st.chunkDone))" in text and "highlightGhostChunk(st.chunkDone)" in text, \
-        "вспышки первого чанка пропускаются (или фон уезжает на чанк назад)"
+    # вспышки идут по живому потоку: чанк объявляется до ответа (chunkStart — фон и
+    # термины глоссария), записи модели вспыхивают по закрытию объекта в потоке
+    assert "if (Number.isInteger(st.chunkStart))" in text and "ghostShowChunk(st.chunkStart)" in text, \
+        "фон чанка и вспышки глоссария больше не показываются до ответа модели"
+    assert "if (st.item && Number.isInteger(st.itemChunk))" in text, \
+        "запись модели не вспыхивает по мере закрытия в потоке"
+    assert "if (state.depth > 0)" in text or "NER_JSON_TAIL" in text, "разбор потока потерял защиту недописанного объекта"
 
 
 

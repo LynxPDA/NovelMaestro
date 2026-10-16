@@ -99,6 +99,64 @@ test('один абзац больше чанка — единственный �
   assert.deepEqual(ranges, [[0, 0]]);
 });
 
+// ── потоковый разбор ответа NER ────────────────────────────────────────────────
+// записи вспыхивают по мере закрытия объекта в потоке, а не пачкой в конце:
+// разбор идёт поверх накопленного текста и продолжается с места остановки
+const NER = new Function(`${slice('function takeNerItems', 'async function requestNerChunk', 'потоковый разбор NER')}
+return { takeNerItems, parseObjectAt };`)();
+
+const feedNer = (pieces) => {
+  const state = { pos: 0, at: 0, depth: 0, inStr: false, esc: false, iter: 0 };
+  let text = '';
+  const out = [];
+  for (const p of pieces) {
+    text += p;
+    for (const raw of NER.takeNerItems(text, state)) out.push(raw);
+  }
+  return out;
+};
+
+test('запись отдаётся сразу, как закрылась в потоке', () => {
+  const pieces = [
+    '[{', '"term":"Ван Линь",', '"translation":"Ван Линь",', '"type":"Person (male)"},',
+    '{"term":"Секта Небесного Облака","translation":"Секта Небесных Облаков",',
+    '"type":"Organization","aliases":["Небесное Облако"]},',
+    '{"term":"Три Потока","translation":"Три Потока"}]',
+  ];
+  const state = { pos: 0, at: 0, depth: 0, inStr: false, esc: false, iter: 0 };
+  let text = '';
+  const rounds = [];
+  for (const p of pieces) {
+    text += p;
+    rounds.push(NER.takeNerItems(text, state).map((o) => o.term));
+  }
+  // первая запись закрылась на четвёртом куске — там же и вспыхнула, а не в конце
+  assert.deepEqual(rounds.slice(0, 3), [[], [], []]);
+  assert.deepEqual(rounds[3], ['Ван Линь']);
+  assert.deepEqual(rounds[5], ['Секта Небесного Облака']);
+  assert.deepEqual(rounds[6], ['Три Потока']);
+});
+
+test('незакрытый объект и скобки внутри строк разбор не путают', () => {
+  const one = feedNer(['[{"term":"Знак }{ в термине","translation":"Знак {}"}']);
+  assert.equal(one.length, 1, `закрывающая скобка в строке закрыла объект раньше времени: ${JSON.stringify(one)}`);
+  assert.equal(one[0].term, 'Знак }{ в термине');
+  // экранированная кавычка не заканчивает строку
+  const esc = feedNer(['[{"term":"Ван \\" Линь","translation":"Ван Линь"}]']);
+  assert.equal(esc.length, 1);
+  assert.equal(esc[0].term, 'Ван " Линь');
+  // проза вокруг JSON: до массива разбор просто идёт дальше
+  const prose = feedNer(['Вот результат:\n```json\n[{"term":"Ван Линь","translation":"Ван Линь"}]']);
+  assert.equal(prose.length, 1);
+  assert.equal(prose[0].term, 'Ван Линь');
+});
+
+test('битый объект не роняет разбор следующего', () => {
+  const items = feedNer(['[{"term":"не объект","translation":"ок"},{"term":"ок","translation":"ок"}]']);
+  assert.equal(items.length, 2, 'после закрытия объекта разбор обязан продолжиться');
+  assert.equal(items[1].term, 'ок');
+});
+
 // ── совпадение модели при проверке сервера ─────────────────────────────────────
 
 const CHECK = new Function(`${slice('const CHECK_TIMEOUT_MIN', 'async function checkServer', 'вердикт по /models')}

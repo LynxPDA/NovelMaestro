@@ -416,8 +416,9 @@ test('статусы прогона говорят о нарушениях то�
 test('стражи: промпт, метка поля и лог нарушения живут в артефакте', () => {
   assert.ok(raw.includes('Промпт извлечения терминов ({targetLang}, {existingGlossary}, {text}):'), 'метка поля настроек не знает о новом плейсхолдере');
   assert.ok(raw.includes('LLM violation: вернула существующий термин'), 'нарушение контракта не логируется');
-  assert.match(raw, /async function requestNerChunk\(chunkText, onChunk, relevantTerms = findRelevantTerms\(chunkText\)\)/, 'requestNerChunk больше не сам считывает релевантные термины');
+  assert.match(raw, /async function requestNerChunk\(chunkText, onChunk, relevantTerms, onItem\)/, 'requestNerChunk больше не принимает готовые термины чанка');
   assert.match(raw, /const chunkTerms = findRelevantTerms\(chunks\[i\], glossary\);/, 'частоты больше не считаются по копии глоссария книги');
+  assert.match(raw, /function takeNerItems\(text, state\)/, 'записи из потока больше не разбираются по мере закрытия');
   // правило «такая запись уже есть» живёт в одном месте (040-glossary), а не инлайн-копиями:
   // одно определение нечёткой проверки; алиасы она охватывает, вызовы — легитимное переиспользование
   assert.equal((raw.match(/function termMatchesText\(/g) || []).length, 1, 'правило дедупликации снова продублировали');

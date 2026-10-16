@@ -2906,13 +2906,75 @@ const host = document.createElement('div');
         if (aliases.length) item.aliases = aliases;
         return item;
     }
+    /**
+     * Записи из уже пришедшего куска JSON-массива: разбор не с нуля на каждый токен,
+     * а с места, где остановились, — поток читается линейно, один раз. Готовым считается
+     * объект с закрытой скобкой и закрытой строкой; недописанный хвост остаётся в буфере.
+     */
+    /**
+     * Записи из уже пришедшего ответа: разбор продолжается с места, где остановились
+     * (state.pos), — поток читается линейно, один раз. Готовым считается объект верхнего
+     * уровня с закрытой скобкой; недописанный хвост просто ждёт следующего куска.
+     */
+    /**
+     * Записи из пришедшего ответа: разбор идёт с места, где остановились (state.at),
+     * — поток читается линейно, один раз. Объект собирается по state.pos (начало объекта
+     * верхнего уровня): пока скобка не закрыта, начало остаётся на месте, а курсор чтения
+     * уже прошёл прочитанное. Готовые объекты возвращаются сразу, как закрылись.
+     */
+    function takeNerItems(text, state) {
+        const items = [];
+        for (let i = state.at; i < text.length; i++) {
+            const ch = text[i];
+            if (state.inStr) {
+                if (state.esc) state.esc = false;
+                else if (ch === '\\') state.esc = true;
+                else if (ch === '"') state.inStr = false;
+                continue;
+            }
+            if (ch === '{') {
+                if (state.depth === 0) { state.pos = i; state.iter = 0; }
+                state.depth++;
+            } else if (ch === '}') {
+                if (state.depth > 0) state.depth--;
+                if (state.depth === 0) {
+                    const obj = parseObjectAt(text, state.pos, i + 1);
+                    if (obj) {
+                        obj.__it = state.iter;
+                        items.push(obj);
+                    }
+                    state.iter += 1;
+                    state.pos = i + 1;
+                }
+            } else if (ch === '"') {
+                // строка: внутри объекта она тянет кавычку дальше, снаружи — обычный текст
+                if (state.depth > 0) state.inStr = true;
+            } else if (state.depth > 0 && ch === ',') {
+                state.iter += 1;
+            }
+        }
+        state.at = text.length;
+        if (state.depth === 0) state.pos = text.length;
+        return items;
+    }
+    /** Объект по известным границам: строка уже собрана, разбор на месте. */
+    function parseObjectAt(buf, from, to) {
+        try {
+            const obj = JSON.parse(buf.slice(from, to));
+            return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : null;
+        } catch { return null; }
+    }
+    /** Новая запись — только она и её алиасы; уже показанные вспышки здесь не трогаются. */
+    function nerItemHit(item) {
+        return { term: item.term, aliases: item.aliases || [] };
+    }
     // один чанк → записи: сетевые повторы и таймауты уже внутри callLLM, здесь
     // повтор для случая «ответ пришёл, но не годится»: не JSON и пустой completion.
     // relevantTerms — записи глоссария, которые нашлись в этом чанке: их же считает
     // частотами extractTermsFromText, поэтому проход по чанку один. Свой промпт без
     // {existingGlossary} — штатный случай: подстановки не происходит, список просто
-    // не уходит в модель
-    async function requestNerChunk(chunkText, onChunk, relevantTerms = findRelevantTerms(chunkText)) {
+    // не уходит в модель. onItem — записи по мере закрытия в потоке, для вспышек призрака
+    async function requestNerChunk(chunkText, onChunk, relevantTerms, onItem) {
         // замена функцией: спец-паттерны замены ($&, $', $`) в тексте главы не
         // должны раскрываться как подстановки
         const userPrompt = config.extractionPrompt
@@ -2921,11 +2983,41 @@ const host = document.createElement('div');
             // текст чанка подставляется последним: своё «{existingGlossary}» внутри
             // главы не должно раскрыться второй раз
             .replaceAll('{text}', () => chunkText);
+        // весь ответ уже виден в res.text — записи из него показываются сразу по
+        // закрытию в потоке, а не пачкой в конце: ждать остальные незачем
+        const seen = new Set();
+        const itemKey = (item) => `${item.term}|${item.translation}`;
+        const emitItem = (raw) => {
+            const item = normalizeNerItem(raw);
+            if (!item || seen.has(itemKey(item))) return;
+            seen.add(itemKey(item));
+            if (onItem) onItem(item);
+        };
+        const take = (full) => {
+            for (const raw of takeNerItems(full, state)) emitItem(raw);
+        };
+        // ответ LLM растёт кусками: накопленный текст и объект состояния общие на
+        // весь поток, а разбор идёт с того места, где остановился в прошлый раз
+        const box = { text: '' };
+        const state = { pos: 0, at: 0, depth: 0, inStr: false, esc: false, iter: 0 };
+        const chunkCb = onItem ? {
+            ...onChunk,
+            onDelta: (piece) => {
+                if (onChunk && onChunk.onDelta) onChunk.onDelta(piece);
+                box.text += piece;
+                take(box.text);
+            }
+        } : onChunk;
         let lastErr = null;
         for (let attempt = 1; attempt <= NER_PARSE_ATTEMPTS; attempt++) {
+            box.text = '';
+            state.pos = 0; state.at = 0; state.depth = 0; state.inStr = false; state.esc = false; state.iter = 0;
             let res = null;
             try {
-                res = await callLLM([{ role: 'user', content: userPrompt }], 0.3, true, onChunk);
+                res = await callLLM([{ role: 'user', content: userPrompt }], 0.3, true, chunkCb);
+                // хвост, не доехавший через onDelta (XHR-режим отдаёт тело целиком):
+                // добираем его тем же разбором с того же места
+                if (onItem && res.text) { box.text = res.text; take(box.text); }
             } catch (error) {
                 // isFatal — настоящий HTTP-ответ (401, нет модели): повторять его
                 // бессмысленно; «Пустой ответ» — единственное исключение: сервер так
@@ -2941,7 +3033,9 @@ const host = document.createElement('div');
                 let bad = 0;
                 for (const raw of arr) {
                     const item = normalizeNerItem(raw);
-                    if (item) items.push(item);
+                    // показанное в потоке сюда придёт тем же emitItem и повторится
+                    // без вспышки: ключ записи уже в seen
+                    if (item) { if (onItem) emitItem(raw); items.push(item); }
                     else bad++;
                 }
                 return { items, bad };
@@ -2968,7 +3062,7 @@ const host = document.createElement('div');
     }
     async function extractTermsRun(text, targetKey, onProgress) {
         // диапазоны абзацев чанков — их подсвечивает призрак читалки; чанкование то же
-        const { chunks, ranges } = splitByNewlinesRanged(text, config.chunkSize);
+        const { chunks } = splitByNewlinesRanged(text, config.chunkSize);
         const glossary = { ...bookGlossary(targetKey) };
         const hash = textHash(text);
         const expectedTotal = Math.max(1, text.length * NER_RESPONSE_RATIO);
@@ -2984,20 +3078,16 @@ const host = document.createElement('div');
             startChunk = Math.min(stored.nerDone, chunks.length);
             if (Array.isArray(stored.nerMissed)) for (const m of stored.nerMissed) if (Number.isInteger(m) && m >= 0 && m < chunks.length) missSet.add(m);
         }
-        // найденные в чанке термины глоссария — считаются до ответа модели и один раз
-        const chunkTermsOf = [];
         const emitProgress = (i, retry, extra) => {
             if (!onProgress) return;
             onProgress({ chunk: i + 1, total: chunks.length, resumed: startChunk, pct: Math.min(99, Math.round((streamed / expectedTotal) * 100)), retry: retry || null, ...(extra || {}) });
         };
-        // успех чанка: прогрессу достаётся то, чем можно подсветить текст в призраке
-        // (диапазон абзацев, найденные термины, новые записи) — лишние поля панель
-        // прогресса игнорирует
-        const chunkDone = (i, fresh) => emitProgress(i, null, {
-            chunkDone: i,
-            range: ranges[i],
-            matched: chunkTermsOf[i].map(t => ({ term: t.term, aliases: t.aliases || [] })),
-            fresh: fresh.map(it => ({ term: it.term, aliases: it.aliases || [] }))
+        // что известно про чанк ДО ответа модели: его абзацы — текущая зона работы,
+        // термины глоссария, которые в них уже встречались (лишние поля панель прогресса
+        // игнорирует) — этим призрак читалки показывает фон и вспышки глоссария
+        const chunkStart = (i, terms) => emitProgress(i, null, {
+            chunkStart: i,
+            matched: terms.map(t => ({ term: t.term, aliases: t.aliases || [] }))
         });
         for (let i = 0; i < chunks.length; i++) {
             if (cancelRequested) { canceled = true; break; }
@@ -3011,8 +3101,13 @@ const host = document.createElement('div');
                 // какие термины глоссария реально есть в чанке; сам глоссарий до
                 // этого места не менялся, поэтому список не зависит от ответа модели
                 const chunkTerms = findRelevantTerms(chunks[i], glossary);
-                chunkTermsOf[i] = chunkTerms;
-                const { items, bad } = await requestNerChunk(chunks[i], onChunk, chunkTerms);
+                chunkStart(i, chunkTerms);
+                const { items, bad } = await requestNerChunk(chunks[i], onChunk, chunkTerms, (item) => {
+                    // контракт промпта: существующие термины модель не возвращает —
+                    // такая запись в потоке не вспыхивает и вообще не показывается
+                    if (findGlossaryEntry(glossary, item.term)) return;
+                    emitProgress(i, null, { itemChunk: i, item: nerItemHit(item) });
+                });
                 badItems += bad;
                 // count считает код, а не модель: та могла термина в тексте не
                 // заметить или прислать его несколько раз. Правило то же, что в
@@ -3024,8 +3119,9 @@ const host = document.createElement('div');
                     glossary[t.id].count = (glossary[t.id].count || 0) + 1;
                     incremented++;
                 }
-                const fresh = [];
                 for (const item of items) {
+                    // вспышка этой записи уже была — она показана по закрытию
+                    // объекта в потоке; здесь только глоссарий и счётчики
                     const existingId = findGlossaryEntry(glossary, item.term);
                     if (existingId) {
                         // нарушение контракта промпта: запись не трогается вообще —
@@ -3035,10 +3131,8 @@ const host = document.createElement('div');
                         continue;
                     }
                     glossary[`${normalize(item.term)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`] = normalizeTerm(item);
-                    fresh.push(item);
                     added++;
                 }
-                chunkDone(i, fresh);
             } catch (error) {
                 if (cancelRequested) { canceled = true; emitProgress(i); break; }
                 // битый формат одного чанка не роняет весь прогон: чанк остаётся
@@ -3307,6 +3401,7 @@ const host = document.createElement('div');
     // ни в глоссарий, ни в книги не пишет и частот не трогает.
     const GHOST_MARK_LIMIT = 200;   // mark на весь прогон: больше — это уже не подсветка
     const GHOST_TERM_LIMIT = 20;    // вхождений одного термина в абзаце
+    const GHOST_HIT_SETTLED = 'rgba(245,158,11,.35)';   // конечный цвет вспышки (см. nm-hit-flash)
     const GHOST_FADE_MS = 350;
     let ghostParas = [];
     let ghostRanges = [];   // диапазоны чанков: [startPara, endPara]
@@ -3316,7 +3411,9 @@ const host = document.createElement('div');
     let ghostFrame = 0;
     let ghostPending = null;        // Set абзацев, ждущих перерисовки в кадре rAF
     let ghostMarkCount = 0;
+    let ghostChunkShown = -1;       // чанк, чей фон уже стоит: фон и автодогон — на смене, не на каждой вспышке
     const ghostMarks = new Map();   // абзац → интервалы вспышек (отсортированы, без вложений)
+    const ghostRendered = new Map(); // абзац → интервалы, уже получившие вспышку
 
     /**
      * Нормализованный текст и карта обратно в оригинал: строится ОДИН раз на абзац,
@@ -3368,23 +3465,33 @@ const host = document.createElement('div');
         ghostActive = false;
         ghostParas = [];
         ghostRanges = [];
+        ghostChunkShown = -1;
         ghostMarks.clear();
+        ghostRendered.clear();
         ghostPending = null;
         ghostMarkCount = 0;
         readerContent.classList.remove('nm-ghost', 'nm-ghost-fade');
         // содержимое трогаем только если оно призрака: перевод в читалке — не его работа
         if (had) readerContent.replaceChildren();
     }
-    /** Абзац с вспышками: детерминированная пересборка из текста и интервалов. */
-    function ghostParagraphNode(text, ranges) {
+    /**
+     * Накопленные вспышки рисуются одним кадром: новых терминов за секунду бывает много.
+     * Интервалы, горевшие раньше, помечаются в конечный цвет без анимации — иначе каждая
+     * новая вспышка в том же абзаце перезапускала бы анимацию у соседей, и текст мигал бы.
+     */
+    function ghostParagraphNode(text, spans, rendered) {
         const frag = document.createDocumentFragment();
         let pos = 0;
-        for (const [a, b] of ranges || []) {
+        for (const [a, b] of spans || []) {
             if (a < pos) continue;
             if (a > pos) frag.append(text.slice(pos, a));
             const mark = document.createElement('mark');
             mark.className = 'nm-hit-new';
             mark.textContent = text.slice(a, b);
+            if (rendered && rendered.has(`${a}-${b}`)) {
+                mark.style.animation = 'none';
+                mark.style.background = GHOST_HIT_SETTLED;
+            }
             frag.append(mark);
             pos = b;
         }
@@ -3394,14 +3501,21 @@ const host = document.createElement('div');
     const ghostParagraphs = () => readerContent.querySelectorAll('p');
     function renderGhostParagraph(idx) {
         const p = ghostParagraphs()[idx];
-        if (p) p.replaceChildren(ghostParagraphNode(ghostParas[idx] || '', ghostMarks.get(idx)));
+        if (!p) return;
+        const spans = ghostMarks.get(idx) || [];
+        p.replaceChildren(ghostParagraphNode(ghostParas[idx] || '', spans, ghostRendered.get(idx)));
+        const seen = ghostRendered.get(idx) || new Set();
+        for (const [a, b] of spans) seen.add(`${a}-${b}`);
+        ghostRendered.set(idx, seen);
     }
-    /** Фон на абзацах текущего чанка и автодогон к его началу. */
-    function highlightGhostChunk(index) {
+    /** Фон на абзацах чанка и автодогон к его началу — один раз на чанк. */
+    function ghostShowChunk(index) {
+        if (index === ghostChunkShown) return;
         const ps = ghostParagraphs();
         ps.forEach(p => p.classList.remove('nm-ghost-chunk'));
         const [a, b] = ghostRanges[index] || [index, index];
         for (let i = a; i <= b && i < ps.length; i++) ps[i].classList.add('nm-ghost-chunk');
+        ghostChunkShown = index;
         if (ghostAutoScroll && ps[a]) ps[a].scrollIntoView({ block: 'start', behavior: 'smooth' });
     }
     const ghostStopAutoScroll = () => { ghostAutoScroll = false; };
@@ -3416,6 +3530,7 @@ const host = document.createElement('div');
         const { chunks, ranges } = splitByNewlinesRanged(text, config.chunkSize);
         ghostParas = paragraphsOf(text);
         ghostRanges = ranges;
+        ghostChunkShown = -1;
         ghostAutoScroll = true;
         readerContent.classList.add('nm-ghost');
         readerContent.replaceChildren(...ghostParas.map(p => {
@@ -3428,27 +3543,36 @@ const host = document.createElement('div');
         for (const ev of ['wheel', 'touchmove']) readerMode.addEventListener(ev, ghostStopAutoScroll, { passive: true });
         progressStatus(`📄 Захвачено: ${String(text).length} симв. • чанков: ${chunks.length}`);
     }
-    /** Прогресс NER: сначала фон текущего чанка, затем вспышки терминов его диапазона. */
+    /** Накопленные вспышки рисуются одним кадром: чанков и записей за секунду бывает много. */
+    function ghostFlush() {
+        if (!ghostPending || ghostFrame) return;
+        ghostFrame = requestAnimationFrame(() => {
+            ghostFrame = 0;
+            const byPara = ghostPending;
+            ghostPending = null;
+            if (!ghostActive || !byPara) return;
+            for (const idx of byPara) renderGhostParagraph(idx);
+        });
+    }
+    /** Прогресс NER: фон чанка, вспышки терминов по мере работы модели. */
     function ghostProgress(st) {
         if (!ghostActive) return;
-        // chunkDone — индекс чанка с нуля, приходит только на успешном чанке:
-        // проверка на число, а не на истинность (нулевой чанк — не «пустой»)
-        if (Number.isInteger(st.chunkDone)) {
-            highlightGhostChunk(st.chunkDone);
-            const variants = [];
-            for (const t of (st.matched || [])) variants.push(t.term, ...(t.aliases || []));
-            for (const t of (st.fresh || [])) variants.push(t.term, ...(t.aliases || []));
-            if (variants.length && st.range) ghostQueueMarks(st.range, variants);
+        // чанк начал обрабатываться: фон его абзацев и вспышка терминов глоссария —
+        // «вот что здесь уже известно»; приходит один раз на чанк (новый — новый фон)
+        if (Number.isInteger(st.chunkStart)) {
+            ghostShowChunk(st.chunkStart);
+            const range = ghostRanges[st.chunkStart];
+            const known = [];
+            for (const t of (st.matched || [])) known.push(t.term, ...(t.aliases || []));
+            if (range && known.length) ghostQueueMarks(range, known);
         }
-        if (ghostPending && !ghostFrame) {
-            ghostFrame = requestAnimationFrame(() => {
-                ghostFrame = 0;
-                const byPara = ghostPending;
-                ghostPending = null;
-                if (!ghostActive || !byPara) return;
-                for (const idx of byPara) renderGhostParagraph(idx);
-            });
+        // запись, дописанная моделью в потоке: вспышка ровно ей и сразу — ждать
+        // остальные термины ответа незачем, для этого и разбирается поток
+        if (st.item && Number.isInteger(st.itemChunk)) {
+            const range = ghostRanges[st.itemChunk];
+            if (range) ghostQueueMarks(range, [st.item.term, ...(st.item.aliases || [])]);
         }
+        ghostFlush();
     }
     /**
      * Вспышки копятся до кадра rAF (чанков за секунду бывает несколько), повторное
