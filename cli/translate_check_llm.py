@@ -78,15 +78,17 @@ from core.common import (  # noqa: E402
 from core import settings as core_settings  # noqa: E402
 
 DEFAULT_PROMPT_FILE = os.path.join("prompts", "translate_check_prompt.txt")
+#: тег промпта стадии: промпт один, берётся только из него
+PROMPT_TAG = "prompt_translate_check"
 # Серверный предел ответа стадии, ТОКЕНЫ (не расчёт)
 # предельный размер ответа сервера — общий настройка MAX_TOKENS
 DEFAULT_REVIEW = "tmp/translate_check_llm_review.json"
 
 # ─────────────────────────────────────────────
-# ВСТРОЕННЫЕ ПРОМПТЫ
+# ВСТРОЕННЫЙ ПРОМПТ
 # ─────────────────────────────────────────────
 
-PASS1_PROMPT = """\
+DEFAULT_PROMPT = """\
 <system>
 Ты — профессиональный редактор перевода веб-новелл на русский язык.
 Тебе дан текст одной или нескольких глав перевода. Найди ТОЛЬКО критические ошибки.
@@ -186,106 +188,6 @@ PASS1_PROMPT = """\
 </user>
 """
 
-PASS2_PROMPT = """\
-<system>
-Ты — старший редактор, выполняющий ВЕРИФИКАЦИЮ найденных ошибок.
-
-Тебе дан:
-1. Оригинальный текст глав.
-2. Список ошибок, найденных младшим редактором (JSON).
-
-Твоя задача — для КАЖДОЙ ошибки выполнить четыре проверки.
-Ошибка проходит только если ВСЕ четыре проверки пройдены.
-
-ПРОВЕРКА 1 — ФРАГМЕНТ СУЩЕСТВУЕТ:
-- Найди fragment в тексте ТОЧНЫМ посимвольным совпадением.
-- Если не найден — попробуй заменить тире/кавычки/многоточия на альтернативные варианты (— vs –, «» vs "").
-- Если всё равно не найден → rejected.
-- НЕ пытайся угадать или восстановить фрагмент.
-- Убедись, что fragment уникален в главе.
-
-ПРОВЕРКА 2 — ОШИБКА РЕАЛЬНА:
-- Убедись, что это действительно ошибка, а не:
-· стилистический выбор или авторская инверсия,
-· корректная склонённая форма имени (Линь Шуи ≠ ошибка),
-· допустимый порядок слов (дативная конструкция и т. п.),
-· архаичная/поэтическая форма, грамматически допустимая в данном синтаксическом контексте,
-· авторский неологизм или устоявшийся термин.
-- Для logic-ошибок: в поле reason младший редактор обязан содержать конкретную цитату из видимого текста, которая
-противоречит фрагменту. Если в reason нет цитаты-подтверждения или ссылка на текст за пределами видимых глав → rejected.
-- Для ошибок рода: убедись, что пол персонажа подтверждён ЯВНЫМ маркером в видимом тексте (местоимение, обращение,
-причастие в том же или соседнем предложении). Имя собственное НЕ является маркером. Если маркера нет → rejected.
-- Для ошибок в именах/названиях: убедись, что каноническая форма подтверждена ВТОРЫМ упоминанием в видимом тексте.
-Если имя встречается только один раз → rejected.
-ПРОВЕРКА 3 — ИСПРАВЛЕНИЕ КОРРЕКТНО:
-- Независимо от младшего редактора, просклоняй/проспрягай исправленное слово. Назови три формы (им. п., род. п., вин. п. для существительного; инфинитив, 1 л. ед. ч., причастие для глагола). Если не можешь построить парадигму — форма не существует → rejected.
-- Подсчитай количество изменённых слов между fragment и corrected.
-- Исправление не создаёт: тавтологию, новое рассогласование рода/числа/падежа, несуществующее слово, смысловую инверсию.
-- Вставь corrected обратно в предложение. Убедись, что оно согласуется с подлежащим, сказуемым и управлением глагола.
-- Ловушки: «убежду», «шелкопрядее», «Белопераой», «чуть-ли».
-Если исправленная форма похожа на одну из ловушек → rejected.
-
-ПРОВЕРКА 4 — МИНИМАЛЬНОСТЬ:
-- Исправление меняет ТОЛЬКО ошибочный элемент.
-- Если corrected перестраивает порядок слов, добавляет уточняющие слова или заменяет более 2 содержательных слов без грамматической необходимости → rejected.
-- Если fragment и corrected идентичны (младший редактор сообщил о противоречии без исправления) → оставь как есть
-со status "confirmed". Это информационное сообщение.
-
-ПРИНЦИП МИНИМАЛЬНОГО ВМЕШАТЕЛЬСТВА:
-- Меняй ТОЛЬКО ошибочное слово/окончание.
-- Если не уверен на 95%+ (для logic — 99%+) → rejected.
-- Лучше пропустить одну реальную ошибку, чем пропустить ложную правку.
-
-НЕ ТРОГАЙ:
-- Стилистику и синонимы (если смысл не искажён)
-- Пунктуацию (если не меняет смысл)
-- Авторский стиль, ритм, инверсии
-- Написание имён собственных (слитно/раздельно/через дефис)
-- Титулы и звания (если нет явного противоречия в видимом тексте)
-- Порядок слов, если предложение грамматически верно
-
-КРИТИЧЕСКИ ВАЖНО — ИМЕНА И ФОРМЫ СЛОВ:
-- Китайские имена склоняются по правилам русского языка.
-НЕ исправляй склонённую форму обратно на именительный падеж.
-- Если не можешь определить пол персонажа по видимому тексту —
-НЕ сообщай об ошибке рода.
-- Если имя встречается в видимом тексте только один раз —
-ты не можешь судить о правильности написания.
-Если видишь КРИТИЧЕСКУЮ ошибку, пропущенную младшим редактором, и она проходит все четыре проверки → status "new".
-Заполни для неё все поля (chapter, fragment, corrected, type, reason).
-
-ТРЕБОВАНИЯ К ФРАГМЕНТУ:
-- 1–3 предложения, НЕ КОРОЧЕ 50 символов, без переноса строк.
-- УНИКАЛЬНЫЙ в пределах главы.
-- fragment и corrected отличаются ТОЛЬКО в месте ошибки.
-- Фрагмент из одного абзаца.
-- Скопируй фрагмент посимвольно из текста. НЕ пересказывай.
-Формат ответа — СТРОГО JSON-массив. Без markdown-обёртки, без ```, без пояснений до или после JSON:
-
-[
-{
-"chapter": <номер главы>,
-"fragment": "<точная цитата, ≥50 символов>",
-"corrected": "<исправленный фрагмент>",
-"type": "typo|missing_word|logic|incomplete|artifact|grammar",
-"reason": "<краткое пояснение>",
-"status": "confirmed|new"
-}
-]
-
-Верни ТОЛЬКО confirmed и new. Отклонённые (rejected) НЕ включай.
-Если все отклонены и новых нет — верни: []
-</system>
-<user>
-=== ОРИГИНАЛЬНЫЙ ТЕКСТ ===
-
-{batch_text}
-
-=== НАЙДЕННЫЕ ОШИБКИ ===
-
-{errors_json}
-</user>
-"""
 
 # ГИБКИЙ ПОИСК ФАЙЛА (адаптер над core.common.find_chapter_file)
 def find_chapter_file_in_dir(dir_path, chapter_num, file_type, logger=None):
@@ -330,35 +232,26 @@ def detect_chapter_range(chapter_map):
 # ПРОМПТЫ ИЗ ФАЙЛА
 # ─────────────────────────────────────────────
 
-def load_prompts(prompt_file, logger):
-    """Внешние промпты (теги <pass1>/<pass2>) или встроенные.
+def load_prompt(prompt_file, logger):
+    """Внешний промпт (тег <prompt_translate_check>) или встроенный.
     Разметка запроса: правила — в <system>, данные — в <user> через
-    переменные {batch_text} (pass1) и {batch_text}/{errors_json}
-    (pass2); у старых внешних промптов без плейсхолдеров данные
-    дописываются после промпта (render_pass1_prompt/render_pass2_prompt)."""
-    p1, p2 = PASS1_PROMPT, PASS2_PROMPT
-    if prompt_file and os.path.isfile(prompt_file):
-        try:
-            with open(prompt_file, "r", encoding="utf-8") as f:
-                content = f.read()
-        except OSError as exc:
-            logger.warning(f"Промпт-файл не читается ({exc}): {prompt_file}")
-            return p1, p2
-        m1 = get_tagged_prompt(content, "pass1")
-        m2 = get_tagged_prompt(content, "pass2")
-        if m1:
-            p1 = m1
-        if m2:
-            p2 = m2
-        if not m1 and not m2:
-            logger.warning("Теги <pass1>/<pass2> не найдены, встроенные.")
-        elif not m1:
-            logger.warning("В промпт-файле нет тега <pass1> — "
-                           "pass1 будет ВСТРОЕННЫМ.")
-        elif not m2:
-            logger.warning("В промпт-файле нет тега <pass2> — "
-                           "pass2 будет ВСТРОЕННЫМ.")
-    return p1, p2
+    переменную {batch_text}; без плейсхолдера данные дописываются после
+    промпта (render_prompt). Промпт берётся только из тега: файл без него —
+    не «промпт целиком», а встроенный промпт стадии."""
+    if not prompt_file or not os.path.isfile(prompt_file):
+        return DEFAULT_PROMPT
+    try:
+        with open(prompt_file, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError as exc:
+        logger.warning(f"Промпт-файл не читается ({exc}): {prompt_file}")
+        return DEFAULT_PROMPT
+    body = get_tagged_prompt(content, PROMPT_TAG)
+    if body:
+        return body
+    logger.warning(f"В промпт-файле {prompt_file} нет тега <{PROMPT_TAG}> — "
+                   f"промпт ВСТРОЕННЫЙ.")
+    return DEFAULT_PROMPT
 
 
 # ─────────────────────────────────────────────
@@ -614,61 +507,29 @@ def compose_batch_text(batch) -> str:
     return "\n".join(parts)
 
 
-def render_pass1_prompt(prompt_tpl: str, batch_text: str) -> str:
-    """user-контент pass1: текст батча — через переменную {batch_text}.
-    Нет плейсхолдера (старый внешний промпт) — текст дописывается
+def render_prompt(prompt_tpl: str, batch_text: str) -> str:
+    """user-контент: текст батча — через переменную {batch_text}.
+    Нет плейсхолдера (внешний промпт без него) — текст дописывается
     после промпта (прежнее поведение). Используется и в предпросмотре."""
     if "{batch_text}" in prompt_tpl:
         return prompt_tpl.replace("{batch_text}", batch_text)
     return f"{prompt_tpl}\n\n{batch_text}"
 
 
-def render_pass2_prompt(prompt_tpl: str, batch_text: str,
-                        errors_json: str) -> str:
-    """user-контент pass2: текст и найденные ошибки — через переменные
-    {batch_text}/{errors_json}. Нет плейсхолдеров (старый внешний
-    промпт) — данные дописываются после промпта (прежнее поведение)."""
-    if "{batch_text}" in prompt_tpl or "{errors_json}" in prompt_tpl:
-        return (prompt_tpl
-                .replace("{batch_text}", batch_text)
-                .replace("{errors_json}", errors_json))
-    return (f"{prompt_tpl}\n\n=== ОРИГИНАЛЬНЫЙ ТЕКСТ ===\n{batch_text}"
-            f"\n\n=== НАЙДЕННЫЕ ОШИБКИ ===\n{errors_json}")
-
-
-def process_batch(batch, p1, p2, two_pass, stage):
-    """Один батч: pass1 (с общими повторами при отсутствии правок) и, если
-    нужно, pass2. Повторы считает core.stage.complete_until по общему
+def process_batch(batch, prompt, stage):
+    """Один батч — один запрос (с общими повторами при отсутствии правок).
+    Повторы считает core.stage.complete_until по общему
     RETRY_EMPTY — своего числа у стадии больше нет."""
     logger = stage.logger
     text = compose_batch_text(batch)
 
-    raw1, _err = complete_until(
-        stage, render_pass1_prompt(p1, text), label="[P1]",
+    raw, _err = complete_until(
+        stage, render_prompt(prompt, text), label="[check]",
         accept=lambda raw: bool(parse_llm_json(raw, logger)),
         note="пустой/нераспарсенный ответ")
-    if raw1 is None:
+    if raw is None:
         return None   # ошибка LLM → fail-fast на уровне прогона
-    errors1 = parse_llm_json(raw1, logger) or []
-    if not errors1:
-        return []
-    if not two_pass:
-        return errors1
-
-    ej = json.dumps(errors1, ensure_ascii=False, indent=2)
-    user2 = render_pass2_prompt(p2, text, ej)
-    raw2, _err = stage.complete(user2, label="[P2]")
-    if raw2 is None:
-        logger.warning("[P2] Нет ответа, использую P1.")
-        return errors1
-    e2 = parse_llm_json(raw2, logger)
-    if e2 is None:
-        logger.warning("[P2] JSON не распарсен, беру P1.")
-        return errors1
-    verified = [e for e in e2 if e.get("status") in ("confirmed", "new")]
-    n_new = sum(1 for e in e2 if e.get("status") == "new")
-    logger.info(f"[P2] Подтверждено: {len(verified)} (новых: {n_new})")
-    return verified
+    return parse_llm_json(raw, logger) or []
 
 
 # ─────────────────────────────────────────────
@@ -890,11 +751,11 @@ def build_parser():
 предохранитель, ТОКЕНЫ.
 Сервер, модель, ключ, таймауты, повторы, потоки и рассуждения — ОДНИ на весь
 конвейер: флаг стадии пуст → значение из общего .env (или профиля LLM).
-Промпт-файл: теги <pass1>/<pass2>; без тегов — встроенные промпты.
+Промпт-файл: один тег <prompt_translate_check>; без него — встроенный промпт.
 """,
     )
     ap.add_argument("--preview-request", dest="preview_request", default=None,
-                    help="ПРЕДПРОСМОТР: pass1-запрос первого батча\n"
+                    help="ПРЕДПРОСМОТР: запрос первого батча\n"
                          "без сети → JSON-файл (messages +\n"
                          "статистика символов и токенов).")
     # Главы (имена полей — реестр настроек, core/settings.py)
@@ -907,12 +768,10 @@ def build_parser():
     ap.add_argument("--type", default="polished",
                     choices=["polished", "redacted", "translated"],
                     help="Тип файлов проверяемых глав.")
-    ap.add_argument("--two_pass", action="store_true",
-                    help="Второй проход верификации (pass2).")
     ap.add_argument("--request_budget", type=int, default=25000,
                     help="Бюджет запроса, ТОКЕНЫ (оценка; промпт — запас 200).")
     ap.add_argument("--prompt_file", default=DEFAULT_PROMPT_FILE,
-                    help="Внешние промпты: теги <pass1>/<pass2>.")
+                    help="Внешний промпт: тег <prompt_translate_check>.")
     # Ограничители правок: 0 — выключен (метрики разные: ШТ, СИМВОЛЫ, СИМВОЛЫ)
     ap.add_argument("--max_fixes_per_chapter", type=int, default=0,
                     help="Лимит правок на главу, ШТ (0 = нет); лишние правки "
@@ -1013,11 +872,11 @@ def do_check(args, stage) -> int:
     # только параметры самой проверки
     logger.info(
         f"Главы {args.start}–{args.end} | {args.type} | "
-        f"2pass={args.two_pass} | budget={args.request_budget} | "
+        f"budget={args.request_budget} | "
         f"threads={stage.profile.threads} | "
         f"retry_empty={stage.profile.retry_empty}")
 
-    p1, p2 = load_prompts(args.prompt_file, logger)
+    prompt = load_prompt(args.prompt_file, logger)
     logger.info(f"Лог: {stage.log_path}")
 
     chapters = collect_chapters(args.start, args.end, args.type,
@@ -1029,12 +888,11 @@ def do_check(args, stage) -> int:
     if not batches:
         return 1
 
-    # ── Предпросмотр запроса (--preview-request): pass1 первого батча ──
-    if stage.preview(f"Pass1 · батч 1/{len(batches)}",
-                    render_pass1_prompt(p1, compose_batch_text(batches[0])),
+    # ── Предпросмотр запроса (--preview-request): первый батч ──
+    if stage.preview(f"Батч 1/{len(batches)}",
+                    render_prompt(prompt, compose_batch_text(batches[0])),
                     meta={"batches": len(batches),
                           "request_budget": args.request_budget,
-                          "two_pass": bool(args.two_pass),
                           "threads": stage.profile.threads,
                           "retry_empty": stage.profile.retry_empty,
                           "first_batch_chapters": sorted(
@@ -1050,7 +908,6 @@ def do_check(args, stage) -> int:
               "бюджет запроса": args.request_budget,
               "потоки": stage.profile.threads,
               "повторов при отсутствии правок": stage.profile.retry_empty,
-              "два прохода": bool(args.two_pass),
               "промпт файл": args.prompt_file}
     meta, existing = load_review_file(args.review, logger)
     created = (meta or {}).get("created") \
@@ -1083,7 +940,7 @@ def do_check(args, stage) -> int:
             bc[c[0]] = bc.get(c[0], "") + ("\n" if c[0] in bc else "") + c[3]
         logger.info(f"Пакет {idx + 1}/{len(batches)}: гл. "
                     f"{nums[0]}–{nums[-1]}")
-        errs = process_batch(batch, p1, p2, args.two_pass, stage)
+        errs = process_batch(batch, prompt, stage)
         if errs is None:
             with lock:
                 failed_cnt[0] += 1

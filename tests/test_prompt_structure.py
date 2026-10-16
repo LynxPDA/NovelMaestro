@@ -14,7 +14,7 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "General" / "
 DATA_PLACEHOLDERS = [
     "{original_text}", "{translated_text}", "{ner_block}", "{chunk_text}",
     "{ner_json}", "{glossary}", "{rag_block}", "{batch_text}",
-    "{errors_json}", "{female_names}", "{male_names}", "{dict_block}",
+    "{female_names}", "{male_names}", "{dict_block}",
     "{rules_block}", "{fewshot_block}",
 ]
 
@@ -63,9 +63,9 @@ def test_ner_check_prompt_data_not_in_system():
 
 def test_translate_check_prompt_data_not_in_system():
     text = _template_text("translate_check_prompt.txt")
-    for tag in ("pass1", "pass2"):
+    for tag in ("prompt_translate_check",):
         sys_body = _system_body(_tagged_block(text, tag))
-        for ph in ("{batch_text}", "{errors_json}"):
+        for ph in ("{batch_text}",):
             assert ph not in sys_body, f"<{tag}>: {ph} в <system>"
 
 

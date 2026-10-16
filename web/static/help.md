@@ -413,7 +413,7 @@ md/html. Промпты стадий:
 | Полировка | `pipeline_prompt.txt` | `<polish>` |
 | Глоссарий | `ner_prompt.txt` | `<prompt_pass1>`, `<prompt_pass2>` |
 | Проверка глоссария | `ner_check_prompt.txt` | — (файл целиком) |
-| Проверка перевода (LLM) | `translate_check_prompt.txt` | `<pass1>/<pass2>` |
+| Проверка перевода (LLM) | `translate_check_prompt.txt` | `<prompt_translate_check>` |
 | Wiki | `wiki_prompt.txt` | `<prompt_wiki_article>` |
 
 Плейсхолдеры: `{ner_block}` (translate/redact/polish),
@@ -739,7 +739,7 @@ Gemma 4 31b по 106 языкам (медиана отношения к реал
 `tmp/translate_check_llm_review.json` (поля: chapter, file, old/new, type,
 reason, status принять/отклонить, applied). Человек правит статусы во
 вкладке «Проверки» → «Применить» (перед применением — контрольная
-точка истории, вкладка «История»). `--two_pass` — второй проход верификации находок. Параметры:
+точка истории, вкладка «История»). Промпт стадии — один проход поиска ошибок, тег `<prompt_translate_check>`. Параметры:
 бюджет запроса (ТОКЕНЫ, оценка: главы одного пакета + запас 200 токенов
 на промпт; глава крупнее — режется на чанки), лимит правок на главу,
 минимальная длина правки, макс. изменённых символов, потоки.

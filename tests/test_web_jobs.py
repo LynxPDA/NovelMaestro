@@ -1500,6 +1500,7 @@ def test_build_translate_check_llm_no_bak():
 
 
 def test_build_translate_check_llm_flags():
+    """Поиск ошибок один проход: --two_pass в argv стадии не появляется."""
     form = {"type": "polished", "start": "1", "end": "10",
             "two_pass": True, "request_budget": "75000",
             "review": "translate_check_llm_review.json", "dry_run": True,
@@ -1508,7 +1509,8 @@ def test_build_translate_check_llm_flags():
     argv = build_command("translate_check_llm", form, {})
     assert argv[0] == "cli/translate_check_llm.py"
     assert "--start" in argv and "--end" in argv
-    assert "--two_pass" in argv and "--request_budget" in argv
+    assert "--request_budget" in argv
+    assert "--two_pass" not in argv
     # применение/предпросмотр/бэкапы — только через «Проверка» проекта
     assert "--dry-run" not in argv
     assert "--apply" not in argv and "--auto-apply" not in argv

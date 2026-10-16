@@ -125,18 +125,17 @@ def make_stage(**profile_kw: Any) -> core_stage.Stage:
 # cli/translate_check_llm.py: LLM-обвязка (промпты, запрос, батчи)
 # ══════════════════════════════════════════════════════════════════════
 
-def test_load_prompts(tmp_path):
+def test_load_prompt(tmp_path):
     p = tmp_path / "prompt.txt"
-    p.write_text("<pass1>\nП1\n</pass1>\n<pass2>\nП2\n</pass2>", encoding="utf-8")
-    p1, p2 = FE.load_prompts(str(p), SilentLog())
-    assert (p1, p2) == ("П1", "П2")
-    # без тегов — встроенные + предупреждение
-    p.write_text("просто текст", encoding="utf-8")
-    p1, p2 = FE.load_prompts(str(p), SilentLog())
-    assert (p1, p2) == (FE.PASS1_PROMPT, FE.PASS2_PROMPT)
-    # нет файла — встроенные
-    p1, p2 = FE.load_prompts(None, SilentLog())
-    assert (p1, p2) == (FE.PASS1_PROMPT, FE.PASS2_PROMPT)
+    p.write_text(f"<{FE.PROMPT_TAG}>\nПРОМПТ\n</{FE.PROMPT_TAG}>",
+                 encoding="utf-8")
+    assert FE.load_prompt(str(p), SilentLog()) == "ПРОМПТ"
+    # тег чужой стадии — не промпт: промпт ВСТРОЕННЫЙ (проход верификации
+    # убран, тег у стадии один)
+    p.write_text("<pass1>\nП1\n</pass1>", encoding="utf-8")
+    assert FE.load_prompt(str(p), SilentLog()) == FE.DEFAULT_PROMPT
+    # нет файла — встроенный
+    assert FE.load_prompt(None, SilentLog()) == FE.DEFAULT_PROMPT
 
 
 def test_stage_complete_delegates(seam):
@@ -158,42 +157,29 @@ def test_stage_complete_delegates(seam):
         {"role": "user", "content": "с\n\nю"}]
 
 
-def test_process_batch_one_pass(seam):
+def test_process_batch_one_request(seam):
     seam.answers.append('[{"chapter": 1, "fragment": "фрагмент длинный", "corrected": "правкa"}]')
     batch = [(1, "f", "d", "Глава 1\nфрагмент длинный"),
              (1, "f", "d", "продолжение главы")]
-    out = FE.process_batch(batch, "П1", "П2", False, make_stage())
+    out = FE.process_batch(batch, "ПРОМПТ", make_stage())
     assert out is not None
     assert len(out) == 1 and out[0]["chapter"] == 1
-    assert len(seam.calls) == 1  # только P1
-    # правила pass1 и текст батча — в одном user-сообщении ({batch_text})
+    assert len(seam.calls) == 1  # один запрос на батч: верификации больше нет
+    # правила промпта и текст батча — в одном user-сообщении ({batch_text})
     content = seam.calls[0]["messages"][1]["content"]
-    assert "П1" in content and "Глава 1" in content
-
-
-def test_process_batch_two_pass(seam):
-    p1_out = '[{"chapter": 1, "fragment": "ааааа", "corrected": "ббббб"}]'
-    p2_out = ('[{"chapter": 1, "fragment": "ааааа", "corrected": "ббббб",'
-              ' "status": "confirmed"},'
-              ' {"chapter": 2, "fragment": "ввввв", "corrected": "ггггг",'
-              ' "status": "rejected"}]')
-    seam.answers.extend([p1_out, p2_out])
-    batch = [(1, "f", "d", "Глава 1\nааааа")]
-    out = FE.process_batch(batch, "П1", "П2", True, make_stage())
-    assert out is not None
-    assert len(out) == 1 and out[0]["status"] == "confirmed"
+    assert "ПРОМПТ" in content and "Глава 1" in content
 
 
 def test_process_batch_failures(seam):
-    # P1 без ответа → ошибка LLM (None = fail-fast на уровне прогона)
+    # нет ответа → ошибка LLM (None = fail-fast на уровне прогона)
     seam.answers.append(None)
     batch = [(1, "f", "d", "текст")]
-    assert FE.process_batch(batch, "П1", "П2", True, make_stage()) is None
-    # P1 вернул не-JSON → общий RETRY_EMPTY исчерпан → пусто (2 попытки);
+    assert FE.process_batch(batch, "ПРОМПТ", make_stage()) is None
+    # не-JSON → общий RETRY_EMPTY исчерпан → пусто (2 попытки);
     # число повторов принадлежит профилю, а не вызову стадии
     seam.calls.clear()
     seam.answers.append("мусор")
-    assert FE.process_batch(batch, "П1", "П2", False,
+    assert FE.process_batch(batch, "ПРОМПТ",
                             make_stage(retry_empty=1)) == []
     assert len(seam.calls) == 2
 

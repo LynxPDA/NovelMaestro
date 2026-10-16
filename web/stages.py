@@ -353,8 +353,6 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
     # папка глав всегда ./chapters (дефолт скрипта, cwd = проект)
     if form.get("type"):
         argv += ["--type", str(form["type"])]
-    if form.get("two_pass"):
-        argv.append("--two_pass")
     if form.get("request_budget") not in (None, ""):
         argv += ["--request_budget", str(form["request_budget"])]
     # review — канонический translate_check_llm_review.json
