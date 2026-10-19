@@ -14,7 +14,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 SPA_DIR = REPO / "web" / "static"
-SPA_TESTS = str(REPO / "tests" / "spa" / "*.test.mjs")
+# список файлов, а не маска: раскрытие шаблонов появилось в node 22,
+# а на CI стоит node 20 — маска приходила аргументом и не находилась
+SPA_TESTS = tuple(str(p) for p in sorted((REPO / "tests" / "spa").glob("*.test.mjs")))
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node не установлен")
@@ -38,7 +40,7 @@ def test_index_loads_ui_layer():
 
 def test_ui_core_node_tests():
     """node --test по tests/spa/*.test.mjs — чистые функции и DOM-слой SPA."""
-    r = _node("--test", SPA_TESTS)
+    r = _node("--test", *SPA_TESTS)
     assert r.returncode == 0, (
         f"node --test упал (rc={r.returncode}):\n{r.stdout}\n{r.stderr}")
 
