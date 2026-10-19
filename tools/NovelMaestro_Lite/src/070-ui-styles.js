@@ -102,6 +102,10 @@
             .nm-key-row .nm-btn { margin: 0; }
             .nm-masked { -webkit-text-security: disc; }
             .nm-masked.nm-reveal { -webkit-text-security: none; }
+            /* где взять ключ (для RouterAI): строка под полем ключа — ссылка слабее
+               подписи, поэтому её читают только тогда, когда ключа ещё нет */
+            .nm-field-doc { display: inline-block; margin-top: 6px; font-size: 12px; color: #2563eb; text-decoration: none; }
+            .nm-field-doc:hover { text-decoration: underline; }
             /* битый ввод (не число, вне диапазона, неразобранный JSON): запрос уходит
                с подменённым значением — поле обязано быть подсвечено */
             .nm-input-bad { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
@@ -148,6 +152,7 @@
             #nm-root.nm-ui-dark .nm-input-group label { color: #c6c9d0; }
             #nm-root.nm-ui-dark .nm-input, #nm-root.nm-ui-dark .nm-textarea, #nm-root.nm-ui-dark .nm-select { background: #2a2f39; color: #e2e2dc; border-color: #3a3f4a; }
             #nm-root.nm-ui-dark .nm-input:disabled { background: #23272e; color: #7d828c; }
+            #nm-root.nm-ui-dark .nm-field-doc { color: #7fb0ff; }
             #nm-root.nm-ui-dark .nm-section { background: #262b34; }
             #nm-root.nm-ui-dark .nm-section h3 { color: #e2e2dc; }
             #nm-root.nm-ui-dark .nm-help { background: #262b34; color: #9aa0aa; }

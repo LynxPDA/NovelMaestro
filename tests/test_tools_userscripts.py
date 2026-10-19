@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 # tools/ — не пакет, сборщик подключается по пути (bootstrap внутри него сам
 # находит корень репо, так что импорт из временной копии тоже работает)
 _spec = importlib.util.spec_from_file_location("build_userscripts", BUILDER)
+assert _spec and _spec.loader, f"сборщик не загрузился: {BUILDER}"
 B = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(B)
 
@@ -38,6 +39,8 @@ REPO_SLUG = "LynxPDA/NovelMaestro"
 # cache-control: public, max-age=604800, и пуш кэш не снимает — менеджер
 # неделями видел бы прежний @version
 RAW = "https://raw.githubusercontent.com/"
+# путь к node один: он и гейт «есть ли node», и сама команда запуска
+NODE = shutil.which("node") or ""
 # @connect: special-значения из спеки + типовые хосты; Lite ходит в LLM-серверы,
 # rulate работает только с самим сайтом
 CONNECT_SPECIALS = {"self", "localhost", "*"}
@@ -137,7 +140,9 @@ def test_meta_has_canonical_keys(script, artifact):
     assert banner.count("@version") == 1, f"{artifact}: строка @version должна быть одна"
     # namespace = URL репо: скрипты ещё не распространялись, менять его поздно
     # нельзя — у уже поставивших менеджер опознаёт скрипт по name+namespace
-    ns = re.search(r"^//[ \t]*@namespace[ \t]+(\S+)", banner, re.MULTILINE).group(1)
+    ns_match = re.search(r"^//[ \t]*@namespace[ \t]+(\S+)", banner, re.MULTILINE)
+    assert ns_match, f"{artifact}: в метаданных нет @namespace"
+    ns = ns_match.group(1)
     assert ns == f"https://github.com/{REPO_SLUG}", \
         f"{artifact}: @namespace должен быть URL репо, сейчас {ns}"
 
@@ -202,6 +207,24 @@ def test_lite_api_key_is_masked_by_style():
         "фолбэк подставляет сохранённый логин вместо нового пароля"
     assert "if (!el.getAttribute('autocomplete')) el.autocomplete = 'off'" in text, \
         "автосписок не отключён остальным полям"
+
+
+def test_lite_api_key_points_at_key_page():
+    """Где взять ключ — ссылка строкой под полем, в обеих темах и без выхода из
+    вкладки: ключ берут один раз, кнопкой она бы спорила с «Проверить сервер»."""
+    text = (TOOLS / "NovelMaestro_Lite" / "novelmaestro-lite.user.js").read_text(encoding="utf-8")
+    key = ('<a class="nm-field-doc" href="https://routerai.ru/p/D7G6RUQ5" '
+           'target="_blank" rel="noopener noreferrer">Получить API-ключ</a>')
+    assert key in text, "в секции API нет ссылки «Получить API-ключ»"
+    # ссылка — часть группы ключа, а не отдельный пункт формы
+    group = text[text.index('<label>API Key:</label>'):text.index('Локальная модель без API-ключа')]
+    assert key in group, "ссылка ключа уехала из группы поля"
+    assert group.index('id="api-key"') < group.index(key), "ссылка выше поля ключа"
+    # тёмная тема — свой цвет: синий на тёмном фоне не читается
+    assert ".nm-field-doc { display: inline-block; margin-top: 6px; font-size: 12px;" in text, \
+        "ссылка ключа не тонкая строка под полем"
+    assert "#nm-root.nm-ui-dark .nm-field-doc { color: #7fb0ff; }" in text, \
+        "в тёмной теме ссылка ключа потеряла цвет"
 
 
 def test_lite_server_check_verdict_is_about_the_model():
@@ -399,7 +422,7 @@ def test_no_crlf_anywhere(script):
 @pytest.mark.parametrize("script,artifact", sorted(SCRIPTS.items()))
 def test_artifact_parses_with_node(script, artifact):
     """Синтаксис проверяется только на артефакте: части по отдельности не парсятся."""
-    res = subprocess.run([shutil.which("node"), "--check", str(TOOLS / script / artifact)],
+    res = subprocess.run([str(NODE), "--check", str(TOOLS / script / artifact)],
                          capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
 
@@ -438,7 +461,7 @@ def test_lite_logic_node_tests():
     Части юзерскрипта — один IIFE, целиком в node они не исполняются, поэтому
     тест вырезает подопытный блок из артефакта по маркерам и исполняет его как
     чистую функцию на заглушках."""
-    res = subprocess.run([shutil.which("node"), "--test",
+    res = subprocess.run([str(NODE), "--test",
                           str(ROOT / "tests" / "tools" / "*.test.mjs")],
                          capture_output=True, text=True, cwd=str(ROOT))
     assert res.returncode == 0, f"node --test упал (rc={res.returncode}):\n{res.stdout}\n{res.stderr}"

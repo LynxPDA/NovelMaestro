@@ -118,6 +118,7 @@ const host = document.createElement('div');
                                                data-lpignore="true" data-1p-ignore="true">
                                         <button type="button" class="nm-btn nm-btn-sm nm-btn-secondary" id="btn-key-eye" title="Показать/скрыть ключ">👁</button>
                                     </div>
+                                    <a class="nm-field-doc" href="https://routerai.ru/p/D7G6RUQ5" target="_blank" rel="noopener noreferrer">Получить API-ключ</a>
                                 </div>
                                 <label class="nm-input-group nm-check-row" data-tip="Пустой API Key разрешён: с этим чекбоксом заголовок Authorization не отправляется вовсе."><input type="checkbox" id="local-model"><span>🖥️ Локальная модель без API-ключа</span></label>
                                 <div class="nm-input-group"><label>Модель:</label><input type="text" class="nm-input" id="model"></div>
