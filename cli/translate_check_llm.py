@@ -780,7 +780,7 @@ def build_parser():
     ap.add_argument("--request_budget", type=int, default=25000,
                     help="Бюджет запроса, ТОКЕНЫ (оценка; промпт — запас 200).")
     ap.add_argument("--retry_empty", type=int, default=0, metavar="N",
-                    help="Повторов без правок, ШТ (0 = нет; пусто = "
+                    help="Повторов при отсутствии правок, ШТ (0 = нет; пусто = "
                          "TRANSLATE_CHECK_LLM_RETRY_EMPTY). Ответ без ошибок "
                          "— не ошибка, а повод спросить ещё раз.")
     ap.add_argument("--prompt_file", default=DEFAULT_PROMPT_FILE,

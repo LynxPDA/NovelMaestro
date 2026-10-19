@@ -345,7 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-c", "--count-threshold", type=int, default=0,
                    help="Порог count: записи с count > X (по умолчанию: 0).")
     p.add_argument("--retry_empty", type=int, default=0, metavar="N",
-                   help="Повторов без правок, ШТ (0 = нет; пусто = "
+                   help="Повторов при отсутствии правок, ШТ (0 = нет; пусто = "
                         "NER_CHECK_RETRY_EMPTY). Ответ без правок — не "
                         "ошибка, а повод спросить ещё раз: повторы — на "
                         "каждый батч и RAG-термин.")
@@ -915,8 +915,8 @@ def do_check(args, stage) -> int:
         sys.exit("❌ Нет записей после фильтрации.")
     logger.info(f"📊 После фильтрации: {len(items)} записей.")
     if args.retry_empty:
-        logger.info(f"🔁 Повторов без правок: {args.retry_empty} "
-                    f"(на каждый батч и RAG-термин)")
+        logger.info(f"🔁 Повторов при отсутствии правок: "
+                    f"{args.retry_empty} (на каждый батч и RAG-термин)")
     # эталон для diff: ВСЕ записи ner.json (не только отфильтрованные)
     items_by_term = {unicodedata.normalize("NFC", i.get("term", "")): i
                      for i in data}
