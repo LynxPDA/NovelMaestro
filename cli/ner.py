@@ -84,8 +84,8 @@ from core.common import (  # noqa: E402
 )
 
 # ══════════════════════════════════════════════════════════════════════
-# ВСТРОЕННЫЕ ПРОМПТЫ (дефолт для китайского; переопределяются
-# через --prompt_file для любого другого языка)
+# ВСТРОЕННЫЕ ПРОМПТЫ (fallback при отсутствии тегов в промпт-файле; язык,
+# поля и правила определяет промпт пользователя)
 # ══════════════════════════════════════════════════════════════════════
 
 SYSTEM_PROMPT_PASS1 = """
@@ -96,7 +96,7 @@ Return result strictly in JSON format:
 [
   {
     "term": "Entity Name",
-    "pinyin": "Pinyin with tones",
+    "reading": "Pronunciation (pinyin/romaji/romanization; for Latin script — the spelling as is)",
     "type": "Person (male/female)/Location/Sect/Technique/Artifact/Stage/Race/Other",
     "translation": "Russian Translation",
     "notes": "Optional comments"
@@ -105,6 +105,7 @@ Return result strictly in JSON format:
 Rules:
 - For Person type, specify gender: "Person (male)" / "Person (female)".
 - Normalize "term" to the form as it appears in the text.
+- The "reading" field is the pronunciation in the source language.
 - Skip generic words that need no glossary entry.
 - If no entities found, return [].
 Output ONLY valid JSON.
@@ -118,14 +119,14 @@ Output ONLY valid JSON.
 
 SYSTEM_PROMPT_PASS2 = """
 <system>
-You are a quality-control reviewer for a Chinese web-novel translation glossary.
+You are a quality-control reviewer for a web-novel translation glossary.
 You will receive:
-1. A chunk of the original Chinese text.
+1. A chunk of the original text.
 2. A JSON array of NER entries previously extracted from this chunk.
 
 Your job:
 - Verify each entry: is the term actually present in the text?
-- Fix pinyin (must match the characters, use tone marks).
+- Fix reading (must match the original spelling).
 - Fix translation (no brackets, no slashes, no English, one final variant).
 - Fix type if wrong.
 - Remove entries that are generic words, not real named entities.
@@ -1314,10 +1315,10 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Примеры:\n"
             "\n"
-            "  Китайский (встроенные промпты по умолчанию):\n"
+            "  С шаблоном General (промпт-файл из prompts/):\n"
             "    python ner.py novel.txt --two-pass\n"
             "\n"
-            "  Японский / корейский / любой другой язык:\n"
+            "  Любой язык — свои поля и правила в промпт-файле:\n"
             "    python ner.py novel.txt --two-pass --prompt_file my_prompts.txt\n"
             "    (язык, поля и инструкции задаются в тексте промпт-файла)\n"
             "\n"
@@ -1336,8 +1337,7 @@ def build_parser() -> argparse.ArgumentParser:
             "    Промпт ревью. Плейсхолдеры: {chunk_text}, {ner_json}.\n"
             "  </prompt_pass2>\n"
             "\n"
-            "  Если теги отсутствуют, файл целиком используется как pass1.\n"
-            "  Pass2 при этом берётся встроенный.\n"
+            "  Файла нет или своего тега нет — встроенный промпт прохода.\n"
             "\n"
             "Фонетическое поле (alias-merge по звучанию):\n"
             "\n"
@@ -1347,7 +1347,7 @@ def build_parser() -> argparse.ArgumentParser:
             "\n"
             "  • Китайский: запрашивайте в промпте поле \"pinyin\".\n"
             "  • Остальные языки: запрашивайте поле \"reading\"\n"
-            "    (ромадзи, транслитерация и т. п.).\n"
+            "    (ромадзи, романизация, транслитерация и т. п.).\n"
             "  • Если ни одно из полей не запрошено в промпте —\n"
             "    alias-merge по звучанию не выполняется.\n"
             "\n"
@@ -1369,7 +1369,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompt_file", default=None,
         help=(
             "Путь к файлу промптов. Поддерживает теги <prompt_pass1>...</prompt_pass1> "
-            "и <prompt_pass2>...</prompt_pass2>. Если тегов нет — файл целиком = pass1."
+            "и <prompt_pass2>...</prompt_pass2>. Файла нет или тега нет — встроенный "
+            "промпт прохода."
         ),
     )
     # Сервер LLM, потоки — общий блок флагов (core.stage); исторические имена

@@ -149,7 +149,7 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`, `
 
 Нюансы ответов LLM:
 
-- **NER** — строго валидный JSON-массив без markdown-обёртки; поля `term`/`reading`/`type`/`translation`/`notes`/`context`. `reading` — произношение/чтение термина (для китайского — пиньинь с тонами); парсер принимает и `pinyin`, и `reading` (`merge_alias_groups` в ner.py, поле ищется по обоим именам).
+- **NER** — строго валидный JSON-массив без markdown-обёртки; поля `term`/`reading`/`type`/`translation`/`notes`/`context`. `reading` — произношение/чтение термина (пиньинь, ромадзи, романизация; для латиницы — само написание); парсер принимает и `pinyin`, и `reading` (`merge_alias_groups` в ner.py, поле ищется по обоим именам).
 - **wiki** — статья обычным текстом (маркдаун в шаблонах статей); `--near-distance` — единица FTS5 NEAR (ТОКЕНЫ).
 - **translate_check_llm** — review-записи полями `stage`/`status`/ `old`/`new` (см. `merge_fix_entries`).
 
