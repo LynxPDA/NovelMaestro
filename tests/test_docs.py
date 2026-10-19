@@ -79,7 +79,9 @@ PROJECTS_API = ["SECTIONS", "DEFAULT_SECTIONS", "load_sections",
                 "TEMPLATE_SKELETON", "_ensure_template_skeleton",
                 "create_template_dir", "render_metadata",
                 "fill_project_from_template", "write_project_metadata",
-                "delete_project", "copy_project"]
+                "delete_project", "copy_project",
+                "builtin_template_files", "sync_builtin_templates",
+                "TEMPLATE_ENV_EXAMPLE"]
 # Зеркало API core/transport.py (единственная точка выхода в сеть)
 TRANSPORT_API = ["TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStream",
                  "ResponseStream", "open_stream", "open_get", "open_json_get",

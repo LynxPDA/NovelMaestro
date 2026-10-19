@@ -379,6 +379,8 @@ def write_project_metadata(pdir: Path, template_dir: Path,
 # Системный набор — только чтение: нельзя удалять/перезаписывать;
 # копировать ИЗ него можно
 TEMPLATE_PROTECTED = "General"
+# шаблон общего конфига — тоже поставка программы (лежит рядом с наборами)
+TEMPLATE_ENV_EXAMPLE = ".env.example"
 
 
 def _tpl_set_dir(templates_dir: Path, name: str) -> Path | None:
@@ -619,6 +621,75 @@ def move_template_file(templates_dir: Path, name: str,
         return "Каталог не существует"  # каталоги не создаются
     sp.replace(dp)
     return None
+
+
+def _same_content(a: Path, b: Path) -> bool:
+    """Файлы совпадают побайтово (размер + куски; файлы мелкие)."""
+    try:
+        if a.stat().st_size != b.stat().st_size:
+            return False
+        with a.open("rb") as fa, b.open("rb") as fb:
+            while True:
+                ca, cb = fa.read(65536), fb.read(65536)
+                if ca != cb:
+                    return False
+                if not ca:
+                    return True
+    except OSError:
+        return False
+
+
+def builtin_template_files(source_dir: Path) -> list:
+    """Файлы шаблонов, которые принадлежат программе, а не пользователю.
+
+    Это системный набор `TEMPLATE_PROTECTED` и шаблон конфига
+    `TEMPLATE_ENV_EXAMPLE` — те же части, что обновление программы кладёт
+    поверх (`core/update.py::is_protected`). Остальное (свои наборы) — данные
+    человека.
+    """
+    source_dir = Path(source_dir)
+    if not source_dir.is_dir():
+        return []
+    env_example = source_dir / TEMPLATE_ENV_EXAMPLE
+    files = [env_example] if env_example.is_file() else []
+    general = source_dir / TEMPLATE_PROTECTED
+    if general.is_dir():
+        files += sorted(p for p in general.rglob("*") if p.is_file())
+    return files
+
+
+def sync_builtin_templates(templates_dir: Path, source_dir: Path) -> dict:
+    """Привести встроенные части templates/ к поставке программы (образу).
+
+    Нужно там, где папка шаблонов лежит вне дерева кода (bind-mount в Docker):
+    новый образ приносит свои шаблоны, но смонтированный каталог их не видит,
+    и новая стадия молча осталась бы на встроенном промпте. Встроенные части
+    (см. `builtin_template_files`) перезаписываются целиком — `General` это
+    системный набор (только чтение в интерфейсе, правкой не настраивается:
+    свои промпты живут в собственном наборе или в проекте); наборы человека
+    не трогаются вовсе, как и у обновления программы.
+
+    Возвращает `{added, copied, unchanged}` — пути относительно templates/:
+    файла не было, содержимое отличалось, совпало.
+    """
+    templates_dir = Path(templates_dir)
+    added, copied, unchanged = [], [], []
+    for src in builtin_template_files(source_dir):
+        rel = src.relative_to(Path(source_dir)).as_posix()
+        dst = templates_dir / rel
+        try:
+            if not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                added.append(rel)
+            elif _same_content(src, dst):
+                unchanged.append(rel)
+            else:
+                shutil.copy2(src, dst)
+                copied.append(rel)
+        except OSError as exc:
+            raise OSError(f"{rel}: {exc}") from exc
+    return {"added": added, "copied": copied, "unchanged": unchanged}
 
 
 def project_dir(projects_root: Path, section: str, name: str) -> Path:
@@ -939,3 +1010,24 @@ def copy_project(projects_root: Path, section: str, name: str, new_name: str):
         except OSError as e:
             return False, f"Не удалось скопировать проект: {e}"
     return True, dst
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # Вход для docker-entrypoint.sh: встроенные шаблоны образа кладутся в
+    # смонтированный каталог шаблонов, наборы пользователя не трогаются.
+    #   python3 -m core.projects sync-templates <templates> <templates-dist>
+    import sys
+
+    if len(sys.argv) == 4 and sys.argv[1] == "sync-templates":
+        res = sync_builtin_templates(Path(sys.argv[2]), Path(sys.argv[3]))
+        print(f"Шаблоны из образа: обновлено {len(res['copied'])}, "
+              f"добавлено {len(res['added'])}, без изменений "
+              f"{len(res['unchanged'])}")
+        for rel in res["copied"]:
+            print(f"  обновлён: {rel}")
+        for rel in res["added"]:
+            print(f"  добавлен: {rel}")
+    else:
+        print("Использование: python3 -m core.projects sync-templates "
+              "<templates> <templates-dist>", file=sys.stderr)
+        raise SystemExit(2)

@@ -891,3 +891,102 @@ def test_project_progress_table_has_missing(tmp_path):
     empty.mkdir()
     st2 = P.project_progress_table(empty)
     assert st2["missing"]["polish"]["pct"] == 0
+
+
+# ══════════════════════════════════════════════════════════════════════
+# встроенные шаблоны в смонтированном каталоге (Docker)
+# ══════════════════════════════════════════════════════════════════════
+def _mk_builtin_source(parent: Path) -> Path:
+    """Поставка программы: снимок шаблонов образа (General/ + .env.example)."""
+    src = parent / "templates-dist"
+    (src / "General" / "prompts").mkdir(parents=True)
+    (src / "General" / "source").mkdir()
+    (src / "General" / "prompts" / "translate.txt").write_text(
+        "промпт образа", encoding="utf-8")
+    (src / "General" / "prompts" / "new_stage.txt").write_text(
+        "новая стадия", encoding="utf-8")
+    (src / "General" / "source" / "info.md").write_text("и", encoding="utf-8")
+    (src / ".env.example").write_text("HOST=образ\n", encoding="utf-8")
+    return src
+
+
+def test_builtin_template_files_only_program_parts(tmp_path):
+    """Встроенные части — General/ и .env.example; свой набор — не программа."""
+    src = _mk_builtin_source(tmp_path)
+    (src / "Custom" / "prompts").mkdir(parents=True)
+    (src / "Custom" / "prompts" / "translate.txt").write_text("чужое",
+                                                             encoding="utf-8")
+    rels = sorted(p.relative_to(src).as_posix()
+                  for p in P.builtin_template_files(src))
+    assert rels == [".env.example", "General/prompts/new_stage.txt",
+                    "General/prompts/translate.txt", "General/source/info.md"]
+    assert P.builtin_template_files(tmp_path / "нет") == []
+
+
+def test_sync_builtin_templates_first_run(tmp_path):
+    """Пустой каталог шаблонов — полный снимок образа (первый запуск)."""
+    src = _mk_builtin_source(tmp_path)
+    dst = tmp_path / "templates"
+    dst.mkdir()
+    res = P.sync_builtin_templates(dst, src)
+    assert sorted(res["added"]) == [".env.example", "General/prompts/new_stage.txt",
+                                    "General/prompts/translate.txt",
+                                    "General/source/info.md"]
+    assert res["copied"] == [] and res["unchanged"] == []
+    assert (dst / "General" / "prompts" / "translate.txt").read_text(
+        encoding="utf-8") == "промпт образа"
+
+
+def test_sync_builtin_templates_reports_three_groups(tmp_path):
+    """Совпадение, правка и новый файл различаются; чужой набор не трогается."""
+    src = _mk_builtin_source(tmp_path)
+    dst = tmp_path / "templates"
+    # установка старой версии: один файл совпадает, другой устарел, своего нет
+    (dst / "General" / "prompts").mkdir(parents=True)
+    (dst / "General" / "prompts" / "translate.txt").write_text(
+        "промпт образа", encoding="utf-8")
+    (dst / "General" / "prompts" / "new_stage.txt").write_text(
+        "старая версия", encoding="utf-8")
+    (dst / "Custom" / "prompts").mkdir(parents=True)
+    (dst / "Custom" / "prompts" / "translate.txt").write_text(
+        "мой набор", encoding="utf-8")
+    res = P.sync_builtin_templates(dst, src)
+    assert res["unchanged"] == ["General/prompts/translate.txt"]
+    assert res["copied"] == ["General/prompts/new_stage.txt"]
+    assert res["added"] == [".env.example", "General/source/info.md"]
+    assert (dst / "General" / "prompts" / "new_stage.txt").read_text(
+        encoding="utf-8") == "новая стадия"
+    assert (dst / "Custom" / "prompts" / "translate.txt").read_text(
+        encoding="utf-8") == "мой набор"
+
+
+def test_sync_builtin_templates_idempotent(tmp_path):
+    """Повторный старт ничего не копирует: второй прогон — всё «без изменений»."""
+    src = _mk_builtin_source(tmp_path)
+    dst = tmp_path / "templates"
+    dst.mkdir()
+    first = P.sync_builtin_templates(dst, src)
+    second = P.sync_builtin_templates(dst, src)
+    assert second["added"] == [] and second["copied"] == []
+    assert sorted(second["unchanged"]) == sorted(
+        first["added"] + first["copied"] + first["unchanged"])
+
+
+def test_sync_builtin_templates_keeps_missing_prompts(tmp_path):
+    """Промпт, которого нет в образе, не удаляется: синхронизация — не чистка."""
+    src = _mk_builtin_source(tmp_path)
+    dst = tmp_path / "templates"
+    (dst / "General" / "prompts").mkdir(parents=True)
+    (dst / "General" / "prompts" / "legacy.txt").write_text(
+        "старый промпт", encoding="utf-8")
+    P.sync_builtin_templates(dst, src)
+    assert (dst / "General" / "prompts" / "legacy.txt").read_text(
+        encoding="utf-8") == "старый промпт"
+
+
+def test_sync_builtin_templates_no_source(tmp_path):
+    """Снимка образа нет — ничего не делаем и не падаем."""
+    dst = tmp_path / "templates"
+    dst.mkdir()
+    res = P.sync_builtin_templates(dst, tmp_path / "нет")
+    assert res == {"added": [], "copied": [], "unchanged": []}

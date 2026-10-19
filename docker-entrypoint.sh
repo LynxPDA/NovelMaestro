@@ -6,10 +6,11 @@
 #  1. Каталоги ./projects, ./templates, ./web/job_logs — docker создаёт
 #     bind-mount каталоги от root, если их нет на хосте; возвращаем
 #     владельца app (uid 1000), иначе сервер не сможет в них писать.
-#  2. Шаблоны из образа (General/, .env.example): bind-mount ./templates
-#     ПЕРЕКРЫВАЕТ содержимое образа — если хостовый каталог пуст,
-#     копируем шаблоны из /app/templates-dist (снимок образа), чтобы
-#     «Шаблоны» не оказались пустыми.
+#  2. Шаблоны из образа: bind-mount ./templates ПЕРЕКРЫВАЕТ содержимое
+#     образа, поэтому встроенные части (набор General/ и шаблон
+#     .env.example) кладёт в него программа — при каждом старте, а не
+#     только на первом: иначе обновление образа оставляло бы старые
+#     промпты. Наборы пользователя в templates/ не трогаются.
 #  3. Системный .env: в томе projects (WEB_ENV_FILE=/app/projects/.env,
 #     правится вкладкой «Настройки», переживает обновление образа);
 #     первый старт — сид из /app/templates-dist/.env.example.
@@ -25,9 +26,17 @@ for d in /app/projects /app/templates /app/web/job_logs; do
     chown -R app:app "$d"
 done
 
-# 2. Шаблоны из образа при пустом хостовом ./templates.
-if [ ! -d /app/templates/General ] && [ -d /app/templates-dist ]; then
-    cp -a /app/templates-dist/. /app/templates/
+# 2. Встроенные шаблоны образа — в смонтированный каталог шаблонов.
+#    Первый запуск (каталог пуст) — полный снимок, как и раньше; дальше
+#    синхронизация по файлам: General/ и .env.example приводятся к образу,
+#    свои наборы остаются. Сбой синхронизации — предупреждение, а не
+#    отказ стартовать: сервер работает и со старыми шаблонами.
+if [ -d /app/templates-dist ]; then
+    if ! gosu app python3 -m core.projects sync-templates \
+            /app/templates /app/templates-dist; then
+        echo "⚠ Не удалось обновить встроенные шаблоны из образа —" \
+             "используются те, что лежат в смонтированном каталоге" >&2
+    fi
     chown -R app:app /app/templates
 fi
 
