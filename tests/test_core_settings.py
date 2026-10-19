@@ -113,6 +113,22 @@ def test_payload_blocks_carry_note():
     assert not payload["llm_conn"].get("note")
 
 
+def test_api_key_field_points_at_key_page():
+    """У поля ключа есть адрес, где его берут: ссылка под полем, а не значение.
+
+    Сам ключ API-ключа остаётся пустым дефолтом, в `.env` подпись не пишется, а
+    подпись ссылки строится из метки поля («Получить API-ключ»)."""
+    field = S.BY_KEY["API_KEY"].form_field()
+    assert field["doc"] == "https://routerai.ru/p/D7G6RUQ5"
+    assert field["secret"] is True and field["default"] == ""
+    # адрес — только у поля ключа: остальные поля берутся со своего сервера
+    assert [s.key for s in S.SETTINGS if s.doc] == ["API_KEY"]
+    assert "https://routerai.ru" not in S.defaults()
+    payload = S.block_payload("llm_conn")
+    assert payload["fields"][1]["doc"] == field["doc"]
+    assert "doc" not in payload["values"]
+
+
 def test_server_blocks_hidden_from_page():
     """Веб-сервер со страницы настроек убран полностью: у своей машины нет
     места рядом с настройками книги (применяется только после перезапуска),

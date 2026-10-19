@@ -1321,6 +1321,17 @@ input[type="number"] {
   color: var(--text-dim);
   margin-top: 2px;
 }
+/* где взять значение поля (адрес приходит из реестра): строка под контролом,
+   тонкая и не спорит с подписью поля */
+.field-doc {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.field-doc:hover {
+  text-decoration: underline;
+}
 /* сброс полей одной вкладки: кнопка над карточками, потому что действие
    относится к вкладке, а не ко всей странице (и прячется на «Внешнем виде») */
 .settings-tab-tools {

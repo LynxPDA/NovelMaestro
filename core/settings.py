@@ -107,6 +107,9 @@ class Setting:
     editable: bool = False      # files-поле правится прямо из формы запуска
     hidden: bool = False        # настройки нет в форме стадии (только «Настройки»)
     help: str = ""
+    #: адрес, где берут значение поля (ссылка под полем на «Настройках»):
+    #: подпись — «Получить <label>», в .env и в argv его нет
+    doc: str = ""
     noenv: bool = False         # состояние UI (чипсы) — в .env не пишется
     run: bool = False           # параметр запуска (главы, входные файлы)
     secret: bool = False        # парольное поле: значение не отдаётся в SPA
@@ -136,7 +139,7 @@ class Setting:
             out["label"] = self.label
         out["default"] = self.default
         for k in ("options", "labels", "min", "max", "step", "dir", "ext",
-                  "rows", "autofile", "editable", "help", "noenv",
+                  "rows", "autofile", "editable", "help", "doc", "noenv",
                   "when", "when_any", "when_set"):
             v = getattr(self, k)
             if v not in (None, "", [], {}, ()):
@@ -210,7 +213,9 @@ GROUPS: tuple = (
         _block("llm_conn", "Подключение",
             _s("HOST", "Сервер LLM", "text", "https://routerai.ru/api/v1",
                 help="адрес API-сервера; /v1 дописывается, если его нет"),
-            _s("API_KEY", "API-ключ", "password", "", secret=True, help="локальный сервер может работать без ключа"),
+            _s("API_KEY", "API-ключ", "password", "", secret=True,
+               help="локальный сервер может работать без ключа",
+               doc="https://routerai.ru/p/D7G6RUQ5"),
             _s("MODEL", "Модель", "text", "google/gemma-4-31b-it",
                 help="одна модель на весь конвейер: отдельных моделей у стадий больше нет"),
         ),

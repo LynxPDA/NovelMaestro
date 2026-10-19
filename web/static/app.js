@@ -1164,6 +1164,17 @@ async function viewSettings() {
   }
 
   // контрол поля: тип, варианты и подсказка — из реестра (SPA их не знает)
+  // где берут значение поля: строка под контролом, а не подпись и не
+  // значение — в `.env` и в argv адрес не едет; подпись — из метки поля
+  function docLink(f) {
+    return h("a", {
+      class: "field-doc",
+      href: f.doc,
+      target: "_blank",
+      rel: "noopener noreferrer",
+    }, `Получить ${f.label || "значение"}`);
+  }
+
   function fieldWrap(f) {
     const val = f.value === undefined || f.value === null ? "" : f.value;
     if (f.type === "hidden") return null; // чипсы — состояние UI запусков
@@ -1238,6 +1249,7 @@ async function viewSettings() {
     } else if (f.help) {
       wrap.append(h("div", { class: "field-help" }, f.help));
     }
+    if (f.doc) wrap.append(docLink(f));
     ctl[id] = input;
     // автосохранение поля: input — текст/число при вводе, change — select и
     // выход из поля; одинаковое значение (фокус, Tab) записи не начинает

@@ -1229,6 +1229,59 @@ async function main() {
       .locator("input,select,textarea").first().inputValue();
     if (masked !== "•".repeat("probe-secret".length))
       problems.push(`настройки: секрет «${masked}»`);
+    // где взять ключ: ссылка под самым полем (а не подпись, не значение):
+    // подпись «Получить API-ключ», наружу и без opener'а, в .env её нет
+    const keyDoc = await page.locator(".settings-cards .field")
+      .filter({ hasText: "API-ключ" }).first()
+      .evaluate((el) => {
+        const a = el.querySelector("a.field-doc");
+        const input = el.querySelector("input");
+        if (!a || !input) return null;
+        return {
+          text: a.textContent.trim(), href: a.getAttribute("href"),
+          target: a.getAttribute("target"), rel: a.getAttribute("rel"),
+          // под полем, а не перед ним
+          after: !!(input.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING),
+        };
+      });
+    if (!keyDoc) problems.push("настройки: у поля ключа нет ссылки «Получить API-ключ»");
+    else if (keyDoc.text !== "Получить API-ключ") problems.push(`настройки: ссылка «${keyDoc.text}»`);
+    if (keyDoc && keyDoc.href !== "https://routerai.ru/p/D7G6RUQ5")
+      problems.push(`настройки: ссылка ключа ведёт на ${keyDoc.href}`);
+    if (keyDoc && (keyDoc.target !== "_blank" || !/noopener/.test(keyDoc.rel || "")))
+      problems.push("настройки: ссылка ключа уводит SPA из вкладки");
+    if (keyDoc && !keyDoc.after) problems.push("настройки: ссылка ключа выше поля");
+    // «Получить API-ключ» — тонкая строка под полем, а не второй заголовок
+    const keyDocBox = keyDoc ? await page.locator(".settings-cards a.field-doc").first()
+      .evaluate((a) => {
+        const cs = getComputedStyle(a);
+        return { size: parseFloat(cs.fontSize), color: cs.color,
+          deco: cs.textDecorationLine };
+      }) : null;
+    if (keyDocBox && keyDocBox.size > 12) problems.push(`настройки: ссылка ключа ${keyDocBox.size}px — спорит с полем`);
+    if (keyDocBox && keyDocBox.deco !== "none")
+      problems.push("настройки: ссылка ключа подчёркнута постоянно — выглядит кнопкой");
+    // ссылка живёт внутри своей карточки и не наезжает на соседние поля
+    const keyDocGeom = keyDoc ? await page.locator(".settings-cards .field")
+      .filter({ hasText: "API-ключ" }).first()
+      .evaluate((el) => {
+        const card = el.closest(".review-card").getBoundingClientRect();
+        const a = el.querySelector("a.field-doc").getBoundingClientRect();
+        const input = el.querySelector("input").getBoundingClientRect();
+        const own = el.getBoundingClientRect();
+        const rows = [...el.parentElement.children]
+          .filter((x) => x !== el)
+          .map((x) => x.getBoundingClientRect());
+        const clash = rows.some((r) => r.width > 0 && a.right > r.left
+          && a.left < r.right && a.bottom > r.top && a.top < r.bottom);
+        return { inside: a.left >= card.left && a.right <= card.right
+          && a.bottom <= card.bottom, below: a.top >= input.bottom - 1,
+          own: a.left >= own.left && a.right <= own.right, clash };
+      }) : null;
+    if (keyDocGeom && !keyDocGeom.inside) problems.push("настройки: ссылка ключа вылезла из карточки");
+    if (keyDocGeom && !keyDocGeom.own) problems.push("настройки: ссылка ключа вышла из своей колонки");
+    if (keyDocGeom && !keyDocGeom.below) problems.push("настройки: ссылка ключа наехала на поле");
+    if (keyDocGeom && keyDocGeom.clash) problems.push("настройки: ссылка ключа перекрывает соседнее поле");
     // «Выбор провайдера»: карточка объясняет себя сама, а чекбокс — такое же
     // двухстрочное поле, как соседи (подпись сверху, контрол под ней)
     const prov = await page
@@ -1256,6 +1309,12 @@ async function main() {
       problems.push(`настройки: чекбокс «${prov.fb.label}» → ${prov.fb.row ? "строка" : "не строка"}, состояние «${prov.fb.state}»`);
     if (SHOT) {
       await page.screenshot({ path: path.join(OUT, "settings.png") });
+      // карточка подключения целиком: видно ссылку «Получить API-ключ»,
+      // кнопку проверки сервера и подсказку поля
+      await page
+        .locator(".settings-cards .review-card", { hasText: "Подключение" })
+        .first()
+        .screenshot({ path: path.join(OUT, "settings-conn.png") });
       // карточка провайдеров целиком: видно выравнивание чекбокса
       await page
         .locator(".settings-cards .review-card", { hasText: "Выбор провайдера" })
