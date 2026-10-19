@@ -463,10 +463,13 @@ def test_lite_logic_node_tests():
     чистую функцию на заглушках.
 
     Файлы перечисляются явно: маску `node --test` раскрывает только с node 22,
-    а на CI стоит node 20 — строка с `*` приходила как путь и не находилась."""
+    а на CI стоит node 20 — строка с `*` приходила как путь и не находилась.
+    Репортёр указан явно: без него сводка бывает TAP («# fail 0») или spec
+    («fail 0» с другим префиксом), и наличие падений решалось форматом
+    вывода, а не кодом возврата."""
     files = [str(p) for p in sorted((ROOT / "tests" / "tools").glob("*.test.mjs"))]
     assert files, "тесты Lite не найдены"
-    res = subprocess.run([str(NODE), "--test", *files],
+    res = subprocess.run([str(NODE), "--test", "--test-reporter=tap", *files],
                          capture_output=True, text=True, cwd=str(ROOT))
     assert res.returncode == 0, f"node --test упал (rc={res.returncode}):\n{res.stdout}\n{res.stderr}"
     assert "# fail 0" in res.stdout, f"node --test: есть падающие проверки:\n{res.stdout}"

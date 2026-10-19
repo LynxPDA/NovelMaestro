@@ -253,12 +253,14 @@ cmd_probe() {
     exec node "$REPO/tools/ui_probe.mjs" "$@"
 }
 
-# юнит-тесты чистых функций SPA (ui-core) и синтаксис всех view-файлов
+# юнит-тесты чистых функций SPA (ui-core) и синтаксис всех view-файлов;
+# файлы перечисляются явно и с TAP-репортёром: маску `node --test`
+# раскрывает только node 22+, а сводка по умолчанию зависит от версии
 cmd_spa() {
     command -v node >/dev/null 2>&1 || { log "нужен node"; exit 3; }
     for f in "$REPO"/web/static/*.js; do node --check "$f" || exit 1; done
     log "node --check: ОК"
-    exec node --test tests/spa/*.test.mjs 2>&1 | tail -5
+    exec node --test --test-reporter=tap tests/spa/*.test.mjs 2>&1 | tail -5
 }
 
 cmd_shell() {

@@ -40,7 +40,7 @@ def test_index_loads_ui_layer():
 
 def test_ui_core_node_tests():
     """node --test по tests/spa/*.test.mjs — чистые функции и DOM-слой SPA."""
-    r = _node("--test", *SPA_TESTS)
+    r = _node("--test", "--test-reporter=tap", *SPA_TESTS)
     assert r.returncode == 0, (
         f"node --test упал (rc={r.returncode}):\n{r.stdout}\n{r.stderr}")
 
