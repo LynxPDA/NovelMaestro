@@ -57,12 +57,31 @@ def test_bootstrap_idempotent_when_env_exists(fake_repo, monkeypatch):
     assert (RUN.REPO / ".env").read_text(encoding="utf-8") == "x"
 
 
-def test_bootstrap_migrates_legacy_projects_env(fake_repo, capsys):
-    """Старый projects/.env переносится в корень при первом запуске."""
+def test_bootstrap_respects_web_env_file(fake_repo, tmp_path, monkeypatch):
+    """WEB_ENV_FILE — тот же путь, что у сервера: шаблон идёт туда, а не в репо."""
+    shared = tmp_path / "shared" / ".env"
+    monkeypatch.setenv("WEB_ENV_FILE", str(shared))
+    RUN.bootstrap_projects()
+    assert shared.is_file()
+    assert "HOST=x" in shared.read_text(encoding="utf-8")
+    # корневой .env репо при этом не появляется: конфиг один
+    assert not (RUN.REPO / ".env").exists()
+
+
+def test_bootstrap_never_moves_projects_env(fake_repo, monkeypatch, capsys):
+    """projects/.env без WEB_ENV_FILE остаётся на месте.
+
+    В Docker это системный конфиг (WEB_ENV_FILE=/app/projects/.env), и перенос
+    его в корень кода увёз бы настройки в слой контейнера — они пропали бы
+    при следующем обновлении образа.
+    """
+    monkeypatch.delenv("WEB_ENV_FILE", raising=False)
     (RUN.PROJECTS / ".env").write_text("HOST=legacy\n", encoding="utf-8")
     RUN.bootstrap_projects()
-    assert not (RUN.PROJECTS / ".env").exists()
-    assert (RUN.REPO / ".env").read_text(encoding="utf-8") == "HOST=legacy\n"
+    assert (RUN.PROJECTS / ".env").read_text(
+        encoding="utf-8") == "HOST=legacy\n"
+    assert not (RUN.REPO / ".env").exists()
+    assert "перенесён" not in capsys.readouterr().out
 
 
 # ──────────────────────────────────────────────────────────────────────

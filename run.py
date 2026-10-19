@@ -14,7 +14,8 @@ run.py — запуск NovelMaestro (web-first).
 
 Менеджмент проектов (создание, перенос, переименование, дублирование,
 удаление) — в web-интерфейсе; общая логика — core/projects.py.
-Конфиг — системный корневой .env (см. templates/.env.example).
+Конфиг — системный корневой .env (см. templates/.env.example); путь
+решает WEB_ENV_FILE (в Docker — projects/.env в постоянном томе).
 stdlib-only.
 """
 from __future__ import annotations
@@ -31,6 +32,7 @@ if str(REPO) not in sys.path:
 
 from core import projects as prj          # noqa: E402
 from core import settings as core_settings  # noqa: E402
+from core.common import system_env_file   # noqa: E402
 
 PROJECTS = REPO / "projects"
 
@@ -53,28 +55,26 @@ def _force_utf8_io() -> None:
 
 
 def bootstrap_projects() -> None:
-    """При запуске: каркас projects/ (разделы) и системный корневой
-    .env из шаблона; старый projects/.env переносится в корень."""
+    """При запуске: каркас projects/ (разделы) и системный .env из шаблона.
+
+    Путь конфига тот же, что у сервера (WEB_ENV_FILE → корневой .env → cwd):
+    в Docker это projects/.env в постоянном томе, и подменять его корневой
+    нельзя — правки «Настроек» пропали бы при следующем обновлении образа.
+    """
     created = prj.ensure_projects_root(PROJECTS)
     if created:
         print(f"  ✔ Созданы разделы: {', '.join(created)}")
-    env_dst = REPO / ".env"
+    env_dst = Path(system_env_file() or (REPO / ".env"))
     env_tpl = REPO / "templates" / ".env.example"
-# миграция старых установок: .env в корне репо отсутствует только там,
-# где конфиг ещё лежит по-старому (projects/.env) — переносим один раз
-    legacy = PROJECTS / ".env"
-    if not env_dst.exists() and legacy.is_file():
-        try:
-            shutil.move(str(legacy), str(env_dst))
-        except OSError as exc:
-            print(f"  ⚠ Не удалось перенести projects/.env: {exc}")
-        else:
-            print(f"  ✔ Системный .env перенесён: projects/.env → {env_dst.name}")
     if not env_dst.exists() and env_tpl.is_file():
         print("  ℹ Системный .env не найден — копирую шаблон "
               "templates/.env.example (единый конфиг сервера и LLM).")
+        env_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(env_tpl, env_dst)
-        print(f"  ✔ Скопировано: {env_dst.name}")
+        print(f"  ✔ Скопировано: {env_dst}")
+    if not env_dst.is_file():
+        print("  ⚠ Системный .env не создан: шаблон templates/.env.example "
+              "не найден — конфиг берётся из встроенных дефолтов")
 
 
 def run_web_backend(args: argparse.Namespace) -> None:
