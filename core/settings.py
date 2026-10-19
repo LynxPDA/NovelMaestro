@@ -219,7 +219,6 @@ GROUPS: tuple = (
             _s("STREAM_TIMEOUT", "Таймаут стрима, СЕК", "number", "900", min=0, help="пауза между строками SSE"),
             _s("MAX_RETRIES", "Повторы при ошибке LLM", "number", "3", min=0, help="ретраи только по 408/425/429/5xx"),
             _s("MAX_TOKENS", "Предел ответа, ТОКЕНЫ", "number", "65536", min=1, help="max_tokens в payload (не расчёт)"),
-            _s("RETRY_EMPTY", "Повторных запросов при отсутствии правок (0 = нет)", "number", "0", min=0, help="0 = нет; стадия повторяет запрос, пока модель не вернёт ни одной правки; последний ответ берётся как есть"),
         ),
         _block("llm_run", "Температура и параллельность",
             _s("TEMPERATURE", "Температура (пусто = сервер)", "text", ""),
@@ -346,6 +345,9 @@ GROUPS: tuple = (
             _s("NER_CHECK_SKIP_LOCKED", "Не проверять зафиксированные", "bool", True,
                 help="замок на термине: зафиксированная запись не уходит на проверку LLM и не правится патчами (см. вкладку «Глоссарий»); снято — зафиксированные проверяются как раньше, но правки по-прежнему применяются только к незафиксированным",
                 stage="ner_check"),
+            _s("NER_CHECK_RETRY_EMPTY", "Повторных запросов без правок (0 = нет)", "number", "0", min=0,
+                help="0 = нет; ответ, где правок нет (пустой JSON-массив [] или ответ без записей), не ошибка, а повод спросить ещё раз: батч или RAG-термин повторяется до N раз, последний ответ берётся как есть. Осторожно: повторы умножаются на число батчей и терминов — книга в 600 глав при 5 повторах стоит до 6× запросов",
+                stage="ner_check"),
             _s("NER_CHECK_RAG_TERMS", "RAG: список терминов", "textarea", "", help="Каждый термин с новой строки; тип/перевод подтягиваются из ner.json; нужен режим «rag»", stage="ner_check", when=(("passes", ("rag",)),)),
             _s("NER_CHECK_RAG_SOURCE_TYPE", "RAG: тип исходного файла", "select", "", options=("", "chapter", "translated", "redacted", "polished"),
                 help="Из какого файла главы собирается текст книги для FTS5-поиска (сборка в память, файл не пишется)", stage="ner_check", when=(("passes", ("rag",)),)),
@@ -377,6 +379,9 @@ GROUPS: tuple = (
             _s("TRANSLATE_CHECK_LLM_MAX_FIXES_PER_CHAPTER", "Лимит правок на главу, ШТ (0 = нет)", "number", "0", stage="translate_check_llm", help="лишние правки отсекаются по порядку выдачи"),
             _s("TRANSLATE_CHECK_LLM_MIN_FIX_LENGTH", "Мин. длина правки, СИМВОЛЫ (0 = нет)", "number", "0", stage="translate_check_llm", help="короче — правка отбрасывается"),
             _s("TRANSLATE_CHECK_LLM_MAX_CHANGED_CHARS", "Макс. изменённых символов, СИМВОЛЫ (0 = нет)", "number", "0", stage="translate_check_llm", help="длиннее — правка отбрасывается"),
+            _s("TRANSLATE_CHECK_LLM_RETRY_EMPTY", "Повторных запросов без правок (0 = нет)", "number", "0", min=0,
+                help="0 = нет; ответ, где правок нет (пустой JSON-массив [] или ответ без ошибок), не ошибка, а повод спросить ещё раз: пакет глав повторяется до N раз, последний ответ берётся как есть; при 0 честный ответ «ошибок нет» не оплачивается повторными запросами",
+                stage="translate_check_llm"),
         ),
         _block("translate_quality", STAGE_TITLES["translate_quality"],
             _s("TRANSLATE_QUALITY_TYPE", "Тип файлов глав", "select", "polished", options=("chapter", "translated", "redacted", "polished"),
@@ -534,7 +539,7 @@ SERVER_BLOCKS: tuple = ("server_net", "server_run")
 #: перекрывался таймаутом соединения
 LLM_STAGE_FIELDS: tuple = ("host", "model", "api_key", "temperature", "timeout",
                            "stream_timeout", "max_retries", "max_tokens",
-                           "retry_empty", "threads")
+                           "threads")
 #: имена LLM-полей: в формах стадий их нет, они приходят из профиля
 LLM_FORM_NAMES = frozenset(LLM_STAGE_FIELDS) | {"retries", "jobs"}
 #: старые имена полей стадии → общая настройка

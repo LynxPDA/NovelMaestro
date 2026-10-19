@@ -344,6 +344,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "65536; промпт не входит).")
     p.add_argument("-c", "--count-threshold", type=int, default=0,
                    help="Порог count: записи с count > X (по умолчанию: 0).")
+    p.add_argument("--retry_empty", type=int, default=0, metavar="N",
+                   help="Повторов без правок, ШТ (0 = нет; пусто = "
+                        "NER_CHECK_RETRY_EMPTY). Ответ без правок — не "
+                        "ошибка, а повод спросить ещё раз: повторы — на "
+                        "каждый батч и RAG-термин.")
     p.add_argument("--skip_locked", "--skip-locked",
                    action=argparse.BooleanOptionalAction,
                    help="не отправлять на проверку зафиксированные (с замком) "
@@ -531,8 +536,9 @@ def run_batch(task, prompt_tpl, args, stage):
     ошибке LLM/парсинга. Diff с ner.json — в do_check (нужен
     полный items_by_term).
 
-    Пустой ответ — не ошибка, а общий RETRY_EMPTY: тот же запрос
-    повторяется ещё раз N раз, пока правки не придут.
+    Ответ без правок (в т.ч. пустой массив `[]`) — не ошибка, а повод
+    спросить ещё раз: `NER_CHECK_RETRY_EMPTY` дополнительных повторов
+    (0 — выключено, ответ берётся как есть).
     """
     logger = stage.logger
     title, batch = task
@@ -543,6 +549,7 @@ def run_batch(task, prompt_tpl, args, stage):
                 f"{estimate_tokens(user_msg)} токенов запроса (оценка)")
     text, err = complete_until(
         stage, user_msg, label=f"ner_check {title}",
+        attempts=args.retry_empty,
         accept=lambda raw: bool(parse_rag_suggestions(raw, logger, fields)))
     if err:
         logger.error(f"  ❌ LLM: {err}")
@@ -680,6 +687,7 @@ def _rag_query(term, user_msg, args, stage, items_by_term, fields):
                 f"(бюджет на термин {args.rag_budget})")
     text_out, err = complete_until(
         stage, user_msg, label=f"ner_check rag {term}",
+        attempts=args.retry_empty,
         accept=lambda raw: bool(parse_rag_suggestions(raw, logger, fields)))
     if err:
         logger.error(f"  ❌ {term}: LLM: {err}")
@@ -906,6 +914,9 @@ def do_check(args, stage) -> int:
     if not items:
         sys.exit("❌ Нет записей после фильтрации.")
     logger.info(f"📊 После фильтрации: {len(items)} записей.")
+    if args.retry_empty:
+        logger.info(f"🔁 Повторов без правок: {args.retry_empty} "
+                    f"(на каждый батч и RAG-термин)")
     # эталон для diff: ВСЕ записи ner.json (не только отфильтрованные)
     items_by_term = {unicodedata.normalize("NFC", i.get("term", "")): i
                      for i in data}
@@ -998,7 +1009,7 @@ def do_check(args, stage) -> int:
                           "request_budget": args.request_budget,
                           "fields": args.fields,
                           "threads": stage.profile.threads,
-                          "retry_empty": stage.profile.retry_empty}):
+                          "retry_empty": args.retry_empty}):
         return 0
 
     # ── параллельное выполнение: threads потоков на ВСЕ батчи

@@ -522,15 +522,18 @@ def render_prompt(prompt_tpl: str, batch_text: str) -> str:
     return f"{prompt_tpl}\n\n{batch_text}"
 
 
-def process_batch(batch, prompt, stage):
-    """Один батч — один запрос (с общими повторами при отсутствии правок).
-    Повторы считает core.stage.complete_until по общему
-    RETRY_EMPTY — своего числа у стадии больше нет."""
+def process_batch(batch, prompt, stage, retry_empty=0):
+    """Один батч — один запрос (с повторами, когда правок не нашлось).
+
+    Повторы считает core.stage.complete_until по числу стадии
+    (TRANSLATE_CHECK_LLM_RETRY_EMPTY): ответ без ошибок, в т.ч. пустой
+    массив `[]`, — повод спросить ещё раз; 0 — повторов нет."""
     logger = stage.logger
     text = compose_batch_text(batch)
 
     raw, _err = complete_until(
         stage, render_prompt(prompt, text), label="[check]",
+        attempts=retry_empty,
         accept=lambda raw: bool(parse_llm_json(raw, logger)),
         note="пустой/нераспарсенный ответ")
     if raw is None:
@@ -776,6 +779,10 @@ def build_parser():
                     help="Тип файлов проверяемых глав.")
     ap.add_argument("--request_budget", type=int, default=25000,
                     help="Бюджет запроса, ТОКЕНЫ (оценка; промпт — запас 200).")
+    ap.add_argument("--retry_empty", type=int, default=0, metavar="N",
+                    help="Повторов без правок, ШТ (0 = нет; пусто = "
+                         "TRANSLATE_CHECK_LLM_RETRY_EMPTY). Ответ без ошибок "
+                         "— не ошибка, а повод спросить ещё раз.")
     ap.add_argument("--prompt_file", default=DEFAULT_PROMPT_FILE,
                     help="Внешний промпт: тег <prompt_translate_check>.")
     # Ограничители правок: 0 — выключен (метрики разные: ШТ, СИМВОЛЫ, СИМВОЛЫ)
@@ -882,7 +889,7 @@ def do_check(args, stage) -> int:
         f"Главы {args.start}–{args.end} | {args.type} | "
         f"budget={args.request_budget} | "
         f"threads={stage.profile.threads} | "
-        f"retry_empty={stage.profile.retry_empty}")
+        f"retry_empty={args.retry_empty}")
 
     prompt = load_prompt(args.prompt_file, logger)
     logger.info(f"Лог: {stage.log_path}")
@@ -902,7 +909,7 @@ def do_check(args, stage) -> int:
                     meta={"batches": len(batches),
                           "request_budget": args.request_budget,
                           "threads": stage.profile.threads,
-                          "retry_empty": stage.profile.retry_empty,
+                          "retry_empty": args.retry_empty,
                           "first_batch_chapters": sorted(
                               {c[0] for c in batches[0]}),
                           "prompt_file": args.prompt_file or ""}):
@@ -915,7 +922,7 @@ def do_check(args, stage) -> int:
               "начало": args.start, "конец": args.end,
               "бюджет запроса": args.request_budget,
               "потоки": stage.profile.threads,
-              "повторов при отсутствии правок": stage.profile.retry_empty,
+              "повторов при отсутствии правок": args.retry_empty,
               "промпт файл": args.prompt_file}
     meta, existing = load_review_file(args.review, logger)
     created = (meta or {}).get("created") \
@@ -948,7 +955,7 @@ def do_check(args, stage) -> int:
             bc[c[0]] = bc.get(c[0], "") + ("\n" if c[0] in bc else "") + c[3]
         logger.info(f"Пакет {idx + 1}/{len(batches)}: гл. "
                     f"{nums[0]}–{nums[-1]}")
-        errs = process_batch(batch, prompt, stage)
+        errs = process_batch(batch, prompt, stage, args.retry_empty)
         if errs is None:
             with lock:
                 failed_cnt[0] += 1

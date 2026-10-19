@@ -58,7 +58,6 @@ _LLM_FLAGS: tuple = (("host", "--host"), ("model", "--model"),
                      ("stream_timeout", "--stream_timeout"),
                      ("max_retries", "--max_retries"),
                      ("max_tokens", "--max_tokens"),
-                     ("retry_empty", "--retry_empty"),
                      ("threads", "--threads"))
 
 
@@ -355,6 +354,9 @@ def build_ner_check(form: dict, ctx: dict) -> list[str]:
                        "--no-skip_locked")
     if form.get("fields"):
         argv += ["--fields", str(form["fields"])]
+    # повторы без правок — число СВОЁ у стадии (нер_check), не из профиля
+    if form.get("retry_empty") not in (None, ""):
+        argv += ["--retry_empty", str(form["retry_empty"])]
     argv += _llm_argv(form, ctx, "ner_check")
     return argv
 
@@ -389,6 +391,9 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
                        ("max_changed_chars", "--max_changed_chars")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
+    # повторы без правок — число СВОЁ у стадии (проверка перевода), не из профиля
+    if form.get("retry_empty") not in (None, ""):
+        argv += ["--retry_empty", str(form["retry_empty"])]
     argv += _llm_argv(form, ctx, "translate_check_llm")
     return argv
 

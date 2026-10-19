@@ -1559,6 +1559,14 @@ def test_build_ner_check_flags():
     assert "--fields" not in argv2
 
 
+def test_build_ner_check_retry_empty():
+    """Повторы без правок — стадийная настройка, а не LLM-поле профиля."""
+    argv = build_command("ner_check", {"retry_empty": "3"}, {})
+    assert argv[argv.index("--retry_empty") + 1] == "3"
+    # пусто — флага нет: скрипт берёт дефолт реестра (0 = повторов нет)
+    assert "--retry_empty" not in build_command("ner_check", {}, {})
+
+
 def test_ner_check_no_apply_fields():
     """auto_apply/no_bak убраны из формы Запусков (применение —
     только в «Проверках»); build больше не шлёт --auto-apply/--no-bak."""
@@ -1703,6 +1711,13 @@ def test_build_translate_check_llm_flags():
     # рассуждения — не поле формы: режим один на весь конвейер (см. stages)
     assert not [a for a in argv if "reason" in a]
     assert "--threads" in argv and "--max_fixes_per_chapter" in argv
+
+
+def test_build_translate_check_llm_retry_empty():
+    """Повторы без правок — своё число у стадии проверки перевода."""
+    argv = build_command("translate_check_llm", {"retry_empty": "2"}, {})
+    assert argv[argv.index("--retry_empty") + 1] == "2"
+    assert "--retry_empty" not in build_command("translate_check_llm", {}, {})
 
 
 def test_build_wiki_flags():

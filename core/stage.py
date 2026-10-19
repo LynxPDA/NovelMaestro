@@ -44,8 +44,6 @@ DEFAULT_TIMEOUT = int(cfg.BY_KEY["TIMEOUT"].default)
 DEFAULT_STREAM_TIMEOUT = int(cfg.BY_KEY["STREAM_TIMEOUT"].default)
 DEFAULT_MAX_RETRIES = int(cfg.BY_KEY["MAX_RETRIES"].default)
 DEFAULT_MAX_TOKENS = int(cfg.BY_KEY["MAX_TOKENS"].default)
-#: доп. повторы, когда правок не найдено (было: своё число у каждой стадии)
-DEFAULT_RETRY_EMPTY = int(cfg.BY_KEY["RETRY_EMPTY"].default)
 #: потоков на весь конвейер (была: 1 у ner_check, 4 у остальных)
 DEFAULT_THREADS = int(cfg.BY_KEY["THREADS"].default)
 #: верхняя граница потоков — то же число, что у поля формы (max)
@@ -139,11 +137,6 @@ def add_llm_args(parser: argparse.ArgumentParser, *,
                        help="Серверный предел ответа, ТОКЕНЫ (пусто = общий "
                             f"MAX_TOKENS, встроенный "
                             f"{int(DEFAULT_MAX_TOKENS)}).")
-    group.add_argument(*flags("retry_empty", "--retry_empty"), type=int,
-                       default=None, metavar="N",
-                       help="Повторных запросов при отсутствии правок "
-                            f"(0 = нет; пусто = общий RETRY_EMPTY, встроенный "
-                            f"{int(DEFAULT_RETRY_EMPTY)}).")
     group.add_argument(*flags("threads", "--threads"), type=int, default=None,
                        metavar="N",
                        help=f"Потоков (1–{DEFAULT_MAX_THREADS}): параллельные "
@@ -170,9 +163,6 @@ class LlmProfile:
     timeout: int = DEFAULT_TIMEOUT
     stream_timeout: int = DEFAULT_STREAM_TIMEOUT
     max_retries: int = DEFAULT_MAX_RETRIES
-    #: доп. повторы запроса, когда правок не найдено (0 = нет): одна настройка
-    #: на конвейер, читают её стадии-проверки (ner_check, translate_check_llm)
-    retry_empty: int = DEFAULT_RETRY_EMPTY
     #: параллельных запросов стадии — тоже одна величина на конвейер
     threads: int = DEFAULT_THREADS
     temperature: float | None = None
@@ -315,7 +305,6 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
         timeout=int(timeout),
         stream_timeout=int(stream_timeout),
         max_retries=int(_pick(args, "max_retries", llm["max_retries"])),
-        retry_empty=int(_pick(args, "retry_empty", llm["retry_empty"] or 0)),
         threads=max(1, min(DEFAULT_MAX_THREADS,
                            int(_pick(args, "threads",
                                      llm["threads"] or DEFAULT_THREADS)))),
@@ -392,20 +381,24 @@ class Stage:
 
 
 def complete_until(stage: Stage, prompt: str, data: str = "", *,
-                   label: str = "", accept=None, attempts: int | None = None,
+                   label: str = "", accept=None, attempts: int = 0,
                    note: str = "правок нет") -> tuple[str | None, str | None]:
     """Запрос стадии с повторами, пока ответ не устроит `accept`.
 
-    Политика повторов на конвейер одна и она не про исключения: максимум
-    `1 + RETRY_EMPTY` запросов, пустой ответ — не ошибка, а повод спросить
-    ещё раз (RETRY_EMPTY один на все стадии, он же в логе запуска).
-    accept(text) → False — правок не найдено; attempts=None — общий RETRY_EMPTY.
-    Последний ответ возвращается как есть: «правок нет» — допустимый результат.
-    Ошибка LLM (text=None) — сразу (её считает stream_chat_completion).
+    Политика повторов одна и она не про исключения: максимум
+    `1 + attempts` запросов. attempts — число ДОПОЛНИТЕЛЬНЫХ повторов, и оно
+    стадийное (`NER_CHECK_RETRY_EMPTY` / `TRANSLATE_CHECK_LLM_RETRY_EMPTY`):
+    цена повтора у проверки глоссария (батч, а в RAG — каждый термин) и у
+    проверки перевода (пакет глав) разная, общее число здесь было бы чужим.
+
+    `accept(text)` → False — правок не найдено: пустой ответ, пустой список
+    `[]` и нераспарсенный ответ равны «ничего не нашлось» и дают повод
+    спросить ещё раз. Последний ответ возвращается как есть: «правок нет» —
+    допустимый результат. Ошибка LLM (text=None) — сразу (её считает
+    stream_chat_completion).
     """
     check = accept or (lambda text: bool((text or "").strip()))
-    total = 1 + (int(stage.profile.retry_empty) if attempts is None
-                 else max(0, int(attempts)))
+    total = 1 + max(0, int(attempts or 0))
     text = None
     err = None
     for att in range(total):

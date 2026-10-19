@@ -30,11 +30,11 @@ ALIAS = {"retries": "max_retries", "jobs": "threads"}
 PROFILE = "profile"
 LLM_FIELDS = {"host", "model", "api_key", "temperature", "timeout",
               "stream_timeout", "max_retries", "retries", "max_tokens",
-              "threads", "jobs", "retry_empty"}
+              "threads", "jobs"}
 # то, что осталось параметрами запуска (не настройки): сверяем полноту
 LLM_NAMES = {
     "host", "api_key", "model", "timeout", "stream_timeout", "max_retries",
-    "max_tokens", "retry_empty", "temperature", "threads",
+    "max_tokens", "temperature", "threads",
     "reasoning_mode", "thinking_profile", "reasoning_effort", "thinking_budget",
     "llm_extra_body_json",
     # выбор провайдера — тоже общие LLM-ключи: маршрут относится к модели
@@ -312,7 +312,7 @@ def test_llm_stage_fields_are_uniform():
     # имена только канонические: старые «retries»/«jobs» в формах стадий больше
     # не появляются (они живы только как псевдонимы флагов CLI)
     assert not set(fields) & set(ALIAS), f"устаревшие имена в наборе: {fields}"
-    for name in ("stream_timeout", "max_tokens", "retry_empty", "threads"):
+    for name in ("stream_timeout", "max_tokens", "threads"):
         assert name in fields, f"общее поле {name} выпало из набора стадий"
 
 

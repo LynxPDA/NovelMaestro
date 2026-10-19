@@ -455,25 +455,25 @@ def test_profile_reasoning_extra_body_wins(recorder, monkeypatch):
 # Таймауты, повторы и потоки — один конфиг на конвейер
 # ══════════════════════════════════════════════════════════════════════
 def test_common_numbers_reach_profile(tmp_path, monkeypatch):
-    """Своих дефолтов у стадии нет: STREAM_TIMEOUT, RETRY_EMPTY и THREADS
-    из общего .env доезжают до профиля стадии.
+    """Своих дефолтов у стадии нет: STREAM_TIMEOUT и THREADS из общего .env
+    доезжают до профиля стадии.
 
     Раньше стадия молча везла своё число (у проверки перевода стрим равнялся
     таймауту соединения, потоки отличались от скрипта к скрипту), поэтому
     «изменённый параметр» в логе выглядел чужим.
     """
     for k in ("TIMEOUT", "STREAM_TIMEOUT", "MAX_RETRIES", "MAX_TOKENS",
-              "RETRY_EMPTY", "THREADS", "TEMPERATURE"):
+              "THREADS", "TEMPERATURE"):
         monkeypatch.delenv(k, raising=False)
     env = tmp_path / "nums.env"
     env.write_text("HOST=http://h\nMODEL=m\nTIMEOUT=111\nSTREAM_TIMEOUT=999\n"
-                   "MAX_RETRIES=5\nMAX_TOKENS=4096\nRETRY_EMPTY=2\n"
+                   "MAX_RETRIES=5\nMAX_TOKENS=4096\n"
                    "THREADS=7\nTEMPERATURE=0.1\n",
                    encoding="utf-8")
     prof = resolve(str(env), stage="translate_check_llm")
     assert (prof.timeout, prof.stream_timeout) == (111, 999)
     assert (prof.max_retries, prof.max_tokens) == (5, 4096)
-    assert (prof.retry_empty, prof.threads) == (2, 7)
+    assert prof.threads == 7
     assert prof.temperature == pytest.approx(0.1)
 
 
@@ -552,25 +552,33 @@ def _stage(answers, **prof_kw):
 
 
 def test_complete_until_repeats_until_found(answers):
-    """Пустой результат — не ошибка, а повод спросить ещё раз (1 + RETRY_EMPTY)."""
+    """Пустой результат — не ошибка, а повод спросить ещё раз (1 + attempts)."""
     answers["want"] = [("[]", None), ("[]", None), ('[{"t": 1}]', None)]
-    stage = _stage(answers, retry_empty=3)
-    text, err = st.complete_until(stage, "п", label="[p1]",
+    stage = _stage(answers)
+    text, err = st.complete_until(stage, "п", label="[p1]", attempts=2,
                                   accept=lambda t: bool(json.loads(t)))
     assert text == '[{"t": 1}]' and err is None and answers["calls"] == 3
+
+
+def test_complete_until_zero_means_one_request(answers):
+    """0 повторов — честный ответ «правок нет» не оплачивается вторым запросом."""
+    answers["want"] = [("[]", None)]
+    text, err = st.complete_until(_stage(answers), "п",
+                                  accept=lambda t: bool(json.loads(t)))
+    assert (text, err) == ("[]", None) and answers["calls"] == 1
 
 
 def test_complete_until_last_answer_wins(answers):
     """Повторы кончились — последний ответ берётся как есть."""
     answers["want"] = [("", None), ("", None)]
-    text, err = st.complete_until(_stage(answers, retry_empty=1), "п")
+    text, err = st.complete_until(_stage(answers), "п", attempts=1)
     assert text == "" and err is None and answers["calls"] == 2
 
 
 def test_complete_until_error_returns_immediately(answers):
     """Ошибка LLM — сразу наружу: её считает политика MAX_RETRIES."""
     answers["want"] = [(None, "read timeout")]
-    text, err = st.complete_until(_stage(answers, retry_empty=5), "п")
+    text, err = st.complete_until(_stage(answers), "п", attempts=5)
     assert (text, err) == (None, "read timeout") and answers["calls"] == 1
 
 
