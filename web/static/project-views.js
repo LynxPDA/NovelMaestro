@@ -93,12 +93,17 @@ function projectNavigate(project, view) {
 
 /* eslint-disable-next-line no-unused-vars -- глобал SPA, вызывается из app.js */
 function viewProject(section, name, tab, job) {
-  /* Последнее состояние вкладок книги живёт в браузере одним ключом
-     (nmTab:<раздел>/<книга>): «Редактор» помнит главу и обе панели, «Главы» —
-     тип файлов, «Логи» — папку и открытый файл, «Заметки» и «Промпты» —
-     открытый документ. Раньше это терялось при перезагрузке страницы.
-     Хранилище — предпочтение браузера, не конфиг книги (AGENTS §7) */
-  const pref = UICore.projectPrefs(localStorage, section, name);
+  /* снимок книги; вне загруженного app.js (vm-контекст тестов) — localStorage */
+  const bookStore = () => (typeof bookState === "function"
+    ? bookState(section, name).store : localStorage);
+
+  /* Последнее состояние вкладок книги — в САМОЙ книге (tmp/ui_state):
+     «Редактор» помнит главу и обе панели, «Главы» — тип файлов, «Логи» —
+     папку и открытый файл, «Заметки» и «Промпты» — открытый документ. Это
+     данные книги, а не привычка браузера (AGENTS §7): смена браузера или
+     домена их не теряет. Снимок один на книгу и живёт в app.js
+     (UICore.bookState); здесь — только его хранилище. */
+  const pref = UICore.projectPrefs(bookStore(), section, name);
   const st = {
     view: "files", // tab (третий сегмент роута) может открыть свою вкладку
     path: pref.get("files").path || "",
@@ -155,7 +160,7 @@ function viewProject(section, name, tab, job) {
 
   /* состояние вкладки «Редактор» — одно на проект: повторный рендер вкладки
      не пересоздаёт CodeMirror и не теряет несохранённые правки. Открытое
-     раньше возвращается из localStorage: значащие поля проверяются по месту
+     раньше возвращается из состояния книги: значащие поля проверяются по месту
      (глава сверяется со списком, тип файла — с вариантами главы) */
   function editorState() {
     if (!st.editor) {
@@ -323,7 +328,7 @@ function viewProject(section, name, tab, job) {
      каталог — копировать и переименовать. Скачивание, перенос и удаление
      применяются к выделке и живут в панели выделения: пока что-то выделено,
      она заменяет кнопки тулбара. Выделение — состояние вкладки (не
-     localStorage): снимается при смене папки и после операции; чекбокс
+     истории): снимается при смене папки и после операции; чекбокс
      строки перерисовывает только панель — список и его страница от клика
      выделения не сбрасываются. */
   async function filesView() {
@@ -1922,7 +1927,7 @@ function viewProject(section, name, tab, job) {
     const DEFAULT_COLS = ["term", "type", "translation"];
     let cols = [...DEFAULT_COLS];
     try {
-      const raw = localStorage.getItem(LS_KEY);
+      const raw = bookStore().getItem(LS_KEY);
       if (raw != null) {
         const saved = JSON.parse(raw);
         if (saved === null)
@@ -2007,15 +2012,15 @@ function viewProject(section, name, tab, job) {
     const LS_LOCK_KEY = `nerLock:${section}/${name}`;
     let lockOnly = false; // показать только зафиксированные термины
     try {
-      lockOnly = localStorage.getItem(LS_LOCK_KEY) === "1";
+      lockOnly = bookStore().getItem(LS_LOCK_KEY) === "1";
     } catch {
-      /* localStorage недоступен (приватный режим) — не критично */
+      /* хранилище недоступно — не критично */
     }
     // null = искать по отображаемым столбцам (дефолт), [] = ни одного
     let searchFields = null;
     let typeFilter = null; // null = все типы, [] = ни одного
     try {
-      const saved = JSON.parse(localStorage.getItem(LS_SEARCH_KEY) || "null");
+      const saved = JSON.parse(bookStore().getItem(LS_SEARCH_KEY) || "null");
       if (Array.isArray(saved)) {
         if (saved.length) {
           const filtered = saved.filter((k) => knownKeys.has(k));
@@ -2032,7 +2037,7 @@ function viewProject(section, name, tab, job) {
     }
     const typeNames = () => Object.keys(data.by_type || {});
     try {
-      const saved = JSON.parse(localStorage.getItem(LS_TYPES_KEY) || "null");
+      const saved = JSON.parse(bookStore().getItem(LS_TYPES_KEY) || "null");
       if (Array.isArray(saved)) {
         if (saved.length) {
           const all = typeNames();
@@ -2049,7 +2054,7 @@ function viewProject(section, name, tab, job) {
 
     /* из «Поиска» вкладка открывается со всеми столбцами: поиск идёт по
        отображаемым ключам, а отображается все ключи записи — то есть ищется
-       по-настоящему по всем полям. Выбор пользователя в localStorage не
+       по-настоящему по всем полям. Выбор пользователя в состоянии книги не
        перезаписываем: он вернётся при обычном заходе на вкладку */
     if (st.nerAll) {
       cols = null;
@@ -2070,34 +2075,34 @@ function viewProject(section, name, tab, job) {
     }
     function saveCols() {
       try {
-        localStorage.setItem(LS_KEY, JSON.stringify(cols));
+        bookStore().setItem(LS_KEY, JSON.stringify(cols));
       } catch {
-        /* localStorage недоступен (приватный режим) — не критично */
+        /* хранилище недоступно — не критично */
       }
     }
     function saveSearchFields() {
       try {
-        localStorage.setItem(LS_SEARCH_KEY, JSON.stringify(searchFields));
+        bookStore().setItem(LS_SEARCH_KEY, JSON.stringify(searchFields));
       } catch {
-        /* localStorage недоступен (приватный режим) — не критично */
+        /* хранилище недоступно — не критично */
       }
     }
     function saveTypeFilter() {
       try {
-        localStorage.setItem(LS_TYPES_KEY, JSON.stringify(typeFilter));
+        bookStore().setItem(LS_TYPES_KEY, JSON.stringify(typeFilter));
       } catch {
-        /* localStorage недоступен (приватный режим) — не критично */
+        /* хранилище недоступно — не критично */
       }
     }
     function saveLockOnly() {
       try {
-        localStorage.setItem(LS_LOCK_KEY, lockOnly ? "1" : "0");
+        bookStore().setItem(LS_LOCK_KEY, lockOnly ? "1" : "0");
       } catch {
-        /* localStorage недоступен (приватный режим) — не критично */
+        /* хранилище недоступно — не критично */
       }
     }
     /* фильтр «только зафиксированные»: чекбокс в панели, состояние — в
-       localStorage рядом со столбцами и типами */
+       снимок книги рядом со столбцами и типами */
     const lockCb = h("input", {
       type: "checkbox",
       class: "ner-lock-cb",
@@ -3480,7 +3485,7 @@ function viewProject(section, name, tab, job) {
       return card;
     }
     /* под-вкладки «Проверок»: каждая проверка — своя вкладка; выбор
-       запоминается в localStorage (UI-предпочтения — на клиенте) */
+       запоминается в состоянии книги (по книге, а не по интерфейсу) */
     const REVIEW_TABS = [
       { key: "ner", label: "Глоссарий (LLM)" },
       { key: "tcheck", label: "Перевод" },
@@ -3768,16 +3773,16 @@ function viewProject(section, name, tab, job) {
     const LS_KEY = `search:${section}/${name}`;
     let prefs = {};
     try {
-      prefs = JSON.parse(localStorage.getItem(LS_KEY) || "{}") || {};
+      prefs = JSON.parse(bookStore().getItem(LS_KEY) || "{}") || {};
     } catch {
       prefs = {};
     }
     function savePrefs(patch) {
       Object.assign(prefs, patch);
       try {
-        localStorage.setItem(LS_KEY, JSON.stringify(prefs));
+        bookStore().setItem(LS_KEY, JSON.stringify(prefs));
       } catch {
-        /* localStorage недоступен (приватный режим) — не критично */
+        /* хранилище недоступно — не критично */
       }
     }
 

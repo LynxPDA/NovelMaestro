@@ -265,6 +265,50 @@ Object.assign(UIC.docs, {
   fit: fitPreviewFrame,
 });
 
+/* ── состояние книги: снимок на сервере (tmp/ui_state) ─────────────────
+ * Один снимок на открытую книгу: книга одна, а состояние у каждой своё.
+ * Живёт в app.js, потому что здесь fetch, X-Requested-With и знание адреса
+ * проекта; вьюхи берут его отсюда — window.bookState(). Загрузка идёт при
+ * смене книги (viewProject), записи копятся в снимке и уходят пачкой после
+ * паузы ввода. Пока ответа нет, снимок читает localStorage: старая память
+ * браузера работает как раньше, а первый заход после обновления поднимает её
+ * ключи в файл книги.
+ *
+ * Уход со страницы дописывает хвост: вкладку переключают и закрывают сразу,
+ * а потерять последнюю правку формы из-за этого нельзя. */
+let bookStateCarrier = null;
+let bookStateKey = "";
+
+function bookState(section, name) {
+  const key = section && name ? `${section}/${name}` : "";
+  if (bookStateCarrier && bookStateKey === key) return bookStateCarrier;
+  bookStateKey = key;
+  bookStateCarrier = UICore.bookState(key
+    ? {
+      load: () => api(`/projects/${encodeURIComponent(section)}/` +
+        `${encodeURIComponent(name)}/ui-state`),
+      save: (data) => api(
+        `/projects/${encodeURIComponent(section)}/` +
+        `${encodeURIComponent(name)}/ui-state`,
+        { method: "PUT", body: { data } }),
+    }
+    : null, section || "", name || "");
+  if (key) bookStateCarrier.load();
+  return bookStateCarrier;
+}
+window.bookState = bookState;
+
+/* уход со страницы: хвост состояния дописывается, а не теряется */
+window.addEventListener("pagehide", () => {
+  if (bookStateCarrier) bookStateCarrier.flush();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && bookStateCarrier) {
+    bookStateCarrier.flush();
+  }
+});
+
 async function api(path, opts = {}) {
   const headers = { "X-Requested-With": "fetch" };
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";

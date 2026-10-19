@@ -231,9 +231,24 @@ globalThis.localStorage = (() => {
     getItem: (k) => (m.has(k) ? m.get(k) : null),
     setItem: (k, v) => m.set(String(k), String(v)),
     removeItem: (k) => m.delete(k),
-    clear: () => m.clear(),
+    clear: () => {
+      m.clear();
+      if (globalThis.__books) globalThis.__books.clear(); // снимок — часть памяти
+    },
   };
 })();
+/* снимок состояния книги для тестов: localStorage в роли сервера (записи
+   видны сразу), без сети — так же, как у вкладки до появления снимка */
+globalThis.__bookState = (section, name) => {
+  const key = `${section}/${name}`;
+  if (!globalThis.__books) globalThis.__books = new Map();
+  if (!globalThis.__books.has(key)) {
+    const carrier = UICore.bookState(null, section, name);
+    carrier.load();
+    globalThis.__books.set(key, carrier);
+  }
+  return globalThis.__books.get(key);
+};
 globalThis.confirm = () => true;
 globalThis.prompt = () => "";
 globalThis.location = { hash: "" };
@@ -504,6 +519,10 @@ const sandbox = {
   document: globalThis.document,
   window: globalThis.window,
   localStorage: globalThis.localStorage,
+  /* состояние книги — тот же снимок, что в браузере, но с localStorage в
+     роли запасного пути: тесты видят ключи (`nmTab:…`, `runVals:…`) там же,
+     где их видели раньше, и могут их чистить */
+  bookState: (section, name) => globalThis.__bookState(section, name),
   Node: El,
   DOMParser: globalThis.DOMParser,
   CustomEvent: globalThis.CustomEvent,
@@ -580,7 +599,9 @@ const renderProject = sandbox.viewProject;
    готовят сами — их не трогаем). reopenProject — повторное открытие БЕЗ
    очистки: так и проверяется, что вкладка помнить начала */
 function viewProject(section, name, ...rest) {
+  if (globalThis.__books) globalThis.__books.delete(`${section}/${name}`);
   globalThis.localStorage.removeItem(`nmTab:${section}/${name}`);
+  globalThis.localStorage.removeItem(`nmStateMigrated:${section}/${name}`);
   return renderProject(section, name, ...rest);
 }
 const reopenProject = renderProject;

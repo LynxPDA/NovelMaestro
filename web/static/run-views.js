@@ -33,6 +33,14 @@
 // видел использование
 window.viewRun = function viewRun(section, name, attachJobId) {
 
+  /* Значения форм стадий, чипсы и профиль LLM — состояние КНИГИ
+     (tmp/ui_state), а не браузера: смена браузера или домена не должна
+     терять «чем и с какого сервера переводим эту книгу». Снимок один на
+     книгу и живёт в app.js (UICore.bookState); ключи — те же, что были в
+     localStorage, поэтому чтения и записи ниже не изменились. */
+  const store = typeof bookState === "function"
+    ? bookState(section, name).store : localStorage;
+
   const st = {
     stage: null, // выбранная стадия: {key, title, script, spec}
     options: null, // динамические опции {chapters, source, prompts, root}
@@ -43,7 +51,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     progress: null, // последнее событие прогресса {label, done, total}
     lastLog: {}, // стадия → последний завершённый запуск (обещание данных)
     gen: 0, // поколение отрисовки — гасит гонки двух render()
-    values: {}, // значения формы по стадиям (рабочее состояние браузера)
+    values: {}, // значения формы по стадиям (рабочее состояние книги)
     // значения формы сразу после инициализации (с автоподхватом диапазона
     // глав и prompt_file) — эталон, к которому возвращает «Сбросить настройки»
     baseline: {},
@@ -195,9 +203,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   function profileStored(key, options) {
     let saved = "";
     try {
-      saved = localStorage.getItem(profileKey(key)) || "";
+      saved = store.getItem(profileKey(key)) || "";
     } catch {
-      /* нет localStorage — выбор живёт до перезагрузки */
+      /* хранилище недоступно — выбор живёт до перезагрузки */
     }
     const list = options && options.length ? options : [PROFILE_GENERAL];
     return list.includes(saved) ? saved : list[0];
@@ -205,9 +213,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
 
   function profileRemember(key, id) {
     try {
-      localStorage.setItem(profileKey(key), id);
+      store.setItem(profileKey(key), id);
     } catch {
-      /* нет localStorage — и нечего сохранять */
+      /* хранилище недоступно — и нечего сохранять */
     }
   }
 
@@ -495,11 +503,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return panel;
   }
 
-  // ── автосохранение значений формы (localStorage, по проекту+стадии) ──
-  // Значения запусков — рабочее состояние браузера: собственного .env у книги
-  // нет, а в общем конфиге им делать нечего (диапазон глав одной книги не
-  // должен становиться настройкой всех книг). Кнопки «Сохранить» в форме нет:
-  // поле изменили — через паузу ввода значения уходят в память браузера, о чём
+  // ── автосохранение значений формы (состояние книги, по стадии) ──
+  // Значения запусков — состояние КНИГИ (tmp/ui_state): своего .env у неё нет, а в
+  // общем конфиге им делать нечего (диапазон глав одной книги не должен
+  // становиться настройкой всех книг). Кнопки «Сохранить» в форме нет: поле
+  // изменили — через паузу ввода значения уходят в снимок книги и на диск, о чём
   // говорит подпись в шапке панели. Храним только изменённые поля, остальное
   // приходит из реестра; «Сбросить настройки» возвращает значения конфига.
   const RUN_SAVE_DELAY = 500; // мС тишины после последнего изменения поля
@@ -516,16 +524,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (!t) return true;
     try {
       if (!t.size) {
-        localStorage.removeItem(runKey(key));
+        store.removeItem(runKey(key));
         return true;
       }
       const vals = st.values[key] || {};
       const data = {};
       for (const n of t) if (vals[n] !== undefined) data[n] = vals[n];
-      localStorage.setItem(runKey(key), JSON.stringify(data));
+      store.setItem(runKey(key), JSON.stringify(data));
       return true;
     } catch {
-      return false; // нет localStorage (приватный режим) — сохранять некуда
+      return false; // хранилище недоступно — сохранять некуда
     }
   }
 
@@ -574,7 +582,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   function runRestore(key, spec, vals) {
     let saved = null;
     try {
-      saved = JSON.parse(localStorage.getItem(runKey(key)) || "null");
+      saved = JSON.parse(store.getItem(runKey(key)) || "null");
     } catch {
       /* повреждённый JSON — значения реестра */
       return;
@@ -645,7 +653,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // эталон «значений конфига» снимается после автоподхвата из ОПЦИЙ
     // КНИГИ (диапазон глав, prompt_file): иначе автозаполненные главы
     // вечно считались бы изменёнными. До восстановления ЛИЧНОЙ памяти
-    // (localStorage): иначе «Сбросить настройки» возвращал бы не значения
+    // (снимка книги): иначе «Сбросить настройки» возвращал бы не значения
     // конфига, а то, что было при прошлом визите (baseline уже включил
     // бы сохранённые значения) — именно поэтому сброс «до предыдущего».
     st.baseline[key] = Object.assign({}, vals);
@@ -664,7 +672,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // ── память выбора чипсов (hidden noenv: types/fields/ner_fields) ──
-  // localStorage per проект+стадия: значения «невидимых» полей,
+  // снимок книги per стадия: значения «невидимых» полей,
   // которые пишет виджет чипсов; терять их при перезагрузке — тихий
   // расхождение «что видно ≠ что уйдёт в запуск»
   function chipKey(key) {
@@ -673,7 +681,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
 
   function chipRestore(key, spec, vals) {
     try {
-      const saved = JSON.parse(localStorage.getItem(chipKey(key)) || "{}");
+      const saved = JSON.parse(store.getItem(chipKey(key)) || "{}");
       if (!saved || typeof saved !== "object") return;
       for (const f of spec.fields || []) {
         if (f.type !== "hidden" || !f.noenv) continue;
@@ -696,7 +704,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (typeof v === "string" && v) data[n] = v;
     }
     try {
-      localStorage.setItem(chipKey(key), JSON.stringify(data));
+      store.setItem(chipKey(key), JSON.stringify(data));
     } catch {
       /* приватный режим браузера — живём без памяти */
     }
@@ -770,10 +778,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         "СБРОСИТЬ",
         () => {
           try {
-            localStorage.removeItem(chipKey(key)); // память чипсов стадии
-            localStorage.removeItem(runKey(key)); // память полей стадии
+            store.removeItem(chipKey(key)); // память чипсов стадии
+            store.removeItem(runKey(key)); // память полей стадии
           } catch {
-            /* нет localStorage — и нечего было чистить */
+            /* хранилище недоступно — и нечего было чистить */
           }
           delete st.values[key]; // значения формы — заново из реестра
           delete st.touched[key];

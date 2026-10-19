@@ -95,7 +95,7 @@ def test_run_views_chips_persistence():
     src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
     assert "function chipRestore(" in src
     assert "chipRestore(key, spec, vals)" in src
-    assert "localStorage.setItem(chipKey(key)" in src
+    assert "store.setItem(chipKey(key)" in src
     # ner_check: дефолт полей, материализованный curFields, — touched
     assert 'st.touched[key].add("fields");' in src
     # форма стадии одна (Простой/Экспертный удалены), кнопка сброса
@@ -110,9 +110,11 @@ def test_run_views_chips_persistence():
 
 
 def test_run_views_values_persistence():
-    """Изменённые поля формы запусков — рабочее состояние браузера: их нет ни в
-    .env книги, ни в argv, поэтому без памяти они молча возвращались к
-    значениям общего конфига после запуска или перезагрузки страницы."""
+    """Изменённые поля формы запусков — состояние КНИГИ (tmp/ui_state): их нет
+    ни в .env книги, ни в argv, поэтому без памяти они молча возвращались к
+    значениям общего конфига после запуска или перезагрузки страницы. Читает и
+    пишет их снимок книги (bookState().store), а не localStorage: смена
+    браузера/домена не должна терять параметры книги."""
     src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
     assert "function runKey(key)" in src
     assert 'return `runVals:${section}/${name}:${key}`' in src
@@ -120,9 +122,15 @@ def test_run_views_values_persistence():
     assert "function runRestore(key, spec, vals)" in src
     # чтение — в initFormValues до чипсов; запись — делегатом формы
     assert "runRestore(key, spec, vals)" in src
-    assert "localStorage.setItem(runKey(key), JSON.stringify(data))" in src
+    assert "store.setItem(runKey(key), JSON.stringify(data))" in src
     # пустое изменение — ключ памяти удаляется, а не оставляется с мусором
-    assert "localStorage.removeItem(runKey(key))" in src
+    assert "store.removeItem(runKey(key))" in src
+    # хранилище — снимок книги (вне загруженного app.js — память браузера)
+    assert "bookState(section, name).store" in src
+    assert 'const store = typeof bookState === "function"' in src
+    assert 'bookState(section, name).store : localStorage;' in src
+    # прямых обращений к localStorage в «Запусках» нет: только через снимок
+    assert "localStorage." not in src
     # профиль стадии — не «изменённое поле»: у него своя память по стадии
     assert "if (f.name === PROFILE_FIELD) continue;" in src
     # запись отложена на паузу ввода и одна на пачку изменений: на каждое
