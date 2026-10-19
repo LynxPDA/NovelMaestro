@@ -24,6 +24,7 @@ from core import search as SRCH  # noqa: E402
 from core import settings as SET  # noqa: E402
 from core import stage as ST_  # noqa: E402
 from core import transport as T  # noqa: E402
+from core import uistate as UIS  # noqa: E402
 from core import update as UPD  # noqa: E402
 
 AGENTS_MD = ROOT / "AGENTS.md"
@@ -110,6 +111,11 @@ UPDATE_API = ["UpdateError", "PROTECTED_PATHS", "PROTECTED_DIRS", "install_kind"
               "host_command_hint", "apply_update", "RESTART_NOTES",
               "restart_supported", "restart_command", "restart_plan",
               "schedule_restart"]
+# Зеркало API core/uistate.py (состояние книги: tmp/ui_state/)
+UISTATE_API = ["UI_STATE_DIR", "UI_STATE_VERSION", "UI_STATE_KEEP",
+               "UI_STATE_STALE", "UI_STATE_DEVICE_COOKIE", "ui_state_dir",
+               "ui_state_device", "ui_state_read", "ui_state_write",
+               "ui_state_prune"]
 # Зеркало API core/search.py (поиск по текстам книги)
 SEARCH_API = ["SearchGroup", "SEARCH_GROUPS", "GROUP_IDS", "GROUP_LABELS",
               "CLUSTERS", "CLUSTER_LABELS", "DEFAULT_SCOPES", "MAX_CONTEXT",
@@ -150,7 +156,7 @@ def test_core_api_mentioned_in_agents_md(name):
 @pytest.mark.parametrize(
     "name",
     TRANSPORT_API + DEPS_API + SETTINGS_API + SEARCH_API + UPDATE_API
-    + STAGE_API)
+    + STAGE_API + UISTATE_API)
 def test_transport_deps_api_exists_in_code(name):
     """API транспорта, зависимостей, реестра настроек, поиска, слоя стадии и
     обновлений существует."""
@@ -158,7 +164,8 @@ def test_transport_deps_api_exists_in_code(name):
               else D if name in DEPS_API
               else SET if name in SETTINGS_API
               else SRCH if name in SEARCH_API
-              else ST_ if name in STAGE_API else UPD)
+              else ST_ if name in STAGE_API
+              else UIS if name in UISTATE_API else UPD)
     assert hasattr(module, name), f"{module.__name__}.{name} исчезла"
 
 
