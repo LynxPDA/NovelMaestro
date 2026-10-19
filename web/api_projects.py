@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from web.jobs import JobManager
 from web.server import ApiError, Router
+from core import uistate as core_uistate
 from web.stages import (
     STAGE_SPECS, build_command, ordered_stages, script_path, spec_for,
 )
@@ -59,6 +60,8 @@ def _register_hub(router: Router) -> None:
                _chapter_titles_put)
     router.add("DELETE", "/api/projects/{sec}/{name}/chapters",
                _chapters_delete)
+    router.add("GET", "/api/projects/{sec}/{name}/ui-state", _ui_state_get)
+    router.add("PUT", "/api/projects/{sec}/{name}/ui-state", _ui_state_put)
     router.add("GET", "/api/templates", _templates)
 
 
@@ -459,6 +462,54 @@ def _project_status(ctx: dict) -> dict:
     root = _projects_root(ctx)
     _pdir, sec, name = _project_path(ctx)
     return {"ok": True, "status": _cached_status(prj, root, sec, name)}
+
+
+def _ui_state_get(ctx: dict) -> dict:
+    """GET …/ui-state — состояние книги для этого устройства.
+
+    Ответ — слияние свежих файлов `tmp/ui_state/` (свой важнее чужого), поэтому
+    новая машина или новый браузер начинает работу с того, что оставили другие,
+    а не с пустых форм. Cookie устройства выдаётся здесь же: она и есть ключ
+    файла, но клиенту его знать не нужно. `pending` — есть ли состояние без
+    владельца (SPA переносит его в свой файл первой записью).
+    """
+    pdir, section, name = _project_path(ctx)
+    handler = ctx.get("handler")
+    device = core_uistate.ui_state_device(
+        handler.device_id() if handler is not None else None)
+    ddir = core_uistate.ui_state_dir(pdir)
+    if handler is not None:
+        handler.set_device_cookie(device)
+    return {"ok": True, "section": section, "name": name,
+            "data": core_uistate.ui_state_read(ddir, device),
+            "dir": str(core_uistate.UI_STATE_DIR).replace("\\", "/")}
+
+
+def _ui_state_put(ctx: dict) -> dict:
+    """PUT …/ui-state ({data}) — записать состояние этого устройства.
+
+    Тело — весь словарь состояния: клиент держит его в памяти, а сервер
+    сливает с уже лежащим на диске (правка другого устройства между чтением и
+    записью не пропадает). Пустой `data` — 400: очистка состояния делается
+    удалением каталога, а не «записью ничего», иначе один пустой PUT от старого
+    клиента стирал бы книгу целиком.
+    """
+    if not isinstance(ctx["body"].get("data", {}), dict):
+        raise ApiError(400, "data должен быть JSON-объектом")
+    pdir, section, name = _project_path(ctx)
+    handler = ctx.get("handler")
+    device = core_uistate.ui_state_device(
+        handler.device_id() if handler is not None else None)
+    try:
+        core_uistate.ui_state_write(
+            core_uistate.ui_state_dir(pdir), device,
+            ctx["body"].get("data") or {})
+    except (OSError, ValueError) as exc:
+        log.warning("ui-state не записан (%s/%s): %s", section, name, exc)
+        raise ApiError(500, f"Не удалось сохранить состояние: {exc}")
+    if handler is not None:
+        handler.set_device_cookie(device)
+    return {"ok": True, "section": section, "name": name}
 
 
 def _project_stats(ctx: dict) -> dict:
