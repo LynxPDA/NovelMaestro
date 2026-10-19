@@ -1360,26 +1360,30 @@ function viewProject(section, name, tab, job) {
       const translation = String(m.item.translation || "");
       const type = String(m.item.type || "");
       const notes = String(m.item.notes || "");
+      /* null в replaceChildren — не «пропустить», а текстовый узел «null»:
+         без фильтра подсказка читалась бы «熊胖胖null Перечень: …» */
       tip.replaceChildren(
-        h("div", { class: "hl-tip-term" }, term || "?"),
-        // замок — состояние термина: запись защищена от правок
-        UICore.nerIsLocked(m.item)
-          ? h("div", { class: "hl-tip-row hl-tip-locked" },
-              "зафиксирован (замок)")
-          : null,
-        translation
-          ? h("div", { class: "hl-tip-row" }, `Перевод: ${translation}`)
-          : null,
-        type ? h("div", { class: "hl-tip-row" }, `Тип: ${type}`) : null,
-        notes ? h("div", { class: "hl-tip-notes" }, notes) : null,
-        h(
-          "button",
-          {
-            class: "btn btn-sm hl-tip-btn",
-            onclick: () => goGlossary(term || translation),
-          },
-          "→ Глоссарий",
-        ),
+        ...[
+          h("div", { class: "hl-tip-term" }, term || "?"),
+          // замок — состояние термина: запись защищена от правок
+          UICore.nerIsLocked(m.item)
+            ? h("div", { class: "hl-tip-row hl-tip-locked" },
+                "зафиксирован (замок)")
+            : null,
+          translation
+            ? h("div", { class: "hl-tip-row" }, `Перевод: ${translation}`)
+            : null,
+          type ? h("div", { class: "hl-tip-row" }, `Тип: ${type}`) : null,
+          notes ? h("div", { class: "hl-tip-notes" }, notes) : null,
+          h(
+            "button",
+            {
+              class: "btn btn-sm hl-tip-btn",
+              onclick: () => goGlossary(term || translation),
+            },
+            "→ Глоссарий",
+          ),
+        ].filter((x) => x != null),
       );
       tip.style.display = "block";
       const x = a.left - hostRect.left + 12;

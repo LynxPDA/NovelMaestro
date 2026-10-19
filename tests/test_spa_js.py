@@ -75,6 +75,18 @@ def test_app_h_null_attrs_safe():
     assert "Object.entries(attrs || {})" in src
 
 
+def test_hl_tip_replace_children_no_null():
+    """Подсказка термина в редакторе: условные строки фильтруются перед
+    replaceChildren. Узел null там не пропуск, а текст «null»: подсказка
+    читалась бы «熊胖胖null Перевод: …» (в панели выделения этот подводный
+    камень уже обойдён)."""
+    src = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    tip = src[src.index("tip.replaceChildren("):]
+    tip = tip[:tip.index("tip.style.display")]
+    assert ".filter((x) => x != null)" in tip, \
+        "условные строки подсказки не отфильтрованы — в подсказке появится «null»"
+
+
 def test_run_views_chips_persistence():
     """Выбор чипсов (hidden noenv: types/fields/ner_fields) переживает
     перезагрузку страницы: chipRestore — в initFormValues, saveChips —
