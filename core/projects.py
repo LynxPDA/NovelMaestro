@@ -698,6 +698,41 @@ def project_stats(pdir: Path) -> str:
             f"ner: {ner} | compiled: {comp} | wiki: {wiki}")
 
 
+# стадии таблицы готовности — в порядке цепочки артефактов
+PROGRESS_STAGES = ("translate", "redact", "polish")
+
+
+def progress_missing(chapters: dict, stages=PROGRESS_STAGES) -> dict:
+    """Чего не хватает по каждой стадии: диапазоны и счётчики пропусков.
+
+    Вселенная глав — непрерывный ряд от первой до последней существующей
+    папки (как all_ids вкладки «Главы»): пропущенная папка и глава без
+    файла стадии одинаково видны в пропусках. Главы без файла стадии —
+    числами, для подписи «Отсутствуют главы 75, 89, 361-717».
+
+    Возвращает {stage: {"ids": [номера], "ranges": "75, 89, 361-717",
+                        "count": N, "total": N, "pct": N}}; готово всё —
+    ids пуст, ranges «—»; глав нет вовсе — total 0 и pct 0.
+    """
+    from .common import format_ranges  # лениво: избегаем циклов
+
+    ids = sorted(chapters)
+    all_ids = list(range(ids[0], ids[-1] + 1)) if ids else []
+    out: dict[str, dict] = {}
+    for stage in stages:
+        missing = [i for i in all_ids
+                   if not (chapters.get(i) or {}).get(stage)]
+        done = len(all_ids) - len(missing)
+        out[stage] = {
+            "ids": missing,
+            "ranges": format_ranges(missing),
+            "count": len(missing),
+            "total": len(all_ids),
+            "pct": round(100 * done / len(all_ids)) if all_ids else 0,
+        }
+    return out
+
+
 def project_progress_table(pdir: Path) -> dict:
     """Таблица готовности глав: по-главные флаги стадий + сводка.
 
@@ -706,6 +741,8 @@ def project_progress_table(pdir: Path) -> dict:
                          "polish": bool}},
        "counts": {"chapters": N, "translate": N, "redact": N,
                    "polish": N},
+       "missing": {stage: {"ids", "ranges", "count", "total", "pct"}}
+                   — см. progress_missing,
        "ner": {"exists": bool, "terms": N},
        "wiki": {"exists": bool, "articles": N},  # rulate-сборка (###) тоже считается
        "compiled": [имена файлов]}
@@ -779,6 +816,7 @@ def project_progress_table(pdir: Path) -> dict:
             or (f.name.startswith(prefix)
                 and (f.name.endswith(".epub") or f.name.endswith(".fb2")))))
     return {"chapters": chapters, "counts": counts,
+            "missing": progress_missing(chapters),
             "ner": ner, "wiki": wiki, "compiled": compiled}
 
 

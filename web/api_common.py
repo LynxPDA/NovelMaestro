@@ -64,7 +64,7 @@ _STATS_LOCK = threading.Lock()
 _STATS_CACHE_FILE = ".stats_cache.json"  # в корне projects/ (рядом с hub_state)
 # версия методики расчёта статуса: изменение project_progress_table
 # делает старые записи кеша неверными (сигнатура mtime их не ловит)
-_STATUS_CACHE_VER = 2
+_STATUS_CACHE_VER = 3
 _CACHE_LOADED: set[str] = set()      # корни, для которых загружен дисковой кеш
 UPLOAD_DIRS = ("source", "chapters", "prompts", "images", "tmp")
 # Текстовое поле формы (без filename) крупнее — подозрительный запрос

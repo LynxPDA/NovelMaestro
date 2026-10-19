@@ -9,6 +9,13 @@ const PAGE_SIZE = 200;
 /* артефакты глав в каноническом порядке цепочки — кнопка «Только главы»
    на вкладке «Поиск» (ключи группы совпадают с core/search.py) */
 const CHAPTER_SCOPES = ["chapter", "translated", "redacted", "polished"];
+/* типы глав на вкладке «Статус»: ключ ответа API → человеческая подпись
+   (порядок — цепочка артефактов, как PROGRESS_STAGES в core/projects.py) */
+const STATUS_STAGES = [
+  ["translate", "Перевод"],
+  ["redact", "Редактура"],
+  ["polish", "Полировка"],
+];
 /* Кнопка-иконка: SVG без подписи, поэтому имя действия живёт в тултипе
    и в aria-label (строки списка файлов узкие — текстовые кнопки в них
    не умещаются). danger — окраска опасных действий. */
@@ -4473,7 +4480,10 @@ function viewProject(section, name, tab, job) {
     return wrap;
   }
 
-  // «Статус» — таблица готовности глав + сводка ner/wiki/compiled
+  /* «Статус» — готовность по типам глав (бар + чего не хватает), сводка
+     ner/wiki и по-главная таблица. Пропуски приходят с сервера готовыми
+     диапазонами (core/projects.py::progress_missing): глав бывает сотни —
+     списочное «75, 89, 361-717» читается там, где таблицу никто не листает. */
   async function statusView() {
     let data;
     try {
@@ -4484,12 +4494,70 @@ function viewProject(section, name, tab, job) {
     const s = data.status || {};
     const chapters = s.chapters || {};
     const counts = s.counts || {};
+    const missing = s.missing || {};
+    const total = counts.chapters ?? 0;
+    /* один блок на тип: подпись стадии, трек с процентом и (когда не всё
+       готово) строка отсутствующих глав — диапазоны, а не перечисление:
+       «Отсутствуют главы: 75, 89, 361-717». У книги на 600 глав список
+       бывает длинным: две строки с многоточием, полный текст — по кнопке
+       «весь список» (подсказка есть только у мыши) и в тултипе; свёрнутость
+       живёт в состоянии вкладки. Готово всё — «Все главы готовы». */
+    const saved = pref.get("status");
+    const stageCards = STATUS_STAGES.map(([k, label]) => {
+      const m = missing[k] || {};
+      const text = String(m.ranges || "—");
+      const absent = Number(m.count ?? 0);
+      const long = absent > 0 && text.length > 80;
+      const open = !!saved[k];
+      const ranges = h(
+        "span",
+        { class: "status-missing-ranges" + (open ? " status-missing-open" : "") },
+        text,
+      );
+      const line = h(
+        "div",
+        { class: "status-missing" + (absent ? " status-missing-has" : "") },
+        h(
+          "span",
+          { class: "status-missing-label" },
+          absent ? "Отсутствуют главы:" : "Все главы готовы",
+        ),
+        absent ? ranges : null,
+      );
+      if (long) {
+        const toggle = h(
+          "button",
+          { class: "btn btn-xs btn-ghost status-missing-more" },
+          open ? "свернуть" : `весь список (${absent})`,
+        );
+        toggle.addEventListener("click", () => {
+          const on = !ranges.classList.contains("status-missing-open");
+          ranges.classList.toggle("status-missing-open", on);
+          toggle.textContent = on ? "свернуть" : `весь список (${absent})`;
+          pref.set("status", { [k]: on });
+        });
+        line.append(toggle);
+        attachTooltip(line, `Отсутствуют главы (${absent}): ${text}`);
+      }
+      const bar = UIC.progressRow();
+      bar.paint({
+        label,
+        count: `${counts[k] ?? 0}/${total} · ${m.pct ?? 0}%`,
+        pct: m.pct ?? 0,
+      });
+      return h("div", { class: "status-stage" }, bar.el, line);
+    });
+    const stageBlock = h(
+      "div",
+      { class: "status-stages" },
+      ...stageCards,
+    );
     const ids = Object.keys(chapters)
       .map(Number)
       .sort((a, b) => a - b);
     const rows = ids.map((id) => {
       const c = chapters[id];
-      const cells = ["translate", "redact", "polish"].map((k) => {
+      const cells = STATUS_STAGES.map(([k]) => {
         const ok = !!c[k];
         return h(
           "td",
@@ -4569,7 +4637,7 @@ function viewProject(section, name, tab, job) {
         h("div", { class: "stat-label" }, "статей wiki"),
       ),
     );
-    return h("div", { class: "files-wrap" }, sumCard, table);
+    return h("div", { class: "files-wrap" }, sumCard, stageBlock, table);
   }
 
   async function configView() {

@@ -958,6 +958,54 @@ async function main() {
     log(`${problems.length === before4 ? "✅" : "❌"} логи: список     ${l0.rows} строк · вложенно ${sub} · просмотр: ${view ? "есть" : "пусто"}`);
   }
 
+  /* «Статус»: над таблицей — готовность по типам глав: трек, процент и
+   * строка отсутствующих глав диапазонами (сервер считает их сам —
+   * core/projects.py::progress_missing). Глава без файла сразу и в
+   * пропусках, и в таблице — расхождению взяться неоткуда. */
+  {
+    const before5 = problems.length;
+    const chDir = path.join(seedDir || "", SECTION, BOOK, "chapters");
+    /* третья глава без редактуры и полировки — пропуск в двух барах; после
+       проверки её убираем: дальше идут сценарии на исходном наборе глав */
+    const third = path.join(chDir, "00000_3_Глава 3");
+    if (seedDir) {
+      fs.mkdirSync(third, { recursive: true });
+      fs.writeFileSync(path.join(third, "chapter.txt"), "Третья глава.\n", "utf-8");
+      fs.writeFileSync(path.join(third, "translated.txt"), "Третья (перевод).\n", "utf-8");
+    }
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/status`, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".status-stage", { timeout: 15000 });
+    const st = await page.evaluate(() => ({
+      stages: [...document.querySelectorAll(".status-stage")].map((x) => ({
+        text: x.textContent.replace(/\s+/g, " ").trim(),
+        pct: (x.querySelector(".progress-count") || {}).textContent || "",
+        width: (x.querySelector(".progress-fill") || {}).getAttribute
+          ? x.querySelector(".progress-fill").getAttribute("style") : "",
+      })),
+      rows: document.querySelectorAll(".ch-table .ch-row").length,
+      missingClass: document.querySelectorAll(".status-missing-has").length,
+    }));
+    if (st.stages.length !== 3)
+      problems.push(`статус: блоков стадий ${st.stages.length}`);
+    if (st.rows !== 3)
+      problems.push(`статус: строк таблицы ${st.rows} (ожидаем 3 главы)`);
+    if (!st.stages[0]?.pct?.includes("3/3 · 100%"))
+      problems.push(`статус: у перевода «${st.stages[0]?.pct}»`);
+    // обработка и полировка — готово 2 из 3: пропуск главой 3 в обоих барах
+    if (st.missingClass !== 2)
+      problems.push(`статус: блоков с пропусками ${st.missingClass} (ожидаем 2)`);
+    if (!/Отсутствуют главы:\s*3/.test(st.stages[1]?.text || ""))
+      problems.push(`статус: пропуски редактуры «${st.stages[1]?.text}»`);
+    if (!/width:67%/.test(st.stages[1]?.width || ""))
+      problems.push(`статус: трек редактуры «${st.stages[1]?.width}»`);
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-status.png") });
+    if (seedDir) fs.rmSync(third, { recursive: true, force: true });
+    log(`${problems.length === before5 ? "✅" : "❌"} статус: типы глав  `
+      + `${st.stages.map((x) => x.pct).join(" · ")} · таблица ${st.rows} глав`);
+  }
+
   /* «История»: список точек страницами, сравнение выбранной пары (всегда от
    * старой к новой), догрузка файлов и раскрашенный дифф файла. Точки
    * создаются тем же POST, что и кнопкой вкладки: между ними меняется один

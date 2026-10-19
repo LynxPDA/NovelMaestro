@@ -94,7 +94,7 @@ python3 web/main.py --host 0.0.0.0 --auth   # доступ с LAN + токен
 | GET | `/api/dashboard`, `/api/state`, `/api/sections`, `/api/projects` | дашборд (`running_jobs` — все активные; `recent_jobs` — до 20), hub |
 | POST | `/api/projects` (создание) | + move/rename/copy/delete; move/rename переписывают project/cwd в журнале запусков — история следует за проектом |
 | GET | `/api/projects/{s}/{n}/tree`, `/api/stats` | главы+артефакты (размеры артефактов — СИМВОЛЫ, не байты; бюджет translate_quality считается в ТОКЕНАХ (оценка)), статистика (артефакты включают легаси `*_перевод/редактура/полировка`) |
-| GET | `/api/projects/{s}/{n}/status` | таблица готовности глав: по-главные флаги translate/redact/polish + ner/wiki/compiled; кеш по сигнатуре mtime |
+| GET | `/api/projects/{s}/{n}/status` | таблица готовности глав: по-главные флаги translate/redact/polish + `missing` (по стадии: `ids`, `ranges` («75, 89, 361-717»), `count`, `total`, `pct`; вселенная глав — непрерывный ряд папок, как вкладка «Главы») + ner/wiki/compiled; кеш по сигнатуре mtime |
 | GET/PUT | `/api/projects/{s}/{n}/chapters/titles` | названия глав (вкладка «Главы»): GET `?type=polished\|redacted\|translated\|chapter` → `{titles: {номер: первая непустая строка}, all_ids: непрерывный 1..N по папкам, missing: номера без файла типа}`; PUT `{type, titles: {номер: строка}}` — замена первой строки в файлах глав (NFC), → `{updated, missing, warnings}` |
 | DELETE | `/api/projects/{s}/{n}/chapters?type=&start=&end=` | удаление файлов глав выбранного типа в диапазоне (вкладка «Главы» — «Удалить файлы»), → `{deleted: [номера]}` |
 | GET | `/api/templates` | наборы шаблонов с деревом файлов (для создания проекта и вкладки «Шаблоны») |

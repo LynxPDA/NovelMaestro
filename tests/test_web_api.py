@@ -663,6 +663,11 @@ def test_project_status_table(srv_ctx):
     assert st["counts"]["translate"] == 1
     assert st["chapters"]["1"]["translate"] is True
     assert st["ner"]["exists"] is True
+    # пропуски по стадиям едут в том же ответе — вкладка «Статус» берёт их
+    # оттуда же, где и таблицу (диапазоны — в человеческой записи)
+    assert st["missing"]["translate"]["ranges"] == "2"
+    assert st["missing"]["redact"]["count"] == 2
+    assert st["missing"]["polish"]["total"] == 2
     # повторный запрос — из кеша (тот же результат)
     res2, payload2 = _request(port, "GET",
                               f"/api/projects/ACTIVE/{pname}/status")

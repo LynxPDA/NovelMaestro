@@ -314,7 +314,10 @@ async function api(path, opts = {}) {
   if (p.endsWith("/tree")) {
     return globalThis.__tree || { chapters: [], artifacts: {} };
   }
-  if (p.endsWith("/status")) return { status: { chapters: {}, counts: {} } };
+  if (p.endsWith("/status")) {
+    return { status: globalThis.__status
+      || { chapters: {}, counts: {}, missing: {} } };
+  }
   if (p.endsWith("/chapters/titles")) return { titles: {} };
   if (p === "/search") {
     return globalThis.__search || { ...SEARCH_EMPTY, files: [], total: 0 };
@@ -2473,4 +2476,96 @@ test("таблица глав: клетка перерисовывается т�
   assert.equal(allText(row("1").querySelectorAll(".ch-cell")[0]), "✗");
   assert.equal(allText(row("2").querySelectorAll(".ch-cell")[2]), "⊘");
   assert.equal(allText(row("3").querySelectorAll(".ch-cell")[0]), "·");
+});
+
+test("«Статус»: по бару на тип главы и строка отсутствующих диапазоном", async () => {
+  /* над таблицей — готовность по типам: процент, трек и «каких глав нет».
+     Список приходит с сервера диапазонами (core/projects.py::progress_missing):
+     сотни номеров в строку не влезают, поэтому подпись - диапазоны. */
+  globalThis.__status = {
+    chapters: {
+      1: { translate: true, redact: true, polish: true },
+      2: { translate: true, redact: false, polish: false },
+      3: { translate: false, redact: false, polish: false },
+    },
+    counts: { chapters: 3, translate: 2, redact: 1, polish: 1 },
+    missing: {
+      translate: { ids: [3], ranges: "3", count: 1, total: 3, pct: 67 },
+      redact: { ids: [2, 3], ranges: "2-3", count: 2, total: 3, pct: 33 },
+      polish: { ids: [2, 3], ranges: "2-3", count: 2, total: 3, pct: 33 },
+    },
+  };
+  const page = await reopenProject("ACTIVE", "Книга", "status");
+  await settled();
+  delete globalThis.__status;
+
+  const stages = findByClass(page, "status-stage");
+  assert.equal(stages.length, 3, "три стадии цепочки — три блока");
+  const texts = stages.map(allText);
+  assert.match(texts[0], /Перевод/, "подпись стадии в баре");
+  assert.match(texts[0], /2\/3 · 67%/, "счётчик и процент готовности");
+  assert.match(texts[1], /Отсутствуют главы:\s*2-3/);
+  // готово всё — диапазона нет, «нет» вместо сплошного ряда номеров
+  globalThis.__status = {
+    chapters: { 1: { translate: true, redact: true, polish: true } },
+    counts: { chapters: 1, translate: 1, redact: 1, polish: 1 },
+    missing: {
+      translate: { ids: [], ranges: "—", count: 0, total: 1, pct: 100 },
+      redact: { ids: [], ranges: "—", count: 0, total: 1, pct: 100 },
+      polish: { ids: [], ranges: "—", count: 0, total: 1, pct: 100 },
+    },
+  };
+  const done = await viewProject("ACTIVE", "Книга", "status");
+  await settled();
+  delete globalThis.__status;
+  const labels = findByClass(done, "status-missing-label");
+  assert.equal(labels.length, 3);
+  assert.ok(labels.every((n) => allText(n) === "Все главы готовы"),
+    "готово — подпись, а не ряд номеров");
+  assert.equal(findByClass(done, "status-missing-ranges").length, 0,
+    "пустого ряда диапазонов на готовом проекте нет");
+  assert.equal(findByClass(done, "status-missing-has").length, 0,
+    "класс пропусков не липнет на готовый проект");
+  // заполнение трека — по проценту сервера
+  const fills = findByClass(done, "progress-fill");
+  assert.ok(fills.length >= 3);
+  assert.equal(fills[0].getAttribute("style"), "width:100%");
+});
+
+test("«Статус»: длинный список пропусков — свернут, разворачивается кнопкой", async () => {
+  /* сотни диапазонов строкой вытеснили бы таблицу за край экрана: по
+     умолчанию две строки, полный перечень — по кнопке; тултип есть у мыши,
+     но не у пальца, поэтому кнопка нужна как таковая */
+  const many = Array.from({ length: 60 }, (_, i) => i * 2 + 2).join(", ");
+  globalThis.__status = {
+    chapters: { 1: { translate: true, redact: false, polish: false } },
+    counts: { chapters: 3, translate: 3, redact: 1, polish: 1 },
+    missing: {
+      translate: { ids: [], ranges: "—", count: 0, total: 3, pct: 100 },
+      redact: { ids: [2], ranges: many, count: 59, total: 3, pct: 33 },
+      polish: { ids: [2], ranges: many, count: 59, total: 3, pct: 33 },
+    },
+  };
+  const page = viewProject("ACTIVE", "Книга", "status");
+  await new Promise((r) => setTimeout(r, 30));
+  const cards = findByClass(page, "status-stage");
+  const more = findByClass(page, "status-missing-more");
+  assert.equal(more.length, 2, "кнопка у каждой длинной строки");
+  assert.match(allText(more[0]), /весь список \(59\)/);
+  const ranges = findByClass(cards[1], "status-missing-ranges")[0];
+  assert.ok(!ranges.className.includes("status-missing-open"),
+    "по умолчанию список свернут");
+  // короткая строка кнопки не получает (у перевода пропусков нет)
+  assert.equal(findByClass(cards[0], "status-missing-more").length, 0);
+  more[0]._listeners.click[0]();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(ranges.className.includes("status-missing-open"), "список раскрыт");
+  assert.match(allText(more[0]), /свернуть/);
+  // состояние переживает перерисовку: вкладка помнит, что список раскрыт
+  const again = await reopenProject("ACTIVE", "Книга", "status");
+  await new Promise((r) => setTimeout(r, 30));
+  delete globalThis.__status;
+  const reRanges = findByClass(again, "status-missing-ranges")[0];
+  assert.ok(reRanges.className.includes("status-missing-open"),
+    "раскрытый список возвращается из состояния вкладки");
 });

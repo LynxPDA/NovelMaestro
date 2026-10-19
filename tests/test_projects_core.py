@@ -828,3 +828,66 @@ def test_project_progress_table_empty_artifact_not_done(tmp_path):
     assert st["chapters"][3]["polish"] is True
     assert st["counts"] == {"chapters": 3, "translate": 1, "redact": 0,
                              "polish": 1}
+
+
+# ── пропуски по стадиям (диапазоны для «Статуса») ───────────────────
+
+def _mk_chapters(pdir, ids, stage="translated", text="t"):
+    for cid in ids:
+        d = pdir / "chapters" / f"{cid:03d}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{stage}.txt").write_text(text, encoding="utf-8")
+
+
+def test_progress_missing_ranges(tmp_path):
+    """Пропуски — диапазонами в порядке номеров: «75, 89, 361-717»."""
+    chapters = {1: {"translate": True, "redact": True, "polish": True},
+                2: {"translate": True, "redact": False, "polish": False},
+                3: {"translate": True, "redact": False, "polish": False},
+                5: {"translate": False, "redact": False, "polish": False},
+                6: {"translate": True, "redact": True, "polish": True}}
+    m = P.progress_missing(chapters)
+    assert list(m) == list(P.PROGRESS_STAGES)
+    # 4-й главы нет даже папкой — она тоже в пропусках: вселенная глав
+    # непрерывна от первой до последней существующей (как all_ids «Глав»)
+    assert m["translate"] == {"ids": [4, 5], "ranges": "4-5", "count": 2,
+                             "total": 6, "pct": 67}
+    assert m["redact"]["ranges"] == "2-5"
+    assert m["redact"]["count"] == 4
+    assert m["polish"]["pct"] == 33
+
+
+def test_progress_missing_all_ready_and_empty(tmp_path):
+    ready = {i: dict.fromkeys(P.PROGRESS_STAGES, True) for i in (1, 2, 3)}
+    m = P.progress_missing(ready)
+    assert m["translate"] == {"ids": [], "ranges": "—", "count": 0,
+                             "total": 3, "pct": 100}
+    # глав нет вовсе: «0/0 · 0%», а не деление на ноль
+    empty = P.progress_missing({})
+    assert empty["polish"] == {"ids": [], "ranges": "—", "count": 0,
+                              "total": 0, "pct": 0}
+
+
+def test_progress_missing_stage_subset(tmp_path):
+    """stages — что именно считать: стадия вне набора в ответ не едет."""
+    chapters = {1: {"translate": False, "redact": True, "polish": True}}
+    m = P.progress_missing(chapters, stages=("translate",))
+    assert list(m) == ["translate"]
+    assert m["translate"]["ranges"] == "1"
+
+
+def test_project_progress_table_has_missing(tmp_path):
+    """Ключ missing есть в ответе таблицы: вкладка «Статус» берёт его оттуда."""
+    pdir = tmp_path / "proj"
+    _mk_chapters(pdir, [1, 2, 3])
+    (pdir / "chapters" / "002" / "redacted.txt").write_text(
+        "r", encoding="utf-8")
+    st = P.project_progress_table(pdir)
+    assert st["missing"]["translate"]["ranges"] == "—"
+    assert st["missing"]["redact"]["ids"] == [1, 3]
+    assert st["missing"]["redact"]["total"] == 3
+    # пустой проект: ключ на месте и безопасен для формы
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    st2 = P.project_progress_table(empty)
+    assert st2["missing"]["polish"]["pct"] == 0
