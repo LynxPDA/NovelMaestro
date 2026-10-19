@@ -117,15 +117,38 @@ def test_empty_or_broken_file_reads_empty(ddir):
 
 
 def test_write_cleans_payload(ddir):
-    """В файл книги едут только ключи интерфейса: глубина 2 и JSON-типы."""
+    """В файл книги едут только ключи интерфейса (JSON-типы, разумная длина)."""
     U.ui_state_write(ddir, "dev1", {
-        "ok": {"a": 1}, "bad-list": [1, 2], "deep": {"x": {"y": 1}},
-        "": {"z": 1}, "scalar": 5, "none": None,
+        "ok": {"a": 1}, "list": [1, 2], "deep": {"x": {"y": 1}},
+        "": {"z": 1}, "scalar": 5, "x" * 300: {"z": 1},
+        "obj": {"n": 1},
     })
-    got = U.ui_state_read(ddir, "dev1")
-    assert got == {"ok": {"a": 1}, "deep": {"x": {"y": 1}}, "scalar": 5,
-                   "none": None}
-    assert "version" not in got and "updated" not in got
+    assert U.ui_state_read(ddir, "dev1") == {
+        "ok": {"a": 1}, "list": [1, 2], "deep": {"x": {"y": 1}}, "scalar": 5,
+        "obj": {"n": 1}}
+
+
+def test_write_none_removes_key(ddir):
+    """None снимает ключ: так сброс настроек стирает значение и в книге."""
+    U.ui_state_write(ddir, "dev1", {"nmProfile:a/b/ner": "home"})
+    assert U.ui_state_read(ddir, "dev1") == {"nmProfile:a/b/ner": "home"}
+    U.ui_state_write(ddir, "dev1", {"nmProfile:a/b/ner": None})
+    assert U.ui_state_read(ddir, "dev1") == {}
+
+
+def test_removed_key_not_resurrected_by_other_device(ddir):
+    """Снятие не отменяется чужим файлом: надгробие старше — сильнее."""
+    U.ui_state_write(ddir, "dev1", {"nmTab:a/b": {"page": {"view": "run"}}})
+    U.ui_state_write(ddir, "dev2", {"nmProfile:a/b/wiki": "home"})
+    U.ui_state_write(ddir, "dev1", {"nmTab:a/b": None})
+    assert "nmTab:a/b" not in U.ui_state_read(ddir, "dev1")
+    # а вот значение, пришедшее ПОСЛЕ снятия, живёт: правка важнее сброса
+    stamp = time.time() + 5
+    os.utime(ddir / "dev2.json", (stamp, stamp))
+    U.ui_state_write(ddir, "dev2", {"nmProfile:a/b/wiki": "home"})
+    U.ui_state_write(ddir, "dev1", {"nmTab:a/b": {"page": {"view": "logs"}}})
+    assert U.ui_state_read(ddir, "dev1")["nmTab:a/b"] == {
+        "page": {"view": "logs"}}
 
 
 def test_write_rejects_non_object(ddir):

@@ -733,23 +733,29 @@
     return new Date(t * 1000).toLocaleString("ru-RU");
   }
 
-  /* ── состояние вкладок проекта: ОДНО хранилище на книгу ─────────────────
+  /* ── состояние книги — одно хранилище на книгу ───────────────────────────
    * Что было открыто в последний раз (глава в «Редакторе», тип файлов в
-   * «Главах», выбранный лог, открытая заметка), живёт в браузере: иначе
-   * перезагрузка страницы бросает книгу на первую главу. Ключ один на
-   * проект — {вкладка: {поле: значение}}.
-   * Старых ключей это не касается (столбцы и фильтры глоссария, сортировка
-   * файлов живут своими): они работают, мигрировать их нечем. */
+   * «Главах», выбранный лог, заметка, значения форм стадий, профиль LLM,
+   * чипсы, фильтры глоссария и запрос «Поиска») — это данные КНИГИ, а не
+   * привычки браузера: живут в `tmp/ui_state` книги (`core/uistate.py`).
+   * Смена браузера, домена и устройства их не теряет, копия книги наследует
+   * их вместе с `tmp/`. Привычки устройства (тема, кегль редакторов, язык
+   * подсветки, сортировка файлов) остаются в `localStorage`.
+   *
+   * Ключи — ровно те, что читают вьюхи (`nmTab:раздел/книга`, `runVals:…`),
+   * поэтому переезд не трогает ни одного вызова: меняется только бумажник. */
   var PROJECT_PREF_KEY = "nmTab";
 
   function projectPrefKey(section, name) {
     return PROJECT_PREF_KEY + ":" + section + "/" + name;
   }
 
-  /* Хранилище состояния книги: get(вкладка) — сохранённый объект вкладки
-   * (пустой, если вкладки ещё не открывали), set(вкладка, объект) —
-   * объединяет с сохранённым. Хранилище передаётся параметром — в тестах это
-   * заглушка; недоступное (приватный режим) читается пустым и молчит. */
+  /* Хранилище состояния книги: get(ключ) — сохранённый объект (пустой, если
+   * его ещё не писали), set(ключ, патч) — объединяет с сохранённым.
+   *
+   * store — снимок состояния книги (см. bookState): getItem читает ключ,
+   * setItem пишет его. null в set убирает ключ: сброс настроек обязан стереть
+   * значение и в книге, иначе после перезагрузки оно вернётся. */
   function projectPrefs(store, section, name) {
     var key = projectPrefKey(section, name);
     var data = {};
@@ -765,14 +771,220 @@
         return t && typeof t === "object" && !Array.isArray(t) ? t : {};
       },
       set: function (tab, patch) {
-        var t = Object.assign({}, data[tab], patch);
-        data[tab] = t;
+        if (patch === null) {
+          if (!(tab in data)) return;
+          delete data[tab];
+        } else {
+          data[tab] = Object.assign({}, data[tab], patch);
+        }
         try {
           if (store) store.setItem(key, JSON.stringify(data));
         } catch (e) {
-          /* недоступно — состояние этого сохранения не получит */
+          /* хранилище недоступно — состояние живёт в памяти страницы */
         }
       },
+    };
+  }
+
+  /* ── снимок состояния книги: сервер + память + запасной localStorage ────
+   * Один на открытую книгу. api — {load(), save(data)}; его подставляет app.js
+   * (там fetch, X-Requested-With и адрес проекта).
+   *
+   * Чтения синхронные: пока ответа сервера нет, getItem отдаёт значение из
+   * localStorage — память браузера работает как раньше, и первый заход после
+   * обновления не теряет ни формы, ни чипсов, ни профиля стадии. Ответил
+   * сервер — состояние его, а локальные ключи книги, которых в файле нет,
+   * уходят туда первой записью (перенос).
+   *
+   * Записи копятся и уходят пачкой после паузы ввода: правка формы — не
+   * запрос на каждое нажатие. Сервер недоступен — значения остаются в памяти
+   * и в localStorage, подписчики видят failed=true и подписывают форму
+   * «не сохранено». */
+  var BOOK_SAVE_DELAY = 500; // мС тишины после последнего изменения
+  /* Ключи книги, значение которых — JSON (у остальных это голая строка:
+   * `nmProfile:…` — id профиля, `nerLock:…` — «1»/«0»). */
+  var BOOK_JSON_PREFIXES = [
+    "nmTab:", "runVals:", "chips:", "nerCols:", "nerSearch:", "nerTypes:",
+    "search:",
+  ];
+
+  function isJsonKey(key) {
+    for (var i = 0; i < BOOK_JSON_PREFIXES.length; i++) {
+      if (String(key).indexOf(BOOK_JSON_PREFIXES[i]) === 0) return true;
+    }
+    return false;
+  }
+
+  function bookState(api, section, name) {
+    var data = {};        // ключ браузера → разобранное значение
+    var loaded = false;   // сервер ответил (или не ответил — живём дальше)
+    var failed = false;   // последняя запись не дошла
+    var busy = null;      // идущая запись
+    var dirty = {};       // ключи, ещё не отправленные
+    var listeners = [];
+    var timer = null;
+    var fallback = null;  // localStorage, а если браузер его запретил — память
+    var pre = section + "/" + name;
+
+    function browser() {
+      if (fallback) return fallback;
+      try {
+        if (typeof localStorage !== "undefined" && localStorage) {
+          return localStorage;
+        }
+      } catch (e) {
+        /* хранилище браузера запрещено — работать будем в памяти */
+      }
+      fallback = {
+        _d: {},
+        getItem: function (k) {
+          return Object.prototype.hasOwnProperty.call(this._d, k)
+            ? this._d[k] : null;
+        },
+        setItem: function (k, v) { this._d[k] = String(v); },
+        removeItem: function (k) { delete this._d[k]; },
+      };
+      return fallback;
+    }
+
+    function notify() {
+      for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i](failed); } catch (e) {
+          /* подписчик не должен мешать записи */
+        }
+      }
+    }
+
+    function schedule() {
+      notify();
+      clearTimeout(timer);
+      timer = setTimeout(flush, BOOK_SAVE_DELAY);
+    }
+
+    /* запись пачки; хвост, накопленный за время запроса, уходит следом */
+    function flush() {
+      clearTimeout(timer);
+      timer = null;
+      if (!api) return Promise.resolve();
+      if (busy) return busy.then(flush);
+      var patch = {};
+      var n = 0;
+      for (var k in dirty) {
+        if (!Object.prototype.hasOwnProperty.call(dirty, k)) continue;
+        if (!Object.prototype.hasOwnProperty.call(data, k)) {
+          patch[k] = null; // ключ убран (сброс настроек)
+        } else {
+          patch[k] = data[k];
+        }
+        n += 1;
+      }
+      if (!n) return Promise.resolve();
+      dirty = {};
+      busy = Promise.resolve(api.save(patch)).then(
+        function () { failed = false; notify(); },
+        function () { failed = true; notify(); },
+      ).then(function () {
+        busy = null;
+        return flush();
+      });
+      return busy;
+    }
+
+    /* перенос: локальные ключи ЭТОЙ книги, которых в файле ещё нет */
+    function adopt() {
+      var store = browser();
+      var keys = [];
+      try {
+        /* в браузере ключи перечислимы; заглушка без перечисления отдаёт
+         * только `nmTab` — этого хватает, остальное приедет из книги */
+        if (typeof store.length === "number" && store.key) {
+          for (var i = 0; i < store.length; i++) {
+            var k = store.key(i);
+            if (k && String(k).indexOf(pre) >= 0) keys.push(k);
+          }
+        }
+      } catch (e) {
+        keys = [];
+      }
+      keys.push(projectPrefKey(section, name));
+      var n = 0;
+      for (var j = 0; j < keys.length; j++) {
+        var key = keys[j];
+        if (Object.prototype.hasOwnProperty.call(data, key)) continue;
+        var raw = null;
+        try { raw = store.getItem(key); } catch (e) { raw = null; }
+        if (raw == null) continue;
+        var value = raw;
+        if (isJsonKey(key)) {
+          try { value = JSON.parse(raw); } catch (e) { continue; }
+        }
+        data[key] = value;
+        dirty[key] = true;
+        n += 1;
+      }
+      return n;
+    }
+
+    return {
+      section: section,
+      name: name,
+      loaded: function () { return loaded; },
+      failed: function () { return failed; },
+      onChange: function (fn) { listeners.push(fn); },
+      /* загрузка: одна на книгу; ответ сервера главнее запасного пути */
+      load: function () {
+        if (!api) { loaded = true; return Promise.resolve(data); }
+        return Promise.resolve(api.load()).then(function (res) {
+          var got = (res && res.data) || {};
+          for (var k in got) {
+            if (!Object.prototype.hasOwnProperty.call(got, k)) continue;
+            /* правка, сделанная до загрузки, важнее серверной */
+            if (!Object.prototype.hasOwnProperty.call(data, k)) data[k] = got[k];
+          }
+          loaded = true;
+          adopt();
+          notify();
+          if (Object.keys(dirty).length) flush();
+          return data;
+        }, function () {
+          loaded = true;
+          failed = true;
+          adopt();
+          notify();
+          return data;
+        });
+      },
+      /* хранилище для projectPrefs и прочих читателей */
+      store: {
+        getItem: function (k) {
+          if (Object.prototype.hasOwnProperty.call(data, k)) {
+            var v = data[k];
+            return isJsonKey(k) && v !== null && typeof v === "object"
+              ? JSON.stringify(v) : (v === null ? null : String(v));
+          }
+          var local = null;
+          try { local = browser().getItem(k); } catch (e) { local = null; }
+          return local;
+        },
+        setItem: function (k, v) {
+          var value = v;
+          if (isJsonKey(k)) {
+            try { value = JSON.parse(v); } catch (e) { value = v; }
+          }
+          data[k] = value;
+          dirty[k] = true;
+          schedule();
+        },
+        removeItem: function (k) {
+          if (Object.prototype.hasOwnProperty.call(data, k)) delete data[k];
+          try { browser().removeItem(k); } catch (e) {
+            /* браузер недоступен — книге и памяти хватит */
+          }
+          dirty[k] = true;
+          schedule();
+        },
+      },
+      flush: flush,
     };
   }
 
@@ -1278,6 +1490,9 @@
     /* состояние вкладок открытой книги (один ключ на проект) */
     projectPrefKey: projectPrefKey,
     projectPrefs: projectPrefs,
+    /* снимок состояния книги на сервере (tmp/ui_state): ключи браузера —
+       те же, что раньше, бумажник — файл книги */
+    bookState: bookState,
 
     nerCellText: nerCellText,
     /* замок термина (NER_LOCK_FIELD): состояние, а не столбец таблицы */

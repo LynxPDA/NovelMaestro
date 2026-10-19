@@ -101,40 +101,50 @@ def ui_state_read(ddir: Path, device: str = "",
                   merge: bool = True) -> dict:
     """Состояние книги для устройства: {ключ: значение}.
 
-    merge=True — поверх своего файла кладутся свежие файлы других устройств
-    (свой важнее: то, что человек только что поменял здесь, не должно
-    перебиваться тем, что осталось на другом устройстве). merge=False — только
-    своё: так читает клиент, который собирается писать (чтобы не перетащить
-    чужое в свой файл молча).
+    merge=True (обычное чтение) — файлы устройств накладываются в порядке
+    mtime: сев за другой браузер, человек продолжает с того, что оставил
+    раньше (вложенные объекты сливаются — правка главы на телефоне не стирает
+    панели, выбранные на ноутбуке). Свой файл накладывается последним: то, что
+    поменяли здесь, важнее. merge=False — только свой файл.
+
+    Снятый ключ не воскресает из чужого файла: удаление отмечается в файле
+    владельца (`_deleted`), и надгробие применяется в том же порядке mtime —
+    иначе «Сбросить настройки» отменялось бы чужой записью.
     """
+    return _read(ddir, device, merge)[0]
+
+
+def _read(ddir: Path, device: str, merge: bool) -> tuple[dict, dict]:
+    """(значения, надгробия) после слияния: надгробия нужны записи."""
     ddir = Path(ddir)
     with _LOCK:
         own = _load(_file(ddir, device))
-        if not merge:
-            return _strip(own)
-        merged: dict = {}
-        try:
-            others = sorted((p for p in ddir.glob("*.json") if p.is_file()),
-                            key=lambda p: p.stat().st_mtime)
-        except OSError:
-            others = []
-        for path in others:
-            if device and path.name == f"{device}.json":
-                continue
-            if not _fresh(path):
-                continue
-            merged = _merge(merged, _strip(_load(path)))
-        return _merge(merged, _strip(own))
+        data: dict = {}
+        graves: dict = {}
+        if merge:
+            try:
+                others = sorted(
+                    (p for p in ddir.glob("*.json")
+                     if p.is_file()
+                     and (not device or p.name != f"{device}.json")),
+                    key=lambda p: p.stat().st_mtime)
+            except OSError:
+                others = []
+            for path in others:
+                if not _fresh(path):
+                    continue
+                _apply(data, graves, _load(path))
+        _apply(data, graves, own)
+        return data, graves
 
 
 def ui_state_write(ddir: Path, device: str, payload: dict) -> None:
-    """Сохранить состояние устройства (merge с уже лежащим на диске).
+    """Сохранить состояние устройства (ключи книги поверх лежащих на диске).
 
-    Клиент держит состояние в памяти и присылает его целиком: **присланные
-    скоупы заменяются**, а не сливаются — иначе нельзя было бы ничего сбросить
-    (значение, возвращённое к дефолту конфига, так и осталось бы в файле). При
-    чтении файлы устройств сливаются глубоко (`ui_state_read`): устройство,
-    пришедшее после другого, видит его правки, а не пустые формы.
+    Клиент присылает только изменённые ключи (`nmTab:…`, `runVals:…:стадия`,
+    `nmProfile:…`); значение `None` снимает ключ и оставляет надгробие — так
+    сброс настроек стирает значение и в книге, а не только в памяти страницы.
+    Неприсланные ключи остаются: правка одной вкладки не задевает соседние.
     """
     if not isinstance(payload, dict):
         raise ValueError("состояние интерфейса — JSON-объект")
@@ -142,11 +152,24 @@ def ui_state_write(ddir: Path, device: str, payload: dict) -> None:
     with _LOCK:
         ddir.mkdir(parents=True, exist_ok=True)
         target = _file(ddir, device)
-        merged = dict(_load(target))
-        merged.update(_clean_state(payload))
-        merged["version"] = UI_STATE_VERSION
-        merged["updated"] = round(time.time(), 3)
-        atomic_write(str(target), json.dumps(merged, ensure_ascii=False,
+        data, graves = _read(ddir, device, merge=False)
+        for key, value in _clean_state(payload).items():
+            if value is None:
+                data.pop(key, None)
+                graves[key] = round(time.time(), 3)
+            else:
+                data[key] = value
+                graves.pop(key, None)
+        # надгробия старше срока годности не нужны: файлы устройств с такими
+        # значениями к этому времени и сами не попадают в слияние
+        cutoff = time.time() - UI_STATE_STALE
+        graves = {k: v for k, v in graves.items() if v >= cutoff}
+        out = dict(data)
+        out["version"] = UI_STATE_VERSION
+        out["updated"] = round(time.time(), 3)
+        if graves:
+            out["_deleted"] = graves
+        atomic_write(str(target), json.dumps(out, ensure_ascii=False,
                                              indent=2))
         ui_state_prune(ddir)
 
@@ -173,22 +196,50 @@ def ui_state_prune(ddir: Path, keep: int = UI_STATE_KEEP) -> list[str]:
     return dropped
 
 
+#: служебные поля файла состояния: в состояние клиента они не едут
+_SERVICE = ("version", "updated", "_deleted")
+
+
 def _strip(data: dict) -> dict:
-    """Только ключи интерфейса: служебные поля формата в состояние не едут."""
-    return {k: v for k, v in data.items() if k not in ("version", "updated")}
+    """Только ключи интерфейса (служебные поля формата отбрасываются)."""
+    return {k: v for k, v in data.items() if k not in _SERVICE}
+
+
+def _deleted(data: dict) -> dict:
+    """Надгробия снятых ключей: {ключ: время снятия}; битые — пусто."""
+    raw = data.get("_deleted")
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items() if isinstance(k, str)}
+
+
+def _apply(out: dict, graves: dict, data: dict) -> None:
+    """Наложить файл на слияние: значения сливаются, надгробия снимают ключи.
+
+    Надгробие действует, если оно не старше уже учтённого: порядок mtime —
+    единственный закон (значение чьей-то более поздней правки важнее снятия).
+    """
+    for key, value in _strip(data).items():
+        old = out.get(key)
+        if isinstance(old, dict) and isinstance(value, dict):
+            out[key] = _merge(old, value)
+        else:
+            out[key] = value
+    for key, when in _deleted(data).items():
+        if when >= float(graves.get(key, 0)):
+            out.pop(key, None)
+            graves[key] = when
 
 
 def _clean_state(state: dict) -> dict:
-    """Глубина 2 и JSON-типы: клиент присылает {ключ: объект}, а мусор в теле
-    запроса не должен ложиться в файл книги."""
+    """Только ключи интерфейса и JSON-типы: мусор из тела запроса не должен
+    ложиться в файл книги (None = ключ снят, так клиент сбрасывает настройки)."""
     out: dict = {}
     for key, value in state.items():
-        if not isinstance(key, str) or not key:
+        if not isinstance(key, str) or not key or len(key) > 200:
             continue
-        if isinstance(value, dict):
-            out[key] = {str(k): v for k, v in value.items()
-                        if isinstance(k, (str, int))}
-        elif isinstance(value, (str, int, float, bool)) or value is None:
+        if isinstance(value, (dict, list)) or value is None or isinstance(
+                value, (str, int, float, bool)):
             out[key] = value
     return out
 
@@ -208,12 +259,15 @@ def _merge(base: dict, patch: dict) -> dict:
 def _selfcheck() -> None:  # pragma: no cover — ручная проверка слоя
     import tempfile
     with tempfile.TemporaryDirectory() as d:
-        ddir = ui_state_dir(Path(d))
-        ui_state_write(ddir, "dev1", {"runs": {"ner": {"chunk_size": "1"}}})
-        ui_state_write(ddir, "dev2", {"runs": {"wiki": {"top": "80"}}})
+        d = Path(d)
+        ddir = ui_state_dir(d)
+        ui_state_write(ddir, "dev1", {"nmTab:a/b": {"page": {"view": "run"}}})
+        ui_state_write(ddir, "dev2", {"nmProfile:a/b/ner": "home"})
         got = ui_state_read(ddir, "dev1")
-        assert got["runs"]["ner"]["chunk_size"] == "1", got
-        assert got["runs"]["wiki"]["top"] == "80", got
+        assert got["nmTab:a/b"] == {"page": {"view": "run"}}, got
+        assert got["nmProfile:a/b/ner"] == "home", got
+        ui_state_write(ddir, "dev1", {"nmProfile:a/b/ner": None})
+        assert "nmProfile:a/b/ner" not in ui_state_read(ddir, "dev1")
         print("ui_state ok:", sorted(p.name for p in ddir.iterdir()))
 
 
