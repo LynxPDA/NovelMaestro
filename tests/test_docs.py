@@ -256,3 +256,28 @@ def test_requirements_cover_declared_roles():
         assert pip in names, f"{pip}: есть в requirements, но не в реестре ролей"
     assert "requests" not in runtime_pkgs, \
         f"requests вытеснен, а в рантайме остался: {runtime_pkgs}"
+
+
+def _project_tab_labels():
+    """Подписи вкладок проекта из реестра SPA (project-views.js: PROJECT_TABS)."""
+    src = (ROOT / "web" / "static" / "project-views.js").read_text(encoding="utf-8")
+    block = src[src.index("const PROJECT_TABS = ["):]
+    block = block[:block.index("];")]
+    return re.findall(r'\[\s*"[a-z_]+"\s*,\s*"([^"]+)"\s*\]', block)
+
+
+def test_readme_lists_all_project_tabs():
+    """README перечисляет вкладки проекта поимённо, и список обязан совпадать
+    с PROJECT_TABS: новая вкладка молча выпадала из документации (так
+    «История» и пропала). Порядок в README держим как в реестре."""
+    labels = _project_tab_labels()
+    assert labels, "PROJECT_TABS не разобран — изменился формат реестра"
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    line = next((ln for ln in text.splitlines()
+                 if "Внутри проекта — вкладки:" in ln), "")
+    assert line, "в README нет строки со списком вкладок проекта"
+    listed = re.findall(r"\*\*([^*]+)\*\*", line)
+    listed = [p.strip() for part in listed for p in part.split(",")]
+    assert listed == labels, (
+        f"список вкладок в README разошёлся с PROJECT_TABS: "
+        f"{listed} ≠ {labels}")
