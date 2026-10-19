@@ -2476,6 +2476,17 @@ async function main() {
     };
     await page.route("**/api/session", inject);
     await page.route("**/api/update/status", inject);
+    /* сама проверка по кнопке: запрос идёт в сеть, ответ кладёт релиз —
+     * панель обязана перерисоваться сразу, а не после перезагрузки страницы */
+    let checkHits = 0;
+    await page.route("**/api/update/check", async (route) => {
+      checkHits += 1;
+      // ответ приходит не мгновенно: на паузе видна подпись «Проверяю…»
+      await new Promise((done) => setTimeout(done, 600));
+      mock = mockUpdate("git");
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ok: true, update: mock }) });
+    });
     const readBox = () =>
       page.evaluate(() => {
         const box = document.querySelector(".user-menu .update-box");
@@ -2626,6 +2637,55 @@ async function main() {
     }
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-portable.png") });
     log(`${problems.length === portableBefore ? "✅" : "❌"} обновления: portable ${portable.none ? "нет панели" : `кнопок ${portable.btns.length}`}`);
+
+    /* кнопка «Проверить»: до ответа подписана «Проверяю…» и не жмётся второй
+     * раз, после ответа панель показывает итог без перезагрузки страницы */
+    const unchecked = mockUpdate("git", "git", null,
+      { release: null, checked: 0, available: false });
+    await openBox(unchecked);
+    const checkBefore = problems.length;
+    const checkBtn = page.locator(".user-menu .update-box button",
+      { hasText: "Проверить обновления" }).first();
+    const pending = checkBtn.click();  // не await: смотрим состояние запроса
+    await page.waitForTimeout(250);
+    const busy = await page.evaluate(() => {
+      const btns = [...document.querySelectorAll(".user-menu .update-box button")];
+      return btns.map((b) => `${b.textContent.trim()}${b.disabled ? "[disabled]" : ""}`);
+    });
+    await pending;
+    await page.waitForTimeout(900);
+    const checkedBox = await readBox();
+    if (checkHits !== 1) problems.push(`кнопка проверки отправила ${checkHits} запрос(а)`);
+    if (!busy.some((b) => /Проверяю…\[disabled\]/.test(b)))
+      problems.push(`на время проверки кнопки: ${busy.join(", ")}`);
+    if (/не проверялось/.test(checkedBox.text))
+      problems.push("после проверки панель осталась на «не проверялось»");
+    if (!/Доступна v9\.9\.0/.test(checkedBox.text))
+      problems.push(`итог проверки не показан: ${checkedBox.text.slice(0, 120)}`);
+    if (!checkedBox.badge) problems.push("после проверки нет точки-бейджа на «⋮»");
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-check.png") });
+    log(`${problems.length === checkBefore ? "✅" : "❌"} обновления: проверка  запросов ${checkHits} · ${busy.join(", ")}`);
+    await page.unroute("**/api/update/check");
+
+    /* отказ проверки: сеть недоступна — это не «обновлений нет», причина
+     * видна в самой панели, а не только в тосте (его можно не заметить) */
+    await page.route("**/api/update/check", (route) => route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ ok: false, error: "HTTP 503: сеть недоступна" }),
+    }));
+    await openBox(unchecked);
+    const failBefore = problems.length;
+    await page.locator(".user-menu .update-box button",
+      { hasText: "Проверить обновления" }).first().click();
+    await page.waitForTimeout(700);
+    const failedBox = await readBox();
+    if (!/Проверить не удалось: HTTP 503/.test(failedBox.text))
+      problems.push(`отказ проверки не показан в панели: ${failedBox.text.slice(0, 140)}`);
+    if (/последняя версия/.test(failedBox.text))
+      problems.push("отказ проверки выдан за «последнюю версию»");
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-update-failed.png") });
+    log(`${problems.length === failBefore ? "✅" : "❌"} обновления: отказ     причина в панели`);
+    await page.unroute("**/api/update/check");
 
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);

@@ -2307,6 +2307,8 @@ const UPDATE_BOOT_TRIES = 5;               // сколько раз её под�
 let updatePollTimer = null;
 let updateJobTimer = null;
 let updateBootTries = 0;
+let updateChecking = false; // проверка идёт: кнопка не жмётся второй раз
+let updateCheckError = "";  // последний отказ проверки: сеть, 500, не-JSON
 /* перезапуск делает сервер сам (git, копия исходников) — по нему решается,
    ждать ответа сервера или звать пользователя перезапустить руками */
 let updateRestartAuto = false;
@@ -2331,7 +2333,18 @@ function updateBootBox() {
 
 function refreshUpdateBox() {
   const old = updateBootBox();
-  if (old) old.replaceWith(updateMenuItem());
+  if (!old) return;
+  old.replaceWith(updateMenuItem());
+  // панель сменила высоту: открытое меню переставляем по кнопке
+  if (_openMenu) placeMenu(_openMenu.btn, _openMenu.menu);
+}
+
+/* строка о неудачной проверке: сеть недоступна — это не «обновлений нет»,
+   и в панели должен быть виден сам отказ, а не только тост */
+function updateErrorBox() {
+  if (!updateCheckError) return null;
+  return h("div", { class: "update-how update-error" },
+    `Проверить не удалось: ${updateCheckError}`);
 }
 
 function updateDate(iso) {
@@ -2376,7 +2389,7 @@ async function updateAdoptBootCheck() {
       updateJobPoll();
     else if (upd.available)
       toast(`Доступна новая версия: v${(upd.release || {}).version || "?"}`);
-    else if (updateBootBox()) refreshUpdateBox();
+    refreshUpdateBox();
   }, UPDATE_BOOT_MS);
 }
 
@@ -2406,12 +2419,19 @@ function updateNotes(text) {
 function updateCheckBtn(label) {
   return h("button", {
     class: "btn btn-sm btn-ghost update-btn",
+    disabled: updateChecking,
     onclick: () => checkUpdates(true),
-  }, label);
+  }, updateChecking ? "Проверяю…" : label);
 }
 
+/* Проверка идёт через сеть (до CHECK_TIMEOUT секунд): панель показывает, что
+   запрос принят, и перерисовывается итогом — иначе в открытом меню остаётся
+   старое «не проверялось», а вердикт виден только тостом и после перезагрузки. */
 async function checkUpdates(showToast) {
-  if (!state.auth) return;
+  if (!state.auth || updateChecking) return;
+  updateChecking = true;
+  updateCheckError = "";
+  refreshUpdateBox();
   try {
     const r = await api("/update/check", { method: "POST" });
     state.update = r.update || state.update;
@@ -2425,7 +2445,11 @@ async function checkUpdates(showToast) {
         && (state.update.job.state === "running"
             || state.update.job.state === "restarting")) updateJobPoll();
   } catch (ex) {
+    updateCheckError = ex.message;
     if (showToast) toast(`Обновление не проверить: ${ex.message}`, "err");
+  } finally {
+    updateChecking = false;
+    refreshUpdateBox();
   }
 }
 
@@ -2562,6 +2586,8 @@ function updateMenuItem() {
     box.append(h("div", { class: "update-state" },
       u.label ? `${u.label}. Обновление не проверялось.`
               : "Обновление не проверялось."));
+    const failed = updateErrorBox();
+    if (failed) box.append(failed);
     box.append(updateCheckBtn("Проверить обновления"));
     return box;
   }
@@ -2601,6 +2627,8 @@ function updateMenuItem() {
   if (rel.url) links.push(updateLink(rel.url, `Релиз v${rel.version}`));
   if (rel.changes) links.push(updateLink(rel.changes, "Список изменений"));
   if (links.length) box.append(h("div", { class: "update-links" }, ...links));
+  const failed = updateErrorBox();
+  if (failed) box.append(failed);
   box.append(updateCheckBtn("Проверить снова"));
   return box;
 }

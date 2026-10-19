@@ -183,6 +183,31 @@ def test_app_update_helpers_defined():
         assert re.search(rf"\bfunction {name}\s*\(", src), f"{name} вызывается, но не определена"
 
 
+def test_app_update_check_rerenders_panel():
+    """Проверка обновления по кнопке перерисовывает панель, а не только
+    состояние: без перерисовки в открытом меню остаётся «не проверялось»,
+    вердикт виден тостом, а итог — только после перезагрузки страницы.
+    Пока запрос идёт, кнопка говорит «Проверяю…» и не жмётся второй раз;
+    отказ сети виден в панели, а не только в тосте."""
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    body = src[src.index("async function checkUpdates("):]
+    body = body[:body.index("\n}\n")]
+    assert "refreshUpdateBox()" in body, "панель не перерисовывается итогом"
+    assert "finally" in body, "флаг проверки не снимается при ошибке"
+    assert "updateChecking" in body, "нет защиты от повторного запуска"
+    assert "updateCheckError" in body, "отказ проверки не сохраняется для панели"
+    # «Проверяю…» рисуется одними и теми же кнопками панели
+    btn = src[src.index("function updateCheckBtn("):]
+    btn = btn[:btn.index("\n}\n")]
+    assert "Проверяю…" in btn and "disabled" in btn
+    # причина отказа — строка панели, а не только тост
+    err = src[src.index("function updateErrorBox("):]
+    err = err[:err.index("\n}\n")]
+    assert "updateCheckError" in err
+    menu = src[src.index("function updateMenuItem("):]
+    assert menu.count("updateErrorBox()") == 2, "отказ не выводится в обоих состояниях"
+
+
 def test_app_update_restart_text_from_server():
     """Текст о перезапуске пишет сервер (core/update.py::RESTART_NOTES): способ
     установки его и определяет. В SPA его быть не может — там только показ

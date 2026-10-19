@@ -411,6 +411,13 @@ body {
   padding-left: 8px;
   border-left: 2px solid var(--border);
 }
+/* отказ проверки: сеть недоступна — это не «обновлений нет», и строка
+   видна в панели, а не только в тосте */
+.update-error {
+  color: var(--danger);
+  padding-left: 8px;
+  border-left: 2px solid var(--danger);
+}
 /* ход обновления: строки лога потока сервера */
 .update-log {
   font-family: var(--mono);
