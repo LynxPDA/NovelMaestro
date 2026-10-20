@@ -2381,6 +2381,96 @@ test("состояние «Промптов»: открытый файл воз�
   delete globalThis.__prompts;
 });
 
+test("«Промпты»: кнопки файлов слева от редактора, а сохранение — в редакторе", async () => {
+  globalThis.__prompts = {
+    prompts: [{ name: "p.txt", size: 3 }],
+    templates: [{ name: "p.txt", set: "General" }],
+    template_sets: [{ name: "General", prompts: ["p.txt"] }],
+  };
+  const page = viewProject("ACTIVE", "Книга", "prompts");
+  await tick();
+  const layout = findByClass(page, "prompts-layout")[0];
+  const [side, main] = layout.children;
+  const sideText = collectText(side).join(" ");
+  assert.match(sideText, /Создать/, "«Создать» — над списком слева");
+  assert.match(sideText, /Из шаблона/, "«Из шаблона» — над списком слева");
+  assert.match(sideText, /Очистить/, "«Очистить» — над списком слева");
+  const mainText = collectText(main).join(" ");
+  assert.match(mainText, /Сохранить/, "сохранение осталось в редакторе");
+  assert.doesNotMatch(mainText, /Создать/);
+  delete globalThis.__prompts;
+});
+
+test("«Промпты»: «Очистить» удаляет все промпты книги одним запросом", async () => {
+  globalThis.__prompts = {
+    prompts: [{ name: "a.txt", size: 3 }, { name: "b.txt", size: 3 }],
+    templates: [],
+    template_sets: [],
+  };
+  globalThis.__calls = [];
+  const page = viewProject("ACTIVE", "Книга", "prompts");
+  await tick();
+  const clear = findByClass(page, "prompts-side")[0]
+    .querySelectorAll("button").find((b) => allText(b).trim() === "Очистить");
+  assert.ok(clear, "кнопка «Очистить» есть");
+  clear._listeners.click[0]();
+  await tick();
+  /* подтверждение — ввод слова-пароля (мок confirmModal требует клика) */
+  const bd = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(bd, "подтверждение очистки открылось");
+  findTag(bd, "input")[0].value = "УДАЛИТЬ";
+  await findByClass(bd, "btn-danger")[0]._listeners.click[0]();
+  await tick();
+  const del = globalThis.__calls.filter((c) => c.method === "DELETE"
+    && c.path === "/prompts");
+  assert.equal(del.length, 1, "очистка — один DELETE /prompts");
+  delete globalThis.__prompts;
+});
+
+test("«Промпты»: «Из шаблона» → весь набор копируется одним запросом", async () => {
+  globalThis.__prompts = {
+    prompts: [{ name: "pipeline_prompt.txt", size: 3 }],
+    templates: [{ name: "pipeline_prompt.txt", set: "General" }],
+    template_sets: [{ name: "General", prompts: ["pipeline_prompt.txt", "ner_prompt.txt"] }],
+  };
+  globalThis.__calls = [];
+  const page = viewProject("ACTIVE", "Книга", "prompts");
+  await tick();
+  await findByClass(page, "prompts-side")[0].querySelectorAll("button")
+    .find((b) => allText(b).trim() === "Из шаблона")._listeners.click[0]();
+  await tick();
+  const bd = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(bd, "модалка «Из шаблона» открылась");
+  /* второй способ — «весь набор»: видно состав и что будет заменено;
+     мок не знает групп radio — снимаем «Один файл» руками */
+  const inputs = findTag(bd, "input");
+  inputs.find((i) => i.value === "one").checked = false;
+  const setRadio = inputs.find((i) => i.value === "set");
+  setRadio.checked = true;
+  await setRadio._listeners.change[0]();
+  /* в DOM первый option выбран сам, заглушка value не выводит — ставим руками */
+  const setSel = findTag(bd, "select")[1];
+  setSel.value = "General";
+  await setSel._listeners.change[0]();
+  const hint = findByClass(bd, "card-hint")[0];
+  assert.match(allText(hint), /ner_prompt\.txt/, "виден состав набора");
+  assert.match(allText(hint), /Заменятся в книге: pipeline_prompt\.txt/,
+    "видно, что будет заменено");
+  await findByClass(bd, "btn-primary")[0]._listeners.click[0]();
+  await tick();
+  const call = globalThis.__calls.find((c) => c.path === "/prompts/copy-set");
+  assert.ok(call, "POST /api/prompts/copy-set ушёл");
+  assert.deepEqual(JSON.parse(JSON.stringify(call.body)), {
+    project: "ACTIVE/Книга",
+    set: "General",
+  });
+  delete globalThis.__prompts;
+});
+
 test("состояние «Логов»: папка и открытый файл возвращаются", async () => {
   globalThis.__logs = {
     logs: [

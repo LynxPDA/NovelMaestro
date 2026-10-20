@@ -2247,6 +2247,59 @@ input[type="number"] {
   color: var(--text-dim);
   font-size: 13px;
 }
+/* «Промпты»: список и кнопки файлов — слева, редактор — справа (как в «Файлах»:
+   действие с открытым документом в тулбаре редактора, а действия с составом
+   папки — над списком). Узкое окно — одна колонка, список сверху */
+.prompts-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.prompts-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.prompts-side .files-toolbar {
+  margin-bottom: 0;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.prompts-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .prompts-layout {
+    grid-template-columns: 1fr;
+  }
+}
+/* выбор способа в модалке «Из шаблона»: один файл или весь набор */
+.prompt-tpl-modes {
+  display: flex;
+  gap: 16px;
+}
+.prompt-tpl-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.prompt-tpl-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* строка предупреждения: эти файлы уже есть в книге и будут заменены */
+.prompt-tpl-warn {
+  margin-top: 4px;
+  color: var(--accent-2);
+}
 .log-view {
   background: var(--log-bg);
   border: 1px solid var(--border);

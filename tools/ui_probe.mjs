@@ -835,6 +835,86 @@ async function main() {
         ? `\n     ${problems.slice(before).join("\n     ")}` : ""));
   }
 
+  /* «Промпты»: копирование ВСЕГО набора шаблона и очистка папки — действия
+   * с составом папки (кнопки слева от редактора), а не с открытым файлом. */
+  {
+    const before = problems.length;
+    const bookPrompts = path.join(seedDir || "", SECTION, BOOK, "prompts");
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/prompts`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".prompt-item", { timeout: 15000 });
+    const side = await page.evaluate(() => {
+      const box = document.querySelector(".prompts-side");
+      return box
+        ? [...box.querySelectorAll("button")].map((b) => b.textContent.trim())
+        : [];
+    });
+    for (const act of ["Создать", "Из шаблона", "Очистить"]) {
+      if (!side.includes(act)) problems.push(`промпты: слева нет «${act}» (${side.join(",")})`);
+    }
+    /* геометрия: кнопки файлов левее редактора, сохранение — над ним */
+    const geo = await page.evaluate(() => {
+      const box = (s) => document.querySelector(s)?.getBoundingClientRect();
+      return {
+        side: box(".prompts-side")?.right || 0,
+        main: box(".prompts-main")?.left || 0,
+        editor: box(".prompts-main .editor-cm")?.top || 0,
+        save: [...document.querySelectorAll(".prompts-main button")]
+          .filter((b) => b.textContent.trim() === "Сохранить")
+          .map((b) => b.getBoundingClientRect().top)[0] || 0,
+      };
+    });
+    if (!(geo.side < geo.main))
+      problems.push(`промпты: список не левее редактора (${geo.side} / ${geo.main})`);
+    if (!(geo.save && geo.save < geo.editor))
+      problems.push(`промпты: «Сохранить» не над редактором (${geo.save} / ${geo.editor})`);
+    await page.locator('.prompts-side button:has-text("Из шаблона")').click();
+    await page.waitForTimeout(500);
+    /* способ «весь набор»: в книгу приезжают все промпты выбранного набора */
+    await page.locator('.modal-backdrop label:has-text("Весь набор") input').check();
+    await page.waitForTimeout(300);
+    const setInfo = await page.evaluate(() =>
+      (document.querySelector(".modal-backdrop .card-hint") || {}).textContent || "");
+    if (!/General:/.test(setInfo) || !/pipeline_prompt\.txt/.test(setInfo))
+      problems.push(`промпты: список файлов набора «${setInfo.trim()}»`);
+    await page.locator('.modal-backdrop button:has-text("Скопировать")').click();
+    await page.waitForTimeout(1500);
+    const copied = fs.existsSync(path.join(bookPrompts, "pipeline_prompt.txt"))
+      && fs.existsSync(path.join(bookPrompts, "ner_check_prompt.txt"));
+    if (!copied) problems.push("промпты: набор не скопировался в книгу");
+    const listed = await page.evaluate(() =>
+      [...document.querySelectorAll(".prompt-item")].map((b) => b.textContent));
+    if (!listed.some((t) => t.includes("pipeline_prompt.txt")))
+      problems.push("промпты: скопированный файл не появился в списке");
+    /* очистка: все промпты книги одним действием, каталог остаётся */
+    await page.locator('.prompts-side button:has-text("Очистить")').click();
+    await page.waitForTimeout(500);
+    await page.locator(".modal-backdrop input.input").fill("УДАЛИТЬ");
+    await page.locator('.modal-backdrop button:has-text("Подтвердить")').click();
+    await page.waitForTimeout(1500);
+    const left = fs.existsSync(bookPrompts)
+      ? fs.readdirSync(bookPrompts).length : 0;
+    if (left) problems.push(`промпты: после очистки осталось ${left} файл(ов)`);
+    const empty = await page.evaluate(() =>
+      (document.querySelector(".prompt-list .empty") || {}).textContent || "");
+    if (!/Нет промптов/.test(empty))
+      problems.push(`промпты: после очистки список «${empty.trim()}»`);
+    /* данные пробы возвращаются на место: дальнейшие сценарии ждут seeded
+       промпты (проверка промпта стадии берёт ner_prompt.txt) */
+    fs.writeFileSync(path.join(bookPrompts, "translate.txt"),
+      "<translate>переведи</translate>\n", "utf-8");
+    fs.writeFileSync(path.join(bookPrompts, "ner_prompt.txt"),
+      "<prompt_pass1>\n{chunk_text}\n</prompt_pass1>\n", "utf-8");
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-prompts-set.png") });
+    log(`${problems.length === before ? "✅" : "❌"} промпты: набор`
+      + ` слева ${side.length} кнопок · копия ${copied ? "есть" : "НЕТ"}`
+      + ` · очистка → файлов ${left}`
+      + (problems.length > before
+        ? `\n     ${problems.slice(before).join("\n     ")}` : ""));
+  }
+
   /* «Файлы»: строка — чекбокс выделения и кнопки одного объекта (правка,
    * переименовать); групповые действия (скачать/перенести/удалить) — в панели
    * выделения, она заменяет кнопки тулбара; построчных меню «⋮» нет */
@@ -2949,6 +3029,9 @@ async function main() {
 
     ["export", `#/project/${SECTION}/${BOOK}/ner`,
       'button:has-text("Экспорт для анализа")', null],
+    /* «Промпты из шаблона»: выбор способа и имя файла в книге */
+    ["prompt-tpl", `#/project/${SECTION}/${BOOK}/prompts`,
+      '.prompts-side button:has-text("Из шаблона")', null],
   ];
   for (const [name, hash, sel, opener] of modals) {
     const before = problems.length;

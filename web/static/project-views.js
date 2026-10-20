@@ -4992,6 +4992,7 @@ function viewProject(section, name, tab, job) {
     function renderList() {
       list.replaceChildren();
       delBtn.disabled = !current;
+      clearBtn.disabled = !(data.prompts || []).length;
       for (const p of data.prompts || []) {
         const btn = h(
           "button",
@@ -5122,26 +5123,58 @@ function viewProject(section, name, tab, job) {
     });
     const tplBtn = h("button", { class: "btn btn-sm btn-ghost" }, "Из шаблона");
     tplBtn.addEventListener("click", () =>
-      templateModal(data.templates || [], async (tpl, outName) => {
-        try {
-          await api(`/prompts/${encodeURIComponent(outName)}`, {
-            method: "PUT",
-            body: { project: `${section}/${name}`, content: tpl.content },
-          });
-          toast(`Создан ${outName} (из «${tpl.set}»)`);
-          render();
-        } catch (ex) {
-          toast(ex.message, "err");
-        }
+      templateModal(data, (done) => {
+        toast(done.message);
+        render();
       }),
+    );
+    /* очистка — все промпты книги сразу: каталог остаётся, удаляются файлы */
+    const clearBtn = h(
+      "button",
+      { class: "btn btn-sm btn-danger-ghost", disabled: true },
+      "Очистить",
+    );
+    clearBtn.addEventListener("click", () => {
+      const all = data.prompts || [];
+      if (!all.length) return;
+      confirmModal(
+        "Удаление промптов",
+        `Будут удалены все промпты книги (${all.length} шт.): `
+          + all.map((p) => p.name).join(", ")
+          + ". Стадии, у которых файла нет, вернутся к встроенным промптам.",
+        "УДАЛИТЬ",
+        async () => {
+          await api(`/prompts?${q}`, { method: "DELETE" });
+          toast("Все промпты удалены");
+          current = null;
+          pref.set("prompts", { file: "" });
+          nameLabel.textContent = "";
+          ed.setValue("");
+          render();
+        },
+      );
+    });
+    /* раскладка — как у «Файлов»: слева список и кнопки файлов, справа
+       редактор (тулбар над ним — действие с открытым файлом) */
+    const side = h(
+      "div",
+      { class: "prompts-side" },
+      h(
+        "div",
+        { class: "files-toolbar" },
+        createBtn,
+        tplBtn,
+        h("span", { class: "spacer" }),
+        clearBtn,
+      ),
+      list,
     );
     const toolbar = h(
       "div",
       { class: "files-toolbar" },
       nameLabel,
       h("span", { class: "spacer" }),
-      createBtn,
-      tplBtn,
+      delBtn,
       UIC.editorSearch(ed),
       saveBtn,
     );
@@ -5152,14 +5185,38 @@ function viewProject(section, name, tab, job) {
       load(current);
     }
     const editorHost = h("div", { class: "editor-cm" }, ed.root);
-    return h("div", { class: "files-wrap" }, toolbar, err, list, editorHost);
+    return h(
+      "div",
+      { class: "files-wrap" },
+      err,
+      h(
+        "div",
+        { class: "prompts-layout" },
+        side,
+        h("div", { class: "prompts-main" }, toolbar, editorHost),
+      ),
+    );
   }
 
-  /* Модалка выбора шаблона: наборы templates + имя файла →
-     колбэк (шаблон, имя). Работает и на пустом prompts/. */
-  function templateModal(templates, onApply) {
+  /* Модалка «Из шаблона»: два способа — ОДИН файл (любой файл любого набора,
+     с именем в книге) или ВЕСЬ набор (все промпты templates/<набор>/prompts).
+     Колбэк получает действие: оно пишет файлы и возвращает текст для тоста. */
+  function templateModal(data, onApply) {
     const q = new URLSearchParams({ project: `${section}/${name}` });
+    const templates = data.templates || [];
+    const sets = data.template_sets || [];
     const err = h("div", { class: "form-error" });
+    const toOne = h("input", { type: "radio", name: "tplmode", value: "one" });
+    const toSet = h("input", { type: "radio", name: "tplmode", value: "set" });
+    toOne.checked = true;
+    const modeOne = h("label", { class: "prompt-tpl-mode" }, toOne, "Один файл");
+    const modeSet = h(
+      "label",
+      { class: "prompt-tpl-mode" },
+      toSet,
+      "Весь набор",
+    );
+
     const sel = h("select", { class: "input" });
     for (const t of templates) {
       sel.append(h("option", { value: t.name }, `${t.name} · набор ${t.set}`));
@@ -5170,12 +5227,64 @@ function viewProject(section, name, tab, job) {
     }
     sel.addEventListener("change", syncName);
     fname.addEventListener("input", () => (fname.dataset.touched = "1"));
+
+    const setSel = h("select", { class: "input" });
+    for (const s of sets) {
+      setSel.append(
+        h("option", { value: s.name }, `${s.name} · ${s.prompts.length} шт.`),
+      );
+    }
+    /* что именно приедет в книгу и что при этом заменится — видно до
+       копирования: молча перезаписывать правленый промпт нельзя */
+    const existing = new Set((data.prompts || []).map((p) => p.name));
+    const setInfo = h("div", { class: "card-hint" });
+    function syncSetInfo() {
+      const s = sets.find((x) => x.name === setSel.value);
+      if (!s) {
+        setInfo.textContent = "Наборы не найдены";
+        return;
+      }
+      const over = s.prompts.filter((n) => existing.has(n));
+      setInfo.replaceChildren(
+        `${s.name}: ${s.prompts.join(", ")}`,
+        over.length
+          ? h(
+            "div",
+            { class: "prompt-tpl-warn" },
+            `Заменятся в книге: ${over.join(", ")}`,
+          )
+          : null,
+      );
+    }
+    setSel.addEventListener("change", syncSetInfo);
+
+    const onePane = h(
+      "div",
+      { class: "prompt-tpl-pane" },
+      h("div", { class: "form-row" }, sel, fname),
+    );
+    const setPane = h(
+      "div",
+      { class: "prompt-tpl-pane" },
+      setSel,
+      setInfo,
+    );
+    function syncMode() {
+      const one = toOne.checked;
+      onePane.classList.toggle("hidden", !one);
+      setPane.classList.toggle("hidden", one);
+    }
+    for (const r of [toOne, toSet]) r.addEventListener("change", syncMode);
+
     UIC.modal({
-      title: "Создать промпт из шаблона",
+      title: "Промпты из шаблона",
       build: (close) => [
-        templates.length
-          ? h("div", { class: "form-row" }, sel, fname)
+        h("div", { class: "prompt-tpl-modes" }, modeOne, modeSet),
+        templates.length || sets.length
+          ? null
           : h("div", { class: "modal-text" }, "Шаблоны не найдены"),
+        onePane,
+        setPane,
         err,
         h(
           "div",
@@ -5186,32 +5295,71 @@ function viewProject(section, name, tab, job) {
             {
               class: "btn btn-primary",
               onclick: async () => {
-                const target = templates.find((t) => t.name === sel.value);
-                const outName = fname.value.trim();
-                if (!target || !outName) {
-                  err.textContent = "Выберите шаблон и укажите имя файла";
-                  return;
+                err.textContent = "";
+                let apply;
+                if (toOne.checked) {
+                  const target = templates.find((t) => t.name === sel.value);
+                  const outName = fname.value.trim();
+                  if (!target || !outName) {
+                    err.textContent = "Выберите шаблон и укажите имя файла";
+                    return;
+                  }
+                  /* содержимое берётся из набора именно этого файла */
+                  apply = async () => {
+                    const d = await api(
+                      `/prompts/${encodeURIComponent(target.name)}`
+                        + `/template?${q}`,
+                    );
+                    const tpl = (d.templates || []).find(
+                      (t) => t.set === target.set,
+                    );
+                    if (!tpl) throw new Error("Шаблон не найден");
+                    await api(`/prompts/${encodeURIComponent(outName)}`, {
+                      method: "PUT",
+                      body: {
+                        project: `${section}/${name}`,
+                        content: tpl.content,
+                      },
+                    });
+                    return { message: `Создан ${outName} (из «${tpl.set}»)` };
+                  };
+                } else {
+                  const set = setSel.value;
+                  if (!set) {
+                    err.textContent = "Выберите набор шаблонов";
+                    return;
+                  }
+                  /* весь набор пишется одним запросом: файлы набора
+                     заменяются, чужие файлы книги остаются */
+                  apply = async () => {
+                    const d = await api("/prompts/copy-set", {
+                      method: "POST",
+                      body: { project: `${section}/${name}`, set },
+                    });
+                    const over = (d.replaced || []).length;
+                    return {
+                      message: `Скопировано из «${set}»: ${d.copied.length}`
+                        + (over ? `, заменено: ${over}` : ""),
+                    };
+                  };
                 }
                 try {
-                  const d = await api(
-                    `/prompts/${encodeURIComponent(target.name)}/template?${q}`,
-                  );
-                  const tpl =
-                    (d.templates || []).find((t) => t.set === target.set) ||
-                    (d.templates || [])[0];
+                  const done = await apply();
                   close();
-                  await onApply(tpl, outName);
+                  onApply(done);
                 } catch (ex) {
                   err.textContent = ex.message;
                 }
               },
             },
-            "Создать",
+            "Скопировать",
           ),
         ),
       ],
     });
     syncName();
+    syncSetInfo();
+    syncMode();
     sel.focus();
   }
 
