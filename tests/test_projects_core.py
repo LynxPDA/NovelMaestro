@@ -267,6 +267,34 @@ def test_fill_template_general_files(tmp_path):
     assert (pdir / "prompts" / "extra_rules.txt").read_text(encoding="utf-8") == "A -> B"
 
 
+def test_copy_template_prompts(tmp_path):
+    """Весь набор промптов — С заменой; чужие файлы книги не трогаются."""
+    tpl = tmp_path / "T"
+    (tpl / "prompts").mkdir(parents=True)
+    (tpl / "source").mkdir(parents=True)
+    (tpl / "prompts" / "a.txt").write_text("новый A", encoding="utf-8")
+    (tpl / "prompts" / "b.txt").write_text("новый B", encoding="utf-8")
+    (tpl / "source" / "metadata.yaml").write_text("m", encoding="utf-8")
+    pdir = tmp_path / "proj"
+    (pdir / "prompts").mkdir(parents=True)
+    (pdir / "prompts" / "a.txt").write_text("свой A", encoding="utf-8")
+    (pdir / "prompts" / "my.txt").write_text("моё", encoding="utf-8")
+    done = P.copy_template_prompts(pdir, tpl)
+    assert done == {"copied": ["a.txt", "b.txt"], "replaced": ["a.txt"]}
+    assert (pdir / "prompts" / "a.txt").read_text(encoding="utf-8") == "новый A"
+    assert (pdir / "prompts" / "my.txt").read_text(encoding="utf-8") == "моё"
+    # source/ шаблона не копируется — этим занимается полный набор проекта
+    assert not (pdir / "source" / "metadata.yaml").exists()
+
+
+def test_copy_template_prompts_empty(tmp_path):
+    """В наборе нет prompts/ — пустой результат, а не ошибка."""
+    tpl = tmp_path / "T"
+    tpl.mkdir()
+    pdir = tmp_path / "proj"
+    assert P.copy_template_prompts(pdir, tpl) == {"copied": [], "replaced": []}
+
+
 def test_write_project_metadata(tmp_path):
     tpl = tmp_path / "T"
     (tpl / "source").mkdir(parents=True)

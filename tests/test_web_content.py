@@ -705,6 +705,79 @@ def test_prompts_template_missing(srv, tmp_path):
     assert "__error__" in r and r["__error__"] == 404
 
 
+def test_prompts_delete_all(srv, tmp_path):
+    """DELETE /api/prompts — очистка: удаляются все промпты книги.
+
+    Каталог prompts/ остаётся (скелет проекта) и чужие подкаталоги тоже.
+    """
+    srv, port, root = srv()
+    pdir = _mk_project(root)
+    pr = pdir / "prompts"
+    pr.mkdir()
+    (pr / "a.txt").write_text("A\n", encoding="utf-8")
+    (pr / "b.txt").write_text("B\n", encoding="utf-8")
+    (pr / "sub").mkdir()
+    (pr / "sub" / "c.txt").write_text("C\n", encoding="utf-8")
+    r = _request(port, "DELETE", f"/api/prompts?{_q('ACTIVE/demo')}")
+    assert r["ok"] and sorted(r["deleted"]) == ["a.txt", "b.txt"]
+    assert pr.is_dir()
+    assert (pr / "sub" / "c.txt").is_file()
+    assert _request(port, "GET", f"/api/prompts?{_q('ACTIVE/demo')}")[
+        "prompts"] == []
+
+
+def test_prompts_delete_all_empty(srv, tmp_path):
+    """Пустая книга — очистка не ошибка: пустой список удалённых."""
+    srv, port, root = srv()
+    _mk_project(root)
+    r = _request(port, "DELETE", f"/api/prompts?{_q('ACTIVE/demo')}")
+    assert r["ok"] and r["deleted"] == []
+
+
+def test_prompts_template_sets_in_list(srv, tmp_path):
+    """Наборы шаблонов — вместе со списком промптов: из них копируют весь набор."""
+    srv, port, root = srv()
+    _mk_project(root)
+    r = _request(port, "GET", f"/api/prompts?{_q('ACTIVE/demo')}")
+    sets = {s["name"]: s for s in r["template_sets"]}
+    assert "General" in sets
+    assert "pipeline_prompt.txt" in sets["General"]["prompts"]
+    # плоский список файлов тоже на месте (выбор одного файла)
+    assert any(t["name"] == "pipeline_prompt.txt" for t in r["templates"])
+
+
+def test_prompts_copy_whole_set(srv, tmp_path):
+    """POST /api/prompts/copy-set — весь набор в книгу одним запросом."""
+    srv, port, root = srv()
+    pdir = _mk_project(root)
+    pr = pdir / "prompts"
+    pr.mkdir()
+    (pr / "pipeline_prompt.txt").write_text("СВОЙ\n", encoding="utf-8")
+    r = _request(port, "POST", "/api/prompts/copy-set",
+                 {"project": "ACTIVE/demo", "set": "General"})
+    assert r["ok"] and r["set"] == "General"
+    assert "ner_prompt.txt" in r["copied"]
+    # существующий файл заменён и назван заменённым (человек выбрал «весь набор»)
+    assert r["replaced"] == ["pipeline_prompt.txt"]
+    assert "СВОЙ" not in (pr / "pipeline_prompt.txt").read_text(encoding="utf-8")
+    assert (pr / "ner_prompt.txt").is_file()
+
+
+def test_prompts_copy_set_missing(srv, tmp_path):
+    srv, port, root = srv()
+    _mk_project(root)
+    r = _request(port, "POST", "/api/prompts/copy-set",
+                 {"project": "ACTIVE/demo", "set": "Nope"})
+    assert "__error__" in r and r["__error__"] == 404
+    r = _request(port, "POST", "/api/prompts/copy-set",
+                 {"project": "ACTIVE/demo"})
+    assert "__error__" in r and r["__error__"] == 400
+    # выход из templates/ — не набор, а путь наружу
+    r = _request(port, "POST", "/api/prompts/copy-set",
+                 {"project": "ACTIVE/demo", "set": "../projects"})
+    assert "__error__" in r and r["__error__"] == 400
+
+
 # ════════════════════════════════════════════════════════════════════
 # Логи
 

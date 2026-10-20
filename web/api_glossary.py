@@ -27,6 +27,7 @@ from web.api_env import (
     _prompts_get,
     _prompts_list,
     _prompts_put,
+    _prompts_copy_set,
     _prompts_template,
 )
 from web.api_stage import _jobs_start
@@ -231,9 +232,12 @@ def _register_glossary(router: Router) -> None:
     # настройки (общий .env) — в api_env._register_settings; файл книги
     # через API не отдаётся: его в модели больше нет
     router.add("GET", "/api/prompts", _prompts_list)
+    router.add("POST", "/api/prompts/copy-set", _prompts_copy_set)
     router.add("GET", "/api/prompts/{name}", _prompts_get)
     router.add("PUT", "/api/prompts/{name}", _prompts_put)
     router.add("DELETE", "/api/prompts/{name}", _prompts_delete)
+    # очистка вкладки: все промпты книги (роут — без {name})
+    router.add("DELETE", "/api/prompts", _prompts_delete)
     router.add("GET", "/api/prompts/{name}/template", _prompts_template)
     router.add("GET", "/api/metadata", _metadata_get)
     router.add("PUT", "/api/metadata", _metadata_put)

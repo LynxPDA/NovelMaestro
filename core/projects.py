@@ -353,6 +353,33 @@ def fill_project_from_template(pdir: Path, template_dir: Path) -> list:
     return copied
 
 
+def copy_template_prompts(pdir: Path, template_dir: Path) -> dict:
+    """Скопировать ВСЕ промпты набора в проект (с заменой существующих).
+
+    Нужно, когда книге нужен полный комплект промптов набора сразу: это
+    именно замена (пользователь выбрал «весь набор» сознательно), поэтому
+    совпадающие по имени файлы перезаписываются. Возвращает
+    {copied, replaced} — имена файлов; replaced — те, что в книге уже были.
+    """
+    pdir, template_dir = Path(pdir), Path(template_dir)
+    src_dir = Path(template_dir) / "prompts"
+    copied: list[str] = []
+    replaced: list[str] = []
+    if not src_dir.is_dir():
+        return {"copied": copied, "replaced": replaced}
+    dst_dir = Path(pdir) / "prompts"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for f in sorted(src_dir.iterdir()):
+        if not f.is_file():
+            continue
+        dst = dst_dir / f.name
+        if dst.exists():
+            replaced.append(f.name)
+        shutil.copy2(f, dst)
+        copied.append(f.name)
+    return {"copied": copied, "replaced": replaced}
+
+
 def write_project_metadata(pdir: Path, template_dir: Path,
                            title: str = "", author: str = "",
                            genres: list | None = None) -> bool:

@@ -25,6 +25,7 @@ from web.server import Router
 from web.api_common import (
     log,
     _import_common,
+    _import_projects,
     _project_ctx,
     _repo_root,
     _resolve_project_path,
@@ -190,10 +191,12 @@ def _register_settings(router: Router) -> None:
 def _prompts_list(ctx: dict) -> dict:
     """Список prompts/ проекта + доступные шаблоны.
 
-    Шаблоны — имена файлов из templates/*/prompts (уникальные, с пометкой
-    from_template): фронт показывает их даже при пустом prompts/ проекта
-    и умеет создавать промпт из шаблона.
+    templates — плоский список файлов templates/*/prompts (уникальные имена
+    с пометкой набора: из него строится выбор файла при копировании из
+    шаблона). template_sets — наборы целиком со списком промптов: по ним
+    копируют ВЕСЬ набор, когда нужно поднять сразу все стадии.
     """
+    prj = _import_projects(ctx)
     pdir, _section, _name = _project_ctx(ctx)
     pr = pdir / "prompts"
     out = []
@@ -207,20 +210,49 @@ def _prompts_list(ctx: dict) -> dict:
                 log.debug("Промпт не читается %s: %s", f, exc)
     repo = _repo_root(ctx)
     tpl_root = repo / "templates"
-    templates = []
+    templates, sets = [], []
     if tpl_root.is_dir():
-        for tset in sorted(tpl_root.iterdir()):
-            tdir = tset / "prompts"
-            if not tset.is_dir() or not tdir.is_dir():
+        for tset in prj.list_template_sets(tpl_root):
+            tdir = tpl_root / tset / "prompts"
+            if not tdir.is_dir():
                 continue
+            names = []
             try:
                 for f in sorted(tdir.iterdir()):
-                    if f.is_file() and f.name not in [t["name"] for t in templates]:
-                        templates.append({"name": f.name, "set": tset.name,
-                                          "size": f.stat().st_size})
+                    if not f.is_file():
+                        continue
+                    names.append(f.name)
+                    if f.name in [t["name"] for t in templates]:
+                        continue
+                    templates.append({"name": f.name, "set": tset,
+                                      "size": f.stat().st_size})
             except OSError as exc:
-                log.debug("Шаблоны не читаются %s: %s", tset.name, exc)
-    return {"ok": True, "prompts": out, "templates": templates}
+                log.debug("Шаблоны не читаются %s: %s", tset, exc)
+                continue
+            sets.append({"name": tset, "prompts": names})
+    return {"ok": True, "prompts": out, "templates": templates,
+            "template_sets": sets}
+
+
+def _prompts_copy_set(ctx: dict) -> dict:
+    """Скопировать весь набор шаблона в книгу (POST /api/prompts/copy-set).
+
+    Нужно, когда стадиям нужен полный комплект промптов сразу. Имена из
+    набора перезаписываются сознательно (человек выбрал «весь набор»),
+    остальные файлы книги не трогаются.
+    """
+    prj = _import_projects(ctx)
+    pdir, _section, _name = _project_ctx(ctx)
+    name = str(ctx["body"].get("set") or "").strip()
+    if not name:
+        raise ApiError(400, "Поле set обязательно")
+    tpl_dir = _resolve_project_path(ctx, _repo_root(ctx) / "templates", name)
+    if not (tpl_dir / "prompts").is_dir():
+        raise ApiError(404, f"Набор не найден: {name}")
+    done = prj.copy_template_prompts(pdir, tpl_dir)
+    if not done["copied"]:
+        raise ApiError(404, f"В наборе нет промптов: {name}")
+    return {"ok": True, "set": name, **done}
 
 
 def _prompts_get(ctx: dict) -> dict:
@@ -249,10 +281,26 @@ def _prompts_put(ctx: dict) -> dict:
 
 
 def _prompts_delete(ctx: dict) -> dict:
-    """Удалить промпт проекта (DELETE /api/prompts/{name}?project=)."""
+    """Удалить промпт проекта (DELETE /api/prompts/{name}?project=).
+
+    Без {name} (DELETE /api/prompts) — очистка: удаляются ВСЕ промпты книги.
+    Каталог prompts/ остаётся, чужие подкаталоги тоже.
+    """
     pdir, _section, _name = _project_ctx(ctx)
-    name = ctx["params"]["name"]
-    target = _resolve_project_path(ctx, pdir / "prompts", name)
+    pr = pdir / "prompts"
+    name = ctx.get("params", {}).get("name", "")
+    if not name:
+        deleted = []
+        if pr.is_dir():
+            for f in sorted(pr.iterdir()):
+                try:
+                    if f.is_file():
+                        f.unlink()
+                        deleted.append(f.name)
+                except OSError as exc:
+                    log.debug("Промпт не удаляется (%s): %s", f.name, exc)
+        return {"ok": True, "deleted": deleted}
+    target = _resolve_project_path(ctx, pr, name)
     if not target.is_file():
         raise ApiError(404, f"Промпт не найден: {name}")
     target.unlink()
