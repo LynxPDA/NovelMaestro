@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "cli"))
 
 import core.common as C  # noqa: E402
+from core import settings as SET  # noqa: E402
 import core.stage as core_stage  # noqa: E402
 import translate_check_llm as FE  # noqa: E402  (бывший fix_errors/redact_errors)
 from conftest import SilentLog, feed, fake_env  # noqa: E402
@@ -429,8 +430,9 @@ def test_main_check_writes_review_and_params(tmp_path, monkeypatch):
     assert e["file"].endswith("polished.txt")
     params = doc["params"]
     assert params["тип файлов"] == "polished" and params["потоки"] == 4
-    # бюджет запроса — из реестра (25000), русское имя params как в ner_check
-    assert params["бюджет запроса"] == 25000
+    # бюджет запроса — из реестра, русское имя params как в ner_check
+    assert params["бюджет запроса"] == int(SET.BY_KEY[
+        "TRANSLATE_CHECK_LLM_REQUEST_BUDGET"].default)
     # повторный прогон: дубль не добавляется
     rc = FE.main(["--host", "http://x", "--api_key", "k", "--model", "m",
                   "--chapters_dir", ch_dir, "--start", "1", "--end", "1",

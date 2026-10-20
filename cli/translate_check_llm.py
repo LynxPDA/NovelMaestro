@@ -777,8 +777,13 @@ def build_parser():
     ap.add_argument("--type", default="polished",
                     choices=["polished", "redacted", "translated"],
                     help="Тип файлов проверяемых глав.")
-    ap.add_argument("--request_budget", type=int, default=25000,
-                    help="Бюджет запроса, ТОКЕНЫ (оценка; промпт — запас 200).")
+    ap.add_argument(
+        "--request_budget", type=int,
+        default=int(core_settings.BY_KEY[
+            "TRANSLATE_CHECK_LLM_REQUEST_BUDGET"].default),
+        help="Бюджет запроса, ТОКЕНЫ (оценка; промпт — запас 200; "
+             "по умолчанию: "
+             f"{core_settings.BY_KEY['TRANSLATE_CHECK_LLM_REQUEST_BUDGET'].default}).")
     ap.add_argument("--retry_empty", type=int, default=0, metavar="N",
                     help="Повторов при отсутствии правок, ШТ (0 = нет; пусто = "
                          "TRANSLATE_CHECK_LLM_RETRY_EMPTY). Ответ без ошибок "

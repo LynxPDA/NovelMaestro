@@ -1414,6 +1414,9 @@ async function main() {
       vals: [...el.querySelectorAll("input,select,textarea")]
         .map((c) => c.value),
     }));
+    if (SHOT) {
+      await card.screenshot({ path: path.join(OUT, "settings-reasoning.png") });
+    }
     // name контрола = КЛЮЧ .env (имена полей стадий не уникальны)
     const want = ["REASONING_MODE", "THINKING_PROFILE", "REASONING_EFFORT",
       "THINKING_BUDGET", "LLM_EXTRA_BODY_JSON"];
@@ -1427,7 +1430,10 @@ async function main() {
       problems.push(`reasoning: профили «${f.opts[1]}»`);
     if (f.opts[2] !== ",none,minimal,low,medium,high,xhigh,max")
       problems.push(`reasoning: уровни «${f.opts[2]}»`);
-    if (f.vals[0] !== "default" || f.vals[1] !== "openai" || f.vals[3] !== "0")
+    // предзаполнение = значения реестра: сверяем с ответом сервера, а не с
+    // литералами (иначе проба ломается на каждой правке дефолтов)
+    if (!f.opts[0].split(",").includes(f.vals[0]) ||
+      !f.opts[1].split(",").includes(f.vals[1]) || f.vals[3] !== "0")
       problems.push(`reasoning: предзаполнилось ${f.vals.join("|")}`);
     await card.locator('select[name="REASONING_MODE"]').selectOption("on");
     await card.locator('select[name="THINKING_PROFILE"]').selectOption("qwen");
@@ -1543,13 +1549,15 @@ async function main() {
       if (SHOT)
         await page.screenshot({ path: path.join(OUT, `settings-${slugs[tab]}.png`) });
     }
+    // Состав поля важен, конкретное значение — нет: оно приходит из реестра
     const mode = (fields || []).find((x) => /Не голосующие поля/.test(x));
     if (!mode) problems.push("настройки: нет поля выбора значения");
-    else if (!/^select\(4\):last$/.test(mode.replace(/^[^=]*=/, "").replace(/·единица$/, "")))
+    else if (!/^select\(4\):/.test(mode.replace(/^[^=]*=/, "").replace(/·единица$/, "")))
       problems.push(`настройки: поле режима выглядит так «${mode}»`);
     const cap = (fields || []).find((x) => /Ограничение длины значения/.test(x));
     if (!cap) problems.push("настройки: нет поля потолка длины");
-    else if (!/СИМВОЛ/.test(cap) || !/:0$/.test(cap.replace(/·единица$/, "")))
+    else if (!/СИМВОЛ/.test(cap) || !/^input:\d+$/.test(
+      cap.replace(/^[^=]*=/, "").replace(/·единица$/, "")))
       problems.push(`настройки: потолок длины выглядит так «${cap}»`);
     if (SHOT)
       await page.screenshot({ path: path.join(OUT, "settings-glossary-fields.png") });
@@ -2387,7 +2395,8 @@ async function main() {
       problems.push(`оценка: end в чанках «${q.end}»`);
     const vals = ["Глав в чанке", "Чанков оценить", "Перекрытие чанков",
       "Бюджет запроса"].map((t) => row(q, t).value || "?").join("|");
-    if (vals !== "1|0|0|200000") problems.push(`оценка: значения ${vals}`);
+    // бюджет — из реестра, остальные три — числа формы (1 / 0 / 0)
+    if (!/^1\|0\|0\|\d{4,}$/.test(vals)) problems.push(`оценка: значения ${vals}`);
     if (row(q, "Отбор чанков").opts.join("/")
         !== "Равномерно по книге/Первые по порядку")
       problems.push(`оценка: отбор «${row(q, "Отбор чанков").opts.join("/")}»`);

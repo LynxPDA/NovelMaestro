@@ -108,7 +108,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
                    help="Лимит загрузки файлов, МБ (по умолчанию 512)")
     p.add_argument("--jobs-limit", type=int,
                    default=_int(cfg, "web_jobs_limit"),
-                   help="Максимум параллельных задач (по умолчанию 2)")
+                   help="Максимум параллельных задач (по умолчанию "
+                        f"{_int(cfg, 'web_jobs_limit')})")
     p.add_argument("--projects-dir", default=cfg["web_projects_dir"],
                    help="Папка проектов (по умолчанию <репо>/projects; "
                         "WEB_PROJECTS_DIR)")

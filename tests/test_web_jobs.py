@@ -1642,7 +1642,7 @@ def test_build_ner_check_rag_flags():
     # нет — файл пишется после каждого ответа LLM
     fb = next(f for f in STAGE_SPECS["ner_check"]["fields"]
               if f["name"] == "rag_budget")
-    assert fb["default"] == "22000"
+    assert fb["default"] == "16000"
     fc = next(f for f in STAGE_SPECS["ner_check"]["fields"]
               if f["name"] == "rag_chunk_size")
     assert fc["default"] == "350"
@@ -2384,10 +2384,13 @@ def test_jobs_stop_api_windows(monkeypatch, jobs_srv, fake_script):
 
 
 def test_jobs_limit_enforced(jobs_srv, monkeypatch):
-    """--jobs-limit (2) — третий одновременный запуск → 429."""
+    """Лимит параллельных задач из реестра — следующий запуск → 429."""
+    limit = core_settings.defaults()["web_jobs_limit"]
     port, req, jm = jobs_srv
-    # три РАЗНЫХ проекта — чтобы не спотыкаться о per-project лок
-    for name in ("p1", "p2", "p3"):
+    # столько же РАЗНЫХ проектов, сколько задач влезает, плюс один лишний —
+    # чтобы не спотыкаться о per-project лок
+    names = [f"p{i}" for i in range(1, limit + 2)]
+    for name in names:
         _make_project(port, req, name=name)
 
     def fake_start(action, title, project, argv, cwd, env=None):
@@ -2399,14 +2402,14 @@ def test_jobs_limit_enforced(jobs_srv, monkeypatch):
         return job
 
     monkeypatch.setattr(jm, "start", fake_start)
-    for name in ("p1", "p2"):
+    for name in names[:-1]:
         res, payload = req("POST", "/api/jobs",
                            {"action": "batch_replace",
                             "project": f"ACTIVE/{name}", "params": {}})
         assert res.status == 200, payload
     res, payload = req("POST", "/api/jobs",
                        {"action": "batch_replace",
-                        "project": "ACTIVE/p3", "params": {}})
+                        "project": f"ACTIVE/{names[-1]}", "params": {}})
     assert res.status == 429, payload
     assert "Лимит" in payload["error"]
 

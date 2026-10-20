@@ -115,7 +115,8 @@ def main() -> None:
     ap.add_argument("--max-upload-mb", type=int,
                     help="Лимит загрузки файлов, МБ (по умолчанию 512)")
     ap.add_argument("--jobs-limit", type=int,
-                    help="Максимум параллельных задач (по умолчанию 2)")
+                    help="Максимум параллельных задач (по умолчанию "
+                         f"{_cfg()['web_jobs_limit']})")
     ap.add_argument("--projects-dir",
                     help="Папка проектов (по умолчанию <репо>/projects; "
                          "WEB_PROJECTS_DIR)")

@@ -442,7 +442,7 @@ def test_form_field_shape():
     field = S.BY_KEY["NER_CHUNK_SIZE"].form_field()
     assert field["name"] == "chunk_size"
     assert field["type"] == "number"
-    assert field["default"] == "5500"
+    assert field["default"] == S.BY_KEY["NER_CHUNK_SIZE"].default
     assert field["label"].startswith("Размер чанка")
     secret = S.BY_KEY["API_KEY"].form_field()
     assert secret["secret"] is True and secret["type"] == "password"
@@ -455,7 +455,8 @@ def test_form_field_shape():
 def test_effective_falls_back_to_registry(monkeypatch, tmp_path):
     monkeypatch.setenv("WEB_ENV_FILE", str(tmp_path / "missing.env"))
     monkeypatch.delenv("NER_CHUNK_SIZE", raising=False)
-    assert S.effective("NER_CHUNK_SIZE") == 5500
+    assert S.effective("NER_CHUNK_SIZE") == S._coerce(
+        S.BY_KEY["NER_CHUNK_SIZE"], S.BY_KEY["NER_CHUNK_SIZE"].default)
     assert S.file_values() == {}
 
 
@@ -482,7 +483,8 @@ def test_empty_file_value_does_not_shadow(monkeypatch, tmp_path):
     env.write_text("NER_CHUNK_SIZE=\n", encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(env))
     monkeypatch.delenv("NER_CHUNK_SIZE", raising=False)
-    assert S.effective("NER_CHUNK_SIZE") == 5500
+    assert S.effective("NER_CHUNK_SIZE") == S._coerce(
+        S.BY_KEY["NER_CHUNK_SIZE"], S.BY_KEY["NER_CHUNK_SIZE"].default)
 
 
 @pytest.mark.parametrize("raw,want", [("1", True), ("true", True), ("ON", True),

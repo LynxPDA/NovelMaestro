@@ -2718,15 +2718,23 @@ def extra_body_fields(env_data: dict | None = None, logger=None) -> dict:
     return got
 
 
-def reasoning_settings(env_data: dict | None = None) -> dict:
-    """Режим рассуждений запуска: os.environ > .env > дефолты.
+def reasoning_settings(env_data: dict | None = None,
+                     defaults: dict | None = None) -> dict:
+    """Режим рассуждений запуска: os.environ > .env > встроенные значения.
 
     Приоритет по ключам, а не по файлу целиком: окружение compose перекрывает
     файл точечно (см. AGENTS §7, слои конфига). Значения выбранного профиля LLM
     слой получает от core.stage: оно лежит в env_data поверх общего файла.
+
+    defaults — встроенные значения на случай, когда ключа нет нигде. Их
+    передаёт core.stage из реестра настроек: свой список дефолтов здесь
+    разошёлся бы с полем формы «Рассуждения» (форма показывала бы один режим,
+    а запрос уходил бы с другим). Без defaults работают крайние значения.
     """
     env_data = env_data or {}
-    got = {k: (os.environ.get(k) or env_data.get(k) or "").strip()
+    base = {k: str((defaults or {}).get(k) or "").strip()
+            for k in REASONING_ENV_KEYS}
+    got = {k: (os.environ.get(k) or env_data.get(k) or base[k]).strip()
            for k in REASONING_ENV_KEYS}
     return {
         "mode": got["REASONING_MODE"] or "default",

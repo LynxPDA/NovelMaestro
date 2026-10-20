@@ -30,6 +30,7 @@ for _p in (ROOT, ROOT / "cli"):
 
 import httpx  # noqa: E402
 
+from core import stage as S  # noqa: E402
 from core import transport as T  # noqa: E402
 
 
@@ -191,10 +192,17 @@ def test_open_stream_request_shape(monkeypatch):
 
 
 def test_default_timeouts_match_stage_defaults():
-    """Числа по умолчанию — те же, что у параметров stream_chat_completion."""
+    """Нижний запас транспорта совпадает с дефолтами стадии из реестра.
+
+    Импортировать реестр в transport нельзя (settings → common → transport —
+    цикл), поэтому числа продублированы литералами и сверяются здесь: иначе
+    они молча разъедутся, и балансировка не заметит.
+    """
     timeout = T.client().timeout
-    assert timeout.connect == T.DEFAULT_CONNECT_TIMEOUT == 300.0
-    assert timeout.read == T.DEFAULT_READ_TIMEOUT == 900.0
+    assert timeout.connect == T.DEFAULT_CONNECT_TIMEOUT == \
+        S.DEFAULT_TIMEOUT
+    assert timeout.read == T.DEFAULT_READ_TIMEOUT == \
+        S.DEFAULT_STREAM_TIMEOUT
     assert timeout.write == T.DEFAULT_READ_TIMEOUT
     assert timeout.pool == T.DEFAULT_CONNECT_TIMEOUT
 

@@ -27,7 +27,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import settings as cfg
-from .common import (EXTRA_BODY_ENV_KEY, REASONING_MODES,
+from .common import (EXTRA_BODY_ENV_KEY, REASONING_ENV_KEYS, REASONING_MODES,
                      REASONING_PROFILES, determine_model, emit_progress,
                      extra_body_fields, get_server_config, llm_messages,
                      log_argv, preview_logger, preview_request_payload,
@@ -278,7 +278,10 @@ def resolve_profile(args: argparse.Namespace, *, stage: str = "",  # noqa: ARG00
     env_data = cfg.layered_values(pid, env_path)
     llm = cfg.llm_values(pid, env_path)
     sc = get_server_config(env_data)
-    rs = reasoning_settings(env_data)
+    # Дефолты рассуждений — из реестра настроек (их же показывает форма):
+    # своей копии в core.common быть не должно
+    rs = reasoning_settings(env_data, {
+        key: cfg.BY_KEY[key].default for key in REASONING_ENV_KEYS})
     host = getattr(args, "host", None) or sc["host"]
     api_key = getattr(args, "api_key", None)
     if api_key is None:

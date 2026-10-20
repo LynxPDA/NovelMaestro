@@ -542,9 +542,13 @@ def test_default_regexp_checks_cover_all_scripts():
 
 
 def test_sensitivity_setting_prefilled():
-    """Чувствительность — число из реестра, дефолт 5, 0 = выключено."""
+    """Чувствительность — число из реестра (0 = объёмные сравнения выключены).
+
+    SMALL_N — не K: это порог «малой базы», ниже которого MAD выборки не
+    доверяем и берём расширенный пол. Числа независимы и совпадать не обязаны.
+    """
     s = SET.BY_KEY["TRANSLATE_CHECK_SENSITIVITY"]
-    assert s.type == "number" and str(s.default) == "5"
+    assert s.type == "number" and int(s.default) > 0
     assert TC.SMALL_N == 5
     assert TC.FLOORS == {"neighbor": 0.02, "original": 0.05}
     assert TC.SMALL_FLOORS == {"neighbor": 0.02, "original": 0.15}

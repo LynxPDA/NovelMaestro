@@ -348,14 +348,37 @@ def test_llm_args_include_reasoning_controls():
             args.thinking_budget) == ("on", "qwen", 2048)
 
 
-def test_reasoning_defaults_touch_nothing(env_file):
-    """Без настроек payload остаётся чистым: дефолт сервера не трогается."""
-    prof = resolve(env_file)
-    assert (prof.reasoning_mode, prof.thinking_profile) == ("default", "openai")
-    assert prof.thinking_budget == 0 and prof.reasoning_effort is None
+def test_reasoning_defaults_touch_nothing(env_file, monkeypatch):
+    """Режим «решение сервера» с пустым уровнем — payload чистый: дефолт
+    сервера не трогается. Уровень сам по себе — тоже режим (у openai он и есть
+    весь режим: высокий уровень при «решении сервера» включает рассуждения),
+    поэтому «не трогать» — это default + пустой уровень."""
+    for k in C.REASONING_ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    prof = resolve(env_file, reasoning_mode="default", reasoning_effort="")
+    assert prof.reasoning_mode == "default"
+    assert prof.thinking_budget == 0 and prof.reasoning_effort == ""
     assert st.reasoning_fields(prof.reasoning_mode, prof.thinking_profile,
                                prof.reasoning_effort or "",
                                prof.thinking_budget) == {}
+
+
+def test_reasoning_registry_defaults_reach_profile(env_file, monkeypatch):
+    """Дефолты рассуждений в профиле берутся из реестра, а не из своей копии
+    в core.common: иначе форма показывала бы один режим, а запрос уходил бы
+    с другим (при «включены» ключ не отправлялся вовсе)."""
+    for k in C.REASONING_ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    prof = resolve(env_file)
+    assert (prof.reasoning_mode, prof.thinking_profile) == (
+        cfg.BY_KEY["REASONING_MODE"].default,
+        cfg.BY_KEY["THINKING_PROFILE"].default)
+    assert prof.reasoning_effort == cfg.BY_KEY["REASONING_EFFORT"].default
+    fields = st.reasoning_fields(prof.reasoning_mode, prof.thinking_profile,
+                                 prof.reasoning_effort or "",
+                                 prof.thinking_budget)
+    # настроенный режим обязан оставить в payload хоть один ключ
+    assert fields and "reasoning_effort" in fields, fields
 
 
 def test_reasoning_env_keys_are_common(tmp_path, monkeypatch):
@@ -399,11 +422,11 @@ def test_profile_layers_reasoning_and_provider(tmp_path, env_file, monkeypatch):
             "PROVIDER_ALLOW_FALLBACKS": "0"}}]}, ensure_ascii=False),
         encoding="utf-8")
     # General — значения общего конфига
-    plain = resolve(env_file)
+    plain = resolve(env_file, thinking_profile="openai")
     assert (plain.reasoning_mode, plain.provider) == (
         "off", {"only": ["openai"]})
     monkeypatch.setenv(cfg.PROFILE_ENV, "cloud")
-    prof = resolve(env_file)
+    prof = resolve(env_file, thinking_profile="openai")
     assert (prof.reasoning_mode, prof.reasoning_effort) == ("on", "high")
     # профиль перекрывает только свои поля: only из General остаётся
     assert prof.provider == {"order": ["deepinfra", "google"],

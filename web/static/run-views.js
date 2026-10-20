@@ -2095,8 +2095,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           tree = [];
         }
       }
+      // пустое поле — бюджет из спеки стадии (реестр настроек), не литерал
+      const def = (inputs.request_budget && inputs.request_budget._field
+        && inputs.request_budget._field.default) || "";
       const raw =
-        budgetIn && budgetIn.value !== "" ? budgetIn.value : "200000";
+        budgetIn && budgetIn.value !== "" ? budgetIn.value : String(def);
       const budget = parseInt(raw, 10) || 0;
       const type = (typeSel && typeSel.value) || "polished";
       return qualityEndByBudget(tree, start, budget, type);

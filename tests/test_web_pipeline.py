@@ -802,10 +802,12 @@ def test_reasoning_registry_fields_match_core():
     want = [k.lower() for k in (*REASONING_ENV_KEYS, EXTRA_BODY_ENV_KEY)]
     assert list(by) == want
     assert list(by["reasoning_mode"]["options"]) == list(REASONING_MODES)
-    assert by["reasoning_mode"]["default"] == "default"
+    # дефолты — значения реестра: их же читает core.stage через reasoning_settings
+    assert by["reasoning_mode"]["default"] in REASONING_MODES
     assert list(by["thinking_profile"]["options"]) == list(REASONING_PROFILES)
+    assert by["thinking_profile"]["default"] in REASONING_PROFILES
     assert list(by["reasoning_effort"]["options"]) == ["", *REASONING_EFFORTS]
-    assert by["reasoning_effort"]["default"] == ""
+    assert by["reasoning_effort"]["default"] in ("", *REASONING_EFFORTS)
     assert by["thinking_budget"]["type"] == "number"
     assert by["llm_extra_body_json"]["type"] == "text"
     # у каждого select есть подпись — SPA рисует её в <option>

@@ -23,6 +23,7 @@ from typing import cast
 
 from web.auth import COOKIE_NAME, Auth, csrf_ok
 from web.version import app_version
+from core import settings as core_settings
 
 #: cookie устройства: ключ файла состояния книги (core/uistate.py)
 DEVICE_COOKIE = "nm_device"
@@ -388,7 +389,7 @@ class WebServer(ThreadingHTTPServer):
     router: Router
     host: str = "127.0.0.1"
     max_upload_mb: int = 512
-    jobs_limit: int = 2
+    jobs_limit: int = core_settings.defaults()["web_jobs_limit"]
     # --no-restart: после обновления сервер не перезапускает себя сам
     # (dev-сервер и автоматизация: PID-файл не должен потерять процесс)
     no_restart: bool = False

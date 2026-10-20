@@ -122,7 +122,8 @@ def _jobs_start(ctx: dict) -> dict:
     # Лимит параллельных задач --jobs-limit (мёртвая опция → живая)
     handler = ctx.get("handler")
     srv = handler.server if handler is not None else None
-    limit = getattr(srv, "jobs_limit", 2) if srv is not None else 2
+    limit = (getattr(srv, "jobs_limit", None)
+             or int(core_settings.BY_KEY["WEB_JOBS_LIMIT"].default))
     running = sum(1 for j in jm.list() if j.get("status") == "running")
     if running >= limit:
         raise ApiError(

@@ -1378,9 +1378,10 @@ def build_parser() -> argparse.ArgumentParser:
     # сервер, таймауты, повторы и max_tokens — общий конфиг (core.stage)
     add_llm_args(parser, aliases=True)
     parser.add_argument(
-        "--chunk_size", type=int, default=5500,
+        "--chunk_size", type=int,
+        default=int(core_settings.BY_KEY["NER_CHUNK_SIZE"].default),
         help="Размер чанка, ТОКЕНЫ — оценка estimate_tokens "
-             "(по умолчанию: 5500).",
+             f"(по умолчанию: {core_settings.BY_KEY['NER_CHUNK_SIZE'].default}).",
     )
     parser.add_argument(
         "--threshold", type=float, default=0.75,
@@ -1412,20 +1413,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Все поля голосуют (включая notes, context, translated_context).",
     )
     parser.add_argument(
-        "--non_voted_mode", default="last",
+        "--non_voted_mode",
+        default=core_settings.BY_KEY["NER_NON_VOTED_MODE"].default,
         choices=("last", "first", "longest", "shortest"),
         help=(
             "Какое значение берут не голосующие поля (notes, context, "
             "translated_context) из значений, пришедших из разных чанков: "
-            "last — последнее (по умолчанию), first — первое присвоенное, "
-            "longest — самое длинное, shortest — самое короткое."
+            "last — последнее, first — первое присвоенное, "
+            "longest — самое длинное, shortest — самое короткое "
+            f"(по умолчанию: {core_settings.BY_KEY['NER_NON_VOTED_MODE'].default})."
         ),
     )
     parser.add_argument(
-        "--non_voted_max_len", type=int, default=0,
+        "--non_voted_max_len", type=int,
+        default=int(core_settings.BY_KEY["NER_NON_VOTED_MAX_LEN"].default),
         help=(
             "Ограничение длины значения не голосующих полей, СИМВОЛЫ (только "
-            "для --non_voted_mode longest; 0 — без ограничения, по умолчанию)."
+            "для --non_voted_mode longest; 0 — без ограничения; по умолчанию: "
+            f"{core_settings.BY_KEY['NER_NON_VOTED_MAX_LEN'].default})."
         ),
     )
     parser.add_argument(

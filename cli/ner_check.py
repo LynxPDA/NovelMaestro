@@ -327,9 +327,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--end", type=int, default=None,
                    help="RAG-режим: конечная глава сборки (по умолчанию: "
                         "максимальная найденная).")
-    p.add_argument("--rag_budget", type=int, default=22000,
+    p.add_argument("--rag_budget", type=int,
+                   default=int(core_settings.BY_KEY["NER_CHECK_RAG_BUDGET"].default),
                    help="RAG-режим: бюджет релевантного текста на термин, "
-                        "ТОКЕНЫ (оценка; по умолчанию: 22000).")
+                        "ТОКЕНЫ (оценка; по умолчанию: "
+                        f"{core_settings.BY_KEY['NER_CHECK_RAG_BUDGET'].default}).")
     p.add_argument("--rag_chunk_size", type=int, default=350,
                    help="RAG-режим: размер чанка FTS5-индекса книги, "
                         "ТОКЕНЫ (оценка; по умолчанию: 350).")

@@ -1232,9 +1232,10 @@ def build_parser() -> argparse.ArgumentParser:
     g_gen.add_argument(
         "--context-chunks",
         type=int,
-        default=12,
+        default=int(core_settings.BY_KEY["WIKI_CONTEXT_CHUNKS"].default),
         metavar="N",
-        help="Максимум фрагментов контекста на один термин (по умолчанию: 12).",
+        help="Максимум фрагментов контекста на один термин (по умолчанию: "
+             f"{core_settings.BY_KEY['WIKI_CONTEXT_CHUNKS'].default}).",
     )
     g_gen.add_argument(
         "--near-distance",
@@ -1287,9 +1288,10 @@ def build_parser() -> argparse.ArgumentParser:
     g_co.add_argument(
         "--co-occurrence-top",
         type=int,
-        default=5,
+        default=int(core_settings.BY_KEY["WIKI_CO_OCCURRENCE_TOP"].default),
         metavar="N",
-        help="Сколько связей выводить для каждого термина (по умолчанию: 5).",
+        help="Сколько связей выводить для каждого термина (по умолчанию: "
+             f"{core_settings.BY_KEY['WIKI_CO_OCCURRENCE_TOP'].default}).",
     )
 
     # ── LLM-сервер: общий блок флагов (core.stage),aliases — старые имена ──
