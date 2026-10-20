@@ -517,7 +517,7 @@ def test_restart_command_without_entry():
     ("git", ".git", True, "перезапустится сам"),
     ("tree", None, True, "перезапустится сам"),
     ("portable", "START.txt", False, "start.bat"),
-    ("docker", ".docker", False, "docker compose pull"),
+    ("docker", ".docker", False, "сам себя не заменит"),
 ], ids=["git", "tree", "portable", "docker"])
 def test_restart_plan_per_install(kind, marker, auto, word, tmp_path):
     """План перезапуска: способ установки диктует авто и текст предупреждения."""

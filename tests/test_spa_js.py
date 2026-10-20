@@ -219,6 +219,25 @@ def test_app_update_restart_text_from_server():
     for word in ("start.bat", "compose pull", "перезапустите", "перезапустится сам"):
         assert word not in body, f"в SPA завёлся текст перезапуска «{word}»"
 
+
+def test_app_update_how_box_has_no_hidden_duplicate():
+    """Объяснение способа обновления — одно: у Docker причину называет строка
+    о перезапуске (сервер), а подпись способа остаётся только про команду
+    хоста. Заголовок панели версию не повторяет: она стоит в футере меню.
+    """
+    src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    how = src[src.index("function updateHowBox("):]
+    how = how[:how.index("\n}\n")]
+    for word in ("сам себя не заменит", "Образ обновляет хост"):
+        assert word not in how, f"в подписи способа завёлся дубль «{word}»"
+    assert "u.command" in how, "команда хоста не берётся из сводки сервера"
+    body = src[src.index("function updateMenuItem("):]
+    body = body[:body.index("\n}\n")]
+    head = body[body.index("update-title"):]
+    head = head[:head.index("));")]
+    assert "u.current" not in head and "state.version" not in head, \
+        "версия задублирована в заголовке панели"
+
 def test_fit_preview_frame_defers_hidden():
     """Предпросмотр отчёта в скрытом контейнере (неактивная под-вкладка
     «Проверки»): load iframe срабатывает при display:none, scrollHeight=0

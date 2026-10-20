@@ -83,7 +83,7 @@ const MOCK_RESTART = {
   git: { auto: true, note: "После обновления сервер перезапустится сам, окно с консолью закрывать не нужно" },
   tree: { auto: true, note: "После обновления сервер перезапустится сам, окно с консолью закрывать не нужно" },
   portable: { auto: false, note: "Перезапустите сборку сами: закройте окно сервера и запустите start.bat заново. Изнутри это невозможно, а до перезапуска работает старый код" },
-  docker: { auto: false, note: `Образ обновляет хост командой ${MOCK_HOST_COMMAND}, контейнер сам себя не заменит. Интерфейс эту команду не запускает` },
+  docker: { auto: false, note: "Образ обновляет хост, контейнер сам себя не заменит: интерфейс эту команду не запускает" },
 };
 
 /* сводка обновления, как её отдаёт web/api_common.py::_update_state */
@@ -2522,8 +2522,11 @@ async function main() {
     if (git.none) {
       problems.push("панель «Обновления» в меню «⋮» не найдена");
     } else {
-      if (!/Обновления · v0\.4\.0/.test(git.title))
+      if (git.title !== "Обновления")
         problems.push(`заголовок панели «${git.title}»`);
+      // версия — одна на панель: её показывает футер меню (.user-menu-version)
+      if (git.text.includes("Обновления · v"))
+        problems.push("версия задублирована в заголовке панели");
       if (!git.badge) problems.push("новая версия не помечена на кнопке «⋮»");
       if (git.text.includes("**")) problems.push("заметки релиза остались текстом со «**»");
       if (git.text.includes("Full Changelog"))
@@ -2557,6 +2560,12 @@ async function main() {
         problems.push(`Docker: команда хоста «${docker.code}»`);
       if (!/образ обновляет хост/i.test(docker.text))
         problems.push("Docker: подпись способа установки потерялась");
+      // про «не заменит себя» говорит одна строка — о перезапуске
+      const selfReplace = docker.text.match(/сам себя не заменит/g) || [];
+      if (selfReplace.length !== 1)
+        problems.push(`Docker: причина дублируется ${selfReplace.length} раза`);
+      if ((docker.text.match(/docker compose pull/g) || []).length !== 1)
+        problems.push("Docker: команда хоста продублирована");
       if (docker.btns.length !== 1 || !/Проверить снова/.test(docker.btns[0]))
         problems.push(`Docker: кнопки обновления предлагаются: ${docker.btns.join(", ")}`);
       if (docker.text.includes("**")) problems.push("Docker: заметки не отрендерены");

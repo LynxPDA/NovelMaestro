@@ -185,6 +185,9 @@ def test_session_docker_offers_command(srv_ctx):
     assert upd["mode_label"] == core_update.MODE_LABELS["command"]
     assert upd["restart"]["auto"] is False
     assert "хост" in upd["restart"]["note"]
+    # команда хоста едет один раз — полем `command`; строка о перезапуске
+    # объясняет причину, а не повторяет команду
+    assert core_update.HOST_COMMAND not in upd["restart"]["note"]
 
 
 def test_session_portable_restarts_by_hand(srv_ctx):

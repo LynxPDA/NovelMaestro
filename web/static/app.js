@@ -2548,13 +2548,15 @@ async function updateDownload(version) {
   }
 }
 
-/* что делает обновление этой установки; для Docker здесь же команда хоста */
+/* что делает обновление этой установки; у Docker — только команда хоста.
+   Почему команда нужна, говорит строка о перезапуске (u.restart.note
+   из core/update.py::RESTART_NOTES): второй подписи здесь быть не может */
 function updateHowBox(u) {
   if (u.mode === "command") {
-    const box = h("div", { class: "update-how" },
-      "Образ обновляет хост, контейнер сам себя не заменит. Команда на хосте:",
-      h("code", { class: "update-cmd" },
-        u.command || "docker compose pull && docker compose up -d"));
+    const box = h("div", { class: "update-how" }, "Команда на хосте:");
+    // строку команды отдаёт сервер (core/update.py::HOST_COMMAND): своей копии
+    // в SPA нет — разойдётся с тем, что реально работает
+    if (u.command) box.append(h("code", { class: "update-cmd" }, u.command));
     return box;
   }
   return h("div", { class: "update-how" }, u.mode === "git"
@@ -2569,8 +2571,8 @@ function updateMenuItem() {
   const rel = u.release || {};
   const job = u.job || {};
   const box = h("div", { class: "update-box" });
-  box.append(h("div", { class: "update-title" },
-    `Обновления · v${u.current || state.version || "?"}`));
+  // версия уже стоит в футере этого же меню (.user-menu-version) — не дублируем
+  box.append(h("div", { class: "update-title" }, "Обновления"));
   if (job.state === "running" || job.state === "restarting") {
     box.append(h("div", { class: "update-state update-new" },
       job.state === "running" ? `Обновляется: ${u.mode_label || ""}`
