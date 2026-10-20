@@ -456,16 +456,20 @@ def test_ner_check_rag_ui_present():
 
 
 def test_prompt_edit_button():
-    """Запуски (LLM): промпт не выбран — «Загрузить»; выбран —
-    «Редактировать» (просмотр/правка/сохранение через /api/prompts).
-    Флаг editable в спеке расширяет кнопку на текстовые файлы из
-    source/ (compile: метаданные YAML, страница поддержки) — те же
-    модалки, но через /api/file."""
+    """Запуски (LLM): промпт выбран — «Редактировать» (просмотр/правка/
+    сохранение через /api/prompts). Флаг editable в спеке расширяет кнопку на
+    текстовые файлы из source/ (compile: метаданные YAML, страница
+    поддержки) — те же модалки, но через /api/file. Промпта в книге нет —
+    «Из шаблона»: готовый файл копируется из templates/*, свои файлы кладут
+    вкладкой «Файлы», где и видны все файлы книги."""
     rv = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
     assert "function editFileModal(relPath, opts = {})" in rv
-    assert "isEditable" in rv  # dir=prompts+.txt или f.editable
-    assert "upBtn.textContent = sel.value ? \"Редактировать\" : \"Загрузить\"" \
-        in rv
+    assert "const isPrompt = dir === \"prompts\"" in rv
+    assert "const isEditable = isPrompt || Boolean(f.editable);" in rv
+    assert """        upBtn.textContent = sel.value
+          ? "Редактировать"
+          : isPrompt ? "Из шаблона" : "Загрузить";""" in rv
+    assert "/prompts/${encodeURIComponent(fname)}/template" in rv
     assert "/prompts/${encodeURIComponent(relPath)}" in rv
     assert "/file?project=${section}/${name}" in rv  # чтение source-файлов
     assert 'makeEditor(d.content || "", UICore.editorLang(relPath, isPromptFile))' \

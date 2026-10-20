@@ -1641,6 +1641,76 @@ test("запуски: проверка промпта — иконка толь�
   globalThis.localStorage.clear();
 });
 
+/* ── промпта в книге нет: поле предлагает «Из шаблона», а не загрузку
+   своего файла — стадия работает без правок, файл приезжает из набора
+   templates/* вместе с выбором в поле ── */
+test("запуски: пустой промпт — «Из шаблона» вместо «Загрузить»", async () => {
+  globalThis.localStorage.clear();
+  globalThis.__calls = [];
+  /* prompts/ книги пуст — автоподхвату нечего выбрать */
+  globalThis.__stageOptions = { prompts: [] };
+  globalThis.__prompts = {
+    prompts: [],
+    content: "<prompt_pass1>\n{chunk_text}\n</prompt_pass1>\n",
+    templates: [
+      { set: "General", name: "ner_prompt.txt",
+        content: "<prompt_pass1>\n{chunk_text}\n</prompt_pass1>\n" },
+    ],
+    template_sets: [
+      { name: "Другой", prompts: ["other.txt"] },
+      { name: "General", prompts: ["ner_prompt.txt", "wiki_prompt.txt"] },
+    ],
+  };
+  const page = await runStage("ner");
+  const wrap = findByClass(page, "field")
+    .find((f) => f._field && f._field.name === "prompt_file");
+  assert.ok(wrap, "поле файла промпта в форме есть");
+  const sel = findTag(wrap, "select")[0];
+  assert.equal(sel.value, "", "промпта в книге нет — выбор пуст");
+  const btn = wrap.querySelectorAll("button")
+    .find((b) => allText(b).trim() === "Из шаблона");
+  assert.ok(btn, "при пустом выборе — «Из шаблона»");
+  assert.ok(!wrap.querySelectorAll("button")
+    .some((b) => allText(b).trim() === "Загрузить"),
+  "загрузки своего файла у промпта нет");
+  await btn._listeners.click[0]();
+  await tick();
+  const bd = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(bd, "модалка «из шаблона» открылась");
+  const selects = findTag(bd, "select");
+  assert.equal(selects.length, 2, "выбор набора и промпта");
+  const [setSel, fileSel] = selects;
+  /* набор с нужным файлом выбран сам: имя берётся из дефолта поля */
+  assert.equal(setSel.value, "General", "набор с ner_prompt.txt — по умолчанию");
+  assert.equal(fileSel.value, "ner_prompt.txt", "файл — по дефолту поля");
+  assert.match(allText(findByClass(bd, "card-hint")[0]),
+    /prompts\/ner_prompt\.txt/, "видно, что приедет в книгу");
+  /* смена набора перестраивает список промптов */
+  setSel.value = "Другой";
+  await setSel._listeners.change[0]();
+  assert.deepEqual(fileSel.children.map((o) => o.value), ["other.txt"]);
+  setSel.value = "General";
+  await setSel._listeners.change[0]();
+  await findByClass(bd, "btn-primary")[0]._listeners.click[0]();
+  await tick();
+  /* содержимое берётся из набора именно этого файла */
+  const tq = globalThis.__gets.filter(
+    (g) => g.path === "/prompts/ner_prompt.txt/template").pop();
+  assert.ok(tq, "шаблон одного промпта запрошен");
+  const put = globalThis.__calls.find((c) => c.method === "PUT"
+    && c.path === "/prompts/ner_prompt.txt");
+  assert.ok(put, "промпт записан в книгу");
+  assert.equal(put.body.project, "ACTIVE/Книга");
+  assert.match(put.body.content, /prompt_pass1/, "в книгу ушёл текст набора");
+  delete globalThis.__stageOptions;
+  delete globalThis.__prompts;
+  globalThis.__calls = [];
+  globalThis.__gets = [];
+  globalThis.localStorage.clear();
+});
+
 /* ── wiki: чипсы типов из глоссария — счётчики считают то, что реально
    уйдёт в запрос: порог частоты И срез «Макс. терминов» ── */
 const WIKI_NER = [

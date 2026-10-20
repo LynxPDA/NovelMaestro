@@ -909,9 +909,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       // редактируемые файлы: промпты (dir=prompts, .txt) и поля с
       // флагом editable в спеке (compile: метаданные/донат — правка
       // выбранного файла прямо из запуска, «Редактировать» вместо
-      // «Загрузить»; пустой выбор — «Загрузить» как у промптов)
-      const isEditable = (dir === "prompts"
-        && (f.ext || []).includes(".txt")) || Boolean(f.editable);
+      // «Загрузить»). Промпта в книге нет — вместо загрузки своего файла
+      // предлагается готовый из шаблона: стадия работает без правок, а
+      // свои файлы кладут вкладкой «Файлы»
+      const isPrompt = dir === "prompts" && (f.ext || []).includes(".txt");
+      const isEditable = isPrompt || Boolean(f.editable);
       const upBtn = h(
         "button",
         { class: "btn btn-sm btn-ghost" },
@@ -922,7 +924,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           upBtn.textContent = "Загрузить";
           return;
         }
-        upBtn.textContent = sel.value ? "Редактировать" : "Загрузить";
+        upBtn.textContent = sel.value
+          ? "Редактировать"
+          : isPrompt ? "Из шаблона" : "Загрузить";
       }
       upBtn.addEventListener("click", () => {
         if (isEditable && sel.value) {
@@ -934,6 +938,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           editFileModal(relPath, {
             prompt: dir === "prompts",
             title: f.label ? `${f.label}: ${sel.value}` : relPath,
+          });
+        } else if (isPrompt) {
+          // новый промпт — сразу в книге: render перечитает список файлов,
+          // а форма перепроверит промпт (promptCheck в formPanel)
+          promptFromTemplateModal(key, f, (created) => {
+            vals[f.name] = created;
+            touched.add(f.name);
+            scheduleRunSave(key); // выбор файла — в состояние книги
+            toast(`Промпт из шаблона: ${created}`);
+            render();
           });
         } else {
           upInput.click();
@@ -1622,6 +1636,123 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       paintPromptWarn(key, (d && d.result && d.result.problems) || [],
         spec.title);
     }).catch(() => { /* фоновая проверка не ломает форму */ });
+  }
+
+  /* Промпт-файл из шаблона: поле «Файл промпта» пустое (в prompts/ книги
+     нужного файла нет) — вместо загрузки своего файла копируем готовый из
+     любого набора templates/*. Наборы и их файлы отдаёт GET /api/prompts
+     (template_sets), содержимое одного файла — GET /api/prompts/{name}/template
+     (по наборам). Колбэк получает имя созданного файла: поле выбирает его. */
+  function promptFromTemplateModal(key, f, onDone) {
+    const err = h("div", { class: "form-error" });
+    const setSel = h("select", { class: "input" });
+    const fileSel = h("select", { class: "input" });
+    const info = h("div", { class: "card-hint" });
+    const existing = new Set((st.options || {}).prompts || []);
+    // что выбрать сразу: имя из дефолта поля (его даёт реестр: у глоссария
+    // — ner_prompt.txt), затем autofile, затем привычное имя стадии. Список
+    // именно кандидатов: у поля без дефолта (pipeline) имя берётся из
+    // второго/третьего варианта, а не выдумывается здесь
+    const wf = [f.default, ...(f.autofile ? [].concat(f.autofile) : []),
+      `${key}_prompt.txt`]
+      .map((n) => UICore.fileBase(n || ""))
+      .filter((n) => n && !n.includes("*"));
+    let sets = [];
+    function syncInfo() {
+      const set = sets.find((s) => s.name === setSel.value);
+      const fname = fileSel.value;
+      if (!set || !fname) {
+        info.textContent = "Наборы шаблонов не найдены";
+        return;
+      }
+      info.replaceChildren(
+        `В книгу будет добавлен prompts/${fname} из набора «${set.name}»`,
+        existing.has(fname)
+          ? h("div", { class: "prompt-tpl-warn" },
+              `Файл ${fname} в книге уже есть — он будет заменён`)
+          : null,
+      );
+    }
+    function syncFiles() {
+      const set = sets.find((s) => s.name === setSel.value);
+      const names = (set && set.prompts) || [];
+      const pick = wf.find((n) => names.includes(n));
+      fileSel.replaceChildren();
+      for (const n of names) fileSel.append(h("option", { value: n }, n));
+      if (names.length) fileSel.value = pick || names[0];
+      syncInfo();
+    }
+    setSel.addEventListener("change", syncFiles);
+    fileSel.addEventListener("change", syncInfo);
+    UIC.modal({
+      title: f.label ? `${f.label} из шаблона` : "Промпт из шаблона",
+      build: (close) => [
+        h("div", { class: "modal-text" }, "Набор шаблонов:"),
+        setSel,
+        h("div", { class: "modal-text" }, "Промпт:"),
+        fileSel,
+        info,
+        err,
+        h(
+          "div",
+          { class: "modal-actions" },
+          h("button", { class: "btn btn-ghost", onclick: () => close() },
+            "Отмена"),
+          h(
+            "button",
+            {
+              class: "btn btn-primary",
+              onclick: async () => {
+                err.textContent = "";
+                const set = setSel.value;
+                const fname = fileSel.value;
+                if (!set || !fname) {
+                  err.textContent = "Выберите набор и промпт";
+                  return;
+                }
+                try {
+                  const d = await api(
+                    `/prompts/${encodeURIComponent(fname)}/template`
+                      + `?project=${section}/${name}`,
+                  );
+                  const tpl = (d.templates || []).find((t) => t.set === set);
+                  if (!tpl) throw new Error(`В наборе «${set}» нет ${fname}`);
+                  await api(`/prompts/${encodeURIComponent(fname)}`, {
+                    method: "PUT",
+                    body: {
+                      project: `${section}/${name}`,
+                      content: tpl.content || "",
+                    },
+                  });
+                  close();
+                  onDone(fname);
+                } catch (ex) {
+                  err.textContent = ex.message;
+                }
+              },
+            },
+            "Скопировать",
+          ),
+        ),
+      ],
+    });
+    api(`/prompts?project=${section}/${name}`).then((d) => {
+      sets = (d.template_sets || [])
+        .filter((s) => (s.prompts || []).length)
+        .sort((a, b) => (a.name === "General" ? -1
+          : b.name === "General" ? 1 : a.name.localeCompare(b.name)));
+      for (const s of sets) {
+        setSel.append(h("option", { value: s.name }, s.name));
+      }
+      // набор, где нужный файл есть, — первым (иначе он мог бы оказаться
+      // ниже остальных и выбор начинался бы с чужого промпта)
+      const host = sets.find(
+        (s) => wf.some((n) => (s.prompts || []).includes(n)));
+      if (host) setSel.value = host.name;
+      syncFiles();
+    }).catch((ex) => {
+      err.textContent = ex.message;
+    });
   }
 
   // «Редактировать» файл из запуска (editFileModal ниже): промпт —

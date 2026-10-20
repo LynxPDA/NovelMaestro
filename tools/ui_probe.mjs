@@ -2024,6 +2024,61 @@ async function main() {
         + `--check-prompt → иконка у поля файла`);
     }
 
+    /* ── промпта в книге нет — поле предлагает «Из шаблона»: готовый файл
+       копируется из набора templates/* и сразу выбирается в поле ── */
+    {
+      const before = problems.length;
+      const tplPrompt = path.join(seedDir || "", SECTION, BOOK, "prompts",
+        "wiki_prompt.txt");
+      const hadTpl = fs.existsSync(tplPrompt);
+      if (hadTpl) fs.rmSync(tplPrompt);
+      await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+        { waitUntil: "load" });
+      await page.reload({ waitUntil: "load" });
+      await page.waitForSelector(".stage-card", { timeout: 15000 });
+      await openStage("Создание Wiki");
+      const field = page.locator(".run-form .field")
+        .filter({ hasText: "Промпт" }).first();
+      const btn = field.locator("button").first();
+      const label = ((await btn.textContent()) || "").trim();
+      if (label !== "Из шаблона")
+        problems.push(`промпт из шаблона: кнопка «${label}» вместо «Из шаблона»`);
+      await btn.click();
+      await page.waitForTimeout(800);
+      const setOpts = await page.evaluate(() => {
+        const sels = [...document.querySelectorAll(".modal-backdrop select")];
+        return sels.map((s) => ({
+          value: s.value,
+          opts: [...s.options].map((o) => o.value),
+        }));
+      });
+      if (setOpts.length !== 2) {
+        problems.push(`промпт из шаблона: полей выбора ${setOpts.length}`);
+      } else if (setOpts[1].value !== "wiki_prompt.txt") {
+        problems.push(`промпт из шаблона: выбран «${setOpts[1].value}»`);
+      }
+      await page.locator('.modal-backdrop button:has-text("Скопировать")')
+        .first().click();
+      await page.waitForTimeout(1500);
+      if (!fs.existsSync(tplPrompt))
+        problems.push("промпт из шаблона: файл в книгу не попал");
+      const chosen = await page.evaluate(() => {
+        const row = [...document.querySelectorAll(".run-form .field")]
+          .find((el) => /Промпт/.test(((el.querySelector(".field-label") || {})
+            .textContent) || ""));
+        const sel = row && row.querySelector("select");
+        return sel ? sel.value : "";
+      });
+      if (chosen !== "wiki_prompt.txt")
+        problems.push(`промпт из шаблона: поле выбрало «${chosen}»`);
+      if (SHOT)
+        await page.screenshot({
+          path: path.join(OUT, "scenario-prompt-template.png"),
+        });
+      log(`${problems.length === before ? "✅" : "❌"} промпт из шаблона  `
+        + `пустое поле → шаблон → файл в книге`);
+    }
+
     // вкладка «Настройки» проекта — данные книги, .env-редактора нет
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/config`,
       { waitUntil: "load" });
