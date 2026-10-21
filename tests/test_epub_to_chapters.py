@@ -110,6 +110,20 @@ def test_apply_cleanups_collapse():
     assert collapsed == "первый\nвторой\nтретий"
 
 
+def test_apply_cleanups_unicode_indent():
+    """Отступ абзаца в CJK-исходнике — U+2003 EM SPACE (встречаются и
+    неразрывный, и BOM): снимается с обоих краёв строки; строка из одних
+    таких пробелов считается пустой и исчезает при сжатии."""
+    raw = ("\u2003\u2003первый\u2003\n"
+           "\u2003 \u2003\n"
+           "\u00a0\ufeffвторой\t")
+    collapsed, _ = E2C.apply_cleanups(raw, [], collapse=True)
+    assert collapsed == "первый\nвторой"
+    # без галки строка из пробелов тоже не выживает: она пустая
+    plain, _ = E2C.apply_cleanups("первый\n\u2003\u2003\n\nвторой", [])
+    assert plain == "первый\n\nвторой"
+
+
 def test_split_input_regex_clean_text(tmp_path):
     """regex: внутри главы пустые строки убираются — каждый абзац своей
     строкой; пустая строка остаётся только между заголовком и телом."""
