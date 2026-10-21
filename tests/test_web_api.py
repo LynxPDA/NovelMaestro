@@ -8,6 +8,7 @@ hub_state, ACTIONS из run.py, дерево глав, шаблоны.
 """
 import http.client
 import json
+import os
 import threading
 import time
 from urllib.parse import quote
@@ -383,7 +384,7 @@ def test_project_stats_cached(monkeypatch, srv_ctx):
 
 
 def test_stats_signature_invalidates(monkeypatch, srv_ctx):
-    """Создание translated.txt меняет сигнатуру mtime → stats пересчёт;
+    """Создание translated.txt меняет сигнатуру → stats пересчёт;
     следующий запрос снова из кеша (без TTL)."""
     import web.api as api
     from core import projects as P
@@ -399,7 +400,7 @@ def test_stats_signature_invalidates(monkeypatch, srv_ctx):
     _create_project(port, proot)
     _request(port, "GET", "/api/projects/ACTIVE/test_book/stats")
     assert len(calls) == 1
-    # создаём translated.txt в первой главе → mtime папки главы меняется
+    # создаём translated.txt в первой главе → меняется состав артефактов
     ch = proot / "ACTIVE" / "test_book" / "chapters" / "00001_1"
     ch.mkdir(parents=True)
     (ch / "chapter.txt").write_text("Текст", encoding="utf-8")
@@ -437,6 +438,25 @@ def test_stats_cache_persisted_on_disk(monkeypatch, srv_ctx):
     assert len(calls) == 1  # из дискового кеша, без пересчёта
     api._STATS_CACHE.clear()
     api._CACHE_LOADED.clear()
+
+
+def test_stats_cache_skips_old_status_versions(tmp_path):
+    """Записи статуса чужой версии методики с диска не грузятся."""
+    from web import api_common, api_projects
+    root = tmp_path / "cached"
+    root.mkdir()
+    old = {"sig": "s", "status": {"counts": {"chapters": 1}}}
+    ver = api_common._STATUS_CACHE_VER
+    (root / api_common._STATS_CACHE_FILE).write_text(
+        json.dumps({f"ACTIVE/book:status:v{ver - 1}": old,
+                    f"ACTIVE/book:status:v{ver}": old}),
+        encoding="utf-8")
+    api_common._STATS_CACHE.clear()
+    api_projects._load_stats_cache(root)
+    assert f"{root}::ACTIVE/book:status:v{ver - 1}" not in \
+        api_common._STATS_CACHE
+    assert f"{root}::ACTIVE/book:status:v{ver}" in api_common._STATS_CACHE
+    api_common._STATS_CACHE.clear()
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -676,6 +696,40 @@ def test_project_status_table(srv_ctx):
     # 404 для несуществующего проекта
     res, payload = _request(port, "GET", "/api/projects/ACTIVE/Nope/status")
     assert res.status == 404
+
+
+def test_project_status_artifact_written_after_dir_mtime(srv_ctx):
+    """Глава стала готовой без изменения mtime папки — статус это видит.
+
+    Стадия открывает выход на запись ДО генерации: папка главы меняет mtime
+    на пустом файле, а дописанный позже текст её уже не трогает. Кеш по mtime
+    папок оставлял главу в пропусках навсегда.
+    """
+    import web.api as api
+    _, port, projects_root = srv_ctx()
+    pname = _create_project(port, projects_root)["name"]
+    pdir = projects_root / "ACTIVE" / pname
+    ch = pdir / "chapters" / "00001_1"
+    ch.mkdir(parents=True)
+    (ch / "translated.txt").write_text("t", encoding="utf-8")
+    api._STATS_CACHE.clear()
+    api._CACHE_LOADED.clear()
+    _, payload = _request(port, "GET", f"/api/projects/ACTIVE/{pname}/status")
+    assert payload["status"]["chapters"]["1"]["polish"] is False
+    # как это делает translate_book.py: пустой выход → генерация → допись
+    out = ch / "polished.txt"
+    out.write_text("", encoding="utf-8")
+    _, payload = _request(port, "GET", f"/api/projects/ACTIVE/{pname}/status")
+    assert payload["status"]["chapters"]["1"]["polish"] is False  # пусто
+    mtime_ns = ch.stat().st_mtime_ns
+    out.write_text("готовый текст", encoding="utf-8")
+    ch.touch()  # гарантируем: mtime папки НЕ объясняет изменение
+    os.utime(ch, ns=(mtime_ns, mtime_ns))
+    _, payload = _request(port, "GET", f"/api/projects/ACTIVE/{pname}/status")
+    assert payload["status"]["chapters"]["1"]["polish"] is True
+    assert payload["status"]["missing"]["polish"]["count"] == 0
+    api._STATS_CACHE.clear()
+    api._CACHE_LOADED.clear()
 
 
 def test_project_stats_404(srv_ctx):

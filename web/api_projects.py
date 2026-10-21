@@ -7,6 +7,7 @@ api_projects.py — пульт и проекты: разделы, список, 
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -71,38 +72,83 @@ def _state(ctx: dict) -> dict:
     return {"ok": True, **hub}
 
 
-def _stats_signature(pdir: Path) -> str:
-    """Дешёвый отпечаток состояния проекта для кеша stats.
+# артефакты готовности главы — те же имена, что в core.projects
+# (_artifact_ready): канонические и легаси-суффиксы старых проектов
+_ARTIFACT_CANON = ("translated.txt", "redacted.txt", "polished.txt")
+_ARTIFACT_SUFFIXES = tuple("_" + n for n in _ARTIFACT_CANON)
 
-    Содержит mtime папок глав (создание/удаление файлов меняет mtime
-    каталога), mtime ner.json/wiki.md и mtime папок compiled-кандидатов.
-    Это scandir 1 уровня, а НЕ полный обход глав — поэтому проверка
-    сигнатуры на порядки дешевле самого project_stats().
+
+def _chapter_artifacts(path: str) -> str:
+    """Артефакты одной главы строкой «имя:размер:mtime».
+
+    Размер обязателен: стадия открывает выход на запись до генерации, и
+    пустой файл готовым не считается (core.projects._artifact_ready).
+    Полный перечень нужен только пока не все канонические файлы готовы:
+    легаси-суффиксы меняют готовность главы, лишь когда канонические пусты.
+    """
+    items = []
+    complete = True
+    for name in _ARTIFACT_CANON:
+        try:
+            st = os.stat(os.path.join(path, name))
+        except OSError:
+            complete = False
+            continue
+        items.append(f"{name}:{st.st_size}:{st.st_mtime_ns}")
+        if st.st_size <= 0:
+            complete = False
+    if not complete:
+        try:
+            with os.scandir(path) as it:
+                for f in it:
+                    if not f.name.endswith(_ARTIFACT_SUFFIXES):
+                        continue
+                    try:
+                        st = f.stat()
+                    except OSError:
+                        continue
+                    items.append(f"{f.name}:{st.st_size}:{st.st_mtime_ns}")
+        except OSError:
+            pass
+    items.sort()
+    return ",".join(items)
+
+
+def _stats_signature(pdir: Path) -> str:
+    """Отпечаток состояния проекта для кеша stats и status.
+
+    Содержит состав папок глав с их артефактами (размер + mtime), mtime
+    ner.json/wiki.md и mtime папок compiled-кандидатов. Сами артефакты нужны
+    потому, что mtime папки главы готовность не показывает: стадия открывает
+    выход на запись ДО генерации — папка меняет mtime на пустом файле, а
+    дописанный в него позже текст папку уже не трогает.
     """
     pdir = Path(pdir)
-    parts: list[str] = []
+    h = hashlib.sha256()
     ch = pdir / "chapters"
     try:
-        subs = sorted(
-            (d.name, d.stat().st_mtime_ns)
-            for d in ch.iterdir() if d.is_dir()
-        )
+        with os.scandir(ch) as it:
+            dirs = sorted((e for e in it if e.is_dir()),
+                          key=lambda e: e.name)
     except OSError:
-        subs = []
-    parts.append(f"ch:{len(subs)}")
-    parts.extend(f"{n}:{m}" for n, m in subs)
+        dirs = []
+    h.update(f"ch:{len(dirs)}\0".encode())
+    for d in dirs:
+        h.update(f"{d.name}\0{_chapter_artifacts(d.path)}\0".encode())
     for f in ("ner.json", "wiki.md"):
         p = pdir / f
         try:
-            parts.append(f"{f}:{p.stat().st_mtime_ns}")
+            m = p.stat().st_mtime_ns
         except OSError:
-            parts.append(f"{f}:0")
+            m = 0
+        h.update(f"{f}:{m}\0".encode())
     for d in (pdir, pdir / "tmp", pdir / "output"):
         try:
-            parts.append(f"d:{d.name}:{d.stat().st_mtime_ns}")
+            m = d.stat().st_mtime_ns
         except OSError:
-            parts.append(f"d:{d.name}:0")
-    return "|".join(parts)
+            m = 0
+        h.update(f"d:{d.name}:{m}\0".encode())
+    return h.hexdigest()
 
 
 def _stats_cache_path(root: Path) -> Path:
@@ -117,17 +163,23 @@ def _stats_cache_key(root: Path, sec: str, name: str) -> str:
 
 
 def _load_stats_cache(root: Path) -> None:
-    """Загрузка дискового кеша stats (переживает рестарт сервера)."""
+    """Загрузка дискового кеша stats (переживает рестарт сервера).
+
+    Записи статуса чужой версии методики не грузятся: их ключ всё равно не
+    читается, а держать их в памяти и переписывать на диск незачем.
+    """
     try:
         import json as _json
         data = _json.loads(_stats_cache_path(root).read_text(
             encoding="utf-8"))
         if isinstance(data, dict):
             pfx = f"{root}::"
+            own = f":status:v{_STATUS_CACHE_VER}"
             _STATS_CACHE.update(
                 {pfx + k: v for k, v in data.items()
                  if isinstance(v, dict) and "sig" in v
-                 and ("stats" in v or "status" in v)})
+                 and ("stats" in v or "status" in v)
+                 and (":status:" not in k or k.endswith(own))})
     except (OSError, ValueError) as exc:
         log.debug("stats-кеш не читается: %s", exc)
 
@@ -179,7 +231,7 @@ def _invalidate_stats_entry(root: Path, sec: str, name: str) -> None:
 def _cached_stats(prj, root: Path, sec: str, name: str) -> str:
     """stats проекта: из кеша, если сигнатура не изменилась (без TTL).
 
-    Кеш в памяти + на диске; актуальность — сигнатура mtime, а не время.
+    Кеш в памяти + на диске; актуальность — сигнатура состояния, а не время.
     """
     key = _stats_cache_key(root, sec, name)
     pdir = root / sec / name
@@ -204,7 +256,7 @@ def _cached_status(prj, root: Path, sec: str, name: str) -> dict:
 
     Ключ с версией методики (_STATUS_CACHE_VER): правка расчёта
     (напр. счётчик статей rulate-wiki) инвалидирует старые записи —
-    сигнатура mtime wiki.md их не ловит.
+    сигнатура wiki.md их не ловит.
     """
     key = _stats_cache_key(root, sec, name) + f":status:v{_STATUS_CACHE_VER}"
     pdir = root / sec / name
