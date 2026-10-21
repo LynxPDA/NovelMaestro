@@ -1300,8 +1300,10 @@ async function viewSettings() {
             body: { action: "create", name: nm, base: model.profile },
           });
           model.profiles = r.profiles || model.profiles;
-          // switchTo сам пишет localStorage и перерисовывает вкладку
-          switchTo(model.profiles[model.profiles.length - 1].id);
+          // switchTo сам пишет localStorage и перерисовывает вкладку;
+          // id берётся из ответа: список идёт алфавитом, и созданный
+          // профиль стоит на своём месте, а не последним
+          switchTo(r.created || model.profiles[0].id);
           toast("Профиль создан");
         }),
     }, "+ Создать профиль"));

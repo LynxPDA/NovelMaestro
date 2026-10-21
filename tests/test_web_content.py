@@ -586,6 +586,10 @@ def test_settings_profile_crud(srv, tmp_path, monkeypatch):
                  {"action": "create", "name": "Дом"})
     assert r["ok"], r
     prof = next(p for p in r["profiles"] if p["name"] == "Дом")
+    # id созданного профиля приходит отдельно: список идёт алфавитом, и
+    # созданный стоит на своём месте, а не последним
+    assert r["created"] == prof["id"]
+    assert r["created"] == "p1"
     # создан не пустой формой: сервер и модель уже проставлены из General
     assert prof["values"]["HOST"] == "http://general:1"
     assert prof["values"]["MODEL"] == "gpt"
@@ -603,6 +607,20 @@ def test_settings_profile_crud(srv, tmp_path, monkeypatch):
     r = _request(port, "POST", "/api/settings/profiles",
                  {"action": "delete", "id": prof["id"]})
     assert r["ok"] and [p["id"] for p in r["profiles"]] == [S.PROFILE_DEFAULT]
+    assert r["created"] == ""
+
+
+def test_settings_profiles_alphabetical(srv, tmp_path, monkeypatch):
+    """Список профилей в интерфейсе — General первым, остальные по алфавиту:
+    порядок создания не должен решать, где искать нужный профиль."""
+    _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch, "MODEL=m\n")
+    for name in ("Ярослав", "домашний", "Beta"):
+        r = _request(port, "POST", "/api/settings/profiles",
+                     {"action": "create", "name": name})
+        assert r["created"], r
+    got = _request(port, "GET", "/api/settings")
+    assert [p["name"] for p in got["profiles"]] == [
+        S.PROFILE_DEFAULT_TITLE, "Beta", "домашний", "Ярослав"]
 
 
 def test_settings_put_profile_keeps_values_in_payload(srv, tmp_path,

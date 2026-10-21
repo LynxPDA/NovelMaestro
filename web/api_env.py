@@ -131,16 +131,19 @@ def _settings_profiles(ctx: dict) -> dict:
     Тело: {action, name?, id?, base?}. id встроенного General не
     переименовывается и не удаляется: его значения — обычный общий .env.
     Новый профиль создаётся копией base — профиля, выбранного сейчас (у create
-    своего id нет); пустой или неизвестный base — копия General.
+    своего id нет); пустой или неизвестный base — копия General. Список идёт
+    алфавитом после General, поэтому id созданного профиля отдаётся отдельно:
+    по нему SPA открывает новый профиль, а не «последний в списке».
     """
     body = ctx["body"]
     action = str(body.get("action") or "").strip()
     pid = str(body.get("id") or "").strip()
     name = str(body.get("name") or "").strip()
+    created = ""
     try:
         if action == "create":
-            core_settings.profile_create(
-                name, base_id=str(body.get("base") or "").strip())
+            created = core_settings.profile_create(
+                name, base_id=str(body.get("base") or "").strip())["id"]
         elif action == "rename":
             core_settings.profile_rename(pid, name)
         elif action == "delete":
@@ -150,7 +153,8 @@ def _settings_profiles(ctx: dict) -> dict:
             raise ApiError(400, "Поле action: create | rename | delete")
     except ValueError as exc:
         raise ApiError(400, str(exc))
-    return {"ok": True, "profiles": core_settings.profiles_payload()}
+    return {"ok": True, "created": created,
+            "profiles": core_settings.profiles_payload()}
 
 
 def _settings_check(ctx: dict) -> dict:
