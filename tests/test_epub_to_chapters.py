@@ -725,8 +725,8 @@ def test_main_clean_text_flag(tmp_path, monkeypatch):
         assert got == want, f"{flag}: {got!r}"
 
 
-def test_main_clean_text_default_off(tmp_path, monkeypatch):
-    """Без флага стадия пишет главы как раньше (дефолт реестра — выключено)."""
+def test_main_clean_text_default_on(tmp_path, monkeypatch):
+    """Без флага стадия чистит текст: дефолт реестра — включено."""
     src = tmp_path / "book.txt"
     src.write_text("Глава 1\n\nпервый\n\nвторой\n", encoding="utf-8")
     out = tmp_path / "out-default"
@@ -736,7 +736,7 @@ def test_main_clean_text_default_off(tmp_path, monkeypatch):
         "--split-re", "Глава \\d+", "--output", str(out)])
     E2C.main()
     got = (out / "00000_1_Глава_1" / "chapter.txt").read_text(encoding="utf-8")
-    assert got == "Глава 1\n\nпервый\n\nвторой\n"
+    assert got == "Глава 1\n\nпервый\nвторой\n"
 
 
 def test_main_requires_input(tmp_path, monkeypatch, capsys):

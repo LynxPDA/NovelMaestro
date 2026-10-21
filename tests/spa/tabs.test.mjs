@@ -439,7 +439,7 @@ const SPEC_FIELDS = {
     { name: "split_patterns", label: "Паттерны разбивки", type: "textarea",
       default: "", rows: 4, when: [["mode", ["regex"]]] },
     { name: "clean_text", label: "Предварительная очистка текста глав",
-      type: "bool", default: false },
+      type: "bool", default: true },
     { name: "clean_output", label: "Очистить папки глав перед записью",
       type: "bool", default: true },
   ],
@@ -1379,8 +1379,8 @@ test("запуски epub: исходник автоподхватывается
   /* режим toc принимает только epub — txt в список не попадает */
   assert.deepEqual(sel.children.map((o) => o.value),
     ["", "book.epub", "вторая.epub"]);
-  /* чекбоксы стадии: дефолты реестра (очистка текста выключена) */
-  assert.equal(field("clean_text")._input.checked, false);
+  /* чекбоксы стадии: дефолты реестра (очистка текста включена) */
+  assert.equal(field("clean_text")._input.checked, true);
   assert.equal(field("clean_output")._input.checked, true);
   /* паттерны разбивки — поле режима regexp: в toc-режиме оно скрыто
      классом (узел живёт в DOM), значения неприменимых полей остаются */

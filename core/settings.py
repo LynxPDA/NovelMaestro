@@ -430,7 +430,7 @@ GROUPS: tuple = (
             _s("EPUB_OUTPUT_TYPE", "Тип выходного файла", "select", "chapter", options=("chapter", "translated", "redacted", "polished"),
                 labels={'chapter': "chapter.txt", 'translated': "translated.txt", 'redacted': "redacted.txt", 'polished': "polished.txt"},
                 help="какой файл создаётся в папке главы (канон артефактов стадий)", stage="epub"),
-            _s("EPUB_CLEAN_TEXT", "Предварительная очистка текста глав", "bool", False,
+            _s("EPUB_CLEAN_TEXT", "Предварительная очистка текста глав", "bool", True,
                 help="перед разбивкой пустые строки внутри глав убираются — каждый абзац своей строкой; пустая строка остаётся только после первой строки файла (между заголовком и телом главы). Пробелы и табуляция в начале строк убираются всегда и без галки; без галки пустые строки между абзацами остаются как в исходнике",
                 stage="epub"),
             _s("EPUB_CLEAN_OUTPUT", "Очистить папки глав перед записью", "bool", True,
