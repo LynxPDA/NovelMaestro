@@ -994,7 +994,10 @@ def profiles_read() -> list:
 
 
 def profiles_write(profiles: list) -> str:
-    """Записать профили атомарной заменой: порядок списка = порядок в UI.
+    """Записать профили атомарной заменой: порядок файла — порядок создания.
+
+    Порядок в интерфейсе задаёт `profiles()` (алфавит), поэтому порядок в
+    файле не важен и при записи не перемешивается.
 
     Последний удалённый профиль убирает файл совсем: пустой файл — не
     состояние, а мусор (тот же закон, что у общего .env)."""
@@ -1017,10 +1020,19 @@ def profiles_write(profiles: list) -> str:
 
 
 def profiles() -> list:
-    """Все профили: встроенный General первым, остальные — с диска."""
+    """Все профили: встроенный General первым, остальные — по алфавиту имени.
+
+    Файл хранит профили в порядке создания, а список в интерфейсе идёт
+    алфавитом: имя придумывает человек, и «чем позже завёл, тем ниже»
+    заставляло бы искать нужный профиль глазами по всему списку.
+    """
     builtin = {"id": PROFILE_DEFAULT, "name": PROFILE_DEFAULT_TITLE,
                "builtin": True, "values": {}}
-    return [builtin] + [dict(p, builtin=False) for p in profiles_read()]
+    rest = [dict(p, builtin=False) for p in profiles_read()]
+    rest.sort(key=lambda p: (unicodedata.normalize("NFC",
+                                                  str(p.get("name") or ""))
+                             .casefold(), str(p.get("id") or "")))
+    return [builtin] + rest
 
 
 def profile_get(profile_id: str) -> dict | None:

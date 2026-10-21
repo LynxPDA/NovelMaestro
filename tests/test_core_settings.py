@@ -605,6 +605,27 @@ def test_profile_file_format(global_env):
     assert data["profiles"][1]["values"] == {"MODEL": "b"}
 
 
+def test_profiles_sorted_by_name(global_env):
+    """Порядок в интерфейсе — алфавит имени (после General), а не порядок
+    создания: файл хранит профили как завели, список же ищут глазами по имени.
+    NFC и регистр не влияют на порядок."""
+    S.profile_create("Ярослав")
+    S.profile_create("домашний")
+    S.profile_create("Beta")
+    names = [p["name"] for p in S.profiles()]
+    assert names == [S.PROFILE_DEFAULT_TITLE, "Beta", "домашний", "Ярослав"]
+    # файл по-прежнему в порядке создания — сортируется только выдача
+    import json as _json
+    data = _json.loads(global_env.parent.joinpath(S.PROFILES_NAME)
+                       .read_text(encoding="utf-8"))
+    assert [p["name"] for p in data["profiles"]] == ["Ярослав", "домашний",
+                                                      "Beta"]
+    # переименование переставляет профиль в списке
+    beta = next(p for p in S.profiles() if p["name"] == "Beta")
+    S.profile_rename(beta["id"], "Альфа")
+    assert [p["name"] for p in S.profiles()][1] == "Альфа"
+
+
 def test_profiles_file_dies_with_last_profile(global_env):
     """Последний удалённый профиль убирает файл: пустой llm_profiles.json —
     не состояние, а мусор (тот же закон, что у пустого общего .env)."""
