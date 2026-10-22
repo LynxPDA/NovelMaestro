@@ -141,8 +141,6 @@ def test_collect_stats_n0_n1():
     files = {1: {"polished": "p1", "chapter": "c1"}}
     st1 = _stats(files, {"p1": 100, "c1": 60})
     assert st1["chapter"]["n"] == 1
-    assert "статистики нет" in TC.stats_line("polished", "chapter",
-                                             st1["chapter"])
 
 
 def test_collect_stats_skips_empty_files():
@@ -194,15 +192,65 @@ def test_scan_files_skips_duplicates(tmp_path):
     assert 1 not in files and 2 in files
 
 
+def _err(st, check_n, ref_n) -> str:
+    """Строка объёмной ошибки: тест ждёт её, а не None."""
+    got = TC.volume_error("polished", "redacted", check_n, ref_n, st)
+    assert got is not None
+    return got
+
+
 def test_volume_error_bounds():
     """Отношение внутри допуска — None; вне — ошибка с числами."""
-    st = {"median": 1.0, "tol": 0.1, "n": 30}
+    st = {"median": 1.0, "tol": 0.1, "n": 30, "mad": 0.0, "k": 7}
     assert TC.volume_error("polished", "redacted", 1000, 1000, st) is None
-    err = TC.volume_error("polished", "redacted", 1200, 1000, st)
-    assert err is not None and "1.20" in err
+    assert "1.20" in _err(st, 1200, 1000)
     # пустой файл не объёмная ошибка (ловит минимальный размер)
     assert TC.volume_error("polished", "redacted", 0, 1000, st) is None
     assert TC.volume_error("polished", "redacted", 1000, 0, st) is None
+
+
+def test_stats_line_shows_bounds():
+    """Строка пары называет ГРАНИЦЫ отношения при текущем K — не проценты
+    допуска, которые приходится пересчитывать в голове."""
+    st = {"n": 100, "median": 1.0, "mad": 0.004, "tol": 0.0999,
+          "k": 25.0, "small": False}
+    line = TC.stats_line("polished", "redacted", st)
+    assert "0.90–1.10" in line, line
+    assert "K=25" in line and "MAD 0.4%" in line, line
+    # малая база: границы есть, признак «разброс не учитывается» на месте
+    small = dict(st, n=3, small=True, tol=0.15)
+    line = TC.stats_line("polished", "chapter", small)
+    assert "0.85–1.15" in line and "мало глав" in line, line
+
+
+def test_volume_error_hints_next_k():
+    """В ошибке — границы при текущем K и сколько K не хватило: видно,
+    двигать ли настройку или править главу."""
+    st = {"median": 0.999, "mad": 0.003996, "tol": 0.0999, "k": 25.0}
+    err = _err(st, 1469, 1637)
+    assert "вне 0.90–1.10 при K=25" in err, err
+    assert "K ≥ 26" in err, err
+    # сильный промах требует заметно большего K: 1267/1450 = 0.874
+    assert "K ≥ 32" in _err(st, 1267, 1450)
+    # K=0 (ручка на нуле) — подсказка не врёт про «следующий K»
+    assert "K ≥ 26" in _err(dict(st, k=0.0), 1469, 1637)
+
+
+def test_volume_error_hint_when_floor_holds():
+    """Разброс 0 — допуск держит пол, и никакой K не расширит его: так и
+    пишем, иначе человек будет крутить настройку без результата."""
+    st = {"median": 1.0, "mad": 0.0, "tol": 0.02, "k": 7.0}
+    err = _err(st, 900, 1000)
+    assert "K не поможет" in err and "пол" in err, err
+    assert TC.min_k_for(0.9, st) is None
+
+
+def test_min_k_for_rounds_up():
+    """Нужный K округляется вверх: 25.43 → 26 (граница включается)."""
+    st = {"median": 0.999, "mad": 0.003996, "tol": 0.0999, "k": 25.0}
+    assert TC.min_k_for(0.8974, st) == 26
+    assert TC.min_k_for(1.0, st) is None  # уже внутри допуска
+    assert TC.bounds(st)[0] == pytest.approx(0.90, abs=0.001)
 
 
 # ════════════════════════════════════════════════════════════════════

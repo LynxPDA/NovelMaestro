@@ -47,6 +47,7 @@ import re
 import shlex
 import statistics
 import sys
+from math import ceil
 from datetime import datetime
 from pathlib import Path
 
@@ -193,32 +194,63 @@ def collect_stats(files, check_type, comparisons, counts,
     return stats
 
 
+def bounds(st: dict) -> tuple[float, float]:
+    """Границы допуска пары: (медиана − tol, медиана + tol)."""
+    return st["median"] - st["tol"], st["median"] + st["tol"]
+
+
+def min_k_for(ratio: float, st: dict) -> int | None:
+    """Наименьшее K, при котором отношение главы влезает в допуск пары.
+
+    Допуск = max(пол, K·MAD/медиана), поэтому пол K не берёт: разброс 0
+    (или его мало) — None, и подсказка честно говорит, что K не поможет.
+    """
+    med, mad = st["median"], st["mad"]
+    if not med or mad <= 0:
+        return None
+    need = abs(ratio - med) / (mad / med)
+    return ceil(need) if need > st.get("k", 0) else None
+
+
 def stats_line(check_type: str, ref_type: str, st: dict) -> str:
-    """Строка отчёта о статистике одной пары."""
+    """Строка отчёта о статистике одной пары.
+
+    Главное в ней — ГРАНИЦЫ отношения при текущем K: по ним видно, что
+    именно означает «допуск ±N%», не пересчитывая в голове.
+    """
     if st["n"] < 2:
         return (f"  {check_type} vs {ref_type}: статистики нет "
                 f"(полных глав {st['n']}) — сравнение пропускается")
+    lo, hi = bounds(st)
     line = (f"  {check_type} vs {ref_type}: глав {st['n']}, "
             f"медиана {st['median']:.3f}, MAD {st['mad'] * 100:.1f}%, "
-            f"допуск ±{st['tol'] * 100:.1f}%")
+            f"допуск ±{st['tol'] * 100:.1f}% → отношение "
+            f"{lo:.2f}–{hi:.2f}")
     if st["small"]:
         return line + " (мало глав — разброс выборки не учитывается)"
     return line + f" (K={st['k']:g})"
 
 
 def volume_error(check_label, ref_label, check_n, ref_n, st) -> str | None:
-    """Отношение объёмов главы вне допуска пары → строка-ошибка."""
+    """Отношение объёмов главы вне допуска пары → строка-ошибка.
+
+    В строке — границы при текущем K и сколько K не хватило: иначе
+    человек не понимает, двигать ли настройку или править главу.
+    """
     if not ref_n or not check_n:
         return None  # пустой файл ловит минимальный размер
     ratio = check_n / ref_n
-    lo = st["median"] - st["tol"]
-    hi = st["median"] + st["tol"]
+    lo, hi = bounds(st)
     if lo <= ratio <= hi:
         return None
+    need = min_k_for(ratio, st)
+    hint = (f"пройдёт при K ≥ {need}" if need is not None else
+            "K не поможет: допуск держит пол, а не разброс книги")
     return (f"  [{check_label} vs {ref_label}]  отношение объёма "
-            f"{ratio:.2f} → ОШИБКА (медиана книги {st['median']:.2f} "
-            f"± {st['tol']:.2f}; {check_label} {check_n} т., "
-            f"{ref_label} {ref_n} т.)")
+            f"{ratio:.2f} → ОШИБКА (вне {lo:.2f}–{hi:.2f} при "
+            f"K={st['k']:g}, медиана книги {st['median']:.2f}; "
+            f"{check_label} {check_n} т., {ref_label} {ref_n} т.; "
+            f"{hint})")
 
 # ──────────────────────────────────────────────
 # ПРОВЕРКА ОДНОЙ ГЛАВЫ
