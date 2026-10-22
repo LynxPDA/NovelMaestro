@@ -791,6 +791,83 @@ async function main() {
         ? `\n     ${problems.slice(before).join("\n     ")}` : ""));
   }
 
+  /* «Глоссарий»: правка записи со служебным полем-структурой (_votes_*).
+   * Поле структуры — JSON-текст, а не подпись ячейки («other (female): 2,
+   * other: 1»): иначе сохранение любой записи с таким полем падало на
+   * «Невалидный JSON в «_votes_type»». */
+  {
+    const before = problems.length;
+    const nerPath = path.join(seedDir || "", SECTION, BOOK, "ner.json");
+    /* служебное поле голосов — как его пишет ner.py; остальные сценарии
+       ждут глоссарий без него, поэтому кладём его только на этот шаг */
+    fs.writeFileSync(nerPath, JSON.stringify([
+      { term: "мир", translation: "мир", type: "other (female)", count: 3,
+        _votes_type: { "other (female)": 2, "other": 1 } },
+      { term: "глава", translation: "глава", type: "other", count: 1 },
+    ], null, 2), "utf-8");
+    /* выделение строк — состояние предыдущего блока, а не книги:
+       перезагрузка страницы его снимает */
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/ner`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".ner-table tbody .ner-row", { timeout: 15000 });
+    /* служебный столбец по умолчанию скрыт — показываем все ключи записи */
+    await page.locator(".ner-menu-btn").first().click();
+    await page.waitForTimeout(300);
+    await page.locator('button[title="Какие столбцы показывать"]').first().click();
+    await page.waitForTimeout(400);
+    await page.locator(".modal-backdrop label.ner-col-row input").first().check();
+    await page.locator('.modal-backdrop button:has-text("Готово")').click();
+    await page.waitForTimeout(500);
+    await page.locator('.ner-table tbody .ner-row .ner-actions '
+      + 'button[aria-label="Редактировать"]').first().click();
+    await page.waitForTimeout(400);
+    const field = await page.evaluate(() => {
+      const cell = document.querySelector(".ner-json-cell");
+      if (!cell) return null;
+      let parsed = null;
+      try { parsed = JSON.parse(cell.value); } catch { /* не JSON */ }
+      return { text: cell.value, parsed: parsed != null };
+    });
+    if (!field)
+      problems.push("глоссарий: поле структуры не стало JSON-полем");
+    else if (!field.parsed)
+      problems.push(`глоссарий: в поле структуры не JSON — «${field.text}»`);
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "scenario-ner-edit.png") });
+    /* правка обычного поля структуру не трогает: сохранение проходит */
+    await page.evaluate(() => {
+      const cells = [...document.querySelectorAll(".ner-editing td")];
+      const inp = cells.map((td) => td.querySelector("input"))
+        .find((i) => i && i.value === "мир");
+      if (inp) inp.value = "мирок";
+    });
+    await page.locator(".ner-editing .ner-actions button").first().click();
+    await page.waitForTimeout(900);
+    const errs = await page.evaluate(() =>
+      [...document.querySelectorAll(".toast-err")].map((x) => x.textContent));
+    if (errs.length)
+      problems.push(`глоссарий: сохранение отказало — ${errs.join(" | ")}`);
+    const saved = (() => {
+      try { return fs.readFileSync(nerPath, "utf-8"); }
+      catch { return ""; }
+    })();
+    if (!/"мирок"/.test(saved))
+      problems.push("глоссарий: правка не доехала в ner.json");
+    if (!/"_votes_type"/.test(saved))
+      problems.push("глоссарий: правка потеряла поле структуры");
+    /* данные пробы возвращаются на место: другие сценарии ждут глоссарий
+       без служебного поля голосов */
+    fs.writeFileSync(nerPath, JSON.stringify([
+      { term: "мирок", translation: "мир", type: "other (female)", count: 3 },
+      { term: "глава", translation: "глава", type: "other", count: 1 },
+    ], null, 2), "utf-8");
+    log(`${problems.length === before ? "✅" : "❌"} глоссарий: правка`
+      + ` JSON-поле «${field ? field.text : "нет"}» · ошибок ${errs.length}`
+      + (problems.length > before
+        ? `\n     ${problems.slice(before).join("\n     ")}` : ""));
+  }
+
   /* «Промпты»: язык редактора выбирает человек. По умолчанию промптам plain
    * text: отдельного «языка промптов» больше нет (у этих файлов расширение
    * .txt). Если же в «Внешнем виде» выбрать XML — теги секций снова видно по

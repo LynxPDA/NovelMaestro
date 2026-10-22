@@ -535,6 +535,23 @@ test("nerCellText: объекты — пары «ключ: значение», �
   assert.equal(UICore.nerCellText({ a: { b: 2 } }), "a: b: 2");
 });
 
+test("nerStructJson: структура в поле правки — разбираемый JSON", () => {
+  /* регресс: поле правки заполнялось подписью ячейки (nerCellText) —
+     «Person (male): 5, Person (female): 2» — и коммит падал с «Невалидный
+     JSON в «_votes_type»», какую бы запись ни правили */
+  assert.equal(UICore.nerStructJson({ a: 1 }), '{"a":1}');
+  assert.equal(
+    UICore.nerStructJson({ "Person (male)": 5, "Person (unknown)": 2 }),
+    '{"Person (male)":5,"Person (unknown)":2}',
+  );
+  assert.deepEqual(JSON.parse(UICore.nerStructJson(["а", "б"])), ["а", "б"]);
+  assert.equal(UICore.nerStructJson({}), "{}");
+  /* структуру без JSON-представления функция не выдаёт за текст */
+  const cyc = {};
+  cyc.self = cyc;
+  assert.equal(UICore.nerStructJson(cyc), "");
+});
+
 test("nextNerSort: первый клик — убывание, повтор — возрастание", () => {
   assert.deepEqual(UICore.nextNerSort("count", "desc", "translation"), {
     field: "translation",

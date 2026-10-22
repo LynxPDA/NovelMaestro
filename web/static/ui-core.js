@@ -380,6 +380,16 @@
       return Object.keys(v).map((k) => `${k}: ${nerCellText(v[k])}`).join(", ");
     return String(v);
   }
+  /* Значение-структура в поле правки — компактный JSON: подпись ячейки
+     (nerCellText) для разбора обратно не годится. */
+  function nerStructJson(v) {
+    try {
+      var text = JSON.stringify(v);
+      return text === undefined ? "" : text;
+    } catch (e) {
+      return "";
+    }
+  }
   /* Тема интерфейса: переключатель в шапке — тёмная ↔ светлая. Всё, что не
    * «light», считается тёмной: это тема по умолчанию. */
   function toggleUiTheme(ui) {
@@ -1631,6 +1641,7 @@
     bookState: bookState,
 
     nerCellText: nerCellText,
+    nerStructJson: nerStructJson,
     /* замок термина (NER_LOCK_FIELD): состояние, а не столбец таблицы */
     nerIsLocked: nerIsLocked,
     nerSetLocked: nerSetLocked,

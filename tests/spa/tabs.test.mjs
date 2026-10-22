@@ -2342,6 +2342,39 @@ test("глоссарий: удаление выделенного обходит
   assert.deepEqual(nerRows(page).map(nerFirstCol), ["дракон"]);
 });
 
+test("глоссарий: правка записи со структурой не падает на JSON-поле", async () => {
+  /* регресс: текст поля брался из подписи ячейки («Person (male): 5,
+     …»), и сохранение любой записи с _votes_* отвечало «Невалидный JSON» */
+  const items = [{
+    term: "Лина", type: "Person (male)", translation: "Лина", count: 7,
+    _votes_type: { "Person (male)": 5, "Person (unknown)": 2 },
+  }];
+  const page = await nerPage(items, { "nerCols:ACTIVE/Книга": null });
+  await tick();
+  const edit = findByClass(nerRows(page)[0], "icon-btn")
+    .find((b) => b.getAttribute("aria-label") === "Редактировать");
+  await edit._listeners.click[0]();
+  const json = findByClass(page, "ner-json-cell")[0];
+  assert.ok(json, "поле структуры — JSON-текст, а не подпись ячейки");
+  assert.deepEqual(JSON.parse(json.value), {
+    "Person (male)": 5, "Person (unknown)": 2,
+  });
+  /* правка обычного поля структуру не трогает: сохранение проходит */
+  const termInp = findTag(nerRows(page)[0], "input")
+    .find((i) => i.value === "Лина");
+  termInp.value = "Линна";
+  json.value = '{"Person (male)":6}';
+  const ok = findByClass(nerRows(page)[0], "ner-actions")[0]
+    .querySelectorAll("button")[0];
+  await ok._listeners.click[0]();
+  await tick();
+  const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
+  assert.ok(saved, "глоссарий сохранён");
+  assert.equal(saved.body.items[0].term, "Линна");
+  assert.deepEqual(JSON.parse(JSON.stringify(saved.body.items[0]._votes_type)),
+    { "Person (male)": 6 });
+});
+
 /* ── редакторы промптов и предпросмотр запроса ─────────────────── */
 
 test("редакторы: у промпта язык — выбор с «Внешнего вида» (дефолт — prompts)", async () => {

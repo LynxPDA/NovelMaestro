@@ -2473,7 +2473,8 @@ function viewProject(section, name, tab, job) {
         { class: "ner-row ner-editing" },
         h("td", { class: "ner-td-sel" }),
         ...visibleCols().map((c) => {
-          /* Значение-объект редактируется как JSON-текст; при
+          /* Значение-объект редактируется как JSON-текст (а не подписью
+             ячейки: разобрать «ключ: значение, …» обратно нельзя); при
              коммите парсим — невалидный JSON не сохраняется */
           const struct = isStruct(it[c]);
           const inp = struct
@@ -2481,7 +2482,7 @@ function viewProject(section, name, tab, job) {
                 class: "input input-sm ner-json-cell",
                 rows: "3",
                 spellcheck: "false",
-                value: cellText(it[c]),
+                value: UICore.nerStructJson(it[c]),
               })
             : h("input", {
                 class: "input input-sm",
