@@ -1118,13 +1118,17 @@ def test_settings_hidden_when_auth_enabled(tmp_path, monkeypatch):
 CHECK_FIXTURE = """=== Отчёт о проверке перевода (polished) ===
 Диапазон глав : 1 – 3
 Папка глав    : /tmp/x/chapters
-Сравнения     : redacted (1.0±0.05)
+Счёт объёма   : токены (оценка); чувствительность K=25
 Режим         : strict
-Единицы       : размеры в байтах; ratio — безразмерная эвристика
 Дата          : Thu Aug 13 09:29:15 2026
 Всего папок   : 3
 ---------------------------------
+Статистика (по всей книге, 3 папок без дублей):
+  polished vs redacted: глав 1320, медиана 0.999, MAD 0.4%, допуск ±9.9% → отношение 0.90–1.10 (K=25)
+  polished vs chapter: глав 2, медиана 1.356, MAD 4.7%, допуск ±87.3% → отношение 0.48–2.23 (K=25)
+---------------------------------
 1. Папка: ./chapters/00000_1_第1章
+  [polished vs redacted]  отношение объёма 0.90 → ОШИБКА (вне 0.90–1.10 при K=25, медиана книги 1.00; polished 1469 т., redacted 1637 т.; пройдёт при K ≥ 26)
   - Английский текст: NPC
 
 2. Дубль папок: a, b
@@ -1142,7 +1146,7 @@ CHECK_FIXTURE = """=== Отчёт о проверке перевода (polished
 
 
 def test_parse_check_report_fixture():
-    """Парсер отчёта — метаданные, entries, FATAL, ./-обрезка."""
+    """Парсер отчёта — метаданные, статистика пар, entries, FATAL, ./-обрезка."""
     from web.api import _parse_check_report
     d = _parse_check_report(CHECK_FIXTURE)
     assert d["type"] == "polished"
@@ -1152,13 +1156,41 @@ def test_parse_check_report_fixture():
     e1 = d["entries"][0]
     assert e1["chapter"] == 1
     assert e1["dir"] == "chapters/00000_1_第1章"  # ./ отрезан
-    assert e1["errors"] == ["- Английский текст: NPC"]
+    assert e1["errors"] == [
+        "[polished vs redacted]  отношение объёма 0.90 → ОШИБКА "
+        "(вне 0.90–1.10 при K=25, медиана книги 1.00; polished 1469 т., "
+        "redacted 1637 т.; пройдёт при K ≥ 26)",
+        "- Английский текст: NPC",
+    ]
     e2 = d["entries"][1]
     assert e2["fatal"] is True
     assert e2["dir"] == ""
     e3 = d["entries"][2]
     assert not e3["fatal"]
     assert any("не найден" in x for x in e3["errors"])
+
+
+def test_parse_check_stats_bounds():
+    """Блок «Статистика»: границы берутся как напечатаны (старый отчёт —
+    из процента), пара без базы — нули и признак «мало глав»."""
+    from web.api import _parse_check_stats
+    rows = _parse_check_stats(CHECK_FIXTURE)
+    assert [r["ref"] for r in rows] == ["redacted", "chapter"]
+    r = rows[0]
+    assert (r["check"], r["chapters"], r["k"]) == ("polished", 1320, 25.0)
+    assert r["median"] == pytest.approx(0.999)
+    assert r["mad"] == pytest.approx(0.4)
+    assert (r["lo"], r["hi"]) == pytest.approx((0.90, 1.10))
+    assert r["small"] is False
+    # старый отчёт без «→ отношение»: границы выводятся из медианы и допуска
+    legacy = "  polished vs redacted: глав 5, медиана 1.000, MAD 0.0%, допуск ±2.0%\n"
+    old = _parse_check_stats(legacy)[0]
+    assert (old["lo"], old["hi"]) == pytest.approx((0.98, 1.02))
+    # пара без базы: чисел нет вовсе — вьюха её не рисует
+    empty = _parse_check_stats(
+        "  polished vs chapter: статистики нет (полных глав 0) — "
+        "сравнение пропускается\n")[0]
+    assert empty["lo"] is None and empty["chapters"] == 0
 
 
 def test_check_reports_endpoint(srv, tmp_path):

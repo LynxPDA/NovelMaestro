@@ -43,6 +43,7 @@ from web.api_projects import (  # noqa: F401  фасад
 )
 from web.api_assets import (  # noqa: F401  фасад
     _parse_check_report,
+    _parse_check_stats,
 )
 from web.api_stage import (  # noqa: F401  фасад
     _jobs_get,

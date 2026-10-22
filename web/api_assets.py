@@ -235,6 +235,53 @@ def _notes_put(ctx: dict) -> dict:
     return {"ok": True, "exists": True}
 
 
+def _parse_check_stats(text: str) -> list[dict]:
+    """Блок «Статистика» отчёта translate_check → строки пар.
+
+    Строка: `  polished vs redacted: глав 1320, медиана 0.999, MAD 0.4%,
+    допуск ±9.9% → отношение 0.90–1.10 (K=25)`; у пары без базы вместо
+    чисел — «статистики нет». Чего в строке нет (старый отчёт), остаётся
+    None — вьюха такую пару просто не рисует.
+    """
+    def num(pattern: str, line: str) -> float | None:
+        m = re.search(pattern, line)
+        if not m:
+            return None
+        try:
+            return float(m.group(1).replace(",", "."))
+        except ValueError:
+            return None
+
+    out: list[dict] = []
+    for line in text.splitlines():
+        m = re.match(r"^\s+(\w+) vs (\w+): (.+)$", line)
+        if not m:
+            continue
+        check_type, ref_type, rest = m.groups()
+        med = num(r"медиана ([\d.]+)", rest)
+        tol = num(r"допуск ±([\d.]+)%", rest)
+        lo = hi = None
+        bounds = re.search(r"отношение ([\d.]+)–([\d.]+)", rest)
+        if bounds:
+            lo, hi = float(bounds.group(1)), float(bounds.group(2))
+        elif tol is not None and med is not None:
+            # старые отчёты границ не печатают — выводим из процента
+            lo, hi = round(med - tol / 100, 2), round(med + tol / 100, 2)
+        out.append({
+            "check": check_type,
+            "ref": ref_type,
+            "chapters": int(num(r"глав (\d+)", rest) or 0),
+            "median": med,
+            "mad": num(r"MAD ([\d.]+)%", rest),
+            "tol": tol,
+            "lo": lo,
+            "hi": hi,
+            "k": num(r"K=([\d.]+)", rest),
+            "small": "мало глав" in rest,
+        })
+    return out
+
+
 def _parse_check_report(text: str) -> dict:
     """Разбор текстового отчёта translate_check (logs/check_*.txt).
 
@@ -292,6 +339,7 @@ def _parse_check_report(text: str) -> dict:
         "checked": _m(r"Проверено глав\s*: (\d+)"),
         "failed": _m(r"С ошибками\s*: (\d+)"),
         "skipped": _m(r"Пропущено\s*: (\d+)"),
+        "stats": _parse_check_stats(text),
         "entries": entries,
     }
 
