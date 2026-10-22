@@ -184,6 +184,35 @@ function seedProjectsDir(dir) {
     ) + "\n",
     "utf-8",
   );
+  // отчёт translate_check: на нём проверяется шкала допуска пары —
+  // полоса при текущем K, штрих медианы и точки глав вне допуска
+  fs.mkdirSync(path.join(book, "logs"), { recursive: true });
+  fs.writeFileSync(
+    path.join(book, "logs", "check_polished_1-2.txt"),
+    [
+      "=== Отчёт о проверке перевода (polished) ===",
+      "Запуск        : /app/cli/translate_check.py --check-type polished --sensitivity 25",
+      "Диапазон глав : 1 – 2",
+      "Счёт объёма   : токены (оценка); чувствительность K=25",
+      "Дата          : Thu Oct 22 10:32:18 2026",
+      "Всего папок   : 2",
+      "---------------------------------",
+      "Статистика (по всей книге, 2 папок без дублей):",
+      "  polished vs redacted: глав 1320, медиана 0.999, MAD 0.4%, допуск ±9.9% → отношение 0.90–1.10 (K=25)",
+      "  polished vs chapter: глав 2, медиана 1.356, MAD 4.7%, допуск ±87.3% → отношение 0.48–2.23 (K=25)",
+      "---------------------------------",
+      "1. Папка: ./chapters/00000_1_Глава 1",
+      "  [polished vs redacted]  отношение объёма 0.90 → ОШИБКА (вне 0.90–1.10 при K=25, медиана книги 1.00; polished 1469 т., redacted 1637 т.; пройдёт при K ≥ 26)",
+      "  [polished vs chapter]  отношение объёма 1.47 → ОШИБКА (вне 0.48–2.23 при K=25, медиана книги 1.36; polished 1469 т., chapter 1000 т.; пройдёт при K ≥ 32)",
+      "",
+      "--- Сводка ---",
+      "Проверено глав : 2",
+      "С ошибками     : 1",
+      "Пропущено      : 0",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
   // файл в корне книги: файловый менеджер есть что показать (quick-look)
   fs.writeFileSync(path.join(book, "notes.md"), "# Заметки\n\n- проба\n", "utf-8");
   // логи книги: вкладка «Логи» показывает и папки, и файлы — и то, и другое
@@ -2352,6 +2381,58 @@ async function main() {
     if (started) problems.push("диапазон: 64 – 3 всё-таки ушёл в запуск");
     log(`${problems.length === before ? "✅" : "❌"} диапазон глав  `
       + `64 – 3: подсказка + ${bad.bad} поля в рамке · отказ «${err}»`);
+  }
+
+  /* Отчёт translate_check: шкала допуска пары — полоса при текущем K,
+   * штрих медианы и точки глав вне допуска. Числа берутся из блока
+   * «Статистика» (сервер разбирает его в r.stats): без них вьюха падала бы
+   * молча, и человек не увидел бы, что значит «допуск ±9.9%» */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/review`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".subtabs .subtab", { timeout: 15000 });
+    await page.locator('.subtabs .subtab:text-is("Перевод")').first().click();
+    await page.waitForSelector(".check-scale", { timeout: 15000 });
+    const sc = await page.evaluate(() =>
+      [...document.querySelectorAll(".check-scale")].map((el) => ({
+        title: (el.querySelector(".check-scale-title") || {}).textContent?.trim() || "",
+        nums: (el.querySelector(".check-scale-nums") || {}).textContent?.trim() || "",
+        band: !!el.querySelector(".check-scale-band"),
+        mark: !!el.querySelector(".check-scale-mark"),
+        dots: [...el.querySelectorAll(".check-scale-dot")].map((d) => ({
+          out: d.classList.contains("is-out"),
+          title: d.getAttribute("title") || "",
+          left: (d.getAttribute("style") || "").replace(/\s/g, ""),
+        })),
+        legend: (el.querySelector(".check-scale-legend") || {}).textContent?.trim() || "",
+      })));
+    if (sc.length !== 2) problems.push(`шкала отчёта: полос ${sc.length} (ожидаем 2)`);
+    const first = sc[0] || {};
+    if (first.title !== "polished vs redacted")
+      problems.push(`шкала отчёта: подпись «${first.title}»`);
+    if (!/допуск 0\.90–1\.10 при K=25/.test(first.nums || ""))
+      problems.push(`шкала отчёта: числа «${first.nums}»`);
+    if (!first.band || !first.mark) problems.push("шкала отчёта: нет полосы или медианы");
+    if ((first.dots || []).length !== 1)
+      problems.push(`шкала отчёта: точек ${(first.dots || []).length} (ожидаем 1)`);
+    const dot = (first.dots || [])[0] || {};
+    /* точка лежит на нижней границе допуска — угол по медиане домена:
+       0.90 при 0.999 и ±0.10 значит «дальше половины шкалы», а не у края */
+    if (!/left:\d+(\.\d+)?%/.test(dot.left || ""))
+      problems.push(`шкала отчёта: позиция точки «${dot.left}»`);
+    if (!/отношение 0\.90 — вне допуска/.test(dot.title || ""))
+      problems.push(`шкала отчёта: тултип точки «${dot.title}»`);
+    if (!/глав в базе: 1320/.test(first.legend || ""))
+      problems.push(`шкала отчёта: подпись «${first.legend}»`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-check-scale.png") });
+    log(`${problems.length === before ? "✅" : "❌"} шкала отчёта    `
+      + `${sc.length} пары · ${(first.dots || []).length} точка`);
+    /* подвкладка «Проверки» запоминается книгой: следующие сценарии ждут
+       глоссарий — возвращаем её, иначе полигон упадёт на пустом .rv-row */
+    await page.locator('.subtabs .subtab:text-is("Глоссарий (LLM)")').first().click();
+    await page.waitForTimeout(400);
   }
 
   /* «Проверка глоссария»: поля записи, уходящие LLM. term, type и
