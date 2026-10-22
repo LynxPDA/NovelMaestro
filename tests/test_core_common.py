@@ -946,6 +946,38 @@ def test_load_ner_data_skips_empty_term(tmp_path):
     assert [d["term"] for d in data] == ["陈阳", "Linh Thuy"]
 
 
+def test_alias_list_normalizes_shapes():
+    """aliases в ner.json бывает пустой строкой (очистка ячейки «Глоссария»
+    старым клиентом) или одиночным именем: обе формы — список строк."""
+    assert C.alias_list(None) == []
+    assert C.alias_list("") == []
+    assert C.alias_list("  ") == []
+    assert C.alias_list("Чэнь") == ["Чэнь"]
+    assert C.alias_list(["a", " b ", ""]) == ["a", "b"]
+    assert C.alias_list(("a",)) == ["a"]
+
+
+def test_load_ner_data_tolerates_bad_aliases(tmp_path):
+    """Строка в aliases не роняет загрузку всей стадии (§ предпросмотр
+    на книге с `"aliases": ""`): термин читается, вариантов нет."""
+    p = tmp_path / "ner.json"
+    p.write_text(json.dumps([
+        {"term": "古一", "translation": "Древний", "aliases": ""},
+        {"term": "黑猫", "translation": "Чёрная Кошка", "aliases": "Кошка"},
+        {"term": "Thor", "translation": "Тор", "aliases": ["Тор"]},
+    ], ensure_ascii=False), encoding="utf-8")
+    data, automaton = C.load_ner_data(str(p), 3, SilentLog())
+    assert [d["term"] for d in data] == ["古一", "黑猫", "Thor"]
+    # одиночное имя — вариант поиска наравне со списком
+    s, cnt = C.find_relevant_ner("Кошка пришла", data, 0.7, 3,
+                                 "term,translation", automaton=automaton)
+    assert cnt == 1 and "Чёрная Кошка" in s
+    # пустая строка — ни одного лишнего варианта
+    s2, cnt2 = C.find_relevant_ner("古一 здесь", data, 0.7, 3,
+                                   "term,translation", automaton=automaton)
+    assert cnt2 == 1 and "Древний" in s2
+
+
 def test_load_ner_data_regex_fallback(tmp_path, monkeypatch):
     """Без pyahocorasick — кортеж-фолбэк, поиск продолжает работать."""
     monkeypatch.setitem(sys.modules, "ahocorasick", None)

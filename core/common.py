@@ -795,6 +795,23 @@ _RULE_FLAGS_RE = re.compile(r"\s\|([iIrR]+)\s*$")
 # ══════════════════════════════════════════════════════════════════════
 # NER: загрузка глоссария + релевантные термины
 # ══════════════════════════════════════════════════════════════════════
+def alias_list(value) -> list:
+    """Поле aliases — всегда список строк.
+
+    В ner.json встречается пустая СТРОКА (очистка ячейки в «Глоссарии»
+    писала «», а не удаляла ключ) и одиночное имя вместо списка — обе
+    формы читаются как список, иначе `[term] + aliases` роняет TypeError
+    всю стадию, а не одну запись."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = value.strip()
+        return [value] if value else []
+    if isinstance(value, (list, tuple, set)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [str(value).strip()]
+
+
 def load_ner_data(filepath, ngram_size, logger):
     """Загрузка глоссария с aliases и построением Aho-Corasick
     (без библиотеки — regex fallback). Возвращает (processed_data, automaton)."""
@@ -817,7 +834,7 @@ def load_ner_data(filepath, ngram_size, logger):
         # count — частота: строки из JSON нормализуем к int (иначе
         # сортировки -count и пороги падают с TypeError)
         item["count"] = _int_count(item.get("count"))
-        variants = [term] + item.get("aliases", [])
+        variants = [term] + alias_list(item.get("aliases"))
         term_norm = normalize_for_search(term)
         item["_term_norm"] = term_norm
         item["_term_lower"] = term_norm  # совместимость

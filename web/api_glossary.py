@@ -67,6 +67,16 @@ def _ner_put(ctx: dict) -> dict:
     items = ctx["body"].get("items")
     if not isinstance(items, list):
         raise ApiError(400, "Поле items: список терминов")
+    # aliases — список в любой записи: старые файлы знают и пустую строку
+    # (очистка ячейки «Глоссария» старым клиентом), и одиночное имя —
+    # нормализуем при записи, чтобы load_ner_data не спотыкался
+    for it in items:
+        if isinstance(it, dict) and "aliases" in it:
+            aliases = common.alias_list(it["aliases"])
+            if aliases:
+                it["aliases"] = aliases
+            else:
+                del it["aliases"]
     import json as _json
     text = _json.dumps(items, ensure_ascii=False, indent=2)
     common.atomic_write(pdir / "ner.json",

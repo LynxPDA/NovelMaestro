@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from conftest import (http_request as _request, http_send,
+from conftest import (SilentLog, http_request as _request, http_send,
                       json_payload)
 from web import api as web_api
 from web.auth import Auth
@@ -457,6 +457,36 @@ def test_stats_cache_skips_old_status_versions(tmp_path):
         api_common._STATS_CACHE
     assert f"{root}::ACTIVE/book:status:v{ver}" in api_common._STATS_CACHE
     api_common._STATS_CACHE.clear()
+
+
+# ════════════════════════════════════════════════════════════════════
+# глоссарий: запись в ner.json
+
+def test_ner_put_normalizes_aliases(srv_ctx):
+    """PUT /api/ner приводит aliases к списку и убирает пустое значение.
+
+    Очистка ячейки старым клиентом писала `"aliases": ""`, и загрузка
+    глоссария стадией падала TypeError на `[term] + ""` (предпросмотр
+    запроса на боевой книге). На диск такая форма больше не попадает."""
+    from core import common as C
+    _, port, projects_root = srv_ctx()
+    pdir = _create_project(port, projects_root, name="ner_book")
+    pdir = projects_root / "ACTIVE" / pdir["name"]
+    items = [
+        {"term": "古一", "translation": "Древний", "aliases": ""},
+        {"term": "黑猫", "translation": "Чёрная Кошка", "aliases": "Кошка"},
+        {"term": "Thor", "translation": "Тор", "aliases": ["Тор"]},
+    ]
+    res, payload = _request(port, "PUT", "/api/ner",
+                            {"project": "ACTIVE/ner_book", "items": items})
+    assert res.status == 200, payload
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert "aliases" not in saved[0], "пустая строка удаляется, а не пишется"
+    assert saved[1]["aliases"] == ["Кошка"], "одиночное имя — в список"
+    assert saved[2]["aliases"] == ["Тор"], "список сохраняется как есть"
+    # загрузка стадией больше не падает на таких данных
+    data, _ = C.load_ner_data(str(pdir / "ner.json"), 3, SilentLog())
+    assert [d["term"] for d in data] == ["古一", "黑猫", "Thor"]
 
 
 # ════════════════════════════════════════════════════════════════════

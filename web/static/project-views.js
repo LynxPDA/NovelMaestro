@@ -2550,7 +2550,10 @@ function viewProject(section, name, tab, job) {
                 return;
               }
             } else {
-              it[c] = ""; // очистка значения
+              /* Очистка — удаление ключа, а не "": пустая строка в
+                 aliases ломала загрузку глоссария стадией
+                 (`[term] + ""` → TypeError) */
+              delete it[c];
             }
           } else {
             it[c] = raw;

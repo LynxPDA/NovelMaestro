@@ -70,6 +70,7 @@ from core.stage import (  # noqa: E402
 from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
     _retry_wait,
+    alias_list,
     atomic_write,
     compile_chapter_text,
     extract_term_context,
@@ -1235,7 +1236,7 @@ def merge_alias_groups(ner_data: list[dict], logger) -> int:
         combined_votes: dict[str, dict[str, int]] = {}
         total_count = 0
         all_source_chunks: list = list(primary.get("_source_chunks", []))
-        all_aliases: list[str] = list(primary.get("aliases", []))
+        all_aliases: list[str] = alias_list(primary.get("aliases"))
 
         for i in indices:
             item = ner_data[i]
@@ -1249,7 +1250,7 @@ def merge_alias_groups(ner_data: list[dict], logger) -> int:
                 t = item.get("term", "")
                 if t and t not in all_aliases:
                     all_aliases.append(t)
-                for a in item.get("aliases", []):
+                for a in alias_list(item.get("aliases")):
                     if a not in all_aliases:
                         all_aliases.append(a)
                 to_remove.add(i)
