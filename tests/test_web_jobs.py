@@ -2258,6 +2258,46 @@ def test_jobs_start_and_status(jobs_srv, fake_script):
     assert res.status == 400
 
 
+def test_jobs_start_validates_chapter_range(jobs_srv, tmp_path):
+    """Диапазон глав — 400 ДО запуска: «64 – 3» и главы за последней не запускают
+    стадию и не роняют её молча (правило — core.settings.chapter_range_error).
+
+    По ветке git заливать нечего: диапазон пустой — пересечения нет.
+    """
+    port, req, jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    for num in (1, 2, 3):
+        d = pdir / "chapters" / f"{num:05d}_{num}"
+        d.mkdir(parents=True)
+        (d / "polished.txt").write_text(f"Глава {num}", encoding="utf-8")
+    body = {"action": "translate_check_llm", "project": "ACTIVE/test_book"}
+    res, payload = req("POST", "/api/jobs",
+                       {**body, "params": {"start": "64", "end": "3"}})
+    assert res.status == 400, payload
+    assert "больше конечной" in payload.get("error", ""), payload
+    res, payload = req("POST", "/api/jobs",
+                       {**body, "params": {"start": "1", "end": "99"}})
+    assert res.status == 400, payload
+    assert "в книге всего 3" in payload.get("error", ""), payload
+    res, payload = req("POST", "/api/jobs",
+                       {**body, "params": {"start": "x", "end": "3"}})
+    assert res.status == 400, payload
+    assert "нужно целое число" in payload.get("error", ""), payload
+    # допустимый диапазон доходит до запуска (стадия падает уже на файлах:
+    # здесь важно только, что 400 «диапазон» нет)
+    res, payload = req("POST", "/api/jobs",
+                       {**body, "params": {"start": "2", "end": "3"}})
+    assert "больше конечной" not in str(payload.get("error", "")), payload
+    assert "в книге всего" not in str(payload.get("error", "")), payload
+    # режим, которому диапазон не нужен (wiki по готовому txt), не проверяется
+    res, payload = req("POST", "/api/jobs",
+                       {"action": "wiki", "project": "ACTIVE/test_book",
+                        "params": {"source": "txt", "file": "book.txt",
+                                   "start": "64", "end": "3"}})
+    assert "больше конечной" not in str(payload.get("error", "")), payload
+
+
 def test_jobs_start_validates_numeric_bounds(jobs_srv):
     """Числовые поля стадии с min/max из реестра: недопустимое значение → 400
     ДО запуска (скрипт бы упал с кодом 2 и «failed» без причины).

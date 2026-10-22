@@ -9,6 +9,9 @@
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from core import settings as S
@@ -424,6 +427,69 @@ def test_chapter_range_lives_outside_registry(global_env):
     assert not S.range_applies("ner_check", {"passes": "whole"})
     assert S.range_applies("wiki", {"source": "chapters"})
     assert not S.range_applies("wiki", {"source": "file"})
+
+
+def test_chapter_range_rule():
+    """Диапазон глав: конец не меньше начала, оба в пределах книги.
+
+    Одно правило на сервер (этот модуль) и на клиент (UICore.chapterRangeError):
+    иначе «64 – 3» доезжал до скрипта и ничего не делал молча."""
+    err = S.chapter_range_error
+    # пустые поля — не ошибка (вся книга, автоподхват делает форма)
+    assert err("", "") == err(None, None) == err("", "5") == ""
+    # порядок диапазона
+    assert "больше конечной" in err("64", "3")
+    assert err("3", "64") == ""
+    assert err("7", "7") == ""
+    # номер главы
+    assert "с 1" in err("0", "5")
+    assert "с 1" in err("1", "0")
+    # пределы книги: конец и начало не больше последней главы
+    assert "в книге всего 601" in err("1", "999", last=601)
+    assert "в книге всего 601" in err("602", "999", last=601)
+    assert err("1", "601", last=601) == ""
+    assert "первая глава книги — 5" in err("3", "64", first=5, last=601)
+    # границ нет (глав не нашли) — проверяется только порядок
+    assert err("3", "64", first=None, last=None) == ""
+    # не число — исключение: это не «диапазон кривой», а непонятный ввод
+    for bad in ("abc", "1.5", "-2", "²"):
+        with pytest.raises(ValueError, match="нужно целое число"):
+            err(bad, "5")
+
+
+def test_chapter_range_rule_matches_client():
+    """Порядок и тексты ошибок те же, что в UICore.chapterRangeError (SPA).
+
+    Клиент и сервер не могут разъехаться: перед запуском проверяет форма,
+    после — API; разные правила значили бы «форма пропустила, сервер отверг».
+    """
+    import subprocess
+
+    script = (
+        "const U=require('./web/static/ui-core.js');"
+        "const r=(a,b,mn,mx)=>{try{return U.chapterRangeError(a,b,{min:mn,max:mx})}"
+        "catch(e){return 'ERR:'+e.message}};"
+        "console.log(JSON.stringify(["
+        "r('','',undefined,undefined),r('64','3',undefined,undefined),"
+        "r('3','64',undefined,undefined),r('0','5',undefined,undefined),"
+        "r('1','999',undefined,601),r('3','64',5,601),r('abc','5',undefined,undefined)"
+        "]))"
+    )
+    try:
+        out = subprocess.run(
+            ["node", "-e", script], cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True, text=True, timeout=60, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip("node недоступен")
+    client = json.loads(out)
+    assert client[0] == ""                        # пусто = вся книга
+    assert "больше конечной" in client[1]        # 64 – 3
+    assert client[2] == ""                        # 3 – 64
+    assert "с 1" in client[3]
+    assert "в книге всего 601" in client[4]
+    assert "первая глава книги — 5" in client[5]
+    assert client[6] == "«Начальная глава»: нужно целое число", \
+        "не число — ошибка, как на сервере"
 
 
 def test_run_params_marked_and_never_written(global_env):

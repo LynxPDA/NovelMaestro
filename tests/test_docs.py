@@ -97,7 +97,7 @@ SETTINGS_API = ["Setting", "Block", "Group", "GROUPS", "SETTINGS", "BY_KEY",
                 "settings_of",
                 # диапазон глав — параметр запуска вне реестра настроек
                 "RANGE_FIELDS", "RANGE_STAGES", "range_settings", "range_fields",
-                "range_applies", "apply_cli_defaults",
+                "range_applies", "chapter_range_error", "apply_cli_defaults",
                 "form_fields", "defaults", "stage_values", "llm_settings",
                 "llm_values", "llm_form", "with_llm", "applies",
                 "applicable_form", "env_key", "env_file",

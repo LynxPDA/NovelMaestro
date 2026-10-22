@@ -65,6 +65,38 @@ def _job_manager(ctx: dict) -> JobManager:
     return jm
 
 
+def _chapter_bounds(ctx: dict, pdir: Path) -> tuple[int | None, int | None]:
+    """Первая и последняя глава книги по папкам chapters/ (None — глав нет)."""
+    try:
+        common = _import_common(ctx)
+        ch_map = common.build_chapter_map(pdir / "chapters")
+        nums = sorted(ch_map)
+    except Exception:  # noqa: BLE001  границы нужны только для подсказки
+        return None, None
+    return (nums[0], nums[-1]) if nums else (None, None)
+
+
+def _check_chapter_range(ctx: dict, action: str, pdir: Path,
+                        params: dict) -> None:
+    """Диапазон глав из формы — 400 ДО запуска, если он невозможен.
+
+    Ошибка в диапазоне не роняет скрипт — она молча оставляет книгу без работы
+    («64 – 3» — пустое пересечение). Правило одно (core.settings.chapter_range_error)
+    и для формы (UICore.chapterRangeError), а пределы берутся у книги: стадия,
+    которой диапазон не касается в текущем режиме, не проверяется вовсе.
+    """
+    if not core_settings.range_applies(action, params):
+        return
+    first, last = _chapter_bounds(ctx, pdir)
+    try:
+        err = core_settings.chapter_range_error(
+            params.get("start"), params.get("end"), last=last, first=first)
+    except ValueError as exc:
+        raise ApiError(400, str(exc)) from None
+    if err:
+        raise ApiError(400, err)
+
+
 def _jobs_start(ctx: dict) -> dict:
     """Запуск стадии (POST /api/jobs {action, project, params})."""
     body = ctx["body"]
@@ -116,6 +148,7 @@ def _jobs_start(ctx: dict) -> dict:
     # LLM-конфиг (сервер/модель/ключ/потоки) в argv подставляет реестр
     # (web.stages.build_command): в форме запусков этих полей больше нет,
     # а свои .env у книги больше нет — локальные значения живут в браузере
+    _check_chapter_range(ctx, action, pdir, params)
     argv = build_command(action, params, ctx)
     argv[0] = str(script)  # абсолютный путь к скрипту
     jm = _job_manager(ctx)
@@ -166,7 +199,6 @@ def _jobs_start(ctx: dict) -> dict:
 def _job_payload(job) -> dict:
     """Публичное представление запуска (метаданные + буфер)."""
     return job.payload()
-
 
 # ════════════════════════════════════════════════════════════════════
 # Настройки: одно место истины — реестр core/settings.py + общий .env

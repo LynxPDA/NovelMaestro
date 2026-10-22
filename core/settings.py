@@ -601,6 +601,52 @@ def range_applies(stage: str, form: dict) -> bool:
     return all(applies(s, form) for s in range_settings(stage))
 
 
+def chapter_range_error(start: object, end: object,
+                        last: int | None = None, first: int | None = None) -> str:
+    """Ошибка диапазона глав человеческим текстом ("" — диапазон годится).
+
+    Диапазон — номера глав книги, поэтому конец должен быть не меньше начала,
+    а оба — в пределах книги (first/last — её первая и последняя глава, None —
+    границ нет). Пустое поле значит «вся книга» и ошибкой не считается: его
+    автоподхват делает форма. Одна проверка на сервер (web/api_stage._jobs_start)
+    и на клиент (UICore.chapterRangeError, тот же порядок проверок): иначе
+    запуск с «64 – 3» доезжал до скрипта и молча не переводил ничего.
+    """
+    def num(value) -> int | None:
+        raw = str(value if value is not None else "").strip()
+        if not raw:
+            return None
+        # только ASCII-цифры: isdigit() пропускает «²» и прочие знаки,
+        # на которых int() падает — диапазон глав читается как номера
+        if not re.fullmatch(r"\+?[0-9]+", raw):
+            raise ValueError("нужно целое число")
+        return int(raw)
+
+    try:
+        a = num(start)
+        z = num(end)
+    except ValueError as exc:
+        raise ValueError(f"диапазон глав: {exc}") from None
+    if a is not None and a < 1:
+        return "«Начальная глава»: главы нумеруются с 1"
+    if z is not None and z < 1:
+        return "«Конечная глава»: главы нумеруются с 1"
+    if a is not None and z is not None and a > z:
+        return (f"Начальная глава больше конечной ({a} – {z}): диапазон "
+                f"берётся от меньшего номера к большему — {z} – {a}")
+    if last is not None and last >= 1:
+        if a is not None and a > last:
+            return f"«Начальная глава»: в книге всего {last} гл."
+        if z is not None and z > last:
+            return f"«Конечная глава»: в книге всего {last} гл."
+    if first is not None and first >= 1:
+        if a is not None and a < first:
+            return f"«Начальная глава»: первая глава книги — {first}"
+        if z is not None and z < first:
+            return f"«Конечная глава»: первая глава книги — {first}"
+    return ""
+
+
 def stage_fields(stage: str) -> tuple:
     """Все поля формы стадии: настройки реестра в его порядке, затем диапазон глав.
 
