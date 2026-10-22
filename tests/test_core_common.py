@@ -1875,6 +1875,21 @@ def test_preview_logger_stderr_only():
     assert log.propagate is False
 
 
+def test_preview_logger_follows_current_stderr():
+    """Поток берётся в момент записи: логгер, созданный ДО подмены
+    sys.stderr (соседний тест, захват вывода, перехват в web-запуске),
+    пишет в текущий поток, а не в давно закрытый исходный."""
+    import io
+    log = C.preview_logger("тест-поток")  # создан на «настоящем» stderr
+    buf = io.StringIO()
+    old, sys.stderr = sys.stderr, buf
+    try:
+        log.warning("⚠️ промпт: нет тега")
+    finally:
+        sys.stderr = old
+    assert "нет тега" in buf.getvalue()
+
+
 def test_output_tail_keeps_reason_not_header():
     """Причина сбоя — в конце вывода: шапка запуска (log_argv, разделитель)
     в ответ не попадает, иначе 500 символов уходят на неё целиком."""

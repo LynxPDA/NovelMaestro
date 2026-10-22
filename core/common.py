@@ -2429,6 +2429,26 @@ def output_tail(stderr, stdout, limit: int = 500) -> str:
     return text[-limit:].strip() if text else ""
 
 
+class _CurrentStderrHandler(logging.StreamHandler):
+    """Хендлер stderr, который берёт поток В МОМЕНТ записи, а не при создании.
+
+    `logging.StreamHandler(sys.stderr)` запоминает объект потока навсегда:
+    после первой же подмены `sys.stderr` (захват вывода тестами, перехват
+    потока в web-запуске) записи уходили бы в старый, давно закрытый поток.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(sys.stderr)
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, value) -> None:
+        self._stream = value
+
+
 def preview_logger(name: str = "preview") -> logging.Logger:
     """Логгер предпросмотра: ТОЛЬКО stderr.
 
@@ -2437,7 +2457,7 @@ def preview_logger(name: str = "preview") -> logging.Logger:
     нельзя (затёр бы реальный лог)."""
     log = logging.getLogger(f"preview.{name}")
     if not log.handlers:
-        sh = logging.StreamHandler(sys.stderr)
+        sh = _CurrentStderrHandler()
         sh.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
         log.addHandler(sh)
     log.setLevel(logging.INFO)
