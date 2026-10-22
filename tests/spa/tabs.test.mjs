@@ -976,13 +976,15 @@ test("файлы: строка — чекбокс и кнопки одного �
   assert.equal(rows.length, 3);
   assert.equal(findByClass(page, "kebab-btn").length, 0, "построчных меню не осталось");
   assert.equal(findByClass(page, "menu-box").length, 0);
-  // каталог: чекбокс + копировать, переименовать; файл: чекбокс + править,
-  // скачать, копировать, переименовать
+  // каталог: чекбокс + копировать, удалить, переименовать; файл: чекбокс +
+  // править, скачать, копировать, удалить (между копированием и переименованием),
+  // переименовать
   assert.equal(findByClass(rows[0], "fsel").length, 1);
   assert.deepEqual(tips(rows[0]),
-    ["Копировать chapters", "Переименовать chapters"]);
+    ["Копировать chapters", "Удалить chapters", "Переименовать chapters"]);
   assert.deepEqual(tips(rows[1]),
-    ["Править a.txt", "Скачать a.txt", "Копировать a.txt", "Переименовать a.txt"]);
+    ["Править a.txt", "Скачать a.txt", "Копировать a.txt",
+     "Удалить a.txt", "Переименовать a.txt"]);
 });
 
 test("файлы: чекбокс строки включает панель выделения и прячет кнопки", async () => {
@@ -1176,6 +1178,28 @@ test("файлы: удаление одного объекта — «Удали�
   assert.equal(del.length, 1, "удаление одного объекта — один DELETE /file");
   assert.match(del[0].query, /path=b\.png/, "удаляется именно выбранный объект");
   assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
+});
+
+test("файлы: корзина в строке удаляет один объект только после слова-пароля", async () => {
+  const page = await filesPage();
+  const row = findByClass(page, "frow")[1]; // файл a.txt
+  const btn = findByClass(row, "factions")[0].querySelectorAll("button")
+    .find((b) => (b.getAttribute("aria-label") || "") === "Удалить a.txt");
+  assert.ok(btn, "в строке есть «Удалить a.txt»");
+  btn._listeners.click[0]();
+  await tick();
+  const bd = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(bd, "подтверждение открылось, а не удаление сразу");
+  assert.match(collectText(bd).join(" "), /a\.txt/);
+  findTag(bd, "input")[0].value = "УДАЛИТЬ";
+  await findByClass(bd, "btn-danger")[0]._listeners.click[0]();
+  await tick();
+  const del = globalThis.__calls.filter((c) => c.method === "DELETE"
+    && c.path === "/file");
+  assert.equal(del.length, 1);
+  assert.match(del[0].query, /path=a\.txt/);
 });
 
 /* ── «История»: точки, страницы и сравнение выбранной пары ───── */

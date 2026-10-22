@@ -1086,9 +1086,25 @@ async function main() {
     if (!f0.all) problems.push("файлы: в тулбаре нет чекбокса «выделить всё»");
     if (f0.cbs !== f0.rows) problems.push(`файлы: чекбоксов ${f0.cbs} из ${f0.rows}`);
     if (!f0.tools || f0.bar) problems.push("файлы: без выделки видна панель выделения");
-    // в строке — только действия одного объекта; опасные и групповые — наверху
-    if (f0.rowTips.some((t) => t.some((x) => /Удалить|Перенести/.test(x))))
-      problems.push(`файлы: в строке осталось групповое действие (${f0.rowTips[0]})`);
+    // в строке — только действия одного объекта (включая удаление именно
+    // этого файла/каталога); групповое «Удалить выделенное» и «Перенести» — наверху
+    if (f0.rowTips.some((t) => t.some((x) => /Перенести|Удалить выделенное/.test(x))))
+      problems.push(`файлы: в строке групповое действие (${f0.rowTips[0]})`);
+    // удаление одного объекта стоит в строке между копированием и переименованием
+    for (const t of f0.rowTips) {
+      const ci = t.findIndex((x) => x.startsWith("Копировать "));
+      const ri = t.findIndex((x) => x.startsWith("Удалить "));
+      const ni = t.findIndex((x) => x.startsWith("Переименовать "));
+      if (ri < 0) {
+        problems.push(`файлы: в строке нет «Удалить» (${t.join(" | ")})`);
+        break;
+      }
+      if (!(ci < ri && ri < ni)) {
+        problems.push(
+          `файлы: порядок кнопок строки — копировать ${ci}, удалить ${ri}, переименовать ${ni}`);
+        break;
+      }
+    }
     if (f0.rowTips.some((t) => !t.some((x) => x.startsWith("Переименовать "))))
       problems.push("файлы: не у каждой строки есть «Переименовать»");
     if (!f0.rowTips.some((t) => t.some((x) => x.startsWith("Править "))))
@@ -3190,8 +3206,6 @@ async function main() {
       const box = document.querySelector(
         ".review-pane:not([style*=\"none\"]) .rv-filters");
       if (!box) return { chips: [], labels: [], sel: "" };
-      const byClass = (n, cls) =>
-        (n.className || "").split(/\s+/).includes(cls);
       return {
         chips: [...box.querySelectorAll(".rv-chip")].map((c) =>
           c.textContent.replace(/\s+/g, " ").trim()),

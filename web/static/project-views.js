@@ -708,7 +708,7 @@ function viewProject(section, name, tab, job) {
     const fPager = UIC.listPager({
       list: drop,
       rows: (slice) =>
-        slice.map((e) => fileRow(e, { toggle: toggleSel, rename: renameOne, copy: copyOne })),
+        slice.map((e) => fileRow(e, { toggle: toggleSel, rename: renameOne, copy: copyOne, remove: deleteOne })),
       infoOnlySinglePage: true,
       info: (total, page, pages) =>
         pages <= 1
@@ -835,9 +835,9 @@ function viewProject(section, name, tab, job) {
         );
     const actions = h("div", { class: "factions" });
     if (!e.dir) {
-      /* порядок один везде: правка → скачать → копировать → переименовать;
-         скачивание — действие самого файла, а не группы, поэтому в строке,
-         а не в тулбаре */
+      /* порядок один везде: правка → скачать → копировать → удалить →
+         переименовать; скачивание — действие самого файла, а не группы,
+         поэтому в строке, а не в тулбаре */
       actions.append(
         iconBtn("pencil", `Править ${e.name}`, () => openEditor(full)),
         iconBtn("download", `Скачать ${e.name}`, () => downloadFile(full, e.name)),
@@ -845,6 +845,7 @@ function viewProject(section, name, tab, job) {
     }
     actions.append(
       iconBtn("copy", `Копировать ${e.name}`, () => acts.copy(e)),
+      iconBtn("trash", `Удалить ${e.name}`, () => acts.remove(e), true),
       iconBtn("rename", `Переименовать ${e.name}`, () =>
         acts.rename(e)),
     );
