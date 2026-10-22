@@ -957,6 +957,88 @@ def test_alias_list_normalizes_shapes():
     assert C.alias_list(("a",)) == ["a"]
 
 
+def test_ner_fields_normalized_on_load(tmp_path):
+    """Запись глоссария приводится к рабочему виду: поля-строки — строки,
+    count — int, aliases — список, _votes_* — объекты. Иначе `normalize`,
+    `.strip()`, `.items()` и `by_type` падали на первой же кривой записи."""
+    p = tmp_path / "ner.json"
+    p.write_text(json.dumps([
+        {"term": 123, "translation": 42, "type": {"a": 1},
+         "aliases": "", "count": "7", "_votes_type": "Person"},
+        {"term": "Т", "translation": ["а", "б"],
+         "aliases": {"a": 1}, "_votes_type": None},
+    ], ensure_ascii=False), encoding="utf-8")
+    data, automaton = C.load_ner_data(str(p), 3, SilentLog())
+    assert [d["term"] for d in data] == ["123", "Т"]
+    first, second = data
+    assert first["translation"] == "42" and first["count"] == 7
+    assert first["type"] == '{"a": 1}' and "aliases" not in first
+    assert first["_votes_type"] == {}, "голоса-строка — пустые голоса"
+    assert second["translation"] == "а, б", "список склеивается через запятую"
+    assert "aliases" not in second, "объект в aliases — мусор, не имена"
+    # поиск, пол и промпт-запись на таких данных работают
+    C.find_relevant_ner("Текст Т", data, 0.7, 3, "term,type",
+                        automaton=automaton)
+    assert C.collect_gender_names("Т", [{"term": "Т", "translation": "Т",
+                                         "type": 5}]) == ([], [])
+    assert C.format_ner_record(first)["term"] == "123"
+
+
+def test_load_ner_data_bad_root(tmp_path):
+    """Корень ner.json — не список: глоссарий не грузится, а не падает.
+
+    Стадия обязана работать без словаря (как при отсутствии файла):
+    объект/строка/число/null в корне не должны ронять запуск."""
+    log = SilentLog()
+    for payload in ({"a": 1}, "abc", 42, None):
+        p = tmp_path / "ner.json"
+        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        assert C.load_ner_data(str(p), 3, log) == ([], None)
+
+
+def test_load_ner_data_skips_non_dict_records(tmp_path):
+    """Не-объекты и записи без term пропускаются, остальные читаются."""
+    p = tmp_path / "ner.json"
+    p.write_text(json.dumps([
+        {"term": "Хороший", "translation": "Х"}, "abc", None, 5,
+        {"term": "   "}, {"translation": "без термина"},
+    ], ensure_ascii=False), encoding="utf-8")
+    data, _ = C.load_ner_data(str(p), 3, SilentLog())
+    assert [d["term"] for d in data] == ["Хороший"]
+
+
+def test_load_ner_data_all_variants_empty(tmp_path):
+    """Все термины нормализуются в пустое (пробелы, пунктуация):
+    автомата нет, поиск возвращает пустой результат, а не падает.
+
+    `make_automaton()` на пустом дереве — не ошибка библиотеки, а
+    AttributeError уже на первом поиске."""
+    p = tmp_path / "ner.json"
+    p.write_text(json.dumps([{"term": "..."}], ensure_ascii=False),
+                 encoding="utf-8")
+    data, automaton = C.load_ner_data(str(p), 3, SilentLog())
+    assert len(data) == 1 and automaton is None
+    assert C.find_relevant_ner("текст", data, 0.7, 3, "term",
+                               automaton=automaton) == ("[]", 0)
+
+
+def test_ner_patch_aliases_always_list():
+    """Патч aliases ложится списком, даже если в записи лежала строка:
+    иначе в поле попадал JSON-текст и книга снова не грузилась."""
+    item = {"term": "Т", "translation": "Тэ", "aliases": "Т"}
+    applied, skipped = C.apply_ner_patches(
+        [item], [{"term": "Т", "field": "aliases", "old": "Т",
+                  "new": '["Тэ"]', "status": "принять"}])
+    assert len(applied) == 1 and skipped == 0
+    assert item["aliases"] == ["Тэ"], "поле — список, а не JSON-строка"
+    # пустой список в патче — правка не применяется, а не портит запись
+    item2 = {"term": "Т", "translation": "Тэ"}
+    _a, skipped2 = C.apply_ner_patches(
+        [item2], [{"term": "Т", "field": "aliases", "old": "",
+                   "new": "[]", "status": "принять"}])
+    assert skipped2 == 1 and "aliases" not in item2
+
+
 def test_load_ner_data_tolerates_bad_aliases(tmp_path):
     """Строка в aliases не роняет загрузку всей стадии (§ предпросмотр
     на книге с `"aliases": ""`): термин читается, вариантов нет."""

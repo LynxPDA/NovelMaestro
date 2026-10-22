@@ -52,9 +52,15 @@ def _ner_get(ctx: dict) -> dict:
         raise ApiError(500, f"ner.json не читается: {exc}")
     if not isinstance(items, list):
         raise ApiError(500, "ner.json: ожидался список терминов")
+    common = _import_common(ctx)
     by_type: dict[str, int] = {}
     for it in items:
-        t = it.get("type") or "?"
+        if not isinstance(it, dict):
+            continue
+        # ключ счётчика — строка: type бывает числом или объектом, и
+        # нехэшируемое значение роняло GET /api/ner в 500 (вкладка
+        # «Глоссарий» не открывалась)
+        t = common.ner_text(it.get("type")).strip() or "?"
         by_type[t] = by_type.get(t, 0) + 1
     return {"ok": True, "exists": True, "total": len(items),
             "by_type": by_type, "items": items}
@@ -69,19 +75,19 @@ def _ner_put(ctx: dict) -> dict:
         raise ApiError(400, "Поле items: список терминов")
     # aliases — список в любой записи: старые файлы знают и пустую строку
     # (очистка ячейки «Глоссария» старым клиентом), и одиночное имя —
-    # нормализуем при записи, чтобы load_ner_data не спотыкался
+    # нормализуем при записи, чтобы load_ner_data не спотыкался на типах
+    normalized = []
     for it in items:
-        if isinstance(it, dict) and "aliases" in it:
-            aliases = common.alias_list(it["aliases"])
-            if aliases:
-                it["aliases"] = aliases
-            else:
-                del it["aliases"]
+        if isinstance(it, dict):
+            it = common.ner_record(dict(it))
+            if it is None:
+                continue  # запись без терминa — мусор, а не термин
+        normalized.append(it)
     import json as _json
-    text = _json.dumps(items, ensure_ascii=False, indent=2)
+    text = _json.dumps(normalized, ensure_ascii=False, indent=2)
     common.atomic_write(pdir / "ner.json",
                         unicodedata.normalize("NFC", text))
-    return {"ok": True, "total": len(items)}
+    return {"ok": True, "total": len(normalized)}
 
 
 def _ner_export(ctx: dict) -> dict:

@@ -80,6 +80,7 @@ from core.common import (  # noqa: E402
     log_argv,
     ner_is_locked,
     ner_pick_non_voted,
+    ner_record,
     preview_logger,
     setup_logging,
     split_text_smart,
@@ -478,10 +479,16 @@ def load_initial_ner(filepath: str, ngram_size: int, logger) -> None:
     try:
         with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
-        for item in data:
-            term = item.get("term", "")
-            if not term:
+        if not isinstance(data, list):
+            _log(logger, logging.ERROR,
+                 f"⚠️ NER файл {filepath}: ожидался список терминов, "
+                 f"получен {type(data).__name__}")
+            return
+        for raw in data:
+            item = ner_record(raw) if isinstance(raw, dict) else None
+            if item is None:
                 continue
+            term = item["term"]
             item["_ngrams"] = get_ngrams(term, n=ngram_size)
             item["_len"] = len(term)
             if "count" not in item:
@@ -1261,7 +1268,11 @@ def merge_alias_groups(ner_data: list[dict], logger) -> int:
                 field = field_key[len("_votes_"):]
                 if field not in combined_votes:
                     combined_votes[field] = {}
-                for variant, cnt in item[field_key].items():
+                votes = item[field_key]
+                if not isinstance(votes, dict):
+                    # в файле встречается мусор вместо голосов (строка, список)
+                    continue
+                for variant, cnt in votes.items():
                     cv = combined_votes[field]
                     cv[variant] = cv.get(variant, 0) + cnt
 

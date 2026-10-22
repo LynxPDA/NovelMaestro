@@ -809,7 +809,58 @@ def alias_list(value) -> list:
         return [value] if value else []
     if isinstance(value, (list, tuple, set)):
         return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, dict):
+        # объект — не список альтернативных имён: иначе в поиск уходил
+        # бы текст вида "{'a': 1}"
+        return []
     return [str(value).strip()]
+
+
+def ner_text(value) -> str:
+    """Строковое поле глоссария — всегда str.
+
+    В ner.json поля приходят из разных рук (LLM, правка в «Глоссарии»,
+    скрипт) и бывают числом, списком, объектом. `normalize_for_search` и
+    ".strip()" ждут str, и одно такое поле роняло загрузку всей книги."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value if v is not None)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def ner_record(item):
+    """Запись глоссария, приведённая к рабочему виду (in-place).
+
+    term/translation — строки, count — int, aliases — список, служебные
+    `_votes_*` — объекты. Возвращает запись или None, если term пустой
+    после нормализации (одна такая запись в файле не должна выключать
+    глоссарий целиком)."""
+    term = ner_text(item.get("term")).strip()
+    if not term:
+        return None
+    item["term"] = term
+    for field in ("translation", "type", "pinyin", "reading", "context",
+                  "translated_context", "notes"):
+        if field in item:
+            item[field] = ner_text(item[field])
+    # count — частота: строки из JSON нормализуем к int (иначе
+    # сортировки -count и пороги падают с TypeError)
+    item["count"] = _int_count(item.get("count"))
+    aliases = alias_list(item.get("aliases"))
+    if aliases:
+        item["aliases"] = aliases
+    else:
+        item.pop("aliases", None)
+    # голоса полей: слияние alias-групп обходит их через .items()
+    for key in [k for k in item if k.startswith("_votes_")]:
+        votes = item[key]
+        item[key] = votes if isinstance(votes, dict) else {}
+    return item
 
 
 def load_ner_data(filepath, ngram_size, logger):
@@ -824,16 +875,25 @@ def load_ner_data(filepath, ngram_size, logger):
     except Exception as e:
         logger.error(f"❌ Error reading NER file: {e}")
         return [], None
+    if not isinstance(data, list):
+        # формат файла — список терминов; объект/строка/число — не глоссарий
+        logger.error(f"❌ NER file ({filepath}): ожидался список "
+                     f"терминов, получен {type(data).__name__}. "
+                     f"Working without dictionary.")
+        return [], None
 
     processed_data = []
     variant_to_idx: dict = {}
-    for item in data:
-        term = item.get("term", "")
-        if not term:
+    skipped = 0
+    for raw in data:
+        if not isinstance(raw, dict):
+            skipped += 1
             continue
-        # count — частота: строки из JSON нормализуем к int (иначе
-        # сортировки -count и пороги падают с TypeError)
-        item["count"] = _int_count(item.get("count"))
+        item = ner_record(raw)
+        if item is None:
+            skipped += 1
+            continue
+        term = item["term"]
         variants = [term] + alias_list(item.get("aliases"))
         term_norm = normalize_for_search(term)
         item["_term_norm"] = term_norm
@@ -852,14 +912,26 @@ def load_ner_data(filepath, ngram_size, logger):
                 variant_to_idx[v_norm] = idx
 
     automaton = None
+    if skipped:
+        logger.warning(f"⚠️ Глоссарий: пропущено записей без термина "
+                       f"или не-объектов — {skipped}")
     try:
         import ahocorasick
         automaton = ahocorasick.Automaton()
         for v_norm, idx in variant_to_idx.items():
             automaton.add_word(v_norm, (v_norm, idx))
-        automaton.make_automaton()
+        if variant_to_idx:
+            automaton.make_automaton()
+        else:
+            # ни одного варианта (термины из одних пробелов/пунктуации):
+            # make_automaton() на пустом дереве — не исключение библиотеки,
+            # а AttributeError при поиске
+            automaton = None
         logger.info(f"✅ Loaded {len(processed_data)} terms, "
-                    f"{len(variant_to_idx)} variants (Aho-Corasick built).")
+                    f"{len(variant_to_idx)} variants (Aho-Corasick built)"
+                    if variant_to_idx else
+                    f"✅ Loaded {len(processed_data)} terms, нет вариантов "
+                    f"для поиска")
     except ImportError:
         logger.info(f"✅ Loaded {len(processed_data)} terms, "
                     f"{len(variant_to_idx)} variants (regex fallback, "
@@ -947,7 +1019,7 @@ def _gender_of_type(type_str) -> str:
     """Пол по полю type: наличие '(female)'/'(male)' (регистр не важен).
     Скобки исключают ложное вхождение 'male' внутри 'female'.
     Возвращает 'female' / 'male' / '' (пола нет)."""
-    t = (type_str or "").lower()
+    t = ner_text(type_str).lower()
     if "(female)" in t:
         return "female"
     if "(male)" in t:
@@ -973,7 +1045,7 @@ def collect_gender_names(text, ner_data, threshold=0.75, ngram_size=3,
     buckets: dict = {"female": [], "male": []}
     seen: set = set()
     for item in ner_data:
-        trans = (item.get("translation") or "").strip()
+        trans = ner_text(item.get("translation")).strip()
         if not trans:
             continue
         gender = _gender_of_type(item.get("type"))
@@ -996,9 +1068,9 @@ def collect_gender_names(text, ner_data, threshold=0.75, ngram_size=3,
 
     def _key(it):
         return (-_int_count(it.get("count")),
-                (it.get("translation") or "").strip().lower())
+                ner_text(it.get("translation")).strip().lower())
 
-    return tuple([(it.get("translation") or "").strip()
+    return tuple([ner_text(it.get("translation")).strip()
                   for it in sorted(buckets[g], key=_key)]
                  for g in ("female", "male"))
 
@@ -1705,15 +1777,28 @@ def apply_ner_patches(items, patches, logger=None):
             skipped += 1
             continue
         new_val = p["new"]
-        cur_val = target.get(p.get("field"))
-        if isinstance(cur_val, (dict, list)):
+        field = p.get("field")
+        cur_val = target.get(field)
+        if field == "aliases":
+            # aliases — всегда список, даже если в файле лежала строка
+            # (такая запись лечится первой же правкой, а не переписывается
+            # JSON-текстом в поле)
+            try:
+                parsed = json.loads(new)
+            except (json.JSONDecodeError, TypeError):
+                parsed = new
+            new_val = alias_list(parsed)
+            if not new_val:
+                skipped += 1
+                continue
+        elif isinstance(cur_val, (dict, list)):
             # значение LLM — JSON-строка; не парсится — пропускаем
             try:
                 new_val = json.loads(new)
             except (json.JSONDecodeError, TypeError):
                 skipped += 1
                 continue
-        target[p["field"]] = new_val
+        target[field] = new_val
         p["applied"] = True
         p["applied_at"] = time.strftime("%Y-%m-%d %H:%M")
         applied.append(p)

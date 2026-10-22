@@ -489,6 +489,49 @@ def test_ner_put_normalizes_aliases(srv_ctx):
     assert [d["term"] for d in data] == ["古一", "黑猫", "Thor"]
 
 
+def test_ner_get_tolerates_bad_types(srv_ctx):
+    """GET /api/ner считает by_type по строке: не-строковый type
+    (объект, число) больше не роняет вкладку «Глоссарий» в 500."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_bad")
+    pdir = projects_root / "ACTIVE" / "ner_bad"
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "ner.json").write_text(json.dumps([
+        {"term": "Т", "type": {"a": 1}},
+        {"term": "У", "type": 5},
+        {"term": "Ф", "type": "Person"},
+        "мусор",
+    ], ensure_ascii=False), encoding="utf-8")
+    res, payload = _request(port, "GET", "/api/ner?project=ACTIVE/ner_bad")
+    assert res.status == 200, payload
+    assert sum(payload["by_type"].values()) == 3
+    assert payload["by_type"]["Person"] == 1
+
+
+def test_ner_put_normalizes_record_types(srv_ctx):
+    """PUT /api/ner приводит поля записи к рабочему виду: числа — строки,
+    count — int, запись без термина отбрасывается."""
+    from core import common as C
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_types")
+    pdir = projects_root / "ACTIVE" / "ner_types"
+    res, payload = _request(port, "PUT", "/api/ner", {
+        "project": "ACTIVE/ner_types",
+        "items": [
+            {"term": 123, "translation": 42, "type": {"a": 1},
+             "count": "7"},
+            {"translation": "без термина"},
+        ],
+    })
+    assert res.status == 200, payload
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert len(saved) == 1, "запись без терминa не пишется"
+    assert saved[0]["term"] == "123" and saved[0]["translation"] == "42"
+    assert saved[0]["count"] == 7
+    data, _ = C.load_ner_data(str(pdir / "ner.json"), 3, SilentLog())
+    assert len(data) == 1
+
+
 # ════════════════════════════════════════════════════════════════════
 # шаблоны (CRUD) и статус проекта
 

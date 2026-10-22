@@ -153,6 +153,42 @@ def test_load_initial_ner(tmp_path, ner_globals):
     NER.load_initial_ner(str(tmp_path / "нет.json"), 3, SilentLog())
 
 
+def test_load_initial_ner_tolerates_bad_records(tmp_path, ner_globals):
+    """Свой загрузчик ner.py терпит то же, что стадии: поля не-строки,
+    мусор в списке, корень-не-список (последний — без падения, без данных)."""
+    f = tmp_path / "start.json"
+    f.write_text(json.dumps([
+        {"term": 123, "translation": 42, "_votes_type": "Person"},
+        {"term": "Т", "translation": ["а", "б"]},
+        "мусор", None, {"translation": "без термина"},
+    ], ensure_ascii=False), encoding="utf-8")
+    NER.load_initial_ner(str(f), 3, SilentLog())
+    terms = [it["term"] for it in NER.global_ner_data]
+    assert terms == ["123", "Т"]
+    assert NER.global_ner_data[0]["_votes_type"] == {}
+    # корень — объект: не глоссарий, стадия работает без словаря
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"a": 1}), encoding="utf-8")
+    NER.global_ner_data.clear()
+    NER.load_initial_ner(str(bad), 3, SilentLog())
+    assert NER.global_ner_data == []
+
+
+def test_merge_alias_groups_bad_votes():
+    """Голоса-мусор (_votes_* строкой/списком/null) не роняют слияние
+    alias-групп: запись мержится, голоса просто пустые."""
+    data = [
+        {"term": "陈阳", "count": 5, "pinyin": "Chen Yang",
+         "_votes_type": "Person (male)", "_votes_translation": [1]},
+        {"term": "陳陽", "count": 3, "pinyin": "chen yang",
+         "_votes_type": None},
+    ]
+    merged = NER.merge_alias_groups(data, SilentLog())
+    assert merged >= 1
+    terms = [it["term"] for it in data]
+    assert terms == ["陈阳"], "группа склеена, а не выпала"
+
+
 def test_merge_into(ner_globals):
     target = [{"term": "陈阳", "type": "Person (male)", "count": 3,
                "_ngrams": NER.get_ngrams("陈阳"), "_len": 2,
