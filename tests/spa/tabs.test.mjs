@@ -385,6 +385,9 @@ const STAGES = [
   { key: "wiki", title: "Wiki", script: "cli/wiki.py" },
   { key: "epub", title: "Разбор исходника на главы",
     script: "cli/epub_to_chapters.py" },
+  /* проверка перевода (LLM): у стадии тоже есть диапазон глав */
+  { key: "translate_check_llm", title: "Проверка перевода (LLM)",
+    script: "cli/translate_check_llm.py" },
 ];
 /* профиль — ПЕРВОЕ ПОЛЕ формы каждой LLM-стадии (noenv: значение живёт в
    браузере проекта+стадии, в .env и в argv оно не попадает) */
@@ -408,6 +411,14 @@ const SPEC_FIELDS = {
     { ...PROFILE_FIELD },
     { name: "action", label: "Тип работы", type: "select", default: "all",
       options: ["all"], labels: { all: "полный цикл" } },
+  ],
+  /* проверка перевода (LLM): диапазон глав + поля проверки */
+  translate_check_llm: [
+    { ...PROFILE_FIELD },
+    { name: "check_type", label: "Тип файлов", type: "select",
+      default: "polished", options: ["polished", "redacted"] },
+    { name: "start", label: "Начальная глава", type: "number", default: "" },
+    { name: "end", label: "Конечная глава", type: "number", default: "" },
   ],
   /* ner_check: режимы одним select, типы и поля записи — скрытые поля
      чипсов (noenv: значение живёт в браузере проекта+стадии) */
@@ -1570,19 +1581,67 @@ test("запуски: пустой конец диапазона при уход
   assert.equal(end.value, "320", "«до» — автоподхват последней");
   /* стёрли «до» и ушли с поля — вернулась последняя глава */
   end.value = "";
-  await end._listeners.input[0]({ target: end });
+  end.dispatchEvent({ type: "input" });
   await end._listeners.change[0]({ target: end });
   assert.equal(end.value, "320", "пустой «до» — последняя глава книги");
   /* стёрли «от» и ушли с поля — вернулась первая */
   start.value = "";
-  await start._listeners.input[0]({ target: start });
+  start.dispatchEvent({ type: "input" });
   await start._listeners.change[0]({ target: start });
   assert.equal(start.value, "3", "пустой «от» — первая глава книги");
   /* во время ввода (без change) пусто остаётся пустым: стереть и вписать
      с нуля можно */
   end.value = "";
-  await end._listeners.input[0]({ target: end });
+  end.dispatchEvent({ type: "input" });
   assert.equal(end.value, "", "при вводе автоподстановка не мешает");
+  delete globalThis.__stageOptions;
+  globalThis.localStorage.clear();
+});
+
+test("запуски: диапазон глав — конец раньше начала виден до запуска", async () => {
+  /* «64 – 3» — не опечатка формы, а запуск без работы: диапазон пуст, стадия
+     молчит. Ошибка видна сразу (подсказка + рамка), а кнопка «Запустить»
+     такой запуск не отправляет */
+  globalThis.localStorage.clear();
+  globalThis.__stageOptions = { chapters: { min: 1, max: 320 } };
+  const page = await runStage("translate_check_llm");
+  const row = findByClass(page, "run-range-row")[0];
+  assert.ok(row, "строка диапазона в форме стадии");
+  const [start, end] = findTag(row, "input");
+  const note = findByClass(row, "run-range-note")[0];
+  assert.equal(note.classList.contains("hidden"), true,
+    "чистый диапазон — без подсказки");
+  /* конец раньше начала */
+  start.value = "64";
+  start.dispatchEvent({ type: "input" });
+  end.value = "3";
+  end.dispatchEvent({ type: "input" });
+  assert.equal(note.classList.contains("hidden"), false);
+  assert.match(note.textContent, /Начальная глава больше конечной/);
+  assert.equal(start.classList.contains("input-bad"), true);
+  assert.equal(end.classList.contains("input-bad"), true);
+  /* потолок — последняя глава книги (номер главы — свой у каждого поля) */
+  end.value = "999";
+  end.dispatchEvent({ type: "input" });
+  assert.equal(start.classList.contains("input-bad"), false);
+  assert.equal(end.classList.contains("input-bad"), true);
+  assert.match(note.textContent, /«Конечная глава»: в книге всего 320/);
+  end.value = "64";
+  end.dispatchEvent({ type: "input" });
+  assert.equal(note.classList.contains("hidden"), true,
+    "годный диапазон — снова чисто");
+  /* кнопка «Запустить»: такой диапазон не уходит на сервер */
+  end.value = "3";
+  end.dispatchEvent({ type: "input" });
+  globalThis.__calls = [];
+  const runBtn = findByClass(page, "btn-primary")
+    .find((b) => collectText(b).join("") === "Запустить");
+  assert.ok(runBtn, "кнопка запуска в форме");
+  await runBtn._listeners.click[0]();
+  assert.equal(globalThis.__calls.filter((c) => c.path === "/jobs").length, 0,
+    "диапазон с концом меньше начала не отправлен");
+  const err = findByClass(page, "form-error")[0];
+  assert.match(err.textContent, /больше конечной/, "причина видна в форме");
   delete globalThis.__stageOptions;
   globalThis.localStorage.clear();
 });

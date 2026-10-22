@@ -2058,6 +2058,27 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h("span", { class: "run-range-sep" }, "–"),
       end,
     );
+    /* подсказка под строкой: диапазон проверяется сразу, до «Запустить».
+       Поле после проверки остаётся рабочим — видно и ошибку, и само значение */
+    const note = h("div", { class: "field-help run-range-note hidden" });
+    const check = () => {
+      const msg = UICore.chapterRangeError(
+        start.value, end.value, (st.options || {}).chapters || {});
+      note.textContent = msg;
+      note.classList.toggle("hidden", !msg);
+      // рамка — на виноватом поле; при перепутанном порядке виноваты оба
+      const both = msg.startsWith("Начальная глава больше");
+      start.classList.toggle("input-bad",
+        !!msg && (both || msg.startsWith("«Начальная")));
+      end.classList.toggle("input-bad",
+        !!msg && (both || msg.startsWith("«Конечная")));
+    };
+    start.addEventListener("input", check);
+    end.addEventListener("input", check);
+    start.addEventListener("change", check);
+    end.addEventListener("change", check);
+    check(); // автоподхват уже мог дать диапазон: подсказка видна сразу
+    rowEl.append(note);
     // ссылки на инпуты — для внешних панелей (предпросмотр замен
     // batch_replace перечитывает диапазон при вводе)
     rowEl._start = start;
@@ -2591,7 +2612,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const runBtn = h("button", { class: "btn btn-primary" }, "Запустить");
     runBtn.addEventListener("click", async () => {
       err.textContent = "";
-      const verr = epubValidateInput(key) || numericFieldError(key, spec);
+      const verr = epubValidateInput(key) || rangeValidate(key, spec)
+        || numericFieldError(key, spec);
       if (verr) {
         err.textContent = verr;
         return;
@@ -2964,6 +2986,22 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return `«${label}»: максимум ${f.max}`;
     }
     return "";
+  }
+
+  // валидация диапазона глав перед запуском: «64 – 3» и главы за последней
+  // главой книги до скрипта не доезжают (то же правило — core.settings.
+  // chapter_range_error и серверный 400). Режим стадии, которому диапазон не
+  // нужен (ner_check без RAG, wiki по готовому txt), не проверяется.
+  function rangeValidate(key, spec) {
+    const vals = st.values[key] || {};
+    // видимость строки диапазона — тот же расчёт, что у attachModeVisibility:
+    // она нужна, если применимо хотя бы одно из полей start/end
+    const fields = (spec.fields || [])
+      .filter((f) => f.name === "start" || f.name === "end");
+    if (!fields.length
+        || !fields.some((f) => UICore.fieldApplies(f, vals))) return "";
+    return UICore.chapterRangeError(vals.start, vals.end,
+      (st.options || {}).chapters || {});
   }
 
   function epubValidateInput(key) {

@@ -3587,12 +3587,23 @@ function viewProject(section, name, tab, job) {
     const endIn = h("input", { type: "number", class: "input run-range" });
     attachTooltip(startIn, "Начальная глава; пусто = с первой");
     attachTooltip(endIn, "Конечная глава; пусто = до последней");
+    const rangeNote = h("span", { class: "field-help run-range-note hidden" });
     let inputs = {}; // id → {input, orig}
     let allIds = []; // непрерывный 1..N (для серых ячеек и префилла)
 
     function readRange() {
       const a = parseInt(startIn.value || "", 10) || 1;
       const b = parseInt(endIn.value || "", 10) || (allIds.at(-1) || 0);
+      /* проглоченный ввод здесь — не задумка, а невиданное дело: конец меньше
+         начала и главы за последней главой книги прямо подписаны.
+         Перестановка остаётся (часто так и набирают), а ошибка — видна */
+      const last = allIds.at(-1);
+      const msg = UICore.chapterRangeError(
+        startIn.value, endIn.value,
+        last === undefined ? {} : { min: allIds[0], max: last },
+      );
+      rangeNote.textContent = msg;
+      rangeNote.classList.toggle("hidden", !msg);
       if (a > b) return { start: b, end: a };
       return { start: a, end: b };
     }
@@ -3617,8 +3628,12 @@ function viewProject(section, name, tab, job) {
         let present = 0;
         let absent = 0;
         // строки в ПОРЯДКЕ НОМЕРОВ: существующая глава идёт на своём
-        // месте, пропущенная — серой ячейкой «N —» между соседями
-        for (let id = range.start; id <= range.end; id++) {
+        // месте, пропущенная — серой ячейкой «N —» между соседями.
+        // Строки — только реальные главы книги: номер за последней главой
+        // (опечатка в «до») не рисует пустой строки, а виден ошибкой диапазона
+        for (const id of allIds.filter(
+          (n) => n >= range.start && n <= range.end,
+        )) {
           if (missing.has(id)) {
             absent++;
             rows.append(
@@ -3746,6 +3761,7 @@ function viewProject(section, name, tab, job) {
       startIn,
       h("span", { class: "run-range-sep" }, "–"),
       endIn,
+      rangeNote,
       h("span", { class: "spacer" }),
       status,
       saveBtn,

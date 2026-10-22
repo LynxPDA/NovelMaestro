@@ -1144,6 +1144,45 @@
       return options.includes(v) ? v : def;
     },
 
+    /* ── диапазон глав: «от» не больше «до», оба в пределах книги ──
+     * Границы — первая и последняя глава книги (options.chapters.min/max);
+     * пустое поле значит «вся книга» и проверяется отдельно (это не ошибка,
+     * а автоподхват). Возвращает текст ошибки или "": его показывает форма,
+     * и он же приходит на сервер, если поле проверку обмануло. */
+    chapterRangeError: (start, end, bounds) => {
+      var b = bounds || {};
+      var lo = b.min === undefined || b.min === null ? null : Number(b.min);
+      var hi = b.max === undefined || b.max === null ? null : Number(b.max);
+      var num = function (v) {
+        var s = String(v === undefined || v === null ? "" : v).trim();
+        if (s === "") return null;
+        return /^\d+$/.test(s) ? parseInt(s, 10) : NaN;
+      };
+      var a = num(start);
+      var z = num(end);
+      if (Number.isNaN(a)) return "«Начальная глава»: нужно целое число";
+      if (Number.isNaN(z)) return "«Конечная глава»: нужно целое число";
+      if (a !== null && a < 1) return "«Начальная глава»: главы нумеруются с 1";
+      if (z !== null && z < 1) return "«Конечная глава»: главы нумеруются с 1";
+      if (a !== null && z !== null && a > z) {
+        return "Начальная глава больше конечной: возьмите диапазон "
+          + z + " – " + a + " или поменяйте значения";
+      }
+      if (a !== null && hi !== null && !Number.isNaN(hi) && a > hi) {
+        return "«Начальная глава»: в книге всего " + hi + " гл.";
+      }
+      if (z !== null && hi !== null && !Number.isNaN(hi) && z > hi) {
+        return "«Конечная глава»: в книге всего " + hi + " гл.";
+      }
+      if (a !== null && lo !== null && !Number.isNaN(lo) && a < lo) {
+        return "«Начальная глава»: первая глава книги — " + lo;
+      }
+      if (z !== null && lo !== null && !Number.isNaN(lo) && z < lo) {
+        return "«Конечная глава»: первая глава книги — " + lo;
+      }
+      return "";
+    },
+
     /* ── дерево каталога из плоского списка путей (шаблоны) ── */
     dirEntries: (files, prefix) => {
       var entries = [];

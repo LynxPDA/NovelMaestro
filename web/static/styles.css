@@ -810,6 +810,15 @@ input[type="number"] {
 .input:focus {
   border-color: var(--accent);
 }
+/* диапазон глав, который не пройдёт проверку (конец меньше начала, глава за
+   последней): рамка сразу в форме, а не сообщением после «Запустить» */
+.input-bad {
+  border-color: var(--danger);
+}
+.run-range-note {
+  flex-basis: 100%;
+  color: var(--danger);
+}
 
 .btn {
   padding: 8px 14px;
@@ -1270,6 +1279,7 @@ input[type="number"] {
 
 .run-range-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   font-size: 13px;
@@ -1808,6 +1818,7 @@ input[type="number"] {
 /* ── вкладка «Главы»: названия глав (тип файлов + правка) ── */
 .chapters-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
@@ -1815,6 +1826,11 @@ input[type="number"] {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   margin-bottom: 10px;
+}
+/* ошибка диапазона — своей строкой слева, кнопки остаются справа */
+.chapters-toolbar .run-range-note {
+  order: 1;
+  flex-basis: 100%;
 }
 .chapters-toolbar .chapters-type {
   width: 160px;
