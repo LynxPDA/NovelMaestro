@@ -505,7 +505,9 @@ const sandbox = {
         getReader: () => ({
           async read() {
             if (i >= frames.length) return { done: true };
-            await new Promise((r) => setTimeout(r, 15));
+            // пауза между кадрами: тесты больших логов обнуляют её
+            // (__sseDelay = 0), иначе тысячи кадров займут десятки секунд
+            await new Promise((r) => setTimeout(r, globalThis.__sseDelay ?? 15));
             const value = new TextEncoder().encode(frames[i++]);
             return { done: false, value };
           },
@@ -2593,22 +2595,49 @@ async function settled() {
   delete globalThis.__stageOptions;
 }
 
-test("живой лог: снимок — одно окно, в панели не больше LOG_LIMIT строк", async () => {
-  /* регресс: панель отдавала весь кольцевой буфер (5000 строк) и на каждое
-     событие перечитывала и заново верстала всё окно целиком */
+/* текст окна лога: собственный текст узла и тексты детей. Настоящий DOM
+ * склеивает их в одном textContent, mock — нет, поэтому окно читается
+ * обходом (в браузере эта сумма и есть textContent) */
+const logText = (n) => (n.textContent || "")
+  + (n.children || []).map((c) => c.textContent).join("");
+
+test("живой лог: снимок — весь буфер, поток ДОПИСЫВАЕТ окно", async () => {
+  /* регресс: панель держала 500 строк и на каждую пачку переписывала всё
+     окно через textContent — на реальном логе глоссария живой поток
+     верстал все предыдущие строки заново (82 мс снимка и 13 мс на кадр на
+     окне 5000 строк) */
+  const job = { id: RUN_JOB, action: "ner", project: "ACTIVE/Книга",
+    status: "running", lines: [], events: [], progress: null };
   const lines = Array.from({ length: 503 }, (_, i) => `л${i}`);
-  const page = await runView(
-    { id: RUN_JOB, action: "ner", project: "ACTIVE/Книга", status: "running",
-      lines: [], events: [], progress: null },
-    [{ type: "snapshot", lines, events: [], progress: null },
-     { type: "status", status: "done" }],
-  );
+  const page = await runView(job, [
+    { type: "snapshot", lines, events: [], progress: null },
+    { type: "line", text: "новая-1" },
+    { type: "line", text: "новая-2" },
+    { type: "status", status: "done" },
+  ]);
   const pre = page.querySelector(".log-area");
   await settled();
-  const shown = pre.textContent.split("\n");
-  assert.equal(shown.length, 500, "в панели — последние 500 строк, не весь буфер");
-  assert.equal(shown[0], "л3");
-  assert.equal(shown[shown.length - 1], "л502", "строки не задом наперёд");
+  const shown = logText(pre).split("\n");
+  assert.equal(shown.length, 505, "снимок пришёл целиком, живые строки — сверху");
+  assert.equal(shown[0], "л0", "шапка прогона остаётся в панели");
+  assert.equal(shown[shown.length - 1], "новая-2", "строки не задом наперёд");
+
+  /* живой поток НЕ переписывает окно: пачки ложатся текстовыми узлами.
+     Сравнение с прогоном, где строк в 150 раз больше: перезаписей окна
+     столько же — их число зависит от кадров, а не от объёма лога */
+  const many = await runView(job, [
+    { type: "snapshot", lines: ["старт"], events: [], progress: null },
+    ...Array.from({ length: 30 }, (_, i) => ({ type: "line", text: `с${i}` })),
+    { type: "status", status: "done" },
+  ]);
+  const preMany = many.querySelector(".log-area");
+  await settled();
+  const shownMany = logText(preMany).split("\n");
+  assert.equal(shownMany.length, 31, "все строки потока — в окне");
+  assert.equal(shownMany[0], "старт");
+  assert.equal(shownMany[30], "с29");
+  assert.equal(preMany._writes, pre._writes,
+    "перезапись окна не зависит от числа строк: строки дописываются");
 });
 
 test("живой лог: вниз прокручивается только панель и так у конца", async () => {
@@ -2624,7 +2653,7 @@ test("живой лог: вниз прокручивается только па
   const atEnd = pinned.querySelector(".log-area");
   atEnd.scrollTop = AT_END;
   await settled();
-  assert.equal(atEnd.textContent, "a\nb\nc");
+  assert.equal(logText(atEnd), "a\nb\nc");
   assert.equal(atEnd.scrollTop, 1000, "панель у конца — прокрутка дописывается");
 
   const scrolled = await runView(job, frames);
@@ -2632,7 +2661,7 @@ test("живой лог: вниз прокручивается только па
   mid.scrollTop = 0; // человек отлистал лог вверх
   await settled();
   assert.equal(mid.scrollTop, 0, "листавшего лог не выбрасывает в конец");
-  assert.equal(mid.textContent, "a\nb\nc");
+  assert.equal(logText(mid), "a\nb\nc");
 });
 
 test("таблица глав: клетка перерисовывается только на смене статуса", async () => {
@@ -2749,4 +2778,62 @@ test("«Статус»: длинный список пропусков — св�
   const reRanges = findByClass(again, "status-missing-ranges")[0];
   assert.ok(reRanges.className.includes("status-missing-open"),
     "раскрытый список возвращается из состояния вкладки");
+});
+
+test("живой лог: окно держит хвост буфера и не растёт с ним", async () => {
+  globalThis.__sseDelay = 0; // кадров тысячи — пауза между ними тут не нужна
+  /* окно лога равно хвосту буфера (LOG_LIMIT — весь кольцевой буфер сервера).
+     Поток длиннее потолка: старое снимается ЦЕЛЫМИ кусками, а не по строке
+     на кадр — построчный срез каждый кадр заново верстает всё окно
+     (замер: 13 мс против 2 мс на кадр на окне 5000 строк) */
+  const LOG_LIMIT = 5000;
+  const LOG_CHUNK = 250;
+  const LOG_TRIM = 500;
+  const snapshot = Array.from({ length: LOG_LIMIT }, (_, i) => `с${i}`);
+  const lines = Array.from(
+    { length: LOG_TRIM + 2 },
+    (_, i) => ({ type: "line", text: `н${i}` }),
+  );
+  const page = await runView(
+    { id: RUN_JOB, action: "ner", project: "ACTIVE/Книга", status: "running",
+      lines: [], events: [], progress: null },
+    [{ type: "snapshot", lines: snapshot, events: [], progress: null },
+     ...lines,
+     { type: "status", status: "done" }],
+  );
+  await settled();
+  // узел перечитывается: смена статуса перерисовывает панель целиком
+  const shown = logText(page.querySelector(".log-area")).split("\n");
+  // окно снимает старое целыми кусками: перебор не больше одного куска
+  assert.ok(shown.length <= LOG_LIMIT + LOG_CHUNK,
+    `окно не растёт с буфером: строк ${shown.length}`);
+  assert.equal(shown[shown.length - 1], `н${LOG_TRIM + 1}`, "хвост — последняя строка");
+  /* окно держит ПОСЛЕДНИЕ строки: старые куски сняты целыми, окно непрерывно */
+  const first = Number(shown[0].slice(1));
+  assert.ok(first > 0, `начало окна сдвинуто вперёд: ${shown[0]}`);
+  assert.equal(shown.length, LOG_LIMIT - first + LOG_TRIM + 2,
+    "окно непрерывно: ни одной выпавшей строки");
+  delete globalThis.__sseDelay;
+});
+
+test("живой лог: пустой прогон — заглушка, после первой строки собирается окно", async () => {
+  const job = { id: RUN_JOB, action: "ner", project: "ACTIVE/Книга",
+    status: "running", lines: [], events: [], progress: null };
+  const page = await runView(job, [
+    { type: "snapshot", lines: [], events: [], progress: null },
+    { type: "status", status: "done" },
+  ]);
+  await settled();
+  assert.equal(page.querySelector(".log-area").textContent, "(лог пуст)");
+
+  /* переподключение снимка: панель пересобирается с нуля, строки не двоятся */
+  const again = await runView(job, [
+    { type: "snapshot", lines: ["a", "b"], events: [], progress: null },
+    { type: "snapshot", lines: ["a", "b", "c"], events: [], progress: null },
+    { type: "line", text: "d" },
+    { type: "status", status: "done" },
+  ]);
+  await settled();
+  assert.equal(logText(again.querySelector(".log-area")), "a\nb\nc\nd",
+    "повторный снимок заменяет окно, а не дописывается к нему");
 });

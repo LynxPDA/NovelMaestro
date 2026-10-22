@@ -3108,25 +3108,93 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return btn;
   }
 
-  /* ── панель лога: окно текста, которое перерисовывается кадром ──────
+  /* ── панель лога: окно текста, которое дорисовывается кадром ────────
      Живой лог — ОДНО текстовое окно: SSE дописывает строки в st.log, окно
-     перерисовывается ОДИН раз на кадр анимации. Прежняя схема перечитывала и
+     получает ОДНУ дорисовку на кадр анимации. Прежняя схема перечитывала и
      заново верстала весь хвост на КАЖДУЮ строку, а сервер присылал их
      отдельными кадрами: прогон на 1300 глав вываливал тысячи перерисовок
      подряд — вкладка «Запуски» висела десятками секунд и с ней весь
-     интерфейс. Прокрутка вниз — только если панель и так упиралась в конец:
-     листавшего лог нельзя выбрасывать в конец. */
-  const LOG_LIMIT = 500; // строк лога в панели — столько же, сколько отдаёт сервер
+     интерфейс. Перезапись окна целиком осталась и после снимка-кадра — на
+     живом потоке она стоит квадратично: каждая пачка верстает все
+     предыдущие строки (замер на реальном логе глоссария: окно 5000 строк —
+     82 мс на сборку и 13 мс на каждый кадр потока). Поэтому строки
+     ДОПИСЫВАЮТСЯ отдельными кусками, а старое снимается ЦЕЛЫМИ кусками:
+     полная пересборка окна остаётся снимку и перерисовке панели, а кадр
+     потока стоит 2 мс вместо 13. Прокрутка вниз — только если панель и так
+     упиралась в конец: листавшего лог нельзя выбрасывать в конец. */
+  const LOG_LIMIT = 5000; // строк в окне — весь буфер сервера (web/jobs.RING_SIZE)
+  // строк в куске при полной сборке окна; живая пачка строк — свой кусок
+  const LOG_CHUNK = 250;
   /* отметки состояний глав — одни на панель лога и на таблицу под ней */
   const STATUS_SYM = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
   let logNode = null; // <pre> панели лога живой стадии
   let logFrame = false; // кадр перерисовки уже заказан
+  let logSegs = []; // {node, n} — куски окна по порядку
+  let logLines = 0; // сколько строк в окне сейчас
+  let logPending = 0; // сколько строк пришло после последней дорисовки
+
+  // заглушка пустого лога
+  function emptyLog() {
+    logNode.textContent = "(лог пуст)";
+    logSegs = [];
+    logLines = 0;
+    logPending = 0;
+  }
+
+  // дописать строки одним куском: живой поток отдаёт их пачкой на кадр
+  function appendLogSeg(lines) {
+    const node = document.createTextNode(
+      (logLines ? "\n" : "") + lines.join("\n"),
+    );
+    logNode.append(node);
+    logSegs.push({ node, n: lines.length });
+    logLines += lines.length;
+  }
+
+  /* Пересобрать окно с нуля: снимок стрима (переподключение присылает хвост
+     заново — дописывать его нельзя, строки задвоятся) и перерисовка панели
+     после смены запуска. Строки делятся на куски по LOG_CHUNK: целыми
+     кусками окно потом и подрезается. */
+  function rebuildLog() {
+    logNode.textContent = "";
+    logSegs = [];
+    logLines = 0;
+    logPending = 0;
+    if (!st.log.length) return emptyLog();
+    for (let i = 0; i < st.log.length; i += LOG_CHUNK) {
+      appendLogSeg(st.log.slice(i, i + LOG_CHUNK));
+    }
+  }
+
+  /* Окно показывает хвост st.log (а он не длиннее LOG_LIMIT) с запасом не
+     больше одного куска: старое снимается ЦЕЛЫМИ кусками — перевёрстка при
+     этом не нарастает */
+  function trimLog() {
+    while (logSegs.length > 1 && logLines - logSegs[0].n >= st.log.length) {
+      const seg = logSegs.shift();
+      seg.node.remove();
+      logLines -= seg.n;
+      // перевод строки снятого куска начал бы окно пустой строкой
+      if (logSegs[0].node.textContent.startsWith("\n")) {
+        logSegs[0].node.textContent =
+          logSegs[0].node.textContent.slice(1);
+      }
+    }
+  }
 
   function paintLog() {
     if (!logNode) return;
     const stick = logNode.scrollHeight - logNode.clientHeight
       - logNode.scrollTop <= 24;
-    logNode.textContent = st.log.length ? st.log.join("\n") : "(лог пуст)";
+    // окно неполное (панель только открылась или стрим переподключился) —
+    // дешевле собрать заново, чем догадываться, чего в нём нет
+    if (logPending >= st.log.length) rebuildLog();
+    else if (logPending) {
+      const n = logPending;
+      logPending = 0;
+      appendLogSeg(st.log.slice(st.log.length - n));
+      trimLog();
+    }
     if (stick) logNode.scrollTop = logNode.scrollHeight;
   }
 
@@ -3150,8 +3218,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const job = view.job;
     const pre = h("pre", { class: "log-area", text: "" });
     if (view.live) {
-      // лента живой панели живёт в st.log — её дописывает SSE (paintLog)
+      // лента живой панели живёт в st.log — её дописывает SSE (paintLog);
+      // узел новый, кусков окна ещё нет
       logNode = pre;
+      rebuildLog();
       paintLog();
     } else {
       pre.textContent = view.lines.length ? view.lines.join("\n") : "(лог пуст)";
@@ -3398,8 +3468,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const live = !!(st.stage && st.job && st.job.action === st.stage);
     if (payload.type === "snapshot") {
       // снимок — весь хвост разом (переподключение тоже присылает его
-      // целиком, поэтому строки не дублируются)
+      // целиком, поэтому строк не прибавляется): окно собирается заново,
+      // а не дописывается
       st.log = (payload.lines || []).slice(-LOG_LIMIT);
+      logPending = st.log.length; // «что в окне — неизвестно»: всё заново
       if (Array.isArray(payload.events)) st.events = payload.events.slice();
       if (payload.progress) st.progress = payload.progress;
       if (live) {
@@ -3410,6 +3482,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
     if (payload.type === "line") {
       st.log.push(payload.text);
+      logPending += 1;
       if (st.log.length > LOG_LIMIT) {
         st.log.splice(0, st.log.length - LOG_LIMIT);
       }

@@ -277,14 +277,15 @@ def test_ring_buffer_cap(tmp_path, fake_script):
         job.append(f"x-{i}")
     assert len(job.lines) == RING_SIZE
     assert job.lines[-1] == f"x-{RING_SIZE + 99}"
-    # payload отдаёт хвост TAIL_LIMIT: панель лога показывает ~30 строк, а
-    # весь буфер в браузере означал бы тысячи перерисовок окна на снимок
+    # payload отдаёт весь буфер (TAIL_LIMIT == RING_SIZE): начало прогона —
+    # шапка отчёта стадии — не теряется, а лишнего сверх буфера нет
     payload = job.payload()
-    assert len(payload["lines"]) == TAIL_LIMIT
-    assert payload["lines"][0] == f"x-{RING_SIZE + 100 - TAIL_LIMIT}"
+    assert TAIL_LIMIT == RING_SIZE, "панель видит весь буфер, а не его кусок"
+    assert len(payload["lines"]) == RING_SIZE
+    assert payload["lines"][0] == f"x-{100}"
     assert payload["lines"][-1] == f"x-{RING_SIZE + 99}"
-    # полный хвост прогона остаётся в сайдкаре: вкладка «Логи» и рестарт
-    # сервера должны видеть больше, чем панель
+    # сайдкар хранит то же самое, что уже ушло браузеру: панель и вкладка
+    # «Логи» показывают один и тот же прогон
     jm._persist()
     sidecar = jm._log_path(job.id)
     assert len(sidecar.read_text(encoding="utf-8").splitlines()) == RING_SIZE
@@ -362,9 +363,10 @@ def test_stream_snapshot_is_one_frame(jobs_srv):
     assert [f["type"] for f in frames] == ["snapshot", "status"], \
         "снимок + финальный статус: по кадру на строку лога быть не должно"
     snap = frames[0]
-    assert len(snap["lines"]) == TAIL_LIMIT
-    # в снимок идёт хвост буфера: младшая строка — последняя
-    assert snap["lines"][0] == f"line-{300}"
+    # в снимок идёт ВЕСЬ буфер стадии (а не его последние 500 строк):
+    # шапку отчёта тоже видно в панели
+    assert len(snap["lines"]) == RING_SIZE
+    assert snap["lines"][0] == f"line-{TAIL_LIMIT + 300 - RING_SIZE}"
     assert snap["lines"][-1] == f"line-{TAIL_LIMIT + 300 - 1}"
     assert snap["events"] == job.events
     assert snap["progress"]["done"] == 3
