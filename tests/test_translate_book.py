@@ -559,6 +559,25 @@ def test_main_preview_request(tmp_path, monkeypatch):
     assert not (tmp_path / "translated_trace.json").exists()
 
 
+def test_main_preview_request_empty_input(tmp_path, monkeypatch):
+    """Предпросмотр на пустом входе — код 1 с причиной, а не IndexError.
+
+    items[0] падал трейсбеком: человек видел «Ошибка предпросмотра: …»
+    с последней строкой traceback вместо «вход пуст»."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ch.txt").write_text("", encoding="utf-8")
+    monkeypatch.setattr(core_stage, "determine_model",
+                        lambda *a, **k: "модель-х")
+    pv = tmp_path / "preview.json"
+    rc = TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
+                  "--prompt_file", "", "--threads", "1",
+                  "--preview-request", str(pv)])
+    assert rc == 1
+    assert not pv.exists()
+    # предпросмотр не заводит ни папки логов, ни файла лога
+    assert not (tmp_path / "logs").exists()
+
+
 def test_main_extended_context_translate_lr(tmp_path, monkeypatch):
     """Расширенный перевод: --dict_file/--rules_file/--examples_file
     подставляют {dict_block}/{rules_block}/{fewshot_block}; тег

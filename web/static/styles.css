@@ -861,6 +861,18 @@ input[type="number"] {
   min-height: 18px;
 }
 
+/* ошибка блока сообщений: текст приходит из лога стадии, переносы ставит
+   логгер, а не вёрстка */
+.preview-req-body > .form-error,
+.form-error.is-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 12px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
 /* ── hub: разделы и проекты (M2) ───────────────────────── */
 .section {
   margin-bottom: 26px;

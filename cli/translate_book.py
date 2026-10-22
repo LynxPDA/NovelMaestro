@@ -559,11 +559,13 @@ def main(argv=None):
     _rel = os.path.relpath(out_path)
     _log_dir = os.path.join("logs", "chapters") \
         if _rel.startswith("chapters" + os.sep) else "logs"
-    try:
-        os.makedirs(_log_dir, exist_ok=True)
-    except OSError as exc:
-        print(f"Не удалось создать {_log_dir}: {exc}")
-        return 1
+    # предпросмотр не создаёт ни папки логов, ни самого лога (new_stage)
+    if not args.preview_request:
+        try:
+            os.makedirs(_log_dir, exist_ok=True)
+        except OSError as exc:
+            print(f"Не удалось создать {_log_dir}: {exc}")
+            return 1
     _log_name = re.sub(r"[\\/]+", "_", _rel)
     stage = new_stage("pipeline", args, log_dir=_log_dir, log_name=_log_name)
     logger = stage.logger
@@ -672,6 +674,9 @@ def main(argv=None):
     # LLM-запроса без сети; до создания trace/выходного файла ──
     if args.preview_request:
         log = stage.logger  # сборка блока пишет предупреждения в лог стадии
+        if not items:
+            log.error("❌ ПРЕДПРОСМОТР: вход пуст — %s", args.file)
+            return 1
         i0, orig0, draft0 = items[0]
         nb, nb_count = find_relevant_ner(
             orig0, ner_data, args.ner_threshold, args.ner_ngram,

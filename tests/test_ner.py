@@ -463,6 +463,25 @@ def test_main_preview_request(tmp_path, monkeypatch, ner_reset):
     # сеть не тронута, глоссарий не создан
     assert not calls
     assert not (tmp_path / "ner.json").exists()
+    # предпросмотр не заводит ни папки логов, ни файлов логов стадии
+    assert not (tmp_path / "logs").exists()
+
+
+def test_main_preview_request_empty_input(tmp_path, monkeypatch, ner_reset):
+    """Предпросмотр на пустом входе — код 1 с причиной, а не IndexError."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "novel.txt").write_text("", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(NER, "llm_request",
+                        lambda *a, **k: calls.append(1) or (P1_ANSWER, None))
+    pv = tmp_path / "preview.json"
+    monkeypatch.setattr(sys, "argv", [
+        "ner.py", "novel.txt", "--host", "http://h", "--model", "модель-х",
+        "--threads", "1", "--ner_file", "ner.json",
+        "--preview-request", str(pv)])
+    NER.main()
+    assert not pv.exists() and not calls
+    assert not (tmp_path / "ner.json").exists()
 
 
 def test_main_no_args_error(monkeypatch, ner_reset):

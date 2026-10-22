@@ -79,6 +79,7 @@ from core.common import (  # noqa: E402
     log_argv,
     ner_is_locked,
     ner_pick_non_voted,
+    preview_logger,
     setup_logging,
     split_text_smart,
 )
@@ -1505,7 +1506,11 @@ def main():
     # ── Сборка глав (chapter.txt → в память; --compile_out — сохранить) ──
     in_memory_text: str | None = None
     if args.compile_chapters:
-        clog, _ = setup_logging(os.path.join("logs", "ner_compile.log"))
+        # предпросмотр не заводит файлов логов: сборка пишет в лог стадии
+        # (в предпросмотре он stderr-только, core.stage.new_stage)
+        clog = (preview_logger("ner_compile")
+                if args.preview_request else
+                setup_logging(os.path.join("logs", "ner_compile.log"))[0])
         text, info = compile_chapter_text(
             args.chapters_dir, want="chapter",
             start=args.start, end=args.end, logger=clog)
@@ -1608,6 +1613,10 @@ def main():
 
     # ── Предпросмотр запроса (--preview-request): pass1 первого чанка ──
     if args.preview_request:
+        if not all_chunks:
+            _log(stage.logger, logging.ERROR,
+                 f"❌ ПРЕДПРОСМОТР: во входе нет текста — {args.file}")
+            return 1
         _log(stage.logger, logging.INFO, f"🧭 Чанков: {len(all_chunks)}")
         stage.preview(
             f"Pass1 · чанк 1/{len(all_chunks)}",

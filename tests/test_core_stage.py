@@ -245,6 +245,32 @@ def test_stage_preview_is_noop_without_flag():
         is False
 
 
+def test_new_stage_preview_creates_no_log_files(tmp_path, monkeypatch):
+    """Предпросмотр не запускает стадию: ни logs/, ни файла лога.
+
+    setup_logging открывает файл mode="w" — предпросмотр стёр бы реальный
+    лог стадии; логгером предпросмотра (только stderr) пишется команда."""
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(preview_request="tmp/preview_request.json")
+    logged = st.new_stage("ner", args)
+    assert logged.preview_path == "tmp/preview_request.json"
+    assert logged.log_path == ""
+    assert not (tmp_path / "logs").exists()
+    assert not any(isinstance(h, logging.FileHandler)
+                   for h in logged.logger.handlers)
+
+
+def test_new_stage_preview_skips_existing_log(tmp_path, monkeypatch):
+    """Существующий лог стадии предпросмотр не обнуляет."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "logs").mkdir()
+    real = tmp_path / "logs" / "ner.log"
+    real.write_text("важный лог", encoding="utf-8")
+    args = argparse.Namespace(preview_request="tmp/preview_request.json")
+    st.new_stage("ner", args)
+    assert real.read_text(encoding="utf-8") == "важный лог"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Прогресс: tqdm в CLI, @@PROGRESS@@ в web
 # ══════════════════════════════════════════════════════════════════════

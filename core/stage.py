@@ -425,6 +425,13 @@ def new_stage(name: str, args: argparse.Namespace, *,
     продолжать: у части стадий лог не критичен.
     """
     log_path = ""
+    if getattr(args, "preview_request", None):
+        # предпросмотр запроса ничего не запускает: ни logs/, ни файла лога
+        # (зато стёр бы реальный лог — setup_logging открывает mode="w")
+        logger = preview_logger(name)
+        log_argv(logger)
+        return LoggedStage(name=name, logger=logger,
+                           preview_path=args.preview_request)
     try:
         os.makedirs(log_dir, exist_ok=True)
     except OSError as exc:
