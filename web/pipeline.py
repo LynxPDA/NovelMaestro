@@ -43,7 +43,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
-    PROGRESS_PREFIX, build_chapter_map, format_ranges,
+    PROGRESS_PREFIX, build_chapter_map, format_ranges, output_tail,
 )
 # общий блок LLM-флагов: у конвейера тот же набор имён, что у стадий
 from core.stage import (add_check_prompt_arg, add_llm_args,  # noqa: E402
@@ -776,7 +776,13 @@ def main() -> None:
         in_name, _ = _STAGE_IO[stage]
         if stage == 3:
             in_name = action_spec.get("polish_input") or in_name
-        cid = start if start in chapters else ids[0]
+        cid = start if start in chapters else None
+        if cid is None:
+            # затишье здесь не запасной вариант: предпросмотр главы 001, о
+            # которой человек не просил, показывает чужой запрос
+            log.error("ПРЕДПРОСМОТР: глав %d нет в книге (главы %d–%d)",
+                      start, ids[0], ids[-1])
+            sys.exit(1)
         in_file = Path(chapters[cid][0]) / in_name
         if not in_file.is_file():
             log.error("ПРЕДПРОСМОТР: нет исходника главы %03d: %s",
@@ -812,9 +818,15 @@ def main() -> None:
             log.error("ПРЕДПРОСМОТР: таймаут 300 с")
             sys.exit(1)
         if proc.returncode != 0:
+            # причина — в хвосте вывода потомка (шапка лога бесполезна),
+            # плюс слова-ошибки из grep_errors выше него
+            hits = grep_errors((proc.stderr or "") + (proc.stdout or ""))
+            reason = output_tail(proc.stderr, proc.stdout, 1500) \
+                or "причина не напечатана"
+            if hits:
+                reason = "\n".join(hits + [reason])
             log.error("ПРЕДПРОСМОТР: ошибка (rc=%d)\n%s",
-                      proc.returncode,
-                      grep_errors((proc.stderr or "") + (proc.stdout or "")))
+                      proc.returncode, reason)
             sys.exit(1)
         pv = Path(args.preview_request)
         if not pv.is_file():
