@@ -1875,6 +1875,27 @@ def test_preview_logger_stderr_only():
     assert log.propagate is False
 
 
+def test_output_tail_keeps_reason_not_header():
+    """Причина сбоя — в конце вывода: шапка запуска (log_argv, разделитель)
+    в ответ не попадает, иначе 500 символов уходят на неё целиком."""
+    header = "INFO: Запуск: cli/translate_book.py --mode translate " + "x" * 900
+    reason = ("ERROR: ❌ ПРЕДПРОСМОТР: вход пуст — chapter.txt")
+    out = C.output_tail("", f"{header}\n{reason}")
+    assert out.endswith(reason)
+    assert not out.startswith("INFO: Запуск")
+    assert len(out) <= 500
+
+
+def test_output_tail_joins_both_streams_and_empty():
+    """stderr и stdout — оба источника причины: у стадий ошибка бывает
+    в stdout, у превью-логгера — в stderr («пустой stderr → пусто» теряло бы её)."""
+    assert C.output_tail("ERROR: бум", "") == "ERROR: бум"
+    assert C.output_tail("", "ERROR: бум") == "ERROR: бум"
+    assert "бум" in C.output_tail("ERROR: бум", "Traceback")
+    assert C.output_tail("", "") == ""
+    assert C.output_tail(None, None) == ""
+
+
 # ══════════════════════════════════════════════════════════════════════
 # flex_fragment_pattern / find_fragment_owner (переаттестация цитат)
 # ══════════════════════════════════════════════════════════════════════

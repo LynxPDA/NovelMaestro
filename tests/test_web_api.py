@@ -2175,6 +2175,60 @@ def test_preview_request_route_script_error(srv_ctx, monkeypatch):
     assert "бум" in (payload.get("error") or "")
 
 
+def test_preview_request_error_shows_tail_not_header(srv_ctx, monkeypatch):
+    """Причина сбоя — в ХВОСТЕ вывода скрипта, а не в первых 500 символах.
+
+    Скрипты стадий логируют в stdout, и начало вывода — шапка запуска
+    («Запуск: … --start 700 --end 701», разделитель). Обрезка с головы занимала
+    ошибкой всю шапку, а настоящая причина («нет исходника главы 599»)
+    терялась."""
+    import subprocess as sp
+
+    _, port, _ = srv_ctx()
+    _file_project(port, _projects_root_of(srv_ctx))
+    header = ("INFO: Запуск: /app/web/pipeline.py --action 8 --start 700 "
+              "--end 701 " + "x" * 600)
+    reason = ("ERROR: ❌ ПРЕДПРОСМОТР: нет исходника главы 599: "
+              "chapters/000_599_г/chapter.txt")
+
+    def fake_run(argv, **kw):
+        return sp.CompletedProcess(argv, 1, stdout=f"{header}\n{reason}",
+                                   stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    res, payload = _request(
+        port, "POST", "/api/stages/pipeline/preview-request",
+        {"project": "ACTIVE/test_book", "params": {}})
+    assert res.status == 400, payload
+    err = payload.get("error") or ""
+    assert "нет исходника главы 599" in err
+    assert "--action 8" not in err
+
+
+def test_preview_request_rejects_bad_chapter_range(srv_ctx, monkeypatch):
+    """Диапазон глав проверяется до предпросмотра — как и у запуска.
+
+    Иначе pipeline тихо берёт первую главу книги (cid = ids[0]) и показывает
+    запрос главы, о которой человек не просил."""
+    import subprocess as sp
+
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    ch = pdir / "chapters" / "00000_1_Глава_1"
+    ch.mkdir(parents=True)
+    (ch / "chapter.txt").write_text("Текст главы.", encoding="utf-8")
+    called = []
+    monkeypatch.setattr(sp, "run",
+                        lambda *a, **k: called.append(1) or None)
+    res, payload = _request(
+        port, "POST", "/api/stages/pipeline/preview-request",
+        {"project": "ACTIVE/test_book",
+         "params": {"start": "700", "end": "701"}})
+    assert res.status == 400, payload
+    assert "Начальная глава" in (payload.get("error") or "")
+    assert not called, "скрипт стадии не должен запускаться при плохом диапазоне"
+
+
 def test_epub_preview_utf8_env(srv_ctx, monkeypatch):
     """Регресс Windows: потомок печатает «→»/кириллицу — синхронный
     запуск предпросмотра обязан задать потомку PYTHONIOENCODING=utf-8

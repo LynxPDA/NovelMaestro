@@ -61,6 +61,7 @@ CORE_API = [
     "read_chapter_titles", "write_chapter_titles",
     # предпросмотр запроса и проверка промпт-файла (web + CLI)
     "preview_request_payload", "write_preview_request", "preview_logger",
+    "output_tail",
     "prompt_check_result", "write_prompt_check",
 ]
 # Зеркало API core/stage.py (слой стадии: флаги LLM, профиль, контекст, прогресс)

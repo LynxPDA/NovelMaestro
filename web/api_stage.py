@@ -17,6 +17,7 @@ from pathlib import Path
 from web.jobs import JobManager, SSE_PING, TAIL_LIMIT
 from web.server import ApiError, Router
 from core import settings as core_settings
+from core.common import output_tail
 from web.stages import (
     STAGE_SPECS, build_command, ordered_stages, script_path, spec_for,
 )
@@ -606,8 +607,8 @@ def _epub_preview_run(ctx: dict, pdir: Path, params: dict) -> dict:
         raise ApiError(500, "Предпросмотр не уложился в 120 c — "
                             "уменьшите исходник")
     if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "").strip()
-        raise ApiError(400, f"Ошибка разбивки: {err[:500]}")
+        err = output_tail(proc.stderr, proc.stdout)
+        raise ApiError(400, f"Ошибка разбивки: {err}")
     data = _epub_preview_read(pdir)
     if not data.get("entries"):
         raise ApiError(400, "Разбивка не дала ни одной главы")
@@ -770,6 +771,9 @@ def _preview_request_post(ctx: dict) -> dict:
     if script is None or not script.is_file():
         raise ApiError(500, "Скрипт стадии не найден")
     params = (ctx["body"] or {}).get("params") or {}
+    # тот же диапазон глав, что и у запуска: предпросмотр не может показывать
+    # запрос главы, которая за пределами книги (иначе pipeline молча берёт 001)
+    _check_chapter_range(ctx, key, pdir, params)
     argv = build_command(key, params, ctx)
     argv[0] = str(script)
     argv += ["--preview-request", PREVIEW_REQUEST_FILE]
@@ -788,8 +792,8 @@ def _preview_request_post(ctx: dict) -> dict:
     except subprocess.TimeoutExpired:
         raise ApiError(500, "Предпросмотр не уложился в 300 c")
     if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "").strip()
-        raise ApiError(400, f"Ошибка предпросмотра: {err[:500]}")
+        err = output_tail(proc.stderr, proc.stdout)
+        raise ApiError(400, f"Ошибка предпросмотра: {err}")
     path = pdir / PREVIEW_REQUEST_FILE
     import json as _json
     try:
@@ -866,12 +870,12 @@ def _prompt_check_post(ctx: dict) -> dict:
         return {"ok": True, "result": None,
                 "error": f"проверка не уложилась в {PROMPT_CHECK_TIMEOUT} c"}
     if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "").strip()
+        err = output_tail(proc.stderr, proc.stdout, 300)
         log.info("prompt-check: %s/%s — код %d: %s", key, pdir.name,
-                 proc.returncode, err[:300])
+                 proc.returncode, err)
         return {"ok": True, "result": None,
                 "error": f"проверка завершилась с кодом {proc.returncode}: "
-                         f"{err[:200]}"}
+                         f"{err}"}
     path = pdir / PROMPT_CHECK_FILE
     import json as _json
     try:

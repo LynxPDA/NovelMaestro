@@ -2416,6 +2416,19 @@ def write_prompt_check(path, payload) -> None:
     atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def output_tail(stderr, stdout, limit: int = 500) -> str:
+    """Причина сбоя команды — из ХВОСТА её вывода, а не из начала.
+
+    Скрипты стадий логируют в stdout, и первое, что попадает в вывод, —
+    шапка запуска (команда, разделитель, параметры). Причина же всегда
+    последней строкой: обрезка с головы показывала человеку шапку вместо
+    ошибки. Пустой stderr — не повод молчать: у стадий причина нередко
+    печатается в stdout (и наоборот).
+    """
+    text = "\n".join(p.strip() for p in (stderr, stdout) if p and p.strip())
+    return text[-limit:].strip() if text else ""
+
+
 def preview_logger(name: str = "preview") -> logging.Logger:
     """Логгер предпросмотра: ТОЛЬКО stderr.
 
