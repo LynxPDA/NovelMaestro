@@ -1107,12 +1107,15 @@ async function main() {
     // выделенная строка должна быть видна: подложка вместо одного чекбокса
     if (f1.selRows !== 1) problems.push(`файлы: выделенных строк ${f1.selRows}`);
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-files-selected.png") });
-    const want = ["Скачать выделенные файлы", "Перенести в…", "Удалить выделенное",
-      "Снять выделение"];
+    const want = ["Скачать выделенные файлы", "Перенести в…", "Снять выделение"];
     if (want.some((w) => !f1.barTips.includes(w)))
       problems.push(`файлы: действия панели (${f1.barTips.join(" | ")})`);
     if (!f1.barTips.some((t) => t.startsWith("Переименовать ")))
       problems.push("файлы: при одном объекте в панели нет «Переименовать»");
+    // при одном объекте удаление называется его именем (рядом с переименованием)
+    if (!f1.barTips.some((t) => t.startsWith("Удалить ")
+      && !t.includes("выделенное")))
+      problems.push("файлы: при одном объекте в панели нет «Удалить <имя>»");
     // перенос: один select по всему дереву каталогов проекта
     await page.locator('.files-sel .icon-btn[aria-label^="Перенести"]').first().click();
     await page.waitForTimeout(600);

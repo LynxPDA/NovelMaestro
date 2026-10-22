@@ -3308,7 +3308,7 @@ async function viewTemplates() {
           actions.append(
             rowIcon("pencil", `Править ${e.name}`, () => openEdit(full)),
             rowDownload(full, e.name),
-            rowIcon("textCursor", `Переименовать ${e.name}`, () =>
+            rowIcon("rename", `Переименовать ${e.name}`, () =>
               nameModal(
                 `Переименовать файл ${e.name}`,
                 "новое имя файла",

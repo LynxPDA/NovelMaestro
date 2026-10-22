@@ -566,10 +566,13 @@ const sandbox = {
   },
   attachTooltip() {},
   toggleMenu() {},
-  /* диалог подтверждения из app.js: dangerous-действие требует слова-пароля */
+  /* диалог подтверждения из app.js: dangerous-действие требует слова-пароля;
+     возвращает промис результата, как и оригинал (тесты ждут ok) */
   confirmModal(title, text, confirmWord, onConfirm) {
     const word = h("input", { class: "input", placeholder: confirmWord });
     const err = h("div", { class: "form-error" });
+    let resolve;
+    const done = new Promise((r) => { resolve = r; });
     const box = h(
       "div",
       { class: "modal" },
@@ -580,7 +583,8 @@ const sandbox = {
       h(
         "div",
         { class: "modal-actions" },
-        h("button", { class: "btn btn-ghost" }, "Отмена"),
+        h("button", { class: "btn btn-ghost", onclick: () => resolve(false) },
+          "Отмена"),
         h(
           "button",
           {
@@ -591,6 +595,7 @@ const sandbox = {
                 return;
               }
               await onConfirm();
+              resolve(true);
             },
           },
           confirmWord,
@@ -598,7 +603,7 @@ const sandbox = {
       ),
     );
     globalThis.document.body.append(h("div", { class: "modal-backdrop" }, box));
-    return box;
+    return done;
   },
   mdPreviewSrcdoc: (html) => html,
   fitPreviewFrame() {},
@@ -996,9 +1001,9 @@ test("файлы: чекбокс строки включает панель вы
   assert.deepEqual(tips(bar), [
     "Переименовать a.txt",
     "Копировать a.txt",
+    "Удалить a.txt",
     "Скачать выделенные файлы",
     "Перенести в…",
-    "Удалить выделенное",
     "Снять выделение",
   ]);
 });
@@ -1011,8 +1016,8 @@ test("файлы: выделка из одних каталогов — скач
   assert.deepEqual(tips(findByClass(page, "files-sel")[0]), [
     "Переименовать chapters",
     "Копировать chapters",
+    "Удалить chapters",
     "Перенести в…",
-    "Удалить выделенное",
     "Снять выделение",
   ]);
 });
@@ -1142,6 +1147,34 @@ test("файлы: копировать из панели — POST /file/copy, в
   assert.deepEqual(JSON.parse(JSON.stringify(call.body)), {
     project: "ACTIVE/Книга", path: "a.txt",
   });
+  assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
+});
+
+test("файлы: удаление одного объекта — «Удалить <имя>», общее — «Удалить выделенное»", async () => {
+  const page = await filesPage();
+  const cb = findByClass(findByClass(page, "frow")[2], "fsel")[0]; // файл b.png
+  cb.checked = true;
+  await cb._listeners.change[0]();
+  const bar = findByClass(page, "files-sel")[0];
+  assert.equal(tips(bar).includes("Удалить выделенное"), false,
+    "при одном объекте общее «Удалить выделенное» не дублируется");
+  const btn = bar.querySelectorAll("button")
+    .find((b) => (b.getAttribute("aria-label") || "") === "Удалить b.png");
+  assert.ok(btn, "у объекта в панели есть «Удалить b.png»");
+  btn._listeners.click[0]();
+  await tick();
+  const bd = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(bd, "подтверждение удаления открылось");
+  assert.match(collectText(bd).join(" "), /b\.png/, "путь объекта в тексте окна");
+  findTag(bd, "input")[0].value = "УДАЛИТЬ";
+  await findByClass(bd, "btn-danger")[0]._listeners.click[0]();
+  await tick();
+  const del = globalThis.__calls.filter((c) => c.method === "DELETE"
+    && c.path === "/file");
+  assert.equal(del.length, 1, "удаление одного объекта — один DELETE /file");
+  assert.match(del[0].query, /path=b\.png/, "удаляется именно выбранный объект");
   assert.equal(findByClass(page, "files-sel")[0].classList.contains("hidden"), true);
 });
 

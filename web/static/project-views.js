@@ -325,12 +325,12 @@ function viewProject(section, name, tab, job) {
 
   /* «Файлы»: список с ВЫДЕЛЕНИЕМ. Строка — чекбокс, имя, метаданные и кнопки
      одного объекта: файл — править, скачать, копировать и переименовать,
-     каталог — копировать и переименовать. Скачивание, перенос и удаление
-     применяются к выделке и живут в панели выделения: пока что-то выделено,
-     она заменяет кнопки тулбара. Выделение — состояние вкладки (не
-     истории): снимается при смене папки и после операции; чекбокс
-     строки перерисовывает только панель — список и его страница от клика
-     выделения не сбрасываются. */
+     каталог — копировать и переименовать. Удаление, перенос и пакетное
+     скачивание применяются к выделке и живут в панели выделения: пока
+     что-то выделено, она заменяет кнопки тулбара. Выделение — состояние
+     вкладки (не истории): снимается при смене папки и после операции;
+     чекбокс строки перерисовывает только панель — список и его страница
+     от клика выделения не сбрасываются. */
   async function filesView() {
     const q = new URLSearchParams({ project: `${section}/${name}` });
     if (st.path) q.set("path", st.path);
@@ -494,7 +494,9 @@ function viewProject(section, name, tab, job) {
     }
 
     /* Панель выделения — только то, что применимо к выделке: переименовать
-       имеет смысл при одном объекте, скачать — когда в выделке есть файлы. */
+       и копировать имеет смысл при одном объекте, скачать — когда в выделке
+       есть файлы. Удаление одно на панель: при одном объекте оно называет
+       его (рядом с переименованием), при нескольких — всю выделку. */
     function paintSel() {
       const n = sel.size;
       tools.classList.toggle("hidden", n > 0);
@@ -511,17 +513,23 @@ function viewProject(section, name, tab, job) {
           h("span", { class: "files-sel-count" }, `выделено: ${n}`),
           one
             ? iconBtn(
-              "textCursor", `Переименовать ${one.name}`, () => renameOne(one))
+              "rename", `Переименовать ${one.name}`, () => renameOne(one))
             : null,
           one
             ? iconBtn(
               "copy", `Копировать ${one.name}`, () => copyOne(one))
             : null,
+          one
+            ? iconBtn(
+              "trash", `Удалить ${one.name}`, () => deleteOne(one), true)
+            : null,
           hasFile
             ? iconBtn("download", "Скачать выделенные файлы", downloadSel)
             : null,
           iconBtn("folderMove", "Перенести в…", moveModal),
-          iconBtn("trash", "Удалить выделенное", deleteSel, true),
+          one
+            ? null
+            : iconBtn("trash", "Удалить выделенное", deleteSel, true),
           iconBtn("close", "Снять выделение", () => {
             sel.clear();
             paintSel();
@@ -652,18 +660,38 @@ function viewProject(section, name, tab, job) {
           (hasDir ? " · каталоги — вместе с содержимым" : ""),
         "УДАЛИТЬ",
         async () => {
-          for (const e of list) {
-            const dq = new URLSearchParams({
-              project: `${section}/${name}`,
-              path: path(e),
-            });
-            await api(`/file?${dq}`, { method: "DELETE" });
-          }
+          await deletePaths(list);
           toast(`Удалено: ${list.length}`);
-          sel.clear();
         },
       );
       if (ok) render();
+    }
+
+    /* Удаление одного объекта из панели выделения: та же опасная операция с
+       тем же словом-паролем, что у групповой, — отличается только список. */
+    async function deleteOne(e) {
+      const ok = await confirmModal(
+        `Удаление ${e.dir ? "каталога" : "файла"}`,
+        path(e) + (e.dir ? " · каталог — вместе с содержимым" : ""),
+        "УДАЛИТЬ",
+        async () => {
+          await deletePaths([e]);
+          toast(`Удалено: ${e.name}`);
+        },
+      );
+      if (ok) render();
+    }
+
+    /* DELETE по одному на объект: сервер удаляет ровно один путь за запрос */
+    async function deletePaths(list) {
+      for (const e of list) {
+        const dq = new URLSearchParams({
+          project: `${section}/${name}`,
+          path: path(e),
+        });
+        await api(`/file?${dq}`, { method: "DELETE" });
+      }
+      sel.clear();
     }
 
     const drop = h("div", { class: "files-list" });
@@ -817,7 +845,7 @@ function viewProject(section, name, tab, job) {
     }
     actions.append(
       iconBtn("copy", `Копировать ${e.name}`, () => acts.copy(e)),
-      iconBtn("textCursor", `Переименовать ${e.name}`, () =>
+      iconBtn("rename", `Переименовать ${e.name}`, () =>
         acts.rename(e)),
     );
     const meta = h(
