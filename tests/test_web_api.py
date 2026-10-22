@@ -2058,15 +2058,57 @@ def test_batch_replace_preview_deletion_and_errors(srv_ctx):
 
 
 def test_epub_preview_no_cli_only_fields(srv_ctx):
-    """Полей, которых нет в реестре (skip, clean_patterns), build_command не
-    касается: их значения из памяти формы в argv не попадают."""
+    """`clean_patterns` — поле-призрак из памяти формы: в argv не попадает.
+
+    `skip` — не поле реестра, а состояние предпросмотра (снятые галочки
+    секций): он в argv едет, иначе исключённые главы снова оказывались бы
+    на диске после запуска.
+    """
     from web.stages import build_command
     argv = build_command("epub", {"input": "source/book.epub",
                                   "mode": "toc", "skip": [1, 3],
                                   "clean_patterns": "^本章完"}, {})
-    assert "--skip" not in argv and "--clean-re" not in argv
+    assert "--clean-re" not in argv and "^本章完" not in argv
     assert argv[:3] == ["cli/epub_to_chapters.py", "--input",
                         "source/book.epub"]
+    # seq снятых галочек — отдельным --skip каждый
+    assert "--skip" in argv
+    assert [argv[i + 1] for i, a in enumerate(argv) if a == "--skip"] == \
+        ["1", "3"]
+
+
+def test_epub_preview_post_passes_skip(srv_ctx, monkeypatch):
+    """Предпросмотр собирает argv тем же build_command, что и запуск: снятые
+    галочки секций доезжают до --preview-json (папки — с новой нумерацией)."""
+    import subprocess as sp
+
+    _, port, projects_root = srv_ctx()
+    pdir = _file_project(port, projects_root)
+    _make_epub_file(pdir)
+    captured = {}
+
+    def fake_run(argv, **kw):
+        captured["argv"] = argv
+        pv = Path(kw["cwd"]) / web_api.EPUB_PREVIEW_FILE
+        pv.parent.mkdir(parents=True, exist_ok=True)
+        pv.write_text(json.dumps(
+            {"source": "book.epub", "num_offset": 1, "title_limit": 50,
+             "entries": [{"seq": 2, "num": 1, "folder": "00000_1_Глава_2",
+                          "heading": "Глава 2", "text": "текст"}]},
+            ensure_ascii=False), encoding="utf-8")
+        return sp.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    res, payload = _request(port, "POST", "/api/stages/epub/preview", {
+        "project": "ACTIVE/test_book",
+        "params": {"input": "source/book.epub", "mode": "toc",
+                   "skip": [1]},
+    })
+    assert res.status == 200, payload
+    argv = captured["argv"]
+    assert [argv[i + 1] for i, a in enumerate(argv) if a == "--skip"] == ["1"]
+    # num_offset нужен SPA для перенумерации строки на месте
+    assert payload["num_offset"] == 1
 
 
 # ══════════════════════════════════════════════════════════════════════

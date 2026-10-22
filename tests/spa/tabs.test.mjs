@@ -297,6 +297,10 @@ async function api(path, opts = {}) {
     if (p.endsWith("/prompt-check")) {
       return { ok: true, result: globalThis.__promptCheck || null };
     }
+    /* epub: предпросмотр разбивки (POST) — папки готовит тест */
+    if (p === "/stages/epub/preview") {
+      return globalThis.__epubPreview || { ok: true, entries: [] };
+    }
     return { ok: true, moved: [], skipped: [] };
   }
   if (p === "/files") {
@@ -2928,4 +2932,68 @@ test("живой лог: пустой прогон — заглушка, пос�
   await settled();
   assert.equal(logText(again.querySelector(".log-area")), "a\nb\nc\nd",
     "повторный снимок заменяет окно, а не дописывается к нему");
+});
+
+/* ── epub: снятые галочки предпросмотра уходят в запуск ──────────────── */
+/* Панель предпросмотра разбивки показывает папки глав; снятие галочки
+   исключает главу из разбора. Регресс: галочки жили только в памяти вкладки
+   (в params уезжал skip), а сервер этот параметр не читал — исключённые
+   главы снова оказывались на диске. Здесь проверяется, что SPA кладёт skip
+   в params ОБА вызова — предпросмотра и запуска (общая сборка buildParams). */
+const EPUB_PREVIEW = {
+  ok: true,
+  source: "book.epub",
+  num_offset: 1,
+  entries: [
+    { seq: 1, num: 1, folder: "00000_1_Глава_1", heading: "Глава 1",
+      size_kb: 1.5 },
+    { seq: 2, num: 2, folder: "00000_2_Глава_2", heading: "Глава 2",
+      size_kb: 2.5 },
+    { seq: 3, num: 3, folder: "00000_3_Глава_3", heading: "Глава 3",
+      size_kb: 3.5 },
+  ],
+};
+
+test("запуски epub: снятая галочка уходит в params запуска как skip", async () => {
+  globalThis.__stageOptions = { source: ["book.epub"] };
+  globalThis.__calls = [];
+  globalThis.__gets = [];
+  const page = await runStage("epub");
+  const prevBtn = findByClass(page, "run-panel-title")
+    .flatMap((t) => findTag(t, "button"))
+    .find((b) => collectText(b).includes("Предпросмотр"));
+  assert.ok(prevBtn, "кнопка «Предпросмотр» есть");
+  globalThis.__epubPreview = EPUB_PREVIEW;
+  await prevBtn._listeners.click[0]();
+  await tick();
+  const rows = findByClass(page, "epub-prev-row");
+  assert.equal(rows.length, 3, "все три главы в предпросмотре");
+  const cbs = rows.map((r) => findTag(r, "input")[0]);
+  assert.ok(cbs.every((c) => c.checked), "по умолчанию все главы включены");
+  /* снимаем вторую главу */
+  cbs[1].checked = false;
+  cbs[1].dispatchEvent({ type: "change" });
+  await tick();
+  assert.equal(rows[1].classList.contains("epub-prev-skip"), true,
+    "строка исключённой главы погасла");
+  /* запуск: skip приезжает в params — та же сборка, что у предпросмотра */
+  const runBtn = findByClass(page, "btn-primary")
+    .find((b) => collectText(b).join("") === "Запустить");
+  assert.ok(runBtn, "кнопка запуска в форме");
+  await runBtn._listeners.click[0]();
+  await tick();
+  const job = globalThis.__calls.find(
+    (c) => c.path === "/jobs" && c.method === "POST");
+  assert.ok(job, "запуск ушёл на сервер");
+  assert.equal(JSON.stringify(job.body.params.skip), "[2]",
+    "снятая галочка ушла в skip запуска");
+  /* предпросмотр и запуск собираются одним buildParams: в теле запроса
+     предпросмотра тоже едет skip (человек видит в папках то, что запишется) */
+  const preview = globalThis.__calls.find(
+    (c) => c.path === "/stages/epub/preview");
+  assert.ok(preview, "предпросмотр шёл через сервер");
+  assert.equal(JSON.stringify(preview.body.params.skip), "[]",
+    "предпросмотр на старте — без исключённых глав");
+  delete globalThis.__stageOptions;
+  delete globalThis.__epubPreview;
 });

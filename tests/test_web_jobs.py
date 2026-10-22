@@ -981,15 +981,22 @@ def test_epub_input_field_autofile():
 
 
 def test_build_epub_to_chapters_clean_patterns_ws():
-    """Очистки (--clean-re) и пропуск номеров (--skip) в web недоступны:
-    их значения из формы (память браузера) в argv не попадают даже."""
+    """`clean_patterns` (очистки) в web недоступны — их делает batch_replace;
+    снятые в предпросмотре секции (`skip`) — наоборот, едут в argv: без этого
+    исключённые главы снова появлялись бы на диске после запуска."""
     argv = build_command("epub",
                          {"mode": "regex",
                           "split_patterns": "第\\d+章",
                           "clean_patterns": " +$ \n^本章完$",
                           "skip": [2, 5]}, {})
     assert " +$ " not in argv and "^本章完$" not in argv
-    assert "--skip" not in argv and "2" not in argv
+    assert "--clean-re" not in argv
+    skips = [argv[i + 1] for i, a in enumerate(argv) if a == "--skip"]
+    assert skips == ["2", "5"]
+    # нечисловой мусор в skip (старая память формы) не роняет сборку argv
+    argv_bad = build_command("epub", {"mode": "toc", "skip": ["x", None]},
+                             {})
+    assert "--skip" not in argv_bad
 
 
 def test_build_epub_to_chapters_split_patterns_ws():
@@ -2327,6 +2334,62 @@ def test_jobs_start_validates_numeric_bounds(jobs_srv):
     assert res.status != 400 or "максимум" not in payload.get("error", "")
     assert res.status != 400 or "минимум" not in payload.get("error", "")
 
+
+
+def test_jobs_epub_skip_reaches_disk(jobs_srv, tmp_path):
+    """Главная проверка стадии: снятые в предпросмотре главы НЕ попадают в
+    разбивку на диске.
+
+    До этого правки в панели предпросмотра жили только в браузере: новое
+    состояние уходило в params, а build_epub_to_chapters `skip` не читал —
+    запуск разбирал исходник целиком, и исключённые главы снова оказывались
+    в chapters/. Теперь argv собирается одним путём: что показал предпросмотр
+    со снятыми галочками, то и записалось.
+    """
+    import zipfile
+    port, req, jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    src = pdir / "source"
+    src.mkdir(exist_ok=True)
+    episode = src / "book.epub"
+    container = ('<?xml version="1.0"?><container><rootfiles><rootfile '
+                 'full-path="OEBPS/content.opf"/></rootfiles></container>')
+    opf = ('<?xml version="1.0"?><package><manifest>'
+           + "".join(f'<item id="c{i}" href="c{i}.xhtml"/>'
+                     for i in (1, 2, 3)) +
+           '</manifest><spine>'
+           + "".join(f'<itemref idref="c{i}"/>' for i in (1, 2, 3)) +
+           '</spine></package>')
+    with zipfile.ZipFile(episode, "w") as zf:
+        zf.writestr("META-INF/container.xml", container)
+        zf.writestr("OEBPS/content.opf", opf)
+        for i in (1, 2, 3):
+            zf.writestr(f"OEBPS/c{i}.xhtml",
+                        f"<html><body><h1>Глава {i}</h1>"
+                        f"<p>текст {i}</p></body></html>")
+    # предпросмотр со снятой второй главой: папки уже с новой нумерацией
+    res, payload = req("POST", "/api/stages/epub/preview", {
+        "project": "ACTIVE/test_book",
+        "params": {"input": "source/book.epub", "mode": "toc",
+                   "skip": [2]},
+    })
+    assert res.status == 200, payload
+    assert [e["folder"] for e in payload["entries"]] == \
+        ["00000_1_Глава_1", "00000_2_Глава_3"]
+    # запуск теми же params — на диске ровно то, что было в предпросмотре
+    res, payload = req("POST", "/api/jobs", {
+        "action": "epub", "project": "ACTIVE/test_book",
+        "params": {"input": "source/book.epub", "mode": "toc",
+                   "skip": [2], "clean_output": True},
+    })
+    assert res.status == 200, payload
+    _wait_status(jm, payload["job"]["id"], "done", "failed")
+    chapters = sorted(p.name for p in (pdir / "chapters").iterdir()
+                      if p.is_dir())
+    assert chapters == ["00000_1_Глава_1", "00000_2_Глава_3"], chapters
+    # исключённая глава не создана ни под каким номером
+    assert not any("Глава_2" in name for name in chapters)
 
 
 def test_jobs_history_trimmed(jobs_srv):

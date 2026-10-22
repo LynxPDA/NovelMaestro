@@ -557,7 +557,11 @@ def _epub_preview_read(pdir: Path) -> dict:
 
 
 def _epub_preview_summary(data: dict) -> dict:
-    """Публичное представление: папки + размеры (без текстов)."""
+    """Публичное представление: папки + размеры (без текстов).
+
+    num_offset едет к клиенту: номер каталога считается от него, и SPA
+    показывает нумерацию так же, как её посчитает скрипт.
+    """
     entries = []
     for e in data.get("entries", []):
         text = e.get("text", "") or ""
@@ -568,23 +572,26 @@ def _epub_preview_summary(data: dict) -> dict:
             "heading": e.get("heading", ""),
             "size_kb": round(len(text.encode("utf-8")) / 1024, 1),
         })
-    return {"entries": entries}
+    return {"entries": entries,
+            "num_offset": data.get("num_offset", 1)}
 
 
-def _epub_preview_run(ctx: dict, pdir: Path, params: dict,
-                      skip: list) -> dict:
-    """Запускает скрипт с --preview-json (синхронно); возвращает данные."""
+def _epub_preview_run(ctx: dict, pdir: Path, params: dict) -> dict:
+    """Запускает скрипт с --preview-json (синхронно); возвращает данные.
+
+    Параметры — ровно та форма, что уйдёт в запуск: снятые галочки секций
+    (`skip`) приезжают внутри params, поэтому предпросмотр и запись на диск
+    собираются одним build_command и не могут разойтись.
+    """
     import subprocess
     import sys as _sys
     repo = Path(_repo_root(ctx))  # repo_root может прийти строкой
     script = script_path("epub", repo)
     if script is None or not script.is_file():
         raise ApiError(500, "Скрипт epub_to_chapters.py не найден")
-    argv = build_command("epub", params, ctx)
+    argv = build_command("epub", params or {}, ctx)
     argv[0] = str(script)
     argv += ["--preview-json", EPUB_PREVIEW_FILE]
-    for s in skip or []:
-        argv += ["--skip", str(s)]
     # stdout потомка — utf-8 (на Windows иначе cp1251 → UnicodeEncodeError
     # на стрелках/значках в тексте предпросмотра; см. PYTHONIOENCODING
     # в web/jobs.py)
@@ -611,8 +618,7 @@ def _epub_preview_post(ctx: dict) -> dict:
     """Создать/обновить предпросмотр (POST /api/stages/epub/preview)."""
     pdir, _sec, _name = _project_ctx(ctx)
     body = ctx["body"] or {}
-    data = _epub_preview_run(ctx, pdir, body.get("params") or {},
-                             body.get("skip") or [])
+    data = _epub_preview_run(ctx, pdir, body.get("params") or {})
     return {"ok": True, "source": data.get("source", ""),
             **_epub_preview_summary(data)}
 

@@ -110,6 +110,25 @@ def _epub_lines(value) -> list[str]:
     return [ln.strip() for ln in str(value).splitlines() if ln.strip()]
 
 
+def _skip_argv(form: dict) -> list[str]:
+    """Пропущенные в предпросмотре разбивки секции (--skip по одному).
+
+    `skip` — не поле реестра, а состояние предпросмотра epub: снятые галочки
+    секций (исходные seq). Запуск обязан пропустить те же секции, что
+    показывает предпросмотр, иначе главы, которые человек исключил, снова
+    появляются на диске. Значения приходят числами из SPA и строками из
+    запроса — принимаются оба вида, мусор отбрасывается.
+    """
+    raw = form.get("skip")
+    out: list[str] = []
+    for item in raw if isinstance(raw, (list, tuple)) else []:
+        try:
+            out += ["--skip", str(int(item))]
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _replace_lines(value) -> list[str]:
     r"""Строки textarea правил замен (batch_replace/replace_patterns).
 
@@ -131,9 +150,10 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
     mode = str(form.get("mode") or "toc")
     argv += ["--mode", mode]
     # «Замены и очистки» из формы epub убраны: замены после разбивки делает
-    # отдельная стадия batch_replace, --clean-re и --skip остаются CLI-флагами
-    # (своих настроек в реестре нет); из очисток в форме остаётся только
-    # чекбокс предварительной очистки текста (--clean-text)
+    # отдельная стадия batch_replace (--clean-re остаётся CLI-флагом, своей
+    # настройки в реестре нет); из очисток в форме остаётся только чекбокс
+    # предварительной очистки текста (--clean-text). --skip приезжает
+    # состоянием предпросмотра (снятые галочки секций), а не полем реестра.
     for p in _epub_lines(form.get("split_patterns")):
         argv += ["--split-re", p]
     if form.get("chunk_size") not in (None, ""):
@@ -148,6 +168,7 @@ def build_epub_to_chapters(form: dict, ctx: dict) -> list[str]:
         argv += ["--title-limit", str(form["title_limit"])]
     if form.get("num_offset") not in (None, ""):
         argv += ["--num-offset", str(form["num_offset"])]
+    argv += _skip_argv(form)
     if form.get("output_type") not in (None, "", "chapter"):
         argv += ["--output-type", str(form["output_type"])]
     argv += _bool_argv(form, "clean_text", "--clean-text", "--no-clean-text")
