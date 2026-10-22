@@ -899,6 +899,17 @@ def load_ner_data(filepath, ngram_size, logger):
         item["_term_norm"] = term_norm
         item["_term_lower"] = term_norm  # совместимость
         item["_ngrams"] = get_ngrams(term_norm, n=ngram_size) if len(term_norm) >= 3 else set()
+        # алиасы — тоже варианты поиска, и не только точного: без
+        # нормализации и n-грамм падежная форма алиаса («Нет
+        # Неудачницы») не находилась, хотя сам термин находился
+        item["_alias_norm"] = [
+            a for a in (normalize_for_search(v) for v in alias_list(item.get("aliases")))
+            if a
+        ]
+        item["_alias_ngrams"] = [
+            (a, get_ngrams(a, n=ngram_size) if len(a) >= 3 else set())
+            for a in item["_alias_norm"]
+        ]
         # русское написание — для поиска имён по translation (polish)
         trans_norm = normalize_for_search(item.get("translation", ""))
         item["_translation_norm"] = trans_norm
@@ -992,11 +1003,19 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
         if i in found:
             continue
         term_norm = item["_term_norm"]
-        if not term_norm or is_cjk(term_norm[0]):
-            continue
-        if _fuzzy_hit(term_norm, item["_ngrams"], text_norm,
-                      text_ngrams, threshold):
-            found.add(i)
+        if term_norm and not is_cjk(term_norm[0]):
+            if _fuzzy_hit(term_norm, item["_ngrams"], text_norm,
+                          text_ngrams, threshold):
+                found.add(i)
+                continue
+        # нечёткий поиск — и по алиасам: термин и его альтернативные
+        # написания равноправны в тексте книги (у CJK-термина алиас
+        # бывает латиницей или кириллицей — он ищется как обычное слово)
+        for a_norm, a_ngrams in item.get("_alias_ngrams") or ():
+            if a_norm and not is_cjk(a_norm[0]) and _fuzzy_hit(
+                    a_norm, a_ngrams, text_norm, text_ngrams, threshold):
+                found.add(i)
+                break
 
     if not found:
         return "[]", 0

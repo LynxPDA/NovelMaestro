@@ -941,6 +941,57 @@ def test_load_ner_data_missing_and_broken(tmp_path):
     assert data == [] and automaton is None
 
 
+def test_aliases_participate_in_fuzzy_search(tmp_path):
+    """Алиас ищется в тексте наравне с термином, включая падежные формы.
+
+    Раньше нечёткий проход смотрел только на term: «Нет Неудачницы» не
+    находило запись с `aliases: ["Неудачница"]`, хотя сам термин находился
+    в любом падеже — альтернативные написания выпадали из поиска."""
+    p = tmp_path / "ner.json"
+    p.write_text(json.dumps([
+        {"term": "黑猫", "translation": "Чёрная Кошка",
+         "type": "Person (female)", "count": 10,
+         "aliases": ["Неудачница", "Felicia Hardy"]},
+        {"term": "陈阳", "translation": "Чэнь Ян", "type": "Person (male)",
+         "count": 50, "aliases": ["陳陽"]},
+    ], ensure_ascii=False), encoding="utf-8")
+    data, automaton = C.load_ner_data(str(p), 3, SilentLog())
+
+    def found(text):
+        s, _ = C.find_relevant_ner(text, data, 0.7, 3, "term,translation",
+                                   automaton=automaton)
+        return [e["term"] for e in json.loads(s)]
+
+    # точная форма и падежи алиаса (кириллица)
+    for text in ("Пришла Неудачница", "Нет Неудачницы",
+                 "с Неудачницей", "Неудачницу"):
+        assert found(text) == ["黑猫"], f"алиас не найден: {text}"
+    # латиница-алиас и CJK-алиас (термин CJK — алиас тоже ищется)
+    assert found("Здесь Felicia Hardy") == ["黑猫"]
+    assert found("陳陽 пришёл") == ["陈阳"]
+    # посторонний текст ничего не находит
+    assert found("Обычный текст без имён") == []
+
+
+def test_alias_only_match_via_fuzzy_keeps_term(tmp_path):
+    """В блок попадает ТЕРМИН записи, а не сработавший алиас: LLM нужна
+    каноническая пара term→translation."""
+    p = tmp_path / "ner.json"
+    p.write_text(json.dumps([
+        {"term": "黑猫", "translation": "Чёрная Кошка",
+         "aliases": ["Неудачница"], "count": 5},
+    ], ensure_ascii=False), encoding="utf-8")
+    data, automaton = C.load_ner_data(str(p), 3, SilentLog())
+    s, n = C.find_relevant_ner("Нет Неудачницы", data, 0.7, 3,
+                               "term,translation,aliases",
+                               automaton=automaton)
+    assert n == 1
+    entry = json.loads(s)[0]
+    assert entry["term"] == "黑猫"
+    assert entry["translation"] == "Чёрная Кошка"
+    assert entry["aliases"] == ["Неудачница"]
+
+
 def test_load_ner_data_skips_empty_term(tmp_path):
     data, _ = C.load_ner_data(_write_ner(tmp_path), 3, SilentLog())
     assert [d["term"] for d in data] == ["陈阳", "Linh Thuy"]
