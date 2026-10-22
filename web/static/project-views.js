@@ -2029,6 +2029,9 @@ function viewProject(section, name, tab, job) {
        компактным JSON, а не «[object Object]» */
     const cellText = UICore.nerCellText;
     const isStruct = (v) => v != null && typeof v === "object";
+    /* Поля-списки: в записи могут отсутствовать (тогда isStruct говорит
+       «скаляр», и пустой ввод писал в них пустую строку) */
+    const STRUCT_OPTIONAL = new Set(["aliases"]);
 
     /* сортировка кликом по заголовку; дефолт — count ↓ даже без столбца.
        Порядок — состояние вкладки: книга помнит, по чему её сортировали */
@@ -2539,7 +2542,12 @@ function viewProject(section, name, tab, job) {
       function commit() {
         for (const c of visibleCols()) {
           const raw = inputs[c].value;
-          if (isStruct(it[c])) {
+          const was = it[c];
+          const changed = raw !== (isStruct(was)
+            ? UICore.nerStructJson(was)
+            : cellText(was));
+          if (!changed) continue;
+          if (isStruct(was)) {
             if (raw.trim()) {
               try {
                 it[c] = JSON.parse(raw);
@@ -2556,9 +2564,34 @@ function viewProject(section, name, tab, job) {
                  (`[term] + ""` → TypeError) */
               delete it[c];
             }
-          } else {
-            it[c] = raw;
+            continue;
           }
+          /* Поле, которого в записи нет, но которое бывает списком
+             (aliases), — всё равно структура: пустой ввод удаляет ключ, а
+             введённое читается как JSON-список. Иначе в aliases попадала
+             пустая СТРОКА — и стадия падала на `[term] + ""`. */
+          if (STRUCT_OPTIONAL.has(c)) {
+            if (!raw.trim()) {
+              delete it[c];
+              continue;
+            }
+            try {
+              const parsed = JSON.parse(raw);
+              it[c] = Array.isArray(parsed) ? parsed : [String(parsed)];
+            } catch {
+              /* «Кошка, Чёрная кошка» — тоже имена, а не ошибка ввода */
+              it[c] = raw
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean);
+            }
+            continue;
+          }
+          /* Числа (count) остаются числами: commit() пишет текстом из
+             input, и count становится "132" — сортировка и пороги
+             ломались на унарном минусе */
+          const num = typeof was === "number" ? Number(raw) : NaN;
+          it[c] = Number.isFinite(num) ? num : raw;
         }
         if (it.__new) {
           const t = String(it.term || "").trim();

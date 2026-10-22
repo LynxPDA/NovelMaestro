@@ -2436,6 +2436,59 @@ test("глоссарий: правка записи со структурой н
     { "Person (male)": 6 });
 });
 
+test("глоссарий: правка одного поля не пишет пустую строку в aliases",
+  async () => {
+    /* Регресс боевой книги: записи без ключа aliases при сохранении любого
+       поля получали "aliases": "", и стадия падала на `[term] + ""`.
+       Заодно count (число) не должен становиться строкой. */
+    const items = [{
+      term: "古一", type: "Person (male)", translation: "Древний", count: 132,
+      reading: "Gǔ Yī",
+      _votes_type: { "Person (male)": 119, "Person (female)": 12 },
+    }];
+    const page = await nerPage(items, { "nerCols:ACTIVE/Книга": null });
+    await tick();
+    const edit = findByClass(nerRows(page)[0], "icon-btn")
+      .find((b) => b.getAttribute("aria-label") === "Редактировать");
+    await edit._listeners.click[0]();
+    /* правим только перевод */
+    const transInp = findTag(nerRows(page)[0], "input")
+      .find((i) => i.value === "Древний");
+    transInp.value = "Древняя";
+    const ok = findByClass(nerRows(page)[0], "ner-actions")[0]
+      .querySelectorAll("button")[0];
+    await ok._listeners.click[0]();
+    await tick();
+    const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
+    assert.ok(saved, "глоссарий сохранён");
+    const it = saved.body.items[0];
+    assert.equal(it.translation, "Древняя");
+    assert.equal("aliases" in it, false, "в aliases не появилась пустая строка");
+    assert.equal(it.count, 132, "count остался числом");
+    assert.equal(it.reading, "Gǔ Yī", "нетронутое поле не перезаписано");
+  });
+
+test("глоссарий: заполненный aliases остаётся списком, пустой — удаляется",
+  async () => {
+    const items = [{ term: "黑猫", translation: "Чёрная Кошка", count: 10 }];
+    const page = await nerPage(items, { "nerCols:ACTIVE/Книга": null });
+    await tick();
+    const edit = findByClass(nerRows(page)[0], "icon-btn")
+      .find((b) => b.getAttribute("aria-label") === "Редактировать");
+    await edit._listeners.click[0]();
+    /* столбца aliases в записи нет — добавляем через колонку «все столбцы» */
+    const inputs = findTag(nerRows(page)[0], "input");
+    const termInp = inputs.find((i) => i.value === "黑猫");
+    termInp.value = "黑猫 ";
+    const ok = findByClass(nerRows(page)[0], "ner-actions")[0]
+      .querySelectorAll("button")[0];
+    await ok._listeners.click[0]();
+    await tick();
+    const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
+    assert.equal("aliases" in saved.body.items[0], false,
+      "пустой aliases не появляется в записи");
+  });
+
 /* ── редакторы промптов и предпросмотр запроса ─────────────────── */
 
 test("редакторы: у промпта язык — выбор с «Внешнего вида» (дефолт — prompts)", async () => {
