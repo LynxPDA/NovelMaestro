@@ -2544,6 +2544,82 @@ input[type="number"] {
   font-size: 13px;
 }
 
+/* ── шкала допуска пары «объём ↔ объём» (отчёт translate_check) ──
+   Полоса — допуск при текущем K, штрих — медиана книги, точки —
+   главы с ошибками. Всё в ОТНОШЕНИЯХ: числа совпадают со строкой
+   ошибки и с шапкой отчёта, пересчитывать проценты не нужно. */
+.check-scale {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.check-scale-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.check-scale-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.check-scale-nums,
+.check-scale-legend {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.check-scale-track {
+  position: relative;
+  height: 26px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.check-scale-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+}
+
+.check-scale-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-dim);
+}
+
+.check-scale-dot {
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.check-scale-dot.is-out {
+  background: #f85149;
+}
+
 .check-fatal {
   white-space: pre-wrap;
   font-size: 13px;

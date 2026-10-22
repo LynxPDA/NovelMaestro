@@ -5679,6 +5679,103 @@ function viewProject(section, name, tab, job) {
   }
 
   /* ── Отчёты translate_check — секция 2 «Проверки» ── */
+  /* ── шкала пары «объём ↔ объём» в отчёте translate_check ───────────
+   * Пары уже разобраны сервером (web/api_assets.py::_parse_check_stats),
+   * здесь только рисование. Вопрос человека — «почему одна и та же ошибка
+   * при любом K»: на шкале видно, что допуск — узкая полоса вокруг
+   * медианы, а главы с ошибками лежат от неё далеко. Точки берутся из
+   * строк ошибок отчёта («отношение объёма 0.90 → …»): о нормальных
+   * главах отчёт строк не пишет. */
+  /* точка ошибки: отношение (округлённое в отчёте до сотых) и признак
+     «вне допуска» прямо из строки — по округлённому числу 0.90 не решить,
+     промах это на 0.2% или попадание ровно на границу */
+  function checkRatio(msg) {
+    const s = String(msg);
+    const m = s.match(/отношение объёма (\d+[.,]\d+)/);
+    if (!m) return null;
+    return { value: Number(m[1].replace(",", ".")), out: /вне [\d.]+–[\d.]+/.test(s) };
+  }
+
+  function checkEntries(r) {
+    return Array.isArray(r && r.entries) ? r.entries : [];
+  }
+
+  /* одна шкала: полоса допуска, штрих медианы, точки глав вне допуска */
+  function checkScale(st, points) {
+    const sc = UICore.checkScale(st, points, null, null);
+    if (!sc) return null;
+    const dots = sc.points.map((p) =>
+      h("span", {
+        class: "check-scale-dot" + (p.out ? " is-out" : ""),
+        style: `left:${p.pos * 100}%`,
+        title: `отношение ${p.value.toFixed(2)}`
+          + (p.out ? " — вне допуска" : " — в допуске"),
+      }),
+    );
+    const track = h(
+      "div",
+      { class: "check-scale-track" },
+      h("div", {
+        class: "check-scale-band",
+        style: `left:${sc.bandLeft * 100}%;width:${sc.bandWidth * 100}%`,
+        title: `допуск при K=${st.k ?? "?"}: ${sc.lo.toFixed(2)}–${sc.hi.toFixed(2)}`,
+      }),
+      h("div", {
+        class: "check-scale-mark",
+        style: `left:${sc.midPos * 100}%`,
+        title: `медиана книги ${sc.median.toFixed(3)}`,
+      }),
+      ...dots,
+    );
+    const out = sc.points.filter((p) => p.out).length;
+    return h(
+      "div",
+      { class: "check-scale" },
+      h(
+        "div",
+        { class: "check-scale-head" },
+        h("span", { class: "check-scale-title" }, `${st.check} vs ${st.ref}`),
+        h(
+          "span",
+          { class: "check-scale-nums" },
+          `допуск ${sc.lo.toFixed(2)}–${sc.hi.toFixed(2)}`
+            + (st.k != null ? ` при K=${st.k}` : "")
+            + (st.mad != null ? ` · MAD ${st.mad}%` : ""),
+        ),
+      ),
+      track,
+      h(
+        "div",
+        { class: "check-scale-legend" },
+        `глав в базе: ${st.chapters ?? "?"}`
+          + (out ? ` · глав вне допуска в отчёте: ${out}` : ""),
+      ),
+    );
+  }
+
+  /* шкалы всех пар отчёта; строка ошибки «[polished vs redacted]» даёт
+     точки своей пары */
+  function checkScales(r) {
+    const stats = Array.isArray(r.stats) ? r.stats : [];
+    if (!stats.length) return [];
+    const entries = checkEntries(r);
+    const out = [];
+    for (const st of stats) {
+      const prefix = `[${st.check} vs ${st.ref}]`;
+      const points = [];
+      for (const e of entries) {
+        for (const msg of e.errors || []) {
+          if (!String(msg).startsWith(prefix)) continue;
+          const v = checkRatio(msg);
+          if (v != null) points.push(v);
+        }
+      }
+      const el = checkScale(st, points);
+      if (el) out.push(el);
+    }
+    return out;
+  }
+
   async function renderCheckReports(section, name) {
     const q = new URLSearchParams({ project: `${section}/${name}` });
     let data;
@@ -5764,13 +5861,13 @@ function viewProject(section, name, tab, job) {
           `тип: ${r.type || "?"} · диапазон: ${r.range || "?"} · проверено: ${r.checked || "?"} · с ошибками: ${r.failed || "?"} · дата: ${r.date || "?"}`,
         ),
       );
+      body.append(...checkScales(r));
       if (!r.entries?.length) {
         body.append(h("div", { class: "card-hint" }, "Ошибок нет ✓"));
         return;
       }
       const rows = [];
-      /* фрагмент для поиска: последний «…» / '…' / текст после «:» */
-      function searchFragment(msg) {
+      /* фрагмент для поиска: последний «…» / '…' / текст после «:» */      function searchFragment(msg) {
         const q = msg.match(/«([^»]+)»/);
         if (q) return q[1];
         const sq = msg.match(/'([^']+)'/);

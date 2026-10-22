@@ -1183,6 +1183,77 @@
       return "";
     },
 
+    /* ── шкала допуска пары «объём ↔ объём» (отчёт translate_check) ──
+     * Домен — в ОТНОШЕНИЯХ (не в процентах): человек сверяет с ними
+     * число из строки ошибки. Домен расширяется точками глав, иначе
+     * выпавшая глава легла бы на край и читалась как «ровно на границе».
+     * Позиции (pos) — доля ширины шкалы 0..1. Без чисел допуска — null. */
+    checkScale: (st, points, min, max) => {
+      var s = st || {};
+      var lo = Number(s.lo);
+      var hi = Number(s.hi);
+      var med = Number(s.median);
+      if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
+      if (!Number.isFinite(med)) med = (lo + hi) / 2;
+      /* точка — число или {value, out}: out задаёт вызывающий, когда
+         границы напечатаны с округлением и равенство краю ничего не значит
+         (строка ошибки «вне 0.90–1.10» про отношение 0.8974 — это всё-таки
+         ошибка, а не попадание в допуск) */
+      var pts = [];
+      (points || []).forEach(function (p) {
+        var obj = p !== null && typeof p === "object";
+        var raw = obj ? p.value : p;
+        // null и пустая строка — «точки нет», а не ноль
+        if (raw === null || raw === undefined || raw === "") return;
+        var v = Number(raw);
+        if (!Number.isFinite(v)) return;
+        pts.push({
+          value: v,
+          out: obj && p.out !== undefined ? !!p.out : null,
+        });
+      });
+      var dom = [lo, hi, med].concat(
+        pts.map(function (p) {
+          return p.value;
+        }),
+      );
+      // пустой min/max — «не задано»: Number(null) == 0 и уехал бы в домен
+      [min, max].forEach(function (v) {
+        if (v === null || v === undefined || v === "") return;
+        if (Number.isFinite(Number(v))) dom.push(Number(v));
+      });
+      var a = Math.min.apply(null, dom);
+      var b = Math.max.apply(null, dom);
+      // запас по краям: точка на границе не должна липнуть к рамке
+      var pad = (b - a) * 0.06 || 0.01;
+      a -= pad;
+      b += pad;
+      var pos = function (v) {
+        return Math.round(((Number(v) - a) / (b - a)) * 1000) / 1000;
+      };
+      return {
+        min: a,
+        max: b,
+        lo: lo,
+        hi: hi,
+        median: med,
+        bandLeft: pos(lo),
+        bandWidth: pos(hi) - pos(lo),
+        midPos: pos(med),
+        /* слева направо: так точки не перекрывают друг друга там, где их
+           несколько с одинаковым отношением */
+        points: pts.sort(function (x, y) {
+          return x.value - y.value;
+        }).map(function (p) {
+          return {
+            value: p.value,
+            pos: pos(p.value),
+            out: p.out === null ? p.value < lo || p.value > hi : p.out,
+          };
+        }),
+      };
+    },
+
     /* ── дерево каталога из плоского списка путей (шаблоны) ── */
     dirEntries: (files, prefix) => {
       var entries = [];

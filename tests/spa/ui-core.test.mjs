@@ -1136,3 +1136,70 @@ test("projectPrefs: битый JSON и недоступное хранилище
   assert.deepEqual(dead.get("editor"), { mode: "one" });
   assert.equal(writes, 1, "попытка записи была — и осталась единственной");
 });
+
+test("checkScale: полоса допуска, медиана и точки глав", () => {
+  /* пара из боевого отчёта: медиана 0.999, MAD 0.4%, K=25 → 0.90–1.10 */
+  const stat = { lo: 0.9, hi: 1.1, median: 0.999 };
+  const sc = UICore.checkScale(stat, [0.9, 0.87, 1.4], null, null);
+  /* домен расширен точками и запасом по краям: выпавшая глава не на рамке */
+  assert.ok(sc.min < 0.87 && sc.max > 1.4, `${sc.min}..${sc.max}`);
+  /* полоса начинается на нижней границе и тянется до верхней */
+  assert.ok(sc.bandLeft > 0 && sc.bandLeft < sc.bandLeft + sc.bandWidth);
+  /* ширина полосы = ровно допуск в долях домена */
+  assert.ok(
+    Math.abs(sc.bandWidth - 0.2 / (sc.max - sc.min)) < 1e-3,
+    `${sc.bandWidth} vs ${0.2 / (sc.max - sc.min)}`,
+  );
+  /* штрих медианы — внутри полосы */
+  assert.ok(sc.midPos > sc.bandLeft && sc.midPos < sc.bandLeft + sc.bandWidth);
+  /* точки отсортированы слева направо, вне допуска помечены */
+  assert.deepEqual(sc.points.map((p) => p.value), [0.87, 0.9, 1.4]);
+  assert.deepEqual(sc.points.map((p) => p.out), [true, false, true]);
+  assert.ok(sc.points[0].pos < sc.points[1].pos);
+});
+
+test("checkScale: без чисел допуска — null, старый отчёт не роняет вкладку", () => {
+  assert.equal(UICore.checkScale(null, [1], null, null), null);
+  assert.equal(UICore.checkScale({ lo: null, hi: null }, [], null, null), null);
+  /* границы схлопнуты или перевёрнуты — рисовать нечего */
+  assert.equal(UICore.checkScale({ lo: 1, hi: 1 }, [], null, null), null);
+  assert.equal(UICore.checkScale({ lo: 2, hi: 1 }, [], null, null), null);
+});
+
+test("checkScale: пустые точки — шкала из одного допуска", () => {
+  const sc = UICore.checkScale({ lo: 0.98, hi: 1.02, median: 1.0 }, [], null, null);
+  assert.deepEqual(sc.points, []);
+  assert.ok(sc.min < 0.98 && sc.max > 1.02);
+  assert.ok(Math.abs(sc.midPos - (sc.bandLeft + sc.bandWidth / 2)) < 0.01);
+});
+
+test("checkScale: точка сама называет, мимо ли она (границы округлены)", () => {
+  /* в отчёте напечатано «вне 0.90–1.10», а отношение показано как 0.90:
+     по числу не отличить промах на 0.2% от попадания ровно на границу */
+  const sc = UICore.checkScale(
+    { lo: 0.9, hi: 1.1, median: 0.999 },
+    [{ value: 0.9, out: true }, { value: 1.0 }],
+    null,
+    null,
+  );
+  assert.deepEqual(sc.points.map((p) => p.out), [true, false]);
+  /* без явного out работает сравнение с границами */
+  const plain = UICore.checkScale({ lo: 0.9, hi: 1.1, median: 1 }, [0.5, 1.0], null, null);
+  assert.deepEqual(plain.points.map((p) => p.out), [true, false]);
+  /* мусор в точках не ломает шкалу */
+  const junk = UICore.checkScale({ lo: 0.9, hi: 1.1, median: 1 }, [null, "x", 1.0], null, null);
+  assert.equal(junk.points.length, 1);
+});
+
+test("checkScale: пустой min/max не превращается в ноль", () => {
+  /* Number(null) === 0: без защиты домен уезжал до 0 и полоса занимала
+     правую четверть пустой шкалы (видно на скриншоте прогона) */
+  const sc = UICore.checkScale({ lo: 0.9, hi: 1.1, median: 0.999 }, [], null, null);
+  assert.ok(sc.min > 0.88, `min=${sc.min}`);
+  assert.ok(sc.max < 1.12, `max=${sc.max}`);
+  /* полоса занимает почти всю шкалу домена */
+  assert.ok(sc.bandWidth > 0.7, `bandWidth=${sc.bandWidth}`);
+  /* переданный min/max работает как раньше */
+  const wide = UICore.checkScale({ lo: 0.9, hi: 1.1, median: 1 }, [], 0.5, 1.5);
+  assert.ok(wide.min < 0.5 && wide.max > 1.5);
+});
