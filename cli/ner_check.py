@@ -821,6 +821,9 @@ def run_rag(args, stage, prompt_tpl) -> int:
 
     total = len(tasks)
     # ── Предпросмотр запроса (--preview-request): RAG первого термина ──
+    if not tasks:
+        logger.error("❌ ПРЕДПРОСМОТР: нет терминов для RAG-запроса")
+        return 1
     term0, msg0 = tasks[0]
     if stage.preview(f"RAG · термин «{term0}» (1/{total})", msg0,
                     meta={"mode": "rag",
