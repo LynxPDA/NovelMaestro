@@ -422,6 +422,164 @@
     return "патч";
   }
 
+  /* ── правки проверок: карточки и фильтры ──────────────────────────────
+     Список правок рисуется карточками: у проверки глоссария одна карточка —
+     один термин (у термина правится несколько полей, и отдельные карточки
+     связь не показывали), у проверки перевода — одна правка.
+
+     Ось фильтра описывает сама себя: `key` — ключ состояния книги, `valueOf`
+     — значение оси у записи, `empty` — подпись записи без значения (у
+     удаления термина поля нет, у правки перевода может не быть типа). */
+  var REVIEW_AXES = {
+    ner: [
+      {
+        key: "field",
+        label: "Поле",
+        valueOf: function (e) {
+          return nerAction(e) === "удаление" ? "" : String(e.field || "");
+        },
+        empty: "удаление термина",
+      },
+      {
+        key: "stage",
+        label: "Этап",
+        valueOf: function (e) {
+          return String(e.stage || "");
+        },
+        empty: "без этапа",
+      },
+    ],
+    tcl: [
+      {
+        key: "type",
+        label: "Тип ошибки",
+        valueOf: function (e) {
+          return String(e.type || "");
+        },
+        empty: "без типа",
+      },
+    ],
+  };
+  /* статус — ось у всех проверок; корзины не пересекаются, поэтому одна
+   * запись попадает ровно в одну из них */
+  var REVIEW_STATUS_BUCKETS = ["нерешённые", "принять", "отклонить", "применено"];
+
+  function reviewAxes(kind) {
+    return REVIEW_AXES[kind] || REVIEW_AXES.ner;
+  }
+
+  function reviewStatusBucket(entry) {
+    var e = entry || {};
+    if (e["applied"]) return "применено";
+    var s = String(e["status"] || "")
+      .trim()
+      .toLowerCase();
+    return s === "принять" || s === "отклонить" ? s : "нерешённые";
+  }
+
+  /* значения оси по записям: [{value, label, count}] в порядке первого
+     появления — набор чипсов задаёт сам файл, а не список в коде */
+  function reviewAxisValues(entries, axis) {
+    var order = [];
+    var counts = {};
+    for (var i = 0; i < (entries || []).length; i++) {
+      var v = axis.valueOf(entries[i] || {});
+      if (!Object.prototype.hasOwnProperty.call(counts, v)) {
+        order.push(v);
+        counts[v] = 0;
+      }
+      counts[v] += 1;
+    }
+    return order.map(function (v) {
+      return { value: v, label: v || axis.empty || "?", count: counts[v] };
+    });
+  }
+
+  /* запись проходит фильтр. Оси хранят СКРЫТЫЕ значения (как столбцы
+     глоссария: пустой список — «видно всё», галочка снята — значение
+     скрыто): так новый тип правки в файле появляется видимым сам, а снятие
+     одной галочки не требует заново отмечать остальные. status — один
+     выбор: «все» или корзина статуса */
+  function reviewFilterMatch(entry, filters, kind) {
+    var f = filters || {};
+    var axes = reviewAxes(kind);
+    for (var i = 0; i < axes.length; i++) {
+      var hidden = f[axes[i].key];
+      if (!hidden || !hidden.length) continue;
+      if (hidden.includes(axes[i].valueOf(entry || {}))) return false;
+    }
+    var st = String(f.status || "");
+    if (st && st !== "все" && reviewStatusBucket(entry) !== st) return false;
+    return true;
+  }
+
+  /* карточки списка: [{key, title, entries: [{index, entry}]}]; index —
+     позиция записи в review-файле (по ней правят запись) */
+  function reviewGroups(entries, kind) {
+    var list = entries || [];
+    var out = [];
+    var byKey = {};
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i] || {};
+      var key =
+        kind === "ner" ? "t:" + String(e["term"] || "") : "#" + String(i);
+      var g = byKey[key];
+      if (!g) {
+        g = { key: key, title: String(e["term"] || ""), entries: [] };
+        byKey[key] = g;
+        out.push(g);
+      }
+      g.entries.push({ index: i, entry: e });
+    }
+    return out;
+  }
+
+  /* видимые правки — под фильтром (без группировки) */
+  function reviewVisibleEntries(entries, filters, kind) {
+    return (entries || []).filter(function (e) {
+      return reviewFilterMatch(e, filters, kind);
+    });
+  }
+
+  /* карточки под фильтром: группа остаётся видимой и показывает только
+     те свои правки, которые прошли фильтр */
+  function reviewVisibleGroups(entries, filters, kind) {
+    var out = [];
+    var groups = reviewGroups(entries, kind);
+    for (var gi = 0; gi < groups.length; gi++) {
+      var shown = groups[gi].entries.filter(function (it) {
+        return reviewFilterMatch(it.entry, filters, kind);
+      });
+      if (!shown.length) continue;
+      out.push({
+        key: groups[gi].key,
+        title: groups[gi].title,
+        entries: shown,
+        all: groups[gi].entries,
+      });
+    }
+    return out;
+  }
+
+  /* статус карточки: общий, когда у всех правок термина он одинаковый */
+  function reviewGroupStatus(entries) {
+    var list = entries || [];
+    if (!list.length) return "";
+    var seen = {};
+    var keys = [];
+    var allApplied = true;
+    for (var i = 0; i < list.length; i++) {
+      var b = reviewStatusBucket(list[i]);
+      if (b !== "применено") allApplied = false;
+      if (!Object.prototype.hasOwnProperty.call(seen, b)) {
+        seen[b] = true;
+        keys.push(b);
+      }
+    }
+    if (allApplied) return "применено";
+    return keys.length === 1 ? keys[0] : "смешанные";
+  }
+
   /* первый клик по столбцу — убывание, повторный — возрастание */
   function nextNerSort(field, dir, clicked) {
     if (clicked && clicked === field) {
@@ -818,10 +976,10 @@
    * чужое снятие ключа не отменялось устаревшей памятью. */
   var BOOK_SAVE_DELAY = 500; // мС тишины после последнего изменения
   /* Ключи книги, значение которых — JSON (у остальных это голая строка:
-   * `nmProfile:…` — id профиля, `nerLock:…` — «1»/«0»). */
+     `nmProfile:…` — id профиля, `nerLock:…` — «1»/«0»). */
   var BOOK_JSON_PREFIXES = [
     "nmTab:", "runVals:", "chips:", "nerCols:", "nerSearch:", "nerTypes:",
-    "search:",
+    "search:", "reviewFilter:",
   ];
 
   function isJsonKey(key) {
@@ -1615,6 +1773,17 @@
       next["updated"] = new Date().toISOString().slice(0, 16).replace("T", " ");
       return next;
     },
+
+    /* ── правки проверок: карточки терминов и оси фильтров ── */
+    reviewAxes: reviewAxes,
+    reviewAxisValues: reviewAxisValues,
+    reviewFilterMatch: reviewFilterMatch,
+    reviewGroups: reviewGroups,
+    reviewVisibleEntries: reviewVisibleEntries,
+    reviewVisibleGroups: reviewVisibleGroups,
+    reviewGroupStatus: reviewGroupStatus,
+    reviewStatusBucket: reviewStatusBucket,
+    REVIEW_STATUS_BUCKETS: REVIEW_STATUS_BUCKETS,
 
     /* сводка по записям: всего / принято / отклонено / применено */
     reviewSummary: (entries) => {

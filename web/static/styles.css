@@ -2126,25 +2126,104 @@ input[type="number"] {
 .rv-row-reject {
   opacity: 0.75;
 }
-/* правка-удаление: термин уходит из глоссария целиком (не правка поля) */
-.rv-row-del {
-  border-left: 3px solid var(--danger);
-}
 .rv-del {
   color: var(--danger);
 }
-/* продолжение группы правок одного термина: без рамки сверху —
-   визуально связано с первой строкой группы */
-.rv-row-cont {
-  margin-top: -6px;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-  border-top: none;
-  padding-top: 4px;
+/* панель фильтров списка правок: оси (поле/этап/тип), статус и счётчик */
+.rv-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 2px;
 }
-.rv-row-cont .rv-row-title {
-  font-weight: 500;
-  opacity: 0.8;
+/* ось фильтра — не отдельной широкой строкой, а блоком в общем потоке:
+   чипсов бывает немного, и лишняя строка на каждую ось — шум */
+.rv-axis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.rv-filters .spacer {
+  flex: 1;
+}
+.rv-filter-count {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.rv-status-sel {
+  width: auto;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.rv-chip {
+  cursor: pointer;
+}
+/* снятая галочка — значение скрыто: чипс гаснет, но подпись читается */
+.rv-chip-off {
+  opacity: 0.55;
+}
+.rv-chip-off .rv-chip-label {
+  text-decoration: line-through;
+}
+.rv-chip .checkbox {
+  width: 14px;
+  height: 14px;
+}
+/* фильтр спрятал часть полей термина — сказано словами: бейдж и действия
+   карточки считаются по всему термину */
+.rv-group-note {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+/* «статусы разные» — не ошибка и не решение, а факт: карточка говорит об
+   этом нейтрально, красным помечается только отказ */
+.rv-row-head .badge {
+  flex: none;
+}
+/* карточка термина: полей несколько — разделяем их тонкой линией, чтобы
+   «было → стало» разных полей не читались одной строкой */
+.rv-group .rv-field:first-of-type {
+  margin-top: 2px;
+}
+.rv-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 0 6px 8px;
+  border-left: 2px solid var(--border);
+}
+.rv-field + .rv-field {
+  border-top: 1px dashed var(--border);
+}
+.rv-field-del {
+  border-left-color: var(--danger);
+}
+.rv-field-reject {
+  opacity: 0.7;
+}
+.rv-field-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.rv-field-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.rv-field-key {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.rv-field-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 .rv-row-head {
   display: flex;

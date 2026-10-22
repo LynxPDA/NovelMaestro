@@ -158,7 +158,8 @@ function seedProjectsDir(dir) {
     ),
     "utf-8",
   );
-  // review-файл глоссария: оба действия правки — патч поля и удаление термина
+  // review-файл глоссария: оба действия правки — патч поля и удаление
+  // термина, а у «мир» правится ДВА поля: одна карточка на термин
   fs.mkdirSync(path.join(book, "tmp"), { recursive: true });
   fs.writeFileSync(
     path.join(book, "tmp", "ner_review.json"),
@@ -171,13 +172,40 @@ function seedProjectsDir(dir) {
           { stage: "Весь глоссарий", action: "патч", term: "мир",
             field: "translation", old: "мир", new: "свет",
             reason: "по контексту", status: "принять", applied: false },
+          { stage: "Весь глоссарий", action: "патч", term: "мир",
+            field: "type", old: "other", new: "other (abstract)",
+            reason: "не сущность", status: "принять", applied: false },
           { stage: "Весь глоссарий", action: "патч", term: "глава",
             field: "type", old: "other", new: "other (female)",
             reason: "род", status: "отклонить", applied: false },
-          { stage: "RAG", action: "удаление", term: "мир", field: "",
-            old: "type=other (female); translation=мир", new: "",
+          { stage: "RAG", action: "удаление", term: "глава", field: "",
+            old: "type=other; translation=глава", new: "",
             reason: "обычное слово, не термин лора", status: "принять",
             applied: false },
+        ],
+      },
+      null, 2,
+    ) + "\n",
+    "utf-8",
+  );
+  // файл правок проверки перевода: ось фильтра здесь — ТИП ошибки, а карточка
+  // одна на правку (терминов в этих записях нет)
+  fs.writeFileSync(
+    path.join(book, "tmp", "translate_check_llm_review.json"),
+    JSON.stringify(
+      {
+        created: "2025-01-01 00:00",
+        updated: "2025-01-02 00:00",
+        entries: [
+          { stage: "проверка перевода", chapter: 1, file: "polished.txt",
+            type: "typo", old: "карова", new: "корова", reason: "опечатка",
+            status: "принять", applied: false },
+          { stage: "проверка перевода", chapter: 1, file: "polished.txt",
+            type: "missing_word", old: "он пришёл", new: "он не пришёл",
+            reason: "потеряно отрицание", status: "", applied: false },
+          { stage: "проверка перевода", chapter: 2, file: "polished.txt",
+            type: "grammar", old: "ихний", new: "их", reason: "норма",
+            status: "отклонить", applied: false },
         ],
       },
       null, 2,
@@ -3095,11 +3123,11 @@ async function main() {
     await page.unroute("**/api/update/status");
   }
 
-  /* правка-удаление в обзоре глоссария: своё действие в заголовке, своё
-   * значение в diff (не пустой «Стало») и своя модалка без поля «Стало».
-   * Заодно — структура самой карточки: режим один (переключателя режимов и
-   * нижних кнопок нет), применение — кнопкой в сводке, файл правок открывается
-   * ссылкой строки состояния (она ведёт в «Файлы» с редактором файла) */
+  /* правки глоссария: одна карточка на ТЕРМИН (полей у термина бывает
+   * несколько — отдельные карточки связь не показывали), панель фильтров по
+   * полю/этапу/статусу, у правки-удаления своя строка и своя модалка без
+   * «Стало». Применение — кнопкой в сводке, файл правок открывается ссылкой
+   * строки состояния (ведёт в редактор поверх этой же вкладки) */
   {
     const before = problems.length;
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/review`, {
@@ -3108,26 +3136,133 @@ async function main() {
     await page.reload({ waitUntil: "load" });
     await page.waitForSelector(".rv-row", { timeout: 15000 });
     await page.waitForTimeout(900);
-    const rows = await page.evaluate(() =>
-      [...document.querySelectorAll(".rv-row")].map((r) => ({
+    // панели всех проверок живут в DOM одновременно — считаем только видимую
+    const cards = await page.evaluate(() =>
+      [...(document.querySelector(".review-pane:not([style*=\"none\"])")
+        ?.querySelectorAll(".rv-row") || [])].map((r) => ({
         title: (r.querySelector(".rv-row-title") || {}).textContent?.trim() || "",
-        del: r.classList.contains("rv-row-del"),
-        diff: (r.querySelector(".rv-diff") || {}).textContent?.trim() || "",
+        note: (r.querySelector(".rv-group-note") || {}).textContent?.trim() || "",
+        badge: (r.querySelector(".rv-row-head .badge") || {}).textContent?.trim() || "",
+        fields: [...r.querySelectorAll(".rv-field")].map((f) => ({
+          name: (f.querySelector(".rv-field-name") || {}).textContent?.trim() || "",
+          del: f.classList.contains("rv-field-del"),
+          diff: (f.querySelector(".rv-diff") || {}).textContent?.trim() || "",
+        })),
+        groupActs: [...r.querySelectorAll(":scope > .rv-actions button")]
+          .map((b) => (b.textContent || b.getAttribute("aria-label") || "").trim()),
+        acts: [...r.querySelectorAll(".rv-field-actions button")]
+          .map((b) => b.getAttribute("aria-label") || b.textContent.trim()),
       })),
     );
-    if (rows.length !== 3) problems.push(`review: строк ${rows.length} (ожидаем 3)`);
-    const dels = rows.filter((x) => x.del);
-    if (dels.length !== 1) problems.push(`review: строк удаления ${dels.length} (ожидаем 1)`);
-    for (const d of dels) {
-      if (!/удаление термина/.test(d.title))
-        problems.push(`review: заголовок удаления «${d.title}»`);
+    // терминов два («мир» с двумя полями и «глава»), карточек — две
+    if (cards.length !== 2) problems.push(`review: карточек ${cards.length} (ожидаем 2)`);
+    const mir = cards.find((c) => c.title.startsWith("мир")) || {};
+    if (!/полей 2/.test(mir.title || ""))
+      problems.push(`review: заголовок группы «${mir.title}»`);
+    if ((mir.fields || []).length !== 2)
+      problems.push(`review: у «мир» строк полей ${(mir.fields || []).length}`);
+    const names = (mir.fields || []).map((f) => f.name);
+    for (const w of ["Перевод", "Тип"])
+      if (!names.includes(w)) problems.push(`review: у «мир» нет поля «${w}»`);
+    if (!(mir.groupActs || []).includes("Принять все"))
+      problems.push(`review: у группы нет «Принять все»: ${(mir.groupActs || []).join(", ")}`);
+    const delField = cards
+      .flatMap((c) => (c.fields || []).map((f) => ({ ...f, card: c.title })))
+      .filter((f) => f.del);
+    if (delField.length !== 1)
+      problems.push(`review: строк удаления ${delField.length} (ожидаем 1)`);
+    // полный список — без пометки «показано частично»
+    if (cards.some((c) => c.note))
+      problems.push(`review: пометка частичного фильтра без фильтра`);
+    for (const d of delField) {
+      if (d.name !== "удаление термина")
+        problems.push(`review: имя строки удаления «${d.name}»`);
       if (!d.diff.includes("термин удалится из глоссария"))
         problems.push(`review: diff удаления «${d.diff}»`);
     }
-    if (rows.filter((x) => !x.del).some((x) => /удаление/.test(x.title)))
-      problems.push("review: метка удаления уехала на правку поля");
+    if (cards.every((c) => (c.fields || []).every((f) => !f.del)))
+      problems.push("review: метка удаления пропала");
+    // панель фильтров: чипсы полей и выбор статуса собираются из файла
+    const filt = await page.evaluate(() => {
+      const box = document.querySelector(
+        ".review-pane:not([style*=\"none\"]) .rv-filters");
+      if (!box) return { chips: [], labels: [], sel: "" };
+      const byClass = (n, cls) =>
+        (n.className || "").split(/\s+/).includes(cls);
+      return {
+        chips: [...box.querySelectorAll(".rv-chip")].map((c) =>
+          c.textContent.replace(/\s+/g, " ").trim()),
+        labels: [...box.querySelectorAll(".search-cluster-label")].map((c) =>
+          c.textContent.trim()),
+        sel: (box.querySelector(".rv-status-sel") || {}).value || "",
+      };
+    });
+    if (!filt.chips.length) problems.push("review: нет чипсов фильтра");
+    if (!filt.labels.includes("Поле:") || !filt.labels.includes("Этап:"))
+      problems.push(`review: оси фильтра ${filt.labels.join(", ")}`);
+    if (filt.sel !== "все")
+      problems.push(`review: статус-фильтр «${filt.sel}»`);
+    // галочки стоят («видно всё»); снимаем «translation» и «type» — остаётся
+    // одна карточка «глава» с одной строкой удаления
+    await page.locator('.rv-chip:has-text("translation")').first().click();
+    await page.waitForTimeout(200);
+    await page.locator('.rv-chip:has-text("type (")').first().click();
+    await page.waitForTimeout(400);
+    const filtered = await page.evaluate(() => {
+      const pane = document.querySelector(
+        ".review-pane:not([style*=\"none\"])");
+      return {
+        cards: pane.querySelectorAll(".rv-row").length,
+        fields: [...pane.querySelectorAll(".rv-field-name")].map((f) =>
+          f.textContent.trim()),
+        count: (pane.querySelector(".rv-filter-count") || {})
+          .textContent?.trim() || "",
+        note: (pane.querySelector(".rv-group-note") || {})
+          .textContent?.trim() || "",
+        rows: pane.querySelectorAll(".rv-row .rv-field").length,
+      };
+    });
+    if (filtered.cards !== 1 || filtered.rows !== 1)
+      problems.push(`review: фильтр по удалению — карточек ${filtered.cards}, `
+        + `строк ${filtered.rows}`);
+    if (!/фильтр показывает 1 из 2 полей/.test(filtered.note))
+      problems.push(`review: пояснение частичного фильтра «${filtered.note}»`);
+    if (!/из 4/.test(filtered.count))
+      problems.push(`review: счётчик фильтра «${filtered.count}»`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-review-filter.png") });
+    // выбор фильтра живёт в КНИГЕ (tmp/ui_state), а не в памяти вкладки:
+    // перезагрузка возвращает тот же отбор
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".rv-chip", { timeout: 15000 });
+    await page.waitForTimeout(900);
+    const kept = await page.evaluate(() => {
+      const pane = document.querySelector(
+        ".review-pane:not([style*=\"none\"])");
+      return {
+        off: pane.querySelectorAll(".rv-chip-off").length,
+        count: (pane.querySelector(".rv-filter-count") || {})
+          .textContent?.trim() || "",
+      };
+    });
+    if (kept.off !== 2 || !/из 4/.test(kept.count))
+      problems.push(`review: фильтр не пережил перезагрузку `
+        + `(скрыто ${kept.off}, «${kept.count}»)`);
+    // «Сбросить» возвращает всё: фильтр — выбор, а не правка файла
+    await page.locator('.rv-filter-reset').first().click();
+    await page.waitForTimeout(400);
+    const reset = await page.evaluate(() => {
+      const pane = document.querySelector(
+        ".review-pane:not([style*=\"none\"])");
+      return {
+        cards: pane.querySelectorAll(".rv-row").length,
+        off: pane.querySelectorAll(".rv-chip-off").length,
+      };
+    });
+    if (reset.cards !== 2 || reset.off)
+      problems.push(`review: «Сбросить» — карточек ${reset.cards}, `
+        + `скрытых чипсов ${reset.off}`);
     await page
-      .locator('.rv-row-del button:has-text("Откорректировать")')
+      .locator('.rv-field-del button:has-text("Откорректировать")')
       .first()
       .click();
     await page.waitForTimeout(600);
@@ -3152,8 +3287,6 @@ async function main() {
       const c = document.querySelector(".review-pane .review-card");
       return {
         seg: !!document.querySelector(".seg"),
-        bottom: [...(c?.querySelectorAll(".review-actions button") || [])]
-          .map((b) => b.textContent.trim()),
         summary: [...(c?.querySelectorAll(".review-summary button") || [])]
           .map((b) => [b.textContent.trim(), b.title]),
         link: (c?.querySelector(".review-status a") || {})
@@ -3161,8 +3294,6 @@ async function main() {
       };
     });
     if (card.seg) problems.push("review: вернулся переключатель «Список/JSON»");
-    if (card.bottom.length)
-      problems.push(`review: внизу карточки кнопки: ${card.bottom.join(", ")}`);
     const apply = card.summary.find(([t]) => t === "Применить");
     if (!apply)
       problems.push(`review: в сводке нет «Применить»: ${card.summary.map((x) => x[0]).join(", ")}`);
@@ -3194,16 +3325,60 @@ async function main() {
       await page.waitForTimeout(900);
       const back = await page.evaluate(() => ({
         tab: (document.querySelector(".tab-active") || {}).textContent?.trim() || "",
-        rows: document.querySelectorAll(".rv-row").length,
+        rows: document.querySelector(
+          ".review-pane:not([style*=\"none\"]) .rv-row") ? 1 : 0,
       }));
       if (back.tab !== "Проверки" || !back.rows)
         problems.push(`review: «← Назад» не вернул к списку правок `
           + `(вкладка «${back.tab}», строк ${back.rows})`);
     }
-    log(`${problems.length === before ? "✅" : "❌"} правки глоссария  ${rows.length} строк · «${(dels[0] || {}).title || ""}» · модалка «${m.title}» | режим один · «${apply ? apply[0] : "?"}» · ссылка «${card.link}» → ${opened.tab}: ${opened.meta}`);
+    log(`${problems.length === before ? "✅" : "❌"} правки глоссария  `
+      + `карточек ${cards.length} · «${mir.title || ""}» (полей `
+      + `${(mir.fields || []).length}) · фильтр «${filt.labels.join(" ")}» `
+      + `${filt.chips.length} чипсов · «Применить» · ссылка «${card.link}» → `
+      + `${opened.tab}: ${opened.meta}`);
   }
 
-  /* предпросмотр массовых замен: пробельные правила должны быть ВИДНЫ —
+  /* правки проверки перевода: ось фильтра — тип ошибки, карточка — одна
+   * правка (термина у записи нет), тип без значения подписан «без типа» */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/review`, {
+      waitUntil: "load",
+    });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".subtab", { timeout: 15000 });
+    await page.locator('.subtab:has-text("Перевод (LLM)")').first().click();
+    await page.waitForTimeout(700);
+    const info = await page.evaluate(() => {
+      const pane = [...document.querySelectorAll(".review-pane")]
+        .find((p) => p.offsetParent !== null) || {};
+      const chips = [...(pane.querySelectorAll?.(".rv-chip") || [])];
+      return {
+        cards: pane.querySelectorAll?.(".rv-row").length ?? 0,
+        fields: pane.querySelectorAll?.(".rv-field").length ?? 0,
+        chips: chips.map((c) => c.textContent.replace(/\s+/g, " ").trim()),
+        labels: [...(pane.querySelectorAll?.(".search-cluster-label") || [])]
+          .map((x) => x.textContent.trim()),
+        sel: (pane.querySelector?.(".rv-status-sel") || {}).value || "",
+      };
+    });
+    if (info.cards !== 3 || info.fields !== 3)
+      problems.push(`tcl: карточек ${info.cards} / строк ${info.fields} `
+        + "(ожидаем 3 и 3)");
+    if (!info.labels.includes("Тип ошибки:"))
+      problems.push(`tcl: оси фильтра ${info.labels.join(", ")}`);
+    if (info.chips.length !== 3)
+      problems.push(`tcl: чипсов типа ${info.chips.length} `
+        + `(${info.chips.join(", ")})`);
+    if (info.sel !== "все") problems.push(`tcl: статус-фильтр «${info.sel}»`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-review-tcl.png") });
+    log(`${problems.length === before ? "✅" : "❌"} правки перевода  `
+      + `карточек ${info.cards} · ось «${info.labels.join(" ")}» · `
+      + `чипсов ${info.chips.length} (${info.chips.join(", ")})`);
+  }
+
+  /* предпросмотр массовых замен: пробельные правила должны быть ВИДНЫ —  /* предпросмотр массовых замен: пробельные правила должны быть ВИДНЫ —
    * без меток «^ + ->» неотличим от удаления, а удалённый перенос строки —
    * от пустоты; пробелы паттерна значимы целиком; битая строка —
    * предупреждение, а не падение предпросмотра */

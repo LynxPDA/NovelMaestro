@@ -79,7 +79,17 @@ globalThis.window = {
   addEventListener() {},
 };
 globalThis.Node = El;
-globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+/* память браузера по-настоящему: фильтры правок живут в состоянии книги,
+   и тест обязан видеть, что они туда доехали */
+globalThis.localStorage = (() => {
+  const data = {};
+  return {
+    __data: data,
+    getItem: (k) => (k in data ? data[k] : null),
+    setItem: (k, v) => { data[k] = String(v); },
+    removeItem: (k) => { delete data[k]; },
+  };
+})();
 globalThis.confirm = () => true;
 globalThis.prompt = () => "";
 globalThis.location = { hash: "" };
@@ -184,6 +194,14 @@ function buttons(page) {
   return out;
 }
 
+/* собранный текст узла: в DOM-mock textContent не агрегируется */
+function nodeText(n) {
+  if (!n) return "";
+  if (n.tagName === "#text") return n.textContent || "";
+  return (n.textContent || "") +
+    (n.children || []).map(nodeText).join("");
+}
+
 /* в DOM-mock textContent не агрегируется — ищем по title */
 function bulkBtn(page, label) {
   return buttons(page).find((b) =>
@@ -226,7 +244,7 @@ test("«Отклонить все»: работает по тому же при�
   assert.equal(saved[2]["applied"], true);       // применённая — нетронута
 });
 
-test("правки одного термина группируются: заголовок термина только у первой", async () => {
+test("правки одного термина — одна карточка: строки полей внутри", async () => {
   REVIEW_CONTENT = JSON.stringify({
     created: "t",
     updated: "t",
@@ -246,16 +264,95 @@ test("правки одного термина группируются: заг�
     for (const c of n.children || []) walk(c);
     if ((n.className || "").split(/\s+/).includes("rv-row")) rows.push(n);
   })(page);
-  assert.equal(rows.length, 3);
-  // вторая правка 林凡 — продолжение группы, третья (другой термин) — нет
-  assert.ok(!(rows[0].className || "").includes("rv-row-cont"));
-  assert.ok((rows[1].className || "").includes("rv-row-cont"));
-  assert.ok(!(rows[2].className || "").includes("rv-row-cont"));
-  // заголовок: у первой «термин · поле», у продолжения — только поле
-  const titleOf = (row) => row.children[0].children[0].children[0].textContent;
-  assert.equal(titleOf(rows[0]), "林凡 · type");
-  assert.equal(titleOf(rows[1]), "translation");
-  assert.equal(titleOf(rows[2]), "青云宗 · type");
+  // два термина — две карточки (а не три строки на три правки)
+  assert.equal(rows.length, 2);
+  const titleOf = (row) => nodeText(row.children[0].children[0]);
+  assert.equal(titleOf(rows[0]), "林凡 · полей 2");
+  assert.equal(titleOf(rows[1]), "青云宗 · полей 1");
+  // внутри первой карточки — по строке на поле, с подписью поля
+  const fieldsOf = (row) =>
+    (row.children || []).filter((c) =>
+      (c.className || "").split(/\s+/).includes("rv-field"));
+  const names = (row) =>
+    fieldsOf(row).map((f) => nodeText(f.children[0].children[0]));
+  assert.deepEqual(names(rows[0]), ["Тип", "Перевод"]);
+  assert.deepEqual(names(rows[1]), ["Тип"]);
+});
+
+test("«Принять все» в карточке термина: один PUT на всю группу", async () => {
+  REVIEW_CONTENT = JSON.stringify({
+    created: "t", updated: "t", input: "ner.json",
+    entries: [
+      { term: "林凡", field: "type", old: "A", new: "B", status: "принять" },
+      { term: "林凡", field: "translation", old: "X", new: "Y", status: "" },
+      { term: "林凡", field: "notes", old: "n", new: "m", status: "" },
+    ],
+  }, null, 2);
+  const page = await openReview();
+  const group = buttons(page).filter((b) =>
+    (b._attrs["title"] || "").includes("林凡"));
+  assert.ok(group.length >= 3, `кнопок группы: ${group.length}`);
+  const acceptAll = group.find((b) =>
+    (b._attrs["title"] || "").includes("статус «принять»"));
+  assert.ok(acceptAll, "нет «Принять все» у карточки термина");
+  await acceptAll._listeners["click"][0]();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(putBodies.length, 1, "три поля — один PUT");
+  assert.deepEqual(putBodies[0]["entries"].map((e) => e.status),
+    ["принять", "принять", "принять"]);
+});
+
+/* узлы по классу (в DOM-mock querySelector нет) */
+function byClass(node, cls) {
+  const out = [];
+  (function walk(n) {
+    if ((n.className || "").split(/\s+/).includes(cls)) out.push(n);
+    for (const c of n.children || []) walk(c);
+  })(node);
+  return out;
+}
+
+test("фильтр по полю: чипс скрывает значение, «Сбросить» возвращает всё", async () => {
+  REVIEW_CONTENT = JSON.stringify({
+    created: "t", updated: "t", input: "ner.json",
+    entries: [
+      { term: "林凡", field: "type", old: "A", new: "B", status: "" },
+      { term: "林凡", field: "translation", old: "X", new: "Y", status: "" },
+      { term: "火", field: "", action: "удаление", old: "e", new: "",
+        status: "" },
+    ],
+  }, null, 2);
+  const page = await openReview();
+  const panel = byClass(page, "rv-filters")[0];
+  assert.ok(panel, "нет панели фильтров");
+  const cardsOf = () => byClass(page, "rv-list")[0].children.length;
+  assert.equal(cardsOf(), 2, "два термина — две карточки");
+  const chips = byClass(panel, "rv-chip");
+  // три значения поля: type, translation, удаление термина
+  assert.equal(chips.length, 3);
+  // все галочки стоят: фильтр — «видно всё» (в DOM-mock checked — атрибут)
+  for (const c of chips) assert.equal(c.children[0]._attrs["checked"], "true");
+  // снимаем «type» — карточка «林凡» остаётся только с translation
+  const typeChip = chips[0];
+  typeChip.children[0]._listeners["change"][0]();
+  await new Promise((r) => setTimeout(r, 20));
+  const rows = byClass(page, "rv-list")[0];
+  assert.equal(rows.children.length, 2);
+  assert.equal(byClass(rows.children[0], "rv-field").length, 1,
+    "у «林凡» осталось одно поле");
+  // состояние фильтра — в книге (переживает перезагрузку)
+  const saved = JSON.parse(
+    globalThis.localStorage.__data["reviewFilter:ACTIVE/Книга"]);
+  assert.deepEqual(saved.field, ["type"]);
+  // «Сбросить» — снова всё видно
+  const reset = byClass(panel, "rv-filter-reset")[0];
+  assert.ok(reset, "нет кнопки «Сбросить»");
+  reset._listeners["click"][0]();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(byClass(page, "rv-list")[0].children.length, 2);
+  assert.equal(byClass(page, "rv-filter-count").length, 0,
+    "без фильтров счётчика «видно из» нет");
+  assert.equal(byClass(byClass(page, "rv-filters")[0], "rv-chip-off").length, 0);
 });
 
 test("все статусы уже установлены — PUT не уходит", async () => {

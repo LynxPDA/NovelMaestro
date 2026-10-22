@@ -2992,23 +2992,49 @@ function viewProject(section, name, tab, job) {
       card.append(h("div", { class: "review-card-title" }, title), body);
       // ── состояние: распарсенный review-файл ──
       let parsed = null; // {doc, entries, isArray} | null (нет файла)
-      const RV_PAGE = 100; // правок на страницу списка
+      const RV_PAGE = 100; // карточек на страницу списка
       const RV_LIST = h("div", { class: "rv-list" });
+      /* фильтры списка — раскладка по осям проверки: у глоссария это поле
+         правки и этап, у перевода — тип ошибки; статус есть у всех. Выбор
+         живёт в состоянии книги (`reviewFilter:<раздел>/<книга>`) и
+         переживает перезагрузку страницы вместе с самой книгой */
+      const FILTER_KEY = `reviewFilter:${section}/${name}`;
+      const filters = { field: [], stage: [], type: [], status: "все" };
+      try {
+        const saved = JSON.parse(bookStore().getItem(FILTER_KEY) || "null");
+        if (saved && typeof saved === "object") {
+          for (const ax of UICore.reviewAxes(kind)) {
+            if (Array.isArray(saved[ax.key])) filters[ax.key] = saved[ax.key];
+          }
+          if (typeof saved.status === "string") filters.status = saved.status;
+        }
+      } catch {
+        /* хранилище недоступно — фильтров нет, список полный */
+      }
+      function saveFilters() {
+        // в книгу — только оси этой проверки: чужие ключи там ни о чём
+        const out = { status: filters.status };
+        for (const ax of UICore.reviewAxes(kind)) out[ax.key] = filters[ax.key];
+        try {
+          bookStore().setItem(FILTER_KEY, JSON.stringify(out));
+        } catch {
+          /* хранилище недоступно — выбор живёт до перезагрузки */
+        }
+      }
+      /* фильтры и «сколько видно» — одной строкой над списком; чипсы осей
+         собираются из САМОГО файла: пустой категории в панели нет */
+      const RV_FILTERS = h("div", { class: "rv-filters" });
       /* страница списка правок — общий пейджер (на одной странице молчит);
-         индекс записи глобальный (page * RV_PAGE + i): кнопки правят запись
-         по позиции в parsed.entries, ner-группировка — по предыдущей */
+         карточки группируют записи по термину, а кнопки внутри правят
+         запись по ФАКТИЧЕСКОЙ позиции в parsed.entries */
       const RV_PAGER = UIC.listPager({
         pageSize: RV_PAGE,
         list: RV_LIST,
         hideSinglePage: true,
-        info: (total, page, pages) => ` ${page} / ${pages} · всего ${total} `,
-        rows: (slice, page) =>
-          slice.map((e, i) => {
-            const prev = parsed.entries[page * RV_PAGE + i - 1];
-            const cont =
-              kind === "ner" && prev != null && prev["term"] === e["term"];
-            return entryRow(e, page * RV_PAGE + i, { cont });
-          }),
+        info: (total, page, pages) =>
+          ` ${page} / ${pages} · карточек ${total} · правок ` +
+          `${UICore.reviewVisibleEntries(parsed ? parsed.entries : [], filters, kind).length} `,
+        rows: (slice) => slice.map(tGroupRow),
       });
       /* клик по строке состояния — тот же однофайловый редактор, что в
          «Поиске»: файл правок открывается поверх этой вкладки, «← Назад»
@@ -3209,46 +3235,190 @@ function viewProject(section, name, tab, job) {
         });
         (del ? reasonIn : newIn).focus();
       }
-      function entryRow(e, i, opts) {
-        const cont = opts && opts["cont"]; // продолжение группы термина
-        const applied = e["applied"];
-        const accepted = e["status"] === "принять";
-        const rejected = e["status"] === "отклонить";
-        const badge = applied
-          ? h("span", { class: "badge badge-done" }, "применено")
-          : accepted
-            ? h("span", { class: "badge badge-accept" }, "принять")
-            : rejected
-              ? h("span", { class: "badge badge-reject" }, "отклонить")
-              : h("span", { class: "badge" }, "новая");
-        const actions = h(
+      /* ── карточка термина / правки ───────────────────────────────────
+         Один термин — одна карточка: полей у него правится несколько, и
+         отдельные карточки не показывали, что это одна запись глоссария.
+         Внутри — строка на поле (поле, было → стало, причина), статус и
+         действия — на всю группу. */
+      /* строка одной правки внутри карточки термина: поле, дифф, причина и
+         свои действия (статус, правка текста, удаление — по одной записи).
+         Общий статус группы живёт в шапке карточки; при разных статусах полей
+         подпись есть и у строки — иначе не видно, какое поле принято */
+      function fieldRow(it, opts) {
+        const e = it.entry;
+        const del = isDel(e);
+        const fld = String(e["field"] || "");
+        /* у глоссария строка — это ПОЛЕ записи, у проверки перевода — тип
+           ошибки: там поле одно (текст главы), а различает правки тип */
+        const label = del
+          ? "удаление термина"
+          : kind === "ner"
+            ? UICore.nerFieldLabel(fld)
+            : String(e["type"] || "без типа");
+        const key = kind === "ner" && fld && fld !== label ? fld : "";
+        const showBadge = opts && opts["badge"];
+        return h(
+          "div",
+          {
+            class: "rv-field" + (del ? " rv-field-del" : "") +
+              (reviewRejected(e) ? " rv-field-reject" : ""),
+          },
+          h(
+            "div",
+            { class: "rv-field-head" },
+            h("span", { class: "rv-field-name" }, label),
+            ...(key ? [h("span", { class: "rv-field-key" }, key)] : []),
+            ...(showBadge ? [reviewBadge(UICore.reviewStatusBucket(e))] : []),
+          ),
+          h(
+            "div",
+            { class: "rv-diff" },
+            h("span", { class: "rv-old" }, e["old"] || ""),
+            " → ",
+            del
+              ? h("span", { class: "rv-del" }, "термин удалится из глоссария")
+              : h("span", { class: "rv-new" }, e["new"] || ""),
+          ),
+          e["reason"] ? h("div", { class: "rv-reason" }, e["reason"]) : null,
+          entryMeta(e) ? h("div", { class: "rv-meta" }, entryMeta(e)) : null,
+          h(
+            "div",
+            { class: "rv-field-actions" },
+            statusBtn(it.index, e, "принять", "Принять"),
+            statusBtn(it.index, e, "отклонить", "Отклонить"),
+            h(
+              "button",
+              {
+                class: "btn btn-xs btn-ghost",
+                title: `Откорректировать правку поля «${label}»: текст и причина`,
+                onclick: () => correctModal(it.index, e),
+              },
+              "Откорректировать",
+            ),
+            h(
+              "button",
+              {
+                class: "btn btn-xs btn-ghost rv-del",
+                title: del
+                  ? "Удалить правку из файла"
+                  : `Удалить правку поля «${label}» из файла`,
+                onclick: () =>
+                  confirmModal(
+                    "Удалить правку",
+                    `Запись «${entryHead(e)}» будет удалена из файла`,
+                    "УДАЛИТЬ",
+                    async () => deleteEntry(it.index),
+                  ),
+              },
+              "Удалить",
+            ),
+          ),
+        );
+      }
+      function reviewRejected(e) {
+        return e["status"] === "отклонить";
+      }
+      function reviewBadge(status) {
+        if (status === "применено")
+          return h("span", { class: "badge badge-done" }, "применено");
+        if (status === "принять")
+          return h("span", { class: "badge badge-accept" }, "принять");
+        if (status === "отклонить")
+          return h("span", { class: "badge badge-reject" }, "отклонить");
+        if (status === "смешанные")
+          return h("span", { class: "badge" }, "статусы разные");
+        return h("span", { class: "badge" }, "новая");
+      }
+      /* одна карточка термина: заголовок с числом полей, строки полей и
+         общие действия; выделение полей внутри карточки — данные, а не
+         выбор второй раз (всё уже отфильтровано) */
+      function tGroupRow(g) {
+        const shownEntries = g.entries.map((it) => it.entry);
+        const allEntries = (g.all || g.entries).map((it) => it.entry);
+        const status = UICore.reviewGroupStatus(allEntries);
+        const rejected =
+          status === "отклонить" &&
+          shownEntries.every((e) => e["status"] === "отклонить");
+        // фильтр может оставить в карточке часть полей: бейдж и групповые
+        // действия считаются по ВСЕМУ термину, поэтому скрытые поля
+        // называются отдельной строкой — иначе «статусы разные» рядом с
+        // единственной видимой строкой читается как ошибка
+        const shown = g.entries.length;
+        const partial = shown < allEntries.length;
+        const head =
+          kind === "ner"
+            ? String(g.title || "?") + ` · полей ${allEntries.length}`
+            : `Гл.${shownEntries[0] && shownEntries[0]["chapter"] != null
+              ? shownEntries[0]["chapter"]
+              : "?"}`;
+        return h(
+          "div",
+          {
+            class:
+              "rv-row rv-group" + (rejected ? " rv-row-reject" : ""),
+          },
+          h(
+            "div",
+            { class: "rv-row-head" },
+            h("span", { class: "rv-row-title" }, head),
+            reviewBadge(status),
+          ),
+          partial
+            ? h(
+              "div",
+              { class: "rv-group-note" },
+              `фильтр показывает ${shown} из ${allEntries.length} полей · `
+                + "бейдж и действия ниже — по всему термину",
+            )
+            : null,
+          ...g.entries.map((it) => fieldRow(it, { badge: allEntries.length > 1 })),
+          groupActions(g),
+        );
+      }
+      /* действия карточки. Одна правка — своё действие у поля (ниже),
+         в подвале только переход к тексту. Несколько полей одного термина —
+         статус и удаление их ВСЕМИ сразу: решение обычно одно на термин,
+         и щёлкать его на каждом поле — работа, которую делает один PUT */
+      function groupActions(g) {
+        const all = (g.all || g.entries).map((it) => it);
+        const multi = all.length > 1;
+        // название термина — в подсказке: кнопок в списке много, и подпись
+        // без объекта заставляет человека угадывать, к чему она относится
+        const who = kind === "ner" ? String(g.title || "") : "глава";
+        return h(
           "div",
           { class: "rv-actions" },
-          statusBtn(i, e, "принять", "Принять"),
-          statusBtn(i, e, "отклонить", "Отклонить"),
-          h(
-            "button",
-            {
-              class: "btn btn-xs btn-ghost",
-              onclick: () => correctModal(i, e),
-            },
-            "Откорректировать",
-          ),
-          h(
-            "button",
-            {
-              class: "btn btn-xs btn-ghost rv-del",
-              title: "Удалить правку из файла",
-              onclick: () =>
-                confirmModal(
-                  "Удалить правку",
-                  `Запись «${entryHead(e)}» будет удалена из файла`,
-                  "УДАЛИТЬ",
-                  async () => deleteEntry(i),
-                ),
-            },
-            "Удалить",
-          ),
+          ...(multi
+            ? [
+              h(
+                "button",
+                {
+                  class: "btn btn-xs btn-ghost",
+                  title: `«${who}»: статус «принять» всем полям (${all.length})`,
+                  onclick: () => setGroupStatus(all, "принять"),
+                },
+                "Принять все",
+              ),
+              h(
+                "button",
+                {
+                  class: "btn btn-xs btn-ghost",
+                  title: `«${who}»: статус «отклонить» всем полям (${all.length})`,
+                  onclick: () => setGroupStatus(all, "отклонить"),
+                },
+                "Отклонить все",
+              ),
+              h(
+                "button",
+                {
+                  class: "btn btn-xs btn-ghost rv-del",
+                  title: `«${who}»: удалить все правки термина из файла (${all.length})`,
+                  onclick: () => deleteGroup(all),
+                },
+                "Удалить все",
+              ),
+            ]
+            : []),
           h(
             "button",
             {
@@ -3257,46 +3427,77 @@ function viewProject(section, name, tab, job) {
                 kind === "ner"
                   ? "Открыть глоссарий с этим термином"
                   : "Открыть файл главы с фрагментом",
-              onclick: () => gotoEntry(e),
+              onclick: () => gotoEntry((all[0] || {}).entry || {}),
             },
             kind === "ner" ? "→ Глоссарий" : "→ Глава",
           ),
         );
-        return h(
-          "div",
-          {
-            class:
-              "rv-row" +
-              (rejected ? " rv-row-reject" : "") +
-              (cont ? " rv-row-cont" : "") +
-              (isDel(e) ? " rv-row-del" : ""),
+      }
+      /* статус группе — один PUT: у термина бывает несколько правок, и
+         каждое нажатие не должно писать файл по разу */
+      async function setGroupStatus(list, status) {
+        err.textContent = "";
+        try {
+          let doc2 = parsed.doc;
+          let changed = 0;
+          for (const it of list) {
+            const e = it.entry;
+            if (e["applied"] || e["status"] === status) continue;
+            const next = UICore.updateReviewEntry(
+              doc2,
+              it.index,
+              { status },
+              parsed.isArray,
+            );
+            if (!next) continue;
+            doc2 = next;
+            changed++;
+          }
+          if (!changed) {
+            toast("Статусы уже установлены");
+            return;
+          }
+          parsed.doc = doc2;
+          await save();
+          renderList();
+        } catch (ex) {
+          err.textContent = ex.message;
+        }
+      }
+      function deleteGroup(list) {
+        /* карточка термина — несколько правок, у перевода карточка всегда
+           одна: заголовок модалки говорит, что именно уходит */
+        const multi = list.length > 1;
+        const what = multi
+          ? `Все правки термина «${list[0].entry["term"] || "?"}» `
+            + `(${list.length} шт.) будут удалены из файла`
+          : `Запись «${entryHead(list[0].entry)}» будет удалена из файла`;
+        confirmModal(
+          multi ? "Удалить правки термина" : "Удалить правку",
+          what,
+          "УДАЛИТЬ",
+          async () => {
+            err.textContent = "";
+            try {
+              /* удаляем с конца: индексы впереди не сдвигаются */
+              const idx = list.map((it) => it.index).sort((a, b) => b - a);
+              let doc2 = parsed.doc;
+              for (const i of idx) {
+                const next = UICore.removeReviewEntry(
+                  doc2,
+                  i,
+                  parsed.isArray,
+                );
+                if (next) doc2 = next;
+              }
+              parsed.doc = doc2;
+              await save();
+              renderList();
+              toast("Правка удалена");
+            } catch (ex) {
+              err.textContent = ex.message;
+            }
           },
-          h(
-            "div",
-            { class: "rv-row-head" },
-            h(
-              "span",
-              { class: "rv-row-title" },
-              cont && kind === "ner"
-                ? isDel(e)
-                  ? "удаление термина"
-                  : e["field"] || "?"
-                : entryHead(e),
-            ),
-            badge,
-          ),
-          h(
-            "div",
-            { class: "rv-diff" },
-            h("span", { class: "rv-old" }, e["old"] || ""),
-            " → ",
-            isDel(e)
-              ? h("span", { class: "rv-del" }, "термин удалится из глоссария")
-              : h("span", { class: "rv-new" }, e["new"] || ""),
-          ),
-          e["reason"] ? h("div", { class: "rv-reason" }, e["reason"]) : null,
-          h("div", { class: "rv-meta" }, entryMeta(e)),
-          actions,
         );
       }
       function clearAllEntries() {
@@ -3354,6 +3555,123 @@ function viewProject(section, name, tab, job) {
         } catch (ex) {
           err.textContent = ex.message;
         }
+      }
+      /* ── панель фильтров ──────────────────────────────────────────────
+         Оси берутся из реестра `UICore.reviewAxes`: у глоссария это поле и
+         этап, у перевода — тип ошибки; статус есть у всех. Чипсы собираются
+         из самого файла — если всех правок одного типа, ось не показывается */
+      function axisChips(axis, entries) {
+        const values = UICore.reviewAxisValues(entries, axis);
+        if (values.length < 2) return null; // один вариант — фильтровать нечего
+        const chips = values.map((v) => {
+          // галочка = значение ВИДНО; скрытые лежат в состоянии книги
+          const on = !filters[axis.key].includes(v.value);
+          return h(
+            "label",
+            {
+              class: "search-chip rv-chip" + (on ? "" : " rv-chip-off"),
+              title: `${axis.label}: ${v.label} — правок ${v.count}`,
+            },
+            h("input", {
+              type: "checkbox",
+              class: "checkbox",
+              checked: on,
+              onchange: () => {
+                const hidden = filters[axis.key].slice();
+                const at = hidden.indexOf(v.value);
+                if (at >= 0) hidden.splice(at, 1);
+                else hidden.push(v.value);
+                /* снят последний видимый вариант — ось возвращается ко «всё
+                   видно»: пустой список карточек ничего не объясняет */
+                filters[axis.key] =
+                  hidden.length >= values.length ? [] : hidden;
+                saveFilters();
+                renderList();
+              },
+            }),
+            h("span", { class: "rv-chip-label" }, `${v.label} (${v.count})`),
+          );
+        });
+        return h(
+          "span",
+          { class: "rv-axis" },
+          h("span", { class: "search-cluster-label" }, `${axis.label}:`),
+          ...chips,
+        );
+      }
+      /* статус — ОДИН выбор (корзины не пересекаются): select из того,
+         что реально есть в файле */
+      function statusFilter(entries) {
+        const seen = {};
+        for (const e of entries) seen[UICore.reviewStatusBucket(e)] = true;
+        const order = UICore.REVIEW_STATUS_BUCKETS.filter((b) => seen[b]);
+        if (order.length < 2) return null;
+        const sel = h(
+          "select",
+          {
+            class: "input rv-status-sel",
+            "aria-label": "Фильтр по статусу правки",
+            onchange: () => {
+              filters.status = sel.value;
+              saveFilters();
+              renderList();
+            },
+          },
+          h("option", { value: "все" }, "Статус: все"),
+          ...order.map((b) => h("option", { value: b }, `Статус: ${b}`)),
+        );
+        sel.value = filters.status;
+        return sel;
+      }
+      function renderFilters() {
+        if (!parsed || !parsed.ok) { RV_FILTERS.replaceChildren(); return; }
+        const entries = parsed.entries;
+        const visible = UICore.reviewVisibleEntries(entries, filters, kind);
+        const shownCount = shownFilterCount();
+        const parts = [];
+        for (const ax of UICore.reviewAxes(kind)) {
+          const chips = axisChips(ax, entries);
+          if (chips) parts.push(chips);
+        }
+        const st = statusFilter(entries);
+        if (st) parts.push(st);
+        // чистить нечего — панель молчит; счётчик появляется только с фильтром
+        if (!parts.length) { RV_FILTERS.replaceChildren(); return; }
+        RV_FILTERS.replaceChildren(
+          ...parts,
+          h("span", { class: "spacer" }),
+          ...(shownCount
+            ? [h(
+              "span",
+              { class: "rv-filter-count" },
+              `видно правок: ${visible.length} из ${entries.length}`,
+            )]
+            : []),
+          ...(shownCount
+            ? [h(
+              "button",
+              {
+                class: "btn btn-xs btn-ghost rv-filter-reset",
+                title: "Снять все фильтры",
+                onclick: () => {
+                  for (const ax of UICore.reviewAxes(kind))
+                    filters[ax.key] = [];
+                  filters.status = "все";
+                  saveFilters();
+                  renderList();
+                },
+              },
+              "Сбросить",
+            )]
+            : []),
+        );
+      }
+      /* какие-нибудь фильтры включены */
+      function shownFilterCount() {
+        let n = 0;
+        for (const ax of UICore.reviewAxes(kind)) n += filters[ax.key].length;
+        if (filters.status && filters.status !== "все") n += 1;
+        return n;
       }
       function renderList() {
         body.replaceChildren();
@@ -3427,10 +3745,13 @@ function viewProject(section, name, tab, job) {
                 "Очистить",
               ),
             ),
+            RV_FILTERS,
             RV_LIST,
             RV_PAGER.el,
           );
-        RV_PAGER.items = parsed.entries;
+        RV_PAGER.items = UICore.reviewVisibleGroups(
+          parsed.entries, filters, kind);
+        renderFilters();
         } else {
           body.append(
             h(

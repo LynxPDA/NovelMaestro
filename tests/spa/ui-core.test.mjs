@@ -796,6 +796,107 @@ test("reviewSummary: подсчёт статусов", () => {
   });
 });
 
+/* ── правки проверок: карточки терминов и фильтры ── */
+
+const RV = [
+  { term: "林凡", field: "type", stage: "Весь глоссарий",
+    old: "A", new: "B", status: "принять" },
+  { term: "林凡", field: "translation", stage: "Весь глоссарий",
+    old: "X", new: "Y", status: "принять" },
+  { term: "青云宗", field: "type", stage: "RAG",
+    old: "C", new: "D", status: "отклонить" },
+  { term: "火", action: "удаление", field: "", stage: "RAG",
+    old: "тип=skill", new: "", applied: true },
+];
+
+test("reviewGroups: один термин — одна карточка, у перевода — правка на карточку", () => {
+  const g = UICore.reviewGroups(RV, "ner");
+  assert.equal(g.length, 3);
+  assert.equal(g[0].title, "林凡");
+  assert.equal(g[0].entries.length, 2);
+  // индекс записи — глобальный, по нему правят файл
+  assert.deepEqual(g[0].entries.map((x) => x.index), [0, 1]);
+  assert.deepEqual(g[2].entries.map((x) => x.index), [3]);
+
+  // проверка перевода: заголовок у каждой правки свой, терминов там нет
+  const tcl = [
+    { chapter: 3, type: "typo", old: "а", new: "б" },
+    { chapter: 3, type: "typo", old: "в", new: "г" },
+  ];
+  const tg = UICore.reviewGroups(tcl, "tcl");
+  assert.equal(tg.length, 2);
+  assert.deepEqual(tg.map((x) => x.entries[0].index), [0, 1]);
+});
+
+test("reviewAxisValues: набор чипсов задаёт файл, удаление — своей подписью", () => {
+  const axes = UICore.reviewAxes("ner");
+  assert.deepEqual(axes.map((a) => a.key), ["field", "stage"]);
+  const field = UICore.reviewAxisValues(RV, axes[0]);
+  assert.deepEqual(field.map((v) => v.value), ["type", "translation", ""]);
+  assert.deepEqual(field.map((v) => v.count), [2, 1, 1]);
+  assert.equal(field[2].label, "удаление термина");
+  const stage = UICore.reviewAxisValues(RV, axes[1]);
+  assert.deepEqual(stage.map((v) => v.value), ["Весь глоссарий", "RAG"]);
+});
+
+test("reviewFilterMatch: пустой фильтр — видно всё, спрятанное — нет", () => {
+  const e = RV[0];
+  assert.equal(UICore.reviewFilterMatch(e, {}, "ner"), true);
+  assert.equal(UICore.reviewFilterMatch(e, { field: [] }, "ner"), true);
+  // ось хранит СКРЫТЫЕ значения: тип спрятан — правка поля type уходит
+  assert.equal(UICore.reviewFilterMatch(e, { field: ["type"] }, "ner"), false);
+  assert.equal(UICore.reviewFilterMatch(RV[1], { field: ["type"] }, "ner"),
+    true);
+  // удаление прячется своим значением — пустой строкой
+  assert.equal(UICore.reviewFilterMatch(RV[3], { field: [""] }, "ner"), false);
+  // этап — та же механика
+  assert.equal(UICore.reviewFilterMatch(e, { stage: ["RAG"] }, "ner"), true);
+  assert.equal(UICore.reviewFilterMatch(RV[2], { stage: ["RAG"] }, "ner"),
+    false);
+});
+
+test("reviewFilterMatch: статус — один выбор, корзины не пересекаются", () => {
+  assert.equal(UICore.reviewFilterMatch(RV[0], { status: "принять" }, "ner"),
+    true);
+  assert.equal(UICore.reviewFilterMatch(RV[2], { status: "принять" }, "ner"),
+    false);
+  // применённая запись не считается «принятой» — она уже отработана
+  assert.equal(UICore.reviewStatusBucket(RV[3]), "применено");
+  assert.equal(UICore.reviewStatusBucket({ status: "принять", applied: true }),
+    "применено");
+  assert.equal(UICore.reviewStatusBucket({ status: "принять" }), "принять");
+  assert.equal(UICore.reviewStatusBucket({ status: "отклонить" }), "отклонить");
+  assert.equal(UICore.reviewStatusBucket({}), "нерешённые");
+  assert.equal(UICore.reviewStatusBucket({ status: "принять " }), "принять");
+});
+
+test("reviewVisibleGroups: в карточке остаются только прошедшие фильтр поля", () => {
+  const g = UICore.reviewVisibleGroups(RV, { field: ["translation"] }, "ner");
+  // «林凡» остаётся, но только с полем type; тип у «青云宗» и удаление «火» —
+  // видны (скрыт только translation)
+  assert.equal(g[0].entries.length, 1);
+  assert.equal(g[0].entries[0].entry.field, "type");
+  assert.equal(g[0].all.length, 2); // полный состав термина помнит карточка
+  const none = UICore.reviewVisibleGroups(
+    RV, { field: ["type", "translation", ""] }, "ner");
+  assert.equal(none.length, 0);
+});
+
+test("reviewGroupStatus: общий статус термина или «смешанные»", () => {
+  assert.equal(UICore.reviewGroupStatus([RV[0], RV[1]]), "принять");
+  assert.equal(UICore.reviewGroupStatus([RV[0], RV[2]]), "смешанные");
+  assert.equal(UICore.reviewGroupStatus([RV[3]]), "применено");
+  assert.equal(UICore.reviewGroupStatus([]), "");
+  // у удаления «применено» перевешивает: запись уже отработала
+  assert.equal(
+    UICore.reviewGroupStatus([
+      { status: "принять", applied: true },
+      { status: "принять", applied: true },
+    ]),
+    "применено",
+  );
+});
+
 test("isCjkString: суррогатные пары не считаются за 2 символа (B9)", () => {
   // U+20000 (CJK Ext B) — суррогатная пара в UTF-16
   const s = "𠀀𠀀𠀀" + "abc"; // 3 CJK + 3 латиницы
