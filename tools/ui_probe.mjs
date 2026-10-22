@@ -2202,6 +2202,45 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} поля режима  ${seen.length} режимов · ${problems.length === before ? "все совпали" : "расхождения"}`);
   }
 
+  /* «Главы»: диапазон с концом меньше начала подписан (тут перестановка
+   * полей остаётся — ею и набирают), а последняя глава книги — потолок */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/chapters`,
+      { waitUntil: "load" });
+    await page.waitForSelector(".chapters-toolbar .run-range", { timeout: 15000 });
+    await page.waitForTimeout(500);
+    const inputs = page.locator(".chapters-toolbar .run-range");
+    await inputs.nth(0).fill("2");
+    await inputs.nth(1).fill("1");
+    await page.waitForTimeout(400);
+    const note = await page.evaluate(() => {
+      const n = document.querySelector(".chapters-toolbar .run-range-note");
+      return { text: ((n || {}).textContent || "").trim(),
+               hidden: !n || n.classList.contains("hidden") };
+    });
+    if (note.hidden || !/больше конечной/.test(note.text)) {
+      problems.push(`главы: перепутанный диапазон не подписан («${note.text}»)`);
+    }
+    await inputs.nth(1).fill("99");
+    await page.waitForTimeout(400);
+    const over = await page.evaluate(() =>
+      ((document.querySelector(".chapters-toolbar .run-range-note") || {})
+        .textContent || "").trim());
+    if (!/в книге всего/.test(over)) {
+      problems.push(`главы: глава за последней не поймана («${over}»)`);
+    }
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "scenario-chapters-range.png") });
+    }
+    /* вернуть чистый диапазон: вкладка помнит поля в памяти книги */
+    await inputs.nth(0).fill("1");
+    await inputs.nth(1).fill("2");
+    await page.waitForTimeout(400);
+    log(`${problems.length === before ? "✅" : "❌"} главы: диапазон  `
+      + `перепутан — «${note.text}» · за книгой — «${over}»`);
+  }
+
   /* «Разбор исходника»: epub из source/ подставляется сам; список селекта
    * строится по ВСЕМУ пулу source/ и фильтруется режимом (txt обязан
    * ВЕРНУТЬСЯ после смены режима); чекбокс предварительной очистки текста —
@@ -2261,6 +2300,58 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} разбор исходника  подхват «${toc.value}» `
       + `· toc: ${toc.opts.length} позиций · regex: ${re.opts.length} позиций `
       + `· очистка текста ${toc.clean ? (toc.cleanOn ? "вкл" : "выкл") : "нет"}`);
+  }
+
+  /* Диапазон глав: «64 – 3» не запускается — подсказка и рамка видны сразу,
+   * кнопка отказывает, а сервер отвечает 400 тем же текстом (правило одно —
+   * core.settings.chapter_range_error / UICore.chapterRangeError) */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".stage-card", { timeout: 15000 });
+    await page.locator('.stage-card:has-text("Проверка перевода (LLM)")')
+      .first().click();
+    await page.waitForTimeout(900);
+    const inputs = page.locator(".run-form .run-range-row input");
+    await inputs.nth(0).fill("64");
+    await inputs.nth(1).fill("3");
+    await page.waitForTimeout(400);
+    const bad = await page.evaluate(() => {
+      const note = document.querySelector(".run-form .run-range-note");
+      const fields = [...document.querySelectorAll(".run-form .run-range")];
+      return {
+        text: ((note || {}).textContent || "").trim(),
+        hidden: !note || note.classList.contains("hidden"),
+        bad: fields.filter((f) => f.classList.contains("input-bad")).length,
+      };
+    });
+    if (bad.hidden || !/больше конечной/.test(bad.text)) {
+      problems.push(`диапазон: нет подсказки о порядке («${bad.text}»)`);
+    }
+    if (bad.bad !== 2) {
+      problems.push(`диапазон: помечено полей ${bad.bad}, а не оба`);
+    }
+    if (SHOT) {
+      await page.locator(".run-form").first().screenshot(
+        { path: path.join(OUT, "scenario-range-bad.png") });
+    }
+    /* кнопка запуска такой диапазон не отправляет */
+    await page.locator('.run-form button:has-text("Запустить")').first()
+      .click();
+    await page.waitForTimeout(500);
+    const err = await page.evaluate(() =>
+      ((document.querySelector(".run-form .form-error") || {}).textContent
+        || "").trim());
+    const started = await page.evaluate(() =>
+      !!document.querySelector(".active-run"));
+    if (!/больше конечной/.test(err)) {
+      problems.push(`диапазон: запуск не объяснил отказ («${err}»)`);
+    }
+    if (started) problems.push("диапазон: 64 – 3 всё-таки ушёл в запуск");
+    log(`${problems.length === before ? "✅" : "❌"} диапазон глав  `
+      + `64 – 3: подсказка + ${bad.bad} поля в рамке · отказ «${err}»`);
   }
 
   /* «Проверка глоссария»: поля записи, уходящие LLM. term, type и
