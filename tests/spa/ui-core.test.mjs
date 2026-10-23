@@ -1321,3 +1321,54 @@ test("checkScale: пустой min/max не превращается в ноль
   const wide = UICore.checkScale({ lo: 0.9, hi: 1.1, median: 1 }, [], 0.5, 1.5);
   assert.ok(wide.min < 0.5 && wide.max > 1.5);
 });
+
+/* ── снимок состояния книги: до ответа сервера честно «не загружен» ── */
+function fakeBookStorage() {
+  const m = new Map();
+  return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(String(k), String(v)),
+    removeItem: (k) => m.delete(k),
+  };
+}
+
+test("bookState: значение из браузера не выдаётся за книгу после ответа", () => {
+  /* на двух устройствах форма запусков показывала разные диапазоны глав:
+     книга ещё не ответила, форма брала зеркало браузера и собиралась один раз */
+  const storage = fakeBookStorage();
+  const prev = globalThis.localStorage;
+  globalThis.localStorage = storage;
+  try {
+    storage.setItem("runVals:ACTIVE/Книга:ner", '{"start":"1","end":"9"}');
+    const book = UICore.bookState(null, "ACTIVE", "Книга");
+    assert.equal(book.loaded(), false, "до ответа снимок не загружен");
+    assert.equal(book.load().then !== undefined, true);
+  } finally {
+    globalThis.localStorage = prev;
+  }
+});
+
+test("bookState: сервер — истина, зеркало — только до его ответа", async () => {
+  const storage = fakeBookStorage();
+  const prev = globalThis.localStorage;
+  globalThis.localStorage = storage;
+  try {
+    storage.setItem("runVals:ACTIVE/Книга:ner", '{"start":"1","end":"9"}');
+    let release = null;
+    const book = UICore.bookState({
+      load: () => new Promise((r) => { release = () => r({ data: {} }); }),
+      save: () => Promise.resolve({ ok: true }),
+    }, "ACTIVE", "Книга");
+    const done = book.load();
+    // до ответа книги читается зеркало браузера: страница не пустует
+    assert.match(String(book.store.getItem("runVals:ACTIVE/Книга:ner")), /"1"/);
+    release();
+    await done;
+    assert.equal(book.loaded(), true);
+    /* книга ответила и ключа в ней нет — значит его нет: иначе сброс
+       настроек на другом устройстве «не срабатывал» бы */
+    assert.equal(book.store.getItem("runVals:ACTIVE/Книга:ner"), null);
+  } finally {
+    globalThis.localStorage = prev;
+  }
+});

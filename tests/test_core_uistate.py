@@ -201,3 +201,58 @@ def test_file_is_atomic_and_readable(tmp_path):
 def test_ui_state_dir_has_no_other_names():
     """Каталог состояния — ровно один: иначе клиент и тесты считают разное."""
     assert U.UI_STATE_DIR.as_posix() == "tmp/ui_state"
+
+
+def test_own_file_is_not_applied_last(ddir):
+    """Своё значение не важнее чужого позднего: иначе два устройства видели
+    РАЗНОЕ по одному ключу (форма запусков показывала разные диапазоны глав).
+
+    Порядок — по времени записи, а не по «свой последним»: устройство,
+    оставившее старую правку, получает то, что записали позже него."""
+    key = "runVals:ACTIVE/book:ner"
+    U.ui_state_write(ddir, "dev1", {key: {"start": "1", "end": "9"}})
+    U.ui_state_write(ddir, "dev2", {key: {"start": "50", "end": "60"}})
+    assert U.ui_state_read(ddir, "dev1")[key] == {"start": "50", "end": "60"}
+    assert U.ui_state_read(ddir, "dev2")[key] == {"start": "50", "end": "60"}
+    # более поздняя запись первого устройства снова становится общей
+    U.ui_state_write(ddir, "dev1", {key: {"start": "3", "end": "4"}})
+    assert U.ui_state_read(ddir, "dev2")[key] == {"start": "3", "end": "4"}
+
+
+def test_devices_still_share_different_keys(ddir):
+    """Разные ключи сливаются по-прежнему: порядок записи их не отменяет."""
+    U.ui_state_write(ddir, "dev1", {"nmTab:a/b": {"editor": {"chapter": "7"}}})
+    U.ui_state_write(ddir, "dev2", {"nmTab:a/b": {"logs": {"path": "logs"}}})
+    assert U.ui_state_read(ddir, "dev1")["nmTab:a/b"] == {
+        "editor": {"chapter": "7"}, "logs": {"path": "logs"}}
+
+
+def test_order_by_record_time_not_by_mtime(ddir):
+    """Свежий mtime при старом содержимом (копия книги, чужие часы, перенос)
+    не перебивает более позднюю запись: решает отметка `updated`."""
+    ddir.mkdir(parents=True, exist_ok=True)
+    key = "runVals:ACTIVE/book:wiki"
+    now = time.time()
+    # поздняя запись, но старый mtime
+    early = ddir / "dev1.json"
+    early.write_text(json.dumps({"updated": now - 10, key: {"start": "9"}}),
+                     encoding="utf-8")
+    os.utime(early, (now - 20, now - 20))
+    # ранняя запись, но свежий mtime на диске
+    late = ddir / "dev2.json"
+    late.write_text(json.dumps({"updated": now - 100, key: {"start": "2"}}),
+                    encoding="utf-8")
+    os.utime(late, (now, now))
+    assert U.ui_state_read(ddir, "dev3")[key] == {"start": "9"}
+    assert U.ui_state_read(ddir, "dev1")[key] == {"start": "9"}
+
+
+def test_file_without_stamp_reads_by_mtime(ddir):
+    """Состояние прежней версии (без `updated`) не теряется: штамп — mtime."""
+    ddir.mkdir(parents=True, exist_ok=True)
+    (ddir / "old.json").write_text(json.dumps(
+        {"runVals:ACTIVE/book:ner": {"start": "5"}}), encoding="utf-8")
+    U.ui_state_write(ddir, "dev1", {"nmProfile:a/b/wiki": "home"})
+    got = U.ui_state_read(ddir, "dev1")
+    assert got["runVals:ACTIVE/book:ner"] == {"start": "5"}
+    assert got["nmProfile:a/b/wiki"] == "home"

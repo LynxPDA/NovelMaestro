@@ -432,8 +432,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       st.options = {};
     }
     // значения формы — один раз на выбор стадии (значения реестра и
-    // общего конфига + автоподхваты)
-    if (!st.values[key]) initFormValues(key, spec);
+    // общего конфига + автоподхваты). Пока книга не ответила, форму не
+    // собираем: значение, взятое из браузерного зеркала, перекрыло бы
+    // чужие свежие правки и уехало бы в запуск (на двух устройствах одна
+    // стадия показывала разные диапазоны), а перерисовка уже
+    // инициализированную форму не обновляет
+    if (!st.values[key]) {
+      const carrier = typeof bookState === "function"
+        ? bookState(section, name) : null;
+      await bookLoaded(carrier);
+      initFormValues(key, spec);
+    }
     // pipeline: автоподхват «Общего промпт-файла» при КАЖДОМ рендере —
     // файл мог появиться после первой инициализации формы (значения
     // кешируются на страницу); пустой выбор добиваем кандидатом auto
@@ -501,6 +510,30 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       br.mount(panel.querySelector(".run-form") || panel);
     }
     return panel;
+  }
+
+  // ── значения формы ждут ответа книги ───────────────────────────
+  // Форма собирается ОДИН раз, а перерисовка её не обновляет, поэтому
+  // стартовать с браузерного зеркала нельзя: на двух устройствах одна и та же
+  // стадия показывала разные диапазоны, а выбор «пустоты» уезжал в запуск.
+  // Ждём, пока снимок книги ответит (успех или отказ — иначе решение не
+  // примет), но не дольше BOOK_WAIT_TIMEOUT: без сети форма открывается по
+  // тому, что есть.
+  const BOOK_WAIT_TIMEOUT = 5000; // мС ожидания ответа книги
+  const BOOK_WAIT_STEP = 25; // мС между проверками готовности
+
+  function bookLoaded(carrier) {
+    if (!carrier || typeof carrier.loaded !== "function") {
+      return Promise.resolve();
+    }
+    const until = Date.now() + BOOK_WAIT_TIMEOUT;
+    return new Promise((done) => {
+      const wait = () => {
+        if (carrier.loaded() || Date.now() >= until) done();
+        else setTimeout(wait, BOOK_WAIT_STEP);
+      };
+      wait();
+    });
   }
 
   // ── автосохранение значений формы (состояние книги, по стадии) ──
