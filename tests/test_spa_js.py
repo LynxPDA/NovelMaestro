@@ -286,23 +286,33 @@ def test_settings_page_autosaves():
     """«Настройки» — страница автосохранения: кнопки «Сохранить» нет, одно
     изменённое поле уходит PUT'ом через полсекунды тишины, идущая запись одна,
     ответ перечитывает model.groups БЕЗ перерисовки вкладки (иначе из поля
-    выпадал бы фокус). «Внешний вид» пишет предпочтения прямо по change."""
+    выпадал бы фокус). «Внешний вид» пишет предпочтения прямо по change.
+
+    Накопленные правки живут в очереди UICore.saveQueue: снимок забирается и
+    очередь очищается ОДНИМ движением. Это и есть исправление потери правки,
+    набранной пока PUT в полёте: прежний код удалял ключи по списку, снятому
+    при отправке, и такая правка исчезала на ответе предыдущего запроса."""
     src = (SPA_DIR / "app.js").read_text(encoding="utf-8")
     view = src[src.index("async function viewSettings()"):
                src.index("/* ── Дашборд")]
     assert '"Сохранить"' not in view, "на странице осталась кнопка сохранения"
     assert "const SAVE_DELAY = 500;" in view
-    assert "clearTimeout(saveTimer);" in view
-    assert "if (saving) { saveTimer = setTimeout(savePending, 1000); return; }" in view
+    assert "const queue = UICore.saveQueue(SAVE_DELAY);" in view
+    assert "queue.due(savePending);" in view
+    # один писатель: второй PUT не пересекает идущую запись
+    save = view[view.index("async function savePending()"):
+                view.index("// ── сброс вкладки")]
+    assert "if (queue.isSaving()) return;" in save
+    assert "const sent = queue.take();" in save
+    assert "if (queue.has()) queue.again();" in save, \
+        "хвост, набранный во время записи, должен уйти следом"
+    assert "queue.back(sent.values);" in save, "ошибка обязана вернуть правку"
     # ключ строки — ключ .env (имена полей стадий не уникальны)
     assert "const id = f.key || f.name;" in view
     # состояние автосохранения — в шапке страницы; пока сохранять нечего,
     # строка молчит (подтверждение — тост)
     assert 'h("div", { class: "page-header-actions" }, status)' in view
     assert 'class: "settings-save-state hidden"' in view
-    # ответ API перечитывает реестр, вкладку не пересобираем
-    save = view[view.index("async function savePending()"):
-                view.index("// ── сброс вкладки")]
     assert "model.groups = [...(r.groups || []), uiGroup];" in save
     assert "renderTab()" not in save, "запись пересобирает вкладку — фокус lost"
     # «Внешний вид» — localStorage по change контрола
@@ -332,7 +342,9 @@ def test_settings_page_tab_reset():
                  view.index("function tabTools(g)")]
     assert 'if (!g || g.id === "ui") return;' in reset
     # не записанные правки уходят первыми, иначе сброс их затрёт
-    assert "if (Object.keys(pending).length) await savePending();" in reset
+    assert "if (queue.has() || queue.isSaving()) await savePending();" in reset
+    assert "await queue.idle();" in reset
+    assert "queue.drop(keys);" in reset
     assert 'method: "PUT", body: { profile: model.profile, values: defaults },' in reset
     assert "renderTab();" in reset  # фокус в модалке — перерисовка безопасна
     # кнопка живёт в теле вкладки, а не в шапке страницы

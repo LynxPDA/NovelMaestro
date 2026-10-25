@@ -1372,3 +1372,51 @@ test("bookState: сервер — истина, зеркало — только 
     globalThis.localStorage = prev;
   }
 });
+
+/* ── очередь автосохранения «Настроек»: правка во время запроса ── */
+test("saveQueue: take очищает очередь сразу — правка в полёте не теряется", () => {
+  /* поле на экране показывало 262144, а на диск уходило пустое: правка,
+     набранная пока PUT в полёте, удалялась на его ответе */
+  const q = UICore.saveQueue(10);
+  q.put("MAX_TOKENS", "");
+  const sent = q.take();          // запрос ушёл с пустым значением
+  assert.deepEqual(sent, { values: { MAX_TOKENS: "" }, keys: ["MAX_TOKENS"] });
+  q.put("MAX_TOKENS", "262144");  // набор, пока запрос в полёте
+  assert.equal(q.has(), true, "правка в полёте осталась в очереди");
+  assert.deepEqual(q.take(), { values: { MAX_TOKENS: "262144" },
+                              keys: ["MAX_TOKENS"] });
+  assert.equal(q.has(), false);
+});
+
+test("saveQueue: ошибка возвращает значения, новые правки важнее", () => {
+  const q = UICore.saveQueue(10);
+  q.put("THREADS", "8");
+  const sent = q.take();
+  q.back(sent.values);            // запрос не прошёл
+  assert.deepEqual(q.pending(), { THREADS: "8" });
+  q.put("THREADS", "12");
+  q.back({ THREADS: "8" });       // старое значение не затирает новое
+  assert.deepEqual(q.pending(), { THREADS: "12" });
+});
+
+test("saveQueue: begin терпит одного писца", () => {
+  const q = UICore.saveQueue(10);
+  assert.equal(q.begin(), true);
+  assert.equal(q.begin(), false, "вторая запись не должна идти параллельно");
+  q.end();
+  assert.equal(q.begin(), true);
+});
+
+test("saveQueue: пауза ввода откладывается новой правкой", async () => {
+  const q = UICore.saveQueue(30);
+  let calls = 0;
+  q.due(() => { calls += 1; });
+  q.put("A", "1");
+  await new Promise((r) => setTimeout(r, 15));
+  q.put("A", "2");               // отсчёт начался заново
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(calls, 0, "запись не должна уйти на полпути ввода");
+  await new Promise((r) => setTimeout(r, 25));
+  assert.equal(calls, 1);
+  assert.deepEqual(q.pending(), { A: "2" });
+});

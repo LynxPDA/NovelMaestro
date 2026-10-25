@@ -977,6 +977,120 @@
    * устройстве состояние начиналось бы с пустых форм. Отметка нужна, чтобы
    * чужое снятие ключа не отменялось устаревшей памятью. */
   var BOOK_SAVE_DELAY = 500; // мС тишины после последнего изменения
+
+  /* ── очередь отложенной записи настроек (app.js, «Настройки») ──
+   * Путь записи ОДИН: очередь забирает снимок накопленных значений и очищает
+   * их ДО начала запроса, а не после него. Прежний код чистил накопленное по
+   * списку, снятому при отправке: правка, набранная пока запрос в полёте,
+   * добиралась до `pending`, но на ответе этого же запроса удалялась, и в
+   * память её никто не выносил — поле на экране новое, на диске пустое.
+   * Ошибка возвращает значения в очередь: следующий заход отправит и их. */
+  function saveQueue(delay) {
+    var pending = {};   // ключ реестра → значение, ждущее записи
+    var timer = null;
+    var saving = false;
+    var wait = typeof delay === "number" ? delay : 500;
+    var onDue = null;   // что звать по паузе ввода: ставит владелец очереди
+    var idleWaiters = []; // кто ждёт конца идущей записи
+
+    function arm() {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        timer = null;
+        if (onDue) onDue();
+      }, wait);
+    }
+
+    return {
+      /* чем записывать: у web-страницы это savePending, у теста — свой
+       * вызов; очередь отвечает только за «что и когда» */
+      due: function (fn) { onDue = fn; },
+      /* значение поля изменилось: запоминаем, запись — после паузы ввода */
+      put: function (key, value) {
+        pending[key] = value;
+        arm();
+      },
+      /* снимок очереди: {values, keys}; очередь тем же мгновением пуста, поэтому
+       * правка, пришедшая во время запроса, попадёт в следующий */
+      take: function () {
+        clearTimeout(timer);
+        timer = null;
+        var values = {};
+        for (var k in pending) {
+          if (Object.prototype.hasOwnProperty.call(pending, k)) {
+            values[k] = pending[k];
+          }
+        }
+        pending = {};
+        return { values: values, keys: Object.keys(values) };
+      },
+      /* запрос не прошёл: значения снова в очереди (новые правки важнее —
+       * старое значение вернулось бы поверх них) */
+      back: function (values) {
+        for (var k in values || {}) {
+          if (Object.prototype.hasOwnProperty.call(values, k)
+              && !Object.prototype.hasOwnProperty.call(pending, k)) {
+            pending[k] = values[k];
+          }
+        }
+      },
+      has: function () {
+        for (var k in pending) {
+          if (Object.prototype.hasOwnProperty.call(pending, k)) return true;
+        }
+        return false;
+      },
+      /* снять ключи из очереди: их значение только что записано другим PUT'ом
+       * (сброс вкладки в реестр) */
+      drop: function (keys) {
+        for (var i = 0; i < (keys || []).length; i++) delete pending[keys[i]];
+      },
+      count: function () {
+        var n = 0;
+        for (var k in pending) {
+          if (Object.prototype.hasOwnProperty.call(pending, k)) n += 1;
+        }
+        return n;
+      },
+      pending: function () {
+        var out = {};
+        for (var k in pending) {
+          if (Object.prototype.hasOwnProperty.call(pending, k)) {
+            out[k] = pending[k];
+          }
+        }
+        return out;
+      },
+      /* занять очередь записью; false — уже занята (второй запрос не идёт) */
+      begin: function () {
+        if (saving) return false;
+        saving = true;
+        return true;
+      },
+      end: function () {
+        saving = false;
+        var waiters = idleWaiters;
+        idleWaiters = [];
+        for (var i = 0; i < waiters.length; i++) {
+          try { waiters[i](); } catch (e) {
+            /* подписчик не должен мешать записи */
+          }
+        }
+      },
+      /* дождаться конца идущей записи: второй PUT не должен её пересечь */
+      idle: function () {
+        if (!saving) return Promise.resolve();
+        return new Promise(function (resolve) { idleWaiters.push(resolve); });
+      },
+      isSaving: function () {
+        return saving;
+      },
+      /* отложить заход ещё раз (запись идёт или очередь ждёт паузы) */
+      again: arm,
+      /* сколько ждать до записи — тестам и подписи «сохраняю…» */
+      delay: wait,
+    };
+  }
   /* Ключи книги, значение которых — JSON (у остальных это голая строка:
      `nmProfile:…` — id профиля, `nerLock:…` — «1»/«0»). */
   var BOOK_JSON_PREFIXES = [
@@ -1810,6 +1924,8 @@
     /* снимок состояния книги на сервере (tmp/ui_state): ключи браузера —
        те же, что раньше, бумажник — файл книги */
     bookState: bookState,
+    /* очередь автосохранения «Настроек»: взять и очистить одним движением */
+    saveQueue: saveQueue,
 
     nerCellText: nerCellText,
     nerStructJson: nerStructJson,

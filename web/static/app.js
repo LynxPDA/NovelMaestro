@@ -1023,17 +1023,18 @@ async function viewSettings() {
   // а НЕ перерисовывает вкладку — иначе из поля выпадал бы фокус.
   const SAVE_DELAY = 500;  // мС тишины после последнего изменения поля
   const status = h("span", { class: "settings-save-state hidden" });
-  const pending = {};      // ключ реестра → значение, ждущее записи
+  /* Очередь записи живёт в UICore: накопленные поля забираются и очищаются
+     ОДНИМ движением, поэтому правка, пришедшая пока PUT в полёте, попадёт в
+     следующий запрос, а не пропадёт на ответе предыдущего. */
+  const queue = UICore.saveQueue(SAVE_DELAY);
   const shown = {};        // ключ реестра → последнее значение на экране
   const labels = {};       // ключ реестра → подпись поля (для строки статуса)
   const envWins = new Set(d.env_wins || []);
   const envBlocked = new Set(); // ключи, перекрытые переменными окружения
-  let saveTimer = 0;
-  let saving = false;
 
   function showStatus() {
     // «Внешний вид» — локальная вкладка: конфиг здесь не сохраняется
-    const busy = saving || Object.keys(pending).length > 0;
+    const busy = queue.isSaving() || queue.has();
     const blocked = [...envBlocked].map((k) => labels[k] || k);
     const text = active === "ui" ? ""
       : busy ? "сохраняю…"
@@ -1047,25 +1048,22 @@ async function viewSettings() {
   function fieldChanged(id, value) {
     if (id in shown && shown[id] === value) return; // фокус или Tab без правки
     shown[id] = value;
-    pending[id] = value;
+    queue.put(id, value);
     if (envWins.has(id)) envBlocked.add(id);
     showStatus();
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(savePending, SAVE_DELAY);
   }
 
   async function savePending() {
-    if (saving) { saveTimer = setTimeout(savePending, 1000); return; }
-    const names = Object.keys(pending);
-    if (!names.length) return;
-    const values = {};
-    for (const k of names) values[k] = pending[k];
-    saving = true;
+    // идущая запись сама отправит хвост своим заходом; два PUT параллельно нельзя
+    if (queue.isSaving()) return;
+    const sent = queue.take();
+    if (!sent.keys.length) return;
+    queue.begin();
     err.textContent = "";
     showStatus();
     try {
       const r = await api("/settings", {
-        method: "PUT", body: { profile: model.profile, values },
+        method: "PUT", body: { profile: model.profile, values: sent.values },
       });
       // профили перечитываем тоже: поля нераскрытого профиля рисуются из
       // model.profiles, и без этого сохранённое значение исчезало бы из формы
@@ -1073,17 +1071,19 @@ async function viewSettings() {
       // ответ API несёт только реестр: без локальной вкладки открытая
       // «Внешний вид» исчезла бы и прыгнула на первую
       model.groups = [...(r.groups || []), uiGroup];
-      for (const k of names) delete pending[k];
-      toast(`Сохранено: ${names.map((k) => labels[k] || k).join(", ")}`);
+      toast(`Сохранено: ${sent.keys.map((k) => labels[k] || k).join(", ")}`);
     } catch (ex) {
-      // значения остаются в pending: при следующем изменении уйдут повторно
-      Object.assign(pending, values);
+      // значения возвращаются в очередь: следующий заход отправит и их
+      queue.back(sent.values);
       err.textContent = ex.message;
     } finally {
-      saving = false;
+      queue.end();
       showStatus();
+      // хвост, набранный во время запроса, уходит своим заходом
+      if (queue.has()) queue.again();
     }
   }
+  queue.due(savePending);
 
   // ── сброс вкладки: её поля возвращаются к значениям по умолчанию ──────
   // Дефолт приходит с сервера в f.default (form_field реестра) — своего знания
@@ -1112,8 +1112,9 @@ async function viewSettings() {
     if (!keys.length) return;
     // не записанные ещё правки уходят первыми: сброс делает второй PUT
     // и не должен их затереть (менять поле другой вкладки успевают за паузу)
-    clearTimeout(saveTimer);
-    if (Object.keys(pending).length) await savePending();
+    queue.again(); // пауза ввода не ждёт: остаток — сейчас
+    if (queue.has() || queue.isSaving()) await savePending();
+    await queue.idle();
     const secrets = (g.blocks || []).some((b) =>
       (b.fields || []).some((f) => f.secret && f.type !== "hidden" && !f.noenv));
     const ok = await confirmModal(
@@ -1127,7 +1128,6 @@ async function viewSettings() {
       async () => {},
     );
     if (!ok) return;
-    saving = true;
     err.textContent = "";
     showStatus();
     try {
@@ -1136,8 +1136,8 @@ async function viewSettings() {
       });
       model.profiles = r.profiles || model.profiles;
       model.groups = [...(r.groups || []), uiGroup];
+      queue.drop(keys);
       for (const k of keys) {
-        delete pending[k];
         shown[k] = defaults[k];
         if (envWins.has(k)) envBlocked.add(k);
       }
@@ -1148,7 +1148,6 @@ async function viewSettings() {
     } catch (ex) {
       err.textContent = ex.message;
     } finally {
-      saving = false;
       showStatus();
     }
   }
