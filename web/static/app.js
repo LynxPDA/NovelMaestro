@@ -957,10 +957,16 @@ async function viewNotes() {
           { class: "files-toolbar" },
           status,
           h("span", { class: "spacer" }),
-          h("span", { class: "field-help" }, "кегль"),
-          previewFontSelect(() => {
-            if (pane.mode !== "code") pane.render();
-          }),
+          /* подпись и список кегля — одна группа: при переносе тулбара
+             подпись не остаётся в хвосте предыдущей строки */
+          h(
+            "span",
+            { class: "toolbar-group" },
+            h("span", { class: "field-help" }, "кегль"),
+            previewFontSelect(() => {
+              if (pane.mode !== "code") pane.render();
+            }),
+          ),
           UIC.editorSearch(ed),
           pane.btn,
           saveBtn,
@@ -3513,10 +3519,14 @@ async function viewTemplates() {
         + (readonly ? " · только чтение" : ""),
       ),
       h("span", { class: "spacer" }),
-      h("span", { class: "field-help" }, "кегль"),
-      previewFontSelect(() => {
-        if (pane.mode !== "code") pane.render();
-      }),
+      h(
+        "span",
+        { class: "toolbar-group" },
+        h("span", { class: "field-help" }, "кегль"),
+        previewFontSelect(() => {
+          if (pane.mode !== "code") pane.render();
+        }),
+      ),
       UIC.editorSearch(ed),
       pane.btn,
       ...(readonly ? [] : [saveBtn]),
