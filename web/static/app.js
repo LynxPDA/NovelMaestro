@@ -1919,22 +1919,26 @@ async function viewHub() {
         h("div", { class: "page-sub" }, `Проектов: ${totalProjects}`),
       ),
       h(
-        "button",
-        {
-          class: "btn btn-primary",
-          onclick: async () => {
-            if (await createProjectModal()) {
-              hubCache = null;
-              render();
-            }
+        "div",
+        { class: "page-header-actions" },
+        h(
+          "button",
+          {
+            class: "btn btn-primary",
+            onclick: async () => {
+              if (await createProjectModal()) {
+                hubCache = null;
+                render();
+              }
+            },
           },
-        },
-        "＋ Создать проект",
-      ),
-      h(
-        "button",
-        { class: "btn btn-ghost", onclick: () => sectionsModal() },
-        "⚙ Управление разделами",
+          "＋ Создать проект",
+        ),
+        h(
+          "button",
+          { class: "btn btn-ghost", onclick: () => sectionsModal() },
+          "⚙ Управление разделами",
+        ),
       ),
     ),
     h(

@@ -1952,6 +1952,12 @@ input[type="number"] {
 .chapters-toolbar .run-range {
   width: 90px;
 }
+/* подпись «Главы:» и оба поля — одна группа: переносы строк её не рвут */
+.chapters-range-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 .chapters-toolbar .run-range-sep {
   color: var(--muted);
 }
@@ -2004,6 +2010,13 @@ input[type="number"] {
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+  /* вкладок больше, чем ширины: полоса прокручивается сама, страница не
+     разгоняется. На широком окне влезают все — прокручивать нечего */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 .tab {
   padding: 8px 14px;
@@ -2025,6 +2038,13 @@ input[type="number"] {
   width: 100%;
   border-collapse: collapse;
   margin-top: 8px;
+}
+/* Обёртка вокруг таблицы: узкое окно — добросовестная горизонтальная
+   прокрутка вместо колонок, уползших за край страницы. На широком окне
+   таблица влезает и полосы прокрутки нет. */
+.ner-table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
 }
 .ner-table th,
 .ner-table td {
@@ -3712,5 +3732,328 @@ body[data-editor-theme="light"] .editor-area {
 @keyframes nm-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* ── мобильный экран (телефон, узкое окно) ───────────────────────────────
+   Интерфейс тот же, но панели переносятся друг под друга, а действия
+   становятся крупнее и перестают уезжать за край. Порог 700px — ширина
+   планшета в портрете ещё показывает две колонки: на них места хватает.
+   Правила ниже ничего не меняют на десктопе: все они внутри @media. */
+@media (max-width: 700px) {
+  /* поля страницы: 24px отступа крадут шестую часть экрана телефона */
+  .content {
+    padding: 14px 12px 24px;
+  }
+  .page-header {
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .page-title {
+    font-size: 20px;
+  }
+  /* кнопки шапки страницы — в свою строку: в одну с заголовком они не
+     влезают и выдавливали заголовок в столбик из букв */
+  .page-header-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: 1 1 100%;
+    gap: 8px;
+  }
+
+  /* логика/замечания в шапке страницы: строка не разгоняет страницу */
+  .run-pill {
+    max-width: calc(100vw - 110px);
+  }
+
+  /* вкладки прокручиваются по горизонтали одной строкой: переносы
+     делали из панели вкладок «лестницу» высотой в треть экрана */
+  .tabs,
+  .subtabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+  }
+  .tabs::-webkit-scrollbar,
+  .subtabs::-webkit-scrollbar {
+    display: none;
+  }
+  .tab,
+  .subtab {
+    flex: none;
+    scroll-snap-align: start;
+  }
+
+  /* тулбары («Файлы», «Глоссарий», «Поиск», «Логи»…): элементы идут
+     строками, поле поиска тянется, кнопки — вправо */
+  .files-toolbar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    column-gap: 8px;
+  }
+  .files-toolbar .search-q {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+  /* распорка теряет свою ширину и не рвёт строку: крошки, сортировка и
+     кнопки переносятся по общим правилам, кнопки прижимаются вправо */
+  .files-toolbar .spacer {
+    flex: 1 1 0;
+  }
+  .files-tools {
+    margin-left: auto;
+  }
+  /* крошки длинного пути не растягивают строку */
+  .crumbs {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  /* строка файла: имя и метаданные переносятся, действия никуда не уходят */
+  .frow {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding: 10px 12px;
+  }
+  .fname {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* метаданные встают второй строкой под именем, действия — справа;
+     у каталогов метаданных нет — пустая строка не должна давать зазор */
+  .fmeta {
+    order: 4;
+    flex-basis: 100%;
+    padding-left: 27px; /* под текстом имени, а не под чекбоксом */
+  }
+  .fmeta:empty {
+    display: none;
+  }
+  .factions {
+    margin-left: auto;
+    flex: none;
+  }
+
+  /* формы: подписи над полем, а не колонкой слева */
+  .manage-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .field-row {
+    flex-wrap: wrap;
+  }
+  .settings-fields .field {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+  .settings-tab-tools {
+    margin: 0;
+    flex-wrap: wrap;
+  }
+
+  /* модалки: на всю ширину экрана, действия — в две равные кнопки;
+     высокий текст внутри прокручивается сам */
+  .modal {
+    width: auto;
+    max-width: none;
+    max-height: calc(100vh - 24px);
+    margin: 12px;
+    padding: 16px;
+  }
+  .modal-backdrop {
+    align-items: flex-end;
+  }
+  .modal-actions {
+    flex-wrap: wrap;
+  }
+  .modal-actions .btn {
+    flex: 1 1 auto;
+  }
+  .quick-frame {
+    height: 60vh;
+  }
+
+  /* редактор глав: панели друг под другом уже есть (общая колонка),
+     но панель с режимом и поиском переносится, а не сжимается */
+  .ed-pane-bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .ed-type {
+    min-width: 0;
+    flex: 1 1 140px;
+  }
+  /* две панели рядом на телефоне — по половине узкого экрана на файл;
+     оригинал и перевод ставятся друг под друга */
+  .ed-grid.ed-grid-two {
+    grid-template-columns: 1fr;
+  }
+  .ed-cm,
+  .editor-cm {
+    min-height: 45vh;
+  }
+  .editor-modal-body {
+    height: 65vh;
+    min-height: 240px;
+  }
+
+  /* «Запуски»: карточки стадий — одной колонкой (уже так), форма тянется */
+  .stage-card {
+    padding: 10px;
+  }
+  .run-panel {
+    padding: 12px;
+  }
+  .run-range {
+    width: 72px;
+  }
+  .run-range-row {
+    row-gap: 6px;
+  }
+
+  /* «Главы»: диапазон и тип файлов в одну строку не влезают — колонкой */
+  .chapters-toolbar {
+    gap: 8px;
+  }
+  .chapters-toolbar .chapters-type,
+  .chapters-toolbar .chapters-range {
+    flex: 1 1 130px;
+    width: auto;
+  }
+  /* распорка рвёт строку: счётчик глав и кнопки — своей строкой,
+     а не в хвосте полей */
+  .chapters-toolbar .spacer {
+    flex: 1 1 100%;
+    height: 0;
+  }
+  /* счётчик глав растягивается — кнопки уходят к правому краю */
+  .chapters-toolbar .review-status {
+    flex: 1 1 auto;
+  }
+  .chapters-range-group .chapters-range,
+  .chapters-range-group .run-range {
+    width: 64px;
+  }
+  .chapters-row {
+    gap: 8px;
+  }
+  .chapters-row .ch-num {
+    min-width: 28px;
+  }
+
+  /* «Справка»: оглавление сверху (липкое сбоку некуда — ширины нет) */
+  .help-layout {
+    flex-direction: column;
+    /* колонка: align-items:flex-start иначе растягивает текст до max-content */
+    align-items: stretch;
+    gap: 12px;
+  }
+  .help-toc {
+    position: static;
+    width: auto;
+    max-height: 34vh;
+  }
+  /* длинные идентификаторы в тексте справки переносятся, а не режут край */
+  .md-body {
+    overflow-wrap: anywhere;
+  }
+  .md-body code {
+    word-break: break-word;
+  }
+
+  /* таблицы с прокруткой: подсказка «дальше есть столбцы» полосой прокрутки */
+  .ner-table th,
+  .ner-table td {
+    padding: 6px 8px;
+  }
+
+  /* «Дашборд»: карточки сводки в две колонки, история запусков прокруткой */
+  .dash-summary {
+    gap: 8px;
+  }
+  .stat-card {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 0;
+    padding: 10px 12px;
+  }
+  .dash-card {
+    min-width: 0;
+  }
+
+  /* «Статус»: карточки стадий в одну колонку */
+  .status-stages {
+    grid-template-columns: 1fr;
+  }
+
+  /* логи: список, панель и текст друг под другом */
+  .log-view {
+    max-height: 55vh;
+  }
+
+  /* «Проверки»: карточки правок и их кнопки на всю ширину */
+  .review-card-title,
+  .review-card-body {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .review-wrap,
+  .config-wrap {
+    padding: 12px 10px;
+  }
+  .review-actions,
+  .rv-actions,
+  .rv-field-actions {
+    row-gap: 6px;
+  }
+
+  /* «Промпты» и «Заметки»: одна колонка */
+  .prompts-layout {
+    grid-template-columns: 1fr;
+  }
+
+  /* «История»: строка точки — заголовок сверху, действия под ним */
+  .history-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding: 9px 10px;
+  }
+  .history-main {
+    flex: 1 1 100%;
+    order: 2;
+  }
+  .history-marker {
+    order: 1;
+  }
+  .history-actions {
+    order: 3;
+    margin-left: auto;
+  }
+  .history-label {
+    white-space: normal;
+  }
+
+  /* тосты не закрывают широкую часть экрана и не липнут к краю */
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+  }
+}
+
+/* Телефон совсем узкий (старые/компактные экраны): ещё плотнее */
+@media (max-width: 420px) {
+  .content {
+    padding: 12px 10px 20px;
+  }
+  .fmeta {
+    padding-left: 0;
+  }
+  .card {
+    padding: 12px;
   }
 }

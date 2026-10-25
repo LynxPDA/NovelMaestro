@@ -292,6 +292,17 @@ function viewProject(section, name, tab, job) {
     else if (st.view === "notes") body = await notesView();
     else body = await filesView();
     page.append(header, tabs);
+    /* Ссылка с вкладкой открывает её в конце полосы — на телефоне полоса
+       прокручивается горизонтально, и активной вкладки не видно. Сдвигаем
+       полосу к ней: только она, страница стоит на месте. */
+    const activeTab = tabs.querySelector(".tab-active");
+    if (activeTab) {
+      tabs.scrollLeft = Math.max(
+        0,
+        activeTab.offsetLeft - tabs.offsetLeft
+          - (tabs.clientWidth - activeTab.offsetWidth) / 2,
+      );
+    }
     if (body) {
       // якорь для pi-navigate при локальной смене вкладки (setView):
       // run-views гасит SSE-стрим своего экземпляра по этому событию
@@ -3140,7 +3151,13 @@ function viewProject(section, name, tab, job) {
     });
     renderRows();
     paintSel();
-    return h("div", { class: "files-wrap" }, toolbar, table, pg.el);
+    return h(
+      "div",
+      { class: "files-wrap" },
+      toolbar,
+      h("div", { class: "ner-table-wrap" }, table),
+      pg.el,
+    );
   }
   /* ── Проверка (review ner / translate_check_llm) ── */
   async function reviewView() {
@@ -4248,10 +4265,16 @@ function viewProject(section, name, tab, job) {
       { class: "chapters-toolbar" },
       h("span", { class: "field-label" }, "Тип файлов глав:"),
       typeSel,
-      h("span", { class: "field-label" }, "Главы:"),
-      startIn,
-      h("span", { class: "run-range-sep" }, "–"),
-      endIn,
+      /* подпись «Главы:» и два поля — одна группа: иначе на узком окне
+         подпись оставалась в конце строки, а поля уезжали под неё */
+      h(
+        "span",
+        { class: "chapters-range-group" },
+        h("span", { class: "field-label" }, "Главы:"),
+        startIn,
+        h("span", { class: "run-range-sep" }, "–"),
+        endIn,
+      ),
       rangeNote,
       h("span", { class: "spacer" }),
       status,
@@ -6444,20 +6467,24 @@ function viewProject(section, name, tab, job) {
       }
       body.append(
         h(
-          "table",
-          { class: "ner-table" },
+          "div",
+          { class: "ner-table-wrap" },
           h(
-            "thead",
-            {},
+            "table",
+            { class: "ner-table" },
             h(
-              "tr",
+              "thead",
               {},
-              h("th", {}, "Глава"),
-              h("th", {}, "Папка"),
-              h("th", {}, "Ошибки"),
+              h(
+                "tr",
+                {},
+                h("th", {}, "Глава"),
+                h("th", {}, "Папка"),
+                h("th", {}, "Ошибки"),
+              ),
             ),
+            h("tbody", {}, rows.slice(pager.page * PAGE_SIZE, (pager.page + 1) * PAGE_SIZE)),
           ),
-          h("tbody", {}, rows.slice(pager.page * PAGE_SIZE, (pager.page + 1) * PAGE_SIZE)),
         ),
       );
       body.append(pager.el);
