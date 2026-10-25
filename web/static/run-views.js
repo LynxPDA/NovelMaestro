@@ -1048,13 +1048,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       syncProfileNote(key);
     }
     // Сложные контролы (select/textarea/files) — тултип при наведении;
-    // inline-подсказка остаётся только у простых text/number
-    if (f.help) {
+    // inline-подсказка остаётся только у простых text/number.
+    // brief — короткая подпись под полем, полный help уходит в тултип
+    // (длинная справка под полем растягивала форму на пол-экрана).
+    if (f.help || f.brief) {
       const complex = f.type === "select" || f.type === "textarea"
         || f.type === "files";
-      if (complex) {
+      if (f.brief && f.help) {
+        wrap.append(h("div", { class: "field-help" }, f.brief));
+        attachTooltip(label, f.help);
+      } else if (complex) {
         attachTooltip(wrap, f.help);
-      } else {
+      } else if (f.help) {
         wrap.append(h("div", { class: "field-help" }, f.help));
       }
     }
@@ -2238,6 +2243,159 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     };
   }
 
+  // ── translate_check: предрасчёт допуска объёма ──────────────────────
+  // Кнопка у поля «Чувствительность»: сервер проходит по книге теми же
+  // функциями, что и запуск (cli/translate_check.py: scan_files →
+  // count_file_tokens → collect_stats), и отвечает допуском и списком глав,
+  // которые в него не влезают. Ответ на вопрос «двигать K или править
+  // главу» — ДО прогона; главы целиком не читаются, поэтому на 600 главах
+  // это секунды.
+  function tcStatsWidget(key, fieldWrap) {
+    const note = h("div", { class: "field-help tc-stats-note" });
+    const box = h("div", { class: "tc-stats hidden" });
+    const btn = h(
+      "button",
+      { class: "btn btn-sm btn-ghost tc-stats-btn", type: "button" },
+      iconEl("activity"),
+      "Предрасчёт",
+    );
+    attachTooltip(
+      btn,
+      "Посчитать допуск объёма по этой книге сейчас: сколько глав диапазона "
+        + "не влезает при текущей чувствительности. Главы не читаются — "
+        + "только счёт объёмов.",
+    );
+    let sig = ""; // что считали: смена типа/K/диапазона делает ответ старым
+    const current = () => {
+      const v = st.values[key] || {};
+      return [v["check_type"], v["sensitivity"], v["start"], v["end"]]
+        .map((x) => String(x ?? "")).join("\u0000");
+    };
+    const markStale = () => {
+      if (box.classList.contains("hidden")) return;
+      note.classList.remove("is-sum");
+      note.textContent = "поля изменились — пересчитайте";
+      box.classList.add("is-stale");
+    };
+    function renderResult(d) {
+      box.replaceChildren();
+      box.classList.remove("is-stale");
+      note.classList.remove("is-sum");
+      const stats = Array.isArray(d.stats) ? d.stats : [];
+      if (d.off) {
+        note.textContent = "K = 0 — объёмные сравнения выключены";
+        box.classList.add("hidden");
+        return;
+      }
+      if (!stats.length) {
+        note.textContent = "глав с парами файлов нет";
+        box.classList.add("hidden");
+        return;
+      }
+      box.classList.remove("hidden");
+      const out = Array.isArray(d.outliers) ? d.outliers : [];
+      const rows = h("div", { class: "tc-stats-rows" });
+      for (const s of stats) {
+        /* база пары: глав мало (2–4) — MAD выборки не доверен, допуск
+           держит расширенный пол; молчать об этом нельзя */
+        rows.append(
+          h(
+            "div",
+            { class: "tc-stats-row" },
+            h("span", { class: "tc-stats-pair" },
+              `${s.check} vs ${s.ref}`),
+            h("span", { class: "tc-stats-nums" },
+              `допуск ${s.lo.toFixed(2)}–${s.hi.toFixed(2)}`
+                + ` · медиана ${s.median.toFixed(3)}`
+                + ` · глав ${s.n}`
+                + (s.small ? " (мало — пол)" : "")),
+          ),
+        );
+      }
+      box.append(rows);
+      if (!out.length) {
+        note.classList.add("is-sum");
+        note.textContent = `при K=${fmtK(stats[0].k)} диапазон проходит `
+          + `(${d.start}–${d.end})`;
+        return;
+      }
+      const list = h("div", { class: "tc-stats-out" });
+      for (const o of out.slice(0, 20)) {
+        for (const p of o.pairs) {
+          list.append(
+            h("div", { class: "tc-stats-out-row" },
+              `глава ${o.chapter} · ${p.ref}: отношение ${p.ratio}`
+                + ` вне ${p.lo}–${p.hi}`
+                + (p.k == null ? " · K не поможет (пол)"
+                  : ` · пройдёт при K ≥ ${p.k}`)),
+          );
+        }
+      }
+      const more = out.length > 20
+        ? h("div", { class: "field-help" }, `…и ещё ${out.length - 20}`)
+        : null;
+      note.classList.add("is-sum");
+      note.textContent = `вне допуска глав: ${out.length}`;
+      box.append(list, more);
+    }
+    function fmtK(k) {
+      const n = Number(k);
+      return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : "?";
+    }
+    async function run() {
+      const sigNow = current();
+      // подсказка уже прочитана, а курсор остаётся на кнопке: гасим тултип
+      btn.dispatchEvent(new Event("mouseleave"));
+      btn.classList.add("busy");
+      btn.disabled = true;
+      note.classList.remove("is-sum");
+      note.textContent = "считаю объёмы…";
+      try {
+        const d = await api("/stages/translate_check/stats", {
+          method: "POST",
+          body: {
+            project: `${section}/${name}`,
+            params: buildParams(key, st.curSpec),
+          },
+        });
+        sig = sigNow;
+        renderResult(d);
+      } catch (ex) {
+        box.replaceChildren();
+        box.classList.add("hidden");
+        note.textContent = "";
+        toast(ex.message, "err");
+      } finally {
+        btn.classList.remove("busy");
+        btn.disabled = false;
+      }
+    }
+    btn.addEventListener("click", run);
+    // поля, от которых зависит ответ: их правка делает предрасчёт старым
+    for (const name of ["check_type", "sensitivity", "start", "end"]) {
+      const wrap = name === "start" || name === "end" ? st.rangeRow : null;
+      const inp = wrap
+        ? (name === "start" ? wrap._start : wrap._end)
+        : fieldWrap && fieldWrap[name] && fieldWrap[name]._input;
+      if (!inp) continue;
+      inp.addEventListener("input", () => { if (sig !== current()) markStale(); });
+      inp.addEventListener("change", () => { if (sig !== current()) markStale(); });
+    }
+    // кнопка — в строке с полем: «значение + действие над ним» читаются
+    // вместе, а не второй строкой под справкой
+    const sens = fieldWrap && fieldWrap["sensitivity"];
+    const input = sens && sens._input;
+    if (input) {
+      // сначала вставляем строку на место поля (input отсоединяется),
+      // потом кладём поле рядом с кнопкой: h() сразу забирает узел в контейнер
+      const row = h("div", { class: "field-row tc-stats-field" });
+      input.replaceWith(row);
+      row.append(input, btn);
+      sens.append(note, box);
+    }
+    return sens;
+  }
+
   // форма стадии: все поля спеки. НЕ async — formPanel вставляет результат
   // как DOM-узел; async вернул бы Promise (баг «[object Promise]»).
   function stageForm(key, spec) {
@@ -2260,6 +2418,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     attachQualityRange(key, fieldWraps);
     // видимость полей по режиму — один проход по метаданным реестра
     const modeVis = attachModeVisibility(key, spec, fieldWraps, rangeRow);
+
+    // translate_check: кнопка предрасчёта встаёт в строку самого поля
+    // чувствительности — ответ на «двигать K или править главу» до прогона,
+    // без отдельного блока в форме
+    if (key === "translate_check") tcStatsWidget(key, fieldWraps);
 
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны;

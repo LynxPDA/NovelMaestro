@@ -368,6 +368,9 @@ function attachTooltip(el, text) {
   el.addEventListener("mouseleave", hide);
   el.addEventListener("focus", show);
   el.addEventListener("blur", hide);
+  // действие по кнопке — подсказка уже прочитана, а курсор остаётся на ней:
+  // тултип не должен закрывать то, что изменилось после клика
+  el.addEventListener("pointerdown", hide);
 }
 // кросс-файловый хелпер: используется в project-views.js (тултипы
 // полей форм) — явный экспорт на window, как у window.viewRun
