@@ -5603,11 +5603,15 @@ function viewProject(section, name, tab, job) {
 
   /* Модалка «Из шаблона»: два способа — ОДИН файл (любой файл любого набора,
      с именем в книге) или ВЕСЬ набор (все промпты templates/<набор>/prompts).
-     Колбэк получает действие: оно пишет файлы и возвращает текст для тоста. */
+     Кандидаты одного файла строятся из template_sets: плоский templates
+     дедуплицирован по имени (одно имя — один набор, и побеждает General),
+     и файл чужого набора из списка пропадал. Колбэк получает действие: оно
+     пишет файлы и возвращает текст для тоста. */
   function templateModal(data, onApply) {
     const q = new URLSearchParams({ project: `${section}/${name}` });
-    const templates = data.templates || [];
     const sets = data.template_sets || [];
+    const templates = sets.flatMap((s) => (s.prompts || [])
+      .map((n) => ({ name: n, set: s.name })));
     const err = h("div", { class: "form-error" });
     const toOne = h("input", { type: "radio", name: "tplmode", value: "one" });
     const toSet = h("input", { type: "radio", name: "tplmode", value: "set" });
@@ -5622,11 +5626,19 @@ function viewProject(section, name, tab, job) {
 
     const sel = h("select", { class: "input" });
     for (const t of templates) {
-      sel.append(h("option", { value: t.name }, `${t.name} · набор ${t.set}`));
+      /* значение — «набор/файл»: одно имя бывает в нескольких наборах, и
+         по имени option выбрать нельзя (выбор уходил бы в соседнюю строку) */
+      sel.append(h("option", { value: `${t.set}/${t.name}` },
+        `${t.name} · набор ${t.set}`));
     }
     const fname = h("input", { class: "input", placeholder: "имя файла" });
+    function chosen() {
+      return templates.find((t) => `${t.set}/${t.name}` === sel.value)
+        || templates[0];
+    }
     function syncName() {
-      if (!fname.dataset.touched) fname.value = sel.value || "";
+      const t = chosen();
+      if (!fname.dataset.touched) fname.value = t ? t.name : "";
     }
     sel.addEventListener("change", syncName);
     fname.addEventListener("input", () => (fname.dataset.touched = "1"));
@@ -5678,6 +5690,7 @@ function viewProject(section, name, tab, job) {
       setPane.classList.toggle("hidden", one);
     }
     for (const r of [toOne, toSet]) r.addEventListener("change", syncMode);
+    syncName();
 
     UIC.modal({
       title: "Промпты из шаблона",
@@ -5701,7 +5714,7 @@ function viewProject(section, name, tab, job) {
                 err.textContent = "";
                 let apply;
                 if (toOne.checked) {
-                  const target = templates.find((t) => t.name === sel.value);
+                  const target = chosen();
                   const outName = fname.value.trim();
                   if (!target || !outName) {
                     err.textContent = "Выберите шаблон и укажите имя файла";

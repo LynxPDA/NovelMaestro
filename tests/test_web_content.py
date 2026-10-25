@@ -764,6 +764,32 @@ def test_prompts_template_sets_in_list(srv, tmp_path):
     assert any(t["name"] == "pipeline_prompt.txt" for t in r["templates"])
 
 
+def test_prompts_template_sets_keep_same_names(srv, tmp_path):
+    """Одно имя в разных наборах — в template_sets каждая запись своя.
+
+    Плоский templates дедуплицирован по имени (первый набор побеждает),
+    поэтому из него не видно, что тот же файл есть и в другом наборе;
+    список одного файла в SPA строится по template_sets.
+    """
+    srv, port, root = srv(repo_root=tmp_path / "repo")
+    _mk_project(root)
+    tpl = tmp_path / "repo" / "templates"
+    for set_name in ("General", "Xianxia"):
+        (tpl / set_name / "prompts").mkdir(parents=True)
+        (tpl / set_name / "prompts" / "pipeline_prompt.txt").write_text(
+            f"{set_name}\n", encoding="utf-8")
+    (tpl / "Xianxia" / "prompts" / "ner_prompt.txt").write_text(
+        "нер\n", encoding="utf-8")
+    r = _request(port, "GET", f"/api/prompts?{_q('ACTIVE/demo')}")
+    sets = {s["name"]: s for s in r["template_sets"]}
+    assert [s["name"] for s in r["template_sets"]] == ["General", "Xianxia"]
+    assert sets["Xianxia"]["prompts"] == ["ner_prompt.txt",
+                                            "pipeline_prompt.txt"]
+    # плоский список оставил одно имя — набор у него первый (General)
+    flat = [t for t in r["templates"] if t["name"] == "pipeline_prompt.txt"]
+    assert len(flat) == 1 and flat[0]["set"] == "General"
+
+
 def test_prompts_copy_whole_set(srv, tmp_path):
     """POST /api/prompts/copy-set — весь набор в книгу одним запросом."""
     srv, port, root = srv()

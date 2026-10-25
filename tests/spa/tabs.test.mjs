@@ -346,6 +346,13 @@ async function api(path, opts = {}) {
   if (p === "/stages/compile/options") return { modes: [] };
   if (p === "/cover") return { files: [] };
   if (p === "/templates") return { templates: [] };
+  if (p.startsWith("/prompts/") && p.endsWith("/template")) {
+    /* шаблоны одного файла — по наборам, с содержимым */
+    const name = decodeURIComponent(p.split("/")[2]);
+    const all = globalThis.__promptTemplates
+      || (globalThis.__prompts || {}).templates || [];
+    return { ok: true, name, templates: all.filter((t) => t.name === name) };
+  }
   if (p.startsWith("/prompts")) return globalThis.__prompts || { prompts: [], templates: [] };
   if (p.startsWith("/logs")) return globalThis.__logs || { logs: [], content: "" };
   if (p === "/ner/export") return { ok: true, content: "" };
@@ -2747,6 +2754,65 @@ test("«Промпты»: «Из шаблона» → весь набор коп
     set: "General",
   });
   delete globalThis.__prompts;
+});
+
+/* ── плоский `templates` сервера дедуплицирован по имени: побеждает первый
+   набор (General). Список «Один файл» строится из template_sets, иначе
+   файл чужого набора виден только как General ── */
+test("«Промпты»: «Из шаблона» → один файл видит все наборы", async () => {
+  globalThis.__prompts = {
+    prompts: [],
+    templates: [{ name: "pipeline_prompt.txt", set: "General" }],
+    template_sets: [
+      { name: "General", prompts: ["pipeline_prompt.txt"] },
+      { name: "Xianxia", prompts: ["pipeline_prompt.txt", "ner_prompt.txt"] },
+    ],
+  };
+  globalThis.__promptTemplates = [
+    { set: "General", name: "pipeline_prompt.txt", content: "G" },
+    { set: "Xianxia", name: "pipeline_prompt.txt", content: "X" },
+    { set: "Xianxia", name: "ner_prompt.txt",
+      content: "<prompt_pass1>\nXianxia\n</prompt_pass1>\n" },
+  ];
+  globalThis.__calls = [];
+  globalThis.__gets = [];
+  const page = viewProject("ACTIVE", "Книга", "prompts");
+  await tick();
+  await findByClass(page, "prompts-side")[0].querySelectorAll("button")
+    .find((b) => allText(b).trim() === "Из шаблона")._listeners.click[0]();
+  await tick();
+  const bd = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  const sel = findTag(bd, "select")[0];
+  const labels = sel.children.map((o) => allText(o).trim());
+  assert.deepEqual(labels, [
+    "pipeline_prompt.txt · набор General",
+    "pipeline_prompt.txt · набор Xianxia",
+    "ner_prompt.txt · набор Xianxia",
+  ], "видны файлы всех наборов, а не только General");
+  /* выбор файла чужого набора: имя в поле и содержимое — из ЭТОГО набора */
+  sel.value = "Xianxia/ner_prompt.txt";
+  await sel._listeners.change[0]();
+  const fname = findTag(bd, "input")
+    .find((i) => i.getAttribute("type") !== "radio");
+  assert.equal(fname.value, "ner_prompt.txt", "имя — из выбранной строки");
+  await findByClass(bd, "btn-primary")[0]._listeners.click[0]();
+  await tick();
+  const got = globalThis.__gets.filter(
+    (g) => g.path === "/prompts/ner_prompt.txt/template").pop();
+  assert.ok(got, "шаблон запрошен по имени выбранного файла");
+  const put = globalThis.__calls.find((c) => c.method === "PUT"
+    && c.path === "/prompts/ner_prompt.txt");
+  assert.ok(put, "файл записан в книгу");
+  assert.deepEqual(JSON.parse(JSON.stringify(put.body)), {
+    project: "ACTIVE/Книга",
+    content: "<prompt_pass1>\nXianxia\n</prompt_pass1>\n",
+  }, "в книгу ушёл текст из выбранного набора, а не первый попавшийся");
+  delete globalThis.__prompts;
+  delete globalThis.__promptTemplates;
+  globalThis.__calls = [];
+  globalThis.__gets = [];
 });
 
 test("состояние «Логов»: папка и открытый файл возвращаются", async () => {
