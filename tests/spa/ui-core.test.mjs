@@ -1420,3 +1420,16 @@ test("saveQueue: пауза ввода откладывается новой п�
   assert.equal(calls, 1);
   assert.deepEqual(q.pending(), { A: "2" });
 });
+
+/* ── дробь в целочисленном поле «Настроек» ── */
+test("numberStepHint: дробь в целочисленном поле предупреждает", () => {
+  /* «262,144» из буфера браузер превращает в 262.144, а чтение числа берёт
+     целую часть — в MAX_TOKENS тихо оказались бы 262 токена */
+  assert.match(UICore.numberStepHint("number", 1, "262.144"), /262/);
+  assert.equal(UICore.numberStepHint("number", 1, "262144"), "");
+  assert.equal(UICore.numberStepHint("number", null, ""), "");
+  // дробное поле (порог схожести 0–1) дробь и ждёт
+  assert.equal(UICore.numberStepHint("number", "0.05", "0.75"), "");
+  // поле-текст, где «.» — обычный символ, предупреждения не получает
+  assert.equal(UICore.numberStepHint("text", 1, "1.5"), "");
+});

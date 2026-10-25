@@ -1428,6 +1428,22 @@
       return options.includes(v) ? v : def;
     },
 
+    /* ── дробное значение в целочисленном поле «Настроек» ──
+     * Скопированный «262,144» браузер в <input type="number"> превращает в
+     * «262.144», и серверное чтение числа (core/settings._coerce) берёт целую
+     * часть — в MAX_TOKENS тихо оказались бы 262 токена. Поле с step ≥ 1
+     * дробных значений не допускает, поле с меньшим шагом — допускает
+     * (порог схожести 0–1). Возвращает текст предупреждения или "". */
+    numberStepHint: (type, step, value) => {
+      if (type !== "number") return "";
+      var raw = String(value === undefined || value === null ? "" : value).trim();
+      if (raw === "" || raw.indexOf(".") < 0) return "";
+      var s = Number(String(step === undefined || step === null ? "1" : step));
+      if (!Number.isFinite(s) || s < 1) return "";
+      return "Здесь нужно целое число: «" + raw + "» будет прочитано как "
+        + Math.trunc(Number(raw));
+    },
+
     /* ── диапазон глав: «от» не больше «до», оба в пределах книги ──
      * Границы — первая и последняя глава книги (options.chapters.min/max);
      * пустое поле значит «вся книга» и проверяется отдельно (это не ошибка,

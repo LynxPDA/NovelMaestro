@@ -1250,9 +1250,31 @@ async function viewSettings() {
     }
     if (f.doc) wrap.append(docLink(f));
     ctl[id] = input;
+    /* дробь в целочисленном поле: «262,144» из буфера браузер превращает в
+       «262.144», а чтение числа берёт целую часть — 262 токена вместо 262144.
+       Поле остаётся рабочим (видно и значение, и предупреждение) */
+    let hint = null;
+    const stepHint = () => {
+      const msg = UICore.numberStepHint(f.type, f.step, input.value);
+      if (!msg) {
+        input.classList.remove("input-bad");
+        if (hint) hint.remove();
+        hint = null;
+        return;
+      }
+      input.classList.add("input-bad");
+      if (!hint) {
+        hint = h("div", { class: "field-help is-warn" });
+        wrap.append(hint);
+      }
+      hint.textContent = msg;
+    };
     // автосохранение поля: input — текст/число при вводе, change — select и
     // выход из поля; одинаковое значение (фокус, Tab) записи не начинает
-    const onField = () => fieldChanged(id, input.value);
+    const onField = () => {
+      stepHint();
+      fieldChanged(id, input.value);
+    };
     input.addEventListener("input", onField);
     input.addEventListener("change", onField);
     return wrap;
