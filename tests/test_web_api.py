@@ -1594,7 +1594,34 @@ def test_upload_bad_dest_rejected(srv_ctx):
         [("dest", "../evil")],
         [("x.txt", "text/plain", b"x")])
     assert res.status == 400
-    assert "недопустима" in payload["error"]
+    assert "песочницы" in payload["error"]
+
+
+def test_upload_any_nested_folder_ok(srv_ctx):
+    """dest — любая папка книги, в т.ч. своей вложенности: перенос
+    папки на вкладку «Файлы» раскладывает её дерево по подпапкам."""
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _multipart_request(
+        port, "/api/upload?project=ACTIVE/test_book",
+        [("dest", "tmp/Новая папка/sub")],
+        [("a.txt", "text/plain", b"a")])
+    assert res.status == 200, payload
+    assert payload["saved"] == ["tmp/Новая папка/sub/a.txt"]
+    pdir = projects_root / "ACTIVE" / "test_book"
+    assert (pdir / "tmp" / "Новая папка" / "sub" / "a.txt").read_bytes() == b"a"
+
+
+def test_upload_dest_is_file_rejected(srv_ctx):
+    """dest указывает на файл — 400, а не молчаливое падение mkdir."""
+    _, port, projects_root = srv_ctx()
+    _file_project(port, projects_root)
+    res, payload = _multipart_request(
+        port, "/api/upload?project=ACTIVE/test_book",
+        [("dest", "source/hello.txt")],
+        [("x.txt", "text/plain", b"x")])
+    assert res.status == 400
+    assert "не каталог" in payload["error"]
 
 
 def test_upload_no_files_400(srv_ctx):

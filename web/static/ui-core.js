@@ -163,6 +163,40 @@
     return F_ICONS[extOf(entry.name)] || "file";
   }
 
+  /* ── загрузка файлов и папок перетаскиванием ──
+   * Перетащенный каталог браузер приносит плоским набором File, у каждого —
+   * webkitRelativePath («папка/подпапка/файл»); обычные файлы этого поля не
+   * имеют. Папку сохраняем как папку: подпапки — отдельные папки назначения
+   * загрузки, а в имени поля всегда basename (сервер принимает только его).
+   * Пустые каталоги не переносятся: в dataTransfer их нет, а браузерный
+   * список файлов о них не знает. */
+  function uploadPath(file) {
+    var rel = String((file && file.webkitRelativePath) || "");
+    var name = String((file && file.name) || "");
+    return rel || name;
+  }
+  function uploadBatches(files) {
+    var groups = {};
+    var order = [];
+    for (var i = 0; i < (files ? files.length : 0); i++) {
+      var f = files[i];
+      if (!f || !f.name) continue;
+      var parts = uploadPath(f).split("/").filter(function (p) {
+        return p && p !== "." && p !== "..";
+      });
+      parts.pop(); // basename остаётся именем поля files[], папка — dest
+      var dir = parts.join("/");
+      if (!Object.prototype.hasOwnProperty.call(groups, dir)) {
+        groups[dir] = [];
+        order.push(dir);
+      }
+      groups[dir].push(f);
+    }
+    return order.map(function (dir) {
+      return { dest: dir, files: groups[dir] };
+    });
+  }
+
   /* ── предпросмотр файлов ──
    * Расширение → режим предпросмотра: html показывается как есть, markdown —
    * через marked, ВСЁ остальное (txt, log, json, yaml…) — обычным текстом.
@@ -1879,6 +1913,9 @@
     icon: icon,
     iconNames: Object.keys(ICON_PATHS),
     extOf: extOf,
+    /* перетаскивание файлов и папок: папка → папки назначения загрузки */
+    uploadPath: uploadPath,
+    uploadBatches: uploadBatches,
     previewMode: previewMode,
     editorLang: editorLang,
     modeValue: modeValue,

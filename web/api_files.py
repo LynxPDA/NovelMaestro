@@ -16,7 +16,7 @@ from web.multipart import (
     parse_disposition,
 )
 from web.server import ApiError, Router
-from web.api_common import log, UPLOAD_DIRS, FILE_TEXT_LIMIT, DIR_TREE_LIMIT
+from web.api_common import log, FILE_TEXT_LIMIT, DIR_TREE_LIMIT
 from web.api_common import (
     _atomic_write_spool,
     _close_multipart_fields,
@@ -278,20 +278,24 @@ def _file_move(ctx: dict) -> dict:
 def _file_upload(ctx: dict) -> dict:
     """Загрузка файлов (POST /api/upload, multipart).
 
-    Поля: dest=source|chapters|prompts|images|tmp|вложенная chapters/…
-    + files[] (несколько); пусто/отсутствует dest = корень проекта.
-    Имена — только basename; лимит max_upload_mb на файл и на тело;
-    файлы пишутся атомарно, при ошибке валидации не пишется ничего.
+    Поля: dest=<любая папка проекта, в т.ч. вложенная> + files[][] (несколько);
+    пусто/отсутствует dest = корень проекта. Имена — только basename файла
+    (вложенные папки перетащенного каталога раскладывает SPA отдельными
+    полями files, базы в них — basename). Папка назначения создаётся.
+    Лимит max_upload_mb на файл и на тело; файлы пишутся атомарно, при ошибке
+    валидации не пишется ничего.
     """
     pdir, _section, _name = _project_ctx(ctx)
     fields = _multipart_fields(ctx)
     try:
         dest = extract_value(fields, "dest")
-        # пусто = корень проекта (поля files с dir="" — ner_file, wiki
-        # file); вложенные папки глав — для загрузки внутрь chapter-папок
-        if dest and dest not in UPLOAD_DIRS \
-                and not dest.startswith("chapters/"):
-            raise ApiError(400, f"Папка назначения недопустима: {dest}")
+        # пусто = корень проекта (поля files с dir="" — ner_file, wiki file);
+        # иначе — путь внутри книги: песочница ниже не пустит за её пределы
+        if dest:
+            rel = _resolve_project_path(ctx, pdir, dest)
+            if rel.exists() and not rel.is_dir():
+                raise ApiError(400, f"Папка назначения не каталог: {dest}")
+            dest = rel.relative_to(pdir).as_posix()
         uploads = []
         for f in extract_files(fields):
             fname = f.get("filename") or ""

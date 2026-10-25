@@ -1433,3 +1433,41 @@ test("numberStepHint: дробь в целочисленном поле пред
   // поле-текст, где «.» — обычный символ, предупреждения не получает
   assert.equal(UICore.numberStepHint("text", 1, "1.5"), "");
 });
+
+/* ── загрузка папки на вкладку «Файлы» ── */
+test("uploadPath: путь перетащенного файла", () => {
+  assert.equal(UICore.uploadPath({ name: "a.txt" }), "a.txt");
+  assert.equal(
+    UICore.uploadPath({ name: "a.txt", webkitRelativePath: "Книга/sub/a.txt" }),
+    "Книга/sub/a.txt",
+  );
+  assert.equal(UICore.uploadPath(null), "");
+});
+
+test("uploadBatches: файлы раскладываются по папкам", () => {
+  const f = (rel) => ({ name: rel.split("/").pop(), webkitRelativePath: rel });
+  const got = UICore.uploadBatches([
+    f("b.txt"),
+    f("Книга/x.txt"),
+    f("Книга/sub/y.txt"),
+    f("Книга/z.txt"),
+    null,
+    { name: "" },
+  ]);
+  assert.deepEqual(
+    got.map((b) => [b.dest, b.files.map((x) => x.name)]),
+    [
+      ["", ["b.txt"]],
+      ["Книга", ["x.txt", "z.txt"]],
+      ["Книга/sub", ["y.txt"]],
+    ],
+  );
+  assert.deepEqual(UICore.uploadBatches(null), []);
+});
+
+test("uploadBatches: папка без имени файла не теряется", () => {
+  /* браузер отдаёт папку только списком её файлов: пустая папка в
+     DataTransfer.files не попадает вовсе — раскладывать нечего */
+  const got = UICore.uploadBatches([{ name: "x.txt", webkitRelativePath: "" }]);
+  assert.deepEqual(got.map((b) => b.dest), [""]);
+});

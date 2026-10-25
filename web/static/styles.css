@@ -655,6 +655,40 @@ body {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
+/* зона перетаскивания файлов и папок: при перетаскивании список накрывает
+   подсвеченная область с подписью «куда и сколько», подсказка не сдвигает
+   список — строки не прыгают под курсором */
+.files-drop {
+  position: relative;
+}
+.files-drop-hint {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  pointer-events: none;
+}
+.files-drop-hint.hidden {
+  display: none; /* .hidden общий знает только display:none !important */
+}
+/* сама зона сброса тоже подсвечивается: пунктир показывает границы цели
+   целиком, минимум высоты — чтобы в пустую папку было куда попасть */
+.files-drop.drop-over .files-list {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  min-height: 160px;
+}
 .files-empty {
   margin-top: 18px;
   padding: 18px;

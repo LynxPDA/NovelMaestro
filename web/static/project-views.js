@@ -450,36 +450,81 @@ function viewProject(section, name, tab, job) {
         }
       } catch (ex) {
         toast(ex.message, "err");
+      } finally {
+        // повторный выбор того же файла тоже должен давать change
+        upInput.value = "";
       }
     });
+    /* Загрузка в текущую папку (пусто → tmp, как было у кнопки «Загрузить»).
+       Перетащенный каталог браузер отдаёт набором файлов с относительным
+       путём (webkitRelativePath): раскладываем их по подпапкам назначения,
+       а имя файла в поле остаётся basename — сервер принимает только его.
+       Группировку считает UICore.uploadBatches. */
     async function uploadFiles(files) {
       const dest = st.path || "tmp";
-      // перезапись существующих файлов — с подтверждением
-      const names = [...files].map((f) => f.name).filter(Boolean);
-      let existing = [];
-      try {
-        const d = await api(
-          `/files?project=${encodeURIComponent(`${section}/${name}`)}` +
-          `&path=${encodeURIComponent(dest)}`,
-        );
-        existing = (d.entries || []).map((e) => e.name);
-      } catch {
-        /* папки ещё нет — всё новое */
+      // корень папки перетащенного каталога — под текущей папкой
+      const batches = UICore.uploadBatches(files).map((b) => ({
+        dest: b.dest ? `${dest}/${b.dest}` : dest,
+        files: b.files,
+      }));
+      if (!batches.length) {
+        toast("Нечего загружать: пустая папка или нет файлов", "err");
+        return null;
       }
-      const collide = names.filter((n) => existing.includes(n));
+      /* перезапись — с подтверждением: за один заход не больше 400 листингов
+         (перетащили дерево из сотен папок — проверяем ближние, остальное
+         просто пишется) */
+      const dirList = [...new Set(batches.map((b) => b.dest))].slice(0, 400);
+      const existing = await existingPaths(dirList);
+      const collide = [];
+      for (const b of batches) {
+        if (!dirList.includes(b.dest)) continue;
+        for (const f of b.files) {
+          if (existing.includes(`${b.dest}/${f.name}`)) {
+            collide.push(`${b.dest}/${f.name}`);
+          }
+        }
+      }
       if (collide.length) {
+        const shown = collide.slice(0, 8).join(", ")
+          + (collide.length > 8 ? ` и ещё ${collide.length - 8}` : "");
         const ok = await confirmModal(
           "Загрузка с перезаписью",
-          `В ${dest} уже есть: ${collide.join(", ")}. Заменить этими файлами?`,
+          `Уже есть: ${shown}. Заменить этими файлами?`,
           "ПЕРЕЗАПИСАТЬ",
           async () => {},
         );
         if (!ok) return null;
       }
-      const form = new FormData();
-      form.append("dest", dest);
-      for (const f of files) form.append("files[]", f, f.name);
-      return apiUpload(`/upload?project=${section}/${name}`, form);
+      const saved = [];
+      for (const b of batches) {
+        const form = new FormData();
+        form.append("dest", b.dest);
+        for (const f of b.files) form.append("files[]", f, f.name);
+        const r = await apiUpload(`/upload?project=${section}/${name}`, form);
+        saved.push(...(r.saved || []));
+      }
+      return { saved };
+    }
+    /* Какие пути уже заняты в папках назначения. Спрашиваем только те папки,
+       которые в проекте есть (дерево из листинга выше): у новых папок
+       отвлекать сервер 404-й незачем — там сталкиваться не с чем. */
+    async function existingPaths(dests) {
+      const known = new Set(dirs);
+      const out = [];
+      for (const dir of dests) {
+        if (!known.has(dir)) continue;
+        try {
+          const d = await api(
+            `/files?project=${encodeURIComponent(`${section}/${name}`)}` +
+            `&path=${encodeURIComponent(dir)}`,
+          );
+          for (const e of d.entries || []) out.push(`${dir}/${e.name}`);
+        } catch {
+          /* папки ещё нет — всё новое */
+        }
+      }
+      return out;
     }
 
     function toggleSel(p, on) {
@@ -704,6 +749,8 @@ function viewProject(section, name, tab, job) {
       e.preventDefault();
       quickLook(row.getAttribute("data-name") || "");
     });
+    /* Пустой список остаётся целью сброса: у него своя высота (ниже), а
+       зона — wrap целиком: тащить в узкую строку на весь экран неудобно. */
     // одна страница — пагинация не нужна, достаточно счётчика
     const fPager = UIC.listPager({
       list: drop,
@@ -724,16 +771,64 @@ function viewProject(section, name, tab, job) {
     fPager.page = st.filesPage;
     fPager.render();
     paintSel();
-    drop.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      drop.classList.add("drop-over");
-    });
-    drop.addEventListener("dragleave", () =>
-      drop.classList.remove("drop-over"),
-    );
-    drop.addEventListener("drop", async (e) => {
-      e.preventDefault();
+    /* Перетаскивание: файлы — в папку, каталог — вместе с содержимым.
+       dataTransfer.items нужен, чтобы посчитать папки и показать, куда
+       кладём; сами File берём из files (папку браузер уже разложил по ним). */
+    let dragDepth = 0;
+    const dragInfo = (dt) => {
+      let dirs = 0;
+      let files = 0;
+      for (const it of dt && dt.items ? [...dt.items] : []) {
+        if (it.kind !== "file") continue;
+        let entry = null;
+        try {
+          entry = it.webkitGetAsEntry ? it.webkitGetAsEntry() : null;
+        } catch {
+          entry = null; // не в dragenter/dragover — состав неизвестен
+        }
+        if (entry && entry.isDirectory) dirs++;
+        else files++;
+      }
+      const parts = [];
+      if (files) parts.push(`файлов: ${files}`);
+      if (dirs) parts.push(`папок: ${dirs}`);
+      return "Загрузить в " + (st.path || "tmp") +
+        (parts.length ? ` · ${parts.join(", ")}` : "");
+    };
+    const hint = h("div", { class: "files-drop-hint hidden" });
+    /* зона сброса — весь блок списка: у пустой/короткой папки строки
+       тонкие, а тащить файл в строку на другом конце экрана неудобно */
+    const zone = h("div", { class: "files-drop" }, hint, drop);
+    const dragEnd = () => {
+      dragDepth = 0;
+      zone.classList.remove("drop-over");
       drop.classList.remove("drop-over");
+      hint.classList.add("hidden");
+    };
+    zone.addEventListener("dragenter", (e) => {
+      if (!e.dataTransfer) return;
+      dragDepth++;
+      zone.classList.add("drop-over");
+      drop.classList.add("drop-over");
+      hint.textContent = dragInfo(e.dataTransfer);
+      hint.classList.remove("hidden");
+    });
+    zone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      // без dropEffect браузер считает зону запретной для сброса
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    });
+    zone.addEventListener("dragleave", () => {
+      // dragleave прилетает и при переходе между строками списка — считаем
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth) return;
+      zone.classList.remove("drop-over");
+      drop.classList.remove("drop-over");
+      hint.classList.add("hidden");
+    });
+    zone.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      dragEnd();
       try {
         const r = await uploadFiles(e.dataTransfer.files);
         if (r) {
@@ -744,7 +839,16 @@ function viewProject(section, name, tab, job) {
         toast(ex.message, "err");
       }
     });
-    return h("div", { class: "files-wrap" }, toolbar, drop, fPager.el);
+    /* скрытое поле выбора файлов живёт в разметке рядом с кнопкой: кнопка
+       его только нажимает, а тест может выставить файлы напрямую */
+    return h(
+      "div",
+      { class: "files-wrap" },
+      upInput,
+      toolbar,
+      zone,
+      fPager.el,
+    );
   }
 
   /* Сортировка списка файлов: каталоги всегда первыми (обход вниз идёт по
