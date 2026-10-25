@@ -157,18 +157,13 @@ def scan_files(chapter_map, check_type, comparisons, strict) -> dict:
     return files
 
 
-def collect_stats(files, check_type, comparisons, counts,
-                  sensitivity: float) -> dict:
-    """Статистика каждой пары по отношениям объёмов ВСЕЙ книги.
+def pair_ratios(files, check_type, comparisons, counts) -> dict:
+    """Отношения объёмов по каждой паре: эталон → {номер главы: отношение}.
 
     База пары — главы, где есть оба файла и оба непусты (промежуточные
-    стадии могли делаться не везде — у каждой пары своя база). Центр —
-    медиана, разброс — MAD; допуск = max(пол, K·MAD/медиана); при
-    n < SMALL_N разброс выборки не доверяем — допуск расширенного пола.
-    Медиана устойчива, пока битых глав в базе меньше половины, — это
-    честный предел метода.
+    стадии могли делаться не везде — у каждой пары своя база).
     """
-    ratios: dict[str, list] = {rt: [] for rt, _ in comparisons}
+    ratios: dict[str, dict] = {rt: {} for rt, _ in comparisons}
     for num, row in files.items():
         cn = counts.get(row.get(check_type, ""), 0)
         if not cn:
@@ -176,10 +171,23 @@ def collect_stats(files, check_type, comparisons, counts,
         for rt, _kind in comparisons:
             rn = counts.get(row.get(rt, ""), 0)
             if rn:
-                ratios[rt].append(cn / rn)
+                ratios[rt][num] = cn / rn
+    return ratios
+
+
+def collect_stats(files, check_type, comparisons, counts,
+                  sensitivity: float) -> dict:
+    """Статистика каждой пары по отношениям объёмов ВСЕЙ книги.
+
+    Центр — медиана, разброс — MAD; допуск = max(пол, K·MAD/медиана); при
+    n < SMALL_N разброс выборки не доверяем — допуск расширенного пола.
+    Медиана устойчива, пока битых глав в базе меньше половины, — это
+    честный предел метода.
+    """
+    ratios = pair_ratios(files, check_type, comparisons, counts)
     stats = {}
     for rt, kind in comparisons:
-        xs = ratios[rt]
+        xs = list(ratios[rt].values())
         n = len(xs)
         if n < 2:
             stats[rt] = {"kind": kind, "n": n, "median": 0.0, "mad": 0.0,
@@ -210,6 +218,64 @@ def min_k_for(ratio: float, st: dict) -> int | None:
         return None
     need = abs(ratio - med) / (mad / med)
     return ceil(need) if need > st.get("k", 0) else None
+
+
+def stats_payload(check_type: str, ref_type: str, st: dict) -> dict:
+    """Статистика одной пары полями — для предрасчёта в форме запусков.
+
+    Те же числа, что печатает stats_line, но без разбора текста: форма
+    показывает допуск и границы отношения до запуска. `n` и `small` важнее
+    коэффициентов: при малой базе MAD выборки не доверяем и допуск держит
+    расширенный пол — об этом говорит `small`.
+    """
+    lo, hi = bounds(st)
+    return {"check": check_type, "ref": ref_type, "kind": st["kind"],
+            "n": st["n"], "k": st["k"], "small": bool(st["small"]),
+            "median": round(st["median"], 3),
+            "mad": round(st["mad"] * 100, 1),
+            "tol": round(st["tol"] * 100, 1),
+            "lo": round(lo, 2), "hi": round(hi, 2)}
+
+
+def stats_payloads(check_type: str, comparisons, stats: dict) -> list[dict]:
+    """Статистика всех пар типа файлов — в порядке comparisons."""
+    return [stats_payload(check_type, rt, stats[rt])
+            for rt, _kind in comparisons if rt in stats]
+
+
+def outliers(comparisons, stats: dict, ratios: dict,
+             start: int, end: int, limit: int = 50) -> list:
+    """Главы диапазона, чьё отношение объёма вышло за допуск пары.
+
+    Тот же расчёт, что у volume_error в основном проходе, но без чтения
+    текстов: предпросмотр отвечает на вопрос «сколько глав поймает текущий
+    K» до запуска. Возвращает записи по главам в порядке номеров со списком
+    пар (`pairs` — эталон, отношение, границы).
+    """
+    rows: list[dict] = []
+    nums = set()
+    for rt, _kind in comparisons:
+        nums.update(ratios.get(rt, {}))
+    for num in sorted(nums):
+        if num < start or num > end:
+            continue
+        hits = []
+        for rt, _kind in comparisons:
+            st = stats.get(rt) or {}
+            ratio = ratios.get(rt, {}).get(num)
+            if ratio is None or st.get("n", 0) < 2:
+                continue
+            lo, hi = bounds(st)
+            if lo <= ratio <= hi:
+                continue
+            hits.append({"ref": rt, "ratio": round(ratio, 3),
+                         "lo": round(lo, 2), "hi": round(hi, 2),
+                         "k": min_k_for(ratio, st)})
+        if hits:
+            rows.append({"chapter": num, "pairs": hits})
+        if len(rows) >= limit:
+            break
+    return rows
 
 
 def stats_line(check_type: str, ref_type: str, st: dict) -> str:
@@ -453,6 +519,38 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
                              "(--no-sequence-check — отключить)")
     core_settings.apply_cli_defaults(parser, "translate_check")
     return parser
+
+
+def collect_book_stats(chapters_dir: str, check_type: str,
+                       sensitivity: float, strict: bool,
+                       start: int | None = None,
+                       end: int | None = None) -> dict:
+    """Статистика пар по всей книге — одни числа с шапкой отчёта.
+
+    Тот же проход (scan_files → count_file_tokens → collect_stats), но без
+    записи отчёта: форма запусков показывает допуск ДО прогона. `outliers` —
+    главы диапазона вне допуска: по ним видно, что даст текущий K.
+    """
+    comparisons = comparisons_for(check_type)
+    chapter_map = build_chapter_map(chapters_dir)
+    if not chapter_map:
+        return {"type": check_type, "chapters": 0, "start": 0, "end": 0,
+                "stats": [], "outliers": []}
+    files = scan_files(chapter_map, check_type, comparisons, strict)
+    counts = count_file_tokens(
+        sorted({p for row in files.values() for p in row.values()}))
+    ratios = pair_ratios(files, check_type, comparisons, counts)
+    stats = collect_stats(files, check_type, comparisons, counts, sensitivity)
+    lo = min(chapter_map) if start is None else start
+    hi = max(chapter_map) if end is None else end
+    # K=0 — объёмные сравнения выключены самим запуском (`volume_on`), значит и
+    # выбросов нет: иначе форма показала бы ошибки, которых прогон не найдёт
+    found = (outliers(comparisons, stats, ratios, lo, hi)
+             if sensitivity > 0 else [])
+    return {"type": check_type, "chapters": len(chapter_map),
+            "start": lo, "end": hi,
+            "stats": stats_payloads(check_type, comparisons, stats),
+            "outliers": found}
 
 
 def main() -> None:

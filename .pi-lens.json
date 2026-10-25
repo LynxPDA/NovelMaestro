@@ -9,7 +9,9 @@
     "**/__pycache__/**",
     ".venv/**",
     "venv/**",
-    ".tmp/**"
+    ".tmp/**",
+    "tools/NovelMaestro_Lite/src/000-open.js",
+    "tools/NovelMaestro_Lite/src/900-close.js"
   ],
   "format": { "enabled": false },
   "rules": {

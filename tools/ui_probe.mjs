@@ -2507,6 +2507,71 @@ async function main() {
       + `64 – 3: подсказка + ${bad.bad} поля в рамке · отказ «${err}»`);
   }
 
+  /* Предрасчёт допуска translate_check: кнопка в строке поля
+   * «Чувствительность» — числа приходят с сервера теми же функциями, что у
+   * прогона. Проверяем: строка «кнопка + число» в одной строке, ответ с
+   * допуском и главой вне допуска, гашение «старого» ответа при смене K. */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".stage-card", { timeout: 15000 });
+    await page.locator('.stage-card:has-text("Проверка перевода")').first()
+      .click();
+    await page.waitForTimeout(900);
+    const layout = await page.evaluate(() => {
+      const row = document.querySelector(".tc-stats-field");
+      const btn = document.querySelector(".tc-stats-btn");
+      if (!row || !btn) return null;
+      return {
+        sameRow: row.contains(btn),
+        hasInput: !!row.querySelector("input"),
+        label: ((document.querySelector(".field:has(.tc-stats-field) .field-label")
+          || {}).textContent || "").trim(),
+        tip: !!document.querySelector(".tc-stats-btn[data-tip]"),
+      };
+    });
+    if (!layout) problems.push("предрасчёт: кнопки у поля чувствительности нет");
+    else {
+      if (!layout.sameRow || !layout.hasInput)
+        problems.push("предрасчёт: кнопка не в строке поля");
+      if (!/Чувствительность/.test(layout.label))
+        problems.push(`предрасчёт: поле рядом с «${layout.label}»`);
+      if (!layout.tip) problems.push("предрасчёт: у кнопки нет подсказки");
+    }
+    await page.locator(".tc-stats-btn").first().click();
+    await page.waitForSelector(".tc-stats-row", { timeout: 20000 });
+    const res = await page.evaluate(() => ({
+      pairs: [...document.querySelectorAll(".tc-stats-row")].map(
+        (r) => r.textContent.replace(/\s+/g, " ").trim()),
+      note: ((document.querySelector(".tc-stats-note") || {})
+        .textContent || "").trim(),
+      out: document.querySelectorAll(".tc-stats-out-row").length,
+    }));
+    if (!res.pairs.length) problems.push("предрасчёт: пар в ответе нет");
+    if (!res.pairs.every((t) => /допуск \d/.test(t)))
+      problems.push(`предрасчёт: без допуска «${res.pairs[0]}»`);
+    if (!/проходит|вне допуска/.test(res.note))
+      problems.push(`предрасчёт: итог «${res.note}»`);
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "scenario-tc-stats.png") });
+    }
+    /* смена K делает ответ старым — вьюха говорит это явно, а не молчит */
+    const sens = page.locator(".tc-stats-field input").first();
+    await sens.fill("3");
+    await sens.dispatchEvent("input");
+    await page.waitForTimeout(300);
+    const stale = await page.evaluate(() => ({
+      text: ((document.querySelector(".tc-stats-note") || {}).textContent || "").trim(),
+      dim: !!document.querySelector(".tc-stats.is-stale"),
+    }));
+    if (!stale.dim || !/пересчитайте/.test(stale.text))
+      problems.push(`предрасчёт: смена K не отметилась («${stale.text}»)`);
+    log(`${problems.length === before ? "✅" : "❌"} предрасчёт     `
+      + `${res.pairs.length} пары · ${res.out} выбросов · «${res.note}»`);
+  }
+
   /* Отчёт translate_check: шкала допуска пары — полоса при текущем K,
    * штрих медианы и точки глав вне допуска. Числа берутся из блока
    * «Статистика» (сервер разбирает его в r.stats): без них вьюха падала бы

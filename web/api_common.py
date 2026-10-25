@@ -167,6 +167,20 @@ def _import_batch_replace():
         raise ApiError(500, f"cli.batch_replace недоступен: {exc}")
 
 
+def _import_translate_check():
+    """Ленивый импорт чистой логики cli/translate_check.py (статистика пар).
+
+    Те же функции, что у самого запуска (scan_files → count_file_tokens →
+    collect_stats): второй реализации счёта допуска быть не может — форма
+    показывала бы одно, а отчёт другое.
+    """
+    try:
+        from cli import translate_check as tc
+        return tc
+    except ImportError as exc:
+        raise ApiError(500, f"cli.translate_check недоступен: {exc}")
+
+
 class _LengthLimitedReader:
     """Бинарный reader, отдающий не более limit байт (тело запроса)."""
 

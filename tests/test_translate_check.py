@@ -615,3 +615,94 @@ def test_default_heading_rule_checks_only_not_first_line():
     hits = [m.group(0).strip() for m in rule.finditer("Глава 12\n\nтекст\n\nГлава 13")]
     assert hits == ["Глава 13"], f"лишний заголовок не найден: {hits}"
     assert rule.findall("Глава 12\n\nтекст") == []
+
+
+# ════════════════════════════════════════════════════════════════════
+# Предрасчёт для формы запусков (те же числа, что шапка отчёта)
+
+
+def test_pair_ratios_keyed_by_chapter(tmp_path):
+    """Отношения — по номеру главы: по ним предпросмотр находит выбросы."""
+    _write_chapter(tmp_path, 1, {"polished": _body(10), "redacted": _body(10)})
+    _write_chapter(tmp_path, 2, {"polished": _body(20), "redacted": _body(10)})
+    comps = TC.comparisons_for("polished")
+    files = TC.scan_files(TC.build_chapter_map(str(tmp_path)), "polished",
+                          comps, True)
+    counts = TC.count_file_tokens(
+        sorted({p for row in files.values() for p in row.values()}))
+    ratios = TC.pair_ratios(files, "polished", comps, counts)
+    assert set(ratios) == {"redacted", "chapter"}
+    assert set(ratios["redacted"]) == {1, 2}
+    assert ratios["redacted"][1] == pytest.approx(1.0, abs=0.05)
+    assert ratios["redacted"][2] > 1.3  # вдвое больше текста
+
+
+def test_stats_payload_matches_stats_line(tmp_path):
+    """Поля payload — те же числа, что печатает stats_line (один источник).
+
+    Форма показывает допуск до запуска, отчёт — после: разойтись они не
+    могут, поэтому оба берут bounds() и те же округления.
+    """
+    for num, mul in ((1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)):
+        _write_chapter(tmp_path, num,
+                       {"polished": _body(10 * mul), "redacted": _body(10)})
+    data = TC.collect_book_stats(str(tmp_path), "polished", 7, True)
+    assert data["chapters"] == 6
+    assert data["start"] == 1 and data["end"] == 6
+    pair = next(s for s in data["stats"] if s["ref"] == "redacted")
+    assert pair["check"] == "polished" and pair["k"] == 7
+    assert pair["n"] == 6 and pair["small"] is False
+    assert pair["lo"] < pair["median"] < pair["hi"]
+    assert pair["lo"] == round(pair["median"] - pair["tol"] / 100, 2) or \
+        abs(pair["lo"] - (pair["median"] - pair["tol"] / 100)) < 0.01
+    # stats_payloads идёт в порядке comparisons
+    refs = [s["ref"] for s in data["stats"]]
+    assert refs == [rt for rt, _ in TC.comparisons_for("polished")]
+
+
+def test_stats_payload_small_base_flag(tmp_path):
+    """Малая база (< SMALL_N) помечена: разброс выборки не доверяем."""
+    for num in (1, 2, 3):
+        _write_chapter(tmp_path, num,
+                       {"polished": _body(10), "redacted": _body(10)})
+    data = TC.collect_book_stats(str(tmp_path), "polished", 7, True)
+    pair = next(s for s in data["stats"] if s["ref"] == "redacted")
+    assert pair["n"] == 3 and pair["small"] is True
+
+
+def test_outliers_respect_range_and_limit(tmp_path):
+    """Выбросы — только главы диапазона, по возрастанию номеров.
+
+    База однородная (все главы равны), в главах 4 и 6 текста вдвое больше:
+    медиана держится на большинстве, а две «толстые» главы выходят за
+    узкий допуск.
+    """
+    for num in range(1, 9):
+        mul = 2 if num in (4, 6) else 1
+        _write_chapter(tmp_path, num,
+                       {"polished": _body(10 * mul), "redacted": _body(10)})
+    data = TC.collect_book_stats(str(tmp_path), "polished", 7, True,
+                                 start=3, end=6)
+    assert data["start"] == 3 and data["end"] == 6
+    nums = [o["chapter"] for o in data["outliers"]]
+    assert nums == [4, 6], nums
+    for o in data["outliers"]:
+        for p in o["pairs"]:
+            assert p["ref"] in ("redacted", "chapter")
+            assert p["ratio"] < p["lo"] or p["ratio"] > p["hi"]
+
+
+def test_collect_book_stats_empty_book(tmp_path):
+    """Глав нет — пустые списки, а не падение (форма рисует «пар нет»)."""
+    data = TC.collect_book_stats(str(tmp_path), "polished", 7, True)
+    assert data == {"type": "polished", "chapters": 0, "start": 0, "end": 0,
+                    "stats": [], "outliers": []}
+
+
+def test_collect_book_stats_zero_sensitivity_no_outliers(tmp_path):
+    """K=0 — объёмных сравнений нет: выбросов не бывает."""
+    for num in range(1, 6):
+        _write_chapter(tmp_path, num,
+                       {"polished": _body(10 * num), "redacted": _body(10)})
+    data = TC.collect_book_stats(str(tmp_path), "polished", 0, True)
+    assert data["outliers"] == []

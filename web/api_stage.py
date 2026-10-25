@@ -36,6 +36,7 @@ from web.api_common import (
     _import_batch_replace,
     _import_common,
     _import_projects,
+    _import_translate_check,
     _project_ctx,
     _projects_root,
     _repo_root,
@@ -746,6 +747,57 @@ def _batch_replace_preview(ctx: dict) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════
+# translate_check: предрасчёт объёмной статистики
+# ════════════════════════════════════════════════════════════════════
+def _translate_check_stats(ctx: dict) -> dict:
+    """Предрасчёт допуска translate_check
+    (POST /api/stages/translate_check/stats).
+
+    Тело: {project, params}. Те же числа, что печатает шапка отчёта (одни
+    функции `cli.translate_check`: scan_files → count_file_tokens →
+    collect_stats), но без запуска проверки и без записи отчёта: главы целиком
+    не читаются, поэтому ответ у книги из 600 глав — секунды. Смысл — увидеть
+    допуск при текущем K и какие главы диапазона в него не влезают до прогона
+    (возможно, двигать надо K, а не текст).
+
+    K=0 — объёмные сравнения выключены: сообщаем это полем `off`, а не пустым
+    допуском (ноль ширины читался бы как «пол жёсткий»).
+    """
+    pdir, _sec, _name = _project_ctx(ctx)
+    params = (ctx["body"] or {}).get("params") or {}
+    tc = _import_translate_check()
+    check_type = str(params.get("check_type") or "polished")
+    if check_type not in ("polished", "redacted", "translated"):
+        raise ApiError(400, f"Неизвестный тип файлов глав: {check_type}")
+    try:
+        sensitivity = float(params.get("sensitivity") or 0)
+    except (TypeError, ValueError):
+        raise ApiError(400, "«Чувствительность проверки объёма» — число") \
+            from None
+    if sensitivity < 0:
+        raise ApiError(400, "«Чувствительность проверки объёма» — число ≥ 0")
+    chapters_dir = pdir / "chapters"
+    if not chapters_dir.is_dir():
+        raise ApiError(404, "В книге нет папки chapters")
+    _check_chapter_range(ctx, "translate_check", pdir, params)
+    data = tc.collect_book_stats(
+        str(chapters_dir), check_type, sensitivity,
+        core_settings.is_on(params.get("strict", True)),
+        _int_or_none(params.get("start")), _int_or_none(params.get("end")))
+    return {"ok": True, "off": sensitivity <= 0, **data}
+
+
+def _int_or_none(value) -> int | None:
+    """Пустое/битое значение диапазона — «не задано» (скрипт возьмёт края книги)."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
 # LLM-стадии: предпросмотр первого запроса (--preview-request)
 # ════════════════════════════════════════════════════════════════════
 # стадии, чьи скрипты поддерживают --preview-request
@@ -916,6 +968,9 @@ def _register_jobs(router: Router) -> None:
                _epub_preview_folder_delete)
     router.add("POST", "/api/stages/batch_replace/preview",
                _batch_replace_preview)
+    # translate_check: предрасчёт допуска объёма по книге (кнопка у поля)
+    router.add("POST", "/api/stages/translate_check/stats",
+               _translate_check_stats)
     # LLM-стадии: предпросмотр первого запроса
     router.add("POST", "/api/stages/{key}/preview-request",
                _preview_request_post)
