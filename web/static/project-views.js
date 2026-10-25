@@ -1064,13 +1064,21 @@ function viewProject(section, name, tab, job) {
       ),
       h("span", { class: "editor-meta" }, `${full} · ${fmtSize(data.size)}`),
       h("span", { class: "spacer" }),
-      h("span", { class: "field-help" }, "кегль"),
-      previewFontSelect(() => {
-        if (pane.mode !== "code") pane.render();
-      }),
-      UIC.editorSearch(ed),
-      pane.btn,
-      saveBtn,
+      h(
+        "span",
+        { class: "toolbar-group" },
+        h("span", { class: "field-help" }, "кегль"),
+        previewFontSelect(() => {
+          if (pane.mode !== "code") pane.render();
+        }),
+      ),
+      h(
+        "span",
+        { class: "toolbar-actions" },
+        UIC.editorSearch(ed),
+        pane.btn,
+        saveBtn,
+      ),
     );
     st._ed = ed;
     return h(
@@ -1197,18 +1205,26 @@ function viewProject(section, name, tab, job) {
         "Сохранить",
       );
       const perr = h("div", { class: "form-error" });
+      /* действия панели — одна группа: при переносе поиск и сохранение
+         уходят на свою строку вместе, а не поодиночке */
+      const actions = h("span", { class: "toolbar-group" }, saveBtn);
       bar.append(
-        h("span", { class: "field-help" }, "Файл:"),
-        typeSel,
+        h(
+          "span",
+          { class: "toolbar-group" },
+          h("span", { class: "field-help" }, "Файл:"),
+          typeSel,
+        ),
         meta,
         h("span", { class: "spacer" }),
-        saveBtn,
+        actions,
       );
       const host = h("div", { class: "ed-cm" });
       pane.append(bar, perr, host);
       return {
         pane,
         bar,
+        actions,
         typeSel,
         meta,
         saveBtn,
@@ -1221,7 +1237,7 @@ function viewProject(section, name, tab, job) {
            появляется и кнопка поиска (без CodeMirror кнопки нет) */
         addSearch: (e) => {
           const f = UIC.editorSearch(e);
-          if (f) bar.insertBefore(f, saveBtn);
+          if (f) actions.insertBefore(f, saveBtn);
         },
       };
     }
@@ -2026,16 +2042,34 @@ function viewProject(section, name, tab, job) {
       }
     });
 
+    /* подпись и её контрол — одна группа: при переносе строки подпись
+       не остаётся в хвосте предыдущей строки */
     toolbar.append(
-      h("span", { class: "field-help" }, "Глава:"),
-      chapterSel,
-      h("span", { class: "field-help" }, "Режим:"),
-      modeBtn,
+      h(
+        "span",
+        { class: "toolbar-group" },
+        h("span", { class: "field-help" }, "Глава:"),
+        chapterSel,
+      ),
+      h(
+        "span",
+        { class: "toolbar-group" },
+        h("span", { class: "field-help" }, "Режим:"),
+        modeBtn,
+      ),
       hlBtn,
-      h("span", { class: "field-help" }, "n-грамма:"),
-      ngramInput,
-      h("span", { class: "field-help" }, "Порог:"),
-      thresholdInput,
+      h(
+        "span",
+        { class: "toolbar-group" },
+        h("span", { class: "field-help" }, "n-грамма:"),
+        ngramInput,
+      ),
+      h(
+        "span",
+        { class: "toolbar-group" },
+        h("span", { class: "field-help" }, "Порог:"),
+        thresholdInput,
+      ),
     );
     renderModeLabel();
     renderHlLabel();
@@ -5704,9 +5738,13 @@ function viewProject(section, name, tab, job) {
       { class: "files-toolbar" },
       nameLabel,
       h("span", { class: "spacer" }),
-      delBtn,
-      UIC.editorSearch(ed),
-      saveBtn,
+      h(
+        "span",
+        { class: "toolbar-actions" },
+        delBtn,
+        UIC.editorSearch(ed),
+        saveBtn,
+      ),
     );
     renderList();
     /* файл мог быть удалён в другом месте — возвращаем только живой */
@@ -6189,13 +6227,21 @@ function viewProject(section, name, tab, job) {
             { class: "files-toolbar" },
             status,
             h("span", { class: "spacer" }),
-            h("span", { class: "field-help" }, "кегль"),
-            previewFontSelect(() => {
-              if (pane.mode !== "code") pane.render();
-            }),
-            UIC.editorSearch(ed),
-            pane.btn,
-            saveBtn,
+            h(
+              "span",
+              { class: "toolbar-group" },
+              h("span", { class: "field-help" }, "кегль"),
+              previewFontSelect(() => {
+                if (pane.mode !== "code") pane.render();
+              }),
+            ),
+            h(
+              "span",
+              { class: "toolbar-actions" },
+              UIC.editorSearch(ed),
+              pane.btn,
+              saveBtn,
+            ),
           ),
           err,
           pane.host,

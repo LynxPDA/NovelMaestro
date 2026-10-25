@@ -967,9 +967,13 @@ async function viewNotes() {
               if (pane.mode !== "code") pane.render();
             }),
           ),
-          UIC.editorSearch(ed),
-          pane.btn,
-          saveBtn,
+          h(
+            "span",
+            { class: "toolbar-actions" },
+            UIC.editorSearch(ed),
+            pane.btn,
+            saveBtn,
+          ),
         ),
         err,
         pane.host,
@@ -3527,9 +3531,13 @@ async function viewTemplates() {
           if (pane.mode !== "code") pane.render();
         }),
       ),
-      UIC.editorSearch(ed),
-      pane.btn,
-      ...(readonly ? [] : [saveBtn]),
+      h(
+        "span",
+        { class: "toolbar-actions" },
+        UIC.editorSearch(ed),
+        pane.btn,
+        ...(readonly ? [] : [saveBtn]),
+      ),
     );
     return h(
       "div",
