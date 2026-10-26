@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 from web.jobs import JobManager
 from web.server import ApiError, Router
+from core import archive as core_archive
 from core import uistate as core_uistate
 from web.stages import (
     STAGE_SPECS, build_command, ordered_stages, script_path, spec_for,
@@ -52,6 +53,11 @@ def _register_hub(router: Router) -> None:
     router.add("POST", "/api/projects/rename", _projects_rename)
     router.add("POST", "/api/projects/copy", _projects_copy)
     router.add("DELETE", "/api/projects", _projects_delete)
+    router.add("POST", "/api/projects/archive", _projects_archive)
+    router.add("GET", "/api/projects/{sec}/{name}/archive", _project_archive)
+    router.add("GET", "/api/projects/{sec}/{name}/archive/download",
+               _project_archive_download)
+    router.add("POST", "/api/sections/{name}/props", _section_props_set)
     router.add("GET", "/api/projects/{sec}/{name}/stats", _project_stats)
     router.add("GET", "/api/projects/{sec}/{name}/status", _project_status)
     router.add("GET", "/api/projects/{sec}/{name}/tree", _project_tree)
@@ -251,6 +257,20 @@ def _cached_stats(prj, root: Path, sec: str, name: str) -> str:
         return stats
 
 
+def _cached_stats_or_empty(prj, root: Path, sec: str, name: str) -> str:
+    """stats архивного проекта: только сохранённая строка, без пересчёта.
+
+    Папки нет — сигнатуру считать не по чему. Если строки в кеше не оказалось
+    (архив лежал до первого открытия страницы), отдаётся пустая: карточка
+    всё равно покажет размер и дату из манифеста.
+    """
+    key = _stats_cache_key(root, sec, name)
+    with _STATS_LOCK:
+        _ensure_stats_cache(root)
+        entry = _STATS_CACHE.get(key)
+        return (entry or {}).get("stats", "")
+
+
 def _cached_status(prj, root: Path, sec: str, name: str) -> dict:
     """Таблица готовности глав: кеш по сигнатуре (как stats).
 
@@ -277,17 +297,32 @@ def _cached_status(prj, root: Path, sec: str, name: str) -> dict:
 
 
 def _collect_stats(prj, root: Path) -> tuple[list, int]:
-    """Обход всех разделов/проектов; stats — из кеша по сигнатуре."""
+    """Обход всех разделов/проектов; stats — из кеша по сигнатуре.
+
+    Проект в архиве папки не имеет: пересчитывать статистику не по чему,
+    поэтому отдаётся сохранённая строка кеша (ключ переживает упаковку)
+    плюс сведения самого архива — размер и дата упаковки.
+    """
     sections = []
     total = 0
     for sec in prj.load_sections(root):
-        names = prj.list_projects(root, sec)
-        total += len(names)
         items = []
-        for n in names:
-            stats = _cached_stats(prj, root, sec, n)
-            items.append({"name": n, "stats": stats})
-        sections.append({"name": sec, "projects": items})
+        props = prj.section_props(root, sec)
+        for item in prj.project_items(root, sec):
+            n = item["name"]
+            if item.get("archived"):
+                stats = _cached_stats_or_empty(prj, root, sec, n)
+            else:
+                stats = _cached_stats(prj, root, sec, n)
+            entry = {"name": n, "stats": stats}
+            if item.get("archived"):
+                entry["archive"] = {"size": item.get("size", 0),
+                                    "packed_at": item.get("packed_at", "")}
+            items.append(entry)
+        total += len(items)
+        sections.append({"name": sec, "projects": items,
+                         "archive": bool(props.get("archive")),
+                         "pack_on_move": bool(props.get("pack_on_move"))})
     return sections, total
 
 
@@ -340,10 +375,13 @@ def _sections(ctx: dict) -> dict:
     """Разделы со счётчиками проектов."""
     prj = _import_projects(ctx)
     root = _projects_root(ctx)
-    return {"ok": True, "sections": [
-        {"name": s, "count": len(prj.list_projects(root, s))}
-        for s in prj.load_sections(root)
-    ]}
+    out = []
+    for s in prj.load_sections(root):
+        props = prj.section_props(root, s)
+        out.append({"name": s, "count": len(prj.list_projects(root, s)),
+                    "archive": bool(props.get("archive")),
+                    "pack_on_move": bool(props.get("pack_on_move"))})
+    return {"ok": True, "sections": out}
 
 
 def _hub_clear_section(root: Path, section: str) -> None:
@@ -399,13 +437,28 @@ def _sections_delete(ctx: dict) -> dict:
 
 
 def _projects_list(ctx: dict) -> dict:
-    """Имена проектов раздела (GET /api/projects?section=)."""
+    """Проекты раздела (GET /api/projects?section=).
+
+    `projects` — имена, как было; `items` — те же проекты со сведениями об
+    архиве (упакован ли, размер, дата). Старое поле остаётся: его читают
+    и чужие клиенты, и часть SPA; новое добавляется рядом, чтобы не ломать
+    форму ответа.
+    """
     prj = _import_projects(ctx)
+    root = _projects_root(ctx)
     section = ctx["query"].get("section", "")
-    if section not in prj.load_sections(_projects_root(ctx)):
+    if section not in prj.load_sections(root):
         raise ApiError(400, f"Неизвестный раздел: {section!r}")
-    names = prj.list_projects(_projects_root(ctx), section)
-    return {"ok": True, "section": section, "projects": names}
+    items = [{"name": p["name"], "archived": bool(p.get("archived")),
+              "size": p.get("size", 0),
+              "packed_at": p.get("packed_at", "")}
+             for p in prj.project_items(root, section)]
+    props = prj.section_props(root, section)
+    return {"ok": True, "section": section,
+            "projects": [p["name"] for p in items],
+            "items": items,
+            "props": {"archive": bool(props.get("archive")),
+                      "pack_on_move": bool(props.get("pack_on_move"))}}
 
 
 def _projects_create(ctx: dict) -> dict:
@@ -506,6 +559,139 @@ def _projects_delete(ctx: dict) -> dict:
         raise ApiError(400, str(res))
     _invalidate_stats_entry(_projects_root(ctx), section, name)
     return {"ok": True, "section": section, "name": name}
+
+
+def _section_props_set(ctx: dict) -> dict:
+    """Свойства раздела: архивность и «упаковывать при переносе».
+
+    POST /api/sections/{name}/props — `{archive?, pack_on_move?}`. Свойство
+    `archive` не запрещает хранить в разделе папки: оно говорит интерфейсу,
+    что раздел предназначен для закрытых книг, и включает массовое
+    «Архивировать». Молчаливой упаковки нет — даже при `pack_on_move`
+    SPA спрашивает подтверждение.
+    """
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    name = ctx["params"]["name"]
+    body = ctx["body"]
+    wanted = {k: body[k] for k in ("archive", "pack_on_move") if k in body}
+    if not wanted:
+        raise ApiError(400, "Нужно хотя бы одно свойство: archive, pack_on_move")
+    ok, res = prj.set_section_props(root, name, **wanted)
+    if not ok:
+        raise ApiError(404 if "не найден" in str(res) else 400, str(res))
+    return {"ok": True, "name": res,
+            "props": prj.section_props(root, str(res))}
+
+
+def _projects_archive(ctx: dict) -> dict:
+    """Массовая архивация/разархивация: `{items, op}` → чтó сделано.
+
+    `items` — `[{section, name}, …]`; `op` — `pack` (папка → `.nmz`) или
+    `unpack` (обратно). Работа идёт одним запросом и одним запуском (job):
+    ответ возвращается сразу после создания запуска — прогресс и лог
+    смотрит обычная панель запусков. Отказы по отдельным проектам
+    (занят запуском, архив уже есть, не найден) не рушат пачку: они едут
+    в `skipped`, чтобы человек видел причину для каждой книги.
+    """
+    root = _projects_root(ctx)
+    body = ctx["body"]
+    op = (body.get("op") or "pack").strip()
+    if op not in ("pack", "unpack"):
+        raise ApiError(400, f"Неизвестная операция: {op}")
+    raw = body.get("items") or []
+    if not isinstance(raw, list) or not raw:
+        raise ApiError(400, "Список items пуст")
+    jm = _job_manager(ctx)
+    todo: list[tuple[str, str]] = []
+    skipped: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        section = str(item.get("section") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not section or not name:
+            skipped.append({"section": section, "name": name,
+                            "reason": "не указаны раздел и имя"})
+            continue
+        busy = jm.running_on(f"{section}/{name}")
+        if busy is not None:
+            skipped.append({"section": section, "name": name,
+                            "reason": f"идёт запуск «{busy.title}»"})
+            continue
+        todo.append((section, name))
+    if not todo:
+        return {"ok": True, "items": [], "skipped": skipped,
+                "job": None}
+    # архивация читает весь проект и пишет десятки мегабайт — это работа,
+    # а не мгновенная операция: один запуск на пачку, как у стадий, с логом
+    # и прогрессом в общей панели запусков
+    title = ("Архивация проектов" if op == "pack"
+             else "Разархивация проектов")
+    project = f"{todo[0][0]}/{todo[0][1]}" if len(todo) == 1 else "archive"
+    script = _repo_root(ctx) / "cli" / "archive.py"
+    if not script.is_file():
+        raise ApiError(500, f"Скрипт не найден: {script}")
+    argv = [str(script), op, *[f"{s}/{n}" for s, n in todo],
+            "--projects-dir", str(root)]
+    if op == "pack":
+        argv.append("--gc-history")
+    job = jm.start("archive", title, project, argv, _repo_root(ctx))
+    return {"ok": True, "items": [{"section": s, "name": n}
+                                    for s, n in todo],
+            "skipped": skipped, "job": _job_payload(job)}
+
+
+def _project_archive(ctx: dict) -> dict:
+    """Манифест архива проекта (GET …/archive)."""
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    section = ctx["params"]["sec"]
+    name = ctx["params"]["name"]
+    pdir = prj.project_dir(root, section, name)
+    item = _find_archive(prj, root, section, name)
+    if item is None:
+        raise ApiError(404, f"Архив не найден: {section}/{name}")
+    man = core_archive.archive_manifest(item["path"])
+    return {"ok": True, "section": section, "name": name,
+            "archived": not pdir.is_dir(), "size": item["size"],
+            "path": f"{section}/{prj.ARCHIVE_DIR}/{Path(item['path']).name}",
+            "manifest": man}
+
+
+def _project_archive_download(ctx: dict) -> dict:
+    """Скачать архив проекта (GET …/archive/download) — обычный `.nmz`.
+
+    Отдаётся тем же приёмом, что и файлы: имя с кавычками кодируется
+    (`quote`), иначе CJK-имена ломали бы заголовок.
+    """
+    from urllib.parse import quote
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    section = ctx["params"]["sec"]
+    name = ctx["params"]["name"]
+    item = _find_archive(prj, root, section, name)
+    if item is None:
+        raise ApiError(404, f"Архив не найден: {section}/{name}")
+    path = Path(item["path"])
+    handler = ctx["handler"]
+    handler._send(200, "application/octet-stream", path.read_bytes(),
+                  [("Content-Disposition",
+                    f'attachment; filename="{quote(path.name)}"')])
+    return {}
+
+
+def _find_archive(prj, root: Path, section: str, name: str) -> dict | None:
+    """Архив проекта в разделе (по имени файла, без чтения содержимого)."""
+    for item in prj.list_archives(root / section):
+        if item["name"] == prj.project_dir(root, section, name).name:
+            return item
+    return None
+
+
+def _job_payload(job) -> dict:
+    """Публичное представление запуска (метаданные + буфер)."""
+    return job.payload()
 
 
 def _project_status(ctx: dict) -> dict:

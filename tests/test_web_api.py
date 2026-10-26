@@ -2744,3 +2744,181 @@ def test_translate_check_stats_validation(srv_ctx):
         port, "POST", "/api/stages/translate_check/stats",
         {"project": "ACTIVE/test_book", "params": {}})
     assert res.status == 404, payload
+
+
+# ════════════════════════════════════════════════════════════════════
+# архив проектов (core/archive.py, core/projects.py, API)
+
+def _archive_file(projects_root, section, name):
+    from core import archive as arc
+    return arc.archive_path(projects_root / section, name)
+
+
+def _job_manager(port):
+    """JobManager сервера этого порта (тот же, что видят хендлеры)."""
+    from web import api_stage
+    # контекст HTTP не носит job_manager, но сервер держит его у себя:
+    # берём через общий кеш api_stage по корню проектов
+    return api_stage._job_manager({"projects_root": _root_of(port)})
+
+
+_ROOTS: dict[int, Path] = {}
+
+
+def _root_of(port):
+    return _ROOTS[port]
+
+
+def _wait_job(jm, job_id, timeout=30.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        job = jm.get(job_id)
+        if job is not None and job.status != "running":
+            return job
+        time.sleep(0.02)
+    raise AssertionError(f"запуск {job_id} не завершился за {timeout} с")
+
+
+@pytest.fixture()
+def archive_srv(srv_ctx):
+    """Сервер + запомненный корень проектов (нужен JobManager теста)."""
+    def _make():
+        srv, port, projects_root = srv_ctx()
+        _ROOTS[port] = projects_root
+        return srv, port, projects_root
+    yield _make
+
+
+def test_sections_report_archive_props(archive_srv):
+    _, port, _root = archive_srv()
+    _, payload = _request(port, "GET", "/api/sections")
+    for item in payload["sections"]:
+        assert item["archive"] is False  # по умолчанию архив выключен
+        assert item["pack_on_move"] is False
+
+
+def test_section_props_set(archive_srv):
+    _, port, _root = archive_srv()
+    res, payload = _request(port, "POST", "/api/sections/DONE/props",
+                            {"archive": True})
+    assert res.status == 200, payload
+    assert payload["props"]["archive"] is True
+    _, payload = _request(port, "GET", "/api/sections")
+    done = next(s for s in payload["sections"] if s["name"] == "DONE")
+    assert done["archive"] is True
+    res, payload = _request(port, "POST", "/api/sections/DONE/props",
+                            {"archive": False})
+    assert res.status == 200 and payload["props"]["archive"] is False
+
+
+def test_section_props_validation(archive_srv):
+    _, port, _root = archive_srv()
+    res, payload = _request(port, "POST", "/api/sections/DONE/props", {})
+    assert res.status == 400 and "свойство" in payload["error"]
+    res, payload = _request(port, "POST", "/api/sections/DONE/props",
+                            {"чужое": True})
+    assert res.status == 400
+    res, payload = _request(port, "POST",
+                            f"/api/sections/{quote('Нет_такого')}/props",
+                            {"archive": True})
+    assert res.status == 404
+
+
+def test_projects_list_reports_items(archive_srv):
+    _, port, projects_root = archive_srv()
+    _create_project(port, projects_root)
+    _, payload = _request(port, "GET", "/api/projects?section=ACTIVE")
+    assert payload["projects"] == ["test_book"]
+    assert payload["items"][0]["archived"] is False
+    assert payload["props"]["archive"] is False
+
+
+def test_archive_pack_unpack_roundtrip(archive_srv):
+    """Круг через API: упаковали — папки нет, архив есть; вернули обратно."""
+    _, port, projects_root = archive_srv()
+    _create_project(port, projects_root)
+    pdir = projects_root / "ACTIVE" / "test_book"
+    (pdir / "ner.json").write_text("[]", encoding="utf-8")
+    (pdir / "chapters" / "00000_1_Глава").mkdir(parents=True)
+    (pdir / "chapters" / "00000_1_Глава" / "chapter.txt").write_text(
+        "Глава 1", encoding="utf-8")
+    jm = _job_manager(port)
+
+    res, payload = _request(port, "POST", "/api/projects/archive", {
+        "op": "pack", "items": [{"section": "ACTIVE", "name": "test_book"}]})
+    assert res.status == 200, payload
+    assert len(payload["items"]) == 1 and not payload["skipped"]
+    _wait_job(jm, payload["job"]["id"])
+    assert not pdir.is_dir(), "папка проекта осталась после упаковки"
+    arc_file = _archive_file(projects_root, "ACTIVE", "test_book")
+    assert arc_file.is_file()
+
+    # проект виден как архивный, со размером и датой
+    _, payload = _request(port, "GET", "/api/projects?section=ACTIVE")
+    item = next(i for i in payload["items"] if i["name"] == "test_book")
+    assert item["archived"] is True and item["size"] > 0
+    assert item["packed_at"]
+
+    # манифест читается без распаковки
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/archive")
+    assert res.status == 200, payload
+    assert payload["manifest"]["files"] > 0
+    assert payload["archived"] is True
+
+    # скачивание отдаёт байты архива
+    res, _payload = _request(port, "GET",
+                             "/api/projects/ACTIVE/test_book/archive/download")
+    assert res.status == 200
+
+    res, payload = _request(port, "POST", "/api/projects/archive", {
+        "op": "unpack",
+        "items": [{"section": "ACTIVE", "name": "test_book"}]})
+    assert res.status == 200, payload
+    _wait_job(jm, payload["job"]["id"])
+    assert pdir.is_dir()
+    assert (pdir / "ner.json").read_text(encoding="utf-8") == "[]"
+    assert not arc_file.is_file(), "архив не убран после распаковки"
+
+
+def test_archive_rejects_bad_requests(archive_srv):
+    _, port, _root = archive_srv()
+    res, payload = _request(port, "POST", "/api/projects/archive",
+                            {"op": "сжать"})
+    assert res.status == 400
+    res, payload = _request(port, "POST", "/api/projects/archive",
+                            {"items": []})
+    assert res.status == 400
+    res, payload = _request(port, "POST", "/api/projects/archive",
+                            {"op": "pack", "items": [{"section": "ACTIVE"}]})
+    assert res.status == 200
+    assert payload["skipped"], "частичный item должен попасть в skipped"
+
+
+def test_archive_skips_project_with_running_job(archive_srv, monkeypatch):
+    _, port, projects_root = archive_srv()
+    _create_project(port, projects_root)
+    jm = _job_manager(port)
+
+    class _Busy:
+        title = "Перевод"
+        id = "abc"
+
+    monkeypatch.setattr(jm, "running_on", lambda project: _Busy())
+    res, payload = _request(port, "POST", "/api/projects/archive", {
+        "op": "pack", "items": [{"section": "ACTIVE", "name": "test_book"}]})
+    assert res.status == 200, payload
+    assert payload["items"] == []
+    assert payload["skipped"][0]["reason"].startswith("идёт запуск")
+    assert (projects_root / "ACTIVE" / "test_book").is_dir()
+
+
+def test_archive_missing_manifest_404(archive_srv):
+    _, port, projects_root = archive_srv()
+    _create_project(port, projects_root)
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/archive")
+    assert res.status == 404, payload
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/archive/download")
+    assert res.status == 404, payload
