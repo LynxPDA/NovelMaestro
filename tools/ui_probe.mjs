@@ -219,19 +219,21 @@ function seedProjectsDir(dir) {
     path.join(book, "logs", "check_polished_1-2.txt"),
     [
       "=== Отчёт о проверке перевода (polished) ===",
-      "Запуск        : /app/cli/translate_check.py --check-type polished --sensitivity 25",
+      "Запуск        : /app/cli/translate_check.py --check-type polished --sensitivity-stages 25 --sensitivity-original 3",
       "Диапазон глав : 1 – 2",
-      "Счёт объёма   : токены (оценка); чувствительность K=25",
+      "Счёт объёма   : токены (оценка); чувствительность K=25 (соседние стадии) / 3 (оригинал)",
+      "Мин. отличие  : 150 т.",
       "Дата          : Thu Oct 22 10:32:18 2026",
       "Всего папок   : 2",
       "---------------------------------",
+      "Цепочка       : polished → redacted → translated → chapter",
       "Статистика (по всей книге, 2 папок без дублей):",
-      "  polished vs redacted: глав 1320, медиана 0.999, MAD 0.4%, допуск ±9.9% → отношение 0.90–1.10 (K=25)",
-      "  polished vs chapter: глав 2, медиана 1.356, MAD 4.7%, допуск ±87.3% → отношение 0.48–2.23 (K=25)",
+      "  polished vs redacted: глав 1320, медиана 0.999, разброс 0.40%, допуск ±9.90% → отношение 0.900–1.100 (K=25)",
+      "  polished vs chapter: глав 2, медиана 1.356, разброс 4.70%, допуск ±87.30% → отношение 0.480–2.230 (K=3)",
       "---------------------------------",
       "1. Папка: ./chapters/00000_1_Глава 1",
-      "  [polished vs redacted]  отношение объёма 0.90 → ОШИБКА (вне 0.90–1.10 при K=25, медиана книги 1.00; polished 1469 т., redacted 1637 т.; пройдёт при K ≥ 26)",
-      "  [polished vs chapter]  отношение объёма 1.47 → ОШИБКА (вне 0.48–2.23 при K=25, медиана книги 1.36; polished 1469 т., chapter 1000 т.; пройдёт при K ≥ 32)",
+      "  [polished vs redacted]  отношение объёма 0.900 → ОШИБКА (вне 0.900–1.100 при K=25, медиана книги 0.999; polished 1469 т., redacted 1632 т.; пройдёт при K ≥ 26)",
+      "  [polished vs chapter]  отношение объёма 1.470 → ОШИБКА (вне 0.480–2.230 при K=3, медиана книги 1.356; polished 1469 т., chapter 1000 т.; пройдёт при K ≥ 32)",
       "",
       "--- Сводка ---",
       "Проверено глав : 2",
@@ -2527,6 +2529,9 @@ async function main() {
       return {
         sameRow: row.contains(btn),
         hasInput: !!row.querySelector("input"),
+        knobs: [...document.querySelectorAll(".run-form .field")]
+          .filter((f) => /Чувствительность/.test(
+            ((f.querySelector(".field-label") || {}).textContent) || "")).length,
         label: ((document.querySelector(".field:has(.tc-stats-field) .field-label")
           || {}).textContent || "").trim(),
         tip: !!document.querySelector(".tc-stats-btn[data-tip]"),
@@ -2539,12 +2544,20 @@ async function main() {
       if (!/Чувствительность/.test(layout.label))
         problems.push(`предрасчёт: поле рядом с «${layout.label}»`);
       if (!layout.tip) problems.push("предрасчёт: у кнопки нет подсказки");
+      /* ручек ДВЕ: соседние стадии и оригинал различаются по разбросу на
+         порядок, и одна цифра на все пары врала бы в одной из групп */
+      if (layout.knobs !== 2)
+        problems.push(`предрасчёт: ручек ${layout.knobs} (ожидаем 2)`);
     }
     await page.locator(".tc-stats-btn").first().click();
     await page.waitForSelector(".tc-stats-row", { timeout: 20000 });
     const res = await page.evaluate(() => ({
       pairs: [...document.querySelectorAll(".tc-stats-row")].map(
         (r) => r.textContent.replace(/\s+/g, " ").trim()),
+      // свой K у каждой пары — отдельным узлом строки
+      ks: [...document.querySelectorAll(".tc-stats-k")].map(
+        (k) => (k.textContent || "").trim()),
+      text: ((document.querySelector(".tc-stats") || {}).textContent || ""),
       note: ((document.querySelector(".tc-stats-note") || {})
         .textContent || "").trim(),
       out: document.querySelectorAll(".tc-stats-out-row").length,
@@ -2552,6 +2565,14 @@ async function main() {
     if (!res.pairs.length) problems.push("предрасчёт: пар в ответе нет");
     if (!res.pairs.every((t) => /допуск \d/.test(t)))
       problems.push(`предрасчёт: без допуска «${res.pairs[0]}»`);
+    /* .append(null) от условной строки вставлял в ответ текстовый узел
+       "null" — в разметке его быть не может ни в каком случае */
+    if (/\bnull\b/.test(res.text))
+      problems.push(`предрасчёт: в ответе «null» — «${res.text.slice(0, 60)}»`);
+    if (res.ks.length !== res.pairs.length)
+      problems.push(`предрасчёт: K у ${res.ks.length} пар из ${res.pairs.length}`);
+    if (!res.ks.every((k) => /^K=[\d.]+$/.test(k)))
+      problems.push(`предрасчёт: ручки пар «${res.ks.join(", ")}»`);
     if (!/проходит|вне допуска/.test(res.note))
       problems.push(`предрасчёт: итог «${res.note}»`);
     if (SHOT) {
@@ -2601,8 +2622,12 @@ async function main() {
     const first = sc[0] || {};
     if (first.title !== "polished vs redacted")
       problems.push(`шкала отчёта: подпись «${first.title}»`);
-    if (!/допуск 0\.90–1\.10 при K=25/.test(first.nums || ""))
+    if (!/допуск 0\.900–1\.100 при K=25/.test(first.nums || ""))
       problems.push(`шкала отчёта: числа «${first.nums}»`);
+    /* три знака — не прихоть: у соседних стадий весь допуск лежит
+       в 0.99–1.01, и двух знаков не хватает, чтобы его нарисовать */
+    if (!/разброс 0\.4%/.test(first.nums || ""))
+      problems.push(`шкала отчёта: разброс «${first.nums}»`);
     if (!first.band || !first.mark) problems.push("шкала отчёта: нет полосы или медианы");
     if ((first.dots || []).length !== 1)
       problems.push(`шкала отчёта: точек ${(first.dots || []).length} (ожидаем 1)`);
@@ -2611,7 +2636,7 @@ async function main() {
        0.90 при 0.999 и ±0.10 значит «дальше половины шкалы», а не у края */
     if (!/left:\d+(\.\d+)?%/.test(dot.left || ""))
       problems.push(`шкала отчёта: позиция точки «${dot.left}»`);
-    if (!/отношение 0\.90 — вне допуска/.test(dot.title || ""))
+    if (!/отношение 0\.900 — вне допуска/.test(dot.title || ""))
       problems.push(`шкала отчёта: тултип точки «${dot.title}»`);
     if (!/глав в базе: 1320/.test(first.legend || ""))
       problems.push(`шкала отчёта: подпись «${first.legend}»`);

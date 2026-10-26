@@ -6273,7 +6273,12 @@ function viewProject(section, name, tab, job) {
     return Array.isArray(r && r.entries) ? r.entries : [];
   }
 
-  /* одна шкала: полоса допуска, штрих медианы, точки глав вне допуска */
+  /* одна шкала: полоса допуска, штрих медианы, точки глав вне допуска
+     Три знака — не украшение: у соседних стадий (polished ↔ redacted) весь
+     допуск лежит в 0.99–1.01, и toFixed(2) схлопнул бы полосу в точку. */
+  // точка, а не запятая: те же числа печатает строка ошибки отчёта, и
+  // человек сверяет их глазами, а не пересчётом
+  const scaleNum = (x) => x.toFixed(3);
   function checkScale(st, points) {
     const sc = UICore.checkScale(st, points, null, null);
     if (!sc) return null;
@@ -6281,7 +6286,7 @@ function viewProject(section, name, tab, job) {
       h("span", {
         class: "check-scale-dot" + (p.out ? " is-out" : ""),
         style: `left:${p.pos * 100}%`,
-        title: `отношение ${p.value.toFixed(2)}`
+        title: `отношение ${scaleNum(p.value)}`
           + (p.out ? " — вне допуска" : " — в допуске"),
       }),
     );
@@ -6291,12 +6296,12 @@ function viewProject(section, name, tab, job) {
       h("div", {
         class: "check-scale-band",
         style: `left:${sc.bandLeft * 100}%;width:${sc.bandWidth * 100}%`,
-        title: `допуск при K=${st.k ?? "?"}: ${sc.lo.toFixed(2)}–${sc.hi.toFixed(2)}`,
+        title: `допуск при K=${st.k ?? "?"}: ${scaleNum(sc.lo)}–${scaleNum(sc.hi)}`,
       }),
       h("div", {
         class: "check-scale-mark",
         style: `left:${sc.midPos * 100}%`,
-        title: `медиана книги ${sc.median.toFixed(3)}`,
+        title: `медиана книги ${scaleNum(sc.median)}`,
       }),
       ...dots,
     );
@@ -6311,9 +6316,9 @@ function viewProject(section, name, tab, job) {
         h(
           "span",
           { class: "check-scale-nums" },
-          `допуск ${sc.lo.toFixed(2)}–${sc.hi.toFixed(2)}`
+          `допуск ${scaleNum(sc.lo)}–${scaleNum(sc.hi)}`
             + (st.k != null ? ` при K=${st.k}` : "")
-            + (st.mad != null ? ` · MAD ${st.mad}%` : ""),
+            + (st.mad != null ? ` · разброс ${st.mad}%` : ""),
         ),
       ),
       track,
@@ -6321,6 +6326,7 @@ function viewProject(section, name, tab, job) {
         "div",
         { class: "check-scale-legend" },
         `глав в базе: ${st.chapters ?? "?"}`
+          + (st.small ? " (мало — разброс не учитывается)" : "")
           + (out ? ` · глав вне допуска в отчёте: ${out}` : ""),
       ),
     );

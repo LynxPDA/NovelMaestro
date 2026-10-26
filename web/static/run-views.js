@@ -2244,12 +2244,20 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   // ── translate_check: предрасчёт допуска объёма ──────────────────────
-  // Кнопка у поля «Чувствительность»: сервер проходит по книге теми же
+  // Кнопка у полей чувствительности: сервер проходит по книге теми же
   // функциями, что и запуск (cli/translate_check.py: scan_files →
   // count_file_tokens → collect_stats), и отвечает допуском и списком глав,
   // которые в него не влезают. Ответ на вопрос «двигать K или править
   // главу» — ДО прогона; главы целиком не читаются, поэтому на 600 главах
   // это секунды.
+  //
+  // Ручек две (соседние стадии и оригинал различаются по разбросу на
+  // порядок), поэтому строка пары печатает СВОЙ K: одна цифра на все пары
+  // врала бы в одной из групп.
+  const TC_KNOBS = ["sensitivity_stages", "sensitivity_original",
+    "min_delta_tokens"];
+  const TC_SIG_FIELDS = ["check_type", ...TC_KNOBS, "start", "end"];
+
   function tcStatsWidget(key, fieldWrap) {
     const note = h("div", { class: "field-help tc-stats-note" });
     const box = h("div", { class: "tc-stats hidden" });
@@ -2262,14 +2270,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     attachTooltip(
       btn,
       "Посчитать допуск объёма по этой книге сейчас: сколько глав диапазона "
-        + "не влезает при текущей чувствительности. Главы не читаются — "
+        + "не влезает при текущих чувствительностях. Главы не читаются — "
         + "только счёт объёмов.",
     );
     let sig = ""; // что считали: смена типа/K/диапазона делает ответ старым
     const current = () => {
       const v = st.values[key] || {};
-      return [v["check_type"], v["sensitivity"], v["start"], v["end"]]
-        .map((x) => String(x ?? "")).join("\u0000");
+      return TC_SIG_FIELDS.map((x) => String(v[x] ?? "")).join("\u0000");
     };
     const markStale = () => {
       if (box.classList.contains("hidden")) return;
@@ -2277,13 +2284,43 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       note.textContent = "поля изменились — пересчитайте";
       box.classList.add("is-stale");
     };
+    const fmtK = (k) => {
+      const n = Number(k);
+      return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : "?";
+    };
+    const fmtNum = (x, digits = 3) => {
+      const n = Number(x);
+      return Number.isFinite(n) ? n.toFixed(digits) : "?";
+    };
+    // подсказка к выбросу — те же слова, что печатает отчёт: одна логика
+    // на прогон и на предрасчёт (cli/translate_check.py::volume_hint);
+    // три знака — как в отчёте, иначе «2» вместо «2.000» рядом с «0.995»
+    const hitText = (o, p) => `глава ${o.chapter} · ${p.ref} → отношение `
+      + `${fmtNum(p.ratio)} вне ${fmtNum(p.lo)}–${fmtNum(p.hi)}`
+      + (p.hint ? ` · ${p.hint}` : "");
+    function renderPairRow(s) {
+      /* база пары: глав мало (2–4) — разброс выборки не доверен, допуск
+         держит расширенный пол; молчать об этом нельзя */
+      return h(
+        "div",
+        { class: "tc-stats-row" },
+        h("span", { class: "tc-stats-pair" }, `${s.check} vs ${s.ref}`),
+        h("span", { class: "tc-stats-nums" },
+          `допуск ${fmtNum(s.lo)}–${fmtNum(s.hi)}`
+            + ` · медиана ${fmtNum(s.median)}`
+            + ` · глав ${s.n}`
+            + (s.small ? " (мало — пол)" : "")),
+        h("span", { class: "tc-stats-k" }, `K=${fmtK(s.k)}`),
+      );
+    }
     function renderResult(d) {
       box.replaceChildren();
       box.classList.remove("is-stale");
       note.classList.remove("is-sum");
       const stats = Array.isArray(d.stats) ? d.stats : [];
       if (d.off) {
-        note.textContent = "K = 0 — объёмные сравнения выключены";
+        note.textContent = "обе чувствительности в нуле — объёмные "
+          + "сравнения выключены";
         box.classList.add("hidden");
         return;
       }
@@ -2295,52 +2332,32 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       box.classList.remove("hidden");
       const out = Array.isArray(d.outliers) ? d.outliers : [];
       const rows = h("div", { class: "tc-stats-rows" });
-      for (const s of stats) {
-        /* база пары: глав мало (2–4) — MAD выборки не доверен, допуск
-           держит расширенный пол; молчать об этом нельзя */
-        rows.append(
-          h(
-            "div",
-            { class: "tc-stats-row" },
-            h("span", { class: "tc-stats-pair" },
-              `${s.check} vs ${s.ref}`),
-            h("span", { class: "tc-stats-nums" },
-              `допуск ${s.lo.toFixed(2)}–${s.hi.toFixed(2)}`
-                + ` · медиана ${s.median.toFixed(3)}`
-                + ` · глав ${s.n}`
-                + (s.small ? " (мало — пол)" : "")),
-          ),
-        );
-      }
+      for (const s of stats) rows.append(renderPairRow(s));
       box.append(rows);
+      const LIMIT = 20;
       if (!out.length) {
         note.classList.add("is-sum");
-        note.textContent = `при K=${fmtK(stats[0].k)} диапазон проходит `
-          + `(${d.start}–${d.end})`;
+        note.textContent = `диапазон проходит (${d.start}–${d.end})`;
         return;
       }
+      // главы идут одним списком: у главы может быть несколько пар, и
+      // разрывать её на строки «по парам» значило бы прятать связь между
+      // ними (сломанная стадия объясняет и оригинал)
       const list = h("div", { class: "tc-stats-out" });
-      for (const o of out.slice(0, 20)) {
+      for (const o of out.slice(0, LIMIT)) {
         for (const p of o.pairs) {
-          list.append(
-            h("div", { class: "tc-stats-out-row" },
-              `глава ${o.chapter} · ${p.ref}: отношение ${p.ratio}`
-                + ` вне ${p.lo}–${p.hi}`
-                + (p.k == null ? " · K не поможет (пол)"
-                  : ` · пройдёт при K ≥ ${p.k}`)),
-          );
+          list.append(h("div", { class: "tc-stats-out-row" }, hitText(o, p)));
         }
       }
-      const more = out.length > 20
-        ? h("div", { class: "field-help" }, `…и ещё ${out.length - 20}`)
-        : null;
       note.classList.add("is-sum");
       note.textContent = `вне допуска глав: ${out.length}`;
-      box.append(list, more);
-    }
-    function fmtK(k) {
-      const n = Number(k);
-      return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : "?";
+      box.append(list);
+      // «…и ещё N» — отдельным узлом и только когда есть о чём: Element
+      // .append(null) вставил бы текстовый узел "null"
+      if (out.length > LIMIT) {
+        box.append(h("div", { class: "field-help" },
+          `…и ещё ${out.length - LIMIT}`));
+      }
     }
     async function run() {
       const sigNow = current();
@@ -2372,7 +2389,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     }
     btn.addEventListener("click", run);
     // поля, от которых зависит ответ: их правка делает предрасчёт старым
-    for (const name of ["check_type", "sensitivity", "start", "end"]) {
+    for (const name of TC_SIG_FIELDS) {
       const wrap = name === "start" || name === "end" ? st.rangeRow : null;
       const inp = wrap
         ? (name === "start" ? wrap._start : wrap._end)
@@ -2381,19 +2398,23 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       inp.addEventListener("input", () => { if (sig !== current()) markStale(); });
       inp.addEventListener("change", () => { if (sig !== current()) markStale(); });
     }
-    // кнопка — в строке с полем: «значение + действие над ним» читаются
-    // вместе, а не второй строкой под справкой
-    const sens = fieldWrap && fieldWrap["sensitivity"];
-    const input = sens && sens._input;
+    // кнопка — в строке с первым полем чувствительности: «значение +
+    // действие над ним» читаются вместе, а не второй строкой под справкой
+    let host = null;
+    for (const name of TC_KNOBS) {
+      const wrap = fieldWrap && fieldWrap[name];
+      if (wrap && wrap._input) { host = wrap; break; }
+    }
+    const input = host && host._input;
     if (input) {
       // сначала вставляем строку на место поля (input отсоединяется),
       // потом кладём поле рядом с кнопкой: h() сразу забирает узел в контейнер
       const row = h("div", { class: "field-row tc-stats-field" });
       input.replaceWith(row);
       row.append(input, btn);
-      sens.append(note, box);
+      host.append(note, box);
     }
-    return sens;
+    return host;
   }
 
   // форма стадии: все поля спеки. НЕ async — formPanel вставляет результат

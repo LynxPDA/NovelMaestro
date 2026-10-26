@@ -1284,6 +1284,18 @@ test("checkScale: без чисел допуска — null, старый отч
   assert.equal(UICore.checkScale({ lo: 2, hi: 1 }, [], null, null), null);
 });
 
+test("checkScale: узкий допуск соседних стадий различим", () => {
+  /* нынешний отчёт: polished vs redacted — медиана 1.000, разброс 0.13%,
+     K=7 → отношение 0.991–1.009. Допуск уже одного процента, но полоса
+     обязана остаться полосой, а не точкой: иначе шкала ничего не значит. */
+  const stat = { lo: 0.991, hi: 1.009, median: 1.0 };
+  const sc = UICore.checkScale(stat, [1.2], null, null);
+  assert.ok(sc.bandWidth > 0.001, `ширина полосы ${sc.bandWidth}`);
+  assert.ok(sc.midPos > sc.bandLeft && sc.midPos < sc.bandLeft + sc.bandWidth);
+  assert.equal(sc.points.length, 1);
+  assert.equal(sc.points[0].out, true, "1.2 вне 0.991–1.009");
+});
+
 test("checkScale: пустые точки — шкала из одного допуска", () => {
   const sc = UICore.checkScale({ lo: 0.98, hi: 1.02, median: 1.0 }, [], null, null);
   assert.deepEqual(sc.points, []);
