@@ -245,6 +245,29 @@ def test_manifest_of_missing_or_broken_is_empty(tmp_path, any_backend):
     assert A.archive_manifest(bad) == {}
 
 
+@pytest.mark.parametrize("payload", [
+    b"",                          # пустой файл
+    b"\x28\xb5\x2f\xfd",            # правильная сигнатура zstd, обрезанная
+    b"\x1f\x8b\x08\x00",            # то же для gzip
+    b"\x00\x01\x02\x03" * 64,       # мусор
+])
+def test_broken_archive_never_leaks_backend_errors(tmp_path, any_backend,
+                                                   payload):
+    """Ошибка распаковки — всегда ArchiveError, а не исключение бэкенда.
+
+    У каждого бэкенда своё исключение (ZstdError пакета, zlib.error,
+    tarfile.TarError), а вызывающие знают только контракт модуля: без
+    обёртки битый архив вылетал наружу сырым ZstdError и ронял список
+    архивов вместо карточки «архив повреждён».
+    """
+    bad = tmp_path / "bad.nmz"
+    bad.write_bytes(payload)
+    man = A.archive_manifest(bad)          # наружу ничего не летит
+    assert man == {}
+    with pytest.raises(A.ArchiveError):    # а распаковка называет причину
+        A.unpack_project(bad, tmp_path / "out")
+
+
 def test_manifest_extra_cannot_lie_about_counts(tmp_path, any_backend):
     """Дополнительные поля не перетирают посчитанные (files/bytes/name)."""
     src = _make_project(tmp_path)

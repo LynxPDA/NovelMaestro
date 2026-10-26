@@ -41,6 +41,7 @@ import os
 import shutil
 import tarfile
 import time
+import zlib
 from pathlib import Path
 
 __all__ = [
@@ -108,7 +109,13 @@ def _backend_zstandard():
             self._r = zstandard.ZstdDecompressor().stream_reader(fh)
 
         def read(self, n=-1):
-            return self._r.read(n)
+            # Ошибка распаковки — ArchiveError у ВСЕХ бэкендов: иначе
+            # битый файл даёт ZstdError пакета (или zlib.error) и вылетает
+            # из вызывающих, которые знают только общий контракт модуля.
+            try:
+                return self._r.read(n)
+            except zstandard.ZstdError as exc:
+                raise ArchiveError(f"Архив повреждён: {exc}") from exc
 
         def readable(self):
             return True
@@ -215,7 +222,10 @@ def _backend_gzip():
             self._z = GzipFile(fileobj=fh, mode="rb")
 
         def read(self, n=-1):
-            return self._z.read(n)
+            try:
+                return self._z.read(n)
+            except (OSError, EOFError, zlib.error) as exc:
+                raise ArchiveError(f"Архив повреждён: {exc}") from exc
 
         def readable(self):
             return True
@@ -523,7 +533,12 @@ def unpack_project(archive, dst, *, progress=None) -> dict:
         if progress:
             progress(total or done, total or done)
         os.replace(tmp, dst)
-    except BaseException:
+    except BaseException as exc:
         shutil.rmtree(tmp, ignore_errors=True)
+        # Ошибка чтения и разбора архива — ArchiveError: у вызывающего
+        # (карточка архива, прогон стадии) один контракт на все бэкенды.
+        # Остальное (отмена, SystemExit) уходит как есть.
+        if isinstance(exc, (OSError, tarfile.TarError)):
+            raise ArchiveError(f"Архив не распаковывается: {exc}") from exc
         raise
     return man
