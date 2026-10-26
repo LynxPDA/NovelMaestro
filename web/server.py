@@ -25,10 +25,9 @@ from web.auth import COOKIE_NAME, Auth, csrf_ok
 from web.version import app_version
 from core import settings as core_settings
 
-#: cookie устройства: ключ файла состояния книги (core/uistate.py)
-DEVICE_COOKIE = "nm_device"
-#: срок жизни cookie устройства — год (состояние книги старше см. UI_STATE_STALE)
-DEVICE_MAX_AGE = 365 * 24 * 3600
+#: cookie прежней версии: состояние книги раскладывалось по файлам устройств,
+#: теперь оно одно на книгу — cookie гасится при первом её запросе
+LEGACY_DEVICE_COOKIE = "nm_device"
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_JSON_BODY = 16 * 1024 * 1024  # 16 МБ — лимит JSON-тел
@@ -168,21 +167,15 @@ class Handler(BaseHTTPRequestHandler):
                 return value
         return None
 
-    def device_id(self) -> str | None:
-        """id устройства (cookie `nm_device`): ключ файла состояния книги."""
-        return self.cookie(DEVICE_COOKIE)
+    def drop_legacy_device_cookie(self) -> None:
+        """Погасить cookie устройства прежней версии.
 
-    def set_device_cookie(self, device: str) -> None:
-        """Выдать/подтвердить cookie устройства на год.
-
-        HttpOnly — клиенту id не нужен, файл состояния он адресует проектом;
-        SameSite=Lax, а не Strict как у сессии: переход по ссылке на книгу из
-        письма/закладки — обычное дело, и устройство должно узнаваться, иначе
-        каждая такая ссылка заводила бы новое состояние.
+        Состояние книги больше не делится по устройствам (core/uistate.py),
+        а cookie осталась бы в браузере на год: гасим тем же путём, каким её
+        выдали, иначе состояние книги продолжало бы адресоваться по ней.
         """
-        self._extra_headers.append(("Set-Cookie", (
-            f"{DEVICE_COOKIE}={device}; Path=/; Max-Age={DEVICE_MAX_AGE}; "
-            "HttpOnly; SameSite=Lax")))
+        if self.cookie(LEGACY_DEVICE_COOKIE):
+            self.clear_cookie(LEGACY_DEVICE_COOKIE)
 
     def _read_json_body(self) -> dict:
         try:

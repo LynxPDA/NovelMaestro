@@ -6,20 +6,24 @@ core/uistate.py — состояние книги на диске: параме�
 
 Состояние интерфейса делится по природе данных: **что описывает книгу** (какие
 значения у стадий, чем запускать перевод, где человек остановился во вкладках)
-лежит в книге — `tmp/ui_state/`; **что описывает устройство** (тема, кегль,
-язык подсветки) остаётся в браузере. Смена браузера, домена или переезд с
-телефона на десктоп книжное состояние больше не теряет, а копия книги
-наследует его вместе с `tmp/`.
+лежит в книге — `tmp/ui_state/state.json`; **что описывает устройство** (тема,
+кегль, язык подсветки) остаётся в браузере. Смена браузера, домена или переезд с
+телефона на десктоп книжное состояние не теряет, а копия книги наследует его
+вместе с `tmp/`.
 
-Файлов в каталоге несколько, а не один: у каждого браузера своё состояние, и
-общий файл заставлял бы устройства затирать друг друга без следа. `id` — cookie
-устройства, выдаётся сервером при первом чтении; `pending.json` — состояние,
-не привязанное к cookie (первый визит, старый клиент). Чтение по умолчанию
-сливает свежие файлы, а внутри ключа побеждает запись, сделанная позже в
-абсолютном времени: устройство, вернувшееся через месяц, получает актуальное
-состояние книги, а не свою заброшенную копию и не чужие старые значения поверх
-своих. Ничего своего у состояния нет — это словарь ключей интерфейса (`tab`,
-`runs`, `nerCols`, …), поэтому слой не знает ни одного имени поля.
+Файл ОДИН на книгу: состояние книги — её свойство, а не свойство устройства.
+Файл на устройство делил одну книгу на несколько правд (два компьютера видели
+разные диапазоны глав), а каталог рос новым json на каждый браузер, домен и
+чистку cookie. Несколько писателей не теряют правки друг друга, потому что
+запись читает файл и накладывает только присланные ключи, а вложенные объекты
+сливает по полям — под общим замком.
+
+Старые файлы устройств (`<id>.json`, `pending.json`) сливаются в общий при
+первом чтении или записи и затем удаляются: состояние, оставленное прежней
+версией, не теряется.
+
+Ничего своего у состояния нет — это словарь ключей интерфейса (`nmTab:…`,
+`runVals:…`, `nerCols:…`), поэтому слой не знает ни одного имени поля.
 
 `tmp/` исключён из истории контрольных точек (web/history.py): состояние — не
 содержимое книги, и возврат к точке не должен откатывать вкладки.
@@ -27,9 +31,6 @@ core/uistate.py — состояние книги на диске: параме�
 from __future__ import annotations
 
 import json
-import os
-import re
-import secrets
 import threading
 import time
 from pathlib import Path
@@ -37,31 +38,20 @@ from pathlib import Path
 from .common import atomic_write, read_text_safe
 
 __all__ = [
-    "UI_STATE_DIR", "UI_STATE_VERSION", "UI_STATE_KEEP", "UI_STATE_STALE",
-    "UI_STATE_DEVICE_COOKIE", "ui_state_dir", "ui_state_device",
-    "ui_state_read", "ui_state_write", "ui_state_prune",
+    "UI_STATE_DIR", "UI_STATE_FILE", "UI_STATE_VERSION", "ui_state_dir",
+    "ui_state_read", "ui_state_write",
 ]
 
 #: каталог состояния внутри проекта (tmp/ — рабочие файлы книги)
 UI_STATE_DIR = Path("tmp") / "ui_state"
-#: версия формата: поле `version` пишется в каждый файл, подъём сюда сбрасывает
-#: кеш на клиенте, а не роняет чтение (незнакомая версия читается как есть)
-UI_STATE_VERSION = 1
-#: сколько файлов устройств держим в каталоге (хвост по mtime)
-UI_STATE_KEEP = 10
-#: состояние старше этого срока в слияние не попадает, сек (180 дней):
-#: значения полугодовой давности всплывали бы сюрпризом
-UI_STATE_STALE = 180 * 24 * 3600
-#: cookie устройства (HttpOnly: клиенту id не нужен, сервер сам его читает)
-UI_STATE_DEVICE_COOKIE = "nm_device"
+#: единственный файл состояния книги
+UI_STATE_FILE = "state.json"
+#: версия формата: поле `version` пишется в каждый файл, незнакомая версия
+#: читается как есть (сброс клиентского кеша — дело клиента)
+UI_STATE_VERSION = 2
 
-# Имя файла устройства — только из наших символов: id приходит из cookie,
-# и путь, собранный из него, не должен выйти из каталога состояния
-_DEVICE_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
-_PENDING = "pending"
-
-# Сервер многопоточный: чтение-слияние-запись идут под общим замком, иначе два
-# браузера теряли бы записи друг друга на read-modify-write.
+# Сервер многопоточный: чтение-слияние-запись идут под общим замком, иначе две
+# вкладки теряли бы записи друг друга на read-modify-write.
 _LOCK = threading.RLock()
 
 
@@ -70,15 +60,8 @@ def ui_state_dir(pdir: Path) -> Path:
     return Path(pdir) / UI_STATE_DIR
 
 
-def ui_state_device(raw: str | None) -> str:
-    """id устройства из cookie; пустое или чужое значение — новый id."""
-    dev = (raw or "").strip()
-    return dev if _DEVICE_RE.match(dev) else secrets.token_urlsafe(16)
-
-
-def _file(ddir: Path, device: str) -> Path:
-    name = device if device else _PENDING
-    return ddir / f"{name}.json"
+def _file(ddir: Path) -> Path:
+    return Path(ddir) / UI_STATE_FILE
 
 
 def _load(path: Path) -> dict:
@@ -91,139 +74,23 @@ def _load(path: Path) -> dict:
 
 
 def _mtime(path: Path) -> float:
-    """mtime файла (0 — нет файла); нужен только для ничьей в слиянии."""
+    """mtime файла (0 — нет файла); нужен только миграции старых файлов."""
     try:
         return path.stat().st_mtime
     except OSError:
         return 0.0
 
 
-def _file_stamp(path: Path, data: dict) -> float:
+def _stamp(path: Path, data: dict) -> float:
     """Время записи файла: `updated` из данных, иначе mtime.
 
     Только по mtime ранжировать нельзя: копирование, перенос книги или правка
-    часов делают свежим файл, чьё содержимое старше, и значение, записанное
-    раньше, перебивало бы позднее (диапазон глав одной стадии показывался на
-    двух устройствах по-разному). Файлы прежней версии без отметки читаются по
-    mtime — состояние, оставленное до обновления, не теряется."""
+    часов делают свежим файл, чьё содержимое старше."""
     try:
         stamp = float(data.get("updated") or 0)
     except (TypeError, ValueError):
         stamp = 0.0
     return stamp if stamp > 0 else _mtime(path)
-
-
-def _fresh(path: Path) -> bool:
-    """Состояние файла не протухло (по mtime; часы диска — единственный закон)."""
-    try:
-        return time.time() - path.stat().st_mtime <= UI_STATE_STALE
-    except OSError:
-        return False
-
-
-def ui_state_read(ddir: Path, device: str = "",
-                  merge: bool = True) -> dict:
-    """Состояние книги для устройства: {ключ: значение}.
-
-    merge=True (обычное чтение) — файлы устройств накладываются в порядке
-    ЗАПИСИ (по отметке `updated`, у старых файлов — по mtime): сев за другой
-    браузер, человек продолжает с того, что оставили позже, а не с того, что
-    случайно оказалось свежее на диске. Вложенные объекты сливаются, поэтому
-    правка главы на телефоне не стирает панели, выбранные на ноутбуке, а
-    совпавший ключ получает все устройства одинаково — последнее значение.
-    merge=False — только свой файл.
-
-    Снятый ключ не воскресает из чужого файла: удаление отмечается в файле
-    владельца (`_deleted`) и применяется в том же порядке — значение,
-    записанное раньше снятия, его не отменяет.
-    """
-    return _read(ddir, device, merge)[0]
-
-
-def _read(ddir: Path, device: str, merge: bool) -> tuple[dict, dict]:
-    """(значения, надгробия) после слияния: надгробия нужны записи.
-
-    Свой файл участвует в том же порядке, что и чужие, а не накладывается
-    последним принудительно: иначе каждое устройство видело бы своё значение
-    одного и того же ключа (форма запусков на двух компьютерах показывала
-    разные диапазоны глав)."""
-    ddir = Path(ddir)
-    with _LOCK:
-        own_path = _file(ddir, device)
-        layers = [(own_path, _load(own_path))]  # своё читается всегда
-        if merge:
-            try:
-                layers += [(p, _load(p)) for p in ddir.glob("*.json")
-                           if p.is_file()
-                           and (not device or p.name != f"{device}.json")
-                           and _fresh(p)]
-            except OSError:
-                pass
-        # у одинаковых отметок решает mtime: порядок записи остаётся единым
-        layers.sort(key=lambda d: (_file_stamp(d[0], d[1]), _mtime(d[0])))
-        data: dict = {}
-        graves: dict = {}
-        for path, got in layers:
-            _apply(data, graves, got)
-        return data, graves
-
-
-def ui_state_write(ddir: Path, device: str, payload: dict) -> None:
-    """Сохранить состояние устройства (ключи книги поверх лежащих на диске).
-
-    Клиент присылает только изменённые ключи (`nmTab:…`, `runVals:…:стадия`,
-    `nmProfile:…`); значение `None` снимает ключ и оставляет надгробие — так
-    сброс настроек стирает значение и в книге, а не только в памяти страницы.
-    Неприсланные ключи остаются: правка одной вкладки не задевает соседние.
-    """
-    if not isinstance(payload, dict):
-        raise ValueError("состояние интерфейса — JSON-объект")
-    ddir = Path(ddir)
-    with _LOCK:
-        ddir.mkdir(parents=True, exist_ok=True)
-        target = _file(ddir, device)
-        data, graves = _read(ddir, device, merge=False)
-        for key, value in _clean_state(payload).items():
-            if value is None:
-                data.pop(key, None)
-                graves[key] = round(time.time(), 3)
-            else:
-                data[key] = value
-                graves.pop(key, None)
-        # надгробия старше срока годности не нужны: файлы устройств с такими
-        # значениями к этому времени и сами не попадают в слияние
-        cutoff = time.time() - UI_STATE_STALE
-        graves = {k: v for k, v in graves.items() if v >= cutoff}
-        out = dict(data)
-        out["version"] = UI_STATE_VERSION
-        out["updated"] = round(time.time(), 3)
-        if graves:
-            out["_deleted"] = graves
-        atomic_write(str(target), json.dumps(out, ensure_ascii=False,
-                                             indent=2))
-        ui_state_prune(ddir)
-
-
-def ui_state_prune(ddir: Path, keep: int = UI_STATE_KEEP) -> list[str]:
-    """Оставить `keep` самых свежих файлов состояния; вернуть удалённые имена.
-
-    `pending.json` удаляется наравне с прочими: после первой записи устройства
-    он больше не нужен, а старое состояние без владельца копилось бы вечно.
-    """
-    ddir = Path(ddir)
-    try:
-        files = sorted((p for p in ddir.glob("*.json") if p.is_file()),
-                       key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError:
-        return []
-    dropped: list[str] = []
-    for path in files[keep:]:
-        try:
-            path.unlink()
-            dropped.append(path.name)
-        except OSError:
-            pass
-    return dropped
 
 
 #: служебные поля файла состояния: в состояние клиента они не едут
@@ -249,13 +116,26 @@ def _deleted(data: dict) -> dict:
     return out
 
 
-def _apply(out: dict, graves: dict, data: dict) -> None:
-    """Наложить файл на слияние: значения сливаются, надгробия снимают ключи.
+def _merge(base, patch):
+    """Слияние состояния: объект поверх объекта, скаляр заменяет скаляр.
 
-    Файлы приходят в порядке записи, поэтому «позже» здесь — просто «следующий
-    слой»: совпавший ключ получает последнее записанное значение, а вложенные
-    объекты сливаются — чужие правки соседних полей не теряются.
-    """
+    Вложенные объекты сливаются по полям: правка одного поля формы не стирает
+    соседние, записанные другим устройством или другой вкладкой. `None` внутри
+    объекта снимает поле (чипс, снятый галочкой, не воскресает после
+    перезагрузки)."""
+    out = dict(base)
+    for key, value in patch.items():
+        if value is None:
+            out.pop(key, None)
+        elif isinstance(out.get(key), dict) and isinstance(value, dict):
+            out[key] = _merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _apply(out: dict, graves: dict, data: dict) -> None:
+    """Наложить слой старого файла: значения сливаются, надгробия снимают ключи."""
     for key, value in _strip(data).items():
         old = out.get(key)
         if isinstance(old, dict) and isinstance(value, dict):
@@ -266,6 +146,114 @@ def _apply(out: dict, graves: dict, data: dict) -> None:
         if when >= float(graves.get(key, 0)):
             out.pop(key, None)
             graves[key] = when
+
+
+def _legacy(ddir: Path) -> list[tuple[Path, dict]]:
+    """Файлы прежней версии (по файлу на устройство) в порядке записи.
+
+    Пусто, если каталога нет или он уже переведён на общий файл. Эти файлы
+    сливаются в `state.json` при первом чтении или записи: состояние,
+    оставленное до обновления, не теряется."""
+    try:
+        files = [p for p in ddir.glob("*.json")
+                 if p.is_file() and p.name != UI_STATE_FILE]
+    except OSError:
+        return []
+    layers = [(p, _load(p)) for p in files]
+    # у одинаковых отметок решает mtime: порядок записи остаётся единым
+    layers.sort(key=lambda d: (_stamp(d[0], d[1]), _mtime(d[0])))
+    return layers
+
+
+def _legacy_state(ddir: Path) -> tuple[dict, dict]:
+    """(значения, надгробия) слияния файлов прежней версии."""
+    data: dict = {}
+    graves: dict = {}
+    for _path, got in _legacy(ddir):
+        _apply(data, graves, got)
+    return data, graves
+
+
+def ui_state_read(ddir: Path) -> dict:
+    """Состояние книги: {ключ: значение}.
+
+    Читается один общий файл, поэтому все устройства и все домены видят одно и
+    то же состояние книги. Файла ещё нет (первый заход после обновления) —
+    читаются файлы прежней версии, слитые в порядке записи.
+    """
+    ddir = Path(ddir)
+    with _LOCK:
+        target = _file(ddir)
+        if target.is_file():
+            return _strip(_load(target))
+        return _legacy_state(ddir)[0]
+
+
+def ui_state_write(ddir: Path, payload: dict) -> dict:
+    """Сохранить изменённые ключи книги и вернуть состояние целиком.
+
+    Клиент присылает только изменённые ключи (`nmTab:…`, `runVals:…:стадия`,
+    `nmProfile:…`); значение `None` снимает ключ, `None` внутри объекта — поле
+    (так сброс настроек и снятый чипс стирают значение и в книге, а не только
+    в памяти страницы). Неприсланные ключи остаются, а у присланных объектов
+    сливаются поля: правка одной вкладки не задевает соседние поля, записанные
+    другим устройством.
+
+    Возвращается слитое состояние, а не принятые ключи: клиент держит его
+    снимок для показа, и без ответа сервера его поля расходились бы с книгой
+    до перезагрузки страницы.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("состояние интерфейса — JSON-объект")
+    ddir = Path(ddir)
+    with _LOCK:
+        ddir.mkdir(parents=True, exist_ok=True)
+        target = _file(ddir)
+        if target.is_file():
+            raw = _load(target)
+            data, graves = _strip(raw), _deleted(raw)
+            legacy = False
+        else:
+            # первый заход после обновления: старое состояние устройств
+            # вливается в общий файл, а не теряется
+            data, graves = _legacy_state(ddir)
+            legacy = True
+        for key, value in _clean_state(payload).items():
+            if value is None:
+                data.pop(key, None)
+                graves[key] = round(time.time(), 3)
+            else:
+                data[key] = _merge(data[key], value) \
+                    if isinstance(data.get(key), dict) and isinstance(value, dict) \
+                    else value
+                graves.pop(key, None)
+        out = dict(data)
+        out["version"] = UI_STATE_VERSION
+        out["updated"] = round(time.time(), 3)
+        if graves:
+            out["_deleted"] = graves
+        atomic_write(str(target), json.dumps(out, ensure_ascii=False,
+                                             indent=2))
+        if legacy:
+            _drop_legacy(ddir)
+        return data
+
+
+def _drop_legacy(ddir: Path) -> list[str]:
+    """Удалить файлы прежней версии, уже влитые в общий файл.
+
+    Состояние, оставленное до обновления, к этому мгновению лежит в
+    `state.json` целиком (запись выше идёт под тем же замком), поэтому старые
+    файлы — только мусор: каталог рос новым json на каждый браузер и домен.
+    """
+    dropped: list[str] = []
+    for path, _data in _legacy(ddir):
+        try:
+            path.unlink()
+            dropped.append(path.name)
+        except OSError:
+            pass
+    return dropped
 
 
 def _clean_state(state: dict) -> dict:
@@ -281,30 +269,21 @@ def _clean_state(state: dict) -> dict:
     return out
 
 
-def _merge(base: dict, patch: dict) -> dict:
-    """Слияние состояния: объект поверх объекта, скаляр заменяет скаляр."""
-    out = dict(base)
-    for key, value in patch.items():
-        old = out.get(key)
-        if isinstance(old, dict) and isinstance(value, dict):
-            out[key] = _merge(old, value)
-        else:
-            out[key] = value
-    return out
-
-
 def _selfcheck() -> None:  # pragma: no cover — ручная проверка слоя
     import tempfile
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         ddir = ui_state_dir(d)
-        ui_state_write(ddir, "dev1", {"nmTab:a/b": {"page": {"view": "run"}}})
-        ui_state_write(ddir, "dev2", {"nmProfile:a/b/ner": "home"})
-        got = ui_state_read(ddir, "dev1")
+        ui_state_write(ddir, {"nmTab:a/b": {"page": {"view": "run"}}})
+        ui_state_write(ddir, {"nmProfile:a/b/ner": "home"})
+        got = ui_state_read(ddir)
         assert got["nmTab:a/b"] == {"page": {"view": "run"}}, got
         assert got["nmProfile:a/b/ner"] == "home", got
-        ui_state_write(ddir, "dev1", {"nmProfile:a/b/ner": None})
-        assert "nmProfile:a/b/ner" not in ui_state_read(ddir, "dev1")
+        ui_state_write(ddir, {"nmTab:a/b": {"editor": {"chapter": "3"}}})
+        assert ui_state_read(ddir)["nmTab:a/b"] == {
+            "page": {"view": "run"}, "editor": {"chapter": "3"}}
+        ui_state_write(ddir, {"nmProfile:a/b/ner": None})
+        assert "nmProfile:a/b/ner" not in ui_state_read(ddir)
         print("ui_state ok:", sorted(p.name for p in ddir.iterdir()))
 
 

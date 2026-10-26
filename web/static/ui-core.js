@@ -959,22 +959,34 @@
    *
    * store — снимок состояния книги (см. bookState): getItem читает ключ,
    * setItem пишет его. null в set убирает ключ: сброс настроек обязан стереть
-   * значение и в книге, иначе после перезагрузки оно вернётся. */
+   * значение и в книге, иначе после перезагрузки оно вернётся.
+   *
+   * Ключ перечитывается при каждом обращении, а не берётся копией при
+   * создании: пока вкладка открыта, книгу мог поправить другой браузер, и
+   * запись старой копии целиком возвращала бы его поля назад. Если хранилище
+   * запрещено (приватный режим), состояние живёт в памяти страницы. */
   function projectPrefs(store, section, name) {
     var key = projectPrefKey(section, name);
-    var data = {};
-    try {
-      var p = store ? JSON.parse(store.getItem(key) || "null") : null;
-      if (p && typeof p === "object" && !Array.isArray(p)) data = p;
-    } catch (e) {
-      data = {}; // битый JSON — состояние начинается заново
+    var memory = null;  // последнее значение, когда хранилище не приняло запись
+
+    function read() {
+      if (memory) return memory;
+      try {
+        var p = store ? JSON.parse(store.getItem(key) || "null") : null;
+        if (p && typeof p === "object" && !Array.isArray(p)) return p;
+      } catch (e) {
+        /* битый JSON или недоступное хранилище — состояние с пустого */
+      }
+      return {};
     }
+
     return {
       get: function (tab) {
-        var t = data[tab];
+        var t = read()[tab];
         return t && typeof t === "object" && !Array.isArray(t) ? t : {};
       },
       set: function (tab, patch) {
+        var data = read();
         if (patch === null) {
           if (!(tab in data)) return;
           delete data[tab];
@@ -982,9 +994,11 @@
           data[tab] = Object.assign({}, data[tab], patch);
         }
         try {
-          if (store) store.setItem(key, JSON.stringify(data));
+          if (!store) throw new Error("нет хранилища");
+          store.setItem(key, JSON.stringify(data));
+          memory = null;
         } catch (e) {
-          /* хранилище недоступно — состояние живёт в памяти страницы */
+          memory = data;  // запись не прошла — состояние остаётся в памяти
         }
       },
     };
@@ -1141,6 +1155,7 @@
 
   function bookState(api, section, name) {
     var data = {};        // ключ браузера → разобранное значение
+    var server = {};      // что лежит в книге (последний ответ сервера)
     var loaded = false;   // сервер ответил (или не ответил — живём дальше)
     var failed = false;   // последняя запись не дошла
     var busy = null;      // идущая запись
@@ -1149,6 +1164,7 @@
     var timer = null;
     var fallback = null;  // localStorage, а если браузер его запретил — память
     var pre = section + "/" + name;
+    var SAME = {};        // маркер слияния: «менять нечего»
 
     function browser() {
       if (fallback) return fallback;
@@ -1185,6 +1201,62 @@
       timer = setTimeout(flush, BOOK_SAVE_DELAY);
     }
 
+    /* что именно изменилось в ключе: правка одного поля не должна стирать
+     * соседние, записанные другим устройством. Скаляры и массивы едут целиком,
+     * объекты — по листьям: чего в новом значении нет, уходит как null
+     * (сервер снимает поле). SAME — менять нечего. */
+    function leafPatch(base, value) {
+      if (base === undefined) return value;
+      var bothObj = base && value && typeof base === "object"
+        && typeof value === "object"
+        && !Array.isArray(base) && !Array.isArray(value);
+      if (bothObj) {
+        var out = {};
+        var any = false;
+        for (var a in base) {
+          if (!Object.prototype.hasOwnProperty.call(base, a)) continue;
+          if (!Object.prototype.hasOwnProperty.call(value, a)) {
+            out[a] = null;
+            any = true;
+          }
+        }
+        for (var b in value) {
+          if (!Object.prototype.hasOwnProperty.call(value, b)) continue;
+          var part = leafPatch(
+            Object.prototype.hasOwnProperty.call(base, b) ? base[b] : undefined,
+            value[b],
+          );
+          if (part === SAME) continue;
+          out[b] = part;
+          any = true;
+        }
+        return any ? out : SAME;
+      }
+      return JSON.stringify(base) === JSON.stringify(value) ? SAME : value;
+    }
+
+    /* ответ сервера — истина книги: чего в нём нет, того нет, а локальные
+     * правки, ещё не отправленные, остаются до ближайшего flush */
+    function applyServer(got) {
+      server = {};
+      for (var k in got || {}) {
+        if (Object.prototype.hasOwnProperty.call(got, k)) server[k] = got[k];
+      }
+      for (var k2 in data) {
+        if (!Object.prototype.hasOwnProperty.call(data, k2)) continue;
+        if (Object.prototype.hasOwnProperty.call(dirty, k2)) continue;
+        if (!Object.prototype.hasOwnProperty.call(server, k2)) delete data[k2];
+        else data[k2] = server[k2];
+      }
+      for (var k3 in server) {
+        if (!Object.prototype.hasOwnProperty.call(server, k3)) continue;
+        if (!Object.prototype.hasOwnProperty.call(data, k3)
+            && !Object.prototype.hasOwnProperty.call(dirty, k3)) {
+          data[k3] = server[k3];
+        }
+      }
+    }
+
     /* запись пачки; хвост, накопленный за время запроса, уходит следом */
     function flush() {
       clearTimeout(timer);
@@ -1197,15 +1269,22 @@
         if (!Object.prototype.hasOwnProperty.call(dirty, k)) continue;
         if (!Object.prototype.hasOwnProperty.call(data, k)) {
           patch[k] = null; // ключ убран (сброс настроек)
-        } else {
-          patch[k] = data[k];
+          n += 1;
+          continue;
         }
+        var part = leafPatch(server[k], data[k]);
+        if (part === SAME) continue; // значение вернулось к книжному
+        patch[k] = part;
         n += 1;
       }
-      if (!n) return Promise.resolve();
       dirty = {};
+      if (!n) return Promise.resolve();
       busy = Promise.resolve(api.save(patch)).then(
-        function () { failed = false; notify(); },
+        function (res) {
+          failed = false;
+          applyServer(res && res.data);
+          notify();
+        },
         function () { failed = true; notify(); },
       ).then(function () {
         busy = null;
@@ -1268,13 +1347,8 @@
       load: function () {
         if (!api) { loaded = true; return Promise.resolve(data); }
         return Promise.resolve(api.load()).then(function (res) {
-          var got = (res && res.data) || {};
-          for (var k in got) {
-            if (!Object.prototype.hasOwnProperty.call(got, k)) continue;
-            /* правка, сделанная до загрузки, важнее серверной */
-            if (!Object.prototype.hasOwnProperty.call(data, k)) data[k] = got[k];
-          }
           loaded = true;
+          applyServer(res && res.data);
           adopt();
           notify();
           if (Object.keys(dirty).length) flush();

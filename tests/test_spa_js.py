@@ -102,7 +102,7 @@ def test_run_views_chips_persistence():
     assert 'st.touched[key].add("fields");' in src
     # форма стадии одна (Простой/Экспертный удалены), кнопка сброса
     # пересчитывается делегатом, а не перестройкой формы; тем же делегатом
-    # изменённые поля уходят в память браузера
+    # изменённые поля уходят в состояние книги
     assert "function stageForm(key, spec)" in src
     assert "const onEdit = () => {" in src
     assert "scheduleRunSave(key);" in src
@@ -127,7 +127,11 @@ def test_run_views_values_persistence():
     assert "store.setItem(runKey(key), JSON.stringify(data))" in src
     # пустое изменение — ключ памяти удаляется, а не оставляется с мусором
     assert "store.removeItem(runKey(key))" in src
-    # хранилище — снимок книги (вне загруженного app.js — память браузера)
+    # пишутся только тронутые поля: иначе правка одного поля формы отправляла
+    # бы в книгу все значения стадии и затирала чужие (два компьютера видели
+    # разные диапазоны глав)
+    assert "for (const n of t) if (vals[n] !== undefined) data[n] = vals[n];" in src
+    # хранилище — снимок книги (вне загруженного app.js — localStorage)
     assert "bookState(section, name).store" in src
     assert 'const store = typeof bookState === "function"' in src
     assert 'bookState(section, name).store : localStorage;' in src

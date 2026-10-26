@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """Тесты роутов состояния книги: GET/PUT /api/projects/{sec}/{name}/ui-state.
 
-Проверяется то, ради чего слой заведён: состояние живёт в книге (tmp/ui_state),
-cookie устройства выдаётся и узнаётся, слияние не теряет правки устройств,
-кривое тело не портит файл.
+Проверяется то, ради чего слой заведён: состояние живёт в книге (tmp/ui_state)
+одним файлом, одинаково для всех браузеров и доменов, слияние не теряет правки
+разных писателей, кривое тело не портит файл.
 """
 import json
 import threading
@@ -15,7 +15,7 @@ import pytest
 from conftest import http_request as _request
 from web import api as web_api
 from web.auth import Auth
-from web.server import DEVICE_COOKIE, make_server
+from web.server import LEGACY_DEVICE_COOKIE, make_server
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -45,11 +45,8 @@ def srv(tmp_path):
         one.server_close()
 
 
-def _device_cookie(res) -> str:
-    for key, value in res.getheaders():
-        if key.lower() == "set-cookie" and value.startswith(DEVICE_COOKIE + "="):
-            return value.split(";")[0]
-    return ""
+def _ddir(projects_root) -> Path:
+    return projects_root / "ACTIVE" / "book" / "tmp" / "ui_state"
 
 
 def test_state_kept_in_project_tmp(srv):
@@ -59,7 +56,7 @@ def test_state_kept_in_project_tmp(srv):
     assert payload["data"] == {}
     assert payload["dir"] == "tmp/ui_state"
     # каталога ещё нет: он появляется первой записью, а не чтением
-    assert not (projects_root / "ACTIVE" / "book" / "tmp" / "ui_state").exists()
+    assert not _ddir(projects_root).exists()
 
 
 def test_put_then_get_roundtrip_in_book(srv):
@@ -67,56 +64,77 @@ def test_put_then_get_roundtrip_in_book(srv):
     res, payload = _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
                             {"data": {"runs": {"ner": {"chunk_size": "1234"}}}})
     assert payload["ok"], payload
-    cookie = _device_cookie(res)
-    assert cookie.startswith(DEVICE_COOKIE + "="), res.getheaders()
-    res2, payload2 = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state",
-                              cookie=cookie)
+    # ответ несёт состояние книги: клиент живёт его снимком
+    assert payload["data"] == {"runs": {"ner": {"chunk_size": "1234"}}}
+    _, payload2 = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state")
     assert payload2["data"] == {"runs": {"ner": {"chunk_size": "1234"}}}
-    ddir = projects_root / "ACTIVE" / "book" / "tmp" / "ui_state"
-    files = list(ddir.glob("*.json"))
-    assert len(files) == 1, files
+    files = list(_ddir(projects_root).glob("*.json"))
+    assert [p.name for p in files] == ["state.json"], files
     raw = json.loads(files[0].read_text(encoding="utf-8"))
     assert raw["runs"]["ner"]["chunk_size"] == "1234"
     assert raw["version"] >= 1
 
 
-def test_different_devices_do_not_overwrite_each_other(srv):
+def test_state_is_one_for_all_browsers(srv):
+    """Два браузера и два домена видят одно состояние книги.
+
+    Раньше состояние раскладывалось по cookie устройства: на боевом один
+    компьютер с двух адресов давал два файла и два разных диапазона глав."""
+    srv_, port, projects_root = srv()
+    _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
+             {"data": {"runVals:a/b:ner": {"start": "7"}}},
+             cookie="nm_device=deviceOne")
+    _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
+             {"data": {"runVals:a/b:ner": {"end": "9"}}},
+             cookie="nm_device=deviceTwo")
+    _, got = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state")
+    assert got["data"]["runVals:a/b:ner"] == {"start": "7", "end": "9"}
+    files = [p.name for p in _ddir(projects_root).glob("*.json")]
+    assert files == ["state.json"], files
+
+
+def test_editing_one_field_keeps_neighbours(srv):
+    """Запись одного поля формы не стирает соседние поля того же ключа."""
     srv_, port, _ = srv()
-    res_a, _ = _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
-                        {"data": {"tab": {"editor": {"chapter": "7"}}}})
-    res_b, _ = _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
-                        {"data": {"tab": {"logs": {"path": "logs"}}}})
-    cookie_a = _device_cookie(res_a)
-    cookie_b = _device_cookie(res_b)
-    assert cookie_a and cookie_b and cookie_a != cookie_b
-    _, got = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state",
-                      cookie=cookie_a)
-    # новое устройство видит чужое состояние: переезд с телефона на десктоп
-    assert got["data"]["tab"] == {"editor": {"chapter": "7"},
-                                  "logs": {"path": "logs"}}
+    key = "runVals:a/b:pipeline"
+    _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
+             {"data": {key: {"start": "100", "end": "200"}}})
+    _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
+             {"data": {key: {"chunk_size": "9000"}}})
+    _, got = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state")
+    assert got["data"][key] == {"start": "100", "end": "200",
+                                "chunk_size": "9000"}
 
 
-def test_get_gives_device_cookie(srv):
+def test_null_inside_object_removes_field(srv):
+    """`null` внутри объекта снимает поле: снятая галочка не воскресает."""
+    srv_, port, _ = srv()
+    key = "runVals:a/b:ner"
+    _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
+             {"data": {key: {"start": "1", "two_pass": "1"}}})
+    _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
+             {"data": {key: {"two_pass": None}}})
+    _, got = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state")
+    assert got["data"][key] == {"start": "1"}
+
+
+def test_no_device_cookie_is_set(srv):
+    """Cookie устройства больше не выдаётся: она делила книгу на правды."""
     srv_, port, _ = srv()
     res, _ = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state")
-    cookie = _device_cookie(res)
-    assert cookie.startswith(DEVICE_COOKIE + "=")
-    header = next(v for k, v in res.getheaders() if k.lower() == "set-cookie")
-    assert "HttpOnly" in header and "SameSite=Lax" in header
-    assert "Max-Age=" in header
-    # тот же id приезжает и в PUT: файл устройства один
-    res2, _ = _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
-                       {"data": {"a": {"b": 1}}}, cookie=cookie)
-    assert _device_cookie(res2) == cookie
+    headers = [v for k, v in res.getheaders() if k.lower() == "set-cookie"]
+    assert not any(v.startswith(LEGACY_DEVICE_COOKIE + "=") for v in headers), \
+        headers
 
 
-def test_foreign_device_cookie_gets_new_id(srv):
-    srv_, port, projects_root = srv()
+def test_legacy_device_cookie_is_cleared(srv):
+    """Старая cookie гасится при первом запросе состояния книги."""
+    srv_, port, _ = srv()
     res, _ = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state",
-                      cookie=f"{DEVICE_COOKIE}=../../etc/passwd")
-    cookie = _device_cookie(res)
-    assert cookie and ".." not in cookie and "/" not in cookie
-    assert list((projects_root / "ACTIVE" / "book" / "tmp").glob("*.json")) == []
+                      cookie=f"{LEGACY_DEVICE_COOKIE}=deviceOne")
+    headers = [v for k, v in res.getheaders() if k.lower() == "set-cookie"]
+    assert any(v.startswith(LEGACY_DEVICE_COOKIE + "=") and "Max-Age=0" in v
+               for v in headers), headers
 
 
 @pytest.mark.parametrize("body", [{"data": [1, 2]}, {"data": "строка"},
@@ -131,15 +149,12 @@ def test_put_rejects_non_object_body(srv, body):
 
 def test_put_empty_data_keeps_file(srv):
     """Пустое тело не стирает книгу: очистка — удаление каталога, не запись."""
-    srv_, port, projects_root = srv()
-    res, _ = _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
-                      {"data": {"tab": {"editor": {"chapter": "1"}}}})
-    cookie = _device_cookie(res)
+    srv_, port, _ = srv()
     _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
-             {"data": {}}, cookie=cookie)
-    _, got = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state",
-                      cookie=cookie)
-    assert got["data"]["tab"] == {"editor": {"chapter": "1"}}
+             {"data": {"nmTab:a/b": {"page": {"view": "run"}}}})
+    _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state", {"data": {}})
+    _, got = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state")
+    assert got["data"]["nmTab:a/b"] == {"page": {"view": "run"}}
 
 
 def test_missing_project_is_404(srv):
@@ -153,12 +168,23 @@ def test_missing_project_is_404(srv):
 
 def test_state_survives_copy_of_book(srv, tmp_path):
     """Копия книги наследует состояние: копия продолжает с тех же параметров."""
-    srv_, port, projects_root = srv()
-    res, _ = _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
-                      {"data": {"runs": {"ner": {"start": "5"}}}})
-    cookie = _device_cookie(res)
+    srv_, port, _ = srv()
+    _request(port, "PUT", "/api/projects/ACTIVE/book/ui-state",
+             {"data": {"runs": {"ner": {"start": "5"}}}})
     _request(port, "POST", "/api/projects/copy",
              {"section": "ACTIVE", "name": "book", "new_name": "book2"})
-    _, got = _request(port, "GET", "/api/projects/ACTIVE/book2/ui-state",
-                      cookie=cookie)
+    _, got = _request(port, "GET", "/api/projects/ACTIVE/book2/ui-state")
     assert got["data"]["runs"] == {"ner": {"start": "5"}}
+
+
+def test_legacy_files_folded_on_first_request(srv):
+    """Файлы устройств прежней версии вливаются в общий файл при первом GET."""
+    srv_, port, projects_root = srv()
+    ddir = _ddir(projects_root)
+    ddir.mkdir(parents=True, exist_ok=True)
+    (ddir / "olddev.json").write_text(json.dumps({
+        "version": 1, "updated": 1,
+        "runVals:a/b:ner": {"start": "42"},
+    }), encoding="utf-8")
+    _, got = _request(port, "GET", "/api/projects/ACTIVE/book/ui-state")
+    assert got["data"]["runVals:a/b:ner"] == {"start": "42"}

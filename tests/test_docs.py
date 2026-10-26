@@ -126,11 +126,9 @@ UPDATE_API = ["UpdateError", "PROTECTED_PATHS", "PROTECTED_DIRS", "install_kind"
               "host_command_hint", "apply_update", "RESTART_NOTES",
               "restart_supported", "restart_command", "restart_plan",
               "schedule_restart"]
-# Зеркало API core/uistate.py (состояние книги: tmp/ui_state/)
-UISTATE_API = ["UI_STATE_DIR", "UI_STATE_VERSION", "UI_STATE_KEEP",
-               "UI_STATE_STALE", "UI_STATE_DEVICE_COOKIE", "ui_state_dir",
-               "ui_state_device", "ui_state_read", "ui_state_write",
-               "ui_state_prune"]
+# Зеркало API core/uistate.py (состояние книги: tmp/ui_state/state.json)
+UISTATE_API = ["UI_STATE_DIR", "UI_STATE_FILE", "UI_STATE_VERSION",
+               "ui_state_dir", "ui_state_read", "ui_state_write"]
 # Зеркало API core/search.py (поиск по текстам книги)
 SEARCH_API = ["SearchGroup", "SEARCH_GROUPS", "GROUP_IDS", "GROUP_LABELS",
               "CLUSTERS", "CLUSTER_LABELS", "DEFAULT_SCOPES", "MAX_CONTEXT",
