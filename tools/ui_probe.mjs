@@ -1010,9 +1010,18 @@ async function main() {
     /* способ «весь набор»: в книгу приезжают все промпты выбранного набора */
     await page.locator('.modal-backdrop label:has-text("Весь набор") input').check();
     await page.waitForTimeout(300);
+    /* подсказка ВИДИМОЙ половины окна: у «Одного файла» своя, и первая в
+       разметке — как раз она, а не выбранный режим */
     const setInfo = await page.evaluate(() =>
-      (document.querySelector(".modal-backdrop .card-hint") || {}).textContent || "");
-    if (!/General:/.test(setInfo) || !/pipeline_prompt\.txt/.test(setInfo))
+      (document.querySelector(
+        ".modal-backdrop .prompt-tpl-pane:not(.hidden) .card-hint",
+      ) || {}).textContent || "");
+    /* набор подписан header'ом, файлы — списком: «General: файлов 6» +
+       строка на файл; replaceChildren(null) вставлял бы текстовый узел null */
+    if (/\bnull\b/.test(setInfo))
+      problems.push(`промпты: в списке набора «null» — «${setInfo.trim()}»`);
+    if (!/Набор «General»: файлов \d+/.test(setInfo)
+      || !/pipeline_prompt\.txt/.test(setInfo))
       problems.push(`промпты: список файлов набора «${setInfo.trim()}»`);
     await page.locator('.modal-backdrop button:has-text("Скопировать")').click();
     await page.waitForTimeout(1500);
@@ -1023,6 +1032,79 @@ async function main() {
       [...document.querySelectorAll(".prompt-item")].map((b) => b.textContent));
     if (!listed.some((t) => t.includes("pipeline_prompt.txt")))
       problems.push("промпты: скопированный файл не появился в списке");
+    /* способ «один файл»: набор и файл — ДВА списка (плоский «файл · набор»
+       был свалкой: имя набора повторялось на каждой строке, а сколько файлов
+       приедет в книгу, человек не видел), и имя в книге правится руками */
+    {
+      const before2 = problems.length;
+      await page.locator('.prompts-side button:has-text("Из шаблона")').click();
+      await page.waitForTimeout(500);
+      await page.locator('.modal-backdrop label:has-text("Один файл") input')
+        .check();
+      await page.waitForTimeout(300);
+      const one = await page.evaluate(() => {
+        const pane = document.querySelector(
+          ".modal-backdrop .prompt-tpl-pane:not(.hidden)");
+        const sels = [...(pane ? pane.querySelectorAll("select") : [])];
+        return {
+          labels: [...document.querySelectorAll(
+            ".modal-backdrop .prompt-tpl-pane:not(.hidden) .field-label")].map(
+            (x) => x.textContent.trim()),
+          setOpts: sels[0] ? [...sels[0].options].map((o) => o.value) : [],
+          fileOpts: sels[1] ? [...sels[1].options].map((o) => o.value) : [],
+          name: (document.querySelector(
+            ".modal-backdrop .prompt-tpl-pane:not(.hidden) input.input")
+            || {}).value || "",
+          text: (document.querySelector(".modal-backdrop .modal") || {})
+            .textContent || "",
+        };
+      });
+      /* подписи полей: без них два списка подряд не различить */
+      const wantLabels = ["Набор шаблонов", "Файл набора", "Имя файла в книге"];
+      if (JSON.stringify(one.labels) !== JSON.stringify(wantLabels))
+        problems.push(`промпт один файл: подписи ${JSON.stringify(one.labels)}`);
+      if (!one.setOpts.includes("General"))
+        problems.push(`промпт один файл: наборы ${one.setOpts.join(",")}`);
+      if (!one.fileOpts.includes("pipeline_prompt.txt"))
+        problems.push(`промпт один файл: файлы ${one.fileOpts.join(",")}`);
+      if (/\bnull\b/.test(one.text))
+        problems.push(`промпт один файл: в окне «null» — «${one.text.slice(0, 60)}»`);
+      /* имя в книге следует за файлом, пока его не правили, и правится руками */
+      await page.locator('.modal-backdrop .prompt-tpl-pane:not(.hidden) select')
+        .nth(1).selectOption("wiki_prompt.txt");
+      await page.waitForTimeout(250);
+      const followed = await page.evaluate(() =>
+        (document.querySelector(
+          ".modal-backdrop .prompt-tpl-pane:not(.hidden) input.input")
+          || {}).value || "");
+      if (followed !== "wiki_prompt.txt")
+        problems.push(`промпт один файл: имя следует за файлом → «${followed}»`);
+      const nameInp = page.locator(
+        ".modal-backdrop .prompt-tpl-pane:not(.hidden) input.input");
+      await nameInp.fill("probe_custom.txt");
+      await page.waitForTimeout(250);
+      const hint = await page.evaluate(() =>
+        (document.querySelector(
+          ".modal-backdrop .prompt-tpl-pane:not(.hidden) .card-hint")
+          || {}).textContent || "");
+      if (!/prompts\/probe_custom\.txt/.test(hint))
+        problems.push(`промпт один файл: подсказка «${hint}»`);
+      await page.locator('.modal-backdrop button:has-text("Скопировать")')
+        .click();
+      await page.waitForTimeout(1500);
+      if (!fs.existsSync(path.join(bookPrompts, "probe_custom.txt")))
+        problems.push("промпт один файл: файл не попал в книгу под своим именем");
+      const shown = await page.evaluate(() =>
+        [...document.querySelectorAll(".prompt-item")].map((b) => b.textContent));
+      if (!shown.some((t) => t.includes("probe_custom.txt")))
+        problems.push("промпт один файл: скопированный файл не появился в списке");
+      log(`${problems.length === before2 ? "✅" : "❌"} промпт один файл  `
+        + `${one.labels.length} подписи · файлов в наборе ${one.fileOpts.length}`
+        + ` · имя из «Имя файла в книге»`);
+      fs.rmSync(path.join(bookPrompts, "probe_custom.txt"), { force: true });
+      await page.reload({ waitUntil: "load" });
+      await page.waitForTimeout(600);
+    }
     /* очистка: все промпты книги одним действием, каталог остаётся */
     await page.locator('.prompts-side button:has-text("Очистить")').click();
     await page.waitForTimeout(500);

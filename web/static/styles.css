@@ -2548,6 +2548,16 @@ input[type="number"] {
   margin-top: 4px;
   color: var(--accent-2);
 }
+/* файлы набора в режиме «Весь набор»: список по строке — «a, b, c» одной
+   строкой не отвечает на вопрос «сколько их и какие заменятся» */
+.prompt-tpl-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+}
+.prompt-tpl-list li.is-over {
+  color: var(--accent-2);
+}
 .log-view {
   background: var(--log-bg);
   border: 1px solid var(--border);

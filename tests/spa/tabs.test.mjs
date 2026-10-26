@@ -2737,11 +2737,15 @@ test("«Промпты»: «Из шаблона» → весь набор коп
   const setRadio = inputs.find((i) => i.value === "set");
   setRadio.checked = true;
   await setRadio._listeners.change[0]();
-  /* в DOM первый option выбран сам, заглушка value не выводит — ставим руками */
-  const setSel = findTag(bd, "select")[1];
+  /* в DOM первый option выбран сам, заглушка value не выводит — ставим руками;
+     списков в окне три: набор и файл «одного файла», затем набор «всего
+     набора» — он последний */
+  const visible = () => findByClass(bd, "prompt-tpl-pane")
+    .find((p) => !p.classList.contains("hidden"));
+  const setSel = findTag(visible(), "select").pop();
   setSel.value = "General";
   await setSel._listeners.change[0]();
-  const hint = findByClass(bd, "card-hint")[0];
+  const hint = findByClass(visible(), "card-hint")[0];
   assert.match(allText(hint), /ner_prompt\.txt/, "виден состав набора");
   assert.match(allText(hint), /Заменятся в книге: pipeline_prompt\.txt/,
     "видно, что будет заменено");
@@ -2759,7 +2763,7 @@ test("«Промпты»: «Из шаблона» → весь набор коп
 /* ── плоский `templates` сервера дедуплицирован по имени: побеждает первый
    набор (General). Список «Один файл» строится из template_sets, иначе
    файл чужого набора виден только как General ── */
-test("«Промпты»: «Из шаблона» → один файл видит все наборы", async () => {
+test("«Промпты»: «Из шаблона» → один файл: набор, файл, имя в книге", async () => {
   globalThis.__prompts = {
     prompts: [],
     templates: [{ name: "pipeline_prompt.txt", set: "General" }],
@@ -2784,30 +2788,56 @@ test("«Промпты»: «Из шаблона» → один файл види
   const bd = globalThis.document.body.children
     .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
     .slice(-1)[0];
-  const sel = findTag(bd, "select")[0];
-  const labels = sel.children.map((o) => allText(o).trim());
-  assert.deepEqual(labels, [
-    "pipeline_prompt.txt · набор General",
-    "pipeline_prompt.txt · набор Xianxia",
-    "ner_prompt.txt · набор Xianxia",
-  ], "видны файлы всех наборов, а не только General");
-  /* выбор файла чужого набора: имя в поле и содержимое — из ЭТОГО набора */
-  sel.value = "Xianxia/ner_prompt.txt";
-  await sel._listeners.change[0]();
-  const fname = findTag(bd, "input")
-    .find((i) => i.getAttribute("type") !== "radio");
-  assert.equal(fname.value, "ner_prompt.txt", "имя — из выбранной строки");
+  const pane = findByClass(bd, "prompt-tpl-pane")
+    .find((p) => !p.classList.contains("hidden"));
+  assert.ok(pane, "режим «один файл» открыт по умолчанию");
+  /* два списка, а не свалка «файл · набор»: сначала набор, потом его файлы */
+  const labels = findByClass(pane, "field-label").map((x) => allText(x).trim());
+  assert.deepEqual(labels, ["Набор шаблонов", "Файл набора",
+    "Имя файла в книге"], "у списков есть подписи, а не placeholder");
+  const [setSel, fileSel] = findTag(pane, "select");
+  assert.deepEqual(setSel.children.map((o) => allText(o).trim()),
+    ["General · 1 шт.", "Xianxia · 2 шт."],
+    "наборы видны все, а не только General");
+  /* выбор чужого набора наполняет свой список файлов */
+  setSel.value = "Xianxia";
+  await setSel._listeners.change[0]();
+  const names = fileSel.children.map((o) => o.value);
+  assert.deepEqual(names, ["pipeline_prompt.txt", "ner_prompt.txt"],
+    "файлы — из выбранного набора");
+  fileSel.value = "ner_prompt.txt";
+  await fileSel._listeners.change[0]();
+  const inputs = findTag(pane, "input");
+  assert.equal(inputs[0].value, "ner_prompt.txt",
+    "имя в книге следует за выбранным файлом");
+  /* правленое имя не перебивается сменой файла: человек назвал файл сам */
+  inputs[0].value = "my_prompt.txt";
+  await inputs[0]._listeners.input[0]();
+  fileSel.value = "pipeline_prompt.txt";
+  await fileSel._listeners.change[0]();
+  assert.equal(inputs[0].value, "my_prompt.txt",
+    "правленое имя переживает смену файла набора");
+  assert.match(allText(findByClass(pane, "card-hint")[0]),
+    /prompts\/my_prompt\.txt из набора «Xianxia»/,
+    "подсказка называет имя в книге, а не имя шаблона");
+  /* «null» от replaceChildren(null) в окне появляться не должен */
+  assert.doesNotMatch(allText(bd), /\bnull\b/,
+    "условная строка не вставляет текстовый узел null");
   await findByClass(bd, "btn-primary")[0]._listeners.click[0]();
   await tick();
+  /* источник и имя в книге — разные вещи: шаблон берётся по файлу набора,
+     а пишется под тем именем, что человек ввёл */
   const got = globalThis.__gets.filter(
-    (g) => g.path === "/prompts/ner_prompt.txt/template").pop();
-  assert.ok(got, "шаблон запрошен по имени выбранного файла");
+    (g) => g.path === "/prompts/pipeline_prompt.txt/template").pop();
+  assert.ok(got, "шаблон запрошен по имени файла набора, а не по имени в книге");
   const put = globalThis.__calls.find((c) => c.method === "PUT"
-    && c.path === "/prompts/ner_prompt.txt");
-  assert.ok(put, "файл записан в книгу");
+    && c.path === "/prompts/my_prompt.txt");
+  assert.ok(put, "файл записан в книгу под своим именем");
+  /* последним выбран файл набора Xianxia: pipeline_prompt.txt есть и в
+     General, поэтому «X» доказывает, что текст взят из нужного набора */
   assert.deepEqual(JSON.parse(JSON.stringify(put.body)), {
     project: "ACTIVE/Книга",
-    content: "<prompt_pass1>\nXianxia\n</prompt_pass1>\n",
+    content: "X",
   }, "в книгу ушёл текст из выбранного набора, а не первый попавшийся");
   delete globalThis.__prompts;
   delete globalThis.__promptTemplates;

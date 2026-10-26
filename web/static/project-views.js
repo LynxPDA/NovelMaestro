@@ -5768,20 +5768,25 @@ function viewProject(section, name, tab, job) {
 
   /* Модалка «Из шаблона»: два способа — ОДИН файл (любой файл любого набора,
      с именем в книге) или ВЕСЬ набор (все промпты templates/<набор>/prompts).
-     Кандидаты одного файла строятся из template_sets: плоский templates
-     дедуплицирован по имени (одно имя — один набор, и побеждает General),
-     и файл чужого набора из списка пропадал. Колбэк получает действие: оно
-     пишет файлы и возвращает текст для тоста. */
+     Файл выбирают ДВУМЯ списками: сначала набор, потом файл этого набора.
+     Плоский список «файл · набор X» был свалкой — один и тот же набор
+     повторялся на каждой строке, а сколько файлов в книгу приедет, человек
+     не видел вовсе. Колбэк получает действие: оно пишет файлы и возвращает
+     текст для тоста. */
   function templateModal(data, onApply) {
     const q = new URLSearchParams({ project: `${section}/${name}` });
-    const sets = data.template_sets || [];
-    const templates = sets.flatMap((s) => (s.prompts || [])
-      .map((n) => ({ name: n, set: s.name })));
+    /* наборы с файлами, General первым: сборка набора — обычная его копия,
+       а не поиск по всему репозиторию */
+    const sets = (data.template_sets || [])
+      .filter((s) => (s.prompts || []).length)
+      .sort((a, b) => (a.name === "General" ? -1
+        : b.name === "General" ? 1 : a.name.localeCompare(b.name)));
     const err = h("div", { class: "form-error" });
     const toOne = h("input", { type: "radio", name: "tplmode", value: "one" });
     const toSet = h("input", { type: "radio", name: "tplmode", value: "set" });
     toOne.checked = true;
-    const modeOne = h("label", { class: "prompt-tpl-mode" }, toOne, "Один файл");
+    const modeOne = h("label", { class: "prompt-tpl-mode" }, toOne,
+      "Один файл");
     const modeSet = h(
       "label",
       { class: "prompt-tpl-mode" },
@@ -5789,64 +5794,103 @@ function viewProject(section, name, tab, job) {
       "Весь набор",
     );
 
-    const sel = h("select", { class: "input" });
-    for (const t of templates) {
-      /* значение — «набор/файл»: одно имя бывает в нескольких наборах, и
-         по имени option выбрать нельзя (выбор уходил бы в соседнюю строку) */
-      sel.append(h("option", { value: `${t.set}/${t.name}` },
-        `${t.name} · набор ${t.set}`));
-    }
-    const fname = h("input", { class: "input", placeholder: "имя файла" });
-    function chosen() {
-      return templates.find((t) => `${t.set}/${t.name}` === sel.value)
-        || templates[0];
-    }
-    function syncName() {
-      const t = chosen();
-      if (!fname.dataset.touched) fname.value = t ? t.name : "";
-    }
-    sel.addEventListener("change", syncName);
-    fname.addEventListener("input", () => (fname.dataset.touched = "1"));
+    /* что именно приедет в книгу и что при этом заменится — видно до
+       копирования: молча перезаписывать правленый промпт нельзя */
+    const existing = new Set((data.prompts || []).map((p) => p.name));
+    const setOf = (name) => sets.find((s) => s.name === name);
 
+    /* ── «Один файл»: набор → файл → имя в книге ── */
+    const setOneSel = h("select", { class: "input" });
+    for (const s of sets) {
+      setOneSel.append(h("option", { value: s.name },
+        `${s.name} · ${s.prompts.length} шт.`));
+    }
+    const fileSel = h("select", { class: "input" });
+    const fname = h("input", { class: "input", placeholder: "имя файла" });
+    fname.addEventListener("input", () => (fname.dataset.touched = "1"));
+    const oneInfo = h("div", { class: "card-hint" });
+    function syncFileOpts() {
+      const s = setOf(setOneSel.value);
+      fileSel.replaceChildren();
+      for (const n of (s && s.prompts) || []) {
+        fileSel.append(h("option", { value: n }, n));
+      }
+      syncOneInfo();
+    }
+    function syncOneInfo() {
+      const fname_ = fileSel.value;
+      if (!fname_) {
+        oneInfo.textContent = "В наборе нет файлов";
+        return;
+      }
+      // имя в книге правится руками: подсказка называет и его, и источник
+      const target = fname.dataset.touched && fname.value.trim()
+        ? fname.value.trim() : fname_;
+      if (!fname.dataset.touched) fname.value = fname_;
+      /* replaceChildren(null) вставляет текстовый узел "null": условную
+         строку кладём только когда она есть */
+      const line = `В книгу будет добавлен prompts/${target} из набора `
+        + `«${setOneSel.value}»`;
+      oneInfo.replaceChildren(...[
+        line,
+        existing.has(target)
+          ? h("div", { class: "prompt-tpl-warn" },
+            `Файл ${target} в книге уже есть — он будет заменён`)
+          : null,
+      ].filter(Boolean));
+    }
+    setOneSel.addEventListener("change", syncFileOpts);
+    fileSel.addEventListener("change", syncOneInfo);
+    fname.addEventListener("input", syncOneInfo);
+
+    /* ── «Весь набор»: набор → его файлы списком ── */
     const setSel = h("select", { class: "input" });
     for (const s of sets) {
       setSel.append(
         h("option", { value: s.name }, `${s.name} · ${s.prompts.length} шт.`),
       );
     }
-    /* что именно приедет в книгу и что при этом заменится — видно до
-       копирования: молча перезаписывать правленый промпт нельзя */
-    const existing = new Set((data.prompts || []).map((p) => p.name));
     const setInfo = h("div", { class: "card-hint" });
     function syncSetInfo() {
-      const s = sets.find((x) => x.name === setSel.value);
+      const s = setOf(setSel.value);
       if (!s) {
-        setInfo.textContent = "Наборы не найдены";
+        setInfo.replaceChildren("Наборы не найдены");
         return;
       }
       const over = s.prompts.filter((n) => existing.has(n));
-      setInfo.replaceChildren(
-        `${s.name}: ${s.prompts.join(", ")}`,
+      // файлы — списком по строке: «ner_prompt.txt, pipeline_prompt.txt…»,
+      // прочитанная строка не даёт понять, сколько их и какие заменятся
+      setInfo.replaceChildren(...[
+        h("div", null, `Набор «${s.name}»: файлов ${s.prompts.length}`),
+        h("ul", { class: "prompt-tpl-list" },
+          ...s.prompts.map((n) => h("li",
+            { class: existing.has(n) ? "is-over" : "" },
+            n, existing.has(n) ? " — заменится" : ""))),
         over.length
-          ? h(
-            "div",
-            { class: "prompt-tpl-warn" },
-            `Заменятся в книге: ${over.join(", ")}`,
-          )
+          ? h("div", { class: "prompt-tpl-warn" },
+            `Заменятся в книге: ${over.join(", ")}`)
           : null,
-      );
+      ].filter(Boolean));
     }
     setSel.addEventListener("change", syncSetInfo);
 
+    /* метка «что это за список» — подпись, а не placeholder: плейсхолдер
+       исчезает с первым выбранным значением, подпись остаётся */
+    const labelled = (text, field) =>
+      h("div", { class: "field" },
+        h("div", { class: "field-label" }, text), field);
     const onePane = h(
       "div",
       { class: "prompt-tpl-pane" },
-      h("div", { class: "form-row" }, sel, fname),
+      labelled("Набор шаблонов", setOneSel),
+      labelled("Файл набора", fileSel),
+      labelled("Имя файла в книге", fname),
+      oneInfo,
     );
     const setPane = h(
       "div",
-      { class: "prompt-tpl-pane" },
-      setSel,
+      { class: "prompt-tpl-pane hidden" },
+      labelled("Набор шаблонов", setSel),
       setInfo,
     );
     function syncMode() {
@@ -5855,13 +5899,13 @@ function viewProject(section, name, tab, job) {
       setPane.classList.toggle("hidden", one);
     }
     for (const r of [toOne, toSet]) r.addEventListener("change", syncMode);
-    syncName();
 
     UIC.modal({
       title: "Промпты из шаблона",
+      wide: true,
       build: (close) => [
         h("div", { class: "prompt-tpl-modes" }, modeOne, modeSet),
-        templates.length || sets.length
+        sets.length
           ? null
           : h("div", { class: "modal-text" }, "Шаблоны не найдены"),
         onePane,
@@ -5879,30 +5923,33 @@ function viewProject(section, name, tab, job) {
                 err.textContent = "";
                 let apply;
                 if (toOne.checked) {
-                  const target = chosen();
-                  const outName = fname.value.trim();
-                  if (!target || !outName) {
-                    err.textContent = "Выберите шаблон и укажите имя файла";
+                  const set = setOf(setOneSel.value);
+                  const src = fileSel.value;
+                  const outName = (fname.value.trim() || src);
+                  if (!set || !src || !outName) {
+                    err.textContent = "Выберите набор и файл";
                     return;
                   }
                   /* содержимое берётся из набора именно этого файла */
                   apply = async () => {
                     const d = await api(
-                      `/prompts/${encodeURIComponent(target.name)}`
-                        + `/template?${q}`,
+                      `/prompts/${encodeURIComponent(src)}/template?${q}`,
                     );
                     const tpl = (d.templates || []).find(
-                      (t) => t.set === target.set,
+                      (t) => t.set === set.name,
                     );
-                    if (!tpl) throw new Error("Шаблон не найден");
+                    if (!tpl) {
+                      throw new Error(
+                        `В наборе «${set.name}» нет ${src}`);
+                    }
                     await api(`/prompts/${encodeURIComponent(outName)}`, {
                       method: "PUT",
                       body: {
                         project: `${section}/${name}`,
-                        content: tpl.content,
+                        content: tpl.content || "",
                       },
                     });
-                    return { message: `Создан ${outName} (из «${tpl.set}»)` };
+                    return { message: `Создан ${outName} (из «${set.name}»)` };
                   };
                 } else {
                   const set = setSel.value;
@@ -5938,10 +5985,10 @@ function viewProject(section, name, tab, job) {
         ),
       ],
     });
-    syncName();
+    syncFileOpts();
     syncSetInfo();
     syncMode();
-    sel.focus();
+    setOneSel.focus();
   }
 
   /* ── Логи ─────────────────────────────────── */
