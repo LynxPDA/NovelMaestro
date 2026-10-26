@@ -106,7 +106,12 @@ python3 web/main.py --host 0.0.0.0 --auth   # доступ с LAN + токен
 | POST | `/api/templates/{s}/upload` (multipart `files[]`, опц. `dest`) | загрузка файлов в набор; General → 403; `dest` обязан существовать (неявный mkdir запрещён) → 400 |
 | GET | `/api/templates/{s}/download?path=…` | скачивание файла набора (attachment); работает и для General |
 | POST | `/api/templates/{s}/mkdir` (`{path}`) | ВСЕГДА 403 — каталоги в шаблонах неизменяемы (скелет `prompts/`+`source/` ремонтируется при чтении) |
-| POST/DELETE | `/api/sections`, `/api/sections/rename` (`{src,dst}`), DELETE `/api/sections/{name}` | управление разделами: создание, переименование (merge — перенос проектов), удаление; непустой раздел → 409 |
+| POST/DELETE | `/api/sections`, `/api/sections/rename` (`{src,dst}`), DELETE `/api/sections/{name}` | управление разделами: создание, переименование (merge — перенос проектов И архивов раздела), удаление; непустой раздел → 409 |
+| POST | `/api/sections/{name}/props` (`{archive?, pack_on_move?}`) | свойства раздела (`core/projects.py::SECTION_PROPS`): `archive` — раздел-архив (карточки показывают бейдж, включается массовая архивация), `pack_on_move` — предлагать упаковку при переносе (молчаливой упаковки не бывает); неизвестный ключ → 400, нет раздела → 404 |
+| POST | `/api/projects/archive` (`{items:[{section,name}], op:"pack"\|"unpack"}`) | массовая архивация/разархивация: ответ сразу после создания запуска (`job`), работа идёт `cli/archive.py` с прогрессом в логе; занятый проектом запуск (`running_on`) → в `skipped` с причиной, пачка не рушится; пустой `items` и незнакомый `op` → 400 |
+| GET | `/api/projects/{sec}/{name}/archive` | манифест архива (читается из головы файла, без распаковки): `archived`, `size`, `path`, `manifest{name, packed_at, files, bytes, compression}`; нет архива → 404 |
+| GET | `/api/projects/{sec}/{name}/archive/download` | скачивание `.nmz` (attachment) — обычный tar+zstd, открывается 7-Zip и `tar --zstd` |
+| GET | `/api/projects` (`?section=`) | `projects` — имена (как раньше) плюс `items` (`{name, archived, size, packed_at}`) и `props` раздела: архивный проект живёт файлом в `<раздел>/.archive/`, папки у него нет |
 | GET/PUT | `/api/ner`, `/api/metadata` | глоссарий (служебные поля записи начинаются с «_»: голоса — «_votes_…», замок — `_locked`; в таблице и в поиске их не видно), metadata.yaml |
 | GET | `/api/ner/export?project=&format=json\|text\|names` | экспорт глоссария для анализа (JSON / записи текстом / имена по полу); фильтры: `count_threshold`, `types`; для format=names — так же `female_types`, `male_types` → `{name, content}` |
 | GET/PUT/DELETE | `/api/cover` | обложка source/cover.* |

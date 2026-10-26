@@ -28,6 +28,10 @@ API: константы `PROFILE_DEFAULT` (`general`) / `PROFILE_DEFAULT_TITLE` 
 
 # core/projects.py — менеджмент проектов (разделы, проекты, шаблоны)
 
+свойства раздела: SECTION_PROPS=("archive","pack_on_move") / section_entries / section_props / set_section_props (набор свойств замкнут: опечатка в ключе — отказ) / archive_sections / is_archive_section. Файл .sections.json хранит `[{"name", "archive", "pack_on_move"}]`, старый список строк читается без миграции и даёт `archive: false` (иначе первая же DONE-книга уехала бы в архив без спроса); save_sections принимает и имена — тогда свойства известных разделов сохраняются, а rename_section переносит их на новое имя
+
+архив: ARCHIVE_DIR (.archive внутри раздела — файл не выглядит проектом) / project_items (проекты раздела со способом хранения: `{name, archived, size, packed_at}`; папка сильнее недораспакованного архива) / list_archives (по файлам .nmz: манифест читается из головы, битый архив виден с error) / archive_project (упаковать → проверить манифест → удалить папку: падение любого шага оставляет книгу целой) / unarchive_project (распаковать; архив удаляется ПОСЛЕ — лишний архив дешевле потерянной книги) / delete_archive. move/rename/copy/delete_project понимают архив как файл
+
 разделы (динамические): DEFAULT_SECTIONS (ACTIVE/HOLD/DONE, алиас SECTIONS) / load_sections (файл .sections.json → дефолты + легаси DONE_OPEN при первом запуске; папки на диске до-обнаруживаются; дубли в файле схлопываются, записи без папки на диске — призраки — игнорируются; операции с файлом под мьютексом — параллельные запросы web не плодят дубли) / save_sections (атомарно tmp+replace) / create_section / rename_section (в существующий — merge: проекты переносятся move_project-ом; переименование на месте сохраняет позицию) / delete_section (непустой — отказ, пустой — сразу) / ensure_projects_root (создаёт дефолтные разделы + .sections.json; кастомные не трогает)
 
 имена: valid_project_name / sanitize_project_name (англ. имя: пробелы → '*', только латиница/цифры/.*-)
@@ -79,6 +83,18 @@ API: `iter_project_files(project_dir, scopes=None, *, max_file_bytes)` — об�
 Ничего своего у состояния нет: это словарь ключей интерфейса (`nmTab:раздел/книга`, `runVals:раздел/книга:стадия`, `nmProfile:…`), поэтому слой не знает ни одного имени поля, а новый ключ SPA не требует правок здесь. `tmp/` исключён из истории контрольных точек (`web/history.py`): состояние — не содержимое книги, и возврат к точке не должен откатывать вкладки.
 
 API: `UI_STATE_DIR` (`tmp/ui_state`) / `UI_STATE_VERSION` / `UI_STATE_KEEP` / `UI_STATE_STALE` / `UI_STATE_DEVICE_COOKIE` (`nm_device`) / `ui_state_dir(project_dir)` — каталог состояния / `ui_state_device(raw)` — нормализованный id из cookie (только `[A-Za-z0-9_-]{8,64}`, иначе пусто: путь, собранный из cookie, не должен выйти из каталога) / `ui_state_read(ddir, device, merge=True)` → `{ключ: значение}` — слияние файлов устройств в порядке записи (`updated`, без отметки — `mtime`), `merge=False` — только свой / `ui_state_write(ddir, device, payload)` — только изменённые ключи (`None` снимает ключ и оставляет надгробие), `atomic_write` под локом, `UI_STATE_VERSION` и `_deleted` в файле, затем prune / `ui_state_prune(ddir, keep=UI_STATE_KEEP)` → имена удалённых файлов.
+
+# core/archive.py — упаковка проекта в один файл и обратная распаковка
+
+Готовая книга — тысячи мелких файлов (боевая: 10 243 файла, 197 МБ на диске), хотя работа по ней не идёт. Упаковка в один файл даёт 197 → 54 МБ и один файл вместо десяти тысяч. Формат — обычный `tar` с потоком `zstd`: открывается без программы (7-Zip, `tar --zstd`, `zstd -d | tar -x`, Windows 11). Своего формата нет намеренно — «архив», который читается только NovelMaestro, перестаёт быть архивом.
+
+Константы: ARCHIVE_EXT (".nmz") / ARCHIVE_MANIFEST (".nm_archive.json" — ПЕРВЫЙ член: имя, дата, версия, счётчики; читается из головы за миллисекунды, поэтому список архивов не распаковывает книги) / ARCHIVE_DIR (".archive" внутри раздела) / ARCHIVE_VERSION / COMPRESSION_LEVEL (9: 25,6 МБ / 0,4 с на боевой книге; 19 даёт 20,4 МБ, но 13,8 с — заметная пауза при нажатии кнопки) / ArchiveError.
+
+Пути и сведения: archive_dir / archive_path (`<раздел>/.archive/<имя>.nmz`) / archive_size (0, если файла нет) / archive_free_space / archive_manifest (пустой словарь по битому файлу — карточка скажет «повреждён», страница не упадёт).
+
+Работа: pack_project(src, dst, skip=..., progress=..., manifest_extra=...) — атомарно (`<dst>.tmp` + `os.replace`; оборванная упаковка оставляет книгу целой), `skip` — папки ТОЛЬКО верхнего уровня, `progress(done, total)` зовётся раз в 64 файла (колбэк стадии пишет строку в лог, на каждый файл это сотни строк), симлинки не уходят (побег за пределы книги), пустые каталоги остаются (каркас `chapters/`+`prompts/`); unpack_project(archive, dst, progress=...) — через временный каталог, занятое место — ошибка (вызывающий решает, что делать с проектом на месте).
+
+Сжатие: backend() → `{id, label, ext, open_write, open_read}`, порядок — `zstandard` (pip, `threads=-1`) → stdlib `compression.zstd` (Python ≥ 3.14) → `gzip`. Последний бэкенд есть всегда, поэтому кнопка «Архивировать» не падает ни в Docker, ни в портативной сборке без пакета — архив просто больше. archive_available() — можно ли упаковывать (сейчас всегда да).
 
 # core/update.py — как эта копия установлена и как она обновляется
 

@@ -17,6 +17,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from core import archive as ARC  # noqa: E402
 from core import common as C  # noqa: E402
 from core import deps as D  # noqa: E402
 from core import projects as PRJ  # noqa: E402
@@ -85,8 +86,18 @@ PROJECTS_API = ["SECTIONS", "DEFAULT_SECTIONS", "load_sections",
                 "fill_project_from_template", "copy_template_prompts",
                 "write_project_metadata",
                 "delete_project", "copy_project",
+                "section_entries", "section_props", "set_section_props",
+                "archive_sections", "is_archive_section", "SECTION_PROPS",
+                "project_items", "list_archives", "archive_project",
+                "unarchive_project", "delete_archive",
                 "builtin_template_files", "sync_builtin_templates",
                 "TEMPLATE_ENV_EXAMPLE"]
+# Зеркало API архива проектов (core/archive.py)
+ARCHIVE_API = ["ArchiveError", "ARCHIVE_EXT", "ARCHIVE_DIR", "ARCHIVE_MANIFEST",
+               "ARCHIVE_VERSION", "COMPRESSION_LEVEL", "backend",
+               "archive_path", "archive_dir", "archive_manifest",
+               "pack_project", "unpack_project", "archive_size",
+               "archive_available", "archive_free_space"]
 # Зеркало API core/transport.py (единственная точка выхода в сеть)
 TRANSPORT_API = ["TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStream",
                  "ResponseStream", "open_stream", "open_get", "open_json_get",
@@ -153,6 +164,19 @@ def test_projects_api_mentioned_in_agents_md(name):
 @pytest.mark.parametrize("name", CORE_API)
 def test_core_api_mentioned_in_agents_md(name):
     """Таблица §6 не потеряла ни одной функции из зеркала."""
+    assert re.search(rf"\b{name}\b", _agents_text()), \
+        f"{name} не упоминается в AGENTS.md — таблица §6 устарела"
+
+
+@pytest.mark.parametrize("name", ARCHIVE_API)
+def test_archive_api_exists_in_code(name):
+    """API архива проектов существует в core.archive."""
+    assert hasattr(ARC, name), f"core.archive.{name} исчезла"
+
+
+@pytest.mark.parametrize("name", ARCHIVE_API)
+def test_archive_api_mentioned_in_agents_md(name):
+    """API архива не потеряно в AGENTS.md (§6)."""
     assert re.search(rf"\b{name}\b", _agents_text()), \
         f"{name} не упоминается в AGENTS.md — таблица §6 устарела"
 
