@@ -41,8 +41,15 @@ log = logging.getLogger("web.history")
 HISTORY_DIRNAME = ".git"
 #: автор коммитов (конфиг user.name не нужен)
 _AUTHOR = b"NovelMaestro <history@localhost>"
-#: что не попадает в точки: рабочие файлы и мусор стадий
-_EXCLUDE = "tmp/\nlogs/\nbackup/\njob_logs/\n*.bak\n"
+#: что не попадает в точки: рабочие файлы и мусор стадий.
+#: `.archive/` и `*.nmz` — архивы проектов (core/archive.py): без этой
+#: строки упакованная книга весом в десятки мегабайт попадала бы в каждую
+#: следующую точку, и история пухла бы быстрее самих проектов.
+_EXCLUDE = "tmp/\nlogs/\nbackup/\njob_logs/\n*.bak\n.archive/\n*.nmz\n"
+#: когда рыхлые объекты стоит упаковать: git держит каждый объект
+#: отдельным файлом и на 5 000+ объектов (боевая книга) тратит на них
+#: вдвое больше места, чем на сами данные
+_GC_MIN_LOOSE = 200
 _KINDS = ("manual", "run", "apply", "restore")
 _KIND_RE = re.compile(r"^Kind: (\w+)$", re.M)
 _LABEL_RE = re.compile(r"\A(.+?) · \d{4}-\d\d-\d\d \d\d:\d\d\Z", re.S)
@@ -114,14 +121,76 @@ def parse_message(commit) -> tuple[str, str]:
 
 
 def ensure_repo(project: Path) -> Repo:
-    """Инициализирует историю проекта (если ещё нет) и возвращает Repo."""
+    """Инициализирует историю проекта (если ещё нет) и возвращает Repo.
+
+    Список исключённого обновляется и в СТАРОЙ истории: в нём живут
+    исключения, добавленные позже (архив проекта), и без перезаписи
+    установка так и хранила бы архивы в точках.
+    """
     project = Path(project)
     if not (project / HISTORY_DIRNAME).is_dir():
         porcelain.init(str(project))
-        exclude = project / HISTORY_DIRNAME / "info" / "exclude"
+    _write_exclude(project)
+    return Repo(str(project))
+
+
+def _write_exclude(project: Path) -> None:
+    """Записать список исключённого — и в старый проект без него.
+
+    Файл правится, а не только создаётся: установка, где история заведена
+    до появления новых исключений (архив), иначе так и хранила бы архивы
+    в точках. Не менялся — не перезаписываем (лишние касания mtime).
+    """
+    exclude = Path(project) / HISTORY_DIRNAME / "info" / "exclude"
+    try:
+        if exclude.is_file() and exclude.read_text(encoding="utf-8") == _EXCLUDE:
+            return
         exclude.parent.mkdir(parents=True, exist_ok=True)
         exclude.write_text(_EXCLUDE, encoding="utf-8")
-    return Repo(str(project))
+    except OSError as exc:  # история не должна падать из-за exclude
+        log.debug("exclude не записан (%s): %s", project, exc)
+
+
+def pack_objects(project: Path, force: bool = False) -> dict:
+    """Упаковать рыхлые объекты истории в один пак (git gc).
+
+    Зовётся перед упаковкой проекта в архив: `.git` боевой книги — 5 371
+    рыхлый объект и 56 МБ на диске, после gc — 35 МБ. Рыхлые объекты — это
+    не «мусор», а штатное состояние git: каждый коммит кладёт новые файлы,
+    и без gc их число только растёт.
+
+    Возвращает `{packed, before, after}` — сколько объектов было и стало.
+    `force=False` не трогает историю с малым числом объектов (дёшево).
+    """
+    project = Path(project)
+    if not (project / HISTORY_DIRNAME).is_dir():
+        return {"packed": False, "before": 0, "after": 0}
+    with _lock:
+        try:
+            repo = Repo(str(project))
+            before = _loose_count(repo)
+            if not force and before < _GC_MIN_LOOSE:
+                return {"packed": False, "before": before, "after": before}
+            porcelain.gc(str(project))
+            after = _loose_count(Repo(str(project)))
+            log.info("История %s упакована: %s → %s объектов",
+                     project.name, before, after)
+            return {"packed": True, "before": before, "after": after}
+        except Exception as exc:  # noqa: BLE001 — gc не должен ломать упаковку
+            log.warning("gc истории %s не прошёл: %s", project.name, exc)
+            return {"packed": False, "before": 0, "after": 0}
+
+
+def _loose_count(repo: Repo) -> int:
+    """Сколько рыхлых объектов лежит в объектном хранилище."""
+    objects = Path(repo.controldir()) / "objects"
+    if not objects.is_dir():
+        return 0
+    n = 0
+    for d in objects.iterdir():
+        if len(d.name) == 2 and d.is_dir():
+            n += sum(1 for f in d.iterdir() if f.is_file())
+    return n
 
 
 def _stage_all(project: Path) -> None:

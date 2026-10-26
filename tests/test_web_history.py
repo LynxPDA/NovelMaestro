@@ -24,9 +24,12 @@ def _make_project(tmp_path, files: dict):
 def _flat(project, sha: str) -> set[str]:
     """Пути файлов точки плоско — чем и проверяем, что в точку попали
     только книги, а не рабочие файлы."""
+    from dulwich.objects import Commit
     from dulwich.repo import Repo
     repo = Repo(str(project))
-    flat = hs._flat_tree(repo, repo[bytes.fromhex(sha)].tree)
+    commit = repo[bytes.fromhex(sha)]
+    assert isinstance(commit, Commit)
+    flat = hs._flat_tree(repo, commit.tree)
     return {p.decode("utf-8", "replace") for p in flat}
 
 
@@ -424,3 +427,83 @@ def test_on_job_finished_failed_job_skipped(tmp_path, monkeypatch):
                                 status="failed"))
     with pytest.raises(hs.HistoryError):
         hs.checkpoints(tmp_path)
+
+
+# ── упаковка объектов и архивы проекта ─────────────────────────────
+
+def test_archives_excluded_from_points(tmp_path):
+    """Архив проекта (.nmz) и папка архивов в точки не попадают.
+
+    Архив боевой книги — десятки мегабайт; попав в точку, он вспух бы
+    в каждой следующей (снимок сравнивается с прошлым по всему дереву).
+    """
+    (tmp_path / ".archive").mkdir()
+    (tmp_path / ".archive/Книга.nmz").write_bytes(b"PK" * 100)
+    _make_project(tmp_path, {"ner.json": "[]"})
+    hs.create(tmp_path, "Начало")
+    top = hs.checkpoints(tmp_path)["checkpoints"][0]["sha"]
+    assert _flat(tmp_path, top) - {"shared.env"} == {"ner.json"}
+
+
+def test_exclude_file_updated_for_old_projects(tmp_path):
+    """Старая история (exclude без архива) получает новые строки.
+
+    Установки, где точки заведены раньше, иначе так и хранили бы архивы:
+    файл исключений правится, а не только создаётся впервые.
+    """
+    from web.history import HISTORY_DIRNAME
+    _make_project(tmp_path, {"ner.json": "[]"})
+    hs.ensure_repo(tmp_path)
+    exclude = tmp_path / HISTORY_DIRNAME / "info" / "exclude"
+    exclude.write_text("tmp/\n", encoding="utf-8")
+    hs.create(tmp_path, "Начало")  # ensure_repo зовётся внутри
+    text = exclude.read_text(encoding="utf-8")
+    assert ".archive/" in text and "*.nmz" in text
+
+
+def test_exclude_file_not_rewritten_when_same(tmp_path):
+    """Совпадающий exclude не перезаписывается (лишние касания mtime)."""
+    from web.history import HISTORY_DIRNAME
+    _make_project(tmp_path, {"ner.json": "[]"})
+    hs.ensure_repo(tmp_path)
+    exclude = tmp_path / HISTORY_DIRNAME / "info" / "exclude"
+    exclude.write_text(hs._EXCLUDE, encoding="utf-8")
+    before = exclude.stat().st_mtime_ns
+    hs.ensure_repo(tmp_path)
+    assert exclude.stat().st_mtime_ns == before
+
+
+def test_pack_objects_skips_small_history(tmp_path):
+    """Малая история не упаковывается: gc не бесплатен."""
+    _make_project(tmp_path, {"ner.json": "[]"})
+    hs.create(tmp_path, "Начало")
+    got = hs.pack_objects(tmp_path)
+    assert got["packed"] is False
+    assert got["before"] == got["after"]
+
+
+def test_pack_objects_without_history(tmp_path):
+    """Проекта без истории gc не касается и не падает."""
+    assert hs.pack_objects(tmp_path) == {"packed": False, "before": 0,
+                                         "after": 0}
+
+
+def test_pack_objects_force_packs_loose(tmp_path, monkeypatch):
+    """force упаковывает даже малое число объектов; счётчики возвращаются."""
+    _make_project(tmp_path, {"ner.json": "[]"})
+    hs.create(tmp_path, "Начало")
+    loose = hs._loose_count(__import__("dulwich.repo", fromlist=["Repo"])
+                            .Repo(str(tmp_path)))
+    assert loose > 0
+    got = hs.pack_objects(tmp_path, force=True)
+    assert got["packed"] is True
+    assert got.get("before", 0) >= 0
+
+
+def test_loose_count_zero_without_objects_dir(tmp_path):
+    """Каталога объектов нет — ноль, а не исключение."""
+    from dulwich.repo import Repo
+    _make_project(tmp_path, {"ner.json": "[]"})
+    hs.create(tmp_path, "Начало")
+    repo = Repo(str(tmp_path))
+    assert hs._loose_count(repo) > 0

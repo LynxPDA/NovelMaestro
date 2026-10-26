@@ -1018,3 +1018,243 @@ def test_sync_builtin_templates_no_source(tmp_path):
     dst.mkdir()
     res = P.sync_builtin_templates(dst, tmp_path / "нет")
     assert res == {"added": [], "copied": [], "unchanged": []}
+
+
+# ── свойства разделов и архив проектов ──
+
+def test_section_props_default_false(tmp_path):
+    """Все разделы по умолчанию НЕ архивы: иначе первая же DONE-книга
+    уехала бы в архив без спроса при обновлении установки."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    for name in P.load_sections(root):
+        assert P.section_props(root, name) == {"archive": False,
+                                               "pack_on_move": False}
+    assert P.archive_sections(root) == []
+    assert P.is_archive_section(root, "DONE") is False
+
+
+def test_section_props_unknown_section_is_default(tmp_path):
+    """Неизвестный раздел — дефолтные свойства, а не исключение."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    assert P.section_props(root, "Нет_такого")["archive"] is False
+
+
+def test_set_section_props_persists(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    ok, name = P.set_section_props(root, "DONE", archive=True)
+    assert ok and name == "DONE"
+    assert P.is_archive_section(root, "DONE") is True
+    assert P.archive_sections(root) == ["DONE"]
+    # файл хранит объект, а не строку — и читается заново
+    data = json.loads((root / P.SECTIONS_FILE).read_text(encoding="utf-8"))
+    assert data[0]["name"] == "ACTIVE"
+    assert {"name": "DONE", "archive": True,
+            "pack_on_move": False} in data
+
+
+def test_set_section_props_unknown_key_rejected(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    ok, msg = P.set_section_props(root, "DONE", архивировать=True)
+    assert not ok and "Неизвестное свойство" in msg
+    ok, msg = P.set_section_props(root, "Нет_такого", archive=True)
+    assert not ok and "не найден" in msg
+
+
+def test_sections_legacy_list_format_read(tmp_path):
+    """Старый файл — список строк; читается без миграции, архив выключен."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    (root / "Архив").mkdir()
+    (root / P.SECTIONS_FILE).write_text(
+        json.dumps(["ACTIVE", "HOLD", "DONE", "Архив"], ensure_ascii=False),
+        encoding="utf-8")
+    assert P.load_sections(root) == ["ACTIVE", "HOLD", "DONE", "Архив"]
+    assert P.section_props(root, "DONE")["archive"] is False
+    # перезапись списком имён сохраняет формат объектов
+    P.save_sections(root, P.load_sections(root))
+    data = json.loads((root / P.SECTIONS_FILE).read_text(encoding="utf-8"))
+    assert all(isinstance(e, dict) and "name" in e for e in data)
+
+
+def test_save_sections_keeps_props_of_known_names(tmp_path):
+    """Запись списка имён (rename/delete_section) не теряет флаг архива."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.set_section_props(root, "DONE", archive=True)
+    names = P.load_sections(root)
+    assert P.save_sections(root, names)
+    assert P.is_archive_section(root, "DONE") is True
+
+
+def test_rename_section_keeps_archive_flag(tmp_path):
+    """Переименование раздела-архива сохраняет свойство."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.set_section_props(root, "DONE", archive=True)
+    ok, name = P.rename_section(root, "DONE", "Закрытые")
+    assert ok and name == "Закрытые"
+    assert P.is_archive_section(root, "Закрытые") is True
+
+
+def test_archive_dir_not_listed_as_section(tmp_path):
+    """Каталог .archive внутри раздела не выглядит разделом."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    (root / P.ARCHIVE_DIR).mkdir()
+    assert P.ARCHIVE_DIR not in P.load_sections(root)
+
+
+def test_project_items_and_list_archives(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "DONE", "Живая")
+    pdir = root / "DONE" / "Упакованная"
+    (pdir / "chapters").mkdir(parents=True)
+    (pdir / "ner.json").write_text("[]", encoding="utf-8")
+    ok, _man = P.archive_project(root, "DONE", "Упакованная")
+    assert ok
+    items = P.project_items(root, "DONE")
+    by_name = {i["name"]: i for i in items}
+    assert by_name["Живая"]["archived"] is False
+    assert by_name["Упакованная"]["archived"] is True
+    assert by_name["Упакованная"]["size"] > 0
+    assert by_name["Упакованная"]["packed_at"]
+    # list_projects видит оба — их и рисует пульт
+    assert P.list_projects(root, "DONE") == ["Живая", "Упакованная"]
+    archives = P.list_archives(root / "DONE")
+    assert [a["name"] for a in archives] == ["Упакованная"]
+    assert archives[0]["error"] == ""
+
+
+def test_archive_project_missing(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    ok, msg = P.archive_project(root, "DONE", "Нет")
+    assert not ok and "не найден" in msg
+
+
+def test_archive_project_twice_refused(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "DONE", "Книга")
+    ok, _ = P.archive_project(root, "DONE", "Книга")
+    assert ok
+    ok, msg = P.archive_project(root, "DONE", "Книга")
+    assert not ok and "уже в архиве" in msg
+
+
+def test_unarchive_project_roundtrip(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "DONE", "Книга")
+    pdir = root / "DONE" / "Книга"
+    (pdir / "ner.json").write_text('["x"]', encoding="utf-8")
+    ok, _ = P.archive_project(root, "DONE", "Книга")
+    assert ok
+    ok, res = P.unarchive_project(root, "DONE", "Книга")
+    assert ok and Path(res) == pdir
+    assert (pdir / "ner.json").read_text(encoding="utf-8") == '["x"]'
+    assert not P.list_archives(root / "DONE")
+
+
+def test_unarchive_refuses_when_present(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "DONE", "Книга")
+    P.archive_project(root, "DONE", "Книга")
+    P.create_project(root, "DONE", "Книга")  # папка вернулась руками
+    ok, msg = P.unarchive_project(root, "DONE", "Книга")
+    assert not ok and "уже распакован" in msg
+
+
+def test_unarchive_missing_archive(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    ok, msg = P.unarchive_project(root, "DONE", "Нет")
+    assert not ok and "не найден" in msg
+
+
+def test_delete_archive(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "DONE", "Книга")
+    P.archive_project(root, "DONE", "Книга")
+    ok, _ = P.delete_archive(root / "DONE", "Книга")
+    assert ok
+    assert P.list_archives(root / "DONE") == []
+    ok, msg = P.delete_archive(root / "DONE", "Книга")
+    assert not ok and "не найден" in msg
+
+
+def test_move_archived_project(tmp_path):
+    """Архив едет файлом в .archive целевого раздела."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "DONE", "Книга")
+    P.archive_project(root, "DONE", "Книга")
+    ok, dst = P.move_project(root, "DONE", "Книга", "HOLD")
+    assert ok
+    assert P.list_archives(root / "DONE") == []
+    assert [a["name"] for a in P.list_archives(root / "HOLD")] == ["Книга"]
+    ok, res = P.unarchive_project(root, "HOLD", "Книга")
+    assert ok and (root / "HOLD" / "Книга").is_dir()
+
+
+def test_rename_archived_project(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "DONE", "Книга")
+    P.archive_project(root, "DONE", "Книга")
+    ok, _ = P.rename_project(root, "DONE", "Книга", "Другая")
+    assert ok
+    assert [a["name"] for a in P.list_archives(root / "DONE")] == ["Другая"]
+
+
+def test_copy_archived_project(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "DONE", "Книга")
+    P.archive_project(root, "DONE", "Книга")
+    ok, _ = P.copy_project(root, "DONE", "Книга", "Копия")
+    assert ok
+    names = sorted(a["name"] for a in P.list_archives(root / "DONE"))
+    assert names == ["Книга", "Копия"]
+
+
+def test_delete_archived_project(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "DONE", "Книга")
+    P.archive_project(root, "DONE", "Книга")
+    ok, _ = P.delete_project(root, "DONE", "Книга")
+    assert ok
+    assert P.list_archives(root / "DONE") == []
+    assert not (root / "DONE" / "Книга").exists()
+
+
+def test_rename_section_merge_moves_archives(tmp_path):
+    """Слияние разделов переносит и архивы, а не только папки проектов."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_section(root, "Архив")
+    P.create_project(root, "Архив", "Книга")
+    P.archive_project(root, "Архив", "Книга")
+    ok, name = P.rename_section(root, "Архив", "DONE")
+    assert ok and name == "DONE"
+    assert [a["name"] for a in P.list_archives(root / "DONE")] == ["Книга"]
+
+
+def test_rename_section_merge_conflicting_archive(tmp_path):
+    """Одноимённый архив в целевом разделе — отказ, а не перезапись."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    for sec in ("A", "B"):
+        P.create_section(root, sec)
+        P.create_project(root, sec, "Книга")
+        P.archive_project(root, sec, "Книга")
+    ok, msg = P.rename_section(root, "A", "B")
+    assert not ok and "архив" in msg

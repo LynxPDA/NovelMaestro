@@ -17,6 +17,7 @@ import threading
 import unicodedata
 from pathlib import Path
 
+from .archive import ARCHIVE_DIR
 from .common import atomic_write
 
 # Дефолтные разделы пульта (бутстрап новой установки; дальше список —
@@ -80,24 +81,54 @@ def _sections_file(projects_root: Path) -> Path:
     return Path(projects_root) / SECTIONS_FILE
 
 
-def load_sections(projects_root: Path) -> list:
-    """Список разделов пульта: дефолты + кастомные из .sections.json.
+# Свойства раздела в .sections.json: имя плюс то, что описывает его целиком.
+# `archive` — раздел-архив (проекты живут файлами, а не папками);
+# `pack_on_move` — при переносе сюда предлагать упаковку (молчаливой нет).
+SECTION_PROPS = ("archive", "pack_on_move")
+DEFAULT_SECTION_PROPS = {"archive": False, "pack_on_move": False}
 
-    Файла нет → дефолты + легаси-папки на диске (миграция, напр. DONE_OPEN
-    со старых установок). Папка на диске, которой нет в списке, тоже
-    добавляется (ручные папки). Дубли в файле схлопываются (след гонки
-    параллельных create_section); запись файла без папки на диске —
-    призрак и игнорируется (создание раздела всегда создаёт папку;
-    папка исчезает только при удалении раздела). Никогда не бросает.
+
+def _entry_props(entry) -> tuple[str, dict | None]:
+    """Разбор записи раздела: строка (старый формат) или объект.
+
+    Старый файл — список имён; новый — список `{name, archive, pack_on_move}`.
+    Оба формата читаются без миграции: установка обновляется молча, а
+    `archive: false` у старых записей — важно (первая же DONE-книга уехала
+    бы в архив без спроса).
+
+    Второй элемент `None` у строки — «имя без мнения о свойствах»: так
+    `save_sections` с списком имён (`rename_section`, `delete_section`) не
+    сбрасывает уже сохранённый флаг архива в `False`.
     """
-    with _SECTIONS_LOCK:
-        return _load_sections_unlocked(projects_root)
+    if isinstance(entry, str):
+        return entry, None
+    if isinstance(entry, dict):
+        name = entry.get("name")
+        if not isinstance(name, str):
+            return "", None
+        props = dict(DEFAULT_SECTION_PROPS)
+        for key in SECTION_PROPS:
+            props[key] = bool(entry.get(key))
+        return name, props
+    return "", None
 
 
-def _load_sections_unlocked(projects_root: Path) -> list:
-    """Чтение списка разделов без захвата мьютекса (внутри секций)."""
+def section_entries(projects_root: Path) -> list[dict]:
+    """Разделы со свойствами: `[{name, archive, pack_on_move}, …]`.
+
+    Порядок и состав тот же, что у `load_sections` (дефолты, до-обнаруженные
+    папки, отброшенные призраки) — это одна и та же вселенная разделов,
+    просто со свойствами. Формат свойств читает это место, остальной код
+    продолжает работать со списком имён.
+    """
+    return [{"name": n, **props}
+            for n, props in _all_entries(projects_root)]
+
+
+def _all_entries(projects_root: Path) -> list[tuple[str, dict]]:
+    """`[(имя, свойства)]` — одна реализация чтения для всех видов запроса."""
     root = Path(projects_root)
-    sections: list[str] = []
+    entries: list[tuple[str, dict]] = []
     had_file = False
     f = _sections_file(root)
     if f.is_file():
@@ -106,41 +137,130 @@ def _load_sections_unlocked(projects_root: Path) -> list:
             data = json.loads(f.read_text(encoding="utf-8"))
             if isinstance(data, list):
                 seen: set[str] = set()
-                for s in data:
-                    if (isinstance(s, str) and valid_project_name(s)
-                            and s not in seen):
-                        seen.add(s)
-                        sections.append(s)
+                for raw in data:
+                    name, props = _entry_props(raw)
+                    if name and valid_project_name(name) and name not in seen:
+                        seen.add(name)
+                        entries.append((name, dict(props or DEFAULT_SECTION_PROPS)))
         except (OSError, ValueError):
             pass
-    if not sections:
-        sections = list(DEFAULT_SECTIONS)
+    if not entries:
+        entries = [(s, dict(DEFAULT_SECTION_PROPS)) for s in DEFAULT_SECTIONS]
     if root.is_dir():
         on_disk = [d.name for d in sorted(root.iterdir())
-                   if d.is_dir() and valid_project_name(d.name)]
-        # реальные папки без записи — до-обнаруживаем (ручные/легаси)
-        from_file = set(sections)
-        # записи файла без папки на диске — призраки (гонка/ручное удаление):
-        # создание раздела всегда создаёт папку; без файла дефолты — контракт
-        # (бутстрап), их отсутствие на диске не мешает create_project
+                   if d.is_dir() and valid_project_name(d.name)
+                   and d.name != ARCHIVE_DIR]
+        # реальные папки без записи — до-обнаруживаем (ручные/легаси);
+        # записи без папки на диске — призраки (гонка/ручное удаление)
         if had_file:
-            sections = [s for s in sections if s in set(on_disk)]
-        sections.extend(d for d in on_disk if d not in from_file)
-    return sections
+            disk_set = set(on_disk)
+            entries = [e for e in entries if e[0] in disk_set]
+        known = {n for n, _ in entries}
+        entries.extend((d, dict(DEFAULT_SECTION_PROPS))
+                       for d in on_disk if d not in known)
+    return entries
+
+
+def load_sections(projects_root: Path) -> list:
+    """Список имён разделов пульта: дефолты + кастомные из .sections.json.
+
+    Файла нет → дефолты + легаси-папки на диске (миграция, напр. DONE_OPEN
+    со старых установок). Папка на диске, которой нет в списке, тоже
+    добавляется (ручные папки). Дубли в файле схлопываются (след гонки
+    параллельных create_section); запись файла без папки на диске —
+    призрак и игнорируется (создание раздела всегда создаёт папку;
+    папка исчезает только при удалении раздела). Никогда не бросает.
+
+    Свойства раздела (архив) см. `section_entries` — здесь только имена:
+    этот список зовут два десятка мест, и каждому из них нужны имена.
+    """
+    with _SECTIONS_LOCK:
+        return [n for n, _ in _all_entries(projects_root)]
+
+
+def _load_sections_unlocked(projects_root: Path) -> list:
+    """Чтение списка разделов без захвата мьютекса (внутри секций)."""
+    return [n for n, _ in _all_entries(projects_root)]
+
+
+def section_props(projects_root: Path, name: str) -> dict:
+    """Свойства раздела; неизвестный раздел — дефолтные (не ошибка).
+
+    Неизвестный раздел не бросает: свойства читают и для только что
+    созданного имени, и для имени из запроса до проверки существования.
+    """
+    with _SECTIONS_LOCK:
+        for n, props in _all_entries(projects_root):
+            if n == name:
+                return dict(props)
+    return dict(DEFAULT_SECTION_PROPS)
+
+
+def set_section_props(projects_root: Path, name: str, **props) -> tuple[bool, str]:
+    """Изменить свойства раздела (`archive`, `pack_on_move`).
+
+    Незнакомый ключ — отказ (иначе опечатка молча терялась бы): набор
+    свойств замкнут. Раздела нет — отказ: свойства без раздела не живут.
+    Возвращает `(ok, сообщение_или_имя)` — как остальные операции.
+    """
+    bad = [k for k in props if k not in SECTION_PROPS]
+    if bad:
+        return False, f"Неизвестное свойство раздела: {', '.join(bad)}."
+    with _SECTIONS_LOCK:
+        entries = _all_entries(projects_root)
+        names = [n for n, _ in entries]
+        if name not in names:
+            return False, f"Раздел не найден: {name!r}."
+        for n, p in entries:
+            if n == name:
+                for k, v in props.items():
+                    p[k] = bool(v)
+        save_sections(projects_root, [{"name": n, **p} for n, p in entries])
+    return True, name
+
+
+def archive_sections(projects_root: Path) -> list:
+    """Имена разделов-архивов (проекты внутри — файлы `.nmz`)."""
+    with _SECTIONS_LOCK:
+        return [n for n, p in _all_entries(projects_root) if p.get("archive")]
+
+
+def is_archive_section(projects_root: Path, name: str) -> bool:
+    """Раздел-архив ли этот."""
+    return bool(section_props(projects_root, name).get("archive"))
 
 
 def save_sections(projects_root: Path, sections: list) -> bool:
     """Атомарно записать список разделов в .sections.json (tmp+replace).
 
+    Принимает имена (или готовые объекты). При записи имён свойства уже
+    существующих разделов сохраняются: `rename_section` и `delete_section`
+    зовут это место со списком имён, и терять из-за этого флаг архива нельзя.
+
     False — не удалось записать (папка/раздел при этом уже созданы/удалены;
     load_sections до-обнаружит папки на диске)."""
     root = Path(projects_root)
+    known: dict[str, dict] = {}
+    try:
+        if _sections_file(root).is_file():
+            known = dict(_all_entries(root))
+    except (OSError, ValueError):  # чтение старого файла не должно мешать записи
+        known = {}
+    out = []
+    for item in sections:
+        name, props = _entry_props(item)
+        if not name:
+            continue
+        merged = dict(known.get(name, DEFAULT_SECTION_PROPS))
+        if props is not None:  # строка — только имя, свойства остаются как были
+            merged.update(props)
+        out.append({"name": name, **merged})
     try:
         root.mkdir(parents=True, exist_ok=True)
         # общий atomic_write: fsync перед replace (пережили выключение) и
         # уникальный tmp — фиксированное .tmp два запроса затёрли бы друг друга
         atomic_write(_sections_file(root),
-                     json.dumps(list(sections), ensure_ascii=False, indent=2))
+                     json.dumps(out, ensure_ascii=False, indent=2))
     except OSError:
         return False
     return True
@@ -193,6 +313,9 @@ def rename_section(projects_root: Path, src: str, dst: str):
         src_dir = root / src
         if not src_dir.is_dir():
             return False, f"Папка раздела не найдена: {src}."
+        entries = _all_entries(root)  # до перемещения: свойства src ещё видны
+        src_props = next((dict(p) for n, p in entries if n == src),
+                         dict(DEFAULT_SECTION_PROPS))
         merge = dst in sections
         if merge:
             dst_dir = root / dst
@@ -201,16 +324,30 @@ def rename_section(projects_root: Path, src: str, dst: str):
             except OSError as e:
                 return False, f"Не удалось создать раздел: {e}"
             for p in sorted(src_dir.iterdir()):
+                if p.name == ARCHIVE_DIR:
+                    continue  # архивы сводятся отдельно: внутри лежат файлы
                 if not p.is_dir():
                     continue
                 if (dst_dir / p.name).exists():
                     return False, (f"В разделе {dst} уже есть проект "
                                    f"{p.name!r} — перенос невозможен.")
+            # архивы каждого раздела: два `.archive` простым move не сливаются
+            src_arc = Path(src_dir) / ARCHIVE_DIR
+            dst_arc = Path(dst_dir) / ARCHIVE_DIR
+            if src_arc.is_dir():
+                for f in sorted(src_arc.glob("*")):
+                    if (dst_arc / f.name).exists():
+                        return False, (f"В разделе {dst} уже есть архив "
+                                       f"{f.name!r} — перенос невозможен.")
             try:
                 for p in sorted(src_dir.iterdir()):
-                    if not p.is_dir():
+                    if p.name == ARCHIVE_DIR or not p.is_dir():
                         continue
                     shutil.move(str(p), str(dst_dir / p.name))
+                if src_arc.is_dir():
+                    dst_arc.mkdir(parents=True, exist_ok=True)
+                    for f in sorted(src_arc.glob("*")):
+                        shutil.move(str(f), str(dst_arc / f.name))
                 shutil.rmtree(src_dir, ignore_errors=True)
             except OSError as e:
                 return False, f"Не удалось перенести проекты: {e}"
@@ -224,11 +361,14 @@ def rename_section(projects_root: Path, src: str, dst: str):
                 return False, f"Не удалось переименовать раздел: {e}"
         if merge:
             # dst уже в списке — просто убираем src (позиция dst сохраняется)
-            sections = [s for s in sections if s != src]
+            out = [{"name": n, **p} for n, p in entries if n != src]
         else:
-            # переименование на месте: позиция сохраняется
-            sections = [dst if s == src else s for s in sections]
-        save_sections(root, sections)
+            # переименование на месте: позиция и свойства сохраняются
+            out = [{"name": dst, **p} if n == src else {"name": n, **p}
+                   for n, p in entries]
+            if not any(n == src for n, _p in entries):
+                out.append({"name": dst, **src_props})
+        save_sections(root, out)
     return True, dst
 
 
@@ -246,7 +386,8 @@ def delete_section(projects_root: Path, name: str):
             return False, f"Раздел не найден: {name!r}."
         d = root / name
         if d.is_dir() and any(d.iterdir()):
-            return False, "Раздел не пуст — сначала перенесите или удалите проекты."
+            return False, ("Раздел не пуст — сначала перенесите или удалите "
+                           "проекты (и архивы, если раздел архивный).")
         try:
             if d.is_dir():
                 shutil.rmtree(d, ignore_errors=True)
@@ -725,13 +866,156 @@ def project_dir(projects_root: Path, section: str, name: str) -> Path:
 
 
 def list_projects(projects_root: Path, section: str) -> list:
-    """Имена проектов раздела (отсортированы); пустой список, если раздела нет."""
+    """Имена проектов раздела (отсортированы); пустой список, если раздела нет.
+
+    В архиве проекта — папка, а не файл: имя собирается из обоих.
+    Проект без папки и без архива не показывается.
+    """
     if section not in load_sections(projects_root):
         return []
-    d = Path(projects_root) / section
+    return sorted(p["name"] for p in project_items(projects_root, section))
+
+
+def project_items(projects_root: Path, section: str) -> list[dict]:
+    """Проекты раздела со способом хранения: `[{name, archived, size, packed_at}]`.
+
+    `archived` — проект лежит архивом (`<раздел>/.archive/<имя>.nmz`), папки
+    нет; в карточке такой проект показывается как есть, но открыть его
+    нельзя — сначала разархивация. `size`/`packed_at` берутся из манифеста
+    (читается из головы архива, без распаковки).
+    """
+    if section not in load_sections(projects_root):
+        return []
+    root = Path(projects_root) / section
+    live: dict[str, dict] = {}
+    if root.is_dir():
+        for p in root.iterdir():
+            if p.is_dir() and not p.is_symlink() \
+                    and p.name != ARCHIVE_DIR:
+                live[p.name] = {"name": p.name, "archived": False,
+                                "size": 0, "packed_at": ""}
+    out = list(live.values())
+    for item in list_archives(root):
+        # папка сильнее: недораспакованный архив (оба остались) не дублирует
+        if item["name"] in live:
+            continue
+        out.append({"name": item["name"], "archived": True,
+                    "size": item["size"], "packed_at": item["packed_at"]})
+    return sorted(out, key=lambda p: p["name"])
+
+
+def list_archives(section_dir: Path) -> list[dict]:
+    """Архивы раздела: `[{name, path, size, packed_at, files, error}]`.
+
+    Список строится по файлам `.nmz` в `<раздел>/.archive/`: манифест
+    читается из головы каждого — имена и даты видны без распаковки.
+    Битый архив попадает в список с `error`: спрятать его хуже, чем показать.
+    """
+    from . import archive as arc  # локально: модуль тянет tarfile/shas
+
+    d = arc.archive_dir(section_dir)
     if not d.is_dir():
         return []
-    return sorted(p.name for p in d.iterdir() if p.is_dir())
+    out = []
+    for f in sorted(d.glob("*" + arc.ARCHIVE_EXT)):
+        if not f.is_file():
+            continue
+        man = arc.archive_manifest(f)
+        out.append({
+            "name": f.stem,
+            "path": f,
+            "size": arc.archive_size(f),
+            "packed_at": man.get("packed_at", ""),
+            "files": man.get("files", 0),
+            "error": "" if man else "манифест не читается",
+        })
+    return out
+
+
+def archive_project(projects_root: Path, section: str, name: str,
+                    skip=None, progress=None) -> tuple:
+    """Упаковать проект в `<раздел>/.archive/<имя>.nmz` и удалить папку.
+
+    Шаги с гарантией порядка: упаковали → проверили манифест → удалили папку.
+    Падение любого шага оставляет проект целым (архив — новый файл, он мог
+    остаться мусором, но не заменил собой книгу). Возвращает
+    `(ok, манифест_или_сообщение)`.
+    """
+    from . import archive as arc  # локально: тяжёлые импорты не нужны везде
+
+    projects_root = Path(projects_root)
+    with _PROJECTS_LOCK:
+        if section not in load_sections(projects_root):
+            return False, f"Неизвестный раздел: {section!r}."
+        src = project_dir(projects_root, section, name)
+        if not src.is_dir():
+            if arc.archive_path(projects_root / section, name).is_file():
+                return False, "Проект уже в архиве."
+            return False, f"Проект не найден: {section}/{name}."
+        dst = arc.archive_path(projects_root / section, src.name)
+        try:
+            man = arc.pack_project(src, dst, skip=skip, progress=progress)
+        except (arc.ArchiveError, OSError) as exc:
+            return False, f"Не удалось упаковать проект: {exc}"
+        # архив не должен выглядеть пустым/битым: распаковка — единственный
+        # способ узнать наверняка, но манифест уже есть в его голове
+        if not arc.archive_manifest(dst):
+            return False, "Архив не читается — проект оставлен как был."
+        try:
+            shutil.rmtree(src)
+        except OSError as exc:
+            return False, (f"Проект упакован, но папка не удалена: {exc}")
+    return True, man
+
+
+def unarchive_project(projects_root: Path, section: str, name: str,
+                      progress=None) -> tuple:
+    """Распаковать архив раздела обратно в папку проекта.
+
+    Архив НЕ удаляется: если распаковка прошла, но удаление не удалось,
+    проект всё равно есть, а лишний архив — маленькая проблема (его видно
+    и можно убрать руками); обратное — потеря книги. Возвращает
+    `(ok, путь_или_сообщение)`.
+    """
+    from . import archive as arc  # локально
+
+    projects_root = Path(projects_root)
+    with _PROJECTS_LOCK:
+        if section not in load_sections(projects_root):
+            return False, f"Неизвестный раздел: {section!r}."
+        sec_dir = projects_root / section
+        dst = project_dir(projects_root, section, name)
+        here = arc.archive_path(sec_dir, dst.name)
+        if dst.is_dir():
+            return False, f"Проект уже распакован: {section}/{name}."
+        if not here.is_file():
+            return False, f"Архив не найден: {section}/{name}."
+        try:
+            arc.unpack_project(here, dst, progress=progress)
+        except (arc.ArchiveError, OSError) as exc:
+            return False, f"Не удалось распаковать проект: {exc}"
+        try:
+            here.unlink()
+        except OSError:
+            pass  # лишний архив не ошибка: проект уже на месте
+    return True, dst
+
+
+def delete_archive(section_dir: Path, name: str) -> tuple:
+    """Удалить архив проекта (только файл, подтверждение — в UI-слое).
+
+    Возвращает `(ok, путь_или_сообщение)` — как остальные операции раздела.
+    """
+    from . import archive as arc  # локально
+
+    path = arc.archive_path(section_dir, name)
+    if not path.is_file():
+        return False, f"Архив не найден: {name}."
+    try:
+        path.unlink()
+    except OSError as exc:
+        return False, f"Не удалось удалить архив: {exc}"
+    return True, path
 
 
 def _has_compiled(pdir: Path) -> bool:
@@ -945,11 +1229,14 @@ def create_project(projects_root: Path, section: str, name: str):
 
 def move_project(projects_root: Path, src_section: str, name: str,
                  dst_section: str):
-    """Перенести проект между разделами.
+    """Перенести проект между разделами (папку или архив — как есть).
 
+    Архив едет файлом в `.archive` целевого раздела: перенос `cp` не стоит.
     Возвращает (ok, message_or_path). Ошибки: нет исходного проекта,
     дубль в целевом разделе, недопустимые разделы.
     """
+    from . import archive as arc  # локально
+
     projects_root = Path(projects_root)
     with _PROJECTS_LOCK:
         sections = load_sections(projects_root)
@@ -959,11 +1246,15 @@ def move_project(projects_root: Path, src_section: str, name: str,
         if src_section == dst_section:
             return False, "Проект уже в этом разделе."
         src = project_dir(projects_root, src_section, name)
-        if not src.is_dir():
+        src_arc = arc.archive_path(projects_root / src_section, src.name)
+        packed = not src.is_dir()
+        src = src_arc if packed else src
+        if not src.exists():
             return False, f"Проект не найден: {src_section}/{name}."
-        dst = project_dir(projects_root, dst_section, src.name)
+        dst = (arc.archive_path(projects_root / dst_section, name) if packed
+               else project_dir(projects_root, dst_section, name))
         if dst.exists():
-            return False, f"В разделе {dst_section} уже есть проект {dst.name!r}."
+            return False, f"В разделе {dst_section} уже есть проект {name!r}."
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
@@ -973,7 +1264,12 @@ def move_project(projects_root: Path, src_section: str, name: str,
 
 
 def rename_project(projects_root: Path, section: str, name: str, new_name: str):
-    """Переименовать проект внутри раздела. Возвращает (ok, message_or_path)."""
+    """Переименовать проект внутри раздела (папку или архив).
+
+    Возвращает (ok, message_or_path).
+    """
+    from . import archive as arc  # локально
+
     projects_root = Path(projects_root)
     new_name = unicodedata.normalize("NFC", (new_name or "").strip())
     if not valid_project_name(new_name):
@@ -981,31 +1277,47 @@ def rename_project(projects_root: Path, section: str, name: str, new_name: str):
     with _PROJECTS_LOCK:
         if section not in load_sections(projects_root):
             return False, f"Неизвестный раздел: {section!r}."
+        sec_dir = projects_root / section
         src = project_dir(projects_root, section, name)
-        if not src.is_dir():
+        src_arc = arc.archive_path(sec_dir, src.name)
+        if src.is_dir():
+            packed = False
+            dst = project_dir(projects_root, section, new_name)
+        elif src_arc.is_file():
+            packed = True
+            dst = arc.archive_path(sec_dir, new_name)
+        else:
             return False, f"Проект не найден: {section}/{name}."
-        dst = project_dir(projects_root, section, new_name)
         if dst.exists():
             return False, f"Проект с именем {new_name!r} уже есть в разделе {section}."
         try:
-            shutil.move(str(src), str(dst))
+            shutil.move(str(src_arc if packed else src), str(dst))
         except OSError as e:
             return False, f"Не удалось переименовать проект: {e}"
     return True, dst
 
 
 def delete_project(projects_root: Path, section: str, name: str):
-    """Удалить папку проекта (без подтверждений — они в UI-слое).
+    """Удалить проект — папку или архив (подтверждения — в UI-слое).
 
     Возвращает (ok, message_or_path).
     """
+    from . import archive as arc  # локально
+
     projects_root = Path(projects_root)
     with _PROJECTS_LOCK:
         if section not in load_sections(projects_root):
             return False, f"Неизвестный раздел: {section!r}."
         src = project_dir(projects_root, section, name)
         if not src.is_dir():
-            return False, f"Проект не найден: {section}/{name}."
+            here = arc.archive_path(projects_root / section, src.name)
+            if not here.is_file():
+                return False, f"Проект не найден: {section}/{name}."
+            try:
+                here.unlink()
+            except OSError as e:
+                return False, f"Не удалось удалить архив: {e}"
+            return True, here
         try:
             shutil.rmtree(src)
         except OSError as e:
@@ -1014,11 +1326,13 @@ def delete_project(projects_root: Path, section: str, name: str):
 
 
 def copy_project(projects_root: Path, section: str, name: str, new_name: str):
-    """Дублировать проект внутри раздела (shutil.copytree).
+    """Дублировать проект внутри раздела (shutil.copytree / копия архива).
 
     Проектный .env (ключи/профили книги) в копию НЕ переносится — копия
     не должна наследовать чужие секреты. Возвращает (ok, message_or_path).
     """
+    from . import archive as arc  # локально
+
     projects_root = Path(projects_root)
     new_name = unicodedata.normalize("NFC", (new_name or "").strip())
     if not valid_project_name(new_name):
@@ -1026,14 +1340,24 @@ def copy_project(projects_root: Path, section: str, name: str, new_name: str):
     with _PROJECTS_LOCK:
         if section not in load_sections(projects_root):
             return False, f"Неизвестный раздел: {section!r}."
+        sec_dir = projects_root / section
         src = project_dir(projects_root, section, name)
-        if not src.is_dir():
+        src_arc = arc.archive_path(sec_dir, src.name)
+        if src.is_dir():
+            packed = False
+            dst = project_dir(projects_root, section, new_name)
+        elif src_arc.is_file():
+            packed = True
+            dst = arc.archive_path(sec_dir, new_name)
+        else:
             return False, f"Проект не найден: {section}/{name}."
-        dst = project_dir(projects_root, section, new_name)
         if dst.exists():
             return False, f"Проект с именем {new_name!r} уже есть в разделе {section}."
         try:
-            shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".env"))
+            if packed:
+                shutil.copy2(src_arc, dst)
+            else:
+                shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".env"))
         except OSError as e:
             return False, f"Не удалось скопировать проект: {e}"
     return True, dst
