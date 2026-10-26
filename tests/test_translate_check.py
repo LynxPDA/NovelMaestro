@@ -3,6 +3,7 @@
 """cli/translate_check.py — адаптивная проверка объёма (медиана+MAD)
 и структурные проверки (остальные ветки — в tests/test_cli_e2e.py)."""
 # pyright: reportMissingImports=false
+import math
 import re
 import sys
 from pathlib import Path
@@ -72,28 +73,51 @@ def test_check_chapter_exclusions(tmp_path):
 
 
 # ════════════════════════════════════════════════════════════════════
-# Пары сравнения по типу файлов глав
+# Пары сравнения по цепочке стадий
 
 
 def test_comparisons_for():
-    assert TC.comparisons_for("polished") == [("redacted", "neighbor"),
-                                              ("chapter", "original")]
-    assert TC.comparisons_for("redacted") == [("translated", "neighbor"),
-                                              ("chapter", "original")]
+    """Цепочка polished → redacted → translated → chapter.
+
+    Порядок пар — от ближайшей стадии к оригиналу. Запасная стадия (вторая
+    в цепочке) нужна там, где соседней у части глав нет; пара с оригиналом
+    есть только когда в книге есть chapter.
+    """
+    assert TC.comparisons_for("polished") == [
+        ("redacted", "stage"), ("translated", "stage"),
+        ("chapter", "original")]
+    assert TC.comparisons_for("redacted") == [
+        ("translated", "stage"), ("chapter", "original")]
     assert TC.comparisons_for("translated") == [("chapter", "original")]
+    # набора файлов книги не хватает — лишних пар нет
+    assert TC.comparisons_for("polished", ("polished", "redacted")) == [
+        ("redacted", "stage")]
+    assert TC.comparisons_for("polished", ()) == []
+
+
+def test_present_from_files():
+    """Набор типов берётся из собранного прохода, а не из второго обхода."""
+    files = {1: {"polished": "p", "chapter": "c"},
+             2: {"polished": "p", "redacted": "r", "chapter": "c"}}
+    assert TC.present_from(files) == ("polished", "redacted", "chapter")
 
 
 # ════════════════════════════════════════════════════════════════════
 # Статистика пар по всей книге
 
 
-def _stats(files, counts, k=5.0, check_type="polished"):
+def _stats(files, counts, k=5.0, check_type="polished", k_original=None):
     comps = TC.comparisons_for(check_type)
-    return TC.collect_stats(files, check_type, comps, counts, k)
+    return TC.collect_stats(files, check_type, comps, counts, k,
+                            k if k_original is None else k_original)
 
 
-def test_collect_stats_median_mad():
-    """Центр — медиана, разброс — MAD; допуск = max(пол, K·MAD/медиана)."""
+def test_collect_stats_log_center_and_sigma():
+    """Центр — медиана логарифмов, разброс — MAD логарифмов × 1.4826.
+
+    Отношение мультипликативно: 0.9 и 1.111 — одно и то же отклонение,
+    поэтому «центр ×/− tol» одинаково строг в обе стороны.
+    """
     files = {i: {"polished": f"p{i}", "redacted": f"r{i}",
                  "chapter": f"c{i}"} for i in range(1, 31)}
     counts = {f"p{i}": 1000 for i in range(1, 31)}
@@ -101,25 +125,48 @@ def test_collect_stats_median_mad():
     counts.update({f"c{i}": 600 for i in range(1, 31)})
     st = _stats(files, counts)
     assert st["redacted"]["n"] == 30
-    assert st["redacted"]["median"] == 1.0
-    assert st["redacted"]["mad"] == 0.0
-    assert st["redacted"]["tol"] == 0.02  # пол, K·MAD = 0
-    assert st["chapter"]["median"] == pytest.approx(1000 / 600)
-    assert st["chapter"]["tol"] == pytest.approx(0.05)  # пол
+    assert st["redacted"]["center"] == pytest.approx(1.0)
+    assert st["redacted"]["sigma"] == pytest.approx(0.0)
+    # разброс нулевой — допуск держит пол (0.5% у соседних стадий)
+    assert st["redacted"]["tol"] == pytest.approx(math.log(1.005))
+    assert st["chapter"]["center"] == pytest.approx(1000 / 600)
+    assert st["chapter"]["tol"] == pytest.approx(math.log(1.05))  # пол
+    lo, hi = TC.bounds(st["chapter"])
+    assert (lo, hi) == pytest.approx((1000 / 600 / 1.05, 1000 / 600 * 1.05))
+
+
+def test_collect_stats_two_knobs():
+    """У пар соседних стадий и у пар с оригиналом своя ручка K.
+
+    Разброс книги тут одинаков в обеих группах (иначе тест не про ручки),
+    поэтому разница допусков — ровно выбранные K.
+    """
+    files, counts = {}, {}
+    for i in range(1, 21):
+        files[i] = {"polished": f"p{i}", "redacted": f"r{i}",
+                    "chapter": f"c{i}"}
+        counts[f"p{i}"] = 1000 + (i % 2) * 150
+        counts[f"r{i}"] = 1000
+        counts[f"c{i}"] = 1000
+    st = _stats(files, counts, k=2.0, k_original=10.0)
+    assert st["redacted"]["k"] == 2.0 and st["chapter"]["k"] == 10.0
+    assert st["redacted"]["sigma"] == pytest.approx(
+        st["chapter"]["sigma"], abs=1e-9)
+    assert st["chapter"]["tol"] == pytest.approx(
+        5 * st["redacted"]["tol"])
 
 
 def test_collect_stats_adaptive_tolerance():
-    """MAD больше пола — допуск адаптивный: K·MAD/медиана."""
+    """MAD пробивает пол — допуск адаптивный: K·σ в логарифмах."""
     files, counts = {}, {}
     for i in range(1, 21):
         files[i] = {"polished": f"p{i}", "chapter": f"c{i}"}
         counts[f"p{i}"] = 1000 + (i % 2) * 150  # разброс 15%
         counts[f"c{i}"] = 1000
     st = _stats(files, counts)
-    med = st["chapter"]["median"]
-    mad = st["chapter"]["mad"]
-    assert st["chapter"]["tol"] == pytest.approx(max(0.05, 5 * mad / med))
-    assert st["chapter"]["tol"] > 0.05  # MAD пробил пол
+    sigma = st["chapter"]["sigma"]
+    assert st["chapter"]["tol"] == pytest.approx(max(math.log(1.05), 5 * sigma))
+    assert st["chapter"]["tol"] > math.log(1.05)  # MAD пробил пол
 
 
 def test_collect_stats_small_n():
@@ -129,18 +176,33 @@ def test_collect_stats_small_n():
     counts.update({f"c{i}": 1000 for i in range(1, 3)})
     st = _stats(files, counts)
     assert st["chapter"]["n"] == 2 and st["chapter"]["small"] is True
-    assert st["chapter"]["tol"] == 0.15  # расширенный пол оригинала
+    assert st["chapter"]["tol"] == pytest.approx(math.log(1.15))
 
 
 def test_collect_stats_n0_n1():
     """n=0 и n=1: пара без статистики, помечается в шапке отчёта."""
     st = _stats({}, {})
     assert st["chapter"]["n"] == 0
-    assert TC.stats_line("polished", "chapter", st["chapter"]).startswith(
-        "  polished vs chapter: статистики нет")
+    assert not TC.active(st["chapter"])
+    assert TC.stats_line("polished", "chapter", st["chapter"]) == ""
     files = {1: {"polished": "p1", "chapter": "c1"}}
     st1 = _stats(files, {"p1": 100, "c1": 60})
     assert st1["chapter"]["n"] == 1
+    assert not TC.active(st1["chapter"])
+
+
+def test_collect_stats_off_when_k_zero():
+    """K = 0 — пара выключена, но из отчёта не исчезает: шапка показывает
+    её выключенной, а не молчит о ней."""
+    files = {i: {"polished": f"p{i}", "redacted": f"r{i}"} for i in (1, 2, 3)}
+    counts = {f"p{i}": 100 for i in (1, 2, 3)}
+    counts.update({f"r{i}": 100 for i in (1, 2, 3)})
+    st = TC.collect_stats(files, "polished", TC.comparisons_for("polished"),
+                          counts, 0.0, 5.0)
+    assert st["redacted"]["off"] is True and not TC.active(st["redacted"])
+    assert st["chapter"]["off"] is False
+    line = TC.stats_line("polished", "redacted", st["redacted"])
+    assert "выключено" in line and "чувствительность 0" in line
 
 
 def test_collect_stats_skips_empty_files():
@@ -154,14 +216,21 @@ def test_collect_stats_skips_empty_files():
 
 
 def test_collect_stats_partial_stage():
-    """Промежуточной стадии нет у части глав — у пары своя база."""
-    files = {i: {"polished": f"p{i}", "redacted": f"r{i}", "chapter": f"c{i}"}
-             for i in range(1, 21)}
+    """Промежуточной стадии нет у части глав — у пары своя база.
+
+    У главы с redacted соседней служит redacted (translated в базу
+    polished↔translated не попадает, хотя файл у главы есть), у главы без
+    redacted — translated. Пара с оригиналом набирает всю книгу.
+    """
+    files = {i: {"polished": f"p{i}", "redacted": f"r{i}", "translated": f"t{i}",
+                 "chapter": f"c{i}"} for i in range(1, 21)}
     counts = {f"p{i}": 1000 for i in range(1, 21)}
     counts.update({f"r{i}": 1000 for i in range(1, 11)})  # redact у половины
+    counts.update({f"t{i}": 1000 for i in range(1, 21)})
     counts.update({f"c{i}": 600 for i in range(1, 21)})
     st = _stats(files, counts)
     assert st["redacted"]["n"] == 10
+    assert st["translated"]["n"] == 10  # только главы без redacted
     assert st["chapter"]["n"] == 20
 
 
@@ -173,7 +242,21 @@ def test_collect_stats_broken_median_robust():
         counts[f"p{i}"] = 632 if i <= 3 else 1341  # 3 битых из 20
         counts[f"c{i}"] = 1000
     st = _stats(files, counts)
-    assert st["chapter"]["median"] == pytest.approx(1.341)
+    assert st["chapter"]["center"] == pytest.approx(1.341)
+
+
+def test_scan_files_reads_whole_chain(tmp_path):
+    """Проход ищет все типы цепочки: запасная стадия нужна для глав без
+    соседней, а не для отчёта."""
+    _write_chapter(tmp_path, 1, {"polished": "текст", "translated": "текст"})
+    _write_chapter(tmp_path, 2, {"polished": "текст", "redacted": "текст"})
+    cmap = __import__("core.common", fromlist=["build_chapter_map"]) \
+        .build_chapter_map(str(tmp_path))
+    files = TC.scan_files(cmap, "polished", TC.comparisons_for("polished"),
+                          strict=True)
+    assert set(files[1]) == {"polished", "translated"}
+    assert set(files[2]) == {"polished", "redacted"}
+    assert TC.present_from(files) == ("polished", "redacted", "translated")
 
 
 def test_scan_files_skips_duplicates(tmp_path):
@@ -192,54 +275,93 @@ def test_scan_files_skips_duplicates(tmp_path):
     assert 1 not in files and 2 in files
 
 
-def _err(st, check_n, ref_n) -> str:
+def _err(st, check_n, ref_n, min_delta=0) -> str:
     """Строка объёмной ошибки: тест ждёт её, а не None."""
-    got = TC.volume_error("polished", "redacted", check_n, ref_n, st)
+    got = TC.volume_error("polished", "redacted", check_n, ref_n, st, min_delta)
     assert got is not None
     return got
 
 
 def test_volume_error_bounds():
     """Отношение внутри допуска — None; вне — ошибка с числами."""
-    st = {"median": 1.0, "tol": 0.1, "n": 30, "mad": 0.0, "k": 7}
+    st = {"center": 1.0, "sigma": 0.0, "tol": 0.1, "n": 30, "k": 7, "off": False}
     assert TC.volume_error("polished", "redacted", 1000, 1000, st) is None
-    assert "1.20" in _err(st, 1200, 1000)
+    assert "1.200" in _err(st, 1200, 1000)
     # пустой файл не объёмная ошибка (ловит минимальный размер)
     assert TC.volume_error("polished", "redacted", 0, 1000, st) is None
     assert TC.volume_error("polished", "redacted", 1000, 0, st) is None
+    # выключенная пара не проверяется
+    assert TC.volume_error("polished", "redacted", 1200, 1000,
+                           dict(st, off=True)) is None
+
+
+def test_volume_error_min_delta_tokens():
+    """Отличие меньше floor'а в токенах — не ошибка: 2% на главе в 200
+    токенов это округление оценки, 10% на главе в 3000 — уже нет."""
+    st = {"center": 1.0, "sigma": 0.0, "tol": 0.01, "n": 30, "k": 7,
+          "off": False}
+    # 3050 против 3000: за допуском (1%), но отклонение 50 т. — шум оценки
+    assert TC.volume_error("polished", "redacted", 3050, 3000, st) is None
+    # 3100 против 3000: отклонение 100 т. — всё ещё шум (порог 150)
+    assert TC.volume_error("polished", "redacted", 3100, 3000, st) is None
+    # 3200 против 3000 — 200 т., уже ошибка
+    assert TC.volume_error("polished", "redacted", 3200, 3000, st) is not None
+    # порог снимается нулём или уменьшается вручную
+    assert TC.volume_error("polished", "redacted", 3050, 3000, st, 0) is not None
+    assert TC.volume_error("polished", "redacted", 3100, 3000, st, 200) is None
 
 
 def test_stats_line_shows_bounds():
     """Строка пары называет ГРАНИЦЫ отношения при текущем K — не проценты
     допуска, которые приходится пересчитывать в голове."""
-    st = {"n": 100, "median": 1.0, "mad": 0.004, "tol": 0.0999,
-          "k": 25.0, "small": False}
+    st = {"n": 100, "center": 1.0, "sigma": 0.004,
+          "tol": math.log(1.1), "k": 25.0, "small": False, "off": False}
     line = TC.stats_line("polished", "redacted", st)
-    assert "0.90–1.10" in line, line
-    assert "K=25" in line and "MAD 0.4%" in line, line
+    assert "0.909–1.100" in line, line
+    assert "K=25" in line and "разброс 0.40%" in line, line
     # малая база: границы есть, признак «разброс не учитывается» на месте
-    small = dict(st, n=3, small=True, tol=0.15)
+    small = dict(st, n=3, small=True, tol=math.log(1.15))
     line = TC.stats_line("polished", "chapter", small)
-    assert "0.85–1.15" in line and "мало глав" in line, line
+    assert "0.870–1.150" in line and "мало глав" in line, line
+    # K стоит в КАЖДОЙ строке с базой: разбирающий отчёт ищет его тут, а не
+    # в догадке «какой из двух ручек сработал»
+    assert "K=25" in line, line
+
+
+def test_bounds_multiplicative():
+    """Границы раздвигаются умножением: 0.9 и 1.111 — одно отклонение."""
+    st = {"center": 1.0, "tol": math.log(1.1)}
+    lo, hi = TC.bounds(st)
+    assert lo == pytest.approx(1 / 1.1) and hi == pytest.approx(1.1)
 
 
 def test_volume_error_hints_next_k():
     """В ошибке — границы при текущем K и сколько K не хватило: видно,
     двигать ли настройку или править главу."""
-    st = {"median": 0.999, "mad": 0.003996, "tol": 0.0999, "k": 25.0}
+    st = {"center": 0.999, "sigma": 0.01, "tol": math.log(1.1), "k": 10.0,
+          "n": 100, "off": False}
     err = _err(st, 1469, 1637)
-    assert "вне 0.90–1.10 при K=25" in err, err
-    assert "K ≥ 26" in err, err
-    # сильный промах требует заметно большего K: 1267/1450 = 0.874
-    assert "K ≥ 32" in _err(st, 1267, 1450)
-    # K=0 (ручка на нуле) — подсказка не врёт про «следующий K»
-    assert "K ≥ 26" in _err(dict(st, k=0.0), 1469, 1637)
+    assert "вне 0.908–1.099 при K=10" in err, err
+    # отклонение 0.897/0.999 = 10.7σ → K = 11
+    assert "K ≥ 11" in err, err
+    # тот же допуск, но K уже выше нужного: подсказки «следующий K» нет
+    # (K=15 уже покрывает), и строка говорит, что глава внутри допуска
+
+
+def test_volume_error_hint_when_k_hopeless():
+    """Разрыв в разы — это не разброс книги: подсказка «K не спасёт»
+    вместо бесконечного «пройдёт при K ≥ 300»."""
+    st = {"center": 1.0, "sigma": 0.001, "tol": math.log(1.005), "k": 7.0,
+          "n": 601, "off": False}
+    err = _err(st, 600, 6000)  # глава в 10 раз короче обычного
+    assert "правьте главу" in err and "K=20" in err, err
 
 
 def test_volume_error_hint_when_floor_holds():
     """Разброс 0 — допуск держит пол, и никакой K не расширит его: так и
     пишем, иначе человек будет крутить настройку без результата."""
-    st = {"median": 1.0, "mad": 0.0, "tol": 0.02, "k": 7.0}
+    st = {"center": 1.0, "sigma": 0.0, "tol": math.log(1.005), "k": 7.0,
+          "n": 100, "off": False}
     err = _err(st, 900, 1000)
     assert "K не поможет" in err and "пол" in err, err
     assert TC.min_k_for(0.9, st) is None
@@ -247,10 +369,10 @@ def test_volume_error_hint_when_floor_holds():
 
 def test_min_k_for_rounds_up():
     """Нужный K округляется вверх: 25.43 → 26 (граница включается)."""
-    st = {"median": 0.999, "mad": 0.003996, "tol": 0.0999, "k": 25.0}
-    assert TC.min_k_for(0.8974, st) == 26
+    st = {"center": 0.999, "sigma": 0.01, "tol": math.log(1.1), "k": 10.0}
+    assert TC.min_k_for(0.8974, st) == 11
     assert TC.min_k_for(1.0, st) is None  # уже внутри допуска
-    assert TC.bounds(st)[0] == pytest.approx(0.90, abs=0.001)
+    assert TC.bounds(st)[0] == pytest.approx(0.999 / 1.1, abs=0.001)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -279,7 +401,7 @@ def test_check_chapter_volume_caught(tmp_path):
     """Обрезанная глава ловится: отношение вне допуска пары."""
     files, counts = _synth_book(tmp_path, 20)
     comps = TC.comparisons_for("polished")
-    stats = TC.collect_stats(files, "polished", comps, counts, 5.0)
+    stats = TC.collect_stats(files, "polished", comps, counts, 5.0, 5.0)
     # глава 21: polished обрезан вдвое
     broken = _write_chapter(tmp_path, 21, {"polished": _body(30),
                                            "redacted": _body(60),
@@ -296,7 +418,7 @@ def test_check_chapter_volume_ok(tmp_path):
     """Нормальные главы чисты."""
     files, counts = _synth_book(tmp_path, 10)
     comps = TC.comparisons_for("polished")
-    stats = TC.collect_stats(files, "polished", comps, counts, 5.0)
+    stats = TC.collect_stats(files, "polished", comps, counts, 5.0, 5.0)
     errors, _ = TC.check_chapter(5, "00000_5_x", "polished", comps, False,
                                  None, exclusions=[], counts=counts,
                                  stats=stats)
@@ -304,11 +426,11 @@ def test_check_chapter_volume_ok(tmp_path):
 
 
 def test_check_chapter_volume_off(tmp_path):
-    """stats=None (--sensitivity 0): объёмные сравнения выключены."""
+    """stats=None (обе чувствительности в нуле): сравнения выключены."""
     d = _write_chapter(tmp_path, 1, {"polished": "коротко",
                                      "redacted": "текст"})
     errors, _ = TC.check_chapter(1, d, "polished",
-                                 [("redacted", "neighbor")], False, None,
+                                 [("redacted", "stage")], False, None,
                                  exclusions=[], counts=None, stats=None)
     assert not any("отношение объёма" in e for e in errors)
 
@@ -317,10 +439,82 @@ def test_check_chapter_volume_no_stats(tmp_path):
     """Базы нет (n<2): объёмная проверка пропускается, помечена в шапке."""
     d = _write_chapter(tmp_path, 1, {"polished": "текст", "redacted": "текст"})
     errors, _ = TC.check_chapter(1, d, "polished",
-                                 [("redacted", "neighbor")], False, None,
+                                 [("redacted", "stage")], False, None,
                                  exclusions=[], counts={"x": 1},
                                  stats={"redacted": {"n": 0}})
     assert not any("отношение объёма" in e for e in errors)
+
+
+def test_check_chapter_no_reference_is_silent(tmp_path):
+    """Нет промежуточной стадии у главы — пары просто нет: сообщения
+    «эталон не найден» в отчёте не появляется."""
+    d = _write_chapter(tmp_path, 1, {"polished": _body(60),
+                                     "translated": _body(60)})
+    comps = TC.comparisons_for("polished", ("polished", "redacted",
+                                           "translated"))
+    st = {"n": 30, "center": 1.0, "sigma": 0.0, "tol": math.log(1.005),
+          "k": 7.0, "off": False}
+    stats = {"redacted": dict(st), "translated": dict(st)}
+    counts = count_file_tokens([f"{d}/polished.txt", f"{d}/translated.txt"])
+    errors, _ = TC.check_chapter(1, d, "polished", comps, False, None,
+                                 exclusions=[], counts=counts, stats=stats)
+    assert not any("не найден" in e or "эталон" in e for e in errors)
+
+
+def test_check_chapter_fallback_stage_pair(tmp_path):
+    """redacted у главы нет — сравнение идёт с translated (запасная стадия),
+    и ошибка называет именно эту пару."""
+    d = _write_chapter(tmp_path, 1, {"polished": _body(20),
+                                     "translated": _body(60)})
+    comps = TC.comparisons_for("polished", ("polished", "redacted",
+                                           "translated"))
+    st = {"n": 30, "center": 1.0, "sigma": 0.0, "tol": math.log(1.005),
+          "k": 7.0, "off": False}
+    stats = {"redacted": dict(st), "translated": dict(st)}
+    counts = count_file_tokens([f"{d}/polished.txt", f"{d}/translated.txt"])
+    errors, _ = TC.check_chapter(1, d, "polished", comps, False, None,
+                                 exclusions=[], counts=counts, stats=stats)
+    assert any("[polished vs translated]" in e for e in errors), errors
+
+
+def test_check_chapter_original_not_repeated(tmp_path):
+    """Глава разошлась с соседней стадией — про оригинал второй раз не
+    сообщаем: сдвиг один, и он уже назван."""
+    d = _write_chapter(tmp_path, 1, {"polished": _body(20),
+                                     "redacted": _body(60),
+                                     "chapter": _body(100)})
+    comps = TC.comparisons_for("polished", ("polished", "redacted", "chapter"))
+    st = {"n": 30, "center": 1.0, "sigma": 0.0, "tol": math.log(1.005),
+          "k": 7.0, "off": False}
+    orig = {"n": 30, "center": 1.0, "sigma": 0.0, "tol": math.log(1.005),
+            "k": 3.0, "off": False}
+    stats = {"redacted": dict(st), "chapter": orig}
+    counts = count_file_tokens([f"{d}/{t}.txt"
+                                for t in ("polished", "redacted", "chapter")])
+    errors, _ = TC.check_chapter(1, d, "polished", comps, False, None,
+                                 exclusions=[], counts=counts, stats=stats)
+    assert any("[polished vs redacted]" in e for e in errors), errors
+    assert not any("[polished vs chapter]" in e for e in errors), errors
+
+
+def test_check_chapter_original_blamed_when_chain_clean(tmp_path):
+    """Цепочка ровная, а оригинал вне допуска — так и пишем: правьте
+    оригинал (термин, а не текст перевода)."""
+    d = _write_chapter(tmp_path, 1, {"polished": _body(60),
+                                     "redacted": _body(60),
+                                     "chapter": _body(20)})
+    comps = TC.comparisons_for("polished", ("polished", "redacted", "chapter"))
+    st = {"n": 30, "center": 1.0, "sigma": 0.0, "tol": math.log(1.005),
+          "k": 7.0, "off": False}
+    orig = {"n": 30, "center": 1.0, "sigma": 0.0, "tol": math.log(1.05),
+            "k": 3.0, "off": False}
+    stats = {"redacted": dict(st), "chapter": orig}
+    counts = count_file_tokens([f"{d}/{t}.txt"
+                                for t in ("polished", "redacted", "chapter")])
+    errors, _ = TC.check_chapter(1, d, "polished", comps, False, None,
+                                 exclusions=[], counts=counts, stats=stats)
+    hit = [e for e in errors if "[polished vs chapter]" in e]
+    assert hit and "правьте оригинал" in hit[0], errors
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -590,16 +784,21 @@ def test_default_regexp_checks_cover_all_scripts():
 
 
 def test_sensitivity_setting_prefilled():
-    """Чувствительность — число из реестра (0 = объёмные сравнения выключены).
+    """Ручек две, и они числа из реестра (0 = пара выключена).
 
-    SMALL_N — не K: это порог «малой базы», ниже которого MAD выборки не
+    SMALL_N — не K: это порог «малой базы», ниже которого разброс выборки не
     доверяем и берём расширенный пол. Числа независимы и совпадать не обязаны.
     """
-    s = SET.BY_KEY["TRANSLATE_CHECK_SENSITIVITY"]
-    assert s.type == "number" and int(s.default) > 0
+    stages = SET.BY_KEY["TRANSLATE_CHECK_SENSITIVITY_STAGES"]
+    original = SET.BY_KEY["TRANSLATE_CHECK_SENSITIVITY_ORIGINAL"]
+    assert stages.type == "number" and int(stages.default) > 0
+    assert original.type == "number" and int(original.default) > 0
+    assert SET.BY_KEY["TRANSLATE_CHECK_MIN_DELTA_TOKENS"].type == "number"
     assert TC.SMALL_N == 5
-    assert TC.FLOORS == {"neighbor": 0.02, "original": 0.05}
-    assert TC.SMALL_FLOORS == {"neighbor": 0.02, "original": 0.15}
+    assert TC.FLOORS == {"stage": 0.005, "original": 0.05}
+    assert TC.SMALL_FLOORS == {"stage": 0.02, "original": 0.15}
+    # цепочка стадий — одна на скрипт и на сравнения
+    assert TC.CHAIN == ("polished", "redacted", "translated", "chapter")
 
 
 def test_default_heading_rule_checks_only_not_first_line():
@@ -628,10 +827,12 @@ def test_pair_ratios_keyed_by_chapter(tmp_path):
     comps = TC.comparisons_for("polished")
     files = TC.scan_files(TC.build_chapter_map(str(tmp_path)), "polished",
                           comps, True)
+    comps = TC.comparisons_for("polished", TC.present_from(files))
     counts = TC.count_file_tokens(
         sorted({p for row in files.values() for p in row.values()}))
     ratios = TC.pair_ratios(files, "polished", comps, counts)
-    assert set(ratios) == {"redacted", "chapter"}
+    # перевода и оригинала в книге нет — пар по ним не возникает
+    assert set(ratios) == {"redacted"}
     assert set(ratios["redacted"]) == {1, 2}
     assert ratios["redacted"][1] == pytest.approx(1.0, abs=0.05)
     assert ratios["redacted"][2] > 1.3  # вдвое больше текста
@@ -646,18 +847,18 @@ def test_stats_payload_matches_stats_line(tmp_path):
     for num, mul in ((1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)):
         _write_chapter(tmp_path, num,
                        {"polished": _body(10 * mul), "redacted": _body(10)})
-    data = TC.collect_book_stats(str(tmp_path), "polished", 7, True)
+    data = TC.collect_book_stats(str(tmp_path), "polished", 7, 3, True)
     assert data["chapters"] == 6
     assert data["start"] == 1 and data["end"] == 6
     pair = next(s for s in data["stats"] if s["ref"] == "redacted")
     assert pair["check"] == "polished" and pair["k"] == 7
     assert pair["n"] == 6 and pair["small"] is False
     assert pair["lo"] < pair["median"] < pair["hi"]
-    assert pair["lo"] == round(pair["median"] - pair["tol"] / 100, 2) or \
-        abs(pair["lo"] - (pair["median"] - pair["tol"] / 100)) < 0.01
-    # stats_payloads идёт в порядке comparisons
+    assert pair["lo"] == pytest.approx(pair["median"] / (1 + pair["tol"] / 100),
+                                      abs=0.01)
+    # stats_payloads в порядке comparisons; пар без единой полной главы нет
     refs = [s["ref"] for s in data["stats"]]
-    assert refs == [rt for rt, _ in TC.comparisons_for("polished")]
+    assert refs == ["redacted"]
 
 
 def test_stats_payload_small_base_flag(tmp_path):
@@ -665,7 +866,7 @@ def test_stats_payload_small_base_flag(tmp_path):
     for num in (1, 2, 3):
         _write_chapter(tmp_path, num,
                        {"polished": _body(10), "redacted": _body(10)})
-    data = TC.collect_book_stats(str(tmp_path), "polished", 7, True)
+    data = TC.collect_book_stats(str(tmp_path), "polished", 7, 3, True)
     pair = next(s for s in data["stats"] if s["ref"] == "redacted")
     assert pair["n"] == 3 and pair["small"] is True
 
@@ -675,13 +876,14 @@ def test_outliers_respect_range_and_limit(tmp_path):
 
     База однородная (все главы равны), в главах 4 и 6 текста вдвое больше:
     медиана держится на большинстве, а две «толстые» главы выходят за
-    узкий допуск.
+    узкий допуск. Главы крупные: иначе сработал бы порог «мин. отличие в
+    токенах» и выбросов не было бы вовсе.
     """
     for num in range(1, 9):
         mul = 2 if num in (4, 6) else 1
         _write_chapter(tmp_path, num,
-                       {"polished": _body(10 * mul), "redacted": _body(10)})
-    data = TC.collect_book_stats(str(tmp_path), "polished", 7, True,
+                       {"polished": _body(200 * mul), "redacted": _body(200)})
+    data = TC.collect_book_stats(str(tmp_path), "polished", 7, 3, True,
                                  start=3, end=6)
     assert data["start"] == 3 and data["end"] == 6
     nums = [o["chapter"] for o in data["outliers"]]
@@ -694,15 +896,32 @@ def test_outliers_respect_range_and_limit(tmp_path):
 
 def test_collect_book_stats_empty_book(tmp_path):
     """Глав нет — пустые списки, а не падение (форма рисует «пар нет»)."""
-    data = TC.collect_book_stats(str(tmp_path), "polished", 7, True)
+    data = TC.collect_book_stats(str(tmp_path), "polished", 7, 3, True)
     assert data == {"type": "polished", "chapters": 0, "start": 0, "end": 0,
                     "stats": [], "outliers": []}
 
 
 def test_collect_book_stats_zero_sensitivity_no_outliers(tmp_path):
-    """K=0 — объёмных сравнений нет: выбросов не бывает."""
+    """Обе ручки в нуле — объёмных сравнений нет: выбросов не бывает."""
     for num in range(1, 6):
         _write_chapter(tmp_path, num,
                        {"polished": _body(10 * num), "redacted": _body(10)})
-    data = TC.collect_book_stats(str(tmp_path), "polished", 0, True)
+    data = TC.collect_book_stats(str(tmp_path), "polished", 0, 0, True)
     assert data["outliers"] == []
+    assert all(s["off"] for s in data["stats"])
+
+
+def test_collect_book_stats_knobs_apart(tmp_path):
+    """Соседние пары можно выключить, а оригинал оставить (и наоборот).
+
+    Это и есть смысл двух ручек: у книги может быть испорченный оригинал,
+    и пары с chapter тогда только шумят.
+    """
+    for num in range(1, 9):
+        _write_chapter(tmp_path, num,
+                       {"polished": _body(10), "redacted": _body(10),
+                        "chapter": _body(20)})
+    data = TC.collect_book_stats(str(tmp_path), "polished", 0, 3, True)
+    by = {s["ref"]: s for s in data["stats"]}
+    assert by["redacted"]["off"] is True
+    assert by["chapter"]["off"] is False

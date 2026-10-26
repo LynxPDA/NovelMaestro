@@ -2669,15 +2669,16 @@ def test_translate_check_stats_route(srv_ctx):
     """POST /api/stages/translate_check/stats: предрасчёт без запуска.
 
     Те же функции, что у прогона (cli.translate_check), поэтому числа
-    совпадают с шапкой отчёта; главы целиком не читаются.
+    совпадают с шапкой отчёта; главы целиком не читаются. Ручек
+    чувствительности две, и у каждой пары в ответе своя.
     """
     _, port, projects_root = srv_ctx()
     _tc_book(port, projects_root)
     res, payload = _request(
         port, "POST", "/api/stages/translate_check/stats",
         {"project": "ACTIVE/test_book",
-         "params": {"check_type": "polished", "sensitivity": "7",
-                    "start": 1, "end": 6}})
+         "params": {"check_type": "polished", "sensitivity_stages": "7",
+                    "sensitivity_original": "3", "start": 1, "end": 6}})
     assert res.status == 200, payload
     assert payload["ok"] is True and payload["off"] is False
     assert payload["chapters"] == 6
@@ -2689,26 +2690,50 @@ def test_translate_check_stats_route(srv_ctx):
     assert [o["chapter"] for o in payload["outliers"]] == [3]
 
 
+def test_translate_check_stats_original_knob(srv_ctx):
+    """Пара с оригиналом берёт свою ручку, а не ручку соседних стадий."""
+    _, port, projects_root = srv_ctx()
+    pdir = _tc_book(port, projects_root)
+    for num in range(1, 7):
+        d = pdir / "chapters" / f"00000_{num}_x"
+        (d / "chapter.txt").write_text(
+            f"Глава {num}\n\n" + "исходный текст. " * 160, encoding="utf-8")
+    res, payload = _request(
+        port, "POST", "/api/stages/translate_check/stats",
+        {"project": "ACTIVE/test_book",
+         "params": {"check_type": "polished", "sensitivity_stages": "7",
+                    "sensitivity_original": "3"}})
+    assert res.status == 200, payload
+    by = {s["ref"]: s for s in payload["stats"]}
+    assert by["redacted"]["k"] == 7 and by["chapter"]["k"] == 3
+
+
 def test_translate_check_stats_zero_sensitivity(srv_ctx):
-    """K=0 — объёмные сравнения выключены: сервер говорит это полем `off`,
-    а не пустым допуском (ноль ширины читался бы как «пол жёсткий»)."""
+    """Обе ручки в нуле — объёмные сравнения выключены: сервер говорит это
+    полем `off`, а не пустым допуском (ноль ширины читался бы как «пол
+    жёсткий»)."""
     _, port, projects_root = srv_ctx()
     _tc_book(port, projects_root)
     res, payload = _request(
         port, "POST", "/api/stages/translate_check/stats",
         {"project": "ACTIVE/test_book",
-         "params": {"check_type": "polished", "sensitivity": "0"}})
+         "params": {"check_type": "polished", "sensitivity_stages": "0",
+                    "sensitivity_original": "0"}})
     assert res.status == 200, payload
     assert payload["off"] is True
     assert payload["outliers"] == []
 
 
 def test_translate_check_stats_validation(srv_ctx):
-    """Битый тип файлов и отрицательный K — 400; нет папки chapters — 404."""
+    """Битый тип файлов, отрицательные ручки и нечисловое отличие — 400;
+    нет папки chapters — 404."""
     _, port, projects_root = srv_ctx()
     pdir = _tc_book(port, projects_root)
     for params, code in (({"check_type": "нет"}, 400),
-                         ({"sensitivity": "-1"}, 400)):
+                         ({"sensitivity_stages": "-1"}, 400),
+                         ({"sensitivity_original": "нет"}, 400),
+                         ({"min_delta_tokens": "много"}, 400),
+                         ({"min_delta_tokens": "-5"}, 400)):
         res, payload = _request(
             port, "POST", "/api/stages/translate_check/stats",
             {"project": "ACTIVE/test_book", "params": params})

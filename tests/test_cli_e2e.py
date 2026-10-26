@@ -751,16 +751,23 @@ def test_tc_main_gaps_and_dup_folders(tmp_path, monkeypatch, capsys):
 
 
 def test_tc_check_chapter_small_file_and_missing_ref(tmp_path):
+    """Мелкий файл помечается; отсутствие эталона — НЕ ошибка.
+
+    Промежуточной стадии у части глав может не быть (redact делали не
+    везде): пары у такой главы просто нет, и сообщать о ней нечего —
+    иначе отчёт превращался в поток «эталон не найден».
+    """
     d = tmp_path / "00000_1_x"
     d.mkdir()
     (d / "polished.txt").write_text("короткий файл", encoding="utf-8")
     errors, _ = TC.check_chapter(
-        1, str(d), "polished", [("redacted", "neighbor")],
+        1, str(d), "polished", [("redacted", "stage")],
         strict=False, prev_inner_chapter=None, exclusions=[],
-        stats={"redacted": {"n": 10}})
+        stats={"redacted": {"n": 10, "center": 1.0, "sigma": 0.0,
+                            "tol": 0.005, "k": 7, "off": False}})
     joined = "\n".join(errors)
     assert "Размер файла слишком мал" in joined
-    assert "эталон 'redacted' не найден" in joined
+    assert "эталон" not in joined and "не найден" not in joined
 
 
 # ══════════════════════════════════════════════════════════════════════

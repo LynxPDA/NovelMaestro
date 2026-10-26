@@ -1217,6 +1217,20 @@ def test_parse_check_stats_bounds():
         "  polished vs chapter: статистики нет (полных глав 0) — "
         "сравнение пропускается\n")[0]
     assert empty["lo"] is None and empty["chapters"] == 0
+    # нынешний формат: «разброс» вместо MAD, три знака в границах, «мало
+    # глав» в конце строки (K теперь есть всегда — он есть у каждой пары)
+    new_fmt = _parse_check_stats(
+        "  polished vs redacted: глав 601, медиана 1.000, разброс 0.13%, "
+        "допуск ±0.91% → отношение 0.991–1.009 (K=7), мало глав — разброс "
+        "выборки не учитывается\n")[0]
+    assert new_fmt["mad"] == pytest.approx(0.13)
+    assert (new_fmt["lo"], new_fmt["hi"]) == pytest.approx((0.991, 1.009))
+    assert new_fmt["k"] == 7.0 and new_fmt["small"] is True
+    # выключенная ручка: чисел допуска нет, признак стоит — вьюха говорит
+    # «выключено», а не рисует полосу из нулей
+    off = _parse_check_stats(
+        "  polished vs chapter: выключено (чувствительность 0)\n")[0]
+    assert off["off"] is True and off["lo"] is None
 
 
 def test_check_reports_endpoint(srv, tmp_path):

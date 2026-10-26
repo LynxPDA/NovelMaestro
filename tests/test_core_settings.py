@@ -535,6 +535,27 @@ def test_effective_file_over_registry(monkeypatch, tmp_path):
     assert S.stage_values("ner")["chunk_size"] == 1500
 
 
+def test_env_alias_old_sensitivity(monkeypatch, tmp_path):
+    """Снятый ключ TRANSLATE_CHECK_SENSITIVITY читается как новая ручка.
+
+    Старое значение — одна ручка на всё: она достаётся более широкой группе
+    (пары с оригиналом), а узкая остаётся дефолтом реестра. Файл при этом не
+    переписывается — конфиг человека работает как есть, без миграции.
+    """
+    env = tmp_path / "shared.env"
+    env.write_text("TRANSLATE_CHECK_SENSITIVITY=9\n", encoding="utf-8")
+    monkeypatch.setenv("WEB_ENV_FILE", str(env))
+    for key in ("TRANSLATE_CHECK_SENSITIVITY",
+                "TRANSLATE_CHECK_SENSITIVITY_ORIGINAL"):
+        monkeypatch.delenv(key, raising=False)
+    assert S.effective("TRANSLATE_CHECK_SENSITIVITY_ORIGINAL") == 9
+    assert S.effective("TRANSLATE_CHECK_SENSITIVITY_STAGES") == 7
+    # новое значение в файле перекрывает старое
+    env.write_text("TRANSLATE_CHECK_SENSITIVITY=9\n"
+                   "TRANSLATE_CHECK_SENSITIVITY_ORIGINAL=4\n", encoding="utf-8")
+    assert S.effective("TRANSLATE_CHECK_SENSITIVITY_ORIGINAL") == 4
+
+
 def test_effective_env_over_file(monkeypatch, tmp_path):
     env = tmp_path / "shared.env"
     env.write_text("NER_CHUNK_SIZE=1500\n", encoding="utf-8")

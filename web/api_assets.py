@@ -238,10 +238,10 @@ def _notes_put(ctx: dict) -> dict:
 def _parse_check_stats(text: str) -> list[dict]:
     """Блок «Статистика» отчёта translate_check → строки пар.
 
-    Строка: `  polished vs redacted: глав 1320, медиана 0.999, MAD 0.4%,
-    допуск ±9.9% → отношение 0.90–1.10 (K=25)`; у пары без базы вместо
-    чисел — «статистики нет». Чего в строке нет (старый отчёт), остаётся
-    None — вьюха такую пару просто не рисует.
+    Строка: `  polished vs redacted: глав 1320, медиана 0.999, разброс 0.13%,
+    допуск ±0.91% → отношение 0.991–1.009 (K=7)`; у пары без базы вместо
+    чисел — «статистики нет», у выключенной — «выключено». Чего в строке нет
+    (старый отчёт), остаётся None — вьюха такую пару просто не рисует.
     """
     def num(pattern: str, line: str) -> float | None:
         m = re.search(pattern, line)
@@ -272,12 +272,14 @@ def _parse_check_stats(text: str) -> list[dict]:
             "ref": ref_type,
             "chapters": int(num(r"глав (\d+)", rest) or 0),
             "median": med,
-            "mad": num(r"MAD ([\d.]+)%", rest),
+            # MAD старого отчёта и σ нового — одно поле вьюхи
+            "mad": num(r"(?:MAD|разброс) ([\d.]+)%", rest),
             "tol": tol,
             "lo": lo,
             "hi": hi,
             "k": num(r"K=([\d.]+)", rest),
             "small": "мало глав" in rest,
+            "off": "выключено" in rest,
         })
     return out
 

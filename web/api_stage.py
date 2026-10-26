@@ -757,11 +757,14 @@ def _translate_check_stats(ctx: dict) -> dict:
     функции `cli.translate_check`: scan_files → count_file_tokens →
     collect_stats), но без запуска проверки и без записи отчёта: главы целиком
     не читаются, поэтому ответ у книги из 600 глав — секунды. Смысл — увидеть
-    допуск при текущем K и какие главы диапазона в него не влезают до прогона
+    допуск при текущих K и какие главы диапазона в него не влезают до прогона
     (возможно, двигать надо K, а не текст).
 
-    K=0 — объёмные сравнения выключены: сообщаем это полем `off`, а не пустым
-    допуском (ноль ширины читался бы как «пол жёсткий»).
+    Обе чувствительности в нуле — объёмные сравнения выключены: сообщаем это
+    полем `off`, а не пустым допуском (ноль ширины читался бы как «пол
+    жёсткий»). Пары строятся по тем файлам, что в книге есть (цепочка
+    стадий), — форма показывает все, а прогон возьмёт их при своём
+    --check-type.
     """
     pdir, _sec, _name = _project_ctx(ctx)
     params = (ctx["body"] or {}).get("params") or {}
@@ -769,22 +772,35 @@ def _translate_check_stats(ctx: dict) -> dict:
     check_type = str(params.get("check_type") or "polished")
     if check_type not in ("polished", "redacted", "translated"):
         raise ApiError(400, f"Неизвестный тип файлов глав: {check_type}")
-    try:
-        sensitivity = float(params.get("sensitivity") or 0)
-    except (TypeError, ValueError):
-        raise ApiError(400, "«Чувствительность проверки объёма» — число") \
-            from None
-    if sensitivity < 0:
-        raise ApiError(400, "«Чувствительность проверки объёма» — число ≥ 0")
+    k_stages, k_original = (_sensitivity(params, "sensitivity_stages"),
+                            _sensitivity(params, "sensitivity_original"))
+    argv_min = params.get("min_delta_tokens")
+    min_delta = _int_or_none(argv_min)
+    if str(argv_min or "").strip() and min_delta is None:
+        raise ApiError(400, "«Мин. отличие объёма» — целое число ТОКЕНОВ")
+    if min_delta is not None and min_delta < 0:
+        raise ApiError(400, "«Мин. отличие объёма» — число ≥ 0")
     chapters_dir = pdir / "chapters"
     if not chapters_dir.is_dir():
         raise ApiError(404, "В книге нет папки chapters")
     _check_chapter_range(ctx, "translate_check", pdir, params)
     data = tc.collect_book_stats(
-        str(chapters_dir), check_type, sensitivity,
+        str(chapters_dir), check_type, k_stages, k_original,
         core_settings.is_on(params.get("strict", True)),
-        _int_or_none(params.get("start")), _int_or_none(params.get("end")))
-    return {"ok": True, "off": sensitivity <= 0, **data}
+        _int_or_none(params.get("start")), _int_or_none(params.get("end")),
+        tc.MIN_DELTA_TOKENS if min_delta is None else min_delta)
+    return {"ok": True, "off": k_stages <= 0 and k_original <= 0, **data}
+
+
+def _sensitivity(params: dict, name: str) -> float:
+    """Чувствительность пары из формы: число ≥ 0 (пусто — «выключено»)."""
+    try:
+        k = float(params.get(name) or 0)
+    except (TypeError, ValueError):
+        raise ApiError(400, f"Чувствительность ({name}) — число") from None
+    if k < 0:
+        raise ApiError(400, f"Чувствительность ({name}) — число ≥ 0")
+    return k
 
 
 def _int_or_none(value) -> int | None:
