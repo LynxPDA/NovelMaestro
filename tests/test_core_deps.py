@@ -61,6 +61,7 @@ def test_roles_cover_the_documented_set():
     assert ROLE_NAMES == ["HTTP-транспорт LLM", ".env-конфигурация",
                          "поиск терминов по главам",
                          "история проектов (контрольные точки)",
+                         "сжатие архивов проектов",
                          "прогресс-бары CLI", "тесты"]
 
 
@@ -105,6 +106,7 @@ def test_required_roles_have_no_fallback():
 
 
 @pytest.mark.parametrize("role", ["поиск терминов по главам",
+                                  "сжатие архивов проектов",
                                   "прогресс-бары CLI"])
 def test_runtime_roles_end_with_stdlib_fallback(role):
     """Опциональная роль рантайма кончается кандидатом без модуля — он всегда
@@ -169,7 +171,7 @@ def test_status_full_stack_is_not_degraded(rows):
 
 
 def test_status_optional_role_falls_back(rows, installed):
-    """Без pyahocorasick/tqdm роль живёт на фолбэке — это не ошибка."""
+    """Без pyahocorasick/tqdm/zstandard роль живёт на фолбэке — не ошибка."""
     installed("httpx", "dotenv", "pytest", "xdist")
     got = {r["role"]: r for r in deps.status()}
     terms = got["поиск терминов по главам"]
@@ -177,6 +179,9 @@ def test_status_optional_role_falls_back(rows, installed):
     assert terms["pip_missing"] == ["pyahocorasick"]
     prog = got["прогресс-бары CLI"]
     assert prog["active"] == "счётчик" and prog["degraded"] is True
+    pack = got["сжатие архивов проектов"]
+    assert pack["active"] == "gzip" and pack["degraded"] is True
+    assert pack["pip_missing"] == ["zstandard"]
 
 
 def test_status_required_role_without_library(rows, installed):
@@ -235,7 +240,7 @@ def test_missing_hint_empty_on_full_stack(rows):
 def test_missing_hint_lists_every_gap(installed):
     installed("dotenv", "ahocorasick", "dulwich")
     got = set(deps.missing_hint().split())
-    assert got == {"httpx", "tqdm", "pytest", "pytest-xdist"}
+    assert got == {"httpx", "tqdm", "zstandard", "pytest", "pytest-xdist"}
 
 
 def test_missing_hint_puts_required_first(installed):
@@ -284,7 +289,7 @@ def test_main_reports_optional_packages(capsys, installed):
     assert deps.main([]) == 0
     out = capsys.readouterr().out
     assert "Опциональные библиотеки не установлены" in out
-    assert "pip install pyahocorasick tqdm" in out
+    assert "pip install pyahocorasick zstandard tqdm" in out
 
 
 def test_main_accepts_argv(capsys, installed):

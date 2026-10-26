@@ -72,6 +72,20 @@ ROLES: tuple[dict, ...] = (
         ),
     },
     {
+        "role": "сжатие архивов проектов",
+        "where": "core/archive.py",
+        # роль опциональна: архив пишется и gzip-ом из stdlib, и
+        # compression.zstd на Python ≥ 3.14; пакет поднимает скорость
+        # (все ядра) и степень сжатия (уровень 9 вместо 6)
+        "required": False,
+        "candidates": (
+            {"pip": "zstandard", "module": "zstandard",
+             "label": "zstandard", "note": "zstd с потоками, уровень 9"},
+            {"pip": "", "module": "", "label": "gzip",
+             "note": "stdlib-фолбэк: тот же архив, но больше и медленнее"},
+        ),
+    },
+    {
         "role": "прогресс-бары CLI",
         "where": "core/stage.py (Progress)",
         # счётчик прогресса общий; бар активен только в CLI: в web-режиме
