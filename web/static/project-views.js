@@ -6343,12 +6343,12 @@ function viewProject(section, name, tab, job) {
       h("div", {
         class: "check-scale-band",
         style: `left:${sc.bandLeft * 100}%;width:${sc.bandWidth * 100}%`,
-        title: `допуск при K=${st.k ?? "?"}: ${scaleNum(sc.lo)}–${scaleNum(sc.hi)}`,
+        title: `допуск ±${st.tol ?? "?"}%: ${scaleNum(sc.lo)}–${scaleNum(sc.hi)}`,
       }),
       h("div", {
         class: "check-scale-mark",
         style: `left:${sc.midPos * 100}%`,
-        title: `медиана книги ${scaleNum(sc.median)}`,
+        title: `среднее книги ${scaleNum(sc.median)}`,
       }),
       ...dots,
     );
@@ -6364,7 +6364,7 @@ function viewProject(section, name, tab, job) {
           "span",
           { class: "check-scale-nums" },
           `допуск ${scaleNum(sc.lo)}–${scaleNum(sc.hi)}`
-            + (st.k != null ? ` при K=${st.k}` : "")
+            + (st.tol != null ? ` при ±${st.tol}%` : "")
             + (st.mad != null ? ` · разброс ${st.mad}%` : ""),
         ),
       ),
@@ -6373,7 +6373,6 @@ function viewProject(section, name, tab, job) {
         "div",
         { class: "check-scale-legend" },
         `глав в базе: ${st.chapters ?? "?"}`
-          + (st.small ? " (мало — разброс не учитывается)" : "")
           + (out ? ` · глав вне допуска в отчёте: ${out}` : ""),
       ),
     );

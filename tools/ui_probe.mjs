@@ -219,21 +219,20 @@ function seedProjectsDir(dir) {
     path.join(book, "logs", "check_polished_1-2.txt"),
     [
       "=== Отчёт о проверке перевода (polished) ===",
-      "Запуск        : /app/cli/translate_check.py --check-type polished --sensitivity-stages 25 --sensitivity-original 3",
+      "Запуск        : /app/cli/translate_check.py --check-type polished --tolerance-stages 5 --tolerance-original 20",
       "Диапазон глав : 1 – 2",
-      "Счёт объёма   : токены (оценка); чувствительность K=25 (соседние стадии) / 3 (оригинал)",
+      "Счёт объёма   : токены (оценка); допуск 5% (соседние стадии) / 20% (оригинал)",
       "Мин. отличие  : 150 т.",
       "Дата          : Thu Oct 22 10:32:18 2026",
       "Всего папок   : 2",
       "---------------------------------",
       "Цепочка       : polished → redacted → translated → chapter",
       "Статистика (по всей книге, 2 папок без дублей):",
-      "  polished vs redacted: глав 1320, медиана 0.999, разброс 0.40%, допуск ±9.90% → отношение 0.900–1.100 (K=25)",
-      "  polished vs chapter: глав 2, медиана 1.356, разброс 4.70%, допуск ±87.30% → отношение 0.480–2.230 (K=3)",
+      "  polished vs redacted: глав 1320, среднее 0.999, допуск ±10% → отношение 0.908–1.099 (разброс книги 0.40%)",
+      "  polished vs chapter: глав 2, среднее 1.356, допуск ±20% → отношение 1.130–1.627 (разброс книги 4.70%)",
       "---------------------------------",
       "1. Папка: ./chapters/00000_1_Глава 1",
-      "  [polished vs redacted]  отношение объёма 0.900 → ОШИБКА (вне 0.900–1.100 при K=25, медиана книги 0.999; polished 1469 т., redacted 1632 т.; пройдёт при K ≥ 26)",
-      "  [polished vs chapter]  отношение объёма 1.470 → ОШИБКА (вне 0.480–2.230 при K=3, медиана книги 1.356; polished 1469 т., chapter 1000 т.; пройдёт при K ≥ 32)",
+      "  [polished vs redacted]  отношение объёма 0.900 → ОШИБКА (вне 0.908–1.099 при допуске ±10%, среднее книги 0.999; polished 1469 т., redacted 1632 т.)",
       "",
       "--- Сводка ---",
       "Проверено глав : 2",
@@ -2539,6 +2538,41 @@ async function main() {
       + `· очистка текста ${toc.clean ? (toc.cleanOn ? "вкл" : "выкл") : "нет"}`);
   }
 
+  /* Форма «Проверка перевода»: два поля допуска в процентах и НИ ОДНОЙ
+   * кнопки предрасчёта — ответ на «сколько глав поймает допуск» даёт сам
+   * прогон (маршрута и виджета больше нет). */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".stage-card", { timeout: 15000 });
+    await page.locator('.stage-card:has-text("Проверка перевода")').first()
+      .click();
+    await page.waitForTimeout(900);
+    const f = await page.evaluate(() => {
+      const labels = [...document.querySelectorAll(".run-form .field-label")]
+        .map((el) => (el.textContent || "").trim());
+      const btns = [...document.querySelectorAll(".run-form button")]
+        .map((b) => (b.textContent || "").replace(/\s+/g, " ").trim());
+      return {
+        tolerances: labels.filter((t) => /^Допуск/.test(t)),
+        precalc: btns.filter((t) => /Предрасч/i.test(t)),
+        stale: !!document.querySelector(".tc-stats, .tc-stats-field"),
+      };
+    });
+    if (f.tolerances.length !== 2)
+      problems.push(`допуски: полей ${f.tolerances.length} (ожидаем 2)`);
+    if (f.precalc.length)
+      problems.push(`допуски: кнопка предрасчёта осталась (${f.precalc.join(", ")})`);
+    if (f.stale) problems.push("допуски: разметка предрасчёта в форме");
+    if (SHOT) {
+      await page.screenshot({ path: path.join(OUT, "scenario-tc-form.png") });
+    }
+    log(`${problems.length === before ? "✅" : "❌"} допуски формы  `
+      + `${f.tolerances.join(" · ")} · предрасчёта нет`);
+  }
+
   /* Диапазон глав: «64 – 3» не запускается — подсказка и рамка видны сразу,
    * кнопка отказывает, а сервер отвечает 400 тем же текстом (правило одно —
    * core.settings.chapter_range_error / UICore.chapterRangeError) */
@@ -2591,90 +2625,6 @@ async function main() {
       + `64 – 3: подсказка + ${bad.bad} поля в рамке · отказ «${err}»`);
   }
 
-  /* Предрасчёт допуска translate_check: кнопка в строке поля
-   * «Чувствительность» — числа приходят с сервера теми же функциями, что у
-   * прогона. Проверяем: строка «кнопка + число» в одной строке, ответ с
-   * допуском и главой вне допуска, гашение «старого» ответа при смене K. */
-  {
-    const before = problems.length;
-    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
-      { waitUntil: "load" });
-    await page.reload({ waitUntil: "load" });
-    await page.waitForSelector(".stage-card", { timeout: 15000 });
-    await page.locator('.stage-card:has-text("Проверка перевода")').first()
-      .click();
-    await page.waitForTimeout(900);
-    const layout = await page.evaluate(() => {
-      const row = document.querySelector(".tc-stats-field");
-      const btn = document.querySelector(".tc-stats-btn");
-      if (!row || !btn) return null;
-      return {
-        sameRow: row.contains(btn),
-        hasInput: !!row.querySelector("input"),
-        knobs: [...document.querySelectorAll(".run-form .field")]
-          .filter((f) => /Чувствительность/.test(
-            ((f.querySelector(".field-label") || {}).textContent) || "")).length,
-        label: ((document.querySelector(".field:has(.tc-stats-field) .field-label")
-          || {}).textContent || "").trim(),
-        tip: !!document.querySelector(".tc-stats-btn[data-tip]"),
-      };
-    });
-    if (!layout) problems.push("предрасчёт: кнопки у поля чувствительности нет");
-    else {
-      if (!layout.sameRow || !layout.hasInput)
-        problems.push("предрасчёт: кнопка не в строке поля");
-      if (!/Чувствительность/.test(layout.label))
-        problems.push(`предрасчёт: поле рядом с «${layout.label}»`);
-      if (!layout.tip) problems.push("предрасчёт: у кнопки нет подсказки");
-      /* ручек ДВЕ: соседние стадии и оригинал различаются по разбросу на
-         порядок, и одна цифра на все пары врала бы в одной из групп */
-      if (layout.knobs !== 2)
-        problems.push(`предрасчёт: ручек ${layout.knobs} (ожидаем 2)`);
-    }
-    await page.locator(".tc-stats-btn").first().click();
-    await page.waitForSelector(".tc-stats-row", { timeout: 20000 });
-    const res = await page.evaluate(() => ({
-      pairs: [...document.querySelectorAll(".tc-stats-row")].map(
-        (r) => r.textContent.replace(/\s+/g, " ").trim()),
-      // свой K у каждой пары — отдельным узлом строки
-      ks: [...document.querySelectorAll(".tc-stats-k")].map(
-        (k) => (k.textContent || "").trim()),
-      text: ((document.querySelector(".tc-stats") || {}).textContent || ""),
-      note: ((document.querySelector(".tc-stats-note") || {})
-        .textContent || "").trim(),
-      out: document.querySelectorAll(".tc-stats-out-row").length,
-    }));
-    if (!res.pairs.length) problems.push("предрасчёт: пар в ответе нет");
-    if (!res.pairs.every((t) => /допуск \d/.test(t)))
-      problems.push(`предрасчёт: без допуска «${res.pairs[0]}»`);
-    /* .append(null) от условной строки вставлял в ответ текстовый узел
-       "null" — в разметке его быть не может ни в каком случае */
-    if (/\bnull\b/.test(res.text))
-      problems.push(`предрасчёт: в ответе «null» — «${res.text.slice(0, 60)}»`);
-    if (res.ks.length !== res.pairs.length)
-      problems.push(`предрасчёт: K у ${res.ks.length} пар из ${res.pairs.length}`);
-    if (!res.ks.every((k) => /^K=[\d.]+$/.test(k)))
-      problems.push(`предрасчёт: ручки пар «${res.ks.join(", ")}»`);
-    if (!/проходит|вне допуска/.test(res.note))
-      problems.push(`предрасчёт: итог «${res.note}»`);
-    if (SHOT) {
-      await page.screenshot({ path: path.join(OUT, "scenario-tc-stats.png") });
-    }
-    /* смена K делает ответ старым — вьюха говорит это явно, а не молчит */
-    const sens = page.locator(".tc-stats-field input").first();
-    await sens.fill("3");
-    await sens.dispatchEvent("input");
-    await page.waitForTimeout(300);
-    const stale = await page.evaluate(() => ({
-      text: ((document.querySelector(".tc-stats-note") || {}).textContent || "").trim(),
-      dim: !!document.querySelector(".tc-stats.is-stale"),
-    }));
-    if (!stale.dim || !/пересчитайте/.test(stale.text))
-      problems.push(`предрасчёт: смена K не отметилась («${stale.text}»)`);
-    log(`${problems.length === before ? "✅" : "❌"} предрасчёт     `
-      + `${res.pairs.length} пары · ${res.out} выбросов · «${res.note}»`);
-  }
-
   /* Отчёт translate_check: шкала допуска пары — полоса при текущем K,
    * штрих медианы и точки глав вне допуска. Числа берутся из блока
    * «Статистика» (сервер разбирает его в r.stats): без них вьюха падала бы
@@ -2704,7 +2654,7 @@ async function main() {
     const first = sc[0] || {};
     if (first.title !== "polished vs redacted")
       problems.push(`шкала отчёта: подпись «${first.title}»`);
-    if (!/допуск 0\.900–1\.100 при K=25/.test(first.nums || ""))
+    if (!/допуск 0\.908–1\.099 при ±10%/.test(first.nums || ""))
       problems.push(`шкала отчёта: числа «${first.nums}»`);
     /* три знака — не прихоть: у соседних стадий весь допуск лежит
        в 0.99–1.01, и двух знаков не хватает, чтобы его нарисовать */

@@ -186,9 +186,8 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
     argv += _range_argv(form)
     if form.get("exclude_words"):
         argv += ["--exclude-words", str(form["exclude_words"])]
-    for name, flag in (("sensitivity_stages", "--sensitivity-stages"),
-                       ("sensitivity_original", "--sensitivity-original"),
-                       ("min_delta_tokens", "--min-delta-tokens")):
+    for name, flag in (("tolerance_stages", "--tolerance-stages"),
+                       ("tolerance_original", "--tolerance-original")):
         if form.get(name) not in (None, ""):
             argv += [flag, str(form[name])]
     for line in _epub_lines(form.get("regexp_checks")):

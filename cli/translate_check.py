@@ -4,19 +4,17 @@
 translate_check.py — проверка перевода по цепочке конвейера.
 
 Проверки:
-  • объём глав (ТОКЕНЫ — оценка estimate_tokens): адаптивная статистика
-    вместо магических констант. По ВСЕЙ книге (не только по диапазону)
-    собираются отношения объёмов каждой пары; центр пары — медиана
-    логарифмов отношения, разброс — MAD в тех же логарифмах (× 1.4826 —
-    это σ для нормального распределения); глава помечается, если
-    отклонение вышло за max(пол, K·σ). Отношение — величина
-    мультипликативная (0.9 и 1.111 — одно и то же отклонение), в линейной
-    шкале MAD книг с разбросом 4% занижал бы допуск.
-    Две ручки K (0 = выключить): --sensitivity-stages — пары соседних
-    стадий (разброс книги 0.13%), --sensitivity-original — пары с
-    оригиналом (4.4%): одна ручка не может быть одновременно узкой и
-    широкой. Полы допуска — измеренный на реальных книгах нижний предел
-    разброса: соседние стадии 0.5%, пара с оригиналом 5%.
+  • объём глав (ТОКЕНЫ — оценка estimate_tokens): по ВСЕЙ книге (не только
+    по диапазону) собираются отношения объёмов каждой пары; среднее пары —
+    медиана отношений (устойчива к битым главам, пока их меньше половины
+    базы), допуск — этот процент от среднего в обе стороны. Отношение —
+    величина мультипликативная (0.9 и 1.111 — одно и то же отклонение), но
+    допуск в процентах задан человеком и раздвигает среднее умножением:
+    границы = среднее × (1 ± Д%). Две ручки в процентах (0 = выключить):
+    --tolerance-stages — пары соседних стадий (5%), --tolerance-original —
+    пары с оригиналом (20%): текст перевода отходит от соседней стадии на
+    доли процента, а от оригинала — на десятки, и одна цифра на обе группы
+    флагует либо всё, либо ничего.
     Пары строятся по ЦЕПОЧКЕ стадий polished → redacted → translated →
     chapter: тип файлов главы сравнивается с ближайшей предыдущей стадией,
     у которой есть файл, и с оригиналом (chapter). Нет промежуточной
@@ -27,11 +25,7 @@ translate_check.py — проверка перевода по цепочке к�
     если глава уже разошлась с соседней стадией, второй раз про оригинал не
     сообщается (это тот же сдвиг), а если цепочка ровная, а оригинал вне
     допуска — ошибка так и говорит: правьте оригинал.
-    Отличие меньше --min-delta-tokens ТОКЕНОВ не флагуется (2% на главе в
-    200 токенов — округление оценки, а не ошибка).
-    Малая база (n < 5): разброс выборки обманчиво узок, допуск —
-    расширенный пол (оригинал 15%, соседние стадии 2%); n < 2 — пара
-    пропускается (центру взяться неоткуда).
+    n < 2 — пара пропускается (среднему взяться неоткуда).
   • минимальный размер файла (--min-file-size, БАЙТЫ; дефолт 3072);
   • regexp-проверки текста главы (--regexp-check, multiline): чистый
       стандартный regexp (Python re), всё найденное — ошибка,
@@ -49,7 +43,7 @@ translate_check.py — проверка перевода по цепочке к�
   • дубли папок / файлов (strict → FATAL, глава пропускается).
 
 ЕДИНИЦЫ: счёт объёма — ТОКЕНЫ (встроенная оценка estimate_tokens);
-размеры файлов — БАЙТЫ.
+размеры файлов — БАЙТЫ; допуск — ПРОЦЕНТЫ.
 Форматы папок глав — единый канон core.common.parse_chapter_id.
 """
 from __future__ import annotations
@@ -61,7 +55,7 @@ import re
 import shlex
 import statistics
 import sys
-from math import ceil, exp, log
+from math import exp, log
 from datetime import datetime
 from pathlib import Path
 
@@ -102,24 +96,14 @@ def parse_regexp_rule(line: str):
 
 
 # ──────────────────────────────────────────────
-# НАСТРОЙКИ (полы допуска — измеренный нижний предел разброса реальных
-# книг: соседние стадии сидят на 1.000 с разбросом 0.13%, пара с оригиналом
-# — 4.4%; пол 0.5% у соседних стадий страхует книгу, где разброс нулевой)
+# НАСТРОЙКИ
 # ──────────────────────────────────────────────
 MIN_FILE_SIZE = 3072          # байты
-#: цепочка стадий от самой поздней к оригиналу; вид пары задаёт пол допуска
+#: цепочка стадий от самой поздней к оригиналу; вид пары задаёт свою ручку
 CHAIN = ("polished", "redacted", "translated", "chapter")
-FLOORS = {"stage": 0.005, "original": 0.05}
-#: малая база: MAD из 2–4 глав обманчиво узок — допуск расширенного пола
-#: (ширина, измеренная на полной книге, а не разброс трёх глав)
-SMALL_N = 5
-SMALL_FLOORS = {"stage": 0.02, "original": 0.15}
-#: меньшее отличие от ожидаемого объёма не флагуется вовсе: 2% на главе в
-#: 200 токенов — округление оценки, а не ошибка (ТОКЕНЫ)
-MIN_DELTA_TOKENS = 150
-#: K, дальше которого подсказка «пройдёт при K ≥ N» бессмысленна: такой
-#: разрыв — не разброс книги, а сломанная глава
-MAX_HINT_K = 20
+#: допуск пары по умолчанию, ПРОЦЕНТЫ от среднего объёма (зеркало .env)
+TOLERANCE_STAGES = 5.0
+TOLERANCE_ORIGINAL = 20.0
 
 
 def load_exclusions(env_path=None) -> list[str]:
@@ -151,7 +135,7 @@ def _write_report(report_path: str, text: str, mode: str = "a") -> None:
 def comparisons_for(check_type: str, present=CHAIN) -> list[tuple[str, str]]:
     """Сравнения типа файлов глав по цепочке стадий: [(эталон, вид пары)].
 
-    Вид пары задаёт пол допуска: stage — соседняя стадия цепочки, original —
+    Вид пары задаёт свою ручку: stage — соседняя стадия цепочки, original —
     оригинал (chapter). Возвращаются ВСЕ кандидаты в порядке близости, но у
     конкретной главы берётся только первый доступный из stage-пар (ближайшая
     предыдущая стадия, у которой есть файл): нет redacted — сравниваем с
@@ -197,10 +181,10 @@ def scan_files(chapter_map, check_type, comparisons, strict) -> dict:
     """Один проход по ВСЕЙ книге: {номер: {тип: путь}} без дублей папок.
 
     Ищутся ВСЕ типы цепочки: по их наличию строятся пары главы (без redacted
-    сравнение идёт с translated), да и в предрасчёте видны все пары книги, а
-    не только выбранные --check-type. Дубли пропускаются — проход 2 их тоже
-    пропустит; файл ищется единым поиском core.common; FATAL-сообщения поиска
-    файл не открывают.
+    сравнение идёт с translated), а база статистики собирается по всей книге,
+    а не только по диапазону --start/--end. Дубли пропускаются — проход 2 их
+    тоже пропустит; файл ищется единым поиском core.common; FATAL-сообщения
+    поиска файл не открывают.
     """
     files: dict = {}
     for num, dirs in sorted(chapter_map.items()):
@@ -242,44 +226,44 @@ def pair_ratios(files, check_type, comparisons, counts) -> dict:
 
 
 def log_stats(xs) -> tuple[float, float]:
-    """Центр и разброс отношений объёмов — в логарифмах.
+    """Среднее и разброс отношений объёмов.
 
-    Отношение объёмов мультипликативно: 0.9 и 1.111 — одно и то же
-    отклонение в разные стороны, поэтому центр — медиана логарифмов, а
-    разброс — MAD логарифмов с коэффициентом 1.4826 (у нормального
-    распределения он равен σ). Возвращает (центр в единицах отношения, σ).
+    Среднее — медиана отношений: битые главы не двигают её, пока их меньше
+    половины базы (у арифметического среднего такого предела нет). Разброс
+    (σ, MAD логарифмов × 1.4826) считается только для справки в отчёте —
+    на допуск он не влияет: допуск задан процентом.
     """
     logs = [log(x) for x in xs]
-    center = statistics.median(logs)
-    sigma = 1.4826 * statistics.median(abs(v - center) for v in logs)
-    return exp(center), sigma
+    center = exp(statistics.median(logs))
+    sigma = 1.4826 * statistics.median(abs(v - log(center)) for v in logs)
+    return center, sigma
 
 
 def collect_stats(files, check_type, comparisons, counts,
-                  k_stages: float, k_original: float) -> dict:
+                  tol_stages: float, tol_original: float) -> dict:
     """Статистика каждой пары по отношениям объёмов ВСЕЙ книги.
 
-    Допуск пары — в логарифмах: max(пол, K·σ), K — своя ручка для соседних
-    стадий и для оригинала. При n < SMALL_N разброс выборки не доверяем —
-    допуск расширенного пола. Медиана устойчива, пока битых глав в базе
-    меньше половины, — это честный предел метода.
+    Допуск пары — заданный процент от среднего (медианы отношений): своя
+    ручка для соседних стадий и для оригинала, 0 — пара выключена. От
+    разброса книги допуск не зависит: σ остаётся в статистике только для
+    справки. Медиана устойчива, пока битых глав в базе меньше половины, —
+    это честный предел метода.
 
-    Пара с K = 0 в результат всё равно попадает (`off`): шапка отчёта и
-    предрасчёт формы показывают её как выключенную, а не молчат о ней.
+    Пара с допуском 0 в результат всё равно попадает (`off`): шапка отчёта
+    показывает её как выключенную, а не молчит о ней.
     """
     ratios = pair_ratios(files, check_type, comparisons, counts)
     stats = {}
     for rt, kind in comparisons:
         xs = list(ratios[rt].values())
         n = len(xs)
-        k = k_stages if kind == "stage" else k_original
-        small = n < SMALL_N
-        st = {"kind": kind, "n": n, "k": k, "small": small,
-              "off": k <= 0, "center": 0.0, "sigma": 0.0, "tol": 0.0}
+        tol_pct = tol_stages if kind == "stage" else tol_original
+        st = {"kind": kind, "n": n, "tol_pct": tol_pct,
+              "off": tol_pct <= 0, "center": 0.0, "sigma": 0.0,
+              "tol": 0.0}
         if not st["off"] and n >= 2:
             st["center"], st["sigma"] = log_stats(xs)
-            floor = SMALL_FLOORS[kind] if small else FLOORS[kind]
-            st["tol"] = max(log(1 + floor), k * st["sigma"])
+            st["tol"] = log(1 + tol_pct / 100)
         stats[rt] = st
     return stats
 
@@ -290,160 +274,40 @@ def active(st) -> bool:
 
 
 def bounds(st: dict) -> tuple[float, float]:
-    """Границы допуска пары: центр, раздвинутый на tol в обе стороны."""
+    """Границы допуска пары: среднее, раздвинутое на tol в обе стороны."""
     if not st.get("center"):
         return 0.0, 0.0
     return st["center"] * exp(-st["tol"]), st["center"] * exp(st["tol"])
 
 
-def min_k_for(ratio: float, st: dict) -> int | None:
-    """Наименьшее K, при котором отношение главы влезает в допуск пары.
-
-    Допуск = max(пол, K·σ), поэтому пол K не берёт: разброс нулевой —
-    None, и подсказка честно говорит, что K не поможет.
-    """
-    sigma = st.get("sigma", 0.0)
-    if not st.get("center") or sigma <= 0:
-        return None
-    need = abs(log(ratio / st["center"])) / sigma
-    return ceil(need) if need > st.get("k", 0) else None
-
-
-def stats_payload(check_type: str, ref_type: str, st: dict) -> dict:
-    """Статистика одной пары полями — для предрасчёта в форме запусков.
-
-    Те же числа, что печатает stats_line, но без разбора текста: форма
-    показывает допуск и границы отношения до запуска. `n` и `small` важнее
-    коэффициентов: при малой базе MAD выборки не доверяем и допуск держит
-    расширенный пол — об этом говорит `small`.
-    """
-    lo, hi = bounds(st)
-    return {"check": check_type, "ref": ref_type, "kind": st["kind"],
-            "n": st["n"], "k": st["k"], "small": bool(st["small"]),
-            "off": bool(st["off"]),
-            "median": round(st["center"], 3),
-            "mad": round(st["sigma"] * 100, 2),
-            "tol": round((exp(st["tol"]) - 1) * 100, 2),
-            "lo": round(lo, 3), "hi": round(hi, 3)}
-
-
-def stats_payloads(check_type: str, comparisons, stats: dict) -> list[dict]:
-    """Статистика ВСЕХ пар типа файлов в порядке comparisons.
-
-    Пара, у которой в книге нет ни одного полного набора файлов (n = 0), не
-    отдаётся вовсе: запасная стадия (polished↔translated при наличии
-    redacted) не используется ни одной главой — это не «выключенная пара»,
-    а «такой пары у книги нет», и нулевой допуск в форме был бы ложью.
-    """
-    return [stats_payload(check_type, rt, stats[rt])
-            for rt, _kind in comparisons
-            if rt in stats and stats[rt].get("n", 0) >= 1]
-
-
-def outliers(comparisons, stats: dict, ratios: dict, counts: dict,
-             check_type: str, files: dict, start: int, end: int,
-             min_delta: int = MIN_DELTA_TOKENS, limit: int = 50) -> list:
-    """Главы диапазона, чьё отношение объёма вышло за допуск пары.
-
-    Тот же расчёт, что у volume_error в основном проходе, но без чтения
-    текстов: предпросмотр отвечает на вопрос «сколько глав поймает текущий
-    K» до запуска. Возвращает записи по главам в порядке номеров со списком
-    пар (`pairs` — эталон, отношение, границы).
-    """
-    rows: list[dict] = []
-    nums = set()
-    for rt, _kind in comparisons:
-        nums.update(ratios.get(rt, {}))
-    for num in sorted(nums):
-        if num < start or num > end:
-            continue
-        hits = []
-        stage_failed = False
-        for rt, kind in comparisons:
-            st = stats.get(rt) or {}
-            ratio = ratios.get(rt, {}).get(num)
-            if ratio is None or not active(st):
-                continue
-            lo, hi = bounds(st)
-            if lo <= ratio <= hi:
-                continue
-            # то же правило, что у прогона: расхождение уже названо по
-            # соседней стадии — оригинал не повторяет его второй раз
-            if kind == "original" and stage_failed:
-                continue
-            if kind == "stage":
-                stage_failed = True
-            # отличие в токенах — по тем же числам, что и у прогона
-            row = files.get(num) or {}
-            check_n = counts.get(row.get(check_type, ""), 0)
-            ref_n = counts.get(row.get(rt, ""), 0)
-            if abs(check_n - st["center"] * ref_n) < min_delta:
-                continue
-            hint, need = volume_hint(ratio, st)
-            hits.append({"ref": rt, "ratio": round(ratio, 3),
-                         "lo": round(lo, 3), "hi": round(hi, 3),
-                         "k": need, "hint": hint})
-        if hits:
-            rows.append({"chapter": num, "pairs": hits})
-        if len(rows) >= limit:
-            break
-    return rows
-
-
 def stats_line(check_type: str, ref_type: str, st: dict) -> str:
     """Строка отчёта о статистике одной пары (n = 0 — пустая строка).
 
-    Главное в ней — ГРАНИЦЫ отношения при текущем K: они и означают
+    Главное в ней — ГРАНИЦЫ отношения при текущем допуске: они и означают
     «допуск ±N%». Три знака после запятой, потому что у соседних стадий
-    отношение живёт в третьем знаке (1.000 ± 0.9%) — двумя его не видно.
+    отношение живёт в третьем знаке (1.000 ± 5%) — двумя его не видно.
+    Разброс книги печатается справочно: на допуск он не влияет.
     """
     if st.get("n", 0) < 1:
         return ""  # запасная пара, которой не пользовалась ни одна глава
     if st.get("off"):
         return (f"  {check_type} vs {ref_type}: выключено "
-                f"(чувствительность 0)")
+                f"(допуск 0%)")
     if st["n"] < 2:
         return (f"  {check_type} vs {ref_type}: статистики нет "
                 f"(полных глав {st['n']}) — сравнение пропускается")
     lo, hi = bounds(st)
-    line = (f"  {check_type} vs {ref_type}: глав {st['n']}, "
-            f"медиана {st['center']:.3f}, разброс {st['sigma'] * 100:.2f}%, "
-            f"допуск ±{(exp(st['tol']) - 1) * 100:.2f}% → отношение "
-            f"{lo:.3f}–{hi:.3f} (K={st['k']:g})")
-    if st["small"]:
-        # K напечатан и здесь: читатель ищет его в каждой строке, а при
-        # маленькой базе он ни на что не влияет — поэтому и подпись
-        return line + ", мало глав — разброс выборки не учитывается"
-    return line
+    return (f"  {check_type} vs {ref_type}: глав {st['n']}, "
+            f"среднее {st['center']:.3f}, допуск ±{st['tol_pct']:g}% → "
+            f"отношение {lo:.3f}–{hi:.3f} "
+            f"(разброс книги {st['sigma'] * 100:.2f}%)")
 
 
-def volume_hint(ratio: float, st: dict) -> tuple[str, int | None]:
-    """Подсказка к выбросу и нужный K — ОДНА на отчёт и на предрасчёт.
-
-    Возвращает (текст, K): K — наименьшая ручка, при которой глава влезет
-    в допуск (None — не влезет: допуск держит пол); текст готов к печати.
-    Разрыв больше MAX_HINT_K сигм — уже не разброс книги, а сломанная
-    глава: так и пишем, иначе человек будет крутить настройку до 300.
-    """
-    need = min_k_for(ratio, st)
-    if need is None:
-        return "K не поможет: допуск держит пол, а не разброс книги", None
-    if need > MAX_HINT_K:
-        rel = abs(log(ratio / st["center"]))
-        sigma = rel / st["sigma"] if st["sigma"] else 0.0
-        return (f"правьте главу: это {sigma:.0f}σ разброса книги "
-                f"({(exp(rel) - 1) * 100:+.0f}% объёма), K={MAX_HINT_K} "
-                f"не спасёт"), need
-    return f"пройдёт при K ≥ {need}", need
-
-
-def volume_error(check_label, ref_label, check_n, ref_n, st,
-                 min_delta: int = MIN_DELTA_TOKENS) -> str | None:
+def volume_error(check_label, ref_label, check_n, ref_n, st) -> str | None:
     """Отношение объёмов главы вне допуска пары → строка-ошибка.
 
-    В строке — границы при текущем K и сколько K не хватило: иначе
-    человек не понимает, двигать ли настройку или править главу. Отличие
-    меньше min_delta ТОКЕНОВ ошибкой не считается вовсе.
+    В строке — среднее книги, границы при текущем допуске и допуск в
+    процентах: по ним видно, править главу или ослабить допуск.
     """
     if not ref_n or not check_n or not active(st):
         return None  # пустой файл ловит минимальный размер
@@ -451,15 +315,10 @@ def volume_error(check_label, ref_label, check_n, ref_n, st,
     lo, hi = bounds(st)
     if lo <= ratio <= hi:
         return None
-    dev = abs(check_n - st["center"] * ref_n)
-    if dev < min_delta:
-        return None  # отличие в токенах ниже шума оценки
-    hint, _need = volume_hint(ratio, st)
     return (f"  [{check_label} vs {ref_label}]  отношение объёма "
-            f"{ratio:.3f} → ОШИБКА (вне {lo:.3f}–{hi:.3f} при "
-            f"K={st['k']:g}, медиана книги {st['center']:.3f}; "
-            f"{check_label} {check_n} т., {ref_label} {ref_n} т.; "
-            f"{hint})")
+            f"{ratio:.3f} → ОШИБКА (вне {lo:.3f}–{hi:.3f} при допуске "
+            f"±{st['tol_pct']:g}%, среднее книги {st['center']:.3f}; "
+            f"{check_label} {check_n} т., {ref_label} {ref_n} т.)")
 
 # ──────────────────────────────────────────────
 # ПРОВЕРКА ОДНОЙ ГЛАВЫ
@@ -467,8 +326,7 @@ def volume_error(check_label, ref_label, check_n, ref_n, st,
 def check_chapter(chapter_num, dir_path, check_type, comparisons,
                   strict, prev_inner_chapter, exclusions=None,
                   regexp_checks=None, min_file_size=None,
-                  sequence_check=True, counts=None, stats=None,
-                  min_delta: int = MIN_DELTA_TOKENS):
+                  sequence_check=True, counts=None, stats=None):
     """Возвращает (список_ошибок, обновлённый_prev_inner_chapter).
     В список попадают ТОЛЬКО ошибки и предупреждения поиска.
     exclusions — слова-исключения, по умолчанию load_exclusions().
@@ -482,7 +340,7 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
       предыдущего (N+1).
     counts — токены файлов (scan_files + core.common.count_file_tokens);
     stats — статистика пар (collect_stats): None — объёмные сравнения
-      выключены (обе чувствительности в нуле)."""
+      выключены (оба допуска в нуле)."""
     errors: list[str] = []
     if exclusions is None:
         exclusions = load_exclusions()
@@ -533,7 +391,7 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
             continue  # тот же сдвиг уже назван по соседней стадии
         err = volume_error(check_type, ref_type,
                            counts.get(str(file_path), 0),
-                           counts.get(str(ref_path), 0), st, min_delta)
+                           counts.get(str(ref_path), 0), st)
         if not err:
             continue
         if kind == "original" and stage_checked:
@@ -601,14 +459,13 @@ def build_parser() -> argparse.ArgumentParser:
   REDACTED   vs translated (соседняя) + chapter (оригинал)
   TRANSLATED vs chapter (оригинал)
 Нет промежуточной стадии — пары нет; сравнение идёт с той, что есть.
-Объём: по ВСЕЙ книге собираются отношения объёмов каждой пары; глава
-помечается, если отклонение логарифма отношения вышло за
-max(пол, K·σ), где σ — MAD тех же логарифмов (× 1.4826). K свой у пар
-соседних стадий и у пар с оригиналом. Полы: соседние стадии 0.5%%,
-оригинал 5%%; при базе меньше 5 глав разброс выборки не учитывается
-(оригинал 15%%, соседние 2%%). Обе чувствительности в нуле — объёмные
-сравнения выключены. Отличие меньше --min-delta-tokens ТОКЕНОВ не
-флагуется.
+Объём: по ВСЕЙ книге собираются отношения объёмов каждой пары; среднее
+пары — медиана отношений, глава помечается, если отношение вышло за
+среднее × (1 ± Д%%), где Д — допуск пары в ПРОЦЕНТАХ. Ручки две:
+--tolerance-stages (соседние стадии, по умолчанию 5%%) и
+--tolerance-original (оригинал, по умолчанию 20%%); 0 выключает свою
+группу, обе в нуле — объёмные сравнения выключены. Разброс книги
+печатается в отчёте справочно: на допуск он не влияет.
 Regexp-проверки текста (--regexp-check, по одной на строку): всё
 найденное — ошибка, проверяются ВСЕ строки, включая заголовок главы;
 ^/$ — начало/конец СТРОКИ (multiline); чистый стандартный regexp
@@ -652,27 +509,23 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
                              "regexp-проверок, равные этим словам, в отчёт "
                              "не попадают (пусто = ничего; иначе "
                              "TRANSLATE_CHECK_EXCLUDE_WORDS из .env)")
-    # ── чувствительность объёмной проверки: два параметра человека (пары
-    #    соседних стадий и пары с оригиналом различаются по разбросу на
-    #    порядок); центр и σ пары считает статистика книги
-    parser.add_argument("--sensitivity-stages", type=float, default=None,
-                        metavar="K",
-                        help="K для пар соседних стадий (polished↔redacted, "
-                             "redacted↔translated): допуск = K·σ разброса "
-                             "книги, но не уже пола 0.5%%; статистика "
-                             "собирается по ВСЕЙ книге, помечаются только "
-                             "главы диапазона; 0 — эти пары выключены")
-    parser.add_argument("--sensitivity-original", type=float, default=None,
-                        metavar="K",
-                        help="K для пар с оригиналом (chapter): разброс "
-                             "книги тут ~4.4%%, поэтому K свой; пол 5%%; "
+    # ── допуск объёмной проверки: два параметра человека в ПРОЦЕНТАХ (пары
+    #    соседних стадий и пары с оригиналом расходятся на порядок); среднее
+    #    пары считает статистика книги
+    parser.add_argument("--tolerance-stages", type=float, default=None,
+                        metavar="Д",
+                        help="допуск для пар соседних стадий "
+                             "(polished↔redacted, redacted↔translated), "
+                             "ПРОЦЕНТЫ от среднего объёма (по умолчанию 5): "
+                             "среднее собирается по ВСЕЙ книге, помечаются "
+                             "только главы диапазона; 0 — эти пары выключены")
+    parser.add_argument("--tolerance-original", type=float, default=None,
+                        metavar="Д",
+                        help="допуск для пар с оригиналом (chapter), "
+                             "ПРОЦЕНТЫ от среднего объёма (по умолчанию 20): "
+                             "перевод отходит от оригинала на десятки "
+                             "процентов, у соседних стадий — доли процента; "
                              "0 — пары с оригиналом выключены")
-    parser.add_argument("--min-delta-tokens", type=int, default=None,
-                        metavar="N",
-                        help=f"Отличие от ожидаемого объёма меньше N "
-                             f"ТОКЕНОВ ошибкой не считается (по умолчанию "
-                             f"{MIN_DELTA_TOKENS}): 2%% на главе в 200 "
-                             f"токенов — округление оценки, а не ошибка")
     # ── regexp-проверки текста главы (экспертные)
     parser.add_argument("--regexp-check", action="append", default=[],
                         metavar="RE",
@@ -695,43 +548,6 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
     return parser
 
 
-def collect_book_stats(chapters_dir: str, check_type: str,
-                       k_stages: float, k_original: float, strict: bool,
-                       start: int | None = None,
-                       end: int | None = None,
-                       min_delta: int = MIN_DELTA_TOKENS) -> dict:
-    """Статистика пар по всей книге — одни числа с шапкой отчёта.
-
-    Тот же проход (scan_files → count_file_tokens → collect_stats), но без
-    записи отчёта: форма запусков показывает допуск ДО прогона. `outliers` —
-    главы диапазона вне допуска: по ним видно, что дадут текущие K. Пары
-    строятся по тем типам файлов, что в книге реально есть (цепочка стадий),
-    поэтому объём прохода задаёт набор файлов, а не выбранный --check-type.
-    """
-    chapter_map = build_chapter_map(chapters_dir)
-    if not chapter_map:
-        return {"type": check_type, "chapters": 0, "start": 0, "end": 0,
-                "stats": [], "outliers": []}
-    comparisons = comparisons_for(check_type)
-    files = scan_files(chapter_map, check_type, comparisons, strict)
-    comparisons = comparisons_for(check_type, present_from(files))
-    counts = count_file_tokens(
-        sorted({p for row in files.values() for p in row.values()}))
-    ratios = pair_ratios(files, check_type, comparisons, counts)
-    stats = collect_stats(files, check_type, comparisons, counts,
-                          k_stages, k_original)
-    lo = min(chapter_map) if start is None else start
-    hi = max(chapter_map) if end is None else end
-    # обе ручки в нуле — пара не считается самим запуском (`active`), значит и
-    # выбросов нет: иначе форма показала бы ошибки, которых прогон не найдёт
-    found = outliers(comparisons, stats, ratios, counts, check_type, files,
-                     lo, hi, min_delta)
-    return {"type": check_type, "chapters": len(chapter_map),
-            "start": lo, "end": hi,
-            "stats": stats_payloads(check_type, comparisons, stats),
-            "outliers": found}
-
-
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -747,13 +563,12 @@ def main() -> None:
     print("    Скрипт проверки перевода")
     print("======================================")
 
-    k_stages = float(args.sensitivity_stages)
-    k_original = float(args.sensitivity_original)
-    if k_stages < 0 or k_original < 0:
-        sys.exit("Ошибка: чувствительности — числа ≥ 0 (0 = пары выключены).")
-    volume_on = k_stages > 0 or k_original > 0
-    min_delta = (MIN_DELTA_TOKENS if args.min_delta_tokens is None
-                 else max(0, args.min_delta_tokens))
+    tol_stages = float(args.tolerance_stages)
+    tol_original = float(args.tolerance_original)
+    if tol_stages < 0 or tol_original < 0:
+        sys.exit("Ошибка: допуски — числа ≥ 0, ПРОЦЕНТЫ "
+                 "(0 = пары выключены).")
+    volume_on = tol_stages > 0 or tol_original > 0
 
     # ── карта глав: единый канон из core.common ──
     chapter_map = build_chapter_map(chapters_dir)
@@ -807,7 +622,7 @@ def main() -> None:
         sorted({p for row in files.values() for p in row.values()})) \
         if volume_on else {}
     stats = collect_stats(files, check_type, comparisons, counts,
-                          k_stages, k_original) if volume_on else {}
+                          tol_stages, tol_original) if volume_on else {}
 
     print("--------------------------------------")
     print(f"Найден диапазон глав: {auto_min} – {auto_max} "
@@ -831,10 +646,9 @@ def main() -> None:
         f"Запуск        : {shlex.join(sys.argv)}\n"
         f"Диапазон глав : {start_cap} – {end_cap}\n"
         f"Папка глав    : {os.path.abspath(chapters_dir)}\n"
-        f"Счёт объёма   : {unit}; чувствительность K="
-        f"{k_stages:g} (соседние стадии) / {k_original:g} (оригинал)"
+        f"Счёт объёма   : {unit}; допуск {tol_stages:g}% (соседние стадии) "
+        f"/ {tol_original:g}% (оригинал)"
         f"{'' if volume_on else ' — объёмные сравнения выключены'}\n"
-        f"Мин. отличие  : {min_delta} т.\n"
         f"Regexp-проверки: {'; '.join(rx.pattern for rx in regexp_checks)}\n"
         f"Мин. размер   : {min_file_size} Б\n"
         f"Последоват.   : {'вкл' if sequence_check else 'выкл'}\n"
@@ -858,8 +672,8 @@ def main() -> None:
     # Фактическая команда запуска
     print(f"Запуск: {shlex.join(sys.argv)}")
     print(f"Запуск проверки ({check_type})…")
-    print(f"Счёт объёма: {unit}; K={k_stages:g} (соседние стадии), "
-          f"{k_original:g} (оригинал)")
+    print(f"Счёт объёма: {unit}; допуск {tol_stages:g}% (соседние стадии), "
+          f"{tol_original:g}% (оригинал)")
     if volume_on:
         print("Статистика (по всей книге):")
         for rt, _k in comparisons:
@@ -901,7 +715,6 @@ def main() -> None:
             sequence_check=sequence_check,
             counts=counts if volume_on else None,
             stats=stats if volume_on else None,
-            min_delta=min_delta,
         )
 
         # ---- консоль: всегда показываем прогресс ----

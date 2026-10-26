@@ -238,8 +238,8 @@ def _notes_put(ctx: dict) -> dict:
 def _parse_check_stats(text: str) -> list[dict]:
     """Блок «Статистика» отчёта translate_check → строки пар.
 
-    Строка: `  polished vs redacted: глав 1320, медиана 0.999, разброс 0.13%,
-    допуск ±0.91% → отношение 0.991–1.009 (K=7)`; у пары без базы вместо
+    Строка: `  polished vs redacted: глав 1320, среднее 0.999, допуск ±5%
+    → отношение 0.949–1.049 (разброс книги 0.13%)`; у пары без базы вместо
     чисел — «статистики нет», у выключенной — «выключено». Чего в строке нет
     (старый отчёт), остаётся None — вьюха такую пару просто не рисует.
     """
@@ -258,7 +258,7 @@ def _parse_check_stats(text: str) -> list[dict]:
         if not m:
             continue
         check_type, ref_type, rest = m.groups()
-        med = num(r"медиана ([\d.]+)", rest)
+        med = num(r"среднее ([\d.]+)", rest) or num(r"медиана ([\d.]+)", rest)
         tol = num(r"допуск ±([\d.]+)%", rest)
         lo = hi = None
         bounds = re.search(r"отношение ([\d.]+)–([\d.]+)", rest)
@@ -273,10 +273,11 @@ def _parse_check_stats(text: str) -> list[dict]:
             "chapters": int(num(r"глав (\d+)", rest) or 0),
             "median": med,
             # MAD старого отчёта и σ нового — одно поле вьюхи
-            "mad": num(r"(?:MAD|разброс) ([\d.]+)%", rest),
+            "mad": num(r"(?:MAD|разброс)(?: книги)? ([\d.]+)%", rest),
             "tol": tol,
             "lo": lo,
             "hi": hi,
+            # старый отчёт печатал коэффициент K и признак малой базы
             "k": num(r"K=([\d.]+)", rest),
             "small": "мало глав" in rest,
             "off": "выключено" in rest,

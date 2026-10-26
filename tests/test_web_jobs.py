@@ -1067,19 +1067,20 @@ def test_build_translate_check():
 
 
 def test_build_translate_check_custom_settings():
-    """Две чувствительности, минимальное отличие и regexp — в argv.
+    """Два допуска в процентах и regexp — в argv.
 
-    Соседние стадии и оригинал различаются по разбросу на порядок, поэтому
-    ручек две; старая одна (--sensitivity) в сборке отсутствует.
+    Соседние стадии и оригинал расходятся на порядок, поэтому ручек две;
+    снятые коэффициенты K и «мин. отличие» в сборке отсутствуют.
     """
-    form = {"check_type": "polished", "sensitivity_stages": 7,
-            "sensitivity_original": 3, "min_delta_tokens": 150,
+    form = {"check_type": "polished", "tolerance_stages": 5,
+            "tolerance_original": 20,
             "regexp_checks": "[一-鿿]+ # иероглифы\n[a-zA-Z]+\n"}
     argv = build_command("translate_check", form, {})
-    assert "--sensitivity-stages" in argv and "7" in argv
-    assert "--sensitivity-original" in argv and "3" in argv
-    assert "--min-delta-tokens" in argv and "150" in argv
-    assert "--sensitivity" not in argv
+    assert "--tolerance-stages" in argv and "5" in argv
+    assert "--tolerance-original" in argv and "20" in argv
+    for gone in ("--sensitivity-stages", "--sensitivity-original",
+                 "--sensitivity", "--min-delta-tokens"):
+        assert gone not in argv, gone
     assert "--regexp-check" in argv
     assert argv.count("--regexp-check") == 2
     # строка уходит как есть (комментарий срезает сам CLI)
@@ -1093,8 +1094,7 @@ def test_build_translate_check_custom_settings():
     argv2 = build_command("translate_check",
                           {"check_type": "polished"}, {})
     for flag in ("--neighbor", "--original", "--regexp-check",
-                 "--sensitivity-stages", "--sensitivity-original",
-                 "--min-delta-tokens"):
+                 "--tolerance-stages", "--tolerance-original"):
         assert flag not in argv2
 
 

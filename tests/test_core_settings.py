@@ -535,25 +535,33 @@ def test_effective_file_over_registry(monkeypatch, tmp_path):
     assert S.stage_values("ner")["chunk_size"] == 1500
 
 
-def test_env_alias_old_sensitivity(monkeypatch, tmp_path):
-    """Снятый ключ TRANSLATE_CHECK_SENSITIVITY читается как новая ручка.
+def test_env_alias_empty_for_changed_semantics(monkeypatch, tmp_path):
+    """Смена смысла ключа не переносится через ENV_ALIAS.
 
-    Старое значение — одна ручка на всё: она достаётся более широкой группе
-    (пары с оригиналом), а узкая остаётся дефолтом реестра. Файл при этом не
-    переписывается — конфиг человека работает как есть, без миграции.
+    `TRANSLATE_CHECK_SENSITIVITY_STAGES=7` означал «семь разбросов книги», а
+    поле с тем же именем означало бы «допуск 7%» — молча подставленное
+    значение врало бы в разы. Такие ключи остаются в старом .env
+    нечитаемыми, действуют дефолты реестра.
     """
+    assert S.ENV_ALIAS == {}
     env = tmp_path / "shared.env"
-    env.write_text("TRANSLATE_CHECK_SENSITIVITY=9\n", encoding="utf-8")
+    env.write_text("TRANSLATE_CHECK_SENSITIVITY=9\n"
+                   "TRANSLATE_CHECK_SENSITIVITY_STAGES=7\n"
+                   "TRANSLATE_CHECK_MIN_DELTA_TOKENS=150\n",
+                   encoding="utf-8")
     monkeypatch.setenv("WEB_ENV_FILE", str(env))
     for key in ("TRANSLATE_CHECK_SENSITIVITY",
-                "TRANSLATE_CHECK_SENSITIVITY_ORIGINAL"):
+                "TRANSLATE_CHECK_SENSITIVITY_STAGES",
+                "TRANSLATE_CHECK_SENSITIVITY_ORIGINAL",
+                "TRANSLATE_CHECK_MIN_DELTA_TOKENS",
+                "TRANSLATE_CHECK_TOLERANCE_STAGES",
+                "TRANSLATE_CHECK_TOLERANCE_ORIGINAL"):
         monkeypatch.delenv(key, raising=False)
-    assert S.effective("TRANSLATE_CHECK_SENSITIVITY_ORIGINAL") == 9
-    assert S.effective("TRANSLATE_CHECK_SENSITIVITY_STAGES") == 7
-    # новое значение в файле перекрывает старое
-    env.write_text("TRANSLATE_CHECK_SENSITIVITY=9\n"
-                   "TRANSLATE_CHECK_SENSITIVITY_ORIGINAL=4\n", encoding="utf-8")
-    assert S.effective("TRANSLATE_CHECK_SENSITIVITY_ORIGINAL") == 4
+    assert S.effective("TRANSLATE_CHECK_TOLERANCE_STAGES") == 5
+    assert S.effective("TRANSLATE_CHECK_TOLERANCE_ORIGINAL") == 20
+    # новое имя в файле работает как обычно
+    env.write_text("TRANSLATE_CHECK_TOLERANCE_ORIGINAL=35\n", encoding="utf-8")
+    assert S.effective("TRANSLATE_CHECK_TOLERANCE_ORIGINAL") == 35
 
 
 def test_effective_env_over_file(monkeypatch, tmp_path):

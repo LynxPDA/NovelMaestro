@@ -1229,8 +1229,15 @@ def test_parse_check_stats_bounds():
     # выключенная ручка: чисел допуска нет, признак стоит — вьюха говорит
     # «выключено», а не рисует полосу из нулей
     off = _parse_check_stats(
-        "  polished vs chapter: выключено (чувствительность 0)\n")[0]
+        "  polished vs chapter: выключено (допуск 0%)\n")[0]
     assert off["off"] is True and off["lo"] is None
+    # нынешний формат: допуск в процентах, разброс книги — справочно
+    cur = _parse_check_stats(
+        "  polished vs redacted: глав 601, среднее 1.000, допуск ±5% → "
+        "отношение 0.950–1.050 (разброс книги 0.13%)\n")[0]
+    assert cur["median"] == pytest.approx(1.0) and cur["tol"] == pytest.approx(5.0)
+    assert (cur["lo"], cur["hi"]) == pytest.approx((0.950, 1.050))
+    assert cur["mad"] == pytest.approx(0.13)
 
 
 def test_check_reports_endpoint(srv, tmp_path):
