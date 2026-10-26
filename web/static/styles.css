@@ -3794,6 +3794,48 @@ body[data-editor-theme="light"] .editor-area {
     scroll-snap-align: start;
   }
 
+  /* Общая беда узких панелей: в строке из кнопок и подписей содержимое
+     сжималось вместо переноса — подпись рвалась на буквы, у кнопки
+     срезалось слово («Выбрать все»). Поэтому панели-строки переносятся,
+     а их дети держат ширину по своему содержимому. */
+  .ner-chips-bar,
+  .selection-bar,
+  .review-summary,
+  .run-range-row,
+  .files-sel,
+  .files-tools,
+  .chapters-toolbar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .ner-chips-bar > *,
+  .selection-bar > *,
+  .review-summary > * {
+    flex: 0 0 auto;
+  }
+  /* пояснение к чипсам — своей строкой: рядом с кнопками оно
+     сжималось в вертикальный столбик из отдельных слов */
+  .ner-chips-bar .field-help {
+    flex: 1 1 100%;
+  }
+  /* Шапка карточки с действием («Обновить», «Очистить»): подпись переносится,
+     а кнопка не сжимается и держится правого края */
+  .dash-jobs .card-title {
+    gap: 10px;
+    align-items: flex-start;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .dash-jobs .card-title > .btn {
+    flex: none;
+    margin-left: auto;
+  }
+  /* Панель выделения: счётчик не рвётся на две строки */
+  .selection-bar .selection-count,
+  .files-sel .files-sel-count {
+    white-space: nowrap;
+  }
+
   /* тулбары («Файлы», «Глоссарий», «Поиск», «Логи»…): элементы идут
      строками, поле поиска тянется, кнопки — вправо */
   .files-toolbar {
@@ -3813,6 +3855,11 @@ body[data-editor-theme="light"] .editor-area {
   .files-tools {
     margin-left: auto;
   }
+  /* панель выделения и панель кнопок делят одно место в тулбаре: обе
+     не тянутся на всю строку, иначе пропадает зазор справа */
+  .files-sel {
+    justify-content: flex-end;
+  }
   /* главное действие тулбара прижимается вправо и когда переносится
      на свою строку (заметки, промпты, редактор): одинокая кнопка у левого
      края читалась как часть соседней группы */
@@ -3824,6 +3871,30 @@ body[data-editor-theme="light"] .editor-area {
   .crumbs {
     max-width: 100%;
     overflow-wrap: anywhere;
+  }
+
+  /* Подписи полей и заголовки: длинный текст переносится по словам,
+     а не вылезает за карточку (подпись рисовалась одной строкой) */
+  .field-label,
+  .field-help,
+  .card-title {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  /* ...но не те, что стоят рядом с контролом в одну строку (редактор,
+     тулбары): там подпись из двух-трёх слов и держится целиком */
+  .ed-pane-bar .field-help,
+  .files-toolbar .field-help {
+    white-space: nowrap;
+  }
+  /* поле формы в колонке не разгоняет карточку своим содержимым */
+  .settings-fields .field,
+  .run-form .field {
+    min-width: 0;
+  }
+  .settings-fields .field > *,
+  .run-form .field > * {
+    max-width: 100%;
   }
 
   /* строка файла: имя и метаданные переносятся, действия никуда не уходят */

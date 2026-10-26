@@ -3710,6 +3710,137 @@ async function main() {
     );
   }
 
+  /* ── мобильный вид ────────────────────────────────────────────────────
+   * Телефон — второй реальный режим интерфейса: панели с кнопками и подписями
+   * на узком экране сжимаются, и текст уезжает за край или рвётся по буквам.
+   * Проверяются три вещи без прокрутки страницы: выход за левый/правый край,
+   * обрезка подписи внутри кнопки и наложение соседей в гибком контейнере.
+   * Тач-вьюпорт и `pointer: coarse` тоже важны: размеры кнопок другие. */
+  {
+    const before = problems.length;
+    const MOB = ["390", "320"];
+    const screens = [
+      ["hub", "#/hub"],
+      ["run", `#/project/${SECTION}/${BOOK}/run`],
+      ["files", `#/project/${SECTION}/${BOOK}/files`],
+      ["ner", `#/project/${SECTION}/${BOOK}/ner`],
+      ["review", `#/project/${SECTION}/${BOOK}/review`],
+      ["chapters", `#/project/${SECTION}/${BOOK}/chapters`],
+      ["logs", `#/project/${SECTION}/${BOOK}/logs`],
+      ["dashboard", "#/dashboard"],
+      ["settings", "#/settings"],
+    ];
+    const seen = [];
+    for (const w of MOB) {
+      const mctx = await browser.newContext({
+        viewport: { width: Number(w), height: 844 },
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+      });
+      const mpage = await mctx.newPage();
+      for (const [name, hash] of screens) {
+        await mpage.goto(`${url}/${hash}`, { waitUntil: "load" });
+        await mpage.waitForTimeout(900);
+        const found = await mpage.evaluate(() => {
+          const vw = document.documentElement.clientWidth;
+          const live = (el) => {
+            const cs = getComputedStyle(el);
+            return cs.display !== "none" && cs.visibility !== "hidden"
+              && el.getBoundingClientRect().width > 0;
+          };
+          // прокручиваемые по горизонтали области (вкладки, таблицы) — так и задумано
+          const scrolled = (el) => {
+            for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+              if (/(auto|scroll|hidden)/.test(getComputedStyle(p).overflowX)) return true;
+            }
+            return false;
+          };
+          const out = [];
+          for (const el of document.querySelectorAll("#app *")) {
+            if (!live(el) || scrolled(el)) continue;
+            const r = el.getBoundingClientRect();
+            if (r.right > vw + 1 || r.left < -1) {
+              out.push(`край: ${el.tagName.toLowerCase()}.`
+                + `${String(el.className).split(/\s+/)[0]}`
+                + ` «${(el.textContent || "").trim().slice(0, 28)}»`);
+            }
+          }
+          // кнопки и подписи: текст не влез в свою ширину
+          for (const el of document.querySelectorAll(
+            "#app .btn, #app .tab, #app .field-help, #app .selection-count, "
+            + "#app .files-sel-count, #app .review-status, #app .field-label")) {
+            if (!live(el) || el.children.length) continue;
+            if (el.scrollWidth > el.clientWidth + 2) {
+              out.push(`обрезка: «${(el.textContent || "").trim().slice(0, 24)}»`
+                + ` ${el.clientWidth}<${el.scrollWidth}`);
+            }
+          }
+          // соседи в гибком контейнере не должны лежать друг на друге
+          for (const box of document.querySelectorAll("#app *")) {
+            const cs = getComputedStyle(box);
+            if (!/flex|grid/.test(cs.display) || !live(box)) continue;
+            const kids = [...box.children].filter(live);
+            const rs = kids.map((k) => ({ k, r: k.getBoundingClientRect() }));
+            for (let i = 0; i < rs.length; i += 1) {
+              for (let j = i + 1; j < rs.length; j += 1) {
+                const a = rs[i].r, b = rs[j].r;
+                const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+                const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+                if (ox > 2 && oy > 2) {
+                  out.push(`наложение: «${(rs[i].k.textContent || "").trim().slice(0, 16)}»`
+                    + ` ∩ «${(rs[j].k.textContent || "").trim().slice(0, 16)}»`);
+                }
+              }
+            }
+          }
+          return [...new Set(out)].slice(0, 6);
+        });
+        if (SHOT) {
+          await mpage.screenshot({
+            path: path.join(OUT, `mobile-${w}-${name}.png`), fullPage: false,
+          });
+        }
+        for (const f of found) problems.push(`мобильный ${w}px ${name}: ${f}`);
+        seen.push(`${w}/${name}${found.length ? "✗" : ""}`);
+      }
+      // панель выделения в глоссарии — самый узкий бар с иконками и счётчиком
+      await mpage.goto(`${url}/#/project/${SECTION}/${BOOK}/ner`, { waitUntil: "load" });
+      await mpage.waitForSelector(".ner-table tbody .ner-row", { timeout: 15000 });
+      const all = mpage.locator(".ner-th-sel .fsel");
+      if (await all.count()) {
+        await all.first().click();
+        await mpage.waitForTimeout(600);
+        const bar = await mpage.evaluate(() => {
+          const el = document.querySelector(".files-sel-count");
+          const box = document.querySelector(".project-body .files-sel");
+          if (!el || !box) return null;
+          return {
+            text: (el.textContent || "").trim(),
+            cut: el.scrollWidth > el.clientWidth + 2,
+            wide: Math.round(box.getBoundingClientRect().width),
+          };
+        });
+        if (!bar) problems.push(`мобильный ${w}px глоссарий: панель выделения не найдена`);
+        else {
+          if (bar.cut) problems.push(`мобильный ${w}px глоссарий: счётчик «${bar.text}» обрезан`);
+          if (!bar.text.startsWith("выделено: ")) {
+            problems.push(`мобильный ${w}px глоссарий: счётчик «${bar.text}»`);
+          }
+        }
+        if (SHOT) {
+          await mpage.screenshot({
+            path: path.join(OUT, `mobile-${w}-ner-select.png`), fullPage: false,
+          });
+        }
+      }
+      await mctx.close();
+    }
+    log(`${problems.length === before ? "✅" : "❌"} мобильный вид ${seen.join(" ")}`
+      + (problems.length > before
+        ? `\n     ${problems.slice(before).join("\n     ")}` : ""));
+  }
+
   await browser.close();
   if (own) own.kill("SIGKILL");
   fs.writeFileSync(
