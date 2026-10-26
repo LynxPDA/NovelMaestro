@@ -536,6 +536,46 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
+/* карточка упакованного проекта: имя и действия те же, но книга на диске —
+   один файл, и «Открыть» у неё нет (сначала разархивация) */
+.card-archived {
+  border-style: dashed;
+}
+.card-archived .card-title {
+  color: var(--muted);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.card-check {
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+.badge-archive {
+  margin-left: 8px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-weight: 400;
+}
+/* панель выделения заменяет кнопки тулбара, пока есть отмеченные книги */
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 14px 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.selection-count {
+  font-weight: 600;
+  font-size: 13px;
+}
 
 .m1-note {
   margin-top: 22px;
