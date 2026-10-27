@@ -397,6 +397,32 @@
     for (var i = 0; i + n <= s.length; i++) out[s.slice(i, i + n)] = true;
     return out;
   }
+  /* Окончания, которые могут дописываться к готовому термину: падеж,
+   * число, род. Только они: любой другой хвост — другая основа («Пол» →
+   * «польза», «Вес» → «весна»), а не форма того же слова. Порядок
+   * проверки — от длинных к коротким (см. INFLECTION_MAX). */
+  var INFLECTIONS = [
+    "ами", "ями", "ого", "его", "ому", "ему", "ыми", "ими",
+    "ов", "ев", "ам", "ям", "ах", "ях", "ом", "ем", "ой", "ей",
+    "а", "я", "у", "ю", "е", "ы", "и", "ь"
+  ].sort(function (a, b) { return b.length - a.length; });
+  /* хвост длиннее самого длинного окончания — уже не форма термина */
+  var INFLECTION_MAX = 3;
+  /* замена одной буквы в конце (падеж с беглой гласной): «нити» от «нить»,
+   * «Хунга» от «Хунг» */
+  function isInflected(termNorm, wordNorm) {
+    if (wordNorm === termNorm) return true;
+    if (!wordNorm.startsWith(termNorm)) {
+      if (wordNorm.length !== termNorm.length) return false;
+      if (!wordNorm.slice(0, -1).startsWith(termNorm.slice(0, -1))) return false;
+      var a = wordNorm.slice(-1), b = termNorm.slice(-1);
+      return "аяуеыиоьйя".indexOf(a) >= 0 && "аяуеыиоьйя".indexOf(b) >= 0;
+    }
+    var rest = wordNorm.slice(termNorm.length);
+    if (rest.length > INFLECTION_MAX) return false;
+    return INFLECTIONS.indexOf(rest) >= 0;
+  }
+
   /* самая длинная общая подстрока — проверка из _fuzzy_hit */
   function longestCommonSubstring(a, b) {
     if (!a || !b) return 0;
@@ -1909,21 +1935,23 @@
               t2++;
             var wordNorm = normalizeForSearch(src.slice(f2, t2));
             if (!wordNorm) continue;
-            /* принять: слово = термин; корень + окончание/падеж (термин —
-               префикс слова, не длиннее +3 — иначе «который» матчится на «кот»,
-               «морали»/«залил» — на «А-Ли»); либо строгий аналог _fuzzy_hit
-               с жёстким ограничением лишних n-грамм слова */
-            var hitWord = wordNorm === en;
-            if (!hitWord && wordNorm.length <= en.length + 3) {
-              hitWord = wordNorm.startsWith(en);
-            }
+            /* принять: слово = термин или его форма (падеж/число/род —
+               
+               `isInflected`); иначе строгий аналог _fuzzy_hit с жёстким
+               ограничением лишних n-грамм слова */
+            var wgrams = getNgrams(wordNorm, n);
+            var inter = 0;
+            for (var wg in wgrams) if (engrams[wg]) inter++;
+            var gramsOk = inter / gramKeys.length >= threshold &&
+              Object.keys(wgrams).length <= gramKeys.length + 1;
+            /* форма слова, а не другая основа: «полом»/«полем» от «Пол» —
+               да, «польза» от «Пол» — нет. Одной длины хвоста мало: основ
+               короткого термина хватает всем («пол» → «польза»/«польский»),
+               поэтому решает список окончаний, а не число букв */
+            var hitWord = isInflected(en, wordNorm);
             if (!hitWord) {
-              var wgrams = getNgrams(wordNorm, n);
-              var inter = 0;
-              for (var wg in wgrams) if (engrams[wg]) inter++;
               if (
-                inter / gramKeys.length >= threshold &&
-                Object.keys(wgrams).length <= gramKeys.length + 1 &&
+                gramsOk &&
                 /* общая подстрока >= доли длины по порогу (не жёсткие 0.8):
                    «нити» от «нить» (3/4 = 0.75) находится при пороге 0.1
                    и даже 0.75; «который»/«морали» отсекаются лишними
