@@ -663,6 +663,22 @@ def _section_props_set(ctx: dict) -> dict:
             "props": prj.section_props(root, str(res))}
 
 
+def _project_storage(ctx: dict, section: str, name: str):
+    """Как книга лежит на диске: `pack` (папкой) | `unpack` (архивом) | None.
+
+    Имена — вид операции, которой книга ещё НЕ потребует: лежащую папкой
+    надо упаковать, лежащую архивом — распаковать. Одна точка правды и для
+    пачки по явному списку, и для проверок карточки.
+    """
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    if prj.project_dir(root, section, name).is_dir():
+        return "pack"
+    if core_archive.archive_path(root / section, name).is_file():
+        return "unpack"
+    return None
+
+
 def _projects_archive(ctx: dict) -> dict:
     """Массовая архивация/разархивация: `{items, op}` → чтó сделано.
 
@@ -697,6 +713,21 @@ def _projects_archive(ctx: dict) -> dict:
         if busy is not None:
             skipped.append({"section": section, "name": name,
                             "reason": f"идёт запуск «{busy.title}»"})
+            continue
+        # Вид операции обязан совпадать с тем, как книга лежит на диске:
+        # «Выделить все» отмечает весь раздел, и пачка «Распаковать» тащила
+        # живые папки в скрипт, который на каждой отвечал «уже распакован» —
+        # запуск завершался «готово: 1 из 3». Смотрим диск, а не ответ
+        # клиента: карточка могла устареть.
+        storage = _project_storage(ctx, section, name)
+        if storage is None:
+            skipped.append({"section": section, "name": name,
+                            "reason": "книга не найдена"})
+            continue
+        if storage != op:
+            skipped.append({"section": section, "name": name,
+                            "reason": ("уже упакована" if op == "pack"
+                                       else "уже распакована")})
             continue
         todo.append((section, name))
     if not todo:

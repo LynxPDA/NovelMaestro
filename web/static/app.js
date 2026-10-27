@@ -1221,12 +1221,32 @@ async function archiveSelected(op) {
     `${verb} ${items.length} проект(ов)? Архив — обычный tar+zstd, его можно открыть любым архиватором; вернуть книгу можно кнопкой «Разархивировать».`,
     verb,
     async () => {
-      const r = await api("/projects/archive", {
-        method: "POST",
-        body: { op, items },
-      });
+      let r;
+      try {
+        r = await api("/projects/archive", {
+          method: "POST",
+          body: { op, items },
+        });
+      } catch (ex) {
+        toast(ex.message, "err");
+        return;
+      }
+      /* Работу считает сервер: «Выделить все» отмечает раздел целиком, а
+         книга, уже лежащая в нужном виде, в пачку не попадает.
+         Подтверждение на диске — ответ сервера, а не наше предположение. */
+      const done = r.items || [];
+      if (!done.length) {
+        const reasons = (r.skipped || []).map((s) => `${s.name}: ${s.reason}`);
+        toast(
+          reasons.length ? `${verb}: ${reasons.join(", ")}` : `${verb}: нечего делать`,
+          "err",
+        );
+        hubSelection = new Set();
+        refreshHub();
+        return;
+      }
       hubSelection = new Set();
-      await afterArchiveStart(r, items, verb);
+      await afterArchiveStart(r, done, verb);
     },
   );
 }

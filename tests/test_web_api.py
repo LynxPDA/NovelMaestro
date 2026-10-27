@@ -2815,6 +2815,66 @@ def test_archive_pack_unpack_roundtrip(archive_srv):
     assert not arc_file.is_file(), "архив не убран после распаковки"
 
 
+def test_archive_batch_takes_only_matching_storage(archive_srv):
+    """Пачка берёт только книги в нужном виде: «Выделить все» отмечает
+    раздел целиком, и «Разархивировать» тащило в запуск живые папки —
+    скрипт отвечал на каждую «уже распакован», а запуск заканчивался
+    «готово: 1 из 3». Причины отказа видны в `skipped`."""
+    _, port, projects_root = archive_srv()
+    for name in ("packed_one", "live_two"):
+        _create_project(port, projects_root, name=name)
+    jm = _job_manager(port)
+    pdir = projects_root / "ACTIVE" / "packed_one"
+
+    res, payload = _request(port, "POST", "/api/projects/archive", {
+        "op": "pack", "items": [{"section": "ACTIVE", "name": "packed_one"}]})
+    assert res.status == 200, payload
+    _wait_job(jm, payload["job"]["id"])
+    assert not pdir.is_dir()
+
+    everything = [{"section": "ACTIVE", "name": "packed_one"},
+                  {"section": "ACTIVE", "name": "live_two"}]
+    res, payload = _request(port, "POST", "/api/projects/archive",
+                            {"op": "unpack", "items": everything})
+    assert res.status == 200, payload
+    # в работу ушла только упакованная книга
+    assert [i["name"] for i in payload["items"]] == ["packed_one"]
+    skipped = {i["name"]: i["reason"] for i in payload["skipped"]}
+    assert skipped == {"live_two": "уже распакована"}
+    _wait_job(jm, payload["job"]["id"])
+    assert pdir.is_dir(), "упакованная книга не вернулась папкой"
+
+    # обратное направление: теперь папки живые, а архивов нет
+    res, payload = _request(port, "POST", "/api/projects/archive",
+                            {"op": "pack", "items": everything})
+    assert res.status == 200, payload
+    assert sorted(i["name"] for i in payload["items"]) == ["live_two", "packed_one"]
+    assert not payload["skipped"]
+
+
+def test_archive_batch_reports_nothing_to_do(archive_srv):
+    """Выделено всё, но всё уже в нужном виде: запуска нет, причина названа
+    (иначе человек видел бы пустое подтверждение и не понял, что произошло)."""
+    _, port, projects_root = archive_srv()
+    _create_project(port, projects_root)
+    res, payload = _request(port, "POST", "/api/projects/archive", {
+        "op": "unpack", "items": [{"section": "ACTIVE", "name": "test_book"}]})
+    assert res.status == 200, payload
+    assert payload["items"] == [] and payload["job"] is None
+    assert payload["skipped"][0]["reason"] == "уже распакована"
+    assert (projects_root / "ACTIVE" / "test_book").is_dir()
+
+
+def test_archive_batch_reports_missing_book(archive_srv):
+    """Книги нет ни папкой, ни архивом — отказ с причиной, а не молчание."""
+    _, port, _root = archive_srv()
+    res, payload = _request(port, "POST", "/api/projects/archive", {
+        "op": "pack", "items": [{"section": "ACTIVE", "name": "нет_такой"}]})
+    assert res.status == 200, payload
+    assert payload["items"] == [] and payload["job"] is None
+    assert payload["skipped"][0]["reason"] == "книга не найдена"
+
+
 def test_archive_rejects_bad_requests(archive_srv):
     _, port, _root = archive_srv()
     res, payload = _request(port, "POST", "/api/projects/archive",

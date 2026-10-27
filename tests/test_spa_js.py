@@ -835,6 +835,19 @@ def test_hub_section_has_select_all_instead_of_archive_all():
     assert "const allSelected = projects.length > 0" in block
 
 
+def test_archive_selected_uses_server_answer():
+    """Подтверждение пачки — ответ сервера, а не наш список: «Выделить все»
+    отмечает раздел целиком, и книга, уже лежащая в нужном виде, в работу не
+    попадает. Иначе тост обещал «Упаковать: 3», хотя упаковали одну."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    fn = app[app.index("async function archiveSelected("):
+             app.index("/* После создания запуска архивации:")]
+    assert "const done = r.items || [];" in fn
+    assert "await afterArchiveStart(r, done, verb);" in fn
+    # пустой ответ — причина из skipped, а не пустой тост
+    assert "reasons.length ?" in fn and "s.reason" in fn
+
+
 def test_hub_create_button_label():
     """Кнопка создания проекта — «＋ Проект»: шапка хаба держит рядом два
     действия, и длинная подпись занимала строку целиком. Проба интерфейса
