@@ -848,6 +848,41 @@ def test_archive_selected_uses_server_answer():
     assert "reasons.length ?" in fn and "s.reason" in fn
 
 
+def test_hub_card_click_reaches_text():
+    """Клик по ТЕКСТУ карточки открывает книгу: почти вся её площадь занята
+    текстом, и пока содержимое лежало над ссылкой-слоем, кликабельным
+    оставалось только пустое место у края. Текст пропускает клик насквозь,
+    а контролы (чекбокс, шестерёнка, действия) возвращают его себе."""
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+    card = css[css.index(".project-card > *:not(.card-open)"):
+               css.index("/* шестерёнка в правом верхнем углу")]
+    assert "pointer-events: none;" in card
+    assert ".project-card .card-check," in card
+    assert ".project-card .card-gear," in card
+    assert "pointer-events: auto;" in card
+    # подсветка при наведении — от карточки: слой под текстом не ловит :hover
+    assert ".project-card:has(.card-open:hover)" in css
+
+
+def test_selection_bar_buttons_are_plain():
+    """В панели выделения одна операция не главная: «Архивировать» была
+    зелёной (btn-primary) и читалась как «правильный ответ», хотя рядом
+    равноправное «Разархивировать»."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    bar = app[app.index("function selectionBar()"):app.index("async function viewHub()")]
+    assert "btn-primary" not in bar
+    assert bar.count('"btn btn-sm btn-ghost"') >= 4
+
+
+def test_run_form_buttons_are_centered():
+    """Кнопки внизу формы запуска — по центру и по своей ширине. Во
+    flex-колонке ребёнок растягивается (align-items: stretch), и
+    «Предпросмотр запроса» с «Запустить» становились полосами во всю
+    ширину формы с подписью у левого края."""
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".run-form > .btn {\n  align-self: center;\n}" in css
+
+
 def test_hub_create_button_label():
     """Кнопка создания проекта — «＋ Проект»: шапка хаба держит рядом два
     действия, и длинная подпись занимала строку целиком. Проба интерфейса

@@ -1117,23 +1117,18 @@ input[type="number"] {
 
 /* Карточка целиком — ссылка в проект. Отдельный слой под содержимым:
    чекбокс и шестерёнка внутри <a> недопустимы, а растягивать ссылку на
-   саму карточку мешает то, что карточка — grid-элемент с padding. Слой
-   лежит под текстом (z-index 0 против 1 у содержимого), поэтому клик по
-   пустому месту попадает в него, а по контролам — в них. */
+   саму карточку мешает то, что карточка — grid-элемент с padding.
+   Текст пропускает клик насквозь (pointer-events: none), а не лежит под
+   ссылкой: иначе почти вся площадь карточки занята текстом и кликабельным
+   остаётся лишь пустое место. Контролы возвращают себе клик явно. */
 .project-card {
   position: relative;
 }
 .card-open {
   position: absolute;
   inset: 0;
-  z-index: 0;
   border-radius: var(--radius);
   text-decoration: none;
-}
-/* видимая рамка — признак «карточка живая»: без неё кликабельность всего
-   блока не читалась, а hover выдавал сюрприз */
-.card-open:hover {
-  box-shadow: inset 0 0 0 1px var(--border-hover, var(--accent-dim));
 }
 .card-open:focus-visible {
   outline: 2px solid var(--accent-2);
@@ -1142,6 +1137,21 @@ input[type="number"] {
 .project-card > *:not(.card-open) {
   position: relative;
   z-index: 1;
+  pointer-events: none;
+}
+.project-card .card-check,
+.project-card .card-gear,
+.project-card .card-actions {
+  pointer-events: auto;
+}
+/* Подсветка карточки при наведении: ведём её от самой карточки, а не от
+   ссылки-слоя — слой лежит под текстом, и :hover на нём срабатывал бы
+   только над пустым местом. */
+.project-card:has(.card-open:hover) {
+  border-color: var(--border-hover, var(--accent-dim));
+}
+.project-card:has(.card-open:hover) .card-title {
+  color: var(--accent-2);
 }
 /* шестерёнка в правом верхнем углу карточки: управление книгой */
 .card-gear {
@@ -1530,6 +1540,14 @@ input[type="number"] {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+/* Кнопки внизу формы — по центру и по своей ширине, а не во весь ряд:
+   во flex-колонке ребёнок по умолчанию растягивается (align-items:
+   stretch), и «Предпросмотр запроса» с «Запустить» становились полосами
+   во всю ширину формы с подписью у левого края. Поля формы тянут ширину
+   сами — им растяжка и нужна. */
+.run-form > .btn {
+  align-self: center;
 }
 /* разделитель блока «Настройки LLM» в Экспертном режиме Запусков */
 .run-form-group {

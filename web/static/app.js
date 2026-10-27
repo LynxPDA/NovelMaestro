@@ -2323,7 +2323,7 @@ function selectionBar() {
     h(
       "button",
       {
-        class: "btn btn-sm btn-primary",
+        class: "btn btn-sm btn-ghost",
         title: "Упаковать выделенные книги в архивы .nmz",
         onclick: () => archiveSelected("pack"),
       },
