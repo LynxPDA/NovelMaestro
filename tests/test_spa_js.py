@@ -874,13 +874,15 @@ def test_selection_bar_buttons_are_plain():
     assert bar.count('"btn btn-sm btn-ghost"') >= 4
 
 
-def test_run_form_buttons_are_centered():
-    """Кнопки внизу формы запуска — по центру и по своей ширине. Во
-    flex-колонке ребёнок растягивается (align-items: stretch), и
-    «Предпросмотр запроса» с «Запустить» становились полосами во всю
-    ширину формы с подписью у левого края."""
+def test_run_form_buttons_span_width_with_centered_text():
+    """Кнопки внизу формы запуска — во всю ширину формы, содержимое по
+    центру. База .btn — inline-flex без justify-content, поэтому подпись
+    прижималась к левому краю широкой кнопки; сужать саму кнопку нельзя —
+    две полосы во всю ширину и были задуманы."""
     css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
-    assert ".run-form > .btn {\n  align-self: center;\n}" in css
+    assert ".run-form > .btn {\n  justify-content: center;\n}" in css
+    # ширину даёт растяжка flex-колонки: собственного сужения быть не должно
+    assert ".run-form > .btn {\n  align-self: center;\n}" not in css
 
 
 def test_hub_create_button_label():
