@@ -3630,7 +3630,7 @@ async function main() {
     const before = problems.length;
     await page.goto(`${url}/#/hub`, { waitUntil: "load" });
     await page.waitForTimeout(1200);
-    await page.locator('button:has-text("Создать проект")').first().click();
+    await page.locator('button:has-text("＋ Проект")').first().click();
     await page.waitForTimeout(600);
     await page.locator('.modal-backdrop input[placeholder="my_book"]').fill("Probe2");
     await page.locator('.modal-backdrop button:has-text("Создать")').last().click();
@@ -3648,7 +3648,7 @@ async function main() {
    * У глоссария настройки живут в меню «⋮» — кнопка видна только с ним */
   const modals = [
     ["sections", "#/hub", 'button:has-text("Управление разделами")', null],
-    ["create", "#/hub", 'button:has-text("Создать проект")', null],
+    ["create", "#/hub", 'button:has-text("＋ Проект")', null],
     ["ner-types", `#/project/${SECTION}/${BOOK}/ner`,
       'button[title="Фильтр типов"]', ".ner-menu-btn"],
     ["ner-cols", `#/project/${SECTION}/${BOOK}/ner`,
