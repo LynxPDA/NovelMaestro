@@ -2955,3 +2955,46 @@ def test_project_items_hides_service_dirs(archive_srv):
     assert payload["projects"] == ["test_book"], payload["projects"]
     assert [i["name"] for i in payload["items"]] == ["test_book"]
 
+
+
+def test_projects_move_many_route(archive_srv):
+    """Массовый перенос: занятое имя — в skipped, остальные книги едут."""
+    _, port, projects_root = archive_srv()
+    for nm in ("book_a", "book_b"):
+        _create_project(port, projects_root, name=nm)
+    _create_project(port, projects_root, section="HOLD", name="book_a")
+
+    res, payload = _request(port, "POST", "/api/projects/move-many", {
+        "dst": "HOLD",
+        "items": [{"section": "ACTIVE", "name": "book_a"},
+                  {"section": "ACTIVE", "name": "book_b"}]})
+    assert res.status == 200, payload
+    assert [m["name"] for m in payload["moved"]] == ["book_b"]
+    assert [s["name"] for s in payload["skipped"]] == ["book_a"]
+    assert (projects_root / "HOLD" / "book_b").is_dir()
+    assert (projects_root / "ACTIVE" / "book_a").is_dir()
+
+    # перенос архива едет файлом, а не распаковкой
+    res, payload = _request(port, "POST", "/api/projects/move-many", {
+        "dst": "DONE", "items": [{"section": "ACTIVE", "name": "book_a"}]})
+    assert res.status == 200, payload
+    assert (projects_root / "DONE" / "book_a").is_dir()
+
+
+def test_projects_move_many_guards(archive_srv):
+    _, port, _root = archive_srv()
+    res, payload = _request(port, "POST", "/api/projects/move-many",
+                            {"items": [{"section": "ACTIVE", "name": "x"}]})
+    assert res.status == 400 and "назначения" in payload["error"]
+    res, payload = _request(port, "POST", "/api/projects/move-many",
+                            {"dst": "Нет_такого",
+                             "items": [{"section": "ACTIVE", "name": "x"}]})
+    assert res.status == 404
+    res, payload = _request(port, "POST", "/api/projects/move-many",
+                            {"dst": "HOLD", "items": []})
+    assert res.status == 400
+    # всё уже в целевом разделе — делать нечего
+    res, payload = _request(port, "POST", "/api/projects/move-many",
+                            {"dst": "HOLD",
+                             "items": [{"section": "HOLD", "name": "x"}]})
+    assert res.status == 400

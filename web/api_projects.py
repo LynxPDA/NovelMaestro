@@ -50,6 +50,7 @@ def _register_hub(router: Router) -> None:
     router.add("GET", "/api/projects", _projects_list)
     router.add("POST", "/api/projects", _projects_create)
     router.add("POST", "/api/projects/move", _projects_move)
+    router.add("POST", "/api/projects/move-many", _projects_move_many)
     router.add("POST", "/api/projects/rename", _projects_rename)
     router.add("POST", "/api/projects/copy", _projects_copy)
     router.add("DELETE", "/api/projects", _projects_delete)
@@ -515,6 +516,51 @@ def _projects_move(ctx: dict) -> dict:
     _job_manager(ctx).update_project_path(
         f"{section}/{name}", f"{dst}/{Path(res).name}", Path(res))
     return {"ok": True, "section": dst, "name": Path(res).name}
+
+
+def _projects_move_many(ctx: dict) -> dict:
+    """Перенос пачки проектов в другой раздел (POST /api/projects/move-many).
+
+    `{items: [{section, name}], dst}`. Имена целевого раздела проверяются
+    один раз; каждый проект едет сам за себя: занятое имя или чужое
+    состояние уезжает в `skipped` с причиной, остальные переносятся.
+    Журналы запусков переезжают вместе с книгами.
+    """
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    body = ctx["body"]
+    dst = (body.get("dst") or "").strip()
+    if not dst:
+        raise ApiError(400, "Не указан раздел назначения")
+    if dst not in prj.load_sections(root):
+        raise ApiError(404, f"Раздел не найден: {dst}")
+    by_section: dict[str, list[str]] = {}
+    for it in body.get("items") or []:
+        if not isinstance(it, dict):
+            continue
+        sec = str(it.get("section") or "").strip()
+        name = str(it.get("name") or "").strip()
+        if sec and name and sec != dst:
+            by_section.setdefault(sec, []).append(name)
+    if not by_section:
+        raise ApiError(400, "Не выбрано ни одного проекта (или все уже в целевом разделе)")
+    jm = _job_manager(ctx)
+    moved: list[dict] = []
+    skipped: list[dict] = []
+    for sec, names in by_section.items():
+        if sec not in prj.load_sections(root):
+            skipped.extend({"section": sec, "name": n,
+                            "reason": f"Раздел не найден: {sec}"}
+                           for n in names)
+            continue
+        res = prj.move_projects(root, sec, names, dst)
+        moved.extend(res["moved"])
+        skipped.extend(res["skipped"])
+    for m in moved:
+        jm.update_project_path(f"{m['section']}/{m['name']}",
+                               f"{dst}/{Path(m['path']).name}",
+                               Path(m["path"]))
+    return {"ok": True, "dst": dst, "moved": moved, "skipped": skipped}
 
 
 def _projects_rename(ctx: dict) -> dict:

@@ -1301,3 +1301,27 @@ def test_rename_section_merge_conflicting_archive(tmp_path):
         P.archive_project(root, sec, "Книга")
     ok, msg = P.rename_section(root, "A", "B")
     assert not ok and "архив" in msg
+
+
+def test_move_projects_batch(tmp_path):
+    """Пачка переезжает целиком; занятое имя — пропуск с причиной, а не отказ."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    for nm in ("A", "B", "C"):
+        P.create_project(root, "ACTIVE", nm)
+    P.create_project(root, "HOLD", "A")  # имя занято в целевом разделе
+    res = P.move_projects(root, "ACTIVE", ["A", "B", "C"], "HOLD")
+    assert [m["name"] for m in res["moved"]] == ["B", "C"]
+    assert [s["name"] for s in res["skipped"]] == ["A"]
+    assert "уже есть проект" in res["skipped"][0]["reason"]
+    assert P.list_projects(root, "ACTIVE") == ["A"]
+    assert P.list_projects(root, "HOLD") == ["A", "B", "C"]
+
+
+def test_move_projects_batch_skips_duplicates_and_empty(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "ACTIVE", "A")
+    res = P.move_projects(root, "ACTIVE", ["A", "A", "", "  ", None], "HOLD")
+    assert [m["name"] for m in res["moved"]] == ["A"]
+    assert res["skipped"] == []

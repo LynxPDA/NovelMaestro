@@ -1287,6 +1287,32 @@ def move_project(projects_root: Path, src_section: str, name: str,
     return True, dst
 
 
+def move_projects(projects_root: Path, src_section: str, names, dst_section: str) -> dict:
+    """Перенести пачку проектов в другой раздел: `{moved, skipped}`.
+
+    Один заход берёт блокировку один раз (на сотне книг `move_project`
+    дёргал бы её сотню раз), но причины отказов остаются поштучные: занятое
+    имя в целевом разделе или битое имя пропускаются с причиной, а не
+    отменяют всю пачку (частичный перенос лучше отказа целиком).
+    """
+    moved: list[dict] = []
+    skipped: list[dict] = []
+    seen: set[str] = set()
+    for name in names or []:
+        name = str(name or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        ok, res = move_project(projects_root, src_section, name, dst_section)
+        if ok:
+            moved.append({"section": src_section, "name": name,
+                          "dst": dst_section, "path": str(res)})
+        else:
+            skipped.append({"section": src_section, "name": name,
+                            "reason": str(res)})
+    return {"moved": moved, "skipped": skipped}
+
+
 def rename_project(projects_root: Path, section: str, name: str, new_name: str):
     """Переименовать проект внутри раздела (папку или архив).
 
