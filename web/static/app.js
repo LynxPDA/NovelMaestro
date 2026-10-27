@@ -838,6 +838,40 @@ function hubSelectedKey(section, name) {
   return `${section}/${name}`;
 }
 
+/* Работа с архивом видна не в компоненте, а в состоянии хаба: пока запуск
+   упаковки/распаковки идёт, карточки показывают «идёт архивация…», а не
+   старое «Открыть/Запуски», и после него хаб перечитывает списки. */
+let hubArchiving = new Set();
+
+function archiveBusy(section, name) {
+  return hubArchiving.has(hubSelectedKey(section, name));
+}
+
+/* Ожидание архивации: опрос /api/jobs/active, пока запуски `archive` не
+   освободятся. Упаковка большой книги занимает секунды, и всё это время
+   карточка должна говорить правду, а не показывать готовый проект. */
+async function waitArchiveJobs() {
+  for (;;) {
+    let busy = false;
+    try {
+      const d = await api("/jobs/active");
+      busy = (d.jobs || []).some((j) => String(j.action) === "archive");
+    } catch {
+      /* нет связи — не ждём бесконечно: пусть прозвучит ошибка сервера */
+      return;
+    }
+    if (!busy) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+/* Перечитать хаб после работы с архивом: списки разделов и архивы
+   приходят разными запросами, поэтому сбрасываем кеш целиком. */
+function refreshHub() {
+  hubCache = null;
+  render();
+}
+
 function sectionBlock(section, projects, sectionActive, statsMap, hub) {
   const items = (hub && hub.itemsBySection && hub.itemsBySection[section.name]) || [];
   const byName = {};
@@ -853,6 +887,7 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
   const cards = projects.map((name) => {
     const info = byName[name] || {};
     const archived = !!info.archived;
+    const busy = archiveBusy(section.name, name);
     const arcMeta = (hub && hub.archiveMap && hub.archiveMap[hubSelectedKey(section.name, name)]) || null;
     const statsLine = archived
       ? `архив · ${fmtSize((arcMeta && arcMeta.size) || info.size || 0)}` +
@@ -860,7 +895,7 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
           ? ` · ${((arcMeta && arcMeta.packed_at) || info.packed_at).slice(0, 10)}`
           : "")
       : ((statsMap || {})[`${section.name}/${name}`] ?? "…");
-    const stats = h("div", { class: "card-hint", text: statsLine });
+    const stats = h("div", { class: "card-hint", text: busy ? "идёт архивация…" : statsLine });
     const key = hubSelectedKey(section.name, name);
     const cb = h("input", {
       type: "checkbox",
@@ -870,46 +905,43 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
       onchange: (e) => toggleSel(key, e.target.checked),
     });
     if (hubSelection.has(key)) cb.checked = true;
+    /* На карточке — только безопасные действия одной книги: открыть/запуски
+       у живой, распаковать/скачать у упакованной. Перенос, копия и удаление
+       — в панели выделения (там же, где у «Файлов»): три подписи в строке
+       шириной 250 px не влезали и уезжали за край карточки. */
+    const openArchive = h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost",
+        title: "Распаковать книгу и вернуть папку проекта",
+        disabled: busy ? "" : null,
+        onclick: () => unarchiveOne(section.name, name),
+      },
+      iconEl("archive-out"),
+      "Разархивировать",
+    );
+    const openBook = h("a", { class: "btn btn-sm btn-ghost", href: `#/project/${section.name}/${name}` }, "Открыть");
+    const runs = h("a", {
+      class: "btn btn-sm btn-ghost",
+      href: `#/project/${section.name}/${name}/run`,
+    }, "Запуски");
     const actions = archived
       ? [
-          h("button", {
-            class: "btn btn-sm btn-ghost",
-            title: "Распаковать книгу и вернуть папку проекта",
-            onclick: () => unarchiveOne(section.name, name),
-          }, "Разархивировать"),
-          h("button", {
-            class: "btn btn-sm btn-ghost",
-            title: "Скачать архив .nmz (открывается любым архиватором)",
-            onclick: () => {
-              window.location.href = `/api/projects/${encodeURIComponent(section.name)}/${encodeURIComponent(name)}/archive/download`;
+          openArchive,
+          h(
+            "a",
+            {
+              class: "btn btn-sm btn-ghost",
+              title: "Скачать архив .nmz (открывается любым архиватором)",
+              href: `/api/projects/${encodeURIComponent(section.name)}`
+                + `/${encodeURIComponent(name)}/archive/download`,
+              download: `${name}.nmz`,
             },
-          }, "Скачать"),
-          h("button", {
-            class: "btn btn-sm btn-ghost",
-            onclick: async () => {
-              if (await manageProjectModal(section.name, name)) {
-                hubCache = null;
-                render();
-              }
-            },
-          }, "Управление"),
+            iconEl("download"),
+            "Скачать",
+          ),
         ]
-      : [
-          h("a", { class: "btn btn-sm btn-ghost", href: `#/project/${section.name}/${name}` }, "Открыть"),
-          h("a", {
-            class: "btn btn-sm btn-ghost",
-            href: `#/project/${section.name}/${name}/run`,
-          }, "Запуски"),
-          h("button", {
-            class: "btn btn-sm btn-ghost",
-            onclick: async () => {
-              if (await manageProjectModal(section.name, name)) {
-                hubCache = null;
-                render();
-              }
-            },
-          }, "Управление"),
-        ];
+      : [openBook, runs];
     return h(
       "div",
       { class: "card project-card" + (archived ? " card-archived" : "") },
@@ -932,12 +964,50 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
     ),
   );
   if (sectionActive) header.classList.add("section-active");
+  /* Раздел целиком: «упаковать все» / «распаковать все» — списком, который
+     сервер считает сам (карточки большого раздела грузятся в фоне). Кнопки
+     не гаснут: «уже всё сделано» — ответ сервера, а погашенная кнопка
+     молчала бы (у disabled не видно подсказки) и заставляла гадать, есть ли
+     действие вообще. */
+  const sectionTools = items.length
+    ? h(
+        "div",
+        { class: "section-tools" },
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            title: "Упаковать все книги раздела (запуск с логом)",
+            onclick: () => archiveSection(section.name, "pack"),
+          },
+          iconEl("archive-in"),
+          "Архивировать все",
+        ),
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            title: "Распаковать все книги раздела (запуск с логом)",
+            onclick: () => archiveSection(section.name, "unpack"),
+          },
+          iconEl("archive-out"),
+          "Разархивировать все",
+        ),
+      )
+    : null;
   return h(
     "section",
     { class: "section" },
     header,
+    sectionTools,
     h("div", { class: "cards" }, cards.length ? cards : [h("div", { class: "empty" }, "Нет проектов")]),
   );
+}
+
+/* Открыть «Управление книгой» и перечитать хаб, если что-то изменилось
+   (перенос/переименование/удаление закрывают модалку с true). */
+async function openManage(section, name) {
+  if (await manageProjectModal(section, name)) refreshHub();
 }
 
 /* Подтверждение обратимого действия: слово-пароль (confirmModal) только
@@ -981,7 +1051,7 @@ async function archiveSelected(op) {
     return { section: k.slice(0, i), name: k.slice(i + 1) };
   });
   const verb = op === "pack" ? "Упаковать" : "Распаковать";
-  const ok = await askModal(
+  return askModal(
     `${verb} выбранные проекты`,
     `${verb} ${items.length} проект(ов)? Архив — обычный tar+zstd, его можно открыть любым архиватором; вернуть книгу можно кнопкой «Разархивировать».`,
     verb,
@@ -990,17 +1060,66 @@ async function archiveSelected(op) {
         method: "POST",
         body: { op, items },
       });
-      const skipped = (r.skipped || []).length;
-      toast(
-        `${verb}: ${(r.items || []).length}` +
-          (skipped ? `, пропущено: ${skipped}` : ""),
-      );
       hubSelection = new Set();
-      hubCache = null;
-      render();
+      await afterArchiveStart(r, items, verb);
     },
   );
-  return ok;
+}
+
+/* Раздел целиком: список книг считает сервер (архивные или живые — по
+   операции), подтверждение спрашивается до запуска. */
+async function archiveSection(section, op) {
+  const verb = op === "pack" ? "Упаковать" : "Распаковать";
+  return askModal(
+    `${verb} все книги раздела ${section}`,
+    `Все книги раздела ${section}, которые сейчас в другом виде, будут ` +
+      `${op === "pack" ? "упакованы в архивы" : "распакованы в папки"}. ` +
+      "Работа идёт одним запуском с логом в панели «Запуски».",
+    verb,
+    async () => {
+      let r;
+      try {
+        r = await api(`/sections/${encodeURIComponent(section)}/archive`, {
+          method: "POST",
+          body: { op },
+        });
+      } catch (ex) {
+        toast(ex.message, "err");
+        return;
+      }
+      const items = r.items || [];
+      if (!items.length) {
+        /* `done` — число книг, уже находящихся в нужном виде, `total` — всего:
+           так различаются пустой раздел и «всё уже сделано» */
+        toast(
+          r.total
+            ? `${verb}: всё уже сделано (${r.done})`
+            : "В разделе нет проектов",
+          "err",
+        );
+        refreshHub();
+        return;
+      }
+      await afterArchiveStart(r, items, verb);
+    },
+  );
+}
+
+/* После создания запуска архивации: карточки сразу говорят «идёт
+   архивация…», а когда запуск завершён — списки перечитываются.
+   Без этого карточка продолжала показывать старое состояние (и «Открыть»,
+   и «Запуски») до ручного обновления страницы. */
+async function afterArchiveStart(r, items, verb) {
+  const skipped = (r.skipped || []).length;
+  toast(
+    `${verb}: ${items.length}` + (skipped ? `, пропущено: ${skipped}` : ""),
+  );
+  hubArchiving = new Set(items.map((i) => hubSelectedKey(i.section, i.name)));
+  hubCache = null;
+  render();
+  await waitArchiveJobs();
+  hubArchiving = new Set();
+  refreshHub();
 }
 
 async function unarchiveOne(section, name) {
@@ -1009,13 +1128,23 @@ async function unarchiveOne(section, name) {
     `Вернуть ${section}/${name} в виде папки? На диске снова будет занято место, зато откроются редактор, поиск и запуски.`,
     "Разархивировать",
     async () => {
-      const r = await api("/projects/archive", {
-        method: "POST",
-        body: { op: "unpack", items: [{ section, name }] },
-      });
-      toast(`Разархивация: ${(r.items || []).length}`);
-      hubCache = null;
-      render();
+      let r;
+      try {
+        r = await api("/projects/archive", {
+          method: "POST",
+          body: { op: "unpack", items: [{ section, name }] },
+        });
+      } catch (ex) {
+        toast(ex.message, "err");
+        return;
+      }
+      if (!(r.items || []).length) {
+        toast((r.skipped && r.skipped[0] && r.skipped[0].reason)
+          || "Разархивация не запущена", "err");
+        refreshHub();
+        return;
+      }
+      await afterArchiveStart(r, [{ section, name }], "Разархивация");
     },
   );
 }
@@ -2065,10 +2194,7 @@ async function viewHub() {
           {
             class: "btn btn-primary",
             onclick: async () => {
-              if (await createProjectModal()) {
-                hubCache = null;
-                render();
-              }
+              if (await createProjectModal()) refreshHub();
             },
           },
           "＋ Создать проект",
@@ -2076,7 +2202,7 @@ async function viewHub() {
         h(
           "button",
           { class: "btn btn-ghost", onclick: () => sectionsModal() },
-          "⚙ Управление разделами",
+          "Управление разделами",
         ),
       ),
     ),
@@ -2089,17 +2215,36 @@ async function viewHub() {
             "button",
             {
               class: "btn btn-sm btn-primary",
+              title: "Упаковать выделенные книги в архивы .nmz",
               onclick: () => archiveSelected("pack"),
             },
+            iconEl("archive-in"),
             "Архивировать",
           ),
           h(
             "button",
             {
               class: "btn btn-sm btn-ghost",
+              title: "Вернуть выделенные книги папками",
               onclick: () => archiveSelected("unpack"),
             },
+            iconEl("archive-out"),
             "Разархивировать",
+          ),
+          /* Групповые действия объекта — здесь, а не на карточке: в строке
+             шириной 250 px три подписи не влезают и уезжают за край */
+          h(
+            "button",
+            {
+              class: "btn btn-sm btn-ghost",
+              title: "Перенести, дублировать или удалить одну книгу",
+              disabled: hubSelection.size === 1 ? null : "",
+              onclick: () => {
+                const [[section, ...name]] = [...hubSelection].map((k) => k.split("/"));
+                openManage(section, name.join("/"));
+              },
+            },
+            "Управление",
           ),
           h(
             "button",
@@ -3139,8 +3284,12 @@ function nameModal(title, placeholder, onOk, initial = "") {
 function sectionsModal() {
   const err = h("div", { class: "form-error" });
   const list = h("div", { class: "hub-sections-modal" });
+  /* wide: в узкой карточке строка раздела с тремя подписями упирается в
+     край, и имя/счётчик уезжают за окно — ни названия раздела, ни кнопок
+     не видно. Действия строки — иконки с подсказкой (как в списках). */
   UIC.modal({
     title: "Управление разделами",
+    wide: true,
     build: (close) => [
       h(
         "div",
@@ -3176,19 +3325,33 @@ function sectionsModal() {
     ],
   });
 
+  function rowIcon(icon, tip, onclick, cls) {
+    const b = h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost icon-btn" + (cls ? " " + cls : ""),
+        title: tip,
+        "aria-label": tip,
+        onclick,
+      },
+      iconEl(icon),
+    );
+    attachTooltip(b, tip);
+    return b;
+  }
+
   function renderRow(s) {
     const actions = h("div", { class: "factions" });
     /* Раздел-архив: книгами здесь принято держать упакованные; флаг включает
-       массовую архивацию и подсказку «это архив» на карточках. Отдельного
-       «упаковать при переносе» пока нет — молчаливой упаковки не бывает. */
-    const arcBtn = h(
-      "button",
-      {
-        class: "btn btn-sm btn-ghost",
-        title: s.archive
+       пометку «архив» и массовое «Архивировать все». Отдельного «упаковать
+       при переносе» пока нет — молчаливой упаковки не бывает. */
+    actions.append(
+      rowIcon(
+        "archive",
+        s.archive
           ? "Раздел архивный: закрытые книги принято держать упакованными"
           : "Сделать раздел архивным",
-        onclick: async () => {
+        async () => {
           err.textContent = "";
           try {
             await api(`/sections/${encodeURIComponent(s.name)}/props`, {
@@ -3203,60 +3366,52 @@ function sectionsModal() {
             err.textContent = ex.message;
           }
         },
-      },
-      s.archive ? "Архив ✓" : "Сделать архивом",
+        s.archive ? "btn-active" : "",
+      ),
     );
-    actions.append(arcBtn);
     actions.append(
-      h(
-        "button",
-        {
-          class: "btn btn-sm btn-ghost",
-          onclick: () =>
-            nameModal(
-              `Переименовать ${s.name}`,
-              "новое имя (совпадает с существующим — проекты перенесутся)",
-              async (nm) => {
-                await api("/sections/rename", {
-                  method: "POST",
-                  body: { src: s.name, dst: nm },
+      rowIcon("rename", "Переименовать раздел", () =>
+        nameModal(
+          `Переименовать ${s.name}`,
+          "новое имя (совпадает с существующим — проекты перенесутся)",
+          async (nm) => {
+            await api("/sections/rename", {
+              method: "POST",
+              body: { src: s.name, dst: nm },
+            });
+            toast(`Раздел переименован: ${s.name} → ${nm}`);
+            hubCache = null;
+            refresh();
+            render(); // хаб за модалкой сразу видит изменения
+          },
+          s.name,
+        )),
+    );
+    actions.append(
+      rowIcon(
+        "trash",
+        "Удалить раздел (только пустой)",
+        () =>
+          confirmModal(
+            "Удалить раздел",
+            `Раздел ${s.name} будет удалён`,
+            "УДАЛИТЬ",
+            async () => {
+              err.textContent = "";
+              try {
+                await api(`/sections/${encodeURIComponent(s.name)}`, {
+                  method: "DELETE",
                 });
-                toast(`Раздел переименован: ${s.name} → ${nm}`);
+                toast(`Удалён раздел: ${s.name}`);
                 hubCache = null;
                 refresh();
                 render(); // хаб за модалкой сразу видит изменения
-              },
-              s.name,
-            ),
-        },
-        "Переименовать",
-      ),
-      h(
-        "button",
-        {
-          class: "btn btn-sm btn-danger-ghost",
-          onclick: () =>
-            confirmModal(
-              "Удалить раздел",
-              `Раздел ${s.name} будет удалён`,
-              "УДАЛИТЬ",
-              async () => {
-                err.textContent = "";
-                try {
-                  await api(`/sections/${encodeURIComponent(s.name)}`, {
-                    method: "DELETE",
-                  });
-                  toast(`Удалён раздел: ${s.name}`);
-                  hubCache = null;
-                  refresh();
-                  render(); // хаб за модалкой сразу видит изменения
-                } catch (ex) {
-                  err.textContent = ex.message;
-                }
-              },
-            ),
-        },
-        "Удалить",
+              } catch (ex) {
+                err.textContent = ex.message;
+              }
+            },
+          ),
+        "btn-danger-ghost",
       ),
     );
     return h(

@@ -3596,7 +3596,7 @@ async function main() {
       [...document.querySelectorAll(".hub-sections-modal .fname")].map((x) => x.textContent.trim()));
     if (!rows.includes("TMP2")) problems.push(`раздел не создан, в списке: ${rows.join(",")}`);
     // опасное действие: сначала неверное слово, потом верное
-    await page.locator('.hub-sections-modal .frow:has-text("TMP2") button:has-text("Удалить")').last().click();
+    await page.locator('.hub-sections-modal .frow:has-text("TMP2") button[aria-label^="Удалить"]').last().click();
     await page.waitForTimeout(500);
     const conf = page.locator(".modal-backdrop").last();
     await conf.locator('input.input').fill("не то");

@@ -246,6 +246,98 @@ function viewProject(section, name, tab, job) {
     if (TABS.some((t) => t[0] === last)) st.view = last;
   }
 
+  /* Ссылка на упакованную книгу (старая закладка, «Назад» из истории
+     адресов): вкладки есть, а файлов на диске нет — каждая падала бы
+     ошибкой 404. Вместо вкладок показываем, что с книгой и как её вернуть;
+     проверка одна на всю страницу — лишний запрос при живом проекте
+     (проверяются только ссылки, оставшиеся с прошлого раза). */
+  const archiveInfo = { value: null, asked: false };
+  async function loadArchiveInfo() {
+    if (archiveInfo.asked) return archiveInfo.value;
+    archiveInfo.asked = true;
+    try {
+      const d = await api(`/projects/${encodeURIComponent(section)}`
+        + `/${encodeURIComponent(name)}/archive`);
+      if (d && d.archived) archiveInfo.value = d;
+    } catch {
+      archiveInfo.value = null; // 404 — книга живая папка
+    }
+    return archiveInfo.value;
+  }
+
+  /* Экран упакованной книги: никаких запросов внутрь проекта (их ждёт папка).
+     Скачать архив и распаковать можно откуда угодно — книга лежит файлом. */
+  async function archivedPage(info) {
+    const size = info && info.size ? fmtSize(info.size) : "";
+    const packed = info && info.manifest && info.manifest.packed_at;
+    const err = h("div", { class: "form-error" });
+    return h(
+      "div",
+      { class: "project-body" },
+      h(
+        "div",
+        { class: "archive-note" },
+        h(
+          "div",
+          { class: "archive-note-head" },
+          iconEl("archive", "archive-note-icon"),
+          h("div", {}, h("div", { class: "archive-note-title" }, "Книга упакована"),
+            h("div", { class: "archive-note-sub" },
+              `${section}/${name}` + (size ? ` · ${size}` : "")
+                + (packed ? ` · ${packed.slice(0, 10)}` : ""))),
+        ),
+        h("div", { class: "archive-note-text" },
+          "На диске это один файл архива, а не папка проекта: редактор, поиск "
+          + "и запуски откроются после распаковки. Это не ошибка — так "
+          + "выглядят упакованные книги."),
+        h(
+          "div",
+          { class: "archive-note-actions" },
+          h(
+            "button",
+            {
+              class: "btn btn-primary",
+              onclick: async () => {
+                err.textContent = "";
+                try {
+                  const r = await api("/projects/archive", {
+                    method: "POST",
+                    body: { op: "unpack", items: [{ section, name }] },
+                  });
+                  if (!(r.items || []).length) {
+                    err.textContent = (r.skipped && r.skipped[0]
+                      && r.skipped[0].reason) || "Распаковка не запущена";
+                    return;
+                  }
+                  toast("Распаковка запущена");
+                  await afterArchiveStart(r, [{ section, name }], "Разархивация");
+                  archiveInfo.asked = false;
+                  archiveInfo.value = null;
+                  render();
+                } catch (ex) {
+                  err.textContent = ex.message;
+                }
+              },
+            },
+            "Разархивировать",
+          ),
+          h(
+            "a",
+            {
+              class: "btn btn-ghost",
+              href: `/api/projects/${encodeURIComponent(section)}`
+                + `/${encodeURIComponent(name)}/archive/download`,
+              download: `${name}.nmz`,
+            },
+            "Скачать архив",
+          ),
+          h("a", { class: "btn btn-ghost", href: "#/hub" }, "К списку книг"),
+        ),
+        err,
+      ),
+    );
+  }
+
   async function render() {
     /* последняя вкладка книги запоминается и при открытии по ссылке: ссылка —
        тоже способ оказаться на вкладке */
@@ -276,6 +368,13 @@ function viewProject(section, name, tab, job) {
       ),
     );
     let body;
+    /* упакованная книга: сначала проверка архива, вкладки — только после
+       неё (иначе каждая из них сделала бы запрос в несуществующую папку) */
+    const arcinfo = await loadArchiveInfo();
+    if (arcinfo) {
+      page.replaceChildren(header, await archivedPage(arcinfo));
+      return;
+    }
     if (st.edit) body = await editorView();
     else if (st.view === "editor") body = await editorTabView();
     else if (st.view === "run")

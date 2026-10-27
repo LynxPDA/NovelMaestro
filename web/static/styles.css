@@ -496,6 +496,16 @@ body {
   flex: 1;
   min-width: 0;
 }
+/* Кнопки шапки не слипаются: без gap «＋ Создать проект» и «Управление
+   разделами» стояли вплотную — два разных действия читались как одно. */
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .page-title {
   margin: 0;
   font-size: 22px;
@@ -801,6 +811,24 @@ a.fname:hover {
   display: flex;
   gap: 6px;
 }
+/* список разделов в окне «Управление разделами»: прокручиваемая карточка
+   строк — иначе окно растягивалось на всю высоту вместе с кнопками, а
+   строка с тремя подписями не помещалась в узкое окно */
+.hub-sections-modal {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+  max-height: 52vh;
+  min-height: 60px;
+}
+.hub-sections-modal .frow {
+  padding: 8px 12px;
+}
+.hub-sections-modal .fname {
+  font-weight: 600;
+}
 .btn-danger-ghost {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
@@ -921,6 +949,11 @@ input[type="number"] {
   text-decoration: none;
   /* без переноса: «▶ Запуски» на 2 строки ломает ряд кнопок */
   white-space: nowrap;
+  /* кнопка с иконкой: SVG — отдельный узел, и без промежутка иконка
+     прилипала к подписи («Архивировать все», «Открыть») */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .btn:hover {
   background: var(--btn-hover);
@@ -962,6 +995,49 @@ input[type="number"] {
   overflow: auto;
 }
 
+/* упакованная книга, открытая по ссылке: вкладки скрыты, вместо них — что
+   с книгой и как её вернуть (файлы на диске — один архив, а не папка) */
+.archive-note {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 640px;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+.archive-note-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.archive-note-icon {
+  color: var(--muted);
+  flex: none;
+}
+.archive-note-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.archive-note-sub {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.archive-note-text {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.archive-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* ── hub: разделы и проекты (M2) ───────────────────────── */
 .section {
   margin-bottom: 26px;
@@ -987,6 +1063,16 @@ input[type="number"] {
   font-size: 11px;
   font-weight: 400;
 }
+/* действия раздела целиком («Архивировать все») — своей строкой под
+   заголовком: рядом с именем они переносились вразнобой, а имя раздела
+   переставало быть заголовком */
+.section-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -4px 0 10px;
+}
 
 .badge {
   padding: 1px 8px;
@@ -1001,7 +1087,15 @@ input[type="number"] {
   margin-top: 12px;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+}
+/* кнопки делят строку поровну: пара «Разархивировать» + «Скачать» в 250 px
+   не влезает и переносится — половинные кнопки читаются как два равных
+   действия, а не как ряд с обрезанным краем */
+.project-card .card-actions > * {
+  flex: 1 1 auto;
+  justify-content: center;
 }
 
 /* ── шаблоны  ── */

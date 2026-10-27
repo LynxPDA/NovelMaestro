@@ -727,3 +727,72 @@ def test_field_applies_js_matches_python(tmp_path):
            if res != ("1" if core_settings.applies(s, form) else "0")]
     assert not bad, f"расхождения JS/Python: {bad[:5]}"
     assert len(cases) > 100, f"мало кейсов: {len(cases)}"
+
+
+def test_hub_archive_refreshes_after_job():
+    """Регрессия «после архивации карточка ещё показывает Открыть/Запуски»:
+    запуск архивации асинхронный, и хаб обязан дождаться его и перечитать
+    списки, а не ждать ручного F5. Пока работа идёт, карточка говорит
+    правду («идёт архивация…»), а не показывает готовую книгу."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    # ожидание запусков: опрос /jobs/active по действию archive
+    assert "async function waitArchiveJobs()" in app
+    assert 'api("/jobs/active")' in app
+    assert 'String(j.action) === "archive"' in app
+    # после старта запуска хаб перечитывается целиком (списки разделов и
+    # архивы приходят разными запросами)
+    assert "await waitArchiveJobs();" in app
+    assert "function refreshHub() {\n  hubCache = null;\n  render();\n}" in app
+    # «идёт архивация…» вместо строки статистики
+    assert "let hubArchiving = new Set();" in app
+    assert 'text: busy ? "идёт архивация…" : statsLine' in app
+
+
+def test_hub_cards_offer_no_open_for_archived():
+    """У упакованной книги папки на диске нет: «Открыть» и «Запуски» из
+    карточки ведут в проект, которого нет. На карточке остаются действия
+    одного объекта, а перенос/копия/удаление — в панели выделения."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    block = app[app.index("function sectionBlock("):app.index("async function openManage(")]
+    archived_part = block[block.index("const actions = archived"):block.index(": [openBook, runs];")]
+    assert "openArchive" in archived_part and "download" in archived_part
+    assert "openBook" not in archived_part and "runs" not in archived_part
+    # групповые действия объекта — в панели выделения (как у «Файлов»)
+    assert '"Управление"' in app and "openManage(section, name)" in app
+
+
+def test_archived_project_opens_with_explanation():
+    """Прямая ссылка на упакованную книгу (закладка, «Назад») раньше давала
+    вкладки с 404: папки нет. Теперь — экран «Книга упакована» с распаковкой.
+    Проверка архива обязана идти ДО вкладок."""
+    pv = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    assert "async function loadArchiveInfo()" in pv
+    assert "async function archivedPage(info)" in pv
+    assert "/archive`);" in pv
+    # проверка стоит перед выбором вкладки: иначе вкладка успела бы сходить
+    # в несуществующую папку
+    i_check = pv.index("const arcinfo = await loadArchiveInfo();")
+    i_tabs = pv.index('if (st.edit) body = await editorView();')
+    assert i_check < i_tabs
+    # у экрана нет вкладок проекта, зато есть распаковка и скачивание
+    page = pv[pv.index("async function archivedPage(info)"):i_check]
+    assert '"Разархивировать"' in page and "archive/download" in page
+    assert '"К списку книг"' in page
+
+
+def test_sections_modal_is_wide_and_named():
+    """Регрессия «в окне «Управление разделами» не видно названий разделов»:
+    narrow-окно 420 px с тремя текстовыми кнопками в строке выдавливало
+    имена за край. Окно стало wide, действия строки — иконки с подсказкой."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+    modal = app[app.index("function sectionsModal()"):]
+    modal = modal[:modal.index("\nasync function viewTemplates()")]
+    assert "wide: true" in modal
+    # строки рисуются иконками: подпись живёт в тултипе и aria-label
+    assert 'class: "hub-sections-modal"' in modal
+    assert "function rowIcon(icon, tip, onclick, cls)" in modal
+    # у списка разделов есть собственный стиль: иначе длинный список
+    # растягивал окно на всю высоту
+    assert ".hub-sections-modal {" in css
+    assert "max-height: 52vh" in css
