@@ -410,6 +410,38 @@ def test_rename_default_section_allowed(tmp_path):
     assert P.load_sections(root) == ["В работе", "HOLD", "DONE"]
 
 
+def test_delete_empty_archive_section(tmp_path):
+    """Пустой архивный раздел удаляется: `.archive` — служебный каталог,
+    а не проект. Проверка «есть ли что-нибудь в папке» делала такой раздел
+    неудаляемым навсегда: `.archive` живёт в нём всегда."""
+    from core import archive as A
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.set_section_props(root, "HOLD", archive=True)
+    A.archive_dir(root / "HOLD").mkdir(parents=True, exist_ok=True)
+    assert P.project_items(root, "HOLD") == []
+    ok, res = P.delete_section(root, "HOLD")
+    assert ok, res
+    assert not (root / "HOLD").exists()
+    assert "HOLD" not in P.load_sections(root)
+
+
+def test_delete_section_with_packed_book_refused(tmp_path):
+    """Упакованная книга — тоже книга: раздел с архивом не удаляется."""
+    from core import archive as A
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.set_section_props(root, "HOLD", archive=True)
+    ok, _ = P.create_project(root, "HOLD", "Книга")
+    assert ok
+    ok, _ = P.archive_project(root, "HOLD", "Книга")
+    assert ok
+    assert A.archive_dir(root / "HOLD").is_dir()
+    ok, msg = P.delete_section(root, "HOLD")
+    assert not ok and "не пуст" in str(msg)
+    assert (root / "HOLD").is_dir()
+
+
 def test_delete_section(tmp_path):
     root = tmp_path / "projects"
     P.ensure_projects_root(root)
@@ -1030,8 +1062,7 @@ def test_section_props_default_false(tmp_path):
     for name in P.load_sections(root):
         assert P.section_props(root, name) == {"archive": False,
                                                "pack_on_move": False}
-    assert P.archive_sections(root) == []
-    assert P.is_archive_section(root, "DONE") is False
+    assert P.section_props(root, "DONE")["archive"] is False
 
 
 def test_section_props_unknown_section_is_default(tmp_path):
@@ -1046,8 +1077,7 @@ def test_set_section_props_persists(tmp_path):
     P.ensure_projects_root(root)
     ok, name = P.set_section_props(root, "DONE", archive=True)
     assert ok and name == "DONE"
-    assert P.is_archive_section(root, "DONE") is True
-    assert P.archive_sections(root) == ["DONE"]
+    assert P.section_props(root, "DONE")["archive"] is True
     # файл хранит объект, а не строку — и читается заново
     data = json.loads((root / P.SECTIONS_FILE).read_text(encoding="utf-8"))
     assert data[0]["name"] == "ACTIVE"
@@ -1111,7 +1141,7 @@ def test_save_sections_keeps_props_of_known_names(tmp_path):
     P.set_section_props(root, "DONE", archive=True)
     names = P.load_sections(root)
     assert P.save_sections(root, names)
-    assert P.is_archive_section(root, "DONE") is True
+    assert P.section_props(root, "DONE")["archive"] is True
 
 
 def test_rename_section_keeps_archive_flag(tmp_path):
@@ -1121,7 +1151,7 @@ def test_rename_section_keeps_archive_flag(tmp_path):
     P.set_section_props(root, "DONE", archive=True)
     ok, name = P.rename_section(root, "DONE", "Закрытые")
     assert ok and name == "Закрытые"
-    assert P.is_archive_section(root, "Закрытые") is True
+    assert P.section_props(root, "Закрытые")["archive"] is True
 
 
 def test_archive_dir_not_listed_as_section(tmp_path):

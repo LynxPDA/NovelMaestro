@@ -230,17 +230,6 @@ def set_section_props(projects_root: Path, name: str, **props) -> tuple[bool, st
     return True, name
 
 
-def archive_sections(projects_root: Path) -> list:
-    """Имена разделов-архивов (проекты внутри — файлы `.nmz`)."""
-    with _SECTIONS_LOCK:
-        return [n for n, p in _all_entries(projects_root) if p.get("archive")]
-
-
-def is_archive_section(projects_root: Path, name: str) -> bool:
-    """Раздел-архив ли этот."""
-    return bool(section_props(projects_root, name).get("archive"))
-
-
 def save_sections(projects_root: Path, sections: list) -> bool:
     """Атомарно записать список разделов в .sections.json (tmp+replace).
 
@@ -383,6 +372,17 @@ def rename_section(projects_root: Path, src: str, dst: str):
     return True, dst
 
 
+def _section_is_empty(projects_root: Path, name: str) -> bool:
+    """В разделе нет ни одной книги (ни папкой, ни архивом).
+
+    Смотреть на сырое содержимое папки нельзя: `.archive` живёт в разделе
+    всегда, а пустая свалка архивов делала раздел «непустым» навсегда —
+    даже пустой архивный HOLD не удалялся. Считаем тем же взглядом, что и
+    хаб (`project_items`): книга в архиве тоже книга.
+    """
+    return not project_items(projects_root, name)
+
+
 def delete_section(projects_root: Path, name: str):
     """Удалить ПУСТОЙ раздел; непустой — отказ (перенос/удаление проектов).
 
@@ -396,7 +396,7 @@ def delete_section(projects_root: Path, name: str):
         if name not in sections:
             return False, f"Раздел не найден: {name!r}."
         d = root / name
-        if d.is_dir() and any(d.iterdir()):
+        if d.is_dir() and not _section_is_empty(root, name):
             return False, ("Раздел не пуст — сначала перенесите или удалите "
                            "проекты (и архивы, если раздел архивный).")
         try:
