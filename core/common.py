@@ -599,10 +599,138 @@ def build_smart_regex(term: str, flags=re.IGNORECASE):
 
 
 def find_exact_match(text: str, term: str) -> bool:
-    """Точное (терпимое к пробелам/регистру) вхождение термина в текст."""
+    """Точное (терпимое к пробелам/регистру) вхождение термина в текст.
+
+    Вхождение — только целым словом: «Пол» не находится в «пользе».
+    Граница проверяется по ОРИГИНАЛУ, а не по нормализации: она
+    выбрасывает пробелы, и «пол» становился подстрокой
+    «думаяопользедела». Граница считается только для не-CJK термина:
+    у китайского/японского слова границ в нашем смысле нет (灵草
+    находится внутри 这是灵草地), а пунктуация и края строки — граница.
+    """
     if not text or not term:
         return False
-    return bool(build_smart_regex(term).search(text))
+    pattern = build_smart_regex(term)
+    for m in pattern.finditer(text):
+        if not _has_word_bounds(text, m.start(), m.end()):
+            continue
+        return True
+    return False
+
+
+def _has_word_bounds(text: str, start: int, end: int) -> bool:
+    """Стоит ли найденный отрезок отдельным словом (для не-CJK).
+
+    Буква/цифра впритык слева или справа — совпадение внутри слова.
+    Для CJK-содержимого границ нет: иероглифы пишутся без пробелов,
+    и требование границы не нашло бы ничего.
+    """
+    if is_cjk_string(text[start:end]):
+        return True
+    if start > 0 and text[start - 1].isalnum():
+        return False
+    return not (end < len(text) and text[end].isalnum())
+
+
+def _normalize_with_map(s: str) -> tuple[str, list[int]]:
+    """Нормализация плюс карта «позиция нормы → индекс в оригинале».
+
+    Нужна там, где совпадение ищется в нормализованном тексте, а границы
+    слова проверяются по оригиналу: нормализация выбрасывает пробелы и
+    пунктуацию, и без карты не понять, «думаяопользедела» — это «пол» из
+    «пользе» или отдельное слово.
+    """
+    out: list[str] = []
+    pos: list[int] = []
+    for i, ch in enumerate(unicodedata.normalize("NFC", s or "")):
+        if _SEARCH_DROP_RE.match(ch):
+            continue
+        for c in ch.lower():
+            out.append(c)
+            pos.append(i)
+    return "".join(out), pos
+
+
+def _bounds_ok(text: str, norm_map: list[int], start: int, end: int) -> bool:
+    """Стоит ли совпадение в НОРМЕ отдельным словом по ОРИГИНАЛУ."""
+    if start < 0 or end > len(norm_map) or start >= end:
+        return False
+    o_start, o_end = norm_map[start], norm_map[end - 1] + 1
+    return _has_word_bounds(text, o_start, o_end)
+
+
+# Окончания, которые дописываются к готовому термину: падеж, число, род.
+# Список — один на Python и SPA (web/static/ui-core.js::INFLECTIONS).
+_INFLECTIONS = frozenset((
+    "ами", "ями", "ого", "его", "ому", "ему", "ыми", "ими",
+    "ов", "ев", "ам", "ям", "ах", "ях", "ом", "ем", "ой", "ей",
+    "а", "я", "у", "ю", "е", "ы", "и", "ь",
+))
+# Насколько может разойтись хвост формы: окончание (до 3) или замена пары
+# букв на стыке основы («Неудачницей» от «Неудачница», «нити» от «нить»).
+_TAIL_SLACK = 2
+
+
+def inflected_match(term_norm: str, word_norm: str) -> bool:
+    """Слово — термин или его форма (падеж/число/род), а не другая основа.
+
+    «полом»/«полем» от «пол» — да; «польза»/«польский» от «пол» — нет.
+    Решает ОБЩАЯ ОСНОВА: разойтись может только хвост. Признак тот же,
+    по которому словарь считает слово формой другого, — общая часть не
+    короче термина минус запас. Термин при этом обязан совпасть СО СЛОВОМ
+    целиком, а не с его началом (за это отвечает `words_for_match`).
+    """
+    if not term_norm or not word_norm:
+        return False
+    if word_norm == term_norm:
+        return True
+    if word_norm.startswith(term_norm):
+        return word_norm[len(term_norm):] in _INFLECTIONS
+    shared = 0
+    limit = min(len(term_norm), len(word_norm))
+    while shared < limit and term_norm[shared] == word_norm[shared]:
+        shared += 1
+    return shared >= len(term_norm) - _TAIL_SLACK \
+        and abs(len(term_norm) - len(word_norm)) <= _TAIL_SLACK
+
+
+_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def words_for_match(text: str) -> list[str]:
+    """Слова оригинала в нормализованном виде — по одному на слово."""
+    return [w for w in (normalize_for_search(m.group())
+                        for m in _WORD_RE.finditer(text or "")) if w]
+
+
+def _fuzzy_bounds_ok(text: str, norm_map: list[int], term_norm: str) -> bool:
+    """Есть ли термин (или его падежная форма) отдельными словами в тексте.
+
+    Нечёткий поиск сам формы не различает: по его правилам «Пол» находился
+    и в «пользе», и в «полем». Нормализация к тому же выбрасывает пробелы,
+    из-за чего термин оказывался подстрокой чужого слова. Поэтому решает
+    совпадение СО СЛОВАМИ текста, а не подстрока склеенного текста.
+
+    Термин бывает и составным («Линь Шуй», «Чёрная Кошка»): тогда он
+    занимает несколько слов подряд, и склеенный термин сверяется со
+    склейкой такой последовательности — границы при этом остаются на
+    краях, а не посреди слов.
+    """
+    if not term_norm:
+        return False
+    words = words_for_match(text)
+    if not words:
+        return False
+    if any(inflected_match(term_norm, w) for w in words):
+        return True
+    # составной термин: 2-3 слова подряд
+    for size in (2, 3):
+        for i in range(len(words) - size + 1):
+            joined = "".join(words[i:i + size])
+            if len(joined) >= len(term_norm) - _TAIL_SLACK \
+                    and inflected_match(term_norm, joined):
+                return True
+    return False
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -979,7 +1107,7 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
     min_count отфильтровываются (0 — фильтр выключен)."""
     if not ner_data or not text:
         return "[]", 0
-    text_norm = normalize_for_search(text)
+    text_norm, norm_map = _normalize_with_map(text)
     found: set = set()
 
     if automaton is not None:
@@ -990,13 +1118,21 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
             # термин в тексте» (только медленнее: V×len(text))
             _, variant_to_idx = automaton
             for v_norm, idx in variant_to_idx.items():
-                if v_norm and v_norm in text_norm:
-                    found.add(idx)
+                if not v_norm:
+                    continue
+                pos = text_norm.find(v_norm)
+                while pos >= 0:
+                    if _bounds_ok(text, norm_map, pos, pos + len(v_norm)):
+                        found.add(idx)
+                        break
+                    pos = text_norm.find(v_norm, pos + 1)
         else:
             if isinstance(automaton, tuple):
                 raise TypeError("Неизвестный формат автомата")
-            for _end, (_variant, idx) in automaton.iter(text_norm):
-                found.add(idx)
+            for end, (variant, idx) in automaton.iter(text_norm):
+                start = end - len(variant) + 1
+                if _bounds_ok(text, norm_map, start, end + 1):
+                    found.add(idx)
 
     text_ngrams = get_ngrams(text_norm, n=ngram_size)
     for i, item in enumerate(ner_data):
@@ -1005,7 +1141,8 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
         term_norm = item["_term_norm"]
         if term_norm and not is_cjk(term_norm[0]):
             if _fuzzy_hit(term_norm, item["_ngrams"], text_norm,
-                          text_ngrams, threshold):
+                          text_ngrams, threshold) \
+                    and _fuzzy_bounds_ok(text, norm_map, term_norm):
                 found.add(i)
                 continue
         # нечёткий поиск — и по алиасам: термин и его альтернативные
@@ -1013,7 +1150,8 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
         # бывает латиницей или кириллицей — он ищется как обычное слово)
         for a_norm, a_ngrams in item.get("_alias_ngrams") or ():
             if a_norm and not is_cjk(a_norm[0]) and _fuzzy_hit(
-                    a_norm, a_ngrams, text_norm, text_ngrams, threshold):
+                    a_norm, a_ngrams, text_norm, text_ngrams, threshold) \
+                    and _fuzzy_bounds_ok(text, norm_map, a_norm):
                 found.add(i)
                 break
 
