@@ -502,20 +502,48 @@ def _projects_create(ctx: dict) -> dict:
 
 
 def _projects_move(ctx: dict) -> dict:
-    """Перенос проекта в другой раздел."""
+    """Перенос проекта в другой раздел.
+
+    `pack: true` — упаковать книгу в новом разделе (клиент спрашивает об этом,
+    когда раздел архивный); без него книга остаётся каталогом.
+    """
     prj = _import_projects(ctx)
+    root = _projects_root(ctx)
     body = ctx["body"]
     section = (body.get("section") or "").strip()
     name = (body.get("name") or "").strip()
     dst = (body.get("dst") or "").strip()
-    ok, res = prj.move_project(_projects_root(ctx), section, name, dst)
+    ok, res = prj.move_project(root, section, name, dst)
     if not ok:
         raise ApiError(400, str(res))
+    moved = [{"section": section, "name": name, "dst": dst, "path": str(res)}]
     # журнал следует за проектом: логи запусков остаются видны на новой
     # вкладке (иначе после переноса в другой раздел история «пропала»)
     _job_manager(ctx).update_project_path(
         f"{section}/{name}", f"{dst}/{Path(res).name}", Path(res))
-    return {"ok": True, "section": dst, "name": Path(res).name}
+    payload = {"ok": True, "section": dst, "name": Path(res).name}
+    pack_job = _pack_after_move(ctx, root, dst, moved)
+    if pack_job is not None:
+        payload["pack"] = pack_job
+    return payload
+
+
+def _pack_after_move(ctx: dict, root: Path, dst: str,
+                     moved: list[dict]) -> dict | None:
+    """Упаковать перенесённые книги — только по явному согласию.
+
+    `moved` — результат `move_project(s)`. Пачка не спрашивает повторно:
+    человек уже ответил один раз, а частичная упаковка половины была бы
+    худшим из ответов. Ответ «оставить каталогами» — `pack: false`.
+    """
+    body = ctx["body"]
+    if not body.get("pack"):
+        return None
+    todo = [(str(m["dst"]), Path(m["path"]).name) for m in moved
+            if Path(m["path"]).is_dir()]
+    if not todo:
+        return None
+    return _archive_job(ctx, root, "pack", todo, [])
 
 
 def _projects_move_many(ctx: dict) -> dict:
@@ -560,7 +588,11 @@ def _projects_move_many(ctx: dict) -> dict:
         jm.update_project_path(f"{m['section']}/{m['name']}",
                                f"{dst}/{Path(m['path']).name}",
                                Path(m["path"]))
-    return {"ok": True, "dst": dst, "moved": moved, "skipped": skipped}
+    pack_job = _pack_after_move(ctx, root, dst, moved)
+    payload = {"ok": True, "dst": dst, "moved": moved, "skipped": skipped}
+    if pack_job is not None:
+        payload["pack"] = pack_job
+    return payload
 
 
 def _projects_rename(ctx: dict) -> dict:

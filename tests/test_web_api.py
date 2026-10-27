@@ -2981,6 +2981,65 @@ def test_projects_move_many_route(archive_srv):
     assert (projects_root / "DONE" / "book_a").is_dir()
 
 
+def test_move_project_packs_on_request(archive_srv):
+    """`pack: true` при переносе в архивный раздел упаковывает книгу."""
+    _, port, projects_root = archive_srv()
+    _create_project(port, projects_root)
+    _request(port, "POST", "/api/sections/DONE/props", {"archive": True})
+    res, payload = _request(port, "POST", "/api/projects/move",
+                            {"section": "ACTIVE", "name": "test_book",
+                             "dst": "DONE", "pack": True})
+    assert res.status == 200, payload
+    assert payload["pack"]["job"], payload
+    _wait_job(_job_manager(port), payload["pack"]["job"]["id"])
+    assert not (projects_root / "DONE" / "test_book").exists()
+    assert _archive_file(projects_root, "DONE", "test_book").is_file()
+
+
+def test_move_project_keeps_folder_without_consent(archive_srv):
+    """Без `pack` книга остаётся каталогом, даже в архивном разделе:
+    молчаливой упаковки не бывает."""
+    _, port, projects_root = archive_srv()
+    _create_project(port, projects_root)
+    _request(port, "POST", "/api/sections/DONE/props", {"archive": True})
+    res, payload = _request(port, "POST", "/api/projects/move",
+                            {"section": "ACTIVE", "name": "test_book",
+                             "dst": "DONE"})
+    assert res.status == 200, payload
+    assert "pack" not in payload
+    assert (projects_root / "DONE" / "test_book").is_dir()
+
+
+def test_projects_move_many_packs_whole_batch(archive_srv):
+    """Пачка спрашивает один раз: `pack: true` пакует все перенесённые."""
+    _, port, projects_root = archive_srv()
+    for nm in ("book_a", "book_b"):
+        _create_project(port, projects_root, name=nm)
+    _request(port, "POST", "/api/sections/DONE/props", {"archive": True})
+    res, payload = _request(port, "POST", "/api/projects/move-many", {
+        "dst": "DONE", "pack": True,
+        "items": [{"section": "ACTIVE", "name": "book_a"},
+                  {"section": "ACTIVE", "name": "book_b"}]})
+    assert res.status == 200, payload
+    assert len(payload["pack"]["items"]) == 2, payload
+    _wait_job(_job_manager(port), payload["pack"]["job"]["id"])
+    for nm in ("book_a", "book_b"):
+        assert _archive_file(projects_root, "DONE", nm).is_file()
+        assert not (projects_root / "DONE" / nm).exists()
+
+
+def test_archive_flag_implies_pack_on_move_route(archive_srv):
+    """Пометка раздела архивным через API включает предложение упаковки."""
+    _, port, _root = archive_srv()
+    res, payload = _request(port, "POST", "/api/sections/DONE/props",
+                            {"archive": True})
+    assert res.status == 200, payload
+    assert payload["props"]["pack_on_move"] is True
+    res, payload = _request(port, "POST", "/api/sections/DONE/props",
+                            {"archive": False})
+    assert payload["props"]["pack_on_move"] is False
+
+
 def test_projects_move_many_guards(archive_srv):
     _, port, _root = archive_srv()
     res, payload = _request(port, "POST", "/api/projects/move-many",
