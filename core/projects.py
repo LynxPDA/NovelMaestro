@@ -883,7 +883,14 @@ def project_items(projects_root: Path, section: str) -> list[dict]:
     нет; в карточке такой проект показывается как есть, но открыть его
     нельзя — сначала разархивация. `size`/`packed_at` берутся из манифеста
     (читается из головы архива, без распаковки).
+
+    Служебные каталоги не выглядят проектами: `.archive` и незавершённые
+    операции упаковки/распаковки (`<имя>.nmz.tmp`, `.nm_restore_<имя>`, см.
+    `core/archive.py`) — иначе во время работы человек видел бы две книги с
+    одним именем и мог бы упаковать мусор.
     """
+    from . import archive as arc  # локально: модуль тянет tarfile/shas
+
     if section not in load_sections(projects_root):
         return []
     root = Path(projects_root) / section
@@ -891,7 +898,7 @@ def project_items(projects_root: Path, section: str) -> list[dict]:
     if root.is_dir():
         for p in root.iterdir():
             if p.is_dir() and not p.is_symlink() \
-                    and p.name != ARCHIVE_DIR:
+                    and p.name != ARCHIVE_DIR and not arc.is_temp_name(p.name):
                 live[p.name] = {"name": p.name, "archived": False,
                                 "size": 0, "packed_at": ""}
     out = list(live.values())
@@ -930,6 +937,23 @@ def list_archives(section_dir: Path) -> list[dict]:
             "error": "" if man else "манифест не читается",
         })
     return out
+
+
+def archive_candidates(projects_root: Path, section: str, op: str) -> dict:
+    """Кого задевает пачка всего раздела: `{todo: [имена], total, done}`.
+
+    `pack` — книги, лежащие папками (архивы не трогаем), `unpack` — лежащие
+    архивами. `total` — сколько проектов в разделе вообще, `done` — сколько
+    уже в целевом состоянии: по ним интерфейс отличает «всё уже упаковано»
+    от «раздел пуст», не собирая список руками.
+    """
+    if op not in ("pack", "unpack"):
+        return {"todo": [], "total": 0, "done": 0}
+    items = project_items(projects_root, section)
+    packed = op == "pack"
+    todo = [i["name"] for i in items if bool(i.get("archived")) != packed]
+    return {"todo": todo, "total": len(items),
+            "done": len(items) - len(todo)}
 
 
 def archive_project(projects_root: Path, section: str, name: str,

@@ -88,7 +88,8 @@ PROJECTS_API = ["SECTIONS", "DEFAULT_SECTIONS", "load_sections",
                 "delete_project", "copy_project",
                 "section_entries", "section_props", "set_section_props",
                 "archive_sections", "is_archive_section", "SECTION_PROPS",
-                "project_items", "list_archives", "archive_project",
+                "project_items", "list_archives", "archive_candidates",
+                "archive_project",
                 "unarchive_project", "delete_archive",
                 "builtin_template_files", "sync_builtin_templates",
                 "TEMPLATE_ENV_EXAMPLE"]
@@ -97,7 +98,7 @@ ARCHIVE_API = ["ArchiveError", "ARCHIVE_EXT", "ARCHIVE_DIR", "ARCHIVE_MANIFEST",
                "ARCHIVE_VERSION", "COMPRESSION_LEVEL", "backend",
                "archive_path", "archive_dir", "archive_manifest",
                "pack_project", "unpack_project", "archive_size",
-               "archive_available", "archive_free_space"]
+               "archive_available", "archive_free_space", "is_temp_name"]
 # Зеркало API core/transport.py (единственная точка выхода в сеть)
 TRANSPORT_API = ["TransportError", "ConnectTimeout", "ReadTimeout", "BrokenStream",
                  "ResponseStream", "open_stream", "open_get", "open_json_get",

@@ -48,7 +48,7 @@ __all__ = [
     "ArchiveError", "ARCHIVE_EXT", "ARCHIVE_DIR", "ARCHIVE_MANIFEST",
     "ARCHIVE_VERSION", "COMPRESSION_LEVEL", "backend", "archive_path",
     "archive_dir", "archive_manifest", "pack_project", "unpack_project",
-    "archive_size", "archive_available", "archive_free_space",
+    "archive_size", "archive_available", "archive_free_space", "is_temp_name",
 ]
 
 log = logging.getLogger("core.archive")
@@ -66,7 +66,7 @@ ARCHIVE_VERSION = 1
 COMPRESSION_LEVEL = 9
 
 # Временные имена рядом с целью — не видны как проект/архив
-_TMP_SUFFIX = ".tmp"
+_TMP_SUFFIX = ARCHIVE_EXT + ".tmp"
 _RESTORE_PREFIX = ".nm_restore_"
 # Как часто звать progress(): колбэк стадии пишет строку в лог, на каждый
 # файл это сотни строк на книгу
@@ -311,6 +311,18 @@ def archive_size(path) -> int:
         return 0
 
 
+def is_temp_name(name: str) -> bool:
+    """Временное имя операции с архивом: не проект и не архив.
+
+    Упаковка пишет `<имя>.nmz.tmp` рядом с архивом, распаковка — каталог
+    `.nm_restore_<имя>` рядом с книгой; по имени файла от книги их не
+    отличить, поэтому список проектов спрашивает именно здесь. Суффикс —
+    полный (`экст архива + .tmp`): книга может честно называться `x.tmp`.
+    """
+    name = str(name)
+    return name.startswith(_RESTORE_PREFIX) or name.endswith(_TMP_SUFFIX)
+
+
 def archive_free_space(path) -> int:
     """Сколько байт свободно на диске, где лежит архив (0 — не узнать)."""
     try:
@@ -443,7 +455,7 @@ def pack_project(src, dst, *, skip=None, progress=None,
         man.update({k: v for k, v in manifest_extra.items() if k not in man})
     man["compression"] = be["id"]
 
-    tmp = dst.with_name(dst.name + _TMP_SUFFIX)
+    tmp = dst.with_name(dst.name + ".tmp")
     written = 0
     total = man["files"]
     try:

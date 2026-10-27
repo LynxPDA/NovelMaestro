@@ -422,3 +422,20 @@ def test_archive_roundtrip_is_smaller_for_text(tmp_path, any_backend):
     dst = tmp_path / "a.nmz"
     A.pack_project(src, dst)
     assert dst.stat().st_size < raw / 4
+
+
+# ════════════════════════════════════════════════════════════════════
+# служебные имена: недоделанная упаковка/распаковка — не книга
+
+
+@pytest.mark.parametrize("name,expected", [
+    (".nm_restore_Книга", True),      # распаковка идёт во временную папку
+    ("Книга.nmz.tmp", True),          # упаковка идёт во временный файл
+    ("Книга", False),
+    ("nm_restore_Книга", False),      # без точки это обычное имя книги
+    ("Книга.tmp", False),             # чужой временный файл — не наш
+    (".archive", False),              # каталог архивов отсекается отдельно
+])
+def test_is_temp_name(name, expected):
+    """Служебные имена упаковки/распаковки не выглядят книгами."""
+    assert A.is_temp_name(name) is expected

@@ -1130,6 +1130,49 @@ def test_project_items_and_list_archives(tmp_path):
     assert archives[0]["error"] == ""
 
 
+def test_project_items_hides_temp_dirs(tmp_path):
+    """Недоделанная распаковка и упаковка не выглядят книгами.
+
+    Пока идёт работа, рядом с книгами лежат `.nm_restore_<имя>` и
+    `<имя>.nmz.tmp`. Человек видел две книги с одним именем и мог выбрать
+    мусор; по имени файла от книги их не отличить — отсекает проект.
+    """
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.create_project(root, "ACTIVE", "Книга")
+    (root / "ACTIVE" / ".nm_restore_Книга").mkdir()
+    (root / "ACTIVE" / "Книга.nmz.tmp").write_text("мусор", encoding="utf-8")
+    (root / "ACTIVE" / "Книга.tmp").mkdir()  # законное имя книги — не служебное
+    assert P.list_projects(root, "ACTIVE") == ["Книга", "Книга.tmp"]
+
+
+def test_archive_candidates_split_by_op(tmp_path):
+    """Что заденет пачка всего раздела: pack — лежащие папками, unpack — архивами."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    for nm in ("Живая1", "Живая2", "Упакованная"):
+        P.create_project(root, "DONE", nm)
+    assert P.archive_project(root, "DONE", "Упакованная")[0]
+
+    pack = P.archive_candidates(root, "DONE", "pack")
+    assert pack == {"todo": ["Живая1", "Живая2"], "total": 3, "done": 1}
+    unpack = P.archive_candidates(root, "DONE", "unpack")
+    assert unpack == {"todo": ["Упакованная"], "total": 3, "done": 2}
+    # всё уже в нужном виде: пустой todo при непустом total — не «раздел пуст»
+    assert P.archive_project(root, "DONE", "Живая1")[0]
+    assert P.archive_project(root, "DONE", "Живая2")[0]
+    assert P.archive_candidates(root, "DONE", "pack")["todo"] == []
+
+
+def test_archive_candidates_bad_input(tmp_path):
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    assert P.archive_candidates(root, "DONE", "сжать") == {
+        "todo": [], "total": 0, "done": 0}
+    assert P.archive_candidates(root, "Нет_такого", "pack") == {
+        "todo": [], "total": 0, "done": 0}
+
+
 def test_archive_project_missing(tmp_path):
     root = tmp_path / "projects"
     P.ensure_projects_root(root)
