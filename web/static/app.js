@@ -700,6 +700,94 @@ function createProjectModal() {
 }
 
 /* ── управление проектом ─────────────────────────────────── */
+/* Массовый перенос выделенных книг между разделами: список имён с их
+   разделами (человек видит, ЧТО переезжает), выбор целевого раздела и
+   отчёт о результатах — занятое имя или битые данные одной книги не
+   отменяют перенос остальных. */
+function moveManyModal(items) {
+  const err = h("div", { class: "form-error" });
+  const dstSel = h("select", { class: "input" });
+  const list = h("div", { class: "files-list move-many-list" });
+  const bySec = {};
+  for (const it of items) (bySec[it.section] = bySec[it.section] || []).push(it.name);
+  for (const [sec, names] of Object.entries(bySec)) {
+    list.append(h("div", { class: "frow move-many-row" },
+      h("span", { class: "fname" }, sec),
+      h("span", { class: "fmeta" }, `${names.length}`),
+    ));
+    for (const n of names) {
+      list.append(h("div", { class: "frow move-many-row" },
+        h("span", { class: "fname" }, n),
+      ));
+    }
+  }
+  return new Promise((resolve) => {
+    UIC.modal({
+      title: `Перенести книги: ${items.length}`,
+      onClose: resolve,
+      build: (close) => [
+        h("div", { class: "modal-text" },
+          "Книги переезжают вместе с папкой (упакованные — файлом архива) "
+          + "и историей точек. Имя, занятое в целевом разделе, — пропуск."),
+        list,
+        h("div", { class: "manage-row" },
+          h("label", { class: "field" }, "Раздел назначения", dstSel),
+        ),
+        err,
+        h(
+          "div",
+          { class: "modal-actions" },
+          h("button", { class: "btn btn-ghost", onclick: () => close(false) }, "Отмена"),
+          h(
+            "button",
+            {
+              class: "btn btn-primary",
+              "data-modal-default": "1",
+              onclick: async () => {
+                err.textContent = "";
+                if (!dstSel.value) {
+                  err.textContent = "Выберите раздел назначения";
+                  return;
+                }
+                try {
+                  const r = await api("/projects/move-many", {
+                    method: "POST",
+                    body: { dst: dstSel.value, items },
+                  });
+                  const moved = (r.moved || []).length;
+                  const skipped = (r.skipped || []).length;
+                  toast(`Перенесено: ${moved}`
+                    + (skipped ? `, пропущено: ${skipped}` : ""));
+                  close(true);
+                } catch (ex) {
+                  err.textContent = ex.message;
+                }
+              },
+            },
+            "Перенести",
+          ),
+        ),
+      ],
+    });
+    loadHub()
+      .then((hub) => {
+        for (const s of hub.sections) {
+          dstSel.append(h("option", { value: s.name }, s.name));
+        }
+        /* предвыбор — СВОЙ раздел не предлагается по умолчанию: перенос в
+           него ничего не делает, а он же стоял первым и выглядел как
+           готовый ответ */
+        const src = new Set(items.map((i) => i.section));
+        const other = hub.sections.find((s) => !src.has(s.name));
+        if (other) dstSel.value = other.name;
+        dstSel.focus();
+      })
+      .catch((ex) => {
+        err.textContent = "Не удалось загрузить разделы: " + ex.message;
+      });
+  });
+}
+
 function manageProjectModal(section, name) {
   const err = h("div", { class: "form-error" });
   const info = h("div", { class: "modal-text" });
@@ -1008,6 +1096,20 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
    (перенос/переименование/удаление закрывают модалку с true). */
 async function openManage(section, name) {
   if (await manageProjectModal(section, name)) refreshHub();
+}
+
+/* Массовый перенос выделенных книг: ключи набора — «раздел/имя», а имя
+   книги само может содержать слэш-подобные символы — режем по ПЕРВОМУ. */
+async function openMoveMany() {
+  const items = [...hubSelection].map((k) => {
+    const i = k.indexOf("/");
+    return { section: k.slice(0, i), name: k.slice(i + 1) };
+  });
+  if (!items.length) return;
+  if (await moveManyModal(items)) {
+    hubSelection = new Set();
+    refreshHub();
+  }
 }
 
 /* Подтверждение обратимого действия: слово-пароль (confirmModal) только
@@ -2230,6 +2332,15 @@ async function viewHub() {
             },
             iconEl("archive-out"),
             "Разархивировать",
+          ),
+          h(
+            "button",
+            {
+              class: "btn btn-sm btn-ghost",
+              title: "Перенести все выделенные книги в другой раздел",
+              onclick: () => openMoveMany(),
+            },
+            "Перенести",
           ),
           /* Групповые действия объекта — здесь, а не на карточке: в строке
              шириной 250 px три подписи не влезают и уезжают за край */
