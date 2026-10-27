@@ -21,6 +21,7 @@ from conftest import (SilentLog, http_request as _request, http_send,
                       json_payload)
 from web import api as web_api
 from web.auth import Auth
+from web.jobs import JobManager
 from web.server import make_server
 
 REPO = Path(__file__).resolve().parent.parent
@@ -40,6 +41,10 @@ def srv_ctx(tmp_path):
         srv = make_server("127.0.0.1", 0, auth_obj,
                           repo_root=repo_root or REPO,
                           projects_root=projects_root)
+        # свой JobManager на каждый тестовый сервер: иначе хендлер уходит
+        # в общий web.main.JOB_MANAGER — один на процесс, и два теста в
+        # одном воркере видели чужие запуски (флак на параллельном прогоне)
+        srv.job_manager = JobManager(tmp_path / "job_logs", repo_root=REPO)
         web_api.register(srv.router, "127.0.0.1")
         t = threading.Thread(target=srv.serve_forever, daemon=True)
         t.start()
@@ -2686,13 +2691,11 @@ def _archive_file(projects_root, section, name):
 
 def _job_manager(port):
     """JobManager сервера этого порта (тот же, что видят хендлеры)."""
-    from web import api_stage
-    # контекст HTTP не носит job_manager, но сервер держит его у себя:
-    # берём через общий кеш api_stage по корню проектов
-    return api_stage._job_manager({"projects_root": _root_of(port)})
+    return _SERVERS[port].job_manager
 
 
 _ROOTS: dict[int, Path] = {}
+_SERVERS: dict[int, Any] = {}
 
 
 def _root_of(port):
@@ -2711,10 +2714,11 @@ def _wait_job(jm, job_id, timeout=30.0):
 
 @pytest.fixture()
 def archive_srv(srv_ctx):
-    """Сервер + запомненный корень проектов (нужен JobManager теста)."""
+    """Сервер + запомненные корень проектов и сам сервер (нужен JobManager)."""
     def _make():
         srv, port, projects_root = srv_ctx()
         _ROOTS[port] = projects_root
+        _SERVERS[port] = srv
         return srv, port, projects_root
     yield _make
 
