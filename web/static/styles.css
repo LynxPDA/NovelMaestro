@@ -546,8 +546,8 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
-/* карточка упакованного проекта: имя и действия те же, но книга на диске —
-   один файл, и «Открыть» у неё нет (сначала разархивация) */
+/* карточка упакованного проекта: книга на диске — один файл, поэтому
+   карточка открывает не проект, а экран «Книга упакована» с распаковкой */
 .card-archived {
   border-style: dashed;
 }
@@ -571,20 +571,21 @@ body {
   color: var(--muted);
   font-weight: 400;
 }
-/* панель выделения заменяет кнопки тулбара, пока есть отмеченные книги */
+/* панель выделения заменяет кнопки тулбара, пока есть отмеченные книги:
+   стоит на их месте в шапке, поэтому не сдвигает карточки вниз */
 .selection-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  margin: 14px 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  flex: 1 1 auto;
+  /* прижимается вправо, как кнопки тулбара, между которыми она встаёт */
+  justify-content: flex-end;
+  gap: 8px;
 }
 .selection-count {
   font-weight: 600;
   font-size: 13px;
+  color: var(--accent-2);
+  /* счётчик — не кнопка: до него может дотянуться перенос строки */
+  white-space: nowrap;
+  margin-right: 2px;
 }
 
 .m1-note {
@@ -1094,23 +1095,17 @@ input[type="number"] {
   align-items: center;
   gap: 8px;
 }
+/* «Выделить все» — у правого края заголовка: кнопка относится к разделу
+   целиком, а не к его названию */
+.section-select-all {
+  margin-left: auto;
+}
 .section-active .section-title::after {
   content: "◀ текущий";
   color: var(--accent-2);
   font-size: 11px;
   font-weight: 400;
 }
-/* действия раздела целиком («Архивировать все») — своей строкой под
-   заголовком: рядом с именем они переносились вразнобой, а имя раздела
-   переставало быть заголовком */
-.section-tools {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: -4px 0 10px;
-}
-
 .badge {
   padding: 1px 8px;
   border-radius: 10px;
@@ -1120,6 +1115,46 @@ input[type="number"] {
   font-size: 12px;
 }
 
+/* Карточка целиком — ссылка в проект. Отдельный слой под содержимым:
+   чекбокс и шестерёнка внутри <a> недопустимы, а растягивать ссылку на
+   саму карточку мешает то, что карточка — grid-элемент с padding. Слой
+   лежит под текстом (z-index 0 против 1 у содержимого), поэтому клик по
+   пустому месту попадает в него, а по контролам — в них. */
+.project-card {
+  position: relative;
+}
+.card-open {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: var(--radius);
+  text-decoration: none;
+}
+/* видимая рамка — признак «карточка живая»: без неё кликабельность всего
+   блока не читалась, а hover выдавал сюрприз */
+.card-open:hover {
+  box-shadow: inset 0 0 0 1px var(--border-hover, var(--accent-dim));
+}
+.card-open:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 1px;
+}
+.project-card > *:not(.card-open) {
+  position: relative;
+  z-index: 1;
+}
+/* шестерёнка в правом верхнем углу карточки: управление книгой */
+.card-gear {
+  margin-left: auto;
+  flex: 0 0 auto;
+  /* угол карточки: подпись не нужна, иконка узнаваема */
+  padding: 4px;
+  opacity: 0.65;
+}
+.card-gear:hover,
+.card-gear:focus-visible {
+  opacity: 1;
+}
 .project-card .card-actions {
   margin-top: 12px;
   display: flex;

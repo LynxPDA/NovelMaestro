@@ -769,15 +769,81 @@ def test_move_asks_pack_only_for_archive_section():
 
 def test_hub_cards_offer_no_open_for_archived():
     """У упакованной книги папки на диске нет: «Открыть» и «Запуски» из
-    карточки ведут в проект, которого нет. На карточке остаются действия
+    карточки вели бы в проект, которого нет. На карточке остаются действия
     одного объекта, а перенос/копия/удаление — в панели выделения."""
     app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
     block = app[app.index("function sectionBlock("):app.index("async function openManage(")]
-    archived_part = block[block.index("const actions = archived"):block.index(": [openBook, runs];")]
-    assert "openArchive" in archived_part and "download" in archived_part
-    assert "openBook" not in archived_part and "runs" not in archived_part
+    archived_part = block[block.index("const actions = archived"):block.index("      : [];")]
+    assert "unarchiveOne" in archived_part and "archive/download" in archived_part
+    # живая книга действий на карточке не несёт: открывает её сама карточка
+    assert "openBook" not in block and "runs" not in block
     # групповые действия объекта — в панели выделения (как у «Файлов»)
     assert '"Управление"' in app and "openManage(section, name)" in app
+
+
+def test_hub_card_opens_project_and_gear_manages():
+    """Карточка проекта целиком — ссылка в книгу, а «Открыть»/«Запуски» из
+    неё убраны: из карточки всегда приходили в один и тот же проект. Ссылка
+    лежит отдельным слоем (.card-open), потому что чекбокс и шестерёнка
+    внутри <a> недопустимы, а по пустому месту карточки кликать тоже надо.
+    Шестерёнка в углу — «Управление книгой»: иконка без подписи."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    block = app[app.index("function sectionBlock("):app.index("async function openManage(")]
+    # ссылка на всю карточку, а не на имя
+    assert 'class: "card-open"' in block
+    assert '"#/project/' not in block  # шаблон адреса собирается encodeURIComponent-ами
+    assert "encodeURIComponent(section.name)}/${encodeURIComponent(name)}`" in block
+    # шестерёнка: только иконка, с подписью в тултипе и aria-label
+    assert 'class: "btn btn-sm btn-ghost icon-btn card-gear"' in block
+    assert 'iconEl("settings")' in block
+    assert '`Управление книгой «${name}»: перенос, копия, переименование, удаление`' in block
+    assert 'e.stopPropagation();' in block
+    # принадлежность разделу с карточки убрана — раздел и так виден
+    assert "card-sub" not in block
+
+
+def test_hub_selection_bar_sits_in_header():
+    """Панель выделения занимает место кнопок шапки, а не отдельную строку
+    под ней: раньше она появлялась под шапкой и сдвигала вниз все карточки
+    — раскладка прыгала от одного клика по чекбоксу."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    hub = app[app.index("function selectionBar()"):app.index("async function viewHub()")]
+    assert 'class: "page-header-actions selection-bar"' in hub
+    # шапка выбирает одно из двух: панель или кнопки тулбара
+    view = app[app.index("async function viewHub()"):app.index("/* ── файловый менеджер")]
+    assert "hubSelection.size\n        ? selectionBar()" in view
+    assert "＋ Проект" in view and "Управление разделами" in view
+    # снятие выделения возвращает тулбар, а не пустое место
+    assert "hubSelection = new Set();\n          render();" in hub
+
+
+def test_hub_section_has_select_all_instead_of_archive_all():
+    """У раздела одна кнопка «Выделить все»: упаковать или распаковать пачку
+    решает панель выделения, где эти действия уже есть. Отдельные
+    «Архивировать все»/«Разархивировать все» дублировали её и заранее
+    выбирали вид операции за человека."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert "Архивировать все" not in app and "Разархивировать все" not in app
+    assert "section-tools" not in app
+    # серверный роут раздела остаётся рабочим API — убран только вызов из UI
+    assert "async function archiveSection" not in app
+    block = app[app.index("function sectionBlock("):app.index("async function openManage(")]
+    assert 'class: "btn btn-sm btn-ghost section-select-all"' in block
+    assert '"Выделить все"' in block and '"Снять выделение"' in block
+    # кнопка отмечает весь раздел, а не пачку «по одной операции»
+    assert "for (const n of projects) hubSelection.add(" in block
+    assert "const allSelected = projects.length > 0" in block
+
+
+def test_hub_create_button_label():
+    """Кнопка создания проекта — «＋ Проект»: шапка хаба держит рядом два
+    действия, и длинная подпись занимала строку целиком. Проба интерфейса
+    ищет её по тексту — совпадение обязательно."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert '"＋ Проект"' in app
+    assert '"＋ Создать проект"' not in app
+    probe = (REPO / "tools" / "ui_probe.mjs").read_text(encoding="utf-8")
+    assert "＋ Проект" in probe and "Создать проект" not in probe
 
 
 def test_archived_project_opens_with_explanation():

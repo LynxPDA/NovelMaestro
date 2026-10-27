@@ -981,6 +981,11 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
     render();
   }
 
+  /* карточка целиком открывает книгу — кнопок «Открыть»/«Запуски» в ней
+     нет: из карточки всегда приходили в один и тот же проект, а место они
+     занимали у всех. Последняя вкладка книги живёт в её же состоянии
+     (`nmTab` → `page`), поэтому обычная ссылка на книгу открывает именно её;
+     шестерёнка — «Управление книгой» (перенос, копия, удаление). */
   const cards = projects.map((name) => {
     const info = byName[name] || {};
     const archived = !!info.archived;
@@ -1002,29 +1007,41 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
       onchange: (e) => toggleSel(key, e.target.checked),
     });
     if (hubSelection.has(key)) cb.checked = true;
-    /* На карточке — только безопасные действия одной книги: открыть/запуски
-       у живой, распаковать/скачать у упакованной. Перенос, копия и удаление
-       — в панели выделения (там же, где у «Файлов»): три подписи в строке
-       шириной 250 px не влезали и уезжали за край карточки. */
-    const openArchive = h(
+    const gear = h(
       "button",
       {
-        class: "btn btn-sm btn-ghost",
-        title: "Распаковать книгу и вернуть папку проекта",
-        disabled: busy ? "" : null,
-        onclick: () => unarchiveOne(section.name, name),
+        class: "btn btn-sm btn-ghost icon-btn card-gear",
+        type: "button",
+        title: `Управление книгой «${name}»: перенос, копия, переименование, удаление`,
+        "aria-label": `Управление книгой «${name}»`,
+        onclick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openManage(section.name, name);
+        },
       },
-      iconEl("archive-out"),
-      "Разархивировать",
+      iconEl("settings"),
     );
-    const openBook = h("a", { class: "btn btn-sm btn-ghost", href: `#/project/${section.name}/${name}` }, "Открыть");
-    const runs = h("a", {
-      class: "btn btn-sm btn-ghost",
-      href: `#/project/${section.name}/${name}/run`,
-    }, "Запуски");
+    /* У живой книги на карточке действий нет: их место — в самом проекте, а
+       открытие делает клик по карточке. У упакованной папки нет, поэтому
+       «Разархивировать»/«Скачать» остаются: иначе до книги не добраться. */
     const actions = archived
       ? [
-          openArchive,
+          h(
+            "button",
+            {
+              class: "btn btn-sm btn-ghost",
+              title: "Распаковать книгу и вернуть папку проекта",
+              disabled: busy ? "" : null,
+              onclick: (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                unarchiveOne(section.name, name);
+              },
+            },
+            iconEl("archive-out"),
+            "Разархивировать",
+          ),
           h(
             "a",
             {
@@ -1033,22 +1050,37 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
               href: `/api/projects/${encodeURIComponent(section.name)}`
                 + `/${encodeURIComponent(name)}/archive/download`,
               download: `${name}.nmz`,
+              onclick: (e) => e.stopPropagation(),
             },
             iconEl("download"),
             "Скачать",
           ),
         ]
-      : [openBook, runs];
+      : [];
     return h(
       "div",
       { class: "card project-card" + (archived ? " card-archived" : "") },
-      h("div", { class: "card-head" }, cb, h("div", { class: "card-title" }, name)),
-      h("div", { class: "card-sub" }, archived ? `${section.name} · архив` : section.name),
+      /* «открыть книгу» — ссылка на всю карточку, а не на имя: попадать
+         надо и в пустое место у края. Чекбокс и шестерёнка внутри ссылки
+         недопустимы, поэтому она лежит отдельным слоем под содержимым
+         (см. .card-open в styles.css). */
+      h("a", {
+        class: "card-open",
+        href: `#/project/${encodeURIComponent(section.name)}/${encodeURIComponent(name)}`,
+        title: `Открыть проект «${name}»`,
+        "aria-label": `Открыть проект «${name}»`,
+      }),
+      h("div", { class: "card-head" }, cb, h("div", { class: "card-title" }, name), gear),
       stats,
-      h("div", { class: "card-actions" }, ...actions),
+      actions.length ? h("div", { class: "card-actions" }, ...actions) : null,
     );
   });
 
+  /* Отметить весь раздел — одна кнопка: упаковать или распаковать пачку
+     решает панель выделения, где эти действия уже есть. Парные кнопки
+     раздела дублировали её и молча выбирали за человека вид операции. */
+  const allSelected = projects.length > 0
+    && projects.every((n) => hubSelection.has(hubSelectedKey(section.name, n)));
   const header = h(
     "div",
     { class: "section-header" },
@@ -1059,44 +1091,32 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
       h("span", { class: "badge" }, String(projects.length)),
       isArchiveSection ? h("span", { class: "badge badge-archive", title: "Раздел архивный: книги здесь принято держать упакованными" }, "архив") : null,
     ),
+    projects.length
+      ? h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost section-select-all",
+            title: allSelected
+              ? `Снять выделение всех книг раздела ${section.name}`
+              : `Выделить все книги раздела ${section.name}`,
+            onclick: () => {
+              if (allSelected) {
+                for (const n of projects) hubSelection.delete(hubSelectedKey(section.name, n));
+              } else {
+                for (const n of projects) hubSelection.add(hubSelectedKey(section.name, n));
+              }
+              render();
+            },
+          },
+          allSelected ? "Снять выделение" : "Выделить все",
+        )
+      : null,
   );
   if (sectionActive) header.classList.add("section-active");
-  /* Раздел целиком: «упаковать все» / «распаковать все» — списком, который
-     сервер считает сам (карточки большого раздела грузятся в фоне). Кнопки
-     не гаснут: «уже всё сделано» — ответ сервера, а погашенная кнопка
-     молчала бы (у disabled не видно подсказки) и заставляла гадать, есть ли
-     действие вообще. */
-  const sectionTools = items.length
-    ? h(
-        "div",
-        { class: "section-tools" },
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            title: "Упаковать все книги раздела (запуск с логом)",
-            onclick: () => archiveSection(section.name, "pack"),
-          },
-          iconEl("archive-in"),
-          "Архивировать все",
-        ),
-        h(
-          "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            title: "Распаковать все книги раздела (запуск с логом)",
-            onclick: () => archiveSection(section.name, "unpack"),
-          },
-          iconEl("archive-out"),
-          "Разархивировать все",
-        ),
-      )
-    : null;
   return h(
     "section",
     { class: "section" },
     header,
-    sectionTools,
     h("div", { class: "cards" }, cards.length ? cards : [h("div", { class: "empty" }, "Нет проектов")]),
   );
 }
@@ -1206,45 +1226,6 @@ async function archiveSelected(op) {
         body: { op, items },
       });
       hubSelection = new Set();
-      await afterArchiveStart(r, items, verb);
-    },
-  );
-}
-
-/* Раздел целиком: список книг считает сервер (архивные или живые — по
-   операции), подтверждение спрашивается до запуска. */
-async function archiveSection(section, op) {
-  const verb = op === "pack" ? "Упаковать" : "Распаковать";
-  return askModal(
-    `${verb} все книги раздела ${section}`,
-    `Все книги раздела ${section}, которые сейчас в другом виде, будут ` +
-      `${op === "pack" ? "упакованы в архивы" : "распакованы в папки"}. ` +
-      "Работа идёт одним запуском с логом в панели «Запуски».",
-    verb,
-    async () => {
-      let r;
-      try {
-        r = await api(`/sections/${encodeURIComponent(section)}/archive`, {
-          method: "POST",
-          body: { op },
-        });
-      } catch (ex) {
-        toast(ex.message, "err");
-        return;
-      }
-      const items = r.items || [];
-      if (!items.length) {
-        /* `done` — число книг, уже находящихся в нужном виде, `total` — всего:
-           так различаются пустой раздел и «всё уже сделано» */
-        toast(
-          r.total
-            ? `${verb}: всё уже сделано (${r.done})`
-            : "В разделе нет проектов",
-          "err",
-        );
-        refreshHub();
-        return;
-      }
       await afterArchiveStart(r, items, verb);
     },
   );
@@ -2310,6 +2291,75 @@ function ensureDashTimer() {
 // (гонка таймер/навигация, та же идея, что st.gen в run-views.js)
 let renderGen = 0;
 
+/* Панель выделения — на месте кнопок шапки хаба. Своей строкой она шла
+   ПОД шапкой и сдвигала вниз все карточки: раскладка прыгала при каждом
+   клике по чекбоксу, хотя выделение ничего не «открывает». */
+function selectionBar() {
+  const keys = [...hubSelection];
+  return h(
+    "div",
+    { class: "page-header-actions selection-bar" },
+    h("span", { class: "selection-count" }, `Выбрано: ${keys.length}`),
+    h(
+      "button",
+      {
+        class: "btn btn-sm btn-primary",
+        title: "Упаковать выделенные книги в архивы .nmz",
+        onclick: () => archiveSelected("pack"),
+      },
+      iconEl("archive-in"),
+      "Архивировать",
+    ),
+    h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost",
+        title: "Вернуть выделенные книги папками",
+        onclick: () => archiveSelected("unpack"),
+      },
+      iconEl("archive-out"),
+      "Разархивировать",
+    ),
+    h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost",
+        title: "Перенести все выделенные книги в другой раздел",
+        onclick: () => openMoveMany(),
+      },
+      "Перенести",
+    ),
+    /* Групповые действия одного объекта — здесь, а не на карточке: в строке
+       шириной 250 px три подписи не влезают и уезжают за край */
+    h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost",
+        title: "Перенести, дублировать или удалить одну книгу",
+        disabled: keys.length === 1 ? null : "",
+        onclick: () => {
+          const [section, ...name] = keys[0].split("/");
+          openManage(section, name.join("/"));
+        },
+      },
+      "Управление",
+    ),
+    h(
+      "button",
+      {
+        class: "btn btn-sm btn-ghost icon-btn",
+        title: "Снять выделение",
+        "aria-label": "Снять выделение",
+        onclick: () => {
+          hubSelection = new Set();
+          render();
+        },
+      },
+      iconEl("close"),
+    ),
+  );
+}
+
 async function viewHub() {
   const hub = await loadHub();
   const sections = hub.sections;
@@ -2331,88 +2381,32 @@ async function viewHub() {
         h("h1", { class: "page-title" }, "Проекты"),
         h("div", { class: "page-sub" }, `Проектов: ${totalProjects}`),
       ),
-      h(
-        "div",
-        { class: "page-header-actions" },
-        h(
-          "button",
-          {
-            class: "btn btn-primary",
-            onclick: async () => {
-              if (await createProjectModal()) refreshHub();
-            },
-          },
-          "＋ Создать проект",
-        ),
-        h(
-          "button",
-          { class: "btn btn-ghost", onclick: () => sectionsModal() },
-          "Управление разделами",
-        ),
-      ),
+      /* Панель выделения занимает место кнопок тулбара, пока есть отметки:
+         раньше она шла отдельной строкой под шапкой и сдвигала вниз все
+         карточки — раскладка прыгала на ровном месте. Кнопки шапки при
+         выделении не нужны: в проекты и разделы отсюда не ходят. */
+      hubSelection.size
+        ? selectionBar()
+        : h(
+            "div",
+            { class: "page-header-actions" },
+            h(
+              "button",
+              {
+                class: "btn btn-primary",
+                onclick: async () => {
+                  if (await createProjectModal()) refreshHub();
+                },
+              },
+              "＋ Проект",
+            ),
+            h(
+              "button",
+              { class: "btn btn-ghost", onclick: () => sectionsModal() },
+              "Управление разделами",
+            ),
+          ),
     ),
-    hubSelection.size
-      ? h(
-          "div",
-          { class: "selection-bar" },
-          h("span", { class: "selection-count" }, `Выбрано: ${hubSelection.size}`),
-          h(
-            "button",
-            {
-              class: "btn btn-sm btn-primary",
-              title: "Упаковать выделенные книги в архивы .nmz",
-              onclick: () => archiveSelected("pack"),
-            },
-            iconEl("archive-in"),
-            "Архивировать",
-          ),
-          h(
-            "button",
-            {
-              class: "btn btn-sm btn-ghost",
-              title: "Вернуть выделенные книги папками",
-              onclick: () => archiveSelected("unpack"),
-            },
-            iconEl("archive-out"),
-            "Разархивировать",
-          ),
-          h(
-            "button",
-            {
-              class: "btn btn-sm btn-ghost",
-              title: "Перенести все выделенные книги в другой раздел",
-              onclick: () => openMoveMany(),
-            },
-            "Перенести",
-          ),
-          /* Групповые действия объекта — здесь, а не на карточке: в строке
-             шириной 250 px три подписи не влезают и уезжают за край */
-          h(
-            "button",
-            {
-              class: "btn btn-sm btn-ghost",
-              title: "Перенести, дублировать или удалить одну книгу",
-              disabled: hubSelection.size === 1 ? null : "",
-              onclick: () => {
-                const [[section, ...name]] = [...hubSelection].map((k) => k.split("/"));
-                openManage(section, name.join("/"));
-              },
-            },
-            "Управление",
-          ),
-          h(
-            "button",
-            {
-              class: "btn btn-sm btn-ghost",
-              onclick: () => {
-                hubSelection = new Set();
-                render();
-              },
-            },
-            "Снять выделение",
-          ),
-        )
-      : null,
     h(
       "div",
       { class: "hub-sections" },
@@ -3496,9 +3490,9 @@ function sectionsModal() {
 
   function renderRow(s) {
     const actions = h("div", { class: "factions" });
-    /* Раздел-архив: книгами здесь принято держать упакованные; флаг включает
-       пометку «архив» и массовое «Архивировать все». Отдельного «упаковать
-       при переносе» пока нет — молчаливой упаковки не бывает. */
+    /* Раздел-архив: книгами здесь принято держать упакованные. Флаг
+       включает пометку «архив» и вопрос об упаковке при переносе
+       (pack_on_move — его следствие); молчаливой упаковки не бывает. */
     actions.append(
       rowIcon(
         "archive",
