@@ -748,6 +748,25 @@ def test_hub_archive_refreshes_after_job():
     assert 'text: busy ? "идёт архивация…" : statsLine' in app
 
 
+def test_move_asks_pack_only_for_archive_section():
+    """Перенос в архивный раздел спрашивает «закрыть книгу или оставить
+    каталогом», а в обычный — не спрашивает вовсе: вопрос ни о чём был бы
+    лишним шагом. Флаг приходит из `/api/sections` (`pack_on_move` —
+    следствие `archive`), в SPA своего списка разделов-архивов нет."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function asksPack(hub, dst)" in app
+    assert "sec.pack_on_move" in app
+    assert "function packChoice()" in app
+    assert '"Оставить каталогом"' in app
+    assert '"Закрыть книгу и освободить место"' in app
+    # вопрос включается выбором раздела в обоих окнах переноса
+    assert "syncPackChoice(choice, hub, dstSel.value)" in app
+    assert "syncPackChoice(choice, hubCache, dstSel.value)" in app
+    # согласие уезжает на сервер отдельным полем, а не выводится там заново
+    assert "body: { dst: dstSel.value, items, pack: choice.pack }" in app
+    assert "body: { section, name, dst: dstSel.value, pack: choice.pack }" in app
+
+
 def test_hub_cards_offer_no_open_for_archived():
     """У упакованной книги папки на диске нет: «Открыть» и «Запуски» из
     карточки ведут в проект, которого нет. На карточке остаются действия

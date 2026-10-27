@@ -710,6 +710,7 @@ function moveManyModal(items) {
   const list = h("div", { class: "files-list move-many-list" });
   const bySec = {};
   for (const it of items) (bySec[it.section] = bySec[it.section] || []).push(it.name);
+  const choice = packChoice();
   for (const [sec, names] of Object.entries(bySec)) {
     list.append(h("div", { class: "frow move-many-row" },
       h("span", { class: "fname" }, sec),
@@ -733,6 +734,7 @@ function moveManyModal(items) {
         h("div", { class: "manage-row" },
           h("label", { class: "field" }, "Раздел назначения", dstSel),
         ),
+        choice.row,
         err,
         h(
           "div",
@@ -752,7 +754,7 @@ function moveManyModal(items) {
                 try {
                   const r = await api("/projects/move-many", {
                     method: "POST",
-                    body: { dst: dstSel.value, items },
+                    body: { dst: dstSel.value, items, pack: choice.pack },
                   });
                   const moved = (r.moved || []).length;
                   const skipped = (r.skipped || []).length;
@@ -780,6 +782,8 @@ function moveManyModal(items) {
         const src = new Set(items.map((i) => i.section));
         const other = hub.sections.find((s) => !src.has(s.name));
         if (other) dstSel.value = other.name;
+        syncPackChoice(choice, hub, dstSel.value);
+        dstSel.onchange = () => syncPackChoice(choice, hub, dstSel.value);
         dstSel.focus();
       })
       .catch((ex) => {
@@ -790,6 +794,7 @@ function moveManyModal(items) {
 
 function manageProjectModal(section, name) {
   const err = h("div", { class: "form-error" });
+  const choice = packChoice();
   const info = h("div", { class: "modal-text" });
   const dstSel = h("select", { class: "input" });
   const newName = h("input", { class: "input", placeholder: "new_name" });
@@ -822,9 +827,10 @@ function manageProjectModal(section, name) {
                   try {
                     const r = await api("/projects/move", {
                       method: "POST",
-                      body: { section, name, dst: dstSel.value },
+                      body: { section, name, dst: dstSel.value, pack: choice.pack },
                     });
-                    toast(`Перенесено → ${r.section}/${r.name}`);
+                    toast(`Перенесено → ${r.section}/${r.name}`
+                      + (r.pack ? ", упаковано" : ""));
                     close(true);
                   } catch (ex) {
                     err.textContent = ex.message;
@@ -834,6 +840,7 @@ function manageProjectModal(section, name) {
               "Перенести",
             ),
           ),
+          choice.row,
           h(
             "div",
             { class: "manage-row" },
@@ -911,6 +918,8 @@ function manageProjectModal(section, name) {
     for (const s of hubCache.sections.filter((x) => x.name !== section)) {
       dstSel.append(h("option", { value: s.name }, s.name));
     }
+    syncPackChoice(choice, hubCache, dstSel.value);
+    dstSel.onchange = () => syncPackChoice(choice, hubCache, dstSel.value);
     newName.value = name;
   });
 }
@@ -1110,6 +1119,40 @@ async function openMoveMany() {
     hubSelection = new Set();
     refreshHub();
   }
+}
+
+/* Перенос в архивный раздел: «закрыть книгу и освободить место» или
+   «оставить каталогом». Спрашиваем всегда и только когда в разделе
+   назначения есть что упаковывать: молчаливой упаковки не бывает, а
+   вопрос ни о чём — лишний шаг. Возвращает `true` — упаковать. */
+function asksPack(hub, dst) {
+  const sec = ((hub && hub.sections) || []).find((s) => s.name === dst);
+  return !!(sec && sec.pack_on_move);
+}
+
+/* Компактный выбор вместо двух кнопок в `.modal-actions`: в окне уже есть
+   «Отмена» и дело, и три кнопки подряд читались бы как три исхода. */
+function packChoice() {
+  const sel = h(
+    "select",
+    { class: "input" },
+    h("option", { value: "keep" }, "Оставить каталогом"),
+    h("option", { value: "pack" }, "Закрыть книгу и освободить место"),
+  );
+  const row = h(
+    "div",
+    { class: "manage-row pack-choice", hidden: "" },
+    h("label", { class: "field" }, "После переноса", sel),
+  );
+  return { row, sel, get pack() { return sel.value === "pack"; } };
+}
+
+/* Раздел назначения сменили — показать или убрать вопрос об упаковке.
+   Свойство `hidden` — булево: пустая строка включает скрытие (как и в
+   разметке `<div hidden>`), поэтому «показать» — это именно false. */
+function syncPackChoice(choice, hub, dst) {
+  choice.row.hidden = !asksPack(hub, dst);
+  if (choice.row.hidden) choice.sel.value = "keep";
 }
 
 /* Подтверждение обратимого действия: слово-пароль (confirmModal) только

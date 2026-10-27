@@ -1315,6 +1315,12 @@ input[type="number"] {
   gap: 10px;
   align-items: flex-end;
 }
+/* `display: flex` перебивает браузерный `[hidden] { display: none }`:
+   скрытые через свойство `hidden` строки оставались на экране (атрибут
+   есть, элемента не видно — уже нет). Правило одно на всю SPA. */
+[hidden] {
+  display: none !important;
+}
 .manage-row .field {
   flex: 1;
 }
