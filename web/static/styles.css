@@ -680,9 +680,12 @@ body {
 }
 /* Пункты меню — все по левому краю: control'ы вьюхи приходят в меню своими
    классами, а у кнопки браузер ставит текст по центру — отсюда «то слева,
-   то по центру» в одном списке. Длинные подписи переносятся. */
+   то по центру» в одном списке. Пункт — растянутая flex-кнопка (база .btn
+   центрирует содержимое), поэтому край задаёт justify-content, а text-align
+   остаётся для блочных пунктов. Длинные подписи переносятся. */
 .toolbar-menu .menu-box > *,
 .user-menu > * {
+  justify-content: flex-start;
   text-align: left;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -991,6 +994,11 @@ input[type="number"] {
      прилипала к подписи («Архивировать все», «Открыть») */
   display: inline-flex;
   align-items: center;
+  /* подпись по центру своей кнопки: кнопка бывает шире текста (на телефоне
+     .modal-actions растягивает её через flex, .btn-block и .update-btn —
+     на всю ширину), и без этого подпись стояла у левого края полосы.
+     Строки-списки, которым нужен левый край, гасят это своим правилом */
+  justify-content: center;
   gap: 6px;
 }
 .btn:hover {
@@ -1510,6 +1518,9 @@ input[type="number"] {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
+  /* заголовок стадии — от левого края: карточка тянется на всю колонку,
+     а центрирование базы .btn собрало бы подписи посередине */
+  justify-content: flex-start;
   text-align: left;
   cursor: pointer;
   transition: border-color 0.15s;
@@ -1540,18 +1551,6 @@ input[type="number"] {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-/* Кнопки внизу формы — по центру и по своей ширине, а не во весь ряд:
-   во flex-колонке ребёнок по умолчанию растягивается (align-items:
-   stretch), и «Предпросмотр запроса» с «Запустить» становились полосами
-   во всю ширину формы с подписью у левого края. Поля формы тянут ширину
-   сами — им растяжка и нужна. */
-/* Кнопки внизу формы — во всю ширину (как и было), а содержимое по
-   центру: база .btn — inline-flex, и содержимое прижималось к левому
-   краю широкой кнопки. Ширину даёт растяжка flex-колонки (align-self по
-   умолчанию), её не трогаем. */
-.run-form > .btn {
-  justify-content: center;
 }
 /* разделитель блока «Настройки LLM» в Экспертном режиме Запусков */
 .run-form-group {
@@ -1797,6 +1796,9 @@ input[type="number"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* путь читается слева, и многоватое обрезается в конце: по центру
+     обрезка съедала бы начало пути */
+  justify-content: flex-start;
   font-family: var(--mono);
   font-size: 12px;
 }
@@ -2651,6 +2653,9 @@ input[type="number"] {
   /* flex: строки логов с иконкой папки — без gap svg слипается с текстом */
   display: flex;
   align-items: center;
+  /* строка списка тянется на всю панель, а читается от левого края:
+     центрирование базы .btn здесь не годится */
+  justify-content: flex-start;
   gap: 8px;
   text-align: left;
 }

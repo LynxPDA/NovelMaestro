@@ -875,15 +875,43 @@ def test_selection_bar_buttons_are_plain():
     assert bar.count('"btn btn-sm btn-ghost"') >= 4
 
 
-def test_run_form_buttons_span_width_with_centered_text():
-    """Кнопки внизу формы запуска — во всю ширину формы, содержимое по
-    центру. База .btn — inline-flex без justify-content, поэтому подпись
-    прижималась к левому краю широкой кнопки; сужать саму кнопку нельзя —
-    две полосы во всю ширину и были задуманы."""
+def test_buttons_center_their_label():
+    """Подпись кнопки стоит по центру самой кнопки. База .btn — inline-flex,
+    и без justify-content кнопка, растянутая шире текста (на телефоне
+    .modal-actions даёт .btn flex: 1 1 auto, .btn-block и .update-btn —
+    width: 100%), оставляла подпись у левого края. Строки-списки, которым
+    нужен левый край, гасят это своим правилом — иначе центрирование
+    возвращается к ним через ту же базу."""
     css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
-    assert ".run-form > .btn {\n  justify-content: center;\n}" in css
+    assert ".btn {" in css
+    base = css[css.index("\n.btn {"):]
+    base = base[:base.index("\n}")]
+    assert "display: inline-flex;" in base
+    assert "justify-content: center;" in base
+    # широкие кнопки без своего правила — на них проверялось смещение
+    assert ".btn-block {\n  width: 100%;\n}" in css
+    assert ".update-btn {\n  width: 100%;\n}" in css
+    assert ".modal-actions .btn {\n    flex: 1 1 auto;\n  }" in css
+    # строки-списки и меню читаются от левого края — это их правило, а не бага
+    for sel in (".toolbar-menu .menu-box > *,\n.user-menu > *",
+                ".prompt-item",
+                ".stage-card",
+                ".search-file-path"):
+        assert sel + " {" in css, sel
+        rule = css[css.index(sel + " {"):]
+        rule = rule[:rule.index("\n}")]
+        assert "justify-content: flex-start;" in rule, sel
+
+
+def test_run_form_buttons_span_width_with_centered_text():
+    """Кнопки внизу формы запуска — во всю ширину формы, подпись по центру
+    (её центрирует база .btn); сужать саму кнопку нельзя — две полосы во всю
+    ширину и были задуманы."""
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+    # собственного правила у формы нет: центрирование живёт в базе .btn
+    assert ".run-form > .btn {" not in css
     # ширину даёт растяжка flex-колонки: собственного сужения быть не должно
-    assert ".run-form > .btn {\n  align-self: center;\n}" not in css
+    assert "align-self: center;" not in css
 
 
 def test_manage_modal_archive_and_long_name():
