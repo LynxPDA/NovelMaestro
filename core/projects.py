@@ -84,6 +84,9 @@ def _sections_file(projects_root: Path) -> Path:
 # Свойства раздела в .sections.json: имя плюс то, что описывает его целиком.
 # `archive` — раздел-архив (проекты живут файлами, а не папками);
 # `pack_on_move` — при переносе сюда предлагать упаковку (молчаливой нет).
+# Отдельного флага «предлагать упаковку» у архивного раздела нет: пометка
+# архивным сама включает предложение — иначе два соседних свойства
+# противоречили бы друг другу («архив, но книги держим папками»).
 SECTION_PROPS = ("archive", "pack_on_move")
 DEFAULT_SECTION_PROPS = {"archive": False, "pack_on_move": False}
 
@@ -202,10 +205,18 @@ def set_section_props(projects_root: Path, name: str, **props) -> tuple[bool, st
     Незнакомый ключ — отказ (иначе опечатка молча терялась бы): набор
     свойств замкнут. Раздела нет — отказ: свойства без раздела не живут.
     Возвращает `(ok, сообщение_или_имя)` — как остальные операции.
+
+    `pack_on_move` следует за `archive`: пометка раздела архивным сама
+    включает предложение упаковки при переносе, снятие — выключает.
+    Явно переданный `pack_on_move` при смене `archive` в том же запросе
+    игнорируется: два ответа на один вопрос разошлись бы.
     """
     bad = [k for k in props if k not in SECTION_PROPS]
     if bad:
         return False, f"Неизвестное свойство раздела: {', '.join(bad)}."
+    wanted = dict(props)
+    if "archive" in wanted:
+        wanted["pack_on_move"] = bool(wanted["archive"])
     with _SECTIONS_LOCK:
         entries = _all_entries(projects_root)
         names = [n for n, _ in entries]
@@ -213,7 +224,7 @@ def set_section_props(projects_root: Path, name: str, **props) -> tuple[bool, st
             return False, f"Раздел не найден: {name!r}."
         for n, p in entries:
             if n == name:
-                for k, v in props.items():
+                for k, v in wanted.items():
                     p[k] = bool(v)
         save_sections(projects_root, [{"name": n, **p} for n, p in entries])
     return True, name

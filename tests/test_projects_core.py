@@ -1051,8 +1051,32 @@ def test_set_section_props_persists(tmp_path):
     # файл хранит объект, а не строку — и читается заново
     data = json.loads((root / P.SECTIONS_FILE).read_text(encoding="utf-8"))
     assert data[0]["name"] == "ACTIVE"
+    # pack_on_move — следствие archive: пометка архивным сама включает
+    # предложение упаковки при переносе
     assert {"name": "DONE", "archive": True,
-            "pack_on_move": False} in data
+            "pack_on_move": True} in data
+
+
+def test_set_section_props_archive_sets_pack_on_move(tmp_path):
+    """Пометка архивным включает предложение упаковки, снятие — выключает."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.set_section_props(root, "DONE", archive=True)
+    props = P.section_props(root, "DONE")
+    assert props["pack_on_move"] is True
+    P.set_section_props(root, "DONE", archive=False)
+    props = P.section_props(root, "DONE")
+    assert props["archive"] is False and props["pack_on_move"] is False
+
+
+def test_set_section_props_conflicting_pair_keeps_archive_truth(tmp_path):
+    """`archive` и явный `pack_on_move` в одном запросе не спорят."""
+    root = tmp_path / "projects"
+    P.ensure_projects_root(root)
+    P.set_section_props(root, "DONE", archive=True, pack_on_move=False)
+    assert P.section_props(root, "DONE")["pack_on_move"] is True
+    P.set_section_props(root, "DONE", archive=False, pack_on_move=True)
+    assert P.section_props(root, "DONE")["pack_on_move"] is False
 
 
 def test_set_section_props_unknown_key_rejected(tmp_path):
