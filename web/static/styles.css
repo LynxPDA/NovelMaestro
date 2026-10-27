@@ -1140,8 +1140,7 @@ input[type="number"] {
   pointer-events: none;
 }
 .project-card .card-check,
-.project-card .card-gear,
-.project-card .card-actions {
+.project-card .card-gear {
   pointer-events: auto;
 }
 /* Подсветка карточки при наведении: ведём её от самой карточки, а не от
@@ -1164,20 +1163,6 @@ input[type="number"] {
 .card-gear:hover,
 .card-gear:focus-visible {
   opacity: 1;
-}
-.project-card .card-actions {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-/* кнопки делят строку поровну: пара «Разархивировать» + «Скачать» в 250 px
-   не влезает и переносится — половинные кнопки читаются как два равных
-   действия, а не как ряд с обрезанным краем */
-.project-card .card-actions > * {
-  flex: 1 1 auto;
-  justify-content: center;
 }
 
 /* ── шаблоны  ── */
@@ -1255,6 +1240,16 @@ input[type="number"] {
 .modal-title {
   font-size: 17px;
   font-weight: 700;
+  /* длинное имя книги в заголовке распирало окно по горизонтали и
+     заставляло прокручивать его вбок до кнопок */
+  overflow-wrap: anywhere;
+}
+/* что за книга: раздел и имя, словом-в-слово и с переносом */
+.modal-sub {
+  margin-top: -6px;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 .modal-text {
   color: var(--muted);
@@ -1359,6 +1354,9 @@ input[type="number"] {
   display: flex;
   gap: 10px;
   align-items: flex-end;
+  /* ряд шире окна (три кнопки в одной строке) не распирает модалку
+     вбок — лишнее переносится на свою строку */
+  flex-wrap: wrap;
 }
 /* `display: flex` перебивает браузерный `[hidden] { display: none }`:
    скрытые через свойство `hidden` строки оставались на экране (атрибут
@@ -1368,6 +1366,8 @@ input[type="number"] {
 }
 .manage-row .field {
   flex: 1;
+  /* поле с длинным значением не тянет за собой ширину ряда */
+  min-width: 0;
 }
 
 /* ── тосты ─────────────────────────────────────────────── */

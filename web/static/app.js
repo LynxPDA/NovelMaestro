@@ -528,7 +528,7 @@ async function loadHub(force = false) {
 }
 
 async function projectStats(section, name) {
-  return api(`/projects/${section}/${name}/stats`);
+  return api(`/projects/${encodeURIComponent(section)}/${encodeURIComponent(name)}/stats`);
 }
 
 /* ── мастер создания проекта ─────────────────────────────── */
@@ -798,17 +798,21 @@ function manageProjectModal(section, name) {
   const info = h("div", { class: "modal-text" });
   const dstSel = h("select", { class: "input" });
   const newName = h("input", { class: "input", placeholder: "new_name" });
+  /* Имя книги — отдельной строкой, а не в заголовке: длинное название
+     распирало окно по горизонтали и заставляло прокручивать его вбок,
+     чтобы добраться до кнопок. Слово без пробелов («Очень_длинное_…»)
+     переносится через overflow-wrap: anywhere. */
+  const subtitle = h("div", { class: "modal-sub" }, `${section} / ${name}`);
+  let archived = false;
+  const arcBtn = h("button", { class: "btn", disabled: "" }, "Архивировать");
 
   return new Promise((resolve) => {
-    projectStats(section, name)
-      .then((r) => {
-        info.textContent = r.stats;
-      })
-      .catch(() => {});
+
     UIC.modal({
-      title: `Управление · ${section}/${name}`,
+      title: "Управление книгой",
       onClose: resolve,
       build: (close) => [
+        subtitle,
         info,
         err,
         h(
@@ -869,6 +873,7 @@ function manageProjectModal(section, name) {
           h(
             "div",
             { class: "manage-row" },
+            arcBtn,
             h(
               "button",
               {
@@ -921,6 +926,70 @@ function manageProjectModal(section, name) {
     syncPackChoice(choice, hubCache, dstSel.value);
     dstSel.onchange = () => syncPackChoice(choice, hubCache, dstSel.value);
     newName.value = name;
+
+    /* Упакована ли книга — по манифесту архива: у живой ответ `archived:
+       false` без 404. Кнопка сначала гаснет (запрос в пути), затем говорит
+       своим текущим состоянием: упакованную можно только распаковать —
+       «Архивировать» на ней вела бы в отказ сервера. */
+    /* Состояние архива решает сразу две вещи: подпись кнопки и то, можно ли
+       спрашивать статистику. У упакованной книги папки нет, и /stats
+       отвечает 404 — запрос «в пустоту» засорял журнал, а строка статистики
+       оставалась пустой. */
+    api(`/projects/${encodeURIComponent(section)}/${encodeURIComponent(name)}/archive`)
+      .then((r) => {
+        archived = !!(r && r.archived);
+        arcBtn.textContent = archived ? "Разархивировать" : "Архивировать";
+        arcBtn.title = archived
+          ? "Вернуть книгу папкой проекта (снова займёт место на диске)"
+          : "Упаковать книгу в архив .nmz и освободить место";
+        arcBtn.disabled = false;
+        if (archived) {
+          // папки нет — статистики тоже: подписываем то, что видно у архива
+          info.textContent = `архив · ${fmtSize(r.size || 0)}`
+            + ((r.manifest && r.manifest.created)
+              ? ` · ${String(r.manifest.created).slice(0, 10)}` : "");
+          return;
+        }
+        projectStats(section, name)
+          .then((st) => {
+            info.textContent = st.stats;
+          })
+          .catch(() => {});
+      })
+      .catch(() => {
+        /* книга не найдена или архив не прочитать — кнопку не предлагаем */
+      });
+    arcBtn.onclick = async () => {
+      err.textContent = "";
+      const op = archived ? "unpack" : "pack";
+      const verb = archived ? "Разархивировать" : "Упаковать";
+      askModal(
+        `${verb} книгу`,
+        archived
+          ? `Вернуть ${name} папкой проекта? На диске снова будет занято место, зато откроются редактор, поиск и запуски.`
+          : `Упаковать ${name} в архив .nmz? Книга займёт меньше места, а вернуть её можно кнопкой «Разархивировать».`,
+        verb,
+        async () => {
+          let r;
+          try {
+            r = await api("/projects/archive", {
+              method: "POST",
+              body: { op, items: [{ section, name }] },
+            });
+          } catch (ex) {
+            toast(ex.message, "err");
+            return;
+          }
+          if (!(r.items || []).length) {
+            toast((r.skipped && r.skipped[0] && r.skipped[0].reason)
+              || `${verb}: не запущено`, "err");
+            return;
+          }
+          close(true); // хаб перечитает списки: книга сменила вид
+          await afterArchiveStart(r, r.items, verb);
+        },
+      );
+    };
   });
 }
 
@@ -1012,7 +1081,7 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
       {
         class: "btn btn-sm btn-ghost icon-btn card-gear",
         type: "button",
-        title: `Управление книгой «${name}»: перенос, копия, переименование, удаление`,
+        title: `Управление книгой «${name}»: архив, перенос, переименование, копия, удаление`,
         "aria-label": `Управление книгой «${name}»`,
         onclick: (e) => {
           e.preventDefault();
@@ -1022,41 +1091,11 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
       },
       iconEl("settings"),
     );
-    /* У живой книги на карточке действий нет: их место — в самом проекте, а
-       открытие делает клик по карточке. У упакованной папки нет, поэтому
-       «Разархивировать»/«Скачать» остаются: иначе до книги не добраться. */
-    const actions = archived
-      ? [
-          h(
-            "button",
-            {
-              class: "btn btn-sm btn-ghost",
-              title: "Распаковать книгу и вернуть папку проекта",
-              disabled: busy ? "" : null,
-              onclick: (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                unarchiveOne(section.name, name);
-              },
-            },
-            iconEl("archive-out"),
-            "Разархивировать",
-          ),
-          h(
-            "a",
-            {
-              class: "btn btn-sm btn-ghost",
-              title: "Скачать архив .nmz (открывается любым архиватором)",
-              href: `/api/projects/${encodeURIComponent(section.name)}`
-                + `/${encodeURIComponent(name)}/archive/download`,
-              download: `${name}.nmz`,
-              onclick: (e) => e.stopPropagation(),
-            },
-            iconEl("download"),
-            "Скачать",
-          ),
-        ]
-      : [];
+    /* Действий на карточке нет ни у живой книги, ни у упакованной:
+       открытие — клик по карточке, а «Архивировать/Разархивировать» и
+       «Скачать» живут в «Управлении книгой» (шестерёнка). Кнопки внизу
+       карточки спорили за место с подписью статистики и у короткой книги
+       занимали половину высоты. */
     return h(
       "div",
       { class: "card project-card" + (archived ? " card-archived" : "") },
@@ -1072,7 +1111,6 @@ function sectionBlock(section, projects, sectionActive, statsMap, hub) {
       }),
       h("div", { class: "card-head" }, cb, h("div", { class: "card-title" }, name), gear),
       stats,
-      actions.length ? h("div", { class: "card-actions" }, ...actions) : null,
     );
   });
 

@@ -767,16 +767,17 @@ def test_move_asks_pack_only_for_archive_section():
     assert "body: { section, name, dst: dstSel.value, pack: choice.pack }" in app
 
 
-def test_hub_cards_offer_no_open_for_archived():
-    """У упакованной книги папки на диске нет: «Открыть» и «Запуски» из
-    карточки вели бы в проект, которого нет. На карточке остаются действия
-    одного объекта, а перенос/копия/удаление — в панели выделения."""
+def test_hub_cards_carry_no_actions():
+    """Карточка не несёт кнопок вовсе: у живой книги открытие делает клик по
+    карточке, у упакованной — кнопки внизу спорили за место с подписью
+    статистики и у короткой книги занимали половину высоты. Архивирование,
+    распаковка и скачивание живут в «Управлении книгой» (шестерёнка), а
+    скачать архив можно ещё с экрана упакованной книги."""
     app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
     block = app[app.index("function sectionBlock("):app.index("async function openManage(")]
-    archived_part = block[block.index("const actions = archived"):block.index("      : [];")]
-    assert "unarchiveOne" in archived_part and "archive/download" in archived_part
-    # живая книга действий на карточке не несёт: открывает её сама карточка
+    assert "card-actions" not in block
     assert "openBook" not in block and "runs" not in block
+    assert "unarchiveOne" not in block and "archive/download" not in block
     # групповые действия объекта — в панели выделения (как у «Файлов»)
     assert '"Управление"' in app and "openManage(section, name)" in app
 
@@ -796,7 +797,7 @@ def test_hub_card_opens_project_and_gear_manages():
     # шестерёнка: только иконка, с подписью в тултипе и aria-label
     assert 'class: "btn btn-sm btn-ghost icon-btn card-gear"' in block
     assert 'iconEl("settings")' in block
-    assert '`Управление книгой «${name}»: перенос, копия, переименование, удаление`' in block
+    assert '`Управление книгой «${name}»: архив, перенос, переименование, копия, удаление`' in block
     assert 'e.stopPropagation();' in block
     # принадлежность разделу с карточки убрана — раздел и так виден
     assert "card-sub" not in block
@@ -855,10 +856,10 @@ def test_hub_card_click_reaches_text():
     а контролы (чекбокс, шестерёнка, действия) возвращают его себе."""
     css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
     card = css[css.index(".project-card > *:not(.card-open)"):
-               css.index("/* шестерёнка в правом верхнем углу")]
+               css.index("/* Подсветка карточки при наведении")]
     assert "pointer-events: none;" in card
     assert ".project-card .card-check," in card
-    assert ".project-card .card-gear," in card
+    assert ".project-card .card-gear {" in card
     assert "pointer-events: auto;" in card
     # подсветка при наведении — от карточки: слой под текстом не ловит :hover
     assert ".project-card:has(.card-open:hover)" in css
@@ -883,6 +884,33 @@ def test_run_form_buttons_span_width_with_centered_text():
     assert ".run-form > .btn {\n  justify-content: center;\n}" in css
     # ширину даёт растяжка flex-колонки: собственного сужения быть не должно
     assert ".run-form > .btn {\n  align-self: center;\n}" not in css
+
+
+def test_manage_modal_archive_and_long_name():
+    """«Управление книгой»: имя — подписью, а не в заголовке (длинное
+    название распирало окно по горизонтали и заставляло прокручивать его
+    вбок до кнопок), и кнопка архивации по текущему состоянию книги.
+    Кнопки внизу карточки за место с подписью не спорят."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    fn = app[app.index("function manageProjectModal("):
+             app.index("/* Экспорт глоссария")]
+    assert 'h("div", { class: "modal-sub" }' in fn
+    assert "`${section} / ${name}`" in fn
+    assert 'title: "Управление книгой"' in fn
+    # подпись кнопки решает ответ по архиву, а не догадка
+    assert "/archive`)" in fn
+    assert 'archived ? "Разархивировать" : "Архивировать"' in fn
+    assert 'body: { op, items: [{ section, name }] }' in fn
+    # статистику у упакованной книги не спрашиваем: папки нет, /stats → 404
+    assert fn.index("archived = !!(r && r.archived);") < fn.index("projectStats(section, name)")
+
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".modal-sub {" in css and "overflow-wrap: anywhere;" in css
+    # ряд кнопок переносится и не распирает окно вбок
+    row = css[css.index(".manage-row {"):css.index("[hidden] {")]
+    assert "flex-wrap: wrap;" in row
+    assert ".manage-row .field {\n  flex: 1;" in css
+    assert "min-width: 0;" in css[css.index(".manage-row .field {"):][:120]
 
 
 def test_hub_create_button_label():
