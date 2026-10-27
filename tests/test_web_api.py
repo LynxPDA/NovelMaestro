@@ -2846,9 +2846,108 @@ def test_archive_skips_project_with_running_job(archive_srv, monkeypatch):
 def test_archive_missing_manifest_404(archive_srv):
     _, port, projects_root = archive_srv()
     _create_project(port, projects_root)
+    # живая книга: архива нет — это ответ, а не ошибка (клиент спрашивает
+    # об этом при каждой открытой книге)
     res, payload = _request(port, "GET",
                             "/api/projects/ACTIVE/test_book/archive")
-    assert res.status == 404, payload
+    assert res.status == 200, payload
+    assert payload["archived"] is False and payload["manifest"] is None
+    # скачивать нечего — ошибка
     res, payload = _request(port, "GET",
                             "/api/projects/ACTIVE/test_book/archive/download")
     assert res.status == 404, payload
+    # несуществующий проект — ошибка
+    res, payload = _request(port, "GET",
+                            f"/api/projects/ACTIVE/{quote('нет_такой')}/archive")
+    assert res.status == 404, payload
+
+
+def test_section_archive_all_packs_and_unpacks(archive_srv):
+    """Раздел целиком: список книг считает сервер, а не клиент."""
+    _, port, projects_root = archive_srv()
+    for nm in ("book_a", "book_b", "book_c"):
+        _create_project(port, projects_root, name=nm)
+    jm = _job_manager(port)
+
+    res, payload = _request(port, "POST", "/api/sections/ACTIVE/archive",
+                            {"op": "pack"})
+    assert res.status == 200, payload
+    assert [i["name"] for i in payload["items"]] == ["book_a", "book_b", "book_c"]
+    assert payload["total"] == 3 and payload["done"] == 0
+    _wait_job(jm, payload["job"]["id"])
+    for nm in ("book_a", "book_b", "book_c"):
+        assert _archive_file(projects_root, "ACTIVE", nm).is_file()
+        assert not (projects_root / "ACTIVE" / nm).is_dir()
+
+    # повторный запуск ничего не делает: все книги уже упакованы
+    res, payload = _request(port, "POST", "/api/sections/ACTIVE/archive",
+                            {"op": "pack"})
+    assert res.status == 200, payload
+    assert payload["items"] == [] and payload["job"] is None
+    assert payload["total"] == 3 and payload["done"] == 3
+
+    res, payload = _request(port, "POST", "/api/sections/ACTIVE/archive",
+                            {"op": "unpack"})
+    assert res.status == 200, payload
+    assert len(payload["items"]) == 3
+    _wait_job(jm, payload["job"]["id"])
+    for nm in ("book_a", "book_b", "book_c"):
+        assert (projects_root / "ACTIVE" / nm).is_dir()
+        assert not _archive_file(projects_root, "ACTIVE", nm).is_file()
+
+
+def test_section_archive_all_guards(archive_srv):
+    _, port, projects_root = archive_srv()
+    res, payload = _request(port, "POST", "/api/sections/ACTIVE/archive",
+                            {"op": "сжать"})
+    assert res.status == 400, payload
+    res, payload = _request(port, "POST",
+                            f"/api/sections/{quote('Нет_такого')}/archive",
+                            {"op": "pack"})
+    assert res.status == 404, payload
+    # пустой раздел: ни запуска, ни ошибки
+    res, payload = _request(port, "POST", "/api/sections/ACTIVE/archive",
+                            {"op": "pack"})
+    assert res.status == 200, payload
+    assert payload["items"] == [] and payload["total"] == 0
+    assert payload["job"] is None
+
+
+def test_section_archive_all_skips_busy(archive_srv, monkeypatch):
+    _, port, projects_root = archive_srv()
+    for nm in ("book_a", "book_b"):
+        _create_project(port, projects_root, name=nm)
+    jm = _job_manager(port)
+
+    class _Busy:
+        title = "Перевод"
+        id = "abc"
+
+    monkeypatch.setattr(jm, "running_on", lambda project: _Busy())
+    res, payload = _request(port, "POST", "/api/sections/ACTIVE/archive",
+                            {"op": "pack"})
+    assert res.status == 200, payload
+    assert payload["items"] == [] and payload["job"] is None
+    assert len(payload["skipped"]) == 2
+    assert (projects_root / "ACTIVE" / "book_a").is_dir()
+
+
+def test_project_items_hides_service_dirs(archive_srv):
+    """Служебные папки упаковки в списке книг не появляются.
+
+    Распаковка идёт в `.nm_restore_*` (имя видно как папка проекта, пока идёт
+    работа), а упаковка пишет `.nmz.tmp` — ни то, ни другое не книга.
+    """
+    _, port, projects_root = archive_srv()
+    _create_project(port, projects_root)
+    sec = projects_root / "ACTIVE"
+    (sec / ".nm_restore_test_book").mkdir()
+    (sec / ".nm_restore_test_book" / "ner.json").write_text("[]", encoding="utf-8")
+    (sec / "book_b.nmz.tmp").write_text("мусор", encoding="utf-8")
+    data = projects_root / "ACTIVE"
+    (data / "test_book.nmz.tmp").write_text("мусор", encoding="utf-8")
+
+    _, payload = _request(port, "GET", "/api/projects?section=ACTIVE")
+    assert payload["projects"] == ["test_book"], payload["projects"]
+    assert [i["name"] for i in payload["items"]] == ["test_book"]
+

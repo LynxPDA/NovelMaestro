@@ -54,6 +54,7 @@ def _register_hub(router: Router) -> None:
     router.add("POST", "/api/projects/copy", _projects_copy)
     router.add("DELETE", "/api/projects", _projects_delete)
     router.add("POST", "/api/projects/archive", _projects_archive)
+    router.add("POST", "/api/sections/{name}/archive", _section_archive_all)
     router.add("GET", "/api/projects/{sec}/{name}/archive", _project_archive)
     router.add("GET", "/api/projects/{sec}/{name}/archive/download",
                _project_archive_download)
@@ -623,12 +624,21 @@ def _projects_archive(ctx: dict) -> dict:
     if not todo:
         return {"ok": True, "items": [], "skipped": skipped,
                 "job": None}
-    # архивация читает весь проект и пишет десятки мегабайт — это работа,
-    # а не мгновенная операция: один запуск на пачку, как у стадий, с логом
-    # и прогрессом в общей панели запусков
+    return _archive_job(ctx, root, op, todo, skipped)
+
+
+def _archive_job(ctx: dict, root: Path, op: str,
+                 todo: list[tuple[str, str]], skipped: list[dict]) -> dict:
+    """Запуск упаковки/распаковки пачки — один job с логом и прогрессом.
+
+    Архивация читает весь проект и пишет десятки мегабайт — это работа, а не
+    мгновенная операция: один запуск на пачку, как у стадий, с логом и
+    прогрессом в общей панели запусков.
+    """
     title = ("Архивация проектов" if op == "pack"
              else "Разархивация проектов")
-    project = f"{todo[0][0]}/{todo[0][1]}" if len(todo) == 1 else "archive"
+    project = (f"{todo[0][0]}/{todo[0][1]}" if len(todo) == 1
+               else "archive")
     script = _repo_root(ctx) / "cli" / "archive.py"
     if not script.is_file():
         raise ApiError(500, f"Скрипт не найден: {script}")
@@ -636,14 +646,54 @@ def _projects_archive(ctx: dict) -> dict:
             "--projects-dir", str(root)]
     if op == "pack":
         argv.append("--gc-history")
-    job = jm.start("archive", title, project, argv, _repo_root(ctx))
+    job = _job_manager(ctx).start("archive", title, project, argv,
+                                  _repo_root(ctx))
     return {"ok": True, "items": [{"section": s, "name": n}
                                     for s, n in todo],
             "skipped": skipped, "job": _job_payload(job)}
 
 
+def _section_archive_all(ctx: dict) -> dict:
+    """Раздел целиком: упаковать или распаковать все его проекты.
+
+    POST /api/sections/{name}/archive — `{op}`. Список книг считает сервер
+    (`archive_candidates`), а не клиент: у большого раздела карточки грузятся
+    в фоне, и пачка по ним сначала молча упаковала бы половину. Пустóй
+    раздел и «всё уже в нужном виде» отвечают без запуска — `job: null`.
+    """
+    prj = _import_projects(ctx)
+    root = _projects_root(ctx)
+    section = ctx["params"]["name"]
+    op = (ctx["body"].get("op") or "pack").strip()
+    if op not in ("pack", "unpack"):
+        raise ApiError(400, f"Неизвестная операция: {op}")
+    if section not in prj.load_sections(root):
+        raise ApiError(404, f"Раздел не найден: {section}")
+    plan = prj.archive_candidates(root, section, op)
+    jm = _job_manager(ctx)
+    todo: list[tuple[str, str]] = []
+    skipped: list[dict] = []
+    for name in plan["todo"]:
+        busy = jm.running_on(f"{section}/{name}")
+        if busy is not None:
+            skipped.append({"section": section, "name": name,
+                            "reason": f"идёт запуск «{busy.title}»"})
+            continue
+        todo.append((section, name))
+    payload = ({"ok": True, "items": [], "skipped": skipped, "job": None}
+               if not todo else _archive_job(ctx, root, op, todo, skipped))
+    payload.update({"section": section, "op": op,
+                    "total": plan["total"], "done": plan["done"]})
+    return payload
+
+
 def _project_archive(ctx: dict) -> dict:
-    """Манифест архива проекта (GET …/archive)."""
+    """Манифест архива проекта (GET …/archive).
+
+    Отсутствие архива — это ответ, а не ошибка: у живой книги архива нет,
+    и клиент спрашивает об этом у каждой открытой книги. 404 на штатный
+    вопрос засорял бы журнал и маскировал настоящие отказы.
+    """
     prj = _import_projects(ctx)
     root = _projects_root(ctx)
     section = ctx["params"]["sec"]
@@ -651,7 +701,11 @@ def _project_archive(ctx: dict) -> dict:
     pdir = prj.project_dir(root, section, name)
     item = _find_archive(prj, root, section, name)
     if item is None:
-        raise ApiError(404, f"Архив не найден: {section}/{name}")
+        if not pdir.is_dir():
+            raise ApiError(404, f"Проект не найден: {section}/{name}")
+        return {"ok": True, "section": section, "name": name,
+                "archived": False, "size": 0, "path": "",
+                "manifest": None}
     man = core_archive.archive_manifest(item["path"])
     return {"ok": True, "section": section, "name": name,
             "archived": not pdir.is_dir(), "size": item["size"],
