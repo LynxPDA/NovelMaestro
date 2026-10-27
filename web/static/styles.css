@@ -829,6 +829,43 @@ a.fname:hover {
 .hub-sections-modal .fname {
   font-weight: 600;
 }
+/* пересечения имён при загрузке файлов: пути с пометкой «будет заменён».
+   Список прокручивается — перетащить могли дерево из сотен файлов */
+.upload-collide {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+  max-height: 46vh;
+}
+.upload-collide-row {
+  padding: 6px 10px;
+}
+.upload-collide-row .fname {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+/* список книг в окне массового переноса: имя раздела заголовком, книги
+   под ним; окно ограничено по высоте, иначе большая пачка растягивает
+   его на весь экран */
+.move-many-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+  max-height: 40vh;
+}
+.move-many-row {
+  padding: 5px 10px;
+}
+.move-many-row .fname {
+  font-size: 13px;
+}
+.move-many-row:has(.fmeta) .fname {
+  font-weight: 600;
+}
 .btn-danger-ghost {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);

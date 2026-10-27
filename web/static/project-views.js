@@ -534,7 +534,11 @@ function viewProject(section, name, tab, job) {
       { class: "files-tools" },
       h(
         "button",
-        { class: "btn btn-sm", onclick: () => upInput.click() },
+        {
+          class: "btn btn-sm",
+          title: "Загрузить файлы в текущую папку",
+          onclick: () => upInput.click(),
+        },
         "Загрузить",
       ),
       addFileBtn,
@@ -565,13 +569,13 @@ function viewProject(section, name, tab, job) {
         upInput.value = "";
       }
     });
-    /* Загрузка в текущую папку (пусто → tmp, как было у кнопки «Загрузить»).
-       Перетащенный каталог браузер отдаёт набором файлов с относительным
-       путём (webkitRelativePath): раскладываем их по подпапкам назначения,
-       а имя файла в поле остаётся basename — сервер принимает только его.
-       Группировку считает UICore.uploadBatches. */
+    /* Загрузка в ТЕКУЩУЮ папку (st.path); корень проекта — тоже папка, а
+       не повод уносить файлы в `tmp/`. Перетащенный каталог браузер отдаёт
+       набором файлов с относительным путём (webkitRelativePath): раскладываем
+       их по подпапкам назначения, а имя файла в поле остаётся basename —
+       сервер принимает только его. Группировку считает UICore.uploadBatches. */
     async function uploadFiles(files) {
-      const dest = st.path || "tmp";
+      const dest = st.path;
       // корень папки перетащенного каталога — под текущей папкой
       const batches = UICore.uploadBatches(files).map((b) => ({
         dest: b.dest ? `${dest}/${b.dest}` : dest,
@@ -581,9 +585,10 @@ function viewProject(section, name, tab, job) {
         toast("Нечего загружать: пустая папка или нет файлов", "err");
         return null;
       }
-      /* перезапись — с подтверждением: за один заход не больше 400 листингов
-         (перетащили дерево из сотен папок — проверяем ближние, остальное
-         просто пишется) */
+      /* Пересечения имён — модалкой со списком: за один заход не больше
+         400 листингов (перетащили дерево из сотен папок — проверяем ближние,
+         остальное просто пишется). Показываем пути, чтобы видеть, ЧТО
+         заменяется (одинаковые имена в разных папках — разные файлы). */
       const dirList = [...new Set(batches.map((b) => b.dest))].slice(0, 400);
       const existing = await existingPaths(dirList);
       const collide = [];
@@ -591,19 +596,12 @@ function viewProject(section, name, tab, job) {
         if (!dirList.includes(b.dest)) continue;
         for (const f of b.files) {
           if (existing.includes(`${b.dest}/${f.name}`)) {
-            collide.push(`${b.dest}/${f.name}`);
+            collide.push(logicalPath(b.dest, f.name));
           }
         }
       }
       if (collide.length) {
-        const shown = collide.slice(0, 8).join(", ")
-          + (collide.length > 8 ? ` и ещё ${collide.length - 8}` : "");
-        const ok = await confirmModal(
-          "Загрузка с перезаписью",
-          `Уже есть: ${shown}. Заменить этими файлами?`,
-          "ПЕРЕЗАПИСАТЬ",
-          async () => {},
-        );
+        const ok = await overwriteModal(collide);
         if (!ok) return null;
       }
       const saved = [];
@@ -635,6 +633,53 @@ function viewProject(section, name, tab, job) {
         }
       }
       return out;
+    }
+
+    /* Путь для человека: пустой dest — корень книги, а не «/имя». */
+    function logicalPath(dest, fname) {
+      return dest ? `${dest}/${fname}` : fname;
+    }
+
+    /* Пересечения имён при загрузке: список путей и выбор. Замена касается
+       именно этих файлов — новые не трогаются, поэтому отказ означает
+       «не загружать ничего» (выборочная замена — отдельная задача). */
+    function overwriteModal(paths) {
+      return new Promise((resolve) => {
+        const list = h("div", { class: "files-list upload-collide" });
+        for (const p of paths) {
+          list.append(h(
+            "div",
+            { class: "frow upload-collide-row" },
+            iconEl("file-text", "fname-icon"),
+            h("span", { class: "fname" }, p),
+            h("span", { class: "badge" }, "будет заменён"),
+          ));
+        }
+        UIC.modal({
+          title: `Совпадает имён: ${paths.length}`,
+          onClose: resolve,
+          build: (close) => [
+            h("div", { class: "modal-text" },
+              "Файлы с такими путями уже есть в папке. Загрузить поверх — "
+              + "содержимое будет заменено, старые версии пропадут. "
+              + "Остальные файлы загрузятся как обычно."),
+            list,
+            h(
+              "div",
+              { class: "modal-actions" },
+              h("button", {
+                class: "btn btn-ghost",
+                "data-modal-default": "1",
+                onclick: () => close(false),
+              }, "Отмена"),
+              h("button", {
+                class: "btn btn-danger",
+                onclick: () => close(true),
+              }, `Заменить ${paths.length}`),
+            ),
+          ],
+        });
+      });
     }
 
     function toggleSel(p, on) {
@@ -902,7 +947,7 @@ function viewProject(section, name, tab, job) {
       const parts = [];
       if (files) parts.push(`файлов: ${files}`);
       if (dirs) parts.push(`папок: ${dirs}`);
-      return "Загрузить в " + (st.path || "tmp") +
+      return "Загрузить в " + (st.path || "корень книги") +
         (parts.length ? ` · ${parts.join(", ")}` : "");
     };
     const hint = h("div", { class: "files-drop-hint hidden" });

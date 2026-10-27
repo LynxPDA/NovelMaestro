@@ -796,3 +796,46 @@ def test_sections_modal_is_wide_and_named():
     # растягивал окно на всю высоту
     assert ".hub-sections-modal {" in css
     assert "max-height: 52vh" in css
+
+
+def test_files_upload_goes_to_current_folder():
+    """Регрессия «сброс файлов всегда уносит их в tmp»: пустой путь — это
+    КОРЕНЬ книги (папка проекта — такая же папка), а не повод уходить в
+    служебный `tmp/`. Каталог перетащенного дерева — под текущей папкой."""
+    pv = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    start = pv.index("async function uploadFiles(files)")
+    body = pv[start:pv.index("return { saved };", start)]
+    assert "const dest = st.path;" in body
+    assert 'st.path || "tmp"' not in body
+    # подсказка при перетаскивании называет ту же папку
+    assert '"Загрузить в " + (st.path || "корень книги")' in pv
+
+
+def test_files_upload_collision_modal_lists_paths():
+    """Пересечение имён: модалка со списком путей и выбором «Заменить»,
+    а не одна строка «уже есть: …» — по ней нельзя понять, что заменяется
+    (одинаковые имена в разных папках — разные файлы)."""
+    pv = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    assert "function overwriteModal(paths)" in pv
+    modal = pv[pv.index("function overwriteModal(paths)"):]
+    modal = modal[:modal.index("function toggleSel(")]
+    assert "upload-collide" in modal
+    # путь с папкой: корень книги — без ведущего слэша
+    assert "function logicalPath(dest, fname)" in pv
+    assert '"Заменить " + paths.length' in modal.replace("`Заменить ${paths.length}`", '"Заменить " + paths.length') \
+        or "Заменить ${paths.length}" in modal
+    # опасное действие — danger-кнопка, отмена идёт первой (Enter — на ней)
+    assert "btn btn-danger" in modal and '"data-modal-default": "1"' in modal
+
+
+def test_hub_batch_move_between_sections():
+    """Выделение в «Проектах»: массовый перенос книг между разделами."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function moveManyModal(items)" in app
+    assert '"Перенести все выделенные книги в другой раздел"' in app
+    assert "async function openMoveMany()" in app
+    assert 'api("/projects/move-many"' in app
+    # после переноса выделение снимается и хаб перечитывается
+    body = app[app.index("async function openMoveMany()"):]
+    body = body[:body.index("\nfunction sectionBlock(") if "\nfunction sectionBlock(" in body else 900]
+    assert "hubSelection = new Set();" in body and "refreshHub();" in body
