@@ -931,6 +931,13 @@ def test_manage_modal_archive_and_long_name():
     assert 'body: { op, items: [{ section, name }] }' in fn
     # статистику у упакованной книги не спрашиваем: папки нет, /stats → 404
     assert fn.index("archived = !!(r && r.archived);") < fn.index("projectStats(section, name)")
+    # после работы кнопка перечитывает диск: окно остаётся открытым, а
+    # подпись меняется сразу — close из build в этом обработчике недоступен
+    # (на его месте оказался бы window.close, который вкладку не закрывает)
+    assert "async function syncArchiveState()" in fn
+    assert fn.count("await syncArchiveState();") == 1
+    assert fn.index("await afterArchiveStart(r, r.items, verb);") \
+        < fn.index("await syncArchiveState();")
 
     css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".modal-sub {" in css and "overflow-wrap: anywhere;" in css

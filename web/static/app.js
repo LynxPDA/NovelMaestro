@@ -927,16 +927,16 @@ function manageProjectModal(section, name) {
     dstSel.onchange = () => syncPackChoice(choice, hubCache, dstSel.value);
     newName.value = name;
 
-    /* Упакована ли книга — по манифесту архива: у живой ответ `archived:
-       false` без 404. Кнопка сначала гаснет (запрос в пути), затем говорит
-       своим текущим состоянием: упакованную можно только распаковать —
-       «Архивировать» на ней вела бы в отказ сервера. */
     /* Состояние архива решает сразу две вещи: подпись кнопки и то, можно ли
        спрашивать статистику. У упакованной книги папки нет, и /stats
        отвечает 404 — запрос «в пустоту» засорял журнал, а строка статистики
-       оставалась пустой. */
-    api(`/projects/${encodeURIComponent(section)}/${encodeURIComponent(name)}/archive`)
-      .then((r) => {
+       оставалась пустой. Читает диск, а не память клиента: после упаковки
+       ту же функцию зовём ещё раз, и подпись снова совпадает с файлом на
+       диске. */
+    async function syncArchiveState() {
+      arcBtn.disabled = true;
+      try {
+        const r = await api(`/projects/${encodeURIComponent(section)}/${encodeURIComponent(name)}/archive`);
         archived = !!(r && r.archived);
         arcBtn.textContent = archived ? "Разархивировать" : "Архивировать";
         arcBtn.title = archived
@@ -955,10 +955,16 @@ function manageProjectModal(section, name) {
             info.textContent = st.stats;
           })
           .catch(() => {});
-      })
-      .catch(() => {
+      } catch {
         /* книга не найдена или архив не прочитать — кнопку не предлагаем */
-      });
+      }
+    }
+    syncArchiveState();
+    /* Упакованная книга держит окно открытым: после работы кнопка говорит
+       новое состояние сразу, а не после закрытия и повторного открытия.
+       close здесь взять нельзя — он живёт в build (иначе это
+       window.close, который свою вкладку не закрывает), а перерисовку
+       модалки делает сама syncArchiveState. */
     arcBtn.onclick = async () => {
       err.textContent = "";
       const op = archived ? "unpack" : "pack";
@@ -985,8 +991,10 @@ function manageProjectModal(section, name) {
               || `${verb}: не запущено`, "err");
             return;
           }
-          close(true); // хаб перечитает списки: книга сменила вид
+          arcBtn.disabled = true;
+          info.textContent = op === "pack" ? "идёт архивация…" : "идёт распаковка…";
           await afterArchiveStart(r, r.items, verb);
+          await syncArchiveState();
         },
       );
     };
