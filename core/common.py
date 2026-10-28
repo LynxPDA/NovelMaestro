@@ -2530,6 +2530,30 @@ def read_text_safe(path) -> str:
 # ПРОГРЕСС ДЛЯ WEB (структурированные события)
 # ══════════════════════════════════════════════════════════════════════
 PROGRESS_PREFIX = "@@PROGRESS@@"
+#: маркер события главы конвейера (web/pipeline.py): @@CHAPTER@@ + JSON
+CHAPTER_PREFIX = "@@CHAPTER@@"
+
+
+def _single_line(text: str) -> str:
+    """Переводы строк → пробел: событие обязано занимать ровно одну строку
+    (json.dumps их не порождает, но подпись прогресса — рукописная)."""
+    return text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+
+
+def emit_line(prefix: str, payload: dict) -> None:
+    """Событие конвейера → stdout ровно одной строкой, ОДНИМ `write`.
+
+    Строку stdout делят лог запуска (logging) и события глав из потоков пула.
+    `print()` пишет текст и завершающий перевод строки двумя вызовами, между
+    ними вклинивался `write` логгера — событие слипалось с лог-строкой:
+        @@CHAPTER@@{"type": "chapter", …}2026-10-28 11:40:14 - INFO - …
+    Такая строка не начинается с префикса, читатель считает её обычной
+    строкой лога, и событие теряется молча. Поэтому строка собирается
+    целиком и уходит одним вызовом (он же атомарен: `write` потока взят под
+    свою блокировку)."""
+    line = _single_line(prefix + json.dumps(payload, ensure_ascii=False))
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
 
 
 def web_progress_enabled() -> bool:
@@ -2555,11 +2579,10 @@ def emit_progress(done: int, total: int | None, label: str = "") -> None:
     на вызывающей стороне (там же, где pbar_lock)."""
     if not web_progress_enabled():
         return
-    print(PROGRESS_PREFIX + json.dumps(
-        {"type": "progress", "label": label,
-         "done": _int_safe(done),
-         "total": None if total is None else _int_safe(total)},
-        ensure_ascii=False), flush=True)
+    emit_line(PROGRESS_PREFIX,
+              {"type": "progress", "label": label,
+               "done": _int_safe(done),
+               "total": None if total is None else _int_safe(total)})
 
 
 # ══════════════════════════════════════════════════════════════════════

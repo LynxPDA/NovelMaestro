@@ -842,3 +842,88 @@ def test_stages_api_exposes_reasoning_block():
     assert resp["reasoning"]["id"] == "llm_reasoning"
     assert [f["name"] for f in resp["reasoning"]["fields"]] == want
     assert list(resp["reasoning"]["values"]) == want
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Событие главы не слипается с лог-строкой
+#
+# stdout конвейера делят logging (лог запуска) и emit/emit_progress из
+# потоков пула. `print()` пишет текст и завершающий перевод строки ДВУМЯ
+# вызовами `write`, поэтому логгер соседнего потока вклинивался между ними:
+#     @@CHAPTER@@{"type": "chapter", …}2026-10-28 11:40:14 - INFO - …
+# Строка не начинается с префикса события → она уходила в лог, и готовая
+# глава (боевой случай — 1103, полировка) оставалась без клетки в таблице.
+
+def test_emit_line_writes_event_in_one_call():
+    """Событие — ровно одна строка и ровно один `write` в stdout."""
+    import core.common as core_common
+
+    calls = []
+
+    class Spy:
+        def write(self, text):
+            calls.append(text)
+
+        def flush(self):
+            pass
+
+    orig = sys.stdout
+    sys.stdout = Spy()
+    try:
+        core_common.emit_line("@@CHAPTER@@",
+                              {"type": "chapter", "id": 7, "stage": 3,
+                               "status": "OK"})
+    finally:
+        sys.stdout = orig
+    assert len(calls) == 1
+    assert calls[0].endswith("\n")
+    assert json.loads(calls[0][len("@@CHAPTER@@"):-1]) == {
+        "type": "chapter", "id": 7, "stage": 3, "status": "OK"}
+
+
+def test_print_would_be_torn_emit_line_is_not():
+    """Детерминированный регресс: чужой `write` между текстом и «\n».
+
+    Именно так вклинивался лог соседнего потока: `print()` пишет текст и
+    завершающий перевод строки двумя вызовами. Поток выводит чужую строку
+    в промежутке — печать через `print()` разваливается, `emit_line` нет."""
+    import core.common as core_common
+
+    class Injecting:
+        """stdout, в который «другой поток» вставляет строку после
+        каждой незавершённой записи (имитация переключения потоков)."""
+
+        def __init__(self):
+            self.text = ""
+
+        def write(self, chunk):
+            self.text += chunk
+            if not chunk.endswith("\n"):
+                self.text += "2026-10-28 11:40:14 - INFO - лог\n"
+
+        def flush(self):
+            pass
+
+    orig = sys.stdout
+    # print(): событие слипается с лог-строкой — так и терялись события
+    torn = Injecting()
+    sys.stdout = torn
+    try:
+        print("@@CHAPTER@@{\"id\": 1103}", flush=True)
+    finally:
+        sys.stdout = orig
+    first = torn.text.splitlines()[0]
+    assert first.startswith("@@CHAPTER@@") and "лог" in first, \
+        "print() обязан показать слипание — иначе тест ничего не проверяет"
+
+    # emit_line(): строка целая, лог идёт следующей строкой
+    whole = Injecting()
+    sys.stdout = whole
+    try:
+        core_common.emit_line("@@CHAPTER@@", {"type": "chapter", "id": 1103,
+                                              "stage": 3, "status": "OK"})
+    finally:
+        sys.stdout = orig
+    lines = whole.text.splitlines()
+    assert lines[0].startswith("@@CHAPTER@@") and "лог" not in lines[0]
+    assert json.loads(lines[0][len("@@CHAPTER@@"):])["id"] == 1103

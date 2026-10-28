@@ -58,7 +58,7 @@ CORE_API = [
     "iter_sse_events", "stream_chat_completion", "llm_messages",
     "server_base_url", "probe_server",
     "atomic_write", "read_text_safe",
-    "web_progress_enabled", "emit_progress",
+    "web_progress_enabled", "emit_progress", "emit_line",
     "parse_chapter_id", "build_chapter_map", "find_chapter_file",
     "format_ranges", "compile_chapter_texts",
     "read_chapter_titles", "write_chapter_titles",

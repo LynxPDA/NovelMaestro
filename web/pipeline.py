@@ -10,7 +10,10 @@ grep слов-ошибок), ThreadPoolExecutor(jobs).
 
 События глав пишутся в stdout строками:
   @@CHAPTER@@ {"type":"chapter","id":3,"stage":1,"status":"OK"}
-JobManager._reader парсит их в job.events → SSE и payload.
+JobManager._reader парсит их в job.events → SSE и payload. Строку пишет
+core.common.emit_line — одним `write`: stdout в web-режиме делят лог
+запуска и события глав из потоков пула, и печать через `print()` (текст и
+«\\n» двумя вызовами) отдавала событие в рваном виде.
 
 Никакого интерактива: только argparse (те же правила, что cli/).
 """
@@ -43,7 +46,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
-    PROGRESS_PREFIX, build_chapter_map, format_ranges, output_tail,
+    PROGRESS_PREFIX, build_chapter_map, emit_line, format_ranges, output_tail,
 )
 # общий блок LLM-флагов: у конвейера тот же набор имён, что у стадий
 from core.stage import (add_check_prompt_arg, add_llm_args,  # noqa: E402
@@ -118,8 +121,8 @@ _PROMPT_TAGS = ("translate", "translate_lr", "redact", "polish")
 
 
 def emit(ev: dict) -> None:
-    """Событие конвейера → stdout (парсится JobManager'ом)."""
-    print(CHAPTER_PREFIX + json.dumps(ev, ensure_ascii=False), flush=True)
+    """Событие конвейера → stdout одной строкой (парсит JobManager)."""
+    emit_line(CHAPTER_PREFIX, ev)
 
 
 def emit_progress(done: int, total: int, label: str = "") -> None:
@@ -128,9 +131,9 @@ def emit_progress(done: int, total: int, label: str = "") -> None:
     done/total — завершённые стадии от общего числа (главы × стадии),
     а не чанки одной главы: полоска в web растёт по главам, детали
     текущего чанка — в label."""
-    print(PROGRESS_PREFIX + json.dumps(
-        {"type": "progress", "done": done, "total": total,
-         "label": label}, ensure_ascii=False), flush=True)
+    emit_line(PROGRESS_PREFIX,
+              {"type": "progress", "done": done, "total": total,
+               "label": label})
 
 
 # ═══ Трекер (потокобезопасный, web-вариант) ═══
@@ -465,12 +468,7 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     # стадии), а не чанки одной главы; детальный
                     # label чанка сохраняется в тексте бара
                     done, total = tracker.overall()
-                    print(PROGRESS_PREFIX + json.dumps(
-                        {"type": "progress",
-                         "done": done,
-                         "total": total,
-                         "label": label},
-                        ensure_ascii=False), flush=True)
+                    emit_progress(done, total, label)
                 except Exception:
                     print(line, end="", flush=True)
                 continue
@@ -641,6 +639,7 @@ def main() -> None:
     # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети
     if check_prompt(args, "pipeline", PROMPT_CONTRACT):
         return
+
 
     log = logging.getLogger("web.pipeline")
     # Дефолты слоя уже посчитаны реестром (стадийные PIPELINE_* + общие

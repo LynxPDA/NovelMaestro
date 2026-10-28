@@ -63,8 +63,46 @@ ORPHAN_POLL = 5.0
 # Префиксы структурированных событий в stdout (JSON после него).
 # @@CHAPTER@@ — события глав конвейера (web/pipeline.py);
 # @@PROGRESS@@ — события прогресса LLM-стадий (core/common.py emit_progress).
-CHAPTER_PREFIX = "@@CHAPTER@@"
-from core.common import PROGRESS_PREFIX  # noqa: E402
+from core.common import CHAPTER_PREFIX, PROGRESS_PREFIX  # noqa: E402
+
+_EVENT_PREFIXES = (PROGRESS_PREFIX, CHAPTER_PREFIX)
+
+
+def split_glued_events(line: str) -> list[str]:
+    """Разделить событие, слипшееся с последующей лог-строкой.
+
+    stdout конвейера делят `print()` и `logging`: событие главы могло попасть
+    в одну строку с лог-строкой, и читатель считал его кривым — событие
+    терялось молча (готовая глава без клетки в таблице). Писать целой
+    строкой теперь умеет core.common.emit_line, но буферы уже прожитых
+    запусков и их сайдкары `.events.json` не должны держать эту дыру вечно:
+    событие начинает строку, JSON после префикса кончается своим `}`,
+    остаток — следующая лог-строка."""
+    if not line.startswith(_EVENT_PREFIXES):
+        return [line]
+    prefix = next(p for p in _EVENT_PREFIXES if line.startswith(p))
+    body = line[len(prefix):].strip()
+    try:
+        json.loads(body)
+    except ValueError:
+        pass
+    else:
+        return [line]  # целая строка — обычный путь
+    if body[:1] != "{":
+        return [line]
+    # вложенные объекты: берём самый длинный разбираемый префикс
+    for end in range(len(body), 0, -1):
+        if body[end - 1] != "}":
+            continue
+        try:
+            ev = json.loads(body[:end])
+        except ValueError:
+            continue
+        if not isinstance(ev, dict) or not ev.get("type"):
+            continue
+        rest = body[end:].strip()
+        return [line[:len(prefix)] + body[:end]] + ([rest] if rest else [])
+    return [line]
 
 
 def _popen_kwargs() -> dict:
@@ -299,14 +337,45 @@ class JobManager:
         if ep.is_file():
             try:
                 ev = json.loads(ep.read_text(encoding="utf-8"))
-                if isinstance(ev, list):
-                    job.events = ev
-                    # индекс «id:stage» → позицию дописывает add_event —
-                    # после чтения сайдкара его нужно восстановить
-                    job._ev_at = {f"{e.get('id')}:{e.get('stage')}": i
-                                  for i, e in enumerate(ev)}
             except ValueError as exc:
                 log.debug("События %s не читаются: %s", ep, exc)
+                return
+            if not isinstance(ev, list):
+                return
+            # события, потерянные старым читателем (слипшаяся строка),
+            # добираются из сайдкара лога — история не хранит дыру вечно
+            job.events = ev
+            job._ev_at = {f"{e.get('id')}:{e.get('stage')}": i
+                          for i, e in enumerate(ev)}
+            self._recover_events(job)
+
+    @staticmethod
+    def _recover_events(job: Job) -> None:
+        """Добрать события, потерянные старым читателем по слипшейся строке.
+
+        Сайдкар лога хранит ту же слипшуюся строку (её писал читатель),
+        поэтому событие восстанавливается и теперь — таблица глав
+        прожитого запуска после рестарта сервера честная."""
+        known = set(job._ev_at)
+        for line in job.lines:
+            parts = split_glued_events(line)
+            if len(parts) == 1:
+                continue
+            for piece in parts:
+                if not piece.startswith(CHAPTER_PREFIX):
+                    continue
+                try:
+                    ev = json.loads(piece[len(CHAPTER_PREFIX):].strip())
+                except ValueError:
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                key = f"{ev.get('id')}:{ev.get('stage')}"
+                if key in known:
+                    continue
+                known.add(key)
+                job.add_event(ev)
+                log.info("Событие главы восстановлено из лога: %s", key)
 
     def _drop_sidecar(self, job_id: str) -> None:
         """Удалить сайдкары задания (trim истории / remove)."""
@@ -596,35 +665,8 @@ class JobManager:
             return
         try:
             for raw in iter(proc.stdout.readline, ""):
-                line = raw.rstrip("\n")
-                if line.startswith(PROGRESS_PREFIX):
-                    try:
-                        ev = json.loads(line[len(PROGRESS_PREFIX):].strip())
-                    except ValueError as exc:
-                        log.debug("Кривое событие прогресса: %s", exc)
-                        job.append(line)
-                        job.notify(("line", line))
-                        continue
-                    if isinstance(ev, dict) and ev.get("type") == "progress":
-                        job.progress = ev
-                        job.notify(("progress", ev))
-                        continue
-                    job.append(line)
-                    job.notify(("line", line))
-                    continue
-                if line.startswith(CHAPTER_PREFIX):
-                    try:
-                        ev = json.loads(line[len(CHAPTER_PREFIX):].strip())
-                    except ValueError as exc:
-                        log.debug("Кривое событие конвейера: %s", exc)
-                        job.append(line)
-                        job.notify(("line", line))
-                        continue
-                    job.add_event(ev)
-                    job.notify(("event", ev))
-                    continue
-                job.append(line)
-                job.notify(("line", line))
+                for line in split_glued_events(raw.rstrip("\n")):
+                    self._reader_line(job, line)
         finally:
             code = proc.wait()
             job.exit_code = code
@@ -642,6 +684,38 @@ class JobManager:
                 on_job_finished(job)
             except Exception as exc:  # noqa: BLE001
                 log.debug("История: %s", exc)
+
+    @staticmethod
+    def _reader_line(job: Job, line: str) -> None:
+        """Одна строка stdout → событие/прогресс/буфер (см. `_reader`)."""
+        if line.startswith(PROGRESS_PREFIX):
+            try:
+                ev = json.loads(line[len(PROGRESS_PREFIX):].strip())
+            except ValueError as exc:
+                log.debug("Кривое событие прогресса: %s", exc)
+                job.append(line)
+                job.notify(("line", line))
+                return
+            if isinstance(ev, dict) and ev.get("type") == "progress":
+                job.progress = ev
+                job.notify(("progress", ev))
+                return
+            job.append(line)
+            job.notify(("line", line))
+            return
+        if line.startswith(CHAPTER_PREFIX):
+            try:
+                ev = json.loads(line[len(CHAPTER_PREFIX):].strip())
+            except ValueError as exc:
+                log.debug("Кривое событие конвейера: %s", exc)
+                job.append(line)
+                job.notify(("line", line))
+                return
+            job.add_event(ev)
+            job.notify(("event", ev))
+            return
+        job.append(line)
+        job.notify(("line", line))
 
     def stop(self, job_id: str) -> Job | None:
         """Остановить запуск вместе с потомками: POSIX — SIGTERM группе

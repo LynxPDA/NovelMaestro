@@ -2840,3 +2840,85 @@ def test_cli_bool_flags_accept_both_polarities(stage, name, on, off, base):
     assert getattr(parser.parse_args(argv_on), name) is True, f"{stage}: {on}"
     assert getattr(parser.parse_args(argv_off), name) is False, \
         f"{stage}: {off}"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Слипшееся событие: `print()` отдаёт текст и «\n» двумя вызовами, логгер
+# соседнего потока вклинивается между ними. Буферы уже прожитых запусков
+# содержат такие строки — читатель их восстанавливает, а не теряет событие.
+
+
+def test_split_glued_events_unpacks_chapter_event():
+    from web.jobs import split_glued_events
+
+    glued = ('@@CHAPTER@@{"type": "chapter", "id": 1103, "stage": 3, '
+             '"status": "OK"}2026-10-28 11:40:14 - INFO - ── 209/720 ──')
+    parts = split_glued_events(glued)
+    assert len(parts) == 2
+    ev = json.loads(parts[0][len("@@CHAPTER@@"):])
+    assert (ev["id"], ev["stage"], ev["status"]) == (1103, 3, "OK")
+    assert parts[1].startswith("2026-10-28 11:40:14")
+    # целая строка остаётся одной; лог-строка без префикса — тоже
+    assert split_glued_events("обычная строка") == ["обычная строка"]
+    whole = '@@CHAPTER@@{"type": "chapter", "id": 1, "stage": 1, "status": "OK"}'
+    assert split_glued_events(whole) == [whole]
+    # вложенный объект (событие с вложенным полем) не режется по первой «}»
+    nested = '@@PROGRESS@@{"type": "progress", "meta": {"a": 1}}хвост'
+    parts = split_glued_events(nested)
+    assert json.loads(parts[0][len("@@PROGRESS@@"):])["meta"] == {"a": 1}
+    assert parts[1] == "хвост"
+
+
+def test_reader_recovers_glued_event(tmp_path):
+    """Скрипт печатает слипшуюся строку — событие всё равно в job.events."""
+    d = tmp_path / "bin"
+    d.mkdir()
+    script = (
+        "import sys\n"
+        "sys.stdout.write('@@CHAPTER@@{\"type\": \"chapter\", \"id\": 1103, '\n"
+        "                 '\"stage\": 3, \"status\": \"OK\"}лог-строка\\n')\n"
+        "sys.stdout.flush()\n"
+        "sys.exit(0)\n"
+    )
+    (d / "glued.py").write_text(script, encoding="utf-8")
+    jm = JobManager(tmp_path, python="python3")
+    job = jm.start("3", "Конвейер", "ACTIVE/x", [str(d / "glued.py")], tmp_path)
+    end = time.time() + 15
+    while time.time() < end and job.status == "running":
+        time.sleep(0.05)
+    assert job.status == "done"
+    assert len(job.events) == 1
+    assert job.events[0]["id"] == 1103 and job.events[0]["stage"] == 3
+    # остаток строки не потерян — он в буфере лога
+    assert any("лог-строка" in line for line in job.lines)
+
+
+def test_read_sidecar_recovers_events_from_glued_log(tmp_path):
+    """Прожитый запуск: событие потеряно старым читателем, но строка лога
+    хранит его слипшейся — после рестарта сервера история честная."""
+    logs = tmp_path / "job_logs"
+    logs.mkdir(parents=True)
+    (logs / "jobs.json").write_text(json.dumps([{
+        "id": "abc123", "action": "pipeline", "title": "Перевод (LLM)",
+        "project": "ACTIVE/x", "status": "running", "created": time.time(),
+        "cwd": ".",
+    }], ensure_ascii=False), encoding="utf-8")
+    # сайдкар событий без потерянной пары «1103:3» — как его записал старый
+    # читатель, который считал слипшуюся строку обычной строкой лога
+    (logs / "abc123.events.json").write_text(json.dumps([
+        {"type": "chapter", "id": 1103, "stage": 1, "status": "OK"},
+        {"type": "chapter", "id": 1103, "stage": 2, "status": "OK"},
+    ]), encoding="utf-8")
+    glued = ('@@CHAPTER@@{"type": "chapter", "id": 1103, "stage": 3, '
+             '"status": "OK"}2026-10-28 11:40:14 - INFO - ── 209/720 ──')
+    (logs / "abc123.log").write_text(
+        "\n".join(["обычная строка", glued]), encoding="utf-8")
+
+    jm = JobManager(tmp_path)
+    job = jm.get("abc123")
+    assert job is not None
+    got = {(e["id"], e["stage"]): e["status"] for e in job.events}
+    assert got[(1103, 3)] == "OK", "событие обязано восстановиться из лога"
+    assert got[(1103, 1)] == "OK" and got[(1103, 2)] == "OK"
+    # слипшаяся лог-строка осталась в буфере — панель лога не переписана
+    assert any("209/720" in line for line in job.lines)
