@@ -362,7 +362,14 @@ async function main() {
   }
 
   fs.mkdirSync(OUT, { recursive: true });
-  const browser = await chromium.launch();
+  /* GPU-процесс headless-shell на некоторых драйверах намертво зависает в
+     ядре (drm_modeset_lock), и тогда виснет любой screenshot: прогону
+     отрисовка не нужна, поэтому софтверный растеризатор отключён, а
+     GPU-процесс живёт внутри основного (NM_PROBE_GPU=1 возвращает обычный
+     запуск для отладки рендеринга) */
+  const browser = await chromium.launch(process.env.NM_PROBE_GPU
+    ? {}
+    : { args: ["--disable-gpu", "--in-process-gpu", "--disable-software-rasterizer"] });
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   const problems = [];
@@ -2908,15 +2915,17 @@ async function main() {
    * нужен: ответ /api/jobs/active подменяем заглушкой */
   {
     const before = problems.length;
+    const job = (n) => ({
+      id: `probe-job-${n}`, status: "running",
+      title: n === 1 ? "Перевод (LLM)" : "Проверка перевода (LLM)",
+      project: `${SECTION}/${BOOK}`,
+      progress: { done: 2 * n, total: 6, label: `Глава ${n} · Перевод` },
+    });
+    let active = [job(1)];
     await page.route("**/api/jobs/active", (r) =>
       r.fulfill({
         contentType: "application/json",
-        body: JSON.stringify({
-          jobs: [{
-            id: "probe-job", status: "running", title: "Перевод (LLM)",
-            project: `${SECTION}/${BOOK}`, progress: { done: 2, total: 3 },
-          }],
-        }),
+        body: JSON.stringify({ jobs: active }),
       }),
     );
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`, { waitUntil: "load" });
@@ -2931,24 +2940,78 @@ async function main() {
       hash: decodeURIComponent(location.hash),
       pill: !!document.querySelector(".run-pill"),
       count: (document.querySelector(".run-pill-count") || {}).textContent || "",
+      title: document.title,
+      hint: (document.querySelector(".run-pill") || {}).title || "",
+      card: !!document.querySelector(".run-card:not(.hidden)"),
+      rows: document.querySelectorAll(".run-card-row").length,
     }));
     const mid = await read();
     if (SHOT) await page.screenshot({ path: path.join(OUT, "run-pill.png") });
     await page.locator(".run-pill").click();
     await page.waitForTimeout(900);
     const after = await read();
-    await page.unroute("**/api/jobs/active");
     if (SHOT) await page.screenshot({ path: path.join(OUT, "run-pill-after.png") });
     if (!mid.pill) problems.push("run-pill: индикатор не отрисован");
     if (mid.tab !== "Статус") problems.push(`run-pill: до клика вкладка «${mid.tab}»`);
-    if (!after.count.includes("2/3")) problems.push(`run-pill: счётчик «${after.count}»`);
+    if (!after.count.includes("2/6")) problems.push(`run-pill: счётчик «${after.count}»`);
     if (after.tab !== "Запуски") {
       problems.push(`run-pill: клик не переключил вкладку (активна «${after.tab}»)`);
     }
     if (!after.hash.endsWith("/run")) {
       problems.push(`run-pill: хэш изменился — ${after.hash}`);
     }
+    // один запуск: подсказка наведения — проект, стадия, проценты, остаток;
+    // заголовок вкладки — со счётчиком
+    if (!mid.hint.includes("Перевод (LLM)") || !mid.hint.includes(BOOK)) {
+      problems.push(`run-pill: подсказка без проекта/стадии — «${mid.hint}»`);
+    }
+    if (!mid.hint.includes("33%")) {
+      problems.push(`run-pill: в подсказке нет процентов — «${mid.hint}»`);
+    }
+    if (mid.title !== "(1) NovelMaestro") {
+      problems.push(`run-pill: заголовок вкладки «${mid.title}»`);
+    }
     log(`${problems.length === before ? "✅" : "❌"} run-pill клик  ${mid.tab} → ${after.tab} · ${after.count}`);
+
+    /* Два одновременных запуска: pill становится меню — клик раскрывает
+       карточку, выбор конкретного прогона открывает ИМЕННО его лог, а не
+       «первый в списке» */
+    const beforeMany = problems.length;
+    active = [job(1), job(2)];
+    await page.evaluate(() => window.updateRunPill());
+    await page.waitForTimeout(700);
+    const many = await read();
+    if (!many.pill) problems.push("run-pill: при двух запусках индикатора нет");
+    if (many.count !== "2") {
+      problems.push(`run-pill: при двух запусках счётчик «${many.count}»`);
+    }
+    if (!many.hint.includes("Идёт запусков: 2")
+        || !many.hint.includes("Проверка перевода (LLM)")) {
+      problems.push(`run-pill: подсказка двух запусков — «${many.hint}»`);
+    }
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "run-pill-many.png") });
+    await page.locator(".run-pill").click();
+    await page.waitForTimeout(500);
+    const opened = await read();
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "run-pill-card.png") });
+    if (!opened.card) problems.push("run-pill: карточка не раскрылась");
+    if (opened.rows !== 2) {
+      problems.push(`run-pill: в карточке строк ${opened.rows} (ожидаем 2)`);
+    }
+    // второй запуск — он и открывается
+    await page.locator(".run-card-row").nth(1).click();
+    await page.waitForTimeout(1200);
+    const chosen = await page.evaluate(() => ({
+      hash: decodeURIComponent(location.hash),
+      tab: (document.querySelector(".tabs .tab-active") || {}).textContent || "",
+    }));
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "run-pill-chosen.png") });
+    if (chosen.tab !== "Запуски") {
+      problems.push(`run-pill: выбор из карточки не открыл «Запуски» («${chosen.tab}»)`);
+    }
+    log(`${problems.length === beforeMany ? "✅" : "❌"} run-pill набор  строк ${opened.rows} · выбор → ${chosen.tab}`);
+    active = [job(1)];
+    await page.unroute("**/api/jobs/active");
   }
 
   /* кириллическое имя проекта: сегменты hash-маршрута браузер хранит
@@ -3742,6 +3805,8 @@ async function main() {
   {
     const before = problems.length;
     const MOB = ["390", "320"];
+    /* карточка запусков проверяется на «Запусках» в каждом вьюпорте */
+    const cardOk = { ok: true };
     const screens = [
       ["hub", "#/hub"],
       ["run", `#/project/${SECTION}/${BOOK}/run`],
@@ -3762,6 +3827,22 @@ async function main() {
         hasTouch: true,
       });
       const mpage = await mctx.newPage();
+      /* карточка активных запусков раскрывается на узком экране: меню
+       * fixed и по краям зажато (UICore.menuPlacement) — проверяем, что оно
+       * целиком в вьюпорте, иначе кнопку выбора не нажать */
+      await mpage.route("**/api/jobs/active", (r) =>
+        r.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobs: [1, 2].map((n) => ({
+              id: `m-job-${n}`, status: "running",
+              title: n === 1 ? "Перевод (LLM)" : "Проверка перевода (LLM)",
+              project: `${SECTION}/${BOOK}`,
+              progress: { done: n, total: 2 },
+            })),
+          }),
+        }),
+      );
       for (const [name, hash] of screens) {
         await mpage.goto(`${url}/${hash}`, { waitUntil: "load" });
         await mpage.waitForTimeout(900);
@@ -3825,6 +3906,41 @@ async function main() {
           });
         }
         for (const f of found) problems.push(`мобильный ${w}px ${name}: ${f}`);
+        /* карточка запусков на узком экране: раскрывается кликом по pill'у,
+           обязана целиком лежать в вьюпорте — иначе кнопку не нажать */
+        if (name === "run") {
+          const pill = mpage.locator(".run-pill");
+          if (await pill.count()) {
+            await pill.click();
+            await mpage.waitForTimeout(400);
+            const box = await mpage.evaluate(() => {
+              const el = document.querySelector(".run-card:not(.hidden)");
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              const rows = el.querySelectorAll(".run-card-row").length;
+              return {
+                rows,
+                inside: r.top >= -1
+                  && r.left >= -1
+                  && r.right <= document.documentElement.clientWidth + 1
+                  && r.bottom <= window.innerHeight + 1,
+                w: Math.round(r.width),
+              };
+            });
+            if (!box) cardOk.ok = false;
+            else if (!box.inside || box.rows !== 2) cardOk.ok = false;
+            if (SHOT) {
+              await mpage.screenshot({
+                path: path.join(OUT, `mobile-${w}-run-card.png`),
+                fullPage: false,
+              });
+            }
+            await mpage.keyboard.press("Escape");
+            await mpage.waitForTimeout(200);
+          } else {
+            cardOk.ok = false;
+          }
+        }
         seen.push(`${w}/${name}${found.length ? "✗" : ""}`);
       }
       // панель выделения в глоссарии — самый узкий бар с иконками и счётчиком
@@ -3859,6 +3975,7 @@ async function main() {
       }
       await mctx.close();
     }
+    if (!cardOk.ok) problems.push("мобильный: карточка запусков не вписалась в экран");
     log(`${problems.length === before ? "✅" : "❌"} мобильный вид ${seen.join(" ")}`
       + (problems.length > before
         ? `\n     ${problems.slice(before).join("\n     ")}` : ""));

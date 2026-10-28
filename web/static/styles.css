@@ -236,6 +236,140 @@ body {
   background: var(--accent);
 }
 
+/* кнопка-индикатор: несколько запусков — это меню выбора, поэтому ▾ и
+   число активных вместо счётчика первого прогона */
+button.run-pill {
+  font-family: var(--sans);
+  cursor: pointer;
+}
+.run-pill-many .run-pill-count {
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--border);
+  color: var(--text);
+  font-size: 11px;
+}
+.run-pill-label-many {
+  color: var(--muted);
+  /* на 320px «2 запуска» + подпись стадии не влезают: слово прячется,
+     счётчик остаётся — карточка назовёт прогоны целиком */
+  white-space: nowrap;
+}
+.run-pill-caret {
+  color: var(--muted);
+  font-size: 10px;
+  /* ▾ — указатель «это меню»: часть подписи, не отдельный глиф под курсором */
+  margin-left: -2px;
+}
+
+/* ── карточка активных запусков (pill при нескольких прогонах) ──
+   fixed как user-menu: карточка списка файлов (.files-list, overflow:hidden)
+   иначе обрезала бы её по своей высоте; координаты от вьюпорта ставит
+   placeMenu (app.js) — общий каркас выпадающих меню */
+.run-card {
+  position: fixed;
+  min-width: 260px;
+  max-width: 340px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 6px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.run-card.hidden {
+  display: none;
+}
+.run-card-head-line {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+/* строка запуска — кнопка целиком: клик в любое место открывает его лог */
+.run-card-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.run-card-row:hover,
+.run-card-row:focus-visible {
+  background: var(--surface-2);
+  border-color: var(--border);
+  outline: none;
+}
+.run-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.run-card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.run-card-pct {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.run-card-project {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-card-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.run-card-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.run-card-info {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.run-card-info > span:empty {
+  display: none;
+}
+.run-card-all {
+  padding: 7px 10px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 12px;
+}
+.run-card-all:hover {
+  color: var(--text);
+}
+
 /* обёртка kebab-кнопки с выпадающим меню (строки файлов и шапка) */
 .menu-wrap {
   display: inline-flex;
@@ -3971,6 +4105,25 @@ body[data-editor-theme="light"] .editor-area {
   .run-pill {
     max-width: calc(100vw - 110px);
   }
+  /* индикатор активных запусков — единственная гибкая часть правой группы:
+     без min-width:0 он не сжимается в флекс-контейнере и на 320px выдавливает
+     соседей за край экрана (ловит probe) */
+  .topbar-right {
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .run-slot {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .run-pill {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .run-pill-label {
+    min-width: 0;
+  }
 
   /* вкладки прокручиваются по горизонтали одной строкой: переносы
      делали из панели вкладок «лестницу» высотой в треть экрана */
@@ -4339,6 +4492,11 @@ body[data-editor-theme="light"] .editor-area {
 @media (max-width: 420px) {
   .content {
     padding: 12px 10px 20px;
+  }
+  /* очень узкий экран: «запуска/запусков» уходит, счётчик с кареткой
+     остаются — иначе pill выдавливает шапку за край (ловит probe) */
+  .run-pill-label-many {
+    display: none;
   }
   .fmeta {
     padding-left: 0;

@@ -918,6 +918,54 @@
     etaSamples.delete(id);
   }
 
+  /* ── карточка активных запусков в шапке ────────────────────────────
+   * Части строки одного запуска: что за запуск, по какой книге, сколько
+   * сделано и сколько осталось. Одна функция на карточку и на подсказку
+   * иконки вкладки — экраны не должны показывать разные цифры. */
+  function runSummary(job, p) {
+    var j = job || {};
+    var parts = progressParts(j, p);
+    var sections = String(j.project || "").split("/");
+    var e = etaOf(j, p);
+    return {
+      id: String(j.id || ""),
+      /* название стадии — из запуска, а не из словаря SPA: «Перевод (LLM)»
+         пишет реестр стадий, второе описание разошлось бы с вкладками */
+      title: String(j.title || j.action || "запуск"),
+      project: String(j.project || ""),
+      /* «Раздел / Книга» для карточки; сама книга — projectName */
+      section: sections[0] || "",
+      projectName: sections[1] || "",
+      count: parts.count,
+      label: parts.label,
+      /* «12%» и «осталось ≈ 3 ч 20 мин» — ровно то, что видно в подсказке
+         иконки вкладки; пустая строка — считать нечего */
+      pct: parts.pct || 0,
+      pctText: (p && Number(p.total) > 0) ? parts.pct + "%" : "",
+      remaining: e ? "осталось ≈ " + etaDuration(e.remaining) : "",
+      finish: e ? etaClock(e.finishAt) : "",
+      waiting: !!parts.waiting,
+    };
+  }
+
+  /* Подсказка иконки вкладки: по строке на запуск (название · книга ·
+   * проценты · остаток). В системной иконке нет тултипа, но текст живёт в
+   * одном месте — его же читает карточка шапки и тесты. */
+  function runDotTitle(jobs) {
+    var list = (jobs || []).map((j) => runSummary(j, j && j.progress));
+    if (!list.length) return "";
+    var head = list.length === 1
+      ? "Идёт запуск"
+      : "Идёт запусков: " + list.length;
+    var lines = list.map((r) => {
+      var where = r.projectName ? " · " + r.projectName : "";
+      var pct = r.pctText ? " · " + r.pctText : "";
+      var left = r.remaining ? " · " + r.remaining : "";
+      return r.title + where + pct + left;
+    });
+    return head + "\n" + lines.join("\n");
+  }
+
   /* ── относительное время («3 ч назад») по unix-секундам ──
    * < 60 с — «только что»; < 60 мин — «N мин назад»; < 24 ч — «N ч назад»;
    * < 7 дн — «N дн назад»; дальше — дата ДД.ММ.ГГГГ. Абсолютное время —
@@ -1508,6 +1556,9 @@
     etaOf: etaOf,
     /* текст оценки одной строкой ("" — считать нечего) */
     etaText: etaText,
+    /* части одного запуска для карточки шапки и подсказки иконки */
+    runSummary: runSummary,
+    runDotTitle: runDotTitle,
     /* окно выборок завершённого запуска больше не нужно */
     etaForget: etaForget,
     etaDuration: etaDuration,

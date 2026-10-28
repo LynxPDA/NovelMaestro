@@ -79,16 +79,18 @@ let activeProject = null;
 /* Навигация по вкладкам проекта из шапки (индикатор запусков): проект открыт —
    переключаем вкладку напрямую, иначе ведём ссылкой. «Открыт» сверяем по
    маршруту: у живого view хэш всегда ведёт тот же проект, а вкладка в нём —
-   какая угодно */
-function projectNavigate(project, view) {
+   какая угодно. jobId — конкретный запуск (карточка активных запусков шапки:
+   у книги может идти несколько прогонов одновременно). */
+function projectNavigate(project, view, jobId) {
   const key = String(project || "");
   const r = UICore.parseRoute(location.hash);
   const live = activeProject;
   if (live && r.view === "project" && r.rest.slice(0, 2).join("/") === key) {
-    live.setView(view);
+    live.setView(view, null, false, jobId);
     return;
   }
-  location.hash = `#/project/${key}/${view}`;
+  const tail = jobId ? `/${jobId}` : "";
+  location.hash = `#/project/${key}/${view}${tail}`;
 }
 
 /* eslint-disable-next-line no-unused-vars -- глобал SPA, вызывается из app.js */
@@ -220,14 +222,22 @@ function viewProject(section, name, tab, job) {
      view тот же); старому телу — сигнал ухода. find — запрос, с которым
      вкладка открывается (из «Поиска» — в «Глоссарий»); all — открыть
      глоссарий со ВСЕМИ столбцами: искателю нужно значение поля, а не три
-     колонки по умолчанию */
-  function setView(view, find, all) {
-    if (view === st.view && !all && (!find || st.search === find)) return;
+     колонки по умолчанию; jobId — какой запуск открыть на «Запусках» (из
+     карточки активных запусков в шапке: у книги может идти несколько
+     прогонов сразу) */
+  function setView(view, find, all, jobId) {
+    const sameJob = view !== "run" || !jobId || st.runJob === jobId;
+    if (view === st.view && !all && (!find || st.search === find) && sameJob)
+      return;
     leaveBody();
     st.view = view;
     st.edit = null;
     st.search = find ? String(find) : null;
     st.nerAll = all ? 1 : null;
+    /* runJob живёт ровно на время «Запусков»: выбранный из шапки запуск
+       не должен всплывать при следующем заходе на вкладку из-за
+       накопленного состояния */
+    st.runJob = view === "run" ? jobId || null : null;
     st.nerSel.clear(); // выделение — про конкретную вкладку
     render();
   }

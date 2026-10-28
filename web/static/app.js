@@ -3275,6 +3275,7 @@ function layout(content) {
    «Запуски» проекта. Активный запуск виден с любого экрана. */
 let runPollTimer = null;
 let runSeen = []; // id активных запусков прошлого опроса — по ним ловим финал
+let runCardEl = null; // карточка выбора запусков текущего pill'а (меню шапки)
 
 /* Фавикон-счётчик: с любой вкладки видно, что что-то считается. */
 function setRunBadge(count) {
@@ -3301,6 +3302,87 @@ function notifyFinished(ids) {
   }
 }
 
+/* Заголовок вкладки: «(2) NovelMaestro» — счётчик активных запусков виден и
+   на неактивной вкладке, где фавикон смазан в точку. */
+function setRunTitle(count) {
+  const n = Number(count) || 0;
+  document.title = n > 0 ? `(${n}) NovelMaestro` : "NovelMaestro";
+}
+
+/* Строка одного запуска в карточке шапки: заголовок стадии, книга, прогресс
+   и остаток. Клик открывает ИМЕННО этот запуск на вкладке «Запуски»: у
+   книги может идти несколько прогонов, и «первый в списке» — не тот, что
+   человек выбрал. */
+function runCardRow(j) {
+  const r = UICore.runSummary(j, j.progress);
+  const parts = UICore.progressParts(j, j.progress);
+  const open = () => {
+    closeMenus();
+    projectNavigate(j.project, "run", j.id);
+  };
+  const row = h(
+    "button",
+    {
+      class: "run-card-row",
+      type: "button",
+      title: `${r.title} · ${r.project}`
+        + (parts.eta ? ` · ${parts.eta}` : "")
+        + (r.waiting ? " · ожидание первого результата" : ""),
+      onclick: open,
+    },
+    h(
+      "span",
+      { class: "run-card-head" },
+      h("span", { class: "run-card-title" }, r.title),
+      r.pctText
+        ? h("span", { class: "run-card-pct" }, r.pctText)
+        : null,
+    ),
+    h("span", { class: "run-card-project" }, r.project),
+    h(
+      "span",
+      { class: "run-card-track" },
+      h("span", {
+        class: "run-card-fill",
+        style: `width:${parts.pct}%`,
+      }),
+    ),
+    h(
+      "span",
+      { class: "run-card-info" },
+      r.count ? h("span", {}, r.count) : null,
+      r.remaining ? h("span", {}, r.remaining) : null,
+      r.finish ? h("span", {}, `→ ${r.finish}`) : null,
+    ),
+  );
+  return row;
+}
+
+/* Карточка активных запусков под pill'ом. Кнопка pill'а остаётся одной:
+   один запуск — сразу его лог (как раньше), несколько — сначала выбор,
+   потому что «первый в списке» не тот запуск, который человек ждёт. */
+function runCard(jobs) {
+  const box = h("div", { class: "run-card hidden", role: "menu" });
+  box.append(
+    h(
+      "div",
+      { class: "run-card-head-line" },
+      `Активных запусков: ${jobs.length}`,
+    ),
+    ...jobs.map(runCardRow),
+    h(
+      "a",
+      {
+        class: "run-card-all",
+        href: "#/dashboard",
+        onclick: () => closeMenus(),
+      },
+      "Все запуски · Дашборд",
+    ),
+  );
+  return box;
+}
+
 function updateRunPill() {
   if (!state.auth) return;
   api("/jobs/active")
@@ -3314,46 +3396,84 @@ function updateRunPill() {
       const finished = runSeen.filter((id) => !now.includes(id));
       runSeen = now;
       setRunBadge(jobs.length);
+      setRunTitle(jobs.length);
       notifyFinished(finished);
+      /* открытая карточка выбора держится за свою кнопку: опрос раз в 10 с
+         перерисовывает слот, и без запоминания «было открыто» меню
+         схлопывалось бы посреди выбора. Старая кнопка уходит из DOM —
+         меню закрываем явно, а новое откроем после сборки */
+      const wasOpen = Boolean(_openMenu && _openMenu.menu === runCardEl);
+      if (wasOpen) closeMenus();
       slot.replaceChildren();
-      if (!jobs.length) return;
+      if (!jobs.length) {
+        return;
+      }
       const j = jobs[0];
       /* части считаются тем же progressParts, что и панелям «Запусков»: в
          шапке pill компактный (название, счётчик, трек), поэтому остаток и
          время конца уходят в тултип — на 220 px строки они не влезают */
       const parts = UICore.progressParts(j, j.progress);
       const label = j.title || j.action || "запуск";
-      const more = jobs.length > 1 ? ` · ещё ${jobs.length - 1}` : "";
+      /* несколько прогонов — pill показывает только «их сколько»: трек одного
+         запуска и «ещё N» рядом с бейджем читались второй строкой прогресса,
+         а какой из прогонов первый в списке — неважно, выбор в карточке */
+      const many = jobs.length > 1;
+      /* подсказка наведения: в системной иконке тултипа нет, поэтому
+         проект, запуск, проценты и остаток собраны здесь же — UICore.
+         runDotTitle, тот же текст живёт в карточке и в тестах */
+      const hint = UICore.runDotTitle(jobs);
+      const box = runCard(jobs);
       const pill = h(
-        "a",
+        "button",
         {
-          class: "run-pill",
-          href: `#/project/${j.project}/run`,
-          title: `Активных запусков: ${jobs.length} — открыть лог`
-            + (parts.eta ? ` · ${parts.eta}` : ""),
-          /* клик — через навигацию SPA: вкладки проекта меняются состоянием,
-             хэш остаётся тем, чем в проект вошли, и ссылка «на ту же вкладку»
-             не меняла бы ничего (клик проходил бы мимо) */
+          class: "run-pill" + (many ? " run-pill-many" : ""),
+          type: "button",
+          title: hint + "\n\nКлик — открыть лог",
+          "aria-label": many
+            ? `Активных запусков: ${jobs.length} — выбрать`
+            : `Активный запуск: ${label} — открыть лог`,
+          "aria-haspopup": many ? "menu" : null,
+          "aria-expanded": many ? "false" : null,
+          /* один запуск — сразу его лог; несколько — раскрываем карточку
+             выбора. Навигация — через projectNavigate: вкладки проекта
+             меняются состоянием, и ссылка «на ту же вкладку» ничего бы не
+             делала (клик проходил бы мимо) */
           onclick: (ev) => {
             ev.preventDefault();
-            projectNavigate(j.project, "run");
+            if (many) {
+              toggleMenu(pill, box);
+              return;
+            }
+            closeMenus();
+            projectNavigate(j.project, "run", j.id);
           },
         },
         iconEl("activity"),
-        h("span", { class: "run-pill-label" }, label + more),
-        parts.count
-          ? h("span", { class: "run-pill-count" }, parts.count)
+        h("span", { class: "run-pill-label" }, label),
+        h("span", { class: "run-pill-count" }, many
+          ? String(jobs.length)
+          : parts.count),
+        many
+          ? null
+          : h(
+            "span",
+            { class: "run-pill-track" },
+            h("span", {
+              class: "run-pill-fill",
+              style: `width:${parts.pct}%`,
+            }),
+          ),
+        many
+          ? h("span", { class: "run-pill-label-many" },
+              jobs.length === 2 ? "запуска" : "запусков")
           : null,
-        h(
-          "span",
-          { class: "run-pill-track" },
-          h("span", {
-            class: "run-pill-fill",
-            style: `width:${parts.pct}%`,
-          }),
-        ),
+        many ? h("span", { class: "run-pill-caret" }, "▾") : null,
       );
-      slot.append(pill);
+      runCardEl = box;
+      slot.append(pill, box);
+      /* раскрытое меню восстанавливаем на новой кнопке: человек выбирает
+         запуск, а не борется с обновлением опроса */
+      if (wasOpen && many) openMenu(pill, box);
     })
     .catch(() => {
       /* нет связи — pill просто не показывается */

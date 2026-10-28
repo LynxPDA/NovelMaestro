@@ -659,13 +659,19 @@ def test_run_pill_switches_tab_without_hash():
     Пилл зовёт projectNavigate: тот же проект — смена вкладки напрямую."""
     app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
     pv = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
-    assert 'onclick: (ev) => {' in app and 'projectNavigate(j.project, "run")' in app
-    assert "function projectNavigate(project, view)" in pv
+    # один запуск — сразу его лог: третий довод адресует «Запуски» к нужному
+    assert "projectNavigate(j.project, \"run\", j.id)" in app
+    # несколько — карточка выбора, каждый ряд ведёт в свой запуск
+    assert "projectNavigate(j.project, \"run\", j.id)" in app
+    assert "function projectNavigate(project, view, jobId)" in pv
     # «открыт» — по маршруту: у живого view хэш всегда ведёт тот же проект
     assert 'if (live && r.view === "project"' in pv
     assert "activeProject = { key: `${section}/${name}`, setView };" in pv
     # чужой проект или другой экран — обычный переход ссылкой
-    assert 'location.hash = `#/project/${key}/${view}`' in pv
+    assert 'location.hash = `#/project/${key}/${view}${tail}`;' in pv
+    # id запуска едет в маршруте: второй ряд открывает ИМЕННО свой прогон
+    assert "const tail = jobId ? `/${jobId}` : \"\";" in pv
+    assert "location.hash = `#/project/${key}/${view}${tail}`;" in pv
 
 
 def test_field_applies_js_matches_python(tmp_path):

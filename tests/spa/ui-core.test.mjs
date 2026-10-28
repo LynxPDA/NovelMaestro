@@ -112,6 +112,81 @@ test("etaOf и etaText: оценка конца — только у работа
   assert.ok(Math.abs(fresh.remaining - 4) < 1, String(fresh.remaining));
 });
 
+test("runSummary: карточка запуска — проект, проценты, остаток", () => {
+  const now = Date.now() / 1000;
+  const job = {
+    id: "abc123",
+    status: "running",
+    created: now - 300,
+    title: "Перевод (LLM)",
+    project: "ACTIVE/Книга",
+  };
+  const r = UICore.runSummary(job, { done: 20, total: 100, label: "Глава 3 · Перевод" });
+  assert.equal(r.id, "abc123");
+  assert.equal(r.title, "Перевод (LLM)");
+  assert.equal(r.project, "ACTIVE/Книга");
+  assert.equal(r.section, "ACTIVE");
+  assert.equal(r.projectName, "Книга");
+  assert.equal(r.pct, 20);
+  assert.equal(r.pctText, "20%");
+  assert.equal(r.count, "20/100 · 20%");
+  assert.equal(r.label, "Глава 3 · Перевод");
+  assert.match(r.remaining, /^осталось ≈ 20 мин$/);
+  assert.ok(r.finish, "часы завершения посчитаны");
+  assert.equal(r.waiting, false);
+  UICore.etaForget("abc123");
+
+  // без событий прогресса: проценты и остаток пустые, ожидание видно
+  const wait = UICore.runSummary(
+    { id: "w1", status: "running", created: now, title: "Глоссарий", project: "HOLD/x" },
+    null,
+  );
+  assert.equal(wait.pctText, "");
+  assert.equal(wait.remaining, "");
+  assert.equal(wait.waiting, true);
+  assert.equal(wait.count, "ожидание первого результата…");
+  UICore.etaForget("w1");
+
+  // без total доли нет — «0%» не выдумываем
+  const noTotal = UICore.runSummary(
+    { id: "n1", status: "running", created: now, title: "wiki", project: "" },
+    { done: 5, total: 0 },
+  );
+  assert.equal(noTotal.pctText, "");
+  assert.equal(noTotal.count, "5 …");
+  assert.equal(noTotal.section, "");
+  assert.equal(noTotal.projectName, "");
+  UICore.etaForget("n1");
+});
+
+test("runDotTitle: подсказка иконки — по строке на запуск", () => {
+  assert.equal(UICore.runDotTitle([]), "");
+  assert.equal(UICore.runDotTitle(null), "");
+  const now = Date.now() / 1000;
+  const jobs = [
+    {
+      id: "j1", status: "running", created: now - 300,
+      title: "Перевод (LLM)", project: "ACTIVE/Книга",
+      progress: { done: 20, total: 100 },
+    },
+    {
+      id: "j2", status: "running", created: now,
+      title: "Проверка (LLM)", project: "HOLD/Другая",
+      progress: null,
+    },
+  ];
+  const text = UICore.runDotTitle(jobs);
+  const lines = text.split("\n");
+  assert.equal(lines[0], "Идёт запусков: 2");
+  assert.match(lines[1], /^Перевод \(LLM\) · Книга · 20% · осталось ≈ 20 мин$/);
+  // у запуска без событий нет ни процентов, ни остатка — только имя
+  assert.equal(lines[2], "Проверка (LLM) · Другая");
+  // один запуск — заголовок в единственном числе
+  assert.match(UICore.runDotTitle([jobs[0]]).split("\n")[0], /^Идёт запуск$/);
+  UICore.etaForget("j1");
+  UICore.etaForget("j2");
+});
+
 test("etaRemaining: фолбэк от старта запуска", () => {
   // окно ещё короткое (span=0): 20 сделано за 200 c → остаток 80/0.1 = 800
   const one = [{ t: 1100, done: 20, total: 100 }];
