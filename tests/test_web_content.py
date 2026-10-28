@@ -827,21 +827,25 @@ def test_prompts_copy_set_missing(srv, tmp_path):
 
 
 def test_logs_list(srv, tmp_path):
-    """дерево логов — рекурсивно по logs/, только *.log,
-    path — относительный путь от logs/."""
+    """дерево логов — рекурсивно по logs/, ВСЕ файлы: отчёты стадий
+    (`check_*.txt` проверки перевода, `build_log_*.txt` сборки) лежат здесь
+    же и тоже являются логом прогона. path — относительный путь от logs/."""
     srv, port, root = srv()
     pdir = _mk_project(root)
     (pdir / "logs").mkdir()
     (pdir / "logs" / "run.log").write_text("line1\n", encoding="utf-8")
-    (pdir / "logs" / "readme.txt").write_text("не лог\n", encoding="utf-8")
+    (pdir / "logs" / "check_polished_1-10.txt").write_text(
+        "отчёт\n", encoding="utf-8")
     (pdir / "logs" / "chapters").mkdir()
     (pdir / "logs" / "chapters" / "ch1.log").write_text("x\n", encoding="utf-8")
     r = _request(port, "GET", f"/api/logs?{_q('ACTIVE/demo')}")
     assert r["ok"]
     by_path = {l["path"]: l for l in r["logs"]}
-    assert set(by_path) == {"run.log", "chapters/ch1.log"}
+    assert set(by_path) == {"run.log", "check_polished_1-10.txt",
+                            "chapters/ch1.log"}
     assert by_path["run.log"]["name"] == "run.log"
     assert by_path["chapters/ch1.log"]["name"] == "ch1.log"
+    assert by_path["check_polished_1-10.txt"]["name"] == "check_polished_1-10.txt"
 
 
 def test_logs_read_tail(srv, tmp_path):
@@ -887,20 +891,21 @@ def test_logs_delete_one(srv, tmp_path):
 
 
 def test_logs_delete_all(srv, tmp_path):
-    """DELETE /api/logs — все *.log, не-.log и папки не трогаем."""
+    """DELETE /api/logs — все файлы logs/ (и отчёты тоже), папки не трогаем."""
     srv, port, root = srv()
     pdir = _mk_project(root)
     (pdir / "logs").mkdir()
     (pdir / "logs" / "run.log").write_text("A\n", encoding="utf-8")
-    (pdir / "logs" / "notes.txt").write_text("не лог\n", encoding="utf-8")
+    (pdir / "logs" / "check_polished_1-10.txt").write_text(
+        "отчёт\n", encoding="utf-8")
     (pdir / "logs" / "chapters").mkdir()
     (pdir / "logs" / "chapters" / "ch1.log").write_text("B\n",
                                                             encoding="utf-8")
     r = _request(port, "DELETE", f"/api/logs?{_q('ACTIVE/demo')}")
-    assert r["ok"] and len(r["deleted"]) == 2
+    assert r["ok"] and len(r["deleted"]) == 3
     assert not (pdir / "logs" / "run.log").exists()
+    assert not (pdir / "logs" / "check_polished_1-10.txt").exists()
     assert not (pdir / "logs" / "chapters" / "ch1.log").exists()
-    assert (pdir / "logs" / "notes.txt").exists()
     assert (pdir / "logs" / "chapters").is_dir()
 
 

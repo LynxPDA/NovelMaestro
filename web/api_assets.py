@@ -127,7 +127,13 @@ def _cover_delete(ctx: dict) -> dict:
 
 
 def _logs_list(ctx: dict) -> dict:
-    """Дерево логов проекта: рекурсивно по logs/, только *.log.
+    """Дерево логов проекта: рекурсивно по logs/, все файлы.
+
+    Раньше брались только `*.log`, и отчёты стадий (`check_*.txt` —
+    проверка перевода, `build_log_*.txt` — сборка,
+    `epub_to_txt_clean_report.txt`) во вкладку не попадали: они
+    переименовывают прогон в отчёт, но лежат здесь же — без них папка
+    логов выглядела полупустой. Расширение — только уточнение в списке.
     path — относительный путь от logs/ (папки через '/'); GET /api/logs."""
     pdir, _section, _name = _project_ctx(ctx)
     out = []
@@ -136,7 +142,7 @@ def _logs_list(ctx: dict) -> dict:
         return {"ok": True, "logs": out}
     for f in sorted(root.rglob("*")):
         try:
-            if not f.is_file() or f.suffix.lower() != ".log":
+            if not f.is_file():
                 continue
             st = f.stat()
             rel = f.relative_to(root)
@@ -181,7 +187,7 @@ def _logs_read(ctx: dict) -> dict:
 
 def _logs_delete(ctx: dict) -> dict:
     """Удаление логов проекта: один файл (DELETE /api/logs/{name}
-    ?dir=подпапка) или ВСЕ *.log (DELETE /api/logs).
+    ?dir=подпапка) или ВСЕ файлы logs/ (DELETE /api/logs).
     Пути валидируются _resolve_project_path (выход за logs/ запрещён)."""
     pdir, _section, _name = _project_ctx(ctx)
     name = ctx.get("params", {}).get("name", "")
@@ -201,10 +207,10 @@ def _logs_delete(ctx: dict) -> dict:
         except OSError as exc:
             raise ApiError(500, f"Не удалось удалить лог: {exc}") from exc
         return {"ok": True, "deleted": name}
-    # очистка всех *.log (папки и не-.log файлы не трогаем)
+    # очистка всех файлов logs/ (папки не трогаем)
     deleted = []
     if root.is_dir():
-        for f in sorted(root.rglob("*.log")):
+        for f in sorted(root.rglob("*")):
             try:
                 if f.is_file():
                     f.unlink()

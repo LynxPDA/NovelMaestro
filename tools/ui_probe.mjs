@@ -248,6 +248,9 @@ function seedProjectsDir(dir) {
   // рисуется одним пейджером
   fs.mkdirSync(path.join(book, "logs", "chapters"), { recursive: true });
   fs.writeFileSync(path.join(book, "logs", "ner.log"), "2025-01-01 00:00 ner: старт\n", "utf-8");
+  /* отчёт стадии лежит в logs/ рядом с логами: вкладка «Логи» показывает
+     его как файл, а не только *.log */
+  fs.writeFileSync(path.join(book, "logs", "build_log_txt.txt"), "сборка: ок\n", "utf-8");
   fs.writeFileSync(path.join(book, "logs", "chapters", "00000_1_Глава 1.log"), "глава: ок\n", "utf-8");
   fs.mkdirSync(path.join(book, "prompts"), { recursive: true });
   fs.writeFileSync(path.join(book, "prompts", "translate.txt"), "<translate>переведи</translate>\n", "utf-8");
@@ -1254,12 +1257,21 @@ async function main() {
       rows: document.querySelectorAll(".prompt-list .prompt-item").length,
       dirs: [...document.querySelectorAll(".prompt-list .prompt-item")]
         .map((x) => x.textContent.trim()).filter((t) => t.endsWith("/")).length,
+      txt: [...document.querySelectorAll(".prompt-list .prompt-item")]
+        .some((x) => x.textContent.includes("build_log_txt.txt")),
+      chk: [...document.querySelectorAll(".prompt-list .prompt-item")]
+        .some((x) => x.textContent.includes("check_polished_1-2.txt")),
       info: ((document.querySelector(".ner-pager-info") || {})
         .textContent || "").trim(),
     }));
-    if (l0.rows < 2) problems.push(`логи: строк ${l0.rows} (ожидаем файл + папку)`);
+    /* в списке не только *.log: отчёты стадий тоже логи прогона, поэтому
+       файлов в корне три (ner.log, build_log_txt.txt, check_polished_1-2.txt)
+       плюс папка chapters/ */
+    if (l0.rows !== 4) problems.push(`логи: строк ${l0.rows} (ожидаем 3 файла + папку)`);
     if (l0.dirs !== 1) problems.push(`логи: папок в списке ${l0.dirs}`);
-    if (!/логова?:\s*1/.test(l0.info)) problems.push(`логи: подпись «${l0.info}»`);
+    if (!l0.txt) problems.push("логи: отчёт сборки (build_log_txt.txt) не показан");
+    if (!l0.chk) problems.push("логи: отчёт проверки перевода (check_*.txt) не показан");
+    if (!/логова?:\s*3/.test(l0.info)) problems.push(`логи: подпись «${l0.info}»`);
     await page.locator('.prompt-list .prompt-item:has-text("ner.log")').first().click();
     await page.waitForTimeout(700);
     const view = await page.evaluate(() => ((document.querySelector(".log-view") || {})
@@ -2675,6 +2687,17 @@ async function main() {
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-check-scale.png") });
     log(`${problems.length === before ? "✅" : "❌"} шкала отчёта    `
       + `${sc.length} пары · ${(first.dots || []).length} точка`);
+    /* корзина у каждого отчёта — как у логов: отчёт лежит файлом в logs/ */
+    const trashes = await page.evaluate(() => ({
+      rows: document.querySelectorAll(".check-list .prompt-item-row").length,
+      icons: document.querySelectorAll(
+        '.check-list .prompt-item-row button[aria-label="Удалить отчёт"]').length,
+    }));
+    if (!trashes.rows) problems.push("отчёты: строк списка нет");
+    else if (trashes.icons !== trashes.rows)
+      problems.push(`отчёты: корзин ${trashes.icons} при ${trashes.rows} строках`);
+    log(`${problems.length === before ? "✅" : "❌"} корзина отчётов  `
+      + `${trashes.icons} из ${trashes.rows}`);
     /* подвкладка «Проверки» запоминается книгой: следующие сценарии ждут
        глоссарий — возвращаем её, иначе полигон упадёт на пустом .rv-row */
     await page.locator('.subtabs .subtab:text-is("Глоссарий (LLM)")').first().click();

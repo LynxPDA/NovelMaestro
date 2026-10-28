@@ -959,6 +959,27 @@ def test_hub_create_button_label():
     assert "＋ Проект" in probe and "Создать проект" not in probe
 
 
+def test_check_reports_have_trash_icon():
+    """У отчётов translate_check в «Проверках» → «Перевод» есть корзина —
+    как у логов: отчёт лежит файлом в logs/, удалить его можно там, где он
+    виден, а не только пачкой «Очистить»."""
+    pv = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
+    fn = pv[pv.index("async function renderCheckReports("):
+            pv.index("/* ── Оценка перевода (LLM)")]
+    assert 'iconBtn("trash", "Удалить отчёт"' in fn
+    assert "`/file?${dq}&path=" in fn
+    assert "logs/${r.name}" in fn
+    # строка списка — кнопка + корзина (общий стиль prompt-item-row)
+    assert 'class: "prompt-item-row"' in fn
+    # удаление идёт через подтверждение, а не сразу по клику
+    assert 'confirmModal(' in fn and '"УДАЛИТЬ"' in fn
+    # счётчик и «Очистить» обновляются вместе со списком: после удаления
+    # одного отчёта подпись «N отчёт(ов)» обязана врать перестать
+    assert "function syncToolbar()" in fn
+    assert fn.count("syncToolbar();") == 2  # вызовы: удаление одного и «Очистить»
+    assert "count.textContent = `${n} отчёт(ов)`" in fn
+
+
 def test_archived_project_opens_with_explanation():
     """Прямая ссылка на упакованную книгу (закладка, «Назад») раньше давала
     вкладки с 404: папки нет. Теперь — экран «Книга упакована» с распаковкой.

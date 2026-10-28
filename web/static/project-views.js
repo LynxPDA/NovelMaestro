@@ -6137,8 +6137,9 @@ function viewProject(section, name, tab, job) {
 
   /* ── Логи ─────────────────────────────────── */
   async function logsView() {
-    /* структура папок как «Проекты-Файлы» (crumbs + подпапки),
-       отображаются только *.log */
+    /* структура папок как «Проекты-Файлы» (crumbs + подпапки);
+       показываем ВСЕ файлы logs/ — отчёты стадий (`check_*.txt`,
+       `build_log_*.txt`) лежат здесь же и тоже описывают прогон */
     const q = new URLSearchParams({ project: `${section}/${name}` });
     let data;
     try {
@@ -6306,7 +6307,7 @@ function viewProject(section, name, tab, job) {
     clearAll.addEventListener("click", () =>
       confirmModal(
         "Очистить все логи",
-        `Будут удалены все *.log в logs/ (${all.length} шт.)`,
+        `Будут удалены все файлы в logs/ (${all.length} шт.)`,
         "УДАЛИТЬ",
         async () => {
           try {
@@ -6567,6 +6568,8 @@ function viewProject(section, name, tab, job) {
     const REPORT_PAGE_SIZE = 10;
     const list = h("div", { class: "prompt-list" });
     const body = h("div", { class: "review-card" });
+    const count = h("span", { class: "check-list-count" },
+      `${data.reports.length} отчёт(ов)`);
     /* страницы — общий пейджер, режим управляемый: компонент держит
        страницу, список и таблицу рисует вьюха (onChange) */
     const listPager = UIC.listPager({
@@ -6605,7 +6608,40 @@ function viewProject(section, name, tab, job) {
           renderList();
           renderReport();
         });
-        list.append(btn);
+        /* Корзина — как у логов: отчёт стадии лежит файлом в logs/, и
+           удалить его можно откуда видно, а не только пачкой «Очистить» */
+        const del = iconBtn("trash", "Удалить отчёт", (ev) => {
+          ev.stopPropagation();
+          confirmModal(
+            "Удалить отчёт",
+            `Файл logs/${r.name} будет удалён`,
+            "УДАЛИТЬ",
+            async () => {
+              const dq = new URLSearchParams({ project: `${section}/${name}` });
+              try {
+                await api(
+                  `/file?${dq}&path=${encodeURIComponent(`logs/${r.name}`)}`,
+                  { method: "DELETE" },
+                );
+                data.reports = data.reports.filter((x) => x !== r);
+                if (current === r) {
+                  current = data.reports[0] || null;
+                  pref.set("notes", { name: current ? current.name : "" });
+                  pager.page = 0;
+                }
+                if (!data.reports.length) listPager.page = 0;
+                syncToolbar();
+                renderList();
+                pager.page = 0;
+                renderReport();
+                toast(`Отчёт удалён: ${r.name}`);
+              } catch (ex) {
+                toast(ex.message, "err");
+              }
+            },
+          );
+        });
+        list.append(h("div", { class: "prompt-item-row" }, btn, del));
       }
       listPager.items = data.reports.length;
     }
@@ -6741,7 +6777,13 @@ function viewProject(section, name, tab, job) {
       },
       "Очистить",
     );
-    clearBtn.disabled = !(data.reports || []).length;
+    /* подпись «N отчёт(ов)» и «Очистить» живут рядом со списком: после
+       удаления одного отчёта они обязаны врать перестать */
+    function syncToolbar() {
+      const n = (data.reports || []).length;
+      count.textContent = `${n} отчёт(ов)`;
+      clearBtn.disabled = !n;
+    }
     clearBtn.addEventListener("click", () => {
       const n = (data.reports || []).length;
       confirmModal(
@@ -6761,7 +6803,7 @@ function viewProject(section, name, tab, job) {
             pref.set("notes", { name: "" });
             pager.page = 0;
             listPager.page = 0;
-            clearBtn.disabled = true;
+            syncToolbar();
             renderList();
             renderReport();
             toast("Все отчёты удалены");
@@ -6782,8 +6824,7 @@ function viewProject(section, name, tab, job) {
         h(
           "div",
           { class: "check-list-toolbar" },
-          h("span", { class: "check-list-count" },
-            `${data.reports.length} отчёт(ов)`),
+          count,
           clearBtn,
         ),
         list,
