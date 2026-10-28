@@ -3906,6 +3906,54 @@ async function main() {
           });
         }
         for (const f of found) problems.push(`мобильный ${w}px ${name}: ${f}`);
+        /* Шапка с активным запуском: pill не должен съедать название
+           программы и обрезать навигацию. Проверяются три вещи — бренд
+           виден целиком или честно с многоточием (не «⇄…»), все пункты
+           навигации в своей строке без обрезки, а подпись pill'а либо
+           читается, либо спрятана целиком (огрызок «П.» хуже пустоты). */
+        const head = await mpage.evaluate(() => {
+          const box = (el) => el.getBoundingClientRect();
+          const brand = document.querySelector(".brand");
+          const nav = document.querySelector(".topnav");
+          const label = document.querySelector(".run-pill-label");
+          const pill = document.querySelector(".run-pill");
+          const vis = (el) => el && getComputedStyle(el).display !== "none";
+          const out = [];
+          if (brand) {
+            const b = box(brand);
+            // ширина меньше 60px = от названия остались «⇄…»
+            if (b.width < 60) out.push(`бренд сжат до ${Math.round(b.width)}px`);
+          }
+          if (nav) {
+            const nb = box(nav);
+            const items = [...nav.querySelectorAll(".nav-item")];
+            const last = items.length ? box(items[items.length - 1]) : null;
+            if (last && last.right > nb.right + 1) {
+              out.push(`навигация обрезана: ${Math.round(nb.width)}px `
+                + `на ${items.length} пунктов`);
+            }
+            if (nav.scrollWidth > nav.clientWidth + 1) {
+              out.push(`навигация скроллится: ${nav.scrollWidth}>${nav.clientWidth}`);
+            }
+          }
+          if (vis(label) && pill) {
+            const lb = box(label);
+            // видимая подпись уже 28px — от неё остался огрызок
+            if (lb.width > 0 && lb.width < 28) {
+              out.push(`подпись pill'а сжата до ${Math.round(lb.width)}px`);
+            }
+          }
+          if (pill) {
+            const pb = box(pill);
+            // трек не должен вылезать за скругление pill'а
+            const track = pill.querySelector(".run-pill-track");
+            if (vis(track) && box(track).right > pb.right + 1) {
+              out.push("трек pill'а вылез за кнопку");
+            }
+          }
+          return out;
+        });
+        for (const f of head) problems.push(`мобильный ${w}px ${name}: шапка ${f}`);
         /* карточка запусков на узком экране: раскрывается кликом по pill'у,
            обязана целиком лежать в вьюпорте — иначе кнопку не нажать */
         if (name === "run") {

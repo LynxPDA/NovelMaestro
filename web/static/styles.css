@@ -159,13 +159,6 @@ body {
     padding: 8px 10px;
   }
 }
-/* индикатор запуска не должен выталкивать шапку за экран: он тянется
-   под свою ширину, а название запуска ужимается многоточием */
-@media (max-width: 640px) {
-  .run-pill {
-    max-width: calc(100vw - 150px);
-  }
-}
 
 .icon-wrap {
   display: inline-flex;
@@ -4101,28 +4094,62 @@ body[data-editor-theme="light"] .editor-area {
     gap: 8px;
   }
 
-  /* логика/замечания в шапке страницы: строка не разгоняет страницу */
-  .run-pill {
-    max-width: calc(100vw - 110px);
+  /* Шапка на телефоне: сетка из двух строк вместо переносимого флекса.
+     Флекс оставлял навигацию в остатке первой строки — она обрезалась по
+     краю (две последние иконки уезжали в скролл без подсказки), а группа
+     справа падала на вторую строку, прижатая влево с пустотой до края.
+     Сетка: бренд и управление сверху, навигация — своей строкой во всю
+     ширину, иконки распределены по ней (пробы ловят обе крайности). */
+  .topbar {
+    display: grid;
+    /* бренд не сжимается первым: имя программы — опознавание, а pill
+       уступает дорогу многоточием в подписи стадии */
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "brand right"
+      "nav nav";
+    align-items: center;
+    gap: 8px 10px;
+    min-height: 0;
+    padding: 8px 12px;
   }
-  /* индикатор активных запусков — единственная гибкая часть правой группы:
-     без min-width:0 он не сжимается в флекс-контейнере и на 320px выдавливает
-     соседей за край экрана (ловит probe) */
-  .topbar-right {
+  .brand {
+    grid-area: brand;
     min-width: 0;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+  .topnav {
+    grid-area: nav;
+    width: 100%;
+    /* обрезки нет: все пункты видны, место между ними делится поровну */
+    overflow: visible;
+    justify-content: space-between;
+    gap: 0;
+  }
+  .topbar-right {
+    grid-area: right;
+    min-width: 0;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  /* индикатор запуска — единственная сжимаемая часть: подпись стадии
+     уходит в многоточие, а не выдавливает соседей за экран */
   .run-slot {
     min-width: 0;
-    max-width: 100%;
   }
-  .run-pill {
-    max-width: 100%;
-    min-width: 0;
-  }
+  .run-pill,
   .run-pill-label {
     min-width: 0;
+    max-width: 100%;
+  }
+  /* трек и слово «запуска» в шапке телефона уступают подписи: процент уже
+     написан рядом, число прогонов стоит в бейдже, а каретка ▾ говорит, что
+     это меню. Иначе от названия стадии оставалось «Пе…» */
+  .run-pill-track,
+  .run-pill-label-many {
+    display: none;
   }
 
   /* вкладки прокручиваются по горизонтали одной строкой: переносы
@@ -4493,15 +4520,24 @@ body[data-editor-theme="light"] .editor-area {
   .content {
     padding: 12px 10px 20px;
   }
-  /* очень узкий экран: «запуска/запусков» уходит, счётчик с кареткой
-     остаются — иначе pill выдавливает шапку за край (ловит probe) */
-  .run-pill-label-many {
-    display: none;
-  }
   .fmeta {
     padding-left: 0;
   }
   .card {
     padding: 12px;
+  }
+}
+
+/* Совсем узкий телефон: от pill'а остаются иконка, счётчик и каретка.
+   Подпись стадии, сжатая до «П.», места занимает больше, чем объясняет, а
+   что именно идёт — расскажут карточка по клику и тултип наведения. */
+@media (max-width: 360px) {
+  .run-pill-label,
+  .run-pill-label-many,
+  .run-pill-track {
+    display: none;
+  }
+  .run-pill {
+    gap: 6px;
   }
 }
