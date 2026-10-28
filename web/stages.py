@@ -407,13 +407,6 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
     # (выбор файла из web убран; его же читает «Правки»)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
-    # ограничители правок (СИМВОЛЫ): 0 = выключен, но поле едет всегда —
-    # числовой дефолт реестра и есть выключенный ограничитель
-    for name, flag in (("max_fixes_per_chapter", "--max_fixes_per_chapter"),
-                       ("min_fix_length", "--min_fix_length"),
-                       ("max_changed_chars", "--max_changed_chars")):
-        if form.get(name) not in (None, ""):
-            argv += [flag, str(form[name])]
     # повторы без правок — число СВОЁ у стадии (проверка перевода), не из профиля
     if form.get("retry_empty") not in (None, ""):
         argv += ["--retry_empty", str(form["retry_empty"])]

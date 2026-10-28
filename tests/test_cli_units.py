@@ -492,24 +492,14 @@ def test_re_validate_errors_drift_and_typography():
     assert out[0]["chapter"] == 6
     assert out[1]["chapter"] == 5
 
-def test_re_apply_safety():
-    errors = [
-        {"chapter": 1, "fragment": "ааааа", "corrected": "ббббб"},
-        {"chapter": 1, "fragment": "ввввв", "corrected": "ггггг"},
-        {"chapter": 2, "fragment": "ддд", "corrected": "короткая правка длинная"},
-        {"chapter": 2, "fragment": "еееее", "corrected": "жёсткая замена совсем другая"},
-    ]
-    # без лимитов — как есть
-    assert RE.apply_safety(errors, 0, 0, 0, SilentLog()) == errors
-    # максимум 1 правка на главу
-    out = RE.apply_safety(errors, 1, 0, 0, SilentLog())
-    assert len(out) == 2
-    # минимальная длина corrected
-    out = RE.apply_safety(errors, 0, 15, 0, SilentLog())
-    assert all(len(e["corrected"]) >= 15 for e in out)
-    # максимальное число изменённых символов
-    out = RE.apply_safety(errors, 0, 0, 5, SilentLog())
-    assert all(e["fragment"] == "ааааа" or e["fragment"] == "ввввв" for e in out)
+def test_re_no_safety_limits():
+    """Ограничители правок (лимит на главу, мин. длина, макс. изменённых
+    символов) убраны: их флагов и фильтра в скрипте нет."""
+    assert not hasattr(RE, "apply_safety")
+    args = RE.build_parser().parse_args([])
+    for name in ("max_fixes_per_chapter", "min_fix_length",
+                 "max_changed_chars"):
+        assert not hasattr(args, name)
 
 
 def test_re_build_batches():

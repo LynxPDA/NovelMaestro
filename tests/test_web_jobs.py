@@ -1717,7 +1717,7 @@ def test_build_translate_check_llm_flags():
             "two_pass": True, "request_budget": "75000",
             "review": "translate_check_llm_review.json", "dry_run": True,
             "apply": True, "auto_apply": True,
-            "threads": "4", "max_fixes_per_chapter": "0"}
+            "threads": "4"}
     argv = build_command("translate_check_llm", form, {})
     assert argv[0] == "cli/translate_check_llm.py"
     assert "--start" in argv and "--end" in argv
@@ -1729,7 +1729,11 @@ def test_build_translate_check_llm_flags():
     assert "--no-bak" not in argv
     # рассуждения — не поле формы: режим один на весь конвейер (см. stages)
     assert not [a for a in argv if "reason" in a]
-    assert "--threads" in argv and "--max_fixes_per_chapter" in argv
+    assert "--threads" in argv
+    # ограничители правок убраны — их флагов в argv нет
+    for flag in ("--max_fixes_per_chapter", "--min_fix_length",
+                 "--max_changed_chars"):
+        assert flag not in argv
 
 
 def test_build_translate_check_llm_retry_empty():

@@ -13,7 +13,7 @@ core/transport.py: единственный HTTP-клиент httpx) + опци�
     размер чанков FTS5 — везде оценка estimate_tokens (по замеру: медиана
     0.93 от реального счёта, ±25% для 79% текстов).
   • СИМВОЛЫ остаются: context_max_len (контекст термина), длины
-    названий каталогов, min_fix_length, max_changed_chars.
+    названий каталогов, title_limit.
   • max_tokens в payload — серверный предохранитель (ТОКЕНЫ);
     --near-distance в wiki.py — дистанция FTS5 NEAR (природа FTS5).
 

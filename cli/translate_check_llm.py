@@ -453,37 +453,6 @@ def validate_errors(errors, valid_ch, batch_contents, logger):
 
 
 # ─────────────────────────────────────────────
-# SAFETY
-# ─────────────────────────────────────────────
-
-def _changed(f, c):
-    # разная длина пар — ожидаемое состояние, strict=False осознанно
-    d = sum(1 for a, b in zip(f, c, strict=False) if a != b)
-    return d + abs(len(f) - len(c))
-
-
-def apply_safety(errors, max_fix, min_len, max_chars, logger):
-    if not max_fix and not min_len and not max_chars:
-        return errors
-    out, counts = [], defaultdict(int)
-    for e in errors:
-        ch = e.get("chapter", 0)
-        if max_fix and counts[ch] >= max_fix:
-            continue
-        if max_fix:
-            counts[ch] += 1
-        if min_len and len(e.get("corrected", "")) < min_len:
-            continue
-        if max_chars and _changed(e.get("fragment", ""), e.get("corrected", "")) > max_chars:
-            continue
-        out.append(e)
-    rm = len(errors) - len(out)
-    if rm:
-        logger.info(f"[SAFETY] Отфильтровано {rm}/{len(errors)}")
-    return out
-
-
-# ─────────────────────────────────────────────
 # ОБРАБОТКА ПАКЕТА
 # ─────────────────────────────────────────────
 
@@ -749,9 +718,8 @@ def build_parser():
   --apply           применить правки со статусом «принять» (без LLM);
   --apply --dry-run предпросмотр применения;
   --auto-apply      сразу применить всё найденное (без человека).
-Единицы: --request_budget — ТОКЕНЫ (оценка estimate_tokens); --type,
---min_fix_length, --max_changed_chars — СИМВОЛЫ; max_tokens — серверный
-предохранитель, ТОКЕНЫ.
+Единицы: --request_budget — ТОКЕНЫ (оценка estimate_tokens); max_tokens —
+серверный предохранитель, ТОКЕНЫ.
 Сервер, модель, ключ, таймауты, повторы, потоки и рассуждения — ОДНИ на весь
 конвейер: флаг стадии пуст → значение из общего .env (или профиля LLM).
 Промпт-файл: один тег <prompt_translate_check>; без него — встроенный промпт.
@@ -784,16 +752,6 @@ def build_parser():
                          "— не ошибка, а повод спросить ещё раз.")
     ap.add_argument("--prompt_file", default=DEFAULT_PROMPT_FILE,
                     help="Внешний промпт: тег <prompt_translate_check>.")
-    # Ограничители правок: 0 — выключен (метрики разные: ШТ, СИМВОЛЫ, СИМВОЛЫ)
-    ap.add_argument("--max_fixes_per_chapter", type=int, default=0,
-                    help="Лимит правок на главу, ШТ (0 = нет); лишние правки "
-                         "отсекаются по порядку выдачи.")
-    ap.add_argument("--min_fix_length", type=int, default=0,
-                    help="Мин. длина правки, СИМВОЛЫ (0 = нет); короче — "
-                         "правка отбрасывается.")
-    ap.add_argument("--max_changed_chars", type=int, default=0,
-                    help="Макс. изменённых символов, СИМВОЛЫ (0 = нет); "
-                         "длиннее — правка отбрасывается.")
     # Review-файл и применение (режимы, не настройки)
     ap.add_argument("--review", default=DEFAULT_REVIEW,
                     help=f"Накопительный файл правок (default: "
@@ -962,9 +920,6 @@ def do_check(args, stage) -> int:
                          f"ошибка LLM.")
             return
         errs = validate_errors(errs, set(nums), bc, logger)
-        errs = apply_safety(errs, args.max_fixes_per_chapter,
-                            args.min_fix_length, args.max_changed_chars,
-                            logger)
         with lock:
             all_errors.extend(errs)
             done_cnt[0] += 1
