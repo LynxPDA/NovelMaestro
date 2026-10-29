@@ -1893,6 +1893,48 @@ async function main() {
     log(`${problems.length === before ? "✅" : "❌"} настройки: сброс вкладки  ${tabNames.length} вкладок`);
   }
 
+  /* каждое поле страницы доживает до конфига: правка в любом блоке (в том
+   * числе «входные файлы» и textarea правил замен) должна пережить перезагрузку.
+   * Проверка общая: берётся по одному полю из разных вкладок, включая те, что
+   * раньше молча пропускались записью. */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/settings`, { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".tabs .tab", { timeout: 15000 });
+    const probes = [
+      { tab: "Книга и файлы", name: "BATCH_REPLACE_REPLACEMENTS",
+        value: "проба (\\d+) -> Глава №\\1" },
+      { tab: "Книга и файлы", name: "COMPILE_EPUB_META",
+        value: "probe-meta.yaml" },
+      { tab: "Перевод", name: "PIPELINE_PROMPT_FILE", value: "probe.txt" },
+      { tab: "Глоссарий", name: "NER_PROMPT_FILE", value: "probe-ner.txt" },
+    ];
+    for (const p of probes) {
+      await page.locator(`.tabs .tab:has-text("${p.tab}")`).first().click();
+      await page.waitForTimeout(250);
+      const sel = `.settings-cards [name="${p.name}"]`;
+      const ctl = page.locator(sel).first();
+      if (!(await ctl.count())) {
+        problems.push(`настройки: нет поля ${p.name} на «${p.tab}»`);
+        continue;
+      }
+      await ctl.fill(p.value);
+      await page.waitForTimeout(900);   // пауза ввода (500) + запись
+      await page.reload({ waitUntil: "load" });
+      await page.waitForSelector(".tabs .tab", { timeout: 15000 });
+      await page.locator(`.tabs .tab:has-text("${p.tab}")`).first().click();
+      await page.waitForTimeout(400);
+      const got = await page.locator(sel).first().inputValue();
+      if (got !== p.value)
+        problems.push(`настройки: ${p.name} после перезагрузки «${got}»,
+          ждали «${p.value}»`.replace(/\s+/g, " "));
+    }
+    if (SHOT)
+      await page.screenshot({ path: path.join(OUT, "settings-persist.png") });
+    log(`${problems.length === before ? "✅" : "❌"} настройки: сохранение полей  ${probes.length} полей`);
+  }
+
   /* проверка LLM-сервера: карточка «Подключение» спрашивает /v1/models тем же
    * путём, каким пойдёт работа; вердикт считается по значениям ФОРМЫ (в пробе
    * окружение чистое, поэтому HOST из поля и есть проверяемый сервер) */

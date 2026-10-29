@@ -242,7 +242,7 @@ def test_env_example_mirrors_registry():
     (тот же sanitize, что и у страницы «Настройки»).
     """
     pairs = _env_example_pairs()
-    want = [s for s in SET.SETTINGS if not s.noenv and not s.run]
+    want = [s for s in SET.SETTINGS if not s.noenv]
     assert [k for k, _ in pairs] == [s.key for s in want], (
         "templates/.env.example разошёлся с реестром по ключам или порядку")
     bad = []

@@ -16,8 +16,9 @@ import pytest
 
 from core import settings as S
 
-# то, что осталось параметрами запуска (не настройки): сверяем полноту
-RUN_PARAMS = {
+#: входные файлы стадий: поле формы запуска, но и настройка тоже
+#: (страница «Настройки» — общее значение по умолчанию для всех книг)
+RUN_NAMES = {
     "input", "file", "action", "replacements", "dict_file",
     "rules_file", "examples_file", "cover", "epub_meta", "donate_file",
     "prompt_file",
@@ -492,12 +493,27 @@ def test_chapter_range_rule_matches_client():
         "не число — ошибка, как на сервере"
 
 
-def test_run_params_marked_and_never_written(global_env):
-    """Главы и входные файлы — параметры запуска: metadata в реестре, но не конфиг."""
-    assert {s.name for s in S.SETTINGS if s.run} == RUN_PARAMS
-    assert not RUN_PARAMS & set(S.defaults())
+def test_run_params_are_regular_settings(global_env):
+    """Входные файлы и режим стадии — обычные настройки, а не «только запуск».
+
+    Раньше у них стоял флаг `run`, и `write_values` такие поля не писал: поле
+    выглядело редактируемым на странице «Настройки», но правка нигде не
+    сохранялась (первым это показал блок «Массовые замены»). Параметр запуска
+    в реестре один — диапазон глав, он вне SETTINGS (RANGE_FIELDS).
+    """
+    assert "run" not in S.Setting.__dataclass_fields__, \
+        "флага «только запуск» больше нет"
+    names = {s.name for s in S.SETTINGS}
+    assert not set(RANGE_NAMES) & names, "диапазон глав живёт вне реестра"
+    assert not RUN_NAMES - names
     assert {"start", "cover", "donate_file"} <= {s.name for s in
                                                 S.stage_fields("compile")}
+    S.write_values({"COMPILE_MODE": "epub", "COMPILE_COVER": "c.png"})
+    text = global_env.read_text(encoding="utf-8")
+    assert "COMPILE_MODE=epub" in text
+    assert "COMPILE_COVER=c.png" in text, "поле запуска — тоже настройка"
+    # диапазон глав — единственное, чего в файле быть не может: его нет в
+    # реестре вовсе (RANGE_FIELDS), чужие ключи запись игнорирует
     S.write_values({"COMPILE_MODE": "epub", "COMPILE_START": "1"})
     text = global_env.read_text(encoding="utf-8")
     assert "COMPILE_MODE=epub" in text

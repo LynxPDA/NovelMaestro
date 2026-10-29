@@ -498,14 +498,33 @@ def test_settings_put_profile_routes_by_owner(srv, tmp_path, monkeypatch):
     prof = next(x for x in r["profiles"] if x["id"] == pid)
     assert prof["values"].get("NER_CHUNK_SIZE") is None
 
-def test_settings_put_run_params_not_persisted(srv, tmp_path, monkeypatch):
-    """Параметры запуска (run=True) в общий .env не пишутся: изменённые для
-    одной книги поля — рабочее состояние браузера, не конфиг."""
+def test_settings_put_input_fields_and_multiline_persist(srv, tmp_path, monkeypatch):
+    """Каждое поле страницы доживает до файла — и входные файлы, и textarea.
+
+    Раньше входные файлы стадий и regexp-замены были помечены run=True, и
+    запись их молча пропускала: поле выглядело редактируемым, а правка
+    исчезала при перечитывании. Проверяем оба вида — files и textarea с
+    переносами (последние живут в файле литералом «\\n»)."""
     _srv, port, root = _settings_srv(srv, tmp_path, monkeypatch)
+    rules = "a -> b" + chr(10) + "c -> d"
     r = _request(port, "PUT", "/api/settings",
-                 {"values": {"NER_PROMPT_FILE": "my.txt", "MODEL": "m"}})
-    assert r["ok"] and r["keys"] == ["MODEL"]
-    assert "NER_PROMPT_FILE" not in _env_text(tmp_path)
+                 {"values": {"NER_PROMPT_FILE": "my.txt",
+                              "COMPILE_COVER": "cover.png",
+                              "PIPELINE_ACTION": "1",
+                              "BATCH_REPLACE_REPLACEMENTS": rules,
+                              "MODEL": "m"}})
+    assert r["ok"]
+    assert set(r["keys"]) == {"NER_PROMPT_FILE", "COMPILE_COVER",
+                              "PIPELINE_ACTION", "BATCH_REPLACE_REPLACEMENTS",
+                              "MODEL"}
+    text = _env_text(tmp_path)
+    assert "NER_PROMPT_FILE=my.txt" in text, text
+    assert "BATCH_REPLACE_REPLACEMENTS=a -> b" + chr(92) + "nc -> d" in text, text
+    # перечитывание отдаёт то же значение: перенос развернут обратно
+    fields = {f["key"]: f for g in _request(port, "GET", "/api/settings")["groups"]
+              for b in g["blocks"] for f in b["fields"]}
+    assert fields["BATCH_REPLACE_REPLACEMENTS"]["value"] == rules
+    assert fields["NER_PROMPT_FILE"]["value"] == "my.txt"
 
 
 def test_settings_put_secret_mask_skipped(srv, tmp_path, monkeypatch):
