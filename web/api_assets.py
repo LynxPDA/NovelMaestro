@@ -291,6 +291,29 @@ def _parse_check_stats(text: str) -> list[dict]:
     return out
 
 
+def _check_error_kind(msg: str) -> str:
+    """Тип строки-ошибки отчёта translate_check.
+
+    Различает три вида проверки — по ним вьюха строит чипсы фильтра:
+    объёмная пара («[polished vs redacted] отношение объёма …»), правило
+    пользователя («- По паттерну …») и последовательность глав. Порядок
+    проверок в скрипте такой же: строка «Нарушена последовательность»
+    содержит « - », и общий префикс списочной ошибки её не перехватывает.
+    """
+    s = msg.strip()
+    if s.startswith("[FATAL]"):
+        return "fatal"
+    if "отношение объёма" in s:
+        return "ratio"
+    if "Нарушена последовательность" in s:
+        return "sequence"
+    # «  - По паттерну …» — строка правила; дефис пункта снимаем, иначе
+    # проверка зависела бы от того, что скрипт печатает перед текстом
+    if s.lstrip("-\u2013\u2014 ").startswith("По паттерну"):
+        return "regexp"
+    return "other"
+
+
 def _parse_check_report(text: str) -> dict:
     """Разбор текстового отчёта translate_check (logs/check_*.txt).
 
@@ -339,6 +362,9 @@ def _parse_check_report(text: str) -> dict:
         entries.append(cur)
     for e in entries:
         e["fatal"] = any(x.startswith("[FATAL]") for x in e["errors"])
+        # тип каждой строки — параллельным списком: вьюха фильтрует ошибки и
+        # не повторяет разбор текста своими шаблонами
+        e["error_kinds"] = [_check_error_kind(x) for x in e["errors"]]
         if e["dir"].startswith("./"):  # './chapters/xxx' → 'chapters/xxx'
             e["dir"] = e["dir"][2:]
     return {

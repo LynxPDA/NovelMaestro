@@ -1577,3 +1577,69 @@ test("uploadBatches: папка без имени файла не теряетс
   const got = UICore.uploadBatches([{ name: "x.txt", webkitRelativePath: "" }]);
   assert.deepEqual(got.map((b) => b.dest), [""]);
 });
+
+test("checkScale: точка помнит номер главы — по нему она ведёт в текст", () => {
+  /* точка ошибки объёма — адрес главы, а не украшение шкалы: клик по ней
+     открывает главу в «Редакторе»; без номера она остаётся подсказкой */
+  const sc = UICore.checkScale(
+    { lo: 0.9, hi: 1.1, median: 1 },
+    [{ value: 0.8, out: true, chapter: 37 }, { value: 1.0 }],
+    null,
+    null,
+  );
+  assert.deepEqual(sc.points.map((p) => p.chapter), [37, null]);
+  /* число вместо объекта — главы нет, шкала та же */
+  assert.deepEqual(sc.points.map((p) => p.value), [0.8, 1.0]);
+});
+
+test("checkErrorKind/checkErrorKinds: подписи типов и порядок реестра", () => {
+  /* подписи — из реестра UICore, имена приходят с сервера
+     (web/api_assets.py::_check_error_kind) */
+  assert.equal(UICore.checkErrorKind("ratio").label, "Соотношение");
+  assert.equal(UICore.checkErrorKind("regexp").label, "Regexp-проверки");
+  assert.equal(
+    UICore.checkErrorKind("sequence").label,
+    "Последовательность глав",
+  );
+  /* незнакомый тип не пропадает из фильтра: подписан «Другое» */
+  assert.equal(UICore.checkErrorKind("??").label, "Другое");
+  assert.equal(UICore.checkErrorKind("").label, "Другое");
+  /* порядок — реестра (Соотношение, Regexp, Последовательность), а не
+     порядок строк отчёта: смешанный список должен читаться одинаково */
+  const kinds = UICore.checkErrorKinds([
+    { error_kinds: ["sequence"] },
+    { error_kinds: ["ratio", "regexp"] },
+    { error_kinds: ["ratio"] },
+  ]);
+  assert.deepEqual(kinds, ["ratio", "regexp", "sequence"]);
+  assert.deepEqual(UICore.checkErrorKinds([]), []);
+  assert.deepEqual(UICore.checkErrorKinds([{ errors: ["x"] }]), []);
+});
+
+test("checkVisibleErrors: фильтр прячет СТРОКИ, а не главы", () => {
+  /* одна глава держит и ошибку объёма, и нарушение последовательности:
+     снятая галочка «Соотношение» не должна уносить главу из отчёта */
+  const entry = {
+    errors: ["[polished vs redacted] отношение объёма 0.90", "- По паттерну x: y"],
+    error_kinds: ["ratio", "regexp"],
+  };
+  assert.deepEqual(
+    UICore.checkVisibleErrors(entry, { error: [] }).map((x) => x.kind),
+    ["ratio", "regexp"],
+  );
+  assert.deepEqual(
+    UICore.checkVisibleErrors(entry, { error: ["ratio"] }).map((x) => x.message),
+    ["- По паттерну x: y"],
+  );
+  /* индекс — позиция строки в исходном списке: по ней строка открывает текст */
+  assert.deepEqual(
+    UICore.checkVisibleErrors(entry, { error: ["ratio"] }).map((x) => x.index),
+    [1],
+  );
+  /* кривые данные не роняют вкладку */
+  assert.deepEqual(UICore.checkVisibleErrors(null, {}), []);
+  assert.deepEqual(
+    UICore.checkVisibleErrors({ errors: ["x"] }, { error: ["ratio"] }),
+    [{ index: 0, message: "x", kind: undefined }],
+  );
+});

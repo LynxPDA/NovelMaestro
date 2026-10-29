@@ -236,9 +236,13 @@ function seedProjectsDir(dir) {
       "1. Папка: ./chapters/00000_1_Глава 1",
       "  [polished vs redacted]  отношение объёма 0.900 → ОШИБКА (вне 0.908–1.099 при допуске ±10%, среднее книги 0.999; polished 1469 т., redacted 1632 т.)",
       "",
+      "2. Папка: ./chapters/00001_2_Глава 2",
+      "  - По паттерну [\\u4e00-\\u9fff]+: 世界",
+      "  - Нарушена последовательность: после Главы 1 → Глава 3 (ожидалась 2)",
+      "",
       "--- Сводка ---",
       "Проверено глав : 2",
-      "С ошибками     : 1",
+      "С ошибками     : 2",
       "Пропущено      : 0",
       "",
     ].join("\n"),
@@ -2744,7 +2748,7 @@ async function main() {
        0.90 при 0.999 и ±0.10 значит «дальше половины шкалы», а не у края */
     if (!/left:\d+(\.\d+)?%/.test(dot.left || ""))
       problems.push(`шкала отчёта: позиция точки «${dot.left}»`);
-    if (!/отношение 0\.900 — вне допуска/.test(dot.title || ""))
+    if (!/отношение 0\.900 · глава 1 — вне допуска/.test(dot.title || ""))
       problems.push(`шкала отчёта: тултип точки «${dot.title}»`);
     if (!/глав в базе: 1320/.test(first.legend || ""))
       problems.push(`шкала отчёта: подпись «${first.legend}»`);
@@ -2762,6 +2766,97 @@ async function main() {
       problems.push(`отчёты: корзин ${trashes.icons} при ${trashes.rows} строках`);
     log(`${problems.length === before ? "✅" : "❌"} корзина отчётов  `
       + `${trashes.icons} из ${trashes.rows}`);
+    /* точка ошибки — кнопка с номером главы в подсказке: клик открывает
+     * «Редактор» этой главы. Отчёт в пробе держит ДВА типа ошибок, поэтому
+     * проверяется и фильтр: снятая галочка «Соотношение» убирает и точку,
+     * и её строку, но главу со второй ошибкой не трогает */
+    {
+      const dots = await page.evaluate(() =>
+        [...document.querySelectorAll(".check-scale-dot")].map((d) => ({
+          tag: d.tagName.toLowerCase(),
+          link: d.classList.contains("is-link"),
+          title: d.getAttribute("title") || "",
+        })));
+      const linked = dots.filter((d) => d.link);
+      if (!linked.length)
+        problems.push("шкала отчёта: точки не кликабельны");
+      else if (linked.some((d) => d.tag !== "button"))
+        problems.push("шкала отчёта: точка-ссылка не кнопка — с клавиатуры не нажать");
+      if (linked.length && !/глава 1\b/.test(linked[0].title || ""))
+        problems.push(`шкала отчёта: в подсказке нет главы «${linked[0].title}»`);
+      log(`${problems.length === before ? "✅" : "❌"} шкала: точки  `
+        + `${linked.length} кликабельны`);
+
+      /* фильтр «Тип ошибки»: набор чипсов задаёт сам отчёт */
+      const chips = await page.evaluate(() =>
+        [...document.querySelectorAll(".check-filters .rv-chip")]
+          .map((c) => (c.textContent || "").trim()));
+      for (const want of ["Соотношение", "Regexp-проверки", "Последовательность глав"]) {
+        if (!chips.some((c) => c.includes(want)))
+          problems.push(`фильтр отчёта: нет типа «${want}» (${chips.join("/")})`);
+      }
+      const rowsBefore = await page.evaluate(() =>
+        [...document.querySelectorAll(".ner-table tbody tr")]
+          .map((tr) => (tr.querySelector(".ch-num") || {}).textContent?.trim()));
+      /* снимаем «Соотношение» — точка и её строка уходят, вторая глава жива */
+      await page.locator('.check-filters .rv-chip:has-text("Соотношение")')
+        .first().click();
+      await page.waitForTimeout(400);
+      const after = await page.evaluate(() => ({
+        out: document.querySelectorAll(".check-scale-dot.is-out").length,
+        rows: [...document.querySelectorAll(".ner-table tbody tr")]
+          .map((tr) => (tr.querySelector(".ch-num") || {}).textContent?.trim()),
+        kinds: [...document.querySelectorAll(".check-msg-kind")]
+          .map((x) => (x.textContent || "").trim()),
+      }));
+      if (after.out) problems.push("фильтр отчёта: красная точка осталась при скрытом соотношении");
+      /* у главы 1 была ТОЛЬКО ошибка соотношения — она уходит целиком;
+         у главы 2 ошибки других типов — она остаётся */
+      if (after.rows.includes("1"))
+        problems.push(`фильтр отчёта: глава без видимых ошибок осталась (${after.rows.join(",")})`);
+      if (!after.rows.includes("2"))
+        problems.push(`фильтр отчёта: глава с другими ошибками пропала (${after.rows.join(",")})`);
+      if (after.kinds.includes("Соотношение"))
+        problems.push("фильтр отчёта: строка скрытого типа осталась");
+      if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-check-filter.png") });
+      log(`${problems.length === before ? "✅" : "❌"} фильтр отчёта   `
+        + `${chips.length} типов · главы ${rowsBefore.join(",")}→${after.rows.join(",")}`);
+      /* возвращаем фильтр: соседние сценарии смотрят полный отчёт */
+      await page.locator(".check-filters .rv-filter-reset").first().click()
+        .catch(() => {});
+      await page.waitForTimeout(300);
+
+      /* клик по точке ведёт в «Редактор» этой главы */
+      const chapter = await page.evaluate(async () => {
+        const btn = [...document.querySelectorAll(".check-scale-dot.is-link")][0];
+        if (!btn) return null;
+        btn.click();
+        return true;
+      });
+      if (chapter) {
+        await page.waitForTimeout(700);
+        const ed = await page.evaluate(() => {
+          const sel = document.querySelector("select.ed-chapter");
+          return {
+            view: !!document.querySelector(".ed-wrap"),
+            chapter: sel ? sel.value : "",
+          };
+        });
+        if (!ed.view) problems.push("переход по точке: вкладка «Редактор» не открылась");
+        else if (!/Глава 1$/.test(ed.chapter || ""))
+          problems.push(`переход по точке: открыта глава «${ed.chapter}»`);
+        if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-check-goto.png") });
+        log(`${problems.length === before ? "✅" : "❌"} точка → «Редактор»  ${ed.chapter || "—"}`);
+        /* возврат к подвкладке отчёта для следующих проверок */
+        await page.goto(`${url}/#/project/${SECTION}/${BOOK}/review`,
+          { waitUntil: "load" });
+        await page.reload({ waitUntil: "load" });
+        await page.waitForSelector(".subtabs .subtab", { timeout: 15000 });
+        await page.locator('.subtabs .subtab:text-is("Перевод")').first().click();
+        await page.waitForTimeout(500);
+      }
+    }
+
     /* подвкладка «Проверки» запоминается книгой: следующие сценарии ждут
        глоссарий — возвращаем её, иначе полигон упадёт на пустом .rv-row */
     await page.locator('.subtabs .subtab:text-is("Глоссарий (LLM)")').first().click();

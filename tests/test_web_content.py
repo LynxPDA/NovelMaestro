@@ -1220,6 +1220,34 @@ def test_parse_check_report_fixture():
     assert any("не найден" in x for x in e3["errors"])
 
 
+def test_parse_check_error_kinds():
+    """У каждой строки ошибки — свой тип: по нему вкладка строит фильтр
+    «Тип ошибки» и решает, куда ведёт нажатие (глава или поиск в файле)."""
+    from web.api import _parse_check_report
+    entries = _parse_check_report(CHECK_FIXTURE)["entries"]
+    # порядок типов — как строки ошибок: у главы может быть несколько;
+    # «Английский текст: NPC» — строка старого отчёта до regexp-поля
+    assert entries[0]["error_kinds"] == ["ratio", "other"]
+    assert "fatal" in entries[1]["error_kinds"]
+    # «Глава 3: файл типа … не найден» — не объём и не правило: «другое»
+    assert entries[2]["error_kinds"] == ["other"]
+    # список параллелен списку строк: по индексу строка знает свой тип
+    for e in entries:
+        assert len(e["error_kinds"]) == len(e["errors"])
+
+
+def test_check_error_kind_covers_every_line():
+    """Тип есть у ЛЮБОЙ строки: неизвестная не пропадает из фильтра."""
+    from web.api_assets import _check_error_kind
+    assert _check_error_kind("  - Нарушена последовательность: после Главы "
+                             "3 → Глава 5 (ожидалась 4)") == "sequence"
+    assert _check_error_kind("  - По паттерну (?i)x: NPC") == "regexp"
+    assert _check_error_kind("  [polished vs chapter]  отношение объёма "
+                             "1.90 → ОШИБКА") == "ratio"
+    assert _check_error_kind("  - Размер файла слишком мал: 12 Б") == "other"
+    assert _check_error_kind("[FATAL] Глава пропущена.") == "fatal"
+
+
 def test_parse_check_stats_bounds():
     """Блок «Статистика»: границы берутся как напечатаны (старый отчёт —
     из процента), пара без базы — нули и признак «мало глав»."""

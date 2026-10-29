@@ -3157,6 +3157,22 @@ input[type="number"] {
   background: var(--text-dim);
 }
 
+/* точка ошибки — кнопка: клик открывает главу (подсказка называет номер);
+   у span (глава неизвестна) ни курсора, ни нажатия */
+.check-scale-dot.is-link {
+  padding: 0;
+  border: none;
+  cursor: pointer;
+  /* поле нажатия больше самой точки: 7 px мышью не ловятся */
+  box-shadow: 0 0 0 4px transparent;
+}
+
+.check-scale-dot.is-link:hover,
+.check-scale-dot.is-link:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 30%, transparent);
+}
+
 .check-scale-dot.is-out {
   background: #f85149;
 }
@@ -3184,6 +3200,44 @@ input[type="number"] {
 
 .check-msg-link:hover {
   text-decoration: underline;
+}
+
+/* строка ошибки с типом проверки: тип узкой колонкой слева, текст — кликабельный */
+.check-msg-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.check-msg-kind {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  /* text-dim на surface-2 давал 3.2:1 — 11 px этим не читаются */
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* в таблице типа ошибок длинная подпись («Последовательность глав») не
+   должна расти колонкой: строка ошибки и так занимает всю ширину */
+.check-msg-row .check-msg-kind {
+  white-space: normal;
+}
+
+.check-filters {
+  margin: 4px 0 8px;
+}
+
+/* узкое окно: тип уходит на свою строку — текст ошибки не сминается в столбик */
+@media (max-width: 700px) {
+  .check-msg-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
 }
 
 /* ── CodeMirror-редактор (W8) ─────────────────────────────── */

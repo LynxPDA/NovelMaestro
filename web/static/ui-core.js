@@ -533,7 +533,60 @@
         empty: "без типа",
       },
     ],
+    /* отчёт translate_check: у главы бывает несколько строк разных проверок,
+       и ось одна — значение — тип строки ошибки (CHECエK_KINDS) */
+    tcheck: [
+      {
+        key: "error",
+        label: "Тип ошибки",
+        valueOf: function (e) {
+          return String(e.error_kind || "");
+        },
+        empty: "без типа",
+      },
+    ],
   };
+  /* типы строк отчёта translate_check — одну строку на тип: подпись и
+   * тег; имена приходят с сервера (web/api_assets.py::_check_error_kind) */
+  var CHECK_ERROR_KINDS = {
+    ratio: { label: "Соотношение", tag: "красная точка на шкале и строка пары" },
+    regexp: { label: "Regexp-проверки", tag: "совпадение правила формы" },
+    sequence: { label: "Последовательность глав", tag: "номер в заголовке не на месте" },
+    fatal: { label: "Глава пропущена", tag: "файл не нашёлся или спорный" },
+    other: { label: "Другое", tag: "размер файла, чтение и прочее" },
+  };
+
+  function checkErrorKind(kind) {
+    return CHECK_ERROR_KINDS[String(kind || "")] || CHECK_ERROR_KINDS.other;
+  }
+
+  /* типы ошибок отчёта в порядке реестра (а не случайном порядке строк) */
+  function checkErrorKinds(entries) {
+    var seen = {};
+    for (var i = 0; i < (entries || []).length; i++) {
+      var e = entries[i] || {};
+      var ks = e.error_kinds || [];
+      for (var j = 0; j < ks.length; j++) seen[ks[j]] = true;
+    }
+    return Object.keys(CHECK_ERROR_KINDS).filter(function (k) {
+      return seen[k];
+    });
+  }
+
+  /* строки ошибок главы под фильтром осей (имена осей — из
+   * UICore.reviewAxes("tcheck")); index сохраняется: по нему строка
+   * открывает свой текст */
+  function checkVisibleErrors(entry, filters) {
+    var ks = (entry || {}).error_kinds || [];
+    var messages = (entry || {}).errors || [];
+    var hidden = (filters || {}).error;
+    var out = [];
+    for (var i = 0; i < messages.length; i++) {
+      if (hidden && hidden.length && hidden.indexOf(ks[i]) >= 0) continue;
+      out.push({ index: i, message: messages[i], kind: ks[i] });
+    }
+    return out;
+  }
   /* статус — ось у всех проверок; корзины не пересекаются, поэтому одна
    * запись попадает ровно в одну из них */
   var REVIEW_STATUS_BUCKETS = ["нерешённые", "принять", "отклонить", "применено"];
@@ -1692,10 +1745,11 @@
       var med = Number(s.median);
       if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
       if (!Number.isFinite(med)) med = (lo + hi) / 2;
-      /* точка — число или {value, out}: out задаёт вызывающий, когда
+      /* точка — число или {value, out, chapter}: out задаёт вызывающий, когда
          границы напечатаны с округлением и равенство краю ничего не значит
          (строка ошибки «вне 0.90–1.10» про отношение 0.8974 — это всё-таки
-         ошибка, а не попадание в допуск) */
+         ошибка, а не попадание в допуск); chapter — номер главы, чтобы точка
+         находки вела в текст */
       var pts = [];
       (points || []).forEach(function (p) {
         var obj = p !== null && typeof p === "object";
@@ -1707,6 +1761,7 @@
         pts.push({
           value: v,
           out: obj && p.out !== undefined ? !!p.out : null,
+          chapter: obj && p.chapter != null ? p.chapter : null,
         });
       });
       var dom = [lo, hi, med].concat(
@@ -1746,6 +1801,7 @@
             value: p.value,
             pos: pos(p.value),
             out: p.out === null ? p.value < lo || p.value > hi : p.out,
+            chapter: p.chapter,
           };
         }),
       };
@@ -2118,6 +2174,9 @@
     reviewGroupStatus: reviewGroupStatus,
     reviewStatusBucket: reviewStatusBucket,
     REVIEW_STATUS_BUCKETS: REVIEW_STATUS_BUCKETS,
+    checkErrorKind: checkErrorKind,
+    checkErrorKinds: checkErrorKinds,
+    checkVisibleErrors: checkVisibleErrors,
 
     /* сводка по записям: всего / принято / отклонено / применено */
     reviewSummary: (entries) => {

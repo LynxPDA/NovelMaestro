@@ -4111,7 +4111,7 @@ function viewProject(section, name, tab, job) {
               h(
                 "button",
                 {
-                  class: "btn btn-xs btn-ghost rv-clear",
+                  class: "btn btn-xs btn-danger",
                   title: "Удалить все правки из файла",
                   onclick: () =>
                     clearAllEntries(),
@@ -5849,7 +5849,7 @@ function viewProject(section, name, tab, job) {
     /* очистка — все промпты книги сразу: каталог остаётся, удаляются файлы */
     const clearBtn = h(
       "button",
-      { class: "btn btn-sm btn-danger-ghost", disabled: true },
+      { class: "btn btn-sm btn-danger", disabled: true },
       "Очистить",
     );
     clearBtn.addEventListener("click", () => {
@@ -6475,23 +6475,36 @@ function viewProject(section, name, tab, job) {
     return Array.isArray(r && r.entries) ? r.entries : [];
   }
 
-  /* одна шкала: полоса допуска, штрих медианы, точки глав вне допуска
+  /* шкала: полоса допуска, штрих медианы, точки глав вне допуска
      Три знака — не украшение: у соседних стадий (polished ↔ redacted) весь
      допуск лежит в 0.99–1.01, и toFixed(2) схлопнул бы полосу в точку. */
   // точка, а не запятая: те же числа печатает строка ошибки отчёта, и
   // человек сверяет их глазами, а не пересчётом
   const scaleNum = (x) => x.toFixed(3);
-  function checkScale(st, points) {
+  /* openChapter — чем точка ведёт в текст главы: точка ошибки — это адрес
+     («глава 37: отношение вне допуска»), а не украшение шкалы. Открыть её
+     — то же, что нажать строку ошибки: редактор главы с поиском */
+  function checkScale(st, points, openChapter) {
     const sc = UICore.checkScale(st, points, null, null);
     if (!sc) return null;
-    const dots = sc.points.map((p) =>
-      h("span", {
-        class: "check-scale-dot" + (p.out ? " is-out" : ""),
+    const dots = sc.points.map((p) => {
+      const where = p.chapter ? `глава ${p.chapter}` : "глава не указана";
+      const tip = `отношение ${scaleNum(p.value)} · ${where}`
+        + (p.out ? " — вне допуска" : " — в допуске");
+      const cls = "check-scale-dot" + (p.out ? " is-out" : "")
+        + (p.chapter ? " is-link" : "");
+      if (!openChapter || !p.chapter) {
+        return h("span", { class: cls, style: `left:${p.pos * 100}%`, title: tip });
+      }
+      return h("button", {
+        type: "button",
+        class: cls,
         style: `left:${p.pos * 100}%`,
-        title: `отношение ${scaleNum(p.value)}`
-          + (p.out ? " — вне допуска" : " — в допуске"),
-      }),
-    );
+        title: `${tip} — открыть главу`,
+        "aria-label": `${where}: отношение ${scaleNum(p.value)}`,
+        onclick: () => openChapter(p.chapter),
+      });
+    });
     const track = h(
       "div",
       { class: "check-scale-track" },
@@ -6534,8 +6547,8 @@ function viewProject(section, name, tab, job) {
   }
 
   /* шкалы всех пар отчёта; строка ошибки «[polished vs redacted]» даёт
-     точки своей пары */
-  function checkScales(r) {
+     точки своей пары, а номер главы — адрес точки */
+  function checkScales(r, openChapter) {
     const stats = Array.isArray(r.stats) ? r.stats : [];
     if (!stats.length) return [];
     const entries = checkEntries(r);
@@ -6547,10 +6560,10 @@ function viewProject(section, name, tab, job) {
         for (const msg of e.errors || []) {
           if (!String(msg).startsWith(prefix)) continue;
           const v = checkRatio(msg);
-          if (v != null) points.push(v);
+          if (v != null) points.push({ ...v, chapter: e.chapter });
         }
       }
-      const el = checkScale(st, points);
+      const el = checkScale(st, points, openChapter);
       if (el) out.push(el);
     }
     return out;
@@ -6655,10 +6668,125 @@ function viewProject(section, name, tab, job) {
       }
       listPager.items = data.reports.length;
     }
+    /* ── фильтр типов ошибок ────────────────────────────────────
+       Отчёт перечисляет главы с ЛЮБОЙ ошибкой, и разбор одной главы
+       прятался за десятками строк другой проверки. Ось одна — «Тип ошибки»
+       (соотношение / regexp / последовательность), чипсы собираются из
+       самого отчёта; выбор живёт в состоянии книги рядом с самой вкладкой */
+    const FILTER_KEY = `checkFilter:${section}/${name}`;
+    const filters = { error: [] };
+    try {
+      const saved = JSON.parse(bookStore().getItem(FILTER_KEY) || "null");
+      if (saved && Array.isArray(saved.error)) filters.error = saved.error;
+    } catch {
+      /* хранилище недоступно — фильтров нет, видны все строки */
+    }
+    function saveFilters() {
+      try {
+        bookStore().setItem(FILTER_KEY, JSON.stringify({ error: filters.error }));
+      } catch {
+        /* хранилище недоступно — выбор живёт до перезагрузки */
+      }
+    }
+    /*очшбки главы под фильтром: фильтр прячет СТРОКИ, а не главы — одна
+       глава может держать и ошибку объёма, и нарушение последовательности */
+    function visibleErrors(entry) {
+      return UICore.checkVisibleErrors(entry, filters);
+    }
+    function anyVisible(entry) {
+      return visibleErrors(entry).length > 0;
+    }
+    /* видимые строки ошибок отчёта: шкалы и таблица рисуют одну и ту же
+       выборку (иначе точка висит, а строки под ней уже отфильтрованы) */
+    function filteredReport(r) {
+      if (!r) return r;
+      if (!filters.error.length) return r;
+      const entries = checkEntries(r).map((e) => {
+        const keep = visibleErrors(e);
+        return {
+          ...e,
+          errors: keep.map((x) => x.message),
+          error_kinds: keep.map((x) => x.kind),
+        };
+      }).filter(anyVisible);
+      return { ...r, entries };
+    }
+    function errorFilter(r) {
+      const kinds = UICore.checkErrorKinds(checkEntries(r));
+      if (kinds.length < 2) return null; // один тип — фильтровать нечего
+      const chips = kinds.map((k) => {
+        const info = UICore.checkErrorKind(k);
+        const on = !filters.error.includes(k);
+        return h(
+          "label",
+          {
+            class: "search-chip rv-chip" + (on ? "" : " rv-chip-off"),
+            title: info.tag,
+          },
+          h("input", {
+            type: "checkbox",
+            class: "checkbox",
+            checked: on,
+            onchange: () => {
+              const hidden = filters.error.slice();
+              const at = hidden.indexOf(k);
+              if (at >= 0) hidden.splice(at, 1);
+              else hidden.push(k);
+              /* снят последний видимый тип — фильтр снимается целиком:
+                 пустая таблица ничего не объясняет */
+              filters.error = hidden.length >= kinds.length ? [] : hidden;
+              saveFilters();
+              renderReport();
+            },
+          }),
+          h("span", { class: "rv-chip-label" }, info.label),
+        );
+      });
+      const shown = filters.error.length;
+      return h(
+        "div",
+        { class: "rv-filters check-filters" },
+        h(
+          "span",
+          { class: "rv-axis" },
+          h("span", { class: "search-cluster-label" }, "Тип ошибки:"),
+          ...chips,
+        ),
+        ...(shown ? [h(
+          "button",
+          {
+            class: "btn btn-xs btn-ghost rv-filter-reset",
+            title: "Показать все типы ошибок",
+            onclick: () => {
+              filters.error = [];
+              saveFilters();
+              renderReport();
+            },
+          },
+          "Сбросить",
+        )] : []),
+      );
+    }
+
+    /* ── переход к главе из отчёта ──────────────────────────────
+       Ошибка объёма — это адрес главы, а не отдельный файл: открываем
+       вкладку «Редактор» на этой главе (там видно оригинал и перевод
+       рядом). Кеш вкладки сбрасывается: иначе вернулся бы старый DOM с
+       прежней главой */
+    function openChapter(dir) {
+      const rel = String(dir || "").replace(/^\/+/, "");
+      if (!rel) {
+        toast("В отчёте нет папки главы", "err");
+        return;
+      }
+      pref.set("editor", { chapter: rel });
+      st.editor = null;
+      setView("editor");
+    }
+
     function renderReport() {
       body.replaceChildren();
-      const r = current;
-      if (!r) {
+      const r = filteredReport(current);      if (!r) {
         // после «Очистить» отчётов нет — пустое состояние вместо падения
         body.append(
           h("div", { class: "files-empty" },
@@ -6675,8 +6803,10 @@ function viewProject(section, name, tab, job) {
           { class: "review-status" },
           `тип: ${r.type || "?"} · диапазон: ${r.range || "?"} · проверено: ${r.checked || "?"} · с ошибками: ${r.failed || "?"} · дата: ${r.date || "?"}`,
         ),
+        errorFilter(current),
       );
-      body.append(...checkScales(r));
+      /* шкалы — уже под фильтром: точка, которую человек скрыл, там не висит */
+      body.append(...checkScales(r, openChapter));
       if (!r.entries?.length) {
         body.append(h("div", { class: "card-hint" }, "Ошибок нет ✓"));
         return;
@@ -6709,6 +6839,23 @@ function viewProject(section, name, tab, job) {
         }
       }
       for (const e of r.entries) {
+        /* номер главы и папка ведут в «Редактор»: рядом видны оригинал и
+           перевод — именно этого человек хочет от отчёта */
+        const chCell = e.dir
+          ? h(
+            "td",
+            { class: "ch-num" },
+            h(
+              "a",
+              {
+                class: "link",
+                title: "Открыть главу в «Редакторе»",
+                onclick: () => openChapter(e.dir),
+              },
+              String(e.chapter),
+            ),
+          )
+          : h("td", { class: "ch-num" }, String(e.chapter));
         const dirCell = h(
           "td",
           {},
@@ -6724,30 +6871,43 @@ function viewProject(section, name, tab, job) {
               )
             : "—",
         );
+        /* строка ошибки: объём — это адрес главы (в «Редакторе» рядом видны
+           оригинал и перевод), остальные проверки — поиск в файле; тип
+           подписан перед строкой, чтобы смешанный список читался */
         const errCell = h(
           "td",
           {},
-          ...e.errors.map((msg) =>
-            h(
-              "button",
-              {
-                class:
-                  "check-msg-link " +
-                  (e.fatal || msg.startsWith("[FATAL]")
-                    ? "check-fatal"
-                    : "check-msg"),
-                onclick: () => openErrorFile(e.dir, r.type, msg),
-                title: `Открыть ${e.dir}/${r.type}.txt и найти ошибку`,
-              },
-              msg,
-            ),
-          ),
+          ...visibleErrors(e).map((it) => {
+            const msg = it.message;
+            const info = UICore.checkErrorKind(it.kind);
+            const ratio = it.kind === "ratio";
+            const fatal = e.fatal || msg.startsWith("[FATAL]");
+            return h(
+              "div",
+              { class: "check-msg-row" },
+              h("span", { class: "check-msg-kind" }, info.label),
+              h(
+                "button",
+                {
+                  class:
+                    "check-msg-link " + (fatal ? "check-fatal" : "check-msg"),
+                  onclick: ratio
+                    ? () => openChapter(e.dir)
+                    : () => openErrorFile(e.dir, r.type, msg),
+                  title: ratio
+                    ? `Открыть главу ${e.chapter} в «Редакторе»`
+                    : `Открыть ${e.dir}/${r.type}.txt и найти ошибку`,
+                },
+                msg,
+              ),
+            );
+          }),
         );
         rows.push(
           h(
             "tr",
             { class: "ner-row" },
-            h("td", { class: "ch-num" }, String(e.chapter)),
+            chCell,
             dirCell,
             errCell,
           ),
@@ -6782,7 +6942,7 @@ function viewProject(section, name, tab, job) {
     const clearBtn = h(
       "button",
       {
-        class: "btn btn-sm btn-ghost rv-clear",
+        class: "btn btn-sm btn-danger",
         title: "Удалить все отчёты check_*.txt из logs/",
       },
       "Очистить",
