@@ -2269,7 +2269,7 @@ async function viewDashboard() {
       h(
         "button",
         {
-          class: "btn btn-sm btn-ghost dash-refresh",
+          class: "btn btn-sm btn-danger dash-refresh",
           onclick: () =>
             confirmModal(
               "Очистить историю запусков",
