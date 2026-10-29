@@ -755,22 +755,48 @@ def test_hub_archive_refreshes_after_job():
 
 
 def test_move_asks_pack_only_for_archive_section():
-    """Перенос в архивный раздел спрашивает «закрыть книгу или оставить
-    каталогом», а в обычный — не спрашивает вовсе: вопрос ни о чём был бы
-    лишним шагом. Флаг приходит из `/api/sections` (`pack_on_move` —
-    следствие `archive`), в SPA своего списка разделов-архивов нет."""
+    """Перенос в архивный раздел спрашивает «архивировать или оставить
+    папкой» и по умолчанию предлагает именно архивировать, а в обычный
+    раздел не спрашивает вовсе: вопрос ни о чём был бы лишним шагом. Флаг
+    приходит из `/api/sections` (`pack_on_move` — следствие `archive`), в SPA
+    своего списка разделов-архивов нет."""
     app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
     assert "function asksPack(hub, dst)" in app
     assert "sec.pack_on_move" in app
     assert "function packChoice()" in app
-    assert '"Оставить каталогом"' in app
-    assert '"Закрыть книгу и освободить место"' in app
-    # вопрос включается выбором раздела в обоих окнах переноса
+    choice = app[app.index("function packChoice()"):app.index("function syncPackChoice")]
+    pack = choice.index('h("option", { value: "pack" }')
+    keep = choice.index('h("option", { value: "keep" }')
+    # «Архивировать» первым пунктом: в архивный раздел переносят, чтобы
+    # освободить место, и этот ответ — выбор по умолчанию
+    assert pack < keep
+    assert '"Архивировать"' in choice and '"Оставить папкой"' in choice
+    assert "Закрыть книгу" not in choice
+    # вопрос включается выбором раздела в обоих окнах переноса, и
+    # раскрытый вопрос встаёт на «Архивировать»
     assert "syncPackChoice(choice, hub, dstSel.value)" in app
     assert "syncPackChoice(choice, hubCache, dstSel.value)" in app
+    sync = app[app.index("function syncPackChoice"):]
+    sync = sync[:sync.index("\n}")]
+    assert 'choice.sel.value = "pack"' in sync
     # согласие уезжает на сервер отдельным полем, а не выводится там заново
     assert "body: { dst: dstSel.value, items, pack: choice.pack }" in app
     assert "body: { section, name, dst: dstSel.value, pack: choice.pack }" in app
+
+
+def test_moved_books_archive_waits_job_and_refreshes_hub():
+    """Перенос в архивный раздел упаковывает книги запуском после ответа:
+    без ожидания и перечитывания хаб показывал новую книгу папкой (а
+    вчерашнюю — в старом разделе) до ручного F5."""
+    app = (SPA_DIR / "app.js").read_text(encoding="utf-8")
+    for name, stop in (("function manageProjectModal(", "/* Экспорт глоссария"),
+                       ("function moveManyModal(", "function manageProjectModal(")):
+        body = app[app.index(name):app.index(stop)]
+        # упаковка после переноса ждёт запуск и перечитывает хаб
+        assert "await afterArchiveStart(r.pack, r.pack.items" in body, name
+        # без упаковки перенос всё равно перерисовывает разделы
+        assert "refreshHub();" in body, name
+        assert "hubCache = null" not in body, name
 
 
 def test_hub_cards_carry_no_actions():

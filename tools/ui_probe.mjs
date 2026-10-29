@@ -48,6 +48,8 @@ const PROJECT_TABS = [
 ];
 const SECTION = "TMP";
 const BOOK = "Probe";
+/* раздел-архив для сценария переноса: книги здесь принято держать в `.nmz` */
+const ARCHIVE_SECTION = "Архив";
 
 /* Заглушка проверки обновлений: свои сводки вместо живого GitHub. Заметки
  * релиза GitHub пишет markdown'ом и всегда дописывает строку «Full Changelog:
@@ -278,6 +280,19 @@ function seedProjectsDir(dir) {
   fs.mkdirSync(cyrCh, { recursive: true });
   fs.writeFileSync(path.join(cyrCh, "chapter.txt"), "Глава первая.\n", "utf-8");
   fs.writeFileSync(path.join(cyr, "ner.json"), "[]\n", "utf-8");
+  /* третий раздел — архивный (`pack_on_move`): сценарий переноса книги
+     сюда проверяет выбор «Архивировать» и что карточка сразу становится
+     упакованной, без обновления страницы */
+  fs.mkdirSync(path.join(dir, ARCHIVE_SECTION), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, ".sections.json"),
+    JSON.stringify([
+      { name: SECTION, archive: false, pack_on_move: false },
+      { name: CYR_SECTION, archive: false, pack_on_move: false },
+      { name: ARCHIVE_SECTION, archive: true, pack_on_move: true },
+    ], null, 2),
+    "utf-8",
+  );
   // общий .env пробы (WEB_ENV_FILE указывает сюда же): ОДИН файл на все
   // книги — дефолты LLM, стадий и рассуждений
   fs.writeFileSync(
@@ -3727,6 +3742,47 @@ async function main() {
     const closed = await page.evaluate(() => document.querySelectorAll(".modal-backdrop").length);
     if (closed !== 0) problems.push(`модалка создания не закрылась (${closed} оверлеев)`);
     log(`${problems.length === before ? "✅" : "❌"} сценарий project     Probe2 ${card ? "создан" : "НЕ создан"}, модалка закрыта`);
+  }
+
+  /* Перенос книги в архивный раздел: выбор «Архивировать» — по умолчанию,
+   * и карточка в новом разделе обязана стать упакованной без F5 (запуск
+   * архивации идёт после ответа переноса). Переезжает Probe2 из сценария
+   * выше: основной книге пробы нужны следующие экраны. */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/hub`, { waitUntil: "load" });
+    await page.waitForTimeout(1200);
+    const card = page.locator('.project-card:has-text("Probe2")').first();
+    await card.locator(".card-gear").click();
+    await page.waitForTimeout(700);
+    await page.locator('.modal-backdrop .manage-row select.input').first()
+      .selectOption(ARCHIVE_SECTION);
+    await page.waitForTimeout(300);
+    const pick = await page.evaluate(() => {
+      const s = document.querySelector(".modal-backdrop .pack-choice select");
+      const row = document.querySelector(".modal-backdrop .pack-choice");
+      return { value: s ? s.value : "",
+        text: s ? s.options[s.selectedIndex].text : "",
+        hidden: row ? row.hidden : null };
+    });
+    if (pick.hidden === true) problems.push("вопрос об архивации не появился у архивного раздела");
+    if (pick.value !== "pack") problems.push(`ответ по умолчанию «${pick.text}», ожидался «Архивировать»`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "flow-move-archive.png") });
+    await page.locator('.modal-backdrop button:has-text("Перенести")').first().click();
+    /* перенос + упаковка: ждём, пока хаб перерисуется и карточка в
+       архивном разделе станет «архив · …» */
+    await page.waitForFunction(
+      (sec) => [...document.querySelectorAll(".section")].some((s) =>
+        s.querySelector(".section-title")?.textContent.includes(sec)
+          && [...s.querySelectorAll(".project-card")].some((c) =>
+            c.querySelector(".card-title")?.textContent.trim() === "Probe2"
+              && c.textContent.includes("архив · "))),
+      ARCHIVE_SECTION, { timeout: 30000 },
+    ).catch(() => problems.push("после переноса карточка не стала архивной без F5"));
+    const opened = await page.evaluate(() => document.querySelectorAll(".modal-backdrop").length);
+    if (opened) problems.push(`окно переноса не закрылось (${opened} оверлеев)`);
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "flow-move-archive-done.png") });
+    log(`${problems.length === before ? "✅" : "❌"} сценарий move      Probe2 → ${ARCHIVE_SECTION} · «${pick.text}» по умолчанию, карточка архивная без F5`);
   }
 
   /* модалки: открываем и закрываем (Escape), проверяем что каркас живой и что

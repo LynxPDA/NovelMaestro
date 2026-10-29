@@ -372,6 +372,12 @@ function attachTooltip(el, text) {
   // тултип не должен закрывать то, что изменилось после клика
   el.addEventListener("pointerdown", hide);
 }
+/* Подсказку гасит и перерисовка экрана: ушедший из DOM элемент
+   `mouseleave` не получит, и подпись чужой кнопки оставалась висеть
+   поверх нового экрана. */
+function hideTooltip() {
+  _tooltip.classList.remove("tooltip-show");
+}
 // кросс-файловый хелпер: используется в project-views.js (тултипы
 // полей форм) — явный экспорт на window, как у window.viewRun
 window.attachTooltip = attachTooltip; 
@@ -761,6 +767,15 @@ function moveManyModal(items) {
                   toast(`Перенесено: ${moved}`
                     + (skipped ? `, пропущено: ${skipped}` : ""));
                   close(true);
+                  /* Упаковка идёт запуском после ответа переноса: папка
+                     переехала, а архив появляется через секунды. Хаб
+                     ждёт запуск и перечитывает списки — иначе карточки
+                     показывали старый раздел до F5. */
+                  if (r.pack && r.pack.job) {
+                    await afterArchiveStart(r.pack, r.pack.items, "Архивация");
+                  } else {
+                    refreshHub();
+                  }
                 } catch (ex) {
                   err.textContent = ex.message;
                 }
@@ -834,8 +849,16 @@ function manageProjectModal(section, name) {
                       body: { section, name, dst: dstSel.value, pack: choice.pack },
                     });
                     toast(`Перенесено → ${r.section}/${r.name}`
-                      + (r.pack ? ", упаковано" : ""));
+                      + (r.pack ? ", архивировано" : ""));
                     close(true);
+                    /* архив создаётся запуском после переноса: хаб ждёт
+                       его, чтобы карточка в новом разделе сразу была
+                       упакованной, а не папкой */
+                    if (r.pack && r.pack.job) {
+                      await afterArchiveStart(r.pack, r.pack.items, "Архивация");
+                    } else {
+                      refreshHub();
+                    }
                   } catch (ex) {
                     err.textContent = ex.message;
                   }
@@ -1187,23 +1210,25 @@ async function openMoveMany() {
   }
 }
 
-/* Перенос в архивный раздел: «закрыть книгу и освободить место» или
-   «оставить каталогом». Спрашиваем всегда и только когда в разделе
-   назначения есть что упаковывать: молчаливой упаковки не бывает, а
-   вопрос ни о чём — лишний шаг. Возвращает `true` — упаковать. */
+/* Перенос в архивный раздел: «архивировать» или «оставить папкой».
+   Спрашиваем всегда и только когда в разделе назначения есть что
+   упаковывать: молчаливой упаковки не бывает, а вопрос ни о чём — лишний
+   шаг. Возвращает `true` — архивировать. */
 function asksPack(hub, dst) {
   const sec = ((hub && hub.sections) || []).find((s) => s.name === dst);
   return !!(sec && sec.pack_on_move);
 }
 
 /* Компактный выбор вместо двух кнопок в `.modal-actions`: в окне уже есть
-   «Отмена» и дело, и три кнопки подряд читались бы как три исхода. */
+   «Отмена» и дело, и три кнопки подряд читались бы как три исхода.
+   «Архивировать» стоит первым: в архивный раздел книгу переносят, чтобы
+   освободить место, и это же действие человек выбирает чаще. */
 function packChoice() {
   const sel = h(
     "select",
     { class: "input" },
-    h("option", { value: "keep" }, "Оставить каталогом"),
-    h("option", { value: "pack" }, "Закрыть книгу и освободить место"),
+    h("option", { value: "pack" }, "Архивировать"),
+    h("option", { value: "keep" }, "Оставить папкой"),
   );
   const row = h(
     "div",
@@ -1215,10 +1240,15 @@ function packChoice() {
 
 /* Раздел назначения сменили — показать или убрать вопрос об упаковке.
    Свойство `hidden` — булево: пустая строка включает скрытие (как и в
-   разметке `<div hidden>`), поэтому «показать» — это именно false. */
+   разметке `<div hidden>`), поэтому «показать» — это именно false.
+   Вопрос появился — ответ по умолчанию «Архивировать»: переключение
+   между двумя архивными разделами выбранный ответ не сбрасывает. */
 function syncPackChoice(choice, hub, dst) {
-  choice.row.hidden = !asksPack(hub, dst);
-  if (choice.row.hidden) choice.sel.value = "keep";
+  const show = asksPack(hub, dst);
+  const opened = show && choice.row.hidden;
+  choice.row.hidden = !show;
+  if (!show) choice.sel.value = "keep";
+  else if (opened) choice.sel.value = "pack";
 }
 
 /* Подтверждение обратимого действия: слово-пароль (confirmModal) только
@@ -3503,6 +3533,7 @@ async function logout() {
 
 function render() {
   const root = document.querySelector("#app");
+  hideTooltip(); // подсказка относится к ушедшему элементу, а не к новому экрану
   // старый view получает сигнал до очистки — гасит SSE-стрим
   // (run-views.js слушает pi-navigate на своём page, once); page лежит
   // глубоко (layout > body > main.content), поэтому ищем по классу
@@ -3791,6 +3822,7 @@ async function viewTemplates() {
   }
 
   async function render() {
+    hideTooltip(); // подсказка принадлежит ушедшим узлам
     page.replaceChildren();
     const header = h(
       "div",
