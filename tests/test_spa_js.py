@@ -172,6 +172,26 @@ def test_run_views_last_finished_log():
     assert "delete st.lastLog[st.job.action]" in src
 
 
+def test_run_views_batch_replace_preview_by_button():
+    """«Массовые замены»: панель «Предпросмотр замен» закрыта, пока не нажата
+    кнопка. Раньше она при открытии вкладки сама читала главы и отправляла
+    запрос предпросмотра; теперь и то, и другое — только после нажатия (st.brOn),
+    как у панели разбивки."""
+    src = (SPA_DIR / "run-views.js").read_text(encoding="utf-8")
+    assert "brOn: false" in src  # флаг состояния
+    assert "st.brOn = false;" in src  # при смене стадии панель снова закрыта
+    body = src[src.index("function batchReplacePreviewPanel(key)"):]
+    body = body[:body.index("// валидация исходника epub")]
+    # тело панели (селектор глав + результат) скрыто до первого нажатия
+    assert 'style: st.brOn ? "" : "display:none"' in body
+    # первый клик только раскрывает панель и читает главы
+    assert "st.brOn = true;" in body
+    assert "loadChapters(true);\n    });" in body
+    # закрытая панель не реагирует на форму: ни списка глав, ни запроса
+    assert "if (!st.brOn) return;" in body
+    assert "if (st.brOn && ev.target === onType)" in body
+    assert "if (st.brOn) loadChapters(true);" in body
+
 
 def test_app_update_helpers_defined():
     """Регрессия «панель обновления падает в ReferenceError»: каждый вызов

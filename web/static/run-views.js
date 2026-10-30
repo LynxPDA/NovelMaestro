@@ -62,6 +62,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     brPreview: null, // batch_replace: предпросмотр {segments, stats, …}
     brChapter: null, // batch_replace: выбранная глава предпросмотра
     brSig: "", // batch_replace: сигнатура формы последнего предпросмотра
+    brOn: false, // batch_replace: панель предпросмотра открыта кнопкой
     profiles: [], // профили LLM [{id,name,builtin,…}] — сводка из /api/stages
     pnote: {}, // подпись выбранного профиля по стадиям (узел под селектом)
     promptWarn: {}, // стадия → узел иконки проверки промпта (пуст, пока чист)
@@ -132,6 +133,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     st.brPreview = null; // batch_replace: предпросмотр замен в главе
     st.brChapter = null;
     st.brSig = "";
+    st.brOn = false; // batch_replace: закрытая панель не читает главы
     // активный запуск/стрим НЕ сбрасываем — лог привязан к своей
     // стадии и виден на её вкладке, чужие вкладки его не показывают
     render();
@@ -2763,6 +2765,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // Правила парсятся и применяются ТЕМ ЖЕ путём, что реальный запуск
   // (parse_replace_lines + apply_rules_segments) — POST
   // /stages/batch_replace/preview.
+  // Панель закрыта, пока не нажата кнопка «Предпросмотр» (как у разбивки):
+  // без нажатия нет ни селектора глав, ни запроса предпросмотра.
   function batchReplacePreviewPanel(key) {
     const wraps = st.curWraps || {};
     const err = h("div", { class: "form-error" });
@@ -2779,6 +2783,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       "Предпросмотр",
     );
     const box = h("div", { class: "br-box" });
+    const hint = h(
+      "div",
+      { class: "field-help", style: st.brOn ? "display:none" : "" },
+      "Нажмите «Предпросмотр» — покажется выбор главы и подсветка изменений",
+    );
 
     const inputOf = (w) =>
       (w && w._input && w._input._sel) || (w && w._input) || null;
@@ -2946,9 +2955,34 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     });
     btn.addEventListener("click", () => {
       err.textContent = "";
-      runPreview();
+      if (st.brOn) {
+        runPreview();
+        return;
+      }
+      // первый заход: только сейчас панель раскрывается и читает главы
+      st.brOn = true;
+      hint.style.display = "none";
+      body.style.display = "";
+      loadChapters(true);
     });
 
+    // тело панели закрыто, пока кнопка не нажата: без него ни селектора
+    // глав, ни запроса предпросмотра
+    const body = h(
+      "div",
+      { class: "br-body", style: st.brOn ? "" : "display:none" },
+      [
+        h(
+          "div",
+          { class: "field" },
+          h("div", { class: "field-label" }, "Глава"),
+          chSel,
+        ),
+        note,
+        dirty,
+        box,
+      ],
+    );
     const el = h(
       "div",
       { class: "run-panel br-panel" },
@@ -2959,21 +2993,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         h("span", { class: "spacer" }),
         btn,
       ),
-      h(
-        "div",
-        { class: "field" },
-        h("div", { class: "field-label" }, "Глава"),
-        chSel,
-      ),
-      note,
-      dirty,
-      box,
+      hint,
+      body,
       err,
     );
 
-    // привязка событий формы ПОСЛЕ вставки в DOM: смена типа/диапазона
-    // пересобирает список глав (и автопресмотр), набор правил только
-    // помечает «устарел» (запуск — кнопкой или выбором главы)
+    // привязка событий формы ПОСЛЕ вставки в DOM: работает только в
+    // раскрытой панели; смена типа/диапазона пересобирает список глав (и
+    // предпросмотр), набор правил только помечает «устарел»
     function mount(formNode) {
       const rangeRow = st.rangeRow || {};
       const onType = inputOf(wraps["type"]);
@@ -2981,6 +3008,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const onEnd = rangeRow._end || null;
       const onRepl = inputOf(wraps["replacements"]);
       formNode.addEventListener("input", (ev) => {
+        if (!st.brOn) return;
         if (ev.target === onRepl) {
           if (st.brSig && sig() !== st.brSig) {
             dirty.textContent =
@@ -2992,13 +3020,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         }
       });
       formNode.addEventListener("change", (ev) => {
-        if (ev.target === onType) {
+        if (st.brOn && ev.target === onType) {
           st.brPreview = null;
           st.brChapter = null;
           loadChapters(true);
         }
       });
-      loadChapters(true);
+      if (st.brOn) loadChapters(true);
     }
 
     return { el, mount };

@@ -3755,10 +3755,12 @@ async function main() {
       + `чипсов ${info.chips.length} (${info.chips.join(", ")})`);
   }
 
-  /* предпросмотр массовых замен: пробельные правила должны быть ВИДНЫ —  /* предпросмотр массовых замен: пробельные правила должны быть ВИДНЫ —
-   * без меток «^ + ->» неотличим от удаления, а удалённый перенос строки —
-   * от пустоты; пробелы паттерна значимы целиком; битая строка —
-   * предупреждение, а не падение предпросмотра */
+  /* предпросмотр массовых замен: по умолчанию панель ЗАКРЫТА (ни списка
+   * глав, ни запроса предпросмотра), раскрывается только кнопкой;
+   * пробельные правила должны быть ВИДНЫ — без меток «^ + ->» они
+   * неотличимы от удаления, а удалённый перенос строки — от пустоты;
+   * пробелы паттерна значимы целиком; битая строка — предупреждение,
+   * а не падение предпросмотра */
   {
     const before = problems.length;
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`, {
@@ -3767,14 +3769,38 @@ async function main() {
     await page.reload({ waitUntil: "load" });
     await page.waitForSelector(".stage-card", { timeout: 15000 });
     await page.locator('.stage-card:has-text("Массовые замены")').first().click();
-    await page.waitForSelector(".br-panel .br-box", { timeout: 15000 });
+    await page.waitForSelector(".br-panel", { timeout: 15000 });
     await page.waitForTimeout(900);
+    // закрытая панель: одна подсказка — тело с главой и результатом скрыто
+    const closed = await page.evaluate(() => {
+      const vis = (el) => !!el && getComputedStyle(el).display !== "none";
+      return {
+        body: vis(document.querySelector(".br-panel .br-body")),
+        stats: vis(document.querySelector(".br-panel .br-stats")),
+        hint: (document.querySelector(".br-panel .field-help") || {})
+          .textContent || "",
+      };
+    });
+    if (closed.body || closed.stats) {
+      problems.push(`br-preview: панель открыта до кнопки: `
+        + `тело=${closed.body} результат=${closed.stats}`);
+    }
+    if (!/Нажмите «Предпросмотр»/.test(closed.hint)) {
+      problems.push(`br-preview: подсказка закрытой панели `
+        + `«${closed.hint.trim()}»`);
+    }
+    if (SHOT) {
+      await page.screenshot({
+        path: path.join(OUT, "scenario-batch-replace-closed.png"),
+      });
+    }
     await page
       .locator(".run-form textarea.epub-textarea")
       .first()
       .fill("^ + ->\n\\n{3,} -> \\n\n +$ ->\n( -> x");
     await page.locator('.br-panel button:has-text("Предпросмотр")').first().click();
-    await page.waitForTimeout(1500);
+    await page.waitForSelector(".br-panel .br-body .br-stats", { timeout: 15000 });
+    await page.waitForTimeout(800);
     const look = await page.evaluate(() => {
       const box = document.querySelector(".br-panel .br-box");
       const qs = (sel) => [...(box?.querySelectorAll(sel) || [])];
