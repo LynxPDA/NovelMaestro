@@ -893,6 +893,26 @@ button.run-pill {
   border-radius: var(--radius);
   color: var(--muted);
 }
+/* запомненная папка удалена: причина и выбор другой папки — стрелкой, а не
+   абзацем текста (внутри .files-empty нет своих строк-абзацев) */
+.files-missing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+.files-missing-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-basis: 100%;
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.files-missing .dir-pick {
+  min-width: 220px;
+}
 .frow {
   display: flex;
   align-items: center;

@@ -1272,6 +1272,64 @@ async function main() {
     log(`${problems.length === before3 ? "✅" : "❌"} файлы: выделка   строк ${f0.rows} · панель: ${f1.barTips.length} действий · перенос: ${mv.opts.length} папок`);
   }
 
+  /* «Файлы»: запомненную папку удалили на диске (переразбивка исходника) —
+   * вкладка не должна становиться тупиком: причина и выбор другой папки */
+  if (seedDir) {
+    const before5 = problems.length;
+    const gone = path.join(seedDir, SECTION, BOOK, "tmp", "исчезла");
+    fs.mkdirSync(gone, { recursive: true });
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/files`, { waitUntil: "load" });
+    await page.waitForSelector(".files-list .frow", { timeout: 15000 });
+    /* заходим в папку штатно, кликами: путь ложится в состояние книги */
+    await page.locator('.files-list .frow[data-name="tmp"] .fname').click();
+    await page.waitForSelector('.files-list .frow[data-name="tmp/исчезла"]', { timeout: 15000 });
+    await page.locator('.files-list .frow[data-name="tmp/исчезла"] .fname').click();
+    await page.waitForSelector(".crumbs", { timeout: 15000 });
+    await page.waitForTimeout(400); // запись состояния книги — после паузы
+    fs.rmSync(gone, { recursive: true, force: true });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".files-missing", { timeout: 15000 });
+    const miss = await page.evaluate(() => {
+      const note = document.querySelector(".files-missing");
+      const pick = note && note.querySelector("select");
+      return {
+        text: note ? note.textContent.trim() : "",
+        opts: pick ? [...pick.options].map((o) => o.value).filter(Boolean) : [],
+        toolbar: !!document.querySelector(".files-toolbar"),
+      };
+    });
+    if (!miss.text.includes("исчезла"))
+      problems.push(`файлы: причина без пути («${miss.text.slice(0, 60)}»)`);
+    if (!miss.opts.length)
+      problems.push("файлы: у удалённой папки нет выбора другой");
+    if (miss.toolbar)
+      problems.push("файлы: тулбар удалённой папки остался");
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-files-missing.png") });
+    /* 404 листинга — ОЖИДАЕМЫЙ отказ: его и обрабатывает вкладка. Убираем
+       его из списка находок, иначе прогон краснеет на своём же сценарии */
+    await page.waitForTimeout(300);
+    for (let i = problems.length - 1; i >= before5; i -= 1) {
+      if (/http 404: .*\/api\/files\?/.test(problems[i])
+        || /console: Failed to load resource/.test(problems[i])) {
+        problems.splice(i, 1);
+      }
+    }
+    /* выбор папки выводит из тупика: список снова рисуется */
+    await page.locator(".files-missing select").selectOption("prompts");
+    await page.waitForSelector(".files-list .frow", { timeout: 15000 });
+    const back = await page.evaluate(() => ({
+      rows: document.querySelectorAll(".files-list .frow").length,
+      crumbs: document.querySelector(".crumbs")
+        ? document.querySelector(".crumbs").textContent : "",
+    }));
+    if (!back.crumbs.includes("prompts"))
+      problems.push(`файлы: крошки после выбора «${back.crumbs.trim()}»`);
+    if (!back.rows)
+      problems.push("файлы: выбранная папка пуста (список не отрисован)");
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-files-recovered.png") });
+    log(`${problems.length === before5 ? "✅" : "❌"} файлы: удалённая папка   выбор: ${miss.opts.length} · крошки «${back.crumbs.trim()}»`);
+  }
+
   /* «Логи»: список папок и файлов рисует общий пейджер; клик по файлу
    * показывает содержимое, «↑» поднимает на папку выше */
   {

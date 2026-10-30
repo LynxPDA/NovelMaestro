@@ -304,6 +304,11 @@ async function api(path, opts = {}) {
     return { ok: true, moved: [], skipped: [] };
   }
   if (p === "/files") {
+    /* папку могли удалить с диска (переразбивка исходника): тест
+       воспроизводит 404 сервера — корень книги при этом читается */
+    if (globalThis.__filesMissing && path.includes("path=")) {
+      throw new Error(`Папка не найдена`);
+    }
     return {
       entries: globalThis.__files || [],
       dirs: globalThis.__dirs || [],
@@ -974,6 +979,37 @@ async function filesPage(dirs = ["chapters", "tmp"]) {
   await tick();
   return page;
 }
+test("файлы: удалённая папка — выбор другой вместо тупика", async () => {
+  /* «Папка не найдена» без крошек и списка оставляла вкладку без выхода:
+     книга запомнила путь, папку удалили — и уйти некуда */
+  globalThis.__dirs = ["chapters", "tmp"];
+  globalThis.__filesMissing = true;
+  try {
+    /* вспомненный путь — в состоянии книги; снимок пересоздаём, чтобы
+       прочитать запись (viewProject чистит книгу для чистого листа) */
+    globalThis.localStorage.setItem("nmTab:ACTIVE/Книга",
+      JSON.stringify({ files: { path: "old" } }));
+    globalThis.__books.delete("ACTIVE/Книга");
+    const page = reopenProject("ACTIVE", "Книга", "files");
+    await tick();
+    assert.equal(findByClass(page, "files-toolbar").length, 0,
+      "тулбара про отсутствующую папку нет");
+    const note = findByClass(page, "files-missing")[0];
+    assert.ok(note, "причина и выбор папки показаны");
+    assert.equal(collectText(note).includes("Папка не найдена: old"), true);
+    const pick = findByClass(note, "dir-pick")[0];
+    assert.deepEqual(pick.options.map((o) => o.value).filter(Boolean),
+      ["chapters", "tmp"]);
+    pick.value = "chapters";
+    await pick._listeners.change[0]();
+    await tick();
+    const saved = JSON.parse(globalThis.localStorage.getItem("nmTab:ACTIVE/Книга"));
+    assert.equal(saved.files.path, "chapters", "путь записан в состояние книги");
+  } finally {
+    globalThis.__filesMissing = false;
+  }
+});
+
 const tips = (node) => findByClass(node, "icon-btn")
   .map((b) => b.getAttribute("aria-label"));
 

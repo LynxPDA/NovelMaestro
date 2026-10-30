@@ -455,10 +455,20 @@ function viewProject(section, name, tab, job) {
     const q = new URLSearchParams({ project: `${section}/${name}` });
     if (st.path) q.set("path", st.path);
     let data;
+    let loadErr = null; // папка на диске не читается — показываем выбор из дерева
     try {
       data = await api(`/files?${q}`);
     } catch (ex) {
-      return h("div", { class: "files-empty" }, ex.message);
+      loadErr = ex;
+      /* Дерево каталогов приходит из листинга, а у отсутствующей папки его
+         нет: спрашиваем корень книги — второй запрос только на ошибке. Не
+         ответил и он — выбор останется одним, «Корень книги». */
+      const rootQ = new URLSearchParams({ project: `${section}/${name}` });
+      try {
+        data = { entries: [], dirs: (await api(`/files?${rootQ}`)).dirs || [] };
+      } catch {
+        data = { entries: [], dirs: [] };
+      }
     }
     const sel = st.filesSel;
     const entries = sortFiles(data.entries || []);
@@ -1006,7 +1016,7 @@ function viewProject(section, name, tab, job) {
     });
     /* скрытое поле выбора файлов живёт в разметке рядом с кнопкой: кнопка
        его только нажимает, а тест может выставить файлы напрямую */
-    return h(
+    const wrap = h(
       "div",
       { class: "files-wrap" },
       upInput,
@@ -1014,6 +1024,34 @@ function viewProject(section, name, tab, job) {
       zone,
       fPager.el,
     );
+    /* Папку запомнили, а на диске её уже нет (переразбивка исходника, ручное
+       удаление): одной надписью «Папка не найдена» вкладка тупиковая — уйти в
+       другую папку нечем, крошек нет. Показываем причину и выбор папки по
+       дереву каталогов: текущей в нём может не быть, остальные на месте. */
+    if (loadErr) {
+      wrap.classList.add("hidden");
+      const pick = h(
+        "select",
+        { class: "input input-sm dir-pick", "aria-label": "Выбрать другую папку" },
+        h("option", { value: "" }, "Корень книги"),
+        ...dirs.map((d) => h("option", { value: d }, d)),
+      );
+      pick.addEventListener("change", () => setPath(pick.value));
+      return h(
+        "div",
+        { class: "files-wrap" },
+        h(
+          "div",
+          { class: "files-empty files-missing" },
+          h("div", { class: "files-missing-head" },
+            iconEl("folder", "fname-icon"),
+            `Папка не найдена: ${st.path}`),
+          h("div", {}, "Её удалили или переименовали — выберите другую:"),
+          pick,
+        ),
+      );
+    }
+    return wrap;
   }
 
   /* Сортировка списка файлов: каталоги всегда первыми (обход вниз идёт по
