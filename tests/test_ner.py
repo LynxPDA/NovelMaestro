@@ -246,21 +246,118 @@ def test_merge_alias_groups():
     assert primary["type"] == "Person (male)"
 
 
-@pytest.mark.parametrize("a,b,reading", [
-    ("第9基地", "第10基地", "dijidi"),
-    ("11区", "十一区", "shi yiqu"),
-    ("S级", "3S级", "s ji"),
-    ("辰", "陈", "chen"),
-    ("1979队", "222队", "dui"),
+@pytest.mark.parametrize("a,b", [
+    ("辰", "陈"),              # односложные омофоны — разные имена
+    ("王", "魍"),
+    ("第9基地", "第10基地"),
+    ("11区", "35区"),
+    ("S级", "3S级"),
+    ("1979队", "222队"),
+    ("异能班", "异能2班"),
+    ("11号基地", "1号基地"),
+    ("军区医院", "42军区医院"),
 ])
-def test_merge_alias_groups_needs_same_spelling(a, b, reading):
-    """Одного произношения мало: 第9基地 и 第10基地 звучат одинаково, но это
-    РАЗНЫЕ объекты. Склеенная запись искала один перевод по обоим и подменяла
-    числа в тексте; в aliases попадал чужой термин."""
-    data = [{"term": a, "pinyin": reading, "count": 5},
-            {"term": b, "pinyin": reading, "count": 5}]
+def test_merge_alias_groups_different_numbers_not_merged(a, b):
+    """Одного произношения мало: числа термина обязаны совпасть.
+
+    第9基地 и 第10基地 звучат одинаково, но это РАЗНЫЕ объекты: склеенная
+    запись искала один перевод по обоим и подменяла номера в тексте.
+    """
+    data = [{"term": a, "pinyin": "same", "count": 5},
+            {"term": b, "pinyin": "same", "count": 5}]
     assert NER.merge_alias_groups(data, SilentLog()) == 0
     assert [d["term"] for d in data] == [a, b]
+
+
+@pytest.mark.parametrize("a,b", [
+    ("陈阳", "陳陽"),          # 繁体/简体 — один человек
+    ("第一基地", "第1基地"),    # цифра и иероглиф — одно число
+    ("11区", "十一区"),
+    ("一百二十区", "120区"),
+    ("道德“法典”", "道德法典"),  # кавычки в написании не значимы
+    ("陆邢", "陆刑"),          # одинаково звучащие варианты одного имени
+])
+def test_merge_alias_groups_same_number_merged(a, b):
+    """Слияние по произношению работает: вариант написания того же числа
+    остаётся алиасом, а не отдельной записью."""
+    data = [{"term": a, "pinyin": "same", "count": 5},
+            {"term": b, "pinyin": "same", "count": 5}]
+    assert NER.merge_alias_groups(data, SilentLog()) == 1
+    assert len(data) == 1 and data[0]["term"] == a
+    assert data[0]["aliases"] == [b]
+
+
+@pytest.mark.parametrize("term,numbers", [
+    ("第11基地", (11,)),
+    ("第十一基地", (11,)),
+    ("11区", (11,)),
+    ("11军区", (11,)),
+    ("一百二十区", (120,)),
+    ("第9基地", (9,)),
+    ("基地", ()),
+    ("陆邢", ()),
+])
+def test_ner_term_numbers(term, numbers):
+    """Числа термина читаются одинаково из цифр и иероглифов: 11军区 и
+    十一军区 — одно число, 第9基地 и 第10基地 — разные."""
+    assert NER.term_numbers(term) == numbers
+
+
+def test_merge_into(ner_globals):
+    target = [{"term": "陈阳", "type": "Person (male)", "count": 3,
+               "_ngrams": NER.get_ngrams("陈阳"), "_len": 2,
+               "_votes_type": {"Person (male)": 3}}]
+    final = [{"term": "陈阳", "type": "Person (female)", "count": 2,
+              "_source_chunks": [7], "_ngrams": NER.get_ngrams("陈阳"),
+              "_len": 2, "_votes_type": {"Person (female)": 2},
+              "notes": "новое"}]
+    NER._merge_into(target, final, 0.95, 3)
+    assert len(target) == 1
+    assert target[0]["count"] == 5
+    assert target[0]["_source_chunks"] == [7]
+    assert target[0]["_votes_type"] == {"Person (male)": 3,
+                                        "Person (female)": 2}
+    assert target[0]["type"] == "Person (male)"  # 3 против 2
+    assert target[0]["notes"] == "новое"
+    # новый термин добавляется
+    NER._merge_into(target, [{"term": "совсем другой термин", "count": 1,
+                              "_ngrams": set(), "_len": 20}], 0.95, 3)
+    assert len(target) == 2
+
+
+def test_fill_term_context():
+    """context извлекается из чанка (не от LLM): предложение с
+    термином; 0 — выключено; термин не найден — поле не заполняется."""
+    ners = [{"term": "陈阳", "type": "Person"}]
+    NER.fill_term_context(ners, "陈阳走进大殿。殿内站着许多人。", 300)
+    assert ners[0]["context"] == "陈阳走进大殿。"
+    # выключено — поле не трогаем
+    ners2 = [{"term": "陈阳"}]
+    NER.fill_term_context(ners2, "陈阳走进大殿。", 0)
+    assert "context" not in ners2[0]
+    # термин не найден в чанке — поле не заполняется (LLM его не даёт)
+    ners3 = [{"term": "林水", "context": "старый контекст"}]
+    NER.fill_term_context(ners3, "陈阳走进大殿。", 300)
+    assert ners3[0]["context"] == "старый контекст"
+
+
+def test_merge_alias_groups():
+    data = [
+        {"term": "陈阳", "pinyin": "Chen Yang", "count": 10,
+         "type": "Person (male)", "_votes_type": {"Person (male)": 10}},
+        {"term": " 陈阳 ", "pinyin": "chenyang", "count": 3,
+         "type": "Person (female)", "_votes_type": {"Person (female)": 3}},
+        {"term": "Без чтения", "count": 9},
+    ]
+    n = NER.merge_alias_groups(data, SilentLog())
+    assert n == 1
+    assert len(data) == 2
+    primary = next(d for d in data if d["term"] == "陈阳")
+    assert primary["count"] == 13
+    # голоса пересуммированы
+    assert primary["_votes_type"] == {"Person (male)": 10,
+                                      "Person (female)": 3}
+    assert primary["type"] == "Person (male)"
 
 
 # ══════════════════════════════════════════════════════════════════════
