@@ -3201,3 +3201,4 @@ def test_projects_move_many_guards(archive_srv):
                             {"dst": "HOLD",
                              "items": [{"section": "HOLD", "name": "x"}]})
     assert res.status == 400
+

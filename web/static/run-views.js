@@ -1705,8 +1705,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       body: { project: `${section}/${name}`, params: buildParams(key, spec) },
     }).then((d) => {
       if (st.promptReq[key] !== mine) return; // ответ устарел
-      paintPromptWarn(key, (d && d.result && d.result.problems) || [],
-        spec.title);
+      const res = d && d.result;
+      // сбой самой проверки (таймаут, ненулевой код, битый вердикт) — тоже
+      // предупреждение: молчание здесь читается как «промпт в порядке»
+      const problems = res ? (res.problems || []) : [(d && d.error)
+        || "проверка промпта не выполнена"];
+      paintPromptWarn(key, problems, spec.title);
     }).catch(() => { /* фоновая проверка не ломает форму */ });
   }
 

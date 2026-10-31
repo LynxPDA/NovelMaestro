@@ -887,3 +887,59 @@ def test_check_prompt_cli_mode(tmp_path, key, script, extra):
         f"«{key}» работает со встроенным промптом"]
     assert not (book / "logs").exists(), "проверка не создаёт логов запусков"
     assert sorted(x.name for x in (book / "tmp").iterdir()) == ["prompt_check.json"]
+
+
+def _run_pc(tmp_path, extra, *args):
+    """Прогон стадии в режиме --check-prompt; возвращает (код, вердикт)."""
+    book = tmp_path / "book"
+    book.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "web" / "pipeline.py"), *extra,
+         "--check-prompt", "tmp/pc.json", *args],
+        cwd=str(book), capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=180,
+        env={"PATH": os.defpath, "HOME": str(tmp_path),
+             "PYTHONIOENCODING": "utf-8", "WEB_ENV_FILE": str(tmp_path / "e.env")})
+    out = book / "tmp" / "pc.json"
+    data = json.loads(out.read_text(encoding="utf-8")) if out.is_file() else None
+    return proc.returncode, data
+
+
+def test_check_prompt_pipeline_checks_auto_file(tmp_path):
+    """Пустое поле у конвейера — не «встроенный промпт».
+
+    Авто-режим сам берёт первый кандидат с тегами из prompts/ — стадии
+    работают именно им. Проверка обязана смотреть тот же файл: иначе битый
+    промпт, который завтра уйдёт в запрос, остаётся без предупреждения
+    (в форме не появлялся восклицательный знак).
+    """
+    book = tmp_path / "book"
+    (book / "prompts").mkdir(parents=True)
+    (book / "prompts" / "pipeline_prompt.txt").write_text(
+        "<translate>\nбез переменных\n</translate>\n", encoding="utf-8")
+    code, data = _run_pc(tmp_path, ["--action", "8"])
+    assert code == 0 and data is not None, data
+    assert data["state"] == "file"
+    assert data["file"] == "prompts/pipeline_prompt.txt"
+    assert any("original_text" in p for p in data["problems"])
+
+
+def test_check_prompt_pipeline_without_auto_file_is_quiet(tmp_path):
+    """Нет кандидата и поле пустое — встроенный промпт, замечаний нет."""
+    code, data = _run_pc(tmp_path, ["--action", "8"])
+    assert code == 0 and data is not None, data
+    assert data["state"] == "none" and data["problems"] == []
+    assert "встроенным" in data["notes"][0]
+
+
+def test_check_prompt_pipeline_explicit_file_wins(tmp_path):
+    """Явно выбранный файл важнее авто-подбора — проверяется он."""
+    book = tmp_path / "book"
+    (book / "prompts").mkdir(parents=True)
+    (book / "prompts" / "pipeline_prompt.txt").write_text(
+        "<translate>\n{original_text}\n</translate>\n", encoding="utf-8")
+    code, data = _run_pc(tmp_path, ["--action", "8"],
+                         "--prompt_file", "prompts/nope.txt")
+    assert code == 0 and data is not None, data
+    assert data["state"] == "missing"
+    assert data["problems"] == ["файл промпта не найден: prompts/nope.txt"]

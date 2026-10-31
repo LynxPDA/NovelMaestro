@@ -649,7 +649,14 @@ def main() -> None:
                         "1 поток) без сети → JSON-файл.")
     args = ap.parse_args()
 
-    # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети
+    # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети.
+    # Пустое поле у конвейера — не «встроенный промпт»: авто-режим сам берёт
+    # первый кандидат с тегами из prompts/, и стадии работают именно им.
+    # Проверка обязана видеть тот же файл — иначе она молчит о битом промпте,
+    # который завтра уйдёт в запрос
+    if args.check_prompt:
+        auto = resolve_prompt_paths(args.prompt_file)
+        args.prompt_file = args.prompt_file or auto.get(1, "")
     if check_prompt(args, "pipeline", PROMPT_CONTRACT):
         return
 
