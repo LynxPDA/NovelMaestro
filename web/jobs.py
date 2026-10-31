@@ -63,7 +63,8 @@ ORPHAN_POLL = 5.0
 # Префиксы структурированных событий в stdout (JSON после него).
 # @@CHAPTER@@ — события глав конвейера (web/pipeline.py);
 # @@PROGRESS@@ — события прогресса LLM-стадий (core/common.py emit_progress).
-from core.common import CHAPTER_PREFIX, PROGRESS_PREFIX  # noqa: E402
+from core.common import (  # noqa: E402
+    CHAPTER_PREFIX, PROGRESS_PREFIX, atomic_write)
 
 _EVENT_PREFIXES = (PROGRESS_PREFIX, CHAPTER_PREFIX)
 
@@ -427,9 +428,11 @@ class JobManager:
                 data = [self._serialize(j) for j in jobs]
                 sp = self._store_path()
                 sp.parent.mkdir(parents=True, exist_ok=True)
-                sp.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2),
-                    encoding="utf-8")
+                # atomic_write, а не write_text: читатель (GET /api/jobs,
+                # дашборд) может открыть файл во время записи и увидеть
+                # пустоту — jobs.json усечён до появления содержимого
+                atomic_write(
+                    str(sp), json.dumps(data, ensure_ascii=False, indent=2))
             except OSError as exc:
                 log.debug("jobs.json не пишется: %s", exc)
             # сайдкары хвоста лога — отдельно от метаданных; падение не

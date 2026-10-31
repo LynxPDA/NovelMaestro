@@ -212,6 +212,43 @@ def test_update_project_path(tmp_path, fake_script):
     assert rec[j2.id]["project"] == "HOLD/other"
 
 
+def test_persist_never_leaves_empty_store(tmp_path, fake_script):
+    """jobs.json пишется атомарно: читатель (GET /api/jobs, дашборд) не
+    видит файл в момент перезаписи. write_text усекает его до появления
+    содержимого, и параллельный GET падал на пустом JSON (json.decoder
+    JSONDecodeError: Expecting value: line 1 column 1).
+    """
+    jm = JobManager(tmp_path, python="python3")
+    for i in range(8):
+        job = jm.start("test", f"Тест {i}", f"ACTIVE/x{i}",
+                       [str(fake_script / "ok.py")], tmp_path)
+        _wait_status(jm, job.id, "done")
+    store = tmp_path / "job_logs" / "jobs.json"
+    bad: list[str] = []
+    stop = threading.Event()
+
+    def reader():
+        """Читатель в темпе GET /api/jobs: файл открывается на каждом тике."""
+        while not stop.is_set():
+            try:
+                json.loads(store.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                continue  # первого persist ещё не было — это не гонка
+            except ValueError as exc:  # пустой или обрезанный файл
+                bad.append(str(exc))
+
+    th = threading.Thread(target=reader, daemon=True)
+    th.start()
+    try:
+        for _ in range(300):
+            jm._persist()
+    finally:
+        stop.set()
+        th.join(timeout=5)
+    assert not bad, f"читатель увидел недописанный jobs.json: {bad[:3]}"
+    assert not list(store.parent.glob("*.tmp")), "временные файлы не копятся"
+
+
 def test_update_project_path_no_jobs(tmp_path):
     """Нет запусков проекта — 0 переписанных, без падений и записи."""
     jm = JobManager(tmp_path, python="python3")

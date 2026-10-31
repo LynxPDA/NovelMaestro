@@ -204,6 +204,13 @@ Alias-merge группировал записи только по нормали
 - [x] **Справка и документация.** `--help` и docstring `cli/ner.py`, `DEVELOPERS.md` описывают правило: числа совпадают, односложные не сливаются.
 - [x] **Проверка серии.** `./dev.sh test` — 2840 тестов (новые: параметризованные `test_merge_alias_groups_different_numbers_not_merged`, `test_merge_alias_groups_same_number_merged`, `test_ner_term_numbers`), `./dev.sh spa` и `./dev.sh probe --shot` чисто.
 
+## Серия «jobs.json: атомарная запись истории запусков»
+
+CI на Python 3.12 упал на `test_update_project_path`: `json.decoder.JSONDecodeError: Expecting value: line 1 column 1`. Это не флак теста, а гонка в `web/jobs.py::_persist`: история писалась через `Path.write_text`, который сначала усекает файл до нуля и только потом пишет содержимое. Читатель (`GET /api/jobs`, дашборд) в этот момент видел пустой `jobs.json` и падал на разборе.
+
+- [x] **`atomic_write` вместо `write_text`.** `_persist` пишет историю через `core.common.atomic_write` (tmp-файл + `os.replace`): читатель видит либо старую версию файла, либо новую, но не пустоту.
+- [x] **Тест на гонку.** `test_persist_never_leaves_empty_store` держит параллельный поток-читатель в темпе `GET /api/jobs` и 300 раз перезаписывает историю: при откате на `write_text` падает с тем же `JSONDecodeError`, что и CI.
+
 ## Остаточные хвосты
 
 - `core`: часть хелперов не покрыта параметризованными тестами — дополнять по
