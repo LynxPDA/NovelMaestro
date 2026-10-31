@@ -4323,10 +4323,13 @@ function viewProject(section, name, tab, job) {
     attachTooltip(endIn, "Конечная глава; пусто = до последней");
     const rangeNote = h("span", { class: "field-help run-range-note hidden" });
     let inputs = {}; // id → {input, orig}
-    let allIds = []; // непрерывный 1..N (для серых ячеек и префилла)
+    let allIds = []; // непрерывный ряд от первой до последней главы книги
 
     function readRange() {
-      const a = parseInt(startIn.value || "", 10) || 1;
+      // пустое начало — с ПЕРВОЙ главы книги, а не с 1: книга, разобранная
+      // с --num-offset 5, не имеет глав 1–4, и пустое поле показывало
+      // их как пропущенные
+      const a = parseInt(startIn.value || "", 10) || allIds[0] || 1;
       const b = parseInt(endIn.value || "", 10) || (allIds.at(-1) || 0);
       /* проглоченный ввод здесь — не задумка, а невиданное дело: конец меньше
          начала и главы за последней главой книги прямо подписаны.

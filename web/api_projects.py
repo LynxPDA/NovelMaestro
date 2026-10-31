@@ -981,14 +981,15 @@ def _chapter_titles_get(ctx: dict) -> dict:
         return {"ok": True, "section": section, "name": name,
                 "type": want, "titles": {}}
     titles = common.read_chapter_titles(chapters_dir, want=want)
-    # all_ids — непрерывный диапазон 1..N по существующим ПАПКАМ глав
-    # (build_chapter_map), а не по titles: файлов типа может не быть вовсе;
-    # missing — номера без файла нужного типа (для серых ячеек)
+    # all_ids — непрерывный ряд от ПЕРВОЙ до последней папки главы: та же
+    # вселенная, что у таблицы «Статус» (progress_missing — range(ids[0], …+1)).
+    # Отсчёт от 1 расходился бы с ней: книга, разобранная с --num-offset 5,
+    # получала здесь главы 1–4, которых нет, а «Статус» — только 5–7.
     try:
         ids = sorted({int(k) for k in common.build_chapter_map(chapters_dir)})
     except (ValueError, TypeError):
         ids = []
-    all_ids = list(range(1, ids[-1] + 1)) if ids else []
+    all_ids = list(range(ids[0], ids[-1] + 1)) if ids else []
     missing = [n for n in all_ids if n not in titles]
     return {"ok": True, "section": section, "name": name,
             "type": want, "titles": titles,

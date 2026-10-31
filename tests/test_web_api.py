@@ -1003,6 +1003,50 @@ def test_project_chapters_titles(srv_ctx):
     assert res.status == 404
 
 
+def test_project_chapters_all_ids_starts_at_first_chapter(srv_ctx):
+    """all_ids — ряд от первой главы книги, а не от 1 (книга с --num-offset).
+
+    Разбор с `--num-offset 5` даёт главы 5…: отсчёт от 1 рисовал бы в
+    «Главах» главы 1–4, которых нет, а таблица «Статус»
+    (`progress_missing` — ряд от первой до последней папки) их не знает.
+    """
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    pdir = projects_root / "ACTIVE" / "test_book"
+    for n in (5, 6):
+        ch = pdir / "chapters" / f"00000_{n}_гл"
+        ch.mkdir(parents=True)
+        (ch / "polished.txt").write_text(f"Глава {n}\n", encoding="utf-8")
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/chapters/titles"
+                            "?type=polished")
+    assert res.status == 200
+    assert payload["all_ids"] == [5, 6]
+    assert payload["missing"] == []
+    # та же вселенная, что у «Статуса»
+    res, status = _request(port, "GET",
+                           "/api/projects/ACTIVE/test_book/status")
+    assert res.status == 200
+    assert status["status"]["missing"]["polish"]["total"] == 2
+
+
+def test_project_chapters_all_ids_keeps_inner_gaps(srv_ctx):
+    """Дыра внутри ряда остаётся в all_ids и попадает в missing."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    pdir = projects_root / "ACTIVE" / "test_book"
+    for n in (1, 3):
+        ch = pdir / "chapters" / f"00000_{n}_гл"
+        ch.mkdir(parents=True)
+        (ch / "polished.txt").write_text(f"Глава {n}\n", encoding="utf-8")
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/chapters/titles"
+                            "?type=polished")
+    assert res.status == 200
+    assert payload["all_ids"] == [1, 2, 3]
+    assert payload["missing"] == [2]
+
+
 def test_project_tree_no_chapters(srv_ctx):
     _, port, _ = srv_ctx()
     _create_project(port, None)  # projects_root не используется здесь
