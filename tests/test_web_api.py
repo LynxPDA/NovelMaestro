@@ -418,6 +418,46 @@ def test_stats_signature_invalidates(monkeypatch, srv_ctx):
     api._CACHE_LOADED.clear()
 
 
+def test_stats_signature_sees_renamed_compiled(monkeypatch, srv_ctx):
+    """Переименование ВНУТРИ папки меняет сигнатуру stats.
+
+    mtime самой папки переименование не трогает: скомпилированная книга,
+    переименованная в tmp/, оставляла в карточке проекта прежний
+    «compiled: ✓» до перезапуска сервера.
+    """
+    import web.api as api
+    from core import projects as P
+    calls = []
+    orig = P.project_stats
+
+    def counting(*a, **k):
+        calls.append(1)
+        return orig(*a, **k)
+
+    monkeypatch.setattr(P, "project_stats", counting)
+    api._STATS_CACHE.clear()
+    api._CACHE_LOADED.clear()
+    _, port, proot = srv_ctx()
+    _create_project(port, proot)
+    tmp = proot / "ACTIVE" / "test_book" / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    compiled = tmp / "test_book_1_5_txt.txt"
+    compiled.write_text("книга", encoding="utf-8")
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/stats")
+    assert res.status == 200
+    assert "compiled: ✓" in payload["stats"]
+    assert len(calls) == 1
+    # переименование внутри tmp/ — сборки больше нет
+    compiled.rename(tmp / "черновик.txt")
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/stats")
+    assert "compiled: —" in payload["stats"]
+    assert len(calls) == 2, "переименование в tmp/ — новое состояние"
+    api._STATS_CACHE.clear()
+    api._CACHE_LOADED.clear()
+
+
 def test_stats_cache_persisted_on_disk(monkeypatch, srv_ctx):
     """Дисковой кеш stats: после «рестарта» (чистый словарь в памяти)
     данные читаются с диска, project_stats не пересчитывается."""

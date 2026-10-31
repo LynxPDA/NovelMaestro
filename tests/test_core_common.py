@@ -646,6 +646,41 @@ def test_build_chapter_map_duplicates_and_files(tmp_path):
     assert C.build_chapter_map(str(tmp_path / "нет")) == {}
 
 
+@pytest.mark.parametrize("change", ["rename", "rewrite", "new", "delete"])
+def test_dir_fingerprint_sees_any_change(tmp_path, change):
+    """Отпечаток каталога видит переименование, правку и удаление файла.
+
+    mtime самого каталога тут не свидетель: переименование внутри и
+    перезапись файла его не меняют, а грубая метка времени (FAT) не меняется
+    и при добавлении файла — кеши web-слоя брали её и устаревали.
+    """
+    d = tmp_path / "source"
+    d.mkdir()
+    f = d / "book.epub"
+    f.write_bytes(b"x")
+    before = C.dir_fingerprint(d)
+    if change == "rename":
+        f.rename(d / "book2.epub")
+    elif change == "rewrite":
+        f.write_bytes(b"y")           # тот же размер
+    elif change == "new":
+        (d / "meta.yaml").write_text("t: 1\n", encoding="utf-8")
+    else:
+        f.unlink()
+    assert C.dir_fingerprint(d) != before
+
+
+def test_dir_fingerprint_stable_and_missing(tmp_path):
+    """Повторный вызов даёт тот же отпечаток; папки нет — пустой кортеж."""
+    d = tmp_path / "prompts"
+    d.mkdir()
+    (d / "a.txt").write_text("раз", encoding="utf-8")
+    (d / "b.txt").write_text("два", encoding="utf-8")
+    assert C.dir_fingerprint(d) == C.dir_fingerprint(d)
+    assert [row[0] for row in C.dir_fingerprint(d)] == ["a.txt", "b.txt"]
+    assert C.dir_fingerprint(tmp_path / "нет") == ()
+
+
 def test_compile_chapter_texts(tmp_path):
     root = tmp_path / "chapters"
     d1 = root / "00000_1_a"

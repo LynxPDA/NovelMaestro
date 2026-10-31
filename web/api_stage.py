@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from web.jobs import JobManager, SSE_PING, TAIL_LIMIT
 from web.server import ApiError, Router
+from core import common as _common
 from core import settings as core_settings
 from core.common import output_tail
 from web.stages import (
@@ -398,38 +399,24 @@ def _stage_spec(ctx: dict) -> dict:
     return {"ok": True, "spec": spec}
 
 
-# U8: кэш опций стадий — сигнатура mtime папок, влияющих на опции
+# U8: кэш опций стадий — отпечаток содержимого папок, влияющих на опции
 # (chapters/source/prompts/корень). build_chapter_map на каждый запрос
 # дорогой, а папки меняются редко; любое изменение — инвалидация.
 
 
-def _options_signature(pdir: Path) -> tuple[float, ...]:
+def _options_signature(pdir: Path) -> tuple:
     """Сигнатура для кэша опций стадий (U8).
 
-    max mtime файлов в папке (а не mtime каталога): перезапись
-    существующего файла (например, правка промпта с тегами) mtime
-    каталога не меняет — иначе кэш опций (список промптов, auto_prompt)
-    устаревал бы."""
-    sig: list[float] = []
+    Отпечаток содержимого папок (core.common.dir_fingerprint), а не mtime
+    каталога: переименование epub внутри source/ (book.epub → book2.epub) и
+    перезапись файла с тем же размером сохраняют mtime каталога — кеш
+    опций оставался бы с прежним списком, и новый исходник не появлялся в
+    селекте «Запусков» ни после обновления страницы, ни после перезапуска
+    сервера (кеш живёт в процессе)."""
+    sig: list = []
     for name in ("chapters", "source", "prompts"):
-        d = pdir / name
-        try:
-            if d.is_dir():
-                mt = 0.0
-                for f in d.iterdir():
-                    try:
-                        mt = max(mt, f.stat().st_mtime)
-                    except OSError:
-                        continue
-                sig.append(mt)
-            else:
-                sig.append(0.0)
-        except OSError:
-            sig.append(0.0)
-    try:
-        sig.append(pdir.stat().st_mtime)  # корень: ner.json и т.п.
-    except OSError:
-        sig.append(0.0)
+        sig.append(_common.dir_fingerprint(pdir / name))
+    sig.append(_common.dir_fingerprint(pdir))  # корень: ner.json и т.п.
     return tuple(sig)
 
 

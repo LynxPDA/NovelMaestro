@@ -1518,6 +1518,25 @@ test("запуски epub: исходник автоподхватывается
   delete globalThis.__stageOptions;
 });
 
+test("запуски epub: переименованный исходник заменяет «мёртвый» выбор из памяти", async () => {
+  /* Память книги держит имя старого файла. Файл переименовали на диске —
+     имя в поле оставалось, автоподхват не срабатывал (выбор не пуст), и
+     запуск уходил в ошибку «файл не найден»: живой epub в селекте не
+     выбирался. Мёртвое имя не восстанавливается, вступает autofile. */
+  globalThis.__stageOptions = { source: ["new.epub"] };
+  const state = JSON.stringify({ input: "old.epub", mode: "toc" });
+  const carrier = globalThis.__bookState("ACTIVE", "Книга");
+  carrier.store.setItem("runVals:ACTIVE/Книга:epub", state);
+  const page = await runStage("epub");
+  const field = (name) => findByClass(page, "field")
+    .find((w) => w._field && w._field.name === name);
+  const sel = field("input")._input._sel;
+  assert.equal(sel.value, "new.epub",
+    "мёртвое имя из памяти не выбрано, подхвачен живой исходник");
+  assert.deepEqual(sel.children.map((o) => o.value), ["", "new.epub"]);
+  delete globalThis.__stageOptions;
+});
+
 test("запуски: профиль LLM — первое поле формы стадии", async () => {
   const page = await runStage("ner");
   const fields = findByClass(page, "field-profile");

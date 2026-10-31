@@ -62,6 +62,7 @@ CORE_API = [
     "parse_chapter_id", "build_chapter_map", "find_chapter_file",
     "format_ranges", "compile_chapter_texts",
     "read_chapter_titles", "write_chapter_titles",
+    "dir_fingerprint",
     # предпросмотр запроса и проверка промпт-файла (web + CLI)
     "preview_request_payload", "write_preview_request", "preview_logger",
     "output_tail",

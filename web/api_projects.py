@@ -14,6 +14,7 @@ from pathlib import Path
 from web.jobs import JobManager
 from web.server import ApiError, Router
 from core import archive as core_archive
+from core import common as core_common
 from core import uistate as core_uistate
 from web.stages import (
     STAGE_SPECS, build_command, ordered_stages, script_path, spec_for,
@@ -125,12 +126,12 @@ def _chapter_artifacts(path: str) -> str:
 def _stats_signature(pdir: Path) -> str:
     """Отпечаток состояния проекта для кеша stats и status.
 
-    Содержит состав папок глав с их артефактами (размер + mtime), mtime
-    ner.json/wiki.md и mtime папок compiled-кандидатов. Сами артефакты нужны
-    потому, что mtime папки главы готовность не показывает: стадия открывает
-    выход на запись ДО генерации — папка меняет mtime на пустом файле, а
-    дописанный в него позже текст папку уже не трогает.
-    """
+    Содержит состав папок глав с их артефактами (размер + mtime + срез
+    содержимого), ner.json/wiki.md и папки compiled-кандидатов. Сами
+    артефакты нужны потому, что правка не видна по метке каталога: стадия
+    открывает выход на запись ДО генерации (папка меняет mtime на пустом
+    файле), а дописанный позже текст и перезапись файла с тем же размером
+    каталог уже не трогают."""
     pdir = Path(pdir)
     h = hashlib.sha256()
     ch = pdir / "chapters"
@@ -143,19 +144,17 @@ def _stats_signature(pdir: Path) -> str:
     h.update(f"ch:{len(dirs)}\0".encode())
     for d in dirs:
         h.update(f"{d.name}\0{_chapter_artifacts(d.path)}\0".encode())
+    # ner.json/wiki.md целиком не читаются: размер + mtime + срез достаточно
+    root_sig = core_common.dir_fingerprint(pdir)
+    known = {row[0]: row for row in root_sig}
     for f in ("ner.json", "wiki.md"):
-        p = pdir / f
-        try:
-            m = p.stat().st_mtime_ns
-        except OSError:
-            m = 0
-        h.update(f"{f}:{m}\0".encode())
-    for d in (pdir, pdir / "tmp", pdir / "output"):
-        try:
-            m = d.stat().st_mtime_ns
-        except OSError:
-            m = 0
-        h.update(f"d:{d.name}:{m}\0".encode())
+        h.update(f"{f}:{known.get(f)}\0".encode())
+    # главное — вспомогательные папки: скомпилированная книга, отчёты.
+    # mtime КАТАЛОГА для этого не годится (переименование его не меняет),
+    # поэтому отпечаток свой у каждой.
+    for name in ("tmp", "output"):
+        h.update(f"d:{name}:{core_common.dir_fingerprint(pdir / name)}\0"
+                 .encode())
     return h.hexdigest()
 
 

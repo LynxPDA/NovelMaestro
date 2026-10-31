@@ -2703,6 +2703,63 @@ def test_stage_options_cache_invalidates(jobs_srv, tmp_path):
     assert "ner.json" in payload["options"]["root"]
 
 
+def test_stage_options_see_renamed_source(jobs_srv, tmp_path):
+    """Переименованный исходник виден селекту «Запусков».
+
+    mtime каталога переименование ВНУТРИ него не меняет (book.epub →
+    book2.epub), а кэш опций сравнивал только её: список файлов оставался
+    прежним и после обновления страницы, и после перезапуска сервера (кеш
+    живёт в процессе). Сигнатура обязана видеть новое имя.
+    """
+    from web.api import _OPTIONS_CACHE
+    _OPTIONS_CACHE.clear()
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    src = pdir / "source"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "old.epub").write_bytes(b"x")
+    res, payload = req("GET",
+                       "/api/stages/epub/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert payload["options"]["source"] == ["old.epub"]
+
+    (src / "old.epub").rename(src / "new.epub")
+    res, payload = req("GET",
+                       "/api/stages/epub/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert payload["options"]["source"] == ["new.epub"]
+
+
+def test_stage_options_see_rewritten_prompt(jobs_srv, tmp_path):
+    """Перезапись файла тем же размером видна кэшу опций.
+
+    Правка промпта с сохранением длины (или копирование с сохранением дат)
+    не меняет ни mtime каталога, ни размер — автоподхват «Общего
+    промпт-файла» оставался бы с прежним вердиктом.
+    """
+    from web.api import _OPTIONS_CACHE
+    _OPTIONS_CACHE.clear()
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    pf = pdir / "prompts" / "pipeline_prompt.txt"
+    pf.parent.mkdir(parents=True, exist_ok=True)
+    pf.write_text("<translate>x</translate>\n", encoding="utf-8")
+    res, payload = req("GET",
+                       "/api/stages/pipeline/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert payload["options"]["auto_prompt"] == "prompts/pipeline_prompt.txt"
+
+    # тот же размер, другой текст: тегов стадии больше нет
+    pf.write_text("abcdefghijklmnopqrstuvwx\n", encoding="utf-8")
+    res, payload = req("GET",
+                       "/api/stages/pipeline/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert "auto_prompt" not in payload["options"]
+    _OPTIONS_CACHE.clear()
+
+
 def test_pipeline_options_auto_prompt(jobs_srv, tmp_path):
     """Автоподхват общего промпт-файла: pipeline_prompt.txt с тегами →
     options.auto_prompt; без тегов/файла — нет; инвалидация по mtime."""

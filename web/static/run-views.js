@@ -614,7 +614,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     el.classList.toggle("hidden", !n);
   }
 
-  function runRestore(key, spec, vals) {
+  function runRestore(key, spec, vals, pools) {
     let saved = null;
     try {
       saved = JSON.parse(store.getItem(runKey(key)) || "null");
@@ -626,6 +626,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     for (const f of spec.fields || []) {
       if (f.name === PROFILE_FIELD) continue; // память профиля — своя, по стадии
       if (saved[f.name] === undefined) continue;
+      // исчезнувший файл не возвращается из памяти: поле остаётся пустым,
+      // чтобы сработал автоподхват (autofile) и человек видел живой выбор
+      const items = (pools || {})[f.name];
+      if (items && saved[f.name] && !items.includes(String(saved[f.name]))) {
+        continue;
+      }
       vals[f.name] = f.type === "bool"
         ? UICore.boolOn(saved[f.name]) : saved[f.name];
       st.touched[key].add(f.name);
@@ -637,6 +643,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   function initFormValues(key, spec) {
     const opts = st.options || {};
     const vals = {};
+    // допустимые имена files-полей (пул опций): по ним проверяется память
+    // книги — имя, которого в книге больше нет (файл переименовали или
+    // удалили на диске), не восстанавливается, и вступает автоподхват
+    const pools = {};
     for (const f of spec.fields || []) {
       const def = f.default == null ? "" : String(f.default);
       if (f.type === "bool") {
@@ -659,6 +669,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         // промпт не остаётся «подхваченным» из .env-памяти и не ломает
         // автоподхват конвейера (pipeline_prompt.txt)
         vals[f.name] = UICore.pickPoolFile(def, items);
+        pools[f.name] = items;
         // autofile: автоподхват файла из пула (epub: первый *.epub из source/,
         // donate.txt и т.п.); не перекрываем память из .env — только пустой выбор
         if (vals[f.name] === "") {
@@ -693,7 +704,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // бы сохранённые значения) — именно поэтому сброс «до предыдущего».
     st.baseline[key] = Object.assign({}, vals);
     // память изменённых полей этой книги+стадии (поверх реестра и .env)
-    runRestore(key, spec, vals);
+    runRestore(key, spec, vals, pools);
     runPending[key] = false;
     // чипсы полей/типов (hidden noenv) — память по проекту+стадии:
     // без неё перезагрузка страницы молча сбрасывает выбор чипсов

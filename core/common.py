@@ -3111,6 +3111,47 @@ def provider_settings(env_data: dict | None = None) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# ОТПЕЧАТОК КАТАЛОГА: состав + размеры + mtime для кешей web-слоя
+# ══════════════════════════════════════════════════════════════════════
+def dir_fingerprint(path, max_bytes: int = 32) -> tuple:
+    """Отпечаток содержимого папки: имена, размеры и mtime её файлов.
+
+    mtime самой папки для кеша не годится: переименование ВНУТРИ папки
+    (book.epub → book2.epub) и перезапись существующего файла правят запись
+    каталога, но не его собственный mtime, а грубая метка времени (FAT,
+    копирование с сохранением дат) не меняется и при добавлении файла.
+    Отпечаток берётся из того же scandir, что и список имён (одни и те же
+    данные), а содержимое файла читается не больше max_bytes — этого хватает,
+    чтобы заметить правку без смены размера.
+
+    Возвращает кортеж (имя, размер, mtime_ns, срез содержимого), отсорти-
+    рованный по имени; папки нет — пустой кортеж.
+    """
+    items = []
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    if not entry.is_file():
+                        continue
+                    st = entry.stat()
+                except OSError:
+                    continue
+                head = b""
+                if max_bytes > 0:
+                    try:
+                        with open(entry.path, "rb") as fh:
+                            head = fh.read(max_bytes)
+                    except OSError:
+                        head = b""
+                items.append((entry.name, st.st_size, st.st_mtime_ns, head))
+    except OSError:
+        return ()
+    items.sort(key=lambda x: x[0])
+    return tuple(items)
+
+
+# ══════════════════════════════════════════════════════════════════════
 # ГЛАВЫ: единый парсер имени папки / карта / поиск файла
 # ══════════════════════════════════════════════════════════════════════
 def parse_chapter_id(folder_name: str):

@@ -121,9 +121,13 @@ def test_run_views_values_persistence():
     assert "function runKey(key)" in src
     assert 'return `runVals:${section}/${name}:${key}`' in src
     assert "function runSave(key)" in src
-    assert "function runRestore(key, spec, vals)" in src
+    assert "function runRestore(key, spec, vals, pools)" in src
     # чтение — в initFormValues до чипсов; запись — делегатом формы
-    assert "runRestore(key, spec, vals)" in src
+    assert "runRestore(key, spec, vals, pools)" in src
+    # мёртвый выбор (файл переименовали на диске) из памяти не возвращается:
+    # имя сверяется с пулом опций стадии, иначе поле держит файл, которого нет
+    assert "if (items && saved[f.name] && !items.includes(String(saved[f.name])))" \
+        in src
     assert "store.setItem(runKey(key), JSON.stringify(data))" in src
     # пустое изменение — ключ памяти удаляется, а не оставляется с мусором
     assert "store.removeItem(runKey(key))" in src
