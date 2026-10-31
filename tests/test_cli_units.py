@@ -163,7 +163,7 @@ def test_ner_merge_alias_groups():
     data = [
         {"term": "陈阳", "pinyin": "Chen Yang", "count": 5,
          "type": "Person (male)", "_votes_type": {"Person (male)": 5}},
-        {"term": "陳陽", "pinyin": "chen yang", "count": 2,
+        {"term": "陈阳", "pinyin": "chen yang", "count": 2,
          "type": "Person (unknown)", "_votes_type": {"Person (unknown)": 2}},
         {"term": "林水", "count": 7},        # без фонетики — не участвует
     ]
@@ -172,9 +172,17 @@ def test_ner_merge_alias_groups():
     assert len(data) == 2
     primary = next(d for d in data if d["term"] == "陈阳")
     assert primary["count"] == 7
-    assert "陳陽" in primary["aliases"]
-    # голоса суммированы: male 2 (5 после пересчёта?) — победитель определился
+    # голоса суммированы: победитель определился
     assert primary["type"].startswith("Person")
+
+
+def test_ner_normalize_spelling_keeps_digits():
+    """Цифра в написании — значимый знак: вырезать её значило склеить
+    第9基地 с 第10基地, а 11区 — с 十一区."""
+    assert NER.normalize_spelling("第9基地") == NER.normalize_spelling("第　9基地")
+    assert NER.normalize_spelling("第9基地") != NER.normalize_spelling("第10基地")
+    assert NER.normalize_spelling("S级") != NER.normalize_spelling("3S级")
+    assert NER.normalize_spelling("陈阳") == NER.normalize_spelling(" 陈阳 ")
 
 
 def test_ner_load_two_pass_prompts(tmp_path):

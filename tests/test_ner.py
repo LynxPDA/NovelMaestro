@@ -180,7 +180,7 @@ def test_merge_alias_groups_bad_votes():
     data = [
         {"term": "陈阳", "count": 5, "pinyin": "Chen Yang",
          "_votes_type": "Person (male)", "_votes_translation": [1]},
-        {"term": "陳陽", "count": 3, "pinyin": "chen yang",
+        {"term": "陈阳", "count": 3, "pinyin": "chen yang",
          "_votes_type": None},
     ]
     merged = NER.merge_alias_groups(data, SilentLog())
@@ -231,7 +231,7 @@ def test_merge_alias_groups():
     data = [
         {"term": "陈阳", "pinyin": "Chen Yang", "count": 10,
          "type": "Person (male)", "_votes_type": {"Person (male)": 10}},
-        {"term": "陳陽", "pinyin": "chen yang", "count": 3,
+        {"term": " 陈阳 ", "pinyin": "chenyang", "count": 3,
          "type": "Person (female)", "_votes_type": {"Person (female)": 3}},
         {"term": "Без чтения", "count": 9},
     ]
@@ -240,11 +240,27 @@ def test_merge_alias_groups():
     assert len(data) == 2
     primary = next(d for d in data if d["term"] == "陈阳")
     assert primary["count"] == 13
-    assert "陳陽" in primary.get("aliases", [])
     # голоса пересуммированы
     assert primary["_votes_type"] == {"Person (male)": 10,
                                       "Person (female)": 3}
     assert primary["type"] == "Person (male)"
+
+
+@pytest.mark.parametrize("a,b,reading", [
+    ("第9基地", "第10基地", "dijidi"),
+    ("11区", "十一区", "shi yiqu"),
+    ("S级", "3S级", "s ji"),
+    ("辰", "陈", "chen"),
+    ("1979队", "222队", "dui"),
+])
+def test_merge_alias_groups_needs_same_spelling(a, b, reading):
+    """Одного произношения мало: 第9基地 и 第10基地 звучат одинаково, но это
+    РАЗНЫЕ объекты. Склеенная запись искала один перевод по обоим и подменяла
+    числа в тексте; в aliases попадал чужой термин."""
+    data = [{"term": a, "pinyin": reading, "count": 5},
+            {"term": b, "pinyin": reading, "count": 5}]
+    assert NER.merge_alias_groups(data, SilentLog()) == 0
+    assert [d["term"] for d in data] == [a, b]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -617,21 +633,20 @@ def test_merge_into_locked_keeps_fields():
 
 def test_merge_alias_groups_locked_primary():
     """Один замок в группе — он и есть основная запись: term, поля и голоса
-    не меняются, вторичная запись уходит в aliases."""
+    не меняются."""
     data = [
         {"term": "陈阳", "pinyin": "Chen Yang", "count": 3,
          "type": "Person (female)", "_votes_type": {"Person (female)": 3}},
-        {"term": "陳陽", "pinyin": "chen yang", "count": 10,
+        {"term": "陈阳", "pinyin": "chen yang", "count": 10,
          "type": "Person (male)", "_votes_type": {"Person (male)": 10},
          LOCK: True},
     ]
     n = NER.merge_alias_groups(data, SilentLog())
     assert n == 1 and len(data) == 1
-    assert data[0]["term"] == "陳陽"          # зафиксированная запись главная
+    assert data[0]["term"] == "陈阳"          # зафиксированная запись главная
     assert data[0]["type"] == "Person (male)"  # поля не перезаписаны
     assert data[0]["_votes_type"] == {"Person (male)": 10}
     assert data[0]["count"] == 13
-    assert "陈阳" in data[0].get("aliases", [])
 
 
 def test_merge_alias_groups_all_locked_skipped():
@@ -640,7 +655,7 @@ def test_merge_alias_groups_all_locked_skipped():
         {"term": "陈阳", "pinyin": "Chen Yang", "count": 3,
          "type": "Person (male)", "_votes_type": {"Person (male)": 3},
          LOCK: True},
-        {"term": "陳陽", "pinyin": "chen yang", "count": 10,
+        {"term": "陈阳", "pinyin": "chen yang", "count": 10,
          "type": "Person (female)",
          "_votes_type": {"Person (female)": 10}, LOCK: True},
     ]
