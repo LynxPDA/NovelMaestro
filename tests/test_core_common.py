@@ -646,6 +646,20 @@ def test_build_chapter_map_duplicates_and_files(tmp_path):
     assert C.build_chapter_map(str(tmp_path / "нет")) == {}
 
 
+def test_build_chapter_map_order_is_numeric(tmp_path):
+    """Порядок ключей — по номеру главы, а не по имени папки.
+
+    Алфавит ставит «00000_100…» раньше «00000_1_…»: «0» < «_». Любой обход
+    .items() без своего sorted() начинал с сотых глав (боевая книга: 16
+    потоков брали 100–114, а 1–9 ждали конца книги).
+    """
+    for n in (1, 2, 3, 9, 10, 12, 100, 101, 414):
+        (tmp_path / f"00000_{n}_第{n}章").mkdir()
+    assert sorted(os.listdir(tmp_path))[0].startswith("00000_100")  # алфавит
+    assert list(C.build_chapter_map(str(tmp_path))) == [
+        1, 2, 3, 9, 10, 12, 100, 101, 414]
+
+
 @pytest.mark.parametrize("change", ["rename", "rewrite", "new", "delete"])
 def test_dir_fingerprint_sees_any_change(tmp_path, change):
     """Отпечаток каталога видит переименование, правку и удаление файла.

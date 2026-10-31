@@ -563,6 +563,39 @@ def test_pipeline_full_cycle_events(tmp_path):
         assert (d / "polished.txt").is_file()
 
 
+def test_pipeline_feeds_chapters_in_numeric_order(tmp_path):
+    """Главы уходят в пул по возрастанию номера, а не по имени папки.
+
+    Раскладка боевой книги — «00000_<номер>_<заголовок>»: в алфавитном
+    sorted() «00000_100…» и «00000_10…» идут раньше «00000_1_…» («0» < «_»),
+    и 16 потоков конвейера начинали с глав 100–114, оставляя 1–9 в хвосте.
+    """
+    proj = tmp_path / "project"
+    ch_dir = proj / "chapters"
+    ch_dir.mkdir(parents=True)
+    fake = tmp_path / "translate_book.py"
+    fake.write_text(FAKE_TRANSLATE, encoding="utf-8")
+    for n in (1, 2, 3, 10, 12, 100):
+        d = ch_dir / f"00000_{n}_第{n}章"
+        d.mkdir()
+        (d / "chapter.txt").write_text("text\n", encoding="utf-8")
+    assert sorted(p.name for p in ch_dir.iterdir())[0].startswith(
+        "00000_100")
+    # один поток — задачи берутся строго в порядке подачи в пул (при
+    # нескольких порядок событий задавал бы планировщик, а не код)
+    out = subprocess.run(
+        [sys.executable, str(PIPELINE), "--action", "1",
+         "--start", "1", "--end", "100", "--jobs", "1",
+         "--script", str(fake), *_PIPELINE_ARGS],
+        capture_output=True, text=True, timeout=120, cwd=str(proj))
+    assert out.returncode == 0, out.stderr[-500:]
+    ids = [json.loads(line[len(CHAPTER_PREFIX):])["id"]
+           for line in out.stdout.splitlines()
+           if line.startswith(CHAPTER_PREFIX)
+           and json.loads(line[len(CHAPTER_PREFIX):])["status"] == "OK"]
+    assert ids == [1, 2, 3, 10, 12, 100], ids
+
+
 def test_pipeline_polish_from_translated(tmp_path):
     """Действие 4 — полировка (исходник - Перевод): вход translated.txt,
     а не redacted.txt (redacted.txt не создаём — иначе был бы SKIP)."""
@@ -672,6 +705,26 @@ def test_pipeline_fail_fast(tmp_path):
     errs = [e for e in events if e["status"] == "ERROR"]
     assert len(errs) >= 1
     assert "ОШИБКА" in r.stdout or "ERROR" in r.stdout
+
+
+def test_pipeline_chapters_in_range_is_numeric():
+    """`chapters_in_range` задаёт порядок подачи явно, а не берёт из карты.
+
+    Карта может прийти в любом порядке (её строят разные вызывающие), а от
+    порядка пула зависит, какие главы возьмут потоки первыми: на боевой книге
+    потоки брали 100–114 вместо 1–9.
+    """
+    from web.pipeline import chapters_in_range
+    chapters = {100: ["c/100"], 101: ["c/101"], 10: ["c/10"],
+                1: ["c/1"], 2: ["c/2"], 12: ["c/12"]}
+    got = chapters_in_range(chapters, 1, 100)
+    assert list(got) == [1, 2, 10, 12, 100]
+    # диапазон отсекает края, путь — Path, папок у номера может быть несколько
+    dup = {1: ["a/1", "b/1"], 2: ["a/2"], 3: ["a/3"]}
+    out = chapters_in_range(dup, 1, 2)
+    assert list(out) == [1, 2]
+    assert [Path(p).name for p in out[1]] == ["1", "1"]
+    assert chapters_in_range({}, 1, 9) == {}
 
 
 def test_pipeline_no_chapters(tmp_path):

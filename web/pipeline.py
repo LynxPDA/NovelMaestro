@@ -404,6 +404,19 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
             "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
 
 
+def chapters_in_range(chapters: dict, start: int, end: int) -> dict:
+    """Главы диапазона по возрастанию номера — порядок подачи в пул.
+
+    Порядок ключей здесь — расписание работы: однопоточный обход `with
+    ThreadPoolExecutor` берёт задачи в порядке поданных futures. Поэтому он не
+    наследуется от карты, а задаётся явно. Алфавитный порядок имён папок
+    ставит «00000_100…» и «00000_10…» раньше «00000_1_…» («0» < «_»): на
+    боевой книге 16 потоков брали главы 100–114, а первые ждали конца книги.
+    """
+    return {cid: [Path(p) for p in chapters[cid]]
+            for cid in sorted(chapters) if start <= cid <= end}
+
+
 def grep_errors(text: str, max_lines: int = 20) -> list[str]:
     """Строки с признаками ошибок. Имя уровня логгера (- WARNING -)
     отрезается до матчинга — иначе любое предупреждение валит главу."""
@@ -840,8 +853,9 @@ def main() -> None:
             log.info("ПРЕДПРОСМОТР : OK — %s", pv)
         sys.exit(0)
 
-    to_process = {cid: [Path(p) for p in dirs]
-                  for cid, dirs in chapters.items() if start <= cid <= end}
+    # порядок подачи в пул — возрастание номера главы (chapters_in_range):
+    # имена папок алфавитно ставят «00000_100…» раньше «00000_1_…»
+    to_process = chapters_in_range(chapters, start, end)
     tracker = Tracker(list(to_process.keys()), stages)
     for cid in range(start, end + 1):
         if cid not in to_process:

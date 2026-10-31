@@ -3204,7 +3204,15 @@ def parse_chapter_id(folder_name: str):
 
 
 def build_chapter_map(chapters_dir, logger=None) -> dict:
-    """{номер: [пути папок]}. Дубли сохраняются списком — решают вызывающие."""
+    """{номер: [пути папок]} по возрастанию номера. Дубли — списком.
+
+    Порядок ключей ЧИСЛОВОЙ, а не алфавитный по именам папок: алфавит
+    ставит «00000_100…» и «00000_10…» раньше «00000_1_…» («0» < «_»), и
+    любой обход .items() без своего sorted() начинал с сотых глав, оставляя
+    первые в хвосте. Конвейер подавал главы в пул потоками именно в этом
+    порядке: 16 потоков брали 100–114, а главы 1–9 ждали конца книги.
+    Внутри главы порядок папок остаётся алфавитным — его решают вызывающие.
+    """
     chapter_map: dict = defaultdict(list)
     if not os.path.isdir(chapters_dir):
         return {}
@@ -3219,7 +3227,7 @@ def build_chapter_map(chapters_dir, logger=None) -> dict:
         num = parse_chapter_id(entry)
         if num is not None:
             chapter_map[num].append(full)
-    return dict(chapter_map)
+    return dict(sorted(chapter_map.items()))
 
 
 _CH_BLACKLIST = {"raw", "draft", "translated", "original", "source", "backup"}
