@@ -3124,6 +3124,12 @@ def dir_fingerprint(path, max_bytes: int = 32) -> tuple:
     данные), а содержимое файла читается не больше max_bytes — этого хватает,
     чтобы заметить правку без смены размера.
 
+    Подпапки тоже входят в отпечаток: у `chapters/` внутри одни каталоги
+    глав, и отпечаток «только файлов» не менялся бы никогда — кеш опций не
+    видел разбора исходника (диапазон глав оставался пустым). От подпапки
+    берётся только имя и mtime: содержимое глав считают те, кому оно нужно
+    (свои сигнатуры), а не список опций.
+
     Возвращает кортеж (имя, размер, mtime_ns, срез содержимого), отсорти-
     рованный по имени; папки нет — пустой кортеж.
     """
@@ -3132,6 +3138,11 @@ def dir_fingerprint(path, max_bytes: int = 32) -> tuple:
         with os.scandir(path) as it:
             for entry in it:
                 try:
+                    if entry.is_dir():
+                        st_dir = entry.stat()
+                        items.append((entry.name + "/", 0, st_dir.st_mtime_ns,
+                                      None))
+                        continue
                     if not entry.is_file():
                         continue
                     st = entry.stat()

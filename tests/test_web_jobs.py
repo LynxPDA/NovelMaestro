@@ -2979,3 +2979,32 @@ def test_read_sidecar_recovers_events_from_glued_log(tmp_path):
     assert got[(1103, 1)] == "OK" and got[(1103, 2)] == "OK"
     # слипшаяся лог-строка осталась в буфере — панель лога не переписана
     assert any("209/720" in line for line in job.lines)
+
+
+def test_stage_options_see_new_chapters(jobs_srv, tmp_path):
+    """Разбор исходника (новые папки глав) виден опциям следующей стадии.
+
+    Кеш опций сравнивал отпечаток ФАЙЛОВ в папках, а у chapters/ внутри
+    только каталоги глав: сигнатура не менялась никогда, и после разбора
+    диапазон глав в форме глоссария оставался пустым до перезапуска
+    сервера.
+    """
+    from web.api import _OPTIONS_CACHE
+    _OPTIONS_CACHE.clear()
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    (pdir / "chapters").mkdir(parents=True, exist_ok=True)
+    res, payload = req("GET",
+                       "/api/stages/ner/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert "chapters" not in payload["options"], "глав ещё нет"
+
+    for i in (1, 2, 3):
+        (pdir / "chapters" / f"00000_{i}_Глава").mkdir()
+    res, payload = req("GET",
+                       "/api/stages/ner/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert payload["options"]["chapters"] == {"min": 1, "max": 3,
+                                              "ids": [1, 2, 3]}
+    _OPTIONS_CACHE.clear()

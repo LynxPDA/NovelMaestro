@@ -1518,6 +1518,47 @@ test("запуски epub: исходник автоподхватывается
   delete globalThis.__stageOptions;
 });
 
+test("запуски: диапазон глав добирается после разбора исходника", async () => {
+  /* Разбор пишет папки глав ПОСЛЕ открытия формы: опции, снятые при
+     первом рендере, были пусты, и границы книги в поле не появлялись —
+     глоссарий запускался «по всей книге» без единого числа в диапазоне.
+     Форма собирается один раз, поэтому добор идёт при каждом рендере. */
+  globalThis.__stageOptions = {}; // глав ещё нет
+  const job = { id: RUN_JOB, action: "ner", project: "ACTIVE/Книга",
+    status: "running", lines: [], events: [], progress: null };
+  const page = await runView(job, [
+    { type: "snapshot", lines: [], events: [], progress: null },
+    { type: "status", status: "done" },
+  ]);
+  const ranges = () => findTag(page, "input")
+    .filter((i) => String(i.className).includes("run-range"));
+  assert.deepEqual(ranges().map((i) => i.value), ["", ""],
+    "глав не было — диапазон пуст");
+  /* разбор исходника завершился: главы появились, стрим закрылся и
+     форма перечитала опции */
+  globalThis.__stageOptions = { chapters: { min: 1, max: 3, ids: [1, 2, 3] } };
+  await settled();
+  assert.equal(ranges()[0].value, "1", "начало — первая глава книги");
+  assert.equal(ranges()[1].value, "3", "конец — последняя");
+});
+
+test("запуски: пустой диапазон из памяти книги не гасит автоподхват", async () => {
+  /* книга помнит пустой диапазон: форма открывалась, когда глав не было.
+     Пустое значение — не выбор, а «вся книга», поэтому оно не перекрывает
+     границы из опций (иначе поле стоит пустым при живых главах). */
+  globalThis.__bookState("ACTIVE", "Книга").store.setItem(
+    "runVals:ACTIVE/Книга:ner",
+    JSON.stringify({ start: "", end: "", chunk_size: "8000" }),
+  );
+  globalThis.__stageOptions = { chapters: { min: 1, max: 3, ids: [1, 2, 3] } };
+  const page = await runStage("ner");
+  const [start, end] = findTag(page, "input")
+    .filter((i) => String(i.className).includes("run-range"));
+  assert.equal(start.value, "1", "начало подхвачено первой главой");
+  assert.equal(end.value, "3", "конец — последней");
+  delete globalThis.__stageOptions;
+});
+
 test("запуски epub: переименованный исходник заменяет «мёртвый» выбор из памяти", async () => {
   /* Память книги держит имя старого файла. Файл переименовали на диске —
      имя в поле оставалось, автоподхват не срабатывал (выбор не пуст), и

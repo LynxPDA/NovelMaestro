@@ -474,6 +474,22 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         const auto = UICore.autofileValue(f, st.options);
         if (auto) vals[f.name] = auto; // значение — имя файла, не путь
       }
+      // диапазон глав: те же правила для уже открытой формы. Разбор
+      // исходника пишет главы ПОСЛЕ того, как форму открыли (или до того,
+      // но опции тогда были пусты) — пустое поле добивается границей
+      // книги при каждом рендере, пока его не тронули. Без этого глоссарий
+      // стоял с пустым диапазоном после разбора и в запуск уходила вся
+      // книга — на вид «ничего не произошло» только в поле
+      const ch = (st.options || {}).chapters || {};
+      ["start", "end"].forEach((name) => {
+        if (!(spec.fields || []).some((f) => f.name === name)) return;
+        if (touched.has(name)) return;
+        const cur = String(vals[name] == null ? "" : vals[name]).trim();
+        const d = name === "start" ? ch.min : ch.max;
+        if (cur !== "" || d == null) return;
+        vals[name] = String(d);
+        (st.baseline[key] || {})[name] = String(d);
+      });
     }
     // Одна форма на стадию: «Простой/Экспертный» и пресеты убраны, все
     // поля идут из реестра настроек (spec.fields)
@@ -626,6 +642,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     for (const f of spec.fields || []) {
       if (f.name === PROFILE_FIELD) continue; // память профиля — своя, по стадии
       if (saved[f.name] === undefined) continue;
+      // пустой диапазон — не выбор, а «вся книга»: память, снятая до разбора
+      // исходника (глав ещё не было), не должна гасить автоподхват границ
+      // книги, иначе панель глоссария стоит пустой при живых главах
+      if ((f.name === "start" || f.name === "end")
+          && String(saved[f.name]).trim() === "") continue;
       // исчезнувший файл не возвращается из памяти: поле остаётся пустым,
       // чтобы сработал автоподхват (autofile) и человек видел живой выбор
       const items = (pools || {})[f.name];
