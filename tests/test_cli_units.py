@@ -177,12 +177,12 @@ def test_ner_merge_alias_groups():
 
 
 def test_ner_term_numbers():
-    """Цифра и иероглиф-числительное — одно число, разные числа — разные."""
-    assert NER.term_numbers("十一区") == NER.term_numbers("11区") == (11,)
+    """Номера термина: цифры любой письменности и римские числа."""
+    assert NER.term_numbers("11区") == (11,)
     assert NER.term_numbers("第9基地") != NER.term_numbers("第10基地")
     assert NER.term_numbers("S级") == () and NER.term_numbers("3S级") == (3,)
+    assert NER.term_numbers("Base IX") == (9,)
     assert NER.term_numbers("基地") == ()
-
 
 def test_ner_load_two_pass_prompts(tmp_path):
     p = tmp_path / "prompts.txt"
