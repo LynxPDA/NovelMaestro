@@ -362,7 +362,7 @@ GROUPS: tuple = (
         ),
         _block("translate_check", STAGE_TITLES["translate_check"],
             _s("TRANSLATE_CHECK_CHECK_TYPE", "Тип файлов глав", "select", "polished", options=("polished", "redacted", "translated"),
-                help="Цепочка стадий polished → redacted → translated → chapter: тип сравнивается с ближайшей предыдущей стадией, у которой есть файлы, и с оригиналом (chapter); нет промежуточной стадии — пары просто нет, а сравнение идёт с той, что есть", stage="translate_check"),
+                help="Цепочка стадий polished → redacted → translated → chapter: проверяются ВСЕ соседние звенья (polished ↔ redacted, redacted ↔ translated, translated ↔ chapter), у каждого свой эталон и своя база статистики — ровная пара выше не маскирует обрезку ниже; нет промежуточной стадии — звено пропускается, а цепочка идёт дальше через ту стадию, что есть", stage="translate_check"),
             _s("TRANSLATE_CHECK_EXCLUDE_WORDS", "Слова-исключения (через запятую)", "text", "",
                 help="Совпадения regexp-проверок, совпадающие с этими словами целиком, в отчёт не попадают (например «Linux», если латиница в тексте допустима); пусто = ничего не исключается", stage="translate_check"),
             _s("TRANSLATE_CHECK_TOLERANCE_STAGES", "Допуск соотношения размеров: соседние стадии, % (0 = нет)", "number", "5", min=0,

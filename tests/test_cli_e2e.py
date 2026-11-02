@@ -41,7 +41,8 @@ def _build_valid_chapter(dir_path: Path, num: int,
 def test_tc_check_chapter_clean(tmp_path):
     d = _build_valid_chapter(tmp_path, 1)
     errors, prev = TC.check_chapter(1, str(d), "polished",
-                                    [("redacted", "neighbor"), ("chapter", "original")],
+                                    [("polished", "redacted", "stage"),
+                                     ("redacted", "chapter", "original")],
                                     strict=False, prev_inner_chapter=None)
     assert errors == [], f"ожидалось без ошибок: {errors}"
     assert prev == 1
@@ -59,7 +60,7 @@ def test_tc_check_chapter_errors(tmp_path):
     checks = [TC.parse_regexp_rule(l) for l in
               ("(?<=\\n)\\s*Глава\\s+\\d+", "[一-鿿]+", "[a-zA-Z]+")]
     errors, prev = TC.check_chapter(1, str(d), "polished",
-                                    [("redacted", "neighbor")],
+                                    [("polished", "redacted", "stage")],
                                     strict=False, prev_inner_chapter=5,
                                     regexp_checks=[c for c in checks if c])
     joined = "\n".join(errors)
@@ -80,14 +81,14 @@ def test_tc_check_chapter_regexp_controls(tmp_path):
     (d / "redacted.txt").write_text(broken, encoding="utf-8")
     # regexp-проверки ВЫКЛЮЧЕНЫ (пустой список)
     errors, _ = TC.check_chapter(1, str(d), "polished",
-                                 [("redacted", "neighbor")],
+                                 [("polished", "redacted", "stage")],
                                  strict=False, prev_inner_chapter=None,
                                  exclusions=[], regexp_checks=[])
     joined = "\n".join(errors)
     assert "broken" not in joined and "中" not in joined
     # свой список — только иероглифы
     errors, _ = TC.check_chapter(
-        1, str(d), "polished", [("redacted", "neighbor")],
+        1, str(d), "polished", [("polished", "redacted", "stage")],
         strict=False, prev_inner_chapter=None,
         exclusions=[], regexp_checks=[re.compile(r"[一-鿿]+")])
     joined = "\n".join(errors)
@@ -105,7 +106,7 @@ def test_tc_check_chapter_sequence_default_on(tmp_path):
     (d / "redacted.txt").write_text(broken, encoding="utf-8")
     # сбой нумерации — ошибка по умолчанию
     errors, prev = TC.check_chapter(1, str(d), "polished",
-                                    [("redacted", "neighbor")],
+                                    [("polished", "redacted", "stage")],
                                     strict=False, prev_inner_chapter=5,
                                     exclusions=[])
     joined = "\n".join(errors)
@@ -117,7 +118,7 @@ def test_tc_check_chapter_sequence_default_on(tmp_path):
     (d / "polished.txt").write_text(custom, encoding="utf-8")
     (d / "redacted.txt").write_text(custom, encoding="utf-8")
     errors, prev = TC.check_chapter(1, str(d), "polished",
-                                    [("redacted", "neighbor")],
+                                    [("polished", "redacted", "stage")],
                                     strict=False, prev_inner_chapter=None,
                                     exclusions=[])
     joined = "\n".join(errors)
@@ -135,7 +136,7 @@ def test_tc_check_chapter_sequence_off(tmp_path):
     checks = [TC.parse_regexp_rule(l) for l in
               ("(?<=\\n)\\s*Глава\\s+\\d+",)]
     errors, prev = TC.check_chapter(1, str(d), "polished",
-                                    [("redacted", "neighbor")],
+                                    [("polished", "redacted", "stage")],
                                     strict=False, prev_inner_chapter=5,
                                     exclusions=[], sequence_check=False,
                                     regexp_checks=[c for c in checks if c])
@@ -761,7 +762,7 @@ def test_tc_check_chapter_small_file_and_missing_ref(tmp_path):
     d.mkdir()
     (d / "polished.txt").write_text("короткий файл", encoding="utf-8")
     errors, _ = TC.check_chapter(
-        1, str(d), "polished", [("redacted", "stage")],
+        1, str(d), "polished", [("polished", "redacted", "stage")],
         strict=False, prev_inner_chapter=None, exclusions=[],
         stats={"redacted": {"n": 10, "center": 1.0, "sigma": 0.0,
                             "tol": 0.005, "k": 7, "off": False}})

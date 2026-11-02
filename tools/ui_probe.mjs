@@ -231,7 +231,8 @@ function seedProjectsDir(dir) {
       "Цепочка       : polished → redacted → translated → chapter",
       "Статистика (по всей книге, 2 папок без дублей):",
       "  polished vs redacted: глав 1320, среднее 0.999, допуск ±10% → отношение 0.908–1.099 (разброс книги 0.40%)",
-      "  polished vs chapter: глав 2, среднее 1.356, допуск ±20% → отношение 1.130–1.627 (разброс книги 4.70%)",
+      "  redacted vs translated: глав 2, среднее 1.000, допуск ±5% → отношение 0.949–1.051 (разброс книги 0.20%)",
+      "  translated vs chapter: глав 2, среднее 1.356, допуск ±20% → отношение 1.130–1.627 (разброс книги 4.70%)",
       "---------------------------------",
       /* ошибка соотношения — у ВТОРОЙ главы: «Редактор» по умолчанию
          открывает первую, поэтому клик по точке обязан отличиться от неё */
@@ -2811,7 +2812,7 @@ async function main() {
         })),
         legend: (el.querySelector(".check-scale-legend") || {}).textContent?.trim() || "",
       })));
-    if (sc.length !== 2) problems.push(`шкала отчёта: полос ${sc.length} (ожидаем 2)`);
+    if (sc.length !== 3) problems.push(`шкала отчёта: полос ${sc.length} (ожидаем 3)`);
     const first = sc[0] || {};
     if (first.title !== "polished vs redacted")
       problems.push(`шкала отчёта: подпись «${first.title}»`);
@@ -2831,6 +2832,11 @@ async function main() {
       problems.push(`шкала отчёта: позиция точки «${dot.left}»`);
     if (!/отношение 0\.900 · глава 2 — вне допуска/.test(dot.title || ""))
       problems.push(`шкала отчёта: тултип точки «${dot.title}»`);
+    /* третья пара — соседние стадии ниже polished: без неё обрезка
+       на редактировании (redacted↔translated) не проверялась вовсе */
+    const third = sc[2] || {};
+    if (third.title !== "translated vs chapter")
+      problems.push(`шкала отчёта: третья пара «${third.title}»`);
     if (!/глав в базе: 1320/.test(first.legend || ""))
       problems.push(`шкала отчёта: подпись «${first.legend}»`);
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-check-scale.png") });

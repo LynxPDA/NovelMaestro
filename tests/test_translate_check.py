@@ -61,12 +61,14 @@ def test_check_chapter_exclusions(tmp_path):
                                      "redacted": "Глава 1\n\nслово VIP и нормальный русский текст. " * 60})
     latin = TC.parse_regexp_rule("[a-zA-Z]+")
     # без исключений — VIP даёт ошибку латиницы
-    errors, _ = TC.check_chapter(1, d, "polished", [("redacted", "neighbor")],
+    errors, _ = TC.check_chapter(1, d, "polished",
+                                 [("polished", "redacted", "stage")],
                                  False, None, exclusions=[],
                                  regexp_checks=[latin])
     assert any("VIP" in e for e in errors)
     # с исключением — чисто
-    errors, _ = TC.check_chapter(1, d, "polished", [("redacted", "neighbor")],
+    errors, _ = TC.check_chapter(1, d, "polished",
+                                 [("polished", "redacted", "stage")],
                                  False, None, exclusions=["vip"],
                                  regexp_checks=[latin])
     assert not any("VIP" in e for e in errors)
@@ -77,21 +79,29 @@ def test_check_chapter_exclusions(tmp_path):
 
 
 def test_comparisons_for():
-    """Цепочка polished → redacted → translated → chapter.
+    """Цепочка polished → redacted → translated → chapter: ВСЕ звенья.
 
-    Порядок пар — от ближайшей стадии к оригиналу. Запасная стадия (вторая
-    в цепочке) нужна там, где соседней у части глав нет; пара с оригиналом
-    есть только когда в книге есть chapter.
+    Проверяется не только ближайшая стадия: у каждой пары свой эталон, и
+    обрезка на редактировании (redacted ↔ translated) не прячется за ровной
+    парой выше. Пара с оригиналом есть только когда в книге есть chapter.
     """
     assert TC.comparisons_for("polished") == [
-        ("redacted", "stage"), ("translated", "stage"),
-        ("chapter", "original")]
+        ("polished", "redacted", "stage"),
+        ("redacted", "translated", "stage"),
+        ("translated", "chapter", "original")]
     assert TC.comparisons_for("redacted") == [
-        ("translated", "stage"), ("chapter", "original")]
-    assert TC.comparisons_for("translated") == [("chapter", "original")]
+        ("redacted", "translated", "stage"),
+        ("translated", "chapter", "original")]
+    assert TC.comparisons_for("translated") == [
+        ("translated", "chapter", "original")]
+    # книга без промежуточной стадии цепочку не рвёт: звенья идут через неё
+    assert TC.comparisons_for("polished", ("polished", "translated",
+                                           "chapter")) == [
+        ("polished", "translated", "stage"),
+        ("translated", "chapter", "original")]
     # набора файлов книги не хватает — лишних пар нет
     assert TC.comparisons_for("polished", ("polished", "redacted")) == [
-        ("redacted", "stage")]
+        ("polished", "redacted", "stage")]
     assert TC.comparisons_for("polished", ()) == []
 
 
@@ -107,9 +117,13 @@ def test_present_from_files():
 
 
 def _stats(files, counts, tol=5.0, check_type="polished", tol_original=None):
-    """Статистика пар: допуск в ПРОЦЕНТАХ (по умолчанию один на обе группы)."""
-    comps = TC.comparisons_for(check_type)
-    return TC.collect_stats(files, check_type, comps, counts, tol,
+    """Статистика звеньев: допуск в ПРОЦЕНТАХ (по умолчанию один на обе группы).
+
+    Звенья строятся по ФАКТИЧЕСКОМУ набору файлов книги — как в прогоне:
+    книга без translated не даёт звена redacted ↔ translated.
+    """
+    comps = TC.comparisons_for(check_type, TC.present_from(files))
+    return TC.collect_stats(files, comps, counts, tol,
                             tol if tol_original is None else tol_original)
 
 
@@ -120,9 +134,11 @@ def test_collect_stats_log_center_and_sigma():
     поэтому «среднее × tol⁻¹…среднее × tol» одинаково строг в обе стороны.
     """
     files = {i: {"polished": f"p{i}", "redacted": f"r{i}",
-                 "chapter": f"c{i}"} for i in range(1, 31)}
+                 "translated": f"t{i}", "chapter": f"c{i}"
+                 } for i in range(1, 31)}
     counts = {f"p{i}": 1000 for i in range(1, 31)}
     counts.update({f"r{i}": 1000 for i in range(1, 31)})
+    counts.update({f"t{i}": 1000 for i in range(1, 31)})
     counts.update({f"c{i}": 600 for i in range(1, 31)})
     st = _stats(files, counts)
     assert st["redacted"]["n"] == 30
@@ -145,9 +161,13 @@ def test_collect_stats_two_knobs():
     files, counts = {}, {}
     for i in range(1, 21):
         files[i] = {"polished": f"p{i}", "redacted": f"r{i}",
-                    "chapter": f"c{i}"}
+                    "translated": f"t{i}", "chapter": f"c{i}"}
+        # разброс одинаков в обеих группах: polished/redacted и
+        # translated/chapter колеблются на ±15%, а звено redacted↔translated
+        # ровное (иначе тест был бы не про ручки допуска)
         counts[f"p{i}"] = 1000 + (i % 2) * 150
         counts[f"r{i}"] = 1000
+        counts[f"t{i}"] = 1000 + (i % 2) * 150
         counts[f"c{i}"] = 1000
     st = _stats(files, counts, tol=3.0, tol_original=12.0)
     assert st["redacted"]["tol_pct"] == 3.0
@@ -179,28 +199,39 @@ def test_collect_stats_tolerance_is_percent_not_spread():
 
 
 def test_collect_stats_n0_n1():
-    """n=0 и n=1: пара без статистики, помечается в шапке отчёта."""
-    st = _stats({}, {})
-    assert st["chapter"]["n"] == 0
-    assert not TC.active(st["chapter"])
-    assert TC.stats_line("polished", "chapter", st["chapter"]) == ""
-    files = {1: {"polished": "p1", "chapter": "c1"}}
-    st1 = _stats(files, {"p1": 100, "c1": 60})
-    assert st1["chapter"]["n"] == 1
-    assert not TC.active(st1["chapter"])
+    """n=0 и n=1: звено без статистики, помечается в шапке отчёта.
+
+    Пустая книга звеньев не даёт вовсе (нет пары файлов) — проверяем на
+    книге, где звено есть, но полноценной базы у него нет.
+    """
+    empty = _stats({}, {})
+    assert empty == {}
+    files = {1: {"polished": "p1", "redacted": "r1"}}
+    st1 = _stats(files, {"p1": 100, "r1": 60})
+    assert st1["redacted"]["n"] == 1
+    assert not TC.active(st1["redacted"])
 
 
 def test_collect_stats_off_when_tolerance_zero():
     """Допуск 0 — пара выключена, но из отчёта не исчезает: шапка показывает
     её выключенной, а не молчит о ней."""
-    files = {i: {"polished": f"p{i}", "redacted": f"r{i}"} for i in (1, 2, 3)}
+    files = {i: {"polished": f"p{i}", "redacted": f"r{i}",
+                 "translated": f"t{i}", "chapter": f"c{i}"}
+             for i in (1, 2, 3)}
     counts = {f"p{i}": 100 for i in (1, 2, 3)}
     counts.update({f"r{i}": 100 for i in (1, 2, 3)})
-    st = TC.collect_stats(files, "polished", TC.comparisons_for("polished"),
+    counts.update({f"t{i}": 100 for i in (1, 2, 3)})
+    counts.update({f"c{i}": 100 for i in (1, 2, 3)})
+    st = TC.collect_stats(files,
+                          TC.comparisons_for("polished",
+                                             TC.present_from(files)),
                           counts, 0.0, 5.0)
+    # ручка соседних стадий в нуле — оба звена стадий выключены, пара с
+    # оригиналом живёт своей ручкой
     assert st["redacted"]["off"] is True and not TC.active(st["redacted"])
+    assert st["translated"]["off"] is True and not TC.active(st["translated"])
     assert st["chapter"]["off"] is False
-    line = TC.stats_line("polished", "redacted", st["redacted"])
+    line = TC.stats_line("redacted", st["redacted"])
     assert "выключено" in line and "допуск 0%" in line
 
 
@@ -280,14 +311,15 @@ def test_stats_line_shows_bounds():
     печатается справочно."""
     st = {"n": 100, "center": 1.0, "sigma": 0.004, "tol_pct": 10.0,
           "tol": math.log(1.1), "off": False}
-    line = TC.stats_line("polished", "redacted", st)
+    line = TC.stats_line("redacted", dict(st, check="polished"))
     assert "0.909–1.100" in line, line
     assert "допуск ±10%" in line and "разброс книги 0.40%" in line, line
     assert "K=" not in line, line
     # малая база ничем не отличается: допуск тот же процент, подписи о
     # «разброс не учитывается» больше нет
     small = dict(st, n=3)
-    assert "допуск ±10%" in TC.stats_line("polished", "chapter", small)
+    assert "допуск ±10%" in TC.stats_line(
+        "chapter", dict(small, check="translated"))
 
 
 def test_bounds_multiplicative():
@@ -379,8 +411,8 @@ def _synth_book(tmp_path, n: int, pol: int = 60, ch: int = 100):
 def test_check_chapter_volume_caught(tmp_path):
     """Обрезанная глава ловится: отношение вне допуска пары."""
     files, counts = _synth_book(tmp_path, 20)
-    comps = TC.comparisons_for("polished")
-    stats = TC.collect_stats(files, "polished", comps, counts, 5.0, 5.0)
+    comps = TC.comparisons_for("polished", TC.present_from(files))
+    stats = TC.collect_stats(files, comps, counts, 5.0, 5.0)
     # глава 21: polished обрезан вдвое
     broken = _write_chapter(tmp_path, 21, {"polished": _body(30),
                                            "redacted": _body(60),
@@ -396,8 +428,8 @@ def test_check_chapter_volume_caught(tmp_path):
 def test_check_chapter_volume_ok(tmp_path):
     """Нормальные главы чисты."""
     files, counts = _synth_book(tmp_path, 10)
-    comps = TC.comparisons_for("polished")
-    stats = TC.collect_stats(files, "polished", comps, counts, 5.0, 5.0)
+    comps = TC.comparisons_for("polished", TC.present_from(files))
+    stats = TC.collect_stats(files, comps, counts, 5.0, 5.0)
     errors, _ = TC.check_chapter(5, "00000_5_x", "polished", comps, False,
                                  None, exclusions=[], counts=counts,
                                  stats=stats)
@@ -409,8 +441,9 @@ def test_check_chapter_volume_off(tmp_path):
     d = _write_chapter(tmp_path, 1, {"polished": "коротко",
                                      "redacted": "текст"})
     errors, _ = TC.check_chapter(1, d, "polished",
-                                 [("redacted", "stage")], False, None,
-                                 exclusions=[], counts=None, stats=None)
+                                 [("polished", "redacted", "stage")],
+                                 False, None, exclusions=[], counts=None,
+                                 stats=None)
     assert not any("отношение объёма" in e for e in errors)
 
 
@@ -418,8 +451,8 @@ def test_check_chapter_volume_no_stats(tmp_path):
     """Базы нет (n<2): объёмная проверка пропускается, помечена в шапке."""
     d = _write_chapter(tmp_path, 1, {"polished": "текст", "redacted": "текст"})
     errors, _ = TC.check_chapter(1, d, "polished",
-                                 [("redacted", "stage")], False, None,
-                                 exclusions=[], counts={"x": 1},
+                                 [("polished", "redacted", "stage")],
+                                 False, None, exclusions=[], counts={"x": 1},
                                  stats={"redacted": {"n": 0}})
     assert not any("отношение объёма" in e for e in errors)
 
@@ -443,56 +476,58 @@ def test_check_chapter_no_reference_is_silent(tmp_path):
 def test_check_chapter_fallback_stage_pair(tmp_path):
     """redacted у главы нет — сравнение идёт с translated (запасная стадия),
     и ошибка называет именно эту пару."""
-    d = _write_chapter(tmp_path, 1, {"polished": _body(20),
-                                     "translated": _body(60)})
-    comps = TC.comparisons_for("polished", ("polished", "redacted",
-                                           "translated"))
+    d = _write_chapter(tmp_path, 1, {"polished": _body(120),
+                                     "translated": _body(360)})
+    comps = TC.comparisons_for("polished", ("polished", "translated"))
     st = {"n": 30, "center": 1.0, "sigma": 0.0, "tol_pct": 0.5,
           "tol": math.log(1.005), "off": False}
-    stats = {"redacted": dict(st), "translated": dict(st)}
+    stats = {"translated": dict(st, check="polished")}
     counts = count_file_tokens([f"{d}/polished.txt", f"{d}/translated.txt"])
     errors, _ = TC.check_chapter(1, d, "polished", comps, False, None,
                                  exclusions=[], counts=counts, stats=stats)
     assert any("[polished vs translated]" in e for e in errors), errors
 
 
-def test_check_chapter_original_not_repeated(tmp_path):
-    """Глава разошлась с соседней стадией — про оригинал второй раз не
-    сообщаем: сдвиг один, и он уже назван."""
-    d = _write_chapter(tmp_path, 1, {"polished": _body(20),
-                                     "redacted": _body(60),
-                                     "chapter": _body(100)})
-    comps = TC.comparisons_for("polished", ("polished", "redacted", "chapter"))
+def test_check_chapter_original_not_blamed_twice(tmp_path):
+    """Цепочка разошлась ниже — про оригинал не добавляем «правьте оригинал»:
+    сдвиг один, и он уже назван по своему звену."""
+    d = _write_chapter(tmp_path, 1, {"polished": _body(120),
+                                     "redacted": _body(360),
+                                     "chapter": _body(360)})
+    comps = TC.comparisons_for("polished",
+                               ("polished", "redacted", "chapter"))
     st = {"n": 30, "center": 1.0, "sigma": 0.0, "tol_pct": 0.5,
           "tol": math.log(1.005), "off": False}
-    orig = {"n": 30, "center": 1.0, "sigma": 0.0, "tol_pct": 0.5,
-            "tol": math.log(1.005), "off": False}
-    stats = {"redacted": dict(st), "chapter": orig}
+    stats = {"redacted": dict(st, check="polished"),
+             "chapter": dict(st, check="redacted")}
     counts = count_file_tokens([f"{d}/{t}.txt"
                                 for t in ("polished", "redacted", "chapter")])
     errors, _ = TC.check_chapter(1, d, "polished", comps, False, None,
                                  exclusions=[], counts=counts, stats=stats)
+    # звено polished↔redacted вне допуска, звено redacted↔chapter — ровное
     assert any("[polished vs redacted]" in e for e in errors), errors
-    assert not any("[polished vs chapter]" in e for e in errors), errors
+    assert not any("правьте оригинал" in e for e in errors), errors
 
 
 def test_check_chapter_original_blamed_when_chain_clean(tmp_path):
     """Цепочка ровная, а оригинал вне допуска — так и пишем: правьте
     оригинал (термин, а не текст перевода)."""
-    d = _write_chapter(tmp_path, 1, {"polished": _body(60),
-                                     "redacted": _body(60),
-                                     "chapter": _body(20)})
-    comps = TC.comparisons_for("polished", ("polished", "redacted", "chapter"))
+    d = _write_chapter(tmp_path, 1, {"polished": _body(120),
+                                     "redacted": _body(120),
+                                     "chapter": _body(40)})
+    comps = TC.comparisons_for("polished",
+                               ("polished", "redacted", "chapter"))
     st = {"n": 30, "center": 1.0, "sigma": 0.0, "tol_pct": 0.5,
           "tol": math.log(1.005), "off": False}
     orig = {"n": 30, "center": 1.0, "sigma": 0.0, "tol_pct": 5.0,
             "tol": math.log(1.05), "off": False}
-    stats = {"redacted": dict(st), "chapter": orig}
+    stats = {"redacted": dict(st, check="polished"),
+             "chapter": dict(orig, check="redacted")}
     counts = count_file_tokens([f"{d}/{t}.txt"
                                 for t in ("polished", "redacted", "chapter")])
     errors, _ = TC.check_chapter(1, d, "polished", comps, False, None,
                                  exclusions=[], counts=counts, stats=stats)
-    hit = [e for e in errors if "[polished vs chapter]" in e]
+    hit = [e for e in errors if "[redacted vs chapter]" in e]
     assert hit and "правьте оригинал" in hit[0], errors
 
 
@@ -603,7 +638,7 @@ def test_check_chapter_min_file_size(tmp_path):
     """Минимальный размер файла — настраиваемый (БАЙТЫ)."""
     d = _write_chapter(tmp_path, 4, {"polished": "Глава 4\n\nкороткий текст",
                                      "redacted": "Глава 4\n\nкороткий текст"})
-    comps = [("redacted", "neighbor")]
+    comps = [("polished", "redacted", "stage")]
     # дефолт 3072 — файл мал → ошибка
     errors, _ = TC.check_chapter(4, d, "polished", comps,
                                  False, None, exclusions=[])
@@ -621,7 +656,7 @@ def test_check_chapter_header_canon_only(tmp_path):
     число из первой строки участвует в последовательности."""
     d = _write_chapter(tmp_path, 5, {"polished": "Раздел 5\n\n" + "русский текст. " * 100,
                                      "redacted": "Раздел 5\n\n" + "русский текст. " * 100})
-    comps = [("redacted", "neighbor")]
+    comps = [("polished", "redacted", "stage")]
     errors, prev = TC.check_chapter(5, d, "polished", comps,
                                     False, None, exclusions=[])
     assert not any("Нет «Глава N»" in e for e in errors)
@@ -633,7 +668,7 @@ def test_check_chapter_sequence_exact_next(tmp_path):
     быть ровно на 1 больше предыдущего (N+1)."""
     d = tmp_path / "00000_6_x"
     d.mkdir()
-    comps = [("redacted", "neighbor")]
+    comps = [("polished", "redacted", "stage")]
 
     def run(chapter_line, prev):
         body = chapter_line + "\n\n" + "русский текст. " * 100
@@ -664,7 +699,7 @@ def test_check_chapter_sequence_off(tmp_path):
     не накапливается (prev остаётся входным)."""
     d = _write_chapter(tmp_path, 7, {"polished": "Глава 1\n\n" + "русский текст. " * 100,
                                      "redacted": "Глава 1\n\n" + "русский текст. " * 100})
-    comps = [("redacted", "neighbor")]
+    comps = [("polished", "redacted", "stage")]
     errors, prev = TC.check_chapter(7, d, "polished", comps,
                                     False, 5, exclusions=[],
                                     sequence_check=False)
@@ -677,7 +712,7 @@ def test_check_chapter_sequence_no_number_in_first_line(tmp_path):
     следующая глава сравнивается с последним найденным номером."""
     d = _write_chapter(tmp_path, 8, {"polished": "Пролог\n\n" + "русский текст. " * 100,
                                      "redacted": "Пролог\n\n" + "русский текст. " * 100})
-    comps = [("redacted", "neighbor")]
+    comps = [("polished", "redacted", "stage")]
     errors, prev = TC.check_chapter(8, d, "polished", comps,
                                     False, 5, exclusions=[])
     assert not any("последовательность" in e for e in errors)
@@ -812,7 +847,7 @@ def test_pair_ratios_keyed_by_chapter(tmp_path):
     comps = TC.comparisons_for("polished", TC.present_from(files))
     counts = TC.count_file_tokens(
         sorted({p for row in files.values() for p in row.values()}))
-    ratios = TC.pair_ratios(files, "polished", comps, counts)
+    ratios = TC.pair_ratios(files, comps, counts)
     # перевода и оригинала в книге нет — пар по ним не возникает
     assert set(ratios) == {"redacted"}
     assert set(ratios["redacted"]) == {1, 2}
@@ -841,8 +876,8 @@ def test_pair_ratios_feed_stats(tmp_path):
     comps = TC.comparisons_for("polished", TC.present_from(files))
     counts = TC.count_file_tokens(
         sorted({p for row in files.values() for p in row.values()}))
-    ratios = TC.pair_ratios(files, "polished", comps, counts)
-    stats = TC.collect_stats(files, "polished", comps, counts, 10, 20)
+    ratios = TC.pair_ratios(files, comps, counts)
+    stats = TC.collect_stats(files, comps, counts, 10, 20)
     st = stats["redacted"]
     assert st["n"] == 4 and st["center"] == pytest.approx(1.0)
     assert TC.active(st)
@@ -900,3 +935,43 @@ def test_end_check_empty_chapter(tmp_path):
     errors, _ = TC.check_chapter(1, str(d), "polished", [], False, None,
                                  min_file_size=0)
     assert any("пуста" in e for e in errors)
+
+
+def test_redacted_drop_caught_by_its_own_pair(tmp_path):
+    """Обрезка на РЕДАКТУРЕ видна своим звеном (redacted ↔ translated).
+
+    Ровная пара polished ↔ redacted её не маскирует, а пара с оригиналом не
+    валит вину на оригинал: ошибка называет именно то звено, где текст
+    потерялся.
+    """
+    files, counts = {}, {}
+    for i in range(1, 21):
+        d = _write_chapter(tmp_path, i, {"polished": _body(200),
+                                         "redacted": _body(200),
+                                         "translated": _body(200),
+                                         "chapter": _body(100)})
+        files[i] = _row(d, ("polished", "redacted", "translated", "chapter"))
+        counts.update(count_file_tokens([f"{d}/{t}.txt" for t in
+                                         ("polished", "redacted", "translated",
+                                          "chapter")]))
+    comps = TC.comparisons_for("polished", TC.present_from(files))
+    stats = TC.collect_stats(files, comps, counts, 5.0, 20.0)
+    # глава 21: редактура потеряла треть текста, остальные звенья ровные
+    broken = _write_chapter(tmp_path, 21, {"polished": _body(200),
+                                           "redacted": _body(130),
+                                           "translated": _body(200),
+                                           "chapter": _body(100)})
+    counts.update(count_file_tokens([f"{broken}/{t}.txt" for t in
+                                     ("polished", "redacted", "translated",
+                                      "chapter")]))
+    errors, _ = TC.check_chapter(21, broken, "polished", comps, False, None,
+                                 exclusions=[], counts=counts, stats=stats)
+    # главное — звено НАЗВАНО: текст потерялся между translated и redacted
+    assert any("[redacted vs translated]" in e for e in errors), errors
+    # звено выше тоже расходится (polished 200 vs redacted 130 — отношение
+    # 1.5), и это не ложное срабатывание: файлы действительно разошлись.
+    # Ценность в том, что настоящая пара названа явно, а не спрятана за
+    # ближайшей соседней стадией
+    assert any("[polished vs redacted]" in e for e in errors), errors
+    # оригинал ровный — про него молчим: сдвиг уже назван выше
+    assert not any("vs chapter" in e for e in errors), errors
