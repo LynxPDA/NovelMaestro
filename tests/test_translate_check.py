@@ -866,7 +866,7 @@ def test_end_check_flags_broken_tail(tmp_path):
     d = _chapter_with_tail(tmp_path, 1, " И тут он")
     errors, _ = TC.check_chapter(1, str(d), "polished", [], False, None,
                                  min_file_size=0)
-    assert any("не кончается концом предложения" in e for e in errors)
+    assert any("не завершается символом конца предложения" in e for e in errors)
 
 
 def test_end_check_accepts_sentence_end(tmp_path):
