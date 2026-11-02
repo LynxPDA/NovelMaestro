@@ -264,6 +264,28 @@ def test_main_missing_input(tmp_path, monkeypatch):
     assert not (tmp_path / "translated_book.txt").exists()
 
 
+def test_main_broken_utf8_input(tmp_path, monkeypatch, caplog):
+    """Битый UTF-8 во входе — понятная ошибка с позицией, а не трейсбек.
+
+    Неполная перезапись двумя процессами рвёт многобайтный символ пополам:
+    главы 77/78 книги Abundant_Martial_Prowess падали UnicodeDecodeError
+    из <frozen codecs>, и по логу нельзя было понять, что файл испорчен."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
+    # «Бежать» в UTF-8: последний байт символа отрезан
+    (tmp_path / "redacted.txt").write_bytes(
+        "Начало.\n".encode() + "Бежать".encode()[:-1]
+        + " не удалось.\n".encode())
+    rc = TB.main(["redacted.txt", "--mode", "polish", "--host", "http://h",
+                  "--model", "m", "--threads", "1"])
+    assert rc == 1
+    text = caplog.text if hasattr(caplog, "text") else ""
+    assert "повреждён" in text or "повреждён" in "\n".join(
+        r.getMessage() for r in caplog.records)
+    # выход не создан: стадия не выдала мусорный перевод
+    assert not (tmp_path / "polished.txt").exists()
+
+
 def test_main_polish_gender_placeholders(tmp_path, monkeypatch):
     """polish: {female_names}/{male_names} подставляются из ner.json
     (translation + (female)/(male) в type; без term), литералы не утекают."""

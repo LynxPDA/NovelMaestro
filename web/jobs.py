@@ -402,12 +402,28 @@ class JobManager:
         }
 
     def _trim_locked(self) -> None:
-        """(лок уже взят): не более MAX_HISTORY запусков."""
+        """(лок уже взят): не более MAX_HISTORY запусков.
+
+        Активные (running) не выбрасываются, даже если они самые старые:
+        запись — это единственное, по чему `running_on` и `stop` находят
+        процесс. Выброшенный из истории долгий запуск исчезал из
+        интерфейса и снимал лок с проекта, а второй такой же стартовал
+        параллельно — два конвейера писали один и тот же translated.txt
+        (файл рвался посередине UTF-8 символа). Лимит в этом случае
+        превышается: живых запусков не бывает больше WEB_JOBS_LIMIT."""
         if len(self._jobs) <= self.MAX_HISTORY:
             return
-        ordered = sorted(self._jobs.values(),
+        # активные считаются в лимите: история держит MAX_HISTORY записей
+        # плюс столько живых, сколько сверх лимита осталось
+        running = [j for j in self._jobs.values() if j.status == "running"]
+        excess = len(self._jobs) - max(self.MAX_HISTORY, len(running))
+        if excess <= 0:
+            return
+        ordered = sorted((j for j in self._jobs.values()
+                          if j.status != "running"),
                          key=lambda j: j.created, reverse=True)
-        for stale in ordered[self.MAX_HISTORY:]:
+        # самые старые завершённые уходят первыми, живые остаются
+        for stale in ordered[-excess:]:
             self._jobs.pop(stale.id, None)
             self._drop_sidecar(stale.id)
 

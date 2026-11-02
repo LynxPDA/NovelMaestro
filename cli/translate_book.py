@@ -662,9 +662,27 @@ def main(argv=None):
                  for i, c in enumerate(json_chunks)]
     else:
         try:
-            with open(args.file, encoding="utf-8") as f:
-                chunks = split_text_smart(f.read(), args.chunk_size,
-                                          args.multiplier, logger)
+            with open(args.file, "rb") as f:
+                raw = f.read()
+        except OSError as exc:
+            logger.error("❌ Не удалось прочитать вход: %s", exc)
+            return 1
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            # Файл испорчен — обычно два писателя одного файла: неполная
+            # перезапись рвёт многобайтный символ пополам. Без этой ветки
+            # стадия падала трейсбеком, и причина не читалась.
+            logger.error(
+                "❌ Входной файл повреждён (не UTF-8): %s, позиция %d из %d "
+                "— оборванный многобайтный символ. Причина не в модели: "
+                "файл недописан, похоже на два процесса на одну книгу. "
+                "Пересоберите текст, затем повторите стадию.",
+                args.file, exc.start, len(raw))
+            return 1
+        try:
+            chunks = split_text_smart(text, args.chunk_size,
+                                      args.multiplier, logger)
         except OSError as exc:
             logger.error("❌ Не удалось прочитать вход: %s", exc)
             return 1

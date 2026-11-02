@@ -2466,6 +2466,40 @@ def test_jobs_history_trimmed(jobs_srv):
         assert f"{jid}.log" in remaining
 
 
+def test_jobs_trim_keeps_running(jobs_srv, fake_script):
+    """Работающий запуск переживает обрезку истории.
+
+    Запись в истории — единственное, по чему `running_on` находит процесс
+    и держит лок на проект. Выброшенная из-за лимита запись снимала лок, и
+    второй конвейер стартовал по той же книге: оба писали translated.txt, и
+    файл рвался посередине UTF-8 символа (главы 77/78 книги
+    Abundant_Martial_Prowess)."""
+    _, _, jm = jobs_srv
+    hang = jm.start("test", "Долгий", "ACTIVE/Book",
+                    [str(fake_script / "hang.py")], fake_script)
+    for i in range(JobManager.MAX_HISTORY + 5):
+        done = jm.start("test", f"Прочее {i}", f"ACTIVE/Other{i}",
+                        [str(fake_script / "ok.py")], fake_script)
+        # короткие запуски должны УСПЕТЬ завершиться: иначе все они тоже
+        # running, и выбрасывать из истории нечего (вытесняются только
+        # завершённые)
+        deadline = time.time() + 10
+        while done.status == "running" and time.time() < deadline:
+            time.sleep(0.01)
+    # запись жива, лок на книгу держится, сайдкар тоже на месте
+    assert jm.get(hang.id) is not None, "работающий запуск выброшен из истории"
+    assert jm.running_on("ACTIVE/Book") is not None
+    assert (jm.web_dir / "job_logs" / f"{hang.id}.log").is_file()
+    # история держит лимит целиком: живой запуск не вытесняется, а старое
+    # завершённое ушло — вместе с ним и сайдкар
+    assert len(jm.list()) == JobManager.MAX_HISTORY
+    gone = jm.web_dir / "job_logs"
+    alive = {f"{j['id']}.log" for j in jm.list()}
+    for p in gone.glob("*.log"):
+        assert p.name in alive, f"сайдкар выброшенного запуска остался: {p.name}"
+    jm.stop(hang.id)
+
+
 def test_jobs_list_delete(jobs_srv):
     port, req, jm = jobs_srv
     job = jm.start("test", "Тест", "ACTIVE/x", [], Path(port and "."))
