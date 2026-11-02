@@ -6532,9 +6532,13 @@ function viewProject(section, name, tab, job) {
       const where = p.chapter ? `глава ${p.chapter}` : "глава не указана";
       const tip = `отношение ${scaleNum(p.value)} · ${where}`
         + (p.out ? " — вне допуска" : " — в допуске");
+      /* ссылка точки — ПАПКА главы, а не её номер: «Редактор» выбирает главу
+         по имени папки в дереве (`chapter.txt`), и номер вместо имени
+         превратился бы в первую главу книги */
+      const target = p.dir || null;
       const cls = "check-scale-dot" + (p.out ? " is-out" : "")
-        + (p.chapter ? " is-link" : "");
-      if (!openChapter || !p.chapter) {
+        + (target ? " is-link" : "");
+      if (!openChapter || !target) {
         return h("span", { class: cls, style: `left:${p.pos * 100}%`, title: tip });
       }
       return h("button", {
@@ -6543,7 +6547,7 @@ function viewProject(section, name, tab, job) {
         style: `left:${p.pos * 100}%`,
         title: `${tip} — открыть главу`,
         "aria-label": `${where}: отношение ${scaleNum(p.value)}`,
-        onclick: () => openChapter(p.chapter),
+        onclick: () => openChapter(target),
       });
     });
     const track = h(
@@ -6588,7 +6592,7 @@ function viewProject(section, name, tab, job) {
   }
 
   /* шкалы всех пар отчёта; строка ошибки «[polished vs redacted]» даёт
-     точки своей пары, а номер главы — адрес точки */
+     точки своей пары, а папка главы — адрес точки */
   function checkScales(r, openChapter) {
     const stats = Array.isArray(r.stats) ? r.stats : [];
     if (!stats.length) return [];
@@ -6601,7 +6605,7 @@ function viewProject(section, name, tab, job) {
         for (const msg of e.errors || []) {
           if (!String(msg).startsWith(prefix)) continue;
           const v = checkRatio(msg);
-          if (v != null) points.push({ ...v, chapter: e.chapter });
+          if (v != null) points.push({ ...v, chapter: e.chapter, dir: e.dir });
         }
       }
       const el = checkScale(st, points, openChapter);
@@ -6813,9 +6817,15 @@ function viewProject(section, name, tab, job) {
        Ошибка объёма — это адрес главы, а не отдельный файл: открываем
        вкладку «Редактор» на этой главе (там видно оригинал и перевод
        рядом). Кеш вкладки сбрасывается: иначе вернулся бы старый DOM с
-       прежней главой */
+       прежней главой.
+
+       Папка отчёта приходит ПУТЁМ (`./chapters/0000_121_Глава`, а у отчёта
+       из корня репо — `projects/ACTIVE/<книга>/chapters/…`), а «Редактор»
+       сверяет главу с именем папки в дереве: путь вместо имени не совпадал
+       ни с одной главой, и вкладка молча открывала первую. Имя папки —
+       последний сегмент пути. */
     function openChapter(dir) {
-      const rel = String(dir || "").replace(/^\/+/, "");
+      const rel = UICore.fileBase(dir).trim();
       if (!rel) {
         toast("В отчёте нет папки главы", "err");
         return;

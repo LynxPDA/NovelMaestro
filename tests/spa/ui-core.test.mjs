@@ -1588,6 +1588,16 @@ test("checkScale: точка помнит номер главы — по нем�
     null,
   );
   assert.deepEqual(sc.points.map((p) => p.chapter), [37, null]);
+  /* номер — подпись, папка — адрес: «Редактор» выбирает главу по имени
+     папки в дереве, и номер вместо него открыл бы первую главу книги */
+  const withDir = UICore.checkScale(
+    { lo: 0.9, hi: 1.1, median: 1 },
+    [{ value: 0.8, chapter: 37, dir: "chapters/0000_37_Глава" }, 1.0],
+    null,
+    null,
+  );
+  assert.deepEqual(withDir.points.map((p) => p.dir),
+    ["chapters/0000_37_Глава", null]);
   /* число вместо объекта — главы нет, шкала та же */
   assert.deepEqual(sc.points.map((p) => p.value), [0.8, 1.0]);
 });

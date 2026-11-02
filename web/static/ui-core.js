@@ -1745,11 +1745,12 @@
       var med = Number(s.median);
       if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
       if (!Number.isFinite(med)) med = (lo + hi) / 2;
-      /* точка — число или {value, out, chapter}: out задаёт вызывающий, когда
-         границы напечатаны с округлением и равенство краю ничего не значит
-         (строка ошибки «вне 0.90–1.10» про отношение 0.8974 — это всё-таки
-         ошибка, а не попадание в допуск); chapter — номер главы, чтобы точка
-         находки вела в текст */
+      /* точка — число или {value, out, chapter, dir}: out задаёт
+         вызывающий, когда границы напечатаны с округлением и равенство
+         краю ничего не значит (строка ошибки «вне 0.90–1.10» про отношение
+         0.8974 — это всё-таки ошибка, а не попадание в допуск); chapter —
+         номер главы для подписи, dir — папка главы: по ней точка ведёт в
+         текст (номер главой «Редактора» не является) */
       var pts = [];
       (points || []).forEach(function (p) {
         var obj = p !== null && typeof p === "object";
@@ -1762,6 +1763,7 @@
           value: v,
           out: obj && p.out !== undefined ? !!p.out : null,
           chapter: obj && p.chapter != null ? p.chapter : null,
+          dir: obj && p.dir ? String(p.dir) : null,
         });
       });
       var dom = [lo, hi, med].concat(
@@ -1802,6 +1804,7 @@
             pos: pos(p.value),
             out: p.out === null ? p.value < lo || p.value > hi : p.out,
             chapter: p.chapter,
+            dir: p.dir,
           };
         }),
       };

@@ -331,7 +331,7 @@ async function api(path, opts = {}) {
   }
   if (p === "/file") return { content: "", missing: true, exists: false, size: 0 };
   if (p === "/ner") return globalThis.__ner || { items: [], too_large: false };
-  if (p === "/check") return { reports: [] };
+  if (p === "/check") return globalThis.__check || { reports: [] };
   if (p === "/ner/review" || p === "/translate_check_llm/review") {
     return globalThis.__review || { exists: false, content: "", size: 0 };
   }
@@ -2725,6 +2725,84 @@ test("состояние «Редактора»: глава, режим и по�
   await tick();
   assert.equal(findByClass(again, "ed-chapter")[0].value, "00000_2_Глава 2");
   assert.equal(findByClass(again, "ed-pane").length, 1, "режим «один файл» помнится");
+  delete globalThis.__tree;
+});
+
+/* ── точка шкалы отчёта translate_check ведёт в СВОЮ главу ────────────────
+ * Ошибка объёма — адрес главы, а не украшение шкалы: клик по точке открывает
+ * «Редактор» на этой главе. Отчёт печатает папку путём (`./chapters/…` либо
+ * путь целиком), а селект главы «Редактора» знает только имя папки. */
+const CHECK_REPORT = {
+  name: "check_polished_1-601.txt",
+  mtime: 1,
+  type: "polished",
+  range: "1 – 601",
+  checked: 601,
+  failed: 2,
+  stats: [{ check: "polished", ref: "redacted", chapters: 601,
+           median: 0.999, mad: 0.4, tol: 5, lo: 0.949, hi: 1.049 }],
+  entries: [
+    { chapter: 121, dir: "./chapters/0000_121_Глава_121", fatal: false,
+      error_kinds: ["ratio"],
+      errors: ["[polished vs redacted]  отношение объёма 0.900 → ОШИБКА "
+        + "(вне 0.949–1.049 при допуске ±5%)"] },
+    { chapter: 293, dir: "chapters/000_293_Глава_293", fatal: false,
+      error_kinds: ["ratio"],
+      errors: ["[polished vs redacted]  отношение объёма 1.300 → ОШИБКА "
+        + "(вне 0.949–1.049 при допуске ±5%)"] },
+  ],
+};
+
+/* книга с этими главами: «Редактор» берёт главу только из дерева */
+const CHECK_TREE = {
+  chapters: [
+    { dir: "0000_1_Глава_1", artifacts: { "chapter.txt": 1 } },
+    { dir: "0000_121_Глава_121", artifacts: { "chapter.txt": 1, "polished.txt": 1 } },
+    { dir: "000_293_Глава_293", artifacts: { "chapter.txt": 1, "polished.txt": 1 } },
+  ],
+};
+
+async function checkReportsPage() {
+  globalThis.__tree = CHECK_TREE;
+  globalThis.__check = { reports: [CHECK_REPORT] };
+  /* «Проверки» живут на под-вкладке «Перевод» второй */
+  globalThis.localStorage.setItem("nmTab:ACTIVE/Книга",
+    JSON.stringify({ review: { tab: "tcheck" } }));
+  globalThis.__books.delete("ACTIVE/Книга");
+  const page = reopenProject("ACTIVE", "Книга", "review");
+  await tick();
+  return page;
+}
+
+test("отчёт translate_check: точка шкалы открывает главу ошибки в «Редакторе»", async () => {
+  const page = await checkReportsPage();
+  const dots = findByClass(page, "check-scale-dot");
+  assert.equal(dots.length, 2, "по точке на главу с ошибкой");
+  /* папка из отчёта `./chapters/…` — не глава «Редактора»: он знает только
+     имя папки, иначе чужая папка молча превращается в первую главу книги */
+  await dots[0]._listeners.click[0]();
+  await tick();
+  assert.equal(collectText(page.querySelector(".tab-active")).join(""),
+    "Редактор", "вкладка сменилась на «Редактор»");
+  assert.equal(findByClass(page, "ed-chapter")[0].value,
+    "0000_121_Глава_121", "открыта глава 121, а не первая");
+  assert.deepEqual(prefsOf().editor.chapter, "0000_121_Глава_121");
+  delete globalThis.__check;
+  delete globalThis.__tree;
+});
+
+test("отчёт translate_check: номер главы ведёт в её главу, папка — путём отчёта", async () => {
+  const page = await checkReportsPage();
+  /* путь без `./` (отчёт из корня репо) — берётся последний сегмент */
+  const rows = findByClass(page, "ch-num");
+  assert.equal(rows.length, 2);
+  const links = rows.map((td) => findTag(td, "a")[0]);
+  assert.ok(links.every(Boolean), "номер главы — ссылка в «Редактор»");
+  await links[1]._listeners.click[0]();
+  await tick();
+  assert.equal(findByClass(page, "ed-chapter")[0].value,
+    "000_293_Глава_293", "открыта глава 293");
+  delete globalThis.__check;
   delete globalThis.__tree;
 });
 
