@@ -4453,6 +4453,25 @@ body[data-editor-theme="light"] .editor-area {
   .run-panel {
     padding: 12px;
   }
+  /* шапка панели: заголовок и инструменты в строку не влезают — подпись
+     «Сбросить настройки (N)» шире кнопки и вылезала за рамку, а на 320px
+     кнопка уезжала за край экрана. Инструменты уходят под заголовок
+     целой строкой и жмутся к правому краю */
+  .run-panel-head {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .run-panel-tools {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+  /* подпись переносится, если не влезает, — вместо того чтобы вылезать */
+  .run-reset {
+    white-space: normal;
+    text-align: center;
+    max-width: 100%;
+  }
   .run-range {
     width: 72px;
   }

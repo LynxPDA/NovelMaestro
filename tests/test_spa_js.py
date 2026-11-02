@@ -1114,3 +1114,22 @@ def test_hub_batch_move_between_sections():
     body = app[app.index("async function openMoveMany()"):]
     body = body[:body.index("\nfunction sectionBlock(") if "\nfunction sectionBlock(" in body else 900]
     assert "hubSelection = new Set();" in body and "refreshHub();" in body
+
+
+def test_run_reset_button_fits_on_mobile():
+    """«Запуски»: подпись «Сбросить настройки (N)» остаётся внутри кнопки.
+
+    `.btn` ставит white-space: nowrap, а шапка панели и её инструменты не
+    переносились: на 320px подпись шире кнопки на 8px и вылезала за рамку, а
+    сама кнопка уезжала за правый край экрана. Мобильный блок даёт шапке и
+    инструментам перенос, а кнопке — право перенести подпись."""
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+    # правило живёт в мобильном блоке: десктоп не меняется
+    mobile = css[css.index("@media (max-width: 700px) {"):]
+    assert ".run-panel-head" in mobile and "flex-wrap: wrap" in mobile
+    assert ".run-panel-tools" in mobile
+    assert ".run-reset" in mobile
+    reset = mobile[mobile.index(".run-reset"):]
+    reset = reset[:reset.index("}")]
+    assert "white-space: normal" in reset, "подпись вылезет за рамку кнопки"
+    assert "max-width: 100%" in reset
