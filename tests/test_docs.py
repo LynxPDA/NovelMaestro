@@ -38,7 +38,7 @@ CORE_API = [
     "setup_logging", "log_argv", "determine_model",
     "load_prompt", "get_tagged_prompt",
     "estimate_tokens", "split_at_tokens", "trim_to_tokens",
-    "count_file_tokens", "split_text_smart",
+    "count_file_tokens", "split_text_smart", "ends_sentence",
     "get_ngrams", "is_cjk", "is_cjk_string", "find_exact_match",
     "trim_rule_left", "trim_rule_right",
     "alias_list", "ner_text", "ner_record", "load_ner_data",

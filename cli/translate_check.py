@@ -77,6 +77,7 @@ from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
     build_chapter_map,
     count_file_tokens,
+    ends_sentence,
     find_chapter_file,
 )
 
@@ -326,7 +327,8 @@ def volume_error(check_label, ref_label, check_n, ref_n, st) -> str | None:
 def check_chapter(chapter_num, dir_path, check_type, comparisons,
                   strict, prev_inner_chapter, exclusions=None,
                   regexp_checks=None, min_file_size=None,
-                  sequence_check=True, counts=None, stats=None):
+                  sequence_check=True, end_check=True, counts=None,
+                  stats=None):
     """Возвращает (список_ошибок, обновлённый_prev_inner_chapter).
     В список попадают ТОЛЬКО ошибки и предупреждения поиска.
     exclusions — слова-исключения, по умолчанию load_exclusions().
@@ -338,6 +340,9 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
     sequence_check — сквозная последовательность: первое число в
       первой непустой строке должно быть ровно на 1 больше
       предыдущего (N+1).
+    end_check — глава обязана кончаться концом предложения
+      (core.common.ends_sentence): оборванный ответ модели обрывается
+      буквой или цифрой, а знак в конце — признак, не зависящий от языка.
     counts — токены файлов (scan_files + core.common.count_file_tokens);
     stats — статистика пар (collect_stats): None — объёмные сравнения
       выключены (оба допуска в нуле)."""
@@ -419,6 +424,20 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
             if bad.lower() in exclusions:
                 continue
             errors.append(f"  - По паттерну {rx.pattern}: {bad}")
+
+    # ---- конец главы: оборванный ответ модели (finish_reason=stop, текст
+    #      оборван посередине фразы) ловится только здесь: файл есть, размер
+    #      в норме, сетевых ошибок не было. Знаки всех письменностей —
+    #      проверка не зависит от языка перевода
+    if end_check and not ends_sentence(content):
+        tail = content.rstrip()
+        if tail:
+            errors.append(
+                "  - Глава не кончается концом предложения: текст обрывается "
+                f"на «…{tail[-40:]}» (последний символ — "
+                f"«{tail[-1]}»); похоже на оборванный ответ модели")
+        else:
+            errors.append("  - Глава пуста или состоит из пробелов")
 
     # ---- последовательность глав (единственный хардкод, отключаемый):
     #      первое число первой непустой строки — ровно на 1 больше
@@ -544,6 +563,13 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
                         action=argparse.BooleanOptionalAction, default=True,
                         help="Проверять сквозную последовательность глав "
                              "(--no-sequence-check — отключить)")
+    parser.add_argument("--end-check",
+                        action=argparse.BooleanOptionalAction, default=True,
+                        help="Проверять, что глава кончается концом "
+                             "предложения (--no-end-check — отключить): "
+                             "оборванный ответ модели кончается буквой или "
+                             "цифрой, знаки всех письменностей считаются "
+                             "концом")
     core_settings.apply_cli_defaults(parser, "translate_check")
     return parser
 
@@ -609,6 +635,7 @@ def main() -> None:
     min_file_size = (args.min_file_size if args.min_file_size is not None
                      else MIN_FILE_SIZE)
     sequence_check = args.sequence_check
+    end_check = args.end_check
 
     # ── счёт объёма: один счётчик на весь конвейер — встроенная оценка ──
     unit = "токены (оценка)"
@@ -652,6 +679,7 @@ def main() -> None:
         f"Regexp-проверки: {'; '.join(rx.pattern for rx in regexp_checks)}\n"
         f"Мин. размер   : {min_file_size} Б\n"
         f"Последоват.   : {'вкл' if sequence_check else 'выкл'}\n"
+        f"Конец главы   : {'вкл (знаки всех письменностей)' if end_check else 'выкл'}\n"
         f"Режим         : {'strict' if strict else 'lenient'}\n"
         f"Исключения    : {', '.join(exclusions)}\n"
         f"Дата          : {datetime.now().strftime('%c')}\n"
@@ -713,6 +741,7 @@ def main() -> None:
             regexp_checks=regexp_checks or None,
             min_file_size=min_file_size,
             sequence_check=sequence_check,
+            end_check=end_check,
             counts=counts if volume_on else None,
             stats=stats if volume_on else None,
         )

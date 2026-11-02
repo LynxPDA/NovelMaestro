@@ -851,3 +851,52 @@ def test_pair_ratios_feed_stats(tmp_path):
     assert lo <= ratios["redacted"][1] <= hi
 
 
+
+
+def _chapter_with_tail(tmp_path, num, tail):
+    d = tmp_path / f"00000_{num}_Глава_{num}"
+    d.mkdir()
+    (d / "polished.txt").write_text("Глава 1. Начало.\n\nТекст главы." + tail,
+                                    encoding="utf-8")
+    return d
+
+
+def test_end_check_flags_broken_tail(tmp_path):
+    """Оборванный ответ модели виден по хвосту: файл есть, размер в норме."""
+    d = _chapter_with_tail(tmp_path, 1, " И тут он")
+    errors, _ = TC.check_chapter(1, str(d), "polished", [], False, None,
+                                 min_file_size=0)
+    assert any("не кончается концом предложения" in e for e in errors)
+
+
+def test_end_check_accepts_sentence_end(tmp_path):
+    d = _chapter_with_tail(tmp_path, 1, " И тут он ушёл.")
+    errors, _ = TC.check_chapter(1, str(d), "polished", [], False, None,
+                                 min_file_size=0)
+    assert not any("не кончается" in e for e in errors)
+
+
+def test_end_check_knows_other_scripts(tmp_path):
+    """Знаки ВСЕХ письменностей — проверка не зависит от языка перевода."""
+    for num, tail in ((1, " 结尾だ。"), (2, " نهاية؟"), (3, " अंत।"),
+                      (4, " 終わり！"), (5, " «Да»")):
+        d = _chapter_with_tail(tmp_path, num, tail)
+        errors, _ = TC.check_chapter(num, str(d), "polished", [], False, None,
+                                     min_file_size=0)
+        assert not any("не кончается" in e for e in errors), (num, tail)
+
+
+def test_end_check_can_be_disabled(tmp_path):
+    d = _chapter_with_tail(tmp_path, 1, " И тут он")
+    errors, _ = TC.check_chapter(1, str(d), "polished", [], False, None,
+                                 min_file_size=0, end_check=False)
+    assert not any("не кончается" in e for e in errors)
+
+
+def test_end_check_empty_chapter(tmp_path):
+    d = tmp_path / "00000_1_Глава_1"
+    d.mkdir()
+    (d / "polished.txt").write_text("   \n\n  ", encoding="utf-8")
+    errors, _ = TC.check_chapter(1, str(d), "polished", [], False, None,
+                                 min_file_size=0)
+    assert any("пуста" in e for e in errors)

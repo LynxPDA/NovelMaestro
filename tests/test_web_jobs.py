@@ -2888,6 +2888,7 @@ _BOOL_FIELDS = [
      {"input": "book.epub"}),
     ("translate_check", "sequence_check", "--sequence-check",
      "--no-sequence-check", {}),
+    ("translate_check", "end_check", "--end-check", "--no-end-check", {}),
     ("wiki", "as_chapter", "--as-chapter", "--no-as-chapter", {}),
     ("wiki", "toc", "--toc", "--no-toc",
      {"as_chapter": False, "format": "md"}),

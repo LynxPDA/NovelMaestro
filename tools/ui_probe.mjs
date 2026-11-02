@@ -238,6 +238,7 @@ function seedProjectsDir(dir) {
       "1. Папка: ./chapters/00000_1_Глава 1",
       "  - По паттерну [\\u4e00-\\u9fff]+: 世界",
       "  - Нарушена последовательность: после Главы 1 → Глава 3 (ожидалась 2)",
+      "  - Глава не кончается концом предложения: текст обрывается на «…и тут он» (последний символ — «н»); похоже на оборванный ответ модели",
       "",
       "2. Папка: ./chapters/00000_2_Глава 2",
       "  [polished vs redacted]  отношение объёма 0.900 → ОШИБКА (вне 0.908–1.099 при допуске ±10%, среднее книги 0.999; polished 1469 т., redacted 1632 т.)",
@@ -2711,6 +2712,26 @@ async function main() {
     }
     log(`${problems.length === before ? "✅" : "❌"} допуски формы  `
       + `${f.tolerances.join(" · ")} · предрасчёта нет`);
+
+    /* проверка «Конец главы» — чекбокс формы, включён по умолчанию: снятый
+       уезжает в argv явным --no-end-check, поэтому проверяется и состояние */
+    const cb = page.locator(
+      '.run-form label.field-check:has-text("кончается концом предложения")'
+        + ' input[type=checkbox]');
+    if (!(await cb.count()))
+      problems.push("конец главы: чекбокса в форме нет");
+    else {
+      if (!(await cb.first().isChecked()))
+        problems.push("конец главы: чекбокс не включён по умолчанию");
+      await cb.first().uncheck();
+      await page.waitForTimeout(300);
+      if (await cb.first().isChecked())
+        problems.push("конец главы: чекбокс не снимается");
+      await cb.first().check();
+      await page.waitForTimeout(300);
+    }
+    log(`${problems.length === before ? "✅" : "❌"} конец главы    `
+      + `чекбокс формы ${await cb.count() ? "есть" : "—"}`);
   }
 
   /* Диапазон глав: «64 – 3» не запускается — подсказка и рамка видны сразу,
@@ -2851,7 +2872,7 @@ async function main() {
       const chips = await page.evaluate(() =>
         [...document.querySelectorAll(".check-filters .rv-chip")]
           .map((c) => (c.textContent || "").trim()));
-      for (const want of ["Соотношение", "Regexp-проверки", "Последовательность глав"]) {
+      for (const want of ["Соотношение", "Regexp-проверки", "Последовательность глав", "Конец главы"]) {
         if (!chips.some((c) => c.includes(want)))
           problems.push(`фильтр отчёта: нет типа «${want}» (${chips.join("/")})`);
       }

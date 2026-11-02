@@ -196,6 +196,7 @@ def build_translate_check(form: dict, ctx: dict) -> list[str]:
         argv += ["--min-file-size", str(form["min_file_size"])]
     argv += _bool_argv(form, "sequence_check", "--sequence-check",
                        "--no-sequence-check")
+    argv += _bool_argv(form, "end_check", "--end-check", "--no-end-check")
     return argv
 
 

@@ -1611,6 +1611,7 @@ test("checkErrorKind/checkErrorKinds: подписи типов и порядо�
     UICore.checkErrorKind("sequence").label,
     "Последовательность глав",
   );
+  assert.equal(UICore.checkErrorKind("ending").label, "Конец главы");
   /* незнакомый тип не пропадает из фильтра: подписан «Другое» */
   assert.equal(UICore.checkErrorKind("??").label, "Другое");
   assert.equal(UICore.checkErrorKind("").label, "Другое");
@@ -1619,9 +1620,9 @@ test("checkErrorKind/checkErrorKinds: подписи типов и порядо�
   const kinds = UICore.checkErrorKinds([
     { error_kinds: ["sequence"] },
     { error_kinds: ["ratio", "regexp"] },
-    { error_kinds: ["ratio"] },
+    { error_kinds: ["ending", "ratio"] },
   ]);
-  assert.deepEqual(kinds, ["ratio", "regexp", "sequence"]);
+  assert.deepEqual(kinds, ["ratio", "regexp", "sequence", "ending"]);
   assert.deepEqual(UICore.checkErrorKinds([]), []);
   assert.deepEqual(UICore.checkErrorKinds([{ errors: ["x"] }]), []);
 });

@@ -2640,3 +2640,44 @@ def test_write_prompt_check_writes_readable_json(tmp_path):
     out = tmp_path / "tmp" / "prompt_check.json"
     C.write_prompt_check(str(out), {"stage": "ner", "problems": ["нет тега"]})
     assert json.loads(out.read_text(encoding="utf-8"))["problems"] == ["нет тега"]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# КОНЕЦ ПРЕДЛОЖЕНИЯ (ends_sentence)
+# ══════════════════════════════════════════════════════════════════════
+def test_ends_sentence_basic():
+    assert C.ends_sentence("Он ушёл.")
+    assert C.ends_sentence("Он ушёл!")
+    assert C.ends_sentence("Кто там?")
+    assert C.ends_sentence("Стоп…")
+    assert not C.ends_sentence("И тут он")
+    assert not C.ends_sentence("Глава 12")
+
+
+def test_ends_sentence_ignores_trailing_space():
+    assert C.ends_sentence("Он ушёл.   \n\n  ")
+    assert not C.ends_sentence("Он ушёл")
+
+
+def test_ends_sentence_other_scripts():
+    """Знаки всех письменностей: проверка не привязана к языку перевода."""
+    for tail in ("结尾だ。", "終わり！", "نهاية؟", "अंत।", "أكمل ۔",
+                 "끝。", "สิ้นสุด。", "ጨረሰ።", "།", "᠃"):
+        assert C.ends_sentence(tail), tail
+
+
+def test_ends_sentence_closing_quotes_and_brackets():
+    """Реплика, закончившаяся кавычкой или скобкой, — закончена."""
+    for tail in ("«Да»", "«Да!»", "(ушёл)", "«Сказал: „да“»", "[8]"):
+        assert C.ends_sentence(tail), tail
+
+
+def test_ends_sentence_empty_is_not_whole():
+    for t in ("", "   ", "\n\n", None):
+        assert not C.ends_sentence(t)
+
+
+def test_sentence_end_chars_cover_common_scripts():
+    """Набор не сводится к «.!?»: в нём есть CJK, арабский, данда."""
+    for ch in "。！？؟۔।།᠃":
+        assert ch in C.SENTENCE_END_CHARS, ch

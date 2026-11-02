@@ -6931,7 +6931,11 @@ function viewProject(section, name, tab, job) {
           ...visibleErrors(e).map((it) => {
             const msg = it.message;
             const info = UICore.checkErrorKind(it.kind);
-            const ratio = it.kind === "ratio";
+            /* «адресные» проверки ведут в «Редактор» к самой главе: там рядом
+               видны оригинал и перевод (объём и хвост главы — свойства главы
+               целиком, а не место в файле, которое надо искать) */
+            const gotoChapter =
+              it.kind === "ratio" || it.kind === "ending";
             const fatal = e.fatal || msg.startsWith("[FATAL]");
             return h(
               "div",
@@ -6942,10 +6946,10 @@ function viewProject(section, name, tab, job) {
                 {
                   class:
                     "check-msg-link " + (fatal ? "check-fatal" : "check-msg"),
-                  onclick: ratio
+                  onclick: gotoChapter
                     ? () => openChapter(e.dir)
                     : () => openErrorFile(e.dir, r.type, msg),
-                  title: ratio
+                  title: gotoChapter
                     ? `Открыть главу ${e.chapter} в «Редакторе»`
                     : `Открыть ${e.dir}/${r.type}.txt и найти ошибку`,
                 },
