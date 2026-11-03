@@ -3377,3 +3377,36 @@ test("запуски epub: снятая галочка уходит в params з
   delete globalThis.__stageOptions;
   delete globalThis.__epubPreview;
 });
+
+test("таблица глав: подсказка «✗» называет ПРИЧИНУ сбоя", async () => {
+  /* Глава 101 боевой книги была снята сторожем: в логе стадии шапка и
+     тишина, клетка «✗» не говорила ничего, причину искали в двух файлах
+     логов. Теперь причина ездит в событии главы (reason) и попадает в
+     подсказку клетки. */
+  const job = { id: RUN_JOB, action: "pipeline", project: "ACTIVE/Книга",
+    status: "running", lines: ["работа"], events: [], progress: null };
+  const page = await runView(job, [
+    { type: "snapshot", lines: ["работа"], events: [], progress: null },
+    { type: "event", event: { id: 1, stage: 2, status: "ERROR",
+      reason: "тишина 9600 с (лимит 2942 с)" } },
+    { type: "status", status: "done" },
+  ], { chapters: { ids: [1] } });
+  await settled();
+  const cell = findByClass(page, "ch-cell").find((c) =>
+    (c.className || "").includes("ch-error"));
+  assert.ok(cell, "клетка со сбоем на месте");
+  const title = cell.getAttribute("title");
+  assert.ok(title.includes("тишина 9600 с"), `в подсказке причина: ${title}`);
+  assert.ok(title.includes("ред"), `стадия названа: ${title}`);
+
+  /* без причины подсказка остаётся прежней — ничего не «пустеет» */
+  const plain = await runView(job, [
+    { type: "snapshot", lines: ["работа"], events: [], progress: null },
+    { type: "event", event: { id: 1, stage: 2, status: "OK" } },
+    { type: "status", status: "done" },
+  ], { chapters: { ids: [1] } });
+  await settled();
+  const okCell = findByClass(plain, "ch-cell").find((c) =>
+    (c.className || "").includes("ch-ok"));
+  assert.equal(okCell.getAttribute("title"), "ред: OK");
+});

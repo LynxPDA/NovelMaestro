@@ -3443,6 +3443,17 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return byKey;
   }
 
+  // причины неудач по тем же ключам: клетка «✗» отдаёт их в подсказке.
+  // Без них клетка отвечает «что-то случилось», и причину приходится искать
+  // в двух файлах логов.
+  function chapterReasons(events) {
+    const byKey = {};
+    for (const ev of events || []) {
+      if (ev.reason) byKey[ev.id + ":" + ev.stage] = ev.reason;
+    }
+    return byKey;
+  }
+
   // диапазон глав для таблицы конвейера: из формы (st.values.pipeline,
   // с автоподхватом диапазона опций); строки — реальные id глав.
   // Пустой/неполный диапазон = все главы из опций
@@ -3469,6 +3480,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const cols = [1, 2, 3];
     const stageSym = { 1: "пер", 2: "ред", 3: "пол" };
     const byKey = chapterByKey(events || []);
+    const why = chapterReasons(events || []);
     // что реально показано в клетках: живой поток правит только смены статуса
     st.chShown = byKey;
     const cells = [];
@@ -3480,10 +3492,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         const cls = s
           ? "ch-cell ch-" + String(s).toLowerCase()
           : "ch-cell ch-pending";
+        const reason = why[id + ":" + stage];
         row.push(
           h(
             "td",
-            { class: cls, title: `${stageSym[stage]}: ${s || "—"}` },
+            { class: cls, title: `${stageSym[stage]}: ${s || "—"}`
+              + (reason ? `\n${reason}` : "") },
             s ? STATUS_SYM[s] || s : "·",
           ),
         );
@@ -3659,6 +3673,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
             st.chShown[ev.id + ":" + ev.stage] = ev.status;
             cell.textContent = STATUS_SYM[ev.status] || ev.status;
             cell.className = "ch-cell ch-" + String(ev.status).toLowerCase();
+            // причина едет вместе со статусом (тишина сторожа, код
+            // возврата, слова-ошибки): подсказка клетки говорит, ПОЧЕМУ
+            if (ev.reason) cell.title += `\n${ev.reason}`;
           }
         }
       }
