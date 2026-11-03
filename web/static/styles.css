@@ -1348,6 +1348,17 @@ input[type="number"] {
   background: var(--danger);
   color: var(--bg);
 }
+/* Кнопка безопасного ожидаемого действия («Применить» рядом с красной
+   «Очистить»): та же форма, что у .btn-danger, но зелёная по смыслу. */
+.btn-success {
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn-success:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
 .btn:disabled,
 .btn[disabled] {
   opacity: 0.45;

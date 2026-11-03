@@ -4139,7 +4139,7 @@ function viewProject(section, name, tab, job) {
               h(
                 "button",
                 {
-                  class: "btn btn-xs",
+                  class: "btn btn-xs btn-success",
                   title:
                     "Применить все принятые правки (запуск — фоновая задача)",
                   onclick: (ev) => runApply(ev.currentTarget),

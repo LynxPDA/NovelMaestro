@@ -797,6 +797,15 @@ test("Проверки: карточка правок — только спис�
   assert.ok(apply, "в сводке есть кнопка «Применить»");
   assert.match(apply.getAttribute("title") || "", /все принятые/,
     "о том, что применяются все принятые, говорит подсказка");
+  /* безопасное ожидаемое действие — зелёная кнопка, как у красной
+     «Очистить» рядом: цвет говорит, что нажатие ничего не разрушает */
+  assert.match(String(apply.className || ""), /btn-success/,
+    "«Применить» — зелёная кнопка");
+  const clear = findByClass(ner, "review-summary")[0]
+    .querySelectorAll("button")
+    .find((b) => collectText(b).join("") === "Очистить");
+  assert.match(String(clear.className || ""), /btn-danger/,
+    "«Очистить» осталась красной");
   globalThis.__review = null;
 });
 
