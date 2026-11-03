@@ -318,6 +318,22 @@ def setup_logging(output_filename, logger_name=None):
     return logger, log_filename
 
 
+def stage_log_path(out_path) -> str:
+    """Файл лога стадии для её выходного файла: под `chapters/` — в
+    `logs/chapters/` с именем выходного пути (разделители каталогов — «_»),
+    иначе `logs/<имя>.log`.
+
+    Правило одно на писателя лога (`cli/translate_book.py`) и на того, кто
+    дописывает в него причину сбоя (`web/pipeline.py`): путь, посчитанный в
+    двух местах, разъехался бы ровно тогда, когда причина и нужна.
+    """
+    rel = os.path.relpath(out_path)
+    log_dir = (os.path.join("logs", "chapters")
+               if rel.startswith("chapters" + os.sep) else "logs")
+    name = re.sub(r"[\\/]+", "_", rel)
+    return os.path.join(log_dir, os.path.splitext(name)[0] + ".log")
+
+
 def determine_model(arg_model, logger=None):
     """Модель ТОЛЬКО из аргумента/конфига (автоопределение
     через GET /models убрано). Пусто → SystemExit (fail-fast)."""
@@ -2321,6 +2337,93 @@ _LOOP_RES = (
 )
 
 
+#: «ответ идёт» пишется не чаще этого, СЕК: мелкая пульсация не нужна
+_HEARTBEAT_MIN = 60.0
+
+
+def _heartbeat_interval(stream_timeout, override=None) -> float:
+    """Пауза между отметками «ответ идёт», СЕК; 0 — не отмечать.
+
+    Треть таймаута тишины, но не чаще раза в минуту: родитель (web-конвейер)
+    считает долгое молчание стадии зависанием, поэтому живой, но долгий
+    запрос обязан оставлять след реже, чем его снимают.
+    """
+    if override is not None:
+        try:
+            return max(0.0, float(override))
+        except (TypeError, ValueError):
+            return 0.0
+    try:
+        base = float(stream_timeout or 0) / 3.0
+    except (TypeError, ValueError):
+        base = 0.0
+    return max(_HEARTBEAT_MIN, base)
+
+
+class _Heartbeat:
+    """Строка «ответ идёт: N с» в лог стадии, пока идёт запрос.
+
+    Запрос к LLM может идти часами (медленный сервер, длинные рассуждения),
+    а stdout стадии всё это время пуст: в логе главы оставался обрыв без
+    причины, а web-конвейеру нечем было отличить живую стадию от зависшей.
+    Без логгера отметки не пишутся и поток не заводится.
+    """
+
+    def __init__(self, logger, label: str, interval: float) -> None:
+        self._logger = logger
+        self._label = (label or "").strip() or "LLM"
+        self._interval = float(interval or 0)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._started = 0.0
+
+    def __enter__(self) -> _Heartbeat:
+        if self._logger is None or self._interval <= 0:
+            return self
+        self._started = time.monotonic()
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name="llm-heartbeat")
+        self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            self._logger.info("⏳ %s ответ идёт: %d с", self._label,
+                              int(time.monotonic() - self._started))
+
+    def __exit__(self, *exc_info) -> bool:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
+        return False
+
+
+def stage_call_timeout(timeout, stream_timeout, max_retries,
+                       connect_grace: float = 120.0) -> float:
+    """Сколько может длиться ОДНА стадия (сторож вызова), СЕК.
+
+    Предел считается из тех же таймаутов, что реально действуют в
+    stream_chat_completion: попытка — это `timeout` на соединение и
+    `stream_timeout` тишины в теле, между попытками — пауза повтора, и таких
+    попыток не больше `max_retries`. Плюс запас на чтение входа, словаря и
+    запись результата. Своё число «на глаз» охраняло бы не таймаут стадии, а
+    чужую константу: при `--timeout 900` подпроцесс мог жить 9600 с и быть
+    убитым посреди девяносто пятой минуты живой генерации.
+    """
+    def _num(value, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    attempts = max(1, int(_num(max_retries, 1)))
+    per_attempt = max(_num(timeout, 300), _num(stream_timeout, 900))
+    # пауза повтора не больше _RETRY_WAIT_MAX (см. _retry_wait)
+    retry_pause = (attempts - 1) * (_RETRY_WAIT_MAX + 1.0)
+    return attempts * per_attempt + retry_pause + connect_grace
+
+
 # Ретраим ТОЛЬКО перегрузки/нестабильность сервера;
 # 4xx-ошибки (400/401/403/404 и т.п.) — сразу наружу.
 _RETRYABLE_STATUS = frozenset({408, 425, 429}) | frozenset(range(500, 600))
@@ -2346,7 +2449,7 @@ def stream_chat_completion(
     max_retries=3, timeout=300, stream_timeout=900,
     temperature=None, reasoning=None, provider=None,
     max_tokens=65536,
-    logger=None, label="",
+    logger=None, label="", heartbeat=None,
 ):
     """Стрим-запрос к OpenAI-совместимому API.
     Возвращает (text | None, error_str).
@@ -2360,7 +2463,10 @@ def stream_chat_completion(
     Единый openai-ключ reasoning_effort — один из таких ключей, отдельного
     параметра под него нет: у чужих профилей он невалиден.
     provider: объект выбора провайдера (core.common.provider_settings) —
-    отдельным ключом тела; None/{} — роутер балансирует сам."""
+    отдельным ключом тела; None/{} — роутер балансирует сам.
+    heartbeat: пауза между строками «ответ идёт», СЕК (None — треть
+    stream_timeout, 0 — молчать): ждать ответ молча нельзя, по тишине
+    в выводе web-конвейер отличает живую стадию от зависшей."""
     url = f"{base_url}/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -2379,9 +2485,12 @@ def stream_chat_completion(
     last_err = "Unknown"
     for attempt in range(max(1, max_retries)):
         try:
-            with open_stream(url, headers=headers, payload=payload,
-                             connect_timeout=timeout,
-                             read_timeout=stream_timeout) as resp:
+            with _Heartbeat(logger, label,
+                            _heartbeat_interval(stream_timeout,
+                                                heartbeat)), \
+                    open_stream(url, headers=headers, payload=payload,
+                                connect_timeout=timeout,
+                                read_timeout=stream_timeout) as resp:
                 if resp.status_code != 200:
                     last_err = f"HTTP {resp.status_code}"
                     # Ретраим ТОЛЬКО 408/425/429/5xx;

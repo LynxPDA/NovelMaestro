@@ -67,6 +67,8 @@ CORE_API = [
     "preview_request_payload", "write_preview_request", "preview_logger",
     "output_tail",
     "prompt_check_result", "write_prompt_check",
+    # время стадии: путь лога и предeл ожидания (сторож web/pipeline.py)
+    "stage_log_path", "stage_call_timeout",
 ]
 # Зеркало API core/stage.py (слой стадии: флаги LLM, профиль, контекст, прогресс)
 STAGE_API = ["add_llm_args", "LlmProfile", "resolve_profile", "describe_profile",

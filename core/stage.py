@@ -175,6 +175,10 @@ class LlmProfile:
     # выбор провайдера (роутеры OpenRouter-типа): {} — балансирует сам роутер
     provider: dict = field(default_factory=dict, compare=False)
     max_tokens: int = DEFAULT_MAX_TOKENS
+    #: пауза между отметками «ответ идёт» в лог стадии, СЕК
+    #: (None — треть stream_timeout, 0 — молчать): живой, но долгий запрос
+    #: обязан оставлять след, иначе родитель считает его зависшим
+    heartbeat: float | None = None
     logger: logging.Logger | None = None
     env_data: dict = field(default_factory=dict, compare=False, repr=False)
 
@@ -204,6 +208,7 @@ class LlmProfile:
             max_tokens=self.max_tokens,
             logger=self.logger,
             label=label,
+            heartbeat=self.heartbeat,
         )
 
 

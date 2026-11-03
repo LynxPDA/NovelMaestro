@@ -980,3 +980,98 @@ def test_print_would_be_torn_emit_line_is_not():
     lines = whole.text.splitlines()
     assert lines[0].startswith("@@CHAPTER@@") and "лог" not in lines[0]
     assert json.loads(lines[0][len("@@CHAPTER@@"):])["id"] == 1103
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Сторож стадии: причина снятия видна в логе главы и в событии
+#
+# Глава 101 боевой книги была снята сторожем после 9600 с живого ответа
+# LLM: в logs/chapters/ лежала шапка стадии и тишина, причина нашлась
+# только в общем логе запуска, а клетка «✗» не говорила ничего.
+# ══════════════════════════════════════════════════════════════════════
+def _watchdog_project(tmp_path, script_body: str):
+    """Проект с одной главой и фейковой стадией; возвращает (proj, script)."""
+    proj = tmp_path / "watch"
+    (proj / "chapters" / "00000_1_г").mkdir(parents=True)
+    (proj / "chapters" / "00000_1_г" / "translated_trace.json").write_text(
+        "x\n", encoding="utf-8")
+    script = proj / "fake_stage.py"
+    script.write_text(script_body, encoding="utf-8")
+    return proj, script
+
+
+def _run_chapter(proj, script, timeout_s: float):
+    """process_chapter в отдельном процессе (cwd = проект), результат —
+    события и локальные файлы проекта."""
+    runner = proj / "runner.py"
+    runner.write_text(
+        "import json, sys, logging\n"
+        f"sys.path.insert(0, {str(REPO)!r})\n"
+        "import web.pipeline as P\n"
+        "P.WATCHDOG_TICK = 0.2\n"
+        "from web.pipeline import Tracker, process_chapter\n"
+        "from pathlib import Path\n"
+        "log = logging.getLogger('watchdog')\n"
+        "log.setLevel(logging.INFO)\n"
+        "log.addHandler(logging.StreamHandler(sys.stdout))\n"
+        "t = Tracker([1], [2])\n"
+        "ok = process_chapter(1, [Path('chapters/00000_1_г')],\n"
+        f"                     Path({script.name!r}), [2], 'h', '', 'm',\n"
+        "                     900, log, t, stream_timeout=900,\n"
+        f"                     max_retries=3, stage_timeout={timeout_s})\n"
+        "print('RESULT', ok, json.dumps(t.snapshot(), ensure_ascii=False))\n",
+        encoding="utf-8")
+    return subprocess.run([sys.executable, str(runner)], cwd=str(proj),
+                          capture_output=True, text=True, timeout=120)
+
+
+def test_watchdog_kills_silent_stage_with_reason(tmp_path):
+    """Молчащая стадия снимается, причина — в логе главы и в событии."""
+    stage = (
+        "import sys, time, os\n"
+        "out = sys.argv[sys.argv.index('--out') + 1]\n"
+        "log = 'logs/chapters/' + out.replace('/', '_')[:-4] + '.log'\n"
+        "os.makedirs(os.path.dirname(log), exist_ok=True)\n"
+        "open(log, 'a', encoding='utf-8').write('старт\\n')\n"
+        "time.sleep(300)\n")
+    proj, script = _watchdog_project(tmp_path, stage)
+    r = _run_chapter(proj, script, 2.0)
+    assert r.returncode == 0, r.stderr[-800:]
+    assert "RESULT False" in r.stdout, r.stdout[-800:]
+    # причина в событии главы — её показывает клетка таблицы
+    events = [json.loads(line[len(CHAPTER_PREFIX):])
+              for line in r.stdout.splitlines()
+              if line.startswith(CHAPTER_PREFIX)]
+    assert [e["status"] for e in events] == ["ERROR"], events
+    assert "тишина" in events[0].get("reason", ""), events
+    # причина в логе стадии — единственное место, где её ищет человек
+    logs = list((proj / "logs" / "chapters").glob("*.log"))
+    assert len(logs) == 1, logs
+    text = logs[0].read_text(encoding="utf-8")
+    assert "СНЯТА" not in text          # маркер только на будущее
+    assert "Стадия снята: тишина" in text, text
+    assert "лимит" in text, text
+
+
+def test_watchdog_keeps_live_long_stage(tmp_path):
+    """Живой, но долгий ответ не снимается: отметки «ответ идёт» продлевают
+    сторож. Именно этот случай убивал главу 101 — ответ шёл, но молчал."""
+    stage = (
+        "import sys, time, os\n"
+        "out = sys.argv[sys.argv.index('--out') + 1]\n"
+        "log = 'logs/chapters/' + out.replace('/', '_')[:-4] + '.log'\n"
+        "os.makedirs(os.path.dirname(log), exist_ok=True)\n"
+        "open(log, 'a', encoding='utf-8').write('старт\\n')\n"
+        "for i in range(10):\n"
+        "    time.sleep(0.4)\n"
+        "    open(log, 'a', encoding='utf-8').write('⏳ ответ идёт\\n')\n"
+        "open(out, 'w', encoding='utf-8').write('готовый перевод\\n')\n")
+    proj, script = _watchdog_project(tmp_path, stage)
+    # 4 с работы при пределе 2 с: без отметок стадию снял бы сторож
+    r = _run_chapter(proj, script, 2.0)
+    assert r.returncode == 0, r.stderr[-800:]
+    assert "RESULT True" in r.stdout, r.stdout[-800:]
+    events = [json.loads(line[len(CHAPTER_PREFIX):])
+              for line in r.stdout.splitlines()
+              if line.startswith(CHAPTER_PREFIX)]
+    assert [e["status"] for e in events] == ["OK"], events

@@ -102,6 +102,7 @@ from core.common import (
     load_prompt,
     load_rules_block,
     split_text_smart,
+    stage_log_path,
 
 )
 
@@ -557,8 +558,10 @@ def main(argv=None):
     }[mode]
 
     _rel = os.path.relpath(out_path)
-    _log_dir = os.path.join("logs", "chapters") \
-        if _rel.startswith("chapters" + os.sep) else "logs"
+    # одно правило пути лога на писателя и на того, кто дописывает причину
+    # сбоя (web/pipeline.py) — core.common.stage_log_path
+    _log_path = stage_log_path(out_path)
+    _log_dir = os.path.dirname(_log_path)
     # предпросмотр не создаёт ни папки логов, ни самого лога (new_stage)
     if not args.preview_request:
         try:
@@ -566,7 +569,7 @@ def main(argv=None):
         except OSError as exc:
             print(f"Не удалось создать {_log_dir}: {exc}")
             return 1
-    _log_name = re.sub(r"[\\/]+", "_", _rel)
+    _log_name = os.path.splitext(os.path.basename(_log_path))[0]
     stage = new_stage("pipeline", args, log_dir=_log_dir, log_name=_log_name)
     logger = stage.logger
 

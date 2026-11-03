@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -47,6 +48,7 @@ _bootstrap_core()
 from core import settings as core_settings  # noqa: E402
 from core.common import (  # noqa: E402
     PROGRESS_PREFIX, build_chapter_map, emit_line, format_ranges, output_tail,
+    stage_call_timeout, stage_log_path,
 )
 # общий блок LLM-флагов: у конвейера тот же набор имён, что у стадий
 from core.stage import (add_check_prompt_arg, add_llm_args,  # noqa: E402
@@ -107,6 +109,9 @@ _LOGGER_PREFIX_RE = re.compile(
 )
 _SYM = {"OK": "✓", "ERROR": "✗", "SKIP": "⊘"}
 CHAPTER_PREFIX = "@@CHAPTER@@"
+#: шаг сторожа стадии, СЕК: как часто смотреть, жива ли стадия (она
+#: отмечается строкой «ответ идёт», см. core.common._Heartbeat)
+WATCHDOG_TICK = 60.0
 # промпт-файлы конвейера — только единый общий файл с тегами
 # <translate>/<redact>/<polish> (отдельные файлы на стадию убраны).
 # Кандидаты «одного файла с тегами» для режима auto.
@@ -430,6 +435,42 @@ def grep_errors(text: str, max_lines: int = 20) -> list[str]:
     return hits
 
 
+def _ts() -> str:
+    """Штамп времени в том же формате, в каком пишет логгер стадии."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+#: слова, которыми ошибка модели передаётся человеку из хвоста вывода
+_REASON_WORDS = ("exceeded", "cut by", "timeout", "таймаут", "loop",
+                 "interrupted", "попыток", "ошибка", "error")
+
+
+def _reason_from(tail: list[str], code: int) -> str:
+    """Причина сбоя стадии одной строкой — из хвоста её вывода.
+
+    Хвост читает человек в общем логе, а клетке таблицы глав и событию
+    запуска нужна одна фраза: иначе клетка «✗» отвечает «что-то
+    случилось». Причины LLM («4 попытки: Read timeout (900s)», «Cut by
+    max_tokens») лежат последними строками — их и берём."""
+    for line in reversed(tail):
+        body = _LOGGER_PREFIX_RE.sub("", line, count=1).strip()
+        body = body.lstrip("│ ").strip()
+        if not body:
+            continue
+        if any(w in body.lower() for w in _REASON_WORDS):
+            return body[:300]
+    return f"стадия завершилась с кодом {code}"
+
+
+def _stamp(path: Path) -> tuple:
+    """Отпечаток файла (размер, mtime): менялся ли он, пока ждал родитель."""
+    try:
+        st = path.stat()
+    except OSError:
+        return (0, 0)
+    return (st.st_size, st.st_mtime_ns)
+
+
 def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     stages: list[int], host: str, api_key: str, model: str,
                     timeout: int, log: logging.Logger,
@@ -446,21 +487,50 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     examples_file: str = "",
                     fewshot_k: int = 3, fewshot_threshold: float = 0.3,
                     request_budget: int = 0,
-                    chunk_size: int | None = None) -> bool:
+                    chunk_size: int | None = None,
+                    stage_timeout: float | None = None) -> bool:
     """Одна глава: стадии по порядку, fail-fast (код 0 + файл + grep).
 
     polish_in — вход полировки вместо дефолтного redacted.txt
-    (полировка из перевода: действия 4 и 6)."""
-    sub_timeout = timeout * 10 + 600
+    (полировка из перевода: действия 4 и 6).
+    stage_timeout — предел ОДНОЙ стадии, СЕК (core.common.stage_call_timeout);
+    пусто — считается из timeout/stream_timeout стадии."""
+    if stage_timeout is None:
+        stage_timeout = stage_call_timeout(timeout, stream_timeout, max_retries)
 
-    def _record(status: str) -> None:
-        """Запись статуса стадии + событие главы + общий прогресс."""
+    def _record(status: str, reason: str = "") -> None:
+        """Запись статуса стадии + событие главы + общий прогресс.
+
+        reason — почему не OK (причина словами): клетка таблицы глав
+        подсказывает её человеку, иначе клетка «✗» отвечает «что-то
+        случилось» и заставляет искать причину в двух файлах логов.
+        """
         tracker.record(chapter_id, stage, status)
-        emit({"type": "chapter", "id": chapter_id, "stage": stage,
-              "status": status})
+        ev = {"type": "chapter", "id": chapter_id, "stage": stage,
+              "status": status}
+        if reason:
+            ev["reason"] = reason
+        emit(ev)
         done, total = tracker.overall()
         emit_progress(done, total,
                       f"Глава {chapter_id} · {_STAGE_LABEL[stage]}")
+
+    def _stage_note(out_file: Path, lines: list[str]) -> str:
+        """Дописать причину в лог стадии.
+
+        Лог стадии — единственное место, где человек ищет, что случилось с
+        главой; снятая стадия до сих пор оставляла там строку о старте и
+        тишину: причина была только в общем логе запуска. Файла нет — не
+        ошибка: стадия могла не дойти до него (нет папки logs/).
+        """
+        path = Path(stage_log_path(out_file))
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                for line in lines:
+                    fh.write(line + "\n")
+        except OSError:
+            pass
+        return path.name
 
     # построчное чтение вывода стадии: метка (`head`) и приёмник (`sink`)
     # приходят аргументами — иначе функция, определённая внутри цикла по
@@ -535,7 +605,9 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
             except OSError as exc:
                 log.error("Глава %03d | [%s] Не удалось запустить: %s",
                           chapter_id, name, exc)
-                _record("ERROR")
+                _stage_note(out_file, [
+                    f"{_ts()} - ERROR - ❌ Стадия не запустилась: {exc}"])
+                _record("ERROR", f"стадия не запустилась: {exc}")
                 return False
             out_lines: list[str] = []
             err_lines: list[str] = []
@@ -547,30 +619,72 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                 target=_drain, args=(proc.stderr, err_lines, head))
             tout.start()
             terr.start()
-            try:
-                proc.wait(timeout=sub_timeout)
-            except subprocess.TimeoutExpired:
+            started = time.monotonic()
+            # сторож смотрит на лог стадии, а не только на время: живой,
+            # но долгий ответ отмечается строкой «ответ идёт»
+            # (core.common._Heartbeat), поэтому до предела не доходит, а
+            # зависшая стадия снимается через stage_timeout
+            stage_log = Path(stage_log_path(out_file))
+            last_stamp = _stamp(stage_log)
+            last_change = started
+            quiet = 0.0
+            killed = False
+            while True:
+                try:
+                    proc.wait(timeout=WATCHDOG_TICK)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                now = time.monotonic()
+                stamp = _stamp(stage_log)
+                if stamp != last_stamp:
+                    last_stamp, last_change = stamp, now
+                quiet = now - last_change
+                if quiet < stage_timeout:
+                    continue
+                killed = True
+                break
+            if killed:
                 proc.kill()
                 tout.join()
                 terr.join()
-                log.error("Глава %03d | [%s] ТАЙМАУТ subprocess (%d с)",
-                          chapter_id, name, sub_timeout)
-                _record("ERROR")
+                limit = int(stage_timeout)
+                log.error("Глава %03d | [%s] ПРЕДЕЛ СТАДИИ: тишина %d с "
+                          "(лимит %d с) — процесс снят",
+                          chapter_id, name, int(quiet), limit)
+                _stage_note(out_file, [
+                    f"{_ts()} - ERROR - ❌ Стадия снята: тишина "
+                    f"{int(quiet)} с при лимите {limit} с",
+                    f"{_ts()} - ERROR - ❌ Причина снятия — молчание "
+                    f"стадии, а не обрыв файла: ни одной строки "
+                    f"«ответ идёт» за это время",
+                ])
+                _record("ERROR", f"тишина {int(quiet)} с "
+                                 f"(лимит {limit} с)")
                 return False
             tout.join()
             terr.join()
             combined = "".join(out_lines) + "\n" + "".join(err_lines)
+            elapsed = int(time.monotonic() - started)
             if proc.returncode != 0:
                 log.error("Глава %03d | [%s] ОШИБКА (код %d)",
                           chapter_id, name, proc.returncode)
-                for line in combined.strip().splitlines()[-10:]:
+                tail = list(combined.strip().splitlines()[-10:])
+                for line in tail:
                     log.error("  │ %s", line)
-                _record("ERROR")
+                _stage_note(out_file, [
+                    f"{_ts()} - ERROR - ❌ Стадия завершилась с кодом "
+                    f"{proc.returncode} за {elapsed} с"]
+                    + [f"{_ts()} - ERROR -   │ {line}" for line in tail])
+                _record("ERROR", _reason_from(tail, proc.returncode))
                 return False
             if not out_file.is_file() or out_file.stat().st_size == 0:
                 log.error("Глава %03d | [%s] ОШИБКА (файл %s не создан)",
                           chapter_id, name, out_name)
-                _record("ERROR")
+                _stage_note(out_file, [
+                    f"{_ts()} - ERROR - ❌ Стадия вернула успех, но файл "
+                    f"{out_name} пуст или не создан"])
+                _record("ERROR", f"файл {out_name} не создан")
                 return False
             error_lines = grep_errors(combined)
             if error_lines:
@@ -578,7 +692,11 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                           chapter_id, name)
                 for line in error_lines:
                     log.error("  │ %s", line)
-                _record("ERROR")
+                _stage_note(out_file, [
+                    f"{_ts()} - ERROR - ❌ Слова-ошибки в выводе стадии:"]
+                    + [f"{_ts()} - ERROR -   │ {line}" for line in error_lines])
+                _record("ERROR", _reason_from(error_lines,
+                                              proc.returncode))
                 return False
             _record("OK")
             log.info("Глава %03d | [%s] OK", chapter_id, name)
@@ -701,6 +819,11 @@ def main() -> None:
     args.stream_timeout = profile.stream_timeout
     args.max_retries = profile.max_retries
     args.temperature = profile.temperature
+    # предел ОДНОЙ стадии (сторож подпроцесса) — из тех же таймаутов, что
+    # действуют в stream_chat_completion: своё число лишало стадию
+    # возможности доработать живую генерацию (kill посреди ответа)
+    stage_limit = stage_call_timeout(args.timeout, args.stream_timeout,
+                                     args.max_retries)
 
     chapters_dir = Path("chapters")
     chapters = build_chapter_map(str(chapters_dir))
@@ -762,6 +885,10 @@ def main() -> None:
     log.info("ТИП РАБОТЫ : %s", action_label)
     log.info("ДИАПАЗОН   : Главы с %d по %d", start, end)
     log.info("ПОТОКОВ    : %d суммарно (главы × чанки)", args.threads)
+    log.info("ПРЕДЕЛ СТАДИИ: %d с (%s попыток × %d с таймаута) — живой, "
+             "но долгий ответ не снимается раньше",
+             int(stage_limit), args.max_retries,
+             max(args.timeout, args.stream_timeout or 0))
     # сервер, таймауты, повторы и модель напечатаны общим слоем (строки
     # resolve_profile перед этим блоком): здесь только то, что есть только тут
     log.info("ПРОМПТЫ    : %s", " | ".join(
@@ -901,7 +1028,8 @@ def main() -> None:
                         fewshot_k=args.fewshot_k,
                         fewshot_threshold=args.fewshot_threshold,
                         request_budget=args.request_budget,
-                        chunk_size=args.chunk_size): cid
+                        chunk_size=args.chunk_size,
+                        stage_timeout=stage_limit): cid
             for cid, dirs in to_process.items()
         }
         for fut in as_completed(futures):
