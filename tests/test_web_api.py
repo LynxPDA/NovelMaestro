@@ -903,8 +903,8 @@ def test_project_tree_legacy_artifacts(srv_ctx):
 
 
 def test_project_tree_sizes_in_chars(srv_ctx):
-    """Размеры артефактов в /tree — СИМВОЛЫ, не байты: клиент считает
-    бюджет translate_quality в символах (utf-8 кириллицы — 2 байта/сим.)."""
+    """Размеры артефактов в /tree — СИМВОЛЫ, не байты: клиент сверяет
+    объёмы глав в символах (utf-8 кириллицы — 2 байта на символ)."""
     _, port, projects_root = srv_ctx()
     _create_project(port, projects_root)
     ch = projects_root / "ACTIVE" / "test_book" / "chapters" / "00003_1"

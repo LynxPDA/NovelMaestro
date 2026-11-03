@@ -26,7 +26,7 @@ RUN_NAMES = {
 #: диапазон глав — параметр запуска вне реестра: своих стадийных ключей нет
 RANGE_NAMES = ("start", "end")
 RANGE_STAGES = {"pipeline", "ner", "ner_check", "translate_check",
-                "translate_check_llm", "translate_quality", "compile", "wiki",
+                "translate_check_llm", "compile", "wiki",
                 "batch_replace"}
 # старые имена LLM-полей стадий, которые свёрнуты в одну общую настройку
 ALIAS = {"retries": "max_retries", "jobs": "threads"}
@@ -263,7 +263,7 @@ def test_block_titles_are_stage_titles():
 def test_stage_names_are_the_registry_owners():
     assert set(S.STAGES) == {
         "epub", "ner", "ner_check", "pipeline", "translate_check",
-        "translate_check_llm", "translate_quality", "wiki", "compile",
+        "translate_check_llm", "wiki", "compile",
         "batch_replace"}
 
 

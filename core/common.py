@@ -9,7 +9,7 @@ core/transport.py: единственный HTTP-клиент httpx) + опци�
 
 СОГЛАШЕНИЕ О ЕДИНИЦАХ (важно):
   • Размеры LLM-запросов — в ТОКЕНАХ: chunk_size, request_budget,
-    context_budget, batch_size/rag_budget, budget (translate_quality),
+    context_budget, batch_size/rag_budget,
     размер чанков FTS5 — везде оценка estimate_tokens (по замеру: медиана
     0.93 от реального счёта, ±25% для 79% текстов).
   • СИМВОЛЫ остаются: context_max_len (контекст термина), длины

@@ -820,10 +820,10 @@ def test_pipeline_preview_request(tmp_path):
 
 
 def test_llm_stages_preview_flag():
-    """Спека: флаг preview — ровно у шести LLM-стадий (кнопка
+    """Спека: флаг preview — ровно у LLM-стадий (кнопка
     «Предпросмотр запроса» в SPA)."""
     expect = {"pipeline", "ner", "ner_check", "translate_check_llm",
-              "translate_quality", "wiki"}
+              "wiki"}
     got = {k for k, v in STAGE_SPECS.items() if v.get("preview")}
     assert got == expect
 

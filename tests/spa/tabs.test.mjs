@@ -706,7 +706,6 @@ test("reviewView: 4 под-вкладки проверок, активная п�
   assert.match(joined, /Глоссарий \(LLM\)/);
   assert.match(joined, /Проверка перевода/);
   assert.match(joined, /Перевод \(LLM\)/);
-  assert.match(joined, /Оценка перевода \(LLM\)/);
   const tabs = [];
   (function walk2(n) {
     for (const c of n.children || []) {
@@ -714,7 +713,7 @@ test("reviewView: 4 под-вкладки проверок, активная п�
       walk2(c);
     }
   })(page);
-  assert.equal(tabs.length, 4);
+  assert.equal(tabs.length, 3);
   assert.ok(tabs[0].className.includes("subtab-active"));
 });
 
@@ -731,8 +730,8 @@ test("reviewView: переключение под-вкладок (клик) и �
       walk(c);
     }
   })(page);
-  assert.equal(tabs.length, 4);
-  assert.equal(panes.length, 4);
+  assert.equal(tabs.length, 3);
+  assert.equal(panes.length, 3);
   // клик по третьей вкладке «Перевод (LLM)»
   await tabs[2]._listeners["click"][0]();
   assert.ok(tabs[2].className.includes("subtab-active"));

@@ -111,7 +111,7 @@ EPUB_PREVIEW_FILE = "tmp/epub_preview.json"  # относит. cwd = папка 
 PREVIEW_REQUEST_FILE = "tmp/preview_request.json"  # относит. cwd = проект
 # стадии, чьи скрипты поддерживают --preview-request
 _PREVIEW_STAGES = {"pipeline", "ner", "ner_check", "translate_check_llm",
-                   "translate_quality", "wiki"}
+                   "wiki"}
 
 # ════════════════════════════════════════════════════════════════════
 # LLM-стадии: проверка промпт-файла (--check-prompt)

@@ -415,35 +415,6 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
     return argv
 
 
-def build_translate_quality(form: dict, ctx: dict) -> list[str]:
-    """Стадия «Оценка перевода (LLM)» — translate_quality.py.
-
-    Два режима: range — один LLM-запрос по пакету глав диапазона; chunks — чанки
-    по N целых глав (глава крупнее бюджета режется по абзацам), каждый чанк —
-    отдельный запрос, их отчёты сворачиваются LLM в заключение. Тип файлов глав →
-    {translated_text}, chapter.txt → {original_text}; бюджет — ТОКЕНЫ — оценка
-    estimate_tokens (главы; промпт НЕ входит) — он же режет чанки и сводки
-    свёртки. Выход — md-отчёт tmp/translation_quality_assessment.md
-    (фиксирован), артефакты чанков — tmp/quality/.
-    """
-    argv = ["cli/translate_quality.py"]
-    argv += _range_argv(form)
-    if form.get("type"):
-        argv += ["--type", str(form["type"])]
-    if form.get("prompt_file"):
-        argv += ["--prompt_file", str(form["prompt_file"])]
-    # выходной файл фиксирован: tmp/translation_quality_assessment.md
-    if form.get("request_budget") not in (None, ""):
-        argv += ["--request_budget", str(form["request_budget"])]
-    for name, flag in (("mode", "--mode"), ("chunk_size", "--chunk_size"),
-                       ("chunks", "--chunks"), ("sample", "--sample"),
-                       ("overlap", "--overlap")):
-        if form.get(name) not in (None, ""):
-            argv += [flag, str(form[name])]
-    argv += _llm_argv(form, ctx, "translate_quality")
-    return argv
-
-
 def build_wiki(form: dict, ctx: dict) -> list[str]:
     """Стадия 7 — генерация вики (wiki.py).
 
@@ -565,13 +536,6 @@ STAGE_SPECS: dict[str, dict] = {
         "build": build_translate_check_llm,
         "fields": core_settings.form_fields("translate_check_llm"),
     },
-    "translate_quality": {
-        "title": core_settings.STAGE_TITLES["translate_quality"],
-        "preview": True,   # кнопка «Предпросмотр запроса»
-        "script": "translate_quality.py",
-        "build": build_translate_quality,
-        "fields": core_settings.form_fields("translate_quality"),
-    },
     "wiki": {
         "title": core_settings.STAGE_TITLES["wiki"],
         "preview": True,   # кнопка «Предпросмотр запроса»
@@ -592,7 +556,7 @@ STAGE_SPECS: dict[str, dict] = {
 # компиляция → вики). Слаги — контракт API, не менять.
 STAGE_ORDER: list[str] = [
     "epub", "ner", "ner_check", "pipeline", "translate_check",
-    "translate_check_llm", "batch_replace", "translate_quality",
+    "translate_check_llm", "batch_replace",
     "compile", "wiki",
 ]
 

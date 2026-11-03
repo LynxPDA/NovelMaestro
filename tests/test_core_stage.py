@@ -344,12 +344,12 @@ def test_progress_cli_mode_uses_bar(monkeypatch, capsys):
 def test_setup_stage_log_and_profile(tmp_path, monkeypatch, env_file):
     monkeypatch.chdir(tmp_path)
     args = parser_with().parse_args(["--env_file", env_file, "--model", "m1"])
-    stage, logger = st.setup_stage("translate_quality", args)
-    assert stage.name == "translate_quality"
+    stage, logger = st.setup_stage("wiki", args)
+    assert stage.name == "wiki"
     assert stage.profile.model == "m1"
     assert stage.preview_path is None
     assert logger is stage.logger
-    log = tmp_path / "logs" / "translate_quality.log"
+    log = tmp_path / "logs" / "wiki.log"
     assert log.is_file()
     assert "Запуск:" in log.read_text(encoding="utf-8")
 

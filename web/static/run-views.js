@@ -1,33 +1,3 @@
-  // translate_quality: последняя глава, помещающаяся в бюджет запроса.
-  // Размер главы = перевод (тип файлов) + оригинал (chapter.txt);
-  // размеры из /tree — СИМВОЛЫ (сервер декодирует utf-8), бюджет —
-  // ТОЛЬКО на содержимое, промпт НЕ вычитается; доступна
-  // как глобал — для node-тестов (vm-контекст), в браузере вызывается
-  // из attachQualityRange.
-  function qualityEndByBudget(chapters, start, budget, type) {
-    const avail = budget || 0;
-    if (avail <= 0 || !start || !chapters || !chapters.length) return "";
-    const art = type + ".txt";
-    const rows = chapters
-      .map((ch) => {
-        const a = ch.artifacts || {};
-        return {
-          id: parseInt(ch.id, 10) || 0,
-          sz: (a[art] || 0) + (a["chapter.txt"] || 0),
-        };
-      })
-      .filter((x) => x.id >= start && x.sz > 0)
-      .sort((a, b) => a.id - b.id);
-    let sum = 0;
-    let last = "";
-    for (const r of rows) {
-      if (sum + r.sz > avail) break;
-      sum += r.sz;
-      last = String(r.id);
-    }
-    return last;
-  }
-
 // Вкладка «Запуски» проекта (глобал: window.viewRun вызывается
 // из project-views.js, вкладка «run»); явная привязка — чтобы линтер
 // видел использование
@@ -1579,8 +1549,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // «Предпросмотр запроса» (LLM-стадии): POST
   // /stages/{key}/preview-request — синхронная эмуляция LLM-запросов стадии
   // без сети; модалка показывает messages и статистику символов из payload.
-  // У стадии «Оценка перевода» чанков запросов два (чанк и свёртка) — они
-  // приезжают в payload.requests, каждый со своими messages и статистикой.
+  // Несколько запросов за прогон (например, свёртка) приезжают в
+  // payload.requests, каждый со своими messages и статистикой.
   async function previewRequestModal(key, spec) {
     const err = h("div", { class: "form-error" });
     const host = h("div", { class: "preview-req-body" });
@@ -2163,72 +2133,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return rowEl;
   }
 
-  // translate_quality: контроль бюджета по end: поле редактируемое,
-  // введённая глава остаётся, если влезает в бюджет, иначе пересчитывается
-  // до последней влезающей (tree — размеры глав). В режиме чанков контроля нет:
-  // там диапазон — это вся книга, а бюджет режет чанки, а не конец диапазона.
-  function attachQualityRange(key, inputs) {
-    if (key !== "translate_quality") return;
-    const row = st.rangeRow;
-    if (!row || !row._start || !row._end) return;
-    const end = row._end;
-    // инпуты — обёртки .field (wrap); у files-полей select спрятан в _sel
-    const fieldInput = (x) => {
-      if (!x) return null;
-      const inp = x._input || x;
-      return (inp && inp._sel) || inp;
-    };
-    const budgetIn = fieldInput(inputs.request_budget);
-    const typeSel = fieldInput(inputs.type);
-    const modeSel = fieldInput(inputs.mode);
-    let tree = null;
-    // последняя глава, помещающаяся в бюджет от start
-    const lastFit = async (start) => {
-      if (!tree) {
-        try {
-          const d = await api(`/projects/${section}/${name}/tree`);
-          tree = d.chapters || [];
-        } catch {
-          tree = [];
-        }
-      }
-      // пустое поле — бюджет из спеки стадии (реестр настроек), не литерал
-      const def = (inputs.request_budget && inputs.request_budget._field
-        && inputs.request_budget._field.default) || "";
-      const raw =
-        budgetIn && budgetIn.value !== "" ? budgetIn.value : String(def);
-      const budget = parseInt(raw, 10) || 0;
-      const type = (typeSel && typeSel.value) || "polished";
-      return qualityEndByBudget(tree, start, budget, type);
-    };
-    const recalc = async () => {
-      if (modeSel && modeSel.value === "chunks") {
-        end.title = "пусто = до последней главы (книга уходит в чанки целиком)";
-        return;
-      }
-      const start = parseInt(row._start.value || "", 10) || 0;
-      const last = await lastFit(start);
-      const cur = parseInt(end.value || "", 10) || 0;
-      if (cur && last && cur > last) {
-        // ручная глава не влезает — пересчёт до последней влезающей
-        end.value = last;
-        st.values[key]["end"] = last;
-        st.touched[key].add("end");
-        end.title = `не влезает в бюджет — обрезано до главы ${last}`;
-      } else if (cur) {
-        end.title = "вручную (в бюджет влезает)";
-      } else {
-        end.title = "пусто = до последней главы (бюджет обрежет)";
-      }
-    };
-    row._start.addEventListener("input", recalc);
-    if (budgetIn) budgetIn.addEventListener("input", recalc);
-    if (typeSel) typeSel.addEventListener("change", recalc);
-    if (modeSel) modeSel.addEventListener("change", recalc);
-    end.addEventListener("input", recalc);
-    recalc();
-  }
-
   /* ── видимость полей по режиму стадии ───────────────────────────────
    * Единый проход по метаданным реестра (when/when_any/when_set у настроек
    * core/settings.py): значения полей режима читаются из st.values — тот же
@@ -2299,8 +2203,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // диапазон глав — ПЕРВЫМ в списке полей (все стадии с start/end)
     const rangeRow = buildRangeRow(key, spec);
     if (rangeRow) fieldNodes.unshift(rangeRow);
-    // translate_quality: ручной end с проверкой бюджета
-    attachQualityRange(key, fieldWraps);
     // видимость полей по режиму — один проход по метаданным реестра
     const modeVis = attachModeVisibility(key, spec, fieldWraps, rangeRow);
 

@@ -922,7 +922,7 @@ def test_stage_order_and_titles():
     assert keys == STAGE_ORDER
     assert STAGE_ORDER == [
         "epub", "ner", "ner_check", "pipeline", "translate_check",
-        "translate_check_llm", "batch_replace", "translate_quality",
+        "translate_check_llm", "batch_replace",
         "compile", "wiki",
     ]
     for key, spec in STAGE_SPECS.items():
@@ -1406,7 +1406,7 @@ def test_form_defaults_match_script_argparse():
     mods = {
         "ner": "cli.ner", "ner_check": "cli.ner_check",
         "translate_check_llm": "cli.translate_check_llm",
-        "translate_quality": "cli.translate_quality", "wiki": "cli.wiki",
+        "wiki": "cli.wiki",
         "epub": "cli.epub_to_chapters", "compile": "cli.clean_and_compile",
         "translate_check": "cli.translate_check",
         "batch_replace": "cli.batch_replace",

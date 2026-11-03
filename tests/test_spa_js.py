@@ -1021,7 +1021,7 @@ def test_check_reports_have_trash_icon():
     виден, а не только пачкой «Очистить»."""
     pv = (SPA_DIR / "project-views.js").read_text(encoding="utf-8")
     fn = pv[pv.index("async function renderCheckReports("):
-            pv.index("/* ── Оценка перевода (LLM)")]
+            pv.index("function exportModal(byType, project)")]
     assert 'iconBtn("trash", "Удалить отчёт"' in fn
     assert "`/file?${dq}&path=" in fn
     assert "logs/${r.name}" in fn

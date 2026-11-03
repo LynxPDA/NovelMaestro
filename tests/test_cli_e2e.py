@@ -856,7 +856,6 @@ _PC_SCRIPTS = [
     ("ner_check", "cli/ner_check.py", []),
     ("pipeline", "web/pipeline.py", ["--action", "8"]),  # весь цикл
     ("translate_check_llm", "cli/translate_check_llm.py", []),
-    ("translate_quality", "cli/translate_quality.py", []),
     ("wiki", "cli/wiki.py", []),
 ]
 

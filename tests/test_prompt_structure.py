@@ -69,14 +69,6 @@ def test_translate_check_prompt_data_not_in_system():
             assert ph not in sys_body, f"<{tag}>: {ph} в <system>"
 
 
-def test_translate_quality_prompt_data_not_in_system():
-    text = _template_text("translate_quality_prompt.txt")
-    block = _tagged_block(text, "prompt_assessment")
-    sys_body = _system_body(block)
-    for ph in ("{original_text}", "{translated_text}"):
-        assert ph not in sys_body, f"prompt_assessment: {ph} в <system>"
-
-
 def test_wiki_prompt_system_closes_and_has_no_data_blocks():
     text = _template_text("wiki_prompt.txt")
     block = _tagged_block(text, "prompt_wiki_article")

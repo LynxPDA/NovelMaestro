@@ -4224,7 +4224,6 @@ function viewProject(section, name, tab, job) {
       { key: "ner", label: "Глоссарий (LLM)" },
       { key: "tcheck", label: "Перевод" },
       { key: "tcl", label: "Перевод (LLM)" },
-      { key: "quality", label: "Оценка перевода (LLM)" },
     ];
     /* вкладка проверки — своя на каждую книгу (была одной на весь интерфейс) */
     let curTab = pref.get("review").tab || null;
@@ -4277,18 +4276,9 @@ function viewProject(section, name, tab, job) {
         "tcl",
       ),
     );
-    /* renderCheckReports/renderQualityReports — глобальные функции
-       (см. ниже), принимают (section, name) параметрами — без
-       глобалов, иначе вкладка падает с ReferenceError */
-    paneOf("quality").append(
-      h(
-        "div",
-        { class: "review-section-sub" },
-        "md-отчёт стадии translate_quality "
-          + "(tmp/translation_quality_assessment.md)",
-      ),
-      await renderQualityReports(section, name),
-    );
+    /* renderCheckReports — глобальная функция (см. ниже), принимает
+       (section, name) параметрами — без глобалов, иначе вкладка падает
+       с ReferenceError */
     wrap.append(bar, panel);
     setTab(curTab);
     return wrap;
@@ -7061,63 +7051,6 @@ function viewProject(section, name, tab, job) {
 
   render();
   return page;
-}
-
-/* ── Оценка перевода (LLM): md-отчёт translate_quality ── */
-async function renderQualityReports(section, name) {
-  /* Секция «Проверки»: рендер фиксированного отчёта
-     tmp/translation_quality_assessment.md в sandbox-iframe;
-     выбор файла убран — имя отчёта фиксируется стадией. */
-  const err = h("div", { class: "form-error" });
-  const empty = h("div", { class: "files-empty" });
-  function syncMsgs() {
-    empty.hidden = !empty.textContent;
-    err.hidden = !err.textContent;
-  }
-  syncMsgs();
-  const frame = h("iframe", {
-    class: "editor-preview-frame preview-adaptive",
-    sandbox: "allow-same-origin",
-    title: "предпросмотр отчёта оценки перевода",
-  });
-  frame.style.display = "none";
-
-  const q = new URLSearchParams({
-    project: `${section}/${name}`,
-    path: "tmp/translation_quality_assessment.md",
-  });
-  const wrap = h(
-    "div",
-    { class: "quality-reports" },
-    empty,
-    err,
-    frame,
-  );
-  try {
-    const r = await api(`/file?${q}`);
-    if (r.missing) {
-      empty.textContent =
-        "Нет отчёта — запустите стадию «Оценка перевода (LLM)» (вкладка «Запуски»)";
-      syncMsgs();
-      return wrap;
-    }
-    const html = window.marked
-      ? window.marked.parse(r.content || "", {
-          mangle: false,
-          headerIds: false,
-        })
-      : "<pre>marked не загружен</pre>";
-    frame.srcdoc = mdPreviewSrcdoc(html);
-    frame.style.display = "block";
-  } catch (ex) {
-    err.textContent = ex.message;
-    empty.textContent =
-      "Нет отчёта — запустите стадию «Оценка перевода (LLM)» (вкладка «Запуски»)";
-  }
-  syncMsgs();
-  frame.addEventListener("load", () => fitPreviewFrame(frame));
-
-  return wrap;
 }
 
 function exportModal(byType, project) {

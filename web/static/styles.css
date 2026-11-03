@@ -3086,20 +3086,6 @@ input[type="number"] {
   font-size: 13px;
 }
 
-.quality-reports {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.quality-reports .check-list {
-  max-height: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 0;
-}
-
 .check-msg {
   white-space: pre-wrap;
   font-size: 13px;
