@@ -4142,7 +4142,7 @@ function viewProject(section, name, tab, job) {
                   class: "btn btn-xs",
                   title:
                     "Применить все принятые правки (запуск — фоновая задача)",
-                  onclick: () => runApply(),
+                  onclick: (ev) => runApply(ev.currentTarget),
                 },
                 "Применить",
               ),
@@ -4176,8 +4176,17 @@ function viewProject(section, name, tab, job) {
         body.append(status, err);
       }
       // ── применение: запуск + уведомление о результате ──
-      async function runApply() {
+      /* Кнопка гаснет и меняет надпись ещё ДО запроса: на большой книге
+         сервер сначала создаёт точку истории (секунды), и без отклика
+         нажатие выглядело зависшим. Тост «запущено» — после ответа: он
+         подтверждает, что задача действительно стартовала. */
+      async function runApply(btn) {
         err.textContent = "";
+        const label = btn ? btn.textContent : "";
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "Запускаю…";
+        }
         try {
           const r = await api(applyPath, {
             method: "POST",
@@ -4185,8 +4194,17 @@ function viewProject(section, name, tab, job) {
           });
           toast("Применение: запущено");
           watchJob(r.job && r.job.id);
+          /* шапка живёт по опросу раз в 10 с: без толчка новый запуск
+             появлялся бы в ней с задержкой, хотя он уже идёт */
+          if (typeof updateRunPill === "function") updateRunPill();
         } catch (ex) {
           err.textContent = ex.message;
+          toast(`Применение не запущено: ${ex.message}`, "err");
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = label;
+          }
         }
       }
       function watchJob(jobId) {
@@ -4204,7 +4222,7 @@ function viewProject(section, name, tab, job) {
           } catch {
             /* сеть — пробуем ещё раз */
           }
-          if (!job || job.status === "running") return;
+          if (!job || UICore.isActive(job)) return;
           clearInterval(timer);
           _reviewWatchers.delete(watchKey);
           if (job.status === "done") toast("✅ Применение завершено");

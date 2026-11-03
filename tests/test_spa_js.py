@@ -164,7 +164,8 @@ def test_run_views_last_finished_log():
     assert "async function logColumn()" in src
     assert "lastFinishedJob(" in src
     assert "lazyLastLog(" in src
-    assert 'j.status !== "running"' in src
+    # завершённый — любой неактивный: подготовка (pending) ещё идёт
+    assert "!UICore.isActive(j)" in src
     # live-гард onPayload: DOM — только при совпадении стадии запуска
     assert "st.job.action === st.stage" in src
     # logPanel параметризован; «Стоп» — только для running, у финала — время

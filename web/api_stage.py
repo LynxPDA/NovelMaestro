@@ -13,8 +13,9 @@ import logging
 import os
 import queue
 import time
+from collections.abc import Callable
 from pathlib import Path
-from web.jobs import JobManager, SSE_PING, TAIL_LIMIT
+from web.jobs import ACTIVE as _ACTIVE, JobManager, SSE_PING, TAIL_LIMIT
 from web.server import ApiError, Router
 from core import common as _common
 from core import settings as core_settings
@@ -159,7 +160,7 @@ def _jobs_start(ctx: dict) -> dict:
     srv = handler.server if handler is not None else None
     limit = (getattr(srv, "jobs_limit", None)
              or int(core_settings.BY_KEY["WEB_JOBS_LIMIT"].default))
-    running = sum(1 for j in jm.list() if j.get("status") == "running")
+    running = sum(1 for j in jm.list() if j.get("status") in _ACTIVE)
     if running >= limit:
         raise ApiError(
             429,
@@ -185,16 +186,22 @@ def _jobs_start(ctx: dict) -> dict:
         # ключ — только в окружении процесса
         env["LLM_API_KEY"] = str(api_key)
     # точка истории ДО применения правок проверки (снимок до изменений;
-    # точка «после» создаётся по завершении запуска в web.history.on_job_finished)
+    # точка «после» создаётся по завершении запуска в web.history.on_job_finished).
+    # Создаётся в фоновом потоке запуска: ответ уходит сразу, а браузер
+    # видит запуск в статусе «pending» — на большой книге add занимает
+    # секунды, и ждать его в запросе значило держать кнопку без ответа.
+    before: Callable[[], None] | None = None
     if (ctx.get("review_apply") and params.get("apply")
             and not params.get("dry_run")):
-        try:
-            from web import history as hs
-            if core_settings.effective("HISTORY_ON_APPLY"):
+        if core_settings.effective("HISTORY_ON_APPLY"):
+            def _snapshot() -> None:
+                from web import history as hs
                 hs.create(pdir, "Перед применением правок", "apply")
-        except Exception as exc:  # noqa: BLE001  история не ломает запуск
-            log.warning("Точка истории не создана: %s", exc)
-    job = jm.start(action, title, project, argv, pdir, env=env)
+
+            before = _snapshot
+
+    job = jm.start(action, title, project, argv, pdir, env=env,
+                   before=before)
     return {"ok": True, "job": _job_payload(job)}
 
 
@@ -220,7 +227,7 @@ def _jobs_active(ctx: dict) -> dict:
     """Только активные запуски (GET /api/jobs/active) — лёгкий опрос
     для индикатора в шапке SPA (в отличие от /api/jobs — без истории)."""
     jm = _job_manager(ctx)
-    active = [j for j in jm.list() if j.get("status") == "running"]
+    active = [j for j in jm.list() if j.get("status") in _ACTIVE]
     return {"ok": True, "jobs": active}
 
 

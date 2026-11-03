@@ -47,6 +47,20 @@ test("progressParts: части строки прогресса", () => {
     },
   );
 
+  // подготовка (точка истории на большой книге идёт секунды): процесс
+  // ещё не поднят, но запуск уже идёт — счётчик называет эту фазу
+  assert.deepEqual(
+    UICore.progressParts({ id: "p2", status: "pending" }, null),
+    { label: "", count: "подготовка…", eta: "", pct: 0, waiting: true },
+  );
+
+  // isActive: подготовка — тот же идущий запуск для шапки и вкладок
+  assert.equal(UICore.isActive({ status: "pending" }), true);
+  assert.equal(UICore.isActive({ status: "running" }), true);
+  assert.equal(UICore.isActive({ status: "done" }), false);
+  assert.equal(UICore.isActive({ status: "failed" }), false);
+  assert.equal(UICore.isActive(null), false);
+
   // нет ни запуска, ни событий (не нашли) — пусто: «0/0 · 0%» нигде
   // мелькать не должно
   assert.deepEqual(UICore.progressParts(null, null), {

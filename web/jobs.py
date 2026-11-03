@@ -35,6 +35,7 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 log = logging.getLogger("web")
@@ -59,6 +60,12 @@ SSE_PING = 15.0  # секунд между ping в стриме
 # рестарта сервера); смерть pid → статус failed + persist. Наблюдатель с этим
 # интервалом живёт только пока сироты есть (см. JobManager._start_watch)
 ORPHAN_POLL = 5.0
+# Статус «запуск есть, процесса ещё нет»: пока идёт подготовка (точка
+# истории), браузер уже показывает запуск — иначе долгая подготовка
+# выглядит зависшей кнопкой. Затем running | done | failed | stopped.
+PENDING = "pending"
+# Статусы, пока запуск идёт: подготовка (PENDING) и сам процесс.
+ACTIVE = (PENDING, "running")
 
 # Префиксы структурированных событий в stdout (JSON после него).
 # @@CHAPTER@@ — события глав конвейера (web/pipeline.py);
@@ -415,12 +422,12 @@ class JobManager:
             return
         # активные считаются в лимите: история держит MAX_HISTORY записей
         # плюс столько живых, сколько сверх лимита осталось
-        running = [j for j in self._jobs.values() if j.status == "running"]
+        running = [j for j in self._jobs.values() if j.status in ACTIVE]
         excess = len(self._jobs) - max(self.MAX_HISTORY, len(running))
         if excess <= 0:
             return
         ordered = sorted((j for j in self._jobs.values()
-                          if j.status != "running"),
+                          if j.status not in ACTIVE),
                          key=lambda j: j.created, reverse=True)
         # самые старые завершённые уходят первыми, живые остаются
         for stale in ordered[-excess:]:
@@ -575,32 +582,39 @@ class JobManager:
                              "помечен failed", job.id, job.pid)
 
     def _reconcile(self) -> None:
-        """Проверяет сохранённые «running»-запуски после рестарта сервера:
-        живой pid → запуск остаётся running (управление по pid: stop/shutdown),
-        мёртвый → помечается failed (процесс не пережил рестарт)."""
+        """Проверяет сохранённые незавершённые запуски после рестарта сервера.
+
+        «running» с живым pid → остаётся running (управление по pid);
+        «pending» — подготовка шла в потоке, который умер вместе с прошлым
+        сервером: процесса ещё не было, запуск не продолжится — failed.
+        """
         changed = False
         for job in list(self._jobs.values()):
-            if job.status != "running":
+            if job.status not in (PENDING, "running"):
                 continue
-            if self._pid_alive(job.pid):
+            if job.status == "running" and self._pid_alive(job.pid):
                 log.info("Reconcile: запуск %s (pid=%s) продолжает работать "
                          "после рестарта сервера", job.id, job.pid)
-            else:
-                job.status = "failed"
-                job.exit_code = job.exit_code or 1
-                job.finished = time.time()
-                changed = True
-                log.info("Reconcile: запуск %s (pid=%s) не пережил рестарт "
-                         "— помечен failed", job.id, job.pid)
+                continue
+            job.status = "failed"
+            job.exit_code = job.exit_code or 1
+            job.finished = time.time()
+            changed = True
+            log.info("Reconcile: запуск %s (pid=%s) не пережил рестарт "
+                     "— помечен failed", job.id, job.pid)
         if changed:
             self._persist()
 
     # ── CRUD ─────────────────────────────────────────────────
     def running_on(self, project: str) -> Job | None:
-        """Активная задача на этот проект — гонка записи."""
+        """Активная задача на этот проект — гонка записи.
+
+        Подготовка считается активной: два запуска на одну книгу
+        параллельно перезаписали бы одни и те же артефакты.
+        """
         with self._lock:
             for j in self._jobs.values():
-                if j.status == "running" and j.project == project:
+                if j.status in ACTIVE and j.project == project:
                     return j
         return None
 
@@ -622,10 +636,51 @@ class JobManager:
 
     def start(self, action: str, title: str, project: str,
               argv: list[str], cwd: Path,
-              env: dict | None = None) -> Job:
+              env: dict | None = None,
+              before: Callable[[], None] | None = None) -> Job:
         """Запуск задачи; env — доп. переменные окружения (напр.
-        LLM_API_KEY), сливаются поверх os.environ."""
+        LLM_API_KEY), сливаются поверх os.environ.
+
+        `before` — работа, которая обязана закончиться ДО первого процесса
+        (точка истории «до правок»). С ней запуск возвращается сразу со
+        статусом `pending`, а процесс поднимается в фоновом потоке: точка
+        на большой книге занимает секунды, и ждать её в HTTP-запросе
+        значило держать нажатой кнопку без ответа. Без `before` поведение
+        прежнее — процесс стартует к возврату.
+        """
         job = Job(action, title, project, argv, cwd)
+        if before is None:
+            # синхронный путь: процесс поднимается сразу, ошибка Popen
+            # сразу ставит failed — запись нужна до старта
+            with self._lock:
+                self._jobs[job.id] = job
+            self._spawn(job, cwd, env)
+            return job
+        job.status = PENDING
+        with self._lock:
+            self._jobs[job.id] = job
+        self._persist()
+
+        def _prepare() -> None:
+            try:
+                before()
+            except Exception as exc:  # noqa: BLE001  подготовка не отменяет запуск
+                log.warning("Подготовка запуска %s: %s", job.id, exc)
+                job.append(f"Подготовка не выполнена: {exc}")
+            self._spawn(job, cwd, env)
+
+        threading.Thread(target=_prepare, daemon=True).start()
+        return job
+
+    def _spawn(self, job: Job, cwd: Path, env: dict | None) -> None:
+        """Popen + поток-читатель (см. `start`)."""
+        # пока шла подготовка, запуск могли остановить (stop/remove):
+        # поднимать процесс тогда нельзя — «остановленный» стал бы живым.
+        # Пропускаются только активные статусы: pending — подготовка
+        # завершилась, running — обычный синхронный запуск.
+        if job.status not in ACTIVE:
+            log.info("Запуск %s отменён до старта (%s)", job.id, job.status)
+            return
         try:
             proc_env = dict(os.environ)
             if env:
@@ -639,7 +694,7 @@ class JobManager:
             # (✦/📊) в cp1251 непредставимы → «?». На POSIX не мешает.
             proc_env.setdefault("PYTHONIOENCODING", "utf-8")
             proc = subprocess.Popen(
-                [self.python] + argv,
+                [self.python] + job.argv,
                 cwd=str(cwd),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -659,17 +714,14 @@ class JobManager:
             job.exit_code = 1
             job.finished = time.time()
             job.append(f"Ошибка запуска: {exc}")
-            with self._lock:
-                self._jobs[job.id] = job
             self._persist()
-            return job
+            job.notify(("status", job.status))
+            return
         job.proc = proc
         job.pid = proc.pid
-        with self._lock:
-            self._jobs[job.id] = job
+        job.status = "running"
         threading.Thread(target=self._reader, args=(job,), daemon=True).start()
         self._persist()
-        return job
 
     def _reader(self, job: Job) -> None:
         """Читает stdout до EOF, потом фиксирует статус.
@@ -744,7 +796,7 @@ class JobManager:
         Работает и для «сирот» после рестарта сервера: proc отсутствует,
         но pid жив — остановка по pid."""
         job = self.get(job_id)
-        if job is None or job.status != "running":
+        if job is None or job.status not in ACTIVE:
             return job
         proc = job.proc
         if proc is None and not self._pid_alive(job.pid):
@@ -789,8 +841,7 @@ class JobManager:
         сервера). Живые сироты останавливаются по pid; статусы/финиш
         фиксируются."""
         with self._lock:
-            jobs = [j for j in self._jobs.values()
-                    if j.status == "running"]
+            jobs = [j for j in self._jobs.values() if j.status in ACTIVE]
         for job in jobs:
             log.info("Shutdown: останавливаю запуск %s (%s)",
                      job.id, job.title)
@@ -818,8 +869,8 @@ class JobManager:
         # Remove останавливает и сирот (proc=None, но pid жив) —
         # остановка уходит и без живого Popen, иначе удаление из
         # истории оставляло процесс работать
-        if job.status == "running" and (job.proc is not None
-                                        or self._pid_alive(job.pid)):
+        if job.status in ACTIVE and (job.proc is not None
+                                     or self._pid_alive(job.pid)):
             _kill_tree(job.pid, proc=job.proc)
         self._drop_sidecar(job_id)
         self._persist()
@@ -831,7 +882,7 @@ class JobManager:
         Возвращает число удалённых записей."""
         with self._lock:
             finished = [j for j in self._jobs.values()
-                        if j.status != "running"]
+                        if j.status not in ACTIVE]
             for job in finished:
                 self._jobs.pop(job.id, None)
                 self._drop_sidecar(job.id)

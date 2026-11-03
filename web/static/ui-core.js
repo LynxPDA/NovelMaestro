@@ -890,8 +890,17 @@
    * остатка не бывает, а висящая оценка после остановки читалась бы как
    * обещание. */
   function progressParts(job, p) {
-    var running = !!(job && job.status === "running");
+    var status = String((job && job.status) || "");
+    var running = status === "running";
     var out = { label: "", count: "", eta: "", pct: 0, waiting: false };
+    /* подготовка (pending): процесс ещё не поднят — точка истории на
+       большой книге занимает секунды, и «ожидание первого результата»
+       читалось бы как зависший запуск */
+    if (status === "pending") {
+      out.waiting = true;
+      out.count = "подготовка…";
+      return out;
+    }
     if (!p) {
       if (running) {
         out.waiting = true;
@@ -1604,6 +1613,13 @@
     },
 
     /* ── прогресс запусков: счётчик, ETA, части строки ── */
+    /* Запуск идёт: подготовка (pending) ещё без процесса, но под него
+     * уже занята книга и он виден в шапке — считать его завершённым
+     * нельзя, иначе шапка молчит все секунды подготовки */
+    isActive: (job) => {
+      var st = String((job && job.status) || "");
+      return st === "pending" || st === "running";
+    },
     progressPct: progressPct,
     progressParts: progressParts,
     /* ETA одного запуска: {remaining, finishAt} | null (и пишет выборку) */

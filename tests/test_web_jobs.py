@@ -186,6 +186,114 @@ def test_start_done(tmp_path, fake_script):
     assert job.lines[-1] == "line-9"
 
 
+def test_start_with_before_returns_pending(tmp_path, fake_script):
+    """Подготовка идёт ДО процесса, а ответ приходит сразу.
+
+    На большой книге точка истории занимает секунды: ждать её внутри
+    HTTP-запроса значило держать нажатой кнопку без ответа. Запуск
+    возвращается со статусом `pending`, а `before` успевает отработать
+    раньше, чем стартует скрипт.
+    """
+    jm = JobManager(tmp_path)
+    marker = tmp_path / "before.txt"
+    seen: list[str] = []
+
+    def pending_job():
+        # поток подготовки стартует раньше, чем тест получит job.id: ищем
+        # единственную запись в истории — она уже есть (start её положил)
+        rows = [j for j in jm.list() if j["status"] == "pending"]
+        assert len(rows) == 1, rows
+        return jm.get(rows[0]["id"])
+
+    def before() -> None:
+        # процесс ещё не поднят — pid пуст
+        current = pending_job()
+        assert current is not None and current.proc is None, \
+            "подготовка обязана закончиться ДО процесса"
+        seen.append(current.status)
+        marker.write_text("готово", encoding="utf-8")
+
+    job = jm.start("test", "Тест", "ACTIVE/x",
+                   [str(fake_script / "ok.py")], tmp_path, before=before)
+    assert job.status == "pending"
+    job = _wait_status(jm, job.id, "done")
+    assert job.exit_code == 0
+    assert seen == ["pending"], "подготовка видела себя ещё в pending"
+    assert marker.read_text(encoding="utf-8") == "готово"
+
+
+def test_before_error_does_not_block_start(tmp_path, fake_script):
+    """Ошибка подготовки не отменяет запуск: причина — строкой в логе."""
+    jm = JobManager(tmp_path)
+
+    def before() -> None:
+        raise OSError("история недоступна")
+
+    job = jm.start("test", "Тест", "ACTIVE/x",
+                   [str(fake_script / "ok.py")], tmp_path, before=before)
+    job = _wait_status(jm, job.id, "done")
+    assert job.exit_code == 0
+    assert any("история недоступна" in line for line in job.lines)
+
+
+def test_pending_is_active_and_locks_project(tmp_path, fake_script):
+    """Подготовка считается активной: вторая стадия на ту же книгу — отказ.
+
+    Иначе точка истории и второй прогон писали бы одни артефакты
+    параллельно.
+    """
+    jm = JobManager(tmp_path)
+    gate = threading.Event()
+
+    def slow_prepare() -> None:
+        gate.wait(timeout=5)
+
+    job = jm.start("test", "Тест", "ACTIVE/x",
+                   [str(fake_script / "ok.py")], tmp_path,
+                   before=slow_prepare)
+    assert job.status == "pending"
+    assert jm.running_on("ACTIVE/x") is not None, \
+        "подготовка должна занимать книгу"
+    assert any(j["id"] == job.id and j["status"] == "pending"
+               for j in jm.list()), "pending попадает в историю запусков"
+    gate.set()
+    _wait_status(jm, job.id, "done")
+    assert jm.running_on("ACTIVE/x") is None
+
+
+def test_pending_survives_no_restart(tmp_path):
+    """pending после рестарта сервера → failed: поток подготовки умер."""
+    jm = JobManager(tmp_path)
+    job = Job("test", "Тест", "ACTIVE/x", [], tmp_path)
+    job.status = "pending"
+    with jm._lock:
+        jm._jobs[job.id] = job
+    jm._persist()
+    again = JobManager(tmp_path)
+    restored = again.get(job.id)
+    assert restored is not None and restored.status == "failed"
+
+
+def test_stop_during_prepare_cancels_start(tmp_path, fake_script):
+    """Остановка во время подготовки не даёт процессу подняться."""
+    jm = JobManager(tmp_path)
+    stopped: list[str] = []
+
+    def before() -> None:
+        # пока «готовим», запуск останавливают (id ищем в истории: поток
+        # подготовки стартует раньше, чем тест получит job.id)
+        rows = [j for j in jm.list() if j["status"] == "pending"]
+        assert len(rows) == 1, rows
+        assert jm.stop(rows[0]["id"]) is not None
+        stopped.append(rows[0]["id"])
+
+    job = jm.start("test", "Тест", "ACTIVE/x",
+                   [str(fake_script / "ok.py")], tmp_path, before=before)
+    job = _wait_status(jm, job.id, "stopped")
+    assert job.status == "stopped"
+    assert job.pid is None, "процесс не должен был стартовать"
+
+
 def test_update_project_path(tmp_path, fake_script):
     """Move/rename: журнал следует за проектом — project/cwd у его
     запусков переписаны (в jobs.json тоже), чужие запуски не тронуты."""
@@ -2584,7 +2692,8 @@ def test_jobs_limit_enforced(jobs_srv, monkeypatch):
     for name in names:
         _make_project(port, req, name=name)
 
-    def fake_start(action, title, project, argv, cwd, env=None):
+    def fake_start(action, title, project, argv, cwd, env=None,
+                   before=None):
         # не порождаем процесс: задача сразу «running»
         job = Job(action, title, project, argv, cwd)
         job.status = "running"
@@ -2610,7 +2719,8 @@ def test_jobs_project_lock_conflict(jobs_srv, monkeypatch):
     port, req, jm = jobs_srv
     _make_project(port, req)
 
-    def fake_start(action, title, project, argv, cwd, env=None):
+    def fake_start(action, title, project, argv, cwd, env=None,
+                   before=None):
         job = Job(action, title, project, argv, cwd)
         job.status = "running"
         with jm._lock:

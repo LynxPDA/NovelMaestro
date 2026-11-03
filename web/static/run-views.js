@@ -76,7 +76,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     try {
       const r = await api("/jobs");
       const mine = (r.jobs || []).filter(
-        (j) => j.status === "running" && j.project === `${section}/${name}`,
+        (j) => UICore.isActive(j) && j.project === `${section}/${name}`,
       );
       if (mine.length) {
         attachToJob(mine[0].id);
@@ -223,7 +223,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const mine = (r.jobs || []).filter(
         (j) => j.project === `${section}/${name}`
           && j.action === key
-          && j.status !== "running",
+          && !UICore.isActive(j),
       );
       return mine.length ? mine[0] : null;
     } catch {
@@ -300,12 +300,12 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   async function activePanel() {
     const panel = h("div", { class: "run-panel" });
     panel.append(h("div", { class: "run-panel-title" }, "Активный запуск"));
-    let j = st.job && st.job.status === "running" ? st.job : null;
+    let j = st.job && UICore.isActive(st.job) ? st.job : null;
     if (!j) {
       try {
         const r = await api("/jobs");
         j = (r.jobs || []).find(
-          (x) => x.status === "running" && x.project === `${section}/${name}`,
+          (x) => UICore.isActive(x) && x.project === `${section}/${name}`,
         );
       } catch {
         j = null;
@@ -3287,6 +3287,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     );
     if (job.status === "running") {
       toolbar.append(stopBtn(job));
+    } else if (job.status === "pending") {
+      /* подготовка: процесса ещё нет, останавливать нечего — кнопка
+         «Стоп» только что создала бы гонку с подъёмом процесса */
+      toolbar.append(h("span", { class: "job-time" }, "подготовка…"));
     } else {
       toolbar.append(
         h(
@@ -3298,7 +3302,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       );
     }
     const nodes = [toolbar];
-    if (view.progress || job.status === "running") {
+    if (view.progress || UICore.isActive(job)) {
       const bar = UIC.progressRow();
       st.logBar = bar;
       bar.paint(UICore.progressParts(job, view.progress));
@@ -3446,7 +3450,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           break; // стрим завершился штатно (задание закончилось)
         } catch (ex) {
           if (ex && ex.name === "AbortError") return; // ушли со страницы
-          const running = st.job && st.job.status === "running";
+          const running = st.job && UICore.isActive(st.job);
           if (!running || attempt >= MAX_STREAM_ATTEMPTS) {
             if (running) toast(`SSE-стрим оборван: ${ex.message}`, "err");
             break;

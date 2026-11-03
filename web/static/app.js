@@ -2151,7 +2151,7 @@ async function viewDashboard() {
      («ожидание первого результата…») — раньше возвращался null и
      запуск выглядел мёртвым */
   function progressBar(job, p) {
-    if (!p && job.status !== "running") return null;
+    if (!p && !UICore.isActive(job)) return null;
     return UIC.progressRow({ mini: true })
       .paint(UICore.progressParts(job, p));
   }
@@ -3421,7 +3421,7 @@ function updateRunPill() {
          render() уходит раньше, чем layout с шапкой попадёт в DOM */
       const slot = document.getElementById("app-run-slot");
       if (!slot) return;
-      const jobs = (d.jobs || []).filter((j) => j.status === "running");
+      const jobs = (d.jobs || []).filter((j) => UICore.isActive(j));
       const now = jobs.map((j) => String(j.id));
       const finished = runSeen.filter((id) => !now.includes(id));
       runSeen = now;
