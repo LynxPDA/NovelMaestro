@@ -328,8 +328,7 @@ def test_scan_files_reads_whole_chain(tmp_path):
     _write_chapter(tmp_path, 2, {"polished": "текст", "redacted": "текст"})
     cmap = __import__("core.common", fromlist=["build_chapter_map"]) \
         .build_chapter_map(str(tmp_path))
-    files = TC.scan_files(cmap, "polished", TC.comparisons_for("polished"),
-                          strict=True)
+    files = TC.scan_files(cmap, strict=True)
     assert set(files[1]) == {"polished", "translated"}
     assert set(files[2]) == {"polished", "redacted"}
     assert TC.present_from(files) == ("polished", "redacted", "translated")
@@ -346,8 +345,7 @@ def test_scan_files_skips_duplicates(tmp_path):
     _write_chapter(tmp_path, 2, {"polished": "текст", "redacted": "текст"})
     cmap = __import__("core.common", fromlist=["build_chapter_map"]) \
         .build_chapter_map(str(tmp_path))
-    files = TC.scan_files(cmap, "polished", TC.comparisons_for("polished"),
-                          strict=True)
+    files = TC.scan_files(cmap, strict=True)
     assert 1 not in files and 2 in files
 
 
@@ -889,8 +887,7 @@ def test_pair_ratios_keyed_by_chapter(tmp_path):
     _write_chapter(tmp_path, 1, {"polished": _body(10), "redacted": _body(10)})
     _write_chapter(tmp_path, 2, {"polished": _body(20), "redacted": _body(10)})
     comps = TC.comparisons_for("polished")
-    files = TC.scan_files(TC.build_chapter_map(str(tmp_path)), "polished",
-                          comps, True)
+    files = TC.scan_files(TC.build_chapter_map(str(tmp_path)), True)
     comps = TC.comparisons_for("polished", TC.present_from(files))
     counts = TC.count_file_tokens(
         sorted({p for row in files.values() for p in row.values()}))
@@ -918,8 +915,7 @@ def test_pair_ratios_feed_stats(tmp_path):
         _write_chapter(tmp_path, num,
                        {"polished": _body(100 * mul), "redacted": _body(100)})
     cmap = TC.build_chapter_map(str(tmp_path))
-    comps = TC.comparisons_for("polished")
-    files = TC.scan_files(cmap, "polished", comps, True)
+    files = TC.scan_files(cmap, True)
     comps = TC.comparisons_for("polished", TC.present_from(files))
     counts = TC.count_file_tokens(
         sorted({p for row in files.values() for p in row.values()}))

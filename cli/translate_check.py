@@ -171,7 +171,7 @@ def present_from(files: dict) -> tuple[str, ...]:
     return tuple(t for t in CHAIN if any(t in row for row in files.values()))
 
 
-def scan_files(chapter_map, check_type, comparisons, strict) -> dict:
+def scan_files(chapter_map, strict) -> dict:
     """Один проход по ВСЕЙ книге: {номер: {тип: путь}} без дублей папок.
 
     Ищутся ВСЕ типы цепочки: по их наличию строятся пары главы (нет redacted —
@@ -657,8 +657,7 @@ def main() -> None:
 
     # ── проход 1: статистика пар по ВСЕЙ книге (диапазон не важен); пары —
     #    по фактическому набору файлов, рядом идёт запасная стадия
-    files = scan_files(chapter_map, check_type, comparisons, strict) \
-        if volume_on else {}
+    files = scan_files(chapter_map, strict) if volume_on else {}
     comparisons = comparisons_for(check_type, present_from(files))
     counts = count_file_tokens(
         sorted({p for row in files.values() for p in row.values()})) \
