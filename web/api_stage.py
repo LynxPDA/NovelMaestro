@@ -470,8 +470,7 @@ def _stage_options(ctx: dict) -> dict:
             except OSError:
                 continue
             if any(common.get_tagged_prompt(text, tag)
-                   for tag in ("translate_lr", "translate",
-                               "redact", "polish")):
+                   for tag in ("translate", "redact", "polish")):
                 out["options"]["auto_prompt"] = f"prompts/{cand}"
                 break
         # файлы корня проекта (для полей files с dir="");

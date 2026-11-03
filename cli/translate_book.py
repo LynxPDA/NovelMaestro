@@ -25,17 +25,9 @@ estimate_tokens); длины — СИМВОЛЫ; max_tokens — серверны
 ner.json (поле translation; пол по наличию (female)/(male) в type), ищутся
 в тексте чанка (основное назначение — polish).
 
-Расширенный контекст (малоресурсные языки): --dict_file (словарь в
-формате ner.json — механизм глоссария), --rules_file (справочник языка
-txt/md), --examples_file (пары оригинал→перевод для few-shot).
-Плейсхолдеры {dict_block}/{rules_block}/{fewshot_block} — во всех
-режимах; нет файла → «(нет)». Словарь ищется по тексту чанка И по
-source-сторонам выбранных примеров. Любой из трёх файлов переводит
-translate в расширенный режим: тег <translate_lr> (фолбэк <translate>
-→ встроенный расширенный промпт). --request_budget — общий потолок
-user-запроса в ТОКЕНАХ (оценка; 0 = без ограничения): предохранитель
-ЛЮБОГО типа работы — перевод, редактура, полировка; превышение —
-ошибка чанка.
+--request_budget — общий потолок user-запроса в ТОКЕНАХ (оценка;
+0 = без ограничения): предохранитель ЛЮБОГО типа работы — перевод,
+редактура, полировка; превышение — ошибка чанка.
 
 Сервер: --host/--model/--api_key (CLI) > HOST/API_KEY/MODEL из .env
 (единая модель скрипта — без отдельных моделей под режимы).
@@ -92,15 +84,10 @@ from core import settings as core_settings  # noqa: E402
 from core.common import (
     collect_gender_names,
     estimate_tokens,
-    find_relevant_dict,
-    find_relevant_examples,
     find_relevant_ner,
-    format_fewshot_block,
     get_tagged_prompt,
-    load_examples,
     load_ner_data,
     load_prompt,
-    load_rules_block,
     split_text_smart,
     stage_log_path,
 
@@ -140,61 +127,10 @@ Translate the following segment into Russian, without additional explanation.
 </user>
 """
 
-# Расширенный контекст (малоресурсные языки): словарь > правила > примеры;
-# примеры — для стиля и терминологии, НЕ дословно.
-DEFAULT_TRANSLATE_LR_PROMPT = """
-<system>
-Ты — профессиональный художественный переводчик с малоресурсного языка
-на русский. Используй предоставленные материалы: словарь — для выбора
-слов (склоняя по контексту), правила — для грамматики и стилистики,
-примеры — как образец стиля и терминологии (НЕ дословно, без переноса
-содержания в перевод текущего текста).
-
-Правила перевода:
-- Не переводи дословно: объединяй короткие фразы, разбивай слишком
-  длинные предложения, избавляйся от канцелярита.
-- Восстанавливай опущенные подлежащие по контексту, избегай
-  неуместного пассивного залога.
-- Соблюдай пол персонажей (в исходном языке он/она часто звучит
-  одинаково) — сверяйся с глоссарием и контекстом.
-- Адаптируй идиомы: передавай смысл литературным русским языком.
-- Форматирование: реплики — с новой строки через длинное тире (—),
-  мысли — в «ёлочках», системные сообщения — в [квадратных скобках].
-- Корректно переводи номер и название главы в начале:
-  «Глава 48. Название» (без названия — только «Глава 48.»).
-
-ФОРМАТ ВЫВОДА:
-Выдай ТОЛЬКО итоговый русский текст. Без вступлений, пояснений,
-комментариев переводчика и без оригинального текста.
-</system>
-<user>
-=== СЛОВАРЬ ===
-{dict_block}
-=== КОНЕЦ СЛОВАРЯ ===
-=== ПРАВИЛА ЯЗЫКА ===
-{rules_block}
-=== КОНЕЦ ПРАВИЛ ===
-=== ПРИМЕРЫ ПЕРЕВОДА ===
-{fewshot_block}
-=== КОНЕЦ ПРИМЕРОВ ===
-=== ГЛОССАРИЙ ===
-{ner_block}
-=== КОНЕЦ ГЛОССАРИЯ ===
-Translate the following segment into Russian.
-
-=== ТЕКСТ ===
-
-{original_text}
-</user>
-"""
-
-
-def _builtin_prompt(mode: str, extended: bool) -> str:
+def _builtin_prompt(mode: str) -> str:
     """Встроенный промпт режима (fallback без внешнего файла)."""
     if mode == "redact":
         return DEFAULT_REDACT_PROMPT
-    if extended and mode == "translate":
-        return DEFAULT_TRANSLATE_LR_PROMPT
     return DEFAULT_TRANSLATE_PROMPT
 
 DEFAULT_REDACT_PROMPT = """
@@ -309,25 +245,18 @@ def save_result_ordered(fh, idx, text, original):
 # ══════════════════════════════════════════════════════════════════════
 def build_user_content(mode, prompt, original_text, draft_text,
                        ner_block, female_block, male_block,
-                       dict_block="(нет)", rules_block="(нет)",
-                       fewshot_block="(нет)",
                        logger=None):
     """user_content режима: плейсхолдеры промпта → значения.
 
     translate/polish: {original_text} — обязательный тег-переменная;
     нет тега — предупреждение (один раз на режим), текст дописывается
-    после промпта, чтобы перевод не сломался. Расширенный контекст:
-    {dict_block}/{rules_block}/{fewshot_block} — во всех режимах
-    (нет файла → «(нет)»). Используется и в предпросмотре запроса
-    (--preview-request)."""
+    после промпта, чтобы перевод не сломался. Используется и в
+    предпросмотре запроса (--preview-request)."""
     def _sub(s):
         return (s
                 .replace("{ner_block}", ner_block)
                 .replace("{female_names}", female_block)
-                .replace("{male_names}", male_block)
-                .replace("{dict_block}", dict_block)
-                .replace("{rules_block}", rules_block)
-                .replace("{fewshot_block}", fewshot_block))
+                .replace("{male_names}", male_block))
     if mode == "redact":
         return (_sub(prompt)
                 .replace("{original_text}", original_text)
@@ -360,34 +289,9 @@ def process_item(internal_id, original_text, draft_text, ctx):
     female_block = "\n".join(female) if female else "(нет)"
     male_block = "\n".join(male) if male else "(нет)"
 
-    # ── Расширенный контекст: примеры → словарь по чанку+примерам ──
-    examples = find_relevant_examples(
-        original_text, ctx.get("examples") or [],
-        k=ctx.get("fewshot_k", 3),
-        threshold=ctx.get("fewshot_threshold", 0.3),
-        ngram_size=ctx["ner_ngram"])
-    fewshot_block = format_fewshot_block(examples) if examples else "(нет)"
-    if ctx.get("dict_data"):
-        # словарь: текст чанка + стороны выбранных примеров, по которым
-        # они найдены (сторона словаря — автодетект по числу совпадений)
-        dict_search = original_text
-        if examples:
-            dict_search += "\n" + "\n".join(
-                e["original_text"] if e.get("_side") == "src"
-                else e["translated_text"] for e in examples)
-        dict_block, _ = find_relevant_dict(
-            dict_search, ctx["dict_data"], ctx["ner_threshold"],
-            ctx["ner_ngram"],
-            automaton=ctx.get("dict_automaton"))
-    else:
-        dict_block, _ = "(нет)", 0
-    rules_block = ctx.get("rules_block") or ""
-
     user_content = build_user_content(
         ctx["mode"], ctx["prompt"], original_text, draft_text,
-        ner_block, female_block, male_block,
-        dict_block=dict_block, rules_block=rules_block or "(нет)",
-        fewshot_block=fewshot_block, logger=ctx["logger"])
+        ner_block, female_block, male_block, logger=ctx["logger"])
     # общий потолок запроса (ТОКЕНЫ, оценка): превышение — ошибка чанка;
     # действует во всех режимах, 0 = без ограничения
     budget = ctx.get("request_budget", 0)
@@ -444,14 +348,8 @@ def build_parser():
                 ner.json (translation; пол по (female)/(male) в type; без term)
                 для справочника полов в polish.
 
-Расширенный контекст (любой из трёх файлов → режим):
-  --dict_file      словарь (JSON, формат ner.json) → {dict_block};
-                   ищется по чанку + source-сторонам примеров
-  --rules_file     справочник языка (txt/md) → {rules_block}
-  --examples_file  пары оригинал→перевод → few-shot {fewshot_block}
-  Промпт: тег <translate_lr> приоритетнее <translate>.
   --request_budget — общий потолок user-запроса, ТОКЕНЫ — оценка;
-  действует во всех режимах, не только в расширенном (0 = без ограничения).
+  действует во всех режимах (0 = без ограничения).
 
 Единицы:
   --chunk_size и --request_budget — ТОКЕНЫ (оценка estimate_tokens);
@@ -490,23 +388,6 @@ def build_parser():
                    help="Минимальный count термина для {female_names}/"
                         "{male_names}: имена с count ниже отфильтровываются "
                         "(0 — выключено).")
-    # Расширенный контекст (малоресурсные языки)
-    p.add_argument("--dict_file", default="",
-                   help="Словарь перевода (JSON, формат ner.json) — "
-                        "{dict_block}; пусто = нет словаря.")
-    p.add_argument("--rules_file", default="",
-                   help="Справочник языка (txt/md) — {rules_block}; "
-                        "пусто = нет правил.")
-    p.add_argument("--examples_file", default="",
-                   help="Пары оригинал→перевод (JSON, {original_text, "
-                        "translated_text}) — few-shot {fewshot_block}; "
-                        "пусто = нет примеров.")
-    p.add_argument("--fewshot_k", type=int, default=3,
-                   help="Макс. число примеров на чанк (few-shot).")
-    p.add_argument("--fewshot_threshold", type=float, default=0.3,
-                   help="Порог схожести примера с чанком (0–1): доля "
-                        "n-грамм стороны примера, найденных в чанке; "
-                        "ниже порога пример не берётся.")
     p.add_argument("--request_budget", type=int, default=0,
                    help="Общий потолок user-запроса (чанк + все блоки), "
                         "ТОКЕНЫ — оценка estimate_tokens; 0 = без "
@@ -514,10 +395,10 @@ def build_parser():
                         "чанка; действует во всех режимах.")
     # Промпт
     p.add_argument("--prompt_file", default=None,
-                   help="Внешний промпт (теги <translate>/<redact>/<polish> "
-                        "или файл целиком = промпт режима; расширенный "
-                        "перевод — тег <translate_lr> приоритетнее "
-                        "<translate>).")
+                   help="Внешний промпт (теги <translate>/<redact>/<polish>); "
+                        "промпт режима берётся только из своего тега — "
+                        "файла без него стадия не читает и остаётся на "
+                        "встроенном промпте.")
     # Сервер и гигиена запроса: общий блок флагов (core.stage.add_llm_args)
     add_llm_args(p, aliases=True)
     # Чанкование (токены, оценка)
@@ -596,36 +477,9 @@ def main(argv=None):
     logger.info(f"📋 Пороги count: ner_block={args.ner_min_count}, "
                 f"имена={args.names_min_count}")
 
-    # ── Расширенный контекст: словарь / правила / примеры ──
-    extended = bool(args.dict_file or args.rules_file or args.examples_file)
-    dict_data, dict_automaton = None, None
-    if args.dict_file:
-        dict_data, dict_automaton = load_ner_data(
-            args.dict_file, args.ner_ngram, logger)
-        if dict_data:
-            logger.info(f"📖 Словарь: {len(dict_data)} записей")
-        else:
-            logger.warning(f"⚠️ Словарь пуст/не загружен: {args.dict_file}")
-    examples = []
-    if args.examples_file:
-        examples = load_examples(args.examples_file, args.ner_ngram, logger)
-        if not examples:
-            logger.warning(f"⚠️ Примеры не загружены: {args.examples_file}")
-    rules_block = ""
-    if args.rules_file:
-        rules_block = load_rules_block(args.rules_file, logger)
-        if not rules_block:
-            logger.warning(f"⚠️ Правила не загружены: {args.rules_file}")
-    if extended:
-        logger.info(f"🗂  Расширенный контекст: словарь={'да' if dict_data else 'нет'}, "
-                    f"правила={'да' if rules_block else 'нет'}, "
-                    f"примеры={len(examples)}")
-
     # ── Промпт ──
     custom = load_prompt(args.prompt_file, logger) if args.prompt_file else None
-    # расширенный перевод: тег <translate_lr> приоритетнее <translate>
-    prompt_tags = ("translate_lr", "translate") \
-        if (extended and mode == "translate") else (mode,)
+    prompt_tags = (mode,)
     tag_used = prompt_tags[0]
     if custom:
         tagged = None
@@ -645,9 +499,9 @@ def main(argv=None):
             logger.warning(
                 f"⚠️ В промпт-файле {args.prompt_file} нет тега "
                 f"<{tag_used}> — используется ВСТРОЕННЫЙ промпт")
-            active_prompt = _builtin_prompt(mode, extended)
+            active_prompt = _builtin_prompt(mode)
     else:
-        active_prompt = _builtin_prompt(mode, extended)
+        active_prompt = _builtin_prompt(mode)
         src = args.prompt_file if args.prompt_file else "(не указан)"
         logger.info(f"ℹ️  Внешний промпт не найден ({src}). "
                     f"Используется ВСТРОЕННЫЙ ({len(active_prompt)} симв.).")
@@ -708,29 +562,10 @@ def main(argv=None):
         fem, mal = collect_gender_names(
             orig0, ner_data, args.ner_threshold, args.ner_ngram,
             min_count=args.names_min_count)
-        ex0 = find_relevant_examples(
-            orig0, examples, k=args.fewshot_k,
-            threshold=args.fewshot_threshold,
-            ngram_size=args.ner_ngram)
-        fs0 = format_fewshot_block(ex0) if ex0 else "(нет)"
-        if dict_data:
-            dict_search = orig0
-            if ex0:
-                dict_search += "\n" + "\n".join(
-                    e["original_text"] if e.get("_side") == "src"
-                    else e["translated_text"] for e in ex0)
-            db0, dc0 = find_relevant_dict(
-                dict_search, dict_data, args.ner_threshold,
-                args.ner_ngram, automaton=dict_automaton)
-        else:
-            db0, dc0 = "(нет)", 0
-        rb0 = rules_block or "(нет)"
         user_content = build_user_content(
             mode, active_prompt, orig0, draft0, nb,
             "\n".join(fem) if fem else "(нет)",
-            "\n".join(mal) if mal else "(нет)",
-            dict_block=db0, rules_block=rb0, fewshot_block=fs0,
-            logger=log)
+            "\n".join(mal) if mal else "(нет)", logger=log)
         meta = {
                 "mode": mode,
                 "chunks": len(items),
@@ -738,9 +573,6 @@ def main(argv=None):
                 "ner_terms": nb_count,
                 "female_names": len(fem),
                 "male_names": len(mal),
-                "dict_terms": dc0,
-                "examples": len(ex0),
-                "rules_chars": len(rules_block),
                 "request_chars": len(user_content),
                 "request_budget": args.request_budget,
                 "prompt_file": args.prompt_file or "",
@@ -769,11 +601,7 @@ def main(argv=None):
         "ner_min_count": args.ner_min_count,
         "names_min_count": args.names_min_count,
         "prompt": active_prompt, "stage": stage,
-        # расширенный контекст
-        "dict_data": dict_data, "dict_automaton": dict_automaton,
-        "examples": examples, "fewshot_k": args.fewshot_k,
-        "fewshot_threshold": args.fewshot_threshold,
-        "rules_block": rules_block, "request_budget": args.request_budget,
+        "request_budget": args.request_budget,
         "logger": logger,
     }
 

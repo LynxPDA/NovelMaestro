@@ -9,7 +9,7 @@ argv. Поля формы (и их дефолты, метки, подсказк�
 - в argv едут только применимые поля: build_command пропускает форму через
   core.settings.applicable_form (when/when_any/when_set у настроек), поэтому
   режим стадии больше не размножается ветками в сборке — RAG-поля в whole,
-  расширенный контекст в действиях 1-8 и т.п. отсекаются реестром;
+  поля чужого режима отсекаются реестром;
 - cwd = папка проекта; python = sys.executable; скрипт = REPO/cli/xxx.py.
 - Единицы в метках — как в help скриптов (СИМВОЛЫ/ТОКЕНЫ/ГЛАВЫ).
 - LLM-настройки (сервер, модель, ключ, температура, таймауты, повторы,
@@ -273,18 +273,6 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
     # пусто = авто (кандидат с тегами из prompts/)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
-    # расширенный контекст (действие 9): словарь/правила/примеры
-    # из source/ + общий бюджет запроса (ТОКЕНЫ); файлы приходят
-    # как source/имя
-    for name, flag in (("dict_file", "--dict_file"),
-                       ("rules_file", "--rules_file"),
-                       ("examples_file", "--examples_file")):
-        if form.get(name) not in (None, ""):
-            argv += [flag, str(form[name])]
-    for name, flag in (("fewshot_k", "--fewshot_k"),
-                       ("fewshot_threshold", "--fewshot_threshold")):
-        if form.get(name) not in (None, ""):
-            argv += [flag, str(form[name])]
     # бюджет запроса (ТОКЕНЫ): 0 = без ограничения — флаг не передаётся
     if str(form.get("request_budget") or "").strip() not in ("", "0"):
         argv += ["--request_budget", str(form["request_budget"])]

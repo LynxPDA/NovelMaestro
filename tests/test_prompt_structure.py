@@ -14,8 +14,7 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "General" / "
 DATA_PLACEHOLDERS = [
     "{original_text}", "{translated_text}", "{ner_block}", "{chunk_text}",
     "{ner_json}", "{glossary}", "{rag_block}", "{batch_text}",
-    "{female_names}", "{male_names}", "{dict_block}",
-    "{rules_block}", "{fewshot_block}",
+    "{female_names}", "{male_names}",
 ]
 
 _SYS_RE = re.compile(r"(?ms)^[ \t]*<system>(.*?)</system>")
@@ -37,7 +36,7 @@ def _template_text(name: str) -> str:
 
 def test_pipeline_prompt_data_not_in_system():
     text = _template_text("pipeline_prompt.txt")
-    for tag in ("translate", "translate_lr", "redact", "polish"):
+    for tag in ("translate", "redact", "polish"):
         sys_body = _system_body(_tagged_block(text, tag))
         for ph in DATA_PLACEHOLDERS:
             assert ph not in sys_body, f"<{tag}>: {ph} в <system>"

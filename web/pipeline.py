@@ -83,10 +83,6 @@ _ACTION_SPECS: dict[int, dict] = {
         "name": "Сокращенный цикл: Редактура -> Полировка"},
     8: {"stages": [1, 2, 3],
         "name": "Полный цикл: Перевод -> Редактура -> Полировка"},
-    # расширенный контекст (малоресурсные языки): словарь/правила/примеры
-    # из source/ — тег <translate_lr>; общий потолок — request_budget
-    9: {"stages": [1],
-        "name": "Перевод с расширенным контекстом", "extended": True},
 }
 # Дефолты конвейера — из реестра настроек core/settings.py: стадийные поля
 # (PIPELINE_*) плюс общие LLM-ключи (HOST/MODEL/THREADS/TIMEOUT/...). Порядок
@@ -120,9 +116,9 @@ _PROMPT_COMBINED_CANDIDATES = [
     "prompts/prompts.txt",
     "prompts/translate_book_prompt.txt",
 ]
-# translate_lr — расширенный перевод (действия 9/10); файл с тегом
-# <translate_lr> авто-подхватывается и не считается «без тега стадии»
-_PROMPT_TAGS = ("translate", "translate_lr", "redact", "polish")
+# теги стадий конвейера: файл с ними авто-подхватывается и не считается
+# «без тега стадии»
+_PROMPT_TAGS = ("translate", "redact", "polish")
 
 
 def emit(ev: dict) -> None:
@@ -289,9 +285,6 @@ _STAGE_TAG = {1: "translate", 2: "redact", 3: "polish"}
 #: про любой тип работы, а не только про выбранный в форме
 PROMPT_CONTRACT: tuple = (
     ("translate", "тип работы «Перевод»", ("original_text", "ner_block")),
-    ("translate_lr", "тип работы «Перевод с расширенным контекстом»",
-     ("original_text", "ner_block", "dict_block", "rules_block",
-      "fewshot_block")),
     ("redact", "тип работы «Редактура»",
      ("original_text", "translated_text", "ner_block")),
     ("polish", "тип работы «Полировка»",
@@ -299,14 +292,12 @@ PROMPT_CONTRACT: tuple = (
 )
 
 
-def warn_missing_prompt_tag(prompt_file: str, stage: int, log,
-                            extended: bool = False) -> bool:
+def warn_missing_prompt_tag(prompt_file: str, stage: int, log) -> bool:
     """Предупреждение, если промпт-файл не содержит тега стадии.
 
     Промпт стадии читается только из своего тега: файл без него — не «промпт
     целиком», стадия уходит на встроенный промпт (иначе в запрос одной стадии
-    попадала бы задача другой). Расширенный перевод (extended): стадия 1
-    принимает <translate_lr> с фолбэком на <translate>.
+    попадала бы задача другой).
     Возвращает True, если тег отсутствует (стадия на встроенном).
     """
     if not prompt_file:
@@ -317,8 +308,7 @@ def warn_missing_prompt_tag(prompt_file: str, stage: int, log,
     except OSError:
         return False
     from core.common import get_tagged_prompt
-    tags = (("translate_lr", "translate") if (extended and stage == 1)
-            else (_STAGE_TAG[stage],))
+    tags = (_STAGE_TAG[stage],)
     if any(get_tagged_prompt(text, t) for t in tags):
         return False
     log.warning("В промпт-файле %s нет тега %s — стадия «%s» "
@@ -336,9 +326,6 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     ner_min_count: int = 0,
                     names_min_count: int = 10,
                     ner_fields: str = "term,translation,type",
-                    dict_file: str = "", rules_file: str = "",
-                    examples_file: str = "",
-                    fewshot_k: int = 3, fewshot_threshold: float = 0.3,
                     request_budget: int = 0,
                     chunk_size: int | None = None) -> list[str]:
     # модель, сервер и ключ конвейера — одни на все стадии (translate,
@@ -371,20 +358,9 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
     common += ["--ner_min_count", str(ner_min_count),
                "--names_min_count", str(names_min_count),
                "--ner_fields", str(ner_fields)]
-    # расширенный контекст: флаги только когда задан хоть один файл
-    # (действие 9; файлы в source/ — пути относительно проекта)
+    # общий потолок запроса (ТОКЕНЫ, оценка) — действует во всех режимах:
+    # перевод, редактура, полировка
     ext_extra = []
-    if dict_file or rules_file or examples_file:
-        if dict_file:
-            ext_extra += ["--dict_file", str(dict_file)]
-        if rules_file:
-            ext_extra += ["--rules_file", str(rules_file)]
-        if examples_file:
-            ext_extra += ["--examples_file", str(examples_file)]
-        ext_extra += ["--fewshot_k", str(fewshot_k),
-                      "--fewshot_threshold", str(fewshot_threshold)]
-    # общий потолок запроса (ТОКЕНЫ, оценка) — НЕ часть расширенного
-    # контекста: он и обычному переводу, и редакатуре с полировкой
     if request_budget:
         ext_extra += ["--request_budget", str(request_budget)]
     # размер чанка перевода/полировки (ТОКЕНЫ): форма > дефолт
@@ -483,9 +459,6 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     ner_min_count: int = 0,
                     names_min_count: int = 10,
                     ner_fields: str = "term,translation,type",
-                    dict_file: str = "", rules_file: str = "",
-                    examples_file: str = "",
-                    fewshot_k: int = 3, fewshot_threshold: float = 0.3,
                     request_budget: int = 0,
                     chunk_size: int | None = None,
                     stage_timeout: float | None = None) -> bool:
@@ -579,11 +552,6 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                                   ner_min_count=ner_min_count,
                                   names_min_count=names_min_count,
                                   ner_fields=ner_fields,
-                                  dict_file=dict_file,
-                                  rules_file=rules_file,
-                                  examples_file=examples_file,
-                                  fewshot_k=fewshot_k,
-                                  fewshot_threshold=fewshot_threshold,
                                   request_budget=request_budget,
                                   chunk_size=chunk_size)
             proc_env = dict(os.environ)
@@ -711,9 +679,7 @@ def main() -> None:
                     help="Тип работы: 1=перевод, 2=редактура (из перевода), "
                          "3=полировка (из редактуры), 4=полировка (из перевода), "
                          "5=перевод→редактура, 6=перевод→полировка, "
-                         "7=редактура→полировка, 8=полный цикл, "
-                         "9=перевод с расширенным контекстом (словарь/правила/"
-                         "примеры из source/)")
+                         "7=редактура→полировка, 8=полный цикл")
     ap.add_argument("--start", type=int, default=None, help="Начальная глава")
     ap.add_argument("--end", type=int, default=None, help="Конечная глава")
     # Сервер LLM, таймауты, повторы, потоки и рассуждения — общий блок
@@ -739,18 +705,6 @@ def main() -> None:
     ap.add_argument("--ner_fields", default="term,translation,type",
                     help="Поля термина в {ner_block} через запятую "
                          "(алиасы — при включении aliases).")
-    # расширенный контекст (действия 9/10): словарь/правила/примеры
-    ap.add_argument("--dict_file", default="",
-                    help="Словарь (source/, формат ner.json) — {dict_block}.")
-    ap.add_argument("--rules_file", default="",
-                    help="Справочник языка (source/, txt/md) — {rules_block}.")
-    ap.add_argument("--examples_file", default="",
-                    help="Пары оригинал→перевод (source/) — few-shot "
-                         "{fewshot_block}.")
-    ap.add_argument("--fewshot_k", type=int, default=3,
-                    help="Макс. примеров на чанк.")
-    ap.add_argument("--fewshot_threshold", type=float, default=0.3,
-                    help="Порог схожести примера с чанком (0–1).")
     ap.add_argument("--request_budget", type=int, default=0,
                     help="Общий потолок user-запроса (чанк + все блоки), "
                          "ТОКЕНЫ (оценка); 0 = без ограничения; "
@@ -840,12 +794,6 @@ def main() -> None:
     action_spec = _ACTION_SPECS[args.action]
     stages = action_spec["stages"]
     action_label = action_spec["name"]
-    # расширенный контекст: файлы словаря/правил/примеров действуют
-    # только для действий 9/10 (иначе молча игнорируются)
-    ext = bool(action_spec.get("extended"))
-    dict_file = args.dict_file if ext else ""
-    rules_file = args.rules_file if ext else ""
-    examples_file = args.examples_file if ext else ""
     # общий лог запуска (канон run_pipeline.sh): один файл на запуск
     # для ЛЮБОГО типа работы — logs/{Метка}_{start}-{end}_j{jobs}_{время}.log
     # (детальные логи по главам — logs/chapters/ как раньше);
@@ -879,7 +827,7 @@ def main() -> None:
     prompts = resolve_prompt_paths(args.prompt_file)
     builtin = {}
     for stage in stages:
-        if warn_missing_prompt_tag(prompts[stage], stage, log, ext):
+        if warn_missing_prompt_tag(prompts[stage], stage, log):
             builtin[stage] = True
     log.info("═" * 60)
     log.info("ТИП РАБОТЫ : %s", action_label)
@@ -900,14 +848,7 @@ def main() -> None:
     log.info("NER-ПОЛЯ   : %s", ",".join(nf_list))
     log.info("ЧАНК       : %d ТОКЕНОВ (оценка; перевод/полировка)",
              args.chunk_size)
-    if ext:
-        log.info("КОНТЕКСТ   : словарь=%s правила=%s примеры=%s | "
-                 "fewshot_k=%d порог=%.2f",
-                 dict_file or "—", rules_file or "—",
-                 examples_file or "—", args.fewshot_k,
-                 args.fewshot_threshold)
-    # потолок запроса — предохранитель любого типа работы, не только
-    # расширенного контекста
+    # потолок запроса — предохранитель любого типа работы
     if args.request_budget:
         log.info("БЮДЖЕТ     : %d ТОКЕНОВ на user-запрос (превышение — "
                  "ошибка чанка)", args.request_budget)
@@ -943,10 +884,6 @@ def main() -> None:
             ner_min_count=args.ner_min_count,
             names_min_count=args.names_min_count,
             ner_fields=args.ner_fields,
-            dict_file=dict_file, rules_file=rules_file,
-            examples_file=examples_file,
-            fewshot_k=args.fewshot_k,
-            fewshot_threshold=args.fewshot_threshold,
             request_budget=args.request_budget,
             chunk_size=args.chunk_size)
         cmd += ["--preview-request", args.preview_request]
@@ -1023,10 +960,6 @@ def main() -> None:
                         ner_min_count=args.ner_min_count,
                         names_min_count=args.names_min_count,
                         ner_fields=args.ner_fields,
-                        dict_file=dict_file, rules_file=rules_file,
-                        examples_file=examples_file,
-                        fewshot_k=args.fewshot_k,
-                        fewshot_threshold=args.fewshot_threshold,
                         request_budget=args.request_budget,
                         chunk_size=args.chunk_size,
                         stage_timeout=stage_limit): cid

@@ -456,83 +456,15 @@ def test_build_user_content_missing_tag_appends(monkeypatch):
     assert out.startswith("ПРОМПТ") and out.endswith("ТЕКСТ")
 
 
-def test_build_user_content_extended_placeholders():
-    """{dict_block}/{rules_block}/{fewshot_block} заменяются во всех
-    режимах; нет файла — «(нет)» (конвенция {female_names})."""
-    p = ("G:{ner_block} D:{dict_block} R:{rules_block} "
-         "F:{fewshot_block} O:{original_text}")
-    out = TB.build_user_content(
-        "translate", p, "текст", None, "[]", "(нет)", "(нет)",
-        dict_block='[{"term": "x"}]', rules_block="Правила",
-        fewshot_block="=== Пример 1 ===")
-    assert 'D:[{"term": "x"}]' in out
-    assert "R:Правила" in out and "F:=== Пример 1 ===" in out
-    # дефолты без расширенного контекста
-    out2 = TB.build_user_content("translate", p, "текст", None,
-                                 "[]", "(нет)", "(нет)")
-    assert "D:(нет)" in out2 and "R:(нет)" in out2 and "F:(нет)" in out2
-
-
-def test_build_parser_extended_flags():
+def test_build_parser_has_no_extended_context_flags():
+    """Расширенного контекста в стадии перевода нет: флагов словаря,
+    правил, примеров и few-shot в argparse не остаётся."""
     p = TB.build_parser()
-    a = p.parse_args(["x.txt", "--dict_file", "source/dict.json",
-                      "--rules_file", "source/rules.md",
-                      "--examples_file", "source/examples.json",
-                      "--fewshot_k", "5", "--fewshot_threshold", "0.2",
-                      "--request_budget", "16000"])
-    assert a.dict_file == "source/dict.json"
-    assert a.fewshot_k == 5 and a.fewshot_threshold == 0.2
+    a = p.parse_args(["x.txt", "--request_budget", "16000"])
     assert a.request_budget == 16000
-    assert not hasattr(a, "rules_budget")
-    assert not hasattr(a, "examples_budget")
-    assert not hasattr(a, "dict_fields")
-
-
-def test_process_item_extended_blocks(monkeypatch):
-    """process_item: словарь ищется по чанку + source-сторонам примеров,
-    few-shot собирается релевантными парами, правила встают целиком."""
-    ctx = _ctx("translate")
-    # словарь через настоящий load_ner_data (механизм тот же, что у
-    # глоссария; детально проверен в test_core_common)
-    from core.common import load_ner_data as _lnd
-    import tempfile
-    import json as _json
-    d = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
-                                    encoding="utf-8")
-    _json.dump([{"term": "苏星宇", "translation": "Су Синюй",
-                 "type": "Person"}], d)
-    d.close()
-    ctx["dict_data"], ctx["dict_automaton"] = _lnd(d.name, 3, SilentLog())
-    # примеры — через настоящий load_examples (кэш n-грамм)
-    import tempfile as _tf
-    e = _tf.NamedTemporaryFile("w", suffix=".json", delete=False,
-                               encoding="utf-8")
-    _json.dump([
-        {"original_text": "苏星宇走进了大殿。",
-         "translated_text": "Су Синюй вошёл в зал."},
-        {"original_text": "他去了市场买药。",
-         "translated_text": "Он пошёл на рынок за лекарством."},
-    ], e, ensure_ascii=False)
-    e.close()
-    ctx["examples"] = TB.load_examples(e.name, 3, SilentLog())
-    ctx["fewshot_k"], ctx["fewshot_threshold"] = 2, 0.3
-    ctx["rules_block"] = "Глагол в конце."
-    ctx["request_budget"] = 0
-    ctx["prompt"] = ("D:{dict_block} R:{rules_block} "
-                      "F:{fewshot_block} O:{original_text}")
-    captured = {}
-    monkeypatch.setattr(
-        core_stage, "stream_chat_completion",
-        lambda *a, **k: (captured.update(content=a[2][-1]["content"]) or
-                         ("ПЕРЕВОД", "")))
-    idx, text, info = TB.process_item(0, "苏星宇走进了大殿。", None, ctx)
-    assert text == "ПЕРЕВОД"
-    c = captured["content"]
-    assert "Су Синюй" in c                      # словарь найден по чанку
-    assert '"original_text": "苏星宇走进了大殿。"' in c  # пример релевантен
-    assert "他去了市场" not in c                  # нерелевантный пример отсечён
-    assert "R:Глагол в конце." in c
-
+    for flag in ("dict_file", "rules_file", "examples_file",
+                 "fewshot_k", "fewshot_threshold"):
+        assert not hasattr(a, flag), flag
 
 def test_process_item_request_budget_exceeded(monkeypatch):
     """--request_budget: превышение — FAIL чанка до вызова LLM."""
@@ -599,105 +531,3 @@ def test_main_preview_request_empty_input(tmp_path, monkeypatch):
     # предпросмотр не заводит ни папки логов, ни файла лога
     assert not (tmp_path / "logs").exists()
 
-
-def test_main_extended_context_translate_lr(tmp_path, monkeypatch):
-    """Расширенный перевод: --dict_file/--rules_file/--examples_file
-    подставляют {dict_block}/{rules_block}/{fewshot_block}; тег
-    <translate_lr> приоритетнее <translate>."""
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "ch.txt").write_text(
-        "苏星宇走进了大殿。长老们在等待。", encoding="utf-8")
-    (tmp_path / "ner.json").write_text("[]", encoding="utf-8")
-    (tmp_path / "dict.json").write_text(json.dumps([
-        {"term": "苏星宇", "translation": "Су Синюй"},
-    ], ensure_ascii=False), encoding="utf-8")
-    (tmp_path / "rules.md").write_text(
-        "Правила: глагол в конце предложения.", encoding="utf-8")
-    (tmp_path / "examples.json").write_text(json.dumps([
-        {"original_text": "苏星宇走进了大殿。",
-         "translated_text": "Су Синюй вошёл в зал."},
-        {"original_text": "他去了市场买药。",
-         "translated_text": "Он пошёл на рынок."},
-    ], ensure_ascii=False), encoding="utf-8")
-    (tmp_path / "prompt.txt").write_text(
-        "<translate>\nОбычный промпт.\n{original_text}\n</translate>\n"
-        "<translate_lr>\nD:{dict_block}\nR:{rules_block}\n"
-        "F:{fewshot_block}\n{original_text}\n</translate_lr>\n",
-        encoding="utf-8")
-    captured = {}
-
-    def fake_stream(base_url, model, messages, **kw):
-        captured["content"] = messages[-1]["content"]
-        return ("ПЕРЕВОД", "")
-
-    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
-    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
-    TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
-             "--prompt_file", "prompt.txt", "--threads", "1",
-             "--dict_file", "dict.json",
-             "--rules_file", "rules.md",
-             "--examples_file", "examples.json"])
-    c = captured["content"]
-    assert "Обычный промпт." not in c      # <translate_lr> победил
-    assert "D:" in c and "Су Синюй" in c
-    assert "R:Правила: глагол в конце" in c
-    # few-shot — JSON-массив пар
-    assert '"original_text": "苏星宇走进了大殿。"' in c
-    assert '"translated_text": "Су Синюй вошёл в зал."' in c
-    assert "他去了市场" not in c
-
-
-def test_main_extended_without_files_plain_prompt(tmp_path, monkeypatch):
-    """Без файлов расширенного контекста — обычный <translate>."""
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "ch.txt").write_text("苏星宇睁开了眼。", encoding="utf-8")
-    (tmp_path / "ner.json").write_text("[]", encoding="utf-8")
-    (tmp_path / "prompt.txt").write_text(
-        "<translate>\nОбычный промпт {original_text}\n</translate>\n"
-        "<translate_lr>\nLR {original_text}\n</translate_lr>\n",
-        encoding="utf-8")
-    captured = {}
-
-    def fake_stream(base_url, model, messages, **kw):
-        captured["content"] = messages[-1]["content"]
-        return ("ПЕРЕВОД", "")
-
-    monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
-    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
-    TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
-             "--prompt_file", "prompt.txt", "--threads", "1"])
-    assert "Обычный промпт" in captured["content"]
-    assert "LR" not in captured["content"]
-
-
-def test_main_preview_extended_blocks(tmp_path, monkeypatch):
-    """Предпросмотр в расширенном режиме: блоки в payload + meta."""
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "ch.txt").write_text("苏星宇走进了大殿。", encoding="utf-8")
-    (tmp_path / "ner.json").write_text("[]", encoding="utf-8")
-    (tmp_path / "dict.json").write_text(json.dumps([
-        {"term": "苏星宇", "translation": "Су Синюй"},
-    ], ensure_ascii=False), encoding="utf-8")
-    (tmp_path / "rules.md").write_text("Правило одно.", encoding="utf-8")
-    (tmp_path / "examples.json").write_text(json.dumps([
-        {"original_text": "苏星宇走进了大殿。",
-         "translated_text": "Су Синюй вошёл в зал."},
-    ], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
-    pv = tmp_path / "preview.json"
-    TB.main(["ch.txt", "--mode", "translate", "--host", "http://h",
-             "--threads", "1", "--preview-request", str(pv),
-             "--dict_file", "dict.json",
-             "--rules_file", "rules.md",
-             "--examples_file", "examples.json"])
-    data = json.loads(pv.read_text(encoding="utf-8"))
-    content = data["messages"][-1]["content"]
-    assert "Су Синюй" in content
-    assert "Правило одно." in content
-    assert '"original_text": "苏星宇走进了大殿。"' in content
-    assert data["meta"]["dict_terms"] == 1
-    assert data["meta"]["examples"] == 1
-    assert data["meta"]["rules_chars"] > 0
-    # request_chars — весь промпт-контент запроса (system + user)
-    assert data["meta"]["request_chars"] == sum(
-        len(m["content"]) for m in data["messages"]) + 37

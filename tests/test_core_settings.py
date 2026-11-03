@@ -19,9 +19,8 @@ from core import settings as S
 #: входные файлы стадий: поле формы запуска, но и настройка тоже
 #: (страница «Настройки» — общее значение по умолчанию для всех книг)
 RUN_NAMES = {
-    "input", "file", "action", "replacements", "dict_file",
-    "rules_file", "examples_file", "cover", "epub_meta", "donate_file",
-    "prompt_file",
+    "input", "file", "action", "replacements", "cover", "epub_meta",
+    "donate_file", "prompt_file",
 }
 #: диапазон глав — параметр запуска вне реестра: своих стадийных ключей нет
 RANGE_NAMES = ("start", "end")
@@ -274,7 +273,7 @@ def test_stage_names_are_the_registry_owners():
 # Настройки, которые живут только в реестре: в форме стадии их нет, они
 # правятся на странице «Настройки» (у конвейера это порог и n-граммы поиска
 # терминов — руками в .env их не задают).
-REGISTRY_ONLY = {"pipeline": (9, ["ner_threshold", "ner_ngram"])}
+REGISTRY_ONLY = {"pipeline": (4, ["ner_threshold", "ner_ngram"])}
 
 
 @pytest.mark.parametrize("stage", sorted(S.STAGES))

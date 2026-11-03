@@ -1370,7 +1370,7 @@ def test_pipeline_request_budget_all_actions():
         assert "--request_budget" in argv, action
         assert argv[argv.index("--request_budget") + 1] == "24000", action
     # дефолт реестра — 0 (без ограничения): флага в argv нет
-    for action in ("1", "2", "3", "9"):
+    for action in ("1", "2", "3", "8"):
         argv = build_command("pipeline", {"action": action}, {})
         assert "--request_budget" not in argv, action
 
@@ -1379,16 +1379,17 @@ def test_build_command_keeps_only_mode_fields():
     """Значения полей чужого режима браузер помнит, но в argv они не едут:
     фильтр — core.settings.applicable_form, а не память формы."""
     argv = build_command("pipeline",
-                         {"action": "3", "dict_file": "source/d.json",
-                          "fewshot_k": "3", "names_min_count": "10",
+                         {"action": "3", "names_min_count": "10",
                           "ner_fields": "term,translation"}, {})
-    assert "--dict_file" not in argv and "--fewshot_k" not in argv
     assert "--ner_fields" not in argv
     assert "--names_min_count" in argv
+    # поля глоссария касаются только тех типов работы, где он в запросе
     argv2 = build_command("pipeline",
-                          {"action": "9", "dict_file": "source/d.json",
-                           "names_min_count": "10"}, {})
-    assert "--dict_file" in argv2 and "--names_min_count" not in argv2
+                          {"action": "3", "ner_min_count": "5"}, {})
+    assert "--ner_min_count" not in argv2
+    argv3 = build_command("pipeline",
+                          {"action": "1", "ner_min_count": "5"}, {})
+    assert "--ner_min_count" in argv3
 
 
 def _norm(v):
@@ -2368,21 +2369,20 @@ def test_jobs_start_validates_numeric_bounds(jobs_srv):
     res, payload = req("POST", "/api/jobs",
                        {"action": "pipeline",
                         "project": "ACTIVE/test_book",
-                        "params": {"fewshot_k": "30"}})
-    assert res.status == 400, payload
-    assert "максимум 20" in payload.get("error", "")
-    res, payload = req("POST", "/api/jobs",
-                       {"action": "pipeline",
-                        "project": "ACTIVE/test_book",
                         "params": {"chunk_size": "0"}})
     assert res.status == 400, payload
     assert "минимум 1" in payload.get("error", "")
+    res, payload = req("POST", "/api/jobs",
+                       {"action": "translate_check",
+                        "project": "ACTIVE/test_book",
+                        "params": {"tolerance_stages": "-1"}})
+    assert res.status == 400, payload
+    assert "минимум 0" in payload.get("error", "")
     # допустимое значение границу проходит (стадия падает уже на файлах)
     res, payload = req("POST", "/api/jobs",
                        {"action": "pipeline",
                         "project": "ACTIVE/test_book",
-                        "params": {"fewshot_k": "2"}})
-    assert res.status != 400 or "максимум" not in payload.get("error", "")
+                        "params": {"chunk_size": "1"}})
     assert res.status != 400 or "минимум" not in payload.get("error", "")
 
 

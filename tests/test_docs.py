@@ -44,8 +44,6 @@ CORE_API = [
     "alias_list", "ner_text", "ner_record", "load_ner_data",
     "find_relevant_ner",
     "collect_gender_names",
-    "load_examples", "find_relevant_examples", "format_fewshot_block",
-    "load_rules_block", "find_relevant_dict",
     "normalize_for_search", "build_smart_regex", "extract_term_context",
     "ner_is_locked", "ner_set_locked", "ner_locked_count",
     "ner_pick_non_voted",
