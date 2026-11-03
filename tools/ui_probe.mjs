@@ -223,16 +223,17 @@ function seedProjectsDir(dir) {
       "=== Отчёт о проверке перевода (polished) ===",
       "Запуск        : /app/cli/translate_check.py --check-type polished --tolerance-stages 5 --tolerance-original 20",
       "Диапазон глав : 1 – 2",
-      "Счёт объёма   : токены (оценка); допуск 5% (соседние стадии) / 20% (оригинал)",
+      "Счёт объёма   : токены (оценка); допуск 5% (пары со стадиями) / 20% (оригинал)",
       "Мин. отличие  : 150 т.",
       "Дата          : Thu Oct 22 10:32:18 2026",
       "Всего папок   : 2",
       "---------------------------------",
-      "Цепочка       : polished → redacted → translated → chapter",
+      "Стадии        : polished → redacted → translated → chapter",
+      "Пары          : polished vs redacted, redacted vs translated, polished vs chapter",
       "Статистика (по всей книге, 2 папок без дублей):",
       "  polished vs redacted: глав 1320, среднее 0.999, допуск ±10% → отношение 0.908–1.099 (разброс книги 0.40%)",
       "  redacted vs translated: глав 2, среднее 1.000, допуск ±5% → отношение 0.949–1.051 (разброс книги 0.20%)",
-      "  translated vs chapter: глав 2, среднее 1.356, допуск ±20% → отношение 1.130–1.627 (разброс книги 4.70%)",
+      "  polished vs chapter: глав 2, среднее 1.356, допуск ±20% → отношение 1.130–1.627 (разброс книги 4.70%)",
       "---------------------------------",
       /* ошибка соотношения — у ВТОРОЙ главы: «Редактор» по умолчанию
          открывает первую, поэтому клик по точке обязан отличиться от неё */
@@ -2832,10 +2833,11 @@ async function main() {
       problems.push(`шкала отчёта: позиция точки «${dot.left}»`);
     if (!/отношение 0\.900 · глава 2 — вне допуска/.test(dot.title || ""))
       problems.push(`шкала отчёта: тултип точки «${dot.title}»`);
-    /* третья пара — соседние стадии ниже polished: без неё обрезка
-       на редактировании (redacted↔translated) не проверялась вовсе */
+    /* третья пара — стадии ниже polished и сам оригинал: без пары
+       polished↔translated обрезка на редактировании (redacted↔translated)
+       не проверялась бы, без пары с оригиналом — сравнение с книгой */
     const third = sc[2] || {};
-    if (third.title !== "translated vs chapter")
+    if (third.title !== "polished vs chapter")
       problems.push(`шкала отчёта: третья пара «${third.title}»`);
     if (!/глав в базе: 1320/.test(first.legend || ""))
       problems.push(`шкала отчёта: подпись «${first.legend}»`);

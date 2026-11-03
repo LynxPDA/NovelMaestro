@@ -11,23 +11,27 @@ translate_check.py — проверка перевода по цепочке к�
     величина мультипликативная (0.9 и 1.111 — одно и то же отклонение), но
     допуск в процентах задан человеком и раздвигает среднее умножением:
     границы = среднее × (1 ± Д%). Две ручки в процентах (0 = выключить):
-    --tolerance-stages — пары соседних стадий (5%), --tolerance-original —
+    --tolerance-stages — пары со стадиями (5%), --tolerance-original —
     пары с оригиналом (20%): текст перевода отходит от соседней стадии на
     доли процента, а от оригинала — на десятки, и одна цифра на обе группы
     флагует либо всё, либо ничего.
-    Пары строятся по ЦЕПОЧКЕ стадий polished → redacted → translated →
-    chapter: сравниваются ВСЕ соседние звенья этой цепочки, у каждого свой
-    эталон и своя база статистики:
-      polished vs redacted, redacted vs translated, translated vs chapter
-    Ближайшей стадией дело не ограничивается: пока проверялось только
-    верхнее звено, обрезка на редактировании (redacted ↔ translated) не
-    ловилась вовсе — пара polished ↔ redacted ровная, а пара с оригиналом
-    ещё грубее и валила вину на оригинал. Нет промежуточной стадии у книги —
-    звено пропускается, а цепочка идёт дальше через ту стадию, что есть
-    (polished → translated → chapter).
-    Подсказка «цепочка стадий ровная — правьте оригинал» появляется только
-    тогда, когда ни одно звено выше не сказало своего: сдвиг уже назван, и
-    второго сообщения про него не нужно.
+    Пары строятся от ПРОВЕРЯЕМОГО типа по цепочке polished → redacted →
+    translated → chapter: у каждой пары свой эталон и своя база статистики.
+      polished   vs redacted, redacted vs translated, polished   vs chapter
+      redacted   vs translated, redacted vs chapter
+      translated vs chapter
+    Проверяемый тип сравнивается с соседней стадией ниже, стадии под ним
+    сравниваются между собой, а оригинал висит на самом проверяемом типе:
+    судят выбранный файл, поэтому объём книги сравнивают с ним, а не с самой
+    нижней стадией. Соседние пары ниже нужны, чтобы был виден адрес потери —
+    срез на редактировании (redacted ↔ translated) не прячется за ровной
+    парой polished ↔ redacted.
+    Нет промежуточной стадии у книги — её пара пропускается, остальные
+    остаются: polished без redacted даёт polished ↔ translated и
+    polished ↔ chapter.
+    Подсказка «пары по стадиям ровные — правьте оригинал» появляется только
+    тогда, когда ни одна пара со стадией не сказала своего: сдвиг уже
+    назван, и второго сообщения про него не нужно.
     n < 2 — пара пропускается (среднему взяться неоткуда).
   • минимальный размер файла (--min-file-size, БАЙТЫ; дефолт 3072);
   • regexp-проверки текста главы (--regexp-check, multiline): чистый
@@ -137,22 +141,25 @@ def _write_report(report_path: str, text: str, mode: str = "a") -> None:
 # ПАРЫ СРАВНЕНИЯ И ИХ СТАТИСТИКА ПО ВСЕЙ КНИГЕ
 # ──────────────────────────────────────────────
 def comparisons_for(check_type: str, present=CHAIN) -> list[tuple[str, str, str]]:
-    """Звенья цепочки стадий от проверяемого типа вниз: [(верх, низ, вид)].
+    """Пары проверяемого типа: [(верх, низ, вид)].
 
-    Вид звена задаёт свою ручку: stage — соседняя стадия, original — оригинал
-    (chapter). Сравниваются ВСЕ звенья цепочки, а не только ближайшее: у каждой
-    пары свой эталон, поэтому обрезка на редактировании (redacted ↔ translated)
-    больше не прячется за ровной парой polished ↔ redacted.
+    Вид пары задаёт свою ручку: stage — стадия, original — оригинал (chapter).
+    Проверяемый тип даёт пару с соседней стадией ниже, стадии под ним — свои
+    соседние пары, а оригинал сравнивается с самим проверяемым типом: судят
+    выбранный файл, и объём книги в переводе относится к нему, а не к самой
+    нижней стадии. Соседние пары ниже называют адрес потери — срез на
+    редактировании (redacted ↔ translated) не прячется за ровной парой выше.
 
-    Книга без промежуточной стадии звено пропускает, но цепочку не рвёт:
-    polished → translated → chapter даёт пары polished ↔ translated и
-    translated ↔ chapter — сравнение идёт с той стадией, что есть.
+    Книга без промежуточной стадии пару пропускает, но остальные не рвёт:
+    polished без redacted даёт polished ↔ translated и polished ↔ chapter.
     """
     present = tuple(present)
-    idx = CHAIN.index(check_type)
-    stages = [t for t in CHAIN[idx:] if t in present]
-    return [(upper, lower, "original" if lower == "chapter" else "stage")
-            for upper, lower in zip(stages, stages[1:])]
+    stages = [t for t in CHAIN[CHAIN.index(check_type):]
+              if t in present and t != "chapter"]
+    pairs = [(upper, low, "stage") for upper, low in zip(stages, stages[1:])]
+    if "chapter" in present:
+        pairs.append((check_type, "chapter", "original"))
+    return pairs
 
 
 def present_from(files: dict) -> tuple[str, ...]:
@@ -167,11 +174,11 @@ def present_from(files: dict) -> tuple[str, ...]:
 def scan_files(chapter_map, check_type, comparisons, strict) -> dict:
     """Один проход по ВСЕЙ книге: {номер: {тип: путь}} без дублей папок.
 
-    Ищутся ВСЕ типы цепочки: по их наличию строятся пары главы (без redacted
-    сравнение идёт с translated), а база статистики собирается по всей книге,
-    а не только по диапазону --start/--end. Дубли пропускаются — проход 2 их
-    тоже пропустит; файл ищется единым поиском core.common; FATAL-сообщения
-    поиска файл не открывают.
+    Ищутся ВСЕ типы цепочки: по их наличию строятся пары главы (нет redacted —
+    сравнение идёт с translated и с оригиналом), а база статистики собирается
+    по всей книге, а не только по диапазону --start/--end. Дубли пропускаются
+    — проход 2 их тоже пропустит; файл ищется единым поиском core.common;
+    FATAL-сообщения поиска файл не открывают.
     """
     files: dict = {}
     for num, dirs in sorted(chapter_map.items()):
@@ -189,11 +196,11 @@ def scan_files(chapter_map, check_type, comparisons, strict) -> dict:
 
 
 def pair_ratios(files, comparisons, counts) -> dict:
-    """Отношения объёмов по каждому звену: низ звена → {глава: отношение}.
+    """Отношения объёмов по каждой паре: низ пары → {глава: отношение}.
 
-    База звена — главы, где есть ОБА файла звена и оба непусты: сравниваются
-    разные тексты (polished ↔ redacted и redacted ↔ translated — разные пары),
-    поэтому одна глава может стоять в базе нескольких звеньев. Пустой файл
+    База пары — главы, где есть ОБА файла пары и оба непусты: сравниваются
+    разные тексты (polished ↔ redacted и polished ↔ chapter — разные пары),
+    поэтому одна глава может стоять в базе нескольких пар. Пустой файл
     (0 токенов) считается отсутствующим — пустоту ловит --min-file-size.
     """
     ratios: dict[str, dict] = {lower: {} for _u, lower, _k in comparisons}
@@ -222,18 +229,19 @@ def log_stats(xs) -> tuple[float, float]:
 
 def collect_stats(files, comparisons, counts,
                   tol_stages: float, tol_original: float) -> dict:
-    """Статистика каждого звена по отношениям объёмов ВСЕЙ книги.
+    """Статистика каждой пары по отношениям объёмов ВСЕЙ книги.
 
-    Допуск звена — заданный процент от среднего (медианы отношений): своя
-    ручка для соседних стадий и для оригинала, 0 — звено выключено. От
+    Допуск пары — заданный процент от среднего (медианы отношений): своя
+    ручка для пар со стадиями и для пар с оригиналом, 0 — пара выключена. От
     разброса книги допуск не зависит: σ остаётся в статистике только для
     справки. Медиана устойчива, пока битых глав в базе меньше половины, —
     это честный предел метода.
 
-    Ключ статистики — НИЗ звена (тип эталонного файла); верх звена лежит в
-    поле check: по нему строка отчёта называет пару. Звено с допуском 0 в
-    результат всё равно попадает (`off`): шапка отчёта показывает его как
-    выключенное, а не молчит о нём.
+    Ключ статистики — НИЗ пары (тип эталонного файла); низы в наборе пар не
+    повторяются: оригинал сравнивается с проверяемым типом, поэтому
+    единственная пара с chapter — у него. Верх пары лежит в поле check: по
+    нему строка отчёта называет пару. Пара с допуском 0 в результат всё равно
+    попадает (`off`): шапка отчёта показывает её выключенной, а не молчит.
     """
     ratios = pair_ratios(files, comparisons, counts)
     stats = {}
@@ -263,30 +271,33 @@ def bounds(st: dict) -> tuple[float, float]:
     return st["center"] * exp(-st["tol"]), st["center"] * exp(st["tol"])
 
 
-def chain_text(check_type: str, comparisons) -> list[str]:
-    """Цепочка стадий от проверяемого типа вниз: [верх, низ, низ, …].
+def chain_text(check_type: str, comparisons) -> str:
+    """Стадии книги, между которыми строятся пары: «polished → … → chapter».
 
-    Звенья идут подряд, поэтому низ следующего — это верх предыдущего:
-    достаточно взять верх первого и низ каждого (последний низ —
-    оригинал).
+    Набор берётся из самих пар (проверяемый тип, верхи и низы) и
+    выстраивается по CHAIN: строка «Стадии» в шапке отчёта не может
+    разойтись с парами ниже — нет translated у книги, нет его и в цепочке.
     """
-    return [check_type] + [lower for _u, lower, _k in comparisons]
+    used = {check_type}
+    for up, low, _kind in comparisons:
+        used.update((up, low))
+    return " → ".join(t for t in CHAIN if t in used)
 
 
 def stats_line(ref_type: str, st: dict) -> str:
-    """Строка отчёта о статистике одного звена (n = 0 — пустая строка).
+    """Строка отчёта о статистике одной пары (n = 0 — пустая строка).
 
-    Пара называется полем check самой статистики (верх звена) и ref_type
+    Пара называется полем check самой статистики (верх пары) и ref_type
     (низ): в строке их два, и путать их нечем.
 
     Главное в ней — ГРАНИЦЫ отношения при текущем допуске: они и означают
-    «допуск ±N%». Три знака после запятой, потому что у соседних стадий
+    «допуск ±N%». Три знака после запятой, потому что у пар со стадиями
     отношение живёт в третьем знаке (1.000 ± 5%) — двумя его не видно.
     Разброс книги печатается справочно: на допуск он не влияет.
     """
     pair = f"{st.get('check', '?')} vs {ref_type}"
     if st.get("n", 0) < 1:
-        return ""  # звено, которым не пользовалась ни одна глава
+        return ""  # пара, которой не пользовалась ни одна глава
     if st.get("off"):
         return f"  {pair}: выключено (допуск 0%)"
     if st["n"] < 2:
@@ -366,18 +377,19 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
         errors.append(f"  - Размер файла слишком мал: {size_file} Б "
                       f"(минимум {min_size} Б).")
 
-    # ---- цикл сравнений: КАЖДОЕ звено цепочки со своим эталоном ----
-    #      Допуск звена — из статистики всей книги. Соседняя пара и пара с
+    # ---- цикл сравнений: КАЖДАЯ пара со своим эталоном ----
+    #      Допуск пары — из статистики всей книги. Соседняя пара и пара с
     #      оригиналом проверяются обе: обрезка на редактировании
     #      (redacted ↔ translated) не прячется за ровной парой выше, а
     #      оригинал показывает, откуда пришёл сдвиг.
     #
-    #      Верх звена — не всегда выбранный тип файлов: у пары redacted ↔
+    #      Верх пары — не всегда выбранный тип файлов: у пары redacted ↔
     #      translated верх — файл redacted главы. Поэтому путь каждого типа
-    #      ищется один раз и ложится в кэш: цепочка ссылается на типы
-    #      повторно (низ звена становится верхом следующего).
+    #      ищется один раз и ложится в кэш: пары ссылаются на типы повторно.
     paths: dict[str, str | None] = {}
-    for t in [check_type] + [low for _u, low, _k in comparisons]:
+    for t in [check_type] + [p for pair in comparisons for p in pair[:2]]:
+        if t in paths:
+            continue
         p, msgs = find_chapter_file(dir_path, chapter_num, want=t,
                                     strict=strict, strict_types=True)
         if p is None and any(m.startswith("[FATAL]") for m in msgs):
@@ -385,26 +397,23 @@ def check_chapter(chapter_num, dir_path, check_type, comparisons,
             return errors, prev_inner_chapter
         paths[t] = p if p and os.path.isfile(p) else None
 
-    upper = check_type
     stage_failed = False
-    for _up, low, kind in comparisons:
+    for up, low, kind in comparisons:
         st = (stats or {}).get(low) or {}
-        up_path, low_path = paths.get(upper), paths.get(low)
+        up_path, low_path = paths.get(up), paths.get(low)
         if not active(st) or not up_path or not low_path:
-            # звено выключено либо у главы нет одного из его файлов (стадию
-            # делали не везде) — цепочка идёт дальше, не рвясь
-            upper = low
+            # пара выключена либо у главы нет одного из её файлов (стадию
+            # делали не везде) — остальные пары проверяются как обычно
             continue
-        err = volume_error(upper, low, counts.get(up_path, 0),
+        err = volume_error(up, low, counts.get(up_path, 0),
                            counts.get(low_path, 0), st)
         if kind == "original" and err and not stage_failed:
-            # цепочка ровная, а оригинал вне допуска — правят оригинал
-            err = err[:-1] + "; цепочка стадий ровная — правьте оригинал)"
+            # пары со стадиями ровные, а оригинал вне допуска — правят оригинал
+            err = err[:-1] + "; пары по стадиям ровные — правьте оригинал)"
         if err:
             errors.append(err)
             if kind == "stage":
                 stage_failed = True
-        upper = low
 
     # ---- чтение ----
     try:
@@ -473,18 +482,20 @@ def build_parser() -> argparse.ArgumentParser:
 Единицы: счёт объёма — ТОКЕНЫ (встроенная оценка estimate_tokens);
 размеры файлов — байты.
 Сравнения по цепочке стадий polished → redacted → translated → chapter:
-проверяются ВСЕ соседние звенья цепочки, у каждого свой эталон и база:
-  polished   vs redacted
-  redacted   vs translated
+пары задаёт проверяемый тип — он сравнивается со стадиями ниже, а оригинал
+с ним самим, у каждой пары свой эталон и база:
+  polished   vs redacted, redacted vs translated, polished   vs chapter
+  redacted   vs translated, redacted vs chapter
   translated vs chapter
-Так обрезка на любой стадии видна своим звеном: ровная пара выше не
+Так обрезка на любой стадии видна своей парой: ровная пара выше не
 маскирует сдвиг ниже, и вина не валится на оригинал.
-Нет промежуточной стадии у книги — звено пропускается, а цепочка идёт
-дальше через ту стадию, что есть (polished → translated → chapter).
+Нет промежуточной стадии у книги — её пара пропускается, остальные
+проверяются (polished без redacted: polished ↔ translated, polished ↔
+chapter).
 Объём: по ВСЕЙ книге собираются отношения объёмов каждой пары; среднее
 пары — медиана отношений, глава помечается, если отношение вышло за
 среднее × (1 ± Д%%), где Д — допуск пары в ПРОЦЕНТАХ. Ручки две:
---tolerance-stages (соседние стадии, по умолчанию 5%%) и
+--tolerance-stages (пары со стадиями, по умолчанию 5%%) и
 --tolerance-original (оригинал, по умолчанию 20%%); 0 выключает свою
 группу, обе в нуле — объёмные сравнения выключены. Разброс книги
 печатается в отчёте справочно: на допуск он не влияет.
@@ -512,10 +523,10 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
     parser.add_argument("--check-type", choices=["polished", "redacted",
                                                  "translated"],
                         default="polished",
-                        help="Тип файлов глав: polished (по цепочке vs "
-                             "redacted/translated + chapter), redacted (vs "
-                             "translated + chapter), translated (vs chapter); "
-                             "по умолчанию: polished")
+                        help="Тип файлов глав: polished (vs redacted, vs "
+                             "translated, vs chapter), redacted (vs "
+                             "translated, vs chapter), translated (vs "
+                             "chapter); по умолчанию: polished")
     parser.add_argument("--start", type=int, default=None,
                         help="Начальная глава (по умолчанию: минимальная найденная)")
     parser.add_argument("--end", type=int, default=None,
@@ -532,21 +543,22 @@ Regexp-проверки текста (--regexp-check, по одной на ст�
                              "не попадают (пусто = ничего; иначе "
                              "TRANSLATE_CHECK_EXCLUDE_WORDS из .env)")
     # ── допуск объёмной проверки: два параметра человека в ПРОЦЕНТАХ (пары
-    #    соседних стадий и пары с оригиналом расходятся на порядок); среднее
+    #    со стадиями и пары с оригиналом расходятся на порядок); среднее
     #    пары считает статистика книги
     parser.add_argument("--tolerance-stages", type=float, default=None,
                         metavar="Д",
-                        help="допуск для пар соседних стадий "
+                        help="допуск для пар со стадиями "
                              "(polished↔redacted, redacted↔translated), "
                              "ПРОЦЕНТЫ от среднего объёма (по умолчанию 5): "
                              "среднее собирается по ВСЕЙ книге, помечаются "
-                             "только главы диапазона; 0 — эти пары выключены")
+                             "только главы диапазона; 0 — пары со стадиями "
+                             "выключены")
     parser.add_argument("--tolerance-original", type=float, default=None,
                         metavar="Д",
                         help="допуск для пар с оригиналом (chapter), "
                              "ПРОЦЕНТЫ от среднего объёма (по умолчанию 20): "
                              "перевод отходит от оригинала на десятки "
-                             "процентов, у соседних стадий — доли процента; "
+                             "процентов, у пар со стадиями — доли процента; "
                              "0 — пары с оригиналом выключены")
     # ── regexp-проверки текста главы (экспертные)
     parser.add_argument("--regexp-check", action="append", default=[],
@@ -676,7 +688,7 @@ def main() -> None:
         f"Запуск        : {shlex.join(sys.argv)}\n"
         f"Диапазон глав : {start_cap} – {end_cap}\n"
         f"Папка глав    : {os.path.abspath(chapters_dir)}\n"
-        f"Счёт объёма   : {unit}; допуск {tol_stages:g}% (соседние стадии) "
+        f"Счёт объёма   : {unit}; допуск {tol_stages:g}% (пары со стадиями) "
         f"/ {tol_original:g}% (оригинал)"
         f"{'' if volume_on else ' — объёмные сравнения выключены'}\n"
         f"Regexp-проверки: {'; '.join(rx.pattern for rx in regexp_checks)}\n"
@@ -690,9 +702,10 @@ def main() -> None:
         "---------------------------------\n"
     )
     if volume_on:
-        header += (f"Цепочка       : "
-                   f"{' → '.join(chain_text(check_type, comparisons))}\n"
-                   f"Статистика (по всей книге, {len(files)} папок без дублей):\n"
+        header += (f"Стадии        : {chain_text(check_type, comparisons)}\n"
+                   "Пары          : "
+                   + ", ".join(f"{u} vs {low}" for u, low, _k in comparisons)
+                   + f"\nСтатистика (по всей книге, {len(files)} папок без дублей):\n"
                    + "\n".join([ln for ln in (stats_line(lower, stats[lower])
                                             for _u, lower, _k in comparisons)
                                if ln])
@@ -703,8 +716,8 @@ def main() -> None:
     # Фактическая команда запуска
     print(f"Запуск: {shlex.join(sys.argv)}")
     print(f"Запуск проверки ({check_type})…")
-    print(f"Счёт объёма: {unit}; допуск {tol_stages:g}% (соседние стадии), "
-          f"{tol_original:g}% (оригинал)")
+    print(f"Счёт объёма: {unit}; допуск {tol_stages:g}% (пары со "
+          f"стадиями), {tol_original:g}% (оригинал)")
     if volume_on:
         print("Статистика (по всей книге):")
         for _upper, lower, _kind in comparisons:
