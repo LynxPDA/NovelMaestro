@@ -7,6 +7,7 @@
 без сети, всё в tmp_path.
 """
 import json
+import sys
 import os
 import threading
 import time
@@ -173,7 +174,7 @@ def _wait_line(job, needle: str, timeout: float = 10.0) -> bool:
 
 
 def test_start_done(tmp_path, fake_script):
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "ok.py")], tmp_path)
     assert job.status == "running"
@@ -188,7 +189,7 @@ def test_start_done(tmp_path, fake_script):
 def test_update_project_path(tmp_path, fake_script):
     """Move/rename: журнал следует за проектом — project/cwd у его
     запусков переписаны (в jobs.json тоже), чужие запуски не тронуты."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     old_dir = tmp_path / "projects" / "ACTIVE" / "book"
     new_dir = tmp_path / "projects" / "DONE" / "book"
     old_dir.mkdir(parents=True)
@@ -218,7 +219,7 @@ def test_persist_never_leaves_empty_store(tmp_path, fake_script):
     содержимого, и параллельный GET падал на пустом JSON (json.decoder
     JSONDecodeError: Expecting value: line 1 column 1).
     """
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     for i in range(8):
         job = jm.start("test", f"Тест {i}", f"ACTIVE/x{i}",
                        [str(fake_script / "ok.py")], tmp_path)
@@ -251,13 +252,13 @@ def test_persist_never_leaves_empty_store(tmp_path, fake_script):
 
 def test_update_project_path_no_jobs(tmp_path):
     """Нет запусков проекта — 0 переписанных, без падений и записи."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     assert jm.update_project_path(
         "ACTIVE/book", "DONE/book", tmp_path) == 0
 
 
 def test_start_failed(tmp_path, fake_script):
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "fail.py")], tmp_path)
     job = _wait_status(jm, job.id, "failed")
@@ -270,7 +271,7 @@ def test_dashboard_running_jobs(tmp_path, fake_script):
     с хвостом лога (running_jobs)."""
     from web.api import _dashboard
 
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "hang.py")], tmp_path)
     assert job.status == "running"
@@ -295,17 +296,17 @@ def test_dashboard_running_jobs(tmp_path, fake_script):
 
 
 def test_start_missing_script(tmp_path):
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(tmp_path / "no_such.py")], tmp_path)
-    # python3 стартует, но скрипта нет — процесс падает с кодом != 0
+    # интерпретатор стартует, но скрипта нет — процесс падает с кодом != 0
     job = _wait_status(jm, job.id, "failed")
     assert job.exit_code != 0
     assert job.finished is not None
 
 
 def test_ring_buffer_cap(tmp_path, fake_script):
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "ok.py")], tmp_path)
     _wait_status(jm, job.id, "done")
@@ -360,7 +361,7 @@ def test_events_fold_by_chapter_and_stage(tmp_path, fake_script):
     Конвейер гонит их по штукe на каждую главу и стадию (а при повторных
     проходах — заново на все главы): буфер, сайдкар и снимок стрима обязаны
     быть размером с таблицу глав, а не с историей всех проходов."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("pipeline", "Конвейер", "ACTIVE/x",
                    [str(fake_script / "chapters.py")], tmp_path)
     job = _wait_status(jm, job.id, "done")
@@ -444,7 +445,7 @@ def test_stream_live_events_after_subscribe(jobs_srv, fake_script, tmp_path):
 
 
 def test_stop_terminates(tmp_path, fake_script):
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "hang.py")], tmp_path)
     # ждём первую строку — процесс точно жив
@@ -465,7 +466,7 @@ def test_stop_terminates(tmp_path, fake_script):
 def test_stop_kills_child_process_group(tmp_path, fake_script):
     """Stop убивает ГРУППУ — дочерний процесс не остаётся сиротой."""
     import os
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Родитель с потомком", "ACTIVE/x",
                    [str(fake_script / "parent.py")], tmp_path)
     end = time.time() + 10
@@ -492,12 +493,12 @@ def test_stop_kills_child_process_group(tmp_path, fake_script):
 
 
 def test_stop_unknown(tmp_path):
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     assert jm.stop("nope") is None
 
 
 def test_remove(tmp_path, fake_script):
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "ok.py")], tmp_path)
     _wait_status(jm, job.id, "done")
@@ -509,7 +510,7 @@ def test_remove(tmp_path, fake_script):
 def test_persist_metadata(tmp_path, fake_script):
     """Хвост лога персистится в job_logs/{id}.log и читается обратно;
     argv/секреты в jobs.json не попадают."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "ok.py"), "--api_key", "SECRET"],
                    tmp_path)
@@ -517,7 +518,7 @@ def test_persist_metadata(tmp_path, fake_script):
     # сайдкар хвоста на месте
     assert (tmp_path / "job_logs" / f"{job.id}.log").is_file()
     # новый менеджер на той же папке — читает jobs.json + сайдкар
-    jm2 = JobManager(tmp_path, python="python3")
+    jm2 = JobManager(tmp_path)
     loaded = jm2.get(job.id)
     assert loaded is not None
     assert loaded.status == "done"
@@ -543,7 +544,7 @@ def test_migrate_old_jobs_json(tmp_path, fake_script):
         "\"project\": \"ACTIVE/x\", \"status\": \"done\", "
         "\"created\": 1}]",
         encoding="utf-8")
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     loaded = jm.get("old-1")
     assert loaded is not None
     assert loaded.title == "Старый"
@@ -554,13 +555,13 @@ def test_migrate_old_jobs_json(tmp_path, fake_script):
     (tmp_path / "job_logs" / "jobs.json").write_text(
         "[]", encoding="utf-8")
     old.write_text("[{\"bad\": 1}]", encoding="utf-8")
-    jm2 = JobManager(tmp_path, python="python3")
+    jm2 = JobManager(tmp_path)
     assert jm2.get("old-1") is None  # история из свежего файла
     assert (tmp_path / "jobs.json").is_file()  # свежий файл не затёрт миграцией
 
 
 def test_subscribe_lines(tmp_path, fake_script):
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "ok.py")], tmp_path)
     seen = []
@@ -586,7 +587,7 @@ def test_subscribe_lines(tmp_path, fake_script):
 def test_progress_events(tmp_path, fake_script):
     """Строки @@PROGRESS@@ парсятся в job.progress (последнее событие),
     в буфер строк не попадают."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("translate", "Перевод", "ACTIVE/x",
                    [str(fake_script / "progress.py")], tmp_path)
     _wait_status(jm, job.id, "done")
@@ -604,7 +605,7 @@ def test_progress_events(tmp_path, fake_script):
 
 def test_progress_persist(tmp_path, fake_script):
     """progress персистится в jobs.json и восстанавливается при рестарте."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("translate", "Перевод", "ACTIVE/x",
                    [str(fake_script / "progress.py")], tmp_path)
     _wait_status(jm, job.id, "done")
@@ -613,7 +614,7 @@ def test_progress_persist(tmp_path, fake_script):
     assert "\"progress\"" in data
     assert "argv" not in data
     # новый менеджер на той же папке — progress восстановлен
-    jm2 = JobManager(tmp_path, python="python3")
+    jm2 = JobManager(tmp_path)
     loaded = jm2.get(job.id)
     assert loaded is not None
     assert loaded.progress == job.progress
@@ -623,7 +624,7 @@ def test_progress_persist(tmp_path, fake_script):
 
 def test_progress_subscribe(tmp_path, fake_script):
     """Подписчик получает ("progress", ev) и последнее значение — финал."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("translate", "Перевод", "ACTIVE/x",
                    [str(fake_script / "progress.py")], tmp_path)
     seen = []
@@ -643,7 +644,7 @@ def test_progress_subscribe(tmp_path, fake_script):
 
 def test_progress_bad_json(tmp_path, fake_script):
     """Кривой JSON под префиксом — обычная строка в буфер, без падения."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("translate", "Перевод", "ACTIVE/x",
                    [str(fake_script / "bad_progress.py")], tmp_path)
     _wait_status(jm, job.id, "done")
@@ -656,7 +657,7 @@ def test_dashboard_progress(tmp_path, fake_script):
     несут progress."""
     from web.api import _dashboard
 
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     marker = tmp_path / "progress-stop"
     job = jm.start("translate", "Перевод", "ACTIVE/x",
                    [str(fake_script / "progress.py"), str(marker)], tmp_path)
@@ -721,7 +722,7 @@ def test_reconcile_dead_pid(tmp_path, fake_script):
     """«running»-запуск с мёртвым pid при загрузке → failed
     (процесс не пережил рестарт сервера)."""
     import os
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "ok.py")], tmp_path)
     _wait_status(jm, job.id, "done")
@@ -732,7 +733,7 @@ def test_reconcile_dead_pid(tmp_path, fake_script):
             item["status"] = "running"
             item["pid"] = 999999999  # заведомо мёртвый
     (tmp_path / "job_logs" / "jobs.json").write_text(json.dumps(data), encoding="utf-8")
-    jm2 = JobManager(tmp_path, python="python3")
+    jm2 = JobManager(tmp_path)
     loaded = jm2.get(job.id)
     assert loaded is not None
     assert loaded.status == "failed"
@@ -749,10 +750,10 @@ def test_reconcile_alive_pid(tmp_path, fake_script):
     import subprocess
     import time as _time
     # живой дочерний процесс
-    sleeper = subprocess.Popen(["python3", "-c",
+    sleeper = subprocess.Popen([sys.executable, "-c",
                                 "import time; time.sleep(120)"])
     try:
-        jm = JobManager(tmp_path, python="python3")
+        jm = JobManager(tmp_path)
         job = jm.start("test", "Тест", "ACTIVE/x",
                        [str(fake_script / "hang.py")], tmp_path)
         _wait_status(jm, job.id, "running")
@@ -763,7 +764,7 @@ def test_reconcile_alive_pid(tmp_path, fake_script):
                 item["status"] = "running"
                 item["pid"] = sleeper.pid
         (tmp_path / "job_logs" / "jobs.json").write_text(json.dumps(data), encoding="utf-8")
-        jm2 = JobManager(tmp_path, python="python3")
+        jm2 = JobManager(tmp_path)
         loaded = jm2.get(job.id)
         assert loaded is not None
         assert loaded.status == "running"
@@ -796,7 +797,7 @@ def test_orphan_watcher_marks_dead(tmp_path, fake_script, monkeypatch):
     фоновый наблюдатель помечает failed, не дожидаясь перезагрузки."""
     import web.jobs as jobs_mod
     monkeypatch.setattr(jobs_mod, "ORPHAN_POLL", 0.05)
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "ok.py")], tmp_path)
     _wait_status(jm, job.id, "done")
@@ -820,10 +821,10 @@ def test_orphan_watcher_ignores_live(tmp_path, fake_script, monkeypatch):
     import subprocess
     import web.jobs as jobs_mod
     monkeypatch.setattr(jobs_mod, "ORPHAN_POLL", 0.05)
-    sleeper = subprocess.Popen(["python3", "-c",
+    sleeper = subprocess.Popen([sys.executable, "-c",
                                 "import time; time.sleep(120)"])
     try:
-        jm = JobManager(tmp_path, python="python3")
+        jm = JobManager(tmp_path)
         job = jm.start("test", "Тест", "ACTIVE/x",
                        [str(fake_script / "hang.py")], tmp_path)
         _wait_status(jm, job.id, "running")
@@ -844,10 +845,10 @@ def test_remove_stops_orphan(tmp_path, fake_script):
     pid жив) — раньше SIGTERM не уходил и процесс работал дальше."""
     import subprocess
     import time as _time
-    sleeper = subprocess.Popen(["python3", "-c",
+    sleeper = subprocess.Popen([sys.executable, "-c",
                                 "import time; time.sleep(120)"])
     try:
-        jm = JobManager(tmp_path, python="python3")
+        jm = JobManager(tmp_path)
         job = jm.start("test", "Тест", "ACTIVE/x",
                        [str(fake_script / "hang.py")], tmp_path)
         _wait_status(jm, job.id, "running")
@@ -870,7 +871,7 @@ def test_remove_stops_orphan(tmp_path, fake_script):
 def test_shutdown_stops_running(tmp_path, fake_script):
     """Shutdown() останавливает все активные запуски (завершение
     сервера — никаких процессов-сирот)."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job1 = jm.start("test", "Тест 1", "ACTIVE/x",
                     [str(fake_script / "hang.py")], tmp_path)
     job2 = jm.start("test", "Тест 2", "ACTIVE/y",
@@ -889,7 +890,7 @@ def test_shutdown_stops_running(tmp_path, fake_script):
 def test_pid_in_payload(tmp_path, fake_script):
     """Pid процесса доступен в payload (для UI-управления),
     argv — нет (секреты)."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "hang.py"), "--api_key", "SECRET"],
                    tmp_path)
@@ -1958,7 +1959,7 @@ def test_llm_no_profile_no_env(tmp_path, monkeypatch):
 
 def test_api_key_not_in_payload(tmp_path, fake_script):
     """argv (с api_key) не попадает в payload/персистентность."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("translate_check_llm", "Проверка", "ACTIVE/x",
                    [str(fake_script / "ok.py"), "--api_key", "SECRET"],
                    tmp_path)
@@ -1973,7 +1974,7 @@ def test_api_key_not_in_payload(tmp_path, fake_script):
 
 def test_llm_api_key_via_env(tmp_path, fake_script):
     """LLM_API_KEY идёт через окружение процесса, а не через argv."""
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("translate_check_llm", "Проверка", "ACTIVE/x",
                    [str(fake_script / "ok.py")],
                    tmp_path,
@@ -2097,7 +2098,7 @@ def jobs_srv(tmp_path, fake_script):
 
     web_dir = tmp_path / "web"
     web_dir.mkdir()
-    jm = JobManager(web_dir, python="python3")
+    jm = JobManager(web_dir)
     auth_obj = Auth("tok", no_auth=True)
     srv = make_server("127.0.0.1", 0, auth_obj,
                       repo_root=REPO, projects_root=tmp_path / "projects")
@@ -2291,7 +2292,7 @@ def test_jobs_get_after_restart_has_lines(jobs_srv, fake_script):
                    [str(fake_script / "ok.py")], Path("."))
     _wait_status(jm, job.id, "done")
     # «рестарт»: новый менеджер на той же web-папке читает сайдкар
-    jm2 = JobManager(jm.web_dir, python="python3")
+    jm2 = JobManager(jm.web_dir)
     loaded = jm2.get(job.id)
     assert loaded is not None and loaded.lines
     # HTTP-хендлер с «перезагруженным» менеджером отдаёт хвост лога
@@ -2648,7 +2649,7 @@ def test_dashboard_recent_cap(tmp_path):
     """recent_jobs на дашборде — не более 20 записей."""
     from web.api import _dashboard
 
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     for i in range(25):
         jm.start("test", f"Тест {i}", "ACTIVE/x", [], Path("."))
     ctx = {"job_manager": jm, "projects_root": tmp_path}
@@ -2663,7 +2664,7 @@ def test_dashboard_running_from_full_list(tmp_path, fake_script):
     а не из среза «последних N»."""
     from web.api import _dashboard
 
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("test", "Висит", "ACTIVE/x",
                    [str(fake_script / "hang.py")], Path("."))
     ctx = {"job_manager": jm, "projects_root": tmp_path}
@@ -3010,7 +3011,7 @@ def test_reader_recovers_glued_event(tmp_path):
         "sys.exit(0)\n"
     )
     (d / "glued.py").write_text(script, encoding="utf-8")
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("3", "Конвейер", "ACTIVE/x", [str(d / "glued.py")], tmp_path)
     end = time.time() + 15
     while time.time() < end and job.status == "running":

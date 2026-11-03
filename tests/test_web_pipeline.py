@@ -715,7 +715,7 @@ def test_reader_parses_chapter_events(tmp_path):
         "sys.exit(0)\n"
     )
     (d / "ev.py").write_text(script, encoding="utf-8")
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("3", "Конвейер", "ACTIVE/x",
                    [str(d / "ev.py")], tmp_path)
     end = time.time() + 15
@@ -738,7 +738,7 @@ def test_reader_bad_event_line(tmp_path):
     script = ("import sys\nprint('@@CHAPTER@@not-json', flush=True)\n"
               "sys.exit(0)\n")
     (d / "bad.py").write_text(script, encoding="utf-8")
-    jm = JobManager(tmp_path, python="python3")
+    jm = JobManager(tmp_path)
     job = jm.start("3", "Конвейер", "ACTIVE/x", [str(d / "bad.py")], tmp_path)
     end = time.time() + 15
     while time.time() < end and job.status == "running":
