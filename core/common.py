@@ -2186,36 +2186,113 @@ class _Heartbeat:
     а stdout стадии всё это время пуст: в логе главы оставался обрыв без
     причины, а web-конвейеру нечем было отличить живую стадию от зависшей.
     Без логгера отметки не пишутся и поток не заводится.
+
+    Отметки ведёт ОДНА нить на логгер, а не своя у каждого запроса: стадия
+    держит до 16 параллельных запросов, и с нитью на запрос лог получал залп
+    одинаковых строк с одним счётом (16 штук в секунду вместо одной),
+    в котором терялся любой другой вывод.
     """
 
     def __init__(self, logger, label: str, interval: float) -> None:
         self._logger = logger
         self._label = (label or "").strip() or "LLM"
         self._interval = float(interval or 0)
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._started = 0.0
 
     def __enter__(self) -> _Heartbeat:
         if self._logger is None or self._interval <= 0:
             return self
-        self._started = time.monotonic()
-        self._thread = threading.Thread(target=self._run, daemon=True,
-                                        name="llm-heartbeat")
-        self._thread.start()
+        _tick(self._logger).begin(self._label, self._interval)
         return self
 
-    def _run(self) -> None:
-        while not self._stop.wait(self._interval):
-            self._logger.info("⏳ %s ответ идёт: %d с", self._label,
-                              int(time.monotonic() - self._started))
-
     def __exit__(self, *exc_info) -> bool:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-            self._thread = None
+        if self._logger is None or self._interval <= 0:
+            return False
+        _tick(self._logger).end()
         return False
+
+
+class _HeartbeatTicker:
+    """Одна нить отметок на логгер: считает, сколько запросов ещё идёт.
+
+    Пока идёт хотя бы один, раз в паузу (самую частую из заявленных) в лог
+    уходит одна строка с подписью первого запроса и временем его начала.
+    Замок короткий: он держит счётчики, но не `logger.info`.
+    """
+
+    def __init__(self, logger) -> None:
+        self._logger = logger
+        self._lock = threading.Lock()
+        self._live = 0
+        self._interval = 0.0
+        self._label = ""
+        self._started = 0.0
+        self._thread: threading.Thread | None = None
+        self._wake = threading.Event()
+
+    def begin(self, label: str, interval: float) -> None:
+        with self._lock:
+            if self._live == 0:
+                self._label = label
+                self._interval = interval
+                self._started = time.monotonic()
+            elif interval < self._interval:
+                # чья-то пауза короче — нить должна успевать и для него
+                self._interval = interval
+            self._live += 1
+            if self._thread is not None:
+                return
+            self._wake.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True,
+                                            name="llm-heartbeat")
+            self._thread.start()
+
+    def end(self) -> None:
+        with self._lock:
+            if self._live == 0:
+                return
+            self._live -= 1
+            last = self._live == 0
+        if last:
+            # будим спящую нить: закончился последний запрос, ждать паузу
+            # ей больше незачем
+            self._wake.set()
+
+    def _run(self) -> None:
+        """Отметки, пока идёт хоть один запрос; пауза — самая частая из них."""
+        while True:
+            with self._lock:
+                if self._live <= 0:
+                    self._thread = None
+                    return
+                interval = self._interval
+            # ждём снаружи замка: выход из контекста не ждёт заснувшую нить
+            # (`Event`, а не `time.sleep`: конец последнего запроса будит её
+            # сразу, и отметка не опаздывает на целую паузу)
+            woken = self._wake.wait(interval)
+            self._wake.clear()
+            with self._lock:
+                if self._live <= 0:
+                    self._thread = None
+                    return
+                label = self._label
+                elapsed = int(time.monotonic() - self._started)
+            if woken:
+                continue   # разбудили — но запросы ещё идут: новая пауза
+            self._logger.info("⏳ %s ответ идёт: %d с", label, elapsed)
+
+
+_TICKERS: dict[int, _HeartbeatTicker] = {}
+_TICKERS_LOCK = threading.Lock()
+
+
+def _tick(logger) -> _HeartbeatTicker:
+    """Нить отметок, общая для всех запросов одного логгера (см. _Heartbeat)."""
+    with _TICKERS_LOCK:
+        ticker = _TICKERS.get(id(logger))
+        if ticker is None:
+            ticker = _HeartbeatTicker(logger)
+            _TICKERS[id(logger)] = ticker
+        return ticker
 
 
 def stage_call_timeout(timeout, stream_timeout, max_retries,

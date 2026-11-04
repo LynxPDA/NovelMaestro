@@ -6,6 +6,8 @@ determine_model, логирование, файловые утилиты, дет
 import json
 import os
 import re
+import threading
+import time
 import unicodedata
 import sys
 from pathlib import Path
@@ -2436,6 +2438,98 @@ def test_write_prompt_check_writes_readable_json(tmp_path):
     out = tmp_path / "tmp" / "prompt_check.json"
     C.write_prompt_check(str(out), {"stage": "ner", "problems": ["нет тега"]})
     assert json.loads(out.read_text(encoding="utf-8"))["problems"] == ["нет тега"]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ОТМЕТКИ «ОТВЕТ ИДЁТ» (_Heartbeat, одна нить на логгер)
+# ══════════════════════════════════════════════════════════════════════
+class _ListLog:
+    """Логгер-копиlka: info (...) с форматом %-строки складывается в lines."""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+        self._lock = threading.Lock()
+
+    def info(self, msg, *args) -> None:
+        with self._lock:
+            self.lines.append(msg % args if args else msg)
+
+
+def _sleep(seconds: float) -> None:
+    """Ожидание в тестах незаметно для фикстуры `_no_sleep`.
+
+    Фикстура гасит `C.time.sleep`, а `C.time` — тот же модуль, что `time`
+    здесь; ждём через событие threads, чтобы тесты отметок не зависели от
+    подмены."""
+    threading.Event().wait(seconds)
+
+
+def test_heartbeat_one_line_for_many_parallel_requests():
+    """16 параллельных запросов дают ОДНУ строку за паузу, а не 16.
+
+    Стадия держит до 16 потоков; с нитью отметок на каждый запрос лог
+    получал залп одинаковых строк с одним счётом, и в нём терялся любой
+    другой вывод."""
+    log = _ListLog()
+    gate = threading.Event()
+
+    def worker() -> None:
+        with C._Heartbeat(log, "[check]", 0.01):
+            gate.wait(timeout=5)
+
+    ts = [threading.Thread(target=worker) for _ in range(16)]
+    for t in ts:
+        t.start()
+    deadline = time.monotonic() + 5
+    while len(log.lines) < 2 and time.monotonic() < deadline:
+        _sleep(0.01)
+    gate.set()
+    for t in ts:
+        t.join(timeout=5)
+    # отметок должно быть НЕ БОЛЬШЕ, чем пауз: за время работы запросов
+    # по одной на поток их было бы в 16 раз больше
+    assert 1 <= len(log.lines) <= 20, log.lines
+    assert all("ответ идёт" in line for line in log.lines)
+
+
+def test_heartbeat_silent_without_logger_or_interval():
+    with C._Heartbeat(None, "[check]", 0.01):
+        pass
+    log = _ListLog()
+    with C._Heartbeat(log, "[check]", 0):   # 0 — молчать
+        pass
+    assert log.lines == []
+
+
+def test_heartbeat_stops_after_last_request():
+    """Нить живёт, пока идёт хоть один запрос, и умирает с последним."""
+    log = _ListLog()
+    ticker = C._tick(log)
+    gate = threading.Event()
+
+    def worker() -> None:
+        with C._Heartbeat(log, "[check]", 0.01):
+            gate.wait(timeout=5)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    deadline = time.monotonic() + 5
+    while not log.lines and time.monotonic() < deadline:
+        _sleep(0.01)
+    assert log.lines, "пока запрос идёт, отметка обязана появиться"
+    gate.set()
+    t.join(timeout=5)
+    assert ticker._live == 0
+    deadline = time.monotonic() + 5
+    while ticker._thread is not None and time.monotonic() < deadline:
+        _sleep(0.01)
+    assert ticker._thread is None, "нить отметок осталась жить без запросов"
+
+
+def test_heartbeat_ticker_is_shared_per_logger():
+    a, b = _ListLog(), _ListLog()
+    assert C._tick(a) is C._tick(a)
+    assert C._tick(a) is not C._tick(b)
 
 
 # ══════════════════════════════════════════════════════════════════════
