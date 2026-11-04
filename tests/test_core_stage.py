@@ -338,6 +338,28 @@ def test_progress_cli_mode_uses_bar(monkeypatch, capsys):
     assert "100%" in capsys.readouterr().err
 
 
+def test_progress_log_writes_whole_line(monkeypatch, capsys):
+    """Строка прогресса уходит ОДНИМ `write`, а не `print`.
+
+    `print()` пишет текст и «\\n» двумя вызовами, и лог-строка из соседнего
+    потока вклинивалась между ними: в панели запуска отметка слипалась со
+    следующей («…700 с2026-11-04 …»)."""
+    monkeypatch.delenv("WEB_PROGRESS", raising=False)
+    written: list[str] = []
+    real_write = st.sys.stdout.write
+
+    def spy(text):
+        written.append(text)
+        return real_write(text)
+
+    monkeypatch.setattr(st.sys.stdout, "write", spy)
+    with st.Progress(2, "Перевод") as p:
+        p._pbar = None  # noqa: SLF001 — без бара строка идёт прямо в stdout
+        p.log("⚠ глава 7: сомнительно")
+    assert "⚠ глава 7: сомнительно\n" in written, written
+    assert all(t.endswith("\n") for t in written), written
+
+
 # ══════════════════════════════════════════════════════════════════════
 # setup_stage: лог стадии + команда запуска + профиль
 # ══════════════════════════════════════════════════════════════════════

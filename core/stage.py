@@ -612,11 +612,19 @@ class Progress:
         self.logger.info(f"📊 Прогресс: {self.done}/{self.total}")
 
     def log(self, message: str) -> None:
-        """Строка прогресса: tqdm.write не рвёт бар, иначе — обычный вывод."""
+        """Строка прогресса: tqdm.write не рвёт бар, иначе — своей строкой.
+
+        Не `print()`: он пишет текст и завершающий «\n» ДВУМЯ вызовами, и
+        лог-строка из соседнего потока вклинивалась между ними — в панели
+        лога запуска строка отметки сливалась со следующей
+        («…700 с2026-11-04 …»). Запись целой строки одним `write` (как в
+        emit_line) под замком вывода не даёт этому случиться.
+        """
         if self._pbar is not None:
             _bar_class().write(message)
         else:
-            print(message)
+            sys.stdout.write(str(message) + "\n")
+            sys.stdout.flush()
 
     def close(self) -> None:
         """Снять бар и оставить в логе финальный счётчик (иначе хвост файла

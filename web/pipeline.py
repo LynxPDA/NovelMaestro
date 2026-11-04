@@ -526,7 +526,12 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     done, total = tracker.overall()
                     emit_progress(done, total, label)
                 except Exception:
-                    print(line, end="", flush=True)
+                    # кривая строка прогресса — в лог как есть, ОДНИМ `write`:
+                    # `print(line, end="")` пишет текст и «\n» двумя
+                    # вызовами, и лог-строка соседнего потока вклинивалась
+                    # между ними — строки слипались
+                    sys.stdout.write(line.rstrip("\n") + "\n")
+                    sys.stdout.flush()
                 continue
             sink.append(line)
 
