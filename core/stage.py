@@ -129,9 +129,10 @@ def add_llm_args(parser: argparse.ArgumentParser, *,
                             f"{int(DEFAULT_STREAM_TIMEOUT)}).")
     group.add_argument(*flags("max_retries", "--max_retries"), type=int,
                        default=None, metavar="N",
-                       help="Повторы при ошибке LLM (пусто = общий "
+                       help="Попыток запроса к LLM, включая первую (пусто = общий "
                             f"MAX_RETRIES, встроенный "
-                            f"{int(DEFAULT_MAX_RETRIES)}).")
+                            f"{int(DEFAULT_MAX_RETRIES)}); повторы — по 408/425/429/5xx, "
+                            "обрыву, таймауту и пустому ответу.")
     group.add_argument(*flags("max_tokens", "--max_tokens"), type=int,
                        default=None, metavar="N",
                        help="Серверный предел ответа, ТОКЕНЫ (пусто = общий "
