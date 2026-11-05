@@ -2532,15 +2532,17 @@ def test_heartbeat_ticker_is_shared_per_logger():
     assert C._tick(a) is not C._tick(b)
 
 
-def test_heartbeat_writes_only_to_stage_log_file(tmp_path, capsys):
+def test_heartbeat_writes_only_to_stage_log_file(tmp_path, capsys, monkeypatch):
     """Отметка идёт в ФАЙЛ лога стадии, а не в ленту запуска.
 
     Сторожу `web/pipeline.py` хватает отпечатка файла; человеку в ленте
     нужны события, а не пульс. Тикер пишет через логгер-двойник с одним
-    файловым хендлером."""
+    файловым хендлером. В CLI stdout — терминал, там отметка полезна."""
     logger, log_path = C.setup_logging(str(tmp_path / "check.txt"))
+    monkeypatch.setenv("WEB_PROGRESS", "1")   # web-режим: лента = stdout
     gate = threading.Event()
     ticker = C._tick(logger)
+    ticker._file_log = ticker._file_only(logger)
 
     def worker() -> None:
         with C._Heartbeat(logger, "[check]", 0.01):
