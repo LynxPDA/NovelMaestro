@@ -326,7 +326,6 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     ner_min_count: int = 0,
                     names_min_count: int = 10,
                     ner_fields: str = "term,translation,type",
-                    request_budget: int = 0,
                     chunk_size: int | None = None) -> list[str]:
     # модель, сервер и ключ конвейера — одни на все стадии (translate,
     # redact, polish), стадийных ключей больше нет
@@ -358,11 +357,6 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
     common += ["--ner_min_count", str(ner_min_count),
                "--names_min_count", str(names_min_count),
                "--ner_fields", str(ner_fields)]
-    # общий потолок запроса (ТОКЕНЫ, оценка) — действует во всех режимах:
-    # перевод, редактура, полировка
-    ext_extra = []
-    if request_budget:
-        ext_extra += ["--request_budget", str(request_budget)]
     # размер чанка перевода/полировки (ТОКЕНЫ): форма > дефолт
     # (_DEFAULTS["chunk_size"] ← PIPELINE_CHUNK_SIZE из .env);
     # редактура идёт главой целиком — стадии 2 чанк не нужен
@@ -372,17 +366,17 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                 "translate", *common,
                 "--chunk_size", cs,
                 "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
-                "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
+                "--ner_ngram", str(_DEFAULTS["ner_ngram"])]
     if stage == 2:
         return [sys.executable, str(script), str(in_file), "--mode",
                 "redact", *common,
                 "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
-                "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
+                "--ner_ngram", str(_DEFAULTS["ner_ngram"])]
     return [sys.executable, str(script), str(in_file), "--mode",
             "polish", *common,
             "--chunk_size", cs,
             "--ner_threshold", str(_DEFAULTS["ner_threshold"]),
-            "--ner_ngram", str(_DEFAULTS["ner_ngram"]), *ext_extra]
+            "--ner_ngram", str(_DEFAULTS["ner_ngram"])]
 
 
 def chapters_in_range(chapters: dict, start: int, end: int) -> dict:
@@ -459,7 +453,6 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     ner_min_count: int = 0,
                     names_min_count: int = 10,
                     ner_fields: str = "term,translation,type",
-                    request_budget: int = 0,
                     chunk_size: int | None = None,
                     stage_timeout: float | None = None) -> bool:
     """Одна глава: стадии по порядку, fail-fast (код 0 + файл + grep).
@@ -557,7 +550,6 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                                   ner_min_count=ner_min_count,
                                   names_min_count=names_min_count,
                                   ner_fields=ner_fields,
-                                  request_budget=request_budget,
                                   chunk_size=chunk_size)
             proc_env = dict(os.environ)
             if api_key:
@@ -710,11 +702,6 @@ def main() -> None:
     ap.add_argument("--ner_fields", default="term,translation,type",
                     help="Поля термина в {ner_block} через запятую "
                          "(алиасы — при включении aliases).")
-    ap.add_argument("--request_budget", type=int, default=0,
-                    help="Общий потолок user-запроса (чанк + все блоки), "
-                         "ТОКЕНЫ (оценка); 0 = без ограничения; "
-                         "превышение — ошибка чанка; действует во всех "
-                         "режимах: перевод, редактура, полировка.")
     ap.add_argument("--chunk_size", type=int, default=None,
                     help="Размер чанка перевода/полировки, ТОКЕНЫ (оценка) "
                          "(пусто = PIPELINE_CHUNK_SIZE из .env → дефолт); "
@@ -853,10 +840,6 @@ def main() -> None:
     log.info("NER-ПОЛЯ   : %s", ",".join(nf_list))
     log.info("ЧАНК       : %d ТОКЕНОВ (оценка; перевод/полировка)",
              args.chunk_size)
-    # потолок запроса — предохранитель любого типа работы
-    if args.request_budget:
-        log.info("БЮДЖЕТ     : %d ТОКЕНОВ на user-запрос (превышение — "
-                 "ошибка чанка)", args.request_budget)
     log.info("ВРЕМЯ      : %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     log.info("═" * 60)
 
@@ -889,7 +872,6 @@ def main() -> None:
             ner_min_count=args.ner_min_count,
             names_min_count=args.names_min_count,
             ner_fields=args.ner_fields,
-            request_budget=args.request_budget,
             chunk_size=args.chunk_size)
         cmd += ["--preview-request", args.preview_request]
         proc_env = dict(os.environ)
@@ -965,8 +947,7 @@ def main() -> None:
                         ner_min_count=args.ner_min_count,
                         names_min_count=args.names_min_count,
                         ner_fields=args.ner_fields,
-                        request_budget=args.request_budget,
-                        chunk_size=args.chunk_size,
+                                    chunk_size=args.chunk_size,
                         stage_timeout=stage_limit): cid
             for cid, dirs in to_process.items()
         }

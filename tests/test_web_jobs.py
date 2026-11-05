@@ -1469,18 +1469,13 @@ def test_pipeline_no_separate_prompts():
     assert "--translate_prompt" not in argv
 
 
-def test_pipeline_request_budget_all_actions():
-    """Бюджет запроса — общий потолок, а не часть расширенного контекста:
-    доезжает и до обычного перевода, и до редакатуре с полировкой;
-    0 = без ограничения — флага нет."""
-    for action in ("1", "2", "3", "9"):
+def test_pipeline_has_no_request_budget():
+    """Бюджета запроса у конвейера нет: потолок запроса — размер чанка,
+    а размер перевода проверяет стадия «Проверка перевода». Поле из формы
+    не едет в argv ни в одном типе работы."""
+    for action in ("1", "2", "3", "8"):
         argv = build_command("pipeline",
                              {"action": action, "request_budget": "24000"}, {})
-        assert "--request_budget" in argv, action
-        assert argv[argv.index("--request_budget") + 1] == "24000", action
-    # дефолт реестра — 0 (без ограничения): флага в argv нет
-    for action in ("1", "2", "3", "8"):
-        argv = build_command("pipeline", {"action": action}, {})
         assert "--request_budget" not in argv, action
 
 

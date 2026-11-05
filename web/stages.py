@@ -273,9 +273,6 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
     # пусто = авто (кандидат с тегами из prompts/)
     if form.get("prompt_file"):
         argv += ["--prompt_file", str(form["prompt_file"])]
-    # бюджет запроса (ТОКЕНЫ): 0 = без ограничения — флаг не передаётся
-    if str(form.get("request_budget") or "").strip() not in ("", "0"):
-        argv += ["--request_budget", str(form["request_budget"])]
     # размер чанка перевода/полировки (ТОКЕНЫ); редактура — глава целиком
     if form.get("chunk_size") not in (None, ""):
         argv += ["--chunk_size", str(form["chunk_size"])]

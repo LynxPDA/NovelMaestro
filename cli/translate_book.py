@@ -11,9 +11,8 @@ translate_book.py — ЕДИНЫЙ скрипт LLM-обработки текс�
 Авто-режим (без --mode): вход *.json → redact, иначе translate
 (обратная совместимость со старыми вызовами).
 
-ЕДИНИЦЫ: --chunk_size и --request_budget — ТОКЕНЫ (оценка
-estimate_tokens); длины — СИМВОЛЫ; max_tokens — серверный
-предохранитель (ТОКЕНЫ), не расчёт.
+ЕДИНИЦЫ: --chunk_size — ТОКЕНЫ (оценка estimate_tokens); длины —
+СИМВОЛЫ; max_tokens — серверный предохранитель (ТОКЕНЫ), не расчёт.
 
 Промпты: --prompt_file БЕЗ тегов = промпт текущего режима (файл целиком);
 с тегами <translate>/<redact>/<polish> — один файл на все режимы.
@@ -24,10 +23,6 @@ estimate_tokens); длины — СИМВОЛЫ; max_tokens — серверны
 {female_names}, {male_names} — женские/мужские имена из
 ner.json (поле translation; пол по наличию (female)/(male) в type), ищутся
 в тексте чанка (основное назначение — polish).
-
---request_budget — общий потолок user-запроса в ТОКЕНАХ (оценка;
-0 = без ограничения): предохранитель ЛЮБОГО типа работы — перевод,
-редактура, полировка; превышение — ошибка чанка.
 
 Сервер: --host/--model/--api_key (CLI) > HOST/API_KEY/MODEL из .env
 (единая модель скрипта — без отдельных моделей под режимы).
@@ -83,7 +78,6 @@ from core.stage import (  # noqa: E402
 from core import settings as core_settings  # noqa: E402
 from core.common import (
     collect_gender_names,
-    estimate_tokens,
     find_relevant_ner,
     get_tagged_prompt,
     load_ner_data,
@@ -292,16 +286,6 @@ def process_item(internal_id, original_text, draft_text, ctx):
     user_content = build_user_content(
         ctx["mode"], ctx["prompt"], original_text, draft_text,
         ner_block, female_block, male_block, logger=ctx["logger"])
-    # общий потолок запроса (ТОКЕНЫ, оценка): превышение — ошибка чанка;
-    # действует во всех режимах, 0 = без ограничения
-    budget = ctx.get("request_budget", 0)
-    n_tokens = estimate_tokens(user_content)
-    if budget and n_tokens > budget:
-        err = (f"Превышен бюджет запроса: {n_tokens} > {budget} "
-               f"токенов (оценка). Уменьшите --chunk_size или снимите "
-               f"--request_budget (0).")
-        fb = f"\n[FAIL: {err}]\n{original_text}\n[FAIL: {err}]\n"
-        return internal_id, fb, f"Chunk {internal_id} FAIL: {err}"
     text, err = ctx["stage"].complete(
         user_content, label=f"[{ctx['mode']} chunk {internal_id}]",
     )
@@ -348,11 +332,8 @@ def build_parser():
                 ner.json (translation; пол по (female)/(male) в type; без term)
                 для справочника полов в polish.
 
-  --request_budget — общий потолок user-запроса, ТОКЕНЫ — оценка;
-  действует во всех режимах (0 = без ограничения).
-
 Единицы:
-  --chunk_size и --request_budget — ТОКЕНЫ (оценка estimate_tokens);
+  --chunk_size — ТОКЕНЫ (оценка estimate_tokens);
   длины — СИМВОЛЫ;
   max_tokens — серверный предохранитель (ТОКЕНЫ), не внутренний расчёт.
 
@@ -388,11 +369,6 @@ def build_parser():
                    help="Минимальный count термина для {female_names}/"
                         "{male_names}: имена с count ниже отфильтровываются "
                         "(0 — выключено).")
-    p.add_argument("--request_budget", type=int, default=0,
-                   help="Общий потолок user-запроса (чанк + все блоки), "
-                        "ТОКЕНЫ — оценка estimate_tokens; 0 = без "
-                        "ограничения (по умолчанию); превышение — ошибка "
-                        "чанка; действует во всех режимах.")
     # Промпт
     p.add_argument("--prompt_file", default=None,
                    help="Внешний промпт (теги <translate>/<redact>/<polish>); "
@@ -574,7 +550,6 @@ def main(argv=None):
                 "female_names": len(fem),
                 "male_names": len(mal),
                 "request_chars": len(user_content),
-                "request_budget": args.request_budget,
                 "prompt_file": args.prompt_file or "",
                 "prompt_source": "внешний" if custom else "встроенный",
         }
@@ -601,7 +576,6 @@ def main(argv=None):
         "ner_min_count": args.ner_min_count,
         "names_min_count": args.names_min_count,
         "prompt": active_prompt, "stage": stage,
-        "request_budget": args.request_budget,
         "logger": logger,
     }
 

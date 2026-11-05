@@ -330,16 +330,13 @@ def test_pipeline_spec_chunk_size_field():
     assert f["type"] == "number"
 
 
-def test_pipeline_spec_request_budget_field():
-    """Бюджет запроса — предохранитель любого типа работы: дефолт 0
-    (без ограничения), поле без привязки к действию 9."""
+def test_pipeline_spec_has_no_request_budget_field():
+    """Бюджета запроса у конвейера нет: в форме только размер чанка."""
     spec = spec_for("pipeline")
     assert spec is not None
-    f = next(x for x in spec["fields"] if x["name"] == "request_budget")
-    assert f["default"] == "0"
-    assert "ТОКЕНЫ" in f["label"]
-    # не касаются только расширенного контекста: режима-условия нет
-    assert "when" not in f and "when_any" not in f and "when_set" not in f
+    names = [x["name"] for x in spec["fields"]]
+    assert "request_budget" not in names
+    assert "chunk_size" in names
 
 
 def test_pipeline_action_specs_have_no_extended():
@@ -351,39 +348,31 @@ def test_pipeline_action_specs_have_no_extended():
         assert "extended" not in spec
 
 
-def test_build_stage_cmd_request_budget(tmp_path):
-    """Бюджет запроса — предохранитель любого типа работы; флагов
-    словаря/правил/примеров в команде стадии нет вовсе."""
+def test_build_stage_cmd_no_request_budget(tmp_path):
+    """Бюджета запроса в команде стадии нет; флагов словаря/правил/примеров
+    тоже нет вовсе."""
     from web.pipeline import build_stage_cmd
     script = tmp_path / "translate_book.py"
-    def _cmd(stage, **kw):
-        return build_stage_cmd(stage, script, tmp_path / "in",
-                               tmp_path / "out", "http://h", "k", "м",
-                               300, **kw)
     for stage in (1, 2, 3):
-        cmd = _cmd(stage)
+        cmd = build_stage_cmd(stage, script, tmp_path / "in",
+                              tmp_path / "out", "http://h", "k", "м", 300)
         assert "--request_budget" not in cmd
         for flag in ("--dict_file", "--rules_file", "--examples_file",
                      "--fewshot_k", "--fewshot_threshold"):
             assert flag not in cmd, flag
-    for stage in (1, 2, 3):
-        cmd = _cmd(stage, request_budget=16000)
-        joined = " ".join(cmd)
-        assert "--request_budget 16000" in joined
         # глоссарий — всегда канонический ner.json (выбор из web убран)
-        assert "--ner_file ner.json" in joined
+        assert "--ner_file ner.json" in " ".join(cmd)
 
 
-def test_build_pipeline_request_budget_argv():
-    """Бюджет запроса формы → argv оркестратора; расширенных полей
-    в форме нет."""
+def test_build_pipeline_no_request_budget_argv():
+    """Бюджет запроса в argv оркестратора не едет: у конвейера его нет."""
     ctx: dict = {}
     base = {"action": "8", "host": "http://h", "model": "m",
             "api_key": "k", "request_budget": "20000"}
     argv = build_command("pipeline", base, ctx)
     joined = " ".join(argv)
     assert "--action 8" in joined
-    assert "--request_budget 20000" in joined
+    assert "--request_budget" not in joined
     assert "--ner_file" not in joined
     for flag in ("--dict_file", "--rules_file", "--examples_file",
                  "--fewshot_k", "--fewshot_threshold"):

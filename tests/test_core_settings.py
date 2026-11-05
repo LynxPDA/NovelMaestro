@@ -273,7 +273,7 @@ def test_stage_names_are_the_registry_owners():
 # Настройки, которые живут только в реестре: в форме стадии их нет, они
 # правятся на странице «Настройки» (у конвейера это порог и n-граммы поиска
 # терминов — руками в .env их не задают).
-REGISTRY_ONLY = {"pipeline": (4, ["ner_threshold", "ner_ngram"])}
+REGISTRY_ONLY = {"pipeline": (3, ["ner_threshold", "ner_ngram"])}
 
 
 @pytest.mark.parametrize("stage", sorted(S.STAGES))

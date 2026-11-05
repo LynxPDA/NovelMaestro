@@ -460,24 +460,11 @@ def test_build_parser_has_no_extended_context_flags():
     """Расширенного контекста в стадии перевода нет: флагов словаря,
     правил, примеров и few-shot в argparse не остаётся."""
     p = TB.build_parser()
-    a = p.parse_args(["x.txt", "--request_budget", "16000"])
-    assert a.request_budget == 16000
-    for flag in ("dict_file", "rules_file", "examples_file",
+    a = p.parse_args(["x.txt", "--chunk_size", "16000"])
+    assert a.chunk_size == 16000
+    for flag in ("request_budget", "dict_file", "rules_file", "examples_file",
                  "fewshot_k", "fewshot_threshold"):
         assert not hasattr(a, flag), flag
-
-def test_process_item_request_budget_exceeded(monkeypatch):
-    """--request_budget: превышение — FAIL чанка до вызова LLM."""
-    ctx = _ctx("translate")
-    ctx["request_budget"] = 5  # ТОКЕНЫ (оценка): запрос заведомо больше
-    ctx["prompt"] = "ПРОМПТ ДЛИННЕЕ БЮДЖЕТА {original_text}"
-    called = []
-    monkeypatch.setattr(core_stage, "stream_chat_completion",
-                        lambda *a, **k: called.append(1) or ("x", ""))
-    idx, text, info = TB.process_item(0, "текст", None, ctx)
-    assert called == []  # LLM не вызван
-    assert "FAIL" in info and "Превышен бюджет запроса" in info
-    assert text.count("[FAIL: Превышен бюджет запроса") == 2
 
 
 def test_main_preview_request(tmp_path, monkeypatch):
