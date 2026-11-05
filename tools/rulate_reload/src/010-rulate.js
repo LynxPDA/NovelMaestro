@@ -8,6 +8,12 @@ const CFG = {
   diffCtx: 40,
   titleMode: 'off',
   fallbackByTitle: false,
+  // проверка «та ли это глава»: chrF и отношение длин к уже сохранённому
+  // переводу. Калибровка на реальных главах: та же глава — chrF 0.958–0.982,
+  // разные главы одной книги — 0.480–0.524
+  checkSameChapter: true,
+  minChrf: 0.75,
+  minLenRatio: 0.35,
 };
 
 /* ---------- утилиты ---------- */
@@ -79,6 +85,55 @@ function firstDiff(a, b) {
   return { pos: i, site: sl(a, i), file: sl(b, i) };
 }
 
+/* chrF: доля совпавших символьных n-грамм (1..6) с β=3. Сравнивать перевод с
+   переводом, а не с оригиналом: здесь оба текста — русская проза, и
+   «похожесть» значит «та же формулировка», а не «тот же смысл».
+   Калибровка на 601 главе книги (translated ↔ polished): медиана 0.983,
+   1-й процентиль 0.945, минимум без битых файлов 0.881. ДВЕ РАЗНЫЕ главы той
+   же книги: медиана 0.477, максимум 0.543. Грубый повторный перевод (40%
+   предложений переписаны) — 0.834-0.873. Порог 0.75 ниже самого тяжёлого
+   повторного перевода и выше разных глав: запас есть с обеих сторон.
+   Объём (ratio длин) для этой задачи почти бесполезен — у разных глав одного
+   автора длина сходится на 0.72-0.92, — поэтому он очень грубый
+   предохранитель от обрезанного файла (ratio калибровки для битой главы: 0.17),
+   а не решатель. */
+function chrf(a, b, nMax, beta) {
+  const n = nMax || 6, b2 = (beta || 3) ** 2;
+  const ga0 = String(a || '').replace(/\s+/g, '');
+  const gb0 = String(b || '').replace(/\s+/g, '');
+  if (!ga0.length || !gb0.length) return 0;
+  let total = 0;
+  for (let k = 1; k <= n; k++) {
+    const ga = new Map(), gb = new Map();
+    for (let i = 0; i + k <= ga0.length; i++) {
+      const g = ga0.slice(i, i + k);
+      ga.set(g, (ga.get(g) || 0) + 1);
+    }
+    for (let i = 0; i + k <= gb0.length; i++) {
+      const g = gb0.slice(i, i + k);
+      gb.set(g, (gb.get(g) || 0) + 1);
+    }
+    let inter = 0;
+    for (const [g, c] of ga) if (gb.has(g)) inter += Math.min(c, gb.get(g));
+    let totalA = 0, totalB = 0;
+    for (const c of ga.values()) totalA += c;
+    for (const c of gb.values()) totalB += c;
+    const p = inter / Math.max(1, totalA), r = inter / Math.max(1, totalB);
+    total += (p + r === 0) ? 0 : (1 + b2) * p * r / (b2 * p + r);
+  }
+  return total / n;
+}
+
+/* Похожа ли глава на уже сохранённый перевод (а не на соседнюю главу).
+   Возвращает {ok, chrf, ratio} — по ним же пишется объяснение в лог. */
+function looksLikeSameChapter(a, b) {
+  const x = norm(a), y = norm(b);
+  if (!x.length || !y.length) return { ok: false, chrf: 0, ratio: 0 };
+  const ratio = Math.min(x.length, y.length) / Math.max(x.length, y.length);
+  const score = chrf(x, y);
+  return { ok: score >= CFG.minChrf && ratio >= CFG.minLenRatio, chrf: score, ratio };
+}
+
 async function getDoc(url) {
   const res = await fetch(url, { credentials: 'include' });
   if (!res.ok) throw new Error('GET ' + res.status + ' ' + url);
@@ -120,9 +175,12 @@ function parseChaptersFile(text) {
   if (cur) out.push(cur);
   return out.map(c => {
     const body = c.lines.join('\n').replace(/\r\n?/g, '\n').trim();
-    /* тег первичен; «Глава N» — запасной вариант для старых файлов без тега
-       и для прологов («# [Пролог :|: 5]» тег уже даёт) */
-    const num = c.tagNum != null ? c.tagNum : chapterNum(c.title);
+    /* Номер — из названия «Глава N», как книга размечена на сайте; тег
+       `:|:` нужен только когда номера в названии нет вовсе (пролог,
+       интерлюдия). Иначе глава из второго тома с названием «Глава 1.
+       Дополнительная» съезжала бы в чужое место по тегу. */
+    const fromTitle = chapterNum(c.title);
+    const num = fromTitle != null ? fromTitle : c.tagNum;
     const problem = detectProblematicNum(c.title);
     return { title: c.title, num, text: body, problem, tagged: c.tagNum != null };
   });
@@ -316,87 +374,57 @@ const countBy = (arr, key) => {
 
 /* План сопоставления файла с сайтом — целиком до первой записи.
 
-   Номер главы файла — из тега `:|:` (его пишет стадия compile), номер сайта —
-   из названия «Глава N»: другого на сайте нет. Разрешение коллизий — тремя
-   подсказками в таком порядке:
+   Ключ сопоставления — НОМЕР из названия главы («Глава N»): так книга и
+   размечена на сайте, и так её присылает стадия compile. Тег `:|:` — только
+   когда в названии номера нет вовсе (пролог «# [Пролог :|: 5]»).
 
-   1. одинаковое название — сильная подсказка, но она работает только когда
-      такая пара одна с ОБЕИХ сторон; на сайте названия бывают от прошлого
-      перевода (файл перекомпилировали, на сайте остались старые), поэтому
-      обычно шаг молчит и решает второй;
-   2. порядок — k-я неразобранная глава файла с этим номером — это k-я
-      неразобранная глава сайта (сравниваем ТОЛЬКО внутри группы одного
-      номера: глобальная позиция сдвигается, стоит на сайте не хватить одной
-      главы, и всё после неё уехало бы на соседа); шаг работает, когда
-      оставшихся глав поровну — лишняя глава на сайте (примечание
-      переводчика, бонус) при этом не мешает;
-   3. не разрешилось — отказ с перечнем кандидатов, а не догадка: лишний
-      перевод в чужой главе (и потеря опубликованного) дороже пропуска.
+   Разные главы с одним номером (второй том, «Глава 1. Дополнительная глава»)
+   разводятся ПОЛНЫМ названием: «Глава 1. История» и «Глава 1. Дополнительная
+   глава» — разные главы. Совпало название целиком (с точностью до регистра,
+   пробелов и NFC) — глава та. Не совпало ни у одной — отказ, а не порядок:
+   порядок угадывает, а ошибка здесь означает запись перевода в чужую главу.
 
-   Возвращает Map: индекс главы файла → {info, how} | {reason, list}.
-   Глав без номера касается только вариант «по названию» (флаг fallback). */
+   Возвращает Map: индекс главы файла → {info, how} | {reason, list}. */
 function planMatches(parsed, site) {
   const plan = new Map();
-  const fileByNum = new Map();
+  const usedSite = new Map();   // chapterId → индекс главы файла (кто уже занял)
 
   parsed.forEach((ch, i) => {
     if (ch.problem) return;
-    if (ch.num == null) {
-      if (!CFG.fallbackByTitle) return;
-      const info = site.titleMap.get(titleKey(ch.title));
-      if (info) plan.set(i, { info, how: 'по названию' });
+
+    /* 1. по названию целиком — годится и когда номер не разобрался */
+    const byTitle = site.titleMap.get(titleKey(ch.title));
+    if (byTitle && !usedSite.has(byTitle.chapterId)) {
+      plan.set(i, { info: byTitle, how: 'по названию' });
+      usedSite.set(byTitle.chapterId, i);
       return;
     }
-    addTo(fileByNum, ch.num, i);
+
+    if (ch.num == null) {
+      if (!CFG.fallbackByTitle) return;
+      plan.set(i, { reason: 'номер не разобрался, название не совпало' });
+      return;
+    }
+
+    const group = site.byNum.get(ch.num) || [];
+    if (!group.length) return;
+
+    /* 2. одна глава с этим номером на сайте — она */
+    if (group.length === 1) {
+      if (usedSite.has(group[0].chapterId)) return; // дубль в файле — вторую не льём
+      plan.set(i, { info: group[0], how: `по номеру ${ch.num}` });
+      usedSite.set(group[0].chapterId, i);
+      return;
+    }
+
+    /* 3. номер повторяется — название уже проверено выше и не подошло */
+    const free = group.filter(g => !usedSite.has(g.chapterId));
+    plan.set(i, {
+      reason: `номер ${ch.num} на сайте у ${group.length} глав, название не совпало`,
+      list: free.length ? free : group,
+    });
   });
 
-  for (const [num, idxs] of fileByNum) {
-    const group = site.byNum.get(num) || [];
-    if (!group.length) {
-      /* номера нет на сайте — запасной путь по названию, если он включён */
-      if (!CFG.fallbackByTitle) continue;
-      for (const i of idxs) {
-        const info = site.titleMap.get(titleKey(parsed[i].title));
-        if (info) plan.set(i, { info, how: 'по названию' });
-      }
-      continue;
-    }
-    if (idxs.length === 1 && group.length === 1) {
-      plan.set(idxs[0], { info: group[0] });
-      continue;
-    }
-
-    // 1. одинаковые названия, если такая пара одна с каждой стороны
-    const siteKeys = countBy(group, g => titleKey(g.siteTitle));
-    const fileKeys = countBy(idxs, i => titleKey(parsed[i].title));
-    const usedSite = new Set();
-    const usedFile = new Set();
-    for (const i of idxs) {
-      const k = titleKey(parsed[i].title);
-      if (siteKeys.get(k) !== 1 || fileKeys.get(k) !== 1) continue;
-      const g = group.find(x => titleKey(x.siteTitle) === k);
-      plan.set(i, { info: g, how: 'по названию' });
-      usedSite.add(g.chapterId);
-      usedFile.add(i);
-    }
-
-    // 2. остальные — по порядку, если оставшихся поровну
-    const restFile = idxs.filter(i => !usedFile.has(i));
-    const restSite = group.filter(g => !usedSite.has(g.chapterId));
-    if (!restFile.length) continue;
-    if (restFile.length === restSite.length) {
-      restFile.forEach((i, k) => {
-        const how = restFile.length > 1 ? `по порядку (${k + 1} из ${restFile.length})` : 'по порядку';
-        plan.set(i, { info: restSite[k], how });
-      });
-      continue;
-    }
-
-    // 3. неоднозначность — отказ на этих главах
-    for (const i of restFile) {
-      plan.set(i, { reason: 'номер повторяется на сайте', list: group });
-    }
-  }
   return plan;
 }
 
@@ -536,6 +564,25 @@ async function run(parsed, opts, ui) {
       const same = compareAndLog(savedText, ch.text, ui);
       const titleSame = (siteTitle || '').trim() === (ch.title || '').trim();
 
+      /* Последний заслон перед записью: даже при «правильном» номере глава
+         на сайте может оказаться ДРУГОЙ (нумерация разъехалась, тег
+         поправили, файл от другой версии книги). Сверяем с уже
+         сохранённым переводом — это тот же текст, что мы льём, только
+         прошлой версии. Не похоже — не пишем. */
+      let similar = null;
+      if (CFG.checkSameChapter && savedText != null) {
+        similar = looksLikeSameChapter(savedText, ch.text);
+      }
+      if (similar && !similar.ok) {
+        fail++;
+        ui.log(`     ОТКАЗ: глава на сайте не похожа на нашу (chrF ${similar.chrf.toFixed(3)}, объём ${similar.ratio.toFixed(2)} < ${CFG.minLenRatio}) — нумерация разъехалась?`, 'err');
+        ui.log('     → сверьте главу глазами; запись не выполнена', 'warn');
+        continue;
+      }
+      if (similar) {
+        ui.log(`     сверка с сохранённым: chrF ${similar.chrf.toFixed(3)}, объём ${similar.ratio.toFixed(2)} — та же глава`, 'plain');
+      }
+
       const doText  = !(opts.skipSame && same);
       const doTitle = (CFG.titleMode === 'title-and-body') && !(opts.skipSame && titleSame);
 
@@ -615,7 +662,7 @@ panel.id = 'ru-bulk';
 /* Разметку панели разбирает DOMParser, а не innerHTML: подстановка шаблона в
    innerHTML — это путь для HTML, а нужен ровно разобранный DOM (и статические
    значения CFG здесь единственные данные, но правило одно на весь файл). */
-const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v2.2</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> </div> <div class="ru-row"> <label title="Перечитать главу после записи"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> <label title="Если номер не найден — искать по названию"><input type="checkbox" id="ru-fallback-title"> Title fallback</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div>`;
+const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v2.2</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> </div> <div class="ru-row"> <label title="Перечитать главу после записи"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> <label title="Если номер не найден — искать по названию"><input type="checkbox" id="ru-fallback-title"> Title fallback</label> <label title="Сверять главу с уже сохранённым переводом (chrF) — заслон от разъехавшейся нумерации"><input type="checkbox" id="ru-check-same" ${CFG.checkSameChapter ? 'checked' : ''}> Сверка главы</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div>`;
 {
   const tplDoc = new DOMParser().parseFromString('<body>' + panelMarkup + '</body>', 'text/html');
   for (const node of [...tplDoc.body.childNodes]) panel.appendChild(document.adoptNode(node));
@@ -731,6 +778,7 @@ async function launch(dryRun) {
   CFG.verify = $('ru-verify').checked;
   CFG.skipSame = $('ru-skip-same').checked;
   CFG.fallbackByTitle = $('ru-fallback-title').checked;
+  CFG.checkSameChapter = $('ru-check-same').checked;
   CFG.delayMs = parseInt($('ru-delay').value, 10) || 2500;
   CFG.jitterMs = parseInt($('ru-jitter').value, 10) || 0;
   CFG.titleMode = $('ru-title-mode').value;
