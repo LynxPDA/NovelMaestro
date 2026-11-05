@@ -227,7 +227,11 @@ function viewProject(section, name, tab, job) {
      прогонов сразу) */
   function setView(view, find, all, jobId) {
     const sameJob = view !== "run" || !jobId || st.runJob === jobId;
-    if (view === st.view && !all && (!find || st.search === find) && sameJob)
+    /* Открытый файл (st.edit) — отдельный экран ПОВЕРХ вкладки: клик по её
+       же ярлыку обязан вернуть к списку, иначе с экрана ошибки (файл не
+       прочитался) выйти нечем — ссылка была бы «мёртвой». */
+    if (view === st.view && !st.edit && !all && (!find || st.search === find)
+        && sameJob)
       return;
     leaveBody();
     st.view = view;
@@ -1201,6 +1205,52 @@ function viewProject(section, name, tab, job) {
     }
   }
 
+  /* Ошибка чтения файла — в редакторе ОСТАЁТСЯ панель с «← Назад».
+     Голый текст посреди пустой вкладки оставлял человека без выхода: уйти
+     можно было только ссылкой в браузере (Файл 179 МБ — слишком большой для
+     редактора, скачайте кнопкой…, а кнопки нет). Здесь та же нижняя
+     панель, что у настоящего редактора, и кнопка скачивания — то самое
+     действие, которое подсказывает причина. */
+  function editorErrorView(full, message) {
+    const cut = String(full).lastIndexOf("/");
+    const dir = cut > 0 ? String(full).slice(0, cut) : "";
+    const name = String(full).slice(cut + 1);
+    return h(
+      "div",
+      { class: "editor-wrap" },
+      h(
+        "div",
+        { class: "files-toolbar" },
+        h(
+          "button",
+          { class: "btn btn-sm btn-ghost", onclick: closeEditor },
+          "← Назад",
+        ),
+        h("span", { class: "editor-meta" }, full),
+      ),
+      h(
+        "div",
+        { class: "files-empty files-missing" },
+        h("div", { class: "files-missing-head" }, message),
+        h("div", {},
+          "Файл можно скачать и посмотреть вне редактора — вкладка осталась " +
+          "там, откуда вы его открыли."),
+        h(
+          "button",
+          { class: "btn btn-sm", onclick: () => downloadFile(full, name) },
+          "Скачать файл",
+        ),
+        dir
+          ? h(
+            "button",
+            { class: "btn btn-sm btn-ghost", onclick: () => setPath(dir) },
+            `Открыть папку ${dir}`,
+          )
+          : null,
+      ),
+    );
+  }
+
   async function editorView() {
     const full = st.edit;
     const q = new URLSearchParams({
@@ -1211,7 +1261,7 @@ function viewProject(section, name, tab, job) {
     try {
       data = await api(`/file?${q}`);
     } catch (ex) {
-      return h("div", { class: "files-empty" }, ex.message);
+      return editorErrorView(full, ex.message);
     }
     const ext = extOf(full);
     /* язык — по назначению файла: prompts/* читаются как промпт (html-язык

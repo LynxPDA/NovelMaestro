@@ -329,7 +329,14 @@ async function api(path, opts = {}) {
   if (p === "/history/patch") {
     return globalThis.__historyPatch || { patch: "", adds: 0, dels: 0 };
   }
-  if (p === "/file") return { content: "", missing: true, exists: false, size: 0 };
+  if (p === "/file") {
+    /* файл сверх предела редактора: сервер отвечает 413 — тест
+       воспроизводит именно этот путь (экран ошибки поверх вкладки) */
+    if (globalThis.__fileTooBig && path.includes(globalThis.__fileTooBig))
+      throw new Error("Файл 17940134 Б — слишком большой для редактора, "
+        + "скачайте его через кнопку скачивания");
+    return { content: "", missing: true, exists: false, size: 0 };
+  }
   if (p === "/ner") return globalThis.__ner || { items: [], too_large: false };
   if (p === "/check") return globalThis.__check || { reports: [] };
   if (p === "/ner/review" || p === "/translate_check_llm/review") {
@@ -674,6 +681,39 @@ test("индикатор запусков: другой проект или эк
   sandbox.location.hash = "#/hub";
   sandbox.projectNavigate("HOLD/Другая", "run");
   assert.equal(sandbox.location.hash, "#/project/HOLD/Другая/run");
+});
+
+test("ярлык вкладки закрывает открытый файл, даже когда вкладка та же", async () => {
+  /* Регресс: «Файлы» → файл (st.edit поверх вкладки) → клик по «Файлы»
+     ничего не делал (view === st.view отбивал вызов), и с экрана ошибки
+     чтения (файл больше предела редактора) выйти было нечем */
+  globalThis.__fileTooBig = "big.txt";
+  globalThis.__files = [{ name: "big.txt", dir: false, size: 17940134 }];
+  globalThis.__dirs = [];
+  const page = viewProject("ACTIVE", "Книга", "files");
+  await new Promise((r) => setTimeout(r, 10));
+  /* открываем файл тем же путём, что кнопка «Править» */
+  const pencil = findByClass(page, "icon-btn")[0];
+  assert.ok(pencil && pencil._listeners.click,
+    "в строке файла есть кнопка правки");
+  pencil._listeners.click[0]();
+  await new Promise((r) => setTimeout(r, 20));
+  /* панель не пропала: причина + путь выхода */
+  const back = findByClass(page, "btn")
+    .filter((b) => collectText(b).join("").includes("← Назад"));
+  assert.equal(back.length, 1, "на экране ошибки есть «← Назад»");
+  const head = page.querySelectorAll(".files-missing-head");
+  assert.ok(head.length && collectText(head[0]).join("").includes("слишком большой"),
+    "причина ошибки видна");
+  /* и второй выход — клик по ярлыку СВОЕЙ же вкладки */
+  const tab = page.querySelectorAll(".tab")
+    .find((t) => collectText(t).join("").trim() === "Файлы");
+  assert.ok(tab && tab._listeners.click, "ярлык «Файлы» на месте");
+  tab._listeners.click[0]();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(page.querySelectorAll(".files-missing-head").length, 0,
+    "повторный клик по ярлыку вернул к списку (не остался на ошибке)");
+  delete globalThis.__fileTooBig;
 });
 
 test("смена вкладки гасит SSE-стрим: pi-navigate доходит до document (bubbles)", async () => {

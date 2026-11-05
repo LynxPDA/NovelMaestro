@@ -4192,7 +4192,29 @@ async function viewTemplates() {
       const q = new URLSearchParams({ path: full });
       data = await api(`/templates/${encodeURIComponent(st.set)}/file?${q}`);
     } catch (ex) {
-      return h("div", { class: "files-empty" }, ex.message);
+      /* панель остаётся и при ошибке: без неё человек видел голый
+         текст ошибки и не мог вернуться к файлам набора — только ссылкой
+         в браузере или перезагрузкой */
+      return h(
+        "div",
+        { class: "editor-wrap" },
+        h(
+          "div",
+          { class: "files-toolbar" },
+          h(
+            "button",
+            { class: "btn btn-sm btn-ghost", onclick: () => setPath(st.path) },
+            "← К файлам",
+          ),
+          h("span", { class: "editor-meta" }, full),
+        ),
+        h(
+          "div",
+          { class: "files-empty files-missing" },
+          h("div", { class: "files-missing-head" }, ex.message),
+          h("div", {}, "Набор шаблона остался на месте — вернитесь к списку файлов."),
+        ),
+      );
     }
     const ext = extOf(full);
     const readonly = st.set === "General"; // системный набор — просмотр
