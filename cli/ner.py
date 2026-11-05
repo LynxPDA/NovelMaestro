@@ -77,6 +77,7 @@ from core.common import (  # noqa: E402
     atomic_write,
     compile_chapter_text,
     extract_term_context,
+    format_ranges,
     get_ngrams,
     get_tagged_prompt,
     is_cjk_string,
@@ -86,7 +87,7 @@ from core.common import (  # noqa: E402
     ner_record,
     preview_logger,
     setup_logging,
-    split_text_smart,
+    split_text_smart_spans,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -204,6 +205,45 @@ def _flush_log(logger) -> None:
 def _log(logger, level: int, msg: str) -> None:
     logger.log(level, msg)
     _flush_log(logger)
+
+# ══════════════════════════════════════════════════════════════════════
+# ЧАНК → ГЛАВЫ КНИГИ (подпись чанка в логах)
+# ══════════════════════════════════════════════════════════════════════
+
+def chunk_labels(chunks: list[str], spans: list[tuple[int, int]],
+                 offsets: list[tuple[int, int, int]]) -> list[str]:
+    """Подпись каждого чанка: «гл. 59-66» по главам, которые он накрывает.
+
+    Номер чанка отвечает на «где я в прогоне», но не на «что это в книге»:
+    по нему нельзя ни перепроверить подозрительный чанк в редакторе, ни
+    найти главу, о которой говорит предупреждение модели. Границы чанков
+    приходят из нарезки (split_text_smart_spans), главы — из сборки
+    (compile_chapter_text → info["offsets"]).
+
+    Нет границ (вход — готовый файл, не сборка глав) — пустая подпись:
+    придумывать главу по куску текста стадия не берётся.
+    """
+    if not offsets or not spans:
+        return [""] * len(chunks)
+    labels: list[str] = []
+    for start, end in spans:
+        hit = [cid for cid, c_start, c_end in offsets
+               if c_start < end and c_end > start]
+        labels.append(f"гл. {format_ranges(hit)}" if hit else "")
+    return labels
+
+
+def with_chunk_label(label: str, chunks_to_chapters: list[str],
+                     idx: int) -> str:
+    """Строка лога с подписью чанка: «✅ Chunk 3: гл. 59-66 +4 new».
+
+    Подпись ставится сразу после номера чанка, а не в конец строки: номер
+    без главы читается «где-то в прогоне», а ошибка модели ниже может быть
+    длинной. Подписи нет (вход — готовый файл) — строка не меняется.
+    """
+    mark = (chunks_to_chapters[idx]
+            if 0 <= idx < len(chunks_to_chapters) else "")
+    return f"{label} {mark}" if mark else label
 
 # ══════════════════════════════════════════════════════════════════════
 # CJK-УТИЛИТЫ И ДЕДУПЛИКАЦИЯ
@@ -778,15 +818,20 @@ def run_two_pass(
     threshold: float,
     ngram_size: int,
     context_max_len: int = 300,
+    chunks_to_chapters: list[str] | None = None,
 ) -> int:
     """Двухпроходный конвейер NER. Возвращает число УПАВШИХ чанков
     (pass1-ошибка/необработанное исключение; pass2-fallback — не сбой).
 
     Каждый запуск обрабатывает ВСЕ чанки с первого — возобновление
     с места остановки убрано. После каждого чанка пишется снапшот
-    ner.json (защита от падения, не кэш)."""
+    ner.json (защита от падения, не кэш).
+
+    chunks_to_chapters — подпись каждого чанка главами книги
+    (chunk_labels): без неё в логе остаётся только номер чанка."""
     logger = stage.logger
     total = len(all_chunks)
+    marks = chunks_to_chapters or [""] * total
 
     # результаты pass2 по чанкам — для снапшотов и финализации
     completed: dict[int, list[dict]] = {}
@@ -820,13 +865,19 @@ def run_two_pass(
                 idx, text, stage, pass1_prompt)
             if err:
                 _log(logger, logging.ERROR,
-                     f"⚠️  Pass1 chunk {idx}/{total}: {err}")
-                progress.log(f"⚠️  Pass1 {idx}: {err}")
+                     with_chunk_label(
+                         f"⚠️  Pass1 chunk {idx}/{total}", marks, idx)
+                     + f": {err}")
+                progress.log(with_chunk_label(f"⚠️  Pass1 {idx}", marks, idx)
+                             + f": {err}")
                 p1_ners = []
             else:
                 _log(logger, logging.INFO,
-                     f"✅ Pass1 chunk {idx}/{total}: {len(p1_ners)} entities")
-                progress.log(f"✅ Pass1 {idx}: {len(p1_ners)} ent.")
+                     with_chunk_label(
+                         f"✅ Pass1 chunk {idx}/{total}", marks, idx)
+                     + f": {len(p1_ners)} entities")
+                progress.log(with_chunk_label(f"✅ Pass1 {idx}", marks, idx)
+                             + f": {len(p1_ners)} ent.")
             _step()
             local_steps += 1
 
@@ -842,13 +893,19 @@ def run_two_pass(
                 idx, text, p1_ners, stage, pass2_prompt)
             if err2:
                 _log(logger, logging.WARNING,
-                     f"⚠️  Pass2 chunk {idx}/{total}: {err2} — fallback to pass1")
-                progress.log(f"⚠️  Pass2 {idx}: {err2} (fallback)")
+                     with_chunk_label(
+                         f"⚠️  Pass2 chunk {idx}/{total}", marks, idx)
+                     + f": {err2} — fallback to pass1")
+                progress.log(with_chunk_label(f"⚠️  Pass2 {idx}", marks, idx)
+                             + f": {err2} (fallback)")
                 p2_ners = p1_ners
             else:
                 _log(logger, logging.INFO,
-                     f"✅ Pass2 chunk {idx}/{total}: {len(p2_ners)} entities")
-                progress.log(f"✅ Pass2 {idx}: {len(p2_ners)} ent.")
+                     with_chunk_label(
+                         f"✅ Pass2 chunk {idx}/{total}", marks, idx)
+                     + f": {len(p2_ners)} entities")
+                progress.log(with_chunk_label(f"✅ Pass2 {idx}", marks, idx)
+                             + f": {len(p2_ners)} ent.")
 
             # context — из чанка (не от LLM): 1–2 предложения вокруг
             # термина; неточно — нечёткий поиск (пороги дедупликации)
@@ -864,8 +921,10 @@ def run_two_pass(
 
         except Exception as e:
             _log(logger, logging.ERROR,
-                 f"💥 Chunk {idx}: необработанная ошибка: {e}")
-            progress.log(f"💥 Chunk {idx}: {e}")
+                 with_chunk_label(f"💥 Chunk {idx}", marks, idx)
+                 + f": необработанная ошибка: {e}")
+            progress.log(with_chunk_label(f"💥 Chunk {idx}", marks, idx)
+                         + f": {e}")
             with done_lock:
                 completed.setdefault(idx, [])
             remaining = 2 - local_steps
@@ -892,7 +951,8 @@ def run_two_pass(
                 threshold, ngram_size, logger,
             )
             _log(logger, logging.INFO,
-                 f"💾 Снапшот ner.json ({len(completed)}/{total} готово)")
+                 f"💾 Снапшот ner.json ({len(completed)}/{total} готово"
+                 + (f", чанк: {marks[idx]}" if marks[idx] else "") + ")")
             progress.log_state()
 
     progress.close()
@@ -1603,6 +1663,7 @@ def main():
 
     # ── Сборка глав (chapter.txt → в память; --compile_out — сохранить) ──
     in_memory_text: str | None = None
+    chapter_offsets: list[tuple[int, int, int]] = []
     if args.compile_chapters:
         # предпросмотр не заводит файлов логов: сборка пишет в лог стадии
         # (в предпросмотре он stderr-только, core.stage.new_stage)
@@ -1615,6 +1676,7 @@ def main():
         if info["written"] == 0:
             clog.error("Не собрано ни одной главы из %s", args.chapters_dir)
             return 1
+        chapter_offsets = info.get("offsets") or []
         if args.compile_out:
             # явный --compile_out — сохранить собранный txt (кастомный файл)
             out = args.compile_out
@@ -1697,10 +1759,17 @@ def main():
         except OSError as exc:
             parser.error(f"Файл не читается: {exc}")
 
-    all_chunks = split_text_smart(
+    all_chunks, chunk_spans = split_text_smart_spans(
         full_text, target_tokens=args.chunk_size, logger=logger
     )
+    # подпись чанка главами книги — на каждой строке чанка ниже: номер
+    # чанка отвечает «где в прогоне», а перепроверить его нужно в главе
+    chunk_marks = chunk_labels(all_chunks, chunk_spans, chapter_offsets)
     _flush_log(logger)
+    if chapter_offsets:
+        _log(logger, logging.INFO,
+             f"🧭 Чанки названы главами книги ({len(chapter_offsets)} глав, "
+             f"{len(all_chunks)} чанков)")
 
     if not all_chunks and not args.two_pass:
         _log(logger, logging.INFO, "✅ Нет чанков для обработки.")
@@ -1750,6 +1819,7 @@ def main():
             threshold=args.threshold,
             ngram_size=args.ngram,
             context_max_len=args.context_max_len,
+            chunks_to_chapters=chunk_marks,
         )
 
     # ════════════════════════════════════════════════════════════════
@@ -1776,8 +1846,11 @@ def main():
                 idx, ners, err = fut.result()
                 if err:
                     failed_chunks += 1  # Счётчик упавших
-                    _log(logger, logging.ERROR, f"⚠️ Chunk {idx}: {err}")
-                    progress.log(f"⚠️  Chunk {idx}: {err}")
+                    _log(logger, logging.ERROR,
+                         with_chunk_label(f"⚠️ Chunk {idx}", chunk_marks, idx)
+                         + f": {err}")
+                    progress.log(with_chunk_label(f"⚠️  Chunk {idx}", chunk_marks, idx)
+                                 + f": {err}")
                 elif ners:
                     fill_term_context(ners, all_chunks[idx],
                                       args.context_max_len,
@@ -1787,10 +1860,14 @@ def main():
                         ners, idx, args.threshold, args.ngram, logger,
                     )
                     _log(logger, logging.INFO,
-                         f"✅ Chunk {idx}: +{a} new | +{u} hits")
-                    progress.log(f"Chunk {idx}: +{a} new | +{u} hits")
+                         with_chunk_label(f"✅ Chunk {idx}", chunk_marks, idx)
+                         + f": +{a} new | +{u} hits")
+                    progress.log(with_chunk_label(f"Chunk {idx}", chunk_marks, idx)
+                                 + f": +{a} new | +{u} hits")
                 else:
-                    _log(logger, logging.INFO, f"✅ Chunk {idx}: 0 entities")
+                    _log(logger, logging.INFO,
+                         with_chunk_label(f"✅ Chunk {idx}", chunk_marks, idx)
+                         + ": 0 entities")
 
                 progress.step()
 
@@ -1800,8 +1877,9 @@ def main():
                     merge_alias_groups(global_ner_data, logger)
                     _save_ner_data_unlocked(args.ner_file)
                 _log(logger, logging.INFO,
-                     f"💾 Промежуточное сохранение "
-                     f"({len(global_ner_data)} терминов)")
+                     with_chunk_label(
+                         "💾 Промежуточное сохранение "
+                         f"({len(global_ner_data)} терминов)", chunk_marks, idx))
                 progress.log_state()
 
             progress.close()

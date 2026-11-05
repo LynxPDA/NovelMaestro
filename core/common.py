@@ -536,50 +536,98 @@ def get_ngrams(text, n=3) -> set:
     return {text[i:i + n] for i in range(len(text) - n + 1)}
 
 
+def split_text_smart_spans(text, target_tokens=7000, multiplier=1.3,
+                           logger=None) -> tuple[list[str], list[tuple[int, int]]]:
+    """Разбивка на чанки ПО ТОКЕНАМ (абзацы → предложения) + их границы.
+
+    target_tokens — целевой размер чанка в ТОКЕНАХ (оценка
+    estimate_tokens); hard_limit = target * multiplier. Имена флагов
+    --chunk_size в CLI/env сохранены по решению пользователя, единица —
+    токены.
+
+    Возвращает (chunks, spans): spans[i] = (начало, конец) чанка в
+    ИСХОДНОМ тексте, полуинтервал [начало, конец). Границы нужны, чтобы
+    назвать чанк по главам книги: текст чанка нормализован (двойные
+    пробелы схлопываются при разбиении строки на предложения), поэтому
+    обратный поиск чанка в тексте не годится — смещения считаются в том же
+    проходе, что и нарезка.
+    """
+    if logger:
+        logger.info(f"✂️  Разбиение текста (цель: {target_tokens} токенов)...")
+    chunks: list[str] = []
+    spans: list[tuple[int, int]] = []
+    current_chunk: list[str] = []
+    current_len = 0
+    cur_start = 0
+    cur_end = 0
+    try:
+        hard_limit = int(target_tokens * multiplier)
+    except (TypeError, ValueError, OverflowError):
+        hard_limit = target_tokens
+    sent_re = re.compile(r"(?<=[.!?。؟؟;；])\s+")
+
+    def _flush() -> None:
+        nonlocal current_chunk, current_len, cur_start, cur_end
+        if not current_chunk:
+            return
+        chunks.append("".join(current_chunk))
+        spans.append((cur_start, cur_end))
+        current_chunk, current_len = [], 0
+
+    def _add(part: str, start: int, end: int) -> None:
+        nonlocal cur_start, cur_end
+        if not current_chunk:
+            cur_start = start
+        current_chunk.append(part)
+        cur_end = end
+
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        line_start, pos = pos, pos + len(line)
+        line_len = estimate_tokens(line)
+        if line_len > hard_limit:
+            # строка длиннее предела: режем по предложениям, а позиции
+            # сегментов ищем от курсора — разделители (пробелы) в чанк
+            # не попадают, но их место в исходном тексте известно
+            body = line.rstrip("\n")
+            cursor = 0
+            for sent in sent_re.split(body):
+                # курсор — СМЕЩЕНИЕ В СТРОКЕ, а не в тексте: сообщённые
+                # величины не должны мешаться, иначе следующий сегмент
+                # ищется за концом строки и чанк вылезает за свою главу
+                local = body.find(sent, cursor) if sent else -1
+                local = cursor if local < 0 else local
+                seg_start = line_start + local
+                seg_end = seg_start + len(sent)
+                cursor = local + len(sent)
+                sent_len = estimate_tokens(sent)
+                if current_len + sent_len > hard_limit:
+                    _flush()
+                _add(sent + " ", seg_start, seg_end)
+                current_len += sent_len
+                if line.endswith("\n"):
+                    current_chunk[-1] += "\n"
+            continue
+        if current_len + line_len > hard_limit:
+            _flush()
+        _add(line, line_start, pos)
+        current_len += line_len
+        if current_len >= target_tokens:
+            _flush()
+    _flush()
+    if logger:
+        logger.info(f"✅ Текст разбит на {len(chunks)} частей.")
+    return chunks, spans
+
+
 def split_text_smart(text, target_tokens=7000, multiplier=1.3, logger=None):
     """Разбивка на чанки ПО ТОКЕНАМ (абзацы → предложения).
 
     target_tokens — целевой размер чанка в ТОКЕНАХ (оценка
     estimate_tokens); hard_limit = target * multiplier. Имена флагов
     --chunk_size в CLI/env сохранены по решению пользователя, единица —
-    токены."""
-    if logger:
-        logger.info(f"✂️  Разбиение текста (цель: {target_tokens} токенов)...")
-    lines = text.splitlines(keepends=True)
-    chunks, current_chunk = [], []
-    current_len = 0
-    try:
-        hard_limit = int(target_tokens * multiplier)
-    except (TypeError, ValueError, OverflowError):
-        hard_limit = target_tokens
-    sent_re = re.compile(r"(?<=[.!?。؟؟;；])\s+")
-    for line in lines:
-        line_len = estimate_tokens(line)
-        if line_len > hard_limit:
-            sentences = sent_re.split(line.rstrip("\n"))
-            for sent in sentences:
-                sent_len = estimate_tokens(sent)
-                if current_len + sent_len > hard_limit and current_chunk:
-                    chunks.append("".join(current_chunk))
-                    current_chunk, current_len = [], 0
-                current_chunk.append(sent + " ")
-                current_len += sent_len
-                if line.endswith("\n") and current_chunk:
-                    current_chunk[-1] += "\n"
-            continue
-        if current_len + line_len > hard_limit and current_chunk:
-            chunks.append("".join(current_chunk))
-            current_chunk, current_len = [], 0
-        current_chunk.append(line)
-        current_len += line_len
-        if current_len >= target_tokens:
-            chunks.append("".join(current_chunk))
-            current_chunk, current_len = [], 0
-    if current_chunk:
-        chunks.append("".join(current_chunk))
-    if logger:
-        logger.info(f"✅ Текст разбит на {len(chunks)} частей.")
-    return chunks
+    токены. Границы чанков в тексте — split_text_smart_spans."""
+    return split_text_smart_spans(text, target_tokens, multiplier, logger)[0]
 
 
 def is_cjk(c: str) -> bool:
@@ -3392,7 +3440,9 @@ def compile_chapter_text(chapters_dir, want="chapter", start=None, end=None,
     Папки — через build_chapter_map; файл главы — find_chapter_file.
     Дубли номера: берётся последняя папка (как clean_and_compile).
     start/end — включительно, None = весь диапазон.
-    Возвращает (text, info) — info {written, missing, warnings}.
+    Возвращает (text, info): info {written, missing, warnings, offsets},
+    offsets — [(номер главы, начало, конец)] в склеенном тексте: по ним
+    чанки (split_text_smart_spans) называются главами книги.
     """
     chapter_map = build_chapter_map(chapters_dir, logger=logger)
     ids = sorted(chapter_map)
@@ -3409,8 +3459,10 @@ def compile_chapter_text(chapters_dir, want="chapter", start=None, end=None,
     if hi is not None:
         ids = [i for i in ids if i <= hi]
     parts: list[str] = []
+    offsets: list[tuple[int, int, int]] = []  # (номер главы, начало, конец)
     missing: list[int] = []
     warnings: list[str] = []
+    pos = 0
     for cid in ids:
         dirs = chapter_map.get(cid) or []
         dir_path = dirs[-1] if dirs else None
@@ -3426,13 +3478,16 @@ def compile_chapter_text(chapters_dir, want="chapter", start=None, end=None,
         if text and not text.endswith("\n"):
             text += "\n"
         parts.append(text)
+        offsets.append((cid, pos, pos + len(text)))
+        pos += len(text) + 1  # + разделитель склейки
         if logger:
             logger.info("Глава %s: %s", cid, os.path.basename(path))
     if logger:
         logger.info("Собрано глав в память: %d (пропущено: %d)",
                     len(parts), len(missing))
     return "\n".join(parts), {"written": len(parts),
-                               "missing": missing, "warnings": warnings}
+                               "missing": missing, "warnings": warnings,
+                               "offsets": offsets}
 
 
 def compile_chapter_texts(chapters_dir, out_path, want="chapter",

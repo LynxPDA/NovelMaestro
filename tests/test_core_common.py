@@ -2602,3 +2602,64 @@ def test_sentence_end_chars_cover_common_scripts():
     """Набор не сводится к «.!?»: в нём есть CJK, арабский, данда."""
     for ch in "。！？؟۔।།᠃":
         assert ch in C.SENTENCE_END_CHARS, ch
+
+
+# ══════════════════════════════════════════════════════════════════════
+# границы чанков и смещения глав (подпись чанка главами книги)
+# ══════════════════════════════════════════════════════════════════════
+def test_split_text_smart_spans_same_chunks_as_split():
+    """Границы не меняют разбивку: спан-версия — тот же результат."""
+    text = ("Предложение номер раз. " * 400) + "\n" + ("Строка.\n" * 20)
+    assert (C.split_text_smart_spans(text, target_tokens=500)[0]
+            == C.split_text_smart(text, target_tokens=500))
+
+
+def test_split_text_smart_spans_cover_short_line_segments():
+    """Длинная строка режется по предложениям — спаны указывают на них.
+
+    Разделители (пробелы между предложениями) в чанк не попадают, поэтому
+    спаны не обязаны покрывать текст встык, но обязаны быть внутри него,
+    идти по возрастанию и указывать на настоящий кусок строки.
+    """
+    text = "Первое предложение. Второе предложение! Третье? " * 60 + "\n"
+    chunks, spans = C.split_text_smart_spans(text, target_tokens=200,
+                                             multiplier=1.3)
+    assert len(chunks) == len(spans) > 1
+    prev = 0
+    for (start, end), chunk in zip(spans, chunks):
+        assert 0 <= start <= end <= len(text)
+        assert start >= prev
+        prev = start
+        # первое слово чанка стоит там, куда указывает спан
+        first_word = chunk.split()[0]
+        assert text[start:end].startswith(first_word[:4])
+
+
+def test_compile_chapter_text_offsets(tmp_path):
+    """offsets: номер главы и её место в склеенном тексте (для подписи чанков)."""
+    root = tmp_path / "chapters"
+    for num, body in ((1, "первая\n"), (2, "вторая глава\n")):
+        d = root / f"00000_{num}_x"
+        d.mkdir(parents=True)
+        (d / "chapter.txt").write_text(body, encoding="utf-8")
+    text, info = C.compile_chapter_text(str(root), want="chapter")
+    offsets = info["offsets"]
+    assert [cid for cid, _, _ in offsets] == [1, 2]
+    for cid, start, end in offsets:
+        body = text[start:end]
+        assert body == ("первая\n" if cid == 1 else "вторая глава\n")
+    # между главами ровно один разделитель склейки
+    assert text[offsets[0][2]:offsets[1][1]] == "\n"
+
+
+def test_compile_chapter_text_offsets_respect_range(tmp_path):
+    """Диапазон глав: смещения считаются по собранному тексту, а не по книге."""
+    root = tmp_path / "chapters"
+    for num in (1, 2, 3):
+        d = root / f"00000_{num}_x"
+        d.mkdir(parents=True)
+        (d / "chapter.txt").write_text(f"глава {num}\n", encoding="utf-8")
+    text, info = C.compile_chapter_text(str(root), want="chapter",
+                                        start=2, end=3)
+    assert [cid for cid, _, _ in info["offsets"]] == [2, 3]
+    assert text.startswith("глава 2")

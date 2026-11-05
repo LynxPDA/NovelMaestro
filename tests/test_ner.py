@@ -825,3 +825,79 @@ def test_log_shows_single_field_mode(ner_globals):
     assert "300" in note
     with _non_voted("last"):
         assert "СИМВОЛОВ" not in NER._non_voted_note()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# подпись чанка главами книги
+# ══════════════════════════════════════════════════════════════════════
+def test_chunk_labels_by_chapter_offsets():
+    """Чанк подписывается главами, которые накрывает: номер чанка сам по себе
+    не отвечает, что это в книге."""
+    # главы: 1 → [0,10), 2 → [11,20), 3 → [21,30)
+    offsets = [(1, 0, 10), (2, 11, 20), (3, 21, 30)]
+    chunks = ["a", "b", "c"]
+    # чанк 0 — глава 1 и часть 2 (граница главы внутри чанка)
+    spans = [(0, 12), (12, 20), (20, 30)]
+    assert NER.chunk_labels(chunks, spans, offsets) == [
+        "гл. 1-2", "гл. 2", "гл. 3"]
+
+
+def test_chunk_labels_squashed_ranges():
+    """Пропуски номеров читаются диапазонами, а не списком из сотни чисел."""
+    offsets = [(5, 0, 10), (6, 10, 20), (9, 20, 30)]
+    assert NER.chunk_labels(["a"], [(0, 30)], offsets) == ["гл. 5-6, 9"]
+
+
+def test_chunk_labels_without_offsets():
+    """Вход — готовый файл, не сборка глав: подписи нет (главу не выдумываем)."""
+    assert NER.chunk_labels(["a", "b"], [(0, 5), (5, 10)], []) == ["", ""]
+    assert NER.chunk_labels(["a"], [], [(1, 0, 10)]) == [""]
+
+
+def test_with_chunk_label_no_mark_keeps_line():
+    """Без подписи строка лога остаётся прежней."""
+    assert NER.with_chunk_label("✅ Chunk 3", [], 3) == "✅ Chunk 3"
+    assert (NER.with_chunk_label("✅ Chunk 0", ["гл. 59-66"], 0)
+            == "✅ Chunk 0 гл. 59-66")
+
+
+def test_main_logs_chapter_marks(tmp_path, monkeypatch, ner_reset):
+    """Строки чанка в логе называют главы книги, а не только номер чанка."""
+    monkeypatch.chdir(tmp_path)
+    for num in (1, 2):
+        d = tmp_path / "chapters" / f"00000_{num}_x"
+        d.mkdir(parents=True)
+        (d / "chapter.txt").write_text(
+            f"Глава {num}\n" + ("陈阳 шёл по дороге. " * 60) + "\n",
+            encoding="utf-8")
+    monkeypatch.setattr(NER, "llm_request", lambda *a, **k: (P1_ANSWER, None))
+    monkeypatch.setattr(sys, "argv", [
+        "ner.py", "--compile_chapters", "--host", "http://h", "--model", "m",
+        "--threads", "1", "--no-two-pass", "--chunk_size", "200",
+        "--ner_file", "ner.json"])
+    NER.main()
+    log = (tmp_path / "logs" / "ner_extraction.log").read_text(encoding="utf-8")
+    assert "Чанки названы главами книги" in log
+    assert "гл. 1" in log and "гл. 2" in log
+    # каждая строка чанка несёт подпись
+    chunk_lines = [ln for ln in log.splitlines() if "✅ Chunk" in ln]
+    assert chunk_lines and all("гл." in ln for ln in chunk_lines)
+
+
+def test_main_two_pass_logs_chapter_marks(tmp_path, monkeypatch, ner_reset):
+    """Двухпроходная схема: подпись главами есть и у pass1, и у pass2."""
+    monkeypatch.chdir(tmp_path)
+    d = tmp_path / "chapters" / "00000_1_x"
+    d.mkdir(parents=True)
+    (d / "chapter.txt").write_text(
+        "Глава 1\n" + ("陈阳 шёл по дороге. " * 80) + "\n", encoding="utf-8")
+    monkeypatch.setattr(NER, "llm_request", _fake_llm)
+    monkeypatch.setattr(sys, "argv", [
+        "ner.py", "--compile_chapters", "--host", "http://h", "--model", "m",
+        "--threads", "1", "--two-pass", "--chunk_size", "200",
+        "--ner_file", "ner.json"])
+    NER.main()
+    log = (tmp_path / "logs" / "ner_extraction.log").read_text(encoding="utf-8")
+    for kind in ("✅ Pass1 chunk", "✅ Pass2 chunk"):
+        lines = [ln for ln in log.splitlines() if kind in ln]
+        assert lines and all("гл. 1" in ln for ln in lines)
