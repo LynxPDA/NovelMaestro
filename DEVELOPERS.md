@@ -100,7 +100,8 @@ MyNovel/
 ├── ner_changes.md         # лог применённых правок
 ├── translate_check_llm_review.json  # правки проверки перевода LLM
 ├── wiki.md                # wiki-компендиум
-├── compiled_1_50_txt.txt  # собранный TXT
+├── MyNovel_1_50_txt.txt   # собранный TXT
+├── MyNovel_1_50_rulate.txt  # собранный TXT для Rulate
 └── MyNovel_1_50.epub/fb2  # собранные EPUB/FB2
 ```
 
@@ -283,7 +284,7 @@ python3 tools/build_userscripts.py --list            # версии и числ�
 
 ## Соглашения
 
-- **Единицы.** ТОКЕНЫ (оценка `estimate_tokens`, веса писем измерены на токенизаторе Gemma 4 31b по 106 языкам: медиана отношения к реальному счёту 0.93, ±25% для 79% текстов): все размеры LLM-запросов — `--chunk_size` (translate_book/конвейер/ner/epub chunk), `--request_budget` (pipeline, ner_check, translate_check_llm, wiki), `--rag_budget` ner_check, FTS5 chunk wiki, `chunkSize` Lite (имена полей форм и флагов унифицированы: бюджет запроса везде — `request_budget`). ТОКЕНЫ (предохранитель сервера): `max_tokens` и `--near-distance` (wiki, природа FTS5 NEAR). СИМВОЛЫ: длины вне запросов — `--title-limit`, `context_max_len`, длины в логах. БАЙТЫ: размеры файлов в отчётах translate_check. ГЛАВЫ: чанкование в clean_and_compile. Единица обязана быть указана в help argparse.
+- **Единицы.** ТОКЕНЫ (оценка `estimate_tokens`, веса писем измерены на токенизаторе Gemma 4 31b по 106 языкам: медиана отношения к реальному счёту 0.93, ±25% для 79% текстов): все размеры LLM-запросов — `--chunk_size` (translate_book/конвейер/ner/epub chunk), `--request_budget` (ner_check, translate_check_llm, wiki), `--rag_budget` ner_check, FTS5 chunk wiki, `chunkSize` Lite (имена полей форм и флагов унифицированы: бюджет запроса везде — `request_budget`). ТОКЕНЫ (предохранитель сервера): `max_tokens` и `--near-distance` (wiki, природа FTS5 NEAR). СИМВОЛЫ: длины вне запросов — `--title-limit`, `context_max_len`, длины в логах. БАЙТЫ: размеры файлов в отчётах translate_check. ГЛАВЫ: чанкование в clean_and_compile. Единица обязана быть указана в help argparse.
 - **Unicode.** NFC-нормализация везде, где сравнивается/заменяется русский текст. Кавычки «»/", тире –—-, многоточия …/... считаются разными.
 - **JSON-файлы данных.** Ключи — по умолчанию на английском (`entries`, `status`, `applied`, `reason`, `stage`, `chapter`, `file`, `type`, `term`, `field`, `old`, `new`, `created`, `updated` …); значения (статусы «принять»/«отклонить», тексты ошибок, логи) — русские. Новые ключи — только английские; переименование жёсткое, без fallback-чтения старых ключей.
 - **Логирование.** Проектные логи: `logs/`; по главам — `logs/chapters/`. `setup_logging` заменяет расширение на `.log`; после него — `log_argv(logger)` (фактическая команда запуска).
