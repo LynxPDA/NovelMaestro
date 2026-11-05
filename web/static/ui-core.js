@@ -1183,7 +1183,11 @@
    * память её никто не выносил — поле на экране новое, на диске пустое.
    * Ошибка возвращает значения в очередь: следующий заход отправит и их. */
   function saveQueue(delay) {
-    var pending = {};   // ключ реестра → значение, ждущее записи
+    /* ключ реестра → {value, owner}: owner — чей это ключ (профиль LLM у
+     * страницы «Настройки»). Владелец запоминается в момент правки: иначе
+     * правка, отправленная после переключения профиля, уезжала в ЧУЖОЙ
+     * профиль, а тот, где поле изменили, оставался с прежним значением. */
+    var pending = {};
     var timer = null;
     var saving = false;
     var wait = typeof delay === "number" ? delay : 500;
@@ -1202,32 +1206,42 @@
       /* чем записывать: у web-страницы это savePending, у теста — свой
        * вызов; очередь отвечает только за «что и когда» */
       due: function (fn) { onDue = fn; },
-      /* значение поля изменилось: запоминаем, запись — после паузы ввода */
-      put: function (key, value) {
-        pending[key] = value;
+      /* значение поля изменилось: запоминаем, запись — после паузы ввода;
+       * owner — чей это ключ (профиль LLM), тесту и другим вьюхам не нужен */
+      put: function (key, value, owner) {
+        pending[key] = { value: value, owner: owner };
         arm();
       },
-      /* снимок очереди: {values, keys}; очередь тем же мгновением пуста, поэтому
-       * правка, пришедшая во время запроса, попадёт в следующий */
+      /* снимок очереди: {values, keys, profile}; очередь тем же мгновением
+       * пуста, поэтому правка, пришедшая во время запроса, попадёт в следующий.
+       * profile — владелец первой правки: две пачки на разные профили в
+       * одном запросе не смешиваются (запись пошлёт их двумя заходами). */
       take: function () {
         clearTimeout(timer);
         timer = null;
         var values = {};
+        var keys = [];
+        var profile;
+        var hasProfile = false;
         for (var k in pending) {
-          if (Object.prototype.hasOwnProperty.call(pending, k)) {
-            values[k] = pending[k];
-          }
+          if (!Object.prototype.hasOwnProperty.call(pending, k)) continue;
+          var item = pending[k];
+          if (hasProfile && item.owner !== profile) continue; // второй заход
+          profile = item.owner;
+          hasProfile = true;
+          values[k] = item.value;
+          keys.push(k);
+          delete pending[k];
         }
-        pending = {};
-        return { values: values, keys: Object.keys(values) };
+        return { values: values, keys: keys, profile: profile };
       },
       /* запрос не прошёл: значения снова в очереди (новые правки важнее —
        * старое значение вернулось бы поверх них) */
-      back: function (values) {
+      back: function (values, owner) {
         for (var k in values || {}) {
           if (Object.prototype.hasOwnProperty.call(values, k)
               && !Object.prototype.hasOwnProperty.call(pending, k)) {
-            pending[k] = values[k];
+            pending[k] = { value: values[k], owner: owner };
           }
         }
       },
@@ -1236,6 +1250,24 @@
           if (Object.prototype.hasOwnProperty.call(pending, k)) return true;
         }
         return false;
+      },
+      /* ждёт ли записи именно этот ключ: поле, которое перерисовывают, пока
+       * его правка в очереди, не должно терять её из виду */
+      holds: function (key) {
+        return Object.prototype.hasOwnProperty.call(pending, key);
+      },
+      /* несохранённое значение ключа: при перерисовке вкладки поле показывает
+       * именно его, а не то, что успело доехать до реестра — иначе правка,
+       * набранная перед сменой вкладки, исчезала с экрана до записи.
+       * owner ограничивает выбор своим профилем: правка General не должна
+       * появиться в поле профиля, куда переключились */
+      value: function (key, owner) {
+        if (!Object.prototype.hasOwnProperty.call(pending, key)) {
+          return undefined;
+        }
+        var item = pending[key];
+        if (arguments.length > 1 && item.owner !== owner) return undefined;
+        return item.value;
       },
       /* снять ключи из очереди: их значение только что записано другим PUT'ом
        * (сброс вкладки в реестр) */
@@ -1253,7 +1285,7 @@
         var out = {};
         for (var k in pending) {
           if (Object.prototype.hasOwnProperty.call(pending, k)) {
-            out[k] = pending[k];
+            out[k] = pending[k].value;
           }
         }
         return out;

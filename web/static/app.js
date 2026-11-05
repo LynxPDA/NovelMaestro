@@ -1520,7 +1520,11 @@ async function viewSettings() {
      ОДНИМ движением, поэтому правка, пришедшая пока PUT в полёте, попадёт в
      следующий запрос, а не пропадёт на ответе предыдущего. */
   const queue = UICore.saveQueue(SAVE_DELAY);
-  const shown = {};        // ключ реестра → последнее значение на экране
+  /* ключ реестра + профиль → значение, которое сейчас в поле. Сравнение с
+     ним и есть «фокус или Tab без правки»: без профиля в ключе смена профиля
+     LLM (поле показывает другое значение) оставляла в памяти чужое, и первая
+     же правка «в то же число» считалась повтором и не уходила на диск */
+  const shown = {};
   const labels = {};       // ключ реестра → подпись поля (для строки статуса)
   const envWins = new Set(d.env_wins || []);
   const envBlocked = new Set(); // ключи, перекрытые переменными окружения
@@ -1537,11 +1541,17 @@ async function viewSettings() {
       + (!text ? " hidden" : busy ? "" : " is-warn");
   }
 
+  // ключ сравнения: одно и то же поле у разных профилей — разные поля
+  function shownKey(id) {
+    return `${model.profile}\u0000${id}`;
+  }
+
   // значение поля уехало в память → через паузу ввода один PUT
   function fieldChanged(id, value) {
-    if (id in shown && shown[id] === value) return; // фокус или Tab без правки
-    shown[id] = value;
-    queue.put(id, value);
+    const key = shownKey(id);
+    if (key in shown && shown[key] === value) return; // фокус или Tab без правки
+    shown[key] = value;
+    queue.put(id, value, model.profile);
     if (envWins.has(id)) envBlocked.add(id);
     showStatus();
   }
@@ -1549,6 +1559,9 @@ async function viewSettings() {
   async function savePending() {
     // идущая запись сама отправит хвост своим заходом; два PUT параллельно нельзя
     if (queue.isSaving()) return;
+    /* Профиль правки запоминается в очереди, а не читается в момент отправки:
+       поле изменили на General, за паузу ввода успели уйти в профиль — и
+       значение уезжало в ЧУЖОЙ профиль, а общий .env оставался прежним. */
     const sent = queue.take();
     if (!sent.keys.length) return;
     queue.begin();
@@ -1556,7 +1569,7 @@ async function viewSettings() {
     showStatus();
     try {
       const r = await api("/settings", {
-        method: "PUT", body: { profile: model.profile, values: sent.values },
+        method: "PUT", body: { profile: sent.profile, values: sent.values },
       });
       // профили перечитываем тоже: поля нераскрытого профиля рисуются из
       // model.profiles, и без этого сохранённое значение исчезало бы из формы
@@ -1567,7 +1580,7 @@ async function viewSettings() {
       toast(`Сохранено: ${sent.keys.map((k) => labels[k] || k).join(", ")}`);
     } catch (ex) {
       // значения возвращаются в очередь: следующий заход отправит и их
-      queue.back(sent.values);
+      queue.back(sent.values, sent.profile);
       err.textContent = ex.message;
     } finally {
       queue.end();
@@ -1631,7 +1644,7 @@ async function viewSettings() {
       model.groups = [...(r.groups || []), uiGroup];
       queue.drop(keys);
       for (const k of keys) {
-        shown[k] = defaults[k];
+        shown[shownKey(k)] = defaults[k];
         if (envWins.has(k)) envBlocked.add(k);
       }
       // перерисовка здесь безопасна: фокус не в поле (он в модалке), а поля
@@ -1668,14 +1681,21 @@ async function viewSettings() {
   }
 
   function fieldWrap(f) {
-    const val = f.value === undefined || f.value === null ? "" : f.value;
+    const id = f.key || f.name;
+    /* Правка, ещё ждущая записи, важнее значения из реестра: между паузой
+       ввода и ответом сервера новое значение в model.groups ещё не лёг, и
+       перерисовка вкладки показывала бы старое, а набранное терялось. */
+    const held = queue.holds(id) ? queue.value(id, model.profile) : undefined;
+    const base = f.value === undefined || f.value === null ? "" : f.value;
+    const val = held === undefined ? base : held;
     if (f.type === "hidden") return null; // чипсы — состояние UI запусков
     // name контрола = ключ реестра: имена полей стадий не уникальны
-    const id = f.key || f.name;
     labels[id] = f.label || f.name;
-    if (!(id in shown)) {
-      shown[id] = f.type === "bool" ? Boolean(val) : String(val);
-    }
+    /* Поле перерисовано — значит в нём лежит val, и «последнее значение на
+       экране» именно оно. Запоминать один раз нельзя: смена профиля и сброс
+       вкладки меняют значение, а память осталась бы с прошлым — и первая
+       правка к тому же значению считалась бы повтором (не записалась). */
+    shown[shownKey(id)] = f.type === "bool" ? Boolean(val) : String(val);
     if (f.type === "bool") {
       const cb = h("input", { type: "checkbox", class: "checkbox" });
       cb.checked = Boolean(val);

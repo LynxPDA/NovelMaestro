@@ -1500,12 +1500,78 @@ test("saveQueue: take очищает очередь сразу — правка 
   const q = UICore.saveQueue(10);
   q.put("MAX_TOKENS", "");
   const sent = q.take();          // запрос ушёл с пустым значением
-  assert.deepEqual(sent, { values: { MAX_TOKENS: "" }, keys: ["MAX_TOKENS"] });
+  assert.deepEqual(sent, { values: { MAX_TOKENS: "" }, keys: ["MAX_TOKENS"],
+                           profile: undefined });
   q.put("MAX_TOKENS", "262144");  // набор, пока запрос в полёте
   assert.equal(q.has(), true, "правка в полёте осталась в очереди");
   assert.deepEqual(q.take(), { values: { MAX_TOKENS: "262144" },
-                              keys: ["MAX_TOKENS"] });
+                              keys: ["MAX_TOKENS"], profile: undefined });
   assert.equal(q.has(), false);
+});
+
+test("saveQueue: владелец правки едет вместе с ней", () => {
+  /* поле изменили на General, а за паузу ввода переключились в профиль:
+     запись уходила в профиль, а общий .env так и оставался прежним */
+  const q = UICore.saveQueue(10);
+  q.put("MAX_TOKENS", "300", "general");
+  assert.equal(q.pending().MAX_TOKENS, "300", "pending отдаёт значения");
+  assert.equal(q.take().profile, "general");
+
+  const q2 = UICore.saveQueue(10);
+  q2.put("MAX_TOKENS", "300", "general");
+  q2.put("MAX_TOKENS", "900", "p1");  // тот же ключ, другой профиль
+  assert.deepEqual(q2.take(), { values: { MAX_TOKENS: "900" },
+                               keys: ["MAX_TOKENS"], profile: "p1" });
+
+  // две пачки на разные профили — двумя заходами, а не одним запросом
+  const q3 = UICore.saveQueue(10);
+  q3.put("MAX_TOKENS", "300", "general");
+  q3.put("THREADS", "8", "p1");
+  const first = q3.take();
+  assert.equal(first.profile, "general");
+  assert.deepEqual(first.keys, ["MAX_TOKENS"]);
+  assert.equal(q3.holds("THREADS"), true, "чужая пачка ждёт своего захода");
+  const second = q3.take();
+  assert.equal(second.profile, "p1");
+  assert.deepEqual(second.values, { THREADS: "8" });
+  assert.equal(q3.has(), false);
+
+  // ошибка возвращает значения вместе с их владельцем
+  const q4 = UICore.saveQueue(10);
+  q4.put("THREADS", "8", "p1");
+  const sent = q4.take();
+  q4.back(sent.values, sent.profile);
+  assert.equal(q4.take().profile, "p1");
+});
+
+test("saveQueue: holds отличает занятый ключ от занятой очереди", () => {
+  /* перерисовка поля не должна терять из виду его несохранённую правку;
+     ключ ищется точный (имена полей стадий не уникальны) */
+  const q = UICore.saveQueue(10);
+  q.put("MAX_TOKENS", "300", "general");
+  assert.equal(q.holds("MAX_TOKENS"), true);
+  assert.equal(q.holds("THREADS"), false);
+  q.take();
+  assert.equal(q.holds("MAX_TOKENS"), false);
+});
+
+test("saveQueue: перерисовка вкладки берёт несохранённую правку", () => {
+  /* правка набрана перед сменой субвкладки: до ответа PUT в model.groups ещё
+     старое значение, и без подмены поле показывало бы прошлое, а набранное
+     исчезало с экрана до записи (в .env оно при этом доезжало) */
+  const q = UICore.saveQueue(10);
+  assert.equal(q.value("TEMPERATURE", "general"), undefined,
+    "пустая очередь значения не подменяет");
+  q.put("TEMPERATURE", "7777", "general");
+  assert.equal(q.value("TEMPERATURE"), "7777");
+  assert.equal(q.value("TEMPERATURE", "general"), "7777");
+  // чужой профиль не должен видеть правку General
+  assert.equal(q.value("TEMPERATURE", "p1"), undefined,
+    "правка чужого профиля не появляется в поле");
+  const sent = q.take();
+  assert.equal(sent.profile, "general");
+  // пока идёт запрос, значение уже не в очереди — поле покажет этот же ответ
+  assert.equal(q.value("TEMPERATURE", "general"), undefined);
 });
 
 test("saveQueue: ошибка возвращает значения, новые правки важнее", () => {

@@ -335,7 +335,10 @@ def test_settings_page_autosaves():
     assert "const sent = queue.take();" in save
     assert "if (queue.has()) queue.again();" in save, \
         "хвост, набранный во время записи, должен уйти следом"
-    assert "queue.back(sent.values);" in save, "ошибка обязана вернуть правку"
+    assert "queue.back(sent.values, sent.profile);" in save, \
+        "ошибка обязана вернуть правку вместе с её профилем"
+    assert "profile: sent.profile" in save, \
+        "запись уходит в профиль правки, а не в тот, что открыт сейчас"
     # ключ строки — ключ .env (имена полей стадий не уникальны)
     assert "const id = f.key || f.name;" in view
     # состояние автосохранения — в шапке страницы; пока сохранять нечего,
@@ -344,6 +347,12 @@ def test_settings_page_autosaves():
     assert 'class: "settings-save-state hidden"' in view
     assert "model.groups = [...(r.groups || []), uiGroup];" in save
     assert "renderTab()" not in save, "запись пересобирает вкладку — фокус lost"
+    # «последнее значение на экране» помнит профиль: без него смена профиля
+    # оставляла в памяти чужое значение, и первая правка «в то же число»
+    # считалась повтором (баг: вставка не сохранялась, спасал только пробел)
+    assert "function shownKey(id)" in view
+    assert "shown[shownKey(id)]" in view, "поле не обновляет память экрана"
+    assert "if (key in shown && shown[key] === value) return;" in view
     # «Внешний вид» — localStorage по change контрола
     assert "function saveLook()" in view
     assert 'el.addEventListener(ev, saveLook);' in view
