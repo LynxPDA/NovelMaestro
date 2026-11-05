@@ -7,9 +7,10 @@ clean_and_compile.py — компиляция глав в TXT/EPUB/FB2 (чист
 Интерактивный режим — в лаунчере tools/run_clean_and_compile.py.
 
 Режимы (--mode):
-  txt          сборка единого TXT (Rulate): заголовки «# [Название :|: N]»
+  txt          сборка единого TXT (Rulate): заголовки «# [Название :|: N]»,
+               имя файла — <проект>_<начало>_<конец>_rulate.txt
   txt-plain    сборка единого TXT: заголовки КАК В ПЕРЕВОДЕ (без
-               markdown-префиксов) — только очистка и компиляция
+               markdown-префиксов), имя файла — <проект>_…_txt.txt
   epub         сборка Markdown → нативная генерация EPUB (zipfile, stdlib)
   fb2          сборка Markdown → нативная генерация FB2 (+ обложка, stdlib)
   epub-chunks  EPUB частями по --chunk-size глав (default 50)
@@ -677,15 +678,16 @@ def _book_label() -> str:
 
 def output_base(start=None, end=None, ext="txt") -> str:
     """Имя выходного файла сборки с названием проекта:
-    <проект>_<начало>_<конец>[.<ext>] (или без суффикса диапазона для
-    epub/fb2). Все файлы сборки — единое именование (compiled_*
-    упразднены)."""
+    <проект>_<начало>_<конец>_<режим>.<ext>. Имя само говорит о формате:
+    .txt — обычный TXT, _rulate.txt — TXT (Rulate), .epub, .fb2. Все файлы
+    сборки — единое именование (compiled_* упразднены)."""
     label = _book_label()
     s = cfg.start if start is None else start
     e = cfg.end if end is None else end
     if ext in ("epub", "fb2"):
         return f"{label}_{s}_{e}.{ext}"
-    return f"{label}_{s}_{e}_{ext}.txt"
+    suffix = "rulate.txt" if ext == "txt" else "txt.txt"
+    return f"{label}_{s}_{e}_{suffix}"
 
 
 # ==========================================
@@ -711,6 +713,11 @@ def compile_book(mode):
     chapter_map = build_chapter_map(cfg.base_dir)
     chapters_data = []
     parts = []   # тело сборки в памяти — запись атомарная одной операцией
+    # epub/fb2 разводят абзацы внутри главы пустой строкой (так их читает
+    # нативный билдер), а txt — одним переносом: абзац в TXT и есть строка.
+    # Главы между собой всегда разделены пустой строкой; в txt ещё и
+    # заголовок отделён от тела, чтобы в сплошном тексте его было видно
+    para_sep = "\n\n" if mode in ("epub", "fb2") else "\n"
     try:
         out_log = open(log_file_path, "w", encoding="utf-8")
     except OSError as exc:
@@ -811,10 +818,13 @@ def compile_book(mode):
                 body_for_book = [ln for ln in cleaned_lines if not ln.startswith("# ")]
             chapters_data.append({"title": final_title, "body": body_for_book})
 
-            if mode == "fb2":
-                parts.append("\n\n".join(cleaned_lines) + "\n\n")
-            else:
-                parts.append("\n".join(cleaned_lines) + "\n\n")
+            body = para_sep.join(cleaned_lines)
+            if mode not in ("epub", "fb2") and len(cleaned_lines) > 1:
+                # пустая строка после названия главы: внутри главы абзацы
+                # идут плотно, и без неё заголовок сливался с текстом
+                body = cleaned_lines[0] + "\n\n" + para_sep.join(
+                    cleaned_lines[1:])
+            parts.append(body + "\n\n")
 
         if mode in ("epub", "fb2") and cfg.add_donate_page == 1:
             donate_result = load_donate_page(cfg.donate_file or None)
@@ -857,8 +867,8 @@ def compile_book(mode):
 def compile_chunks(mode, chunk_size):
     """Разбивка диапазона на части по chunk_size глав (chunk_size > 0).
 
-    mode: 'epub' | 'txt' | 'fb2'; каждая часть собирается через
-    compile_book (имя части — output_base текущего поддиапазона)."""
+    mode: 'epub' | 'txt' | 'txt-plain' | 'fb2'; каждая часть собирается
+    через compile_book (имя части — output_base текущего поддиапазона)."""
     orig_start, orig_end = cfg.start, cfg.end
     current_start = orig_start
     while current_start <= orig_end:
@@ -890,8 +900,9 @@ def build_parser():
     p.add_argument("--mode", required=True,
                    choices=["txt", "txt-plain", "epub", "fb2"],
                    help="Формат сборки. txt = TXT (Rulate) с тегами "
-                        "«# [Название :|: N]»; txt-plain — TXT как в "
-                        "переводе: заголовки без markdown-префиксов")
+                        "«# [Название :|: N]» (файл …_rulate.txt); txt-plain — "
+                        "TXT как в переводе: заголовки без markdown-префиксов "
+                        "(файл …_txt.txt)")
     p.add_argument("--start", type=int, default=None,
                    help="Начальная глава (по умолчанию: минимальная найденная)")
     p.add_argument("--end", type=int, default=None,

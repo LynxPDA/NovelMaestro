@@ -1057,10 +1057,10 @@ def _has_compiled(pdir: Path) -> bool:
     """Есть ли скомпилированные файлы (clean_and_compile пишет их в
     tmp/ проекта; старые версии писали в корень или output/).
 
-    Паттерны: '{имя_проекта}_{start}_{end}[.epub/.fb2/_txt.txt]';
+    Паттерны: '{имя_проекта}_{start}_{end}[(_{txt|rulate})].{txt|epub|fb2}';
     легаси compiled_*/book_* тоже распознаются."""
     new_pats = (f"{pdir.name}_*.epub", f"{pdir.name}_*.fb2",
-                f"{pdir.name}_*_txt.txt", f"{pdir.name}_*_txt-plain.txt")
+                f"{pdir.name}_*_txt.txt", f"{pdir.name}_*_rulate.txt")
     for d in (pdir, pdir / "tmp", pdir / "output"):
         if not d.is_dir():
             continue
@@ -1231,7 +1231,9 @@ def project_progress_table(pdir: Path) -> dict:
         if f.is_file() and (
             f.name.startswith("compiled_") or f.name.startswith("book_")
             or (f.name.startswith(prefix)
-                and (f.name.endswith(".epub") or f.name.endswith(".fb2")))))
+                and (f.name.endswith(".epub") or f.name.endswith(".fb2")
+                     or f.name.endswith("_txt.txt")
+                     or f.name.endswith("_rulate.txt")))))
     return {"chapters": chapters, "counts": counts,
             "missing": progress_missing(chapters),
             "ner": ner, "wiki": wiki, "compiled": compiled}
