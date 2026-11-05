@@ -2532,6 +2532,35 @@ def test_heartbeat_ticker_is_shared_per_logger():
     assert C._tick(a) is not C._tick(b)
 
 
+def test_heartbeat_writes_only_to_stage_log_file(tmp_path, capsys):
+    """Отметка идёт в ФАЙЛ лога стадии, а не в ленту запуска.
+
+    Сторожу `web/pipeline.py` хватает отпечатка файла; человеку в ленте
+    нужны события, а не пульс. Тикер пишет через логгер-двойник с одним
+    файловым хендлером."""
+    logger, log_path = C.setup_logging(str(tmp_path / "check.txt"))
+    gate = threading.Event()
+    ticker = C._tick(logger)
+
+    def worker() -> None:
+        with C._Heartbeat(logger, "[check]", 0.01):
+            gate.wait(timeout=5)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    deadline = time.monotonic() + 5
+    while ticker._live == 0 and time.monotonic() < deadline:
+        _sleep(0.01)
+    _sleep(0.05)
+    gate.set()
+    t.join(timeout=5)
+
+    assert "ответ идёт" in open(log_path, encoding="utf-8").read(), \
+        "отметка обязана попасть в файл лога стадии"
+    assert "ответ идёт" not in capsys.readouterr().out, \
+        "лента запуска (stdout) отметками не засоряется"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # КОНЕЦ ПРЕДЛОЖЕНИЯ (ends_sentence)
 # ══════════════════════════════════════════════════════════════════════

@@ -311,6 +311,10 @@ def setup_logging(output_filename, logger_name=None):
     fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     fh = logging.FileHandler(log_filename, encoding="utf-8", mode="w")
     fh.setFormatter(fmt)
+    # отметка хендлера файла: служебные строки стадии («ответ идёт») пишутся
+    # ТОЛЬКО в файл — сторожу хватает отпечатка файла, а лента запусков
+    # остаётся чистой (см. core.common._HeartbeatTicker)
+    fh.stage_file = True  # type: ignore[attr-defined]
     sh = logging.StreamHandler(sys.stdout)
     sh.setFormatter(fmt)
     logger.addHandler(fh)
@@ -2216,7 +2220,12 @@ class _HeartbeatTicker:
 
     Пока идёт хотя бы один, раз в паузу (самую частую из заявленных) в лог
     уходит одна строка с подписью первого запроса и временем его начала.
-    Замок короткий: он держит счётчики, но не `logger.info`.
+    Замок короткий: он держит счётчики, но не запись строки.
+
+    Строка идёт ТОЛЬКО в файл лога стадии, а не в ленту запуска: сторожу
+    `web/pipeline.py` нужен отпечаток файла, а человеку в ленте нужны
+    события, а не пульс. Живой, но долгий ответ попрежнему не считается
+    молчанием — сторож видит, что файл растёт.
     """
 
     def __init__(self, logger) -> None:
@@ -2228,6 +2237,28 @@ class _HeartbeatTicker:
         self._started = 0.0
         self._thread: threading.Thread | None = None
         self._wake = threading.Event()
+        self._file_log = self._file_only(logger)
+
+    @staticmethod
+    def _file_only(logger) -> logging.Logger:
+        """Логгер-двойник: только ФАЙЛОВЫЕ хендлеры исходного.
+
+        Через сам логгер писать нельзя — его stdout-хендлер засорял бы
+        ленту запуска пульсом; отдельный логгер пишет только в файл
+        стадии (то, что читает сторож). Нет ни одного файлового
+        хендлера (чужой/тестовый логгер) — остаётся сам логгер.
+        """
+        file_handlers = [h for h in getattr(logger, "handlers", []) or []
+                         if getattr(h, "stage_file", False)]
+        if not file_handlers:
+            return logger
+        twin = logging.getLogger(f"{logger.name}.stage-file")
+        twin.handlers.clear()
+        twin.setLevel(logging.INFO)
+        twin.propagate = False   # без stdout-хендлера исходного логгера
+        for handler in file_handlers:
+            twin.addHandler(handler)
+        return twin
 
     def begin(self, label: str, interval: float) -> None:
         with self._lock:
@@ -2278,7 +2309,7 @@ class _HeartbeatTicker:
                 elapsed = int(time.monotonic() - self._started)
             if woken:
                 continue   # разбудили — но запросы ещё идут: новая пауза
-            self._logger.info("⏳ %s ответ идёт: %d с", label, elapsed)
+            self._file_log.info("⏳ %s ответ идёт: %d с", label, elapsed)
 
 
 _TICKERS: dict[int, _HeartbeatTicker] = {}
