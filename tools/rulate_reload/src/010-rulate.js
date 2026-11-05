@@ -43,7 +43,13 @@ function detectProblematicNum(title) {
   return null;
 }
 
-const decodeHtml = (s) => { const d = document.createElement('div'); d.innerHTML = s; return d.textContent || ''; };
+/* HTML → текст: DOMParser строит документ без innerHTML (в innerHTML сущности
+   разворачиваются, но анализатор справедливо считает это путём для XSS;
+   здесь же нужен только текст, а не рендер). */
+const decodeHtml = (s) => {
+  const doc = new DOMParser().parseFromString('<body>' + s + '</body>', 'text/html');
+  return (doc.body && doc.body.textContent) || '';
+};
 
 function norm(s) {
   return (s || '')
@@ -84,6 +90,20 @@ const userIdFromHtml = (html) => (html.match(/new\s+CUser\(\{\s*id:\s*(\d+)/) ||
 const csrfFromDoc = (doc) => (doc.querySelector('meta[name="csrf-token"]') || {}).content || '';
 
 /* ---------- парсер файла ---------- */
+/* Заголовок — «# [Название :|: Номер (:|: paywall (:|: том))]»: тег пишет
+   стадия compile, поэтому номер и прочие поля берутся из НЕГО, а «Глава N»
+   в названии — только текст. Название из «Глава N» ненадёжно: в книге
+   бывают «Глава 1. Дополнительная глава» или второй том с нумерацией
+   с единицы, и по названию такая глава уезжала бы в первую с тем же
+   номером. Разделителей бывает несколько, поэтому делим по всем, а не
+   по последнему (иначе paywall/том попадали в название и уезжали на сайт). */
+function parseChapterHeader(inner) {
+  const parts = inner.split(':|:').map(s => s.trim());
+  const title = parts[0];
+  const num = /^\d+$/.test(parts[1] || '') ? parseInt(parts[1], 10) : null;
+  return { title, num };
+}
+
 function parseChaptersFile(text) {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   const headerRe = /^#\s*\[(.+?)\]\s*$/;
@@ -93,18 +113,18 @@ function parseChaptersFile(text) {
     const m = raw.match(headerRe);
     if (m && m[1].includes(':|:')) {
       if (cur) out.push(cur);
-      const inner = m[1], sep = inner.lastIndexOf(':|:');
-      const title = inner.slice(0, sep).trim();
-      const tailNum = parseInt(inner.slice(sep + 3).trim(), 10);
-      cur = { title, fallbackNum: Number.isFinite(tailNum) ? tailNum : null, lines: [] };
+      const h = parseChapterHeader(m[1]);
+      cur = { title: h.title, tagNum: h.num, lines: [] };
     } else if (cur) cur.lines.push(raw);
   }
   if (cur) out.push(cur);
   return out.map(c => {
     const body = c.lines.join('\n').replace(/\r\n?/g, '\n').trim();
-    const num = chapterNum(c.title) != null ? chapterNum(c.title) : c.fallbackNum;
+    /* тег первичен; «Глава N» — запасной вариант для старых файлов без тега
+       и для прологов («# [Пролог :|: 5]» тег уже даёт) */
+    const num = c.tagNum != null ? c.tagNum : chapterNum(c.title);
     const problem = detectProblematicNum(c.title);
-    return { title: c.title, num, text: body, problem };
+    return { title: c.title, num, text: body, problem, tagged: c.tagNum != null };
   });
 }
 
@@ -126,20 +146,45 @@ function parseRange(str) {
 }
 
 /* ---------- карта сайта ---------- */
+/* Карта — «номер → СПИСОК глав сайта», а не одна глава: на сайте бывает
+   несколько глав с одним номером («Глава 1» во втором томе, «Глава 1.
+   Дополнительная глава»). Раньше в карте оставалась первая, остальные
+   терялись молча — и текст дополнительной главы уезжал в «Историю».
+   Заодно собирается список всех глав в порядке оглавления: он нужен
+   как последняя подсказка, когда название на сайте устарело (книгу
+   перекомпилировали, названия на сайте — от прошлого перевода). */
 async function buildSiteMap(bookId) {
   const bookUrl = '/book/' + bookId;
-  const doc = (location.pathname === bookUrl || location.pathname === bookUrl + '/')
+  const first = (location.pathname === bookUrl || location.pathname === bookUrl + '/')
     ? document
     : (await getDoc(bookUrl)).doc;
+  /* Оглавление постраничное (на сайте по 100 глав на страницу): без
+     обхода пейджера главы 101+ не видны, и файл на них говорит
+     «НЕ НАЙДЕНА». Номера страниц берём из ссылок пейджера, а не
+     из размера DOM: сколько глав показать, решает сервер и настройка
+     «Выводить главы по». */
+  const pageNums = new Set();
+  first.querySelectorAll('a[href*="Chapter_page="]').forEach(a => {
+    const m = (a.getAttribute('href') || '').match(/Chapter_page=(\d+)/);
+    if (m) pageNums.add(parseInt(m[1], 10));
+  });
+  const extra = [];
+  for (const p of [...pageNums].sort((a, b) => a - b)) {
+    try { extra.push((await getDoc(bookUrl + '?Chapter_page=' + p)).doc); }
+    catch (e) { /* страница не отдалась — работаем с тем, что есть */ }
+  }
+  const docs = [first, ...extra];
 
-  const map = new Map();
+  const byNum = new Map();   // номер → [главы сайта с этим номером]
   const titleMap = new Map();
   const nonStandard = [];
-  const titleOccurrences = new Map();
+  const ordered = [];        // все главы сайта в порядке оглавления
 
   const junkRe = /^(читать|продолжить чтение|read|скачать|удалить|редактировать|править|\+|\-|×|✕|\d+)$/i;
+  const seen = new Set();
 
-  doc.querySelectorAll('a[href*="/book/' + bookId + '/"]').forEach(a => {
+  // каждый id — один раз: одна и та же глава бывает слинкована со страницы несколько раз
+  for (const doc of docs) doc.querySelectorAll('a[href*="/book/' + bookId + '/"]').forEach(a => {
     let pathname;
     try { pathname = new URL(a.href, location.origin).pathname; } catch (e) { return; }
     const m = pathname.match(new RegExp('^/book/' + bookId + '/(\\d+)(?:/|$)'));
@@ -152,40 +197,28 @@ async function buildSiteMap(bookId) {
     if (text.length <= 3 && !/^Глава/i.test(text)) return;
 
     const chapterId = m[1];
+    if (seen.has(chapterId)) return;
+    seen.add(chapterId);
+
+    const info = { url: '/book/' + bookId + '/' + chapterId, chapterId, siteTitle: text };
+    ordered.push(info);
 
     const normKey = text.toLowerCase().replace(/\s+/g, ' ').trim();
-    if (normKey) {
-      if (!titleOccurrences.has(normKey)) titleOccurrences.set(normKey, []);
-      titleOccurrences.get(normKey).push({
-        chapterId,
-        siteTitle: text,
-        url: '/book/' + bookId + '/' + chapterId,
-      });
-    }
+    if (normKey && !titleMap.has(normKey)) titleMap.set(normKey, info);
 
     const type = classifySiteTitle(text);
-
     if (type !== 'standard') {
       nonStandard.push({ title: text, type, chapterId });
-      if (normKey && !titleMap.has(normKey)) {
-        titleMap.set(normKey, { url: '/book/' + bookId + '/' + chapterId, chapterId, siteTitle: text });
-      }
       return;
     }
 
     const num = chapterNum(text);
     if (num == null) return;
-    const info = { url: '/book/' + bookId + '/' + chapterId, chapterId, siteTitle: text };
-    if (!map.has(num)) map.set(num, info);
-    if (normKey && !titleMap.has(normKey)) titleMap.set(normKey, info);
+    if (!byNum.has(num)) byNum.set(num, []);
+    byNum.get(num).push(info);
   });
 
-  const duplicateTitles = [];
-  for (const [, arr] of titleOccurrences) {
-    if (arr.length > 1) duplicateTitles.push(arr);
-  }
-
-  return { map, titleMap, nonStandard, duplicateTitles };
+  return { byNum, titleMap, nonStandard, ordered };
 }
 
 /* ---------- id фрагмента/перевода ---------- */
@@ -272,6 +305,101 @@ function compareAndLog(savedRaw, fileText, ui) {
   return false;
 }
 
+/* ---------- сопоставление файла с сайтом ---------- */
+const titleKey = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+const addTo = (map, k, v) => { if (!map.has(k)) map.set(k, []); map.get(k).push(v); };
+const countBy = (arr, key) => {
+  const m = new Map();
+  for (const x of arr) { const k = key(x); m.set(k, (m.get(k) || 0) + 1); }
+  return m;
+};
+
+/* План сопоставления файла с сайтом — целиком до первой записи.
+
+   Номер главы файла — из тега `:|:` (его пишет стадия compile), номер сайта —
+   из названия «Глава N»: другого на сайте нет. Разрешение коллизий — тремя
+   подсказками в таком порядке:
+
+   1. одинаковое название — сильная подсказка, но она работает только когда
+      такая пара одна с ОБЕИХ сторон; на сайте названия бывают от прошлого
+      перевода (файл перекомпилировали, на сайте остались старые), поэтому
+      обычно шаг молчит и решает второй;
+   2. порядок — k-я неразобранная глава файла с этим номером — это k-я
+      неразобранная глава сайта (сравниваем ТОЛЬКО внутри группы одного
+      номера: глобальная позиция сдвигается, стоит на сайте не хватить одной
+      главы, и всё после неё уехало бы на соседа); шаг работает, когда
+      оставшихся глав поровну — лишняя глава на сайте (примечание
+      переводчика, бонус) при этом не мешает;
+   3. не разрешилось — отказ с перечнем кандидатов, а не догадка: лишний
+      перевод в чужой главе (и потеря опубликованного) дороже пропуска.
+
+   Возвращает Map: индекс главы файла → {info, how} | {reason, list}.
+   Глав без номера касается только вариант «по названию» (флаг fallback). */
+function planMatches(parsed, site) {
+  const plan = new Map();
+  const fileByNum = new Map();
+
+  parsed.forEach((ch, i) => {
+    if (ch.problem) return;
+    if (ch.num == null) {
+      if (!CFG.fallbackByTitle) return;
+      const info = site.titleMap.get(titleKey(ch.title));
+      if (info) plan.set(i, { info, how: 'по названию' });
+      return;
+    }
+    addTo(fileByNum, ch.num, i);
+  });
+
+  for (const [num, idxs] of fileByNum) {
+    const group = site.byNum.get(num) || [];
+    if (!group.length) {
+      /* номера нет на сайте — запасной путь по названию, если он включён */
+      if (!CFG.fallbackByTitle) continue;
+      for (const i of idxs) {
+        const info = site.titleMap.get(titleKey(parsed[i].title));
+        if (info) plan.set(i, { info, how: 'по названию' });
+      }
+      continue;
+    }
+    if (idxs.length === 1 && group.length === 1) {
+      plan.set(idxs[0], { info: group[0] });
+      continue;
+    }
+
+    // 1. одинаковые названия, если такая пара одна с каждой стороны
+    const siteKeys = countBy(group, g => titleKey(g.siteTitle));
+    const fileKeys = countBy(idxs, i => titleKey(parsed[i].title));
+    const usedSite = new Set();
+    const usedFile = new Set();
+    for (const i of idxs) {
+      const k = titleKey(parsed[i].title);
+      if (siteKeys.get(k) !== 1 || fileKeys.get(k) !== 1) continue;
+      const g = group.find(x => titleKey(x.siteTitle) === k);
+      plan.set(i, { info: g, how: 'по названию' });
+      usedSite.add(g.chapterId);
+      usedFile.add(i);
+    }
+
+    // 2. остальные — по порядку, если оставшихся поровну
+    const restFile = idxs.filter(i => !usedFile.has(i));
+    const restSite = group.filter(g => !usedSite.has(g.chapterId));
+    if (!restFile.length) continue;
+    if (restFile.length === restSite.length) {
+      restFile.forEach((i, k) => {
+        const how = restFile.length > 1 ? `по порядку (${k + 1} из ${restFile.length})` : 'по порядку';
+        plan.set(i, { info: restSite[k], how });
+      });
+      continue;
+    }
+
+    // 3. неоднозначность — отказ на этих главах
+    for (const i of restFile) {
+      plan.set(i, { reason: 'номер повторяется на сайте', list: group });
+    }
+  }
+  return plan;
+}
+
 /* ---------- основной цикл ---------- */
 async function run(parsed, opts, ui) {
   const bookId = bookIdFromUrl();
@@ -292,24 +420,23 @@ async function run(parsed, opts, ui) {
   try { siteData = await buildSiteMap(bookId); }
   catch (e) { return ui.log('Ошибка чтения оглавления: ' + e.message, 'err'); }
 
-  const siteMap = siteData.map;
-  const titleMap = siteData.titleMap;
   const nonStandard = siteData.nonStandard;
 
-  const dupSiteChapterIds = new Set();
-  if (siteData.duplicateTitles && siteData.duplicateTitles.length > 0) {
-    ui.log(`⚠ НА САЙТЕ ${siteData.duplicateTitles.length} групп глав с идентичными названиями — ИСКЛЮЧЕНЫ:`, 'err');
-    for (const group of siteData.duplicateTitles) {
-      ui.log(`   «${group[0].siteTitle}» ×${group.length}:`, 'err');
-      for (const g of group) {
-        ui.log(`      id=${g.chapterId}`, 'err');
-        dupSiteChapterIds.add(g.chapterId);
-      }
+  const nums = [...siteData.byNum.keys()].sort((a, b) => a - b);
+  ui.log(`Оглавление: глав=${siteData.ordered.length}, номеров=${siteData.byNum.size}, диапазон=${nums.length ? nums[0] + '..' + nums[nums.length-1] : '∅'}.`, siteData.ordered.length ? 'ok' : 'err');
+
+  /* Повторяющийся номер — не повод вычёркивать главы из работы: разведём
+     их по названию или порядку (matchChapter), а если не выйдет — откажем
+     на этой главе и скажем почему. Прежнее «исключаем всё сомнительное»
+     превращало книгу со вторым томом в «не найдено» целиком. */
+  const repeated = [...siteData.byNum].filter(([, g]) => g.length > 1)
+    .sort((a, b) => a[0] - b[0]);
+  if (repeated.length) {
+    ui.log(`⚠ Номер повторяется у ${repeated.length} групп глав на сайте:`, 'warn');
+    for (const [num, g] of repeated) {
+      ui.log(`   №${num}: ${g.map(x => `id=${x.chapterId} «${x.siteTitle}»`).join(' | ')}`, 'warn');
     }
   }
-
-  const nums = [...siteMap.keys()].sort((a, b) => a - b);
-  ui.log(`Оглавление: глав=${siteMap.size}, диапазон=${nums.length ? nums[0] + '..' + nums[nums.length-1] : '∅'}.`, siteMap.size ? 'ok' : 'err');
 
   if (nonStandard.length > 0) {
     ui.log(`⚠ Нестандартные главы на сайте (${nonStandard.length}):`, 'warn');
@@ -319,9 +446,14 @@ async function run(parsed, opts, ui) {
     });
   }
 
-  let saved = 0, wouldSave = 0, skipSame = 0, skipOther = 0, skipRange = 0, skipProblem = 0, fail = 0, titleChanged = 0;
+  let saved = 0, wouldSave = 0, skipSame = 0, skipOther = 0, skipRange = 0, skipProblem = 0, fail = 0, titleChanged = 0, ambiguous = 0;
   const notFoundNums = [];
   const notFoundTitles = [];
+
+  /* План сопоставления — сразу на весь файл, до первой записи: разрешение
+     коллизий номеров зависит от всего набора глав (порядок, лишние главы
+     на сайте), а не от текущей строки. */
+  const plan = planMatches(parsed, siteData);
 
   for (let i = 0; i < parsed.length; i++) {
     if (ui.aborted) { ui.log('Остановлено.', 'warn'); break; }
@@ -334,34 +466,27 @@ async function run(parsed, opts, ui) {
       continue;
     }
 
-    {
-      let tmpInfo = ch.num != null ? siteMap.get(ch.num) : null;
-      if (!tmpInfo && CFG.fallbackByTitle) {
-        const nt = ch.title.toLowerCase().replace(/\s+/g, ' ').trim();
-        tmpInfo = titleMap.get(nt);
-      }
-      if (tmpInfo && dupSiteChapterIds.has(tmpInfo.chapterId)) {
-        skipProblem++;
-        ui.log(`[${i+1}/${parsed.length}] «${ch.title}» → id=${tmpInfo.chapterId} — дубль названия на сайте. ПРОПУСК.`, 'warn');
-        continue;
-      }
-    }
-
     if (rangeSet && ch.num != null && !rangeSet.has(ch.num)) { skipRange++; continue; }
 
-    let info = ch.num != null ? siteMap.get(ch.num) : null;
-    if (!info && CFG.fallbackByTitle) {
-      const nt = ch.title.toLowerCase().replace(/\s+/g, ' ').trim();
-      info = titleMap.get(nt);
-      if (info) ui.log(`[${i+1}/${parsed.length}] Fallback: «${ch.title}» найдена по названию.`, 'plain');
-    }
+    const matched = plan.get(i) || { reason: 'нет главы с этим номером' };
+    const info = matched.info || null;
     if (!info) {
-      skipOther++;
-      if (ch.num != null) notFoundNums.push(ch.num);
-      else notFoundTitles.push(ch.title);
-      ui.log(`[${i+1}/${parsed.length}] Глава ${ch.num != null ? ch.num : '«'+ch.title+'»'} — НЕ НАЙДЕНА.`, 'warn');
+      if (matched.list) {
+        ambiguous++;
+        ui.log(`[${i+1}/${parsed.length}] «${ch.title}» — НЕОДНОЗНАЧНО: №${ch.num} на сайте у ${matched.list.length} глав:`, 'err');
+        for (const g of matched.list) {
+          ui.log(`     id=${g.chapterId} «${g.siteTitle}»`, 'err');
+        }
+        ui.log('     → допишите номер в тег `:|:` или переименуйте главу. ПРОПУСК.', 'warn');
+      } else {
+        skipOther++;
+        if (ch.num != null) notFoundNums.push(ch.num);
+        else notFoundTitles.push(ch.title);
+        ui.log(`[${i+1}/${parsed.length}] Глава ${ch.num != null ? ch.num : '«'+ch.title+'»'} — НЕ НАЙДЕНА (${matched.reason}).`, 'warn');
+      }
       continue;
     }
+    if (matched.how) ui.log(`[${i+1}/${parsed.length}] «${ch.title}» сопоставлена ${matched.how}: id=${info.chapterId} «${info.siteTitle}»`, 'plain');
 
     try {
       /* ===== РЕЖИМ: ТОЛЬКО НАЗВАНИЯ ===== */
@@ -468,9 +593,9 @@ async function run(parsed, opts, ui) {
 
   let summary;
   if (opts.dryRun) {
-    summary = `=== DRY-RUN: зальётся ${wouldSave}, пропущено ${skipSame}, не найдено ${skipOther}, вне диапазона ${skipRange}, проблемных ${skipProblem} ===`;
+    summary = `=== DRY-RUN: зальётся ${wouldSave}, пропущено ${skipSame}, не найдено ${skipOther}, неоднозначных ${ambiguous}, вне диапазона ${skipRange}, проблемных ${skipProblem} ===`;
   } else {
-    summary = `=== ГОТОВО: залито ${saved}, названий ${titleChanged}, пропущено ${skipSame}, не найдено ${skipOther}, вне диапазона ${skipRange}, проблемных ${skipProblem}, ошибок ${fail} ===`;
+    summary = `=== ГОТОВО: залито ${saved}, названий ${titleChanged}, пропущено ${skipSame}, не найдено ${skipOther}, неоднозначных ${ambiguous}, вне диапазона ${skipRange}, проблемных ${skipProblem}, ошибок ${fail} ===`;
   }
   ui.log(summary, fail ? 'warn' : 'ok');
 
@@ -487,7 +612,14 @@ GM_addStyle(`#ru-bulk, #ru-bulk * { box-sizing: border-box !important; } #ru-bul
 
 const panel = document.createElement('div');
 panel.id = 'ru-bulk';
-panel.innerHTML = `<div class="ru-hd"> <b>RL · обновление глав v2.1</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> </div> <div class="ru-row"> <label title="Перечитать главу после записи"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> <label title="Если номер не найден — искать по названию"><input type="checkbox" id="ru-fallback-title"> Title fallback</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div>`;
+/* Разметку панели разбирает DOMParser, а не innerHTML: подстановка шаблона в
+   innerHTML — это путь для HTML, а нужен ровно разобранный DOM (и статические
+   значения CFG здесь единственные данные, но правило одно на весь файл). */
+const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v2.2</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> </div> <div class="ru-row"> <label title="Перечитать главу после записи"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> <label title="Если номер не найден — искать по названию"><input type="checkbox" id="ru-fallback-title"> Title fallback</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div>`;
+{
+  const tplDoc = new DOMParser().parseFromString('<body>' + panelMarkup + '</body>', 'text/html');
+  for (const node of [...tplDoc.body.childNodes]) panel.appendChild(document.adoptNode(node));
+}
 
 document.body.appendChild(panel);
 
@@ -560,22 +692,21 @@ $('ru-file').addEventListener('change', (e) => {
   rd.onload = () => {
     parsed = parseChaptersFile(rd.result);
 
-    const fileTitleMap = new Map();
+    /* Дубли названий в файле больше не выбрасываются: главы разводятся
+       номером из тега, а если номер один — порядком внутри группы.
+       Раньше обе «Главы 1» исчезали из заливки целиком. */
+    const sameName = new Map();
     for (const c of parsed) {
-      const key = c.title.toLowerCase().replace(/\s+/g, ' ').trim();
-      if (!fileTitleMap.has(key)) fileTitleMap.set(key, []);
-      fileTitleMap.get(key).push(c);
+      const key = titleKey(c.title);
+      if (!sameName.has(key)) sameName.set(key, []);
+      sameName.get(key).push(c);
     }
-    const dupFileSet = new Set();
-    for (const [, arr] of fileTitleMap) {
-      if (arr.length > 1) arr.forEach(c => dupFileSet.add(c));
-    }
-    if (dupFileSet.size > 0) {
-      log(`⚠ В ФАЙЛЕ ${dupFileSet.size} глав с идентичными названиями — ИСКЛЮЧЕНЫ:`, 'err');
-      for (const c of dupFileSet) {
-        log(`   · «${c.title}» (номер ${c.num ?? '—'})`, 'err');
+    const dupNames = [...sameName.values()].filter(arr => arr.length > 1);
+    if (dupNames.length) {
+      log(`⚠ В ФАЙЛЕ ${dupNames.length} групп глав с одинаковым названием — разводятся по номеру/порядку:`, 'warn');
+      for (const arr of dupNames) {
+        log(`   · «${arr[0].title}» ×${arr.length} (номера ${arr.map(c => c.num ?? '—').join(', ')})`, 'warn');
       }
-      parsed = parsed.filter(c => !dupFileSet.has(c));
     }
 
     const problems = parsed.filter(c => c.problem);
