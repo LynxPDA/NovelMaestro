@@ -214,6 +214,13 @@ function seedProjectsDir(dir) {
     ) + "\n",
     "utf-8",
   );
+  // файл больше предела редактора: открыть его нельзя, а выйти надо —
+  // проверяем, что причина и кнопки («← Назад», «Скачать») на месте
+  fs.writeFileSync(
+    path.join(book, "too_big.txt"),
+    "x".repeat(6 * 1024 * 1024),
+    "utf-8",
+  );
   // отчёт translate_check: на нём проверяется шкала допуска пары —
   // полоса при текущем K, штрих медианы и точки глав вне допуска
   fs.mkdirSync(path.join(book, "logs"), { recursive: true });
@@ -399,13 +406,19 @@ async function main() {
   const problems = [];
   page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
   page.on("console", (m) => {
-    if (m.type() === "error") problems.push(`console: ${m.text().slice(0, 200)}`);
+    if (m.type() !== "error") return;
+    /* 413 от too_big.txt — ожидаемый: браузер пишет о нём в консоль */
+    if (m.text().includes("Too Large")) return;
+    problems.push(`console: ${m.text().slice(0, 200)}`);
   });
   page.on("requestfailed", (r) =>
     problems.push(`requestfailed: ${r.url()} ${r.failure()?.errorText}`),
   );
   page.on("response", (r) => {
-    if (r.status() >= 400) problems.push(`http ${r.status()}: ${r.url()}`);
+    /* 413 на too_big.txt — ОЖИДАЕМЫЙ ответ: проба намеренно открывает
+       файл больше предела редактора, чтобы проверить панель ошибки */
+    if (r.status() >= 400 && !r.url().includes("too_big.txt"))
+      problems.push(`http ${r.status()}: ${r.url()}`);
   });
 
   const routes = { ...ROUTES };
@@ -2988,6 +3001,70 @@ async function main() {
         { path: path.join(OUT, "scenario-ner-check-fields.png") });
     }
     log(`${problems.length === before ? "✅" : "❌"} поля ner_check  ${got.join(" · ")}`);
+  }
+
+  /* Файл больше предела редактора: причина НЕ заменяет панель.
+   * Раньше вместо редактора оставался голый текст ошибки — выйти было
+   * нечем (на активной вкладке клик по ней же ничего не делает).
+   * Файл кладётся в корень книги, а папка вкладки — состояние книги
+   * (может быть любой), поэтому идём с начала: «Файлы» → корень. */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/files`, { waitUntil: "load" });
+    await page.waitForSelector(".files-wrap", { timeout: 15000 });
+    /* крошка корня — первая ссылка в цепочке пути */
+    await page.evaluate(() => {
+      const crumb = document.querySelector(".crumbs button, .crumbs a, .crumb");
+      if (crumb) crumb.click();
+    });
+    await page.waitForTimeout(400);
+    const clicked = await page.evaluate(() => {
+      // тот же путь, что у кнопки «Править»: файл поверх вкладки «Файлы»
+      const row = [...document.querySelectorAll(".frow")]
+        .find((r) => (r.getAttribute("data-name") || "").endsWith("too_big.txt"));
+      const btn = row && row.querySelector(".factions button");
+      if (!btn) return false;
+      btn.click();
+      return true;
+    });
+    await page.waitForTimeout(900);
+    const got = await page.evaluate(() => ({
+      err: (document.querySelector(".files-empty .files-missing-head") || {}).textContent || "",
+      back: [...document.querySelectorAll(".files-toolbar button")]
+        .map((b) => (b.textContent || "").trim()),
+      /* действия ошибки лежат В БЛОКЕ причины, а не в панели */
+      actions: [...document.querySelectorAll(".files-empty button")]
+        .map((b) => (b.textContent || "").trim()),
+      code: !!document.querySelector(".editor-cm"),
+    }));
+    if (!clicked)
+      problems.push("большой файл: строка too_big.txt не нашлась в «Файлах»");
+    if (!/слишком большой/.test(got.err))
+      problems.push(`большой файл: нет причины ошибки — «${got.err}»`);
+    if (!got.back.some((t) => t.includes("← Назад")))
+      problems.push(`большой файл: нет «← Назад» (${got.back.join("/")})`);
+    if (!got.actions.some((t) => t.includes("Скачать")))
+      problems.push(`большой файл: нет кнопки скачивания (${got.actions.join("/")})`);
+    if (got.code) problems.push("большой файл: редактор всё-таки открылся");
+    if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-editor-too-big.png") });
+    /* выход из ошибки — двумя путями: кнопка «← Назад» и клик по
+     * собственному ярлыку вкладки (раньше второй был мёртв: setView
+     * выходил по «view === st.view», и человек оставался в ловушке) */
+    await page.evaluate(() => {
+      const tab = [...document.querySelectorAll(".tabs button, .tab")]
+        .find((b) => (b.textContent || "").trim() === "Файлы");
+      if (tab) tab.click();
+    });
+    await page.waitForTimeout(500);
+    const escaped = await page.evaluate(() => ({
+      toolbar: [...document.querySelectorAll(".files-toolbar button")].length,
+      rows: document.querySelectorAll(".frow").length,
+    }));
+    if (!escaped.rows || !escaped.toolbar)
+      problems.push("большой файл: клик по ярлыку вкладки не вернул к списку");
+    log(`${problems.length === before ? "✅" : "❌"} большой файл    `
+      + `панель: ${got.back.join(" / ")} · действия: ${got.actions.join(" / ")}`
+      + ` · ярлык ↔ список: ${escaped.rows}`);
   }
 
   /* Состояние вкладок книги: перезагрузка возвращает на ту же вкладку,
