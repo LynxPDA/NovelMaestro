@@ -191,8 +191,12 @@ def test_start_with_before_returns_pending(tmp_path, fake_script):
 
     На большой книге точка истории занимает секунды: ждать её внутри
     HTTP-запроса значило держать нажатой кнопку без ответа. Запуск
-    возвращается со статусом `pending`, а `before` успевает отработать
+    возвращается до старта процесса, а `before` успевает отработать
     раньше, чем стартует скрипт.
+
+    Статус в момент возврата — `pending` или уже `running` (поток
+    подготовки мог успеть поднять процесс), а вот `before` обязан
+    увидеть себя ещё в `pending`: иначе процесс стартовал раньше точки.
     """
     jm = JobManager(tmp_path)
     marker = tmp_path / "before.txt"
@@ -215,7 +219,7 @@ def test_start_with_before_returns_pending(tmp_path, fake_script):
 
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "ok.py")], tmp_path, before=before)
-    assert job.status == "pending"
+    assert job.status in ("pending", "running"), job.status
     job = _wait_status(jm, job.id, "done")
     assert job.exit_code == 0
     assert seen == ["pending"], "подготовка видела себя ещё в pending"

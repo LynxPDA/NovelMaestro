@@ -440,31 +440,36 @@ class JobManager:
             self._trim_locked()
 
     def _persist(self) -> None:
+        """Метаданные + сайдкары под локом (см. `_persist_locked`)."""
+        with self._lock:
+            self._persist_locked()
+
+    def _persist_locked(self) -> None:
         """Метаданные + сайдкары; весь цикл — под локом, чтобы reader-
         поток завершённого задания не писал сайдкар задания, которое
         параллельный trim уже выбросил из истории: вернувшийся файл
-        осиротел бы до следующей перезагрузки сервера."""
-        with self._lock:
-            self._trim_locked()
-            jobs = list(self._jobs.values())
+        осиротел бы до следующей перезагрузки сервера.
+        """
+        self._trim_locked()
+        jobs = list(self._jobs.values())
+        try:
+            data = [self._serialize(j) for j in jobs]
+            sp = self._store_path()
+            sp.parent.mkdir(parents=True, exist_ok=True)
+            # atomic_write, а не write_text: читатель (GET /api/jobs,
+            # дашборд) может открыть файл во время записи и увидеть
+            # пустоту — jobs.json усечён до появления содержимого
+            atomic_write(
+                str(sp), json.dumps(data, ensure_ascii=False, indent=2))
+        except OSError as exc:
+            log.debug("jobs.json не пишется: %s", exc)
+        # сайдкары хвоста лога — отдельно от метаданных; падение не
+        # ломает jobs.json (метаданные уже записаны)
+        for job in jobs:
             try:
-                data = [self._serialize(j) for j in jobs]
-                sp = self._store_path()
-                sp.parent.mkdir(parents=True, exist_ok=True)
-                # atomic_write, а не write_text: читатель (GET /api/jobs,
-                # дашборд) может открыть файл во время записи и увидеть
-                # пустоту — jobs.json усечён до появления содержимого
-                atomic_write(
-                    str(sp), json.dumps(data, ensure_ascii=False, indent=2))
+                self._write_sidecar(job)
             except OSError as exc:
-                log.debug("jobs.json не пишется: %s", exc)
-            # сайдкары хвоста лога — отдельно от метаданных; падение не
-            # ломает jobs.json (метаданные уже записаны)
-            for job in jobs:
-                try:
-                    self._write_sidecar(job)
-                except OSError as exc:
-                    log.debug("job_logs/{id}.log не пишется: %s", exc)
+                log.debug("job_logs/{id}.log не пишется: %s", exc)
 
     def _cleanup_orphans(self) -> None:
         """сайдкары без записи в jobs.json — сироты от
@@ -742,12 +747,20 @@ class JobManager:
             code = proc.wait()
             job.exit_code = code
             job.finished = time.time()
+            final = job.status
             if code == 0:
-                job.status = "done"
+                final = "done"
             elif job.status == "running":
-                job.status = "failed"
+                final = "failed"
+            # `done` — сигнал «всё записано»: статус меняется под тем же
+            # локом, что и запись jobs.json, и НЕ раньше неё. Иначе
+            # читатель, дождавшийся `done` (тест, перезапуск сервера),
+            # открывал файл ещё с прошлым статусом и без последнего
+            # события прогресса.
+            with self._lock:
+                job.status = final
+                self._persist_locked()
             job.notify(("status", job.status))
-            self._persist()
             # точка истории по событию завершения (исключения глотаются
             # внутри: история не должна ломать отчёт о запуске)
             try:
