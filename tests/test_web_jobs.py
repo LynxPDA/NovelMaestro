@@ -67,6 +67,20 @@ FAKE_PROGRESS = (
     "        time.sleep(0.01)\n"
     "sys.exit(0)\n"
 )
+# Прогресс, который выдаётся ПОСЛЕ маркера: его ловит подписчик, а он
+# встаёт в очередь уже после `start` — мгновенные print'ы успевали выйти
+# раньше (CI падал через раз на пустой очереди).
+FAKE_PROGRESS_WAIT = (
+    "import os, sys, time\n"
+    "while not os.path.exists(sys.argv[1]):\n"
+    "    time.sleep(0.01)\n"
+    "for i in range(3):\n"
+    "    print(f'line-{i}', flush=True)\n"
+    "    print('@@PROGRESS@@' + '{\"type\": \"progress\", '"
+    "          '\"label\": \"Перевод\", \"done\": %d, \"total\": 3}' "
+    "          % (i + 1), flush=True)\n"
+    "sys.exit(0)\n"
+)
 # Живой стрим: одна строка сразу (она попадает в снимок), дальше процесс ждёт
 # маркера и только потом выдаёт строки и прогресс — они обязаны прийти кадрами
 # line/progress, а не остаться только в снимке.
@@ -140,6 +154,8 @@ def fake_script(tmp_path):
     (d / "hang.py").write_text(FAKE_HANG, encoding="utf-8")
     (d / "parent.py").write_text(FAKE_PARENT_CHILD, encoding="utf-8")
     (d / "progress.py").write_text(FAKE_PROGRESS, encoding="utf-8")
+    (d / "progress_wait.py").write_text(FAKE_PROGRESS_WAIT,
+                                        encoding="utf-8")
     (d / "live.py").write_text(FAKE_LIVE, encoding="utf-8")
     (d / "chapters.py").write_text(FAKE_CHAPTERS, encoding="utf-8")
     (d / "bad_progress.py").write_text(FAKE_BAD_PROGRESS, encoding="utf-8")
@@ -737,10 +753,16 @@ def test_progress_persist(tmp_path, fake_script):
 def test_progress_subscribe(tmp_path, fake_script):
     """Подписчик получает ("progress", ev) и последнее значение — финал."""
     jm = JobManager(tmp_path)
+    # скрипт ждёт маркер: события прогресса обязаны прийти уже после
+    # подписки (иначе три мгновенных print'а успевали выйти до неё, и
+    # очередь оставалась пустой — CI падал через раз)
+    marker = tmp_path / "go"
     job = jm.start("translate", "Перевод", "ACTIVE/x",
-                   [str(fake_script / "progress.py")], tmp_path)
+                   [str(fake_script / "progress_wait.py"), str(marker)],
+                   tmp_path)
     seen = []
     q = job.subscribe()
+    marker.touch()
     _wait_status(jm, job.id, "done")
     try:
         while True:
