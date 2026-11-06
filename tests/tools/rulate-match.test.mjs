@@ -206,11 +206,12 @@ test('rulate: chrF различает свою главу и чужую', () => 
   assert.equal(api.looksLikeSameChapter(base, other).ok, false);
 });
 
-test('rulate: обрезанный файл не проходит сверку объёма', () => {
+test('rulate: обрезанный файл не проходит сверку', () => {
   const { api } = boot([]);
   const full = ('Длинная глава с большим количеством текста и подробностями повествования. ').repeat(40);
   const cut = full.slice(0, Math.floor(full.length * 0.1));
   const res = api.looksLikeSameChapter(full, cut);
   assert.equal(res.ok, false, '10% объёма — это обрыв файла, а не та же глава');
-  assert.ok(res.ratio < 0.35);
+  assert.equal('ratio' in res, false, 'объём не мерится вовсе: признак — chrF');
+  assert.ok(res.chrf < 0.75);
 });

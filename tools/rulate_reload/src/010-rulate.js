@@ -8,12 +8,11 @@ const CFG = {
   diffCtx: 40,
   titleMode: 'off',
   fallbackByTitle: false,
-  // проверка «та ли это глава»: chrF и отношение длин к уже сохранённому
-  // переводу. Калибровка на реальных главах: та же глава — chrF 0.958–0.982,
+  // проверка «та ли это глава»: chrF с уже сохранённым переводом.
+  // Калибровка на реальных главах: та же глава — chrF 0.958–0.982,
   // разные главы одной книги — 0.480–0.524
   checkSameChapter: true,
   minChrf: 0.75,
-  minLenRatio: 0.35,
 };
 
 /* ---------- утилиты ---------- */
@@ -93,10 +92,9 @@ function firstDiff(a, b) {
    же книги: медиана 0.477, максимум 0.543. Грубый повторный перевод (40%
    предложений переписаны) — 0.834-0.873. Порог 0.75 ниже самого тяжёлого
    повторного перевода и выше разных глав: запас есть с обеих сторон.
-   Объём (ratio длин) для этой задачи почти бесполезен — у разных глав одного
-   автора длина сходится на 0.72-0.92, — поэтому он очень грубый
-   предохранитель от обрезанного файла (ratio калибровки для битой главы: 0.17),
-   а не решатель. */
+   Объём сознательно не мерится: у разных глав одного автора длина сходится
+   на 0.72-0.92, и как признак «та ли глава» отношение длин не работает;
+   обрезанный файл ловится самим chrF (10% текста — около 0.11). */
 function chrf(a, b, nMax, beta) {
   const n = nMax || 6, b2 = (beta || 3) ** 2;
   const ga0 = String(a || '').replace(/\s+/g, '');
@@ -125,13 +123,12 @@ function chrf(a, b, nMax, beta) {
 }
 
 /* Похожа ли глава на уже сохранённый перевод (а не на соседнюю главу).
-   Возвращает {ok, chrf, ratio} — по ним же пишется объяснение в лог. */
+   Возвращает {ok, chrf} — по ним же пишется объяснение в лог. */
 function looksLikeSameChapter(a, b) {
   const x = norm(a), y = norm(b);
-  if (!x.length || !y.length) return { ok: false, chrf: 0, ratio: 0 };
-  const ratio = Math.min(x.length, y.length) / Math.max(x.length, y.length);
+  if (!x.length || !y.length) return { ok: false, chrf: 0 };
   const score = chrf(x, y);
-  return { ok: score >= CFG.minChrf && ratio >= CFG.minLenRatio, chrf: score, ratio };
+  return { ok: score >= CFG.minChrf, chrf: score };
 }
 
 async function getDoc(url) {
@@ -575,12 +572,12 @@ async function run(parsed, opts, ui) {
       }
       if (similar && !similar.ok) {
         fail++;
-        ui.log(`     ОТКАЗ: глава на сайте не похожа на нашу (chrF ${similar.chrf.toFixed(3)}, объём ${similar.ratio.toFixed(2)} < ${CFG.minLenRatio}) — нумерация разъехалась?`, 'err');
+        ui.log(`     ОТКАЗ: глава на сайте не похожа на нашу (chrF ${similar.chrf.toFixed(3)} < ${CFG.minChrf}) — нумерация разъехалась?`, 'err');
         ui.log('     → сверьте главу глазами; запись не выполнена', 'warn');
         continue;
       }
       if (similar) {
-        ui.log(`     сверка с сохранённым: chrF ${similar.chrf.toFixed(3)}, объём ${similar.ratio.toFixed(2)} — та же глава`, 'plain');
+        ui.log(`     сверка с сохранённым: chrF ${similar.chrf.toFixed(3)} — та же глава`, 'plain');
       }
 
       const doText  = !(opts.skipSame && same);
