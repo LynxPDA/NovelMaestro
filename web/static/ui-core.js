@@ -827,7 +827,8 @@
       : 0;
   }
 
-  /* Длительность по-русски: «45 с», «12 мин», «1 ч 5 мин». */
+  /* Остаток словами. Свыше двух суток — в сутках: «277777 ч» в подсказке
+   * не читается, а такая оценка всё равно означает «очень долго». */
   function etaDuration(sec) {
     var s = Math.max(0, Math.round(Number(sec) || 0));
     if (s < 60) return s + " с";
@@ -835,7 +836,10 @@
     if (m < 60) return m + " мин";
     var h = Math.floor(m / 60);
     var rest = m % 60;
-    return h + " ч" + (rest ? " " + rest + " мин" : "");
+    if (h < 48) return h + " ч" + (rest ? " " + rest + " мин" : "");
+    var d = Math.floor(h / 24);
+    var rh = h % 24;
+    return d + " дн" + (rh ? " " + rh + " ч" : "");
   }
 
   /* Часы завершения: сегодня — «14:35», не сегодня — с датой в том же
@@ -972,10 +976,14 @@
   /* Одна выборка на шаг. Шаг адаптивный (ETA_STEP … прожитое/ETA_WINDOW):
    * средняя скорость считается по ВСЕМУ прогону, а в многочасовом прогоне
    * точки раз в 5 c — это десятки тысяч записей на карту запусков.
-   * Смена total (новый диапазон глав) окно сбрасывает. */
+   * Окно сбрасывает и смена total (новый диапазон глав), и ОТКАТ done:
+   * стадия могла перезапуститься и пересчитать ячейки — приращения через
+   * такую границу отрицательные, и средняя скорость выходила ниже реальной
+   * в разы (оценка остатка росла на часы). */
   function etaSample(job, done, total) {
     var s = etaSamples.get(job.id);
-    if (!s || !s.length || s[s.length - 1].total !== total) {
+    var last0 = s && s.length ? s[s.length - 1] : null;
+    if (!last0 || last0.total !== total || done < last0.done) {
       if (!etaSamples.has(job.id) && etaSamples.size >= ETA_MAX_JOBS) {
         var oldest = etaSamples.keys().next().value;
         etaSamples.delete(oldest);

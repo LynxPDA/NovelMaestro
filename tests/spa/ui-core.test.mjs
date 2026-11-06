@@ -245,6 +245,27 @@ test("runDotTitle: подсказка иконки — по строке на з
   UICore.etaForget("j2");
 });
 
+test("etaDuration: остаток словами", () => {
+  assert.equal(UICore.etaDuration(0), "0 с");
+  assert.equal(UICore.etaDuration(45), "45 с");
+  assert.equal(UICore.etaDuration(60), "1 мин");
+  assert.equal(UICore.etaDuration(150), "3 мин");
+  assert.equal(UICore.etaDuration(3600), "1 ч");
+  assert.equal(UICore.etaDuration(3660), "1 ч 1 мин");
+  assert.equal(UICore.etaDuration(6 * 3600), "6 ч");
+  assert.equal(UICore.etaDuration(4000), "1 ч 7 мин");
+  // дольше двух суток — в сутках: «277777 ч» в подсказке не читается
+  assert.equal(UICore.etaDuration(48 * 3600), "2 дн");
+  assert.equal(UICore.etaDuration(50 * 3600), "2 дн 2 ч");
+  assert.equal(UICore.etaDuration(24 * 24 * 3600), "24 дн");
+  // мусор на входе — не «NaN с» и не исключение
+  assert.equal(UICore.etaDuration(NaN), "0 с");
+  assert.equal(UICore.etaDuration(null), "0 с");
+  assert.equal(UICore.etaDuration(undefined), "0 с");
+  assert.equal(UICore.etaDuration(-100), "0 с");
+  assert.equal(UICore.etaDuration("120"), "2 мин");
+});
+
 test("etaRemaining: скорость — средняя по прогону", () => {
   /* Скорость — по накопленным приращениям, а не по последним минутам:
    * конвейер ведёт главу через все стадии, и окно успевало поймать то
@@ -309,6 +330,44 @@ test("etaRemaining: старое забывается, свежее весит �
   // ещё остаётся в разумных пределах — не «вся книга за минуту»
   assert.ok(est < naive, `${est} < ${naive}`);
   assert.ok(est > 100, String(est));
+});
+
+test("etaOf: откат прогресса сбрасывает окно", () => {
+  /* Перезапуск стадии пересчитывает счётчик: done уменьшается, total
+   * остаётся. Приращения через такую границу отрицательные — средняя
+   * скорость выходила ниже реальной в разы, и остаток вырастал на часы.
+   * После сброса окно набирается заново с новой точки. */
+  const realNow = Date.now;
+  const T0 = 1_700_000_000;
+  let vt = 0;
+  Date.now = () => (T0 + vt) * 1000;
+  try {
+    const job = { id: "rollback", status: "running", created: T0 };
+    UICore.etaForget("rollback");
+    // старый темп: 0.1 шага/c
+    for (let d = 0; d <= 100; d += 10) {
+      vt = d * 10;
+      UICore.etaOf(job, { done: d, total: 1000 });
+    }
+    vt = 1000;
+    assert.ok(Math.abs(UICore.etaOf(job, { done: 100, total: 1000 }).remaining - 9000) < 100);
+    // откат: счётчик вернулся к 3
+    vt = 1010;
+    assert.equal(UICore.etaOf(job, { done: 3, total: 1000 }), null, "после отката — молчим");
+    // тот же темп заново
+    for (let d = 6; d <= 60; d += 6) {
+      vt = 1010 + d * 10;
+      UICore.etaOf(job, { done: d, total: 1000 });
+    }
+    vt = 1610;
+    const e = UICore.etaOf(job, { done: 60, total: 1000 });
+    // скорость 0.1 шага/c (две выборки нового участка), остаток 940 → 9400,
+    // а не 34000 из приращений через откат
+    assert.ok(e && e.remaining > 8000 && e.remaining < 11000, String(e && e.remaining));
+  } finally {
+    Date.now = realNow;
+    UICore.etaForget("rollback");
+  }
 });
 
 test("etaOf: показанная оценка сглаживается по времени", async () => {
