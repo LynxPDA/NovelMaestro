@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rulate: массовое обновление глав из .txt
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      2.2.0
+// @version      2.3.0
 // @description  Льёт перевод глав на tl.rulate.ru из .txt. Смена названий. Глобальная пауза с рандомом. Диапазон глав. Fallback по названию. Обработка дробных/диапазонных номеров. Отчёт по ненайденным и нестандартным.
 // @author       NovelMaestro
 // @license      MIT
@@ -25,6 +25,10 @@
 (function () {
 'use strict';
 
+/* Версия панели — из meta.js (сборщик подставляет 2.3.0): вторая
+   копия номера в разметке разъезжается с релизом. */
+const APP_VERSION = '2.3.0';
+
 const CFG = {
   delayMs: 2100,
   jitterMs: 0,
@@ -40,6 +44,8 @@ const CFG = {
   // разные главы одной книги — 0.480–0.524
   checkSameChapter: true,
   minChrf: 0.75,
+  // пауза между главами в dry-run: страницы читаются, но записи нет
+  dryMs: 150,
 };
 
 /* ---------- утилиты ---------- */
@@ -452,118 +458,352 @@ function planMatches(parsed, site) {
   return plan;
 }
 
-/* ---------- основной цикл ---------- */
-async function run(parsed, opts, ui) {
+/* ---------- план и его правка ---------- */
+/* План — данные, а не побочный результат заливки: {rows, order, problems, site}.
+   Строка — «глава файла (fi) → глава сайта (site)» либо `site: null` с причиной
+   (`reason`) и кандидатами (`cands`). Человек правит `site` в панели, `how`
+   показывает, откуда взялось значение. Решает сопоставление по-прежнему
+   planMatches; здесь только хранение и ручные поправки. */
+const titleNorm = (s) => String(s || '').normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+
+const siteUrl = (bookId, id) => '/book/' + bookId + '/' + id;
+
+function buildPlan(parsed, site, overrides) {
   const bookId = bookIdFromUrl();
-  if (!bookId) return ui.log('Не определён id книги из URL.', 'err');
-  const globalCsrf = $meta('csrf-token');
-  const rangeSet = parseRange(opts.rangeStr);
+  const base = planMatches(parsed, site);
+  const rows = [];
+  const problems = [];
+  const order = [];
 
-  const tmLabel = CFG.titleMode === 'off' ? 'выкл' : CFG.titleMode === 'title-only' ? 'ТОЛЬКО названия' : 'названия + текст';
-  ui.log(`Книга #${bookId} | Глав: ${parsed.length} | dry-run: ${opts.dryRun ? 'ДА' : 'нет'} | названия: ${tmLabel}`, 'ok');
-  if (rangeSet) ui.log(`Диапазон: ${[...rangeSet].sort((a,b)=>a-b).join(', ')}`, 'plain');
-  if (CFG.fallbackByTitle) ui.log(`Fallback по названию: ВКЛ`, 'plain');
-  ui.log(`Пауза: ${CFG.delayMs}мс ± ${CFG.jitterMs}мс`, 'plain');
-  ui.log(opts.skipSame
-    ? 'Режим: совпадающие ПРОПУСКАЮТСЯ (текст и названия).'
-    : 'Режим: ПРИОРИТЕТ ФАЙЛА — льётся КАЖДАЯ найденная глава.', 'plain');
+  parsed.forEach((ch, fi) => {
+    if (ch.problem) { problems.push(fi); return; }
+    order.push(fi);
+    const b = base.get(fi);
+    const row = {
+      fi, num: ch.num, title: ch.title,
+      site: b && b.info ? b.info : null,
+      cands: b && b.list ? b.list : [],
+      reason: b ? (b.reason || '') : 'нет главы с этим номером',
+      how: b && b.info ? (b.how || 'по номеру') : (b && b.list ? 'спорная' : 'нет'),
+      host: '',
+    };
+    rows.push(row);
+  });
 
-  let siteData;
-  try { siteData = await buildSiteMap(bookId); }
-  catch (e) { return ui.log('Ошибка чтения оглавления: ' + e.message, 'err'); }
+  const plan = { rows, order, problems, site, manual: {}, bookId };
+  if (overrides) applyOverrides(plan, parsed, overrides);
+  resolveConflicts(plan);
+  return plan;
+}
 
-  const nonStandard = siteData.nonStandard;
-
-  const nums = [...siteData.byNum.keys()].sort((a, b) => a - b);
-  ui.log(`Оглавление: глав=${siteData.ordered.length}, номеров=${siteData.byNum.size}, диапазон=${nums.length ? nums[0] + '..' + nums[nums.length-1] : '∅'}.`, siteData.ordered.length ? 'ok' : 'err');
-
-  /* Повторяющийся номер — не повод вычёркивать главы из работы: разведём
-     их по названию или порядку (matchChapter), а если не выйдет — откажем
-     на этой главе и скажем почему. Прежнее «исключаем всё сомнительное»
-     превращало книгу со вторым томом в «не найдено» целиком. */
-  const repeated = [...siteData.byNum].filter(([, g]) => g.length > 1)
-    .sort((a, b) => a[0] - b[0]);
-  if (repeated.length) {
-    ui.log(`⚠ Номер повторяется у ${repeated.length} групп глав на сайте:`, 'warn');
-    for (const [num, g] of repeated) {
-      ui.log(`   №${num}: ${g.map(x => `id=${x.chapterId} «${x.siteTitle}»`).join(' | ')}`, 'warn');
-    }
+/* Одна глава сайта — одна строка: второй претендент помечается `host`
+   («кто занял»), но выбор человека не отменяется — пусть видит, что делает.
+   Последним заслоном остаётся chrF перед записью. */
+function resolveConflicts(plan) {
+  const owner = new Map();
+  for (const r of plan.rows) {
+    if (!r.site) { r.host = ''; continue; }
+    const id = String(r.site.chapterId);
+    if (!owner.has(id)) { owner.set(id, r); r.host = ''; }
+    else r.host = String(owner.get(id).fi);
   }
+}
 
-  if (nonStandard.length > 0) {
-    ui.log(`⚠ Нестандартные главы на сайте (${nonStandard.length}):`, 'warn');
-    const typeLabels = { fractional: 'дробный №', range: 'диапазон', nonstandard: 'без номера' };
-    nonStandard.forEach(item => {
-      ui.log(`   · [${typeLabels[item.type] || item.type}] «${item.title}» (id=${item.chapterId})`, 'warn');
-    });
+const planRow = (plan, fi) => plan.rows.find(r => r.fi === fi) || null;
+
+/* Ручное назначение: `siteId` — глава сайта или null (пропустить строку).
+   Возвращает {ok, error}: «нет такой главы» должен сказать интерфейс, а не
+   молчаливая подмена. */
+function planAssign(plan, fi, siteId) {
+  const row = planRow(plan, fi);
+  if (!row) return { ok: false, error: 'строка не найдена' };
+  if (siteId == null || siteId === '') {
+    row.site = null;
+    row.how = 'пропуск (ваше решение)';
+    plan.manual[fi] = null;
+    resolveConflicts(plan);
+    return { ok: true };
   }
+  const id = String(siteId);
+  const hit = (plan.site.ordered || []).find(g => String(g.chapterId) === id);
+  if (!hit) return { ok: false, error: 'на сайте нет главы id=' + id };
+  row.site = { url: hit.url || siteUrl(plan.bookId, id), chapterId: id, siteTitle: hit.siteTitle };
+  row.how = 'вручную';
+  plan.manual[fi] = id;
+  resolveConflicts(plan);
+  return { ok: true };
+}
 
-  let saved = 0, wouldSave = 0, skipSame = 0, skipOther = 0, skipRange = 0, skipProblem = 0, fail = 0, titleChanged = 0, ambiguous = 0;
-  const notFoundNums = [];
-  const notFoundTitles = [];
+/* Оверрайды: что человек решил, помнится между запусками и переживает
+   перекомпиляцию файла. Ключ — номер + название главы файла: индекс строки
+   после нового разбора уже другой (главы добавились или ушли). */
+const overrideKey = (ch) => `${ch.num == null ? '-' : ch.num}|${titleNorm(ch.title)}`;
 
-  /* План сопоставления — сразу на весь файл, до первой записи: разрешение
-     коллизий номеров зависит от всего набора глав (порядок, лишние главы
-     на сайте), а не от текущей строки. */
-  const plan = planMatches(parsed, siteData);
-
-  for (let i = 0; i < parsed.length; i++) {
-    if (ui.aborted) { ui.log('Остановлено.', 'warn'); break; }
-    const ch = parsed[i];
-    ui.setProgress(i, parsed.length);
-
-    if (ch.problem) {
-      skipProblem++;
-      ui.log(`[${i+1}/${parsed.length}] «${ch.title}» — ${ch.problem}. ПРОПУСК.`, 'warn');
+function applyOverrides(plan, parsed, overrides) {
+  const applied = { assigned: 0, skipped: 0, lost: 0 };
+  /* Что скрипт решил бы сам: если назначение из файла с этим совпадает, это
+     не «ручная правка» — иначе после каждого импорта весь план выглядит
+     правленым руками и перестаёт что-либо сообщать. */
+  const auto = planMatches(parsed, plan.site);
+  const autoId = (fi) => {
+    const b = auto.get(fi);
+    return b && b.info ? String(b.info.chapterId) : null;
+  };
+  for (const row of plan.rows) {
+    const key = overrideKey(parsed[row.fi]);
+    if (!Object.prototype.hasOwnProperty.call(overrides, key)) continue;
+    const id = overrides[key];
+    if (id == null) {
+      row.site = null;
+      row.how = 'пропуск (ваше решение)';
+      plan.manual[row.fi] = null;
+      applied.skipped++;
       continue;
     }
+    const hit = (plan.site.ordered || []).find(g => String(g.chapterId) === String(id));
+    if (!hit) { applied.lost++; continue; }
+    row.site = { url: hit.url || siteUrl(plan.bookId, String(id)), chapterId: String(id), siteTitle: hit.siteTitle };
+    row.how = autoId(row.fi) === String(id) ? 'из плана' : 'вручную';
+    plan.manual[row.fi] = String(id);
+    applied.assigned++;
+  }
+  resolveConflicts(plan);
+  return applied;
+}
 
-    if (rangeSet && ch.num != null && !rangeSet.has(ch.num)) { skipRange++; continue; }
+function collectOverrides(plan, parsed) {
+  const out = {};
+  for (const fi of Object.keys(plan.manual)) {
+    const row = planRow(plan, Number(fi));
+    if (!row) continue;
+    const id = plan.manual[fi];
+    out[overrideKey(parsed[row.fi])] = id == null ? null : String(id);
+  }
+  return out;
+}
 
-    const matched = plan.get(i) || { reason: 'нет главы с этим номером' };
-    const info = matched.info || null;
-    if (!info) {
-      if (matched.list) {
-        ambiguous++;
-        ui.log(`[${i+1}/${parsed.length}] «${ch.title}» — НЕОДНОЗНАЧНО: №${ch.num} на сайте у ${matched.list.length} глав:`, 'err');
-        for (const g of matched.list) {
-          ui.log(`     id=${g.chapterId} «${g.siteTitle}»`, 'err');
-        }
-        ui.log('     → допишите номер в тег `:|:` или переименуйте главу. ПРОПУСК.', 'warn');
+/* Пакетные действия по выделению — то же решение, что и выбор в строке, но
+   разом. Возвращают счётчик изменённых строк, чтобы интерфейс сказал итог. */
+function planSkipSelected(plan, fis) {
+  let n = 0;
+  for (const fi of fis) {
+    const row = planRow(plan, fi);
+    if (!row || row.how.startsWith('пропуск (ваше')) continue;
+    planAssign(plan, fi, null);
+    n++;
+  }
+  return n;
+}
+
+/* «Сбросить»: вернуть строку к тому, что решил бы скрипт сам. Решение берём
+   у planMatches — второго алгоритма сопоставления быть не должно, иначе
+   «сбросить» и «План» начнут расходиться. */
+function planResetSelected(plan, parsed, fis) {
+  const base = planMatches(parsed, plan.site);
+  for (const fi of fis) {
+    const row = planRow(plan, fi);
+    if (!row) continue;
+    delete plan.manual[row.fi];
+    const b = base.get(row.fi);
+    if (b && b.info) {
+      row.site = b.info;
+      row.cands = [];
+      row.how = b.how || 'по номеру';
+    } else {
+      row.site = null;
+      row.cands = (b && b.list) || [];
+      row.how = b && b.list ? 'спорная' : 'нет';
+    }
+  }
+  resolveConflicts(plan);
+  return fis.length;
+}
+
+/* Черновое выравнивание по порядку — предложение, а не решение. Нужно, когда
+   нумерация разъехалась (второй том начали с единицы, файл перекомпилировали):
+   якоря — строки, уже сопоставленные по названию, между ними позиции
+   выравниваются по порядку оглавления. Ничего не пишется, пока человек не
+   нажал «Старт», и каждая предложенная строка помечена `по порядку (черновик)`. */
+function planAlignByOrder(plan, parsed) {
+  const anchors = plan.rows
+    .map((row, idx) => ({ row, idx, at: (plan.site.ordered || []).findIndex(g => row.site && String(g.chapterId) === String(row.site.chapterId)) }))
+    .filter(a => a.at >= 0);
+  if (!anchors.length) return { suggested: 0, note: 'нет ни одной строки, сопоставленной по названию, — выравнивать не от чего' };
+
+  let suggested = 0;
+  for (let i = 0; i < anchors.length - 1; i++) {
+    const a = anchors[i], b = anchors[i + 1];
+    const gapRows = plan.rows.filter(r => !r.site && r.fi > a.row.fi && r.fi < b.row.fi);
+    const gapSite = (plan.site.ordered || []).slice(a.at + 1, b.at);
+    if (!gapRows.length || !gapSite.length || gapRows.length !== gapSite.length) continue;
+    gapRows.forEach((row, k) => {
+      const g = gapSite[k];
+      planAssign(plan, row.fi, String(g.chapterId));
+      plan.manual[row.fi] = String(g.chapterId);
+      row.how = 'по порядку (черновик)';
+      suggested++;
+    });
+  }
+  resolveConflicts(plan);
+  return {
+    suggested,
+    note: suggested ? `выровнено ${suggested} строк между якорями — проверьте их глазами` : 'свободных промежутков одинаковой длины нет',
+  };
+}
+
+/* ---------- план в файл и обратно ---------- */
+function planToData(plan, parsed) {
+  const occupied = new Set(plan.rows.filter(r => r.site).map(r => String(r.site.chapterId)));
+  return {
+    app: 'NovelMaestro rulate plan',
+    version: 1,
+    book: String(plan.bookId),
+    exported: new Date().toISOString(),
+    rows: plan.rows.map(r => ({
+      num: r.num,
+      title: r.title,
+      site: r.site ? { id: String(r.site.chapterId), title: r.site.siteTitle || '' } : null,
+      how: r.how,
+      cands: r.cands.map(c => ({ id: String(c.chapterId), title: c.siteTitle })),
+    })),
+    problems: plan.problems.map(fi => ({ num: parsed[fi].num, title: parsed[fi].title, problem: parsed[fi].problem })),
+    unused: (plan.site.ordered || []).filter(g => !occupied.has(String(g.chapterId)))
+      .map(g => ({ id: String(g.chapterId), title: g.siteTitle })),
+  };
+}
+
+/* Чужой файл не должен ломать панель: разбираем терпимо, а всё, чего нет в
+   книге, отдаём отчётом. Строки ищутся по названию, затем по номеру —
+   индексы из чужого файла не значат ничего. */
+function planFromData(data, parsed, site) {
+  const notes = [];
+  const overrides = {};
+  if (!data || typeof data !== 'object') return { overrides, notes: ['это не файл плана'], book: null };
+  const book = data.book ? String(data.book) : null;
+  if (data.app !== 'NovelMaestro rulate plan') return { overrides, notes: ['в файле нет отметки «NovelMaestro rulate plan»'], book };
+
+  const rows = Array.isArray(data.rows) ? data.rows.filter(r => r && typeof r === 'object') : [];
+  if (!rows.length) return { overrides, notes: ['в файле нет ни одной строки'], book };
+
+  const siteIds = new Set((site.ordered || []).map(g => String(g.chapterId)));
+  const siteTitles = new Map((site.ordered || []).map(g => [titleNorm(g.siteTitle), String(g.chapterId)]));
+  const used = new Set();
+
+  parsed.forEach((ch) => {
+    if (ch.problem) return;
+    let src = rows.find(r => !used.has(r) && titleNorm(r.title) === titleNorm(ch.title));
+    if (!src && ch.num != null) src = rows.find(r => !used.has(r) && r.num === ch.num);
+    if (!src) return;
+    used.add(src);
+
+    if (!src.site || src.site.id == null) {
+      /* Пропуск запоминается только как явное «не лить»: в плане такие строки
+         помечены «пропуск (ваше решение)». Строка, которой просто не нашлось
+         главы на сайте, решением человека не является — её не записываем, иначе
+         после импорта «не найдена» превратилась бы в «вы её сняли». */
+      if (src.site === null && String(src.how || '').startsWith('пропуск (ваше')) {
+        overrides[overrideKey(ch)] = null;
+      }
+      return;
+    }
+    let id = String(src.site.id);
+    if (!siteIds.has(id)) {
+      const byName = siteTitles.get(titleNorm(src.site.title || ''));
+      if (!byName) { notes.push(`«${ch.title}»: главы id=${id} на сайте нет — строка осталась как решил скрипт`); return; }
+      notes.push(`«${ch.title}»: главы id=${id} нет, взята по названию id=${byName}`);
+      id = byName;
+    }
+    overrides[overrideKey(ch)] = id;
+  });
+
+  const missed = rows.filter(r => !used.has(r) && r.site).length;
+  if (missed) notes.push(`в файле плана ${missed} строк (глав) не нашлось в этом .txt`);
+  if (book && book !== String(bookIdFromUrl())) notes.push(`план от книги #${book}, а открыта #${bookIdFromUrl()}`);
+  return { overrides, notes, book };
+}
+
+function planToText(plan, parsed) {
+  const lines = ['# План заливки: глава файла → глава сайта', '#'];
+  for (const row of plan.rows) {
+    const label = (row.num != null ? row.num + '. ' : '-. ') + row.title;
+    const target = row.site ? `id=${row.site.chapterId} «${row.site.siteTitle}»` : '—';
+    lines.push(`${label}\t${target}\t${row.how}${row.host ? ` (глава сайта занята строкой ${row.host})` : ''}`);
+  }
+  for (const fi of plan.problems) lines.push(`${parsed[fi].title}\t—\t${parsed[fi].problem}`);
+  return lines.join('\n') + '\n';
+}
+
+/* ---------- заливка по плану ---------- */
+/* Заливка ровно по плану: решения не пересматриваются, иначе правка человека
+   была бы игрушечной. `opts.onlyFi` — залить только эти строки (выделение),
+   `opts.skipSame` — пропускать совпадающее, `opts.rangeStr` — диапазон номеров. */
+async function writePlan(plan, parsed, opts, ui) {
+  const rangeSet = parseRange(opts.rangeStr);
+  const only = opts.onlyFi ? new Set(opts.onlyFi) : null;
+  const entries = plan.order.map(fi => planRow(plan, fi)).filter(Boolean)
+    .filter(r => !only || only.has(r.fi));
+  const total = entries.length;
+  const st = { saved: 0, wouldSave: 0, skipSame: 0, skipOther: 0, skipRange: 0, skipProblem: 0, fail: 0, titleChanged: 0, ambiguous: 0 };
+  const notFoundNums = [];
+  const notFoundTitles = [];
+  const reports = [];
+  const report = (row, status, chrf) => reports.push({ fi: row.fi, status, chrf: chrf == null ? null : chrf });
+
+  if (!only) {
+    st.skipProblem = plan.problems.length;
+    if (plan.problems.length) ui.log(`Проблемных в файле: ${plan.problems.length} (пропущены)`, 'warn');
+  }
+
+  for (let job = 0; job < entries.length; job++) {
+    const row = entries[job];
+    if (ui.aborted) { ui.log('Остановлено.', 'warn'); break; }
+    ui.setProgress(job, total);
+    const ch = parsed[row.fi];
+    const tick = `[${job + 1}/${total}]`;
+
+    if (rangeSet && ch.num != null && !rangeSet.has(ch.num)) { st.skipRange++; report(row, 'вне диапазона'); continue; }
+
+    if (!row.site) {
+      /* Снятая человеком строка — не «неоднозначно» и не «не найдена»:
+         скрипт тут ничего не решал, решать было нечего. */
+      if (row.how.startsWith('пропуск (ваше')) {
+        st.skipOther++;
+        ui.log(`${tick} «${ch.title}» — снята вручную.`, 'plain');
+        report(row, 'пропуск (ваше решение)');
+        continue;
+      }
+      if (row.cands.length) {
+        st.ambiguous++;
+        ui.log(`${tick} «${ch.title}» — НЕОДНОЗНАЧНО: №${ch.num} на сайте у ${row.cands.length} глав:`, 'err');
+        for (const g of row.cands) ui.log(`     id=${g.chapterId} «${g.siteTitle}»`, 'err');
+        ui.log('     → выберите главу в панели (кнопка «План») или допишите номер в тег `:|:`', 'warn');
+        report(row, 'неоднозначно');
       } else {
-        skipOther++;
-        if (ch.num != null) notFoundNums.push(ch.num);
-        else notFoundTitles.push(ch.title);
-        ui.log(`[${i+1}/${parsed.length}] Глава ${ch.num != null ? ch.num : '«'+ch.title+'»'} — НЕ НАЙДЕНА (${matched.reason}).`, 'warn');
+        st.skipOther++;
+        if (ch.num != null) notFoundNums.push(ch.num); else notFoundTitles.push(ch.title);
+        ui.log(`${tick} «${ch.title}» — НЕ НАЙДЕНА (${row.how})`, 'warn');
+        report(row, 'не найдена');
       }
       continue;
     }
-    if (matched.how) ui.log(`[${i+1}/${parsed.length}] «${ch.title}» сопоставлена ${matched.how}: id=${info.chapterId} «${info.siteTitle}»`, 'plain');
+
+    const info = row.site;
+    if (row.host && String(row.host) !== String(row.fi)) {
+      ui.log(`${tick} ⚠ глава сайта id=${info.chapterId} уже стоит в строке ${row.host} — сверим chrF`, 'warn');
+    }
 
     try {
       /* ===== РЕЖИМ: ТОЛЬКО НАЗВАНИЯ ===== */
       if (CFG.titleMode === 'title-only') {
         const curTitle = info.siteTitle || '';
-        const titleSame = curTitle.trim() === (ch.title || '').trim();
-
-        ui.log(`[${i+1}/${parsed.length}] Глава ${ch.num}: «${ch.title}» ↔ «${curTitle}»`, 'plain');
-
-        if (opts.skipSame && titleSame) {
-          skipSame++;
-          ui.log('     название совпадает — пропуск.', 'plain');
-          continue;
-        }
-
-        if (opts.dryRun) {
-          wouldSave++;
-          ui.log('     [DRY] название было бы обновлено', 'plain');
-          continue;
-        }
-
-        await saveChapterTitle(bookId, info.chapterId, ch.title, globalCsrf);
-        titleChanged++;
-        ui.log('     название обновлено', 'ok');
-        if (i < parsed.length - 1 && !ui.aborted) await globalPause(CFG.delayMs, CFG.jitterMs);
+        const titleSame = titleNorm(curTitle) === titleNorm(ch.title);
+        if (opts.skipSame && titleSame) { st.skipSame++; ui.log(`${tick} название совпадает — пропуск.`, 'plain'); report(row, 'пропуск'); continue; }
+        if (opts.dryRun) { st.wouldSave++; ui.log(`${tick} [DRY] название было бы обновлено`, 'plain'); report(row, 'будет залито'); continue; }
+        await saveChapterTitle(plan.bookId, info.chapterId, ch.title, $meta('csrf-token'));
+        st.titleChanged++;
+        ui.log(`${tick} название обновлено`, 'ok');
+        report(row, 'залито');
+        if (job < total - 1 && !ui.aborted) await globalPause(CFG.delayMs, CFG.jitterMs);
         continue;
       }
 
@@ -573,120 +813,162 @@ async function run(parsed, opts, ui) {
 
       const userId = userIdFromHtml(html);
       if (!userId) throw new Error('Нет данных пользователя — вы залогинены?');
-      const csrf = csrfFromDoc(doc) || globalCsrf;
+      const csrf = csrfFromDoc(doc) || $meta('csrf-token');
       if (!csrf) throw new Error('CSRF не найден');
 
-      const siteTitle = (html.match(/Chap\s*=\s*\{[\s\S]*?title:\s*'([^']*)'/) || [])[1] || ('Глава ' + ch.num);
+      const siteTitle = (html.match(/Chap\s*=\s*\{[\s\S]*?title:\s*'([^']*)'/) || [])[1] || (info.siteTitle || '');
       const pairs = readChapterIds(doc, userId);
-      if (!pairs.length) { skipOther++; ui.log(`[${i+1}/${parsed.length}] Глава ${ch.num} — нет вашего перевода.`, 'warn'); continue; }
-      if (pairs.length > 1 && CFG.multiFragment === 'skip') { skipOther++; ui.log(`[${i+1}/${parsed.length}] Глава ${ch.num} — фрагментов ${pairs.length} (>1), пропуск.`, 'warn'); continue; }
+      if (!pairs.length) { st.skipOther++; ui.log(`${tick} «${ch.title}» — нет вашего перевода.`, 'warn'); report(row, 'нет перевода'); continue; }
+      if (pairs.length > 1 && CFG.multiFragment === 'skip') { st.skipOther++; ui.log(`${tick} «${ch.title}» — фрагментов ${pairs.length} (>1), пропуск.`, 'warn'); report(row, 'несколько фрагментов'); continue; }
 
       const { origId, trId } = pairs[0];
-      ui.log(`[${i+1}/${parsed.length}] Глава ${ch.num}: «${ch.title}» ↔ «${siteTitle}» | chap=${info.chapterId} orig=${origId} tr=${trId} | ${ch.text.length}с`, 'plain');
+      ui.log(`${tick} «${ch.title}» ↔ «${siteTitle}» | chap=${info.chapterId} orig=${origId} tr=${trId} | ${ch.text.length}с`, 'plain');
 
       const savedText = readSavedText(doc, trId);
       const same = compareAndLog(savedText, ch.text, ui);
-      const titleSame = (siteTitle || '').trim() === (ch.title || '').trim();
+      const titleSame = titleNorm(siteTitle) === titleNorm(ch.title);
 
       /* Последний заслон перед записью: даже при «правильном» номере глава
          на сайте может оказаться ДРУГОЙ (нумерация разъехалась, тег
-         поправили, файл от другой версии книги). Сверяем с уже
-         сохранённым переводом — это тот же текст, что мы льём, только
-         прошлой версии. Не похоже — не пишем. */
+         поправили, файл от другой версии книги). Сверяем с уже сохранённым
+         переводом — это тот же текст, что мы льём, только прошлой версии.
+         Не похоже — не пишем, даже если строку назначил человек. */
       let similar = null;
-      if (CFG.checkSameChapter && savedText != null) {
-        similar = looksLikeSameChapter(savedText, ch.text);
-      }
+      if (CFG.checkSameChapter && savedText != null) similar = looksLikeSameChapter(savedText, ch.text);
       if (similar && !similar.ok) {
-        fail++;
+        st.fail++;
         ui.log(`     ОТКАЗ: глава на сайте не похожа на нашу (chrF ${similar.chrf.toFixed(3)} < ${CFG.minChrf}) — нумерация разъехалась?`, 'err');
         ui.log('     → сверьте главу глазами; запись не выполнена', 'warn');
+        report(row, 'отказ chrF', similar.chrf);
         continue;
       }
-      if (similar) {
-        ui.log(`     сверка с сохранённым: chrF ${similar.chrf.toFixed(3)} — та же глава`, 'plain');
-      }
+      if (similar) ui.log(`     сверка с сохранённым: chrF ${similar.chrf.toFixed(3)} — та же глава`, 'plain');
 
-      const doText  = !(opts.skipSame && same);
+      const doText = !(opts.skipSame && same);
       const doTitle = (CFG.titleMode === 'title-and-body') && !(opts.skipSame && titleSame);
 
       if (opts.dryRun) {
-        if (!doText && !doTitle) {
-          skipSame++;
-          ui.log('     [DRY] пропущено бы (всё совпадает)', 'plain');
-        } else {
-          wouldSave++;
+        if (!doText && !doTitle) { st.skipSame++; ui.log('     [DRY] пропущено бы (всё совпадает)', 'plain'); report(row, 'пропуск'); }
+        else {
+          st.wouldSave++;
           const parts = [];
-          if (doText)  parts.push('текст');
+          if (doText) parts.push('текст');
           if (doTitle) parts.push('название');
           ui.log(`     [DRY] будет обновлено: ${parts.join(' + ')}`, 'plain');
+          report(row, 'будет залито', similar ? similar.chrf : null);
         }
+      } else if (!doText && !doTitle) {
+        st.skipSame++;
+        ui.log('     пропущено (всё совпадает)', 'plain');
+        report(row, 'пропуск');
       } else {
-        if (!doText && !doTitle) {
-          skipSame++;
-          ui.log('     пропущено (всё совпадает)', 'plain');
-        } else {
-          if (doTitle) {
-            await saveChapterTitle(bookId, info.chapterId, ch.title, csrf);
-            titleChanged++;
-            ui.log('     название обновлено', 'ok');
-            await globalPause(CFG.intraMs, 0);
-          } else if (CFG.titleMode === 'title-and-body') {
-            ui.log('     название совпадает — переименование пропущено', 'plain');
-          }
-
-          if (doText) {
-            await saveTranslation(bookId, info.chapterId, origId, trId, ch.text, csrf);
-            if (CFG.verify) {
-              await globalPause(CFG.intraMs, 0);
-              const vDoc = (await getDoc(info.url)).doc;
-              const vRaw = readSavedText(vDoc, trId);
-              if (norm(vRaw == null ? '' : vRaw) !== norm(ch.text)) {
-                fail++;
-                ui.log('     ВНИМАНИЕ: после сохранения текст не совпал!', 'err');
-                if (vRaw != null) { const d = firstDiff(norm(vRaw), norm(ch.text)); ui.log(`        сайт: ${d.site}`, 'plain'); ui.log(`        файл: ${d.file}`, 'plain'); }
-                continue;
-              }
-              ui.log('     залито + проверка OK', 'ok');
-            } else { ui.log('     залито (без проверки).', 'ok'); }
-            saved++;
-          } else {
-            ui.log('     текст совпадает — запись пропущена', 'plain');
-          }
+        if (doTitle) {
+          await saveChapterTitle(plan.bookId, info.chapterId, ch.title, csrf);
+          st.titleChanged++;
+          ui.log('     название обновлено', 'ok');
+          await globalPause(CFG.intraMs, 0);
+        } else if (CFG.titleMode === 'title-and-body') {
+          ui.log('     название совпадает — переименование пропущено', 'plain');
         }
+
+        if (doText) {
+          await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);
+          if (CFG.verify) {
+            await globalPause(CFG.intraMs, 0);
+            const vDoc = (await getDoc(info.url)).doc;
+            const vRaw = readSavedText(vDoc, trId);
+            if (norm(vRaw == null ? '' : vRaw) !== norm(ch.text)) {
+              st.fail++;
+              ui.log('     ВНИМАНИЕ: после сохранения текст не совпал!', 'err');
+              if (vRaw != null) { const d = firstDiff(norm(vRaw), norm(ch.text)); ui.log(`        сайт: ${d.site}`, 'plain'); ui.log(`        файл: ${d.file}`, 'plain'); }
+              report(row, 'расхождение после записи');
+              continue;
+            }
+            ui.log('     залито + проверка OK', 'ok');
+          } else ui.log('     залито (без проверки).', 'ok');
+          st.saved++;
+        } else {
+          ui.log('     текст совпадает — запись пропущена', 'plain');
+        }
+        report(row, 'залито', similar ? similar.chrf : null);
       }
-    } catch (e) { fail++; ui.log('     ОШИБКА: ' + e.message, 'err'); }
+    } catch (e) { st.fail++; ui.log('     ОШИБКА: ' + e.message, 'err'); report(row, 'ошибка: ' + e.message); }
 
-    if (i < parsed.length - 1 && !ui.aborted) await globalPause(opts.dryRun ? 150 : CFG.delayMs, CFG.jitterMs);
+    if (job < total - 1 && !ui.aborted) await globalPause(opts.dryRun ? CFG.dryMs : CFG.delayMs, CFG.jitterMs);
   }
 
-  ui.setProgress(parsed.length, parsed.length);
-
-  let summary;
-  if (opts.dryRun) {
-    summary = `=== DRY-RUN: зальётся ${wouldSave}, пропущено ${skipSame}, не найдено ${skipOther}, неоднозначных ${ambiguous}, вне диапазона ${skipRange}, проблемных ${skipProblem} ===`;
-  } else {
-    summary = `=== ГОТОВО: залито ${saved}, названий ${titleChanged}, пропущено ${skipSame}, не найдено ${skipOther}, неоднозначных ${ambiguous}, вне диапазона ${skipRange}, проблемных ${skipProblem}, ошибок ${fail} ===`;
-  }
-  ui.log(summary, fail ? 'warn' : 'ok');
+  ui.setProgress(total, total);
+  const summary = opts.dryRun
+    ? `=== DRY-RUN: зальётся ${st.wouldSave}, пропущено ${st.skipSame}, не найдено ${st.skipOther}, неоднозначных ${st.ambiguous}, вне диапазона ${st.skipRange}, проблемных ${st.skipProblem} ===`
+    : `=== ГОТОВО: залито ${st.saved}, названий ${st.titleChanged}, пропущено ${st.skipSame}, не найдено ${st.skipOther}, неоднозначных ${st.ambiguous}, вне диапазона ${st.skipRange}, проблемных ${st.skipProblem}, ошибок ${st.fail} ===`;
+  ui.log(summary, st.fail ? 'warn' : 'ok');
 
   if (notFoundNums.length > 0 || notFoundTitles.length > 0) {
     const parts = [];
-    if (notFoundNums.length > 0) parts.push(`Главы: ${notFoundNums.sort((a,b)=>a-b).join(', ')}`);
+    if (notFoundNums.length > 0) parts.push(`Главы: ${notFoundNums.sort((a, b) => a - b).join(', ')}`);
     if (notFoundTitles.length > 0) parts.push(`Без номера: ${notFoundTitles.join('; ')}`);
     ui.log(`Не найдены на сайте → ${parts.join(' | ')}`, 'warn');
+  }
+
+  return Object.assign({ reports }, st);
+}
+
+/* Один вход на обе кнопки: без готового плана он строится заново (старое
+   поведение «Старт»), с планом — заливается ровно он. */
+async function run(parsed, opts, ui) {
+  const bookId = bookIdFromUrl();
+  if (!bookId) { ui.log('Не определён id книги из URL.', 'err'); return null; }
+
+  ui.log(`Книга #${bookId} | Глав: ${parsed.length} | dry-run: ${opts.dryRun ? 'ДА' : 'нет'}`, 'ok');
+  const tmLabel = CFG.titleMode === 'off' ? 'выкл' : CFG.titleMode === 'title-only' ? 'ТОЛЬКО названия' : 'названия + текст';
+  ui.log(`Названия: ${tmLabel} | Пауза: ${CFG.delayMs}мс ± ${CFG.jitterMs}мс`, 'plain');
+  ui.log(opts.dryRun ? 'Режим: DRY-RUN' : (opts.skipSame ? 'Режим: совпадающие ПРОПУСКАЮТСЯ (текст и названия).' : 'Режим: ПРИОРИТЕТ ФАЙЛА — льётся КАЖДАЯ найденная глава.'), 'plain');
+
+  let plan = opts.plan || null;
+  if (!plan) {
+    let site;
+    try { site = await buildSiteMap(bookId); }
+    catch (e) { ui.log('Ошибка чтения оглавления: ' + e.message, 'err'); return { error: 'оглавление' }; }
+    logSiteReport(site, ui);
+    plan = buildPlan(parsed, site);
+  }
+  const res = await writePlan(plan, parsed, opts, ui);
+  res.plan = plan;
+  return res;
+}
+
+/* Отчёт об оглавлении — общий для «Плана» и «Старта»: повторяющиеся номера и
+   нестандартные главы человек должен видеть до заливки, а не в конце. */
+function logSiteReport(site, ui) {
+  const nums = [...site.byNum.keys()].sort((a, b) => a - b);
+  ui.log(`Оглавление: глав=${site.ordered.length}, номеров=${site.byNum.size}, диапазон=${nums.length ? nums[0] + '..' + nums[nums.length - 1] : '∅'}.`, site.ordered.length ? 'ok' : 'err');
+
+  const repeated = [...site.byNum].filter(([, g]) => g.length > 1).sort((a, b) => a[0] - b[0]);
+  if (repeated.length) {
+    ui.log(`⚠ Номер повторяется у ${repeated.length} групп глав на сайте:`, 'warn');
+    for (const [num, g] of repeated) {
+      ui.log(`   №${num}: ${g.map(x => `id=${x.chapterId} «${x.siteTitle}»`).join(' | ')}`, 'warn');
+    }
+  }
+
+  if (site.nonStandard.length) {
+    const typeLabels = { fractional: 'дробный №', range: 'диапазон', nonstandard: 'без номера' };
+    ui.log(`⚠ Нестандартные главы на сайте (${site.nonStandard.length}):`, 'warn');
+    for (const item of site.nonStandard) {
+      ui.log(`   · [${typeLabels[item.type] || item.type}] «${item.title}» (id=${item.chapterId})`, 'warn');
+    }
   }
 }
 
 /* ---------- UI ---------- */
-GM_addStyle(`#ru-bulk, #ru-bulk * { box-sizing: border-box !important; } #ru-bulk { position: fixed; right: 12px; bottom: 12px; z-index: 999999; width: min(520px, calc(100vw - 24px)); text-align: left !important; background: #1f2430; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 10px; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important; box-shadow: 0 8px 28px rgba(0,0,0,.45); margin: 0; padding: 0; } #ru-bulk .ru-hd { padding: 8px 10px; background: #2a3142; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: grab; user-select: none; margin: 0; } #ru-bulk .ru-hd:active { cursor: grabbing; } #ru-bulk .ru-hd b { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0; padding: 0; } #ru-bulk .ru-bd { padding: 10px; margin: 0; } #ru-bulk .ru-hd-btns { display: flex; gap: 4px; align-items: center; } #ru-bulk button#ru-close:hover { background: #d9534f !important; } #ru-bulk button { background: #2f81c4; color: #fff; border: 0; border-radius: 5px; padding: 6px 11px; cursor: pointer; margin: 0; font: inherit; user-select: none; white-space: nowrap; } #ru-bulk button.ru-sec { background: #444c5c; } #ru-bulk button.ru-go { background: #2e9e5b; } #ru-bulk button:hover { filter: brightness(1.08); } #ru-bulk button:disabled { opacity: .45; cursor: not-allowed; filter: none; } #ru-bulk .ru-log-box { min-height: 120px; max-height: 40vh; overflow-x: hidden !important; overflow-y: auto !important; background: #11151c; border: 1px solid #333; border-radius: 6px; padding: 7px !important; margin: 8px 0 0 0 !important; font: 11.5px/1.4 ui-monospace, Menlo, Consolas, monospace !important; white-space: pre-wrap !important; word-break: break-word !important; text-align: left !important; } #ru-bulk .ru-log-box span { margin: 0 !important; padding: 0 !important; display: inline; } #ru-bulk .ru-bar { height: 6px; background: #333; border-radius: 3px; margin: 8px 0 0 0; overflow: hidden; } #ru-bulk .ru-bar > i { display: block; height: 100%; width: 0; background: #37c46a; transition: width .2s; } #ru-bulk .ru-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0 0 0 !important; padding: 0 !important; width: 100% !important; } #ru-bulk .ru-row:first-child { margin-top: 0 !important; } #ru-bulk .ru-ok { color: #7fe39a !important; } #ru-bulk .ru-err { color: #ff8585 !important; } #ru-bulk .ru-warn { color: #ffd166 !important; } #ru-bulk .ru-plain { color: #9aa3b2 !important; } #ru-bulk label { display: inline-flex; gap: 5px; align-items: center; user-select: none; cursor: pointer; white-space: nowrap; margin: 0 !important; font-weight: normal !important; } #ru-bulk input[type=number], #ru-bulk input[type=text] { width: 70px; background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; outline: none; } #ru-bulk input[type=text].ru-wide { width: 130px; } #ru-bulk select { background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; } #ru-bulk input[type=checkbox] { margin: 0 !important; transform: scale(1.1); } #ru-bulk .ru-muted { color: #9aa3b2; } #ru-bulk .ru-sep { border-top: 1px solid #3a4150; margin: 8px 0 !important; padding: 0 !important; }`);
+GM_addStyle(`#ru-bulk, #ru-bulk * { box-sizing: border-box !important; } #ru-bulk { position: fixed; right: 12px; bottom: 12px; z-index: 999999; width: min(680px, calc(100vw - 24px)); text-align: left !important; background: #1f2430; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 10px; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important; box-shadow: 0 8px 28px rgba(0,0,0,.45); margin: 0; padding: 0; } #ru-bulk .ru-hd { padding: 8px 10px; background: #2a3142; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: grab; user-select: none; margin: 0; } #ru-bulk .ru-hd:active { cursor: grabbing; } #ru-bulk .ru-hd b { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0; padding: 0; } #ru-bulk .ru-bd { padding: 10px; margin: 0; } #ru-bulk .ru-hd-btns { display: flex; gap: 4px; align-items: center; } #ru-bulk button#ru-close:hover { background: #d9534f !important; } #ru-bulk button { background: #2f81c4; color: #fff; border: 0; border-radius: 5px; padding: 6px 11px; cursor: pointer; margin: 0; font: inherit; user-select: none; white-space: nowrap; } #ru-bulk button.ru-sec { background: #444c5c; } #ru-bulk button.ru-go { background: #2e9e5b; } #ru-bulk button:hover { filter: brightness(1.08); } #ru-bulk button:disabled { opacity: .45; cursor: not-allowed; filter: none; } #ru-bulk .ru-log-box { min-height: 120px; max-height: 40vh; overflow-x: hidden !important; overflow-y: auto !important; background: #11151c; border: 1px solid #333; border-radius: 6px; padding: 7px !important; margin: 8px 0 0 0 !important; font: 11.5px/1.4 ui-monospace, Menlo, Consolas, monospace !important; white-space: pre-wrap !important; word-break: break-word !important; text-align: left !important; } #ru-bulk .ru-log-box span { margin: 0 !important; padding: 0 !important; display: inline; } #ru-bulk .ru-bar { height: 6px; background: #333; border-radius: 3px; margin: 8px 0 0 0; overflow: hidden; } #ru-bulk .ru-bar > i { display: block; height: 100%; width: 0; background: #37c46a; transition: width .2s; } #ru-bulk .ru-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0 0 0 !important; padding: 0 !important; width: 100% !important; } #ru-bulk .ru-row:first-child { margin-top: 0 !important; } #ru-bulk .ru-ok { color: #7fe39a !important; } #ru-bulk .ru-err { color: #ff8585 !important; } #ru-bulk .ru-warn { color: #ffd166 !important; } #ru-bulk .ru-plain { color: #9aa3b2 !important; } #ru-bulk label { display: inline-flex; gap: 5px; align-items: center; user-select: none; cursor: pointer; white-space: nowrap; margin: 0 !important; font-weight: normal !important; } #ru-bulk input[type=number], #ru-bulk input[type=text] { width: 70px; background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; outline: none; } #ru-bulk input[type=text].ru-wide { width: 130px; } #ru-bulk select { background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; } #ru-bulk input[type=checkbox] { margin: 0 !important; transform: scale(1.1); } #ru-bulk .ru-muted { color: #9aa3b2; } #ru-bulk .ru-sep { border-top: 1px solid #3a4150; margin: 8px 0 !important; padding: 0 !important; } #ru-bulk .ru-plan-box { margin: 8px 0 0 0 !important; } #ru-bulk .ru-plan-title { margin: 0 !important; } #ru-bulk .ru-plan-title b { font-weight: 600; } #ru-bulk .ru-plan-hd { gap: 8px; } #ru-bulk .ru-plan-hd label { white-space: nowrap; } #ru-bulk .ru-plan-list { max-height: 46vh; overflow: auto; background: #11151c; border: 1px solid #333; border-radius: 6px; margin: 6px 0 0 0 !important; font: 11.5px/1.35 ui-monospace, Menlo, Consolas, monospace !important; } #ru-bulk .ru-plan-row { display: flex; gap: 6px; align-items: center; padding: 3px 6px; border-bottom: 1px solid #232936; } #ru-bulk .ru-plan-row:last-child { border-bottom: 0; } #ru-bulk .ru-plan-row.ru-pr-issue { background: #2a2113; } #ru-bulk .ru-plan-row.ru-pr-none { background: #2a1717; } #ru-bulk .ru-plan-row.ru-pr-manual { background: #12242a; } #ru-bulk .ru-pr-num { flex: 0 0 42px; color: #9aa3b2; text-align: right; } #ru-bulk .ru-pr-title { flex: 1 1 46%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #ru-bulk .ru-pr-arrow { flex: 0 0 auto; color: #6b7686; } #ru-bulk .ru-pr-sel { flex: 1 1 38%; min-width: 0; max-width: 100%; } #ru-bulk .ru-pr-chrf { flex: 0 0 46px; text-align: right; color: #9aa3b2; } #ru-bulk .ru-pr-chrf.ru-bad { color: #ff8585; } #ru-bulk .ru-pr-chrf.ru-good { color: #7fe39a; } #ru-bulk .ru-pr-status { flex: 0 0 auto; color: #7f8b9c; font-size: 10.5px; }`);
 
 const panel = document.createElement('div');
 panel.id = 'ru-bulk';
 /* Разметку панели разбирает DOMParser, а не innerHTML: подстановка шаблона в
    innerHTML — это путь для HTML, а нужен ровно разобранный DOM (и статические
    значения CFG здесь единственные данные, но правило одно на весь файл). */
-const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v2.2</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> </div> <div class="ru-row"> <label title="Перечитать главу после записи"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> <label title="Если номер не найден — искать по названию"><input type="checkbox" id="ru-fallback-title"> Title fallback</label> <label title="Сверять главу с уже сохранённым переводом (chrF) — заслон от разъехавшейся нумерации"><input type="checkbox" id="ru-check-same" ${CFG.checkSameChapter ? 'checked' : ''}> Сверка главы</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div>`;
+const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v${APP_VERSION}</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> <button id="ru-plan" class="ru-sec" disabled title="Показать сопоставление глав файла с главами сайта — с правкой вручную">План</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> </div> <div class="ru-plan-box" id="ru-plan-box" style="display:none"> <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет</b></div> <div class="ru-row ru-plan-hd"> <label title="Показать только спорные и ненайденные строки"><input type="checkbox" id="ru-plan-issues"> только спорные</label> <label title="Оставить в списке только выбранные строки"><input type="checkbox" id="ru-plan-only"> только выделенные</label> <button class="ru-sec" id="ru-plan-skip" title="Отметить выделенные строки как «не лить»">Снять</button> <button class="ru-sec" id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button> <button class="ru-sec" id="ru-plan-align" title="Черновое выравнивание по порядку оглавления (когда нумерация разъехалась)">По порядку</button> <button class="ru-sec" id="ru-plan-check" title="Прочитать выделенные главы и сверить текст (chrF)">Проверить</button> <button class="ru-sec" id="ru-plan-save" title="Сохранить план в JSON — его можно поправить и загрузить обратно">Экспорт</button> <button class="ru-sec" id="ru-plan-load" title="Загрузить план из JSON">Импорт</button> <input type="file" id="ru-plan-file" accept="application/json,.json" style="display:none"> </div> <div class="ru-plan-list" id="ru-plan-list"></div> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> </div> <div class="ru-row"> <label title="Перечитать главу после записи"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> <label title="Если номер не найден — искать по названию"><input type="checkbox" id="ru-fallback-title"> Title fallback</label> <label title="Сверять главу с уже сохранённым переводом (chrF) — заслон от разъехавшейся нумерации"><input type="checkbox" id="ru-check-same" ${CFG.checkSameChapter ? 'checked' : ''}> Сверка главы</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div>`;
 {
   const tplDoc = new DOMParser().parseFromString('<body>' + panelMarkup + '</body>', 'text/html');
   for (const node of [...tplDoc.body.childNodes]) panel.appendChild(document.adoptNode(node));
@@ -709,12 +991,330 @@ const log = (msg, cls) => {
   logEl.scrollTop = logEl.scrollHeight;
 };
 
-let parsed = [], aborted = false;
+/* ---------- состояние панели ---------- */
+let parsed = [];
+let aborted = false;
+let plan = null;            // готовый план: его же заливают кнопки
+let site = null;            // оглавление книги на момент построения плана
+let selected = new Set();   // fi выделенных строк
+let touched = new Set();    // fi строк, назначенных вручную в этом проходе
+let reports = new Map();    // fi → {status, chrf} из последнего прогона
 const ui = {
   log,
   get aborted() { return aborted; },
-  setProgress: (i, n) => $('ru-bar-fill').style.width = Math.round(i / n * 100) + '%',
+  setProgress: (i, n) => { $('ru-bar-fill').style.width = Math.round(i / Math.max(1, n) * 100) + '%'; },
 };
+
+/* План живёт в браузере для этой книги: перезагрузка страницы Rulate не
+   должна забирать разбор шестисот строк. Ключ — id книги, не URL панели. */
+const storeKey = () => 'rlPlan:' + (bookIdFromUrl() || '');
+function savePlanLocal() {
+  if (!plan) return;
+  try {
+    localStorage.setItem(storeKey(), JSON.stringify({
+      data: planToData(plan, parsed),
+      manual: collectOverrides(plan, parsed),
+      source: parsed.map(c => c.title),
+    }));
+  } catch (e) { /* переполнилось хранилище — не повод падать */ }
+}
+function loadPlanLocal() {
+  try {
+    const raw = localStorage.getItem(storeKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+/* ---------- таблица плана ---------- */
+const allSiteOptions = () => (site ? site.ordered : []).map(g => ({ id: String(g.chapterId), title: g.siteTitle, url: g.url }));
+
+function candOptions(row) {
+  /* Порядок подсказок: сам план, кандидаты по номеру, соседние по оглавлению,
+     затем вся книга. Соседи нужны, когда нумерация разъехалась: сайт и файл
+     идут в одном порядке, и верный ответ обычно рядом. */
+  const out = [];
+  const seen = new Set();
+  const push = (g) => {
+    const id = String(g.chapterId != null ? g.chapterId : g.id);
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push({ id, title: g.siteTitle != null ? g.siteTitle : g.title });
+  };
+  if (row.site) push({ chapterId: row.site.chapterId, siteTitle: row.site.siteTitle });
+  row.cands.forEach(push);
+  const all = allSiteOptions();
+  const at = all.findIndex(g => row.site && g.id === String(row.site.chapterId));
+  const anchor = at >= 0 ? at : -1;
+  for (const d of [1, -1, 2, -2]) if (anchor >= 0 && all[anchor + d]) push({ chapterId: all[anchor + d].id, siteTitle: all[anchor + d].title });
+  return { list: out, all };
+}
+
+function planRowClass(row) {
+  if (row.how === 'вручную') return 'ru-pr-manual';
+  if (!row.site) return row.cands.length ? 'ru-pr-issue' : 'ru-pr-none';
+  return row.host && String(row.host) !== String(row.fi) ? 'ru-pr-issue' : '';
+}
+
+function renderPlan() {
+  const box = $('ru-plan-box');
+  const list = $('ru-plan-list');
+  if (!plan) { box.style.display = 'none'; return; }
+  box.style.display = '';
+
+  const onlyIssues = $('ru-plan-issues').checked;
+  const onlySel = $('ru-plan-only').checked;
+  /* «только спорные» — строки, которые ещё требуют решения. Только что
+     назначенная руками строка остаётся видимой до переключения фильтра:
+     иначе выбор исчезает из-под курсора вместе с результатом. */
+  const needsDecision = (r) => !r.site || (r.host && String(r.host) !== String(r.fi));
+  const rows = plan.rows.filter(r => (onlySel ? selected.has(r.fi) : true)
+    && (onlyIssues ? needsDecision(r) || touched.has(r.fi) : true));
+
+  const ok = plan.rows.filter(r => r.site && !(r.host && String(r.host) !== String(r.fi))).length;
+  const ambiguous = plan.rows.filter(r => !r.site && r.cands.length).length;
+  const none = plan.rows.filter(r => !r.site && !r.cands.length).length;
+  const manual = plan.rows.filter(r => r.how === 'вручную').length;
+  $('ru-plan-stat').textContent = `План: сопоставлено ${ok}, спорных ${ambiguous}, не найдено ${none}` + (manual ? `, вручную ${manual}` : '') + `, проблемных ${plan.problems.length}`;
+
+  list.textContent = '';
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'ru-plan-row ru-pr-none';
+    empty.textContent = (onlyIssues || onlySel) ? 'Строк по фильтру нет.' : 'Строк нет.';
+    list.appendChild(empty);
+  }
+
+  for (const row of rows) {
+    const sel = document.createElement('input');
+    sel.type = 'checkbox';
+    sel.checked = selected.has(row.fi);
+    sel.title = 'Выделить строку (для «только выделенные» и «Проверить»)';
+    sel.onchange = () => { if (sel.checked) selected.add(row.fi); else selected.delete(row.fi); renderPlan(); };
+
+    const num = document.createElement('span');
+    num.className = 'ru-pr-num';
+    num.textContent = row.num != null ? row.num : '—';
+
+    const title = document.createElement('span');
+    title.className = 'ru-pr-title';
+    title.textContent = row.title;
+    title.title = row.title;
+
+    const arrow = document.createElement('span');
+    arrow.className = 'ru-pr-arrow';
+    arrow.textContent = '→';
+
+    const cell = document.createElement('span');
+    cell.className = 'ru-pr-sel';
+    const select = document.createElement('select');
+    select.className = 'ru-pr-sel';
+    select.title = row.site ? 'Глава на сайте: id=' + row.site.chapterId : 'Глава на сайте не определена — выберите';
+    const noneOpt = document.createElement('option');
+    noneOpt.value = '';
+    noneOpt.textContent = '— не выбрана —';
+    select.appendChild(noneOpt);
+
+    const { list: cands, all } = candOptions(row);
+    const grp = document.createElement('optgroup');
+    grp.label = 'кандидаты';
+    for (const c of cands) {
+      const o = document.createElement('option');
+      o.value = c.id;
+      o.textContent = `id=${c.id} ${c.title}`;
+      if (row.site && c.id === String(row.site.chapterId)) o.selected = true;
+      grp.appendChild(o);
+    }
+    if (cands.length) select.appendChild(grp);
+
+    const grpAll = document.createElement('optgroup');
+    grpAll.label = 'вся книга';
+    for (const g of all) {
+      if (cands.some(c => c.id === g.id)) continue;
+      const o = document.createElement('option');
+      o.value = g.id;
+      o.textContent = `id=${g.id} ${g.title}`;
+      if (row.site && g.id === String(row.site.chapterId)) o.selected = true;
+      grpAll.appendChild(o);
+    }
+    select.appendChild(grpAll);
+    select.onchange = () => {
+      const res = planAssign(plan, row.fi, select.value || null);
+      if (!res.ok) log('Не назначено: ' + res.error, 'err');
+      else {
+        touched.add(row.fi);
+        log(`Строка ${row.num != null ? row.num : '«' + row.title + '»'}: ${select.value ? 'глава сайта id=' + select.value : 'пропуск'} (вручную)`, 'plain');
+      }
+      savePlanLocal();
+      renderPlan();
+    };
+    cell.appendChild(select);
+
+    const chrf = document.createElement('span');
+    const rep = reports.get(row.fi);
+    chrf.className = 'ru-pr-chrf';
+    if (rep && rep.chrf != null) {
+      chrf.textContent = rep.chrf.toFixed(2);
+      chrf.classList.add(rep.chrf >= CFG.minChrf ? 'ru-good' : 'ru-bad');
+    } else chrf.textContent = '';
+
+    const status = document.createElement('span');
+    status.className = 'ru-pr-status';
+    status.textContent = rep ? rep.status : row.how;
+
+    const tr = document.createElement('div');
+    tr.className = 'ru-plan-row ' + planRowClass(row);
+    tr.append(sel, num, title, arrow, cell, chrf, status);
+    list.appendChild(tr);
+  }
+
+  const foot = document.createElement('div');
+  foot.className = 'ru-plan-row ru-pr-status';
+  foot.textContent = `${rows.length} из ${plan.rows.length} строк · выделено ${selected.size}`;
+  list.appendChild(foot);
+  $('ru-start').disabled = $('ru-dry').disabled = parsed.length === 0;
+}
+
+/* ---------- построение плана ---------- */
+async function refreshPlan() {
+  if (!parsed.length) { log('Сначала выберите .txt', 'warn'); return null; }
+  const bookId = bookIdFromUrl();
+  if (!bookId) { log('Не определён id книги из URL.', 'err'); return null; }
+  $('ru-plan').disabled = true;
+  try {
+    site = await buildSiteMap(bookId);
+    logSiteReport(site, ui);
+    const saved = loadPlanLocal();
+    const overrides = saved && saved.manual ? saved.manual : null;
+    plan = buildPlan(parsed, site, overrides);
+    selected = new Set();
+    touched = new Set();
+    reports = new Map();
+    if (overrides && Object.keys(overrides).length) {
+      const applied = plan.rows.filter(r => r.how === 'вручную' || r.how.startsWith('пропуск (ваше')).length;
+      log(`Восстановлено ваших решений из прошлого раза: ${applied} из ${Object.keys(overrides).length}`, 'plain');
+    }
+    log(`План: строк ${plan.rows.length}, спорных ${plan.rows.filter(r => !r.site && r.cands.length).length}, не найдено ${plan.rows.filter(r => !r.site && !r.cands.length).length}. Смотрите строки с цветом.`, 'ok');
+    savePlanLocal();
+    renderPlan();
+    return plan;
+  } catch (e) {
+    log('Ошибка чтения оглавления: ' + e.message, 'err');
+    return null;
+  } finally {
+    $('ru-plan').disabled = false;
+  }
+}
+
+/* Проверка выделенных (или всех спорных): читаем страницу главы, сверяем
+   сохранённый перевод через chrF. Дорого — по запросу на строку, поэтому
+   только по кнопке и с прогрессом. */
+async function checkRows() {
+  if (!plan) { log('Сначала постройте план.', 'warn'); return; }
+  let targets = plan.rows.filter(r => selected.has(r.fi));
+  if (!targets.length) targets = plan.rows.filter(r => !r.site || (r.host && String(r.host) !== String(r.fi)));
+  if (!targets.length) { log('Нечего проверять: спорных строк нет. Выделите строки в панели.', 'warn'); return; }
+  log(`=== ПРОВЕРКА ${targets.length} строк (chrF) ===`, 'ok');
+  aborted = false;
+  $('ru-start').disabled = $('ru-dry').disabled = true;
+  $('ru-stop').disabled = false;
+
+  for (let i = 0; i < targets.length; i++) {
+    if (aborted) { log('Проверка остановлена.', 'warn'); break; }
+    const row = targets[i];
+    ui.setProgress(i, targets.length);
+    const ch = parsed[row.fi];
+    try {
+      /* Проверяем ту главу, которую предлагает план: выбранную, иначе первого
+         кандидата по номеру. Строка «не найдена» проверке не подлежит. */
+      const probe = row.site || row.cands[0];
+      if (!probe) { reports.set(row.fi, { status: 'нечего проверять', chrf: null }); continue; }
+      const { html, doc } = await getDoc(siteUrl(bookIdFromUrl(), probe.chapterId));
+      await globalPause(CFG.intraMs, 0);
+      const userId = userIdFromHtml(html);
+      if (!userId) { log('Нет данных пользователя — вы залогинены?', 'err'); break; }
+      const pairs = readChapterIds(doc, userId);
+      if (!pairs.length) { reports.set(row.fi, { status: 'нет перевода', chrf: null }); log(`[${i + 1}/${targets.length}] «${ch.title}» — нет вашего перевода.`, 'warn'); continue; }
+      const savedText = readSavedText(doc, pairs[0].trId);
+      if (savedText == null) { reports.set(row.fi, { status: 'на сайте пусто', chrf: null }); log(`[${i + 1}/${targets.length}] «${ch.title}» — на сайте пусто.`, 'plain'); continue; }
+      const res = looksLikeSameChapter(savedText, ch.text);
+      reports.set(row.fi, { status: res.chrf >= CFG.minChrf ? 'похожа' : 'НЕ похожа', chrf: res.chrf });
+      log(`[${i + 1}/${targets.length}] «${ch.title}» ↔ id=${probe.chapterId}: chrF ${res.chrf.toFixed(3)} — ${res.chrf >= CFG.minChrf ? 'та же глава' : 'НЕ та глава'}`, res.chrf >= CFG.minChrf ? 'ok' : 'err');
+      renderPlan();
+    } catch (e) {
+      reports.set(row.fi, { status: 'ошибка', chrf: null });
+      log(`[${i + 1}/${targets.length}] «${ch.title}» — ошибка: ${e.message}`, 'err');
+    }
+    await globalPause(CFG.dryMs, 0);
+  }
+  ui.setProgress(targets.length, targets.length);
+  log('=== ПРОВЕРКА ЗАВЕРШЕНА ===', 'ok');
+  $('ru-stop').disabled = true;
+  $('ru-start').disabled = $('ru-dry').disabled = parsed.length === 0;
+  renderPlan();
+}
+
+/* ---------- события таблицы ---------- */
+$('ru-plan').onclick = () => refreshPlan();
+$('ru-plan-issues').onchange = () => { touched = new Set(); renderPlan(); };
+$('ru-plan-only').onchange = () => { touched = new Set(); renderPlan(); };
+$('ru-plan-check').onclick = () => checkRows();
+$('ru-plan-skip').onclick = () => {
+  if (!plan || !selected.size) { log('Выделите строки в таблице.', 'warn'); return; }
+  const n = planSkipSelected(plan, [...selected]);
+  log(`Снято выделенных строк: ${n}`, 'ok');
+  savePlanLocal();
+  renderPlan();
+};
+$('ru-plan-reset').onclick = () => {
+  if (!plan || !selected.size) { log('Выделите строки в таблице.', 'warn'); return; }
+  const n = planResetSelected(plan, parsed, [...selected]);
+  log(`Возвращено к решению скрипта: ${n}`, 'ok');
+  savePlanLocal();
+  renderPlan();
+};
+$('ru-plan-align').onclick = () => {
+  if (!plan) { log('Сначала постройте план.', 'warn'); return; }
+  const res = planAlignByOrder(plan, parsed);
+  log('По порядку: ' + res.note, res.suggested ? 'warn' : 'plain');
+  savePlanLocal();
+  renderPlan();
+};
+$('ru-plan-save').onclick = () => {
+  if (!plan) { log('Сначала постройте план.', 'warn'); return; }
+  const data = planToData(plan, parsed);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  a.download = `rulate-plan-${data.book}.json`;
+  a.click();
+  log(`План выгружен: rulate-plan-${data.book}.json`, 'ok');
+  const a2 = document.createElement('a');
+  a2.href = URL.createObjectURL(new Blob([planToText(plan, parsed)], { type: 'text/plain;charset=utf-8' }));
+  a2.download = `rulate-plan-${data.book}.txt`;
+  a2.click();
+};
+$('ru-plan-load').onclick = () => $('ru-plan-file').click();
+$('ru-plan-file').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    let data;
+    try { data = JSON.parse(rd.result); } catch (err) { log('Это не JSON-файл плана: ' + err.message, 'err'); return; }
+    if (!site) {
+      log('Сначала нажмите «План» — импорт сверяется с оглавлением книги.', 'warn');
+      return;
+    }
+    const res = planFromData(data, parsed, site);
+    res.notes.forEach(n => log('   · ' + n, 'warn'));
+    if (!Object.keys(res.overrides).length) { log('Из файла нечего применить.', 'warn'); return; }
+    const applied = applyOverrides(plan, parsed, res.overrides);
+    log(`Импорт: назначено ${applied.assigned}, пропусков ${applied.skipped}` + (applied.lost ? `, потеряно ${applied.lost} (глав нет на сайте)` : ''), applied.lost ? 'warn' : 'ok');
+    savePlanLocal();
+    renderPlan();
+  };
+  rd.readAsText(f, 'utf-8');
+});
 
 (function makeDraggable() {
   const handle = panel.querySelector('.ru-hd');
@@ -783,7 +1383,15 @@ $('ru-file').addEventListener('change', (e) => {
     const problems = parsed.filter(c => c.problem);
     const valid = parsed.filter(c => !c.problem);
     $('ru-count').textContent = valid.length;
+    $('ru-plan').disabled = valid.length === 0;
     $('ru-start').disabled = $('ru-dry').disabled = valid.length === 0;
+    plan = null;
+    site = null;
+    selected = new Set();
+    reports = new Map();
+    $('ru-plan-issues').checked = false;
+    $('ru-plan-only').checked = false;
+    renderPlan();
     log(`Файл «${f.name}»: глав ${parsed.length} (валидных ${valid.length}).`, valid.length ? 'ok' : 'err');
     if (problems.length) {
       log(`⚠ Проблемных в файле: ${problems.length} (будут пропущены)`, 'warn');
@@ -808,11 +1416,24 @@ async function launch(dryRun) {
   CFG.titleMode = $('ru-title-mode').value;
   const rangeStr = $('ru-range').value.trim();
 
+  const onlySel = $('ru-plan-only').checked && selected.size > 0;
+  const onlyFi = onlySel ? [...selected] : null;
+  if (plan && selected.size && !$('ru-plan-only').checked) {
+    log(`Выделено ${selected.size} строк, но «только выделенные» не отмечено — пойдёт весь план.`, 'plain');
+  }
+  if (onlyFi) log(`Только выделенные строки: ${onlyFi.length}`, 'plain');
+
   $('ru-start').disabled = $('ru-dry').disabled = true;
   $('ru-stop').disabled = false;
   log(`=== ${dryRun ? 'DRY-RUN' : 'ЗАПУСК'} ===`, 'ok');
   try {
-    await run(parsed, { dryRun, skipSame: CFG.skipSame, rangeStr }, ui);
+    const res = await run(parsed, { dryRun, skipSame: CFG.skipSame, rangeStr, plan, onlyFi }, ui);
+    if (res && res.reports) {
+      reports = new Map(res.reports.map(r => [r.fi, r]));
+      plan = res.plan || plan;
+      renderPlan();
+      savePlanLocal();
+    }
   } finally {
     $('ru-start').disabled = $('ru-dry').disabled = parsed.length === 0;
     $('ru-stop').disabled = true;
