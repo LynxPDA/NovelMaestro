@@ -14,8 +14,8 @@ const CFG = {
   fallbackByTitle: false,
   // проверка «та ли это глава»: chrF с уже сохранённым переводом.
   // Калибровка на реальных главах: та же глава — chrF 0.958–0.982,
-  // разные главы одной книги — 0.480–0.524
-  checkSameChapter: true,
+  // разные главы одной книги — 0.480–0.524. Ноль выключает проверку:
+  // переключатель один, и это порог, а не отдельная галка рядом с ним.
   minChrf: 0.75,
   // пауза между главами в dry-run: страницы читаются, но записи нет
   dryMs: 150,
@@ -431,6 +431,28 @@ function planMatches(parsed, site) {
   return plan;
 }
 
+/* Порог сверки из поля панели: «0» — проверка выключена, пустое поле — порог
+   по умолчанию. Пустое не означает «выключено»: стёртое по случайности поле не
+   должно снимать последний заслон перед записью в чужую главу. */
+const CHRF_DEFAULT = CFG.minChrf;
+
+function parseChrfThreshold(raw) {
+  const t = String(raw == null ? '' : raw).replace(',', '.').trim();
+  if (t === '') return CHRF_DEFAULT;
+  const v = Number(t);
+  if (!Number.isFinite(v)) return CHRF_DEFAULT;
+  if (v < 0) return 0;
+  if (v > 1) return 1;
+  return v;
+}
+
+/* Оценка счёта для колонки chrF: при выключенной проверке судить нечем —
+   число показываем, но не красим в «хорошо/плохо». */
+function chrfVerdict(score) {
+  if (CFG.minChrf <= 0) return 'off';
+  return score >= CFG.minChrf ? 'good' : 'bad';
+}
+
 /* ---------- план и его правка ---------- */
 /* План — данные, а не побочный результат заливки: {rows, order, problems, site}.
    Строка — «глава файла (fi) → глава сайта (site)» либо `site: null` с причиной
@@ -807,7 +829,7 @@ async function writePlan(plan, parsed, opts, ui) {
          переводом — это тот же текст, что мы льём, только прошлой версии.
          Не похоже — не пишем, даже если строку назначил человек. */
       let similar = null;
-      if (CFG.checkSameChapter && savedText != null) similar = looksLikeSameChapter(savedText, ch.text);
+      if (CFG.minChrf > 0 && savedText != null) similar = looksLikeSameChapter(savedText, ch.text);
       if (similar && !similar.ok) {
         st.fail++;
         ui.log(`     ОТКАЗ: глава на сайте не похожа на нашу (chrF ${similar.chrf.toFixed(3)} < ${CFG.minChrf}) — нумерация разъехалась?`, 'err');
@@ -941,7 +963,7 @@ panel.id = 'ru-bulk';
 /* Разметку панели разбирает DOMParser, а не innerHTML: подстановка шаблона в
    innerHTML — это путь для HTML, а нужен ровно разобранный DOM (и статические
    значения CFG здесь единственные данные, но правило одно на весь файл). */
-const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v${APP_VERSION}</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> <button id="ru-plan" class="ru-sec" disabled title="Показать сопоставление глав файла с главами сайта — с правкой вручную">План</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> </div> <div class="ru-plan-box" id="ru-plan-box" style="display:none"> <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет</b></div> <div class="ru-row ru-plan-hd"> <label title="Показать только спорные и ненайденные строки"><input type="checkbox" id="ru-plan-issues"> только спорные</label> <label title="Оставить в списке только выбранные строки"><input type="checkbox" id="ru-plan-only"> только выделенные</label> <button class="ru-sec" id="ru-plan-skip" title="Отметить выделенные строки как «не лить»">Снять</button> <button class="ru-sec" id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button> <button class="ru-sec" id="ru-plan-align" title="Черновое выравнивание по порядку оглавления (когда нумерация разъехалась)">По порядку</button> <button class="ru-sec" id="ru-plan-check" title="Прочитать выделенные главы и сверить текст (chrF)">Проверить</button> <button class="ru-sec" id="ru-plan-save" title="Сохранить план в JSON — его можно поправить и загрузить обратно">Экспорт</button> <button class="ru-sec" id="ru-plan-load" title="Загрузить план из JSON">Импорт</button> <input type="file" id="ru-plan-file" accept="application/json,.json" style="display:none"> </div> <div class="ru-plan-list" id="ru-plan-list"></div> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> </div> <div class="ru-row"> <label title="Перечитать главу после записи"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> <label title="Если номер не найден — искать по названию"><input type="checkbox" id="ru-fallback-title"> Title fallback</label> <label title="Сверять главу с уже сохранённым переводом (chrF) — заслон от разъехавшейся нумерации"><input type="checkbox" id="ru-check-same" ${CFG.checkSameChapter ? 'checked' : ''}> Сверка главы</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div>`;
+const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v${APP_VERSION}</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> <button id="ru-plan" class="ru-sec" disabled title="Показать сопоставление глав файла с главами сайта — с правкой вручную">План</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> </div> <div class="ru-plan-box" id="ru-plan-box" style="display:none"> <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет</b></div> <div class="ru-row ru-plan-hd"> <label title="Показать только спорные и ненайденные строки"><input type="checkbox" id="ru-plan-issues"> только спорные</label> <label title="Оставить в списке только выбранные строки"><input type="checkbox" id="ru-plan-only"> только выделенные</label> <button class="ru-sec" id="ru-plan-skip" title="Отметить выделенные строки как «не лить»">Снять</button> <button class="ru-sec" id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button> <button class="ru-sec" id="ru-plan-align" title="Черновое выравнивание по порядку оглавления (когда нумерация разъехалась)">По порядку</button> <button class="ru-sec" id="ru-plan-check" title="Прочитать выделенные главы и сверить текст (chrF)">Проверить</button> <button class="ru-sec" id="ru-plan-save" title="Сохранить план в JSON — его можно поправить и загрузить обратно">Экспорт</button> <button class="ru-sec" id="ru-plan-load" title="Загрузить план из JSON">Импорт</button> <input type="file" id="ru-plan-file" accept="application/json,.json" style="display:none"> </div> <div class="ru-plan-list" id="ru-plan-list"></div> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> <span class="ru-muted" style="margin-left:6px" title="Порог сверки главы с уже сохранённым переводом на сайте: 0.75 — обычный, 0 — сверка выключена">chrF:</span> <input id="ru-chrf" type="number" value="${CFG.minChrf}" min="0" max="1" step="0.05" title="Порог сверки главы с уже сохранённым переводом на сайте. 1 — тексты обязаны совпасть почти дословно, 0.75 — обычный порог (мелкие правки проходят, чужая глава нет), 0 — сверка выключена. Пустое поле — порог по умолчанию."> </div> <div class="ru-row"> <label title="Перечитать главу после записи"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> <label title="Если номер не найден — искать по названию"><input type="checkbox" id="ru-fallback-title"> Title fallback</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div>`;
 {
   const tplDoc = new DOMParser().parseFromString('<body>' + panelMarkup + '</body>', 'text/html');
   for (const node of [...tplDoc.body.childNodes]) panel.appendChild(document.adoptNode(node));
@@ -1127,7 +1149,8 @@ function renderPlan() {
     chrf.className = 'ru-pr-chrf';
     if (rep && rep.chrf != null) {
       chrf.textContent = rep.chrf.toFixed(2);
-      chrf.classList.add(rep.chrf >= CFG.minChrf ? 'ru-good' : 'ru-bad');
+      const verdict = chrfVerdict(rep.chrf);
+      if (verdict !== 'off') chrf.classList.add(verdict === 'good' ? 'ru-good' : 'ru-bad');
     } else chrf.textContent = '';
 
     const status = document.createElement('span');
@@ -1210,8 +1233,9 @@ async function checkRows() {
       const savedText = readSavedText(doc, pairs[0].trId);
       if (savedText == null) { reports.set(row.fi, { status: 'на сайте пусто', chrf: null }); log(`[${i + 1}/${targets.length}] «${ch.title}» — на сайте пусто.`, 'plain'); continue; }
       const res = looksLikeSameChapter(savedText, ch.text);
-      reports.set(row.fi, { status: res.chrf >= CFG.minChrf ? 'похожа' : 'НЕ похожа', chrf: res.chrf });
-      log(`[${i + 1}/${targets.length}] «${ch.title}» ↔ id=${probe.chapterId}: chrF ${res.chrf.toFixed(3)} — ${res.chrf >= CFG.minChrf ? 'та же глава' : 'НЕ та глава'}`, res.chrf >= CFG.minChrf ? 'ok' : 'err');
+      const verdict = chrfVerdict(res.chrf);
+      reports.set(row.fi, { status: verdict === 'off' ? 'chrF (без порога)' : verdict === 'good' ? 'похожа' : 'НЕ похожа', chrf: res.chrf });
+      log(`[${i + 1}/${targets.length}] «${ch.title}» ↔ id=${probe.chapterId}: chrF ${res.chrf.toFixed(3)} — ${verdict === 'off' ? 'порог не задан, судить нечем' : verdict === 'good' ? 'та же глава' : 'НЕ та глава'}`, verdict === 'bad' ? 'err' : 'ok');
       renderPlan();
     } catch (e) {
       reports.set(row.fi, { status: 'ошибка', chrf: null });
@@ -1383,7 +1407,7 @@ async function launch(dryRun) {
   CFG.verify = $('ru-verify').checked;
   CFG.skipSame = $('ru-skip-same').checked;
   CFG.fallbackByTitle = $('ru-fallback-title').checked;
-  CFG.checkSameChapter = $('ru-check-same').checked;
+  CFG.minChrf = parseChrfThreshold($('ru-chrf').value);
   CFG.delayMs = parseInt($('ru-delay').value, 10) || 2500;
   CFG.jitterMs = parseInt($('ru-jitter').value, 10) || 0;
   CFG.titleMode = $('ru-title-mode').value;

@@ -88,7 +88,7 @@ function boot(site) {
     'document', 'location', 'fetch', 'DOMParser', 'FormData', 'Blob',
     BODY + '\nreturn { CFG, parseChaptersFile, buildSiteMap, planMatches, run, chrf, looksLikeSameChapter,'
       + ' buildPlan, planAssign, planToData, planFromData, planToText, applyOverrides, collectOverrides, writePlan,'
-      + ' planSkipSelected, planResetSelected, planAlignByOrder };',
+      + ' planSkipSelected, planResetSelected, planAlignByOrder, parseChrfThreshold };',
   )(
     document,
     { pathname: `/book/${BOOK}`, origin: 'https://tl.rulate.ru' },
@@ -100,8 +100,8 @@ function boot(site) {
   api.CFG.verify = false; // стенд не сохраняет текст, сверка после записи здесь не про сопоставление
   /* Тексты-заглушки («н1» против «с1») не похожи друг на друга, и сверка
      главы по chrF справедливо отказала бы — но эти тесты про СОПОСТАВЛЕНИЕ,
-     а не про неё. Свои проверки chrF есть ниже, отдельными тестами. */
-  api.CFG.checkSameChapter = false;
+     а не про неё. Порог 0 = сверка выключена. Свои проверки chrF — ниже. */
+  api.CFG.minChrf = 0;
   api.CFG.delayMs = 0;
   api.CFG.intraMs = 0;
   return { api, posts };
@@ -199,6 +199,7 @@ test('rulate: одна и та же глава дважды в файле — в
 
 test('rulate: chrF различает свою главу и чужую', () => {
   const { api } = boot([]);
+  api.CFG.minChrf = 0.75; // стенд по умолчанию сверку выключает — здесь она и проверяется
   const base = ('Слово за словом эта глава рассказывает о человеке, который пришёл в город и нашёл судьбу. ').repeat(20);
   const edited = base.replace(/судьбу/g, 'участь').replace(/город/g, 'град');
   const other = ('Совсем другой текст про море, корабли и шторм, где герой сражается с волнами. ').repeat(20);
@@ -210,6 +211,7 @@ test('rulate: chrF различает свою главу и чужую', () => 
 
 test('rulate: обрезанный файл не проходит сверку', () => {
   const { api } = boot([]);
+  api.CFG.minChrf = 0.75;
   const full = ('Длинная глава с большим количеством текста и подробностями повествования. ').repeat(40);
   const cut = full.slice(0, Math.floor(full.length * 0.1));
   const res = api.looksLikeSameChapter(full, cut);
@@ -391,7 +393,7 @@ test('rulate: «только выделенные» льёт выбранные 
 test('rulate: «не найдена» в плане не превращается в запись, chrF останавливает чужую', async () => {
   const site = [{ id: 21, title: 'Глава 7. Совсем другое', text: 'Он плыл по морю, шторм рвал паруса, и берег исчез.' }];
   const { api, posts, parsed } = await planFor(site, ['# [Глава 7. Моя глава :|: 7]', 'Тихий вечер, чай, разговор о книгах и планы на завтра.'],
-    (a) => { a.CFG.checkSameChapter = true; });
+    (a) => { a.CFG.minChrf = 0.75; });
   const siteData = await api.buildSiteMap(String(BOOK));
   const plan = api.buildPlan(parsed, siteData);
   api.planAssign(plan, 0, '21'); // человек настоял, но глава на сайте — другая
@@ -519,4 +521,38 @@ test('rulate: снятая вручную строка с кандидатами
     { aborted: false, log: (m) => logs.push(m), setProgress() {} });
   assert.ok(logs.some((l) => l.includes('снята вручную')), logs.join('\n'));
   assert.ok(!logs.some((l) => l.includes('НЕОДНОЗНАЧНО')), 'решение человека — не путаница скрипта');
+});
+
+/* ── порог chrF как поле панели ── */
+
+test('rulate: порог chrF читается из поля, 0 — выключено', () => {
+  const { api } = boot([]);
+  /* Дефолт — у сборки, а не у стенда: стенд выключает сверку для тестов
+     сопоставления, поэтому значение дефолта проверяем в исходнике. */
+  const def = api.parseChrfThreshold('');
+  assert.equal(def, 0.75, 'пустое поле — штатный порог 0.75');
+  assert.equal(api.parseChrfThreshold('0.9'), 0.9);
+  assert.equal(api.parseChrfThreshold('0'), 0, '0 — сверка выключена');
+  assert.equal(api.parseChrfThreshold('0,8'), 0.8, 'десятичная запятая допустима');
+  assert.equal(api.parseChrfThreshold(''), def, 'пустое поле — порог по умолчанию, а не «выключено»');
+  assert.equal(api.parseChrfThreshold('   '), def);
+  assert.equal(api.parseChrfThreshold('abc'), def, 'мусор в поле не снимает заслон');
+  assert.equal(api.parseChrfThreshold('-1'), 0, 'отрицательное — то же, что 0');
+  assert.equal(api.parseChrfThreshold('5'), 1, 'выше единицы порог не бывает');
+});
+
+test('rulate: при пороге 0 запись не отказывает, потому что сверять не с чем', async () => {
+  const site = [{ id: 21, title: 'Глава 7. Совсем другое', text: 'Он плыл по морю, шторм рвал паруса.' }];
+  const { api, posts, parsed } = await planFor(site,
+    ['# [Глава 7. Моя глава :|: 7]', 'Тихий вечер, чай, разговор о книгах.'],
+    (a) => { a.CFG.minChrf = 0; });
+  const siteData = await api.buildSiteMap(String(BOOK));
+  const plan = api.buildPlan(parsed, siteData);
+  api.planAssign(plan, 0, '21');
+  const logs = [];
+  await api.writePlan(plan, parsed,
+    { dryRun: false, skipSame: false, rangeStr: '' },
+    { aborted: false, log: (m) => logs.push(m), setProgress() {} });
+  assert.deepEqual(posts, ['21'], 'человек выключил заслон осознанно — заливаем');
+  assert.ok(!logs.some((l) => l.includes('ОТКАЗ')), logs.join('\n'));
 });
