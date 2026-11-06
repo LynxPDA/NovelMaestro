@@ -210,10 +210,22 @@ body {
 .run-pill-label {
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+  /* подпись уступает первой: название стадии читается в карточке и
+     в тултипе, а счётчик «2817/2817 · 100%» не имеет второго места */
+  flex-shrink: 100;
 }
 .run-pill-count {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  /* счётчик — единственная гибкая часть pill'а: подпись стадии либо
+     читается, либо спрятана целиком, а счётчик сжимается многоточием.
+     Без min-width:0 он не сжимался в flex-контейнере: на 320–390 px
+     «ожидание…» вылезало за скругление кнопки (ловит probe) */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .run-pill-track {
   width: 48px;
@@ -4220,6 +4232,12 @@ body[data-editor-theme="light"] .editor-area {
      это меню. Иначе от названия стадии оставалось «Пе…» */
   .run-pill-track,
   .run-pill-label-many {
+    display: none;
+  }
+  /* дробь счётчика («4/2817 · ») уступает процентам: вместе они не влезают
+     в 60 px, которые остаются счётчику на телефоне, и многоточие съедало
+     именно проценты — то, что читается с одного взгляда */
+  .run-pill-frac {
     display: none;
   }
 

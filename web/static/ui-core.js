@@ -854,25 +854,34 @@
   }
 
   /* Остаток в секундах: скорость — по окну выборок прогресса
-   * samples = [{t, done, total}] (t — сек, окно пишет etaSample); окно
-   * пустое/короткое или стоит на месте — фолбэк от старта запуска
-   * (created, сек). Оценить нечего — null. */
+   * samples = [{t, done}] (t — сек, окно пишет etaSample); окно пустое,
+   * короткое или стоит на месте — фолбэк от старта запуска (created, сек).
+   * Оценить нечего — null.
+   *
+   * Окно — последние ETA_MAX_AGE секунд, и скорость берётся по времени
+   * МЕЖДУ выборками: последняя сделана в произвольной фазе шага, и
+   * «сейчас минус выборка» — это остаток шага, а не его длительность.
+   * Именно эта ошибка давала «осталось ≈ 2 ч» на только что начатом
+   * прогоне и рывки оценки на каждом событии. */
   function etaRemaining(samples, done, total, now, created) {
     done = Number(done) || 0;
     total = Number(total) || 0;
     if (total <= 0 || done <= 0 || done >= total) return null;
     var rate = 0;
-    if (samples && samples.length) {
-      var first = samples[0];
-      var span = now - first.t;
-      var lastDone = samples[samples.length - 1].done;
-      /* окно с одним приращением скорости не даёт: первая выборка
-         пишется в произвольной фазе шага (открытие страницы посреди
-         шага), и время до следующего события — не длительность шага,
-         а его остаток. Верим окну только с ≥2 приращениями. */
-      if (span > 0 && lastDone - first.done >= 2) {
-        rate = (lastDone - first.done) / span;
+    if (samples && samples.length >= 2) {
+      var last = samples[samples.length - 1];
+      var base = samples.length - 1;
+      while (base > 0 && last.t - samples[base - 1].t <= ETA_MAX_AGE) base -= 1;
+      /* редкие события (глава идёт десять минут): окно по времени короче
+         двух шагов — дотягиваем базу до минимума приращений, сколько бы
+         времени они ни заняли: без этого медленная стадия вообще не
+         получала оценки, кроме средней от старта */
+      while (base > 0 && last.done - samples[base].done < ETA_MIN_STEPS) {
+        base -= 1;
       }
+      var steps = last.done - samples[base].done;
+      var span = last.t - samples[base].t;
+      if (span >= ETA_MIN_SPAN && steps >= ETA_MIN_STEPS) rate = steps / span;
     }
     if (rate <= 0 && created) {
       rate = done / Math.max(1, now - created);
@@ -903,8 +912,15 @@
     }
     if (!p) {
       if (running) {
+        /* «ждём», а не «ожидание первого результата…»: счётчик едет в
+           pill шапки, где на 320 px под него остаётся 40 px — длинная
+           фраза не влезала и уходила за скругление кнопки, а обрезанное
+           «ожида…» читалось огрызком. Многоточие тоже убрано: «ждём…» —
+           41 px, на пиксель шире места, и обрезалось до «ждё…». Чего
+           именно ждём, говорит подсказка pill'а, карточка запуска и
+           справка */
         out.waiting = true;
-        out.count = "ожидание первого результата…";
+        out.count = "ждём";
       }
       return out;
     }
@@ -920,28 +936,41 @@
   }
 
   /* ── ETA завершения запуска ─────────────────────────────────────────
-   * Скорость считается по скользящему окну выборок @@PROGRESS@@: шаг ≥5 с,
-   * 15 точек (≈ минута) — окно устойчивее к разным размерам глав, чем пара
-   * соседних событий. Пока выборок мало — фолбэк от старта запуска
-   * (job.created): он консервативно переоценивает остаток. Окно ОДНО на все
-   * точки вывода (лог «Запусков», карточка активного запуска, Дашборд,
-   * pill шапки): выборки одного запуска не должны расходиться по экранам. */
+   * Скорость считается по скользящему окну выборок @@PROGRESS@@: выборка
+   * не чаще раза в ETA_STEP секунд, окно — последние ETA_MAX_AGE секунд.
+   * Пока в окне меньше ETA_MIN_SPAN секунд и ETA_MIN_STEPS приращений —
+   * фолбэк от старта запуска (job.created): одного-двух шагов на скорость
+   * не хватает, а выдать по ним «осталось 40 ч» хуже, чем честное среднее.
+   * Показанная оценка сглаживается по времени (ETA_SMOOTH): скорость по
+   * нескольким шагам скачет вместе с размерами глав, и без сглаживания
+   * остаток прыгал на десятки процентов от события к событию.
+   * Окно ОДНО на все точки вывода (лог «Запусков», карточка активного
+   * запуска, Дашборд, pill шапки): выборки одного запуска не должны
+   * расходиться по экранам. */
   var ETA_STEP = 5; // сек между выборками
-  var ETA_WINDOW = 15; // точек в скользящем окне
+  var ETA_MAX_AGE = 300; // сек: окно оценки (старше — не нужны)
+  var ETA_MIN_SPAN = 60; // сек: меньше — скорость ещё не измерена
+  var ETA_MIN_STEPS = 2; // приращений должно быть хотя бы столько
+  var ETA_SMOOTH = 60; // сек: постоянная сглаживания показа
+  var ETA_WINDOW = 240; // точек храним: 20 мин — с запасом на два шага по 10 мин
   var ETA_MAX_JOBS = 50; // страховка от роста Map
   var etaSamples = new Map(); // job.id → [{t, done, total}]
+  var etaShown = new Map(); // job.id → {eta, at}: сглаженная оценка
 
-  /* Одна выборка на шаг: первая пишется в произвольной фазе шага (страницу
-   * открыли посреди главы), поэтому время до следующего события — ещё не
-   * длительность шага. Смена total (новый диапазон глав) окно сбрасывает. */
+  /* Одна выборка на шаг: чаще раза в ETA_STEP не пишем (опрос pill'а —
+   * раз в 10 с, SSE-события приходят чаще). Смена total (новый диапазон
+   * глав) окно сбрасывает. */
   function etaSample(job, done, total) {
     var s = etaSamples.get(job.id);
     if (!s || !s.length || s[s.length - 1].total !== total) {
       if (!etaSamples.has(job.id) && etaSamples.size >= ETA_MAX_JOBS) {
-        etaSamples.delete(etaSamples.keys().next().value);
+        var oldest = etaSamples.keys().next().value;
+        etaSamples.delete(oldest);
+        etaShown.delete(oldest);
       }
       s = [];
       etaSamples.set(job.id, s);
+      etaShown.delete(job.id);
     }
     var now = Date.now() / 1000;
     var last = s[s.length - 1];
@@ -957,14 +986,28 @@
     if (!job || !job.id || !p || !p.total) return null;
     var done = Number(p.done) || 0;
     var total = Number(p.total) || 0;
-    var remaining = etaRemaining(
+    var now = Date.now() / 1000;
+    var raw = etaRemaining(
       etaSample(job, done, total),
       done,
       total,
-      Date.now() / 1000,
+      now,
       job.created,
     );
-    if (remaining == null) return null;
+    if (raw == null) {
+      etaShown.delete(job.id); // считать нечего — сглаживать нечего
+      return null;
+    }
+    var prev = etaShown.get(job.id);
+    var remaining = raw;
+    if (prev && now > prev.at) {
+      /* доля правки по времени: показ раз в 10 с сдвигает оценку на 15%,
+         редкая перерисовка — сильнее; так оценка сходится к новой
+         скорости, но не перескакивает на неё одним кадром */
+      var w = 1 - Math.exp(-(now - prev.at) / ETA_SMOOTH);
+      remaining = prev.eta + (raw - prev.eta) * w;
+    }
+    etaShown.set(job.id, { eta: remaining, at: now });
     return { remaining: remaining, finishAt: Date.now() + remaining * 1000 };
   }
 
@@ -976,9 +1019,10 @@
       + " · завершение " + etaClock(e.finishAt);
   }
 
-  /* финал запуска: окно выборок больше не нужно */
+  /* финал запуска: окно выборок и сглаженная оценка больше не нужны */
   function etaForget(id) {
     etaSamples.delete(id);
+    etaShown.delete(id);
   }
 
   /* ── карточка активных запусков в шапке ────────────────────────────

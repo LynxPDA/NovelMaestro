@@ -3473,6 +3473,23 @@ function updateRunPill() {
          runDotTitle, тот же текст живёт в карточке и в тестах */
       const hint = UICore.runDotTitle(jobs);
       const box = runCard(jobs);
+      /* счётчик собирается из двух узлов: дробь «4/2817 · » и проценты.
+         На телефоне дробь прячется (CSS), проценты остаются — целый
+         счётчик на 320–390 px не влезал и превращался в «4/2817 · …»,
+         теряя как раз то, что читается с одного взгляда. Полный счётчик
+         есть в карточке запуска и в подсказке pill'а */
+      const countText = many ? String(jobs.length) : String(parts.count);
+      const sep = countText.lastIndexOf(" · ");
+      const count = h(
+        "span",
+        { class: "run-pill-count" },
+        sep > 0
+          ? [
+            h("span", { class: "run-pill-frac" }, countText.slice(0, sep + 3)),
+            h("span", null, countText.slice(sep + 3)),
+          ]
+          : countText,
+      );
       const pill = h(
         "button",
         {
@@ -3500,9 +3517,7 @@ function updateRunPill() {
         },
         iconEl("activity"),
         h("span", { class: "run-pill-label" }, label),
-        h("span", { class: "run-pill-count" }, many
-          ? String(jobs.length)
-          : parts.count),
+        count,
         many
           ? null
           : h(
@@ -3521,6 +3536,12 @@ function updateRunPill() {
       );
       runCardEl = box;
       slot.append(pill, box);
+      /* подпись стадии, сжатая до огрызка («П…»), места занимает больше,
+         чем объясняет: название есть в карточке и в подсказке pill'а.
+         28 px — тот же порог, по которому probe считает подпись огрызком;
+         замер один, до отрисовки кадра */
+      const lbl = pill.querySelector(".run-pill-label");
+      if (lbl && lbl.getBoundingClientRect().width < 28) lbl.style.display = "none";
       /* раскрытое меню восстанавливаем на новой кнопке: человек выбирает
          запуск, а не борется с обновлением опроса */
       if (wasOpen && many) openMenu(pill, box);

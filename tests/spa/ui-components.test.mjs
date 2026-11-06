@@ -249,7 +249,7 @@ test("progressRow: ожидание — строка видна, но пусты
   const bar = UIC.progressRow({ mini: true });
   const parts = {
     label: "",
-    count: "ожидание первого результата…",
+    count: "ждём",
     eta: "",
     pct: 0,
     waiting: true,
@@ -258,7 +258,7 @@ test("progressRow: ожидание — строка видна, но пусты
   assert.equal(bar.el.className, "progress-row progress-mini progress-waiting");
   assert.equal(
     bar.el.find("progress-info").textContent,
-    "ожидание первого результата…",
+    "ждём",
   );
   assert.equal(bar.el.find("progress-fill").attrs.style, "width:0%");
 });

@@ -40,7 +40,7 @@ test("progressParts: части строки прогресса", () => {
     UICore.progressParts({ id: "p1", status: "running", created: null }, null),
     {
       label: "",
-      count: "ожидание первого результата…",
+      count: "ждём",
       eta: "",
       pct: 0,
       waiting: true,
@@ -158,7 +158,7 @@ test("runSummary: карточка запуска — проект, процен
   assert.equal(wait.pctText, "");
   assert.equal(wait.remaining, "");
   assert.equal(wait.waiting, true);
-  assert.equal(wait.count, "ожидание первого результата…");
+  assert.equal(wait.count, "ждём");
   UICore.etaForget("w1");
 
   // без total доли нет — «0%» не выдумываем
@@ -219,12 +219,25 @@ test("etaRemaining: фолбэк от старта запуска", () => {
   ];
   // фолбэк: 5 шагов за 200 c → остаток 315/0.025 = 12600
   assert.equal(UICore.etaRemaining(jump, 5, 320, 1100, 900), 12600);
-  // два приращения — окну верим: 2 за 100 c → остаток 315/0.02 = 15750
+  // два приращения на длине окна МЕНЬШЕ минуты — скорости ещё нет:
+  // событие приходит в произвольной фазе шага, и пара выборок подряд
+  // меряет не шаг, а его остаток (давала «осталось ≈ 2 ч» на старте)
+  const short = [
+    { t: 1058, done: 3, total: 320 },
+    { t: 1100, done: 5, total: 320 },
+  ];
+  // фолбэк: 5 шагов за 200 c → остаток 315/0.025 = 12600
+  assert.equal(UICore.etaRemaining(short, 5, 320, 1100, 900), 12600);
+  // два приращения за минуту и больше — окну верим: 2 за 100 c →
+  // остаток 315/0.02 = 15750
   const two = [
     { t: 1000, done: 3, total: 320 },
     { t: 1100, done: 5, total: 320 },
   ];
   assert.equal(UICore.etaRemaining(two, 5, 320, 1100, 900), 15750);
+  // окно короче минуты, но длинного фолбэка нет (created нет) — null:
+  // лучше молчать, чем показать остаток по огрызку шага
+  assert.equal(UICore.etaRemaining(short, 5, 320, 1100, null), null);
   // нет выборок, нет created — оценить нечего
   assert.equal(UICore.etaRemaining([], 20, 100, 1100, null), null);
   // стоит на месте (окно без прогресса) и created нет — null
@@ -233,6 +246,50 @@ test("etaRemaining: фолбэк от старта запуска", () => {
     { t: 1100, done: 10, total: 100 },
   ];
   assert.equal(UICore.etaRemaining(stuck, 10, 100, 1100, null), null);
+});
+
+test("etaRemaining: окно по времени, а не по числу точек", () => {
+  // выборки старше ETA_MAX_AGE не участвуют: скорость меряется по
+  // свежему участку, иначе «средняя за книгу» не реагировала бы на смену
+  // стадии. Старые выборки по 1 шагу за 100 c, свежие — 5 шагов за 100 c
+  const samples = [];
+  for (let i = 0; i < 20; i += 1) samples.push({ t: 1000 + i * 100, done: i, total: 1000 });
+  const last = samples[samples.length - 1];
+  // в окне последние 300 c: 3 шага за 300 c → остаток 981/0.01 = 98100
+  assert.equal(
+    UICore.etaRemaining(samples, last.done, 1000, last.t, null),
+    98100,
+  );
+  // свежий участок быстрее — оценка следует за ним, а не за всей историей
+  const fast = samples.concat([
+    { t: last.t + 60, done: last.done + 20, total: 1000 },
+  ]);
+  const fl = fast[fast.length - 1];
+  // окно скользит: база — выборка на t=2700 (в пределах 300 c), в окне
+  // 22 шага за 260 c → 961/0.0846 ≈ 11357 против 97900 по всей истории
+  const e = UICore.etaRemaining(fast, fl.done, 1000, fl.t, null);
+  assert.ok(e > 11000 && e < 11600, String(e));
+});
+
+test("etaOf: показанная оценка сглаживается по времени", async () => {
+  const now = Date.now() / 1000;
+  const job = { id: "smooth-1", status: "running", created: now - 300 };
+  // первый показ — ровно расчётная оценка: 20 шагов за 300 c → 1200 c
+  const first = UICore.etaOf(job, { done: 20, total: 100 });
+  assert.ok(Math.abs(first.remaining - 1200) < 20, String(first.remaining));
+  // прогресс прыгнул вдвое, а показанная оценка сползла на долю правки
+  // по времени (ETA_SMOOTH = 60 c, прошло 50 мс → доля меньше процента):
+  // расчётная сейчас 450 c, показ остаётся у прежних 1200 — скачок оценки
+  // читался бы рывком, хотя новой скорости ещё никто не подтвердил
+  await new Promise((r) => setTimeout(r, 50));
+  const second = UICore.etaOf(job, { done: 40, total: 100 });
+  assert.ok(second.remaining > 1190, String(second.remaining));
+  assert.ok(second.remaining < first.remaining, String(second.remaining));
+  UICore.etaForget("smooth-1");
+  // окно снято — оценка считается заново, без памяти о сглаживании
+  const fresh = UICore.etaOf(job, { done: 40, total: 100 });
+  assert.ok(Math.abs(fresh.remaining - 450) < 20, String(fresh.remaining));
+  UICore.etaForget("smooth-1");
 });
 
 test("etaRemaining: границы — нет данных для оценки", () => {
