@@ -3458,3 +3458,83 @@ test("таблица глав: подсказка «✗» называет ПР�
     (c.className || "").includes("ch-ok"));
   assert.equal(okCell.getAttribute("title"), "ред: OK");
 });
+
+test("таблица глав: снимок стрима докрашивает клетки после обрыва", async () => {
+  /* регресс (телефон): уснувший экран и смена сети рвут SSE, и события за
+     обрыв в панель не попадают. Снимок переподключения несёт их все, но
+     обновлял он только лог с прогрессом — клетки оставались «·» до
+     перезагрузки страницы. Теперь снимок — истина и для таблицы глав.
+     Кадр `status` здесь НЕ приходит: он перерисовывает страницу целиком, и
+     проверка докраски подменилась бы проверкой рендера. */
+  const job = { id: RUN_JOB, action: "pipeline", project: "ACTIVE/Книга",
+    status: "running", lines: ["работа"], events: [], progress: null };
+  const page = await runView(job, [
+    { type: "snapshot", lines: ["работа"], events: [
+      { id: 1, stage: 1, status: "OK" },
+      { id: 1, stage: 2, status: "OK" },
+      { id: 2, stage: 1, status: "ERROR", reason: "код 1" },
+    ], progress: null },
+    /* переподключение: тот же хвост заново плюс новое событие */
+    { type: "snapshot", lines: ["работа"], events: [
+      { id: 1, stage: 1, status: "OK" },
+      { id: 1, stage: 2, status: "OK" },
+      { id: 2, stage: 1, status: "ERROR", reason: "код 1" },
+      { id: 2, stage: 3, status: "SKIP" },
+    ], progress: null },
+  ], { chapters: { ids: [1, 2] } });
+  await new Promise((r) => setTimeout(r, 300));
+  const row = (id) => findByClass(page, "ch-row")
+    .find((r) => r.getAttribute("data-id") === id);
+  assert.equal(row("1").querySelectorAll(".ch-cell")[0].textContent, "✓",
+    "перевод первой главы из снимка");
+  assert.equal(row("1").querySelectorAll(".ch-cell")[1].textContent, "✓",
+    "редактура первой главы из снимка");
+  assert.equal(row("2").querySelectorAll(".ch-cell")[0].textContent, "✗",
+    "сбой второй главы из снимка");
+  assert.equal(row("2").querySelectorAll(".ch-cell")[2].textContent, "⊘",
+    "событие второго снимка докрашено");
+  const cell = row("2").querySelectorAll(".ch-cell")[0];
+  assert.ok(cell.getAttribute("title").includes("код 1"),
+    "причина из снимка тоже доехала");
+  /* показанные клетки снимок не трогает: событий на большой книге тысячи */
+  const cells = findByClass(page, "ch-cell");
+  assert.equal(cells.reduce((n, c) => n + (c._writes || 0), 0), 4,
+    "четыре изменённые клетки — четыре записи, повторные статусы мимо");
+  delete globalThis.__job;
+  delete globalThis.__sse;
+  delete globalThis.__stageOptions;
+});
+
+test("живой стрим: поток закрылся без статуса — переподключение, а не тишина", async () => {
+  /* регресс: EOF чтения считался «задание закончилось». Прокси, сон
+     телефона или рестарт сервера закрывали тело без кадра `status`, и
+     панель молча замирала до перезагрузки страницы — галочки в таблице
+     глав новых глав уже не появлялись. Живой стрим кончается только
+     кадром `status`: всё остальное — обрыв, за которым идёт повтор. */
+  const job = { id: RUN_JOB, action: "pipeline", project: "ACTIVE/Книга",
+    status: "running", lines: ["работа"], events: [], progress: null };
+  globalThis.__job = { job };
+  globalThis.__sse = [{ type: "snapshot", lines: ["работа"],
+                        events: [], progress: null }];
+  globalThis.__sseDelay = 0;
+  globalThis.__stageOptions = { chapters: { ids: [1] } };
+  const page = viewProject("ACTIVE", "Книга", "run", RUN_JOB);
+  for (let i = 0; i < 20 && !page.querySelector(".log-area"); i++) await tick();
+  /* первый поток кончился без статуса — клиент обязан сказать об этом, а не
+     успокоиться (переподключение идёт с паузой 1 c — проверяем сам факт) */
+  await new Promise((r) => setTimeout(r, 100));
+  globalThis.__sse = [
+    { type: "snapshot", lines: ["работа"], events: [
+      { id: 1, stage: 1, status: "OK" },
+    ], progress: null },
+    { type: "status", status: "done" },
+  ];
+  await new Promise((r) => setTimeout(r, 1400)); // пауза повтора пережита
+  await settled();
+  const row = findByClass(page, "ch-row")
+    .find((r) => r.getAttribute("data-id") === "1");
+  assert.ok(row, "строка главы на месте");
+  assert.equal(allText(row.querySelectorAll(".ch-cell")[0]), "✓",
+    "событие из повторного снимка попало в таблицу");
+  delete globalThis.__sseDelay;
+});

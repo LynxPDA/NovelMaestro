@@ -3169,6 +3169,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   const LOG_CHUNK = 250;
   /* отметки состояний глав — одни на панель лога и на таблицу под ней */
   const STATUS_SYM = { OK: "✓", ERROR: "✗", SKIP: "⊘" };
+  // подписи стадий в подсказке клетки — те же, что у колонок
+  const STAGE_SHORT = { 1: "пер", 2: "ред", 3: "пол" };
   let logNode = null; // <pre> панели лога живой стадии
   let logFrame = false; // кадр перерисовки уже заказан
   let logSegs = []; // {node, n} — куски окна по порядку
@@ -3384,7 +3386,6 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // «·»: стадии ещё не дошли). Данные из истории — то же самое
   function chapterTable(events) {
     const cols = [1, 2, 3];
-    const stageSym = { 1: "пер", 2: "ред", 3: "пол" };
     const byKey = chapterByKey(events || []);
     const why = chapterReasons(events || []);
     // что реально показано в клетках: живой поток правит только смены статуса
@@ -3402,7 +3403,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         row.push(
           h(
             "td",
-            { class: cls, title: `${stageSym[stage]}: ${s || "—"}`
+            { class: cls, title: `${STAGE_SHORT[stage]}: ${s || "—"}`
               + (reason ? `\n${reason}` : "") },
             s ? STATUS_SYM[s] || s : "·",
           ),
@@ -3432,6 +3433,57 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     );
   }
 
+  /* Клетка таблицы глав правится ТОЛЬКО на смену статуса: событий конвейера
+     тысячи, а поиск строки — обход всей таблицы. Главы вне диапазона формы в
+     таблице нет — событие копится в st.events и появится при перерисовке
+     (поэтому пропуск не записывается в st.chShown: иначе клетка не докрасится
+     никогда, когда строка всё-таки появится). */
+  function paintCell(cell, ev) {
+    cell.textContent = STATUS_SYM[ev.status] || ev.status;
+    cell.className = "ch-cell ch-" + String(ev.status).toLowerCase();
+    /* подсказка собирается заново целиком: причина едет вместе со статусом
+       (тишина сторожа, код возврата, слова-ошибки), и у повторного прогона
+       успешная клетка не должна оставить причину прошлого сбоя */
+    cell.setAttribute("title", `${STAGE_SHORT[ev.stage] || ev.stage}: ${ev.status}`
+      + (ev.reason ? `\n${ev.reason}` : ""));
+  }
+
+  function patchChapterCell(ev) {
+    const key = ev.id + ":" + ev.stage;
+    if (st.chShown[key] === ev.status) return;
+    const t = page.querySelector(".ch-table");
+    const cell = t && t.querySelector(
+      `.ch-row[data-id="${ev.id}"] .ch-cell:nth-child(${ev.stage + 1})`,
+    );
+    if (!cell) return;
+    st.chShown[key] = ev.status;
+    paintCell(cell, ev);
+  }
+
+  /* Снимок стрима — истина по всем главам разом (приходит и при
+     переподключении: телефон уснул, сеть сменилась, сервер перезапустился; за
+     обрыв события в панель не попали и клетки оставались «·» до перезагрузки
+     страницы). Один обход строк на тысячи событий: поиск клетки на каждое
+     событие — это тысячи обходов всей таблицы. */
+  function paintChapterTable() {
+    const t = page.querySelector(".ch-table");
+    if (!t) return;
+    const rows = new Map();
+    for (const r of t.querySelectorAll(".ch-row")) {
+      rows.set(String(r.getAttribute("data-id")), r);
+    }
+    for (const ev of st.events) {
+      if (!ev || ev.id == null || typeof ev.stage !== "number") continue;
+      const key = ev.id + ":" + ev.stage;
+      if (st.chShown[key] === ev.status) continue;
+      const row = rows.get(String(ev.id));
+      const cell = row && row.querySelectorAll(".ch-cell")[ev.stage - 1];
+      if (!cell) continue;
+      st.chShown[key] = ev.status;
+      paintCell(cell, ev);
+    }
+  }
+
   // стрим лога после старта. единственный источник лога —
   // SSE (стартовый снимок сервера уже содержит хвост), payload lines не
   // дублируем; AbortController гасит старый стрим при уходе со страницы.
@@ -3446,8 +3498,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     try {
       for (let attempt = 0; ; attempt++) {
         try {
-          await streamOnce(jobId, sig);
-          break; // стрим завершился штатно (задание закончилось)
+          const finished = await streamOnce(jobId, sig);
+          if (finished) break; // кадр status — задание закончилось
+          /* Конец тела без кадра `status`: живой стрим кончается только им,
+             значит соединение закрыл прокси, сон телефона или рестарт
+             сервера. Это обрыв, а не завершение запуска — иначе панель
+             молча замирала бы до перезагрузки страницы. */
+          throw new Error("поток закрыт без статуса");
         } catch (ex) {
           if (ex && ex.name === "AbortError") return; // ушли со страницы
           const running = st.job && UICore.isActive(st.job);
@@ -3483,6 +3540,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   async function streamOnce(jobId, sig) {
     // события конвейера приходят в том же SSE (snapshot + живые);
     // отдельный GET /jobs здесь не нужен — он дублировал бы события
+    let finished = false; // пришёл кадр status — задание закончилось
     const res = await fetch(`/api/jobs/${jobId}/stream`, { signal: sig });
     if (!res.ok || !res.body) {
       const err = await res.json().catch(() => ({}));
@@ -3511,12 +3569,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           // а панель не закроется — status так и не придёт)
           try {
             onPayload(payload);
+            if (payload.type === "status") finished = true;
           } catch {
             /* кривое событие пропущено: статус придёт следующим кадром */
           }
         }
       }
     }
+    return finished;
   }
 
   // разбор одного SSE-payload: снимок буфера, строка лога, событие главы,
@@ -3537,6 +3597,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (live) {
         paintLog();
         if (st.logBar || st.miniBar) paintProgress();
+        /* Снимок приходит и при переподключении (телефон уснул, сеть
+           сменилась), а события за обрыв в панель не попали: таблица
+           отстала, и клетки оставались «·» до перезагрузки страницы.
+           События снимка — истина: докрашиваем расхождения. */
+        paintChapterTable();
       }
       return;
     }
@@ -3563,27 +3628,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         );
         if (prev >= 0) st.events[prev] = ev;
         else st.events.push(ev);
-        if (live && st.chShown[ev.id + ":" + ev.stage] !== ev.status) {
-          // интерактивная визуализация: клетка таблицы под логом
-          // обновляется сразу (строка ищется по data-id — реальная
-          // глава, а не позиция: нумерация может быть разреженной).
-          // Главы вне диапазона формы в таблице нет — событие
-          // копится в st.events и появится при перерисовке.
-          // Конвейер на 1300 глав — это тысячи событий, а поиск строки
-          // есть обход всей таблицы, поэтому правится только смена статуса
-          const t = page.querySelector(".ch-table");
-          const cell = t && t.querySelector(
-            `.ch-row[data-id="${ev.id}"] .ch-cell:nth-child(${ev.stage + 1})`,
-          );
-          if (cell) {
-            st.chShown[ev.id + ":" + ev.stage] = ev.status;
-            cell.textContent = STATUS_SYM[ev.status] || ev.status;
-            cell.className = "ch-cell ch-" + String(ev.status).toLowerCase();
-            // причина едет вместе со статусом (тишина сторожа, код
-            // возврата, слова-ошибки): подсказка клетки говорит, ПОЧЕМУ
-            if (ev.reason) cell.title += `\n${ev.reason}`;
-          }
-        }
+        if (live) patchChapterCell(ev); // клетка таблицы под логом
       }
     } else if (payload.type === "status") {
       st.job.status = payload.status;
