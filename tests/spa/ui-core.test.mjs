@@ -103,11 +103,10 @@ test("etaOf и etaText: оценка конца — только у работа
   const p = { done: 20, total: 100 };
   UICore.etaForget("eta-1");
   try {
-    // одна выборка — оценивать нечего: пока прогресс не прирастал на
-    // протяжении минуты, любая цифра была бы выдумкой
-    assert.equal(UICore.etaOf(job, p), null);
-    vt = 60;
-    assert.equal(UICore.etaOf(job, { done: 21, total: 100 }), null, "не хватает шагов");
+    // первое событие пришло через 90 c после старта: скорость уже есть
+    // (двадцать ячеек за полторы минуты), оценка не ждёт накопления окна
+    vt = 90;
+    assert.ok(UICore.etaOf(job, p) !== null, "оценка с первого события");
     vt = 120;
     UICore.etaForget("eta-1");
     vt = 0;
@@ -137,6 +136,112 @@ test("etaOf и etaText: оценка конца — только у работа
   // финал запуска снимает накопленное: следующий прогон считается заново
   UICore.etaForget("eta-1");
   UICore.etaForget("eta-1");
+});
+
+test("etaOf: отстающий канал не сбрасывает окно", () => {
+  /* Один запуск виден с двух сторон: живой SSE в панели лога и опрос
+   * /jobs (шапка, Дашборд) раз в 10 c. Снимок опроса отстаёт от живого
+   * кадра — счётчик приходит назад. Это не перезапуск стадии: сброс окна
+   * на каждом опросе не давал оценке набраться вовсе. */
+  const realNow = Date.now;
+  const T0 = 1_700_000_000;
+  let vt = 0;
+  Date.now = () => (T0 + vt) * 1000;
+  try {
+    const job = { id: "stale", status: "running", created: T0 };
+    UICore.etaForget("stale");
+    // ровный темп: 0.1 шага/c — живой канал
+    for (let d = 0; d <= 10; d += 1) {
+      vt = d * 10;
+      UICore.etaOf(job, { done: d, total: 1000 });
+    }
+    // опрос пришёл с тем же снимком, что и прошлый — новый прогресс не
+    // пришёл, и выдумывать по нему нечего
+    vt = 110;
+    const same = UICore.etaOf(job, { done: 10, total: 1000 });
+    assert.ok(same && same.remaining > 9000, String(same && same.remaining));
+    // следующий живой кадр: шаг вперёд
+    vt = 120;
+    const e = UICore.etaOf(job, { done: 11, total: 1000 });
+    // скорость та же: остаток ≈ 9890 c, а не часы из отрицательного
+    // приращения через откат
+    assert.ok(e && e.remaining > 9000 && e.remaining < 13000,
+      String(e && e.remaining));
+  } finally {
+    Date.now = realNow;
+    UICore.etaForget("stale");
+  }
+});
+
+test("etaOf: перезапуск стадии возвращает счётчик", () => {
+  /* Стадия, начатая заново, пересчитывает счётчик: done падает с 100 до 3,
+   * total остаётся. Считаем продолжением того же бара — скорость та же,
+   * остаток 997 шагов, а не часы из отрицательного приращения.
+   * Начало бара (t0/d0) — точка отсчёта средней, пока окно не измерено. */
+  const realNow = Date.now;
+  const T0 = 1_700_000_000;
+  let vt = 0;
+  Date.now = () => (T0 + vt) * 1000;
+  try {
+    const job = { id: "rollback", status: "running", created: T0 };
+    UICore.etaForget("rollback");
+    // старый темп: 0.1 шага/c
+    for (let d = 0; d <= 100; d += 10) {
+      vt = d * 10;
+      UICore.etaOf(job, { done: d, total: 1000 });
+    }
+    vt = 1000;
+    assert.ok(Math.abs(UICore.etaOf(job, { done: 100, total: 1000 }).remaining - 9000) < 100);
+    // откат: счётчик вернулся к 3
+    vt = 1010;
+    UICore.etaOf(job, { done: 3, total: 1000 });
+    // тот же темп заново
+    for (let d = 6; d <= 60; d += 6) {
+      vt = 1010 + d * 10;
+      UICore.etaOf(job, { done: d, total: 1000 });
+    }
+    vt = 1610;
+    const e = UICore.etaOf(job, { done: 60, total: 1000 });
+    // скорость 0.1 шага/c (две выборки нового участка), остаток 940 → 9400,
+    // а не 34000 из приращений через откат
+    assert.ok(e && e.remaining > 8000 && e.remaining < 11000, String(e && e.remaining));
+  } finally {
+    Date.now = realNow;
+    UICore.etaForget("rollback");
+  }
+});
+
+test("etaOf: показанная оценка сглаживается по времени", async () => {
+  const now = Date.now() / 1000;
+  const job = { id: "smooth-1", status: "running", created: now - 300 };
+  UICore.etaForget("smooth-1");
+  // до прироста считать нечего: оценка — по сделанному
+  const first = UICore.etaOf(job, { done: 0, total: 100 });
+  assert.equal(first, null, "ничего не сделано — оценивать нечего");
+  await new Promise((r) => setTimeout(r, 60));
+  UICore.etaForget("smooth-1");
+  const realNow = Date.now;
+  let vt = 0;
+  Date.now = () => (1_700_000_000 + vt) * 1000;
+  const job2 = { id: "smooth-2", status: "running", created: 1_700_000_000 };
+  UICore.etaForget("smooth-2");
+  vt = 0;
+  assert.equal(UICore.etaOf(job2, { done: 0, total: 100 }), null);
+  // первая же завершённая ячейка даёт оценку: 1 шаг за 30 c → 99 шагов
+  vt = 30;
+  const e0 = UICore.etaOf(job2, { done: 1, total: 100 });
+  assert.ok(e0 && Math.abs(e0.remaining - 2970) < 60, String(e0 && e0.remaining));
+  vt = 70;
+  const e1 = UICore.etaOf(job2, { done: 3, total: 100 });
+  assert.ok(e1 && e1.remaining > 0, "минута и два приращения — оценка есть");
+  // прогресс скакнул: показ сдвигается на долю правки по времени, а не на
+  // всё новое значение (ETA_SMOOTH), а не перескакивает одним кадром
+  vt = 80;
+  const e2 = UICore.etaOf(job2, { done: 6, total: 100 });
+  assert.ok(e2.remaining < e1.remaining, "новая скорость видна");
+  assert.ok(e2.remaining > e1.remaining * 0.6, "но не целиком за 10 c");
+  Date.now = realNow;
+  UICore.etaForget("smooth-2");
 });
 
 test("runSummary: карточка запуска — проект, проценты, остаток", () => {
@@ -287,7 +392,7 @@ test("etaRemaining: скорость — средняя по прогону", ()
   assert.ok(est > 0 && est < 9000, String(est));
 });
 
-test("etaRemaining: оценка не появляется из одного приращения", () => {
+test("etaRemaining: окно меряет скорость с двух приращений за минуту", () => {
   // одна выборка — скорости нет: событие приходит в произвольной фазе
   // шага, и пара выборок подряд меряет не шаг, а его остаток
   assert.equal(
@@ -332,76 +437,6 @@ test("etaRemaining: старое забывается, свежее весит �
   assert.ok(est > 100, String(est));
 });
 
-test("etaOf: откат прогресса сбрасывает окно", () => {
-  /* Перезапуск стадии пересчитывает счётчик: done уменьшается, total
-   * остаётся. Приращения через такую границу отрицательные — средняя
-   * скорость выходила ниже реальной в разы, и остаток вырастал на часы.
-   * После сброса окно набирается заново с новой точки. */
-  const realNow = Date.now;
-  const T0 = 1_700_000_000;
-  let vt = 0;
-  Date.now = () => (T0 + vt) * 1000;
-  try {
-    const job = { id: "rollback", status: "running", created: T0 };
-    UICore.etaForget("rollback");
-    // старый темп: 0.1 шага/c
-    for (let d = 0; d <= 100; d += 10) {
-      vt = d * 10;
-      UICore.etaOf(job, { done: d, total: 1000 });
-    }
-    vt = 1000;
-    assert.ok(Math.abs(UICore.etaOf(job, { done: 100, total: 1000 }).remaining - 9000) < 100);
-    // откат: счётчик вернулся к 3
-    vt = 1010;
-    assert.equal(UICore.etaOf(job, { done: 3, total: 1000 }), null, "после отката — молчим");
-    // тот же темп заново
-    for (let d = 6; d <= 60; d += 6) {
-      vt = 1010 + d * 10;
-      UICore.etaOf(job, { done: d, total: 1000 });
-    }
-    vt = 1610;
-    const e = UICore.etaOf(job, { done: 60, total: 1000 });
-    // скорость 0.1 шага/c (две выборки нового участка), остаток 940 → 9400,
-    // а не 34000 из приращений через откат
-    assert.ok(e && e.remaining > 8000 && e.remaining < 11000, String(e && e.remaining));
-  } finally {
-    Date.now = realNow;
-    UICore.etaForget("rollback");
-  }
-});
-
-test("etaOf: показанная оценка сглаживается по времени", async () => {
-  const now = Date.now() / 1000;
-  const job = { id: "smooth-1", status: "running", created: now - 300 };
-  UICore.etaForget("smooth-1");
-  // первые выборки — оценка считается по накопленным приращениям
-  const first = UICore.etaOf(job, { done: 20, total: 100 });
-  assert.equal(first, null, "одна выборка — оценивать нечего");
-  await new Promise((r) => setTimeout(r, 60));
-  UICore.etaForget("smooth-1");
-  // две выборки с разницей меньше минуты — всё ещё молчим
-  const realNow = Date.now;
-  let vt = 0;
-  Date.now = () => (1_700_000_000 + vt) * 1000;
-  const job2 = { id: "smooth-2", status: "running", created: 1_700_000_000 };
-  UICore.etaForget("smooth-2");
-  vt = 0;
-  assert.equal(UICore.etaOf(job2, { done: 1, total: 100 }), null);
-  vt = 30;
-  assert.equal(UICore.etaOf(job2, { done: 2, total: 100 }), null);
-  vt = 70;
-  const e1 = UICore.etaOf(job2, { done: 3, total: 100 });
-  assert.ok(e1 && e1.remaining > 0, "минута и два приращения — оценка есть");
-  // прогресс скакнул: показ сдвигается на долю правки по времени, а не на
-  // всё новое значение (ETA_SMOOTH), а не перескакивает одним кадром
-  vt = 80;
-  const e2 = UICore.etaOf(job2, { done: 6, total: 100 });
-  assert.ok(e2.remaining < e1.remaining, "новая скорость видна");
-  assert.ok(e2.remaining > e1.remaining * 0.6, "но не целиком за 10 c");
-  Date.now = realNow;
-  UICore.etaForget("smooth-2");
-});
-
 test("etaRemaining: границы — нет данных для оценки", () => {
   const win = [
     { t: 1000, done: 10, total: 100 },
@@ -411,6 +446,26 @@ test("etaRemaining: границы — нет данных для оценки",
   assert.equal(UICore.etaRemaining(win, 100, 100, 1100), null); // всё готово
   assert.equal(UICore.etaRemaining(win, 20, 0, 1100), null); // нет total
   assert.equal(UICore.etaRemaining(null, 20, 100, 1100), null); // нет выборок
+});
+
+test("etaRemaining: первая же ячейка даёт оценку", () => {
+  /* Главный случай: конвейер на 2199 ячеек, первые результаты — через
+   * две минуты. Окна (два приращения за минуту) ещё нет, но средняя с
+   * начала бара уже меряет темп, и оценка обязана появиться сразу. */
+  const e = UICore.etaRemaining([], 1, 100, 120, { t: 0, done: 0 });
+  assert.ok(e && Math.abs(e - 11880) < 60, String(e)); // 1 шаг за 120 c
+  // пачка одновременных событий (16 потоков закончили стадию разом)
+  // средней с начала бара не обманывает: 16 за 120 c → остаток 14880
+  const burst = UICore.etaRemaining([], 16, 100, 120, { t: 0, done: 0 });
+  assert.ok(burst && Math.abs(burst - 630) < 10, String(burst));
+  // совсем свежий старт (меньше ETA_MIN_RUN) — скорости ещё нет
+  assert.equal(UICore.etaRemaining([], 1, 100, 2, { t: 0, done: 0 }), null);
+  // перезапуск стадии: начало бара пересчитано, средней нет до прироста
+  assert.equal(UICore.etaRemaining([], 3, 100, 1000, { t: 1000, done: 3 }), null);
+  // страница открыта посреди прогона (перезагрузка): первого бара своей
+  // точки отсчёта не имеет — считаем от старта запуска, а не от загрузки
+  const resumed = UICore.etaRemaining([], 3, 2199, 1800, { t: 0, done: 0 });
+  assert.ok(resumed > 0, "оценка сразу после перезагрузки страницы");
 });
 
 test("boolOn: строки .env", () => {

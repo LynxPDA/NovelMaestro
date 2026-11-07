@@ -858,8 +858,8 @@
   }
 
   /* Остаток в секундах: скорость — по накопленным приращениям прогресса
-   * samples = [{t, done}] (t — сек, окно пишет etaSample). Оценить нечего —
-   * null.
+   * samples = [{t, done}] (t — сек, окно пишет etaSample); base = {t, done} —
+   * начало текущего бара стадии. Оценить нечего — null.
    *
    * Скорость — СРЕДНЯЯ за прогон, а не по последним минутам. Конвейер
    * проводит каждую главу через все стадии, и скорости стадий отличаются
@@ -871,37 +871,55 @@
    * Старое забывается: вклад приращения убывает экспоненциально, и вес
    * растёт вместе с длительностью запуска (ETA_SLOWDOWN) — короткий прогон
    * успевает среагировать на смену скорости сервера, а на многочасовом
-   * старый темп уже не тянет оценку назад. */
-  function etaRemaining(samples, done, total, now) {
+   * старый темп уже не тянет оценку назад.
+   *
+   * Пока окно не измерено (приращений меньше ETA_MIN_STEPS или прогон
+   * короче ETA_MIN_SPAN), скорость — средняя с начала бара (base): первая
+   * же завершённая ячейка даёт оценку, а не тишину на минуту. Такую
+   * среднюю нельзя брать из окна: пачка одновременных событий (16 потоков
+   * закончили стадию разом) давала бы «осталось 20 с». */
+  function etaRemaining(samples, done, total, now, base) {
     done = Number(done) || 0;
     total = Number(total) || 0;
     if (total <= 0 || done <= 0 || done >= total) return null;
-    if (!samples || samples.length < 2) return null;
-    var last = samples[samples.length - 1];
-    /* память — доля прожитого прогона, но не меньше ETA_TAU_MIN: в
-       первые минуты среднее и так одно-два приращения */
-    var tau = Math.max(ETA_TAU_MIN, last.t / ETA_SLOWDOWN);
-    var num = 0;
-    var den = 0;
-    for (var i = 1; i < samples.length; i += 1) {
-      var a = samples[i - 1];
-      var b = samples[i];
-      if (b.t > now) break;
-      var dt = b.t - a.t;
-      if (dt <= 0) continue;
-      var w = Math.exp(-(now - b.t) / tau);
-      num += w * (b.done - a.done);
-      den += w * dt;
+    var rate = 0;
+    if (samples && samples.length >= 2) {
+      var last = samples[samples.length - 1];
+      /* память — доля прожитого прогона, но не меньше ETA_TAU_MIN: в
+         первые минуты среднее и так одно-два приращения */
+      var tau = Math.max(ETA_TAU_MIN, last.t / ETA_SLOWDOWN);
+      var num = 0;
+      var den = 0;
+      for (var i = 1; i < samples.length; i += 1) {
+        var a = samples[i - 1];
+        var b = samples[i];
+        if (b.t > now) break;
+        var dt = b.t - a.t;
+        if (dt <= 0) continue;
+        var w = Math.exp(-(now - b.t) / tau);
+        num += w * (b.done - a.done);
+        den += w * dt;
+      }
+      var steps = last.done - samples[0].done;
+      /* скорость окна измерена только с двух приращений за ETA_MIN_SPAN:
+         пара выборок подряд меряет длину шага с «фазой», в которой попала
+         первая выборка */
+      if (den > 0 && steps >= ETA_MIN_STEPS
+          && last.t - samples[0].t >= ETA_MIN_SPAN) {
+        rate = num / den;
+      }
     }
-    var steps = last.done - samples[0].done;
-    if (den <= 0 || steps <= 0) return null;
-    /* приращений меньше ETA_MIN_STEPS или прогон ещё короче ETA_MIN_SPAN —
-       скорость не измерена: среднее по одному шагу меряет его длину с
-       «фазой», в которой попала первая выборка */
-    if (steps < ETA_MIN_STEPS || last.t - samples[0].t < ETA_MIN_SPAN) {
-      return null;
+    if (rate <= 0 && base) {
+      /* начало бара → сюда: первая же завершённая ячейка даёт оценку, а не
+         тишину до накопления окна. Такую среднюю нельзя брать из окна:
+         пачка одновременных событий (16 потоков закончили стадию разом)
+         давала бы «осталось 20 с» */
+      var run = now - (Number(base.t) || 0);
+      var grew = done - (Number(base.done) || 0);
+      if (run >= ETA_MIN_RUN && grew > 0) rate = grew / run;
     }
-    return (total - done) / (num / den);
+    if (!(rate > 0)) return null;
+    return (total - done) / rate;
   }
 
   /* Части строки прогресса для UIC.progressRow: {label, count, eta, pct,
@@ -955,52 +973,68 @@
    * окно из последних минут ловило то медленный перевод, то пяток быстрых
    * редактур — остаток скакал на десятки процентов. Старое забывается
    * медленно (ETA_SLOWDOWN), так что смена скорости сервера всё равно
-   * догоняется. Пока приращений меньше ETA_MIN_STEPS и прогон короче
-   * ETA_MIN_SPAN — оценки нет вовсе (лучше молчать, чем обещать).
+   * догоняется. Окно меряет скорость только с двух приращений за
+   * ETA_MIN_SPAN; до этого считается средняя с начала бара, поэтому оценка
+   * видна с первого же завершённого шага.
    * Показанная оценка сглаживается по времени (ETA_SMOOTH): остаток не
    * перескакивает на новое значение одним кадром.
    * Выборки ОДНИ на все точки вывода (лог «Запусков», карточка активного
    * запуска, Дашборд, pill шапки): экраны не должны показывать разные
-   * цифры одного прогона. */
+   * цифры одного прогона, а отставший снимок опроса не должен обнулять
+   * накопленное (см. etaSample). */
   var ETA_STEP = 5; // сек между выборками в начале прогона
   var ETA_SLOWDOWN = 4; // память = 1/N прожитого прогона
   var ETA_TAU_MIN = 600; // сек: нижняя граница памяти
-  var ETA_MIN_SPAN = 60; // сек: меньше — скорость ещё не измерена
-  var ETA_MIN_STEPS = 2; // приращений должно быть хотя бы столько
+  var ETA_MIN_SPAN = 60; // сек: меньше — окно ещё не измерено
+  var ETA_MIN_STEPS = 2; // приращений окна должно быть хотя бы столько
+  var ETA_MIN_RUN = 5; // сек: короче средняя с начала бара не мерило
   var ETA_SMOOTH = 60; // сек: постоянная сглаживания показа
   var ETA_WINDOW = 240; // точек храним
   var ETA_MAX_JOBS = 50; // страховка от роста Map
-  var etaSamples = new Map(); // job.id → [{t, done, total}]
+  var etaSamples = new Map(); // job.id → {points: [{t, done, total}], t0, d0}
   var etaShown = new Map(); // job.id → {eta, at}: сглаженная оценка
 
   /* Одна выборка на шаг. Шаг адаптивный (ETA_STEP … прожитое/ETA_WINDOW):
    * средняя скорость считается по ВСЕМУ прогону, а в многочасовом прогоне
    * точки раз в 5 c — это десятки тысяч записей на карту запусков.
-   * Окно сбрасывает и смена total (новый диапазон глав), и ОТКАТ done:
-   * стадия могла перезапуститься и пересчитать ячейки — приращения через
-   * такую границу отрицательные, и средняя скорость выходила ниже реальной
-   * в разы (оценка остатка росла на часы). */
+   * Окно сбрасывает только смена total (новый бар-стадия: у ner_check и
+   * wiki их по два). Откат done — не сброс: отставшая точка (опрос
+   * /jobs обгоняет кадр живого SSE) и пересчёт перезапущенной стадии
+   * отличаются только временем, а обе возвращают счётчик назад. Такая точка
+   * не пишется — приращения через неё отрицательные, и средняя скорость
+   * выходила ниже реальной в разы (оценка росла на часы). Скорость при этом
+   * сохраняется: работу пересчитывают с той же скоростью, что и считали.
+   * Начало бара (t0/d0) — точка отсчёта средней, пока окно не измерено. */
   function etaSample(job, done, total) {
     var s = etaSamples.get(job.id);
-    var last0 = s && s.length ? s[s.length - 1] : null;
-    if (!last0 || last0.total !== total || done < last0.done) {
+    var last0 = s && s.points.length ? s.points[s.points.length - 1] : null;
+    var now = Date.now() / 1000;
+    if (!last0 || last0.total !== total) {
       if (!etaSamples.has(job.id) && etaSamples.size >= ETA_MAX_JOBS) {
         var oldest = etaSamples.keys().next().value;
         etaSamples.delete(oldest);
         etaShown.delete(oldest);
       }
-      s = [];
+      s = {
+        points: [],
+        /* первый бар считается с начала запуска: первое же событие
+           приходит через минуты, и своей точки отсчёта у него нет */
+        t0: last0 ? now : (Number(job && job.created) || now),
+        d0: last0 ? done : 0,
+      };
       etaSamples.set(job.id, s);
       etaShown.delete(job.id);
+    } else if (done <= last0.done) {
+      return s; // откат или повтор — новый прогресс не пришёл
     }
-    var now = Date.now() / 1000;
-    var last = s[s.length - 1];
+    var pts = s.points;
+    var last = pts[pts.length - 1];
     var step = last
-      ? Math.max(ETA_STEP, (now - s[0].t) / ETA_WINDOW)
+      ? Math.max(ETA_STEP, (now - pts[0].t) / ETA_WINDOW)
       : ETA_STEP;
     if (!last || now - last.t >= step) {
-      s.push({ t: now, done: done, total: total });
-      if (s.length > ETA_WINDOW) s.shift();
+      pts.push({ t: now, done: done, total: total });
+      if (pts.length > ETA_WINDOW) pts.shift();
     }
     return s;
   }
@@ -1011,11 +1045,13 @@
     var done = Number(p.done) || 0;
     var total = Number(p.total) || 0;
     var now = Date.now() / 1000;
+    var win = etaSample(job, done, total);
     var raw = etaRemaining(
-      etaSample(job, done, total),
+      win.points,
       done,
       total,
       now,
+      { t: win.t0, done: win.d0 },
     );
     if (raw == null) {
       etaShown.delete(job.id); // считать нечего — сглаживать нечего
