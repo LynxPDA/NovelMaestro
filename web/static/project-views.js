@@ -190,8 +190,11 @@ function viewProject(section, name, tab, job) {
     return st.editor;
   }
 
-  /* «Редактор» помнит главу, панели, режим и подсветку: пишем при каждой
-     смене — перезагрузка страницы возвращает пользователя в то же место */
+  /* «Редактор» помнит главу, панели, режим, подсветку и n-грамму с порогом:
+     пишем при каждой смене — перезагрузка страницы возвращает пользователя в
+     то же место. Выбор файла панели — не про одну главу, а про книгу: у главы
+     может не быть части артефактов, тогда селект уходит на доступный (см.
+     fillTypeSel), а следующий же переход вернёт желаемый тип */
   function saveEditorPref() {
     const ed = st.editor;
     if (!ed) return;
@@ -2249,8 +2252,12 @@ function viewProject(section, name, tab, job) {
     chapterSel.addEventListener("change", () => {
       ed.chapter = chapterSel.value;
       saveEditorPref();
+      /* Тип файла — выбор КНИГИ, а не главы: человек настроил «слева перевод,
+         справа редактура» один раз, и следующая глава открывается так же.
+         Прошлый текст панели именно поэтому нужно снять явно — иначе
+         loadPane примет его за загруженный и не перечитает файл новой
+         главы. */
       for (const p of panes) {
-        p.state.type = null;
         p.state.text = null;
         p.state.dirty = false;
         p.state.missing = false;
@@ -2267,9 +2274,11 @@ function viewProject(section, name, tab, job) {
         p.addDraft = null;
         if (p.addUi) p.addUi.wrap.style.display = "none";
       }
-      const def = defaultTypes();
-      fillTypeSel(pLeft, def.left);
-      fillTypeSel(pRight, def.right);
+      /* желанный тип остаётся в p.state.type: fillTypeSel берёт его, если у
+         новой главы такой файл есть, иначе — канон главы */
+      fillTypeSel(pLeft);
+      fillTypeSel(pRight);
+      saveEditorPref();
       loadPane(pLeft);
       loadPane(pRight);
     });

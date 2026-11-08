@@ -3546,6 +3546,12 @@ test("живой стрим: поток закрылся без статуса �
   delete globalThis.__sseDelay;
 });
 
+/* ── «Редактор»: выбор файлов — про книгу, а не про одну главу ──────────
+ * Регресс: смена главы обнуляла тип панели (`p.state.type = null`), и
+ * следующая глава открывалась дефолтами «оригинал + полировка». Человек,
+ * настроивший «слева перевод, справа редактура», терял выбор на каждой
+ * главе — и возвращался к тем же дефолтам. Теперь желаемый тип живёт в
+ * состоянии вкладки и в состоянии книги. */
 const EDITOR_TREE_TYPED = {
   chapters: [
     { dir: "00000_1_Глава 1", artifacts: {
@@ -3558,6 +3564,54 @@ const EDITOR_TREE_TYPED = {
       "chapter.txt": "3", "translated.txt": "3" } },
   ],
 };
+
+test("«Редактор»: выбор панелей остаётся при переключении главы", async () => {
+  globalThis.__tree = EDITOR_TREE_TYPED;
+  const page = viewProject("ACTIVE", "Книга 3", "editor");
+  await tick();
+  const panes = findByClass(page, "ed-pane");
+  const sel = (i) => findByClass(panes[i], "ed-type")[0];
+
+  /* слева — перевод, справа — редактура (не дефолты) */
+  sel(0).value = "translated.txt";
+  sel(0)._listeners.change[0]();
+  sel(1).value = "redacted.txt";
+  sel(1)._listeners.change[0]();
+  await tick();
+  assert.deepEqual(prefsOf("ACTIVE", "Книга 3").editor.left, "translated.txt",
+    "выбор левой панели записан в состояние книги");
+
+  const chapter = findByClass(page, "ed-chapter")[0];
+  chapter.value = "00000_2_Глава 2";
+  await chapter._listeners.change[0]();
+  await tick();
+  assert.equal(findByClass(page, "ed-pane")[0]
+    .querySelectorAll(".ed-type")[0].value, "translated.txt",
+    "на другой главе слева тот же файл");
+  assert.equal(findByClass(page, "ed-pane")[1]
+    .querySelectorAll(".ed-type")[0].value, "redacted.txt",
+    "справа тоже прежний выбор");
+
+  /* глава без выбранного файла: селект уходит на доступный канон, но
+     следующий переход возвращает желаемый тип, а не дефолт */
+  chapter.value = "00000_3_Глава 3";
+  await chapter._listeners.change[0]();
+  await tick();
+  assert.equal(findByClass(page, "ed-pane")[1]
+    .querySelectorAll(".ed-type")[0].value, "redacted.txt",
+    "у главы есть файл — выбор прежний");
+  assert.ok(findByClass(page, "ed-pane")[0]
+    .querySelectorAll(".ed-type")[0].value === "translated.txt",
+    "файл есть у третьей главы тоже");
+
+  /* переоткрытие вкладки: настройки те же (не «сброс к дефолтам») */
+  const again = reopenProject("ACTIVE", "Книга 3", "editor");
+  await tick();
+  assert.equal(findByClass(again, "ed-pane")[0]
+    .querySelectorAll(".ed-type")[0].value, "translated.txt",
+    "перезаход в «Редактор» не сбрасывает панели");
+  delete globalThis.__tree;
+});
 
 test("«Редактор»: подпись размера считает байты и обновляется на правке", async () => {
   /* регресс: подпись была длиной строки в UTF-16 и обновлялась только после
