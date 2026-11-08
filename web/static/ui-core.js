@@ -840,6 +840,52 @@
     return list;
   }
 
+  /* ── «Удалить по фильтру» глоссария ─────────────────────────────────
+     Сравнение зависит от значений, а не от оператора: обе стороны числа —
+     числовое (иначе «count = 1» уносил записи с count 17, 91 и 931: `=`
+     искал подстроку); текст — по целому значению, подстрока не ищется.
+     Пустая ячейка не проходит ни одно условие — массовое удаление не
+     должно молча забирать записи без поля. */
+  function nerFilterHit(v, op, raw) {
+    var text = nerCellText(v).trim();
+    var want = String(raw == null ? "" : raw).trim();
+    if (!text || !want) return false;
+    var a = text.toLowerCase();
+    var b = want.toLowerCase();
+    /* подстрока — только явными операторами: «содержит» — поиск, а не
+       область значений, и «=» его не подменяет */
+    if (op === "~") return a.includes(b);
+    if (op === "!~") return !a.includes(b);
+    var nv = Number(text);
+    var nw = Number(want);
+    if (Number.isFinite(nv) && Number.isFinite(nw)) {
+      if (op === ">") return nv > nw;
+      if (op === "<") return nv < nw;
+      if (op === "≥") return nv >= nw;
+      if (op === "≤") return nv <= nw;
+      if (op === "≠") return nv !== nw;
+      return nv === nw;
+    }
+    if (op === ">") return a > b;
+    if (op === "<") return a < b;
+    if (op === "≠") return a !== b;
+    if (op === "≥" || op === "≤") return false; // порог текста не бывает
+    return a === b;
+  }
+  /* Записи под условием «Удалить по фильтру» (в порядке файла). Замок значит
+     «не трогать»: зафиксированная запись в список не попадает никогда. */
+  function nerDeleteFilter(items, field, op, raw) {
+    var out = [];
+    var key = String(field == null ? "" : field);
+    if (!key) return out;
+    for (var i = 0; i < (items || []).length; i++) {
+      var it = items[i];
+      if (!it || typeof it !== "object" || nerIsLocked(it)) continue;
+      if (nerFilterHit(it[key], op, raw)) out.push(it);
+    }
+    return out;
+  }
+
   /* ── прогресс запусков: счётчик, ETA и части строки ──────────────
    * Бар живёт в четырёх местах (панель лога, карточка активного запуска,
    * Дашборд, pill шапки): части строки считаются здесь, узлы собирает
@@ -2397,6 +2443,9 @@
     isCjkString: isCjkString,
     filterNerItems: filterNerItems,
     sortNerItems: sortNerItems,
+    /* «Удалить по фильтру»: сравнение по значению, а не по подстроке */
+    nerFilterHit: nerFilterHit,
+    nerDeleteFilter: nerDeleteFilter,
 
   };
 

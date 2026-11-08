@@ -2995,9 +2995,17 @@ function viewProject(section, name, tab, job) {
           }
           /* Числа (count) остаются числами: commit() пишет текстом из
              input, и count становится "132" — сортировка и пороги
-             ломались на унарном минусе */
-          const num = typeof was === "number" ? Number(raw) : NaN;
-          it[c] = Number.isFinite(num) ? num : raw;
+             ломались на унарном минусе. Числовыми остаются поля, где число
+             уже лежит, и count (его тип — целое по определению); текст в
+             notes/translation числом не становится. Нечисло в числовом поле —
+             отказ с причиной, а не молчаливый 0 */
+          const numericField = typeof was === "number" || c === "count";
+          const num = numericField ? Number(raw) : NaN;
+          if (numericField && !Number.isFinite(num)) {
+            toast(`«${colLabel(c)}» — число, правка не сохранена`, "err");
+            return;
+          }
+          it[c] = numericField ? num : raw;
         }
         if (it.__new) {
           const t = String(it.term || "").trim();
@@ -3280,51 +3288,52 @@ function viewProject(section, name, tab, job) {
       const fieldSel = h(
         "select",
         { class: "input" },
-        ...[...knownKeys].map((k) => h("option", { value: k }, k)),
+        // count первым — даже когда ни у одной записи его нет: условие по
+        // частоте — обычный случай, а пустая ячейка под условие не попадает
+        ...[...new Set(["count", ...knownKeys])].map((k) =>
+          h("option", { value: k }, k),
+        ),
       );
       fieldSel.value = "count";
       const opSel = h(
         "select",
         { class: "input" },
-        h("option", { value: ">" }, ">"),
-        h("option", { value: "<" }, "<"),
         h("option", { value: "=" }, "="),
         h("option", { value: "≠" }, "≠"),
+        h("option", { value: ">" }, ">"),
+        h("option", { value: "<" }, "<"),
+        h("option", { value: "≥" }, "≥"),
+        h("option", { value: "≤" }, "≤"),
+        h("option", { value: "~" }, "содержит"),
+        h("option", { value: "!~" }, "не содержит"),
       );
       const valInp = h("input", { class: "input", placeholder: "значение" });
       const countEl = h("div", { class: "field-help" }, "");
       const err2 = h("div", { class: "form-error" });
-      function victims() {
-        // условие применяется ко ВСЕМ незафиксированным терминам: замок
-        // значит «не трогать», массовое удаление его не снимает
-        const raw = valInp.value.trim();
-        if (!raw) return [];
-        const num = Number(raw);
-        return data.items.filter((it) => {
-          if (UICore.nerIsLocked(it)) return false;
-          const v = it[fieldSel.value];
-          const s = String(v == null ? "" : v);
-          // «=»/«≠» — СОДЕРЖИТ/НЕ СОДЕРЖИТ (по подстроке), а не
-          // точное совпадение; «>»/«<» — числовое сравнение, если
-          // обе стороны числа (иначе строковое)
-          if (opSel.value === "=") return s.includes(raw);
-          if (opSel.value === "≠") return !s.includes(raw);
-          if (
-            Number.isFinite(num) &&
-            v != null &&
-            v !== "" &&
-            Number.isFinite(Number(v))
-          ) {
-            const n = Number(v);
-            if (opSel.value === ">") return n > num;
-            return n < num;
-          }
-          if (opSel.value === ">") return s > raw;
-          return s < raw;
-        });
-      }
+      /* условие применяется ко ВСЕМ незафиксированным терминам: замок
+         значит «не трогать», массовое удаление его не снимает. Сравнение —
+         по значению (см. UICore.nerDeleteFilter): «=» и «≠» над числами
+         сравнивают числа, а не подстроки — иначе «count = 1» уносил записи
+         с count 17, 91 и 931 */
+      const victims = () =>
+        UICore.nerDeleteFilter(
+          data.items,
+          fieldSel.value,
+          opSel.value,
+          valInp.value,
+        );
+      const victimsPreview = h("div", {
+        class: "field-help ner-del-preview",
+      });
       function refreshCount() {
-        countEl.textContent = `Будет удалено: ${victims().length}`;
+        const vics = victims();
+        countEl.textContent = `Будет удалено: ${vics.length}`;
+        // список жертв перед подтверждением: удаление массовое, человек
+        // обязан увидеть записи, а не только их число
+        victimsPreview.textContent = vics
+          .slice(0, 30)
+          .map((it) => String(it.term || "?"))
+          .join(", ") + (vics.length > 30 ? ` … и ещё ${vics.length - 30}` : "");
       }
       [fieldSel, opSel, valInp].forEach((el) =>
         el.addEventListener("input", refreshCount),
@@ -3337,12 +3346,15 @@ function viewProject(section, name, tab, job) {
             "div",
             { class: "modal-text" },
             "Условие применяется ко всем незафиксированным терминам ",
-            "глоссария. ",
-            "«=» — содержит, «≠» — не содержит (по подстроке, ",
-            "не точное совпадение); «>»/«<» — больше/меньше.",
+            "глоссария. Сравнение — по целому значению: «=» и «≠» с ",
+            "числом сравнивают числа (count = 1 — только записи с ",
+            "count 1, не 17 и не 931), с текстом — значение целиком. ",
+            "Подстроку ищут только «содержит»/«не содержит». Записи ",
+            "с пустой ячейкой под условие не попадают.",
           ),
           h("div", { class: "ner-del-filter" }, fieldSel, opSel, valInp),
           countEl,
+          victimsPreview,
           err2,
           h(
             "div",
@@ -7158,23 +7170,26 @@ function exportModal(byType, project) {
     value: "0",
   });
 
+  // пустой type в /api/ner подписан «?», а в фильтр экспорта должен уйти
+  // пустой строкой: иначе выбранный «?» не находит ни одной записи
+  const sentType = (t) => (t === "?" ? "" : t);
   const typeKeys = Object.keys(byType);
   const typeCbs = typeKeys.map((t) => {
     const cb = h("input", { type: "checkbox" });
-    cb.dataset.type = t;
+    cb.dataset.type = sentType(t);
     return h("label", { class: "ner-col-row" }, cb, ` ${t} (${byType[t]})`);
   });
 
   const femaleCbs = typeKeys.map((t) => {
     const cb = h("input", { type: "checkbox" });
     cb.checked = /\(female\)/i.test(t);
-    cb.dataset.type = t;
+    cb.dataset.type = sentType(t);
     return h("label", { class: "ner-col-row" }, cb, ` ${t} (${byType[t]})`);
   });
   const maleCbs = typeKeys.map((t) => {
     const cb = h("input", { type: "checkbox" });
     cb.checked = /\(male\)/i.test(t);
-    cb.dataset.type = t;
+    cb.dataset.type = sentType(t);
     return h("label", { class: "ner-col-row" }, cb, ` ${t} (${byType[t]})`);
   });
   const extra = h("div", { class: "exp-extra" });
@@ -7200,7 +7215,17 @@ function exportModal(byType, project) {
     err.textContent = "";
     const fmt = fmtJson.checked ? "json" : fmtText.checked ? "text" : "names";
     const q = new URLSearchParams({ project, format: fmt });
-    if (cntInp.value !== "") q.set("count_threshold", cntInp.value);
+    // порог — целое неотрицательное: пустое и мусорное поле не должно
+    // превращаться в «0» молча (NaN ушёл бы на сервер строкой "NaN")
+    const cnt = String(cntInp.value).trim();
+    if (cnt !== "") {
+      const n = Number(cnt);
+      if (!Number.isFinite(n) || n < 0) {
+        err.textContent = "Порог count — число не меньше 0";
+        return;
+      }
+      q.set("count_threshold", String(Math.trunc(n)));
+    }
     const sel = typeCbs.filter((cb) => cb.checked).map((cb) => cb.dataset.type);
     if (sel.length) q.set("types", sel.join(","));
     if (fmt === "names") {

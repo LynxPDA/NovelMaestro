@@ -2561,6 +2561,73 @@ test("глоссарий: удаление выделенного обходит
   assert.deepEqual(nerRows(page).map(nerFirstCol), ["дракон"]);
 });
 
+test("глоссарий: «Удалить по фильтру» сравнивает count как число", async () => {
+  /* Регресс боевой книги: «=» искал подстроку, и условие count = 1
+     уносило записи с count 17, 91 и 931. Сравнение — по значению. */
+  const items = [
+    { term: "один", translation: "один", count: 1 },
+    { term: "семнадцать", translation: "17", count: 17 },
+    { term: "девятьсот", translation: "931", count: 931 },
+    { term: "восемнадцать", translation: "18", count: 18 },
+    { term: "строка", translation: "1", count: "1" },
+    { term: "замок", translation: "1", count: 1, _locked: true },
+    { term: "безполя", translation: "1" },
+  ];
+  const page = await nerPage(items);
+  await tick();
+  const btn = findByClass(page, "menu-box")[0].children
+    .find((c) => collectText(c).join("") === "Удалить по фильтру");
+  await btn._listeners.click[0]();
+  const bd = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  assert.ok(bd, "модалка фильтра открылась");
+  const inputs = findTag(bd, "input").filter((i) => i.getAttribute("placeholder") === "значение");
+  const valInp = inputs[0];
+  const ops = findTag(bd, "select")[1];
+  const count = () => collectText(findByClass(bd, "field-help")[0]).join("");
+  /* столбец по умолчанию — count */
+  assert.equal(findTag(bd, "select")[0].value, "count");
+  valInp.value = "1";
+  ops.value = "=";
+  await valInp._listeners.input[0]();
+  assert.equal(count(), "Будет удалено: 2",
+    "count = 1 — ровно записи с count 1 (число и строка), замок пропущен");
+  const preview = findByClass(bd, "ner-del-preview")[0];
+  assert.match(preview.textContent, /один/);
+  assert.doesNotMatch(preview.textContent, /семнадцать|девятьсот|восемнадцать/);
+  ops.value = "≠";
+  await ops._listeners.input[0]();
+  assert.equal(count(), "Будет удалено: 3",
+    "count ≠ 1 — только 17, 18 и 931: замок и запись без count не в счёте");
+  ops.value = ">";
+  valInp.value = "17";
+  await valInp._listeners.input[0]();
+  assert.equal(count(), "Будет удалено: 2", "count > 17 — 18 и 931");
+  ops.value = "≤";
+  valInp.value = "18";
+  await valInp._listeners.input[0]();
+  assert.equal(count(), "Будет удалено: 4", "count ≤ 18 — 1, 1, 17, 18");
+  /* текстовое поле — по значению целиком, а не по подстроке */
+  findTag(bd, "select")[0].value = "term";
+  ops.value = "=";
+  valInp.value = "один";
+  await valInp._listeners.input[0]();
+  assert.equal(count(), "Будет удалено: 1", "term = один — только одна запись");
+  await findByClass(bd, "btn-danger")[0]._listeners.click[0]();
+  const confirm = globalThis.document.body.children
+    .filter((el) => (el.className || "").split(/\s+/).includes("modal-backdrop"))
+    .slice(-1)[0];
+  const word = findTag(confirm, "input")[0];
+  word.value = "УДАЛИТЬ";
+  await findByClass(confirm, "btn-danger")[0]._listeners.click[0]();
+  await tick();
+  const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
+  assert.deepEqual(saved.body.items.map((it) => it.term).sort(),
+    ["безполя", "восемнадцать", "девятьсот", "замок", "семнадцать", "строка"].sort(),
+    "удалена ровно одна запись под условием");
+});
+
 test("глоссарий: правка записи со структурой не падает на JSON-поле", async () => {
   /* регресс: текст поля брался из подписи ячейки («Person (male): 5,
      …»), и сохранение любой записи с _votes_* отвечало «Невалидный JSON» */

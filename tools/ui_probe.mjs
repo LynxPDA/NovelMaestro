@@ -4012,6 +4012,9 @@ async function main() {
       'button[title="Фильтр типов"]', ".ner-menu-btn"],
     ["ner-cols", `#/project/${SECTION}/${BOOK}/ner`,
       'button[title="Какие столбцы показывать"]', ".ner-menu-btn"],
+    /* «Удалить по фильтру»: условие, счётчик и список жертв до запуска */
+    ["ner-del-filter", `#/project/${SECTION}/${BOOK}/ner`,
+      'button:has-text("Удалить по фильтру")', ".ner-menu-btn"],
 
     ["export", `#/project/${SECTION}/${BOOK}/ner`,
       'button:has-text("Экспорт для анализа")', null],

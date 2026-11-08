@@ -118,20 +118,34 @@ def _ner_export(ctx: dict) -> dict:
         raise ApiError(400, "format: json | text | names")
 
     def _int(name: str, default: int) -> int:
+        """Целое из строки запроса: браузер шлёт число из input как есть
+        («17.0», « 17 »), а не float-исключение в 400."""
         v = q.get(name)
         if v in (None, ""):
             return default
         try:
-            return int(v)
-        except ValueError:
+            return int(float(str(v).strip()))
+        except (TypeError, ValueError):
             raise ApiError(400, f"{name}: ожидалось число")
 
     def _csv(name: str) -> list[str]:
         return [s.strip() for s in q.get(name, "").split(",") if s.strip()]
 
     threshold = _int("count_threshold", 0)
-    types = _csv("types")
-    filtered = common.filter_ner_items(items, threshold, types)
+    types = []
+    for t in _csv("types"):
+        # по типу считается не только в файле, но и в фильтре: пустой type в
+        # «Типах» глоссария подписан «?» (см. _ner_get) — строку «?» из фильтра
+        # надо понимать так же, иначе выбранный «?» не находит НИ ОДНОЙ записи
+        # и экспорт молча возвращал чужой набор
+        if t == "?":
+            t = ""
+        types.append(t)
+    # пустой тип — осмысленное значение («?» на чипсах), а filter_ner_items
+    # пустое имя типа отбрасывает как «фильтра нет» — поэтому белый список
+    # собирается здесь, а порог остаётся общему правилу
+    filtered = [it for it in common.filter_ner_items(items, threshold)
+                if not types or str(it.get("type", "")) in types]
     if not filtered:
         raise ApiError(400, "Нет записей, подходящих под критерии")
 

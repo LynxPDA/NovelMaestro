@@ -214,6 +214,45 @@ def test_ner_export_filters(srv, tmp_path):
     assert r["total"] == 3  # фильтры не применены
 
 
+def test_ner_export_threshold_accepts_float_form(srv, tmp_path):
+    """Порог count из формы — число: «11.0» и пробелы не дают 400.
+
+    Семантика порога — строгое «count > X», поэтому 11.0 оставляет только
+    запись с count 12."""
+    srv, port, root = srv()
+    _mk_ner(_mk_project(root))
+    q = _q("ACTIVE/demo", format="json", count_threshold="11.0")
+    r = _request(port, "GET", f"/api/ner/export?{q}")
+    assert r["total"] == 1, r
+    # «7.9» — это порог 7: остаются 陈阳 (12) и 青云宗 (8), у 林水 count 3
+    q = _q("ACTIVE/demo", format="json", count_threshold="7.9")
+    r = _request(port, "GET", f"/api/ner/export?{q}")
+    assert r["total"] == 2, r
+    # пробелы в числе — не ошибка
+    q = _q("ACTIVE/demo", format="json", count_threshold=" 8 ")
+    assert _request(port, "GET", f"/api/ner/export?{q}")["total"] == 1
+    # нечисло — честная 400, а не молчаливый 0
+    q = _q("ACTIVE/demo", format="json", count_threshold="мусор")
+    r = _request(port, "GET", f"/api/ner/export?{q}")
+    assert r.get("__error__") == 400, r
+
+
+def test_ner_export_empty_type_as_question_mark(srv, tmp_path):
+    """Пустой type показан в «Типах» как «?» — фильтр обязан его понимать."""
+    srv, port, root = srv()
+    pdir = _mk_project(root)
+    (pdir / "ner.json").write_text(json.dumps([
+        {"term": "A", "type": "", "translation": "А", "count": 1},
+        {"term": "B", "type": "noun", "translation": "Б", "count": 2},
+    ], ensure_ascii=False), encoding="utf-8")
+    got = _request(port, "GET", f"/api/ner?{_q('ACTIVE/demo')}")
+    assert got["by_type"] == {"?": 1, "noun": 1}
+    q = _q("ACTIVE/demo", format="json", types="?")
+    r = _request(port, "GET", f"/api/ner/export?{q}")
+    assert r["total"] == 1, "выбранный «?» находит запись без type"
+    assert json.loads(r["content"])[0]["term"] == "A"
+
+
 def test_ner_export_bad_format(srv, tmp_path):
     srv, port, root = srv()
     _mk_ner(_mk_project(root))

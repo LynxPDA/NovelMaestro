@@ -1957,6 +1957,70 @@ test("checkVisibleErrors: фильтр прячет СТРОКИ, а не гла
   );
 });
 
+/* ── «Удалить по фильтру» глоссария: сравнение по значению ────────────
+ * Подстрока в «=» уносила чужие записи: условие count = 1 удаляло и
+ * count 17, и 931. Числа сравниваются как числа, текст — целиком. */
+test("nerFilterHit: числа сравниваются как числа", () => {
+  assert.equal(UICore.nerFilterHit(1, "=", "1"), true);
+  assert.equal(UICore.nerFilterHit(17, "=", "1"), false, "17 — не 1");
+  assert.equal(UICore.nerFilterHit(931, "=", "1"), false);
+  assert.equal(UICore.nerFilterHit("1", "=", "1"), true, "строка-число тоже");
+  assert.equal(UICore.nerFilterHit(" 1 ", "=", " 1 "), true, "пробелы не мешают");
+  assert.equal(UICore.nerFilterHit(1.0, "=", "1.0"), true);
+  assert.equal(UICore.nerFilterHit(17, "≠", "1"), true);
+  assert.equal(UICore.nerFilterHit(1, "≠", "1"), false);
+  assert.equal(UICore.nerFilterHit(18, ">", "17"), true);
+  assert.equal(UICore.nerFilterHit(17, ">", "17"), false, "строгое больше");
+  assert.equal(UICore.nerFilterHit(17, "≥", "17"), true);
+  assert.equal(UICore.nerFilterHit(17, "≤", "18"), true);
+  assert.equal(UICore.nerFilterHit(19, "≤", "18"), false);
+  assert.equal(UICore.nerFilterHit(2, "<", "18"), true,
+    "2 < 18 — сравнение чисел, а не строк");
+});
+
+test("nerFilterHit: текст — по целому значению, регистр не важен", () => {
+  assert.equal(UICore.nerFilterHit("Person (male)", "=", "Person (male)"), true);
+  assert.equal(UICore.nerFilterHit("Person (male)", "=", "Person"), false,
+    "подстрока не считается");
+  assert.equal(UICore.nerFilterHit("Person", "=", "person"), true);
+  assert.equal(UICore.nerFilterHit("Person", "≠", "Location"), true);
+  assert.equal(UICore.nerFilterHit("Альфа", ">", "Бета"), false, "строковое сравнение");
+  assert.equal(UICore.nerFilterHit("Альфа", "<", "Бета"), true);
+  /* порог текста не бывает: запись не считается ни больше, ни меньше */
+  assert.equal(UICore.nerFilterHit("Альфа", "≥", "Альфа"), false);
+  /* подстрока — только явными операторами, «=» её не подменяет */
+  assert.equal(UICore.nerFilterHit("Person (male)", "~", "male"), true);
+  assert.equal(UICore.nerFilterHit("Person (male)", "~", "MALE"), true);
+  assert.equal(UICore.nerFilterHit("Person (male)", "~", "Location"), false);
+  assert.equal(UICore.nerFilterHit("Person (male)", "!~", "male"), false);
+  assert.equal(UICore.nerFilterHit("Person (male)", "!~", "Location"), true);
+  /* пустое значение ничему не равно и под условие не попадает */
+  assert.equal(UICore.nerFilterHit("", "=", ""), false);
+  assert.equal(UICore.nerFilterHit(null, "≠", "1"), false);
+  assert.equal(UICore.nerFilterHit(1, "=", "  "), false, "пустое условие — ничего");
+});
+
+test("nerDeleteFilter: замок не трогается, условие — по выбранному полю", () => {
+  const items = [
+    { term: "a", count: 1 },
+    { term: "b", count: 17 },
+    { term: "c", count: 1, _locked: true },
+    { term: "d" },
+    { term: "e", count: "1" },
+  ];
+  const terms = (f, op, v) => UICore.nerDeleteFilter(items, f, op, v)
+    .map((it) => it.term).join(",");
+  assert.equal(terms("count", "=", "1"), "a,e",
+    "замок пропущен, запись без count под условие не попадает");
+  assert.equal(terms("count", "≤", "1"), "a,e");
+  assert.equal(terms("term", "=", "b"), "b");
+  assert.equal(terms("", "=", "1"), "", "поля нет — жертв нет");
+  /* кривые данные не роняют вкладку */
+  assert.deepEqual(UICore.nerDeleteFilter(null, "count", "=", "1"), []);
+  assert.deepEqual(
+    UICore.nerDeleteFilter([null, 5, "x"], "count", "=", "1"), []);
+});
+
 /* ── размер текста в БАЙТАХ, а не в символах ────────────────────────────
  * Подпись размера в «Редакторе» после правки считалась как String.length:
  * кириллица в файле занимает 2 байта на символ, поэтому цифра расходилась
