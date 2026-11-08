@@ -3358,6 +3358,19 @@ def build_chapter_map(chapters_dir, logger=None) -> dict:
 
 
 _CH_BLACKLIST = {"raw", "draft", "translated", "original", "source", "backup"}
+#: имена, которыми называются артефакты конвейера. Откат «единственный
+#: безопасный txt» обязан их пропускать: `polished.txt` и `chapter1_polished.txt`
+#: значат «полировка», а не «что-то подходящее под запрос». Без этого
+#: удаление `translated` в папке с одним `chapter.txt` стирало ОРИГИНАЛ, а
+#: запись названий в `chapter` правила `polished.txt`.
+_CH_KNOWN_TYPES = {"chapter", "translated", "redacted", "polished"}
+
+
+def _is_known_type(name: str) -> bool:
+    """Называется ли файл артефактом известного типа (`polished.txt`,
+    `chapter1_polished.txt`, `chapter_5_redacted.txt` — да)."""
+    low = name.lower()
+    return any(low == f"{t}.txt" or f"_{t}" in low for t in _CH_KNOWN_TYPES)
 #: кэш скомпилированных паттернов поиска файла главы. `re.match(pat, …)` с
 #: строкой идёт через `re._cache` (512 записей, вытесняется при переполнении),
 #: а на книге из 6000 глав своих шаблонов больше — тысячи перекомпиляций на
@@ -3382,6 +3395,13 @@ def find_chapter_file(dir_path, chapter_num, want="polished", logger=None,
     (None, ['[FATAL] ...']) — вызывающий пропускает главу;
     без strict берётся первый файл + предупреждение [КОНФЛИКТ].
     strict_types: не подменять запрошенный тип другим файлом (никакого fallback на chapter.txt)
+
+    Откат «единственный безопасный txt» срабатывает только на файл
+    НЕИЗВЕСТНОГО типа (`weird_name.txt`): файл, названный `polished.txt`
+    или `chapter1_polished.txt`, — это другой артефакт конвейера, и подмена
+    им запрошенного типа и портила данные (удаление перевода стирало
+    оригинал). Запрашиваемая запись читается и без отката: `want="chapter"`
+    ищет `chapter.txt`, `want="polished"` — `polished.txt`.
     """
     if not os.path.isdir(dir_path):
         return None, []
@@ -3426,7 +3446,8 @@ def find_chapter_file(dir_path, chapter_num, want="polished", logger=None,
         return None, [f"[ВНИМАНИЕ] Глава {n}: файл типа '{want}' не найден "
                       f"(fallback на другие типы отключён)."]
     safe = [f for f in all_txt
-            if not any(b in f.lower() for b in _CH_BLACKLIST)]
+            if not any(b in f.lower() for b in _CH_BLACKLIST)
+            and not _is_known_type(f)]
     if len(safe) == 1:
         return os.path.join(dir_path, safe[0]), []
     return None, [f"[ВНИМАНИЕ] Глава {n}: не удалось выбрать файл ({want})."]
@@ -3484,7 +3505,8 @@ def compile_chapter_text(chapters_dir, want="chapter", start=None, end=None,
         if not dir_path:
             missing.append(cid)
             continue
-        path, warns = find_chapter_file(dir_path, cid, want=want, logger=logger)
+        path, warns = find_chapter_file(dir_path, cid, want=want, logger=logger,
+                                        strict_types=True)
         warnings.extend(warns or [])
         if not path:
             missing.append(cid)
@@ -3587,9 +3609,11 @@ def read_chapter_titles(chapters_dir, want="polished", logger=None) -> dict:
         dir_path = dirs[-1] if dirs else None
         if not dir_path:
             continue
+        # strict_types: чтение названий — тот же поиск, что у записи
+        # (write_chapter_titles). Иначе вкладка «Главы» показывала бы
+        # заголовок из файла чужого типа, а сохранение его пропускало.
         path, _warns = find_chapter_file(
-            dir_path, cid, want=want,
-            strict_types=(want != "chapter"), logger=logger)
+            dir_path, cid, want=want, strict_types=True, logger=logger)
         if not path:
             continue
         s = _first_nonempty_line(path)
@@ -3623,9 +3647,11 @@ def write_chapter_titles(chapters_dir, want, titles, logger=None) -> dict:
         if not dir_path:
             missing.append(cid)
             continue
+        # strict_types: запись названия не смеет править файл чужого типа.
+        # Откат поиска подставлял `chapter.txt` под запрос `polished`, и
+        # заголовок главы затирал оригинал.
         path, warns = find_chapter_file(
-            dir_path, cid, want=want,
-            strict_types=(want != "chapter"), logger=logger)
+            dir_path, cid, want=want, strict_types=True, logger=logger)
         warnings.extend(warns or [])
         if not path:
             missing.append(cid)

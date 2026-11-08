@@ -1252,8 +1252,12 @@ def _chapters_delete(ctx: dict) -> dict:
         dirs = ch_map[num]
         if not dirs:
             continue
+        # strict_types: удаление НЕ ищет «что-нибудь подходящее». Откат
+        # поиска подставил бы чужой файл (в папке с одним `chapter.txt`
+        # запрос `polished` возвращал оригинал), и удаление типа стирало
+        # данные другого типа. Нет файла этого типа — глава пропущена.
         f, _msgs = common.find_chapter_file(dirs[-1], num, want=want,
-                                            strict=True)
+                                            strict=True, strict_types=True)
         if f:
             try:
                 os.unlink(f)

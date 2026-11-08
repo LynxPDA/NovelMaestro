@@ -283,6 +283,30 @@ def test_cac_compile_txt(cac_env):
     assert log.is_file() and "[OK] Глава 1" in log.read_text(encoding="utf-8")
 
 
+def test_cac_compile_no_type_substitution(cac_env):
+    """`--source-type chapter` не берёт готовый перевод за оригинал.
+
+    У сборки уже стоит strict_types для не-chapter типов, но запрос самого
+    `chapter` тоже шёл через откат: в папке без `chapter.txt` сборка
+    «оригинала» собирала `polished.txt` — русский текст попадал на место
+    исходника и ехал дальше по стадиям как «книга на китайском».
+    """
+    root = Path(CAC.cfg.base_dir)
+    for n in (1, 2):
+        d = root / f"00000_{n}_x"
+        for f in d.glob("*.txt"):
+            f.unlink()
+        (d / "polished.txt").write_text(f"Глава {n} готовый перевод\n",
+                                          encoding="utf-8")
+    CAC.cfg.compile_type = "chapter"
+    CAC.compile_book("txt-plain")
+    out = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2_txt.txt"
+    content = out.read_text(encoding="utf-8") if out.is_file() else ""
+    assert "готовый перевод" not in content
+    log = (Path("logs") / "build_log_txt-plain.txt").read_text(encoding="utf-8")
+    assert "нет файла" in log
+
+
 def test_cac_compile_txt_plain(cac_env):
     """txt-plain: заголовки КАК В ПЕРЕВОДЕ — без markdown-префиксов
     и rulate-тегов «[:|:]» (в отличие от txt = TXT (Rulate)); имя файла
@@ -868,6 +892,23 @@ def test_br_main_no_rules(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["batch_replace.py"])
     assert BR.main() == 1
     assert "нет ни одной корректной замены" in capsys.readouterr().out
+
+
+def test_br_main_no_type_substitution(tmp_path, monkeypatch):
+    """Замена в типе, которого нет, не пишет в файл другого типа.
+
+    Без strict_types откат поиска возвращал единственный txt папки, и
+    правило для `polished` правила `chapter.txt` — оригинал книги (тот же
+    механизм, что стёр исходники через вкладку «Главы»).
+    """
+    d = tmp_path / "chapters" / "00000_1_x"
+    d.mkdir(parents=True)
+    src = d / "chapter.txt"
+    src.write_text("Хунг пришёл.", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", _br_argv())  # --type polished (дефолт)
+    assert BR.main() == 0
+    assert src.read_text(encoding="utf-8") == "Хунг пришёл."
 
 
 def test_br_main_broken_rule(tmp_path, monkeypatch, capsys):

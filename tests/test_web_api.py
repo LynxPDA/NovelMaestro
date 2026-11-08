@@ -1209,6 +1209,39 @@ def test_project_chapters_all_ids_keeps_inner_gaps(srv_ctx):
     assert payload["missing"] == [2]
 
 
+def test_chapters_delete_keeps_other_types(srv_ctx):
+    """Удаление типа глав не трогает файлы ДРУГИХ типов.
+
+    Боевой случай: `DELETE …/chapters?type=polished&start=1&end=6018`
+    в папках с одним `chapter.txt` находил через откат поиска ОРИГИНАЛ
+    и удалял его — три вызова стёрли 5645 исходников из 6018.
+    """
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    pdir = projects_root / "ACTIVE" / "test_book"
+    # глава 1 — только оригинал (именно она терялась)
+    ch1 = pdir / "chapters" / "00001_1"
+    ch1.mkdir(parents=True)
+    (ch1 / "chapter.txt").write_text("中文\n", encoding="utf-8")
+    # глава 2 — полный набор
+    ch2 = pdir / "chapters" / "00002_2"
+    ch2.mkdir(parents=True)
+    for name in ("chapter.txt", "translated.txt", "redacted.txt",
+                 "polished.txt"):
+        (ch2 / name).write_text(f"{name}\n", encoding="utf-8")
+
+    res, payload = _request(
+        port, "DELETE",
+        "/api/projects/ACTIVE/test_book/chapters"
+        "?type=polished&start=1&end=6018")
+    assert res.status == 200
+    assert payload["deleted"] == [2]      # только настоящая полировка
+    assert (ch1 / "chapter.txt").is_file()  # оригинал цел
+    assert not (ch2 / "polished.txt").exists()
+    for name in ("chapter.txt", "translated.txt", "redacted.txt"):
+        assert (ch2 / name).is_file()
+
+
 def test_project_tree_no_chapters(srv_ctx):
     _, port, _ = srv_ctx()
     _create_project(port, None)  # projects_root не используется здесь

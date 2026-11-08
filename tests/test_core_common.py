@@ -876,6 +876,74 @@ def test_find_chapter_file_strict_types_no_fallback(tmp_path):
     assert p is None and warns and "fallback" in warns[0]
 
 
+def test_find_chapter_file_fallback_skips_known_types(tmp_path):
+    """Откат не подставляет файл ДРУГОГО типа конвейера.
+
+    На книге с одним `chapter.txt` в папке запрос `polished` возвращал
+    оригинал, и удаление перевода в web стирало исходники (boevoy случай:
+    три DELETE по 6018 главам оставили 373 файла). Откат существует для
+    файлов НЕИЗВЕСТНОГО имени (`weird_name.txt`), а не для подмены типа.
+    """
+    d = tmp_path / "c"
+    d.mkdir()
+    (d / "chapter.txt").write_text("zh", encoding="utf-8")
+    for want in ("polished", "redacted", "translated"):
+        p, _ = C.find_chapter_file(str(d), 1, want)
+        assert p is None, f"want={want} подставил {p}"
+    # легаси-имя тоже не подставляется под другой запрос
+    d2 = tmp_path / "c2"
+    d2.mkdir()
+    (d2 / "chapter9_polished.txt").write_text("ru", encoding="utf-8")
+    p, _ = C.find_chapter_file(str(d2), 9, "chapter")
+    assert p is None
+    # а своё имя находится без отката
+    p, _ = C.find_chapter_file(str(d2), 9, "polished")
+    assert p is not None and Path(p).name == "chapter9_polished.txt"
+    # откат жив для неизвестного имени (ради него и написан)
+    d3 = tmp_path / "c3"
+    d3.mkdir()
+    (d3 / "weird_name.txt").write_text("ru", encoding="utf-8")
+    p, _ = C.find_chapter_file(str(d3), 3, "polished")
+    assert p is not None and Path(p).name == "weird_name.txt"
+
+
+def test_compile_chapter_text_no_type_substitution(tmp_path):
+    """Сборка не выдаёт оригинал за перевод (want=polished без polished.txt)."""
+    root = tmp_path / "chapters"
+    d1 = root / "00000_1_a"
+    d2 = root / "00000_2_b"
+    d1.mkdir(parents=True)
+    d2.mkdir()
+    (d1 / "chapter.txt").write_text("第1章 中文\n", encoding="utf-8")
+    (d2 / "chapter.txt").write_text("第2章 中文\n", encoding="utf-8")
+    (d2 / "polished.txt").write_text("Глава 2 перевод\n", encoding="utf-8")
+    text, info = C.compile_chapter_text(str(root), want="polished")
+    assert info["written"] == 1
+    assert info["missing"] == [1]
+    assert text == "Глава 2 перевод\n"
+
+
+def test_write_chapter_titles_no_type_substitution(tmp_path):
+    """Запись заголовка не правит файл чужого типа.
+
+    Вкладка «Главы» с типом `chapter` на папке без `chapter.txt` правила
+    через откат `polished.txt`: готовый перевод терял заголовок и получал
+    китайский заглавие оригинала.
+    """
+    root = tmp_path / "chapters"
+    d1 = root / "00000_1_a"
+    d1.mkdir(parents=True)
+    pol = d1 / "polished.txt"
+    pol.write_text("Глава 1 Готовая\n\nТекст\n", encoding="utf-8")
+    res = C.write_chapter_titles(str(root), "chapter", {1: "第1章 原题"})
+    assert res["updated"] == [] and res["missing"] == [1]
+    assert pol.read_text(encoding="utf-8") == "Глава 1 Готовая\n\nТекст\n"
+    # свой файл правится как раньше
+    res = C.write_chapter_titles(str(root), "polished", {1: "Глава 1 Новая"})
+    assert res["updated"] == [1] and res["missing"] == []
+    assert pol.read_text(encoding="utf-8") == "Глава 1 Новая\n\nТекст\n"
+
+
 def test_find_chapter_file_blacklist(tmp_path):
     d = tmp_path / "c"
     d.mkdir()

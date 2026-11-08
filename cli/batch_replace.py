@@ -350,8 +350,12 @@ def main(argv=None) -> int:
     progress.start()
     for num in selected:
         for dir_path in chapter_map[num]:
+            # strict_types: замена пишет в файл, и подменённый тип
+            # означал бы правку ЧУЖОГО артефакта (правило для перевода
+            # ложилось в оригинал).
             filepath, warns = find_chapter_file(dir_path, num, want=want,
-                                                strict=True)
+                                                strict=True,
+                                                strict_types=True)
             for w in warns:
                 progress.log(f"  ⚠ {w}")
             if filepath is None:
