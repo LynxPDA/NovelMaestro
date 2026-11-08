@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from web.jobs import JobManager
 from web.server import ApiError, Router
@@ -314,6 +315,11 @@ def _cached_status(prj, root: Path, sec: str, name: str) -> dict:
 #: кеширует, и не переживать рестарт ценой размера.
 _TREE_MEM: dict[str, dict] = {}
 _TREE_MEM_LOCK = threading.Lock()
+#: лок СБОРКИ (не словаря): одновременные промахи ждут один пересчёт.
+#: Держится всё время чтения книги — это сотни миллисекунд, но ждут только
+#: те, кому нужна ТА ЖЕ книга; попытки в кеше отдают сразу.
+_TREE_BUILD_LOCK = threading.Lock()
+
 #: сколько книг держим: дерево и названия по две записи на книгу
 _TREE_MEM_BOOKS = 8
 #: предел объёма кеша в «единицах» (записей дерева + символов названий).
@@ -391,6 +397,41 @@ def _mem_evict(keep: str) -> None:
         order.remove(book)
 
 
+def _tree_sig_cached(root: Path, sec: str, name: str) -> str:
+    """Сигнатура книги (полный `stat` обход файлов глав).
+
+    Окно «свежести» намеренно НЕ вводится: файлы пишут стадии отдельными
+    процессами, и любой пропуск проверки означал бы показ устаревшего
+    размера или названия — ровно те ошибки, ради которых сигнатура и
+    заведена. Обход 0.04–0.1 c дешевле чтения всех артефактов в 4–9 раз,
+    этого и достаточно.
+    """
+    return _tree_signature(root / sec / name)
+
+
+def _mem_build(kind: str, root: Path, sec: str, name: str, want: str,
+               sig: str, build):
+    """Посчитать запись один раз на всех, кто её одновременно ждёт.
+
+    Проверка сигнатуры и последующая сборка не атомарны: восемь вкладок,
+    открывших книгу разом (обновление страницы после деплоя, «открыть во
+    всех»), все видели промах и каждая считала дерево заново — на книге из
+    6000 глав это восемь чтений по 94 МБ вместо одного и 2.9 c ожидания
+    вместо 0.4. Считаем под отдельным локом сборки и перепроверяем кеш
+    внутри него: пока ждавшие спали, результат уже положили.
+    """
+    entry = _mem_get(kind, root, sec, name, want)
+    if entry is not None and entry.get("sig") == sig:
+        return entry["data"]
+    with _TREE_BUILD_LOCK:
+        entry = _mem_get(kind, root, sec, name, want)  # ждали — уже готово
+        if entry is not None and entry.get("sig") == sig:
+            return entry["data"]
+        data = build()
+        _mem_put(kind, root, sec, name, want, sig, data)
+        return data
+
+
 def _cached_tree(common, root: Path, sec: str, name: str) -> list:
     """Дерево глав: кеш в памяти по сигнатуре состояния.
 
@@ -400,13 +441,9 @@ def _cached_tree(common, root: Path, sec: str, name: str) -> list:
     же файлам, 0.04–0.07 c) дешевле чтения в 6–9 раз.
     """
     pdir = root / sec / name
-    sig = _tree_signature(pdir)
-    entry = _mem_get("tree", root, sec, name)
-    if entry is not None and entry.get("sig") == sig:
-        return entry["data"]
-    chapters = _build_tree(common, pdir)
-    _mem_put("tree", root, sec, name, "", sig, chapters)
-    return chapters
+    sig = _tree_sig_cached(root, sec, name)
+    return _mem_build("tree", root, sec, name, "", sig,
+                      lambda: _build_tree(common, pdir))
 
 
 def _collect_stats(prj, root: Path) -> tuple[list, int]:
@@ -1129,13 +1166,10 @@ def _cached_titles(common, root: Path, sec: str, name: str,
     артефакта свой набор названий.
     """
     pdir = root / sec / name
-    sig = _tree_signature(pdir)
-    entry = _mem_get("titles", root, sec, name, want)
-    if entry is not None and entry.get("sig") == sig:
-        return entry["data"]
-    titles = common.read_chapter_titles(pdir / "chapters", want=want)
-    _mem_put("titles", root, sec, name, want, sig, titles)
-    return titles
+    sig = _tree_sig_cached(root, sec, name)
+    return _mem_build(
+        "titles", root, sec, name, want, sig,
+        lambda: common.read_chapter_titles(pdir / "chapters", want=want))
 
 
 def _project_tree(ctx: dict) -> dict:
