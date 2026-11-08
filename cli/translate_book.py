@@ -361,7 +361,8 @@ def build_parser():
                    help="Размер n-грамм поиска терминов (символы).")
     p.add_argument("--ner_fields", type=str, default="term,translation,type",
                    help="Поля ner.json через запятую, которые попадают "
-                        "в NER-блок (алиасы — при включении aliases).")
+                        "в NER-блок (алиасы — при включении aliases; порядок "
+                        "в блоке — term, aliases, type, translation).")
     p.add_argument("--ner_min_count", type=int, default=0,
                    help="Минимальный count термина для {ner_block}: термины "
                         "с count ниже отфильтровываются (0 — выключено).")

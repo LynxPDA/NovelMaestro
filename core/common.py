@@ -1167,10 +1167,18 @@ def _fuzzy_hit(term_norm, term_ngrams, text_norm, text_ngrams, threshold):
     return lm.size >= len(term_norm) * threshold
 
 
+# порядок полей в записи {ner_block}: как у записи глоссария, что читает
+# человек (NER_RECORD_FIELDS), а не порядок чипсов формы — набор полей
+# приходит из формы, порядок задаёт вопрос «что это за сущность»
+NER_BLOCK_FIELDS = ("term", "aliases", "type", "translation")
+
+
 def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
                       automaton=None, min_count=0):
     """Поиск релевантных терминов: Aho-Corasick/regex → n-граммы (не-CJK).
-    Возвращает (JSON-строка, count). ner_fields — 'f1,f2,...'.
+    Возвращает (JSON-строка, count). ner_fields — 'f1,f2,...';
+    порядок полей записи в блоке — NER_BLOCK_FIELDS (term, aliases, type,
+    translation), остальные — за ними в порядке настройки.
     min_count — порог поля count (частота термина): термины с count <
     min_count отфильтровываются (0 — фильтр выключен)."""
     if not ner_data or not text:
@@ -1227,6 +1235,8 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
         return "[]", 0
 
     fields = [f.strip() for f in ner_fields.split(",") if f.strip()]
+    fields = [f for f in NER_BLOCK_FIELDS if f in fields] \
+        + [f for f in fields if f not in NER_BLOCK_FIELDS]
     entries, seen = [], set()
     for i in sorted(found):
         item = ner_data[i]

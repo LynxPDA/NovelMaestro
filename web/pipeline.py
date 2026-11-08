@@ -701,7 +701,8 @@ def main() -> None:
                          "{male_names} (0 — выключено).")
     ap.add_argument("--ner_fields", default="term,translation,type",
                     help="Поля термина в {ner_block} через запятую "
-                         "(алиасы — при включении aliases).")
+                         "(алиасы — при включении aliases; порядок в блоке — "
+                         "term, aliases, type, translation).")
     ap.add_argument("--chunk_size", type=int, default=None,
                     help="Размер чанка перевода/полировки, ТОКЕНЫ (оценка) "
                          "(пусто = PIPELINE_CHUNK_SIZE из .env → дефолт); "

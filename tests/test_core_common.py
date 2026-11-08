@@ -1346,6 +1346,25 @@ def test_find_relevant_ner_ngram_threshold(tmp_path):
     assert cnt == 0
 
 
+def test_find_relevant_ner_block_field_order(tmp_path):
+    """Порядок полей записи {ner_block} — term, aliases, type, translation.
+
+    Набор полей выбирает форма (ner_fields), а порядок в JSON задаёт
+    ядро: с порядком чипсов записи ключи шли type → translation →
+    aliases и менялись от стадии к стадии."""
+    data, automaton = C.load_ner_data(_write_ner(tmp_path), 3, SilentLog())
+    s, _ = C.find_relevant_ner("陳陽 здесь", data, 0.7, 3,
+                               "term,type,translation,aliases,count",
+                               automaton=automaton)
+    assert list(json.loads(s)[0]) == ["term", "aliases", "type",
+                                      "translation", "count"], \
+        "term → aliases → type → translation, прочие поля — за ними"
+    s, _ = C.find_relevant_ner("陳陽 здесь", data, 0.7, 3,
+                               "translation,aliases,term",
+                               automaton=automaton)
+    assert list(json.loads(s)[0]) == ["term", "aliases", "translation"]
+
+
 # ══════════════════════════════════════════════════════════════════════
 # collect_gender_names (имена по полу для polish)
 # ══════════════════════════════════════════════════════════════════════
