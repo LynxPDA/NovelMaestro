@@ -902,6 +902,34 @@ def test_project_tree_legacy_artifacts(srv_ctx):
     assert "chapter1_translated_trace.json" not in arts
 
 
+def test_project_tree_cache_refreshes(srv_ctx):
+    """Кеш /tree перечитывает изменившееся дерево, а не отдаёт старое.
+
+    Дерево кешируется по сигнатуре состояния: правка файла с ДРУГИМ
+    размером меняет сигнатуру, и следующий запрос обязан увидеть новый
+    размер и новый файл — иначе после правки в «Редакторе» вкладка
+    показывала бы прежний объём.
+    """
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    ch = projects_root / "ACTIVE" / "test_book" / "chapters" / "00004_1"
+    ch.mkdir(parents=True)
+    (ch / "chapter.txt").write_text("первый", encoding="utf-8")  # 6 симв.
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/tree")
+    assert res.status == 200
+    assert payload["chapters"][0]["artifacts"]["chapter.txt"] == 6
+    # правка: текст длиннее — сигнатура изменилась, кеш обязан обновиться
+    (ch / "chapter.txt").write_text("второй вариант", encoding="utf-8")
+    (ch / "polished.txt").write_text("полировка", encoding="utf-8")
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/tree")
+    assert res.status == 200
+    arts = payload["chapters"][0]["artifacts"]
+    assert arts["chapter.txt"] == 14
+    assert arts["polished.txt"] == 9
+
+
 def test_project_tree_sizes_in_chars(srv_ctx):
     """Размеры артефактов в /tree — СИМВОЛЫ, не байты: клиент сверяет
     объёмы глав в символах (utf-8 кириллицы — 2 байта на символ)."""
@@ -919,6 +947,34 @@ def test_project_tree_sizes_in_chars(srv_ctx):
     assert entry["artifacts"]["chapter.txt"] == len(text)
     assert entry["artifacts"]["polished.txt"] == len(text)
     assert len(text.encode("utf-8")) == 320  # байт больше символов — не путать
+
+def test_project_titles_cache_refreshes(srv_ctx):
+    """Кеш названий глав видит правку, а не отдаёт старое название.
+
+    Кеш ключуется по сигнатуре файлов глав и типу: правка первой строки
+    меняет `mtime`, и следующий запрос обязан вернуть новое название.
+    Иначе вкладка «Главы» после правки показывала бы прошлый заголовок.
+    """
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    pdir = projects_root / "ACTIVE" / "test_book"
+    ch = pdir / "chapters" / "00001_1"
+    ch.mkdir(parents=True)
+    (ch / "polished.txt").write_text("Старое название\n\nТекст\n",
+                                      encoding="utf-8")
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/chapters/titles"
+                            "?type=polished")
+    assert res.status == 200
+    assert payload["titles"] == {"1": "Старое название"}
+    (ch / "polished.txt").write_text("Новое название\n\nТекст\n",
+                                      encoding="utf-8")
+    res, payload = _request(port, "GET",
+                            "/api/projects/ACTIVE/test_book/chapters/titles"
+                            "?type=polished")
+    assert res.status == 200
+    assert payload["titles"] == {"1": "Новое название"}
+
 
 def test_project_chapters_titles(srv_ctx):
     """GET/PUT /api/projects/{s}/{n}/chapters/titles — названия глав."""

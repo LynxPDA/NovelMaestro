@@ -26,6 +26,8 @@ from web.api_common import (
     _STATS_LOCK,
     _STATS_CACHE_FILE,
     _STATUS_CACHE_VER,
+    _TREE_CACHE_VER,
+    _TITLES_CACHE_VER,
     _CACHE_LOADED,
 )
 from web.api_common import (
@@ -182,11 +184,16 @@ def _load_stats_cache(root: Path) -> None:
         if isinstance(data, dict):
             pfx = f"{root}::"
             own = f":status:v{_STATUS_CACHE_VER}"
+            own_tree = f":tree:v{_TREE_CACHE_VER}"
             _STATS_CACHE.update(
                 {pfx + k: v for k, v in data.items()
                  if isinstance(v, dict) and "sig" in v
-                 and ("stats" in v or "status" in v)
-                 and (":status:" not in k or k.endswith(own))})
+                 and ("stats" in v or "status" in v or "chapters" in v
+                      or "titles" in v)
+                 and (":status:" not in k or k.endswith(own))
+                 and (":tree:" not in k or k.endswith(own_tree))
+                 and (":titles:" not in k
+                      or k.endswith(f":v{_TITLES_CACHE_VER}"))})
     except (OSError, ValueError) as exc:
         log.debug("stats-кеш не читается: %s", exc)
 
@@ -230,7 +237,8 @@ def _invalidate_stats_entry(root: Path, sec: str, name: str) -> None:
     """
     with _STATS_LOCK:
         key = _stats_cache_key(root, sec, name)
-        for k in (key, key + f":status:v{_STATUS_CACHE_VER}"):
+        for k in [kk for kk in _STATS_CACHE
+                  if kk == key or kk.startswith(key + ":")]:
             _STATS_CACHE.pop(k, None)
         _save_stats_cache(root)
 
@@ -295,6 +303,31 @@ def _cached_status(prj, root: Path, sec: str, name: str) -> dict:
         _STATS_CACHE[key] = {"sig": sig, "status": status}
         _save_stats_cache(root)
         return status
+
+
+def _cached_tree(common, root: Path, sec: str, name: str) -> list:
+    """Дерево глав: кеш по сигнатуре состояния (как /status).
+
+    `/tree` читает каждый артефакт ради размера в СИМВОЛАХ: на книге из
+    6000 глав это 94 МБ с диска и ~0.4 c, а вкладки «Редактор» и «Массовая
+    замена» спрашивают дерево при каждом открытии. Сигнатура (stat по тем
+    же файлам, 0.06 c) дешевле чтения в 6 раз, и правится дерево только
+    стадиями, а не просмотром. Ключ — с версией, чтобы правка пересчёта не
+    жила со старыми записями.
+    """
+    key = _stats_cache_key(root, sec, name) + f":tree:v{_TREE_CACHE_VER}"
+    pdir = root / sec / name
+    sig = _tree_signature(pdir)
+    with _STATS_LOCK:
+        _ensure_stats_cache(root)
+        entry = _STATS_CACHE.get(key)
+        if entry is not None and entry.get("sig") == sig:
+            return entry.get("chapters", [])
+    chapters = _build_tree(common, pdir)
+    with _STATS_LOCK:
+        _STATS_CACHE[key] = {"sig": sig, "chapters": chapters}
+        _save_stats_cache(root)
+    return chapters
 
 
 def _collect_stats(prj, root: Path) -> tuple[list, int]:
@@ -919,30 +952,35 @@ def _project_stats(ctx: dict) -> dict:
                           if p.is_dir()]}
 
 
-def _project_tree(ctx: dict) -> dict:
-    """Дерево глав: номер, папка, артефакты с размерами в СИМВОЛАХ
-    (не байты: клиент сверяет объёмы глав в символах; байты
-    кириллицы/CJK дают расхождение до ~3×).
+def _build_tree(common, pdir: Path) -> list:
+    """Главы с артефактами и размерами в СИМВОЛАХ.
+
+    Размер — символы, а не байты: кириллица в UTF-8 занимает 2 байта,
+    CJK — до 3, и клиент, сверяющий объёмы глав, получал бы расхождение до
+    ~3×. Символы берутся декодированием прочитанного файла: быстрее всего
+    именно оно (Python ведёт декодер по таблице, а ручной скан байтов на
+    Python — в 40 раз медленнее того же объёма).
 
     помимо канонических имён — легаси-суффиксы старых проектов:
     ``*_translated.txt``, ``*_redacted.txt``, ``*_polished.txt``
     (вкладка «Редактор» видит ключевые файлы независимо от маски)."""
-    common = _import_common(ctx)
-    pdir, section, name = _project_path(ctx)
     chapters_dir = pdir / "chapters"
     if not chapters_dir.is_dir():
-        return {"ok": True, "section": section, "name": name,
-                "chapters": []}
+        return []
     chapter_map = common.build_chapter_map(chapters_dir)
     artifacts = ("chapter.txt", "translated.txt", "translated_trace.json",
                  "redacted.txt", "polished.txt")
     legacy_sfx = ("_translated.txt", "_redacted.txt", "_polished.txt")
+
     def _char_size(f: Path) -> int:
         # utf-8 почти всегда (наши артефакты); ошибки — длина байтов
         try:
             return len(f.read_bytes().decode("utf-8"))
-        except UnicodeDecodeError:
-            return f.stat().st_size
+        except (OSError, UnicodeDecodeError):
+            try:
+                return f.stat().st_size
+            except OSError:
+                return 0
 
     items = []
     for num in sorted(chapter_map):
@@ -961,8 +999,88 @@ def _project_tree(ctx: dict) -> dict:
                 if f.is_file() and f.name.endswith(legacy_sfx):
                     entry["artifacts"][f.name] = _char_size(f)
             items.append(entry)
+    return items
+
+
+def _tree_signature(pdir: Path) -> str:
+    """Отпечаток состояния для кеша /tree и названий глав.
+
+    От `_stats_signature` отличается составом: там сигнатура про готовность
+    стадий (`translated/redacted/polished`), а дереву нужны ВСЕ файлы,
+    которые оно отдаёт, включая `chapter.txt` и `translated_trace.json`.
+    `chapter.txt` в готовность не входит и в сигнатуре статуса отсутствует:
+    без него правка оригинала не инвалидировала бы кеш и вкладка
+    «Редактор» показывала бы старый объём.
+
+    Считается по `stat`: содержимое не читается, поэтому дешевле самого
+    дерева в разы (0.04 c против 0.4 c на книге из 6000 глав).
+    """
+    h = hashlib.sha256()
+    ch = pdir / "chapters"
+    try:
+        with os.scandir(ch) as it:
+            dirs = sorted((e for e in it if e.is_dir()), key=lambda e: e.name)
+    except OSError:
+        dirs = []
+    h.update(f"ch:{len(dirs)}\0".encode())
+    for d in dirs:
+        h.update(f"{d.name}\0".encode())
+        try:
+            with os.scandir(d.path) as it:
+                files = sorted((e for e in it if e.name.endswith(".txt")),
+                               key=lambda e: e.name)
+        except OSError:
+            files = []
+        for f in files:
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            h.update(f"{f.name}:{st.st_size}:{st.st_mtime_ns}\0".encode())
+    return h.hexdigest()
+
+
+def _cached_titles(common, root: Path, sec: str, name: str,
+                   want: str) -> dict:
+    """Названия глав: кеш по сигнатуре (как /tree и /status).
+
+    `read_chapter_titles` открывает по файлу на главу: на книге из 6000
+    глав — 0.2–0.6 c на каждое открытие вкладки «Главы». Сигнатура
+    (stat по тем же файлам) дешевле; тип файлов — часть ключа: у глав
+    свой набор названий на каждый артефакт.
+    """
+    key = (f"{_stats_cache_key(root, sec, name)}"
+           f":titles:{want}:v{_TITLES_CACHE_VER}")
+    pdir = root / sec / name
+    sig = _tree_signature(pdir)
+    with _STATS_LOCK:
+        _ensure_stats_cache(root)
+        entry = _STATS_CACHE.get(key)
+        if entry is not None and entry.get("sig") == sig:
+            return entry.get("titles", {})
+    titles = common.read_chapter_titles(pdir / "chapters", want=want)
+    with _STATS_LOCK:
+        _STATS_CACHE[key] = {"sig": sig, "titles": titles}
+        _save_stats_cache(root)
+    return titles
+
+
+def _project_tree(ctx: dict) -> dict:
+    """Дерево глав: номер, папка, артефакты с размерами в СИМВОЛАХ.
+
+    Построение — через кеш по сигнатуре (`_cached_tree`): сам обход дёшев,
+    но чтение артефактов ради размера стоит 0.4 c на книге из 6000 глав.
+    """
+    common = _import_common(ctx)
+    pdir, section, name = _project_path(ctx)
+    root = _projects_root(ctx)
+    try:
+        chapters = _cached_tree(common, root, section, name)
+    except Exception as exc:  # noqa: BLE001 — кеш не важнее ответа
+        log.debug("tree(%s/%s) без кеша: %s", section, name, exc)
+        chapters = _build_tree(common, pdir)
     return {"ok": True, "section": section, "name": name,
-            "chapters": items}
+            "chapters": chapters}
 
 
 def _chapter_titles_get(ctx: dict) -> dict:
@@ -980,7 +1098,7 @@ def _chapter_titles_get(ctx: dict) -> dict:
     if not chapters_dir.is_dir():
         return {"ok": True, "section": section, "name": name,
                 "type": want, "titles": {}}
-    titles = common.read_chapter_titles(chapters_dir, want=want)
+    titles = _cached_titles(common, _projects_root(ctx), section, name, want)
     # all_ids — непрерывный ряд от ПЕРВОЙ до последней папки главы: та же
     # вселенная, что у таблицы «Статус» (progress_missing — range(ids[0], …+1)).
     # Отсчёт от 1 расходился бы с ней: книга, разобранная с --num-offset 5,
