@@ -1549,7 +1549,7 @@ function viewProject(section, name, tab, job) {
         pInfo.perr.textContent = "";
         pInfo.meta.textContent = pInfo.state.missing
           ? `новый файл · ${type}`
-          : `${fmtSize(pInfo.state.text.length)} · ${type}`;
+          : `${fmtSize(UICore.textBytes(pInfo.state.text))} · ${type}`;
         pInfo.saveBtn.disabled = !pInfo.state.dirty;
         if (pInfo.hl) {
           pInfo.host.append(pInfo.hl.tip);
@@ -1584,6 +1584,11 @@ function viewProject(section, name, tab, job) {
             pInfo.state.text = pInfo.editor.getValue();
             pInfo.state.dirty = true;
             pInfo.saveBtn.disabled = false;
+            /* размер — сразу за правкой, БАЙТАМИ (как на диске): раньше
+               подпись обновлялась только после сохранения и считалась в
+               символах, и цифра расходилась с реальным файлом */
+            pInfo.meta.textContent =
+              `${fmtSize(UICore.textBytes(pInfo.state.text))} · ${pInfo.state.type}`;
             if (pInfo.hl) pInfo.hl.tip.style.display = "none";
             scheduleHighlight(pInfo);
           });
@@ -1623,7 +1628,8 @@ function viewProject(section, name, tab, job) {
         });
         pInfo.state.dirty = false;
         pInfo.state.missing = false; /* файл создан — больше не «новый» */
-        pInfo.meta.textContent = `${fmtSize(pInfo.state.text.length)} · ${pInfo.state.type}`;
+        pInfo.meta.textContent =
+          `${fmtSize(UICore.textBytes(pInfo.state.text))} · ${pInfo.state.type}`;
         pInfo.saveBtn.disabled = true;
         toast("Сохранено");
       } catch (ex) {

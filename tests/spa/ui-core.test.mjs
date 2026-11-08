@@ -1956,3 +1956,22 @@ test("checkVisibleErrors: фильтр прячет СТРОКИ, а не гла
     [{ index: 0, message: "x", kind: undefined }],
   );
 });
+
+/* ── размер текста в БАЙТАХ, а не в символах ────────────────────────────
+ * Подпись размера в «Редакторе» после правки считалась как String.length:
+ * кириллица в файле занимает 2 байта на символ, поэтому цифра расходилась
+ * с реальным файлом в полтора-два раза. */
+test("textBytes: байты UTF-8, а не единицы UTF-16", () => {
+  assert.equal(UICore.textBytes("abc"), 3, "латиница — байт на символ");
+  assert.equal(UICore.textBytes("привет"), 12, "кириллица — 2 байта на символ");
+  assert.equal(UICore.textBytes("«ё»"), 6, "кавычки и буква ё тоже по 2 байта");
+  assert.equal(UICore.textBytes("漢字"), 6, "CJK — по 3 байта");
+  assert.equal(UICore.textBytes("😀"), 4, "эмодзи вне BMP — 4 байта на пару");
+  assert.equal(UICore.textBytes(""), 0);
+  assert.equal(UICore.textBytes(null), 0, "нет текста — нет байт");
+  assert.equal(UICore.textBytes("a\nб"), 4, "перевод строки — один байт");
+  /* правка, которая делает файл МЕНЬШЕ, тоже видна: это не «длина ответа» */
+  const long = UICore.textBytes("длинный исходный текст главы");
+  const short = UICore.textBytes("короче");
+  assert.ok(short < long, `сокращение текста уменьшает размер: ${short} < ${long}`);
+});

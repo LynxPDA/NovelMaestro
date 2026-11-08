@@ -226,6 +226,32 @@
     if (ext === "md" || ext === "markdown") return "md";
     return "text";
   }
+
+  /* Размер ТЕКСТА в байтах UTF-8 — столько файл займёт на диске. Длина строки
+   * в UTF-16 (String.length) — число единиц хранения JavaScript: кириллица
+   * занимает в файле 2 байта на символ, астропланные коды — 4, поэтому
+   * подпись, посчитанная как text.length, после правки показывала размер в
+   * полтора-два раза меньше реального (сервер при загрузке отдаёт байты
+   * stat(), и цифры расходились). TextEncoder — стандарт браузера, своего
+   * подсчёта кодовых точек не пишем. */
+  function textBytes(text) {
+    var s = String(text == null ? "" : text);
+    if (typeof TextEncoder !== "undefined") {
+      return new TextEncoder().encode(s).length;
+    }
+    /* без TextEncoder (старый движок): запасной счёт кодовых точек */
+    var n = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c < 0x80) n += 1;
+      else if (c < 0x800) n += 2;
+      else if (c >= 0xd800 && c <= 0xdbff) {
+        n += 4;
+        i++; // суррогатная пара — один символ из 4 байт
+      } else n += 3;
+    }
+    return n;
+  }
   /* HTML-разрядщик текста в <pre> предпросмотра */
   function escapeHtml(s) {
     return String(s == null ? "" : s).replace(/[&<>]/g, function (c) {
@@ -2293,6 +2319,7 @@
     uploadPath: uploadPath,
     uploadBatches: uploadBatches,
     previewMode: previewMode,
+    textBytes: textBytes,
     editorLang: editorLang,
     modeValue: modeValue,
     fieldApplies: fieldApplies,

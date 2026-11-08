@@ -330,6 +330,9 @@ async function api(path, opts = {}) {
     return globalThis.__historyPatch || { patch: "", adds: 0, dels: 0 };
   }
   if (p === "/file") {
+    /* содержимое и размер файла задаёт тест: вкладка «Редактор» сверяет
+       подпись размера с тем, что отдал сервер */
+    if (globalThis.__fileData) return globalThis.__fileData;
     /* файл сверх предела редактора: сервер отвечает 413 — тест
        воспроизводит именно этот путь (экран ошибки поверх вкладки) */
     if (globalThis.__fileTooBig && path.includes(globalThis.__fileTooBig))
@@ -387,16 +390,20 @@ async function api(path, opts = {}) {
   return { ok: true };
 }
 
-function makeEditor(initial, lang) {
+function makeEditor(initial, lang, onUpdate) {
   const ta = new El("textarea");
   ta.value = initial;
   ta.lang = lang || ""; // язык редактора — тестам проверять именно его
-  return {
+  const api = {
     root: ta, isCM: false,
     getValue: () => ta.value,
     setValue: (t) => { ta.value = t; },
     setLang(l) { ta.lang = l || ""; }, setReadOnly() {},
+    /* «правка пользователя»: CodeMirror зовёт updateListener, тест — это */
+    __update: (u) => onUpdate && onUpdate(u || { docChanged: true }),
   };
+  ta._editor = api; // панель «Редактора» ищется по узлу своей панели
+  return api;
 }
 
 /* стадии и профили LLM: поле «Профиль LLM» рисует сводку отсюда */
@@ -3537,4 +3544,49 @@ test("живой стрим: поток закрылся без статуса �
   assert.equal(allText(row.querySelectorAll(".ch-cell")[0]), "✓",
     "событие из повторного снимка попало в таблицу");
   delete globalThis.__sseDelay;
+});
+
+const EDITOR_TREE_TYPED = {
+  chapters: [
+    { dir: "00000_1_Глава 1", artifacts: {
+      "chapter.txt": "1", "translated.txt": "1",
+      "redacted.txt": "1", "polished.txt": "1" } },
+    { dir: "00000_2_Глава 2", artifacts: {
+      "chapter.txt": "2", "translated.txt": "2",
+      "redacted.txt": "2", "polished.txt": "2" } },
+    { dir: "00000_3_Глава 3", artifacts: {
+      "chapter.txt": "3", "translated.txt": "3" } },
+  ],
+};
+
+test("«Редактор»: подпись размера считает байты и обновляется на правке", async () => {
+  /* регресс: подпись была длиной строки в UTF-16 и обновлялась только после
+     сохранения — на кириллице она врала в полтора-два раза, а до нажатия
+     «Сохранить» показывала старый размер вовсе */
+  globalThis.__tree = EDITOR_TREE_TYPED;
+  /* «привет» — 6 символов, но 12 байт: сервер отдаёт размер файла в байтах */
+  globalThis.__fileData = { content: "привет", size: 12, exists: true };
+  const page = viewProject("ACTIVE", "Книга 2", "editor");
+  await tick();
+  const pane = findByClass(page, "ed-pane")[0];
+  const ta = pane.querySelector(".ed-cm").children[0];
+  assert.ok(ta && ta._editor, "редактор панели смонтирован");
+  assert.match(allText(findByClass(pane, "ed-meta")[0]), /^12 B · /,
+    "до правки — размер файла с сервера");
+
+  /* правка текста: 4 символа кириллицы — это 8 байт, а не 4 и не 12 */
+  ta.value = "тест";
+  ta._editor.__update({ docChanged: true });
+  await tick();
+  assert.match(allText(findByClass(pane, "ed-meta")[0]), /^8 B · /,
+    "после правки размер обновлён сразу и посчитан в байтах");
+
+  /* сокращение текста уменьшает подпись — это размер файла, а не счётчик */
+  ta.value = "я";
+  ta._editor.__update({ docChanged: true });
+  await tick();
+  assert.match(allText(findByClass(pane, "ed-meta")[0]), /^2 B · /,
+    "кириллическая буква — 2 байта");
+  delete globalThis.__tree;
+  delete globalThis.__fileData;
 });
