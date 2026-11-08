@@ -948,6 +948,112 @@ def test_project_tree_sizes_in_chars(srv_ctx):
     assert entry["artifacts"]["polished.txt"] == len(text)
     assert len(text.encode("utf-8")) == 320  # байт больше символов — не путать
 
+def test_project_tree_cache_same_size_edit(srv_ctx):
+    """Кеш видит правку с ТЕМ ЖЕ размером — именно её стерегёт mtime.
+
+    Кеш по одному размеру пропустил бы такую правку: файл перезаписан,
+    объём тот же, а содержимое другое. В отпечаток входит `mtime_ns`,
+    поэтому название главы меняется и без смены длины.
+    """
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    ch = projects_root / "ACTIVE" / "test_book" / "chapters" / "00001_1"
+    ch.mkdir(parents=True)
+    (ch / "polished.txt").write_text("Глава 1. Старт\n\nтекст",
+                                      encoding="utf-8")
+    url = ("/api/projects/ACTIVE/test_book/chapters/titles"
+           "?type=polished")
+    res, payload = _request(port, "GET", url)
+    assert res.status == 200
+    assert payload["titles"] == {"1": "Глава 1. Старт"}
+    # та же длина (14 симв.), другой текст
+    assert len("Глава 1. Финиш\n\nтекст") == len("Глава 1. Старт\n\nтекст")
+    (ch / "polished.txt").write_text("Глава 1. Финиш\n\nтекст",
+                                      encoding="utf-8")
+    res, payload = _request(port, "GET", url)
+    assert res.status == 200
+    assert payload["titles"] == {"1": "Глава 1. Финиш"}
+
+
+def test_project_tree_cache_isolated(srv_ctx):
+    """Кеш не смешивает книги и типы файлов при одинаковых номерах глав."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    _create_project(port, projects_root, name="other_book")
+    for book, name in (("test_book", "Альфа"), ("other_book", "Бета")):
+        ch = projects_root / "ACTIVE" / book / "chapters" / "00001_1"
+        ch.mkdir(parents=True)
+        (ch / "polished.txt").write_text(f"{name} глава\n\nт",
+                                          encoding="utf-8")
+        (ch / "chapter.txt").write_text(f"{name} исходник\n\nт",
+                                         encoding="utf-8")
+    url = "/api/projects/ACTIVE/{}/chapters/titles?type={}"
+    res, a = _request(port, "GET", url.format("test_book", "polished"))
+    res, b = _request(port, "GET", url.format("other_book", "polished"))
+    res, ac = _request(port, "GET", url.format("test_book", "chapter"))
+    assert a["titles"] == {"1": "Альфа глава"}
+    assert b["titles"] == {"1": "Бета глава"}
+    assert ac["titles"] == {"1": "Альфа исходник"}
+
+
+def test_project_tree_cache_missing_book(srv_ctx):
+    """Удалённая книга и отсутствующие chapters/ — пустое дерево, не 500."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root)
+    pdir = projects_root / "ACTIVE" / "test_book"
+    ch = pdir / "chapters" / "00001_1"
+    ch.mkdir(parents=True)
+    (ch / "polished.txt").write_text("глава\n\nт", encoding="utf-8")
+    url = "/api/projects/ACTIVE/test_book/tree"
+    res, payload = _request(port, "GET", url)
+    assert res.status == 200 and len(payload["chapters"]) == 1
+    # книга удалена после кеширования — дерево пустое, а не старое
+    import shutil
+    shutil.rmtree(pdir)
+    res, payload = _request(port, "GET", url)
+    assert res.status in (200, 404)
+    if res.status == 200:
+        assert payload["chapters"] == []
+
+
+def test_tree_mem_evicts_by_books_and_units(tmp_path):
+    """Кеш дерева в памяти вытесняет целыми книгами по двум пределам.
+
+    Без вытеснения в памяти висели бы все открытые книги; книга 6000 глав
+    — 245 000 единиц и ~7 МБ, восемь таких — под сотню мегабайт ради
+    экономии 0.4 c. Книга, которую только что положили, не вытесняется
+    даже если одна не влезает в предел (иначе кеш не сработал бы никогда).
+    """
+    ap = web_api.api_projects
+    root = tmp_path
+    old_books, old_units = ap._TREE_MEM_BOOKS, ap._TREE_MEM_UNITS
+    try:
+        # 1. по числу книг
+        ap._TREE_MEM.clear()
+        ap._TREE_MEM_BOOKS, ap._TREE_MEM_UNITS = 3, 10 ** 9
+        for b in range(6):
+            ap._mem_put("titles", root, "TMP", f"b{b}", "polished",
+                        "sig", {1: "Название"})
+        books = {v["book"].rsplit("/", 1)[-1] for v in ap._TREE_MEM.values()}
+        assert len(books) == 3 and books == {"b3", "b4", "b5"}
+        # 2. по объёму
+        ap._TREE_MEM.clear()
+        ap._TREE_MEM_BOOKS, ap._TREE_MEM_UNITS = 99, 100
+        for b in range(6):
+            ap._mem_put("titles", root, "TMP", f"b{b}", "polished", "sig",
+                        dict.fromkeys(range(10), "Длинное название главы"))
+        assert len({v["book"] for v in ap._TREE_MEM.values()}) == 1
+        # 3. гигантская книга не вытесняет себя
+        ap._TREE_MEM.clear()
+        ap._TREE_MEM_BOOKS, ap._TREE_MEM_UNITS = 99, 10
+        ap._mem_put("titles", root, "TMP", "giant", "polished", "sig",
+                    dict.fromkeys(range(50), "Длинное название главы"))
+        assert len({v["book"] for v in ap._TREE_MEM.values()}) == 1
+    finally:
+        ap._TREE_MEM.clear()
+        ap._TREE_MEM_BOOKS, ap._TREE_MEM_UNITS = old_books, old_units
+
+
 def test_project_titles_cache_refreshes(srv_ctx):
     """Кеш названий глав видит правку, а не отдаёт старое название.
 

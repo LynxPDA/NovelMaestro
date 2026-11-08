@@ -10,6 +10,7 @@ import copy
 import hashlib
 import logging
 import os
+import threading
 from pathlib import Path
 from web.jobs import JobManager
 from web.server import ApiError, Router
@@ -26,8 +27,6 @@ from web.api_common import (
     _STATS_LOCK,
     _STATS_CACHE_FILE,
     _STATUS_CACHE_VER,
-    _TREE_CACHE_VER,
-    _TITLES_CACHE_VER,
     _CACHE_LOADED,
 )
 from web.api_common import (
@@ -184,16 +183,14 @@ def _load_stats_cache(root: Path) -> None:
         if isinstance(data, dict):
             pfx = f"{root}::"
             own = f":status:v{_STATUS_CACHE_VER}"
-            own_tree = f":tree:v{_TREE_CACHE_VER}"
+            # только stats/status: дерево и названия живут в памяти и на
+            # диск не пишутся (старые записи прежней версии отбрасываются)
             _STATS_CACHE.update(
                 {pfx + k: v for k, v in data.items()
                  if isinstance(v, dict) and "sig" in v
-                 and ("stats" in v or "status" in v or "chapters" in v
-                      or "titles" in v)
-                 and (":status:" not in k or k.endswith(own))
-                 and (":tree:" not in k or k.endswith(own_tree))
-                 and (":titles:" not in k
-                      or k.endswith(f":v{_TITLES_CACHE_VER}"))})
+                 and ("stats" in v or "status" in v)
+                 and ("chapters" not in v and "titles" not in v)
+                 and (":status:" not in k or k.endswith(own))})
     except (OSError, ValueError) as exc:
         log.debug("stats-кеш не читается: %s", exc)
 
@@ -305,28 +302,110 @@ def _cached_status(prj, root: Path, sec: str, name: str) -> dict:
         return status
 
 
+#: Кеш дерева глав и названий — только в памяти, с вытеснением по книгам.
+#:
+#: В дисковый `_STATS_CACHE` его класть нельзя: `_save_stats_cache`
+#: сериализует и переписывает ВЕСЬ файл под глобальным локом при каждом
+#: обновлении любой записи. Дерево на 6000 глав — 876 КБ JSON, а названия
+#: зависят от объёма первой строки файла главы: на данных, где первая
+#: строка — абзац, вышло 12 МБ на книгу. Один пересчёт дерева подвешивал бы
+#: пульт, статусы и статистику всех книг на десятки миллисекунд, а файл
+#: раздувался бы до десятков мегабайт. Кеш обязан быть дешевле того, что
+#: кеширует, и не переживать рестарт ценой размера.
+_TREE_MEM: dict[str, dict] = {}
+_TREE_MEM_LOCK = threading.Lock()
+#: сколько книг держим: дерево и названия по две записи на книгу
+_TREE_MEM_BOOKS = 8
+#: предел объёма кеша в «единицах» (записей дерева + символов названий).
+#: Реальная книга на 6000 глав (четыре артефакта, заголовки по полсотни
+#: символов) — 24 000 на дерево и 221 000 на названия, около 7 МБ. Держать
+#: восемь таких — под сотню мегабайт ради экономии 0.4 c. Предел ≈ трём
+#: большим книгам: свежие открытые книги остаются, давно закрытые уходят.
+_TREE_MEM_UNITS = 800_000
+
+
+def _mem_units(data, want: str) -> int:
+    """Стоимость записи для предела: записи дерева + символы названий."""
+    if want:
+        return len(data) + sum(len(v) for v in data.values()
+                               if isinstance(v, str))
+    return len(data) * 4  # у дерева ещё папка и имена артефактов
+
+
+def _mem_key(kind: str, root: Path, sec: str, name: str,
+             want: str = "") -> str:
+    """Ключ записи в памяти: тип, корень projects/, книга, тип файла."""
+    return f"{kind}|{root}|{sec}/{name}|{want}"
+
+
+def _mem_get(kind: str, root: Path, sec: str, name: str,
+             want: str = "") -> dict | None:
+    """Запись кеша в памяти (свежесть проверяет вызывающий по сигнатуре)."""
+    with _TREE_MEM_LOCK:
+        return _TREE_MEM.get(_mem_key(kind, root, sec, name, want))
+
+
+def _mem_put(kind: str, root: Path, sec: str, name: str, want: str,
+             sig: str, data) -> None:
+    """Положить запись, вытеснив самые старые книги.
+
+    Вытесняем двумя рубежами: по числу книг и по объёму. Книга 6000 глав
+    весит ~29 МБ, и по одному счётчику книг кеш раздувался бы до сотен
+    мегабайт — а смысл кеша сэкономить 0.4 c, не заняв полгигабайта.
+    Вытесняем целыми книгами: иначе дерево книги жило бы, а её названия
+    вытеснялись соседними, и каждый заход пересобирал бы одно и то же.
+    """
+    key = _mem_key(kind, root, sec, name, want)
+    book = f"{root}|{sec}/{name}"
+    with _TREE_MEM_LOCK:
+        _TREE_MEM[key] = {"sig": sig, "data": data, "book": book,
+                          "units": _mem_units(data, want)}
+        _mem_evict(book)
+
+
+def _mem_evict(keep: str) -> None:
+    """Вытеснить целыми книгами, пока кеш не влезет в пределы (вызывать под локом).
+
+    `keep` — книга, которую только что положили: она не вытесняется, даже
+    если одна не влезает в предел (иначе кеш не сработал бы никогда, а
+    запрос всё равно уже посчитан).
+    """
+    order: list[str] = []
+    sizes: dict[str, int] = {}
+    for entry in _TREE_MEM.values():
+        book = entry["book"]
+        if book not in sizes:
+            order.append(book)
+            sizes[book] = 0
+        sizes[book] += entry["units"]
+    total = sum(sizes.values())
+    for book in order:  # от самых старых к новым
+        over = (len(order) > _TREE_MEM_BOOKS or total > _TREE_MEM_UNITS)
+        if not over:
+            break
+        if book == keep:
+            continue
+        for k in [k for k, v in _TREE_MEM.items() if v["book"] == book]:
+            del _TREE_MEM[k]
+        total -= sizes[book]
+        order.remove(book)
+
+
 def _cached_tree(common, root: Path, sec: str, name: str) -> list:
-    """Дерево глав: кеш по сигнатуре состояния (как /status).
+    """Дерево глав: кеш в памяти по сигнатуре состояния.
 
     `/tree` читает каждый артефакт ради размера в СИМВОЛАХ: на книге из
     6000 глав это 94 МБ с диска и ~0.4 c, а вкладки «Редактор» и «Массовая
     замена» спрашивают дерево при каждом открытии. Сигнатура (stat по тем
-    же файлам, 0.06 c) дешевле чтения в 6 раз, и правится дерево только
-    стадиями, а не просмотром. Ключ — с версией, чтобы правка пересчёта не
-    жила со старыми записями.
+    же файлам, 0.04–0.07 c) дешевле чтения в 6–9 раз.
     """
-    key = _stats_cache_key(root, sec, name) + f":tree:v{_TREE_CACHE_VER}"
     pdir = root / sec / name
     sig = _tree_signature(pdir)
-    with _STATS_LOCK:
-        _ensure_stats_cache(root)
-        entry = _STATS_CACHE.get(key)
-        if entry is not None and entry.get("sig") == sig:
-            return entry.get("chapters", [])
+    entry = _mem_get("tree", root, sec, name)
+    if entry is not None and entry.get("sig") == sig:
+        return entry["data"]
     chapters = _build_tree(common, pdir)
-    with _STATS_LOCK:
-        _STATS_CACHE[key] = {"sig": sig, "chapters": chapters}
-        _save_stats_cache(root)
+    _mem_put("tree", root, sec, name, "", sig, chapters)
     return chapters
 
 
@@ -1042,26 +1121,20 @@ def _tree_signature(pdir: Path) -> str:
 
 def _cached_titles(common, root: Path, sec: str, name: str,
                    want: str) -> dict:
-    """Названия глав: кеш по сигнатуре (как /tree и /status).
+    """Названия глав: кеш в памяти по сигнатуре состояния (как дерево).
 
     `read_chapter_titles` открывает по файлу на главу: на книге из 6000
-    глав — 0.2–0.6 c на каждое открытие вкладки «Главы». Сигнатура
-    (stat по тем же файлам) дешевле; тип файлов — часть ключа: у глав
-    свой набор названий на каждый артефакт.
+    глав — 0.2–0.6 c на каждое открытие вкладки «Главы». Сигнатура (stat
+    по тем же файлам) дешевле; тип файлов — часть ключа: у каждого
+    артефакта свой набор названий.
     """
-    key = (f"{_stats_cache_key(root, sec, name)}"
-           f":titles:{want}:v{_TITLES_CACHE_VER}")
     pdir = root / sec / name
     sig = _tree_signature(pdir)
-    with _STATS_LOCK:
-        _ensure_stats_cache(root)
-        entry = _STATS_CACHE.get(key)
-        if entry is not None and entry.get("sig") == sig:
-            return entry.get("titles", {})
+    entry = _mem_get("titles", root, sec, name, want)
+    if entry is not None and entry.get("sig") == sig:
+        return entry["data"]
     titles = common.read_chapter_titles(pdir / "chapters", want=want)
-    with _STATS_LOCK:
-        _STATS_CACHE[key] = {"sig": sig, "titles": titles}
-        _save_stats_cache(root)
+    _mem_put("titles", root, sec, name, want, sig, titles)
     return titles
 
 
