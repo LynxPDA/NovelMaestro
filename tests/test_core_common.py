@@ -844,6 +844,30 @@ def test_find_chapter_file_conflict_with_logger(tmp_path):
     assert p is not None and warns and "КОНФЛИКТ" in warns[0]
 
 
+def test_find_chapter_file_pattern_cache_same_result(tmp_path):
+    """Кеш скомпилированных шаблонов не меняет выбор файла.
+
+    `re.match(pat, …)` со строкой идёт через внутренний кеш `re` на 512
+    записей: на книге из 6000 глав своих шаблонов больше, и на каждом обходе
+    они перекомпилировались заново (1.5 c из 1.7 на read_chapter_titles).
+    Тест держит главное: с кешем находится тот же файл и те же
+    предупреждения, в том числе для повторного вызова (попадание в кеш).
+    """
+    d = tmp_path / "c"
+    d.mkdir()
+    (d / "chapter1_translated.txt").write_text("п", encoding="utf-8")
+    for _ in range(3):  # первый — промах, следующие — попадания
+        p, warns = C.find_chapter_file(str(d), 1, "translated")
+        assert p is not None
+        assert os.path.basename(p) == "chapter1_translated.txt"
+        assert warns == []
+    # дубли ловятся так же, как без кеша (strict → FATAL): второй файл
+    # под ТОТ ЖЕ шаблон — смена регистра (^chapter1_translated\.txt$, IGNORECASE)
+    (d / "Chapter1_translated.txt").write_text("п2", encoding="utf-8")
+    p, warns = C.find_chapter_file(str(d), 1, "translated", strict=True)
+    assert p is None and warns and "FATAL" in warns[0]
+
+
 def test_find_chapter_file_strict_types_no_fallback(tmp_path):
     d = tmp_path / "c"
     d.mkdir()

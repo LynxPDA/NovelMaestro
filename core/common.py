@@ -3358,6 +3358,20 @@ def build_chapter_map(chapters_dir, logger=None) -> dict:
 
 
 _CH_BLACKLIST = {"raw", "draft", "translated", "original", "source", "backup"}
+#: кэш скомпилированных паттернов поиска файла главы. `re.match(pat, …)` с
+#: строкой идёт через `re._cache` (512 записей, вытесняется при переполнении),
+#: а на книге из 6000 глав своих шаблонов больше — тысячи перекомпиляций на
+#: один обход (профиль: 1.5 c из 1.7 на read_chapter_titles). Ключ — сам
+#: шаблон, флаги фиксированы (IGNORECASE).
+_CHAPTER_FILE_RE: dict = {}
+
+
+def _chapter_file_re(pattern: str):
+    """Скомпилированный шаблон поиска имени файла главы (кэш на процесс)."""
+    rx = _CHAPTER_FILE_RE.get(pattern)
+    if rx is None:
+        rx = _CHAPTER_FILE_RE[pattern] = re.compile(pattern, re.IGNORECASE)
+    return rx
 
 def find_chapter_file(dir_path, chapter_num, want="polished", logger=None,
                       strict=False, strict_types=False):
@@ -3392,7 +3406,8 @@ def find_chapter_file(dir_path, chapter_num, want="polished", logger=None,
             rf".*{w}.*\.txt$",
         ]
     for pat in patterns:
-        hits = [f for f in all_txt if re.match(pat, f, re.IGNORECASE)]
+        rx = _chapter_file_re(pat)
+        hits = [f for f in all_txt if rx.match(f)]
         if len(hits) == 1:
             return os.path.join(dir_path, hits[0]), []
         if len(hits) > 1:
