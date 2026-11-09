@@ -2559,13 +2559,16 @@ test("глоссарий: удаление выделенного обходит
   await tick();
   const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
   assert.equal(saved.method, "PATCH", "удаление — точечная правка");
-  /* JSON-сравнение: объекты приходят из контекста страницы и своих
-     прототипов, deepStrictEqual на них спотыкается о прототип */
-  assert.equal(JSON.stringify(saved.body.changes),
-    JSON.stringify([
-      { term: "мир", delete: true },
-      { term: "Лина", delete: true },
-    ]), "на сервер уходят только удалённые термины; зафиксированная выжила");
+  /* Удаление адресуется каноном записи и её номером: термин не уникален,
+     и «удалить по терму» сносило соседние дубли. JSON-сравнение — объекты
+     из контекста страницы, deepStrictEqual спотыкается о прототип. */
+  assert.deepEqual(saved.body.changes.map((c) => [c.term, c.delete]),
+    [["мир", true], ["Лина", true]],
+    "на сервер уходят только удалённые термины; зафиксированная выжила");
+  for (const c of saved.body.changes) {
+    assert.match(c.canon, /^\{.*"term":/, "канон — JSON записи");
+    assert.equal(typeof c.order, "number", "номер записи среди дублей");
+  }
   assert.deepEqual(nerRows(page).map(nerFirstCol), ["дракон"]);
 });
 

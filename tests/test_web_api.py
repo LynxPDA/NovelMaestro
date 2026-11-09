@@ -631,6 +631,121 @@ def test_ner_patch_delete_and_clear_field(srv_ctx):
     assert "_locked" not in saved[0], "None снимает поле, а не пишет null"
 
 
+def test_ner_patch_addresses_one_of_duplicate_terms(srv_ctx):
+    """PATCH бьёт по ОДНОЙ записи из дублей термина, а не по всем.
+
+    Термин в ner.json не уникален (слияние алиас-групп, разные прогоны).
+    Правка «по терму» задевала все записи слова: замок одной строки лочил
+    все, удаление одной сносило все — потеря данных на ровном месте."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_dups")
+    pdir = projects_root / "ACTIVE" / "ner_dups"
+    items = [
+        {"term": "А", "translation": "1", "count": 10},
+        {"term": "А", "translation": "2", "count": 5},
+        {"term": "А", "translation": "3", "count": 1},
+    ]
+    _request(port, "PUT", "/api/ner",
+             {"project": "ACTIVE/ner_dups", "items": items})
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    second = saved[1]
+    canon = json.dumps({k: v for k, v in second.items()
+                        if k not in ("_locked", "__new")
+                        and not k.startswith("_fp")},
+                       ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":"))
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_dups",
+        "changes": [{"term": "А", "canon": canon,
+                     "set": {"_locked": True}}],
+    })
+    assert res.status == 200, payload
+    assert payload["changed"] == 1, "задет ровно один дубль"
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert [it.get("_locked", False) for it in saved] == [False, True, False]
+
+
+def test_ner_patch_delete_removes_one_duplicate(srv_ctx):
+    """PATCH delete убирает адресованную запись, соседние дубли остаются."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_dups_del")
+    pdir = projects_root / "ACTIVE" / "ner_dups_del"
+    _request(port, "PUT", "/api/ner", {
+        "project": "ACTIVE/ner_dups_del",
+        "items": [
+            {"term": "А", "translation": "1", "count": 10},
+            {"term": "А", "translation": "2", "count": 5},
+            {"term": "А", "translation": "3", "count": 1},
+        ],
+    })
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    first = saved[0]
+    canon = json.dumps({k: v for k, v in first.items()
+                        if k not in ("_locked", "__new")
+                        and not k.startswith("_fp")},
+                       ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":"))
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_dups_del",
+        "changes": [{"term": "А", "canon": canon, "delete": True}],
+    })
+    assert res.status == 200, payload
+    assert payload["changed"] == 1
+    assert payload["total"] == 2
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert [it["translation"] for it in saved] == ["2", "3"]
+
+
+def test_ner_patch_order_splits_identical_records(srv_ctx):
+    """Побайтовые дубли (тот же канон) различаются номером `order`."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_dups_order")
+    pdir = projects_root / "ACTIVE" / "ner_dups_order"
+    _request(port, "PUT", "/api/ner", {
+        "project": "ACTIVE/ner_dups_order",
+        "items": [
+            {"term": "Д", "translation": "x", "count": 5},
+            {"term": "Д", "translation": "x", "count": 5},
+        ],
+    })
+    canon = json.dumps({"term": "Д", "translation": "x", "count": 5},
+                       ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":"))
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_dups_order",
+        "changes": [{"term": "Д", "canon": canon, "order": 1,
+                     "delete": True}],
+    })
+    assert res.status == 200, payload
+    assert payload["changed"] == 1 and payload["total"] == 1
+
+
+def test_ner_patch_normalizes_records(srv_ctx):
+    """PATCH нормализует запись как PUT: пустой aliases снимается ключом.
+
+    Очистка ячейки писала `aliases: ""`, и стадия падала на `[term] + ""`.
+    Полный PUT это лечил (`ner_record`), а точечный путь — нет: файл
+    читался по-разному в зависимости от того, чем его правили."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_patch_norm")
+    pdir = projects_root / "ACTIVE" / "ner_patch_norm"
+    _request(port, "PUT", "/api/ner", {
+        "project": "ACTIVE/ner_patch_norm",
+        "items": [{"term": "古一", "translation": "Древний"}],
+    })
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_patch_norm",
+        "changes": [{"term": "古一", "set": {"aliases": "",
+                                             "count": "7",
+                                             "__new": True}}],
+    })
+    assert res.status == 200, payload
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert "aliases" not in saved[0], "пустой aliases снят ключом"
+    assert saved[0]["count"] == 7, "count приведён к числу"
+    assert "__new" not in saved[0], "служебный ключ клиента не пишется"
+
+
 def test_ner_patch_rejects_empty_and_unknown(srv_ctx):
     """PATCH: пустой список — 400; неизвестный термин — без изменений."""
     _, port, projects_root = srv_ctx()

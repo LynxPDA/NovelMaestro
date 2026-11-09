@@ -6,7 +6,9 @@ review-файлы ner_check и translate_check_llm и их применение.
 """
 from __future__ import annotations
 
+import json
 import logging
+import threading
 import unicodedata
 from pathlib import Path
 from web.jobs import JobManager
@@ -32,6 +34,10 @@ from web.api_env import (
 )
 from web.api_stage import _jobs_start
 
+#: запись глоссария — read-modify-write: PATCH и PUT держат один замок,
+#: иначе параллельные правки теряют записи друг друга
+_NER_LOCK = threading.Lock()
+
 
 def _ner_get(ctx: dict) -> dict:
     """Глоссарий (GET /api/ner?project=): total + by_type + items.
@@ -46,8 +52,7 @@ def _ner_get(ctx: dict) -> dict:
     if size > NER_TEXT_LIMIT:
         return {"ok": True, "exists": True, "too_large": True, "size": size}
     try:
-        import json as _json
-        items = _json.loads(ner.read_text(encoding="utf-8", errors="replace"))
+        items = json.loads(ner.read_text(encoding="utf-8", errors="replace"))
     except (OSError, ValueError) as exc:
         raise ApiError(500, f"ner.json не читается: {exc}")
     if not isinstance(items, list):
@@ -83,22 +88,89 @@ def _ner_put(ctx: dict) -> dict:
             if it is None:
                 continue  # запись без терминa — мусор, а не термин
         normalized.append(it)
-    import json as _json
-    text = _json.dumps(normalized, ensure_ascii=False, indent=2)
-    common.atomic_write(pdir / "ner.json",
-                        unicodedata.normalize("NFC", text))
+    text = json.dumps(normalized, ensure_ascii=False, indent=2)
+    # тот же замок, что у PATCH: иначе полное сохранение затирало бы
+    # точечную правку, пришедшую между чтением и записью
+    with _NER_LOCK:
+        common.atomic_write(pdir / "ner.json",
+                            unicodedata.normalize("NFC", text))
     return {"ok": True, "total": len(normalized)}
+
+
+def _ner_canon(item: dict) -> str:
+    """Канонический вид записи — для адресации дублей термина.
+
+    Термин не уникален: в ner.json бывает несколько записей одного слова с
+    разными значениями (слияние алиас-групп, разные прогоны). Правка «по
+    терму» задевала ВСЕ такие записи — замок одного дубля лочил все, а
+    удаление одной строки сносило их разом.
+
+    Клиент присылает эту же строку (`canon`, UICore.nerCanon) и сервер
+    сравнивает её, а не хеш: алгоритм не нужно дублировать на двух языках,
+    и расхождение дайджестов не может молча превратить правку в «не
+    нашли». Служебные поля (`_locked`, `__new`, `_fp*`) в канон не входят:
+    замок и переименование не должны менять адрес записи.
+    """
+    body = {k: v for k, v in item.items()
+            if k not in ("_locked", "__new") and not k.startswith("_fp")}
+    text = json.dumps(body, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"))
+    return unicodedata.normalize("NFC", text)
+
+
+def _ner_targets(items: list, ch: dict, term_of) -> list:
+    """Записи, которые правка задевает: терм + канон (если передан).
+
+    Без канона адресация прежняя (все записи термина) — так работают
+    клиенты, которые его ещё не шлют: старый SPA не должен терять правки.
+    С каноном — ровно одна запись; если записей-побайтовых дублей несколько,
+    `order` (номер совпадения в файле) различает их.
+    """
+    term = unicodedata.normalize("NFC", str(ch.get("term", ""))).strip()
+    if not term:
+        return []
+    cands = [it for it in items if term_of(it) == term]
+    canon = ch.get("canon")
+    if isinstance(canon, str) and canon and len(cands) > 1:
+        want = unicodedata.normalize("NFC", canon)
+        same = [it for it in cands if _ner_canon(it) == want]
+        if same:
+            cands = same
+    order = _to_int_or_none(ch.get("order"))
+    if order is not None and 0 <= order < len(cands):
+        cands = [cands[order]]
+    return cands
+
+
+def _to_int_or_none(v):
+    """Целое из JSON-числа или строки; иначе None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _ner_patch(ctx: dict) -> dict:
     """Точечная правка глоссария (PATCH /api/ner {project, changes}).
 
-    Каждое изменение — `{term, set}` (поля записи) либо `{term, delete: true}`.
-    Клиент присылает его на микродействие — замок термина, правку ячейки,
-    удаление строки, — а не весь список: у книги на 10978 терминов PUT с
-    полным `items` весил 6 МБ и занимал 4 с на одну снятую галочку.
-    Термин ищется точным совпадением после NFC; правка ложится на все
-    незафиксированные записи термина (у дублей он один, а значения разные).
+    Каждое изменение — `{term, set, canon?, order?}` (поля записи) либо
+    `{term, delete: true, canon?, order?}`. Клиент присылает его на
+    микродействие — замок термина, правку ячейки, удаление строки, — а не
+    весь список: у книги на 10978 терминов PUT с полным `items` весил 6 МБ
+    и занимал 4 с на одну снятую галочку.
+
+    Адресация — терм + необязательный `canon` (см. `_ner_canon`): термин
+    НЕ уникален, и правка «по терму» задевала соседние записи того же
+    слова. Без канона правка ложится на все записи термина — прежнее
+    поведение.
+
+    Записи нормализуются `ner_record` (как в PUT): иначе `aliases: ""`,
+    `count: "3"` и служебный `__new` попадали в файл мимо проверок, и
+    глоссарий читался иначе, чем после полного сохранения.
     Возвращает `{ok, changed, total}`."""
     common = _import_common(ctx)
     pdir, _section, _name = _project_ctx(ctx)
@@ -108,48 +180,61 @@ def _ner_patch(ctx: dict) -> dict:
     ner = pdir / "ner.json"
     if not ner.is_file():
         raise ApiError(404, "ner.json не найден")
-    try:
-        import json as _json
-        items = _json.loads(ner.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, ValueError) as exc:
-        raise ApiError(500, f"ner.json не читается: {exc}")
-    if not isinstance(items, list):
-        raise ApiError(500, "ner.json: ожидался список терминов")
+    # read-modify-write под общим замком: два одновременных PATCH иначе
+    # читали бы один и тот же файл и второй затирал правки первого
+    with _NER_LOCK:
+        try:
+            items = json.loads(ner.read_text(encoding="utf-8",
+                                             errors="replace"))
+        except (OSError, ValueError) as exc:
+            raise ApiError(500, f"ner.json не читается: {exc}")
+        if not isinstance(items, list):
+            raise ApiError(500, "ner.json: ожидался список терминов")
 
-    def term_of(it) -> str:
-        if not isinstance(it, dict):
-            return ""
-        return unicodedata.normalize("NFC", str(it.get("term", ""))).strip()
+        def term_of(it) -> str:
+            if not isinstance(it, dict):
+                return ""
+            return unicodedata.normalize(
+                "NFC", str(it.get("term", ""))).strip()
 
-    changed = 0
-    for ch in changes:
-        if not isinstance(ch, dict):
-            continue
-        term = unicodedata.normalize("NFC", str(ch.get("term", ""))).strip()
-        if not term:
-            continue
-        targets = [it for it in items if term_of(it) == term]
-        if not targets:
-            continue
-        if ch.get("delete"):
-            items = [it for it in items if term_of(it) != term]
+        changed = 0
+        for ch in changes:
+            if not isinstance(ch, dict):
+                continue
+            targets = _ner_targets(items, ch, term_of)
+            if not targets:
+                continue
+            if ch.get("delete"):
+                dead = {id(it) for it in targets}
+                items = [it for it in items if id(it) not in dead]
+                changed += len(targets)
+                continue
+            fields = ch.get("set")
+            if not isinstance(fields, dict):
+                continue
+            for it in targets:
+                for k, v in fields.items():
+                    # __new — маркер «запись ещё не в файле» из формы SPA:
+                    # в файл он попадать не должен
+                    if k == "__new":
+                        continue
+                    if v is None:
+                        it.pop(k, None)
+                    else:
+                        it[k] = v
+                # та же нормализация, что у полного PUT: файл не должен
+                # отличаться в зависимости от того, чем его правили
+                clean = common.ner_record(dict(it))
+                if clean is None:
+                    continue
+                it.clear()
+                it.update(clean)
             changed += len(targets)
-            continue
-        fields = ch.get("set")
-        if not isinstance(fields, dict):
-            continue
-        for it in targets:
-            for k, v in fields.items():
-                if v is None:
-                    it.pop(k, None)
-                else:
-                    it[k] = v
-        changed += len(targets)
 
-    import json as _json
-    text = _json.dumps(items, ensure_ascii=False, indent=2)
-    common.atomic_write(ner, unicodedata.normalize("NFC", text))
-    return {"ok": True, "changed": changed, "total": len(items)}
+        text = json.dumps(items, ensure_ascii=False, indent=2)
+        common.atomic_write(ner, unicodedata.normalize("NFC", text))
+        total = len(items)
+    return {"ok": True, "changed": changed, "total": total}
 
 
 def _ner_export(ctx: dict) -> dict:
@@ -167,8 +252,7 @@ def _ner_export(ctx: dict) -> dict:
     if not ner.is_file():
         raise ApiError(404, "ner.json не найден")
     try:
-        import json as _json
-        items = _json.loads(ner.read_text(encoding="utf-8", errors="replace"))
+        items = json.loads(ner.read_text(encoding="utf-8", errors="replace"))
     except (OSError, ValueError) as exc:
         raise ApiError(500, f"ner.json не читается: {exc}")
     if not isinstance(items, list):
@@ -212,14 +296,14 @@ def _ner_export(ctx: dict) -> dict:
         raise ApiError(400, "Нет записей, подходящих под критерии")
 
     if fmt == "json":
-        content = _json.dumps(filtered, ensure_ascii=False, indent=2) + "\n"
+        content = json.dumps(filtered, ensure_ascii=False, indent=2) + "\n"
         return {"ok": True, "name": "ner_export.json", "content": content,
                 "total": len(filtered)}
     if fmt == "text":
         # JSONL — по одной записи на строку (тот же формат, что в
         # промптах: format_ner_record)
         content = "\n".join(
-            _json.dumps(common.format_ner_record(item),
+            json.dumps(common.format_ner_record(item),
                         ensure_ascii=False)
             for item in filtered) + "\n"
         return {"ok": True, "name": "ner_analysis.jsonl",
@@ -258,8 +342,8 @@ def _review_get(ctx: dict, fname: str) -> dict:
     text = p.read_text(encoding="utf-8", errors="replace")
     if p.suffix == ".json":
         try:
-            import json as _json
-            text = _json.dumps(_json.loads(text), ensure_ascii=False, indent=2)
+            text = json.dumps(json.loads(text), ensure_ascii=False,
+                              indent=2)
         except (ValueError, TypeError):
             log.debug("review-файл невалиден, отдаём как есть: %s", fname)
     return {"ok": True, "exists": True, "content": text,
