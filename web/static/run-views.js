@@ -2144,15 +2144,20 @@ window.viewRun = function viewRun(section, name, attachJobId) {
    * верно всегда. Считаем только диапазон формы. */
   function budgetStatus(key, fieldWraps) {
     const el = h("div", { class: "field-help budget-status" });
-    const BYTES_PER_TOKEN = 2.5;
     const fmt = (n) => Number(n).toLocaleString("ru-RU");
     const refresh = () => {
-      const sizes = (st.options || {}).pair_bytes || null;
+      const opts = st.options || {};
+      const sizes = opts.pair_bytes || null;
+      const ri = opts.pair_ratio || {};
+      // Коэффициент считает сервер (`estimate_tokens` — один счётчик на
+      // проект): клиент только делит байты. Фиксированные 2.5 давали до
+      // 115 ложных «не влезет» из 115 — на деле не влезало 15 из 5652.
+      const ratio = Number(ri.value) || 2.5;
       const vals = st.values[key] || {};
       const bw = fieldWraps["request_budget"];
       const budget = Number(
         (bw && bw._input && bw._input.value) || vals["request_budget"] || 0);
-      const ch = (st.options || {}).chapters || {};
+      const ch = opts.chapters || {};
       const rs = Number(vals["start"] || ch.min || 0);
       const re = Number(vals["end"] || ch.max || 0);
       const lo = rs && re ? Math.min(rs, re) : 0;
@@ -2160,26 +2165,45 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const nums = sizes
         ? Object.keys(sizes).map(Number).filter((n) => n >= lo && n <= hi)
         : [];
-      if (!sizes || !budget || !nums.length) {
+      if (!sizes || !budget) {
         el.textContent = "";
         el.classList.add("hidden");
         return;
       }
       nums.sort((a, b) => a - b);
-      const tokens = (n) => Math.round(sizes[n] / BYTES_PER_TOKEN);
-      const over = nums.filter((n) => tokens(n) > budget);
-      // ёмкость бюджета: сколько глав среднего размера он держит
-      const total = nums.reduce((s, n) => s + tokens(n), 0);
-      const mean = total / nums.length;
-      const capacity = Math.max(1, Math.floor(budget / mean));
-      // «глав» после числа склоняется: 21 глава, 22 главы, 25 глав
-      const plural = (n) => {
-        const d = n % 10, dd = n % 100;
-        if (d === 1 && dd !== 11) return "глава";
-        if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return "главы";
-        return "глав";
+      // пара = перевод + оригинал: токены обоих, плюс накладные промпта
+      const PROMPT_OVERHEAD = 200;
+      const tokens = (n) => {
+        const p = sizes[n] || {};
+        const bytes = Number(p.tr || p[0] || 0) + Number(p.src || p[1] || 0);
+        return Math.round(bytes / ratio) + PROMPT_OVERHEAD;
       };
       const parts = [];
+      // главы без перевода: они не попадут в проверку вовсе — это не
+      // «влезет/не влезет», а отдельная строка, иначе непонятно, почему
+      // глав в диапазоне больше, чем в прогнозе
+      const ids = Array.isArray(ch.ids) ? ch.ids : [];
+      const notReady = ids.filter((n) => n >= lo && n <= hi
+        && !sizes[n]).length;
+      if (notReady) {
+        parts.push(`Без перевода выбранного типа: ${fmt(notReady)} `
+          + `${plural(notReady)} — в проверку не пойдут.`);
+      }
+      // пустой файл перевода — отдельная беда: он есть, но проверять нечего
+      if (ri.empty) {
+        parts.push(`Пустых файлов перевода: ${fmt(ri.empty)} `
+          + `— главы без текста, стадия их пропустит.`);
+      }
+      if (!nums.length) {
+        el.textContent = parts.join(" ");
+        el.classList.toggle("hidden", !parts.length);
+        el.classList.remove("is-warn");
+        return;
+      }
+      const over = nums.filter((n) => tokens(n) > budget);
+      const total = nums.reduce((s2, n) => s2 + tokens(n), 0);
+      const mean = total / nums.length;
+      const capacity = Math.max(1, Math.floor(budget / mean));
       if (!over.length) {
         parts.push(`Все главы диапазона влезут в бюджет (${fmt(nums.length)}).`);
         el.classList.remove("is-warn");
@@ -2193,9 +2217,21 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
       parts.push(`Средняя глава ${fmt(Math.round(mean))} ток. — `
         + `в бюджет входит ≈${fmt(capacity)} ${plural(capacity)}.`);
+      // откуда взялся коэффициент: иначе цифра выглядит магией
+      if (ri.samples) {
+        parts.push(`(${fmt(ratio).replace(",", ".")} байт/токен `
+          + `по ${fmt(ri.samples)} ${plural(ri.samples)})`);
+      }
       el.textContent = parts.join(" ");
       el.classList.remove("hidden");
     };
+    // «глав» после числа склоняется: 21 глава, 22 главы, 25 глав
+    function plural(n) {
+      const d = n % 10, dd = n % 100;
+      if (d === 1 && dd !== 11) return "глава";
+      if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return "главы";
+      return "глав";
+    }
     return { el: el, refresh: refresh };
   }
 

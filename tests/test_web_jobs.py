@@ -2904,15 +2904,122 @@ def test_stage_options_pair_bytes(jobs_srv, tmp_path):
     assert res.status == 200
     pb = payload["options"].get("pair_bytes")
     assert pb, "нет pair_bytes у проверки перевода LLM"
-    # байты = размер перевода + размер оригинала (utf-8)
-    assert pb["1"] == len(("перевод" * 100).encode()) \
-        + len(("原文" * 50).encode())
-    assert pb["2"] == len("原文".encode())
+    # байты по частям: перевод и оригинал ЧИСЛЯТСЯ, но складываются с
+    # ОДНИМ коэффициентом — у русского 2 байта на символ, у CJK 3, и
+    # сложение байт до деления завышало бы CJK-оригинал
+    assert pb["1"] == {"tr": len(("перевод" * 100).encode()),
+                       "src": len(("原文" * 50).encode())}
+    assert pb["2"] == {"tr": 0, "src": len("原文".encode())}
+    # коэффициент посчитан по переводу книги, а не взят фиксированным
+    pr = payload["options"].get("pair_ratio") or {}
+    assert isinstance(pr.get("value"), (int, float)), pr
+    assert pr["type"] == "polished", "тип файлов берётся из настроек стадии"
     # стадия без сверки с оригиналом поле не получает
     res, other = req("GET",
                      "/api/stages/epub/options?project=ACTIVE/test_book")
     assert res.status == 200
     assert "pair_bytes" not in other["options"]
+
+
+def test_stage_options_pair_ratio_is_measured(jobs_srv, tmp_path):
+    """Байт на токен считается по тексту книги, а не берётся 2.5: у русского
+    перевода с китайским оригиналом пара даёт ~4.2, и фиксированное 2.5
+    завышало прогноз в 1.7 раза (115 ложных «не влезет» из 115 на книге)."""
+    from web.api import _OPTIONS_CACHE
+    _OPTIONS_CACHE.clear()
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    for n in range(1, 4):
+        d = pdir / "chapters" / f"{n:05d}"
+        d.mkdir(parents=True)
+        (d / "chapter.txt").write_text("原文" * 200, encoding="utf-8")
+        (d / "polished.txt").write_text("перевод " * 200, encoding="utf-8")
+    res, payload = req(
+        "GET",
+        "/api/stages/translate_check_llm/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    pr = payload["options"]["pair_ratio"]
+    assert pr["samples"] == 3, pr
+    assert not pr["fallback"], pr
+    # русский текст — 2 байта на букву, китайский — 3 на иероглиф
+    assert 3.0 < pr["value"] < 6.0, pr
+    # стадия другого типа считает свои файлы: у translated.txt пусто
+    pdir2 = pdir / "chapters" / "00001"
+    (pdir2 / "translated.txt").write_text("перевод " * 200, encoding="utf-8")
+    from web import api as api_mod
+    assert api_mod._OPTIONS_CACHE is not None
+
+
+def test_pair_ratio_fallback_without_text(jobs_srv, tmp_path):
+    """Мерить не по чему (глав с переводом нет) — запасное консервативное
+    2.5 и признак `fallback`: прогноз обязан ЗАВЫШАТЬ, а не обещать
+    «влезет» на главах, которых он не видел."""
+    from web.api_stage import _pair_ratio, PAIR_RATIO_FALLBACK
+    class _C:
+        @staticmethod
+        def estimate_tokens(t):
+            return len(t) // 4
+    assert _pair_ratio(_C, []) == PAIR_RATIO_FALLBACK
+    assert _pair_ratio(_C, [("", "")]) == PAIR_RATIO_FALLBACK
+
+
+def test_pair_ratio_counts_source_bytes(jobs_srv):
+    """Байты ОРИГИНАЛА входят в дробь, а не только перевода: у китайского
+    оригинала 3 байта на иероглиф при том же числе токенов, и деление одних
+    байт перевода занижало прогноз на 18 % (все 110 глав книги)."""
+    from web.api_stage import _pair_ratio
+    class _C:
+        @staticmethod
+        def estimate_tokens(t):
+            # один токен на символ — чтобы дробь была предсказуемой
+            return len(t)
+    # перевод «аб» (4 байта, 2 токена) + оригинал «原文» (6 байт, 2 токена)
+    got = _pair_ratio(_C, [("аб", "原文")])
+    assert got == round((4 + 6) / 4, 2), got
+    # только перевод — дробь меньше (2 байта на токен), но не ниже 2.5
+    assert _pair_ratio(_C, [("аб", "")]) == 2.5
+
+
+def test_chapter_sizes_skips_empty_and_respects_type(jobs_srv, tmp_path):
+    """Пустой файл — не перевод (у главы 111 книги `polished.txt` нулевой
+    после сбоя стадии), а тип файлов стадии учитывается строго: прогноз не
+    должен падать в translated, если стадия читает polished."""
+    from web.api_stage import _chapter_sizes
+    class _C:
+        @staticmethod
+        def estimate_tokens(t):
+            return len(t) // 4
+    root = tmp_path / "chapters"
+    for n, tr, rd in ((1, "перевод", ""), (2, "", "перевод"), (3, "", "")):
+        d = root / f"{n:05d}"
+        d.mkdir(parents=True)
+        (d / "chapter.txt").write_text("原文", encoding="utf-8")
+        if tr or n == 1:
+            (d / "polished.txt").write_text(tr, encoding="utf-8")
+        if rd or n == 2:
+            (d / "redacted.txt").write_text(rd + " текст", encoding="utf-8")
+    import sys as _s
+    _s.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+    from test_web_jobs import __name__ as _n  # noqa: F401
+    from core.common import build_chapter_map
+    ch_map = build_chapter_map(root)
+    sizes, _texts, empty = _chapter_sizes(_C, ch_map, "polished")
+    assert sizes[1][0] == len("перевод".encode())
+    # глава 2: polished ПУСТ — перевода нет, и redacted не подставляется
+    # (стадия читает строго свой тип); оригинал при этом посчитан
+    assert sizes[2][0] == 0, "пустой polished не считается переводом"
+    assert sizes[2][1] > 0, "оригинал считается и без перевода"
+    # пустых глав нет: у всех трёх есть chapter.txt, и `empty` их не считает
+    assert empty == 0, empty
+    # глава 3 без перевода вообще — в прогнозе у неё только оригинал
+    assert sizes[3][0] == 0 and sizes[3][1] > 0
+    # глава вовсе без текста (нет ни перевода, ни оригинала) — отдельный счёт
+    (root / "00004").mkdir()
+    (root / "00004" / "polished.txt").write_text("", encoding="utf-8")
+    _s2, _t2, empty2 = _chapter_sizes(_C, build_chapter_map(root),
+                                      "polished")
+    assert empty2 == 1, "глава без единого байта текста считается отдельно"
 
 
 def test_stage_options_cache_invalidates(jobs_srv, tmp_path):

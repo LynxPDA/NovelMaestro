@@ -427,45 +427,167 @@ def _options_signature(pdir: Path) -> tuple:
     return tuple(sig)
 
 
-#: байт на токен для прогноза «не влезет в бюджет» (нижняя граница,
-#: замеренная на живых книгах: 3.0 у CJK-оригинала, 3.8 у русского
-#: перевода; 2.5 — с запасом, поэтому прогноз ЗАВЫШАЕТ и его «не влезет»
-#: верно всегда). Та же константа, что у core.common.SIZE_BYTES_PER_TOKEN
-_PAIR_BYTES_PER_TOKEN = 2.5
+#: запасной байт на токен, если замерить не по чему (в книге нет ни одной
+#: главы с текстом выбранного типа). Прежнее консервативное значение:
+#: прогноз от него только ЗАВЫШАЕТ токены, и «не влезет» не пропустит
+#: тяжёлую главу
+PAIR_RATIO_FALLBACK = 2.5
+
+#: сколько глав диапазона читать ради замера байт на токен. `estimate_tokens`
+#: ходит по символам, поэтому мерить на всей книге значило бы прочитать её
+#: целиком ради одной цифры: коэффициент задаётся языком и письменностью, а
+#: не главой. 10 глав по 30 КБ — 300 КБ, десяток миллисекунд
+PAIR_SAMPLE = 10
+
+#: байт на токен по книгам: {путь книги: (отпечаток, коэффициент)}. Считается
+#: один раз — иначе каждое открытие формы перечитывало бы те же главы. Живёт
+#: в процессе: после перезапуска сервера главы могли измениться
+_PAIR_RATIO_CACHE: dict = {}
 
 
-def _pair_bytes(common, ch_map: dict) -> dict:
-    """Размеры пары «перевод + оригинал» по главам: {номер: байт}.
+def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
+    """Байты файлов глав одним проходом: `(sizes, sample_texts, empty)`.
 
-    Один `os.scandir` на папку главы и `stat` по готовым именам: 0.05 с на
-    книге в 5652 главы против 1.3 с через `find_chapter_file` (тот делает
-    `listdir` на каждый поиск, а их тут два). Предупреждение в форме не
-    должно тормозить её открытие.
+    `sizes` — {номер: (перевод, оригинал)} в байтах. `sample_texts` — тексты
+    первых `PAIR_SAMPLE` глав, у которых есть перевод: по ним считается
+    байт на токен (`pair_ratio`). Читать здесь же дешевле, чем второй раз
+    открывать те же файлы.
 
-    Имена — точные имена артефактов (`polished.txt`, `chapter.txt` и т.д.),
-    поэтому файл нестандартного имени в прогноз не попадёт: ложное «не
-    влезет» тут дороже пропущенного (стадия потом всё равно посчитает
-    точно и напишет главу в лог).
+    `file_type` — тип файлов стадии (`polished`/`redacted`/`translated`):
+    прогноз обязан считать ровно ту пару, которую прочитает стадия. Пустой
+    тип — первый доступный по приоритету (общая оценка книги).
+
+    Один `os.scandir` на папку и `stat` по готовым именам: 0.05 с на 5652
+    главах против 1.3 с через `find_chapter_file`. Нет пары у главы — её нет
+    и в словаре (в прогноз она попасть не может, но и ложного «влезет» от
+    неё не будет — стадия напишет её в лог отдельно).
     """
-    out: dict = {}
-    order = ("polished.txt", "redacted.txt", "translated.txt")
-    for num, dirs in ch_map.items():
+    # С выбранным типом — ТОЛЬКО он: `strict_types=True` у стадии не
+    # подставляет другой файл, и прогноз, падающий в translated, обещал бы
+    # проверку главы, которую стадия молча пропустит (на живой книге так
+    # расходились 111 polished против 114 translated)
+    order = ["chapter.txt"]
+    if file_type:
+        order.append(file_type if file_type.endswith(".txt")
+                     else file_type + ".txt")
+    else:
+        order += ["polished.txt", "redacted.txt", "translated.txt"]
+    sizes: dict = {}
+    texts: list = []
+    empty = 0
+    for num, dirs in sorted(ch_map.items()):
         if not dirs:
             continue
         try:
-            sizes = {e.name: e.stat().st_size
-                     for e in os.scandir(dirs[0]) if e.is_file()}
+            entries = {e.name: e for e in os.scandir(dirs[0]) if e.is_file()}
         except OSError:
             continue
-        total = 0
-        for name in order:
-            if name in sizes:
-                total += sizes[name]
+        tr = src = 0
+        tr_name = ""
+        for name in order[1:]:
+            if name in entries:
+                size = entries[name].stat().st_size
+                if not size:
+                    # ПУСТОЙ файл — это не текст: у главы 111 `polished.txt`
+                    # нулевой после сбоя стадии, а перевод лежит в
+                    # `redacted.txt`. Считать его «главой с переводом»
+                    # значило бы обещать проверку пустой главы
+                    continue
+                tr, tr_name = size, name
                 break
-        total += sizes.get("chapter.txt", 0)
-        if total:
-            out[num] = total
-    return out
+        if "chapter.txt" in entries:
+            src = entries["chapter.txt"].stat().st_size
+        # глава без единого байта текста — стадия её пропустит, и прогноз
+        # обязан сказать о ней отдельно, а не молчать
+        if not (tr or src):
+            empty += 1
+        if tr or src:
+            sizes[num] = (tr, src)
+        if tr_name and len(texts) < PAIR_SAMPLE:
+            texts.append((_read_text(entries[tr_name].path),
+                          _read_text(entries["chapter.txt"].path)
+                          if "chapter.txt" in entries else ""))
+    return sizes, texts, empty
+
+
+def _read_text(path) -> str:
+    """Текст файла для замера коэффициента (пусто — файл не прочитался)."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def _pair_ratio(common, pairs: list) -> float:
+    """Байт на токен для ПАРЫ «перевод + оригинал».
+
+    Делить байты пары на коэффициент одного перевода нельзя: у китайского
+    оригинала 3 байта на иероглиф при том же числе токенов, и общая дробь
+    выходила завышенной на 18 % — прогноз недосчитывал по тысяче токенов на
+    главу (проверено на книге: 111 глав, все 110 недооценены).
+
+    Считать надо ровно то, что складывается: `sum(байт пары) /
+    sum(estimate_tokens(перевод) + estimate_tokens(оригинал))`. Поэтому
+    тексты выборки передаются парами, а `estimate_tokens` вызывается для
+    обоих файлов — он и есть единственный счётчик проекта.
+
+    Возвращает `PAIR_RATIO_FALLBACK`, если мерить не по чему.
+    """
+    if not pairs:
+        return PAIR_RATIO_FALLBACK
+    tokens = 0
+    raw = 0
+    for tr, src in pairs:
+        t = common.estimate_tokens(tr) if tr else 0
+        s2 = common.estimate_tokens(src) if src else 0
+        if not (t or s2):
+            continue
+        tokens += t + s2
+        raw += len((tr or "").encode("utf-8")) + len((src or "").encode("utf-8"))
+    if not tokens or not raw:
+        return PAIR_RATIO_FALLBACK
+    value = round(raw / tokens, 2)
+    # Предохранитель: прогноз обязан скорее ЗАВЫСИТЬ, чем пропустить
+    # тяжёлую главу, поэтому ниже прежних 2.5 коэффициент не опускаем.
+    return max(PAIR_RATIO_FALLBACK, value)
+
+
+def _stage_file_type(pdir, key: str) -> str:
+    """Тип файлов главы из настроек стадии (поле `<СТАДИЯ>_TYPE`).
+
+    Прогноз обязан считать ту же пару, что прочитает стадия: у «polished»
+    и «translated» разные размеры, и прогноз по одному типу давал бы
+    «влезет» на книге, где стадия читает другой. Нет настройки — пусто:
+    `_chapter_sizes` возьмёт первый доступный тип.
+    """
+    try:
+        from core import settings as core_settings
+        name = core_settings.env_key(key, "type")
+        if not name:
+            return ""
+        return str(core_settings.effective(name) or "")
+    except Exception:  # реестр не обязан знать про эту стадию
+        return ""
+
+
+def _pair_ratio_cached(common, pdir, texts: list) -> float:
+    """Байт на токен с кешем на книгу: перечитывать выборку незачем.
+
+    Ключ кеша — путь книги и отпечаток `chapters/`: правка глав меняет
+    выборку, и без отпечатка коэффициент оставался бы от прежнего текста.
+    Отпечаток уже считается для кеша опций (`_options_signature`), но здесь
+    он берётся по главам отдельно: `sizes`/`texts` могли посчитать при
+    другом составе файлов.
+    """
+    key = str(pdir)
+    sig = common.dir_fingerprint(pdir / "chapters")
+    hit = _PAIR_RATIO_CACHE.get(key)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    ratio = _pair_ratio(common, texts)
+    _PAIR_RATIO_CACHE[key] = (sig, ratio)
+    return ratio
 
 
 def _options_for_stage(options: dict, key: str) -> dict:
@@ -477,10 +599,13 @@ def _options_for_stage(options: dict, key: str) -> dict:
     не просто лишний — клиент его не знает, а размер словаря по 5652 главам
     в каждом ответе не нужен никому.
     """
-    if key == "translate_check_llm" or "pair_bytes" not in options:
+    if key == "translate_check_llm":
+        return options
+    if "pair_bytes" not in options and "pair_ratio" not in options:
         return options
     out = dict(options)
     out.pop("pair_bytes", None)
+    out.pop("pair_ratio", None)
     return out
 
 
@@ -511,12 +636,21 @@ def _stage_options(ctx: dict) -> dict:
                 out["options"]["chapters"] = {
                     "min": nums[0], "max": nums[-1], "ids": nums}
                 # прогноз «не влезет в бюджет» для translate_check_llm:
-                # по размерам файлов (0.03 с на 5652 главах) — предупредить
-                # ДО запуска. Бюджет приходит из формы, поэтому считается
-                # на клиенте по `sizes`: сервер отдаёт только байты
+                # байты пары по главам (0.03 с на 5652 главах) + байт на
+                # токен по тексту книги — предупредить ДО запуска. Бюджет
+                # приходит из формы, поэтому деление на коэффициент делает
+                # клиент: сервер отдаёт байты и коэффициент
                 if key == "translate_check_llm":
-                    out["options"]["pair_bytes"] = _pair_bytes(
-                        common, ch_map)
+                    ft = _stage_file_type(pdir, key)
+                    sizes, texts, empty = _chapter_sizes(common, ch_map, ft)
+                    ratio = _pair_ratio_cached(common, pdir, texts)
+                    out["options"]["pair_bytes"] = {
+                        str(n): {"tr": tr, "src": src}
+                        for n, (tr, src) in sizes.items()}
+                    out["options"]["pair_ratio"] = {
+                        "value": ratio, "fallback": ratio
+                        == PAIR_RATIO_FALLBACK,
+                        "samples": len(texts), "type": ft, "empty": empty}
         # файлы source/ — ВСЕ файлы (клиент фильтрует по ext селекта):
         # epub-исходники, txt, обложки (jpg/png/webp), metadata.yaml и т.п.
         src = pdir / "source"
