@@ -305,6 +305,81 @@ def _project_tab_labels():
     return re.findall(r'\[\s*"[a-z_]+"\s*,\s*"([^"]+)"\s*\]', block)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# ШАБЛОНЫ ПРОМПТОВ ↔ ВСТРОЕННЫЕ ПРОМПТЫ СКРИПТОВ
+# ══════════════════════════════════════════════════════════════════════
+#: шаблон General → (скрипт, встроенный промпт, тег)
+#: ner_check-промпт в список не входит: внешний шаблон там подробнее
+#: встроенного (83 строки против 55), это отдельная задача — см. TODO.md
+PROMPT_TEMPLATES = [
+    ("translate_check_prompt.txt", "cli/translate_check_llm.py",
+     "DEFAULT_PROMPT", "prompt_translate_check"),
+    ("ner_check_prompt.txt", "cli/ner_check.py",
+     "DEFAULT_NER_RAG_PROMPT", "prompt_rag"),
+]
+
+
+def _load_script_module(rel: str):
+    """Импорт скрипта стадии по пути (cli/*.py не пакет)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "prompt_tpl_" + Path(rel).stem, ROOT / rel)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("tpl_name,script,var,tag", PROMPT_TEMPLATES)
+def test_general_prompt_template_matches_builtin(tpl_name, script, var, tag):
+    """Шаблон General и встроенный промпт скрипта — один и тот же текст.
+
+    Встроенный промпт это запасной вариант, и §7 требует синхронизировать
+    смысл с внешним шаблоном. Рассинхрон копится молча: правило убрали из
+    кода (нарезки глав больше нет), а в шаблоне оно осталось — и модель
+    читает инструкцию про «часть k/m», которой в данных не бывает.
+    """
+    mod = _load_script_module(script)
+    builtin = getattr(mod, var, "")
+    assert builtin, f"{script}: нет {var}"
+    tpl = (ROOT / "templates" / "General" / "prompts" / tpl_name).read_text(
+        encoding="utf-8")
+    body = C.get_tagged_prompt(tpl, tag)
+    assert body, f"{tpl_name}: тег <{tag}> не найден"
+    # перенос строки — оформление шаблона, а не правило: сравниваем абзацы
+    def blocks(text):
+        out = []
+        for para in re.split(r"\n\s*\n", text.strip()):
+            words = " ".join(ln.strip() for ln in para.split("\n") if ln.strip())
+            if words:
+                out.append(re.sub(r"\s+", " ", words))
+        return out
+
+    got, want = blocks(body), blocks(builtin)
+    if got != want:
+        diff = [f"  - {a[:120]}\n  + {b[:120]}"
+                for a, b in zip(want, got) if a != b]
+        raise AssertionError(
+            f"{tpl_name} разошёлся со встроенным {var} "
+            f"({len(want)} абзацев против {len(got)}):\n" + "\n".join(diff[:4]))
+
+
+def test_check_prompt_path_is_report_not_prompt():
+    """`--check-prompt PATH` — файл ОТЧЁТА, а не проверяемый промпт.
+
+    Перепутать легко (так дважды затирался шаблон промпта вердиктом), поэтому
+    справка флага это проговаривает, а проверяемый файл приходит только из
+    `--prompt_file`.
+    """
+    help_text = ST_.add_check_prompt_arg.__doc__ or ""
+    import argparse
+    ap = argparse.ArgumentParser()
+    ST_.add_check_prompt_arg(ap)
+    action = ap._actions[-1]
+    joined = (action.help or "") + help_text
+    assert "ОТЧЁТ" in joined or "отчёт" in joined.lower(), joined
+    assert "--prompt_file" in joined, joined
+
+
 def test_readme_lists_all_project_tabs():
     """README перечисляет вкладки проекта поимённо, и список обязан совпадать
     с PROJECT_TABS: новая вкладка молча выпадала из документации (так
