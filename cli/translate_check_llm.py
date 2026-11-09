@@ -64,6 +64,7 @@ from core.stage import (  # noqa: E402
 from core.common import (  # noqa: E402
     REVIEW_ACCEPT,
     REVIEW_REJECT,
+    SOURCE_FIX_TYPES,
     apply_fix_to_text,
     apply_flex_fix,
     atomic_write,
@@ -73,9 +74,13 @@ from core.common import (  # noqa: E402
     find_chapter_file as common_find_chapter_file,
     fix_entry,
     flex_fragment_pattern,
+    fragment_occurrences,
     get_tagged_prompt,
+    insertion_of,
     merge_fix_entries,
     read_text_safe,
+    sentence_spans,
+    split_at_sentences,
 )
 from core import settings as core_settings  # noqa: E402
 
@@ -106,6 +111,22 @@ DEFAULT_PROMPT = """\
 - logic — смена пола/имени/вида персонажа, числа предметов, названия организации и другие логические ошибки — СТРОГО при наличии противоречия в ВИДИМОМ тексте
 - incomplete — предложение обрывается, отсутствует сказуемое или подлежащее
 - artifact — фрагменты исходного языка, оставшиеся в тексте (иероглифы, кана, хангыль, буквы иной письменности); чужие сеттингу единицы измерения (футы, мили в восточном фэнтези); примечания переводчика в теле текста
+- mistranslation — смысл перевода разошёлся с ОРИГИНАЛОМ: инверсия отрицания или условия, другой субъект/объект, перепутанное число или род, противоположное действие, потерянное «не». Сообщай ТОЛЬКО когда видишь расхождение в паре [ОРИГИНАЛ]/[ПЕРЕВОД] здесь же
+- missing_text — в ПЕРЕВОДЕ нет смыслового куска ОРИГИНАЛА этой пары (потерян абзац или фраза сюжета). Примечания автора и заголовок главы из этого правила исключены — см. ниже
+- extra_text — в ПЕРЕВОДЕ есть то, чего в ОРИГИНАЛЕ нет: дубль абзаца, примечание автора, которое конвейер не вырезал, вставка чужого текста
+
+ПАРЫ «ОРИГИНАЛ ↔ ПЕРЕВОД» (если они есть в данных):
+Каждая глава может прийти парой блоков: [ОРИГИНАЛ] и [ПЕРЕВОД]. Это ОДНА и та же глава.
+- Границы предложений и абзацев в паре НЕ совпадают: перевод сжимает два предложения в одно, делит одно на три, переставляет порядок реплик внутри сцены. Само по себе расхождение границ — НЕ ошибка и НЕ повод для правки.
+- Правки всегда берутся из [ПЕРЕВОД]: fragment и corrected — из него, НИКОГДА из [ОРИГИНАЛ].
+- Помеченная «часть k/m» глава разрезана на части: обрыв фразы в самом начале или в самом конце части — не incomplete, текст продолжается в следующей части.
+- Если пары нет — оцениваешь только текст перевода, как раньше.
+
+ЧЕГО В ПЕРЕВОДЕ НЕТ ПО РАЗРЕШЕНИЮ КОНВЕЙЕРА (это НЕ missing_text):
+- примечания автора к читателям: «ps:», «ps2:», «作者的话», «公告», благодарности за донат (打赏), просьбы о рекомендациях и подписке (求追读, 推荐票, 求收藏), сообщения о задержке глав, поздравления, «бонусная глава», ссылки на сторонние сайты. Они вырезаны намеренно — при их отсутствии НЕ сообщай о пропуске, а если такое примечание ОСТАЛОСЬ в переводе — это extra_text.
+- заголовок главы: переводится свободно и с оригиналом не сверяется;
+- пометки переводчика («(прим. пер.)»), маркеры сайтов-источников, разметка.
+ГДЕ ГРАНИЦА: примечание автора обращено к ЧИТАТЕЛЮ и говорит о книге, главах, подписке, здоровье автора — оно всегда вне сюжета. Если то же по смыслу сказано персонажем в сцене («мой отец болен», системное сообщение игрового мира, шутка в адрес читателей внутри действия) — это текст книги, и его пропажа в переводе — настоящий missing_text.
 
 ПОРОГ УВЕРЕННОСТИ (зависит от типа):
 - typo, grammar: 90%+
@@ -114,6 +135,7 @@ DEFAULT_PROMPT = """\
 Если для обоснования нужно знание за пределами данных глав — НЕ сообщай.
 
 КРИТИЧЕСКИ ВАЖНО — ИМЕНА, ТЕРМИНЫ, ФОРМЫ СЛОВ:
+0. Имена собственные и названия (секты, техники, артефакты, титулы) транскрибированы по канону проекта: НЕ исправляй их написание и не меняй транскрипцию, даже если она отличается от оригинала или кажется неудачной. Ошибка имени — только когда имя заменено общеупотребимым словом или другой сущностью и от этого меняется смысл («в ливне из яда» → «в ливне из Венома»). Сверку транскрипции с оригиналом НЕ делай.
 1. Если имя/название встречается в видимом тексте ТОЛЬКО ОДИН раз — ты НЕ можешь знать, правильное ли написание. Не сообщай об ошибке в написании имени, если нет второго упоминания для сравнения.
 2. Если в видимом тексте имя встречается в ДВУХ РАЗНЫХ формах
 (например, «Ци Чжаопин» в одной главе и «Ци Чжаои» в другой) — это противоречие, но ты НЕ знаешь, какая форма каноническая.
@@ -161,13 +183,20 @@ DEFAULT_PROMPT = """\
 5. ПРОВЕРЬ СМЫСЛ. Не инвертирует ли исправление условие/отрицание? Пример: удаление «не» из «если бы не открыла» меняет смысл на противоположный. Если не уверен в логике — НЕ выдавай.
 
 ТРЕБОВАНИЯ К ФРАГМЕНТУ:
-- 1–3 предложения, НЕ КОРОЧЕ 50 символов, без переноса строк.
-- УНИКАЛЬНЫЙ в пределах главы.
+- 1–3 предложения, НЕ КОРОЧЕ 50 символов, без переноса строк. Короткая реплика диалога — бери её вместе с соседней фразой того же абзаца.
+- УНИКАЛЬНЫЙ в пределах главы: иначе правку некуда применить, и её отклонит проверка.
 - НЕ пересказывай фрагмент. Скопируй его из текста посимвольно, включая: пробелы, тире (— vs – vs -), кавычки («» vs ""), многоточия (… vs ...), регистр букв.
 - Если сомневаешься в точном написании хотя бы одного знака — расширь фрагмент на слово в каждую сторону, но НЕ угадывай.
 - Фрагмент НЕ должен начинаться или заканчиваться на пробел.
 - fragment и corrected отличаются ТОЛЬКО в месте ошибки; всё до и после — идентично посимвольно.
 - Фрагмент из одного абзаца, от начала до конца слова/знака препинания.
+
+МЕСТО ВСТАВКИ (missing_text):
+- fragment — текст ПЕРЕВОДА вокруг места вставки, посимвольно из файла: конец предыдущего абзаца + «¶» (перенос строки) + начало следующего либо один абзац целиком.
+- corrected — тот же текст с вставленным русским текстом. Ничего, кроме вставки, не меняй: всё до и после — идентично посимвольно, иначе правку некуда применить и её отклонят.
+- Начало и конец куска — целые предложения; вставка внутри абзаца или между двумя соседними абзацами. Вставка в самое начало или в самый конец главы/части — такие правки отклоняются.
+- Если место пропуска определить НЕЛЬЗЯ (нет обоих соседних кусков) — скопируй fragment в corrected БЕЗ ИЗМЕНЕНИЙ и напиши в reason «пропуск, нужна ручная вставка», плюс кратко — что потеряно. Такая запись попадёт человеку.
+
 Формат ответа — СТРОГО JSON-массив. Без markdown-обёртки, без ```, без пояснений до или после JSON:
 
 [
@@ -175,7 +204,7 @@ DEFAULT_PROMPT = """\
 "chapter": <номер главы>,
 "fragment": "<точная цитата, ≥50 символов>",
 "corrected": "<исправленный фрагмент>",
-"type": "typo|missing_word|logic|incomplete|artifact|grammar",
+"type": "typo|missing_word|logic|incomplete|artifact|grammar|mistranslation|missing_text|extra_text",
 "reason": "<краткое пояснение>"
 }
 ]
@@ -183,10 +212,15 @@ DEFAULT_PROMPT = """\
 </system>
 <user>
 === ТЕКСТ ГЛАВ ===
+(главы идут парами [ОРИГИНАЛ]/[ПЕРЕВОД], если оригинал есть)
 
 {batch_text}
 </user>
 """
+
+#: отличительная фраза нового блока правил: по ней --check-prompt
+#: предупреждает, что внешний промпт старше сверки с оригиналом
+SOURCE_PROMPT_MARK = "[ОРИГИНАЛ]"
 
 
 # ГИБКИЙ ПОИСК ФАЙЛА (адаптер над core.common.find_chapter_file)
@@ -305,8 +339,20 @@ def split_into_chunks(content, max_tokens):
 # СБОР ГЛАВ
 # ─────────────────────────────────────────────
 
-def collect_chapters(start, end, file_type, budget, chapter_map, logger):
-    chapters, skipped, chunked = [], 0, 0
+def collect_chapters(start, end, file_type, budget, chapter_map, logger,
+                     use_source=False):
+    """Главы диапазона: (номер, файл, папка, текст, оригинал|None, часть|None).
+
+    С `use_source` рядом с переведённым файлом читается `chapter.txt` —
+    пара уходит в запрос одним куском. Нет оригинала (у книги только
+    перевод) — глава проверяется одна, как раньше: это не ошибка, а
+    свойство книги, и о нём сообщается одной строкой итога.
+
+    Пара больше бюджета в запрос не влезает, поэтому режется на части
+    (`split_pair`): граница каждой — конец предложения, доля перевода —
+    по его собственной длине. Части одной главы считаются одной главой.
+    """
+    chapters, skipped, chunked, no_source = [], 0, 0, 0
     OV = 200
     for i in range(start, end + 1):
         paths = chapter_map.get(i)
@@ -317,46 +363,164 @@ def collect_chapters(start, end, file_type, budget, chapter_map, logger):
         if fp is None or content is None:
             skipped += 1
             continue
-        if estimate_tokens(content) + OV > budget:
+        source = None
+        if use_source:
+            src_fp, source = find_chapter_file_in_dir(paths[0], i, "chapter",
+                                                      logger)
+            if src_fp is None or not (source or "").strip():
+                source = None
+                no_source += 1
+        if source is not None:
+            pair_tokens = estimate_tokens(content) + estimate_tokens(source)
+            parts = split_pair(content, source, budget - OV)
+        else:
+            pair_tokens = estimate_tokens(content)
+            parts = None
+        if parts is not None and len(parts) > 1:
+            chunked += 1
+            logger.info(f"Глава {i}: пара {pair_tokens} ток. (оценка) → "
+                        f"{len(parts)} частей")
+            for k, (tr_part, src_part) in enumerate(parts, 1):
+                chapters.append((i, fp, paths[0], tr_part, src_part,
+                                 (k, len(parts))))
+            continue
+        if parts is not None:
+            tr_part, src_part = parts[0]
+            chapters.append((i, fp, paths[0], tr_part, src_part, None))
+            continue
+        if pair_tokens + OV > budget:
             mc = budget - OV
             ch = split_into_chunks(content, mc)
             chunked += 1
             logger.info(f"Глава {i}: {estimate_tokens(content)} ток. "
                         f"(оценка) → {len(ch)} чанков")
             for c in ch:
-                chapters.append((i, fp, paths[0], c))
+                chapters.append((i, fp, paths[0], c, None, None))
             continue
-        chapters.append((i, fp, paths[0], content))
+        chapters.append((i, fp, paths[0], content, None, None))
     total = end - start + 1
     logger.info(
         f"Сбор: найдено={len(chapters)}, пропущено={skipped}, "
-        f"чанков={chunked}, диапазон={total}")
+        f"разрезано={chunked}, диапазон={total}")
+    if use_source:
+        logger.info(f"Сверка с оригиналом: пар={len(chapters) - no_source}, "
+                    f"без оригинала={no_source} (проверяются только по переводу)")
     if total > 0 and skipped / total > 0.1:
         logger.warning(f"⚠️ Пропущено {skipped}/{total} ({skipped/total:.0%})")
     return chapters
+
+
+def split_pair(trans, source, budget):
+    """Режем пару «перевод + оригинал» на части, не больше бюджета.
+
+    Единица реза — ПРЕДЛОЖЕНИЕ (`core.common.sentence_spans`): часть не
+    обрывается посередине фразы. Доля каждой части — токены своей стороны
+    (оценка та же, что у бюджета): оригинал идёт по своим токенам, перевод —
+    по своим. Он в 2–3 раза длиннее, поэтому доля оригинала в токенах и в
+    символах — разные величины, и считать её надо ровно тем счётчиком,
+    которым задан бюджет.
+
+    Выравнивание «по смыслу» здесь не делается и не нужно: сдвиг на
+    предложение-два на сверку смысла не влияет, а перевод после ручных
+    правок всё равно не совпадает с оригиналом один к одному.
+
+    Части обоих текстов склеиваются обратно в исходный — ни один символ не
+    теряется (тест это проверяет).
+    """
+    trans = trans or ""
+    source = source or ""
+    if budget <= 0 or estimate_tokens(trans) + estimate_tokens(source) <= budget:
+        return [(trans, source)]
+    out = []
+    pos_t = pos_s = 0
+    while True:
+        rest = estimate_tokens(trans[pos_t:]) + estimate_tokens(source[pos_s:])
+        if rest <= budget:
+            break
+        # сколько частей ещё нужно, если резать равномерно
+        left = max(2, -(-rest // budget))
+        goal_t = max(estimate_tokens(trans[pos_t:]) / left, 1.0)
+        goal_s = max(estimate_tokens(source[pos_s:]) / left, 1.0)
+        end_t = _cut_by_tokens(trans, pos_t, goal_t)
+        end_s = _cut_by_tokens(source, pos_s, goal_s)
+        if end_t <= pos_t or end_s <= pos_s:
+            # одно предложение крупнее доли бюджета — дробим его нет смысла:
+            # остаток отдаётся одной частью, как есть
+            break
+        out.append((trans[pos_t:end_t], source[pos_s:end_s]))
+        pos_t, pos_s = end_t, end_s
+    out.append((trans[pos_t:], source[pos_s:]))
+    return out
+
+
+def _cut_by_tokens(text, start, want_tokens):
+    """Позиция реза: около `want_tokens` от `start`, но ВСЕГДА по концу
+    предложения — иначе часть кончится на середине фразы и модель увидит
+    обрыв, которого в книге нет. Возвращает индекс в `text`.
+    """
+    body = text[start:]
+    if not body:
+        return len(text)
+    acc = 0.0
+    end = len(text)
+    for _s, e in sentence_spans(body):
+        acc += estimate_tokens(body[_s:e])
+        if acc >= want_tokens:
+            end = start + e
+            break
+    return end
 
 
 # ─────────────────────────────────────────────
 # ПАКЕТЫ
 # ─────────────────────────────────────────────
 
-def build_batches(chapters, budget, logger):
+def build_batches(chapters, budget, logger, per_request=0):
+    """Пакеты глав.
+
+    `per_request` > 0 — пакет по числу ГЛАВ: части одной разрезанной
+    главы всегда идут вместе и считаются одной главой (иначе половина
+    главы проверялась бы без остальной, а её хвост был бы ложным
+    missing_text). `per_request` = 0 — пакет собирается по бюджету, как
+    было до сверки с оригиналом; части одной главы так же не разделяются.
+    """
     if not chapters:
         return []
-    batches, cur, size = [], [], 0
+    batches, cur, size, seen = [], [], 0, set()
     OV = 200
     for item in chapters:
-        s = estimate_tokens(item[3]) + OV
-        if cur and size + s > budget:
+        n = item[0]
+        new_chapter = n not in seen
+        s = estimate_tokens(item[3]) + _tokens_of(_item_source(item)) + OV
+        over_budget = bool(cur) and size + s > budget
+        over_count = bool(per_request) and new_chapter and len(seen) >= per_request
+        if cur and (over_count or (over_budget and new_chapter)):
             batches.append(cur)
-            cur, size = [], 0
+            cur, size, seen = [], 0, set()
+            new_chapter = True
         cur.append(item)
         size += s
+        if new_chapter:
+            seen.add(n)
     if cur:
         batches.append(cur)
-    logger.info(f"Пакетов: {len(batches)} "
-                f"(бюджет: {budget} токенов, оценка)")
+    if per_request:
+        logger.info(f"Пакетов: {len(batches)} (по {per_request} глав в запросе)")
+    else:
+        logger.info(f"Пакетов: {len(batches)} "
+                    f"(бюджет: {budget} токенов, оценка)")
     return batches
+
+
+def _tokens_of(text):
+    """Токены текста или 0: у главы без оригинала второго текста нет."""
+    return estimate_tokens(text) if text else 0
+
+
+def _item_source(item):
+    """Оригинал элемента батча («" — его нет): элемент — кортеж
+    (номер, файл, папка, текст[, оригинал, часть])."""
+    return (item[4] if len(item) > 4 else "") or ""
 
 
 # ─────────────────────────────────────────────
@@ -409,46 +573,83 @@ def _frag_in_text(frag, text):
     flex = flex_fragment_pattern(frag)
     return flex != re.escape(frag_n) and re.search(flex, text_n) is not None
 
-def validate_errors(errors, valid_ch, batch_contents, logger):
-    """Сверка ответа LLM с фактическим текстом батча. Дрейф атрибуции
-    (LLM указала соседнюю главу) отсекается здесь: цитата обязана
-    найтись в заявленной главе (точно или типографически-мягко —
-    flex_fragment_pattern), иначе правка перепривязывается на
-    единственную главу батча с совпадением; ни одна — отклонение.
-    Раньше сверка была только при чужом номере главы, и сдвиг ±1
-    проходил насквозь."""
-    out, dropped, moved = [], 0, 0
+def validate_errors(errors, valid_ch, batch_contents, logger,
+                    manual_notes=False):
+    """Сверка ответа LLM с фактическим ПЕРЕВОДОМ батча.
+
+    Дрейф атрибуции (LLM указала соседнюю главу) отсекается здесь: цитата
+    обязана найтись в заявленной главе (точно или типографически-мягко —
+    flex_fragment_pattern), иначе правка перепривязывается на единственную
+    главу батча с совпадением; ни одна — отклонение.
+
+    Сверяемся ТОЛЬКО с переводом: оригинал в батче идёт рядом, но правка
+    адресуется файлу перевода, и цитата, случайно совпавшая с оригиналом
+    (латиница, цифры, имена), была бы неверной находкой.
+
+    У сверки с оригиналом свой контроль: `missing_text` — только ВСТАВКА
+    (`core.common.insertion_of`), иначе запись уходит человеку с пометкой
+    («место пропуска не доказано»); `manual_notes` — та же причина для
+    `corrected == fragment` (LLM сама сказала, что вставить не может).
+    Цитата обязана быть УНИКАЛЬНОЙ в главе: замена адресуется ею, и второе
+    вхождение в файле — это уже не адрес.
+    """
+    out, dropped, moved, manual = [], 0, 0, 0
     for e in errors:
         ch = _to_int(e.get("chapter"))
         if ch is None:
             continue
+        etype = str(e.get("type") or "").strip().lower()
         frag, corr = e.get("fragment", ""), e.get("corrected", "")
         if not frag or len(frag) < 10 or not corr:
             continue
         if frag.strip() == corr.strip():
+            # LLM сама сказала, что место не определено: маркер manual
+            if etype in SOURCE_FIX_TYPES:
+                e["type"] = "manual"
+                e["note"] = "место пропуска не определено — нужна ручная вставка"
+                out.append(e)
+                manual += 1
             continue
         cont = batch_contents.get(ch, "")
-        if cont and _frag_in_text(frag, cont):
-            e["chapter"] = ch
-            out.append(e)
-            continue
-        found = [oc for oc, ocont in batch_contents.items()
-                 if ocont and _frag_in_text(frag, ocont)]
-        if len(found) == 1:
+        if not (cont and _frag_in_text(frag, cont)):
+            found = [oc for oc, ocont in batch_contents.items()
+                     if ocont and _frag_in_text(frag, ocont)]
+            if len(found) != 1:
+                dropped += 1
+                continue
             moved += 1
             logger.info(f"  ↪ Цитата не в гл.{ch}, а в гл.{found[0]} — "
                         f"правка перепривязана.")
-            e["chapter"] = found[0]
-            out.append(e)
+            ch = found[0]
+            cont = batch_contents.get(ch, "")
+        e["chapter"] = ch
+        # уникальность: замена адресуется цитатой
+        if fragment_occurrences(cont, frag) > 1:
+            dropped += 1
             continue
-        dropped += 1
-        continue
-    rej = dropped
-    if rej:
-        logger.info(f"Валидация: отклонено {rej}/{len(errors)}")
+        if etype == "missing_text":
+            place = insertion_of(frag, corr)
+            if place is None:
+                # переписывание вместо вставки: место не доказано
+                e["type"] = "manual"
+                e["note"] = ("место пропуска не доказано (правка не вставка) — "
+                             "нужна ручная сверка")
+                manual += 1
+            elif place[0] == 0 or place[0] >= len(frag):
+                # вставка только в самое начало/конец — приманка на стыке частей
+                e["type"] = "manual"
+                e["note"] = ("вставка только в начало/конец куска — "
+                             "место не доказано")
+                manual += 1
+        out.append(e)
+    if dropped:
+        logger.info(f"Валидация: отклонено {dropped}/{len(errors)}")
     if moved:
         logger.info(f"Валидация: перепривязано {moved} правок на "
                     f"реальные главы.")
+    if manual:
+        logger.info(f"Сверка с оригиналом: {manual} записей без места "
+                    f"вставки — человеку (статус «отклонить»)")
     return out
 
 
@@ -457,9 +658,14 @@ def validate_errors(errors, valid_ch, batch_contents, logger):
 # ─────────────────────────────────────────────
 
 def compose_batch_text(batch) -> str:
-    """Текст батча для LLM: заголовки глав («=== Глава N ===», с
-    нумерацией частей для разрезанных) + очищенный текст. Используется
-    и в предпросмотре запроса."""
+    """Текст батча для LLM: заголовок главы («=== Глава N ===», с
+    нумерацией частей для разрезанных) + текст. С оригиналом — пара блоков
+    `[ОРИГИНАЛ]` и `[ПЕРЕВОД]` одной главы. Используется и в предпросмотре
+    запроса.
+
+    Заголовок главы из обоих текстов вырезан (`strip_chapter_headers`): он
+    переводится свободно, и его расхождение с оригиналом — не missing_text.
+    """
     ch_counts = defaultdict(int)
     for c in batch:
         ch_counts[c[0]] += 1
@@ -467,13 +673,20 @@ def compose_batch_text(batch) -> str:
     parts = []
     for c in batch:
         cleaned = strip_chapter_headers(c[3])
+        source = strip_chapter_headers(_item_source(c))
         if ch_counts[c[0]] > 1:
             ch_seen[c[0]] += 1
-            hdr = f"=== Глава {c[0]} (часть {ch_seen[c[0]]}/{ch_counts[c[0]]}) ==="
+            hdr = (f"=== Глава {c[0]} (часть {ch_seen[c[0]]}/"
+                   f"{ch_counts[c[0]]}) ===")
         else:
             hdr = f"=== Глава {c[0]} ==="
-        parts.append(f"{hdr}\n{cleaned}")
-    return "\n".join(parts)
+        if source and source.strip():
+            body = (f"{hdr}\n[ОРИГИНАЛ]\n{source.strip()}\n\n"
+                    f"[ПЕРЕВОД]\n{cleaned.strip()}")
+        else:
+            body = f"{hdr}\n{cleaned}"
+        parts.append(body)
+    return "\n\n".join(parts)
 
 
 def render_prompt(prompt_tpl: str, batch_text: str) -> str:
@@ -558,14 +771,26 @@ def save_review_file(path, input_dir, created, entries, params=None,
 
 
 def errors_to_entries(errors, stage, file_type, chapter_map, logger):
-    """Ошибки LLM → записи review-файла с путём файла главы."""
-    entries, skip = [], 0
+    """Ошибки LLM → записи review-файла с путём файла главы.
+
+    Запись с типом `manual` (пропуск без доказанного места вставки) встаёт
+    сразу со статусом «отклонить»: применять её нечем, а автопринятие
+    оставляло в файле строку, которую человек не читая принял бы к
+    дальнейшим действиям (следующий `--apply` её пропускает, но ложное
+    «принять» в статистике и в фильтрах карточек остаётся).
+    """
+    entries, skip, manual = [], 0, 0
     cache = {}
     for e in errors:
         rec = fix_entry(e, stage=stage)
         if not rec:
             skip += 1
             continue
+        if rec.get("type") == "manual":
+            rec["status"] = REVIEW_REJECT
+            if e.get("note"):
+                rec["note"] = e["note"]
+            manual += 1
         ch = rec["chapter"]
         if ch not in cache:
             cache[ch] = find_chapter_file(ch, file_type, chapter_map,
@@ -576,6 +801,9 @@ def errors_to_entries(errors, stage, file_type, chapter_map, logger):
         entries.append(rec)
     if skip:
         logger.info(f"Некорректных записей отсеяно: {skip}")
+    if manual:
+        logger.info(f"Записей без места вставки: {manual} "
+                    f"(в правках со статусом «отклонить»)")
     return entries
 
 
@@ -719,10 +947,12 @@ def build_parser():
   --apply --dry-run предпросмотр применения;
   --auto-apply      сразу применить всё найденное (без человека).
 Единицы: --request_budget — ТОКЕНЫ (оценка estimate_tokens); max_tokens —
-серверный предохранитель, ТОКЕНЫ.
+серверный предохранитель, ТОКЕНЫ; --chapters_per_request — ГЛАВЫ.
 Сервер, модель, ключ, таймауты, повторы, потоки и рассуждения — ОДНИ на весь
 конвейер: флаг стадии пуст → значение из общего .env (или профиля LLM).
 Промпт-файл: один тег <prompt_translate_check>; без него — встроенный промпт.
+Сверка с оригиналом: к каждой главе подмешивается её chapter.txt (блоки
+[ОРИГИНАЛ]/[ПЕРЕВОД]), правки берутся только из перевода.
 """,
     )
     ap.add_argument("--preview-request", dest="preview_request", default=None,
@@ -746,6 +976,17 @@ def build_parser():
         help="Бюджет запроса, ТОКЕНЫ (оценка; промпт — запас 200; "
              "по умолчанию: "
              f"{core_settings.BY_KEY['TRANSLATE_CHECK_LLM_REQUEST_BUDGET'].default}).")
+    ap.add_argument("--use-source", dest="use_source", default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help="Сверять с оригиналом: к главе подмешивается её "
+                         "chapter.txt парой [ОРИГИНАЛ]/[ПЕРЕВОД]; правки — "
+                         "только из перевода (пусто = "
+                         "TRANSLATE_CHECK_LLM_USE_SOURCE).")
+    ap.add_argument("--chapters_per_request", type=int, default=1, metavar="N",
+                    help="Глав в одном запросе, ГЛАВЫ (0 = пакет по бюджету); "
+                         "части одной сверхбольшой главы считаются одной "
+                         "главой (пусто = "
+                         "TRANSLATE_CHECK_LLM_CHAPTERS_PER_REQUEST).")
     ap.add_argument("--retry_empty", type=int, default=0, metavar="N",
                     help="Повторов при отсутствии правок, ШТ (0 = нет; пусто = "
                          "TRANSLATE_CHECK_LLM_RETRY_EMPTY). Ответ без ошибок "
@@ -845,18 +1086,28 @@ def do_check(args, stage) -> int:
     logger.info(
         f"Главы {args.start}–{args.end} | {args.type} | "
         f"budget={args.request_budget} | "
+        f"оригинал={'да' if args.use_source else 'нет'} | "
+        f"глав в запросе={args.chapters_per_request} | "
         f"threads={stage.profile.threads} | "
         f"retry_empty={args.retry_empty}")
 
     prompt = load_prompt(args.prompt_file, logger)
+    if args.use_source and SOURCE_PROMPT_MARK not in prompt:
+        logger.warning("⚠️ В промпте нет блока сверки с оригиналом "
+                       "([ОРИГИНАЛ]/[ПЕРЕВОД], примечания автора) — "
+                       "устаревший промпт; встроенные правила не подставлены")
+
     logger.info(f"Лог: {stage.log_path}")
 
     chapters = collect_chapters(args.start, args.end, args.type,
-                                args.request_budget, chapter_map, logger)
+                                args.request_budget, chapter_map, logger,
+                                use_source=args.use_source)
     if not chapters:
         logger.error("❌ Главы не найдены.")
         return 1
-    batches = build_batches(chapters, args.request_budget, logger)
+    batches = build_batches(chapters, args.request_budget, logger,
+                            per_request=args.chapters_per_request
+                            if args.use_source else 0)
     if not batches:
         return 1
 
@@ -865,6 +1116,8 @@ def do_check(args, stage) -> int:
                     render_prompt(prompt, compose_batch_text(batches[0])),
                     meta={"batches": len(batches),
                           "request_budget": args.request_budget,
+                          "use_source": bool(args.use_source),
+                          "chapters_per_request": args.chapters_per_request,
                           "threads": stage.profile.threads,
                           "retry_empty": args.retry_empty,
                           "first_batch_chapters": sorted(
@@ -876,6 +1129,8 @@ def do_check(args, stage) -> int:
     stage_label = f"Главы {args.start}–{args.end} ({args.type})"
     params = {"директория глав": args.chapters_dir,
               "тип файлов": args.type,
+              "сверка с оригиналом": "да" if args.use_source else "нет",
+              "глав в запросе": args.chapters_per_request,
               "начало": args.start, "конец": args.end,
               "бюджет запроса": args.request_budget,
               "потоки": stage.profile.threads,
@@ -907,6 +1162,9 @@ def do_check(args, stage) -> int:
 
     def worker(idx, batch):
         nums = [c[0] for c in batch]
+        # сверка идёт ТОЛЬКО по тексту перевода: оригинал в батче есть,
+        # но адрес правки — файл перевода, и цитата, случайно совпавшая
+        # с оригиналом, была бы неверной находкой (см. validate_errors)
         bc = {}
         for c in batch:
             bc[c[0]] = bc.get(c[0], "") + ("\n" if c[0] in bc else "") + c[3]
@@ -982,10 +1240,21 @@ def do_check(args, stage) -> int:
     return 0
 
 
+#: фразы, без которых внешний промпт устарел по смыслу (теги на месте,
+#: а правил сверки нет): попадают в notes вердикта --check-prompt
+PROMPT_MARKS: tuple = (
+    (SOURCE_PROMPT_MARK,
+     "в промпте нет блоков [ОРИГИНАЛ]/[ПЕРЕВОД] — правила сверки с "
+     "оригиналом (пропуски, примечания автора) не действуют, пока "
+     "включено «Сверять с оригиналом»"),
+)
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     # --check-prompt: вердикт о промпт-файле до логов, чтения глав и сети
-    if check_prompt(args, "translate_check_llm", PROMPT_CONTRACT):
+    if check_prompt(args, "translate_check_llm", PROMPT_CONTRACT,
+                    marks=PROMPT_MARKS):
         return 0
     # лог стадии — всегда; профиль LLM нужен только режиму проверки
     stage = new_stage("translate_check_llm", args, log_fatal=False)

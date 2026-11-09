@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "cli"))
 from conftest import SilentLog  # noqa: E402
 
 from core import stage as core_stage  # noqa: E402
+import core.common as C  # noqa: E402
 import ner as NER            # noqa: E402
 import wiki as WIKI          # noqa: E402
 import translate_check_llm as RE  # noqa: E402  (бывший fix_errors)
@@ -499,6 +500,55 @@ def test_re_validate_errors_drift_and_typography():
     assert out[0]["chapter"] == 6
     assert out[1]["chapter"] == 5
 
+
+def test_re_validate_errors_source_types():
+    """Сверка с оригиналом: вставка проверяется как вставка, место
+    оценивается по краю куска, дословный копипаст → ручная запись, а
+    цитата, встречающаяся дважды, отклоняется (адрес неоднозначен)."""
+    cont = ("Су Мин подошёл к краю утёса и долго смотрел вниз. "
+            "Ветер трепал его плащ. Затем он развернулся и ушёл. "
+            "Повтор фразы один. Повтор фразы два. Повтор фразы один. "
+            "Повтор фразы два.")
+    batch = {7: cont}
+    frag_ok = "Су Мин подошёл к краю утёса и долго смотрел вниз. Ветер трепал его плащ."
+    corr_ok = ("Су Мин подошёл к краю утёса и долго смотрел вниз. "
+               "Где-то внизу шумело море. Ветер трепал его плащ.")
+    errors = [
+        # честная вставка внутри абзаца
+        {"chapter": 7, "fragment": frag_ok, "corrected": corr_ok,
+         "type": "missing_text"},
+        # переписывание вместо вставки → человеку, статус решает ошибки_to_entries
+        {"chapter": 7, "fragment": frag_ok,
+         "corrected": frag_ok.replace("долго", "недолго"),
+         "type": "missing_text"},
+        # LLM сама сказала, что вставить не может
+        {"chapter": 7, "fragment": frag_ok, "corrected": frag_ok,
+         "type": "missing_text", "reason": "пропуск"},
+        # вставка только в самое начало куска — место не доказано
+        {"chapter": 7, "fragment": frag_ok,
+         "corrected": "Новая фраза. " + frag_ok, "type": "missing_text"},
+        # цитата встречается дважды → адрес неоднозначен
+        {"chapter": 7, "fragment": "Повтор фразы один. Повтор фразы два.",
+         "corrected": "Повтор фразы один.", "type": "extra_text"},
+    ]
+    out = RE.validate_errors(errors, {7}, batch, SilentLog())
+    kinds = [e.get("type") for e in out]
+    assert kinds == ["missing_text", "manual", "manual", "manual"]
+
+
+def test_re_errors_to_entries_manual_is_rejected():
+    """Запись без доказанного места вставки встаёт со статусом «отклонить»:
+    применять её нечем, а «принять» по умолчанию обмануло бы статистику."""
+    chapter_map = {}
+    errs = [{"chapter": 3, "fragment": "цитата без места вставки",
+             "corrected": "цитата без места вставки", "type": "manual",
+             "note": "место пропуска не определено"}]
+    recs = RE.errors_to_entries(errs, "стадия", "polished", chapter_map,
+                                SilentLog())
+    assert len(recs) == 1
+    assert recs[0]["status"] == C.REVIEW_REJECT
+    assert recs[0]["note"] == "место пропуска не определено"
+
 def test_re_no_safety_limits():
     """Ограничители правок (лимит на главу, мин. длина, макс. изменённых
     символов) убраны: их флагов и фильтра в скрипте нет."""
@@ -518,6 +568,64 @@ def test_re_build_batches():
     batches = RE.build_batches(chapters, 5000, SilentLog())
     assert len(batches) == 1 and len(batches[0]) == 3
     assert RE.build_batches([], 700, SilentLog()) == []
+
+
+def test_re_build_batches_by_chapters_and_pairs():
+    """Пакет по числу ГЛАВ (ГЛАВЫ): части одной главы уезжают вместе, и
+    бюджет не режет пакет раньше времени."""
+    # глава 2 разрезана на две части — они в одном пакете
+    chapters = [(1, "f", "d", "а"), (2, "f", "d", "б"),
+                (2, "f", "d", "б2"), (3, "f", "d", "в")]
+    batches = RE.build_batches(chapters, 500, SilentLog(), per_request=1)
+    assert [[c[0] for c in b] for b in batches] == [[1], [2, 2], [3]]
+    batches = RE.build_batches(chapters, 500, SilentLog(), per_request=2)
+    assert [[c[0] for c in b] for b in batches] == [[1, 2, 2], [3]]
+    # пары (оригинал+перевод) в бюджете учитываются оба текста
+    pair = [(1, "f", "d", "х" * 300, "字" * 300)]
+    assert len(RE.build_batches(pair, 600, SilentLog())) == 1
+    assert len(RE.build_batches(pair, 100, SilentLog())) == 1
+
+
+def test_re_split_pair_sentences_and_glue():
+    """Нарезка сверхбюджетной пары: части в пределах бюджета, режутся по
+    концу предложения, а склейка равна исходному тексту до символа."""
+    zh = ("第471章 推理\n苏明并没有先解释，而是先让渡鸦和夜影同时使用暗影魔法。"
+          "又命令女妖准备魔法阵。\n“各位，我们正在谈论的是戴安娜。”\n") * 40
+    ru = ("Су Мин не стал сразу всё объяснять, а приказал Рэйвен скрыть "
+          "корабль. Затем он велел Банши подготовить круг. «Дамы и господа, "
+          "мы говорим о Диане, королеве амазонок». Он оперся на меч.\n") * 40
+    from core.common import ends_sentence, estimate_tokens
+    parts = RE.split_pair(ru, zh, 900)
+    assert len(parts) > 1
+    for tr_part, src_part in parts:
+        assert estimate_tokens(tr_part) + estimate_tokens(src_part) <= 900 * 1.6
+        assert ends_sentence(tr_part) or not tr_part.strip()
+        assert ends_sentence(src_part) or not src_part.strip()
+    assert "".join(a for a, _ in parts) == ru
+    assert "".join(b for _, b in parts) == zh
+    # пара меньше бюджета — одна часть целиком
+    assert RE.split_pair("раз. два.", "一。二。", 10000) == [("раз. два.", "一。二。")]
+
+
+def test_re_collect_chapters_pairs_and_missing_source(tmp_path):
+    """Сбор глав с оригиналом: пара берётся из chapter.txt, без него глава
+    проверяется одна (это не ошибка, о ней пишется одной строкой)."""
+    for num in (1, 2):
+        d = tmp_path / f"00000_{num}_гл"
+        d.mkdir()
+        (d / "polished.txt").write_text(f"Глава {num}\nперевод главы {num}",
+                                        encoding="utf-8")
+    (tmp_path / "00000_1_гл" / "chapter.txt").write_text(
+        "第1章\n原文", encoding="utf-8")
+    ch_map = C.build_chapter_map(str(tmp_path))
+    log = SilentLog()
+    items = RE.collect_chapters(1, 2, "polished", 65000, ch_map, log,
+                                use_source=True)
+    assert len(items) == 2
+    assert items[0][4] == "第1章\n原文" and items[1][4] is None
+    # без сверки оригинал не читается вовсе
+    items = RE.collect_chapters(1, 2, "polished", 65000, ch_map, log)
+    assert all(item[4] is None for item in items)
 
 
 def test_re_detect_chapter_range():
