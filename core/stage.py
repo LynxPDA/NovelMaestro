@@ -484,12 +484,17 @@ def setup_stage(name: str, args: argparse.Namespace, *, log_dir: str = "logs",
 def add_check_prompt_arg(ap: argparse.ArgumentParser) -> None:
     """Флаг --check-prompt у стадии с внешним промптом.
 
-    Путь артефакта относительный: web передаёт tmp/prompt_check.json, а cwd
-    процесса — папка книги."""
+    PATH — файл, КУДА писать вердикт, а не проверяемый промпт: сам промпт
+    берётся из --prompt_file. Путь относительный: web передаёт
+    tmp/prompt_check.json, а cwd процесса — папка книги. Перепутать местами
+    эти два пути легко и дорого: вердикт записывался поверх шаблона промпта.
+    """
     ap.add_argument("--check-prompt", dest="check_prompt", default=None,
                     metavar="PATH",
-                    help="ПРОВЕРКА промпт-файла: сверить теги и переменные "
-                         "стадии без запросов к LLM → JSON в PATH.")
+                    help="ПРОВЕРКА промпт-файла (тот, что в --prompt_file): "
+                         "сверить теги и переменные стадии без запросов к "
+                         "LLM → JSON-вердикт в PATH (это файл ОТЧЁТА, а не "
+                         "проверяемый промпт)")
 
 
 def check_prompt(args: argparse.Namespace, name: str, contract,
