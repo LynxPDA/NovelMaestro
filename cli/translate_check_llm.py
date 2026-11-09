@@ -446,6 +446,31 @@ def _frag_in_text(frag, text):
     flex = flex_fragment_pattern(frag)
     return flex != re.escape(frag_n) and re.search(flex, text_n) is not None
 
+#: сколько символов общего контекста обязано быть у правки, чтобы
+#: применять её вместо цитаты (замена внутри слова даёт контекст вокруг)
+_MIN_COMMON_CONTEXT = 8
+
+
+def _common_context(a: str, b: str) -> tuple:
+    """Общее начало и общий конец двух строк — в символах.
+
+    Правка отличается от цитаты только в месте ошибки, поэтому общий
+    контекст есть почти всегда. Ноль с обеих сторон означает, что текст
+    переписан целиком: применять его нельзя, это не адресованная правка.
+    """
+    a = a or ""
+    b = b or ""
+    limit = min(len(a), len(b))
+    head = 0
+    while head < limit and a[head] == b[head]:
+        head += 1
+    tail = 0
+    while (tail < limit - head
+           and a[len(a) - 1 - tail] == b[len(b) - 1 - tail]):
+        tail += 1
+    return head, tail
+
+
 def validate_errors(errors, valid_ch, batch_contents, logger,
                     manual_notes=False):
     """Сверка ответа LLM с фактическим ПЕРЕВОДОМ батча.
@@ -500,6 +525,19 @@ def validate_errors(errors, valid_ch, batch_contents, logger,
         if fragment_occurrences(cont, frag) > 1:
             dropped += 1
             continue
+        # Пересказ вместо точечной правки: у правки есть общий КОНТЕКСТ с
+        # цитатой — до места ошибки и после. Модель, переписавшая кусок
+        # своими словами, общего контекста не даёт, и подставлять её текст
+        # значит заменить часть главы чужим. Вставка (`missing_text`) и
+        # удаление (`extra_text`) проверяются отдельно: там `new` отличается
+        # от цитаты намеренно и целиком.
+        if etype not in ("missing_text", "extra_text"):
+            head, tail = _common_context(frag, corr)
+            if head + tail < _MIN_COMMON_CONTEXT:
+                dropped += 1
+                logger.info(f"  ⚠ Гл.{ch}: правка переписана целиком — "
+                            f"контекст {head + tail} симв., отклонена")
+                continue
         if etype == "missing_text":
             place = insertion_of(frag, corr)
             if place is None:
@@ -687,6 +725,29 @@ def resolve_entry_path(entry, file_type, chapter_map, logger=None):
     return fp2
 
 
+def _apply_fail_note(text, e) -> str:
+    """Почему правка не легла: «не найден» и «формат не совпал» — разные
+    причины, и вторая означает, что модель расставила переносы иначе.
+
+    Наличие фрагмента проверяется МЯГКО (`flex_fragment_pattern`): правка
+    отклонена именно там, где мягкий поиск его нашёл, но форматирование
+    разошлось. Проверять точное вхождение бессмысленно — до отказа
+    `apply_flex_fix` дошёл только потому, что точного совпадения не было.
+    """
+    frag = unicodedata.normalize("NFC", str(e.get("old") or ""))
+    if not frag:
+        return "пустая цитата"
+    try:
+        found = re.search(flex_fragment_pattern(frag),
+                          unicodedata.normalize("NFC", text))
+    except re.error:
+        found = None
+    if found:
+        return ("переносы строк в правке не совпали с файлом — не применяю, "
+                "чтобы не склеить абзацы")
+    return "фрагмент не найден в файле"
+
+
 def apply_fix_entries(entries, file_type, chapter_map, logger,
                       dry_run=False):
     """Применение принятых неприменённых правок к файлам глав.
@@ -773,7 +834,7 @@ def apply_fix_entries(entries, file_type, chapter_map, logger,
         nt, ok = apply_flex_fix(text, e["old"], e["new"])
         if not ok:
             e["chapter"] = claimed
-            e["note"] = "фрагмент не найден в найденной главе"
+            e["note"] = _apply_fail_note(text, e)
             skipped += 1
             continue
         if not dry_run:

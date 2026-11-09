@@ -662,3 +662,25 @@ def test_compose_batch_text_headers():
     assert text.index("Глава 1") < text.index("Глава 3")
 
 
+
+
+def test_validate_drops_full_rewrite():
+    """Пересказ вместо правки отклоняется: у правки обязан быть общий
+    контекст с цитатой, иначе подстановка заменит кусок главы чужим
+    текстом. Вставка и удаление проверяются отдельно — там различие
+    намеренное."""
+    text = "Первый абзац главы идёт здесь. Второй абзац тоже здесь есть."
+    errs = [
+        # пересказ целиком: общего контекста нет
+        {"chapter": 1, "fragment": "Первый абзац главы идёт здесь.",
+         "corrected": "Совсем иное предложение про другое.",
+         "type": "logic", "reason": "х"},
+        # нормальная правка: контекст вокруг слова
+        {"chapter": 1, "fragment": "Второй абзац тоже здесь есть.",
+         "corrected": "Второй абзац тоже тут есть.",
+         "type": "typo", "reason": "х"},
+    ]
+    from tests.conftest import SilentLog
+    out = FE.validate_errors(errs, {1}, {1: text}, SilentLog())
+    assert len(out) == 1, [e["type"] for e in out]
+    assert out[0]["corrected"] == "Второй абзац тоже тут есть."

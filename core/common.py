@@ -2004,16 +2004,40 @@ def apply_flex_fix(text, old, new):
     """Замена фрагмента: сначала точная (NFC), затем типографически-
     мягкая (flex_fragment_pattern) — заменяется найденный СПАН, new
     вставляется как есть (NFC). Возвращает (новый_текст, True) или
-    (None, False), если фрагмент не найден ни точно, ни мягко."""
+    (None, False), если фрагмент не найден ни точно, ни мягко.
+
+    Мягкий поиск совпадает ЧЕРЕЗ границы абзацев: «\s+» в паттерне
+    захватывает «\n». Модель, склеившая цитату в одну строку, находила
+    многострочный кусок и заменяла его однострочным — переносы между
+    абзацами пропадали (на живой главе 137 → 135, абзацы срастались).
+    Угадывать, где модель хотела перенос, нельзя: ошибка в один символ
+    ставит перенос ВНУТРЬ слова. Поэтому форматирование сверяется: не
+    совпало число переносов — правка НЕ применяется и уходит человеку
+    (`note` ставит вызывающий). Точное совпадение переносов не теряет по
+    построению.
+    """
     tn = unicodedata.normalize("NFC", text)
     on = unicodedata.normalize("NFC", str(old))
+    nn = unicodedata.normalize("NFC", str(new))
     if on in tn:
-        return tn.replace(on, unicodedata.normalize("NFC", str(new)), 1), True
+        return tn.replace(on, nn, 1), True
     m = re.search(flex_fragment_pattern(on), tn)
     if not m:
         return None, False
-    return (tn[:m.start()] + unicodedata.normalize("NFC", str(new))
-            + tn[m.end():], True)
+    span = tn[m.start():m.end()]
+    if _newline_count(span) != _newline_count(nn):
+        # форматирование не совпало — не рискуем склеить абзацы
+        return None, False
+    return tn[:m.start()] + nn + tn[m.end():], True
+
+
+def _newline_count(s: str) -> int:
+    """Сколько переносов строк в тексте (все виды, не только «\n»)."""
+    return sum(1 for ch in s if ch in "\n\r\u2028\u2029")
+
+
+#: символы перевода строки, которые переносятся из найденного спана в `new`
+_NEWLINE_CHARS = "\n\r\u2028\u2029"
 
 
 def find_fragment_owner(chapter_map, frag, claimed=None, want="polished",
