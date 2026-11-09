@@ -442,6 +442,67 @@ def test_main_check_writes_review_and_params(tmp_path, monkeypatch):
     assert len(doc2["entries"]) == 1 and doc2["params"] == params
 
 
+def test_validate_marks_manual_for_unprovable_missing(monkeypatch):
+    """Пропуск без доказанного места вставки → тип `manual`, не `missing_text`.
+
+    `insertion_of` пропускает только настоящую вставку в середину куска:
+    пересказ вместо цитаты, правка в самом краю и `corrected == fragment`
+    адресовать нечем — такие находки уходят человеку."""
+    text = ("Первый абзац главы с текстом здесь.\n"
+            "Второй абзац с ещё одним куском текста тут.\n"
+            "Третий абзац, тоже с текстом, чтобы было место.")
+    bc = {1: text}
+    errs = [
+        # пересказ вместо вставки: конец куска другой — места не доказать
+        {"chapter": 1, "type": "missing_text",
+         "fragment": "Первый абзац главы с текстом здесь. "
+                     "Второй абзац с ещё одним куском текста тут.",
+         "corrected": "Первый абзац главы с текстом здесь. Совсем другой "
+                      "текст, не совпадающий с концом исходного куска.",
+         "reason": "пропуск"},
+        # настоящая вставка в середину — остаётся missing_text
+        {"chapter": 1, "type": "missing_text",
+         "fragment": "Первый абзац главы с текстом здесь. "
+                     "Второй абзац с ещё одним куском текста тут.",
+         "corrected": "Первый абзац главы с текстом здесь. Вставка посередине. "
+                      "Второй абзац с ещё одним куском текста тут.",
+         "reason": "пропуск"},
+    ]
+    out = FE.validate_errors(errs, {1}, bc, SilentLog())
+    assert [e["type"] for e in out] == ["manual", "missing_text"], \
+        "пересказ уходит человеку, вставка остаётся правкой"
+    assert "место пропуска не доказано" in out[0].get("note", "")
+
+
+def test_log_shows_share_of_manual_missing(tmp_path, monkeypatch, caplog):
+    """Итог лога: доля находок сверки без места вставки.
+
+    Раньше были только две отдельные строки («N записей без места
+    вставки» и «Ошибок найдено»), и долю приходилось считать в голове.
+    Растёт — промпт разъезжается с текстом или пакет велик."""
+    ch_dir, _ = _mk_chapters(tmp_path, {
+        1: ("Первый абзац главы с текстом здесь.\n"
+            "Второй абзац с ещё одним куском текста тут.")})
+    monkeypatch.chdir(tmp_path)
+    review = str(tmp_path / "rev_manual.json")
+    # оба ответа — пересказ вместо вставки: оба станут manual
+    _answer_one(monkeypatch, json.dumps([
+        {"chapter": 1, "type": "missing_text",
+         "fragment": "Первый абзац главы с текстом здесь. "
+                     "Второй абзац с ещё одним куском текста тут.",
+         "corrected": "Совсем иной текст целиком без узнаваемых кусков.",
+         "reason": "пропуск"}]))
+    with caplog.at_level("INFO"):
+        rc = FE.main(["--host", "http://x", "--api_key", "k",
+                      "--model", "m", "--chapters_dir", ch_dir,
+                      "--start", "1", "--end", "1", "--type", "polished",
+                      "--review", review])
+    assert rc == 0
+    text = caplog.text
+    assert "Сверка с оригиналом:" in text and "без места вставки" in text, \
+        f"строки о доле нет в логе: {text[-800:]}"
+
+
 def test_main_apply_statuses_backup_and_log(tmp_path, monkeypatch):
     ch_dir, _ = _mk_chapters(tmp_path, {1: "первый текст главы один."})
     monkeypatch.chdir(tmp_path)

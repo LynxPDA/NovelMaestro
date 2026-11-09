@@ -667,9 +667,9 @@ def errors_to_entries(errors, stage, file_type, chapter_map, logger):
         entries.append(rec)
     if skip:
         logger.info(f"Некорректных записей отсеяно: {skip}")
-    if manual:
-        logger.info(f"Записей без места вставки: {manual} "
-                    f"(в правках со статусом «отклонить»)")
+    # про записи без места вставки итог считает вызывающий (do_check):
+    # там есть и общее число находок сверки, и доля — отдельная строка
+    # на каждый батч дублировала бы счётчик и не давала доли
     return entries
 
 
@@ -1008,10 +1008,20 @@ def do_check(args, stage) -> int:
     entries = existing or []
     added_total = 0
     lock = threading.Lock()
+    # сколько находок каждого типа пришло от модели и сколько из них ушло
+    # человеку без доказанного места вставки (manual). Доля важна сама по
+    # себе: растёт — промпт или бюджет разъезжаются с текстом, падает — сверка
+    # научилась доказывать место
+    found_types = defaultdict(int)
+    manual_total = 0
 
     def merge_and_save(errs):
         """Ошибки батча → записи → накопительный файл (под замком)."""
-        nonlocal entries, added_total
+        nonlocal entries, added_total, manual_total
+        for e in errs:
+            found_types[str(e.get("type") or "?")] += 1
+            if str(e.get("type")) == "manual":
+                manual_total += 1
         fresh = errors_to_entries(errs, stage_label, args.type,
                                   chapter_map, logger)
         if not fresh:
@@ -1081,6 +1091,29 @@ def do_check(args, stage) -> int:
         for e in all_errors:
             tc[e.get("type", "?")] += 1
         logger.info(f"Типы: {dict(tc)}")
+        # ── сверка с оригиналом: доля находок без доказанного места ──
+        # `missing_text`/`extra_text` дают человеку адрес вставки только
+        # когда правка — настоящая вставка в середину куска. Остальное
+        # («переписал вместо вставки», «место не определил», «вставка в
+        # самый край») уходит со статусом «отклонить»: применить нечем.
+        # Доля от находок сверки показывает, насколько эти правила
+        # работают на деле, а не только объявлены в промпте.
+        source_found = sum(tc.get(t, 0) for t in SOURCE_FIX_TYPES)
+        if source_found:
+            pct = manual_total * 100 / source_found
+            logger.info(
+                f"Сверка с оригиналом: {source_found} находок, "
+                f"без места вставки {manual_total} ({pct:.0f}%) — "
+                f"в правках со статусом «отклонить», нужна ручная сверка")
+            if pct >= 50:
+                logger.warning(
+                    f"⚠️ Больше половины находок сверки ({pct:.0f}%) без "
+                    f"доказанного места вставки: модель пересказывает "
+                    f"пропуск вместо цитаты — проверьте промпт (раздел "
+                    f"«МЕСТО ВСТАВКИ») или размер пакета")
+        elif manual_total:
+            logger.info(f"Записей без места вставки: {manual_total} "
+                        f"(в правках со статусом «отклонить»)")
 
     if args.auto_apply and entries:
         applied, skipped = apply_fix_entries(entries, args.type,
