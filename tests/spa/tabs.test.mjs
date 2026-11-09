@@ -2521,11 +2521,13 @@ test("глоссарий: чекбоксы строк, групповой зам
     [true, true, true],
     "замок поставился на выделенное, зафиксированный остался зафиксированным",
   );
+  /* групповой замок — точечная правка: на сервер уходят только тронутые
+     термины, а не весь глоссарий (у боевой книги это 6 МБ на действие) */
   const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
-  assert.equal(saved.method, "PUT");
-  assert.equal(saved.body.items.filter((it) => it._locked === true).length, 3);
-  assert.equal(saved.body.items.filter((it) => it.__new != null).length, 0,
-    "служебный ключ __new в файл не пишется");
+  assert.equal(saved.method, "PATCH");
+  assert.equal(saved.body.changes.length, 2, "две выделенные записи");
+  assert.deepEqual(saved.body.changes.map((c) => c.set._locked), [true, true]);
+  assert.equal(saved.body.items, undefined, "полный список не пересылается");
 });
 
 test("глоссарий: удаление выделенного обходит зафиксированные", async () => {
@@ -2556,8 +2558,14 @@ test("глоссарий: удаление выделенного обходит
   await findByClass(bd, "btn-danger")[0]._listeners.click[0]();
   await tick();
   const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
-  assert.deepEqual(saved.body.items.map((it) => it.term), ["дракон"],
-    "зафиксированная запись выжила");
+  assert.equal(saved.method, "PATCH", "удаление — точечная правка");
+  /* JSON-сравнение: объекты приходят из контекста страницы и своих
+     прототипов, deepStrictEqual на них спотыкается о прототип */
+  assert.equal(JSON.stringify(saved.body.changes),
+    JSON.stringify([
+      { term: "мир", delete: true },
+      { term: "Лина", delete: true },
+    ]), "на сервер уходят только удалённые термины; зафиксированная выжила");
   assert.deepEqual(nerRows(page).map(nerFirstCol), ["дракон"]);
 });
 
@@ -2656,8 +2664,11 @@ test("глоссарий: правка записи со структурой н
   await tick();
   const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
   assert.ok(saved, "глоссарий сохранён");
-  assert.equal(saved.body.items[0].term, "Линна");
-  assert.deepEqual(JSON.parse(JSON.stringify(saved.body.items[0]._votes_type)),
+  assert.equal(saved.method, "PATCH", "правка ячейки — точечная");
+  const ch = saved.body.changes[0];
+  assert.equal(ch.term, "Лина", "ключ поиска — прежний термин");
+  assert.equal(ch.set.term, "Линна", "переименование едет полем term");
+  assert.deepEqual(JSON.parse(JSON.stringify(ch.set._votes_type)),
     { "Person (male)": 6 });
 });
 
@@ -2686,11 +2697,11 @@ test("глоссарий: правка одного поля не пишет п�
     await tick();
     const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
     assert.ok(saved, "глоссарий сохранён");
-    const it = saved.body.items[0];
-    assert.equal(it.translation, "Древняя");
-    assert.equal("aliases" in it, false, "в aliases не появилась пустая строка");
-    assert.equal(it.count, 132, "count остался числом");
-    assert.equal(it.reading, "Gǔ Yī", "нетронутое поле не перезаписано");
+    const set = saved.body.changes[0].set;
+    assert.equal(set.translation, "Древняя", "правка уехала");
+    assert.equal("aliases" in set, false, "aliases не тронут — ключа нет");
+    assert.equal("count" in set, false, "нетронутые поля не пересылаются");
+    assert.equal("reading" in set, false, "reading не перезаписан вхолостую");
   });
 
 test("глоссарий: заполненный aliases остаётся списком, пустой — удаляется",
@@ -2710,7 +2721,8 @@ test("глоссарий: заполненный aliases остаётся спи
     await ok._listeners.click[0]();
     await tick();
     const saved = globalThis.__calls.filter((c) => c.path === "/ner").slice(-1)[0];
-    assert.equal("aliases" in saved.body.items[0], false,
+    assert.equal(saved.method, "PATCH");
+    assert.equal("aliases" in saved.body.changes[0].set, false,
       "пустой aliases не появляется в записи");
   });
 

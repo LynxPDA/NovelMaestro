@@ -90,6 +90,68 @@ def _ner_put(ctx: dict) -> dict:
     return {"ok": True, "total": len(normalized)}
 
 
+def _ner_patch(ctx: dict) -> dict:
+    """Точечная правка глоссария (PATCH /api/ner {project, changes}).
+
+    Каждое изменение — `{term, set}` (поля записи) либо `{term, delete: true}`.
+    Клиент присылает его на микродействие — замок термина, правку ячейки,
+    удаление строки, — а не весь список: у книги на 10978 терминов PUT с
+    полным `items` весил 6 МБ и занимал 4 с на одну снятую галочку.
+    Термин ищется точным совпадением после NFC; правка ложится на все
+    незафиксированные записи термина (у дублей он один, а значения разные).
+    Возвращает `{ok, changed, total}`."""
+    common = _import_common(ctx)
+    pdir, _section, _name = _project_ctx(ctx)
+    changes = ctx["body"].get("changes")
+    if not isinstance(changes, list) or not changes:
+        raise ApiError(400, "Поле changes: непустой список изменений")
+    ner = pdir / "ner.json"
+    if not ner.is_file():
+        raise ApiError(404, "ner.json не найден")
+    try:
+        import json as _json
+        items = _json.loads(ner.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as exc:
+        raise ApiError(500, f"ner.json не читается: {exc}")
+    if not isinstance(items, list):
+        raise ApiError(500, "ner.json: ожидался список терминов")
+
+    def term_of(it) -> str:
+        if not isinstance(it, dict):
+            return ""
+        return unicodedata.normalize("NFC", str(it.get("term", ""))).strip()
+
+    changed = 0
+    for ch in changes:
+        if not isinstance(ch, dict):
+            continue
+        term = unicodedata.normalize("NFC", str(ch.get("term", ""))).strip()
+        if not term:
+            continue
+        targets = [it for it in items if term_of(it) == term]
+        if not targets:
+            continue
+        if ch.get("delete"):
+            items = [it for it in items if term_of(it) != term]
+            changed += len(targets)
+            continue
+        fields = ch.get("set")
+        if not isinstance(fields, dict):
+            continue
+        for it in targets:
+            for k, v in fields.items():
+                if v is None:
+                    it.pop(k, None)
+                else:
+                    it[k] = v
+        changed += len(targets)
+
+    import json as _json
+    text = _json.dumps(items, ensure_ascii=False, indent=2)
+    common.atomic_write(ner, unicodedata.normalize("NFC", text))
+    return {"ok": True, "changed": changed, "total": len(items)}
+
+
 def _ner_export(ctx: dict) -> dict:
     """Экспорт глоссария для анализа (GET /api/ner/export?project=&format=…).
 
@@ -251,6 +313,7 @@ def _register_glossary(router: Router) -> None:
     router.add("GET", "/api/ner", _ner_get)
     router.add("GET", "/api/ner/export", _ner_export)
     router.add("PUT", "/api/ner", _ner_put)
+    router.add("PATCH", "/api/ner", _ner_patch)
     router.add("GET", "/api/ner/review", lambda ctx: _review_get(ctx, "ner_review.json"))
     router.add("PUT", "/api/ner/review", lambda ctx: _review_put(ctx, "ner_review.json"))
     router.add("POST", "/api/ner/review/apply", _ner_review_apply)

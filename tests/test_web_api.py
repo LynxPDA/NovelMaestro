@@ -577,6 +577,105 @@ def test_ner_put_normalizes_record_types(srv_ctx):
     assert len(data) == 1
 
 
+def test_ner_patch_changes_single_term(srv_ctx):
+    """PATCH /api/ner меняет одну запись, не пересылая весь глоссарий.
+
+    Микродействие вкладки (замок, правка ячейки) раньше слало полный
+    список: у книги на 10978 терминов — 6 МБ и 4 с на одну галочку."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_patch")
+    pdir = projects_root / "ACTIVE" / "ner_patch"
+    items = [
+        {"term": "苏明", "translation": "Су Мин", "type": "персонаж"},
+        {"term": "古一", "translation": "Древний", "type": "персонаж"},
+    ]
+    res, payload = _request(port, "PUT", "/api/ner", {
+        "project": "ACTIVE/ner_patch", "items": items})
+    assert res.status == 200, payload
+
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_patch",
+        "changes": [{"term": "苏明", "set": {"_locked": True}}],
+    })
+    assert res.status == 200, payload
+    assert payload["changed"] == 1 and payload["total"] == 2
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    by_term = {it["term"]: it for it in saved}
+    assert by_term["苏明"]["_locked"] is True
+    assert "古一" in by_term, "чужие записи остаются"
+    assert "_locked" not in by_term["古一"], "чужая запись не тронута"
+
+
+def test_ner_patch_delete_and_clear_field(srv_ctx):
+    """PATCH: delete убирает термин, set с None снимает поле."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_patch_del")
+    pdir = projects_root / "ACTIVE" / "ner_patch_del"
+    _request(port, "PUT", "/api/ner", {
+        "project": "ACTIVE/ner_patch_del",
+        "items": [
+            {"term": "苏明", "translation": "Су Мин", "_locked": True},
+            {"term": "古一", "translation": "Древний"},
+        ],
+    })
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_patch_del",
+        "changes": [
+            {"term": "苏明", "set": {"_locked": None}},
+            {"term": "古一", "delete": True},
+        ],
+    })
+    assert res.status == 200, payload
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert [it["term"] for it in saved] == ["苏明"]
+    assert "_locked" not in saved[0], "None снимает поле, а не пишет null"
+
+
+def test_ner_patch_rejects_empty_and_unknown(srv_ctx):
+    """PATCH: пустой список — 400; неизвестный термин — без изменений."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_patch_err")
+    pdir = projects_root / "ACTIVE" / "ner_patch_err"
+    _request(port, "PUT", "/api/ner", {
+        "project": "ACTIVE/ner_patch_err",
+        "items": [{"term": "苏明", "translation": "Су Мин"}],
+    })
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_patch_err", "changes": []})
+    assert res.status == 400
+    # термин, которого нет, — не ошибка: changed = 0, файл прежний
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_patch_err",
+        "changes": [{"term": "нет такого", "set": {"notes": "x"}}],
+    })
+    assert res.status == 200, payload
+    assert payload["changed"] == 0
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert len(saved) == 1 and "notes" not in saved[0]
+
+
+def test_patch_requires_csrf_header(srv_ctx):
+    """PATCH — мутирующий метод: без CSRF-заголовка 403, как у PUT.
+
+    Метод добавлен ради точечных правок глоссария; в проверке CSRF его
+    сначала не было, и запрос проходил бы без защиты."""
+    from web import server as srv_mod
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_csrf")
+    import urllib.request
+    body = json.dumps({"project": "ACTIVE/ner_csrf",
+                       "changes": [{"term": "x", "set": {"a": 1}}]}).encode()
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/ner", data=body, method="PATCH",
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req) as r:
+            code = r.status
+    except urllib.error.HTTPError as exc:
+        code = exc.code
+    assert code == 403, "PATCH без X-Requested-With обязан отказывать"
+
+
 # ════════════════════════════════════════════════════════════════════
 # шаблоны (CRUD) и статус проекта
 

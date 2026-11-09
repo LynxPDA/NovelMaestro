@@ -235,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(401, {"ok": False, "error": "Требуется вход"})
             return
         # CSRF: мутирующие методы
-        if self.command in ("POST", "PUT", "DELETE") and not csrf_ok(self):
+        if self.command in ("POST", "PUT", "PATCH", "DELETE") and not csrf_ok(self):
             self._send_json(403, {"ok": False, "error": "CSRF-заголовок отсутствует"})
             return
         handler_fn, params = srv.router.dispatch(self.command, parts)
@@ -260,7 +260,7 @@ class Handler(BaseHTTPRequestHandler):
             "raw_body": b"",
             "content_type": ctype,
         }
-        if self.command in ("POST", "PUT", "DELETE"):
+        if self.command in ("POST", "PUT", "PATCH", "DELETE"):
             if ctype.startswith("multipart/form-data"):
                 # тело НЕ читаем в память: хендлер забирает его из rfile
                 # потоково (upload), здесь — только валидация длины
@@ -364,6 +364,7 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = _dispatch
     do_POST = _dispatch
     do_PUT = _dispatch
+    do_PATCH = _dispatch
     do_DELETE = _dispatch
 
 

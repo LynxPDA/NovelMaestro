@@ -2665,6 +2665,23 @@ function viewProject(section, name, tab, job) {
       }
     }
 
+    /* Микродействие (замок, правка ячейки, удаление строки) шлёт только
+       затронутые термины: полный PUT у книги на 10978 терминов весил 6 МБ
+       и занимал 4 с на одну снятую галочку. `changes` — [{term, set}]
+       либо [{term, delete: true}]. Ошибка — тост, как у saveNer; список
+       записей уже изменён локально, сервер догоняет его. */
+    async function saveNerChanges(changes) {
+      if (!changes || !changes.length) return;
+      try {
+        await api("/ner", {
+          method: "PATCH",
+          body: { project: `${section}/${name}`, changes },
+        });
+      } catch (ex) {
+        toast(ex.message, "err");
+      }
+    }
+
 
     /* выделение записей — как в «Файлах»: чекбокс строки, групповые действия
        (замок, удаление) в панели выделения, она заменяет кнопки тулбара.
@@ -2693,7 +2710,10 @@ function viewProject(section, name, tab, job) {
       items.forEach((it) => UICore.nerSetLocked(it, on));
       renderRows();
       paintSel();
-      saveNer();
+      saveNerChanges(items.map((it) => ({
+        term: it.term,
+        set: { _locked: on ? true : null },
+      })));
       toast(
         on
           ? `Зафиксировано записей: ${items.length}`
@@ -2723,9 +2743,10 @@ function viewProject(section, name, tab, job) {
         "УДАЛИТЬ",
         async () => {
           const dead = new Set(victims);
+          const gone = victims.map((it) => ({ term: it.term, delete: true }));
           data.items = data.items.filter((it) => !dead.has(it));
           nerSel.clear();
-          await saveNer();
+          await saveNerChanges(gone);
           renderRows();
           paintSel();
         },
@@ -2818,7 +2839,10 @@ function viewProject(section, name, tab, job) {
       const on = !UICore.nerIsLocked(it);
       UICore.nerSetLocked(it, on);
       renderRows();
-      saveNer();
+      saveNerChanges([{
+        term: it.term,
+        set: { _locked: on ? true : null },
+      }]);
       toast(
         on
           ? `Термин «${it.term}» зафиксирован`
@@ -2860,7 +2884,7 @@ function viewProject(section, name, tab, job) {
                 "УДАЛИТЬ",
                 async () => {
                   data.items = data.items.filter((x) => x !== it);
-                  await saveNer();
+                  await saveNerChanges([{ term: it.term, delete: true }]);
                   renderRows();
                 },
               ),
@@ -2946,6 +2970,10 @@ function viewProject(section, name, tab, job) {
         ),
       );
       function commit() {
+        /* что реально изменилось — на сервер уходят только эти поля
+           (микродействие, а не весь глоссарий: см. saveNerChanges) */
+        const origin = String(it.term || "");
+        const touched = {};
         for (const c of visibleCols()) {
           const raw = inputs[c].value;
           const was = it[c];
@@ -2957,6 +2985,7 @@ function viewProject(section, name, tab, job) {
             if (raw.trim()) {
               try {
                 it[c] = JSON.parse(raw);
+                touched[c] = it[c];
               } catch {
                 toast(
                   `Невалидный JSON в «${colLabel(c)}» — правка не сохранена`,
@@ -2969,6 +2998,7 @@ function viewProject(section, name, tab, job) {
                  aliases ломала загрузку глоссария стадией
                  (`[term] + ""` → TypeError) */
               delete it[c];
+              touched[c] = null;
             }
             continue;
           }
@@ -2979,6 +3009,7 @@ function viewProject(section, name, tab, job) {
           if (STRUCT_OPTIONAL.has(c)) {
             if (!raw.trim()) {
               delete it[c];
+              touched[c] = null;
               continue;
             }
             try {
@@ -2991,6 +3022,7 @@ function viewProject(section, name, tab, job) {
                 .map((s) => s.trim())
                 .filter(Boolean);
             }
+            touched[c] = it[c];
             continue;
           }
           /* Числа (count) остаются числами: commit() пишет текстом из
@@ -3006,6 +3038,7 @@ function viewProject(section, name, tab, job) {
             return;
           }
           it[c] = numericField ? num : raw;
+          touched[c] = it[c];
         }
         if (it.__new) {
           const t = String(it.term || "").trim();
@@ -3017,10 +3050,18 @@ function viewProject(section, name, tab, job) {
           it.term = t;
           it.translation = tr;
         }
+        const isNew = !!it.__new;
         delete it.__new;
         editing = null;
         renderRows();
-        saveNer();
+        if (isNew) {
+          /* новая запись: сервер про неё не знает — шлём целиком */
+          saveNer();
+        } else {
+          const set = { ...touched };
+          if (origin && origin !== it.term) set.term = it.term;
+          saveNerChanges([{ term: origin, set }]);
+        }
       }
       function cancel() {
         if (it.__new) data.items = data.items.filter((x) => x !== it);
