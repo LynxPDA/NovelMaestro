@@ -3353,6 +3353,20 @@ def insertion_of(old: str, new: str):
         tail += 1
     if head + tail < len(old):
         return None
+    # Общее начало могло попасть ВНУТРЬ слова вставки: «…здесь.\nВторой» и
+    # вставка «…здесь.\nВставка между абзацами.\nВторой» — посимвольное
+    # сравнение съедало «В» у обоих, деля вставку пополам («ставка…В»), и
+    # проверка «целым словом» ниже отклоняла настоящую вставку. Отступаем к
+    # началу слова в НОВОМ тексте и пересчитываем хвост от новой границы:
+    # старая граница хвоста годилась только для прежней головы.
+    while (0 < head < len(new) and new[head - 1].isalnum()
+           and new[head].isalnum()):
+        head -= 1
+    tail = len(old) - head
+    if tail < 0 or tail > len(new) - head:
+        return None
+    if old[head:] != new[len(new) - tail:]:
+        return None
     ins = new[head:len(new) - tail]
     if not ins or not ins.strip():
         return None
