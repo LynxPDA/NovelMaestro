@@ -2698,12 +2698,36 @@ function viewProject(section, name, tab, job) {
     async function saveNerChanges(changes) {
       if (!changes || !changes.length) return;
       try {
-        await api("/ner", {
+        const res = await api("/ner", {
           method: "PATCH",
           body: { project: `${section}/${name}`, changes },
         });
+        /* Часть правок не нашла свою запись: вкладку открыли до того, как
+           запись изменили (голосование ner_check, другой браузер). Локально
+           мы уже применили правку — перечитываем файл, иначе экран
+           показывает то, чего на диске нет. Молчать нельзя: иначе человек
+           думает, что замок поставлен, а он остался на прежней записи. */
+        if (res && res.stale) {
+          toast("Глоссарий изменился — список перечитан", "warn");
+          await reloadNer();
+        }
       } catch (ex) {
         toast(ex.message, "err");
+      }
+    }
+    /* перечитать глоссарий после устаревшей адресации */
+    async function reloadNer() {
+      try {
+        const q = new URLSearchParams({ project: `${section}/${name}` });
+        const fresh = await api(`/ner?${q}`);
+        if (fresh && Array.isArray(fresh.items)) {
+          data.items = fresh.items;
+          nerSel.clear();
+          renderRows();
+          paintSel();
+        }
+      } catch {
+        /* файл не прочитался — прежний список остаётся до перезагрузки */
       }
     }
 

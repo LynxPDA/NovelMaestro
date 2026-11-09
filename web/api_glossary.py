@@ -125,20 +125,41 @@ def _ner_targets(items: list, ch: dict, term_of) -> list:
     клиенты, которые его ещё не шлют: старый SPA не должен терять правки.
     С каноном — ровно одна запись; если записей-побайтовых дублей несколько,
     `order` (номер совпадения в файле) различает их.
+
+    Канон не нашёлся — правка НЕ применяется и `order` не используется:
+    вкладка открывалась на прежнем файле, запись с тех пор изменили или
+    удалили, и `order`-й кандидат — уже ДРУГАЯ запись. Именно так замок,
+    адресованный одному дублю, ложился на соседний, а правка перевода
+    писала чужое слово: клиент видел успех и показывал локальную правку.
+    Возврат пустого списка безопасен — остаётся `stale`, и клиент
+    перечитывает глоссарий.
     """
     term = unicodedata.normalize("NFC", str(ch.get("term", ""))).strip()
     if not term:
         return []
     cands = [it for it in items if term_of(it) == term]
     canon = ch.get("canon")
-    if isinstance(canon, str) and canon and len(cands) > 1:
+    if isinstance(canon, str) and canon:
         want = unicodedata.normalize("NFC", canon)
         same = [it for it in cands if _ner_canon(it) == want]
-        if same:
-            cands = same
+        if not same:
+            return []
+        cands = same
     order = _to_int_or_none(ch.get("order"))
-    if order is not None and 0 <= order < len(cands):
-        cands = [cands[order]]
+    if order is not None:
+        # `order` — часть адреса: он пришёл вместе с каноном и описывает
+        # ТОТ ЖЕ набор. Вне диапазона — набор изменился (запись удалили в
+        # другом окне), и брать «все совпадения» нельзя: удаление одной
+        # строки сносило все, `changed: 3` и пустой файл вместо трёх
+        # записей.
+        if not (0 <= order < len(cands)):
+            return []
+        return [cands[order]]
+    if len(cands) > 1:
+        # ни канона, ни номера: адрес неоднозначен. `delete` в такой
+        # ситуации опаснее пропуска — молча ничего не делаем
+        if ch.get("delete"):
+            return []
     return cands
 
 
@@ -171,7 +192,9 @@ def _ner_patch(ctx: dict) -> dict:
     Записи нормализуются `ner_record` (как в PUT): иначе `aliases: ""`,
     `count: "3"` и служебный `__new` попадали в файл мимо проверок, и
     глоссарий читался иначе, чем после полного сохранения.
-    Возвращает `{ok, changed, total}`."""
+    Возвращает `{ok, changed, total, stale}`: `stale` — правки, чей канон
+    не нашёлся (вкладка устарела), их не применили и клиенту надо
+    перечитать глоссарий."""
     common = _import_common(ctx)
     pdir, _section, _name = _project_ctx(ctx)
     changes = ctx["body"].get("changes")
@@ -198,11 +221,16 @@ def _ner_patch(ctx: dict) -> dict:
                 "NFC", str(it.get("term", ""))).strip()
 
         changed = 0
+        stale = 0
         for ch in changes:
             if not isinstance(ch, dict):
                 continue
             targets = _ner_targets(items, ch, term_of)
             if not targets:
+                # адрес не нашёлся ИЛИ канон устарел: различаем, чтобы
+                # клиент не молчал о потерянной правке
+                if ch.get("canon"):
+                    stale += 1
                 continue
             if ch.get("delete"):
                 dead = {id(it) for it in targets}
@@ -234,7 +262,8 @@ def _ner_patch(ctx: dict) -> dict:
         text = json.dumps(items, ensure_ascii=False, indent=2)
         common.atomic_write(ner, unicodedata.normalize("NFC", text))
         total = len(items)
-    return {"ok": True, "changed": changed, "total": total}
+    return {"ok": True, "changed": changed, "total": total,
+            "stale": stale}
 
 
 def _ner_export(ctx: dict) -> dict:

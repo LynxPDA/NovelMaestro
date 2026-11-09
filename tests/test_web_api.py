@@ -769,6 +769,115 @@ def test_ner_patch_rejects_empty_and_unknown(srv_ctx):
     assert len(saved) == 1 and "notes" not in saved[0]
 
 
+def test_ner_patch_stale_canon_does_not_touch_other_record(srv_ctx):
+    """Устаревший канон — правка НЕ применяется, `order` не спасает.
+
+    Вкладку открыли до изменения записи (голосование `ner_check --apply`
+    трогает `_votes_*`, другой браузер — перевод). `canon` тогда не
+    совпадает ни с одной записью, и `order`-й кандидат — уже ДРУГАЯ
+    запись: раньше замок ложился на соседний дубль, а правка перевода
+    писала чужое слово, и клиент показывал успех."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_stale")
+    pdir = projects_root / "ACTIVE" / "ner_stale"
+    (pdir / "ner.json").write_text(json.dumps([
+        {"term": "меч", "translation": "blade"},
+        {"term": "меч", "translation": "sword"},
+    ], ensure_ascii=False, indent=2), encoding="utf-8")
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_stale",
+        "changes": [{
+            "term": "меч",
+            # канон от прежней версии записи (перевод с тех пор сменили)
+            "canon": json.dumps({"term": "меч", "translation": "старое"},
+                                ensure_ascii=False, sort_keys=True,
+                                separators=(",", ":")),
+            "order": 0,
+            "set": {"_locked": True},
+        }],
+    })
+    assert res.status == 200, payload
+    assert payload["changed"] == 0, "правка не должна ни к чему примениться"
+    assert payload["stale"] == 1, "клиент узнаёт, что адрес устарел"
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert [x["translation"] for x in saved] == ["blade", "sword"]
+    assert not any(x.get("_locked") for x in saved), \
+        "замок не должен лечь на соседнюю запись"
+
+
+def test_ner_patch_order_out_of_range_does_not_delete_all(srv_ctx):
+    """`order` вне диапазона не превращается в «все совпадения».
+
+    Раньше условие `0 <= order < len` пропускало такой `order`, и
+    срабатывала ветка «без канона» — удаление одной записи сносило все
+    три: файл оставался с нулём записей."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_order")
+    pdir = projects_root / "ACTIVE" / "ner_order"
+    items = [{"term": "меч", "translation": t} for t in
+             ("sword", "blade", "saber")]
+    (pdir / "ner.json").write_text(json.dumps(items, ensure_ascii=False,
+                                             indent=2), encoding="utf-8")
+    # канон совпадает, но order указывает за пределы: набор записей с тех
+    # пор изменился (одну удалили в другом окне). Адрес не доказан —
+    # правка не применяется вовсе, и «все совпадения» НЕ подставляются
+    canon = json.dumps({"term": "меч", "translation": "sword"},
+                       ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":"))
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_order",
+        "changes": [{"term": "меч", "canon": canon, "order": 9,
+                     "delete": True}],
+    })
+    assert res.status == 200, payload
+    assert payload["changed"] == 0, "адрес не доказан — ничего не удаляем"
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert len(saved) == 3, f"файл не должен измениться: {saved}"
+
+
+def test_ner_patch_delete_without_address_is_noop(srv_ctx):
+    """Удаление по одному термину без канона и номера неоднозначно: две
+    записи «меч» — какую удалять? Раньше удалялись обе.
+
+    Микродействия клиента всегда шлют `canon`/`order`; этот путь остаётся
+    для старых клиентов, и там безопаснее ничего не сделать, чем снести
+    лишнее."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_del_amb")
+    pdir = projects_root / "ACTIVE" / "ner_del_amb"
+    items = [{"term": "меч", "translation": t} for t in ("sword", "blade")]
+    (pdir / "ner.json").write_text(json.dumps(items, ensure_ascii=False,
+                                             indent=2), encoding="utf-8")
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_del_amb",
+        "changes": [{"term": "меч", "delete": True}],
+    })
+    assert res.status == 200, payload
+    assert payload["changed"] == 0
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert len(saved) == 2, saved
+
+
+def test_ner_patch_empty_term_is_noop(srv_ctx):
+    """Пустой терм — не «все записи»: `ner_record` такую запись не
+    принимает, и правка по ней ничего не значит."""
+    _, port, projects_root = srv_ctx()
+    _create_project(port, projects_root, name="ner_empty_term")
+    pdir = projects_root / "ACTIVE" / "ner_empty_term"
+    (pdir / "ner.json").write_text(json.dumps([
+        {"term": "", "translation": "пусто"},
+        {"term": "меч", "translation": "sword"},
+    ], ensure_ascii=False, indent=2), encoding="utf-8")
+    res, payload = _request(port, "PATCH", "/api/ner", {
+        "project": "ACTIVE/ner_empty_term",
+        "changes": [{"term": "", "set": {"translation": "ЗАМЕНА"}}],
+    })
+    assert res.status == 200, payload
+    assert payload["changed"] == 0
+    saved = json.loads((pdir / "ner.json").read_text(encoding="utf-8"))
+    assert [x["translation"] for x in saved] == ["пусто", "sword"]
+
+
 def test_patch_requires_csrf_header(srv_ctx):
     """PATCH — мутирующий метод: без CSRF-заголовка 403, как у PUT.
 
