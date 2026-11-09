@@ -2133,48 +2133,51 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return rowEl;
   }
 
-  /* ── «сколько глав не влезет в бюджет» (Проверка перевода LLM) ──────
-   * Сервер отдаёт байты пары по главам (os.stat, без чтения: 0.03 с на
-   * 5652 главах), клиент делит на консервативный «байт на токен» 2.5:
-   * на живых книгах нижняя граница 3.0, поэтому оценка ЗАВЫШАЕТ токены и
-   * «не влезет» верно всегда. Считаем только диапазон формы — про главы
-   * за его пределами человеку знать незачем.
-   * `near` (±30% от бюджета) не выводим: оценка грубая, и предупреждение
-   * о главах, которые могут пройти, — шум. */
-  function tooBigNote(key, fieldWraps) {
-    const el = h("div", { class: "field-help too-big-note hidden" });
+  /* ── «пройдут ли все главы» (Проверка перевода LLM) ─────────────────
+   * Строка статуса под полем бюджета видна ВСЕГДА: «все N глав влезут» и
+   * «не влезет M из N» — вопрос человека перед запуском именно такой, и
+   * молчание при нуле читалось бы как «проверки нет».
+   * Данные — байты пары по главам с сервера (`os.stat`, 0.04 с на 5652
+   * главах), делим на консервативные 2.5 байта на токен: на живых книгах
+   * нижняя граница 3.0, поэтому оценка ЗАВЫШАЕТ и «не влезет» верно всегда.
+   * Считаем только диапазон формы — о главах за его пределами знать незачем. */
+  function budgetStatus(key, fieldWraps) {
+    const el = h("div", { class: "field-help budget-status" });
     const BYTES_PER_TOKEN = 2.5;
-    const update = () => {
+    const refresh = () => {
       const sizes = (st.options || {}).pair_bytes || null;
       const vals = st.values[key] || {};
       const bw = fieldWraps["request_budget"];
       const budget = Number(
         (bw && bw._input && bw._input.value) || vals["request_budget"] || 0);
-      if (!sizes || !budget) {
-        el.classList.add("hidden");
-        return;
-      }
       const ch = (st.options || {}).chapters || {};
       const rs = Number(vals["start"] || ch.min || 0);
       const re = Number(vals["end"] || ch.max || 0);
       const lo = rs && re ? Math.min(rs, re) : 0;
       const hi = rs && re ? Math.max(rs, re) : Infinity;
-      const over = Object.keys(sizes)
-        .map(Number)
-        .filter((n) => n >= lo && n <= hi
-          && sizes[n] / BYTES_PER_TOKEN > budget)
-        .sort((a, b) => a - b);
-      if (!over.length) {
+      const nums = sizes
+        ? Object.keys(sizes).map(Number).filter((n) => n >= lo && n <= hi)
+        : [];
+      if (!sizes || !budget || !nums.length) {
+        el.textContent = "";
         el.classList.add("hidden");
         return;
       }
-      const nums = over.length > 12
-        ? `${over.slice(0, 12).join(", ")}…` : over.join(", ");
-      el.textContent = `Не влезет в бюджет (${over.length}): гл. ${nums}. `
-        + "Такие главы в проверку не пойдут — поднимите бюджет.";
+      nums.sort((a, b) => a - b);
+      const over = nums.filter((n) => sizes[n] / BYTES_PER_TOKEN > budget);
+      if (!over.length) {
+        el.textContent = `Все главы диапазона влезут в бюджет (${nums.length}).`;
+        el.classList.remove("is-warn");
+      } else {
+        const list = over.length > 12
+          ? `${over.slice(0, 12).join(", ")}…` : over.join(", ");
+        el.textContent = `Не влезет ${over.length} из ${nums.length}: `
+          + `гл. ${list} — в проверку не пойдут, поднимите бюджет.`;
+        el.classList.add("is-warn");
+      }
       el.classList.remove("hidden");
     };
-    return { el: el, refresh: update };
+    return { el: el, refresh: refresh };
   }
 
   /* ── видимость полей по режиму стадии ───────────────────────────────
@@ -2253,25 +2256,27 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // видимость полей по режиму — один проход по метаданным реестра
     const modeVis = attachModeVisibility(key, spec, fieldWraps, rangeRow);
 
-    // Проверка перевода (LLM): сколько глав диапазона не влезет в бюджет.
+    // Проверка перевода (LLM): пройдут ли все главы диапазона.
     // Считается по размерам файлов (опции сервера, os.stat без чтения):
     // 0.03 с на 5652 главах, поэтому пересчитывается на ввод бюджета без
     // запросов. Оценка завышена намеренно — «не влезет» верно всегда.
     if (key === "translate_check_llm") {
-      const tooBig = tooBigNote(key, fieldWraps);
+      const budgetStatusRow = budgetStatus(key, fieldWraps);
       const bw = fieldWraps["request_budget"];
       const idx = bw ? fieldNodes.indexOf(bw) : -1;
-      if (idx >= 0) fieldNodes.splice(idx + 1, 0, tooBig.el);
+      if (idx >= 0) fieldNodes.splice(idx + 1, 0, budgetStatusRow.el);
       const bi = bw && bw._input;
       if (bi) ["input", "change"].forEach(
-        (ev) => bi.addEventListener(ev, tooBig.refresh));
+        (ev) => bi.addEventListener(ev, budgetStatusRow.refresh));
       if (rangeRow) {
         if (rangeRow._start) {
-          rangeRow._start.addEventListener("input", tooBig.refresh);
+          rangeRow._start.addEventListener("input", budgetStatusRow.refresh);
         }
-        if (rangeRow._end) rangeRow._end.addEventListener("input", tooBig.refresh);
+        if (rangeRow._end) {
+          rangeRow._end.addEventListener("input", budgetStatusRow.refresh);
+        }
       }
-      tooBig.refresh();
+      budgetStatusRow.refresh();
     }
 
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),

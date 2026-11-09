@@ -2852,10 +2852,10 @@ async function main() {
       + `«Глав в запросе»: видно=${shownOn}, скрыто=${hiddenOff}`);
   }
 
-  /* «Не влезет в бюджет» у проверки перевода LLM: глава крупнее бюджета
-   * не уходит в запрос, и человек должен узнать это ДО запуска — подсказка
-   * под полем бюджета. Считается по размерам файлов (сервер отдаёт байты
-   * пары в опциях), поэтому пересчитывается на ввод бюджета без запросов */
+  /* «Пройдут ли все главы» у проверки перевода LLM: строка статуса под
+   * полем бюджета видна ВСЕГДА — «все N влезут» или «не влезет M из N».
+   * Считается по размерам файлов (сервер отдаёт байты пары в опциях),
+   * поэтому пересчитывается на ввод бюджета без запросов. */
   {
     const before = problems.length;
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
@@ -2871,10 +2871,14 @@ async function main() {
     await rangeInputs.nth(0).fill("1");
     await rangeInputs.nth(1).fill("2");
     await page.waitForTimeout(400);
-    const note = page.locator(".run-form .too-big-note").first();
-    // при нормальном бюджете подсказки нет: главы пробы мелкие
-    const hiddenBig = await note.evaluate(
-      (el) => !el || el.classList.contains("hidden"));
+    const status = page.locator(".run-form .budget-status").first();
+    const read = () => status.evaluate((el) => ({
+      hidden: !el || el.classList.contains("hidden"),
+      warn: !!el && el.classList.contains("is-warn"),
+      text: ((el || {}).textContent || "").trim(),
+    }));
+    // при нормальном бюджете строка есть и говорит «все влезут»
+    const okBig = await read();
     // бюджет 1 токен — каждая глава «не влезает»
     const bwrap = page.locator(".run-form .field", {
       hasText: "Бюджет запроса",
@@ -2882,23 +2886,25 @@ async function main() {
     await bwrap.locator("input").first().fill("1");
     await bwrap.locator("input").first().dispatchEvent("input");
     await page.waitForTimeout(400);
-    const shown = await note.evaluate((el) => ({
-      hidden: !el || el.classList.contains("hidden"),
-      text: (el || {}).textContent || "",
-    }));
+    const overSmall = await read();
     if (SHOT) {
       await page.locator(".run-form").first().screenshot(
-        { path: path.join(OUT, "scenario-too-big.png") });
+        { path: path.join(OUT, "scenario-budget-status.png") });
     }
-    if (!hiddenBig) {
-      problems.push("too-big: подсказка при большом бюджете — ложная тревога");
+    if (okBig.hidden || !/Все главы диапазона влезут/.test(okBig.text)) {
+      problems.push(`budget-status: при большом бюджете «${okBig.text}»`);
     }
-    if (shown.hidden || !/Не влезет в бюджет/.test(shown.text)) {
-      problems.push(`too-big: нет подсказки на малом бюджете («${shown.text}»)`);
+    if (okBig.warn) {
+      problems.push("budget-status: при большом бюджете стоит предупреждение");
     }
-    log(`${problems.length === before ? "✅" : "❌"} too-big      `
-      + `скрыто при 65000=${hiddenBig}, показано при 1=${!shown.hidden}`
-);
+    if (overSmall.hidden || !/Не влезет 2 из 2/.test(overSmall.text)) {
+      problems.push(`budget-status: на малом бюджете «${overSmall.text}»`);
+    }
+    if (!overSmall.warn) {
+      problems.push("budget-status: «не влезет» не выделено предупреждением");
+    }
+    log(`${problems.length === before ? "✅" : "❌"} budget-status `
+      + `все влезут=${!okBig.warn}, не влезет=${overSmall.warn}`);
   }
 
   /* Отчёт translate_check: шкала допуска пары — полоса при текущем K,
