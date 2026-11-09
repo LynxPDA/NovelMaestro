@@ -684,3 +684,31 @@ def test_validate_drops_full_rewrite():
     out = FE.validate_errors(errs, {1}, {1: text}, SilentLog())
     assert len(out) == 1, [e["type"] for e in out]
     assert out[0]["corrected"] == "Второй абзац тоже тут есть."
+
+
+@pytest.mark.parametrize("frag,corr,expected", [
+    # дописано в конец: place[0] = 27 при длине 28 — прежняя проверка
+    # `>= len(frag)` такое не ловила, и пропуск, которого нет, уходил
+    # в правки как missing_text
+    ("Он долго ждал её на станции.",
+     "Он долго ждал её на станции ровно.", "manual"),
+    # вставка перед знаком в конце — тот же край
+    ("Он долго ждал её на станции.",
+     "Он долго ждал её на станции там.", "manual"),
+    # настоящая вставка в середину — остаётся правкой
+    ("Он долго ждал её на станции.",
+     "Он долго и молча ждал её на станции.", "missing_text"),
+    # вставка между абзацами — тоже настоящая
+    ("Первый абзац главы.\nВторой абзац главы.",
+     "Первый абзац главы.\nНовый абзац.\nВторой абзац главы.",
+     "missing_text"),
+])
+def test_edge_insert_goes_to_human(frag, corr, expected):
+    """Вставка, прижатая к краю цитаты, — не место пропуска, а граница
+    того, что модель видела."""
+    from tests.conftest import SilentLog
+    errs = [{"chapter": 1, "fragment": frag, "corrected": corr,
+             "type": "missing_text", "reason": "х"}]
+    out = FE.validate_errors(errs, {1}, {1: frag}, SilentLog())
+    assert len(out) == 1, out
+    assert out[0]["type"] == expected, out[0]

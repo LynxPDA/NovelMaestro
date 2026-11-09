@@ -446,6 +446,37 @@ def _frag_in_text(frag, text):
     flex = flex_fragment_pattern(frag)
     return flex != re.escape(frag_n) and re.search(flex, text_n) is not None
 
+def _is_edge_insert(place, frag: str) -> bool:
+    """Вставка прижата к краю цитаты — адрес не доказан.
+
+    `insertion_of` возвращает позицию ВСТАВКИ, то есть конец общего
+    начала: у «Он долго ждал её на станции.» → «… станции ровно.» вставка
+    начинается на 27 при длине цитаты 28. Прежняя проверка `place[0] >=
+    len(frag)` такой случай не ловила (27 < 28), и дописанное в конец
+    уходило как `missing_text` — пропуск, которого нет.
+
+    Край — это не место пропуска, а граница того, что модель видела:
+    цитата кончается, и «дальше» в ней нет ничего. Вставка перед
+    хвостом из одного-двух символов тоже не место (пунктуация).
+    """
+    pos, ins = place[0], place[1] if len(place) > 1 else ""
+    if pos <= 0 or pos >= len(frag):
+        return True
+    # хвост после вставки — только знаки/пробелы: вставка прижата к концу
+    tail = frag[pos:].strip()
+    if not tail:
+        return True
+    if len(tail) <= 2 and not any(ch.isalnum() for ch in tail):
+        return True
+    # вставка прижата к началу: перед ней только пробелы/знаки
+    head = frag[:pos].strip()
+    if not head:
+        return True
+    if len(head) <= 2 and not any(ch.isalnum() for ch in head):
+        return True
+    return False
+
+
 #: сколько символов общего контекста обязано быть у правки, чтобы
 #: применять её вместо цитаты (замена внутри слова даёт контекст вокруг)
 _MIN_COMMON_CONTEXT = 8
@@ -546,7 +577,7 @@ def validate_errors(errors, valid_ch, batch_contents, logger,
                 e["note"] = ("место пропуска не доказано (правка не вставка) — "
                              "нужна ручная сверка")
                 manual += 1
-            elif place[0] == 0 or place[0] >= len(frag):
+            elif _is_edge_insert(place, frag):
                 # вставка только в самое начало/конец: адрес не доказан
                 # (край куска — не место, а граница того, что модель видела)
                 e["type"] = "manual"
