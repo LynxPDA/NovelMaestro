@@ -2774,3 +2774,96 @@ def test_compile_chapter_text_offsets_respect_range(tmp_path):
                                         start=2, end=3)
     assert [cid for cid, _, _ in info["offsets"]] == [2, 3]
     assert text.startswith("глава 2")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# НАРЕЗКА ПО ПРЕДЛОЖЕНИЯМ (sentence_spans, split_at_sentences)
+# ══════════════════════════════════════════════════════════════════════
+def test_sentence_spans_glues_to_source():
+    """Границы предложений покрывают текст целиком и без дыр: по ним
+    собирается нарезка, а склейка обязана вернуть исходник до символа."""
+    import random
+    text = ("Он ушёл. Она осталась! Кто здесь? «Да не может быть…» — "
+            "сказал он. Дальше шёл длинный абзац без знаков в конце\n")
+    spans = C.sentence_spans(text)
+    assert spans and spans[0][0] == 0 and spans[-1][1] == len(text)
+    for (_, e1), (b2, _) in zip(spans, spans[1:]):
+        assert e1 == b2
+    assert "".join(text[b:e] for b, e in spans) == text
+    # случайный текст: покрытие держится на любой письменности
+    rnd = random.Random(7)
+    alphabet = "абвгд 。！？.!?\n«»—…字"
+    for _ in range(50):
+        s = "".join(rnd.choice(alphabet) for _ in range(rnd.randint(0, 120)))
+        sp = C.sentence_spans(s)
+        assert "".join(s[b:e] for b, e in sp) == s, s
+
+
+def test_sentence_spans_no_false_cut():
+    """Сокращения и десятичные дроби не режут текст: «т.е.», «3.5»,
+    инициалы — часть одного предложения."""
+    text = "Он сказал, что это т.е. верно, и 3.5 часа ждал, но А. С. Пушкин не пришёл."
+    assert len(C.sentence_spans(text)) == 1
+    short = "Конец. Начало."
+    assert "".join(short[b:e] for b, e in C.sentence_spans(short)) == short
+
+
+def _cut_by_sentences(text, target):
+    """Куски по `split_at_sentences` (он отдаёт ПОЗИЦИЮ реза, а не список)."""
+    parts, rest = [], text
+    while rest:
+        pos = C.split_at_sentences(rest, target)
+        if pos <= 0:
+            parts.append(rest)
+            break
+        parts.append(rest[:pos])
+        rest = rest[pos:]
+    return parts
+
+
+@pytest.mark.parametrize("target", [1, 5, 50, 10000])
+def test_split_at_sentences_keeps_text(target):
+    """Нарезка никогда не теряет и не дублирует символы, а концы кусков
+    (кроме последнего) приходятся на конец предложения."""
+    text = "Первое предложение здесь. Второе предложение тут! И третье?\n" * 20
+    parts = _cut_by_sentences(text, target)
+    assert "".join(parts) == text
+    assert all(part for part in parts)
+    for part in parts[:-1]:
+        assert C.ends_sentence(part), part[-30:]
+    if target >= len(text):
+        assert parts == [text]
+
+
+def test_split_at_sentences_cjk_without_newlines():
+    """CJK-абзац без переводов строк режется — по концам предложений,
+    а не построчно (ради этого `split_text_smart_spans` не годится)."""
+    text = "他走了。" * 400
+    parts = _cut_by_sentences(text, 100)
+    assert len(parts) > 10
+    assert "".join(parts) == text
+    assert all(part.endswith("。") for part in parts[:-1])
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ВСТАВКА И ПОВТОРЫ (insertion_of, fragment_occurrences)
+# ══════════════════════════════════════════════════════════════════════
+@pytest.mark.parametrize("old,new,expect", [
+    ("Он пришёл домой.", "Он пришёл домой. Легно спать.", (16, " Легно спать.")),
+    ("Он пришёл домой.", "Он пришёл вчера домой.", (10, "вчера ")),
+    ("Он пришёл домой.", "Он пришёл.", None),                  # удаление
+    ("Он долго ждал.", "Он недолго ждал.", None),              # «не» внутри слова
+    ("Он ждал.", "Он очень ждал.", (3, "очень ")),
+    ("Он ждал.", "Он ждал, потом ушёл.", (7, ", потом ушёл")),
+    ("Он ждал.", "Он ждал.", None),                            # без изменений
+])
+def test_insertion_of(old, new, expect):
+    assert C.insertion_of(old, new) == expect
+
+
+def test_fragment_occurrences_counts_all_matches():
+    """Повторы считаются по тексту: по этому счёту отбрасывается цитата,
+    у которой неоднозначный адрес."""
+    assert C.fragment_occurrences("текст текст", "текст") == 2
+    assert C.fragment_occurrences("текст", "нет такого") == 0
+    assert C.fragment_occurrences("", "х") == 0

@@ -493,18 +493,22 @@ def add_check_prompt_arg(ap: argparse.ArgumentParser) -> None:
 
 
 def check_prompt(args: argparse.Namespace, name: str, contract,
-                 json_tags=(), *, file_attr: str = "prompt_file") -> bool:
+                 json_tags=(), *, file_attr: str = "prompt_file",
+                 marks=()) -> bool:
     """Режим --check-prompt: вердикт о промпт-файле стадии, до LLM не доходит.
 
     contract — записи (тег, где читается, (переменные,)), json_tags — служебные
     JSON-теги; проверка ставится первым делом main(), до чтения глав: логи
     запусков и артефакты стадии не создаются, пишется только сам вердикт.
+    marks — пары (фраза, пояснение): без такой фразы промпт устарел по
+    смыслу (теги и переменные на месте, а правил нового режима нет); такие
+    фразы попадают в notes — замечанием не считаются, стадия работает.
     True — режим выполнен, main() возвращает 0."""
     path = getattr(args, "check_prompt", None)
     if not path:
         return False
     res = prompt_check_result(name, str(getattr(args, file_attr, "") or ""),
-                              contract, json_tags)
+                              contract, json_tags, marks)
     write_prompt_check(path, res)
     log = preview_logger(name)
     if res["problems"]:

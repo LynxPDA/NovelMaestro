@@ -1871,7 +1871,14 @@ def apply_ner_patches(items, patches, logger=None):
 # translate_check_llm: review-записи правок текста глав (fragment → corrected)
 # ══════════════════════════════════════════════════════════════════════
 FIX_ERROR_TYPES = ("typo", "missing_word", "grammar", "logic",
-                   "incomplete", "artifact")
+                   "incomplete", "artifact", "mistranslation",
+                   "missing_text", "extra_text")
+#: типы сверки с оригиналом: правка вставляется (`missing_text`) или
+#: удаляется (`extra_text`) — текста-заместителя в исходной цитате нет
+SOURCE_FIX_TYPES = ("missing_text", "extra_text")
+#: правка, которую нечем применять: LLM дала цитату без изменений
+#: (место пропуска не определено). Тексты для `apply_fix_to_text`
+MANUAL_FIX_TYPE = "manual"
 
 
 def fix_entry(raw, stage=""):
@@ -1879,7 +1886,13 @@ def fix_entry(raw, stage=""):
     → нормализованная запись review-файла. Возвращает None, если
     запись некорректна (нет главы/фрагмента/правки, old == new).
     old/new — NFC. Статус по умолчанию «принять» (человек правит
-    в файле на «отклонить» при необходимости)."""
+    в файле на «отклонить» при необходимости).
+
+    Исключение из «old == new» — ручная запись (`manual`, `missing_text`
+    без доказанного места вставки): у неё `new` повторяет `old`, и
+    выбрасывать её нельзя — именно она и несёт человеку «здесь пропуск,
+    вставить не смогли». Применять её нечем (new == old).
+    """
     if not isinstance(raw, dict):
         return None
     ch = raw.get("chapter")
@@ -1898,21 +1911,26 @@ def fix_entry(raw, stage=""):
         return None
     old = str(raw.get("fragment") or "").strip()
     new = str(raw.get("corrected") or "").strip()
-    if not old or not new or old == new:
+    etype = str(raw.get("type") or "").strip().lower()
+    if not old or not new:
+        return None
+    if old == new and etype != MANUAL_FIX_TYPE:
         return None
     status = str(raw.get("status") or REVIEW_ACCEPT).strip().lower()
     if status not in REVIEW_STATUSES:
         status = REVIEW_ACCEPT
-    etype = str(raw.get("type") or "").strip().lower()
-    if etype and etype not in FIX_ERROR_TYPES:
+    if etype and etype not in FIX_ERROR_TYPES + (MANUAL_FIX_TYPE,):
         etype = ""
-    return {"stage": str(stage or ""), "chapter": ch,
-            "file": str(raw.get("file") or ""),
-            "type": etype,
-            "old": unicodedata.normalize("NFC", old),
-            "new": unicodedata.normalize("NFC", new),
-            "reason": str(raw.get("reason") or "").strip(),
-            "status": status, "applied": bool(raw.get("applied"))}
+    rec = {"stage": str(stage or ""), "chapter": ch,
+           "file": str(raw.get("file") or ""),
+           "type": etype,
+           "old": unicodedata.normalize("NFC", old),
+           "new": unicodedata.normalize("NFC", new),
+           "reason": str(raw.get("reason") or "").strip(),
+           "status": status, "applied": bool(raw.get("applied"))}
+    if raw.get("note"):
+        rec["note"] = str(raw["note"])
+    return rec
 
 
 def merge_fix_entries(existing, fresh, logger=None):
@@ -2730,14 +2748,16 @@ PROMPT_CHECK_FILE = os.path.join("tmp", "prompt_check.json")
 
 
 def prompt_check_result(name: str, prompt_file: str, contract,
-                        json_tags=()) -> dict:
+                        json_tags=(), marks=()) -> dict:
     """Сверка промпт-файла стадии с её контрактом (--check-prompt).
 
     contract — записи (тег, где читается, (имена переменных, ...));
     json_tags — служебные теги с JSON-значением (wiki). Проверяются ВСЕ теги
     стадии, а не только режим из формы: отчёт обязан быть честным про все
     режимы. Промпт стадии читается только из своего тега, поэтому файл без
-    тегов — проблема, а не «промпт целиком». Возвращает
+    тегов — проблема, а не «промпт целиком». `marks` — пары (фраза, пояснение):
+    без такой фразы промпт устарел по смыслу (правил нового режима в нём
+    нет), это уходит в notes. Возвращает
     {stage, file, state (none|missing|empty|file), tags, problems, notes,
     mtime}; в сеть не ходит, читает только сам файл."""
     res: dict = {"stage": name, "file": prompt_file or "", "state": "file",
@@ -2786,6 +2806,12 @@ def prompt_check_result(name: str, prompt_file: str, contract,
             json.loads(body)
         except ValueError as exc:
             res["problems"].append(f"в <{tag}> битый JSON: {exc}")
+    # marks — фразы, без которых промпт устарел ПО СМЫСЛУ: теги и
+    # переменные на месте, а правил нового режима нет. Замечанием не
+    # считается (стадия работает), но человек увидит, что файл старше
+    for mark, hint in marks or ():
+        if mark not in text:
+            res["notes"].append(hint)
     return res
 
 
@@ -3300,6 +3326,162 @@ def ends_sentence(text: str | None) -> bool:
     if not body:
         return False
     return body[-1] in SENTENCE_END_CHARS
+
+
+#: сокращения, у которых точка НЕ кончает предложение (иначе «т.е.» режет
+#: абзац пополам и часть пары уезжает в чужой запрос)
+_ABBR = frozenset({
+    "т.е.", "т.д.", "т.п.", "т.к.", "т.н.", "др.", "г.", "гг.", "в.",
+    "вв.", "см.", "напр.", "стр.", "рис.", "ул.", "им.", "проф.", "акад.",
+})
+#: закрывающие символы после знака конца: текст кончается ПОСЛЕ них
+_CLOSERS = frozenset("\u00bb\u2019\u201d\u203a\u300d\u300f\u3011\u3015\u3017"
+                     "\u3019\u301b\uff09\uff3d\uff5d\uff60\uff63)]}\u005d\u0029")
+
+
+def _sentence_end_at(text: str, i: int) -> bool:
+    """Кончается ли предложение на позиции `i` (там стоит знак конца).
+
+    Отсекаются точка в числе («3.5»), сокращения («т.е.») и инициал
+    («А. С. Пушкин»): без этого абзац рассыпается на куски по точке."""
+    if text[i] == ".":
+        prev = text[i - 1] if i else ""
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if prev.isdigit() and nxt.isdigit():
+            return False
+        j = i
+        while j > 0 and not text[j - 1].isspace() and i - j < 12:
+            j -= 1
+        word = text[j:i + 1].lower()
+        if word in _ABBR:
+            return False
+        if len(word) == 2 and word[0].isalpha():      # «г.» / «A.»
+            return False
+    return True
+
+
+def split_at_sentences(text: str, target: int, spans=None) -> int:
+    """Позиция реза, КРАТНАЯ предложению, около `target` символов.
+
+    Возвращает индекс в `text`: конец предложения не раньше `target`;
+    нет ни одного — после последней строки; нет и её — `len(text)`.
+    Режется по `SENTENCE_END_CHARS`, вместе с серией знаков («…»», «?!»)
+    и закрывающими кавычками/скобками — цитата никогда не рвётся посередине
+    предложения или между словом и его кавычкой.
+
+    Нужен там, где границы обязаны быть смысловыми, а не по токенам: часть
+    пары «оригинал+перевод» в translate_check_llm. `target` — СИМВОЛЫ; бюджет
+    запроса остаётся в токенах, но внутри пары счётчик линеен от символов.
+    `spans` — готовый результат `sentence_spans` (когда режут несколько раз).
+    """
+    if not text:
+        return 0
+    total = len(text)
+    if target >= total:
+        return total
+    for _s, _e in (spans if spans is not None else sentence_spans(text)):
+        if _e >= target:
+            return _e
+    return total
+
+
+def sentence_spans(text: str) -> list:
+    """Границы предложений: [(начало, конец)] — резы идут по ним.
+
+    Предложение кончается на знаке из `SENTENCE_END_CHARS` вместе с серией
+    таких знаков и закрывающими скобками/кавычками, плюс следующие пробелы
+    и переводы строк. Точка не кончает предложение у сокращений и в числах
+    (`_sentence_end_at`).
+
+    Отдельно отбрасывается ложная граница: после точки, за которой идёт
+    СТРОЧНАЯ буква не с новой строки (обрыв строки внутри абзаца, а не
+    конец фразы). Без этого RE-перевод с мягким переносом рвётся по ширине
+    строки, а не по смыслу.
+    """
+    out: list = []
+    n = len(text)
+    start = 0
+    i = 0
+    while i < n:
+        if text[i] not in SENTENCE_END_CHARS or not _sentence_end_at(text, i):
+            i += 1
+            continue
+        j = i + 1
+        while j < n and text[j] in SENTENCE_END_CHARS:
+            j += 1
+        while j < n and text[j] in _CLOSERS:
+            j += 1
+        m = j
+        while m < n and text[m] in " \n\t\u3000\u00a0":
+            m += 1
+        seg = text[start:m]
+        if (seg.strip() and text[j:j + 1] != "\n"
+                and m < n and text[m].islower()):
+            i, start = m, start          # граница ложная — продолжаем фразу
+            continue
+        if seg.strip():
+            out.append((start, m))
+        start = m
+        i = m
+    if text[start:].strip():
+        out.append((start, n))
+    return out
+
+
+def insertion_of(old: str, new: str):
+    """Вставка ли это: `(позиция, текст вставки)` или None.
+
+    Правка `old → new`, у которой НАЧАЛО old совпадает с началом new, а
+    КОНЕЦ — с концом, — это вставка в одно место, и её место определяется
+    точно. Всё остальное (переписывание, удаление, правка падежа) вставкой
+    не является — такому пропуску место определяет человек, а не догадка.
+
+    Вставка обязана быть ЦЕЛЫМ СЛОВОМ (или фразой с пробела): дописанное
+    «не» в середине слова — это правка смысла, а не восстановленный
+    пропущенный кусок, и адресовать её как вставку нельзя.
+    """
+    old, new = str(old or ""), str(new or "")
+    if not old or not new or old == new:
+        return None
+    limit = min(len(old), len(new))
+    head = 0
+    while head < limit and old[head] == new[head]:
+        head += 1
+    tail = 0
+    while (tail < limit - head
+           and old[len(old) - 1 - tail] == new[len(new) - 1 - tail]):
+        tail += 1
+    if head + tail < len(old):
+        return None
+    ins = new[head:len(new) - tail]
+    if not ins or not ins.strip():
+        return None
+    # вставка обязана быть отдельным куском: дописанное «не» перед «долго»
+    # — правка слова, а не восстановленный пропуск, и адресовать её как
+    # вставку нельзя (её отклонит проверка места)
+    before = new[head - 1] if head else ""
+    after = new[head + len(ins)] if head + len(ins) < len(new) else ""
+    if before.isalnum() and ins[0].isalnum():
+        return None
+    if ins[-1].isalnum() and after.isalnum():
+        return None
+    return head, ins
+
+
+def fragment_occurrences(text: str, fragment: str) -> int:
+    """Сколько раз цитата встречается в тексте (точно или типографически-мягко).
+
+    Замена адресуется цитатой, поэтому она обязана быть единственной:
+    иначе `apply_flex_fix` может заменить не то вхождение, а проверка
+    «уникальна в главе» была только просьбой в промпте."""
+    frag = str(fragment or "")
+    if not frag or not text:
+        return 0
+    if frag in text:
+        return text.count(frag)
+    canon = unicodedata.normalize("NFC", text)
+    pat = flex_fragment_pattern(frag)
+    return len(re.findall(pat, canon))
 
 
 def parse_chapter_id(folder_name: str):
