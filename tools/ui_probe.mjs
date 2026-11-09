@@ -2891,8 +2891,14 @@ async function main() {
       await page.locator(".run-form").first().screenshot(
         { path: path.join(OUT, "scenario-budget-status.png") });
     }
-    if (okBig.hidden || !/Все главы диапазона влезут/.test(okBig.text)) {
+    if (okBig.hidden || !/Все главы диапазона влезут в бюджет \(2\)/.test(okBig.text)) {
       problems.push(`budget-status: при большом бюджете «${okBig.text}»`);
+    }
+    // средняя глава и ёмкость бюджета — второй частью той же строки
+    // разделитель тысяч — неразрывный пробел из toLocaleString("ru-RU")
+    if (!/Средняя глава [\d\u00a0 ]+ ток\. — в бюджет входит ≈[\d\u00a0 ]+ глав[аы]?\./
+      .test(okBig.text)) {
+      problems.push(`budget-status: нет средней главы и ёмкости «${okBig.text}»`);
     }
     if (okBig.warn) {
       problems.push("budget-status: при большом бюджете стоит предупреждение");

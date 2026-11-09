@@ -2134,16 +2134,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   }
 
   /* ── «пройдут ли все главы» (Проверка перевода LLM) ─────────────────
-   * Строка статуса под полем бюджета видна ВСЕГДА: «все N глав влезут» и
-   * «не влезет M из N» — вопрос человека перед запуском именно такой, и
-   * молчание при нуле читалось бы как «проверки нет».
+   * Строка статуса под полем бюджета видна ВСЕГДА и отвечает на три вопроса
+   * перед запуском: сколько глав в диапазоне, сколько из них умещается в
+   * бюджет, сколько глав бюджет держит в среднем (ёмкость). Молчание при
+   * нуле читалось бы как «проверки нет».
    * Данные — байты пары по главам с сервера (`os.stat`, 0.04 с на 5652
    * главах), делим на консервативные 2.5 байта на токен: на живых книгах
-   * нижняя граница 3.0, поэтому оценка ЗАВЫШАЕТ и «не влезет» верно всегда.
-   * Считаем только диапазон формы — о главах за его пределами знать незачем. */
+   * нижняя граница 3.0, поэтому оценка ЗАВЫШАЕТ токены и «не влезет»
+   * верно всегда. Считаем только диапазон формы. */
   function budgetStatus(key, fieldWraps) {
     const el = h("div", { class: "field-help budget-status" });
     const BYTES_PER_TOKEN = 2.5;
+    const fmt = (n) => Number(n).toLocaleString("ru-RU");
     const refresh = () => {
       const sizes = (st.options || {}).pair_bytes || null;
       const vals = st.values[key] || {};
@@ -2164,17 +2166,34 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return;
       }
       nums.sort((a, b) => a - b);
-      const over = nums.filter((n) => sizes[n] / BYTES_PER_TOKEN > budget);
+      const tokens = (n) => Math.round(sizes[n] / BYTES_PER_TOKEN);
+      const over = nums.filter((n) => tokens(n) > budget);
+      // ёмкость бюджета: сколько глав среднего размера он держит
+      const total = nums.reduce((s, n) => s + tokens(n), 0);
+      const mean = total / nums.length;
+      const capacity = Math.max(1, Math.floor(budget / mean));
+      // «глав» после числа склоняется: 21 глава, 22 главы, 25 глав
+      const plural = (n) => {
+        const d = n % 10, dd = n % 100;
+        if (d === 1 && dd !== 11) return "глава";
+        if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return "главы";
+        return "глав";
+      };
+      const parts = [];
       if (!over.length) {
-        el.textContent = `Все главы диапазона влезут в бюджет (${nums.length}).`;
+        parts.push(`Все главы диапазона влезут в бюджет (${fmt(nums.length)}).`);
         el.classList.remove("is-warn");
       } else {
         const list = over.length > 12
-          ? `${over.slice(0, 12).join(", ")}…` : over.join(", ");
-        el.textContent = `Не влезет ${over.length} из ${nums.length}: `
-          + `гл. ${list} — в проверку не пойдут, поднимите бюджет.`;
+          ? `${over.slice(0, 12).map(fmt).join(", ")}…`
+          : over.map(fmt).join(", ");
+        parts.push(`Не влезет ${fmt(over.length)} из ${fmt(nums.length)}: `
+          + `гл. ${list} — в проверку не пойдут, поднимите бюджет.`);
         el.classList.add("is-warn");
       }
+      parts.push(`Средняя глава ${fmt(Math.round(mean))} ток. — `
+        + `в бюджет входит ≈${fmt(capacity)} ${plural(capacity)}.`);
+      el.textContent = parts.join(" ");
       el.classList.remove("hidden");
     };
     return { el: el, refresh: refresh };
