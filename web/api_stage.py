@@ -427,10 +427,68 @@ def _options_signature(pdir: Path) -> tuple:
     return tuple(sig)
 
 
+#: байт на токен для прогноза «не влезет в бюджет» (нижняя граница,
+#: замеренная на живых книгах: 3.0 у CJK-оригинала, 3.8 у русского
+#: перевода; 2.5 — с запасом, поэтому прогноз ЗАВЫШАЕТ и его «не влезет»
+#: верно всегда). Та же константа, что у core.common.SIZE_BYTES_PER_TOKEN
+_PAIR_BYTES_PER_TOKEN = 2.5
+
+
+def _pair_bytes(common, ch_map: dict) -> dict:
+    """Размеры пары «перевод + оригинал» по главам: {номер: байт}.
+
+    Один `os.scandir` на папку главы и `stat` по готовым именам: 0.05 с на
+    книге в 5652 главы против 1.3 с через `find_chapter_file` (тот делает
+    `listdir` на каждый поиск, а их тут два). Предупреждение в форме не
+    должно тормозить её открытие.
+
+    Имена — точные имена артефактов (`polished.txt`, `chapter.txt` и т.д.),
+    поэтому файл нестандартного имени в прогноз не попадёт: ложное «не
+    влезет» тут дороже пропущенного (стадия потом всё равно посчитает
+    точно и напишет главу в лог).
+    """
+    out: dict = {}
+    order = ("polished.txt", "redacted.txt", "translated.txt")
+    for num, dirs in ch_map.items():
+        if not dirs:
+            continue
+        try:
+            sizes = {e.name: e.stat().st_size
+                     for e in os.scandir(dirs[0]) if e.is_file()}
+        except OSError:
+            continue
+        total = 0
+        for name in order:
+            if name in sizes:
+                total += sizes[name]
+                break
+        total += sizes.get("chapter.txt", 0)
+        if total:
+            out[num] = total
+    return out
+
+
+def _options_for_stage(options: dict, key: str) -> dict:
+    """Опции одной стадии из общего кеша проекта.
+
+    Кеш опций общий на книгу (диапазон глав, файлы source/prompts, корень) —
+    иначе каждая стадия заново обходила бы папки. Но `pair_bytes` (прогноз
+    «не влезет в бюджет») нужен ТОЛЬКО проверке перевода LLM: остальным он
+    не просто лишний — клиент его не знает, а размер словаря по 5652 главам
+    в каждом ответе не нужен никому.
+    """
+    if key == "translate_check_llm" or "pair_bytes" not in options:
+        return options
+    out = dict(options)
+    out.pop("pair_bytes", None)
+    return out
+
+
 def _stage_options(ctx: dict) -> dict:
     """Динамические опции стадии (GET /api/stages/{key}/options?project=)."""
     common = _import_common(ctx)
-    spec = spec_for(ctx["params"]["key"])
+    key = ctx["params"]["key"]
+    spec = spec_for(key)
     if spec is None:
         raise ApiError(404, "Стадия не найдена")
     out: dict = {"ok": True, "options": {}}
@@ -440,7 +498,7 @@ def _stage_options(ctx: dict) -> dict:
         sig = _options_signature(pdir)
         cached = _OPTIONS_CACHE.get(str(pdir))
         if cached is not None and cached[0] == sig:
-            out["options"] = cached[1]
+            out["options"] = _options_for_stage(cached[1], key)
             return out
         # диапазон глав
         chapters_dir = pdir / "chapters"
@@ -452,6 +510,13 @@ def _stage_options(ctx: dict) -> dict:
                 # строки по списку, а не по диапазону min..max
                 out["options"]["chapters"] = {
                     "min": nums[0], "max": nums[-1], "ids": nums}
+                # прогноз «не влезет в бюджет» для translate_check_llm:
+                # по размерам файлов (0.03 с на 5652 главах) — предупредить
+                # ДО запуска. Бюджет приходит из формы, поэтому считается
+                # на клиенте по `sizes`: сервер отдаёт только байты
+                if key == "translate_check_llm":
+                    out["options"]["pair_bytes"] = _pair_bytes(
+                        common, ch_map)
         # файлы source/ — ВСЕ файлы (клиент фильтрует по ext селекта):
         # epub-исходники, txt, обложки (jpg/png/webp), metadata.yaml и т.п.
         src = pdir / "source"
@@ -487,6 +552,7 @@ def _stage_options(ctx: dict) -> dict:
         if root:
             out["options"]["root"] = root
         _OPTIONS_CACHE[str(pdir)] = (sig, out["options"])
+        out["options"] = _options_for_stage(out["options"], key)
     return out
 
 

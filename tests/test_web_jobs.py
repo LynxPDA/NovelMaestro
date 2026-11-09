@@ -2881,6 +2881,40 @@ def test_stage_options_api(jobs_srv, tmp_path):
     assert "metadata2.yaml" in payload["options"]["source"]
 
 
+def test_stage_options_pair_bytes(jobs_srv, tmp_path):
+    """Прогноз «не влезет в бюджет» для проверки перевода LLM: сервер
+    отдаёт байты пары по главам (только `stat`, без чтения текста) — по
+    ним клиент предупреждает ДО запуска. Другим стадиям поле не нужно и в
+    кеш не подмешивается."""
+    from web.api import _OPTIONS_CACHE
+    _OPTIONS_CACHE.clear()
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    d1 = pdir / "chapters" / "00001"
+    d1.mkdir(parents=True)
+    (d1 / "chapter.txt").write_text("原文" * 50, encoding="utf-8")
+    (d1 / "polished.txt").write_text("перевод" * 100, encoding="utf-8")
+    d2 = pdir / "chapters" / "00002"
+    d2.mkdir()
+    (d2 / "chapter.txt").write_text("原文", encoding="utf-8")
+    res, payload = req(
+        "GET",
+        "/api/stages/translate_check_llm/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    pb = payload["options"].get("pair_bytes")
+    assert pb, "нет pair_bytes у проверки перевода LLM"
+    # байты = размер перевода + размер оригинала (utf-8)
+    assert pb["1"] == len(("перевод" * 100).encode()) \
+        + len(("原文" * 50).encode())
+    assert pb["2"] == len("原文".encode())
+    # стадия без сверки с оригиналом поле не получает
+    res, other = req("GET",
+                     "/api/stages/epub/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert "pair_bytes" not in other["options"]
+
+
 def test_stage_options_cache_invalidates(jobs_srv, tmp_path):
     """U8: кэш опций инвалидируется по mtime — новый файл в корне
     виден вторым запросом без перезагрузки сервера."""

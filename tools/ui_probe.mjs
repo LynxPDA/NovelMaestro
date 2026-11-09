@@ -2852,6 +2852,55 @@ async function main() {
       + `«Глав в запросе»: видно=${shownOn}, скрыто=${hiddenOff}`);
   }
 
+  /* «Не влезет в бюджет» у проверки перевода LLM: глава крупнее бюджета
+   * не уходит в запрос, и человек должен узнать это ДО запуска — подсказка
+   * под полем бюджета. Считается по размерам файлов (сервер отдаёт байты
+   * пары в опциях), поэтому пересчитывается на ввод бюджета без запросов */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".stage-card", { timeout: 15000 });
+    await page.locator('.stage-card:has-text("Проверка перевода (LLM)")')
+      .first().click();
+    await page.waitForTimeout(900);
+    // состояние книги переживает переходы: прошлый сценарий оставил
+    // диапазон 64–3, а главы пробы — 1 и 2. Вернуть их в диапазон.
+    const rangeInputs = page.locator(".run-form .run-range-row input");
+    await rangeInputs.nth(0).fill("1");
+    await rangeInputs.nth(1).fill("2");
+    await page.waitForTimeout(400);
+    const note = page.locator(".run-form .too-big-note").first();
+    // при нормальном бюджете подсказки нет: главы пробы мелкие
+    const hiddenBig = await note.evaluate(
+      (el) => !el || el.classList.contains("hidden"));
+    // бюджет 1 токен — каждая глава «не влезает»
+    const bwrap = page.locator(".run-form .field", {
+      hasText: "Бюджет запроса",
+    }).first();
+    await bwrap.locator("input").first().fill("1");
+    await bwrap.locator("input").first().dispatchEvent("input");
+    await page.waitForTimeout(400);
+    const shown = await note.evaluate((el) => ({
+      hidden: !el || el.classList.contains("hidden"),
+      text: (el || {}).textContent || "",
+    }));
+    if (SHOT) {
+      await page.locator(".run-form").first().screenshot(
+        { path: path.join(OUT, "scenario-too-big.png") });
+    }
+    if (!hiddenBig) {
+      problems.push("too-big: подсказка при большом бюджете — ложная тревога");
+    }
+    if (shown.hidden || !/Не влезет в бюджет/.test(shown.text)) {
+      problems.push(`too-big: нет подсказки на малом бюджете («${shown.text}»)`);
+    }
+    log(`${problems.length === before ? "✅" : "❌"} too-big      `
+      + `скрыто при 65000=${hiddenBig}, показано при 1=${!shown.hidden}`
+);
+  }
+
   /* Отчёт translate_check: шкала допуска пары — полоса при текущем K,
    * штрих медианы и точки глав вне допуска. Числа берутся из блока
    * «Статистика» (сервер разбирает его в r.stats): без них вьюха падала бы

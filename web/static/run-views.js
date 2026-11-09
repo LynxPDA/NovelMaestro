@@ -2133,6 +2133,50 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     return rowEl;
   }
 
+  /* ── «сколько глав не влезет в бюджет» (Проверка перевода LLM) ──────
+   * Сервер отдаёт байты пары по главам (os.stat, без чтения: 0.03 с на
+   * 5652 главах), клиент делит на консервативный «байт на токен» 2.5:
+   * на живых книгах нижняя граница 3.0, поэтому оценка ЗАВЫШАЕТ токены и
+   * «не влезет» верно всегда. Считаем только диапазон формы — про главы
+   * за его пределами человеку знать незачем.
+   * `near` (±30% от бюджета) не выводим: оценка грубая, и предупреждение
+   * о главах, которые могут пройти, — шум. */
+  function tooBigNote(key, fieldWraps) {
+    const el = h("div", { class: "field-help too-big-note hidden" });
+    const BYTES_PER_TOKEN = 2.5;
+    const update = () => {
+      const sizes = (st.options || {}).pair_bytes || null;
+      const vals = st.values[key] || {};
+      const bw = fieldWraps["request_budget"];
+      const budget = Number(
+        (bw && bw._input && bw._input.value) || vals["request_budget"] || 0);
+      if (!sizes || !budget) {
+        el.classList.add("hidden");
+        return;
+      }
+      const ch = (st.options || {}).chapters || {};
+      const rs = Number(vals["start"] || ch.min || 0);
+      const re = Number(vals["end"] || ch.max || 0);
+      const lo = rs && re ? Math.min(rs, re) : 0;
+      const hi = rs && re ? Math.max(rs, re) : Infinity;
+      const over = Object.keys(sizes)
+        .map(Number)
+        .filter((n) => n >= lo && n <= hi
+          && sizes[n] / BYTES_PER_TOKEN > budget)
+        .sort((a, b) => a - b);
+      if (!over.length) {
+        el.classList.add("hidden");
+        return;
+      }
+      const nums = over.length > 12
+        ? `${over.slice(0, 12).join(", ")}…` : over.join(", ");
+      el.textContent = `Не влезет в бюджет (${over.length}): гл. ${nums}. `
+        + "Такие главы в проверку не пойдут — поднимите бюджет.";
+      el.classList.remove("hidden");
+    };
+    return { el: el, refresh: update };
+  }
+
   /* ── видимость полей по режиму стадии ───────────────────────────────
    * Единый проход по метаданным реестра (when/when_any/when_set у настроек
    * core/settings.py): значения полей режима читаются из st.values — тот же
@@ -2208,6 +2252,27 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     if (rangeRow) fieldNodes.unshift(rangeRow);
     // видимость полей по режиму — один проход по метаданным реестра
     const modeVis = attachModeVisibility(key, spec, fieldWraps, rangeRow);
+
+    // Проверка перевода (LLM): сколько глав диапазона не влезет в бюджет.
+    // Считается по размерам файлов (опции сервера, os.stat без чтения):
+    // 0.03 с на 5652 главах, поэтому пересчитывается на ввод бюджета без
+    // запросов. Оценка завышена намеренно — «не влезет» верно всегда.
+    if (key === "translate_check_llm") {
+      const tooBig = tooBigNote(key, fieldWraps);
+      const bw = fieldWraps["request_budget"];
+      const idx = bw ? fieldNodes.indexOf(bw) : -1;
+      if (idx >= 0) fieldNodes.splice(idx + 1, 0, tooBig.el);
+      const bi = bw && bw._input;
+      if (bi) ["input", "change"].forEach(
+        (ev) => bi.addEventListener(ev, tooBig.refresh));
+      if (rangeRow) {
+        if (rangeRow._start) {
+          rangeRow._start.addEventListener("input", tooBig.refresh);
+        }
+        if (rangeRow._end) rangeRow._end.addEventListener("input", tooBig.refresh);
+      }
+      tooBig.refresh();
+    }
 
     // pipeline — единый общий промпт-файл (теги translate/redact/polish),
     // режим промптов и отдельные файлы на стадию убраны;
