@@ -309,6 +309,14 @@
     return false;
   }
 
+  /* Заполнено ли поле режима (when_set): у bool-поля — само значение,
+   * снятый чекбокс — «не задано» (core.settings._form_set). */
+  function modeSet(values, name) {
+    const v = values ? values[name] : undefined;
+    if (typeof v === "boolean") return v;
+    return modeValue(values, name) !== null;
+  }
+
   /* Касается ли настройка текущего режима формы (единственный источник правды
    * вместе с core.settings.applies: те же данные, та же логика). */
   function fieldApplies(field, values) {
@@ -326,9 +334,7 @@
         return false;
       }
     }
-    return (field.when_set || []).every(
-      (name) => modeValue(values, name) !== null,
-    );
+    return (field.when_set || []).every((name) => modeSet(values, name));
   }
 
   /* Язык подсветки файла с выбором пользователя: промпты и логи — как указано

@@ -2150,6 +2150,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       for (const c of [...(f.when || []), ...(f.when_any || [])]) {
         watched.add(c[0]);
       }
+      // when_set: снятая галка — «поля не задано», но менять видимость
+      // она тоже должна — иначе поле не гаснет до перерисовки формы
+      for (const name of f.when_set || []) watched.add(name);
     }
     const extras = []; // [узел, имя поля]: узел повторяет видимость поля
     const apply = () => {

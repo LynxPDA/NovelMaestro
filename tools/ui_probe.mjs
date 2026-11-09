@@ -2797,6 +2797,61 @@ async function main() {
       + `64 – 3: подсказка + ${bad.bad} поля в рамке · отказ «${err}»`);
   }
 
+  /* Сверка с оригиналом в форме проверки перевода (LLM): галка «Сверка с
+   * оригиналом» показывает «Глав в запросе» и прячет его при снятии (условие
+   * `when_set` в реестре читает и сервер, и клиент — расхождение стоило бы
+   * человеку невидимого поля), плюс подсказка о единицах */
+  {
+    const before = problems.length;
+    await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
+      { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector(".stage-card", { timeout: 15000 });
+    await page.locator('.stage-card:has-text("Проверка перевода (LLM)")')
+      .first().click();
+    await page.waitForTimeout(900);
+    const wrapOf = (label) => page.locator(".run-form .field", {
+      hasText: label,
+    }).first();
+    const cpr = wrapOf("Глав в запросе");
+    const useSrc = wrapOf("Сверять с оригиналом");
+    const box = useSrc.locator('input[type="checkbox"], input[type="radio"]')
+      .first();
+    const visible = async () => !(await cpr.evaluate(
+      (el) => !!el && el.classList.contains("hidden")));
+    const wasOn = await box.isChecked();
+    if (!wasOn) await box.check();
+    await page.waitForTimeout(300);
+    const shownOn = await visible();
+    await box.uncheck();
+    await page.waitForTimeout(300);
+    const hiddenOff = !(await visible());
+    const label = await cpr.evaluate(
+      (el) => ((el.querySelector(".field-label") || {}).textContent || "").trim());
+    const help = await cpr.evaluate(
+      (el) => ((el.querySelector(".field-help") || {}).textContent || "").trim());
+    if (SHOT) {
+      await box.check();
+      await page.waitForTimeout(300);
+      await page.locator(".run-form").first().screenshot(
+        { path: path.join(OUT, "scenario-use-source.png") });
+    }
+    if (!shownOn) {
+      problems.push("use-source: «Глав в запросе» не показалось при включении");
+    }
+    if (!hiddenOff) {
+      problems.push("use-source: «Глав в запросе» осталось при снятой галке");
+    }
+    if (!/ГЛАВЫ/.test(label)) {
+      problems.push(`use-source: единица не в метке поля: «${label}»`);
+    }
+    if (help && !/бюджет/i.test(help)) {
+      problems.push(`use-source: подсказка вне смысла поля: «${help}»`);
+    }
+    log(`${problems.length === before ? "✅" : "❌"} use-source    `
+      + `«Глав в запросе»: видно=${shownOn}, скрыто=${hiddenOff}`);
+  }
+
   /* Отчёт translate_check: шкала допуска пары — полоса при текущем K,
    * штрих медианы и точки глав вне допуска. Числа берутся из блока
    * «Статистика» (сервер разбирает его в r.stats): без них вьюха падала бы
