@@ -1429,11 +1429,24 @@ async function main() {
       problems.push(`статус: пропуски редактуры «${st.stages[1]?.text}»`);
     if (!/width:67%/.test(st.stages[1]?.width || ""))
       problems.push(`статус: трек редактуры «${st.stages[1]?.width}»`);
+    /* таблица глав постранично: у книги в 6018 глав она рисовала 30 258
+       узлов разом и открывалась секундами. Главы пробы помещаются на одну
+       страницу, поэтому проверяем сам факт пейджера и счётчик */
+    const pg = await page.evaluate(() => {
+      const info = document.querySelector(".ner-pager-info");
+      return { has: !!info, text: (info || {}).textContent || "",
+               nodes: document.querySelectorAll(".ch-table *").length };
+    });
+    if (!pg.has)
+      problems.push("статус: у таблицы глав нет пейджера");
+    if (pg.nodes > 60)
+      problems.push(`статус: таблица строит ${pg.nodes} узлов — нет пагинации`);
     if (SHOT)
       await page.screenshot({ path: path.join(OUT, "scenario-status.png") });
     if (seedDir) fs.rmSync(third, { recursive: true, force: true });
     log(`${problems.length === before5 ? "✅" : "❌"} статус: типы глав  `
-      + `${st.stages.map((x) => x.pct).join(" · ")} · таблица ${st.rows} глав`);
+      + `${st.stages.map((x) => x.pct).join(" · ")} · таблица ${st.rows} глав`
+      + ` · пейджер ${pg.has ? "да" : "нет"}`);
   }
 
   /* «История»: список точек страницами, сравнение выбранной пары (всегда от

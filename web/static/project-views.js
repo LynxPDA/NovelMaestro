@@ -5408,7 +5408,12 @@ function viewProject(section, name, tab, job) {
     const ids = Object.keys(chapters)
       .map(Number)
       .sort((a, b) => a - b);
-    const rows = ids.map((id) => {
+    /* Таблица глав — постранично: у книги в 6018 глав она рисовала 30 258
+       узлов разом, и вкладка открывалась секундами (замер: 30 258 узлов
+       против 5 364 у глоссария, который уже с пейджером). Пейджер тот же,
+       что у глоссария; страница 200 строк. */
+    const tbody = h("tbody", {});
+    const rowFor = (id) => {
       const c = chapters[id];
       const cells = STATUS_STAGES.map(([k]) => {
         const ok = !!c[k];
@@ -5424,6 +5429,14 @@ function viewProject(section, name, tab, job) {
         h("th", { class: "ch-num" }, String(id)),
         ...cells,
       );
+    };
+    const pager = UIC.listPager({
+      pageSize: 200,
+      label: "глав",
+      list: tbody,
+      rows: (page) => (page.length
+        ? page.map(rowFor)
+        : [h("tr", {}, h("td", { colspan: 4 }, "Глав пока нет"))]),
     });
     const table = h(
       "table",
@@ -5440,14 +5453,9 @@ function viewProject(section, name, tab, job) {
           h("th", {}, "пол"),
         ),
       ),
-      h(
-        "tbody",
-        {},
-        rows.length
-          ? rows
-          : [h("tr", {}, h("td", { colspan: 4 }, "Глав пока нет"))],
-      ),
+      tbody,
     );
+    pager.items = ids;
     const ner = s.ner || {};
     const wiki = s.wiki || {};
     const sumCard = h(
@@ -5490,7 +5498,8 @@ function viewProject(section, name, tab, job) {
         h("div", { class: "stat-label" }, "статей wiki"),
       ),
     );
-    return h("div", { class: "files-wrap" }, sumCard, stageBlock, table);
+    return h("div", { class: "files-wrap" }, sumCard, stageBlock,
+      pager.el, table);
   }
 
   async function configView() {
