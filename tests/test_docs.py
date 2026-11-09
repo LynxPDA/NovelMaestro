@@ -309,11 +309,13 @@ def _project_tab_labels():
 # ШАБЛОНЫ ПРОМПТОВ ↔ ВСТРОЕННЫЕ ПРОМПТЫ СКРИПТОВ
 # ══════════════════════════════════════════════════════════════════════
 #: шаблон General → (скрипт, встроенный промпт, тег)
-#: ner_check-промпт в список не входит: внешний шаблон там подробнее
-#: встроенного (83 строки против 55), это отдельная задача — см. TODO.md
+#: pipeline_prompt.txt сюда не входит: его теги translate/redact —
+#: самостоятельные промпты перевода, а не запасной вариант (см. §7)
 PROMPT_TEMPLATES = [
     ("translate_check_prompt.txt", "cli/translate_check_llm.py",
      "DEFAULT_PROMPT", "prompt_translate_check"),
+    ("ner_check_prompt.txt", "cli/ner_check.py",
+     "DEFAULT_NER_CHECK_PROMPT", "prompt_ner_check"),
     ("ner_check_prompt.txt", "cli/ner_check.py",
      "DEFAULT_NER_RAG_PROMPT", "prompt_rag"),
 ]
