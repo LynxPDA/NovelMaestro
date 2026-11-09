@@ -2665,11 +2665,36 @@ function viewProject(section, name, tab, job) {
       }
     }
 
+    /* Адрес записи на сервере: {term, canon, order}. Термин НЕ уникален, и
+       правка «по терму» задевала соседние дубли — замок одной строки лочил
+       все, удаление одной сносило все. Канон снимается ДО правки записи
+       (сервер сравнивает его со своим состоянием файла), а `order` — номер
+       совпадения в файле — различает побайтово одинаковые записи: два
+       дубля с тем же каноном иначе не разделить. */
+    const addr = (it) => ({
+      term: it.term,
+      canon: UICore.nerCanon(it),
+      order: itemsWithCanon(it),
+    });
+    /* индекс записи среди записей файла с ТЕМ ЖЕ каноном: сервер берёт
+       `order`-й кандидат из своей выборки, и порядок там — порядок файла,
+       а data.items — тот же файл, прочитанный при открытии вкладки */
+    function itemsWithCanon(it) {
+      const c = UICore.nerCanon(it);
+      let n = 0;
+      for (const x of data.items) {
+        if (x === it) return n;
+        if (String(x.term || "") === String(it.term || "")
+            && UICore.nerCanon(x) === c) n += 1;
+      }
+      return 0;
+    }
+
     /* Микродействие (замок, правка ячейки, удаление строки) шлёт только
-       затронутые термины: полный PUT у книги на 10978 терминов весил 6 МБ
-       и занимал 4 с на одну снятую галочку. `changes` — [{term, set}]
-       либо [{term, delete: true}]. Ошибка — тост, как у saveNer; список
-       записей уже изменён локально, сервер догоняет его. */
+       затронутые записи: полный PUT у книги на 10978 терминов весил 6 МБ
+       и занимал 4 с на одну снятую галочку. `changes` — [{term, canon,
+       set}] либо [{term, canon, delete: true}]. Ошибка — тост, как у
+       saveNer; список записей уже изменён локально, сервер догоняет. */
     async function saveNerChanges(changes) {
       if (!changes || !changes.length) return;
       try {
@@ -2710,8 +2735,10 @@ function viewProject(section, name, tab, job) {
       items.forEach((it) => UICore.nerSetLocked(it, on));
       renderRows();
       paintSel();
+      /* канон — ДО правки: он адресует запись на сервере, и замок в него
+         не входит; считается по записи, какой она была при загрузке */
       saveNerChanges(items.map((it) => ({
-        term: it.term,
+        ...addr(it),
         set: { _locked: on ? true : null },
       })));
       toast(
@@ -2743,7 +2770,7 @@ function viewProject(section, name, tab, job) {
         "УДАЛИТЬ",
         async () => {
           const dead = new Set(victims);
-          const gone = victims.map((it) => ({ term: it.term, delete: true }));
+          const gone = victims.map((it) => ({ ...addr(it), delete: true }));
           data.items = data.items.filter((it) => !dead.has(it));
           nerSel.clear();
           await saveNerChanges(gone);
@@ -2839,10 +2866,7 @@ function viewProject(section, name, tab, job) {
       const on = !UICore.nerIsLocked(it);
       UICore.nerSetLocked(it, on);
       renderRows();
-      saveNerChanges([{
-        term: it.term,
-        set: { _locked: on ? true : null },
-      }]);
+      saveNerChanges([{ ...addr(it), set: { _locked: on ? true : null } }]);
       toast(
         on
           ? `Термин «${it.term}» зафиксирован`
@@ -2884,7 +2908,7 @@ function viewProject(section, name, tab, job) {
                 "УДАЛИТЬ",
                 async () => {
                   data.items = data.items.filter((x) => x !== it);
-                  await saveNerChanges([{ term: it.term, delete: true }]);
+                  await saveNerChanges([{ ...addr(it), delete: true }]);
                   renderRows();
                 },
               ),
@@ -2973,6 +2997,9 @@ function viewProject(section, name, tab, job) {
         /* что реально изменилось — на сервер уходят только эти поля
            (микродействие, а не весь глоссарий: см. saveNerChanges) */
         const origin = String(it.term || "");
+        /* адрес снимаем здесь: дальше запись правится, а на сервере она
+           ещё в состоянии до правки */
+        const target = addr(it);
         const touched = {};
         for (const c of visibleCols()) {
           const raw = inputs[c].value;
@@ -3060,7 +3087,7 @@ function viewProject(section, name, tab, job) {
         } else {
           const set = { ...touched };
           if (origin && origin !== it.term) set.term = it.term;
-          saveNerChanges([{ term: origin, set }]);
+          saveNerChanges([{ ...target, set }]);
         }
       }
       function cancel() {
@@ -3529,7 +3556,11 @@ function viewProject(section, name, tab, job) {
          живёт в состоянии книги (`reviewFilter:<раздел>/<книга>`) и
          переживает перезагрузку страницы вместе с самой книгой */
       const FILTER_KEY = `reviewFilter:${section}/${name}`;
-      const filters = { field: [], stage: [], type: [], status: "все" };
+      // Оси — из реестра, а не списком: новая ось («Группа» у проверки
+      // перевода) без пустого массива роняла панель фильтров на
+      // `undefined.includes` — «Проверки» открывались без чипсов вовсе
+      const filters = { status: "все" };
+      for (const ax of UICore.reviewAxes(kind)) filters[ax.key] = [];
       try {
         const saved = JSON.parse(bookStore().getItem(FILTER_KEY) || "null");
         if (saved && typeof saved === "object") {

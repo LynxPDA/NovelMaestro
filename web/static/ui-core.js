@@ -564,6 +564,19 @@
         },
         empty: "без типа",
       },
+      {
+        /* Группа — ответ на вопрос «это нашла сверка с оригиналом или
+           проверка русского текста?»: типов ошибок девять, и отследить
+           именно сверочные находки по одному `type` неудобно. Порядок
+           групп — от самого дешёвого для чтения к самому дорогому:
+           правка слова, правка смысла, ручная вставка. */
+        key: "group",
+        label: "Группа",
+        valueOf: function (e) {
+          return fixGroupOf(String(e.type || ""));
+        },
+        empty: "без группы",
+      },
     ],
     /* отчёт translate_check: у главы бывает несколько строк разных проверок,
        и ось одна — значение — тип строки ошибки (CHECエK_KINDS) */
@@ -588,6 +601,31 @@
     fatal: { label: "Глава пропущена", tag: "файл не нашёлся или спорный" },
     other: { label: "Другое", tag: "размер файла, чтение и прочее" },
   };
+
+  /* Группы находок проверки перевода (LLM) — по типу записи:
+     * «сверка с оригиналом» — без оригинала такие ошибки не увидеть
+       (смысл разошёлся, пропуск, лишнее);
+     * «текст перевода» — видно и без оригинала (опечатка, падеж);
+     * «к человеку» — `manual`: место правки не доказано, применяет
+       человек. Отдельная группа, потому что такие записи уходят со
+       статусом «отклонить» и требуют ручной сверки. */
+  var FIX_GROUPS = {
+    source: "сверка с оригиналом",
+    text: "текст перевода",
+    manual: "к человеку",
+  };
+  var SOURCE_FIX_TYPES = ["mistranslation", "missing_text", "extra_text"];
+  var TEXT_FIX_TYPES = ["typo", "missing_word", "grammar", "logic",
+                        "incomplete", "artifact"];
+
+  function fixGroupOf(type) {
+    var t = String(type || "").trim().toLowerCase();
+    if (!t) return "";
+    if (t === "manual") return FIX_GROUPS.manual;
+    if (SOURCE_FIX_TYPES.indexOf(t) >= 0) return FIX_GROUPS.source;
+    if (TEXT_FIX_TYPES.indexOf(t) >= 0) return FIX_GROUPS.text;
+    return "";
+  }
 
   function checkErrorKind(kind) {
     return CHECK_ERROR_KINDS[String(kind || "")] || CHECK_ERROR_KINDS.other;
@@ -771,7 +809,46 @@
       s === "1" || s === "true" || s === "yes" || s === "y" || s === "да" || s === "истина"
     );
   }
-  /* замок записи (in-place): снятый замок — ключ удаляется */
+  /* Канонический вид записи глоссария — адресация дублей термина
+     (зеркало web/api_glossary.py::_ner_canon). Термин НЕ уникален: в
+     ner.json бывает несколько записей одного слова, и правка «по терму»
+     задевала соседние — замок одной строки лочил все, удаление одной
+     сносило все. На сервер уходит эта строка: он сравнивает её с каноном
+     своих записей, поэтому алгоритм не приходится дублировать на двух
+     языках. Служебные `_locked`/`__new`/`_fp*` в канон не входят: замок и
+     переименование не меняют адрес записи. */
+  function nerCanon(item) {
+    if (!item || typeof item !== "object") return "";
+    var body = {};
+    var keys = Object.keys(item).sort();
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (k === "_locked" || k === "__new" || k.indexOf("_fp") === 0) continue;
+      body[k] = item[k];
+    }
+    return normNfc(stableJson(body));
+  }
+  /* JSON с сортировкой ключей на всех уровнях: JSON.stringify сохраняет
+     порядок как есть, а сервер сортирует (json.dumps sort_keys) */
+  function stableJson(v) {
+    if (v == null || typeof v !== "object") return JSON.stringify(v);
+    if (Array.isArray(v)) return "[" + v.map(stableJson).join(",") + "]";
+    var ks = Object.keys(v).sort();
+    var parts = [];
+    for (var i = 0; i < ks.length; i++) {
+      parts.push(JSON.stringify(ks[i]) + ":" + stableJson(v[ks[i]]));
+    }
+    return "{" + parts.join(",") + "}";
+  }
+  /* NFC-нормализация строки (Unicode normalization, если браузер умеет) */
+  function normNfc(s) {
+    try {
+      return String(s).normalize("NFC");
+    } catch (e) {
+      return String(s);
+    }
+  }
+  /* замок записи (in-place): снятый замок — ключ удаляется */  /* замок записи (in-place): снятый замок — ключ удаляется */
   function nerSetLocked(item, locked) {
     if (!item || typeof item !== "object") return item;
     if (locked) item._locked = true;
@@ -2409,6 +2486,8 @@
     reviewStatusBucket: reviewStatusBucket,
     REVIEW_STATUS_BUCKETS: REVIEW_STATUS_BUCKETS,
     checkErrorKind: checkErrorKind,
+    fixGroupOf: fixGroupOf,
+    FIX_GROUPS: FIX_GROUPS,
     checkErrorKinds: checkErrorKinds,
     checkVisibleErrors: checkVisibleErrors,
 
@@ -2442,6 +2521,7 @@
     nerStructJson: nerStructJson,
     /* замок термина (NER_LOCK_FIELD): состояние, а не столбец таблицы */
     nerIsLocked: nerIsLocked,
+    nerCanon: nerCanon,
     nerSetLocked: nerSetLocked,
     nerLockedCount: nerLockedCount,
     nerLockAllowed: nerLockAllowed,

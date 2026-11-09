@@ -208,6 +208,11 @@ function seedProjectsDir(dir) {
           { stage: "проверка перевода", chapter: 2, file: "polished.txt",
             type: "grammar", old: "ихний", new: "их", reason: "норма",
             status: "отклонить", applied: false },
+          // запись СВЕРКИ с оригиналом: из-за неё у оси «Группа» появляется
+          // второй вариант, и проверка чипсов видит обе оси
+          { stage: "проверка перевода", chapter: 3, file: "polished.txt",
+            type: "mistranslation", old: "он ушёл", new: "он остался",
+            reason: "смысл разошёлся", status: "", applied: false },
         ],
       },
       null, 2,
@@ -2916,6 +2921,12 @@ async function main() {
     if (okBig.warn) {
       problems.push("budget-status: при большом бюджете стоит предупреждение");
     }
+    // коэффициент байт/токен считается сервером по тексту книги и назван в
+    // строке — иначе цифра выглядит магией, а фиксированные 2.5 давали
+    // ложные «не влезет» почти на каждой главе
+    if (!/\d+[.,]\d+ байт\/токен по \d+ глав/.test(okBig.text)) {
+      problems.push(`budget-status: не назван коэффициент «${okBig.text}»`);
+    }
     if (overSmall.hidden || !/Не влезет 2 из 2/.test(overSmall.text)) {
       problems.push(`budget-status: на малом бюджете «${overSmall.text}»`);
     }
@@ -3923,13 +3934,18 @@ async function main() {
         sel: (pane.querySelector?.(".rv-status-sel") || {}).value || "",
       };
     });
-    if (info.cards !== 3 || info.fields !== 3)
+    if (info.cards !== 4 || info.fields !== 4)
       problems.push(`tcl: карточек ${info.cards} / строк ${info.fields} `
-        + "(ожидаем 3 и 3)");
+        + "(ожидаем 4 и 4)");
+    // две оси: тип ошибки и группа «сверка с оригиналом / текст перевода»
     if (!info.labels.includes("Тип ошибки:"))
       problems.push(`tcl: оси фильтра ${info.labels.join(", ")}`);
-    if (info.chips.length !== 3)
-      problems.push(`tcl: чипсов типа ${info.chips.length} `
+    if (!info.labels.some((l) => l.startsWith("Группа:")))
+      problems.push(`tcl: нет оси «Группа» — ${info.labels.join(", ")}`);
+    if (!info.chips.includes("сверка с оригиналом (1)"))
+      problems.push(`tcl: нет чипса группы сверки (${info.chips.join(", ")})`);
+    if (info.chips.length !== 6)
+      problems.push(`tcl: чипсов ${info.chips.length} `
         + `(${info.chips.join(", ")})`);
     if (info.sel !== "все") problems.push(`tcl: статус-фильтр «${info.sel}»`);
     if (SHOT) await page.screenshot({ path: path.join(OUT, "scenario-review-tcl.png") });
