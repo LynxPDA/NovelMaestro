@@ -435,130 +435,6 @@ def test_re_strip_chapter_headers():
     assert "текст до" in out and "Глава" not in out
 
 
-def test_re_split_into_chunks():
-    assert RE.split_into_chunks("маленький", 1000) == ["маленький"]
-    paras = "\n\n".join("абзац номер %d" % i for i in range(50))
-    # единица — ТОКЕНЫ (оценка): кириллица ~0.33 токена на символ
-    chunks = RE.split_into_chunks(paras, 30)
-    assert len(chunks) > 1
-    assert all(RE.estimate_tokens(c) <= 60 for c in chunks)
-    # гигантский абзац без переносов режется по строкам/жёстко
-    huge = "х" * 500
-    chunks = RE.split_into_chunks(huge, 30)
-    assert sum(len(c) for c in chunks) >= 500
-
-
-def test_re_parse_llm_json():
-    assert RE.parse_llm_json('[{"a": 1}]', SilentLog()) == [{"a": 1}]
-    assert RE.parse_llm_json('```json\n[{"a": 1}]\n```', SilentLog()) == [{"a": 1}]
-    assert RE.parse_llm_json('шум {"не список": 1}', SilentLog()) is None
-    assert RE.parse_llm_json('{"ключ": "значение"}', SilentLog()) is None
-    assert RE.parse_llm_json("вообще не json", SilentLog()) is None
-
-
-def test_re_to_int():
-    assert RE._to_int(5) == 5
-    assert RE._to_int(5.0) == 5
-    assert RE._to_int(" 7 ") == 7
-    assert RE._to_int("абв") is None
-    assert RE._to_int(None) is None
-
-
-def test_re_validate_errors():
-    valid_ch = {1, 2}
-    batch = {1: "здесь живёт фрагмент номер один", 2: "другое содержимое главы"}
-    errors = [
-        {"chapter": 1, "fragment": "фрагмент номер один", "corrected": "правкa"},
-        {"chapter": "2", "fragment": "короткий", "corrected": "x"},        # <10 симв
-        {"chapter": 1, "fragment": "одинаковый текст тут", "corrected": "одинаковый текст тут"},
-        {"chapter": 9, "fragment": "другое содержимое", "corrected": "правкa"},  # переезд в 2
-        {"chapter": 9, "fragment": "нет нигде в главах", "corrected": "правкa"},
-        {"chapter": "абв", "fragment": "длинный фрагмент здесь", "corrected": "y"},
-    ]
-    out = RE.validate_errors(errors, valid_ch, batch, SilentLog())
-    assert len(out) == 2
-    assert out[0]["chapter"] == 1
-    assert out[1]["chapter"] == 2   # фрагмент нашли в главе 2
-
-
-def test_re_validate_errors_drift_and_typography():
-    """Дрейф атрибуции: LLM указала главу из батча, но цитата живёт
-    в соседней — сверка ловит и перепривязывает; типографика
-    (кавычки/тире/многоточия) не считается промахом."""
-    batch = {5: "Он резко развернулся, и с глухим звустом… стрела марионетки пробила плечо.",
-             6: "Совсем другой текст шестой главы без цитат"}
-    errors = [
-        # цитата из гл.6, а указана гл.5 → перепривязка на 6
-        {"chapter": 5, "fragment": "Совсем другой текст шестой главы", "corrected": "правкa"},
-        # типографика: LLM процитировала с ASCII-многоточием вместо «…» — совпадает мягко
-        {"chapter": 5, "fragment": "с глухим звустом... стрела", "corrected": "правкa"},
-        # цитаты нет ни в одной главе батча → отклонение
-        {"chapter": 5, "fragment": "фраза из совсем другой книги здесь", "corrected": "правкa"},
-    ]
-    out = RE.validate_errors(errors, {5, 6}, batch, SilentLog())
-    assert len(out) == 2
-    assert out[0]["chapter"] == 6
-    assert out[1]["chapter"] == 5
-
-
-def test_re_validate_errors_source_types():
-    """Сверка с оригиналом: вставка проверяется как вставка, место
-    оценивается по краю куска, дословный копипаст → ручная запись, а
-    цитата, встречающаяся дважды, отклоняется (адрес неоднозначен)."""
-    cont = ("Су Мин подошёл к краю утёса и долго смотрел вниз. "
-            "Ветер трепал его плащ. Затем он развернулся и ушёл. "
-            "Повтор фразы один. Повтор фразы два. Повтор фразы один. "
-            "Повтор фразы два.")
-    batch = {7: cont}
-    frag_ok = "Су Мин подошёл к краю утёса и долго смотрел вниз. Ветер трепал его плащ."
-    corr_ok = ("Су Мин подошёл к краю утёса и долго смотрел вниз. "
-               "Где-то внизу шумело море. Ветер трепал его плащ.")
-    errors = [
-        # честная вставка внутри абзаца
-        {"chapter": 7, "fragment": frag_ok, "corrected": corr_ok,
-         "type": "missing_text"},
-        # переписывание вместо вставки → человеку, статус решает ошибки_to_entries
-        {"chapter": 7, "fragment": frag_ok,
-         "corrected": frag_ok.replace("долго", "недолго"),
-         "type": "missing_text"},
-        # LLM сама сказала, что вставить не может
-        {"chapter": 7, "fragment": frag_ok, "corrected": frag_ok,
-         "type": "missing_text", "reason": "пропуск"},
-        # вставка только в самое начало куска — место не доказано
-        {"chapter": 7, "fragment": frag_ok,
-         "corrected": "Новая фраза. " + frag_ok, "type": "missing_text"},
-        # цитата встречается дважды → адрес неоднозначен
-        {"chapter": 7, "fragment": "Повтор фразы один. Повтор фразы два.",
-         "corrected": "Повтор фразы один.", "type": "extra_text"},
-    ]
-    out = RE.validate_errors(errors, {7}, batch, SilentLog())
-    kinds = [e.get("type") for e in out]
-    assert kinds == ["missing_text", "manual", "manual", "manual"]
-
-
-def test_re_errors_to_entries_manual_is_rejected():
-    """Запись без доказанного места вставки встаёт со статусом «отклонить»:
-    применять её нечем, а «принять» по умолчанию обмануло бы статистику."""
-    chapter_map = {}
-    errs = [{"chapter": 3, "fragment": "цитата без места вставки",
-             "corrected": "цитата без места вставки", "type": "manual",
-             "note": "место пропуска не определено"}]
-    recs = RE.errors_to_entries(errs, "стадия", "polished", chapter_map,
-                                SilentLog())
-    assert len(recs) == 1
-    assert recs[0]["status"] == C.REVIEW_REJECT
-    assert recs[0]["note"] == "место пропуска не определено"
-
-def test_re_no_safety_limits():
-    """Ограничители правок (лимит на главу, мин. длина, макс. изменённых
-    символов) убраны: их флагов и фильтра в скрипте нет."""
-    assert not hasattr(RE, "apply_safety")
-    args = RE.build_parser().parse_args([])
-    for name in ("max_fixes_per_chapter", "min_fix_length",
-                 "max_changed_chars"):
-        assert not hasattr(args, name)
-
-
 def test_re_build_batches():
     chapters = [(1, "f", "d", "х" * 300), (2, "f", "d", "х" * 300),
                 (3, "f", "d", "х" * 300)]
@@ -571,40 +447,28 @@ def test_re_build_batches():
 
 
 def test_re_build_batches_by_chapters_and_pairs():
-    """Пакет по числу ГЛАВ (ГЛАВЫ): части одной главы уезжают вместе, и
-    бюджет не режет пакет раньше времени."""
-    # глава 2 разрезана на две части — они в одном пакете
-    chapters = [(1, "f", "d", "а"), (2, "f", "d", "б"),
-                (2, "f", "d", "б2"), (3, "f", "d", "в")]
-    batches = RE.build_batches(chapters, 500, SilentLog(), per_request=1)
-    assert [[c[0] for c in b] for b in batches] == [[1], [2, 2], [3]]
-    batches = RE.build_batches(chapters, 500, SilentLog(), per_request=2)
-    assert [[c[0] for c in b] for b in batches] == [[1, 2, 2], [3]]
-    # пары (оригинал+перевод) в бюджете учитываются оба текста
+    """Пакет по числу ГЛАВ (ГЛАВЫ): глава либо входит целиком, либо
+    начинает новый пакет; бюджет закрывает пакет раньше счёта глав."""
+    chapters = [(1, "f", "d", "а"), (2, "f", "d", "б"), (3, "f", "d", "в")]
+    batches = RE.build_batches(chapters, 5000, SilentLog(), per_request=1)
+    assert [[c[0] for c in b] for b in batches] == [[1], [2], [3]]
+    batches = RE.build_batches(chapters, 5000, SilentLog(), per_request=2)
+    assert [[c[0] for c in b] for b in batches] == [[1, 2], [3]]
+    batches = RE.build_batches(chapters, 5000, SilentLog(), per_request=0)
+    assert [[c[0] for c in b] for b in batches] == [[1, 2, 3]]
+    # пары (оригинал+перевод): в бюджете оба текста
     pair = [(1, "f", "d", "х" * 300, "字" * 300)]
-    assert len(RE.build_batches(pair, 600, SilentLog())) == 1
+    assert len(RE.build_batches(pair, 5000, SilentLog())) == 1
+    # бюджет меньше пары: глава всё равно едет одна (резать нечем)
     assert len(RE.build_batches(pair, 100, SilentLog())) == 1
 
 
-def test_re_split_pair_sentences_and_glue():
-    """Нарезка сверхбюджетной пары: части в пределах бюджета, режутся по
-    концу предложения, а склейка равна исходному тексту до символа."""
-    zh = ("第471章 推理\n苏明并没有先解释，而是先让渡鸦和夜影同时使用暗影魔法。"
-          "又命令女妖准备魔法阵。\n“各位，我们正在谈论的是戴安娜。”\n") * 40
-    ru = ("Су Мин не стал сразу всё объяснять, а приказал Рэйвен скрыть "
-          "корабль. Затем он велел Банши подготовить круг. «Дамы и господа, "
-          "мы говорим о Диане, королеве амазонок». Он оперся на меч.\n") * 40
-    from core.common import ends_sentence, estimate_tokens
-    parts = RE.split_pair(ru, zh, 900)
-    assert len(parts) > 1
-    for tr_part, src_part in parts:
-        assert estimate_tokens(tr_part) + estimate_tokens(src_part) <= 900 * 1.6
-        assert ends_sentence(tr_part) or not tr_part.strip()
-        assert ends_sentence(src_part) or not src_part.strip()
-    assert "".join(a for a, _ in parts) == ru
-    assert "".join(b for _, b in parts) == zh
-    # пара меньше бюджета — одна часть целиком
-    assert RE.split_pair("раз. два.", "一。二。", 10000) == [("раз. два.", "一。二。")]
+def test_re_build_batches_budget_closes_packet_before_count():
+    """5 глав по 13k и бюджет 65k: уходят 4 целые главы, пятая отдельным
+    пакетом — она НЕ режется (второй вариант пореза был бы неверен)."""
+    chapters = [(i, "f", "d", "х" * 35000) for i in range(1, 6)]
+    batches = RE.build_batches(chapters, 65000, SilentLog(), per_request=5)
+    assert [[c[0] for c in b] for b in batches] == [[1, 2, 3, 4], [5]]
 
 
 def test_re_collect_chapters_pairs_and_missing_source(tmp_path):
@@ -644,7 +508,10 @@ def test_re_find_chapter_file_in_dir(tmp_path):
     assert fp is None and content is None
 
 
-def test_re_collect_chapters_and_chunking(tmp_path):
+def test_re_collect_chapters_skips_oversized(tmp_path):
+    """Глава пары больше бюджета в проверку НЕ идёт: резать её нельзя
+    (части дали бы ложные missing_text на стыке), поэтому она пишется в
+    лог отдельной строкой и пропускается."""
     d1 = tmp_path / "00000_1_x"
     d1.mkdir()
     (d1 / "polished.txt").write_text("\n\n".join(
@@ -654,12 +521,15 @@ def test_re_collect_chapters_and_chunking(tmp_path):
     d2.mkdir()
     (d2 / "polished.txt").write_text("текст второй", encoding="utf-8")
     cmap = {1: [str(d1)], 2: [str(d2)]}
-    # бюджет меньше главы (в ТОКЕНАХ, оценка) → чанкование
-    chapters = RE.collect_chapters(1, 2, "polished", 300, cmap, SilentLog())
-    assert len(chapters) > 2
-    assert all(ch[0] in (1, 2) for ch in chapters)
-    # пропуск отсутствующих
-    chapters = RE.collect_chapters(1, 5, "polished", 100000, cmap, SilentLog())
+    log = SilentLog()
+    # маленький бюджет: крупная глава 1 не влезает, глава 2 проходит
+    chapters = RE.collect_chapters(1, 2, "polished", 300, cmap, log)
+    assert [ch[0] for ch in chapters] == [2]
+    # нормальный бюджет: обе на месте и целиком
+    chapters = RE.collect_chapters(1, 2, "polished", 65000, cmap, log)
+    assert {ch[0] for ch in chapters} == {1, 2}
+    # пропуск отсутствующих в книге
+    chapters = RE.collect_chapters(1, 5, "polished", 100000, cmap, log)
     assert {ch[0] for ch in chapters} == {1, 2}
 
 

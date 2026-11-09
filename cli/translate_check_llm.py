@@ -79,8 +79,6 @@ from core.common import (  # noqa: E402
     insertion_of,
     merge_fix_entries,
     read_text_safe,
-    sentence_spans,
-    split_at_sentences,
 )
 from core import settings as core_settings  # noqa: E402
 
@@ -94,6 +92,10 @@ PROMPT_CONTRACT: tuple = (
 # Серверный предел ответа стадии, ТОКЕНЫ (не расчёт)
 # предельный размер ответа сервера — общий настройка MAX_TOKENS
 DEFAULT_REVIEW = "tmp/translate_check_llm_review.json"
+
+#: запас бюджета на сам промпт и разметку пары — ТОКЕНЫ (оценка); глава,
+#: чья пара с этим запасом не влезает в бюджет, в проверку не идёт
+PROMPT_OVERHEAD = 200
 
 # ─────────────────────────────────────────────
 # ВСТРОЕННЫЙ ПРОМПТ
@@ -119,7 +121,7 @@ DEFAULT_PROMPT = """\
 Каждая глава может прийти парой блоков: [ОРИГИНАЛ] и [ПЕРЕВОД]. Это ОДНА и та же глава.
 - Границы предложений и абзацев в паре НЕ совпадают: перевод сжимает два предложения в одно, делит одно на три, переставляет порядок реплик внутри сцены. Само по себе расхождение границ — НЕ ошибка и НЕ повод для правки.
 - Правки всегда берутся из [ПЕРЕВОД]: fragment и corrected — из него, НИКОГДА из [ОРИГИНАЛ].
-- Помеченная «часть k/m» глава разрезана на части: обрыв фразы в самом начале или в самом конце части — не incomplete, текст продолжается в следующей части.
+- Глава приходит ЦЕЛИКОМ: если фраза оборвана в самом её конце — это incomplete (перевод сохранён обрезанным).
 - Если пары нет — оцениваешь только текст перевода, как раньше.
 
 ЧЕГО В ПЕРЕВОДЕ НЕТ ПО РАЗРЕШЕНИЮ КОНВЕЙЕРА (это НЕ missing_text):
@@ -194,7 +196,7 @@ DEFAULT_PROMPT = """\
 МЕСТО ВСТАВКИ (missing_text):
 - fragment — текст ПЕРЕВОДА вокруг места вставки, посимвольно из файла: конец предыдущего абзаца + «¶» (перенос строки) + начало следующего либо один абзац целиком.
 - corrected — тот же текст с вставленным русским текстом. Ничего, кроме вставки, не меняй: всё до и после — идентично посимвольно, иначе правку некуда применить и её отклонят.
-- Начало и конец куска — целые предложения; вставка внутри абзаца или между двумя соседними абзацами. Вставка в самое начало или в самый конец главы/части — такие правки отклоняются.
+- Начало и конец куска — целые предложения; вставка внутри абзаца или между двумя соседними абзацами. Вставка в самое начало или в самый конец главы — такие правки отклоняются.
 - Если место пропуска определить НЕЛЬЗЯ (нет обоих соседних кусков) — скопируй fragment в corrected БЕЗ ИЗМЕНЕНИЙ и напиши в reason «пропуск, нужна ручная вставка», плюс кратко — что потеряно. Такая запись попадёт человеку.
 
 Формат ответа — СТРОГО JSON-массив. Без markdown-обёртки, без ```, без пояснений до или после JSON:
@@ -300,60 +302,27 @@ def strip_chapter_headers(content):
 
 
 # ─────────────────────────────────────────────
-# ЧАНКИ
-# ─────────────────────────────────────────────
-
-def split_into_chunks(content, max_tokens):
-    """Чанкование ПО ТОКЕНАМ (оценка estimate_tokens): абзацы → строки."""
-    if estimate_tokens(content) <= max_tokens:
-        return [content]
-    chunks, current, cur_size = [], [], 0
-    for para in content.split("\n\n"):
-        ps = estimate_tokens(para) + 1
-        if cur_size + ps > max_tokens and current:
-            chunks.append("\n\n".join(current))
-            current, cur_size = [], 0
-        if ps > max_tokens:
-            if current:
-                chunks.append("\n\n".join(current))
-                current, cur_size = [], 0
-            lines, buf, ls = para.split("\n"), [], 0
-            for line in lines:
-                lt = estimate_tokens(line) + 1
-                if ls + lt > max_tokens and buf:
-                    chunks.append("\n".join(buf))
-                    buf, ls = [], 0
-                buf.append(line)
-                ls += lt
-            if buf:
-                chunks.append("\n".join(buf))
-        else:
-            current.append(para)
-            cur_size += ps
-    if current:
-        chunks.append("\n\n".join(current))
-    return chunks or [content]
-
-
-# ─────────────────────────────────────────────
 # СБОР ГЛАВ
 # ─────────────────────────────────────────────
 
 def collect_chapters(start, end, file_type, budget, chapter_map, logger,
                      use_source=False):
-    """Главы диапазона: (номер, файл, папка, текст, оригинал|None, часть|None).
+    """Главы диапазона: (номер, файл, папка, текст, оригинал|None).
 
     С `use_source` рядом с переведённым файлом читается `chapter.txt` —
     пара уходит в запрос одним куском. Нет оригинала (у книги только
     перевод) — глава проверяется одна, как раньше: это не ошибка, а
     свойство книги, и о нём сообщается одной строкой итога.
 
-    Пара больше бюджета в запрос не влезает, поэтому режется на части
-    (`split_pair`): граница каждой — конец предложения, доля перевода —
-    по его собственной длине. Части одной главы считаются одной главой.
+    Глава, чья пара не влезает в бюджет запроса, в проверку НЕ идёт и
+    пишется в лог отдельной строкой. Резать её нельзя: части одной главы
+    пришлось бы проверять по отдельности, а тогда разъехавшиеся границы
+    кусков (оригинал и перевод режутся независимо) дают ложные
+    `missing_text` на стыках — модель видит «непереведённый» хвост
+    оригинала, который в переводе был передан в другой части. Оценка
+    размера — та же `estimate_tokens`, которой считается бюджет.
     """
-    chapters, skipped, chunked, no_source = [], 0, 0, 0
-    OV = 200
+    chapters, skipped, too_big, no_source = [], 0, [], 0
     for i in range(start, end + 1):
         paths = chapter_map.get(i)
         if not paths:
@@ -370,105 +339,32 @@ def collect_chapters(start, end, file_type, budget, chapter_map, logger,
             if src_fp is None or not (source or "").strip():
                 source = None
                 no_source += 1
-        if source is not None:
-            pair_tokens = estimate_tokens(content) + estimate_tokens(source)
-            parts = split_pair(content, source, budget - OV)
-        else:
-            pair_tokens = estimate_tokens(content)
-            parts = None
-        if parts is not None and len(parts) > 1:
-            chunked += 1
-            logger.info(f"Глава {i}: пара {pair_tokens} ток. (оценка) → "
-                        f"{len(parts)} частей")
-            for k, (tr_part, src_part) in enumerate(parts, 1):
-                chapters.append((i, fp, paths[0], tr_part, src_part,
-                                 (k, len(parts))))
+        size = estimate_tokens(content) + _tokens_of(source) + PROMPT_OVERHEAD
+        if size > budget:
+            too_big.append((i, size))
+            logger.error(f"✗ Глава {i}: {size} ток. (оценка) — больше "
+                         f"бюджета {budget}, в проверку не идёт. "
+                         f"Поднимите «Бюджет запроса» до {size} и "
+                         f"перезапустите только эту главу.")
             continue
-        if parts is not None:
-            tr_part, src_part = parts[0]
-            chapters.append((i, fp, paths[0], tr_part, src_part, None))
-            continue
-        if pair_tokens + OV > budget:
-            mc = budget - OV
-            ch = split_into_chunks(content, mc)
-            chunked += 1
-            logger.info(f"Глава {i}: {estimate_tokens(content)} ток. "
-                        f"(оценка) → {len(ch)} чанков")
-            for c in ch:
-                chapters.append((i, fp, paths[0], c, None, None))
-            continue
-        chapters.append((i, fp, paths[0], content, None, None))
+        chapters.append((i, fp, paths[0], content, source))
     total = end - start + 1
     logger.info(
         f"Сбор: найдено={len(chapters)}, пропущено={skipped}, "
-        f"разрезано={chunked}, диапазон={total}")
+        f"не влезло={len(too_big)}, диапазон={total}")
     if use_source:
-        logger.info(f"Сверка с оригиналом: пар={len(chapters) - no_source}, "
-                    f"без оригинала={no_source} (проверяются только по переводу)")
+        logger.info(f"Сверка с оригиналом: пар="
+                    f"{len(chapters) - no_source}, без оригинала={no_source} "
+                    f"(проверяются только по переводу)")
+    if too_big and len(too_big) <= 20:
+        nums = ", ".join(str(n) for n, _ in too_big)
+        logger.warning(f"⚠️ Не влезли в бюджет ({len(too_big)}): гл. {nums}")
+    elif too_big:
+        logger.warning(f"⚠️ Не влезли в бюджет: {len(too_big)} глав — "
+                       f"поднимите бюджет или проверьте их по отдельности")
     if total > 0 and skipped / total > 0.1:
         logger.warning(f"⚠️ Пропущено {skipped}/{total} ({skipped/total:.0%})")
     return chapters
-
-
-def split_pair(trans, source, budget):
-    """Режем пару «перевод + оригинал» на части, не больше бюджета.
-
-    Единица реза — ПРЕДЛОЖЕНИЕ (`core.common.sentence_spans`): часть не
-    обрывается посередине фразы. Доля каждой части — токены своей стороны
-    (оценка та же, что у бюджета): оригинал идёт по своим токенам, перевод —
-    по своим. Он в 2–3 раза длиннее, поэтому доля оригинала в токенах и в
-    символах — разные величины, и считать её надо ровно тем счётчиком,
-    которым задан бюджет.
-
-    Выравнивание «по смыслу» здесь не делается и не нужно: сдвиг на
-    предложение-два на сверку смысла не влияет, а перевод после ручных
-    правок всё равно не совпадает с оригиналом один к одному.
-
-    Части обоих текстов склеиваются обратно в исходный — ни один символ не
-    теряется (тест это проверяет).
-    """
-    trans = trans or ""
-    source = source or ""
-    if budget <= 0 or estimate_tokens(trans) + estimate_tokens(source) <= budget:
-        return [(trans, source)]
-    out = []
-    pos_t = pos_s = 0
-    while True:
-        rest = estimate_tokens(trans[pos_t:]) + estimate_tokens(source[pos_s:])
-        if rest <= budget:
-            break
-        # сколько частей ещё нужно, если резать равномерно
-        left = max(2, -(-rest // budget))
-        goal_t = max(estimate_tokens(trans[pos_t:]) / left, 1.0)
-        goal_s = max(estimate_tokens(source[pos_s:]) / left, 1.0)
-        end_t = _cut_by_tokens(trans, pos_t, goal_t)
-        end_s = _cut_by_tokens(source, pos_s, goal_s)
-        if end_t <= pos_t or end_s <= pos_s:
-            # одно предложение крупнее доли бюджета — дробим его нет смысла:
-            # остаток отдаётся одной частью, как есть
-            break
-        out.append((trans[pos_t:end_t], source[pos_s:end_s]))
-        pos_t, pos_s = end_t, end_s
-    out.append((trans[pos_t:], source[pos_s:]))
-    return out
-
-
-def _cut_by_tokens(text, start, want_tokens):
-    """Позиция реза: около `want_tokens` от `start`, но ВСЕГДА по концу
-    предложения — иначе часть кончится на середине фразы и модель увидит
-    обрыв, которого в книге нет. Возвращает индекс в `text`.
-    """
-    body = text[start:]
-    if not body:
-        return len(text)
-    acc = 0.0
-    end = len(text)
-    for _s, e in sentence_spans(body):
-        acc += estimate_tokens(body[_s:e])
-        if acc >= want_tokens:
-            end = start + e
-            break
-    return end
 
 
 # ─────────────────────────────────────────────
@@ -476,36 +372,34 @@ def _cut_by_tokens(text, start, want_tokens):
 # ─────────────────────────────────────────────
 
 def build_batches(chapters, budget, logger, per_request=0):
-    """Пакеты глав.
+    """Пакеты глав: каждая глава целиком, без разрезания на части.
 
-    `per_request` > 0 — пакет по числу ГЛАВ: части одной разрезанной
-    главы всегда идут вместе и считаются одной главой (иначе половина
-    главы проверялась бы без остальной, а её хвост был бы ложным
-    missing_text). `per_request` = 0 — пакет собирается по бюджету, как
-    было до сверки с оригиналом; части одной главы так же не разделяются.
+    `per_request` > 0 — пакет по числу ГЛАВ (сколько глав человек заказал
+    в одном запросе); 0 — пакет собирается только по бюджету. Бюджет
+    действует в обоих режимах и закрывает пакет раньше, чем наберётся
+    `per_request` глав: глава либо входит целиком, либо начинает новый
+    пакет, но никогда не режется пополам. Части одной главы в разных
+    пакетах дали бы ложные `missing_text` на стыке — поэтому их нет.
     """
     if not chapters:
         return []
-    batches, cur, size, seen = [], [], 0, set()
-    OV = 200
+    batches, cur, size, count = [], [], 0, 0
     for item in chapters:
-        n = item[0]
-        new_chapter = n not in seen
-        s = estimate_tokens(item[3]) + _tokens_of(_item_source(item)) + OV
+        s = estimate_tokens(item[3]) + _tokens_of(_item_source(item)) \
+            + PROMPT_OVERHEAD
         over_budget = bool(cur) and size + s > budget
-        over_count = bool(per_request) and new_chapter and len(seen) >= per_request
-        if cur and (over_count or (over_budget and new_chapter)):
+        over_count = bool(per_request) and count >= per_request
+        if cur and (over_count or over_budget):
             batches.append(cur)
-            cur, size, seen = [], 0, set()
-            new_chapter = True
+            cur, size, count = [], 0, 0
         cur.append(item)
         size += s
-        if new_chapter:
-            seen.add(n)
+        count += 1
     if cur:
         batches.append(cur)
     if per_request:
-        logger.info(f"Пакетов: {len(batches)} (по {per_request} глав в запросе)")
+        logger.info(f"Пакетов: {len(batches)} (до {per_request} глав "
+                    f"в запросе, бюджет {budget})")
     else:
         logger.info(f"Пакетов: {len(batches)} "
                     f"(бюджет: {budget} токенов, оценка)")
@@ -518,8 +412,8 @@ def _tokens_of(text):
 
 
 def _item_source(item):
-    """Оригинал элемента батча («" — его нет): элемент — кортеж
-    (номер, файл, папка, текст[, оригинал, часть])."""
+    """Оригинал элемента батча ("" — его нет): элемент — кортеж
+    (номер, файл, папка, текст[, оригинал])."""
     return (item[4] if len(item) > 4 else "") or ""
 
 
@@ -636,7 +530,8 @@ def validate_errors(errors, valid_ch, batch_contents, logger,
                              "нужна ручная сверка")
                 manual += 1
             elif place[0] == 0 or place[0] >= len(frag):
-                # вставка только в самое начало/конец — приманка на стыке частей
+                # вставка только в самое начало/конец: адрес не доказан
+                # (край куска — не место, а граница того, что модель видела)
                 e["type"] = "manual"
                 e["note"] = ("вставка только в начало/конец куска — "
                              "место не доказано")
@@ -658,28 +553,20 @@ def validate_errors(errors, valid_ch, batch_contents, logger,
 # ─────────────────────────────────────────────
 
 def compose_batch_text(batch) -> str:
-    """Текст батча для LLM: заголовок главы («=== Глава N ===», с
-    нумерацией частей для разрезанных) + текст. С оригиналом — пара блоков
-    `[ОРИГИНАЛ]` и `[ПЕРЕВОД]` одной главы. Используется и в предпросмотре
-    запроса.
+    """Текст батча для LLM: заголовок «=== Глава N ===» + текст. С
+    оригиналом — пара блоков `[ОРИГИНАЛ]` и `[ПЕРЕВОД]` одной главы.
+    Используется и в предпросмотре запроса.
 
     Заголовок главы из обоих текстов вырезан (`strip_chapter_headers`): он
     переводится свободно, и его расхождение с оригиналом — не missing_text.
+    Глава в батче всегда целиком: нарезки на части нет, поэтому и нумерации
+    частей здесь нет.
     """
-    ch_counts = defaultdict(int)
-    for c in batch:
-        ch_counts[c[0]] += 1
-    ch_seen = defaultdict(int)
     parts = []
     for c in batch:
         cleaned = strip_chapter_headers(c[3])
         source = strip_chapter_headers(_item_source(c))
-        if ch_counts[c[0]] > 1:
-            ch_seen[c[0]] += 1
-            hdr = (f"=== Глава {c[0]} (часть {ch_seen[c[0]]}/"
-                   f"{ch_counts[c[0]]}) ===")
-        else:
-            hdr = f"=== Глава {c[0]} ==="
+        hdr = f"=== Глава {c[0]} ==="
         if source and source.strip():
             body = (f"{hdr}\n[ОРИГИНАЛ]\n{source.strip()}\n\n"
                     f"[ПЕРЕВОД]\n{cleaned.strip()}")
@@ -983,9 +870,9 @@ def build_parser():
                          "только из перевода (пусто = "
                          "TRANSLATE_CHECK_LLM_USE_SOURCE).")
     ap.add_argument("--chapters_per_request", type=int, default=1, metavar="N",
-                    help="Глав в одном запросе, ГЛАВЫ (0 = пакет по бюджету); "
-                         "части одной сверхбольшой главы считаются одной "
-                         "главой (пусто = "
+                    help="Глав в одном запросе, ГЛАВЫ (0 = пакет только по "
+                         "бюджету). Бюджет закрывает пакет раньше, но глава "
+                         "никогда не режется (пусто = "
                          "TRANSLATE_CHECK_LLM_CHAPTERS_PER_REQUEST).")
     ap.add_argument("--retry_empty", type=int, default=0, metavar="N",
                     help="Повторов при отсутствии правок, ШТ (0 = нет; пусто = "
