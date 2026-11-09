@@ -3004,7 +3004,8 @@ def test_chapter_sizes_skips_empty_and_respects_type(jobs_srv, tmp_path):
     from test_web_jobs import __name__ as _n  # noqa: F401
     from core.common import build_chapter_map
     ch_map = build_chapter_map(root)
-    sizes, _texts, empty = _chapter_sizes(_C, ch_map, "polished")
+    sizes, _texts, empty, _sig = _chapter_sizes(
+        _C, ch_map, "polished")
     assert sizes[1][0] == len("перевод".encode())
     # глава 2: polished ПУСТ — перевода нет, и redacted не подставляется
     # (стадия читает строго свой тип); оригинал при этом посчитан
@@ -3017,9 +3018,41 @@ def test_chapter_sizes_skips_empty_and_respects_type(jobs_srv, tmp_path):
     # глава вовсе без текста (нет ни перевода, ни оригинала) — отдельный счёт
     (root / "00004").mkdir()
     (root / "00004" / "polished.txt").write_text("", encoding="utf-8")
-    _s2, _t2, empty2 = _chapter_sizes(_C, build_chapter_map(root),
-                                      "polished")
+    _s2, _t2, empty2, _sig2 = _chapter_sizes(
+        _C, build_chapter_map(root), "polished")
     assert empty2 == 1, "глава без единого байта текста считается отдельно"
+
+
+def test_pair_ratio_cache_sees_content_change(jobs_srv, tmp_path):
+    """Правка содержания главы пересчитывает коэффициент.
+
+    Кеш опирался на `dir_fingerprint(chapters/)`, а от подпапки главы тот
+    берёт только имя и mtime: перезапись существующего файла mtime папки
+    не меняет, и после смены языка перевода коэффициент оставался 4.2 при
+    реальных 3.18. Теперь отпечаток считается из `stat` самих файлов
+    выборки."""
+    import time
+    from web.api_stage import (_chapter_sizes, _pair_ratio_cached,
+                              _PAIR_RATIO_CACHE)
+    from core import common as C
+    _PAIR_RATIO_CACHE.clear()
+    root = tmp_path / "chapters"
+    for n in (1, 2):
+        d = root / f"{n:05d}"
+        d.mkdir(parents=True)
+        (d / "chapter.txt").write_text("原文" * 300, encoding="utf-8")
+        (d / "polished.txt").write_text("перевод " * 300, encoding="utf-8")
+    _, texts, _, sig = _chapter_sizes(C, C.build_chapter_map(root), "polished")
+    r1 = _pair_ratio_cached(C, tmp_path, texts, sig)
+    time.sleep(0.02)
+    for n in (1, 2):
+        (root / f"{n:05d}" / "polished.txt").write_text(
+            "translation " * 300, encoding="utf-8")
+    _, texts2, _, sig2 = _chapter_sizes(C, C.build_chapter_map(root),
+                                        "polished")
+    r2 = _pair_ratio_cached(C, tmp_path, texts2, sig2)
+    assert r1 != r2, f"коэффициент не пересчитался: {r1} → {r2}"
+    assert sig != sig2, "отпечаток выборки не увидел правку файла"
 
 
 def test_stage_options_cache_invalidates(jobs_srv, tmp_path):

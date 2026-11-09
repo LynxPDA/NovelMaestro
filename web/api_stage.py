@@ -446,7 +446,7 @@ _PAIR_RATIO_CACHE: dict = {}
 
 
 def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
-    """Байты файлов глав одним проходом: `(sizes, sample_texts, empty)`.
+    """Байты файлов глав одним проходом: `(sizes, sample_texts, empty, sig)`.
 
     `sizes` — {номер: (перевод, оригинал)} в байтах. `sample_texts` — тексты
     первых `PAIR_SAMPLE` глав, у которых есть перевод: по ним считается
@@ -474,6 +474,7 @@ def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
         order += ["polished.txt", "redacted.txt", "translated.txt"]
     sizes: dict = {}
     texts: list = []
+    sig: list = []
     empty = 0
     for num, dirs in sorted(ch_map.items()):
         if not dirs:
@@ -504,10 +505,19 @@ def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
         if tr or src:
             sizes[num] = (tr, src)
         if tr_name and len(texts) < PAIR_SAMPLE:
+            tr_st = entries[tr_name].stat()
+            sr_st = (entries["chapter.txt"].stat()
+                     if "chapter.txt" in entries else None)
+            # размер и mtime обоих файлов — отпечаток ВЫБОРКИ: правку
+            # содержания иначе не увидеть (mtime папки главы при
+            # перезаписи файла не меняется)
+            sig.append((num, tr_st.st_size, tr_st.st_mtime_ns,
+                        sr_st.st_size if sr_st else 0,
+                        sr_st.st_mtime_ns if sr_st else 0))
             texts.append((_read_text(entries[tr_name].path),
                           _read_text(entries["chapter.txt"].path)
                           if "chapter.txt" in entries else ""))
-    return sizes, texts, empty
+    return sizes, texts, empty, tuple(sig)
 
 
 def _read_text(path) -> str:
@@ -571,22 +581,26 @@ def _stage_file_type(pdir, key: str) -> str:
         return ""
 
 
-def _pair_ratio_cached(common, pdir, texts: list) -> float:
+def _pair_ratio_cached(common, pdir, sample: list, sig) -> float:
     """Байт на токен с кешем на книгу: перечитывать выборку незачем.
 
-    Ключ кеша — путь книги и отпечаток `chapters/`: правка глав меняет
-    выборку, и без отпечатка коэффициент оставался бы от прежнего текста.
-    Отпечаток уже считается для кеша опций (`_options_signature`), но здесь
-    он берётся по главам отдельно: `sizes`/`texts` могли посчитать при
-    другом составе файлов.
+    Ключ — путь книги и отпечаток ТЕХ ФАЙЛОВ, по которым мерили (`sig`
+    считает `_chapter_sizes` из самих `stat` выборки). `dir_fingerprint`
+    папки `chapters/` здесь не годится: от подпапки главы он берёт только
+    имя и mtime, а перезапись существующего файла mtime папки не меняет —
+    заменили перевод на другой язык, коэффициент остался прежним (4.2 →
+    4.2 при латинице вместо кириллицы).
+
+    Пустая выборка не кешируется: у книги без глав файлов ещё нет, и
+    запасное значение «не по чему мерить» — не измеренный коэффициент.
     """
     key = str(pdir)
-    sig = common.dir_fingerprint(pdir / "chapters")
     hit = _PAIR_RATIO_CACHE.get(key)
-    if hit is not None and hit[0] == sig:
+    if hit is not None and hit[0] == sig and hit[1] is not None:
         return hit[1]
-    ratio = _pair_ratio(common, texts)
-    _PAIR_RATIO_CACHE[key] = (sig, ratio)
+    ratio = _pair_ratio(common, sample)
+    if sig:
+        _PAIR_RATIO_CACHE[key] = (sig, ratio)
     return ratio
 
 
@@ -642,8 +656,9 @@ def _stage_options(ctx: dict) -> dict:
                 # клиент: сервер отдаёт байты и коэффициент
                 if key == "translate_check_llm":
                     ft = _stage_file_type(pdir, key)
-                    sizes, texts, empty = _chapter_sizes(common, ch_map, ft)
-                    ratio = _pair_ratio_cached(common, pdir, texts)
+                    sizes, texts, empty, sig = _chapter_sizes(
+                        common, ch_map, ft)
+                    ratio = _pair_ratio_cached(common, pdir, texts, sig)
                     out["options"]["pair_bytes"] = {
                         str(n): {"tr": tr, "src": src}
                         for n, (tr, src) in sizes.items()}
