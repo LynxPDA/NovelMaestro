@@ -658,6 +658,43 @@ def test_cac_output_locations(cac_env):
     assert (Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2_rulate.txt").is_file()
 
 
+def test_cac_missing_type_stops_build(cac_env):
+    """Пропущенная глава — ошибка сборки, а не молчаливая неполная книга.
+
+    Главу, для которой нет файла выбранного типа (сокращённый цикл оставил
+    только translated/redacted, либо тип сменили на середине книги), сборка
+    раньше теряла молча: код возврата 0, книга без части глав, а при нуле
+    найденных — пустой файл на 0 байт. Web считал запуск успешным.
+    """
+    CAC.cfg.compile_type = "redacted"  # файлов этого типа в фикстуре нет
+    rc = CAC.compile_book("txt")
+    assert rc == 1, "нет ни одной главы нужного типа — сборка обязана упасть"
+    # частичная книга не пишется: она выглядела бы готовой
+    out = Path(CAC.cfg.out_dir)
+    assert not any(out.glob("*_rulate.txt")), "пустой файл не создаётся"
+
+
+def test_cac_partial_type_miss_stops_build(cac_env):
+    """Хватает одной главы без файла типа — сборка не должна «укоротиться»."""
+    d2 = Path(CAC.cfg.base_dir) / "00000_2_x"
+    (d2 / "polished.txt").unlink()
+    rc = CAC.compile_book("txt")
+    assert rc == 1
+    out = Path(CAC.cfg.out_dir)
+    assert not any(out.glob("*_rulate.txt")), "книга без главы 2 не пишется"
+
+
+def test_cac_main_exits_nonzero_on_missing_type(cac_env, monkeypatch):
+    """Код возврата — единственный сигнал web-слою: он обязан быть ненулевым."""
+    monkeypatch.setattr(sys, "argv", [
+        "clean_and_compile.py", "--mode", "txt",
+        "--source-type", "redacted",   # файлов этого типа нет вовсе
+        "--chapters-dir", CAC.cfg.base_dir, "--tmp-dir", str(cac_env)])
+    with pytest.raises(SystemExit) as exc:
+        CAC.main()
+    assert exc.value.code == 1
+
+
 def test_cac_main_argparse(cac_env, monkeypatch):
     monkeypatch.setattr(sys, "argv", [
         "clean_and_compile.py", "--mode", "txt",

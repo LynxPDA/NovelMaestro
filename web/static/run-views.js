@@ -256,6 +256,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // завершённый запуск этой стадии; иначе — заглушка
   async function logColumn() {
     logNode = null; // панель живой стадии ниже вернёт себе узел; чужой — нет
+    /* строка прогресса принадлежит тому рендеру, который её создал: без
+       сброса ссылка на отсоединённый узел живёт до закрытия вкладки, и
+       поток событий рисует прогресс в пустоту (а при последующем живом
+       рендере — не туда). Живая панель ниже вернёт st.logBar себе. */
+    st.logBar = null;
     if (st.stage) {
       if (st.job && st.job.action === st.stage) {
         return logPanel({
@@ -312,6 +317,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
     }
     if (!j) {
+      /* карточки нет — строку прогресса рисовать некуда: ссылка на
+         отсоединённый узел прошлого рендера копила бы paint() в пустоту */
+      st.miniBar = null;
       panel.append(h("div", { class: "empty" }, "Нет активного запуска"));
       return panel;
     }
@@ -3433,7 +3441,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     const nodes = [toolbar];
     if (view.progress || UICore.isActive(job)) {
       const bar = UIC.progressRow();
-      st.logBar = bar;
+      /* Живая панель отдаёт строку прогресса потоку событий; панель
+         истории (последний завершённый запуск, показанный на чужой
+         вкладке стадии) — НЕТ. Иначе стрим активного запуска рисовал
+         свой «Глава 229 · Перевод · осталось ≈ 20 дн» в подвал чужой
+         панели с логом завершённого запуска: строка прогресса
+         относилась к другому запуску и переписывала чужой подвал. */
+      if (view.live) st.logBar = bar; else st.logBar = null;
       bar.paint(UICore.progressParts(job, view.progress));
       nodes.push(bar.el);
     } else {
@@ -3779,6 +3793,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     () => {
       if (streamCtrl) streamCtrl.abort();
       streamCtrl = null;
+      /* Отложенная запись формы (RUN_SAVE_DELAY) иначе сгорает вместе с
+         экземпляром: человек правит диапазон глав и сразу уходит на другую
+         вкладку — таймер ещё не сработал, правка не записана, а вернувшись
+         он видит старое значение. Дописываем то, что уже набрано. */
+      for (const key of Object.keys(runTimers)) {
+        if (!runTimers[key]) continue;
+        clearTimeout(runTimers[key]);
+        runTimers[key] = null;
+        if (!runPending[key]) continue;
+        runFailed[key] = !runSave(key);
+        runPending[key] = false;
+      }
     },
     { once: true },
   );

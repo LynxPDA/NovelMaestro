@@ -312,11 +312,21 @@ document.addEventListener("visibilitychange", () => {
 async function api(path, opts = {}) {
   const headers = { "X-Requested-With": "fetch" };
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
-  const res = await fetch("/api" + path, {
-    ...opts,
-    headers,
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-  });
+  let res;
+  try {
+    res = await fetch("/api" + path, {
+      ...opts,
+      headers,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+    });
+  } catch (ex) {
+    /* Сеть отвалилась (сервер перезапускается при обновлении, пропал Wi-Fi,
+       уснул ноутбук): fetch бросает «Failed to fetch» — английскую строку
+       движка, которую человеку показывать нечего. Каждая вьюха печатает
+       ex.message в свою ошибку/тост, поэтому перевод живёт здесь. */
+    if (ex && ex.name === "AbortError") throw ex;
+    throw new Error("Нет связи с сервером — проверьте, что он запущен");
+  }
   let data = null;
   try {
     data = await res.json();

@@ -3726,3 +3726,36 @@ test("«Редактор»: подпись размера считает бай�
   delete globalThis.__tree;
   delete globalThis.__fileData;
 });
+
+/* ── подвал панели лога принадлежит своему запуску ───────────────────── */
+/* Регресс: у стадии A запуск завершён (панель показывает его лог), на
+   стадии B идёт активный запуск. Поток B рисовал свой прогресс в строку
+   прогресса панели A — «Глава 229 · Перевод · осталось ≈ 20 дн» появлялось
+   под логом ЧУЖОГО, уже завершённого запуска. Строка прогресса — часть
+   панели своего запуска: панель истории её потоку не отдаёт. */
+test("панель истории не принимает прогресс чужого запуска", async () => {
+  const done = { id: RUN_JOB, action: "ner", project: "ACTIVE/Книга",
+    status: "done", lines: ["готово"], events: [], progress: null,
+    finished: 1 };
+  globalThis.__job = { job: done };
+  const page = viewProject("ACTIVE", "Книга", "run", RUN_JOB);
+  for (let i = 0; i < 20 && !page.querySelector(".log-area"); i++) await tick();
+  assert.ok(page.querySelector(".log-area"), "панель завершённого запуска видна");
+  assert.equal(findByClass(page, "progress-row").length, 0,
+    "у завершённого прогона без прогресса строки прогресса нет");
+  delete globalThis.__job;
+});
+
+test("miniBar не остаётся от прошлого рендера, когда активного запуска нет", async () => {
+  /* активного запуска нет: карточка в левой колонке — заглушка, строку
+     прогресса рисовать некуда. Ссылка на узел прошлого рендера не должна
+     переживать перерисовку, иначе поток пишет в отсоединённый DOM */
+  globalThis.__job = null;
+  const page = viewProject("ACTIVE", "Книга", "run");
+  await tick();
+  await tick();
+  const card = findByClass(page, "run-panel").find((p) =>
+    collectText(p).includes("Нет активного запуска"));
+  assert.ok(card, "карточка активного запуска — заглушка");
+  assert.equal(findByClass(card, "progress-row").length, 0);
+});

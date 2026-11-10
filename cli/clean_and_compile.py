@@ -840,7 +840,19 @@ def compile_book(mode):
         log("==========================================", out_log)
         log(f"Сборка {mode} завершена: {output_file}", out_log)
         if missing_chapters:
-            log(f"ПРОПУЩЕНО ГЛАВ: {len(missing_chapters)} ({', '.join(missing_chapters)})", out_log)
+            # Глава, для которой не нашлось файла выбранного типа, в книгу
+            # НЕ попала: молчаливая сборка давала книгу без части глав (в
+            # пределе — пустой файл на 0 байт) с кодом возврата 0, и web
+            # считал запуск успешным. Тип файлов выбирается в форме, и
+            # ошибка выбора (сокращённый цикл без polished, смена типа на
+            # середине книги) обязана остановить сборку, а не укоротить её.
+            # Файл НЕ пишем: частичная книга выглядит готовой.
+            log(f"ОШИБКА: ПРОПУЩЕНО ГЛАВ: {len(missing_chapters)} "
+                f"({', '.join(missing_chapters)})", out_log)
+            log(f"Книга НЕ собрана: у {len(missing_chapters)} глав нет файла "
+                f"типа '{cfg.compile_type}'. Проверьте «Тип файлов глав».",
+                out_log)
+            return 1
         # txt-режимы — финальный файл; epub/fb2 — промежуточный txt
         # не нужен (книга собирается из chapters_data) — не пишем
         if mode not in ("epub", "fb2"):
@@ -871,14 +883,22 @@ def compile_chunks(mode, chunk_size):
     через compile_book (имя части — output_base текущего поддиапазона)."""
     orig_start, orig_end = cfg.start, cfg.end
     current_start = orig_start
-    while current_start <= orig_end:
-        current_end = min(current_start + chunk_size - 1, orig_end)
-        cfg.start, cfg.end = current_start, current_end
-        print(f"\nСборка части {mode.upper()}: Главы {cfg.start} - {cfg.end}")
-        compile_book(mode)
-        current_start = current_end + 1
-    cfg.start, cfg.end = orig_start, orig_end
+    try:
+        while current_start <= orig_end:
+            current_end = min(current_start + chunk_size - 1, orig_end)
+            cfg.start, cfg.end = current_start, current_end
+            print(f"\nСборка части {mode.upper()}: Главы {cfg.start} - {cfg.end}")
+            rc = compile_book(mode)
+            if rc:
+                # часть собрана не полностью — остальные части не начинаем:
+                # недостающая глава в середине книги не должна выглядеть
+                # как «всё готово, кроме одного файла»
+                return rc
+            current_start = current_end + 1
+    finally:
+        cfg.start, cfg.end = orig_start, orig_end
     print(f"\nВсе части {mode.upper()} сгенерированы в {cfg.out_dir}!")
+    return 0
 
 # ==========================================
 # CLI
@@ -987,9 +1007,13 @@ def main():
     if chunk_size < 0:
         sys.exit("❌ --chunk-size должен быть >= 0 (0 = без разбивки).")
     if chunk_size == 0:
-        compile_book(mode)
+        rc = compile_book(mode)
     else:
-        compile_chunks(mode, chunk_size)
+        rc = compile_chunks(mode, chunk_size)
+    if rc:
+        # код возврата — единственный сигнал web-слою: лог скрипта успех не
+        # отменяет, а частичная книга хуже отсутствия книги
+        sys.exit(rc)
 
 
 if __name__ == "__main__":
