@@ -1368,8 +1368,13 @@ function viewProject(section, name, tab, job) {
 
   async function editorTabView() {
     const ed = editorState();
-    /* вкладка уже собрана: не пересоздаём (скролл, глава, правки, подсветка) */
-    if (ed.wrap) return ed.wrap;
+    /* вкладка уже собрана: не пересоздаём (скролл, глава, правки, подсветка).
+       Но файлы к этому моменту могли переписать стадии — возврат на вкладку
+       перечитывает панели (несохранённые правки перечитывание не трогает). */
+    if (ed.wrap) {
+      for (const p of ed.panes || []) loadPane(p, true);
+      return ed.wrap;
+    }
     const wrap = h("div", { class: "ed-wrap" });
     const toolbar = h("div", { class: "files-toolbar" });
     const grid = h("div", { class: "ed-grid" });
@@ -1541,7 +1546,12 @@ function viewProject(section, name, tab, job) {
     }
 
     /* загрузка артефакта главы в редактор (первый раз — создаёт CM) */
-    async function loadPane(pInfo) {
+    /* reload — перечитать файл с диска, даже когда редактор уже открыт.
+       Нужен при возврате на вкладку: файл могли переписать другие стадии
+       (перевод, редактура, полировка), а собранный DOM вкладки об этом не
+       знает — он живёт в ed.wrap и отдаётся целиком, минуя загрузку.
+       Несохранённые правки человека перечитывание не трогает. */
+    async function loadPane(pInfo, reload) {
       const type = pInfo.state.type;
       if (!type) {
         setEditorText(pInfo, "");
@@ -1552,7 +1562,7 @@ function viewProject(section, name, tab, job) {
       }
       /* повторный рендер вкладки: редактор уже загружен — только
          переподключаем DOM (несохранённые правки не трогаем) */
-      if (pInfo.editor && pInfo.state.text != null) {
+      if (pInfo.editor && pInfo.state.text != null && !reload) {
         pInfo.host.replaceChildren(pInfo.editor.root);
         pInfo.perr.textContent = "";
         pInfo.meta.textContent = pInfo.state.missing
@@ -1574,6 +1584,9 @@ function viewProject(section, name, tab, job) {
       pInfo.meta.textContent = "загрузка…";
       try {
         const data = await api(`/file?${q}`);
+        /* правки человека не перебиваем: несохранённое живёт в редакторе,
+           и подменять его версией с диска значило бы потерять работу */
+        if (reload && pInfo.state.dirty) return;
         pInfo.state.text = data.content;
         pInfo.state.dirty = false;
         pInfo.state.missing = !!data.missing; /* файла нет — создание при сохранении */

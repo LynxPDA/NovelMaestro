@@ -3736,6 +3736,38 @@ test("«Редактор»: выбор панелей остаётся при п
   delete globalThis.__tree;
 });
 
+test("«Редактор»: возврат на вкладку перечитывает файл, а не отдаёт кеш", async () => {
+  /* Файл на диске обновился (перевод переписали, стадию перезапустили), но
+     вкладка держит собранный DOM в ed.wrap и отдаёт его целиком, не заходя
+     в loadPane. Клик по ярлыку вкладки показывал старую версию до F5 —
+     перезагрузка пересоздавала состояние и читала файл заново. */
+  globalThis.__tree = EDITOR_TREE_TYPED;
+  globalThis.__fileData = { content: "ВАРИАНТ_ПЕРВЫЙ", size: 14, exists: true };
+  const page = await viewProject("ACTIVE", "Книга 3", "editor");
+  await tick();
+  const paneText = (p) => {
+    const host = findByClass(p, "ed-cm")[0];
+    const ta = findTag(host, "textarea")[0];
+    return ta ? ta.value : "";
+  };
+  const pane = () => findByClass(page, "ed-pane")[1];
+  assert.equal(paneText(pane()), "ВАРИАНТ_ПЕРВЫЙ", "открылось с первой версией");
+  /* файл переписали, пока вкладка была открыта */
+  globalThis.__fileData = { content: "ВАРИАНТ_ВТОРОЙ", size: 14, exists: true };
+  /* уходим на другую вкладку и возвращаемся тем же путём, что и человек —
+     кликом по ярлыку (setView, локальный рендер, без перезагрузки) */
+  const tab = (label) => findByClass(page, "tab")
+    .find((t) => collectText(t).includes(label));
+  tab("Файлы")._listeners.click[0]();
+  await tick();
+  tab("Редактор")._listeners.click[0]();
+  await tick();
+  assert.equal(paneText(pane()), "ВАРИАНТ_ВТОРОЙ",
+    "возврат на вкладку показывает файл с диска, а не прошлый кеш");
+  delete globalThis.__tree;
+  delete globalThis.__fileData;
+});
+
 test("«Редактор»: подпись размера считает байты и обновляется на правке", async () => {
   /* регресс: подпись была длиной строки в UTF-16 и обновлялась только после
      сохранения — на кириллице она врала в полтора-два раза, а до нажатия
