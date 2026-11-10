@@ -426,13 +426,53 @@ def test_wiki_llm_request_delegates(monkeypatch):
 # ══════════════════════════════════════════════════════════════════════
 # cli/translate_check_llm.py (бывший fix_errors.py)
 # ══════════════════════════════════════════════════════════════════════
-def test_re_strip_chapter_headers():
-    out = RE.strip_chapter_headers("Глава 5: Тьма\nтекст\nГлава 6: Свет\nпродолжение")
-    assert "Глава" not in out and "текст" in out and "продолжение" in out
-    # известная грань: одиночное «Глава N.» съедает и следующую строку
-    # (\s* в _HDR_RE переходит через перевод строки) — фиксируем поведение
-    out = RE.strip_chapter_headers("текст до\nГлава 6.\nпродолжение")
-    assert "текст до" in out and "Глава" not in out
+@pytest.mark.parametrize("text,number,expect", [
+    # запись заголовка на любом языке — срезается одинаково
+    ("第113章 公器私用\n\n梦神听了苏明的话。", 113, "梦神听了苏明的话。"),
+    ("Глава 113. Использование блага\n\nУслышав слова.", 113, "Услышав слова."),
+    ("Chapter 113: The Exploit\n\nThe dream god heard.", 113,
+     "The dream god heard."),
+    ("Capítulo 113 — El uso\n\nEl dios del sueño.", 113,
+     "El dios del sueño."),
+    ("Kapitel 113\n\nDer Traumgott.", 113, "Der Traumgott."),
+    ("113 Начало\n\nТекст главы.", 113, "Текст главы."),
+    # заголовков бывает несколько подряд: разбор исходника оставил строку
+    # из папки и приписал переведённую
+    ("第4章 哈莉奎茵\n\n第4章 哈莉·奎茵\n沿着楼梯往下。", 4, "沿着楼梯往下。"),
+    # нумерация в файле отстаёт на единицу — это тот же заголовок
+    ("第2693章 试探计划\n\n第2692章\n“Мы уже.”", 2693, "“Мы уже.”"),
+    # знак конца предложения ВНУТРИ названия не мешает
+    ("第61章 千百年来如此，还该如此？\n\n正文。", 61, "正文。"),
+    # проза с номером главы в начале — НЕ заголовок (после числа предлог)
+    ("В 113 году до нашей эры произошло событие, о котором писали много.",
+     113, None),
+    ("In 113 the world changed for everyone who lived there.", 113, None),
+    # проза вообще без номера — не трогается
+    ("Обычная проза без заголовка.\nВторая строка.", 113, None),
+    ("40K宇宙的萨卡星更像MCU的，是高天尊开办的角斗场。", 1942, None),
+])
+def test_re_strip_chapter_header_any_language(text, number, expect):
+    """Заголовок — короткая строка с номером главы в начале, на любом языке."""
+    out = RE.strip_chapter_header(text, number)
+    if expect is None:
+        assert out == text, f"прозу тронули: {out!r}"
+    else:
+        assert out.strip() == expect, out
+
+
+def test_re_strip_chapter_header_without_number_is_noop():
+    """Без номера главы заголовок не отличить от прозы — текст не трогаем."""
+    text = "Глава 113. Начало\n\nТекст."
+    assert RE.strip_chapter_header(text) == text
+    assert RE.strip_chapter_header(text, None) == text
+    assert RE.strip_chapter_header(text, "не число") == text
+
+
+def test_re_strip_chapter_headers_inside_text():
+    """Легаси-склейка: заголовки внутри текста тоже убираются."""
+    v = "текст до\n第6章 Свет\nпродолжение"
+    out = RE.strip_chapter_headers(v, 6)
+    assert "текст до" in out and "продолжение" in out and "第6章" not in out
 
 
 def test_re_build_batches():
