@@ -449,6 +449,12 @@ const SPEC_FIELDS = {
       default: "polished", options: ["polished", "redacted"] },
     { name: "start", label: "Начальная глава", type: "number", default: "" },
     { name: "end", label: "Конечная глава", type: "number", default: "" },
+    /* подсказка бюджета считается по этим двум полям: «Сверять с
+       оригиналом» решает, входит ли chapter.txt в вес пары */
+    { name: "use_source", label: "Сверять с оригиналом", type: "bool",
+      default: true },
+    { name: "request_budget", label: "Бюджет запроса, ТОКЕНЫ", type: "number",
+      default: "65000" },
   ],
   /* ner_check: режимы одним select, типы и поля записи — скрытые поля
      чипсов (noenv: значение живёт в браузере проекта+стадии) */
@@ -1570,6 +1576,41 @@ test("запуски epub: исходник автоподхватывается
   assert.deepEqual(sel2.children.map((o) => o.value),
     ["", "book.epub", "notes.txt", "вторая.epub"]);
   assert.equal(sel2.value, "book.epub", "подхват сохранён");
+  delete globalThis.__stageOptions;
+});
+
+test("запуски: подсказка бюджета пересчитывается по «Сверять с оригиналом»", async () => {
+  /* Подсказка «пройдут ли главы» считает вес ПАРЫ: с оригиналом в запрос
+     едут и перевод, и chapter.txt, без оригинала — только перевод (стадия
+     в этом случае оригинал не читает вовсе). Формула считала оба файла
+     всегда, поэтому снятая галка цифру не меняла: подсказка врала про
+     ёмкость бюджета до перезагрузки страницы. */
+  globalThis.__stageOptions = {
+    chapters: { min: 1, max: 2, ids: [1, 2] },
+    pair_bytes: { 1: { tr: 4000, src: 4000 }, 2: { tr: 4000, src: 4000 } },
+    pair_ratio: { value: 4, samples: 2 },
+  };
+  const page = await runStage("translate_check_llm");
+  const field = (name) => findByClass(page, "field")
+    .find((w) => w._field && w._field.name === name);
+  const status = findByClass(page, "budget-status")[0];
+  assert.ok(status, "строка статуса в форме есть");
+  const text = () => String(status.textContent || "");
+  /* пара = (4000 + 4000) / 4 + запас 3000 = 5000 токенов */
+  assert.match(text(), /Средняя глава 5\s?000 ток\./, text());
+  assert.match(text(), /входит ≈13 глав/, text());
+  /* снимаем «Сверять с оригиналом»: остаётся только перевод
+     (4000 / 4 + 3000 = 4000 токенов), ёмкость бюджета растёт */
+  field("use_source")._input.checked = false;
+  field("use_source")._input.dispatchEvent({ type: "change" });
+  await tick();
+  assert.match(text(), /Средняя глава 4\s?000 ток\./, text());
+  assert.match(text(), /входит ≈16 глав/, text());
+  /* и обратно: галка возвращает вес пары */
+  field("use_source")._input.checked = true;
+  field("use_source")._input.dispatchEvent({ type: "change" });
+  await tick();
+  assert.match(text(), /Средняя глава 5\s?000 ток\./, text());
   delete globalThis.__stageOptions;
 });
 

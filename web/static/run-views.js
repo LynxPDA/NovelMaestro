@@ -2165,6 +2165,15 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const bw = fieldWraps["request_budget"];
       const budget = Number(
         (bw && bw._input && bw._input.value) || vals["request_budget"] || 0);
+      // «Сверять с оригиналом» решает, поедет ли chapter.txt в том же
+      // запросе (`collect_chapters` стадии): выключено — оригинал не
+      // читается вовсе, и пара весит только перевод. Считаем по ТОМУ ЖЕ
+      // значению, что уйдёт в argv запуска (bool-поле едет явным флагом),
+      // иначе подсказка обещала бы ёмкость, которой в запуске не будет.
+      const srcWrap = fieldWraps["use_source"];
+      const srcRaw = srcWrap && srcWrap._input
+        ? srcWrap._input.checked : vals["use_source"];
+      const withSource = UICore.boolOn(srcRaw);
       const ch = opts.chapters || {};
       const rs = Number(vals["start"] || ch.min || 0);
       const re = Number(vals["end"] || ch.max || 0);
@@ -2179,11 +2188,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return;
       }
       nums.sort((a, b) => a - b);
-      // пара = перевод + оригинал: токены обоих, плюс накладные промпта
+      // Пара = перевод + оригинал (когда сверка включена): токены обоих,
+      // плюс накладные промпта. Без оригинала в запросе его байтов нет.
       const PROMPT_OVERHEAD = 3000;
       const tokens = (n) => {
         const p = sizes[n] || {};
-        const bytes = Number(p.tr || p[0] || 0) + Number(p.src || p[1] || 0);
+        const bytes = Number(p.tr || p[0] || 0)
+          + (withSource ? Number(p.src || p[1] || 0) : 0);
         return Math.round(bytes / ratio) + PROMPT_OVERHEAD;
       };
       const parts = [];
@@ -2338,6 +2349,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           rangeRow._end.addEventListener("input", budgetStatusRow.refresh);
         }
       }
+      // «Сверять с оригиналом» меняет вес пары (с оригиналом — перевод +
+      // chapter.txt, без него — только перевод), поэтому подсказка обязана
+      // пересчитаться сразу, а не только после перезагрузки страницы.
+      const srcWrap = fieldWraps["use_source"];
+      const si = srcWrap && srcWrap._input;
+      if (si) ["change", "input"].forEach(
+        (ev) => si.addEventListener(ev, budgetStatusRow.refresh));
       budgetStatusRow.refresh();
     }
 
