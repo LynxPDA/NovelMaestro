@@ -3937,14 +3937,12 @@ async function main() {
     if (info.cards !== 4 || info.fields !== 4)
       problems.push(`tcl: карточек ${info.cards} / строк ${info.fields} `
         + "(ожидаем 4 и 4)");
-    // две оси: тип ошибки и группа «сверка с оригиналом / текст перевода»
+    // ось одна — тип находки: сверки с оригиналом и вставки больше нет
     if (!info.labels.includes("Тип ошибки:"))
       problems.push(`tcl: оси фильтра ${info.labels.join(", ")}`);
-    if (!info.labels.some((l) => l.startsWith("Группа:")))
-      problems.push(`tcl: нет оси «Группа» — ${info.labels.join(", ")}`);
-    if (!info.chips.includes("сверка с оригиналом (1)"))
-      problems.push(`tcl: нет чипса группы сверки (${info.chips.join(", ")})`);
-    if (info.chips.length !== 6)
+    if (info.labels.some((l) => l.startsWith("Группа:")))
+      problems.push(`tcl: лишняя ось «Группа» — ${info.labels.join(", ")}`);
+    if (info.chips.length !== 4)
       problems.push(`tcl: чипсов ${info.chips.length} `
         + `(${info.chips.join(", ")})`);
     if (info.sel !== "все") problems.push(`tcl: статус-фильтр «${info.sel}»`);

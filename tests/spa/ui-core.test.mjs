@@ -2040,25 +2040,17 @@ test("textBytes: байты UTF-8, а не единицы UTF-16", () => {
   assert.ok(short < long, `сокращение текста уменьшает размер: ${short} < ${long}`);
 });
 
-test("fixGroupOf: находки делятся на сверку с оригиналом, текст и ручную", () => {
-  assert.equal(UICore.fixGroupOf("mistranslation"), "сверка с оригиналом");
-  assert.equal(UICore.fixGroupOf("typo"), "текст перевода");
-  assert.equal(UICore.fixGroupOf("grammar"), "текст перевода");
-  assert.equal(UICore.fixGroupOf("MANUAL"), "к человеку");
-  assert.equal(UICore.fixGroupOf(""), "");
-});
-
-test("reviewAxes('tcl'): вторая ось — группа находки", () => {
+test("reviewAxes('tcl'): ось только одна — тип находки", () => {
   const axes = UICore.reviewAxes("tcl");
-  assert.deepEqual(axes.map((a) => a.key), ["type", "group"]);
+  assert.deepEqual(axes.map((a) => a.key), ["type"]);
   const vals = UICore.reviewAxisValues(
     [{ type: "mistranslation" }, { type: "mistranslation" },
-     { type: "typo" }, { type: "manual" }], axes[1]);
+     { type: "typo" }, { type: "manual" }], axes[0]);
   assert.deepEqual(vals.map((v) => [v.label, v.count]),
-    [["сверка с оригиналом", 2], ["текст перевода", 1], ["к человеку", 1]]);
-  // скрытая группа не проходит фильтр, остальные — проходят
-  const hidden = { group: ["сверка с оригиналом"] };
-  assert.equal(UICore.reviewFilterMatch({ type: "mistranslation" }, hidden, "tcl"),
-    false);
+    [["mistranslation", 2], ["typo", 1], ["manual", 1]]);
+  // скрытый тип не проходит фильтр, остальные — проходят
+  const hidden = { type: ["mistranslation"] };
+  assert.equal(UICore.reviewFilterMatch({ type: "mistranslation" }, hidden,
+    "tcl"), false);
   assert.equal(UICore.reviewFilterMatch({ type: "typo" }, hidden, "tcl"), true);
 });

@@ -564,19 +564,6 @@
         },
         empty: "без типа",
       },
-      {
-        /* Группа — ответ на вопрос «это нашла сверка с оригиналом или
-           проверка русского текста?»: типов ошибок девять, и отследить
-           именно сверочные находки по одному `type` неудобно. Порядок
-           групп — от самого дешёвого для чтения к самому дорогому:
-           правка слова, правка смысла, ручная вставка. */
-        key: "group",
-        label: "Группа",
-        valueOf: function (e) {
-          return fixGroupOf(String(e.type || ""));
-        },
-        empty: "без группы",
-      },
     ],
     /* отчёт translate_check: у главы бывает несколько строк разных проверок,
        и ось одна — значение — тип строки ошибки (CHECエK_KINDS) */
@@ -601,31 +588,6 @@
     fatal: { label: "Глава пропущена", tag: "файл не нашёлся или спорный" },
     other: { label: "Другое", tag: "размер файла, чтение и прочее" },
   };
-
-  /* Группы находок проверки перевода (LLM) — по типу записи:
-     * «сверка с оригиналом» — без оригинала такую ошибку не увидеть
-       (смысл разошёлся);
-     * «текст перевода» — видно и без оригинала (опечатка, падеж);
-     * «к человеку» — `manual`: место правки не доказано, применяет
-       человек. Отдельная группа, потому что такие записи уходят со
-       статусом «отклонить» и требуют ручной сверки. */
-  var FIX_GROUPS = {
-    source: "сверка с оригиналом",
-    text: "текст перевода",
-    manual: "к человеку",
-  };
-  var SOURCE_FIX_TYPES = ["mistranslation"];
-  var TEXT_FIX_TYPES = ["typo", "missing_word", "grammar", "logic",
-                        "incomplete", "artifact"];
-
-  function fixGroupOf(type) {
-    var t = String(type || "").trim().toLowerCase();
-    if (!t) return "";
-    if (t === "manual") return FIX_GROUPS.manual;
-    if (SOURCE_FIX_TYPES.indexOf(t) >= 0) return FIX_GROUPS.source;
-    if (TEXT_FIX_TYPES.indexOf(t) >= 0) return FIX_GROUPS.text;
-    return "";
-  }
 
   function checkErrorKind(kind) {
     return CHECK_ERROR_KINDS[String(kind || "")] || CHECK_ERROR_KINDS.other;
@@ -2486,8 +2448,6 @@
     reviewStatusBucket: reviewStatusBucket,
     REVIEW_STATUS_BUCKETS: REVIEW_STATUS_BUCKETS,
     checkErrorKind: checkErrorKind,
-    fixGroupOf: fixGroupOf,
-    FIX_GROUPS: FIX_GROUPS,
     checkErrorKinds: checkErrorKinds,
     checkVisibleErrors: checkVisibleErrors,
 
