@@ -438,10 +438,13 @@ def test_re_strip_chapter_headers():
 def test_re_build_batches():
     chapters = [(1, "f", "d", "х" * 300), (2, "f", "d", "х" * 300),
                 (3, "f", "d", "х" * 300)]
-    # 300 символов кириллицы ≈ 99 токенов + OV 200 → ~299 токенов/шт
-    batches = RE.build_batches(chapters, 500, SilentLog())
+    ov = RE.PROMPT_OVERHEAD
+    one = RE.estimate_tokens("х" * 300) + ov      # одна глава с запасом
+    # бюджет на одну главу — каждая едет отдельно
+    batches = RE.build_batches(chapters, one, SilentLog())
     assert len(batches) == 3 and all(len(b) == 1 for b in batches)
-    batches = RE.build_batches(chapters, 5000, SilentLog())
+    # бюджета хватает на все три
+    batches = RE.build_batches(chapters, one * 3, SilentLog())
     assert len(batches) == 1 and len(batches[0]) == 3
     assert RE.build_batches([], 700, SilentLog()) == []
 
@@ -450,12 +453,14 @@ def test_re_build_batches_by_chapters_and_pairs():
     """Пакет по числу ГЛАВ (ГЛАВЫ): глава либо входит целиком, либо
     начинает новый пакет; бюджет закрывает пакет раньше счёта глав."""
     chapters = [(1, "f", "d", "а"), (2, "f", "d", "б"), (3, "f", "d", "в")]
-    batches = RE.build_batches(chapters, 5000, SilentLog(), per_request=1)
+    # бюджет с запасом на две главы: счёт глав закрывает пакет раньше
+    two = (RE.estimate_tokens("а") + RE.PROMPT_OVERHEAD) * 2
+    batches = RE.build_batches(chapters, 50000, SilentLog(), per_request=1)
     assert [[c[0] for c in b] for b in batches] == [[1], [2], [3]]
-    batches = RE.build_batches(chapters, 5000, SilentLog(), per_request=2)
+    batches = RE.build_batches(chapters, two, SilentLog(), per_request=2)
     assert [[c[0] for c in b] for b in batches] == [[1, 2], [3]]
-    batches = RE.build_batches(chapters, 5000, SilentLog(), per_request=0)
-    assert [[c[0] for c in b] for b in batches] == [[1, 2, 3]]
+    batches = RE.build_batches(chapters, two, SilentLog(), per_request=0)
+    assert [[c[0] for c in b] for b in batches] == [[1, 2], [3]]
     # пары (оригинал+перевод): в бюджете оба текста
     pair = [(1, "f", "d", "х" * 300, "字" * 300)]
     assert len(RE.build_batches(pair, 5000, SilentLog())) == 1
@@ -466,8 +471,11 @@ def test_re_build_batches_by_chapters_and_pairs():
 def test_re_build_batches_budget_closes_packet_before_count():
     """5 глав по 13k и бюджет 65k: уходят 4 целые главы, пятая отдельным
     пакетом — она НЕ режется (второй вариант пореза был бы неверен)."""
+    one = RE.estimate_tokens("х" * 35000) + RE.PROMPT_OVERHEAD
     chapters = [(i, "f", "d", "х" * 35000) for i in range(1, 6)]
-    batches = RE.build_batches(chapters, 65000, SilentLog(), per_request=5)
+    # бюджет на 4 главы: пятая уходит отдельным пакетом
+    batches = RE.build_batches(chapters, int(one * 4), SilentLog(),
+                               per_request=5)
     assert [[c[0] for c in b] for b in batches] == [[1, 2, 3, 4], [5]]
 
 
@@ -522,8 +530,9 @@ def test_re_collect_chapters_skips_oversized(tmp_path):
     (d2 / "polished.txt").write_text("текст второй", encoding="utf-8")
     cmap = {1: [str(d1)], 2: [str(d2)]}
     log = SilentLog()
-    # маленький бюджет: крупная глава 1 не влезает, глава 2 проходит
-    chapters = RE.collect_chapters(1, 2, "polished", 300, cmap, log)
+    # бюджет меньше одной главы 1: она не влезает, глава 2 проходит
+    chapters = RE.collect_chapters(1, 2, "polished",
+                                   RE.PROMPT_OVERHEAD + 10, cmap, log)
     assert [ch[0] for ch in chapters] == [2]
     # нормальный бюджет: обе на месте и целиком
     chapters = RE.collect_chapters(1, 2, "polished", 65000, cmap, log)

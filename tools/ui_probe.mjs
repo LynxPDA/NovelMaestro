@@ -2909,7 +2909,7 @@ async function main() {
       await page.locator(".run-form").first().screenshot(
         { path: path.join(OUT, "scenario-budget-status.png") });
     }
-    if (okBig.hidden || !/Все главы диапазона влезут в бюджет \(2\)/.test(okBig.text)) {
+    if (okBig.hidden || !/Все главы диапазона проходят по бюджету \(2\)/.test(okBig.text)) {
       problems.push(`budget-status: при большом бюджете «${okBig.text}»`);
     }
     // средняя глава и ёмкость бюджета — второй частью той же строки
@@ -2924,7 +2924,7 @@ async function main() {
     // коэффициент байт/токен считается сервером по тексту книги и назван в
     // строке — иначе цифра выглядит магией, а фиксированные 2.5 давали
     // ложные «не влезет» почти на каждой главе
-    if (!/\d+[.,]\d+ байт\/токен по \d+ глав/.test(okBig.text)) {
+    if (!/\d+[.,]\d+ байт\/токен/.test(okBig.text)) {
       problems.push(`budget-status: не назван коэффициент «${okBig.text}»`);
     }
     if (overSmall.hidden || !/Не влезет 2 из 2/.test(overSmall.text)) {
@@ -2934,7 +2934,7 @@ async function main() {
       problems.push("budget-status: «не влезет» не выделено предупреждением");
     }
     log(`${problems.length === before ? "✅" : "❌"} budget-status `
-      + `все влезут=${!okBig.warn}, не влезет=${overSmall.warn}`);
+      + `все проходят=${!okBig.warn}, не влезет=${overSmall.warn}`);
   }
 
   /* Отчёт translate_check: шкала допуска пары — полоса при текущем K,

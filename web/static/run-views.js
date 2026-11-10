@@ -2172,7 +2172,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       }
       nums.sort((a, b) => a - b);
       // пара = перевод + оригинал: токены обоих, плюс накладные промпта
-      const PROMPT_OVERHEAD = 200;
+      const PROMPT_OVERHEAD = 3000;
       const tokens = (n) => {
         const p = sizes[n] || {};
         const bytes = Number(p.tr || p[0] || 0) + Number(p.src || p[1] || 0);
@@ -2205,7 +2205,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const mean = total / nums.length;
       const capacity = Math.max(1, Math.floor(budget / mean));
       if (!over.length) {
-        parts.push(`Все главы диапазона влезут в бюджет (${fmt(nums.length)}).`);
+        parts.push(`Все главы диапазона проходят по бюджету (${fmt(nums.length)}).`);
         el.classList.remove("is-warn");
       } else {
         const list = over.length > 12
@@ -2219,8 +2219,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         + `в бюджет входит ≈${fmt(capacity)} ${plural(capacity)}.`);
       // откуда взялся коэффициент: иначе цифра выглядит магией
       if (ri.samples) {
-        parts.push(`(${fmt(ratio).replace(",", ".")} байт/токен `
-          + `по ${fmt(ri.samples)} ${plural(ri.samples)})`);
+        parts.push(`(${fmt(ratio).replace(",", ".")} байт/токен)`);
       }
       el.textContent = parts.join(" ");
       el.classList.remove("hidden");
