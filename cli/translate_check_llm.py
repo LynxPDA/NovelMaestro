@@ -62,6 +62,7 @@ from core.stage import (  # noqa: E402
     new_stage,
 )
 from core.common import (  # noqa: E402
+    FIX_ERROR_TYPES,
     REVIEW_ACCEPT,
     REVIEW_REJECT,
     apply_fix_to_text,
@@ -469,6 +470,13 @@ def validate_errors(errors, valid_ch, batch_contents, logger):
             continue
         frag, corr = e.get("fragment", ""), e.get("corrected", "")
         if not frag or len(frag) < 10 or not corr:
+            continue
+        # Тип вне списка находок — устаревший промпт или догадка модели:
+        # вставлять и удалять текст стадия больше не умеет, и такая запись
+        # не должна попасть ни в правки, ни человеку как «пропуск».
+        etype = str(e.get("type") or "").strip().lower()
+        if etype and etype not in FIX_ERROR_TYPES:
+            dropped += 1
             continue
         if frag.strip() == corr.strip():
             dropped += 1

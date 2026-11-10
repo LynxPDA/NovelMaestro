@@ -694,6 +694,22 @@ def test_check_prompt_writes_result_and_skips_llm(tmp_path, monkeypatch,
     assert "prompt_pass2" in capsys.readouterr().err
 
 
+def test_check_prompt_refuses_to_overwrite_source(tmp_path, capsys):
+    """--check-prompt, указывающий на сам промпт, файл не трогает.
+
+    PATH — файл ОТЧЁТА, а промпт берётся из --prompt_file; перепутать их
+    легко, и вердикт затирал проверяемый шаблон: стадия молча теряла
+    промпт, получая JSON с «тег не найден»."""
+    pf = tmp_path / "prompts" / "ner_prompt.txt"
+    pf.parent.mkdir(parents=True)
+    src = "<prompt_pass1>\n{chunk_text}\n</prompt_pass1>\n"
+    pf.write_text(src, encoding="utf-8")
+    args = argparse.Namespace(check_prompt=str(pf), prompt_file=str(pf))
+    assert st.check_prompt(args, "ner", _PC_CONTRACT) is True
+    assert pf.read_text(encoding="utf-8") == src, "промпт затёрт отчётом"
+    assert "файл не тронут" in capsys.readouterr().err
+
+
 def test_check_prompt_without_flag_is_noop():
     """Флага нет — обычный запуск: ничего не пишется, main() продолжает работу."""
     args = argparse.Namespace(check_prompt=None, prompt_file="prompts/x.txt")

@@ -24,6 +24,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 from . import settings as cfg
@@ -512,10 +513,19 @@ def check_prompt(args: argparse.Namespace, name: str, contract,
     path = getattr(args, "check_prompt", None)
     if not path:
         return False
+    log = preview_logger(name)
+    # PATH — файл ОТЧЁТА, а промпт берётся из --prompt_file. Перепутать их
+    # легко и дорого: вердикт затирал сам проверяемый шаблон (файл промпта
+    # превращался в JSON с «нет тега»), и стадия теряла промпт молча.
+    src = Path(str(getattr(args, file_attr, "") or ""))
+    if src.name and Path(str(path)).name == src.name:
+        log.error("❌ --check-prompt %s указывает на сам проверяемый файл: "
+                  "это путь ОТЧЁТА, промпт задаётся --prompt_file. "
+                  "Проверка не выполнена, файл не тронут.", path)
+        return True
     res = prompt_check_result(name, str(getattr(args, file_attr, "") or ""),
                               contract, json_tags, marks)
     write_prompt_check(path, res)
-    log = preview_logger(name)
     if res["problems"]:
         for line in res["problems"]:
             log.warning("⚠️ промпт: %s", line)
