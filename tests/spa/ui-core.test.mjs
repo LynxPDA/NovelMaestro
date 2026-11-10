@@ -138,6 +138,52 @@ test("etaOf и etaText: оценка конца — только у работа
   UICore.etaForget("eta-1");
 });
 
+test("etaOf: скорость следует за последними минутами, а не с начала", () => {
+  /* Память скорости считалась от `last.t` — это Unix-время
+   * (`Date.now()/1000`). Деление на ETA_SLOWDOWN давало tau ≈ 4.5e8 c:
+   * вес точки часовой давности 0.999992, то есть забывания не было вовсе
+   * и скорость оставалась средней С НАЧАЛА ПРОГОНА. Отсюда и скачки
+   * остатка на боевом сервере: медленная волна глав тянула оценку вниз,
+   * быстрая — вверх, и «11 дней» сменялись «39 днями» без всякой причины
+   * в работе.
+   *
+   * Сценарий: 20 минут быстро (стадия раз в 5 c), затем 40 минут втрое
+   * медленнее (раз в 15 c). Правда к концу — по последней скорости.
+   * Со средней с начала выходит заметно меньше правды. */
+  const realNow = Date.now;
+  const T0 = 1_700_000_000;
+  let vt = 0;
+  Date.now = () => (T0 + vt) * 1000;
+  const job = { id: "eta-speed", status: "running", created: T0 };
+  const total = 6000;
+  UICore.etaForget("eta-speed");
+  try {
+    let done = 0;
+    for (vt = 5; vt <= 1200; vt += 5) {
+      done += 1;
+      UICore.etaOf(job, { done, total });
+    }
+    for (let cur = vt; cur <= 3600; cur += 15) {
+      vt = cur;
+      done += 1;
+      UICore.etaOf(job, { done, total });
+    }
+    const e = UICore.etaOf(job, { done, total });
+    assert.ok(e, "оценка есть");
+    const truth = (total - done) * 15; // последняя скорость: 15 c на стадию
+    const off = Math.abs(e.remaining - truth) / truth;
+    assert.ok(
+      off < 0.15,
+      `оценка ${(e.remaining / 60).toFixed(0)} мин при правде `
+        + `${(truth / 60).toFixed(0)} мин (${(off * 100).toFixed(0)}%): `
+        + "скорость осталась средней с начала прогона",
+    );
+  } finally {
+    Date.now = realNow;
+    UICore.etaForget("eta-speed");
+  }
+});
+
 test("etaOf: отстающий канал не сбрасывает окно", () => {
   /* Один запуск виден с двух сторон: живой SSE в панели лога и опрос
    * /jobs (шапка, Дашборд) раз в 10 c. Снимок опроса отстаёт от живого
