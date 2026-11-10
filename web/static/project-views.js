@@ -11,6 +11,11 @@ const PAGE_SIZE = 200;
 const CHAPTER_SCOPES = ["chapter", "translated", "redacted", "polished"];
 /* типы глав на вкладке «Статус»: ключ ответа API → человеческая подпись
    (порядок — цепочка артефактов, как PROGRESS_STAGES в core/projects.py) */
+/* размеры страницы таблицы «Статуса»: 0 — «Все». Дефолт — «Все»: пропуски
+   ищут глазами по всей таблице, а разбиение нужно машине, которой тяжело
+   рисовать тысячи узлов; она его и включает — выбор запоминается */
+const STATUS_PAGE_SIZES = [0, 100, 500, 1000];
+const STATUS_PAGE_DEFAULT = 0;
 const STATUS_STAGES = [
   ["translate", "Перевод"],
   ["redact", "Редактура"],
@@ -5506,8 +5511,11 @@ function viewProject(section, name, tab, job) {
       .sort((a, b) => a - b);
     /* Таблица глав — постранично: у книги в 6018 глав она рисовала 30 258
        узлов разом, и вкладка открывалась секундами (замер: 30 258 узлов
-       против 5 364 у глоссария, который уже с пейджером). Пейджер тот же,
-       что у глоссария; страница 200 строк. */
+       против 5 364 у глоссария, который уже с пейджером). Размер выбирает
+       человек (Все / 100 / 500 / 1000), выбор живёт в состоянии вкладки,
+       по умолчанию — «Все»: у книги 6018 глав это 30 тысяч узлов, и на
+       слабой машине вкладка открывается секундами, поэтому размер дан
+       человеку вторым кликом, а не зашит константой. */
     const tbody = h("tbody", {});
     const rowFor = (id) => {
       const c = chapters[id];
@@ -5527,12 +5535,18 @@ function viewProject(section, name, tab, job) {
       );
     };
     const pager = UIC.listPager({
-      pageSize: 200,
+      pageSize: STATUS_PAGE_SIZES.includes(saved.pageSize)
+        ? saved.pageSize
+        : STATUS_PAGE_DEFAULT,
+      sizes: STATUS_PAGE_SIZES,
       label: "глав",
       list: tbody,
       rows: (page) => (page.length
         ? page.map(rowFor)
         : [h("tr", {}, h("td", { colspan: 4 }, "Глав пока нет"))]),
+      /* выбор запоминается в состоянии вкладки: переоткрыл книгу — тот же
+         размер, а размер «Все» — это отсутствие разбиения, а не её число */
+      onSize: (n) => pref.set("status", { pageSize: n }),
     });
     const table = h(
       "table",

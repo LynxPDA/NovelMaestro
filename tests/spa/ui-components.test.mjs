@@ -538,6 +538,64 @@ test("listPager: подпись счётчика своя", () => {
   assert.match(pg.el.textContent, /1 \/ 3 · отчётов: 25/);
 });
 
+/* сменить значение select и дёрнуть его обработчик change (в браузере
+   это делает событие, в заглушке El — прямой вызов) */
+function fire(node, type) {
+  for (const fn of node.listeners[type] || []) fn({ target: node });
+}
+
+test("listPager: размер страницы выбирается, «Все» — без разбиения", () => {
+  const list = new El("ul");
+  const seen = [];
+  const pg = UIC.listPager({
+    pageSize: 2,
+    sizes: [100, 500, 1000, 0],
+    list,
+    rows: (slice) => slice.map((x) => UIC.h("li", {}, String(x))),
+    onSize: (n) => seen.push(n),
+  });
+  pg.items = [1, 2, 3, 4, 5];
+  assert.equal(list.childNodes.length, 2);
+  const sel = pg.el.childNodes[0];
+  assert.equal(sel.tagName, "SELECT");
+  assert.equal(sel.value, "2"); // стартовый размер — из opts
+  // «Все»: одна страница, весь список, стрелок нет
+  sel.value = "0";
+  fire(sel, "change");
+  assert.deepEqual(seen, [0]);
+  assert.equal(pg.pageSize, 0);
+  assert.equal(list.childNodes.length, 5);
+  assert.equal(pg.page, 0);
+  assert.doesNotMatch(pg.el.textContent, /›/);
+  // возврат к «по 100» — снова страницы
+  sel.value = "100";
+  fire(sel, "change");
+  assert.deepEqual(seen, [0, 100]);
+  assert.equal(pg.pageSize, 100);
+});
+
+test("listPager: смена размера начинает список с первой страницы", () => {
+  const pg = UIC.listPager({
+    pageSize: 2,
+    sizes: [2, 500, 0],
+    rows: () => [],
+  });
+  pg.items = new Array(50).fill(0);
+  assert.equal(pg.el.childNodes.length, 4); // селект + ‹ + счётчик + ›
+  pg.el.childNodes[3].click(); // на вторую страницу
+  assert.equal(pg.page, 1);
+  const sel = pg.el.childNodes[0];
+  sel.value = "500";
+  fire(sel, "change");
+  assert.equal(pg.page, 0); // размер сменился — с начала
+});
+
+test("listPager: без sizes селекта нет", () => {
+  const pg = UIC.listPager({ pageSize: 10, rows: () => [] });
+  pg.items = new Array(30).fill(0);
+  assert.equal(pg.el.querySelector("select"), null);
+});
+
 test("listPager: список усох — страница поджимается", () => {
   const pg = UIC.listPager({ pageSize: 10, rows: () => [] });
   pg.items = new Array(100).fill(0);

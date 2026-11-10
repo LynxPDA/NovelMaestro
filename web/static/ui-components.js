@@ -418,13 +418,23 @@
    * делать на одной странице и на пустом списке: infoOnlySinglePage оставляет
    * один счётчик, hideSinglePage убирает панель совсем, hideOnEmpty — молчит
    * на пустом. */
+  /* Размеры страницы на выбор: 0 — «Все» (весь список одной страницей).
+     Список задаёт вьюха через o.sizes, значение запоминает сама. */
   function listPager(opts) {
     const o = opts || {};
-    const pageSize = Math.max(1, o.pageSize || 200);
+    const sizes = Array.isArray(o.sizes) && o.sizes.length
+      ? o.sizes.slice()
+      : null;
+    let pageSize = Math.max(0, o.pageSize == null ? 200 : Number(o.pageSize));
+    if (!pageSize) pageSize = 0;  // 0 — без разбиения
     const st = { page: 0, items: [] };
     const el = h("div", { class: "ner-pager" });
+    /* effective — сколько строк на странице на самом деле: 0 значит «все» */
+    function per() {
+      return pageSize > 0 ? pageSize : Math.max(1, st.items.length);
+    }
     function pages() {
-      return Math.max(1, Math.ceil(st.items.length / pageSize));
+      return Math.max(1, Math.ceil(st.items.length / per()));
     }
     function nav(label, disabled, delta) {
       return h(
@@ -449,12 +459,38 @@
           : ` ${st.page + 1} / ${pages()} · ${o.label || "всего"} ${st.items.length} `,
       );
     }
+    /* выбор размера: подпись «по N» и список «100 / 500 / 1000 / Все» */
+    function sizeSelect() {
+      const sel = h(
+        "select",
+        {
+          class: "input ner-pager-size",
+          title: "Сколько строк показывать на странице",
+          "aria-label": "Сколько строк показывать на странице",
+        },
+        ...sizes.map((n) => h("option", { value: String(n) },
+          n > 0 ? `по ${n}` : "Все")),
+      );
+      sel.value = String(pageSize);
+      sel.addEventListener("change", () => {
+        setPageSize(Number(sel.value));
+        if (o.onSize) o.onSize(pageSize);
+      });
+      return sel;
+    }
+    function setPageSize(v) {
+      const n = Math.max(0, Number(v) || 0);
+      if (n === pageSize) return;
+      pageSize = n;
+      st.page = 0;  // размер сменился — список показываем с начала
+      render();
+    }
     /* на одной странице списки молчат про страницы: только счётчик */
     function render() {
-      const from = st.page * pageSize;
+      const from = st.page * per();
       if (o.list) o.list.replaceChildren();
       const rows = o.rows
-        ? o.rows(st.items.slice(from, from + pageSize), st.page)
+        ? o.rows(st.items.slice(from, from + per()), st.page)
         : null;
       if (o.list && rows != null) {
         o.list.append(
@@ -468,11 +504,15 @@
       } else if (o.infoOnlySinglePage && pages() <= 1) {
         el.replaceChildren(info());
       } else {
-        el.replaceChildren(
-          nav("‹", st.page <= 0, -1),
-          info(),
-          nav("›", st.page >= pages() - 1, 1),
-        );
+        /* «Все» рисует одну страницу: стрелки не нужны, выбор размера — нужен */
+        const parts = sizes ? [sizeSelect()] : [];
+        if (pages() > 1) {
+          parts.push(nav("‹", st.page <= 0, -1), info(),
+            nav("›", st.page >= pages() - 1, 1));
+        } else {
+          parts.push(info());
+        }
+        el.replaceChildren(...parts);
       }
     }
     return {
@@ -483,6 +523,14 @@
       },
       set page(v) {
         st.page = Math.max(0, Math.min(v, pages() - 1));
+      },
+      /* размер страницы: 0 — «Все». Читается вьюхой при первой отрисовке,
+         чтобы восстановить запомненный выбор до запроса данных. */
+      get pageSize() {
+        return pageSize;
+      },
+      set pageSize(v) {
+        setPageSize(v);
       },
       /* данные задаются одним присваиванием: страница поджимается под список */
       get items() {

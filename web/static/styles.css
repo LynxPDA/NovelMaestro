@@ -2492,6 +2492,13 @@ input[type="number"] {
   color: var(--text-dim);
   font-size: 13px;
 }
+/* выбор «по N» рядом с листалкой: узкий селект общих стилей .input */
+.ner-pager-size {
+  width: auto;
+  min-width: 92px;
+  padding: 2px 6px;
+  font-size: 13px;
+}
 /* заметки используют editor-cm как файлы.
    .notes-frame переопределяется ПОСЛЕ .editor-preview-frame (см. ниже). */
 .review-wrap,
