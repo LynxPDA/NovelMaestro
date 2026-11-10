@@ -1871,13 +1871,9 @@ def apply_ner_patches(items, patches, logger=None):
 # translate_check_llm: review-записи правок текста глав (fragment → corrected)
 # ══════════════════════════════════════════════════════════════════════
 FIX_ERROR_TYPES = ("typo", "missing_word", "grammar", "logic",
-                   "incomplete", "artifact", "mistranslation",
-                   "missing_text", "extra_text")
-#: типы сверки с оригиналом: правка вставляется (`missing_text`) или
-#: удаляется (`extra_text`) — текста-заместителя в исходной цитате нет
-SOURCE_FIX_TYPES = ("missing_text", "extra_text")
+                   "incomplete", "artifact", "mistranslation")
 #: правка, которую нечем применять: LLM дала цитату без изменений
-#: (место пропуска не определено). Тексты для `apply_fix_to_text`
+#: (запись человека, а не адресованная правка). Тексты для `apply_fix_to_text`
 MANUAL_FIX_TYPE = "manual"
 
 
@@ -1888,10 +1884,9 @@ def fix_entry(raw, stage=""):
     old/new — NFC. Статус по умолчанию «принять» (человек правит
     в файле на «отклонить» при необходимости).
 
-    Исключение из «old == new» — ручная запись (`manual`, `missing_text`
-    без доказанного места вставки): у неё `new` повторяет `old`, и
-    выбрасывать её нельзя — именно она и несёт человеку «здесь пропуск,
-    вставить не смогли». Применять её нечем (new == old).
+    Исключение из «old == new» — ручная запись (`manual`): у неё `new`
+    повторяет `old`, и выбрасывать её нельзя — она несёт человеку пометку
+    о месте, требующем сверки. Применять её нечем (new == old).
     """
     if not isinstance(raw, dict):
         return None
@@ -3350,60 +3345,6 @@ def ends_sentence(text: str | None) -> bool:
     if not body:
         return False
     return body[-1] in SENTENCE_END_CHARS
-
-
-def insertion_of(old: str, new: str):
-    """Вставка ли это: `(позиция, текст вставки)` или None.
-
-    Правка `old → new`, у которой НАЧАЛО old совпадает с началом new, а
-    КОНЕЦ — с концом, — это вставка в одно место, и её место определяется
-    точно. Всё остальное (переписывание, удаление, правка падежа) вставкой
-    не является — такому пропуску место определяет человек, а не догадка.
-
-    Вставка обязана быть ЦЕЛЫМ СЛОВОМ (или фразой с пробела): дописанное
-    «не» в середине слова — это правка смысла, а не восстановленный
-    пропущенный кусок, и адресовать её как вставку нельзя.
-    """
-    old, new = str(old or ""), str(new or "")
-    if not old or not new or old == new:
-        return None
-    limit = min(len(old), len(new))
-    head = 0
-    while head < limit and old[head] == new[head]:
-        head += 1
-    tail = 0
-    while (tail < limit - head
-           and old[len(old) - 1 - tail] == new[len(new) - 1 - tail]):
-        tail += 1
-    if head + tail < len(old):
-        return None
-    # Общее начало могло попасть ВНУТРЬ слова вставки: «…здесь.\nВторой» и
-    # вставка «…здесь.\nВставка между абзацами.\nВторой» — посимвольное
-    # сравнение съедало «В» у обоих, деля вставку пополам («ставка…В»), и
-    # проверка «целым словом» ниже отклоняла настоящую вставку. Отступаем к
-    # началу слова в НОВОМ тексте и пересчитываем хвост от новой границы:
-    # старая граница хвоста годилась только для прежней головы.
-    while (0 < head < len(new) and new[head - 1].isalnum()
-           and new[head].isalnum()):
-        head -= 1
-    tail = len(old) - head
-    if tail < 0 or tail > len(new) - head:
-        return None
-    if old[head:] != new[len(new) - tail:]:
-        return None
-    ins = new[head:len(new) - tail]
-    if not ins or not ins.strip():
-        return None
-    # вставка обязана быть отдельным куском: дописанное «не» перед «долго»
-    # — правка слова, а не восстановленный пропуск, и адресовать её как
-    # вставку нельзя (её отклонит проверка места)
-    before = new[head - 1] if head else ""
-    after = new[head + len(ins)] if head + len(ins) < len(new) else ""
-    if before.isalnum() and ins[0].isalnum():
-        return None
-    if ins[-1].isalnum() and after.isalnum():
-        return None
-    return head, ins
 
 
 def fragment_occurrences(text: str, fragment: str) -> int:
