@@ -106,6 +106,24 @@ def test_comparisons_for():
     assert TC.comparisons_for("polished", ()) == []
 
 
+def test_stats_line_names_pair_base():
+    """Пара без базы называет БАЗУ ПАРЫ, а не число глав книги.
+
+    «полных глав 1» на книге в 3 главы читалось как «проверили одну из
+    одной», хотя причина другая: файл стадии завели только у одной главы
+    (сокращённый цикл прошёл не по всей книге, либо стадию добавили позже).
+    """
+    st = {"check": "polished", "n": 1, "tol_pct": 5, "off": False,
+          "center": 0.0, "sigma": 0.0, "tol": 0.0}
+    line = TC.stats_line("redacted", st)
+    assert "глав с обоими файлами: 1" in line, line
+    assert "полных глав" not in line
+    # база из двух глав и больше — обычная строка с числами, без пояснений
+    st2 = dict(st, n=3, center=1.0, sigma=0.001, tol=math.log(1.05))
+    assert "глав 3" in TC.stats_line("redacted", st2)
+    assert "обоими файлами" not in TC.stats_line("redacted", st2)
+
+
 def test_present_from_files():
     """Набор типов берётся из собранного прохода, а не из второго обхода."""
     files = {1: {"polished": "p", "chapter": "c"},
