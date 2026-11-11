@@ -159,9 +159,16 @@ def test_stage_complete_delegates(seam):
 
 
 def test_process_batch_one_request(seam):
-    seam.answers.append('[{"chapter": 1, "fragment": "фрагмент длинный", "corrected": "правкa"}]')
-    batch = [(1, "f", "d", "Глава 1\nфрагмент длинный"),
-             (1, "f", "d", "продолжение главы")]
+    # правка обязана найтись в переводе: валидация стоит внутри повторов,
+    # и невалидная цитата теперь даёт повтор, а не «ошибок: 0» на выходе
+    body = ("Первый абзац главы идёт здесь и дальше. "
+            "Второй абзац тоже здесь есть!")
+    seam.answers.append(json.dumps([{
+        "chapter": 1,
+        "fragment": "Второй абзац тоже здесь есть!",
+        "corrected": "Второй абзац тоже тут есть!",
+        "type": "typo", "reason": "проверка"}]))
+    batch = [(1, "f", "d", "Глава 1\n" + body)]
     out = FE.process_batch(batch, "ПРОМПТ", make_stage())
     assert out is not None
     assert len(out) == 1 and out[0]["chapter"] == 1
@@ -683,3 +690,58 @@ def test_progress_log_line_shows_current_step():
             os.environ.pop("WEB_PROGRESS", None)
         else:
             os.environ["WEB_PROGRESS"] = monkey
+
+
+def test_parse_llm_json_keeps_empty_array_before_prose_brackets():
+    """`[]` и квадратные скобки в пояснении модели — не один массив.
+
+    Регулярка «от первой [ до последней ]» на ответе «[]\\nЕсли нужно
+    [больше] — скажите» давала неразбираемый огрызок: валидный «правок
+    нет» считался пустым ответом и уходил в повтор (а при `retry_empty=0`
+    пакет терялся).
+    """
+    from tests.conftest import SilentLog
+    text = "[]\nГотово. Если нужно [больше], скажите."
+    assert FE.parse_llm_json(text, SilentLog()) == []
+
+
+def test_parse_llm_json_ignores_trailing_prose():
+    from tests.conftest import SilentLog
+    text = '[{"chapter": 1, "fragment": "x"}]\n\nНайдено 1 ошибка.'
+    out = FE.parse_llm_json(text, SilentLog())
+    assert out == [{"chapter": 1, "fragment": "x"}]
+
+
+def test_process_batch_repeats_when_validation_rejects_all(seam):
+    """Все находки отклонены валидацией — это «правок нет», а не успех.
+
+    Раньше валидация шла в цикле пакетов уже после `complete_until`:
+    пакет, где все цитаты не нашлись в переводе, писал «ошибок: 0» и
+    повторного запроса не делал, хотя модель ошибки находила.
+    """
+    body = "Первый абзац главы идёт здесь и дальше. Второй тоже здесь."
+    batch = [(1, "f", "d", body)]
+    bad = json.dumps([{
+        "chapter": 1,
+        "fragment": "Такого текста в переводе нет и не было никогда!",
+        "corrected": "Такого текста в переводе нет и не было никогда?",
+        "type": "typo", "reason": "проверка"}])
+    seam.answers.extend([bad, bad])
+    out = FE.process_batch(batch, "ПРОМПТ", make_stage(), retry_empty=1)
+    assert out == []
+    assert len(seam.calls) == 2, "отклонённые правки не вызвали повтор"
+
+
+def test_process_batch_stops_when_validation_accepts(seam):
+    """Первый же ответ с ГОДНОЙ правкой заканчивает повторы."""
+    body = ("Первый абзац главы идёт здесь и дальше. "
+            "Второй абзац тоже здесь есть!")
+    batch = [(1, "f", "d", body)]
+    seam.answers.append(json.dumps([{
+        "chapter": 1,
+        "fragment": "Второй абзац тоже здесь есть!",
+        "corrected": "Второй абзац тоже тут есть!",
+        "type": "typo", "reason": "проверка"}]))
+    out = FE.process_batch(batch, "ПРОМПТ", make_stage(), retry_empty=2)
+    assert out is not None
+    assert len(out) == 1 and len(seam.calls) == 1
