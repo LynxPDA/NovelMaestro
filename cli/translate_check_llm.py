@@ -1243,11 +1243,14 @@ def do_check(args, stage) -> int:
             # не теряет правки уже готовых батчей
             merge_and_save(errs)
 
-    # верхний предел потоков 16 (как в ner/wiki/translate)
+    # верхний предел потоков 16 (как в ner/wiki/translate). Прогресс
+    # создаётся ДО запуска потоков: иначе первый пакет успевал напечатать
+    # «Пакет 1/154» и отдать правки раньше, чем прогресс объявлял 0/154 —
+    # в ленте это читалось как откат счётчика (1/154 → 0/154)
     with ThreadPoolExecutor(max_workers=stage.profile.threads) as ex:
-        futs = {ex.submit(worker, i, b): i for i, b in enumerate(batches)}
         with Progress(len(batches), "Проверка перевода LLM", unit="батч",
                       bar=True, logger=logger) as progress:
+            futs = {ex.submit(worker, i, b): i for i, b in enumerate(batches)}
             for f in as_completed(futs):
                 try:
                     f.result()

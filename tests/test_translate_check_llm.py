@@ -625,3 +625,61 @@ def test_validate_drops_full_rewrite():
     assert out[0]["corrected"] == "Второй абзац тоже тут есть."
 
 
+
+
+def test_progress_starts_before_workers(tmp_path, monkeypatch):
+    """`Progress` создаётся ДО запуска потоков, а не после.
+
+    Потоки стартовали раньше (`ex.submit(...)` стоял выше `with Progress`),
+    поэтому первый пакет успевал напечатать «Пакет 1/154» и отдать правки,
+    и только потом в ленту приезжало «Прогресс: 0/154»: счётчик выглядел
+    откатившимся (1/154 → 0/154). Проверяем сам источник — порядок строк в
+    `main`: создать бар раньше, чем раздавать пакеты исполнителю.
+    """
+    import inspect
+    src = inspect.getsource(FE.do_check)
+    i_bar = src.index("with Progress(")
+    i_submit = src.index("ex.submit(worker")
+    assert i_bar < i_submit, (
+        f"Progress создаётся позже первого submit (бар {i_bar} > "
+        f"submit {i_submit}): первый пакет отчитается раньше нуля")
+
+
+def test_progress_log_line_shows_current_step():
+    """Строка «Прогресс: N/M» называет ТЕКУЩЕЕ число, а не предыдущее.
+
+    Поле `_logged` обнулялось до печати, поэтому первая же строка после
+    шага писала 0/154 при done=1 — рядом с «Пакет 1/154» это читалось как
+    расхождение двух счётчиков.
+    """
+    import io
+    import logging
+    import os
+    from core.stage import Progress
+    monkey = os.environ.get("WEB_PROGRESS")
+    os.environ["WEB_PROGRESS"] = "1"
+    try:
+        lines = []
+
+        class _H(logging.Handler):
+            def emit(self, record):
+                if "Прогресс" in record.getMessage():
+                    lines.append(record.getMessage())
+
+        log = logging.getLogger("tcl-progress2")
+        log.handlers = [_H()]
+        log.propagate = False
+        log.setLevel(logging.INFO)
+        p = Progress(10, "X", unit="батч", bar=False, logger=log)
+        p.start()
+        # форсируем запись: как при первом шаге, когда порог ещё не набран
+        p._logged = -1
+        p.step()
+        p._logged = -1
+        p.step()
+        assert lines and lines[-1].endswith("2/10"), lines
+    finally:
+        if monkey is None:
+            os.environ.pop("WEB_PROGRESS", None)
+        else:
+            os.environ["WEB_PROGRESS"] = monkey
