@@ -2100,3 +2100,23 @@ test("reviewAxes('tcl'): ось только одна — тип находки"
     "tcl"), false);
   assert.equal(UICore.reviewFilterMatch({ type: "typo" }, hidden, "tcl"), true);
 });
+
+test("progressParts: отставший снимок опроса не откатывает счётчик", () => {
+  /* Два источника одного прогона: живой поток SSE и опрос /jobs. Снимок
+     опроса приходит на кадр позже, и его done меньше уже показанного —
+     лента рисовала «3/154», а карточка и pill шапки получив тот же снимок
+     показывали «0/154». Счётчик одного запуска обязан идти только вперёд. */
+  const job = { id: "j-back", status: "running" };
+  const live = UICore.progressParts(
+    job, { label: "Проверка перевода LLM", done: 3, total: 154 });
+  assert.equal(live.count, "3/154 · 2%");
+  // тот же запуск, отставший снимок: done вернулся к нулю
+  const stale = UICore.progressParts(
+    job, { label: "Проверка перевода LLM", done: 0, total: 154 });
+  assert.equal(stale.count, "3/154 · 2%",
+    "снимок откатил счётчик назад");
+  // смена total — другая шкала (новый бар стадии): откат разрешён
+  const other = UICore.progressParts(
+    job, { label: "Другая стадия", done: 0, total: 20 });
+  assert.equal(other.count, "0/20 · 0%");
+});

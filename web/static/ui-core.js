@@ -1052,6 +1052,27 @@
    * разъезжаются. ETA пишется только у running-запуска: у завершённого
    * остатка не бывает, а висящая оценка после остановки читалась бы как
    * обещание. */
+  /* Счётчик не ходит назад. Живой поток (SSE) и опрос /jobs идут разными
+   * путями: снимок опроса отстаёт на кадр, и его `done` бывает меньше уже
+   * показанного. Тогда на экране два счётчика одного прогона расходились —
+   * лента рисовала «1/154», карточка и pill шапки «0/154» на следующем
+   * опросе, и число мигало туда-обратно. Помним последнее показанное
+   * значение на запуск и не даём ему уменьшиться; смена total (новый бар
+   * стадии) сбрасывает память — это другая шкала, а не откат. */
+  var progressSeen = new Map(); // job.id → {done, total}
+
+  function progressMonotonic(job, p) {
+    if (!p || !job || !job.id) return p;
+    var done = Number(p.done) || 0;
+    var total = Number(p.total) || 0;
+    var prev = progressSeen.get(job.id);
+    if (prev && prev.total === total && done < prev.done) {
+      return Object.assign({}, p, { done: prev.done });
+    }
+    progressSeen.set(job.id, { done: done, total: total });
+    return p;
+  }
+
   function progressParts(job, p) {
     var status = String((job && job.status) || "");
     var running = status === "running";
@@ -1078,6 +1099,7 @@
       }
       return out;
     }
+    p = progressMonotonic(job, p);
     var done = Number(p.done) || 0;
     var total = Number(p.total) || 0;
     out.label = String(p.label || "");
