@@ -6,6 +6,7 @@ cli/translate_check_llm.py (накопительный
 Без сети и без интерактива."""
 # pyright: reportMissingImports=false
 import json
+import logging
 import sys
 import unicodedata
 from pathlib import Path
@@ -116,11 +117,20 @@ def seam(monkeypatch):
     return rec
 
 
-def make_stage(**profile_kw: Any) -> core_stage.Stage:
+#: логгер, который caplog видит: SilentLog глушит всё выше CRITICAL.
+#: Берётся из реестра logging — экземпляр, созданный мимо него, не тот же
+#: объект, что `getLogger` вернёт обработчику перехвата, и записи мимо
+LOUD = logging.getLogger("nm_test_loud")
+LOUD.setLevel(logging.INFO)
+LOUD.propagate = True
+
+
+def make_stage(logger: Any = None, **profile_kw: Any) -> core_stage.Stage:
     """Контекст стадии для тестов: лог заглушен, профиль — какой попросили."""
     prof: dict[str, Any] = {"base_url": "http://h", "model": "m"}
     prof.update(profile_kw)
-    return core_stage.Stage(name="translate_check_llm", logger=SilentLog(),
+    return core_stage.Stage(name="translate_check_llm",
+                            logger=logger or SilentLog(),
                             profile=core_stage.LlmProfile(**prof))
 
 
@@ -838,3 +848,32 @@ def test_validate_short_unique_fragment_survives():
           "corrected": "подолгу ждала её",
           "type": "grammar"}], {1}, {1: body}, SilentLog(), drop=dropped)
     assert len(out) == 1 and not dropped
+
+
+def test_repeat_log_names_why_answer_gave_no_edits(seam, caplog):
+    """Лог повтора различает «модель ответила `[]`» и «ответ не разобран».
+
+    Общая строка «пустой массив, нераспарсенный ответ или отклонённые
+    валидацией» не отвечала на главный вопрос: что именно случилось.
+    По ней нельзя решить, чинить промпт (модель пишет прозу) или смириться
+    (модель честно не нашла ошибок).
+    """
+    body = "Первый абзац главы идёт здесь и дальше. Второй тоже здесь."
+    batch = [(1, "f", "d", body)]
+    seam.answers.extend(["[]", "[]"])
+    with caplog.at_level(logging.INFO, logger=LOUD.name):
+        FE.process_batch(batch, "ПРОМПТ", make_stage(logger=LOUD), retry_empty=1)
+    lines = [r.getMessage() for r in caplog.records if "повтор" in r.getMessage()]
+    assert lines and "пустой массив" in lines[0], lines
+    assert "нераспарсенный" not in lines[0], lines
+
+
+def test_repeat_log_shows_head_of_unparsed_answer(seam, caplog):
+    """Нераспарсенный ответ показывается началом: видно, что вернула модель."""
+    body = "Первый абзац главы идёт здесь и дальше. Второй тоже здесь."
+    batch = [(1, "f", "d", body)]
+    seam.answers.extend(["Извините, я не нашёл ошибок в этом тексте.", "[]"])
+    with caplog.at_level(logging.INFO, logger=LOUD.name):
+        FE.process_batch(batch, "ПРОМПТ", make_stage(logger=LOUD), retry_empty=1)
+    lines = [r.getMessage() for r in caplog.records if "повтор" in r.getMessage()]
+    assert lines and "Извините" in lines[0], lines

@@ -734,3 +734,37 @@ def test_complete_until_log_names_retries_not_attempts(answers, caplog):
     assert lines[1].endswith("повтор 2 из 2"), lines
     # номера запросов (2 и 3) в строке не появляются
     assert all("/3" not in ln for ln in lines), lines
+
+
+def test_complete_until_log_names_concrete_reason(answers, caplog):
+    """Строка повтора называет КОНКРЕТНУЮ причину, а не перечень правил.
+
+    Общее `note` перечисляло сразу три варианта («пустой массив,
+    нераспарсенный ответ или отклонённые валидацией»), и по логу нельзя
+    было понять, что случилось: модель честно ответила «правок нет» или
+    вернула обрывок JSON, который лечится правкой промпта.
+    """
+    answers["want"] = [("", None), ("", None)]
+    with caplog.at_level(logging.INFO, logger=LOG.name):
+        st.complete_until(
+            _stage(answers), "п", label="[check]", attempts=1,
+            note="правок нет",
+            detail=lambda t: "ответ не разобран как JSON-массив")
+    lines = [r.getMessage() for r in caplog.records if "повтор" in r.getMessage()]
+    assert lines and "ответ не разобран как JSON-массив" in lines[0], lines
+    assert "пустой массив" not in lines[0], lines
+
+
+def test_complete_until_detail_failure_does_not_break_stage(answers, caplog):
+    """Сломанный `detail` не роняет стадию: объяснение — не работа."""
+    answers["want"] = [("", None), ("", None)]
+
+    def boom(_t):
+        raise RuntimeError("объяснение сломалось")
+
+    with caplog.at_level(logging.INFO, logger=LOG.name):
+        text, err = st.complete_until(_stage(answers), "п", attempts=1,
+                                      note="правок нет", detail=boom)
+    assert (text, err) == ("", None)
+    lines = [r.getMessage() for r in caplog.records if "повтор" in r.getMessage()]
+    assert lines and "правок нет" in lines[0], lines
