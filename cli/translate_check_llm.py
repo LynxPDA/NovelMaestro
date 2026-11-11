@@ -548,9 +548,11 @@ def build_batches(chapters, budget, logger):
         sizes = [len(b) for b in batches]
         # пакеты намеренно разного размера: видно, сколько глав влезает и
         # что остаток — не потерянные главы, а хвост диапазона
+        span = str(min(sizes)) if min(sizes) == max(sizes) \
+            else f"{min(sizes)}–{max(sizes)}"
         logger.info(f"Пакетов: {len(batches)} на {len(chapters)} глав "
                     f"(бюджет {budget} токенов, оценка; "
-                    f"глав в пакете: {min(sizes)}–{max(sizes)})")
+                    f"глав в пакете: {span})")
     return batches
 
 
