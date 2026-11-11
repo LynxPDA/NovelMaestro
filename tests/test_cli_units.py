@@ -601,11 +601,12 @@ def test_re_errors_to_entries(tmp_path):
     assert e["old"] == "ошибка в тексте" and e["new"] == "правкa"
     assert e["type"] == "typo" and e["status"] == "принять"
     assert e["file"].endswith("polished.txt")
-    # неизвестный тип ошибки очищается, запись живёт
+    # неизвестный тип сохраняется: метка это описание для человека, а не
+    # адрес замены — модель могла не назвать категорию, но увидеть ошибку
     e2 = RE.errors_to_entries(
         [{"chapter": 1, "fragment": "фрагмент подлиннее", "corrected": "y",
           "type": "бред"}], "s", "polished", cmap, SilentLog())
-    assert e2 and e2[0]["type"] == ""
+    assert e2 and e2[0]["type"] == "бред"
 
 
 # ══════════════════════════════════════════════════════════════════════
