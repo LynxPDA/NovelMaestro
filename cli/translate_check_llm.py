@@ -63,6 +63,7 @@ from core.stage import (  # noqa: E402
 )
 from core.common import (  # noqa: E402
     FIX_ERROR_TYPES,
+    MANUAL_FIX_TYPE,
     SENTENCE_END_CHARS,
     REVIEW_ACCEPT,
     REVIEW_REJECT,
@@ -652,7 +653,25 @@ def _common_context(a: str, b: str) -> tuple:
     return head, tail
 
 
-def validate_errors(errors, valid_ch, batch_contents, logger):
+#: ниже этой длины цитата как адрес замены ненадёжна
+_MIN_FRAG_LEN = 10
+
+#: причины отклонения — имена короткие, они попадают в счётчик и в лог
+_DROP_NO_CHAPTER = "нет номера главы"
+_DROP_SHORT = f"цитата короче {_MIN_FRAG_LEN} символов"
+_DROP_EMPTY = "пустая цитата или правка"
+_DROP_SAME = "правка не меняет текст"
+_DROP_NOT_FOUND = "цитаты нет в переводе"
+_DROP_AMBIGUOUS = "цитата встречается несколько раз"
+_DROP_REWRITE = "правка переписала кусок целиком"
+
+
+def _too_short(frag: str) -> bool:
+    """Цитата короче порога — как адрес замены ненадёжна."""
+    return len(frag) < _MIN_FRAG_LEN
+
+
+def validate_errors(errors, valid_ch, batch_contents, logger, drop=None):
     """Сверка ответа LLM с фактическим ПЕРЕВОДОМ батча.
 
     Дрейф атрибуции (LLM указала соседнюю главу) отсекается здесь: цитата
@@ -670,31 +689,74 @@ def validate_errors(errors, valid_ch, batch_contents, logger):
     Правка — замена внутри найденной цитаты: стадия не вставляет и не
     удаляет текст. `corrected == fragment` отбрасывается: применять его
     нечем, а «здесь пропуск» — это не находка, а догадка о невидимом.
+
+    `drop` — необязательный список, куда складываются ОТКЛОНЁННЫЕ записи с
+    причиной: счётчик обязан считать всё, что не дошло до правок, иначе
+    человек видит «отклонено 9/12» при восьми выброшенных.
+
+    Тип вне списка НЕ повод выбрасывать: правка полезна и без метки, а
+    метка — описание для человека, а не адрес замены. Модель могла не
+    суметь назвать категорию, но увидеть настоящую ошибку; `fix_entry`
+    такой тип сохраняет как есть.
     """
-    out, dropped, moved = [], 0, 0
+    out, moved = [], 0
+    reasons: dict = {}
+    drop = drop if drop is not None else []
+
+    def reject(e, why):
+        """Отклонить запись с причиной (счётчик и список для review)."""
+        reasons[why] = reasons.get(why, 0) + 1
+        drop.append({"entry": e, "reason": why})
+
     for e in errors:
-        ch = _to_int(e.get("chapter"))
-        if ch is None:
-            continue
+        raw_ch = e.get("chapter")
+        ch = _to_int(raw_ch)
         frag, corr = e.get("fragment", ""), e.get("corrected", "")
-        if not frag or len(frag) < 10 or not corr:
+        frag = frag if isinstance(frag, str) else ""
+        corr = corr if isinstance(corr, str) else ""
+
+        if not frag.strip() or not corr.strip():
+            reject(e, _DROP_EMPTY)
             continue
-        # Тип вне списка находок — устаревший промпт или догадка модели:
-        # вставлять и удалять текст стадия больше не умеет, и такая запись
-        # не должна попасть ни в правки, ни человеку как «пропуск».
-        etype = str(e.get("type") or "").strip().lower()
-        if etype and etype not in FIX_ERROR_TYPES:
-            dropped += 1
-            continue
+        if ch is None:
+            # номер потерян (null, «гл. 5»): адрес правки есть в самом
+            # тексте — ищем цитату по главам батча, и только однозначное
+            # совпадение даёт главу
+            found = [oc for oc, ocont in batch_contents.items()
+                     if ocont and _frag_in_text(frag, ocont)]
+            if len(found) != 1:
+                reject(e, _DROP_NO_CHAPTER)
+                continue
+            ch = found[0]
+            moved += 1
+            logger.info(f"  ↪ Номер главы не указан — цитата в гл.{ch}, "
+                        f"правка привязана.")
+        if _too_short(frag):
+            # короткая цитата спасается только одна в главе: у «здесь»
+            # второе вхождение сделало бы замену неоднозначной
+            cont = batch_contents.get(ch, "")
+            if not cont or not _frag_in_text(frag, cont) \
+                    or fragment_occurrences(cont, frag) > 1:
+                reject(e, _DROP_SHORT)
+                continue
         if frag.strip() == corr.strip():
-            dropped += 1
+            # Промпт ПРЯМО просит так делать, когда найдены две формы имени:
+            # «скопируй fragment в corrected БЕЗ ИЗМЕНЕНИЙ, а в reason
+            # напиши...». Это не правка, а пометка места для сверки: тип
+            # `manual`, status «отклонить» — в файл она попадает, в замены
+            # нет, человек видит её в списке правок с причиной.
+            reason = str(e.get("reason") or "").strip()
+            note = "требуется сверка: правка не меняет текст"
+            out.append({**e, "corrected": corr, "type": MANUAL_FIX_TYPE,
+                        "status": REVIEW_REJECT, "note": note,
+                        "reason": reason or note})
             continue
         cont = batch_contents.get(ch, "")
         if not (cont and _frag_in_text(frag, cont)):
             found = [oc for oc, ocont in batch_contents.items()
                      if ocont and _frag_in_text(frag, ocont)]
             if len(found) != 1:
-                dropped += 1
+                reject(e, _DROP_NOT_FOUND)
                 continue
             moved += 1
             logger.info(f"  ↪ Цитата не в гл.{ch}, а в гл.{found[0]} — "
@@ -704,20 +766,20 @@ def validate_errors(errors, valid_ch, batch_contents, logger):
         e["chapter"] = ch
         # уникальность: замена адресуется цитатой
         if fragment_occurrences(cont, frag) > 1:
-            dropped += 1
+            reject(e, _DROP_AMBIGUOUS)
             continue
         # Правка обязана делить с цитатой общий контекст: модель, переписавшая
         # кусок своими словами, общего контекста не даёт, и подстановка её
         # текста заменила бы часть главы чужим.
         head, tail = _common_context(frag, corr)
         if head + tail < _MIN_COMMON_CONTEXT:
-            dropped += 1
-            logger.info(f"  ⚠ Гл.{ch}: правка переписана целиком — "
-                        f"контекст {head + tail} симв., отклонена")
+            reject(e, _DROP_REWRITE)
             continue
         out.append(e)
-    if dropped:
-        logger.info(f"Валидация: отклонено {dropped}/{len(errors)}")
+    if reasons:
+        parts = ", ".join(f"{k}: {v}" for k, v in
+                          sorted(reasons.items(), key=lambda kv: -kv[1]))
+        logger.info(f"Валидация: отклонено {len(drop)}/{len(errors)} ({parts})")
     if moved:
         logger.info(f"Валидация: перепривязано {moved} правок на "
                     f"реальные главы.")
@@ -776,7 +838,12 @@ def process_batch(batch, prompt, stage, retry_empty=0):
     повторной попытки — модель как будто ничего не нашла.
 
     Число повторов — настройка стадии `TRANSLATE_CHECK_LLM_RETRY_EMPTY`
-    (0 — одна попытка)."""
+    (0 — одна попытка).
+
+    Возвращает `(правки, отброшенные)`; второе — записи, которые валидация
+    не пропустила, с причиной. Они попадают в review-файл со статусом
+    «отклонить»: молча выброшенная находка — это потеря работы модели,
+    которую человек не увидит и не восстановит."""
     logger = stage.logger
     text = compose_batch_text(batch)
     # сверка идёт ТОЛЬКО по тексту перевода: оригинал в батче есть, но адрес
@@ -787,21 +854,23 @@ def process_batch(batch, prompt, stage, retry_empty=0):
         contents[c[0]] = contents.get(c[0], "") + \
             ("\n" if c[0] in contents else "") + c[3]
     valid = set(contents)
-    cache: dict[str, list] = {}   # ответ → проверенные правки (ответы не длиннее батча)
+    cache: dict[str, tuple] = {}   # ответ → (правки, отброшенные)
 
     def clean(raw):
         """Разбор + валидация; None — ответ не разобран."""
         errs = parse_llm_json(raw, logger)
         if errs is None:
             return None
-        return validate_errors(errs, valid, contents, logger)
+        dropped: list = []
+        kept = validate_errors(errs, valid, contents, logger, drop=dropped)
+        return kept, dropped
 
     def accept(raw):
         res = clean(raw)
         if res is None:
             return False
         cache[raw] = res
-        return bool(res)   # нечего применять — повод спросить ещё раз
+        return bool(res[0])   # нечего применять — повод спросить ещё раз
 
     raw, _err = complete_until(
         stage, render_prompt(prompt, text), label="[check]",
@@ -810,7 +879,7 @@ def process_batch(batch, prompt, stage, retry_empty=0):
              "или отклонённые валидацией)")
     if raw is None:
         return None   # ошибка LLM → fail-fast на уровне прогона
-    return cache[raw] if raw in cache else (clean(raw) or [])
+    return cache[raw] if raw in cache else (clean(raw) or ([], []))
 
 
 # ─────────────────────────────────────────────
@@ -1237,11 +1306,34 @@ def do_check(args, stage) -> int:
     added_total = 0
     lock = threading.Lock()
 
-    def merge_and_save(errs):
-        """Ошибки батча → записи → накопительный файл (под замком)."""
+    def merge_and_save(errs, dropped=()):
+        """Ошибки батча → записи → накопительный файл (под замком).
+
+        `dropped` — находки, не прошедшие валидацию: они сохраняются со
+        статусом «отклонить» и причиной в `note`. Молча выброшенная
+        находка — потерянная работа модели: человек не видит её ни в
+        списке правок, ни в логе, и восстановить её неоткуда."""
         nonlocal entries, added_total
         fresh = errors_to_entries(errs, stage_label, args.type,
                                   chapter_map, logger)
+        # отклонённые — те же записи, но с готовым статусом и причиной;
+        # `manual` (пометка о сверке) несёт свой статус из валидации.
+        # errors_to_entries сам проставит путь файла главы, поэтому записи
+        # собираются его же путём: у отклонённой цитаты главы может и не
+        # быть (номер потерян) — тогда путь останется пустым
+        for item in dropped:
+            e = item["entry"]
+            # записи собираются по ОДНОЙ: errors_to_entries умеет отсеивать
+            # некорректные, и пакетный вызов сдвинул бы пару «запись ↔
+            # причина» (отклонённая с потерянным номером главы — как раз
+            # такой случай)
+            one = errors_to_entries(
+                [{**e, "status": e.get("status") or REVIEW_REJECT,
+                  "note": e.get("note") or item["reason"]}],
+                stage_label, args.type, chapter_map, logger)
+            if not one:
+                continue
+            fresh.extend(one)
         if not fresh:
             return
         with lock:
@@ -1261,23 +1353,25 @@ def do_check(args, stage) -> int:
         # правки уже проверены в process_batch: валидация стоит внутри
         # повторов, иначе пакет с одними отклонёнными находками уходил бы
         # в «ошибок: 0» без повторного запроса
-        errs = process_batch(batch, prompt, stage, args.retry_empty)
-        if errs is None:
+        pair = process_batch(batch, prompt, stage, args.retry_empty)
+        if pair is None:
             with lock:
                 failed_cnt[0] += 1
             logger.error(f"✗ Пакет {idx + 1}: гл. {nums[0]}–{nums[-1]} — "
                          f"ошибка LLM.")
             return
+        errs, dropped = pair
         with lock:
             all_errors.extend(errs)
             done_cnt[0] += 1
             dn = done_cnt[0]
         logger.info(f"✓ Пакет {idx + 1}: гл. {nums[0]}–{nums[-1]}, "
                     f"ошибок: {len(errs)} | {dn}/{len(batches)}")
-        if errs:
+        if errs or dropped:
             # файл пишется после КАЖДОГО ответа LLM — упавший прогон
-            # не теряет правки уже готовых батчей
-            merge_and_save(errs)
+            # не теряет правки уже готовых батчей (и отклонённые тоже:
+            # их разбирает человек)
+            merge_and_save(errs, dropped)
 
     # верхний предел потоков 16 (как в ner/wiki/translate). Прогресс
     # создаётся ДО запуска потоков: иначе первый пакет успевал напечатать
