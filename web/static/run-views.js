@@ -404,9 +404,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // поменяться на диске вне интерфейса (переименование epub/zip,
     // загрузка), а селект исходника должен видеть свежий список
     try {
-      const r = await api(
-        `/stages/${key}/options?project=${section}/${name}`,
-      );
+      // тип файлов главы — из формы: прогноз бюджета («Проверки перевода
+      // LLM») обязан считать ту пару, которую прочитает стадия, а поле
+      // меняют прямо в форме, не на диске
+      const q = new URLSearchParams({ project: `${section}/${name}` });
+      const cur = (st.values[key] || {})["type"];
+      if (cur) q.set("type", cur);
+      const r = await api(`/stages/${key}/options?${q}`);
       st.options = r.options || {};
     } catch {
       st.options = {};
@@ -2359,6 +2363,24 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const si = srcWrap && srcWrap._input;
       if (si) ["change", "input"].forEach(
         (ev) => si.addEventListener(ev, budgetStatusRow.refresh));
+      // тип файлов главы меняет вес пары (у polished и translated разные
+      // размеры): цифры приходят с сервера вместе с новым типом, поэтому
+      // смена селекта — перезапрос опций, а не только перерисовка
+      const tw = fieldWraps["type"];
+      const ti = tw && tw._input;
+      if (ti) {
+        ti.addEventListener("change", async () => {
+          try {
+            const q = new URLSearchParams({ project: `${section}/${name}` });
+            if (ti.value) q.set("type", ti.value);
+            const r = await api(`/stages/${key}/options?${q}`);
+            st.options = r.options || {};
+          } catch {
+            /* прежние опции: прогноз пересчитается при следующем открытии */
+          }
+          budgetStatusRow.refresh();
+        });
+      }
       budgetStatusRow.refresh();
     }
 

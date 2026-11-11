@@ -2958,6 +2958,37 @@ def test_stage_options_pair_bytes_survive_foreign_cache(jobs_srv, tmp_path):
     assert "pair_bytes" not in other2["options"], "прогноз утёк в чужую стадию"
 
 
+def test_stage_options_pair_bytes_follow_form_file_type(jobs_srv, tmp_path):
+    """Тип файлов из формы меняет прогноз бюджета.
+
+    У `polished` и `translated` разные размеры, а тип выбирают селектом
+    прямо в форме. Прогноз читал тип только из `.env` — на книге, где
+    полировка длиннее перевода, подсказка завышала вес пары и писала
+    «не влезет» там, где стадия всё проверит.
+    """
+    from web.api import _OPTIONS_CACHE
+    _OPTIONS_CACHE.clear()
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    d1 = pdir / "chapters" / "00001"
+    d1.mkdir(parents=True)
+    (d1 / "chapter.txt").write_text("原文", encoding="utf-8")
+    (d1 / "polished.txt").write_text("полировка" * 40, encoding="utf-8")
+    (d1 / "translated.txt").write_text("перевод", encoding="utf-8")
+    res, pol = req("GET", "/api/stages/translate_check_llm/options"
+                          "?project=ACTIVE/test_book&type=polished")
+    assert res.status == 200
+    res, tr = req("GET", "/api/stages/translate_check_llm/options"
+                         "?project=ACTIVE/test_book&type=translated")
+    assert res.status == 200
+    assert pol["options"]["pair_ratio"]["type"] == "polished"
+    assert tr["options"]["pair_ratio"]["type"] == "translated"
+    assert (pol["options"]["pair_bytes"]["1"]["tr"]
+            > tr["options"]["pair_bytes"]["1"]["tr"]), \
+        "байты взяты не из выбранного типа файлов"
+
+
 def test_stage_options_pair_ratio_is_measured(jobs_srv, tmp_path):
     """Байт на токен считается по тексту книги, а не берётся 2.5: у русского
     перевода с китайским оригиналом пара даёт ~4.2, и фиксированное 2.5

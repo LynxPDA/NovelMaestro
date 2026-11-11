@@ -604,12 +604,25 @@ def _pair_ratio_cached(common, pdir, sample: list, sig) -> float:
     return ratio
 
 
-def _pair_options(common, pdir: Path, key: str) -> dict:
+def _file_type_arg(ctx: dict) -> str:
+    """Тип файлов главы, выбранный В ФОРМЕ (`type=polished|redacted|…`).
+
+    Прогноз обязан считать ту пару, которую прочитает стадия. Значение в
+    `.env` — лишь дефолт: человек меняет список «Тип файлов глав» прямо в
+    форме, и прогноз по старому типу показывал бы чужой вес пары (на книге
+    с разными `polished`/`translated` это давало завышение в разы).
+    """
+    val = str(ctx["query"].get("type") or "").strip()
+    return val if val in ("polished", "redacted", "translated") else ""
+
+
+def _pair_options(common, pdir: Path, key: str, file_type: str = "") -> dict:
     """Прогноз бюджета для «Проверки перевода (LLM)»: байты пары по главам
     и замеренный байт на токен.
 
     Считается по требованию, а НЕ кладётся в общий кеш опций: кеш общий на
-    книгу и заполняется любой стадией, а этот словарь нужен одной.
+    книгу и заполняется любой стадией, а этот словарь нужен одной. `file_type`
+    — тип из формы; пустой — берётся из настроек стадии (`.env`).
     """
     chapters_dir = pdir / "chapters"
     if not chapters_dir.is_dir():
@@ -617,7 +630,7 @@ def _pair_options(common, pdir: Path, key: str) -> dict:
     ch_map = common.build_chapter_map(chapters_dir)
     if not ch_map:
         return {}
-    ft = _stage_file_type(pdir, key)
+    ft = file_type or _stage_file_type(pdir, key)
     sizes, texts, empty, fsig = _chapter_sizes(common, ch_map, ft)
     ratio = _pair_ratio_cached(common, pdir, texts, fsig)
     return {
@@ -628,14 +641,14 @@ def _pair_options(common, pdir: Path, key: str) -> dict:
                        "samples": len(texts), "type": ft, "empty": empty}}
 
 
-def _with_pair_options(common, pdir: Path, key: str) -> dict:
+def _with_pair_options(common, pdir: Path, key: str, ctx: dict) -> dict:
     """Опции стадии из кеша ПЛЮС прогноз бюджета (кеш не меняется).
 
     Кеш мог заполнить кто угодно и когда угодно — прогноз добавляется на
     выдаче, чтобы чужая стадия не «съедала» его из общего словаря.
     """
     out = dict(_OPTIONS_CACHE.get(str(pdir), (None, {}))[1])
-    out.update(_pair_options(common, pdir, key))
+    out.update(_pair_options(common, pdir, key, _file_type_arg(ctx)))
     return _options_for_stage(out, key)
 
 
@@ -673,13 +686,11 @@ def _stage_options(ctx: dict) -> dict:
         cached = _OPTIONS_CACHE.get(str(pdir))
         if cached is not None and cached[0] == sig:
             out["options"] = _options_for_stage(cached[1], key)
-            # прогноз бюджета считается ТОЛЬКО здесь, в кеш он не входит:
-            # кеш общий на книгу, и его заполняет любая стадия (ner, epub,
-            # перевод). Прежде pair_bytes строился лишь при первом запросе
-            # «Проверки перевода (LLM)» — если кеш заполнила другая стадия,
-            # подсказка оставалась скрытой до перезапуска сервера.
-            if key == "translate_check_llm" and "pair_bytes" not in out["options"]:
-                out["options"] = _with_pair_options(common, pdir, key)
+            # Прогноз бюджета считается на ВЫДАЧЕ и в кеш не попадает: кеш
+            # общий на книгу, его заполняет любая стадия (ner, epub, перевод),
+            # а тип файлов приходит из формы — от него зависит вес пары.
+            if key == "translate_check_llm":
+                out["options"] = _with_pair_options(common, pdir, key, ctx)
             return out
         # диапазон глав
         chapters_dir = pdir / "chapters"
@@ -691,13 +702,7 @@ def _stage_options(ctx: dict) -> dict:
                 # строки по списку, а не по диапазону min..max
                 out["options"]["chapters"] = {
                     "min": nums[0], "max": nums[-1], "ids": nums}
-                # прогноз «не влезет в бюджет» для translate_check_llm:
-                # байты пары по главам (0.03 с на 5652 главах) + байт на
-                # токен по тексту книги — предупредить ДО запуска. Бюджет
-                # приходит из формы, поэтому деление на коэффициент делает
-                # клиент: сервер отдаёт байты и коэффициент
-                if key == "translate_check_llm":
-                    out["options"].update(_pair_options(common, pdir, key))
+
         # файлы source/ — ВСЕ файлы (клиент фильтрует по ext селекта):
         # epub-исходники, txt, обложки (jpg/png/webp), metadata.yaml и т.п.
         src = pdir / "source"
@@ -734,6 +739,12 @@ def _stage_options(ctx: dict) -> dict:
             out["options"]["root"] = root
         _OPTIONS_CACHE[str(pdir)] = (sig, out["options"])
         out["options"] = _options_for_stage(out["options"], key)
+        # прогноз бюджета — ПОСЛЕ записи в кеш и отдельным словарём: в кеше
+        # ему делать нечего (нужен одной стадии и зависит от типа файлов,
+        # который меняют в форме, а не на диске)
+        if key == "translate_check_llm":
+            out["options"].update(
+                _pair_options(common, pdir, key, _file_type_arg(ctx)))
     return out
 
 
