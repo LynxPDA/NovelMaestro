@@ -975,3 +975,11 @@ def test_regexp_checks_default_has_no_literal_newline_inside_rule(global_env):
     S.write_values({"TRANSLATE_CHECK_REGEXP_CHECKS": raw})
     assert len([l for l in str(S.effective("TRANSLATE_CHECK_REGEXP_CHECKS")).splitlines()
                 if l.strip()]) == 6
+
+
+def test_translate_check_llm_budget_defaults():
+    """Дефолты проверки перевода LLM: пакет по бюджету (0 глав) и 68000
+    токенов. «Глав в запросе» = 1 резало книгу на запрос-на-главу, хотя
+    бюджет уже ограничивает пакет."""
+    assert S.BY_KEY["TRANSLATE_CHECK_LLM_CHAPTERS_PER_REQUEST"].default == "0"
+    assert S.BY_KEY["TRANSLATE_CHECK_LLM_REQUEST_BUDGET"].default == "68000"
