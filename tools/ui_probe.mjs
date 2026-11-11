@@ -2815,10 +2815,10 @@ async function main() {
       + `64 – 3: подсказка + ${bad.bad} поля в рамке · отказ «${err}»`);
   }
 
-  /* Сверка с оригиналом в форме проверки перевода (LLM): галка «Сверка с
-   * оригиналом» показывает «Глав в запросе» и прячет его при снятии (условие
-   * `when_set` в реестре читает и сервер, и клиент — расхождение стоило бы
-   * человеку невидимого поля), плюс подсказка о единицах */
+  /* Сверка с оригиналом в форме проверки перевода (LLM): галка меняет вес
+   * пары, а «Глав в запросе» у стадии БОЛЬШЕ НЕТ — пакет собирается только
+   * по бюджету, и лишнее поле человеку пришлось бы объяснять. Галка должна
+   * пересчитывать подсказку бюджета (включена — перевод + оригинал). */
   {
     const before = problems.length;
     await page.goto(`${url}/#/project/${SECTION}/${BOOK}/run`,
@@ -2831,43 +2831,44 @@ async function main() {
     const wrapOf = (label) => page.locator(".run-form .field", {
       hasText: label,
     }).first();
-    const cpr = wrapOf("Глав в запросе");
+    const cprCount = await page.locator(".run-form .field", {
+      hasText: "Глав в запросе",
+    }).count();
     const useSrc = wrapOf("Сверять с оригиналом");
     const box = useSrc.locator('input[type="checkbox"], input[type="radio"]')
       .first();
-    const visible = async () => !(await cpr.evaluate(
-      (el) => !!el && el.classList.contains("hidden")));
-    const wasOn = await box.isChecked();
-    if (!wasOn) await box.check();
-    await page.waitForTimeout(300);
-    const shownOn = await visible();
+    // состояние книги переживает переходы: прошлый сценарий оставил
+    // диапазон 64–3, а главы пробы — 1 и 2. Вернуть их в диапазон, иначе
+    // подсказка бюджета пуста и сравнивать нечего.
+    const rangeInputs = page.locator(".run-form .run-range-row input");
+    await rangeInputs.nth(0).fill("1");
+    await rangeInputs.nth(1).fill("2");
+    await page.waitForTimeout(500);
+    const status = () => page.locator(".run-form .budget-status").first()
+      .textContent();
+    if (!(await box.isChecked())) await box.check();
+    await page.waitForTimeout(400);
+    const withSrc = await status();
     await box.uncheck();
-    await page.waitForTimeout(300);
-    const hiddenOff = !(await visible());
-    const label = await cpr.evaluate(
-      (el) => ((el.querySelector(".field-label") || {}).textContent || "").trim());
-    const help = await cpr.evaluate(
-      (el) => ((el.querySelector(".field-help") || {}).textContent || "").trim());
+    await page.waitForTimeout(400);
+    const noSrc = await status();
     if (SHOT) {
       await box.check();
       await page.waitForTimeout(300);
       await page.locator(".run-form").first().screenshot(
         { path: path.join(OUT, "scenario-use-source.png") });
     }
-    if (!shownOn) {
-      problems.push("use-source: «Глав в запросе» не показалось при включении");
+    if (cprCount) {
+      problems.push("use-source: «Глав в запросе» вернулось в форму");
     }
-    if (!hiddenOff) {
-      problems.push("use-source: «Глав в запросе» осталось при снятой галке");
+    if (!/Запросов на диапазон/.test(withSrc || "")) {
+      problems.push(`use-source: нет числа запросов «${withSrc}»`);
     }
-    if (!/ГЛАВЫ/.test(label)) {
-      problems.push(`use-source: единица не в метке поля: «${label}»`);
-    }
-    if (help && !/бюджет/i.test(help)) {
-      problems.push(`use-source: подсказка вне смысла поля: «${help}»`);
+    if (withSrc === noSrc) {
+      problems.push("use-source: подсказка не пересчиталась по галке");
     }
     log(`${problems.length === before ? "✅" : "❌"} use-source    `
-      + `«Глав в запросе»: видно=${shownOn}, скрыто=${hiddenOff}`);
+      + `поля нет=${!cprCount}, подсказка меняется=${withSrc !== noSrc}`);
   }
 
   /* «Пройдут ли все главы» у проверки перевода LLM: строка статуса под
@@ -2912,11 +2913,14 @@ async function main() {
     if (okBig.hidden || !/Все главы диапазона проходят по бюджету \(2\)/.test(okBig.text)) {
       problems.push(`budget-status: при большом бюджете «${okBig.text}»`);
     }
-    // средняя глава и ёмкость бюджета — второй частью той же строки
-    // разделитель тысяч — неразрывный пробел из toLocaleString("ru-RU")
-    if (!/Средняя глава [\d\u00a0 ]+ ток\. — в бюджет входит ≈[\d\u00a0 ]+ глав[аы]?\./
-      .test(okBig.text)) {
-      problems.push(`budget-status: нет средней главы и ёмкости «${okBig.text}»`);
+    // сколько запросов выйдет на диапазон и по сколько глав — второй
+    // частью той же строки (средняя ёмкость пакета без числа запросов не
+    // отвечала на вопрос «сколько это будет вызовов»)
+    if (!/Запросов на диапазон: [\d\u00a0 ]+/.test(okBig.text)) {
+      problems.push(`budget-status: нет числа запросов «${okBig.text}»`);
+    }
+    if (!/в запрос входит до [\d\u00a0 ]+ глав/.test(okBig.text)) {
+      problems.push(`budget-status: нет среднего размера пакета «${okBig.text}»`);
     }
     if (okBig.warn) {
       problems.push("budget-status: при большом бюджете стоит предупреждение");

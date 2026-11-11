@@ -2225,11 +2225,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         el.classList.remove("is-warn");
         return;
       }
+      // глава крупнее бюджета в проверку не идёт вовсе (резать её нельзя)
       const over = nums.filter((n) => pairTokens(n) + PROMPT_OVERHEAD > budget);
-      const total = nums.reduce((s2, n) => s2 + pairTokens(n), 0);
-      const mean = total / nums.length;
-      // сколько глав входит: промпт вычитается из бюджета ОДИН раз
-      const capacity = Math.max(1, Math.floor((budget - PROMPT_OVERHEAD) / mean));
+      const fits = nums.filter((n) => !over.includes(n));
       if (!over.length) {
         parts.push(`Все главы диапазона проходят по бюджету (${fmt(nums.length)}).`);
         el.classList.remove("is-warn");
@@ -2241,8 +2239,34 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           + `гл. ${list} — в проверку не пойдут, поднимите бюджет.`);
         el.classList.add("is-warn");
       }
-      parts.push(`Средняя глава ${fmt(Math.round(mean))} ток. — `
-        + `в бюджет входит ≈${fmt(capacity)} ${plural(capacity)}.`);
+      // Пакеты считаются ТОЙ ЖЕ сборкой, что и у стадии (`build_batches`):
+      // главы идут подряд, пакет закрывается перед первой, которая не влезает,
+      // запас промпта — один на пакет. Средняя глава этого не показывала:
+      // «входит ≈12 глав» не говорило, сколько будет запросов.
+      const weights = fits.map(pairTokens);
+      let packets = 0;
+      if (weights.length) {
+        packets = 1;
+        let cur = 0;
+        for (const n of nums.filter((x) => !over.includes(x))) {
+          const t = pairTokens(n);
+          if (cur && cur + t + PROMPT_OVERHEAD > budget) {
+            packets += 1;
+            cur = 0;
+          }
+          cur += t;
+        }
+        const sum = weights.reduce((a, b) => a + b, 0);
+        const per = Math.max(1, Math.round(
+          (budget - PROMPT_OVERHEAD) / (sum / weights.length)));
+        const lo = Math.min(...weights), hi = Math.max(...weights);
+        // ёмкость — предел бюджета, а не размер пакета этой книги: их
+        // путало «в среднем по 2 600 глав» на диапазоне из двух глав
+        const weight = lo === hi ? `${fmt(lo)} ток.` : `${fmt(lo)}–${fmt(hi)} ток.`;
+        parts.push(`Запросов на диапазон: ${fmt(packets)}; `
+          + `в запрос входит до ${fmt(per)} ${plural(per)} `
+          + `(глава весит ${weight}).`);
+      }
       // откуда взялся коэффициент: иначе цифра выглядит магией
       if (ri.samples) {
         parts.push(`(${fmt(ratio).replace(",", ".")} байт/токен)`);

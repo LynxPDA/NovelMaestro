@@ -490,18 +490,15 @@ def test_re_build_batches():
     assert RE.build_batches([], 700, SilentLog()) == []
 
 
-def test_re_build_batches_by_chapters_and_pairs():
-    """Пакет по числу ГЛАВ (ГЛАВЫ): глава либо входит целиком, либо
-    начинает новый пакет; бюджет закрывает пакет раньше счёта глав."""
+def test_re_build_batches_by_budget_and_pairs():
+    """Пакет — только по бюджету: глав столько, сколько влезает.
+
+    Числа глав в запросе у стадии нет: пакеты намеренно разного размера,
+    и глава либо входит целиком, либо начинает новый пакет."""
     chapters = [(1, "f", "d", "а"), (2, "f", "d", "б"), (3, "f", "d", "в")]
-    # бюджет с запасом на две главы: счёт глав закрывает пакет раньше
     two = (RE.estimate_tokens("а") + RE.estimate_tokens("б")
            + RE.PROMPT_OVERHEAD)
-    batches = RE.build_batches(chapters, 50000, SilentLog(), per_request=1)
-    assert [[c[0] for c in b] for b in batches] == [[1], [2], [3]]
-    batches = RE.build_batches(chapters, two, SilentLog(), per_request=2)
-    assert [[c[0] for c in b] for b in batches] == [[1, 2], [3]]
-    batches = RE.build_batches(chapters, two, SilentLog(), per_request=0)
+    batches = RE.build_batches(chapters, two, SilentLog())
     assert [[c[0] for c in b] for b in batches] == [[1, 2], [3]]
     # пары (оригинал+перевод): в бюджете оба текста
     pair = [(1, "f", "d", "х" * 300, "字" * 300)]
@@ -510,14 +507,13 @@ def test_re_build_batches_by_chapters_and_pairs():
     assert len(RE.build_batches(pair, 100, SilentLog())) == 1
 
 
-def test_re_build_batches_budget_closes_packet_before_count():
-    """5 глав по 13k и бюджет 65k: уходят 4 целые главы, пятая отдельным
+def test_re_build_batches_budget_closes_packet():
+    """5 глав по 13k и бюджет на 4: уходят 4 целые главы, пятая отдельным
     пакетом — она НЕ режется (второй вариант пореза был бы неверен)."""
-    one = RE.estimate_tokens("х" * 35000) + RE.PROMPT_OVERHEAD
+    one = RE.estimate_tokens("х" * 35000)
     chapters = [(i, "f", "d", "х" * 35000) for i in range(1, 6)]
-    # бюджет на 4 главы: пятая уходит отдельным пакетом
-    batches = RE.build_batches(chapters, int(one * 4), SilentLog(),
-                               per_request=5)
+    batches = RE.build_batches(chapters, int(one * 4) + RE.PROMPT_OVERHEAD,
+                               SilentLog())
     assert [[c[0] for c in b] for b in batches] == [[1, 2, 3, 4], [5]]
 
 

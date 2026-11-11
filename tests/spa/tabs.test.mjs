@@ -1597,21 +1597,23 @@ test("запуски: подсказка бюджета пересчитывае
   assert.ok(status, "строка статуса в форме есть");
   const text = () => String(status.textContent || "");
   /* пара = (4000 + 4000) / 4 = 2 000 токенов; запас промпта 3000
-     вычитается ОДИН раз на запрос, поэтому входит (65000 − 3000) / 2000 */
-  assert.match(text(), /Средняя глава 2\s?000 ток\./, text());
-  assert.match(text(), /входит ≈31 глав/, text());
+     вычитается ОДИН раз на запрос, поэтому в пакет входит
+     (65000 − 3000) / 2000 = 31 глава. Обе главы влезают в один запрос. */
+  assert.match(text(), /Запросов на диапазон: 1/, text());
+  assert.match(text(), /в запрос входит до 31 глав[аы]?/, text());
+  assert.match(text(), /глава весит 2\s?000 ток\./, text());
   /* снимаем «Сверять с оригиналом»: остаётся только перевод
-     (4000 / 4 = 1000 токенов), ёмкость бюджета растёт */
+     (4000 / 4 = 1000 токенов), ёмкость пакета растёт */
   field("use_source")._input.checked = false;
   field("use_source")._input.dispatchEvent({ type: "change" });
   await tick();
-  assert.match(text(), /Средняя глава 1\s?000 ток\./, text());
-  assert.match(text(), /входит ≈62 глав/, text());
+  assert.match(text(), /в запрос входит до 62 глав/, text());
+  assert.match(text(), /глава весит 1\s?000 ток\./, text());
   /* и обратно: галка возвращает вес пары */
   field("use_source")._input.checked = true;
   field("use_source")._input.dispatchEvent({ type: "change" });
   await tick();
-  assert.match(text(), /Средняя глава 2\s?000 ток\./, text());
+  assert.match(text(), /в запрос входит до 31 глав[аы]?/, text());
   delete globalThis.__stageOptions;
 });
 
@@ -3832,4 +3834,38 @@ test("miniBar не остаётся от прошлого рендера, ког
     collectText(p).includes("Нет активного запуска"));
   assert.ok(card, "карточка активного запуска — заглушка");
   assert.equal(findByClass(card, "progress-row").length, 0);
+});
+
+test("запуски: подсказка считает запросы тем же правилом, что стадия", async () => {
+  /* Пакеты собираются ТОЛЬКО по бюджету (числа глав в запросе у стадии
+     нет): главы идут подряд, пакет закрывается перед первой, которая не
+     влезает, запас промпта — один на пакет. Подсказка обязана считать тем
+     же правилом, иначе человек видит «влезет 3 главы», а получает 3
+     запроса: средняя ёмкость этого не показывала. */
+  globalThis.__stageOptions = {
+    chapters: { min: 1, max: 4, ids: [1, 2, 3, 4] },
+    /* глава 1 весит 4 000 токенов (16000/4), главы 2–4 по 1 000 (4000/4) */
+    pair_bytes: {
+      1: { tr: 16000, src: 0 },
+      2: { tr: 4000, src: 0 },
+      3: { tr: 4000, src: 0 },
+      4: { tr: 4000, src: 0 },
+    },
+    pair_ratio: { value: 4, samples: 4 },
+  };
+  const page = await runStage("translate_check_llm");
+  const field = (name) => findByClass(page, "field")
+    .find((w) => w._field && w._field.name === name);
+  field("use_source")._input.checked = false;
+  field("use_source")._input.dispatchEvent({ type: "change" });
+  await tick();
+  /* бюджет 8 000: запас 3 000 → остаётся 5 000. Глава 1 (4 000) входит,
+     глава 2 уже нет → пакет [1]; дальше [2, 3, 4] по 1 000 = 3 000 ≤ 5 000.
+     Итого 2 запроса, хотя «в среднем» помещается (5000/(7000/4)) ≈ 2.86. */
+  field("request_budget")._input.value = "8000";
+  field("request_budget")._input.dispatchEvent({ type: "input" });
+  await tick();
+  const text = String(findByClass(page, "budget-status")[0].textContent || "");
+  assert.match(text, /Запросов на диапазон: 2/, text);
+  delete globalThis.__stageOptions;
 });

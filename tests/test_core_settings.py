@@ -978,8 +978,9 @@ def test_regexp_checks_default_has_no_literal_newline_inside_rule(global_env):
 
 
 def test_translate_check_llm_budget_defaults():
-    """Дефолты проверки перевода LLM: пакет по бюджету (0 глав) и 68000
-    токенов. «Глав в запросе» = 1 резало книгу на запрос-на-главу, хотя
-    бюджет уже ограничивает пакет."""
-    assert S.BY_KEY["TRANSLATE_CHECK_LLM_CHAPTERS_PER_REQUEST"].default == "0"
+    """Дефолт бюджета проверки перевода LLM — 68000 токенов.
+
+    Числа глав в запросе у стадии больше нет: пакет собирается только по
+    бюджету, поэтому поле не возвращается в реестр."""
     assert S.BY_KEY["TRANSLATE_CHECK_LLM_REQUEST_BUDGET"].default == "68000"
+    assert "TRANSLATE_CHECK_LLM_CHAPTERS_PER_REQUEST" not in S.BY_KEY

@@ -262,6 +262,10 @@ _HDR_MAX_CHARS = 160
 #: («В 1999 году…»), и она в этот порог не влезает.
 _HDR_PREFIX = 8
 
+#: что срезается с краёв первого слова, чтобы «Глава:» и «(Глава)» дали
+#: служебное слово, а не пунктуацию: знаки обоих тире, кавычки, скобки
+_HDR_TRIM_CHARS = ",.;:!?—–-–»«\"'()[]"
+
 
 def first_line(text):
     """Первая непустая строка текста ("" — текста нет)."""
@@ -309,7 +313,7 @@ def _starts_sentence(after: str) -> bool:
     words = after.replace("\xa0", " ").split()
     if not words:
         return False
-    first = words[0].strip(",.;:!?—–-–»«\"'()[]").lower()
+    first = words[0].strip(_HDR_TRIM_CHARS).lower()
     return first in _NOT_HEADER_TAG
 
 
@@ -516,41 +520,37 @@ def collect_chapters(start, end, file_type, budget, chapter_map, logger,
 # ПАКЕТЫ
 # ─────────────────────────────────────────────
 
-def build_batches(chapters, budget, logger, per_request=0):
+def build_batches(chapters, budget, logger):
     """Пакеты глав: каждая глава целиком, без разрезания на части.
 
-    `per_request` > 0 — пакет по числу ГЛАВ (сколько глав человек заказал
-    в одном запросе); 0 — пакет собирается только по бюджету. Бюджет
-    действует в обоих режимах и закрывает пакет раньше, чем наберётся
-    `per_request` глав: глава либо входит целиком, либо начинает новый
-    пакет, но никогда не режется пополам. Части одной главы в разных
-    пакетах дали бы ложные находки на стыке — поэтому их нет.
+    Пакет собирается только по бюджету — глав в запросе столько, сколько
+    влезает, поэтому пакеты бывают разного размера. Глава либо входит
+    целиком, либо начинает новый пакет, но никогда не режется пополам:
+    части одной главы в разных пакетах дали бы ложные находки на стыке.
     """
     if not chapters:
         return []
-    batches, cur, size, count = [], [], 0, 0
+    batches, cur, size = [], [], 0
     for item in chapters:
         # текст главы БЕЗ накладных: `PROMPT_OVERHEAD` — вес промпта, и он
         # один на ЗАПРОС, а не на каждую главу. Прежний подсчёт прибавлял
         # 3000 к каждой главе, и пакет закрывался на 8 главах там, где по
         # бюджету влезало 11: 24 000 токенов бюджета уходили впустую
         s = estimate_tokens(item[3]) + _tokens_of(_item_source(item))
-        over_budget = bool(cur) and size + s + PROMPT_OVERHEAD > budget
-        over_count = bool(per_request) and count >= per_request
-        if cur and (over_count or over_budget):
+        if cur and size + s + PROMPT_OVERHEAD > budget:
             batches.append(cur)
-            cur, size, count = [], 0, 0
+            cur, size = [], 0
         cur.append(item)
         size += s
-        count += 1
     if cur:
         batches.append(cur)
-    if per_request:
-        logger.info(f"Пакетов: {len(batches)} (до {per_request} глав "
-                    f"в запросе, бюджет {budget})")
-    else:
-        logger.info(f"Пакетов: {len(batches)} "
-                    f"(бюджет: {budget} токенов, оценка)")
+    if batches:
+        sizes = [len(b) for b in batches]
+        # пакеты намеренно разного размера: видно, сколько глав влезает и
+        # что остаток — не потерянные главы, а хвост диапазона
+        logger.info(f"Пакетов: {len(batches)} на {len(chapters)} глав "
+                    f"(бюджет {budget} токенов, оценка; "
+                    f"глав в пакете: {min(sizes)}–{max(sizes)})")
     return batches
 
 
@@ -1009,7 +1009,7 @@ def build_parser():
   --apply --dry-run предпросмотр применения;
   --auto-apply      сразу применить всё найденное (без человека).
 Единицы: --request_budget — ТОКЕНЫ (оценка estimate_tokens); max_tokens —
-серверный предохранитель, ТОКЕНЫ; --chapters_per_request — ГЛАВЫ.
+серверный предохранитель, ТОКЕНЫ.
 Сервер, модель, ключ, таймауты, повторы, потоки и рассуждения — ОДНИ на весь
 конвейер: флаг стадии пуст → значение из общего .env (или профиля LLM).
 Промпт-файл: один тег <prompt_translate_check>; без него — встроенный промпт.
@@ -1044,11 +1044,6 @@ def build_parser():
                          "chapter.txt парой [ОРИГИНАЛ]/[ПЕРЕВОД]; правки — "
                          "только из перевода (пусто = "
                          "TRANSLATE_CHECK_LLM_USE_SOURCE).")
-    ap.add_argument("--chapters_per_request", type=int, default=1, metavar="N",
-                    help="Глав в одном запросе, ГЛАВЫ (0 = пакет только по "
-                         "бюджету). Бюджет закрывает пакет раньше, но глава "
-                         "никогда не режется (пусто = "
-                         "TRANSLATE_CHECK_LLM_CHAPTERS_PER_REQUEST).")
     ap.add_argument("--retry_empty", type=int, default=0, metavar="N",
                     help="Повторов при отсутствии правок, ШТ (0 = нет; пусто = "
                          "TRANSLATE_CHECK_LLM_RETRY_EMPTY). Ответ без ошибок "
@@ -1149,7 +1144,6 @@ def do_check(args, stage) -> int:
         f"Главы {args.start}–{args.end} | {args.type} | "
         f"budget={args.request_budget} | "
         f"оригинал={'да' if args.use_source else 'нет'} | "
-        f"глав в запросе={args.chapters_per_request} | "
         f"threads={stage.profile.threads} | "
         f"retry_empty={args.retry_empty}")
 
@@ -1167,9 +1161,7 @@ def do_check(args, stage) -> int:
     if not chapters:
         logger.error("❌ Главы не найдены.")
         return 1
-    batches = build_batches(chapters, args.request_budget, logger,
-                            per_request=args.chapters_per_request
-                            if args.use_source else 0)
+    batches = build_batches(chapters, args.request_budget, logger)
     if not batches:
         return 1
 
@@ -1179,7 +1171,6 @@ def do_check(args, stage) -> int:
                     meta={"batches": len(batches),
                           "request_budget": args.request_budget,
                           "use_source": bool(args.use_source),
-                          "chapters_per_request": args.chapters_per_request,
                           "threads": stage.profile.threads,
                           "retry_empty": args.retry_empty,
                           "first_batch_chapters": sorted(
@@ -1192,7 +1183,6 @@ def do_check(args, stage) -> int:
     params = {"директория глав": args.chapters_dir,
               "тип файлов": args.type,
               "сверка с оригиналом": "да" if args.use_source else "нет",
-              "глав в запросе": args.chapters_per_request,
               "начало": args.start, "конец": args.end,
               "бюджет запроса": args.request_budget,
               "потоки": stage.profile.threads,

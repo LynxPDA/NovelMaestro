@@ -397,11 +397,9 @@ def build_translate_check_llm(form: dict, ctx: dict) -> list[str]:
     if form.get("retry_empty") not in (None, ""):
         argv += ["--retry_empty", str(form["retry_empty"])]
     # сверка с оригиналом: явный флаг в обе стороны (снятая галка не должна
-    # уехать включённой) + число глав в запросе, когда сверка включена
+    # уехать включённой). Пакет собирается только по бюджету — числа глав в
+    # запросе у стадии нет: глава целиком, сколько влезет
     argv += _bool_argv(form, "use_source", "--use-source", "--no-use-source")
-    if form.get("chapters_per_request") not in (None, "") \
-            and core_settings.is_on(form.get("use_source", True)):
-        argv += ["--chapters_per_request", str(form["chapters_per_request"])]
     argv += _llm_argv(form, ctx, "translate_check_llm")
     return argv
 
