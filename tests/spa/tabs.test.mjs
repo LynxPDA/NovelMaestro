@@ -1596,21 +1596,22 @@ test("запуски: подсказка бюджета пересчитывае
   const status = findByClass(page, "budget-status")[0];
   assert.ok(status, "строка статуса в форме есть");
   const text = () => String(status.textContent || "");
-  /* пара = (4000 + 4000) / 4 + запас 3000 = 5000 токенов */
-  assert.match(text(), /Средняя глава 5\s?000 ток\./, text());
-  assert.match(text(), /входит ≈13 глав/, text());
+  /* пара = (4000 + 4000) / 4 = 2 000 токенов; запас промпта 3000
+     вычитается ОДИН раз на запрос, поэтому входит (65000 − 3000) / 2000 */
+  assert.match(text(), /Средняя глава 2\s?000 ток\./, text());
+  assert.match(text(), /входит ≈31 глав/, text());
   /* снимаем «Сверять с оригиналом»: остаётся только перевод
-     (4000 / 4 + 3000 = 4000 токенов), ёмкость бюджета растёт */
+     (4000 / 4 = 1000 токенов), ёмкость бюджета растёт */
   field("use_source")._input.checked = false;
   field("use_source")._input.dispatchEvent({ type: "change" });
   await tick();
-  assert.match(text(), /Средняя глава 4\s?000 ток\./, text());
-  assert.match(text(), /входит ≈16 глав/, text());
+  assert.match(text(), /Средняя глава 1\s?000 ток\./, text());
+  assert.match(text(), /входит ≈62 глав/, text());
   /* и обратно: галка возвращает вес пары */
   field("use_source")._input.checked = true;
   field("use_source")._input.dispatchEvent({ type: "change" });
   await tick();
-  assert.match(text(), /Средняя глава 5\s?000 ток\./, text());
+  assert.match(text(), /Средняя глава 2\s?000 ток\./, text());
   delete globalThis.__stageOptions;
 });
 

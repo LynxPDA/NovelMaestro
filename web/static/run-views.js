@@ -2188,14 +2188,16 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         return;
       }
       nums.sort((a, b) => a - b);
-      // Пара = перевод + оригинал (когда сверка включена): токены обоих,
-      // плюс накладные промпта. Без оригинала в запросе его байтов нет.
+      // Пара = перевод + оригинал (когда сверка включена). Без оригинала
+      // в запросе его байтов нет. Промпт (PROMPT_OVERHEAD) — ОДИН на
+      // запрос, а не на главу: начислять его каждой главе значило бы
+      // занижать ёмкость бюджета на 3000 × (глав − 1).
       const PROMPT_OVERHEAD = 3000;
-      const tokens = (n) => {
+      const pairTokens = (n) => {
         const p = sizes[n] || {};
         const bytes = Number(p.tr || p[0] || 0)
           + (withSource ? Number(p.src || p[1] || 0) : 0);
-        return Math.round(bytes / ratio) + PROMPT_OVERHEAD;
+        return Math.round(bytes / ratio);
       };
       const parts = [];
       // главы без перевода: они не попадут в проверку вовсе — это не
@@ -2219,10 +2221,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         el.classList.remove("is-warn");
         return;
       }
-      const over = nums.filter((n) => tokens(n) > budget);
-      const total = nums.reduce((s2, n) => s2 + tokens(n), 0);
+      const over = nums.filter((n) => pairTokens(n) + PROMPT_OVERHEAD > budget);
+      const total = nums.reduce((s2, n) => s2 + pairTokens(n), 0);
       const mean = total / nums.length;
-      const capacity = Math.max(1, Math.floor(budget / mean));
+      // сколько глав входит: промпт вычитается из бюджета ОДИН раз
+      const capacity = Math.max(1, Math.floor((budget - PROMPT_OVERHEAD) / mean));
       if (!over.length) {
         parts.push(`Все главы диапазона проходят по бюджету (${fmt(nums.length)}).`);
         el.classList.remove("is-warn");

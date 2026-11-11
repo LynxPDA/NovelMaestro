@@ -532,9 +532,12 @@ def build_batches(chapters, budget, logger, per_request=0):
         return []
     batches, cur, size, count = [], [], 0, 0
     for item in chapters:
-        s = estimate_tokens(item[3]) + _tokens_of(_item_source(item)) \
-            + PROMPT_OVERHEAD
-        over_budget = bool(cur) and size + s > budget
+        # текст главы БЕЗ накладных: `PROMPT_OVERHEAD` — вес промпта, и он
+        # один на ЗАПРОС, а не на каждую главу. Прежний подсчёт прибавлял
+        # 3000 к каждой главе, и пакет закрывался на 8 главах там, где по
+        # бюджету влезало 11: 24 000 токенов бюджета уходили впустую
+        s = estimate_tokens(item[3]) + _tokens_of(_item_source(item))
+        over_budget = bool(cur) and size + s + PROMPT_OVERHEAD > budget
         over_count = bool(per_request) and count >= per_request
         if cur and (over_count or over_budget):
             batches.append(cur)

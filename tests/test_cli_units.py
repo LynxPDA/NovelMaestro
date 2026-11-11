@@ -210,9 +210,9 @@ def test_ner_load_two_pass_prompts(tmp_path):
 
 def _ner_stage(**kw):
     """Контекст стадии NER для моков: профиль с короткими таймаутами."""
-    fields = dict(base_url="http://h", model="модель", api_key="ключ",
-                  timeout=300, stream_timeout=300, max_retries=3,
-                  max_tokens=65536, logger=SilentLog())
+    fields: dict = dict(base_url="http://h", model="модель", api_key="ключ",
+                        timeout=300, stream_timeout=300, max_retries=3,
+                        max_tokens=65536, logger=SilentLog())
     fields.update(kw)
     return core_stage.Stage(name="ner", logger=SilentLog(),
                             profile=core_stage.LlmProfile(**fields))
@@ -479,11 +479,12 @@ def test_re_build_batches():
     chapters = [(1, "f", "d", "х" * 300), (2, "f", "d", "х" * 300),
                 (3, "f", "d", "х" * 300)]
     ov = RE.PROMPT_OVERHEAD
-    one = RE.estimate_tokens("х" * 300) + ov      # одна глава с запасом
-    # бюджет на одну главу — каждая едет отдельно
+    # Промпт — ОДИН на запрос: бюджет «промпт + одна глава» пускает ровно
+    # одну главу (две уже не влезут)
+    one = ov + RE.estimate_tokens("х" * 300)
     batches = RE.build_batches(chapters, one, SilentLog())
     assert len(batches) == 3 and all(len(b) == 1 for b in batches)
-    # бюджета хватает на все три
+    # бюджета хватает на все три: промпт считается один раз
     batches = RE.build_batches(chapters, one * 3, SilentLog())
     assert len(batches) == 1 and len(batches[0]) == 3
     assert RE.build_batches([], 700, SilentLog()) == []
@@ -494,7 +495,8 @@ def test_re_build_batches_by_chapters_and_pairs():
     начинает новый пакет; бюджет закрывает пакет раньше счёта глав."""
     chapters = [(1, "f", "d", "а"), (2, "f", "d", "б"), (3, "f", "d", "в")]
     # бюджет с запасом на две главы: счёт глав закрывает пакет раньше
-    two = (RE.estimate_tokens("а") + RE.PROMPT_OVERHEAD) * 2
+    two = (RE.estimate_tokens("а") + RE.estimate_tokens("б")
+           + RE.PROMPT_OVERHEAD)
     batches = RE.build_batches(chapters, 50000, SilentLog(), per_request=1)
     assert [[c[0] for c in b] for b in batches] == [[1], [2], [3]]
     batches = RE.build_batches(chapters, two, SilentLog(), per_request=2)
@@ -1058,6 +1060,7 @@ def test_cli_defaults_match_registry(stage):
     --replace-re вместо «split_patterns») — их проверяет
     test_web_jobs.py на собранном argv."""
     path = STAGE_SCRIPT[stage]
+    assert path is not None, f"нет скрипта стадии: {stage}"
     assert path.is_file(), f"нет скрипта стадии: {path}"
     by_dest = {a.dest: a.default for a in _script_parser(path)._actions}
     bad = []
@@ -1076,3 +1079,23 @@ def test_cli_defaults_match_registry(stage):
         if norm(want) != norm(got):
             bad.append(f"{name}: реестр {want!r} ≠ скрипт {got!r}")
     assert not bad, f"{stage}: " + "; ".join(bad)
+
+
+def test_re_build_batches_prompt_overhead_once_per_request():
+    """Запас промпта списывается ОДИН раз на запрос, а не на каждую главу.
+
+    Регресс боевого прогона: при бюджете 68000 пакет закрывался на 8 главах
+    и уходил запрос на ~46000 токенов — 24000 бюджета (3000 × 8) пропадали
+    впустую, потому что запас начислялся каждой главе.
+    """
+    body = "х" * 600
+    per = RE.estimate_tokens(body)
+    chapters = [(i, "f", "d", body) for i in range(1, 11)]
+    budget = RE.PROMPT_OVERHEAD + per * 10
+    batches = RE.build_batches(chapters, budget, SilentLog())
+    assert len(batches) == 1, "все десять глав влезают: запас один на запрос"
+    assert [c[0] for c in batches[0]] == list(range(1, 11))
+    # на одну главу меньше бюджета — последняя уходит отдельным пакетом
+    tight = RE.PROMPT_OVERHEAD + per * 10 - 1
+    batches = RE.build_batches(chapters, tight, SilentLog())
+    assert [len(b) for b in batches] == [9, 1], [len(b) for b in batches]
