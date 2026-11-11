@@ -158,10 +158,10 @@ DEFAULT_PROMPT = """\
 
 [
   {
+    "reason": "<краткое доказательство ошибки и проверка грамматики исправления>",
     "chapter": 117,
     "type": "typo|grammar|missing_word|incomplete|artifact|logic|mistranslation",
     "fragment": "<точная цитата из ПЕРЕВОДА без переносов строк, ≥50 символов (от 7–10 слов)>",
-    "reason": "<краткое доказательство ошибки и проверка грамматики исправления>",
     "corrected": "<исправленный fragment>"
   }
 ]
@@ -572,17 +572,27 @@ def _item_source(item):
 # ─────────────────────────────────────────────
 
 def parse_llm_json(text, logger):
+    """JSON-массив правок из ответа модели; None — не разобрать.
+
+    Берём ПЕРВЫЙ массив в тексте и разбираем его с места открывающей
+    скобки (`raw_decode`), а не регуляркой «от первой [ до последней ]».
+    Регулярка склеивала массив с квадратными скобками из пояснений модели:
+    на хвосте «Готово. Если нужно [больше], скажите» после пустого `[]`
+    совпадение тянулось до самой «]» в прозе, и валидный ответ `[]`
+    превращался в нераспарсенный — пакет без правок уходил в повтор, а при
+    `retry_empty=0` просто терялся.
+    """
     c = text.strip()
     c = re.sub(r'^```(?:json)?\s*', '', c)
     c = re.sub(r'\s*```$', '', c).strip()
-    m = re.search(r'\[.*\]', c, re.DOTALL)
-    if not m:
+    start = c.find("[")
+    if start < 0:
         return None
     try:
-        d = json.loads(m.group())
-        return d if isinstance(d, list) else None
+        obj, _end = json.JSONDecoder().raw_decode(c, start)
     except json.JSONDecodeError:
         return None
+    return obj if isinstance(obj, list) else None
 
 
 # ─────────────────────────────────────────────
@@ -755,22 +765,52 @@ def render_prompt(prompt_tpl: str, batch_text: str) -> str:
 
 
 def process_batch(batch, prompt, stage, retry_empty=0):
-    """Один батч — один запрос (с повторами, когда правок не нашлось).
+    """Один батч — один запрос (с повторами, пока не найдётся правка).
 
-    Повторы считает core.stage.complete_until по числу стадии
-    (TRANSLATE_CHECK_LLM_RETRY_EMPTY): ответ без ошибок, в т.ч. пустой
-    массив `[]`, — повод спросить ещё раз; 0 — повторов нет."""
+    «Правок нет» — это ЛЮБОЙ исход, где применять нечего: пустой ответ,
+    нераспарсенный ответ, пустой массив `[]` и ответ, полностью отклонённый
+    валидацией (цитата не нашлась в переводе, найдена дважды, правка
+    переписала кусок целиком). Валидация поэтому идёт ЗДЕСЬ, внутри
+    повторов: раньше она стояла в цикле пакетов уже после `complete_until`,
+    и пакет, где все находки отклонились, уходил в «ошибок: 0» без единой
+    повторной попытки — модель как будто ничего не нашла.
+
+    Число повторов — настройка стадии `TRANSLATE_CHECK_LLM_RETRY_EMPTY`
+    (0 — одна попытка)."""
     logger = stage.logger
     text = compose_batch_text(batch)
+    # сверка идёт ТОЛЬКО по тексту перевода: оригинал в батче есть, но адрес
+    # правки — файл перевода, и цитата, случайно совпавшая с оригиналом,
+    # была бы неверной находкой (см. validate_errors)
+    contents = {}
+    for c in batch:
+        contents[c[0]] = contents.get(c[0], "") + \
+            ("\n" if c[0] in contents else "") + c[3]
+    valid = set(contents)
+    cache: dict[str, list] = {}   # ответ → проверенные правки (ответы не длиннее батча)
+
+    def clean(raw):
+        """Разбор + валидация; None — ответ не разобран."""
+        errs = parse_llm_json(raw, logger)
+        if errs is None:
+            return None
+        return validate_errors(errs, valid, contents, logger)
+
+    def accept(raw):
+        res = clean(raw)
+        if res is None:
+            return False
+        cache[raw] = res
+        return bool(res)   # нечего применять — повод спросить ещё раз
 
     raw, _err = complete_until(
         stage, render_prompt(prompt, text), label="[check]",
-        attempts=retry_empty,
-        accept=lambda raw: bool(parse_llm_json(raw, logger)),
-        note="пустой/нераспарсенный ответ")
+        attempts=retry_empty, accept=accept,
+        note="правок нет (пустой массив, нераспарсенный ответ "
+             "или отклонённые валидацией)")
     if raw is None:
         return None   # ошибка LLM → fail-fast на уровне прогона
-    return parse_llm_json(raw, logger) or []
+    return cache[raw] if raw in cache else (clean(raw) or [])
 
 
 # ─────────────────────────────────────────────
@@ -1216,14 +1256,11 @@ def do_check(args, stage) -> int:
 
     def worker(idx, batch):
         nums = [c[0] for c in batch]
-        # сверка идёт ТОЛЬКО по тексту перевода: оригинал в батче есть,
-        # но адрес правки — файл перевода, и цитата, случайно совпавшая
-        # с оригиналом, была бы неверной находкой (см. validate_errors)
-        bc = {}
-        for c in batch:
-            bc[c[0]] = bc.get(c[0], "") + ("\n" if c[0] in bc else "") + c[3]
         logger.info(f"Пакет {idx + 1}/{len(batches)}: гл. "
                     f"{nums[0]}–{nums[-1]}")
+        # правки уже проверены в process_batch: валидация стоит внутри
+        # повторов, иначе пакет с одними отклонёнными находками уходил бы
+        # в «ошибок: 0» без повторного запроса
         errs = process_batch(batch, prompt, stage, args.retry_empty)
         if errs is None:
             with lock:
@@ -1231,7 +1268,6 @@ def do_check(args, stage) -> int:
             logger.error(f"✗ Пакет {idx + 1}: гл. {nums[0]}–{nums[-1]} — "
                          f"ошибка LLM.")
             return
-        errs = validate_errors(errs, set(nums), bc, logger)
         with lock:
             all_errors.extend(errs)
             done_cnt[0] += 1
