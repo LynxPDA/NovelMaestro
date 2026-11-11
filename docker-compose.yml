@@ -11,12 +11,16 @@
 #
 # Проверка правок на боевых данных (локальный образ вместо реестра):
 #   ./dev.sh image                     # соберёт <VERSION>-dev и :dev
-#   NOVELMAESTRO_IMAGE=<образ>:<VERSION>-dev docker compose up -d
+#   docker compose up -d               # compose возьмёт :dev и пересоздаст
 #   ...посмотреть руками...
-#   docker compose up -d               # вернуть релизный источник
-# Источник образа берётся из NOVELMAESTRO_IMAGE (окружение или .env рядом с
-# этим файлом), по умолчанию — релизный тег из реестра. Так локальная
-# проверка не требует правки самого compose и не может остаться в git.
+#   NOVELMAESTRO_IMAGE=ghcr.io/lynxpda/novelmaestro:latest docker compose up -d
+# Источник образа — NOVELMAESTRO_IMAGE (окружение или .env рядом с файлом),
+# по умолчанию локальный :dev: боевой контейнер поднимается с последней
+# собранной сборки, а не с выпущенного релиза, и тег не надо править после
+# каждой пересборки. Релизный образ подставляется переменной — правка
+# `image:` руками уезжала бы в git и могла там остаться.
+# pull_policy: never — локального образа нет в реестре, без этого
+# `docker compose pull` падал бы «pull access denied» и рвал `pull && up -d`.
 #
 # Данные:
 #   ./projects        — ВСЕ проекты (обязательно монтировать, иначе потеряются)
@@ -42,10 +46,17 @@
 services:
   novelmaestro:
     build: .                                    # исходники для --build
-    # Готовый образ из реестра. Локальная проверка правок подставляет
-    # свой тег через NOVELMAESTRO_IMAGE (см. шапку файла), поэтому
-    # закоммиченный здесь источник всегда остаётся релизным.
-    image: ${NOVELMAESTRO_IMAGE:-ghcr.io/lynxpda/novelmaestro:latest}
+    # По умолчанию — последняя локальная сборка (`./dev.sh image` метит её
+    # же тегом :dev, поэтому правка файла после пересборки не нужна:
+    # `docker compose up -d` пересоздаёт контейнер на новом образе).
+    # Релизный образ — NOVELMAESTRO_IMAGE=ghcr.io/lynxpda/novelmaestro:latest.
+    image: ${NOVELMAESTRO_IMAGE:-novelmaestro:dev}
+    # # Релизный образ из реестра — для истории и отката. Вернуть его:
+    # # раскомментировать строку ниже (или задать NOVELMAESTRO_IMAGE).
+    # image: ghcr.io/lynxpda/novelmaestro:latest
+    # В реестре локального тега нет: без этого `docker compose pull`
+    # падал бы «pull access denied» и рвал команду `pull && up -d`.
+    pull_policy: never
     container_name: novelmaestro
     restart: unless-stopped
     # uid/gid: контейнер стартует от root, docker-entrypoint.sh сам

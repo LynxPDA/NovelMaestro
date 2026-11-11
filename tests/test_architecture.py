@@ -355,14 +355,24 @@ def test_release_image_takes_version_from_one_place():
     assert "steps.ver.outputs.version" in wf
 
 
-def test_compose_image_source_stays_release():
-    """Источник образа в compose — релизный, а локальный подставляется снаружи.
+def test_compose_defaults_to_local_image():
+    """Боевой compose по умолчанию поднимает локальную сборку, не релиз.
 
-    Правка `image:` руками в боевом compose уезжала бы в git и могла
-    остаться там после проверки. Переменная оставляет закоммиченный
-    источник релизным всегда.
+    Проверка правок на боевых данных идёт ДО релиза, поэтому по умолчанию
+    должен подниматься проверочный образ: `docker compose up -d` без
+    переменных и без правки файла. Релизный образ подставляется
+    NOVELMAESTRO_IMAGE, а в шапке файла лежит закомментированной для
+    истории и отката.
     """
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "image: ${NOVELMAESTRO_IMAGE:-ghcr.io/lynxpda/novelmaestro:latest}" in compose, \
-        "источник образа обязан оставаться релизным по умолчанию"
-    assert "NOVELMAESTRO_IMAGE" in (ROOT / "dev.sh").read_text(encoding="utf-8")
+    assert "image: ${NOVELMAESTRO_IMAGE:-novelmaestro:dev}" in compose, \
+        "по умолчанию обязан подниматься локальный проверочный образ"
+    # строка релизного образа остаётся рядом — закомментированной
+    assert "# image: ghcr.io/lynxpda/novelmaestro:latest" in compose or \
+        "image: ghcr.io/lynxpda/novelmaestro:latest" in compose
+    src = (ROOT / "dev.sh").read_text(encoding="utf-8")
+    assert "NOVELMAESTRO_IMAGE" in src
+    # локального тега нет в реестре: без never `pull` рвёт `pull && up -d`
+    assert "pull_policy: never" in compose, \
+        "без pull_policy: never docker compose pull падает на локальном теге"
+    assert '-t "$base:dev"' in src, "тег :dev обязан ставиться при сборке"
