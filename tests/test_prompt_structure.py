@@ -76,3 +76,21 @@ def test_wiki_prompt_system_closes_and_has_no_data_blocks():
     # плейсхолдеров данных в шаблоне быть не должно
     for ph in DATA_PLACEHOLDERS:
         assert ph not in block, f"prompt_wiki_article: {ph} в шаблоне"
+
+
+def test_translate_check_prompt_puts_original_first_for_gender():
+    """Пол персонажа: приоритет у [ОРИГИНАЛА].
+
+    Раньше правило отправляло модель к «сюжету» и ставило [ОРИГИНАЛ]
+    вровень с видимым контекстом — при расхождении пола правка шла наугад.
+    Шаблон и встроенный промпт должны говорить одно.
+    """
+    from cli import translate_check_llm as tcl
+    tpl = _template_text("translate_check_prompt.txt")
+    for name, text in (("шаблон", tpl), ("встроенный", tcl.DEFAULT_PROMPT)):
+        low = text.lower()
+        assert "приоритет" in low, f"{name}: нет слова «приоритет»"
+        i = low.index("реальный пол определяй с приоритетом")
+        tail = low[i:i + 120]
+        assert "[оригинал]" in tail, f"{name}: [ОРИГИНАЛ] не первым"
+        assert "прав [оригинал]" in low, f"{name}: нет правила «прав [ОРИГИНАЛ]»"
