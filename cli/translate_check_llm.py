@@ -572,6 +572,21 @@ def _item_source(item):
 # ЗАПРОС К LLM
 # ─────────────────────────────────────────────
 
+#: сколько символов ответа модели показывать в логе, когда он не разобрался
+_LOG_HEAD = 120
+
+
+def _head(text) -> str:
+    """Начало ответа одной строкой — для лога нераспарсенного ответа.
+
+    Переводы строк схлопываются: ответ модели приходит куском JSON, но
+    переносы внутри строки ломают чтение лога построчно, а человеку важно
+    увидеть, с чего ответ начался (проза вместо массива, обрывок, забор).
+    """
+    one = " ".join(str(text or "").split())
+    return one if len(one) <= _LOG_HEAD else one[:_LOG_HEAD] + "…"
+
+
 def parse_llm_json(text, logger):
     """JSON-массив правок из ответа модели; None — не разобрать.
 
@@ -855,14 +870,30 @@ def process_batch(batch, prompt, stage, retry_empty=0):
             ("\n" if c[0] in contents else "") + c[3]
     valid = set(contents)
     cache: dict[str, tuple] = {}   # ответ → (правки, отброшенные)
+    # ответ → почему он не дал правок: одна строка для лога повтора
+    why: dict[str, str] = {}
 
     def clean(raw):
         """Разбор + валидация; None — ответ не разобран."""
         errs = parse_llm_json(raw, logger)
         if errs is None:
+            why[raw] = ("ответ не разобран как JSON-массив "
+                        f"(начало: «{_head(raw)}»)")
             return None
+        if not errs:
+            why[raw] = "модель вернула пустой массив `[]`"
+            return [], []
         dropped: list = []
         kept = validate_errors(errs, valid, contents, logger, drop=dropped)
+        if not kept:
+            # причины уже посчитаны валидацией — называем их, а не
+            # повторяем общий перечень правил
+            seen: dict = {}
+            for d in dropped:
+                seen[d["reason"]] = seen.get(d["reason"], 0) + 1
+            parts = ", ".join(f"{k}: {v}" for k, v in
+                              sorted(seen.items(), key=lambda kv: -kv[1]))
+            why[raw] = f"валидация отклонила все {len(errs)} ({parts})"
         return kept, dropped
 
     def accept(raw):
@@ -875,8 +906,7 @@ def process_batch(batch, prompt, stage, retry_empty=0):
     raw, _err = complete_until(
         stage, render_prompt(prompt, text), label="[check]",
         attempts=retry_empty, accept=accept,
-        note="правок нет (пустой массив, нераспарсенный ответ "
-             "или отклонённые валидацией)")
+        note="правок нет", detail=lambda r: why.get(r, "правок нет"))
     if raw is None:
         return None   # ошибка LLM → fail-fast на уровне прогона
     return cache[raw] if raw in cache else (clean(raw) or ([], []))
