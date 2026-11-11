@@ -3891,3 +3891,34 @@ test("запуски: глава без перевода не считается
   assert.match(text, /проходят по бюджету \(2\)/, text);
   delete globalThis.__stageOptions;
 });
+
+test("запуски: карточка активного запуска показывает живой прогресс", async () => {
+  /* Карточка брала `j.progress` — снимок задания на момент прикрепления,
+     который при SSE никогда не обновлялся. Рядом с лентой, где счётчик
+     уже шёл, карточка застревала на «0/154»: два счётчика на одном
+     экране показывали разные числа. Прогресс обязан идти из потока. */
+  const job = {
+    id: RUN_JOB, action: "translate_check_llm", project: "ACTIVE/Книга",
+    status: "running", lines: [], events: [],
+    /* снимок отстал: задание говорит 0/154 */
+    progress: { label: "Проверка перевода LLM", done: 0, total: 154 },
+  };
+  const page = await runView(job, [
+    /* а поток уже принёс 3/154 */
+    { type: "progress",
+      event: { label: "Проверка перевода LLM", done: 3, total: 154 } },
+  ]);
+  // кадры стрима расходятся по 15 мс: без ожидания карточка ещё на снимке
+  await settled();
+  const bars = findByClass(page, "progress-row");
+  assert.ok(bars.length, "строка прогресса есть");
+  const texts = bars.map((b) => collectText(b));
+  assert.ok(
+    texts.some((t) => /3\/154/.test(t)),
+    `в потоке 3/154, на экране: ${JSON.stringify(texts)}`,
+  );
+  assert.equal(
+    texts.filter((t) => /0\/154/.test(t)).length, 0,
+    `карточка отстала на 0/154: ${JSON.stringify(texts)}`,
+  );
+});

@@ -330,7 +330,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
        кнопки в одну строку не влезают никогда. */
     const bar = UIC.progressRow({ mini: true });
     st.miniBar = bar;
-    bar.paint(UICore.progressParts(j, j.progress));
+    /* Прогресс — из потока событий (`st.progress`), а `j` — снимок на
+       момент прикрепления: его `.progress` не обновляется никогда, и
+       карточка показывала «0/154», пока в ленте уже шло «1/154».
+       Снимок используется, только когда живого состояния ещё нет (чужая
+       карточка из списка запусков). */
+    const live = st.job && st.job.id === j.id ? st.progress : null;
+    bar.paint(UICore.progressParts(j, live || j.progress));
     const row = h(
       "div",
       { class: "active-run" },
@@ -3874,7 +3880,10 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       st.log = (payload.lines || []).slice(-LOG_LIMIT);
       logPending = st.log.length; // «что в окне — неизвестно»: всё заново
       if (Array.isArray(payload.events)) st.events = payload.events.slice();
-      if (payload.progress) st.progress = payload.progress;
+      if (payload.progress) {
+        st.progress = payload.progress;
+        if (st.job) st.job.progress = payload.progress;
+      }
       if (live) {
         paintLog();
         if (st.logBar || st.miniBar) paintProgress();
@@ -3895,6 +3904,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (live) scheduleLog();
     } else if (payload.type === "progress" && payload.event) {
       st.progress = payload.event;
+      // задание — тот же объект, что рисует карточку активного запуска:
+      // без этой строки её прогресс застревал на цифре прикрепления
+      if (st.job) st.job.progress = payload.event;
       // строка прогресса оживает и в панели лога живой стадии, и в
       // карточке активного запуска (она видна на любой вкладке)
       if ((live && st.logBar) || st.miniBar) paintProgress();
