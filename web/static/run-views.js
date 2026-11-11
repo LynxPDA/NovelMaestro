@@ -2292,6 +2292,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           + `(${weight}).`);
       }
       // откуда взялся коэффициент: иначе цифра выглядит магией
+      // неоднородная книга: плотность глав различается в разы, и один
+      // коэффициент не может быть точным для всех — честно говорим об этом
+      if (Number(ri.spread) > 1.15) {
+        const sp = fmt(Number(ri.spread)).replace(",", ".");
+        parts.push(`Разные языки в главах (плотность расходится в ${sp} раза): `
+          + "оценка приблизительная.");
+      }
       if (ri.samples) {
         const trShown = fmt(trRatio).replace(",", ".");
         // коэффициент оригинала показываем только когда он в деле:
@@ -2405,6 +2412,30 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     // запросов. Оценка завышена намеренно — «не влезет» верно всегда.
     if (key === "translate_check_llm") {
       const budgetStatusRow = budgetStatus(key, fieldWraps);
+      /* Опции несут байт на токен, а он меряется по текстам глав
+       * ДИАПАЗОНА: книга бывает разнородной (первые главы переведены с
+       * одного языка, остальные с другого), и коэффициент, снятый по первым
+       * десяти, завышал токены почти вдвое. Поэтому тип и диапазон едут в
+       * запрос вместе. */
+      const refetchOptions = async () => {
+        try {
+          const q = new URLSearchParams({ project: `${section}/${name}` });
+          const tw0 = fieldWraps["type"];
+          const tv = tw0 && tw0._input ? tw0._input.value : "";
+          if (tv) q.set("type", tv);
+          if (rangeRow && rangeRow._start) {
+            const s0 = String(rangeRow._start.value).trim();
+            const e0 = String(rangeRow._end.value).trim();
+            if (s0) q.set("start", s0);
+            if (e0) q.set("end", e0);
+          }
+          const r = await api(`/stages/${key}/options?${q}`);
+          st.options = r.options || {};
+        } catch {
+          /* прежние опции: прогноз пересчитается при следующем открытии */
+        }
+        budgetStatusRow.refresh();
+      };
       const bw = fieldWraps["request_budget"];
       const idx = bw ? fieldNodes.indexOf(bw) : -1;
       if (idx >= 0) fieldNodes.splice(idx + 1, 0, budgetStatusRow.el);
@@ -2412,11 +2443,24 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       if (bi) ["input", "change"].forEach(
         (ev) => bi.addEventListener(ev, budgetStatusRow.refresh));
       if (rangeRow) {
-        if (rangeRow._start) {
-          rangeRow._start.addEventListener("input", budgetStatusRow.refresh);
-        }
-        if (rangeRow._end) {
-          rangeRow._end.addEventListener("input", budgetStatusRow.refresh);
+        // Другой диапазон — другие главы, по текстам которых меряется байт
+        // на токен, поэтому опции перезапрашиваются. Пауза, а не на каждую
+        // цифру: поле числовое и вводят его посимвольно («1» → «11» → «111»
+        // дали бы три запроса впустую).
+        let refetchTimer = null;
+        const refetchSoon = () => {
+          clearTimeout(refetchTimer);
+          refetchTimer = setTimeout(refetchOptions, 400);
+        };
+        // input — мгновенный пересчёт по уже загруженным размерам (цифры
+        // видны сразу), change — сразу запрос, без ожидания паузы
+        for (const inp of [rangeRow._start, rangeRow._end]) {
+          if (!inp) continue;
+          inp.addEventListener("input", () => {
+            budgetStatusRow.refresh();
+            refetchSoon();
+          });
+          inp.addEventListener("change", refetchOptions);
         }
       }
       // «Сверять с оригиналом» меняет вес пары (с оригиналом — перевод +
@@ -2432,17 +2476,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const tw = fieldWraps["type"];
       const ti = tw && tw._input;
       if (ti) {
-        ti.addEventListener("change", async () => {
-          try {
-            const q = new URLSearchParams({ project: `${section}/${name}` });
-            if (ti.value) q.set("type", ti.value);
-            const r = await api(`/stages/${key}/options?${q}`);
-            st.options = r.options || {};
-          } catch {
-            /* прежние опции: прогноз пересчитается при следующем открытии */
-          }
-          budgetStatusRow.refresh();
-        });
+        ti.addEventListener("change", () => refetchOptions());
       }
       budgetStatusRow.refresh();
     }

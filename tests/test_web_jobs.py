@@ -3500,3 +3500,36 @@ def test_chapter_sizes_keeps_chapter_without_translation(jobs_srv, tmp_path):
         _C, build_chapter_map(root), "polished")
     assert sizes[1][0] > 0, "глава с переводом"
     assert sizes[2][0] == 0 and sizes[2][1] > 0, "глава без перевода видна"
+
+
+def test_pair_ratio_samples_only_selected_range(jobs_srv, tmp_path):
+    """Байт на токен меряется по главам ДИАПАЗОНА, а не по первым десяти.
+
+    Книга бывает разнородной: первые главы переведены с одного языка (3.12
+    байта на токен), остальные с другого (5.24). Замер по первым десяти
+    давал диапазону 11–40 чужую плотность и завышал токены почти вдвое —
+    «входит до N глав» было меньше настоящего.
+    """
+    from web.api_stage import _chapter_sizes
+    class _C:
+        @staticmethod
+        def estimate_tokens(t):
+            import sys
+            sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+            from core.common import estimate_tokens as real
+            return real(t)
+    root = tmp_path / "chapters"
+    for n in range(1, 21):
+        d = root / f"{n:05d}"
+        d.mkdir(parents=True)
+        (d / "chapter.txt").write_text("原文", encoding="utf-8")
+        # 1–10 плотный китайский текст, 11–20 разрежённый русский
+        body = "中文翻译文本。" * 100 if n <= 10 else "Перевод главы. " * 100
+        (d / "polished.txt").write_text(body, encoding="utf-8")
+    from core.common import build_chapter_map
+    ch_map = build_chapter_map(root)
+    _s, texts_all, _g = _chapter_sizes(_C, ch_map, "polished")
+    _s2, texts_hi, _g2 = _chapter_sizes(_C, ch_map, "polished", 11, 20)
+    # выборка берётся ровно из диапазона: все номера 11..20
+    assert texts_hi and texts_hi != texts_all, "диапазон меняет выборку"
+    assert len(texts_hi) <= 10

@@ -445,13 +445,24 @@ PAIR_SAMPLE = 10
 _PAIR_RATIO_CACHE: dict = {}
 
 
-def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
+def _chapter_sizes(common, ch_map: dict, file_type: str = "",
+                   start: int = 0, end: int = 0) -> tuple:
     """Байты файлов глав одним проходом: `(sizes, sample_texts, sig)`.
 
     `sizes` — {номер: (перевод, оригинал)} в байтах. `sample_texts` — тексты
-    первых `PAIR_SAMPLE` глав, у которых есть перевод: по ним считается
-    байт на токен (`pair_ratio`). Читать здесь же дешевле, чем второй раз
-    открывать те же файлы.
+    `PAIR_SAMPLE` глав, равномерно разнесённых по диапазону: по ним
+    считается байт на токен (`pair_ratio`). Читать здесь же дешевле, чем
+    второй раз открывать те же файлы.
+
+    Равномерно, а не «первые десять»: смешанная книга (часть глав переведена
+    с одного языка, часть с другого) мерилась только по её началу — диапазон
+    11–40 получал плотность 3.12 вместо 5.24, и прогноз завышал токены почти
+    вдвое. Разнесённая выборка стоит столько же чтения и видит всю книгу.
+
+    `start`/`end` — диапазон из формы: коэффициент меряется по его главам.
+    Книга бывает разнородной (перевод первых глав на одном языке, дальше на
+    другом), и замер по первым десяти главам давал на диапазоне 11–40
+    плотность 3.12 вместо 5.24 — прогноз завышал токены почти вдвое.
 
     `file_type` — тип файлов стадии (`polished`/`redacted`/`translated`):
     прогноз обязан считать ровно ту пару, которую прочитает стадия. Пустой
@@ -472,6 +483,12 @@ def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
                      else file_type + ".txt")
     else:
         order += ["polished.txt", "redacted.txt", "translated.txt"]
+    # выборка равномерно по диапазону: каждый k-й номер (не «первые десять» —
+    # смешанная книга мерилась бы только по началу)
+    nums = [n for n in sorted(ch_map)
+            if (not start or n >= start) and (not end or n <= end)]
+    step = max(1, len(nums) // PAIR_SAMPLE) if nums else 1
+    sample_ids = set(nums[::step][:PAIR_SAMPLE])
     sizes: dict = {}
     texts: list = []
     sig: list = []
@@ -499,7 +516,7 @@ def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
             src = entries["chapter.txt"].stat().st_size
         if tr or src:
             sizes[num] = (tr, src)
-        if tr_name and len(texts) < PAIR_SAMPLE:
+        if tr_name and num in sample_ids and len(texts) < PAIR_SAMPLE:
             tr_st = entries[tr_name].stat()
             sr_st = (entries["chapter.txt"].stat()
                      if "chapter.txt" in entries else None)
@@ -562,6 +579,30 @@ def _pair_ratio(common, pairs: list) -> float:
     # Предохранитель: прогноз обязан скорее ЗАВЫСИТЬ, чем пропустить
     # тяжёлую главу, поэтому ниже прежних 2.5 коэффициент не опускаем.
     return max(PAIR_RATIO_FALLBACK, value)
+
+
+def _ratio_spread(common, pairs: list, base: float) -> float:
+    """Во сколько раз плотность глав диапазона расходится с общей.
+
+    Книга обычно однородна (на живых книгах разброс 1.02x), но бывает
+    смешанной: часть глав переведена с одного языка, часть с другого, и
+    плотность различается в 1.7 раза. Один средний коэффициент тогда
+    переоценивает «легкие» главы до 40 % — прогноз обещает меньше глав,
+    чем стадия реально увезёт. Значение > 1.15 клиент показывает человеку,
+    чтобы тот не удивлялся расхождению.
+    """
+    if not pairs or base <= 0:
+        return 1.0
+    ratios = []
+    for tr, _src in pairs:
+        if not tr:
+            continue
+        tok = common.estimate_tokens(tr)
+        if tok:
+            ratios.append(len(tr.encode("utf-8")) / tok)
+    if len(ratios) < 2:
+        return 1.0
+    return round(max(ratios) / min(ratios), 2)
 
 
 def _translation_ratio(common, pairs: list) -> tuple:
@@ -645,13 +686,33 @@ def _file_type_arg(ctx: dict) -> str:
     return val if val in ("polished", "redacted", "translated") else ""
 
 
-def _pair_options(common, pdir: Path, key: str, file_type: str = "") -> dict:
+def _range_arg(ctx: dict) -> tuple:
+    """Диапазон глав из query формы: `(start, end)`, 0 — граница не задана.
+
+    Коэффициент «байт на токен» меряется по текстам глав, а плотность у
+    языков разная. Книга, где первые главы переведены с одного языка, а
+    остальные с другого, мерилась по первым десяти — и диапазон 11–40
+    получал чужую плотность (3.12 вместо 5.24), прогноз завышал токены
+    почти вдвое.
+    """
+    def _num(name):
+        try:
+            return max(0, int(str(ctx["query"].get(name) or "").strip()))
+        except (TypeError, ValueError):
+            return 0
+    return _num("start"), _num("end")
+
+
+def _pair_options(common, pdir: Path, key: str, file_type: str = "",
+                  start: int = 0, end: int = 0) -> dict:
     """Прогноз бюджета для «Проверки перевода (LLM)»: байты пары по главам
     и замеренный байт на токен.
 
     Считается по требованию, а НЕ кладётся в общий кеш опций: кеш общий на
     книгу и заполняется любой стадией, а этот словарь нужен одной. `file_type`
     — тип из формы; пустой — берётся из настроек стадии (`.env`).
+    `start`/`end` — диапазон формы: по нему меряется коэффициент, иначе
+    разнородная книга получала плотность чужих глав.
     """
     chapters_dir = pdir / "chapters"
     if not chapters_dir.is_dir():
@@ -660,7 +721,7 @@ def _pair_options(common, pdir: Path, key: str, file_type: str = "") -> dict:
     if not ch_map:
         return {}
     ft = file_type or _stage_file_type(pdir, key)
-    sizes, texts, fsig = _chapter_sizes(common, ch_map, ft)
+    sizes, texts, fsig = _chapter_sizes(common, ch_map, ft, start, end)
     ratio = _pair_ratio_cached(common, pdir, texts, fsig)
     # Три коэффициента, потому что складывать байты разных языков в одну
     # дробь нельзя: у русского перевода ~5.1 байта на токен, у китайского
@@ -668,6 +729,7 @@ def _pair_options(common, pdir: Path, key: str, file_type: str = "") -> dict:
     # только с оригиналом (её стадия всё равно пропустит) и глава с
     # маленьким оригиналом получали одну и ту же плотность.
     tr_ratio, src_ratio = _translation_ratio(common, texts)
+    spread = _ratio_spread(common, texts, tr_ratio)
     return {
         "pair_bytes": {str(n): {"tr": tr, "src": src}
                        for n, (tr, src) in sizes.items()},
@@ -675,7 +737,8 @@ def _pair_options(common, pdir: Path, key: str, file_type: str = "") -> dict:
                        "translation": tr_ratio,
                        "source": src_ratio,
                        "fallback": ratio == PAIR_RATIO_FALLBACK,
-                       "samples": len(texts), "type": ft}}
+                       "samples": len(texts), "type": ft,
+                       "spread": spread}}
 
 
 def _with_pair_options(common, pdir: Path, key: str, ctx: dict) -> dict:
@@ -685,7 +748,9 @@ def _with_pair_options(common, pdir: Path, key: str, ctx: dict) -> dict:
     выдаче, чтобы чужая стадия не «съедала» его из общего словаря.
     """
     out = dict(_OPTIONS_CACHE.get(str(pdir), (None, {}))[1])
-    out.update(_pair_options(common, pdir, key, _file_type_arg(ctx)))
+    start, end = _range_arg(ctx)
+    out.update(_pair_options(common, pdir, key, _file_type_arg(ctx),
+                             start, end))
     return _options_for_stage(out, key)
 
 
@@ -780,8 +845,10 @@ def _stage_options(ctx: dict) -> dict:
         # ему делать нечего (нужен одной стадии и зависит от типа файлов,
         # который меняют в форме, а не на диске)
         if key == "translate_check_llm":
+            start, end = _range_arg(ctx)
             out["options"].update(
-                _pair_options(common, pdir, key, _file_type_arg(ctx)))
+                _pair_options(common, pdir, key, _file_type_arg(ctx),
+                              start, end))
     return out
 
 
