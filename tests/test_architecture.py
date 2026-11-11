@@ -361,12 +361,15 @@ def test_compose_in_repo_uses_registry_image():
     Этот файл получают все, а локального `:dev` образа у них нет: с ним
     `docker compose pull` падал бы «pull access denied» и рвал
     `pull && up -d`. Свой локальный образ на проверку ставится в личном
-    compose на своей машине, а здесь — только переопределение
-    NOVELMAESTRO_IMAGE, чтобы проверка не требовала правки файла.
+    compose на своей машине. Здесь источник буквальный, без переменных:
+    файл читается как есть, и подстановка из окружения не может незаметно
+    отправить общего пользователя за образом, которого у него нет.
     """
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "image: ${NOVELMAESTRO_IMAGE:-ghcr.io/lynxpda/novelmaestro:latest}" in compose, \
-        "источник образа в репозитории обязан быть релизным"
+    assert "image: ghcr.io/lynxpda/novelmaestro:latest" in compose, \
+        "источник образа в репозитории обязан быть релизным и без переменных"
+    assert "${" not in compose.split("image:")[1].splitlines()[0], \
+        "строка образа не должна зависеть от переменных окружения"
     # в комментариях-образцах эти строки как раз нужны — смотрим код конфига
     code = [ln for ln in compose.splitlines() if not ln.lstrip().startswith("#")]
     assert not any("novelmaestro:dev" in ln for ln in code), \

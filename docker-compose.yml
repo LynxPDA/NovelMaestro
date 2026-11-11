@@ -43,10 +43,11 @@
 services:
   novelmaestro:
     build: .                                    # исходники для --build
-    # Готовый образ из реестра. Переопределяется NOVELMAESTRO_IMAGE —
-    # так локальная проверка подставляет свой, не трогая файл (правка
-    # `image:` руками уезжала бы в git и могла там остаться).
-    image: ${NOVELMAESTRO_IMAGE:-ghcr.io/lynxpda/novelmaestro:latest}
+    # Готовый образ из реестра. Локальную проверку правок делают в своём
+    # compose на своей машине (см. блок «Источник образа» в шапке) — здесь
+    # без переменных: файл читается буквально, и `docker compose pull`
+    # приносит выпущенный образ у всех, кто его скачал.
+    image: ghcr.io/lynxpda/novelmaestro:latest
     container_name: novelmaestro
     restart: unless-stopped
     # uid/gid: контейнер стартует от root, docker-entrypoint.sh сам
