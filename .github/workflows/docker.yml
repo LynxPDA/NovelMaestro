@@ -1,16 +1,31 @@
 # Docker-образ NovelMaestro → ghcr.io (GitHub Container Registry).
 #
-# Запуск: вкладка Actions → «Docker image» → «Run workflow» (кнопка),
-# или автоматически при пуше тега v* (например, git tag v1.2.3 && git push).
-# Образы: ghcr.io/<владелец>/<репо>:latest (по кнопке) и :<версия> (по тегу),
-# платформы linux/amd64 + linux/arm64.
+# Запуск: пуш тега v* (как было — релиз публикует образ вместе с
+# остальными сборками) или кнопка Actions → «Docker image» → «Run workflow»
+# с тегом релиза (пересобрать образ, не выпуская остальных артефактов).
+#
+# Как проверяют правки до релиза: `./dev.sh image` собирает образ из
+# текущего дерева и метит его тем же номером с суффиксом dev
+# (novelmaestro:0.8.9-dev). Он поднимается на боевых данных вручную, и
+# только после проверки человек решает выпускать релиз. Порядок описан
+# в packaging/README.md («Проверка правок до релиза»). Релизный образ
+# из реестра в этой проверке не участвует: `docker compose pull`
+# приносит только выпущенные версии.
+#
+# Образы: ghcr.io/<владелец>/<репо>:<версия> и :latest (на ветке по
+# умолчанию), платформы linux/amd64 + linux/arm64.
 
 name: Docker image
 
 on:
-  workflow_dispatch:          # ручная сборка по кнопке
+  workflow_dispatch:          # ручная пересборка: поле «Тег релиза»
+    inputs:
+      tag:
+        description: "Тег релиза (v1.2.3), из него VERSION и теги образа"
+        required: true
+        default: ""
   push:
-    tags: ["v*"]              # автоматически по тегу v1.2.3
+    tags: ["v*"]              # релиз — как раньше: по тегу v1.2.3
 
 permissions:
   contents: read
@@ -20,24 +35,41 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # release.yml передвигает тег на коммит с VERSION = тег ПОСЛЕ пуша
-      # тега, а все воркфлоу стартуют одновременно: checkout без явного
-      # ref фиксирует sha из события (старый коммит со старой цифрой).
-      # Ждём, пока удалённый тег укажет на коммит с правильным VERSION
-      # (не нужен, если bump не потребовался — совпадение сразу).
+      # Тег релиза: при пуше — сам тег, по кнопке — поле ввода.
+      # Дальше все шаги берут его отсюда, поэтому оба пути дают одно и то
+      # же: и версию в образе, и теги образа.
+      - name: Тег релиза
+        id: rel
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          case "$tag" in
+            v*) ;;
+            *) echo "::error::Тег релиза указывается с буквой v: v1.2.3 (получено: '$tag')"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      # release.yml передвигает тег на коммит с VERSION = тег уже ПОСЛЕ
+      # пуша тега, поэтому сверяемся с текущим положением тега, а не с
+      # sha события: ждём, пока он укажет на коммит с верной цифрой
+      # (сборка сразу после тега не должна получить старый коммит).
       - name: Дождаться синхронизации тега с VERSION
-        if: github.event_name == 'push'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.rel.outputs.tag }}
         run: |
-          ver="${GITHUB_REF_NAME#v}"
+          ref_name="${RELEASE_TAG}"
+          ver="${ref_name#v}"
           url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           tmp=$(mktemp -d)
           git init -q "$tmp"
           ok=""
           for i in $(seq 1 36); do
-            sha=$(git ls-remote "$url" "refs/tags/${GITHUB_REF_NAME}" | cut -f1)
+            sha=$(git ls-remote "$url" "refs/tags/${ref_name}" | cut -f1)
             if [ -n "$sha" ] \
                && git -C "$tmp" fetch --depth 1 -q "$url" "$sha" 2>/dev/null \
                && [ "$(git -C "$tmp" show "$sha":VERSION 2>/dev/null)" = "$ver" ]; then
@@ -46,15 +78,15 @@ jobs:
             sleep 10
           done
           if [ -z "$ok" ]; then
-            echo "::error::Тег $GITHUB_REF_NAME не указывает на коммит с VERSION=$ver (не отработал release.yml?)"
+            echo "::error::Тег $ref_name не указывает на коммит с VERSION=$ver (не отработал release.yml?)"
             exit 1
           fi
 
       - uses: actions/checkout@v4
         with:
-          # ref явный: тег разрешается СЕЙЧАС (после ожидания),
-          # а не по sha события пуша
-          ref: ${{ github.ref_name }}
+          # ref явный: тег разрешается СЕЙЧАС (после ожидания) —
+          # в его актуальном положении, а не по sha события
+          ref: ${{ steps.rel.outputs.tag }}
 
       - name: QEMU (эмуляция arm64 на amd64-раннере)
         uses: docker/setup-qemu-action@v3
@@ -63,12 +95,13 @@ jobs:
       # контекст сборки не входит. По тегу сверяем: расхождение VERSION с тегом
       # раньше давало образ «новой» версии со старой цифрой в интерфейсе.
       - name: VERSION = тег
-        if: github.event_name == 'push'
         shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.rel.outputs.tag }}
         run: |
-          ver="${GITHUB_REF_NAME#v}"
+          ver="${RELEASE_TAG#v}"
           if [ "$ver" != "$(cat VERSION)" ]; then
-            echo "::error::VERSION ($(cat VERSION)) не совпадает с тегом $GITHUB_REF_NAME — обновите VERSION или передвиньте тег"
+            echo "::error::VERSION ($(cat VERSION)) не совпадает с тегом $RELEASE_TAG — обновите VERSION или передвиньте тег"
             exit 1
           fi
 
@@ -82,15 +115,32 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Теги образа считаются САМИ из поля ввода: `type=semver` у
+      # metadata-action разбирает GITHUB_REF, а при ручном запуске это
+      # ветка (main), не тег — образ остался бы без версии и с одним
+      # :latest. Здесь те же три метки, что раньше давал semver.
+      - name: Теги образа из тега релиза
+        id: ver
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          full="${RELEASE_TAG#v}"          # 1.2.3
+          major="${full%%.*}"              # 1
+          rest="${full#*.}"
+          minor="${rest%%.*}"              # 2
+          echo "version=$full" >> "$GITHUB_OUTPUT"
+          echo "minor=$major.$minor" >> "$GITHUB_OUTPUT"
+
       - name: Метаданные образа
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ steps.ver.outputs.version }}
+            type=raw,value=${{ steps.ver.outputs.minor }}
+            type=raw,value=latest
 
       - name: Сборка и публикация
         uses: docker/build-push-action@v6
