@@ -1599,21 +1599,21 @@ test("запуски: подсказка бюджета пересчитывае
   /* пара = (4000 + 4000) / 4 = 2 000 токенов; запас промпта 3000
      вычитается ОДИН раз на запрос, поэтому в пакет входит
      (65000 − 3000) / 2000 = 31 глава. Обе главы влезают в один запрос. */
-  assert.match(text(), /Запросов на диапазон: 1/, text());
-  assert.match(text(), /в запрос входит до 31 глав[аы]?/, text());
-  assert.match(text(), /глава весит 2\s?000 ток\./, text());
+  assert.match(text(), /Запросов на весь диапазон: 1/, text());
+  assert.match(text(), /в среднем в запрос входит до 31 глав[аы]?/, text());
+  assert.match(text(), /средняя глава — 2\s?000 ток\./, text());
   /* снимаем «Сверять с оригиналом»: остаётся только перевод
      (4000 / 4 = 1000 токенов), ёмкость пакета растёт */
   field("use_source")._input.checked = false;
   field("use_source")._input.dispatchEvent({ type: "change" });
   await tick();
-  assert.match(text(), /в запрос входит до 62 глав/, text());
-  assert.match(text(), /глава весит 1\s?000 ток\./, text());
+  assert.match(text(), /в среднем в запрос входит до 62 глав[аы]?/, text());
+  assert.match(text(), /средняя глава — 1\s?000 ток\./, text());
   /* и обратно: галка возвращает вес пары */
   field("use_source")._input.checked = true;
   field("use_source")._input.dispatchEvent({ type: "change" });
   await tick();
-  assert.match(text(), /в запрос входит до 31 глав[аы]?/, text());
+  assert.match(text(), /в среднем в запрос входит до 31 глав[аы]?/, text());
   delete globalThis.__stageOptions;
 });
 
@@ -3866,6 +3866,28 @@ test("запуски: подсказка считает запросы тем ж
   field("request_budget")._input.dispatchEvent({ type: "input" });
   await tick();
   const text = String(findByClass(page, "budget-status")[0].textContent || "");
-  assert.match(text, /Запросов на диапазон: 2/, text);
+  assert.match(text, /Запросов на весь диапазон: 2/, text);
+  delete globalThis.__stageOptions;
+});
+
+test("запуски: глава без перевода не считается проходящей", async () => {
+  /* Глава с одним chapter.txt стадией ПРОПУСКАЕТСЯ: `find_chapter_file_in_dir`
+     не найдёт нужный тип файла. Прогноз видел у неё байты оригинала и считал
+     «проходит по бюджету» — обещал проверку, которой не будет. */
+  globalThis.__stageOptions = {
+    chapters: { min: 1, max: 3, ids: [1, 2, 3] },
+    /* гл. 2 — только оригинал, перевода нет */
+    pair_bytes: {
+      1: { tr: 16000, src: 0 },
+      2: { tr: 0, src: 16000 },
+      3: { tr: 16000, src: 0 },
+    },
+    pair_ratio: { value: 4, translation: 4, source: 2.5, samples: 3 },
+  };
+  const page = await runStage("translate_check_llm");
+  const text = String(findByClass(page, "budget-status")[0].textContent || "");
+  assert.match(text, /Без перевода выбранного типа: 1 глав[аы]?/, text);
+  // проходят только главы 1 и 3, а не все три
+  assert.match(text, /проходят по бюджету \(2\)/, text);
   delete globalThis.__stageOptions;
 });

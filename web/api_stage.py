@@ -500,7 +500,11 @@ def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
             src = entries["chapter.txt"].stat().st_size
         # глава без единого байта текста — стадия её пропустит, и прогноз
         # обязан сказать о ней отдельно, а не молчать
-        if not (tr or src):
+        if not tr:
+            # пустой ЛИБО отсутствующий перевод — глава без текста, и стадия
+            # её пропустит. Считать только «пустой файл» было мало: глава
+            # с одним chapter.txt вообще не попадала в счёт, хотя в проверку
+            # она тоже не идёт
             empty += 1
         if tr or src:
             sizes[num] = (tr, src)
@@ -542,6 +546,12 @@ def _pair_ratio(common, pairs: list) -> float:
     тексты выборки передаются парами, а `estimate_tokens` вызывается для
     обоих файлов — он и есть единственный счётчик проекта.
 
+    Коэффициент ПАРЫ клиент применяет к сумме байт обоих файлов, поэтому
+    складывать надо ровно те же величины. Снятая галка «Сверять с
+    оригиналом» едет без оригинала — там нужен коэффициент ОДНОГО перевода
+    (`_translation_ratio`), иначе дробь пары (4.74) делила бы байты
+    перевода, которые в среднем плотнее (5.2), и прогноз завышал токены.
+
     Возвращает `PAIR_RATIO_FALLBACK`, если мерить не по чему.
     """
     if not pairs:
@@ -561,6 +571,34 @@ def _pair_ratio(common, pairs: list) -> float:
     # Предохранитель: прогноз обязан скорее ЗАВЫСИТЬ, чем пропустить
     # тяжёлую главу, поэтому ниже прежних 2.5 коэффициент не опускаем.
     return max(PAIR_RATIO_FALLBACK, value)
+
+
+def _translation_ratio(common, pairs: list) -> tuple:
+    """Байт на токен ОТДЕЛЬНО для перевода и для оригинала: `(tr, src)`.
+
+    Складывать байты разных письменностей в одну дробь нельзя: русский
+    перевод — ~5.1 байта на токен, китайский оригинал — ~2.8. Общая дробь
+    пары занижала главу с одним переводом и завышала главу с оригиналом
+    (на живой книге: 11 372 против 11 635 ток. и 3 463 против 2 969).
+    Клиент умножает каждый файл своим коэффициентом.
+
+    Второй элемент — 0.0, если оригиналов в выборке нет: делить не на что,
+    и подставлять чужую плотность значило бы выдумывать число.
+    """
+    tr_tokens = tr_raw = src_tokens = src_raw = 0
+    for tr, src in pairs:
+        t = common.estimate_tokens(tr) if tr else 0
+        if t:
+            tr_tokens += t
+            tr_raw += len((tr or "").encode("utf-8"))
+        s2 = common.estimate_tokens(src) if src else 0
+        if s2:
+            src_tokens += s2
+            src_raw += len((src or "").encode("utf-8"))
+    tr_ratio = (max(PAIR_RATIO_FALLBACK, round(tr_raw / tr_tokens, 2))
+                if tr_tokens and tr_raw else PAIR_RATIO_FALLBACK)
+    src_ratio = round(src_raw / src_tokens, 2) if src_tokens and src_raw else 0.0
+    return tr_ratio, src_ratio
 
 
 def _stage_file_type(pdir, key: str) -> str:
@@ -633,10 +671,18 @@ def _pair_options(common, pdir: Path, key: str, file_type: str = "") -> dict:
     ft = file_type or _stage_file_type(pdir, key)
     sizes, texts, empty, fsig = _chapter_sizes(common, ch_map, ft)
     ratio = _pair_ratio_cached(common, pdir, texts, fsig)
+    # Три коэффициента, потому что складывать байты разных языков в одну
+    # дробь нельзя: у русского перевода ~5.1 байта на токен, у китайского
+    # оригинала ~2.8. Общая дробь пары (4.4) врала в обе стороны — глава
+    # только с оригиналом (её стадия всё равно пропустит) и глава с
+    # маленьким оригиналом получали одну и ту же плотность.
+    tr_ratio, src_ratio = _translation_ratio(common, texts)
     return {
         "pair_bytes": {str(n): {"tr": tr, "src": src}
                        for n, (tr, src) in sizes.items()},
         "pair_ratio": {"value": ratio,
+                       "translation": tr_ratio,
+                       "source": src_ratio,
                        "fallback": ratio == PAIR_RATIO_FALLBACK,
                        "samples": len(texts), "type": ft, "empty": empty}}
 

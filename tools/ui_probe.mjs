@@ -2861,7 +2861,7 @@ async function main() {
     if (cprCount) {
       problems.push("use-source: «Глав в запросе» вернулось в форму");
     }
-    if (!/Запросов на диапазон/.test(withSrc || "")) {
+    if (!/Запросов на весь диапазон/.test(withSrc || "")) {
       problems.push(`use-source: нет числа запросов «${withSrc}»`);
     }
     if (withSrc === noSrc) {
@@ -2916,10 +2916,10 @@ async function main() {
     // сколько запросов выйдет на диапазон и по сколько глав — второй
     // частью той же строки (средняя ёмкость пакета без числа запросов не
     // отвечала на вопрос «сколько это будет вызовов»)
-    if (!/Запросов на диапазон: [\d\u00a0 ]+/.test(okBig.text)) {
+    if (!/Запросов на весь диапазон: [\d\u00a0 ]+/.test(okBig.text)) {
       problems.push(`budget-status: нет числа запросов «${okBig.text}»`);
     }
-    if (!/в запрос входит до [\d\u00a0 ]+ глав/.test(okBig.text)) {
+    if (!/в среднем в запрос входит до [\d\u00a0 ]+ глав/.test(okBig.text)) {
       problems.push(`budget-status: нет среднего размера пакета «${okBig.text}»`);
     }
     if (okBig.warn) {

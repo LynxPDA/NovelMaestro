@@ -2178,13 +2178,29 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const srcRaw = srcWrap && srcWrap._input
         ? srcWrap._input.checked : vals["use_source"];
       const withSource = UICore.boolOn(srcRaw);
+      // Плотность у русского перевода (~5.1 байта на токен) и у
+      // китайского оригинала (~2.8) разная, поэтому файлы делятся СВОИМИ
+      // коэффициентами. Одна дробь пары врала в обе стороны: глава с
+      // маленьким оригиналом получала 3 463 ток. вместо 2 969, глава с
+      // большим — 11 372 вместо 11 635.
+      const trRatio = Number(ri.translation) || ratio;
+      const srcRatio = Number(ri.source) || ratio;
       const ch = opts.chapters || {};
       const rs = Number(vals["start"] || ch.min || 0);
       const re = Number(vals["end"] || ch.max || 0);
       const lo = rs && re ? Math.min(rs, re) : 0;
       const hi = rs && re ? Math.max(rs, re) : Infinity;
+      // Глава без перевода (есть только chapter.txt) стадией ПРОПУСКАЕТСЯ:
+      // `find_chapter_file_in_dir` не найдёт нужный тип, и в проверку глава
+      // не пойдёт. В прогнозе у неё есть байты оригинала, и раньше она
+      // считалась «проходит по бюджету» — обещала проверку, которой не будет.
+      const hasTr = (n) => {
+        const p = sizes[n] || {};
+        return Number(p.tr || p[0] || 0) > 0;
+      };
       const nums = sizes
-        ? Object.keys(sizes).map(Number).filter((n) => n >= lo && n <= hi)
+        ? Object.keys(sizes).map(Number)
+          .filter((n) => n >= lo && n <= hi && hasTr(n))
         : [];
       if (!sizes || !budget) {
         el.textContent = "";
@@ -2199,25 +2215,27 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const PROMPT_OVERHEAD = 3000;
       const pairTokens = (n) => {
         const p = sizes[n] || {};
-        const bytes = Number(p.tr || p[0] || 0)
-          + (withSource ? Number(p.src || p[1] || 0) : 0);
-        return Math.round(bytes / ratio);
+        const tr = Number(p.tr || p[0] || 0);
+        const src = withSource ? Number(p.src || p[1] || 0) : 0;
+        // вверх, а не round: «скорее завысить» — 0.4 токена вниз на сотнях
+        // глав складывались в главу, которую прогноз обещал, а стадия нет
+        return Math.ceil(tr / trRatio) + Math.ceil(src / srcRatio);
       };
       const parts = [];
       // главы без перевода: они не попадут в проверку вовсе — это не
       // «влезет/не влезет», а отдельная строка, иначе непонятно, почему
       // глав в диапазоне больше, чем в прогнозе
       const ids = Array.isArray(ch.ids) ? ch.ids : [];
+      // только главы ДИАПАЗОНА: книга из 300 глав при диапазоне 1–2
+      // показывала «без перевода 298» и пугала несуществующей работой
       const notReady = ids.filter((n) => n >= lo && n <= hi
-        && !sizes[n]).length;
+        && !hasTr(n)).length;
+      // «нет перевода» и «пустой перевод» — одно и то же для стадии:
+      // `find_chapter_file_in_dir` пустой файл не найдёт, и глава не поедет.
+      // Считать их двумя строками значило дважды сказать одно
       if (notReady) {
         parts.push(`Без перевода выбранного типа: ${fmt(notReady)} `
           + `${plural(notReady)} — в проверку не пойдут.`);
-      }
-      // пустой файл перевода — отдельная беда: он есть, но проверять нечего
-      if (ri.empty) {
-        parts.push(`Пустых файлов перевода: ${fmt(ri.empty)} `
-          + `— главы без текста, стадия их пропустит.`);
       }
       if (!nums.length) {
         el.textContent = parts.join(" ");
@@ -2257,19 +2275,32 @@ window.viewRun = function viewRun(section, name, attachJobId) {
           cur += t;
         }
         const sum = weights.reduce((a, b) => a + b, 0);
-        const per = Math.max(1, Math.round(
+        // Ёмкость — СКОЛЬКО ЦЕЛЫХ глав влезает в среднем, поэтому
+        // округление вниз: Math.round на 32.5 обещал 33 главы, а 33-я
+        // уже не влезает (0.5 главы не бывает)
+        const per = Math.max(1, Math.floor(
           (budget - PROMPT_OVERHEAD) / (sum / weights.length)));
-        const lo = Math.min(...weights), hi = Math.max(...weights);
-        // ёмкость — предел бюджета, а не размер пакета этой книги: их
-        // путало «в среднем по 2 600 глав» на диапазоне из двух глав
-        const weight = lo === hi ? `${fmt(lo)} ток.` : `${fmt(lo)}–${fmt(hi)} ток.`;
-        parts.push(`Запросов на диапазон: ${fmt(packets)}; `
-          + `в запрос входит до ${fmt(per)} ${plural(per)} `
-          + `(глава весит ${weight}).`);
+        // имена СВОИ: lo/hi выше — границы диапазона глав, и повторное
+        // объявление в этой же области ломало бы диапазон
+        const wLo = Math.min(...weights), wHi = Math.max(...weights);
+        // это средний объём главы, а не вес конкретной: так и пишем
+        const weight = wLo === wHi
+          ? `средняя глава — ${fmt(wLo)} ток.`
+          : `средняя глава — от ${fmt(wLo)} до ${fmt(wHi)} ток.`;
+        parts.push(`Запросов на весь диапазон: ${fmt(packets)}; `
+          + `в среднем в запрос входит до ${fmt(per)} ${pluralGen(per)} `
+          + `(${weight}).`);
       }
       // откуда взялся коэффициент: иначе цифра выглядит магией
       if (ri.samples) {
-        parts.push(`(${fmt(ratio).replace(",", ".")} байт/токен)`);
+        const trShown = fmt(trRatio).replace(",", ".");
+        // коэффициент оригинала показываем только когда он в деле:
+        // оголённое второе число человеку ничего не объясняло
+        const srcShown = Number(ri.source)
+          ? `, ${fmt(Number(ri.source)).replace(",", ".")}` : "";
+        parts.push(withSource && srcShown
+          ? `(перевод ${trShown}, оригинал ${fmt(Number(ri.source)).replace(",", ".")} байт/токен)`
+          : `(${trShown} байт/токен)`);
       }
       el.textContent = parts.join(" ");
       el.classList.remove("hidden");
@@ -2279,6 +2310,14 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const d = n % 10, dd = n % 100;
       if (d === 1 && dd !== 11) return "глава";
       if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return "главы";
+      return "глав";
+    }
+    /* после «до» нужен родительный падеж: «до 21 главы», а не «до 21 глава».
+       Формы те же, меняется только первая (глава → главы) */
+    function pluralGen(n) {
+      const d = n % 10, dd = n % 100;
+      if (d === 1 && dd !== 11) return "главы";
+      if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return "глав";
       return "глав";
     }
     return { el: el, refresh: refresh };

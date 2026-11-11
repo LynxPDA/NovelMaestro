@@ -3079,16 +3079,13 @@ def test_chapter_sizes_skips_empty_and_respects_type(jobs_srv, tmp_path):
     # (стадия читает строго свой тип); оригинал при этом посчитан
     assert sizes[2][0] == 0, "пустой polished не считается переводом"
     assert sizes[2][1] > 0, "оригинал считается и без перевода"
-    # пустых глав нет: у всех трёх есть chapter.txt, и `empty` их не считает
-    assert empty == 0, empty
+    # `empty` — главы БЕЗ ПЕРЕВОДА: стадия их пропустит, и прогноз обязан
+    # сказать о них отдельно. Раньше считались только «пустые файлы», а
+    # глава с одним chapter.txt вообще не попадала в счёт, хотя в проверку
+    # она тоже не идёт (2 и 3: пустой polished и полное его отсутствие)
+    assert empty == 2, empty
     # глава 3 без перевода вообще — в прогнозе у неё только оригинал
     assert sizes[3][0] == 0 and sizes[3][1] > 0
-    # глава вовсе без текста (нет ни перевода, ни оригинала) — отдельный счёт
-    (root / "00004").mkdir()
-    (root / "00004" / "polished.txt").write_text("", encoding="utf-8")
-    _s2, _t2, empty2, _sig2 = _chapter_sizes(
-        _C, build_chapter_map(root), "polished")
-    assert empty2 == 1, "глава без единого байта текста считается отдельно"
 
 
 def test_pair_ratio_cache_sees_content_change(jobs_srv, tmp_path):
@@ -3454,3 +3451,55 @@ def test_stage_options_see_new_chapters(jobs_srv, tmp_path):
     assert payload["options"]["chapters"] == {"min": 1, "max": 3,
                                               "ids": [1, 2, 3]}
     _OPTIONS_CACHE.clear()
+
+
+def test_pair_ratio_splits_by_language(jobs_srv):
+    """Коэффициент считается ОТДЕЛЬНО для перевода и оригинала.
+
+    Общая дробь пары смешивала письменности: русский перевод — ~5.1 байта
+    на токен, китайский оригинал — ~2.8. На живой книге прогноз давал
+    3 463 ток. вместо 2 969 у главы с маленьким оригиналом и 11 372 вместо
+    11 635 у главы с большим — «не влезет» и число пакетов врали.
+    """
+    from web.api_stage import _translation_ratio
+    class _C:
+        @staticmethod
+        def estimate_tokens(t):
+            import sys
+            sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+            from core.common import estimate_tokens as real
+            return real(t)
+    # русский перевод плотный, китайский оригинал — редкий
+    tr = "перевод главы текст. " * 100
+    src = "原" * 500
+    tr_ratio, src_ratio = _translation_ratio(_C, [(tr, src)])
+    assert tr_ratio > 4.0, tr_ratio
+    assert src_ratio < 3.5, src_ratio
+    # глава без оригинала: второго коэффициента нет — не выдумываем число
+    _tr2, src2 = _translation_ratio(_C, [(tr, "")])
+    assert src2 == 0.0, "без оригиналов коэффициент оригинала не выдумывается"
+
+
+def test_chapter_sizes_counts_chapter_without_translation_as_empty(jobs_srv,
+                                                                   tmp_path):
+    """Глава с одним `chapter.txt` считается «без перевода».
+
+    Стадия её пропустит (`find_chapter_file_in_dir` не найдёт нужный тип),
+    поэтому прогноз обязан сказать о ней отдельно. Раньше `empty` считал
+    только пустые файлы, и такая глава не попадала ни в один счёт.
+    """
+    from web.api_stage import _chapter_sizes
+    class _C:
+        @staticmethod
+        def estimate_tokens(t):
+            return len(t) // 4
+    root = tmp_path / "chapters"
+    for n in (1, 2):
+        d = root / f"{n:05d}"
+        d.mkdir(parents=True)
+        (d / "chapter.txt").write_text("原文", encoding="utf-8")
+    (root / "00001" / "polished.txt").write_text("перевод", encoding="utf-8")
+    from core.common import build_chapter_map
+    _sizes, _texts, empty, _sig = _chapter_sizes(
+        _C, build_chapter_map(root), "polished")
+    assert empty == 1, "глава 2 без перевода — в счёте «без перевода»"
