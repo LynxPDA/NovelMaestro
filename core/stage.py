@@ -418,7 +418,11 @@ def complete_until(stage: Stage, prompt: str, data: str = "", *,
         if check(text):
             return text, None
         if stage.logger is not None and att < total - 1:
-            stage.logger.info(f"{label}: {note} — повтор {att + 2}/{total}")
+            # «повтор 2/3» читалось как «попытка 2 из 3» — то есть как
+            # MAX_RETRIES, хотя это ДРУГАЯ настройка (RETRY_EMPTY): считаем
+            # сами повторы, а не запросы, и называем предел их числом
+            stage.logger.info(
+                f"{label}: {note} — повтор {att + 1} из {total - 1}")
     return text, None
 
 

@@ -714,3 +714,23 @@ def test_check_prompt_without_flag_is_noop():
     """Флага нет — обычный запуск: ничего не пишется, main() продолжает работу."""
     args = argparse.Namespace(check_prompt=None, prompt_file="prompts/x.txt")
     assert st.check_prompt(args, "ner", _PC_CONTRACT) is False
+
+
+def test_complete_until_log_names_retries_not_attempts(answers, caplog):
+    """Строка повтора называет НОМЕР ПОВТОРА, а не номер запроса.
+
+    Было «повтор 2/3» при `RETRY_EMPTY=2`: читается как «попытка 2 из 3»,
+    то есть как настройка `MAX_RETRIES` («Попыток запроса к LLM»), хотя это
+    другая величина — дополнительные запросы при отсутствии правок. Своих
+    повторов здесь ровно два, значит и предел — «из 2».
+    """
+    answers["want"] = [("[]", None), ("[]", None), ("[]", None)]
+    stage = _stage(answers)
+    with caplog.at_level(logging.INFO, logger=LOG.name):
+        st.complete_until(stage, "п", label="[check]", attempts=2,
+                          accept=lambda t: bool(json.loads(t)))
+    lines = [r.getMessage() for r in caplog.records if "повтор" in r.getMessage()]
+    assert lines[0].endswith("повтор 1 из 2"), lines
+    assert lines[1].endswith("повтор 2 из 2"), lines
+    # номера запросов (2 и 3) в строке не появляются
+    assert all("/3" not in ln for ln in lines), lines
