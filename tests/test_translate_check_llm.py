@@ -40,10 +40,12 @@ def test_fix_entry_normalizes_and_defaults():
     assert e["applied"] is False
 
 
-def test_fix_entry_bad_type_cleared_and_invalid_rejected():
+def test_fix_entry_bad_type_and_invalid_rejected():
+    """Незнакомый тип остаётся: модель могла не назвать категорию, но
+    увидеть настоящую ошибку — метка это описание, а не адрес замены."""
     e = C.fix_entry({"chapter": 1, "fragment": "длинный фрагмент",
                      "corrected": "другой фрагмент", "type": "бред"})
-    assert e is not None and e["type"] == ""
+    assert e is not None and e["type"] == "бред"
     assert C.fix_entry({"chapter": "x", "fragment": "а",
                         "corrected": "б"}) is None
     assert C.fix_entry({"chapter": 1, "fragment": "одно и то же",
@@ -169,8 +171,9 @@ def test_process_batch_one_request(seam):
         "corrected": "Второй абзац тоже тут есть!",
         "type": "typo", "reason": "проверка"}]))
     batch = [(1, "f", "d", "Глава 1\n" + body)]
-    out = FE.process_batch(batch, "ПРОМПТ", make_stage())
-    assert out is not None
+    pair = FE.process_batch(batch, "ПРОМПТ", make_stage())
+    assert pair is not None
+    out, _dropped = pair
     assert len(out) == 1 and out[0]["chapter"] == 1
     assert len(seam.calls) == 1  # один запрос на батч: верификации больше нет
     # правила промпта и текст батча — в одном user-сообщении ({batch_text})
@@ -187,7 +190,8 @@ def test_process_batch_failures(seam):
     # число повторов принадлежит настройке стадии, а не профилю
     seam.calls.clear()
     seam.answers.append("мусор")
-    assert FE.process_batch(batch, "ПРОМПТ", make_stage(), retry_empty=1) == []
+    pair = FE.process_batch(batch, "ПРОМПТ", make_stage(), retry_empty=1)
+    assert pair is not None and pair[0] == []
     assert len(seam.calls) == 2
 
 
@@ -195,7 +199,8 @@ def test_process_batch_no_retry_by_default(seam):
     """Без повторов ответ «ошибок нет» (`[]`) берётся с первого раза."""
     seam.answers.append("[]")
     batch = [(1, "f", "d", "текст")]
-    assert FE.process_batch(batch, "ПРОМПТ", make_stage()) == []
+    pair = FE.process_batch(batch, "ПРОМПТ", make_stage())
+    assert pair is not None and pair[0] == []
     assert len(seam.calls) == 1
 
 
@@ -727,9 +732,13 @@ def test_process_batch_repeats_when_validation_rejects_all(seam):
         "corrected": "Такого текста в переводе нет и не было никогда?",
         "type": "typo", "reason": "проверка"}])
     seam.answers.extend([bad, bad])
-    out = FE.process_batch(batch, "ПРОМПТ", make_stage(), retry_empty=1)
+    pair = FE.process_batch(batch, "ПРОМПТ", make_stage(), retry_empty=1)
+    assert pair is not None
+    out, dropped = pair
     assert out == []
     assert len(seam.calls) == 2, "отклонённые правки не вызвали повтор"
+    # отклонённое не пропадает: уходит человеку с причиной
+    assert dropped and dropped[0]["reason"]
 
 
 def test_process_batch_stops_when_validation_accepts(seam):
@@ -742,6 +751,90 @@ def test_process_batch_stops_when_validation_accepts(seam):
         "fragment": "Второй абзац тоже здесь есть!",
         "corrected": "Второй абзац тоже тут есть!",
         "type": "typo", "reason": "проверка"}]))
-    out = FE.process_batch(batch, "ПРОМПТ", make_stage(), retry_empty=2)
-    assert out is not None
+    pair = FE.process_batch(batch, "ПРОМПТ", make_stage(), retry_empty=2)
+    assert pair is not None
+    out, _dropped = pair
     assert len(out) == 1 and len(seam.calls) == 1
+
+
+def test_validate_counts_every_drop_with_reason():
+    """Счётчик считает ВСЁ, что не дошло до правок, и называет причины.
+
+    Раньше три случая (нет номера главы, короткая цитата, пустое поле)
+    уходили из цикла без `dropped += 1`: лог писал «отклонено 3/5» при
+    пяти выброшенных, и понять, куда делись остальные, было негде.
+    """
+    from tests.conftest import SilentLog
+    body = "Он вошёл в комнату и увидел своего брата, который что-то писал."
+    errs = [
+        {"fragment": "", "corrected": "x", "type": "typo"},            # пусто
+        {"fragment": "писал", "corrected": "пишет", "type": "typo"},   # коротко
+        {"chapter": 1, "fragment": "нет такого текста тут вообще",
+         "corrected": "нет такого текста тут, вообще", "type": "typo"},
+    ]
+    dropped = []
+    out = FE.validate_errors(errs, {1}, {1: body}, SilentLog(), drop=dropped)
+    assert out == []
+    assert len(dropped) == 3, [d["reason"] for d in dropped]
+    assert all(d["reason"] for d in dropped)
+
+
+def test_validate_recovers_lost_chapter_number():
+    """Номер главы потерян, цитата одна на батч — правка спасается.
+
+    `null` в `chapter` — не редкость у слабых моделей, а адрес замены есть
+    в самом тексте: привязка по единственному совпадению ничего не
+    угадывает.
+    """
+    from tests.conftest import SilentLog
+    body = "Он вошёл в комнату и увидел своего брата, который что-то писал."
+    out = FE.validate_errors(
+        [{"fragment": "который что-то писал", "corrected": "который что-то пишет",
+          "type": "grammar"}], {1}, {1: body}, SilentLog())
+    assert len(out) == 1 and out[0]["chapter"] == 1
+
+
+def test_validate_keeps_unknown_type():
+    """Тип вне списка — метка, а не адрес: правку сохраняем."""
+    from tests.conftest import SilentLog
+    body = ("Первый абзац главы идёт здесь и дальше, он длинный. "
+            "Второй абзац тоже здесь есть.")
+    out = FE.validate_errors(
+        [{"chapter": 1, "fragment": "Второй абзац тоже здесь есть",
+          "corrected": "Второй абзац тоже тут есть", "type": "style"}],
+        {1}, {1: body}, SilentLog())
+    assert len(out) == 1 and out[0]["type"] == "style"
+
+
+def test_validate_marks_same_text_as_manual_not_drop():
+    """`corrected == fragment` промпт просит для двух форм имени.
+
+    Правило промпта: скопируй цитату без изменений и напиши в `reason`
+    «требуется сверка». Валидация такие записи выбрасывала — вопреки
+    собственной инструкции. Теперь это пометка `manual`: в файл попадает,
+    в замены нет.
+    """
+    from tests.conftest import SilentLog
+    body = "Он встретил Ци Чжаопин, а рядом стоял Ци Чжаои."
+    frag = "Он встретил Ци Чжаопин"
+    dropped = []
+    out = FE.validate_errors(
+        [{"chapter": 1, "fragment": frag, "corrected": frag, "type": "logic",
+          "reason": "Встречены две формы имени: X и Y. Требуется сверка"}],
+        {1}, {1: body}, SilentLog(), drop=dropped)
+    assert len(out) == 1, dropped
+    assert out[0]["type"] == "manual"
+    assert out[0]["status"] == C.REVIEW_REJECT
+    assert out[0]["note"]
+
+
+def test_validate_short_unique_fragment_survives():
+    """Короткая цитата спасается, только если она одна в главе."""
+    from tests.conftest import SilentLog
+    body = "Он подолгу ждал её здесь, у самого края обрыва над рекой."
+    dropped = []
+    out = FE.validate_errors(
+        [{"chapter": 1, "fragment": "подолгу ждал её",
+          "corrected": "подолгу ждала её",
+          "type": "grammar"}], {1}, {1: body}, SilentLog(), drop=dropped)
+    assert len(out) == 1 and not dropped
