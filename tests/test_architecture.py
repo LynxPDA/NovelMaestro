@@ -292,3 +292,77 @@ def test_dev_server_stops_by_pid_file():
     assert 'state" != "Z"' in src, "zombie-процесс не считается живым"
     assert "DEV_PROJECTS" in src, \
         "dev-сервер обязан ходить по временной папке данных"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Локальная проверка образа и публикация релизного: разные вещи
+# ══════════════════════════════════════════════════════════════════════
+def test_local_image_is_marked_as_dev():
+    """Локальная сборка называется версией с суффиксом dev.
+
+    Образ для проверки правок обязан отличаться от релизного по виду:
+    `:0.8.9` — выпущенный релиз, `:0.8.9-dev` — то, что собрали сейчас
+    и проверяют руками. Иначе в интерфейсе висела бы релизная цифра, и
+    человек не отличил бы локальную сборку от настоящей.
+
+    Суффикс через дефис: docker-тег не допускает `/`, и `0.8.9/dev`
+    отклоняется как `invalid reference format`.
+    """
+    src = (ROOT / "dev.sh").read_text(encoding="utf-8")
+    assert "cmd_image() {" in src and 'image) shift' in src, \
+        "dev.sh: нет команды image"
+    assert '"${version}-dev"' in src, "локальный тег обязан нести суффикс -dev"
+    # тег собирается переменной, а не литералом с косой чертой: docker
+    # отклоняет `0.8.9/dev` как invalid reference format
+    body = src.split("cmd_image")[1].split("cmd_deps")[0]
+    assert "tag=\"${version}/dev\"" not in body
+    assert "-t \"$base:$tag\"" in body, "тег обязан собираться одной строкой"
+    # версия уходит в образ параметром сборки, а не копией файла VERSION:
+    # файл остаётся релизной цифрой для release.yml/docker.yml
+    assert "--build-arg" in src and "NOVELMAESTRO_VERSION" in src
+    df = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "ARG NOVELMAESTRO_VERSION" in df, \
+        "Dockerfile не принимает версию сборки"
+    assert 'ENV NOVELMAESTRO_VERSION="${NOVELMAESTRO_VERSION}"' in df
+
+
+def test_release_image_takes_version_from_one_place():
+    """Релизный образ собирается и по тегу, и по кнопке — из одного тега.
+
+    Порядок работы: правки → локальный образ → ручная проверка на боевых
+    данных → и только потом релиз (как раньше, по команде человека).
+    Ручной запуск нужен, чтобы пересобрать образ, не выпуская остальных
+    артефактов; тег в нём приходит полем ввода, а при пуше — из самого
+    тега. Оба пути обязаны сойтись в одну переменную, иначе версия в
+    образе и теги образа считались бы из разных мест.
+    """
+    wf = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
+    head = wf.split("permissions:")[0]
+    assert "workflow_dispatch:" in head, "нет ручного запуска"
+    assert "push:" in head, "релиз по тегу должен работать как раньше"
+    assert "tag:" in head, "тег релиза приходит полем ввода"
+    assert 'tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"' in wf, \
+        "пуш тега и кнопка должны сходиться в один тег"
+    # остальные шаги берут тег только из этого шага
+    assert wf.count("inputs.tag") == 1, \
+        "inputs.tag читается в одном месте, дальше — steps.rel.outputs.tag"
+    # теги образа считаются из поля ввода: type=semver разбирает GITHUB_REF,
+    # а при ручном запуске это ветка — образ остался бы без версии
+    # комментарии упоминают semver как объяснение — смотрим строки конфига
+    code = [ln for ln in wf.splitlines() if not ln.lstrip().startswith("#")]
+    assert not any("type=semver" in ln for ln in code), \
+        "semver-теги берут версию из GITHUB_REF (ветка при ручном запуске)"
+    assert "steps.ver.outputs.version" in wf
+
+
+def test_compose_image_source_stays_release():
+    """Источник образа в compose — релизный, а локальный подставляется снаружи.
+
+    Правка `image:` руками в боевом compose уезжала бы в git и могла
+    остаться там после проверки. Переменная оставляет закоммиченный
+    источник релизным всегда.
+    """
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "image: ${NOVELMAESTRO_IMAGE:-ghcr.io/lynxpda/novelmaestro:latest}" in compose, \
+        "источник образа обязан оставаться релизным по умолчанию"
+    assert "NOVELMAESTRO_IMAGE" in (ROOT / "dev.sh").read_text(encoding="utf-8")
