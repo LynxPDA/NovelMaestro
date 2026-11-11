@@ -3072,18 +3072,13 @@ def test_chapter_sizes_skips_empty_and_respects_type(jobs_srv, tmp_path):
     from test_web_jobs import __name__ as _n  # noqa: F401
     from core.common import build_chapter_map
     ch_map = build_chapter_map(root)
-    sizes, _texts, empty, _sig = _chapter_sizes(
+    sizes, _texts, _sig = _chapter_sizes(
         _C, ch_map, "polished")
     assert sizes[1][0] == len("перевод".encode())
     # глава 2: polished ПУСТ — перевода нет, и redacted не подставляется
     # (стадия читает строго свой тип); оригинал при этом посчитан
     assert sizes[2][0] == 0, "пустой polished не считается переводом"
     assert sizes[2][1] > 0, "оригинал считается и без перевода"
-    # `empty` — главы БЕЗ ПЕРЕВОДА: стадия их пропустит, и прогноз обязан
-    # сказать о них отдельно. Раньше считались только «пустые файлы», а
-    # глава с одним chapter.txt вообще не попадала в счёт, хотя в проверку
-    # она тоже не идёт (2 и 3: пустой polished и полное его отсутствие)
-    assert empty == 2, empty
     # глава 3 без перевода вообще — в прогнозе у неё только оригинал
     assert sizes[3][0] == 0 and sizes[3][1] > 0
 
@@ -3107,13 +3102,13 @@ def test_pair_ratio_cache_sees_content_change(jobs_srv, tmp_path):
         d.mkdir(parents=True)
         (d / "chapter.txt").write_text("原文" * 300, encoding="utf-8")
         (d / "polished.txt").write_text("перевод " * 300, encoding="utf-8")
-    _, texts, _, sig = _chapter_sizes(C, C.build_chapter_map(root), "polished")
+    _, texts, sig = _chapter_sizes(C, C.build_chapter_map(root), "polished")
     r1 = _pair_ratio_cached(C, tmp_path, texts, sig)
     time.sleep(0.02)
     for n in (1, 2):
         (root / f"{n:05d}" / "polished.txt").write_text(
             "translation " * 300, encoding="utf-8")
-    _, texts2, _, sig2 = _chapter_sizes(C, C.build_chapter_map(root),
+    _, texts2, sig2 = _chapter_sizes(C, C.build_chapter_map(root),
                                         "polished")
     r2 = _pair_ratio_cached(C, tmp_path, texts2, sig2)
     assert r1 != r2, f"коэффициент не пересчитался: {r1} → {r2}"
@@ -3480,13 +3475,14 @@ def test_pair_ratio_splits_by_language(jobs_srv):
     assert src2 == 0.0, "без оригиналов коэффициент оригинала не выдумывается"
 
 
-def test_chapter_sizes_counts_chapter_without_translation_as_empty(jobs_srv,
-                                                                   tmp_path):
-    """Глава с одним `chapter.txt` считается «без перевода».
+def test_chapter_sizes_keeps_chapter_without_translation(jobs_srv, tmp_path):
+    """Глава с одним `chapter.txt` остаётся в размерах с нулевым переводом.
 
-    Стадия её пропустит (`find_chapter_file_in_dir` не найдёт нужный тип),
-    поэтому прогноз обязан сказать о ней отдельно. Раньше `empty` считал
-    только пустые файлы, и такая глава не попадала ни в один счёт.
+    Сервер не решает, кто пойдёт в проверку: он отдаёт байты, а клиент
+    фильтрует по `tr > 0` и показывает «без перевода». Считать это
+    отдельным счётчиком на сервере значило держать второе мнение, которое
+    к тому же считалось по ВСЕЙ книге — при диапазоне 1–10 человек видел
+    «пустых 5 018» про главы, которых в запуске нет.
     """
     from web.api_stage import _chapter_sizes
     class _C:
@@ -3500,6 +3496,7 @@ def test_chapter_sizes_counts_chapter_without_translation_as_empty(jobs_srv,
         (d / "chapter.txt").write_text("原文", encoding="utf-8")
     (root / "00001" / "polished.txt").write_text("перевод", encoding="utf-8")
     from core.common import build_chapter_map
-    _sizes, _texts, empty, _sig = _chapter_sizes(
+    sizes, _texts, _sig = _chapter_sizes(
         _C, build_chapter_map(root), "polished")
-    assert empty == 1, "глава 2 без перевода — в счёте «без перевода»"
+    assert sizes[1][0] > 0, "глава с переводом"
+    assert sizes[2][0] == 0 and sizes[2][1] > 0, "глава без перевода видна"

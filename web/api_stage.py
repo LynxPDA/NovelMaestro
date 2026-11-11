@@ -446,7 +446,7 @@ _PAIR_RATIO_CACHE: dict = {}
 
 
 def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
-    """Байты файлов глав одним проходом: `(sizes, sample_texts, empty, sig)`.
+    """Байты файлов глав одним проходом: `(sizes, sample_texts, sig)`.
 
     `sizes` — {номер: (перевод, оригинал)} в байтах. `sample_texts` — тексты
     первых `PAIR_SAMPLE` глав, у которых есть перевод: по ним считается
@@ -475,7 +475,6 @@ def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
     sizes: dict = {}
     texts: list = []
     sig: list = []
-    empty = 0
     for num, dirs in sorted(ch_map.items()):
         if not dirs:
             continue
@@ -498,14 +497,6 @@ def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
                 break
         if "chapter.txt" in entries:
             src = entries["chapter.txt"].stat().st_size
-        # глава без единого байта текста — стадия её пропустит, и прогноз
-        # обязан сказать о ней отдельно, а не молчать
-        if not tr:
-            # пустой ЛИБО отсутствующий перевод — глава без текста, и стадия
-            # её пропустит. Считать только «пустой файл» было мало: глава
-            # с одним chapter.txt вообще не попадала в счёт, хотя в проверку
-            # она тоже не идёт
-            empty += 1
         if tr or src:
             sizes[num] = (tr, src)
         if tr_name and len(texts) < PAIR_SAMPLE:
@@ -521,7 +512,7 @@ def _chapter_sizes(common, ch_map: dict, file_type: str = "") -> tuple:
             texts.append((_read_text(entries[tr_name].path),
                           _read_text(entries["chapter.txt"].path)
                           if "chapter.txt" in entries else ""))
-    return sizes, texts, empty, tuple(sig)
+    return sizes, texts, tuple(sig)
 
 
 def _read_text(path) -> str:
@@ -669,7 +660,7 @@ def _pair_options(common, pdir: Path, key: str, file_type: str = "") -> dict:
     if not ch_map:
         return {}
     ft = file_type or _stage_file_type(pdir, key)
-    sizes, texts, empty, fsig = _chapter_sizes(common, ch_map, ft)
+    sizes, texts, fsig = _chapter_sizes(common, ch_map, ft)
     ratio = _pair_ratio_cached(common, pdir, texts, fsig)
     # Три коэффициента, потому что складывать байты разных языков в одну
     # дробь нельзя: у русского перевода ~5.1 байта на токен, у китайского
@@ -684,7 +675,7 @@ def _pair_options(common, pdir: Path, key: str, file_type: str = "") -> dict:
                        "translation": tr_ratio,
                        "source": src_ratio,
                        "fallback": ratio == PAIR_RATIO_FALLBACK,
-                       "samples": len(texts), "type": ft, "empty": empty}}
+                       "samples": len(texts), "type": ft}}
 
 
 def _with_pair_options(common, pdir: Path, key: str, ctx: dict) -> dict:
