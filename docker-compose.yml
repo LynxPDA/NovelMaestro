@@ -9,6 +9,15 @@
 #   docker compose up -d --build       # или локальная сборка из исходников
 #   → http://localhost:8756
 #
+# Проверка правок на боевых данных (локальный образ вместо реестра):
+#   ./dev.sh image                     # соберёт <VERSION>-dev и :dev
+#   NOVELMAESTRO_IMAGE=<образ>:<VERSION>-dev docker compose up -d
+#   ...посмотреть руками...
+#   docker compose up -d               # вернуть релизный источник
+# Источник образа берётся из NOVELMAESTRO_IMAGE (окружение или .env рядом с
+# этим файлом), по умолчанию — релизный тег из реестра. Так локальная
+# проверка не требует правки самого compose и не может остаться в git.
+#
 # Данные:
 #   ./projects        — ВСЕ проекты (обязательно монтировать, иначе потеряются)
 #   ./templates       — ваши наборы шаблонов + встроенный General/, который
@@ -33,7 +42,10 @@
 services:
   novelmaestro:
     build: .                                    # исходники для --build
-    image: ghcr.io/lynxpda/novelmaestro:latest   # готовый образ из реестра
+    # Готовый образ из реестра. Локальная проверка правок подставляет
+    # свой тег через NOVELMAESTRO_IMAGE (см. шапку файла), поэтому
+    # закоммиченный здесь источник всегда остаётся релизным.
+    image: ${NOVELMAESTRO_IMAGE:-ghcr.io/lynxpda/novelmaestro:latest}
     container_name: novelmaestro
     restart: unless-stopped
     # uid/gid: контейнер стартует от root, docker-entrypoint.sh сам

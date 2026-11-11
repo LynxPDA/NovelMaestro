@@ -236,6 +236,43 @@ cmd_status() {
     fi
 }
 
+# ── локальный образ для проверки правок на боевых данных ──────────────
+# Собирается из текущего дерева репозитория (не из ghcr) и помечается
+# версией с суффиксом dev: 0.8.9 → novelmaestro:0.8.9-dev (он же :dev).
+# На проде источник образа подставляется переменной NOVELMAESTRO_IMAGE,
+# поэтому compose в git остаётся с релизным тегом и правка руками не
+# нужна. Локальная метка отличается от релизной по виду: `:0.8.9` —
+# собранный релиз, `:0.8.9-dev` — проверка правок.
+#
+# Суффикс через дефис, а не через слэш (`0.8.9/dev`): docker-тег не
+# допускает `/` — `invalid reference format`, тег с косой чертой
+# невозможно ни собрать, ни запушить.
+#
+# Версия образа — build-arg NOVELMAESTRO_VERSION, а не только файл
+# VERSION: файл остаётся релизной цифрой (его читает release.yml и
+# сверяет docker.yml), а образ обязан назвать себя проверочным в
+# интерфейсе — иначе в «⋮» висело бы 0.8.9 и человек не отличил бы
+# локальную сборку от настоящей.
+# Локальное имя, а не ghcr.io/...: образ собран из дерева, в реестре его нет,
+# и `docker compose pull` по такому тегу падал бы «manifest unknown».
+NOVELMAESTRO_IMAGE_DEFAULT="novelmaestro"
+
+cmd_image() {
+    command -v docker >/dev/null 2>&1 || { log "нужен docker"; exit 3; }
+    local version base tag
+    version="$(cat "$REPO/VERSION" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$version" ] || { log "нет файла VERSION в корне репозитория"; exit 1; }
+    base="${NOVELMAESTRO_IMAGE:-$NOVELMAESTRO_IMAGE_DEFAULT}"
+    tag="${version}-dev"
+    log "сборка образа $base:$tag (из текущего дерева, не из реестра)"
+    docker build \
+        --build-arg "NOVELMAESTRO_VERSION=$tag" \
+        -t "$base:$tag" -t "$base:dev" "$REPO" || exit 1
+    log "готово: $base:$tag (он же :dev)"
+    log "на проде: NOVELMAESTRO_IMAGE=$base:$tag docker compose up -d"
+    log "         (без переменной compose снова берёт релизный тег из git)"
+}
+
 cmd_deps() {
     activate
     exec python3 -m core.deps
@@ -303,6 +340,9 @@ dev.sh — разработка NovelMaestro в venv (Linux/macOS/WSL)
   ./dev.sh status       запущен ли dev-сервер
   ./dev.sh probe [args] обход SPA headless-браузером (свой сервер, временные данные);
                         --shot — скриншоты в logs/ui_probe/ (правка UI без прогона не закрыта)
+  ./dev.sh image        локальный docker-образ для ручной проверки правок:
+                        <образ>:<VERSION>-dev и :dev (не из ghcr); в боевом
+                        compose заменить image: на этот тег, затем вернуть
   ./dev.sh spa          node --check по static/*.js + node --test tests/spa/
   ./dev.sh shell        bash с активированным venv
   ./dev.sh clean        удалить .venv и служебную папку .tmp/ (кэш тестов, покрытие)
@@ -310,6 +350,7 @@ dev.sh — разработка NovelMaestro в venv (Linux/macOS/WSL)
 Переменные окружения:
   NOVELMAESTRO_VENV     путь к venv (по умолчанию <репо>/.venv)
   PYTHON                интерпретатор для создания venv (по умолчанию python3)
+  NOVELMAESTRO_IMAGE    имя образа для ./dev.sh image (по умолчанию novelmaestro)
 EOF
 }
 
@@ -324,6 +365,7 @@ case "$command" in
     stop) shift || true; cmd_stop "$@" ;;
     status) shift || true; cmd_status "$@" ;;
     probe) shift || true; cmd_probe "$@" ;;
+    image) shift || true; cmd_image "$@" ;;
     spa) shift || true; cmd_spa "$@" ;;
     shell) shift || true; cmd_shell "$@" ;;
     clean) shift || true; cmd_clean "$@" ;;

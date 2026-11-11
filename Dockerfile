@@ -17,6 +17,15 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     WEB_ENV_FILE=/app/projects/.env
 
+# Версия, которую образ называет собой в интерфейсе. Release-сборка не
+# передаёт аргумент — версия берётся из файла VERSION (web/version.py,
+# приоритет NOVELMAESTRO_VERSION → VERSION). Локальная проверочная сборка
+# (./dev.sh image) передаёт `0.8.9-dev`: файл VERSION остаётся релизной
+# цифрой для release.yml/docker.yml, а на экране видно, что это проверка
+# правок, а не выпущенный релиз.
+ARG NOVELMAESTRO_VERSION=""
+ENV NOVELMAESTRO_VERSION="${NOVELMAESTRO_VERSION}"
+
 # gosu — переключение root → app в docker-entrypoint.sh (chown каталогов
 # данных, созданных docker от root, требует root-прав); tzdata —
 # локальные часовые пояса для отчётов (местное время, см. TZ в compose).
