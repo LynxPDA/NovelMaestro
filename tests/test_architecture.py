@@ -355,24 +355,23 @@ def test_release_image_takes_version_from_one_place():
     assert "steps.ver.outputs.version" in wf
 
 
-def test_compose_defaults_to_local_image():
-    """Боевой compose по умолчанию поднимает локальную сборку, не релиз.
+def test_compose_in_repo_uses_registry_image():
+    """В репозитории источник образа — релизный из реестра.
 
-    Проверка правок на боевых данных идёт ДО релиза, поэтому по умолчанию
-    должен подниматься проверочный образ: `docker compose up -d` без
-    переменных и без правки файла. Релизный образ подставляется
-    NOVELMAESTRO_IMAGE, а в шапке файла лежит закомментированной для
-    истории и отката.
+    Этот файл получают все, а локального `:dev` образа у них нет: с ним
+    `docker compose pull` падал бы «pull access denied» и рвал
+    `pull && up -d`. Свой локальный образ на проверку ставится в личном
+    compose на своей машине, а здесь — только переопределение
+    NOVELMAESTRO_IMAGE, чтобы проверка не требовала правки файла.
     """
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "image: ${NOVELMAESTRO_IMAGE:-novelmaestro:dev}" in compose, \
-        "по умолчанию обязан подниматься локальный проверочный образ"
-    # строка релизного образа остаётся рядом — закомментированной
-    assert "# image: ghcr.io/lynxpda/novelmaestro:latest" in compose or \
-        "image: ghcr.io/lynxpda/novelmaestro:latest" in compose
+    assert "image: ${NOVELMAESTRO_IMAGE:-ghcr.io/lynxpda/novelmaestro:latest}" in compose, \
+        "источник образа в репозитории обязан быть релизным"
+    # в комментариях-образцах эти строки как раз нужны — смотрим код конфига
+    code = [ln for ln in compose.splitlines() if not ln.lstrip().startswith("#")]
+    assert not any("novelmaestro:dev" in ln for ln in code), \
+        "локальный :dev в репозиторном compose падает у всех, кто его скачал"
+    assert not any("pull_policy" in ln for ln in code), \
+        "pull_policy: never оправдан только в личном compose с локальным образом"
     src = (ROOT / "dev.sh").read_text(encoding="utf-8")
-    assert "NOVELMAESTRO_IMAGE" in src
-    # локального тега нет в реестре: без never `pull` рвёт `pull && up -d`
-    assert "pull_policy: never" in compose, \
-        "без pull_policy: never docker compose pull падает на локальном теге"
     assert '-t "$base:dev"' in src, "тег :dev обязан ставиться при сборке"
