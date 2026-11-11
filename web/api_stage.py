@@ -604,6 +604,41 @@ def _pair_ratio_cached(common, pdir, sample: list, sig) -> float:
     return ratio
 
 
+def _pair_options(common, pdir: Path, key: str) -> dict:
+    """Прогноз бюджета для «Проверки перевода (LLM)»: байты пары по главам
+    и замеренный байт на токен.
+
+    Считается по требованию, а НЕ кладётся в общий кеш опций: кеш общий на
+    книгу и заполняется любой стадией, а этот словарь нужен одной.
+    """
+    chapters_dir = pdir / "chapters"
+    if not chapters_dir.is_dir():
+        return {}
+    ch_map = common.build_chapter_map(chapters_dir)
+    if not ch_map:
+        return {}
+    ft = _stage_file_type(pdir, key)
+    sizes, texts, empty, fsig = _chapter_sizes(common, ch_map, ft)
+    ratio = _pair_ratio_cached(common, pdir, texts, fsig)
+    return {
+        "pair_bytes": {str(n): {"tr": tr, "src": src}
+                       for n, (tr, src) in sizes.items()},
+        "pair_ratio": {"value": ratio,
+                       "fallback": ratio == PAIR_RATIO_FALLBACK,
+                       "samples": len(texts), "type": ft, "empty": empty}}
+
+
+def _with_pair_options(common, pdir: Path, key: str) -> dict:
+    """Опции стадии из кеша ПЛЮС прогноз бюджета (кеш не меняется).
+
+    Кеш мог заполнить кто угодно и когда угодно — прогноз добавляется на
+    выдаче, чтобы чужая стадия не «съедала» его из общего словаря.
+    """
+    out = dict(_OPTIONS_CACHE.get(str(pdir), (None, {}))[1])
+    out.update(_pair_options(common, pdir, key))
+    return _options_for_stage(out, key)
+
+
 def _options_for_stage(options: dict, key: str) -> dict:
     """Опции одной стадии из общего кеша проекта.
 
@@ -638,6 +673,13 @@ def _stage_options(ctx: dict) -> dict:
         cached = _OPTIONS_CACHE.get(str(pdir))
         if cached is not None and cached[0] == sig:
             out["options"] = _options_for_stage(cached[1], key)
+            # прогноз бюджета считается ТОЛЬКО здесь, в кеш он не входит:
+            # кеш общий на книгу, и его заполняет любая стадия (ner, epub,
+            # перевод). Прежде pair_bytes строился лишь при первом запросе
+            # «Проверки перевода (LLM)» — если кеш заполнила другая стадия,
+            # подсказка оставалась скрытой до перезапуска сервера.
+            if key == "translate_check_llm" and "pair_bytes" not in out["options"]:
+                out["options"] = _with_pair_options(common, pdir, key)
             return out
         # диапазон глав
         chapters_dir = pdir / "chapters"
@@ -655,17 +697,7 @@ def _stage_options(ctx: dict) -> dict:
                 # приходит из формы, поэтому деление на коэффициент делает
                 # клиент: сервер отдаёт байты и коэффициент
                 if key == "translate_check_llm":
-                    ft = _stage_file_type(pdir, key)
-                    sizes, texts, empty, sig = _chapter_sizes(
-                        common, ch_map, ft)
-                    ratio = _pair_ratio_cached(common, pdir, texts, sig)
-                    out["options"]["pair_bytes"] = {
-                        str(n): {"tr": tr, "src": src}
-                        for n, (tr, src) in sizes.items()}
-                    out["options"]["pair_ratio"] = {
-                        "value": ratio, "fallback": ratio
-                        == PAIR_RATIO_FALLBACK,
-                        "samples": len(texts), "type": ft, "empty": empty}
+                    out["options"].update(_pair_options(common, pdir, key))
         # файлы source/ — ВСЕ файлы (клиент фильтрует по ext селекта):
         # epub-исходники, txt, обложки (jpg/png/webp), metadata.yaml и т.п.
         src = pdir / "source"

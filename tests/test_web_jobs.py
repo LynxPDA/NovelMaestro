@@ -2921,6 +2921,43 @@ def test_stage_options_pair_bytes(jobs_srv, tmp_path):
     assert "pair_bytes" not in other["options"]
 
 
+def test_stage_options_pair_bytes_survive_foreign_cache(jobs_srv, tmp_path):
+    """Прогноз бюджета не теряется, если кеш опций заполнила ДРУГАЯ стадия.
+
+    Кеш опций общий на книгу, а `pair_bytes` нужен одной стадии. Строился он
+    только на пути `key == translate_check_llm`, поэтому первым пришедший
+    `ner`/`epub` клал в кеш словарь БЕЗ прогноза — и «Проверка перевода
+    (LLM)» до перезапуска сервера показывала пустую подсказку (на живой
+    книге это выглядело как «оценки по главам нет, пока идёт другой запуск»).
+    """
+    from web.api import _OPTIONS_CACHE
+    _OPTIONS_CACHE.clear()
+    port, req, _jm = jobs_srv
+    _make_project(port, req)
+    pdir = tmp_path / "projects" / "ACTIVE" / "test_book"
+    d1 = pdir / "chapters" / "00001"
+    d1.mkdir(parents=True)
+    (d1 / "chapter.txt").write_text("原文" * 50, encoding="utf-8")
+    (d1 / "polished.txt").write_text("перевод" * 100, encoding="utf-8")
+    # первой спрашивает ЧУЖАЯ стадия — она и заполняет общий кеш
+    res, other = req("GET", "/api/stages/ner/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert "pair_bytes" not in other["options"], "чужой стадии прогноз не нужен"
+    # теперь проверка перевода: прогноз обязан быть, хотя кеш уже заполнен
+    res, payload = req(
+        "GET",
+        "/api/stages/translate_check_llm/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    pb = payload["options"].get("pair_bytes")
+    assert pb, "прогноз пропал из-за кеша, заполненного другой стадией"
+    assert pb["1"] == {"tr": len(("перевод" * 100).encode()),
+                       "src": len(("原文" * 50).encode())}
+    # и обратный порядок: после прогноза чужая стадия его не получает
+    res, other2 = req("GET", "/api/stages/epub/options?project=ACTIVE/test_book")
+    assert res.status == 200
+    assert "pair_bytes" not in other2["options"], "прогноз утёк в чужую стадию"
+
+
 def test_stage_options_pair_ratio_is_measured(jobs_srv, tmp_path):
     """Байт на токен считается по тексту книги, а не берётся 2.5: у русского
     перевода с китайским оригиналом пара даёт ~4.2, и фиксированное 2.5
