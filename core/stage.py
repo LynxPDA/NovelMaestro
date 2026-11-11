@@ -392,7 +392,8 @@ class Stage:
 
 def complete_until(stage: Stage, prompt: str, data: str = "", *,
                    label: str = "", accept=None, attempts: int = 0,
-                   note: str = "правок нет") -> tuple[str | None, str | None]:
+                   note: str = "правок нет",
+                   detail=None) -> tuple[str | None, str | None]:
     """Запрос стадии с повторами, пока ответ не устроит `accept`.
 
     Политика повторов одна и она не про исключения: максимум
@@ -406,6 +407,13 @@ def complete_until(stage: Stage, prompt: str, data: str = "", *,
     спросить ещё раз. Последний ответ возвращается как есть: «правок нет» —
     допустимый результат. Ошибка LLM (text=None) — сразу (её считает
     stream_chat_completion).
+
+    `detail(text)` → конкретная причина отказа для строки повтора. Общее
+    `note` называет правила («пустой массив, нераспарсенный ответ или
+    отклонённые валидацией»), и по нему нельзя понять, что случилось на
+    самом деле: модель честно написала «правок нет» или вернула обрывок
+    JSON, который надо чинить промптом. Стадия знает разницу — пусть
+    скажет её прямо.
     """
     check = accept or (lambda text: bool((text or "").strip()))
     total = 1 + max(0, int(attempts or 0))
@@ -420,9 +428,16 @@ def complete_until(stage: Stage, prompt: str, data: str = "", *,
         if stage.logger is not None and att < total - 1:
             # «повтор 2/3» читалось как «попытка 2 из 3» — то есть как
             # MAX_RETRIES, хотя это ДРУГАЯ настройка (RETRY_EMPTY): считаем
-            # сами повторы, а не запросы, и называем предел их числом
+            # сами повторы, а не запросы, и называем предел их числом.
+            # Конкретная причина — из `detail`, если стадия её знает
+            why = ""
+            if detail is not None:
+                try:
+                    why = (detail(text) or "").strip()
+                except Exception:  # noqa: BLE001  объяснение не должно ронять стадию
+                    why = ""
             stage.logger.info(
-                f"{label}: {note} — повтор {att + 1} из {total - 1}")
+                f"{label}: {why or note} — повтор {att + 1} из {total - 1}")
     return text, None
 
 
