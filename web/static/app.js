@@ -307,6 +307,10 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && bookStateCarrier) {
     bookStateCarrier.flush();
   }
+  /* вернулись на вкладку (после сна ноутбука, переключения окна): таймеры
+     браузер притормаживает, и до первого тика шапка показывала события
+     давно минувшего времени — спрашиваем сразу */
+  if (document.visibilityState === "visible") updateRunPill();
 });
 
 async function api(path, opts = {}) {
@@ -3336,6 +3340,18 @@ function layout(content) {
 let runPollTimer = null;
 let runSeen = []; // id активных запусков прошлого опроса — по ним ловим финал
 let runCardEl = null; // карточка выбора запусков текущего pill'а (меню шапки)
+/* Ответы опроса ходят вне очереди: толчок после запуска и тик таймера могут
+   лететь одновременно, и ответ старого запроса, пришедший позже нового,
+   возвращал уже снятую кнопку. Счётчик запросов отбрасывает устаревшие. */
+let runPollSeq = 0;
+/* Текущий период опроса: у числа из setInterval свойство не сохранится
+   (в браузере это обычный Number), поэтому период живёт отдельно. */
+let runPollRate = 0;
+/* Пока в шапке есть активные запуски, опрос идёт часто (см.
+   UICore.runPollDelay): по нему видно и прогресс, и финал. Как только
+   список опустел, частый опрос бессмысленен — остаётся редкая проверка
+   «не начался ли новый». */
+
 
 /* Фавикон-счётчик: с любой вкладки видно, что что-то считается. */
 function setRunBadge(count) {
@@ -3445,8 +3461,12 @@ function runCard(jobs) {
 
 function updateRunPill() {
   if (!state.auth) return;
+  const seq = ++runPollSeq;
   api("/jobs/active")
     .then((d) => {
+      /* ответ устарел: пока он ехал, ушёл более новый запрос (толчок после
+         запуска или следующий тик) — его данные и нарисуем */
+      if (seq !== runPollSeq) return;
       /* слот ищем в момент прихода ответа, а не старта запроса: вызов из
          render() уходит раньше, чем layout с шапкой попадёт в DOM */
       const slot = document.getElementById("app-run-slot");
@@ -3466,6 +3486,7 @@ function updateRunPill() {
       if (wasOpen) closeMenus();
       slot.replaceChildren();
       if (!jobs.length) {
+        setRunPollRate(false);
         return;
       }
       const j = jobs[0];
@@ -3555,15 +3576,29 @@ function updateRunPill() {
       /* раскрытое меню восстанавливаем на новой кнопке: человек выбирает
          запуск, а не борется с обновлением опроса */
       if (wasOpen && many) openMenu(pill, box);
+      /* частота опроса — по состоянию: пока что-то идёт, шапка должна
+         замечать прогресс и финал за секунды, в покое — не дёргать сервер */
+      setRunPollRate(true);
     })
     .catch(() => {
       /* нет связи — pill просто не показывается */
     });
 }
 
+/* Частота опроса шапки: `busy` — в списке есть активные запуски. Раньше
+   интервал был один и 10 с, поэтому новый запуск появлялся в шапке с
+   задержкой до 10 с, а завершённый столько же висел в ней после финала. */
+function setRunPollRate(busy) {
+  const want = UICore.runPollDelay(busy);
+  if (runPollTimer && runPollRate === want) return;
+  if (runPollTimer) clearInterval(runPollTimer);
+  runPollTimer = setInterval(updateRunPill, want);
+  runPollRate = want;
+}
+
 function ensureRunPolling() {
   if (runPollTimer) return;
-  runPollTimer = setInterval(updateRunPill, 10000);
+  setRunPollRate(false); // до первого ответа состояние неизвестно
 }
 
 /* ── роутер и рендер ─────────────────────────────────────── */
@@ -3606,6 +3641,7 @@ function render() {
     if (runPollTimer) {
       clearInterval(runPollTimer);
       runPollTimer = null;
+      runPollRate = 0; // после входа период выберется заново по состоянию
     }
     root.append(viewLogin());
     return;

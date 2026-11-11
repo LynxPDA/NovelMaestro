@@ -367,6 +367,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
               try {
                 await api(`/jobs/${j.id}/stop`, { method: "POST" });
                 toast("Остановка...");
+                if (typeof updateRunPill === "function") updateRunPill();
               } catch (ex) {
                 toast(ex.message, "err");
               }
@@ -2893,6 +2894,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         st.progress = r.job.progress || null;
         await render(); // дождаться DOM лога, иначе attachStream не найдёт его
         attachStream(r.job.id);
+        /* шапка живёт опросом: без толчка новый запуск появлялся бы в ней
+           с задержкой таймера, хотя он уже идёт */
+        if (typeof updateRunPill === "function") updateRunPill();
       } catch (ex) {
         err.textContent = ex.message;
       }
@@ -3424,6 +3428,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       try {
         await api(`/jobs/${job.id}/stop`, { method: "POST" });
         toast("Остановка...");
+        if (typeof updateRunPill === "function") updateRunPill();
       } catch (ex) {
         toast(ex.message, "err");
       }
@@ -3926,6 +3931,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     } else if (payload.type === "status") {
       st.job.status = payload.status;
       UICore.etaForget(st.job.id); // окно ETA больше не нужно
+      /* финал известен из стрима раньше, чем его увидит опрос шапки:
+         снимаем пункт сразу, не дожидаясь тика */
+      if (typeof updateRunPill === "function") updateRunPill();
       // кэш последнего запуска этой стадии устарел — при возврате
       // на вкладку данные перечитаются из /jobs/{id}
       delete st.lastLog[st.job.action];

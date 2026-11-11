@@ -2120,3 +2120,13 @@ test("progressParts: отставший снимок опроса не отка�
     job, { label: "Другая стадия", done: 0, total: 20 });
   assert.equal(other.count, "0/20 · 0%");
 });
+
+test("runPollDelay: идущий запуск опрашивается часто, покой — редко", () => {
+  /* Шапка узнавала о старте и финале только с тика таймера: интервал был
+     один и 10 с, поэтому новый запуск появлялся в ней с задержкой до 10 с,
+     а завершённый столько же висел после финала. Пока что-то идёт — опрос
+     частый; в покое частый опрос дёргал бы сервер без повода. */
+  assert.equal(UICore.runPollDelay(true), 2000);
+  assert.equal(UICore.runPollDelay(false), 10000);
+  assert.ok(UICore.runPollDelay(true) < UICore.runPollDelay(false));
+});
