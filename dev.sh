@@ -341,8 +341,8 @@ dev.sh — разработка NovelMaestro в venv (Linux/macOS/WSL)
   ./dev.sh probe [args] обход SPA headless-браузером (свой сервер, временные данные);
                         --shot — скриншоты в logs/ui_probe/ (правка UI без прогона не закрыта)
   ./dev.sh image        локальный docker-образ для ручной проверки правок:
-                        <образ>:<VERSION>-dev и :dev (не из ghcr); в боевом
-                        compose заменить image: на этот тег, затем вернуть
+                        <VERSION>-dev и :dev (не из ghcr); свой compose берёт
+                        :dev, поэтому дальше достаточно docker compose up -d
   ./dev.sh spa          node --check по static/*.js + node --test tests/spa/
   ./dev.sh shell        bash с активированным venv
   ./dev.sh clean        удалить .venv и служебную папку .tmp/ (кэш тестов, покрытие)
